@@ -10,9 +10,9 @@ mod encoding;
 mod client_hasher;
 
 use wasm_bindgen::prelude::*;
-use std::collections::{HashMap,HashSet};
+use std::collections::HashMap;
 use std::hash::BuildHasherDefault;
-use std::rc::{Rc,Weak};
+use std::rc::Rc;
 use std::cell::{RefCell,Cell};
 use rand::Rng;
 use encoding::*;
@@ -34,12 +34,12 @@ pub struct UpdateEvent {
     pub update: Vec<u8>
 }
 
-pub trait UpdateObserver {
-    fn on_update (&self, event: UpdateEvent);
+pub trait Observable <EventType> {
+    fn on_change(&self, event: EventType);
 }
 
 impl <'a> Doc {
-    pub fn on_update (&'a self, observer: std::rc::Weak<impl UpdateObserver + 'static>) {
+    pub fn on_update (&'a self, observer: std::rc::Weak<impl Observable<UpdateEvent> + 'static>) {
         self.inner.update_handlers.borrow_mut().push(observer);
     }
 }
@@ -171,7 +171,7 @@ struct DocInner {
     type_refs: RefCell<HashMap<String, usize>>,
     types: RefCell<Vec<(Rc<TypeInner>,String)>>,
     ss: RefCell<StructStore>,
-    update_handlers: RefCell<Vec<std::rc::Weak<dyn UpdateObserver>>>
+    update_handlers: RefCell<Vec<std::rc::Weak<dyn Observable<UpdateEvent>>>>
 }
 
 impl DocInner {
@@ -321,7 +321,7 @@ impl Drop for Transaction {
                 update: update.to_vec()
             };
             match update_handler.upgrade() {
-                Some(handler) => handler.on_update(update_event),
+                Some(handler) => handler.on_change(update_event),
                 None => needs_removed.push(i)
             };
         }

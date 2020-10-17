@@ -1,14 +1,18 @@
-use std::rc::{Rc,Weak};
+use std::rc::Rc;
 use yrs::*;
 
 const ITERATIONS: u32 = 2000;
 
+/// This is a complete example creating several Yjs documents that sync with each other.
+/// * The sync-steps are used to sync documents manually.
+/// * The YProvider is used to automatically sync a document with doc1. It shows how you could implement
+///   a network adapter for Yjs.
 struct YProvider {
     doc: Rc<Doc>
 }
 
-impl UpdateObserver for YProvider {
-    fn on_update (&self, event: UpdateEvent) {
+impl Observable<UpdateEvent> for YProvider {
+    fn on_change (&self, event: UpdateEvent) {
         self.doc.apply_update(&event.update[..])
     }
 }
