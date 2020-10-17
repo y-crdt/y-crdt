@@ -7,39 +7,16 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug executable 'yrs'",
+            "name": "Debug Example",
             "cargo": {
                 "args": [
                     "build",
-                    "--bin=yrs",
-                    "--package=yrs"
-                ],
-                "filter": {
-                    "name": "yrs",
-                    "kind": "bin"
-                }
+                    "--examples"
+                ]
             },
             "args": [],
-            "cwd": "${workspaceFolder}"
-        },
-        {
-            "type": "lldb",
-            "request": "launch",
-            "name": "Debug unit tests in executable 'yrs'",
-            "cargo": {
-                "args": [
-                    "test",
-                    "--no-run",
-                    "--bin=yrs",
-                    "--package=yrs"
-                ],
-                "filter": {
-                    "name": "yrs",
-                    "kind": "bin"
-                }
-            },
-            "args": [],
-            "cwd": "${workspaceFolder}"
+            "cwd": "${workspaceFolder}",
+            "program": "${workspaceFolder}/target/debug/examples/insert"
         }
     ]
 }
