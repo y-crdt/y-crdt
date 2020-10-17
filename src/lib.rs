@@ -4,7 +4,7 @@
  *   Item: A Struct that is used to model sequence data. It is connected through a linked list.
  *   ItemUnintegrated: A Struct that is an unintegrated item. it is not yet connected through the linked list.
  *   GC: A Struct that only marks that content existed but doesn't anymore. It contains all necessary metadata information.
- *  
+ *
  */
 mod encoding;
 mod client_hasher;
@@ -18,6 +18,12 @@ use rand::Rng;
 use encoding::*;
 use client_hasher::ClientHasher;
 
+/// A Y.Doc instance.
+///
+/// ```
+/// let doc = Doc::new();
+/// let type = doc.get_type("type_name");
+/// ```
 #[wasm_bindgen]
 pub struct Doc {
     pub client_id: u32,
@@ -93,7 +99,7 @@ impl Doc {
         update_encoder.buffer().to_owned()
     }
     #[wasm_bindgen(js_name = applyUpdate)]
-    pub fn apply_update (&self, update: &[u8]) {    
+    pub fn apply_update (&self, update: &[u8]) {
         let update_decoder = &mut encoding::UpdateDecoder::new(update);
         self.read_structs(update_decoder);
     }
@@ -224,7 +230,7 @@ impl Type {
     pub fn to_string (&self) -> String {
         let ss = self.doc.ss.borrow();
         let mut start = self.inner.start.get();
-        
+
         let mut s = String::new();
         while let Some(a) = start.as_ref() {
             let item = ss.get_item(&a);
