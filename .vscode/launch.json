@@ -4,10 +4,25 @@
     // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
     "version": "0.2.0",
     "configurations": [
+
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug Example",
+            "name": "Yrs tests",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--lib"
+                ]
+            },
+            "program": "${cargo:program}",
+            "args": []
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Yrs Example",
             "cargo": {
                 "args": [
                     "build",
@@ -16,7 +31,7 @@
             },
             "args": [],
             "cwd": "${workspaceFolder}",
-            "program": "${workspaceFolder}/target/debug/examples/insert"
+            "program": "${workspaceFolder}/target/debug/examples/example"
         }
     ]
 }

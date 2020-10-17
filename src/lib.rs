@@ -18,6 +18,11 @@ use rand::Rng;
 use encoding::*;
 use client_hasher::ClientHasher;
 
+#[test]
+fn it_works() {
+    assert_eq!(2 + 2, 4);
+}
+
 /// A Y.Doc instance.
 ///
 /// ```

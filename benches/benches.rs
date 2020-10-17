@@ -54,7 +54,7 @@ fn gen_vec_perf_pred () {
 }
 
 
-const MULT_STRUCT_SIZE: u32 = 5;
+const MULT_STRUCT_SIZE: u32 = 7;
 
 fn gen_vec_perf_optimal () {
     let mut vec: Vec<u64> = Vec::new();

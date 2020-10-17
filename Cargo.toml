@@ -1,10 +1,8 @@
 [package]
 name = "yrs"
 version = "0.1.0"
-authors = ["Kevin Jahns <kevin.jahns@protonmail.com>"]
+authors = ["Kevin Jahns <kevin.jahns@pm.me>"]
 edition = "2018"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 rand = { version = "0.7.0", features = ["wasm-bindgen"] }
@@ -14,7 +12,7 @@ wasm-bindgen = "^0.2.63"
 criterion = "^0.3"
 
 [[bench]]
-name = "ytext_benchmark"
+name = "benches"
 harness = false
 
 [lib]
