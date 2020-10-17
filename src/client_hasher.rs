@@ -1,5 +1,5 @@
-use core::hash::Hasher;
 use std::convert::TryFrom;
+use std::hash::Hasher;
 
 // An minimalistic hasher for client-ids!
 // Client-ids are already random only have a size of maximum 64 bit. No reason to spin up

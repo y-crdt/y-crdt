@@ -21,8 +21,8 @@ use client_hasher::ClientHasher;
 /// A Y.Doc instance.
 ///
 /// ```
-/// let doc = Doc::new();
-/// let type = doc.get_type("type_name");
+/// let doc = yrs::Doc::new();
+/// let t = doc.get_type("type_name");
 /// ```
 #[wasm_bindgen]
 pub struct Doc {
