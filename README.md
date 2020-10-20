@@ -50,8 +50,8 @@ In Yjs we use the term *Struct* to refer to the building blocks of which Yjs
 types are composed. In some CRDTs, the term operation is prefered. In Yjs the
 document is composed out of the operations objects. Since operations usually
 represent a change on a document, the term seems inapproriate in implementations
-of Yjs. Now the term **Struct** is ambigious in the Rust language because 
-*"struct* is a keyword and is used in a different context.
+of Yjs. Now the term *Struct* is ambigious in the Rust language because 
+*struct* is a keyword and is used in a different context.
 
 Each change on the document generates a small piece of information that is
 integrated into the document. In Yrs we call these small pieces **blocks**.
