@@ -5,6 +5,9 @@ description = "High performance implementation of the Yjs CRDT"
 license = "MIT"
 authors = ["Kevin Jahns <kevin.jahns@pm.me>"]
 edition = "2018"
+homepage = "https://github.com/yjs/yrs/"
+repository = "https://github.com/yjs/yrs/"
+readme = "README.md"
 
 [dependencies]
 rand = { version = "0.7.0", features = ["wasm-bindgen"] }
