@@ -1,6 +1,6 @@
 # Yrs
 
-> Yjs port to Rust (WIP)
+> Yjs port to Rust (WIP). [Rust Docs](https://docs.rs/yrs/)
 
 Yrs "wires" is a Rust port of the Yjs framework. The [Ywasm](https://github.com/yjs/Ywasm) project generates a wasm library based on this package.
 
