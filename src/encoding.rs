@@ -18,6 +18,7 @@ pub const BIT7: u8 = 0b01000000;
 // pub const BITS2: u8 = 0b00000011;
 // pub const BITS1: u8 = 0b00000001;
 
+#[derive(Default)]
 pub struct Encoder {
     pub buf: Vec<u8>
 }
@@ -53,6 +54,7 @@ impl Encoder {
     }
 }
 
+#[derive(Default)]
 pub struct Decoder <'a> {
     pub buf: &'a [u8],
     next: usize
@@ -81,6 +83,7 @@ impl <'a> Decoder <'a> {
     }
 }
 
+#[derive(Default)]
 pub struct UpdateEncoder {
     pub rest_encoder: Encoder
 }
@@ -132,6 +135,7 @@ impl UpdateEncoder {
     }
 }
 
+#[derive(Default)]
 pub struct UpdateDecoder <'a> {
     pub rest_decoder: Decoder<'a>
 }

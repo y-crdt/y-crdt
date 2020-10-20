@@ -28,10 +28,9 @@ fn main () {
     {
         // scope the transaction so that it is droped and the update is synced
         // to doc_synced
-        let mut tr = doc1.transact();
-        t.insert(&mut tr, 0, 'x');
+        t.insert(0, 'x');
         for i in 1..ITERATIONS {
-            t.insert(&mut tr, i, 'a')
+            t.insert(i, 'a')
         }
     }
     println!("doc1 content {}", t.to_string());
