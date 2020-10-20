@@ -11,8 +11,8 @@ struct YProvider {
     doc: Rc<Doc>
 }
 
-impl Observable<UpdateEvent> for YProvider {
-    fn on_change (&self, event: UpdateEvent) {
+impl Subscriber<events::UpdateEvent> for YProvider {
+    fn on_change (&self, event: events::UpdateEvent) {
         self.doc.apply_update(&event.update[..])
     }
 }
@@ -28,9 +28,9 @@ fn main () {
     {
         // scope the transaction so that it is droped and the update is synced
         // to doc_synced
-        t.insert(0, 'x');
-        for i in 1..ITERATIONS {
-            t.insert(i, 'a')
+        t.insert(&doc1.transact(), 0, 'x');
+        for _ in 0..ITERATIONS {
+            t.insert(&doc1.transact(), 0, 'a')
         }
     }
     println!("doc1 content {}", t.to_string());

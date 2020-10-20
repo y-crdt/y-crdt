@@ -3,14 +3,22 @@ use yrs::*;
 
 const ITERATIONS: u32 = 1000000;
 
-fn ytext_insert() {
+fn ytext_prepend() {
     let doc = Doc::new();
-    // let tr = doc.transact();
+    let tr = doc.transact();
     let t = doc.get_type("");
     for _ in 0..ITERATIONS {
-        t.insert(0, 'a')
+        t.insert(&tr, 0, 'a')
     }
-    // tr.end();
+}
+
+fn ytext_append() {
+    let doc = Doc::new();
+    let tr = doc.transact();
+    let t = doc.get_type("");
+    for i in 0..6000 {
+        t.insert(&tr, i, 'a')
+    }
 }
 
 const MULT_STRUCT_SIZE: u32 = 7;
@@ -30,7 +38,8 @@ fn gen_vec_perf_pred_optimal () {
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
-    c.bench_function("ytext insert", |b| b.iter(|| ytext_insert()));
+    c.bench_function("ytext insert", |b| b.iter(|| ytext_prepend()));
+    c.bench_function("ytext insert", |b| b.iter(|| ytext_append()));
     c.bench_function("gen vec perf optimal", |b| b.iter(|| gen_vec_perf_optimal()));
     c.bench_function("gen vec perf pred optimal", |b| b.iter(|| gen_vec_perf_pred_optimal()));
 }
