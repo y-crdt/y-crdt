@@ -40,9 +40,6 @@ impl Type {
             }
         }
     }
-}
-
-impl Type {
     pub fn insert (&self, _: &Transaction, pos: u32, c: char) {
         let mut doc = self.doc.borrow_mut();
         let pos = self.find_list_pos(&doc.ss, pos);
