@@ -1,0 +1,43 @@
+[package]
+name = "ywasm"
+version = "0.1.0"
+authors = ["Kevin Jahns <kevin.jahns@protonmail.com>"]
+edition = "2018"
+license = "MIT"
+description = "High performance implementation of the Yjs CRDT"
+homepage = "https://github.com/yjs/yrs/"
+repository = "https://github.com/yjs/yrs/"
+readme = "./README.md"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["console_error_panic_hook"]
+
+[dependencies]
+yrs = { path = "../lib" }
+wasm-bindgen = "0.2.65"
+
+# The `console_error_panic_hook` crate provides better debugging of panics by
+# logging them with `console.error`. This is great for development, but requires
+# all the `std::fmt` and `std::panicking` infrastructure, so isn't great for
+# code size when deploying.
+console_error_panic_hook = { version = "0.1.6", optional = true }
+
+# `wee_alloc` is a tiny allocator for wasm that is only ~1K in code size
+# compared to the default allocator's ~10K. It is slower than the default
+# allocator, however.
+#
+# Unfortunately, `wee_alloc` requires nightly Rust when targeting wasm for now.
+wee_alloc = { version = "0.4.5", optional = true }
+js-sys = "0.3.45"
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3.13"
+
+# `wasm-opt` is on by default in for the release profile, but it can be
+# disabled by setting it to `false`
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false
+
