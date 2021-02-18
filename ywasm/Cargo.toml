@@ -5,8 +5,8 @@ authors = ["Kevin Jahns <kevin.jahns@protonmail.com>"]
 edition = "2018"
 license = "MIT"
 description = "High performance implementation of the Yjs CRDT"
-homepage = "https://github.com/yjs/yrs/"
-repository = "https://github.com/yjs/yrs/"
+homepage = "https://github.com/yjs/y-crdt/"
+repository = "https://github.com/yjs/y-crdt/"
 readme = "./README.md"
 
 [lib]
@@ -16,7 +16,7 @@ crate-type = ["cdylib", "rlib"]
 default = ["console_error_panic_hook"]
 
 [dependencies]
-yrs = { path = "../lib" }
+yrs = { path = "../yrs" }
 wasm-bindgen = "0.2.65"
 
 # The `console_error_panic_hook` crate provides better debugging of panics by

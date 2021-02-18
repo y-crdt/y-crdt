@@ -38,8 +38,8 @@ fn gen_vec_perf_pred_optimal () {
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
-    c.bench_function("ytext insert", |b| b.iter(|| ytext_prepend()));
-    c.bench_function("ytext insert", |b| b.iter(|| ytext_append()));
+    c.bench_function("ytext prepend", |b| b.iter(|| ytext_prepend()));
+    c.bench_function("ytext append", |b| b.iter(|| ytext_append()));
     c.bench_function("gen vec perf optimal", |b| b.iter(|| gen_vec_perf_optimal()));
     c.bench_function("gen vec perf pred optimal", |b| b.iter(|| gen_vec_perf_pred_optimal()));
 }
