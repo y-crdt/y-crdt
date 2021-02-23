@@ -6,7 +6,7 @@ pub struct Transaction {
     pub doc: Rc<RefCell<DocInner>>,
 
     #[wasm_bindgen(skip)]
-    pub start_state_vector: StateVector
+    pub start_state_vector: StateVector,
 }
 
 impl Drop for Transaction {
@@ -20,11 +20,11 @@ impl Drop for Transaction {
             let mut needs_removed = Vec::new();
             for (i, update_handler) in inner.update_handlers.iter().enumerate() {
                 let update_event = events::UpdateEvent {
-                    update: update.to_vec()
+                    update: update.to_vec(),
                 };
                 match update_handler.upgrade() {
                     Some(handler) => handler.on_change(update_event),
-                    None => needs_removed.push(i)
+                    None => needs_removed.push(i),
                 };
             }
             // delete weak references that don't point to data anymore.

@@ -4,7 +4,7 @@ use crate::*;
 impl Type {
     #[wasm_bindgen(js_name = toString)]
     #[allow(clippy::inherent_to_string)]
-    pub fn to_string (&self) -> String {
+    pub fn to_string(&self) -> String {
         let ss = &self.doc.borrow().ss;
         let mut start = self.inner.start.get();
 
@@ -16,11 +16,11 @@ impl Type {
         }
         s
     }
-    fn find_list_pos (&self, ss: &BlockStore, pos: u32) -> ItemPosition {
+    fn find_list_pos(&self, ss: &BlockStore, pos: u32) -> ItemPosition {
         if pos == 0 {
             ItemPosition {
                 parent: self,
-                after: None
+                after: None,
             }
         } else {
             let mut ptr = &self.inner.start.get();
@@ -36,11 +36,11 @@ impl Type {
             }
             ItemPosition {
                 parent: self,
-                after: *ptr
+                after: *ptr,
             }
         }
     }
-    pub fn insert (&self, _: &Transaction, pos: u32, c: char) {
+    pub fn insert(&self, _: &Transaction, pos: u32, c: char) {
         let mut doc = self.doc.borrow_mut();
         let pos = self.find_list_pos(&doc.ss, pos);
         doc.create_item(&pos, c);
@@ -49,7 +49,7 @@ impl Type {
 
 pub struct TypeInner {
     pub start: Cell<Option<BlockPtr>>,
-    pub ptr: TypePtr
+    pub ptr: TypePtr,
 }
 
 pub enum TypePtr {
@@ -57,10 +57,10 @@ pub enum TypePtr {
     // Id(ID)
 }
 
-impl <'a> TypePtr {
-    pub fn clone (&self) -> TypePtr {
+impl<'a> TypePtr {
+    pub fn clone(&self) -> TypePtr {
         match self {
-            TypePtr::Named(tname) => TypePtr::Named(*tname)
+            TypePtr::Named(tname) => TypePtr::Named(*tname),
         }
     }
 }
