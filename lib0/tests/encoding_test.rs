@@ -23,6 +23,8 @@ quickcheck! {
 
 #[test]
 fn it_adds_two() {
+    let num = 1;
+    assert_eq!((num as u32), 1);
     let mut encoder = Encoder::new();
     encoder.write(4);
     encoder.write(3);
