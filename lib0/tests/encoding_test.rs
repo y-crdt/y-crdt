@@ -1,33 +1,39 @@
 use lib0::decoding::Decoder;
 use lib0::encoding::Encoder;
-use quickcheck::quickcheck;
+use lib0::any::Any;
+use proptest::prelude::*;
 
-#[cfg(test)]
-quickcheck! {
-    fn write(xs: Vec<u8>) -> bool {
+pub fn arb_any() -> impl Strategy<Value = Any> {
+    let leaf = prop_oneof![
+        Just(Any::Null),
+        Just(Any::Undefined),
+        any::<bool>().prop_map(Any::Bool),
+        any::<i32>().prop_map(|i| Any::Number(i as f64)),
+        any::<String>().prop_map(Any::String),
+        any::<Box<[u8]>>().prop_map(Any::Buffer),
+    ].boxed();
+
+    leaf.prop_recursive(
+        8,
+        256,
+        10,
+        |inner| prop_oneof![
+            prop::collection::vec(inner.clone(), 0..10)
+                .prop_map(Any::Array),
+            prop::collection::hash_map(".*", inner, 0..10)
+                .prop_map(Any::Map),
+        ]
+    )
+}
+
+proptest! {
+    #[test]
+    fn encoding_any_prop(any in arb_any()) {
         let mut encoder = Encoder::new();
-        for elem in xs.iter() {
-            encoder.write(*elem);
-        }
+        encoder.write_any(&any);
         let mut decoder = Decoder::new(&encoder.buf);
-        for i in 0..xs.len() {
-            let b = decoder.read();
-            assert_eq!(b, xs[i]);
-            if b != xs[i] {
-                return false
-            }
-        }
-        true
+        let copy = decoder.read_any();
+        assert!(any == copy)
     }
 }
 
-#[test]
-fn it_adds_two() {
-    let num = 1;
-    assert_eq!((num as u32), 1);
-    let mut encoder = Encoder::new();
-    encoder.write(4);
-    encoder.write(3);
-    let mut decoder = Decoder::new(&encoder.buf);
-    assert_eq!(decoder.read(), 4);
-}

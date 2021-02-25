@@ -138,7 +138,7 @@ impl<'a> Decoder<'a> {
             if r < binary::BIT8 as u8 {
                 return if is_negative { -num } else { num }
             }
-            if len > 41 {
+            if len > 128 {
                 panic!("Integer out of range!");
             }
         }

@@ -87,7 +87,7 @@ impl Encoder {
         let mut rest = if is_negative { -num } else { num };
         self.write(
             // whether to continue reading
-            (if rest > binary::BITS6 as i64 { binary::BIT8 } else { 0 }) as u8
+            (if rest > binary::BITS6 as i64 { binary::BIT8 as u8 } else { 0 })
                 // whether number is negative
                 | (if is_negative { binary::BIT7 as u8 } else { 0 })
                 // number
@@ -95,11 +95,10 @@ impl Encoder {
         );
         rest >>= 6;
         while rest > 0 {
-            self.write(if rest > binary::BITS7 as i64 {
-                binary::BIT8 as u8
-            } else {
-                (binary::BITS7 as i64 & rest) as u8
-            });
+            self.write(
+                if rest > binary::BITS7 as i64 { binary::BIT8 as u8 } else { 0 }
+                | (binary::BITS7 as i64 & rest) as u8
+            );
             rest >>= 7;
         }
     }
@@ -183,6 +182,8 @@ impl Encoder {
                 self.write(if *bool { 120 } else { 121 })
             }
             Any::String(str) => {
+                // TYPE 119: String
+                self.write(119);
                 self.write_var_string(&str);
             }
             Any::Number(num) => {
