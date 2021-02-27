@@ -41,7 +41,7 @@ impl Encoder {
     // Write an unsigned integer (16bit)
     pub fn set_uint16(&mut self, pos: usize, num: u16) {
         self.set(pos, num as u8);
-        self.set(pos, (num >> 8) as u8);
+        self.set(pos + 1, (num >> 8) as u8);
     }
     // Write an unsigned integer (32bit)
     pub fn write_uint32(&mut self, num: u32) {
@@ -53,9 +53,9 @@ impl Encoder {
     // Write an unsigned integer (32bit)
     pub fn set_uint32(&mut self, pos: usize, num: u32) {
         self.set(pos, num as u8);
-        self.set(pos, (num >> 8) as u8);
-        self.set(pos, (num >> 16) as u8);
-        self.set(pos, (num >> 24) as u8);
+        self.set(pos + 1, (num >> 8) as u8);
+        self.set(pos + 2, (num >> 16) as u8);
+        self.set(pos + 3, (num >> 24) as u8);
     }
     // Write an unsigned integer (32bit) in big endian order (most significant byte first)
     pub fn write_uint32_big_endian(&mut self, num: u32) {
@@ -68,13 +68,13 @@ impl Encoder {
     //
     // Encodes integers in the range from [0, 4294967295] / [0, 0xffffffff]. (max 32 bit unsigned integer).
     // @todo Support 53, 64, and possibly 128 bit integers.
-    pub fn write_var_uint(&mut self, num: u32) {
+    pub fn write_var_uint(&mut self, num: u64) {
         let mut rest = num;
-        while rest > binary::BITS7 {
-            self.write((binary::BITS7 & rest) as u8);
+        while rest > binary::BITS7 as u64 {
+            self.write(binary::BIT8 as u8 | (binary::BITS7 as u8 & rest as u8));
             rest >>= 7;
         }
-        self.write((binary::BITS7 & rest) as u8);
+        self.write(binary::BITS7 as u8 & rest as u8);
     }
     // Write a variable length integer.
     //
@@ -82,6 +82,7 @@ impl Encoder {
     // to use the same function for BigInt and 53bit integers.
     //
     // We use the 7th bit instead for signaling that this is a negative number.
+    // @todo Support up to 128 bit
     pub fn write_var_int(&mut self, num: i64) {
         let is_negative = num < 0;
         let mut rest = if is_negative { -num } else { num };
@@ -108,7 +109,7 @@ impl Encoder {
     }
     // Write variable length buffer (binary content).
     pub fn write_var_buffer(&mut self, buf: &[u8]) {
-        self.write_var_uint(buf.len() as u32);
+        self.write_var_uint(buf.len() as u64);
         self.write_buffer(buf);
     }
     // Write variable-length utf8 string
@@ -188,7 +189,7 @@ impl Encoder {
             }
             Any::Number(num) => {
                 let num_truncated = num.trunc();
-                if num_truncated == *num {
+                if num_truncated == *num && num_truncated <= crate::number::F64_MAX_SAFE_INTEGER && num_truncated >= crate::number::F64_MIN_SAFE_INTEGER {
                     // TYPE 125: INTEGER
                     self.write(125);
                     self.write_var_int(num_truncated as i64);
@@ -210,7 +211,7 @@ impl Encoder {
             Any::Array(arr) => {
                 // TYPE 117: Array
                 self.write(117);
-                self.write_var_uint(arr.len() as u32);
+                self.write_var_uint(arr.len() as u64);
                 for el in arr.iter() {
                     self.write_any(el);
                 }
@@ -218,7 +219,7 @@ impl Encoder {
             Any::Map(map) => {
                 // TYPE 118: Map
                 self.write(118);
-                self.write_var_uint(map.len() as u32);
+                self.write_var_uint(map.len() as u64);
                 for (key, value) in map {
                     self.write_var_string(&key);
                     self.write_any(value);

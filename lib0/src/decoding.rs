@@ -114,7 +114,7 @@ impl<'a> Decoder<'a> {
             if r < binary::BIT8 as u64 {
                 return num
             }
-            if len > 35 {
+            if len > 64 {
                 panic!("Integer out of range!");
             }
         }
@@ -181,7 +181,7 @@ impl<'a> Decoder<'a> {
     }
     // read buffer of 8 bytes as fixed-length array
     pub fn read_buffer_fixed8 (&mut self) -> [u8; 8] {
-        let buf = self.read_buffer(4);
+        let buf = self.read_buffer(8);
         let mut res: [u8; 8] = Default::default();
         res.clone_from_slice(buf);
         res
@@ -244,7 +244,7 @@ impl<'a> Decoder<'a> {
             // CASE 118: Map<string,Any>
             118 => {
                 let len = self.read_var_uint();
-                let mut map = HashMap::new();
+                let mut map = HashMap::with_capacity(len as usize);
                 for _ in 0..len {
                     let key = self.read_var_string();
                     map.insert(key.to_owned(), self.read_any());
@@ -254,7 +254,7 @@ impl<'a> Decoder<'a> {
             // CASE 117: Array<Any>
             117 => {
                 let len = self.read_var_uint();
-                let mut arr = Vec::new();
+                let mut arr = Vec::with_capacity(len as usize);
                 for _ in 0..len {
                     arr.push(self.read_any());
                 }
