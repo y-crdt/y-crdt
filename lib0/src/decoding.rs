@@ -200,7 +200,7 @@ impl<'a> Decoder<'a> {
         i64::from_be_bytes(self.read_buffer_fixed8())
     }
     // read BigUInt64 in big endian order
-    pub fn read_biguint64 (&mut self) -> u64 {
+    pub fn read_big_uint64 (&mut self) -> u64 {
         u64::from_be_bytes(self.read_buffer_fixed8())
     }
     pub fn read_any (&mut self) -> Any {

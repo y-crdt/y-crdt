@@ -66,12 +66,12 @@ impl Encoder {
     }
     // Write a variable length unsigned integer.
     pub fn write_var_uint(&mut self, mut num: impl Uint) {
-        let mut c = true;
-        while c {
+        while {
             let rest = num.shift7_rest_to_byte();
-            c = !num.is_null();
+            let c = !num.is_null();
             self.write(if c { 0b10000000 | rest } else { rest });
-        }
+            c
+        } {};
     }
     // Write a variable length integer.
     //
@@ -80,29 +80,29 @@ impl Encoder {
     //
     // We use the 7th bit instead for signaling that this is a negative number.
     // @todo Support up to 128 bit
-    pub fn write_var_int(&mut self, num: i64) {
+    pub fn write_var_int(&mut self, mut num: i64) {
         let is_negative = num < 0;
-        let mut rest = if is_negative { -num } else { num };
+        num = if is_negative { -num } else { num };
         self.write(
             // whether to continue reading
-            (if rest > binary::BITS6 as i64 { binary::BIT8 as u8 } else { 0 })
+            (if num > binary::BITS6 as i64 { binary::BIT8 as u8 } else { 0 })
                 // whether number is negative
                 | (if is_negative { binary::BIT7 as u8 } else { 0 })
                 // number
-                | (binary::BITS6 as i64 & rest) as u8,
+                | (binary::BITS6 as i64 & num) as u8,
         );
-        rest >>= 6;
-        while rest > 0 {
+        num >>= 6;
+        while num > 0 {
             self.write(
-                if rest > binary::BITS7 as i64 { binary::BIT8 as u8 } else { 0 }
-                | (binary::BITS7 as i64 & rest) as u8
+                if num > binary::BITS7 as i64 { binary::BIT8 as u8 } else { 0 }
+                | (binary::BITS7 as i64 & num) as u8
             );
-            rest >>= 7;
+            num >>= 7;
         }
     }
     // Write buffer without storing the length of the buffer
     pub fn write_buffer(&mut self, buf: &[u8]) {
-        self.buf.write(buf).expect("");
+        self.buf.write(buf).unwrap();
     }
     // Write variable length buffer (binary content).
     pub fn write_var_buffer(&mut self, buf: &[u8]) {

@@ -187,7 +187,7 @@ impl EncodingTypes {
                 assert_eq!(read, *input);
             }
             EncodingTypes::BigUInt64(input) => {
-                let read = decoder.read_biguint64();
+                let read = decoder.read_big_uint64();
                 assert_eq!(read, *input);
             }
             EncodingTypes::Any(input) => {

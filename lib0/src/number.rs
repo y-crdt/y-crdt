@@ -10,76 +10,92 @@ pub trait Uint: Eq + Ord + Default {
 }
 
 impl Uint for u32 {
+  #[inline]
   fn shift6_rest_to_byte(&mut self) -> u8 {
     let b = *self as u8 & 0b00111111;
     *self >>= 6;
     b
   }
+  #[inline]
   fn shift7_rest_to_byte(&mut self) -> u8 {
     let b = *self as u8 & 0b01111111;
     *self >>= 7;
     b
   }
+  #[inline]
   fn unshift_add(&mut self, unshift: usize, add: u8) {
     *self |= (add as Self) << unshift;
   }
+  #[inline]
   fn is_null (&self) -> bool {
     *self == 0
   }
 }
 
 impl Uint for u64 {
+  #[inline]
   fn shift6_rest_to_byte(&mut self) -> u8 {
     let b = *self as u8 & 0b00111111;
     *self >>= 6;
     b
   }
+  #[inline]
   fn shift7_rest_to_byte(&mut self) -> u8 {
     let b = *self as u8 & 0b01111111;
     *self >>= 7;
     b
   }
+  #[inline]
   fn unshift_add(&mut self, unshift: usize, add: u8) {
     *self |= (add as Self) << unshift;
   }
+  #[inline]
   fn is_null (&self) -> bool {
     *self == 0
   }
 }
 
 impl Uint for u128 {
+  #[inline]
   fn shift6_rest_to_byte(&mut self) -> u8 {
     let b = *self as u8 & 0b00111111;
     *self >>= 6;
     b
   }
+  #[inline]
   fn shift7_rest_to_byte(&mut self) -> u8 {
     let b = *self as u8 & 0b01111111;
     *self >>= 7;
     b
   }
+  #[inline]
   fn unshift_add(&mut self, unshift: usize, add: u8) {
     *self |= (add as Self) << unshift;
   }
+  #[inline]
   fn is_null (&self) -> bool {
     *self == 0
   }
 }
 
 impl Uint for usize {
+  #[inline]
   fn shift6_rest_to_byte(&mut self) -> u8 {
     let b = *self as u8 & 0b00111111;
     *self >>= 6;
     b
   }
+  #[inline]
   fn shift7_rest_to_byte(&mut self) -> u8 {
     let b = *self as u8 & 0b01111111;
     *self >>= 7;
     b
   }
+  #[inline]
   fn unshift_add(&mut self, unshift: usize, add: u8) {
     *self |= (add as Self) << unshift;
   }
+  #[inline]
   fn is_null (&self) -> bool {
     *self == 0
   }
