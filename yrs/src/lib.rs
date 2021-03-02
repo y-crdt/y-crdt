@@ -90,6 +90,8 @@ mod doc;
 mod encoding;
 mod shared_type;
 mod transaction;
+mod updates;
+mod update_encoder;
 
 use block::*;
 use block_store::*;

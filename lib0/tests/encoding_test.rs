@@ -45,7 +45,10 @@ enum EncodingTypes {
     Uint16(u16),
     Uint32(u32),
     Uint32BigEndian(u32),
-    VarUint(u64),
+    VarUint32(u32),
+    VarUint64(u64),
+    VarUint128(u128),
+    VarUintUsize(usize),
     VarInt(i64),
     Buffer(Vec<u8>),
     VarBuffer(Vec<u8>),
@@ -76,7 +79,16 @@ impl EncodingTypes {
             EncodingTypes::Uint32BigEndian(input) => {
                 encoder.write_uint32_big_endian(*input);
             }
-            EncodingTypes::VarUint(input) => {
+            EncodingTypes::VarUint32(input) => {
+                encoder.write_var_uint(*input);
+            }
+            EncodingTypes::VarUint64(input) => {
+                encoder.write_var_uint(*input);
+            }
+            EncodingTypes::VarUint128(input) => {
+                encoder.write_var_uint(*input);
+            }
+            EncodingTypes::VarUintUsize(input) => {
                 encoder.write_var_uint(*input);
             }
             EncodingTypes::VarInt(input) => {
@@ -130,8 +142,20 @@ impl EncodingTypes {
                 let read = decoder.read_uint32_big_endian();
                 assert_eq!(read, *input);
             }
-            EncodingTypes::VarUint(input) => {
-                let read = decoder.read_var_uint();
+            EncodingTypes::VarUint32(input) => {
+                let read: u32 = decoder.read_var_uint();
+                assert_eq!(read, *input);
+            }
+            EncodingTypes::VarUint64(input) => {
+                let read: u64 = decoder.read_var_uint();
+                assert_eq!(read, *input);
+            }
+            EncodingTypes::VarUint128(input) => {
+                let read: u128 = decoder.read_var_uint();
+                assert_eq!(read, *input);
+            }
+            EncodingTypes::VarUintUsize(input) => {
+                let read: usize = decoder.read_var_uint();
                 assert_eq!(read, *input);
             }
             EncodingTypes::VarInt(input) => {

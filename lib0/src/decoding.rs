@@ -38,13 +38,13 @@ impl<'a> Decoder<'a> {
     }
     // Read a variable length buffer.
     pub fn read_var_buffer(&mut self) -> &[u8] {
-        let len = self.read_var_uint() as u32;
+        let len: u32 = self.read_var_uint();
         self.read_buffer(len)
     }
     // Read a variable length buffer.
     pub fn peek_var_buffer(&mut self) -> &[u8] {
         let next = self.next;
-        let len = self.read_var_uint() as u32;
+        let len: u32 = self.read_var_uint();
         let buffer_next = self.next;
         self.next = next;
         let slice = &self.buf[buffer_next..(buffer_next + len as usize)];
@@ -104,17 +104,17 @@ impl<'a> Decoder<'a> {
     // * numbers < 2^7 are stored in one byte
     // * numbers < 2^14 are stored in two bytes
     // @todo currently, only 32 bits supported
-    pub fn read_var_uint(&mut self) -> u64 {
-        let mut num: u64 = 0;
+    pub fn read_var_uint<T: crate::number::Uint>(&mut self) -> T {
+        let mut num: T = Default::default();
         let mut len: usize = 0;
         loop {
-            let r = self.read() as u64;
-            num |= (r & binary::BITS7 as u64) << len;
+            let r = self.read();
+            num.unshift_add(len, r & binary::BITS7);
             len += 7;
-            if r < binary::BIT8 as u64 {
+            if r < binary::BIT8 {
                 return num
             }
-            if len > 64 {
+            if len > 128 {
                 panic!("Integer out of range!");
             }
         }
@@ -243,8 +243,8 @@ impl<'a> Decoder<'a> {
             }
             // CASE 118: Map<string,Any>
             118 => {
-                let len = self.read_var_uint();
-                let mut map = HashMap::with_capacity(len as usize);
+                let len: usize = self.read_var_uint();
+                let mut map = HashMap::with_capacity(len);
                 for _ in 0..len {
                     let key = self.read_var_string();
                     map.insert(key.to_owned(), self.read_any());
@@ -253,8 +253,8 @@ impl<'a> Decoder<'a> {
             }
             // CASE 117: Array<Any>
             117 => {
-                let len = self.read_var_uint();
-                let mut arr = Vec::with_capacity(len as usize);
+                let len: usize = self.read_var_uint();
+                let mut arr = Vec::with_capacity(len);
                 for _ in 0..len {
                     arr.push(self.read_any());
                 }

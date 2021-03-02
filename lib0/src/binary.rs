@@ -1,11 +1,12 @@
-pub const BIT1: u32 = 1;
-pub const BIT2: u32 = 2;
-pub const BIT3: u32 = 4;
-pub const BIT4: u32 = 8;
-pub const BIT5: u32 = 16;
-pub const BIT6: u32 = 32;
-pub const BIT7: u32 = 64;
-pub const BIT8: u32 = 128;
+
+pub const BIT1: u8 = 1;
+pub const BIT2: u8 = 2;
+pub const BIT3: u8 = 4;
+pub const BIT4: u8 = 8;
+pub const BIT5: u8 = 16;
+pub const BIT6: u8 = 32;
+pub const BIT7: u8 = 64;
+pub const BIT8: u8 = 128;
 pub const BIT9: u32 = 256;
 pub const BIT10: u32 = 512;
 pub const BIT11: u32 = 1024;
@@ -33,14 +34,14 @@ pub const BIT32: u32 = 1 << 31;
 
 // First n bits activated
 pub const BITS0: u32 = 0;
-pub const BITS1: u32 = 1;
-pub const BITS2: u32 = 3;
-pub const BITS3: u32 = 7;
-pub const BITS4: u32 = 15;
-pub const BITS5: u32 = 31;
-pub const BITS6: u32 = 63;
-pub const BITS7: u32 = 127;
-pub const BITS8: u32 = 255;
+pub const BITS1: u8 = 1;
+pub const BITS2: u8 = 3;
+pub const BITS3: u8 = 7;
+pub const BITS4: u8 = 15;
+pub const BITS5: u8 = 31;
+pub const BITS6: u8 = 63;
+pub const BITS7: u8 = 127;
+pub const BITS8: u8 = 255;
 pub const BITS9: u32 = 511;
 pub const BITS10: u32 = 1023;
 pub const BITS11: u32 = 2047;

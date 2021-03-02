@@ -1060,6 +1060,7 @@ name = "yrs"
 version = "0.0.1"
 dependencies = [
  "criterion",
+ "lib0",
  "quickcheck",
  "rand 0.7.3",
  "wasm-bindgen",

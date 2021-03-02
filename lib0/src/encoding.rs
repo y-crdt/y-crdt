@@ -1,4 +1,4 @@
-use crate::any::Any;
+use crate::{any::Any, number::Uint};
 use crate::binary;
 use std::io::Write;
 
@@ -65,16 +65,13 @@ impl Encoder {
         self.write(num as u8);
     }
     // Write a variable length unsigned integer.
-    //
-    // Encodes integers in the range from [0, 4294967295] / [0, 0xffffffff]. (max 32 bit unsigned integer).
-    // @todo Support 53, 64, and possibly 128 bit integers.
-    pub fn write_var_uint(&mut self, num: u64) {
-        let mut rest = num;
-        while rest > binary::BITS7 as u64 {
-            self.write(binary::BIT8 as u8 | (binary::BITS7 as u8 & rest as u8));
-            rest >>= 7;
+    pub fn write_var_uint(&mut self, mut num: impl Uint) {
+        let mut c = true;
+        while c {
+            let rest = num.shift7_rest_to_byte();
+            c = !num.is_null();
+            self.write(if c { 0b10000000 | rest } else { rest });
         }
-        self.write(binary::BITS7 as u8 & rest as u8);
     }
     // Write a variable length integer.
     //
@@ -109,7 +106,7 @@ impl Encoder {
     }
     // Write variable length buffer (binary content).
     pub fn write_var_buffer(&mut self, buf: &[u8]) {
-        self.write_var_uint(buf.len() as u64);
+        self.write_var_uint(buf.len());
         self.write_buffer(buf);
     }
     // Write variable-length utf8 string
