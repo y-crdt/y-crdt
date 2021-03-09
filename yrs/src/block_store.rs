@@ -1,9 +1,9 @@
 use crate::*;
+use lib0::decoding::Decoder;
+use lib0::encoding::Encoder;
 use std::collections::HashMap;
 use std::hash::BuildHasherDefault;
 use std::vec::Vec;
-use lib0::encoding::Encoder;
-use lib0::decoding::Decoder;
 
 #[wasm_bindgen]
 #[derive(Default)]

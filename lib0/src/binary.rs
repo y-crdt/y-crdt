@@ -1,4 +1,3 @@
-
 pub const BIT1: u8 = 1;
 pub const BIT2: u8 = 2;
 pub const BIT3: u8 = 4;

@@ -1,5 +1,5 @@
-use crate::{any::Any, number::Uint};
 use crate::binary;
+use crate::{any::Any, number::Uint};
 use std::io::Write;
 
 #[derive(Default)]
@@ -74,7 +74,7 @@ impl Encoder {
             let c = !num.is_null();
             self.write(if c { 0b10000000 | rest } else { rest });
             c
-        } {};
+        } {}
     }
     // Write a variable length integer.
     //
@@ -97,8 +97,11 @@ impl Encoder {
         num >>= 6;
         while num > 0 {
             self.write(
-                if num > binary::BITS7 as i64 { binary::BIT8 as u8 } else { 0 }
-                | (binary::BITS7 as i64 & num) as u8
+                if num > binary::BITS7 as i64 {
+                    binary::BIT8 as u8
+                } else {
+                    0
+                } | (binary::BITS7 as i64 & num) as u8,
             );
             num >>= 7;
         }
@@ -189,7 +192,10 @@ impl Encoder {
             }
             Any::Number(num) => {
                 let num_truncated = num.trunc();
-                if num_truncated == *num && num_truncated <= crate::number::F64_MAX_SAFE_INTEGER && num_truncated >= crate::number::F64_MIN_SAFE_INTEGER {
+                if num_truncated == *num
+                    && num_truncated <= crate::number::F64_MAX_SAFE_INTEGER
+                    && num_truncated >= crate::number::F64_MIN_SAFE_INTEGER
+                {
                     // TYPE 125: INTEGER
                     self.write(125);
                     self.write_var_int(num_truncated as i64);

@@ -89,9 +89,9 @@ mod client_hasher;
 mod doc;
 mod shared_type;
 mod transaction;
-mod updates;
-mod update_encoder;
 mod update_decoder;
+mod update_encoder;
+mod updates;
 
 use block::*;
 use block_store::*;

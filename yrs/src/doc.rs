@@ -1,9 +1,9 @@
 use rand::Rng;
 
 use crate::*;
-use update_encoder::*;
-use update_decoder::*;
 use lib0::decoding::Decoder;
+use update_decoder::*;
+use update_encoder::*;
 
 const BIT7: u8 = 0b01000000;
 const BIT8: u8 = 0b10000000;
@@ -309,9 +309,7 @@ impl<'a> DocInner {
         if self.ss.local_block_list.integrated_len > sv.get_state(self.ss.client_id) as usize {
             structs.push((&self.client_id, &self.ss.local_block_list));
         }
-        update_encoder
-            .rest_encoder
-            .write_var_uint(structs.len());
+        update_encoder.rest_encoder.write_var_uint(structs.len());
 
         for (client_id, client_structs) in structs.iter() {
             let start_clock = sv.get_state(**client_id);

@@ -1,7 +1,7 @@
-use core::{panic};
-use std::collections::HashMap;
-use crate::binary;
 use crate::any::Any;
+use crate::binary;
+use core::panic;
+use std::collections::HashMap;
 
 #[derive(Default)]
 pub struct Decoder<'a> {
@@ -27,7 +27,7 @@ impl<'a> Decoder<'a> {
     pub fn clone(&self) -> Decoder<'a> {
         Decoder {
             buf: self.buf,
-            next: self.next
+            next: self.next,
         }
     }
     // Take a slice of the next `len` bytes and advance the position by `len`.
@@ -56,15 +56,15 @@ impl<'a> Decoder<'a> {
         self.read_buffer((self.buf.len() - self.next) as u32)
     }
     // Skip one byte, jump to the next position
-    pub fn skip8 (&mut self) {
+    pub fn skip8(&mut self) {
         self.next += 1;
     }
     // Read one byte as unsigned integer.
-    pub fn read_uint8 (&mut self) -> u8 {
+    pub fn read_uint8(&mut self) -> u8 {
         self.read()
     }
     // Read 2 bytes as unsigned integer
-    pub fn read_uint16 (&mut self) -> u16 {
+    pub fn read_uint16(&mut self) -> u16 {
         self.read() as u16 | ((self.read() as u16) << 8)
     }
     // Read 4 bytes as unsigned integer
@@ -112,7 +112,7 @@ impl<'a> Decoder<'a> {
             num.unshift_add(len, r & binary::BITS7);
             len += 7;
             if r < binary::BIT8 {
-                return num
+                return num;
             }
             if len > 128 {
                 panic!("Integer out of range!");
@@ -129,14 +129,14 @@ impl<'a> Decoder<'a> {
         let mut len: u32 = 6;
         let is_negative = r & binary::BIT7 as u8 > 0;
         if r & binary::BIT8 as u8 == 0 {
-            return if is_negative { -num } else { num }
+            return if is_negative { -num } else { num };
         }
         loop {
             r = self.read();
             num |= (r as i64 & binary::BITS7 as i64) << len;
             len += 7;
             if r < binary::BIT8 as u8 {
-                return if is_negative { -num } else { num }
+                return if is_negative { -num } else { num };
             }
             if len > 128 {
                 panic!("Integer out of range!");
@@ -144,14 +144,14 @@ impl<'a> Decoder<'a> {
         }
     }
     // Look ahead and read var_uint without incrementing position
-    pub fn peek_var_uint (&mut self) -> u64 {
+    pub fn peek_var_uint(&mut self) -> u64 {
         let pos = self.next;
         let s = self.read_var_uint();
         self.next = pos;
         s
     }
     // Look ahead and read var_int without incrementing position
-    pub fn peek_var_int (&mut self) -> i64 {
+    pub fn peek_var_int(&mut self) -> i64 {
         let pos = self.next;
         let s = self.read_var_int();
         self.next = pos;
@@ -159,88 +159,66 @@ impl<'a> Decoder<'a> {
     }
     // Read string of variable length.
     // read_var_uint is used to read the length of the string.
-    pub fn read_var_string (&mut self) -> &str {
+    pub fn read_var_string(&mut self) -> &str {
         let buf = self.read_var_buffer();
-        unsafe {
-            std::str::from_utf8_unchecked(buf)
-        }
+        unsafe { std::str::from_utf8_unchecked(buf) }
     }
     // Look ahead and read var_string without incrementing position
-    pub fn peek_var_string (&mut self) -> &str {
+    pub fn peek_var_string(&mut self) -> &str {
         let buf = self.peek_var_buffer();
-        unsafe {
-            std::str::from_utf8_unchecked(buf)
-        }
+        unsafe { std::str::from_utf8_unchecked(buf) }
     }
     // read buffer of 4 bytes as fixed-length array
-    pub fn read_buffer_fixed4 (&mut self) -> [u8; 4] {
+    pub fn read_buffer_fixed4(&mut self) -> [u8; 4] {
         let buf = self.read_buffer(4);
         let mut res: [u8; 4] = Default::default();
         res.clone_from_slice(buf);
         res
     }
     // read buffer of 8 bytes as fixed-length array
-    pub fn read_buffer_fixed8 (&mut self) -> [u8; 8] {
+    pub fn read_buffer_fixed8(&mut self) -> [u8; 8] {
         let buf = self.read_buffer(8);
         let mut res: [u8; 8] = Default::default();
         res.clone_from_slice(buf);
         res
     }
     // Read float32 in big endian order
-    pub fn read_float32 (&mut self) -> f32 {
+    pub fn read_float32(&mut self) -> f32 {
         f32::from_be_bytes(self.read_buffer_fixed4())
     }
     // Read float64 in big endian order
     // @todo there must be a more elegant way to convert a slice to a fixed-length buffer.
-    pub fn read_float64 (&mut self) -> f64 {
+    pub fn read_float64(&mut self) -> f64 {
         f64::from_be_bytes(self.read_buffer_fixed8())
     }
     // read BigInt64 in big endian order
-    pub fn read_bigint64 (&mut self) -> i64{
+    pub fn read_bigint64(&mut self) -> i64 {
         i64::from_be_bytes(self.read_buffer_fixed8())
     }
     // read BigUInt64 in big endian order
-    pub fn read_big_uint64 (&mut self) -> u64 {
+    pub fn read_big_uint64(&mut self) -> u64 {
         u64::from_be_bytes(self.read_buffer_fixed8())
     }
-    pub fn read_any (&mut self) -> Any {
+    pub fn read_any(&mut self) -> Any {
         match self.read_uint8() {
             // CASE 127: undefined
-            127 => {
-                Any::Undefined
-            }
+            127 => Any::Undefined,
             // CASE 126: null
-            126 => {
-                Any::Null
-            }
+            126 => Any::Null,
             // CASE 125: integer
-            125 => {
-                Any::Number(self.read_var_int() as f64)
-            }
+            125 => Any::Number(self.read_var_int() as f64),
             // CASE 124: float32
-            124 => {
-                Any::Number(self.read_float32() as f64)
-            }
+            124 => Any::Number(self.read_float32() as f64),
             // CASE 123: float64
-            123 => {
-                Any::Number(self.read_float64())
-            }
+            123 => Any::Number(self.read_float64()),
             // CASE 122: bigint
-            122 => {
-                Any::BigInt(self.read_bigint64())
-            }
+            122 => Any::BigInt(self.read_bigint64()),
             // CASE 121: boolean (false)
-            121 => {
-                Any::Bool(false)
-            }
+            121 => Any::Bool(false),
             // CASE 120: boolean (true)
-            120 => {
-                Any::Bool(true)
-            }
+            120 => Any::Bool(true),
             // CASE 119: string
-            119 => {
-                Any::String(self.read_var_string().to_owned())
-            }
+            119 => Any::String(self.read_var_string().to_owned()),
             // CASE 118: Map<string,Any>
             118 => {
                 let len: usize = self.read_var_uint();
@@ -261,9 +239,7 @@ impl<'a> Decoder<'a> {
                 Any::Array(arr)
             }
             // CASE 116: buffer
-            116 => {
-                Any::Buffer(Box::from(self.read_var_buffer().to_owned()))
-            }
+            116 => Any::Buffer(Box::from(self.read_var_buffer().to_owned())),
             _ => {
                 panic!("Unable to read Any content");
             }

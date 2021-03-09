@@ -1,6 +1,6 @@
+use lib0::any::Any;
 use lib0::decoding::Decoder;
 use lib0::encoding::Encoder;
-use lib0::any::Any;
 use proptest::prelude::*;
 
 pub fn arb_any() -> impl Strategy<Value = Any> {
@@ -12,19 +12,15 @@ pub fn arb_any() -> impl Strategy<Value = Any> {
         any::<i64>().prop_map(|i| Any::Number(i as f64)),
         any::<String>().prop_map(Any::String),
         any::<Box<[u8]>>().prop_map(Any::Buffer),
-    ].boxed();
+    ]
+    .boxed();
 
-    leaf.prop_recursive(
-        8,
-        256,
-        10,
-        |inner| prop_oneof![
-            prop::collection::vec(inner.clone(), 0..10)
-                .prop_map(Any::Array),
-            prop::collection::hash_map(".*", inner, 0..10)
-                .prop_map(Any::Map),
+    leaf.prop_recursive(8, 256, 10, |inner| {
+        prop_oneof![
+            prop::collection::vec(inner.clone(), 0..10).prop_map(Any::Array),
+            prop::collection::hash_map(".*", inner, 0..10).prop_map(Any::Map),
         ]
-    )
+    })
 }
 
 proptest! {
@@ -62,11 +58,9 @@ enum EncodingTypes {
 }
 
 impl EncodingTypes {
-    fn write (&self, encoder: &mut Encoder) {
+    fn write(&self, encoder: &mut Encoder) {
         match self {
-            EncodingTypes::Byte(input) => {
-                encoder.write(*input)
-            }
+            EncodingTypes::Byte(input) => encoder.write(*input),
             EncodingTypes::Uint8(input) => {
                 encoder.write_uint8(*input);
             }
@@ -120,7 +114,7 @@ impl EncodingTypes {
             }
         }
     }
-    fn read (&self, decoder: &mut Decoder) {
+    fn read(&self, decoder: &mut Decoder) {
         match self {
             EncodingTypes::Byte(input) => {
                 let read = decoder.read();

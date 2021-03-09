@@ -1,5 +1,5 @@
 use crate::*;
-use update_encoder::{EncoderV1, DSEncoder};
+use update_encoder::{DSEncoder, EncoderV1};
 
 #[wasm_bindgen]
 pub struct Transaction {

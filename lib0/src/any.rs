@@ -1,5 +1,5 @@
+use std::cmp::PartialEq;
 use std::collections::HashMap;
-use std::cmp::{PartialEq};
 
 #[derive(PartialEq, Debug, Clone)]
 pub enum Any {
