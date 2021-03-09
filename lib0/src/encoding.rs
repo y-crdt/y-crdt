@@ -8,8 +8,11 @@ pub struct Encoder {
 }
 impl Encoder {
     pub fn new() -> Encoder {
+        Encoder::with_capacity(10000)
+    }
+    pub fn with_capacity(capacity: usize) -> Encoder {
         Encoder {
-            buf: Vec::with_capacity(10000),
+            buf: Vec::with_capacity(capacity),
         }
     }
     // Write a single byte to the encoder

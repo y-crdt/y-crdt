@@ -1,12 +1,17 @@
-use encoding::*;
 use rand::Rng;
 
 use crate::*;
+use update_encoder::*;
+use update_decoder::*;
+use lib0::decoding::Decoder;
+
+const BIT7: u8 = 0b01000000;
+const BIT8: u8 = 0b10000000;
 
 /// A Y.Doc instance.
 #[wasm_bindgen]
 pub struct Doc {
-    pub client_id: u32,
+    pub client_id: u64,
     inner: Rc<RefCell<DocInner>>,
 }
 
@@ -32,7 +37,7 @@ impl Clone for Doc {
 impl Doc {
     #[wasm_bindgen(constructor)]
     pub fn new() -> Doc {
-        let client_id: u32 = rand::thread_rng().gen();
+        let client_id: u64 = rand::thread_rng().gen();
         Doc {
             client_id,
             inner: Rc::from(RefCell::from(DocInner {
@@ -111,11 +116,13 @@ impl Doc {
     ///
     #[wasm_bindgen(js_name = encodeStateAsUpdate)]
     pub fn encode_state_as_update(&self) -> Vec<u8> {
-        let update_encoder = &mut encoding::UpdateEncoder::new();
+        let update_encoder = &mut EncoderV1::new();
         self.inner
             .borrow()
             .write_structs(update_encoder, &StateVector::empty());
-        update_encoder.buffer().to_owned()
+        // @todo this is not satisfactory. We would copy the complete buffer every time this method is called.
+        // Instead we should implement `write_state_as_update` and fill an existing object that implements the Write trait.
+        update_encoder.to_buffer().to_owned()
     }
     /// Compute a diff to sync with another client.
     ///
@@ -134,20 +141,21 @@ impl Doc {
     /// // encode state vector to a binary format that you can send to other peers.
     /// let state_vector_encoded: Vec<u8> = state_vector.encode();
     ///
-    /// let diff = doc2.encode_diff_as_update(&yrs::StateVector::decode(&state_vector_encoded));    
+    /// let diff = doc2.encode_diff_as_update(&yrs::StateVector::decode(&state_vector_encoded));
     ///
     /// // apply all missing changes from doc2 to doc1.
     /// doc1.apply_update(&diff);
     /// ```
     pub fn encode_diff_as_update(&self, sv: &StateVector) -> Vec<u8> {
-        let update_encoder = &mut encoding::UpdateEncoder::new();
+        let update_encoder = &mut EncoderV1::new();
         self.inner.borrow().write_structs(update_encoder, sv);
-        update_encoder.buffer().to_owned()
+        update_encoder.to_buffer().to_owned()
     }
     /// Apply a document update.
     #[wasm_bindgen(js_name = applyUpdate)]
     pub fn apply_update(&self, update: &[u8]) {
-        let update_decoder = &mut encoding::UpdateDecoder::new(update);
+        let decoder = &mut Decoder::new(update);
+        let update_decoder = &mut DecoderV1::new(decoder);
         self.inner.borrow_mut().read_structs(update_decoder);
     }
     // Retrieve document state vector in order to encode the document diff.
@@ -157,7 +165,7 @@ impl Doc {
 }
 
 pub struct DocInner {
-    client_id: u32,
+    client_id: u64,
     type_refs: HashMap<String, usize>,
     types: Vec<(Rc<TypeInner>, String)>,
     pub ss: BlockStore,
@@ -226,12 +234,12 @@ impl<'a> DocInner {
             type_ref
         })
     }
-    pub fn read_structs(&mut self, update_decoder: &mut encoding::UpdateDecoder) {
-        let number_of_clients = update_decoder.rest_decoder.read_var_u32();
+    pub fn read_structs(&mut self, update_decoder: &mut DecoderV1) {
+        let number_of_clients: u32 = update_decoder.rest_decoder.read_var_uint();
         for _ in 0..number_of_clients {
             let client = update_decoder.read_client();
-            let number_of_structs = update_decoder.rest_decoder.read_var_u32();
-            let mut clock = update_decoder.rest_decoder.read_var_u32();
+            let number_of_structs: u32 = update_decoder.rest_decoder.read_var_uint();
+            let mut clock = update_decoder.rest_decoder.read_var_uint();
             for _ in 0..number_of_structs {
                 let info = update_decoder.read_info();
                 // we will get parent from either left, right. Otherwise, we
@@ -262,14 +270,16 @@ impl<'a> DocInner {
                     let type_name_ref = self.get_type_ref(&type_name);
                     parent = Some(TypePtr::Named(type_name_ref as u32))
                 };
-                let content = update_decoder.read_char();
+                let content = update_decoder.read_string();
+                // @todo implement composite representation
+                let ch = content.chars().next().unwrap();
                 let item = Item {
                     id: ID { client, clock },
                     left,
                     right,
                     origin,
                     right_origin,
-                    content,
+                    content: ch,
                     parent: parent.unwrap(),
                 };
                 item.integrate(self, clock); // todo compute pivot beforehand
@@ -287,10 +297,10 @@ impl<'a> DocInner {
         }
     }
 
-    pub fn write_structs(&self, update_encoder: &mut encoding::UpdateEncoder, sv: &StateVector) {
+    pub fn write_structs(&self, update_encoder: &mut EncoderV1, sv: &StateVector) {
         // turns this into a vector because at some point we want to sort this
         // @todo Sort for better perf!
-        let mut structs: Vec<(&u32, &ClientBlockList)> = self
+        let mut structs: Vec<(&u64, &ClientBlockList)> = self
             .ss
             .clients
             .iter()
@@ -301,15 +311,16 @@ impl<'a> DocInner {
         }
         update_encoder
             .rest_encoder
-            .write_var_u32(structs.len() as u32);
+            .write_var_uint(structs.len());
+
         for (client_id, client_structs) in structs.iter() {
             let start_clock = sv.get_state(**client_id);
             let start_pivot = client_structs.find_pivot(start_clock);
             update_encoder.write_client(**client_id);
             update_encoder
                 .rest_encoder
-                .write_var_u32(client_structs.integrated_len as u32 - start_pivot);
-            update_encoder.rest_encoder.write_var_u32(start_clock); // initial clock
+                .write_var_uint(client_structs.integrated_len as u32 - start_pivot);
+            update_encoder.rest_encoder.write_var_uint(start_clock); // initial clock
             for i in (start_pivot as usize)..(client_structs.integrated_len) {
                 let item = &client_structs.list[i];
                 let info = if item.origin.is_some() { BIT8 } else { 0 } // is left null
@@ -326,7 +337,8 @@ impl<'a> DocInner {
                     let type_name = &self.types[*type_name_ref as usize].1;
                     update_encoder.write_string(type_name);
                 }
-                update_encoder.write_char(item.content);
+                // @todo implement composition representation
+                update_encoder.write_string(&item.content.to_string());
             }
         }
     }

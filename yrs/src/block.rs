@@ -2,7 +2,7 @@ use crate::*;
 
 #[derive(Copy, Clone)]
 pub struct ID {
-    pub client: u32,
+    pub client: u64,
     pub clock: u32,
 }
 

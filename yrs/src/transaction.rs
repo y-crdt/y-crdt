@@ -1,4 +1,5 @@
 use crate::*;
+use update_encoder::{EncoderV1, DSEncoder};
 
 #[wasm_bindgen]
 pub struct Transaction {
@@ -14,9 +15,9 @@ impl Drop for Transaction {
         let inner = &mut self.doc.borrow_mut();
         // only compute update if observers exist
         if !inner.update_handlers.is_empty() {
-            let update_encoder = &mut encoding::UpdateEncoder::new();
+            let update_encoder = &mut EncoderV1::new();
             inner.write_structs(update_encoder, &self.start_state_vector);
-            let update = update_encoder.buffer();
+            let update = update_encoder.to_buffer();
             let mut needs_removed = Vec::new();
             for (i, update_handler) in inner.update_handlers.iter().enumerate() {
                 let update_event = events::UpdateEvent {

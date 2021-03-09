@@ -2,10 +2,12 @@ use crate::*;
 use std::collections::HashMap;
 use std::hash::BuildHasherDefault;
 use std::vec::Vec;
+use lib0::encoding::Encoder;
+use lib0::decoding::Decoder;
 
 #[wasm_bindgen]
 #[derive(Default)]
-pub struct StateVector(HashMap<u32, u32, BuildHasherDefault<ClientHasher>>);
+pub struct StateVector(HashMap<u64, u32, BuildHasherDefault<ClientHasher>>);
 
 impl StateVector {
     pub fn empty() -> Self {
@@ -22,34 +24,34 @@ impl StateVector {
         }
         sv
     }
-    pub fn get_state(&self, client_id: u32) -> u32 {
+    pub fn get_state(&self, client_id: u64) -> u32 {
         match self.0.get(&client_id) {
             Some(state) => *state,
             None => 0,
         }
     }
-    pub fn iter(&self) -> std::collections::hash_map::Iter<u32, u32> {
+    pub fn iter(&self) -> std::collections::hash_map::Iter<u64, u32> {
         self.0.iter()
     }
     pub fn encode(&self) -> Vec<u8> {
         let len = self.size();
         // expecting to write at most two u32 values (using variable encoding
         // we will probably write less)
-        let mut encoder = encoding::Encoder::with_capacity(len * 8);
-        encoder.write_var_u32(len as u32);
+        let mut encoder = Encoder::with_capacity(len * 14); // Upper bound: 9 for client, 5 for clock
+        encoder.write_var_uint(len);
         for (client_id, clock) in self.iter() {
-            encoder.write_var_u32(*client_id);
-            encoder.write_var_u32(*clock);
+            encoder.write_var_uint(*client_id);
+            encoder.write_var_uint(*clock);
         }
         encoder.buf
     }
     pub fn decode(encoded_sv: &[u8]) -> Self {
-        let mut decoder = encoding::Decoder::new(encoded_sv);
-        let len = decoder.read_var_u32();
+        let mut decoder = Decoder::new(encoded_sv);
+        let len: u32 = decoder.read_var_uint();
         let mut sv = Self::empty();
         for _ in 0..len {
             // client, clock
-            sv.0.insert(decoder.read_var_u32(), decoder.read_var_u32());
+            sv.0.insert(decoder.read_var_uint(), decoder.read_var_uint());
         }
         sv
     }
@@ -90,17 +92,17 @@ impl ClientBlockList {
 }
 
 pub struct BlockStore {
-    pub clients: HashMap<u32, ClientBlockList, BuildHasherDefault<ClientHasher>>,
-    pub client_id: u32,
+    pub clients: HashMap<u64, ClientBlockList, BuildHasherDefault<ClientHasher>>,
+    pub client_id: u64,
     pub local_block_list: ClientBlockList,
     // contains structs that can't be integrated because they depend on other structs
     // unintegrated: HashMap::<u32, Vec<Item>, BuildHasherDefault<ClientHasher>>,
 }
 
 impl BlockStore {
-    pub fn new(client_id: u32) -> BlockStore {
+    pub fn new(client_id: u64) -> BlockStore {
         BlockStore {
-            clients: HashMap::<u32, ClientBlockList, BuildHasherDefault<ClientHasher>>::default(),
+            clients: HashMap::<u64, ClientBlockList, BuildHasherDefault<ClientHasher>>::default(),
             client_id,
             local_block_list: ClientBlockList::new(),
             // unintegrated: HashMap::<u32, Vec<Item>, BuildHasherDefault<ClientHasher>>::default()
@@ -110,10 +112,10 @@ impl BlockStore {
         let sv = self.get_state_vector();
         // expecting to write at most two u32 values (using variable encoding
         // we will probably write less)
-        let mut encoder = encoding::Encoder::with_capacity(sv.size() * 8);
+        let mut encoder = Encoder::with_capacity(sv.size() * 8);
         for (client_id, clock) in sv.iter() {
-            encoder.write_var_u32(*client_id);
-            encoder.write_var_u32(*clock);
+            encoder.write_var_uint(*client_id);
+            encoder.write_var_uint(*clock);
         }
         encoder.buf
     }
@@ -160,7 +162,7 @@ impl BlockStore {
         }
     }
     #[inline(always)]
-    pub fn get_state(&self, client: u32) -> u32 {
+    pub fn get_state(&self, client: u64) -> u32 {
         if client == self.client_id {
             self.local_block_list.get_state()
         } else if let Some(client_structs) = self.clients.get(&client) {
@@ -173,7 +175,7 @@ impl BlockStore {
         self.local_block_list.get_state()
     }
     #[inline(always)]
-    pub fn get_client_structs_list(&mut self, client_id: u32) -> &mut ClientBlockList {
+    pub fn get_client_structs_list(&mut self, client_id: u64) -> &mut ClientBlockList {
         if client_id == self.client_id {
             &mut self.local_block_list
         } else {
@@ -185,7 +187,7 @@ impl BlockStore {
     #[inline(always)]
     pub fn get_client_structs_list_with_capacity(
         &mut self,
-        client_id: u32,
+        client_id: u64,
         capacity: usize,
     ) -> &mut ClientBlockList {
         if client_id == self.client_id {

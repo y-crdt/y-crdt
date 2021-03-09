@@ -87,11 +87,11 @@ mod block;
 mod block_store;
 mod client_hasher;
 mod doc;
-mod encoding;
 mod shared_type;
 mod transaction;
 mod updates;
 mod update_encoder;
+mod update_decoder;
 
 use block::*;
 use block_store::*;
