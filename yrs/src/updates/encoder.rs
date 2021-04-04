@@ -1,7 +1,8 @@
-use crate::ID;
+use crate::*;
 use lib0::{any::Any, encoding::Encoder};
 
 pub trait DSEncoder {
+    fn rest_encoder(&mut self) -> &mut Encoder;
     fn to_buffer(&self) -> &Vec<u8>;
     fn reset_ds_cur_val(&mut self);
     fn write_ds_clock(&mut self, clock: u32);
@@ -21,6 +22,9 @@ impl EncoderV1 {
 }
 
 impl DSEncoder for EncoderV1 {
+    fn rest_encoder(&mut self) -> &mut Encoder {
+        &mut self.rest_encoder
+    }
     fn to_buffer(&self) -> &Vec<u8> {
         &self.rest_encoder.buf
     }
@@ -36,8 +40,8 @@ impl DSEncoder for EncoderV1 {
 }
 
 pub trait UpdateEncoder: DSEncoder {
-    fn write_left_id(&mut self, id: &ID);
-    fn write_right_id(&mut self, id: &ID);
+    fn write_left_id(&mut self, id: &block::ID);
+    fn write_right_id(&mut self, id: &block::ID);
     fn write_client(&mut self, client: u64);
     fn write_info(&mut self, info: u8);
     fn write_string(&mut self, s: &str);
@@ -50,12 +54,12 @@ pub trait UpdateEncoder: DSEncoder {
 }
 
 impl UpdateEncoder for EncoderV1 {
-    fn write_left_id(&mut self, id: &ID) {
+    fn write_left_id(&mut self, id: &block::ID) {
         self.rest_encoder.write_var_uint(id.client);
         self.rest_encoder.write_var_uint(id.clock);
     }
 
-    fn write_right_id(&mut self, id: &ID) {
+    fn write_right_id(&mut self, id: &block::ID) {
         self.rest_encoder.write_var_uint(id.client);
         self.rest_encoder.write_var_uint(id.clock);
     }

@@ -83,34 +83,57 @@
 //! ```
 //!
 
+mod utils;
 mod block;
 mod block_store;
-mod client_hasher;
 mod doc;
-mod shared_type;
 mod transaction;
-mod update_decoder;
-mod update_encoder;
 mod updates;
+mod types;
+mod store;
 
-use block::*;
-use block_store::*;
-use client_hasher::ClientHasher;
-use doc::*;
-use shared_type::*;
-use std::cell::{Cell, RefCell};
+use utils::client_hasher::ClientHasher;
+use std::cell::{Cell, RefCell, RefMut};
 use std::collections::HashMap;
 use std::rc::Rc;
-use transaction::*;
-use wasm_bindgen::prelude::*;
+use std::hash::BuildHasherDefault;
 
-pub use block_store::StateVector;
-pub use doc::Doc;
+pub struct Doc {
+    pub client_id: u64,
+    store: RefCell<Store>
+}
 
-#[wasm_bindgen]
-pub struct Type {
-    doc: Rc<RefCell<DocInner>>,
-    inner: Rc<TypeInner>,
+#[derive(Default)]
+pub struct StateVector(HashMap<u64, u32, BuildHasherDefault<ClientHasher>>);
+
+pub struct Transaction <'a> {
+    pub store: RefMut<'a, Store>,
+    pub start_state_vector: StateVector,
+}
+
+pub struct ClientBlockList {
+    pub list: Vec<block::Item>,
+    pub integrated_len: usize,
+}
+
+
+pub struct BlockStore {
+    pub clients: HashMap<u64, ClientBlockList, BuildHasherDefault<ClientHasher>>,
+    pub client_id: u64,
+    pub local_block_list: ClientBlockList,
+    // contains structs that can't be integrated because they depend on other structs
+    // unintegrated: HashMap::<u32, Vec<Item>, BuildHasherDefault<ClientHasher>>,
+}
+
+pub struct Store {
+    client_id: u64,
+    pub type_refs: HashMap<String, u32>,
+    pub types: Vec<(types::Inner, String)>,
+    pub blocks: BlockStore,
+}
+
+struct YProvider {
+    doc: Rc<Doc>,
 }
 
 pub mod events {

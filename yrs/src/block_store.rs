@@ -2,12 +2,8 @@ use crate::*;
 use lib0::decoding::Decoder;
 use lib0::encoding::Encoder;
 use std::collections::HashMap;
-use std::hash::BuildHasherDefault;
 use std::vec::Vec;
 
-#[wasm_bindgen]
-#[derive(Default)]
-pub struct StateVector(HashMap<u64, u32, BuildHasherDefault<ClientHasher>>);
 
 impl StateVector {
     pub fn empty() -> Self {
@@ -57,11 +53,6 @@ impl StateVector {
     }
 }
 
-pub struct ClientBlockList {
-    pub list: Vec<Item>,
-    pub integrated_len: usize,
-}
-
 impl ClientBlockList {
     #[inline]
     fn new() -> ClientBlockList {
@@ -91,13 +82,6 @@ impl ClientBlockList {
     }
 }
 
-pub struct BlockStore {
-    pub clients: HashMap<u64, ClientBlockList, BuildHasherDefault<ClientHasher>>,
-    pub client_id: u64,
-    pub local_block_list: ClientBlockList,
-    // contains structs that can't be integrated because they depend on other structs
-    // unintegrated: HashMap::<u32, Vec<Item>, BuildHasherDefault<ClientHasher>>,
-}
 
 impl BlockStore {
     pub fn new(client_id: u64) -> BlockStore {
@@ -123,14 +107,14 @@ impl BlockStore {
         StateVector::from(self)
     }
     #[inline(always)]
-    pub fn find_item_ptr(&self, id: &ID) -> BlockPtr {
-        BlockPtr {
+    pub fn find_item_ptr(&self, id: &block::ID) -> block::BlockPtr {
+        block::BlockPtr {
             id: *id,
             pivot: id.clock,
         }
     }
     #[inline(always)]
-    pub fn get_item_mut(&mut self, ptr: &BlockPtr) -> &mut Item {
+    pub fn get_item_mut(&mut self, ptr: &block::BlockPtr) -> &mut block::Item {
         if ptr.id.client == self.client_id {
             unsafe {
                 self.local_block_list
@@ -151,7 +135,7 @@ impl BlockStore {
         }
     }
     #[inline(always)]
-    pub fn get_item(&self, ptr: &BlockPtr) -> &Item {
+    pub fn get_item(&self, ptr: &block::BlockPtr) -> &block::Item {
         if ptr.id.client == self.client_id {
             &self.local_block_list.list[ptr.pivot as usize]
         } else {

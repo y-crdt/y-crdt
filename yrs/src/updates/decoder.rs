@@ -1,4 +1,4 @@
-use crate::ID;
+use crate::*;
 use lib0::{any::Any, decoding::Decoder};
 
 pub trait DSDecoder {
@@ -34,8 +34,8 @@ impl<'a> DSDecoder for DecoderV1<'a> {
 }
 
 pub trait UpdateDecoder: DSDecoder {
-    fn read_left_id(&mut self) -> ID;
-    fn read_right_id(&mut self) -> ID;
+    fn read_left_id(&mut self) -> block::ID;
+    fn read_right_id(&mut self) -> block::ID;
     fn read_client(&mut self) -> u64;
     fn read_info(&mut self) -> u8;
     fn read_string(&mut self) -> &str;
@@ -48,15 +48,15 @@ pub trait UpdateDecoder: DSDecoder {
 }
 
 impl<'a> UpdateDecoder for DecoderV1<'a> {
-    fn read_left_id(&mut self) -> ID {
-        ID {
+    fn read_left_id(&mut self) -> block::ID {
+        block::ID {
             client: self.rest_decoder.read_var_uint(),
             clock: self.rest_decoder.read_var_uint(),
         }
     }
 
-    fn read_right_id(&mut self) -> ID {
-        ID {
+    fn read_right_id(&mut self) -> block::ID {
+        block::ID {
             client: self.rest_decoder.read_var_uint(),
             clock: self.rest_decoder.read_var_uint(),
         }
