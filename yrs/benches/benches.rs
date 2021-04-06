@@ -5,19 +5,19 @@ const ITERATIONS: u32 = 1000000;
 
 fn ytext_prepend() {
     let doc = Doc::new();
-    let tr = doc.transact();
-    let t = doc.get_type("");
+    let tr = &mut doc.transact();
+    let t = doc.get_type(tr, "");
     for _ in 0..ITERATIONS {
-        t.insert(&tr, 0, 'a')
+        t.insert(tr, 0, "a")
     }
 }
 
 fn ytext_append() {
     let doc = Doc::new();
-    let tr = doc.transact();
-    let t = doc.get_type("");
+    let tr = &mut doc.transact();
+    let t = doc.get_type(tr, "");
     for i in 0..6000 {
-        t.insert(&tr, i, 'a')
+        t.insert(tr, i, "a")
     }
 }
 

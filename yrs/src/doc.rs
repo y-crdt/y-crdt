@@ -27,9 +27,7 @@ impl Doc {
     }
     pub fn get_type(&self, tr: &Transaction, string: &str) -> types::Text {
         let ptr = types::TypePtr::Named(string.to_owned());
-        types::Text {
-            ptr
-        }
+        types::Text::from(ptr)
     }
     /// Creates a transaction. Transaction cleanups & calling event handles
     /// happen when the transaction struct is dropped.
@@ -87,12 +85,11 @@ impl Doc {
     /// ```
     ///
     pub fn encode_state_as_update(&self, tr: &Transaction) -> Vec<u8> {
-        let update_encoder = &mut updates::encoder::EncoderV1::new();
-
-        tr.store.write_structs(update_encoder, &StateVector::empty());
+        let mut update_encoder = updates::encoder::EncoderV1::new();
+        tr.store.write_structs(&mut update_encoder, &StateVector::empty());
         // @todo this is not satisfactory. We would copy the complete buffer every time this method is called.
         // Instead we should implement `write_state_as_update` and fill an existing object that implements the Write trait.
-        update_encoder.to_buffer().to_owned()
+        update_encoder.to_buffer()
     }
     /// Compute a diff to sync with another client.
     ///
@@ -117,9 +114,9 @@ impl Doc {
     /// doc1.apply_update(&diff);
     /// ```
     pub fn encode_diff_as_update(&self, tr: &Transaction, sv: &StateVector) -> Vec<u8> {
-        let update_encoder = &mut updates::encoder::EncoderV1::new();
-        tr.store.write_structs(update_encoder, sv);
-        update_encoder.to_buffer().to_owned()
+        let mut update_encoder = updates::encoder::EncoderV1::new();
+        tr.store.write_structs(&mut update_encoder, sv);
+        update_encoder.to_buffer()
     }
     /// Apply a document update.
     pub fn apply_update(&self, tr: &mut Transaction, update: &[u8]) {
@@ -193,9 +190,15 @@ impl<'a> Store {
                 };
                 if info & (BIT7 | BIT8) == 0 {
                     // neither origin nor right_origin is defined
-                    let type_name = update_decoder.read_string();
-                    let type_name_ref = self.init_type_ref(type_name);
-                    parent = Some(types::TypePtr::NamedRef(type_name_ref as u32));
+                    let parent_info = update_decoder.read_parent_info();
+                    if parent_info {
+                        let type_name = update_decoder.read_string();
+                        let type_name_ref = self.init_type_ref(type_name);
+                        parent = Some(types::TypePtr::NamedRef(type_name_ref as u32));
+                    } else {
+                        let id = update_decoder.read_left_id();
+                        parent = Some(types::TypePtr::Id(block::BlockPtr::from(id)));
+                    }
                 };
                 let stringContent = update_decoder.read_string();
                 let content = block::ItemContent::String(stringContent.to_owned());
@@ -260,13 +263,22 @@ impl<'a> Store {
                     update_encoder.write_right_id(right_origin_id);
                 }
                 if item.origin.is_none() && item.right_origin.is_none() {
-                    let types::TypePtr::NamedRef(type_name_ref) = &item.parent;
-                    let type_name = &self.types[*type_name_ref as usize].1;
-                    update_encoder.write_string(type_name);
+                    match &item.parent {
+                        types::TypePtr::NamedRef(type_name_ref) => {
+                            let type_name = &self.types[*type_name_ref as usize].1;
+                            update_encoder.write_parent_info(true);
+                            update_encoder.write_string(type_name);
+                        }
+                        types::TypePtr::Id(id) => {
+                            update_encoder.write_parent_info(false);
+                            update_encoder.write_left_id(&id.id);
+                        }
+                        types::TypePtr::Named(name) => {
+                            update_encoder.write_parent_info(true);
+                            update_encoder.write_string(name)
+                        }
+                    }
                 }
-                // @todo implement composition representation
-                let block::ItemContent::String(stringContent) = &item.content;
-                update_encoder.write_string(stringContent);
             }
         }
     }

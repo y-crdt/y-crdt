@@ -26,6 +26,12 @@ pub struct BlockPtr {
     pub pivot: u32,
 }
 
+impl BlockPtr {
+    pub fn from (id: ID) -> BlockPtr {
+        BlockPtr { id, pivot: id.clock }
+    }
+}
+
 pub enum Block {
     Item(Item),
     Skip(Skip),

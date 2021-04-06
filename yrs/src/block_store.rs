@@ -108,10 +108,8 @@ impl BlockStore {
     }
     #[inline(always)]
     pub fn find_item_ptr(&self, id: &block::ID) -> block::BlockPtr {
-        block::BlockPtr {
-            id: *id,
-            pivot: id.clock,
-        }
+        let x = block::BlockPtr::from(*id);
+        x
     }
     #[inline(always)]
     pub fn get_item_mut(&mut self, ptr: &block::BlockPtr) -> &mut block::Item {

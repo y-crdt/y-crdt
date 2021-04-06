@@ -1,35 +1,23 @@
-use std::rc::Rc;
 
 struct MyProvider {
     doc: yrs::Doc,
-}
-
-impl yrs::Subscriber<yrs::events::UpdateEvent> for MyProvider {
-    fn on_change(&self, event: yrs::events::UpdateEvent) {
-        self.doc.apply_update(&event.update);
-    }
 }
 
 fn main() {
     let doc1 = yrs::Doc::new();
     let doc2 = yrs::Doc::new();
 
-    // register update observer
-    let provider = Rc::from(MyProvider { doc: doc2.clone() });
-    doc1.on_update(Rc::downgrade(&provider));
+    let tr = &mut doc1.transact();
+    let ytext = doc1.get_type(tr,"mytype");
+    ytext.insert(tr, 0, "a");
 
-    let my_type = doc1.get_type("my first shared type");
+    let update = tr.encode_update();
 
-    {
-        // All changes must happen within a transaction.
-        // When the transaction is dropped, the yrs::Doc fires event (e.g. the update event)
-        let tr = doc1.transact();
-        my_type.insert(&tr, 0, 'a');
-    } // transaction is dropped and changes are automatically synced to doc2
 
-    println!(
-        "synced document state: {}",
-        doc2.get_type("my first shared type").to_string()
-    );
-    assert_eq!(doc2.get_type("my first shared type").to_string(), "a");
+    let tr2 = &mut doc2.transact();
+    doc2.apply_update(tr2, &update);
+    let ytext2 = doc2.get_type(tr2,"mytext");
+    let txt2 = ytext2.to_string(tr);
+    println!("synced document state: {}", txt2);
+    assert_eq!(txt2, "a");
 }

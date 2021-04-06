@@ -3,7 +3,7 @@ use lib0::{any::Any, encoding::Encoder};
 
 pub trait DSEncoder {
     fn rest_encoder(&mut self) -> &mut Encoder;
-    fn to_buffer(&self) -> &Vec<u8>;
+    fn to_buffer(self) -> Vec<u8>;
     fn reset_ds_cur_val(&mut self);
     fn write_ds_clock(&mut self, clock: u32);
     fn write_ds_len(&mut self, len: u32);
@@ -25,8 +25,8 @@ impl DSEncoder for EncoderV1 {
     fn rest_encoder(&mut self) -> &mut Encoder {
         &mut self.rest_encoder
     }
-    fn to_buffer(&self) -> &Vec<u8> {
-        &self.rest_encoder.buf
+    fn to_buffer(self) -> Vec<u8> {
+        self.rest_encoder.buf
     }
     fn reset_ds_cur_val(&mut self) {
         // nop

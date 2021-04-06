@@ -5,6 +5,9 @@ pub struct Text {
 }
 
 impl Text {
+    pub fn from (ptr: types::TypePtr) -> Self {
+        Text { ptr }
+    }
     #[allow(clippy::inherent_to_string)]
     pub fn to_string(&self, tr: &Transaction) -> String {
         tr.store.get_type_from_ptr(&self.ptr).and_then(|inner| {
