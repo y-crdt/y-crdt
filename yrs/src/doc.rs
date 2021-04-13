@@ -21,7 +21,7 @@ impl Doc {
                 client_id,
                 type_refs: Default::default(),
                 types: Default::default(),
-                blocks: BlockStore::new(client_id),
+                blocks: BlockStore::new(),
             }),
         }
     }

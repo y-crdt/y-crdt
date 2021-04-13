@@ -95,7 +95,6 @@ mod store;
 use utils::client_hasher::ClientHasher;
 use std::cell::{Cell, RefCell, RefMut};
 use std::collections::HashMap;
-use std::rc::Rc;
 use std::hash::BuildHasherDefault;
 
 pub struct Doc {
@@ -112,17 +111,13 @@ pub struct Transaction <'a> {
 }
 
 pub struct ClientBlockList {
-    pub list: Vec<block::Item>,
+    pub list: Vec<block::Block>,
     pub integrated_len: usize,
 }
 
 
 pub struct BlockStore {
     pub clients: HashMap<u64, ClientBlockList, BuildHasherDefault<ClientHasher>>,
-    pub client_id: u64,
-    pub local_block_list: ClientBlockList,
-    // contains structs that can't be integrated because they depend on other structs
-    // unintegrated: HashMap::<u32, Vec<Item>, BuildHasherDefault<ClientHasher>>,
 }
 
 pub struct Store {
@@ -130,18 +125,4 @@ pub struct Store {
     pub type_refs: HashMap<String, u32>,
     pub types: Vec<(types::Inner, String)>,
     pub blocks: BlockStore,
-}
-
-struct YProvider {
-    doc: Rc<Doc>,
-}
-
-pub mod events {
-    pub struct UpdateEvent {
-        pub update: Vec<u8>,
-    }
-}
-
-pub trait Subscriber<EventType> {
-    fn on_change(&self, event: EventType);
 }

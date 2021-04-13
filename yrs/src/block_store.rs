@@ -1,9 +1,9 @@
 use crate::*;
+use updates::decoder::UpdateDecoder;
 use lib0::decoding::Decoder;
 use lib0::encoding::Encoder;
 use std::collections::HashMap;
 use std::vec::Vec;
-
 
 impl StateVector {
     pub fn empty() -> Self {
@@ -14,7 +14,6 @@ impl StateVector {
     }
     pub fn from(ss: &BlockStore) -> Self {
         let mut sv = StateVector::default();
-        sv.0.insert(ss.client_id, ss.local_block_list.get_state());
         for (client_id, client_struct_list) in ss.clients.iter() {
             sv.0.insert(*client_id, client_struct_list.get_state());
         }
@@ -78,19 +77,68 @@ impl ClientBlockList {
         }
     }
     pub fn find_pivot(&self, clock: u32) -> u32 {
-        clock
+        panic!("implement findIndexSS");
+    }
+    pub fn find_item_clean_start(&mut self, tr: &mut Transaction, clock_start: u32) {
+
+    }
+    pub fn iterate(&self, tr: &Transaction, clock_start: u32, len: u32, f: fn(block::Block)) {
+        if (len > 0) {
+            let clock_end = clock_start + len;
+        }
     }
 }
 
-
 impl BlockStore {
-    pub fn new(client_id: u64) -> BlockStore {
-        BlockStore {
+    pub fn new() -> Self {
+        Self {
             clients: HashMap::<u64, ClientBlockList, BuildHasherDefault<ClientHasher>>::default(),
-            client_id,
-            local_block_list: ClientBlockList::new(),
-            // unintegrated: HashMap::<u32, Vec<Item>, BuildHasherDefault<ClientHasher>>::default()
         }
+    }
+    pub fn from (update_decoder: updates::decoder::DecoderV1) -> Self {
+        let mut store = Self::new();
+        let num_of_state_updates: u32 = update_decoder.rest_decoder.read_var_uint();
+        for i in 0..num_of_state_updates {
+            let number_of_structs: u32 = update_decoder.rest_decoder.read_var_uint();
+            let client = update_decoder.read_client();
+            let clock: u32 = update_decoder.rest_decoder.read_var_uint();
+            let structs = store.get_client_structs_list_with_capacity(client, number_of_structs);
+            let id = block::ID { client, clock };
+            for j in 0..number_of_structs {
+                let info = update_decoder.read_info();
+                if info == 10 {
+                    // is a Skip
+                    let len: u32 = update_decoder.rest_decoder.read_var_uint();
+                    let skip = block::Skip {
+                        id,
+                        len
+                    };
+                    structs.list.push(block::Block::Skip(skip));
+                    clock += len;
+                } else if info & 0b11111 != 0 {
+                    // is an Item
+                    let cantCopyParentInfo = info & 0b11000000 == 0;
+                    let left = if info & 0b10000000 > 0 { Some(update_decoder.read_left_id()) } else { None };
+                    let right = if info & 0b01000000 > 0 { Some(update_decoder.read_right_id()) } else { None };
+                    let parent = if cantCopyParentInfo {
+                        types::TypePtr::Named(update_decoder.read_string().to_owned())
+                    } else {
+                        types::TypePtr::Id(block::BlockPtr::from(update_decoder.read_left_id()))
+                    };
+                    let parent_sub = if cantCopyParentInfo && info & 0b00100000 > 0 {
+                        Some(update_decoder.read_string())
+                    } else {
+                        None
+                    };
+                    block::ItemContent::Binary()
+
+                } else {
+                    // is a GC
+                }
+            }
+        }
+
+        store
     }
     pub fn encode_state_vector(&self) -> Vec<u8> {
         let sv = self.get_state_vector();
@@ -113,58 +161,37 @@ impl BlockStore {
     }
     #[inline(always)]
     pub fn get_item_mut(&mut self, ptr: &block::BlockPtr) -> &mut block::Item {
-        if ptr.id.client == self.client_id {
-            unsafe {
-                self.local_block_list
-                    .list
-                    .get_unchecked_mut(ptr.pivot as usize)
-            }
-        } else {
-            unsafe {
-                // this is not a dangerous expectation because we really checked
-                // beforehand that these items existed (once a reference ptr was created we
-                // know that the item existed)
-                self.clients
-                    .get_mut(&ptr.id.client)
-                    .unwrap()
-                    .list
-                    .get_unchecked_mut(ptr.pivot as usize)
-            }
+        unsafe {
+            // this is not a dangerous expectation because we really checked
+            // beforehand that these items existed (once a reference ptr was created we
+            // know that the item existed)
+            self.clients
+                .get_mut(&ptr.id.client)
+                .unwrap()
+                .list
+                .get_unchecked_mut(ptr.pivot as usize)
         }
     }
     #[inline(always)]
     pub fn get_item(&self, ptr: &block::BlockPtr) -> &block::Item {
-        if ptr.id.client == self.client_id {
-            &self.local_block_list.list[ptr.pivot as usize]
-        } else {
-            // this is not a dangerous expectation because we really checked
-            // beforehand that these items existed (once a reference was created we
-            // know that the item existed)
-            &self.clients[&ptr.id.client].list[ptr.pivot as usize]
-        }
+        // this is not a dangerous expectation because we really checked
+        // beforehand that these items existed (once a reference was created we
+        // know that the item existed)
+        &self.clients[&ptr.id.client].list[ptr.pivot as usize]
     }
     #[inline(always)]
     pub fn get_state(&self, client: u64) -> u32 {
-        if client == self.client_id {
-            self.local_block_list.get_state()
-        } else if let Some(client_structs) = self.clients.get(&client) {
+        if let Some(client_structs) = self.clients.get(&client) {
             client_structs.get_state()
         } else {
             0
         }
     }
-    pub fn get_local_state(&self) -> u32 {
-        self.local_block_list.get_state()
-    }
     #[inline(always)]
     pub fn get_client_structs_list(&mut self, client_id: u64) -> &mut ClientBlockList {
-        if client_id == self.client_id {
-            &mut self.local_block_list
-        } else {
-            self.clients
-                .entry(client_id)
-                .or_insert_with(ClientBlockList::new)
-        }
+        self.clients
+            .entry(client_id)
+            .or_insert_with(ClientBlockList::new)
     }
     #[inline(always)]
     pub fn get_client_structs_list_with_capacity(
@@ -172,12 +199,8 @@ impl BlockStore {
         client_id: u64,
         capacity: usize,
     ) -> &mut ClientBlockList {
-        if client_id == self.client_id {
-            &mut self.local_block_list
-        } else {
-            self.clients
-                .entry(client_id)
-                .or_insert_with(|| ClientBlockList::with_capacity(capacity))
-        }
+        self.clients
+            .entry(client_id)
+            .or_insert_with(|| ClientBlockList::with_capacity(capacity))
     }
 }

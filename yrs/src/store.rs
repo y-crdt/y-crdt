@@ -1,7 +1,10 @@
 use crate::*;
 
 impl Store {
-  pub fn get_type_from_ptr<'a>(&'a self, ptr: &types::TypePtr) -> Option<&'a types::Inner> {
+  pub fn get_local_state (&self) -> u32 {
+    self.blocks.get_state(self.client_id)
+  }
+  pub fn get_type<'a>(&'a self, ptr: &types::TypePtr) -> Option<&'a types::Inner> {
       match ptr {
           types::TypePtr::NamedRef(name_ref) => {
             self.types.get(*name_ref as usize).map(|t| &t.0)
@@ -41,16 +44,14 @@ impl Store {
   pub fn init_type_ref(&mut self, string: &str) -> u32 {
       let types = &mut self.types;
       *self.type_refs.entry(string.to_owned()).or_insert_with(|| {
-        let type_ref = types.len();
+        let name_ref = types.len() as u32;
+        let ptr = types::TypePtr::NamedRef(name_ref);
+        let inner = types::Inner::new(ptr, None, types::TypeRefs::YArray);
         types.push((
-            types::Inner {
-                start: Cell::new(None),
-                ptr: types::TypePtr::NamedRef(type_ref as u32),
-            },
-            string.to_owned(),
-          )
-        );
-        type_ref as u32
+          inner,
+          string.to_owned(),
+        ));
+        name_ref
       })
   }
 }

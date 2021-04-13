@@ -1,8 +1,4 @@
 
-struct MyProvider {
-    doc: yrs::Doc,
-}
-
 fn main() {
     let doc1 = yrs::Doc::new();
     let doc2 = yrs::Doc::new();

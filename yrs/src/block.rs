@@ -1,6 +1,7 @@
 use crate::*;
-use updates::encoder::UpdateEncoder;
+use std::panic;
 use lib0::any::Any;
+use updates::decoder::UpdateDecoder;
 
 const BLOCK_GC_REF_NUMBER: u8 = 0;
 const BLOCK_ITEM_DELETED_REF_NUMBER: u8 = 1;
@@ -42,7 +43,7 @@ pub enum ItemContent {
     Any(Any),
     Binary(Vec<u8>),
     Deleted(u32),
-    Doc(String),
+    Doc(String, Any),
     JSON(String), // String is JSON
     Embed(String), // String is JSON
     Format(String, String), // key, value: JSON
@@ -52,7 +53,7 @@ pub enum ItemContent {
 
 #[derive(Clone)]
 pub struct ItemPosition {
-    pub parent: types::Inner,
+    pub parent: types::TypePtr,
     pub after: Option<BlockPtr>,
 }
 
@@ -114,7 +115,7 @@ impl ItemContent {
             ItemContent::Deleted(_) => {
                 BLOCK_ITEM_DELETED_REF_NUMBER
             }
-            ItemContent::Doc(_) => {
+            ItemContent::Doc(_, _) => {
                 BLOCK_ITEM_DOC_REF_NUMBER
             }
             ItemContent::JSON(_) => {
@@ -131,6 +132,64 @@ impl ItemContent {
             }
             ItemContent::Type(_) => {
                 BLOCK_ITEM_TYPE_REF_NUMBER
+            }
+        }
+    }
+
+    pub fn write (&self) {
+        match self {
+            ItemContent::Any(content) => {}
+            ItemContent::Binary(content) => {}
+            ItemContent::Deleted(content) => {}
+            ItemContent::Doc(content, _) => {}
+            ItemContent::JSON(content) => {}
+            ItemContent::Embed(content) => {}
+            ItemContent::Format(_, _) => {}
+            ItemContent::String(content) => {}
+            ItemContent::Type(content) => {
+
+            }
+        }
+    }
+    pub fn read (update_decoder: updates::decoder::DecoderV1, ref_num: u16, ptr: block::BlockPtr) -> Self {
+        match ref_num {
+            1 => { // Content Deleted
+               ItemContent::Deleted(update_decoder.read_len()) 
+            }
+            2 => { // Content JSON
+               ItemContent::JSON(update_decoder.read_string().to_owned())
+            }
+            3 => { // Content Binary
+               ItemContent::Binary(update_decoder.read_buffer().to_owned())
+            }
+            4 => { // Content String
+               ItemContent::String(update_decoder.read_string().to_owned())
+            }
+            5 => { // Content Embed
+               ItemContent::Embed(update_decoder.read_string().to_owned())
+            }
+            6 => { // Content Format
+               ItemContent::Format(update_decoder.read_string().to_owned(), update_decoder.read_string().to_owned())
+            }
+            7 => { // Content Type
+                let type_ref = update_decoder.read_type_ref();
+                let name = if type_ref == types::TypeRefs::YXmlElement || type_ref == types::TypeRefs::YXmlHook {
+                    Some(update_decoder.read_key().to_owned())
+                } else {
+                    None
+                };
+                let innerPtr = types::TypePtr::Id(ptr);
+                let inner = types::Inner::new(innerPtr, name, type_ref);
+                ItemContent::Type(inner)
+            }
+            8 => { // Content Any
+               ItemContent::Any(update_decoder.read_any())
+            }
+            9 => { // Content Doc
+               ItemContent::Doc(update_decoder.read_string().to_owned(), update_decoder.read_any())
+            }
+            _ => { // Unknown
+                panic!("Unknown content type");
             }
         }
     }
