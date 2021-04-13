@@ -3,5 +3,6 @@
 members = [
   "yrs",
   "ywasm",
-  "lib0"
+  "lib0",
+  "yrs-api-wrapper"
 ]

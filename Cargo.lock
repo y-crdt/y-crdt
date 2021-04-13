@@ -1067,6 +1067,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "yrs-api-wrapper"
+version = "0.1.0"
+
+[[package]]
 name = "ywasm"
 version = "0.1.0"
 dependencies = [
