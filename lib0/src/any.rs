@@ -1,5 +1,6 @@
 use std::cmp::PartialEq;
 use std::collections::HashMap;
+use std::convert::TryInto;
 
 #[derive(PartialEq, Debug, Clone)]
 pub enum Any {
@@ -73,19 +74,13 @@ impl Into<Any> for f32 {
 
 impl Into<Any> for u32 {
     fn into(self) -> Any {
-        Any::BigInt(self as i64)
-    }
-}
-
-impl Into<Any> for i64 {
-    fn into(self) -> Any {
-        Any::BigInt(self)
+        Any::Number(self as f64)
     }
 }
 
 impl Into<Any> for i32 {
     fn into(self) -> Any {
-        Any::BigInt(self as i64)
+        Any::Number(self as f64)
     }
 }
 
@@ -139,5 +134,34 @@ impl<T> Into<Any> for HashMap<String, T> where T: Into<Any> {
             map.insert(key, value.into());
         }
         Any::Map(map)
+    }
+}
+
+impl TryInto<Any> for u64 {
+    type Error = &'static str;
+
+    fn try_into(self) -> Result<Any, Self::Error> {
+        if self <= (1 << 53) {
+            Ok(Any::Number(self as f64))
+        } else {
+            Err("lib0::Any conversion is possible only for numbers up to 2^53")
+        }
+    }
+}
+
+impl TryInto<Any> for usize {
+    type Error = &'static str;
+
+    #[cfg(target_pointer_width = "32")]
+    fn try_into(self) -> Result<Any, Self::Error> {
+        // for 32-bit architectures we know that usize will always fit,
+        // so there's no need to check for length, but we stick to TryInto
+        // trait to keep API compatibility
+        Ok(Any::Number(self as f64))
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    fn try_into(self) -> Result<Any, Self::Error> {
+        (self as u64).try_into()
     }
 }
