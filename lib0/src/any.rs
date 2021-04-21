@@ -141,10 +141,12 @@ impl TryInto<Any> for u64 {
     type Error = &'static str;
 
     fn try_into(self) -> Result<Any, Self::Error> {
-        if self <= (1 << 53) {
+        if self < (1 << 53) {
             Ok(Any::Number(self as f64))
+        } else if self <= (i64::MAX as u64) {
+            Ok(Any::BigInt(self as i64))
         } else {
-            Err("lib0::Any conversion is possible only for numbers up to 2^53")
+            Err("lib0::Any conversion is possible only for numbers up to 2^63")
         }
     }
 }
