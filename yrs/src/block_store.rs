@@ -53,21 +53,18 @@ impl StateVector {
 }
 
 impl ClientBlockList {
-    #[inline]
     fn new() -> ClientBlockList {
         ClientBlockList {
             list: Vec::new(),
             integrated_len: 0,
         }
     }
-    #[inline]
     pub fn with_capacity(capacity: usize) -> ClientBlockList {
         ClientBlockList {
             list: Vec::with_capacity(capacity),
             integrated_len: 0,
         }
     }
-    #[inline]
     pub fn get_state(&self) -> u32 {
         if self.integrated_len == 0 {
             0
@@ -154,12 +151,10 @@ impl BlockStore {
     pub fn get_state_vector(&self) -> StateVector {
         StateVector::from(self)
     }
-    #[inline(always)]
     pub fn find_item_ptr(&self, id: &block::ID) -> block::BlockPtr {
         let x = block::BlockPtr::from(*id);
         x
     }
-    #[inline(always)]
     pub fn get_item_mut(&mut self, ptr: &block::BlockPtr) -> &mut block::Item {
         unsafe {
             // this is not a dangerous expectation because we really checked
@@ -172,11 +167,9 @@ impl BlockStore {
                 .get_unchecked_mut(ptr.pivot as usize)
         }
     }
-    #[inline(always)]
     pub fn get_block(&self, ptr: &block::BlockPtr) -> &block::Block {
         &self.clients[&ptr.id.client].list[ptr.pivot as usize]
     }
-    #[inline(always)]
     pub fn get_item(&self, ptr: &block::BlockPtr) -> &block::Item {
         // this is not a dangerous expectation because we really checked
         // beforehand that these items existed (once a reference was created we
@@ -184,7 +177,6 @@ impl BlockStore {
         let block::Item(item) = &self.clients[&ptr.id.client].list[ptr.pivot as usize];
         item
     }
-    #[inline(always)]
     pub fn get_state(&self, client: u64) -> u32 {
         if let Some(client_structs) = self.clients.get(&client) {
             client_structs.get_state()
@@ -192,13 +184,11 @@ impl BlockStore {
             0
         }
     }
-    #[inline(always)]
     pub fn get_client_structs_list(&mut self, client_id: u64) -> &mut ClientBlockList {
         self.clients
             .entry(client_id)
             .or_insert_with(ClientBlockList::new)
     }
-    #[inline(always)]
     pub fn get_client_structs_list_with_capacity(
         &mut self,
         client_id: u64,
