@@ -73,7 +73,7 @@ impl ClientBlockList {
             0
         } else {
             let item = &self.list[self.integrated_len - 1];
-            item.id.clock + 1
+            item.id().clock + item.len()
         }
     }
     pub fn find_pivot(&self, clock: u32) -> u32 {
@@ -83,7 +83,7 @@ impl ClientBlockList {
 
     }
     pub fn iterate(&self, tr: &Transaction, clock_start: u32, len: u32, f: fn(block::Block)) {
-        if (len > 0) {
+        if len > 0 {
             let clock_end = clock_start + len;
         }
     }
@@ -102,7 +102,7 @@ impl BlockStore {
             let number_of_structs: u32 = update_decoder.rest_decoder.read_var_uint();
             let client = update_decoder.read_client();
             let clock: u32 = update_decoder.rest_decoder.read_var_uint();
-            let structs = store.get_client_structs_list_with_capacity(client, number_of_structs);
+            let structs = store.get_client_structs_list_with_capacity(client, number_of_structs as usize);
             let id = block::ID { client, clock };
             for j in 0..number_of_structs {
                 let info = update_decoder.read_info();
@@ -173,11 +173,16 @@ impl BlockStore {
         }
     }
     #[inline(always)]
+    pub fn get_block(&self, ptr: &block::BlockPtr) -> &block::Block {
+        &self.clients[&ptr.id.client].list[ptr.pivot as usize]
+    }
+    #[inline(always)]
     pub fn get_item(&self, ptr: &block::BlockPtr) -> &block::Item {
         // this is not a dangerous expectation because we really checked
         // beforehand that these items existed (once a reference was created we
         // know that the item existed)
-        &self.clients[&ptr.id.client].list[ptr.pivot as usize]
+        let block::Item(item) = &self.clients[&ptr.id.client].list[ptr.pivot as usize];
+        item
     }
     #[inline(always)]
     pub fn get_state(&self, client: u64) -> u32 {
