@@ -30,7 +30,7 @@ impl Store {
           self.types.get(id as usize).map(|t| &t.0)
         }
         _ => {
-          if let Some(inner) = self.get_type_from_ptr(ptr) {
+          if let Some(inner) = self.get_type(ptr) {
             return Some(inner)
           } else {
             None

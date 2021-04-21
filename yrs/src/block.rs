@@ -101,6 +101,9 @@ impl Item {
             }
         }
     }
+    pub fn len (&self) -> u32 {
+        self.content.len()
+    }
 }
 
 impl ItemContent {
@@ -136,6 +139,21 @@ impl ItemContent {
         }
     }
 
+    pub fn len(&self) -> u32 {
+        match self {
+            ItemContent::Deleted(deletedContent) => {
+                *deletedContent
+            }
+            ItemContent::String(str) => {
+                // @todo this should return the length in utf16!
+                str.len() as u32
+            }
+            _ => {
+                1
+            }
+        }
+    }
+
     pub fn write (&self) {
         match self {
             ItemContent::Any(content) => {}
@@ -154,7 +172,7 @@ impl ItemContent {
     pub fn read (update_decoder: updates::decoder::DecoderV1, ref_num: u16, ptr: block::BlockPtr) -> Self {
         match ref_num {
             1 => { // Content Deleted
-               ItemContent::Deleted(update_decoder.read_len()) 
+               ItemContent::Deleted(update_decoder.read_len())
             }
             2 => { // Content JSON
                ItemContent::JSON(update_decoder.read_string().to_owned())
@@ -231,6 +249,37 @@ impl Block {
             Block::GC(gc) => {
                 encoder.write_info(BLOCK_GC_REF_NUMBER);
                 encoder.write_len(gc.len - offset)
+            }
+        }
+    }
+}
+
+
+
+impl Block {
+    pub fn id (&self) -> &ID {
+        match self {
+            Block::Item(item) => {
+                &item.id
+            }
+            Block::Skip(skip) => {
+                &skip.id
+            }
+            Block::GC(gc) => {
+                &gc.id
+            }
+        }
+    }
+    pub fn len (&self) -> u32 {
+        match self {
+            Block::Item(item) => {
+                item.content.len()
+            }
+            Block::Skip(skip) => {
+                skip.len
+            }
+            Block::GC(gc) => {
+                gc.len
             }
         }
     }
