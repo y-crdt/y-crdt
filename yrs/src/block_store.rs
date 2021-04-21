@@ -4,6 +4,7 @@ use lib0::decoding::Decoder;
 use lib0::encoding::Encoder;
 use std::collections::HashMap;
 use std::vec::Vec;
+use crate::block::Block;
 
 impl StateVector {
     pub fn empty() -> Self {
