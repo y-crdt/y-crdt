@@ -23,7 +23,7 @@ impl Store {
       }
   }
 
-  pub fn init_type_from_ptr<'a>(&'a mut self, ptr: &types::TypePtr) -> Option<&'a types::Inner> {
+  pub fn init_type_from_ptr(&mut self, ptr: &types::TypePtr) -> Option<&types::Inner> {
     match ptr {
         types::TypePtr::Named(name) => {
           let id = self.init_type_ref(name);
@@ -38,6 +38,15 @@ impl Store {
         }
     }
   }
+
+  pub fn get_type_from_ptr(&self, ptr: &types::TypePtr) -> Option<&types::Inner> {
+      todo!()
+  }
+
+  pub fn get_type_from_ptr_mut(&mut self, ptr: &types::TypePtr) -> Option<&mut types::Inner> {
+      todo!()
+  }
+
   pub fn get_type_ref(&self, string: &str) -> Option<u32> {
     self.type_refs.get(string).map(|r| *r)
   }

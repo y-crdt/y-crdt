@@ -39,6 +39,22 @@ pub enum Block {
     GC(GC),
 }
 
+impl Block {
+    pub fn as_item(&self) -> Option<&Item> {
+        match self {
+            Block::Item(item) => Some(item),
+            _ => None
+        }
+    }
+
+    pub fn as_item_mut(&mut self) -> Option<&mut Item> {
+        match self {
+            Block::Item(item) => Some(item),
+            _ => None
+        }
+    }
+}
+
 pub enum ItemContent {
     Any(Any),
     Binary(Vec<u8>),
@@ -169,7 +185,7 @@ impl ItemContent {
             }
         }
     }
-    pub fn read (update_decoder: updates::decoder::DecoderV1, ref_num: u16, ptr: block::BlockPtr) -> Self {
+    pub fn read (update_decoder: &mut updates::decoder::DecoderV1, ref_num: u16, ptr: block::BlockPtr) -> Self {
         match ref_num {
             1 => { // Content Deleted
                ItemContent::Deleted(update_decoder.read_len())
