@@ -1,5 +1,7 @@
 # Y CRDT Ports
 
+[![Join the chat at https://gitter.im/Yjs/y-crdt](https://badges.gitter.im/Yjs/y-crdt.svg)](https://gitter.im/Yjs/y-crdt?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
+
 > Yjs ports to other programming languages (WIP).
 
 Yrs "wires" is a Rust port of the Yjs framework. The
