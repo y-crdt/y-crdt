@@ -27,7 +27,7 @@ impl Text {
         tr.store.get_type(&self.ptr).and_then(|inner| {
             if pos == 0 {
                 Some(block::ItemPosition {
-                    parent: inner.ptr,
+                    parent: inner.ptr.clone(),
                     after: None,
                 })
             } else {

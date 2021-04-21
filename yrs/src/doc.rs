@@ -131,7 +131,6 @@ impl Doc {
 }
 
 impl<'a> Store {
-    #[inline]
     pub fn create_item(&mut self, pos: &block::ItemPosition, content: block::ItemContent) {
         let parent = self.get_type(&pos.parent).unwrap();
         let left = pos.after;
@@ -152,7 +151,7 @@ impl<'a> Store {
             right,
             origin: pos.after.as_ref().map(|l| l.id),
             right_origin: right.map(|r| r.id),
-            parent: pos.parent,
+            parent: pos.parent.clone(),
             deleted: false,
             parent_sub: None,
         };
@@ -160,6 +159,7 @@ impl<'a> Store {
         local_block_list.list.push(block::Block::Item(item));
         local_block_list.integrated_len += 1;
     }
+
     pub fn read_structs(&mut self, update_decoder: &mut updates::decoder::DecoderV1) {
         let number_of_clients: u32 = update_decoder.rest_decoder.read_var_uint();
         for _ in 0..number_of_clients {
@@ -251,30 +251,31 @@ impl<'a> Store {
                 .write_var_uint(client_structs.integrated_len as u32 - start_pivot);
             update_encoder.rest_encoder.write_var_uint(start_clock); // initial clock
             for i in (start_pivot as usize)..(client_structs.integrated_len) {
-                let block::Block::Item(item) = &client_structs.list[i];
-                let info = if item.origin.is_some() { BIT8 } else { 0 } // is left null
-                    | if item.right_origin.is_some() { BIT7 } else { 0 }; // is right null
-                update_encoder.write_info(info);
-                if let Some(origin_id) = item.origin.as_ref() {
-                    update_encoder.write_left_id(origin_id);
-                }
-                if let Some(right_origin_id) = item.right_origin.as_ref() {
-                    update_encoder.write_right_id(right_origin_id);
-                }
-                if item.origin.is_none() && item.right_origin.is_none() {
-                    match &item.parent {
-                        types::TypePtr::NamedRef(type_name_ref) => {
-                            let type_name = &self.types[*type_name_ref as usize].1;
-                            update_encoder.write_parent_info(true);
-                            update_encoder.write_string(type_name);
-                        }
-                        types::TypePtr::Id(id) => {
-                            update_encoder.write_parent_info(false);
-                            update_encoder.write_left_id(&id.id);
-                        }
-                        types::TypePtr::Named(name) => {
-                            update_encoder.write_parent_info(true);
-                            update_encoder.write_string(name)
+                if let Some(item) = client_structs.list[i].as_item() {
+                    let info = if item.origin.is_some() { BIT8 } else { 0 } // is left null
+                        | if item.right_origin.is_some() { BIT7 } else { 0 }; // is right null
+                    update_encoder.write_info(info);
+                    if let Some(origin_id) = item.origin.as_ref() {
+                        update_encoder.write_left_id(origin_id);
+                    }
+                    if let Some(right_origin_id) = item.right_origin.as_ref() {
+                        update_encoder.write_right_id(right_origin_id);
+                    }
+                    if item.origin.is_none() && item.right_origin.is_none() {
+                        match &item.parent {
+                            types::TypePtr::NamedRef(type_name_ref) => {
+                                let type_name = &self.types[*type_name_ref as usize].1;
+                                update_encoder.write_parent_info(true);
+                                update_encoder.write_string(type_name);
+                            }
+                            types::TypePtr::Id(id) => {
+                                update_encoder.write_parent_info(false);
+                                update_encoder.write_left_id(&id.id);
+                            }
+                            types::TypePtr::Named(name) => {
+                                update_encoder.write_parent_info(true);
+                                update_encoder.write_string(name)
+                            }
                         }
                     }
                 }
