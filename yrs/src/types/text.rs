@@ -10,7 +10,7 @@ impl Text {
     }
     #[allow(clippy::inherent_to_string)]
     pub fn to_string(&self, tr: &Transaction) -> String {
-        tr.store.get_type_from_ptr(&self.ptr).and_then(|inner| {
+        tr.store.get_type(&self.ptr).and_then(|inner| {
             let mut start = inner.start.get();
             let mut s = String::new();
             while let Some(a) = start.as_ref() {
@@ -24,7 +24,7 @@ impl Text {
         }).unwrap_or_default()
     }
     fn find_list_pos(&self, tr: &Transaction, pos: u32) -> Option<block::ItemPosition> {
-        tr.store.get_type_from_ptr(&self.ptr).and_then(|inner| {
+        tr.store.get_type(&self.ptr).and_then(|inner| {
             if pos == 0 {
                 Some(block::ItemPosition {
                     parent: inner.ptr,
