@@ -100,7 +100,7 @@ impl BlockStore {
         for i in 0..num_of_state_updates {
             let number_of_structs = update_decoder.rest_decoder.read_var_uint::<u32>() as usize;
             let client = update_decoder.read_client();
-            let clock: u32 = update_decoder.rest_decoder.read_var_uint();
+            let mut clock: u32 = update_decoder.rest_decoder.read_var_uint();
             let structs = store.get_client_structs_list_with_capacity(client, number_of_structs as usize);
             let id = block::ID { client, clock };
             for j in 0..number_of_structs {
