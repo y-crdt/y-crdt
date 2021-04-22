@@ -4,5 +4,6 @@ members = [
   "yrs",
   "ywasm",
   "lib0",
-  "yrs-api-wrapper"
+  "yrs-api-wrapper",
+  "yrs-python"
 ]
