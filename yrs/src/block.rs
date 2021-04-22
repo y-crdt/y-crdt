@@ -2,6 +2,8 @@ use crate::*;
 use std::panic;
 use lib0::any::Any;
 use updates::decoder::UpdateDecoder;
+use crate::updates::encoder::{EncoderV1, UpdateEncoder};
+use lib0::binary::{BIT8, BIT7};
 
 const BLOCK_GC_REF_NUMBER: u8 = 0;
 const BLOCK_ITEM_DELETED_REF_NUMBER: u8 = 1;
@@ -51,6 +53,47 @@ impl Block {
         match self {
             Block::Item(item) => Some(item),
             _ => None
+        }
+    }
+
+    pub fn encode(&self, store: &Store, encoder: &mut EncoderV1) {
+        match self {
+            Block::Item(item) => {
+                let info = if item.origin.is_some() { BIT8 } else { 0 } // is left null
+                    | if item.right_origin.is_some() { BIT7 } else { 0 }; // is right null
+                encoder.write_info(info);
+                if let Some(origin_id) = item.origin.as_ref() {
+                    encoder.write_left_id(origin_id);
+                }
+                if let Some(right_origin_id) = item.right_origin.as_ref() {
+                    encoder.write_right_id(right_origin_id);
+                }
+                if item.origin.is_none() && item.right_origin.is_none() {
+                    match &item.parent {
+                        types::TypePtr::NamedRef(type_name_ref) => {
+                            let type_name = store.get_type_name(*type_name_ref);
+                            encoder.write_parent_info(true);
+                            encoder.write_string(type_name);
+                        }
+                        types::TypePtr::Id(id) => {
+                            encoder.write_parent_info(false);
+                            encoder.write_left_id(&id.id);
+                        }
+                        types::TypePtr::Named(name) => {
+                            encoder.write_parent_info(true);
+                            encoder.write_string(name)
+                        }
+                    }
+                }
+            },
+            Block::Skip(skip) => {
+                encoder.write_info(10);
+                encoder.write_len(skip.len);
+            },
+            Block::GC(gc) => {
+                encoder.write_info(0);
+                encoder.write_len(gc.len);
+            }
         }
     }
 }

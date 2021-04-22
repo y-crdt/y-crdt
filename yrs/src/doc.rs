@@ -6,7 +6,6 @@ use crate::updates::encoder::UpdateEncoder;
 
 use rand::Rng;
 use lib0::decoding::Decoder;
-use crate::block::Block;
 
 const BIT7: u8 = 0b01000000;
 const BIT8: u8 = 0b10000000;
@@ -203,8 +202,8 @@ impl<'a> Store {
                         parent = Some(types::TypePtr::Id(block::BlockPtr::from(id)));
                     }
                 };
-                let stringContent = update_decoder.read_string();
-                let content = block::ItemContent::String(stringContent.to_owned());
+                let string_content = update_decoder.read_string();
+                let content = block::ItemContent::String(string_content.to_owned());
                 let item = block::Item {
                     id: block::ID { client, clock },
                     left,
@@ -234,7 +233,7 @@ impl<'a> Store {
     pub fn write_structs(&self, update_encoder: &mut updates::encoder::EncoderV1, sv: &StateVector) {
         // turns this into a vector because at some point we want to sort this
         // @todo Sort for better perf!
-        let mut structs: Vec<(&u64, &ClientBlockList)> = self
+        let structs: Vec<(&u64, &ClientBlockList)> = self
             .blocks
             .clients
             .iter()
@@ -245,53 +244,20 @@ impl<'a> Store {
 
         for (client_id, client_structs) in structs.iter() {
             let start_clock = sv.get_state(**client_id);
-            let start_pivot = client_structs.find_pivot(start_clock);
+            let start_pivot = client_structs.find_pivot(start_clock).unwrap() as u32;
             update_encoder.write_client(**client_id);
             update_encoder
                 .rest_encoder
                 .write_var_uint(client_structs.integrated_len as u32 - start_pivot);
             update_encoder.rest_encoder.write_var_uint(start_clock); // initial clock
             for i in (start_pivot as usize)..(client_structs.integrated_len) {
-                match &client_structs.list[i] {
-                    Block::Item(item) => {
-                        let info = if item.origin.is_some() { BIT8 } else { 0 } // is left null
-                            | if item.right_origin.is_some() { BIT7 } else { 0 }; // is right null
-                        update_encoder.write_info(info);
-                        if let Some(origin_id) = item.origin.as_ref() {
-                            update_encoder.write_left_id(origin_id);
-                        }
-                        if let Some(right_origin_id) = item.right_origin.as_ref() {
-                            update_encoder.write_right_id(right_origin_id);
-                        }
-                        if item.origin.is_none() && item.right_origin.is_none() {
-                            match &item.parent {
-                                types::TypePtr::NamedRef(type_name_ref) => {
-                                    let type_name = &self.types[*type_name_ref as usize].1;
-                                    update_encoder.write_parent_info(true);
-                                    update_encoder.write_string(type_name);
-                                }
-                                types::TypePtr::Id(id) => {
-                                    update_encoder.write_parent_info(false);
-                                    update_encoder.write_left_id(&id.id);
-                                }
-                                types::TypePtr::Named(name) => {
-                                    update_encoder.write_parent_info(true);
-                                    update_encoder.write_string(name)
-                                }
-                            }
-                        }
-                    },
-                    Block::Skip(skip) => {
-                        update_encoder.write_info(10);
-                        update_encoder.write_len(skip.len);
-                    },
-                    Block::GC(gc) => {
-                        update_encoder.write_info(0);
-                        update_encoder.write_len(gc.len);
-                    }
-                }
+                client_structs.list[i].encode(self, update_encoder);
             }
         }
+    }
+
+    pub fn get_type_name(&self, type_name_ref: u32) -> &str {
+        &self.types[type_name_ref as usize].1
     }
 }
 
