@@ -56,6 +56,14 @@ impl Block {
         }
     }
 
+    pub fn is_deleted(&self) -> bool {
+        match self {
+            Block::Item(item) => item.deleted,
+            Block::Skip(_) => false,
+            Block::GC(_) => false,
+        }
+    }
+
     pub fn encode(&self, store: &Store, encoder: &mut EncoderV1) {
         match self {
             Block::Item(item) => {

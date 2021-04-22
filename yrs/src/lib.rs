@@ -1,3 +1,4 @@
+#![feature(shrink_to)]
 //! Yrs "wires" is a high performance CRDT implementation based on the idea of **Shared
 //! Types**. It is a compatible port of the [Yjs](https://github.com/yjs/yjs) CRDT.
 //!
@@ -91,6 +92,7 @@ mod transaction;
 mod updates;
 mod types;
 mod store;
+mod id_set;
 
 use utils::client_hasher::ClientHasher;
 use std::cell::{Cell, RefCell, RefMut};
