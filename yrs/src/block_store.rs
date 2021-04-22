@@ -53,27 +53,24 @@ impl StateVector {
 }
 
 impl ClientBlockList {
-    #[inline]
     fn new() -> ClientBlockList {
         ClientBlockList {
             list: Vec::new(),
             integrated_len: 0,
         }
     }
-    #[inline]
     pub fn with_capacity(capacity: usize) -> ClientBlockList {
         ClientBlockList {
             list: Vec::with_capacity(capacity),
             integrated_len: 0,
         }
     }
-    #[inline]
     pub fn get_state(&self) -> u32 {
         if self.integrated_len == 0 {
             0
         } else {
             let item = &self.list[self.integrated_len - 1];
-            item.id.clock + 1
+            item.id().clock + item.len()
         }
     }
     pub fn find_pivot(&self, clock: u32) -> u32 {
@@ -83,7 +80,7 @@ impl ClientBlockList {
 
     }
     pub fn iterate(&self, tr: &Transaction, clock_start: u32, len: u32, f: fn(block::Block)) {
-        if (len > 0) {
+        if len > 0 {
             let clock_end = clock_start + len;
         }
     }
@@ -102,7 +99,7 @@ impl BlockStore {
             let number_of_structs: u32 = update_decoder.rest_decoder.read_var_uint();
             let client = update_decoder.read_client();
             let clock: u32 = update_decoder.rest_decoder.read_var_uint();
-            let structs = store.get_client_structs_list_with_capacity(client, number_of_structs);
+            let structs = store.get_client_structs_list_with_capacity(client, number_of_structs as usize);
             let id = block::ID { client, clock };
             for j in 0..number_of_structs {
                 let info = update_decoder.read_info();
@@ -154,12 +151,10 @@ impl BlockStore {
     pub fn get_state_vector(&self) -> StateVector {
         StateVector::from(self)
     }
-    #[inline(always)]
     pub fn find_item_ptr(&self, id: &block::ID) -> block::BlockPtr {
         let x = block::BlockPtr::from(*id);
         x
     }
-    #[inline(always)]
     pub fn get_item_mut(&mut self, ptr: &block::BlockPtr) -> &mut block::Item {
         unsafe {
             // this is not a dangerous expectation because we really checked
@@ -172,14 +167,16 @@ impl BlockStore {
                 .get_unchecked_mut(ptr.pivot as usize)
         }
     }
-    #[inline(always)]
+    pub fn get_block(&self, ptr: &block::BlockPtr) -> &block::Block {
+        &self.clients[&ptr.id.client].list[ptr.pivot as usize]
+    }
     pub fn get_item(&self, ptr: &block::BlockPtr) -> &block::Item {
         // this is not a dangerous expectation because we really checked
         // beforehand that these items existed (once a reference was created we
         // know that the item existed)
-        &self.clients[&ptr.id.client].list[ptr.pivot as usize]
+        let block::Item(item) = &self.clients[&ptr.id.client].list[ptr.pivot as usize];
+        item
     }
-    #[inline(always)]
     pub fn get_state(&self, client: u64) -> u32 {
         if let Some(client_structs) = self.clients.get(&client) {
             client_structs.get_state()
@@ -187,13 +184,11 @@ impl BlockStore {
             0
         }
     }
-    #[inline(always)]
     pub fn get_client_structs_list(&mut self, client_id: u64) -> &mut ClientBlockList {
         self.clients
             .entry(client_id)
             .or_insert_with(ClientBlockList::new)
     }
-    #[inline(always)]
     pub fn get_client_structs_list_with_capacity(
         &mut self,
         client_id: u64,
