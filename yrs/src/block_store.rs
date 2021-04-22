@@ -123,7 +123,6 @@ impl BlockStore {
     pub fn new() -> Self {
         Self {
             clients: HashMap::<u64, ClientBlockList, BuildHasherDefault<ClientHasher>>::default(),
-            local_block_list: ClientBlockList::new(),
         }
     }
     pub fn from (update_decoder: &mut updates::decoder::DecoderV1) -> Self {

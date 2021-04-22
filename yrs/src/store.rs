@@ -39,14 +39,6 @@ impl Store {
     }
   }
 
-  pub fn get_type_from_ptr(&self, ptr: &types::TypePtr) -> Option<&types::Inner> {
-      todo!()
-  }
-
-  pub fn get_type_from_ptr_mut(&mut self, ptr: &types::TypePtr) -> Option<&mut types::Inner> {
-      todo!()
-  }
-
   pub fn get_type_ref(&self, string: &str) -> Option<u32> {
     self.type_refs.get(string).map(|r| *r)
   }
