@@ -143,8 +143,7 @@ impl<'a> Store {
             client: self.client_id,
             clock: self.get_local_state(),
         };
-        let local_block_list = self.blocks.get_client_structs_list(self.client_id);
-        let pivot = local_block_list.integrated_len as u32;
+        let pivot = self.blocks.get_client_structs_list(self.client_id).integrated_len as u32;
         let item = block::Item {
             id,
             content,
@@ -157,6 +156,7 @@ impl<'a> Store {
             parent_sub: None,
         };
         item.integrate(self, pivot as u32);
+        let local_block_list = self.blocks.get_client_structs_list(self.client_id);
         local_block_list.list.push(block::Block::Item(item));
         local_block_list.integrated_len += 1;
     }
