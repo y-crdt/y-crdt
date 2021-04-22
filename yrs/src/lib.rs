@@ -119,7 +119,6 @@ pub struct ClientBlockList {
 
 pub struct BlockStore {
     pub clients: HashMap<u64, ClientBlockList, BuildHasherDefault<ClientHasher>>,
-    pub local_block_list: ClientBlockList,
 }
 
 pub struct Store {
