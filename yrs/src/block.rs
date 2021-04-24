@@ -23,6 +23,15 @@ pub struct ID {
     pub clock: u32,
 }
 
+impl ID {
+    pub fn new(client: u64, clock: u32) -> Self {
+        ID {
+            client,
+            clock,
+        }
+    }
+}
+
 #[derive(Copy, Clone)]
 pub struct BlockPtr {
     pub id: ID,
@@ -104,6 +113,33 @@ impl Block {
             }
         }
     }
+
+    pub fn id (&self) -> &ID {
+        match self {
+            Block::Item(item) => {
+                &item.id
+            }
+            Block::Skip(skip) => {
+                &skip.id
+            }
+            Block::GC(gc) => {
+                &gc.id
+            }
+        }
+    }
+    pub fn len (&self) -> u32 {
+        match self {
+            Block::Item(item) => {
+                item.content.len()
+            }
+            Block::Skip(skip) => {
+                skip.len
+            }
+            Block::GC(gc) => {
+                gc.len
+            }
+        }
+    }
 }
 
 pub enum ItemContent {
@@ -116,6 +152,43 @@ pub enum ItemContent {
     Format(String, String), // key, value: JSON
     String(String),
     Type(types::Inner),
+}
+
+impl ItemContent {
+    pub(crate) fn splice(&mut self, offset: usize) -> Option<ItemContent> {
+        match self {
+            ItemContent::Any(value) => {
+                todo!()
+            },
+            ItemContent::String(string) => {
+                let (left, right) = string.split_at(offset);
+                let mut left = left.to_string();
+                let mut right = right.to_string();
+
+                //TODO: do we need that in Rust?
+                //let split_point = left.chars().last().unwrap();
+                //if split_point >= 0xD800 as char && split_point <= 0xDBFF as char {
+                //    // Last character of the left split is the start of a surrogate utf16/ucs2 pair.
+                //    // We don't support splitting of surrogate pairs because this may lead to invalid documents.
+                //    // Replace the invalid character with a unicode replacement character (� / U+FFFD)
+                //    left.replace_range((offset-1)..offset, "�");
+                //    right.replace_range(0..1, "�");
+                //}
+                *self = ItemContent::String(left);
+
+                Some(ItemContent::String(right))
+            },
+            ItemContent::Deleted(len) => {
+                let right = ItemContent::Deleted(*len - offset as u32);
+                *len = offset as u32;
+                Some(right)
+            },
+            ItemContent::JSON(value) => {
+                todo!()
+            },
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -170,6 +243,25 @@ impl Item {
     }
     pub fn len (&self) -> u32 {
         self.content.len()
+    }
+
+    pub fn split(&mut self, diff: u32) -> Item {
+        let client = self.id.client;
+        let clock = self.id.clock;
+        let other = Item {
+            id: ID::new(client, clock + diff),
+            left: Some(BlockPtr::from(self.id)),
+            right: self.right.clone(),
+            origin: Some(ID::new(client, clock + diff - 1)),
+            right_origin: self.right_origin.clone(),
+            content: self.content.splice(diff as usize).unwrap(),
+            parent: self.parent.clone(),
+            parent_sub: self.parent_sub.clone(),
+            deleted: self.deleted,
+        };
+
+        self.right = Some(BlockPtr::from(other.id));
+        other
     }
 }
 
@@ -275,78 +367,6 @@ impl ItemContent {
             }
             _ => { // Unknown
                 panic!("Unknown content type");
-            }
-        }
-    }
-}
-
-impl Block {
-    pub fn write (&self, mut encoder: impl updates::encoder::UpdateEncoder, offset: u32) {
-        match self {
-            Block::Item(item) => {
-                let origin = if offset > 0 { Some(ID { client: item.id.client, clock: item.id.clock }) } else { item.origin };
-                encoder.write_info(
-                    item.content.get_ref_number() |
-                    if origin.is_none() { 0 } else { 0b10000000 } | // origin is defined
-                    if item.right_origin.is_none() { 0 } else { 0b01000000 } | // right_origin is defined
-                    if item.parent_sub.is_none() { 0 } else { 0b00100000 } // parent_sub is defined
-                );
-                if let Some(lo) = origin {
-                    encoder.write_left_id(&lo);
-                }
-                if let Some(ro) = item.right_origin {
-                    encoder.write_right_id(&ro);
-                }
-                if origin.is_none() && item.right_origin.is_none() {
-                    match &item.parent {
-                        types::TypePtr::Named(name) => {
-                            // @todo write control variables here
-                            encoder.write_string(name);
-                        }
-                        types::TypePtr::NamedRef(_) => {}
-                        types::TypePtr::Id(_) => {}
-                    }
-                }
-            }
-            Block::Skip(skip) => {
-                encoder.write_info(BLOCK_SKIP_REF_NUMBER);
-                // write as var_uint because Skips can't make use of predilcatble length-encoding
-                encoder.rest_encoder().write_var_uint(skip.len - offset)
-            }
-            Block::GC(gc) => {
-                encoder.write_info(BLOCK_GC_REF_NUMBER);
-                encoder.write_len(gc.len - offset)
-            }
-        }
-    }
-}
-
-
-
-impl Block {
-    pub fn id (&self) -> &ID {
-        match self {
-            Block::Item(item) => {
-                &item.id
-            }
-            Block::Skip(skip) => {
-                &skip.id
-            }
-            Block::GC(gc) => {
-                &gc.id
-            }
-        }
-    }
-    pub fn len (&self) -> u32 {
-        match self {
-            Block::Item(item) => {
-                item.content.len()
-            }
-            Block::Skip(skip) => {
-                skip.len
-            }
-            Block::GC(gc) => {
-                gc.len
             }
         }
     }

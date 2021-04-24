@@ -98,6 +98,7 @@ use utils::client_hasher::ClientHasher;
 use std::cell::{Cell, RefCell, RefMut};
 use std::collections::HashMap;
 use std::hash::BuildHasherDefault;
+use crate::block::ID;
 
 pub struct Doc {
     pub client_id: u64,
@@ -110,6 +111,7 @@ pub struct StateVector(HashMap<u64, u32, BuildHasherDefault<ClientHasher>>);
 pub struct Transaction <'a> {
     pub store: RefMut<'a, Store>,
     pub start_state_vector: StateVector,
+    pub merge_blocks: Vec<ID>,
 }
 
 pub struct ClientBlockList {
