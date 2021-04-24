@@ -81,8 +81,15 @@ impl IdSet {
         set
     }
 
-    pub fn iterate<F>(&self, transaction: &mut Transaction, f: F) where F: Fn(&Block) -> () {
-        todo!()
+    pub fn apply_ranges<F>(&self, transaction: &mut Transaction, f: &F) where F: Fn(&Block) -> () {
+        // equivalent of JS: Y.iterateDeletedStructs
+        for (client, ranges) in self.clients.iter() {
+            if transaction.store.blocks.clients.contains_key(client) {
+                for range in ranges.iter() {
+                    transaction.iterate_structs(client, range.clock, range.len, f);
+                }
+            }
+        }
     }
 
     fn find_pivot(block: &[IdRange], clock: u32) -> Option<usize> {
