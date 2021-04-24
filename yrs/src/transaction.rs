@@ -65,7 +65,7 @@ impl <'a> Transaction <'a> {
 
                 f(block);
                 index += 1;
-                
+
                 let blocks = &self.store.blocks.clients.get(client).unwrap().list;
                 block = &blocks[index];
             }

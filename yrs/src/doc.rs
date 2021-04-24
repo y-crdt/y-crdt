@@ -225,7 +225,7 @@ impl<'a> Store {
                 client_struct_list.integrated_len += 1;
 
                 // struct integration done. Now increase clock
-                clock += 1;
+                clock += item.len();
             }
         }
     }
