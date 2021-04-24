@@ -162,7 +162,7 @@ impl BlockStore {
                     };
                     let item: block::Item = todo!();
                     structs.list.push(block::Block::Item(item));
-                    clock += 1;
+                    clock += item.len();
 
                 } else {
                     // is a GC
