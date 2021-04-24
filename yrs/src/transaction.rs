@@ -51,23 +51,20 @@ impl <'a> Transaction <'a> {
 
         let clock_end = clock_start + len;
         if let Some(mut index) = self.find_index_clean_start(client, clock_start) {
-            let blocks = &self.store.blocks.clients.get(client).unwrap().list;
-            let mut block = &blocks[index];
-            let mut blocks_len = blocks.len();
+            let mut blocks = self.store.blocks.clients.get(client).unwrap();
+            let mut block = &blocks.list[index];
 
-            while index < blocks_len && block.id().clock < clock_end {
+            while index < blocks.list.len() && block.id().clock < clock_end {
                 if clock_end < block.id().clock + block.len() {
                     self.find_index_clean_start(client, clock_start);
-                    let blocks = &self.store.blocks.clients.get(client).unwrap().list;
-                    blocks_len = blocks.len();
-                    block = &blocks[index];
+                    blocks = self.store.blocks.clients.get(client).unwrap();
+                    block = &blocks.list[index];
                 }
 
                 f(block);
                 index += 1;
 
-                let blocks = &self.store.blocks.clients.get(client).unwrap().list;
-                block = &blocks[index];
+                block = &blocks.list[index];
             }
         }
     }
