@@ -2,7 +2,9 @@ use crate::*;
 
 use updates::encoder::*;
 use std::cell::RefMut;
-use crate::block::{Item, ID, BlockPtr, Block};
+use crate::block::{Item, ID, BlockPtr, Block, ItemContent};
+use crate::id_set::{IdSet, IdRange};
+use crate::types::TypePtr;
 
 impl <'a> Transaction <'a> {
     pub fn new (store: RefMut<'a, Store>) -> Transaction {
@@ -11,6 +13,8 @@ impl <'a> Transaction <'a> {
             store,
             start_state_vector,
             merge_blocks: Vec::new(),
+            delete_set: IdSet::new(),
+            changed: HashMap::new(),
         }
     }
     /// Encodes the document state to a binary format.
@@ -55,7 +59,7 @@ impl <'a> Transaction <'a> {
             let mut block = &blocks.list[index];
 
             while index < blocks.list.len() && block.id().clock < clock_end {
-                if clock_end < block.id().clock + block.len() {
+                if clock_end < block.clock_end() {
                     self.find_index_clean_start(client, clock_start);
                     blocks = self.store.blocks.clients.get(client).unwrap();
                     block = &blocks.list[index];
@@ -96,6 +100,15 @@ impl <'a> Transaction <'a> {
             }
         }
 
+        if let Some((right_ptr, id)) = id_ptr {
+            self.rewire(&right_ptr, id);
+        }
+
+        Some(index)
+    }
+
+    fn rewire(&mut self, right_ptr: &BlockPtr, id: ID) {
+
         // if we had split an item, it was inserted as a new right. We need to rewrite pointers
         // of the old right to point into the new_item on its left:
         //
@@ -109,17 +122,111 @@ impl <'a> Transaction <'a> {
         //  +------+ --> +------+ --> +-------+
         //  | LEFT |     | ITEM |     | RIGHT |
         //  +------+ <-- +------+ <-- +-------+
-        //
-        if let Some((right_ptr, id)) = id_ptr {
-            let right = {
-                let blocks = self.store.blocks.clients.get_mut(&right_ptr.id.client).unwrap();
-                &mut blocks.list[right_ptr.pivot as usize]
-            };
-            if let Some(right_item) = right.as_item_mut() {
-                right_item.left = Some(BlockPtr::from(id))
+
+        let blocks = self.store.blocks.clients.get_mut(&right_ptr.id.client).unwrap();
+        let right = &mut blocks.list[right_ptr.pivot as usize];
+        if let Some(right_item) = right.as_item_mut() {
+            right_item.left = Some(BlockPtr::from(id))
+        }
+    }
+
+    /// Applies given `id_set` onto current transaction to run multi-range deletion.
+    /// Returns a remaining of original ID set, that couldn't be applied.
+    pub fn apply_delete(&mut self, id_set: &IdSet) -> IdSet {
+        let mut unapplied = IdSet::new();
+        for (client, ranges) in id_set.iter() {
+            let mut blocks = self.store.blocks.clients.get_mut(client).unwrap();
+            let state = blocks.get_state();
+
+            for range in ranges.iter() {
+                let clock = range.clock;
+                let clock_end = clock + range.len;
+
+                if clock < state {
+                    if state < clock_end {
+                        unapplied.insert(ID::new(*client, clock), clock_end - state);
+                    }
+                    // We can ignore the case of GC and Delete structs, because we are going to skip them
+                    if let Some(mut index) = blocks.find_pivot(clock) {
+                        // We can ignore the case of GC and Delete structs, because we are going to skip them
+                        if let Some(item) = blocks.list[index].as_item_mut() {
+                            // split the first item if necessary
+                            if !item.deleted && item.id.clock < clock {
+                                index += 1;
+                                let right = item.split(clock - item.id.clock);
+                                let id = right.id.clone();
+                                let right_ptr = right.right.clone();
+                                self.merge_blocks.push(id);
+                                blocks.list.insert(index, Block::Item(right));
+                                if let Some(right_ptr) = right_ptr {
+                                    self.rewire(&right_ptr, id);
+                                    blocks = self.store.blocks.clients.get_mut(client).unwrap(); // just to make the borrow checker happy
+                                }
+                            }
+
+                            while index < blocks.list.len() {
+                                let block = &mut blocks.list[index];
+                                index += 1;
+                                if let Some(item) = block.as_item_mut() {
+                                    if item.id.clock < clock_end {
+                                        if !item.deleted {
+                                            let ptr = BlockPtr::from(item.id.clone());
+                                            if item.id.clock + item.content.len() > clock_end {
+                                                index += 1;
+                                                let right = item.split(clock - item.id.clock);
+                                                let id = right.id.clone();
+                                                let right_ptr = right.right.clone();
+                                                self.merge_blocks.push(id);
+                                                blocks.list.insert(index, Block::Item(right));
+                                                if let Some(right_ptr) = right_ptr {
+                                                    self.rewire(&right_ptr, id);
+                                                }
+                                            }
+                                            self.delete(&ptr);
+                                            blocks = self.store.blocks.clients.get_mut(client).unwrap(); // just to make the borrow checker happy
+                                        }
+                                    } else {
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    unapplied.insert(ID::new(*client, clock), clock_end - clock);
+                }
             }
         }
+        unapplied
+    }
 
-        Some(index)
+    fn delete(&mut self, ptr: &BlockPtr) {
+        let item = self.store.blocks.get_item_mut(&ptr);
+        if !item.deleted {
+            //TODO:
+            // if let Some(parent) = self.store.get_type(&item.parent) {
+            //     // adjust the length of parent
+            //     if (this.countable && this.parentSub === null) {
+            //         parent._length -= this.length
+            //     }
+            // }
+            item.deleted = true;
+            self.delete_set.insert(item.id.clone(), item.len());
+            // addChangedTypeToTransaction(transaction, item.type, item.parentSub)
+            if item.id.clock < self.start_state_vector.get_state(item.id.client) {
+                let set = self.changed.entry(item.parent.clone()).or_default();
+                set.insert(item.parent_sub.clone());
+            }
+            // item.content.delete(transaction)
+            match &mut item.content {
+                ItemContent::Doc(s, value) => {
+                    todo!()
+                },
+                ItemContent::Type(t) => {
+                    todo!()
+                },
+                _ => {}, // do nothing
+            }
+        }
     }
 }

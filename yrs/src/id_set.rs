@@ -5,9 +5,9 @@ use crate::updates::encoder::{EncoderV1, UpdateEncoder, DSEncoder};
 use crate::updates::decoder::{DecoderV1, UpdateDecoder, DSDecoder};
 
 #[derive(Default, Copy, Clone)]
-struct IdRange {
-    clock: u32,
-    len: u32
+pub(crate) struct IdRange {
+    pub clock: u32,
+    pub len: u32
 }
 
 impl IdRange {
@@ -45,6 +45,8 @@ pub struct IdSet {
     clients: HashMap::<u64, Vec<IdRange>, BuildHasherDefault<ClientHasher>>,
 }
 
+pub(crate) type Iter<'a> = std::collections::hash_map::Iter<'a, u64, Vec<IdRange>>;
+
 impl IdSet {
     pub fn new () -> Self {
         Self::default()
@@ -79,6 +81,10 @@ impl IdSet {
             }
         }
         set
+    }
+
+    pub(crate) fn iter(&self) -> Iter<'_> {
+        self.clients.iter()
     }
 
     pub fn apply_ranges<F>(&self, transaction: &mut Transaction, f: &F) where F: Fn(&Block) -> () {
