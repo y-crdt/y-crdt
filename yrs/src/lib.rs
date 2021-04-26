@@ -96,9 +96,11 @@ mod id_set;
 
 use utils::client_hasher::ClientHasher;
 use std::cell::{Cell, RefCell, RefMut};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::BuildHasherDefault;
 use crate::block::ID;
+use crate::id_set::{IdRange, IdSet};
+use crate::types::TypePtr;
 
 pub struct Doc {
     pub client_id: u64,
@@ -112,6 +114,8 @@ pub struct Transaction <'a> {
     pub store: RefMut<'a, Store>,
     pub start_state_vector: StateVector,
     pub merge_blocks: Vec<ID>,
+    delete_set: IdSet,
+    changed: HashMap<TypePtr, HashSet<Option<String>>>,
 }
 
 pub struct ClientBlockList {

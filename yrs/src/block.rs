@@ -17,7 +17,7 @@ const BLOCK_ITEM_ANY_REF_NUMBER: u8 = 8;
 const BLOCK_ITEM_DOC_REF_NUMBER: u8 = 9;
 const BLOCK_SKIP_REF_NUMBER: u8 = 10;
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, PartialOrd, PartialEq, Ord, Eq, Hash)]
 pub struct ID {
     pub client: u64,
     pub clock: u32,
@@ -32,7 +32,7 @@ impl ID {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, PartialOrd, PartialEq, Ord, Eq, Hash)]
 pub struct BlockPtr {
     pub id: ID,
     pub pivot: u32,
@@ -127,6 +127,7 @@ impl Block {
             }
         }
     }
+
     pub fn len (&self) -> u32 {
         match self {
             Block::Item(item) => {
@@ -138,6 +139,14 @@ impl Block {
             Block::GC(gc) => {
                 gc.len
             }
+        }
+    }
+
+    pub fn clock_end(&self) -> u32 {
+        match self {
+            Block::Item(item) => item.id.clock + item.content.len(),
+            Block::Skip(skip) => skip.id.clock + skip.len,
+            Block::GC(gc) => gc.id.clock + gc.len,
         }
     }
 }
@@ -241,6 +250,7 @@ impl Item {
             }
         }
     }
+
     pub fn len (&self) -> u32 {
         self.content.len()
     }

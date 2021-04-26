@@ -97,7 +97,7 @@ impl Inner {
   }
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialOrd, PartialEq, Ord, Eq, Hash)]
 pub enum TypePtr {
     NamedRef(u32),
     Id(block::BlockPtr),
