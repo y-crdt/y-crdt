@@ -1,0 +1,19 @@
+[package]
+name = "y-py"
+version = "0.1.1"
+authors = ["Pierre-Olivier Simonard <pierre.olivier.simonard@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+name = "y_py"
+crate-type = ["cdylib"]
+
+[dependencies]
+yrs-api-wrapper = { git="https://github.com/yjs/y-crdt/", branch="main"}
+pythonize = "0.13.0"
+
+[dependencies.pyo3]
+version = "0.13.2"
+features = ["extension-module"]
