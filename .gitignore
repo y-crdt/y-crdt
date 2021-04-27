@@ -3,3 +3,4 @@ perf.data
 perf.data.old
 pkg
 .idea
+.DS_Store
