@@ -42,8 +42,8 @@ pub fn diff_updates (update: Vec<u8>, state_vector: Vec<u8>) -> PyResult<Py<PyAn
 }
 
 
-#[pymodule(yrs)]
-fn yrs(py: Python, m: &PyModule) -> PyResult<()> {
+#[pymodule(y_py)]
+fn y_py(py: Python, m: &PyModule) -> PyResult<()> {
     
     m.add_function(wrap_pyfunction!(merge_updates, m)?)?;
     m.add_function(wrap_pyfunction!(encode_state_vector_from_update, m)?)?;
