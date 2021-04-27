@@ -1,7 +1,7 @@
-import yrs
+import y_py
 
-# shows all the functions available in module yrs
-print(dir(yrs))
+# shows all the functions available in module y_py
+print(dir(y_py))
 
 
 # I used the following JS code to generate a binary buffer :
@@ -24,10 +24,10 @@ bin_buff1 = [
 ]
 
 
-result = yrs.encode_state_vector_from_update(bin_buff1)
+result = y_py.encode_state_vector_from_update(bin_buff1)
 
 print(result)
 
 # test here the other functions :
-# yrs.merge_updates
-# yrs.diff_updates
+# y_py.merge_updates
+# y_py.diff_updates
