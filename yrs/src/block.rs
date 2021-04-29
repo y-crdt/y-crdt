@@ -17,7 +17,7 @@ const BLOCK_ITEM_ANY_REF_NUMBER: u8 = 8;
 const BLOCK_ITEM_DOC_REF_NUMBER: u8 = 9;
 const BLOCK_SKIP_REF_NUMBER: u8 = 10;
 
-#[derive(Copy, Clone, PartialOrd, PartialEq, Ord, Eq, Hash)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct ID {
     pub client: u64,
     pub clock: u32,
@@ -32,7 +32,7 @@ impl ID {
     }
 }
 
-#[derive(Copy, Clone, PartialOrd, PartialEq, Ord, Eq, Hash)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct BlockPtr {
     pub id: ID,
     pub pivot: u32,
@@ -69,7 +69,7 @@ impl Block {
         match self {
             Block::Item(item) => item.deleted,
             Block::Skip(_) => false,
-            Block::GC(_) => false,
+            Block::GC(_) => true,
         }
     }
 
@@ -260,7 +260,7 @@ impl Item {
         let clock = self.id.clock;
         let other = Item {
             id: ID::new(client, clock + diff),
-            left: Some(BlockPtr::from(self.id)),
+            left: Some(BlockPtr::from(ID::new(client, clock + diff - 1))),
             right: self.right.clone(),
             origin: Some(ID::new(client, clock + diff - 1)),
             right_origin: self.right_origin.clone(),

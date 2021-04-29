@@ -14,7 +14,7 @@ impl <'a> Transaction <'a> {
             start_state_vector,
             merge_blocks: Vec::new(),
             delete_set: IdSet::new(),
-            changed: HashMap::new(),
+            changed: HashMap::with_hasher(BuildHasherDefault::default()),
         }
     }
     /// Encodes the document state to a binary format.

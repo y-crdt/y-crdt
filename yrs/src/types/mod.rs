@@ -7,6 +7,7 @@ pub use text::Text;
 
 use std::convert::TryFrom;
 use std::convert::Into;
+use std::hash::Hasher;
 
 pub struct Array {
   ptr: types::TypePtr,
@@ -97,9 +98,44 @@ impl Inner {
   }
 }
 
-#[derive(Clone, PartialOrd, PartialEq, Ord, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TypePtr {
     NamedRef(u32),
     Id(block::BlockPtr),
     Named(String),
+}
+
+#[derive(Default)]
+pub(crate) struct XorHasher(u64);
+
+impl Hasher for XorHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        let mut i = 0;
+        let mut buf = [0u8;8];
+        while i <= bytes.len() - 8 {
+            buf.copy_from_slice(&bytes[i..i+8]);
+            self.0 ^= u64::from_ne_bytes(buf);
+            i += 8;
+        }
+        while i < bytes.len() {
+            self.0 ^= bytes[i] as u64;
+            i += 1;
+        }
+    }
+
+    fn write_u32(&mut self, value: u32) {
+        self.0 ^= value as u64;
+    }
+
+    fn write_u64(&mut self, value: u64) {
+        self.0 ^= value;
+    }
+
+    fn write_usize(&mut self, value: usize) {
+        self.0 ^= value as u64;
+    }
 }
