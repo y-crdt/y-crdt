@@ -84,52 +84,25 @@
 //! ```
 //!
 
-mod utils;
 mod block;
 mod block_store;
 mod doc;
-mod transaction;
-mod updates;
-mod types;
-mod store;
 mod id_set;
+mod store;
+mod transaction;
+mod types;
+mod updates;
+mod utils;
 
-use utils::client_hasher::ClientHasher;
-use std::cell::{Cell, RefCell, RefMut};
-use std::collections::{HashMap, HashSet};
-use std::hash::BuildHasherDefault;
 use crate::block::ID;
 use crate::id_set::{IdRange, IdSet};
 use crate::types::{TypePtr, XorHasher};
+use std::cell::{Cell, RefCell, RefMut};
+use std::collections::{HashMap, HashSet};
+use std::hash::BuildHasherDefault;
+use utils::client_hasher::ClientHasher;
 
-pub struct Doc {
-    pub client_id: u64,
-    store: RefCell<Store>
-}
-
-#[derive(Default)]
-pub struct StateVector(HashMap<u64, u32, BuildHasherDefault<ClientHasher>>);
-
-pub struct Transaction <'a> {
-    pub store: RefMut<'a, Store>,
-    pub start_state_vector: StateVector,
-    pub merge_blocks: Vec<ID>,
-    delete_set: IdSet,
-    changed: HashMap<TypePtr, HashSet<Option<String>>, BuildHasherDefault<XorHasher>>,
-}
-
-pub struct ClientBlockList {
-    pub list: Vec<block::Block>,
-    pub integrated_len: usize,
-}
-
-pub struct BlockStore {
-    pub clients: HashMap<u64, ClientBlockList, BuildHasherDefault<ClientHasher>>,
-}
-
-pub struct Store {
-    client_id: u64,
-    pub type_refs: HashMap<String, u32>,
-    pub types: Vec<(types::Inner, String)>,
-    pub blocks: BlockStore,
-}
+pub type Doc = crate::doc::Doc;
+pub type Transaction<'a> = crate::transaction::Transaction<'a>;
+pub type BlockStore = crate::block_store::BlockStore;
+pub type StateVector = crate::block_store::StateVector;

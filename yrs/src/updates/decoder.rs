@@ -1,5 +1,5 @@
-use crate::*;
 use crate::types::TypeRefs;
+use crate::*;
 use lib0::{any::Any, decoding::Decoder};
 use std::convert::TryInto;
 
@@ -49,7 +49,7 @@ pub trait UpdateDecoder: DSDecoder {
     fn read_key(&mut self) -> &str;
 }
 
-impl <'a> UpdateDecoder for DecoderV1<'a> {
+impl<'a> UpdateDecoder for DecoderV1<'a> {
     fn read_left_id(&mut self) -> block::ID {
         block::ID {
             client: self.rest_decoder.read_var_uint(),

@@ -1,10 +1,14 @@
+use crate::block::{Block, ID};
+use crate::transaction::Transaction;
 use crate::*;
-use updates::decoder::UpdateDecoder;
 use lib0::decoding::Decoder;
 use lib0::encoding::Encoder;
 use std::collections::HashMap;
 use std::vec::Vec;
-use crate::block::{Block, ID};
+use updates::decoder::UpdateDecoder;
+
+#[derive(Default, Debug, Clone)]
+pub struct StateVector(HashMap<u64, u32, BuildHasherDefault<ClientHasher>>);
 
 impl StateVector {
     pub fn empty() -> Self {
@@ -53,6 +57,12 @@ impl StateVector {
     }
 }
 
+#[derive(Debug)]
+pub struct ClientBlockList {
+    pub list: Vec<block::Block>,
+    pub integrated_len: usize,
+}
+
 impl ClientBlockList {
     fn new() -> ClientBlockList {
         ClientBlockList {
@@ -91,11 +101,11 @@ impl ClientBlockList {
                 mid_clock = mid.id().clock;
                 if mid_clock <= clock {
                     if clock < mid_clock + mid.len() {
-                        return Some(mid_idx)
+                        return Some(mid_idx);
                     }
                     left = mid_idx + 1;
                 } else {
-                    right = mid_idx -1;
+                    right = mid_idx - 1;
                 }
                 mid_idx = (left + right) / 2;
             }
@@ -109,14 +119,17 @@ impl ClientBlockList {
         Some(&self.list[idx])
     }
 
-    pub fn find_item_clean_start(&mut self, tr: &mut Transaction, clock_start: u32) {
-
-    }
+    pub fn find_item_clean_start(&mut self, tr: &mut Transaction, clock_start: u32) {}
     pub fn iterate(&self, tr: &Transaction, clock_start: u32, len: u32, f: fn(block::Block)) {
         if len > 0 {
             let clock_end = clock_start + len;
         }
     }
+}
+
+#[derive(Debug)]
+pub struct BlockStore {
+    pub clients: HashMap<u64, ClientBlockList, BuildHasherDefault<ClientHasher>>,
 }
 
 impl BlockStore {
@@ -125,31 +138,37 @@ impl BlockStore {
             clients: HashMap::<u64, ClientBlockList, BuildHasherDefault<ClientHasher>>::default(),
         }
     }
-    pub fn from (update_decoder: &mut updates::decoder::DecoderV1) -> Self {
+    pub fn from(update_decoder: &mut updates::decoder::DecoderV1) -> Self {
         let mut store = Self::new();
         let num_of_state_updates: u32 = update_decoder.rest_decoder.read_var_uint();
         for i in 0..num_of_state_updates {
             let number_of_structs = update_decoder.rest_decoder.read_var_uint::<u32>() as usize;
             let client = update_decoder.read_client();
             let mut clock: u32 = update_decoder.rest_decoder.read_var_uint();
-            let structs = store.get_client_structs_list_with_capacity(client, number_of_structs as usize);
+            let structs =
+                store.get_client_structs_list_with_capacity(client, number_of_structs as usize);
             let id = block::ID { client, clock };
             for j in 0..number_of_structs {
                 let info = update_decoder.read_info();
                 if info == 10 {
                     // is a Skip
                     let len: u32 = update_decoder.rest_decoder.read_var_uint();
-                    let skip = block::Skip {
-                        id,
-                        len
-                    };
+                    let skip = block::Skip { id, len };
                     structs.list.push(block::Block::Skip(skip));
                     clock += len;
                 } else if info & 0b11111 != 0 {
                     // is an Item
                     let cantCopyParentInfo = info & 0b11000000 == 0;
-                    let left = if info & 0b10000000 > 0 { Some(update_decoder.read_left_id()) } else { None };
-                    let right = if info & 0b01000000 > 0 { Some(update_decoder.read_right_id()) } else { None };
+                    let left = if info & 0b10000000 > 0 {
+                        Some(update_decoder.read_left_id())
+                    } else {
+                        None
+                    };
+                    let right = if info & 0b01000000 > 0 {
+                        Some(update_decoder.read_right_id())
+                    } else {
+                        None
+                    };
                     let parent = if cantCopyParentInfo {
                         types::TypePtr::Named(update_decoder.read_string().to_owned())
                     } else {
@@ -163,14 +182,10 @@ impl BlockStore {
                     let item: block::Item = todo!();
                     structs.list.push(block::Block::Item(item));
                     clock += item.len();
-
                 } else {
                     // is a GC
                     let len: u32 = update_decoder.rest_decoder.read_var_uint();
-                    let skip = block::GC {
-                        id,
-                        len
-                    };
+                    let skip = block::GC { id, len };
                     structs.list.push(block::Block::GC(skip));
                     clock += len;
                 }
@@ -218,7 +233,9 @@ impl BlockStore {
         // this is not a dangerous expectation because we really checked
         // beforehand that these items existed (once a reference was created we
         // know that the item existed)
-        self.clients[&ptr.id.client].list[ptr.pivot as usize].as_item().unwrap()
+        self.clients[&ptr.id.client].list[ptr.pivot as usize]
+            .as_item()
+            .unwrap()
     }
     pub fn get_state(&self, client: u64) -> u32 {
         if let Some(client_structs) = self.clients.get(&client) {

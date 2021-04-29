@@ -1,22 +1,39 @@
 use crate::*;
 
-use updates::encoder::*;
-use std::cell::RefMut;
-use crate::block::{Item, ID, BlockPtr, Block, ItemContent};
-use crate::id_set::{IdSet, IdRange};
+use crate::block::{Block, BlockPtr, Item, ItemContent, ID};
+use crate::block_store::StateVector;
+use crate::id_set::{IdRange, IdSet};
+use crate::store::Store;
 use crate::types::TypePtr;
+use std::cell::RefMut;
+use updates::encoder::*;
 
-impl <'a> Transaction <'a> {
-    pub fn new (store: RefMut<'a, Store>) -> Transaction {
-        let start_state_vector = store.blocks.get_state_vector();
+pub struct Transaction<'a> {
+    /// Store containing the state of the document.
+    pub store: RefMut<'a, Store>,
+    /// State vector of a current transaction.
+    pub timestamp: StateVector,
+    /// ID's of the blocks to be merged.
+    pub merge_blocks: Vec<ID>,
+    /// Describes the set of deleted items by ids.
+    delete_set: IdSet,
+    /// All types that were directly modified (property added or child inserted/deleted).
+    /// New types are not included in this Set.
+    changed: HashMap<TypePtr, HashSet<Option<String>>, BuildHasherDefault<XorHasher>>,
+}
+
+impl<'a> Transaction<'a> {
+    pub fn new(store: RefMut<'a, Store>) -> Transaction {
+        let begin_timestamp = store.blocks.get_state_vector();
         Transaction {
             store,
-            start_state_vector,
+            timestamp: begin_timestamp,
             merge_blocks: Vec::new(),
             delete_set: IdSet::new(),
             changed: HashMap::with_hasher(BuildHasherDefault::default()),
         }
     }
+
     /// Encodes the document state to a binary format.
     ///
     /// Document updates are idempotent and commutative. Caveats:
@@ -40,17 +57,19 @@ impl <'a> Transaction <'a> {
     /// assert_eq!(doc1.get_type("my type").to_string(), "a");
     /// ```
     ///
-    pub fn encode_update (&self) -> Vec<u8> {
+    pub fn encode_update(&self) -> Vec<u8> {
         let mut update_encoder = updates::encoder::EncoderV1::new();
-        self.store.write_structs(&mut update_encoder, &self.start_state_vector);
+        self.store
+            .write_blocks(&mut update_encoder, &self.timestamp);
         update_encoder.to_buffer()
     }
 
     pub fn iterate_structs<F>(&mut self, client: &u64, clock_start: u32, len: u32, f: &F)
-        where F: Fn(&Block) -> () {
-
+    where
+        F: Fn(&Block) -> (),
+    {
         if len == 0 {
-            return
+            return;
         }
 
         let clock_end = clock_start + len;
@@ -83,7 +102,6 @@ impl <'a> Transaction <'a> {
             let block = &mut blocks.list[index];
             if let Some(item) = block.as_item_mut() {
                 if item.id.clock < clock {
-
                     // if we run over the clock, we need to the split item
                     let half = item.split(clock - item.id.clock);
                     if let Some(ptr) = half.right {
@@ -108,7 +126,6 @@ impl <'a> Transaction <'a> {
     }
 
     fn rewire(&mut self, right_ptr: &BlockPtr, id: ID) {
-
         // if we had split an item, it was inserted as a new right. We need to rewrite pointers
         // of the old right to point into the new_item on its left:
         //
@@ -123,7 +140,12 @@ impl <'a> Transaction <'a> {
         //  | LEFT |     | ITEM |     | RIGHT |
         //  +------+ <-- +------+ <-- +-------+
 
-        let blocks = self.store.blocks.clients.get_mut(&right_ptr.id.client).unwrap();
+        let blocks = self
+            .store
+            .blocks
+            .clients
+            .get_mut(&right_ptr.id.client)
+            .unwrap();
         let right = &mut blocks.list[right_ptr.pivot as usize];
         if let Some(right_item) = right.as_item_mut() {
             right_item.left = Some(BlockPtr::from(id))
@@ -160,7 +182,8 @@ impl <'a> Transaction <'a> {
                                 blocks.list.insert(index, Block::Item(right));
                                 if let Some(right_ptr) = right_ptr {
                                     self.rewire(&right_ptr, id);
-                                    blocks = self.store.blocks.clients.get_mut(client).unwrap(); // just to make the borrow checker happy
+                                    blocks = self.store.blocks.clients.get_mut(client).unwrap();
+                                    // just to make the borrow checker happy
                                 }
                             }
 
@@ -183,7 +206,9 @@ impl <'a> Transaction <'a> {
                                                 }
                                             }
                                             self.delete(&ptr);
-                                            blocks = self.store.blocks.clients.get_mut(client).unwrap(); // just to make the borrow checker happy
+                                            blocks =
+                                                self.store.blocks.clients.get_mut(client).unwrap();
+                                            // just to make the borrow checker happy
                                         }
                                     } else {
                                         break;
@@ -213,7 +238,7 @@ impl <'a> Transaction <'a> {
             item.deleted = true;
             self.delete_set.insert(item.id.clone(), item.len());
             // addChangedTypeToTransaction(transaction, item.type, item.parentSub)
-            if item.id.clock < self.start_state_vector.get_state(item.id.client) {
+            if item.id.clock < self.timestamp.get_state(item.id.client) {
                 let set = self.changed.entry(item.parent.clone()).or_default();
                 set.insert(item.parent_sub.clone());
             }
@@ -221,11 +246,11 @@ impl <'a> Transaction <'a> {
             match &mut item.content {
                 ItemContent::Doc(s, value) => {
                     todo!()
-                },
+                }
                 ItemContent::Type(t) => {
                     todo!()
-                },
-                _ => {}, // do nothing
+                }
+                _ => {} // do nothing
             }
         }
     }

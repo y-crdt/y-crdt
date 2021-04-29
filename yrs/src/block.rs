@@ -1,9 +1,10 @@
-use crate::*;
-use std::panic;
-use lib0::any::Any;
-use updates::decoder::UpdateDecoder;
+use crate::store::Store;
 use crate::updates::encoder::{EncoderV1, UpdateEncoder};
-use lib0::binary::{BIT8, BIT7};
+use crate::*;
+use lib0::any::Any;
+use lib0::binary::{BIT7, BIT8};
+use std::panic;
+use updates::decoder::UpdateDecoder;
 
 const BLOCK_GC_REF_NUMBER: u8 = 0;
 const BLOCK_ITEM_DELETED_REF_NUMBER: u8 = 1;
@@ -25,10 +26,7 @@ pub struct ID {
 
 impl ID {
     pub fn new(client: u64, clock: u32) -> Self {
-        ID {
-            client,
-            clock,
-        }
+        ID { client, clock }
     }
 }
 
@@ -39,11 +37,15 @@ pub struct BlockPtr {
 }
 
 impl BlockPtr {
-    pub fn from (id: ID) -> BlockPtr {
-        BlockPtr { id, pivot: id.clock }
+    pub fn from(id: ID) -> BlockPtr {
+        BlockPtr {
+            id,
+            pivot: id.clock,
+        }
     }
 }
 
+#[derive(Debug)]
 pub enum Block {
     Item(Item),
     Skip(Skip),
@@ -54,14 +56,14 @@ impl Block {
     pub fn as_item(&self) -> Option<&Item> {
         match self {
             Block::Item(item) => Some(item),
-            _ => None
+            _ => None,
         }
     }
 
     pub fn as_item_mut(&mut self) -> Option<&mut Item> {
         match self {
             Block::Item(item) => Some(item),
-            _ => None
+            _ => None,
         }
     }
 
@@ -102,11 +104,11 @@ impl Block {
                         }
                     }
                 }
-            },
+            }
             Block::Skip(skip) => {
                 encoder.write_info(10);
                 encoder.write_len(skip.len);
-            },
+            }
             Block::GC(gc) => {
                 encoder.write_info(0);
                 encoder.write_len(gc.len);
@@ -114,31 +116,19 @@ impl Block {
         }
     }
 
-    pub fn id (&self) -> &ID {
+    pub fn id(&self) -> &ID {
         match self {
-            Block::Item(item) => {
-                &item.id
-            }
-            Block::Skip(skip) => {
-                &skip.id
-            }
-            Block::GC(gc) => {
-                &gc.id
-            }
+            Block::Item(item) => &item.id,
+            Block::Skip(skip) => &skip.id,
+            Block::GC(gc) => &gc.id,
         }
     }
 
-    pub fn len (&self) -> u32 {
+    pub fn len(&self) -> u32 {
         match self {
-            Block::Item(item) => {
-                item.content.len()
-            }
-            Block::Skip(skip) => {
-                skip.len
-            }
-            Block::GC(gc) => {
-                gc.len
-            }
+            Block::Item(item) => item.content.len(),
+            Block::Skip(skip) => skip.len,
+            Block::GC(gc) => gc.len,
         }
     }
 
@@ -151,13 +141,14 @@ impl Block {
     }
 }
 
+#[derive(Debug)]
 pub enum ItemContent {
     Any(Any),
     Binary(Vec<u8>),
     Deleted(u32),
     Doc(String, Any),
-    JSON(String), // String is JSON
-    Embed(String), // String is JSON
+    JSON(String),           // String is JSON
+    Embed(String),          // String is JSON
     Format(String, String), // key, value: JSON
     String(String),
     Type(types::Inner),
@@ -168,7 +159,7 @@ impl ItemContent {
         match self {
             ItemContent::Any(value) => {
                 todo!()
-            },
+            }
             ItemContent::String(string) => {
                 let (left, right) = string.split_at(offset);
                 let mut left = left.to_string();
@@ -186,27 +177,27 @@ impl ItemContent {
                 *self = ItemContent::String(left);
 
                 Some(ItemContent::String(right))
-            },
+            }
             ItemContent::Deleted(len) => {
                 let right = ItemContent::Deleted(*len - offset as u32);
                 *len = offset as u32;
                 Some(right)
-            },
+            }
             ItemContent::JSON(value) => {
                 todo!()
-            },
+            }
             _ => None,
         }
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct ItemPosition {
     pub parent: types::TypePtr,
     pub after: Option<BlockPtr>,
 }
 
-
+#[derive(Debug)]
 pub struct Item {
     pub id: ID,
     pub left: Option<BlockPtr>,
@@ -219,11 +210,13 @@ pub struct Item {
     pub deleted: bool,
 }
 
+#[derive(Debug)]
 pub struct Skip {
     pub id: ID,
-    pub len: u32
-
+    pub len: u32,
 }
+
+#[derive(Debug)]
 pub struct GC {
     pub id: ID,
     pub len: u32,
@@ -251,7 +244,7 @@ impl Item {
         }
     }
 
-    pub fn len (&self) -> u32 {
+    pub fn len(&self) -> u32 {
         self.content.len()
     }
 
@@ -276,54 +269,32 @@ impl Item {
 }
 
 impl ItemContent {
-    pub fn get_ref_number (&self) -> u8 {
+    pub fn get_ref_number(&self) -> u8 {
         match self {
-            ItemContent::Any(_) => {
-                BLOCK_ITEM_ANY_REF_NUMBER
-            }
-            ItemContent::Binary(_) => {
-                BLOCK_ITEM_BINARY_REF_NUMBER
-            }
-            ItemContent::Deleted(_) => {
-                BLOCK_ITEM_DELETED_REF_NUMBER
-            }
-            ItemContent::Doc(_, _) => {
-                BLOCK_ITEM_DOC_REF_NUMBER
-            }
-            ItemContent::JSON(_) => {
-                BLOCK_ITEM_JSON_REF_NUMBER
-            }
-            ItemContent::Embed(_) => {
-                BLOCK_ITEM_EMBED_REF_NUMBER
-            }
-            ItemContent::Format(_, _) => {
-                BLOCK_ITEM_FORMAT_REF_NUMBER
-            }
-            ItemContent::String(_) => {
-                BLOCK_ITEM_STRING_REF_NUMBER
-            }
-            ItemContent::Type(_) => {
-                BLOCK_ITEM_TYPE_REF_NUMBER
-            }
+            ItemContent::Any(_) => BLOCK_ITEM_ANY_REF_NUMBER,
+            ItemContent::Binary(_) => BLOCK_ITEM_BINARY_REF_NUMBER,
+            ItemContent::Deleted(_) => BLOCK_ITEM_DELETED_REF_NUMBER,
+            ItemContent::Doc(_, _) => BLOCK_ITEM_DOC_REF_NUMBER,
+            ItemContent::JSON(_) => BLOCK_ITEM_JSON_REF_NUMBER,
+            ItemContent::Embed(_) => BLOCK_ITEM_EMBED_REF_NUMBER,
+            ItemContent::Format(_, _) => BLOCK_ITEM_FORMAT_REF_NUMBER,
+            ItemContent::String(_) => BLOCK_ITEM_STRING_REF_NUMBER,
+            ItemContent::Type(_) => BLOCK_ITEM_TYPE_REF_NUMBER,
         }
     }
 
     pub fn len(&self) -> u32 {
         match self {
-            ItemContent::Deleted(deletedContent) => {
-                *deletedContent
-            }
+            ItemContent::Deleted(deletedContent) => *deletedContent,
             ItemContent::String(str) => {
                 // @todo this should return the length in utf16!
                 str.len() as u32
             }
-            _ => {
-                1
-            }
+            _ => 1,
         }
     }
 
-    pub fn write (&self) {
+    pub fn write(&self) {
         match self {
             ItemContent::Any(content) => {}
             ItemContent::Binary(content) => {}
@@ -333,34 +304,48 @@ impl ItemContent {
             ItemContent::Embed(content) => {}
             ItemContent::Format(_, _) => {}
             ItemContent::String(content) => {}
-            ItemContent::Type(content) => {
-
-            }
+            ItemContent::Type(content) => {}
         }
     }
-    pub fn read (update_decoder: &mut updates::decoder::DecoderV1, ref_num: u16, ptr: block::BlockPtr) -> Self {
+    pub fn read(
+        update_decoder: &mut updates::decoder::DecoderV1,
+        ref_num: u16,
+        ptr: block::BlockPtr,
+    ) -> Self {
         match ref_num {
-            1 => { // Content Deleted
-               ItemContent::Deleted(update_decoder.read_len())
+            1 => {
+                // Content Deleted
+                ItemContent::Deleted(update_decoder.read_len())
             }
-            2 => { // Content JSON
-               ItemContent::JSON(update_decoder.read_string().to_owned())
+            2 => {
+                // Content JSON
+                ItemContent::JSON(update_decoder.read_string().to_owned())
             }
-            3 => { // Content Binary
-               ItemContent::Binary(update_decoder.read_buffer().to_owned())
+            3 => {
+                // Content Binary
+                ItemContent::Binary(update_decoder.read_buffer().to_owned())
             }
-            4 => { // Content String
-               ItemContent::String(update_decoder.read_string().to_owned())
+            4 => {
+                // Content String
+                ItemContent::String(update_decoder.read_string().to_owned())
             }
-            5 => { // Content Embed
-               ItemContent::Embed(update_decoder.read_string().to_owned())
+            5 => {
+                // Content Embed
+                ItemContent::Embed(update_decoder.read_string().to_owned())
             }
-            6 => { // Content Format
-               ItemContent::Format(update_decoder.read_string().to_owned(), update_decoder.read_string().to_owned())
+            6 => {
+                // Content Format
+                ItemContent::Format(
+                    update_decoder.read_string().to_owned(),
+                    update_decoder.read_string().to_owned(),
+                )
             }
-            7 => { // Content Type
+            7 => {
+                // Content Type
                 let type_ref = update_decoder.read_type_ref();
-                let name = if type_ref == types::TypeRefs::YXmlElement || type_ref == types::TypeRefs::YXmlHook {
+                let name = if type_ref == types::TYPE_REFS_XML_ELEMENT
+                    || type_ref == types::TYPE_REFS_XML_HOOK
+                {
                     Some(update_decoder.read_key().to_owned())
                 } else {
                     None
@@ -369,13 +354,19 @@ impl ItemContent {
                 let inner = types::Inner::new(innerPtr, name, type_ref);
                 ItemContent::Type(inner)
             }
-            8 => { // Content Any
-               ItemContent::Any(update_decoder.read_any())
+            8 => {
+                // Content Any
+                ItemContent::Any(update_decoder.read_any())
             }
-            9 => { // Content Doc
-               ItemContent::Doc(update_decoder.read_string().to_owned(), update_decoder.read_any())
+            9 => {
+                // Content Doc
+                ItemContent::Doc(
+                    update_decoder.read_string().to_owned(),
+                    update_decoder.read_any(),
+                )
             }
-            _ => { // Unknown
+            _ => {
+                // Unknown
                 panic!("Unknown content type");
             }
         }
