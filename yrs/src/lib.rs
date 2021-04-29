@@ -1,3 +1,4 @@
+#![feature(shrink_to)]
 //! Yrs "wires" is a high performance CRDT implementation based on the idea of **Shared
 //! Types**. It is a compatible port of the [Yjs](https://github.com/yjs/yjs) CRDT.
 //!
@@ -91,11 +92,15 @@ mod transaction;
 mod updates;
 mod types;
 mod store;
+mod id_set;
 
 use utils::client_hasher::ClientHasher;
 use std::cell::{Cell, RefCell, RefMut};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::BuildHasherDefault;
+use crate::block::ID;
+use crate::id_set::{IdRange, IdSet};
+use crate::types::{TypePtr, XorHasher};
 
 pub struct Doc {
     pub client_id: u64,
@@ -108,6 +113,9 @@ pub struct StateVector(HashMap<u64, u32, BuildHasherDefault<ClientHasher>>);
 pub struct Transaction <'a> {
     pub store: RefMut<'a, Store>,
     pub start_state_vector: StateVector,
+    pub merge_blocks: Vec<ID>,
+    delete_set: IdSet,
+    changed: HashMap<TypePtr, HashSet<Option<String>>, BuildHasherDefault<XorHasher>>,
 }
 
 pub struct ClientBlockList {
@@ -117,7 +125,6 @@ pub struct ClientBlockList {
 
 pub struct BlockStore {
     pub clients: HashMap<u64, ClientBlockList, BuildHasherDefault<ClientHasher>>,
-    pub local_block_list: ClientBlockList,
 }
 
 pub struct Store {
