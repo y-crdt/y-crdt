@@ -64,7 +64,7 @@ impl IdSet {
                     let mut len = block.len();
                     if i + 1 < blocks.list.len() {
                         let mut next = &blocks.list[i+1];
-                        while i + 1 < blocks.list.len() && next.id().clock == clock + len && next.is_deleted() {
+                        while i + 1 < blocks.list.len() && next.is_deleted() {
                             len += next.len();
                             i += 1;
                             next = &blocks.list[i+1];
