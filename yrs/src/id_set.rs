@@ -1,21 +1,18 @@
-
-use crate::*;
 use crate::block::{Block, ID};
-use crate::updates::encoder::{EncoderV1, UpdateEncoder, DSEncoder};
-use crate::updates::decoder::{DecoderV1, UpdateDecoder, DSDecoder};
+use crate::transaction::Transaction;
+use crate::updates::decoder::{DSDecoder, DecoderV1, UpdateDecoder};
+use crate::updates::encoder::{DSEncoder, EncoderV1, UpdateEncoder};
+use crate::*;
 
 #[derive(Default, Copy, Clone)]
 pub(crate) struct IdRange {
     pub clock: u32,
-    pub len: u32
+    pub len: u32,
 }
 
 impl IdRange {
     pub fn new(clock: u32, len: u32) -> Self {
-        IdRange {
-            clock,
-            len,
-        }
+        IdRange { clock, len }
     }
 
     pub fn encode(&self, encoder: &mut EncoderV1) {
@@ -26,10 +23,7 @@ impl IdRange {
     pub fn decode(decoder: &mut DecoderV1) -> Self {
         let clock = decoder.read_ds_clock();
         let len = decoder.read_ds_len();
-        IdRange {
-            clock,
-            len,
-        }
+        IdRange { clock, len }
     }
 }
 
@@ -42,13 +36,13 @@ impl IdRange {
 ///   sorted and merged.
 #[derive(Default)]
 pub struct IdSet {
-    clients: HashMap::<u64, Vec<IdRange>, BuildHasherDefault<ClientHasher>>,
+    clients: HashMap<u64, Vec<IdRange>, BuildHasherDefault<ClientHasher>>,
 }
 
 pub(crate) type Iter<'a> = std::collections::hash_map::Iter<'a, u64, Vec<IdRange>>;
 
 impl IdSet {
-    pub fn new () -> Self {
+    pub fn new() -> Self {
         Self::default()
     }
 
@@ -63,11 +57,11 @@ impl IdSet {
                     let clock = block.id().clock;
                     let mut len = block.len();
                     if i + 1 < blocks.list.len() {
-                        let mut next = &blocks.list[i+1];
+                        let mut next = &blocks.list[i + 1];
                         while i + 1 < blocks.list.len() && next.is_deleted() {
                             len += next.len();
                             i += 1;
-                            next = &blocks.list[i+1];
+                            next = &blocks.list[i + 1];
                         }
                     }
                     ranges.push(IdRange::new(clock, len));
@@ -87,7 +81,10 @@ impl IdSet {
         self.clients.iter()
     }
 
-    pub fn apply_ranges<F>(&self, transaction: &mut Transaction, f: &F) where F: Fn(&Block) -> () {
+    pub fn apply_ranges<F>(&self, transaction: &mut Transaction, f: &F)
+    where
+        F: Fn(&Block) -> (),
+    {
         // equivalent of JS: Y.iterateDeletedStructs
         for (client, ranges) in self.clients.iter() {
             if transaction.store.blocks.clients.contains_key(client) {
@@ -106,7 +103,7 @@ impl IdSet {
             let mid = &block[mid_idx];
             if mid.clock <= clock {
                 if clock < mid.clock + mid.len {
-                    return Some(mid_idx)
+                    return Some(mid_idx);
                 }
                 left = mid_idx + 1;
             } else {
@@ -126,7 +123,7 @@ impl IdSet {
 
     pub fn sort_and_merge(&mut self) {
         for block in self.clients.values_mut() {
-            block.sort_by(|a,b| a.clock.cmp(&b.clock));
+            block.sort_by(|a, b| a.clock.cmp(&b.clock));
             // merge items without filtering or splicing the array
             // i is the current pointer
             // j refers to the current insert position for the pointed item
@@ -135,7 +132,7 @@ impl IdSet {
             let mut j = 1;
             while i < block.len() {
                 let right = block[i]; // copying 8B element is very cheap
-                let left = &mut block[j-1];
+                let left = &mut block[j - 1];
                 if left.clock + left.len >= right.clock {
                     left.len = left.len.max(right.clock + right.len - left.clock);
                 } else {
@@ -179,7 +176,9 @@ impl IdSet {
             let client = decoder.read_client();
             let block_len = decoder.read_len() as usize;
             if block_len > 0 {
-                let block = set.clients.entry(client)
+                let block = set
+                    .clients
+                    .entry(client)
                     .or_insert_with(|| Vec::with_capacity(block_len));
 
                 let mut j = 0;
@@ -195,6 +194,4 @@ impl IdSet {
 }
 
 #[cfg(test)]
-mod test {
-
-}
+mod test {}
