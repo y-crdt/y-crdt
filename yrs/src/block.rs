@@ -1,4 +1,5 @@
 use crate::store::Store;
+use crate::updates::decoder::DecoderV1;
 use crate::updates::encoder::{EncoderV1, UpdateEncoder};
 use crate::*;
 use lib0::any::Any;
@@ -6,17 +7,20 @@ use lib0::binary::{BIT7, BIT8};
 use std::panic;
 use updates::decoder::UpdateDecoder;
 
-const BLOCK_GC_REF_NUMBER: u8 = 0;
-const BLOCK_ITEM_DELETED_REF_NUMBER: u8 = 1;
-const BLOCK_ITEM_JSON_REF_NUMBER: u8 = 2;
-const BLOCK_ITEM_BINARY_REF_NUMBER: u8 = 3;
-const BLOCK_ITEM_STRING_REF_NUMBER: u8 = 4;
-const BLOCK_ITEM_EMBED_REF_NUMBER: u8 = 5;
-const BLOCK_ITEM_FORMAT_REF_NUMBER: u8 = 6;
-const BLOCK_ITEM_TYPE_REF_NUMBER: u8 = 7;
-const BLOCK_ITEM_ANY_REF_NUMBER: u8 = 8;
-const BLOCK_ITEM_DOC_REF_NUMBER: u8 = 9;
-const BLOCK_SKIP_REF_NUMBER: u8 = 10;
+pub const BLOCK_GC_REF_NUMBER: u8 = 0;
+pub const BLOCK_ITEM_DELETED_REF_NUMBER: u8 = 1;
+pub const BLOCK_ITEM_JSON_REF_NUMBER: u8 = 2;
+pub const BLOCK_ITEM_BINARY_REF_NUMBER: u8 = 3;
+pub const BLOCK_ITEM_STRING_REF_NUMBER: u8 = 4;
+pub const BLOCK_ITEM_EMBED_REF_NUMBER: u8 = 5;
+pub const BLOCK_ITEM_FORMAT_REF_NUMBER: u8 = 6;
+pub const BLOCK_ITEM_TYPE_REF_NUMBER: u8 = 7;
+pub const BLOCK_ITEM_ANY_REF_NUMBER: u8 = 8;
+pub const BLOCK_ITEM_DOC_REF_NUMBER: u8 = 9;
+pub const BLOCK_SKIP_REF_NUMBER: u8 = 10;
+
+pub const HAS_RIGHT_ORIGIN: u8 = 0b01000000;
+pub const HAS_ORIGIN: u8 = 0b10000000;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct ID {
@@ -78,8 +82,8 @@ impl Block {
     pub fn encode(&self, store: &Store, encoder: &mut EncoderV1) {
         match self {
             Block::Item(item) => {
-                let info = if item.origin.is_some() { BIT8 } else { 0 } // is left null
-                    | if item.right_origin.is_some() { BIT7 } else { 0 }; // is right null
+                let info = if item.origin.is_some() { HAS_ORIGIN } else { 0 } // is left null
+                    | if item.right_origin.is_some() { HAS_RIGHT_ORIGIN } else { 0 }; // is right null
                 encoder.write_info(info);
                 if let Some(origin_id) = item.origin.as_ref() {
                     encoder.write_left_id(origin_id);
@@ -106,11 +110,11 @@ impl Block {
                 }
             }
             Block::Skip(skip) => {
-                encoder.write_info(10);
+                encoder.write_info(BLOCK_SKIP_REF_NUMBER);
                 encoder.write_len(skip.len);
             }
             Block::GC(gc) => {
-                encoder.write_info(0);
+                encoder.write_info(BLOCK_GC_REF_NUMBER);
                 encoder.write_len(gc.len);
             }
         }
@@ -137,56 +141,6 @@ impl Block {
             Block::Item(item) => item.id.clock + item.content.len(),
             Block::Skip(skip) => skip.id.clock + skip.len,
             Block::GC(gc) => gc.id.clock + gc.len,
-        }
-    }
-}
-
-#[derive(Debug)]
-pub enum ItemContent {
-    Any(Any),
-    Binary(Vec<u8>),
-    Deleted(u32),
-    Doc(String, Any),
-    JSON(String),           // String is JSON
-    Embed(String),          // String is JSON
-    Format(String, String), // key, value: JSON
-    String(String),
-    Type(types::Inner),
-}
-
-impl ItemContent {
-    pub(crate) fn splice(&mut self, offset: usize) -> Option<ItemContent> {
-        match self {
-            ItemContent::Any(value) => {
-                todo!()
-            }
-            ItemContent::String(string) => {
-                let (left, right) = string.split_at(offset);
-                let mut left = left.to_string();
-                let mut right = right.to_string();
-
-                //TODO: do we need that in Rust?
-                //let split_point = left.chars().last().unwrap();
-                //if split_point >= 0xD800 as char && split_point <= 0xDBFF as char {
-                //    // Last character of the left split is the start of a surrogate utf16/ucs2 pair.
-                //    // We don't support splitting of surrogate pairs because this may lead to invalid documents.
-                //    // Replace the invalid character with a unicode replacement character (� / U+FFFD)
-                //    left.replace_range((offset-1)..offset, "�");
-                //    right.replace_range(0..1, "�");
-                //}
-                *self = ItemContent::String(left);
-
-                Some(ItemContent::String(right))
-            }
-            ItemContent::Deleted(len) => {
-                let right = ItemContent::Deleted(*len - offset as u32);
-                *len = offset as u32;
-                Some(right)
-            }
-            ItemContent::JSON(value) => {
-                todo!()
-            }
-            _ => None,
         }
     }
 }
@@ -268,6 +222,19 @@ impl Item {
     }
 }
 
+#[derive(Debug)]
+pub enum ItemContent {
+    Any(Vec<Any>),
+    Binary(Vec<u8>),
+    Deleted(u32),
+    Doc(String, Any),
+    JSON(String),           // String is JSON
+    Embed(String),          // String is JSON
+    Format(String, String), // key, value: JSON
+    String(String),
+    Type(types::Inner),
+}
+
 impl ItemContent {
     pub fn get_ref_number(&self) -> u8 {
         match self {
@@ -285,7 +252,7 @@ impl ItemContent {
 
     pub fn len(&self) -> u32 {
         match self {
-            ItemContent::Deleted(deletedContent) => *deletedContent,
+            ItemContent::Deleted(deleted) => *deleted,
             ItemContent::String(str) => {
                 // @todo this should return the length in utf16!
                 str.len() as u32
@@ -294,81 +261,83 @@ impl ItemContent {
         }
     }
 
-    pub fn write(&self) {
-        match self {
-            ItemContent::Any(content) => {}
-            ItemContent::Binary(content) => {}
-            ItemContent::Deleted(content) => {}
-            ItemContent::Doc(content, _) => {}
-            ItemContent::JSON(content) => {}
-            ItemContent::Embed(content) => {}
-            ItemContent::Format(_, _) => {}
-            ItemContent::String(content) => {}
-            ItemContent::Type(content) => {}
-        }
-    }
-    pub fn read(
-        update_decoder: &mut updates::decoder::DecoderV1,
-        ref_num: u16,
+    pub fn decode(
+        decoder: &mut updates::decoder::DecoderV1,
+        ref_num: u8,
         ptr: block::BlockPtr,
     ) -> Self {
-        match ref_num {
-            1 => {
-                // Content Deleted
-                ItemContent::Deleted(update_decoder.read_len())
-            }
-            2 => {
-                // Content JSON
-                ItemContent::JSON(update_decoder.read_string().to_owned())
-            }
-            3 => {
-                // Content Binary
-                ItemContent::Binary(update_decoder.read_buffer().to_owned())
-            }
-            4 => {
-                // Content String
-                ItemContent::String(update_decoder.read_string().to_owned())
-            }
-            5 => {
-                // Content Embed
-                ItemContent::Embed(update_decoder.read_string().to_owned())
-            }
-            6 => {
-                // Content Format
-                ItemContent::Format(
-                    update_decoder.read_string().to_owned(),
-                    update_decoder.read_string().to_owned(),
-                )
-            }
-            7 => {
-                // Content Type
-                let type_ref = update_decoder.read_type_ref();
+        match ref_num as u8 {
+            BLOCK_ITEM_DELETED_REF_NUMBER => ItemContent::Deleted(decoder.read_len()),
+            BLOCK_ITEM_JSON_REF_NUMBER => ItemContent::JSON(decoder.read_string().to_owned()),
+            BLOCK_ITEM_BINARY_REF_NUMBER => ItemContent::Binary(decoder.read_buffer().to_owned()),
+            BLOCK_ITEM_STRING_REF_NUMBER => ItemContent::String(decoder.read_string().to_owned()),
+            BLOCK_ITEM_EMBED_REF_NUMBER => ItemContent::Embed(decoder.read_string().to_owned()),
+            BLOCK_ITEM_FORMAT_REF_NUMBER => ItemContent::Format(
+                decoder.read_string().to_owned(),
+                decoder.read_string().to_owned(),
+            ),
+            BLOCK_ITEM_TYPE_REF_NUMBER => {
+                let type_ref = decoder.read_type_ref();
                 let name = if type_ref == types::TYPE_REFS_XML_ELEMENT
                     || type_ref == types::TYPE_REFS_XML_HOOK
                 {
-                    Some(update_decoder.read_key().to_owned())
+                    Some(decoder.read_key().to_owned())
                 } else {
                     None
                 };
-                let innerPtr = types::TypePtr::Id(ptr);
-                let inner = types::Inner::new(innerPtr, name, type_ref);
+                let inner_ptr = types::TypePtr::Id(ptr);
+                let inner = types::Inner::new(inner_ptr, name, type_ref);
                 ItemContent::Type(inner)
             }
-            8 => {
-                // Content Any
-                ItemContent::Any(update_decoder.read_any())
+            BLOCK_ITEM_ANY_REF_NUMBER => {
+                let len = decoder.read_len() as usize;
+                let mut values = Vec::with_capacity(len);
+                let mut i = 0;
+                while i < len {
+                    values.push(decoder.read_any());
+                    i += 1;
+                }
+                ItemContent::Any(values)
             }
-            9 => {
-                // Content Doc
-                ItemContent::Doc(
-                    update_decoder.read_string().to_owned(),
-                    update_decoder.read_any(),
-                )
+            BLOCK_ITEM_DOC_REF_NUMBER => {
+                ItemContent::Doc(decoder.read_string().to_owned(), decoder.read_any())
             }
-            _ => {
-                // Unknown
-                panic!("Unknown content type");
+            info => panic!("ItemContent::decode unrecognized info flag: {}", info),
+        }
+    }
+
+    pub(crate) fn splice(&mut self, offset: usize) -> Option<ItemContent> {
+        match self {
+            ItemContent::Any(value) => {
+                todo!()
             }
+            ItemContent::String(string) => {
+                let (left, right) = string.split_at(offset);
+                let left = left.to_string();
+                let right = right.to_string();
+
+                //TODO: do we need that in Rust?
+                //let split_point = left.chars().last().unwrap();
+                //if split_point >= 0xD800 as char && split_point <= 0xDBFF as char {
+                //    // Last character of the left split is the start of a surrogate utf16/ucs2 pair.
+                //    // We don't support splitting of surrogate pairs because this may lead to invalid documents.
+                //    // Replace the invalid character with a unicode replacement character (� / U+FFFD)
+                //    left.replace_range((offset-1)..offset, "�");
+                //    right.replace_range(0..1, "�");
+                //}
+                *self = ItemContent::String(left);
+
+                Some(ItemContent::String(right))
+            }
+            ItemContent::Deleted(len) => {
+                let right = ItemContent::Deleted(*len - offset as u32);
+                *len = offset as u32;
+                Some(right)
+            }
+            ItemContent::JSON(value) => {
+                todo!()
+            }
+            _ => None,
         }
     }
 }

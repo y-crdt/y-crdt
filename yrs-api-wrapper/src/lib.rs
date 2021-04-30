@@ -21,13 +21,13 @@ pub fn merge_updates(updates: &[&[u8]]) -> Vec<u8> {
 }
 
 // Computes the state vector from a document update
-pub fn encode_state_vector_from_update(update: &[u8]) -> Vec<u8> {
+pub fn encode_state_vector_from_update(_update: &[u8]) -> Vec<u8> {
     // @todo This is a polyfill that always returns an empty state vector
     Vec::from([0])
 }
 
 // Encode the missing differences to another document update.
-pub fn diff_updates(update: &[u8], state_vector: &[u8]) -> Vec<u8> {
+pub fn diff_updates(update: &[u8], _state_vector: &[u8]) -> Vec<u8> {
     // @todo This is a polyfill that always returns the complete state
     update.to_owned()
 }

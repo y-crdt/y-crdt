@@ -1,9 +1,14 @@
-use crate::block::{Block, ID};
+use crate::block::{
+    Block, BlockPtr, Item, ItemContent, BLOCK_GC_REF_NUMBER, BLOCK_SKIP_REF_NUMBER, HAS_ORIGIN,
+    HAS_RIGHT_ORIGIN, ID,
+};
 use crate::transaction::Transaction;
+use crate::utils::client_hasher::ClientHasher;
 use crate::*;
 use lib0::decoding::Decoder;
 use lib0::encoding::Encoder;
 use std::collections::HashMap;
+use std::hash::BuildHasherDefault;
 use std::vec::Vec;
 use updates::decoder::UpdateDecoder;
 
@@ -118,13 +123,6 @@ impl ClientBlockList {
         let idx = self.find_pivot(clock)?;
         Some(&self.list[idx])
     }
-
-    pub fn find_item_clean_start(&mut self, tr: &mut Transaction, clock_start: u32) {}
-    pub fn iterate(&self, tr: &Transaction, clock_start: u32, len: u32, f: fn(block::Block)) {
-        if len > 0 {
-            let clock_end = clock_start + len;
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -140,54 +138,65 @@ impl BlockStore {
     }
     pub fn from(update_decoder: &mut updates::decoder::DecoderV1) -> Self {
         let mut store = Self::new();
-        let num_of_state_updates: u32 = update_decoder.rest_decoder.read_var_uint();
-        for i in 0..num_of_state_updates {
-            let number_of_structs = update_decoder.rest_decoder.read_var_uint::<u32>() as usize;
+        let updates_count: u32 = update_decoder.rest_decoder.read_var_uint();
+        for i in 0..updates_count {
+            let blocks_len = update_decoder.rest_decoder.read_var_uint::<u32>() as usize;
             let client = update_decoder.read_client();
             let mut clock: u32 = update_decoder.rest_decoder.read_var_uint();
-            let structs =
-                store.get_client_structs_list_with_capacity(client, number_of_structs as usize);
+            let blocks = store.get_client_blocks_with_capacity_mut(client, blocks_len);
             let id = block::ID { client, clock };
-            for j in 0..number_of_structs {
+            for j in 0..blocks_len {
                 let info = update_decoder.read_info();
-                if info == 10 {
-                    // is a Skip
-                    let len: u32 = update_decoder.rest_decoder.read_var_uint();
-                    let skip = block::Skip { id, len };
-                    structs.list.push(block::Block::Skip(skip));
-                    clock += len;
-                } else if info & 0b11111 != 0 {
-                    // is an Item
-                    let cantCopyParentInfo = info & 0b11000000 == 0;
-                    let left = if info & 0b10000000 > 0 {
-                        Some(update_decoder.read_left_id())
-                    } else {
-                        None
-                    };
-                    let right = if info & 0b01000000 > 0 {
-                        Some(update_decoder.read_right_id())
-                    } else {
-                        None
-                    };
-                    let parent = if cantCopyParentInfo {
-                        types::TypePtr::Named(update_decoder.read_string().to_owned())
-                    } else {
-                        types::TypePtr::Id(block::BlockPtr::from(update_decoder.read_left_id()))
-                    };
-                    let parent_sub = if cantCopyParentInfo && info & 0b00100000 > 0 {
-                        Some(update_decoder.read_string())
-                    } else {
-                        None
-                    };
-                    let item: block::Item = todo!();
-                    structs.list.push(block::Block::Item(item));
-                    clock += item.len();
-                } else {
-                    // is a GC
-                    let len: u32 = update_decoder.rest_decoder.read_var_uint();
-                    let skip = block::GC { id, len };
-                    structs.list.push(block::Block::GC(skip));
-                    clock += len;
+                match info {
+                    BLOCK_SKIP_REF_NUMBER => {
+                        let len: u32 = update_decoder.rest_decoder.read_var_uint();
+                        let skip = block::Skip { id, len };
+                        blocks.list.push(block::Block::Skip(skip));
+                        clock += len;
+                    }
+                    BLOCK_GC_REF_NUMBER => {
+                        let len: u32 = update_decoder.rest_decoder.read_var_uint();
+                        let skip = block::GC { id, len };
+                        blocks.list.push(block::Block::GC(skip));
+                        clock += len;
+                    }
+                    info => {
+                        let cant_copy_parent_info = info & (HAS_ORIGIN | HAS_RIGHT_ORIGIN) == 0;
+                        let origin = if info & HAS_ORIGIN != 0 {
+                            Some(update_decoder.read_left_id())
+                        } else {
+                            None
+                        };
+                        let right_origin = if info & HAS_RIGHT_ORIGIN != 0 {
+                            Some(update_decoder.read_right_id())
+                        } else {
+                            None
+                        };
+                        let parent = if cant_copy_parent_info {
+                            types::TypePtr::Named(update_decoder.read_string().to_owned())
+                        } else {
+                            types::TypePtr::Id(block::BlockPtr::from(update_decoder.read_left_id()))
+                        };
+                        let parent_sub = if cant_copy_parent_info && (info & 0b00100000 != 0) {
+                            Some(update_decoder.read_string().to_owned())
+                        } else {
+                            None
+                        };
+                        let content = ItemContent::decode(update_decoder, info, todo!()); //TODO: What BlockPtr here is supposed to mean
+                        let item: block::Item = Item {
+                            id,
+                            left: None,
+                            right: None,
+                            origin,
+                            right_origin,
+                            content,
+                            parent,
+                            parent_sub,
+                            deleted: false,
+                        };
+                        blocks.list.push(block::Block::Item(item));
+                        clock += item.len();
+                    }
                 }
             }
         }
@@ -244,12 +253,12 @@ impl BlockStore {
             0
         }
     }
-    pub fn get_client_structs_list(&mut self, client_id: u64) -> &mut ClientBlockList {
+    pub fn get_client_blocks_mut(&mut self, client_id: u64) -> &mut ClientBlockList {
         self.clients
             .entry(client_id)
             .or_insert_with(ClientBlockList::new)
     }
-    pub fn get_client_structs_list_with_capacity(
+    pub fn get_client_blocks_with_capacity_mut(
         &mut self,
         client_id: u64,
         capacity: usize,

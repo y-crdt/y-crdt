@@ -1,13 +1,12 @@
-use crate::updates::decoder::UpdateDecoder;
 use crate::updates::encoder::DSEncoder;
-use crate::updates::encoder::UpdateEncoder;
 use crate::*;
 
-use crate::block_store::{ClientBlockList, StateVector};
+use crate::block_store::StateVector;
 use crate::store::Store;
 use crate::transaction::Transaction;
 use lib0::decoding::Decoder;
 use rand::Rng;
+use std::cell::RefCell;
 
 /// A Y.Doc instance.
 pub struct Doc {

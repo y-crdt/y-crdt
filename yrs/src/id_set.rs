@@ -2,7 +2,10 @@ use crate::block::{Block, ID};
 use crate::transaction::Transaction;
 use crate::updates::decoder::{DSDecoder, DecoderV1, UpdateDecoder};
 use crate::updates::encoder::{DSEncoder, EncoderV1, UpdateEncoder};
+use crate::utils::client_hasher::ClientHasher;
 use crate::*;
+use std::collections::HashMap;
+use std::hash::BuildHasherDefault;
 
 #[derive(Default, Copy, Clone)]
 pub(crate) struct IdRange {

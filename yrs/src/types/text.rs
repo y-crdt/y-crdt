@@ -18,8 +18,8 @@ impl Text {
                 let mut s = String::new();
                 while let Some(a) = start.as_ref() {
                     let item = tr.store.blocks.get_item(&a);
-                    if let block::ItemContent::String(itemString) = &item.content {
-                        s.push_str(itemString);
+                    if let block::ItemContent::String(item_string) = &item.content {
+                        s.push_str(item_string);
                     }
                     start = item.right
                 }
