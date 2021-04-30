@@ -1,11 +1,9 @@
+use crate::block::{HAS_ORIGIN, HAS_RIGHT_ORIGIN};
 use crate::block_store::{BlockStore, ClientBlockList, StateVector};
 use crate::updates::decoder::UpdateDecoder;
 use crate::updates::encoder::UpdateEncoder;
 use crate::{block, types, updates};
 use std::collections::HashMap;
-
-const HAS_RIGHT_ORIGIN: u8 = 0b01000000;
-const HAS_ORIGIN: u8 = 0b10000000;
 
 pub struct Store {
     client_id: u64,
@@ -86,7 +84,7 @@ impl Store {
         };
         let pivot = self
             .blocks
-            .get_client_structs_list(self.client_id)
+            .get_client_blocks_mut(self.client_id)
             .integrated_len as u32;
         let item = block::Item {
             id,
@@ -100,7 +98,7 @@ impl Store {
             parent_sub: None,
         };
         item.integrate(self, pivot as u32);
-        let local_block_list = self.blocks.get_client_structs_list(self.client_id);
+        let local_block_list = self.blocks.get_client_blocks_mut(self.client_id);
         local_block_list.list.push(block::Block::Item(item));
         local_block_list.integrated_len += 1;
     }
@@ -165,7 +163,7 @@ impl Store {
                                              // @todo try borow of index and generalize in ss
                 let client_struct_list = self
                     .blocks
-                    .get_client_structs_list_with_capacity(client, number_of_structs as usize);
+                    .get_client_blocks_with_capacity_mut(client, number_of_structs as usize);
                 client_struct_list.list.push(block::Block::Item(item));
                 client_struct_list.integrated_len += 1;
 

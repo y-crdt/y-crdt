@@ -1,11 +1,13 @@
 use crate::*;
 
-use crate::block::{Block, BlockPtr, Item, ItemContent, ID};
+use crate::block::{Block, BlockPtr, ItemContent, ID};
 use crate::block_store::StateVector;
-use crate::id_set::{IdRange, IdSet};
+use crate::id_set::IdSet;
 use crate::store::Store;
-use crate::types::TypePtr;
+use crate::types::{TypePtr, XorHasher};
 use std::cell::RefMut;
+use std::collections::{HashMap, HashSet};
+use std::hash::BuildHasherDefault;
 use updates::encoder::*;
 
 pub struct Transaction<'a> {
@@ -247,7 +249,7 @@ impl<'a> Transaction<'a> {
                 ItemContent::Doc(s, value) => {
                     todo!()
                 }
-                ItemContent::Type(t) => {
+                ItemContent::Type(inner) => {
                     todo!()
                 }
                 _ => {} // do nothing

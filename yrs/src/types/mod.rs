@@ -5,8 +5,7 @@ use crate::*;
 pub use map::Map;
 pub use text::Text;
 
-use std::convert::Into;
-use std::convert::TryFrom;
+use std::cell::Cell;
 use std::hash::Hasher;
 
 pub struct Array {

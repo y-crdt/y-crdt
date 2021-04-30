@@ -94,15 +94,8 @@ mod types;
 mod updates;
 mod utils;
 
-use crate::block::ID;
-use crate::id_set::{IdRange, IdSet};
-use crate::types::{TypePtr, XorHasher};
-use std::cell::{Cell, RefCell, RefMut};
-use std::collections::{HashMap, HashSet};
-use std::hash::BuildHasherDefault;
-use utils::client_hasher::ClientHasher;
-
-pub type Doc = crate::doc::Doc;
-pub type Transaction<'a> = crate::transaction::Transaction<'a>;
-pub type BlockStore = crate::block_store::BlockStore;
-pub type StateVector = crate::block_store::StateVector;
+pub use crate::block::ID;
+pub use crate::block_store::BlockStore;
+pub use crate::block_store::StateVector;
+pub use crate::doc::Doc;
+pub use crate::transaction::Transaction;
