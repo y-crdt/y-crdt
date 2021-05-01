@@ -2,7 +2,7 @@ use std::cmp::PartialEq;
 use std::collections::HashMap;
 use std::convert::TryInto;
 
-#[derive(PartialEq, Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Any {
     Null,
     Undefined,
@@ -36,18 +36,18 @@ impl std::fmt::Display for Any {
                     value.fmt(f)?;
                 }
                 write!(f, "]")?;
-            },
+            }
             Any::Map(entries) => {
                 write!(f, "{{")?;
                 let mut i = entries.iter();
-                if let Some((key,value)) = i.next() {
+                if let Some((key, value)) = i.next() {
                     write!(f, "\"{}\": {}", key, value)?;
                 }
-                while let Some((key,value)) = i.next() {
+                while let Some((key, value)) = i.next() {
                     write!(f, ", \"{}\": {}", key, value)?;
                 }
                 write!(f, "}}")?;
-            },
+            }
         }
 
         Ok(())
@@ -108,7 +108,10 @@ impl Into<Any> for Vec<u8> {
     }
 }
 
-impl<T> Into<Any> for Option<T> where T: Into<Any> {
+impl<T> Into<Any> for Option<T>
+where
+    T: Into<Any>,
+{
     fn into(self) -> Any {
         match self {
             None => Any::Null,
@@ -117,7 +120,10 @@ impl<T> Into<Any> for Option<T> where T: Into<Any> {
     }
 }
 
-impl<T> Into<Any> for Vec<T> where T: Into<Any> {
+impl<T> Into<Any> for Vec<T>
+where
+    T: Into<Any>,
+{
     fn into(self) -> Any {
         let mut array = Vec::with_capacity(self.len());
         for value in self {
@@ -127,7 +133,10 @@ impl<T> Into<Any> for Vec<T> where T: Into<Any> {
     }
 }
 
-impl<T> Into<Any> for HashMap<String, T> where T: Into<Any> {
+impl<T> Into<Any> for HashMap<String, T>
+where
+    T: Into<Any>,
+{
     fn into(self) -> Any {
         let mut map = HashMap::with_capacity(self.len());
         for (key, value) in self {

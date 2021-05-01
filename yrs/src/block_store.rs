@@ -182,7 +182,8 @@ impl BlockStore {
                         } else {
                             None
                         };
-                        let content = ItemContent::decode(update_decoder, info, todo!()); //TODO: What BlockPtr here is supposed to mean
+                        let content =
+                            ItemContent::decode(update_decoder, info, BlockPtr::from(id.clone())); //TODO: What BlockPtr here is supposed to mean
                         let item: block::Item = Item {
                             id,
                             left: None,
@@ -194,8 +195,8 @@ impl BlockStore {
                             parent_sub,
                             deleted: false,
                         };
-                        blocks.list.push(block::Block::Item(item));
                         clock += item.len();
+                        blocks.list.push(block::Block::Item(item));
                     }
                 }
             }
@@ -271,5 +272,53 @@ impl BlockStore {
     pub fn find(&self, id: &ID) -> Option<&Block> {
         let blocks = self.clients.get(&id.client)?;
         blocks.find_block(id.clock)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::block::{Block, Item, ItemContent};
+    use crate::types::TypePtr;
+    use crate::updates::decoder::DecoderV1;
+    use crate::{BlockStore, ID};
+    use lib0::decoding::Decoder;
+
+    #[test]
+    fn block_store_from_basic() {
+        /* Generated with:
+
+           ```js
+           var Y = require('yjs');
+
+           var doc = new Y.Doc()
+           var map = doc.getMap()
+           map.set('keyB', 'valueB')
+
+           // Merge changes from remote
+           var update = Y.encodeStateAsUpdate(doc)
+           ```
+        */
+        let update: &[u8] = &[
+            1, 1, 176, 249, 159, 198, 7, 0, 40, 1, 0, 4, 107, 101, 121, 66, 1, 119, 6, 118, 97,
+            108, 117, 101, 66, 0,
+        ];
+        let mut decoder = Decoder::new(update);
+        let mut decoder = DecoderV1::new(&mut decoder);
+        let store = BlockStore::from(&mut decoder);
+
+        let id = ID::new(2026372272, 0);
+        let block = store.find(&id);
+        let expected = Some(Block::Item(Item {
+            id,
+            left: None,
+            right: None,
+            origin: None,
+            right_origin: None,
+            content: ItemContent::Any(vec!["valueB".into()]),
+            parent: TypePtr::Named("\u{0}".to_owned()),
+            parent_sub: Some("keyB".to_owned()),
+            deleted: false,
+        }));
+        assert_eq!(block, expected.as_ref());
     }
 }
