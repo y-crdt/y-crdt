@@ -1,9 +1,7 @@
 use crate::store::Store;
-use crate::updates::decoder::DecoderV1;
 use crate::updates::encoder::{EncoderV1, UpdateEncoder};
 use crate::*;
 use lib0::any::Any;
-use lib0::binary::{BIT7, BIT8};
 use std::panic;
 use updates::decoder::UpdateDecoder;
 
@@ -49,7 +47,7 @@ impl BlockPtr {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum Block {
     Item(Item),
     Skip(Skip),
@@ -151,7 +149,7 @@ pub struct ItemPosition {
     pub after: Option<BlockPtr>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct Item {
     pub id: ID,
     pub left: Option<BlockPtr>,
@@ -164,13 +162,13 @@ pub struct Item {
     pub deleted: bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct Skip {
     pub id: ID,
     pub len: u32,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct GC {
     pub id: ID,
     pub len: u32,
@@ -222,7 +220,7 @@ impl Item {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum ItemContent {
     Any(Vec<Any>),
     Binary(Vec<u8>),
@@ -266,7 +264,7 @@ impl ItemContent {
         ref_num: u8,
         ptr: block::BlockPtr,
     ) -> Self {
-        match ref_num as u8 {
+        match ref_num & 0b1111 {
             BLOCK_ITEM_DELETED_REF_NUMBER => ItemContent::Deleted(decoder.read_len()),
             BLOCK_ITEM_JSON_REF_NUMBER => ItemContent::JSON(decoder.read_string().to_owned()),
             BLOCK_ITEM_BINARY_REF_NUMBER => ItemContent::Binary(decoder.read_buffer().to_owned()),
