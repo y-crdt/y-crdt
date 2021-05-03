@@ -2,7 +2,6 @@ use crate::block::{
     Block, BlockPtr, Item, ItemContent, BLOCK_GC_REF_NUMBER, BLOCK_SKIP_REF_NUMBER, HAS_ORIGIN,
     HAS_RIGHT_ORIGIN, ID,
 };
-use crate::transaction::Transaction;
 use crate::utils::client_hasher::ClientHasher;
 use crate::*;
 use lib0::decoding::Decoder;
@@ -139,13 +138,13 @@ impl BlockStore {
     pub fn from(update_decoder: &mut updates::decoder::DecoderV1) -> Self {
         let mut store = Self::new();
         let updates_count: u32 = update_decoder.rest_decoder.read_var_uint();
-        for i in 0..updates_count {
+        for _ in 0..updates_count {
             let blocks_len = update_decoder.rest_decoder.read_var_uint::<u32>() as usize;
             let client = update_decoder.read_client();
             let mut clock: u32 = update_decoder.rest_decoder.read_var_uint();
             let blocks = store.get_client_blocks_with_capacity_mut(client, blocks_len);
             let id = block::ID { client, clock };
-            for j in 0..blocks_len {
+            for _ in 0..blocks_len {
                 let info = update_decoder.read_info();
                 match info {
                     BLOCK_SKIP_REF_NUMBER => {
