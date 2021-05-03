@@ -87,6 +87,7 @@
 mod block;
 mod block_store;
 mod doc;
+mod event;
 mod id_set;
 mod store;
 mod transaction;
