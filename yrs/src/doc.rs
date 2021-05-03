@@ -161,6 +161,6 @@ mod test {
         doc.apply_update(&mut tr, update);
 
         let actual = doc.get_type(&tr, "type").to_string(&tr);
-        assert_eq!(actual, "321".to_owned());
+        assert_eq!(actual, "210".to_owned());
     }
 }
