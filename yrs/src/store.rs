@@ -106,8 +106,8 @@ impl Store {
     pub fn read_blocks(&mut self, update_decoder: &mut updates::decoder::DecoderV1) {
         let number_of_clients: u32 = update_decoder.rest_decoder.read_var_uint();
         for _ in 0..number_of_clients {
-            let client = update_decoder.read_client();
             let number_of_structs: u32 = update_decoder.rest_decoder.read_var_uint();
+            let client = update_decoder.read_client();
             let mut clock = update_decoder.rest_decoder.read_var_uint();
             for _ in 0..number_of_structs {
                 let info = update_decoder.read_info();
