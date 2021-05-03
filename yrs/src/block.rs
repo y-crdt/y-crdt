@@ -307,7 +307,11 @@ impl ItemContent {
     pub(crate) fn splice(&mut self, offset: usize) -> Option<ItemContent> {
         match self {
             ItemContent::Any(value) => {
-                todo!()
+                let (left, right) = value.split_at(offset);
+                let left = left.to_vec();
+                let right = right.to_vec();
+                *self = ItemContent::Any(left);
+                Some(ItemContent::Any(right))
             }
             ItemContent::String(string) => {
                 let (left, right) = string.split_at(offset);

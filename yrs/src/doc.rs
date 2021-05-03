@@ -133,3 +133,34 @@ impl Default for Doc {
         Doc::new()
     }
 }
+
+#[cfg(test)]
+mod test {
+    use crate::Doc;
+
+    #[test]
+    fn apply_update_basic() {
+        /* Result of calling following code:
+        ```javascript
+        const doc = new Y.Doc()
+        const ytext = doc.getText('type')
+        doc.transact(function () {
+            for (let i = 0; i < 3; i++) {
+                ytext.insert(0, (i % 10).toString())
+            }
+        })
+        const update = Y.encodeStateAsUpdate(doc)
+        ```
+         */
+        let update = &[
+            1, 3, 227, 214, 245, 198, 5, 0, 4, 1, 4, 116, 121, 112, 101, 1, 48, 68, 227, 214, 245,
+            198, 5, 0, 1, 49, 68, 227, 214, 245, 198, 5, 1, 1, 50, 0,
+        ];
+        let doc = Doc::new();
+        let mut tr = doc.transact();
+        doc.apply_update(&mut tr, update);
+
+        let actual = doc.get_type(&tr, "type").to_string(&tr);
+        assert_eq!(actual, "321".to_owned());
+    }
+}
