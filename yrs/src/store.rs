@@ -4,7 +4,7 @@ impl Store {
   pub fn get_local_state (&self) -> u32 {
     self.blocks.get_state(self.client_id)
   }
-  pub fn get_type<'a>(&'a self, ptr: &types::TypePtr) -> Option<&'a types::Inner> {
+  pub fn get_type(&self, ptr: &types::TypePtr) -> Option<&types::Inner> {
       match ptr {
           types::TypePtr::NamedRef(name_ref) => {
             self.types.get(*name_ref as usize).map(|t| &t.0)
@@ -37,14 +37,6 @@ impl Store {
           }
         }
     }
-  }
-
-  pub fn get_type_from_ptr(&self, ptr: &types::TypePtr) -> Option<&types::Inner> {
-      todo!()
-  }
-
-  pub fn get_type_from_ptr_mut(&mut self, ptr: &types::TypePtr) -> Option<&mut types::Inner> {
-      todo!()
   }
 
   pub fn get_type_ref(&self, string: &str) -> Option<u32> {
