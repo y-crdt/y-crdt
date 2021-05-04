@@ -4,7 +4,7 @@ use lib0::decoding::Decoder;
 use lib0::encoding::Encoder;
 use std::collections::HashMap;
 use std::vec::Vec;
-use crate::block::Block;
+use crate::block::{Block, ID};
 
 impl StateVector {
     pub fn empty() -> Self {
@@ -74,9 +74,41 @@ impl ClientBlockList {
             item.id().clock + item.len()
         }
     }
-    pub fn find_pivot(&self, clock: u32) -> u32 {
-        panic!("implement findIndexSS");
+    pub fn find_pivot(&self, clock: u32) -> Option<usize> {
+        let mut left = 0;
+        let mut right = self.list.len() - 1;
+        let mut mid = &self.list[right];
+        let mut mid_clock = mid.id().clock;
+        if mid_clock == clock {
+            Some(right)
+        } else {
+            //todo: does it even make sense to pivot the search?
+            // If a good split misses, it might actually increase the time to find the correct item.
+            // Currently, the only advantage is that search with pivoting might find the item on the first try.
+            let mut mid_idx = ((clock / (mid_clock + mid.len() - 1)) * right as u32) as usize;
+            while left <= right {
+                mid = &self.list[mid_idx];
+                mid_clock = mid.id().clock;
+                if mid_clock <= clock {
+                    if clock < mid_clock + mid.len() {
+                        return Some(mid_idx)
+                    }
+                    left = mid_idx + 1;
+                } else {
+                    right = mid_idx -1;
+                }
+                mid_idx = (left + right) / 2;
+            }
+
+            None
+        }
     }
+
+    pub fn find_block(&self, clock: u32) -> Option<&Block> {
+        let idx = self.find_pivot(clock)?;
+        Some(&self.list[idx])
+    }
+
     pub fn find_item_clean_start(&mut self, tr: &mut Transaction, clock_start: u32) {
 
     }
@@ -91,7 +123,6 @@ impl BlockStore {
     pub fn new() -> Self {
         Self {
             clients: HashMap::<u64, ClientBlockList, BuildHasherDefault<ClientHasher>>::default(),
-            local_block_list: ClientBlockList::new(),
         }
     }
     pub fn from (update_decoder: &mut updates::decoder::DecoderV1) -> Self {
@@ -131,7 +162,7 @@ impl BlockStore {
                     };
                     let item: block::Item = todo!();
                     structs.list.push(block::Block::Item(item));
-                    clock += 1;
+                    clock += item.len();
 
                 } else {
                     // is a GC
@@ -209,5 +240,10 @@ impl BlockStore {
         self.clients
             .entry(client_id)
             .or_insert_with(|| ClientBlockList::with_capacity(capacity))
+    }
+
+    pub fn find(&self, id: &ID) -> Option<&Block> {
+        let blocks = self.clients.get(&id.client)?;
+        blocks.find_block(id.clock)
     }
 }
