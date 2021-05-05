@@ -5,81 +5,50 @@ use crate::*;
 pub use map::Map;
 pub use text::Text;
 
-use std::convert::TryFrom;
-use std::convert::Into;
+use std::cell::Cell;
 use std::hash::Hasher;
 
 pub struct Array {
-  ptr: types::TypePtr,
+    ptr: types::TypePtr,
 }
 
 pub struct XmlElement {
-  ptr: types::TypePtr,
+    ptr: types::TypePtr,
 }
 
 pub struct XmlFragment {
-  ptr: types::TypePtr,
+    ptr: types::TypePtr,
 }
 
 pub struct XmlHook {
-  ptr: types::TypePtr,
+    ptr: types::TypePtr,
 }
 
 pub struct XmlText {
-  ptr: types::TypePtr,
+    ptr: types::TypePtr,
 }
 
 pub enum SharedType {
-  Text(Text),
-  Array(Array),
-  Map(Map),
-  XmlElement(XmlElement),
-  XmlFragment(XmlFragment),
-  XmlHook(XmlHook),
-  XmlText(XmlText)
-}
-#[derive(std::cmp::PartialEq)]
-pub enum TypeRefs {
-  YArray,
-  YMap,
-  YText,
-  YXmlElement,
-  YXmlFragment,
-  YXmlHook,
-  YXmlText,
+    Text(Text),
+    Array(Array),
+    Map(Map),
+    XmlElement(XmlElement),
+    XmlFragment(XmlFragment),
+    XmlHook(XmlHook),
+    XmlText(XmlText),
 }
 
-impl TryFrom<u8> for TypeRefs {
-  type Error = &'static str;
+pub type TypeRefs = u8;
 
-  fn try_from(value: u8) -> Result<Self, Self::Error> {
-    match value {
-      0 => Ok(TypeRefs::YArray),
-      1 => Ok(TypeRefs::YMap),
-      2 => Ok(TypeRefs::YText),
-      3 => Ok(TypeRefs::YXmlElement),
-      4 => Ok(TypeRefs::YXmlFragment),
-      5 => Ok(TypeRefs::YXmlHook),
-      6 => Ok(TypeRefs::YXmlText),
-      _ => Err("Unknown shared type"),
-    }
-  }
-}
+pub const TYPE_REFS_ARRAY: TypeRefs = 0;
+pub const TYPE_REFS_MAP: TypeRefs = 1;
+pub const TYPE_REFS_TEXT: TypeRefs = 2;
+pub const TYPE_REFS_XML_ELEMENT: TypeRefs = 3;
+pub const TYPE_REFS_XML_FRAGMENT: TypeRefs = 4;
+pub const TYPE_REFS_XML_HOOK: TypeRefs = 5;
+pub const TYPE_REFS_XML_TEXT: TypeRefs = 6;
 
-impl Into<u8> for TypeRefs {
-  fn into(self) -> u8 {
-    match self {
-        TypeRefs::YArray => { 0 }
-        TypeRefs::YMap => { 1 }
-        TypeRefs::YText => { 2 }
-        TypeRefs::YXmlElement => { 3 }
-        TypeRefs::YXmlFragment => { 4 }
-        TypeRefs::YXmlHook => { 5 }
-        TypeRefs::YXmlText => { 6 }
-    }
-  } 
-}
-
+#[derive(Debug, Eq, PartialEq)]
 pub struct Inner {
     pub start: Cell<Option<block::BlockPtr>>,
     pub ptr: TypePtr,
@@ -88,14 +57,14 @@ pub struct Inner {
 }
 
 impl Inner {
-  pub fn new (ptr: TypePtr, name: Option<String>, type_ref: TypeRefs) -> Self {
-    Self {
-      start: Cell::from(None),
-      ptr,
-      name,
-      type_ref
+    pub fn new(ptr: TypePtr, name: Option<String>, type_ref: TypeRefs) -> Self {
+        Self {
+            start: Cell::from(None),
+            ptr,
+            name,
+            type_ref,
+        }
     }
-  }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -115,9 +84,9 @@ impl Hasher for XorHasher {
 
     fn write(&mut self, bytes: &[u8]) {
         let mut i = 0;
-        let mut buf = [0u8;8];
+        let mut buf = [0u8; 8];
         while i <= bytes.len() - 8 {
-            buf.copy_from_slice(&bytes[i..i+8]);
+            buf.copy_from_slice(&bytes[i..i + 8]);
             self.0 ^= u64::from_ne_bytes(buf);
             i += 8;
         }
