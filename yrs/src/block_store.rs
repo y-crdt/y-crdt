@@ -2,14 +2,14 @@ use crate::block::{
     Block, BlockPtr, Item, ItemContent, BLOCK_GC_REF_NUMBER, BLOCK_SKIP_REF_NUMBER, HAS_ORIGIN,
     HAS_RIGHT_ORIGIN, ID,
 };
+use crate::updates::decoder::Decoder;
 use crate::utils::client_hasher::ClientHasher;
 use crate::*;
-use lib0::decoding::Decoder;
-use lib0::encoding::Encoder;
+use lib0::decoding::{Cursor, Read};
+use lib0::encoding::Write;
 use std::collections::HashMap;
 use std::hash::BuildHasherDefault;
 use std::vec::Vec;
-use updates::decoder::UpdateDecoder;
 
 #[derive(Default, Debug, Clone)]
 pub struct StateVector(HashMap<u64, u32, BuildHasherDefault<ClientHasher>>);
@@ -37,20 +37,21 @@ impl StateVector {
     pub fn iter(&self) -> std::collections::hash_map::Iter<u64, u32> {
         self.0.iter()
     }
+
     pub fn encode(&self) -> Vec<u8> {
         let len = self.size();
         // expecting to write at most two u32 values (using variable encoding
         // we will probably write less)
-        let mut encoder = Encoder::with_capacity(len * 14); // Upper bound: 9 for client, 5 for clock
+        let mut encoder = Vec::with_capacity(len * 14); // Upper bound: 9 for client, 5 for clock
         encoder.write_uvar(len);
         for (client_id, clock) in self.iter() {
             encoder.write_uvar(*client_id);
             encoder.write_uvar(*clock);
         }
-        encoder.buf
+        encoder
     }
     pub fn decode(encoded_sv: &[u8]) -> Self {
-        let mut decoder = Decoder::new(encoded_sv);
+        let mut decoder = Cursor::new(encoded_sv);
         let len: u32 = decoder.read_uvar();
         let mut sv = Self::empty();
         for _ in 0..len {
@@ -135,26 +136,26 @@ impl BlockStore {
             clients: HashMap::<u64, ClientBlockList, BuildHasherDefault<ClientHasher>>::default(),
         }
     }
-    pub fn from(update_decoder: &mut updates::decoder::DecoderV1) -> Self {
+    pub fn from<D: Decoder>(decoder: &mut D) -> Self {
         let mut store = Self::new();
-        let updates_count: u32 = update_decoder.rest_decoder.read_uvar();
+        let updates_count: u32 = decoder.read_uvar();
         for _ in 0..updates_count {
-            let blocks_len = update_decoder.rest_decoder.read_uvar::<u32>() as usize;
-            let client = update_decoder.read_client();
-            let mut clock: u32 = update_decoder.rest_decoder.read_uvar();
+            let blocks_len = decoder.read_uvar::<u32>() as usize;
+            let client = decoder.read_client();
+            let mut clock: u32 = decoder.read_uvar();
             let blocks = store.get_client_blocks_with_capacity_mut(client, blocks_len);
             let id = block::ID { client, clock };
             for _ in 0..blocks_len {
-                let info = update_decoder.read_info();
+                let info = decoder.read_info();
                 match info {
                     BLOCK_SKIP_REF_NUMBER => {
-                        let len: u32 = update_decoder.rest_decoder.read_uvar();
+                        let len: u32 = decoder.read_uvar();
                         let skip = block::Skip { id, len };
                         blocks.list.push(block::Block::Skip(skip));
                         clock += len;
                     }
                     BLOCK_GC_REF_NUMBER => {
-                        let len: u32 = update_decoder.rest_decoder.read_uvar();
+                        let len: u32 = decoder.read_uvar();
                         let skip = block::GC { id, len };
                         blocks.list.push(block::Block::GC(skip));
                         clock += len;
@@ -162,27 +163,27 @@ impl BlockStore {
                     info => {
                         let cant_copy_parent_info = info & (HAS_ORIGIN | HAS_RIGHT_ORIGIN) == 0;
                         let origin = if info & HAS_ORIGIN != 0 {
-                            Some(update_decoder.read_left_id())
+                            Some(decoder.read_left_id())
                         } else {
                             None
                         };
                         let right_origin = if info & HAS_RIGHT_ORIGIN != 0 {
-                            Some(update_decoder.read_right_id())
+                            Some(decoder.read_right_id())
                         } else {
                             None
                         };
                         let parent = if cant_copy_parent_info {
-                            types::TypePtr::Named(update_decoder.read_string().to_owned())
+                            types::TypePtr::Named(decoder.read_string().to_owned())
                         } else {
-                            types::TypePtr::Id(block::BlockPtr::from(update_decoder.read_left_id()))
+                            types::TypePtr::Id(block::BlockPtr::from(decoder.read_left_id()))
                         };
                         let parent_sub = if cant_copy_parent_info && (info & 0b00100000 != 0) {
-                            Some(update_decoder.read_string().to_owned())
+                            Some(decoder.read_string().to_owned())
                         } else {
                             None
                         };
                         let content =
-                            ItemContent::decode(update_decoder, info, BlockPtr::from(id.clone())); //TODO: What BlockPtr here is supposed to mean
+                            ItemContent::decode(decoder, info, BlockPtr::from(id.clone())); //TODO: What BlockPtr here is supposed to mean
                         let item: block::Item = Item {
                             id,
                             left: None,
@@ -207,12 +208,12 @@ impl BlockStore {
         let sv = self.get_state_vector();
         // expecting to write at most two u32 values (using variable encoding
         // we will probably write less)
-        let mut encoder = Encoder::with_capacity(sv.size() * 8);
+        let mut encoder = Vec::with_capacity(sv.size() * 8);
         for (client_id, clock) in sv.iter() {
             encoder.write_uvar(*client_id);
             encoder.write_uvar(*clock);
         }
-        encoder.buf
+        encoder
     }
     pub fn get_state_vector(&self) -> StateVector {
         StateVector::from(self)
@@ -280,7 +281,6 @@ mod test {
     use crate::types::TypePtr;
     use crate::updates::decoder::DecoderV1;
     use crate::{BlockStore, ID};
-    use lib0::decoding::Decoder;
 
     #[test]
     fn block_store_from_basic() {
@@ -301,8 +301,7 @@ mod test {
             1, 1, 176, 249, 159, 198, 7, 0, 40, 1, 0, 4, 107, 101, 121, 66, 1, 119, 6, 118, 97,
             108, 117, 101, 66, 0,
         ];
-        let mut decoder = Decoder::new(update);
-        let mut decoder = DecoderV1::new(&mut decoder);
+        let mut decoder = DecoderV1::from(update);
         let store = BlockStore::from(&mut decoder);
 
         let id = ID::new(2026372272, 0);

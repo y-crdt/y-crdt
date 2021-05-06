@@ -1,105 +1,106 @@
-use crate::types::TypeRefs;
 use crate::*;
-use lib0::{any::Any, decoding::Decoder};
-use std::convert::TryInto;
+use lib0::decoding::Read;
+use lib0::{any::Any, decoding::Cursor};
 
-pub trait DSDecoder {
+pub trait Decoder: Read {
     fn reset_ds_cur_val(&mut self);
     fn read_ds_clock(&mut self) -> u32;
     fn read_ds_len(&mut self) -> u32;
-}
-
-pub struct DecoderV1<'a> {
-    pub rest_decoder: &'a mut Decoder<'a>,
-}
-
-impl<'a> DecoderV1<'a> {
-    pub fn new(decoder: &'a mut Decoder<'a>) -> Self {
-        DecoderV1 {
-            rest_decoder: decoder,
-        }
-    }
-}
-
-impl<'a> DSDecoder for DecoderV1<'a> {
-    fn reset_ds_cur_val(&mut self) {
-        todo!()
-    }
-
-    fn read_ds_clock(&mut self) -> u32 {
-        todo!()
-    }
-
-    fn read_ds_len(&mut self) -> u32 {
-        todo!()
-    }
-}
-
-pub trait UpdateDecoder: DSDecoder {
     fn read_left_id(&mut self) -> block::ID;
     fn read_right_id(&mut self) -> block::ID;
     fn read_client(&mut self) -> u64;
     fn read_info(&mut self) -> u8;
-    fn read_string(&mut self) -> &str;
     fn read_parent_info(&mut self) -> bool;
     fn read_type_ref(&mut self) -> types::TypeRefs;
     fn read_len(&mut self) -> u32;
     fn read_any(&mut self) -> lib0::any::Any;
-    fn read_buffer(&mut self) -> &[u8];
     fn read_key(&mut self) -> &str;
 }
 
-impl<'a> UpdateDecoder for DecoderV1<'a> {
-    fn read_left_id(&mut self) -> block::ID {
-        block::ID {
-            client: self.rest_decoder.read_uvar(),
-            clock: self.rest_decoder.read_uvar(),
-        }
+pub struct DecoderV1<'a> {
+    cursor: Cursor<'a>,
+}
+
+impl<'a> DecoderV1<'a> {
+    pub fn new(cursor: Cursor<'a>) -> Self {
+        DecoderV1 { cursor }
     }
 
-    fn read_right_id(&mut self) -> block::ID {
-        block::ID {
-            client: self.rest_decoder.read_uvar(),
-            clock: self.rest_decoder.read_uvar(),
-        }
+    fn read_id(&mut self) -> block::ID {
+        ID::new(self.read_uvar(), self.read_uvar())
+    }
+}
+
+impl<'a> From<Cursor<'a>> for DecoderV1<'a> {
+    fn from(cursor: Cursor<'a>) -> Self {
+        Self::new(cursor)
+    }
+}
+
+impl<'a> From<&'a [u8]> for DecoderV1<'a> {
+    fn from(buf: &'a [u8]) -> Self {
+        Self::new(Cursor::new(buf))
+    }
+}
+
+impl<'a> Read for DecoderV1<'a> {
+    fn read_u8(&mut self) -> u8 {
+        self.cursor.read_u8()
+    }
+
+    fn read(&mut self, len: usize) -> &[u8] {
+        self.cursor.read(len)
+    }
+}
+
+impl<'a> Decoder for DecoderV1<'a> {
+    fn reset_ds_cur_val(&mut self) {
+        /* no op */
+    }
+
+    fn read_ds_clock(&mut self) -> u32 {
+        self.read_uvar()
+    }
+
+    fn read_ds_len(&mut self) -> u32 {
+        self.read_uvar()
+    }
+
+    fn read_left_id(&mut self) -> ID {
+        self.read_id()
+    }
+
+    fn read_right_id(&mut self) -> ID {
+        self.read_id()
     }
 
     fn read_client(&mut self) -> u64 {
-        self.rest_decoder.read_uvar()
+        self.cursor.read_uvar()
     }
 
     fn read_info(&mut self) -> u8 {
-        self.rest_decoder.read_u8()
-    }
-
-    fn read_string(&mut self) -> &str {
-        self.rest_decoder.read_string()
+        self.cursor.read_u8()
     }
 
     fn read_parent_info(&mut self) -> bool {
-        let info: u32 = self.rest_decoder.read_uvar();
+        let info: u32 = self.cursor.read_uvar();
         info == 1
     }
 
-    fn read_type_ref(&mut self) -> TypeRefs {
+    fn read_type_ref(&mut self) -> u8 {
         // In Yjs we use read_var_uint but use only 7 bit. So this is equivalent.
-        let r = self.rest_decoder.read_u8();
-        r.try_into().unwrap()
+        self.cursor.read_u8()
     }
 
     fn read_len(&mut self) -> u32 {
-        self.rest_decoder.read_uvar()
+        self.read_uvar()
     }
 
     fn read_any(&mut self) -> Any {
-        Any::decode(&mut self.rest_decoder)
-    }
-
-    fn read_buffer(&mut self) -> &[u8] {
-        self.rest_decoder.read_var_buffer()
+        Any::decode(self)
     }
 
     fn read_key(&mut self) -> &str {
-        self.rest_decoder.read_string()
+        self.read_string()
     }
 }

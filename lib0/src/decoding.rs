@@ -1,47 +1,63 @@
-use crate::any::Any;
 use crate::binary;
 use core::panic;
-use std::collections::HashMap;
-use std::io::Read;
+use std::mem::MaybeUninit;
 
 #[derive(Default)]
-pub struct Decoder<'a> {
+pub struct Cursor<'a> {
     pub buf: &'a [u8],
     next: usize,
 }
 
-impl<'a> Decoder<'a> {
-    pub fn new(buf: &'a [u8]) -> Decoder<'a> {
-        Decoder { buf, next: 0 }
+impl<'a> Cursor<'a> {
+    pub fn new(buf: &'a [u8]) -> Cursor<'a> {
+        Cursor { buf, next: 0 }
     }
+}
 
+impl<'a, R> From<&'a R> for Cursor<'a>
+where
+    R: AsRef<[u8]>,
+{
+    fn from(buf: &'a R) -> Self {
+        Self::new(buf.as_ref())
+    }
+}
+
+impl<'a> Read for Cursor<'a> {
     /// Read a single byte.
-    pub fn read_u8(&mut self) -> u8 {
+    fn read_u8(&mut self) -> u8 {
         let b = self.buf[self.next];
         self.next += 1;
         b
     }
 
     /// Take a slice of the next `len` bytes and advance the position by `len`.
-    pub fn read_buffer(&mut self, len: u32) -> &[u8] {
-        let slice = &self.buf[self.next..(self.next + len as usize)];
+    fn read(&mut self, len: usize) -> &[u8] {
+        let slice = &self.buf[self.next..(self.next + len)];
         self.next += len as usize;
         slice
     }
+}
+
+pub trait Read {
+    /// Read a single byte.
+    fn read_u8(&mut self) -> u8;
+
+    fn read(&mut self, len: usize) -> &[u8];
 
     /// Read a variable length buffer.
-    pub fn read_var_buffer(&mut self) -> &[u8] {
+    fn read_buf(&mut self) -> &[u8] {
         let len: u32 = self.read_uvar();
-        self.read_buffer(len)
+        self.read(len as usize)
     }
 
     /// Read 2 bytes as unsigned integer
-    pub fn read_u16(&mut self) -> u16 {
+    fn read_u16(&mut self) -> u16 {
         self.read_u8() as u16 | ((self.read_u8() as u16) << 8)
     }
 
     /// Read 4 bytes as unsigned integer
-    pub fn read_u32(&mut self) -> u32 {
+    fn read_u32(&mut self) -> u32 {
         self.read_u8() as u32
             | (self.read_u8() as u32) << 8
             | (self.read_u8() as u32) << 16
@@ -50,7 +66,7 @@ impl<'a> Decoder<'a> {
 
     /// Read 4 bytes as unsigned integer in big endian order.
     /// (most significant byte first)
-    pub fn read_u32_be(&mut self) -> u32 {
+    fn read_u32_be(&mut self) -> u32 {
         (self.read_u8() as u32) << 24
             | (self.read_u8() as u32) << 16
             | (self.read_u8() as u32) << 8
@@ -61,7 +77,7 @@ impl<'a> Decoder<'a> {
     /// * numbers < 2^7 are stored in one byte
     /// * numbers < 2^14 are stored in two bytes
     // @todo currently, only 32 bits supported
-    pub fn read_uvar<T: crate::number::Uint>(&mut self) -> T {
+    fn read_uvar<T: crate::number::Uint>(&mut self) -> T {
         let mut num: T = Default::default();
         let mut len: usize = 0;
         loop {
@@ -81,7 +97,7 @@ impl<'a> Decoder<'a> {
     /// * numbers < 2^7 are stored in one byte
     /// * numbers < 2^14 are stored in two bytes
     // @todo currently, only 32 bits supported
-    pub fn read_ivar(&mut self) -> i64 {
+    fn read_ivar(&mut self) -> i64 {
         let mut r = self.read_u8();
         let mut num = (r & binary::BITS6 as u8) as i64;
         let mut len: u32 = 6;
@@ -102,62 +118,52 @@ impl<'a> Decoder<'a> {
         }
     }
 
-    /// Look ahead and read var_uint without incrementing position
-    pub fn peek_var_uint(&mut self) -> u64 {
-        let pos = self.next;
-        let s = self.read_uvar();
-        self.next = pos;
-        s
-    }
-
-    /// Look ahead and read var_int without incrementing position
-    pub fn peek_var_int(&mut self) -> i64 {
-        let pos = self.next;
-        let s = self.read_ivar();
-        self.next = pos;
-        s
-    }
-
     /// Read string of variable length.
-    pub fn read_string(&mut self) -> &str {
-        let buf = self.read_var_buffer();
+    fn read_string(&mut self) -> &str {
+        let buf = self.read_buf();
         unsafe { std::str::from_utf8_unchecked(buf) }
     }
 
-    /// Read buffer of 4 bytes as fixed-length array
-    pub fn read_buffer_fixed4(&mut self) -> [u8; 4] {
-        let buf = self.read_buffer(4);
-        let mut res: [u8; 4] = Default::default();
-        res.clone_from_slice(buf);
-        res
-    }
-
-    /// Read buffer of 8 bytes as fixed-length array
-    pub fn read_buffer_fixed8(&mut self) -> [u8; 8] {
-        let buf = self.read_buffer(8);
-        let mut res: [u8; 8] = Default::default();
-        res.clone_from_slice(buf);
-        res
-    }
-
     /// Read float32 in big endian order
-    pub fn read_f32(&mut self) -> f32 {
-        f32::from_be_bytes(self.read_buffer_fixed4())
+    fn read_f32(&mut self) -> f32 {
+        let buf = [
+            self.read_u8(),
+            self.read_u8(),
+            self.read_u8(),
+            self.read_u8(),
+        ];
+        f32::from_be_bytes(buf)
     }
 
     /// Read float64 in big endian order
     // @todo there must be a more elegant way to convert a slice to a fixed-length buffer.
-    pub fn read_f64(&mut self) -> f64 {
-        f64::from_be_bytes(self.read_buffer_fixed8())
+    fn read_f64(&mut self) -> f64 {
+        let mut bytes = init_buf();
+        bytes.clone_from_slice(self.read(8));
+        f64::from_be_bytes(bytes)
     }
 
     /// Read BigInt64 in big endian order
-    pub fn read_i64(&mut self) -> i64 {
-        i64::from_be_bytes(self.read_buffer_fixed8())
+    fn read_i64(&mut self) -> i64 {
+        let mut bytes = init_buf();
+        bytes.clone_from_slice(self.read(8));
+        i64::from_be_bytes(bytes)
     }
 
     /// read BigUInt64 in big endian order
-    pub fn read_u64(&mut self) -> u64 {
-        u64::from_be_bytes(self.read_buffer_fixed8())
+    fn read_u64(&mut self) -> u64 {
+        let mut bytes = init_buf();
+        bytes.clone_from_slice(self.read(8));
+        u64::from_be_bytes(bytes)
+    }
+}
+
+/// Create non-zeroed fixed array of 8-bytes and returns it.
+/// Since it's not zeroed it should be filled before use.
+#[inline(always)]
+fn init_buf() -> [u8; 8] {
+    unsafe {
+        let b: [MaybeUninit<u8>; 8] = MaybeUninit::uninit().assume_init();
+        std::mem::transmute::<_, [u8; 8]>(b)
     }
 }

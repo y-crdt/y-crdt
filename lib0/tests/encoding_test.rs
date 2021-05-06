@@ -1,6 +1,6 @@
 use lib0::any::Any;
-use lib0::decoding::Decoder;
-use lib0::encoding::Encoder;
+use lib0::decoding::{Cursor, Read};
+use lib0::encoding::Write;
 use proptest::prelude::*;
 
 pub fn arb_any() -> impl Strategy<Value = Any> {
@@ -26,9 +26,9 @@ pub fn arb_any() -> impl Strategy<Value = Any> {
 proptest! {
     #[test]
     fn encoding_any_prop(any in arb_any()) {
-        let mut encoder = Encoder::new();
+        let mut encoder = Vec::with_capacity(1024);
         any.encode(&mut encoder);
-        let mut decoder = Decoder::new(&encoder.buf);
+        let mut decoder = Cursor::new(encoder.as_slice());
         let copy = Any::decode(&mut decoder);
         assert_eq!(any, copy);
     }
@@ -58,7 +58,7 @@ enum EncodingTypes {
 }
 
 impl EncodingTypes {
-    fn write(&self, encoder: &mut Encoder) {
+    fn write<W: Write>(&self, encoder: &mut W) {
         match self {
             EncodingTypes::Byte(input) => encoder.write_u8(*input),
             EncodingTypes::Uint8(input) => {
@@ -114,7 +114,7 @@ impl EncodingTypes {
             }
         }
     }
-    fn read(&self, decoder: &mut Decoder) {
+    fn read(&self, decoder: &mut Cursor) {
         match self {
             EncodingTypes::Byte(input) => {
                 let read = decoder.read_u8();
@@ -157,11 +157,11 @@ impl EncodingTypes {
                 assert_eq!(read, *input);
             }
             EncodingTypes::Buffer(input) => {
-                let read = decoder.read_buffer(input.len() as u32);
+                let read = decoder.read(input.len());
                 assert_eq!(read, *input);
             }
             EncodingTypes::VarBuffer(input) => {
-                let read = decoder.read_var_buffer();
+                let read = decoder.read_buf();
                 assert_eq!(read, *input);
             }
             EncodingTypes::VarString(input) => {
@@ -195,9 +195,9 @@ impl EncodingTypes {
 proptest! {
     #[test]
     fn encoding_prop(val: EncodingTypes) {
-        let mut encoder = Encoder::new();
+        let mut encoder = Vec::new();
         val.write(&mut encoder);
-        let mut decoder = Decoder::new(&encoder.buf);
+        let mut decoder = Cursor::new(encoder.as_slice());
         val.read(&mut decoder)
     }
 }
