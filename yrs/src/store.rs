@@ -104,11 +104,11 @@ impl Store {
     }
 
     pub fn read_blocks(&mut self, update_decoder: &mut updates::decoder::DecoderV1) {
-        let number_of_clients: u32 = update_decoder.rest_decoder.read_var_uint();
+        let number_of_clients: u32 = update_decoder.rest_decoder.read_uvar();
         for _ in 0..number_of_clients {
-            let number_of_structs: u32 = update_decoder.rest_decoder.read_var_uint();
+            let number_of_structs: u32 = update_decoder.rest_decoder.read_uvar();
             let client = update_decoder.read_client();
-            let mut clock = update_decoder.rest_decoder.read_var_uint();
+            let mut clock = update_decoder.rest_decoder.read_uvar();
             for _ in 0..number_of_structs {
                 let info = update_decoder.read_info();
                 // we will get parent from either left, right. Otherwise, we
@@ -183,7 +183,7 @@ impl Store {
             // @todo this could be optimized
             .filter(|(client_id, sl)| sv.get_state(**client_id) < sl.get_state())
             .collect();
-        update_encoder.rest_encoder.write_var_uint(structs.len());
+        update_encoder.rest_encoder.write_uvar(structs.len());
 
         for (client_id, client_structs) in structs.iter() {
             let start_clock = sv.get_state(**client_id);
@@ -191,8 +191,8 @@ impl Store {
             update_encoder.write_client(**client_id);
             update_encoder
                 .rest_encoder
-                .write_var_uint(client_structs.integrated_len as u32 - start_pivot);
-            update_encoder.rest_encoder.write_var_uint(start_clock); // initial clock
+                .write_uvar(client_structs.integrated_len as u32 - start_pivot);
+            update_encoder.rest_encoder.write_uvar(start_clock); // initial clock
             for i in (start_pivot as usize)..(client_structs.integrated_len) {
                 client_structs.list[i].encode(self, update_encoder);
             }

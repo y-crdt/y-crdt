@@ -12,11 +12,11 @@ fn criterion_benchmark(c: &mut Criterion) {
         b.iter(|| {
             let mut encoder = Encoder::new();
             for i in 0..(BENCHMARK_SIZE as i64) {
-                encoder.write_var_int(i);
+                encoder.write_ivar(i);
             }
             let mut decoder = Decoder::new(&encoder.buf);
             for i in 0..(BENCHMARK_SIZE as i64) {
-                let num: i64 = decoder.read_var_int();
+                let num: i64 = decoder.read_ivar();
                 assert_eq!(num, i);
             }
         })
@@ -26,11 +26,11 @@ fn criterion_benchmark(c: &mut Criterion) {
         b.iter(|| {
             let mut encoder = Encoder::new();
             for i in 0..BENCHMARK_SIZE {
-                encoder.write_var_uint(i);
+                encoder.write_uvar(i);
             }
             let mut decoder = Decoder::new(&encoder.buf);
             for i in 0..BENCHMARK_SIZE {
-                let num: u32 = decoder.read_var_uint();
+                let num: u32 = decoder.read_uvar();
                 assert_eq!(num, i);
             }
         })
@@ -40,11 +40,11 @@ fn criterion_benchmark(c: &mut Criterion) {
         b.iter(|| {
             let mut encoder = Encoder::new();
             for i in 0..BENCHMARK_SIZE {
-                encoder.write_uint32(i);
+                encoder.write_u32(i);
             }
             let mut decoder = Decoder::new(&encoder.buf);
             for i in 0..BENCHMARK_SIZE {
-                let num: u32 = decoder.read_uint32();
+                let num: u32 = decoder.read_u32();
                 assert_eq!(num, i);
             }
         })
@@ -54,11 +54,11 @@ fn criterion_benchmark(c: &mut Criterion) {
         b.iter(|| {
             let mut encoder = Encoder::new();
             for i in 0..(BENCHMARK_SIZE as u64) {
-                encoder.write_var_uint(i);
+                encoder.write_uvar(i);
             }
             let mut decoder = Decoder::new(&encoder.buf);
             for i in 0..(BENCHMARK_SIZE as u64) {
-                let num: u64 = decoder.read_var_uint();
+                let num: u64 = decoder.read_uvar();
                 assert_eq!(num, i);
             }
         })
@@ -68,11 +68,11 @@ fn criterion_benchmark(c: &mut Criterion) {
         b.iter(|| {
             let mut encoder = Encoder::new();
             for i in 0..(BENCHMARK_SIZE as u64) {
-                encoder.write_big_uint64(i)
+                encoder.write_u64(i)
             }
             let mut decoder = Decoder::new(&encoder.buf);
             for i in 0..(BENCHMARK_SIZE as u64) {
-                let num = decoder.read_big_uint64();
+                let num = decoder.read_u64();
                 assert_eq!(num, i);
             }
         })

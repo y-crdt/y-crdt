@@ -52,47 +52,47 @@ pub trait UpdateDecoder: DSDecoder {
 impl<'a> UpdateDecoder for DecoderV1<'a> {
     fn read_left_id(&mut self) -> block::ID {
         block::ID {
-            client: self.rest_decoder.read_var_uint(),
-            clock: self.rest_decoder.read_var_uint(),
+            client: self.rest_decoder.read_uvar(),
+            clock: self.rest_decoder.read_uvar(),
         }
     }
 
     fn read_right_id(&mut self) -> block::ID {
         block::ID {
-            client: self.rest_decoder.read_var_uint(),
-            clock: self.rest_decoder.read_var_uint(),
+            client: self.rest_decoder.read_uvar(),
+            clock: self.rest_decoder.read_uvar(),
         }
     }
 
     fn read_client(&mut self) -> u64 {
-        self.rest_decoder.read_var_uint()
+        self.rest_decoder.read_uvar()
     }
 
     fn read_info(&mut self) -> u8 {
-        self.rest_decoder.read_uint8()
+        self.rest_decoder.read_u8()
     }
 
     fn read_string(&mut self) -> &str {
-        self.rest_decoder.read_var_string()
+        self.rest_decoder.read_string()
     }
 
     fn read_parent_info(&mut self) -> bool {
-        let info: u32 = self.rest_decoder.read_var_uint();
+        let info: u32 = self.rest_decoder.read_uvar();
         info == 1
     }
 
     fn read_type_ref(&mut self) -> TypeRefs {
         // In Yjs we use read_var_uint but use only 7 bit. So this is equivalent.
-        let r = self.rest_decoder.read_uint8();
+        let r = self.rest_decoder.read_u8();
         r.try_into().unwrap()
     }
 
     fn read_len(&mut self) -> u32 {
-        self.rest_decoder.read_var_uint()
+        self.rest_decoder.read_uvar()
     }
 
     fn read_any(&mut self) -> Any {
-        self.rest_decoder.read_any()
+        Any::decode(&mut self.rest_decoder)
     }
 
     fn read_buffer(&mut self) -> &[u8] {
@@ -100,6 +100,6 @@ impl<'a> UpdateDecoder for DecoderV1<'a> {
     }
 
     fn read_key(&mut self) -> &str {
-        self.rest_decoder.read_var_string()
+        self.rest_decoder.read_string()
     }
 }
