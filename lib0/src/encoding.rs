@@ -1,35 +1,28 @@
 use crate::binary;
-use crate::{any::Any, number::Uint};
-use std::io::Write;
+use crate::number::Uint;
 
-#[derive(Default)]
-pub struct Encoder {
-    pub buf: Vec<u8>,
+impl Write for Vec<u8> {
+    fn write_u8(&mut self, value: u8) {
+        self.push(value);
+    }
+
+    fn write(&mut self, buf: &[u8]) {
+        self.extend_from_slice(buf);
+    }
 }
-impl Encoder {
-    pub fn new() -> Encoder {
-        Encoder::with_capacity(10000)
-    }
 
-    pub fn with_capacity(capacity: usize) -> Encoder {
-        Encoder {
-            buf: Vec::with_capacity(capacity),
-        }
-    }
-
-    /// Write a single byte to the encoder
-    pub fn write_u8(&mut self, byte: u8) {
-        self.buf.push(byte);
-    }
+pub trait Write {
+    fn write_u8(&mut self, value: u8);
+    fn write(&mut self, buf: &[u8]);
 
     /// Write an unsigned integer (16bit)
-    pub fn write_u16(&mut self, num: u16) {
+    fn write_u16(&mut self, num: u16) {
         self.write_u8(num as u8);
         self.write_u8((num >> 8) as u8);
     }
 
     /// Write an unsigned integer (32bit)
-    pub fn write_u32(&mut self, num: u32) {
+    fn write_u32(&mut self, num: u32) {
         self.write_u8(num as u8);
         self.write_u8((num >> 8) as u8);
         self.write_u8((num >> 16) as u8);
@@ -37,7 +30,7 @@ impl Encoder {
     }
 
     /// Write an unsigned integer (32bit) in big endian order (most significant byte first)
-    pub fn write_u32_be(&mut self, num: u32) {
+    fn write_u32_be(&mut self, num: u32) {
         self.write_u8((num >> 24) as u8);
         self.write_u8((num >> 16) as u8);
         self.write_u8((num >> 8) as u8);
@@ -45,7 +38,7 @@ impl Encoder {
     }
 
     /// Write a variable length unsigned integer.
-    pub fn write_uvar(&mut self, mut num: impl Uint) {
+    fn write_uvar(&mut self, mut num: impl Uint) {
         while {
             let rest = num.shift7_rest_to_byte();
             let c = !num.is_null();
@@ -61,7 +54,7 @@ impl Encoder {
     ///
     /// We use the 7th bit instead for signaling that this is a negative number.
     // @todo Support up to 128 bit
-    pub fn write_ivar(&mut self, mut num: i64) {
+    fn write_ivar(&mut self, mut num: i64) {
         let is_negative = num < 0;
         num = if is_negative { -num } else { num };
         self.write_u8(
@@ -85,44 +78,39 @@ impl Encoder {
         }
     }
 
-    /// Write buffer without storing the length of the buffer
-    pub fn write(&mut self, buf: &[u8]) {
-        self.buf.write(buf).unwrap();
-    }
-
     /// Write variable length buffer (binary content).
-    pub fn write_buf<B: AsRef<[u8]>>(&mut self, buf: B) {
+    fn write_buf<B: AsRef<[u8]>>(&mut self, buf: B) {
         let buf = buf.as_ref();
         self.write_uvar(buf.len());
         self.write(buf);
     }
 
     /// Write variable-length utf8 string
-    pub fn write_string(&mut self, str: &str) {
+    fn write_string(&mut self, str: &str) {
         self.write_buf(str);
     }
 
     /// Write floating point number in 4 bytes
-    pub fn write_f32(&mut self, num: f32) {
+    fn write_f32(&mut self, num: f32) {
         self.write(&num.to_be_bytes());
     }
 
     /// Write floating point number in 8 bytes
-    pub fn write_f64(&mut self, num: f64) {
+    fn write_f64(&mut self, num: f64) {
         self.write(&num.to_be_bytes());
     }
 
     /// Write BigInt in 8 bytes in big endian order.
     // @deprecated This method is here for compatibility to lib0/encoding. Instead you should use
     // write_int_64;
-    pub fn write_i64(&mut self, num: i64) {
+    fn write_i64(&mut self, num: i64) {
         self.write(&num.to_be_bytes());
     }
 
     /// Write BigUInt in 8 bytes in big endian order.
     // @deprecated This method is here for compatibility to lib0/encoding. Instead you should use
     // write_int_64;
-    pub fn write_u64(&mut self, num: u64) {
+    fn write_u64(&mut self, num: u64) {
         self.write(&num.to_be_bytes());
     }
 }

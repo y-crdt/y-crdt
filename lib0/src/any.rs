@@ -1,5 +1,5 @@
-use crate::decoding::Decoder;
-use crate::encoding::Encoder;
+use crate::decoding::Read;
+use crate::encoding::Write;
 use std::cmp::PartialEq;
 use std::collections::HashMap;
 use std::convert::TryInto;
@@ -18,7 +18,7 @@ pub enum Any {
 }
 
 impl Any {
-    pub fn decode(decoder: &mut Decoder<'_>) -> Self {
+    pub fn decode<R: Read>(decoder: &mut R) -> Self {
         match decoder.read_u8() {
             // CASE 127: undefined
             127 => Any::Undefined,
@@ -58,7 +58,7 @@ impl Any {
                 Any::Array(arr)
             }
             // CASE 116: buffer
-            116 => Any::Buffer(Box::from(decoder.read_var_buffer().to_owned())),
+            116 => Any::Buffer(Box::from(decoder.read_buf().to_owned())),
             _ => {
                 panic!("Unable to read Any content");
             }
@@ -97,7 +97,7 @@ impl Any {
     //          (defined by the function that uses this library)
     // [31-127] the end of the data range is used for data encoding by
     //          lib0/encoding.js
-    pub fn encode(&self, encoder: &mut Encoder) {
+    pub fn encode<W: Write>(&self, encoder: &mut W) {
         match self {
             Any::Undefined => {
                 // TYPE 127: undefined

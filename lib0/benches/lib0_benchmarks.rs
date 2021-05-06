@@ -1,6 +1,6 @@
 use criterion::{criterion_group, criterion_main, Criterion, SamplingMode};
-use lib0::decoding::Decoder;
-use lib0::encoding::Encoder;
+use lib0::decoding::{Cursor, Read};
+use lib0::encoding::Write;
 
 const BENCHMARK_SIZE: u32 = 100000;
 
@@ -10,11 +10,11 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     group.bench_function("var_int (64 bit)", |b| {
         b.iter(|| {
-            let mut encoder = Encoder::new();
+            let mut encoder = Vec::with_capacity(BENCHMARK_SIZE as usize * 8);
             for i in 0..(BENCHMARK_SIZE as i64) {
                 encoder.write_ivar(i);
             }
-            let mut decoder = Decoder::new(&encoder.buf);
+            let mut decoder = Cursor::from(&encoder);
             for i in 0..(BENCHMARK_SIZE as i64) {
                 let num: i64 = decoder.read_ivar();
                 assert_eq!(num, i);
@@ -24,11 +24,11 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     group.bench_function("var_uint (32 bit)", |b| {
         b.iter(|| {
-            let mut encoder = Encoder::new();
+            let mut encoder = Vec::with_capacity(BENCHMARK_SIZE as usize * 8);
             for i in 0..BENCHMARK_SIZE {
                 encoder.write_uvar(i);
             }
-            let mut decoder = Decoder::new(&encoder.buf);
+            let mut decoder = Cursor::from(&encoder);
             for i in 0..BENCHMARK_SIZE {
                 let num: u32 = decoder.read_uvar();
                 assert_eq!(num, i);
@@ -38,11 +38,11 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     group.bench_function("uint32", |b| {
         b.iter(|| {
-            let mut encoder = Encoder::new();
+            let mut encoder = Vec::with_capacity(BENCHMARK_SIZE as usize * 8);
             for i in 0..BENCHMARK_SIZE {
                 encoder.write_u32(i);
             }
-            let mut decoder = Decoder::new(&encoder.buf);
+            let mut decoder = Cursor::from(&encoder);
             for i in 0..BENCHMARK_SIZE {
                 let num: u32 = decoder.read_u32();
                 assert_eq!(num, i);
@@ -52,11 +52,11 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     group.bench_function("var_uint (64 bit)", |b| {
         b.iter(|| {
-            let mut encoder = Encoder::new();
+            let mut encoder = Vec::with_capacity(BENCHMARK_SIZE as usize * 8);
             for i in 0..(BENCHMARK_SIZE as u64) {
                 encoder.write_uvar(i);
             }
-            let mut decoder = Decoder::new(&encoder.buf);
+            let mut decoder = Cursor::from(&encoder);
             for i in 0..(BENCHMARK_SIZE as u64) {
                 let num: u64 = decoder.read_uvar();
                 assert_eq!(num, i);
@@ -66,11 +66,11 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     group.bench_function("uint64", |b| {
         b.iter(|| {
-            let mut encoder = Encoder::new();
+            let mut encoder = Vec::with_capacity(BENCHMARK_SIZE as usize * 8);
             for i in 0..(BENCHMARK_SIZE as u64) {
                 encoder.write_u64(i)
             }
-            let mut decoder = Decoder::new(&encoder.buf);
+            let mut decoder = Cursor::from(&encoder);
             for i in 0..(BENCHMARK_SIZE as u64) {
                 let num = decoder.read_u64();
                 assert_eq!(num, i);

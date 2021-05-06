@@ -1,9 +1,9 @@
 use crate::store::Store;
-use crate::updates::encoder::{EncoderV1, UpdateEncoder};
+use crate::updates::decoder::Decoder;
+use crate::updates::encoder::Encoder;
 use crate::*;
 use lib0::any::Any;
 use std::panic;
-use updates::decoder::UpdateDecoder;
 
 pub const BLOCK_GC_REF_NUMBER: u8 = 0;
 pub const BLOCK_ITEM_DELETED_REF_NUMBER: u8 = 1;
@@ -39,7 +39,11 @@ pub struct BlockPtr {
 }
 
 impl BlockPtr {
-    pub fn from(id: ID) -> BlockPtr {
+    pub fn new(id: ID, pivot: u32) -> Self {
+        BlockPtr { id, pivot }
+    }
+
+    pub fn from(id: ID) -> Self {
         BlockPtr {
             id,
             pivot: id.clock,
@@ -77,7 +81,7 @@ impl Block {
         }
     }
 
-    pub fn encode(&self, store: &Store, encoder: &mut EncoderV1) {
+    pub fn encode<E: Encoder>(&self, store: &Store, encoder: &mut E) {
         match self {
             Block::Item(item) => {
                 let info = if item.origin.is_some() { HAS_ORIGIN } else { 0 } // is left null
@@ -259,15 +263,11 @@ impl ItemContent {
         }
     }
 
-    pub fn decode(
-        decoder: &mut updates::decoder::DecoderV1,
-        ref_num: u8,
-        ptr: block::BlockPtr,
-    ) -> Self {
+    pub fn decode<D: Decoder>(decoder: &mut D, ref_num: u8, ptr: block::BlockPtr) -> Self {
         match ref_num & 0b1111 {
             BLOCK_ITEM_DELETED_REF_NUMBER => ItemContent::Deleted(decoder.read_len()),
             BLOCK_ITEM_JSON_REF_NUMBER => ItemContent::JSON(decoder.read_string().to_owned()),
-            BLOCK_ITEM_BINARY_REF_NUMBER => ItemContent::Binary(decoder.read_buffer().to_owned()),
+            BLOCK_ITEM_BINARY_REF_NUMBER => ItemContent::Binary(decoder.read_buf().to_owned()),
             BLOCK_ITEM_STRING_REF_NUMBER => ItemContent::String(decoder.read_string().to_owned()),
             BLOCK_ITEM_EMBED_REF_NUMBER => ItemContent::Embed(decoder.read_string().to_owned()),
             BLOCK_ITEM_FORMAT_REF_NUMBER => ItemContent::Format(

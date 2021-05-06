@@ -1,7 +1,7 @@
 use crate::block::{Block, ID};
 use crate::transaction::Transaction;
-use crate::updates::decoder::{DSDecoder, DecoderV1, UpdateDecoder};
-use crate::updates::encoder::{DSEncoder, EncoderV1, UpdateEncoder};
+use crate::updates::decoder::Decoder;
+use crate::updates::encoder::Encoder;
 use crate::utils::client_hasher::ClientHasher;
 use crate::*;
 use std::collections::HashMap;
@@ -18,12 +18,12 @@ impl IdRange {
         IdRange { clock, len }
     }
 
-    pub fn encode(&self, encoder: &mut EncoderV1) {
+    pub fn encode<E: Encoder>(&self, encoder: &mut E) {
         encoder.write_ds_clock(self.clock);
         encoder.write_ds_len(self.len);
     }
 
-    pub fn decode(decoder: &mut DecoderV1) -> Self {
+    pub fn decode<D: Decoder>(decoder: &mut D) -> Self {
         let clock = decoder.read_ds_clock();
         let len = decoder.read_ds_len();
         IdRange { clock, len }
@@ -67,7 +67,7 @@ impl IdSet {
                             next = &blocks.list[i + 1];
                         }
                     }
-                    ranges.push(IdRange::new(clock, len));
+                    ranges.push(IdRange::new(clock, len as u32));
                 }
 
                 i += 1;
@@ -158,7 +158,7 @@ impl IdSet {
         block.push(IdRange::new(id.clock, len));
     }
 
-    pub fn encode(&self, encoder: &mut EncoderV1) {
+    pub fn encode<E: Encoder>(&self, encoder: &mut E) {
         encoder.write_len(self.clients.len() as u32);
         for (&client_id, block) in self.clients.iter() {
             encoder.reset_ds_cur_val();
@@ -170,7 +170,7 @@ impl IdSet {
         }
     }
 
-    pub fn decode(decoder: &mut DecoderV1) -> Self {
+    pub fn decode<D: Decoder>(decoder: &mut D) -> Self {
         let mut set = Self::new();
         let client_len = decoder.read_len();
         let mut i = 0;

@@ -1,10 +1,9 @@
-use crate::updates::encoder::DSEncoder;
-use crate::*;
-
 use crate::block_store::StateVector;
 use crate::store::Store;
 use crate::transaction::Transaction;
-use lib0::decoding::Decoder;
+use crate::updates::decoder::DecoderV1;
+use crate::updates::encoder::Encoder;
+use crate::*;
 use rand::Rng;
 use std::cell::RefCell;
 
@@ -87,7 +86,7 @@ impl Doc {
             .write_blocks(&mut update_encoder, &StateVector::empty());
         // @todo this is not satisfactory. We would copy the complete buffer every time this method is called.
         // Instead we should implement `write_state_as_update` and fill an existing object that implements the Write trait.
-        update_encoder.to_buffer()
+        update_encoder.to_vec()
     }
     /// Compute a diff to sync with another client.
     ///
@@ -114,13 +113,12 @@ impl Doc {
     pub fn encode_diff_as_update(&self, tr: &Transaction, sv: &StateVector) -> Vec<u8> {
         let mut update_encoder = updates::encoder::EncoderV1::new();
         tr.store.write_blocks(&mut update_encoder, sv);
-        update_encoder.to_buffer()
+        update_encoder.to_vec()
     }
     /// Apply a document update.
     pub fn apply_update(&self, tr: &mut Transaction, update: &[u8]) {
-        let decoder = &mut Decoder::new(update);
-        let update_decoder = &mut updates::decoder::DecoderV1::new(decoder);
-        tr.store.read_blocks(update_decoder)
+        let mut decoder = DecoderV1::from(update);
+        tr.store.read_blocks(&mut decoder)
     }
     // Retrieve document state vector in order to encode the document diff.
     pub fn get_state_vector(&self, tr: &mut Transaction) -> StateVector {
