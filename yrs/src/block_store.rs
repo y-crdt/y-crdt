@@ -42,20 +42,20 @@ impl StateVector {
         // expecting to write at most two u32 values (using variable encoding
         // we will probably write less)
         let mut encoder = Encoder::with_capacity(len * 14); // Upper bound: 9 for client, 5 for clock
-        encoder.write_var_uint(len);
+        encoder.write_uvar(len);
         for (client_id, clock) in self.iter() {
-            encoder.write_var_uint(*client_id);
-            encoder.write_var_uint(*clock);
+            encoder.write_uvar(*client_id);
+            encoder.write_uvar(*clock);
         }
         encoder.buf
     }
     pub fn decode(encoded_sv: &[u8]) -> Self {
         let mut decoder = Decoder::new(encoded_sv);
-        let len: u32 = decoder.read_var_uint();
+        let len: u32 = decoder.read_uvar();
         let mut sv = Self::empty();
         for _ in 0..len {
             // client, clock
-            sv.0.insert(decoder.read_var_uint(), decoder.read_var_uint());
+            sv.0.insert(decoder.read_uvar(), decoder.read_uvar());
         }
         sv
     }
@@ -137,24 +137,24 @@ impl BlockStore {
     }
     pub fn from(update_decoder: &mut updates::decoder::DecoderV1) -> Self {
         let mut store = Self::new();
-        let updates_count: u32 = update_decoder.rest_decoder.read_var_uint();
+        let updates_count: u32 = update_decoder.rest_decoder.read_uvar();
         for _ in 0..updates_count {
-            let blocks_len = update_decoder.rest_decoder.read_var_uint::<u32>() as usize;
+            let blocks_len = update_decoder.rest_decoder.read_uvar::<u32>() as usize;
             let client = update_decoder.read_client();
-            let mut clock: u32 = update_decoder.rest_decoder.read_var_uint();
+            let mut clock: u32 = update_decoder.rest_decoder.read_uvar();
             let blocks = store.get_client_blocks_with_capacity_mut(client, blocks_len);
             let id = block::ID { client, clock };
             for _ in 0..blocks_len {
                 let info = update_decoder.read_info();
                 match info {
                     BLOCK_SKIP_REF_NUMBER => {
-                        let len: u32 = update_decoder.rest_decoder.read_var_uint();
+                        let len: u32 = update_decoder.rest_decoder.read_uvar();
                         let skip = block::Skip { id, len };
                         blocks.list.push(block::Block::Skip(skip));
                         clock += len;
                     }
                     BLOCK_GC_REF_NUMBER => {
-                        let len: u32 = update_decoder.rest_decoder.read_var_uint();
+                        let len: u32 = update_decoder.rest_decoder.read_uvar();
                         let skip = block::GC { id, len };
                         blocks.list.push(block::Block::GC(skip));
                         clock += len;
@@ -209,8 +209,8 @@ impl BlockStore {
         // we will probably write less)
         let mut encoder = Encoder::with_capacity(sv.size() * 8);
         for (client_id, clock) in sv.iter() {
-            encoder.write_var_uint(*client_id);
-            encoder.write_var_uint(*clock);
+            encoder.write_uvar(*client_id);
+            encoder.write_uvar(*clock);
         }
         encoder.buf
     }
