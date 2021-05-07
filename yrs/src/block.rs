@@ -3,6 +3,7 @@ use crate::updates::decoder::Decoder;
 use crate::updates::encoder::Encoder;
 use crate::*;
 use lib0::any::Any;
+use std::fmt::Formatter;
 use std::panic;
 
 pub const BLOCK_GC_REF_NUMBER: u8 = 0;
@@ -29,6 +30,12 @@ pub struct ID {
 impl ID {
     pub fn new(client: u64, clock: u32) -> Self {
         ID { client, clock }
+    }
+}
+
+impl std::fmt::Display for ID {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "(client: {}, clock: {})", self.client, self.clock)
     }
 }
 
@@ -78,6 +85,14 @@ impl Block {
             Block::Item(item) => item.deleted,
             Block::Skip(_) => false,
             Block::GC(_) => true,
+        }
+    }
+
+    pub fn integrate(&mut self, store: &mut Store, offset: i32) {
+        match self {
+            Block::Item(item) => item.integrate(store, offset as u32),
+            Block::GC(gc) => gc.integrate(store, offset),
+            Block::Skip(_) => {}
         }
     }
 
@@ -176,6 +191,15 @@ pub struct Skip {
 pub struct GC {
     pub id: ID,
     pub len: u32,
+}
+
+impl GC {
+    fn integrate(&mut self, store: &mut Store, offset: u32) {
+        if offset > 0 {
+            self.id.clock += offset;
+            self.len -= offset;
+        }
+    }
 }
 
 impl Item {

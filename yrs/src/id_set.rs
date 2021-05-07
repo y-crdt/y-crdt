@@ -51,7 +51,7 @@ impl IdSet {
 
     pub fn from(store: &BlockStore) -> Self {
         let mut set = Self::new();
-        for (&client, blocks) in store.clients.iter() {
+        for (&client, blocks) in store.iter() {
             let mut ranges = Vec::with_capacity(blocks.list.len());
             let mut i = 0;
             while i < blocks.list.len() {
@@ -90,7 +90,7 @@ impl IdSet {
     {
         // equivalent of JS: Y.iterateDeletedStructs
         for (client, ranges) in self.clients.iter() {
-            if transaction.store.blocks.clients.contains_key(client) {
+            if transaction.store.blocks.contains_client(client) {
                 for range in ranges.iter() {
                     transaction.iterate_structs(client, range.clock, range.len, f);
                 }

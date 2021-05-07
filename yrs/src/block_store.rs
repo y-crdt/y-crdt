@@ -3,10 +3,11 @@ use crate::block::{
     HAS_RIGHT_ORIGIN, ID,
 };
 use crate::updates::decoder::Decoder;
+use crate::updates::encoder::Encoder;
 use crate::utils::client_hasher::ClientHasher;
 use crate::*;
-use lib0::decoding::{Cursor, Read};
 use lib0::encoding::Write;
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::hash::BuildHasherDefault;
 use std::vec::Vec;
@@ -18,7 +19,7 @@ impl StateVector {
     pub fn empty() -> Self {
         StateVector::default()
     }
-    pub fn size(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.0.len()
     }
     pub fn from(ss: &BlockStore) -> Self {
@@ -28,30 +29,45 @@ impl StateVector {
         }
         sv
     }
-    pub fn get_state(&self, client_id: u64) -> u32 {
-        match self.0.get(&client_id) {
+    pub fn get(&self, client_id: &u64) -> u32 {
+        match self.0.get(client_id) {
             Some(state) => *state,
             None => 0,
         }
     }
+
+    pub fn insert(&mut self, client_id: u64, clock: u32) {
+        self.0.insert(client_id, clock);
+    }
+
     pub fn iter(&self) -> std::collections::hash_map::Iter<u64, u32> {
         self.0.iter()
     }
 
-    pub fn encode(&self) -> Vec<u8> {
-        let len = self.size();
+    pub(crate) fn update_missing(&mut self, client: u64, clock: u32) {
+        match self.0.entry(client) {
+            Entry::Occupied(e) => {
+                let e = e.into_mut();
+                *e = (*e).min(clock)
+            }
+            Entry::Vacant(e) => {
+                e.insert(clock);
+            }
+        }
+    }
+
+    pub fn encode<E: Encoder>(&self, encoder: &mut E) {
+        let len = self.len();
         // expecting to write at most two u32 values (using variable encoding
         // we will probably write less)
-        let mut encoder = Vec::with_capacity(len * 14); // Upper bound: 9 for client, 5 for clock
         encoder.write_uvar(len);
         for (client_id, clock) in self.iter() {
             encoder.write_uvar(*client_id);
             encoder.write_uvar(*clock);
         }
-        encoder
     }
-    pub fn decode(encoded_sv: &[u8]) -> Self {
-        let mut decoder = Cursor::new(encoded_sv);
+
+    pub fn decode<D: Decoder>(decoder: &mut D) -> Self {
         let len: u32 = decoder.read_uvar();
         let mut sv = Self::empty();
         for _ in 0..len {
@@ -68,13 +84,37 @@ pub struct ClientBlockList {
     pub integrated_len: usize,
 }
 
+impl Default for ClientBlockList {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ClientBlockList {
-    fn new() -> ClientBlockList {
+    pub fn new() -> ClientBlockList {
         ClientBlockList {
             list: Vec::new(),
             integrated_len: 0,
         }
     }
+
+    pub fn from(list: Vec<block::Block>) -> Self {
+        ClientBlockList {
+            list,
+            integrated_len: 0,
+        }
+    }
+
+    pub fn is_integrated(&self) -> bool {
+        self.list.len() == self.integrated_len
+    }
+
+    pub fn advance(&mut self) -> block::Block {
+        let block = self.list[self.integrated_len];
+        self.integrated_len += 1;
+        block
+    }
+
     pub fn with_capacity(capacity: usize) -> ClientBlockList {
         ClientBlockList {
             list: Vec::with_capacity(capacity),
@@ -127,7 +167,7 @@ impl ClientBlockList {
 
 #[derive(Debug)]
 pub struct BlockStore {
-    pub clients: HashMap<u64, ClientBlockList, BuildHasherDefault<ClientHasher>>,
+    clients: HashMap<u64, ClientBlockList, BuildHasherDefault<ClientHasher>>,
 }
 
 impl BlockStore {
@@ -136,7 +176,50 @@ impl BlockStore {
             clients: HashMap::<u64, ClientBlockList, BuildHasherDefault<ClientHasher>>::default(),
         }
     }
-    pub fn from<D: Decoder>(decoder: &mut D) -> Self {
+
+    pub fn insert(&mut self, client: u64, list: ClientBlockList) {
+        self.clients.insert(client, list);
+    }
+
+    pub fn remove(&mut self, client: &u64) -> Option<ClientBlockList> {
+        self.clients.remove(client)
+    }
+
+    pub fn keys(&self) -> Keys<'_> {
+        self.clients.keys()
+    }
+
+    pub fn iter(&self) -> Iter<'_> {
+        self.clients.iter()
+    }
+
+    /// Returns an iterator that provides the client-blocks pairs, but only for blocks
+    /// that are higher than given state `vector`.
+    pub fn iter_over<'a, 'b>(&'a self, vector: &'b StateVector) -> IterOver<'a, 'b> {
+        IterOver {
+            vector,
+            inner: self.clients.iter(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.clients.is_empty()
+    }
+
+    pub fn contains_client(&self, client: &u64) -> bool {
+        self.clients.contains_key(client)
+    }
+
+    pub fn get(&self, client: &u64) -> Option<&ClientBlockList> {
+        self.clients.get(client)
+    }
+
+    pub fn get_mut(&mut self, client: &u64) -> Option<&mut ClientBlockList> {
+        self.clients.get_mut(client)
+    }
+
+    /// Decodes a block store from given `decoder`.
+    pub fn decode<D: Decoder>(decoder: &mut D) -> Self {
         let mut store = Self::new();
         let updates_count: u32 = decoder.read_uvar();
         for _ in 0..updates_count {
@@ -208,7 +291,7 @@ impl BlockStore {
         let sv = self.get_state_vector();
         // expecting to write at most two u32 values (using variable encoding
         // we will probably write less)
-        let mut encoder = Vec::with_capacity(sv.size() * 8);
+        let mut encoder = Vec::with_capacity(sv.len() * 8);
         for (client_id, clock) in sv.iter() {
             encoder.write_uvar(*client_id);
             encoder.write_uvar(*clock);
@@ -247,8 +330,8 @@ impl BlockStore {
             .as_item()
             .unwrap()
     }
-    pub fn get_state(&self, client: u64) -> u32 {
-        if let Some(client_structs) = self.clients.get(&client) {
+    pub fn get_state(&self, client: &u64) -> u32 {
+        if let Some(client_structs) = self.clients.get(client) {
             client_structs.get_state()
         } else {
             0
@@ -269,9 +352,62 @@ impl BlockStore {
             .or_insert_with(|| ClientBlockList::with_capacity(capacity))
     }
 
+    pub fn insert_block(&mut self, block: Block) {
+        let id = block.id();
+        let blocks = self.clients.entry(id.client).or_default();
+        if let Some(last) = blocks.list.last() {
+            if last.id().clock + last.len() != id.clock {
+                panic!(
+                    "tried to insert block {} after {} with len: {}",
+                    id,
+                    last.id(),
+                    last.len()
+                );
+            }
+        }
+        blocks.list.push(block);
+    }
+
     pub fn find(&self, id: &ID) -> Option<&Block> {
         let blocks = self.clients.get(&id.client)?;
         blocks.find_block(id.clock)
+    }
+
+    pub(crate) fn next_missing(
+        &mut self,
+        block_ids: &mut Vec<u64>,
+    ) -> Option<&mut ClientBlockList> {
+        let mut next_target = self.get_mut(block_ids.last()?)?;
+        while next_target.list.len() == next_target.integrated_len {
+            block_ids.pop();
+            if !block_ids.is_empty() {
+                next_target = self.get_mut(block_ids.last()?)?;
+            } else {
+                return None;
+            }
+        }
+        Some(next_target)
+    }
+}
+
+pub type Keys<'a> = std::collections::hash_map::Keys<'a, u64, ClientBlockList>;
+pub type Iter<'a> = std::collections::hash_map::Iter<'a, u64, ClientBlockList>;
+
+pub struct IterOver<'a, 'b> {
+    vector: &'b StateVector,
+    inner: Iter<'a>,
+}
+
+impl<'a, 'b> Iterator for IterOver<'a, 'b> {
+    type Item = (&'a u64, &'a ClientBlockList);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while let Some(n) = self.inner.next() {
+            if self.vector.get(n.0) < n.1.get_state() {
+                return Some(n);
+            }
+        }
+        None
     }
 }
 
@@ -302,7 +438,7 @@ mod test {
             108, 117, 101, 66, 0,
         ];
         let mut decoder = DecoderV1::from(update);
-        let store = BlockStore::from(&mut decoder);
+        let store = BlockStore::decode(&mut decoder);
 
         let id = ID::new(2026372272, 0);
         let block = store.find(&id);

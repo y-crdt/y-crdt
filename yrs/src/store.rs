@@ -1,5 +1,5 @@
 use crate::block::{HAS_ORIGIN, HAS_RIGHT_ORIGIN};
-use crate::block_store::{BlockStore, ClientBlockList, StateVector};
+use crate::block_store::{BlockStore, StateVector};
 use crate::updates::decoder::Decoder;
 use crate::updates::encoder::Encoder;
 use crate::{block, types};
@@ -22,8 +22,12 @@ impl Store {
         }
     }
 
+    pub fn get_state(&self, client: &u64) -> u32 {
+        self.blocks.get_state(client)
+    }
+
     pub fn get_local_state(&self) -> u32 {
-        self.blocks.get_state(self.client_id)
+        self.blocks.get_state(&self.client_id)
     }
     pub fn get_type(&self, ptr: &types::TypePtr) -> Option<&types::Inner> {
         match ptr {
@@ -176,23 +180,17 @@ impl Store {
     pub fn write_blocks<E: Encoder>(&self, encoder: &mut E, sv: &StateVector) {
         // turns this into a vector because at some point we want to sort this
         // @todo Sort for better perf!
-        let structs: Vec<(&u64, &ClientBlockList)> = self
-            .blocks
-            .clients
-            .iter()
-            // @todo this could be optimized
-            .filter(|(client_id, sl)| sv.get_state(**client_id) < sl.get_state())
-            .collect();
-        encoder.write_uvar(structs.len());
+        let blocks: Vec<_> = self.blocks.iter_over(sv).collect();
+        encoder.write_uvar(blocks.len());
 
-        for (client_id, client_structs) in structs.iter() {
-            let start_clock = sv.get_state(**client_id);
-            let start_pivot = client_structs.find_pivot(start_clock).unwrap() as u32;
+        for (client_id, client_blocks) in blocks.iter() {
+            let start_clock = sv.get(*client_id);
+            let start_pivot = client_blocks.find_pivot(start_clock).unwrap() as u32;
             encoder.write_client(**client_id);
-            encoder.write_uvar(client_structs.integrated_len as u32 - start_pivot);
+            encoder.write_uvar(client_blocks.integrated_len as u32 - start_pivot);
             encoder.write_uvar(start_clock); // initial clock
-            for i in (start_pivot as usize)..(client_structs.integrated_len) {
-                client_structs.list[i].encode(self, encoder);
+            for i in (start_pivot as usize)..(client_blocks.integrated_len) {
+                client_blocks.list[i].encode(self, encoder);
             }
         }
     }
