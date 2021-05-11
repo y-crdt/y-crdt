@@ -1,6 +1,6 @@
 use crate::*;
 
-use crate::block::{Block, BlockPtr, ItemContent, ID};
+use crate::block::{Block, BlockPtr, Item, ItemContent, ID};
 use crate::block_store::{ClientBlockList, StateVector};
 use crate::id_set::IdSet;
 use crate::store::Store;
@@ -259,7 +259,7 @@ impl<'a> Transaction<'a> {
 
     fn add_stack(stack: Vec<Block>, blocks: &mut BlockStore, remaining: &mut BlockStore) {
         for item in stack {
-            let id = item.id();
+            let id = item.id().clone();
             let to_insert = if let Some(mut unapplicable) = blocks.remove(&id.client) {
                 // decrement because we weren't able to apply previous operation
                 unapplicable
@@ -304,30 +304,34 @@ impl<'a> Transaction<'a> {
                     let client = id.client;
                     let local_clock = self.store.get_state(&client);
                     state.insert(client, local_clock);
-                    let offset = local_clock as i32 - item.id.clock as i32;
+                    let offset = local_clock as i32 - id.clock as i32;
                     if offset < 0 {
                         stack.push(stack_head);
                         missing_vector.update_missing(client, id.clock);
                         Self::add_stack(stack, &mut blocks, &mut remaining);
                         stack = Vec::new();
                     } else {
-                        if let Some(missing) = self.get_missing(&item) {
-                            stack.push(item);
+                        if let Some(missing) = self.get_missing(&mut stack_head) {
+                            stack.push(stack_head);
                             // get the struct reader that has the missing struct
-                            let refs = blocks.get_mut(missing).unwrap_or_else(ClientBlockList::new);
+                            let refs = blocks
+                                .get_mut(&missing)
+                                .unwrap_or_else(|| &mut ClientBlockList::new());
                             if refs.is_integrated() {
                                 // This update message causally depends on another update message that doesn't exist yet
-                                missing_vector.update_missing(*missing, store.get_state(missing));
+                                missing_vector
+                                    .update_missing(missing, self.store.get_state(&missing));
                                 Self::add_stack(stack, &mut blocks, &mut remaining);
                                 stack = Vec::new();
                             } else {
                                 stack_head = refs.advance();
                                 continue;
                             }
-                        } else if offset == 0 || offset < item.len() as i32 {
+                        } else if offset == 0 || offset < stack_head.len() as i32 {
+                            let len = stack_head.len();
                             // all fine, apply the stackhead
-                            item.integrate(&mut self, offset as usize);
-                            state.insert(client, item.id.clock + item.len())
+                            stack_head.integrate(&mut self.store, offset as u32);
+                            state.insert(client, id.clock + len)
                         }
                     }
                 }
@@ -356,6 +360,99 @@ impl<'a> Transaction<'a> {
                 None
             }
         }
+    }
+
+    /// Return the creator clientID of the missing op or define missing items and return `None`.
+    fn get_missing(&mut self, block: &mut Block) -> Option<u64> {
+        match block {
+            Block::Item(item) => {
+                if let Some(client) = self.dependency_client(item.origin.as_ref(), &item.id) {
+                    return Some(client);
+                }
+                if let Some(client) = self.dependency_client(item.right_origin.as_ref(), &item.id) {
+                    return Some(client);
+                }
+
+                if let TypePtr::Id(ptr) = &item.parent {
+                    if let Some(client) = self.dependency_client(Some(&ptr.id), &item.id) {
+                        return Some(client);
+                    }
+                }
+
+                // We have all missing ids, now find the items
+                let new_left = item
+                    .origin
+                    .as_ref()
+                    .and_then(|origin| self.get_item_clean_end(origin));
+                if let Some(new_left) = new_left {
+                    let last_id = new_left.last_id();
+                    item.left = Some(BlockPtr::from(new_left.id().clone()));
+                    item.origin = Some(last_id);
+                    if let Block::Item(left) = new_left {
+                        item.parent = left.parent.clone();
+                        item.parent_sub = left.parent_sub.clone();
+                    }
+                }
+
+                let new_right = item
+                    .right_origin
+                    .as_ref()
+                    .and_then(|right_origin| self.get_item_clean_start(right_origin));
+                if let Some(new_right) = new_right {
+                    let right_id = new_right.id().clone();
+                    item.right = Some(BlockPtr::from(right_id.clone()));
+                    item.right_origin = Some(right_id);
+                    if let Block::Item(right) = new_right {
+                        item.parent = right.parent.clone();
+                        item.parent_sub = right.parent_sub.clone();
+                    }
+                }
+            }
+            Block::GC(gc) => {}
+            Block::Skip(_) => {}
+        }
+
+        None
+    }
+
+    fn get_item_clean_end(&mut self, id: &ID) -> Option<&Block> {
+        let blocks = self.store.blocks.get_mut(&id.client)?;
+        let idx = blocks.find_pivot(id.clock)?;
+        let block = &mut blocks.list[idx];
+        match block {
+            Block::Item(item) => {
+                if id.clock != item.id.clock + item.len() - 1 {
+                    let other = item.split(id.clock - item.id.clock + 1);
+                    if let Some(right_ptr) = &item.right {
+                        self.rewire(right_ptr, item.id.clone());
+                    }
+                    blocks.list.insert(idx + 1, Block::Item(other));
+                }
+            }
+            Block::Skip(skip) => {
+                if id.clock != skip.id.clock + skip.len - 1 {
+                    unimplemented!("skip not supported yet")
+                }
+            }
+            block => {}
+        };
+        Some(block)
+    }
+
+    fn get_item_clean_start(&mut self, id: &ID) -> Option<&Block> {
+        let idx = self.find_index_clean_start(&id.client, id.clock)?;
+        let blocks = self.store.blocks.get_client_blocks_mut(id.client);
+        Some(&blocks.list[idx])
+    }
+
+    fn dependency_client(&self, prev: Option<&ID>, next: &ID) -> Option<u64> {
+        if let Some(prev) = prev {
+            if prev.client != next.client && next.clock >= self.store.get_state(&prev.client) {
+                return Some(prev.client);
+            }
+        }
+
+        None
     }
 }
 

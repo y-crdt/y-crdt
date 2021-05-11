@@ -88,12 +88,18 @@ impl Block {
         }
     }
 
-    pub fn integrate(&mut self, store: &mut Store, offset: i32) {
+    pub fn integrate(&mut self, store: &mut Store, offset: u32) {
         match self {
-            Block::Item(item) => item.integrate(store, offset as u32),
+            Block::Item(item) => item.integrate(store, offset),
             Block::GC(gc) => gc.integrate(store, offset),
             Block::Skip(_) => {}
         }
+    }
+
+    /// Computes the last content address of this Item.
+    pub fn last_id(&self) -> ID {
+        let id = self.id();
+        ID::new(id.client, id.clock + self.len() - 1)
     }
 
     pub fn encode<E: Encoder>(&self, store: &Store, encoder: &mut E) {
