@@ -43,6 +43,7 @@ impl std::fmt::Display for ID {
 pub struct BlockPtr {
     pub id: ID,
     pub pivot: u32,
+    block_store: Rc<RefCell<BlockStore>>,
 }
 
 impl BlockPtr {
@@ -183,6 +184,7 @@ pub struct Item {
     pub right_origin: Option<ID>,
     pub content: ItemContent,
     pub parent: types::TypePtr,
+    /// When current item is used in key-val entry, this is the key
     pub parent_sub: Option<String>,
     pub deleted: bool,
 }

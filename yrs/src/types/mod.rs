@@ -69,9 +69,9 @@ impl Inner {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TypePtr {
-    NamedRef(u32),
-    Id(block::BlockPtr),
-    Named(String),
+    NamedRef(u32),       // stores hash to Named('string'), store.type_refs stores them
+    Id(block::BlockPtr), // pointer to parent item eg. a.field = b -> p.parent == a
+    Named(String), // used for top-level type, yarray = doc.getArray("name") => yarray.parent == "name"
 }
 
 #[derive(Default)]

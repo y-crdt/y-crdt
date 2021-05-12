@@ -5,6 +5,7 @@ use crate::block_store::{ClientBlockList, StateVector};
 use crate::id_set::IdSet;
 use crate::store::Store;
 use crate::types::{TypePtr, XorHasher};
+use crate::update::Update;
 use crate::updates::decoder::Decoder;
 use std::cell::RefMut;
 use std::collections::{HashMap, HashSet};
@@ -253,26 +254,80 @@ impl<'a> Transaction<'a> {
     }
 
     fn update<D: Decoder>(&mut self, decoder: &mut D) {
-        let ss = BlockStore::decode(decoder);
-        self.integrate_blocks(ss);
+        let u = BlockStore::decode(decoder);
+        self.integrate_blocks(u);
     }
 
-    fn add_stack(stack: Vec<Block>, blocks: &mut BlockStore, remaining: &mut BlockStore) {
-        for item in stack {
-            let id = item.id().clone();
-            let to_insert = if let Some(mut unapplicable) = blocks.remove(&id.client) {
-                // decrement because we weren't able to apply previous operation
-                unapplicable
-                    .list
-                    .drain(unapplicable.integrated_len - 1..)
-                    .collect()
-            } else {
-                // item was the last item on clientsStructRefs and the field was already cleared.
-                // Add item to remaining and continue
-                vec![item]
-            };
-            remaining.insert(id.client, ClientBlockList::from(to_insert));
+    //fn add_stack(stack: Vec<Block>, blocks: &mut BlockStore, remaining: &mut BlockStore) {
+    //    for item in stack {
+    //        let id = item.id().clone();
+    //        let to_insert = if let Some(mut unapplicable) = blocks.remove(&id.client) {
+    //            // decrement because we weren't able to apply previous operation
+    //            unapplicable
+    //                .list
+    //                .drain(unapplicable.integrated_len - 1..)
+    //                .collect()
+    //        } else {
+    //            // item was the last item on clientsStructRefs and the field was already cleared.
+    //            // Add item to remaining and continue
+    //            vec![item]
+    //        };
+    //        remaining.insert(id.client, ClientBlockList::from(to_insert));
+    //    }
+    //}
+
+    fn integrate(&mut self, mut update: Update) -> Option<IntegrationOutput> {
+        // we use stack in case when there are missing updates (they weren't delivered for some reason)
+        let mut stack: Vec<Block> = Vec::new();
+
+        while let Some(mut current) = update.pop() {
+            let mut missing_vector = StateVector::empty();
+            let mut state = StateVector::empty();
+            if let Some(mut stack_head) = current.pop_front() {
+                if let Block::Skip(_) = &stack_head {
+                    // nothing to do
+                } else {
+                    let id = stack_head.id();
+                    let client = id.client;
+                    let clock = id.clock;
+                    let local_clock = self.store.get_state(&client);
+                    state.insert(client, local_clock);
+                    let offset = local_clock as i32 - clock as i32;
+                    if offset < 0 {
+                        // local peer is missing an update prior to `stack_head`
+                        // update vector with missing values
+                        missing_vector.update_missing(client, clock - 1);
+                        stack.push(stack_head);
+                        // push all values from the stack back onto the update
+                        // internally update is filled back by blocks but block keys (used in outer
+                        // while loop) are not so we don't run into infinite loop
+                        update.add_stack(stack);
+                        stack = Vec::new();
+                    } else {
+                        let offset = offset as u32;
+                        if let Some(missing) = self.get_missing(&mut stack_head) {
+                            stack.push(stack_head);
+                            if let Some(current) = update.get_mut(&missing) {
+                                missing_vector
+                                    .update_missing(client, self.store.get_state(&missing));
+                                // push all values from the stack back onto the update
+                                // internally update is filled back by blocks but block keys (used in outer
+                                // while loop) are not so we don't run into infinite loop
+                                update.add_stack(stack);
+                                stack = Vec::new();
+                            }
+                        } else if offset == 0 || offset < stack_head.len() as u32 {
+                            let len = stack_head.len();
+                            // all fine, apply the stackhead
+                            stack_head.integrate(&mut self.store, offset as u32);
+                            state.insert(client, id.clock + len)
+                        }
+                    }
+                }
+            }
         }
+
+        None
     }
 
     fn integrate_blocks(&mut self, mut blocks: BlockStore) -> Option<IntegrationOutput> {
@@ -306,11 +361,12 @@ impl<'a> Transaction<'a> {
                     state.insert(client, local_clock);
                     let offset = local_clock as i32 - id.clock as i32;
                     if offset < 0 {
-                        stack.push(stack_head);
+                        stack.push(stack_head); //TODO: if we're adding this to the stack, why later we're moving integrated_length back?
                         missing_vector.update_missing(client, id.clock);
                         Self::add_stack(stack, &mut blocks, &mut remaining);
                         stack = Vec::new();
                     } else {
+                        let offset = offset as u32;
                         if let Some(missing) = self.get_missing(&mut stack_head) {
                             stack.push(stack_head);
                             // get the struct reader that has the missing struct
@@ -327,10 +383,10 @@ impl<'a> Transaction<'a> {
                                 stack_head = refs.advance();
                                 continue;
                             }
-                        } else if offset == 0 || offset < stack_head.len() as i32 {
+                        } else if offset == 0 || offset < stack_head.len() as u32 {
                             let len = stack_head.len();
                             // all fine, apply the stackhead
-                            stack_head.integrate(&mut self.store, offset as u32);
+                            stack_head.integrate(&mut self.store, offset);
                             state.insert(client, id.clock + len)
                         }
                     }
