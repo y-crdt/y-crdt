@@ -127,8 +127,10 @@ impl ClientBlockList {
 
 #[derive(Debug)]
 pub struct BlockStore {
-    pub clients: HashMap<u64, ClientBlockList, BuildHasherDefault<ClientHasher>>,
+    clients: HashMap<u64, ClientBlockList, BuildHasherDefault<ClientHasher>>,
 }
+
+pub type Iter<'a> = std::collections::hash_map::Iter<'a, u64, ClientBlockList>;
 
 impl BlockStore {
     pub fn new() -> Self {
@@ -136,6 +138,23 @@ impl BlockStore {
             clients: HashMap::<u64, ClientBlockList, BuildHasherDefault<ClientHasher>>::default(),
         }
     }
+
+    pub fn contains_client(&self, client: &u64) -> bool {
+        self.clients.contains_key(client)
+    }
+
+    pub fn get(&self, client: &u64) -> Option<&ClientBlockList> {
+        self.clients.get(client)
+    }
+
+    pub fn get_mut(&mut self, client: &u64) -> Option<&mut ClientBlockList> {
+        self.clients.get_mut(client)
+    }
+
+    pub fn iter(&self) -> Iter<'_> {
+        self.clients.iter()
+    }
+
     pub fn from<D: Decoder>(decoder: &mut D) -> Self {
         let mut store = Self::new();
         let updates_count: u32 = decoder.read_uvar();

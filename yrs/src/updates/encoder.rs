@@ -2,6 +2,10 @@ use crate::*;
 use lib0::any::Any;
 use lib0::encoding::Write;
 
+pub trait Encode {
+    fn encode<E: Encoder>(&self, encoder: &mut E);
+}
+
 pub trait Encoder: Write {
     fn to_vec(self) -> Vec<u8>;
     fn reset_ds_cur_val(&mut self);
