@@ -80,19 +80,19 @@ impl<'a> Transaction<'a> {
 
         if let Some(mut index) = self.find_index_clean_start(client, clock_start) {
             let mut blocks = self.store.blocks.get(client).unwrap();
-            let mut block = &blocks.list[index];
+            let mut block = &blocks[index];
 
-            while index < blocks.list.len() && block.id().clock < clock_end {
+            while index < blocks.len() && block.id().clock < clock_end {
                 if clock_end < block.clock_end() {
                     self.find_index_clean_start(client, clock_start);
                     blocks = self.store.blocks.get(client).unwrap();
-                    block = &blocks.list[index];
+                    block = &blocks[index];
                 }
 
                 f(block);
                 index += 1;
 
-                block = &blocks.list[index];
+                block = &blocks[index];
             }
         }
     }
@@ -104,7 +104,7 @@ impl<'a> Transaction<'a> {
         {
             let blocks = self.store.blocks.get_mut(client)?;
             index = blocks.find_pivot(clock)?;
-            let block = &mut blocks.list[index];
+            let block = &mut blocks[index];
             if let Some(item) = block.as_item_mut() {
                 if item.id.clock < clock {
                     // if we run over the clock, we need to the split item
@@ -118,7 +118,7 @@ impl<'a> Transaction<'a> {
                     //NOTE: is this right to insert an item right away, or should we always put it
                     // to transaction.merge_blocks? If we do so, we later may not be able to find it
                     // by iterating over the blocks alone?
-                    blocks.list.insert(index, Block::Item(half));
+                    blocks.insert(index, Block::Item(half));
                 }
             }
         }
@@ -146,7 +146,7 @@ impl<'a> Transaction<'a> {
         //  +------+ <-- +------+ <-- +-------+
 
         let blocks = self.store.blocks.get_mut(&right_ptr.id.client).unwrap();
-        let right = &mut blocks.list[right_ptr.pivot as usize];
+        let right = &mut blocks[right_ptr.pivot as usize];
         if let Some(right_item) = right.as_item_mut() {
             right_item.left = Some(BlockPtr::from(id))
         }
@@ -185,7 +185,7 @@ impl<'a> Transaction<'a> {
                     // We can ignore the case of GC and Delete structs, because we are going to skip them
                     if let Some(mut index) = blocks.find_pivot(clock) {
                         // We can ignore the case of GC and Delete structs, because we are going to skip them
-                        if let Some(item) = blocks.list[index].as_item_mut() {
+                        if let Some(item) = blocks[index].as_item_mut() {
                             // split the first item if necessary
                             if !item.deleted && item.id.clock < clock {
                                 index += 1;
@@ -193,7 +193,7 @@ impl<'a> Transaction<'a> {
                                 let id = right.id.clone();
                                 let right_ptr = right.right.clone();
                                 self.merge_blocks.push(id);
-                                blocks.list.insert(index, Block::Item(right));
+                                blocks.insert(index, Block::Item(right));
                                 if let Some(right_ptr) = right_ptr {
                                     self.rewire(&right_ptr, id);
                                     blocks = self.store.blocks.get_mut(client).unwrap();
@@ -201,8 +201,8 @@ impl<'a> Transaction<'a> {
                                 }
                             }
 
-                            while index < blocks.list.len() {
-                                let block = &mut blocks.list[index];
+                            while index < blocks.len() {
+                                let block = &mut blocks[index];
                                 index += 1;
                                 if let Some(item) = block.as_item_mut() {
                                     if item.id.clock < clock_end {
@@ -214,7 +214,7 @@ impl<'a> Transaction<'a> {
                                                 let id = right.id.clone();
                                                 let right_ptr = right.right.clone();
                                                 self.merge_blocks.push(id);
-                                                blocks.list.insert(index, Block::Item(right));
+                                                blocks.insert(index, Block::Item(right));
                                                 if let Some(right_ptr) = right_ptr {
                                                     self.rewire(&right_ptr, id);
                                                 }
