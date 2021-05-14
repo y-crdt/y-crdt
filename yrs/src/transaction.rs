@@ -152,6 +152,20 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    pub fn apply_ranges<F>(&mut self, set: &IdSet, f: &F)
+    where
+        F: Fn(&Block) -> (),
+    {
+        // equivalent of JS: Y.iterateDeletedStructs
+        for (client, ranges) in set.iter() {
+            if self.store.blocks.contains_client(client) {
+                for range in ranges.iter() {
+                    self.iterate_structs(client, range, f);
+                }
+            }
+        }
+    }
+
     /// Applies given `id_set` onto current transaction to run multi-range deletion.
     /// Returns a remaining of original ID set, that couldn't be applied.
     pub fn apply_delete(&mut self, id_set: &IdSet) -> IdSet {

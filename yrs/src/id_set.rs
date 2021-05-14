@@ -51,23 +51,27 @@ impl IdRange {
         }
     }
 
-    /// Returns a range describing a continuous space of the [IdRange], starting from the beginning
-    /// of the clock up to the end of current range or the first missing range (in case when current
-    /// range is fragmented).
-    ///
-    /// Note: this function assumes that fragmented range already has been compacted.
-    pub fn continuous(&self) -> Option<&Range<u32>> {
+    /// Inverts current [IdRange], returning another [IdRange] that contains all
+    /// "holes" (ranges not included in current range). If current range is a continuous space
+    /// starting from the initial clock (eg. [0..5)), then returned range will be empty.
+    pub fn invert(&self) -> IdRange {
         match self {
-            IdRange::Continuous(range) if range.start == 0 => Some(range),
+            IdRange::Continuous(range) => IdRange::Continuous(0..range.start),
             IdRange::Fragmented(ranges) => {
-                let first = ranges.first()?;
-                if first.start == 0 {
-                    Some(first)
-                } else {
-                    None
+                let mut inv = Vec::new();
+                let mut start = 0;
+                for range in ranges.iter() {
+                    if range.start > start {
+                        inv.push(start..range.start);
+                    }
+                    start = range.end;
+                }
+                match inv.len() {
+                    0 => IdRange::Continuous(0..0),
+                    1 => IdRange::Continuous(inv[0].clone()),
+                    _ => IdRange::Fragmented(inv),
                 }
             }
-            _ => None,
         }
     }
 
@@ -208,7 +212,7 @@ impl<'a> Iterator for IdRangeIter<'a> {
 ///   directly from StructStore.
 /// - We read a DeleteSet as a apart of sync/update message. In this case the DeleteSet is already
 ///   sorted and merged.
-#[derive(Default, Debug)]
+#[derive(Default, Debug, PartialEq, Eq)]
 pub struct IdSet(HashMap<u64, IdRange, BuildHasherDefault<ClientHasher>>);
 
 pub(crate) type Iter<'a> = std::collections::hash_map::Iter<'a, u64, IdRange>;
@@ -234,20 +238,7 @@ impl IdSet {
         }
     }
 
-    pub fn apply_ranges<F>(&self, transaction: &mut Transaction, f: &F)
-    where
-        F: Fn(&Block) -> (),
-    {
-        // equivalent of JS: Y.iterateDeletedStructs
-        for (client, ranges) in self.0.iter() {
-            if transaction.store.blocks.contains_client(client) {
-                for range in ranges.iter() {
-                    transaction.iterate_structs(client, range, f);
-                }
-            }
-        }
-    }
-
+    /// Compacts an internal ranges representation.
     pub fn compact(&mut self) {
         for block in self.0.values_mut() {
             block.compact();
@@ -334,12 +325,95 @@ impl DeleteSet {
 
 #[cfg(test)]
 mod test {
-    use crate::id_set::IdRange;
+    use crate::id_set::{IdRange, IdSet};
+    use crate::updates::decoder::{Decode, DecoderV1};
+    use crate::updates::encoder::{Encode, Encoder, EncoderV1};
+    use crate::ID;
+    use std::fmt::Debug;
 
     #[test]
     fn id_range_compact() {
         let mut r = IdRange::Fragmented(vec![(0..3), (3..5), (6..7)]);
         r.compact();
         assert_eq!(r, IdRange::Fragmented(vec![(0..5), (6..7)]));
+    }
+
+    #[test]
+    fn id_range_invert() {
+        assert!(IdRange::Continuous(0..3).invert().is_empty());
+
+        assert_eq!(
+            IdRange::Continuous(3..5).invert(),
+            IdRange::Continuous(0..3)
+        );
+
+        assert_eq!(
+            IdRange::Fragmented(vec![0..3, 4..5]).invert(),
+            IdRange::Continuous(3..4)
+        );
+
+        assert_eq!(
+            IdRange::Fragmented(vec![3..4, 7..9]).invert(),
+            IdRange::Fragmented(vec![0..3, 4..7])
+        );
+    }
+
+    #[test]
+    fn id_range_contains() {
+        assert!(!IdRange::Continuous(1..3).contains(0));
+        assert!(IdRange::Continuous(1..3).contains(1));
+        assert!(IdRange::Continuous(1..3).contains(2));
+        assert!(!IdRange::Continuous(1..3).contains(3));
+
+        assert!(!IdRange::Fragmented(vec![1..3, 4..5]).contains(0));
+        assert!(IdRange::Fragmented(vec![1..3, 4..5]).contains(1));
+        assert!(IdRange::Fragmented(vec![1..3, 4..5]).contains(2));
+        assert!(!IdRange::Fragmented(vec![1..3, 4..5]).contains(3));
+        assert!(IdRange::Fragmented(vec![1..3, 4..5]).contains(4));
+        assert!(!IdRange::Fragmented(vec![1..3, 4..5]).contains(5));
+        assert!(!IdRange::Fragmented(vec![1..3, 4..5]).contains(6));
+    }
+
+    #[test]
+    fn id_range_push() {
+        let mut range = IdRange::Continuous(0..0);
+
+        range.push(0..4);
+        assert_eq!(range, IdRange::Continuous(0..4));
+
+        range.push(4..6);
+        assert_eq!(range, IdRange::Continuous(0..6));
+
+        range.push(7..9);
+        assert_eq!(range, IdRange::Fragmented(vec![0..6, 7..9]));
+    }
+
+    #[test]
+    fn id_range_encode_decode() {
+        roundtrip(&IdRange::Continuous(0..4));
+        roundtrip(&IdRange::Fragmented(vec![1..4, 5..8]));
+    }
+
+    #[test]
+    fn id_set_encode_decode() {
+        let mut set = IdSet::new();
+        set.insert(ID::new(124, 0), 1);
+        set.insert(ID::new(1337, 0), 12);
+        set.insert(ID::new(124, 1), 3);
+
+        roundtrip(&set);
+    }
+
+    fn roundtrip<T>(value: &T)
+    where
+        T: Encode + Decode + PartialEq + Debug,
+    {
+        let mut encoder = EncoderV1::new();
+        value.encode(&mut encoder);
+        let buf = encoder.to_vec();
+        let mut decoder = DecoderV1::from(buf.as_slice());
+        let decoded = T::decode(&mut decoder);
+
+        assert_eq!(value, &decoded);
     }
 }
