@@ -2,6 +2,10 @@ use crate::*;
 use lib0::decoding::Read;
 use lib0::{any::Any, decoding::Cursor};
 
+pub trait Decode {
+    fn decode<D: Decoder>(decoder: &mut D) -> Self;
+}
+
 pub trait Decoder: Read {
     fn reset_ds_cur_val(&mut self);
     fn read_ds_clock(&mut self) -> u32;

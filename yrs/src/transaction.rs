@@ -8,6 +8,7 @@ use crate::types::{TypePtr, XorHasher};
 use std::cell::RefMut;
 use std::collections::{HashMap, HashSet};
 use std::hash::BuildHasherDefault;
+use std::ops::Range;
 use updates::encoder::*;
 
 pub struct Transaction<'a> {
@@ -66,23 +67,25 @@ impl<'a> Transaction<'a> {
         update_encoder.to_vec()
     }
 
-    pub fn iterate_structs<F>(&mut self, client: &u64, clock_start: u32, len: u32, f: &F)
+    pub fn iterate_structs<F>(&mut self, client: &u64, range: &Range<u32>, f: &F)
     where
         F: Fn(&Block) -> (),
     {
-        if len == 0 {
+        let clock_start = range.start;
+        let clock_end = range.end;
+
+        if clock_start == clock_end {
             return;
         }
 
-        let clock_end = clock_start + len;
         if let Some(mut index) = self.find_index_clean_start(client, clock_start) {
-            let mut blocks = self.store.blocks.clients.get(client).unwrap();
+            let mut blocks = self.store.blocks.get(client).unwrap();
             let mut block = &blocks.list[index];
 
             while index < blocks.list.len() && block.id().clock < clock_end {
                 if clock_end < block.clock_end() {
                     self.find_index_clean_start(client, clock_start);
-                    blocks = self.store.blocks.clients.get(client).unwrap();
+                    blocks = self.store.blocks.get(client).unwrap();
                     block = &blocks.list[index];
                 }
 
@@ -99,7 +102,7 @@ impl<'a> Transaction<'a> {
         let mut index = 0;
 
         {
-            let blocks = self.store.blocks.clients.get_mut(client)?;
+            let blocks = self.store.blocks.get_mut(client)?;
             index = blocks.find_pivot(clock)?;
             let block = &mut blocks.list[index];
             if let Some(item) = block.as_item_mut() {
@@ -142,12 +145,7 @@ impl<'a> Transaction<'a> {
         //  | LEFT |     | ITEM |     | RIGHT |
         //  +------+ <-- +------+ <-- +-------+
 
-        let blocks = self
-            .store
-            .blocks
-            .clients
-            .get_mut(&right_ptr.id.client)
-            .unwrap();
+        let blocks = self.store.blocks.get_mut(&right_ptr.id.client).unwrap();
         let right = &mut blocks.list[right_ptr.pivot as usize];
         if let Some(right_item) = right.as_item_mut() {
             right_item.left = Some(BlockPtr::from(id))
@@ -159,12 +157,12 @@ impl<'a> Transaction<'a> {
     pub fn apply_delete(&mut self, id_set: &IdSet) -> IdSet {
         let mut unapplied = IdSet::new();
         for (client, ranges) in id_set.iter() {
-            let mut blocks = self.store.blocks.clients.get_mut(client).unwrap();
+            let mut blocks = self.store.blocks.get_mut(client).unwrap();
             let state = blocks.get_state();
 
             for range in ranges.iter() {
-                let clock = range.clock;
-                let clock_end = clock + range.len;
+                let clock = range.start;
+                let clock_end = range.end;
 
                 if clock < state {
                     if state < clock_end {
@@ -184,7 +182,7 @@ impl<'a> Transaction<'a> {
                                 blocks.list.insert(index, Block::Item(right));
                                 if let Some(right_ptr) = right_ptr {
                                     self.rewire(&right_ptr, id);
-                                    blocks = self.store.blocks.clients.get_mut(client).unwrap();
+                                    blocks = self.store.blocks.get_mut(client).unwrap();
                                     // just to make the borrow checker happy
                                 }
                             }
@@ -208,8 +206,7 @@ impl<'a> Transaction<'a> {
                                                 }
                                             }
                                             self.delete(&ptr);
-                                            blocks =
-                                                self.store.blocks.clients.get_mut(client).unwrap();
+                                            blocks = self.store.blocks.get_mut(client).unwrap();
                                             // just to make the borrow checker happy
                                         }
                                     } else {

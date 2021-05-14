@@ -178,7 +178,6 @@ impl Store {
         // @todo Sort for better perf!
         let structs: Vec<(&u64, &ClientBlockList)> = self
             .blocks
-            .clients
             .iter()
             // @todo this could be optimized
             .filter(|(client_id, sl)| sv.get_state(**client_id) < sl.get_state())
