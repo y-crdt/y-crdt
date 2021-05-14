@@ -299,16 +299,13 @@ impl DeleteSet {
     pub fn from(store: &BlockStore) -> Self {
         let mut set = DeleteSet(IdSet::new());
         for (&client, blocks) in store.iter() {
-            let mut deletes = IdRange::with_capacity(blocks.list.len());
-            let mut i = 0;
-            while i < blocks.list.len() {
-                let block = &blocks.list[i];
+            let mut deletes = IdRange::with_capacity(blocks.len());
+            for block in blocks.iter() {
                 if block.is_deleted() {
                     let start = block.id().clock;
                     let end = start + block.len();
                     deletes.push(start..end);
                 }
-                i += 1;
             }
 
             if !deletes.is_empty() {

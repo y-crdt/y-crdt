@@ -85,7 +85,7 @@ impl Store {
         let pivot = self
             .blocks
             .get_client_blocks_mut(self.client_id)
-            .integrated_len as u32;
+            .integrated_len() as u32;
         let item = block::Item {
             id,
             content,
@@ -99,8 +99,7 @@ impl Store {
         };
         item.integrate(self, pivot as u32);
         let local_block_list = self.blocks.get_client_blocks_mut(self.client_id);
-        local_block_list.list.push(block::Block::Item(item));
-        local_block_list.integrated_len += 1;
+        local_block_list.push(block::Block::Item(item));
     }
 
     pub fn read_blocks<D: Decoder>(&mut self, decoder: &mut D) {
@@ -164,8 +163,7 @@ impl Store {
                 let client_struct_list = self
                     .blocks
                     .get_client_blocks_with_capacity_mut(client, number_of_structs as usize);
-                client_struct_list.list.push(block::Block::Item(item));
-                client_struct_list.integrated_len += 1;
+                client_struct_list.push(block::Block::Item(item));
 
                 // struct integration done. Now increase clock
                 clock += 1;
@@ -188,10 +186,10 @@ impl Store {
             let start_clock = sv.get_state(**client_id);
             let start_pivot = client_structs.find_pivot(start_clock).unwrap() as u32;
             encoder.write_client(**client_id);
-            encoder.write_uvar(client_structs.integrated_len as u32 - start_pivot);
+            encoder.write_uvar(client_structs.integrated_len() as u32 - start_pivot);
             encoder.write_uvar(start_clock); // initial clock
-            for i in (start_pivot as usize)..(client_structs.integrated_len) {
-                client_structs.list[i].encode(self, encoder);
+            for i in (start_pivot as usize)..(client_structs.integrated_len()) {
+                client_structs[i].encode(self, encoder);
             }
         }
     }

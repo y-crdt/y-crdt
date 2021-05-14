@@ -9,6 +9,7 @@ use lib0::decoding::{Cursor, Read};
 use lib0::encoding::Write;
 use std::collections::HashMap;
 use std::hash::BuildHasherDefault;
+use std::ops::{Index, IndexMut};
 use std::vec::Vec;
 
 #[derive(Default, Debug, Clone)]
@@ -18,9 +19,11 @@ impl StateVector {
     pub fn empty() -> Self {
         StateVector::default()
     }
-    pub fn size(&self) -> usize {
+
+    pub fn len(&self) -> usize {
         self.0.len()
     }
+
     pub fn from(ss: &BlockStore) -> Self {
         let mut sv = StateVector::default();
         for (client_id, client_struct_list) in ss.clients.iter() {
@@ -28,18 +31,20 @@ impl StateVector {
         }
         sv
     }
+
     pub fn get_state(&self, client_id: u64) -> u32 {
         match self.0.get(&client_id) {
             Some(state) => *state,
             None => 0,
         }
     }
+
     pub fn iter(&self) -> std::collections::hash_map::Iter<u64, u32> {
         self.0.iter()
     }
 
     pub fn encode(&self) -> Vec<u8> {
-        let len = self.size();
+        let len = self.len();
         // expecting to write at most two u32 values (using variable encoding
         // we will probably write less)
         let mut encoder = Vec::with_capacity(len * 14); // Upper bound: 9 for client, 5 for clock
@@ -64,8 +69,8 @@ impl StateVector {
 
 #[derive(Debug)]
 pub struct ClientBlockList {
-    pub list: Vec<block::Block>,
-    pub integrated_len: usize,
+    list: Vec<block::Block>,
+    integrated_len: usize,
 }
 
 impl ClientBlockList {
@@ -75,12 +80,14 @@ impl ClientBlockList {
             integrated_len: 0,
         }
     }
+
     pub fn with_capacity(capacity: usize) -> ClientBlockList {
         ClientBlockList {
             list: Vec::with_capacity(capacity),
             integrated_len: 0,
         }
     }
+
     pub fn get_state(&self) -> u32 {
         if self.integrated_len == 0 {
             0
@@ -89,6 +96,7 @@ impl ClientBlockList {
             item.id().clock + item.len()
         }
     }
+
     pub fn find_pivot(&self, clock: u32) -> Option<usize> {
         let mut left = 0;
         let mut right = self.list.len() - 1;
@@ -123,7 +131,44 @@ impl ClientBlockList {
         let idx = self.find_pivot(clock)?;
         Some(&self.list[idx])
     }
+
+    pub fn push(&mut self, block: block::Block) {
+        self.list.push(block);
+        self.integrated_len += 1;
+    }
+
+    pub fn insert(&mut self, index: usize, block: block::Block) {
+        self.list.insert(index, block);
+    }
+
+    pub fn len(&self) -> usize {
+        self.list.len()
+    }
+
+    pub fn integrated_len(&self) -> usize {
+        self.integrated_len
+    }
+
+    pub fn iter(&self) -> ClientBlockListIter<'_> {
+        self.list.iter()
+    }
 }
+
+impl Index<usize> for ClientBlockList {
+    type Output = block::Block;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.list[index]
+    }
+}
+
+impl IndexMut<usize> for ClientBlockList {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        &mut self.list[index]
+    }
+}
+
+pub type ClientBlockListIter<'a> = std::slice::Iter<'a, block::Block>;
 
 #[derive(Debug)]
 pub struct BlockStore {
@@ -227,7 +272,7 @@ impl BlockStore {
         let sv = self.get_state_vector();
         // expecting to write at most two u32 values (using variable encoding
         // we will probably write less)
-        let mut encoder = Vec::with_capacity(sv.size() * 8);
+        let mut encoder = Vec::with_capacity(sv.len() * 8);
         for (client_id, clock) in sv.iter() {
             encoder.write_uvar(*client_id);
             encoder.write_uvar(*clock);
