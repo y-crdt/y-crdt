@@ -1,8 +1,8 @@
 use crate::block::{HAS_ORIGIN, HAS_RIGHT_ORIGIN};
 use crate::block_store::{BlockStore, ClientBlockList, StateVector};
-use crate::updates::decoder::UpdateDecoder;
-use crate::updates::encoder::UpdateEncoder;
-use crate::{block, types, updates};
+use crate::updates::decoder::Decoder;
+use crate::updates::encoder::Encoder;
+use crate::{block, types};
 use std::collections::HashMap;
 
 pub struct Store {
@@ -103,19 +103,19 @@ impl Store {
         local_block_list.integrated_len += 1;
     }
 
-    pub fn read_blocks(&mut self, update_decoder: &mut updates::decoder::DecoderV1) {
-        let number_of_clients: u32 = update_decoder.rest_decoder.read_var_uint();
+    pub fn read_blocks<D: Decoder>(&mut self, decoder: &mut D) {
+        let number_of_clients: u32 = decoder.read_uvar();
         for _ in 0..number_of_clients {
-            let number_of_structs: u32 = update_decoder.rest_decoder.read_var_uint();
-            let client = update_decoder.read_client();
-            let mut clock = update_decoder.rest_decoder.read_var_uint();
+            let number_of_structs: u32 = decoder.read_uvar();
+            let client = decoder.read_client();
+            let mut clock = decoder.read_uvar();
             for _ in 0..number_of_structs {
-                let info = update_decoder.read_info();
+                let info = decoder.read_info();
                 // we will get parent from either left, right. Otherwise, we
                 // read it from update_decoder.
                 let mut parent: Option<types::TypePtr> = None;
                 let (origin, left) = if info & HAS_ORIGIN == HAS_ORIGIN {
-                    let id = update_decoder.read_left_id();
+                    let id = decoder.read_left_id();
                     let ptr = self.blocks.find_item_ptr(&id);
                     parent = Some(self.blocks.get_item(&ptr).parent.clone());
                     (Some(id), Some(ptr))
@@ -123,7 +123,7 @@ impl Store {
                     (None, None)
                 };
                 let (right_origin, right) = if info & HAS_RIGHT_ORIGIN == HAS_RIGHT_ORIGIN {
-                    let id = update_decoder.read_right_id();
+                    let id = decoder.read_right_id();
                     let ptr = self.blocks.find_item_ptr(&id);
                     if info & HAS_ORIGIN != HAS_ORIGIN {
                         // only set parent if not already done so above
@@ -135,17 +135,17 @@ impl Store {
                 };
                 if info & (HAS_RIGHT_ORIGIN | HAS_ORIGIN) == 0 {
                     // neither origin nor right_origin is defined
-                    let parent_info = update_decoder.read_parent_info();
+                    let parent_info = decoder.read_parent_info();
                     if parent_info {
-                        let type_name = update_decoder.read_string();
+                        let type_name = decoder.read_string();
                         let type_name_ref = self.init_type_ref(type_name);
                         parent = Some(types::TypePtr::NamedRef(type_name_ref as u32));
                     } else {
-                        let id = update_decoder.read_left_id();
+                        let id = decoder.read_left_id();
                         parent = Some(types::TypePtr::Id(block::BlockPtr::from(id)));
                     }
                 };
-                let string_content = update_decoder.read_string();
+                let string_content = decoder.read_string();
                 let content = block::ItemContent::String(string_content.to_owned());
                 let item = block::Item {
                     id: block::ID { client, clock },
@@ -173,7 +173,7 @@ impl Store {
         }
     }
 
-    pub fn write_blocks(&self, update_encoder: &mut updates::encoder::EncoderV1, sv: &StateVector) {
+    pub fn write_blocks<E: Encoder>(&self, encoder: &mut E, sv: &StateVector) {
         // turns this into a vector because at some point we want to sort this
         // @todo Sort for better perf!
         let structs: Vec<(&u64, &ClientBlockList)> = self
@@ -183,18 +183,16 @@ impl Store {
             // @todo this could be optimized
             .filter(|(client_id, sl)| sv.get_state(**client_id) < sl.get_state())
             .collect();
-        update_encoder.rest_encoder.write_var_uint(structs.len());
+        encoder.write_uvar(structs.len());
 
         for (client_id, client_structs) in structs.iter() {
             let start_clock = sv.get_state(**client_id);
             let start_pivot = client_structs.find_pivot(start_clock).unwrap() as u32;
-            update_encoder.write_client(**client_id);
-            update_encoder
-                .rest_encoder
-                .write_var_uint(client_structs.integrated_len as u32 - start_pivot);
-            update_encoder.rest_encoder.write_var_uint(start_clock); // initial clock
+            encoder.write_client(**client_id);
+            encoder.write_uvar(client_structs.integrated_len as u32 - start_pivot);
+            encoder.write_uvar(start_clock); // initial clock
             for i in (start_pivot as usize)..(client_structs.integrated_len) {
-                client_structs.list[i].encode(self, update_encoder);
+                client_structs.list[i].encode(self, encoder);
             }
         }
     }

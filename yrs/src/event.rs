@@ -1,7 +1,6 @@
 use rand::RngCore;
-use std::cell::{RefCell, RefMut};
+use std::cell::RefCell;
 use std::collections::HashMap;
-use std::pin::Pin;
 use std::rc::{Rc, Weak};
 
 pub struct EventHandler<T>(Rc<RefCell<Subscriptions<T>>>);

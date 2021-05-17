@@ -63,7 +63,7 @@ impl<'a> Transaction<'a> {
         let mut update_encoder = updates::encoder::EncoderV1::new();
         self.store
             .write_blocks(&mut update_encoder, &self.timestamp);
-        update_encoder.to_buffer()
+        update_encoder.to_vec()
     }
 
     pub fn iterate_structs<F>(&mut self, client: &u64, clock_start: u32, len: u32, f: &F)
