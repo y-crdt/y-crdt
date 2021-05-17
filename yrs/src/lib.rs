@@ -92,6 +92,7 @@ mod id_set;
 mod store;
 mod transaction;
 mod types;
+mod update;
 mod updates;
 mod utils;
 

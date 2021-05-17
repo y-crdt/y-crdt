@@ -2,7 +2,6 @@ use crate::block_store::StateVector;
 use crate::store::Store;
 use crate::transaction::Transaction;
 use crate::updates::decoder::DecoderV1;
-use crate::updates::encoder::Encoder;
 use crate::*;
 use rand::Rng;
 use std::cell::RefCell;
@@ -57,68 +56,11 @@ impl Doc {
     pub fn transact(&self) -> Transaction {
         Transaction::new(self.store.borrow_mut())
     }
-    /// Encodes the document state to a binary format.
-    ///
-    /// Document updates are idempotent and commutative. Caveats:
-    /// * It doesn't matter in which order document updates are applied.
-    /// * As long as all clients receive the same document updates, all clients
-    ///   end up with the same content.
-    /// * Even if an update contains known information, the unknown information
-    ///   is extracted and integrated into the document structure.
-    ///
-    /// ```
-    /// let doc1 = yrs::Doc::new();
-    /// let doc2 = yrs::Doc::new();
-    ///
-    /// // some content
-    /// doc1.get_type("my type").insert(&doc1.transact(), 0, 'a');
-    ///
-    /// let update = doc1.encode_state_as_update();
-    ///
-    /// doc2.apply_update(&update);
-    ///
-    /// assert_eq!(doc1.get_type("my type").to_string(), "a");
-    /// ```
-    ///
-    pub fn encode_state_as_update(&self, tr: &Transaction) -> Vec<u8> {
-        let mut update_encoder = updates::encoder::EncoderV1::new();
-        tr.store
-            .write_blocks(&mut update_encoder, &StateVector::empty());
-        // @todo this is not satisfactory. We would copy the complete buffer every time this method is called.
-        // Instead we should implement `write_state_as_update` and fill an existing object that implements the Write trait.
-        update_encoder.to_vec()
-    }
-    /// Compute a diff to sync with another client.
-    ///
-    /// This is the most efficient method to sync with another client by only
-    /// syncing the differences.
-    ///
-    /// The sync protocol in Yrs/js is:
-    /// * Send StateVector to the other client.
-    /// * The other client comutes a minimal diff to sync by using the StateVector.
-    ///
-    /// ```
-    /// let doc1 = yrs::Doc::new();
-    /// let doc2 = yrs::Doc::new();
-    ///
-    /// let state_vector = doc1.get_state_vector();
-    /// // encode state vector to a binary format that you can send to other peers.
-    /// let state_vector_encoded: Vec<u8> = state_vector.encode();
-    ///
-    /// let diff = doc2.encode_diff_as_update(&yrs::StateVector::decode(&state_vector_encoded));
-    ///
-    /// // apply all missing changes from doc2 to doc1.
-    /// doc1.apply_update(&diff);
-    /// ```
-    pub fn encode_diff_as_update(&self, tr: &Transaction, sv: &StateVector) -> Vec<u8> {
-        let mut update_encoder = updates::encoder::EncoderV1::new();
-        tr.store.write_blocks(&mut update_encoder, sv);
-        update_encoder.to_vec()
-    }
+
     /// Apply a document update.
     pub fn apply_update(&self, tr: &mut Transaction, update: &[u8]) {
         let mut decoder = DecoderV1::from(update);
-        tr.store.read_blocks(&mut decoder)
+        tr.store.integrate(&mut decoder)
     }
     // Retrieve document state vector in order to encode the document diff.
     pub fn get_state_vector(&self, tr: &mut Transaction) -> StateVector {
