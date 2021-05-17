@@ -1,6 +1,6 @@
 use lib0::any::Any;
-use lib0::decoding::Decoder;
-use lib0::encoding::Encoder;
+use lib0::decoding::{Cursor, Read};
+use lib0::encoding::Write;
 use proptest::prelude::*;
 
 pub fn arb_any() -> impl Strategy<Value = Any> {
@@ -26,10 +26,10 @@ pub fn arb_any() -> impl Strategy<Value = Any> {
 proptest! {
     #[test]
     fn encoding_any_prop(any in arb_any()) {
-        let mut encoder = Encoder::new();
-        encoder.write_any(&any);
-        let mut decoder = Decoder::new(&encoder.buf);
-        let copy = decoder.read_any();
+        let mut encoder = Vec::with_capacity(1024);
+        any.encode(&mut encoder);
+        let mut decoder = Cursor::new(encoder.as_slice());
+        let copy = Any::decode(&mut decoder);
         assert_eq!(any, copy);
     }
 }
@@ -58,134 +58,134 @@ enum EncodingTypes {
 }
 
 impl EncodingTypes {
-    fn write(&self, encoder: &mut Encoder) {
+    fn write<W: Write>(&self, encoder: &mut W) {
         match self {
-            EncodingTypes::Byte(input) => encoder.write(*input),
+            EncodingTypes::Byte(input) => encoder.write_u8(*input),
             EncodingTypes::Uint8(input) => {
-                encoder.write_uint8(*input);
+                encoder.write_u8(*input);
             }
             EncodingTypes::Uint16(input) => {
-                encoder.write_uint16(*input);
+                encoder.write_u16(*input);
             }
             EncodingTypes::Uint32(input) => {
-                encoder.write_uint32(*input);
+                encoder.write_u32(*input);
             }
             EncodingTypes::Uint32BigEndian(input) => {
-                encoder.write_uint32_big_endian(*input);
+                encoder.write_u32_be(*input);
             }
             EncodingTypes::VarUint32(input) => {
-                encoder.write_var_uint(*input);
+                encoder.write_uvar(*input);
             }
             EncodingTypes::VarUint64(input) => {
-                encoder.write_var_uint(*input);
+                encoder.write_uvar(*input);
             }
             EncodingTypes::VarUint128(input) => {
-                encoder.write_var_uint(*input);
+                encoder.write_uvar(*input);
             }
             EncodingTypes::VarUintUsize(input) => {
-                encoder.write_var_uint(*input);
+                encoder.write_uvar(*input);
             }
             EncodingTypes::VarInt(input) => {
-                encoder.write_var_int(*input);
+                encoder.write_ivar(*input);
             }
             EncodingTypes::Buffer(input) => {
-                encoder.write_buffer(input);
+                encoder.write(input);
             }
             EncodingTypes::VarBuffer(input) => {
-                encoder.write_var_buffer(input);
+                encoder.write_buf(input);
             }
             EncodingTypes::VarString(input) => {
-                encoder.write_var_string(input);
+                encoder.write_string(input);
             }
             EncodingTypes::Float32(input) => {
-                encoder.write_float32(*input);
+                encoder.write_f32(*input);
             }
             EncodingTypes::Float64(input) => {
-                encoder.write_float64(*input);
+                encoder.write_f64(*input);
             }
             EncodingTypes::BigInt64(input) => {
-                encoder.write_big_int64(*input);
+                encoder.write_i64(*input);
             }
             EncodingTypes::BigUInt64(input) => {
-                encoder.write_big_uint64(*input);
+                encoder.write_u64(*input);
             }
             EncodingTypes::Any(input) => {
-                encoder.write_any(input);
+                input.encode(encoder);
             }
         }
     }
-    fn read(&self, decoder: &mut Decoder) {
+    fn read(&self, decoder: &mut Cursor) {
         match self {
             EncodingTypes::Byte(input) => {
-                let read = decoder.read();
+                let read = decoder.read_u8();
                 assert_eq!(read, *input);
             }
             EncodingTypes::Uint8(input) => {
-                let read = decoder.read_uint8();
+                let read = decoder.read_u8();
                 assert_eq!(read, *input);
             }
             EncodingTypes::Uint16(input) => {
-                let read = decoder.read_uint16();
+                let read = decoder.read_u16();
                 assert_eq!(read, *input);
             }
             EncodingTypes::Uint32(input) => {
-                let read = decoder.read_uint32();
+                let read = decoder.read_u32();
                 assert_eq!(read, *input);
             }
             EncodingTypes::Uint32BigEndian(input) => {
-                let read = decoder.read_uint32_big_endian();
+                let read = decoder.read_u32_be();
                 assert_eq!(read, *input);
             }
             EncodingTypes::VarUint32(input) => {
-                let read: u32 = decoder.read_var_uint();
+                let read: u32 = decoder.read_uvar();
                 assert_eq!(read, *input);
             }
             EncodingTypes::VarUint64(input) => {
-                let read: u64 = decoder.read_var_uint();
+                let read: u64 = decoder.read_uvar();
                 assert_eq!(read, *input);
             }
             EncodingTypes::VarUint128(input) => {
-                let read: u128 = decoder.read_var_uint();
+                let read: u128 = decoder.read_uvar();
                 assert_eq!(read, *input);
             }
             EncodingTypes::VarUintUsize(input) => {
-                let read: usize = decoder.read_var_uint();
+                let read: usize = decoder.read_uvar();
                 assert_eq!(read, *input);
             }
             EncodingTypes::VarInt(input) => {
-                let read = decoder.read_var_int();
+                let read = decoder.read_ivar();
                 assert_eq!(read, *input);
             }
             EncodingTypes::Buffer(input) => {
-                let read = decoder.read_buffer(input.len() as u32);
+                let read = decoder.read(input.len());
                 assert_eq!(read, *input);
             }
             EncodingTypes::VarBuffer(input) => {
-                let read = decoder.read_var_buffer();
+                let read = decoder.read_buf();
                 assert_eq!(read, *input);
             }
             EncodingTypes::VarString(input) => {
-                let read = decoder.read_var_string();
+                let read = decoder.read_string();
                 assert_eq!(read, *input);
             }
             EncodingTypes::Float32(input) => {
-                let read = decoder.read_float32();
+                let read = decoder.read_f32();
                 assert_eq!(read, *input);
             }
             EncodingTypes::Float64(input) => {
-                let read = decoder.read_float64();
+                let read = decoder.read_f64();
                 assert_eq!(read, *input);
             }
             EncodingTypes::BigInt64(input) => {
-                let read = decoder.read_bigint64();
+                let read = decoder.read_i64();
                 assert_eq!(read, *input);
             }
             EncodingTypes::BigUInt64(input) => {
-                let read = decoder.read_big_uint64();
+                let read = decoder.read_u64();
                 assert_eq!(read, *input);
             }
             EncodingTypes::Any(input) => {
-                let read = decoder.read_any();
+                let read = Any::decode(decoder);
                 assert_eq!(read, *input);
             }
         }
@@ -195,9 +195,9 @@ impl EncodingTypes {
 proptest! {
     #[test]
     fn encoding_prop(val: EncodingTypes) {
-        let mut encoder = Encoder::new();
+        let mut encoder = Vec::new();
         val.write(&mut encoder);
-        let mut decoder = Decoder::new(&encoder.buf);
+        let mut decoder = Cursor::new(encoder.as_slice());
         val.read(&mut decoder)
     }
 }
