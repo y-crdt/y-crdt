@@ -62,8 +62,7 @@ impl<'a> Transaction<'a> {
     ///
     pub fn encode_update(&self) -> Vec<u8> {
         let mut update_encoder = updates::encoder::EncoderV1::new();
-        self.store
-            .write_blocks(&mut update_encoder, &self.timestamp);
+        self.store.encode_diff(&self.timestamp, &mut update_encoder);
         update_encoder.to_vec()
     }
 
@@ -251,7 +250,7 @@ impl<'a> Transaction<'a> {
             item.deleted = true;
             self.delete_set.insert(item.id.clone(), item.len());
             // addChangedTypeToTransaction(transaction, item.type, item.parentSub)
-            if item.id.clock < self.timestamp.get_state(item.id.client) {
+            if item.id.clock < self.timestamp.get_state(&item.id.client) {
                 let set = self.changed.entry(item.parent.clone()).or_default();
                 set.insert(item.parent_sub.clone());
             }

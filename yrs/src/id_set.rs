@@ -1,5 +1,4 @@
-use crate::block::{Block, ID};
-use crate::transaction::Transaction;
+use crate::block::ID;
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::client_hasher::ClientHasher;
@@ -317,6 +316,18 @@ impl DeleteSet {
 
     pub fn is_deleted(&self, id: &ID) -> bool {
         self.0.contains(id)
+    }
+}
+
+impl Decode for DeleteSet {
+    fn decode<D: Decoder>(decoder: &mut D) -> Self {
+        DeleteSet(IdSet::decode(decoder))
+    }
+}
+
+impl Encode for DeleteSet {
+    fn encode<E: Encoder>(&self, encoder: &mut E) {
+        self.0.encode(encoder)
     }
 }
 
