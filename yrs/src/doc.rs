@@ -1,7 +1,9 @@
 use crate::block_store::StateVector;
+use crate::id_set::DeleteSet;
 use crate::store::Store;
 use crate::transaction::Transaction;
-use crate::updates::decoder::DecoderV1;
+use crate::update::Update;
+use crate::updates::decoder::{Decode, DecoderV1};
 use crate::*;
 use rand::Rng;
 use std::cell::RefCell;
@@ -60,7 +62,9 @@ impl Doc {
     /// Apply a document update.
     pub fn apply_update(&self, tr: &mut Transaction, update: &[u8]) {
         let mut decoder = DecoderV1::from(update);
-        tr.store.integrate(&mut decoder)
+        let update = Update::decode(&mut decoder);
+        let ds = DeleteSet::decode(&mut decoder);
+        tr.apply_update(update, ds)
     }
     // Retrieve document state vector in order to encode the document diff.
     pub fn get_state_vector(&self, tr: &mut Transaction) -> StateVector {

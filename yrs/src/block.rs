@@ -19,6 +19,7 @@ pub const BLOCK_SKIP_REF_NUMBER: u8 = 10;
 
 pub const HAS_RIGHT_ORIGIN: u8 = 0b01000000;
 pub const HAS_ORIGIN: u8 = 0b10000000;
+pub const HAS_PARENT_SUB: u8 = 0b00100000;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct ID {
@@ -78,6 +79,16 @@ impl Block {
             Block::Item(item) => item.deleted,
             Block::Skip(_) => false,
             Block::GC(_) => true,
+        }
+    }
+
+    pub fn integrate(&mut self, store: &mut Store, pivot: u32) {
+        match self {
+            Block::Item(item) => item.integrate(store, pivot),
+            Block::GC(gc) => gc.integrate(store, pivot),
+            Block::Skip(_) => {
+                panic!("Block::Skip cannot be integrated")
+            }
         }
     }
 
@@ -178,9 +189,22 @@ pub struct GC {
     pub len: u32,
 }
 
+impl GC {
+    pub fn integrate(&mut self, store: &mut Store, pivot: u32) {
+        if pivot > 0 {
+            self.id.clock += pivot;
+            self.len -= pivot;
+        }
+    }
+}
+
 impl Item {
-    #[inline(always)]
-    pub fn integrate(&self, store: &mut Store, pivot: u32) {
+    pub fn integrate(&mut self, store: &mut Store, pivot: u32) {
+        if pivot > 0 {
+            self.id.clock += pivot;
+            todo!()
+        }
+
         let blocks = &mut store.blocks;
         // No conflict resolution yet..
         // We only implement the reconnection part:

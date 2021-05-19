@@ -1,16 +1,19 @@
-use crate::block::{HAS_ORIGIN, HAS_RIGHT_ORIGIN};
+use crate::block::{Item, HAS_ORIGIN, HAS_RIGHT_ORIGIN};
 use crate::block_store::{BlockStore, StateVector};
 use crate::id_set::DeleteSet;
+use crate::update::{PendingUpdate, Update};
 use crate::updates::decoder::Decoder;
 use crate::updates::encoder::{Encode, Encoder};
-use crate::{block, types};
+use crate::{block, types, ID};
 use std::collections::HashMap;
 
 pub struct Store {
     client_id: u64,
-    pub type_refs: HashMap<String, u32>,
-    pub types: Vec<(types::Inner, String)>,
+    type_refs: HashMap<String, u32>,
+    types: Vec<(types::Inner, String)>,
     pub blocks: BlockStore,
+    pub pending: Option<PendingUpdate>,
+    pub pending_ds: Option<DeleteSet>,
 }
 
 impl Store {
@@ -20,6 +23,8 @@ impl Store {
             type_refs: Default::default(),
             types: Default::default(),
             blocks: BlockStore::new(),
+            pending: None,
+            pending_ds: None,
         }
     }
 
@@ -87,7 +92,7 @@ impl Store {
             .blocks
             .get_client_blocks_mut(self.client_id)
             .integrated_len() as u32;
-        let item = block::Item {
+        let mut item = block::Item {
             id,
             content,
             left,
@@ -101,75 +106,6 @@ impl Store {
         item.integrate(self, pivot as u32);
         let local_block_list = self.blocks.get_client_blocks_mut(self.client_id);
         local_block_list.push(block::Block::Item(item));
-    }
-
-    pub fn integrate<D: Decoder>(&mut self, decoder: &mut D) {
-        let number_of_clients: u32 = decoder.read_uvar();
-        for _ in 0..number_of_clients {
-            let number_of_structs: u32 = decoder.read_uvar();
-            let client = decoder.read_client();
-            let mut clock = decoder.read_uvar();
-            for _ in 0..number_of_structs {
-                let info = decoder.read_info();
-                // we will get parent from either left, right. Otherwise, we
-                // read it from update_decoder.
-                let mut parent: Option<types::TypePtr> = None;
-                let (origin, left) = if info & HAS_ORIGIN == HAS_ORIGIN {
-                    let id = decoder.read_left_id();
-                    let ptr = self.blocks.find_item_ptr(&id);
-                    parent = Some(self.blocks.get_item(&ptr).parent.clone());
-                    (Some(id), Some(ptr))
-                } else {
-                    (None, None)
-                };
-                let (right_origin, right) = if info & HAS_RIGHT_ORIGIN == HAS_RIGHT_ORIGIN {
-                    let id = decoder.read_right_id();
-                    let ptr = self.blocks.find_item_ptr(&id);
-                    if info & HAS_ORIGIN != HAS_ORIGIN {
-                        // only set parent if not already done so above
-                        parent = Some(self.blocks.get_item(&ptr).parent.clone());
-                    }
-                    (Some(id), Some(ptr))
-                } else {
-                    (None, None)
-                };
-                if info & (HAS_RIGHT_ORIGIN | HAS_ORIGIN) == 0 {
-                    // neither origin nor right_origin is defined
-                    let parent_info = decoder.read_parent_info();
-                    if parent_info {
-                        let type_name = decoder.read_string();
-                        let type_name_ref = self.init_type_ref(type_name);
-                        parent = Some(types::TypePtr::NamedRef(type_name_ref as u32));
-                    } else {
-                        let id = decoder.read_left_id();
-                        parent = Some(types::TypePtr::Id(block::BlockPtr::from(id)));
-                    }
-                };
-                let string_content = decoder.read_string();
-                let content = block::ItemContent::String(string_content.to_owned());
-                let item = block::Item {
-                    id: block::ID { client, clock },
-                    left,
-                    right,
-                    origin,
-                    right_origin,
-                    content,
-                    parent: parent.unwrap(),
-                    deleted: false,
-                    parent_sub: None,
-                };
-                item.integrate(self, clock); // todo compute pivot beforehand
-                                             // add item to struct list
-                                             // @todo try borow of index and generalize in ss
-                let client_struct_list = self
-                    .blocks
-                    .get_client_blocks_with_capacity_mut(client, number_of_structs as usize);
-                client_struct_list.push(block::Block::Item(item));
-
-                // struct integration done. Now increase clock
-                clock += 1;
-            }
-        }
     }
 
     pub fn get_type_name(&self, type_name_ref: u32) -> &str {
@@ -223,13 +159,13 @@ impl Store {
     fn diff_state_vectors(local_sv: &StateVector, remote_sv: &StateVector) -> Vec<(u64, u32)> {
         let mut diff = Vec::new();
         for (client, &remote_clock) in remote_sv.iter() {
-            let local_clock = local_sv.get_state(client);
+            let local_clock = local_sv.get(client);
             if local_clock > remote_clock {
                 diff.push((*client, local_clock));
             }
         }
         for (client, &local_clock) in local_sv.iter() {
-            if remote_sv.get_state(client) == 0 {
+            if remote_sv.get(client) == 0 {
                 diff.push((*client, local_clock));
             }
         }

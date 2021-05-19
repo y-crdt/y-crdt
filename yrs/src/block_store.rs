@@ -1,8 +1,9 @@
-use crate::block::{Block, ID};
+use crate::block::{Block, BlockPtr, ID};
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::client_hasher::ClientHasher;
 use crate::*;
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::hash::BuildHasherDefault;
 use std::ops::{Index, IndexMut};
@@ -14,6 +15,10 @@ pub struct StateVector(HashMap<u64, u32, BuildHasherDefault<ClientHasher>>);
 impl StateVector {
     pub fn empty() -> Self {
         StateVector::default()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
     }
 
     pub fn len(&self) -> usize {
@@ -28,10 +33,22 @@ impl StateVector {
         sv
     }
 
-    pub fn get_state(&self, client_id: &u64) -> u32 {
+    pub fn get(&self, client_id: &u64) -> u32 {
         match self.0.get(client_id) {
             Some(state) => *state,
             None => 0,
+        }
+    }
+
+    pub fn set_min(&mut self, client: u64, clock: u32) {
+        match self.0.entry(client) {
+            Entry::Occupied(e) => {
+                let value = e.into_mut();
+                *value = (*value).min(clock);
+            }
+            Entry::Vacant(e) => {
+                e.insert(clock);
+            }
         }
     }
 
@@ -176,6 +193,10 @@ pub struct BlockStore {
 pub type Iter<'a> = std::collections::hash_map::Iter<'a, u64, ClientBlockList>;
 
 impl BlockStore {
+    pub fn from(clients: HashMap<u64, ClientBlockList, BuildHasherDefault<ClientHasher>>) -> Self {
+        Self { clients }
+    }
+
     pub fn new() -> Self {
         Self {
             clients: HashMap::<u64, ClientBlockList, BuildHasherDefault<ClientHasher>>::default(),
@@ -262,5 +283,11 @@ impl BlockStore {
     pub fn find(&self, id: &ID) -> Option<&Block> {
         let blocks = self.clients.get(&id.client)?;
         blocks.find_block(id.clock)
+    }
+
+    /// Given block pointer, tries to split it, returning a (left, right) halves
+    /// of a newly split block. If split was not necessary (eg. because block `ptr`
+    pub fn split_block(&mut self, ptr: &BlockPtr) -> (&Block, Option<&Block>) {
+        todo!()
     }
 }
