@@ -2,9 +2,10 @@ use crate::*;
 
 use crate::block::{Block, BlockPtr, ItemContent, ID};
 use crate::block_store::StateVector;
-use crate::id_set::IdSet;
+use crate::id_set::{DeleteSet, IdSet};
 use crate::store::Store;
 use crate::types::{TypePtr, XorHasher};
+use crate::update::Update;
 use std::cell::RefMut;
 use std::collections::{HashMap, HashSet};
 use std::hash::BuildHasherDefault;
@@ -167,9 +168,9 @@ impl<'a> Transaction<'a> {
 
     /// Applies given `id_set` onto current transaction to run multi-range deletion.
     /// Returns a remaining of original ID set, that couldn't be applied.
-    pub fn apply_delete(&mut self, id_set: &IdSet) -> IdSet {
-        let mut unapplied = IdSet::new();
-        for (client, ranges) in id_set.iter() {
+    pub fn apply_delete(&mut self, ds: &DeleteSet) -> Option<DeleteSet> {
+        let mut unapplied = DeleteSet::new();
+        for (client, ranges) in ds.iter() {
             let mut blocks = self.store.blocks.get_mut(client).unwrap();
             let state = blocks.get_state();
 
@@ -234,7 +235,12 @@ impl<'a> Transaction<'a> {
                 }
             }
         }
-        unapplied
+
+        if unapplied.is_empty() {
+            None
+        } else {
+            Some(unapplied)
+        }
     }
 
     fn delete(&mut self, ptr: &BlockPtr) {
@@ -250,7 +256,7 @@ impl<'a> Transaction<'a> {
             item.deleted = true;
             self.delete_set.insert(item.id.clone(), item.len());
             // addChangedTypeToTransaction(transaction, item.type, item.parentSub)
-            if item.id.clock < self.timestamp.get_state(&item.id.client) {
+            if item.id.clock < self.timestamp.get(&item.id.client) {
                 let set = self.changed.entry(item.parent.clone()).or_default();
                 set.insert(item.parent_sub.clone());
             }
@@ -263,6 +269,55 @@ impl<'a> Transaction<'a> {
                     todo!()
                 }
                 _ => {} // do nothing
+            }
+        }
+    }
+
+    pub fn apply_update(&mut self, update: Update, ds: DeleteSet) {
+        let remaining = update.integrate(&mut self.store);
+
+        let mut retry = false;
+        if let Some(mut pending) = self.store.pending.take() {
+            // check if we can apply something
+            for (client, &clock) in pending.missing.iter() {
+                if clock < self.store.blocks.get_state(client) {
+                    retry = true;
+                    break;
+                }
+            }
+
+            if let Some(remaining) = remaining {
+                // merge restStructs into store.pending
+                for (&client, &clock) in remaining.missing.iter() {
+                    pending.missing.set_min(client, clock);
+                }
+                pending.update.merge(remaining.update);
+                self.store.pending = Some(pending);
+            }
+        } else {
+            self.store.pending = remaining;
+        }
+
+        let mut ds = self.apply_delete(&ds);
+        if let Some(mut pending) = self.store.pending_ds.take() {
+            let ds2 = self.apply_delete(&pending);
+            let ds = match (ds, ds2) {
+                (Some(mut a), Some(b)) => {
+                    a.merge(b);
+                    Some(a)
+                }
+                (Some(x), _) | (_, Some(x)) => Some(x),
+                _ => None,
+            };
+            self.store.pending_ds = ds;
+        } else {
+            self.store.pending_ds = ds;
+        }
+
+        if retry {
+            if let Some(pending) = self.store.pending.take() {
+                let ds = self.store.pending_ds.take().unwrap_or_default();
+                self.apply_update(pending.update, ds);
             }
         }
     }

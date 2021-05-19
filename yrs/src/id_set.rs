@@ -237,6 +237,10 @@ impl IdSet {
         }
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty() || self.0.values().all(|r| r.is_empty())
+    }
+
     /// Compacts an internal ranges representation.
     pub fn compact(&mut self) {
         for block in self.0.values_mut() {
@@ -258,6 +262,43 @@ impl IdSet {
 
     pub fn insert_range(&mut self, client: u64, range: IdRange) {
         self.0.insert(client, range);
+    }
+
+    pub fn merge(&mut self, other: Self) {
+        for (client, range) in other.0 {
+            match self.0.entry(client) {
+                Entry::Occupied(mut e) => {
+                    let r = e.get_mut();
+                    match (r, range) {
+                        (IdRange::Continuous(r1), IdRange::Continuous(r2)) => {
+                            if r1.end >= r2.start && r1.start <= r2.start {
+                                r1.end = r2.end;
+                            } else {
+                                let new = IdRange::Fragmented(vec![r1.clone(), r2.clone()]);
+                                e.replace_entry(new);
+                            }
+                        }
+                        (IdRange::Fragmented(rs), IdRange::Continuous(r)) => {
+                            rs.push(r.clone());
+                        }
+                        (IdRange::Continuous(r), IdRange::Fragmented(rs)) => {
+                            let mut v = rs.clone();
+                            v.push(r.clone());
+                            let new = IdRange::Fragmented(v);
+                            e.replace_entry(new);
+                        }
+                        (IdRange::Fragmented(rs1), IdRange::Fragmented(rs2)) => {
+                            rs1.append(&mut rs2.clone());
+                        }
+                    }
+                }
+                Entry::Vacant(e) => {
+                    e.insert(range);
+                }
+            }
+        }
+
+        self.compact()
     }
 }
 
@@ -290,9 +331,19 @@ impl Decode for IdSet {
 
 /// [DeleteSet] contains information about all blocks (described by clock ranges) that have been
 /// subjected to delete process.
-pub(crate) struct DeleteSet(IdSet);
+pub struct DeleteSet(IdSet);
+
+impl Default for DeleteSet {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl DeleteSet {
+    pub fn new() -> Self {
+        DeleteSet(IdSet::new())
+    }
+
     /// Creates a [DeleteSet] by reading all deleted blocks and including their clock ranges into
     /// the delete set itself.
     pub fn from(store: &BlockStore) -> Self {
@@ -314,8 +365,24 @@ impl DeleteSet {
         set
     }
 
+    pub fn insert(&mut self, id: ID, len: u32) {
+        self.0.insert(id, len)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
     pub fn is_deleted(&self, id: &ID) -> bool {
         self.0.contains(id)
+    }
+
+    pub fn iter(&self) -> Iter<'_> {
+        self.0.iter()
+    }
+
+    pub fn merge(&mut self, other: Self) {
+        self.0.merge(other.0)
     }
 }
 
