@@ -92,6 +92,21 @@ impl Block {
         }
     }
 
+    pub fn try_merge(&mut self, other: &Self) -> bool {
+        match (self, other) {
+            (Item(v1), Item(v2)) => v1.try_merge(v2),
+            (GC(v1), GC(v2)) => {
+                v1.merge(v2);
+                true
+            }
+            (Skip(v1), Skip(v2)) => {
+                v1.merge(v2);
+                true
+            }
+            _ => false,
+        }
+    }
+
     pub fn encode<E: Encoder>(&self, store: &Store, encoder: &mut E) {
         match self {
             Block::Item(item) => {
@@ -183,6 +198,13 @@ pub struct Skip {
     pub len: u32,
 }
 
+impl Skip {
+    #[inline]
+    pub fn merge(&mut self, other: &Self) {
+        self.len += other.len;
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub struct GC {
     pub id: ID,
@@ -195,6 +217,11 @@ impl GC {
             self.id.clock += pivot;
             self.len -= pivot;
         }
+    }
+
+    #[inline]
+    pub fn merge(&mut self, other: &Self) {
+        self.len += other.len;
     }
 }
 
@@ -245,6 +272,26 @@ impl Item {
 
         self.right = Some(BlockPtr::from(other.id));
         other
+    }
+
+    pub fn last_id(&self) -> ID {
+        ID::new(self.id.client, self.id.clock + self.len() - 1)
+    }
+
+    /// Tries to merge current [Item] with another, returning true if merge was performed successfully.
+    pub fn try_merge(&mut self, other: &Self) -> bool {
+        if other.origin == Some(self.last_id())
+            && self.right == Some(BlockPtr::from(other.id.clone()))
+            && self.right_origin == other.right_origin
+            && self.id.client == other.id.client
+            && self.id.clock + self.len() == other.id.clock
+            && self.deleted == other.deleted
+            && self.content.try_merge(&other.content)
+        {
+            true
+        } else {
+            false
+        }
     }
 }
 
@@ -364,6 +411,27 @@ impl ItemContent {
                 todo!()
             }
             _ => None,
+        }
+    }
+
+    pub fn try_merge(&mut self, other: &Self) -> bool {
+        match (self, other) {
+            (ItemContent::Any(v1), ItemContent::Any(v2)) => {
+                v1.append(&mut v2.clone());
+                true
+            }
+            (ItemContent::Deleted(v1), ItemContent::Deleted(v2)) => {
+                *v1 = *v1 + *v2;
+                true
+            }
+            (ItemContent::JSON(v1), ItemContent::JSON(v2)) => {
+                todo!()
+            }
+            (ItemContent::String(v1), ItemContent::String(v2)) => {
+                v1.push_str(v2.as_str());
+                true
+            }
+            _ => false,
         }
     }
 }
