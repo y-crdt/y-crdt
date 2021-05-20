@@ -37,7 +37,7 @@ impl Update {
         }
     }
 
-    fn build_work_queue(&self, local_sv: &StateVector) -> Vec<(&u64, usize)> {
+    fn build_work_queue(&self) -> Vec<(u64, usize)> {
         let mut total_len = 0;
         let mut filter: HashMap<u64, BlockFilter, BuildHasherDefault<ClientHasher>> =
             HashMap::with_capacity_and_hasher(self.clients.len(), BuildHasherDefault::default());
@@ -57,7 +57,7 @@ impl Update {
                 // mark block index as visited
                 if bits.set(index) {
                     let mut block = &blocks[index];
-                    work_q.push((&block.id().client, index));
+                    work_q.push((block.id().client, index));
 
                     while let Some(dependency) = block.dependency() {
                         let (bits, blocks) = if dependency.client == *client {
@@ -78,7 +78,7 @@ impl Update {
                             //TODO: check if dependency is in missing set
                             if bits.set(index) {
                                 block = &blocks[index];
-                                work_q.push((&block.id().client, index));
+                                work_q.push((block.id().client, index));
                             } else {
                                 break; // we already visited that block, it's on the work_q
                             }
@@ -94,28 +94,21 @@ impl Update {
     }
 
     pub fn integrate(mut self, store: &mut Store) -> Option<PendingUpdate> {
+        //TODO: check if it's valid to insert the block into current block store
         let state_vector = store.blocks.get_state_vector();
-        let jobs = self.build_work_queue(&state_vector);
+        let mut jobs = self.build_work_queue();
 
-        //let client_len: u32 = decoder.read_uvar();
-        //for _ in 0..client_len {
-        //    let block_len: u32 = decoder.read_uvar();
-        //    let client = decoder.read_client();
-        //    let mut clock = decoder.read_uvar();
-        //    for _ in 0..block_len {
-        //        let mut item = self.decode_item(ID::new(client, clock), decoder);
-        //        item.integrate(store, clock); // todo compute pivot beforehand
-        //                                      // add item to struct list
-        //                                      // @todo try borow of index and generalize in ss
-        //        let client_struct_list = store
-        //            .blocks
-        //            .get_client_blocks_with_capacity_mut(client, block_len as usize);
-        //        client_struct_list.push(Block::Item(item));
-        //
-        //        // struct integration done. Now increase clock
-        //        clock += 1;
-        //    }
-        //}
+        while let Some((client, index)) = jobs.pop() {
+            let blocks = self.clients.get_mut(&client).unwrap();
+            let len = blocks.len();
+            let block = &mut blocks[index];
+
+            block.integrate(store, index as u32);
+            let blocks = store
+                .blocks
+                .get_client_blocks_with_capacity_mut(client, len);
+            blocks.push(unsafe { std::ptr::read(block as *const Block) });
+        }
 
         todo!()
     }
