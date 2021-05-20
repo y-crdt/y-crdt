@@ -290,11 +290,11 @@ impl Item {
 
     /// Tries to merge current [Item] with another, returning true if merge was performed successfully.
     pub fn try_merge(&mut self, other: &Self) -> bool {
-        if other.origin == Some(self.last_id())
+        if self.id.client == other.id.client
+            && self.id.clock + self.len() == other.id.clock
+            && other.origin == Some(self.last_id())
             && self.right == Some(BlockPtr::from(other.id.clone()))
             && self.right_origin == other.right_origin
-            && self.id.client == other.id.client
-            && self.id.clock + self.len() == other.id.clock
             && self.deleted == other.deleted
             && self.content.try_merge(&other.content)
         {

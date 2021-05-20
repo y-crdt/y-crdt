@@ -285,9 +285,65 @@ impl BlockStore {
         blocks.find_block(id.clock)
     }
 
-    /// Given block pointer, tries to split it, returning a (left, right) halves
-    /// of a newly split block. If split was not necessary (eg. because block `ptr`
-    pub fn split_block(&mut self, ptr: &BlockPtr) -> (&Block, Option<&Block>) {
-        todo!()
+    /// Given block pointer, tries to split it, returning a pointers to left and right halves
+    /// of a newly split block.
+    ///
+    /// If split was not necessary (eg. because block `ptr` was not inside of any block),
+    /// the right half returned wll be None.
+    ///
+    /// If no block for given `ptr` was found, then both returned options will be None.
+    pub fn split_block(&mut self, ptr: &BlockPtr) -> (Option<BlockPtr>, Option<BlockPtr>) {
+        let mut pivot = ptr.pivot as usize;
+        if let Some(mut blocks) = self.clients.get_mut(&ptr.id.client) {
+            let mut block: &mut Block = {
+                match blocks.list.get_mut(pivot as usize) {
+                    // check if ptr clock fits into block found by pivot
+                    Some(b) if ptr.id.clock >= b.id().clock && ptr.id.clock < b.clock_end() => b,
+                    _ => {
+                        // search by pivot missed: perform standard lookup to find correct block
+                        if let Some(p) = blocks.find_pivot(ptr.id.clock) {
+                            pivot = p;
+                            &mut blocks.list[pivot]
+                        } else {
+                            return (None, None);
+                        }
+                    }
+                }
+            };
+
+            let left_split_ptr = BlockPtr::new(block.id().clone(), pivot as u32);
+            let right_split_ptr = match block {
+                Block::Item(item) => {
+                    let diff = (item.id.clock + item.len()) as isize - ptr.id.clock as isize;
+                    if diff <= 0 {
+                        None
+                    } else {
+                        let index = pivot + 1;
+                        let diff = diff as u32;
+                        let right_split = item.split(diff);
+                        let right_split_id = right_split.id.clone();
+                        let right_ptr = right_split.right.clone();
+                        if let Some(right_ptr) = right_ptr {
+                            blocks = if right_ptr.id.client == ptr.id.client {
+                                blocks
+                            } else {
+                                self.clients.get_mut(&right_ptr.id.client).unwrap()
+                            };
+                            let right = &mut blocks[right_ptr.pivot as usize];
+                            if let Some(right_item) = right.as_item_mut() {
+                                right_item.left =
+                                    Some(BlockPtr::new(right_split.id.clone(), index as u32));
+                            }
+                        }
+                        blocks.insert(index, Block::Item(right_split));
+                        Some(BlockPtr::new(right_split_id, index as u32))
+                    }
+                }
+                _ => None,
+            };
+            (Some(left_split_ptr), right_split_ptr)
+        } else {
+            (None, None)
+        }
     }
 }
