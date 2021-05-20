@@ -28,30 +28,29 @@ impl Text {
             .unwrap_or_default()
     }
     fn find_list_pos(&self, tr: &Transaction, pos: u32) -> Option<block::ItemPosition> {
-        tr.store.get_type(&self.ptr).and_then(|inner| {
-            if pos == 0 {
-                Some(block::ItemPosition {
-                    parent: inner.ptr.clone(),
-                    after: None,
-                })
-            } else {
-                let mut ptr = inner.start.get();
-                let mut curr_pos = 1;
-                while curr_pos != pos {
-                    if let Some(a) = ptr.as_ref() {
-                        ptr = tr.store.blocks.get_item(a).right;
-                        curr_pos += 1;
-                    } else {
-                        // todo: throw error here
-                        break;
-                    }
+        let inner = tr.store.get_type(&self.ptr)?;
+        if pos == 0 {
+            Some(block::ItemPosition {
+                parent: inner.ptr.clone(),
+                after: None,
+            })
+        } else {
+            let mut ptr = inner.start.get();
+            let mut curr_pos = 1;
+            while curr_pos != pos {
+                if let Some(a) = ptr.as_ref() {
+                    ptr = tr.store.blocks.get_item(a).right;
+                    curr_pos += 1;
+                } else {
+                    // todo: throw error here
+                    break;
                 }
-                Some(block::ItemPosition {
-                    parent: inner.ptr.clone(),
-                    after: ptr,
-                })
             }
-        })
+            Some(block::ItemPosition {
+                parent: inner.ptr.clone(),
+                after: ptr,
+            })
+        }
     }
     pub fn insert(&self, tr: &mut Transaction, pos: u32, content: &str) {
         if let Some(pos) = self.find_list_pos(tr, pos) {

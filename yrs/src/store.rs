@@ -63,6 +63,10 @@ impl Store {
             }
         }
     }
+    pub fn create_type_ptr(&mut self, name: &str) -> types::TypePtr {
+        let id = self.init_type_ref(name);
+        types::TypePtr::NamedRef(id)
+    }
 
     pub fn get_type_ref(&self, string: &str) -> Option<u32> {
         self.type_refs.get(string).map(|r| *r)
