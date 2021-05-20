@@ -37,7 +37,7 @@ impl Update {
         }
     }
 
-    fn build_work_queue(&self, local_sv: &StateVector) -> VecDeque<(&ID, usize)> {
+    fn build_work_queue(&self, local_sv: &StateVector) -> Vec<(&u64, usize)> {
         let mut total_len = 0;
         let mut filter: HashMap<u64, BlockFilter, BuildHasherDefault<ClientHasher>> =
             HashMap::with_capacity_and_hasher(self.clients.len(), BuildHasherDefault::default());
@@ -47,29 +47,55 @@ impl Update {
             filter.insert(*client, BlockFilter::with_capacity(len));
         }
 
+        let mut work_q = Vec::with_capacity(total_len);
+
         for (client, bits) in filter.iter() {
             let blocks = self.clients.get(client).unwrap();
+
+            // iterate over non-visited blocks
             for index in bits.unset() {
-                bits.set(index);
-                match &blocks[index] {
-                    Block::Item(item) => {
-                        if let Some(origin) = item.origin {
-                            //
+                // mark block index as visited
+                if bits.set(index) {
+                    let mut block = &blocks[index];
+                    work_q.push((&block.id().client, index));
+
+                    while let Some(dependency) = block.dependency() {
+                        let (bits, blocks) = if dependency.client == *client {
+                            (bits, blocks)
+                        } else {
+                            if let Some(blocks) = self.clients.get(&dependency.client) {
+                                let bits = filter.get(&dependency.client).unwrap();
+                                (bits, blocks)
+                            } else {
+                                break; // the update doesn't contain client, dependency refers to
+                            }
+                        };
+
+                        let dependency_index = blocks
+                            .binary_search_by(|b| b.id().clock.cmp(&dependency.clock))
+                            .ok();
+                        if let Some(index) = dependency_index {
+                            //TODO: check if dependency is in missing set
+                            if bits.set(index) {
+                                block = &blocks[index];
+                                work_q.push((&block.id().client, index));
+                            } else {
+                                break; // we already visited that block, it's on the work_q
+                            }
+                        } else {
+                            break; // we haven't found the dependency block in a current update
                         }
                     }
-                    Block::GC(gc) => {}
-                    Block::Skip(_) => {}
                 }
             }
         }
-
-        let mut work_q = VecDeque::with_capacity(total_len);
 
         work_q
     }
 
     pub fn integrate(mut self, store: &mut Store) -> Option<PendingUpdate> {
         let state_vector = store.blocks.get_state_vector();
+        let jobs = self.build_work_queue(&state_vector);
 
         //let client_len: u32 = decoder.read_uvar();
         //for _ in 0..client_len {
@@ -222,10 +248,19 @@ impl BlockFilter {
         self.0.borrow()[position] & mask == mask
     }
 
-    fn set(&self, index: usize) {
+    /// Marks block as visited. This is used when we construct a work queue -
+    /// during that process we traverse over the chain of block dependencies
+    /// and add them to the queue. [BlockFilter] is then used to detect potential
+    /// duplicates.
+    ///
+    /// Returns true if value under index was false prior the call.
+    /// Returns false, if value was already set before.
+    fn set(&self, index: usize) -> bool {
         let (position, mask) = Self::parse_index(index);
         let e = &mut self.0.borrow_mut()[position];
+        let result = *e & mask == 0;
         *e = (*e) | mask;
+        result
     }
 
     /// Iterates over unset bits back to front, returning their indexes.
