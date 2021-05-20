@@ -351,10 +351,11 @@ mod test {
     use crate::types::TypePtr;
     use crate::update::Update;
     use crate::updates::decoder::{Decode, DecoderV1};
-    use crate::ID;
+    use crate::updates::encoder::{Encoder, EncoderV1};
+    use crate::{Doc, ID};
 
     #[test]
-    fn block_store_from_basic() {
+    fn update_decode() {
         /* Generated with:
 
            ```js
@@ -390,5 +391,39 @@ mod test {
             deleted: false,
         }));
         assert_eq!(block, &expected);
+    }
+
+    #[test]
+    fn integrate() {
+        // create new document at A and add some initial text to it
+        let mut d1 = Doc::new();
+        let mut t1 = d1.transact();
+        let txt = t1.get_text("test");
+        txt.insert(&mut t1, 0, "hello");
+        txt.insert(&mut t1, 5, " ");
+        txt.insert(&mut t1, 6, "world");
+
+        assert_eq!(txt.to_string(&t1), "hello world".to_string());
+
+        // create document at B
+        let d2 = Doc::new();
+        let mut t2 = d1.transact();
+        let sv = d2.get_state_vector(&mut t2);
+
+        // create an update A->B based on B's state vector
+        let mut encoder = EncoderV1::new();
+        t1.store.encode_diff(&sv, &mut encoder);
+        let binary = encoder.to_vec();
+
+        // decode an update incoming from A and integrate it at B
+        let mut decoder = DecoderV1::from(binary.as_slice());
+        let update = Update::decode(&mut decoder);
+        let pending = update.integrate(&mut t2.store);
+
+        assert!(pending.is_none());
+
+        // check if B sees the same thing that A does
+        let txt = t2.get_text("test");
+        assert_eq!(txt.to_string(&t2), "hello world".to_string());
     }
 }

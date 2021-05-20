@@ -4,7 +4,7 @@ use crate::block::{Block, BlockPtr, ItemContent, ID};
 use crate::block_store::StateVector;
 use crate::id_set::{DeleteSet, IdSet};
 use crate::store::Store;
-use crate::types::{TypePtr, XorHasher};
+use crate::types::{Text, TypePtr, XorHasher};
 use crate::update::Update;
 use std::cell::RefMut;
 use std::collections::{HashMap, HashSet};
@@ -36,6 +36,11 @@ impl<'a> Transaction<'a> {
             delete_set: IdSet::new(),
             changed: HashMap::with_hasher(BuildHasherDefault::default()),
         }
+    }
+
+    pub fn get_text(&mut self, name: &str) -> Text {
+        let ptr = self.store.create_type_ptr(name);
+        Text::from(ptr)
     }
 
     /// Encodes the document state to a binary format.
