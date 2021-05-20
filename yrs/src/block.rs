@@ -1,4 +1,5 @@
 use crate::store::Store;
+use crate::types::TypePtr;
 use crate::updates::decoder::Decoder;
 use crate::updates::encoder::Encoder;
 use crate::*;
@@ -94,12 +95,12 @@ impl Block {
 
     pub fn try_merge(&mut self, other: &Self) -> bool {
         match (self, other) {
-            (Item(v1), Item(v2)) => v1.try_merge(v2),
-            (GC(v1), GC(v2)) => {
+            (Block::Item(v1), Block::Item(v2)) => v1.try_merge(v2),
+            (Block::GC(v1), Block::GC(v2)) => {
                 v1.merge(v2);
                 true
             }
-            (Skip(v1), Skip(v2)) => {
+            (Block::Skip(v1), Block::Skip(v2)) => {
                 v1.merge(v2);
                 true
             }
@@ -169,6 +170,15 @@ impl Block {
             Block::Item(item) => item.id.clock + item.content.len(),
             Block::Skip(skip) => skip.id.clock + skip.len,
             Block::GC(gc) => gc.id.clock + gc.len,
+        }
+    }
+
+    /// Returns an ID of a block, current item depends upon
+    /// (meaning: dependency must appear in the store before current item).
+    pub fn dependency(&self) -> Option<&ID> {
+        match self {
+            Block::Item(item) => item.dependency(),
+            _ => None,
         }
     }
 }
@@ -292,6 +302,18 @@ impl Item {
         } else {
             false
         }
+    }
+
+    /// Returns an ID of a block, current item depends upon
+    /// (meaning: dependency must appear in the store before current item).
+    pub fn dependency(&self) -> Option<&ID> {
+        self.origin
+            .as_ref()
+            .or_else(|| self.right_origin.as_ref())
+            .or_else(|| match &self.parent {
+                TypePtr::Id(ptr) => Some(&ptr.id),
+                _ => None,
+            })
     }
 }
 
