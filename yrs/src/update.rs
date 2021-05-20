@@ -25,16 +25,69 @@ impl Update {
     }
 
     pub fn merge(&mut self, other: Self) {
-        for (client, blocks) in other.clients {
+        for (client, other_blocks) in other.clients {
             match self.clients.entry(client) {
                 Entry::Occupied(e) => {
-                    todo!()
+                    let mut blocks = e.into_mut();
+
+                    let mut i2 = other_blocks.into_iter();
+                    let mut n2 = i2.next();
+
+                    let mut i1 = 0;
+
+                    while i1 < blocks.len() {
+                        let a = &mut blocks[i1];
+                        if let Some(b) = n2.as_ref() {
+                            if a.try_merge(b) {
+                                n2 = i2.next();
+                                continue;
+                            } else if let Block::Item(a) = a {
+                                // we only can split Block::Item
+                                let diff = (a.id.clock + a.len()) as isize - b.id().clock as isize;
+                                if diff > 0 {
+                                    // `b`'s clock position is inside of `a` -> we need to split `a`
+                                    self.split_item(client, i1, diff as u32);
+                                    blocks = self.clients.get_mut(&client).unwrap();
+                                }
+                            }
+                            i1 += 1;
+                            n2 = i2.next();
+                        } else {
+                            break;
+                        }
+                    }
+
+                    while let Some(b) = n2 {
+                        blocks.push(b);
+                        n2 = i2.next();
+                    }
                 }
                 Entry::Vacant(e) => {
-                    e.insert(blocks);
+                    e.insert(other_blocks);
                 }
             }
         }
+    }
+
+    fn split_item(&mut self, client: u64, mut index: usize, diff: u32) {
+        let mut blocks = self.clients.get_mut(&client).unwrap();
+        if let Block::Item(item) = &mut blocks[index] {
+            index += 1;
+            let right_split = item.split(diff);
+            let right_ptr = right_split.right.clone();
+            if let Some(right_ptr) = right_ptr {
+                blocks = if right_ptr.id.client == client {
+                    blocks
+                } else {
+                    self.clients.get_mut(&right_ptr.id.client).unwrap()
+                };
+                let right = &mut blocks[right_ptr.pivot as usize];
+                if let Some(right_item) = right.as_item_mut() {
+                    right_item.left = Some(BlockPtr::new(right_split.id.clone(), index as u32));
+                }
+            }
+            blocks.insert(index, Block::Item(right_split));
+        };
     }
 
     fn build_work_queue(&self) -> Vec<(u64, usize)> {
