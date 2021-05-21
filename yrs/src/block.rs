@@ -284,8 +284,11 @@ impl Item {
                 //}
                 todo!()
             } else {
-                // o = /** @type {AbstractType<any>} */ (this.parent)._start
-                todo!()
+                if let Some(parent) = txn.store.get_type(&self.parent) {
+                    parent.start.get()
+                } else {
+                    self.right.clone()
+                }
             };
 
             let mut left = self.left.clone();
