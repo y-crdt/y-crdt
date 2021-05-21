@@ -43,7 +43,7 @@ impl Text {
                     curr_pos += 1;
                 } else {
                     // todo: throw error here
-                    break;
+                    panic!("Couldn't find block for given pointer {:?}", ptr);
                 }
             }
             Some(block::ItemPosition {

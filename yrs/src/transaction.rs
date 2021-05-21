@@ -355,7 +355,7 @@ impl<'a> Transaction<'a> {
             deleted: false,
             parent_sub: None,
         };
-        item.integrate(self, pivot as u32);
+        item.integrate(self, pivot, 0);
         let local_block_list = self.store.blocks.get_client_blocks_mut(client_id);
         local_block_list.push(block::Block::Item(item));
     }
