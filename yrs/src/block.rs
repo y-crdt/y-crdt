@@ -54,7 +54,7 @@ impl BlockPtr {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Block {
     Item(Item),
     Skip(Skip),
@@ -199,7 +199,7 @@ pub struct ItemPosition {
     pub after: Option<BlockPtr>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Item {
     pub id: ID,
     pub left: Option<BlockPtr>,
@@ -212,7 +212,7 @@ pub struct Item {
     pub deleted: bool,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Skip {
     pub id: ID,
     pub len: u32,
@@ -225,7 +225,7 @@ impl Skip {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GC {
     pub id: ID,
     pub len: u32,
@@ -470,7 +470,7 @@ impl Item {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ItemContent {
     Any(Vec<Any>),
     Binary(Vec<u8>),

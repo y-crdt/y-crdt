@@ -49,7 +49,7 @@ pub const TYPE_REFS_XML_FRAGMENT: TypeRefs = 4;
 pub const TYPE_REFS_XML_HOOK: TypeRefs = 5;
 pub const TYPE_REFS_XML_TEXT: TypeRefs = 6;
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Inner {
     pub start: Cell<Option<block::BlockPtr>>,
     pub ptr: TypePtr,
