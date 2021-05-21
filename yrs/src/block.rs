@@ -4,6 +4,7 @@ use crate::updates::decoder::Decoder;
 use crate::updates::encoder::Encoder;
 use crate::*;
 use lib0::any::Any;
+use std::collections::{BTreeSet, HashSet};
 use std::panic;
 
 pub const BLOCK_GC_REF_NUMBER: u8 = 0;
@@ -83,10 +84,10 @@ impl Block {
         }
     }
 
-    pub fn integrate(&mut self, store: &mut Store, pivot: u32) {
+    pub fn integrate(&mut self, txn: &mut Transaction<'_>, pivot: u32) {
         match self {
-            Block::Item(item) => item.integrate(store, pivot),
-            Block::GC(gc) => gc.integrate(store, pivot),
+            Block::Item(item) => item.integrate(txn, pivot),
+            Block::GC(gc) => gc.integrate(pivot),
             Block::Skip(_) => {
                 panic!("Block::Skip cannot be integrated")
             }
@@ -222,7 +223,7 @@ pub struct GC {
 }
 
 impl GC {
-    pub fn integrate(&mut self, store: &mut Store, pivot: u32) {
+    pub fn integrate(&mut self, pivot: u32) {
         if pivot > 0 {
             self.id.clock += pivot;
             self.len -= pivot;
@@ -236,28 +237,139 @@ impl GC {
 }
 
 impl Item {
-    pub fn integrate(&mut self, store: &mut Store, pivot: u32) {
+    pub fn integrate(&mut self, txn: &mut Transaction<'_>, pivot: u32) {
         if pivot > 0 {
             self.id.clock += pivot;
-            todo!()
+            let (left, _) = txn
+                .store
+                .blocks
+                .split_block(&BlockPtr::from(ID::new(self.id.client, self.id.clock - 1)));
+            if let Some(left) = left {
+                let origin = txn.store.blocks.get_item(&left).last_id();
+                self.origin = Some(origin);
+                self.left = Some(left);
+            } else {
+                self.left = None;
+                self.origin = None;
+            }
+            self.content.splice(pivot as usize);
         }
 
-        let blocks = &mut store.blocks;
-        // No conflict resolution yet..
-        // We only implement the reconnection part:
+        // resolve conflicts
+        let left = self.left.map(|ptr| txn.store.blocks.get_block(&ptr));
+        let right = self.right.map(|ptr| txn.store.blocks.get_block(&ptr));
+        let right_is_null_or_has_left = right
+            .map(|item| match item {
+                Block::Item(item) => item.left.is_some(),
+                _ => false,
+            })
+            .unwrap_or(true);
+        let left_has_other_right_than_self = if let Some(left) = left {
+            match left {
+                Block::Item(item) => item.right.map(|ptr| ptr.id) != Some(self.id),
+                _ => true,
+            }
+        } else {
+            false
+        };
+
+        if (left.is_none() && right_is_null_or_has_left) || left_has_other_right_than_self {
+            // set the first conflicting item
+            let mut o = if let Some(Block::Item(left)) = left {
+                left.right
+            } else if let Some(sub) = &self.parent_sub {
+                //o = /** @type {AbstractType<any>} */ (this.parent)._map.get(this.parentSub) || null
+                //while (o !== null && o.left !== null) {
+                //    o = o.left
+                //}
+                todo!()
+            } else {
+                // o = /** @type {AbstractType<any>} */ (this.parent)._start
+                todo!()
+            };
+
+            let mut left = self.left.clone();
+            let mut conflicting_items = HashSet::new();
+            let mut items_before_origin = HashSet::new();
+
+            // Let c in conflicting_items, b in items_before_origin
+            // ***{origin}bbbb{this}{c,b}{c,b}{o}***
+            // Note that conflicting_items is a subset of items_before_origin
+            while let Some(ptr) = o {
+                if Some(ptr) == self.right {
+                    break;
+                }
+
+                items_before_origin.insert(ptr.id.clone());
+                conflicting_items.insert(ptr.id.clone());
+                if let Some(item) = txn.store.blocks.get_block(&ptr).as_item() {
+                    if self.origin == item.origin {
+                        // case 1
+                        if ptr.id.client < self.id.client {
+                            left = Some(ptr.clone());
+                            conflicting_items.clear();
+                        } else if self.right_origin == item.right_origin {
+                            // `self` and `item` are conflicting and point to the same integration
+                            // points. The id decides which item comes first. Since `self` is to
+                            // the left of `item`, we can break here.
+                            break;
+                        }
+                    } else {
+                        if let Some(item_origin) = item.origin {
+                            if items_before_origin.contains(&item_origin) {
+                                if !conflicting_items.contains(&item_origin) {
+                                    left = Some(ptr.clone());
+                                    conflicting_items.clear();
+                                }
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                    o = item.right;
+                }
+                self.left = left;
+            }
+        }
+
+        // reconnect left/right
         if let Some(right_id) = self.right {
-            let right = blocks.get_item_mut(&right_id);
+            let right = txn.store.blocks.get_item_mut(&right_id);
             right.left = Some(BlockPtr { pivot, id: self.id });
         }
         match self.left {
             Some(left_id) => {
-                let left = blocks.get_item_mut(&left_id);
+                let left = txn.store.blocks.get_item_mut(&left_id);
                 left.right = Some(BlockPtr { pivot, id: self.id });
             }
             None => {
-                let parent_type = store.init_type_from_ptr(&self.parent).unwrap();
+                let parent_type = txn.store.init_type_from_ptr(&self.parent).unwrap();
                 parent_type.start.set(Some(BlockPtr { pivot, id: self.id }));
             }
+        }
+
+        self.integrate_content(txn);
+        // addChangedTypeToTransaction(transaction, /** @type {AbstractType<any>} */ (this.parent), this.parentSub)
+        let parent_deleted = txn
+            .store
+            .blocks
+            .get_item_from_type_ptr(&self.parent)
+            .map(|item| item.deleted)
+            .unwrap_or(false);
+        if parent_deleted || (self.parent_sub.is_some() && self.right.is_some()) {
+            // delete if parent is deleted or if this is not the current attribute value of parent
+            self.delete(txn);
+        }
+    }
+
+    pub fn delete(&mut self, txn: &mut Transaction<'_>) {
+        if !self.deleted {
+            self.deleted = true;
+            self.content.delete(txn);
+            //addToDeleteSet(transaction.deleteSet, this.id.client, this.id.clock, this.length)
+            //addChangedTypeToTransaction(transaction, parent, this.parentSub)
+            //this.content.delete(transaction)
+            todo!()
         }
     }
 
@@ -315,6 +427,35 @@ impl Item {
                 _ => None,
             })
     }
+    fn integrate_content(&mut self, txn: &mut Transaction<'_>) {
+        match &mut self.content {
+            ItemContent::Deleted(_) => {
+                //addToDeleteSet(transaction.deleteSet, item.id.client, item.id.clock, this.len)
+                //item.markDeleted()
+                todo!()
+            }
+            ItemContent::Doc(_, _) => {
+                //// this needs to be reflected in doc.destroy as well
+                //this.doc._item = item
+                //transaction.subdocsAdded.add(this.doc)
+                //if (this.doc.shouldLoad) {
+                //    transaction.subdocsLoaded.add(this.doc)
+                //}
+                todo!()
+            }
+            ItemContent::Format(_, _) => {
+                // @todo searchmarker are currently unsupported for rich text documents
+                // /** @type {AbstractType<any>} */ (item.parent)._searchMarker = null
+            }
+            ItemContent::Type(_) => {
+                // this.type._integrate(transaction.doc, item)
+                todo!()
+            }
+            _ => {
+                // other types don't define integration-specific actions
+            }
+        }
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -342,6 +483,47 @@ impl ItemContent {
             ItemContent::Format(_, _) => BLOCK_ITEM_FORMAT_REF_NUMBER,
             ItemContent::String(_) => BLOCK_ITEM_STRING_REF_NUMBER,
             ItemContent::Type(_) => BLOCK_ITEM_TYPE_REF_NUMBER,
+        }
+    }
+
+    fn delete(&mut self, txn: &mut Transaction<'_>) {
+        match self {
+            ItemContent::Doc(_, _) => {
+                //if (transaction.subdocsAdded.has(this.doc)) {
+                //    transaction.subdocsAdded.delete(this.doc)
+                //} else {
+                //    transaction.subdocsRemoved.add(this.doc)
+                //}
+                todo!()
+            }
+            ItemContent::Type(_) => {
+                //let item = this.type._start
+                //while (item !== null) {
+                //    if (!item.deleted) {
+                //        item.delete(transaction)
+                //    } else {
+                //        // Whis will be gc'd later and we want to merge it if possible
+                //        // We try to merge all deleted items after each transaction,
+                //        // but we have no knowledge about that this needs to be merged
+                //        // since it is not in transaction.ds. Hence we add it to transaction._mergeStructs
+                //        transaction._mergeStructs.push(item)
+                //    }
+                //    item = item.right
+                //}
+                //this.type._map.forEach(item => {
+                //    if (!item.deleted) {
+                //        item.delete(transaction)
+                //    } else {
+                //        // same as above
+                //        transaction._mergeStructs.push(item)
+                //    }
+                //})
+                //transaction.changed.delete(this.type)
+                todo!()
+            }
+            _ => {
+                // nothing to do for other content types
+            }
         }
     }
 

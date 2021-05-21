@@ -8,7 +8,7 @@ use crate::{block, types, ID};
 use std::collections::HashMap;
 
 pub struct Store {
-    client_id: u64,
+    pub client_id: u64,
     type_refs: HashMap<String, u32>,
     types: Vec<(types::Inner, String)>,
     pub blocks: BlockStore,
@@ -80,36 +80,6 @@ impl Store {
             types.push((inner, string.to_owned()));
             name_ref
         })
-    }
-    pub fn create_item(&mut self, pos: &block::ItemPosition, content: block::ItemContent) {
-        let parent = self.get_type(&pos.parent).unwrap();
-        let left = pos.after;
-        let right = match pos.after.as_ref() {
-            Some(left_id) => self.blocks.get_item(left_id).right,
-            None => parent.start.get(),
-        };
-        let id = block::ID {
-            client: self.client_id,
-            clock: self.get_local_state(),
-        };
-        let pivot = self
-            .blocks
-            .get_client_blocks_mut(self.client_id)
-            .integrated_len() as u32;
-        let mut item = block::Item {
-            id,
-            content,
-            left,
-            right,
-            origin: pos.after.as_ref().map(|l| l.id),
-            right_origin: right.map(|r| r.id),
-            parent: pos.parent.clone(),
-            deleted: false,
-            parent_sub: None,
-        };
-        item.integrate(self, pivot as u32);
-        let local_block_list = self.blocks.get_client_blocks_mut(self.client_id);
-        local_block_list.push(block::Block::Item(item));
     }
 
     pub fn get_type_name(&self, type_name_ref: u32) -> &str {

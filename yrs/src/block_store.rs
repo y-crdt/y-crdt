@@ -1,4 +1,5 @@
-use crate::block::{Block, BlockPtr, ID};
+use crate::block::{Block, BlockPtr, Item, ID};
+use crate::types::TypePtr;
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::client_hasher::ClientHasher;
@@ -283,6 +284,16 @@ impl BlockStore {
     pub fn find(&self, id: &ID) -> Option<&Block> {
         let blocks = self.clients.get(&id.client)?;
         blocks.find_block(id.clock)
+    }
+
+    pub fn get_item_from_type_ptr(&self, ptr: &TypePtr) -> Option<&Item> {
+        if let TypePtr::Id(ptr) = ptr {
+            if let Block::Item(item) = &self.get_block(ptr) {
+                return Some(item);
+            }
+        }
+
+        None
     }
 
     /// Given block pointer, tries to split it, returning a pointers to left and right halves
