@@ -135,12 +135,12 @@ impl Store {
         for (client, &remote_clock) in remote_sv.iter() {
             let local_clock = local_sv.get(client);
             if local_clock > remote_clock {
-                diff.push((*client, local_clock));
+                diff.push((*client, remote_clock));
             }
         }
-        for (client, &local_clock) in local_sv.iter() {
+        for (client, _) in local_sv.iter() {
             if remote_sv.get(client) == 0 {
-                diff.push((*client, local_clock));
+                diff.push((*client, 0));
             }
         }
         diff
