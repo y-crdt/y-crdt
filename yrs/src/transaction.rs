@@ -279,7 +279,7 @@ impl<'a> Transaction<'a> {
     }
 
     pub fn apply_update(&mut self, update: Update, ds: DeleteSet) {
-        let remaining = update.integrate(&mut self.store);
+        let remaining = update.integrate(self);
 
         let mut retry = false;
         if let Some(mut pending) = self.store.pending.take() {
@@ -325,5 +325,38 @@ impl<'a> Transaction<'a> {
                 self.apply_update(pending.update, ds);
             }
         }
+    }
+
+    pub fn create_item(&mut self, pos: &block::ItemPosition, content: block::ItemContent) {
+        let parent = self.store.get_type(&pos.parent).unwrap();
+        let left = pos.after;
+        let right = match pos.after.as_ref() {
+            Some(left_id) => self.store.blocks.get_item(left_id).right,
+            None => parent.start.get(),
+        };
+        let client_id = self.store.client_id;
+        let id = block::ID {
+            client: client_id,
+            clock: self.store.get_local_state(),
+        };
+        let pivot = self
+            .store
+            .blocks
+            .get_client_blocks_mut(client_id)
+            .integrated_len() as u32;
+        let mut item = block::Item {
+            id,
+            content,
+            left,
+            right,
+            origin: pos.after.as_ref().map(|l| l.id),
+            right_origin: right.map(|r| r.id),
+            parent: pos.parent.clone(),
+            deleted: false,
+            parent_sub: None,
+        };
+        item.integrate(self, pivot as u32);
+        let local_block_list = self.store.blocks.get_client_blocks_mut(client_id);
+        local_block_list.push(block::Block::Item(item));
     }
 }

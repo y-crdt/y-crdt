@@ -7,7 +7,7 @@ use crate::store::Store;
 use crate::types::TypePtr;
 use crate::updates::decoder::{Decode, Decoder};
 use crate::utils::client_hasher::ClientHasher;
-use crate::{StateVector, ID};
+use crate::{StateVector, Transaction, ID};
 use std::cell::RefCell;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, VecDeque};
@@ -146,9 +146,9 @@ impl Update {
         work_q
     }
 
-    pub fn integrate(mut self, store: &mut Store) -> Option<PendingUpdate> {
+    pub fn integrate(mut self, txn: &mut Transaction<'_>) -> Option<PendingUpdate> {
         //TODO: check if it's valid to insert the block into current block store
-        let state_vector = store.blocks.get_state_vector();
+        let state_vector = txn.store.blocks.get_state_vector();
         let mut jobs = self.build_work_queue();
 
         while let Some((client, index)) = jobs.pop() {
@@ -156,8 +156,9 @@ impl Update {
             let len = blocks.len();
             let block = &mut blocks[index];
 
-            block.integrate(store, index as u32);
-            let blocks = store
+            block.integrate(txn, index as u32);
+            let blocks = txn
+                .store
                 .blocks
                 .get_client_blocks_with_capacity_mut(client, len);
             blocks.push(unsafe { std::ptr::read(block as *const Block) });
@@ -416,9 +417,8 @@ mod test {
         let binary = encoder.to_vec();
 
         // decode an update incoming from A and integrate it at B
-        let mut decoder = DecoderV1::from(binary.as_slice());
-        let update = Update::decode(&mut decoder);
-        let pending = update.integrate(&mut t2.store);
+        let update = Update::decode_v1(binary.as_slice());
+        let pending = update.integrate(&mut t2);
 
         assert!(pending.is_none());
 

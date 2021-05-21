@@ -5,6 +5,7 @@ use crate::*;
 pub use map::Map;
 pub use text::Text;
 
+use crate::block::{Block, Item};
 use std::cell::Cell;
 use std::hash::Hasher;
 
