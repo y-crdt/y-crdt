@@ -84,10 +84,10 @@ impl Block {
         }
     }
 
-    pub fn integrate(&mut self, txn: &mut Transaction<'_>, pivot: u32) {
+    pub fn integrate(&mut self, txn: &mut Transaction<'_>, pivot: u32, offset: u32) {
         match self {
-            Block::Item(item) => item.integrate(txn, pivot),
-            Block::GC(gc) => gc.integrate(pivot),
+            Block::Item(item) => item.integrate(txn, pivot, offset),
+            Block::GC(gc) => gc.integrate(offset),
             Block::Skip(_) => {
                 panic!("Block::Skip cannot be integrated")
             }
@@ -237,9 +237,9 @@ impl GC {
 }
 
 impl Item {
-    pub fn integrate(&mut self, txn: &mut Transaction<'_>, pivot: u32) {
-        if pivot > 0 {
-            self.id.clock += pivot;
+    pub fn integrate(&mut self, txn: &mut Transaction<'_>, pivot: u32, offset: u32) {
+        if offset > 0 {
+            self.id.clock += offset;
             let (left, _) = txn
                 .store
                 .blocks
@@ -252,7 +252,7 @@ impl Item {
                 self.left = None;
                 self.origin = None;
             }
-            self.content.splice(pivot as usize);
+            self.content.splice(offset as usize);
         }
 
         // resolve conflicts

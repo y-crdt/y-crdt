@@ -148,7 +148,7 @@ impl Update {
 
     pub fn integrate(mut self, txn: &mut Transaction<'_>) -> Option<PendingUpdate> {
         //TODO: check if it's valid to insert the block into current block store
-        let state_vector = txn.store.blocks.get_state_vector();
+        let mut local_sv = txn.store.blocks.get_state_vector();
         let mut jobs = self.build_work_queue();
 
         while let Some((client, index)) = jobs.pop() {
@@ -156,12 +156,23 @@ impl Update {
             let len = blocks.len();
             let block = &mut blocks[index];
 
-            block.integrate(txn, index as u32);
-            let blocks = txn
-                .store
-                .blocks
-                .get_client_blocks_with_capacity_mut(client, len);
-            blocks.push(unsafe { std::ptr::read(block as *const Block) });
+            let offset = local_sv.get(&client) as isize - block.id().clock as isize;
+            if offset < 0 {
+                // we're missing the update from the same client
+                todo!()
+            } else {
+                let blocks = txn
+                    .store
+                    .blocks
+                    .get_client_blocks_with_capacity_mut(client, len);
+                let pivot = blocks.integrated_len() as u32;
+                block.integrate(txn, pivot, offset as u32);
+                let blocks = txn
+                    .store
+                    .blocks
+                    .get_client_blocks_with_capacity_mut(client, len);
+                blocks.push(unsafe { std::ptr::read(block as *const Block) });
+            }
         }
 
         todo!()
@@ -400,15 +411,17 @@ mod test {
         let mut d1 = Doc::new();
         let mut t1 = d1.transact();
         let txt = t1.get_text("test");
+        // Question: why YText.insert uses positions of blocks instead of actual cursor positions
+        // in text as seen by user?
         txt.insert(&mut t1, 0, "hello");
-        txt.insert(&mut t1, 5, " ");
-        txt.insert(&mut t1, 6, "world");
+        txt.insert(&mut t1, 1, " ");
+        txt.insert(&mut t1, 2, "world");
 
         assert_eq!(txt.to_string(&t1), "hello world".to_string());
 
         // create document at B
         let d2 = Doc::new();
-        let mut t2 = d1.transact();
+        let mut t2 = d2.transact();
         let sv = d2.get_state_vector(&mut t2);
 
         // create an update A->B based on B's state vector
