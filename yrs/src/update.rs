@@ -363,8 +363,8 @@ mod test {
     use crate::types::TypePtr;
     use crate::update::Update;
     use crate::updates::decoder::{Decode, DecoderV1};
-    use crate::updates::encoder::{Encoder, EncoderV1};
-    use crate::{Doc, ID};
+    use crate::updates::encoder::{Encode, Encoder, EncoderV1};
+    use crate::{Doc, StateVector, ID};
 
     #[test]
     fn update_decode() {
@@ -422,11 +422,12 @@ mod test {
         // create document at B
         let d2 = Doc::new();
         let mut t2 = d2.transact();
-        let sv = d2.get_state_vector(&mut t2);
+        let sv = d2.get_state_vector(&mut t2).encode_v1();
 
         // create an update A->B based on B's state vector
         let mut encoder = EncoderV1::new();
-        t1.store.encode_diff(&sv, &mut encoder);
+        t1.store
+            .encode_diff(&StateVector::decode_v1(sv.as_slice()), &mut encoder);
         let binary = encoder.to_vec();
 
         // decode an update incoming from A and integrate it at B

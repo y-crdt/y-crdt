@@ -113,7 +113,10 @@ impl Block {
         match self {
             Block::Item(item) => {
                 let info = if item.origin.is_some() { HAS_ORIGIN } else { 0 } // is left null
-                    | if item.right_origin.is_some() { HAS_RIGHT_ORIGIN } else { 0 }; // is right null
+                    | if item.right_origin.is_some() { HAS_RIGHT_ORIGIN } else { 0 } // is right null
+                    | if item.parent_sub.is_some() { HAS_PARENT_SUB } else { 0 }
+                    | item.content.get_ref_number();
+                let cant_copy_parent_info = info & (HAS_ORIGIN | HAS_RIGHT_ORIGIN) == 0;
                 encoder.write_info(info);
                 if let Some(origin_id) = item.origin.as_ref() {
                     encoder.write_left_id(origin_id);
@@ -121,7 +124,7 @@ impl Block {
                 if let Some(right_origin_id) = item.right_origin.as_ref() {
                     encoder.write_right_id(right_origin_id);
                 }
-                if item.origin.is_none() && item.right_origin.is_none() {
+                if cant_copy_parent_info {
                     match &item.parent {
                         types::TypePtr::NamedRef(type_name_ref) => {
                             let type_name = store.get_type_name(*type_name_ref);
@@ -138,6 +141,12 @@ impl Block {
                         }
                     }
                 }
+                if cant_copy_parent_info {
+                    if let Some(parent_sub) = item.parent_sub.as_ref() {
+                        encoder.write_string(parent_sub.as_str());
+                    }
+                }
+                item.content.encode(encoder);
             }
             Block::Skip(skip) => {
                 encoder.write_info(BLOCK_SKIP_REF_NUMBER);
@@ -538,6 +547,38 @@ impl ItemContent {
                 str.len() as u32
             }
             _ => 1,
+        }
+    }
+
+    pub fn encode<E: Encoder>(&self, encoder: &mut E) {
+        match self {
+            ItemContent::Deleted(len) => encoder.write_len(*len),
+            ItemContent::JSON(s) => encoder.write_string(s.as_str()),
+            ItemContent::Binary(buf) => encoder.write_buf(buf),
+            ItemContent::String(s) => encoder.write_string(s.as_str()),
+            ItemContent::Embed(s) => encoder.write_string(s.as_str()),
+            ItemContent::Format(k, v) => {
+                encoder.write_string(k.as_str());
+                encoder.write_string(v.as_str());
+            }
+            ItemContent::Type(inner) => {
+                encoder.write_type_ref(inner.type_ref);
+                if inner.type_ref == types::TYPE_REFS_XML_ELEMENT
+                    || inner.type_ref == types::TYPE_REFS_XML_HOOK
+                {
+                    encoder.write_key(inner.name.as_ref().unwrap().as_str())
+                }
+            }
+            ItemContent::Any(any) => {
+                encoder.write_len(any.len() as u32);
+                for a in any.iter() {
+                    encoder.write_any(a);
+                }
+            }
+            ItemContent::Doc(key, any) => {
+                encoder.write_string(key.as_str());
+                encoder.write_any(any);
+            }
         }
     }
 
