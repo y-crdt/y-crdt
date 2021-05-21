@@ -13,6 +13,7 @@ use std::collections::hash_map::Entry;
 use std::collections::{HashMap, VecDeque};
 use std::hash::BuildHasherDefault;
 
+#[derive(Debug)]
 pub struct Update {
     clients: HashMap<u64, Vec<Block>, BuildHasherDefault<ClientHasher>>,
 }
@@ -90,7 +91,7 @@ impl Update {
         };
     }
 
-    fn build_work_queue(&self) -> Vec<(u64, usize)> {
+    fn build_work_queue(&self, local_sv: &StateVector) -> Vec<(u64, usize)> {
         let mut total_len = 0;
         let mut filter: HashMap<u64, BlockFilter, BuildHasherDefault<ClientHasher>> =
             HashMap::with_capacity_and_hasher(self.clients.len(), BuildHasherDefault::default());
@@ -106,7 +107,7 @@ impl Update {
             let blocks = self.clients.get(client).unwrap();
 
             // iterate over non-visited blocks
-            for index in bits.unset() {
+            for index in bits.iter_unset() {
                 // mark block index as visited
                 if bits.set(index) {
                     let mut block = &blocks[index];
@@ -149,17 +150,24 @@ impl Update {
     pub fn integrate(mut self, txn: &mut Transaction<'_>) -> Option<PendingUpdate> {
         //TODO: check if it's valid to insert the block into current block store
         let mut local_sv = txn.store.blocks.get_state_vector();
-        let mut jobs = self.build_work_queue();
+        let mut jobs = self.build_work_queue(&local_sv);
+
+        println!("Jobs: {:?}", &jobs);
+        let mut missing = HashMap::default();
+        let mut missing_sv = StateVector::empty();
 
         while let Some((client, index)) = jobs.pop() {
             let blocks = self.clients.get_mut(&client).unwrap();
             let len = blocks.len();
             let block = &mut blocks[index];
 
-            let offset = local_sv.get(&client) as isize - block.id().clock as isize;
+            let remote_clock = block.id().clock;
+            let offset = local_sv.get(&client) as isize - remote_clock as isize;
             if offset < 0 {
                 // we're missing the update from the same client
-                todo!()
+                let e: &mut Vec<Block> = missing.entry(client).or_default();
+                e.push(block.clone());
+                missing_sv.set_min(client, remote_clock);
             } else {
                 let blocks = txn
                     .store
@@ -171,11 +179,18 @@ impl Update {
                     .store
                     .blocks
                     .get_client_blocks_with_capacity_mut(client, len);
-                blocks.push(unsafe { std::ptr::read(block as *const Block) });
+                blocks.push(block.clone());
             }
         }
 
-        todo!()
+        if missing.is_empty() {
+            None
+        } else {
+            Some(PendingUpdate {
+                update: Update { clients: missing },
+                missing: missing_sv,
+            })
+        }
     }
 
     fn decode_block<D: Decoder>(id: ID, decoder: &mut D) -> Block {
@@ -285,25 +300,25 @@ impl PendingUpdate {
     }
 }
 
-struct BlockFilter(RefCell<Box<[u8]>>);
+struct BlockFilter(usize, RefCell<Box<[u8]>>);
 
 impl BlockFilter {
     fn with_capacity(capacity: usize) -> Self {
-        let capacity = 1 + capacity / 8;
-        let bits = unsafe { Box::new_zeroed_slice(capacity).assume_init() };
-        BlockFilter(RefCell::new(bits))
+        let len = 1 + capacity / 8;
+        let bits = unsafe { Box::new_zeroed_slice(len).assume_init() };
+        BlockFilter(capacity, RefCell::new(bits))
     }
 
     #[inline]
     fn parse_index(index: usize) -> (usize, u8) {
         let byte_position = index / 8;
-        let mask = 1u8 << (index & 0x07);
+        let mask = 1u8 << (index & 0b111);
         (byte_position, mask)
     }
 
     fn get(&self, index: usize) -> bool {
         let (position, mask) = Self::parse_index(index);
-        self.0.borrow()[position] & mask == mask
+        self.1.borrow()[position] & mask == mask
     }
 
     /// Marks block as visited. This is used when we construct a work queue -
@@ -315,14 +330,21 @@ impl BlockFilter {
     /// Returns false, if value was already set before.
     fn set(&self, index: usize) -> bool {
         let (position, mask) = Self::parse_index(index);
-        let e = &mut self.0.borrow_mut()[position];
+        let e = &mut self.1.borrow_mut()[position];
         let result = *e & mask == 0;
         *e = (*e) | mask;
         result
     }
 
+    /// Marks block as unvisited. Reverts effects of [set] method.
+    fn unset(&self, index: usize) {
+        let (position, mask) = Self::parse_index(index);
+        let e = &mut self.1.borrow_mut()[position];
+        *e = (*e) & !mask;
+    }
+
     /// Iterates over unset bits back to front, returning their indexes.
-    fn unset(&self) -> IterUnset<'_> {
+    fn iter_unset(&self) -> IterUnset<'_> {
         IterUnset::new(self)
     }
 }
@@ -336,7 +358,7 @@ impl<'a> IterUnset<'a> {
     fn new(bits: &'a BlockFilter) -> Self {
         IterUnset {
             bits,
-            current: bits.0.borrow().len(),
+            current: bits.0,
         }
     }
 }
@@ -361,10 +383,29 @@ impl<'a> Iterator for IterUnset<'a> {
 mod test {
     use crate::block::{Block, Item, ItemContent};
     use crate::types::TypePtr;
-    use crate::update::Update;
+    use crate::update::{BlockFilter, Update};
     use crate::updates::decoder::{Decode, DecoderV1};
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
     use crate::{Doc, StateVector, ID};
+
+    #[test]
+    fn block_filter_set() {
+        let bf = BlockFilter::with_capacity(13);
+        assert!(bf.set(9));
+        assert!(!bf.set(9));
+
+        let mut expected = vec![0u8, 2u8];
+        assert_eq!(bf.1.borrow().to_vec(), expected);
+    }
+
+    #[test]
+    fn block_filter_unset() {
+        let bf = BlockFilter::with_capacity(13);
+        bf.set(9);
+        bf.set(4);
+        let indices = bf.iter_unset().collect::<Vec<_>>();
+        assert_eq!(indices, vec![12, 11, 10, 8, 7, 6, 5, 3, 2, 1, 0]);
+    }
 
     #[test]
     fn update_decode() {
@@ -432,6 +473,7 @@ mod test {
 
         // decode an update incoming from A and integrate it at B
         let update = Update::decode_v1(binary.as_slice());
+        println!("Update: {:#?}", &update);
         let pending = update.integrate(&mut t2);
 
         assert!(pending.is_none());
