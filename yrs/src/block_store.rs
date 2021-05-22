@@ -41,6 +41,13 @@ impl StateVector {
         }
     }
 
+    pub fn inc_by(&mut self, client: u64, delta: u32) {
+        if delta > 0 {
+            let e = self.0.entry(client).or_default();
+            *e = *e + delta;
+        }
+    }
+
     pub fn set_min(&mut self, client: u64, clock: u32) {
         match self.0.entry(client) {
             Entry::Occupied(e) => {
@@ -229,19 +236,10 @@ impl BlockStore {
         x
     }
 
-    pub fn get_item_mut(&mut self, ptr: &block::BlockPtr) -> &mut block::Item {
-        unsafe {
-            // this is not a dangerous expectation because we really checked
-            // beforehand that these items existed (once a reference ptr was created we
-            // know that the item existed)
-            self.clients
-                .get_mut(&ptr.id.client)
-                .unwrap()
-                .list
-                .get_unchecked_mut(ptr.pivot as usize)
-                .as_item_mut()
-                .unwrap()
-        }
+    pub fn get_item_mut(&mut self, ptr: &block::BlockPtr) -> Option<&mut block::Item> {
+        let blocks = self.clients.get_mut(&ptr.id.client)?;
+        let block = blocks.list.get_mut(ptr.pivot as usize)?;
+        block.as_item_mut()
     }
 
     pub fn get_block(&self, ptr: &block::BlockPtr) -> Option<&block::Block> {

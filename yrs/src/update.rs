@@ -173,6 +173,7 @@ impl Update {
                     .blocks
                     .get_client_blocks_with_capacity_mut(client, len);
                 let pivot = blocks.integrated_len() as u32;
+                local_sv.inc_by(client, block.len());
                 block.integrate(txn, pivot, offset as u32);
                 let blocks = txn
                     .store
@@ -241,7 +242,7 @@ impl Update {
                 } else {
                     None
                 };
-                let content = ItemContent::decode(decoder, info, BlockPtr::from(id.clone())); //TODO: What BlockPtr here is supposed to mean
+                let content = ItemContent::decode(decoder, info, BlockPtr::from(id.clone()));
                 let item: Item = Item {
                     id,
                     left,
@@ -261,7 +262,6 @@ impl Update {
 
 impl Decode for Update {
     fn decode<D: Decoder>(decoder: &mut D) -> Self {
-        let mut missing = IdSet::new();
         let clients_len: u32 = decoder.read_uvar();
         let mut total_len: usize = 0;
         let mut clients =
@@ -275,9 +275,9 @@ impl Decode for Update {
             let blocks = clients
                 .entry(client)
                 .or_insert_with(|| Vec::with_capacity(blocks_len));
-            let id = ID::new(client, clock);
 
             for _ in 0..blocks_len {
+                let id = ID::new(client, clock);
                 let block = Self::decode_block(id, decoder);
                 clock += block.len();
                 blocks.push(block);
@@ -438,7 +438,7 @@ mod test {
             origin: None,
             right_origin: None,
             content: ItemContent::Any(vec!["valueB".into()]),
-            parent: TypePtr::Named("\u{0}".to_owned()),
+            parent: TypePtr::Named("".to_owned()),
             parent_sub: Some("keyB".to_owned()),
             deleted: false,
         }));
