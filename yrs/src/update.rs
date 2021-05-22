@@ -152,7 +152,6 @@ impl Update {
         let mut local_sv = txn.store.blocks.get_state_vector();
         let mut jobs = self.build_work_queue(&local_sv);
 
-        println!("Jobs: {:?}", &jobs);
         let mut missing = HashMap::default();
         let mut missing_sv = StateVector::empty();
 
@@ -473,7 +472,6 @@ mod test {
 
         // decode an update incoming from A and integrate it at B
         let update = Update::decode_v1(binary.as_slice());
-        println!("Update: {:#?}", &update);
         let pending = update.integrate(&mut t2);
 
         assert!(pending.is_none());

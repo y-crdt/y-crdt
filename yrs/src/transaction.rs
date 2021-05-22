@@ -331,7 +331,11 @@ impl<'a> Transaction<'a> {
         let parent = self.store.get_type(&pos.parent).unwrap();
         let left = pos.after;
         let right = match pos.after.as_ref() {
-            Some(left_id) => self.store.blocks.get_item(left_id).right,
+            Some(left_id) => self
+                .store
+                .blocks
+                .get_item(left_id)
+                .and_then(|item| item.right),
             None => parent.start.get(),
         };
         let client_id = self.store.client_id;

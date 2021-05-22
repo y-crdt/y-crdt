@@ -244,17 +244,14 @@ impl BlockStore {
         }
     }
 
-    pub fn get_block(&self, ptr: &block::BlockPtr) -> &block::Block {
-        &self.clients[&ptr.id.client].list[ptr.pivot as usize]
+    pub fn get_block(&self, ptr: &block::BlockPtr) -> Option<&block::Block> {
+        let clients = self.clients.get(&ptr.id.client)?;
+        clients.list.get(ptr.pivot as usize)
     }
 
-    pub fn get_item(&self, ptr: &block::BlockPtr) -> &block::Item {
-        // this is not a dangerous expectation because we really checked
-        // beforehand that these items existed (once a reference was created we
-        // know that the item existed)
-        self.clients[&ptr.id.client].list[ptr.pivot as usize]
-            .as_item()
-            .unwrap()
+    pub fn get_item(&self, ptr: &block::BlockPtr) -> Option<&block::Item> {
+        let block = self.get_block(ptr)?;
+        block.as_item()
     }
 
     pub fn get_state(&self, client: &u64) -> u32 {
@@ -288,7 +285,7 @@ impl BlockStore {
 
     pub fn get_item_from_type_ptr(&self, ptr: &TypePtr) -> Option<&Item> {
         if let TypePtr::Id(ptr) = ptr {
-            if let Block::Item(item) = &self.get_block(ptr) {
+            if let Some(Block::Item(item)) = &self.get_block(ptr) {
                 return Some(item);
             }
         }

@@ -254,9 +254,10 @@ impl Item {
                 .blocks
                 .split_block(&BlockPtr::from(ID::new(self.id.client, self.id.clock - 1)));
             if let Some(left) = left {
-                let origin = txn.store.blocks.get_item(&left).last_id();
-                self.origin = Some(origin);
-                self.left = Some(left);
+                if let Some(origin) = txn.store.blocks.get_item(&left) {
+                    self.origin = Some(origin.last_id());
+                    self.left = Some(left);
+                }
             } else {
                 self.left = None;
                 self.origin = None;
@@ -265,8 +266,8 @@ impl Item {
         }
 
         // resolve conflicts
-        let left = self.left.map(|ptr| txn.store.blocks.get_block(&ptr));
-        let right = self.right.map(|ptr| txn.store.blocks.get_block(&ptr));
+        let left = self.left.and_then(|ptr| txn.store.blocks.get_block(&ptr));
+        let right = self.right.and_then(|ptr| txn.store.blocks.get_block(&ptr));
         let right_is_null_or_has_left = right
             .map(|item| match item {
                 Block::Item(item) => item.left.is_some(),
@@ -314,7 +315,7 @@ impl Item {
 
                 items_before_origin.insert(ptr.id.clone());
                 conflicting_items.insert(ptr.id.clone());
-                if let Some(item) = txn.store.blocks.get_block(&ptr).as_item() {
+                if let Some(Block::Item(item)) = txn.store.blocks.get_block(&ptr) {
                     if self.origin == item.origin {
                         // case 1
                         if ptr.id.client < self.id.client {
