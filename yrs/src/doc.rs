@@ -4,6 +4,7 @@ use crate::store::Store;
 use crate::transaction::Transaction;
 use crate::update::Update;
 use crate::updates::decoder::{Decode, DecoderV1};
+use crate::updates::encoder::Encode;
 use crate::*;
 use rand::Rng;
 use std::cell::RefCell;
@@ -22,6 +23,11 @@ impl Doc {
             store: RefCell::from(Store::new(client_id)),
         }
     }
+
+    pub fn encode_state_as_update(&self, txn: &mut Transaction) -> Vec<u8> {
+        txn.store.encode_v1()
+    }
+
     pub fn get_type(&self, tr: &Transaction, string: &str) -> types::Text {
         let ptr = types::TypePtr::Named(string.to_owned());
         types::Text::from(ptr)

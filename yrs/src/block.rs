@@ -35,6 +35,12 @@ impl ID {
     }
 }
 
+impl std::fmt::Display for ID {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "({}:{})", self.client, self.clock)
+    }
+}
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct BlockPtr {
     pub id: ID,
@@ -346,19 +352,38 @@ impl Item {
         }
 
         // reconnect left/right
-        if let Some(right_id) = self.right {
-            let right = txn.store.blocks.get_item_mut(&right_id);
-            right.left = Some(BlockPtr { pivot, id: self.id });
-        }
-        match self.left {
-            Some(left_id) => {
-                let left = txn.store.blocks.get_item_mut(&left_id);
-                left.right = Some(BlockPtr { pivot, id: self.id });
+        if let Some(left_id) = self.left.as_ref() {
+            if let Some(left) = txn.store.blocks.get_item_mut(left_id) {
+                self.right = left.right.replace(BlockPtr { pivot, id: self.id });
             }
-            None => {
+        } else {
+            let r = if let Some(parent_sub) = &self.parent_sub {
+                //r = /** @type {AbstractType<any>} */ (this.parent)._map.get(this.parentSub) || null
+                //while (r !== null && r.left !== null) {
+                //    r = r.left
+                //}
+                todo!()
+            } else {
                 let parent_type = txn.store.init_type_from_ptr(&self.parent).unwrap();
+                let start = parent_type.start.get();
                 parent_type.start.set(Some(BlockPtr { pivot, id: self.id }));
+                start
+            };
+            self.right = r;
+        }
+
+        if let Some(right_id) = self.right.as_ref() {
+            if let Some(right) = txn.store.blocks.get_item_mut(right_id) {
+                right.left = Some(BlockPtr { pivot, id: self.id });
             }
+        } else if let Some(parent_sub) = &self.parent_sub {
+            // // set as current parent value if right === null and this is parentSub
+            // /** @type {AbstractType<any>} */ (this.parent)._map.set(this.parentSub, this)
+            // if (this.left !== null) {
+            //   // this is the current attribute value of parent. delete right
+            //   this.left.delete(transaction)
+            // }
+            todo!()
         }
 
         self.integrate_content(txn);

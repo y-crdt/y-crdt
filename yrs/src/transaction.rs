@@ -249,31 +249,32 @@ impl<'a> Transaction<'a> {
     }
 
     fn delete(&mut self, ptr: &BlockPtr) {
-        let item = self.store.blocks.get_item_mut(&ptr);
-        if !item.deleted {
-            //TODO:
-            // if let Some(parent) = self.store.get_type(&item.parent) {
-            //     // adjust the length of parent
-            //     if (this.countable && this.parentSub === null) {
-            //         parent._length -= this.length
-            //     }
-            // }
-            item.deleted = true;
-            self.delete_set.insert(item.id.clone(), item.len());
-            // addChangedTypeToTransaction(transaction, item.type, item.parentSub)
-            if item.id.clock < self.timestamp.get(&item.id.client) {
-                let set = self.changed.entry(item.parent.clone()).or_default();
-                set.insert(item.parent_sub.clone());
-            }
-            // item.content.delete(transaction)
-            match &mut item.content {
-                ItemContent::Doc(s, value) => {
-                    todo!()
+        if let Some(item) = self.store.blocks.get_item_mut(&ptr) {
+            if !item.deleted {
+                //TODO:
+                // if let Some(parent) = self.store.get_type(&item.parent) {
+                //     // adjust the length of parent
+                //     if (this.countable && this.parentSub === null) {
+                //         parent._length -= this.length
+                //     }
+                // }
+                item.deleted = true;
+                self.delete_set.insert(item.id.clone(), item.len());
+                // addChangedTypeToTransaction(transaction, item.type, item.parentSub)
+                if item.id.clock < self.timestamp.get(&item.id.client) {
+                    let set = self.changed.entry(item.parent.clone()).or_default();
+                    set.insert(item.parent_sub.clone());
                 }
-                ItemContent::Type(inner) => {
-                    todo!()
+                // item.content.delete(transaction)
+                match &mut item.content {
+                    ItemContent::Doc(s, value) => {
+                        todo!()
+                    }
+                    ItemContent::Type(inner) => {
+                        todo!()
+                    }
+                    _ => {} // do nothing
                 }
-                _ => {} // do nothing
             }
         }
     }
