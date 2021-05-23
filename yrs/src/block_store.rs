@@ -256,6 +256,7 @@ impl BlockStore {
 
     /// It's like [get_block], but it will fix the `ptr.pivot` if it missed.
     pub(crate) fn fetch(&self, ptr: &mut block::BlockPtr) -> Option<&block::Block> {
+        //TODO: find better name for this method
         let clients = self.clients.get(&ptr.id.client)?;
         match clients.list.get(ptr.pivot as usize) {
             Some(block) if block.id().eq(&ptr.id) => Some(block),
