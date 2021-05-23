@@ -16,8 +16,12 @@ pub struct Doc {
 }
 
 impl Doc {
-    pub fn new() -> Doc {
+    pub fn new() -> Self {
         let client_id: u64 = rand::thread_rng().gen();
+        Self::with_client_id(client_id)
+    }
+
+    fn with_client_id(client_id: u64) -> Self {
         Doc {
             client_id,
             store: RefCell::from(Store::new(client_id)),
@@ -119,7 +123,7 @@ mod test {
 
     #[test]
     fn encode_basic() {
-        let doc = Doc::new();
+        let doc = Doc::with_client_id(1490905955);
         let mut t = doc.transact();
         let mut txt = t.get_text("type");
         txt.insert(&mut t, 0, "0");
