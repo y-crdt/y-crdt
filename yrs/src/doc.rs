@@ -86,7 +86,10 @@ impl Default for Doc {
 
 #[cfg(test)]
 mod test {
-    use crate::Doc;
+    use crate::update::Update;
+    use crate::updates::decoder::Decode;
+    use crate::updates::encoder::{Encode, Encoder, EncoderV1};
+    use crate::{Doc, StateVector};
 
     #[test]
     fn apply_update_basic() {
@@ -112,5 +115,58 @@ mod test {
 
         let actual = doc.get_type(&tr, "type").to_string(&tr);
         assert_eq!(actual, "210".to_owned());
+    }
+
+    #[test]
+    fn encode_basic() {
+        let doc = Doc::new();
+        let mut t = doc.transact();
+        let mut txt = t.get_text("type");
+        txt.insert(&mut t, 0, "0");
+        txt.insert(&mut t, 0, "1");
+        txt.insert(&mut t, 0, "2");
+
+        let encoded = doc.encode_state_as_update(&mut t);
+        let expected = &[
+            1, 3, 227, 214, 245, 198, 5, 0, 4, 1, 4, 116, 121, 112, 101, 1, 48, 68, 227, 214, 245,
+            198, 5, 0, 1, 49, 68, 227, 214, 245, 198, 5, 1, 1, 50, 0,
+        ];
+        assert_eq!(encoded.as_slice(), expected);
+    }
+
+    #[test]
+    fn integrate() {
+        // create new document at A and add some initial text to it
+        let mut d1 = Doc::new();
+        let mut t1 = d1.transact();
+        let txt = t1.get_text("test");
+        // Question: why YText.insert uses positions of blocks instead of actual cursor positions
+        // in text as seen by user?
+        txt.insert(&mut t1, 0, "hello");
+        txt.insert(&mut t1, 1, " ");
+        txt.insert(&mut t1, 2, "world");
+
+        assert_eq!(txt.to_string(&t1), "hello world".to_string());
+
+        // create document at B
+        let d2 = Doc::new();
+        let mut t2 = d2.transact();
+        let sv = d2.get_state_vector(&mut t2).encode_v1();
+
+        // create an update A->B based on B's state vector
+        let mut encoder = EncoderV1::new();
+        t1.store
+            .encode_diff(&StateVector::decode_v1(sv.as_slice()), &mut encoder);
+        let binary = encoder.to_vec();
+
+        // decode an update incoming from A and integrate it at B
+        let update = Update::decode_v1(binary.as_slice());
+        let pending = update.integrate(&mut t2);
+
+        assert!(pending.is_none());
+
+        // check if B sees the same thing that A does
+        let txt = t2.get_text("test");
+        assert_eq!(txt.to_string(&t2), "hello world".to_string());
     }
 }

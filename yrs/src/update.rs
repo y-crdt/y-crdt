@@ -2,15 +2,13 @@ use crate::block::{
     Block, BlockPtr, Item, ItemContent, Skip, BLOCK_GC_REF_NUMBER, BLOCK_SKIP_REF_NUMBER, GC,
     HAS_ORIGIN, HAS_PARENT_SUB, HAS_RIGHT_ORIGIN,
 };
-use crate::id_set::IdSet;
-use crate::store::Store;
 use crate::types::TypePtr;
 use crate::updates::decoder::{Decode, Decoder};
 use crate::utils::client_hasher::ClientHasher;
 use crate::{StateVector, Transaction, ID};
 use std::cell::RefCell;
 use std::collections::hash_map::Entry;
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::hash::BuildHasherDefault;
 
 #[derive(Debug)]
@@ -384,8 +382,7 @@ mod test {
     use crate::types::TypePtr;
     use crate::update::{BlockFilter, Update};
     use crate::updates::decoder::{Decode, DecoderV1};
-    use crate::updates::encoder::{Encode, Encoder, EncoderV1};
-    use crate::{Doc, StateVector, ID};
+    use crate::ID;
 
     #[test]
     fn block_filter_set() {
@@ -443,41 +440,5 @@ mod test {
             deleted: false,
         }));
         assert_eq!(block, &expected);
-    }
-
-    #[test]
-    fn integrate() {
-        // create new document at A and add some initial text to it
-        let mut d1 = Doc::new();
-        let mut t1 = d1.transact();
-        let txt = t1.get_text("test");
-        // Question: why YText.insert uses positions of blocks instead of actual cursor positions
-        // in text as seen by user?
-        txt.insert(&mut t1, 0, "hello");
-        txt.insert(&mut t1, 1, " ");
-        txt.insert(&mut t1, 2, "world");
-
-        assert_eq!(txt.to_string(&t1), "hello world".to_string());
-
-        // create document at B
-        let d2 = Doc::new();
-        let mut t2 = d2.transact();
-        let sv = d2.get_state_vector(&mut t2).encode_v1();
-
-        // create an update A->B based on B's state vector
-        let mut encoder = EncoderV1::new();
-        t1.store
-            .encode_diff(&StateVector::decode_v1(sv.as_slice()), &mut encoder);
-        let binary = encoder.to_vec();
-
-        // decode an update incoming from A and integrate it at B
-        let update = Update::decode_v1(binary.as_slice());
-        let pending = update.integrate(&mut t2);
-
-        assert!(pending.is_none());
-
-        // check if B sees the same thing that A does
-        let txt = t2.get_text("test");
-        assert_eq!(txt.to_string(&t2), "hello world".to_string());
     }
 }

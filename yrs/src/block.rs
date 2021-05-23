@@ -4,7 +4,7 @@ use crate::updates::decoder::Decoder;
 use crate::updates::encoder::Encoder;
 use crate::*;
 use lib0::any::Any;
-use std::collections::{BTreeSet, HashSet};
+use std::collections::HashSet;
 use std::panic;
 
 pub const BLOCK_GC_REF_NUMBER: u8 = 0;

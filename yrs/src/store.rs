@@ -36,7 +36,8 @@ impl Store {
             types::TypePtr::NamedRef(name_ref) => self.types.get(*name_ref as usize).map(|t| &t.0),
             types::TypePtr::Id(id) => {
                 // @todo the item might not exist
-                if let block::ItemContent::Type(t) = &self.blocks.get_item(id)?.content {
+                let item = self.blocks.get_item(id)?;
+                if let block::ItemContent::Type(t) = &item.content {
                     Some(t)
                 } else {
                     None
