@@ -272,8 +272,14 @@ impl Item {
         }
 
         // resolve conflicts
-        let left = self.left.and_then(|ptr| txn.store.blocks.get_block(&ptr));
-        let right = self.right.and_then(|ptr| txn.store.blocks.get_block(&ptr));
+        let left = self
+            .left
+            .as_mut()
+            .and_then(|ptr| txn.store.blocks.fetch(ptr));
+        let right = self
+            .right
+            .as_mut()
+            .and_then(|ptr| txn.store.blocks.fetch(ptr));
         let right_is_null_or_has_left = right
             .map(|item| match item {
                 Block::Item(item) => item.left.is_some(),

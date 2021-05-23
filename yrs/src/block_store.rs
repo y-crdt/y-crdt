@@ -244,7 +244,28 @@ impl BlockStore {
 
     pub fn get_block(&self, ptr: &block::BlockPtr) -> Option<&block::Block> {
         let clients = self.clients.get(&ptr.id.client)?;
-        clients.list.get(ptr.pivot as usize)
+        match clients.list.get(ptr.pivot as usize) {
+            Some(block) if block.id().eq(&ptr.id) => Some(block),
+            _ => {
+                /// ptr.pivot missed - go slow path to find it
+                let pivot = clients.find_pivot(ptr.id.clock)?;
+                Some(&clients.list[pivot])
+            }
+        }
+    }
+
+    /// It's like [get_block], but it will fix the `ptr.pivot` if it missed.
+    pub(crate) fn fetch(&self, ptr: &mut block::BlockPtr) -> Option<&block::Block> {
+        let clients = self.clients.get(&ptr.id.client)?;
+        match clients.list.get(ptr.pivot as usize) {
+            Some(block) if block.id().eq(&ptr.id) => Some(block),
+            _ => {
+                /// ptr.pivot missed - go slow path to find it
+                let pivot = clients.find_pivot(ptr.id.clock)?;
+                ptr.pivot = pivot as u32;
+                Some(&clients.list[pivot])
+            }
+        }
     }
 
     pub fn get_item(&self, ptr: &block::BlockPtr) -> Option<&block::Item> {
