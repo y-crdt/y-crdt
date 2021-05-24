@@ -162,6 +162,7 @@ impl ClientBlockList {
 
     pub fn insert(&mut self, index: usize, block: block::Block) {
         self.list.insert(index, block);
+        self.integrated_len += 1;
     }
 
     pub fn len(&self) -> usize {
@@ -342,12 +343,9 @@ impl BlockStore {
             let left_split_ptr = BlockPtr::new(block.id().clone(), pivot as u32);
             let right_split_ptr = match block {
                 Block::Item(item) => {
-                    let diff = (item.id.clock + item.len()) as isize - ptr.id.clock as isize;
-                    if diff <= 0 {
-                        None
-                    } else {
+                    if ptr.id.clock > item.id.clock && ptr.id.clock <= item.id.clock + item.len() {
                         let index = pivot + 1;
-                        let diff = diff as u32;
+                        let diff = ptr.id.clock - item.id.clock;
                         let right_split = item.split(diff);
                         let right_split_id = right_split.id.clone();
                         let right_ptr = right_split.right.clone();
@@ -365,6 +363,8 @@ impl BlockStore {
                         }
                         blocks.insert(index, Block::Item(right_split));
                         Some(BlockPtr::new(right_split_id, index as u32))
+                    } else {
+                        None
                     }
                 }
                 _ => None,

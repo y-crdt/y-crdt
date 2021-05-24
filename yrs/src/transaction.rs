@@ -329,15 +329,22 @@ impl<'a> Transaction<'a> {
     }
 
     pub fn create_item(&mut self, pos: &block::ItemPosition, content: block::ItemContent) {
-        let parent = self.store.get_type(&pos.parent).unwrap();
         let left = pos.after;
-        let right = match pos.after.as_ref() {
-            Some(left_id) => self
-                .store
-                .blocks
-                .get_item(left_id)
-                .and_then(|item| item.right),
-            None => parent.start.get(),
+        let right = if pos.offset == 0 {
+            match pos.after.as_ref() {
+                None => self.store.get_type(&pos.parent).unwrap().start.get(),
+                Some(left) => self.store.blocks.get_item(left).and_then(|item| item.right),
+            }
+        } else {
+            match pos.after.as_ref() {
+                None => self.store.get_type(&pos.parent).unwrap().start.get(),
+                Some(left) => {
+                    let mut split_ptr = left.clone();
+                    split_ptr.id.clock += pos.offset;
+                    let (_, right) = self.store.blocks.split_block(&split_ptr);
+                    right
+                }
+            }
         };
         let client_id = self.store.client_id;
         let id = block::ID {
