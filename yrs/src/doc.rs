@@ -147,8 +147,8 @@ mod test {
         // Question: why YText.insert uses positions of blocks instead of actual cursor positions
         // in text as seen by user?
         txt.insert(&mut t1, 0, "hello");
-        txt.insert(&mut t1, 1, " ");
-        txt.insert(&mut t1, 2, "world");
+        txt.insert(&mut t1, 5, " ");
+        txt.insert(&mut t1, 6, "world");
 
         assert_eq!(txt.to_string(&t1), "hello world".to_string());
 
