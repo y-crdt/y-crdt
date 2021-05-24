@@ -30,33 +30,36 @@ impl Text {
             })
             .unwrap_or_default()
     }
-    fn find_list_pos(&self, tr: &Transaction, pos: u32) -> Option<block::ItemPosition> {
+    fn find_position(&self, tr: &Transaction, index: u32) -> Option<block::ItemPosition> {
         let inner = tr.store.get_type(&self.ptr)?;
-        if pos == 0 {
+        if index == 0 {
             Some(block::ItemPosition {
                 parent: inner.ptr.clone(),
                 after: None,
             })
         } else {
             let mut ptr = inner.start.get();
-            let mut curr_pos = 1;
-            while curr_pos != pos {
-                if let Some(a) = ptr.as_ref() {
-                    ptr = tr.store.blocks.get_item(a).and_then(|item| item.right);
-                    curr_pos += 1;
+            let mut current = 0;
+            while let Some(item) = ptr.and_then(|p| tr.store.blocks.get_item(&p)) {
+                let len = item.len();
+                current += len;
+                if current >= index {
+                    // the index we look for is either after or inside of the index
+                    let mut ptr = ptr.unwrap().clone();
+                    ptr.id.clock += len - 1;
+                    return Some(block::ItemPosition {
+                        parent: inner.ptr.clone(),
+                        after: Some(ptr),
+                    });
                 } else {
-                    // todo: throw error here
-                    panic!("Couldn't find block for given pointer {:?}", ptr);
+                    ptr = item.right;
                 }
             }
-            Some(block::ItemPosition {
-                parent: inner.ptr.clone(),
-                after: ptr,
-            })
+            None
         }
     }
-    pub fn insert(&self, tr: &mut Transaction, pos: u32, content: &str) {
-        if let Some(pos) = self.find_list_pos(tr, pos) {
+    pub fn insert(&self, tr: &mut Transaction, index: u32, content: &str) {
+        if let Some(pos) = self.find_position(tr, index) {
             tr.create_item(&pos, block::ItemContent::String(content.to_owned()));
         } else {
             panic!("The type or the position doesn't exist!");
