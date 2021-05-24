@@ -4,7 +4,7 @@ use crate::store::Store;
 use crate::transaction::Transaction;
 use crate::update::Update;
 use crate::updates::decoder::{Decode, DecoderV1};
-use crate::updates::encoder::Encode;
+use crate::updates::encoder::{Encode, Encoder, EncoderV1};
 use crate::*;
 use rand::Rng;
 use std::cell::RefCell;
@@ -21,15 +21,25 @@ impl Doc {
         Self::with_client_id(client_id)
     }
 
-    fn with_client_id(client_id: u64) -> Self {
+    pub fn with_client_id(client_id: u64) -> Self {
         Doc {
             client_id,
             store: RefCell::from(Store::new(client_id)),
         }
     }
 
-    pub fn encode_state_as_update(&self, txn: &mut Transaction) -> Vec<u8> {
+    pub fn encode_state_as_update(&self, txn: &Transaction<'_>) -> Vec<u8> {
         txn.store.encode_v1()
+    }
+
+    pub fn encode_delta_as_update(
+        &self,
+        remote_sv: &StateVector,
+        txn: &Transaction<'_>,
+    ) -> Vec<u8> {
+        let mut encoder = EncoderV1::new();
+        txn.store.encode_diff(remote_sv, &mut encoder);
+        encoder.to_vec()
     }
 
     pub fn get_type(&self, tr: &Transaction, string: &str) -> types::Text {
@@ -76,8 +86,9 @@ impl Doc {
         let ds = DeleteSet::decode(&mut decoder);
         tr.apply_update(update, ds)
     }
+
     // Retrieve document state vector in order to encode the document diff.
-    pub fn get_state_vector(&self, tr: &mut Transaction) -> StateVector {
+    pub fn get_state_vector(&self, tr: &Transaction) -> StateVector {
         tr.store.blocks.get_state_vector()
     }
 }
@@ -130,7 +141,7 @@ mod test {
         txt.insert(&mut t, 0, "1");
         txt.insert(&mut t, 0, "2");
 
-        let encoded = doc.encode_state_as_update(&mut t);
+        let encoded = doc.encode_state_as_update(&t);
         let expected = &[
             1, 3, 227, 214, 245, 198, 5, 0, 4, 1, 4, 116, 121, 112, 101, 1, 48, 68, 227, 214, 245,
             198, 5, 0, 1, 49, 68, 227, 214, 245, 198, 5, 1, 1, 50, 0,
