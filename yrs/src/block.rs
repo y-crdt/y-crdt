@@ -271,6 +271,20 @@ impl Item {
             self.content.splice(offset as usize);
         }
 
+        // In the original Y.js algorithm we decoded items as we go and attached them to client
+        // block list. During that process if we had right origin but no left, we made a lookup for
+        // right origin's parent and attach it as a parent of current block.
+        //
+        // Here since we decode all blocks first, then apply them, we might not find them in
+        // the block store during decoding. Therefore we retroactively reattach it here.
+        if let TypePtr::Id(ptr) = &self.parent {
+            if Some(ptr.id) == self.right_origin {
+                if let Some(item) = txn.store.blocks.get_item(&ptr) {
+                    self.parent = item.parent.clone();
+                }
+            }
+        }
+
         // resolve conflicts
         let left = self
             .left
