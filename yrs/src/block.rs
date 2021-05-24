@@ -203,6 +203,7 @@ impl Block {
 pub struct ItemPosition {
     pub parent: types::TypePtr,
     pub after: Option<BlockPtr>,
+    pub offset: u32,
 }
 
 #[derive(Debug, Clone, PartialEq)]
