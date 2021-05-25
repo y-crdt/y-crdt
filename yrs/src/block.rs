@@ -60,6 +60,12 @@ impl BlockPtr {
     }
 }
 
+impl std::fmt::Display for BlockPtr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "({}->{})", self.id, self.pivot)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Block {
     Item(Item),
