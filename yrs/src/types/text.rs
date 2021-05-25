@@ -190,6 +190,7 @@ mod test {
         let mut txt1 = t1.get_text("test");
 
         txt1.insert(&mut t1, 0, "I expect that");
+        assert_eq!(txt1.to_string(&t1).as_str(), "I expect that");
 
         let mut d2 = Doc::with_client_id(2);
         let mut t2 = d2.transact();
@@ -199,10 +200,14 @@ mod test {
         d2.apply_update(&mut t2, u1.as_slice());
 
         let mut txt2 = t2.get_text("test");
+        assert_eq!(txt2.to_string(&t2).as_str(), "I expect that");
 
-        txt2.insert(&mut t1, 1, " have");
-        txt2.insert(&mut t1, 13, "ed");
+        txt2.insert(&mut t2, 1, " have");
+        txt2.insert(&mut t2, 13, "ed");
+        assert_eq!(txt2.to_string(&t2).as_str(), "I have expected that");
+
         txt1.insert(&mut t1, 1, " didn't");
+        assert_eq!(txt1.to_string(&t1).as_str(), "I didn't expect that");
 
         let d2_sv = d2.get_state_vector(&t2);
         let d1_sv = d1.get_state_vector(&t1);

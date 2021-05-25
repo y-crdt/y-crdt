@@ -20,7 +20,7 @@ pub struct Transaction<'a> {
     /// ID's of the blocks to be merged.
     pub merge_blocks: Vec<ID>,
     /// Describes the set of deleted items by ids.
-    delete_set: IdSet,
+    pub delete_set: DeleteSet,
     /// All types that were directly modified (property added or child inserted/deleted).
     /// New types are not included in this Set.
     changed: HashMap<TypePtr, HashSet<Option<String>>, BuildHasherDefault<XorHasher>>,
@@ -33,7 +33,7 @@ impl<'a> Transaction<'a> {
             store,
             timestamp: begin_timestamp,
             merge_blocks: Vec::new(),
-            delete_set: IdSet::new(),
+            delete_set: DeleteSet::new(),
             changed: HashMap::with_hasher(BuildHasherDefault::default()),
         }
     }
@@ -103,58 +103,21 @@ impl<'a> Transaction<'a> {
     }
 
     pub fn find_index_clean_start(&mut self, client: &u64, clock: u32) -> Option<usize> {
-        let mut id_ptr = None;
-        let mut index = 0;
-
-        {
-            let blocks = self.store.blocks.get_mut(client)?;
-            index = blocks.find_pivot(clock)?;
-            let block = &mut blocks[index];
-            if let Some(item) = block.as_item_mut() {
-                if item.id.clock < clock {
-                    // if we run over the clock, we need to the split item
-                    let half = item.split(clock - item.id.clock);
-                    if let Some(ptr) = half.right {
-                        id_ptr = Some((ptr.clone(), half.id.clone()))
-                    }
-                    index += 1;
-
-                    self.merge_blocks.push(half.id.clone());
-                    //NOTE: is this right to insert an item right away, or should we always put it
-                    // to transaction.merge_blocks? If we do so, we later may not be able to find it
-                    // by iterating over the blocks alone?
-                    blocks.insert(index, Block::Item(half));
-                }
+        let blocks = self.store.blocks.get_mut(client)?;
+        let index = blocks.find_pivot(clock)?;
+        let block = &mut blocks[index];
+        if let Some(item) = block.as_item_mut() {
+            if item.id.clock < clock {
+                // if we run over the clock, we need to the split item
+                let id = ID::new(*client, clock - item.id.clock);
+                self.store
+                    .blocks
+                    .split_block(&BlockPtr::new(id, index as u32));
+                return Some(index + 1);
             }
         }
 
-        if let Some((right_ptr, id)) = id_ptr {
-            self.rewire(&right_ptr, id);
-        }
-
         Some(index)
-    }
-
-    fn rewire(&mut self, right_ptr: &BlockPtr, id: ID) {
-        // if we had split an item, it was inserted as a new right. We need to rewrite pointers
-        // of the old right to point into the new_item on its left:
-        //
-        // Before:
-        //  +------+ --> +------+ --> +-------+
-        //  | LEFT |     | ITEM |     | RIGHT |
-        //  +------+ <-- +------+     +-------+
-        //         ^------------------+
-        //
-        // After:
-        //  +------+ --> +------+ --> +-------+
-        //  | LEFT |     | ITEM |     | RIGHT |
-        //  +------+ <-- +------+ <-- +-------+
-
-        let blocks = self.store.blocks.get_mut(&right_ptr.id.client).unwrap();
-        let right = &mut blocks[right_ptr.pivot as usize];
-        if let Some(right_item) = right.as_item_mut() {
-            right_item.left = Some(BlockPtr::from(id))
-        }
     }
 
     pub fn apply_ranges<F>(&mut self, set: &IdSet, f: &F)
@@ -193,17 +156,14 @@ impl<'a> Transaction<'a> {
                         if let Some(item) = blocks[index].as_item_mut() {
                             // split the first item if necessary
                             if !item.deleted && item.id.clock < clock {
+                                let split_ptr = BlockPtr::new(
+                                    ID::new(*client, clock - item.id.clock),
+                                    index as u32,
+                                );
+                                let (_, right) = self.store.blocks.split_block(&split_ptr);
+                                blocks = self.store.blocks.get_mut(client).unwrap();
                                 index += 1;
-                                let right = item.split(clock - item.id.clock);
-                                let id = right.id.clone();
-                                let right_ptr = right.right.clone();
-                                self.merge_blocks.push(id);
-                                blocks.insert(index, Block::Item(right));
-                                if let Some(right_ptr) = right_ptr {
-                                    self.rewire(&right_ptr, id);
-                                    blocks = self.store.blocks.get_mut(client).unwrap();
-                                    // just to make the borrow checker happy
-                                }
+                                self.merge_blocks.push(right.unwrap().id);
                             }
 
                             while index < blocks.len() {
@@ -214,15 +174,14 @@ impl<'a> Transaction<'a> {
                                         if !item.deleted {
                                             let ptr = BlockPtr::from(item.id.clone());
                                             if item.id.clock + item.content.len() > clock_end {
+                                                let split_ptr = BlockPtr::new(
+                                                    ID::new(*client, clock_end - item.id.clock),
+                                                    index as u32,
+                                                );
+                                                let (_, right) =
+                                                    self.store.blocks.split_block(&split_ptr);
                                                 index += 1;
-                                                let right = item.split(clock - item.id.clock);
-                                                let id = right.id.clone();
-                                                let right_ptr = right.right.clone();
-                                                self.merge_blocks.push(id);
-                                                blocks.insert(index, Block::Item(right));
-                                                if let Some(right_ptr) = right_ptr {
-                                                    self.rewire(&right_ptr, id);
-                                                }
+                                                self.merge_blocks.push(right.unwrap().id);
                                             }
                                             self.delete(&ptr);
                                             blocks = self.store.blocks.get_mut(client).unwrap();

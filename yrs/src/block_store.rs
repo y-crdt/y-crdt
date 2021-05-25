@@ -160,7 +160,7 @@ impl ClientBlockList {
         self.integrated_len += 1;
     }
 
-    pub fn insert(&mut self, index: usize, block: block::Block) {
+    fn insert(&mut self, index: usize, block: block::Block) {
         self.list.insert(index, block);
         self.integrated_len += 1;
     }
