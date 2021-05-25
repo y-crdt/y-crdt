@@ -80,7 +80,7 @@ impl Update {
                 } else {
                     self.clients.get_mut(&right_ptr.id.client).unwrap()
                 };
-                let right = &mut blocks[right_ptr.pivot as usize];
+                let right = &mut blocks[right_ptr.pivot()];
                 if let Some(right_item) = right.as_item_mut() {
                     right_item.left = Some(BlockPtr::new(right_split.id.clone(), index as u32));
                 }

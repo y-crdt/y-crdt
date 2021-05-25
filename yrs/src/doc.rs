@@ -136,7 +136,7 @@ mod test {
     fn encode_basic() {
         let doc = Doc::with_client_id(1490905955);
         let mut t = doc.transact();
-        let mut txt = t.get_text("type");
+        let txt = t.get_text("type");
         txt.insert(&mut t, 0, "0");
         txt.insert(&mut t, 0, "1");
         txt.insert(&mut t, 0, "2");
@@ -152,7 +152,7 @@ mod test {
     #[test]
     fn integrate() {
         // create new document at A and add some initial text to it
-        let mut d1 = Doc::new();
+        let d1 = Doc::new();
         let mut t1 = d1.transact();
         let txt = t1.get_text("test");
         // Question: why YText.insert uses positions of blocks instead of actual cursor positions

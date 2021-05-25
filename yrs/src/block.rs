@@ -5,6 +5,7 @@ use crate::updates::encoder::Encoder;
 use crate::*;
 use lib0::any::Any;
 use std::collections::HashSet;
+use std::hash::Hash;
 use std::panic;
 
 pub const BLOCK_GC_REF_NUMBER: u8 = 0;
@@ -41,10 +42,10 @@ impl std::fmt::Display for ID {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub struct BlockPtr {
     pub id: ID,
-    pub pivot: u32,
+    pivot: u32,
 }
 
 impl BlockPtr {
@@ -58,11 +59,20 @@ impl BlockPtr {
             pivot: id.clock,
         }
     }
+
+    #[inline]
+    pub fn pivot(&self) -> usize {
+        self.pivot as usize
+    }
+
+    pub fn fix_pivot(&self, pivot: u32) {
+        unsafe { std::ptr::write(&self.pivot as *const u32 as *mut u32, pivot) };
+    }
 }
 
 impl std::fmt::Display for BlockPtr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "({}->{})", self.id, self.pivot)
+        write!(f, "({}->{})", self.id, self.pivot())
     }
 }
 
@@ -302,12 +312,12 @@ impl Item {
         // resolve conflicts
         let left = self
             .left
-            .as_mut()
-            .and_then(|ptr| txn.store.blocks.fetch(ptr));
+            .as_ref()
+            .and_then(|ptr| txn.store.blocks.get_block(ptr));
         let right = self
             .right
-            .as_mut()
-            .and_then(|ptr| txn.store.blocks.fetch(ptr));
+            .as_ref()
+            .and_then(|ptr| txn.store.blocks.get_block(ptr));
         let right_is_null_or_has_left = right
             .map(|item| match item {
                 Block::Item(item) => item.left.is_some(),
@@ -379,7 +389,7 @@ impl Item {
                             }
                         }
                     }
-                    o = item.right;
+                    o = item.right.clone();
                 }
                 self.left = left;
             }
@@ -388,7 +398,7 @@ impl Item {
         // reconnect left/right
         if let Some(left_id) = self.left.as_ref() {
             if let Some(left) = txn.store.blocks.get_item_mut(left_id) {
-                self.right = left.right.replace(BlockPtr { pivot, id: self.id });
+                self.right = left.right.replace(BlockPtr::new(self.id, pivot));
             }
         } else {
             let r = if let Some(parent_sub) = &self.parent_sub {
@@ -399,8 +409,9 @@ impl Item {
                 todo!()
             } else {
                 let parent_type = txn.store.init_type_from_ptr(&self.parent).unwrap();
-                let start = parent_type.start.get();
-                parent_type.start.set(Some(BlockPtr { pivot, id: self.id }));
+                let start = parent_type
+                    .start
+                    .replace(Some(BlockPtr::new(self.id, pivot)));
                 start
             };
             self.right = r;
@@ -408,7 +419,7 @@ impl Item {
 
         if let Some(right_id) = self.right.as_ref() {
             if let Some(right) = txn.store.blocks.get_item_mut(right_id) {
-                right.left = Some(BlockPtr { pivot, id: self.id });
+                right.left = Some(BlockPtr::new(self.id, pivot));
             }
         } else if let Some(parent_sub) = &self.parent_sub {
             // // set as current parent value if right === null and this is parentSub
@@ -651,7 +662,7 @@ impl ItemContent {
         match ref_num & 0b1111 {
             BLOCK_ITEM_DELETED_REF_NUMBER => ItemContent::Deleted(decoder.read_len()),
             BLOCK_ITEM_JSON_REF_NUMBER => {
-                let mut remaining = decoder.read_len();
+                let mut remaining = decoder.read_len() as i32;
                 let mut buf = Vec::with_capacity(remaining as usize);
                 while remaining >= 0 {
                     buf.push(decoder.read_string().to_owned());
@@ -764,4 +775,15 @@ impl ItemContent {
 }
 
 #[cfg(test)]
-mod test {}
+mod test {
+    use crate::block::BlockPtr;
+    use crate::ID;
+
+    #[test]
+    fn block_ptr_pivot() {
+        let ptr = BlockPtr::new(ID::new(1, 2), 3);
+        assert_eq!(ptr.pivot(), 3);
+        ptr.fix_pivot(4);
+        assert_eq!(ptr.pivot(), 4);
+    }
+}

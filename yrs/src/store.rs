@@ -1,10 +1,8 @@
-use crate::block::{Item, HAS_ORIGIN, HAS_RIGHT_ORIGIN};
 use crate::block_store::{BlockStore, StateVector};
 use crate::id_set::DeleteSet;
-use crate::update::{PendingUpdate, Update};
-use crate::updates::decoder::Decoder;
+use crate::update::PendingUpdate;
 use crate::updates::encoder::{Encode, Encoder};
-use crate::{block, types, ID};
+use crate::{block, types};
 use std::collections::HashMap;
 
 pub struct Store {

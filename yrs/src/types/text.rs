@@ -21,7 +21,7 @@ impl Text {
                         if let block::ItemContent::String(item_string) = &item.content {
                             s.push_str(item_string);
                         }
-                        start = item.right;
+                        start = item.right.clone();
                     } else {
                         break;
                     }
@@ -72,14 +72,13 @@ impl Text {
 
 #[cfg(test)]
 mod test {
-    use crate::updates::encoder::Encode;
     use crate::Doc;
 
     #[test]
-    fn append_single_character_chunks() {
-        let mut doc = Doc::new();
+    fn append_single_character_blocks() {
+        let doc = Doc::new();
         let mut txn = doc.transact();
-        let mut txt = txn.get_text("test");
+        let txt = txn.get_text("test");
 
         txt.insert(&mut txn, 0, "a");
         txt.insert(&mut txn, 1, "b");
@@ -89,10 +88,10 @@ mod test {
     }
 
     #[test]
-    fn append_mutli_character_chunks() {
-        let mut doc = Doc::new();
+    fn append_mutli_character_blocks() {
+        let doc = Doc::new();
         let mut txn = doc.transact();
-        let mut txt = txn.get_text("test");
+        let txt = txn.get_text("test");
 
         txt.insert(&mut txn, 0, "hello");
         txt.insert(&mut txn, 5, " ");
@@ -102,10 +101,10 @@ mod test {
     }
 
     #[test]
-    fn prepend_single_character_chunks() {
-        let mut doc = Doc::new();
+    fn prepend_single_character_blocks() {
+        let doc = Doc::new();
         let mut txn = doc.transact();
-        let mut txt = txn.get_text("test");
+        let txt = txn.get_text("test");
 
         txt.insert(&mut txn, 0, "a");
         txt.insert(&mut txn, 0, "b");
@@ -115,10 +114,10 @@ mod test {
     }
 
     #[test]
-    fn prepend_mutli_character_chunks() {
-        let mut doc = Doc::new();
+    fn prepend_mutli_character_blocks() {
+        let doc = Doc::new();
         let mut txn = doc.transact();
-        let mut txt = txn.get_text("test");
+        let txt = txn.get_text("test");
 
         txt.insert(&mut txn, 0, "hello");
         txt.insert(&mut txn, 0, " ");
@@ -128,10 +127,10 @@ mod test {
     }
 
     #[test]
-    fn insert_after_chunk() {
-        let mut doc = Doc::new();
+    fn insert_after_block() {
+        let doc = Doc::new();
         let mut txn = doc.transact();
-        let mut txt = txn.get_text("test");
+        let txt = txn.get_text("test");
 
         txt.insert(&mut txn, 0, "hello");
         txt.insert(&mut txn, 5, " ");
@@ -142,10 +141,10 @@ mod test {
     }
 
     #[test]
-    fn insert_inside_of_chunk() {
-        let mut doc = Doc::new();
+    fn insert_inside_of_block() {
+        let doc = Doc::new();
         let mut txn = doc.transact();
-        let mut txt = txn.get_text("test");
+        let txt = txn.get_text("test");
 
         txt.insert(&mut txn, 0, "it was expected");
         txt.insert(&mut txn, 6, " not");
@@ -155,15 +154,15 @@ mod test {
 
     #[test]
     fn insert_concurrent_root() {
-        let mut d1 = Doc::with_client_id(1);
+        let d1 = Doc::with_client_id(1);
         let mut t1 = d1.transact();
-        let mut txt1 = t1.get_text("test");
+        let txt1 = t1.get_text("test");
 
         txt1.insert(&mut t1, 0, "hello ");
 
-        let mut d2 = Doc::with_client_id(2);
+        let d2 = Doc::with_client_id(2);
         let mut t2 = d2.transact();
-        let mut txt2 = t2.get_text("test");
+        let txt2 = t2.get_text("test");
 
         txt2.insert(&mut t2, 0, "world");
 
@@ -185,21 +184,21 @@ mod test {
 
     #[test]
     fn insert_concurrent_in_the_middle() {
-        let mut d1 = Doc::with_client_id(1);
+        let d1 = Doc::with_client_id(1);
         let mut t1 = d1.transact();
-        let mut txt1 = t1.get_text("test");
+        let txt1 = t1.get_text("test");
 
         txt1.insert(&mut t1, 0, "I expect that");
         assert_eq!(txt1.to_string(&t1).as_str(), "I expect that");
 
-        let mut d2 = Doc::with_client_id(2);
+        let d2 = Doc::with_client_id(2);
         let mut t2 = d2.transact();
 
         let d2_sv = d2.get_state_vector(&t2);
         let u1 = d1.encode_delta_as_update(&d2_sv, &t1);
         d2.apply_update(&mut t2, u1.as_slice());
 
-        let mut txt2 = t2.get_text("test");
+        let txt2 = t2.get_text("test");
         assert_eq!(txt2.to_string(&t2).as_str(), "I expect that");
 
         txt2.insert(&mut t2, 1, " have");

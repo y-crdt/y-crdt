@@ -239,32 +239,18 @@ impl BlockStore {
 
     pub fn get_item_mut(&mut self, ptr: &block::BlockPtr) -> Option<&mut block::Item> {
         let blocks = self.clients.get_mut(&ptr.id.client)?;
-        let block = blocks.list.get_mut(ptr.pivot as usize)?;
+        let block = blocks.list.get_mut(ptr.pivot())?;
         block.as_item_mut()
     }
 
     pub fn get_block(&self, ptr: &block::BlockPtr) -> Option<&block::Block> {
         let clients = self.clients.get(&ptr.id.client)?;
-        match clients.list.get(ptr.pivot as usize) {
+        match clients.list.get(ptr.pivot()) {
             Some(block) if block.id().eq(&ptr.id) => Some(block),
             _ => {
-                /// ptr.pivot missed - go slow path to find it
+                // ptr.pivot missed - go slow path to find it
                 let pivot = clients.find_pivot(ptr.id.clock)?;
-                Some(&clients.list[pivot])
-            }
-        }
-    }
-
-    /// It's like [get_block], but it will fix the `ptr.pivot` if it missed.
-    pub(crate) fn fetch(&self, ptr: &mut block::BlockPtr) -> Option<&block::Block> {
-        //TODO: find better name for this method
-        let clients = self.clients.get(&ptr.id.client)?;
-        match clients.list.get(ptr.pivot as usize) {
-            Some(block) if block.id().eq(&ptr.id) => Some(block),
-            _ => {
-                /// ptr.pivot missed - go slow path to find it
-                let pivot = clients.find_pivot(ptr.id.clock)?;
-                ptr.pivot = pivot as u32;
+                ptr.fix_pivot(pivot as u32);
                 Some(&clients.list[pivot])
             }
         }
@@ -322,10 +308,10 @@ impl BlockStore {
     ///
     /// If no block for given `ptr` was found, then both returned options will be None.
     pub fn split_block(&mut self, ptr: &BlockPtr) -> (Option<BlockPtr>, Option<BlockPtr>) {
-        let mut pivot = ptr.pivot as usize;
+        let mut pivot = ptr.pivot();
         if let Some(mut blocks) = self.clients.get_mut(&ptr.id.client) {
-            let mut block: &mut Block = {
-                match blocks.list.get_mut(pivot as usize) {
+            let block: &mut Block = {
+                match blocks.list.get_mut(pivot) {
                     // check if ptr clock fits into block found by pivot
                     Some(b) if ptr.id.clock >= b.id().clock && ptr.id.clock < b.clock_end() => b,
                     _ => {
@@ -355,7 +341,7 @@ impl BlockStore {
                             } else {
                                 self.clients.get_mut(&right_ptr.id.client).unwrap()
                             };
-                            let right = &mut blocks[right_ptr.pivot as usize];
+                            let right = &mut blocks[right_ptr.pivot()];
                             if let Some(right_item) = right.as_item_mut() {
                                 right_item.left =
                                     Some(BlockPtr::new(right_split.id.clone(), index as u32));
