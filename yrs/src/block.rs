@@ -226,6 +226,9 @@ pub struct Skip {
 }
 
 impl Skip {
+    pub fn new(id: ID, len: u32) -> Self {
+        Skip { id, len }
+    }
     #[inline]
     pub fn merge(&mut self, other: &Self) {
         self.len += other.len;
@@ -239,6 +242,10 @@ pub struct GC {
 }
 
 impl GC {
+    pub fn new(id: ID, len: u32) -> Self {
+        GC { id, len }
+    }
+
     pub fn integrate(&mut self, pivot: u32) {
         if pivot > 0 {
             self.id.clock += pivot;
@@ -523,7 +530,7 @@ pub enum ItemContent {
     Binary(Vec<u8>),
     Deleted(u32),
     Doc(String, Any),
-    JSON(String),           // String is JSON
+    JSON(Vec<String>),      // String is JSON
     Embed(String),          // String is JSON
     Format(String, String), // key, value: JSON
     String(String),
@@ -600,10 +607,15 @@ impl ItemContent {
     pub fn encode<E: Encoder>(&self, encoder: &mut E) {
         match self {
             ItemContent::Deleted(len) => encoder.write_len(*len),
-            ItemContent::JSON(s) => encoder.write_string(s.as_str()),
             ItemContent::Binary(buf) => encoder.write_buf(buf),
             ItemContent::String(s) => encoder.write_string(s.as_str()),
             ItemContent::Embed(s) => encoder.write_string(s.as_str()),
+            ItemContent::JSON(s) => {
+                encoder.write_len(s.len() as u32);
+                for json in s.iter() {
+                    encoder.write_string(json.as_str())
+                }
+            }
             ItemContent::Format(k, v) => {
                 encoder.write_string(k.as_str());
                 encoder.write_string(v.as_str());
@@ -632,7 +644,15 @@ impl ItemContent {
     pub fn decode<D: Decoder>(decoder: &mut D, ref_num: u8, ptr: block::BlockPtr) -> Self {
         match ref_num & 0b1111 {
             BLOCK_ITEM_DELETED_REF_NUMBER => ItemContent::Deleted(decoder.read_len()),
-            BLOCK_ITEM_JSON_REF_NUMBER => ItemContent::JSON(decoder.read_string().to_owned()),
+            BLOCK_ITEM_JSON_REF_NUMBER => {
+                let mut remaining = decoder.read_len();
+                let mut buf = Vec::with_capacity(remaining as usize);
+                while remaining >= 0 {
+                    buf.push(decoder.read_string().to_owned());
+                    remaining -= 1;
+                }
+                ItemContent::JSON(buf)
+            }
             BLOCK_ITEM_BINARY_REF_NUMBER => ItemContent::Binary(decoder.read_buf().to_owned()),
             BLOCK_ITEM_STRING_REF_NUMBER => ItemContent::String(decoder.read_string().to_owned()),
             BLOCK_ITEM_EMBED_REF_NUMBER => ItemContent::Embed(decoder.read_string().to_owned()),
@@ -703,13 +723,18 @@ impl ItemContent {
                 Some(right)
             }
             ItemContent::JSON(value) => {
-                todo!()
+                let (left, right) = value.split_at(offset);
+                let left = left.to_vec();
+                let right = right.to_vec();
+                *self = ItemContent::JSON(left);
+                Some(ItemContent::JSON(right))
             }
             _ => None,
         }
     }
 
     pub fn try_merge(&mut self, other: &Self) -> bool {
+        //TODO: change `other` to Self (not ref) and return type to Option<Self> (none if merge suceeded)
         match (self, other) {
             (ItemContent::Any(v1), ItemContent::Any(v2)) => {
                 v1.append(&mut v2.clone());
@@ -720,7 +745,8 @@ impl ItemContent {
                 true
             }
             (ItemContent::JSON(v1), ItemContent::JSON(v2)) => {
-                todo!()
+                v1.append(&mut v2.clone());
+                true
             }
             (ItemContent::String(v1), ItemContent::String(v2)) => {
                 v1.push_str(v2.as_str());
@@ -730,3 +756,6 @@ impl ItemContent {
         }
     }
 }
+
+#[cfg(test)]
+mod test {}

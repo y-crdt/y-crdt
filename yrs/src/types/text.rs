@@ -154,7 +154,7 @@ mod test {
     }
 
     #[test]
-    fn insert_root_concurrent() {
+    fn insert_concurrent_root() {
         let mut d1 = Doc::with_client_id(1);
         let mut t1 = d1.transact();
         let mut txt1 = t1.get_text("test");
@@ -181,5 +181,40 @@ mod test {
 
         assert_eq!(a, b);
         assert_eq!(a.as_str(), "hello world");
+    }
+
+    #[test]
+    fn insert_concurrent_in_the_middle() {
+        let mut d1 = Doc::with_client_id(1);
+        let mut t1 = d1.transact();
+        let mut txt1 = t1.get_text("test");
+
+        txt1.insert(&mut t1, 0, "I expect that");
+
+        let mut d2 = Doc::with_client_id(2);
+        let mut t2 = d2.transact();
+
+        let d2_sv = d2.get_state_vector(&t2);
+        let u1 = d1.encode_delta_as_update(&d2_sv, &t1);
+        d2.apply_update(&mut t2, u1.as_slice());
+
+        let mut txt2 = t2.get_text("test");
+
+        txt2.insert(&mut t1, 1, " have");
+        txt2.insert(&mut t1, 13, "ed");
+        txt1.insert(&mut t1, 1, " didn't");
+
+        let d2_sv = d2.get_state_vector(&t2);
+        let d1_sv = d1.get_state_vector(&t1);
+        let u1 = d1.encode_delta_as_update(&d2_sv, &t1);
+        let u2 = d2.encode_delta_as_update(&d1_sv, &t2);
+        d1.apply_update(&mut t1, u2.as_slice());
+        d2.apply_update(&mut t2, u1.as_slice());
+
+        let a = txt1.to_string(&t1);
+        let b = txt2.to_string(&t2);
+
+        assert_eq!(a, b);
+        assert_eq!(a.as_str(), "I didn't have expected that");
     }
 }
