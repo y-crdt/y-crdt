@@ -120,6 +120,20 @@ impl ClientBlockList {
         }
     }
 
+    /// Returns first block on the list - since we only initialize [ClientBlockList]
+    /// when we're sure, we're about to add new elements to it, it always should
+    /// stay non-empty.
+    pub fn first(&self) -> &Block {
+        &self.list[0]
+    }
+
+    /// Returns last block on the list - since we only initialize [ClientBlockList]
+    /// when we're sure, we're about to add new elements to it, it always should
+    /// stay non-empty.
+    pub fn last(&self) -> &Block {
+        &self.list[self.integrated_len - 1]
+    }
+
     pub fn find_pivot(&self, clock: u32) -> Option<usize> {
         let mut left = 0;
         let mut right = self.list.len() - 1;
@@ -341,7 +355,11 @@ impl BlockStore {
                             } else {
                                 self.clients.get_mut(&right_ptr.id.client).unwrap()
                             };
-                            let right = &mut blocks[right_ptr.pivot()];
+                            let mut right = &mut blocks[right_ptr.pivot()];
+                            if *right.id() != right_ptr.id {
+                                let pivot = blocks.find_pivot(right_ptr.id.clock).unwrap();
+                                right = &mut blocks[pivot];
+                            }
                             if let Some(right_item) = right.as_item_mut() {
                                 right_item.left =
                                     Some(BlockPtr::new(right_split.id.clone(), index as u32));

@@ -114,7 +114,7 @@ impl Store {
         encoder.write_uvar(diff.len());
         for (client, clock) in diff {
             let blocks = self.blocks.get(&client).unwrap();
-            let clock = clock.max(blocks[0].id().clock); // make sure the first id exists
+            let clock = clock.max(blocks.first().id().clock); // make sure the first id exists
             let start = blocks.find_pivot(clock).unwrap();
             // write # encoded structs
             encoder.write_uvar(blocks.integrated_len() - start);

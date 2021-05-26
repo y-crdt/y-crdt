@@ -48,33 +48,6 @@ impl Doc {
     }
     /// Creates a transaction. Transaction cleanups & calling event handles
     /// happen when the transaction struct is dropped.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use std::rc::Rc;
-    ///
-    /// struct MyObserver {}
-    ///
-    /// impl yrs::Subscriber<yrs::events::UpdateEvent> for MyObserver {
-    ///   fn on_change (&self, event: yrs::events::UpdateEvent) {
-    ///     println!("Observer called!")
-    ///   }
-    /// }
-    ///
-    /// let doc = yrs::Doc::new();
-    ///
-    /// // register update observer
-    /// let provider = Rc::from(MyObserver {});
-    /// doc.on_update(Rc::downgrade(&provider));
-    /// {
-    ///   let tr = doc.transact();
-    ///   doc.get_type("my type").insert(&tr, 0, 'a');
-    ///   doc.get_type("my type").insert(&tr, 0, 'a');
-    ///   // the block ends and `tr` is going to be dropped
-    /// } // => "Observer called!"
-    ///
-    /// ```
     pub fn transact(&self) -> Transaction {
         Transaction::new(self.store.borrow_mut())
     }
