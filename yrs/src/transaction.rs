@@ -51,21 +51,6 @@ impl<'a> Transaction<'a> {
     ///   end up with the same content.
     /// * Even if an update contains known information, the unknown information
     ///   is extracted and integrated into the document structure.
-    ///
-    /// ```
-    /// let doc1 = yrs::Doc::new();
-    /// let doc2 = yrs::Doc::new();
-    ///
-    /// // some content
-    /// doc1.get_type("my type").insert(&doc1.transact(), 0, 'a');
-    ///
-    /// let update = doc1.encode_state_as_update();
-    ///
-    /// doc2.apply_update(&update);
-    ///
-    /// assert_eq!(doc1.get_type("my type").to_string(), "a");
-    /// ```
-    ///
     pub fn encode_update(&self) -> Vec<u8> {
         let mut update_encoder = updates::encoder::EncoderV1::new();
         self.store.encode_diff(&self.timestamp, &mut update_encoder);
