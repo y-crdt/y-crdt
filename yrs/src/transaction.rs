@@ -273,7 +273,7 @@ impl<'a> Transaction<'a> {
     }
 
     pub fn create_item(&mut self, pos: &block::ItemPosition, content: block::ItemContent) {
-        let left = pos.after;
+        let mut left = pos.after;
         let right = if pos.offset == 0 {
             match pos.after.as_ref() {
                 None => self.store.get_type(&pos.parent).unwrap().start.get(),
@@ -282,11 +282,12 @@ impl<'a> Transaction<'a> {
         } else {
             match pos.after.as_ref() {
                 None => self.store.get_type(&pos.parent).unwrap().start.get(),
-                Some(left) => {
-                    let mut split_ptr = left.clone();
+                Some(ptr) => {
+                    let mut split_ptr = ptr.clone();
                     split_ptr.id.clock += pos.offset;
-                    let (_, right) = self.store.blocks.split_block(&split_ptr);
-                    right
+                    let (l, r) = self.store.blocks.split_block(&split_ptr);
+                    left = l;
+                    r
                 }
             }
         };
