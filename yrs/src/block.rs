@@ -309,15 +309,22 @@ impl Item {
             }
         }
 
-        // resolve conflicts
-        let left = self
-            .left
-            .as_ref()
-            .and_then(|ptr| txn.store.blocks.get_block(ptr));
-        let right = self
-            .right
-            .as_ref()
-            .and_then(|ptr| txn.store.blocks.get_block(ptr));
+        let (left, right) = {
+            let left = self.left.as_ref();
+            if let Some(left_ptr) = left {
+                // try to split the left block - left_ptr may poin in the middle of it
+                txn.store.blocks.split_block(left_ptr);
+            }
+            let right = self.right.as_ref();
+            if let Some(right_ptr) = right {
+                // try to split the right block - right_ptr may poin in the middle of it
+                txn.store.blocks.split_block(right_ptr);
+            }
+            let left = left.and_then(|ptr| txn.store.blocks.get_block(ptr));
+            let right = right.and_then(|ptr| txn.store.blocks.get_block(ptr));
+            (left, right)
+        };
+
         let right_is_null_or_has_left = right
             .map(|item| match item {
                 Block::Item(item) => item.left.is_some(),
