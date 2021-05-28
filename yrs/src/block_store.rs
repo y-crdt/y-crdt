@@ -260,7 +260,7 @@ impl BlockStore {
     pub fn get_block(&self, ptr: &block::BlockPtr) -> Option<&block::Block> {
         let clients = self.clients.get(&ptr.id.client)?;
         match clients.list.get(ptr.pivot()) {
-            Some(block) if block.id().eq(&ptr.id) => Some(block),
+            Some(block) if block.id().clock == ptr.id.clock => Some(block),
             _ => {
                 // ptr.pivot missed - go slow path to find it
                 let pivot = clients.find_pivot(ptr.id.clock)?;

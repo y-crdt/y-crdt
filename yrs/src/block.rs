@@ -276,6 +276,13 @@ impl GC {
 }
 
 impl Item {
+    pub(crate) fn mark_as_deleted(&self) {
+        unsafe {
+            let ptr = &self.deleted as *const bool as *mut bool;
+            std::ptr::write(ptr, true);
+        }
+    }
+
     pub fn integrate(&mut self, txn: &mut Transaction<'_>, pivot: u32, offset: u32) {
         if offset > 0 {
             self.id.clock += offset;

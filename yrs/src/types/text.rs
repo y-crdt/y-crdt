@@ -1,3 +1,4 @@
+use crate::block::{BlockPtr, Item, ItemPosition};
 use crate::transaction::Transaction;
 use crate::*;
 
@@ -65,9 +66,59 @@ impl Text {
             })
         }
     }
+
     pub fn insert(&self, tr: &mut Transaction, index: u32, content: &str) {
         if let Some(pos) = self.find_position(tr, index) {
             tr.create_item(&pos, block::ItemContent::String(content.to_owned()));
+        } else {
+            panic!("The type or the position doesn't exist!");
+        }
+    }
+
+    pub fn delete(&self, txn: &mut Transaction, index: u32, mut len: u32) {
+        if let Some(pos) = self.find_position(txn, index) {
+            let mut current = if pos.offset == 0 {
+                let block = pos
+                    .after
+                    .as_ref()
+                    .and_then(|ptr| txn.store.blocks.get_block(ptr));
+                block.unwrap().as_item()
+            } else {
+                let mut split_ptr = pos.after.unwrap().clone();
+                split_ptr.id.clock += pos.offset;
+                let (left, right) = txn.store.blocks.split_block(&split_ptr);
+                txn.store
+                    .blocks
+                    .get_block(right.as_ref().unwrap())
+                    .and_then(|block| block.as_item())
+            };
+            while let Some(mut item) = current {
+                if len == 0 {
+                    break;
+                }
+                if !item.deleted {
+                    if len < item.len() {
+                        // split item
+                        let split_ptr = BlockPtr::from(item.id);
+                        let (left, _) = txn.store.blocks.split_block(&split_ptr);
+                        item = txn
+                            .store
+                            .blocks
+                            .get_block(left.as_ref().unwrap())
+                            .unwrap()
+                            .as_item()
+                            .unwrap();
+                    }
+
+                    len -= item.len();
+                    item.mark_as_deleted();
+                }
+                current = item
+                    .right
+                    .as_ref()
+                    .and_then(|ptr| txn.store.blocks.get_block(ptr))
+                    .and_then(|block| block.as_item());
+            }
         } else {
             panic!("The type or the position doesn't exist!");
         }
@@ -264,5 +315,95 @@ mod test {
 
         assert_eq!(a, b);
         assert_eq!(a.as_str(), "aaaaaabbbbbb");
+    }
+
+    #[test]
+    fn delete_single_block_start() {
+        let doc = Doc::new();
+        let mut txn = doc.transact();
+        let txt = txn.get_text("test");
+
+        txt.insert(&mut txn, 0, "bbb");
+        txt.insert(&mut txn, 0, "aaa");
+        txt.delete(&mut txn, 0, 3);
+
+        assert_eq!(txt.to_string(&txn).as_str(), "bbb");
+    }
+
+    #[test]
+    fn delete_single_block_end() {
+        let doc = Doc::new();
+        let mut txn = doc.transact();
+        let txt = txn.get_text("test");
+
+        txt.insert(&mut txn, 0, "bbb");
+        txt.insert(&mut txn, 0, "aaa");
+        txt.delete(&mut txn, 3, 3);
+
+        assert_eq!(txt.to_string(&txn).as_str(), "aaa");
+    }
+
+    #[test]
+    fn delete_multiple_whole_blocks() {
+        let doc = Doc::new();
+        let mut txn = doc.transact();
+        let txt = txn.get_text("test");
+
+        txt.insert(&mut txn, 0, "a");
+        txt.insert(&mut txn, 1, "b");
+        txt.insert(&mut txn, 2, "c");
+
+        txt.delete(&mut txn, 1, 1);
+        assert_eq!(txt.to_string(&txn).as_str(), "ac");
+
+        txt.delete(&mut txn, 1, 1);
+        assert_eq!(txt.to_string(&txn).as_str(), "a");
+
+        txt.delete(&mut txn, 0, 1);
+        assert_eq!(txt.to_string(&txn).as_str(), "");
+    }
+
+    #[test]
+    fn delete_slice_of_block() {
+        let doc = Doc::new();
+        let mut txn = doc.transact();
+        let txt = txn.get_text("test");
+
+        txt.insert(&mut txn, 0, "abc");
+        txt.delete(&mut txn, 1, 1);
+
+        assert_eq!(txt.to_string(&txn).as_str(), "ac");
+    }
+
+    #[test]
+    fn delete_multiple_blocks_with_slicing() {
+        let doc = Doc::new();
+        let mut txn = doc.transact();
+        let txt = txn.get_text("test");
+
+        txt.insert(&mut txn, 0, "hello ");
+        txt.insert(&mut txn, 6, "beautiful");
+        txt.insert(&mut txn, 15, " world");
+
+        txt.delete(&mut txn, 5, 11);
+        assert_eq!(txt.to_string(&txn).as_str(), "helloworld");
+    }
+
+    #[test]
+    fn insert_after_delete() {
+        let doc = Doc::new();
+        let mut txn = doc.transact();
+        let txt = txn.get_text("test");
+
+        txt.insert(&mut txn, 0, "hello ");
+        txt.delete(&mut txn, 0, 5);
+        txt.insert(&mut txn, 1, "world");
+
+        assert_eq!(txt.to_string(&txn).as_str(), " world");
+    }
+
+    #[test]
+    fn concurrent_insert_delete() {
+        todo!()
     }
 }
