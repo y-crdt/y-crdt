@@ -50,15 +50,20 @@ impl Text {
                 if remaining == 0 {
                     break;
                 }
-                let len = item.len();
-                if remaining < len {
-                    // the index we look for is either after or inside of the index
-                    prev = ptr;
-                    break;
+                if !item.deleted {
+                    let len = item.len();
+                    if remaining < len {
+                        // the index we look for is either after or inside of the index
+                        prev = ptr;
+                        break;
+                    } else {
+                        prev = ptr.take();
+                        ptr = item.right;
+                        remaining -= len;
+                    }
                 } else {
                     prev = ptr.take();
                     ptr = item.right;
-                    remaining -= len;
                 }
             }
             Some(block::ItemPosition {
