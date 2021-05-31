@@ -85,7 +85,10 @@ impl Text {
                     .as_ref()
                     .and_then(|ptr| txn.store.blocks.get_block(ptr));
                 match block {
-                    Some(block) => block.as_item(),
+                    Some(block) => block
+                        .as_item()
+                        .and_then(|item| item.right.as_ref())
+                        .and_then(|ptr| txn.store.blocks.get_item(ptr)),
                     None => {
                         let ptr = txn.store.get_type(&pos.parent).unwrap().start.get();
                         let item = ptr.as_ref().and_then(|ptr| txn.store.blocks.get_item(ptr));
@@ -347,8 +350,6 @@ mod test {
 
         txt.insert(&mut txn, 0, "bbb");
         txt.insert(&mut txn, 0, "aaa");
-        txt.insert(&mut txn, 3, "ccc");
-
         txt.delete(&mut txn, 3, 3);
 
         assert_eq!(txt.to_string(&txn).as_str(), "aaa");
