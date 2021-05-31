@@ -274,21 +274,17 @@ impl<'a> Transaction<'a> {
 
     pub fn create_item(&mut self, pos: &block::ItemPosition, content: block::ItemContent) {
         let mut left = pos.after;
-        let right = if pos.offset == 0 {
-            match pos.after.as_ref() {
-                None => self.store.get_type(&pos.parent).unwrap().start.get(),
-                Some(left) => self.store.blocks.get_item(left).and_then(|item| item.right),
+        let right = match pos.after.as_ref() {
+            None => self.store.get_type(&pos.parent).unwrap().start.get(),
+            Some(left) if pos.offset == 0 => {
+                self.store.blocks.get_item(left).and_then(|item| item.right)
             }
-        } else {
-            match pos.after.as_ref() {
-                None => self.store.get_type(&pos.parent).unwrap().start.get(),
-                Some(ptr) => {
-                    let mut split_ptr = ptr.clone();
-                    split_ptr.id.clock += pos.offset;
-                    let (l, r) = self.store.blocks.split_block(&split_ptr);
-                    left = l;
-                    r
-                }
+            Some(ptr) => {
+                let mut split_ptr = ptr.clone();
+                split_ptr.id.clock += pos.offset;
+                let (l, r) = self.store.blocks.split_block(&split_ptr);
+                left = l;
+                r
             }
         };
         let client_id = self.store.client_id;
