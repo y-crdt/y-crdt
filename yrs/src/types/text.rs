@@ -19,8 +19,10 @@ impl Text {
                 let mut s = String::new();
                 while let Some(a) = start.as_ref() {
                     if let Some(item) = tr.store.blocks.get_item(&a) {
-                        if let block::ItemContent::String(item_string) = &item.content {
-                            s.push_str(item_string);
+                        if !item.deleted {
+                            if let block::ItemContent::String(item_string) = &item.content {
+                                s.push_str(item_string);
+                            }
                         }
                         start = item.right.clone();
                     } else {
@@ -82,7 +84,14 @@ impl Text {
                     .after
                     .as_ref()
                     .and_then(|ptr| txn.store.blocks.get_block(ptr));
-                block.unwrap().as_item()
+                match block {
+                    Some(block) => block.as_item(),
+                    None => {
+                        let ptr = txn.store.get_type(&pos.parent).unwrap().start.get();
+                        let item = ptr.as_ref().and_then(|ptr| txn.store.blocks.get_item(ptr));
+                        item
+                    }
+                }
             } else {
                 let mut split_ptr = pos.after.unwrap().clone();
                 split_ptr.id.clock += pos.offset;
@@ -338,6 +347,8 @@ mod test {
 
         txt.insert(&mut txn, 0, "bbb");
         txt.insert(&mut txn, 0, "aaa");
+        txt.insert(&mut txn, 3, "ccc");
+
         txt.delete(&mut txn, 3, 3);
 
         assert_eq!(txt.to_string(&txn).as_str(), "aaa");
