@@ -111,7 +111,8 @@ impl Text {
                 if !item.deleted {
                     if len < item.len() {
                         // split item
-                        let split_ptr = BlockPtr::from(item.id);
+                        let mut split_ptr = BlockPtr::from(item.id);
+                        split_ptr.id.clock += len;
                         let (left, _) = txn.store.blocks.split_block(&split_ptr);
                         item = txn
                             .store
