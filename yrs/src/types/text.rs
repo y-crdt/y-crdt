@@ -145,6 +145,7 @@ impl Text {
 
 #[cfg(test)]
 mod test {
+    use crate::updates::encoder::Encode;
     use crate::Doc;
 
     #[test]
@@ -422,6 +423,43 @@ mod test {
 
     #[test]
     fn concurrent_insert_delete() {
-        todo!()
+        let d1 = Doc::with_client_id(1);
+        let mut t1 = d1.transact();
+        let txt1 = t1.get_text("test");
+
+        txt1.insert(&mut t1, 0, "hello world");
+        assert_eq!(txt1.to_string(&t1).as_str(), "hello world");
+
+        let u1 = d1.encode_state_as_update(&t1);
+
+        let d2 = Doc::with_client_id(2);
+        let mut t2 = d2.transact();
+        d2.apply_update(&mut t2, u1.as_slice());
+        let txt2 = t2.get_text("test");
+        assert_eq!(txt2.to_string(&t2).as_str(), "hello world");
+
+        txt1.insert(&mut t1, 5, " beautiful");
+        txt1.insert(&mut t1, 21, "!");
+        txt1.delete(&mut t1, 0, 5);
+        assert_eq!(txt1.to_string(&t1).as_str(), " beautiful world!");
+
+        txt2.delete(&mut t2, 5, 5);
+        txt2.delete(&mut t2, 0, 1);
+        txt2.insert(&mut t2, 0, "H");
+        assert_eq!(txt2.to_string(&t2).as_str(), "Hellod");
+
+        let sv1 = d1.get_state_vector(&t1);
+        let sv2 = d2.get_state_vector(&t2);
+        let u1 = d1.encode_delta_as_update(&sv2, &t1);
+        let u2 = d2.encode_delta_as_update(&sv1, &t2);
+
+        d1.apply_update(&mut t1, u2.as_slice());
+        d2.apply_update(&mut t2, u1.as_slice());
+
+        let a = txt1.to_string(&t1);
+        let b = txt2.to_string(&t2);
+
+        assert_eq!(a, b);
+        assert_eq!(a, "H beautiful worl!".to_owned());
     }
 }

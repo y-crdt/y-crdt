@@ -134,6 +134,14 @@ impl ClientBlockList {
         &self.list[self.integrated_len - 1]
     }
 
+    pub fn find(&mut self, ptr: &BlockPtr) -> Option<&mut Block> {
+        let pivot = match self.list.get_mut(ptr.pivot()) {
+            Some(block) if *block.id() == ptr.id => Some(ptr.pivot()),
+            _ => self.find_pivot(ptr.id.clock),
+        };
+        self.list.get_mut(pivot?)
+    }
+
     pub fn find_pivot(&self, clock: u32) -> Option<usize> {
         let mut left = 0;
         let mut right = self.list.len() - 1;
@@ -355,11 +363,7 @@ impl BlockStore {
                             } else {
                                 self.clients.get_mut(&right_ptr.id.client).unwrap()
                             };
-                            let mut right = &mut blocks[right_ptr.pivot()];
-                            if *right.id() != right_ptr.id {
-                                let pivot = blocks.find_pivot(right_ptr.id.clock).unwrap();
-                                right = &mut blocks[pivot];
-                            }
+                            let right = blocks.find(&right_ptr).unwrap();
                             if let Some(right_item) = right.as_item_mut() {
                                 right_item.left =
                                     Some(BlockPtr::new(right_split.id.clone(), index as u32));
