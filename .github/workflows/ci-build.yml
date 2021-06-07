@@ -1,6 +1,16 @@
 name: Rust
 
 on:
+  workflow_dispatch:
+    inputs:
+      name:
+        description: 'Manual Trigger'
+        required: true
+        default: 'Mona the Octocat'
+      home:
+        description: 'location'
+        required: false
+        default: 'The Octoverse'
   push:
     branches: [ master ]
   pull_request:
