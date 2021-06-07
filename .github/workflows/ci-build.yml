@@ -6,11 +6,11 @@ on:
       name:
         description: 'Manual Trigger'
         required: true
-        default: 'Mona the Octocat'
+        default: 'Triggered Manually'
       home:
         description: 'location'
         required: false
-        default: 'The Octoverse'
+        default: ''
   push:
     branches: [ master ]
   pull_request:
