@@ -4,3 +4,4 @@ perf.data.old
 pkg
 .idea
 .DS_Store
+.vscode/

@@ -1,8 +1,10 @@
 use crate::block_store::StateVector;
+use crate::id_set::DeleteSet;
 use crate::store::Store;
 use crate::transaction::Transaction;
-use crate::updates::decoder::DecoderV1;
-use crate::updates::encoder::Encoder;
+use crate::update::Update;
+use crate::updates::decoder::{Decode, DecoderV1};
+use crate::updates::encoder::{Encode, Encoder, EncoderV1};
 use crate::*;
 use rand::Rng;
 use std::cell::RefCell;
@@ -14,114 +16,52 @@ pub struct Doc {
 }
 
 impl Doc {
-    pub fn new() -> Doc {
+    pub fn new() -> Self {
         let client_id: u64 = rand::thread_rng().gen();
+        Self::with_client_id(client_id)
+    }
+
+    pub fn with_client_id(client_id: u64) -> Self {
         Doc {
             client_id,
             store: RefCell::from(Store::new(client_id)),
         }
     }
+
+    pub fn encode_state_as_update(&self, txn: &Transaction<'_>) -> Vec<u8> {
+        txn.store.encode_v1()
+    }
+
+    pub fn encode_delta_as_update(
+        &self,
+        remote_sv: &StateVector,
+        txn: &Transaction<'_>,
+    ) -> Vec<u8> {
+        let mut encoder = EncoderV1::new();
+        txn.store.encode_diff(remote_sv, &mut encoder);
+        encoder.to_vec()
+    }
+
     pub fn get_type(&self, tr: &Transaction, string: &str) -> types::Text {
         let ptr = types::TypePtr::Named(string.to_owned());
         types::Text::from(ptr)
     }
     /// Creates a transaction. Transaction cleanups & calling event handles
     /// happen when the transaction struct is dropped.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use std::rc::Rc;
-    ///
-    /// struct MyObserver {}
-    ///
-    /// impl yrs::Subscriber<yrs::events::UpdateEvent> for MyObserver {
-    ///   fn on_change (&self, event: yrs::events::UpdateEvent) {
-    ///     println!("Observer called!")
-    ///   }
-    /// }
-    ///
-    /// let doc = yrs::Doc::new();
-    ///
-    /// // register update observer
-    /// let provider = Rc::from(MyObserver {});
-    /// doc.on_update(Rc::downgrade(&provider));
-    /// {
-    ///   let tr = doc.transact();
-    ///   doc.get_type("my type").insert(&tr, 0, 'a');
-    ///   doc.get_type("my type").insert(&tr, 0, 'a');
-    ///   // the block ends and `tr` is going to be dropped
-    /// } // => "Observer called!"
-    ///
-    /// ```
     pub fn transact(&self) -> Transaction {
         Transaction::new(self.store.borrow_mut())
     }
-    /// Encodes the document state to a binary format.
-    ///
-    /// Document updates are idempotent and commutative. Caveats:
-    /// * It doesn't matter in which order document updates are applied.
-    /// * As long as all clients receive the same document updates, all clients
-    ///   end up with the same content.
-    /// * Even if an update contains known information, the unknown information
-    ///   is extracted and integrated into the document structure.
-    ///
-    /// ```
-    /// let doc1 = yrs::Doc::new();
-    /// let doc2 = yrs::Doc::new();
-    ///
-    /// // some content
-    /// doc1.get_type("my type").insert(&doc1.transact(), 0, 'a');
-    ///
-    /// let update = doc1.encode_state_as_update();
-    ///
-    /// doc2.apply_update(&update);
-    ///
-    /// assert_eq!(doc1.get_type("my type").to_string(), "a");
-    /// ```
-    ///
-    pub fn encode_state_as_update(&self, tr: &Transaction) -> Vec<u8> {
-        let mut update_encoder = updates::encoder::EncoderV1::new();
-        tr.store
-            .write_blocks(&mut update_encoder, &StateVector::empty());
-        // @todo this is not satisfactory. We would copy the complete buffer every time this method is called.
-        // Instead we should implement `write_state_as_update` and fill an existing object that implements the Write trait.
-        update_encoder.to_vec()
-    }
-    /// Compute a diff to sync with another client.
-    ///
-    /// This is the most efficient method to sync with another client by only
-    /// syncing the differences.
-    ///
-    /// The sync protocol in Yrs/js is:
-    /// * Send StateVector to the other client.
-    /// * The other client comutes a minimal diff to sync by using the StateVector.
-    ///
-    /// ```
-    /// let doc1 = yrs::Doc::new();
-    /// let doc2 = yrs::Doc::new();
-    ///
-    /// let state_vector = doc1.get_state_vector();
-    /// // encode state vector to a binary format that you can send to other peers.
-    /// let state_vector_encoded: Vec<u8> = state_vector.encode();
-    ///
-    /// let diff = doc2.encode_diff_as_update(&yrs::StateVector::decode(&state_vector_encoded));
-    ///
-    /// // apply all missing changes from doc2 to doc1.
-    /// doc1.apply_update(&diff);
-    /// ```
-    pub fn encode_diff_as_update(&self, tr: &Transaction, sv: &StateVector) -> Vec<u8> {
-        let mut update_encoder = updates::encoder::EncoderV1::new();
-        tr.store.write_blocks(&mut update_encoder, sv);
-        update_encoder.to_vec()
-    }
+
     /// Apply a document update.
     pub fn apply_update(&self, tr: &mut Transaction, update: &[u8]) {
         let mut decoder = DecoderV1::from(update);
-        tr.store.read_blocks(&mut decoder)
+        let update = Update::decode(&mut decoder);
+        let ds = DeleteSet::decode(&mut decoder);
+        tr.apply_update(update, ds)
     }
+
     // Retrieve document state vector in order to encode the document diff.
-    pub fn get_state_vector(&self, tr: &mut Transaction) -> StateVector {
+    pub fn get_state_vector(&self, tr: &Transaction) -> StateVector {
         tr.store.blocks.get_state_vector()
     }
 }
@@ -134,7 +74,10 @@ impl Default for Doc {
 
 #[cfg(test)]
 mod test {
-    use crate::Doc;
+    use crate::update::Update;
+    use crate::updates::decoder::Decode;
+    use crate::updates::encoder::{Encode, Encoder, EncoderV1};
+    use crate::{Doc, StateVector};
 
     #[test]
     fn apply_update_basic() {
@@ -160,5 +103,58 @@ mod test {
 
         let actual = doc.get_type(&tr, "type").to_string(&tr);
         assert_eq!(actual, "210".to_owned());
+    }
+
+    #[test]
+    fn encode_basic() {
+        let doc = Doc::with_client_id(1490905955);
+        let mut t = doc.transact();
+        let txt = t.get_text("type");
+        txt.insert(&mut t, 0, "0");
+        txt.insert(&mut t, 0, "1");
+        txt.insert(&mut t, 0, "2");
+
+        let encoded = doc.encode_state_as_update(&t);
+        let expected = &[
+            1, 3, 227, 214, 245, 198, 5, 0, 4, 1, 4, 116, 121, 112, 101, 1, 48, 68, 227, 214, 245,
+            198, 5, 0, 1, 49, 68, 227, 214, 245, 198, 5, 1, 1, 50, 0,
+        ];
+        assert_eq!(encoded.as_slice(), expected);
+    }
+
+    #[test]
+    fn integrate() {
+        // create new document at A and add some initial text to it
+        let d1 = Doc::new();
+        let mut t1 = d1.transact();
+        let txt = t1.get_text("test");
+        // Question: why YText.insert uses positions of blocks instead of actual cursor positions
+        // in text as seen by user?
+        txt.insert(&mut t1, 0, "hello");
+        txt.insert(&mut t1, 5, " ");
+        txt.insert(&mut t1, 6, "world");
+
+        assert_eq!(txt.to_string(&t1), "hello world".to_string());
+
+        // create document at B
+        let d2 = Doc::new();
+        let mut t2 = d2.transact();
+        let sv = d2.get_state_vector(&mut t2).encode_v1();
+
+        // create an update A->B based on B's state vector
+        let mut encoder = EncoderV1::new();
+        t1.store
+            .encode_diff(&StateVector::decode_v1(sv.as_slice()), &mut encoder);
+        let binary = encoder.to_vec();
+
+        // decode an update incoming from A and integrate it at B
+        let update = Update::decode_v1(binary.as_slice());
+        let pending = update.integrate(&mut t2);
+
+        assert!(pending.is_none());
+
+        // check if B sees the same thing that A does
+        let txt = t2.get_text("test");
+        assert_eq!(txt.to_string(&t2), "hello world".to_string());
     }
 }
