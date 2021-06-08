@@ -2,6 +2,16 @@ use crate::*;
 use lib0::decoding::Read;
 use lib0::{any::Any, decoding::Cursor};
 
+pub trait Decode: Sized {
+    fn decode<D: Decoder>(decoder: &mut D) -> Self;
+
+    /// Helper function for decoding
+    fn decode_v1(data: &[u8]) -> Self {
+        let mut decoder = DecoderV1::from(data);
+        Self::decode(&mut decoder)
+    }
+}
+
 pub trait Decoder: Read {
     fn reset_ds_cur_val(&mut self);
     fn read_ds_clock(&mut self) -> u32;

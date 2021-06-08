@@ -1,8 +1,11 @@
 use crate::store::Store;
+use crate::types::TypePtr;
 use crate::updates::decoder::Decoder;
 use crate::updates::encoder::Encoder;
 use crate::*;
 use lib0::any::Any;
+use std::collections::HashSet;
+use std::hash::Hash;
 use std::panic;
 
 pub const BLOCK_GC_REF_NUMBER: u8 = 0;
@@ -19,6 +22,7 @@ pub const BLOCK_SKIP_REF_NUMBER: u8 = 10;
 
 pub const HAS_RIGHT_ORIGIN: u8 = 0b01000000;
 pub const HAS_ORIGIN: u8 = 0b10000000;
+pub const HAS_PARENT_SUB: u8 = 0b00100000;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct ID {
@@ -32,10 +36,16 @@ impl ID {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+impl std::fmt::Display for ID {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "({}:{})", self.client, self.clock)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub struct BlockPtr {
     pub id: ID,
-    pub pivot: u32,
+    pivot: u32,
 }
 
 impl BlockPtr {
@@ -49,9 +59,24 @@ impl BlockPtr {
             pivot: id.clock,
         }
     }
+
+    #[inline]
+    pub fn pivot(&self) -> usize {
+        self.pivot as usize
+    }
+
+    pub fn fix_pivot(&self, pivot: u32) {
+        unsafe { std::ptr::write(&self.pivot as *const u32 as *mut u32, pivot) };
+    }
 }
 
-#[derive(Debug, PartialEq)]
+impl std::fmt::Display for BlockPtr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "({}->{})", self.id, self.pivot())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum Block {
     Item(Item),
     Skip(Skip),
@@ -81,11 +106,39 @@ impl Block {
         }
     }
 
+    pub fn integrate(&mut self, txn: &mut Transaction<'_>, pivot: u32, offset: u32) {
+        match self {
+            Block::Item(item) => item.integrate(txn, pivot, offset),
+            Block::GC(gc) => gc.integrate(offset),
+            Block::Skip(_) => {
+                panic!("Block::Skip cannot be integrated")
+            }
+        }
+    }
+
+    pub fn try_merge(&mut self, other: &Self) -> bool {
+        match (self, other) {
+            (Block::Item(v1), Block::Item(v2)) => v1.try_merge(v2),
+            (Block::GC(v1), Block::GC(v2)) => {
+                v1.merge(v2);
+                true
+            }
+            (Block::Skip(v1), Block::Skip(v2)) => {
+                v1.merge(v2);
+                true
+            }
+            _ => false,
+        }
+    }
+
     pub fn encode<E: Encoder>(&self, store: &Store, encoder: &mut E) {
         match self {
             Block::Item(item) => {
                 let info = if item.origin.is_some() { HAS_ORIGIN } else { 0 } // is left null
-                    | if item.right_origin.is_some() { HAS_RIGHT_ORIGIN } else { 0 }; // is right null
+                    | if item.right_origin.is_some() { HAS_RIGHT_ORIGIN } else { 0 } // is right null
+                    | if item.parent_sub.is_some() { HAS_PARENT_SUB } else { 0 }
+                    | item.content.get_ref_number();
+                let cant_copy_parent_info = info & (HAS_ORIGIN | HAS_RIGHT_ORIGIN) == 0;
                 encoder.write_info(info);
                 if let Some(origin_id) = item.origin.as_ref() {
                     encoder.write_left_id(origin_id);
@@ -93,7 +146,7 @@ impl Block {
                 if let Some(right_origin_id) = item.right_origin.as_ref() {
                     encoder.write_right_id(right_origin_id);
                 }
-                if item.origin.is_none() && item.right_origin.is_none() {
+                if cant_copy_parent_info {
                     match &item.parent {
                         types::TypePtr::NamedRef(type_name_ref) => {
                             let type_name = store.get_type_name(*type_name_ref);
@@ -110,6 +163,12 @@ impl Block {
                         }
                     }
                 }
+                if cant_copy_parent_info {
+                    if let Some(parent_sub) = item.parent_sub.as_ref() {
+                        encoder.write_string(parent_sub.as_str());
+                    }
+                }
+                item.content.encode(encoder);
             }
             Block::Skip(skip) => {
                 encoder.write_info(BLOCK_SKIP_REF_NUMBER);
@@ -145,15 +204,25 @@ impl Block {
             Block::GC(gc) => gc.id.clock + gc.len,
         }
     }
+
+    /// Returns an ID of a block, current item depends upon
+    /// (meaning: dependency must appear in the store before current item).
+    pub fn dependency(&self) -> Option<&ID> {
+        match self {
+            Block::Item(item) => item.dependency(),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct ItemPosition {
     pub parent: types::TypePtr,
     pub after: Option<BlockPtr>,
+    pub offset: u32,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Item {
     pub id: ID,
     pub left: Option<BlockPtr>,
@@ -166,37 +235,231 @@ pub struct Item {
     pub deleted: bool,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Skip {
     pub id: ID,
     pub len: u32,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+impl Skip {
+    pub fn new(id: ID, len: u32) -> Self {
+        Skip { id, len }
+    }
+    #[inline]
+    pub fn merge(&mut self, other: &Self) {
+        self.len += other.len;
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GC {
     pub id: ID,
     pub len: u32,
 }
 
-impl Item {
-    #[inline(always)]
-    pub fn integrate(&self, store: &mut Store, pivot: u32) {
-        let blocks = &mut store.blocks;
-        // No conflict resolution yet..
-        // We only implement the reconnection part:
-        if let Some(right_id) = self.right {
-            let right = blocks.get_item_mut(&right_id);
-            right.left = Some(BlockPtr { pivot, id: self.id });
+impl GC {
+    pub fn new(id: ID, len: u32) -> Self {
+        GC { id, len }
+    }
+
+    pub fn integrate(&mut self, pivot: u32) {
+        if pivot > 0 {
+            self.id.clock += pivot;
+            self.len -= pivot;
         }
-        match self.left {
-            Some(left_id) => {
-                let left = blocks.get_item_mut(&left_id);
-                left.right = Some(BlockPtr { pivot, id: self.id });
+    }
+
+    #[inline]
+    pub fn merge(&mut self, other: &Self) {
+        self.len += other.len;
+    }
+}
+
+impl Item {
+    pub fn integrate(&mut self, txn: &mut Transaction<'_>, pivot: u32, offset: u32) {
+        if offset > 0 {
+            self.id.clock += offset;
+            let (left, _) = txn
+                .store
+                .blocks
+                .split_block(&BlockPtr::from(ID::new(self.id.client, self.id.clock - 1)));
+            if let Some(left) = left {
+                if let Some(origin) = txn.store.blocks.get_item(&left) {
+                    self.origin = Some(origin.last_id());
+                    self.left = Some(left);
+                }
+            } else {
+                self.left = None;
+                self.origin = None;
             }
-            None => {
-                let parent_type = store.init_type_from_ptr(&self.parent).unwrap();
-                parent_type.start.set(Some(BlockPtr { pivot, id: self.id }));
+            self.content.splice(offset as usize);
+        }
+
+        // In the original Y.js algorithm we decoded items as we go and attached them to client
+        // block list. During that process if we had right origin but no left, we made a lookup for
+        // right origin's parent and attach it as a parent of current block.
+        //
+        // Here since we decode all blocks first, then apply them, we might not find them in
+        // the block store during decoding. Therefore we retroactively reattach it here.
+        if let TypePtr::Id(ptr) = &self.parent {
+            if Some(ptr.id) == self.right_origin {
+                if let Some(item) = txn.store.blocks.get_item(&ptr) {
+                    self.parent = item.parent.clone();
+                }
             }
+        }
+
+        let (left, right) = {
+            let left = self.left.as_ref();
+            if let Some(left_ptr) = left {
+                // try to split the left block - left_ptr may poin in the middle of it
+                txn.store.blocks.split_block(left_ptr);
+            }
+            let right = self.right.as_ref();
+            if let Some(right_ptr) = right {
+                // try to split the right block - right_ptr may poin in the middle of it
+                txn.store.blocks.split_block(right_ptr);
+            }
+            let left = left.and_then(|ptr| txn.store.blocks.get_block(ptr));
+            let right = right.and_then(|ptr| txn.store.blocks.get_block(ptr));
+            (left, right)
+        };
+
+        let right_is_null_or_has_left = right
+            .map(|item| match item {
+                Block::Item(item) => item.left.is_some(),
+                _ => false,
+            })
+            .unwrap_or(true);
+        let left_has_other_right_than_self = if let Some(left) = left {
+            match left {
+                Block::Item(item) => item.right.map(|ptr| ptr.id) != Some(self.id),
+                _ => true,
+            }
+        } else {
+            false
+        };
+
+        if (left.is_none() && right_is_null_or_has_left) || left_has_other_right_than_self {
+            // set the first conflicting item
+            let mut o = if let Some(Block::Item(left)) = left {
+                left.right
+            } else if let Some(sub) = &self.parent_sub {
+                //o = /** @type {AbstractType<any>} */ (this.parent)._map.get(this.parentSub) || null
+                //while (o !== null && o.left !== null) {
+                //    o = o.left
+                //}
+                todo!()
+            } else {
+                if let Some(parent) = txn.store.get_type(&self.parent) {
+                    parent.start.get()
+                } else {
+                    self.right.clone()
+                }
+            };
+
+            let mut left = self.left.clone();
+            let mut conflicting_items = HashSet::new();
+            let mut items_before_origin = HashSet::new();
+
+            // Let c in conflicting_items, b in items_before_origin
+            // ***{origin}bbbb{this}{c,b}{c,b}{o}***
+            // Note that conflicting_items is a subset of items_before_origin
+            while let Some(ptr) = o {
+                if Some(ptr) == self.right {
+                    break;
+                }
+
+                items_before_origin.insert(ptr.id.clone());
+                conflicting_items.insert(ptr.id.clone());
+                if let Some(Block::Item(item)) = txn.store.blocks.get_block(&ptr) {
+                    if self.origin == item.origin {
+                        // case 1
+                        if ptr.id.client < self.id.client {
+                            left = Some(ptr.clone());
+                            conflicting_items.clear();
+                        } else if self.right_origin == item.right_origin {
+                            // `self` and `item` are conflicting and point to the same integration
+                            // points. The id decides which item comes first. Since `self` is to
+                            // the left of `item`, we can break here.
+                            break;
+                        }
+                    } else {
+                        if let Some(item_origin) = item.origin {
+                            if items_before_origin.contains(&item_origin) {
+                                if !conflicting_items.contains(&item_origin) {
+                                    left = Some(ptr.clone());
+                                    conflicting_items.clear();
+                                }
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                    o = item.right.clone();
+                }
+                self.left = left;
+            }
+        }
+
+        // reconnect left/right
+        if let Some(left_id) = self.left.as_ref() {
+            if let Some(left) = txn.store.blocks.get_item_mut(left_id) {
+                self.right = left.right.replace(BlockPtr::new(self.id, pivot));
+            }
+        } else {
+            let r = if let Some(parent_sub) = &self.parent_sub {
+                //r = /** @type {AbstractType<any>} */ (this.parent)._map.get(this.parentSub) || null
+                //while (r !== null && r.left !== null) {
+                //    r = r.left
+                //}
+                todo!()
+            } else {
+                let parent_type = txn.store.init_type_from_ptr(&self.parent).unwrap();
+                let start = parent_type
+                    .start
+                    .replace(Some(BlockPtr::new(self.id, pivot)));
+                start
+            };
+            self.right = r;
+        }
+
+        if let Some(right_id) = self.right.as_ref() {
+            if let Some(right) = txn.store.blocks.get_item_mut(right_id) {
+                right.left = Some(BlockPtr::new(self.id, pivot));
+            }
+        } else if let Some(parent_sub) = &self.parent_sub {
+            // // set as current parent value if right === null and this is parentSub
+            // /** @type {AbstractType<any>} */ (this.parent)._map.set(this.parentSub, this)
+            // if (this.left !== null) {
+            //   // this is the current attribute value of parent. delete right
+            //   this.left.delete(transaction)
+            // }
+            todo!()
+        }
+
+        self.integrate_content(txn);
+        // addChangedTypeToTransaction(transaction, /** @type {AbstractType<any>} */ (this.parent), this.parentSub)
+        let parent_deleted = txn
+            .store
+            .blocks
+            .get_item_from_type_ptr(&self.parent)
+            .map(|item| item.deleted)
+            .unwrap_or(false);
+        if parent_deleted || (self.parent_sub.is_some() && self.right.is_some()) {
+            // delete if parent is deleted or if this is not the current attribute value of parent
+            self.delete(txn);
+        }
+    }
+
+    pub fn delete(&mut self, txn: &mut Transaction<'_>) {
+        if !self.deleted {
+            self.deleted = true;
+            self.content.delete(txn);
+            //addToDeleteSet(transaction.deleteSet, this.id.client, this.id.clock, this.length)
+            //addChangedTypeToTransaction(transaction, parent, this.parentSub)
+            //this.content.delete(transaction)
+            todo!()
         }
     }
 
@@ -222,15 +485,76 @@ impl Item {
         self.right = Some(BlockPtr::from(other.id));
         other
     }
+
+    pub fn last_id(&self) -> ID {
+        ID::new(self.id.client, self.id.clock + self.len() - 1)
+    }
+
+    /// Tries to merge current [Item] with another, returning true if merge was performed successfully.
+    pub fn try_merge(&mut self, other: &Self) -> bool {
+        if self.id.client == other.id.client
+            && self.id.clock + self.len() == other.id.clock
+            && other.origin == Some(self.last_id())
+            && self.right == Some(BlockPtr::from(other.id.clone()))
+            && self.right_origin == other.right_origin
+            && self.deleted == other.deleted
+            && self.content.try_merge(&other.content)
+        {
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Returns an ID of a block, current item depends upon
+    /// (meaning: dependency must appear in the store before current item).
+    pub fn dependency(&self) -> Option<&ID> {
+        self.origin
+            .as_ref()
+            .or_else(|| self.right_origin.as_ref())
+            .or_else(|| match &self.parent {
+                TypePtr::Id(ptr) => Some(&ptr.id),
+                _ => None,
+            })
+    }
+    fn integrate_content(&mut self, txn: &mut Transaction<'_>) {
+        match &mut self.content {
+            ItemContent::Deleted(_) => {
+                //addToDeleteSet(transaction.deleteSet, item.id.client, item.id.clock, this.len)
+                //item.markDeleted()
+                todo!()
+            }
+            ItemContent::Doc(_, _) => {
+                //// this needs to be reflected in doc.destroy as well
+                //this.doc._item = item
+                //transaction.subdocsAdded.add(this.doc)
+                //if (this.doc.shouldLoad) {
+                //    transaction.subdocsLoaded.add(this.doc)
+                //}
+                todo!()
+            }
+            ItemContent::Format(_, _) => {
+                // @todo searchmarker are currently unsupported for rich text documents
+                // /** @type {AbstractType<any>} */ (item.parent)._searchMarker = null
+            }
+            ItemContent::Type(_) => {
+                // this.type._integrate(transaction.doc, item)
+                todo!()
+            }
+            _ => {
+                // other types don't define integration-specific actions
+            }
+        }
+    }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ItemContent {
     Any(Vec<Any>),
     Binary(Vec<u8>),
     Deleted(u32),
     Doc(String, Any),
-    JSON(String),           // String is JSON
+    JSON(Vec<String>),      // String is JSON
     Embed(String),          // String is JSON
     Format(String, String), // key, value: JSON
     String(String),
@@ -252,6 +576,47 @@ impl ItemContent {
         }
     }
 
+    fn delete(&mut self, txn: &mut Transaction<'_>) {
+        match self {
+            ItemContent::Doc(_, _) => {
+                //if (transaction.subdocsAdded.has(this.doc)) {
+                //    transaction.subdocsAdded.delete(this.doc)
+                //} else {
+                //    transaction.subdocsRemoved.add(this.doc)
+                //}
+                todo!()
+            }
+            ItemContent::Type(_) => {
+                //let item = this.type._start
+                //while (item !== null) {
+                //    if (!item.deleted) {
+                //        item.delete(transaction)
+                //    } else {
+                //        // Whis will be gc'd later and we want to merge it if possible
+                //        // We try to merge all deleted items after each transaction,
+                //        // but we have no knowledge about that this needs to be merged
+                //        // since it is not in transaction.ds. Hence we add it to transaction._mergeStructs
+                //        transaction._mergeStructs.push(item)
+                //    }
+                //    item = item.right
+                //}
+                //this.type._map.forEach(item => {
+                //    if (!item.deleted) {
+                //        item.delete(transaction)
+                //    } else {
+                //        // same as above
+                //        transaction._mergeStructs.push(item)
+                //    }
+                //})
+                //transaction.changed.delete(this.type)
+                todo!()
+            }
+            _ => {
+                // nothing to do for other content types
+            }
+        }
+    }
+
     pub fn len(&self) -> u32 {
         match self {
             ItemContent::Deleted(deleted) => *deleted,
@@ -263,10 +628,55 @@ impl ItemContent {
         }
     }
 
+    pub fn encode<E: Encoder>(&self, encoder: &mut E) {
+        match self {
+            ItemContent::Deleted(len) => encoder.write_len(*len),
+            ItemContent::Binary(buf) => encoder.write_buf(buf),
+            ItemContent::String(s) => encoder.write_string(s.as_str()),
+            ItemContent::Embed(s) => encoder.write_string(s.as_str()),
+            ItemContent::JSON(s) => {
+                encoder.write_len(s.len() as u32);
+                for json in s.iter() {
+                    encoder.write_string(json.as_str())
+                }
+            }
+            ItemContent::Format(k, v) => {
+                encoder.write_string(k.as_str());
+                encoder.write_string(v.as_str());
+            }
+            ItemContent::Type(inner) => {
+                encoder.write_type_ref(inner.type_ref);
+                if inner.type_ref == types::TYPE_REFS_XML_ELEMENT
+                    || inner.type_ref == types::TYPE_REFS_XML_HOOK
+                {
+                    encoder.write_key(inner.name.as_ref().unwrap().as_str())
+                }
+            }
+            ItemContent::Any(any) => {
+                encoder.write_len(any.len() as u32);
+                for a in any.iter() {
+                    encoder.write_any(a);
+                }
+            }
+            ItemContent::Doc(key, any) => {
+                encoder.write_string(key.as_str());
+                encoder.write_any(any);
+            }
+        }
+    }
+
     pub fn decode<D: Decoder>(decoder: &mut D, ref_num: u8, ptr: block::BlockPtr) -> Self {
         match ref_num & 0b1111 {
             BLOCK_ITEM_DELETED_REF_NUMBER => ItemContent::Deleted(decoder.read_len()),
-            BLOCK_ITEM_JSON_REF_NUMBER => ItemContent::JSON(decoder.read_string().to_owned()),
+            BLOCK_ITEM_JSON_REF_NUMBER => {
+                let mut remaining = decoder.read_len() as i32;
+                let mut buf = Vec::with_capacity(remaining as usize);
+                while remaining >= 0 {
+                    buf.push(decoder.read_string().to_owned());
+                    remaining -= 1;
+                }
+                ItemContent::JSON(buf)
+            }
             BLOCK_ITEM_BINARY_REF_NUMBER => ItemContent::Binary(decoder.read_buf().to_owned()),
             BLOCK_ITEM_STRING_REF_NUMBER => ItemContent::String(decoder.read_string().to_owned()),
             BLOCK_ITEM_EMBED_REF_NUMBER => ItemContent::Embed(decoder.read_string().to_owned()),
@@ -337,9 +747,50 @@ impl ItemContent {
                 Some(right)
             }
             ItemContent::JSON(value) => {
-                todo!()
+                let (left, right) = value.split_at(offset);
+                let left = left.to_vec();
+                let right = right.to_vec();
+                *self = ItemContent::JSON(left);
+                Some(ItemContent::JSON(right))
             }
             _ => None,
         }
+    }
+
+    pub fn try_merge(&mut self, other: &Self) -> bool {
+        //TODO: change `other` to Self (not ref) and return type to Option<Self> (none if merge suceeded)
+        match (self, other) {
+            (ItemContent::Any(v1), ItemContent::Any(v2)) => {
+                v1.append(&mut v2.clone());
+                true
+            }
+            (ItemContent::Deleted(v1), ItemContent::Deleted(v2)) => {
+                *v1 = *v1 + *v2;
+                true
+            }
+            (ItemContent::JSON(v1), ItemContent::JSON(v2)) => {
+                v1.append(&mut v2.clone());
+                true
+            }
+            (ItemContent::String(v1), ItemContent::String(v2)) => {
+                v1.push_str(v2.as_str());
+                true
+            }
+            _ => false,
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::block::BlockPtr;
+    use crate::ID;
+
+    #[test]
+    fn block_ptr_pivot() {
+        let ptr = BlockPtr::new(ID::new(1, 2), 3);
+        assert_eq!(ptr.pivot(), 3);
+        ptr.fix_pivot(4);
+        assert_eq!(ptr.pivot(), 4);
     }
 }
