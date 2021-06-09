@@ -351,10 +351,13 @@ impl BlockStore {
             let left_split_ptr = BlockPtr::new(block.id().clone(), pivot as u32);
             let right_split_ptr = match block {
                 Block::Item(item) => {
-                    if ptr.id.clock > item.id.clock && ptr.id.clock <= item.id.clock + item.len() {
+                    let len = item.len();
+                    if ptr.id.clock > item.id.clock && ptr.id.clock <= item.id.clock + len {
                         let index = pivot + 1;
                         let diff = ptr.id.clock - item.id.clock;
+                        println!("splitting item {} at position {}", item, diff);
                         let right_split = item.split(diff);
+                        println!("\tsplit result: {} - {}", item, right_split);
                         let right_split_id = right_split.id.clone();
                         let right_ptr = right_split.right.clone();
                         if let Some(right_ptr) = right_ptr {
@@ -381,5 +384,32 @@ impl BlockStore {
         } else {
             (None, None)
         }
+    }
+}
+
+impl std::fmt::Display for ClientBlockList {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "[")?;
+        let mut i = 0;
+        writeln!(f, "")?;
+        while i < self.list.len() {
+            let block = &self.list[i];
+            writeln!(f, "\t\t{}", block)?;
+            if i == self.integrated_len {
+                writeln!(f, "---")?;
+            }
+            i += 1;
+        }
+        write!(f, "\t]")
+    }
+}
+
+impl std::fmt::Display for BlockStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "{{")?;
+        for (k, v) in self.iter() {
+            writeln!(f, "\t{} ->{}", k, v)?;
+        }
+        writeln!(f, "}}")
     }
 }

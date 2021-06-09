@@ -277,6 +277,7 @@ mod test {
 
         txt2.insert(&mut t2, 1, " have");
         txt2.insert(&mut t2, 13, "ed");
+        println!("{}", &t2.store.blocks);
         assert_eq!(txt2.to_string(&t2).as_str(), "I have expected that");
 
         txt1.insert(&mut t1, 1, " didn't");
@@ -326,14 +327,15 @@ mod test {
         let d1_sv = d1.get_state_vector(&t1);
         let u1 = d1.encode_delta_as_update(&d2_sv, &t1);
         let u2 = d2.encode_delta_as_update(&d1_sv, &t2);
+
         d1.apply_update(&mut t1, u2.as_slice());
         d2.apply_update(&mut t2, u1.as_slice());
 
         let a = txt1.to_string(&t1);
         let b = txt2.to_string(&t2);
 
-        assert_eq!(a, b);
         assert_eq!(a.as_str(), "aaaaaabbbbbb");
+        assert_eq!(a, b);
     }
 
     #[test]
@@ -460,6 +462,6 @@ mod test {
         let b = txt2.to_string(&t2);
 
         assert_eq!(a, b);
-        assert_eq!(a, "H beautiful worl!".to_owned());
+        assert_eq!(a, "H beautifuld!".to_owned());
     }
 }
