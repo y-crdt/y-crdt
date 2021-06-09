@@ -38,7 +38,7 @@ impl ID {
 
 impl std::fmt::Display for ID {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "({}:{})", self.client, self.clock)
+        write!(f, "<{}#{}>", self.client, self.clock)
     }
 }
 
@@ -83,7 +83,57 @@ pub enum Block {
     GC(GC),
 }
 
+impl std::fmt::Display for Block {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Block::Item(item) = self {
+            item.fmt(f)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl std::fmt::Display for Item {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "({}", self.id)?;
+        if let Some(origin) = self.origin.as_ref() {
+            write!(f, ", origin-l: {}", origin)?;
+        }
+        if let Some(origin) = self.right_origin.as_ref() {
+            write!(f, ", origin-r: {}", origin)?;
+        }
+        if let Some(left) = self.left.as_ref() {
+            write!(f, ", left: {}", left.id)?;
+        }
+        if let Some(right) = self.right.as_ref() {
+            write!(f, ", right: {}", right.id)?;
+        }
+        if self.deleted {
+            write!(f, ": ~{}~)", &self.content)
+        } else {
+            write!(f, ": '{}')", &self.content)
+        }
+    }
+}
+
+impl std::fmt::Display for ItemContent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ItemContent::String(s) => write!(f, "{}", s),
+            _ => Ok(()),
+        }
+    }
+}
+
 impl Block {
+    pub fn last_id(&self) -> ID {
+        match self {
+            Block::Item(item) => item.last_id(),
+            Block::Skip(skip) => ID::new(skip.id.client, skip.id.clock + skip.len),
+            Block::GC(gc) => ID::new(gc.id.client, gc.id.clock + gc.len),
+        }
+    }
+
     pub fn as_item(&self) -> Option<&Item> {
         match self {
             Block::Item(item) => Some(item),
@@ -290,9 +340,10 @@ impl Item {
                 .store
                 .blocks
                 .split_block(&BlockPtr::from(ID::new(self.id.client, self.id.clock - 1)));
-            if let Some(left) = left {
+            if let Some(mut left) = left {
                 if let Some(origin) = txn.store.blocks.get_item(&left) {
                     self.origin = Some(origin.last_id());
+                    left.id = origin.last_id();
                     self.left = Some(left);
                 }
             } else {
@@ -318,13 +369,17 @@ impl Item {
 
         let (left, right) = {
             let left = self.left.as_ref();
-            if let Some(left_ptr) = left {
-                // try to split the left block - left_ptr may poin in the middle of it
-                txn.store.blocks.split_block(left_ptr);
-            }
+            //if let Some(left_ptr) = left {
+            //    // try to split the left block - left_ptr may point in the middle of it
+            //    let mut left_ptr = left_ptr.clone();
+            //    // keep in mind that left pointer points at the block ending
+            //    // so we should really split after it
+            //    left_ptr.id.clock += 1;
+            //    txn.store.blocks.split_block(&left_ptr);
+            //}
             let right = self.right.as_ref();
             if let Some(right_ptr) = right {
-                // try to split the right block - right_ptr may poin in the middle of it
+                // try to split the right block - right_ptr may point in the middle of it
                 txn.store.blocks.split_block(right_ptr);
             }
             let left = left.and_then(|ptr| txn.store.blocks.get_block(ptr));
@@ -347,6 +402,13 @@ impl Item {
             false
         };
 
+        match (left, right) {
+            (Some(left), Some(right)) => println!(
+                "before conflict res: \n\t- left: {}\n\t- self: {}\n\t- right: {}",
+                &left, self, &right
+            ),
+            _ => {}
+        }
         if (left.is_none() && right_is_null_or_has_left) || left_has_other_right_than_self {
             // set the first conflicting item
             let mut o = if let Some(Block::Item(left)) = left {
@@ -405,8 +467,16 @@ impl Item {
                     }
                     o = item.right.clone();
                 }
-                self.left = left;
             }
+            self.left = left;
+        }
+
+        match (left, right) {
+            (Some(left), Some(right)) => println!(
+                "after conflict res: \n\t- left: {}\n\t- self: {}\n\t- right: {}",
+                &left, self, &right
+            ),
+            _ => {}
         }
 
         // reconnect left/right
@@ -447,12 +517,7 @@ impl Item {
 
         self.integrate_content(txn);
         // addChangedTypeToTransaction(transaction, /** @type {AbstractType<any>} */ (this.parent), this.parentSub)
-        let parent_deleted = txn
-            .store
-            .blocks
-            .get_item_from_type_ptr(&self.parent)
-            .map(|item| item.deleted)
-            .unwrap_or(false);
+        let parent_deleted = false; // (this.parent)._item !== null && (this.parent)._item.deleted)
         if parent_deleted || (self.parent_sub.is_some() && self.right.is_some()) {
             // delete if parent is deleted or if this is not the current attribute value of parent
             self.delete(txn);
@@ -461,12 +526,10 @@ impl Item {
 
     pub fn delete(&mut self, txn: &mut Transaction<'_>) {
         if !self.deleted {
-            self.deleted = true;
+            self.mark_as_deleted();
             self.content.delete(txn);
-            //addToDeleteSet(transaction.deleteSet, this.id.client, this.id.clock, this.length)
-            //addChangedTypeToTransaction(transaction, parent, this.parentSub)
-            //this.content.delete(transaction)
-            todo!()
+            txn.delete_set.insert(self.id, self.len());
+            //TODO: addChangedTypeToTransaction(transaction, parent, this.parentSub)
         }
     }
 
@@ -488,7 +551,6 @@ impl Item {
             parent_sub: self.parent_sub.clone(),
             deleted: self.deleted,
         };
-
         self.right = Some(BlockPtr::from(other.id));
         other
     }

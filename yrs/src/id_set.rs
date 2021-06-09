@@ -339,6 +339,37 @@ impl Default for DeleteSet {
     }
 }
 
+impl std::fmt::Display for DeleteSet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl std::fmt::Display for IdSet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "{{")?;
+        for (k, v) in self.0.iter() {
+            writeln!(f, "\t{}:{}", k, v)?;
+        }
+        writeln!(f, "}}")
+    }
+}
+
+impl std::fmt::Display for IdRange {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            IdRange::Continuous(r) => write!(f, "[{}..{})", r.start, r.end),
+            IdRange::Fragmented(r) => {
+                write!(f, "[")?;
+                for r in r.iter() {
+                    write!(f, " [{}..{})", r.start, r.end)?;
+                }
+                write!(f, " ]")
+            }
+        }
+    }
+}
+
 impl DeleteSet {
     pub fn new() -> Self {
         DeleteSet(IdSet::new())
