@@ -36,12 +36,6 @@ impl ID {
     }
 }
 
-impl std::fmt::Display for ID {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "<{}#{}>", self.client, self.clock)
-    }
-}
-
 #[derive(Debug, Clone, Copy, Hash)]
 pub struct BlockPtr {
     pub id: ID,
@@ -74,13 +68,8 @@ impl Eq for BlockPtr {}
 
 impl PartialEq for BlockPtr {
     fn eq(&self, other: &Self) -> bool {
+        // BlockPtr.pivot may differ, but logicaly it doesn't affect block equality
         self.id == other.id
-    }
-}
-
-impl std::fmt::Display for BlockPtr {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "({}->{})", self.id, self.pivot())
     }
 }
 
@@ -89,48 +78,6 @@ pub enum Block {
     Item(Item),
     Skip(Skip),
     GC(GC),
-}
-
-impl std::fmt::Display for Block {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if let Block::Item(item) = self {
-            item.fmt(f)
-        } else {
-            Ok(())
-        }
-    }
-}
-
-impl std::fmt::Display for Item {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "({}", self.id)?;
-        if let Some(origin) = self.origin.as_ref() {
-            write!(f, ", origin-l: {}", origin)?;
-        }
-        if let Some(origin) = self.right_origin.as_ref() {
-            write!(f, ", origin-r: {}", origin)?;
-        }
-        if let Some(left) = self.left.as_ref() {
-            write!(f, ", left: {}", left.id)?;
-        }
-        if let Some(right) = self.right.as_ref() {
-            write!(f, ", right: {}", right.id)?;
-        }
-        if self.deleted {
-            write!(f, ": ~{}~)", &self.content)
-        } else {
-            write!(f, ": '{}')", &self.content)
-        }
-    }
-}
-
-impl std::fmt::Display for ItemContent {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ItemContent::String(s) => write!(f, "{}", s),
-            _ => Ok(()),
-        }
-    }
 }
 
 impl Block {
@@ -281,19 +228,6 @@ pub struct ItemPosition {
     pub index: u32,
 }
 
-impl std::fmt::Display for ItemPosition {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "(index: {}", self.index)?;
-        if let Some(l) = self.left.as_ref() {
-            write!(f, ", left: {}", l)?;
-        }
-        if let Some(r) = self.right.as_ref() {
-            write!(f, ", right: {}", r)?;
-        }
-        write!(f, ")")
-    }
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct Item {
     pub id: ID,
@@ -355,6 +289,10 @@ impl Item {
         }
     }
 
+    /// Assign left/right neighbors of the block. This may require for origin/right_origin
+    /// blocks to be already present in block store - which may not be the case during block
+    /// decoding. We decode entire update first, and apply individual blocks second, hence
+    /// repair function is called before applying the block rather than on decode.
     pub fn repair(&mut self, txn: &mut Transaction<'_>) {
         if let Some(origin_id) = self.origin {
             let ptr = BlockPtr::from(origin_id);
@@ -865,6 +803,73 @@ impl ItemContent {
             }
             _ => false,
         }
+    }
+}
+
+impl std::fmt::Display for ID {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "<{}#{}>", self.client, self.clock)
+    }
+}
+
+impl std::fmt::Display for BlockPtr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "({}->{})", self.id, self.pivot())
+    }
+}
+
+impl std::fmt::Display for Block {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Block::Item(item) = self {
+            item.fmt(f)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl std::fmt::Display for Item {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "({}", self.id)?;
+        if let Some(origin) = self.origin.as_ref() {
+            write!(f, ", origin-l: {}", origin)?;
+        }
+        if let Some(origin) = self.right_origin.as_ref() {
+            write!(f, ", origin-r: {}", origin)?;
+        }
+        if let Some(left) = self.left.as_ref() {
+            write!(f, ", left: {}", left.id)?;
+        }
+        if let Some(right) = self.right.as_ref() {
+            write!(f, ", right: {}", right.id)?;
+        }
+        if self.deleted {
+            write!(f, ": ~{}~)", &self.content)
+        } else {
+            write!(f, ": '{}')", &self.content)
+        }
+    }
+}
+
+impl std::fmt::Display for ItemContent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ItemContent::String(s) => write!(f, "{}", s),
+            _ => Ok(()),
+        }
+    }
+}
+
+impl std::fmt::Display for ItemPosition {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "(index: {}", self.index)?;
+        if let Some(l) = self.left.as_ref() {
+            write!(f, ", left: {}", l)?;
+        }
+        if let Some(r) = self.right.as_ref() {
+            write!(f, ", right: {}", r)?;
+        }
+        write!(f, ")")
     }
 }
 

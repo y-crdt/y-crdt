@@ -16,20 +16,6 @@ pub struct Update {
     clients: HashMap<u64, Vec<Block>, BuildHasherDefault<ClientHasher>>,
 }
 
-impl std::fmt::Display for Update {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "{{")?;
-        for (k, v) in self.clients.iter() {
-            writeln!(f, "\t{} -> [", k)?;
-            for block in v.iter() {
-                writeln!(f, "\t\t{}", block)?;
-            }
-            writeln!(f, "\t]")?;
-        }
-        writeln!(f, "}}")
-    }
-}
-
 impl Update {
     fn new() -> Self {
         Update {
@@ -390,6 +376,20 @@ impl<'a> Iterator for IterUnset<'a> {
             self.current -= 1;
             Some(self.current)
         }
+    }
+}
+
+impl std::fmt::Display for Update {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "{{")?;
+        for (k, v) in self.clients.iter() {
+            writeln!(f, "\t{} -> [", k)?;
+            for block in v.iter() {
+                writeln!(f, "\t\t{}", block)?;
+            }
+            writeln!(f, "\t]")?;
+        }
+        writeln!(f, "}}")
     }
 }
 
