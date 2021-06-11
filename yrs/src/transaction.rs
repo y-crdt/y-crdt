@@ -275,34 +275,16 @@ impl<'a> Transaction<'a> {
     }
 
     pub fn create_item(&mut self, pos: &block::ItemPosition, content: block::ItemContent) {
-        let mut left = pos.after;
-        let mut origin = None;
-        let right = match pos.after.as_ref() {
-            None => self.store.get_type(&pos.parent).unwrap().start.get(),
-            Some(left) if pos.offset == 0 => {
-                if let Some(item) = self.store.blocks.get_item(left) {
-                    origin = Some(item.last_id());
-                    item.right
-                } else {
-                    None
-                }
+        let left = pos.left;
+        let right = pos.right;
+        let origin = if let Some(ptr) = pos.left.as_ref() {
+            if let Some(item) = self.store.blocks.get_item(ptr) {
+                Some(item.last_id())
+            } else {
+                None
             }
-            Some(ptr) => {
-                let mut split_ptr = ptr.clone();
-                split_ptr.id.clock += pos.offset;
-                let (l, r) = self.store.blocks.split_block(&split_ptr);
-                left = l;
-                // in case of split split origin is the last clock corresponding to left side,
-                // which is an equivalent of first clock of the right side - 1
-                if let Some(ptr) = r.as_ref() {
-                    let o = ID::new(ptr.id.client, ptr.id.clock - 1);
-                    origin = Some(o);
-                } else if let Some(item) = self.store.blocks.get_item(ptr) {
-                    let o = item.last_id();
-                    origin = Some(o);
-                }
-                r
-            }
+        } else {
+            None
         };
         let client_id = self.store.client_id;
         let id = block::ID {

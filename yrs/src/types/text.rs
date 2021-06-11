@@ -1,4 +1,4 @@
-use crate::block::{BlockPtr, Item, ItemPosition};
+use crate::block::{Block, BlockPtr, Item, ItemPosition};
 use crate::transaction::Transaction;
 use crate::*;
 
@@ -34,44 +34,46 @@ impl Text {
             .unwrap_or_default()
     }
 
-    fn find_position(&self, tr: &Transaction, index: u32) -> Option<block::ItemPosition> {
-        let inner = tr.store.get_type(&self.ptr)?;
-        if index == 0 {
-            Some(block::ItemPosition {
+    fn find_position(&self, txn: &mut Transaction, mut count: u32) -> Option<block::ItemPosition> {
+        let mut pos = {
+            let inner = txn.store.get_type(&self.ptr)?;
+            block::ItemPosition {
                 parent: inner.ptr.clone(),
-                after: None,
-                offset: 0,
-            })
-        } else {
-            let mut ptr = inner.start.get();
-            let mut prev = ptr.clone();
-            let mut remaining = index;
-            while let Some(item) = ptr.and_then(|p| tr.store.blocks.get_item(&p)) {
-                if remaining == 0 {
-                    break;
-                }
-                if !item.deleted {
-                    let len = item.len();
-                    if remaining < len {
-                        // the index we look for is either after or inside of the index
-                        prev = ptr;
-                        break;
-                    } else {
-                        prev = ptr.take();
-                        ptr = item.right;
-                        remaining -= len;
-                    }
-                } else {
-                    prev = ptr.take();
-                    ptr = item.right;
-                }
+                left: None,
+                right: inner.start.get(),
+                index: 0,
             }
-            Some(block::ItemPosition {
-                parent: inner.ptr.clone(),
-                after: prev,
-                offset: remaining,
-            })
+        };
+
+        while let Some(right_ptr) = pos.right.as_ref() {
+            if count == 0 {
+                break;
+            }
+
+            if let Some(mut right) = txn.store.blocks.get_item(right_ptr) {
+                if !right.deleted {
+                    let mut right_len = right.len();
+                    if count < right_len {
+                        // split right item
+                        let split_ptr = BlockPtr::new(
+                            ID::new(right.id.client, right.id.clock + count),
+                            right_ptr.pivot() as u32,
+                        );
+                        let (l, _) = txn.store.blocks.split_block(&split_ptr);
+                        right = txn.store.blocks.get_item(right_ptr).unwrap();
+                        right_len = right.len();
+                    }
+                    pos.index += right_len;
+                    count -= right_len;
+                }
+                pos.left = pos.right.take();
+                pos.right = right.right.clone();
+            } else {
+                return None;
+            }
         }
+
+        Some(pos)
     }
 
     pub fn insert(&self, tr: &mut Transaction, index: u32, content: &str) {
@@ -84,9 +86,9 @@ impl Text {
 
     pub fn delete(&self, txn: &mut Transaction, index: u32, mut len: u32) {
         if let Some(pos) = self.find_position(txn, index) {
-            let mut current = if pos.offset == 0 {
+            let mut current = {
                 let block = pos
-                    .after
+                    .left
                     .as_ref()
                     .and_then(|ptr| txn.store.blocks.get_block(ptr));
                 match block {
@@ -100,14 +102,6 @@ impl Text {
                         item
                     }
                 }
-            } else {
-                let mut split_ptr = pos.after.unwrap().clone();
-                split_ptr.id.clock += pos.offset;
-                let (left, right) = txn.store.blocks.split_block(&split_ptr);
-                txn.store
-                    .blocks
-                    .get_block(right.as_ref().unwrap())
-                    .and_then(|block| block.as_item())
             };
             while let Some(mut item) = current {
                 if len == 0 {
@@ -277,7 +271,6 @@ mod test {
 
         txt2.insert(&mut t2, 1, " have");
         txt2.insert(&mut t2, 13, "ed");
-        println!("{}", &t2.store.blocks);
         assert_eq!(txt2.to_string(&t2).as_str(), "I have expected that");
 
         txt1.insert(&mut t1, 1, " didn't");

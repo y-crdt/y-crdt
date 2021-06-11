@@ -57,7 +57,6 @@ impl Doc {
         let mut decoder = DecoderV1::from(update);
         let update = Update::decode(&mut decoder);
         let ds = DeleteSet::decode(&mut decoder);
-        println!("Applying update: {}delete set: {}", &update, &ds);
         tr.apply_update(update, ds)
     }
 

@@ -355,9 +355,7 @@ impl BlockStore {
                     if ptr.id.clock > item.id.clock && ptr.id.clock <= item.id.clock + len {
                         let index = pivot + 1;
                         let diff = ptr.id.clock - item.id.clock;
-                        println!("splitting item {} at position {}", item, diff);
                         let right_split = item.split(diff);
-                        println!("\tsplit result: {} - {}", item, right_split);
                         let right_split_id = right_split.id.clone();
                         let right_ptr = right_split.right.clone();
                         if let Some(right_ptr) = right_ptr {
