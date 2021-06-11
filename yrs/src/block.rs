@@ -42,7 +42,7 @@ impl std::fmt::Display for ID {
     }
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Copy, Hash)]
 pub struct BlockPtr {
     pub id: ID,
     pivot: u32,
@@ -67,6 +67,14 @@ impl BlockPtr {
 
     pub fn fix_pivot(&self, pivot: u32) {
         unsafe { std::ptr::write(&self.pivot as *const u32 as *mut u32, pivot) };
+    }
+}
+
+impl Eq for BlockPtr {}
+
+impl PartialEq for BlockPtr {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
     }
 }
 
@@ -268,8 +276,22 @@ impl Block {
 #[derive(Debug, Clone)]
 pub struct ItemPosition {
     pub parent: types::TypePtr,
-    pub after: Option<BlockPtr>,
-    pub offset: u32,
+    pub left: Option<BlockPtr>,
+    pub right: Option<BlockPtr>,
+    pub index: u32,
+}
+
+impl std::fmt::Display for ItemPosition {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "(index: {}", self.index)?;
+        if let Some(l) = self.left.as_ref() {
+            write!(f, ", left: {}", l)?;
+        }
+        if let Some(r) = self.right.as_ref() {
+            write!(f, ", right: {}", r)?;
+        }
+        write!(f, ")")
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -333,6 +355,31 @@ impl Item {
         }
     }
 
+    pub fn repair(&mut self, txn: &mut Transaction<'_>) {
+        if let Some(origin_id) = self.origin {
+            let ptr = BlockPtr::from(origin_id);
+            if let Some(item) = txn.store.blocks.get_item(&ptr) {
+                let id = self.origin.unwrap();
+                let len = item.len();
+                if id.clock == item.id.clock + len - 1 {
+                    self.left = Some(ptr);
+                } else {
+                    let mut ptr =
+                        BlockPtr::new(ID::new(origin_id.client, origin_id.clock + 1), ptr.pivot);
+                    let (l, r) = txn.store.blocks.split_block(&ptr);
+                    self.left = l;
+                }
+            }
+        }
+
+        if let Some(id) = self.right_origin {
+            let (l, r) = txn.store.blocks.split_block(&BlockPtr::from(id));
+            // if we got a split, point to right-side
+            // if right side is None, then no split happened and `l` is right neighbor
+            self.right = r.or(l);
+        }
+    }
+
     pub fn integrate(&mut self, txn: &mut Transaction<'_>, pivot: u32, offset: u32) {
         if offset > 0 {
             self.id.clock += offset;
@@ -367,48 +414,25 @@ impl Item {
             }
         }
 
-        let (left, right) = {
-            let left = self.left.as_ref();
-            //if let Some(left_ptr) = left {
-            //    // try to split the left block - left_ptr may point in the middle of it
-            //    let mut left_ptr = left_ptr.clone();
-            //    // keep in mind that left pointer points at the block ending
-            //    // so we should really split after it
-            //    left_ptr.id.clock += 1;
-            //    txn.store.blocks.split_block(&left_ptr);
-            //}
-            let right = self.right.as_ref();
-            if let Some(right_ptr) = right {
-                // try to split the right block - right_ptr may point in the middle of it
-                txn.store.blocks.split_block(right_ptr);
-            }
-            let left = left.and_then(|ptr| txn.store.blocks.get_block(ptr));
-            let right = right.and_then(|ptr| txn.store.blocks.get_block(ptr));
-            (left, right)
+        let left = self
+            .left
+            .as_ref()
+            .and_then(|ptr| txn.store.blocks.get_block(ptr));
+        let right = self
+            .right
+            .as_ref()
+            .and_then(|ptr| txn.store.blocks.get_block(ptr));
+
+        let right_is_null_or_has_left = match right {
+            None => true,
+            Some(Block::Item(i)) => i.left.is_some(),
+            _ => false,
+        };
+        let left_has_other_right_than_self = match left {
+            Some(Block::Item(i)) => i.right != self.right,
+            _ => false,
         };
 
-        let right_is_null_or_has_left = right
-            .map(|item| match item {
-                Block::Item(item) => item.left.is_some(),
-                _ => false,
-            })
-            .unwrap_or(true);
-        let left_has_other_right_than_self = if let Some(left) = left {
-            match left {
-                Block::Item(item) => item.right.map(|ptr| ptr.id) != Some(self.id),
-                _ => true,
-            }
-        } else {
-            false
-        };
-
-        match (left, right) {
-            (Some(left), Some(right)) => println!(
-                "before conflict res: \n\t- left: {}\n\t- self: {}\n\t- right: {}",
-                &left, self, &right
-            ),
-            _ => {}
-        }
         if (left.is_none() && right_is_null_or_has_left) || left_has_other_right_than_self {
             // set the first conflicting item
             let mut o = if let Some(Block::Item(left)) = left {
@@ -466,17 +490,11 @@ impl Item {
                         }
                     }
                     o = item.right.clone();
+                } else {
+                    break;
                 }
             }
             self.left = left;
-        }
-
-        match (left, right) {
-            (Some(left), Some(right)) => println!(
-                "after conflict res: \n\t- left: {}\n\t- self: {}\n\t- right: {}",
-                &left, self, &right
-            ),
-            _ => {}
         }
 
         // reconnect left/right
