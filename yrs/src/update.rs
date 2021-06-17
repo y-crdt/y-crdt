@@ -1,3 +1,4 @@
+use crate::bit_vec::BitVec;
 use crate::block::{
     Block, BlockPtr, Item, ItemContent, Skip, BLOCK_GC_REF_NUMBER, BLOCK_SKIP_REF_NUMBER, GC,
     HAS_ORIGIN, HAS_PARENT_SUB, HAS_RIGHT_ORIGIN,
@@ -13,7 +14,7 @@ use std::hash::BuildHasherDefault;
 
 #[derive(Debug)]
 pub struct Update {
-    clients: HashMap<u64, Vec<Block>, BuildHasherDefault<ClientHasher>>,
+    clients: HashMap<u64, BitVec<Block>, BuildHasherDefault<ClientHasher>>,
 }
 
 impl Update {
