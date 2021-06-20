@@ -3,18 +3,21 @@ use crate::block::{
     Block, BlockPtr, Item, ItemContent, Skip, BLOCK_GC_REF_NUMBER, BLOCK_SKIP_REF_NUMBER, GC,
     HAS_ORIGIN, HAS_PARENT_SUB, HAS_RIGHT_ORIGIN,
 };
+use crate::block_store::ClientBlockList;
 use crate::types::TypePtr;
 use crate::updates::decoder::{Decode, Decoder};
 use crate::utils::client_hasher::ClientHasher;
-use crate::{StateVector, Transaction, ID};
+use crate::{BlockStore, StateVector, Transaction, ID};
 use std::cell::RefCell;
 use std::collections::hash_map::Entry;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::hash::BuildHasherDefault;
+
+type ClientBlocks = HashMap<u64, VecDeque<Block>, BuildHasherDefault<ClientHasher>>;
 
 #[derive(Debug)]
 pub struct Update {
-    clients: HashMap<u64, BitVec<Block>, BuildHasherDefault<ClientHasher>>,
+    clients: ClientBlocks,
 }
 
 impl Update {
@@ -25,175 +28,191 @@ impl Update {
     }
 
     pub fn merge(&mut self, other: Self) {
-        for (client, other_blocks) in other.clients {
-            match self.clients.entry(client) {
-                Entry::Occupied(e) => {
-                    let mut blocks = e.into_mut();
-
-                    let mut i2 = other_blocks.into_iter();
-                    let mut n2 = i2.next();
-
-                    let mut i1 = 0;
-
-                    while i1 < blocks.len() {
-                        let a = &mut blocks[i1];
-                        if let Some(b) = n2.as_ref() {
-                            if a.try_merge(b) {
-                                n2 = i2.next();
-                                continue;
-                            } else if let Block::Item(a) = a {
-                                // we only can split Block::Item
-                                let diff = (a.id.clock + a.len()) as isize - b.id().clock as isize;
-                                if diff > 0 {
-                                    // `b`'s clock position is inside of `a` -> we need to split `a`
-                                    self.split_item(client, i1, diff as u32);
-                                    blocks = self.clients.get_mut(&client).unwrap();
-                                }
-                            }
-                            i1 += 1;
-                            n2 = i2.next();
-                        } else {
-                            break;
-                        }
-                    }
-
-                    while let Some(b) = n2 {
-                        blocks.push(b);
-                        n2 = i2.next();
-                    }
-                }
-                Entry::Vacant(e) => {
-                    e.insert(other_blocks);
-                }
-            }
-        }
+        //for (client, other_blocks) in other.clients {
+        //    match self.clients.entry(client) {
+        //        Entry::Occupied(e) => {
+        //            let mut blocks = e.into_mut();
+        //
+        //            let mut i2 = other_blocks.into_iter();
+        //            let mut n2 = i2.next();
+        //
+        //            let mut i1 = 0;
+        //
+        //            while i1 < blocks.len() {
+        //                let a = &mut blocks[i1];
+        //                if let Some(b) = n2.as_ref() {
+        //                    if a.try_merge(b) {
+        //                        n2 = i2.next();
+        //                        continue;
+        //                    } else if let Block::Item(a) = a {
+        //                        // we only can split Block::Item
+        //                        let diff = (a.id.clock + a.len()) as isize - b.id().clock as isize;
+        //                        if diff > 0 {
+        //                            // `b`'s clock position is inside of `a` -> we need to split `a`
+        //                            self.split_item(client, i1, diff as u32);
+        //                            blocks = self.clients.get_mut(&client).unwrap();
+        //                        }
+        //                    }
+        //                    i1 += 1;
+        //                    n2 = i2.next();
+        //                } else {
+        //                    break;
+        //                }
+        //            }
+        //
+        //            while let Some(b) = n2 {
+        //                blocks.push(b);
+        //                n2 = i2.next();
+        //            }
+        //        }
+        //        Entry::Vacant(e) => {
+        //            e.insert(other_blocks);
+        //        }
+        //    }
+        //}
     }
 
-    fn split_item(&mut self, client: u64, mut index: usize, diff: u32) {
-        let mut blocks = self.clients.get_mut(&client).unwrap();
-        if let Block::Item(item) = &mut blocks[index] {
-            index += 1;
-            let right_split = item.split(diff);
-            let right_ptr = right_split.right.clone();
-            if let Some(right_ptr) = right_ptr {
-                blocks = if right_ptr.id.client == client {
-                    blocks
-                } else {
-                    self.clients.get_mut(&right_ptr.id.client).unwrap()
-                };
-                let right = &mut blocks[right_ptr.pivot()];
-                if let Some(right_item) = right.as_item_mut() {
-                    right_item.left = Some(BlockPtr::new(right_split.id.clone(), index as u32));
-                }
-            }
-            blocks.insert(index, Block::Item(right_split));
-        };
-    }
-
-    fn build_work_queue(&self, local_sv: &StateVector) -> Vec<(u64, usize)> {
-        let mut total_len = 0;
-        let mut filter: HashMap<u64, BlockFilter, BuildHasherDefault<ClientHasher>> =
-            HashMap::with_capacity_and_hasher(self.clients.len(), BuildHasherDefault::default());
-        for (client, vec) in self.clients.iter() {
-            let len = vec.len();
-            total_len += len;
-            filter.insert(*client, BlockFilter::with_capacity(len));
-        }
-
-        let mut work_q = Vec::with_capacity(total_len);
-
-        for (client, bits) in filter.iter() {
-            let blocks = self.clients.get(client).unwrap();
-
-            // iterate over non-visited blocks
-            for index in bits.iter_unset() {
-                // mark block index as visited
-                if bits.set(index) {
-                    let mut block = &blocks[index];
-                    work_q.push((block.id().client, index));
-
-                    while let Some(dependency) = block.dependency() {
-                        let (bits, blocks) = if dependency.client == *client {
-                            (bits, blocks)
-                        } else {
-                            if let Some(blocks) = self.clients.get(&dependency.client) {
-                                let bits = filter.get(&dependency.client).unwrap();
-                                (bits, blocks)
-                            } else {
-                                break; // the update doesn't contain client, dependency refers to
-                            }
-                        };
-
-                        let dependency_index = blocks
-                            .binary_search_by(|b| b.id().clock.cmp(&dependency.clock))
-                            .ok();
-                        if let Some(index) = dependency_index {
-                            //TODO: check if dependency is in missing set
-                            if bits.set(index) {
-                                block = &blocks[index];
-                                work_q.push((block.id().client, index));
-                            } else {
-                                break; // we already visited that block, it's on the work_q
-                            }
-                        } else {
-                            break; // we haven't found the dependency block in a current update
-                        }
-                    }
-                }
-            }
-        }
-
-        work_q
-    }
+    //fn split_item(&mut self, client: u64, mut index: usize, diff: u32) {
+    //    let mut blocks = self.clients.get_mut(&client).unwrap();
+    //    if let Block::Item(item) = &mut blocks[index] {
+    //        index += 1;
+    //        let right_split = item.split(diff);
+    //        let right_ptr = right_split.right.clone();
+    //        if let Some(right_ptr) = right_ptr {
+    //            blocks = if right_ptr.id.client == client {
+    //                blocks
+    //            } else {
+    //                self.clients.get_mut(&right_ptr.id.client).unwrap()
+    //            };
+    //            let right = &mut blocks[right_ptr.pivot()];
+    //            if let Some(right_item) = right.as_item_mut() {
+    //                right_item.left = Some(BlockPtr::new(right_split.id.clone(), index as u32));
+    //            }
+    //        }
+    //        blocks.insert(index, Block::Item(right_split));
+    //    };
+    //}
 
     pub fn integrate(mut self, txn: &mut Transaction<'_>) -> Option<PendingUpdate> {
-        //TODO: check if it's valid to insert the block into current block store
+        if self.clients.is_empty() {
+            return None;
+        }
+        let mut client_block_ref_ids: Vec<u64> = self.clients.keys().cloned().collect();
+        client_block_ref_ids.sort_by(|a, b| b.cmp(a));
+        let mut current_target = client_block_ref_ids
+            .pop()
+            .and_then(|id| self.clients.get_mut(&id))
+            .unwrap();
+        let mut stack_head = current_target.pop_front();
+
         let mut local_sv = txn.store.blocks.get_state_vector();
-        let mut jobs = self.build_work_queue(&local_sv);
-
-        let mut missing = HashMap::default();
         let mut missing_sv = StateVector::empty();
+        let mut remaining = BlockStore::new();
+        let mut stack = Vec::new();
 
-        while let Some((client, index)) = jobs.pop() {
-            let blocks = self.clients.get_mut(&client).unwrap();
-            let len = blocks.len();
-            let block = &mut blocks[index];
-
-            // during decoding left and right neighbors were not set, so we do it now
-            if let Block::Item(item) = block {
-                item.repair(txn);
+        while let Some(mut block) = stack_head {
+            let id = block.id();
+            if local_sv.contains(id) {
+                let offset = local_sv.get(&id.client) - id.clock;
+                if let Some(dep) = Self::missing(&block, &local_sv) {
+                    stack.push(block);
+                    // get the struct reader that has the missing struct
+                    let block_refs = txn.store.blocks.get_client_blocks_mut(dep);
+                    if block_refs.integrated_len() == block_refs.len() {
+                        // This update message causally depends on another update message that doesn't exist yet
+                        missing_sv.set_min(dep, local_sv.get(&dep));
+                        Self::return_stack(stack, &mut txn.store.blocks, &mut remaining);
+                        stack = Vec::new();
+                    } else {
+                        stack_head = current_target.pop_front();
+                        continue;
+                    }
+                } else {
+                    local_sv.set_max(id.client, id.clock + block.len());
+                    block.as_item_mut().map(|item| item.repair(txn));
+                    block.integrate(txn, offset, offset);
+                }
+            } else {
+                // update from the same client is missing
+                stack.push(block);
+                // hid a dead wall, add all items from stack to restSS
+                Self::return_stack(stack, &mut txn.store.blocks, &mut remaining);
+                stack = Vec::new();
             }
 
-            let remote_clock = block.id().clock;
-            let offset = local_sv.get(&client) as isize - remote_clock as isize;
-            if offset < 0 {
-                // we're missing the update from the same client
-                let e: &mut Vec<Block> = missing.entry(client).or_default();
-                e.push(block.clone());
-                missing_sv.set_min(client, remote_clock);
+            // iterate to next stackHead
+            if !stack.is_empty() {
+                stack_head = stack.pop();
             } else {
-                let blocks = txn
-                    .store
-                    .blocks
-                    .get_client_blocks_with_capacity_mut(client, len);
-                let pivot = blocks.integrated_len() as u32;
-                local_sv.inc_by(client, block.len());
-                block.integrate(txn, pivot, offset as u32);
-                let blocks = txn
-                    .store
-                    .blocks
-                    .get_client_blocks_with_capacity_mut(client, len);
-                blocks.push(block.clone());
+                if !current_target.is_empty() {
+                    stack_head = current_target.pop_front();
+                } else if let Some(v) =
+                    Self::next_target(&mut client_block_ref_ids, &mut self.clients)
+                {
+                    current_target = v;
+                    stack_head = current_target.pop_front();
+                } else {
+                    stack_head = None;
+                }
             }
         }
 
-        if missing.is_empty() {
-            None
-        } else {
-            Some(PendingUpdate {
-                update: Update { clients: missing },
-                missing: missing_sv,
-            })
+        todo!()
+    }
+
+    fn missing(block: &Block, local_sv: &StateVector) -> Option<u64> {
+        if let Block::Item(item) = block {
+            if let Some(origin) = item.origin {
+                if origin.client != item.id.client && !local_sv.contains(&item.id) {
+                    return Some(origin.client);
+                }
+            } else if let Some(right_origin) = item.right_origin {
+                if right_origin.client != item.id.client && !local_sv.contains(&item.id) {
+                    return Some(right_origin.client);
+                }
+            } else if let TypePtr::Id(parent) = item.parent {
+                if parent.id.client != item.id.client && !local_sv.contains(&item.id) {
+                    return Some(parent.id.client);
+                }
+            }
+        }
+        None
+    }
+
+    fn next_target<'a, 'b>(
+        client_block_ref_ids: &'a mut Vec<u64>,
+        clients: &'b mut ClientBlocks,
+    ) -> Option<&'b mut VecDeque<Block>> {
+        loop {
+            if let Some(client_blocks) = client_block_ref_ids
+                .pop()
+                .and_then(move |id| clients.get_mut(&id))
+            {
+                if !client_blocks.is_empty() {
+                    return Some(client_blocks);
+                }
+            }
+
+            break;
+        }
+        None
+    }
+
+    fn return_stack(stack: Vec<Block>, refs: &mut BlockStore, remaining: &mut BlockStore) {
+        for item in stack.into_iter() {
+            let client = item.id().client;
+            // remove client from clientsStructRefsIds to prevent users from applying the same update again
+            if let Some(mut unapplicable_items) = refs.remove(&client) {
+                // decrement because we weren't able to apply previous operation
+                unapplicable_items.drain_integrated_blocks();
+                remaining.insert(client, unapplicable_items);
+            } else {
+                // item was the last item on clientsStructRefs and the field was already cleared.
+                // Add item to restStructs and continue
+                let mut blocks = ClientBlockList::with_capacity(1);
+                blocks.push(item);
+                remaining.insert(client, blocks);
+            }
         }
     }
 
@@ -276,13 +295,13 @@ impl Decode for Update {
             let mut clock: u32 = decoder.read_uvar();
             let blocks = clients
                 .entry(client)
-                .or_insert_with(|| Vec::with_capacity(blocks_len));
+                .or_insert_with(|| VecDeque::with_capacity(blocks_len));
 
             for _ in 0..blocks_len {
                 let id = ID::new(client, clock);
                 let block = Self::decode_block(id, decoder);
                 clock += block.len();
-                blocks.push(block);
+                blocks.push_back(block);
             }
         }
 
@@ -298,85 +317,6 @@ pub struct PendingUpdate {
 impl PendingUpdate {
     fn merge(&mut self, other: &Self) {
         todo!()
-    }
-}
-
-struct BlockFilter(usize, RefCell<Box<[u8]>>);
-
-impl BlockFilter {
-    fn with_capacity(capacity: usize) -> Self {
-        let len = 1 + capacity / 8;
-        let bits = unsafe { Box::new_zeroed_slice(len).assume_init() };
-        BlockFilter(capacity, RefCell::new(bits))
-    }
-
-    #[inline]
-    fn parse_index(index: usize) -> (usize, u8) {
-        let byte_position = index / 8;
-        let mask = 1u8 << (index & 0b111);
-        (byte_position, mask)
-    }
-
-    fn get(&self, index: usize) -> bool {
-        let (position, mask) = Self::parse_index(index);
-        self.1.borrow()[position] & mask == mask
-    }
-
-    /// Marks block as visited. This is used when we construct a work queue -
-    /// during that process we traverse over the chain of block dependencies
-    /// and add them to the queue. [BlockFilter] is then used to detect potential
-    /// duplicates.
-    ///
-    /// Returns true if value under index was false prior the call.
-    /// Returns false, if value was already set before.
-    fn set(&self, index: usize) -> bool {
-        let (position, mask) = Self::parse_index(index);
-        let e = &mut self.1.borrow_mut()[position];
-        let result = *e & mask == 0;
-        *e = (*e) | mask;
-        result
-    }
-
-    /// Marks block as unvisited. Reverts effects of [set] method.
-    fn unset(&self, index: usize) {
-        let (position, mask) = Self::parse_index(index);
-        let e = &mut self.1.borrow_mut()[position];
-        *e = (*e) & !mask;
-    }
-
-    /// Iterates over unset bits back to front, returning their indexes.
-    fn iter_unset(&self) -> IterUnset<'_> {
-        IterUnset::new(self)
-    }
-}
-
-struct IterUnset<'a> {
-    bits: &'a BlockFilter,
-    current: usize,
-}
-
-impl<'a> IterUnset<'a> {
-    fn new(bits: &'a BlockFilter) -> Self {
-        IterUnset {
-            bits,
-            current: bits.0,
-        }
-    }
-}
-
-impl<'a> Iterator for IterUnset<'a> {
-    type Item = usize;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        while self.current != 0 && self.bits.get(self.current - 1) {
-            self.current -= 1;
-        }
-        if self.current == 0 {
-            None
-        } else {
-            self.current -= 1;
-            Some(self.current)
-        }
     }
 }
 
@@ -398,28 +338,9 @@ impl std::fmt::Display for Update {
 mod test {
     use crate::block::{Block, Item, ItemContent};
     use crate::types::TypePtr;
-    use crate::update::{BlockFilter, Update};
+    use crate::update::Update;
     use crate::updates::decoder::{Decode, DecoderV1};
     use crate::ID;
-
-    #[test]
-    fn block_filter_set() {
-        let bf = BlockFilter::with_capacity(13);
-        assert!(bf.set(9));
-        assert!(!bf.set(9));
-
-        let mut expected = vec![0u8, 2u8];
-        assert_eq!(bf.1.borrow().to_vec(), expected);
-    }
-
-    #[test]
-    fn block_filter_unset() {
-        let bf = BlockFilter::with_capacity(13);
-        bf.set(9);
-        bf.set(4);
-        let indices = bf.iter_unset().collect::<Vec<_>>();
-        assert_eq!(indices, vec![12, 11, 10, 8, 7, 6, 5, 3, 2, 1, 0]);
-    }
 
     #[test]
     fn update_decode() {

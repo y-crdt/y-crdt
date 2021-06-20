@@ -11,7 +11,7 @@ pub struct BitVec<T> {
 }
 
 impl<T> BitVec<T> {
-    pub fn new(capacity: usize) -> Self {
+    pub fn with_capacity(capacity: usize) -> Self {
         let occupation = unsafe { alloc_zeroed(Layout::array::<u8>(1 + capacity / 8).unwrap()) };
         let values = unsafe { alloc_zeroed(Layout::array::<T>(capacity).unwrap()) as *mut T };
         BitVec {
@@ -137,6 +137,22 @@ impl<T> Drop for BitVec<T> {
     }
 }
 
+impl<T: PartialEq> PartialEq for BitVec<T> {
+    fn eq(&self, other: &Self) -> bool {
+        if self.capacity != other.capacity || self.count != other.count {
+            false
+        } else {
+            for i in 0..self.capacity {
+                if self.peek(i) != other.peek(i) {
+                    return false;
+                }
+            }
+
+            true
+        }
+    }
+}
+
 impl<T: Debug> Debug for BitVec<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "BitVec {{")?;
@@ -212,7 +228,7 @@ mod test {
     #[test]
     fn peek() {
         let capacity = 14;
-        let mut v = BitVec::new(capacity);
+        let mut v = BitVec::with_capacity(capacity);
         for i in 0..capacity {
             v.set(i, i.to_string());
         }
@@ -230,7 +246,7 @@ mod test {
     #[test]
     fn pop() {
         let capacity = 14;
-        let mut v = BitVec::new(capacity);
+        let mut v = BitVec::with_capacity(capacity);
         for i in 0..capacity {
             v.set(i, i.to_string());
         }
@@ -248,7 +264,7 @@ mod test {
     #[test]
     fn iter() {
         let capacity = 14;
-        let mut v = BitVec::new(capacity);
+        let mut v = BitVec::with_capacity(capacity);
         v.set(1, "1");
         v.set(3, "3");
         v.set(4, "4");
@@ -266,7 +282,7 @@ mod test {
 
     #[test]
     fn is_empty() {
-        let mut v = BitVec::new(10);
+        let mut v = BitVec::with_capacity(10);
         assert!(v.is_empty());
         v.set(1, "1");
         assert!(!v.is_empty());
