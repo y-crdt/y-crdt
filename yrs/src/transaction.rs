@@ -2,6 +2,7 @@ use crate::*;
 
 use crate::block::{Block, BlockPtr, ItemContent, ID};
 use crate::block_store::StateVector;
+use crate::event::UpdateEvent;
 use crate::id_set::{DeleteSet, IdSet};
 use crate::store::Store;
 use crate::types::{Text, TypePtr, XorHasher};
@@ -225,7 +226,13 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    pub fn apply_update(&mut self, update: Update, ds: DeleteSet) {
+    pub fn apply_update(&mut self, mut update: Update, mut ds: DeleteSet) {
+        if self.store.update_events.has_subscribers() {
+            let event = UpdateEvent::new(update, ds);
+            self.store.update_events.publish(&event);
+            update = event.update;
+            ds = event.delete_set;
+        }
         let remaining = update.integrate(self);
 
         let mut retry = false;
