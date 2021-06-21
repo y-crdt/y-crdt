@@ -302,7 +302,7 @@ impl Item {
                 if id.clock == item.id.clock + len - 1 {
                     self.left = Some(ptr);
                 } else {
-                    let mut ptr =
+                    let ptr =
                         BlockPtr::new(ID::new(origin_id.client, origin_id.clock + 1), ptr.pivot);
                     let (l, r) = txn.store.blocks.split_block(&ptr);
                     self.left = l;
