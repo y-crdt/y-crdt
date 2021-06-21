@@ -81,8 +81,8 @@ mod test {
             let a = s1_state.clone();
             let b = s2_state.clone();
 
-            let s1 = eh.subscribe(move |value| a.store(*value, Ordering::Release));
-            let s2 = eh.subscribe(move |value| b.store(*value * 2, Ordering::Release));
+            let _s1 = eh.subscribe(move |value| a.store(*value, Ordering::Release));
+            let _s2 = eh.subscribe(move |value| b.store(*value * 2, Ordering::Release));
             assert_eq!(eh.subscription_count(), 2);
 
             eh.publish(&1);

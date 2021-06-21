@@ -90,7 +90,7 @@ mod test {
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
     use crate::{Doc, StateVector};
-    use std::cell::{Cell, RefCell, RefMut};
+    use std::cell::Cell;
     use std::rc::Rc;
 
     #[test]
@@ -174,11 +174,11 @@ mod test {
 
     #[test]
     fn on_update() {
-        let mut counter = Rc::new(Cell::new(0));
-        let mut doc = Doc::new();
+        let counter = Rc::new(Cell::new(0));
+        let doc = Doc::new();
         let mut doc2 = Doc::new();
-        let mut c = counter.clone();
-        let mut sub = doc2.on_update(move |e| {
+        let c = counter.clone();
+        let sub = doc2.on_update(move |e| {
             for block in e.update.blocks() {
                 c.set(c.get() + block.len());
             }

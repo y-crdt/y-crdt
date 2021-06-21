@@ -257,8 +257,8 @@ impl<'a> Transaction<'a> {
             self.store.pending = remaining;
         }
 
-        let mut ds = self.apply_delete(&ds);
-        if let Some(mut pending) = self.store.pending_ds.take() {
+        let ds = self.apply_delete(&ds);
+        if let Some(pending) = self.store.pending_ds.take() {
             let ds2 = self.apply_delete(&pending);
             let ds = match (ds, ds2) {
                 (Some(mut a), Some(b)) => {
