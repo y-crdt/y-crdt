@@ -1,3 +1,5 @@
+use crate::id_set::DeleteSet;
+use crate::update::Update;
 use rand::RngCore;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -30,6 +32,10 @@ impl<T> EventHandler<T> {
         }
     }
 
+    pub fn has_subscribers(&self) -> bool {
+        !self.0.borrow().is_empty()
+    }
+
     fn subscription_count(&self) -> usize {
         self.0.borrow().len()
     }
@@ -45,6 +51,17 @@ impl<T> Drop for Subscription<T> {
         if let Some(cell) = self.subscriptions.upgrade() {
             cell.borrow_mut().remove(&self.id);
         }
+    }
+}
+
+pub struct UpdateEvent {
+    pub update: Update,
+    pub delete_set: DeleteSet,
+}
+
+impl UpdateEvent {
+    pub fn new(update: Update, delete_set: DeleteSet) -> Self {
+        UpdateEvent { update, delete_set }
     }
 }
 
