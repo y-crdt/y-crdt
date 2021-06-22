@@ -211,14 +211,6 @@ impl ClientBlockList {
         self.integrated_len = 0;
         self.list.clear();
     }
-
-    /// Drain all integrated blocks.
-    pub fn drain_integrated_blocks(&mut self) {
-        for _ in self.list.drain(..self.integrated_len) {
-            // just drain
-        }
-        self.integrated_len = 0;
-    }
 }
 
 impl Default for ClientBlockList {
