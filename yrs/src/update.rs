@@ -158,6 +158,11 @@ impl Update {
             let len = blocks.len();
             let block = &mut blocks[index];
 
+            // during decoding left and right neighbors were not set, so we do it now
+            if let Block::Item(item) = block {
+                item.repair(txn);
+            }
+
             let remote_clock = block.id().clock;
             let offset = local_sv.get(&client) as isize - remote_clock as isize;
             if offset < 0 {
@@ -209,13 +214,11 @@ impl Update {
                 } else {
                     None
                 };
-                let left = origin.as_ref().map(|id| BlockPtr::from(id.clone()));
                 let right_origin = if info & HAS_RIGHT_ORIGIN != 0 {
                     Some(decoder.read_right_id())
                 } else {
                     None
                 };
-                let right = right_origin.as_ref().map(|id| BlockPtr::from(id.clone()));
                 let parent = if cant_copy_parent_info {
                     if decoder.read_parent_info() {
                         TypePtr::Named(decoder.read_string().to_owned())
@@ -243,8 +246,8 @@ impl Update {
                 let content = ItemContent::decode(decoder, info, BlockPtr::from(id.clone()));
                 let item: Item = Item {
                     id,
-                    left,
-                    right,
+                    left: None,
+                    right: None,
                     origin,
                     right_origin,
                     content,
@@ -373,6 +376,20 @@ impl<'a> Iterator for IterUnset<'a> {
             self.current -= 1;
             Some(self.current)
         }
+    }
+}
+
+impl std::fmt::Display for Update {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "{{")?;
+        for (k, v) in self.clients.iter() {
+            writeln!(f, "\t{} -> [", k)?;
+            for block in v.iter() {
+                writeln!(f, "\t\t{}", block)?;
+            }
+            writeln!(f, "\t]")?;
+        }
+        writeln!(f, "}}")
     }
 }
 

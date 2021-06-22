@@ -153,22 +153,23 @@ impl<'a> Transaction<'a> {
 
                             while index < blocks.len() {
                                 let block = &mut blocks[index];
-                                index += 1;
                                 if let Some(item) = block.as_item_mut() {
                                     if item.id.clock < clock_end {
                                         if !item.deleted {
-                                            let ptr = BlockPtr::from(item.id.clone());
+                                            let delete_ptr =
+                                                BlockPtr::new(item.id.clone(), index as u32);
                                             if item.id.clock + item.content.len() > clock_end {
-                                                let split_ptr = BlockPtr::new(
-                                                    ID::new(*client, clock_end - item.id.clock),
-                                                    index as u32,
-                                                );
-                                                let (_, right) =
+                                                let diff = clock_end - item.id.clock;
+                                                let mut split_ptr = delete_ptr.clone();
+                                                split_ptr.id.clock += diff;
+                                                let (l, right) =
                                                     self.store.blocks.split_block(&split_ptr);
-                                                index += 1;
-                                                self.merge_blocks.push(right.unwrap().id);
+                                                if let Some(right) = right {
+                                                    self.merge_blocks.push(right.id);
+                                                    index += 1;
+                                                }
                                             }
-                                            self.delete(&ptr);
+                                            self.delete(&delete_ptr);
                                             blocks = self.store.blocks.get_mut(client).unwrap();
                                             // just to make the borrow checker happy
                                         }
@@ -176,6 +177,7 @@ impl<'a> Transaction<'a> {
                                         break;
                                     }
                                 }
+                                index += 1;
                             }
                         }
                     }
@@ -202,7 +204,7 @@ impl<'a> Transaction<'a> {
                 //         parent._length -= this.length
                 //     }
                 // }
-                item.deleted = true;
+                item.mark_as_deleted();
                 self.delete_set.insert(item.id.clone(), item.len());
                 // addChangedTypeToTransaction(transaction, item.type, item.parentSub)
                 if item.id.clock < self.timestamp.get(&item.id.client) {
@@ -273,23 +275,16 @@ impl<'a> Transaction<'a> {
     }
 
     pub fn create_item(&mut self, pos: &block::ItemPosition, content: block::ItemContent) {
-        let mut left = pos.after;
-        let right = if pos.offset == 0 {
-            match pos.after.as_ref() {
-                None => self.store.get_type(&pos.parent).unwrap().start.get(),
-                Some(left) => self.store.blocks.get_item(left).and_then(|item| item.right),
+        let left = pos.left;
+        let right = pos.right;
+        let origin = if let Some(ptr) = pos.left.as_ref() {
+            if let Some(item) = self.store.blocks.get_item(ptr) {
+                Some(item.last_id())
+            } else {
+                None
             }
         } else {
-            match pos.after.as_ref() {
-                None => self.store.get_type(&pos.parent).unwrap().start.get(),
-                Some(ptr) => {
-                    let mut split_ptr = ptr.clone();
-                    split_ptr.id.clock += pos.offset;
-                    let (l, r) = self.store.blocks.split_block(&split_ptr);
-                    left = l;
-                    r
-                }
-            }
+            None
         };
         let client_id = self.store.client_id;
         let id = block::ID {
@@ -301,12 +296,13 @@ impl<'a> Transaction<'a> {
             .blocks
             .get_client_blocks_mut(client_id)
             .integrated_len() as u32;
+
         let mut item = block::Item {
             id,
             content,
             left,
             right,
-            origin: pos.after.as_ref().map(|l| l.id),
+            origin,
             right_origin: right.map(|r| r.id),
             parent: pos.parent.clone(),
             deleted: false,
