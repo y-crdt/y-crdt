@@ -99,9 +99,8 @@ impl Update {
         let mut client_block_ref_ids: Vec<u64> = self.clients.keys().cloned().collect();
         client_block_ref_ids.sort_by(|a, b| b.cmp(a));
 
-        let mut current_target = client_block_ref_ids
-            .pop()
-            .and_then(|id| self.clients.get_mut(&id));
+        let mut current_client_id = client_block_ref_ids.pop();
+        let mut current_target = current_client_id.and_then(|id| self.clients.get_mut(&id));
         let mut stack_head = Self::next(&mut current_target);
 
         let mut local_sv = txn.store.blocks.get_state_vector();
@@ -121,6 +120,8 @@ impl Update {
                         // This update message causally depends on another update message that doesn't exist yet
                         missing_sv.set_min(dep, local_sv.get(&dep));
                         Self::return_stack(stack, &mut self.clients, &mut remaining);
+                        stack_head = None;
+                        current_target = current_client_id.and_then(|id| self.clients.get_mut(&id));
                         stack = Vec::new();
                     } else {
                         stack_head = Self::next(&mut current_target);
@@ -136,6 +137,8 @@ impl Update {
                 stack.push(block);
                 // hid a dead wall, add all items from stack to restSS
                 Self::return_stack(stack, &mut self.clients, &mut remaining);
+                stack_head = None;
+                current_target = current_client_id.and_then(|id| self.clients.get_mut(&id));
                 stack = Vec::new();
             }
 
@@ -149,7 +152,15 @@ impl Update {
                         if !v.is_empty() {
                             Some(v)
                         } else {
-                            Self::next_target(&mut client_block_ref_ids, &mut self.clients)
+                            if let Some((client_id, target)) =
+                                Self::next_target(&mut client_block_ref_ids, &mut self.clients)
+                            {
+                                current_client_id = Some(client_id);
+                                Some(target)
+                            } else {
+                                current_client_id = None;
+                                None
+                            }
                         }
                     }
                 };
@@ -197,14 +208,14 @@ impl Update {
     fn next_target<'a, 'b>(
         client_block_ref_ids: &'a mut Vec<u64>,
         clients: &'b mut ClientBlocks,
-    ) -> Option<&'b mut VecDeque<Block>> {
+    ) -> Option<(u64, &'b mut VecDeque<Block>)> {
         loop {
-            if let Some(client_blocks) = client_block_ref_ids
+            if let Some((id, Some(client_blocks))) = client_block_ref_ids
                 .pop()
-                .and_then(move |id| clients.get_mut(&id))
+                .map(move |id| (id, clients.get_mut(&id)))
             {
                 if !client_blocks.is_empty() {
-                    return Some(client_blocks);
+                    return Some((id, client_blocks));
                 }
             }
 
@@ -217,7 +228,7 @@ impl Update {
         for item in stack.into_iter() {
             let client = item.id().client;
             // remove client from clientsStructRefsIds to prevent users from applying the same update again
-            if let Some(mut unapplicable_items) = refs.remove(&client) {
+            if let Some(unapplicable_items) = refs.remove(&client) {
                 // decrement because we weren't able to apply previous operation
                 remaining.insert(client, unapplicable_items);
             } else {
