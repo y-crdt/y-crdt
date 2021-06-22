@@ -134,6 +134,14 @@ impl ClientBlockList {
         &self.list[self.integrated_len - 1]
     }
 
+    pub fn find(&mut self, ptr: &BlockPtr) -> Option<&mut Block> {
+        let pivot = match self.list.get_mut(ptr.pivot()) {
+            Some(block) if *block.id() == ptr.id => Some(ptr.pivot()),
+            _ => self.find_pivot(ptr.id.clock),
+        };
+        self.list.get_mut(pivot?)
+    }
+
     pub fn find_pivot(&self, clock: u32) -> Option<usize> {
         let mut left = 0;
         let mut right = self.list.len() - 1;
@@ -260,7 +268,7 @@ impl BlockStore {
     pub fn get_block(&self, ptr: &block::BlockPtr) -> Option<&block::Block> {
         let clients = self.clients.get(&ptr.id.client)?;
         match clients.list.get(ptr.pivot()) {
-            Some(block) if block.id().eq(&ptr.id) => Some(block),
+            Some(block) if block.id().clock == ptr.id.clock => Some(block),
             _ => {
                 // ptr.pivot missed - go slow path to find it
                 let pivot = clients.find_pivot(ptr.id.clock)?;
@@ -343,7 +351,8 @@ impl BlockStore {
             let left_split_ptr = BlockPtr::new(block.id().clone(), pivot as u32);
             let right_split_ptr = match block {
                 Block::Item(item) => {
-                    if ptr.id.clock > item.id.clock && ptr.id.clock <= item.id.clock + item.len() {
+                    let len = item.len();
+                    if ptr.id.clock > item.id.clock && ptr.id.clock <= item.id.clock + len {
                         let index = pivot + 1;
                         let diff = ptr.id.clock - item.id.clock;
                         let right_split = item.split(diff);
@@ -355,11 +364,7 @@ impl BlockStore {
                             } else {
                                 self.clients.get_mut(&right_ptr.id.client).unwrap()
                             };
-                            let mut right = &mut blocks[right_ptr.pivot()];
-                            if *right.id() != right_ptr.id {
-                                let pivot = blocks.find_pivot(right_ptr.id.clock).unwrap();
-                                right = &mut blocks[pivot];
-                            }
+                            let right = blocks.find(&right_ptr).unwrap();
                             if let Some(right_item) = right.as_item_mut() {
                                 right_item.left =
                                     Some(BlockPtr::new(right_split.id.clone(), index as u32));
@@ -377,5 +382,32 @@ impl BlockStore {
         } else {
             (None, None)
         }
+    }
+}
+
+impl std::fmt::Display for ClientBlockList {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "[")?;
+        let mut i = 0;
+        writeln!(f, "")?;
+        while i < self.list.len() {
+            let block = &self.list[i];
+            writeln!(f, "\t\t{}", block)?;
+            if i == self.integrated_len {
+                writeln!(f, "---")?;
+            }
+            i += 1;
+        }
+        write!(f, "\t]")
+    }
+}
+
+impl std::fmt::Display for BlockStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "{{")?;
+        for (k, v) in self.iter() {
+            writeln!(f, "\t{} ->{}", k, v)?;
+        }
+        writeln!(f, "}}")
     }
 }

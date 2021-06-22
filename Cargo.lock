@@ -1248,7 +1248,7 @@ version = "0.1.0"
 [[package]]
 name = "yrs-api-wrapper"
 version = "0.1.0"
-source = "git+https://github.com/yjs/y-crdt/?branch=main#c9ea399c758471e7d8e46d6c2418bb1b0025ae8d"
+source = "git+https://github.com/yjs/y-crdt/?branch=main#049a5910c4e532023b663e9f1a1d2e9d26227e07"
 
 [[package]]
 name = "ywasm"
