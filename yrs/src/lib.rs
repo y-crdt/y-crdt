@@ -36,6 +36,9 @@ mod update;
 mod updates;
 mod utils;
 
+#[cfg(test)]
+mod compatibility_tests;
+
 pub use crate::block::ID;
 pub use crate::block_store::BlockStore;
 pub use crate::block_store::StateVector;
