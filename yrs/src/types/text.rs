@@ -1,4 +1,4 @@
-use crate::block::{Block, BlockPtr, Item, ItemPosition};
+use crate::block::BlockPtr;
 use crate::transaction::Transaction;
 use crate::*;
 
@@ -139,7 +139,6 @@ impl Text {
 
 #[cfg(test)]
 mod test {
-    use crate::updates::encoder::Encode;
     use crate::Doc;
 
     #[test]
