@@ -302,7 +302,7 @@ impl Item {
                 if id.clock == item.id.clock + len - 1 {
                     self.left = Some(ptr);
                 } else {
-                    let mut ptr =
+                    let ptr =
                         BlockPtr::new(ID::new(origin_id.client, origin_id.clock + 1), ptr.pivot);
                     let (l, r) = txn.store.blocks.split_block(&ptr);
                     self.left = l;
@@ -544,10 +544,9 @@ impl Item {
     }
     fn integrate_content(&mut self, txn: &mut Transaction<'_>) {
         match &mut self.content {
-            ItemContent::Deleted(_) => {
-                //addToDeleteSet(transaction.deleteSet, item.id.client, item.id.clock, this.len)
-                //item.markDeleted()
-                todo!()
+            ItemContent::Deleted(len) => {
+                txn.delete_set.insert(self.id, *len);
+                self.mark_as_deleted();
             }
             ItemContent::Doc(_, _) => {
                 //// this needs to be reflected in doc.destroy as well
