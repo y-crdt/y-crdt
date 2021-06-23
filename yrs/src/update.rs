@@ -128,9 +128,12 @@ impl Update {
                         continue;
                     }
                 } else {
-                    local_sv.set_max(id.client, id.clock + block.len());
+                    let client = id.client;
+                    local_sv.set_max(client, id.clock + block.len());
                     block.as_item_mut().map(|item| item.repair(txn));
                     block.integrate(txn, offset, offset);
+                    let blocks = txn.store.blocks.get_client_blocks_mut(client);
+                    blocks.push(block);
                 }
             } else {
                 // update from the same client is missing
@@ -228,8 +231,9 @@ impl Update {
         for item in stack.into_iter() {
             let client = item.id().client;
             // remove client from clientsStructRefsIds to prevent users from applying the same update again
-            if let Some(unapplicable_items) = refs.remove(&client) {
+            if let Some(mut unapplicable_items) = refs.remove(&client) {
                 // decrement because we weren't able to apply previous operation
+                unapplicable_items.push_front(item);
                 remaining.insert(client, unapplicable_items);
             } else {
                 // item was the last item on clientsStructRefs and the field was already cleared.
