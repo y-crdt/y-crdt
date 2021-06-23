@@ -7,7 +7,7 @@ use std::rc::Rc;
 
 #[test]
 fn text_insert_delete() {
-    /** Generated via:
+    /* Generated via:
         ```js
            const doc = new Y.Doc()
            const ytext = doc.getText('type')
