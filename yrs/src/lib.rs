@@ -24,7 +24,6 @@
 //! mediums all at once. We don't have this ecosystem yet in Yrs, but you can
 //! build them easily on your own.
 
-mod bit_vec;
 mod block;
 mod block_store;
 mod doc;
