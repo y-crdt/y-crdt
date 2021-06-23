@@ -1,4 +1,5 @@
 use crate::block_store::{BlockStore, StateVector};
+use crate::event::{EventHandler, UpdateEvent};
 use crate::id_set::DeleteSet;
 use crate::update::PendingUpdate;
 use crate::updates::encoder::{Encode, Encoder};
@@ -12,6 +13,7 @@ pub struct Store {
     pub blocks: BlockStore,
     pub pending: Option<PendingUpdate>,
     pub pending_ds: Option<DeleteSet>,
+    pub(crate) update_events: EventHandler<UpdateEvent>,
 }
 
 impl Store {
@@ -23,6 +25,7 @@ impl Store {
             blocks: BlockStore::new(),
             pending: None,
             pending_ds: None,
+            update_events: EventHandler::new(),
         }
     }
 
