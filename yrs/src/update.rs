@@ -26,6 +26,12 @@ impl Update {
         }
     }
 
+    /// Returns an iterator that allows a traversal of all of the blocks
+    /// which consist into this [Update].
+    pub fn blocks(&self) -> Blocks<'_> {
+        Blocks::new(self)
+    }
+
     pub fn merge(&mut self, other: Self) {
         for (client, other_blocks) in other.clients {
             match self.clients.entry(client) {
@@ -360,6 +366,42 @@ impl std::fmt::Display for Update {
             writeln!(f, "\t]")?;
         }
         writeln!(f, "}}")
+    }
+}
+
+pub struct Blocks<'a> {
+    current_client: std::collections::hash_map::Iter<'a, u64, Vec<Block>>,
+    current_block: Option<std::slice::Iter<'a, Block>>,
+}
+
+impl<'a> Blocks<'a> {
+    fn new(update: &'a Update) -> Self {
+        let mut current_client = update.clients.iter();
+        let current_block = current_client.next().map(|(k, v)| v.iter());
+        Blocks {
+            current_client,
+            current_block,
+        }
+    }
+}
+
+impl<'a> Iterator for Blocks<'a> {
+    type Item = &'a Block;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(blocks) = self.current_block.as_mut() {
+            let block = blocks.next();
+            if block.is_some() {
+                return block;
+            }
+        }
+
+        if let Some(entry) = self.current_client.next() {
+            self.current_block = Some(entry.1.iter());
+            self.next()
+        } else {
+            None
+        }
     }
 }
 

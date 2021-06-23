@@ -331,7 +331,37 @@ impl Decode for IdSet {
 
 /// [DeleteSet] contains information about all blocks (described by clock ranges) that have been
 /// subjected to delete process.
+#[derive(Debug, PartialEq)]
 pub struct DeleteSet(IdSet);
+
+impl From<IdSet> for DeleteSet {
+    fn from(id_set: IdSet) -> Self {
+        DeleteSet(id_set)
+    }
+}
+
+impl<'a> From<&'a BlockStore> for DeleteSet {
+    /// Creates a [DeleteSet] by reading all deleted blocks and including their clock ranges into
+    /// the delete set itself.
+    fn from(store: &'a BlockStore) -> Self {
+        let mut set = DeleteSet(IdSet::new());
+        for (&client, blocks) in store.iter() {
+            let mut deletes = IdRange::with_capacity(blocks.len());
+            for block in blocks.iter() {
+                if block.is_deleted() {
+                    let start = block.id().clock;
+                    let end = start + block.len();
+                    deletes.push(start..end);
+                }
+            }
+
+            if !deletes.is_empty() {
+                set.0.insert_range(client, deletes);
+            }
+        }
+        set
+    }
+}
 
 impl Default for DeleteSet {
     fn default() -> Self {
@@ -373,27 +403,6 @@ impl std::fmt::Display for IdRange {
 impl DeleteSet {
     pub fn new() -> Self {
         DeleteSet(IdSet::new())
-    }
-
-    /// Creates a [DeleteSet] by reading all deleted blocks and including their clock ranges into
-    /// the delete set itself.
-    pub fn from(store: &BlockStore) -> Self {
-        let mut set = DeleteSet(IdSet::new());
-        for (&client, blocks) in store.iter() {
-            let mut deletes = IdRange::with_capacity(blocks.len());
-            for block in blocks.iter() {
-                if block.is_deleted() {
-                    let start = block.id().clock;
-                    let end = start + block.len();
-                    deletes.push(start..end);
-                }
-            }
-
-            if !deletes.is_empty() {
-                set.0.insert_range(client, deletes);
-            }
-        }
-        set
     }
 
     pub fn insert(&mut self, id: ID, len: u32) {

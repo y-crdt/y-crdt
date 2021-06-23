@@ -1,4 +1,5 @@
 use crate::block_store::StateVector;
+use crate::event::{Subscription, UpdateEvent};
 use crate::id_set::DeleteSet;
 use crate::store::Store;
 use crate::transaction::Transaction;
@@ -60,9 +61,20 @@ impl Doc {
         tr.apply_update(update, ds)
     }
 
-    // Retrieve document state vector in order to encode the document diff.
+    /// Retrieve document state vector in order to encode the document diff.
     pub fn get_state_vector(&self, tr: &Transaction) -> StateVector {
         tr.store.blocks.get_state_vector()
+    }
+
+    /// Subscribe callback function for incoming update events.
+    /// Returns a subscription, which will unsubscribe function
+    /// when dropped.
+    pub fn on_update<F>(&mut self, f: F) -> Subscription<UpdateEvent>
+    where
+        F: Fn(&UpdateEvent) -> () + 'static,
+    {
+        let mut store = self.store.borrow_mut();
+        store.update_events.subscribe(f)
     }
 }
 
@@ -78,6 +90,8 @@ mod test {
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
     use crate::{Doc, StateVector};
+    use std::cell::Cell;
+    use std::rc::Rc;
 
     #[test]
     fn apply_update_basic() {
@@ -156,5 +170,33 @@ mod test {
         // check if B sees the same thing that A does
         let txt = t2.get_text("test");
         assert_eq!(txt.to_string(&t2), "hello world".to_string());
+    }
+
+    #[test]
+    fn on_update() {
+        let counter = Rc::new(Cell::new(0));
+        let doc = Doc::new();
+        let mut doc2 = Doc::new();
+        let c = counter.clone();
+        let sub = doc2.on_update(move |e| {
+            for block in e.update.blocks() {
+                c.set(c.get() + block.len());
+            }
+        });
+        let mut txn = doc.transact();
+        let mut txn2 = doc2.transact();
+        let txt = txn.get_text("test");
+
+        txt.insert(&mut txn, 0, "abc");
+        let u = doc.encode_delta_as_update(&doc2.get_state_vector(&txn2), &txn);
+        doc2.apply_update(&mut txn2, u.as_slice());
+        assert_eq!(counter.get(), 3); // update has been propagated
+
+        drop(sub);
+
+        txt.insert(&mut txn, 3, "de");
+        let u = doc.encode_delta_as_update(&doc2.get_state_vector(&txn2), &txn);
+        doc2.apply_update(&mut txn2, u.as_slice());
+        assert_eq!(counter.get(), 3); // since subscription has been dropped, update was not propagated
     }
 }
