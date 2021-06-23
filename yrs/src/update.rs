@@ -370,8 +370,8 @@ impl std::fmt::Display for Update {
 }
 
 pub struct Blocks<'a> {
-    current_client: std::collections::hash_map::Iter<'a, u64, Vec<Block>>,
-    current_block: Option<std::slice::Iter<'a, Block>>,
+    current_client: std::collections::hash_map::Iter<'a, u64, VecDeque<Block>>,
+    current_block: Option<std::collections::vec_deque::Iter<'a, Block>>,
 }
 
 impl<'a> Blocks<'a> {
