@@ -129,7 +129,6 @@ fn map_set() {
            x.set('k2', 'v2')
            const update = Y.encodeStateAsUpdate(doc)
            console.log(update);
-           Y.logUpdate(update)
         ```
     */
     let original = &[
@@ -161,6 +160,45 @@ fn map_set() {
             deleted: false,
         }),
     ];
+    let u = Update::decode_v1(original);
+    let blocks: Vec<&Block> = u.blocks().collect();
+    assert_eq!(blocks.as_slice(), expected);
+
+    let store: Store = u.into();
+    let serialized = store.encode_v1();
+    assert_eq!(serialized, original);
+}
+
+#[test]
+fn array_insert() {
+    /* Generated via:
+        ```js
+           const doc = new Y.Doc()
+           const x = doc.getArray('test')
+           x.push(['a']);
+           x.push(['b']);
+           const update = Y.encodeStateAsUpdate(doc)
+           console.log(update);
+        ```
+    */
+    let original = &[
+        1, 1, 199, 195, 202, 51, 0, 8, 1, 4, 116, 101, 115, 116, 2, 119, 1, 97, 119, 1, 98, 0,
+    ];
+    const CLIENT_ID: u64 = 108175815;
+    let expected = &[&Block::Item(Item {
+        id: ID::new(CLIENT_ID, 0),
+        left: None,
+        right: None,
+        origin: None,
+        right_origin: None,
+        content: ItemContent::Any(vec![
+            Any::String("a".to_string()),
+            Any::String("b".to_string()),
+        ]),
+        parent: TypePtr::Named("test".to_string()),
+        parent_sub: None,
+        deleted: false,
+    })];
     let u = Update::decode_v1(original);
     let blocks: Vec<&Block> = u.blocks().collect();
     assert_eq!(blocks.as_slice(), expected);
