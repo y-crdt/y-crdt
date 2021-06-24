@@ -1,7 +1,7 @@
 use crate::block::{Block, BlockPtr, Item, ItemContent};
 use crate::id_set::{DeleteSet, IdSet};
 use crate::store::Store;
-use crate::types::TypePtr;
+use crate::types::{Inner, TypePtr, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT};
 use crate::update::Update;
 use crate::updates::decoder::{Decode, DecoderV1};
 use crate::updates::encoder::Encode;
@@ -131,7 +131,7 @@ fn map_set() {
            console.log(update);
         ```
     */
-    let original = &[
+    let payload = &[
         1, 2, 183, 229, 212, 163, 3, 0, 40, 1, 4, 116, 101, 115, 116, 2, 107, 49, 1, 119, 2, 118,
         49, 40, 1, 4, 116, 101, 115, 116, 2, 107, 50, 1, 119, 2, 118, 50, 0,
     ];
@@ -160,13 +160,8 @@ fn map_set() {
             deleted: false,
         }),
     ];
-    let u = Update::decode_v1(original);
-    let blocks: Vec<&Block> = u.blocks().collect();
-    assert_eq!(blocks.as_slice(), expected);
 
-    let store: Store = u.into();
-    let serialized = store.encode_v1();
-    assert_eq!(serialized, original);
+    roundtrip(payload, expected);
 }
 
 #[test]
@@ -181,7 +176,7 @@ fn array_insert() {
            console.log(update);
         ```
     */
-    let original = &[
+    let payload = &[
         1, 1, 199, 195, 202, 51, 0, 8, 1, 4, 116, 101, 115, 116, 2, 119, 1, 97, 119, 1, 98, 0,
     ];
     const CLIENT_ID: u64 = 108175815;
@@ -199,11 +194,76 @@ fn array_insert() {
         parent_sub: None,
         deleted: false,
     })];
-    let u = Update::decode_v1(original);
+
+    roundtrip(payload, expected);
+}
+
+#[test]
+fn xml_fragment_insert() {
+    /* Generated via:
+        ```js
+           const ydoc = new Y.Doc()
+           const yxmlFragment = ydoc.getXmlFragment('fragment-name')
+           const yxmlNested = new Y.XmlFragment('fragment-name')
+           const yxmlText = new Y.XmlText()
+           yxmlFragment.insert(0, [yxmlText])
+           yxmlFragment.firstChild === yxmlText
+           yxmlFragment.insertAfter(yxmlText, [new Y.XmlElement('node-name')])
+        ```
+    */
+    let payload = &[
+        1, 2, 219, 173, 215, 246, 1, 0, 7, 1, 13, 102, 114, 97, 103, 109, 101, 110, 116, 45, 110,
+        97, 109, 101, 6, 135, 219, 173, 215, 246, 1, 0, 3, 9, 110, 111, 100, 101, 45, 110, 97, 109,
+        101, 0,
+    ];
+    const CLIENT_ID: u64 = 517330651;
+    let expected = &[
+        &Block::Item(Item {
+            id: ID::new(CLIENT_ID, 0),
+            left: None,
+            right: None,
+            origin: None,
+            right_origin: None,
+            content: ItemContent::Type(Inner {
+                start: Cell::new(None),
+                ptr: TypePtr::Id(BlockPtr::from(ID::new(CLIENT_ID, 0))),
+                name: None,
+                type_ref: TYPE_REFS_XML_TEXT,
+            }),
+            parent: TypePtr::Named("fragment-name".to_string()),
+            parent_sub: None,
+            deleted: false,
+        }),
+        &Block::Item(Item {
+            id: ID::new(CLIENT_ID, 1),
+            left: None,
+            right: None,
+            origin: Some(ID::new(CLIENT_ID, 0)),
+            right_origin: None,
+            content: ItemContent::Type(Inner {
+                start: Cell::new(None),
+                ptr: TypePtr::Id(BlockPtr::from(ID::new(CLIENT_ID, 1))),
+                name: Some("node-name".to_string()),
+                type_ref: TYPE_REFS_XML_ELEMENT,
+            }),
+            parent: TypePtr::Id(BlockPtr::from(ID::new(CLIENT_ID, 0))),
+            parent_sub: None,
+            deleted: false,
+        }),
+    ];
+
+    roundtrip(payload, expected);
+}
+
+/// Verify if given `payload` can be deserialized into series
+/// of `expected` blocks, then serialize them back and check
+/// if produced binary is equivalent to `payload`.
+fn roundtrip(payload: &[u8], expected: &[&Block]) {
+    let u = Update::decode_v1(payload);
     let blocks: Vec<&Block> = u.blocks().collect();
     assert_eq!(blocks.as_slice(), expected);
 
     let store: Store = u.into();
     let serialized = store.encode_v1();
-    assert_eq!(serialized, original);
+    assert_eq!(serialized, payload);
 }
