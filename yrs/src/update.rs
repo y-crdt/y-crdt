@@ -396,10 +396,12 @@ impl<'a> Iterator for Blocks<'a> {
 #[cfg(test)]
 mod test {
     use crate::block::{Block, Item, ItemContent};
+    use crate::id_set::DeleteSet;
     use crate::types::TypePtr;
     use crate::update::Update;
     use crate::updates::decoder::{Decode, DecoderV1};
-    use crate::ID;
+    use crate::{Doc, ID};
+    use lib0::decoding::Cursor;
 
     #[test]
     fn update_decode() {
@@ -441,5 +443,44 @@ mod test {
     }
 
     #[test]
-    fn merge() {}
+    fn update_merge() {
+        let d1 = Doc::new();
+        let mut t1 = d1.transact();
+        let txt1 = t1.get_text("test");
+
+        let d2 = Doc::new();
+        let mut t2 = d2.transact();
+        let txt2 = t2.get_text("test");
+
+        txt1.insert(&mut t1, 0, "aaa");
+        txt1.insert(&mut t1, 0, "aaa");
+
+        txt1.insert(&mut t1, 0, "bbb");
+        txt1.insert(&mut t1, 2, "bbb");
+
+        let binary1 = t1.encode_update();
+        let binary2 = t2.encode_update();
+
+        d1.apply_update(&mut t1, binary2.as_slice());
+        d2.apply_update(&mut t2, binary1.as_slice());
+
+        let mut u1 = Update::decode(&mut DecoderV1::new(Cursor::new(binary1.as_slice())));
+        let u2 = Update::decode(&mut DecoderV1::new(Cursor::new(binary2.as_slice())));
+
+        // a crux of our test: merged update upon applying should produce
+        // the same output as sequence of updates applied individually
+        u1.merge(u2);
+
+        let d3 = Doc::new();
+        let mut t3 = d3.transact();
+        let txt3 = t3.get_text("test");
+        t3.apply_update(u1, DeleteSet::default());
+
+        let str1 = txt1.to_string(&t1);
+        let str2 = txt2.to_string(&t2);
+        let str3 = txt3.to_string(&t3);
+
+        assert_eq!(str1, str2);
+        assert_eq!(str2, str3);
+    }
 }
