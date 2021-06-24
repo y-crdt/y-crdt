@@ -1,7 +1,13 @@
 use crate::block::{Block, BlockPtr, Item, ItemContent};
 use crate::id_set::{DeleteSet, IdSet};
+use crate::store::Store;
 use crate::types::TypePtr;
-use crate::{Doc, ID};
+use crate::update::Update;
+use crate::updates::decoder::{Decode, DecoderV1};
+use crate::updates::encoder::Encode;
+use crate::{BlockStore, Doc, ID};
+use lib0::any::Any;
+use lib0::decoding::Cursor;
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -111,4 +117,55 @@ fn text_insert_delete() {
     doc.apply_update(&mut txn, update);
     assert_eq!(txt.to_string(&txn), "abhi".to_string());
     assert!(visited.get());
+}
+
+#[test]
+fn map_set() {
+    /* Generated via:
+        ```js
+           const doc = new Y.Doc()
+           const x = doc.getMap('test')
+           x.set('k1', 'v1')
+           x.set('k2', 'v2')
+           const update = Y.encodeStateAsUpdate(doc)
+           console.log(update);
+           Y.logUpdate(update)
+        ```
+    */
+    let original = &[
+        1, 2, 183, 229, 212, 163, 3, 0, 40, 1, 4, 116, 101, 115, 116, 2, 107, 49, 1, 119, 2, 118,
+        49, 40, 1, 4, 116, 101, 115, 116, 2, 107, 50, 1, 119, 2, 118, 50, 0,
+    ];
+    const CLIENT_ID: u64 = 880095927;
+    let expected = &[
+        &Block::Item(Item {
+            id: ID::new(CLIENT_ID, 0),
+            left: None,
+            right: None,
+            origin: None,
+            right_origin: None,
+            content: ItemContent::Any(vec![Any::String("v1".to_string())]),
+            parent: TypePtr::Named("test".to_string()),
+            parent_sub: Some("k1".to_string()),
+            deleted: false,
+        }),
+        &Block::Item(Item {
+            id: ID::new(CLIENT_ID, 1),
+            left: None,
+            right: None,
+            origin: None,
+            right_origin: None,
+            content: ItemContent::Any(vec![Any::String("v2".to_string())]),
+            parent: TypePtr::Named("test".to_string()),
+            parent_sub: Some("k2".to_string()),
+            deleted: false,
+        }),
+    ];
+    let u = Update::decode_v1(original);
+    let blocks: Vec<&Block> = u.blocks().collect();
+    assert_eq!(blocks.as_slice(), expected);
+
+    let store: Store = u.into();
+    let serialized = store.encode_v1();
+    assert_eq!(serialized, original);
 }
