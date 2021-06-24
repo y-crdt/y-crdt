@@ -10,7 +10,7 @@ use std::hash::BuildHasherDefault;
 use std::ops::{Index, IndexMut};
 use std::vec::Vec;
 
-#[derive(Default, Debug, Clone)]
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct StateVector(HashMap<u64, u32, BuildHasherDefault<ClientHasher>>);
 
 impl StateVector {

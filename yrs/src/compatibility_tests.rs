@@ -5,10 +5,11 @@ use crate::types::{Inner, TypePtr, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT};
 use crate::update::Update;
 use crate::updates::decoder::{Decode, DecoderV1};
 use crate::updates::encoder::Encode;
-use crate::{BlockStore, Doc, ID};
+use crate::{BlockStore, Doc, StateVector, ID};
 use lib0::any::Any;
 use lib0::decoding::Cursor;
 use std::cell::Cell;
+use std::collections::HashMap;
 use std::rc::Rc;
 
 #[test]
@@ -253,6 +254,34 @@ fn xml_fragment_insert() {
     ];
 
     roundtrip(payload, expected);
+}
+
+#[test]
+fn state_vector() {
+    /* Generated via:
+      ```js
+         const a = new Y.Doc()
+         const ta = a.getText('test')
+         ta.insert(0, 'abc')
+
+         const b = new Y.Doc()
+         const tb = b.getText('test')
+         tb.insert(0, 'de')
+
+         Y.applyUpdate(a, Y.encodeStateAsUpdate(b))
+         console.log(Y.encodeStateVector(a))
+      ```
+    */
+    let payload = &[2, 178, 219, 218, 44, 3, 190, 212, 225, 6, 2];
+    let mut expected = StateVector::default();
+    expected.inc_by(14182974, 2);
+    expected.inc_by(93760946, 3);
+
+    let sv = StateVector::decode_v1(payload);
+    assert_eq!(sv, expected);
+
+    let serialized = sv.encode_v1();
+    assert_eq!(serialized.as_slice(), payload);
 }
 
 /// Verify if given `payload` can be deserialized into series
