@@ -304,7 +304,7 @@ impl Item {
                 } else {
                     let ptr =
                         BlockPtr::new(ID::new(origin_id.client, origin_id.clock + 1), ptr.pivot);
-                    let (l, r) = txn.store.blocks.split_block(&ptr);
+                    let (l, _) = txn.store.blocks.split_block(&ptr);
                     self.left = l;
                 }
             }
@@ -375,7 +375,7 @@ impl Item {
             // set the first conflicting item
             let mut o = if let Some(Block::Item(left)) = left {
                 left.right
-            } else if let Some(sub) = &self.parent_sub {
+            } else if let Some(_sub) = &self.parent_sub {
                 //o = /** @type {AbstractType<any>} */ (this.parent)._map.get(this.parentSub) || null
                 //while (o !== null && o.left !== null) {
                 //    o = o.left
@@ -441,7 +441,7 @@ impl Item {
                 self.right = left.right.replace(BlockPtr::new(self.id, pivot));
             }
         } else {
-            let r = if let Some(parent_sub) = &self.parent_sub {
+            let r = if let Some(_parent_sub) = &self.parent_sub {
                 //r = /** @type {AbstractType<any>} */ (this.parent)._map.get(this.parentSub) || null
                 //while (r !== null && r.left !== null) {
                 //    r = r.left
@@ -461,7 +461,7 @@ impl Item {
             if let Some(right) = txn.store.blocks.get_item_mut(right_id) {
                 right.left = Some(BlockPtr::new(self.id, pivot));
             }
-        } else if let Some(parent_sub) = &self.parent_sub {
+        } else if let Some(_parent_sub) = &self.parent_sub {
             // // set as current parent value if right === null and this is parentSub
             // /** @type {AbstractType<any>} */ (this.parent)._map.set(this.parentSub, this)
             // if (this.left !== null) {
@@ -600,7 +600,7 @@ impl ItemContent {
         }
     }
 
-    fn delete(&mut self, txn: &mut Transaction<'_>) {
+    fn delete(&mut self, _txn: &mut Transaction<'_>) {
         match self {
             ItemContent::Doc(_, _) => {
                 //if (transaction.subdocsAdded.has(this.doc)) {

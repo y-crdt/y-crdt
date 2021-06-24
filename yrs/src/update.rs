@@ -2,12 +2,10 @@ use crate::block::{
     Block, BlockPtr, Item, ItemContent, Skip, BLOCK_GC_REF_NUMBER, BLOCK_SKIP_REF_NUMBER, GC,
     HAS_ORIGIN, HAS_PARENT_SUB, HAS_RIGHT_ORIGIN,
 };
-use crate::block_store::ClientBlockList;
 use crate::types::TypePtr;
 use crate::updates::decoder::{Decode, Decoder};
 use crate::utils::client_hasher::ClientHasher;
-use crate::{BlockStore, StateVector, Transaction, ID};
-use std::cell::RefCell;
+use crate::{StateVector, Transaction, ID};
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, VecDeque};
 use std::hash::BuildHasherDefault;
@@ -20,12 +18,6 @@ pub struct Update {
 }
 
 impl Update {
-    fn new() -> Self {
-        Update {
-            clients: HashMap::default(),
-        }
-    }
-
     /// Returns an iterator that allows a traversal of all of the blocks
     /// which consist into this [Update].
     pub fn blocks(&self) -> Blocks<'_> {
@@ -126,7 +118,6 @@ impl Update {
                         // This update message causally depends on another update message that doesn't exist yet
                         missing_sv.set_min(dep, local_sv.get(&dep));
                         Self::return_stack(stack, &mut self.clients, &mut remaining);
-                        stack_head = None;
                         current_target = current_client_id.and_then(|id| self.clients.get_mut(&id));
                         stack = Vec::new();
                     } else {
@@ -146,7 +137,6 @@ impl Update {
                 stack.push(block);
                 // hid a dead wall, add all items from stack to restSS
                 Self::return_stack(stack, &mut self.clients, &mut remaining);
-                stack_head = None;
                 current_target = current_client_id.and_then(|id| self.clients.get_mut(&id));
                 stack = Vec::new();
             }
@@ -319,12 +309,10 @@ impl Update {
 impl Decode for Update {
     fn decode<D: Decoder>(decoder: &mut D) -> Self {
         let clients_len: u32 = decoder.read_uvar();
-        let mut total_len: usize = 0;
         let mut clients =
             HashMap::with_capacity_and_hasher(clients_len as usize, BuildHasherDefault::default());
         for _ in 0..clients_len {
             let blocks_len = decoder.read_uvar::<u32>() as usize;
-            total_len += blocks_len;
 
             let client = decoder.read_client();
             let mut clock: u32 = decoder.read_uvar();
@@ -350,7 +338,7 @@ pub struct PendingUpdate {
 }
 
 impl PendingUpdate {
-    fn merge(&mut self, other: &Self) {
+    fn merge(&mut self, _other: &Self) {
         todo!()
     }
 }
@@ -377,7 +365,7 @@ pub struct Blocks<'a> {
 impl<'a> Blocks<'a> {
     fn new(update: &'a Update) -> Self {
         let mut current_client = update.clients.iter();
-        let current_block = current_client.next().map(|(k, v)| v.iter());
+        let current_block = current_client.next().map(|(_, v)| v.iter());
         Blocks {
             current_client,
             current_block,
@@ -451,4 +439,7 @@ mod test {
         }));
         assert_eq!(block, &expected);
     }
+
+    #[test]
+    fn merge() {}
 }
