@@ -33,6 +33,10 @@ impl Doc {
         txn.store.encode_v1()
     }
 
+    pub fn encode_state_vector(&self, txn: &Transaction<'_>) -> Vec<u8> {
+        txn.store.blocks.get_state_vector().encode_v1()
+    }
+
     pub fn encode_delta_as_update(
         &self,
         remote_sv: &StateVector,
