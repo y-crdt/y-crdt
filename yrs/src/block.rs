@@ -410,12 +410,20 @@ impl Item {
             // set the first conflicting item
             let mut o = if let Some(Block::Item(left)) = left {
                 left.right
-            } else if let Some(_sub) = &self.parent_sub {
-                //o = /** @type {AbstractType<any>} */ (this.parent)._map.get(this.parentSub) || null
-                //while (o !== null && o.left !== null) {
-                //    o = o.left
-                //}
-                todo!()
+            } else if let Some(sub) = &self.parent_sub {
+                if let Some(parent) = txn.store.get_type(&self.parent) {
+                    let mut o = parent.map.get(sub);
+                    while let Some(ptr) = o {
+                        if let Some(item) = txn.store.blocks.get_item(ptr) {
+                            o = item.left.as_ref();
+                        } else {
+                            break;
+                        }
+                    }
+                    o.cloned()
+                } else {
+                    None
+                }
             } else {
                 if let Some(parent) = txn.store.get_type(&self.parent) {
                     parent.start.get()
@@ -476,12 +484,20 @@ impl Item {
                 self.right = left.right.replace(BlockPtr::new(self.id, pivot));
             }
         } else {
-            let r = if let Some(_parent_sub) = &self.parent_sub {
-                //r = /** @type {AbstractType<any>} */ (this.parent)._map.get(this.parentSub) || null
-                //while (r !== null && r.left !== null) {
-                //    r = r.left
-                //}
-                todo!()
+            let r = if let Some(parent_sub) = &self.parent_sub {
+                if let Some(parent) = txn.store.get_type(&self.parent) {
+                    let mut o = parent.map.get(parent_sub);
+                    while let Some(ptr) = o {
+                        if let Some(item) = txn.store.blocks.get_item(ptr) {
+                            o = item.left.as_ref();
+                        } else {
+                            break;
+                        }
+                    }
+                    o.cloned()
+                } else {
+                    None
+                }
             } else {
                 let parent_type = txn.store.init_type_from_ptr(&self.parent).unwrap();
                 let start = parent_type
