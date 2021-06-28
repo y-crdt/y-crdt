@@ -38,6 +38,8 @@ mod utils;
 
 #[cfg(test)]
 mod compatibility_tests;
+#[cfg(test)]
+mod test_utils;
 
 pub use crate::block::ID;
 pub use crate::block_store::BlockStore;
