@@ -52,6 +52,11 @@ impl TestConnector {
         tc
     }
 
+    /// Returns random number generator attached to current [TestConnector].
+    pub fn rng(&mut self) -> &mut ThreadRng {
+        &mut self.rng
+    }
+
     /// Create a new [TestPeer] with provided `client_id` or return one, if such `client_id`
     /// was already created before.
     pub fn create_peer(&mut self, client_id: u64) -> &mut TestPeer {
