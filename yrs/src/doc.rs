@@ -43,7 +43,7 @@ impl Doc {
         encoder.to_vec()
     }
 
-    pub fn get_type(&self, tr: &Transaction, string: &str) -> types::Text {
+    pub fn get_type(&self, _txn: &Transaction, string: &str) -> types::Text {
         let ptr = types::TypePtr::Named(string.to_owned());
         types::Text::from(ptr)
     }

@@ -34,6 +34,10 @@ impl StateVector {
         sv
     }
 
+    pub fn contains(&self, id: &ID) -> bool {
+        id.clock <= self.get(&id.client)
+    }
+
     pub fn get(&self, client_id: &u64) -> u32 {
         match self.0.get(client_id) {
             Some(state) => *state,
@@ -58,6 +62,10 @@ impl StateVector {
                 e.insert(clock);
             }
         }
+    }
+    pub fn set_max(&mut self, client: u64, clock: u32) {
+        let e = self.0.entry(client).or_default();
+        *e = (*e).max(clock);
     }
 
     pub fn iter(&self) -> std::collections::hash_map::Iter<u64, u32> {
@@ -198,6 +206,17 @@ impl ClientBlockList {
     pub fn iter(&self) -> ClientBlockListIter<'_> {
         self.list.iter()
     }
+
+    pub fn clear(&mut self) {
+        self.integrated_len = 0;
+        self.list.clear();
+    }
+}
+
+impl Default for ClientBlockList {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Index<usize> for ClientBlockList {
@@ -244,6 +263,10 @@ impl BlockStore {
 
     pub fn get_mut(&mut self, client: &u64) -> Option<&mut ClientBlockList> {
         self.clients.get_mut(client)
+    }
+
+    pub fn remove(&mut self, client: &u64) -> Option<ClientBlockList> {
+        self.clients.remove(client)
     }
 
     pub fn iter(&self) -> Iter<'_> {
@@ -320,6 +343,10 @@ impl BlockStore {
         }
 
         None
+    }
+
+    pub fn insert(&mut self, client: u64, blocks: ClientBlockList) -> Option<ClientBlockList> {
+        self.clients.insert(client, blocks)
     }
 
     /// Given block pointer, tries to split it, returning a pointers to left and right halves
