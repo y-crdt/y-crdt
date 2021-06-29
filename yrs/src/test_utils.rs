@@ -15,9 +15,40 @@ const MSG_SYNC_STEP_1: usize = 0;
 const MSG_SYNC_STEP_2: usize = 1;
 const MSG_SYNC_UPDATE: usize = 2;
 
+pub fn run_scenario<F>(mods: &[F], users: usize, iterations: usize)
+where
+    F: Fn(&mut Doc, &mut ThreadRng),
+{
+    let mut tc = TestConnector::with_peer_num(thread_rng(), users as u64);
+    for i in 0..iterations {
+        if tc.rng.gen_range(0, 100) <= 2 {
+            // 2% chance to disconnect/reconnect a random user
+            if tc.rng.gen_bool(0.5) {
+                tc.disconnect_random();
+            } else {
+                tc.reconnect_random();
+            }
+        } else if tc.rng.gen_range(0, 100) <= 1 {
+            // 1% chance to flush all
+            tc.flush_all();
+        } else if tc.rng.gen_range(0, 100) <= 50 {
+            tc.flush_random();
+        }
+        let test = mods.choose(tc.rng()).unwrap();
+        let peer = {
+            let idx = tc.rng.gen_range(0, tc.peers.len());
+            &mut tc.peers[idx]
+        };
+
+        test(&mut peer.doc, &mut tc.rng);
+    }
+
+    tc.assert_final_state();
+}
+
 pub struct TestConnector {
     rng: ThreadRng,
-    clients: Vec<TestPeer>,
+    peers: Vec<TestPeer>,
     /// Maps all Client IDs to indexes in the `docs` vector.
     all: HashMap<u64, usize>,
     /// Maps online Client IDs to indexes in the `docs` vector.
@@ -34,7 +65,7 @@ impl TestConnector {
     pub fn with_rng(rng: ThreadRng) -> Self {
         TestConnector {
             rng,
-            clients: Vec::new(),
+            peers: Vec::new(),
             all: HashMap::new(),
             online: HashMap::new(),
         }
@@ -62,11 +93,11 @@ impl TestConnector {
     pub fn create_peer(&mut self, client_id: u64) -> &mut TestPeer {
         if !self.all.contains_key(&client_id) {
             let instance = TestPeer::new(client_id);
-            let idx = self.clients.len();
-            self.clients.push(instance);
+            let idx = self.peers.len();
+            self.peers.push(instance);
             self.all.insert(client_id, idx);
             self.online.insert(client_id, idx);
-            &mut self.clients[idx]
+            &mut self.peers[idx]
         } else {
             self.get_mut(&client_id).unwrap()
         }
@@ -75,14 +106,14 @@ impl TestConnector {
     /// Try to retrieve a reference to [TestPeer] for a given `client_id`, if such node was created.
     pub fn get(&self, client_id: &u64) -> Option<&TestPeer> {
         let idx = self.all.get(client_id)?;
-        Some(&self.clients[*idx])
+        Some(&self.peers[*idx])
     }
 
     /// Try to retrieve a mutable reference to [TestPeer] for a given `client_id`,
     /// if such node was created.
     pub fn get_mut(&mut self, client_id: &u64) -> Option<&mut TestPeer> {
         let idx = self.all.get(client_id)?;
-        Some(&mut self.clients[*idx])
+        Some(&mut self.peers[*idx])
     }
 
     /// Disconnects test node with given `client_id` from the rest of known nodes.
@@ -172,7 +203,7 @@ impl TestConnector {
 
     fn pick_random_pair(&mut self) -> Option<(&mut TestPeer, &mut TestPeer)> {
         let pairs: Vec<_> = self
-            .clients
+            .peers
             .iter()
             .enumerate()
             .flat_map(|(receiver_idx, conn)| {
@@ -188,7 +219,7 @@ impl TestConnector {
             .collect();
         let (receiver_idx, sender_idx) = pairs.choose(&mut self.rng)?;
         unsafe {
-            let ptr = self.clients.as_mut_ptr();
+            let ptr = self.peers.as_mut_ptr();
             let receiver = ptr.offset(*receiver_idx as isize);
             let sender = ptr.offset(*sender_idx as isize);
             Some((receiver.as_mut().unwrap(), sender.as_mut().unwrap()))
@@ -268,6 +299,30 @@ impl TestConnector {
 
         encoder.write_uvar(MSG_SYNC_STEP_2);
         encoder.write_buf(peer.doc.encode_delta_as_update(&remote_sv, &txn));
+    }
+
+    pub fn assert_final_state(mut self) {
+        self.reconnect_all();
+        while self.flush_all() { /* do nothing */ }
+        // For each document, merge all received document updates with Y.mergeUpdates
+        // and create a new document which will be added to the list of "users"
+        // This ensures that mergeUpdates works correctly
+        /*
+        const mergedDocs = users.map(user => {
+          const ydoc = new Y.Doc()
+          enc.applyUpdate(ydoc, enc.mergeUpdates(user.updates))
+          return ydoc
+        })
+        users.push(.../** @type {any} */(mergedDocs))
+        */
+        for i in 0..(self.peers.len() - 1) {
+            let a = self.peers[i].doc.transact();
+            let b = self.peers[i + 1].doc.transact();
+
+            assert_eq!(a.store.blocks, b.store.blocks);
+            assert_eq!(a.store.pending, b.store.pending);
+            assert_eq!(a.store.pending_ds, b.store.pending_ds);
+        }
     }
 }
 

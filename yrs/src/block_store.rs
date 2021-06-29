@@ -10,7 +10,7 @@ use std::hash::BuildHasherDefault;
 use std::ops::{Index, IndexMut};
 use std::vec::Vec;
 
-#[derive(Default, Debug, Clone)]
+#[derive(Default, Debug, Clone, Eq, PartialEq)]
 pub struct StateVector(HashMap<u64, u32, BuildHasherDefault<ClientHasher>>);
 
 impl StateVector {
@@ -90,7 +90,7 @@ impl Encode for StateVector {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct ClientBlockList {
     list: Vec<block::Block>,
     integrated_len: usize,
@@ -216,7 +216,7 @@ impl IndexMut<usize> for ClientBlockList {
 
 pub type ClientBlockListIter<'a> = std::slice::Iter<'a, block::Block>;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct BlockStore {
     clients: HashMap<u64, ClientBlockList, BuildHasherDefault<ClientHasher>>,
 }
