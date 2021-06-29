@@ -11,7 +11,7 @@ use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::hash::BuildHasherDefault;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct Update {
     clients: HashMap<u64, Vec<Block>, BuildHasherDefault<ClientHasher>>,
 }
@@ -295,6 +295,7 @@ impl Decode for Update {
     }
 }
 
+#[derive(Debug, PartialEq)]
 pub struct PendingUpdate {
     pub update: Update,
     pub missing: StateVector,

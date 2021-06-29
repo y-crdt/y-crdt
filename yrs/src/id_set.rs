@@ -331,7 +331,7 @@ impl Decode for IdSet {
 
 /// [DeleteSet] contains information about all blocks (described by clock ranges) that have been
 /// subjected to delete process.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct DeleteSet(IdSet);
 
 impl From<IdSet> for DeleteSet {
