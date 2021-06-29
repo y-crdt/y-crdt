@@ -17,7 +17,7 @@ const MSG_SYNC_UPDATE: usize = 2;
 
 pub struct TestConnector {
     rng: ThreadRng,
-    clients: Vec<TestInstance>,
+    clients: Vec<TestNode>,
     /// Maps all Client IDs to indexes in the `docs` vector.
     all: HashMap<u64, usize>,
     /// Maps online Client IDs to indexes in the `docs` vector.
@@ -25,10 +25,12 @@ pub struct TestConnector {
 }
 
 impl TestConnector {
+    /// Create new [TestConnector] with random seed.
     pub fn new() -> Self {
         Self::with_rng(thread_rng())
     }
 
+    /// Create new [TestConnector] with provided randomizer.
     pub fn with_rng(rng: ThreadRng) -> Self {
         TestConnector {
             rng,
@@ -38,9 +40,23 @@ impl TestConnector {
         }
     }
 
-    pub fn create(&mut self, client_id: u64) -> &mut TestInstance {
+    /// Create a new [TestConnector] with pre-initialized number of peers.
+    pub fn with_peer_num(rng: ThreadRng, peer_num: u64) -> Self {
+        let mut tc = Self::with_rng(rng);
+        for client_id in 0..peer_num {
+            let peer = tc.create(client_id);
+            let mut txn = peer.doc.transact();
+            txn.get_text("text");
+        }
+        tc.sync_all();
+        tc
+    }
+
+    /// Create a new [TestNode] with provided `client_id` or return one, if such `client_id`
+    /// was already created before.
+    pub fn create(&mut self, client_id: u64) -> &mut TestNode {
         if !self.all.contains_key(&client_id) {
-            let instance = TestInstance::new(client_id);
+            let instance = TestNode::new(client_id);
             let idx = self.clients.len();
             self.clients.push(instance);
             self.all.insert(client_id, idx);
@@ -51,16 +67,20 @@ impl TestConnector {
         }
     }
 
-    pub fn get(&self, client_id: &u64) -> Option<&TestInstance> {
+    /// Try to retrieve a reference to [TestNode] for a given `client_id`, if such node was created.
+    pub fn get(&self, client_id: &u64) -> Option<&TestNode> {
         let idx = self.all.get(client_id)?;
         Some(&self.clients[*idx])
     }
 
-    pub fn get_mut(&mut self, client_id: &u64) -> Option<&mut TestInstance> {
+    /// Try to retrieve a mutable reference to [TestNode] for a given `client_id`,
+    /// if such node was created.
+    pub fn get_mut(&mut self, client_id: &u64) -> Option<&mut TestNode> {
         let idx = self.all.get(client_id)?;
         Some(&mut self.clients[*idx])
     }
 
+    /// Disconnects test node with given `client_id` from the rest of known nodes.
     pub fn disconnect(&mut self, client_id: u64) {
         if let Some(peer) = self.get_mut(&client_id) {
             peer.receiving.clear();
@@ -77,6 +97,7 @@ impl TestConnector {
         }
     }
 
+    /// Reconnects back all known nodes.
     pub fn reconnect_all(&mut self) {
         let all_ids: Vec<_> = self.all.keys().cloned().collect();
         for id in all_ids {
@@ -84,6 +105,7 @@ impl TestConnector {
         }
     }
 
+    /// Disconnects all known nodes from each other.
     pub fn disconnect_all(&mut self) {
         let all_ids: Vec<_> = self.all.keys().cloned().collect();
         for id in all_ids {
@@ -91,11 +113,13 @@ impl TestConnector {
         }
     }
 
+    /// Reconnects all known nodes and processes their pending messages.
     pub fn sync_all(&mut self) {
         self.reconnect_all();
         self.flush_all();
     }
 
+    /// Processes all pending messages of connected nodes in random order.
     pub fn flush_all(&mut self) -> bool {
         let mut did_something = false;
         while self.flush_random() {
@@ -141,7 +165,7 @@ impl TestConnector {
         }
     }
 
-    fn pick_random_pair(&mut self) -> Option<(&mut TestInstance, &mut TestInstance)> {
+    fn pick_random_pair(&mut self) -> Option<(&mut TestNode, &mut TestNode)> {
         let pairs: Vec<_> = self
             .clients
             .iter()
@@ -166,6 +190,7 @@ impl TestConnector {
         }
     }
 
+    /// Disconnects one node at random.
     pub fn disconnect_random(&mut self) -> bool {
         if let Some(id) = self.online.keys().choose(&mut self.rng).cloned() {
             self.disconnect(id);
@@ -175,6 +200,7 @@ impl TestConnector {
         }
     }
 
+    /// Reconnects one previously disconnected node at random.
     pub fn reconnect_random(&mut self) -> bool {
         let reconnectable: Vec<_> = self
             .all
@@ -191,7 +217,7 @@ impl TestConnector {
     }
 
     fn read_sync_message<D: Decoder, E: Encoder>(
-        peer: &TestInstance,
+        peer: &TestNode,
         decoder: &mut D,
         encoder: &mut E,
     ) -> usize {
@@ -209,33 +235,29 @@ impl TestConnector {
         msg_type
     }
 
-    fn read_sync_step1<D: Decoder, E: Encoder>(
-        peer: &TestInstance,
-        decoder: &mut D,
-        encoder: &mut E,
-    ) {
+    fn read_sync_step1<D: Decoder, E: Encoder>(peer: &TestNode, decoder: &mut D, encoder: &mut E) {
         Self::write_step2(peer, decoder.read_buf(), encoder)
     }
 
-    fn read_sync_step2<D: Decoder>(peer: &TestInstance, decoder: &mut D) {
+    fn read_sync_step2<D: Decoder>(peer: &TestNode, decoder: &mut D) {
         let mut txn = peer.doc.transact();
 
         peer.doc.apply_update(&mut txn, decoder.read_buf());
     }
 
-    fn read_update<D: Decoder>(peer: &TestInstance, decoder: &mut D) {
+    fn read_update<D: Decoder>(peer: &TestNode, decoder: &mut D) {
         Self::read_sync_step2(peer, decoder)
     }
 
     /// Create a sync step 1 message based on the state of the current shared document.
-    fn write_step1<E: Encoder>(peer: &TestInstance, encoder: &mut E) {
+    fn write_step1<E: Encoder>(peer: &TestNode, encoder: &mut E) {
         let txn = peer.doc.transact();
 
         encoder.write_uvar(MSG_SYNC_STEP_1);
         encoder.write_buf(peer.doc.encode_state_vector(&txn));
     }
 
-    fn write_step2<E: Encoder>(peer: &TestInstance, sv: &[u8], encoder: &mut E) {
+    fn write_step2<E: Encoder>(peer: &TestNode, sv: &[u8], encoder: &mut E) {
         let txn = peer.doc.transact();
         let remote_sv = StateVector::decode_v1(sv);
 
@@ -244,15 +266,15 @@ impl TestConnector {
     }
 }
 
-pub struct TestInstance {
+pub struct TestNode {
     doc: Doc,
     receiving: HashMap<u64, VecDeque<Vec<u8>>>,
     updates: VecDeque<Vec<u8>>,
 }
 
-impl TestInstance {
+impl TestNode {
     pub fn new(client_id: u64) -> Self {
-        TestInstance {
+        TestNode {
             doc: Doc::with_client_id(client_id),
             receiving: HashMap::new(),
             updates: VecDeque::new(),
