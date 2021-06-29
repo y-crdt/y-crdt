@@ -59,7 +59,7 @@ impl Text {
                             ID::new(right.id.client, right.id.clock + count),
                             right_ptr.pivot() as u32,
                         );
-                        let (l, _) = txn.store.blocks.split_block(&split_ptr);
+                        let (_, _) = txn.store.blocks.split_block(&split_ptr);
                         right = txn.store.blocks.get_item(right_ptr).unwrap();
                         right_len = right.len();
                     }

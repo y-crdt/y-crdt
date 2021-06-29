@@ -163,7 +163,7 @@ impl<'a> Transaction<'a> {
                                                 let diff = clock_end - item.id.clock;
                                                 let mut split_ptr = delete_ptr.clone();
                                                 split_ptr.id.clock += diff;
-                                                let (l, right) =
+                                                let (_, right) =
                                                     self.store.blocks.split_block(&split_ptr);
                                                 if let Some(right) = right {
                                                     self.merge_blocks.push(right.id);
@@ -214,10 +214,10 @@ impl<'a> Transaction<'a> {
                 }
                 // item.content.delete(transaction)
                 match &mut item.content {
-                    ItemContent::Doc(s, value) => {
+                    ItemContent::Doc(_s, _value) => {
                         todo!()
                     }
-                    ItemContent::Type(inner) => {
+                    ItemContent::Type(_inner) => {
                         todo!()
                     }
                     _ => {} // do nothing
