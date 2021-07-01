@@ -5,7 +5,7 @@ use std::mem::MaybeUninit;
 #[derive(Default)]
 pub struct Cursor<'a> {
     pub buf: &'a [u8],
-    next: usize,
+    pub next: usize,
 }
 
 impl<'a> Cursor<'a> {

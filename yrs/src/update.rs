@@ -4,6 +4,7 @@ use crate::block::{
 };
 use crate::types::TypePtr;
 use crate::updates::decoder::{Decode, Decoder};
+use crate::updates::encoder::{Encoder, EncoderV1};
 use crate::utils::client_hasher::ClientHasher;
 use crate::{StateVector, Transaction, ID};
 use std::collections::hash_map::Entry;
@@ -18,6 +19,15 @@ pub struct Update {
 }
 
 impl Update {
+    pub fn state_vector(&self) -> StateVector {
+        let mut sv = StateVector::empty();
+        for (&client, blocks) in self.clients.iter() {
+            let last_id = blocks[blocks.len() - 1].last_id();
+            sv.set_max(client, last_id.clock);
+        }
+        sv
+    }
+
     /// Returns an iterator that allows a traversal of all of the blocks
     /// which consist into this [Update].
     pub fn blocks(&self) -> Blocks<'_> {
@@ -301,6 +311,47 @@ impl Update {
                     deleted: false,
                 };
                 Block::Item(item)
+            }
+        }
+    }
+
+    pub(crate) fn encode_diff<E: Encoder>(&self, remote_sv: &StateVector, encoder: &mut E) {
+        let mut clients = HashMap::new();
+        for (client, blocks) in self.clients.iter() {
+            let remote_clock = remote_sv.get(client);
+            let mut iter = blocks.iter();
+            let mut curr = iter.next();
+            while let Some(block) = curr {
+                if let Block::Skip(_) = block {
+                    curr = iter.next();
+                } else if block.id().clock + block.len() > remote_clock {
+                    let e = clients.entry(*client).or_insert_with(|| (0, Vec::new()));
+                    e.0 = (remote_clock as i64 - block.id().clock as i64).max(0) as u32;
+                    e.1.push(block);
+                    curr = iter.next();
+                    while let Some(block) = curr {
+                        e.1.push(block);
+                        curr = iter.next();
+                    }
+                } else {
+                    // read until something new comes up
+                    curr = iter.next();
+                }
+            }
+        }
+
+        // finish lazy struct writing
+        encoder.write_uvar(clients.len());
+        for (client, (offset, blocks)) in clients {
+            encoder.write_uvar(blocks.len());
+            encoder.write_uvar(client);
+
+            let mut block = blocks[0];
+            encoder.write_uvar(block.id().clock + offset);
+            block.encode_with_offset(encoder, offset);
+            for i in 1..blocks.len() {
+                block = blocks[i];
+                block.encode_with_offset(encoder, 0);
             }
         }
     }

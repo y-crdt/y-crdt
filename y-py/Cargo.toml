@@ -11,7 +11,7 @@ name = "y_py"
 crate-type = ["cdylib"]
 
 [dependencies]
-yrs-api-wrapper = { git="https://github.com/yjs/y-crdt/", branch="main"}
+yrs = { path = "../yrs" }
 pythonize = "0.13.0"
 
 [dependencies.pyo3]
