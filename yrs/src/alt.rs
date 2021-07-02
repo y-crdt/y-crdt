@@ -16,7 +16,7 @@ pub fn merge_updates(updates: &[&[u8]]) -> Vec<u8> {
             let mut ds = DeleteSet::decode(&mut decoder);
 
             while let Some(data) = iter.next() {
-                let mut decoder = DecoderV1::new(Cursor::new(iter.next().unwrap()));
+                let mut decoder = DecoderV1::new(Cursor::new(data));
                 let mut u = Update::decode(&mut decoder);
                 let mut d = DeleteSet::decode(&mut decoder);
 
@@ -52,4 +52,37 @@ pub fn diff_updates(update: &[u8], state_vector: &[u8]) -> Vec<u8> {
     let mut result = encoder.to_vec();
     result.extend_from_slice(decoder.read_to_end());
     result
+}
+
+#[cfg(test)]
+mod test {
+    use crate::{encode_state_vector_from_update, merge_updates};
+
+    #[test]
+    fn merge_updates_compatibility() {
+        let a = &[
+            1, 1, 220, 240, 237, 172, 15, 0, 4, 1, 4, 116, 101, 115, 116, 3, 97, 98, 99, 0,
+        ];
+        let b = &[
+            1, 1, 201, 139, 250, 201, 1, 0, 4, 1, 4, 116, 101, 115, 116, 2, 100, 101, 0,
+        ];
+        let expected = &[
+            2, 1, 220, 240, 237, 172, 15, 0, 4, 1, 4, 116, 101, 115, 116, 3, 97, 98, 99, 1, 201,
+            139, 250, 201, 1, 0, 4, 1, 4, 116, 101, 115, 116, 2, 100, 101, 0,
+        ];
+
+        let actual = merge_updates(&[a, b]);
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn encode_state_vector_compatibility() {
+        let update = &[
+            2, 1, 220, 240, 237, 172, 15, 0, 4, 1, 4, 116, 101, 115, 116, 3, 97, 98, 99, 1, 201,
+            139, 250, 201, 1, 0, 4, 1, 4, 116, 101, 115, 116, 2, 100, 101, 0,
+        ];
+        let expected = &[2, 220, 240, 237, 172, 15, 3, 201, 139, 250, 201, 1, 2];
+        let actual = encode_state_vector_from_update(update);
+        assert_eq!(actual, expected);
+    }
 }
