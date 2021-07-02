@@ -23,7 +23,7 @@ impl Update {
         let mut sv = StateVector::empty();
         for (&client, blocks) in self.clients.iter() {
             let last_id = blocks[blocks.len() - 1].last_id();
-            sv.set_max(client, last_id.clock);
+            sv.set_max(client, last_id.clock + 1);
         }
         sv
     }
