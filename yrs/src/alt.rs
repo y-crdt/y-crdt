@@ -56,7 +56,7 @@ pub fn diff_updates(update: &[u8], state_vector: &[u8]) -> Vec<u8> {
 
 #[cfg(test)]
 mod test {
-    use crate::{encode_state_vector_from_update, merge_updates};
+    use crate::{diff_updates, encode_state_vector_from_update, merge_updates};
 
     #[test]
     fn merge_updates_compatibility() {
@@ -83,6 +83,20 @@ mod test {
         ];
         let expected = &[2, 220, 240, 237, 172, 15, 3, 201, 139, 250, 201, 1, 2];
         let actual = encode_state_vector_from_update(update);
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn diff_updates_compatibility() {
+        let state_vector = &[1, 148, 189, 145, 162, 9, 3];
+        let update = &[
+            1, 2, 148, 189, 145, 162, 9, 0, 4, 1, 4, 116, 101, 115, 116, 3, 97, 98, 99, 68, 148,
+            189, 145, 162, 9, 0, 2, 100, 101, 0,
+        ];
+        let expected = &[
+            1, 1, 148, 189, 145, 162, 9, 3, 68, 148, 189, 145, 162, 9, 0, 2, 100, 101, 0,
+        ];
+        let actual = diff_updates(update, state_vector);
         assert_eq!(actual, expected);
     }
 }
