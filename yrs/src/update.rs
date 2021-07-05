@@ -2,6 +2,7 @@ use crate::block::{
     Block, BlockPtr, Item, ItemContent, Skip, BLOCK_GC_REF_NUMBER, BLOCK_SKIP_REF_NUMBER, GC,
     HAS_ORIGIN, HAS_PARENT_SUB, HAS_RIGHT_ORIGIN,
 };
+use crate::store::Store;
 use crate::types::TypePtr;
 use crate::updates::decoder::{Decode, Decoder};
 use crate::utils::client_hasher::ClientHasher;
@@ -354,6 +355,23 @@ impl std::fmt::Display for Update {
             writeln!(f, "\t]")?;
         }
         writeln!(f, "}}")
+    }
+}
+
+/// Conversion for tests only
+#[cfg(test)]
+impl Into<Store> for Update {
+    fn into(self) -> Store {
+        let mut store = Store::new(0);
+        for (client_id, vec) in self.clients {
+            let blocks = store
+                .blocks
+                .get_client_blocks_with_capacity_mut(client_id, vec.len());
+            for block in vec {
+                blocks.push(block);
+            }
+        }
+        store
     }
 }
 
