@@ -1228,7 +1228,7 @@ version = "0.1.1"
 dependencies = [
  "pyo3",
  "pythonize",
- "yrs-api-wrapper 0.1.0 (git+https://github.com/yjs/y-crdt/?branch=main)",
+ "yrs",
 ]
 
 [[package]]
@@ -1244,11 +1244,9 @@ dependencies = [
 [[package]]
 name = "yrs-api-wrapper"
 version = "0.1.0"
-
-[[package]]
-name = "yrs-api-wrapper"
-version = "0.1.0"
-source = "git+https://github.com/yjs/y-crdt/?branch=main#049a5910c4e532023b663e9f1a1d2e9d26227e07"
+dependencies = [
+ "yrs",
+]
 
 [[package]]
 name = "ywasm"
