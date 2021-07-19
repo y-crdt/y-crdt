@@ -712,6 +712,36 @@ impl ItemContent {
         }
     }
 
+    pub fn get_content(&self) -> Vec<Any> {
+        match self {
+            ItemContent::Any(v) => v.clone(),
+            ItemContent::Binary(v) => vec![Any::Buffer(v.clone().into_boxed_slice())],
+            ItemContent::Deleted(_) => Vec::default(),
+            ItemContent::Doc(_, v) => vec![v.clone()],
+            ItemContent::JSON(v) => v.iter().map(|v| Any::String(v.clone())).collect(),
+            ItemContent::Embed(v) => vec![Any::String(v.clone())],
+            ItemContent::Format(_, _) => Vec::default(),
+            ItemContent::String(v) => v.chars().map(|c| Any::String(c.to_string())).collect(),
+            ItemContent::Type(_) => panic!("ItemContent::get_content on type?"),
+        }
+    }
+
+    /// Similar to [get_content], but it only returns the latest result and doesn't materialize
+    /// other for performance reasons.
+    pub fn value(&self) -> Option<Any> {
+        match self {
+            ItemContent::Any(v) => v.last().cloned(),
+            ItemContent::Binary(v) => Some(Any::Buffer(v.clone().into_boxed_slice())),
+            ItemContent::Deleted(_) => None,
+            ItemContent::Doc(_, v) => Some(v.clone()),
+            ItemContent::JSON(v) => v.last().map(|v| Any::String(v.clone())),
+            ItemContent::Embed(v) => Some(Any::String(v.clone())),
+            ItemContent::Format(_, _) => None,
+            ItemContent::String(v) => Some(Any::String(v.clone())),
+            ItemContent::Type(inner) => panic!("ItemContent::value on type?"),
+        }
+    }
+
     pub fn encode_with_offset<E: Encoder>(&self, encoder: &mut E, offset: u32) {
         match self {
             ItemContent::Deleted(len) => encoder.write_len(*len - offset),
