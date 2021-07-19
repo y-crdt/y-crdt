@@ -8,6 +8,7 @@ use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encoder, EncoderV1};
 use crate::utils::client_hasher::ClientHasher;
 use crate::{StateVector, Transaction, ID};
+use std::cmp::Ordering;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, VecDeque};
 use std::hash::BuildHasherDefault;
@@ -318,7 +319,14 @@ impl Update {
 
     pub(crate) fn encode_diff<E: Encoder>(&self, remote_sv: &StateVector, encoder: &mut E) {
         let mut clients = HashMap::new();
-        for (client, blocks) in self.clients.iter() {
+        // Write higher clients first ⇒ sort by clientID & clock and remove decoders without content
+        let mut sorted_clients: Vec<_> =
+            self.clients.iter().filter(|(_, q)| !q.is_empty()).collect();
+        sorted_clients.sort_by(|&(x_id, x_q), &(y_id, y_q)| match y_id.cmp(x_id) {
+            Ordering::Equal => y_q[0].id().clock.cmp(&x_q[0].id().clock),
+            other => other,
+        });
+        for (client, blocks) in sorted_clients {
             let remote_clock = remote_sv.get(client);
             let mut iter = blocks.iter();
             let mut curr = iter.next();
