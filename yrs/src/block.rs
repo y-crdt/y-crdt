@@ -485,19 +485,24 @@ impl Item {
             }
         } else {
             let r = if let Some(parent_sub) = &self.parent_sub {
-                if let Some(parent) = txn.store.get_type(&self.parent) {
-                    let mut o = parent.map.get(parent_sub);
-                    while let Some(ptr) = o {
-                        if let Some(item) = txn.store.blocks.get_item(ptr) {
-                            o = item.left.as_ref();
-                        } else {
-                            break;
-                        }
-                    }
-                    o.cloned()
-                } else {
-                    None
+                let start = match txn.store.get_type(&self.parent) {
+                    None => txn
+                        .store
+                        .init_type_from_ptr(&self.parent)
+                        .and_then(|p| p.map.get(parent_sub)),
+                    Some(parent) => parent.map.get(parent_sub),
                 }
+                .cloned();
+                let mut o = start.as_ref();
+
+                while let Some(ptr) = o {
+                    if let Some(item) = txn.store.blocks.get_item(ptr) {
+                        o = item.left.as_ref();
+                    } else {
+                        break;
+                    }
+                }
+                o.cloned()
             } else {
                 let parent_type = txn.store.init_type_from_ptr(&self.parent).unwrap();
                 let start = parent_type
@@ -512,14 +517,19 @@ impl Item {
             if let Some(right) = txn.store.blocks.get_item_mut(right_id) {
                 right.left = Some(BlockPtr::new(self.id, pivot));
             }
-        } else if let Some(_parent_sub) = &self.parent_sub {
-            // // set as current parent value if right === null and this is parentSub
-            // /** @type {AbstractType<any>} */ (this.parent)._map.set(this.parentSub, this)
-            // if (this.left !== null) {
-            //   // this is the current attribute value of parent. delete right
-            //   this.left.delete(transaction)
-            // }
-            todo!()
+        } else if let Some(parent_sub) = &self.parent_sub {
+            // set as current parent value if right === null and this is parentSub
+            if let Some(parent) = txn.store.get_type_mut(&self.parent) {
+                let ptr = BlockPtr::new(self.id, pivot);
+                parent.map.insert(parent_sub.clone(), ptr);
+            }
+            if let Some(left) = self.left {
+                // this is the current attribute value of parent. delete right
+                if let Some(item) = txn.store.blocks.get_item_mut(&left) {
+                    //item.delete(txn);
+                    todo!()
+                }
+            }
         }
 
         self.integrate_content(txn);
