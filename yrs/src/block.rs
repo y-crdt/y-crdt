@@ -73,7 +73,7 @@ impl PartialEq for BlockPtr {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub enum Block {
     Item(Item),
     Skip(Skip),
@@ -136,13 +136,48 @@ impl Block {
         }
     }
 
+    pub fn encode_with_offset<E: Encoder>(&self, encoder: &mut E, offset: u32) {
+        if let Block::Item(item) = self {
+            let origin = if offset > 0 {
+                Some(ID::new(item.id.client, item.id.clock + offset - 1))
+            } else {
+                item.origin
+            };
+            let info = item.info();
+            let cant_copy_parent_info = info & (HAS_ORIGIN | HAS_RIGHT_ORIGIN) == 0;
+            encoder.write_info(info);
+            if let Some(origin_id) = origin {
+                encoder.write_left_id(&origin_id);
+            }
+            if let Some(right_origin_id) = item.right_origin.as_ref() {
+                encoder.write_right_id(right_origin_id);
+            }
+            if cant_copy_parent_info {
+                match &item.parent {
+                    types::TypePtr::Id(id) => {
+                        encoder.write_parent_info(false);
+                        encoder.write_left_id(&id.id);
+                    }
+                    types::TypePtr::Named(name) => {
+                        encoder.write_parent_info(true);
+                        encoder.write_string(name)
+                    }
+                    types::TypePtr::NamedRef(type_name_ref) => {
+                        panic!("Block::encode_with_offset doesn't support named refs");
+                    }
+                }
+                if let Some(parent_sub) = item.parent_sub.as_ref() {
+                    encoder.write_string(parent_sub.as_str());
+                }
+            }
+            item.content.encode_with_offset(encoder, offset);
+        }
+    }
+
     pub fn encode<E: Encoder>(&self, store: &Store, encoder: &mut E) {
         match self {
             Block::Item(item) => {
-                let info = if item.origin.is_some() { HAS_ORIGIN } else { 0 } // is left null
-                    | if item.right_origin.is_some() { HAS_RIGHT_ORIGIN } else { 0 } // is right null
-                    | if item.parent_sub.is_some() { HAS_PARENT_SUB } else { 0 }
-                    | item.content.get_ref_number();
+                let info = item.info();
                 let cant_copy_parent_info = info & (HAS_ORIGIN | HAS_RIGHT_ORIGIN) == 0;
                 encoder.write_info(info);
                 if let Some(origin_id) = item.origin.as_ref() {
@@ -220,7 +255,7 @@ impl Block {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ItemPosition {
     pub parent: types::TypePtr,
     pub left: Option<BlockPtr>,
@@ -228,7 +263,7 @@ pub struct ItemPosition {
     pub index: u32,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct Item {
     pub id: ID,
     pub left: Option<BlockPtr>,
@@ -241,7 +276,7 @@ pub struct Item {
     pub deleted: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct Skip {
     pub id: ID,
     pub len: u32,
@@ -257,7 +292,7 @@ impl Skip {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct GC {
     pub id: ID,
     pub len: u32,
@@ -304,7 +339,7 @@ impl Item {
                 } else {
                     let ptr =
                         BlockPtr::new(ID::new(origin_id.client, origin_id.clock + 1), ptr.pivot);
-                    let (l, r) = txn.store.blocks.split_block(&ptr);
+                    let (l, _) = txn.store.blocks.split_block(&ptr);
                     self.left = l;
                 }
             }
@@ -375,7 +410,7 @@ impl Item {
             // set the first conflicting item
             let mut o = if let Some(Block::Item(left)) = left {
                 left.right
-            } else if let Some(sub) = &self.parent_sub {
+            } else if let Some(_sub) = &self.parent_sub {
                 //o = /** @type {AbstractType<any>} */ (this.parent)._map.get(this.parentSub) || null
                 //while (o !== null && o.left !== null) {
                 //    o = o.left
@@ -441,7 +476,7 @@ impl Item {
                 self.right = left.right.replace(BlockPtr::new(self.id, pivot));
             }
         } else {
-            let r = if let Some(parent_sub) = &self.parent_sub {
+            let r = if let Some(_parent_sub) = &self.parent_sub {
                 //r = /** @type {AbstractType<any>} */ (this.parent)._map.get(this.parentSub) || null
                 //while (r !== null && r.left !== null) {
                 //    r = r.left
@@ -461,7 +496,7 @@ impl Item {
             if let Some(right) = txn.store.blocks.get_item_mut(right_id) {
                 right.left = Some(BlockPtr::new(self.id, pivot));
             }
-        } else if let Some(parent_sub) = &self.parent_sub {
+        } else if let Some(_parent_sub) = &self.parent_sub {
             // // set as current parent value if right === null and this is parentSub
             // /** @type {AbstractType<any>} */ (this.parent)._map.set(this.parentSub, this)
             // if (this.left !== null) {
@@ -542,6 +577,15 @@ impl Item {
                 _ => None,
             })
     }
+
+    fn info(&self) -> u8 {
+        let info = if self.origin.is_some() { HAS_ORIGIN } else { 0 } // is left null
+            | if self.right_origin.is_some() { HAS_RIGHT_ORIGIN } else { 0 } // is right null
+            | if self.parent_sub.is_some() { HAS_PARENT_SUB } else { 0 }
+            | (self.content.get_ref_number() & 0b1111);
+        info
+    }
+
     fn integrate_content(&mut self, txn: &mut Transaction<'_>) {
         match &mut self.content {
             ItemContent::Deleted(len) => {
@@ -572,7 +616,7 @@ impl Item {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub enum ItemContent {
     Any(Vec<Any>),
     Binary(Vec<u8>),
@@ -600,7 +644,7 @@ impl ItemContent {
         }
     }
 
-    fn delete(&mut self, txn: &mut Transaction<'_>) {
+    fn delete(&mut self, _txn: &mut Transaction<'_>) {
         match self {
             ItemContent::Doc(_, _) => {
                 //if (transaction.subdocsAdded.has(this.doc)) {
@@ -649,6 +693,43 @@ impl ItemContent {
                 str.len() as u32
             }
             _ => 1,
+        }
+    }
+
+    pub fn encode_with_offset<E: Encoder>(&self, encoder: &mut E, offset: u32) {
+        match self {
+            ItemContent::Deleted(len) => encoder.write_len(*len - offset),
+            ItemContent::Binary(buf) => encoder.write_buf(buf),
+            ItemContent::String(s) => encoder.write_string(&s.as_str()[(offset as usize)..]),
+            ItemContent::Embed(s) => encoder.write_string(s.as_str()),
+            ItemContent::JSON(s) => {
+                encoder.write_len(s.len() as u32 - offset);
+                for i in (offset as usize)..s.len() {
+                    encoder.write_string(s[i].as_str())
+                }
+            }
+            ItemContent::Format(k, v) => {
+                encoder.write_string(k.as_str());
+                encoder.write_string(v.as_str());
+            }
+            ItemContent::Type(inner) => {
+                encoder.write_type_ref(inner.type_ref);
+                if inner.type_ref == types::TYPE_REFS_XML_ELEMENT
+                    || inner.type_ref == types::TYPE_REFS_XML_HOOK
+                {
+                    encoder.write_key(inner.name.as_ref().unwrap().as_str())
+                }
+            }
+            ItemContent::Any(any) => {
+                encoder.write_len(any.len() as u32 - offset);
+                for i in (offset as usize)..any.len() {
+                    encoder.write_any(&any[i]);
+                }
+            }
+            ItemContent::Doc(key, any) => {
+                encoder.write_string(key.as_str());
+                encoder.write_any(any);
+            }
         }
     }
 

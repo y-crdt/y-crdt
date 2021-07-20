@@ -25,6 +25,7 @@ pub trait Decoder: Read {
     fn read_len(&mut self) -> u32;
     fn read_any(&mut self) -> lib0::any::Any;
     fn read_key(&mut self) -> &str;
+    fn read_to_end(&mut self) -> &[u8];
 }
 
 pub struct DecoderV1<'a> {
@@ -112,5 +113,9 @@ impl<'a> Decoder for DecoderV1<'a> {
 
     fn read_key(&mut self) -> &str {
         self.read_string()
+    }
+
+    fn read_to_end(&mut self) -> &[u8] {
+        &self.cursor.buf[self.cursor.next..]
     }
 }
