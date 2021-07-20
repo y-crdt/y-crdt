@@ -61,11 +61,11 @@ impl Map {
         Iter::new(self, txn)
     }
 
-    pub fn insert<T: Into<ItemContent>>(
+    pub fn insert<V: Into<Any>>(
         &self,
         txn: &mut Transaction<'_>,
         key: String,
-        value: T,
+        value: V,
     ) -> Option<Any> {
         let previous = self.get(txn, &key);
 
@@ -79,7 +79,7 @@ impl Map {
             index: 0,
         };
 
-        txn.create_item(&pos, value.into(), Some(key));
+        txn.create_item(&pos, ItemContent::Any(vec![value.into()]), Some(key));
         previous
     }
 
@@ -190,15 +190,86 @@ impl<'a, 'txn> Iterator for Values<'a, 'txn> {
 
 #[cfg(test)]
 mod test {
+    use crate::types::Map;
+    use crate::{Doc, Transaction};
+    use lib0::any::Any;
+    use std::collections::HashMap;
 
     #[test]
     fn map_basic() {
-        todo!()
+        let d1 = Doc::with_client_id(1);
+        let mut t1 = d1.transact();
+        let mut m1 = t1.get_map("map");
+
+        let d2 = Doc::with_client_id(2);
+        let mut t2 = d2.transact();
+        let mut m2 = t2.get_map("map");
+
+        m1.insert(&mut t1, "number".to_owned(), 1);
+        m1.insert(&mut t1, "string".to_owned(), "hello Y");
+        m1.insert(&mut t1, "object".to_owned(), {
+            let mut v = HashMap::new();
+            v.insert("key2".to_owned(), "value");
+
+            let mut map = HashMap::new();
+            map.insert("key".to_owned(), v);
+            map // { key: { key2: 'value' } }
+        });
+        m1.insert(&mut t1, "boolean1".to_owned(), true);
+        m1.insert(&mut t1, "boolean0".to_owned(), false);
+
+        //TODO: YMap & YArray within YMap
+        fn compare_all(t: &Transaction<'_>, m: &Map) {
+            assert_eq!(m.len(&t), 5);
+            assert_eq!(m.get(&t, &"number".to_owned()), Some(Any::Number(1f64)));
+            assert_eq!(m.get(&t, &"boolean0".to_owned()), Some(Any::Bool(false)));
+            assert_eq!(m.get(&t, &"boolean1".to_owned()), Some(Any::Bool(true)));
+            assert_eq!(
+                m.get(&t, &"string".to_owned()),
+                Some(Any::String("hello Y".to_owned()))
+            );
+            assert_eq!(
+                m.get(&t, &"object".to_owned()),
+                Some(Any::Map({
+                    let mut m = HashMap::new();
+                    let mut n = HashMap::new();
+                    n.insert("key2".to_owned(), Any::String("value".to_owned()));
+                    m.insert("key".to_owned(), Any::Map(n));
+                    m
+                }))
+            );
+        }
+
+        compare_all(&t1, &m1);
+
+        let update = d1.encode_state_as_update(&t1);
+        d2.apply_update(&mut t2, update.as_slice());
+
+        compare_all(&t2, &m2);
     }
 
     #[test]
     fn map_get_set() {
-        todo!()
+        let d1 = Doc::with_client_id(1);
+        let mut t1 = d1.transact();
+        let mut m1 = t1.get_map("map");
+
+        m1.insert(&mut t1, "stuff".to_owned(), "stuffy");
+        m1.insert(&mut t1, "null".to_owned(), None as Option<String>);
+
+        let update = d1.encode_state_as_update(&t1);
+
+        let d2 = Doc::with_client_id(2);
+        let mut t2 = d2.transact();
+
+        d2.apply_update(&mut t2, update.as_slice());
+
+        let m2 = t2.get_map("map");
+        assert_eq!(
+            m2.get(&t2, &"stuff".to_owned()),
+            Some(Any::String("stuffy".to_owned()))
+        );
+        assert_eq!(m2.get(&t2, &"null".to_owned()), Some(Any::Null));
     }
 
     #[test]
