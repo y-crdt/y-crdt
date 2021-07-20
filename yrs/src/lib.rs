@@ -24,6 +24,7 @@
 //! mediums all at once. We don't have this ecosystem yet in Yrs, but you can
 //! build them easily on your own.
 
+mod alt;
 mod block;
 mod block_store;
 mod doc;
@@ -41,6 +42,7 @@ mod compatibility_tests;
 #[cfg(test)]
 mod test_utils;
 
+pub use crate::alt::{diff_updates, encode_state_vector_from_update, merge_updates};
 pub use crate::block::ID;
 pub use crate::block_store::BlockStore;
 pub use crate::block_store::StateVector;
