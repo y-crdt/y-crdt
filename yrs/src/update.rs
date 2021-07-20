@@ -14,7 +14,7 @@ use std::hash::BuildHasherDefault;
 
 type ClientBlocks = HashMap<u64, VecDeque<Block>, BuildHasherDefault<ClientHasher>>;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct Update {
     clients: ClientBlocks,
 }
@@ -318,7 +318,11 @@ impl Update {
 
     pub(crate) fn encode_diff<E: Encoder>(&self, remote_sv: &StateVector, encoder: &mut E) {
         let mut clients = HashMap::new();
-        for (client, blocks) in self.clients.iter() {
+        // Write higher clients first ⇒ sort by clientID & clock and remove decoders without content
+        let mut sorted_clients: Vec<_> =
+            self.clients.iter().filter(|(_, q)| !q.is_empty()).collect();
+        sorted_clients.sort_by(|&(x_id, _), &(y_id, _)| y_id.cmp(x_id));
+        for (client, blocks) in sorted_clients {
             let remote_clock = remote_sv.get(client);
             let mut iter = blocks.iter();
             let mut curr = iter.next();
@@ -384,6 +388,7 @@ impl Decode for Update {
     }
 }
 
+#[derive(Debug, PartialEq)]
 pub struct PendingUpdate {
     pub update: Update,
     pub missing: StateVector,
