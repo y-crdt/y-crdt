@@ -98,7 +98,7 @@ impl Encode for StateVector {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct ClientBlockList {
     list: Vec<block::Block>,
     integrated_len: usize,
@@ -235,7 +235,7 @@ impl IndexMut<usize> for ClientBlockList {
 
 pub type ClientBlockListIter<'a> = std::slice::Iter<'a, block::Block>;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct BlockStore {
     clients: HashMap<u64, ClientBlockList, BuildHasherDefault<ClientHasher>>,
 }
