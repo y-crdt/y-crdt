@@ -12,9 +12,10 @@ use std::collections::hash_map::Entry;
 use std::collections::{HashMap, VecDeque};
 use std::hash::BuildHasherDefault;
 
+#[derive(Debug, PartialEq)]
 type ClientBlocks = HashMap<u64, VecDeque<Block>, BuildHasherDefault<ClientHasher>>;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct Update {
     clients: ClientBlocks,
 }
@@ -384,6 +385,7 @@ impl Decode for Update {
     }
 }
 
+#[derive(Debug, PartialEq)]
 pub struct PendingUpdate {
     pub update: Update,
     pub missing: StateVector,
