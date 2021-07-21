@@ -6,6 +6,7 @@ pub use map::Map;
 pub use text::Text;
 
 use crate::block::BlockPtr;
+use lib0::any::Any;
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::hash::Hasher;
@@ -67,6 +68,19 @@ impl Inner {
             ptr,
             name,
             type_ref,
+        }
+    }
+
+    pub fn to_json(&self, txn: &Transaction) -> Any {
+        match self.type_ref {
+            TYPE_REFS_ARRAY => todo!(),
+            TYPE_REFS_MAP => Map::to_json_inner(self, txn),
+            TYPE_REFS_TEXT => Any::String(Text::to_string_inner(self, txn)),
+            TYPE_REFS_XML_ELEMENT => todo!(),
+            TYPE_REFS_XML_FRAGMENT => todo!(),
+            TYPE_REFS_XML_HOOK => todo!(),
+            TYPE_REFS_XML_TEXT => todo!(),
+            other => panic!("Defect: unknown type reference: {}", other),
         }
     }
 }

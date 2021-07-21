@@ -1,5 +1,6 @@
 use crate::block::BlockPtr;
 use crate::transaction::Transaction;
+use crate::types::Inner;
 use crate::*;
 
 pub struct Text {
@@ -11,30 +12,36 @@ impl Text {
         Text { ptr }
     }
     #[allow(clippy::inherent_to_string)]
-    pub fn to_string(&self, tr: &Transaction) -> String {
-        tr.store
+    pub fn to_string(&self, txn: &Transaction<'_>) -> String {
+        txn.store
             .get_type(&self.ptr)
-            .and_then(|inner| {
-                let mut start = inner.start.get();
-                let mut s = String::new();
-                while let Some(a) = start.as_ref() {
-                    if let Some(item) = tr.store.blocks.get_item(&a) {
-                        if !item.deleted {
-                            if let block::ItemContent::String(item_string) = &item.content {
-                                s.push_str(item_string);
-                            }
-                        }
-                        start = item.right.clone();
-                    } else {
-                        break;
-                    }
-                }
-                Some(s)
-            })
+            .map(|inner| Self::to_string_inner(inner, txn))
             .unwrap_or_default()
     }
 
-    fn find_position(&self, txn: &mut Transaction, mut count: u32) -> Option<block::ItemPosition> {
+    pub(crate) fn to_string_inner(inner: &Inner, txn: &Transaction<'_>) -> String {
+        let mut start = inner.start.get();
+        let mut s = String::new();
+        while let Some(a) = start.as_ref() {
+            if let Some(item) = txn.store.blocks.get_item(&a) {
+                if !item.deleted {
+                    if let block::ItemContent::String(item_string) = &item.content {
+                        s.push_str(item_string);
+                    }
+                }
+                start = item.right.clone();
+            } else {
+                break;
+            }
+        }
+        s
+    }
+
+    fn find_position(
+        &self,
+        txn: &mut Transaction<'_>,
+        mut count: u32,
+    ) -> Option<block::ItemPosition> {
         let mut pos = {
             let inner = txn.store.get_type(&self.ptr)?;
             block::ItemPosition {
