@@ -1,10 +1,10 @@
 use crate::store::Store;
-use crate::types::TypePtr;
+use crate::types::{Text, TypePtr};
 use crate::updates::decoder::Decoder;
 use crate::updates::encoder::Encoder;
 use crate::*;
 use lib0::any::Any;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::panic;
 
@@ -722,7 +722,7 @@ impl ItemContent {
         }
     }
 
-    pub fn get_content(&self) -> Vec<Any> {
+    pub fn get_content(&self, txn: &Transaction<'_>) -> Vec<Any> {
         match self {
             ItemContent::Any(v) => v.clone(),
             ItemContent::Binary(v) => vec![Any::Buffer(v.clone().into_boxed_slice())],
@@ -732,13 +732,13 @@ impl ItemContent {
             ItemContent::Embed(v) => vec![Any::String(v.clone())],
             ItemContent::Format(_, _) => Vec::default(),
             ItemContent::String(v) => v.chars().map(|c| Any::String(c.to_string())).collect(),
-            ItemContent::Type(_) => panic!("ItemContent::get_content on type?"),
+            ItemContent::Type(inner) => vec![inner.to_json(txn)],
         }
     }
 
     /// Similar to [get_content], but it only returns the latest result and doesn't materialize
     /// other for performance reasons.
-    pub fn value(&self) -> Option<Any> {
+    pub fn get_content_last(&self, txn: &Transaction<'_>) -> Option<Any> {
         match self {
             ItemContent::Any(v) => v.last().cloned(),
             ItemContent::Binary(v) => Some(Any::Buffer(v.clone().into_boxed_slice())),
@@ -748,7 +748,7 @@ impl ItemContent {
             ItemContent::Embed(v) => Some(Any::String(v.clone())),
             ItemContent::Format(_, _) => None,
             ItemContent::String(v) => Some(Any::String(v.clone())),
-            ItemContent::Type(inner) => panic!("ItemContent::value on type?"),
+            ItemContent::Type(inner) => Some(inner.to_json(txn)),
         }
     }
 
@@ -942,28 +942,6 @@ impl ItemContent {
     }
 }
 
-impl std::fmt::Display for ID {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "<{}#{}>", self.client, self.clock)
-    }
-}
-
-impl std::fmt::Display for BlockPtr {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "({}->{})", self.id, self.pivot())
-    }
-}
-
-impl std::fmt::Display for Block {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if let Block::Item(item) = self {
-            item.fmt(f)
-        } else {
-            Ok(())
-        }
-    }
-}
-
 impl std::fmt::Display for Item {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "({}", self.id)?;
@@ -1006,6 +984,131 @@ impl std::fmt::Display for ItemPosition {
             write!(f, ", right: {}", r)?;
         }
         write!(f, ")")
+    }
+}
+
+impl Into<ItemContent> for Text {
+    fn into(self) -> ItemContent {
+        todo!()
+    }
+}
+
+/*TODO: implement this once you'll figure out compiler errors
+impl<T> Into<ItemContent> for T
+where
+    T: Into<Any>,
+{
+    fn into(self) -> ItemContent {
+        let v: Any = self.into();
+        ItemContent::Any(vec![v])
+    }
+} */
+
+impl Into<ItemContent> for bool {
+    fn into(self) -> ItemContent {
+        ItemContent::Any(vec![Any::Bool(self)])
+    }
+}
+
+impl Into<ItemContent> for f64 {
+    fn into(self) -> ItemContent {
+        ItemContent::Any(vec![Any::Number(self)])
+    }
+}
+
+impl Into<ItemContent> for f32 {
+    fn into(self) -> ItemContent {
+        ItemContent::Any(vec![Any::Number(self as f64)])
+    }
+}
+
+impl Into<ItemContent> for u32 {
+    fn into(self) -> ItemContent {
+        ItemContent::Any(vec![Any::Number(self as f64)])
+    }
+}
+
+impl Into<ItemContent> for i32 {
+    fn into(self) -> ItemContent {
+        ItemContent::Any(vec![Any::Number(self as f64)])
+    }
+}
+
+impl Into<ItemContent> for String {
+    fn into(self) -> ItemContent {
+        ItemContent::Any(vec![Any::String(self)])
+    }
+}
+
+impl Into<ItemContent> for &str {
+    fn into(self) -> ItemContent {
+        ItemContent::Any(vec![Any::String(self.to_string())])
+    }
+}
+
+impl Into<ItemContent> for Box<[u8]> {
+    fn into(self) -> ItemContent {
+        ItemContent::Any(vec![Any::Buffer(self)])
+    }
+}
+
+impl<T> Into<ItemContent> for Option<T>
+where
+    T: Into<ItemContent>,
+{
+    fn into(self) -> ItemContent {
+        match self {
+            None => ItemContent::Any(vec![]),
+            Some(value) => value.into(),
+        }
+    }
+}
+
+impl<T> Into<ItemContent> for Vec<T>
+where
+    T: Into<Any>,
+{
+    fn into(self) -> ItemContent {
+        let mut array = Vec::with_capacity(self.len());
+        for value in self {
+            array.push(value.into())
+        }
+        ItemContent::Any(vec![Any::Array(array)])
+    }
+}
+
+impl<T> Into<ItemContent> for HashMap<String, T>
+where
+    T: Into<Any>,
+{
+    fn into(self) -> ItemContent {
+        let mut map = HashMap::with_capacity(self.len());
+        for (key, value) in self {
+            map.insert(key, value.into());
+        }
+        ItemContent::Any(vec![Any::Map(map)])
+    }
+}
+
+impl std::fmt::Display for ID {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "<{}#{}>", self.client, self.clock)
+    }
+}
+
+impl std::fmt::Display for BlockPtr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "({}->{})", self.id, self.pivot())
+    }
+}
+
+impl std::fmt::Display for Block {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Block::Item(item) = self {
+            item.fmt(f)
+        } else {
+            Ok(())
+        }
     }
 }
 

@@ -16,19 +16,21 @@ impl Map {
     pub fn to_json(&self, txn: &Transaction<'_>) -> Any {
         match txn.store.get_type(&self.ptr) {
             None => Any::Null,
-            Some(t) => {
-                let mut res = HashMap::new();
-                for (key, ptr) in t.map.iter() {
-                    if let Some(item) = txn.store.blocks.get_item(ptr) {
-                        if !item.deleted {
-                            let value = item.content.value().unwrap_or(Any::Null);
-                            res.insert(key.clone(), value);
-                        }
-                    }
+            Some(t) => Self::to_json_inner(t, txn),
+        }
+    }
+
+    pub(crate) fn to_json_inner(inner: &Inner, txn: &Transaction<'_>) -> Any {
+        let mut res = HashMap::new();
+        for (key, ptr) in inner.map.iter() {
+            if let Some(item) = txn.store.blocks.get_item(ptr) {
+                if !item.deleted {
+                    let value = item.content.get_content_last(txn).unwrap_or(Any::Null);
+                    res.insert(key.clone(), value);
                 }
-                Any::Map(res)
             }
         }
+        Any::Map(res)
     }
 
     pub fn len(&self, txn: &Transaction<'_>) -> usize {
@@ -61,7 +63,7 @@ impl Map {
         Iter::new(self, txn)
     }
 
-    pub fn insert<V: Into<Any>>(
+    pub fn insert<V: Into<ItemContent>>(
         &self,
         txn: &mut Transaction<'_>,
         key: String,
@@ -79,7 +81,7 @@ impl Map {
             index: 0,
         };
 
-        txn.create_item(&pos, ItemContent::Any(vec![value.into()]), Some(key));
+        txn.create_item(&pos, value.into(), Some(key));
         previous
     }
 
@@ -91,7 +93,7 @@ impl Map {
         if item.deleted {
             None
         } else {
-            let previous = item.content.value();
+            let previous = item.content.get_content_last(txn);
             item.mark_as_deleted();
             previous
         }
@@ -104,7 +106,7 @@ impl Map {
         if item.deleted {
             None
         } else {
-            item.content.value()
+            item.content.get_content_last(txn)
         }
     }
 
@@ -162,7 +164,7 @@ impl<'a, 'txn> Iterator for Iter<'a, 'txn> {
             }
         }
         let item = block.unwrap();
-        Some((key, item.content.get_content()))
+        Some((key, item.content.get_content(self.txn)))
     }
 }
 
@@ -217,6 +219,12 @@ mod test {
         });
         m1.insert(&mut t1, "boolean1".to_owned(), true);
         m1.insert(&mut t1, "boolean0".to_owned(), false);
+
+        let m1m = t1.get_map("y-map");
+        let m1a = t1.get_text("y-text");
+        m1a.insert(&mut t1, 0, "a");
+        m1a.insert(&mut t1, 0, "b");
+        m1m.insert(&mut t1, "y-text".to_owned(), m1a);
 
         //TODO: YMap & YArray within YMap
         fn compare_all(t: &Transaction<'_>, m: &Map) {
