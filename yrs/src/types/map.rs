@@ -1,23 +1,19 @@
-use crate::block::{Block, BlockPtr, Item, ItemContent, ItemPosition};
+use crate::block::{BlockPtr, Item, ItemContent, ItemPosition};
 use crate::types::{Inner, TypePtr};
 use crate::*;
 use lib0::any::Any;
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 
-pub struct Map {
-    ptr: TypePtr,
-}
+pub struct Map(Rc<RefCell<Inner>>);
 
 impl Map {
-    pub fn from(ptr: TypePtr) -> Self {
-        Map { ptr }
+    pub fn new(inner: Rc<RefCell<Inner>>) -> Self {
+        Map(inner)
     }
-
     pub fn to_json(&self, txn: &Transaction<'_>) -> Any {
-        match txn.store.get_type(&self.ptr) {
-            None => Any::Null,
-            Some(t) => Self::to_json_inner(t, txn),
-        }
+        Self::to_json_inner(&*self.0.borrow(), txn)
     }
 
     pub(crate) fn to_json_inner(inner: &Inner, txn: &Transaction<'_>) -> Any {
@@ -34,33 +30,34 @@ impl Map {
     }
 
     pub fn len(&self, txn: &Transaction<'_>) -> usize {
-        match txn.store.get_type(&self.ptr) {
-            None => 0,
-            Some(t) => {
-                let mut len = 0;
-                for ptr in t.map.values() {
-                    //TODO: maybe it would be better to just cache len in the map itself?
-                    if let Some(item) = txn.store.blocks.get_item(ptr) {
-                        if !item.deleted {
-                            len += 1;
-                        }
-                    }
+        let mut len = 0;
+        let inner = self.0.borrow();
+        for ptr in inner.map.values() {
+            //TODO: maybe it would be better to just cache len in the map itself?
+            if let Some(item) = txn.store.blocks.get_item(ptr) {
+                if !item.deleted {
+                    len += 1;
                 }
-                len
             }
         }
+        len
+    }
+
+    fn blocks<'a, 'b, 'txn>(&'a self, txn: &'b Transaction<'txn>) -> Blocks<'b, 'txn> {
+        let ptr = &self.0.borrow().ptr;
+        Blocks::new(ptr, txn)
     }
 
     pub fn keys<'a, 'b, 'txn>(&'a self, txn: &'b Transaction<'txn>) -> Keys<'b, 'txn> {
-        Keys(Iter::new(self, txn))
+        Keys(self.blocks(txn))
     }
 
     pub fn values<'a, 'b, 'txn>(&'a self, txn: &'b Transaction<'txn>) -> Values<'b, 'txn> {
-        Values(Iter::new(self, txn))
+        Values(self.blocks(txn))
     }
 
     pub fn iter<'a, 'b, 'txn>(&'a self, txn: &'b Transaction<'txn>) -> Iter<'b, 'txn> {
-        Iter::new(self, txn)
+        Iter(self.blocks(txn))
     }
 
     pub fn insert<V: Into<ItemContent>>(
@@ -71,14 +68,15 @@ impl Map {
     ) -> Option<Any> {
         let previous = self.get(txn, &key);
 
-        let parent = self.ptr.clone();
-        let t = txn.store.get_type(&self.ptr).unwrap();
-        let left = t.map.get(&key);
-        let pos = ItemPosition {
-            parent,
-            left: left.cloned(),
-            right: None,
-            index: 0,
+        let pos = {
+            let inner = self.0.borrow();
+            let left = inner.map.get(&key);
+            ItemPosition {
+                parent: inner.ptr.clone(),
+                left: left.cloned(),
+                right: None,
+                index: 0,
+            }
         };
 
         txn.create_item(&pos, value.into(), Some(key));
@@ -86,7 +84,7 @@ impl Map {
     }
 
     pub fn remove(&self, txn: &mut Transaction<'_>, key: &String) -> Option<Any> {
-        let t = txn.store.get_type(&self.ptr)?;
+        let t = self.0.borrow();
         let ptr = t.map.get(key)?;
         let item = txn.store.blocks.get_item(ptr)?;
 
@@ -100,7 +98,7 @@ impl Map {
     }
 
     pub fn get(&self, txn: &Transaction<'_>, key: &String) -> Option<Any> {
-        let t = txn.store.get_type(&self.ptr)?;
+        let t = self.0.borrow();
         let ptr = t.map.get(key)?;
         let item = txn.store.blocks.get_item(ptr)?;
         if item.deleted {
@@ -111,7 +109,7 @@ impl Map {
     }
 
     pub fn contains(&self, txn: &Transaction<'_>, key: &String) -> bool {
-        let t = txn.store.get_type(&self.ptr).unwrap();
+        let t = self.0.borrow();
         if let Some(ptr) = t.map.get(key) {
             if let Some(item) = txn.store.blocks.get_item(ptr) {
                 return !item.deleted;
@@ -121,7 +119,7 @@ impl Map {
     }
 
     pub fn clear(&self, txn: &mut Transaction<'_>) {
-        let t = txn.store.get_type(&self.ptr).unwrap();
+        let t = self.0.borrow();
         for (_, ptr) in t.map.iter() {
             if let Some(item) = txn.store.blocks.get_item(ptr) {
                 if !item.deleted {
@@ -132,21 +130,22 @@ impl Map {
     }
 }
 
-pub struct Iter<'a, 'txn> {
+struct Blocks<'a, 'txn> {
     txn: &'a Transaction<'txn>,
     iter: std::collections::hash_map::Iter<'a, String, BlockPtr>,
 }
 
-impl<'a, 'txn> Iter<'a, 'txn> {
-    fn new<'b>(map: &'b Map, txn: &'a Transaction<'txn>) -> Self {
-        let t = txn.store.get_type(&map.ptr).unwrap();
-        let iter = t.map.iter();
-        Iter { txn, iter }
+impl<'a, 'txn> Blocks<'a, 'txn> {
+    fn new<'b>(ptr: &'b TypePtr, txn: &'a Transaction<'txn>) -> Self {
+        let rc = txn.store.get_type(ptr).unwrap();
+        let cell = rc.as_ref();
+        let iter = unsafe { &*cell.as_ptr() as &'a Inner }.map.iter();
+        Blocks { txn, iter }
     }
 }
 
-impl<'a, 'txn> Iterator for Iter<'a, 'txn> {
-    type Item = (&'a String, Vec<Any>);
+impl<'a, 'txn> Iterator for Blocks<'a, 'txn> {
+    type Item = (&'a String, &'a Item);
 
     fn next(&mut self) -> Option<Self::Item> {
         let (mut key, ptr) = self.iter.next()?;
@@ -164,11 +163,22 @@ impl<'a, 'txn> Iterator for Iter<'a, 'txn> {
             }
         }
         let item = block.unwrap();
-        Some((key, item.content.get_content(self.txn)))
+        Some((key, item))
     }
 }
 
-pub struct Keys<'a, 'txn>(Iter<'a, 'txn>);
+pub struct Iter<'a, 'txn>(Blocks<'a, 'txn>);
+
+impl<'a, 'txn> Iterator for Iter<'a, 'txn> {
+    type Item = (&'a String, Vec<Any>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let (key, item) = self.0.next()?;
+        Some((key, item.content.get_content(self.0.txn)))
+    }
+}
+
+pub struct Keys<'a, 'txn>(Blocks<'a, 'txn>);
 
 impl<'a, 'txn> Iterator for Keys<'a, 'txn> {
     type Item = &'a String;
@@ -179,14 +189,14 @@ impl<'a, 'txn> Iterator for Keys<'a, 'txn> {
     }
 }
 
-pub struct Values<'a, 'txn>(Iter<'a, 'txn>);
+pub struct Values<'a, 'txn>(Blocks<'a, 'txn>);
 
 impl<'a, 'txn> Iterator for Values<'a, 'txn> {
     type Item = Vec<Any>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let (_, value) = self.0.next()?;
-        Some(value)
+        let (_, item) = self.0.next()?;
+        Some(item.content.get_content(self.0.txn))
     }
 }
 
@@ -201,11 +211,11 @@ mod test {
     fn map_basic() {
         let d1 = Doc::with_client_id(1);
         let mut t1 = d1.transact();
-        let mut m1 = t1.get_map("map");
+        let m1 = t1.get_map("map");
 
         let d2 = Doc::with_client_id(2);
         let mut t2 = d2.transact();
-        let mut m2 = t2.get_map("map");
+        let m2 = t2.get_map("map");
 
         m1.insert(&mut t1, "number".to_owned(), 1);
         m1.insert(&mut t1, "string".to_owned(), "hello Y");
@@ -260,7 +270,7 @@ mod test {
     fn map_get_set() {
         let d1 = Doc::with_client_id(1);
         let mut t1 = d1.transact();
-        let mut m1 = t1.get_map("map");
+        let m1 = t1.get_map("map");
 
         m1.insert(&mut t1, "stuff".to_owned(), "stuffy");
         m1.insert(&mut t1, "null".to_owned(), None as Option<String>);
@@ -277,7 +287,7 @@ mod test {
             m2.get(&t2, &"stuff".to_owned()),
             Some(Any::String("stuffy".to_owned()))
         );
-        assert_eq!(m2.get(&t2, &"null".to_owned()), Some(Any::Null));
+        assert_eq!(m2.get(&t2, &"null".to_owned()), None);
     }
 
     #[test]

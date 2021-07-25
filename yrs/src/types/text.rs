@@ -1,22 +1,21 @@
-use crate::block::BlockPtr;
+use crate::block::{BlockPtr, ItemContent};
 use crate::transaction::Transaction;
 use crate::types::Inner;
 use crate::*;
+use std::cell::RefCell;
+use std::rc::Rc;
 
-pub struct Text {
-    ptr: types::TypePtr,
-}
+pub struct Text(Rc<RefCell<Inner>>);
 
 impl Text {
-    pub fn from(ptr: types::TypePtr) -> Self {
-        Text { ptr }
+    pub fn new(inner: Rc<RefCell<Inner>>) -> Self {
+        Text(inner)
     }
+
     #[allow(clippy::inherent_to_string)]
     pub fn to_string(&self, txn: &Transaction<'_>) -> String {
-        txn.store
-            .get_type(&self.ptr)
-            .map(|inner| Self::to_string_inner(inner, txn))
-            .unwrap_or_default()
+        let inner = self.0.borrow();
+        Self::to_string_inner(&*inner, txn)
     }
 
     pub(crate) fn to_string_inner(inner: &Inner, txn: &Transaction<'_>) -> String {
@@ -43,7 +42,7 @@ impl Text {
         mut count: u32,
     ) -> Option<block::ItemPosition> {
         let mut pos = {
-            let inner = txn.store.get_type(&self.ptr)?;
+            let inner = self.0.borrow();
             block::ItemPosition {
                 parent: inner.ptr.clone(),
                 left: None,
@@ -104,7 +103,9 @@ impl Text {
                         .and_then(|item| item.right.as_ref())
                         .and_then(|ptr| txn.store.blocks.get_item(ptr)),
                     None => {
-                        let ptr = txn.store.get_type(&pos.parent).unwrap().start.get();
+                        let t = txn.store.get_type(&pos.parent).unwrap();
+                        let inner = t.borrow();
+                        let ptr = inner.start.get();
                         let item = ptr.as_ref().and_then(|ptr| txn.store.blocks.get_item(ptr));
                         item
                     }
@@ -141,6 +142,12 @@ impl Text {
         } else {
             panic!("The type or the position doesn't exist!");
         }
+    }
+}
+
+impl Into<ItemContent> for Text {
+    fn into(self) -> ItemContent {
+        ItemContent::Type(self.0.clone())
     }
 }
 

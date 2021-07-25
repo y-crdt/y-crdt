@@ -5,7 +5,7 @@ use crate::block_store::StateVector;
 use crate::event::UpdateEvent;
 use crate::id_set::{DeleteSet, IdSet};
 use crate::store::Store;
-use crate::types::{Map, Text, TypePtr, XorHasher};
+use crate::types::{Map, Text, TypePtr, XorHasher, TYPE_REFS_MAP, TYPE_REFS_TEXT};
 use crate::update::Update;
 use std::cell::RefMut;
 use std::collections::{HashMap, HashSet};
@@ -40,13 +40,13 @@ impl<'a> Transaction<'a> {
     }
 
     pub fn get_text(&mut self, name: &str) -> Text {
-        let ptr = self.store.create_type_ptr(name);
-        Text::from(ptr)
+        let c = self.store.create_type(name, TYPE_REFS_TEXT);
+        Text::new(c)
     }
 
     pub fn get_map(&mut self, name: &str) -> Map {
-        let ptr = self.store.create_type_ptr(name);
-        Map::from(ptr)
+        let c = self.store.create_type(name, TYPE_REFS_MAP);
+        Map::new(c)
     }
 
     /// Encodes the document state to a binary format.

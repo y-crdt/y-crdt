@@ -1,10 +1,7 @@
-use crate::id_set::DeleteSet;
-use crate::update::Update;
 use crate::updates::decoder::{Decode, Decoder, DecoderV1};
-use crate::updates::encoder::{Encode, Encoder, EncoderV1};
+use crate::updates::encoder::{Encoder, EncoderV1};
 use crate::{Doc, StateVector};
 use lib0::decoding::{Cursor, Read};
-use lib0::encoding::Write;
 use rand::prelude::SliceRandom;
 use rand::rngs::ThreadRng;
 use rand::seq::IteratorRandom;

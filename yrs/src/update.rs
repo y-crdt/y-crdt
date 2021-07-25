@@ -2,15 +2,17 @@ use crate::block::{
     Block, BlockPtr, Item, ItemContent, Skip, BLOCK_GC_REF_NUMBER, BLOCK_SKIP_REF_NUMBER, GC,
     HAS_ORIGIN, HAS_PARENT_SUB, HAS_RIGHT_ORIGIN,
 };
+#[cfg(test)]
 use crate::store::Store;
 use crate::types::TypePtr;
 use crate::updates::decoder::{Decode, Decoder};
-use crate::updates::encoder::{Encoder, EncoderV1};
+use crate::updates::encoder::Encoder;
 use crate::utils::client_hasher::ClientHasher;
 use crate::{StateVector, Transaction, ID};
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, VecDeque};
 use std::hash::BuildHasherDefault;
+use std::rc::Rc;
 
 type ClientBlocks = HashMap<u64, VecDeque<Block>, BuildHasherDefault<ClientHasher>>;
 
@@ -277,7 +279,7 @@ impl Update {
                 };
                 let parent = if cant_copy_parent_info {
                     if decoder.read_parent_info() {
-                        TypePtr::Named(decoder.read_string().to_owned())
+                        TypePtr::Named(Rc::new(decoder.read_string().to_owned()))
                     } else {
                         TypePtr::Id(BlockPtr::from(decoder.read_left_id()))
                     }
@@ -395,8 +397,9 @@ pub struct PendingUpdate {
 }
 
 impl PendingUpdate {
-    fn merge(&mut self, _other: &Self) {
-        todo!()
+    fn merge(&mut self, other: Self) {
+        self.update.merge(other.update);
+        self.missing.merge(other.missing);
     }
 }
 
@@ -476,6 +479,7 @@ mod test {
     use crate::updates::decoder::{Decode, DecoderV1};
     use crate::{Doc, ID};
     use lib0::decoding::Cursor;
+    use std::rc::Rc;
 
     #[test]
     fn update_decode() {
@@ -509,7 +513,7 @@ mod test {
             origin: None,
             right_origin: None,
             content: ItemContent::Any(vec!["valueB".into()]),
-            parent: TypePtr::Named("".to_owned()),
+            parent: TypePtr::Named(Rc::new("".to_owned())),
             parent_sub: Some("keyB".to_owned()),
             deleted: false,
         }));

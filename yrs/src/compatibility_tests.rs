@@ -3,12 +3,11 @@ use crate::id_set::{DeleteSet, IdSet};
 use crate::store::Store;
 use crate::types::{Inner, TypePtr, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT};
 use crate::update::Update;
-use crate::updates::decoder::{Decode, DecoderV1};
+use crate::updates::decoder::Decode;
 use crate::updates::encoder::Encode;
-use crate::{BlockStore, Doc, StateVector, ID};
+use crate::{Doc, StateVector, ID};
 use lib0::any::Any;
-use lib0::decoding::Cursor;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -46,7 +45,7 @@ fn text_insert_delete() {
             origin: None,
             right_origin: None,
             content: ItemContent::Deleted(3),
-            parent: TypePtr::Named("type".to_string()),
+            parent: TypePtr::Named(Rc::new("type".to_string())),
             parent_sub: None,
             deleted: false,
         }),
@@ -145,7 +144,7 @@ fn map_set() {
             origin: None,
             right_origin: None,
             content: ItemContent::Any(vec![Any::String("v1".to_string())]),
-            parent: TypePtr::Named("test".to_string()),
+            parent: TypePtr::Named(Rc::new("test".to_string())),
             parent_sub: Some("k1".to_string()),
             deleted: false,
         }),
@@ -156,7 +155,7 @@ fn map_set() {
             origin: None,
             right_origin: None,
             content: ItemContent::Any(vec![Any::String("v2".to_string())]),
-            parent: TypePtr::Named("test".to_string()),
+            parent: TypePtr::Named(Rc::new("test".to_string())),
             parent_sub: Some("k2".to_string()),
             deleted: false,
         }),
@@ -191,7 +190,7 @@ fn array_insert() {
             Any::String("a".to_string()),
             Any::String("b".to_string()),
         ]),
-        parent: TypePtr::Named("test".to_string()),
+        parent: TypePtr::Named(Rc::new("test".to_string())),
         parent_sub: None,
         deleted: false,
     })];
@@ -225,14 +224,14 @@ fn xml_fragment_insert() {
             right: None,
             origin: None,
             right_origin: None,
-            content: ItemContent::Type(Inner {
+            content: ItemContent::Type(Rc::new(RefCell::new(Inner {
                 start: Cell::new(None),
                 map: HashMap::default(),
                 ptr: TypePtr::Id(BlockPtr::from(ID::new(CLIENT_ID, 0))),
                 name: None,
                 type_ref: TYPE_REFS_XML_TEXT,
-            }),
-            parent: TypePtr::Named("fragment-name".to_string()),
+            }))),
+            parent: TypePtr::Named(Rc::new("fragment-name".to_string())),
             parent_sub: None,
             deleted: false,
         }),
@@ -242,13 +241,13 @@ fn xml_fragment_insert() {
             right: None,
             origin: Some(ID::new(CLIENT_ID, 0)),
             right_origin: None,
-            content: ItemContent::Type(Inner {
+            content: ItemContent::Type(Rc::new(RefCell::new(Inner {
                 start: Cell::new(None),
                 map: HashMap::default(),
                 ptr: TypePtr::Id(BlockPtr::from(ID::new(CLIENT_ID, 1))),
                 name: Some("node-name".to_string()),
                 type_ref: TYPE_REFS_XML_ELEMENT,
-            }),
+            }))),
             parent: TypePtr::Id(BlockPtr::from(ID::new(CLIENT_ID, 0))),
             parent_sub: None,
             deleted: false,

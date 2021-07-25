@@ -17,8 +17,8 @@ pub fn merge_updates(updates: &[&[u8]]) -> Vec<u8> {
 
             while let Some(data) = iter.next() {
                 let mut decoder = DecoderV1::new(Cursor::new(data));
-                let mut u = Update::decode(&mut decoder);
-                let mut d = DeleteSet::decode(&mut decoder);
+                let u = Update::decode(&mut decoder);
+                let d = DeleteSet::decode(&mut decoder);
 
                 update.merge(u);
                 ds.merge(d);
@@ -41,7 +41,7 @@ pub fn encode_state_vector_from_update(update: &[u8]) -> Vec<u8> {
 // Encode the missing differences to another document update.
 pub fn diff_updates(update: &[u8], state_vector: &[u8]) -> Vec<u8> {
     let sv = StateVector::decode_v1(state_vector);
-    let mut cursor = Cursor::new(update);
+    let cursor = Cursor::new(update);
     let mut decoder = DecoderV1::new(cursor);
     let update = Update::decode(&mut decoder);
 
