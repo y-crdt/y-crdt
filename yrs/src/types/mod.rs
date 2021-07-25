@@ -10,6 +10,7 @@ use lib0::any::Any;
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::hash::Hasher;
+use std::rc::Rc;
 
 pub struct Array {
     ptr: types::TypePtr,
@@ -51,6 +52,9 @@ pub const TYPE_REFS_XML_FRAGMENT: TypeRefs = 4;
 pub const TYPE_REFS_XML_HOOK: TypeRefs = 5;
 pub const TYPE_REFS_XML_TEXT: TypeRefs = 6;
 
+/// Placeholder for non-specialized AbstractType.
+pub const TYPE_REFS_UNDEFINED: TypeRefs = 7;
+
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Inner {
     pub start: Cell<Option<BlockPtr>>,
@@ -87,9 +91,8 @@ impl Inner {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TypePtr {
-    NamedRef(u32),
     Id(block::BlockPtr),
-    Named(String),
+    Named(Rc<String>),
 }
 
 #[derive(Default)]

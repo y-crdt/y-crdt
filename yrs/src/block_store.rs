@@ -71,6 +71,13 @@ impl StateVector {
     pub fn iter(&self) -> std::collections::hash_map::Iter<u64, u32> {
         self.0.iter()
     }
+
+    pub fn merge(&mut self, other: Self) {
+        for (client, clock) in other.0 {
+            let e = self.0.entry(client).or_default();
+            *e = (*e).max(clock);
+        }
+    }
 }
 
 impl Decode for StateVector {
