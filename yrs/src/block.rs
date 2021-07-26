@@ -511,10 +511,7 @@ impl Item {
                     .insert(parent_sub.clone(), BlockPtr::new(self.id, pivot));
                 if let Some(left) = self.left {
                     // this is the current attribute value of parent. delete right
-                    if let Some(item) = txn.store.blocks.get_item_mut(&left) {
-                        //item.delete(txn);
-                        todo!()
-                    }
+                    txn.delete(&left);
                 }
             }
 
@@ -523,19 +520,11 @@ impl Item {
             let parent_deleted = false; // (this.parent)._item !== null && (this.parent)._item.deleted)
             if parent_deleted || (self.parent_sub.is_some() && self.right.is_some()) {
                 // delete if parent is deleted or if this is not the current attribute value of parent
-                self.delete(txn);
+                //self.delete(txn);
+                txn.delete(&BlockPtr::from(self.id));
             }
         } else {
             panic!("Defect: item has no parent");
-        }
-    }
-
-    pub fn delete(&mut self, txn: &mut Transaction<'_>) {
-        if !self.deleted {
-            self.mark_as_deleted();
-            self.content.delete(txn);
-            txn.delete_set.insert(self.id, self.len());
-            //TODO: addChangedTypeToTransaction(transaction, parent, this.parentSub)
         }
     }
 
@@ -655,47 +644,6 @@ impl ItemContent {
             ItemContent::Format(_, _) => BLOCK_ITEM_FORMAT_REF_NUMBER,
             ItemContent::String(_) => BLOCK_ITEM_STRING_REF_NUMBER,
             ItemContent::Type(_) => BLOCK_ITEM_TYPE_REF_NUMBER,
-        }
-    }
-
-    fn delete(&mut self, _txn: &mut Transaction<'_>) {
-        match self {
-            ItemContent::Doc(_, _) => {
-                //if (transaction.subdocsAdded.has(this.doc)) {
-                //    transaction.subdocsAdded.delete(this.doc)
-                //} else {
-                //    transaction.subdocsRemoved.add(this.doc)
-                //}
-                todo!()
-            }
-            ItemContent::Type(_) => {
-                //let item = this.type._start
-                //while (item !== null) {
-                //    if (!item.deleted) {
-                //        item.delete(transaction)
-                //    } else {
-                //        // Whis will be gc'd later and we want to merge it if possible
-                //        // We try to merge all deleted items after each transaction,
-                //        // but we have no knowledge about that this needs to be merged
-                //        // since it is not in transaction.ds. Hence we add it to transaction._mergeStructs
-                //        transaction._mergeStructs.push(item)
-                //    }
-                //    item = item.right
-                //}
-                //this.type._map.forEach(item => {
-                //    if (!item.deleted) {
-                //        item.delete(transaction)
-                //    } else {
-                //        // same as above
-                //        transaction._mergeStructs.push(item)
-                //    }
-                //})
-                //transaction.changed.delete(this.type)
-                todo!()
-            }
-            _ => {
-                // nothing to do for other content types
-            }
         }
     }
 

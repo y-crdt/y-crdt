@@ -6,6 +6,7 @@ use rand::prelude::SliceRandom;
 use rand::rngs::ThreadRng;
 use rand::seq::IteratorRandom;
 use rand::{thread_rng, Rng};
+use std::cell::{Ref, RefCell};
 use std::collections::{HashMap, VecDeque};
 
 const MSG_SYNC_STEP_1: usize = 0;
@@ -18,33 +19,33 @@ where
 {
     let mut tc = TestConnector::with_peer_num(thread_rng(), users as u64);
     for i in 0..iterations {
-        if tc.rng.gen_range(0, 100) <= 2 {
+        if tc.rng.borrow_mut().gen_range(0, 100) <= 2 {
             // 2% chance to disconnect/reconnect a random user
-            if tc.rng.gen_bool(0.5) {
+            if tc.rng.borrow_mut().gen_bool(0.5) {
                 tc.disconnect_random();
             } else {
                 tc.reconnect_random();
             }
-        } else if tc.rng.gen_range(0, 100) <= 1 {
+        } else if tc.rng.borrow_mut().gen_range(0, 100) <= 1 {
             // 1% chance to flush all
             tc.flush_all();
-        } else if tc.rng.gen_range(0, 100) <= 50 {
+        } else if tc.rng.borrow_mut().gen_range(0, 100) <= 50 {
             tc.flush_random();
         }
         let test = mods.choose(tc.rng()).unwrap();
         let peer = {
-            let idx = tc.rng.gen_range(0, tc.peers.len());
+            let idx = tc.rng.borrow_mut().gen_range(0, tc.peers.len());
             &mut tc.peers[idx]
         };
 
-        test(&mut peer.doc, &mut tc.rng);
+        test(&mut peer.doc, &mut *tc.rng.borrow_mut());
     }
 
     tc.assert_final_state();
 }
 
 pub struct TestConnector {
-    rng: ThreadRng,
+    rng: RefCell<ThreadRng>,
     peers: Vec<TestPeer>,
     /// Maps all Client IDs to indexes in the `docs` vector.
     all: HashMap<u64, usize>,
@@ -61,7 +62,7 @@ impl TestConnector {
     /// Create new [TestConnector] with provided randomizer.
     pub fn with_rng(rng: ThreadRng) -> Self {
         TestConnector {
-            rng,
+            rng: RefCell::new(rng),
             peers: Vec::new(),
             all: HashMap::new(),
             online: HashMap::new(),
@@ -75,6 +76,7 @@ impl TestConnector {
             let peer = tc.create_peer(client_id);
             let mut txn = peer.doc.transact();
             txn.get_text("text");
+            txn.get_map("map");
         }
         tc.sync_all();
         tc
@@ -82,7 +84,7 @@ impl TestConnector {
 
     /// Returns random number generator attached to current [TestConnector].
     pub fn rng(&mut self) -> &mut ThreadRng {
-        &mut self.rng
+        self.rng.get_mut()
     }
 
     /// Create a new [TestPeer] with provided `client_id` or return one, if such `client_id`
@@ -108,9 +110,13 @@ impl TestConnector {
 
     /// Try to retrieve a mutable reference to [TestPeer] for a given `client_id`,
     /// if such node was created.
-    pub fn get_mut(&mut self, client_id: &u64) -> Option<&mut TestPeer> {
-        let idx = self.all.get(client_id)?;
-        Some(&mut self.peers[*idx])
+    pub fn get_mut(&self, client_id: &u64) -> Option<&mut TestPeer> {
+        let idx = *self.all.get(client_id)?;
+        unsafe {
+            let peers = self.peers.as_ptr() as *mut TestPeer;
+            let peer = peers.offset(idx as isize);
+            peer.as_mut()
+        }
     }
 
     /// Disconnects test node with given `client_id` from the rest of known nodes.
@@ -153,7 +159,7 @@ impl TestConnector {
     }
 
     /// Processes all pending messages of connected peers in random order.
-    pub fn flush_all(&mut self) -> bool {
+    pub fn flush_all(&self) -> bool {
         let mut did_something = false;
         while self.flush_random() {
             did_something = true;
@@ -164,7 +170,7 @@ impl TestConnector {
     /// Choose random connection and flush a random message from a random sender.
     /// If this function was unable to flush a message, because there are no more messages to flush,
     /// it returns false. true otherwise.
-    pub fn flush_random(&mut self) -> bool {
+    pub fn flush_random(&self) -> bool {
         if let Some((receiver, sender)) = self.pick_random_pair() {
             if let Some(m) = receiver
                 .receiving
@@ -198,7 +204,7 @@ impl TestConnector {
         }
     }
 
-    fn pick_random_pair(&mut self) -> Option<(&mut TestPeer, &mut TestPeer)> {
+    fn pick_random_pair(&self) -> Option<(&mut TestPeer, &mut TestPeer)> {
         let pairs: Vec<_> = self
             .peers
             .iter()
@@ -214,9 +220,9 @@ impl TestConnector {
                 }
             })
             .collect();
-        let (receiver_idx, sender_idx) = pairs.choose(&mut self.rng)?;
+        let (receiver_idx, sender_idx) = pairs.choose(&mut *self.rng.borrow_mut())?;
         unsafe {
-            let ptr = self.peers.as_mut_ptr();
+            let ptr = self.peers.as_ptr() as *mut TestPeer;
             let receiver = ptr.offset(*receiver_idx as isize);
             let sender = ptr.offset(*sender_idx as isize);
             Some((receiver.as_mut().unwrap(), sender.as_mut().unwrap()))
@@ -225,7 +231,12 @@ impl TestConnector {
 
     /// Disconnects one peer at random.
     pub fn disconnect_random(&mut self) -> bool {
-        if let Some(id) = self.online.keys().choose(&mut self.rng).cloned() {
+        let id = self
+            .online
+            .keys()
+            .choose(&mut *self.rng.borrow_mut())
+            .cloned();
+        if let Some(id) = id {
             self.disconnect(id);
             true
         } else {
@@ -241,7 +252,7 @@ impl TestConnector {
             .filter(|&id| !self.online.contains_key(id))
             .cloned()
             .collect();
-        if let Some(&id) = reconnectable.choose(&mut self.rng) {
+        if let Some(&id) = reconnectable.choose(self.rng()) {
             self.connect(id);
             true
         } else {
@@ -320,6 +331,20 @@ impl TestConnector {
             assert_eq!(a.store.pending, b.store.pending);
             assert_eq!(a.store.pending_ds, b.store.pending_ds);
         }
+    }
+
+    pub fn peers(&self) -> Peers<'_> {
+        Peers(self.peers.iter())
+    }
+}
+
+pub struct Peers<'a>(std::slice::Iter<'a, TestPeer>);
+
+impl<'a> Iterator for Peers<'a> {
+    type Item = &'a TestPeer;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.0.next()
     }
 }
 

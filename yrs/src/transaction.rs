@@ -1,6 +1,6 @@
 use crate::*;
 
-use crate::block::{Block, BlockPtr, ItemContent, ID};
+use crate::block::{Block, BlockPtr, Item, ItemContent, ID};
 use crate::block_store::StateVector;
 use crate::event::UpdateEvent;
 use crate::id_set::{DeleteSet, IdSet};
@@ -200,8 +200,13 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    fn delete(&mut self, ptr: &BlockPtr) {
-        if let Some(item) = self.store.blocks.get_item_mut(&ptr) {
+    /// Delete item under given pointer.
+    /// Returns true if block was successfully deleted, false if it was already deleted in the past.
+    pub(crate) fn delete(&mut self, ptr: &BlockPtr) -> bool {
+        let mut recurse = Vec::new();
+        let mut result = false;
+
+        if let Some(item) = self.store.blocks.get_item(&ptr) {
             if !item.deleted {
                 //TODO:
                 // if let Some(parent) = self.store.get_type(&item.parent) {
@@ -217,18 +222,49 @@ impl<'a> Transaction<'a> {
                     let set = self.changed.entry(item.parent.clone()).or_default();
                     set.insert(item.parent_sub.clone());
                 }
-                // item.content.delete(transaction)
-                match &mut item.content {
-                    ItemContent::Doc(_s, _value) => {
+
+                match &item.content {
+                    ItemContent::Doc(_, _) => {
+                        //if (transaction.subdocsAdded.has(this.doc)) {
+                        //    transaction.subdocsAdded.delete(this.doc)
+                        //} else {
+                        //    transaction.subdocsRemoved.add(this.doc)
+                        //}
                         todo!()
                     }
-                    ItemContent::Type(_inner) => {
-                        todo!()
+                    ItemContent::Type(t) => {
+                        let inner = t.borrow_mut();
+                        let mut ptr = inner.start.get();
+                        self.changed.remove(&item.parent);
+
+                        while let Some(item) = ptr.and_then(|ptr| self.store.blocks.get_item(&ptr))
+                        {
+                            if !item.deleted {
+                                recurse.push(ptr.unwrap());
+                            }
+
+                            ptr = item.right.clone();
+                        }
+
+                        for ptr in inner.map.values() {
+                            recurse.push(ptr.clone());
+                        }
                     }
-                    _ => {} // do nothing
+                    _ => {
+                        // nothing to do for other content types
+                    }
                 }
+                result = true;
             }
         }
+
+        for ptr in recurse.iter() {
+            if !self.delete(ptr) {
+                self.merge_blocks.push(ptr.id);
+            }
+        }
+
+        result
     }
 
     pub fn apply_update(&mut self, mut update: Update, mut ds: DeleteSet) {
