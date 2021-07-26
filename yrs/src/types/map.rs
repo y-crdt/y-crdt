@@ -202,9 +202,11 @@ impl<'a, 'txn> Iterator for Values<'a, 'txn> {
 
 #[cfg(test)]
 mod test {
+    use crate::test_utils::TestConnector;
     use crate::types::Map;
     use crate::{Doc, Transaction};
     use lib0::any::Any;
+    use rand::thread_rng;
     use std::collections::HashMap;
 
     #[test]
@@ -236,7 +238,7 @@ mod test {
         m1a.insert(&mut t1, 0, "b");
         m1m.insert(&mut t1, "y-text".to_owned(), m1a);
 
-        //TODO: YMap & YArray within YMap
+        //TODO: YArray within YMap
         fn compare_all(t: &Transaction<'_>, m: &Map) {
             assert_eq!(m.len(&t), 5);
             assert_eq!(m.get(&t, &"number".to_owned()), Some(Any::Number(1f64)));
@@ -291,42 +293,206 @@ mod test {
     }
 
     #[test]
-    fn map_get_set_array() {
-        todo!()
-    }
-
-    #[test]
-    fn map_get_set_sync() {
-        todo!()
-    }
-
-    #[test]
     fn map_get_set_sync_with_conflicts() {
-        todo!()
+        let d1 = Doc::with_client_id(1);
+        let mut t1 = d1.transact();
+        let m1 = t1.get_map("map");
+
+        let d2 = Doc::with_client_id(2);
+        let mut t2 = d2.transact();
+        let m2 = t2.get_map("map");
+
+        m1.insert(&mut t1, "stuff".to_owned(), "c0");
+        m2.insert(&mut t2, "stuff".to_owned(), "c1");
+
+        let u1 = d1.encode_state_as_update(&t1);
+        let u2 = d2.encode_state_as_update(&t2);
+
+        d1.apply_update(&mut t1, u2.as_slice());
+        d2.apply_update(&mut t2, u1.as_slice());
+
+        assert_eq!(
+            m1.get(&t1, &"stuff".to_owned()),
+            m2.get(&t2, &"stuff".to_owned())
+        );
     }
 
     #[test]
-    fn map_remove() {
-        todo!()
+    fn map_len_remove() {
+        let d1 = Doc::with_client_id(1);
+        let mut t1 = d1.transact();
+        let m1 = t1.get_map("map");
+
+        let key1 = "stuff".to_owned();
+        let key2 = "other-stuff".to_owned();
+
+        m1.insert(&mut t1, key1.clone(), "c0");
+        m1.insert(&mut t1, key2.clone(), "c1");
+        assert_eq!(m1.len(&t1), 2);
+
+        // remove 'stuff'
+        assert_eq!(
+            m1.remove(&mut t1, &key1),
+            Some(Any::String("c0".to_owned()))
+        );
+        assert_eq!(m1.len(&t1), 1);
+
+        // remove 'stuff' again - nothing should happen
+        assert_eq!(m1.remove(&mut t1, &key1), None);
+        assert_eq!(m1.len(&t1), 1);
+
+        // remove 'other-stuff'
+        assert_eq!(
+            m1.remove(&mut t1, &key2),
+            Some(Any::String("c1".to_owned()))
+        );
+        assert_eq!(m1.len(&t1), 0);
     }
 
     #[test]
     fn map_clear() {
-        todo!()
+        let d1 = Doc::with_client_id(1);
+        let mut t1 = d1.transact();
+        let m1 = t1.get_map("map");
+
+        m1.insert(&mut t1, "key1".to_owned(), "c0");
+        m1.insert(&mut t1, "key2".to_owned(), "c1");
+        m1.clear(&mut t1);
+
+        assert_eq!(m1.len(&t1), 0);
+        assert_eq!(m1.get(&t1, &"key1".to_owned()), None);
+        assert_eq!(m1.get(&t1, &"key2".to_owned()), None);
+
+        let d2 = Doc::with_client_id(2);
+        let mut t2 = d2.transact();
+
+        let u1 = d1.encode_state_as_update(&t1);
+        d2.apply_update(&mut t2, u1.as_slice());
+
+        let m2 = t2.get_map("map");
+        assert_eq!(m2.len(&t2), 0);
+        assert_eq!(m2.get(&t2, &"key1".to_owned()), None);
+        assert_eq!(m2.get(&t2, &"key2".to_owned()), None);
     }
 
     #[test]
     fn map_clear_sync() {
-        todo!()
+        let mut tc = TestConnector::with_peer_num(thread_rng(), 4);
+
+        {
+            let mut t1 = tc.get_mut(&0).unwrap().doc_mut().transact();
+            let mut t2 = tc.get_mut(&1).unwrap().doc_mut().transact();
+            let mut t3 = tc.get_mut(&2).unwrap().doc_mut().transact();
+            let mut t4 = tc.get_mut(&3).unwrap().doc_mut().transact();
+
+            let m1 = t1.get_map("map");
+            let m2 = t2.get_map("map");
+            let m3 = t3.get_map("map");
+            let m4 = t4.get_map("map");
+
+            m1.insert(&mut t1, "key1".to_owned(), "c0");
+            m2.insert(&mut t2, "key1".to_owned(), "c1");
+            m2.insert(&mut t2, "key1".to_owned(), "c2");
+            m3.insert(&mut t3, "key1".to_owned(), "c3");
+
+            tc.flush_all();
+
+            m1.insert(&mut t1, "key2".to_owned(), "c0");
+            m2.insert(&mut t2, "key2".to_owned(), "c1");
+            m2.insert(&mut t2, "key2".to_owned(), "c2");
+            m3.insert(&mut t3, "key2".to_owned(), "c3");
+            m3.clear(&mut t3);
+
+            tc.flush_all();
+        }
+
+        for peer in tc.peers() {
+            let doc = peer.doc();
+            let mut txn = doc.transact();
+            let map = txn.get_map("map");
+
+            assert_eq!(map.get(&txn, &"key1".to_owned()), None);
+            assert_eq!(map.get(&txn, &"key2".to_owned()), None);
+            assert_eq!(map.len(&txn), 0);
+        }
+
+        tc.assert_final_state();
     }
 
     #[test]
     fn map_get_set_with_3_way_conflicts() {
-        todo!()
+        let mut tc = TestConnector::with_peer_num(thread_rng(), 3);
+
+        {
+            let mut t1 = tc.get_mut(&0).unwrap().doc_mut().transact();
+            let mut t2 = tc.get_mut(&1).unwrap().doc_mut().transact();
+            let mut t3 = tc.get_mut(&2).unwrap().doc_mut().transact();
+
+            let m1 = t1.get_map("map");
+            let m2 = t2.get_map("map");
+            let m3 = t3.get_map("map");
+
+            m1.insert(&mut t1, "stuff".to_owned(), "c0");
+            m2.insert(&mut t2, "stuff".to_owned(), "c1");
+            m2.insert(&mut t2, "stuff".to_owned(), "c2");
+            m3.insert(&mut t3, "stuff".to_owned(), "c3");
+
+            tc.flush_all();
+        }
+
+        for peer in tc.peers() {
+            let doc = peer.doc();
+            let mut txn = doc.transact();
+            let map = txn.get_map("map");
+
+            assert_eq!(
+                map.get(&txn, &"stuff".to_owned()),
+                Some(Any::String("c3".to_owned()))
+            );
+        }
+
+        tc.assert_final_state();
     }
 
     #[test]
     fn map_get_set_remove_with_3_way_conflicts() {
-        todo!()
+        let mut tc = TestConnector::with_peer_num(thread_rng(), 4);
+
+        {
+            let mut t1 = tc.get_mut(&0).unwrap().doc_mut().transact();
+            let mut t2 = tc.get_mut(&1).unwrap().doc_mut().transact();
+            let mut t3 = tc.get_mut(&2).unwrap().doc_mut().transact();
+            let mut t4 = tc.get_mut(&3).unwrap().doc_mut().transact();
+
+            let m1 = t1.get_map("map");
+            let m2 = t2.get_map("map");
+            let m3 = t3.get_map("map");
+            let m4 = t4.get_map("map");
+
+            m1.insert(&mut t1, "key1".to_owned(), "c0");
+            m2.insert(&mut t2, "key1".to_owned(), "c1");
+            m2.insert(&mut t2, "key1".to_owned(), "c2");
+            m3.insert(&mut t3, "key1".to_owned(), "c3");
+
+            tc.flush_all();
+
+            m1.insert(&mut t1, "key1".to_owned(), "deleteme");
+            m2.insert(&mut t2, "key1".to_owned(), "c1");
+            m3.insert(&mut t3, "key1".to_owned(), "c2");
+            m4.insert(&mut t4, "key1".to_owned(), "c3");
+            m4.remove(&mut t4, &"key1".to_owned());
+
+            tc.flush_all();
+        }
+
+        for peer in tc.peers() {
+            let doc = peer.doc();
+            let mut txn = doc.transact();
+            let map = txn.get_map("map");
+
+            assert_eq!(map.get(&txn, &"key1".to_owned()), None);
+        }
+
+        tc.assert_final_state();
     }
 }
