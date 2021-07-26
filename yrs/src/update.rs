@@ -320,11 +320,7 @@ impl Update {
 
     pub(crate) fn encode_diff<E: Encoder>(&self, remote_sv: &StateVector, encoder: &mut E) {
         let mut clients = HashMap::new();
-        // Write higher clients first ⇒ sort by clientID & clock and remove decoders without content
-        let mut sorted_clients: Vec<_> =
-            self.clients.iter().filter(|(_, q)| !q.is_empty()).collect();
-        sorted_clients.sort_by(|&(x_id, _), &(y_id, _)| y_id.cmp(x_id));
-        for (client, blocks) in sorted_clients {
+        for (client, blocks) in self.clients.iter() {
             let remote_clock = remote_sv.get(client);
             let mut iter = blocks.iter();
             let mut curr = iter.next();
@@ -347,15 +343,20 @@ impl Update {
             }
         }
 
+        // Write higher clients first ⇒ sort by clientID & clock and remove decoders without content
+        let mut sorted_clients: Vec<_> =
+            clients.iter().filter(|(_, (_, q))| !q.is_empty()).collect();
+        sorted_clients.sort_by(|&(x_id, _), &(y_id, _)| y_id.cmp(x_id));
+
         // finish lazy struct writing
-        encoder.write_uvar(clients.len());
-        for (client, (offset, blocks)) in clients {
+        encoder.write_uvar(sorted_clients.len());
+        for (&client, (offset, blocks)) in sorted_clients {
             encoder.write_uvar(blocks.len());
             encoder.write_uvar(client);
 
             let mut block = blocks[0];
             encoder.write_uvar(block.id().clock + offset);
-            block.encode_with_offset(encoder, offset);
+            block.encode_with_offset(encoder, *offset);
             for i in 1..blocks.len() {
                 block = blocks[i];
                 block.encode_with_offset(encoder, 0);
