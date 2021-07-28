@@ -417,10 +417,12 @@ impl Item {
                     let mut o = parent_ref.map.get(sub);
                     while let Some(ptr) = o {
                         if let Some(item) = txn.store.blocks.get_item(ptr) {
-                            o = item.left.as_ref();
-                        } else {
-                            break;
+                            if item.left.is_some() {
+                                o = item.left.as_ref();
+                                continue;
+                            }
                         }
+                        break;
                     }
                     o.cloned()
                 } else {
@@ -481,16 +483,18 @@ impl Item {
             } else {
                 let r = if let Some(parent_sub) = &self.parent_sub {
                     let start = parent_ref.map.get(parent_sub).cloned();
-                    let mut o = start.as_ref();
+                    let mut r = start.as_ref();
 
-                    while let Some(ptr) = o {
+                    while let Some(ptr) = r {
                         if let Some(item) = txn.store.blocks.get_item(ptr) {
-                            o = item.left.as_ref();
-                        } else {
-                            break;
+                            if item.left.is_some() {
+                                r = item.left.as_ref();
+                                continue;
+                            }
                         }
+                        break;
                     }
-                    o.cloned()
+                    r.cloned()
                 } else {
                     let start = parent_ref
                         .start
@@ -520,7 +524,7 @@ impl Item {
             let parent_deleted = false; // (this.parent)._item !== null && (this.parent)._item.deleted)
             if parent_deleted || (self.parent_sub.is_some() && self.right.is_some()) {
                 // delete if parent is deleted or if this is not the current attribute value of parent
-                //self.delete(txn);
+                // delete if parent is deleted or if this is not the current attribute value of parent
                 txn.delete(&BlockPtr::from(self.id));
             }
         } else {

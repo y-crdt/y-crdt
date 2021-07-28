@@ -6,7 +6,7 @@ use crate::block::{
 use crate::store::Store;
 use crate::types::TypePtr;
 use crate::updates::decoder::{Decode, Decoder};
-use crate::updates::encoder::Encoder;
+use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::client_hasher::ClientHasher;
 use crate::{StateVector, Transaction, ID};
 use std::collections::hash_map::Entry;
@@ -362,6 +362,12 @@ impl Update {
                 block.encode_with_offset(encoder, 0);
             }
         }
+    }
+}
+
+impl Encode for Update {
+    fn encode<E: Encoder>(&self, encoder: &mut E) {
+        self.encode_diff(&StateVector::default(), encoder);
     }
 }
 
