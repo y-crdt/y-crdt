@@ -1,15 +1,14 @@
 use crate::*;
 
-use crate::block::{Block, BlockPtr, Item, ItemContent, ID};
+use crate::block::{Block, BlockPtr, ItemContent, ID};
 use crate::block_store::StateVector;
 use crate::event::UpdateEvent;
 use crate::id_set::{DeleteSet, IdSet};
 use crate::store::Store;
-use crate::types::{Map, Text, TypePtr, XorHasher, TYPE_REFS_MAP, TYPE_REFS_TEXT};
+use crate::types::{Map, Text, TypePtr, TYPE_REFS_MAP, TYPE_REFS_TEXT};
 use crate::update::Update;
 use std::cell::RefMut;
 use std::collections::{HashMap, HashSet};
-use std::hash::BuildHasherDefault;
 use std::ops::Range;
 use updates::encoder::*;
 
@@ -24,7 +23,7 @@ pub struct Transaction<'a> {
     pub delete_set: DeleteSet,
     /// All types that were directly modified (property added or child inserted/deleted).
     /// New types are not included in this Set.
-    changed: HashMap<TypePtr, HashSet<Option<String>>, BuildHasherDefault<XorHasher>>,
+    changed: HashMap<TypePtr, HashSet<Option<String>>>,
 }
 
 impl<'a> Transaction<'a> {
@@ -35,7 +34,7 @@ impl<'a> Transaction<'a> {
             timestamp: begin_timestamp,
             merge_blocks: Vec::new(),
             delete_set: DeleteSet::new(),
-            changed: HashMap::with_hasher(BuildHasherDefault::default()),
+            changed: HashMap::new(),
         }
     }
 
