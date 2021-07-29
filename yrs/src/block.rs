@@ -113,7 +113,7 @@ impl Block {
         }
     }
 
-    pub fn integrate(&mut self, txn: &mut Transaction<'_>, pivot: u32, offset: u32) {
+    pub fn integrate(&mut self, txn: &mut Transaction<'_>, pivot: u32, offset: u32) -> bool {
         match self {
             Block::Item(item) => item.integrate(txn, pivot, offset),
             Block::GC(gc) => gc.integrate(offset),
@@ -297,11 +297,13 @@ impl GC {
         GC { id, len }
     }
 
-    pub fn integrate(&mut self, pivot: u32) {
+    pub fn integrate(&mut self, pivot: u32) -> bool {
         if pivot > 0 {
             self.id.clock += pivot;
             self.len -= pivot;
         }
+
+        false
     }
 
     #[inline]
@@ -347,7 +349,9 @@ impl Item {
         }
     }
 
-    pub fn integrate(&mut self, txn: &mut Transaction<'_>, pivot: u32, offset: u32) {
+    /// Integrates current block into block store.
+    /// If it returns true, it means that the block should be deleted after being added to a block store.
+    pub fn integrate(&mut self, txn: &mut Transaction<'_>, pivot: u32, offset: u32) -> bool {
         if offset > 0 {
             self.id.clock += offset;
             let (left, _) = txn
@@ -524,11 +528,13 @@ impl Item {
             let parent_deleted = false; // (this.parent)._item !== null && (this.parent)._item.deleted)
             if parent_deleted || (self.parent_sub.is_some() && self.right.is_some()) {
                 // delete if parent is deleted or if this is not the current attribute value of parent
-                // delete if parent is deleted or if this is not the current attribute value of parent
-                txn.delete(&BlockPtr::from(self.id));
+                //txn.delete(&BlockPtr::new(self.id, pivot)); //TODO: current item must be added to block list before txn.delete call
+                true
+            } else {
+                false
             }
         } else {
-            panic!("Defect: item has no parent");
+            panic!("Defect: item has no parent")
         }
     }
 

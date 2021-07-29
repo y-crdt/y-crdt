@@ -141,9 +141,19 @@ impl Update {
                     let client = id.client;
                     local_sv.set_max(client, id.clock + block.len());
                     block.as_item_mut().map(|item| item.repair(txn));
-                    block.integrate(txn, offset, offset);
+                    let should_delete = block.integrate(txn, offset, offset);
+                    let delete_ptr = if should_delete {
+                        Some(BlockPtr::new(block.id().clone(), offset))
+                    } else {
+                        None
+                    };
+
                     let blocks = txn.store.blocks.get_client_blocks_mut(client);
                     blocks.push(block);
+
+                    if let Some(ptr) = delete_ptr {
+                        txn.delete(&ptr);
+                    }
                 }
             } else {
                 // update from the same client is missing
