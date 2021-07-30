@@ -23,7 +23,7 @@ pub struct Update {
 
 impl Update {
     pub fn state_vector(&self) -> StateVector {
-        let mut sv = StateVector::empty();
+        let mut sv = StateVector::default();
         for (&client, blocks) in self.clients.iter() {
             let last_id = blocks[blocks.len() - 1].last_id();
             sv.set_max(client, last_id.clock + 1);
@@ -115,7 +115,7 @@ impl Update {
         let mut stack_head = Self::next(&mut current_target);
 
         let mut local_sv = txn.store.blocks.get_state_vector();
-        let mut missing_sv = StateVector::empty();
+        let mut missing_sv = StateVector::default();
         let mut remaining = ClientBlocks::default();
         let mut stack = Vec::new();
 

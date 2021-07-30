@@ -250,6 +250,15 @@ impl Block {
             _ => None,
         }
     }
+
+    pub fn same_type(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Block::Item(_), Block::Item(_))
+            | (Block::GC(_), Block::GC(_))
+            | (Block::Skip(_), Block::Skip(_)) => true,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug)]

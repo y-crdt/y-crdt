@@ -14,10 +14,6 @@ use std::vec::Vec;
 pub struct StateVector(HashMap<u64, u32, BuildHasherDefault<ClientHasher>>);
 
 impl StateVector {
-    pub fn empty() -> Self {
-        StateVector::default()
-    }
-
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
@@ -218,6 +214,44 @@ impl ClientBlockList {
         self.integrated_len = 0;
         self.list.clear();
     }
+
+    pub(crate) fn compact_left(&mut self, pos: usize) -> Option<CompactionResult> {
+        let replacement = {
+            let (l, r) = self.list.split_at_mut(pos);
+            let left = &mut l[pos - 1];
+            let right = &r[0];
+            if left.is_deleted() == right.is_deleted() && left.same_type(right) {
+                if left.try_merge(right) {
+                    Some(BlockPtr::new(left.id().clone(), pos as u32 - 1))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
+
+        if let Some(replacement) = replacement {
+            let block = self.list.remove(pos);
+            if let Block::Item(item) = block {
+                if let Some(parent_sub) = item.parent_sub {
+                    return Some(CompactionResult {
+                        parent: item.parent,
+                        parent_sub,
+                        replacement,
+                    });
+                }
+            }
+        }
+
+        None
+    }
+}
+
+pub(crate) struct CompactionResult {
+    pub parent: TypePtr,
+    pub parent_sub: String,
+    pub replacement: BlockPtr,
 }
 
 impl Default for ClientBlockList {

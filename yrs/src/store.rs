@@ -1,4 +1,4 @@
-use crate::block_store::{BlockStore, StateVector};
+use crate::block_store::{BlockStore, CompactionResult, StateVector};
 use crate::event::{EventHandler, UpdateEvent};
 use crate::id_set::DeleteSet;
 use crate::types::{Inner, TypeRefs};
@@ -147,6 +147,15 @@ impl Store {
         }
         diff
     }
+
+    pub(crate) fn gc_cleanup(&mut self, compaction: CompactionResult) {
+        if let Some(parent) = self.get_type(&compaction.parent) {
+            let mut inner = parent.borrow_mut();
+            inner
+                .map
+                .insert(compaction.parent_sub, compaction.replacement);
+        }
+    }
 }
 
 impl Encode for Store {
@@ -159,6 +168,6 @@ impl Encode for Store {
     /// * Even if an update contains known information, the unknown information
     ///   is extracted and integrated into the document structure.
     fn encode<E: Encoder>(&self, encoder: &mut E) {
-        self.encode_diff(&StateVector::empty(), encoder)
+        self.encode_diff(&StateVector::default(), encoder)
     }
 }
