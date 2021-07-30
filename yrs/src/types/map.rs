@@ -86,15 +86,16 @@ impl Map {
     pub fn remove(&self, txn: &mut Transaction<'_>, key: &String) -> Option<Any> {
         let t = self.0.borrow();
         let ptr = t.map.get(key)?;
-        let item = txn.store.blocks.get_item(ptr)?;
-
-        if item.deleted {
-            None
-        } else {
-            let previous = item.content.get_content_last(txn);
-            item.mark_as_deleted();
-            previous
-        }
+        let prev = {
+            let item = txn.store.blocks.get_item(ptr)?;
+            if item.deleted {
+                None
+            } else {
+                item.content.get_content_last(txn)
+            }
+        };
+        txn.delete(ptr);
+        prev
     }
 
     pub fn get(&self, txn: &Transaction<'_>, key: &String) -> Option<Any> {
