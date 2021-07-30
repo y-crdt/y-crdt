@@ -1,5 +1,8 @@
 use crate::store::Store;
-use crate::types::{TypePtr, TYPE_REFS_UNDEFINED};
+use crate::types::{
+    TypePtr, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT, TYPE_REFS_UNDEFINED,
+    TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_HOOK, TYPE_REFS_XML_TEXT,
+};
 use crate::updates::decoder::Decoder;
 use crate::updates::encoder::Encoder;
 use crate::*;
@@ -911,10 +914,15 @@ impl std::fmt::Display for Item {
         if let Some(right) = self.right.as_ref() {
             write!(f, ", right: {}", right.id)?;
         }
-        if self.deleted {
-            write!(f, ": ~{}~)", &self.content)
+        if let Some(key) = self.parent_sub.as_ref() {
+            write!(f, ", '{}' =>", key)?;
         } else {
-            write!(f, ": '{}')", &self.content)
+            write!(f, ":")?;
+        }
+        if self.deleted {
+            write!(f, " ~{}~)", &self.content)
+        } else {
+            write!(f, " '{}')", &self.content)
         }
     }
 }
@@ -923,6 +931,53 @@ impl std::fmt::Display for ItemContent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ItemContent::String(s) => write!(f, "{}", s),
+            ItemContent::Any(s) => {
+                write!(f, "[")?;
+                let mut iter = s.iter();
+                if let Some(a) = iter.next() {
+                    write!(f, "{}", a.to_string())?;
+                }
+                while let Some(a) = iter.next() {
+                    write!(f, ", {}", a.to_string())?;
+                }
+                write!(f, "]")
+            }
+            ItemContent::JSON(s) => {
+                write!(f, "{{")?;
+                let mut iter = s.iter();
+                if let Some(a) = iter.next() {
+                    write!(f, "{}", a)?;
+                }
+                while let Some(a) = iter.next() {
+                    write!(f, ", {}", a)?;
+                }
+                write!(f, "}}")
+            }
+            ItemContent::Deleted(s) => write!(f, "deleted({})", s),
+            ItemContent::Binary(s) => write!(f, "{:?}", s),
+            ItemContent::Type(t) => {
+                let inner = t.borrow();
+                match inner.type_ref & 0b1111 {
+                    TYPE_REFS_ARRAY => write!(f, "<array(head: {})>", inner.start.get().unwrap()),
+                    TYPE_REFS_MAP => {
+                        write!(f, "<map({{")?;
+                        let mut iter = inner.map.iter();
+                        if let Some((k, ptr)) = iter.next() {
+                            write!(f, "'{}': {}", k, ptr)?;
+                        }
+                        while let Some((k, ptr)) = iter.next() {
+                            write!(f, ", '{}': {}", k, ptr)?;
+                        }
+                        write!(f, "}})>")
+                    }
+                    TYPE_REFS_TEXT => write!(f, "<text(head: {})>", inner.start.get().unwrap()),
+                    TYPE_REFS_XML_ELEMENT => write!(f, "<xml element>"),
+                    TYPE_REFS_XML_FRAGMENT => write!(f, "<xml fragment>"),
+                    TYPE_REFS_XML_HOOK => write!(f, "<xml hook>"),
+                    TYPE_REFS_XML_TEXT => write!(f, "<xml text>"),
+                    other => write!(f, "<undefined type ref>"),
+                }
+            }
             _ => Ok(()),
         }
     }
