@@ -25,7 +25,7 @@ pub fn merge_updates(updates: &[&[u8]]) -> Vec<u8> {
             }
 
             let mut encoder = EncoderV1::new();
-            update.encode_diff(&StateVector::empty(), &mut encoder);
+            update.encode_diff(&StateVector::default(), &mut encoder);
             ds.encode(&mut encoder);
             encoder.to_vec()
         }
