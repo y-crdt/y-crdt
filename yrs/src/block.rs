@@ -7,7 +7,7 @@ use crate::updates::decoder::Decoder;
 use crate::updates::encoder::Encoder;
 use crate::*;
 use lib0::any::Any;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::panic;
@@ -110,7 +110,7 @@ impl Block {
 
     pub fn is_deleted(&self) -> bool {
         match self {
-            Block::Item(item) => item.deleted,
+            Block::Item(item) => item.deleted.get(),
             Block::Skip(_) => false,
             Block::GC(_) => true,
         }
@@ -279,7 +279,7 @@ pub struct Item {
     pub content: ItemContent,
     pub parent: types::TypePtr,
     pub parent_sub: Option<String>,
-    pub deleted: bool,
+    pub deleted: Cell<bool>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -326,10 +326,7 @@ impl GC {
 
 impl Item {
     pub(crate) fn mark_as_deleted(&self) {
-        unsafe {
-            let ptr = &self.deleted as *const bool as *mut bool;
-            std::ptr::write(ptr, true);
-        }
+        self.deleted.set(true);
     }
 
     /// Assign left/right neighbors of the block. This may require for origin/right_origin
@@ -566,7 +563,7 @@ impl Item {
             content: self.content.splice(diff as usize).unwrap(),
             parent: self.parent.clone(),
             parent_sub: self.parent_sub.clone(),
-            deleted: self.deleted,
+            deleted: self.deleted.clone(),
         };
         self.right = Some(BlockPtr::from(other.id));
         other
@@ -928,7 +925,7 @@ impl std::fmt::Display for Item {
         } else {
             write!(f, ":")?;
         }
-        if self.deleted {
+        if self.deleted.get() {
             write!(f, " ~{}~)", &self.content)
         } else {
             write!(f, " '{}')", &self.content)

@@ -23,7 +23,7 @@ impl Text {
         let mut s = String::new();
         while let Some(a) = start.as_ref() {
             if let Some(item) = txn.store.blocks.get_item(&a) {
-                if !item.deleted {
+                if !item.deleted.get() {
                     if let block::ItemContent::String(item_string) = &item.content {
                         s.push_str(item_string);
                     }
@@ -57,7 +57,7 @@ impl Text {
             }
 
             if let Some(mut right) = txn.store.blocks.get_item(right_ptr) {
-                if !right.deleted {
+                if !right.deleted.get() {
                     let mut right_len = right.len();
                     if count < right_len {
                         // split right item
@@ -115,7 +115,7 @@ impl Text {
                 if len == 0 {
                     break;
                 }
-                if !item.deleted {
+                if !item.deleted.get() {
                     if len < item.len() {
                         // split item
                         let mut split_ptr = BlockPtr::from(item.id);

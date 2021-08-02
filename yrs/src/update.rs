@@ -9,6 +9,7 @@ use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::client_hasher::ClientHasher;
 use crate::{StateVector, Transaction, ID};
+use std::cell::Cell;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, VecDeque};
 use std::hash::BuildHasherDefault;
@@ -321,7 +322,7 @@ impl Update {
                     content,
                     parent,
                     parent_sub,
-                    deleted: false,
+                    deleted: Cell::new(false),
                 };
                 Block::Item(item)
             }
@@ -496,6 +497,7 @@ mod test {
     use crate::updates::decoder::{Decode, DecoderV1};
     use crate::{Doc, ID};
     use lib0::decoding::Cursor;
+    use std::cell::Cell;
     use std::rc::Rc;
 
     #[test]
@@ -532,7 +534,7 @@ mod test {
             content: ItemContent::Any(vec!["valueB".into()]),
             parent: TypePtr::Named(Rc::new("".to_owned())),
             parent_sub: Some("keyB".to_owned()),
-            deleted: false,
+            deleted: Cell::new(false),
         }));
         assert_eq!(block, &expected);
     }
