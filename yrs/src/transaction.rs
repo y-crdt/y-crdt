@@ -7,7 +7,7 @@ use crate::id_set::{DeleteSet, IdSet};
 use crate::store::Store;
 use crate::types::{Map, Text, TypePtr, TYPE_REFS_MAP, TYPE_REFS_TEXT};
 use crate::update::Update;
-use std::cell::{RefCell, RefMut};
+use std::cell::{Cell, RefCell, RefMut};
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use updates::encoder::*;
@@ -148,7 +148,7 @@ impl<'a> Transaction<'a> {
                         // We can ignore the case of GC and Delete structs, because we are going to skip them
                         if let Some(item) = blocks[index].as_item_mut() {
                             // split the first item if necessary
-                            if !item.deleted && item.id.clock < clock {
+                            if !item.deleted.get() && item.id.clock < clock {
                                 let split_ptr = BlockPtr::new(
                                     ID::new(*client, clock - item.id.clock),
                                     index as u32,
@@ -163,7 +163,7 @@ impl<'a> Transaction<'a> {
                                 let block = &mut blocks[index];
                                 if let Some(item) = block.as_item_mut() {
                                     if item.id.clock < clock_end {
-                                        if !item.deleted {
+                                        if !item.deleted.get() {
                                             let delete_ptr =
                                                 BlockPtr::new(item.id.clone(), index as u32);
                                             if item.id.clock + item.content.len() > clock_end {
@@ -209,7 +209,7 @@ impl<'a> Transaction<'a> {
         let mut result = false;
 
         if let Some(item) = self.store.blocks.get_item(&ptr) {
-            if !item.deleted {
+            if !item.deleted.get() {
                 //TODO:
                 // if let Some(parent) = self.store.get_type(&item.parent) {
                 //     // adjust the length of parent
@@ -241,7 +241,7 @@ impl<'a> Transaction<'a> {
 
                         while let Some(item) = ptr.and_then(|ptr| self.store.blocks.get_item(&ptr))
                         {
-                            if !item.deleted {
+                            if !item.deleted.get() {
                                 recurse.push(ptr.unwrap());
                             }
 
@@ -360,7 +360,7 @@ impl<'a> Transaction<'a> {
             origin,
             right_origin: right.map(|r| r.id),
             parent: pos.parent.clone(),
-            deleted: false,
+            deleted: Cell::new(false),
             parent_sub,
         };
         item.integrate(self, pivot, 0);
@@ -434,7 +434,7 @@ impl<'a> Transaction<'a> {
                                 break;
                             } else {
                                 if let Block::Item(item) = block {
-                                    if item.deleted {
+                                    if item.deleted.get() {
                                         if let ItemContent::Type(t) = &item.content {
                                             /*
                                             let item = this.type._start

@@ -47,7 +47,7 @@ fn text_insert_delete() {
             content: ItemContent::Deleted(3),
             parent: TypePtr::Named(Rc::new("type".to_string())),
             parent_sub: None,
-            deleted: false,
+            deleted: Cell::new(false),
         }),
         Block::Item(Item {
             id: ID::new(CLIENT_ID, 3),
@@ -58,7 +58,7 @@ fn text_insert_delete() {
             content: ItemContent::String("ab".to_string()),
             parent: TypePtr::Id(BlockPtr::new(ID::new(CLIENT_ID, 0), 0)),
             parent_sub: None,
-            deleted: false,
+            deleted: Cell::new(false),
         }),
         Block::Item(Item {
             id: ID::new(CLIENT_ID, 5),
@@ -69,7 +69,7 @@ fn text_insert_delete() {
             content: ItemContent::Deleted(1),
             parent: TypePtr::Id(BlockPtr::new(ID::new(CLIENT_ID, 4), 4)),
             parent_sub: None,
-            deleted: false,
+            deleted: Cell::new(false),
         }),
         Block::Item(Item {
             id: ID::new(CLIENT_ID, 6),
@@ -80,7 +80,7 @@ fn text_insert_delete() {
             content: ItemContent::Deleted(1),
             parent: TypePtr::Id(BlockPtr::new(ID::new(CLIENT_ID, 2), 2)),
             parent_sub: None,
-            deleted: false,
+            deleted: Cell::new(false),
         }),
         Block::Item(Item {
             id: ID::new(CLIENT_ID, 7),
@@ -91,7 +91,7 @@ fn text_insert_delete() {
             content: ItemContent::String("hi".to_string()),
             parent: TypePtr::Id(BlockPtr::new(ID::new(CLIENT_ID, 6), 6)),
             parent_sub: None,
-            deleted: false,
+            deleted: Cell::new(false),
         }),
     ];
     let expected_ds = {
@@ -146,7 +146,7 @@ fn map_set() {
             content: ItemContent::Any(vec![Any::String("v1".to_string())]),
             parent: TypePtr::Named(Rc::new("test".to_string())),
             parent_sub: Some("k1".to_string()),
-            deleted: false,
+            deleted: Cell::new(false),
         }),
         &Block::Item(Item {
             id: ID::new(CLIENT_ID, 1),
@@ -157,7 +157,7 @@ fn map_set() {
             content: ItemContent::Any(vec![Any::String("v2".to_string())]),
             parent: TypePtr::Named(Rc::new("test".to_string())),
             parent_sub: Some("k2".to_string()),
-            deleted: false,
+            deleted: Cell::new(false),
         }),
     ];
 
@@ -192,7 +192,7 @@ fn array_insert() {
         ]),
         parent: TypePtr::Named(Rc::new("test".to_string())),
         parent_sub: None,
-        deleted: false,
+        deleted: Cell::new(false),
     })];
 
     roundtrip(payload, expected);
@@ -233,7 +233,7 @@ fn xml_fragment_insert() {
             }))),
             parent: TypePtr::Named(Rc::new("fragment-name".to_string())),
             parent_sub: None,
-            deleted: false,
+            deleted: Cell::new(false),
         }),
         &Block::Item(Item {
             id: ID::new(CLIENT_ID, 1),
@@ -250,7 +250,7 @@ fn xml_fragment_insert() {
             }))),
             parent: TypePtr::Id(BlockPtr::from(ID::new(CLIENT_ID, 0))),
             parent_sub: None,
-            deleted: false,
+            deleted: Cell::new(false),
         }),
     ];
 

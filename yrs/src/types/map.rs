@@ -20,7 +20,7 @@ impl Map {
         let mut res = HashMap::new();
         for (key, ptr) in inner.map.iter() {
             if let Some(item) = txn.store.blocks.get_item(ptr) {
-                if !item.deleted {
+                if !item.deleted.get() {
                     let value = item.content.get_content_last(txn).unwrap_or(Any::Null);
                     res.insert(key.clone(), value);
                 }
@@ -35,7 +35,7 @@ impl Map {
         for ptr in inner.map.values() {
             //TODO: maybe it would be better to just cache len in the map itself?
             if let Some(item) = txn.store.blocks.get_item(ptr) {
-                if !item.deleted {
+                if !item.deleted.get() {
                     len += 1;
                 }
             }
@@ -88,7 +88,7 @@ impl Map {
         let ptr = t.map.get(key)?;
         let prev = {
             let item = txn.store.blocks.get_item(ptr)?;
-            if item.deleted {
+            if item.deleted.get() {
                 None
             } else {
                 item.content.get_content_last(txn)
@@ -102,7 +102,7 @@ impl Map {
         let t = self.0.borrow();
         let ptr = t.map.get(key)?;
         let item = txn.store.blocks.get_item(ptr)?;
-        if item.deleted {
+        if item.deleted.get() {
             None
         } else {
             item.content.get_content_last(txn)
@@ -113,7 +113,7 @@ impl Map {
         let t = self.0.borrow();
         if let Some(ptr) = t.map.get(key) {
             if let Some(item) = txn.store.blocks.get_item(ptr) {
-                return !item.deleted;
+                return !item.deleted.get();
             }
         }
         false
@@ -123,7 +123,7 @@ impl Map {
         let t = self.0.borrow();
         for (_, ptr) in t.map.iter() {
             if let Some(item) = txn.store.blocks.get_item(ptr) {
-                if !item.deleted {
+                if !item.deleted.get() {
                     item.mark_as_deleted();
                 }
             }
@@ -153,7 +153,7 @@ impl<'a, 'txn> Iterator for Blocks<'a, 'txn> {
         let mut block = self.txn.store.blocks.get_item(ptr);
         loop {
             match block {
-                Some(item) if !item.deleted => {
+                Some(item) if !item.deleted.get() => {
                     break;
                 }
                 _ => {
