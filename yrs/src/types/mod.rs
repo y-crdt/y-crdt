@@ -89,6 +89,31 @@ impl Inner {
     }
 }
 
+impl std::fmt::Display for Inner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.type_ref {
+            TYPE_REFS_ARRAY => write!(f, "YArray(start: {})", self.start.get().unwrap()),
+            TYPE_REFS_MAP => {
+                write!(f, "YMap(")?;
+                let mut iter = self.map.iter();
+                if let Some((k, v)) = iter.next() {
+                    write!(f, "'{}': {}", k, v)?;
+                }
+                while let Some((k, v)) = iter.next() {
+                    write!(f, ", '{}': {}", k, v)?;
+                }
+                write!(f, ")")
+            }
+            TYPE_REFS_TEXT => write!(f, "YText(start: {})", self.start.get().unwrap()),
+            TYPE_REFS_XML_ELEMENT => todo!(),
+            TYPE_REFS_XML_FRAGMENT => todo!(),
+            TYPE_REFS_XML_HOOK => todo!(),
+            TYPE_REFS_XML_TEXT => todo!(),
+            other => panic!("Defect: unknown type reference: {}", other),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TypePtr {
     Id(block::BlockPtr),

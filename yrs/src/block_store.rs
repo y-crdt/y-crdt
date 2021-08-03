@@ -233,14 +233,14 @@ impl ClientBlockList {
 
         if let Some(replacement) = replacement {
             let block = self.list.remove(pos);
+            self.integrated_len -= 1;
             if let Block::Item(item) = block {
-                if let Some(parent_sub) = item.parent_sub {
-                    return Some(CompactionResult {
-                        parent: item.parent,
-                        parent_sub,
-                        replacement,
-                    });
-                }
+                return Some(CompactionResult {
+                    parent: item.parent,
+                    parent_sub: item.parent_sub,
+                    right: item.right,
+                    replacement,
+                });
             }
         }
 
@@ -250,8 +250,10 @@ impl ClientBlockList {
 
 pub(crate) struct CompactionResult {
     pub parent: TypePtr,
-    pub parent_sub: String,
+    pub parent_sub: Option<String>,
+    /// Pointer to a block that resulted from compaction of two adjacent blocks.
     pub replacement: BlockPtr,
+    pub right: Option<BlockPtr>,
 }
 
 impl Default for ClientBlockList {
@@ -292,6 +294,10 @@ impl BlockStore {
         Self {
             clients: HashMap::<u64, ClientBlockList, BuildHasherDefault<ClientHasher>>::default(),
         }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.clients.is_empty()
     }
 
     pub fn contains_client(&self, client: &u64) -> bool {

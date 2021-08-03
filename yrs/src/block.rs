@@ -488,6 +488,9 @@ impl Item {
                 self.left = left;
             }
 
+            self.try_reassign_parent_sub(left);
+            self.try_reassign_parent_sub(right);
+
             // reconnect left/right
             if let Some(left_id) = self.left.as_ref() {
                 if let Some(left) = txn.store.blocks.get_item_mut(left_id) {
@@ -537,13 +540,23 @@ impl Item {
             let parent_deleted = false; // (this.parent)._item !== null && (this.parent)._item.deleted)
             if parent_deleted || (self.parent_sub.is_some() && self.right.is_some()) {
                 // delete if parent is deleted or if this is not the current attribute value of parent
-                //txn.delete(&BlockPtr::new(self.id, pivot)); //TODO: current item must be added to block list before txn.delete call
                 true
             } else {
                 false
             }
         } else {
             panic!("Defect: item has no parent")
+        }
+    }
+
+    fn try_reassign_parent_sub(&mut self, block: Option<&Block>) {
+        if self.parent_sub.is_none() {
+            if let Some(Block::Item(item)) = block {
+                //TODO: make parent_sub Rc<String> and clone from left unconditionally
+                if item.parent_sub.is_some() {
+                    self.parent_sub = item.parent_sub.clone();
+                }
+            }
         }
     }
 
@@ -583,6 +596,8 @@ impl Item {
             && self.deleted == other.deleted
             && self.content.try_merge(&other.content)
         {
+            self.right = other.right;
+            // self.right.left = self
             true
         } else {
             false
