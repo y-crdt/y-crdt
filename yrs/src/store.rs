@@ -149,11 +149,16 @@ impl Store {
     }
 
     pub(crate) fn gc_cleanup(&mut self, compaction: CompactionResult) {
-        if let Some(parent) = self.get_type(&compaction.parent) {
-            let mut inner = parent.borrow_mut();
-            inner
-                .map
-                .insert(compaction.parent_sub, compaction.replacement);
+        if let Some(parent_sub) = compaction.parent_sub {
+            if let Some(parent) = self.get_type(&compaction.parent) {
+                let mut inner = parent.borrow_mut();
+                inner.map.insert(parent_sub, compaction.replacement);
+            }
+        }
+        if let Some(right) = compaction.right {
+            if let Some(item) = self.blocks.get_item_mut(&right) {
+                item.left = Some(compaction.replacement);
+            }
         }
     }
 }
@@ -169,5 +174,24 @@ impl Encode for Store {
     ///   is extracted and integrated into the document structure.
     fn encode<E: Encoder>(&self, encoder: &mut E) {
         self.encode_diff(&StateVector::default(), encoder)
+    }
+}
+
+impl std::fmt::Display for Store {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "Store(ID: {}) {{", self.client_id)?;
+        if !self.types.is_empty() {
+            writeln!(f, "\ttypes: {{")?;
+            for (k, v) in self.types.iter() {
+                writeln!(f, "\t\t'{}': {}", k.as_str(), *v.borrow())?;
+            }
+
+            writeln!(f, "\t}}")?;
+        }
+        if !self.blocks.is_empty() {
+            writeln!(f, "\tblocks: {}", self.blocks)?;
+        }
+
+        writeln!(f, "}}")
     }
 }
