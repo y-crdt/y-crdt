@@ -478,6 +478,8 @@ impl Item {
                                 } else {
                                     break;
                                 }
+                            } else {
+                                break;
                             }
                         }
                         o = item.right.clone();
