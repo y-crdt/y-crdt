@@ -222,7 +222,8 @@ impl ClientBlockList {
             let right = &r[0];
             if left.is_deleted() == right.is_deleted() && left.same_type(right) {
                 if left.try_merge(right) {
-                    Some(BlockPtr::new(left.id().clone(), pos as u32 - 1))
+                    let new_ptr = BlockPtr::new(left.id().clone(), pos as u32 - 1);
+                    Some(new_ptr)
                 } else {
                     None
                 }
@@ -238,7 +239,8 @@ impl ClientBlockList {
                 return Some(CompactionResult {
                     parent: item.parent,
                     parent_sub: item.parent_sub,
-                    right: item.right,
+                    new_right: item.right,
+                    old_right: item.id,
                     replacement,
                 });
             }
@@ -253,7 +255,10 @@ pub(crate) struct CompactionResult {
     pub parent_sub: Option<String>,
     /// Pointer to a block that resulted from compaction of two adjacent blocks.
     pub replacement: BlockPtr,
-    pub right: Option<BlockPtr>,
+    /// Pointer to a neighbor, that's now on the right side of the `replacement` block.
+    pub new_right: Option<BlockPtr>,
+    /// ID of the block that was compacted into left block. Left block ID is in `replacement`.
+    pub old_right: ID,
 }
 
 impl Default for ClientBlockList {

@@ -1,3 +1,4 @@
+use crate::block::BlockPtr;
 use crate::block_store::{BlockStore, CompactionResult, StateVector};
 use crate::event::{EventHandler, UpdateEvent};
 use crate::id_set::DeleteSet;
@@ -6,6 +7,7 @@ use crate::update::PendingUpdate;
 use crate::updates::encoder::{Encode, Encoder};
 use crate::{block, types};
 use std::cell::RefCell;
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -152,10 +154,20 @@ impl Store {
         if let Some(parent_sub) = compaction.parent_sub {
             if let Some(parent) = self.get_type(&compaction.parent) {
                 let mut inner = parent.borrow_mut();
-                inner.map.insert(parent_sub, compaction.replacement);
+                match inner.map.entry(parent_sub) {
+                    Entry::Occupied(e) => {
+                        let cell = e.into_mut();
+                        if cell.id == compaction.old_right {
+                            *cell = compaction.replacement;
+                        }
+                    }
+                    Entry::Vacant(e) => {
+                        e.insert(compaction.replacement);
+                    }
+                }
             }
         }
-        if let Some(right) = compaction.right {
+        if let Some(right) = compaction.new_right {
             if let Some(item) = self.blocks.get_item_mut(&right) {
                 item.left = Some(compaction.replacement);
             }
