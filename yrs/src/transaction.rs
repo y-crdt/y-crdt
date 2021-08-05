@@ -1,6 +1,6 @@
 use crate::*;
 
-use crate::block::{Block, BlockPtr, ItemContent, ID};
+use crate::block::{Block, BlockPtr, Item, ItemContent, ID};
 use crate::block_store::StateVector;
 use crate::event::UpdateEvent;
 use crate::id_set::{DeleteSet, IdSet};
@@ -148,7 +148,7 @@ impl<'a> Transaction<'a> {
                         // We can ignore the case of GC and Delete structs, because we are going to skip them
                         if let Some(item) = blocks[index].as_item_mut() {
                             // split the first item if necessary
-                            if !item.deleted.get() && item.id.clock < clock {
+                            if !item.is_deleted() && item.id.clock < clock {
                                 let split_ptr = BlockPtr::new(
                                     ID::new(*client, clock - item.id.clock),
                                     index as u32,
@@ -163,7 +163,7 @@ impl<'a> Transaction<'a> {
                                 let block = &mut blocks[index];
                                 if let Some(item) = block.as_item_mut() {
                                     if item.id.clock < clock_end {
-                                        if !item.deleted.get() {
+                                        if !item.is_deleted() {
                                             let delete_ptr =
                                                 BlockPtr::new(item.id.clone(), index as u32);
                                             if item.id.clock + item.content.len() > clock_end {
@@ -209,14 +209,14 @@ impl<'a> Transaction<'a> {
         let mut result = false;
 
         if let Some(item) = self.store.blocks.get_item(&ptr) {
-            if !item.deleted.get() {
-                //TODO:
-                // if let Some(parent) = self.store.get_type(&item.parent) {
-                //     // adjust the length of parent
-                //     if (this.countable && this.parentSub === null) {
-                //         parent._length -= this.length
-                //     }
-                // }
+            if !item.is_deleted() {
+                if item.parent_sub.is_none() && item.is_countable() {
+                    if let Some(parent) = self.store.get_type(&item.parent) {
+                        let mut inner = parent.borrow_mut();
+                        inner.len -= item.len();
+                    }
+                }
+
                 item.mark_as_deleted();
                 self.delete_set.insert(item.id.clone(), item.len());
                 // addChangedTypeToTransaction(transaction, item.type, item.parentSub)
@@ -241,7 +241,7 @@ impl<'a> Transaction<'a> {
 
                         while let Some(item) = ptr.and_then(|ptr| self.store.blocks.get_item(&ptr))
                         {
-                            if !item.deleted.get() {
+                            if !item.is_deleted() {
                                 recurse.push(ptr.unwrap());
                             }
 
@@ -352,17 +352,16 @@ impl<'a> Transaction<'a> {
             .get_client_blocks_mut(client_id)
             .integrated_len() as u32;
 
-        let mut item = block::Item {
+        let mut item = Item::new(
             id,
-            content,
             left,
-            right,
             origin,
-            right_origin: right.map(|r| r.id),
-            parent: pos.parent.clone(),
-            deleted: Cell::new(false),
+            right,
+            right.map(|r| r.id),
+            pos.parent.clone(),
             parent_sub,
-        };
+            content,
+        );
         item.integrate(self, pivot, 0);
         let local_block_list = self.store.blocks.get_client_blocks_mut(client_id);
         local_block_list.push(block::Block::Item(item));
@@ -434,7 +433,7 @@ impl<'a> Transaction<'a> {
                                 break;
                             } else {
                                 if let Block::Item(item) = block {
-                                    if item.deleted.get() {
+                                    if item.is_deleted() {
                                         if let ItemContent::Type(t) = &item.content {
                                             /*
                                             let item = this.type._start

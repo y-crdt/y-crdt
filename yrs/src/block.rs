@@ -110,7 +110,7 @@ impl Block {
 
     pub fn is_deleted(&self) -> bool {
         match self {
-            Block::Item(item) => item.deleted.get(),
+            Block::Item(item) => item.is_deleted(),
             Block::Skip(_) => false,
             Block::GC(_) => true,
         }
@@ -269,6 +269,11 @@ pub struct ItemPosition {
     pub index: u32,
 }
 
+const ITEM_FLAG_MARKED: u8 = 0b1000;
+const ITEM_FLAG_DELETED: u8 = 0b0100;
+const ITEM_FLAG_COUNTABLE: u8 = 0b0010;
+const ITEM_FLAG_KEEP: u8 = 0b0001;
+
 #[derive(Debug, PartialEq)]
 pub struct Item {
     pub id: ID,
@@ -279,7 +284,7 @@ pub struct Item {
     pub content: ItemContent,
     pub parent: types::TypePtr,
     pub parent_sub: Option<String>,
-    pub deleted: Cell<bool>,
+    pub info: Cell<u8>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -325,8 +330,52 @@ impl GC {
 }
 
 impl Item {
+    pub fn new(
+        id: ID,
+        left: Option<BlockPtr>,
+        origin: Option<ID>,
+        right: Option<BlockPtr>,
+        right_origin: Option<ID>,
+        parent: TypePtr,
+        parent_sub: Option<String>,
+        content: ItemContent,
+    ) -> Self {
+        let info = if content.is_countable() {
+            ITEM_FLAG_COUNTABLE
+        } else {
+            0
+        };
+        Item {
+            id,
+            left,
+            right,
+            origin,
+            right_origin,
+            content,
+            parent,
+            parent_sub,
+            info: Cell::new(info),
+        }
+    }
+
+    pub fn marked(&self) -> bool {
+        self.info.get() & ITEM_FLAG_MARKED == ITEM_FLAG_MARKED
+    }
+
+    pub fn keep(&self) -> bool {
+        self.info.get() & ITEM_FLAG_KEEP == ITEM_FLAG_KEEP
+    }
+
+    pub fn is_deleted(&self) -> bool {
+        self.info.get() & ITEM_FLAG_DELETED == ITEM_FLAG_DELETED
+    }
+
+    pub fn is_countable(&self) -> bool {
+        self.info.get() & ITEM_FLAG_COUNTABLE == ITEM_FLAG_COUNTABLE
+    }
+
     pub(crate) fn mark_as_deleted(&self) {
-        self.deleted.set(true);
+        self.info.set(self.info.get() | ITEM_FLAG_DELETED);
     }
 
     /// Assign left/right neighbors of the block. This may require for origin/right_origin
@@ -537,6 +586,10 @@ impl Item {
                 }
             }
 
+            if self.parent_sub.is_none() && self.is_countable() && !self.is_deleted() {
+                parent_ref.len += self.len();
+            }
+
             self.integrate_content(txn);
             // addChangedTypeToTransaction(transaction, /** @type {AbstractType<any>} */ (this.parent), this.parentSub)
             let parent_deleted = false; // (this.parent)._item !== null && (this.parent)._item.deleted)
@@ -578,7 +631,7 @@ impl Item {
             content: self.content.splice(diff as usize).unwrap(),
             parent: self.parent.clone(),
             parent_sub: self.parent_sub.clone(),
-            deleted: self.deleted.clone(),
+            info: self.info.clone(),
         };
         self.right = Some(BlockPtr::from(other.id));
         other
@@ -595,7 +648,7 @@ impl Item {
             && other.origin == Some(self.last_id())
             && self.right == Some(BlockPtr::from(other.id.clone()))
             && self.right_origin == other.right_origin
-            && self.deleted == other.deleted
+            && self.is_deleted() == other.is_deleted()
             && self.content.try_merge(&other.content)
         {
             self.right = other.right;
@@ -683,6 +736,20 @@ impl ItemContent {
         }
     }
 
+    pub fn is_countable(&self) -> bool {
+        match self {
+            ItemContent::Any(_) => true,
+            ItemContent::Binary(_) => true,
+            ItemContent::Doc(_, _) => true,
+            ItemContent::JSON(_) => true,
+            ItemContent::Embed(_) => true,
+            ItemContent::String(_) => true,
+            ItemContent::Type(_) => true,
+            ItemContent::Deleted(_) => false,
+            ItemContent::Format(_, _) => false,
+        }
+    }
+
     pub fn len(&self) -> u32 {
         match self {
             ItemContent::Deleted(deleted) => *deleted,
@@ -748,9 +815,9 @@ impl ItemContent {
             }
             ItemContent::Type(c) => {
                 let inner = c.borrow();
-                encoder.write_type_ref(inner.type_ref);
-                if inner.type_ref == types::TYPE_REFS_XML_ELEMENT
-                    || inner.type_ref == types::TYPE_REFS_XML_HOOK
+                encoder.write_type_ref(inner.type_ref());
+                let type_ref = inner.type_ref();
+                if type_ref == types::TYPE_REFS_XML_ELEMENT || type_ref == types::TYPE_REFS_XML_HOOK
                 {
                     encoder.write_key(inner.name.as_ref().unwrap().as_str())
                 }
@@ -786,9 +853,9 @@ impl ItemContent {
             }
             ItemContent::Type(c) => {
                 let inner = c.borrow();
-                encoder.write_type_ref(inner.type_ref);
-                if inner.type_ref == types::TYPE_REFS_XML_ELEMENT
-                    || inner.type_ref == types::TYPE_REFS_XML_HOOK
+                let type_ref = inner.type_ref();
+                encoder.write_type_ref(type_ref);
+                if type_ref == types::TYPE_REFS_XML_ELEMENT || type_ref == types::TYPE_REFS_XML_HOOK
                 {
                     encoder.write_key(inner.name.as_ref().unwrap().as_str())
                 }
@@ -942,7 +1009,7 @@ impl std::fmt::Display for Item {
         } else {
             write!(f, ":")?;
         }
-        if self.deleted.get() {
+        if self.is_deleted() {
             write!(f, " ~{}~)", &self.content)
         } else {
             write!(f, " '{}')", &self.content)
@@ -980,7 +1047,7 @@ impl std::fmt::Display for ItemContent {
             ItemContent::Binary(s) => write!(f, "{:?}", s),
             ItemContent::Type(t) => {
                 let inner = t.borrow();
-                match inner.type_ref & 0b1111 {
+                match inner.type_ref() {
                     TYPE_REFS_ARRAY => write!(f, "<array(head: {})>", inner.start.get().unwrap()),
                     TYPE_REFS_MAP => {
                         write!(f, "<map({{")?;
