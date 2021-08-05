@@ -38,61 +38,56 @@ fn text_insert_delete() {
     ];
     const CLIENT_ID: u64 = 264992024;
     let expected_blocks = vec![
-        Block::Item(Item {
-            id: ID::new(CLIENT_ID, 0),
-            left: None,
-            right: None,
-            origin: None,
-            right_origin: None,
-            content: ItemContent::Deleted(3),
-            parent: TypePtr::Named(Rc::new("type".to_string())),
-            parent_sub: None,
-            deleted: Cell::new(false),
-        }),
-        Block::Item(Item {
-            id: ID::new(CLIENT_ID, 3),
-            left: None,
-            right: None,
-            origin: None,
-            right_origin: Some(ID::new(CLIENT_ID, 0)),
-            content: ItemContent::String("ab".to_string()),
-            parent: TypePtr::Id(BlockPtr::new(ID::new(CLIENT_ID, 0), 0)),
-            parent_sub: None,
-            deleted: Cell::new(false),
-        }),
-        Block::Item(Item {
-            id: ID::new(CLIENT_ID, 5),
-            left: None,
-            right: None,
-            origin: Some(ID::new(CLIENT_ID, 4)),
-            right_origin: Some(ID::new(CLIENT_ID, 0)),
-            content: ItemContent::Deleted(1),
-            parent: TypePtr::Id(BlockPtr::new(ID::new(CLIENT_ID, 4), 4)),
-            parent_sub: None,
-            deleted: Cell::new(false),
-        }),
-        Block::Item(Item {
-            id: ID::new(CLIENT_ID, 6),
-            left: None,
-            right: None,
-            origin: Some(ID::new(CLIENT_ID, 2)),
-            right_origin: None,
-            content: ItemContent::Deleted(1),
-            parent: TypePtr::Id(BlockPtr::new(ID::new(CLIENT_ID, 2), 2)),
-            parent_sub: None,
-            deleted: Cell::new(false),
-        }),
-        Block::Item(Item {
-            id: ID::new(CLIENT_ID, 7),
-            left: None,
-            right: None,
-            origin: Some(ID::new(CLIENT_ID, 6)),
-            right_origin: None,
-            content: ItemContent::String("hi".to_string()),
-            parent: TypePtr::Id(BlockPtr::new(ID::new(CLIENT_ID, 6), 6)),
-            parent_sub: None,
-            deleted: Cell::new(false),
-        }),
+        Block::Item(Item::new(
+            ID::new(CLIENT_ID, 0),
+            None,
+            None,
+            None,
+            None,
+            TypePtr::Named(Rc::new("type".to_string())),
+            None,
+            ItemContent::Deleted(3),
+        )),
+        Block::Item(Item::new(
+            ID::new(CLIENT_ID, 3),
+            None,
+            None,
+            None,
+            Some(ID::new(CLIENT_ID, 0)),
+            TypePtr::Id(BlockPtr::new(ID::new(CLIENT_ID, 0), 0)),
+            None,
+            ItemContent::String("ab".to_string()),
+        )),
+        Block::Item(Item::new(
+            ID::new(CLIENT_ID, 5),
+            None,
+            Some(ID::new(CLIENT_ID, 4)),
+            None,
+            Some(ID::new(CLIENT_ID, 0)),
+            TypePtr::Id(BlockPtr::new(ID::new(CLIENT_ID, 4), 4)),
+            None,
+            ItemContent::Deleted(1),
+        )),
+        Block::Item(Item::new(
+            ID::new(CLIENT_ID, 6),
+            None,
+            Some(ID::new(CLIENT_ID, 2)),
+            None,
+            None,
+            TypePtr::Id(BlockPtr::new(ID::new(CLIENT_ID, 2), 2)),
+            None,
+            ItemContent::Deleted(1),
+        )),
+        Block::Item(Item::new(
+            ID::new(CLIENT_ID, 7),
+            None,
+            Some(ID::new(CLIENT_ID, 6)),
+            None,
+            None,
+            TypePtr::Id(BlockPtr::new(ID::new(CLIENT_ID, 6), 6)),
+            None,
+            ItemContent::String("hi".to_string()),
+        )),
     ];
     let expected_ds = {
         let mut ds = IdSet::new();
@@ -137,28 +132,26 @@ fn map_set() {
     ];
     const CLIENT_ID: u64 = 880095927;
     let expected = &[
-        &Block::Item(Item {
-            id: ID::new(CLIENT_ID, 0),
-            left: None,
-            right: None,
-            origin: None,
-            right_origin: None,
-            content: ItemContent::Any(vec![Any::String("v1".to_string())]),
-            parent: TypePtr::Named(Rc::new("test".to_string())),
-            parent_sub: Some("k1".to_string()),
-            deleted: Cell::new(false),
-        }),
-        &Block::Item(Item {
-            id: ID::new(CLIENT_ID, 1),
-            left: None,
-            right: None,
-            origin: None,
-            right_origin: None,
-            content: ItemContent::Any(vec![Any::String("v2".to_string())]),
-            parent: TypePtr::Named(Rc::new("test".to_string())),
-            parent_sub: Some("k2".to_string()),
-            deleted: Cell::new(false),
-        }),
+        &Block::Item(Item::new(
+            ID::new(CLIENT_ID, 0),
+            None,
+            None,
+            None,
+            None,
+            TypePtr::Named(Rc::new("test".to_string())),
+            Some("k1".to_string()),
+            ItemContent::Any(vec![Any::String("v1".to_string())]),
+        )),
+        &Block::Item(Item::new(
+            ID::new(CLIENT_ID, 1),
+            None,
+            None,
+            None,
+            None,
+            TypePtr::Named(Rc::new("test".to_string())),
+            Some("k2".to_string()),
+            ItemContent::Any(vec![Any::String("v2".to_string())]),
+        )),
     ];
 
     roundtrip(payload, expected);
@@ -180,20 +173,19 @@ fn array_insert() {
         1, 1, 199, 195, 202, 51, 0, 8, 1, 4, 116, 101, 115, 116, 2, 119, 1, 97, 119, 1, 98, 0,
     ];
     const CLIENT_ID: u64 = 108175815;
-    let expected = &[&Block::Item(Item {
-        id: ID::new(CLIENT_ID, 0),
-        left: None,
-        right: None,
-        origin: None,
-        right_origin: None,
-        content: ItemContent::Any(vec![
+    let expected = &[&Block::Item(Item::new(
+        ID::new(CLIENT_ID, 0),
+        None,
+        None,
+        None,
+        None,
+        TypePtr::Named(Rc::new("test".to_string())),
+        None,
+        ItemContent::Any(vec![
             Any::String("a".to_string()),
             Any::String("b".to_string()),
         ]),
-        parent: TypePtr::Named(Rc::new("test".to_string())),
-        parent_sub: None,
-        deleted: Cell::new(false),
-    })];
+    ))];
 
     roundtrip(payload, expected);
 }
@@ -218,40 +210,34 @@ fn xml_fragment_insert() {
     ];
     const CLIENT_ID: u64 = 517330651;
     let expected = &[
-        &Block::Item(Item {
-            id: ID::new(CLIENT_ID, 0),
-            left: None,
-            right: None,
-            origin: None,
-            right_origin: None,
-            content: ItemContent::Type(Rc::new(RefCell::new(Inner {
-                start: Cell::new(None),
-                map: HashMap::default(),
-                ptr: TypePtr::Id(BlockPtr::from(ID::new(CLIENT_ID, 0))),
-                name: None,
-                type_ref: TYPE_REFS_XML_TEXT,
-            }))),
-            parent: TypePtr::Named(Rc::new("fragment-name".to_string())),
-            parent_sub: None,
-            deleted: Cell::new(false),
-        }),
-        &Block::Item(Item {
-            id: ID::new(CLIENT_ID, 1),
-            left: None,
-            right: None,
-            origin: Some(ID::new(CLIENT_ID, 0)),
-            right_origin: None,
-            content: ItemContent::Type(Rc::new(RefCell::new(Inner {
-                start: Cell::new(None),
-                map: HashMap::default(),
-                ptr: TypePtr::Id(BlockPtr::from(ID::new(CLIENT_ID, 1))),
-                name: Some("node-name".to_string()),
-                type_ref: TYPE_REFS_XML_ELEMENT,
-            }))),
-            parent: TypePtr::Id(BlockPtr::from(ID::new(CLIENT_ID, 0))),
-            parent_sub: None,
-            deleted: Cell::new(false),
-        }),
+        &Block::Item(Item::new(
+            ID::new(CLIENT_ID, 0),
+            None,
+            None,
+            None,
+            None,
+            TypePtr::Named(Rc::new("fragment-name".to_string())),
+            None,
+            ItemContent::Type(Rc::new(RefCell::new(Inner::new(
+                TypePtr::Id(BlockPtr::from(ID::new(CLIENT_ID, 0))),
+                None,
+                TYPE_REFS_XML_TEXT,
+            )))),
+        )),
+        &Block::Item(Item::new(
+            ID::new(CLIENT_ID, 1),
+            None,
+            Some(ID::new(CLIENT_ID, 0)),
+            None,
+            None,
+            TypePtr::Id(BlockPtr::from(ID::new(CLIENT_ID, 0))),
+            None,
+            ItemContent::Type(Rc::new(RefCell::new(Inner::new(
+                TypePtr::Id(BlockPtr::from(ID::new(CLIENT_ID, 1))),
+                Some("node-name".to_string()),
+                TYPE_REFS_XML_ELEMENT,
+            )))),
+        )),
     ];
 
     roundtrip(payload, expected);

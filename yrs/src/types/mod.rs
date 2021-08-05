@@ -61,7 +61,8 @@ pub struct Inner {
     pub map: HashMap<String, BlockPtr>,
     pub ptr: TypePtr,
     pub name: Option<String>,
-    pub type_ref: TypeRefs,
+    pub len: u32,
+    type_ref: TypeRefs,
 }
 
 impl Inner {
@@ -69,14 +70,23 @@ impl Inner {
         Self {
             start: Cell::from(None),
             map: HashMap::default(),
+            len: 0,
             ptr,
             name,
             type_ref,
         }
     }
 
+    pub fn type_ref(&self) -> TypeRefs {
+        self.type_ref & 0b1111
+    }
+
+    pub fn len(&self) -> u32 {
+        self.len
+    }
+
     pub fn to_json(&self, txn: &Transaction) -> Any {
-        match self.type_ref {
+        match self.type_ref() {
             TYPE_REFS_ARRAY => todo!(),
             TYPE_REFS_MAP => Map::to_json_inner(self, txn),
             TYPE_REFS_TEXT => Any::String(Text::to_string_inner(self, txn)),
@@ -91,7 +101,7 @@ impl Inner {
 
 impl std::fmt::Display for Inner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.type_ref {
+        match self.type_ref() {
             TYPE_REFS_ARRAY => write!(f, "YArray(start: {})", self.start.get().unwrap()),
             TYPE_REFS_MAP => {
                 write!(f, "YMap(")?;

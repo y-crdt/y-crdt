@@ -313,17 +313,16 @@ impl Update {
                     None
                 };
                 let content = ItemContent::decode(decoder, info, BlockPtr::from(id.clone()));
-                let item: Item = Item {
+                let item = Item::new(
                     id,
-                    left: None,
-                    right: None,
+                    None,
                     origin,
+                    None,
                     right_origin,
-                    content,
                     parent,
                     parent_sub,
-                    deleted: Cell::new(false),
-                };
+                    content,
+                );
                 Block::Item(item)
             }
         }
@@ -525,17 +524,16 @@ mod test {
         let id = ID::new(2026372272, 0);
         let block = u.clients.get(&id.client).unwrap();
         let mut expected = Vec::new();
-        expected.push(Block::Item(Item {
+        expected.push(Block::Item(Item::new(
             id,
-            left: None,
-            right: None,
-            origin: None,
-            right_origin: None,
-            content: ItemContent::Any(vec!["valueB".into()]),
-            parent: TypePtr::Named(Rc::new("".to_owned())),
-            parent_sub: Some("keyB".to_owned()),
-            deleted: Cell::new(false),
-        }));
+            None,
+            None,
+            None,
+            None,
+            TypePtr::Named(Rc::new("".to_owned())),
+            Some("keyB".to_owned()),
+            ItemContent::Any(vec!["valueB".into()]),
+        )));
         assert_eq!(block, &expected);
     }
 
