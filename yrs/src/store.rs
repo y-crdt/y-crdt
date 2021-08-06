@@ -1,4 +1,3 @@
-use crate::block::BlockPtr;
 use crate::block_store::{BlockStore, CompactionResult, StateVector};
 use crate::event::{EventHandler, UpdateEvent};
 use crate::id_set::DeleteSet;

@@ -1,3 +1,4 @@
+pub mod array;
 pub mod map;
 pub mod text;
 

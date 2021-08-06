@@ -7,9 +7,26 @@ use rand::prelude::SliceRandom;
 use rand::rngs::ThreadRng;
 use rand::seq::IteratorRandom;
 use rand::{thread_rng, Rng};
-use std::cell::{Ref, RefCell, RefMut};
+use std::cell::{RefCell, RefMut};
 use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
+
+pub fn exchange_updates(docs: &[&Doc]) {
+    for i in 0..docs.len() {
+        for j in 0..docs.len() {
+            if i != j {
+                let a = docs[i];
+                let ta = a.transact();
+                let b = docs[j];
+                let mut tb = b.transact();
+
+                let sv = b.get_state_vector(&tb);
+                let update = a.encode_delta_as_update(&sv, &ta);
+                b.apply_update(&mut tb, update.as_slice());
+            }
+        }
+    }
+}
 
 const MSG_SYNC_STEP_1: usize = 0;
 const MSG_SYNC_STEP_2: usize = 1;
