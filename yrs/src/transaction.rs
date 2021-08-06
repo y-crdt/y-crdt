@@ -5,9 +5,10 @@ use crate::block_store::StateVector;
 use crate::event::UpdateEvent;
 use crate::id_set::{DeleteSet, IdSet};
 use crate::store::Store;
-use crate::types::{Map, Text, TypePtr, TYPE_REFS_MAP, TYPE_REFS_TEXT};
+use crate::types::array::Array;
+use crate::types::{Map, Text, TypePtr, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT};
 use crate::update::Update;
-use std::cell::{Cell, RefCell, RefMut};
+use std::cell::RefMut;
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use updates::encoder::*;
@@ -48,6 +49,11 @@ impl<'a> Transaction<'a> {
     pub fn get_map(&mut self, name: &str) -> Map {
         let c = self.store.create_type(name, TYPE_REFS_MAP);
         Map::new(c)
+    }
+
+    pub fn get_array(&mut self, name: &str) -> Array {
+        let c = self.store.create_type(name, TYPE_REFS_ARRAY);
+        Array::new(c)
     }
 
     /// Encodes the document state to a binary format.

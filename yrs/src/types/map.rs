@@ -201,8 +201,15 @@ impl<'a, 'txn> Iterator for Values<'a, 'txn> {
     }
 }
 
+impl Into<ItemContent> for Map {
+    fn into(self) -> ItemContent {
+        ItemContent::Type(self.0.clone())
+    }
+}
+
 #[cfg(test)]
 mod test {
+    use crate::test_utils::exchange_updates;
     use crate::types::Map;
     use crate::{Doc, Transaction};
     use lib0::any::Any;
@@ -447,23 +454,6 @@ mod test {
                 "all entries for peer {} should be removed",
                 doc.client_id
             );
-        }
-    }
-
-    fn exchange_updates(docs: &[&Doc]) {
-        for i in 0..docs.len() {
-            for j in 0..docs.len() {
-                if i != j {
-                    let a = docs[i];
-                    let ta = a.transact();
-                    let b = docs[j];
-                    let mut tb = b.transact();
-
-                    let sv = b.get_state_vector(&tb);
-                    let update = a.encode_delta_as_update(&sv, &ta);
-                    b.apply_update(&mut tb, update.as_slice());
-                }
-            }
         }
     }
 
