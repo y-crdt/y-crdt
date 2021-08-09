@@ -19,54 +19,64 @@ impl Array {
     }
 
     pub fn insert<V: Into<ItemContent>>(&self, txn: &mut Transaction, index: u32, value: V) {
-        let ptr = {
+        let (start, parent) = {
             let parent = self.0.borrow();
-            parent.start.get()
-        };
-        let after = Self::index_to_ptr(txn, ptr, index);
-        if let Some(ptr) = after {
-            let (left, right) = txn.store.blocks.split_block(&ptr);
-            if let Some(ptr) = left {
-                Self::insert_after(txn, self.0.borrow().ptr.clone(), ptr, value)
+            if index <= parent.len() {
+                (parent.start.get(), parent.ptr.clone())
+            } else {
+                panic!("Cannot insert item at index over the length of an array")
             }
-        }
+        };
+        let (left, right) = if index == 0 {
+            (None, None)
+        } else {
+            Self::index_to_ptr(txn, start, index)
+        };
+        let content = value.into();
+        let pos = ItemPosition {
+            parent,
+            left,
+            right,
+            index: 0,
+        };
+        txn.create_item(&pos, content, None);
     }
 
     fn index_to_ptr(
         txn: &mut Transaction,
         mut ptr: Option<BlockPtr>,
         mut index: u32,
-    ) -> Option<BlockPtr> {
+    ) -> (Option<BlockPtr>, Option<BlockPtr>) {
         while let Some(p) = ptr {
-            let item = txn.store.blocks.get_item(&p)?;
+            let item = txn
+                .store
+                .blocks
+                .get_item(&p)
+                .expect("No item for a given pointer was found.");
             let len = item.len();
             if !item.is_deleted() && item.is_countable() {
-                if index < len {
+                if index == len {
+                    let left = Some(p.clone());
+                    let right = item.right.clone();
+                    return (left, right);
+                } else if index < len {
                     let split_point = ID::new(item.id.client, item.id.clock + index);
-                    return Some(BlockPtr::new(split_point, p.pivot() as u32));
+                    let ptr = BlockPtr::new(split_point, p.pivot() as u32);
+                    let (left, mut right) = txn.store.blocks.split_block(&ptr);
+                    if right.is_none() {
+                        if let Some(left_ptr) = left.as_ref() {
+                            if let Some(left) = txn.store.blocks.get_item(left_ptr) {
+                                right = left.right.clone();
+                            }
+                        }
+                    }
+                    return (left, right);
                 }
             }
             index -= len;
             ptr = item.right.clone();
         }
-        None
-    }
-
-    fn insert_after<V: Into<ItemContent>>(
-        txn: &mut Transaction,
-        parent: TypePtr,
-        ptr: BlockPtr,
-        value: V,
-    ) {
-        let content = value.into();
-
-        let pos = ItemPosition {
-            parent,
-            left: Some(ptr),
-            right: None,
-            index: 0,
-        };
-        txn.create_item(&pos, content, None);
+        (None, None)
     }
 
     pub fn push_back<V: Into<ItemContent>>(&self, txn: &mut Transaction, content: V) {
@@ -78,13 +88,43 @@ impl Array {
         self.insert(txn, 0, content)
     }
 
-    pub fn remove(&self, txn: &mut Transaction, index: u32, len: u32) {
+    pub fn remove(&self, txn: &mut Transaction, index: u32, mut len: u32) {
         let ptr = {
             let parent = self.0.borrow();
             parent.start.get()
         };
-        let mut ptr = Self::index_to_ptr(txn, ptr, index);
-        todo!()
+        let (_, mut right) = if index == 0 {
+            (None, ptr)
+        } else {
+            Self::index_to_ptr(txn, ptr, index)
+        };
+        while len > 0 {
+            if let Some(mut ptr) = right {
+                if let Some(item) = txn.store.blocks.get_item(&ptr) {
+                    if !item.is_deleted() {
+                        let item_len = item.len();
+                        let (l, r) = if len < item_len {
+                            ptr.id.clock += len;
+                            len = 0;
+                            txn.store.blocks.split_block(&ptr)
+                        } else {
+                            len -= item_len;
+                            (right, item.right.clone())
+                        };
+                        txn.delete(&l.unwrap());
+                        right = r;
+                    } else {
+                        right = item.right.clone();
+                    }
+                }
+            } else {
+                break;
+            }
+        }
+
+        if len > 0 {
+            panic!("Array length exceeded");
+        }
     }
 
     pub fn get(&self, txn: &Transaction, mut index: u32) -> Option<Any> {
@@ -170,6 +210,48 @@ mod test {
     use std::collections::HashMap;
 
     #[test]
+    fn push_back() {
+        let doc = Doc::with_client_id(1);
+        let mut txn = doc.transact();
+        let a = txn.get_array("array");
+
+        a.push_back(&mut txn, "a");
+        a.push_back(&mut txn, "b");
+        a.push_back(&mut txn, "c");
+
+        let actual: Vec<_> = a.iter(&txn).collect();
+        assert_eq!(actual, vec!["a".into(), "b".into(), "c".into()]);
+    }
+
+    #[test]
+    fn push_front() {
+        let doc = Doc::with_client_id(1);
+        let mut txn = doc.transact();
+        let a = txn.get_array("array");
+
+        a.push_front(&mut txn, "c");
+        a.push_front(&mut txn, "b");
+        a.push_front(&mut txn, "a");
+
+        let actual: Vec<_> = a.iter(&txn).collect();
+        assert_eq!(actual, vec!["a".into(), "b".into(), "c".into()]);
+    }
+
+    #[test]
+    fn insert() {
+        let doc = Doc::with_client_id(1);
+        let mut txn = doc.transact();
+        let a = txn.get_array("array");
+
+        a.insert(&mut txn, 0, "a");
+        a.insert(&mut txn, 1, "c");
+        a.insert(&mut txn, 1, "b");
+
+        let actual: Vec<_> = a.iter(&txn).collect();
+        assert_eq!(actual, vec!["a".into(), "b".into(), "c".into()]);
+    }
+
+    #[test]
     fn basic() {
         let d1 = Doc::with_client_id(1);
         let d2 = Doc::with_client_id(2);
@@ -190,47 +272,47 @@ mod test {
 
     #[test]
     fn len() {
-        let d = Doc::new();
+        let d = Doc::with_client_id(1);
 
         {
             let mut txn = d.transact();
             let a = txn.get_array("array");
 
-            a.push_back(&mut txn, 0);
-            a.push_back(&mut txn, 1);
-            a.push_back(&mut txn, 2);
-            a.push_back(&mut txn, 3);
+            a.push_back(&mut txn, 0); // len: 1
+            a.push_back(&mut txn, 1); // len: 2
+            a.push_back(&mut txn, 2); // len: 3
+            a.push_back(&mut txn, 3); // len: 4
 
-            a.remove(&mut txn, 0, 1);
-            a.insert(&mut txn, 0, 0);
+            a.remove(&mut txn, 0, 1); // len: 3
+            a.insert(&mut txn, 0, 0); // len: 4
 
-            assert_eq!(a.len() as usize, a.iter(&txn).count());
+            assert_eq!(a.len(), 4);
         }
         {
             let mut txn = d.transact();
             let a = txn.get_array("array");
-            a.remove(&mut txn, 1, 1);
-            assert_eq!(a.len() as usize, a.iter(&txn).count());
+            a.remove(&mut txn, 1, 1); // len: 3
+            assert_eq!(a.len(), 3);
 
-            a.insert(&mut txn, 1, 1);
-            assert_eq!(a.len() as usize, a.iter(&txn).count());
+            a.insert(&mut txn, 1, 1); // len: 4
+            assert_eq!(a.len(), 4);
 
-            a.remove(&mut txn, 2, 1);
-            assert_eq!(a.len() as usize, a.iter(&txn).count());
+            a.remove(&mut txn, 2, 1); // len: 3
+            assert_eq!(a.len(), 3);
 
-            a.insert(&mut txn, 2, 2);
-            assert_eq!(a.len() as usize, a.iter(&txn).count());
+            a.insert(&mut txn, 2, 2); // len: 4
+            assert_eq!(a.len(), 4);
         }
 
         let mut txn = d.transact();
         let a = txn.get_array("array");
-        assert_eq!(a.len() as usize, a.iter(&txn).count());
+        assert_eq!(a.len(), 4);
 
         a.remove(&mut txn, 1, 1);
-        assert_eq!(a.len() as usize, a.iter(&txn).count());
+        assert_eq!(a.len(), 3);
 
         a.insert(&mut txn, 1, 1);
-        assert_eq!(a.len() as usize, a.iter(&txn).count());
+        assert_eq!(a.len(), 4);
     }
 
     #[test]

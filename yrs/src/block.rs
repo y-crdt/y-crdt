@@ -757,6 +757,8 @@ impl ItemContent {
                 // @todo this should return the length in utf16!
                 str.len() as u32
             }
+            ItemContent::Any(v) => v.len() as u32,
+            ItemContent::JSON(v) => v.len() as u32,
             _ => 1,
         }
     }
