@@ -1,6 +1,7 @@
 pub mod array;
 pub mod map;
 pub mod text;
+pub mod xml;
 
 use crate::*;
 pub use map::Map;
@@ -12,36 +13,6 @@ use std::cell::Cell;
 use std::collections::HashMap;
 use std::hash::Hasher;
 use std::rc::Rc;
-
-pub struct Array {
-    ptr: types::TypePtr,
-}
-
-pub struct XmlElement {
-    ptr: types::TypePtr,
-}
-
-pub struct XmlFragment {
-    ptr: types::TypePtr,
-}
-
-pub struct XmlHook {
-    ptr: types::TypePtr,
-}
-
-pub struct XmlText {
-    ptr: types::TypePtr,
-}
-
-pub enum SharedType {
-    Text(Text),
-    Array(Array),
-    Map(Map),
-    XmlElement(XmlElement),
-    XmlFragment(XmlFragment),
-    XmlHook(XmlHook),
-    XmlText(XmlText),
-}
 
 pub type TypeRefs = u8;
 

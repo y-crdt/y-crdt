@@ -6,7 +6,10 @@ use crate::event::UpdateEvent;
 use crate::id_set::{DeleteSet, IdSet};
 use crate::store::Store;
 use crate::types::array::Array;
-use crate::types::{Map, Text, TypePtr, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT};
+use crate::types::xml::XmlElement;
+use crate::types::{
+    Map, Text, TypePtr, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT, TYPE_REFS_XML_ELEMENT,
+};
 use crate::update::Update;
 use std::cell::RefMut;
 use std::collections::{HashMap, HashSet};
@@ -54,6 +57,11 @@ impl<'a> Transaction<'a> {
     pub fn get_array(&mut self, name: &str) -> Array {
         let c = self.store.create_type(name, TYPE_REFS_ARRAY);
         Array::new(c)
+    }
+
+    pub fn get_xml_element(&mut self, name: &str) -> XmlElement {
+        let c = self.store.create_type(name, TYPE_REFS_XML_ELEMENT);
+        XmlElement::new(c)
     }
 
     /// Encodes the document state to a binary format.
