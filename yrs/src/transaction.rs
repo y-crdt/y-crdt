@@ -160,9 +160,11 @@ impl<'a> Transaction<'a> {
                                     index as u32,
                                 );
                                 let (_, right) = self.store.blocks.split_block(&split_ptr);
+                                if let Some(right) = right {
+                                    index += 1;
+                                    self.merge_blocks.push(right.id);
+                                }
                                 blocks = self.store.blocks.get_mut(client).unwrap();
-                                index += 1;
-                                self.merge_blocks.push(right.unwrap().id);
                             }
 
                             while index < blocks.len() {
