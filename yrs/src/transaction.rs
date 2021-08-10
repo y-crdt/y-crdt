@@ -174,7 +174,7 @@ impl<'a> Transaction<'a> {
                                         if !item.is_deleted() {
                                             let delete_ptr =
                                                 BlockPtr::new(item.id.clone(), index as u32);
-                                            if item.id.clock + item.content.len() > clock_end {
+                                            if item.id.clock + item.len() > clock_end {
                                                 let diff = clock_end - item.id.clock;
                                                 let mut split_ptr = delete_ptr.clone();
                                                 split_ptr.id.clock += diff;

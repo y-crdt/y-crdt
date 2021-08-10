@@ -43,7 +43,6 @@ impl Store {
                 if let block::ItemContent::Type(c) = &item.content {
                     Some(c)
                 } else {
-                    println!("expected ItemContent::Type but got: {:?}", &item.content);
                     None
                 }
             }

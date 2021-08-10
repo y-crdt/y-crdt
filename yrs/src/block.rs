@@ -228,7 +228,7 @@ impl Block {
 
     pub fn len(&self) -> u32 {
         match self {
-            Block::Item(item) => item.content.len(),
+            Block::Item(item) => item.len(),
             Block::Skip(skip) => skip.len,
             Block::GC(gc) => gc.len,
         }
@@ -236,7 +236,7 @@ impl Block {
 
     pub fn clock_end(&self) -> u32 {
         match self {
-            Block::Item(item) => item.id.clock + item.content.len(),
+            Block::Item(item) => item.id.clock + item.len(),
             Block::Skip(skip) => skip.id.clock + skip.len,
             Block::GC(gc) => gc.id.clock + gc.len,
         }
@@ -1153,7 +1153,7 @@ where
 {
     fn into(self) -> ItemContent {
         match self {
-            None => ItemContent::Any(vec![]),
+            None => ItemContent::Any(vec![Any::Null]),
             Some(value) => value.into(),
         }
     }

@@ -156,27 +156,28 @@ impl ClientBlockList {
     pub fn find_pivot(&self, clock: u32) -> Option<usize> {
         let mut left = 0;
         let mut right = self.list.len() - 1;
-        let mut mid = &self.list[right];
-        let mut mid_clock = mid.id().clock;
-        if mid_clock == clock {
+        let mut block = &self.list[right];
+        let mut current_clock = block.id().clock;
+        if current_clock == clock {
             Some(right)
         } else {
             //todo: does it even make sense to pivot the search?
             // If a good split misses, it might actually increase the time to find the correct item.
             // Currently, the only advantage is that search with pivoting might find the item on the first try.
-            let mut mid_idx = ((clock / (mid_clock + mid.len() - 1)) * right as u32) as usize;
+            let div = (current_clock + block.len() - 1);
+            let mut mid = ((clock / div) * right as u32) as usize;
             while left <= right {
-                mid = &self.list[mid_idx];
-                mid_clock = mid.id().clock;
-                if mid_clock <= clock {
-                    if clock < mid_clock + mid.len() {
-                        return Some(mid_idx);
+                block = &self.list[mid];
+                current_clock = block.id().clock;
+                if current_clock <= clock {
+                    if clock < current_clock + block.len() {
+                        return Some(mid);
                     }
-                    left = mid_idx + 1;
+                    left = mid + 1;
                 } else {
-                    right = mid_idx - 1;
+                    right = mid - 1;
                 }
-                mid_idx = (left + right) / 2;
+                mid = (left + right) / 2;
             }
 
             None

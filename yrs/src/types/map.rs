@@ -295,7 +295,7 @@ mod test {
             m2.get(&t2, &"stuff".to_owned()),
             Some(Any::String("stuffy".to_owned()))
         );
-        assert_eq!(m2.get(&t2, &"null".to_owned()), None);
+        assert_eq!(m2.get(&t2, &"null".to_owned()), Some(Any::Null));
     }
 
     #[test]
