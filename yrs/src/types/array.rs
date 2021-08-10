@@ -72,8 +72,8 @@ impl Array {
                     }
                     return (left, right);
                 }
+                index -= len;
             }
-            index -= len;
             ptr = item.right.clone();
         }
         (None, None)
@@ -89,32 +89,32 @@ impl Array {
     }
 
     pub fn remove(&self, txn: &mut Transaction, index: u32, mut len: u32) {
-        let ptr = {
+        let start = {
             let parent = self.0.borrow();
             parent.start.get()
         };
-        let (_, mut right) = if index == 0 {
-            (None, ptr)
+        let (_, mut ptr) = if index == 0 {
+            (None, start)
         } else {
-            Self::index_to_ptr(txn, ptr, index)
+            Self::index_to_ptr(txn, start, index)
         };
         while len > 0 {
-            if let Some(mut ptr) = right {
-                if let Some(item) = txn.store.blocks.get_item(&ptr) {
+            if let Some(mut p) = ptr {
+                if let Some(item) = txn.store.blocks.get_item(&p) {
                     if !item.is_deleted() {
                         let item_len = item.len();
                         let (l, r) = if len < item_len {
-                            ptr.id.clock += len;
+                            p.id.clock += len;
                             len = 0;
-                            txn.store.blocks.split_block(&ptr)
+                            txn.store.blocks.split_block(&p)
                         } else {
                             len -= item_len;
-                            (right, item.right.clone())
+                            (ptr, item.right.clone())
                         };
                         txn.delete(&l.unwrap());
-                        right = r;
+                        ptr = r;
                     } else {
-                        right = item.right.clone();
+                        ptr = item.right.clone();
                     }
                 }
             } else {
@@ -409,6 +409,7 @@ mod test {
         exchange_updates(&[&d1, &d2, &d3]);
 
         {
+            // start state: [x,y,z]
             let mut t1 = d1.transact();
             let mut t2 = d2.transact();
             let mut t3 = d3.transact();
@@ -416,13 +417,14 @@ mod test {
             let a2 = t2.get_array("array");
             let a3 = t3.get_array("array");
 
-            a1.insert(&mut t1, 1, 0);
-            a2.remove(&mut t2, 0, 1);
-            a2.remove(&mut t2, 1, 1);
-            a3.insert(&mut t3, 1, 2);
+            a1.insert(&mut t1, 1, 0); // [x,0,y,z]
+            a2.remove(&mut t2, 0, 1); // [y,z]
+            a2.remove(&mut t2, 1, 1); // [y]
+            a3.insert(&mut t3, 1, 2); // [x,2,y,z]
         }
 
         exchange_updates(&[&d1, &d2, &d3]);
+        // after exchange expected: [0,2,y]
 
         let a1 = to_array(&d1);
         let a2 = to_array(&d2);
