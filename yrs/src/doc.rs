@@ -47,9 +47,8 @@ impl Doc {
         encoder.to_vec()
     }
 
-    pub fn get_type(&self, _txn: &Transaction, string: &str) -> types::Text {
-        let ptr = types::TypePtr::Named(string.to_owned());
-        types::Text::from(ptr)
+    pub fn get_text(&self, txn: &mut Transaction, string: &str) -> types::Text {
+        txn.get_text(string)
     }
     /// Creates a transaction. Transaction cleanups & calling event handles
     /// happen when the transaction struct is dropped.
@@ -119,7 +118,7 @@ mod test {
         let mut tr = doc.transact();
         doc.apply_update(&mut tr, update);
 
-        let actual = doc.get_type(&tr, "type").to_string(&tr);
+        let actual = doc.get_text(&mut tr, "type").to_string(&tr);
         assert_eq!(actual, "210".to_owned());
     }
 

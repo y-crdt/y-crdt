@@ -2,15 +2,18 @@ use crate::block::{
     Block, BlockPtr, Item, ItemContent, Skip, BLOCK_GC_REF_NUMBER, BLOCK_SKIP_REF_NUMBER, GC,
     HAS_ORIGIN, HAS_PARENT_SUB, HAS_RIGHT_ORIGIN,
 };
+#[cfg(test)]
 use crate::store::Store;
 use crate::types::TypePtr;
 use crate::updates::decoder::{Decode, Decoder};
-use crate::updates::encoder::{Encoder, EncoderV1};
+use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::client_hasher::ClientHasher;
 use crate::{StateVector, Transaction, ID};
+use std::cell::Cell;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, VecDeque};
 use std::hash::BuildHasherDefault;
+use std::rc::Rc;
 
 type ClientBlocks = HashMap<u64, VecDeque<Block>, BuildHasherDefault<ClientHasher>>;
 
@@ -21,7 +24,7 @@ pub struct Update {
 
 impl Update {
     pub fn state_vector(&self) -> StateVector {
-        let mut sv = StateVector::empty();
+        let mut sv = StateVector::default();
         for (&client, blocks) in self.clients.iter() {
             let last_id = blocks[blocks.len() - 1].last_id();
             sv.set_max(client, last_id.clock + 1);
@@ -113,7 +116,7 @@ impl Update {
         let mut stack_head = Self::next(&mut current_target);
 
         let mut local_sv = txn.store.blocks.get_state_vector();
-        let mut missing_sv = StateVector::empty();
+        let mut missing_sv = StateVector::default();
         let mut remaining = ClientBlocks::default();
         let mut stack = Vec::new();
 
@@ -139,9 +142,19 @@ impl Update {
                     let client = id.client;
                     local_sv.set_max(client, id.clock + block.len());
                     block.as_item_mut().map(|item| item.repair(txn));
-                    block.integrate(txn, offset, offset);
+                    let should_delete = block.integrate(txn, offset, offset);
+                    let delete_ptr = if should_delete {
+                        Some(BlockPtr::new(block.id().clone(), offset))
+                    } else {
+                        None
+                    };
+
                     let blocks = txn.store.blocks.get_client_blocks_mut(client);
                     blocks.push(block);
+
+                    if let Some(ptr) = delete_ptr {
+                        txn.delete(&ptr);
+                    }
                 }
             } else {
                 // update from the same client is missing
@@ -277,7 +290,7 @@ impl Update {
                 };
                 let parent = if cant_copy_parent_info {
                     if decoder.read_parent_info() {
-                        TypePtr::Named(decoder.read_string().to_owned())
+                        TypePtr::Named(Rc::new(decoder.read_string().to_owned()))
                     } else {
                         TypePtr::Id(BlockPtr::from(decoder.read_left_id()))
                     }
@@ -300,17 +313,16 @@ impl Update {
                     None
                 };
                 let content = ItemContent::decode(decoder, info, BlockPtr::from(id.clone()));
-                let item: Item = Item {
+                let item = Item::new(
                     id,
-                    left: None,
-                    right: None,
+                    None,
                     origin,
+                    None,
                     right_origin,
-                    content,
                     parent,
                     parent_sub,
-                    deleted: false,
-                };
+                    content,
+                );
                 Block::Item(item)
             }
         }
@@ -318,11 +330,7 @@ impl Update {
 
     pub(crate) fn encode_diff<E: Encoder>(&self, remote_sv: &StateVector, encoder: &mut E) {
         let mut clients = HashMap::new();
-        // Write higher clients first ⇒ sort by clientID & clock and remove decoders without content
-        let mut sorted_clients: Vec<_> =
-            self.clients.iter().filter(|(_, q)| !q.is_empty()).collect();
-        sorted_clients.sort_by(|&(x_id, _), &(y_id, _)| y_id.cmp(x_id));
-        for (client, blocks) in sorted_clients {
+        for (client, blocks) in self.clients.iter() {
             let remote_clock = remote_sv.get(client);
             let mut iter = blocks.iter();
             let mut curr = iter.next();
@@ -345,20 +353,31 @@ impl Update {
             }
         }
 
+        // Write higher clients first ⇒ sort by clientID & clock and remove decoders without content
+        let mut sorted_clients: Vec<_> =
+            clients.iter().filter(|(_, (_, q))| !q.is_empty()).collect();
+        sorted_clients.sort_by(|&(x_id, _), &(y_id, _)| y_id.cmp(x_id));
+
         // finish lazy struct writing
-        encoder.write_uvar(clients.len());
-        for (client, (offset, blocks)) in clients {
+        encoder.write_uvar(sorted_clients.len());
+        for (&client, (offset, blocks)) in sorted_clients {
             encoder.write_uvar(blocks.len());
             encoder.write_uvar(client);
 
             let mut block = blocks[0];
             encoder.write_uvar(block.id().clock + offset);
-            block.encode_with_offset(encoder, offset);
+            block.encode_with_offset(encoder, *offset);
             for i in 1..blocks.len() {
                 block = blocks[i];
                 block.encode_with_offset(encoder, 0);
             }
         }
+    }
+}
+
+impl Encode for Update {
+    fn encode<E: Encoder>(&self, encoder: &mut E) {
+        self.encode_diff(&StateVector::default(), encoder);
     }
 }
 
@@ -395,8 +414,9 @@ pub struct PendingUpdate {
 }
 
 impl PendingUpdate {
-    fn merge(&mut self, _other: &Self) {
-        todo!()
+    fn merge(&mut self, other: Self) {
+        self.update.merge(other.update);
+        self.missing.merge(other.missing);
     }
 }
 
@@ -476,6 +496,8 @@ mod test {
     use crate::updates::decoder::{Decode, DecoderV1};
     use crate::{Doc, ID};
     use lib0::decoding::Cursor;
+    use std::cell::Cell;
+    use std::rc::Rc;
 
     #[test]
     fn update_decode() {
@@ -502,17 +524,16 @@ mod test {
         let id = ID::new(2026372272, 0);
         let block = u.clients.get(&id.client).unwrap();
         let mut expected = Vec::new();
-        expected.push(Block::Item(Item {
+        expected.push(Block::Item(Item::new(
             id,
-            left: None,
-            right: None,
-            origin: None,
-            right_origin: None,
-            content: ItemContent::Any(vec!["valueB".into()]),
-            parent: TypePtr::Named("".to_owned()),
-            parent_sub: Some("keyB".to_owned()),
-            deleted: false,
-        }));
+            None,
+            None,
+            None,
+            None,
+            TypePtr::Named(Rc::new("".to_owned())),
+            Some("keyB".to_owned()),
+            ItemContent::Any(vec!["valueB".into()]),
+        )));
         assert_eq!(block, &expected);
     }
 

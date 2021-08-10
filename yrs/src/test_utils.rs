@@ -1,5 +1,3 @@
-use crate::id_set::DeleteSet;
-use crate::update::Update;
 use crate::updates::decoder::{Decode, Decoder, DecoderV1};
 use crate::updates::encoder::{Encode, Encoder, EncoderV1};
 use crate::{Doc, StateVector};
@@ -9,7 +7,9 @@ use rand::prelude::SliceRandom;
 use rand::rngs::ThreadRng;
 use rand::seq::IteratorRandom;
 use rand::{thread_rng, Rng};
+use std::cell::{Ref, RefCell, RefMut};
 use std::collections::{HashMap, VecDeque};
+use std::rc::Rc;
 
 const MSG_SYNC_STEP_1: usize = 0;
 const MSG_SYNC_STEP_2: usize = 1;
@@ -21,32 +21,36 @@ where
 {
     let mut tc = TestConnector::with_peer_num(thread_rng(), users as u64);
     for i in 0..iterations {
-        if tc.rng.gen_range(0, 100) <= 2 {
+        if tc.0.borrow_mut().rng.gen_range(0, 100) <= 2 {
             // 2% chance to disconnect/reconnect a random user
-            if tc.rng.gen_bool(0.5) {
+            if tc.0.borrow_mut().rng.gen_bool(0.5) {
                 tc.disconnect_random();
             } else {
                 tc.reconnect_random();
             }
-        } else if tc.rng.gen_range(0, 100) <= 1 {
+        } else if tc.0.borrow_mut().rng.gen_range(0, 100) <= 1 {
             // 1% chance to flush all
             tc.flush_all();
-        } else if tc.rng.gen_range(0, 100) <= 50 {
+        } else if tc.0.borrow_mut().rng.gen_range(0, 100) <= 50 {
             tc.flush_random();
         }
-        let test = mods.choose(tc.rng()).unwrap();
-        let peer = {
-            let idx = tc.rng.gen_range(0, tc.peers.len());
-            &mut tc.peers[idx]
-        };
 
-        test(&mut peer.doc, &mut tc.rng);
+        {
+            let inner = &mut *tc.0.borrow_mut();
+            let rng = &mut inner.rng;
+            let idx = rng.gen_range(0, inner.peers.len());
+            let peer = &mut inner.peers[idx];
+            let test = mods.choose(rng).unwrap();
+            test(&mut peer.doc, rng);
+        };
     }
 
     tc.assert_final_state();
 }
 
-pub struct TestConnector {
+pub struct TestConnector(Rc<RefCell<Inner>>);
+
+struct Inner {
     rng: ThreadRng,
     peers: Vec<TestPeer>,
     /// Maps all Client IDs to indexes in the `docs` vector.
@@ -63,12 +67,12 @@ impl TestConnector {
 
     /// Create new [TestConnector] with provided randomizer.
     pub fn with_rng(rng: ThreadRng) -> Self {
-        TestConnector {
+        TestConnector(Rc::new(RefCell::new(Inner {
             rng,
             peers: Vec::new(),
             all: HashMap::new(),
             online: HashMap::new(),
-        }
+        })))
     }
 
     /// Create a new [TestConnector] with pre-initialized number of peers.
@@ -78,74 +82,147 @@ impl TestConnector {
             let peer = tc.create_peer(client_id);
             let mut txn = peer.doc.transact();
             txn.get_text("text");
+            txn.get_map("map");
         }
         tc.sync_all();
         tc
     }
 
     /// Returns random number generator attached to current [TestConnector].
-    pub fn rng(&mut self) -> &mut ThreadRng {
-        &mut self.rng
+    pub fn rng(&self) -> RefMut<ThreadRng> {
+        let inner = self.0.borrow_mut();
+        RefMut::map(inner, |i| &mut i.rng)
     }
 
     /// Create a new [TestPeer] with provided `client_id` or return one, if such `client_id`
     /// was already created before.
-    pub fn create_peer(&mut self, client_id: u64) -> &mut TestPeer {
-        if !self.all.contains_key(&client_id) {
-            let instance = TestPeer::new(client_id);
-            let idx = self.peers.len();
-            self.peers.push(instance);
-            self.all.insert(client_id, idx);
-            self.online.insert(client_id, idx);
-            &mut self.peers[idx]
+    pub fn create_peer(&self, client_id: u64) -> &mut TestPeer {
+        if let Some(peer) = self.get_mut(&client_id) {
+            peer
         } else {
-            self.get_mut(&client_id).unwrap()
+            let rc = self.0.clone();
+            let inner = unsafe { self.0.as_ptr().as_mut().unwrap() };
+            let mut instance = TestPeer::new(client_id);
+            instance.doc.on_update(move |e| {
+                let payload = {
+                    let mut encoder = EncoderV1::new();
+                    encoder.write_uvar(MSG_SYNC_UPDATE);
+                    e.update.encode(&mut encoder);
+                    e.delete_set.encode(&mut encoder);
+                    encoder.to_vec()
+                };
+                let mut inner = rc.borrow_mut();
+                Self::broadcast(&mut inner, client_id, &payload);
+            });
+            let idx = inner.peers.len();
+            inner.peers.push(instance);
+            inner.all.insert(client_id, idx);
+            inner.online.insert(client_id, idx);
+            &mut inner.peers[idx]
+        }
+    }
+
+    fn broadcast(inner: &mut RefMut<Inner>, sender: u64, payload: &Vec<u8>) {
+        let online: Vec<_> = inner
+            .online
+            .iter()
+            .filter_map(|(&id, &idx)| if id != sender { Some(idx) } else { None })
+            .collect();
+        for idx in online {
+            let peer = &mut inner.peers[idx];
+            peer.receive(sender, payload.clone());
         }
     }
 
     /// Try to retrieve a reference to [TestPeer] for a given `client_id`, if such node was created.
     pub fn get(&self, client_id: &u64) -> Option<&TestPeer> {
-        let idx = self.all.get(client_id)?;
-        Some(&self.peers[*idx])
+        let inner = unsafe { self.0.as_ptr().as_ref().unwrap() };
+        let idx = inner.all.get(client_id)?;
+        Some(&inner.peers[*idx])
     }
 
     /// Try to retrieve a mutable reference to [TestPeer] for a given `client_id`,
     /// if such node was created.
-    pub fn get_mut(&mut self, client_id: &u64) -> Option<&mut TestPeer> {
-        let idx = self.all.get(client_id)?;
-        Some(&mut self.peers[*idx])
+    pub fn get_mut(&self, client_id: &u64) -> Option<&mut TestPeer> {
+        let inner = self.0.borrow_mut();
+        let idx = *inner.all.get(client_id)?;
+        unsafe {
+            let peers = inner.peers.as_ptr() as *mut TestPeer;
+            let peer = peers.offset(idx as isize);
+            peer.as_mut()
+        }
     }
 
     /// Disconnects test node with given `client_id` from the rest of known nodes.
-    pub fn disconnect(&mut self, client_id: u64) {
+    pub fn disconnect(&self, client_id: u64) {
         if let Some(peer) = self.get_mut(&client_id) {
             peer.receiving.clear();
         }
-        self.online.remove(&client_id);
+        let mut inner = self.0.borrow_mut();
+        inner.online.remove(&client_id);
     }
 
     /// Append `client_id` to the list of known Y instances in [TestConnector].
     /// Also initiate sync with all clients.
-    pub fn connect(&mut self, client_id: u64) {
-        if !self.online.contains_key(&client_id) {
-            let idx = *self.all.get(&client_id).expect("unknown client_id");
-            self.online.insert(client_id, idx);
+    pub fn connect(&self, client_id: u64) {
+        let mut inner = self.0.borrow_mut();
+        Self::connect_inner(&mut inner, client_id);
+    }
+
+    fn connect_inner(inner: &mut RefMut<Inner>, client_id: u64) {
+        if !inner.online.contains_key(&client_id) {
+            let idx = *inner.all.get(&client_id).expect("unknown client_id");
+            inner.online.insert(client_id, idx);
+        }
+
+        let client_idx = *inner.all.get(&client_id).unwrap();
+        let payload = {
+            let sender = &mut inner.peers[client_idx];
+            let mut encoder = EncoderV1::new();
+            Self::write_step1(sender, &mut encoder);
+            encoder.to_vec()
+        };
+        Self::broadcast(inner, client_id, &payload);
+
+        let online: Vec<_> = inner
+            .online
+            .iter()
+            .filter_map(|(&id, &idx)| {
+                if id != client_id {
+                    Some((id, idx))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        for (remote_id, idx) in online {
+            let payload = {
+                let peer = &inner.peers[idx];
+                let mut encoder = EncoderV1::new();
+                Self::write_step1(peer, &mut encoder);
+                encoder.to_vec()
+            };
+
+            let sender = &mut inner.peers[client_idx];
+            sender.receive(remote_id, payload);
         }
     }
 
     /// Reconnects back all known peers.
     pub fn reconnect_all(&mut self) {
-        let all_ids: Vec<_> = self.all.keys().cloned().collect();
-        for id in all_ids {
-            self.connect(id);
+        let mut inner = self.0.borrow_mut();
+        let all_ids: Vec<_> = inner.all.keys().cloned().collect();
+        for client_id in all_ids {
+            Self::connect_inner(&mut inner, client_id);
         }
     }
 
     /// Disconnects all known peers from each other.
     pub fn disconnect_all(&mut self) {
-        let all_ids: Vec<_> = self.all.keys().cloned().collect();
-        for id in all_ids {
-            self.connect(id);
+        let mut inner = self.0.borrow_mut();
+        let all_ids: Vec<_> = inner.all.keys().cloned().collect();
+        for client_id in all_ids {
+            Self::connect_inner(&mut inner, client_id);
         }
     }
 
@@ -156,7 +233,7 @@ impl TestConnector {
     }
 
     /// Processes all pending messages of connected peers in random order.
-    pub fn flush_all(&mut self) -> bool {
+    pub fn flush_all(&self) -> bool {
         let mut did_something = false;
         while self.flush_random() {
             did_something = true;
@@ -167,8 +244,13 @@ impl TestConnector {
     /// Choose random connection and flush a random message from a random sender.
     /// If this function was unable to flush a message, because there are no more messages to flush,
     /// it returns false. true otherwise.
-    pub fn flush_random(&mut self) -> bool {
-        if let Some((receiver, sender)) = self.pick_random_pair() {
+    pub fn flush_random(&self) -> bool {
+        let mut inner = self.0.borrow_mut();
+        Self::flush_random_inner(&mut inner)
+    }
+
+    fn flush_random_inner(inner: &mut RefMut<Inner>) -> bool {
+        if let Some((receiver, sender)) = Self::pick_random_pair(inner) {
             if let Some(m) = receiver
                 .receiving
                 .get_mut(&sender.client_id())
@@ -194,15 +276,17 @@ impl TestConnector {
                 true
             } else {
                 receiver.receiving.remove(&sender.client_id());
-                self.flush_random()
+                Self::flush_random_inner(inner)
             }
         } else {
             false
         }
     }
 
-    fn pick_random_pair(&mut self) -> Option<(&mut TestPeer, &mut TestPeer)> {
-        let pairs: Vec<_> = self
+    fn pick_random_pair<'a>(
+        inner: &'a mut RefMut<Inner>,
+    ) -> Option<(&'a mut TestPeer, &'a mut TestPeer)> {
+        let pairs: Vec<_> = inner
             .peers
             .iter()
             .enumerate()
@@ -212,14 +296,14 @@ impl TestConnector {
                 } else {
                     conn.receiving
                         .keys()
-                        .map(|id| (receiver_idx, *self.all.get(id).unwrap()))
+                        .map(|id| (receiver_idx, *inner.all.get(id).unwrap()))
                         .collect()
                 }
             })
             .collect();
-        let (receiver_idx, sender_idx) = pairs.choose(&mut self.rng)?;
+        let (receiver_idx, sender_idx) = pairs.choose(&mut inner.rng)?;
         unsafe {
-            let ptr = self.peers.as_mut_ptr();
+            let ptr = inner.peers.as_ptr() as *mut TestPeer;
             let receiver = ptr.offset(*receiver_idx as isize);
             let sender = ptr.offset(*sender_idx as isize);
             Some((receiver.as_mut().unwrap(), sender.as_mut().unwrap()))
@@ -227,8 +311,14 @@ impl TestConnector {
     }
 
     /// Disconnects one peer at random.
-    pub fn disconnect_random(&mut self) -> bool {
-        if let Some(id) = self.online.keys().choose(&mut self.rng).cloned() {
+    pub fn disconnect_random(&self) -> bool {
+        let id = {
+            let mut inner = self.0.borrow_mut();
+            let keys: Vec<_> = inner.online.keys().cloned().collect();
+            let rng = &mut inner.rng;
+            keys.choose(rng).cloned()
+        };
+        if let Some(id) = id {
             self.disconnect(id);
             true
         } else {
@@ -237,15 +327,16 @@ impl TestConnector {
     }
 
     /// Reconnects one previously disconnected peer at random.
-    pub fn reconnect_random(&mut self) -> bool {
-        let reconnectable: Vec<_> = self
+    pub fn reconnect_random(&self) -> bool {
+        let mut inner = self.0.borrow_mut();
+        let reconnectable: Vec<_> = inner
             .all
             .keys()
-            .filter(|&id| !self.online.contains_key(id))
+            .filter(|&id| !inner.online.contains_key(id))
             .cloned()
             .collect();
-        if let Some(&id) = reconnectable.choose(&mut self.rng) {
-            self.connect(id);
+        if let Some(&id) = reconnectable.choose(&mut inner.rng) {
+            Self::connect_inner(&mut inner, id);
             true
         } else {
             false
@@ -261,7 +352,7 @@ impl TestConnector {
         match msg_type {
             MSG_SYNC_STEP_1 => Self::read_sync_step1(peer, decoder, encoder),
             MSG_SYNC_STEP_2 => Self::read_sync_step2(peer, decoder),
-            MSG_UPDATE => Self::read_update(peer, decoder),
+            MSG_SYNC_UPDATE => Self::read_update(peer, decoder),
             other => panic!(
                 "Unknown message type: {} to {}",
                 other,
@@ -315,14 +406,31 @@ impl TestConnector {
         })
         users.push(.../** @type {any} */(mergedDocs))
         */
-        for i in 0..(self.peers.len() - 1) {
-            let a = self.peers[i].doc.transact();
-            let b = self.peers[i + 1].doc.transact();
+        let inner = self.0.borrow();
+        for i in 0..(inner.peers.len() - 1) {
+            let a = inner.peers[i].doc.transact();
+            let b = inner.peers[i + 1].doc.transact();
 
             assert_eq!(a.store.blocks, b.store.blocks);
             assert_eq!(a.store.pending, b.store.pending);
             assert_eq!(a.store.pending_ds, b.store.pending_ds);
         }
+    }
+
+    pub fn peers(&self) -> Peers {
+        let inner = unsafe { self.0.as_ptr().as_ref().unwrap() };
+        let iter = inner.peers.iter();
+        Peers(iter)
+    }
+}
+
+pub struct Peers<'a>(std::slice::Iter<'a, TestPeer>);
+
+impl<'a> Iterator for Peers<'a> {
+    type Item = &'a TestPeer;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.0.next()
     }
 }
 

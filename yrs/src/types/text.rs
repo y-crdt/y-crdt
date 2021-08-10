@@ -1,42 +1,52 @@
-use crate::block::BlockPtr;
+use crate::block::{BlockPtr, ItemContent};
 use crate::transaction::Transaction;
+use crate::types::Inner;
 use crate::*;
+use std::cell::RefCell;
+use std::rc::Rc;
 
-pub struct Text {
-    ptr: types::TypePtr,
-}
+pub struct Text(Rc<RefCell<Inner>>);
 
 impl Text {
-    pub fn from(ptr: types::TypePtr) -> Self {
-        Text { ptr }
-    }
-    #[allow(clippy::inherent_to_string)]
-    pub fn to_string(&self, tr: &Transaction) -> String {
-        tr.store
-            .get_type(&self.ptr)
-            .and_then(|inner| {
-                let mut start = inner.start.get();
-                let mut s = String::new();
-                while let Some(a) = start.as_ref() {
-                    if let Some(item) = tr.store.blocks.get_item(&a) {
-                        if !item.deleted {
-                            if let block::ItemContent::String(item_string) = &item.content {
-                                s.push_str(item_string);
-                            }
-                        }
-                        start = item.right.clone();
-                    } else {
-                        break;
-                    }
-                }
-                Some(s)
-            })
-            .unwrap_or_default()
+    pub fn new(inner: Rc<RefCell<Inner>>) -> Self {
+        Text(inner)
     }
 
-    fn find_position(&self, txn: &mut Transaction, mut count: u32) -> Option<block::ItemPosition> {
+    #[allow(clippy::inherent_to_string)]
+    pub fn to_string(&self, txn: &Transaction<'_>) -> String {
+        let inner = self.0.borrow();
+        Self::to_string_inner(&*inner, txn)
+    }
+
+    pub fn len(&self) -> u32 {
+        self.0.borrow().len()
+    }
+
+    pub(crate) fn to_string_inner(inner: &Inner, txn: &Transaction<'_>) -> String {
+        let mut start = inner.start.get();
+        let mut s = String::new();
+        while let Some(a) = start.as_ref() {
+            if let Some(item) = txn.store.blocks.get_item(&a) {
+                if !item.is_deleted() {
+                    if let block::ItemContent::String(item_string) = &item.content {
+                        s.push_str(item_string);
+                    }
+                }
+                start = item.right.clone();
+            } else {
+                break;
+            }
+        }
+        s
+    }
+
+    fn find_position(
+        &self,
+        txn: &mut Transaction<'_>,
+        mut count: u32,
+    ) -> Option<block::ItemPosition> {
         let mut pos = {
-            let inner = txn.store.get_type(&self.ptr)?;
+            let inner = self.0.borrow();
             block::ItemPosition {
                 parent: inner.ptr.clone(),
                 left: None,
@@ -51,7 +61,7 @@ impl Text {
             }
 
             if let Some(mut right) = txn.store.blocks.get_item(right_ptr) {
-                if !right.deleted {
+                if !right.is_deleted() {
                     let mut right_len = right.len();
                     if count < right_len {
                         // split right item
@@ -78,7 +88,7 @@ impl Text {
 
     pub fn insert(&self, tr: &mut Transaction, index: u32, content: &str) {
         if let Some(pos) = self.find_position(tr, index) {
-            tr.create_item(&pos, block::ItemContent::String(content.to_owned()));
+            tr.create_item(&pos, block::ItemContent::String(content.to_owned()), None);
         } else {
             panic!("The type or the position doesn't exist!");
         }
@@ -97,7 +107,9 @@ impl Text {
                         .and_then(|item| item.right.as_ref())
                         .and_then(|ptr| txn.store.blocks.get_item(ptr)),
                     None => {
-                        let ptr = txn.store.get_type(&pos.parent).unwrap().start.get();
+                        let t = txn.store.get_type(&pos.parent).unwrap();
+                        let inner = t.borrow();
+                        let ptr = inner.start.get();
                         let item = ptr.as_ref().and_then(|ptr| txn.store.blocks.get_item(ptr));
                         item
                     }
@@ -107,7 +119,7 @@ impl Text {
                 if len == 0 {
                     break;
                 }
-                if !item.deleted {
+                if !item.is_deleted() {
                     if len < item.len() {
                         // split item
                         let mut split_ptr = BlockPtr::from(item.id);
@@ -134,6 +146,12 @@ impl Text {
         } else {
             panic!("The type or the position doesn't exist!");
         }
+    }
+}
+
+impl Into<ItemContent> for Text {
+    fn into(self) -> ItemContent {
+        ItemContent::Type(self.0.clone())
     }
 }
 

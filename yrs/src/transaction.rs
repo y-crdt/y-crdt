@@ -1,15 +1,14 @@
 use crate::*;
 
-use crate::block::{Block, BlockPtr, ItemContent, ID};
+use crate::block::{Block, BlockPtr, Item, ItemContent, ID};
 use crate::block_store::StateVector;
 use crate::event::UpdateEvent;
 use crate::id_set::{DeleteSet, IdSet};
 use crate::store::Store;
-use crate::types::{Text, TypePtr, XorHasher};
+use crate::types::{Map, Text, TypePtr, TYPE_REFS_MAP, TYPE_REFS_TEXT};
 use crate::update::Update;
-use std::cell::RefMut;
+use std::cell::{Cell, RefCell, RefMut};
 use std::collections::{HashMap, HashSet};
-use std::hash::BuildHasherDefault;
 use std::ops::Range;
 use updates::encoder::*;
 
@@ -17,14 +16,15 @@ pub struct Transaction<'a> {
     /// Store containing the state of the document.
     pub store: RefMut<'a, Store>,
     /// State vector of a current transaction.
-    pub timestamp: StateVector,
+    pub before_state: StateVector,
     /// ID's of the blocks to be merged.
     pub merge_blocks: Vec<ID>,
     /// Describes the set of deleted items by ids.
     pub delete_set: DeleteSet,
     /// All types that were directly modified (property added or child inserted/deleted).
     /// New types are not included in this Set.
-    changed: HashMap<TypePtr, HashSet<Option<String>>, BuildHasherDefault<XorHasher>>,
+    changed: HashMap<TypePtr, HashSet<Option<String>>>,
+    after_state: StateVector,
 }
 
 impl<'a> Transaction<'a> {
@@ -32,16 +32,22 @@ impl<'a> Transaction<'a> {
         let begin_timestamp = store.blocks.get_state_vector();
         Transaction {
             store,
-            timestamp: begin_timestamp,
+            before_state: begin_timestamp,
             merge_blocks: Vec::new(),
             delete_set: DeleteSet::new(),
-            changed: HashMap::with_hasher(BuildHasherDefault::default()),
+            changed: HashMap::new(),
+            after_state: StateVector::default(),
         }
     }
 
     pub fn get_text(&mut self, name: &str) -> Text {
-        let ptr = self.store.create_type_ptr(name);
-        Text::from(ptr)
+        let c = self.store.create_type(name, TYPE_REFS_TEXT);
+        Text::new(c)
+    }
+
+    pub fn get_map(&mut self, name: &str) -> Map {
+        let c = self.store.create_type(name, TYPE_REFS_MAP);
+        Map::new(c)
     }
 
     /// Encodes the document state to a binary format.
@@ -54,7 +60,8 @@ impl<'a> Transaction<'a> {
     ///   is extracted and integrated into the document structure.
     pub fn encode_update(&self) -> Vec<u8> {
         let mut update_encoder = updates::encoder::EncoderV1::new();
-        self.store.encode_diff(&self.timestamp, &mut update_encoder);
+        self.store
+            .encode_diff(&self.before_state, &mut update_encoder);
         update_encoder.to_vec()
     }
 
@@ -141,7 +148,7 @@ impl<'a> Transaction<'a> {
                         // We can ignore the case of GC and Delete structs, because we are going to skip them
                         if let Some(item) = blocks[index].as_item_mut() {
                             // split the first item if necessary
-                            if !item.deleted && item.id.clock < clock {
+                            if !item.is_deleted() && item.id.clock < clock {
                                 let split_ptr = BlockPtr::new(
                                     ID::new(*client, clock - item.id.clock),
                                     index as u32,
@@ -156,7 +163,7 @@ impl<'a> Transaction<'a> {
                                 let block = &mut blocks[index];
                                 if let Some(item) = block.as_item_mut() {
                                     if item.id.clock < clock_end {
-                                        if !item.deleted {
+                                        if !item.is_deleted() {
                                             let delete_ptr =
                                                 BlockPtr::new(item.id.clone(), index as u32);
                                             if item.id.clock + item.content.len() > clock_end {
@@ -195,35 +202,71 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    fn delete(&mut self, ptr: &BlockPtr) {
-        if let Some(item) = self.store.blocks.get_item_mut(&ptr) {
-            if !item.deleted {
-                //TODO:
-                // if let Some(parent) = self.store.get_type(&item.parent) {
-                //     // adjust the length of parent
-                //     if (this.countable && this.parentSub === null) {
-                //         parent._length -= this.length
-                //     }
-                // }
+    /// Delete item under given pointer.
+    /// Returns true if block was successfully deleted, false if it was already deleted in the past.
+    pub(crate) fn delete(&mut self, ptr: &BlockPtr) -> bool {
+        let mut recurse = Vec::new();
+        let mut result = false;
+
+        if let Some(item) = self.store.blocks.get_item(&ptr) {
+            if !item.is_deleted() {
+                if item.parent_sub.is_none() && item.is_countable() {
+                    if let Some(parent) = self.store.get_type(&item.parent) {
+                        let mut inner = parent.borrow_mut();
+                        inner.len -= item.len();
+                    }
+                }
+
                 item.mark_as_deleted();
                 self.delete_set.insert(item.id.clone(), item.len());
                 // addChangedTypeToTransaction(transaction, item.type, item.parentSub)
-                if item.id.clock < self.timestamp.get(&item.id.client) {
+                if item.id.clock < self.before_state.get(&item.id.client) {
                     let set = self.changed.entry(item.parent.clone()).or_default();
                     set.insert(item.parent_sub.clone());
                 }
-                // item.content.delete(transaction)
-                match &mut item.content {
-                    ItemContent::Doc(_s, _value) => {
+
+                match &item.content {
+                    ItemContent::Doc(_, _) => {
+                        //if (transaction.subdocsAdded.has(this.doc)) {
+                        //    transaction.subdocsAdded.delete(this.doc)
+                        //} else {
+                        //    transaction.subdocsRemoved.add(this.doc)
+                        //}
                         todo!()
                     }
-                    ItemContent::Type(_inner) => {
-                        todo!()
+                    ItemContent::Type(t) => {
+                        let inner = t.borrow_mut();
+                        let mut ptr = inner.start.get();
+                        self.changed.remove(&item.parent);
+
+                        while let Some(item) = ptr.and_then(|ptr| self.store.blocks.get_item(&ptr))
+                        {
+                            if !item.is_deleted() {
+                                recurse.push(ptr.unwrap());
+                            }
+
+                            ptr = item.right.clone();
+                        }
+
+                        for ptr in inner.map.values() {
+                            recurse.push(ptr.clone());
+                        }
                     }
-                    _ => {} // do nothing
+                    _ => {
+                        // nothing to do for other content types
+                    }
                 }
+                result = true;
             }
         }
+
+        for ptr in recurse.iter() {
+            if !self.delete(ptr) {
+                self.merge_blocks.push(ptr.id);
+            }
+        }
+
+        result
     }
 
     pub fn apply_update(&mut self, mut update: Update, mut ds: DeleteSet) {
@@ -281,7 +324,12 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    pub fn create_item(&mut self, pos: &block::ItemPosition, content: block::ItemContent) {
+    pub fn create_item(
+        &mut self,
+        pos: &block::ItemPosition,
+        content: block::ItemContent,
+        parent_sub: Option<String>,
+    ) {
         let left = pos.left;
         let right = pos.right;
         let origin = if let Some(ptr) = pos.left.as_ref() {
@@ -304,19 +352,122 @@ impl<'a> Transaction<'a> {
             .get_client_blocks_mut(client_id)
             .integrated_len() as u32;
 
-        let mut item = block::Item {
+        let mut item = Item::new(
             id,
-            content,
             left,
-            right,
             origin,
-            right_origin: right.map(|r| r.id),
-            parent: pos.parent.clone(),
-            deleted: false,
-            parent_sub: None,
-        };
+            right,
+            right.map(|r| r.id),
+            pos.parent.clone(),
+            parent_sub,
+            content,
+        );
         item.integrate(self, pivot, 0);
         let local_block_list = self.store.blocks.get_client_blocks_mut(client_id);
         local_block_list.push(block::Block::Item(item));
+    }
+
+    pub fn commit(&mut self) {
+        // 1. sort and merge delete set
+        self.delete_set.compact();
+        self.after_state = self.store.blocks.get_state_vector();
+
+        // 2. emit 'beforeObserverCalls'
+        // 3. for each change observed by the transaction call 'afterTransaction'
+        // 4. try GC delete set
+        self.try_gc(); //TODO: eventually this is a configurable variant: if (doc.gc)
+
+        // 5. try merge delete set
+        self.delete_set.try_compact(&self.store.blocks);
+
+        // 6. get transaction after state and try to merge to left
+        for (client, &clock) in self.after_state.iter() {
+            let before_clock = self.before_state.get(client);
+            if before_clock != clock {
+                let mut blocks = self.store.blocks.get_mut(client).unwrap();
+                let first_change = blocks.find_pivot(before_clock).unwrap().max(1);
+                let mut i = blocks.len() - 1;
+                while i >= first_change {
+                    if let Some(compaction) = blocks.compact_left(i) {
+                        self.store.gc_cleanup(compaction);
+                        blocks = self.store.blocks.get_mut(client).unwrap();
+                    }
+                    i -= 1;
+                }
+            }
+        }
+        // 7. get merge_structs and try to merge to left
+        for id in self.merge_blocks.iter() {
+            let client = id.client;
+            let clock = id.clock;
+            let blocks = self.store.blocks.get_mut(&client).unwrap();
+            let replaced_pos = blocks.find_pivot(clock).unwrap();
+            if replaced_pos + 1 < blocks.len() {
+                if let Some(compaction) = blocks.compact_left(replaced_pos + 1) {
+                    self.store.gc_cleanup(compaction);
+                }
+            } else if replaced_pos > 0 {
+                if let Some(compaction) = blocks.compact_left(replaced_pos) {
+                    self.store.gc_cleanup(compaction);
+                }
+            }
+        }
+        // 8. emit 'afterTransactionCleanup'
+        // 9. emit 'update'
+        // 10. emit 'updateV2'
+        // 11. add and remove subdocs
+        // 12. emit 'subdocs'
+    }
+
+    fn try_gc(&mut self) {
+        for (client, range) in self.delete_set.iter() {
+            if let Some(blocks) = self.store.blocks.get_mut(client) {
+                for delete_item in range.iter().rev() {
+                    let mut start = delete_item.start;
+                    if let Some(mut i) = blocks.find_pivot(start) {
+                        while i < blocks.len() {
+                            let block = &mut blocks[i];
+                            let len = block.len();
+                            start += len;
+                            if start > delete_item.end {
+                                break;
+                            } else {
+                                if let Block::Item(item) = block {
+                                    if item.is_deleted() {
+                                        if let ItemContent::Type(t) = &item.content {
+                                            /*
+                                            let item = this.type._start
+                                            while (item !== null) {
+                                              item.gc(store, true)
+                                              item = item.right
+                                            }
+                                            this.type._start = null
+                                            this.type._map.forEach(/** @param {Item | null} item */ (item) => {
+                                              while (item !== null) {
+                                                item.gc(store, true)
+                                                item = item.left
+                                              }
+                                            })
+                                            this.type._map = new Map()
+                                            */
+                                            todo!()
+                                        }
+
+                                        item.content = ItemContent::Deleted(len);
+                                    }
+                                }
+                                i += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl<'a> Drop for Transaction<'a> {
+    fn drop(&mut self) {
+        self.commit()
     }
 }

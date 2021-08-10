@@ -1,15 +1,19 @@
-use crate::block_store::{BlockStore, StateVector};
+use crate::block::BlockPtr;
+use crate::block_store::{BlockStore, CompactionResult, StateVector};
 use crate::event::{EventHandler, UpdateEvent};
 use crate::id_set::DeleteSet;
+use crate::types::{Inner, TypeRefs};
 use crate::update::PendingUpdate;
 use crate::updates::encoder::{Encode, Encoder};
 use crate::{block, types};
+use std::cell::RefCell;
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 pub struct Store {
     pub client_id: u64,
-    type_refs: HashMap<String, u32>,
-    types: Vec<(types::Inner, String)>,
+    pub types: HashMap<Rc<String>, Rc<RefCell<types::Inner>>>,
     pub blocks: BlockStore,
     pub pending: Option<PendingUpdate>,
     pub pending_ds: Option<DeleteSet>,
@@ -20,7 +24,6 @@ impl Store {
     pub fn new(client_id: u64) -> Self {
         Store {
             client_id,
-            type_refs: Default::default(),
             types: Default::default(),
             blocks: BlockStore::new(),
             pending: None,
@@ -32,60 +35,59 @@ impl Store {
     pub fn get_local_state(&self) -> u32 {
         self.blocks.get_state(&self.client_id)
     }
-    pub fn get_type(&self, ptr: &types::TypePtr) -> Option<&types::Inner> {
+
+    pub fn get_type(&self, ptr: &types::TypePtr) -> Option<&Rc<RefCell<types::Inner>>> {
         match ptr {
-            types::TypePtr::NamedRef(name_ref) => self.types.get(*name_ref as usize).map(|t| &t.0),
             types::TypePtr::Id(id) => {
                 // @todo the item might not exist
                 let item = self.blocks.get_item(id)?;
-                if let block::ItemContent::Type(t) = &item.content {
-                    Some(t)
+                if let block::ItemContent::Type(c) = &item.content {
+                    Some(c)
                 } else {
+                    println!("expected ItemContent::Type but got: {:?}", &item.content);
                     None
                 }
             }
-            types::TypePtr::Named(name) => self
-                .get_type_ref(name)
-                .map(|tref| &self.types[tref as usize].0),
+            types::TypePtr::Named(name) => self.types.get(name),
         }
     }
 
-    pub fn init_type_from_ptr(&mut self, ptr: &types::TypePtr) -> Option<&types::Inner> {
+    pub fn init_type_from_ptr(
+        &mut self,
+        ptr: &types::TypePtr,
+        type_refs: TypeRefs,
+    ) -> Option<Rc<RefCell<types::Inner>>> {
         match ptr {
             types::TypePtr::Named(name) => {
-                let id = self.init_type_ref(name);
-                self.types.get(id as usize).map(|t| &t.0)
+                let inner = self.init_type_ref(name.clone(), type_refs);
+                Some(inner)
             }
             _ => {
                 if let Some(inner) = self.get_type(ptr) {
-                    return Some(inner);
+                    return Some(inner.clone());
                 } else {
                     None
                 }
             }
         }
     }
-    pub fn create_type_ptr(&mut self, name: &str) -> types::TypePtr {
-        let id = self.init_type_ref(name);
-        types::TypePtr::NamedRef(id)
+    pub fn create_type(&mut self, name: &str, type_ref: TypeRefs) -> Rc<RefCell<Inner>> {
+        let rc = Rc::new(name.to_owned());
+        self.init_type_ref(rc.clone(), type_ref)
     }
 
-    pub fn get_type_ref(&self, string: &str) -> Option<u32> {
-        self.type_refs.get(string).map(|r| *r)
-    }
-    pub fn init_type_ref(&mut self, string: &str) -> u32 {
-        let types = &mut self.types;
-        *self.type_refs.entry(string.to_owned()).or_insert_with(|| {
-            let name_ref = types.len() as u32;
-            let ptr = types::TypePtr::NamedRef(name_ref);
-            let inner = types::Inner::new(ptr, None, types::TYPE_REFS_ARRAY);
-            types.push((inner, string.to_owned()));
-            name_ref
-        })
-    }
-
-    pub fn get_type_name(&self, type_name_ref: u32) -> &str {
-        &self.types[type_name_ref as usize].1
+    pub(crate) fn init_type_ref(
+        &mut self,
+        string: Rc<String>,
+        type_ref: TypeRefs,
+    ) -> Rc<RefCell<Inner>> {
+        let e = self.types.entry(string.clone());
+        let value = e.or_insert_with(|| {
+            let type_ptr = types::TypePtr::Named(string.clone());
+            let inner = types::Inner::new(type_ptr, None, type_ref);
+            Rc::new(RefCell::new(inner))
+        });
+        value.clone()
     }
 
     /// Compute a diff to sync with another client.
@@ -125,9 +127,9 @@ impl Store {
             encoder.write_uvar(clock);
             let first_block = &blocks[start];
             // write first struct with an offset
-            first_block.encode(self, encoder);
+            first_block.encode(encoder);
             for i in (start + 1)..blocks.integrated_len() {
-                blocks[i].encode(self, encoder);
+                blocks[i].encode(encoder);
             }
         }
     }
@@ -147,6 +149,30 @@ impl Store {
         }
         diff
     }
+
+    pub(crate) fn gc_cleanup(&mut self, compaction: CompactionResult) {
+        if let Some(parent_sub) = compaction.parent_sub {
+            if let Some(parent) = self.get_type(&compaction.parent) {
+                let mut inner = parent.borrow_mut();
+                match inner.map.entry(parent_sub) {
+                    Entry::Occupied(e) => {
+                        let cell = e.into_mut();
+                        if cell.id == compaction.old_right {
+                            *cell = compaction.replacement;
+                        }
+                    }
+                    Entry::Vacant(e) => {
+                        e.insert(compaction.replacement);
+                    }
+                }
+            }
+        }
+        if let Some(right) = compaction.new_right {
+            if let Some(item) = self.blocks.get_item_mut(&right) {
+                item.left = Some(compaction.replacement);
+            }
+        }
+    }
 }
 
 impl Encode for Store {
@@ -159,6 +185,25 @@ impl Encode for Store {
     /// * Even if an update contains known information, the unknown information
     ///   is extracted and integrated into the document structure.
     fn encode<E: Encoder>(&self, encoder: &mut E) {
-        self.encode_diff(&StateVector::empty(), encoder)
+        self.encode_diff(&StateVector::default(), encoder)
+    }
+}
+
+impl std::fmt::Display for Store {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "Store(ID: {}) {{", self.client_id)?;
+        if !self.types.is_empty() {
+            writeln!(f, "\ttypes: {{")?;
+            for (k, v) in self.types.iter() {
+                writeln!(f, "\t\t'{}': {}", k.as_str(), *v.borrow())?;
+            }
+
+            writeln!(f, "\t}}")?;
+        }
+        if !self.blocks.is_empty() {
+            writeln!(f, "\tblocks: {}", self.blocks)?;
+        }
+
+        writeln!(f, "}}")
     }
 }

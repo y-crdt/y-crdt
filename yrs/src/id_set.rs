@@ -204,6 +204,17 @@ impl<'a> Iterator for IdRangeIter<'a> {
     }
 }
 
+/// Implement this to efficiently let IdRange iterator work in descending order
+impl<'a> DoubleEndedIterator for IdRangeIter<'a> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        if let Some(inner) = &mut self.inner {
+            inner.next_back()
+        } else {
+            self.range.take()
+        }
+    }
+}
+
 /// DeleteSet is a temporary object that is created when needed.
 /// - When created in a transaction, it must only be accessed after sorting and merging.
 ///   - This DeleteSet is sent to other clients.
@@ -211,7 +222,7 @@ impl<'a> Iterator for IdRangeIter<'a> {
 ///   directly from StructStore.
 /// - We read a DeleteSet as a apart of sync/update message. In this case the DeleteSet is already
 ///   sorted and merged.
-#[derive(Default, Debug, PartialEq, Eq)]
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct IdSet(HashMap<u64, IdRange, BuildHasherDefault<ClientHasher>>);
 
 pub(crate) type Iter<'a> = std::collections::hash_map::Iter<'a, u64, IdRange>;
@@ -331,7 +342,7 @@ impl Decode for IdSet {
 
 /// [DeleteSet] contains information about all blocks (described by clock ranges) that have been
 /// subjected to delete process.
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct DeleteSet(IdSet);
 
 impl From<IdSet> for DeleteSet {
@@ -423,6 +434,14 @@ impl DeleteSet {
 
     pub fn merge(&mut self, other: Self) {
         self.0.merge(other.0)
+    }
+
+    pub fn compact(&mut self) {
+        self.0.compact()
+    }
+
+    pub fn try_compact(&mut self, blocks: &BlockStore) {
+        //TODO
     }
 }
 

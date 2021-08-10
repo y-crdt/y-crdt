@@ -14,10 +14,6 @@ use std::vec::Vec;
 pub struct StateVector(HashMap<u64, u32, BuildHasherDefault<ClientHasher>>);
 
 impl StateVector {
-    pub fn empty() -> Self {
-        StateVector::default()
-    }
-
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
@@ -70,6 +66,13 @@ impl StateVector {
 
     pub fn iter(&self) -> std::collections::hash_map::Iter<u64, u32> {
         self.0.iter()
+    }
+
+    pub fn merge(&mut self, other: Self) {
+        for (client, clock) in other.0 {
+            let e = self.0.entry(client).or_default();
+            *e = (*e).max(clock);
+        }
     }
 }
 
@@ -211,6 +214,51 @@ impl ClientBlockList {
         self.integrated_len = 0;
         self.list.clear();
     }
+
+    pub(crate) fn compact_left(&mut self, pos: usize) -> Option<CompactionResult> {
+        let replacement = {
+            let (l, r) = self.list.split_at_mut(pos);
+            let left = &mut l[pos - 1];
+            let right = &r[0];
+            if left.is_deleted() == right.is_deleted() && left.same_type(right) {
+                if left.try_merge(right) {
+                    let new_ptr = BlockPtr::new(left.id().clone(), pos as u32 - 1);
+                    Some(new_ptr)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
+
+        if let Some(replacement) = replacement {
+            let block = self.list.remove(pos);
+            self.integrated_len -= 1;
+            if let Block::Item(item) = block {
+                return Some(CompactionResult {
+                    parent: item.parent,
+                    parent_sub: item.parent_sub,
+                    new_right: item.right,
+                    old_right: item.id,
+                    replacement,
+                });
+            }
+        }
+
+        None
+    }
+}
+
+pub(crate) struct CompactionResult {
+    pub parent: TypePtr,
+    pub parent_sub: Option<String>,
+    /// Pointer to a block that resulted from compaction of two adjacent blocks.
+    pub replacement: BlockPtr,
+    /// Pointer to a neighbor, that's now on the right side of the `replacement` block.
+    pub new_right: Option<BlockPtr>,
+    /// ID of the block that was compacted into left block. Left block ID is in `replacement`.
+    pub old_right: ID,
 }
 
 impl Default for ClientBlockList {
@@ -251,6 +299,10 @@ impl BlockStore {
         Self {
             clients: HashMap::<u64, ClientBlockList, BuildHasherDefault<ClientHasher>>::default(),
         }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.clients.is_empty()
     }
 
     pub fn contains_client(&self, client: &u64) -> bool {
