@@ -1,3 +1,4 @@
+pub mod array;
 pub mod map;
 pub mod text;
 
@@ -119,7 +120,24 @@ impl std::fmt::Display for Inner {
             TYPE_REFS_XML_FRAGMENT => todo!(),
             TYPE_REFS_XML_HOOK => todo!(),
             TYPE_REFS_XML_TEXT => todo!(),
-            other => panic!("Defect: unknown type reference: {}", other),
+            other => {
+                write!(f, "UnknownRef")?;
+                if let Some(start) = self.start.get() {
+                    write!(f, "(start: {})", start)?;
+                }
+                if !self.map.is_empty() {
+                    write!(f, " {{")?;
+                    let mut iter = self.map.iter();
+                    if let Some((k, v)) = iter.next() {
+                        write!(f, "'{}': {}", k, v)?;
+                    }
+                    while let Some((k, v)) = iter.next() {
+                        write!(f, ", '{}': {}", k, v)?;
+                    }
+                    write!(f, "}}")?;
+                }
+                Ok(())
+            }
         }
     }
 }
