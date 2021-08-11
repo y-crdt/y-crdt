@@ -1,4 +1,3 @@
-use crate::block::BlockPtr;
 use crate::block_store::{BlockStore, CompactionResult, StateVector};
 use crate::event::{EventHandler, UpdateEvent};
 use crate::id_set::DeleteSet;
@@ -44,7 +43,6 @@ impl Store {
                 if let block::ItemContent::Type(c) = &item.content {
                     Some(c)
                 } else {
-                    println!("expected ItemContent::Type but got: {:?}", &item.content);
                     None
                 }
             }

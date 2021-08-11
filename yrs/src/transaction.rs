@@ -5,9 +5,10 @@ use crate::block_store::StateVector;
 use crate::event::UpdateEvent;
 use crate::id_set::{DeleteSet, IdSet};
 use crate::store::Store;
-use crate::types::{Map, Text, TypePtr, TYPE_REFS_MAP, TYPE_REFS_TEXT};
+use crate::types::array::Array;
+use crate::types::{Map, Text, TypePtr, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT};
 use crate::update::Update;
-use std::cell::{Cell, RefCell, RefMut};
+use std::cell::RefMut;
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use updates::encoder::*;
@@ -48,6 +49,11 @@ impl<'a> Transaction<'a> {
     pub fn get_map(&mut self, name: &str) -> Map {
         let c = self.store.create_type(name, TYPE_REFS_MAP);
         Map::new(c)
+    }
+
+    pub fn get_array(&mut self, name: &str) -> Array {
+        let c = self.store.create_type(name, TYPE_REFS_ARRAY);
+        Array::new(c)
     }
 
     /// Encodes the document state to a binary format.
@@ -154,9 +160,11 @@ impl<'a> Transaction<'a> {
                                     index as u32,
                                 );
                                 let (_, right) = self.store.blocks.split_block(&split_ptr);
+                                if let Some(right) = right {
+                                    index += 1;
+                                    self.merge_blocks.push(right.id);
+                                }
                                 blocks = self.store.blocks.get_mut(client).unwrap();
-                                index += 1;
-                                self.merge_blocks.push(right.unwrap().id);
                             }
 
                             while index < blocks.len() {
@@ -166,7 +174,7 @@ impl<'a> Transaction<'a> {
                                         if !item.is_deleted() {
                                             let delete_ptr =
                                                 BlockPtr::new(item.id.clone(), index as u32);
-                                            if item.id.clock + item.content.len() > clock_end {
+                                            if item.id.clock + item.len() > clock_end {
                                                 let diff = clock_end - item.id.clock;
                                                 let mut split_ptr = delete_ptr.clone();
                                                 split_ptr.id.clock += diff;
