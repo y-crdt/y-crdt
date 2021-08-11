@@ -7,7 +7,7 @@ use crate::*;
 pub use map::Map;
 pub use text::Text;
 
-use crate::block::BlockPtr;
+use crate::block::{BlockPtr, Item, ItemContent, ItemPosition};
 use lib0::any::Any;
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -57,6 +57,7 @@ impl Inner {
         self.len
     }
 
+    /// Converts current root type into [Any] object equivalent that resembles enhanced JSON payload.
     pub fn to_json(&self, txn: &Transaction) -> Any {
         match self.type_ref() {
             TYPE_REFS_ARRAY => todo!(),
@@ -66,8 +67,148 @@ impl Inner {
             TYPE_REFS_XML_FRAGMENT => todo!(),
             TYPE_REFS_XML_HOOK => todo!(),
             TYPE_REFS_XML_TEXT => todo!(),
-            other => panic!("Defect: unknown type reference: {}", other),
+            other => todo!(),
         }
+    }
+
+    /// Get iterator over (String, Block) entries of a map component of a current root type.
+    /// Deleted blocks are skipped by this iterator.
+    pub(crate) fn entries<'a, 'b, 'txn>(&'a self, txn: &'b Transaction<'txn>) -> Entries<'b, 'txn> {
+        Entries::new(&self.ptr, txn)
+    }
+
+    /// Get iterator over Block entries of an array component of a current root type.
+    /// Deleted blocks are skipped by this iterator.
+    pub(crate) fn iter<'a, 'b, 'txn>(&'a self, txn: &'b Transaction<'txn>) -> Iter<'b, 'txn> {
+        Iter::new(self.start.get(), txn)
+    }
+
+    /// Returns a materialized value of non-deleted entry under a given `key` of a map component
+    /// of a current root type.
+    pub(crate) fn get(&self, txn: &Transaction<'_>, key: &str) -> Option<Any> {
+        let ptr = self.map.get(key)?;
+        let item = txn.store.blocks.get_item(ptr)?;
+        if item.is_deleted() {
+            None
+        } else {
+            item.content.get_content_last(txn)
+        }
+    }
+
+    /// Inserts a value given `key` of a map component of a current root type.
+    pub(crate) fn insert<V: Into<ItemContent>>(
+        &self,
+        txn: &mut Transaction,
+        key: String,
+        value: V,
+    ) {
+        let pos = {
+            let left = self.map.get(&key);
+            ItemPosition {
+                parent: self.ptr.clone(),
+                left: left.cloned(),
+                right: None,
+                index: 0,
+            }
+        };
+
+        txn.create_item(&pos, value.into(), Some(key));
+    }
+
+    /// Removes an entry under given `key` of a map component of a current root type, returning
+    /// a materialized representation of value stored underneath if entry existed prior deletion.
+    pub(crate) fn remove(&self, txn: &mut Transaction, key: &str) -> Option<Any> {
+        let ptr = self.map.get(key)?;
+        let prev = {
+            let item = txn.store.blocks.get_item(ptr)?;
+            if item.is_deleted() {
+                None
+            } else {
+                item.content.get_content_last(txn)
+            }
+        };
+        txn.delete(ptr);
+        prev
+    }
+
+    pub(crate) fn insert_at<V: Into<ItemContent>>(
+        &self,
+        txn: &mut Transaction,
+        index: u32,
+        value: V,
+    ) {
+        let (start, parent) = {
+            if index <= self.len() {
+                (self.start.get(), self.ptr.clone())
+            } else {
+                panic!("Cannot insert item at index over the length of an array")
+            }
+        };
+        let (left, right) = if index == 0 {
+            (None, None)
+        } else {
+            Self::index_to_ptr(txn, start, index)
+        };
+        let content = value.into();
+        let pos = ItemPosition {
+            parent,
+            left,
+            right,
+            index: 0,
+        };
+        txn.create_item(&pos, content, None);
+    }
+
+    /// Returns a first non-deleted item from an array component of a current root type.
+    pub(crate) fn first<'a, 'b>(&'a self, txn: &'b Transaction) -> Option<&'b Item> {
+        let mut ptr = self.start.get();
+        while let Some(p) = ptr {
+            let mut item = txn.store.blocks.get_item(&p)?;
+            if item.is_deleted() {
+                ptr = item.right.clone();
+            } else {
+                return Some(item);
+            }
+        }
+
+        None
+    }
+
+    fn index_to_ptr(
+        txn: &mut Transaction,
+        mut ptr: Option<BlockPtr>,
+        mut index: u32,
+    ) -> (Option<BlockPtr>, Option<BlockPtr>) {
+        while let Some(p) = ptr {
+            let item = txn
+                .store
+                .blocks
+                .get_item(&p)
+                .expect("No item for a given pointer was found.");
+            let len = item.len();
+            if !item.is_deleted() && item.is_countable() {
+                if index == len {
+                    let left = Some(p.clone());
+                    let right = item.right.clone();
+                    return (left, right);
+                } else if index < len {
+                    let split_point = ID::new(item.id.client, item.id.clock + index);
+                    let ptr = BlockPtr::new(split_point, p.pivot() as u32);
+                    let (left, mut right) = txn.store.blocks.split_block(&ptr);
+                    if right.is_none() {
+                        if let Some(left_ptr) = left.as_ref() {
+                            if let Some(left) = txn.store.blocks.get_item(left_ptr) {
+                                right = left.right.clone();
+                            }
+                        }
+                    }
+                    return (left, right);
+                }
+                index -= len;
+            }
+            ptr = item.right.clone();
+        }
+        (None, None)
     }
 }
 
@@ -110,6 +251,65 @@ impl std::fmt::Display for Inner {
                 Ok(())
             }
         }
+    }
+}
+
+pub(crate) struct Entries<'a, 'txn> {
+    pub txn: &'a Transaction<'txn>,
+    iter: std::collections::hash_map::Iter<'a, String, BlockPtr>,
+}
+
+impl<'a, 'txn> Entries<'a, 'txn> {
+    pub(crate) fn new<'b>(ptr: &'b TypePtr, txn: &'a Transaction<'txn>) -> Self {
+        let rc = txn.store.get_type(ptr).unwrap();
+        let cell = rc.as_ref();
+        let iter = unsafe { &*cell.as_ptr() as &'a Inner }.map.iter();
+        Entries { txn, iter }
+    }
+}
+
+impl<'a, 'txn> Iterator for Entries<'a, 'txn> {
+    type Item = (&'a String, &'a Item);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let (mut key, ptr) = self.iter.next()?;
+        let mut block = self.txn.store.blocks.get_item(ptr);
+        loop {
+            match block {
+                Some(item) if !item.is_deleted() => {
+                    break;
+                }
+                _ => {
+                    let (k, ptr) = self.iter.next()?;
+                    key = k;
+                    block = self.txn.store.blocks.get_item(ptr);
+                }
+            }
+        }
+        let item = block.unwrap();
+        Some((key, item))
+    }
+}
+
+pub(crate) struct Iter<'a, 'txn> {
+    ptr: Option<BlockPtr>,
+    txn: &'a Transaction<'txn>,
+}
+
+impl<'a, 'txn> Iter<'a, 'txn> {
+    fn new(start: Option<BlockPtr>, txn: &'a Transaction<'txn>) -> Self {
+        Iter { ptr: start, txn }
+    }
+}
+
+impl<'a, 'txn> Iterator for Iter<'a, 'txn> {
+    type Item = &'a Item;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let ptr = self.ptr.take()?;
+        let item = self.txn.store.blocks.get_item(&ptr)?;
+        self.ptr = item.right;
+        Some(item)
     }
 }
 
