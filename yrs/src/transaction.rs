@@ -46,22 +46,22 @@ impl<'a> Transaction<'a> {
 
     pub fn get_text(&mut self, name: &str) -> Text {
         let c = self.store.create_type(name, TYPE_REFS_TEXT);
-        Text::new(c)
+        Text::from(c)
     }
 
     pub fn get_map(&mut self, name: &str) -> Map {
         let c = self.store.create_type(name, TYPE_REFS_MAP);
-        Map::new(c)
+        Map::from(c)
     }
 
     pub fn get_array(&mut self, name: &str) -> Array {
         let c = self.store.create_type(name, TYPE_REFS_ARRAY);
-        Array::new(c)
+        Array::from(c)
     }
 
     pub fn get_xml_element(&mut self, name: &str) -> XmlElement {
         let c = self.store.create_type(name, TYPE_REFS_XML_ELEMENT);
-        XmlElement::new(c)
+        XmlElement::from(c)
     }
 
     /// Encodes the document state to a binary format.
