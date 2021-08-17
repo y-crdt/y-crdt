@@ -2,16 +2,12 @@ use crate::block::{BlockPtr, ItemContent};
 use crate::transaction::Transaction;
 use crate::types::Inner;
 use crate::*;
-use std::cell::RefCell;
+use std::cell::{Ref, RefCell};
 use std::rc::Rc;
 
 pub struct Text(Rc<RefCell<Inner>>);
 
 impl Text {
-    pub fn new(inner: Rc<RefCell<Inner>>) -> Self {
-        Text(inner)
-    }
-
     #[allow(clippy::inherent_to_string)]
     pub fn to_string(&self, txn: &Transaction<'_>) -> String {
         let inner = self.0.borrow();
@@ -20,6 +16,10 @@ impl Text {
 
     pub fn len(&self) -> u32 {
         self.0.borrow().len()
+    }
+
+    pub(crate) fn inner(&self) -> Ref<Inner> {
+        self.0.borrow()
     }
 
     pub(crate) fn to_string_inner(inner: &Inner, txn: &Transaction<'_>) -> String {
@@ -152,6 +152,12 @@ impl Text {
 impl Into<ItemContent> for Text {
     fn into(self) -> ItemContent {
         ItemContent::Type(self.0.clone())
+    }
+}
+
+impl From<Rc<RefCell<Inner>>> for Text {
+    fn from(inner: Rc<RefCell<Inner>>) -> Self {
+        Text(inner)
     }
 }
 

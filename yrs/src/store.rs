@@ -76,12 +76,12 @@ impl Store {
 
     pub(crate) fn init_type_ref(
         &mut self,
-        string: Rc<String>,
+        name: Rc<String>,
         type_ref: TypeRefs,
     ) -> Rc<RefCell<Inner>> {
-        let e = self.types.entry(string.clone());
+        let e = self.types.entry(name.clone());
         let value = e.or_insert_with(|| {
-            let type_ptr = types::TypePtr::Named(string.clone());
+            let type_ptr = types::TypePtr::Named(name.clone());
             let inner = types::Inner::new(type_ptr, None, type_ref);
             Rc::new(RefCell::new(inner))
         });

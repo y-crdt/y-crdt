@@ -9,10 +9,6 @@ use std::rc::Rc;
 pub struct Array(Rc<RefCell<Inner>>);
 
 impl Array {
-    pub fn new(inner: Rc<RefCell<Inner>>) -> Self {
-        Array(inner)
-    }
-
     pub fn len(&self) -> u32 {
         let inner = self.0.borrow();
         inner.len()
@@ -199,6 +195,12 @@ impl<'b, 'txn> Iterator for Iter<'b, 'txn> {
 impl Into<ItemContent> for Array {
     fn into(self) -> ItemContent {
         ItemContent::Type(self.0.clone())
+    }
+}
+
+impl From<Rc<RefCell<Inner>>> for Array {
+    fn from(inner: Rc<RefCell<Inner>>) -> Self {
+        Array(inner)
     }
 }
 

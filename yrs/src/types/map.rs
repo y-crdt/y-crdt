@@ -9,9 +9,6 @@ use std::rc::Rc;
 pub struct Map(Rc<RefCell<Inner>>);
 
 impl Map {
-    pub fn new(inner: Rc<RefCell<Inner>>) -> Self {
-        Map(inner)
-    }
     pub fn to_json(&self, txn: &Transaction<'_>) -> Any {
         Self::to_json_inner(&*self.0.borrow(), txn)
     }
@@ -140,6 +137,12 @@ impl<'a, 'txn> Iterator for Values<'a, 'txn> {
 impl Into<ItemContent> for Map {
     fn into(self) -> ItemContent {
         ItemContent::Type(self.0.clone())
+    }
+}
+
+impl From<Rc<RefCell<Inner>>> for Map {
+    fn from(inner: Rc<RefCell<Inner>>) -> Self {
+        Map(inner)
     }
 }
 
