@@ -174,7 +174,7 @@ impl std::fmt::Display for Any {
             Any::Bool(value) => write!(f, "{}", value)?,
             Any::Number(value) => write!(f, "{}", value)?,
             Any::BigInt(value) => write!(f, "{}", value)?,
-            Any::String(value) => write!(f, "\"{}\"", value)?,
+            Any::String(value) => write!(f, "{}", value)?,
             Any::Buffer(value) => write!(f, "[binary: {} bytes]", value.len())?, //TODO: use base64?
             Any::Array(values) => {
                 write!(f, "[")?;

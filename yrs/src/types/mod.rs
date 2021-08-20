@@ -8,9 +8,11 @@ pub use map::Map;
 pub use text::Text;
 
 use crate::block::{BlockPtr, Item, ItemContent, ItemPosition};
+use crate::types::xml::XmlElement;
 use lib0::any::Any;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::fmt::Formatter;
 use std::hash::Hasher;
 use std::rc::Rc;
 
@@ -33,16 +35,18 @@ pub struct Inner {
     pub map: HashMap<String, BlockPtr>,
     pub ptr: TypePtr,
     pub name: Option<String>,
+    pub item: Option<BlockPtr>,
     pub len: u32,
     type_ref: TypeRefs,
 }
 
 impl Inner {
-    pub fn new(ptr: TypePtr, name: Option<String>, type_ref: TypeRefs) -> Self {
+    pub fn new(ptr: TypePtr, type_ref: TypeRefs, name: Option<String>) -> Self {
         Self {
             start: Cell::from(None),
             map: HashMap::default(),
             len: 0,
+            item: None,
             ptr,
             name,
             type_ref,
@@ -60,13 +64,19 @@ impl Inner {
     /// Converts current root type into [Any] object equivalent that resembles enhanced JSON payload.
     pub fn to_json(&self, txn: &Transaction) -> Any {
         match self.type_ref() {
-            TYPE_REFS_ARRAY => todo!(),
+            TYPE_REFS_ARRAY => {
+                let values = self
+                    .iter(txn)
+                    .flat_map(|i| i.content.get_content(txn))
+                    .collect();
+                Any::Array(values)
+            }
             TYPE_REFS_MAP => Map::to_json_inner(self, txn),
             TYPE_REFS_TEXT => Any::String(Text::to_string_inner(self, txn)),
-            TYPE_REFS_XML_ELEMENT => todo!(),
-            TYPE_REFS_XML_FRAGMENT => todo!(),
-            TYPE_REFS_XML_HOOK => todo!(),
-            TYPE_REFS_XML_TEXT => todo!(),
+            TYPE_REFS_XML_ELEMENT => Any::String(XmlElement::to_string_inner(self, txn)),
+            TYPE_REFS_XML_FRAGMENT => Any::String(XmlElement::to_string_inner(self, txn)),
+            TYPE_REFS_XML_HOOK => Map::to_json_inner(self, txn),
+            TYPE_REFS_XML_TEXT => Any::String(Text::to_string_inner(self, txn)),
             other => todo!(),
         }
     }
@@ -95,24 +105,25 @@ impl Inner {
         }
     }
 
-    /// Inserts a value given `key` of a map component of a current root type.
-    pub(crate) fn insert<V: Into<ItemContent>>(
-        &self,
-        txn: &mut Transaction,
-        key: String,
-        value: V,
-    ) {
-        let pos = {
-            let left = self.map.get(&key);
-            ItemPosition {
-                parent: self.ptr.clone(),
-                left: left.cloned(),
-                right: None,
-                index: 0,
+    pub(crate) fn get_at<'a, 'b>(
+        &'a self,
+        txn: &'b Transaction,
+        mut index: u32,
+    ) -> Option<(&'b ItemContent, usize)> {
+        let mut ptr = self.start.get();
+        while let Some(p) = ptr {
+            let item = txn.store.blocks.get_item(&p)?;
+            let len = item.len();
+            if !item.is_deleted() && item.is_countable() {
+                if index < len {
+                    return Some((&item.content, index as usize));
+                }
             }
-        };
+            index -= len;
+            ptr = item.right.clone();
+        }
 
-        txn.create_item(&pos, value.into(), Some(key));
+        None
     }
 
     /// Removes an entry under given `key` of a map component of a current root type, returning
@@ -131,32 +142,48 @@ impl Inner {
         prev
     }
 
-    pub(crate) fn insert_at<V: Into<ItemContent>>(
-        &self,
+    pub(crate) fn remove_at(
+        rc: &Rc<RefCell<Self>>,
         txn: &mut Transaction,
         index: u32,
-        value: V,
+        mut len: u32,
     ) {
-        let (start, parent) = {
-            if index <= self.len() {
-                (self.start.get(), self.ptr.clone())
-            } else {
-                panic!("Cannot insert item at index over the length of an array")
-            }
+        let start = {
+            let parent = rc.borrow();
+            parent.start.get()
         };
-        let (left, right) = if index == 0 {
-            (None, None)
+        let (_, mut ptr) = if index == 0 {
+            (None, start)
         } else {
-            Self::index_to_ptr(txn, start, index)
+            Inner::index_to_ptr(txn, start, index)
         };
-        let content = value.into();
-        let pos = ItemPosition {
-            parent,
-            left,
-            right,
-            index: 0,
-        };
-        txn.create_item(&pos, content, None);
+        while len > 0 {
+            if let Some(mut p) = ptr {
+                if let Some(item) = txn.store.blocks.get_item(&p) {
+                    if !item.is_deleted() {
+                        let item_len = item.len();
+                        let (l, r) = if len < item_len {
+                            p.id.clock += len;
+                            len = 0;
+                            txn.store.blocks.split_block(&p)
+                        } else {
+                            len -= item_len;
+                            (ptr, item.right.clone())
+                        };
+                        txn.delete(&l.unwrap());
+                        ptr = r;
+                    } else {
+                        ptr = item.right.clone();
+                    }
+                }
+            } else {
+                break;
+            }
+        }
+
+        if len > 0 {
+            panic!("Array length exceeded");
+        }
     }
 
     /// Returns a first non-deleted item from an array component of a current root type.
@@ -228,10 +255,36 @@ impl std::fmt::Display for Inner {
                 write!(f, ")")
             }
             TYPE_REFS_TEXT => write!(f, "YText(start: {})", self.start.get().unwrap()),
-            TYPE_REFS_XML_ELEMENT => todo!(),
-            TYPE_REFS_XML_FRAGMENT => todo!(),
-            TYPE_REFS_XML_HOOK => todo!(),
-            TYPE_REFS_XML_TEXT => todo!(),
+            TYPE_REFS_XML_ELEMENT => {
+                write!(f, "YXmlElement")?;
+                if let Some(start) = self.start.get() {
+                    write!(f, "(start: {})", start)?;
+                }
+                if !self.map.is_empty() {
+                    write!(f, " {{")?;
+                    let mut iter = self.map.iter();
+                    if let Some((k, v)) = iter.next() {
+                        write!(f, "'{}': {}", k, v)?;
+                    }
+                    while let Some((k, v)) = iter.next() {
+                        write!(f, ", '{}': {}", k, v)?;
+                    }
+                    write!(f, "}}")?;
+                }
+                Ok(())
+            }
+            TYPE_REFS_XML_HOOK => {
+                write!(f, "YXmlHook(")?;
+                let mut iter = self.map.iter();
+                if let Some((k, v)) = iter.next() {
+                    write!(f, "'{}': {}", k, v)?;
+                }
+                while let Some((k, v)) = iter.next() {
+                    write!(f, ", '{}': {}", k, v)?;
+                }
+                write!(f, ")")
+            }
+            TYPE_REFS_XML_TEXT => write!(f, "YXmlText(start: {})", self.start.get().unwrap()),
             other => {
                 write!(f, "UnknownRef")?;
                 if let Some(start) = self.start.get() {
@@ -317,6 +370,15 @@ impl<'a, 'txn> Iterator for Iter<'a, 'txn> {
 pub enum TypePtr {
     Id(block::BlockPtr),
     Named(Rc<String>),
+}
+
+impl std::fmt::Display for TypePtr {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TypePtr::Id(ptr) => write!(f, "{}", ptr),
+            TypePtr::Named(name) => write!(f, "'{}'", name),
+        }
+    }
 }
 
 #[derive(Default)]

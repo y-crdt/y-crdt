@@ -1,13 +1,14 @@
 use crate::store::Store;
+use crate::types::xml::XmlElement;
 use crate::types::{
-    TypePtr, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT, TYPE_REFS_UNDEFINED,
+    Inner, TypePtr, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT, TYPE_REFS_UNDEFINED,
     TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_HOOK, TYPE_REFS_XML_TEXT,
 };
 use crate::updates::decoder::Decoder;
 use crate::updates::encoder::Encoder;
 use crate::*;
 use lib0::any::Any;
-use std::cell::{Cell, RefCell};
+use std::cell::{BorrowMutError, Cell, Ref, RefCell, RefMut};
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::panic;
@@ -189,6 +190,22 @@ impl Block {
                     encoder.write_right_id(right_origin_id);
                 }
                 if cant_copy_parent_info {
+                    //TODO:
+                    /*
+                        const parent = /** @type {AbstractType<any>} */ (this.parent)
+                        if (parent._item !== undefined) {
+                          const parentItem = parent._item
+                          if (parentItem === null) {
+                            // parent type on y._map
+                            // find the correct key
+                            const ykey = findRootTypeKey(parent)
+                            encoder.writeParentInfo(true) // write parentYKey
+                            encoder.writeString(ykey)
+                          } else {
+                            encoder.writeParentInfo(false) // write parent id
+                            encoder.writeLeftID(parentItem.id)
+                          }
+                    */
                     match &item.parent {
                         types::TypePtr::Id(id) => {
                             encoder.write_parent_info(false);
@@ -442,9 +459,7 @@ impl Item {
         }
 
         let parent = match txn.store.get_type(&self.parent).cloned() {
-            None => txn
-                .store
-                .init_type_from_ptr(&self.parent, TYPE_REFS_UNDEFINED),
+            None => txn.store.init_type_from_ptr(&self.parent, &self.content),
             parent => parent,
         };
 
@@ -590,9 +605,9 @@ impl Item {
                 parent_ref.len += self.len();
             }
 
-            self.integrate_content(txn);
-            // addChangedTypeToTransaction(transaction, /** @type {AbstractType<any>} */ (this.parent), this.parentSub)
-            let parent_deleted = false; // (this.parent)._item !== null && (this.parent)._item.deleted)
+            self.integrate_content(txn, pivot, &mut *parent_ref);
+            txn.add_changed_type(&mut *parent_ref, self.parent_sub.as_ref());
+            let parent_deleted = self.is_deleted();
             if parent_deleted || (self.parent_sub.is_some() && self.right.is_some()) {
                 // delete if parent is deleted or if this is not the current attribute value of parent
                 true
@@ -679,7 +694,7 @@ impl Item {
         info
     }
 
-    fn integrate_content(&mut self, txn: &mut Transaction<'_>) {
+    fn integrate_content(&mut self, txn: &mut Transaction<'_>, pivot: u32, parent: &mut Inner) {
         match &mut self.content {
             ItemContent::Deleted(len) => {
                 txn.delete_set.insert(self.id, *len);
@@ -698,8 +713,13 @@ impl Item {
                 // @todo searchmarker are currently unsupported for rich text documents
                 // /** @type {AbstractType<any>} */ (item.parent)._searchMarker = null
             }
-            ItemContent::Type(_) => {
+            ItemContent::Type(inner) => {
                 // this.type._integrate(transaction.doc, item)
+                let ptr = Some(BlockPtr::new(self.id.clone(), pivot));
+                match inner.try_borrow_mut() {
+                    Ok(mut parent) => parent.item = ptr,
+                    Err(_) => parent.item = ptr,
+                }
             }
             _ => {
                 // other types don't define integration-specific actions
@@ -904,7 +924,7 @@ impl ItemContent {
                     None
                 };
                 let inner_ptr = types::TypePtr::Id(ptr);
-                let inner = types::Inner::new(inner_ptr, name, type_ref);
+                let inner = types::Inner::new(inner_ptr, type_ref, name);
                 ItemContent::Type(Rc::new(RefCell::new(inner)))
             }
             BLOCK_ITEM_ANY_REF_NUMBER => {
@@ -994,6 +1014,7 @@ impl ItemContent {
 impl std::fmt::Display for Item {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "({}", self.id)?;
+        write!(f, ", parent: {}", self.parent)?;
         if let Some(origin) = self.origin.as_ref() {
             write!(f, ", origin-l: {}", origin)?;
         }
@@ -1063,7 +1084,9 @@ impl std::fmt::Display for ItemContent {
                         write!(f, "}})>")
                     }
                     TYPE_REFS_TEXT => write!(f, "<text(head: {})>", inner.start.get().unwrap()),
-                    TYPE_REFS_XML_ELEMENT => write!(f, "<xml element>"),
+                    TYPE_REFS_XML_ELEMENT => {
+                        write!(f, "<xml element: {}>", inner.name.as_ref().unwrap())
+                    }
                     TYPE_REFS_XML_FRAGMENT => write!(f, "<xml fragment>"),
                     TYPE_REFS_XML_HOOK => write!(f, "<xml hook>"),
                     TYPE_REFS_XML_TEXT => write!(f, "<xml text>"),

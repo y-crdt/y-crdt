@@ -1,5 +1,7 @@
-use crate::block::{BlockPtr, Item, ItemContent};
-use crate::types::{Entries, Inner, Map, Text, TypePtr, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT};
+use crate::block::{BlockPtr, Item, ItemContent, ItemPosition};
+use crate::types::{
+    Entries, Inner, Map, Text, TypePtr, TypeRefs, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT,
+};
 use crate::Transaction;
 use lib0::any::Any;
 use std::borrow::Borrow;
@@ -7,6 +9,7 @@ use std::cell::{Ref, RefCell};
 use std::fmt::Write;
 use std::rc::Rc;
 
+#[derive(Debug, Eq, PartialEq)]
 pub struct XmlElement(XmlFragment);
 
 impl XmlElement {
@@ -16,11 +19,20 @@ impl XmlElement {
     }
 
     pub fn to_string(&self, txn: &Transaction) -> String {
-        let mut s = String::new();
         let inner = self.inner();
-        let node_name = inner.name.as_ref().unwrap();
-        write!(&mut s, "<{}", node_name);
-        for (k, v) in self.attributes(txn) {
+        Self::to_string_inner(&*inner, txn)
+    }
+
+    pub(crate) fn to_string_inner(inner: &Inner, txn: &Transaction) -> String {
+        let mut s = String::new();
+        let tag = inner
+            .name
+            .as_ref()
+            .map(|s| s.as_str())
+            .unwrap_or(&"UNDEFINED");
+        write!(&mut s, "<{}", tag);
+        let attributes = Attributes(inner.entries(txn));
+        for (k, v) in attributes {
             write!(&mut s, " \"{}\"=\"{}\"", k, v);
         }
         write!(&mut s, ">");
@@ -29,7 +41,7 @@ impl XmlElement {
                 write!(&mut s, "{}", content);
             }
         }
-        write!(&mut s, "</{}>", node_name);
+        write!(&mut s, "</{}>", tag);
         s
     }
 
@@ -43,8 +55,20 @@ impl XmlElement {
         attr_name: K,
         attr_value: V,
     ) {
-        self.inner()
-            .insert(txn, attr_name.to_string(), attr_value.to_string())
+        let key = attr_name.to_string();
+        let value = attr_value.to_string();
+        let pos = {
+            let inner = self.inner();
+            let left = inner.map.get(&key);
+            ItemPosition {
+                parent: inner.ptr.clone(),
+                left: left.cloned(),
+                right: None,
+                index: 0,
+            }
+        };
+
+        txn.create_item(&pos, value.into(), Some(key));
     }
 
     pub fn get_attribute(&self, txn: &Transaction, attr_name: &str) -> Option<String> {
@@ -59,58 +83,20 @@ impl XmlElement {
         Attributes(blocks)
     }
 
-    pub fn next_sibling(&self, txn: &Transaction) -> Option<XmlElement> {
-        let inner = self.inner();
-        let item = txn.store.blocks.get_item(&inner.start.get().unwrap())?;
-        let mut next = item
-            .right
-            .as_ref()
-            .and_then(|p| txn.store.blocks.get_item(p));
-        while let Some(item) = next {
-            if !item.is_deleted() {
-                break;
-            }
-            next = item
-                .right
-                .as_ref()
-                .and_then(|p| txn.store.blocks.get_item(p));
-        }
-
-        let item = next?;
-        if let ItemContent::Type(inner) = &item.content {
-            Some(XmlElement(XmlFragment(inner.clone())))
-        } else {
-            None
-        }
+    pub fn next_sibling<T: From<Rc<RefCell<Inner>>>>(&self, txn: &Transaction) -> Option<T> {
+        next_sibling(self.inner(), txn)
     }
 
-    pub fn prev_sibling(&self, txn: &Transaction) -> Option<XmlElement> {
-        let inner = self.inner();
-        let item = txn.store.blocks.get_item(&inner.start.get().unwrap())?;
-        let mut next = item
-            .left
-            .as_ref()
-            .and_then(|p| txn.store.blocks.get_item(p));
-        while let Some(item) = next {
-            if !item.is_deleted() {
-                break;
-            }
-            next = item
-                .left
-                .as_ref()
-                .and_then(|p| txn.store.blocks.get_item(p));
-        }
-
-        let item = next?;
-        if let ItemContent::Type(inner) = &item.content {
-            Some(XmlElement(XmlFragment(inner.clone())))
-        } else {
-            None
-        }
+    pub fn prev_sibling<T: From<Rc<RefCell<Inner>>>>(&self, txn: &Transaction) -> Option<T> {
+        prev_sibling(self.inner(), txn)
     }
 
-    pub fn first(&self, txn: &Transaction) -> Option<XmlElement> {
-        self.0.first(txn)
+    pub fn parent<T: From<Rc<RefCell<Inner>>>>(&self, txn: &Transaction) -> Option<T> {
+        self.0.parent(txn)
+    }
+
+    pub fn first_child<T: From<Rc<RefCell<Inner>>>>(&self, txn: &Transaction) -> Option<T> {
+        self.0.first_child(txn)
     }
 
     pub fn len(&self, txn: &Transaction) -> u32 {
@@ -121,28 +107,45 @@ impl XmlElement {
         self.0.iter(txn)
     }
 
-    pub fn select(&self, txn: &Transaction, query: &str) -> TreeWalker {
+    pub fn select<'a, 'b, 'c, 'txn>(
+        &'a self,
+        txn: &'b Transaction<'txn>,
+        query: &'c str,
+    ) -> Select<'b, 'c, 'txn> {
         self.0.select(txn, query)
     }
 
-    pub fn insert(&self, txn: &mut Transaction, index: u32, content: &[XmlElement]) {
-        self.0.insert(txn, index, content)
+    pub fn insert_elem<S: ToString>(
+        &self,
+        txn: &mut Transaction,
+        index: u32,
+        name: S,
+    ) -> XmlElement {
+        self.0.insert_elem(txn, index, name)
     }
 
-    pub fn insert_after(&self, txn: &mut Transaction, ref_: XmlElement, content: &[XmlElement]) {
-        self.0.insert_after(txn, ref_, content)
+    pub fn insert_text(&self, txn: &mut Transaction, index: u32) -> XmlText {
+        self.0.insert_text(txn, index)
     }
 
     pub fn remove(&self, txn: &mut Transaction, index: u32, len: u32) {
         self.0.remove(txn, index, len)
     }
 
-    pub fn push_back(&self, txn: &mut Transaction, content: &[XmlElement]) {
-        self.0.push_back(txn, content)
+    pub fn push_elem_back<S: ToString>(&self, txn: &mut Transaction, name: S) -> XmlElement {
+        self.0.push_elem_back(txn, name)
     }
 
-    pub fn push_front(&self, txn: &mut Transaction, content: &[XmlElement]) {
-        self.0.push_front(txn, content)
+    pub fn push_elem_front<S: ToString>(&self, txn: &mut Transaction, name: S) -> XmlElement {
+        self.0.push_elem_front(txn, name)
+    }
+
+    pub fn push_text_back(&self, txn: &mut Transaction) -> XmlText {
+        self.0.push_text_back(txn)
+    }
+
+    pub fn push_text_front(&self, txn: &mut Transaction) -> XmlText {
+        self.0.push_text_front(txn)
     }
 
     pub fn get(&self, txn: &Transaction, index: u32) -> Option<XmlElement> {
@@ -185,6 +188,7 @@ impl Into<XmlElement> for XmlFragment {
     }
 }
 
+#[derive(Debug, Eq, PartialEq)]
 pub struct XmlFragment(Rc<RefCell<Inner>>);
 
 impl XmlFragment {
@@ -196,11 +200,20 @@ impl XmlFragment {
         (*self.0).borrow()
     }
 
-    pub fn first(&self, txn: &Transaction) -> Option<XmlElement> {
+    pub fn first_child<T: From<Rc<RefCell<Inner>>>>(&self, txn: &Transaction) -> Option<T> {
         let inner = self.inner();
         let first = inner.first(txn)?;
-        //first.content.get_content_first()
-        todo!()
+        match &first.content {
+            ItemContent::Type(c) => {
+                let value = T::from(c.clone());
+                Some(value)
+            }
+            _ => None,
+        }
+    }
+
+    pub fn parent<T: From<Rc<RefCell<Inner>>>>(&self, txn: &Transaction) -> Option<T> {
+        parent(self.inner(), txn)
     }
 
     pub fn len(&self, txn: &Transaction) -> u32 {
@@ -211,8 +224,12 @@ impl XmlFragment {
         TreeWalker::new(txn, &*self.inner())
     }
 
-    pub fn select(&self, txn: &Transaction, query: &str) -> TreeWalker {
-        todo!()
+    pub fn select<'a, 'b, 'c, 'txn>(
+        &'a self,
+        txn: &'b Transaction<'txn>,
+        query: &'c str,
+    ) -> Select<'b, 'c, 'txn> {
+        Select::new(self.iter(txn), query)
     }
 
     pub fn to_string(&self, txn: &Transaction) -> String {
@@ -226,29 +243,86 @@ impl XmlFragment {
         s
     }
 
-    pub fn insert(&self, txn: &mut Transaction, index: u32, content: &[XmlElement]) {
-        let inner = self.inner();
-        todo!()
+    pub fn insert_elem<S: ToString>(
+        &self,
+        txn: &mut Transaction,
+        index: u32,
+        name: S,
+    ) -> XmlElement {
+        let inner = self.insert(txn, index, TYPE_REFS_XML_ELEMENT, Some(name.to_string()));
+        XmlElement::from(inner)
     }
 
-    pub fn insert_after(&self, txn: &mut Transaction, ref_: XmlElement, content: &[XmlElement]) {
-        todo!()
+    pub fn insert_text(&self, txn: &mut Transaction, index: u32) -> XmlText {
+        let inner = self.insert(txn, index, TYPE_REFS_XML_TEXT, None);
+        XmlText::from(inner)
+    }
+
+    fn insert(
+        &self,
+        txn: &mut Transaction,
+        index: u32,
+        type_refs: TypeRefs,
+        name: Option<String>,
+    ) -> Rc<RefCell<Inner>> {
+        let (start, parent) = {
+            let parent = self.inner();
+            if index <= parent.len() {
+                (parent.start.get(), parent.ptr.clone())
+            } else {
+                panic!("Cannot insert item at index over the length of an array")
+            }
+        };
+        let (left, right) = if index == 0 {
+            (None, None)
+        } else {
+            Inner::index_to_ptr(txn, start, index)
+        };
+        let content = {
+            let parent = self.inner();
+            let inner = Inner::new(parent.ptr.clone(), type_refs, name);
+            Rc::new(RefCell::new(inner))
+        };
+        let pos = ItemPosition {
+            parent,
+            left,
+            right,
+            index: 0,
+        };
+        txn.create_item(&pos, ItemContent::Type(content.clone()), None);
+        content
     }
 
     pub fn remove(&self, txn: &mut Transaction, index: u32, len: u32) {
-        todo!()
+        Inner::remove_at(&self.0, txn, index, len)
     }
 
-    pub fn push_back(&self, txn: &mut Transaction, content: &[XmlElement]) {
-        todo!()
+    pub fn push_elem_back<S: ToString>(&self, txn: &mut Transaction, name: S) -> XmlElement {
+        let len = self.len(txn);
+        self.insert_elem(txn, len, name)
     }
 
-    pub fn push_front(&self, txn: &mut Transaction, content: &[XmlElement]) {
-        todo!()
+    pub fn push_elem_front<S: ToString>(&self, txn: &mut Transaction, name: S) -> XmlElement {
+        self.insert_elem(txn, 0, name)
     }
 
-    pub fn get(&self, txn: &Transaction, index: u32) -> Option<XmlElement> {
-        todo!()
+    pub fn push_text_back(&self, txn: &mut Transaction) -> XmlText {
+        let len = self.len(txn);
+        self.insert_text(txn, len)
+    }
+
+    pub fn push_text_front(&self, txn: &mut Transaction) -> XmlText {
+        self.insert_text(txn, 0)
+    }
+
+    pub fn get<T: From<Rc<RefCell<Inner>>>>(&self, txn: &Transaction, index: u32) -> Option<T> {
+        let inner = self.inner();
+        let (content, idx) = inner.get_at(txn, index)?;
+        if let ItemContent::Type(inner) = content {
+            Some(T::from(inner.clone()))
+        } else {
+            None
+        }
     }
 }
 
@@ -261,23 +335,18 @@ impl Into<ItemContent> for XmlFragment {
 pub struct TreeWalker<'a, 'txn> {
     txn: &'a Transaction<'txn>,
     current: Option<&'a Item>,
-    first_call: bool,
     root: TypePtr,
 }
 
 impl<'a, 'txn> TreeWalker<'a, 'txn> {
     fn new<'b>(txn: &'a Transaction<'txn>, parent: &'b Inner) -> Self {
         let root = parent.ptr.clone();
-        let current = parent
+        let mut current = parent
             .start
             .get()
             .and_then(|p| txn.store.blocks.get_item(&p));
-        TreeWalker {
-            txn,
-            current,
-            root,
-            first_call: true,
-        }
+
+        TreeWalker { txn, current, root }
     }
 }
 
@@ -286,53 +355,77 @@ impl<'a, 'txn> Iterator for TreeWalker<'a, 'txn> {
 
     /// Tree walker used depth-first search to move over the xml tree.
     fn next(&mut self) -> Option<Self::Item> {
-        let mut next = self.current.take();
-        if !self.first_call {
-            while let Some(n) = next {
-                if n.is_deleted() {
-                    if let ItemContent::Type(inner) = &n.content {
-                        // walk down in the tree
-                        let refc: &RefCell<_> = inner.borrow();
-                        let parent = refc.borrow();
-                        next = parent
-                            .start
-                            .get()
-                            .and_then(|ptr| self.txn.store.blocks.get_item(&ptr));
+        let mut result = None;
+        while let Some(current) = self.current.take() {
+            if current.is_deleted() {
+                self.current = current
+                    .right
+                    .as_ref()
+                    .and_then(|ptr| self.txn.store.blocks.get_item(ptr));
+                continue;
+            }
 
-                        continue;
-                    }
-                }
+            if let ItemContent::Type(inner) = &current.content {
+                // walk down in the tree
+                self.current = {
+                    let refc: &RefCell<_> = inner.borrow();
+                    let r = refc.borrow();
+                    r.start
+                        .get()
+                        .and_then(|ptr| self.txn.store.blocks.get_item(&ptr))
+                };
 
-                // walk right or up in the tree
-                while let Some(n) = next {
-                    if let Some(right) = n.right.as_ref() {
-                        next = self.txn.store.blocks.get_item(right);
-                        break;
-                    } else if n.parent == self.root {
-                        next = None;
-                    } else {
-                        next = self
-                            .txn
-                            .store
-                            .get_type(&n.parent)
-                            .and_then(|inner| {
-                                let i: &RefCell<_> = inner.borrow();
-                                i.borrow().start.get()
-                            })
-                            .and_then(|ptr| self.txn.store.blocks.get_item(&ptr));
-                    }
+                result = Some(XmlElement::from(inner.clone()));
+            }
+
+            if self.current.is_none() {
+                self.current = if let Some(right) = current.right.as_ref() {
+                    self.txn.store.blocks.get_item(right) // walk to right neighbor
+                } else if current.parent != self.root {
+                    // walk up in the tree hierarchy
+                    self.txn
+                        .store
+                        .get_type(&current.parent)
+                        .and_then(|inner| {
+                            let i: &RefCell<_> = inner.borrow();
+                            i.borrow().item.clone()
+                        })
+                        .and_then(|ptr| self.txn.store.blocks.get_item(&ptr))
+                } else {
+                    None
+                };
+            }
+            break;
+        }
+        result
+    }
+}
+
+pub struct Select<'a, 'b, 'txn> {
+    inner: TreeWalker<'a, 'txn>,
+    query: &'b str,
+}
+
+impl<'a, 'b, 'txn> Select<'a, 'b, 'txn> {
+    fn new(inner: TreeWalker<'a, 'txn>, query: &'b str) -> Self {
+        Select { inner, query }
+    }
+}
+
+impl<'a, 'b, 'txn> Iterator for Select<'a, 'b, 'txn> {
+    type Item = XmlElement;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while let Some(elem) = self.inner.next() {
+            let inner = elem.inner();
+            if let Some(tag) = inner.name.as_ref() {
+                if tag == self.query {
+                    drop(inner);
+                    return Some(elem);
                 }
             }
         }
-
-        self.first_call = false;
-        let result = if let ItemContent::Type(inner) = &next?.content {
-            Some(XmlElement::from(inner.clone()))
-        } else {
-            None
-        };
-        self.current = next;
-        result
+        None
     }
 }
 
@@ -416,6 +509,7 @@ impl Into<XmlHook> for Map {
     }
 }
 
+#[derive(Debug, Eq, PartialEq)]
 pub struct XmlText(Text);
 
 impl XmlText {
@@ -428,7 +522,7 @@ impl XmlText {
     }
 
     pub fn to_string(&self, txn: &Transaction) -> String {
-        todo!()
+        self.0.to_string(txn)
     }
 
     pub fn remove_attribute(&self, txn: &mut Transaction, attr_name: &str) {
@@ -441,8 +535,20 @@ impl XmlText {
         attr_name: K,
         attr_value: V,
     ) {
-        self.inner()
-            .insert(txn, attr_name.to_string(), attr_value.to_string())
+        let key = attr_name.to_string();
+        let value = attr_value.to_string();
+        let pos = {
+            let inner = self.inner();
+            let left = inner.map.get(&key);
+            ItemPosition {
+                parent: inner.ptr.clone(),
+                left: left.cloned(),
+                right: None,
+                index: 0,
+            }
+        };
+
+        txn.create_item(&pos, value.into(), Some(key));
     }
 
     pub fn get_attribute(&self, txn: &Transaction, attr_name: &str) -> Option<String> {
@@ -452,25 +558,27 @@ impl XmlText {
     }
 
     pub fn attributes<'a, 'b, 'txn>(&'a self, txn: &'b Transaction<'txn>) -> Attributes<'b, 'txn> {
-        let inner = self.inner();
-        let blocks = inner.entries(txn);
-        Attributes(blocks)
+        Attributes(self.inner().entries(txn))
     }
 
-    pub fn next_sibling(&self, txn: &Transaction) -> Option<XmlElement> {
-        todo!()
+    pub fn next_sibling<T: From<Rc<RefCell<Inner>>>>(&self, txn: &Transaction) -> Option<T> {
+        next_sibling(self.0.inner(), txn)
     }
 
-    pub fn prev_sibling(&self, txn: &Transaction) -> Option<XmlElement> {
-        todo!()
+    pub fn prev_sibling<T: From<Rc<RefCell<Inner>>>>(&self, txn: &Transaction) -> Option<T> {
+        prev_sibling(self.0.inner(), txn)
+    }
+
+    pub fn parent<T: From<Rc<RefCell<Inner>>>>(&self, txn: &Transaction) -> Option<T> {
+        parent(self.inner(), txn)
     }
 
     pub fn len(&self, txn: &Transaction) -> u32 {
-        todo!()
+        self.0.len()
     }
 
     pub fn insert(&self, txn: &mut Transaction, index: u32, content: &str) {
-        todo!()
+        self.0.insert(txn, index, content)
     }
 
     pub fn push(&self, txn: &mut Transaction, content: &str) {
@@ -479,7 +587,7 @@ impl XmlText {
     }
 
     pub fn remove(&self, txn: &mut Transaction, index: u32, len: u32) {
-        todo!()
+        self.0.remove(txn, index, len)
     }
 }
 
@@ -501,44 +609,155 @@ impl Into<XmlText> for Text {
     }
 }
 
+fn next_sibling<T: From<Rc<RefCell<Inner>>>>(inner: Ref<Inner>, txn: &Transaction) -> Option<T> {
+    let mut current = inner
+        .item
+        .as_ref()
+        .and_then(|ptr| txn.store.blocks.get_item(ptr));
+    while let Some(item) = current {
+        current = item
+            .right
+            .as_ref()
+            .and_then(|ptr| txn.store.blocks.get_item(ptr));
+        if let Some(right) = current {
+            if !right.is_deleted() {
+                if let ItemContent::Type(inner) = &right.content {
+                    return Some(T::from(inner.clone()));
+                }
+            }
+        }
+    }
+
+    None
+}
+
+fn prev_sibling<T: From<Rc<RefCell<Inner>>>>(inner: Ref<Inner>, txn: &Transaction) -> Option<T> {
+    let mut current = inner
+        .item
+        .as_ref()
+        .and_then(|ptr| txn.store.blocks.get_item(ptr));
+    while let Some(item) = current {
+        current = item
+            .left
+            .as_ref()
+            .and_then(|ptr| txn.store.blocks.get_item(ptr));
+        if let Some(left) = current {
+            if !left.is_deleted() {
+                if let ItemContent::Type(inner) = &left.content {
+                    return Some(T::from(inner.clone()));
+                }
+            }
+        }
+    }
+
+    None
+}
+
+fn parent<T: From<Rc<RefCell<Inner>>>>(inner: Ref<Inner>, txn: &Transaction) -> Option<T> {
+    let item = txn.store.blocks.get_item(inner.item.as_ref()?)?;
+    let parent = txn.store.get_type(&item.parent)?;
+    Some(T::from(parent.clone()))
+}
+
 #[cfg(test)]
 mod test {
+    use crate::types::xml::XmlElement;
     use crate::Doc;
 
     #[test]
-    fn insert() {
+    fn insert_attribute() {
         let d1 = Doc::with_client_id(1);
         let mut t1 = d1.transact();
-        let xml1 = t1.get_xml_element("xml");
-        xml1.insert_attribute(&mut t1, "height", "10");
+        let xml1 = t1.get_xml_element("xml", "UNDEFINED");
+        xml1.insert_attribute(&mut t1, "height", 10);
         assert_eq!(xml1.get_attribute(&t1, "height"), Some("10".to_string()));
 
         let d2 = Doc::with_client_id(1);
         let mut t2 = d2.transact();
-        let xml2 = t2.get_xml_element("xml");
+        let xml2 = t2.get_xml_element("xml", "UNDEFINED");
         d2.apply_update(&mut t2, d1.encode_state_as_update(&t1).as_slice());
         assert_eq!(xml2.get_attribute(&t2, "height"), Some("10".to_string()));
     }
 
     #[test]
     fn tree_walker() {
-        let d1 = Doc::with_client_id(1);
-        let mut t1 = d1.transact();
-        let paragraph1 = t1.get_xml_element("p");
+        let doc = Doc::with_client_id(1);
+        let mut txn = doc.transact();
+        /*
+            <root>
+                <p>{txt1}{txt2}</p>
+                <p></p>
+                <img/>
+            </root>
+        */
+        let root = txn.get_xml_element("xml", "root");
+        let p1 = root.push_elem_back(&mut txn, "p");
+        let txt1 = p1.push_text_back(&mut txn);
+        let txt2 = p1.push_text_back(&mut txn);
+        let p2 = root.push_elem_back(&mut txn, "p");
+        let img = root.push_elem_back(&mut txn, "img");
+
+        let mut all_paragraphs = root.select(&txn, "p");
+        let actual: Vec<_> = all_paragraphs.collect();
+
+        assert_eq!(
+            actual.len(),
+            2,
+            "query selector should found two paragraphs"
+        );
+        assert_eq!(actual[0], p1, "query selector found 1st paragraph");
+        assert_eq!(actual[1], p2, "query selector found 2nd paragraph");
     }
 
     #[test]
     fn text_attributes() {
-        todo!()
+        let doc = Doc::with_client_id(1);
+        let mut txn = doc.transact();
+        let txt = txn.get_xml_text("txt");
+        txt.insert_attribute(&mut txn, "test", 42);
+
+        assert_eq!(txt.get_attribute(&txn, "test"), Some("42".to_string()));
+        let actual: Vec<_> = txt.attributes(&txn).collect();
+        assert_eq!(actual, vec![("test", "42".to_string())]);
     }
 
     #[test]
     fn siblings() {
-        todo!()
-    }
+        let doc = Doc::with_client_id(1);
+        let mut txn = doc.transact();
+        let root = txn.get_xml_element("root", "root");
+        println!("1st: {}", txn.store);
+        let first = root.push_text_back(&mut txn);
+        println!("2nd: {}", txn.store);
+        first.push(&mut txn, "hello");
+        println!("3rd: {}", txn.store);
+        let second = root.push_elem_back(&mut txn, "p");
+        println!("5th: {}", txn.store);
 
-    #[test]
-    fn insert_after() {
-        todo!()
+        assert_eq!(
+            first.next_sibling(&txn).as_ref(),
+            Some(&second),
+            "first.next_sibling should point to second"
+        );
+        assert_eq!(
+            second.prev_sibling(&txn).as_ref(),
+            Some(&first),
+            "second.prev_sibling should point to first"
+        );
+        assert_eq!(
+            first.parent(&txn).as_ref(),
+            Some(&root),
+            "first.parent should point to root"
+        );
+        assert_eq!(
+            root.parent::<XmlElement>(&txn).as_ref(),
+            None,
+            "root parent should not exist"
+        );
+        assert_eq!(
+            root.first_child(&txn).as_ref(),
+            Some(&first),
+            "root.first_child should point to first"
+        );
     }
 }

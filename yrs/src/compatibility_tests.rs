@@ -219,8 +219,8 @@ fn xml_fragment_insert() {
             None,
             ItemContent::Type(Rc::new(RefCell::new(Inner::new(
                 TypePtr::Id(BlockPtr::from(ID::new(CLIENT_ID, 0))),
-                None,
                 TYPE_REFS_XML_TEXT,
+                None,
             )))),
         )),
         &Block::Item(Item::new(
@@ -233,8 +233,8 @@ fn xml_fragment_insert() {
             None,
             ItemContent::Type(Rc::new(RefCell::new(Inner::new(
                 TypePtr::Id(BlockPtr::from(ID::new(CLIENT_ID, 1))),
-                Some("node-name".to_string()),
                 TYPE_REFS_XML_ELEMENT,
+                Some("node-name".to_string()),
             )))),
         )),
     ];
