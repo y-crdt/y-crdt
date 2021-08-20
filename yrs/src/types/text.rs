@@ -5,6 +5,7 @@ use crate::*;
 use std::cell::{Ref, RefCell};
 use std::rc::Rc;
 
+#[derive(Debug, Eq, PartialEq)]
 pub struct Text(Rc<RefCell<Inner>>);
 
 impl Text {
@@ -94,7 +95,7 @@ impl Text {
         }
     }
 
-    pub fn delete(&self, txn: &mut Transaction, index: u32, mut len: u32) {
+    pub fn remove(&self, txn: &mut Transaction, index: u32, mut len: u32) {
         if let Some(pos) = self.find_position(txn, index) {
             let mut current = {
                 let block = pos
@@ -362,7 +363,7 @@ mod test {
 
         txt.insert(&mut txn, 0, "bbb");
         txt.insert(&mut txn, 0, "aaa");
-        txt.delete(&mut txn, 0, 3);
+        txt.remove(&mut txn, 0, 3);
 
         assert_eq!(txt.to_string(&txn).as_str(), "bbb");
     }
@@ -375,7 +376,7 @@ mod test {
 
         txt.insert(&mut txn, 0, "bbb");
         txt.insert(&mut txn, 0, "aaa");
-        txt.delete(&mut txn, 3, 3);
+        txt.remove(&mut txn, 3, 3);
 
         assert_eq!(txt.to_string(&txn).as_str(), "aaa");
     }
@@ -390,13 +391,13 @@ mod test {
         txt.insert(&mut txn, 1, "b");
         txt.insert(&mut txn, 2, "c");
 
-        txt.delete(&mut txn, 1, 1);
+        txt.remove(&mut txn, 1, 1);
         assert_eq!(txt.to_string(&txn).as_str(), "ac");
 
-        txt.delete(&mut txn, 1, 1);
+        txt.remove(&mut txn, 1, 1);
         assert_eq!(txt.to_string(&txn).as_str(), "a");
 
-        txt.delete(&mut txn, 0, 1);
+        txt.remove(&mut txn, 0, 1);
         assert_eq!(txt.to_string(&txn).as_str(), "");
     }
 
@@ -407,7 +408,7 @@ mod test {
         let txt = txn.get_text("test");
 
         txt.insert(&mut txn, 0, "abc");
-        txt.delete(&mut txn, 1, 1);
+        txt.remove(&mut txn, 1, 1);
 
         assert_eq!(txt.to_string(&txn).as_str(), "ac");
     }
@@ -422,7 +423,7 @@ mod test {
         txt.insert(&mut txn, 6, "beautiful");
         txt.insert(&mut txn, 15, " world");
 
-        txt.delete(&mut txn, 5, 11);
+        txt.remove(&mut txn, 5, 11);
         assert_eq!(txt.to_string(&txn).as_str(), "helloworld");
     }
 
@@ -433,7 +434,7 @@ mod test {
         let txt = txn.get_text("test");
 
         txt.insert(&mut txn, 0, "hello ");
-        txt.delete(&mut txn, 0, 5);
+        txt.remove(&mut txn, 0, 5);
         txt.insert(&mut txn, 1, "world");
 
         assert_eq!(txt.to_string(&txn).as_str(), " world");
@@ -458,11 +459,11 @@ mod test {
 
         txt1.insert(&mut t1, 5, " beautiful");
         txt1.insert(&mut t1, 21, "!");
-        txt1.delete(&mut t1, 0, 5);
+        txt1.remove(&mut t1, 0, 5);
         assert_eq!(txt1.to_string(&t1).as_str(), " beautiful world!");
 
-        txt2.delete(&mut t2, 5, 5);
-        txt2.delete(&mut t2, 0, 1);
+        txt2.remove(&mut t2, 5, 5);
+        txt2.remove(&mut t2, 0, 1);
         txt2.insert(&mut t2, 0, "H");
         assert_eq!(txt2.to_string(&t2).as_str(), "Hellod");
 

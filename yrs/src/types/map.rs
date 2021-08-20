@@ -41,8 +41,8 @@ impl Map {
     }
 
     fn blocks<'a, 'b, 'txn>(&'a self, txn: &'b Transaction<'txn>) -> Entries<'b, 'txn> {
-        let inner = &*self.0;
-        inner.borrow().entries(txn)
+        let ptr = &self.0.borrow().ptr;
+        Entries::new(ptr, txn)
     }
 
     pub fn keys<'a, 'b, 'txn>(&'a self, txn: &'b Transaction<'txn>) -> Keys<'b, 'txn> {
@@ -64,8 +64,18 @@ impl Map {
         value: V,
     ) -> Option<Any> {
         let previous = self.get(txn, &key);
-        let inner = self.0.borrow();
-        inner.insert(txn, key, value);
+        let pos = {
+            let inner = self.0.borrow();
+            let left = inner.map.get(&key);
+            ItemPosition {
+                parent: inner.ptr.clone(),
+                left: left.cloned(),
+                right: None,
+                index: 0,
+            }
+        };
+
+        txn.create_item(&pos, value.into(), Some(key));
         previous
     }
 
