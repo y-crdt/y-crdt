@@ -116,7 +116,21 @@ impl Block {
 
     pub fn integrate(&mut self, txn: &mut Transaction<'_>, pivot: u32, offset: u32) -> bool {
         match self {
-            Block::Item(item) => item.integrate(txn, pivot, offset),
+            Block::Item(item) => {
+                // In the original Y.js algorithm we decoded items as we go and attached them to client
+                // block list. During that process if we had right origin but no left, we made a lookup for
+                // right origin's parent and attach it as a parent of current block.
+                //
+                // Here since we decode all blocks first, then apply them, we might not find them in
+                // the block store during decoding. Therefore we retroactively reattach it here.
+                if let TypePtr::Id(ptr) = &item.parent {
+                    if let Some(i) = txn.store.blocks.get_item(&ptr) {
+                        item.parent = i.parent.clone();
+                    }
+                }
+
+                item.integrate(txn, pivot, offset)
+            }
             Block::GC(gc) => gc.integrate(offset),
             Block::Skip(_) => {
                 panic!("Block::Skip cannot be integrated")
@@ -441,18 +455,6 @@ impl Item {
                 self.origin = None;
             }
             self.content.splice(offset as usize);
-        }
-
-        // In the original Y.js algorithm we decoded items as we go and attached them to client
-        // block list. During that process if we had right origin but no left, we made a lookup for
-        // right origin's parent and attach it as a parent of current block.
-        //
-        // Here since we decode all blocks first, then apply them, we might not find them in
-        // the block store during decoding. Therefore we retroactively reattach it here.
-        if let TypePtr::Id(ptr) = &self.parent {
-            if let Some(item) = txn.store.blocks.get_item(&ptr) {
-                self.parent = item.parent.clone();
-            }
         }
 
         let parent = match txn.store.get_type(&self.parent).cloned() {

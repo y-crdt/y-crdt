@@ -2,7 +2,7 @@ use crate::block::ItemContent;
 use crate::block_store::{BlockStore, CompactionResult, StateVector};
 use crate::event::{EventHandler, UpdateEvent};
 use crate::id_set::DeleteSet;
-use crate::types::{InnerRef, TypeRefs, TYPE_REFS_UNDEFINED};
+use crate::types::{InnerRef, TypePtr, TypeRefs, TYPE_REFS_UNDEFINED};
 use crate::update::PendingUpdate;
 use crate::updates::encoder::{Encode, Encoder};
 use crate::{block, types};
