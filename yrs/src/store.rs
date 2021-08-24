@@ -2,7 +2,7 @@ use crate::block::ItemContent;
 use crate::block_store::{BlockStore, CompactionResult, StateVector};
 use crate::event::{EventHandler, UpdateEvent};
 use crate::id_set::DeleteSet;
-use crate::types::{Inner, TypeRefs, TYPE_REFS_UNDEFINED};
+use crate::types::{Inner, InnerRef, TypeRefs, TYPE_REFS_UNDEFINED};
 use crate::update::PendingUpdate;
 use crate::updates::encoder::{Encode, Encoder};
 use crate::{block, types};
@@ -13,7 +13,7 @@ use std::rc::Rc;
 
 pub struct Store {
     pub client_id: u64,
-    pub types: HashMap<Rc<String>, Rc<RefCell<types::Inner>>>,
+    pub types: HashMap<Rc<String>, InnerRef>,
     pub blocks: BlockStore,
     pub pending: Option<PendingUpdate>,
     pub pending_ds: Option<DeleteSet>,
@@ -36,7 +36,7 @@ impl Store {
         self.blocks.get_state(&self.client_id)
     }
 
-    pub fn get_type(&self, ptr: &types::TypePtr) -> Option<&Rc<RefCell<types::Inner>>> {
+    pub fn get_type(&self, ptr: &types::TypePtr) -> Option<&InnerRef> {
         match ptr {
             types::TypePtr::Id(id) => {
                 // @todo the item might not exist
@@ -55,7 +55,7 @@ impl Store {
         &mut self,
         ptr: &types::TypePtr,
         content: &ItemContent,
-    ) -> Option<Rc<RefCell<types::Inner>>> {
+    ) -> Option<InnerRef> {
         match ptr {
             types::TypePtr::Named(name) => {
                 if let ItemContent::Type(inner) = content {
@@ -81,7 +81,7 @@ impl Store {
         name: &str,
         node_name: Option<String>,
         type_ref: TypeRefs,
-    ) -> Rc<RefCell<Inner>> {
+    ) -> InnerRef {
         let rc = Rc::new(name.to_owned());
         self.init_type_ref(rc.clone(), node_name, type_ref)
     }
@@ -91,12 +91,12 @@ impl Store {
         name: Rc<String>,
         node_name: Option<String>,
         type_ref: TypeRefs,
-    ) -> Rc<RefCell<Inner>> {
+    ) -> InnerRef {
         let e = self.types.entry(name.clone());
         let value = e.or_insert_with(|| {
             let type_ptr = types::TypePtr::Named(name.clone());
             let inner = types::Inner::new(type_ptr, type_ref, node_name);
-            Rc::new(RefCell::new(inner))
+            InnerRef::new(inner)
         });
         value.clone()
     }

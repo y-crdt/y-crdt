@@ -1,6 +1,7 @@
 use crate::block::{BlockPtr, Item, ItemContent, ItemPosition};
 use crate::types::{
-    Entries, Inner, Map, Text, TypePtr, TypeRefs, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT,
+    Entries, Inner, InnerRef, Map, Text, TypePtr, TypeRefs, TYPE_REFS_XML_ELEMENT,
+    TYPE_REFS_XML_TEXT,
 };
 use crate::Transaction;
 use lib0::any::Any;
@@ -14,8 +15,7 @@ pub struct XmlElement(XmlFragment);
 
 impl XmlElement {
     fn inner(&self) -> Ref<Inner> {
-        let fragment = &self.0;
-        (*fragment.0).borrow()
+        self.0.inner()
     }
 
     pub fn to_string(&self, txn: &Transaction) -> String {
@@ -83,19 +83,19 @@ impl XmlElement {
         Attributes(blocks)
     }
 
-    pub fn next_sibling<T: From<Rc<RefCell<Inner>>>>(&self, txn: &Transaction) -> Option<T> {
+    pub fn next_sibling<T: From<InnerRef>>(&self, txn: &Transaction) -> Option<T> {
         next_sibling(self.inner(), txn)
     }
 
-    pub fn prev_sibling<T: From<Rc<RefCell<Inner>>>>(&self, txn: &Transaction) -> Option<T> {
+    pub fn prev_sibling<T: From<InnerRef>>(&self, txn: &Transaction) -> Option<T> {
         prev_sibling(self.inner(), txn)
     }
 
-    pub fn parent<T: From<Rc<RefCell<Inner>>>>(&self, txn: &Transaction) -> Option<T> {
+    pub fn parent<T: From<InnerRef>>(&self, txn: &Transaction) -> Option<T> {
         self.0.parent(txn)
     }
 
-    pub fn first_child<T: From<Rc<RefCell<Inner>>>>(&self, txn: &Transaction) -> Option<T> {
+    pub fn first_child<T: From<InnerRef>>(&self, txn: &Transaction) -> Option<T> {
         self.0.first_child(txn)
     }
 
@@ -159,8 +159,8 @@ impl Into<ItemContent> for XmlElement {
     }
 }
 
-impl From<Rc<RefCell<Inner>>> for XmlElement {
-    fn from(inner: Rc<RefCell<Inner>>) -> Self {
+impl From<InnerRef> for XmlElement {
+    fn from(inner: InnerRef) -> Self {
         XmlElement(XmlFragment::new(inner))
     }
 }
@@ -189,18 +189,18 @@ impl Into<XmlElement> for XmlFragment {
 }
 
 #[derive(Debug, Eq, PartialEq)]
-pub struct XmlFragment(Rc<RefCell<Inner>>);
+pub struct XmlFragment(InnerRef);
 
 impl XmlFragment {
-    pub fn new(inner: Rc<RefCell<Inner>>) -> Self {
+    pub fn new(inner: InnerRef) -> Self {
         XmlFragment(inner)
     }
 
     fn inner(&self) -> Ref<Inner> {
-        (*self.0).borrow()
+        self.0.borrow()
     }
 
-    pub fn first_child<T: From<Rc<RefCell<Inner>>>>(&self, txn: &Transaction) -> Option<T> {
+    pub fn first_child<T: From<InnerRef>>(&self, txn: &Transaction) -> Option<T> {
         let inner = self.inner();
         let first = inner.first(txn)?;
         match &first.content {
@@ -212,7 +212,7 @@ impl XmlFragment {
         }
     }
 
-    pub fn parent<T: From<Rc<RefCell<Inner>>>>(&self, txn: &Transaction) -> Option<T> {
+    pub fn parent<T: From<InnerRef>>(&self, txn: &Transaction) -> Option<T> {
         parent(self.inner(), txn)
     }
 
@@ -264,7 +264,7 @@ impl XmlFragment {
         index: u32,
         type_refs: TypeRefs,
         name: Option<String>,
-    ) -> Rc<RefCell<Inner>> {
+    ) -> InnerRef {
         let (start, parent) = {
             let parent = self.inner();
             if index <= parent.len() {
@@ -281,7 +281,7 @@ impl XmlFragment {
         let content = {
             let parent = self.inner();
             let inner = Inner::new(parent.ptr.clone(), type_refs, name);
-            Rc::new(RefCell::new(inner))
+            InnerRef::new(inner)
         };
         let pos = ItemPosition {
             parent,
@@ -294,7 +294,7 @@ impl XmlFragment {
     }
 
     pub fn remove(&self, txn: &mut Transaction, index: u32, len: u32) {
-        Inner::remove_at(&self.0, txn, index, len)
+        self.0.remove_at(txn, index, len)
     }
 
     pub fn push_elem_back<S: ToString>(&self, txn: &mut Transaction, name: S) -> XmlElement {
@@ -315,7 +315,7 @@ impl XmlFragment {
         self.insert_text(txn, 0)
     }
 
-    pub fn get<T: From<Rc<RefCell<Inner>>>>(&self, txn: &Transaction, index: u32) -> Option<T> {
+    pub fn get<T: From<InnerRef>>(&self, txn: &Transaction, index: u32) -> Option<T> {
         let inner = self.inner();
         let (content, idx) = inner.get_at(txn, index)?;
         if let ItemContent::Type(inner) = content {
@@ -368,9 +368,9 @@ impl<'a, 'txn> Iterator for TreeWalker<'a, 'txn> {
             if let ItemContent::Type(inner) = &current.content {
                 // walk down in the tree
                 self.current = {
-                    let refc: &RefCell<_> = inner.borrow();
-                    let r = refc.borrow();
-                    r.start
+                    inner
+                        .borrow()
+                        .start
                         .get()
                         .and_then(|ptr| self.txn.store.blocks.get_item(&ptr))
                 };
@@ -386,10 +386,7 @@ impl<'a, 'txn> Iterator for TreeWalker<'a, 'txn> {
                     self.txn
                         .store
                         .get_type(&current.parent)
-                        .and_then(|inner| {
-                            let i: &RefCell<_> = inner.borrow();
-                            i.borrow().item.clone()
-                        })
+                        .and_then(|inner| inner.borrow().item.clone())
                         .and_then(|ptr| self.txn.store.blocks.get_item(&ptr))
                 } else {
                     None
@@ -497,8 +494,8 @@ impl Into<ItemContent> for XmlHook {
     }
 }
 
-impl From<Rc<RefCell<Inner>>> for XmlHook {
-    fn from(inner: Rc<RefCell<Inner>>) -> Self {
+impl From<InnerRef> for XmlHook {
+    fn from(inner: InnerRef) -> Self {
         XmlHook(Map::from(inner))
     }
 }
@@ -513,10 +510,6 @@ impl Into<XmlHook> for Map {
 pub struct XmlText(Text);
 
 impl XmlText {
-    pub fn new(inner: Rc<RefCell<Inner>>) -> Self {
-        XmlText(Text::from(inner))
-    }
-
     fn inner(&self) -> Ref<Inner> {
         self.0.inner()
     }
@@ -561,15 +554,15 @@ impl XmlText {
         Attributes(self.inner().entries(txn))
     }
 
-    pub fn next_sibling<T: From<Rc<RefCell<Inner>>>>(&self, txn: &Transaction) -> Option<T> {
+    pub fn next_sibling<T: From<InnerRef>>(&self, txn: &Transaction) -> Option<T> {
         next_sibling(self.0.inner(), txn)
     }
 
-    pub fn prev_sibling<T: From<Rc<RefCell<Inner>>>>(&self, txn: &Transaction) -> Option<T> {
+    pub fn prev_sibling<T: From<InnerRef>>(&self, txn: &Transaction) -> Option<T> {
         prev_sibling(self.0.inner(), txn)
     }
 
-    pub fn parent<T: From<Rc<RefCell<Inner>>>>(&self, txn: &Transaction) -> Option<T> {
+    pub fn parent<T: From<InnerRef>>(&self, txn: &Transaction) -> Option<T> {
         parent(self.inner(), txn)
     }
 
@@ -597,9 +590,9 @@ impl Into<ItemContent> for XmlText {
     }
 }
 
-impl From<Rc<RefCell<Inner>>> for XmlText {
-    fn from(inner: Rc<RefCell<Inner>>) -> Self {
-        XmlText::new(inner)
+impl From<InnerRef> for XmlText {
+    fn from(inner: InnerRef) -> Self {
+        XmlText(Text::from(inner))
     }
 }
 
@@ -609,7 +602,7 @@ impl Into<XmlText> for Text {
     }
 }
 
-fn next_sibling<T: From<Rc<RefCell<Inner>>>>(inner: Ref<Inner>, txn: &Transaction) -> Option<T> {
+fn next_sibling<T: From<InnerRef>>(inner: Ref<Inner>, txn: &Transaction) -> Option<T> {
     let mut current = inner
         .item
         .as_ref()
@@ -631,7 +624,7 @@ fn next_sibling<T: From<Rc<RefCell<Inner>>>>(inner: Ref<Inner>, txn: &Transactio
     None
 }
 
-fn prev_sibling<T: From<Rc<RefCell<Inner>>>>(inner: Ref<Inner>, txn: &Transaction) -> Option<T> {
+fn prev_sibling<T: From<InnerRef>>(inner: Ref<Inner>, txn: &Transaction) -> Option<T> {
     let mut current = inner
         .item
         .as_ref()
@@ -653,7 +646,7 @@ fn prev_sibling<T: From<Rc<RefCell<Inner>>>>(inner: Ref<Inner>, txn: &Transactio
     None
 }
 
-fn parent<T: From<Rc<RefCell<Inner>>>>(inner: Ref<Inner>, txn: &Transaction) -> Option<T> {
+fn parent<T: From<InnerRef>>(inner: Ref<Inner>, txn: &Transaction) -> Option<T> {
     let item = txn.store.blocks.get_item(inner.item.as_ref()?)?;
     let parent = txn.store.get_type(&item.parent)?;
     Some(T::from(parent.clone()))

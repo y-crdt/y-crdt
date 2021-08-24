@@ -1,12 +1,12 @@
 use crate::block::{BlockPtr, ItemContent};
 use crate::transaction::Transaction;
-use crate::types::Inner;
+use crate::types::{Inner, InnerRef};
 use crate::*;
 use std::cell::{Ref, RefCell};
 use std::rc::Rc;
 
 #[derive(Debug, Eq, PartialEq)]
-pub struct Text(Rc<RefCell<Inner>>);
+pub struct Text(InnerRef);
 
 impl Text {
     #[allow(clippy::inherent_to_string)]
@@ -156,8 +156,8 @@ impl Into<ItemContent> for Text {
     }
 }
 
-impl From<Rc<RefCell<Inner>>> for Text {
-    fn from(inner: Rc<RefCell<Inner>>) -> Self {
+impl From<InnerRef> for Text {
+    fn from(inner: InnerRef) -> Self {
         Text(inner)
     }
 }

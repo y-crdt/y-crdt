@@ -10,7 +10,7 @@ pub use text::Text;
 use crate::block::{BlockPtr, Item, ItemContent, ItemPosition};
 use crate::types::xml::XmlElement;
 use lib0::any::Any;
-use std::cell::{Cell, RefCell};
+use std::cell::{BorrowMutError, Cell, Ref, RefCell, RefMut};
 use std::collections::HashMap;
 use std::fmt::Formatter;
 use std::hash::Hasher;
@@ -28,6 +28,83 @@ pub const TYPE_REFS_XML_TEXT: TypeRefs = 6;
 
 /// Placeholder for non-specialized AbstractType.
 pub const TYPE_REFS_UNDEFINED: TypeRefs = 7;
+
+#[derive(Debug, Clone)]
+pub struct InnerRef(Rc<RefCell<Inner>>);
+
+impl InnerRef {
+    pub fn new(inner: Inner) -> Self {
+        InnerRef(Rc::new(RefCell::new(inner)))
+    }
+
+    pub fn borrow(&self) -> Ref<Inner> {
+        self.0.borrow()
+    }
+
+    pub fn borrow_mut(&self) -> RefMut<Inner> {
+        self.0.borrow_mut()
+    }
+
+    pub fn try_borrow_mut(&self) -> Result<RefMut<Inner>, BorrowMutError> {
+        self.0.try_borrow_mut()
+    }
+
+    pub(crate) fn remove_at(&self, txn: &mut Transaction, index: u32, mut len: u32) {
+        let start = {
+            let parent = self.borrow();
+            parent.start.get()
+        };
+        let (_, mut ptr) = if index == 0 {
+            (None, start)
+        } else {
+            Inner::index_to_ptr(txn, start, index)
+        };
+        while len > 0 {
+            if let Some(mut p) = ptr {
+                if let Some(item) = txn.store.blocks.get_item(&p) {
+                    if !item.is_deleted() {
+                        let item_len = item.len();
+                        let (l, r) = if len < item_len {
+                            p.id.clock += len;
+                            len = 0;
+                            txn.store.blocks.split_block(&p)
+                        } else {
+                            len -= item_len;
+                            (ptr, item.right.clone())
+                        };
+                        txn.delete(&l.unwrap());
+                        ptr = r;
+                    } else {
+                        ptr = item.right.clone();
+                    }
+                }
+            } else {
+                break;
+            }
+        }
+
+        if len > 0 {
+            panic!("Array length exceeded");
+        }
+    }
+}
+
+impl AsRef<Inner> for InnerRef {
+    fn as_ref<'a>(&'a self) -> &'a Inner {
+        unsafe { &*self.0.as_ptr() as &'a Inner }
+    }
+}
+
+impl Eq for InnerRef {}
+impl PartialEq for InnerRef {
+    fn eq(&self, other: &Self) -> bool {
+        if Rc::ptr_eq(&self.0, &other.0) {
+            true
+        } else {
+            self.0.borrow().eq(&other.0.borrow())
+        }
+    }
+}
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Inner {
@@ -140,50 +217,6 @@ impl Inner {
         };
         txn.delete(ptr);
         prev
-    }
-
-    pub(crate) fn remove_at(
-        rc: &Rc<RefCell<Self>>,
-        txn: &mut Transaction,
-        index: u32,
-        mut len: u32,
-    ) {
-        let start = {
-            let parent = rc.borrow();
-            parent.start.get()
-        };
-        let (_, mut ptr) = if index == 0 {
-            (None, start)
-        } else {
-            Inner::index_to_ptr(txn, start, index)
-        };
-        while len > 0 {
-            if let Some(mut p) = ptr {
-                if let Some(item) = txn.store.blocks.get_item(&p) {
-                    if !item.is_deleted() {
-                        let item_len = item.len();
-                        let (l, r) = if len < item_len {
-                            p.id.clock += len;
-                            len = 0;
-                            txn.store.blocks.split_block(&p)
-                        } else {
-                            len -= item_len;
-                            (ptr, item.right.clone())
-                        };
-                        txn.delete(&l.unwrap());
-                        ptr = r;
-                    } else {
-                        ptr = item.right.clone();
-                    }
-                }
-            } else {
-                break;
-            }
-        }
-
-        if len > 0 {
-            panic!("Array length exceeded");
-        }
     }
 
     /// Returns a first non-deleted item from an array component of a current root type.
@@ -314,9 +347,8 @@ pub(crate) struct Entries<'a, 'txn> {
 
 impl<'a, 'txn> Entries<'a, 'txn> {
     pub(crate) fn new<'b>(ptr: &'b TypePtr, txn: &'a Transaction<'txn>) -> Self {
-        let rc = txn.store.get_type(ptr).unwrap();
-        let cell = rc.as_ref();
-        let iter = unsafe { &*cell.as_ptr() as &'a Inner }.map.iter();
+        let inner = txn.store.get_type(ptr).unwrap();
+        let iter = inner.as_ref().map.iter();
         Entries { txn, iter }
     }
 }

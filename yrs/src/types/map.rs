@@ -1,12 +1,12 @@
 use crate::block::{BlockPtr, Item, ItemContent, ItemPosition};
-use crate::types::{Entries, Inner, TypePtr};
+use crate::types::{Entries, Inner, InnerRef, TypePtr};
 use crate::*;
 use lib0::any::Any;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-pub struct Map(Rc<RefCell<Inner>>);
+pub struct Map(InnerRef);
 
 impl Map {
     pub fn to_json(&self, txn: &Transaction<'_>) -> Any {
@@ -150,8 +150,8 @@ impl Into<ItemContent> for Map {
     }
 }
 
-impl From<Rc<RefCell<Inner>>> for Map {
-    fn from(inner: Rc<RefCell<Inner>>) -> Self {
+impl From<InnerRef> for Map {
+    fn from(inner: InnerRef) -> Self {
         Map(inner)
     }
 }
