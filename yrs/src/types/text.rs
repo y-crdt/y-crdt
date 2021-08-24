@@ -40,7 +40,7 @@ impl Text {
         s
     }
 
-    fn find_position(
+    pub(crate) fn find_position(
         &self,
         txn: &mut Transaction<'_>,
         mut count: u32,

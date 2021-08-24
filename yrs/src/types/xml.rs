@@ -569,7 +569,13 @@ impl XmlText {
     }
 
     pub fn insert(&self, txn: &mut Transaction, index: u32, content: &str) {
-        self.0.insert(txn, index, content)
+        if let Some(mut pos) = self.0.find_position(txn, index) {
+            let parent = { TypePtr::Id(self.inner().item.unwrap()) };
+            pos.parent = parent;
+            txn.create_item(&pos, ItemContent::String(content.to_owned()), None);
+        } else {
+            panic!("The type or the position doesn't exist!");
+        }
     }
 
     pub fn push(&self, txn: &mut Transaction, content: &str) {
@@ -717,13 +723,9 @@ mod test {
         let doc = Doc::with_client_id(1);
         let mut txn = doc.transact();
         let root = txn.get_xml_element("root", "root");
-        println!("1st: {}", txn.store);
         let first = root.push_text_back(&mut txn);
-        println!("2nd: {}", txn.store);
         first.push(&mut txn, "hello");
-        println!("3rd: {}", txn.store);
         let second = root.push_elem_back(&mut txn, "p");
-        println!("5th: {}", txn.store);
 
         assert_eq!(
             first.next_sibling(&txn).as_ref(),
