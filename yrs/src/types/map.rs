@@ -1,10 +1,8 @@
-use crate::block::{BlockPtr, Item, ItemContent, ItemPosition};
-use crate::types::{Entries, Inner, InnerRef, TypePtr};
+use crate::block::{ItemContent, ItemPosition};
+use crate::types::{Entries, Inner, InnerRef};
 use crate::*;
 use lib0::any::Any;
-use std::cell::RefCell;
 use std::collections::HashMap;
-use std::rc::Rc;
 
 pub struct Map(InnerRef);
 
@@ -346,12 +344,10 @@ mod test {
             let mut t1 = d1.transact();
             let mut t2 = d2.transact();
             let mut t3 = d3.transact();
-            let mut t4 = d4.transact();
 
             let m1 = t1.get_map("map");
             let m2 = t2.get_map("map");
             let m3 = t3.get_map("map");
-            let m4 = t4.get_map("map");
 
             m1.insert(&mut t1, "key1".to_owned(), "c0");
             m2.insert(&mut t2, "key1".to_owned(), "c1");
@@ -365,12 +361,10 @@ mod test {
             let mut t1 = d1.transact();
             let mut t2 = d2.transact();
             let mut t3 = d3.transact();
-            let mut t4 = d4.transact();
 
             let m1 = t1.get_map("map");
             let m2 = t2.get_map("map");
             let m3 = t3.get_map("map");
-            let m4 = t4.get_map("map");
 
             m1.insert(&mut t1, "key2".to_owned(), "c0");
             m2.insert(&mut t2, "key2".to_owned(), "c1");
@@ -454,12 +448,10 @@ mod test {
             let mut t1 = d1.transact();
             let mut t2 = d2.transact();
             let mut t3 = d3.transact();
-            let mut t4 = d4.transact();
 
             let m1 = t1.get_map("map");
             let m2 = t2.get_map("map");
             let m3 = t3.get_map("map");
-            let m4 = t4.get_map("map");
 
             m1.insert(&mut t1, "key1".to_owned(), "c0");
             m2.insert(&mut t2, "key1".to_owned(), "c1");

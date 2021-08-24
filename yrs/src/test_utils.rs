@@ -5,7 +5,6 @@ use lib0::decoding::{Cursor, Read};
 use lib0::encoding::Write;
 use rand::prelude::SliceRandom;
 use rand::rngs::ThreadRng;
-use rand::seq::IteratorRandom;
 use rand::{thread_rng, Rng};
 use std::cell::{RefCell, RefMut};
 use std::collections::{HashMap, VecDeque};
@@ -37,7 +36,7 @@ where
     F: Fn(&mut Doc, &mut ThreadRng),
 {
     let mut tc = TestConnector::with_peer_num(thread_rng(), users as u64);
-    for i in 0..iterations {
+    for _i in 0..iterations {
         if tc.0.borrow_mut().rng.gen_range(0, 100) <= 2 {
             // 2% chance to disconnect/reconnect a random user
             if tc.0.borrow_mut().rng.gen_bool(0.5) {

@@ -7,7 +7,7 @@ use crate::updates::decoder::Decode;
 use crate::updates::encoder::Encode;
 use crate::{Doc, StateVector, ID};
 use lib0::any::Any;
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::rc::Rc;
 
 #[test]

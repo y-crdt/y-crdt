@@ -7,10 +7,10 @@ use crate::*;
 pub use map::Map;
 pub use text::Text;
 
-use crate::block::{BlockPtr, Item, ItemContent, ItemPosition};
+use crate::block::{BlockPtr, Item, ItemContent};
 use crate::types::xml::XmlElement;
 use lib0::any::Any;
-use std::cell::{BorrowMutError, Cell, Ref, RefCell, RefMut};
+use std::cell::{BorrowMutError, Ref, RefCell, RefMut};
 use std::collections::HashMap;
 use std::fmt::Formatter;
 use std::hash::Hasher;
@@ -223,7 +223,7 @@ impl Inner {
     pub(crate) fn first<'a, 'b>(&'a self, txn: &'b Transaction) -> Option<&'b Item> {
         let mut ptr = self.start;
         while let Some(p) = ptr {
-            let mut item = txn.store.blocks.get_item(&p)?;
+            let item = txn.store.blocks.get_item(&p)?;
             if item.is_deleted() {
                 ptr = item.right.clone();
             } else {

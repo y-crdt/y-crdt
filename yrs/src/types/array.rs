@@ -1,10 +1,8 @@
 use crate::block::{BlockPtr, ItemContent, ItemPosition};
-use crate::types::{Inner, InnerRef, TypePtr};
-use crate::{Transaction, ID};
+use crate::types::{Inner, InnerRef};
+use crate::Transaction;
 use lib0::any::Any;
-use std::cell::RefCell;
 use std::collections::VecDeque;
-use std::rc::Rc;
 
 pub struct Array(InnerRef);
 
@@ -47,7 +45,7 @@ impl Array {
         self.insert(txn, 0, content)
     }
 
-    pub fn remove(&self, txn: &mut Transaction, index: u32, mut len: u32) {
+    pub fn remove(&self, txn: &mut Transaction, index: u32, len: u32) {
         self.0.remove_at(txn, index, len)
     }
 
