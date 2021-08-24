@@ -1,14 +1,12 @@
-use crate::block::{BlockPtr, Item, ItemContent, ItemPosition};
+use crate::block::{Item, ItemContent, ItemPosition};
 use crate::types::{
     Entries, Inner, InnerRef, Map, Text, TypePtr, TypeRefs, TYPE_REFS_XML_ELEMENT,
     TYPE_REFS_XML_TEXT,
 };
 use crate::Transaction;
 use lib0::any::Any;
-use std::borrow::Borrow;
-use std::cell::{Ref, RefCell};
+use std::cell::Ref;
 use std::fmt::Write;
-use std::rc::Rc;
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct XmlElement(XmlFragment);
@@ -216,7 +214,7 @@ impl XmlFragment {
         parent(self.inner(), txn)
     }
 
-    pub fn len(&self, txn: &Transaction) -> u32 {
+    pub fn len(&self, _txn: &Transaction) -> u32 {
         self.inner().len()
     }
 

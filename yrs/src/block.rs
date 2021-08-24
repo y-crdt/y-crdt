@@ -1,5 +1,3 @@
-use crate::store::Store;
-use crate::types::xml::XmlElement;
 use crate::types::{
     Inner, InnerRef, TypePtr, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT, TYPE_REFS_UNDEFINED,
     TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_HOOK, TYPE_REFS_XML_TEXT,
@@ -8,11 +6,10 @@ use crate::updates::decoder::Decoder;
 use crate::updates::encoder::Encoder;
 use crate::*;
 use lib0::any::Any;
-use std::cell::{BorrowMutError, Cell, Ref, RefCell, RefMut};
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::panic;
-use std::rc::Rc;
 
 pub const BLOCK_GC_REF_NUMBER: u8 = 0;
 pub const BLOCK_ITEM_DELETED_REF_NUMBER: u8 = 1;

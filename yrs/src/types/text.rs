@@ -2,8 +2,7 @@ use crate::block::{BlockPtr, ItemContent};
 use crate::transaction::Transaction;
 use crate::types::{Inner, InnerRef};
 use crate::*;
-use std::cell::{Ref, RefCell};
-use std::rc::Rc;
+use std::cell::Ref;
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct Text(InnerRef);
