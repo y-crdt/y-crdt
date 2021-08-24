@@ -24,7 +24,7 @@ impl Text {
     }
 
     pub(crate) fn to_string_inner(inner: &Inner, txn: &Transaction<'_>) -> String {
-        let mut start = inner.start.get();
+        let mut start = inner.start;
         let mut s = String::new();
         while let Some(a) = start.as_ref() {
             if let Some(item) = txn.store.blocks.get_item(&a) {
@@ -51,7 +51,7 @@ impl Text {
             block::ItemPosition {
                 parent: inner.ptr.clone(),
                 left: None,
-                right: inner.start.get(),
+                right: inner.start,
                 index: 0,
             }
         };
@@ -110,8 +110,8 @@ impl Text {
                     None => {
                         let t = txn.store.get_type(&pos.parent).unwrap();
                         let inner = t.borrow();
-                        let ptr = inner.start.get();
-                        let item = ptr.as_ref().and_then(|ptr| txn.store.blocks.get_item(ptr));
+                        let ptr = inner.start.as_ref();
+                        let item = ptr.and_then(|ptr| txn.store.blocks.get_item(ptr));
                         item
                     }
                 }

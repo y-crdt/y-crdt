@@ -52,7 +52,7 @@ impl InnerRef {
     pub(crate) fn remove_at(&self, txn: &mut Transaction, index: u32, mut len: u32) {
         let start = {
             let parent = self.borrow();
-            parent.start.get()
+            parent.start
         };
         let (_, mut ptr) = if index == 0 {
             (None, start)
@@ -108,7 +108,7 @@ impl PartialEq for InnerRef {
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Inner {
-    pub start: Cell<Option<BlockPtr>>,
+    pub start: Option<BlockPtr>,
     pub map: HashMap<String, BlockPtr>,
     pub ptr: TypePtr,
     pub name: Option<String>,
@@ -120,7 +120,7 @@ pub struct Inner {
 impl Inner {
     pub fn new(ptr: TypePtr, type_ref: TypeRefs, name: Option<String>) -> Self {
         Self {
-            start: Cell::from(None),
+            start: None,
             map: HashMap::default(),
             len: 0,
             item: None,
@@ -167,7 +167,7 @@ impl Inner {
     /// Get iterator over Block entries of an array component of a current root type.
     /// Deleted blocks are skipped by this iterator.
     pub(crate) fn iter<'a, 'b, 'txn>(&'a self, txn: &'b Transaction<'txn>) -> Iter<'b, 'txn> {
-        Iter::new(self.start.get(), txn)
+        Iter::new(self.start, txn)
     }
 
     /// Returns a materialized value of non-deleted entry under a given `key` of a map component
@@ -187,7 +187,7 @@ impl Inner {
         txn: &'b Transaction,
         mut index: u32,
     ) -> Option<(&'b ItemContent, usize)> {
-        let mut ptr = self.start.get();
+        let mut ptr = self.start;
         while let Some(p) = ptr {
             let item = txn.store.blocks.get_item(&p)?;
             let len = item.len();
@@ -221,7 +221,7 @@ impl Inner {
 
     /// Returns a first non-deleted item from an array component of a current root type.
     pub(crate) fn first<'a, 'b>(&'a self, txn: &'b Transaction) -> Option<&'b Item> {
-        let mut ptr = self.start.get();
+        let mut ptr = self.start;
         while let Some(p) = ptr {
             let mut item = txn.store.blocks.get_item(&p)?;
             if item.is_deleted() {
@@ -275,7 +275,7 @@ impl Inner {
 impl std::fmt::Display for Inner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.type_ref() {
-            TYPE_REFS_ARRAY => write!(f, "YArray(start: {})", self.start.get().unwrap()),
+            TYPE_REFS_ARRAY => write!(f, "YArray(start: {})", self.start.unwrap()),
             TYPE_REFS_MAP => {
                 write!(f, "YMap(")?;
                 let mut iter = self.map.iter();
@@ -287,10 +287,10 @@ impl std::fmt::Display for Inner {
                 }
                 write!(f, ")")
             }
-            TYPE_REFS_TEXT => write!(f, "YText(start: {})", self.start.get().unwrap()),
+            TYPE_REFS_TEXT => write!(f, "YText(start: {})", self.start.unwrap()),
             TYPE_REFS_XML_ELEMENT => {
                 write!(f, "YXmlElement")?;
-                if let Some(start) = self.start.get() {
+                if let Some(start) = self.start.as_ref() {
                     write!(f, "(start: {})", start)?;
                 }
                 if !self.map.is_empty() {
@@ -317,10 +317,10 @@ impl std::fmt::Display for Inner {
                 }
                 write!(f, ")")
             }
-            TYPE_REFS_XML_TEXT => write!(f, "YXmlText(start: {})", self.start.get().unwrap()),
+            TYPE_REFS_XML_TEXT => write!(f, "YXmlText(start: {})", self.start.unwrap()),
             other => {
                 write!(f, "UnknownRef")?;
-                if let Some(start) = self.start.get() {
+                if let Some(start) = self.start.as_ref() {
                     write!(f, "(start: {})", start)?;
                 }
                 if !self.map.is_empty() {

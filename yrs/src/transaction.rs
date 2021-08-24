@@ -260,7 +260,7 @@ impl<'a> Transaction<'a> {
                     }
                     ItemContent::Type(t) => {
                         let inner = t.borrow_mut();
-                        let mut ptr = inner.start.get();
+                        let mut ptr = inner.start;
                         self.changed.remove(&item.parent);
 
                         while let Some(item) = ptr.and_then(|ptr| self.store.blocks.get_item(&ptr))
