@@ -1,12 +1,12 @@
 use crate::block::{BlockPtr, ItemContent, ItemPosition};
-use crate::types::{Inner, TypePtr};
+use crate::types::{Inner, InnerRef, TypePtr};
 use crate::{Transaction, ID};
 use lib0::any::Any;
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
 
-pub struct Array(Rc<RefCell<Inner>>);
+pub struct Array(InnerRef);
 
 impl Array {
     pub fn len(&self) -> u32 {
@@ -48,7 +48,7 @@ impl Array {
     }
 
     pub fn remove(&self, txn: &mut Transaction, index: u32, mut len: u32) {
-        Inner::remove_at(&self.0, txn, index, len)
+        self.0.remove_at(txn, index, len)
     }
 
     pub fn get(&self, txn: &Transaction, index: u32) -> Option<Any> {
@@ -113,8 +113,8 @@ impl Into<ItemContent> for Array {
     }
 }
 
-impl From<Rc<RefCell<Inner>>> for Array {
-    fn from(inner: Rc<RefCell<Inner>>) -> Self {
+impl From<InnerRef> for Array {
+    fn from(inner: InnerRef) -> Self {
         Array(inner)
     }
 }

@@ -1,7 +1,7 @@
 use crate::store::Store;
 use crate::types::xml::XmlElement;
 use crate::types::{
-    Inner, TypePtr, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT, TYPE_REFS_UNDEFINED,
+    Inner, InnerRef, TypePtr, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT, TYPE_REFS_UNDEFINED,
     TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_HOOK, TYPE_REFS_XML_TEXT,
 };
 use crate::updates::decoder::Decoder;
@@ -738,7 +738,7 @@ pub enum ItemContent {
     Embed(String),          // String is JSON
     Format(String, String), // key, value: JSON
     String(String),
-    Type(Rc<RefCell<types::Inner>>),
+    Type(InnerRef),
 }
 
 impl ItemContent {
@@ -925,7 +925,7 @@ impl ItemContent {
                 };
                 let inner_ptr = types::TypePtr::Id(ptr);
                 let inner = types::Inner::new(inner_ptr, type_ref, name);
-                ItemContent::Type(Rc::new(RefCell::new(inner)))
+                ItemContent::Type(InnerRef::new(inner))
             }
             BLOCK_ITEM_ANY_REF_NUMBER => {
                 let len = decoder.read_len() as usize;
