@@ -268,7 +268,7 @@ impl XmlFragment {
         let (start, parent) = {
             let parent = self.inner();
             if index <= parent.len() {
-                (parent.start.get(), parent.ptr.clone())
+                (parent.start, parent.ptr.clone())
             } else {
                 panic!("Cannot insert item at index over the length of an array")
             }
@@ -343,8 +343,8 @@ impl<'a, 'txn> TreeWalker<'a, 'txn> {
         let root = parent.ptr.clone();
         let mut current = parent
             .start
-            .get()
-            .and_then(|p| txn.store.blocks.get_item(&p));
+            .as_ref()
+            .and_then(|p| txn.store.blocks.get_item(p));
 
         TreeWalker { txn, current, root }
     }
@@ -371,8 +371,8 @@ impl<'a, 'txn> Iterator for TreeWalker<'a, 'txn> {
                     inner
                         .borrow()
                         .start
-                        .get()
-                        .and_then(|ptr| self.txn.store.blocks.get_item(&ptr))
+                        .as_ref()
+                        .and_then(|ptr| self.txn.store.blocks.get_item(ptr))
                 };
 
                 result = Some(XmlElement::from(inner.clone()));

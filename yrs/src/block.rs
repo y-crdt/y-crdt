@@ -503,7 +503,7 @@ impl Item {
                     }
                     o.cloned()
                 } else {
-                    parent_ref.start.get()
+                    parent_ref.start
                 };
 
                 let mut left = self.left.clone();
@@ -578,9 +578,7 @@ impl Item {
                     }
                     r.cloned()
                 } else {
-                    let start = parent_ref
-                        .start
-                        .replace(Some(BlockPtr::new(self.id, pivot)));
+                    let start = parent_ref.start.replace(BlockPtr::new(self.id, pivot));
                     start
                 };
                 self.right = r;
@@ -1071,7 +1069,7 @@ impl std::fmt::Display for ItemContent {
             ItemContent::Type(t) => {
                 let inner = t.borrow();
                 match inner.type_ref() {
-                    TYPE_REFS_ARRAY => write!(f, "<array(head: {})>", inner.start.get().unwrap()),
+                    TYPE_REFS_ARRAY => write!(f, "<array(head: {})>", inner.start.unwrap()),
                     TYPE_REFS_MAP => {
                         write!(f, "<map({{")?;
                         let mut iter = inner.map.iter();
@@ -1083,7 +1081,7 @@ impl std::fmt::Display for ItemContent {
                         }
                         write!(f, "}})>")
                     }
-                    TYPE_REFS_TEXT => write!(f, "<text(head: {})>", inner.start.get().unwrap()),
+                    TYPE_REFS_TEXT => write!(f, "<text(head: {})>", inner.start.unwrap()),
                     TYPE_REFS_XML_ELEMENT => {
                         write!(f, "<xml element: {}>", inner.name.as_ref().unwrap())
                     }

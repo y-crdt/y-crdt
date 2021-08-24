@@ -18,7 +18,7 @@ impl Array {
         let (start, parent) = {
             let parent = self.0.borrow();
             if index <= parent.len() {
-                (parent.start.get(), parent.ptr.clone())
+                (parent.start, parent.ptr.clone())
             } else {
                 panic!("Cannot insert item at index over the length of an array")
             }
@@ -76,9 +76,8 @@ pub struct Iter<'b, 'txn> {
 impl<'b, 'txn> Iter<'b, 'txn> {
     fn new(array: &Array, txn: &'b Transaction<'txn>) -> Self {
         let inner = array.0.borrow();
-        let ptr = inner.start.get();
         Iter {
-            ptr,
+            ptr: inner.start,
             txn,
             content: VecDeque::default(),
         }
