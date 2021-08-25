@@ -1,3 +1,4 @@
+use crate::store::Store;
 use crate::types::{
     Inner, InnerRef, TypePtr, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT, TYPE_REFS_UNDEFINED,
     TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_HOOK, TYPE_REFS_XML_TEXT,
@@ -170,16 +171,16 @@ impl Block {
                 encoder.write_right_id(right_origin_id);
             }
             if cant_copy_parent_info {
-                match &item.parent {
-                    types::TypePtr::Id(id) => {
-                        encoder.write_parent_info(false);
-                        encoder.write_left_id(&id.id);
-                    }
-                    types::TypePtr::Named(name) => {
-                        encoder.write_parent_info(true);
-                        encoder.write_string(name)
-                    }
+                if let TypePtr::Id(id) = &item.parent {
+                    encoder.write_parent_info(false);
+                    encoder.write_left_id(&id.id);
+                } else if let TypePtr::Named(name) = &item.parent {
+                    encoder.write_parent_info(true);
+                    encoder.write_string(name)
+                } else {
+                    panic!("Couldn't get item's parent")
                 }
+
                 if let Some(parent_sub) = item.parent_sub.as_ref() {
                     encoder.write_string(parent_sub.as_str());
                 }
@@ -188,7 +189,7 @@ impl Block {
         }
     }
 
-    pub fn encode<E: Encoder>(&self, encoder: &mut E) {
+    pub fn encode<E: Encoder>(&self, store: &Store, encoder: &mut E) {
         match self {
             Block::Item(item) => {
                 let info = item.info();
@@ -201,34 +202,25 @@ impl Block {
                     encoder.write_right_id(right_origin_id);
                 }
                 if cant_copy_parent_info {
-                    //TODO:
-                    /*
-                        const parent = /** @type {AbstractType<any>} */ (this.parent)
-                        if (parent._item !== undefined) {
-                          const parentItem = parent._item
-                          if (parentItem === null) {
-                            // parent type on y._map
-                            // find the correct key
-                            const ykey = findRootTypeKey(parent)
-                            encoder.writeParentInfo(true) // write parentYKey
-                            encoder.writeString(ykey)
-                          } else {
-                            encoder.writeParentInfo(false) // write parent id
-                            encoder.writeLeftID(parentItem.id)
-                          }
-                    */
-                    match &item.parent {
-                        types::TypePtr::Id(id) => {
-                            encoder.write_parent_info(false);
-                            encoder.write_left_id(&id.id);
+                    if let Some(parent) = store.get_type(&item.parent) {
+                        let parent_ref = parent.borrow();
+                        if let Some(parent_ptr) = parent_ref.item {
+                            encoder.write_parent_info(false); // write parent id
+                            encoder.write_left_id(&parent_ptr.id);
+                        } else if let Some(key) = store.get_root_type_key(parent) {
+                            encoder.write_parent_info(true); // write parentYKey
+                            encoder.write_string(key.as_str());
                         }
-                        types::TypePtr::Named(name) => {
-                            encoder.write_parent_info(true);
-                            encoder.write_string(name)
-                        }
+                    } else if let TypePtr::Id(id) = &item.parent {
+                        encoder.write_parent_info(false);
+                        encoder.write_left_id(&id.id);
+                    } else if let TypePtr::Named(name) = &item.parent {
+                        encoder.write_parent_info(true);
+                        encoder.write_string(name)
+                    } else {
+                        panic!("Couldn't get item's parent")
                     }
-                }
-                if cant_copy_parent_info {
+
                     if let Some(parent_sub) = item.parent_sub.as_ref() {
                         encoder.write_string(parent_sub.as_str());
                     }
@@ -612,6 +604,8 @@ impl Item {
                 false
             }
         } else {
+            println!("self: {}", self);
+            println!("store: {}", txn.store);
             panic!("Defect: item has no parent")
         }
     }
