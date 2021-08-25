@@ -164,7 +164,7 @@ impl ClientBlockList {
             //todo: does it even make sense to pivot the search?
             // If a good split misses, it might actually increase the time to find the correct item.
             // Currently, the only advantage is that search with pivoting might find the item on the first try.
-            let div = (current_clock + block.len() - 1);
+            let div = current_clock + block.len() - 1;
             let mut mid = ((clock / div) * right as u32) as usize;
             while left <= right {
                 block = &self.list[mid];

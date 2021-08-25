@@ -1,17 +1,16 @@
 use crate::store::Store;
 use crate::types::{
-    TypePtr, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT, TYPE_REFS_UNDEFINED,
+    Inner, InnerRef, TypePtr, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT, TYPE_REFS_UNDEFINED,
     TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_HOOK, TYPE_REFS_XML_TEXT,
 };
 use crate::updates::decoder::Decoder;
 use crate::updates::encoder::Encoder;
 use crate::*;
 use lib0::any::Any;
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::panic;
-use std::rc::Rc;
 
 pub const BLOCK_GC_REF_NUMBER: u8 = 0;
 pub const BLOCK_ITEM_DELETED_REF_NUMBER: u8 = 1;
@@ -118,7 +117,21 @@ impl Block {
 
     pub fn integrate(&mut self, txn: &mut Transaction<'_>, pivot: u32, offset: u32) -> bool {
         match self {
-            Block::Item(item) => item.integrate(txn, pivot, offset),
+            Block::Item(item) => {
+                // In the original Y.js algorithm we decoded items as we go and attached them to client
+                // block list. During that process if we had right origin but no left, we made a lookup for
+                // right origin's parent and attach it as a parent of current block.
+                //
+                // Here since we decode all blocks first, then apply them, we might not find them in
+                // the block store during decoding. Therefore we retroactively reattach it here.
+                if let TypePtr::Id(ptr) = &item.parent {
+                    if let Some(i) = txn.store.blocks.get_item(&ptr) {
+                        item.parent = i.parent.clone();
+                    }
+                }
+
+                item.integrate(txn, pivot, offset)
+            }
             Block::GC(gc) => gc.integrate(offset),
             Block::Skip(_) => {
                 panic!("Block::Skip cannot be integrated")
@@ -158,16 +171,16 @@ impl Block {
                 encoder.write_right_id(right_origin_id);
             }
             if cant_copy_parent_info {
-                match &item.parent {
-                    types::TypePtr::Id(id) => {
-                        encoder.write_parent_info(false);
-                        encoder.write_left_id(&id.id);
-                    }
-                    types::TypePtr::Named(name) => {
-                        encoder.write_parent_info(true);
-                        encoder.write_string(name)
-                    }
+                if let TypePtr::Id(id) = &item.parent {
+                    encoder.write_parent_info(false);
+                    encoder.write_left_id(&id.id);
+                } else if let TypePtr::Named(name) = &item.parent {
+                    encoder.write_parent_info(true);
+                    encoder.write_string(name)
+                } else {
+                    panic!("Couldn't get item's parent")
                 }
+
                 if let Some(parent_sub) = item.parent_sub.as_ref() {
                     encoder.write_string(parent_sub.as_str());
                 }
@@ -176,7 +189,7 @@ impl Block {
         }
     }
 
-    pub fn encode<E: Encoder>(&self, encoder: &mut E) {
+    pub fn encode<E: Encoder>(&self, store: &Store, encoder: &mut E) {
         match self {
             Block::Item(item) => {
                 let info = item.info();
@@ -189,18 +202,25 @@ impl Block {
                     encoder.write_right_id(right_origin_id);
                 }
                 if cant_copy_parent_info {
-                    match &item.parent {
-                        types::TypePtr::Id(id) => {
-                            encoder.write_parent_info(false);
-                            encoder.write_left_id(&id.id);
+                    if let Some(parent) = store.get_type(&item.parent) {
+                        let parent_ref = parent.borrow();
+                        if let Some(parent_ptr) = parent_ref.item {
+                            encoder.write_parent_info(false); // write parent id
+                            encoder.write_left_id(&parent_ptr.id);
+                        } else if let Some(key) = store.get_root_type_key(parent) {
+                            encoder.write_parent_info(true); // write parentYKey
+                            encoder.write_string(key.as_str());
                         }
-                        types::TypePtr::Named(name) => {
-                            encoder.write_parent_info(true);
-                            encoder.write_string(name)
-                        }
+                    } else if let TypePtr::Id(id) = &item.parent {
+                        encoder.write_parent_info(false);
+                        encoder.write_left_id(&id.id);
+                    } else if let TypePtr::Named(name) = &item.parent {
+                        encoder.write_parent_info(true);
+                        encoder.write_string(name)
+                    } else {
+                        panic!("Couldn't get item's parent")
                     }
-                }
-                if cant_copy_parent_info {
+
                     if let Some(parent_sub) = item.parent_sub.as_ref() {
                         encoder.write_string(parent_sub.as_str());
                     }
@@ -429,22 +449,8 @@ impl Item {
             self.content.splice(offset as usize);
         }
 
-        // In the original Y.js algorithm we decoded items as we go and attached them to client
-        // block list. During that process if we had right origin but no left, we made a lookup for
-        // right origin's parent and attach it as a parent of current block.
-        //
-        // Here since we decode all blocks first, then apply them, we might not find them in
-        // the block store during decoding. Therefore we retroactively reattach it here.
-        if let TypePtr::Id(ptr) = &self.parent {
-            if let Some(item) = txn.store.blocks.get_item(&ptr) {
-                self.parent = item.parent.clone();
-            }
-        }
-
         let parent = match txn.store.get_type(&self.parent).cloned() {
-            None => txn
-                .store
-                .init_type_from_ptr(&self.parent, TYPE_REFS_UNDEFINED),
+            None => txn.store.init_type_from_ptr(&self.parent, &self.content),
             parent => parent,
         };
 
@@ -488,7 +494,7 @@ impl Item {
                     }
                     o.cloned()
                 } else {
-                    parent_ref.start.get()
+                    parent_ref.start
                 };
 
                 let mut left = self.left.clone();
@@ -563,9 +569,7 @@ impl Item {
                     }
                     r.cloned()
                 } else {
-                    let start = parent_ref
-                        .start
-                        .replace(Some(BlockPtr::new(self.id, pivot)));
+                    let start = parent_ref.start.replace(BlockPtr::new(self.id, pivot));
                     start
                 };
                 self.right = r;
@@ -590,9 +594,9 @@ impl Item {
                 parent_ref.len += self.len();
             }
 
-            self.integrate_content(txn);
-            // addChangedTypeToTransaction(transaction, /** @type {AbstractType<any>} */ (this.parent), this.parentSub)
-            let parent_deleted = false; // (this.parent)._item !== null && (this.parent)._item.deleted)
+            self.integrate_content(txn, pivot, &mut *parent_ref);
+            txn.add_changed_type(&mut *parent_ref, self.parent_sub.as_ref());
+            let parent_deleted = self.is_deleted();
             if parent_deleted || (self.parent_sub.is_some() && self.right.is_some()) {
                 // delete if parent is deleted or if this is not the current attribute value of parent
                 true
@@ -600,6 +604,8 @@ impl Item {
                 false
             }
         } else {
+            println!("self: {}", self);
+            println!("store: {}", txn.store);
             panic!("Defect: item has no parent")
         }
     }
@@ -679,7 +685,7 @@ impl Item {
         info
     }
 
-    fn integrate_content(&mut self, txn: &mut Transaction<'_>) {
+    fn integrate_content(&mut self, txn: &mut Transaction<'_>, pivot: u32, parent: &mut Inner) {
         match &mut self.content {
             ItemContent::Deleted(len) => {
                 txn.delete_set.insert(self.id, *len);
@@ -698,8 +704,13 @@ impl Item {
                 // @todo searchmarker are currently unsupported for rich text documents
                 // /** @type {AbstractType<any>} */ (item.parent)._searchMarker = null
             }
-            ItemContent::Type(_) => {
+            ItemContent::Type(inner) => {
                 // this.type._integrate(transaction.doc, item)
+                let ptr = Some(BlockPtr::new(self.id.clone(), pivot));
+                match inner.try_borrow_mut() {
+                    Ok(mut parent) => parent.item = ptr,
+                    Err(_) => parent.item = ptr,
+                }
             }
             _ => {
                 // other types don't define integration-specific actions
@@ -718,7 +729,7 @@ pub enum ItemContent {
     Embed(String),          // String is JSON
     Format(String, String), // key, value: JSON
     String(String),
-    Type(Rc<RefCell<types::Inner>>),
+    Type(InnerRef),
 }
 
 impl ItemContent {
@@ -904,8 +915,8 @@ impl ItemContent {
                     None
                 };
                 let inner_ptr = types::TypePtr::Id(ptr);
-                let inner = types::Inner::new(inner_ptr, name, type_ref);
-                ItemContent::Type(Rc::new(RefCell::new(inner)))
+                let inner = types::Inner::new(inner_ptr, type_ref, name);
+                ItemContent::Type(InnerRef::new(inner))
             }
             BLOCK_ITEM_ANY_REF_NUMBER => {
                 let len = decoder.read_len() as usize;
@@ -994,6 +1005,7 @@ impl ItemContent {
 impl std::fmt::Display for Item {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "({}", self.id)?;
+        write!(f, ", parent: {}", self.parent)?;
         if let Some(origin) = self.origin.as_ref() {
             write!(f, ", origin-l: {}", origin)?;
         }
@@ -1050,7 +1062,7 @@ impl std::fmt::Display for ItemContent {
             ItemContent::Type(t) => {
                 let inner = t.borrow();
                 match inner.type_ref() {
-                    TYPE_REFS_ARRAY => write!(f, "<array(head: {})>", inner.start.get().unwrap()),
+                    TYPE_REFS_ARRAY => write!(f, "<array(head: {})>", inner.start.unwrap()),
                     TYPE_REFS_MAP => {
                         write!(f, "<map({{")?;
                         let mut iter = inner.map.iter();
@@ -1062,8 +1074,10 @@ impl std::fmt::Display for ItemContent {
                         }
                         write!(f, "}})>")
                     }
-                    TYPE_REFS_TEXT => write!(f, "<text(head: {})>", inner.start.get().unwrap()),
-                    TYPE_REFS_XML_ELEMENT => write!(f, "<xml element>"),
+                    TYPE_REFS_TEXT => write!(f, "<text(head: {})>", inner.start.unwrap()),
+                    TYPE_REFS_XML_ELEMENT => {
+                        write!(f, "<xml element: {}>", inner.name.as_ref().unwrap())
+                    }
                     TYPE_REFS_XML_FRAGMENT => write!(f, "<xml fragment>"),
                     TYPE_REFS_XML_HOOK => write!(f, "<xml hook>"),
                     TYPE_REFS_XML_TEXT => write!(f, "<xml text>"),

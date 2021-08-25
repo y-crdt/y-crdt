@@ -1,18 +1,12 @@
 use crate::block::{BlockPtr, ItemContent, ItemPosition};
-use crate::types::{Inner, TypePtr};
-use crate::{Transaction, ID};
+use crate::types::{Inner, InnerRef};
+use crate::Transaction;
 use lib0::any::Any;
-use std::cell::RefCell;
 use std::collections::VecDeque;
-use std::rc::Rc;
 
-pub struct Array(Rc<RefCell<Inner>>);
+pub struct Array(InnerRef);
 
 impl Array {
-    pub fn new(inner: Rc<RefCell<Inner>>) -> Self {
-        Array(inner)
-    }
-
     pub fn len(&self) -> u32 {
         let inner = self.0.borrow();
         inner.len()
@@ -22,7 +16,7 @@ impl Array {
         let (start, parent) = {
             let parent = self.0.borrow();
             if index <= parent.len() {
-                (parent.start.get(), parent.ptr.clone())
+                (parent.start, parent.ptr.clone())
             } else {
                 panic!("Cannot insert item at index over the length of an array")
             }
@@ -30,7 +24,7 @@ impl Array {
         let (left, right) = if index == 0 {
             (None, None)
         } else {
-            Self::index_to_ptr(txn, start, index)
+            Inner::index_to_ptr(txn, start, index)
         };
         let content = value.into();
         let pos = ItemPosition {
@@ -42,43 +36,6 @@ impl Array {
         txn.create_item(&pos, content, None);
     }
 
-    fn index_to_ptr(
-        txn: &mut Transaction,
-        mut ptr: Option<BlockPtr>,
-        mut index: u32,
-    ) -> (Option<BlockPtr>, Option<BlockPtr>) {
-        while let Some(p) = ptr {
-            let item = txn
-                .store
-                .blocks
-                .get_item(&p)
-                .expect("No item for a given pointer was found.");
-            let len = item.len();
-            if !item.is_deleted() && item.is_countable() {
-                if index == len {
-                    let left = Some(p.clone());
-                    let right = item.right.clone();
-                    return (left, right);
-                } else if index < len {
-                    let split_point = ID::new(item.id.client, item.id.clock + index);
-                    let ptr = BlockPtr::new(split_point, p.pivot() as u32);
-                    let (left, mut right) = txn.store.blocks.split_block(&ptr);
-                    if right.is_none() {
-                        if let Some(left_ptr) = left.as_ref() {
-                            if let Some(left) = txn.store.blocks.get_item(left_ptr) {
-                                right = left.right.clone();
-                            }
-                        }
-                    }
-                    return (left, right);
-                }
-                index -= len;
-            }
-            ptr = item.right.clone();
-        }
-        (None, None)
-    }
-
     pub fn push_back<V: Into<ItemContent>>(&self, txn: &mut Transaction, content: V) {
         let len = self.len();
         self.insert(txn, len, content)
@@ -88,62 +45,14 @@ impl Array {
         self.insert(txn, 0, content)
     }
 
-    pub fn remove(&self, txn: &mut Transaction, index: u32, mut len: u32) {
-        let start = {
-            let parent = self.0.borrow();
-            parent.start.get()
-        };
-        let (_, mut ptr) = if index == 0 {
-            (None, start)
-        } else {
-            Self::index_to_ptr(txn, start, index)
-        };
-        while len > 0 {
-            if let Some(mut p) = ptr {
-                if let Some(item) = txn.store.blocks.get_item(&p) {
-                    if !item.is_deleted() {
-                        let item_len = item.len();
-                        let (l, r) = if len < item_len {
-                            p.id.clock += len;
-                            len = 0;
-                            txn.store.blocks.split_block(&p)
-                        } else {
-                            len -= item_len;
-                            (ptr, item.right.clone())
-                        };
-                        txn.delete(&l.unwrap());
-                        ptr = r;
-                    } else {
-                        ptr = item.right.clone();
-                    }
-                }
-            } else {
-                break;
-            }
-        }
-
-        if len > 0 {
-            panic!("Array length exceeded");
-        }
+    pub fn remove(&self, txn: &mut Transaction, index: u32, len: u32) {
+        self.0.remove_at(txn, index, len)
     }
 
-    pub fn get(&self, txn: &Transaction, mut index: u32) -> Option<Any> {
+    pub fn get(&self, txn: &Transaction, index: u32) -> Option<Any> {
         let inner = self.0.borrow();
-        let mut ptr = inner.start.get();
-        while let Some(p) = ptr {
-            let item = txn.store.blocks.get_item(&p)?;
-            let len = item.len();
-            if !item.is_deleted() && item.is_countable() {
-                if index < len {
-                    let mut value = item.content.get_content(txn);
-                    return Some(value.remove(index as usize));
-                }
-            }
-            index -= len;
-            ptr = item.right.clone();
-        }
-
-        None
+        let (content, idx) = inner.get_at(txn, index)?;
+        Some(content.get_content(txn).remove(idx))
     }
 
     pub fn iter<'a, 'b, 'txn>(&'a self, txn: &'b Transaction<'txn>) -> Iter<'b, 'txn> {
@@ -165,9 +74,8 @@ pub struct Iter<'b, 'txn> {
 impl<'b, 'txn> Iter<'b, 'txn> {
     fn new(array: &Array, txn: &'b Transaction<'txn>) -> Self {
         let inner = array.0.borrow();
-        let ptr = inner.start.get();
         Iter {
-            ptr,
+            ptr: inner.start,
             txn,
             content: VecDeque::default(),
         }
@@ -199,6 +107,12 @@ impl<'b, 'txn> Iterator for Iter<'b, 'txn> {
 impl Into<ItemContent> for Array {
     fn into(self) -> ItemContent {
         ItemContent::Type(self.0.clone())
+    }
+}
+
+impl From<InnerRef> for Array {
+    fn from(inner: InnerRef) -> Self {
+        Array(inner)
     }
 }
 

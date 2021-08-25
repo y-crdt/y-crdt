@@ -5,7 +5,6 @@ use lib0::decoding::{Cursor, Read};
 use lib0::encoding::Write;
 use rand::prelude::SliceRandom;
 use rand::rngs::ThreadRng;
-use rand::seq::IteratorRandom;
 use rand::{thread_rng, Rng};
 use std::cell::{RefCell, RefMut};
 use std::collections::{HashMap, VecDeque};
@@ -21,7 +20,7 @@ pub fn exchange_updates(docs: &[&Doc]) {
                 let mut tb = b.transact();
 
                 let sv = b.get_state_vector(&tb);
-                let update = a.encode_delta_as_update(&sv, &ta);
+                let update = a.encode_delta_as_update(&ta, &sv);
                 b.apply_update(&mut tb, update.as_slice());
             }
         }
@@ -37,7 +36,7 @@ where
     F: Fn(&mut Doc, &mut ThreadRng),
 {
     let mut tc = TestConnector::with_peer_num(thread_rng(), users as u64);
-    for i in 0..iterations {
+    for _i in 0..iterations {
         if tc.0.borrow_mut().rng.gen_range(0, 100) <= 2 {
             // 2% chance to disconnect/reconnect a random user
             if tc.0.borrow_mut().rng.gen_bool(0.5) {
@@ -406,7 +405,7 @@ impl TestConnector {
         let remote_sv = StateVector::decode_v1(sv);
 
         encoder.write_uvar(MSG_SYNC_STEP_2);
-        encoder.write_buf(peer.doc.encode_delta_as_update(&remote_sv, &txn));
+        encoder.write_buf(peer.doc.encode_delta_as_update(&txn, &remote_sv));
     }
 
     pub fn assert_final_state(mut self) {

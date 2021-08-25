@@ -1,17 +1,13 @@
-use crate::block::{BlockPtr, Item, ItemContent, ItemPosition};
-use crate::types::{Inner, TypePtr};
+use crate::block::{ItemContent, ItemPosition};
+use crate::types::{Entries, Inner, InnerRef};
 use crate::*;
 use lib0::any::Any;
-use std::cell::RefCell;
 use std::collections::HashMap;
-use std::rc::Rc;
 
-pub struct Map(Rc<RefCell<Inner>>);
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct Map(InnerRef);
 
 impl Map {
-    pub fn new(inner: Rc<RefCell<Inner>>) -> Self {
-        Map(inner)
-    }
     pub fn to_json(&self, txn: &Transaction<'_>) -> Any {
         Self::to_json_inner(&*self.0.borrow(), txn)
     }
@@ -43,9 +39,9 @@ impl Map {
         len
     }
 
-    fn blocks<'a, 'b, 'txn>(&'a self, txn: &'b Transaction<'txn>) -> Blocks<'b, 'txn> {
+    fn blocks<'a, 'b, 'txn>(&'a self, txn: &'b Transaction<'txn>) -> Entries<'b, 'txn> {
         let ptr = &self.0.borrow().ptr;
-        Blocks::new(ptr, txn)
+        Entries::new(ptr, txn)
     }
 
     pub fn keys<'a, 'b, 'txn>(&'a self, txn: &'b Transaction<'txn>) -> Keys<'b, 'txn> {
@@ -62,12 +58,11 @@ impl Map {
 
     pub fn insert<V: Into<ItemContent>>(
         &self,
-        txn: &mut Transaction<'_>,
+        txn: &mut Transaction,
         key: String,
         value: V,
     ) -> Option<Any> {
         let previous = self.get(txn, &key);
-
         let pos = {
             let inner = self.0.borrow();
             let left = inner.map.get(&key);
@@ -83,33 +78,17 @@ impl Map {
         previous
     }
 
-    pub fn remove(&self, txn: &mut Transaction<'_>, key: &String) -> Option<Any> {
+    pub fn remove(&self, txn: &mut Transaction, key: &str) -> Option<Any> {
         let t = self.0.borrow();
-        let ptr = t.map.get(key)?;
-        let prev = {
-            let item = txn.store.blocks.get_item(ptr)?;
-            if item.is_deleted() {
-                None
-            } else {
-                item.content.get_content_last(txn)
-            }
-        };
-        txn.delete(ptr);
-        prev
+        t.remove(txn, key)
     }
 
-    pub fn get(&self, txn: &Transaction<'_>, key: &String) -> Option<Any> {
+    pub fn get(&self, txn: &Transaction, key: &str) -> Option<Any> {
         let t = self.0.borrow();
-        let ptr = t.map.get(key)?;
-        let item = txn.store.blocks.get_item(ptr)?;
-        if item.is_deleted() {
-            None
-        } else {
-            item.content.get_content_last(txn)
-        }
+        t.get(txn, key)
     }
 
-    pub fn contains(&self, txn: &Transaction<'_>, key: &String) -> bool {
+    pub fn contains(&self, txn: &Transaction, key: &String) -> bool {
         let t = self.0.borrow();
         if let Some(ptr) = t.map.get(key) {
             if let Some(item) = txn.store.blocks.get_item(ptr) {
@@ -131,44 +110,7 @@ impl Map {
     }
 }
 
-struct Blocks<'a, 'txn> {
-    txn: &'a Transaction<'txn>,
-    iter: std::collections::hash_map::Iter<'a, String, BlockPtr>,
-}
-
-impl<'a, 'txn> Blocks<'a, 'txn> {
-    fn new<'b>(ptr: &'b TypePtr, txn: &'a Transaction<'txn>) -> Self {
-        let rc = txn.store.get_type(ptr).unwrap();
-        let cell = rc.as_ref();
-        let iter = unsafe { &*cell.as_ptr() as &'a Inner }.map.iter();
-        Blocks { txn, iter }
-    }
-}
-
-impl<'a, 'txn> Iterator for Blocks<'a, 'txn> {
-    type Item = (&'a String, &'a Item);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let (mut key, ptr) = self.iter.next()?;
-        let mut block = self.txn.store.blocks.get_item(ptr);
-        loop {
-            match block {
-                Some(item) if !item.is_deleted() => {
-                    break;
-                }
-                _ => {
-                    let (k, ptr) = self.iter.next()?;
-                    key = k;
-                    block = self.txn.store.blocks.get_item(ptr);
-                }
-            }
-        }
-        let item = block.unwrap();
-        Some((key, item))
-    }
-}
-
-pub struct Iter<'a, 'txn>(Blocks<'a, 'txn>);
+pub struct Iter<'a, 'txn>(Entries<'a, 'txn>);
 
 impl<'a, 'txn> Iterator for Iter<'a, 'txn> {
     type Item = (&'a String, Vec<Any>);
@@ -179,7 +121,7 @@ impl<'a, 'txn> Iterator for Iter<'a, 'txn> {
     }
 }
 
-pub struct Keys<'a, 'txn>(Blocks<'a, 'txn>);
+pub struct Keys<'a, 'txn>(Entries<'a, 'txn>);
 
 impl<'a, 'txn> Iterator for Keys<'a, 'txn> {
     type Item = &'a String;
@@ -190,7 +132,7 @@ impl<'a, 'txn> Iterator for Keys<'a, 'txn> {
     }
 }
 
-pub struct Values<'a, 'txn>(Blocks<'a, 'txn>);
+pub struct Values<'a, 'txn>(Entries<'a, 'txn>);
 
 impl<'a, 'txn> Iterator for Values<'a, 'txn> {
     type Item = Vec<Any>;
@@ -204,6 +146,12 @@ impl<'a, 'txn> Iterator for Values<'a, 'txn> {
 impl Into<ItemContent> for Map {
     fn into(self) -> ItemContent {
         ItemContent::Type(self.0.clone())
+    }
+}
+
+impl From<InnerRef> for Map {
+    fn from(inner: InnerRef) -> Self {
+        Map(inner)
     }
 }
 
@@ -238,11 +186,11 @@ mod test {
         m1.insert(&mut t1, "boolean1".to_owned(), true);
         m1.insert(&mut t1, "boolean0".to_owned(), false);
 
-        let m1m = t1.get_map("y-map");
-        let m1a = t1.get_text("y-text");
-        m1a.insert(&mut t1, 0, "a");
-        m1a.insert(&mut t1, 0, "b");
-        m1m.insert(&mut t1, "y-text".to_owned(), m1a);
+        //let m1m = t1.get_map("y-map");
+        //let m1a = t1.get_text("y-text");
+        //m1a.insert(&mut t1, 0, "a");
+        //m1a.insert(&mut t1, 0, "b");
+        //m1m.insert(&mut t1, "y-text".to_owned(), m1a);
 
         //TODO: YArray within YMap
         fn compare_all(t: &Transaction<'_>, m: &Map) {
@@ -268,6 +216,7 @@ mod test {
 
         compare_all(&t1, &m1);
 
+        println!("store A: {}", t1.store);
         let update = d1.encode_state_as_update(&t1);
         d2.apply_update(&mut t2, update.as_slice());
 
@@ -397,12 +346,10 @@ mod test {
             let mut t1 = d1.transact();
             let mut t2 = d2.transact();
             let mut t3 = d3.transact();
-            let mut t4 = d4.transact();
 
             let m1 = t1.get_map("map");
             let m2 = t2.get_map("map");
             let m3 = t3.get_map("map");
-            let m4 = t4.get_map("map");
 
             m1.insert(&mut t1, "key1".to_owned(), "c0");
             m2.insert(&mut t2, "key1".to_owned(), "c1");
@@ -416,12 +363,10 @@ mod test {
             let mut t1 = d1.transact();
             let mut t2 = d2.transact();
             let mut t3 = d3.transact();
-            let mut t4 = d4.transact();
 
             let m1 = t1.get_map("map");
             let m2 = t2.get_map("map");
             let m3 = t3.get_map("map");
-            let m4 = t4.get_map("map");
 
             m1.insert(&mut t1, "key2".to_owned(), "c0");
             m2.insert(&mut t2, "key2".to_owned(), "c1");
@@ -505,12 +450,10 @@ mod test {
             let mut t1 = d1.transact();
             let mut t2 = d2.transact();
             let mut t3 = d3.transact();
-            let mut t4 = d4.transact();
 
             let m1 = t1.get_map("map");
             let m2 = t2.get_map("map");
             let m3 = t3.get_map("map");
-            let m4 = t4.get_map("map");
 
             m1.insert(&mut t1, "key1".to_owned(), "c0");
             m2.insert(&mut t2, "key1".to_owned(), "c1");
