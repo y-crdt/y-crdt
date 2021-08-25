@@ -8,7 +8,24 @@ use lib0::any::Any;
 use std::cell::Ref;
 use std::fmt::Write;
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum Xml {
+    Element(XmlElement),
+    Text(XmlText),
+}
+
+impl From<InnerRef> for Xml {
+    fn from(inner: InnerRef) -> Self {
+        let type_ref = { inner.borrow().type_ref & 0b1111 };
+        match type_ref {
+            TYPE_REFS_XML_ELEMENT => Xml::Element(XmlElement::from(inner)),
+            TYPE_REFS_XML_TEXT => Xml::Text(XmlText::from(inner)),
+            other => panic!("Unsupported type: {}", other),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct XmlElement(XmlFragment);
 
 impl XmlElement {
@@ -41,6 +58,11 @@ impl XmlElement {
         }
         write!(&mut s, "</{}>", tag).unwrap();
         s
+    }
+
+    pub fn tag(&self) -> &str {
+        let inner = self.0 .0.as_ref();
+        inner.name.as_ref().unwrap()
     }
 
     pub fn remove_attribute(&self, txn: &mut Transaction, attr_name: &str) {
@@ -81,19 +103,19 @@ impl XmlElement {
         Attributes(blocks)
     }
 
-    pub fn next_sibling<T: From<InnerRef>>(&self, txn: &Transaction) -> Option<T> {
+    pub fn next_sibling(&self, txn: &Transaction) -> Option<Xml> {
         next_sibling(self.inner(), txn)
     }
 
-    pub fn prev_sibling<T: From<InnerRef>>(&self, txn: &Transaction) -> Option<T> {
+    pub fn prev_sibling(&self, txn: &Transaction) -> Option<Xml> {
         prev_sibling(self.inner(), txn)
     }
 
-    pub fn parent<T: From<InnerRef>>(&self, txn: &Transaction) -> Option<T> {
+    pub fn parent(&self, txn: &Transaction) -> Option<XmlElement> {
         self.0.parent(txn)
     }
 
-    pub fn first_child<T: From<InnerRef>>(&self, txn: &Transaction) -> Option<T> {
+    pub fn first_child(&self, txn: &Transaction) -> Option<Xml> {
         self.0.first_child(txn)
     }
 
@@ -103,14 +125,6 @@ impl XmlElement {
 
     pub fn iter<'a, 'b, 'txn>(&'a self, txn: &'b Transaction<'txn>) -> TreeWalker<'b, 'txn> {
         self.0.iter(txn)
-    }
-
-    pub fn select<'a, 'b, 'c, 'txn>(
-        &'a self,
-        txn: &'b Transaction<'txn>,
-        query: &'c str,
-    ) -> Select<'b, 'c, 'txn> {
-        self.0.select(txn, query)
     }
 
     pub fn insert_elem<S: ToString>(
@@ -186,7 +200,7 @@ impl Into<XmlElement> for XmlFragment {
     }
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct XmlFragment(InnerRef);
 
 impl XmlFragment {
@@ -198,19 +212,19 @@ impl XmlFragment {
         self.0.borrow()
     }
 
-    pub fn first_child<T: From<InnerRef>>(&self, txn: &Transaction) -> Option<T> {
+    pub fn first_child(&self, txn: &Transaction) -> Option<Xml> {
         let inner = self.inner();
         let first = inner.first(txn)?;
         match &first.content {
             ItemContent::Type(c) => {
-                let value = T::from(c.clone());
+                let value = Xml::from(c.clone());
                 Some(value)
             }
             _ => None,
         }
     }
 
-    pub fn parent<T: From<InnerRef>>(&self, txn: &Transaction) -> Option<T> {
+    pub fn parent(&self, txn: &Transaction) -> Option<XmlElement> {
         parent(self.inner(), txn)
     }
 
@@ -220,14 +234,6 @@ impl XmlFragment {
 
     pub fn iter<'a, 'b, 'txn>(&'a self, txn: &'b Transaction<'txn>) -> TreeWalker<'b, 'txn> {
         TreeWalker::new(txn, &*self.inner())
-    }
-
-    pub fn select<'a, 'b, 'c, 'txn>(
-        &'a self,
-        txn: &'b Transaction<'txn>,
-        query: &'c str,
-    ) -> Select<'b, 'c, 'txn> {
-        Select::new(self.iter(txn), query)
     }
 
     pub fn to_string(&self, txn: &Transaction) -> String {
@@ -349,7 +355,7 @@ impl<'a, 'txn> TreeWalker<'a, 'txn> {
 }
 
 impl<'a, 'txn> Iterator for TreeWalker<'a, 'txn> {
-    type Item = XmlElement;
+    type Item = Xml;
 
     /// Tree walker used depth-first search to move over the xml tree.
     fn next(&mut self) -> Option<Self::Item> {
@@ -373,7 +379,7 @@ impl<'a, 'txn> Iterator for TreeWalker<'a, 'txn> {
                         .and_then(|ptr| self.txn.store.blocks.get_item(ptr))
                 };
 
-                result = Some(XmlElement::from(inner.clone()));
+                result = Some(Xml::from(inner.clone()));
             }
 
             if self.current.is_none() {
@@ -396,34 +402,7 @@ impl<'a, 'txn> Iterator for TreeWalker<'a, 'txn> {
     }
 }
 
-pub struct Select<'a, 'b, 'txn> {
-    inner: TreeWalker<'a, 'txn>,
-    query: &'b str,
-}
-
-impl<'a, 'b, 'txn> Select<'a, 'b, 'txn> {
-    fn new(inner: TreeWalker<'a, 'txn>, query: &'b str) -> Self {
-        Select { inner, query }
-    }
-}
-
-impl<'a, 'b, 'txn> Iterator for Select<'a, 'b, 'txn> {
-    type Item = XmlElement;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        while let Some(elem) = self.inner.next() {
-            let inner = elem.inner();
-            if let Some(tag) = inner.name.as_ref() {
-                if tag == self.query {
-                    drop(inner);
-                    return Some(elem);
-                }
-            }
-        }
-        None
-    }
-}
-
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct XmlHook(Map);
 
 impl XmlHook {
@@ -504,7 +483,7 @@ impl Into<XmlHook> for Map {
     }
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct XmlText(Text);
 
 impl XmlText {
@@ -552,15 +531,15 @@ impl XmlText {
         Attributes(self.inner().entries(txn))
     }
 
-    pub fn next_sibling<T: From<InnerRef>>(&self, txn: &Transaction) -> Option<T> {
+    pub fn next_sibling(&self, txn: &Transaction) -> Option<Xml> {
         next_sibling(self.0.inner(), txn)
     }
 
-    pub fn prev_sibling<T: From<InnerRef>>(&self, txn: &Transaction) -> Option<T> {
+    pub fn prev_sibling(&self, txn: &Transaction) -> Option<Xml> {
         prev_sibling(self.0.inner(), txn)
     }
 
-    pub fn parent<T: From<InnerRef>>(&self, txn: &Transaction) -> Option<T> {
+    pub fn parent(&self, txn: &Transaction) -> Option<XmlElement> {
         parent(self.inner(), txn)
     }
 
@@ -606,7 +585,7 @@ impl Into<XmlText> for Text {
     }
 }
 
-fn next_sibling<T: From<InnerRef>>(inner: Ref<Inner>, txn: &Transaction) -> Option<T> {
+fn next_sibling(inner: Ref<Inner>, txn: &Transaction) -> Option<Xml> {
     let mut current = inner
         .item
         .as_ref()
@@ -619,7 +598,7 @@ fn next_sibling<T: From<InnerRef>>(inner: Ref<Inner>, txn: &Transaction) -> Opti
         if let Some(right) = current {
             if !right.is_deleted() {
                 if let ItemContent::Type(inner) = &right.content {
-                    return Some(T::from(inner.clone()));
+                    return Some(Xml::from(inner.clone()));
                 }
             }
         }
@@ -628,7 +607,7 @@ fn next_sibling<T: From<InnerRef>>(inner: Ref<Inner>, txn: &Transaction) -> Opti
     None
 }
 
-fn prev_sibling<T: From<InnerRef>>(inner: Ref<Inner>, txn: &Transaction) -> Option<T> {
+fn prev_sibling(inner: Ref<Inner>, txn: &Transaction) -> Option<Xml> {
     let mut current = inner
         .item
         .as_ref()
@@ -641,7 +620,7 @@ fn prev_sibling<T: From<InnerRef>>(inner: Ref<Inner>, txn: &Transaction) -> Opti
         if let Some(left) = current {
             if !left.is_deleted() {
                 if let ItemContent::Type(inner) = &left.content {
-                    return Some(T::from(inner.clone()));
+                    return Some(Xml::from(inner.clone()));
                 }
             }
         }
@@ -650,15 +629,15 @@ fn prev_sibling<T: From<InnerRef>>(inner: Ref<Inner>, txn: &Transaction) -> Opti
     None
 }
 
-fn parent<T: From<InnerRef>>(inner: Ref<Inner>, txn: &Transaction) -> Option<T> {
+fn parent(inner: Ref<Inner>, txn: &Transaction) -> Option<XmlElement> {
     let item = txn.store.blocks.get_item(inner.item.as_ref()?)?;
     let parent = txn.store.get_type(&item.parent)?;
-    Some(T::from(parent.clone()))
+    Some(XmlElement::from(parent.clone()))
 }
 
 #[cfg(test)]
 mod test {
-    use crate::types::xml::XmlElement;
+    use crate::types::xml::{Xml, XmlElement};
     use crate::Doc;
 
     #[test]
@@ -694,7 +673,10 @@ mod test {
         let p2 = root.push_elem_back(&mut txn, "p");
         root.push_elem_back(&mut txn, "img");
 
-        let all_paragraphs = root.select(&txn, "p");
+        let all_paragraphs = root.iter(&txn).filter_map(|n| match n {
+            Xml::Element(e) if e.tag() == "p" => Some(e),
+            _ => None,
+        });
         let actual: Vec<_> = all_paragraphs.collect();
 
         assert_eq!(
@@ -729,12 +711,12 @@ mod test {
 
         assert_eq!(
             first.next_sibling(&txn).as_ref(),
-            Some(&second),
+            Some(&Xml::Element(second.clone())),
             "first.next_sibling should point to second"
         );
         assert_eq!(
             second.prev_sibling(&txn).as_ref(),
-            Some(&first),
+            Some(&Xml::Text(first.clone())),
             "second.prev_sibling should point to first"
         );
         assert_eq!(
@@ -743,13 +725,13 @@ mod test {
             "first.parent should point to root"
         );
         assert_eq!(
-            root.parent::<XmlElement>(&txn).as_ref(),
+            root.parent(&txn).as_ref(),
             None,
             "root parent should not exist"
         );
         assert_eq!(
             root.first_child(&txn).as_ref(),
-            Some(&first),
+            Some(&Xml::Text(first)),
             "root.first_child should point to first"
         );
     }

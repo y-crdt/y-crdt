@@ -4,6 +4,7 @@ use crate::*;
 use lib0::any::Any;
 use std::collections::HashMap;
 
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Map(InnerRef);
 
 impl Map {
