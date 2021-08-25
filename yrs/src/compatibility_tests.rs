@@ -1,13 +1,13 @@
 use crate::block::{Block, BlockPtr, Item, ItemContent};
 use crate::id_set::{DeleteSet, IdSet};
 use crate::store::Store;
-use crate::types::{Inner, TypePtr, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT};
+use crate::types::{Inner, InnerRef, TypePtr, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT};
 use crate::update::Update;
 use crate::updates::decoder::Decode;
 use crate::updates::encoder::Encode;
 use crate::{Doc, StateVector, ID};
 use lib0::any::Any;
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::rc::Rc;
 
 #[test]
@@ -217,11 +217,11 @@ fn xml_fragment_insert() {
             None,
             TypePtr::Named(Rc::new("fragment-name".to_string())),
             None,
-            ItemContent::Type(Rc::new(RefCell::new(Inner::new(
+            ItemContent::Type(InnerRef::new(Inner::new(
                 TypePtr::Id(BlockPtr::from(ID::new(CLIENT_ID, 0))),
-                None,
                 TYPE_REFS_XML_TEXT,
-            )))),
+                None,
+            ))),
         )),
         &Block::Item(Item::new(
             ID::new(CLIENT_ID, 1),
@@ -231,11 +231,11 @@ fn xml_fragment_insert() {
             None,
             TypePtr::Id(BlockPtr::from(ID::new(CLIENT_ID, 0))),
             None,
-            ItemContent::Type(Rc::new(RefCell::new(Inner::new(
+            ItemContent::Type(InnerRef::new(Inner::new(
                 TypePtr::Id(BlockPtr::from(ID::new(CLIENT_ID, 1))),
-                Some("node-name".to_string()),
                 TYPE_REFS_XML_ELEMENT,
-            )))),
+                Some("node-name".to_string()),
+            ))),
         )),
     ];
 

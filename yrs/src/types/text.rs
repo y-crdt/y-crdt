@@ -1,17 +1,13 @@
 use crate::block::{BlockPtr, ItemContent};
 use crate::transaction::Transaction;
-use crate::types::Inner;
+use crate::types::{Inner, InnerRef};
 use crate::*;
-use std::cell::RefCell;
-use std::rc::Rc;
+use std::cell::Ref;
 
-pub struct Text(Rc<RefCell<Inner>>);
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct Text(InnerRef);
 
 impl Text {
-    pub fn new(inner: Rc<RefCell<Inner>>) -> Self {
-        Text(inner)
-    }
-
     #[allow(clippy::inherent_to_string)]
     pub fn to_string(&self, txn: &Transaction<'_>) -> String {
         let inner = self.0.borrow();
@@ -22,8 +18,12 @@ impl Text {
         self.0.borrow().len()
     }
 
+    pub(crate) fn inner(&self) -> Ref<Inner> {
+        self.0.borrow()
+    }
+
     pub(crate) fn to_string_inner(inner: &Inner, txn: &Transaction<'_>) -> String {
-        let mut start = inner.start.get();
+        let mut start = inner.start;
         let mut s = String::new();
         while let Some(a) = start.as_ref() {
             if let Some(item) = txn.store.blocks.get_item(&a) {
@@ -40,7 +40,7 @@ impl Text {
         s
     }
 
-    fn find_position(
+    pub(crate) fn find_position(
         &self,
         txn: &mut Transaction<'_>,
         mut count: u32,
@@ -50,7 +50,7 @@ impl Text {
             block::ItemPosition {
                 parent: inner.ptr.clone(),
                 left: None,
-                right: inner.start.get(),
+                right: inner.start,
                 index: 0,
             }
         };
@@ -94,7 +94,7 @@ impl Text {
         }
     }
 
-    pub fn delete(&self, txn: &mut Transaction, index: u32, mut len: u32) {
+    pub fn remove(&self, txn: &mut Transaction, index: u32, mut len: u32) {
         if let Some(pos) = self.find_position(txn, index) {
             let mut current = {
                 let block = pos
@@ -109,8 +109,8 @@ impl Text {
                     None => {
                         let t = txn.store.get_type(&pos.parent).unwrap();
                         let inner = t.borrow();
-                        let ptr = inner.start.get();
-                        let item = ptr.as_ref().and_then(|ptr| txn.store.blocks.get_item(ptr));
+                        let ptr = inner.start.as_ref();
+                        let item = ptr.and_then(|ptr| txn.store.blocks.get_item(ptr));
                         item
                     }
                 }
@@ -152,6 +152,12 @@ impl Text {
 impl Into<ItemContent> for Text {
     fn into(self) -> ItemContent {
         ItemContent::Type(self.0.clone())
+    }
+}
+
+impl From<InnerRef> for Text {
+    fn from(inner: InnerRef) -> Self {
+        Text(inner)
     }
 }
 
@@ -254,8 +260,8 @@ mod test {
         let d1_sv = d1.get_state_vector(&t1);
         let d2_sv = d2.get_state_vector(&t2);
 
-        let u1 = d1.encode_delta_as_update(&d2_sv, &t1);
-        let u2 = d2.encode_delta_as_update(&d1_sv, &t2);
+        let u1 = d1.encode_delta_as_update(&t1, &d2_sv);
+        let u2 = d2.encode_delta_as_update(&t2, &d1_sv);
 
         d1.apply_update(&mut t1, u2.as_slice());
         d2.apply_update(&mut t2, u1.as_slice());
@@ -280,7 +286,7 @@ mod test {
         let mut t2 = d2.transact();
 
         let d2_sv = d2.get_state_vector(&t2);
-        let u1 = d1.encode_delta_as_update(&d2_sv, &t1);
+        let u1 = d1.encode_delta_as_update(&t1, &d2_sv);
         d2.apply_update(&mut t2, u1.as_slice());
 
         let txt2 = t2.get_text("test");
@@ -295,8 +301,8 @@ mod test {
 
         let d2_sv = d2.get_state_vector(&t2);
         let d1_sv = d1.get_state_vector(&t1);
-        let u1 = d1.encode_delta_as_update(&d2_sv, &t1);
-        let u2 = d2.encode_delta_as_update(&d1_sv, &t2);
+        let u1 = d1.encode_delta_as_update(&t1, &d2_sv);
+        let u2 = d2.encode_delta_as_update(&t2, &d1_sv);
         d1.apply_update(&mut t1, u2.as_slice());
         d2.apply_update(&mut t2, u1.as_slice());
 
@@ -320,7 +326,7 @@ mod test {
         let mut t2 = d2.transact();
 
         let d2_sv = d2.get_state_vector(&t2);
-        let u1 = d1.encode_delta_as_update(&d2_sv, &t1);
+        let u1 = d1.encode_delta_as_update(&t1, &d2_sv);
         d2.apply_update(&mut t2, u1.as_slice());
 
         let txt2 = t2.get_text("test");
@@ -335,8 +341,8 @@ mod test {
 
         let d2_sv = d2.get_state_vector(&t2);
         let d1_sv = d1.get_state_vector(&t1);
-        let u1 = d1.encode_delta_as_update(&d2_sv, &t1);
-        let u2 = d2.encode_delta_as_update(&d1_sv, &t2);
+        let u1 = d1.encode_delta_as_update(&t1, &d2_sv);
+        let u2 = d2.encode_delta_as_update(&t2, &d1_sv);
 
         d1.apply_update(&mut t1, u2.as_slice());
         d2.apply_update(&mut t2, u1.as_slice());
@@ -356,7 +362,7 @@ mod test {
 
         txt.insert(&mut txn, 0, "bbb");
         txt.insert(&mut txn, 0, "aaa");
-        txt.delete(&mut txn, 0, 3);
+        txt.remove(&mut txn, 0, 3);
 
         assert_eq!(txt.to_string(&txn).as_str(), "bbb");
     }
@@ -369,7 +375,7 @@ mod test {
 
         txt.insert(&mut txn, 0, "bbb");
         txt.insert(&mut txn, 0, "aaa");
-        txt.delete(&mut txn, 3, 3);
+        txt.remove(&mut txn, 3, 3);
 
         assert_eq!(txt.to_string(&txn).as_str(), "aaa");
     }
@@ -384,13 +390,13 @@ mod test {
         txt.insert(&mut txn, 1, "b");
         txt.insert(&mut txn, 2, "c");
 
-        txt.delete(&mut txn, 1, 1);
+        txt.remove(&mut txn, 1, 1);
         assert_eq!(txt.to_string(&txn).as_str(), "ac");
 
-        txt.delete(&mut txn, 1, 1);
+        txt.remove(&mut txn, 1, 1);
         assert_eq!(txt.to_string(&txn).as_str(), "a");
 
-        txt.delete(&mut txn, 0, 1);
+        txt.remove(&mut txn, 0, 1);
         assert_eq!(txt.to_string(&txn).as_str(), "");
     }
 
@@ -401,7 +407,7 @@ mod test {
         let txt = txn.get_text("test");
 
         txt.insert(&mut txn, 0, "abc");
-        txt.delete(&mut txn, 1, 1);
+        txt.remove(&mut txn, 1, 1);
 
         assert_eq!(txt.to_string(&txn).as_str(), "ac");
     }
@@ -416,7 +422,7 @@ mod test {
         txt.insert(&mut txn, 6, "beautiful");
         txt.insert(&mut txn, 15, " world");
 
-        txt.delete(&mut txn, 5, 11);
+        txt.remove(&mut txn, 5, 11);
         assert_eq!(txt.to_string(&txn).as_str(), "helloworld");
     }
 
@@ -427,7 +433,7 @@ mod test {
         let txt = txn.get_text("test");
 
         txt.insert(&mut txn, 0, "hello ");
-        txt.delete(&mut txn, 0, 5);
+        txt.remove(&mut txn, 0, 5);
         txt.insert(&mut txn, 1, "world");
 
         assert_eq!(txt.to_string(&txn).as_str(), " world");
@@ -452,18 +458,18 @@ mod test {
 
         txt1.insert(&mut t1, 5, " beautiful");
         txt1.insert(&mut t1, 21, "!");
-        txt1.delete(&mut t1, 0, 5);
+        txt1.remove(&mut t1, 0, 5);
         assert_eq!(txt1.to_string(&t1).as_str(), " beautiful world!");
 
-        txt2.delete(&mut t2, 5, 5);
-        txt2.delete(&mut t2, 0, 1);
+        txt2.remove(&mut t2, 5, 5);
+        txt2.remove(&mut t2, 0, 1);
         txt2.insert(&mut t2, 0, "H");
         assert_eq!(txt2.to_string(&t2).as_str(), "Hellod");
 
         let sv1 = d1.get_state_vector(&t1);
         let sv2 = d2.get_state_vector(&t2);
-        let u1 = d1.encode_delta_as_update(&sv2, &t1);
-        let u2 = d2.encode_delta_as_update(&sv1, &t2);
+        let u1 = d1.encode_delta_as_update(&t1, &sv2);
+        let u2 = d2.encode_delta_as_update(&t2, &sv1);
 
         d1.apply_update(&mut t1, u2.as_slice());
         d2.apply_update(&mut t2, u1.as_slice());

@@ -6,7 +6,11 @@ use crate::event::UpdateEvent;
 use crate::id_set::{DeleteSet, IdSet};
 use crate::store::Store;
 use crate::types::array::Array;
-use crate::types::{Map, Text, TypePtr, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT};
+use crate::types::xml::{XmlElement, XmlText};
+use crate::types::{
+    Inner, Map, Text, TypePtr, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
+    TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT,
+};
 use crate::update::Update;
 use std::cell::RefMut;
 use std::collections::{HashMap, HashSet};
@@ -42,18 +46,30 @@ impl<'a> Transaction<'a> {
     }
 
     pub fn get_text(&mut self, name: &str) -> Text {
-        let c = self.store.create_type(name, TYPE_REFS_TEXT);
-        Text::new(c)
+        let c = self.store.create_type(name, None, TYPE_REFS_TEXT);
+        Text::from(c)
     }
 
     pub fn get_map(&mut self, name: &str) -> Map {
-        let c = self.store.create_type(name, TYPE_REFS_MAP);
-        Map::new(c)
+        let c = self.store.create_type(name, None, TYPE_REFS_MAP);
+        Map::from(c)
     }
 
     pub fn get_array(&mut self, name: &str) -> Array {
-        let c = self.store.create_type(name, TYPE_REFS_ARRAY);
-        Array::new(c)
+        let c = self.store.create_type(name, None, TYPE_REFS_ARRAY);
+        Array::from(c)
+    }
+
+    pub fn get_xml_element<S: ToString>(&mut self, name: &str, tag: S) -> XmlElement {
+        let c = self
+            .store
+            .create_type(name, Some(tag.to_string()), TYPE_REFS_XML_ELEMENT);
+        XmlElement::from(c)
+    }
+
+    pub fn get_xml_text(&mut self, name: &str) -> XmlText {
+        let c = self.store.create_type(name, None, TYPE_REFS_XML_TEXT);
+        XmlText::from(c)
     }
 
     /// Encodes the document state to a binary format.
@@ -244,7 +260,7 @@ impl<'a> Transaction<'a> {
                     }
                     ItemContent::Type(t) => {
                         let inner = t.borrow_mut();
-                        let mut ptr = inner.start.get();
+                        let mut ptr = inner.start;
                         self.changed.remove(&item.parent);
 
                         while let Some(item) = ptr.and_then(|ptr| self.store.blocks.get_item(&ptr))
@@ -471,6 +487,16 @@ impl<'a> Transaction<'a> {
                 }
             }
         }
+    }
+
+    pub fn add_changed_type(&mut self, parent: &mut Inner, parent_sub: Option<&String>) {
+        // TODO:
+        /*
+              const item = type._item
+              if (item === null || (item.id.clock < (transaction.beforeState.get(item.id.client) || 0) && !item.deleted)) {
+                map.setIfUndefined(transaction.changed, type, set.create).add(parentSub)
+              }
+        */
     }
 }
 

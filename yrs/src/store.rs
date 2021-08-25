@@ -1,18 +1,18 @@
+use crate::block::ItemContent;
 use crate::block_store::{BlockStore, CompactionResult, StateVector};
 use crate::event::{EventHandler, UpdateEvent};
 use crate::id_set::DeleteSet;
-use crate::types::{Inner, TypeRefs};
+use crate::types::{InnerRef, TypeRefs, TYPE_REFS_UNDEFINED};
 use crate::update::PendingUpdate;
 use crate::updates::encoder::{Encode, Encoder};
 use crate::{block, types};
-use std::cell::RefCell;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::rc::Rc;
 
 pub struct Store {
     pub client_id: u64,
-    pub types: HashMap<Rc<String>, Rc<RefCell<types::Inner>>>,
+    pub types: HashMap<Rc<String>, InnerRef>,
     pub blocks: BlockStore,
     pub pending: Option<PendingUpdate>,
     pub pending_ds: Option<DeleteSet>,
@@ -35,7 +35,7 @@ impl Store {
         self.blocks.get_state(&self.client_id)
     }
 
-    pub fn get_type(&self, ptr: &types::TypePtr) -> Option<&Rc<RefCell<types::Inner>>> {
+    pub fn get_type(&self, ptr: &types::TypePtr) -> Option<&InnerRef> {
         match ptr {
             types::TypePtr::Id(id) => {
                 // @todo the item might not exist
@@ -53,12 +53,18 @@ impl Store {
     pub fn init_type_from_ptr(
         &mut self,
         ptr: &types::TypePtr,
-        type_refs: TypeRefs,
-    ) -> Option<Rc<RefCell<types::Inner>>> {
+        content: &ItemContent,
+    ) -> Option<InnerRef> {
         match ptr {
             types::TypePtr::Named(name) => {
-                let inner = self.init_type_ref(name.clone(), type_refs);
-                Some(inner)
+                if let ItemContent::Type(inner) = content {
+                    let e = self.types.entry(name.clone());
+                    let inner = e.or_insert(inner.clone());
+                    Some(inner.clone())
+                } else {
+                    let inner = self.init_type_ref(name.clone(), None, TYPE_REFS_UNDEFINED);
+                    Some(inner)
+                }
             }
             _ => {
                 if let Some(inner) = self.get_type(ptr) {
@@ -69,21 +75,27 @@ impl Store {
             }
         }
     }
-    pub fn create_type(&mut self, name: &str, type_ref: TypeRefs) -> Rc<RefCell<Inner>> {
+    pub fn create_type(
+        &mut self,
+        name: &str,
+        node_name: Option<String>,
+        type_ref: TypeRefs,
+    ) -> InnerRef {
         let rc = Rc::new(name.to_owned());
-        self.init_type_ref(rc.clone(), type_ref)
+        self.init_type_ref(rc.clone(), node_name, type_ref)
     }
 
     pub(crate) fn init_type_ref(
         &mut self,
-        string: Rc<String>,
+        name: Rc<String>,
+        node_name: Option<String>,
         type_ref: TypeRefs,
-    ) -> Rc<RefCell<Inner>> {
-        let e = self.types.entry(string.clone());
+    ) -> InnerRef {
+        let e = self.types.entry(name.clone());
         let value = e.or_insert_with(|| {
-            let type_ptr = types::TypePtr::Named(string.clone());
-            let inner = types::Inner::new(type_ptr, None, type_ref);
-            Rc::new(RefCell::new(inner))
+            let type_ptr = types::TypePtr::Named(name.clone());
+            let inner = types::Inner::new(type_ptr, type_ref, node_name);
+            InnerRef::new(inner)
         });
         value.clone()
     }
@@ -125,9 +137,9 @@ impl Store {
             encoder.write_uvar(clock);
             let first_block = &blocks[start];
             // write first struct with an offset
-            first_block.encode(encoder);
+            first_block.encode(self, encoder);
             for i in (start + 1)..blocks.integrated_len() {
-                blocks[i].encode(encoder);
+                blocks[i].encode(self, encoder);
             }
         }
     }
@@ -170,6 +182,16 @@ impl Store {
                 item.left = Some(compaction.replacement);
             }
         }
+    }
+
+    pub(crate) fn get_root_type_key(&self, value: &InnerRef) -> Option<&Rc<String>> {
+        for (k, v) in self.types.iter() {
+            if v == value {
+                return Some(k);
+            }
+        }
+
+        None
     }
 }
 
