@@ -28,18 +28,18 @@ impl XmlElement {
             .as_ref()
             .map(|s| s.as_str())
             .unwrap_or(&"UNDEFINED");
-        write!(&mut s, "<{}", tag);
+        write!(&mut s, "<{}", tag).unwrap();
         let attributes = Attributes(inner.entries(txn));
         for (k, v) in attributes {
-            write!(&mut s, " \"{}\"=\"{}\"", k, v);
+            write!(&mut s, " \"{}\"=\"{}\"", k, v).unwrap();
         }
-        write!(&mut s, ">");
+        write!(&mut s, ">").unwrap();
         for i in inner.iter(txn) {
             for content in i.content.get_content(txn) {
-                write!(&mut s, "{}", content);
+                write!(&mut s, "{}", content).unwrap();
             }
         }
-        write!(&mut s, "</{}>", tag);
+        write!(&mut s, "</{}>", tag).unwrap();
         s
     }
 
@@ -235,7 +235,7 @@ impl XmlFragment {
         let inner = self.inner();
         for i in inner.iter(txn) {
             for content in i.content.get_content(txn) {
-                write!(&mut s, "{}", content);
+                write!(&mut s, "{}", content).unwrap();
             }
         }
         s
@@ -315,7 +315,7 @@ impl XmlFragment {
 
     pub fn get<T: From<InnerRef>>(&self, txn: &Transaction, index: u32) -> Option<T> {
         let inner = self.inner();
-        let (content, idx) = inner.get_at(txn, index)?;
+        let (content, _) = inner.get_at(txn, index)?;
         if let ItemContent::Type(inner) = content {
             Some(T::from(inner.clone()))
         } else {
@@ -339,7 +339,7 @@ pub struct TreeWalker<'a, 'txn> {
 impl<'a, 'txn> TreeWalker<'a, 'txn> {
     fn new<'b>(txn: &'a Transaction<'txn>, parent: &'b Inner) -> Self {
         let root = parent.ptr.clone();
-        let mut current = parent
+        let current = parent
             .start
             .as_ref()
             .and_then(|p| txn.store.blocks.get_item(p));
@@ -564,7 +564,7 @@ impl XmlText {
         parent(self.inner(), txn)
     }
 
-    pub fn len(&self, txn: &Transaction) -> u32 {
+    pub fn len(&self, _txn: &Transaction) -> u32 {
         self.0.len()
     }
 
@@ -689,12 +689,12 @@ mod test {
         */
         let root = txn.get_xml_element("xml", "root");
         let p1 = root.push_elem_back(&mut txn, "p");
-        let txt1 = p1.push_text_back(&mut txn);
-        let txt2 = p1.push_text_back(&mut txn);
+        p1.push_text_back(&mut txn);
+        p1.push_text_back(&mut txn);
         let p2 = root.push_elem_back(&mut txn, "p");
-        let img = root.push_elem_back(&mut txn, "img");
+        root.push_elem_back(&mut txn, "img");
 
-        let mut all_paragraphs = root.select(&txn, "p");
+        let all_paragraphs = root.select(&txn, "p");
         let actual: Vec<_> = all_paragraphs.collect();
 
         assert_eq!(

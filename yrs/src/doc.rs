@@ -37,11 +37,7 @@ impl Doc {
         txn.store.blocks.get_state_vector().encode_v1()
     }
 
-    pub fn encode_delta_as_update(
-        &self,
-        remote_sv: &StateVector,
-        txn: &Transaction<'_>,
-    ) -> Vec<u8> {
+    pub fn encode_delta_as_update(&self, txn: &Transaction, remote_sv: &StateVector) -> Vec<u8> {
         let mut encoder = EncoderV1::new();
         txn.store.encode_diff(remote_sv, &mut encoder);
         encoder.to_vec()
@@ -191,14 +187,14 @@ mod test {
         let txt = txn.get_text("test");
 
         txt.insert(&mut txn, 0, "abc");
-        let u = doc.encode_delta_as_update(&doc2.get_state_vector(&txn2), &txn);
+        let u = doc.encode_delta_as_update(&txn, &doc2.get_state_vector(&txn2));
         doc2.apply_update(&mut txn2, u.as_slice());
         assert_eq!(counter.get(), 3); // update has been propagated
 
         drop(sub);
 
         txt.insert(&mut txn, 3, "de");
-        let u = doc.encode_delta_as_update(&doc2.get_state_vector(&txn2), &txn);
+        let u = doc.encode_delta_as_update(&txn, &doc2.get_state_vector(&txn2));
         doc2.apply_update(&mut txn2, u.as_slice());
         assert_eq!(counter.get(), 3); // since subscription has been dropped, update was not propagated
     }

@@ -185,11 +185,11 @@ mod test {
         m1.insert(&mut t1, "boolean1".to_owned(), true);
         m1.insert(&mut t1, "boolean0".to_owned(), false);
 
-        let m1m = t1.get_map("y-map");
-        let m1a = t1.get_text("y-text");
-        m1a.insert(&mut t1, 0, "a");
-        m1a.insert(&mut t1, 0, "b");
-        m1m.insert(&mut t1, "y-text".to_owned(), m1a);
+        //let m1m = t1.get_map("y-map");
+        //let m1a = t1.get_text("y-text");
+        //m1a.insert(&mut t1, 0, "a");
+        //m1a.insert(&mut t1, 0, "b");
+        //m1m.insert(&mut t1, "y-text".to_owned(), m1a);
 
         //TODO: YArray within YMap
         fn compare_all(t: &Transaction<'_>, m: &Map) {
@@ -215,6 +215,7 @@ mod test {
 
         compare_all(&t1, &m1);
 
+        println!("store A: {}", t1.store);
         let update = d1.encode_state_as_update(&t1);
         d2.apply_update(&mut t2, update.as_slice());
 

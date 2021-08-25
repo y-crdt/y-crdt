@@ -260,8 +260,8 @@ mod test {
         let d1_sv = d1.get_state_vector(&t1);
         let d2_sv = d2.get_state_vector(&t2);
 
-        let u1 = d1.encode_delta_as_update(&d2_sv, &t1);
-        let u2 = d2.encode_delta_as_update(&d1_sv, &t2);
+        let u1 = d1.encode_delta_as_update(&t1, &d2_sv);
+        let u2 = d2.encode_delta_as_update(&t2, &d1_sv);
 
         d1.apply_update(&mut t1, u2.as_slice());
         d2.apply_update(&mut t2, u1.as_slice());
@@ -286,7 +286,7 @@ mod test {
         let mut t2 = d2.transact();
 
         let d2_sv = d2.get_state_vector(&t2);
-        let u1 = d1.encode_delta_as_update(&d2_sv, &t1);
+        let u1 = d1.encode_delta_as_update(&t1, &d2_sv);
         d2.apply_update(&mut t2, u1.as_slice());
 
         let txt2 = t2.get_text("test");
@@ -301,8 +301,8 @@ mod test {
 
         let d2_sv = d2.get_state_vector(&t2);
         let d1_sv = d1.get_state_vector(&t1);
-        let u1 = d1.encode_delta_as_update(&d2_sv, &t1);
-        let u2 = d2.encode_delta_as_update(&d1_sv, &t2);
+        let u1 = d1.encode_delta_as_update(&t1, &d2_sv);
+        let u2 = d2.encode_delta_as_update(&t2, &d1_sv);
         d1.apply_update(&mut t1, u2.as_slice());
         d2.apply_update(&mut t2, u1.as_slice());
 
@@ -326,7 +326,7 @@ mod test {
         let mut t2 = d2.transact();
 
         let d2_sv = d2.get_state_vector(&t2);
-        let u1 = d1.encode_delta_as_update(&d2_sv, &t1);
+        let u1 = d1.encode_delta_as_update(&t1, &d2_sv);
         d2.apply_update(&mut t2, u1.as_slice());
 
         let txt2 = t2.get_text("test");
@@ -341,8 +341,8 @@ mod test {
 
         let d2_sv = d2.get_state_vector(&t2);
         let d1_sv = d1.get_state_vector(&t1);
-        let u1 = d1.encode_delta_as_update(&d2_sv, &t1);
-        let u2 = d2.encode_delta_as_update(&d1_sv, &t2);
+        let u1 = d1.encode_delta_as_update(&t1, &d2_sv);
+        let u2 = d2.encode_delta_as_update(&t2, &d1_sv);
 
         d1.apply_update(&mut t1, u2.as_slice());
         d2.apply_update(&mut t2, u1.as_slice());
@@ -468,8 +468,8 @@ mod test {
 
         let sv1 = d1.get_state_vector(&t1);
         let sv2 = d2.get_state_vector(&t2);
-        let u1 = d1.encode_delta_as_update(&sv2, &t1);
-        let u2 = d2.encode_delta_as_update(&sv1, &t2);
+        let u1 = d1.encode_delta_as_update(&t1, &sv2);
+        let u2 = d2.encode_delta_as_update(&t2, &sv1);
 
         d1.apply_update(&mut t1, u2.as_slice());
         d2.apply_update(&mut t2, u1.as_slice());

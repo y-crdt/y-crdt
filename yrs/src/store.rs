@@ -2,7 +2,7 @@ use crate::block::ItemContent;
 use crate::block_store::{BlockStore, CompactionResult, StateVector};
 use crate::event::{EventHandler, UpdateEvent};
 use crate::id_set::DeleteSet;
-use crate::types::{InnerRef, TypePtr, TypeRefs, TYPE_REFS_UNDEFINED};
+use crate::types::{InnerRef, TypeRefs, TYPE_REFS_UNDEFINED};
 use crate::update::PendingUpdate;
 use crate::updates::encoder::{Encode, Encoder};
 use crate::{block, types};
@@ -137,9 +137,9 @@ impl Store {
             encoder.write_uvar(clock);
             let first_block = &blocks[start];
             // write first struct with an offset
-            first_block.encode(encoder);
+            first_block.encode(self, encoder);
             for i in (start + 1)..blocks.integrated_len() {
-                blocks[i].encode(encoder);
+                blocks[i].encode(self, encoder);
             }
         }
     }
@@ -182,6 +182,16 @@ impl Store {
                 item.left = Some(compaction.replacement);
             }
         }
+    }
+
+    pub(crate) fn get_root_type_key(&self, value: &InnerRef) -> Option<&Rc<String>> {
+        for (k, v) in self.types.iter() {
+            if v == value {
+                return Some(k);
+            }
+        }
+
+        None
     }
 }
 

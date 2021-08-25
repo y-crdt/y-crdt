@@ -96,6 +96,15 @@ impl AsRef<Inner> for InnerRef {
 }
 
 impl Eq for InnerRef {}
+
+#[cfg(not(test))]
+impl PartialEq for InnerRef {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+#[cfg(test)]
 impl PartialEq for InnerRef {
     fn eq(&self, other: &Self) -> bool {
         if Rc::ptr_eq(&self.0, &other.0) {
