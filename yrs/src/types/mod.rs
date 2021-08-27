@@ -409,6 +409,7 @@ impl<'a, 'txn> Iterator for Iter<'a, 'txn> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TypePtr {
+    Unknown,
     Id(block::BlockPtr),
     Named(Rc<String>),
 }
@@ -416,6 +417,7 @@ pub enum TypePtr {
 impl std::fmt::Display for TypePtr {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
+            TypePtr::Unknown => write!(f, "unknown"),
             TypePtr::Id(ptr) => write!(f, "{}", ptr),
             TypePtr::Named(name) => write!(f, "'{}'", name),
         }

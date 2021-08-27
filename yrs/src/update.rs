@@ -120,8 +120,8 @@ impl Update {
         let mut stack = Vec::new();
 
         while let Some(mut block) = stack_head {
-            let id = block.id();
-            if local_sv.contains(id) {
+            let id = block.id().clone();
+            if local_sv.contains(&id) {
                 let offset = local_sv.get(&id.client) - id.clock;
                 if let Some(dep) = Self::missing(&block, &local_sv) {
                     stack.push(block);
@@ -294,17 +294,7 @@ impl Update {
                         TypePtr::Id(BlockPtr::from(decoder.read_left_id()))
                     }
                 } else {
-                    let parent = if let Some(id) = origin.as_ref() {
-                        id.clone()
-                    } else if let Some(id) = right_origin.as_ref() {
-                        id.clone()
-                    } else {
-                        panic!(
-                            "Couldn't decode item (id: {:?}) - no parent was provided",
-                            id
-                        )
-                    };
-                    TypePtr::Id(BlockPtr::from(parent))
+                    TypePtr::Unknown
                 };
                 let parent_sub = if cant_copy_parent_info && (info & HAS_PARENT_SUB != 0) {
                     Some(decoder.read_string().to_owned())
