@@ -60,10 +60,10 @@ impl<'a> Transaction<'a> {
         Array::from(c)
     }
 
-    pub fn get_xml_element<S: ToString>(&mut self, name: &str, tag: S) -> XmlElement {
+    pub fn get_xml_element(&mut self, name: &str) -> XmlElement {
         let c = self
             .store
-            .create_type(name, Some(tag.to_string()), TYPE_REFS_XML_ELEMENT);
+            .create_type(name, Some("UNDEFINED".to_string()), TYPE_REFS_XML_ELEMENT);
         XmlElement::from(c)
     }
 
