@@ -2,7 +2,7 @@ use crate::block::ItemContent;
 use crate::block_store::{BlockStore, CompactionResult, StateVector};
 use crate::event::{EventHandler, UpdateEvent};
 use crate::id_set::DeleteSet;
-use crate::types::{InnerRef, TypeRefs, TYPE_REFS_UNDEFINED};
+use crate::types::{InnerRef, TypePtr, TypeRefs, TYPE_REFS_UNDEFINED};
 use crate::update::PendingUpdate;
 use crate::updates::encoder::{Encode, Encoder};
 use crate::{block, types};
@@ -35,18 +35,19 @@ impl Store {
         self.blocks.get_state(&self.client_id)
     }
 
-    pub fn get_type(&self, ptr: &types::TypePtr) -> Option<&InnerRef> {
+    pub fn get_type(&self, ptr: &TypePtr) -> Option<&InnerRef> {
         match ptr {
-            types::TypePtr::Id(id) => {
+            TypePtr::Id(id) => {
                 // @todo the item might not exist
                 let item = self.blocks.get_item(id)?;
-                if let block::ItemContent::Type(c) = &item.content {
+                if let ItemContent::Type(c) = &item.content {
                     Some(c)
                 } else {
                     None
                 }
             }
-            types::TypePtr::Named(name) => self.types.get(name),
+            TypePtr::Named(name) => self.types.get(name),
+            TypePtr::Unknown => None,
         }
     }
 
