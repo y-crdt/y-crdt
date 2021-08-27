@@ -409,8 +409,15 @@ impl<'a, 'txn> Iterator for Iter<'a, 'txn> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TypePtr {
+    /// Temporary value - used only when block is deserialized right away, but had not been
+    /// integrated into block store yet. As part of block integration process, items are
+    /// repaired and their fields (including parent) are being rewired.
     Unknown,
+
+    /// Pointer to another block. Used in nested data types ie. YMap containing another YMap.
     Id(block::BlockPtr),
+
+    /// Pointer to a root-level type.
     Named(Rc<String>),
 }
 
