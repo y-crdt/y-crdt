@@ -752,12 +752,9 @@ mod test {
 
         let d2 = Doc::with_client_id(2);
         let mut t2 = d2.transact();
-        d2.apply_update(&mut t2, u1.as_slice());
         let r2 = t2.get_xml_element("root");
 
-        println!("{}", t1.store);
-        println!("{}", t2.store);
-
+        d2.apply_update(&mut t2, u1.as_slice());
         assert_eq!(r2.to_string(&t2), expected);
     }
 
@@ -770,6 +767,18 @@ mod test {
         first.push(&mut t1, "hello");
         let second = r1.push_elem_back(&mut t1, "p");
 
+        /* This binary is result of following Yjs code (matching Rust code above):
+        ```js
+            let d1 = new Y.Doc()
+            d1.clientID = 1
+            let root = d1.get('root', Y.XmlElement)
+            let first = new Y.XmlText()
+            first.insert(0, 'hello')
+            let second = new Y.XmlElement('p')
+            root.insert(0, [first,second])
+
+            let expected = Y.encodeStateAsUpdate(d1)
+        ``` */
         let expected = &[
             1, 3, 1, 0, 7, 1, 4, 114, 111, 111, 116, 6, 4, 0, 1, 0, 5, 104, 101, 108, 108, 111,
             135, 1, 0, 3, 1, 112, 0,

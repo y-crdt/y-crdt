@@ -624,8 +624,6 @@ impl Item {
                 false
             }
         } else {
-            println!("self: {}", self);
-            println!("store: {}", txn.store);
             panic!("Defect: item has no parent")
         }
     }

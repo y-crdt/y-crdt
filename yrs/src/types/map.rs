@@ -216,7 +216,6 @@ mod test {
 
         compare_all(&t1, &m1);
 
-        println!("store A: {}", t1.store);
         let update = d1.encode_state_as_update(&t1);
         d2.apply_update(&mut t2, update.as_slice());
 
