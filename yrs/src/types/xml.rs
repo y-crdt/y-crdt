@@ -644,13 +644,13 @@ mod test {
     fn insert_attribute() {
         let d1 = Doc::with_client_id(1);
         let mut t1 = d1.transact();
-        let xml1 = t1.get_xml_element("xml", "UNDEFINED");
+        let xml1 = t1.get_xml_element("xml");
         xml1.insert_attribute(&mut t1, "height", 10);
         assert_eq!(xml1.get_attribute(&t1, "height"), Some("10".to_string()));
 
         let d2 = Doc::with_client_id(1);
         let mut t2 = d2.transact();
-        let xml2 = t2.get_xml_element("xml", "UNDEFINED");
+        let xml2 = t2.get_xml_element("xml");
         d2.apply_update(&mut t2, d1.encode_state_as_update(&t1).as_slice());
         assert_eq!(xml2.get_attribute(&t2, "height"), Some("10".to_string()));
     }
@@ -660,13 +660,13 @@ mod test {
         let doc = Doc::with_client_id(1);
         let mut txn = doc.transact();
         /*
-            <root>
+            <UNDEFINED>
                 <p>{txt1}{txt2}</p>
                 <p></p>
                 <img/>
-            </root>
+            </UNDEFINED>
         */
-        let root = txn.get_xml_element("xml", "root");
+        let root = txn.get_xml_element("xml");
         let p1 = root.push_elem_back(&mut txn, "p");
         p1.push_text_back(&mut txn);
         p1.push_text_back(&mut txn);
@@ -704,7 +704,7 @@ mod test {
     fn siblings() {
         let doc = Doc::with_client_id(1);
         let mut txn = doc.transact();
-        let root = txn.get_xml_element("root", "root");
+        let root = txn.get_xml_element("root");
         let first = root.push_text_back(&mut txn);
         first.push(&mut txn, "hello");
         let second = root.push_elem_back(&mut txn, "p");
@@ -734,5 +734,27 @@ mod test {
             Some(&Xml::Text(first)),
             "root.first_child should point to first"
         );
+    }
+
+    #[test]
+    fn serialization() {
+        let d1 = Doc::with_client_id(1);
+        let mut t1 = d1.transact();
+        let r1 = t1.get_xml_element("root");
+        let first = r1.push_text_back(&mut t1);
+        first.push(&mut t1, "hello");
+        let second = r1.push_elem_back(&mut t1, "p");
+
+        let expected = "<UNDEFINED>hello<p></p></UNDEFINED>";
+        assert_eq!(r1.to_string(&t1), expected);
+
+        let u1 = d1.encode_state_as_update(&t1);
+
+        let d2 = Doc::with_client_id(2);
+        let mut t2 = d2.transact();
+        d2.apply_update(&mut t2, u1.as_slice());
+        let r2 = t2.get_xml_element("root");
+
+        assert_eq!(r2.to_string(&t2), expected);
     }
 }
