@@ -5,5 +5,5 @@ members = [
   "ywasm",
   "lib0",
   "yrs-api-wrapper",
-  #"y-py"
+  "y-py"
 ]

@@ -755,6 +755,26 @@ mod test {
         d2.apply_update(&mut t2, u1.as_slice());
         let r2 = t2.get_xml_element("root");
 
+        println!("{}", t1.store);
+        println!("{}", t2.store);
+
         assert_eq!(r2.to_string(&t2), expected);
+    }
+
+    #[test]
+    fn serialization_compatibility() {
+        let d1 = Doc::with_client_id(1);
+        let mut t1 = d1.transact();
+        let r1 = t1.get_xml_element("root");
+        let first = r1.push_text_back(&mut t1);
+        first.push(&mut t1, "hello");
+        let second = r1.push_elem_back(&mut t1, "p");
+
+        let expected = &[
+            1, 3, 1, 0, 7, 1, 4, 114, 111, 111, 116, 6, 4, 0, 1, 0, 5, 104, 101, 108, 108, 111,
+            135, 1, 0, 3, 1, 112, 0,
+        ];
+        let u1 = d1.encode_state_as_update(&t1);
+        assert_eq!(u1.as_slice(), expected);
     }
 }
