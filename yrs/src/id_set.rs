@@ -309,11 +309,10 @@ impl IdSet {
                     }
                 }
                 Entry::Vacant(e) => {
-                    e.insert(range);
+                    e.insert(range.clone());
                 }
             }
         }
-
         self.squash()
     }
 }
