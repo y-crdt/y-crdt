@@ -1120,102 +1120,68 @@ impl std::fmt::Display for ItemPosition {
     }
 }
 
-/*TODO: implement this once you'll figure out compiler errors
-impl<T> Into<ItemContent> for T
-where
-    T: Into<Any>,
-{
-    fn into(self) -> ItemContent {
-        let v: Any = self.into();
-        ItemContent::Any(vec![v])
-    }
-} */
+/// A trait used for preliminary types, that can be inserted into nested YArray/YMap structures.
+pub trait Prelim: Sized {
+    fn into_content(self, txn: &mut Transaction, ptr: TypePtr) -> (ItemContent, Option<Self>);
+    fn integrate(self, txn: &mut Transaction, inner_ref: InnerRef);
+}
 
-impl Into<ItemContent> for bool {
-    fn into(self) -> ItemContent {
-        ItemContent::Any(vec![Any::Bool(self)])
+impl Prelim for String {
+    fn into_content(self, _txn: &mut Transaction, _ptr: TypePtr) -> (ItemContent, Option<Self>) {
+        (ItemContent::String(self), None)
+    }
+
+    fn integrate(self, _txn: &mut Transaction, _inner_ref: InnerRef) {}
+}
+
+impl Prelim for &str {
+    fn into_content(self, _txn: &mut Transaction, _ptr: TypePtr) -> (ItemContent, Option<Self>) {
+        (ItemContent::String(self.to_owned()), None)
+    }
+
+    fn integrate(self, _txn: &mut Transaction, _inner_ref: InnerRef) {}
+}
+
+impl Prelim for Any {
+    fn into_content(self, _txn: &mut Transaction, _ptr: TypePtr) -> (ItemContent, Option<Self>) {
+        (ItemContent::Any(vec![self]), None)
+    }
+
+    fn integrate(self, txn: &mut Transaction, inner_ref: InnerRef) {}
+}
+
+impl<V: Into<Any>> Prelim for HashMap<String, V> {
+    fn into_content(self, _txn: &mut Transaction, _ptr: TypePtr) -> (ItemContent, Option<Self>) {
+        let value: Any = self.into();
+        (ItemContent::Any(vec![value]), None)
+    }
+
+    fn integrate(self, _txn: &mut Transaction, _inner_ref: InnerRef) {}
+}
+
+impl<V: Into<Any>> Prelim for Option<V> {
+    fn into_content(self, _txn: &mut Transaction, _ptr: TypePtr) -> (ItemContent, Option<Self>) {
+        let value: Any = self.into();
+        (ItemContent::Any(vec![value]), None)
+    }
+
+    fn integrate(self, _txn: &mut Transaction, _inner_ref: InnerRef) {}
+}
+
+macro_rules! impl_prelim_any {
+    ( $($t:ty),*) => {
+        $(impl Prelim for $t {
+            fn into_content(self, txn: &mut Transaction, ptr: TypePtr) -> (ItemContent, Option<Self>) {
+                let value: Any = self.into();
+                (ItemContent::Any(vec![value]), None)
+            }
+
+            fn integrate(self, txn: &mut Transaction, inner_ref: InnerRef) {}
+        }) *
     }
 }
 
-impl Into<ItemContent> for f64 {
-    fn into(self) -> ItemContent {
-        ItemContent::Any(vec![Any::Number(self)])
-    }
-}
-
-impl Into<ItemContent> for f32 {
-    fn into(self) -> ItemContent {
-        ItemContent::Any(vec![Any::Number(self as f64)])
-    }
-}
-
-impl Into<ItemContent> for u32 {
-    fn into(self) -> ItemContent {
-        ItemContent::Any(vec![Any::Number(self as f64)])
-    }
-}
-
-impl Into<ItemContent> for i32 {
-    fn into(self) -> ItemContent {
-        ItemContent::Any(vec![Any::Number(self as f64)])
-    }
-}
-
-impl Into<ItemContent> for String {
-    fn into(self) -> ItemContent {
-        ItemContent::Any(vec![Any::String(self)])
-    }
-}
-
-impl Into<ItemContent> for &str {
-    fn into(self) -> ItemContent {
-        ItemContent::Any(vec![Any::String(self.to_string())])
-    }
-}
-
-impl Into<ItemContent> for Box<[u8]> {
-    fn into(self) -> ItemContent {
-        ItemContent::Any(vec![Any::Buffer(self)])
-    }
-}
-
-impl<T> Into<ItemContent> for Option<T>
-where
-    T: Into<ItemContent>,
-{
-    fn into(self) -> ItemContent {
-        match self {
-            None => ItemContent::Any(vec![Any::Null]),
-            Some(value) => value.into(),
-        }
-    }
-}
-
-impl<T> Into<ItemContent> for Vec<T>
-where
-    T: Into<Any>,
-{
-    fn into(self) -> ItemContent {
-        let mut array = Vec::with_capacity(self.len());
-        for value in self {
-            array.push(value.into())
-        }
-        ItemContent::Any(vec![Any::Array(array)])
-    }
-}
-
-impl<T> Into<ItemContent> for HashMap<String, T>
-where
-    T: Into<Any>,
-{
-    fn into(self) -> ItemContent {
-        let mut map = HashMap::with_capacity(self.len());
-        for (key, value) in self {
-            map.insert(key, value.into());
-        }
-        ItemContent::Any(vec![Any::Map(map)])
-    }
-}
+impl_prelim_any! { bool, f32, f64, i32, u32, Box<[u8]>, Vec<u8> }
 
 impl std::fmt::Display for ID {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

@@ -7,7 +7,7 @@ use crate::*;
 pub use map::Map;
 pub use text::Text;
 
-use crate::block::{BlockPtr, Item, ItemContent};
+use crate::block::{BlockPtr, Item, ItemContent, ItemPosition, Prelim};
 use crate::types::xml::XmlElement;
 use lib0::any::Any;
 use std::cell::{BorrowMutError, Ref, RefCell, RefMut};
@@ -86,6 +86,35 @@ impl InnerRef {
         if len > 0 {
             panic!("Array length exceeded");
         }
+    }
+
+    pub(crate) fn insert_at<'t, V: Prelim>(
+        &self,
+        txn: &'t mut Transaction,
+        index: u32,
+        value: V,
+    ) -> &'t Item {
+        let (start, parent) = {
+            let parent = self.borrow();
+            if index <= parent.len() {
+                (parent.start, parent.ptr.clone())
+            } else {
+                panic!("Cannot insert item at index over the length of an array")
+            }
+        };
+        let (left, right) = if index == 0 {
+            (None, None)
+        } else {
+            Inner::index_to_ptr(txn, start, index)
+        };
+        let pos = ItemPosition {
+            parent,
+            left,
+            right,
+            index: 0,
+        };
+
+        txn.create_item(&pos, value, None)
     }
 }
 

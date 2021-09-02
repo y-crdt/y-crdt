@@ -1,5 +1,5 @@
-use crate::block::{ItemContent, ItemPosition};
-use crate::types::{Entries, Inner, InnerRef};
+use crate::block::{ItemContent, ItemPosition, Prelim};
+use crate::types::{Entries, Inner, InnerRef, TypePtr, TYPE_REFS_MAP};
 use crate::*;
 use lib0::any::Any;
 use std::collections::HashMap;
@@ -56,12 +56,7 @@ impl Map {
         Iter(self.blocks(txn))
     }
 
-    pub fn insert<V: Into<ItemContent>>(
-        &self,
-        txn: &mut Transaction,
-        key: String,
-        value: V,
-    ) -> Option<Any> {
+    pub fn insert<V: Prelim>(&self, txn: &mut Transaction, key: String, value: V) -> Option<Any> {
         let previous = self.get(txn, &key);
         let pos = {
             let inner = self.0.borrow();
@@ -74,7 +69,20 @@ impl Map {
             }
         };
 
-        txn.create_item(&pos, value.into(), Some(key));
+        txn.create_item(&pos, value, None);
+        //match value.into_content() {
+        //    Ok(content) => txn.create_item(&pos, content, None),
+        //    Err(value) => {
+        //        let inner = InnerRef::new(Inner::new(
+        //            pos.parent.clone(),
+        //            TYPE_REFS_UNDEFINED,
+        //            Some(key),
+        //        ));
+        //        let content = ItemContent::Type(inner.clone());
+        //        txn.create_item(&pos, content, None);
+        //        value.integrate(txn, &inner);
+        //    }
+        //};
         previous
     }
 
@@ -143,15 +151,31 @@ impl<'a, 'txn> Iterator for Values<'a, 'txn> {
     }
 }
 
-impl Into<ItemContent> for Map {
-    fn into(self) -> ItemContent {
-        ItemContent::Type(self.0.clone())
-    }
-}
-
 impl From<InnerRef> for Map {
     fn from(inner: InnerRef) -> Self {
         Map(inner)
+    }
+}
+
+pub struct PrelimMap<T>(HashMap<String, T>);
+
+impl<T> From<HashMap<String, T>> for PrelimMap<T> {
+    fn from(map: HashMap<String, T>) -> Self {
+        PrelimMap(map)
+    }
+}
+
+impl<T: Prelim> Prelim for PrelimMap<T> {
+    fn into_content(self, txn: &mut Transaction, ptr: TypePtr) -> (ItemContent, Option<Self>) {
+        let inner = InnerRef::new(Inner::new(ptr, TYPE_REFS_MAP, None));
+        (ItemContent::Type(inner), Some(self))
+    }
+
+    fn integrate(self, txn: &mut Transaction, inner_ref: InnerRef) {
+        let map = Map::from(inner_ref);
+        for (key, value) in self.0 {
+            map.insert(txn, key, value);
+        }
     }
 }
 
