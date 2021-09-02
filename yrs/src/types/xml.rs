@@ -76,7 +76,7 @@ impl XmlElement {
         attr_value: V,
     ) {
         let key = attr_name.to_string();
-        let value = attr_value.to_string();
+        let value = crate::block::Text(attr_value.to_string());
         let pos = {
             let inner = self.inner();
             let left = inner.map.get(&key);
@@ -488,7 +488,7 @@ impl XmlText {
         attr_value: V,
     ) {
         let key = attr_name.to_string();
-        let value = attr_value.to_string();
+        let value = crate::block::Text(attr_value.to_string());
         let pos = {
             let inner = self.inner();
             let left = inner.map.get(&key);
@@ -533,7 +533,7 @@ impl XmlText {
         if let Some(mut pos) = self.0.find_position(txn, index) {
             let parent = { TypePtr::Id(self.inner().item.unwrap()) };
             pos.parent = parent;
-            txn.create_item(&pos, content.to_owned(), None);
+            txn.create_item(&pos, crate::block::Text(content.to_owned()), None);
         } else {
             panic!("The type or the position doesn't exist!");
         }

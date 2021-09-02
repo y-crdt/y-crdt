@@ -70,19 +70,6 @@ impl Map {
         };
 
         txn.create_item(&pos, value, None);
-        //match value.into_content() {
-        //    Ok(content) => txn.create_item(&pos, content, None),
-        //    Err(value) => {
-        //        let inner = InnerRef::new(Inner::new(
-        //            pos.parent.clone(),
-        //            TYPE_REFS_UNDEFINED,
-        //            Some(key),
-        //        ));
-        //        let content = ItemContent::Type(inner.clone());
-        //        txn.create_item(&pos, content, None);
-        //        value.integrate(txn, &inner);
-        //    }
-        //};
         previous
     }
 
