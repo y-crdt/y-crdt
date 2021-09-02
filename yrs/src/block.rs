@@ -1126,62 +1126,28 @@ pub trait Prelim: Sized {
     fn integrate(self, txn: &mut Transaction, inner_ref: InnerRef);
 }
 
-impl Prelim for String {
-    fn into_content(self, _txn: &mut Transaction, _ptr: TypePtr) -> (ItemContent, Option<Self>) {
-        (ItemContent::String(self), None)
-    }
-
-    fn integrate(self, _txn: &mut Transaction, _inner_ref: InnerRef) {}
-}
-
-impl Prelim for &str {
-    fn into_content(self, _txn: &mut Transaction, _ptr: TypePtr) -> (ItemContent, Option<Self>) {
-        (ItemContent::String(self.to_owned()), None)
-    }
-
-    fn integrate(self, _txn: &mut Transaction, _inner_ref: InnerRef) {}
-}
-
-impl Prelim for Any {
-    fn into_content(self, _txn: &mut Transaction, _ptr: TypePtr) -> (ItemContent, Option<Self>) {
-        (ItemContent::Any(vec![self]), None)
+impl<T> Prelim for T
+where
+    T: Into<Any>,
+{
+    fn into_content(self, txn: &mut Transaction, ptr: TypePtr) -> (ItemContent, Option<Self>) {
+        let value: Any = self.into();
+        (ItemContent::Any(vec![value]), None)
     }
 
     fn integrate(self, txn: &mut Transaction, inner_ref: InnerRef) {}
 }
 
-impl<V: Into<Any>> Prelim for HashMap<String, V> {
-    fn into_content(self, _txn: &mut Transaction, _ptr: TypePtr) -> (ItemContent, Option<Self>) {
-        let value: Any = self.into();
-        (ItemContent::Any(vec![value]), None)
+#[derive(Debug)]
+pub struct Text(pub String);
+
+impl Prelim for Text {
+    fn into_content(self, txn: &mut Transaction, ptr: TypePtr) -> (ItemContent, Option<Self>) {
+        (ItemContent::String(self.0), None)
     }
 
-    fn integrate(self, _txn: &mut Transaction, _inner_ref: InnerRef) {}
+    fn integrate(self, txn: &mut Transaction, inner_ref: InnerRef) {}
 }
-
-impl<V: Into<Any>> Prelim for Option<V> {
-    fn into_content(self, _txn: &mut Transaction, _ptr: TypePtr) -> (ItemContent, Option<Self>) {
-        let value: Any = self.into();
-        (ItemContent::Any(vec![value]), None)
-    }
-
-    fn integrate(self, _txn: &mut Transaction, _inner_ref: InnerRef) {}
-}
-
-macro_rules! impl_prelim_any {
-    ( $($t:ty),*) => {
-        $(impl Prelim for $t {
-            fn into_content(self, txn: &mut Transaction, ptr: TypePtr) -> (ItemContent, Option<Self>) {
-                let value: Any = self.into();
-                (ItemContent::Any(vec![value]), None)
-            }
-
-            fn integrate(self, txn: &mut Transaction, inner_ref: InnerRef) {}
-        }) *
-    }
-}
-
-impl_prelim_any! { bool, f32, f64, i32, u32, Box<[u8]>, Vec<u8> }
 
 impl std::fmt::Display for ID {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
