@@ -69,7 +69,7 @@ impl Map {
             }
         };
 
-        txn.create_item(&pos, value, None);
+        txn.create_item(&pos, value, Some(key));
         previous
     }
 
