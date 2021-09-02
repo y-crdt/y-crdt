@@ -1,5 +1,5 @@
-use crate::block::{BlockPtr, ItemContent, ItemPosition};
-use crate::types::{Inner, InnerRef};
+use crate::block::{BlockPtr, ItemContent, ItemPosition, Prelim};
+use crate::types::{Inner, InnerRef, TypePtr, TYPE_REFS_ARRAY};
 use crate::Transaction;
 use lib0::any::Any;
 use std::collections::VecDeque;
@@ -12,7 +12,7 @@ impl Array {
         inner.len()
     }
 
-    pub fn insert<V: Into<ItemContent>>(&self, txn: &mut Transaction, index: u32, value: V) {
+    pub fn insert<V: Prelim>(&self, txn: &mut Transaction, index: u32, value: V) {
         let (start, parent) = {
             let parent = self.0.borrow();
             if index <= parent.len() {
@@ -26,22 +26,22 @@ impl Array {
         } else {
             Inner::index_to_ptr(txn, start, index)
         };
-        let content = value.into();
         let pos = ItemPosition {
             parent,
             left,
             right,
             index: 0,
         };
-        txn.create_item(&pos, content, None);
+
+        txn.create_item(&pos, value, None);
     }
 
-    pub fn push_back<V: Into<ItemContent>>(&self, txn: &mut Transaction, content: V) {
+    pub fn push_back<V: Prelim>(&self, txn: &mut Transaction, content: V) {
         let len = self.len();
         self.insert(txn, len, content)
     }
 
-    pub fn push_front<V: Into<ItemContent>>(&self, txn: &mut Transaction, content: V) {
+    pub fn push_front<V: Prelim>(&self, txn: &mut Transaction, content: V) {
         self.insert(txn, 0, content)
     }
 
@@ -104,21 +104,38 @@ impl<'b, 'txn> Iterator for Iter<'b, 'txn> {
     }
 }
 
-impl Into<ItemContent> for Array {
-    fn into(self) -> ItemContent {
-        ItemContent::Type(self.0.clone())
-    }
-}
-
 impl From<InnerRef> for Array {
     fn from(inner: InnerRef) -> Self {
         Array(inner)
     }
 }
 
+pub struct PrelimArray<T>(VecDeque<T>);
+
+impl<T> From<VecDeque<T>> for PrelimArray<T> {
+    fn from(vec: VecDeque<T>) -> Self {
+        PrelimArray(vec)
+    }
+}
+
+impl<T: Prelim> Prelim for PrelimArray<T> {
+    fn into_content(self, txn: &mut Transaction, ptr: TypePtr) -> (ItemContent, Option<Self>) {
+        let inner = InnerRef::new(Inner::new(ptr, TYPE_REFS_ARRAY, None));
+        (ItemContent::Type(inner), Some(self))
+    }
+
+    fn integrate(self, txn: &mut Transaction, inner_ref: InnerRef) {
+        let array = Array::from(inner_ref);
+        for value in self.0 {
+            array.push_back(txn, value);
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use crate::test_utils::exchange_updates;
+    use crate::types::map::PrelimMap;
     use crate::Doc;
     use lib0::any::Any;
     use std::collections::HashMap;
@@ -451,10 +468,9 @@ mod test {
         let mut txn = d.transact();
         let a = txn.get_array("arr");
         for i in 0..10 {
-            let name = format!("map{}", i);
-            let m = txn.get_map(name.as_str());
-            m.insert(&mut txn, "value".to_owned(), i);
-            a.push_back(&mut txn, m);
+            let mut m = HashMap::new();
+            m.insert("value".to_owned(), i);
+            a.push_back(&mut txn, PrelimMap::from(m));
         }
 
         for (i, value) in a.iter(&txn).enumerate() {

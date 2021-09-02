@@ -88,7 +88,7 @@ impl Text {
 
     pub fn insert(&self, tr: &mut Transaction, index: u32, content: &str) {
         if let Some(pos) = self.find_position(tr, index) {
-            tr.create_item(&pos, block::ItemContent::String(content.to_owned()), None);
+            tr.create_item(&pos, content.to_owned(), None);
         } else {
             panic!("The type or the position doesn't exist!");
         }
