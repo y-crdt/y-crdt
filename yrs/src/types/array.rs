@@ -1,9 +1,10 @@
 use crate::block::{BlockPtr, ItemContent, ItemPosition, Prelim};
-use crate::types::{Inner, InnerRef, TypePtr, TYPE_REFS_ARRAY};
+use crate::types::{Inner, InnerRef, TypePtr, Value, TYPE_REFS_ARRAY};
 use crate::Transaction;
 use lib0::any::Any;
 use std::collections::VecDeque;
 
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Array(InnerRef);
 
 impl Array {
@@ -49,7 +50,7 @@ impl Array {
         self.0.remove_at(txn, index, len)
     }
 
-    pub fn get(&self, txn: &Transaction, index: u32) -> Option<Any> {
+    pub fn get(&self, txn: &Transaction, index: u32) -> Option<Value> {
         let inner = self.0.borrow();
         let (content, idx) = inner.get_at(txn, index)?;
         Some(content.get_content(txn).remove(idx))
@@ -59,14 +60,14 @@ impl Array {
         Iter::new(self, txn)
     }
 
-    pub fn to_json(&self, txn: &Transaction<'_>) -> Any {
-        let res = self.iter(txn).collect();
+    pub fn to_json(&self, txn: &Transaction) -> Any {
+        let res = self.iter(txn).map(|v| v.to_json(txn)).collect();
         Any::Array(res)
     }
 }
 
 pub struct Iter<'b, 'txn> {
-    content: VecDeque<Any>,
+    content: VecDeque<Value>,
     ptr: Option<BlockPtr>,
     txn: &'b Transaction<'txn>,
 }
@@ -83,7 +84,7 @@ impl<'b, 'txn> Iter<'b, 'txn> {
 }
 
 impl<'b, 'txn> Iterator for Iter<'b, 'txn> {
-    type Item = Any;
+    type Item = Value;
 
     fn next(&mut self) -> Option<Self::Item> {
         match self.content.pop_front() {
@@ -136,6 +137,7 @@ impl<T: Prelim> Prelim for PrelimArray<T> {
 mod test {
     use crate::test_utils::exchange_updates;
     use crate::types::map::PrelimMap;
+    use crate::types::Value;
     use crate::Doc;
     use lib0::any::Any;
     use std::collections::HashMap;
@@ -198,7 +200,7 @@ mod test {
         let a2 = t2.get_array("array");
         let actual: Vec<_> = a2.iter(&t2).collect();
 
-        assert_eq!(actual, vec![Any::String("Hi".to_owned())]);
+        assert_eq!(actual, vec!["Hi".into()]);
     }
 
     #[test]
@@ -270,7 +272,7 @@ mod test {
             let actual: Vec<_> = a1.iter(&t1).collect();
             assert_eq!(
                 actual,
-                vec![Any::Number(1.0), Any::Bool(true), Any::Bool(false)]
+                vec![Value::from(1.0), Value::from(true), Value::from(false)]
             );
         }
 
@@ -281,7 +283,7 @@ mod test {
         let actual: Vec<_> = a2.iter(&t2).collect();
         assert_eq!(
             actual,
-            vec![Any::Number(1.0), Any::Bool(true), Any::Bool(false)]
+            vec![Value::from(1.0), Value::from(true), Value::from(false)]
         );
     }
 
@@ -318,7 +320,7 @@ mod test {
         assert_eq!(a2, a3, "Peer 2 and peer 3 states are different");
     }
 
-    fn to_array(d: &Doc) -> Vec<Any> {
+    fn to_array(d: &Doc) -> Vec<Value> {
         let mut txn = d.transact();
         let a = txn.get_array("array");
         a.iter(&txn).collect()
@@ -476,7 +478,12 @@ mod test {
         for (i, value) in a.iter(&txn).enumerate() {
             let mut expected = HashMap::new();
             expected.insert("value".to_owned(), Any::Number(i as f64));
-            assert_eq!(value, Any::Map(expected));
+            match value {
+                Value::YMap(ref map) => {
+                    assert_eq!(value.to_json(&txn), Any::Map(expected))
+                }
+                other => panic!("Value of array at index {} was no YMap", i),
+            }
         }
     }
 }
