@@ -1,6 +1,6 @@
 use crate::store::Store;
 use crate::types::{
-    Inner, InnerRef, TypePtr, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT, TYPE_REFS_UNDEFINED,
+    Inner, InnerRef, TypePtr, Value, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
     TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_HOOK, TYPE_REFS_XML_TEXT,
 };
 use crate::updates::decoder::Decoder;
@@ -8,7 +8,7 @@ use crate::updates::encoder::Encoder;
 use crate::*;
 use lib0::any::Any;
 use std::cell::Cell;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::hash::Hash;
 use std::panic;
 
@@ -792,39 +792,41 @@ impl ItemContent {
         }
     }
 
-    pub fn get_content(&self, txn: &Transaction<'_>) -> Vec<Any> {
+    pub fn get_content(&self, txn: &Transaction<'_>) -> Vec<Value> {
         match self {
-            ItemContent::Any(v) => v.clone(),
-            ItemContent::Binary(v) => vec![Any::Buffer(v.clone().into_boxed_slice())],
+            ItemContent::Any(v) => v.iter().map(|a| Value::Any(a.clone())).collect(),
+            ItemContent::Binary(v) => vec![Value::Any(Any::Buffer(v.clone().into_boxed_slice()))],
             ItemContent::Deleted(_) => Vec::default(),
-            ItemContent::Doc(_, v) => vec![v.clone()],
-            ItemContent::JSON(v) => v.iter().map(|v| Any::String(v.clone())).collect(),
-            ItemContent::Embed(v) => vec![Any::String(v.clone())],
+            ItemContent::Doc(_, v) => vec![Value::Any(v.clone())],
+            ItemContent::JSON(v) => v
+                .iter()
+                .map(|v| Value::Any(Any::String(v.clone())))
+                .collect(),
+            ItemContent::Embed(v) => vec![Value::Any(Any::String(v.clone()))],
             ItemContent::Format(_, _) => Vec::default(),
-            ItemContent::String(v) => v.chars().map(|c| Any::String(c.to_string())).collect(),
+            ItemContent::String(v) => v
+                .chars()
+                .map(|c| Value::Any(Any::String(c.to_string())))
+                .collect(),
             ItemContent::Type(c) => {
-                let inner = c.borrow();
-                vec![inner.to_json(txn)]
+                vec![c.clone().into_value(txn)]
             }
         }
     }
 
     /// Similar to [get_content], but it only returns the latest result and doesn't materialize
     /// other for performance reasons.
-    pub fn get_content_last(&self, txn: &Transaction<'_>) -> Option<Any> {
+    pub fn get_content_last(&self, txn: &Transaction<'_>) -> Option<Value> {
         match self {
-            ItemContent::Any(v) => v.last().cloned(),
-            ItemContent::Binary(v) => Some(Any::Buffer(v.clone().into_boxed_slice())),
+            ItemContent::Any(v) => v.last().map(|a| Value::Any(a.clone())),
+            ItemContent::Binary(v) => Some(Value::Any(Any::Buffer(v.clone().into_boxed_slice()))),
             ItemContent::Deleted(_) => None,
-            ItemContent::Doc(_, v) => Some(v.clone()),
-            ItemContent::JSON(v) => v.last().map(|v| Any::String(v.clone())),
-            ItemContent::Embed(v) => Some(Any::String(v.clone())),
+            ItemContent::Doc(_, v) => Some(Value::Any(v.clone())),
+            ItemContent::JSON(v) => v.last().map(|v| Value::Any(Any::String(v.clone()))),
+            ItemContent::Embed(v) => Some(Value::Any(Any::String(v.clone()))),
             ItemContent::Format(_, _) => None,
-            ItemContent::String(v) => Some(Any::String(v.clone())),
-            ItemContent::Type(c) => {
-                let inner = c.borrow();
-                Some(inner.to_json(txn))
-            }
+            ItemContent::String(v) => Some(Value::Any(Any::String(v.clone()))),
+            ItemContent::Type(c) => Some(c.clone().into_value(txn)),
         }
     }
 

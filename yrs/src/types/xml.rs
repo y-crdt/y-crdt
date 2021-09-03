@@ -1,7 +1,6 @@
 use crate::block::{Item, ItemContent, ItemPosition, Prelim};
 use crate::types::{
-    Entries, Inner, InnerRef, Map, Text, TypePtr, TypeRefs, TYPE_REFS_XML_ELEMENT,
-    TYPE_REFS_XML_TEXT,
+    Entries, Inner, InnerRef, Map, Text, TypePtr, Value, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT,
 };
 use crate::Transaction;
 use lib0::any::Any;
@@ -53,7 +52,7 @@ impl XmlElement {
         write!(&mut s, ">").unwrap();
         for i in inner.iter(txn) {
             for content in i.content.get_content(txn) {
-                write!(&mut s, "{}", content).unwrap();
+                write!(&mut s, "{}", content.to_string(txn)).unwrap();
             }
         }
         write!(&mut s, "</{}>", tag).unwrap();
@@ -94,7 +93,7 @@ impl XmlElement {
     pub fn get_attribute(&self, txn: &Transaction, attr_name: &str) -> Option<String> {
         let inner: Ref<_> = self.inner();
         let value = inner.get(txn, attr_name)?;
-        Some(value.to_string())
+        Some(value.to_string(txn))
     }
 
     pub fn attributes<'a, 'b, 'txn>(&'a self, txn: &'b Transaction<'txn>) -> Attributes<'b, 'txn> {
@@ -187,7 +186,7 @@ impl<'a, 'txn> Iterator for Attributes<'a, 'txn> {
         let value = block
             .content
             .get_content_last(self.0.txn)
-            .map(|v| v.to_string())
+            .map(|v| v.to_string(self.0.txn))
             .unwrap_or(String::default());
 
         Some((key.as_str(), value))
@@ -241,7 +240,7 @@ impl XmlFragment {
         let inner = self.inner();
         for i in inner.iter(txn) {
             for content in i.content.get_content(txn) {
-                write!(&mut s, "{}", content).unwrap();
+                write!(&mut s, "{}", content.to_string(txn)).unwrap();
             }
         }
         s
@@ -432,15 +431,15 @@ impl XmlHook {
         self.0.iter(txn)
     }
 
-    pub fn insert<V: Prelim>(&self, txn: &mut Transaction, key: String, value: V) -> Option<Any> {
+    pub fn insert<V: Prelim>(&self, txn: &mut Transaction, key: String, value: V) -> Option<Value> {
         self.0.insert(txn, key, value)
     }
 
-    pub fn remove(&self, txn: &mut Transaction, key: &str) -> Option<Any> {
+    pub fn remove(&self, txn: &mut Transaction, key: &str) -> Option<Value> {
         self.0.remove(txn, key)
     }
 
-    pub fn get(&self, txn: &Transaction, key: &str) -> Option<Any> {
+    pub fn get(&self, txn: &Transaction, key: &str) -> Option<Value> {
         self.0.get(txn, key)
     }
 
@@ -506,7 +505,7 @@ impl XmlText {
     pub fn get_attribute(&self, txn: &Transaction, attr_name: &str) -> Option<String> {
         let inner: Ref<_> = self.inner();
         let value = inner.get(txn, attr_name)?;
-        Some(value.to_string())
+        Some(value.to_string(txn))
     }
 
     pub fn attributes<'a, 'b, 'txn>(&'a self, txn: &'b Transaction<'txn>) -> Attributes<'b, 'txn> {
@@ -638,7 +637,7 @@ fn parent(inner: Ref<Inner>, txn: &Transaction) -> Option<XmlElement> {
 
 #[cfg(test)]
 mod test {
-    use crate::types::xml::{Xml, XmlElement};
+    use crate::types::xml::Xml;
     use crate::Doc;
 
     #[test]
