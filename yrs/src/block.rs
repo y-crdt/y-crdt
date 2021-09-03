@@ -1124,7 +1124,18 @@ impl std::fmt::Display for ItemPosition {
 
 /// A trait used for preliminary types, that can be inserted into nested YArray/YMap structures.
 pub trait Prelim: Sized {
+    /// This method is used to create initial content required in order to create a block item.
+    /// A supplied `ptr` can be used to identify block that is about to be created to store
+    /// the returned content.
+    ///
+    /// Since this method may decide to consume `self` or not, a second optional return parameter
+    /// is used when `self` was not consumed - which is the case for complex types creation such as
+    /// YMap or YArray. In such case it will be passed later on to [Self::integrate] method.
     fn into_content(self, txn: &mut Transaction, ptr: TypePtr) -> (ItemContent, Option<Self>);
+
+    /// Method called once an original item filled with content from [Self::into_content] has been
+    /// added to block store. This method is used by complex types such as maps or arrays to append
+    /// the original contents of prelim struct into YMap, YArray etc.
     fn integrate(self, txn: &mut Transaction, inner_ref: InnerRef);
 }
 
