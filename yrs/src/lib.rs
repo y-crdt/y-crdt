@@ -43,7 +43,6 @@ mod test_utils;
 
 pub use crate::alt::{diff_updates, encode_state_vector_from_update, merge_updates};
 pub use crate::block::ID;
-pub use crate::block_store::BlockStore;
 pub use crate::block_store::StateVector;
 pub use crate::doc::Doc;
 pub use crate::transaction::Transaction;

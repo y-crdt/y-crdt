@@ -33,7 +33,7 @@ impl Update {
 
     /// Returns an iterator that allows a traversal of all of the blocks
     /// which consist into this [Update].
-    pub fn blocks(&self) -> Blocks<'_> {
+    pub(crate) fn blocks(&self) -> Blocks<'_> {
         Blocks::new(self)
     }
 
@@ -51,7 +51,7 @@ impl Update {
                     while i1 < blocks.len() {
                         let a = &mut blocks[i1];
                         if let Some(b) = n2.as_ref() {
-                            if a.try_merge(b) {
+                            if a.try_squash(b) {
                                 n2 = i2.next();
                                 continue;
                             } else if let Block::Item(a) = a {
@@ -440,7 +440,7 @@ impl Into<Store> for Update {
     }
 }
 
-pub struct Blocks<'a> {
+pub(crate) struct Blocks<'a> {
     current_client: std::collections::hash_map::Iter<'a, u64, VecDeque<Block>>,
     current_block: Option<std::collections::vec_deque::Iter<'a, Block>>,
 }

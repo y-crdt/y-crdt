@@ -12,25 +12,59 @@ use std::collections::HashSet;
 use std::hash::Hash;
 use std::panic;
 
+/// Bit flag used to identify [Block::GC].
 pub const BLOCK_GC_REF_NUMBER: u8 = 0;
+
+/// Bit flag used to identify items with content of type [ItemContent::Deleted].
 pub const BLOCK_ITEM_DELETED_REF_NUMBER: u8 = 1;
+
+/// Bit flag used to identify items with content of type [ItemContent::JSON].
 pub const BLOCK_ITEM_JSON_REF_NUMBER: u8 = 2;
+
+/// Bit flag used to identify items with content of type [ItemContent::Binary].
 pub const BLOCK_ITEM_BINARY_REF_NUMBER: u8 = 3;
+
+/// Bit flag used to identify items with content of type [ItemContent::String].
 pub const BLOCK_ITEM_STRING_REF_NUMBER: u8 = 4;
+
+/// Bit flag used to identify items with content of type [ItemContent::Embed].
 pub const BLOCK_ITEM_EMBED_REF_NUMBER: u8 = 5;
+
+/// Bit flag used to identify items with content of type [ItemContent::Format].
 pub const BLOCK_ITEM_FORMAT_REF_NUMBER: u8 = 6;
+
+/// Bit flag used to identify items with content of type [ItemContent::Number].
 pub const BLOCK_ITEM_TYPE_REF_NUMBER: u8 = 7;
+
+/// Bit flag used to identify items with content of type [ItemContent::Any].
 pub const BLOCK_ITEM_ANY_REF_NUMBER: u8 = 8;
+
+/// Bit flag used to identify items with content of type [ItemContent::Doc].
 pub const BLOCK_ITEM_DOC_REF_NUMBER: u8 = 9;
+
+/// Bit flag used to identify [Block::Skip].
 pub const BLOCK_SKIP_REF_NUMBER: u8 = 10;
 
+/// Bit flag used to tell if encoded item has right origin defined.
 pub const HAS_RIGHT_ORIGIN: u8 = 0b01000000;
+
+/// Bit flag used to tell if encoded item has left origin defined.
 pub const HAS_ORIGIN: u8 = 0b10000000;
+
+/// Bit flag used to tell if encoded item has a parent subtitle defined. Subtitles are used only
+/// for blocks which act as map-like types entries.
 pub const HAS_PARENT_SUB: u8 = 0b00100000;
 
+/// Unique block identifier.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct ID {
+    /// Unique identifier of a client, which inserted corresponding item.
     pub client: u64,
+
+    /// Monotonically incrementing sequence number, which informs about order of inserted item
+    /// operation in a scope of a given `client`. This value doesn't have to increase by 1, but
+    /// instead is increased by number of countable elements which make a content of an inserted
+    /// block.
     pub clock: u32,
 }
 
@@ -40,9 +74,18 @@ impl ID {
     }
 }
 
+/// A logical block pointer. It contains a unique block [ID], but also contains a helper metadata
+/// which allows to faster locate block it points to within a block store.
 #[derive(Debug, Clone, Copy, Hash)]
 pub struct BlockPtr {
+    /// Unique identifier of a corresponding block.
     pub id: ID,
+
+    /// An information about offset at which current block can be found within block store.
+    ///
+    /// Atm. this value is not always precise, so a conservative check is performed every time
+    /// it's used. If such check fails, search algorithm falls back to binary search and upon
+    /// completion re-adjusts the pivot information.
     pivot: u32,
 }
 
@@ -72,19 +115,27 @@ impl Eq for BlockPtr {}
 
 impl PartialEq for BlockPtr {
     fn eq(&self, other: &Self) -> bool {
-        // BlockPtr.pivot may differ, but logicaly it doesn't affect block equality
+        // BlockPtr.pivot may differ, but logically it doesn't affect block equality
         self.id == other.id
     }
 }
 
+/// An enum containing all supported block variants.
 #[derive(Debug, PartialEq)]
-pub enum Block {
+pub(crate) enum Block {
+    /// An active block containing user data.
     Item(Item),
+
     Skip(Skip),
+
+    /// Block, which is a subject of garbage collection after an [Item] has been deleted and its
+    /// safe for the transaction to remove it.
     GC(GC),
 }
 
 impl Block {
+    /// Since [Block] can span over multiple elements, this method returns an unique ID of the last
+    /// element contained within current block.
     pub fn last_id(&self) -> ID {
         match self {
             Block::Item(item) => item.last_id(),
@@ -93,6 +144,8 @@ impl Block {
         }
     }
 
+    /// Tries to cast this [Block] into an immutable [Item] reference, returning `None` if block was
+    /// in fact not an item.
     pub fn as_item(&self) -> Option<&Item> {
         match self {
             Block::Item(item) => Some(item),
@@ -100,6 +153,8 @@ impl Block {
         }
     }
 
+    /// Tries to cast this [Block] into a mutable [Item] reference, returning `None` if block was in
+    /// fact not an item.
     pub fn as_item_mut(&mut self) -> Option<&mut Item> {
         match self {
             Block::Item(item) => Some(item),
@@ -107,6 +162,8 @@ impl Block {
         }
     }
 
+    /// Checks if current block has been deleted. Yrs uses soft deletion (a.k.a. tombstoning) for
+    /// marking deleted blocks.
     pub fn is_deleted(&self) -> bool {
         match self {
             Block::Item(item) => item.is_deleted(),
@@ -115,6 +172,7 @@ impl Block {
         }
     }
 
+    /// Integrates a new incoming block into a block store.
     pub fn integrate(&mut self, txn: &mut Transaction<'_>, pivot: u32, offset: u32) -> bool {
         match self {
             Block::Item(item) => item.integrate(txn, pivot, offset),
@@ -125,9 +183,13 @@ impl Block {
         }
     }
 
-    pub fn try_merge(&mut self, other: &Self) -> bool {
+    /// Squashes two blocks together. Returns true if it succeeded. Squashing is possible only if
+    /// blocks are of the same type, their contents are of the same type, they belong to the same
+    /// parent data structure, their IDs are sequenced directly one after another and they point to
+    /// each other as their left/right neighbors respectively.
+    pub fn try_squash(&mut self, other: &Self) -> bool {
         match (self, other) {
-            (Block::Item(v1), Block::Item(v2)) => v1.try_merge(v2),
+            (Block::Item(v1), Block::Item(v2)) => v1.try_squash(v2),
             (Block::GC(v1), Block::GC(v2)) => {
                 v1.merge(v2);
                 true
@@ -224,6 +286,7 @@ impl Block {
         }
     }
 
+    /// Returns a unique identifier of a current block.
     pub fn id(&self) -> &ID {
         match self {
             Block::Item(item) => &item.id,
@@ -232,6 +295,7 @@ impl Block {
         }
     }
 
+    /// Returns a number of countable elements stored within of a current block.
     pub fn len(&self) -> u32 {
         match self {
             Block::Item(item) => item.len(),
@@ -240,6 +304,8 @@ impl Block {
         }
     }
 
+    /// Returns a last clock value of a current block. This is exclusive value meaning, that
+    /// using it with current block's client ID will point to the beginning of a next block.
     pub fn clock_end(&self) -> u32 {
         match self {
             Block::Item(item) => item.id.clock + item.len(),
@@ -257,6 +323,7 @@ impl Block {
         }
     }
 
+    /// Checks if two blocks are of the same type.
     pub fn same_type(&self, other: &Self) -> bool {
         match (self, other) {
             (Block::Item(_), Block::Item(_))
@@ -267,29 +334,63 @@ impl Block {
     }
 }
 
+/// A helper structure that's used to precisely describe a location of an [Item] to be inserted in
+/// relation to its neighbors and parent.
 #[derive(Debug)]
-pub struct ItemPosition {
+pub(crate) struct ItemPosition {
     pub parent: types::TypePtr,
     pub left: Option<BlockPtr>,
     pub right: Option<BlockPtr>,
     pub index: u32,
 }
 
+/// Bit flag (4th bit) for a marked item - not used atm.
 const ITEM_FLAG_MARKED: u8 = 0b1000;
+
+/// Bit flag (3rd bit) for a tombstoned (deleted) item.
 const ITEM_FLAG_DELETED: u8 = 0b0100;
+
+/// Bit flag (2nd bit) for an item, which contents are considered countable.
 const ITEM_FLAG_COUNTABLE: u8 = 0b0010;
+
+/// Bit flag (1st bit) used for an item which should be kept - not used atm.
 const ITEM_FLAG_KEEP: u8 = 0b0001;
 
+/// An item is basic unit of work in Yrs. It contains user data reinforced with all metadata
+/// required for a potential conflict resolution as well as extra fields used for joining blocks
+/// together as a part of indexed sequences or maps.
 #[derive(Debug, PartialEq)]
-pub struct Item {
+pub(crate) struct Item {
+    /// Unique identifier of current item.
     pub id: ID,
+
+    /// Pointer to left neighbor of this item. Used in sequenced collections.
+    /// If `None` current item is a first one on it's `parent` collection.
     pub left: Option<BlockPtr>,
+
+    /// Pointer to right neighbor of this item. Used in sequenced collections.
+    /// If `None` current item is the last one on it's `parent` collection.
     pub right: Option<BlockPtr>,
+
+    /// Used for concurrent insert conflict resolution. An ID of a left-side neighbor at the moment
+    /// of insertion of current block.
     pub origin: Option<ID>,
+
+    /// Used for concurrent insert conflict resolution. An ID of a right-side neighbor at the moment
+    /// of insertion of current block.
     pub right_origin: Option<ID>,
+
+    /// A user data stored inside of a current item.
     pub content: ItemContent,
+
+    /// Pointer to a parent collection containing current item.
     pub parent: types::TypePtr,
-    pub parent_sub: Option<String>,
+
+    /// Used only when current item is used by map-like types. In such case this item works as a
+    /// key-value entry of a map, and this field contains a key used by map.
+    pub parent_sub: Option<String>, //TODO: Rc since it's already used in Branch.map component
+
+    /// Bit flag field which contains information about specifics of this item.
     pub info: Cell<u8>,
 }
 
@@ -336,7 +437,7 @@ impl GC {
 }
 
 impl Item {
-    pub fn new(
+    pub(crate) fn new(
         id: ID,
         left: Option<BlockPtr>,
         origin: Option<ID>,
@@ -364,18 +465,24 @@ impl Item {
         }
     }
 
+    //TODO: not used yet
     pub fn marked(&self) -> bool {
         self.info.get() & ITEM_FLAG_MARKED == ITEM_FLAG_MARKED
     }
 
+    //TODO: not used yet
     pub fn keep(&self) -> bool {
         self.info.get() & ITEM_FLAG_KEEP == ITEM_FLAG_KEEP
     }
 
+    /// Checks if current item is marked as deleted (tombstoned). Yrs uses soft item deletion
+    /// mechanism.
     pub fn is_deleted(&self) -> bool {
         self.info.get() & ITEM_FLAG_DELETED == ITEM_FLAG_DELETED
     }
 
+    /// Checks if item content can be considered countable. Countable elements can be split
+    /// and joined together.
     pub fn is_countable(&self) -> bool {
         self.info.get() & ITEM_FLAG_COUNTABLE == ITEM_FLAG_COUNTABLE
     }
@@ -643,6 +750,8 @@ impl Item {
         self.content.len()
     }
 
+    /// Splits current item in two and a given `diff` offset. Returns a new item created as result
+    /// of this split.
     pub fn split(&mut self, diff: u32) -> Item {
         let client = self.id.client;
         let clock = self.id.clock;
@@ -661,19 +770,20 @@ impl Item {
         other
     }
 
+    /// Returns an ID of the last element that can be considered a part of this item.
     pub fn last_id(&self) -> ID {
         ID::new(self.id.client, self.id.clock + self.len() - 1)
     }
 
     /// Tries to merge current [Item] with another, returning true if merge was performed successfully.
-    pub fn try_merge(&mut self, other: &Self) -> bool {
+    pub fn try_squash(&mut self, other: &Self) -> bool {
         if self.id.client == other.id.client
             && self.id.clock + self.len() == other.id.clock
             && other.origin == Some(self.last_id())
             && self.right == Some(BlockPtr::from(other.id.clone()))
             && self.right_origin == other.right_origin
             && self.is_deleted() == other.is_deleted()
-            && self.content.try_merge(&other.content)
+            && self.content.try_squash(&other.content)
         {
             self.right = other.right;
             // self.right.left = self
@@ -737,20 +847,39 @@ impl Item {
     }
 }
 
+/// An enum describing the type of a user content stored as part of one or more
+/// (if items were squashed) insert operations.
 #[derive(Debug, PartialEq)]
 pub enum ItemContent {
+    /// Any JSON-like primitive type range.
     Any(Vec<Any>),
+
+    /// A binary data eg. images.
     Binary(Vec<u8>),
+
+    /// A marker for delete item data, which describes a number of deleted elements.
+    /// Deleted elements also don't contribute to an overall length of containing collection type.
     Deleted(u32),
+
     Doc(String, Any),
-    JSON(Vec<String>),      // String is JSON
-    Embed(String),          // String is JSON
+    JSON(Vec<String>), // String is JSON
+    Embed(String),     // String is JSON
+
+    /// Formatting attribute entry. Format attributes are not considered countable and don't
+    /// contribute to an overall length of a collection they are applied to.
     Format(String, String), // key, value: JSON
+
+    /// A chunk of text, usually applied by collaborative text insertion.
     String(String),
+
+    /// A reference of a branch node. Branch nodes define a complex collection types, such as
+    /// arrays, maps or XML elements.
     Type(BranchRef),
 }
 
 impl ItemContent {
+    /// Returns a reference number used to determine a content type.
+    /// It's used during encoding/decoding of a containing block.
     pub fn get_ref_number(&self) -> u8 {
         match self {
             ItemContent::Any(_) => BLOCK_ITEM_ANY_REF_NUMBER,
@@ -765,6 +894,8 @@ impl ItemContent {
         }
     }
 
+    /// Checks if item content can be considered countable. Countable elements contribute to
+    /// a length of the block they are contained by.
     pub fn is_countable(&self) -> bool {
         match self {
             ItemContent::Any(_) => true,
@@ -779,6 +910,10 @@ impl ItemContent {
         }
     }
 
+    /// Returns a number of elements contained within an item content. This method often should be
+    /// checked together with a [Self::is_countable], since every Yrs block has defined a length,
+    /// but not every block should be counted at all times (such counter examples are deleted
+    /// and format blocks).
     pub fn len(&self) -> u32 {
         match self {
             ItemContent::Deleted(deleted) => *deleted,
@@ -792,6 +927,10 @@ impl ItemContent {
         }
     }
 
+    /// Returns a formatted content of an item. For complex types (represented by [BranchRef] nodes)
+    /// it will return a target type of a branch node (eg. Yrs [Array], [Map] or [XmlElement]). For
+    /// other types it will returns a vector of elements stored within current block. Since block
+    /// may describe a chunk of values within it, it always returns a vector of values.
     pub fn get_content(&self, txn: &Transaction<'_>) -> Vec<Value> {
         match self {
             ItemContent::Any(v) => v.iter().map(|a| Value::Any(a.clone())).collect(),
@@ -815,7 +954,7 @@ impl ItemContent {
     }
 
     /// Similar to [get_content], but it only returns the latest result and doesn't materialize
-    /// other for performance reasons.
+    /// others for performance reasons.
     pub fn get_content_last(&self, txn: &Transaction<'_>) -> Option<Value> {
         match self {
             ItemContent::Any(v) => v.last().map(|a| Value::Any(a.clone())),
@@ -998,7 +1137,8 @@ impl ItemContent {
         }
     }
 
-    pub fn try_merge(&mut self, other: &Self) -> bool {
+    /// Tries to squash two item content structures together.
+    pub fn try_squash(&mut self, other: &Self) -> bool {
         //TODO: change `other` to Self (not ref) and return type to Option<Self> (none if merge suceeded)
         match (self, other) {
             (ItemContent::Any(v1), ItemContent::Any(v2)) => {

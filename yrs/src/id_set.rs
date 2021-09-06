@@ -1,4 +1,5 @@
 use crate::block::ID;
+use crate::block_store::BlockStore;
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::client_hasher::ClientHasher;
@@ -440,7 +441,7 @@ impl DeleteSet {
         self.0.compact()
     }
 
-    pub fn try_compact(&mut self, blocks: &BlockStore) {
+    pub(crate) fn try_compact(&mut self, blocks: &BlockStore) {
         //TODO
     }
 }
