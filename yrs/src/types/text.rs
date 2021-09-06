@@ -1,11 +1,11 @@
 use crate::block::{BlockPtr, ItemContent};
 use crate::transaction::Transaction;
-use crate::types::{Inner, InnerRef};
+use crate::types::{Branch, BranchRef};
 use crate::*;
 use std::cell::Ref;
 
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub struct Text(InnerRef);
+pub struct Text(BranchRef);
 
 impl Text {
     #[allow(clippy::inherent_to_string)]
@@ -18,11 +18,11 @@ impl Text {
         self.0.borrow().len()
     }
 
-    pub(crate) fn inner(&self) -> Ref<Inner> {
+    pub(crate) fn inner(&self) -> Ref<Branch> {
         self.0.borrow()
     }
 
-    pub(crate) fn to_string_inner(inner: &Inner, txn: &Transaction<'_>) -> String {
+    pub(crate) fn to_string_inner(inner: &Branch, txn: &Transaction<'_>) -> String {
         let mut start = inner.start;
         let mut s = String::new();
         while let Some(a) = start.as_ref() {
@@ -145,7 +145,7 @@ impl Text {
                     .and_then(|block| block.as_item());
             }
         } else {
-            panic!("The type or the position doesn't exist!");
+            panic!("Cannot remove range at provided index, which is outside of the current text range!");
         }
     }
 }
@@ -156,8 +156,8 @@ impl Into<ItemContent> for Text {
     }
 }
 
-impl From<InnerRef> for Text {
-    fn from(inner: InnerRef) -> Self {
+impl From<BranchRef> for Text {
+    fn from(inner: BranchRef) -> Self {
         Text(inner)
     }
 }
