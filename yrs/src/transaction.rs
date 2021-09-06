@@ -87,7 +87,7 @@ impl<'a> Transaction<'a> {
         update_encoder.to_vec()
     }
 
-    pub fn iterate_structs<F>(&mut self, client: &u64, range: &Range<u32>, f: &F)
+    pub(crate) fn iterate_structs<F>(&mut self, client: &u64, range: &Range<u32>, f: &F)
     where
         F: Fn(&Block) -> (),
     {
@@ -135,7 +135,7 @@ impl<'a> Transaction<'a> {
         Some(index)
     }
 
-    pub fn apply_ranges<F>(&mut self, set: &IdSet, f: &F)
+    pub(crate) fn apply_ranges<F>(&mut self, set: &IdSet, f: &F)
     where
         F: Fn(&Block) -> (),
     {
@@ -348,7 +348,7 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    pub fn create_item<T: Prelim>(
+    pub(crate) fn create_item<T: Prelim>(
         &mut self,
         pos: &block::ItemPosition,
         value: T,
@@ -428,7 +428,7 @@ impl<'a> Transaction<'a> {
                 let first_change = blocks.find_pivot(before_clock).unwrap().max(1);
                 let mut i = blocks.len() - 1;
                 while i >= first_change {
-                    if let Some(compaction) = blocks.compact_left(i) {
+                    if let Some(compaction) = blocks.squash_left(i) {
                         self.store.gc_cleanup(compaction);
                         blocks = self.store.blocks.get_mut(client).unwrap();
                     }
@@ -443,11 +443,11 @@ impl<'a> Transaction<'a> {
             let blocks = self.store.blocks.get_mut(&client).unwrap();
             let replaced_pos = blocks.find_pivot(clock).unwrap();
             if replaced_pos + 1 < blocks.len() {
-                if let Some(compaction) = blocks.compact_left(replaced_pos + 1) {
+                if let Some(compaction) = blocks.squash_left(replaced_pos + 1) {
                     self.store.gc_cleanup(compaction);
                 }
             } else if replaced_pos > 0 {
-                if let Some(compaction) = blocks.compact_left(replaced_pos) {
+                if let Some(compaction) = blocks.squash_left(replaced_pos) {
                     self.store.gc_cleanup(compaction);
                 }
             }

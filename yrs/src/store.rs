@@ -1,5 +1,5 @@
 use crate::block::ItemContent;
-use crate::block_store::{BlockStore, CompactionResult, StateVector};
+use crate::block_store::{BlockStore, SquashResult, StateVector};
 use crate::event::{EventHandler, UpdateEvent};
 use crate::id_set::DeleteSet;
 use crate::types;
@@ -13,7 +13,7 @@ use std::rc::Rc;
 pub struct Store {
     pub client_id: u64,
     pub types: HashMap<Rc<String>, BranchRef>,
-    pub blocks: BlockStore,
+    pub(crate) blocks: BlockStore,
     pub pending: Option<PendingUpdate>,
     pub pending_ds: Option<DeleteSet>,
     pub(crate) update_events: EventHandler<UpdateEvent>,
@@ -161,7 +161,7 @@ impl Store {
         diff
     }
 
-    pub(crate) fn gc_cleanup(&mut self, compaction: CompactionResult) {
+    pub(crate) fn gc_cleanup(&mut self, compaction: SquashResult) {
         if let Some(parent_sub) = compaction.parent_sub {
             if let Some(parent) = self.get_type(&compaction.parent) {
                 let mut inner = parent.borrow_mut();
