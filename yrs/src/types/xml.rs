@@ -1,20 +1,24 @@
 use crate::block::{Item, ItemContent, ItemPosition, Prelim};
+use crate::types::array::ArrayRemoveError;
 use crate::types::{
-    Entries, Inner, InnerRef, Map, Text, TypePtr, Value, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT,
+    Branch, BranchRef, Entries, Map, Text, TypePtr, Value, TYPE_REFS_XML_ELEMENT,
+    TYPE_REFS_XML_TEXT,
 };
 use crate::Transaction;
 use lib0::any::Any;
 use std::cell::Ref;
 use std::fmt::Write;
 
+/// An return type from XML elements retrieval methods. It's an enum of all supported values, that
+/// can be nested inside of [XmlElement]. These are other [XmlElement]s or [XmlText] values.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum Xml {
     Element(XmlElement),
     Text(XmlText),
 }
 
-impl From<InnerRef> for Xml {
-    fn from(inner: InnerRef) -> Self {
+impl From<BranchRef> for Xml {
+    fn from(inner: BranchRef) -> Self {
         let type_ref = { inner.borrow().type_ref & 0b1111 };
         match type_ref {
             TYPE_REFS_XML_ELEMENT => Xml::Element(XmlElement::from(inner)),
@@ -24,20 +28,21 @@ impl From<InnerRef> for Xml {
     }
 }
 
+/// XML element data type. It represents an XML node, which can contain key-value attributes
+/// (interpreted as strings) as well as other nested XML elements or plain text (represented by
+/// [XmlText] type).
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct XmlElement(XmlFragment);
 
 impl XmlElement {
-    fn inner(&self) -> Ref<Inner> {
+    fn inner(&self) -> Ref<Branch> {
         self.0.inner()
     }
 
+    /// Converts current XML node into a textual representation. This representation if flat, it
+    /// doesn't include any indentation.
     pub fn to_string(&self, txn: &Transaction) -> String {
         let inner = self.inner();
-        Self::to_string_inner(&*inner, txn)
-    }
-
-    pub(crate) fn to_string_inner(inner: &Inner, txn: &Transaction) -> String {
         let mut s = String::new();
         let tag = inner
             .name
@@ -59,15 +64,18 @@ impl XmlElement {
         s
     }
 
+    /// A tag name of a current top-level XML node, eg. node `<p></p>` has "p" as it's tag name.
     pub fn tag(&self) -> &str {
         let inner = self.0 .0.as_ref();
         inner.name.as_ref().unwrap()
     }
 
+    /// Removes an attribute recognized by an `attr_name` from a current XML element.
     pub fn remove_attribute(&self, txn: &mut Transaction, attr_name: &str) {
         self.inner().remove(txn, attr_name);
     }
 
+    /// Inserts an attribute entry into current XML element.
     pub fn insert_attribute<K: ToString, V: ToString>(
         &self,
         txn: &mut Transaction,
@@ -90,42 +98,100 @@ impl XmlElement {
         txn.create_item(&pos, value, Some(key));
     }
 
+    /// Returns a value of an attribute given its `attr_name`. Returns `None` if no such attribute
+    /// can be found inside of a current XML element.
     pub fn get_attribute(&self, txn: &Transaction, attr_name: &str) -> Option<String> {
         let inner: Ref<_> = self.inner();
         let value = inner.get(txn, attr_name)?;
         Some(value.to_string(txn))
     }
 
+    /// Returns an unordered iterator over all attributes (key-value pairs), that can be found
+    /// inside of a current XML element.
     pub fn attributes<'a, 'b, 'txn>(&'a self, txn: &'b Transaction<'txn>) -> Attributes<'b, 'txn> {
         let inner = self.inner();
         let blocks = inner.entries(txn);
         Attributes(blocks)
     }
 
+    /// Returns a next sibling of a current XML element, if any exists.
     pub fn next_sibling(&self, txn: &Transaction) -> Option<Xml> {
         next_sibling(self.inner(), txn)
     }
 
+    /// Returns a previous sibling of a current XML element, if any exists.
     pub fn prev_sibling(&self, txn: &Transaction) -> Option<Xml> {
         prev_sibling(self.inner(), txn)
     }
 
+    /// Returns a parent XML element, current node can be found within.
+    /// Returns `None`, if current node is a root.
     pub fn parent(&self, txn: &Transaction) -> Option<XmlElement> {
         self.0.parent(txn)
     }
 
+    /// Returns a first child XML node (either [XmlElement] or [XmlText]), that can be found in
+    /// a current XML element. Returns `None` if current element is empty.
     pub fn first_child(&self, txn: &Transaction) -> Option<Xml> {
         self.0.first_child(txn)
     }
 
+    /// Returns a number of child XML nodes, that can be found inside of a current XML element.
+    /// This is a flat count - successor nodes (children of a children) are not counted.
     pub fn len(&self, txn: &Transaction) -> u32 {
         self.0.len(txn)
     }
 
-    pub fn iter<'a, 'b, 'txn>(&'a self, txn: &'b Transaction<'txn>) -> TreeWalker<'b, 'txn> {
+    /// Returns an iterator that can be used to traverse over the successors of a current
+    /// XML element. This includes recursive step over children of its children. The recursive
+    /// iteration is depth-first.
+    ///
+    /// Example:
+    /// ```
+    /// /* construct node with a shape:
+    ///    <div>
+    ///       <p>Hello <b>world</b></p>
+    ///       again
+    ///    </div>
+    /// */
+    /// use yrs::{XmlElement, Doc, Xml};
+    ///
+    /// let doc = Doc::new();
+    /// let mut txn = doc.transact();
+    /// let mut html = txn.get_xml_element("div");
+    /// let p = html.push_elem_back(&mut txn, "p");
+    /// let txt = p.push_text_back(&mut txn);
+    /// txt.push(&mut txn, "Hello ");
+    /// let b = p.push_elem_back(&mut txn, "b");
+    /// let txt = b.push_text_back(&mut txn);
+    /// txt.push(&mut txn, "world");
+    /// let txt = html.push_text_back(&mut txn);
+    /// txt.push(&mut txn, "again");
+    ///
+    /// for node in html.successors(&txn) {
+    ///     match node {
+    ///         Xml::Element(elem) => println!("- {}", elem.tag()),
+    ///         Xml::Text(txt) => println!("- {}", txt.to_string(&txn))
+    ///     }
+    /// }
+    /// /* will print:
+    ///    - UNDEFINED // (XML root element)
+    ///    - p
+    ///    - Hello
+    ///    - b
+    ///    - world
+    ///    - again
+    /// */
+    /// ```
+    pub fn successors<'a, 'b, 'txn>(&'a self, txn: &'b Transaction<'txn>) -> TreeWalker<'b, 'txn> {
         self.0.iter(txn)
     }
 
+    /// Inserts another [XmlElement] with a given tag `name` into a current one at the given `index`
+    /// and returns it. If `index` is equal to `0`, new element will be inserted as a first child.
+    /// If `index` is equal to length of current XML element, new element will be inserted as a last
+    /// child.
+    /// This method will panic if `index` is greater than the length of current XML element.
     pub fn insert_elem<S: ToString>(
         &self,
         txn: &mut Transaction,
@@ -135,31 +201,52 @@ impl XmlElement {
         self.0.insert_elem(txn, index, name)
     }
 
+    /// Inserts a [XmlText] into a current XML element at the given `index` and returns it.
+    /// If `index` is equal to `0`, new text field will be inserted as a first child.
+    /// If `index` is equal to length of current XML element, new text field will be inserted
+    /// as a last child.
+    /// This method will panic if `index` is greater than the length of current XML element.
     pub fn insert_text(&self, txn: &mut Transaction, index: u32) -> XmlText {
         self.0.insert_text(txn, index)
     }
 
-    pub fn remove(&self, txn: &mut Transaction, index: u32, len: u32) {
+    /// Removes a range (defined by `len`) of XML nodes from the current XML element, starting at
+    /// the given `index`. Returns the result which may contain an error if a number of elements
+    /// removed is lesser than the expected one provided in `len` parameter.
+    pub fn remove(
+        &self,
+        txn: &mut Transaction,
+        index: u32,
+        len: u32,
+    ) -> Result<(), ArrayRemoveError> {
         self.0.remove(txn, index, len)
     }
 
+    /// Pushes a new [XmlElement] with a given tag `name` as the last child of a current one and
+    /// returns it.
     pub fn push_elem_back<S: ToString>(&self, txn: &mut Transaction, name: S) -> XmlElement {
         self.0.push_elem_back(txn, name)
     }
 
+    /// Pushes a new [XmlElement] with a given tag `name` as the first child of a current one and
+    /// returns it.
     pub fn push_elem_front<S: ToString>(&self, txn: &mut Transaction, name: S) -> XmlElement {
         self.0.push_elem_front(txn, name)
     }
 
+    /// Pushes a new [XmlText] field as the last child of a current XML element and returns it.
     pub fn push_text_back(&self, txn: &mut Transaction) -> XmlText {
         self.0.push_text_back(txn)
     }
 
+    /// Pushes a new [XmlText] field as the first child of a current XML element and returns it.
     pub fn push_text_front(&self, txn: &mut Transaction) -> XmlText {
         self.0.push_text_front(txn)
     }
 
-    pub fn get(&self, txn: &Transaction, index: u32) -> Option<XmlElement> {
+    /// Returns an XML node stored under a given `index` of a current XML element.
+    /// Returns `None` if provided `index` is over the range of a current element.
+    pub fn get(&self, txn: &Transaction, index: u32) -> Option<Xml> {
         self.0.get(txn, index)
     }
 }
@@ -170,12 +257,13 @@ impl Into<ItemContent> for XmlElement {
     }
 }
 
-impl From<InnerRef> for XmlElement {
-    fn from(inner: InnerRef) -> Self {
+impl From<BranchRef> for XmlElement {
+    fn from(inner: BranchRef) -> Self {
         XmlElement(XmlFragment::new(inner))
     }
 }
 
+/// Iterator over the attributes (key-value pairs represented as a strings) of an [XmlElement].
 pub struct Attributes<'a, 'txn>(Entries<'a, 'txn>);
 
 impl<'a, 'txn> Iterator for Attributes<'a, 'txn> {
@@ -200,14 +288,14 @@ impl Into<XmlElement> for XmlFragment {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub struct XmlFragment(InnerRef);
+pub struct XmlFragment(BranchRef);
 
 impl XmlFragment {
-    pub fn new(inner: InnerRef) -> Self {
+    pub fn new(inner: BranchRef) -> Self {
         XmlFragment(inner)
     }
 
-    fn inner(&self) -> Ref<Inner> {
+    fn inner(&self) -> Ref<Branch> {
         self.0.borrow()
     }
 
@@ -271,8 +359,21 @@ impl XmlFragment {
         }
     }
 
-    pub fn remove(&self, txn: &mut Transaction, index: u32, len: u32) {
-        self.0.remove_at(txn, index, len)
+    pub fn remove(
+        &self,
+        txn: &mut Transaction,
+        index: u32,
+        len: u32,
+    ) -> Result<(), ArrayRemoveError> {
+        let removed = self.0.remove_at(txn, index, len);
+        if removed == len {
+            Ok(())
+        } else {
+            Err(ArrayRemoveError {
+                expected: len,
+                removed,
+            })
+        }
     }
 
     pub fn push_elem_back<S: ToString>(&self, txn: &mut Transaction, name: S) -> XmlElement {
@@ -293,7 +394,7 @@ impl XmlFragment {
         self.insert_text(txn, 0)
     }
 
-    pub fn get<T: From<InnerRef>>(&self, txn: &Transaction, index: u32) -> Option<T> {
+    pub fn get<T: From<BranchRef>>(&self, txn: &Transaction, index: u32) -> Option<T> {
         let inner = self.inner();
         let (content, _) = inner.get_at(txn, index)?;
         if let ItemContent::Type(inner) = content {
@@ -310,6 +411,7 @@ impl Into<ItemContent> for XmlFragment {
     }
 }
 
+/// An iterator over [XmlElement] successors, working in a recursive depth-first manner.
 pub struct TreeWalker<'a, 'txn> {
     txn: &'a Transaction<'txn>,
     current: Option<&'a Item>,
@@ -318,7 +420,7 @@ pub struct TreeWalker<'a, 'txn> {
 }
 
 impl<'a, 'txn> TreeWalker<'a, 'txn> {
-    fn new<'b>(txn: &'a Transaction<'txn>, parent: &'b Inner) -> Self {
+    fn new<'b>(txn: &'a Transaction<'txn>, parent: &'b Branch) -> Self {
         let root = parent.ptr.clone();
         let current = parent
             .start
@@ -402,7 +504,7 @@ impl XmlHook {
         XmlHook(map)
     }
 
-    pub fn len(&self, txn: &Transaction) -> usize {
+    pub fn len(&self, txn: &Transaction) -> u32 {
         self.0.len(txn)
     }
 
@@ -452,8 +554,8 @@ impl XmlHook {
     }
 }
 
-impl From<InnerRef> for XmlHook {
-    fn from(inner: InnerRef) -> Self {
+impl From<BranchRef> for XmlHook {
+    fn from(inner: BranchRef) -> Self {
         XmlHook(Map::from(inner))
     }
 }
@@ -464,14 +566,17 @@ impl Into<XmlHook> for Map {
     }
 }
 
+/// A XML node that represent a raw text stored inside of a [XmlElement]. It has collaborative,
+/// conflict-free features of a [Text] data type.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct XmlText(Text);
 
 impl XmlText {
-    fn inner(&self) -> Ref<Inner> {
+    fn inner(&self) -> Ref<Branch> {
         self.0.inner()
     }
 
+    /// Returns a string representation of a current XML text.
     pub fn to_string(&self, txn: &Transaction) -> String {
         self.0.to_string(txn)
     }
@@ -512,37 +617,49 @@ impl XmlText {
         Attributes(self.inner().entries(txn))
     }
 
+    /// Returns next XML sibling of this XML text, which can be either a [XmlElement], [XmlText] or
+    /// `None` if current text is a last child of its parent XML element.
     pub fn next_sibling(&self, txn: &Transaction) -> Option<Xml> {
         next_sibling(self.0.inner(), txn)
     }
 
+    /// Returns previous XML sibling of this XML text, which can be either a [XmlElement], [XmlText]
+    /// or `None` if current text is a first child of its parent XML element.
     pub fn prev_sibling(&self, txn: &Transaction) -> Option<Xml> {
         prev_sibling(self.0.inner(), txn)
     }
 
+    /// Returns a parent XML element containing this XML text value.
     pub fn parent(&self, txn: &Transaction) -> Option<XmlElement> {
         parent(self.inner(), txn)
     }
 
+    /// Returns a number of characters contained under this XML text structure.
     pub fn len(&self, _txn: &Transaction) -> u32 {
         self.0.len()
     }
 
+    /// Inserts a new string `content` into this XML text structure at the given `index`.
+    /// This method may panic if `index` if greater than a length of this text.
     pub fn insert(&self, txn: &mut Transaction, index: u32, content: &str) {
         if let Some(mut pos) = self.0.find_position(txn, index) {
             let parent = { TypePtr::Id(self.inner().item.unwrap()) };
             pos.parent = parent;
             txn.create_item(&pos, crate::block::Text(content.to_owned()), None);
         } else {
-            panic!("The type or the position doesn't exist!");
+            panic!("Cannot insert string content into an XML text: provided index is outside of the current text range!");
         }
     }
 
+    /// Appends a new string `content` at the end of this XML text structure.
     pub fn push(&self, txn: &mut Transaction, content: &str) {
         let len = self.len(txn);
         self.insert(txn, len, content);
     }
 
+    /// Removes a number of characters specified by a `len` parameter from this XML text structure,
+    /// starting at given `index`.
+    /// This method may panic if `index` if greater than a length of this text.
     pub fn remove(&self, txn: &mut Transaction, index: u32, len: u32) {
         self.0.remove(txn, index, len)
     }
@@ -554,8 +671,8 @@ impl Into<ItemContent> for XmlText {
     }
 }
 
-impl From<InnerRef> for XmlText {
-    fn from(inner: InnerRef) -> Self {
+impl From<BranchRef> for XmlText {
+    fn from(inner: BranchRef) -> Self {
         XmlText(Text::from(inner))
     }
 }
@@ -566,7 +683,7 @@ impl Into<XmlText> for Text {
     }
 }
 
-pub enum PrelimXml {
+enum PrelimXml {
     Elem(String),
     Text,
 }
@@ -575,17 +692,17 @@ impl Prelim for PrelimXml {
     fn into_content(self, txn: &mut Transaction, ptr: TypePtr) -> (ItemContent, Option<Self>) {
         let inner = match self {
             PrelimXml::Elem(node_name) => {
-                InnerRef::new(Inner::new(ptr, TYPE_REFS_XML_ELEMENT, Some(node_name)))
+                BranchRef::new(Branch::new(ptr, TYPE_REFS_XML_ELEMENT, Some(node_name)))
             }
-            PrelimXml::Text => InnerRef::new(Inner::new(ptr, TYPE_REFS_XML_TEXT, None)),
+            PrelimXml::Text => BranchRef::new(Branch::new(ptr, TYPE_REFS_XML_TEXT, None)),
         };
         (ItemContent::Type(inner), None)
     }
 
-    fn integrate(self, txn: &mut Transaction, inner_ref: InnerRef) {}
+    fn integrate(self, txn: &mut Transaction, inner_ref: BranchRef) {}
 }
 
-fn next_sibling(inner: Ref<Inner>, txn: &Transaction) -> Option<Xml> {
+fn next_sibling(inner: Ref<Branch>, txn: &Transaction) -> Option<Xml> {
     let mut current = inner
         .item
         .as_ref()
@@ -607,7 +724,7 @@ fn next_sibling(inner: Ref<Inner>, txn: &Transaction) -> Option<Xml> {
     None
 }
 
-fn prev_sibling(inner: Ref<Inner>, txn: &Transaction) -> Option<Xml> {
+fn prev_sibling(inner: Ref<Branch>, txn: &Transaction) -> Option<Xml> {
     let mut current = inner
         .item
         .as_ref()
@@ -629,7 +746,7 @@ fn prev_sibling(inner: Ref<Inner>, txn: &Transaction) -> Option<Xml> {
     None
 }
 
-fn parent(inner: Ref<Inner>, txn: &Transaction) -> Option<XmlElement> {
+fn parent(inner: Ref<Branch>, txn: &Transaction) -> Option<XmlElement> {
     let item = txn.store.blocks.get_item(inner.item.as_ref()?)?;
     let parent = txn.store.get_type(&item.parent)?;
     Some(XmlElement::from(parent.clone()))
@@ -673,7 +790,7 @@ mod test {
         let p2 = root.push_elem_back(&mut txn, "p");
         root.push_elem_back(&mut txn, "img");
 
-        let all_paragraphs = root.iter(&txn).filter_map(|n| match n {
+        let all_paragraphs = root.successors(&txn).filter_map(|n| match n {
             Xml::Element(e) if e.tag() == "p" => Some(e),
             _ => None,
         });

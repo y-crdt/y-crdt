@@ -8,7 +8,7 @@ use crate::store::Store;
 use crate::types::array::Array;
 use crate::types::xml::{XmlElement, XmlText};
 use crate::types::{
-    Inner, Map, Text, TypePtr, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
+    Branch, Map, Text, TypePtr, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
     TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT,
 };
 use crate::update::Update;
@@ -505,7 +505,7 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    pub fn add_changed_type(&mut self, parent: &mut Inner, parent_sub: Option<&String>) {
+    pub fn add_changed_type(&mut self, parent: &mut Branch, parent_sub: Option<&String>) {
         // TODO:
         /*
               const item = type._item

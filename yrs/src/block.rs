@@ -1,6 +1,6 @@
 use crate::store::Store;
 use crate::types::{
-    Inner, InnerRef, TypePtr, Value, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
+    Branch, BranchRef, TypePtr, Value, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
     TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_HOOK, TYPE_REFS_XML_TEXT,
 };
 use crate::updates::decoder::Decoder;
@@ -703,7 +703,7 @@ impl Item {
         info
     }
 
-    fn integrate_content(&mut self, txn: &mut Transaction<'_>, pivot: u32, parent: &mut Inner) {
+    fn integrate_content(&mut self, txn: &mut Transaction<'_>, pivot: u32, parent: &mut Branch) {
         match &mut self.content {
             ItemContent::Deleted(len) => {
                 txn.delete_set.insert(self.id, *len);
@@ -747,7 +747,7 @@ pub enum ItemContent {
     Embed(String),          // String is JSON
     Format(String, String), // key, value: JSON
     String(String),
-    Type(InnerRef),
+    Type(BranchRef),
 }
 
 impl ItemContent {
@@ -935,8 +935,8 @@ impl ItemContent {
                     None
                 };
                 let inner_ptr = types::TypePtr::Id(ptr);
-                let inner = types::Inner::new(inner_ptr, type_ref, name);
-                ItemContent::Type(InnerRef::new(inner))
+                let inner = types::Branch::new(inner_ptr, type_ref, name);
+                ItemContent::Type(BranchRef::new(inner))
             }
             BLOCK_ITEM_ANY_REF_NUMBER => {
                 let len = decoder.read_len() as usize;
@@ -1136,7 +1136,7 @@ pub trait Prelim: Sized {
     /// Method called once an original item filled with content from [Self::into_content] has been
     /// added to block store. This method is used by complex types such as maps or arrays to append
     /// the original contents of prelim struct into YMap, YArray etc.
-    fn integrate(self, txn: &mut Transaction, inner_ref: InnerRef);
+    fn integrate(self, txn: &mut Transaction, inner_ref: BranchRef);
 }
 
 impl<T> Prelim for T
@@ -1148,7 +1148,7 @@ where
         (ItemContent::Any(vec![value]), None)
     }
 
-    fn integrate(self, txn: &mut Transaction, inner_ref: InnerRef) {}
+    fn integrate(self, txn: &mut Transaction, inner_ref: BranchRef) {}
 }
 
 #[derive(Debug)]
@@ -1159,7 +1159,7 @@ impl Prelim for Text {
         (ItemContent::String(self.0), None)
     }
 
-    fn integrate(self, txn: &mut Transaction, inner_ref: InnerRef) {}
+    fn integrate(self, txn: &mut Transaction, inner_ref: BranchRef) {}
 }
 
 impl std::fmt::Display for ID {

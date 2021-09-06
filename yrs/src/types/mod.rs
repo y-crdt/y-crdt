@@ -19,34 +19,50 @@ use std::rc::Rc;
 
 pub type TypeRefs = u8;
 
+/// Type ref identifier for an [Array] type.
 pub const TYPE_REFS_ARRAY: TypeRefs = 0;
+
+/// Type ref identifier for a [Map] type.
 pub const TYPE_REFS_MAP: TypeRefs = 1;
+
+/// Type ref identifier for a [Text] type.
 pub const TYPE_REFS_TEXT: TypeRefs = 2;
+
+/// Type ref identifier for a [XmlElement] type.
 pub const TYPE_REFS_XML_ELEMENT: TypeRefs = 3;
+
+/// Type ref identifier for a [XmlFragment] type. Used for compatibility.
 pub const TYPE_REFS_XML_FRAGMENT: TypeRefs = 4;
+
+/// Type ref identifier for a [XmlHook] type. Used for compatibility.
 pub const TYPE_REFS_XML_HOOK: TypeRefs = 5;
+
+/// Type ref identifier for a [XmlText] type.
 pub const TYPE_REFS_XML_TEXT: TypeRefs = 6;
 
-/// Placeholder for non-specialized AbstractType.
+/// Placeholder type ref identifier for non-specialized AbstractType. Used only for root-level types
+/// which have been integrated from remote peers before they were defined locally.
 pub const TYPE_REFS_UNDEFINED: TypeRefs = 7;
 
+/// A wrapper around [Branch] cell, supplied with a bunch of convenience methods to operate on both
+/// map-like and array-like contents of a [Branch].
 #[derive(Debug, Clone)]
-pub struct InnerRef(Rc<RefCell<Inner>>);
+pub struct BranchRef(Rc<RefCell<Branch>>);
 
-impl InnerRef {
-    pub fn new(inner: Inner) -> Self {
-        InnerRef(Rc::new(RefCell::new(inner)))
+impl BranchRef {
+    pub fn new(inner: Branch) -> Self {
+        BranchRef(Rc::new(RefCell::new(inner)))
     }
 
-    pub fn borrow(&self) -> Ref<Inner> {
+    pub fn borrow(&self) -> Ref<Branch> {
         self.0.borrow()
     }
 
-    pub fn borrow_mut(&self) -> RefMut<Inner> {
+    pub fn borrow_mut(&self) -> RefMut<Branch> {
         self.0.borrow_mut()
     }
 
-    pub fn try_borrow_mut(&self) -> Result<RefMut<Inner>, BorrowMutError> {
+    pub fn try_borrow_mut(&self) -> Result<RefMut<Branch>, BorrowMutError> {
         self.0.try_borrow_mut()
     }
 
@@ -64,7 +80,10 @@ impl InnerRef {
         }
     }
 
-    pub(crate) fn remove_at(&self, txn: &mut Transaction, index: u32, mut len: u32) {
+    /// Removes up to a `len` of countable elements from current branch sequence, starting at the
+    /// given `index`. Returns number of removed elements.
+    pub(crate) fn remove_at(&self, txn: &mut Transaction, index: u32, len: u32) -> u32 {
+        let mut remaining = len;
         let start = {
             let parent = self.borrow();
             parent.start
@@ -72,19 +91,19 @@ impl InnerRef {
         let (_, mut ptr) = if index == 0 {
             (None, start)
         } else {
-            Inner::index_to_ptr(txn, start, index)
+            Branch::index_to_ptr(txn, start, index)
         };
-        while len > 0 {
+        while remaining > 0 {
             if let Some(mut p) = ptr {
                 if let Some(item) = txn.store.blocks.get_item(&p) {
                     if !item.is_deleted() {
                         let item_len = item.len();
-                        let (l, r) = if len < item_len {
-                            p.id.clock += len;
-                            len = 0;
+                        let (l, r) = if remaining < item_len {
+                            p.id.clock += remaining;
+                            remaining = 0;
                             txn.store.blocks.split_block(&p)
                         } else {
-                            len -= item_len;
+                            remaining -= item_len;
                             (ptr, item.right.clone())
                         };
                         txn.delete(&l.unwrap());
@@ -98,9 +117,7 @@ impl InnerRef {
             }
         }
 
-        if len > 0 {
-            panic!("Array length exceeded");
-        }
+        len - remaining
     }
 
     pub(crate) fn insert_at<'t, V: Prelim>(
@@ -120,7 +137,7 @@ impl InnerRef {
         let (left, right) = if index == 0 {
             (None, None)
         } else {
-            Inner::index_to_ptr(txn, start, index)
+            Branch::index_to_ptr(txn, start, index)
         };
         let pos = ItemPosition {
             parent,
@@ -133,23 +150,23 @@ impl InnerRef {
     }
 }
 
-impl AsRef<Inner> for InnerRef {
-    fn as_ref<'a>(&'a self) -> &'a Inner {
-        unsafe { &*self.0.as_ptr() as &'a Inner }
+impl AsRef<Branch> for BranchRef {
+    fn as_ref<'a>(&'a self) -> &'a Branch {
+        unsafe { &*self.0.as_ptr() as &'a Branch }
     }
 }
 
-impl Eq for InnerRef {}
+impl Eq for BranchRef {}
 
 #[cfg(not(test))]
-impl PartialEq for InnerRef {
+impl PartialEq for BranchRef {
     fn eq(&self, other: &Self) -> bool {
         Rc::ptr_eq(&self.0, &other.0)
     }
 }
 
 #[cfg(test)]
-impl PartialEq for InnerRef {
+impl PartialEq for BranchRef {
     fn eq(&self, other: &Self) -> bool {
         if Rc::ptr_eq(&self.0, &other.0) {
             true
@@ -160,7 +177,7 @@ impl PartialEq for InnerRef {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub struct Inner {
+pub struct Branch {
     pub start: Option<BlockPtr>,
     pub map: HashMap<String, BlockPtr>,
     pub ptr: TypePtr,
@@ -170,7 +187,7 @@ pub struct Inner {
     type_ref: TypeRefs,
 }
 
-impl Inner {
+impl Branch {
     pub fn new(ptr: TypePtr, type_ref: TypeRefs, name: Option<String>) -> Self {
         Self {
             start: None,
@@ -361,7 +378,7 @@ where
     }
 }
 
-impl std::fmt::Display for Inner {
+impl std::fmt::Display for Branch {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.type_ref() {
             TYPE_REFS_ARRAY => write!(f, "YArray(start: {})", self.start.unwrap()),

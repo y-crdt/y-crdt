@@ -1,18 +1,27 @@
 use crate::block::{BlockPtr, ItemContent, ItemPosition, Prelim};
-use crate::types::{Inner, InnerRef, TypePtr, Value, TYPE_REFS_ARRAY};
+use crate::types::{Branch, BranchRef, TypePtr, Value, TYPE_REFS_ARRAY};
 use crate::Transaction;
 use lib0::any::Any;
 use std::collections::VecDeque;
+use std::error::Error;
+use std::fmt::Formatter;
 
+/// A collection used to store data in an indexed sequence structure.
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub struct Array(InnerRef);
+pub struct Array(BranchRef);
 
 impl Array {
+    /// Returns a number of elements stored in current array.
     pub fn len(&self) -> u32 {
         let inner = self.0.borrow();
         inner.len()
     }
 
+    /// Inserts a `value` at the given `index`. Inserting at index `0` is equivalent to prepending
+    /// current array with given `value`, while inserting at array length is equivalent to appending
+    /// that value at the end of it.
+    ///
+    /// Using `index` value that's higher than current array length results in panic.
     pub fn insert<V: Prelim>(&self, txn: &mut Transaction, index: u32, value: V) {
         let (start, parent) = {
             let parent = self.0.borrow();
@@ -25,7 +34,7 @@ impl Array {
         let (left, right) = if index == 0 {
             (None, None)
         } else {
-            Inner::index_to_ptr(txn, start, index)
+            Branch::index_to_ptr(txn, start, index)
         };
         let pos = ItemPosition {
             parent,
@@ -37,32 +46,77 @@ impl Array {
         txn.create_item(&pos, value, None);
     }
 
-    pub fn push_back<V: Prelim>(&self, txn: &mut Transaction, content: V) {
+    /// Inserts given `value` at the end of the current array.
+    pub fn push_back<V: Prelim>(&self, txn: &mut Transaction, value: V) {
         let len = self.len();
-        self.insert(txn, len, content)
+        self.insert(txn, len, value)
     }
 
+    /// Inserts given `value` at the beginning of the current array.
     pub fn push_front<V: Prelim>(&self, txn: &mut Transaction, content: V) {
         self.insert(txn, 0, content)
     }
 
-    pub fn remove(&self, txn: &mut Transaction, index: u32, len: u32) {
-        self.0.remove_at(txn, index, len)
+    /// Removes a range of elements from current array, starting at given `index` up until
+    /// a particular number described by `len` has been deleted. Returns a result, which can contain
+    /// an error in case when not all expected elements were removed (due to insufficient number of
+    /// elements in an array).
+    pub fn remove(
+        &self,
+        txn: &mut Transaction,
+        index: u32,
+        len: u32,
+    ) -> Result<(), ArrayRemoveError> {
+        let removed = self.0.remove_at(txn, index, len);
+        if removed == len {
+            Ok(())
+        } else {
+            Err(ArrayRemoveError {
+                expected: len,
+                removed,
+            })
+        }
     }
 
+    /// Retrieves a value stored at a given `index`. Returns `None` when provided index was out
+    /// of the range of a current array.
     pub fn get(&self, txn: &Transaction, index: u32) -> Option<Value> {
         let inner = self.0.borrow();
         let (content, idx) = inner.get_at(txn, index)?;
         Some(content.get_content(txn).remove(idx))
     }
 
+    /// Returns an iterator, that can be used to lazely traverse over all values stored in a current
+    /// array.
     pub fn iter<'a, 'b, 'txn>(&'a self, txn: &'b Transaction<'txn>) -> Iter<'b, 'txn> {
         Iter::new(self, txn)
     }
 
+    /// Converts all contents of current array into a JSON-like representation.
     pub fn to_json(&self, txn: &Transaction) -> Any {
         let res = self.iter(txn).map(|v| v.to_json(txn)).collect();
         Any::Array(res)
+    }
+}
+
+/// An error returned when array range removal couldn't remove all expected elements.
+#[derive(Debug)]
+pub struct ArrayRemoveError {
+    /// Expected number of elements to remove.
+    pub expected: u32,
+    /// Actual number of successfully removed elements.
+    pub removed: u32,
+}
+
+impl Error for ArrayRemoveError {}
+
+impl std::fmt::Display for ArrayRemoveError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Couldn't remove {} elements from an array. Only {} of them were successfully removed.",
+            self.expected, self.removed
+        )
     }
 }
 
@@ -105,27 +159,38 @@ impl<'b, 'txn> Iterator for Iter<'b, 'txn> {
     }
 }
 
-impl From<InnerRef> for Array {
-    fn from(inner: InnerRef) -> Self {
+impl From<BranchRef> for Array {
+    fn from(inner: BranchRef) -> Self {
         Array(inner)
     }
 }
 
-pub struct PrelimArray<T>(VecDeque<T>);
+/// A preliminary array. It's can be used to initialize an [Array], when it's about to be nested
+/// into another Yrs data collection, such as [Map] or another [Array].
+pub struct PrelimArray<T, V>(T)
+where
+    T: IntoIterator<Item = V>;
 
-impl<T> From<VecDeque<T>> for PrelimArray<T> {
-    fn from(vec: VecDeque<T>) -> Self {
-        PrelimArray(vec)
+impl<T, V> From<T> for PrelimArray<T, V>
+where
+    T: IntoIterator<Item = V>,
+{
+    fn from(iter: T) -> Self {
+        PrelimArray(iter)
     }
 }
 
-impl<T: Prelim> Prelim for PrelimArray<T> {
+impl<T, V> Prelim for PrelimArray<T, V>
+where
+    V: Prelim,
+    T: IntoIterator<Item = V>,
+{
     fn into_content(self, txn: &mut Transaction, ptr: TypePtr) -> (ItemContent, Option<Self>) {
-        let inner = InnerRef::new(Inner::new(ptr, TYPE_REFS_ARRAY, None));
+        let inner = BranchRef::new(Branch::new(ptr, TYPE_REFS_ARRAY, None));
         (ItemContent::Type(inner), Some(self))
     }
 
-    fn integrate(self, txn: &mut Transaction, inner_ref: InnerRef) {
+    fn integrate(self, txn: &mut Transaction, inner_ref: BranchRef) {
         let array = Array::from(inner_ref);
         for value in self.0 {
             array.push_back(txn, value);
@@ -216,7 +281,7 @@ mod test {
             a.push_back(&mut txn, 2); // len: 3
             a.push_back(&mut txn, 3); // len: 4
 
-            a.remove(&mut txn, 0, 1); // len: 3
+            a.remove(&mut txn, 0, 1).unwrap(); // len: 3
             a.insert(&mut txn, 0, 0); // len: 4
 
             assert_eq!(a.len(), 4);
@@ -224,13 +289,13 @@ mod test {
         {
             let mut txn = d.transact();
             let a = txn.get_array("array");
-            a.remove(&mut txn, 1, 1); // len: 3
+            a.remove(&mut txn, 1, 1).unwrap(); // len: 3
             assert_eq!(a.len(), 3);
 
             a.insert(&mut txn, 1, 1); // len: 4
             assert_eq!(a.len(), 4);
 
-            a.remove(&mut txn, 2, 1); // len: 3
+            a.remove(&mut txn, 2, 1).unwrap(); // len: 3
             assert_eq!(a.len(), 3);
 
             a.insert(&mut txn, 2, 2); // len: 4
@@ -241,7 +306,7 @@ mod test {
         let a = txn.get_array("array");
         assert_eq!(a.len(), 4);
 
-        a.remove(&mut txn, 1, 1);
+        a.remove(&mut txn, 1, 1).unwrap();
         assert_eq!(a.len(), 3);
 
         a.insert(&mut txn, 1, 1);
@@ -255,7 +320,7 @@ mod test {
         let mut t1 = d1.transact();
         let a1 = t1.get_array("array");
         a1.insert(&mut t1, 0, "A");
-        a1.remove(&mut t1, 1, 0);
+        a1.remove(&mut t1, 1, 0).unwrap();
     }
 
     #[test]
@@ -351,8 +416,8 @@ mod test {
             let a3 = t3.get_array("array");
 
             a1.insert(&mut t1, 1, 0); // [x,0,y,z]
-            a2.remove(&mut t2, 0, 1); // [y,z]
-            a2.remove(&mut t2, 1, 1); // [y]
+            a2.remove(&mut t2, 0, 1).unwrap(); // [y,z]
+            a2.remove(&mut t2, 1, 1).unwrap(); // [y]
             a3.insert(&mut t3, 1, 2); // [x,2,y,z]
         }
 
@@ -423,8 +488,8 @@ mod test {
             let a1 = t1.get_array("array");
             let a2 = t2.get_array("array");
 
-            a2.remove(&mut t2, 1, 1);
-            a1.remove(&mut t1, 0, 2);
+            a2.remove(&mut t2, 1, 1).unwrap();
+            a1.remove(&mut t1, 0, 2).unwrap();
         }
 
         exchange_updates(&[&d1, &d2]);
@@ -453,7 +518,7 @@ mod test {
             let mut t2 = d2.transact();
             let a2 = t2.get_array("array");
 
-            a2.remove(&mut t2, 0, 3);
+            a2.remove(&mut t2, 0, 3).unwrap();
         }
 
         exchange_updates(&[&d1, &d2]);
