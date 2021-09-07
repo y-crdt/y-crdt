@@ -57,24 +57,19 @@ impl Array {
         self.insert(txn, 0, content)
     }
 
+    /// Removes a single element at provided `index`.
+    pub fn remove(&self, txn: &mut Transaction, index: u32) {
+        self.remove_range(txn, index, 1)
+    }
+
     /// Removes a range of elements from current array, starting at given `index` up until
-    /// a particular number described by `len` has been deleted. Returns a result, which can contain
-    /// an error in case when not all expected elements were removed (due to insufficient number of
-    /// elements in an array).
-    pub fn remove(
-        &self,
-        txn: &mut Transaction,
-        index: u32,
-        len: u32,
-    ) -> Result<(), ArrayRemoveError> {
+    /// a particular number described by `len` has been deleted. This method panics in case when
+    /// not all expected elements were removed (due to insufficient number of elements in an array)
+    /// or `index` is outside of the bounds of an array.
+    pub fn remove_range(&self, txn: &mut Transaction, index: u32, len: u32) {
         let removed = self.0.remove_at(txn, index, len);
-        if removed == len {
-            Ok(())
-        } else {
-            Err(ArrayRemoveError {
-                expected: len,
-                removed,
-            })
+        if removed != len {
+            panic!("Couldn't remove {} elements from an array. Only {} of them were successfully removed.", len, removed);
         }
     }
 
@@ -96,27 +91,6 @@ impl Array {
     pub fn to_json(&self, txn: &Transaction) -> Any {
         let res = self.iter(txn).map(|v| v.to_json(txn)).collect();
         Any::Array(res)
-    }
-}
-
-/// An error returned when array range removal couldn't remove all expected elements.
-#[derive(Debug)]
-pub struct ArrayRemoveError {
-    /// Expected number of elements to remove.
-    pub expected: u32,
-    /// Actual number of successfully removed elements.
-    pub removed: u32,
-}
-
-impl Error for ArrayRemoveError {}
-
-impl std::fmt::Display for ArrayRemoveError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "Couldn't remove {} elements from an array. Only {} of them were successfully removed.",
-            self.expected, self.removed
-        )
     }
 }
 
@@ -281,7 +255,7 @@ mod test {
             a.push_back(&mut txn, 2); // len: 3
             a.push_back(&mut txn, 3); // len: 4
 
-            a.remove(&mut txn, 0, 1).unwrap(); // len: 3
+            a.remove_range(&mut txn, 0, 1); // len: 3
             a.insert(&mut txn, 0, 0); // len: 4
 
             assert_eq!(a.len(), 4);
@@ -289,13 +263,13 @@ mod test {
         {
             let mut txn = d.transact();
             let a = txn.get_array("array");
-            a.remove(&mut txn, 1, 1).unwrap(); // len: 3
+            a.remove_range(&mut txn, 1, 1); // len: 3
             assert_eq!(a.len(), 3);
 
             a.insert(&mut txn, 1, 1); // len: 4
             assert_eq!(a.len(), 4);
 
-            a.remove(&mut txn, 2, 1).unwrap(); // len: 3
+            a.remove_range(&mut txn, 2, 1); // len: 3
             assert_eq!(a.len(), 3);
 
             a.insert(&mut txn, 2, 2); // len: 4
@@ -306,7 +280,7 @@ mod test {
         let a = txn.get_array("array");
         assert_eq!(a.len(), 4);
 
-        a.remove(&mut txn, 1, 1).unwrap();
+        a.remove_range(&mut txn, 1, 1);
         assert_eq!(a.len(), 3);
 
         a.insert(&mut txn, 1, 1);
@@ -320,7 +294,7 @@ mod test {
         let mut t1 = d1.transact();
         let a1 = t1.get_array("array");
         a1.insert(&mut t1, 0, "A");
-        a1.remove(&mut t1, 1, 0).unwrap();
+        a1.remove_range(&mut t1, 1, 0);
     }
 
     #[test]
@@ -416,8 +390,8 @@ mod test {
             let a3 = t3.get_array("array");
 
             a1.insert(&mut t1, 1, 0); // [x,0,y,z]
-            a2.remove(&mut t2, 0, 1).unwrap(); // [y,z]
-            a2.remove(&mut t2, 1, 1).unwrap(); // [y]
+            a2.remove_range(&mut t2, 0, 1); // [y,z]
+            a2.remove_range(&mut t2, 1, 1); // [y]
             a3.insert(&mut t3, 1, 2); // [x,2,y,z]
         }
 
@@ -488,8 +462,8 @@ mod test {
             let a1 = t1.get_array("array");
             let a2 = t2.get_array("array");
 
-            a2.remove(&mut t2, 1, 1).unwrap();
-            a1.remove(&mut t1, 0, 2).unwrap();
+            a2.remove_range(&mut t2, 1, 1);
+            a1.remove_range(&mut t1, 0, 2);
         }
 
         exchange_updates(&[&d1, &d2]);
@@ -518,7 +492,7 @@ mod test {
             let mut t2 = d2.transact();
             let a2 = t2.get_array("array");
 
-            a2.remove(&mut t2, 0, 3).unwrap();
+            a2.remove_range(&mut t2, 0, 3);
         }
 
         exchange_updates(&[&d1, &d2]);
