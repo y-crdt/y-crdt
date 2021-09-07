@@ -100,7 +100,6 @@ fn text_insert_delete() {
     let mut doc = Doc::new();
     let _sub = doc.on_update(move |e| {
         for (actual, expected) in e.update.blocks().zip(expected_blocks.as_slice()) {
-            //println!("{}", actual);
             assert_eq!(actual, expected);
         }
         assert_eq!(&e.delete_set, &expected_ds);

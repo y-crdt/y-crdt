@@ -1,6 +1,6 @@
 use crate::*;
 
-use crate::block::{Block, BlockPtr, Item, ItemContent, ID};
+use crate::block::{Block, BlockPtr, Item, ItemContent, Prelim, ID};
 use crate::block_store::StateVector;
 use crate::event::UpdateEvent;
 use crate::id_set::{DeleteSet, IdSet};
@@ -348,12 +348,12 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    pub fn create_item(
+    pub fn create_item<T: Prelim>(
         &mut self,
         pos: &block::ItemPosition,
-        content: block::ItemContent,
+        value: T,
         parent_sub: Option<String>,
-    ) {
+    ) -> &Item {
         let left = pos.left;
         let right = pos.right;
         let origin = if let Some(ptr) = pos.left.as_ref() {
@@ -376,6 +376,13 @@ impl<'a> Transaction<'a> {
             .get_client_blocks_mut(client_id)
             .integrated_len() as u32;
 
+        let ptr = BlockPtr::new(id, pivot);
+        let (content, remainder) = value.into_content(self, TypePtr::Id(ptr));
+        let inner_ref = if let ItemContent::Type(inner_ref) = &content {
+            Some(inner_ref.clone())
+        } else {
+            None
+        };
         let mut item = Item::new(
             id,
             left,
@@ -389,6 +396,15 @@ impl<'a> Transaction<'a> {
         item.integrate(self, pivot, 0);
         let local_block_list = self.store.blocks.get_client_blocks_mut(client_id);
         local_block_list.push(block::Block::Item(item));
+        let idx = local_block_list.len() - 1;
+
+        if let Some(remainder) = remainder {
+            remainder.integrate(self, inner_ref.unwrap())
+        }
+
+        self.store.blocks.get_client_blocks_mut(client_id)[idx]
+            .as_item()
+            .unwrap()
     }
 
     pub fn commit(&mut self) {

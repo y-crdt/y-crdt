@@ -1,9 +1,10 @@
-use crate::block::{BlockPtr, ItemContent, ItemPosition};
-use crate::types::{Inner, InnerRef};
+use crate::block::{BlockPtr, ItemContent, ItemPosition, Prelim};
+use crate::types::{Inner, InnerRef, TypePtr, Value, TYPE_REFS_ARRAY};
 use crate::Transaction;
 use lib0::any::Any;
 use std::collections::VecDeque;
 
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Array(InnerRef);
 
 impl Array {
@@ -12,7 +13,7 @@ impl Array {
         inner.len()
     }
 
-    pub fn insert<V: Into<ItemContent>>(&self, txn: &mut Transaction, index: u32, value: V) {
+    pub fn insert<V: Prelim>(&self, txn: &mut Transaction, index: u32, value: V) {
         let (start, parent) = {
             let parent = self.0.borrow();
             if index <= parent.len() {
@@ -26,22 +27,22 @@ impl Array {
         } else {
             Inner::index_to_ptr(txn, start, index)
         };
-        let content = value.into();
         let pos = ItemPosition {
             parent,
             left,
             right,
             index: 0,
         };
-        txn.create_item(&pos, content, None);
+
+        txn.create_item(&pos, value, None);
     }
 
-    pub fn push_back<V: Into<ItemContent>>(&self, txn: &mut Transaction, content: V) {
+    pub fn push_back<V: Prelim>(&self, txn: &mut Transaction, content: V) {
         let len = self.len();
         self.insert(txn, len, content)
     }
 
-    pub fn push_front<V: Into<ItemContent>>(&self, txn: &mut Transaction, content: V) {
+    pub fn push_front<V: Prelim>(&self, txn: &mut Transaction, content: V) {
         self.insert(txn, 0, content)
     }
 
@@ -49,7 +50,7 @@ impl Array {
         self.0.remove_at(txn, index, len)
     }
 
-    pub fn get(&self, txn: &Transaction, index: u32) -> Option<Any> {
+    pub fn get(&self, txn: &Transaction, index: u32) -> Option<Value> {
         let inner = self.0.borrow();
         let (content, idx) = inner.get_at(txn, index)?;
         Some(content.get_content(txn).remove(idx))
@@ -59,14 +60,14 @@ impl Array {
         Iter::new(self, txn)
     }
 
-    pub fn to_json(&self, txn: &Transaction<'_>) -> Any {
-        let res = self.iter(txn).collect();
+    pub fn to_json(&self, txn: &Transaction) -> Any {
+        let res = self.iter(txn).map(|v| v.to_json(txn)).collect();
         Any::Array(res)
     }
 }
 
 pub struct Iter<'b, 'txn> {
-    content: VecDeque<Any>,
+    content: VecDeque<Value>,
     ptr: Option<BlockPtr>,
     txn: &'b Transaction<'txn>,
 }
@@ -83,7 +84,7 @@ impl<'b, 'txn> Iter<'b, 'txn> {
 }
 
 impl<'b, 'txn> Iterator for Iter<'b, 'txn> {
-    type Item = Any;
+    type Item = Value;
 
     fn next(&mut self) -> Option<Self::Item> {
         match self.content.pop_front() {
@@ -104,21 +105,39 @@ impl<'b, 'txn> Iterator for Iter<'b, 'txn> {
     }
 }
 
-impl Into<ItemContent> for Array {
-    fn into(self) -> ItemContent {
-        ItemContent::Type(self.0.clone())
-    }
-}
-
 impl From<InnerRef> for Array {
     fn from(inner: InnerRef) -> Self {
         Array(inner)
     }
 }
 
+pub struct PrelimArray<T>(VecDeque<T>);
+
+impl<T> From<VecDeque<T>> for PrelimArray<T> {
+    fn from(vec: VecDeque<T>) -> Self {
+        PrelimArray(vec)
+    }
+}
+
+impl<T: Prelim> Prelim for PrelimArray<T> {
+    fn into_content(self, txn: &mut Transaction, ptr: TypePtr) -> (ItemContent, Option<Self>) {
+        let inner = InnerRef::new(Inner::new(ptr, TYPE_REFS_ARRAY, None));
+        (ItemContent::Type(inner), Some(self))
+    }
+
+    fn integrate(self, txn: &mut Transaction, inner_ref: InnerRef) {
+        let array = Array::from(inner_ref);
+        for value in self.0 {
+            array.push_back(txn, value);
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use crate::test_utils::exchange_updates;
+    use crate::types::map::PrelimMap;
+    use crate::types::Value;
     use crate::Doc;
     use lib0::any::Any;
     use std::collections::HashMap;
@@ -181,7 +200,7 @@ mod test {
         let a2 = t2.get_array("array");
         let actual: Vec<_> = a2.iter(&t2).collect();
 
-        assert_eq!(actual, vec![Any::String("Hi".to_owned())]);
+        assert_eq!(actual, vec!["Hi".into()]);
     }
 
     #[test]
@@ -253,7 +272,7 @@ mod test {
             let actual: Vec<_> = a1.iter(&t1).collect();
             assert_eq!(
                 actual,
-                vec![Any::Number(1.0), Any::Bool(true), Any::Bool(false)]
+                vec![Value::from(1.0), Value::from(true), Value::from(false)]
             );
         }
 
@@ -264,7 +283,7 @@ mod test {
         let actual: Vec<_> = a2.iter(&t2).collect();
         assert_eq!(
             actual,
-            vec![Any::Number(1.0), Any::Bool(true), Any::Bool(false)]
+            vec![Value::from(1.0), Value::from(true), Value::from(false)]
         );
     }
 
@@ -301,7 +320,7 @@ mod test {
         assert_eq!(a2, a3, "Peer 2 and peer 3 states are different");
     }
 
-    fn to_array(d: &Doc) -> Vec<Any> {
+    fn to_array(d: &Doc) -> Vec<Value> {
         let mut txn = d.transact();
         let a = txn.get_array("array");
         a.iter(&txn).collect()
@@ -451,16 +470,20 @@ mod test {
         let mut txn = d.transact();
         let a = txn.get_array("arr");
         for i in 0..10 {
-            let name = format!("map{}", i);
-            let m = txn.get_map(name.as_str());
-            m.insert(&mut txn, "value".to_owned(), i);
-            a.push_back(&mut txn, m);
+            let mut m = HashMap::new();
+            m.insert("value".to_owned(), i);
+            a.push_back(&mut txn, PrelimMap::from(m));
         }
 
         for (i, value) in a.iter(&txn).enumerate() {
             let mut expected = HashMap::new();
             expected.insert("value".to_owned(), Any::Number(i as f64));
-            assert_eq!(value, Any::Map(expected));
+            match value {
+                Value::YMap(ref map) => {
+                    assert_eq!(value.to_json(&txn), Any::Map(expected))
+                }
+                other => panic!("Value of array at index {} was no YMap", i),
+            }
         }
     }
 }

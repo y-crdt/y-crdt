@@ -1,5 +1,5 @@
-use crate::block::{ItemContent, ItemPosition};
-use crate::types::{Entries, Inner, InnerRef};
+use crate::block::{ItemContent, ItemPosition, Prelim};
+use crate::types::{Entries, Inner, InnerRef, TypePtr, Value, TYPE_REFS_MAP};
 use crate::*;
 use lib0::any::Any;
 use std::collections::HashMap;
@@ -17,8 +17,12 @@ impl Map {
         for (key, ptr) in inner.map.iter() {
             if let Some(item) = txn.store.blocks.get_item(ptr) {
                 if !item.is_deleted() {
-                    let value = item.content.get_content_last(txn).unwrap_or(Any::Null);
-                    res.insert(key.clone(), value);
+                    let any = if let Some(value) = item.content.get_content_last(txn) {
+                        value.to_json(txn)
+                    } else {
+                        Any::Null
+                    };
+                    res.insert(key.clone(), any);
                 }
             }
         }
@@ -56,12 +60,7 @@ impl Map {
         Iter(self.blocks(txn))
     }
 
-    pub fn insert<V: Into<ItemContent>>(
-        &self,
-        txn: &mut Transaction,
-        key: String,
-        value: V,
-    ) -> Option<Any> {
+    pub fn insert<V: Prelim>(&self, txn: &mut Transaction, key: String, value: V) -> Option<Value> {
         let previous = self.get(txn, &key);
         let pos = {
             let inner = self.0.borrow();
@@ -74,16 +73,16 @@ impl Map {
             }
         };
 
-        txn.create_item(&pos, value.into(), Some(key));
+        txn.create_item(&pos, value, Some(key));
         previous
     }
 
-    pub fn remove(&self, txn: &mut Transaction, key: &str) -> Option<Any> {
+    pub fn remove(&self, txn: &mut Transaction, key: &str) -> Option<Value> {
         let t = self.0.borrow();
         t.remove(txn, key)
     }
 
-    pub fn get(&self, txn: &Transaction, key: &str) -> Option<Any> {
+    pub fn get(&self, txn: &Transaction, key: &str) -> Option<Value> {
         let t = self.0.borrow();
         t.get(txn, key)
     }
@@ -113,7 +112,7 @@ impl Map {
 pub struct Iter<'a, 'txn>(Entries<'a, 'txn>);
 
 impl<'a, 'txn> Iterator for Iter<'a, 'txn> {
-    type Item = (&'a String, Vec<Any>);
+    type Item = (&'a String, Vec<Value>);
 
     fn next(&mut self) -> Option<Self::Item> {
         let (key, item) = self.0.next()?;
@@ -135,17 +134,11 @@ impl<'a, 'txn> Iterator for Keys<'a, 'txn> {
 pub struct Values<'a, 'txn>(Entries<'a, 'txn>);
 
 impl<'a, 'txn> Iterator for Values<'a, 'txn> {
-    type Item = Vec<Any>;
+    type Item = Vec<Value>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let (_, item) = self.0.next()?;
         Some(item.content.get_content(self.0.txn))
-    }
-}
-
-impl Into<ItemContent> for Map {
-    fn into(self) -> ItemContent {
-        ItemContent::Type(self.0.clone())
     }
 }
 
@@ -155,10 +148,32 @@ impl From<InnerRef> for Map {
     }
 }
 
+pub struct PrelimMap<T>(HashMap<String, T>);
+
+impl<T> From<HashMap<String, T>> for PrelimMap<T> {
+    fn from(map: HashMap<String, T>) -> Self {
+        PrelimMap(map)
+    }
+}
+
+impl<T: Prelim> Prelim for PrelimMap<T> {
+    fn into_content(self, _txn: &mut Transaction, ptr: TypePtr) -> (ItemContent, Option<Self>) {
+        let inner = InnerRef::new(Inner::new(ptr, TYPE_REFS_MAP, None));
+        (ItemContent::Type(inner), Some(self))
+    }
+
+    fn integrate(self, txn: &mut Transaction, inner_ref: InnerRef) {
+        let map = Map::from(inner_ref);
+        for (key, value) in self.0 {
+            map.insert(txn, key, value);
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use crate::test_utils::exchange_updates;
-    use crate::types::Map;
+    use crate::types::{Map, Value};
     use crate::{Doc, Transaction};
     use lib0::any::Any;
     use std::collections::HashMap;
@@ -195,16 +210,16 @@ mod test {
         //TODO: YArray within YMap
         fn compare_all(t: &Transaction<'_>, m: &Map) {
             assert_eq!(m.len(&t), 5);
-            assert_eq!(m.get(&t, &"number".to_owned()), Some(Any::Number(1f64)));
-            assert_eq!(m.get(&t, &"boolean0".to_owned()), Some(Any::Bool(false)));
-            assert_eq!(m.get(&t, &"boolean1".to_owned()), Some(Any::Bool(true)));
+            assert_eq!(m.get(&t, &"number".to_owned()), Some(Value::from(1f64)));
+            assert_eq!(m.get(&t, &"boolean0".to_owned()), Some(Value::from(false)));
+            assert_eq!(m.get(&t, &"boolean1".to_owned()), Some(Value::from(true)));
             assert_eq!(
                 m.get(&t, &"string".to_owned()),
-                Some(Any::String("hello Y".to_owned()))
+                Some(Value::from("hello Y"))
             );
             assert_eq!(
                 m.get(&t, &"object".to_owned()),
-                Some(Any::Map({
+                Some(Value::from({
                     let mut m = HashMap::new();
                     let mut n = HashMap::new();
                     n.insert("key2".to_owned(), Any::String("value".to_owned()));
@@ -241,9 +256,9 @@ mod test {
         let m2 = t2.get_map("map");
         assert_eq!(
             m2.get(&t2, &"stuff".to_owned()),
-            Some(Any::String("stuffy".to_owned()))
+            Some(Value::from("stuffy"))
         );
-        assert_eq!(m2.get(&t2, &"null".to_owned()), Some(Any::Null));
+        assert_eq!(m2.get(&t2, &"null".to_owned()), Some(Value::Any(Any::Null)));
     }
 
     #[test]
@@ -265,15 +280,8 @@ mod test {
         d1.apply_update(&mut t1, u2.as_slice());
         d2.apply_update(&mut t2, u1.as_slice());
 
-        assert_eq!(
-            m1.get(&t1, &"stuff".to_owned()),
-            Some(Any::String("c1".to_owned()))
-        );
-
-        assert_eq!(
-            m2.get(&t2, &"stuff".to_owned()),
-            Some(Any::String("c1".to_owned()))
-        );
+        assert_eq!(m1.get(&t1, &"stuff".to_owned()), Some(Value::from("c1")));
+        assert_eq!(m2.get(&t2, &"stuff".to_owned()), Some(Value::from("c1")));
     }
 
     #[test]
@@ -290,10 +298,7 @@ mod test {
         assert_eq!(m1.len(&t1), 2);
 
         // remove 'stuff'
-        assert_eq!(
-            m1.remove(&mut t1, &key1),
-            Some(Any::String("c0".to_owned()))
-        );
+        assert_eq!(m1.remove(&mut t1, &key1), Some(Value::from("c0")));
         assert_eq!(m1.len(&t1), 1);
 
         // remove 'stuff' again - nothing should happen
@@ -301,10 +306,7 @@ mod test {
         assert_eq!(m1.len(&t1), 1);
 
         // remove 'other-stuff'
-        assert_eq!(
-            m1.remove(&mut t1, &key2),
-            Some(Any::String("c1".to_owned()))
-        );
+        assert_eq!(m1.remove(&mut t1, &key2), Some(Value::from("c1")));
         assert_eq!(m1.len(&t1), 0);
     }
 
@@ -431,7 +433,7 @@ mod test {
 
             assert_eq!(
                 map.get(&txn, &"stuff".to_owned()),
-                Some(Any::String("c3".to_owned())),
+                Some(Value::from("c3")),
                 "peer {} - map entry resolved to unexpected value",
                 doc.client_id
             );

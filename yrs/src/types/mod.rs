@@ -7,8 +7,9 @@ use crate::*;
 pub use map::Map;
 pub use text::Text;
 
-use crate::block::{BlockPtr, Item, ItemContent};
-use crate::types::xml::XmlElement;
+use crate::block::{BlockPtr, Item, ItemContent, ItemPosition, Prelim};
+use crate::types::array::Array;
+use crate::types::xml::{XmlElement, XmlText};
 use lib0::any::Any;
 use std::cell::{BorrowMutError, Ref, RefCell, RefMut};
 use std::collections::HashMap;
@@ -49,6 +50,20 @@ impl InnerRef {
         self.0.try_borrow_mut()
     }
 
+    pub fn into_value(self, txn: &Transaction) -> Value {
+        let type_ref = { self.as_ref().type_ref() };
+        match type_ref {
+            TYPE_REFS_ARRAY => Value::YArray(Array::from(self)),
+            TYPE_REFS_MAP => Value::YMap(Map::from(self)),
+            TYPE_REFS_TEXT => Value::YText(Text::from(self)),
+            TYPE_REFS_XML_ELEMENT => Value::YXmlElement(XmlElement::from(self)),
+            TYPE_REFS_XML_FRAGMENT => Value::YXmlElement(XmlElement::from(self)),
+            TYPE_REFS_XML_TEXT => Value::YXmlText(XmlText::from(self)),
+            //TYPE_REFS_XML_HOOK => Value::YXmlElement(XmlElement::from(self)),
+            other => panic!("Cannot convert to value - unsupported type ref: {}", other),
+        }
+    }
+
     pub(crate) fn remove_at(&self, txn: &mut Transaction, index: u32, mut len: u32) {
         let start = {
             let parent = self.borrow();
@@ -86,6 +101,35 @@ impl InnerRef {
         if len > 0 {
             panic!("Array length exceeded");
         }
+    }
+
+    pub(crate) fn insert_at<'t, V: Prelim>(
+        &self,
+        txn: &'t mut Transaction,
+        index: u32,
+        value: V,
+    ) -> &'t Item {
+        let (start, parent) = {
+            let parent = self.borrow();
+            if index <= parent.len() {
+                (parent.start, parent.ptr.clone())
+            } else {
+                panic!("Cannot insert item at index over the length of an array")
+            }
+        };
+        let (left, right) = if index == 0 {
+            (None, None)
+        } else {
+            Inner::index_to_ptr(txn, start, index)
+        };
+        let pos = ItemPosition {
+            parent,
+            left,
+            right,
+            index: 0,
+        };
+
+        txn.create_item(&pos, value, None)
     }
 }
 
@@ -147,26 +191,6 @@ impl Inner {
         self.len
     }
 
-    /// Converts current root type into [Any] object equivalent that resembles enhanced JSON payload.
-    pub fn to_json(&self, txn: &Transaction) -> Any {
-        match self.type_ref() {
-            TYPE_REFS_ARRAY => {
-                let values = self
-                    .iter(txn)
-                    .flat_map(|i| i.content.get_content(txn))
-                    .collect();
-                Any::Array(values)
-            }
-            TYPE_REFS_MAP => Map::to_json_inner(self, txn),
-            TYPE_REFS_TEXT => Any::String(Text::to_string_inner(self, txn)),
-            TYPE_REFS_XML_ELEMENT => Any::String(XmlElement::to_string_inner(self, txn)),
-            TYPE_REFS_XML_FRAGMENT => Any::String(XmlElement::to_string_inner(self, txn)),
-            TYPE_REFS_XML_HOOK => Map::to_json_inner(self, txn),
-            TYPE_REFS_XML_TEXT => Any::String(Text::to_string_inner(self, txn)),
-            other => todo!(),
-        }
-    }
-
     /// Get iterator over (String, Block) entries of a map component of a current root type.
     /// Deleted blocks are skipped by this iterator.
     pub(crate) fn entries<'a, 'b, 'txn>(&'a self, txn: &'b Transaction<'txn>) -> Entries<'b, 'txn> {
@@ -181,7 +205,7 @@ impl Inner {
 
     /// Returns a materialized value of non-deleted entry under a given `key` of a map component
     /// of a current root type.
-    pub(crate) fn get(&self, txn: &Transaction<'_>, key: &str) -> Option<Any> {
+    pub(crate) fn get(&self, txn: &Transaction<'_>, key: &str) -> Option<Value> {
         let ptr = self.map.get(key)?;
         let item = txn.store.blocks.get_item(ptr)?;
         if item.is_deleted() {
@@ -214,7 +238,7 @@ impl Inner {
 
     /// Removes an entry under given `key` of a map component of a current root type, returning
     /// a materialized representation of value stored underneath if entry existed prior deletion.
-    pub(crate) fn remove(&self, txn: &mut Transaction, key: &str) -> Option<Any> {
+    pub(crate) fn remove(&self, txn: &mut Transaction, key: &str) -> Option<Value> {
         let ptr = self.map.get(key)?;
         let prev = {
             let item = txn.store.blocks.get_item(ptr)?;
@@ -278,6 +302,62 @@ impl Inner {
             ptr = item.right.clone();
         }
         (None, None)
+    }
+}
+
+/// Value that can be returned by Yrs data types. This includes [Any] which is an extension
+/// representation of JSON, but also nested complex collaborative structures specific to Yrs.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Value {
+    /// Primitive value.
+    Any(Any),
+    YText(Text),
+    YArray(Array),
+    YMap(Map),
+    YXmlElement(XmlElement),
+    YXmlText(XmlText),
+}
+
+impl Value {
+    /// Converts current value into [Any] object equivalent that resembles enhanced JSON payload.
+    /// Rules are:
+    ///
+    /// - Primitive types ([Value::Any]) are passed right away, as no transformation is needed.
+    /// - [Value::YArray] is converted into JSON-like array.
+    /// - [Value::YMap] is converted into JSON-like object map.
+    /// - [Value::YText], [Value::YXmlText] and [Value::YXmlElement] are converted into strings
+    ///   (XML types are stringified XML representation).
+    pub fn to_json(self, txn: &Transaction) -> Any {
+        match self {
+            Value::Any(a) => a,
+            Value::YText(v) => Any::String(v.to_string(txn)),
+            Value::YArray(v) => v.to_json(txn),
+            Value::YMap(v) => v.to_json(txn),
+            Value::YXmlElement(v) => Any::String(v.to_string(txn)),
+            Value::YXmlText(v) => Any::String(v.to_string(txn)),
+        }
+    }
+
+    /// Converts current value into stringified representation.
+    pub fn to_string(self, txn: &Transaction) -> String {
+        match self {
+            Value::Any(a) => a.to_string(),
+            Value::YText(v) => v.to_string(txn),
+            Value::YArray(v) => v.to_json(txn).to_string(),
+            Value::YMap(v) => v.to_json(txn).to_string(),
+            Value::YXmlElement(v) => v.to_string(txn),
+            Value::YXmlText(v) => v.to_string(txn),
+        }
+    }
+}
+
+impl<T> From<T> for Value
+where
+    T: Into<Any>,
+{
+    fn from(v: T) -> Self {
+        let any: Any = v.into();
+        Value::Any(any)
     }
 }
 
