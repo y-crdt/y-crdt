@@ -1,7 +1,6 @@
-use crate::block::{Item, ItemContent, ItemPosition};
+use crate::block::{Item, ItemContent, ItemPosition, Prelim};
 use crate::types::{
-    Entries, Inner, InnerRef, Map, Text, TypePtr, TypeRefs, TYPE_REFS_XML_ELEMENT,
-    TYPE_REFS_XML_TEXT,
+    Entries, Inner, InnerRef, Map, Text, TypePtr, Value, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT,
 };
 use crate::Transaction;
 use lib0::any::Any;
@@ -53,7 +52,7 @@ impl XmlElement {
         write!(&mut s, ">").unwrap();
         for i in inner.iter(txn) {
             for content in i.content.get_content(txn) {
-                write!(&mut s, "{}", content).unwrap();
+                write!(&mut s, "{}", content.to_string(txn)).unwrap();
             }
         }
         write!(&mut s, "</{}>", tag).unwrap();
@@ -76,7 +75,7 @@ impl XmlElement {
         attr_value: V,
     ) {
         let key = attr_name.to_string();
-        let value = attr_value.to_string();
+        let value = crate::block::Text(attr_value.to_string());
         let pos = {
             let inner = self.inner();
             let left = inner.map.get(&key);
@@ -88,13 +87,13 @@ impl XmlElement {
             }
         };
 
-        txn.create_item(&pos, value.into(), Some(key));
+        txn.create_item(&pos, value, Some(key));
     }
 
     pub fn get_attribute(&self, txn: &Transaction, attr_name: &str) -> Option<String> {
         let inner: Ref<_> = self.inner();
         let value = inner.get(txn, attr_name)?;
-        Some(value.to_string())
+        Some(value.to_string(txn))
     }
 
     pub fn attributes<'a, 'b, 'txn>(&'a self, txn: &'b Transaction<'txn>) -> Attributes<'b, 'txn> {
@@ -187,7 +186,7 @@ impl<'a, 'txn> Iterator for Attributes<'a, 'txn> {
         let value = block
             .content
             .get_content_last(self.0.txn)
-            .map(|v| v.to_string())
+            .map(|v| v.to_string(self.0.txn))
             .unwrap_or(String::default());
 
         Some((key.as_str(), value))
@@ -241,7 +240,7 @@ impl XmlFragment {
         let inner = self.inner();
         for i in inner.iter(txn) {
             for content in i.content.get_content(txn) {
-                write!(&mut s, "{}", content).unwrap();
+                write!(&mut s, "{}", content.to_string(txn)).unwrap();
             }
         }
         s
@@ -253,48 +252,23 @@ impl XmlFragment {
         index: u32,
         name: S,
     ) -> XmlElement {
-        let inner = self.insert(txn, index, TYPE_REFS_XML_ELEMENT, Some(name.to_string()));
-        XmlElement::from(inner)
+        let item = self
+            .0
+            .insert_at(txn, index, PrelimXml::Elem(name.to_string()));
+        if let ItemContent::Type(inner) = &item.content {
+            XmlElement::from(inner.clone())
+        } else {
+            panic!("Defect: inserted XML element returned primitive value block")
+        }
     }
 
     pub fn insert_text(&self, txn: &mut Transaction, index: u32) -> XmlText {
-        let inner = self.insert(txn, index, TYPE_REFS_XML_TEXT, None);
-        XmlText::from(inner)
-    }
-
-    fn insert(
-        &self,
-        txn: &mut Transaction,
-        index: u32,
-        type_refs: TypeRefs,
-        name: Option<String>,
-    ) -> InnerRef {
-        let (start, parent) = {
-            let parent = self.inner();
-            if index <= parent.len() {
-                (parent.start, parent.ptr.clone())
-            } else {
-                panic!("Cannot insert item at index over the length of an array")
-            }
-        };
-        let (left, right) = if index == 0 {
-            (None, None)
+        let item = self.0.insert_at(txn, index, PrelimXml::Text);
+        if let ItemContent::Type(inner) = &item.content {
+            XmlText::from(inner.clone())
         } else {
-            Inner::index_to_ptr(txn, start, index)
-        };
-        let content = {
-            let parent = self.inner();
-            let inner = Inner::new(parent.ptr.clone(), type_refs, name);
-            InnerRef::new(inner)
-        };
-        let pos = ItemPosition {
-            parent,
-            left,
-            right,
-            index: 0,
-        };
-        txn.create_item(&pos, ItemContent::Type(content.clone()), None);
-        content
+            panic!("Defect: inserted XML element returned primitive value block")
+        }
     }
 
     pub fn remove(&self, txn: &mut Transaction, index: u32, len: u32) {
@@ -340,6 +314,7 @@ pub struct TreeWalker<'a, 'txn> {
     txn: &'a Transaction<'txn>,
     current: Option<&'a Item>,
     root: TypePtr,
+    first_call: bool,
 }
 
 impl<'a, 'txn> TreeWalker<'a, 'txn> {
@@ -350,7 +325,12 @@ impl<'a, 'txn> TreeWalker<'a, 'txn> {
             .as_ref()
             .and_then(|p| txn.store.blocks.get_item(p));
 
-        TreeWalker { txn, current, root }
+        TreeWalker {
+            txn,
+            current,
+            root,
+            first_call: true,
+        }
     }
 }
 
@@ -360,43 +340,55 @@ impl<'a, 'txn> Iterator for TreeWalker<'a, 'txn> {
     /// Tree walker used depth-first search to move over the xml tree.
     fn next(&mut self) -> Option<Self::Item> {
         let mut result = None;
-        while let Some(current) = self.current.take() {
-            if current.is_deleted() {
-                self.current = current
-                    .right
-                    .as_ref()
-                    .and_then(|ptr| self.txn.store.blocks.get_item(ptr));
-                continue;
+        let mut n = self.current.take();
+        if let Some(current) = n {
+            if !self.first_call || current.is_deleted() {
+                while {
+                    if let ItemContent::Type(t) = &current.content {
+                        let inner = t.borrow();
+                        let type_ref = inner.type_ref();
+                        if !current.is_deleted()
+                            && (type_ref == TYPE_REFS_XML_ELEMENT || type_ref == TYPE_REFS_XML_TEXT)
+                            && inner.start.is_some()
+                        {
+                            // walk down in the tree
+                            n = inner
+                                .start
+                                .as_ref()
+                                .and_then(|ptr| self.txn.store.blocks.get_item(ptr));
+                        } else {
+                            // walk right or up in the tree
+                            while let Some(current) = n {
+                                if let Some(right) = current.right.as_ref() {
+                                    n = self.txn.store.blocks.get_item(right);
+                                    break;
+                                } else if current.parent == self.root {
+                                    n = None;
+                                } else {
+                                    n = self
+                                        .txn
+                                        .store
+                                        .get_type(&current.parent)
+                                        .and_then(|t| t.as_ref().item.as_ref())
+                                        .and_then(|ptr| self.txn.store.blocks.get_item(ptr));
+                                }
+                            }
+                        }
+                    }
+                    if let Some(current) = n {
+                        current.is_deleted()
+                    } else {
+                        false
+                    }
+                } {}
             }
-
-            if let ItemContent::Type(inner) = &current.content {
-                // walk down in the tree
-                self.current = {
-                    inner
-                        .borrow()
-                        .start
-                        .as_ref()
-                        .and_then(|ptr| self.txn.store.blocks.get_item(ptr))
-                };
-
-                result = Some(Xml::from(inner.clone()));
+            self.first_call = false;
+            self.current = n;
+        }
+        if let Some(current) = self.current {
+            if let ItemContent::Type(t) = &current.content {
+                result = Some(Xml::from(t.clone()));
             }
-
-            if self.current.is_none() {
-                self.current = if let Some(right) = current.right.as_ref() {
-                    self.txn.store.blocks.get_item(right) // walk to right neighbor
-                } else if current.parent != self.root {
-                    // walk up in the tree hierarchy
-                    self.txn
-                        .store
-                        .get_type(&current.parent)
-                        .and_then(|inner| inner.borrow().item.clone())
-                        .and_then(|ptr| self.txn.store.blocks.get_item(&ptr))
-                } else {
-                    None
-                };
-            }
-            break;
         }
         result
     }
@@ -439,20 +431,15 @@ impl XmlHook {
         self.0.iter(txn)
     }
 
-    pub fn insert<V: Into<ItemContent>>(
-        &self,
-        txn: &mut Transaction,
-        key: String,
-        value: V,
-    ) -> Option<Any> {
+    pub fn insert<V: Prelim>(&self, txn: &mut Transaction, key: String, value: V) -> Option<Value> {
         self.0.insert(txn, key, value)
     }
 
-    pub fn remove(&self, txn: &mut Transaction, key: &str) -> Option<Any> {
+    pub fn remove(&self, txn: &mut Transaction, key: &str) -> Option<Value> {
         self.0.remove(txn, key)
     }
 
-    pub fn get(&self, txn: &Transaction, key: &str) -> Option<Any> {
+    pub fn get(&self, txn: &Transaction, key: &str) -> Option<Value> {
         self.0.get(txn, key)
     }
 
@@ -462,12 +449,6 @@ impl XmlHook {
 
     pub fn clear(&self, txn: &mut Transaction) {
         self.0.clear(txn)
-    }
-}
-
-impl Into<ItemContent> for XmlHook {
-    fn into(self) -> ItemContent {
-        self.0.into()
     }
 }
 
@@ -506,7 +487,7 @@ impl XmlText {
         attr_value: V,
     ) {
         let key = attr_name.to_string();
-        let value = attr_value.to_string();
+        let value = crate::block::Text(attr_value.to_string());
         let pos = {
             let inner = self.inner();
             let left = inner.map.get(&key);
@@ -518,13 +499,13 @@ impl XmlText {
             }
         };
 
-        txn.create_item(&pos, value.into(), Some(key));
+        txn.create_item(&pos, value, Some(key));
     }
 
     pub fn get_attribute(&self, txn: &Transaction, attr_name: &str) -> Option<String> {
         let inner: Ref<_> = self.inner();
         let value = inner.get(txn, attr_name)?;
-        Some(value.to_string())
+        Some(value.to_string(txn))
     }
 
     pub fn attributes<'a, 'b, 'txn>(&'a self, txn: &'b Transaction<'txn>) -> Attributes<'b, 'txn> {
@@ -551,7 +532,7 @@ impl XmlText {
         if let Some(mut pos) = self.0.find_position(txn, index) {
             let parent = { TypePtr::Id(self.inner().item.unwrap()) };
             pos.parent = parent;
-            txn.create_item(&pos, ItemContent::String(content.to_owned()), None);
+            txn.create_item(&pos, crate::block::Text(content.to_owned()), None);
         } else {
             panic!("The type or the position doesn't exist!");
         }
@@ -583,6 +564,25 @@ impl Into<XmlText> for Text {
     fn into(self) -> XmlText {
         XmlText(self)
     }
+}
+
+pub enum PrelimXml {
+    Elem(String),
+    Text,
+}
+
+impl Prelim for PrelimXml {
+    fn into_content(self, txn: &mut Transaction, ptr: TypePtr) -> (ItemContent, Option<Self>) {
+        let inner = match self {
+            PrelimXml::Elem(node_name) => {
+                InnerRef::new(Inner::new(ptr, TYPE_REFS_XML_ELEMENT, Some(node_name)))
+            }
+            PrelimXml::Text => InnerRef::new(Inner::new(ptr, TYPE_REFS_XML_TEXT, None)),
+        };
+        (ItemContent::Type(inner), None)
+    }
+
+    fn integrate(self, txn: &mut Transaction, inner_ref: InnerRef) {}
 }
 
 fn next_sibling(inner: Ref<Inner>, txn: &Transaction) -> Option<Xml> {
@@ -637,7 +637,7 @@ fn parent(inner: Ref<Inner>, txn: &Transaction) -> Option<XmlElement> {
 
 #[cfg(test)]
 mod test {
-    use crate::types::xml::{Xml, XmlElement};
+    use crate::types::xml::Xml;
     use crate::Doc;
 
     #[test]
