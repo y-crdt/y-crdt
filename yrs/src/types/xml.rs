@@ -1,5 +1,6 @@
 use crate::block::{Item, ItemContent, ItemPosition, Prelim};
 use crate::types::array::ArrayRemoveError;
+use crate::types::text::TextRemoveError;
 use crate::types::{
     Branch, BranchRef, Entries, Map, Text, TypePtr, Value, TYPE_REFS_XML_ELEMENT,
     TYPE_REFS_XML_TEXT,
@@ -660,7 +661,12 @@ impl XmlText {
     /// Removes a number of characters specified by a `len` parameter from this XML text structure,
     /// starting at given `index`.
     /// This method may panic if `index` if greater than a length of this text.
-    pub fn remove(&self, txn: &mut Transaction, index: u32, len: u32) {
+    pub fn remove(
+        &self,
+        txn: &mut Transaction,
+        index: u32,
+        len: u32,
+    ) -> Result<(), TextRemoveError> {
         self.0.remove(txn, index, len)
     }
 }
@@ -768,7 +774,7 @@ mod test {
         let d2 = Doc::with_client_id(1);
         let mut t2 = d2.transact();
         let xml2 = t2.get_xml_element("xml");
-        d2.apply_update(&mut t2, d1.encode_state_as_update(&t1).as_slice());
+        d2.apply_update_v1(&mut t2, d1.encode_state_as_update_v1(&t1).as_slice());
         assert_eq!(xml2.get_attribute(&t2, "height"), Some("10".to_string()));
     }
 
@@ -865,13 +871,13 @@ mod test {
         let expected = "<UNDEFINED>hello<p></p></UNDEFINED>";
         assert_eq!(r1.to_string(&t1), expected);
 
-        let u1 = d1.encode_state_as_update(&t1);
+        let u1 = d1.encode_state_as_update_v1(&t1);
 
         let d2 = Doc::with_client_id(2);
         let mut t2 = d2.transact();
         let r2 = t2.get_xml_element("root");
 
-        d2.apply_update(&mut t2, u1.as_slice());
+        d2.apply_update_v1(&mut t2, u1.as_slice());
         assert_eq!(r2.to_string(&t2), expected);
     }
 
@@ -900,7 +906,7 @@ mod test {
             1, 3, 1, 0, 7, 1, 4, 114, 111, 111, 116, 6, 4, 0, 1, 0, 5, 104, 101, 108, 108, 111,
             135, 1, 0, 3, 1, 112, 0,
         ];
-        let u1 = d1.encode_state_as_update(&t1);
+        let u1 = d1.encode_state_as_update_v1(&t1);
         assert_eq!(u1.as_slice(), expected);
     }
 }

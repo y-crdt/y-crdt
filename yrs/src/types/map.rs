@@ -248,8 +248,8 @@ mod test {
 
         compare_all(&t1, &m1);
 
-        let update = d1.encode_state_as_update(&t1);
-        d2.apply_update(&mut t2, update.as_slice());
+        let update = d1.encode_state_as_update_v1(&t1);
+        d2.apply_update_v1(&mut t2, update.as_slice());
 
         compare_all(&t2, &m2);
     }
@@ -263,12 +263,12 @@ mod test {
         m1.insert(&mut t1, "stuff".to_owned(), "stuffy");
         m1.insert(&mut t1, "null".to_owned(), None as Option<String>);
 
-        let update = d1.encode_state_as_update(&t1);
+        let update = d1.encode_state_as_update_v1(&t1);
 
         let d2 = Doc::with_client_id(2);
         let mut t2 = d2.transact();
 
-        d2.apply_update(&mut t2, update.as_slice());
+        d2.apply_update_v1(&mut t2, update.as_slice());
 
         let m2 = t2.get_map("map");
         assert_eq!(
@@ -291,11 +291,11 @@ mod test {
         m1.insert(&mut t1, "stuff".to_owned(), "c0");
         m2.insert(&mut t2, "stuff".to_owned(), "c1");
 
-        let u1 = d1.encode_state_as_update(&t1);
-        let u2 = d2.encode_state_as_update(&t2);
+        let u1 = d1.encode_state_as_update_v1(&t1);
+        let u2 = d2.encode_state_as_update_v1(&t2);
 
-        d1.apply_update(&mut t1, u2.as_slice());
-        d2.apply_update(&mut t2, u1.as_slice());
+        d1.apply_update_v1(&mut t1, u2.as_slice());
+        d2.apply_update_v1(&mut t2, u1.as_slice());
 
         assert_eq!(m1.get(&t1, &"stuff".to_owned()), Some(Value::from("c1")));
         assert_eq!(m2.get(&t2, &"stuff".to_owned()), Some(Value::from("c1")));
@@ -344,8 +344,8 @@ mod test {
         let d2 = Doc::with_client_id(2);
         let mut t2 = d2.transact();
 
-        let u1 = d1.encode_state_as_update(&t1);
-        d2.apply_update(&mut t2, u1.as_slice());
+        let u1 = d1.encode_state_as_update_v1(&t1);
+        d2.apply_update_v1(&mut t2, u1.as_slice());
 
         let m2 = t2.get_map("map");
         assert_eq!(m2.len(&t2), 0);

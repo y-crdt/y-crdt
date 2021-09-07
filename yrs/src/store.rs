@@ -10,16 +10,39 @@ use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-pub struct Store {
+/// Store is a core element of a document. It contains all of the information, like block store
+/// map of root types, pending updates waiting to be applied once a missing update information
+/// arrives and all subscribed callbacks.
+pub(crate) struct Store {
+    /// An unique identifier of a current document replica.
     pub client_id: u64,
+
+    /// Root types (a.k.a. top-level types). These types are defined by users at the document level,
+    /// they have their own unique names and represent core shared types that expose operations
+    /// which can be called concurrently by remote peers in a conflict-free manner.
     pub types: HashMap<Rc<String>, BranchRef>,
+
+    /// A block store of a current document. It represent all blocks (inserted or tombstoned
+    /// operations) integrated - and therefore visible - into a current document.
     pub(crate) blocks: BlockStore,
+
+    /// A pending update. It contains blocks, which are not yet integrated into `blocks`, usually
+    /// because due to issues in update exchange, there were some missing blocks that need to be
+    /// integrated first before the data from `pending` can be applied safely.
     pub pending: Option<PendingUpdate>,
+
+    /// A pending delete set. Just like `pending`, it contains deleted ranges of blocks that have
+    /// not been yet applied due to missing blocks that prevent `pending` update to be integrated
+    /// into `blocks`.
     pub pending_ds: Option<DeleteSet>,
+
+    /// A subscription handler. It contains all callbacks with registered by user functions that
+    /// are supposed to be called, once a new update arrives.
     pub(crate) update_events: EventHandler<UpdateEvent>,
 }
 
 impl Store {
+    /// Create a new empty store in context of a given `client_id`.
     pub fn new(client_id: u64) -> Self {
         Store {
             client_id,
@@ -31,10 +54,16 @@ impl Store {
         }
     }
 
+    /// Get the latest clock sequence number observed and integrated into a current store client.
+    /// This is exclusive value meaning it describes a clock value of the beginning of the next
+    /// block that's about to be inserted. You cannot use that clock value to find any existing
+    /// block content.
     pub fn get_local_state(&self) -> u32 {
         self.blocks.get_state(&self.client_id)
     }
 
+    /// Returns a branch reference to a complex type identified by its pointer. Returns `None` if
+    /// no such type could be found or was ever defined.
     pub fn get_type(&self, ptr: &TypePtr) -> Option<&BranchRef> {
         match ptr {
             TypePtr::Id(id) => {
@@ -51,6 +80,10 @@ impl Store {
         }
     }
 
+    /// Retrieves a complex data structure reference given its type pointer. In case of root types
+    /// (defined by the user at document level) of such type didn't exist before, it will be created
+    /// and returned. For other (recursively nested) types, they will be returned only if they
+    /// already existed. Otherwise a `None` will be returned.
     pub fn init_type_from_ptr(
         &mut self,
         ptr: &types::TypePtr,
@@ -76,6 +109,10 @@ impl Store {
             }
         }
     }
+
+    /// Creates or returns a new empty root type (defined by user at the document level). This type
+    /// has user-specified `name`, a `node_name` (which is used only in case of XML elements) and a
+    /// type ref describing which shared type does this instance represent.
     pub fn create_type(
         &mut self,
         name: &str,

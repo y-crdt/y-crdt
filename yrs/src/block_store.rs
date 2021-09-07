@@ -343,57 +343,66 @@ pub(crate) struct BlockStore {
 pub(crate) type Iter<'a> = std::collections::hash_map::Iter<'a, u64, ClientBlockList>;
 
 impl BlockStore {
+    /// Creates a new block store instance from a given collection.
     pub(crate) fn from(
         clients: HashMap<u64, ClientBlockList, BuildHasherDefault<ClientHasher>>,
     ) -> Self {
         Self { clients }
     }
 
+    /// Creates a new empty block store instance.
     pub fn new() -> Self {
         Self {
             clients: HashMap::<u64, ClientBlockList, BuildHasherDefault<ClientHasher>>::default(),
         }
     }
 
+    /// Checks if block store is empty. Empty block store doesn't contain any blocks, neither active
+    /// nor tombstoned.
     pub fn is_empty(&self) -> bool {
         self.clients.is_empty()
     }
 
+    /// Checks if the were any blocks integrated from a given `client`.
     pub fn contains_client(&self, client: &u64) -> bool {
         self.clients.contains_key(client)
     }
 
+    /// Returns an immutable reference to a block list for a particular `client`. Returns `None` if
+    /// no block list existed for provided `client` in current block store.
     pub fn get(&self, client: &u64) -> Option<&ClientBlockList> {
         self.clients.get(client)
     }
 
+    /// Returns a mutable reference to a block list for a particular `client`. Returns `None` if
+    /// no block list existed for provided `client` in current block store.
     pub fn get_mut(&mut self, client: &u64) -> Option<&mut ClientBlockList> {
         self.clients.get_mut(client)
     }
 
-    pub fn remove(&mut self, client: &u64) -> Option<ClientBlockList> {
-        self.clients.remove(client)
-    }
-
+    /// Returns an iterator over the client and block lists pairs known to a current block store.
     pub fn iter(&self) -> Iter<'_> {
         self.clients.iter()
     }
 
+    /// Returns a state vector, which is a compact representation of the state of blocks integrated
+    /// into a current block store. This state vector can later be encoded and send to a remote
+    /// peers in order to calculate differences between two stored and produce a compact update,
+    /// that can be applied in order to fill missing update information.
     pub fn get_state_vector(&self) -> StateVector {
         StateVector::from(self)
     }
 
-    pub fn find_item_ptr(&self, id: &block::ID) -> block::BlockPtr {
-        let x = block::BlockPtr::from(*id);
-        x
-    }
-
+    /// Returns mutable reference to an item, given its pointer. Returns `None` if not such block
+    /// could be found.
     pub(crate) fn get_item_mut(&mut self, ptr: &block::BlockPtr) -> Option<&mut block::Item> {
         let blocks = self.clients.get_mut(&ptr.id.client)?;
         let block = blocks.list.get_mut(ptr.pivot())?;
         block.as_item_mut()
     }
 
+    /// Returns immutable reference to a block, given its pointer. Returns `None` if not such
+    /// block could be found.
     pub(crate) fn get_block(&self, ptr: &block::BlockPtr) -> Option<&block::Block> {
         let clients = self.clients.get(&ptr.id.client)?;
         match clients.list.get(ptr.pivot()) {
@@ -407,11 +416,16 @@ impl BlockStore {
         }
     }
 
+    /// Returns immutable reference to an item, given its pointer. Returns `None` if not such
+    /// block could be found.
     pub(crate) fn get_item(&self, ptr: &block::BlockPtr) -> Option<&block::Item> {
         let block = self.get_block(ptr)?;
         block.as_item()
     }
 
+    /// Returns the last observed clock sequence number for a given `client`. This is exclusive
+    /// value meaning it describes a clock value of the beginning of the next block that's about
+    /// to be inserted. You cannot use that clock value to find any existing block content.
     pub fn get_state(&self, client: &u64) -> u32 {
         if let Some(client_structs) = self.clients.get(client) {
             client_structs.get_state()
@@ -420,43 +434,24 @@ impl BlockStore {
         }
     }
 
-    pub(crate) fn get_client_blocks_mut(&mut self, client_id: u64) -> &mut ClientBlockList {
+    /// Returns a mutable reference to block list for the given `client`. In case when no such list
+    /// existed, a new one will be created and returned.
+    pub(crate) fn get_client_blocks_mut(&mut self, client: u64) -> &mut ClientBlockList {
         self.clients
-            .entry(client_id)
+            .entry(client)
             .or_insert_with(ClientBlockList::new)
     }
 
+    /// Returns a mutable reference to block list for the given `client`. In case when no such list
+    /// existed, a new one will be created with predefined `capacity` and returned.
     pub(crate) fn get_client_blocks_with_capacity_mut(
         &mut self,
-        client_id: u64,
+        client: u64,
         capacity: usize,
     ) -> &mut ClientBlockList {
         self.clients
-            .entry(client_id)
+            .entry(client)
             .or_insert_with(|| ClientBlockList::with_capacity(capacity))
-    }
-
-    pub(crate) fn find(&self, id: &ID) -> Option<&Block> {
-        let blocks = self.clients.get(&id.client)?;
-        blocks.find_block(id.clock)
-    }
-
-    pub(crate) fn get_item_from_type_ptr(&self, ptr: &TypePtr) -> Option<&Item> {
-        if let TypePtr::Id(ptr) = ptr {
-            if let Some(Block::Item(item)) = &self.get_block(ptr) {
-                return Some(item);
-            }
-        }
-
-        None
-    }
-
-    pub(crate) fn insert(
-        &mut self,
-        client: u64,
-        blocks: ClientBlockList,
-    ) -> Option<ClientBlockList> {
-        self.clients.insert(client, blocks)
     }
 
     /// Given block pointer, tries to split it, returning a pointers to left and right halves

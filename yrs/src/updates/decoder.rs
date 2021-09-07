@@ -13,22 +13,55 @@ pub trait Decode: Sized {
     }
 }
 
+/// Trait used by lib0 decoders. Natively lib0 encoding supports two versions:
+///
+/// 1. 1st version (implemented in Yrs) uses simple optimization techniques like var int encoding.
+/// 2. 2nd version optimizes bigger batches of blocks by using run-length encoding.
+///
+/// Both of these define a common set of operations defined in this trait.  
 pub trait Decoder: Read {
+    /// Reset the value of current delete set state.
     fn reset_ds_cur_val(&mut self);
+
+    /// Read next [DeleteSet] clock value.
     fn read_ds_clock(&mut self) -> u32;
+
+    /// Read the number of clients stored in encoded [DeleteSet].
     fn read_ds_len(&mut self) -> u32;
+
+    /// Read left origin of a currently decoded [Block].
     fn read_left_id(&mut self) -> block::ID;
+
+    /// Read right origin of a currently decoded [Block].
     fn read_right_id(&mut self) -> block::ID;
+
+    /// Read currently decoded client identifier.
     fn read_client(&mut self) -> u64;
+
+    /// Read info bit flags of a currently decoded [Block].
     fn read_info(&mut self) -> u8;
+
+    /// Read bit flags determining type of parent of a currently decoded [Block].
     fn read_parent_info(&mut self) -> bool;
+
+    /// Read type ref info of a currently decoded [Block] parent.
     fn read_type_ref(&mut self) -> types::TypeRefs;
+
+    /// Read length parameter.
     fn read_len(&mut self) -> u32;
+
+    /// Decode a JSON-like data type. It's a complex type which is an extension of native JavaScript
+    /// Object Notation.
     fn read_any(&mut self) -> lib0::any::Any;
+
+    /// Read key string.
     fn read_key(&mut self) -> &str;
+
+    /// Consume a rest of the decoded buffer data and return it without parsing.
     fn read_to_end(&mut self) -> &[u8];
 }
 
+/// Version 1 of lib0 decoder.
 pub struct DecoderV1<'a> {
     cursor: Cursor<'a>,
 }

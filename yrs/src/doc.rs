@@ -10,18 +10,51 @@ use crate::*;
 use rand::Rng;
 use std::cell::RefCell;
 
-/// A Y.Doc instance.
+/// A Yrs document type. Documents are most important units of collaborative resources management.
+/// All shared collections live within a scope of their corresponding documents. All updates are
+/// generated on per document basis (rather than individual shared type). All operations on shared
+/// collections happen via [Transaction], which lifetime is also bound to a document.
+///
+/// Document manages so called root types, which are top-level shared types definitions (as opposed
+/// to recursively nested types).
+///
+/// A basic workflow sample:
+///
+/// ```
+/// use yrs::Doc;
+///
+/// let doc = Doc::new();
+/// let mut txn = doc.transact(); // all Yrs operations happen in scope of a transaction
+/// let root = txn.get_text("root-type-name");
+/// root.push(&mut txn, "hello world"); // append text to our collaborative document
+///
+/// // in order to exchange data with other documents we first need to create a state vector
+/// let remote_doc = Doc::new();
+/// let mut remote_txn = remote_doc.transact();
+/// let state_vector = remote_doc.get_state_vector(&remote_txn);
+///
+/// // now compute a differential update based on remote document's state vector
+/// let update = doc.encode_delta_as_update_v1(&txn, &state_vector);
+///
+/// // both update and state vector are serializable, we can pass the over the wire
+/// // now apply update to a remote document
+/// remote_doc.apply_update_v1(&mut remote_txn, update.as_slice());
+/// ```
 pub struct Doc {
+    /// A unique client identifier, that's also a unique identifier of current document replica.
     pub client_id: u64,
     store: RefCell<Store>,
 }
 
 impl Doc {
+    /// Creates a new document with a randomized client identifier.
     pub fn new() -> Self {
         let client_id: u64 = rand::thread_rng().gen();
         Self::with_client_id(client_id)
     }
 
+    /// Creates a new document with a specified `client_id`. It's up to a caller to guarantee that
+    /// this identifier is unique across all communicating replicas of that document.
     pub fn with_client_id(client_id: u64) -> Self {
         Doc {
             client_id,
@@ -29,45 +62,49 @@ impl Doc {
         }
     }
 
-    pub fn encode_state_as_update(&self, txn: &Transaction<'_>) -> Vec<u8> {
+    /// Encode entire state of a current block store using ver. 1 encoding.
+    /// This state can be persisted so that later the entire document will be recovered.
+    /// To apply state update use [Self::apply_update] method.
+    pub fn encode_state_as_update_v1(&self, txn: &Transaction<'_>) -> Vec<u8> {
         txn.store.encode_v1()
     }
 
-    pub fn encode_state_vector(&self, txn: &Transaction<'_>) -> Vec<u8> {
+    /// Encode state vector of a current block store using ver. 1 encoding.
+    pub fn encode_state_vector_v1(&self, txn: &Transaction<'_>) -> Vec<u8> {
         txn.store.blocks.get_state_vector().encode_v1()
     }
 
-    pub fn encode_delta_as_update(&self, txn: &Transaction, remote_sv: &StateVector) -> Vec<u8> {
+    /// Encodes a difference between current block store and a remote one based on its state vector.
+    /// Such update contains only blocks not observed by a remote peer together with a delete set.
+    pub fn encode_delta_as_update_v1(&self, txn: &Transaction, remote_sv: &StateVector) -> Vec<u8> {
         let mut encoder = EncoderV1::new();
         txn.store.encode_diff(remote_sv, &mut encoder);
         encoder.to_vec()
     }
 
-    pub fn get_text(&self, txn: &mut Transaction, string: &str) -> types::Text {
-        txn.get_text(string)
-    }
-    /// Creates a transaction. Transaction cleanups & calling event handles
-    /// happen when the transaction struct is dropped.
+    /// Creates a transaction used for all kind of block store operations.
+    /// Transaction cleanups & calling event handles happen when the transaction struct is dropped.
     pub fn transact(&self) -> Transaction {
         Transaction::new(self.store.borrow_mut())
     }
 
-    /// Apply a document update.
-    pub fn apply_update(&self, tr: &mut Transaction, update: &[u8]) {
+    /// Apply a document update assuming it's encoded using lib0 ver.1 data format.
+    pub fn apply_update_v1(&self, tr: &mut Transaction, update: &[u8]) {
         let mut decoder = DecoderV1::from(update);
         let update = Update::decode(&mut decoder);
         let ds = DeleteSet::decode(&mut decoder);
         tr.apply_update(update, ds)
     }
 
-    /// Retrieve document state vector in order to encode the document diff.
+    /// Retrieve document state vector in order to encode the document diff. This state vector
+    /// contains compressed information about all inserted blocks observed by the current block
+    /// store.
     pub fn get_state_vector(&self, tr: &Transaction) -> StateVector {
         tr.store.blocks.get_state_vector()
     }
 
-    /// Subscribe callback function for incoming update events.
-    /// Returns a subscription, which will unsubscribe function
-    /// when dropped.
+    /// Subscribe callback function for incoming update events. Returns a subscription, which will
+    /// unsubscribe function when dropped.
     pub fn on_update<F>(&mut self, f: F) -> Subscription<UpdateEvent>
     where
         F: Fn(&UpdateEvent) -> () + 'static,
@@ -112,9 +149,9 @@ mod test {
         ];
         let doc = Doc::new();
         let mut tr = doc.transact();
-        doc.apply_update(&mut tr, update);
+        doc.apply_update_v1(&mut tr, update);
 
-        let actual = doc.get_text(&mut tr, "type").to_string(&tr);
+        let actual = tr.get_text("type").to_string(&tr);
         assert_eq!(actual, "210".to_owned());
     }
 
@@ -127,7 +164,7 @@ mod test {
         txt.insert(&mut t, 0, "1");
         txt.insert(&mut t, 0, "2");
 
-        let encoded = doc.encode_state_as_update(&t);
+        let encoded = doc.encode_state_as_update_v1(&t);
         let expected = &[
             1, 3, 227, 214, 245, 198, 5, 0, 4, 1, 4, 116, 121, 112, 101, 1, 48, 68, 227, 214, 245,
             198, 5, 0, 1, 49, 68, 227, 214, 245, 198, 5, 1, 1, 50, 0,
@@ -187,15 +224,15 @@ mod test {
         let txt = txn.get_text("test");
 
         txt.insert(&mut txn, 0, "abc");
-        let u = doc.encode_delta_as_update(&txn, &doc2.get_state_vector(&txn2));
-        doc2.apply_update(&mut txn2, u.as_slice());
+        let u = doc.encode_delta_as_update_v1(&txn, &doc2.get_state_vector(&txn2));
+        doc2.apply_update_v1(&mut txn2, u.as_slice());
         assert_eq!(counter.get(), 3); // update has been propagated
 
         drop(sub);
 
         txt.insert(&mut txn, 3, "de");
-        let u = doc.encode_delta_as_update(&txn, &doc2.get_state_vector(&txn2));
-        doc2.apply_update(&mut txn2, u.as_slice());
+        let u = doc.encode_delta_as_update_v1(&txn, &doc2.get_state_vector(&txn2));
+        doc2.apply_update_v1(&mut txn2, u.as_slice());
         assert_eq!(counter.get(), 3); // since subscription has been dropped, update was not propagated
     }
 }
