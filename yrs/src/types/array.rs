@@ -258,10 +258,10 @@ mod test {
         let a1 = t1.get_array("array");
 
         a1.insert(&mut t1, 0, "Hi");
-        let update = d1.encode_state_as_update(&t1);
+        let update = d1.encode_state_as_update_v1(&t1);
 
         let mut t2 = d2.transact();
-        d2.apply_update(&mut t2, update.as_slice());
+        d2.apply_update_v1(&mut t2, update.as_slice());
         let a2 = t2.get_array("array");
         let actual: Vec<_> = a2.iter(&t2).collect();
 

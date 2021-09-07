@@ -16,12 +16,20 @@ use std::rc::Rc;
 
 type ClientBlocks = HashMap<u64, VecDeque<Block>, BuildHasherDefault<ClientHasher>>;
 
+/// Update type which contains an information about all decoded blocks which are incoming from a
+/// remote peer. Since these blocks are not yet integrated into current document's block store,
+/// they still may require repairing before doing so as they don't contain full data about their
+/// relations.
+///
+/// Update is conceptually similar to a block store itself, however the work patters are different.
 #[derive(Debug, PartialEq)]
 pub struct Update {
     clients: ClientBlocks,
 }
 
 impl Update {
+    /// Returns a state vector representing an upper bound of client clocks included by blocks
+    /// stored in current update.
     pub fn state_vector(&self) -> StateVector {
         let mut sv = StateVector::default();
         for (&client, blocks) in self.clients.iter() {
@@ -37,6 +45,7 @@ impl Update {
         Blocks::new(self)
     }
 
+    /// Merges another update into current one. Their blocks are deduplicated and reordered.
     pub fn merge(&mut self, other: Self) {
         for (client, other_blocks) in other.clients {
             match self.clients.entry(client) {
@@ -103,6 +112,11 @@ impl Update {
         };
     }
 
+    /// Integrates current update into a block store referenced by a given transaction.
+    /// If entire integration process was successful a `None` value is returned. Otherwise a
+    /// pending update object is returned which contains blocks that couldn't be integrated, most
+    /// likely because there were missing blocks that are used as a dependencies of other blocks
+    /// contained in this update.
     pub fn integrate(mut self, txn: &mut Transaction<'_>) -> Option<PendingUpdate> {
         if self.clients.is_empty() {
             return None;
@@ -396,9 +410,13 @@ impl Decode for Update {
     }
 }
 
+/// A pending update which contains unapplied blocks from the update which created it.
 #[derive(Debug, PartialEq)]
 pub struct PendingUpdate {
+    /// Collection of unapplied blocks.
     pub update: Update,
+    /// A state vector that informs about minimal client clock values that need to be satisfied
+    /// in order to successfully apply corresponding `update`.
     pub missing: StateVector,
 }
 
@@ -541,11 +559,11 @@ mod test {
         txt1.insert(&mut t1, 0, "bbb");
         txt1.insert(&mut t1, 2, "bbb");
 
-        let binary1 = t1.encode_update();
-        let binary2 = t2.encode_update();
+        let binary1 = t1.encode_update_v1();
+        let binary2 = t2.encode_update_v1();
 
-        d1.apply_update(&mut t1, binary2.as_slice());
-        d2.apply_update(&mut t2, binary1.as_slice());
+        d1.apply_update_v1(&mut t1, binary2.as_slice());
+        d2.apply_update_v1(&mut t2, binary1.as_slice());
 
         let mut u1 = Update::decode(&mut DecoderV1::new(Cursor::new(binary1.as_slice())));
         let u2 = Update::decode(&mut DecoderV1::new(Cursor::new(binary2.as_slice())));
