@@ -46,6 +46,19 @@ impl Array {
         txn.create_item(&pos, value, None);
     }
 
+    /// Inserts multiple `values` at the given `index`. Inserting at index `0` is equivalent to
+    /// prepending current array with given `values`, while inserting at array length is equivalent
+    /// to appending that value at the end of it.
+    ///
+    /// Using `index` value that's higher than current array length results in panic.
+    pub fn insert_range<T, V>(&self, txn: &mut Transaction, index: u32, values: T)
+    where
+        T: IntoIterator<Item = V>,
+        V: Into<Any>,
+    {
+        self.insert(txn, index, PrelimRange(values))
+    }
+
     /// Inserts given `value` at the end of the current array.
     pub fn push_back<V: Prelim>(&self, txn: &mut Transaction, value: V) {
         let len = self.len();
@@ -152,6 +165,26 @@ where
     fn from(iter: T) -> Self {
         PrelimArray(iter)
     }
+}
+
+/// Prelim range defines a way to insert multiple elements effectively at once one after another
+/// in an efficient way, provided that these elements correspond to a primitive JSON-like types.
+struct PrelimRange<T, V>(T)
+where
+    T: IntoIterator<Item = V>,
+    V: Into<Any>;
+
+impl<T, V> Prelim for PrelimRange<T, V>
+where
+    T: IntoIterator<Item = V>,
+    V: Into<Any>,
+{
+    fn into_content(self, txn: &mut Transaction, ptr: TypePtr) -> (ItemContent, Option<Self>) {
+        let vec: Vec<Any> = self.0.into_iter().map(|v| v.into()).collect();
+        (ItemContent::Any(vec), None)
+    }
+
+    fn integrate(self, txn: &mut Transaction, inner_ref: BranchRef) {}
 }
 
 impl<T, V> Prelim for PrelimArray<T, V>
@@ -371,9 +404,7 @@ mod test {
         {
             let mut txn = d1.transact();
             let a = txn.get_array("array");
-            a.push_back(&mut txn, "x");
-            a.push_back(&mut txn, "y");
-            a.push_back(&mut txn, "z");
+            a.insert_range(&mut txn, 0, ["x", "y", "z"]);
         }
         let d2 = Doc::with_client_id(2);
         let d3 = Doc::with_client_id(3);
