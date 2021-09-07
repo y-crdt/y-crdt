@@ -1292,9 +1292,9 @@ where
 }
 
 #[derive(Debug)]
-pub struct Text(pub String);
+pub struct PrelimText(pub String);
 
-impl Prelim for Text {
+impl Prelim for PrelimText {
     fn into_content(self, txn: &mut Transaction, ptr: TypePtr) -> (ItemContent, Option<Self>) {
         (ItemContent::String(self.0), None)
     }

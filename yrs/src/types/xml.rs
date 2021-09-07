@@ -1,6 +1,4 @@
 use crate::block::{Item, ItemContent, ItemPosition, Prelim};
-use crate::types::array::ArrayRemoveError;
-use crate::types::text::TextRemoveError;
 use crate::types::{
     Branch, BranchRef, Entries, Map, Text, TypePtr, Value, TYPE_REFS_XML_ELEMENT,
     TYPE_REFS_XML_TEXT,
@@ -84,7 +82,7 @@ impl XmlElement {
         attr_value: V,
     ) {
         let key = attr_name.to_string();
-        let value = crate::block::Text(attr_value.to_string());
+        let value = crate::block::PrelimText(attr_value.to_string());
         let pos = {
             let inner = self.inner();
             let left = inner.map.get(&key);
@@ -214,12 +212,7 @@ impl XmlElement {
     /// Removes a range (defined by `len`) of XML nodes from the current XML element, starting at
     /// the given `index`. Returns the result which may contain an error if a number of elements
     /// removed is lesser than the expected one provided in `len` parameter.
-    pub fn remove(
-        &self,
-        txn: &mut Transaction,
-        index: u32,
-        len: u32,
-    ) -> Result<(), ArrayRemoveError> {
+    pub fn remove(&self, txn: &mut Transaction, index: u32, len: u32) {
         self.0.remove(txn, index, len)
     }
 
@@ -360,20 +353,10 @@ impl XmlFragment {
         }
     }
 
-    pub fn remove(
-        &self,
-        txn: &mut Transaction,
-        index: u32,
-        len: u32,
-    ) -> Result<(), ArrayRemoveError> {
+    pub fn remove(&self, txn: &mut Transaction, index: u32, len: u32) {
         let removed = self.0.remove_at(txn, index, len);
-        if removed == len {
-            Ok(())
-        } else {
-            Err(ArrayRemoveError {
-                expected: len,
-                removed,
-            })
+        if removed != len {
+            panic!("Couldn't remove {} elements from an array. Only {} of them were successfully removed.", len, removed);
         }
     }
 
@@ -593,7 +576,7 @@ impl XmlText {
         attr_value: V,
     ) {
         let key = attr_name.to_string();
-        let value = crate::block::Text(attr_value.to_string());
+        let value = crate::block::PrelimText(attr_value.to_string());
         let pos = {
             let inner = self.inner();
             let left = inner.map.get(&key);
@@ -646,7 +629,7 @@ impl XmlText {
         if let Some(mut pos) = self.0.find_position(txn, index) {
             let parent = { TypePtr::Id(self.inner().item.unwrap()) };
             pos.parent = parent;
-            txn.create_item(&pos, crate::block::Text(content.to_owned()), None);
+            txn.create_item(&pos, crate::block::PrelimText(content.to_owned()), None);
         } else {
             panic!("Cannot insert string content into an XML text: provided index is outside of the current text range!");
         }
@@ -661,13 +644,8 @@ impl XmlText {
     /// Removes a number of characters specified by a `len` parameter from this XML text structure,
     /// starting at given `index`.
     /// This method may panic if `index` if greater than a length of this text.
-    pub fn remove(
-        &self,
-        txn: &mut Transaction,
-        index: u32,
-        len: u32,
-    ) -> Result<(), TextRemoveError> {
-        self.0.remove(txn, index, len)
+    pub fn remove(&self, txn: &mut Transaction, index: u32, len: u32) {
+        self.0.remove_range(txn, index, len)
     }
 }
 

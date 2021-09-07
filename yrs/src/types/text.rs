@@ -95,7 +95,7 @@ impl Text {
     /// This method will panic if provided `index` is greater than the length of a current text.
     pub fn insert(&self, tr: &mut Transaction, index: u32, chunk: &str) {
         if let Some(pos) = self.find_position(tr, index) {
-            let value = crate::block::Text(chunk.to_owned());
+            let value = crate::block::PrelimText(chunk.to_owned());
             tr.create_item(&pos, value, None);
         } else {
             panic!("The type or the position doesn't exist!");
@@ -109,15 +109,9 @@ impl Text {
     }
 
     /// Removes up to a `len` characters from a current text structure, starting at given `index`.
-    /// This method returns result, which may contain an error in case when either a provided
-    /// `index` was out of the bound of current text or a number of characters to remove was greater
-    /// than actual number of characters on the right side of that `index`.
-    pub fn remove(
-        &self,
-        txn: &mut Transaction,
-        index: u32,
-        len: u32,
-    ) -> Result<(), TextRemoveError> {
+    /// This method panics in case when not all expected characters were removed (due to
+    /// insufficient number of characters to remove) or `index` is outside of the bounds of text.
+    pub fn remove_range(&self, txn: &mut Transaction, index: u32, len: u32) {
         let mut remaining = len;
         if let Some(pos) = self.find_position(txn, index) {
             let mut current = {
@@ -167,33 +161,9 @@ impl Text {
                     .and_then(|ptr| txn.store.blocks.get_block(ptr))
                     .and_then(|block| block.as_item());
             }
-            Ok(())
         } else {
-            Err(TextRemoveError {
-                index,
-                expected: len,
-                removed: len - remaining,
-            })
+            panic!("Failed to remove characters starting at index {}. Index outside of the bounds of a text.", len);
         }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct TextRemoveError {
-    pub index: u32,
-    pub expected: u32,
-    pub removed: u32,
-}
-
-impl Error for TextRemoveError {}
-
-impl std::fmt::Display for TextRemoveError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "Failed to remove all {} characters starting at index {}. Operation could remove only {} of them.",
-            self.expected, self.index, self.removed
-        )
     }
 }
 
@@ -410,7 +380,7 @@ mod test {
 
         txt.insert(&mut txn, 0, "bbb");
         txt.insert(&mut txn, 0, "aaa");
-        txt.remove(&mut txn, 0, 3).unwrap();
+        txt.remove_range(&mut txn, 0, 3);
 
         assert_eq!(txt.to_string(&txn).as_str(), "bbb");
     }
@@ -423,7 +393,7 @@ mod test {
 
         txt.insert(&mut txn, 0, "bbb");
         txt.insert(&mut txn, 0, "aaa");
-        txt.remove(&mut txn, 3, 3).unwrap();
+        txt.remove_range(&mut txn, 3, 3);
 
         assert_eq!(txt.to_string(&txn).as_str(), "aaa");
     }
@@ -438,13 +408,13 @@ mod test {
         txt.insert(&mut txn, 1, "b");
         txt.insert(&mut txn, 2, "c");
 
-        txt.remove(&mut txn, 1, 1).unwrap();
+        txt.remove_range(&mut txn, 1, 1);
         assert_eq!(txt.to_string(&txn).as_str(), "ac");
 
-        txt.remove(&mut txn, 1, 1).unwrap();
+        txt.remove_range(&mut txn, 1, 1);
         assert_eq!(txt.to_string(&txn).as_str(), "a");
 
-        txt.remove(&mut txn, 0, 1).unwrap();
+        txt.remove_range(&mut txn, 0, 1);
         assert_eq!(txt.to_string(&txn).as_str(), "");
     }
 
@@ -455,7 +425,7 @@ mod test {
         let txt = txn.get_text("test");
 
         txt.insert(&mut txn, 0, "abc");
-        txt.remove(&mut txn, 1, 1).unwrap();
+        txt.remove_range(&mut txn, 1, 1);
 
         assert_eq!(txt.to_string(&txn).as_str(), "ac");
     }
@@ -470,7 +440,7 @@ mod test {
         txt.insert(&mut txn, 6, "beautiful");
         txt.insert(&mut txn, 15, " world");
 
-        txt.remove(&mut txn, 5, 11).unwrap();
+        txt.remove_range(&mut txn, 5, 11);
         assert_eq!(txt.to_string(&txn).as_str(), "helloworld");
     }
 
@@ -481,7 +451,7 @@ mod test {
         let txt = txn.get_text("test");
 
         txt.insert(&mut txn, 0, "hello ");
-        txt.remove(&mut txn, 0, 5).unwrap();
+        txt.remove_range(&mut txn, 0, 5);
         txt.insert(&mut txn, 1, "world");
 
         assert_eq!(txt.to_string(&txn).as_str(), " world");
@@ -506,11 +476,11 @@ mod test {
 
         txt1.insert(&mut t1, 5, " beautiful");
         txt1.insert(&mut t1, 21, "!");
-        txt1.remove(&mut t1, 0, 5).unwrap();
+        txt1.remove_range(&mut t1, 0, 5);
         assert_eq!(txt1.to_string(&t1).as_str(), " beautiful world!");
 
-        txt2.remove(&mut t2, 5, 5).unwrap();
-        txt2.remove(&mut t2, 0, 1).unwrap();
+        txt2.remove_range(&mut t2, 5, 5);
+        txt2.remove_range(&mut t2, 0, 1);
         txt2.insert(&mut t2, 0, "H");
         assert_eq!(txt2.to_string(&t2).as_str(), "Hellod");
 
