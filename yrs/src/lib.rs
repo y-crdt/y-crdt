@@ -36,8 +36,12 @@ mod update;
 mod updates;
 mod utils;
 
+#[cfg(feature = "capi")]
+mod capi;
+
 #[cfg(test)]
 mod compatibility_tests;
+
 #[cfg(test)]
 mod test_utils;
 
