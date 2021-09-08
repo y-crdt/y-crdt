@@ -14,6 +14,9 @@ use std::vec::Vec;
 /// a given document. This descriptor can be serialized and used to determine a difference between
 /// seen and unseen inserts of two replicas of the same document, potentially existing in different
 /// processes.
+///
+/// Another popular name for the concept represented by state vector is
+/// [Version Vector](https://en.wikipedia.org/wiki/Version_vector).
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct StateVector(HashMap<u64, u32, BuildHasherDefault<ClientHasher>>);
 

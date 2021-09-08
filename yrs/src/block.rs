@@ -55,7 +55,12 @@ pub const HAS_ORIGIN: u8 = 0b10000000;
 /// for blocks which act as map-like types entries.
 pub const HAS_PARENT_SUB: u8 = 0b00100000;
 
-/// Unique block identifier.
+/// Block identifier, which allows to uniquely identify any element insertion in a global scope
+/// (across different replicas of the same document). It consists of client ID (which is unique
+/// document replica identifier) and monotonically incrementing clock value.
+///
+/// [ID] corresponds to a [Lamport timestamp](https://en.wikipedia.org/wiki/Lamport_timestamp) in
+/// terms of its properties and guarantees.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct ID {
     /// Unique identifier of a client, which inserted corresponding item.
@@ -295,7 +300,10 @@ impl Block {
         }
     }
 
-    /// Returns a number of countable elements stored within of a current block.
+    /// Returns a number of elements stored within this block. These elements don't have to exists
+    /// in reality ie. when block was garbage collected or tombstoned, corresponding content no
+    /// longer exists but `len` still refers to a number of elements current block used to
+    /// represent.
     pub fn len(&self) -> u32 {
         match self {
             Block::Item(item) => item.len(),
@@ -746,6 +754,9 @@ impl Item {
         }
     }
 
+    /// Returns a number of elements stored within this item. These elements don't have to exists
+    /// in reality ie. when item has been deleted, corresponding content no longer exists but `len`
+    /// still refers to a number of elements current block used to represent.
     pub fn len(&self) -> u32 {
         self.content.len()
     }
@@ -895,7 +906,9 @@ impl ItemContent {
     }
 
     /// Checks if item content can be considered countable. Countable elements contribute to
-    /// a length of the block they are contained by.
+    /// a length of the block they are contained by. Most of the item content variants are countable
+    /// with exception for [ItemContent::Deleted] (which length describes number of removed
+    /// elements) and [ItemContent::Format] (which is used for storing text formatting tags).
     pub fn is_countable(&self) -> bool {
         match self {
             ItemContent::Any(_) => true,
@@ -910,10 +923,17 @@ impl ItemContent {
         }
     }
 
-    /// Returns a number of elements contained within an item content. This method often should be
-    /// checked together with a [Self::is_countable], since every Yrs block has defined a length,
-    /// but not every block should be counted at all times (such counter examples are deleted
-    /// and format blocks).
+    /// Returns a number of separate elements contained within current item content struct.
+    ///
+    /// Separate elements can be split in order to put another block in between them. Definition of
+    /// separation depends on a item content kin, eg. [ItemContent::String], [ItemContent::Any],
+    /// [ItemContent::JSON] and [ItemContent::Deleted] can have variable length as they may be split
+    /// by other insert operations. Other variants (eg. [ItemContent::Binary]) are considered as
+    /// a single element and therefore their length is always 1 and are not considered as subject of
+    /// splitting.
+    ///
+    /// In cases of counting number of visible elements, `len` method should be used together with
+    /// [ItemContent::is_countable].
     pub fn len(&self) -> u32 {
         match self {
             ItemContent::Deleted(deleted) => *deleted,
