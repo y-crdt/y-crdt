@@ -1,4 +1,5 @@
 use crate::block::ID;
+use crate::block_store::BlockStore;
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::client_hasher::ClientHasher;
@@ -108,7 +109,7 @@ impl IdRange {
 
     /// Alters current [IdRange] by compacting its internal implementation (in fragmented case).
     /// Example: fragmented space of [0,3), [3,5), [6,7) will be compacted into [0,5), [6,7).
-    fn compact(&mut self) {
+    fn squash(&mut self) {
         if let IdRange::Fragmented(ranges) = self {
             if !ranges.is_empty() {
                 ranges.sort_by(|a, b| a.start.cmp(&b.start));
@@ -248,14 +249,15 @@ impl IdSet {
         }
     }
 
+    /// Checks if current ID set contains any data.
     pub fn is_empty(&self) -> bool {
         self.0.is_empty() || self.0.values().all(|r| r.is_empty())
     }
 
     /// Compacts an internal ranges representation.
-    pub fn compact(&mut self) {
+    pub fn squash(&mut self) {
         for block in self.0.values_mut() {
-            block.compact();
+            block.squash();
         }
     }
 
@@ -271,10 +273,13 @@ impl IdSet {
         }
     }
 
+    /// Inserts a new ID `range` corresponding with a given `client`.
     pub fn insert_range(&mut self, client: u64, range: IdRange) {
         self.0.insert(client, range);
     }
 
+    /// Merges another ID set into a current one, combining their information about observed ID
+    /// ranges and squashing them if necessary.
     pub fn merge(&mut self, other: Self) {
         for (client, range) in other.0 {
             match self.0.entry(client) {
@@ -309,7 +314,7 @@ impl IdSet {
             }
         }
 
-        self.compact()
+        self.squash()
     }
 }
 
@@ -412,35 +417,46 @@ impl std::fmt::Display for IdRange {
 }
 
 impl DeleteSet {
+    /// Creates a new empty delete set instance.
     pub fn new() -> Self {
         DeleteSet(IdSet::new())
     }
 
+    /// Inserts an information about delete block (identified by `id` and having a specified length)
+    /// inside of a current delete set.
     pub fn insert(&mut self, id: ID, len: u32) {
         self.0.insert(id, len)
     }
 
+    /// Checks if delete set contains any clock ranges.
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
+    /// Checks if given block `id` is considered deleted from the perspective of current delete set.
     pub fn is_deleted(&self, id: &ID) -> bool {
         self.0.contains(id)
     }
 
+    /// Returns an iterator over all client-range pairs registered in this delete set.
     pub fn iter(&self) -> Iter<'_> {
         self.0.iter()
     }
 
+    /// Merges another delete set into a current one, combining their information about deleted
+    /// clock ranges.
     pub fn merge(&mut self, other: Self) {
         self.0.merge(other.0)
     }
 
-    pub fn compact(&mut self) {
-        self.0.compact()
+    /// Squashes the contents of a current delete set. This operation means, that in case when
+    /// delete set contains any overlapping ranges within, they will be squashed together to
+    /// optimize the space and make future encoding more compact.
+    pub fn squash(&mut self) {
+        self.0.squash()
     }
 
-    pub fn try_compact(&mut self, blocks: &BlockStore) {
+    pub(crate) fn try_compact(&mut self, blocks: &BlockStore) {
         //TODO
     }
 }
@@ -468,7 +484,7 @@ mod test {
     #[test]
     fn id_range_compact() {
         let mut r = IdRange::Fragmented(vec![(0..3), (3..5), (6..7)]);
-        r.compact();
+        r.squash();
         assert_eq!(r, IdRange::Fragmented(vec![(0..5), (6..7)]));
     }
 

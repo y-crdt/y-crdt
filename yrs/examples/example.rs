@@ -20,7 +20,7 @@ fn main() {
 
     let doc1 = Doc::new();
     let tr = &mut doc1.transact();
-    let t = doc1.get_text(tr, "");
+    let t = tr.get_text("");
     {
         // scope the transaction so that it is droped and the update is synced
         // to doc_synced
@@ -30,20 +30,20 @@ fn main() {
         }
     }
     println!("doc1 content {}", t.to_string(tr));
-    let update = doc1.encode_state_as_update(tr);
+    let update = doc1.encode_state_as_update_v1(tr);
     println!("update.len: {}", update.len());
 
     println!(
         "doc_synced content (should be the same as doc1) {}",
-        doc_synced.get_text(tr, "").to_string(tr)
+        tr.get_text("").to_string(tr)
     );
 
     let bs: Vec<u8> = doc1.client_id.to_ne_bytes().iter().map(|x| *x).collect();
     println!("client_id: {}, ne_bytes: {:?}", doc1.client_id, bs);
     let doc2 = Doc::new();
     let tr2 = &mut doc2.transact();
-    let t2 = doc2.get_text(tr2, "");
-    doc2.apply_update(tr2, &update);
+    let t2 = tr2.get_text("");
+    doc2.apply_update_v1(tr2, &update);
     println!(
         "doc2 content (this is manually synced from doc1) {}",
         t2.to_string(tr2)
