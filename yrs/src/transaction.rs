@@ -8,7 +8,7 @@ use crate::store::Store;
 use crate::types::array::Array;
 use crate::types::xml::{XmlElement, XmlText};
 use crate::types::{
-    Inner, Map, Text, TypePtr, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
+    Branch, Map, Text, TypePtr, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
     TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT,
 };
 use crate::update::Update;
@@ -17,11 +17,15 @@ use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use updates::encoder::*;
 
+/// Transaction is one of the core types in Yrs. All operations that need to touch a document's
+/// contents (a.k.a. block store), need to be executed in scope of a transaction.
 pub struct Transaction<'a> {
     /// Store containing the state of the document.
-    pub store: RefMut<'a, Store>,
-    /// State vector of a current transaction.
+    pub(crate) store: RefMut<'a, Store>,
+    /// State vector of a current transaction at the moment of its creation.
     pub before_state: StateVector,
+    /// Current state vector of a transaction, which includes all performed updates.
+    pub after_state: StateVector,
     /// ID's of the blocks to be merged.
     pub merge_blocks: Vec<ID>,
     /// Describes the set of deleted items by ids.
@@ -29,11 +33,10 @@ pub struct Transaction<'a> {
     /// All types that were directly modified (property added or child inserted/deleted).
     /// New types are not included in this Set.
     changed: HashMap<TypePtr, HashSet<Option<String>>>,
-    after_state: StateVector,
 }
 
 impl<'a> Transaction<'a> {
-    pub fn new(store: RefMut<'a, Store>) -> Transaction {
+    pub(crate) fn new(store: RefMut<'a, Store>) -> Transaction {
         let begin_timestamp = store.blocks.get_state_vector();
         Transaction {
             store,
@@ -45,21 +48,64 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    /// Returns a [Text] data structure stored under a given `name`. Text structures are used for
+    /// collaborative text editing: they expose operations to append and remove chunks of text,
+    /// which are free to execute concurrently by multiple peers over remote boundaries.
+    ///
+    /// If not structure under defined `name` existed before, it will be created and returned
+    /// instead.
+    ///
+    /// If a structure under defined `name` already existed, but its type was different it will be
+    /// reinterpreted as a text (in such case a sequence component of complex data type will be
+    /// interpreted as a list of text chunks).
     pub fn get_text(&mut self, name: &str) -> Text {
         let c = self.store.create_type(name, None, TYPE_REFS_TEXT);
         Text::from(c)
     }
 
+    /// Returns a [Map] data structure stored under a given `name`. Maps are used to store key-value
+    /// pairs associated together. These values can be primitive data (similar but not limited to
+    /// a JavaScript Object Notation) as well as other shared types (Yrs maps, arrays, text
+    /// structures etc.), enabling to construct a complex recursive tree structures.
+    ///
+    /// If not structure under defined `name` existed before, it will be created and returned
+    /// instead.
+    ///
+    /// If a structure under defined `name` already existed, but its type was different it will be
+    /// reinterpreted as a map (in such case a map component of complex data type will be
+    /// interpreted as native map).
     pub fn get_map(&mut self, name: &str) -> Map {
         let c = self.store.create_type(name, None, TYPE_REFS_MAP);
         Map::from(c)
     }
 
+    /// Returns an [Array] data structure stored under a given `name`. Array structures are used for
+    /// storing a sequences of elements in ordered manner, positioning given element accordingly
+    /// to its index.
+    ///
+    /// If not structure under defined `name` existed before, it will be created and returned
+    /// instead.
+    ///
+    /// If a structure under defined `name` already existed, but its type was different it will be
+    /// reinterpreted as an array (in such case a sequence component of complex data type will be
+    /// interpreted as a list of inserted values).
     pub fn get_array(&mut self, name: &str) -> Array {
         let c = self.store.create_type(name, None, TYPE_REFS_ARRAY);
         Array::from(c)
     }
 
+    /// Returns a [XmlElement] data structure stored under a given `name`. XML elements represent
+    /// nodes of XML document. They can contain attributes (key-value pairs, both of string type)
+    /// as well as other nested XML elements or text values, which are stored in their insertion
+    /// order.
+    ///
+    /// If not structure under defined `name` existed before, it will be created and returned
+    /// instead.
+    ///
+    /// If a structure under defined `name` already existed, but its type was different it will be
+    /// reinterpreted as a XML element (in such case a map component of complex data type will be
+    /// interpreted as map of its attributes, while a sequence component - as a list of its child
+    /// XML nodes).
     pub fn get_xml_element(&mut self, name: &str) -> XmlElement {
         let c = self
             .store
@@ -67,6 +113,16 @@ impl<'a> Transaction<'a> {
         XmlElement::from(c)
     }
 
+    /// Returns a [XmlText] data structure stored under a given `name`. Text structures are used for
+    /// collaborative text editing: they expose operations to append and remove chunks of text,
+    /// which are free to execute concurrently by multiple peers over remote boundaries.
+    ///
+    /// If not structure under defined `name` existed before, it will be created and returned
+    /// instead.
+    ///
+    /// If a structure under defined `name` already existed, but its type was different it will be
+    /// reinterpreted as a text (in such case a sequence component of complex data type will be
+    /// interpreted as a list of text chunks).
     pub fn get_xml_text(&mut self, name: &str) -> XmlText {
         let c = self.store.create_type(name, None, TYPE_REFS_XML_TEXT);
         XmlText::from(c)
@@ -80,14 +136,14 @@ impl<'a> Transaction<'a> {
     ///   end up with the same content.
     /// * Even if an update contains known information, the unknown information
     ///   is extracted and integrated into the document structure.
-    pub fn encode_update(&self) -> Vec<u8> {
+    pub fn encode_update_v1(&self) -> Vec<u8> {
         let mut update_encoder = updates::encoder::EncoderV1::new();
         self.store
             .encode_diff(&self.before_state, &mut update_encoder);
         update_encoder.to_vec()
     }
 
-    pub fn iterate_structs<F>(&mut self, client: &u64, range: &Range<u32>, f: &F)
+    pub(crate) fn iterate_structs<F>(&mut self, client: &u64, range: &Range<u32>, f: &F)
     where
         F: Fn(&Block) -> (),
     {
@@ -117,7 +173,7 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    pub fn find_index_clean_start(&mut self, client: &u64, clock: u32) -> Option<usize> {
+    pub(crate) fn find_index_clean_start(&mut self, client: &u64, clock: u32) -> Option<usize> {
         let blocks = self.store.blocks.get_mut(client)?;
         let index = blocks.find_pivot(clock)?;
         let block = &mut blocks[index];
@@ -135,7 +191,7 @@ impl<'a> Transaction<'a> {
         Some(index)
     }
 
-    pub fn apply_ranges<F>(&mut self, set: &IdSet, f: &F)
+    pub(crate) fn apply_ranges<F>(&mut self, set: &IdSet, f: &F)
     where
         F: Fn(&Block) -> (),
     {
@@ -151,7 +207,7 @@ impl<'a> Transaction<'a> {
 
     /// Applies given `id_set` onto current transaction to run multi-range deletion.
     /// Returns a remaining of original ID set, that couldn't be applied.
-    pub fn apply_delete(&mut self, ds: &DeleteSet) -> Option<DeleteSet> {
+    pub(crate) fn apply_delete(&mut self, ds: &DeleteSet) -> Option<DeleteSet> {
         let mut unapplied = DeleteSet::new();
         for (client, ranges) in ds.iter() {
             let mut blocks = self.store.blocks.get_mut(client).unwrap();
@@ -348,7 +404,7 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    pub fn create_item<T: Prelim>(
+    pub(crate) fn create_item<T: Prelim>(
         &mut self,
         pos: &block::ItemPosition,
         value: T,
@@ -407,9 +463,15 @@ impl<'a> Transaction<'a> {
             .unwrap()
     }
 
+    /// Commits current transaction. This step involves cleaning up and optimizing changes performed
+    /// during lifetime of a transaction. Such changes include squashing delete sets data
+    /// or squashing blocks that have been appended one after another to preserve memory.
+    ///
+    /// This step is performed automatically when a transaction is about to be dropped (its life
+    /// scope comes to an end).
     pub fn commit(&mut self) {
         // 1. sort and merge delete set
-        self.delete_set.compact();
+        self.delete_set.squash();
         self.after_state = self.store.blocks.get_state_vector();
 
         // 2. emit 'beforeObserverCalls'
@@ -428,7 +490,7 @@ impl<'a> Transaction<'a> {
                 let first_change = blocks.find_pivot(before_clock).unwrap().max(1);
                 let mut i = blocks.len() - 1;
                 while i >= first_change {
-                    if let Some(compaction) = blocks.compact_left(i) {
+                    if let Some(compaction) = blocks.squash_left(i) {
                         self.store.gc_cleanup(compaction);
                         blocks = self.store.blocks.get_mut(client).unwrap();
                     }
@@ -443,11 +505,11 @@ impl<'a> Transaction<'a> {
             let blocks = self.store.blocks.get_mut(&client).unwrap();
             let replaced_pos = blocks.find_pivot(clock).unwrap();
             if replaced_pos + 1 < blocks.len() {
-                if let Some(compaction) = blocks.compact_left(replaced_pos + 1) {
+                if let Some(compaction) = blocks.squash_left(replaced_pos + 1) {
                     self.store.gc_cleanup(compaction);
                 }
             } else if replaced_pos > 0 {
-                if let Some(compaction) = blocks.compact_left(replaced_pos) {
+                if let Some(compaction) = blocks.squash_left(replaced_pos) {
                     self.store.gc_cleanup(compaction);
                 }
             }
@@ -505,7 +567,7 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    pub fn add_changed_type(&mut self, parent: &mut Inner, parent_sub: Option<&String>) {
+    pub(crate) fn add_changed_type(&mut self, parent: &mut Branch, parent_sub: Option<&String>) {
         // TODO:
         /*
               const item = type._item

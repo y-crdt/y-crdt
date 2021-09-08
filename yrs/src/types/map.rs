@@ -1,18 +1,17 @@
 use crate::block::{ItemContent, ItemPosition, Prelim};
-use crate::types::{Entries, Inner, InnerRef, TypePtr, Value, TYPE_REFS_MAP};
+use crate::types::{Branch, BranchRef, Entries, TypePtr, Value, TYPE_REFS_MAP};
 use crate::*;
 use lib0::any::Any;
 use std::collections::HashMap;
 
+/// Collection used to store key-value entries in an unordered manner.
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub struct Map(InnerRef);
+pub struct Map(BranchRef);
 
 impl Map {
+    /// Converts all entries of a current map into JSON-like object representation.
     pub fn to_json(&self, txn: &Transaction<'_>) -> Any {
-        Self::to_json_inner(&*self.0.borrow(), txn)
-    }
-
-    pub(crate) fn to_json_inner(inner: &Inner, txn: &Transaction<'_>) -> Any {
+        let inner = self.0.as_ref();
         let mut res = HashMap::new();
         for (key, ptr) in inner.map.iter() {
             if let Some(item) = txn.store.blocks.get_item(ptr) {
@@ -29,7 +28,8 @@ impl Map {
         Any::Map(res)
     }
 
-    pub fn len(&self, txn: &Transaction<'_>) -> usize {
+    /// Returns a number of entries stored within current map.
+    pub fn len(&self, txn: &Transaction<'_>) -> u32 {
         let mut len = 0;
         let inner = self.0.borrow();
         for ptr in inner.map.values() {
@@ -43,23 +43,30 @@ impl Map {
         len
     }
 
-    fn blocks<'a, 'b, 'txn>(&'a self, txn: &'b Transaction<'txn>) -> Entries<'b, 'txn> {
+    fn entries<'a, 'b, 'txn>(&'a self, txn: &'b Transaction<'txn>) -> Entries<'b, 'txn> {
         let ptr = &self.0.borrow().ptr;
         Entries::new(ptr, txn)
     }
 
+    /// Returns an iterator that enables to traverse over all keys of entries stored within
+    /// current map. These keys are not ordered.
     pub fn keys<'a, 'b, 'txn>(&'a self, txn: &'b Transaction<'txn>) -> Keys<'b, 'txn> {
-        Keys(self.blocks(txn))
+        Keys(self.entries(txn))
     }
 
+    /// Returns an iterator that enables to traverse over all values stored within current map.
     pub fn values<'a, 'b, 'txn>(&'a self, txn: &'b Transaction<'txn>) -> Values<'b, 'txn> {
-        Values(self.blocks(txn))
+        Values(self.entries(txn))
     }
 
+    /// Returns an iterator that enables to traverse over all entries - tuple of key-value pairs -
+    /// stored within current map.
     pub fn iter<'a, 'b, 'txn>(&'a self, txn: &'b Transaction<'txn>) -> Iter<'b, 'txn> {
-        Iter(self.blocks(txn))
+        Iter(self.entries(txn))
     }
 
+    /// Inserts a new `value` under given `key` into current map. Returns a value stored previously
+    /// under the same key (if any existed).
     pub fn insert<V: Prelim>(&self, txn: &mut Transaction, key: String, value: V) -> Option<Value> {
         let previous = self.get(txn, &key);
         let pos = {
@@ -77,17 +84,22 @@ impl Map {
         previous
     }
 
+    /// Removes a stored within current map under a given `key`. Returns that value or `None` if
+    /// no entry with a given `key` was present in current map.
     pub fn remove(&self, txn: &mut Transaction, key: &str) -> Option<Value> {
         let t = self.0.borrow();
         t.remove(txn, key)
     }
 
+    /// Returns a value stored under a given `key` within current map, or `None` if no entry
+    /// with such `key` existed.
     pub fn get(&self, txn: &Transaction, key: &str) -> Option<Value> {
         let t = self.0.borrow();
         t.get(txn, key)
     }
 
-    pub fn contains(&self, txn: &Transaction, key: &String) -> bool {
+    /// Checks if an entry with given `key` can be found within current map.
+    pub fn contains(&self, txn: &Transaction, key: &str) -> bool {
         let t = self.0.borrow();
         if let Some(ptr) = t.map.get(key) {
             if let Some(item) = txn.store.blocks.get_item(ptr) {
@@ -97,6 +109,7 @@ impl Map {
         false
     }
 
+    /// Clears the contents of current map, effectively removing all of its entries.
     pub fn clear(&self, txn: &mut Transaction<'_>) {
         let t = self.0.borrow();
         for (_, ptr) in t.map.iter() {
@@ -120,6 +133,7 @@ impl<'a, 'txn> Iterator for Iter<'a, 'txn> {
     }
 }
 
+/// An unordered iterator over the keys of a [Map].
 pub struct Keys<'a, 'txn>(Entries<'a, 'txn>);
 
 impl<'a, 'txn> Iterator for Keys<'a, 'txn> {
@@ -131,6 +145,7 @@ impl<'a, 'txn> Iterator for Keys<'a, 'txn> {
     }
 }
 
+/// Iterator over the values of a [Map].
 pub struct Values<'a, 'txn>(Entries<'a, 'txn>);
 
 impl<'a, 'txn> Iterator for Values<'a, 'txn> {
@@ -142,12 +157,14 @@ impl<'a, 'txn> Iterator for Values<'a, 'txn> {
     }
 }
 
-impl From<InnerRef> for Map {
-    fn from(inner: InnerRef) -> Self {
+impl From<BranchRef> for Map {
+    fn from(inner: BranchRef) -> Self {
         Map(inner)
     }
 }
 
+/// A preliminary map. It can be used to early initialize the contents of a [Map], when it's about
+/// to be inserted into another Yrs collection, such as [Array] or another [Map].
 pub struct PrelimMap<T>(HashMap<String, T>);
 
 impl<T> From<HashMap<String, T>> for PrelimMap<T> {
@@ -158,11 +175,11 @@ impl<T> From<HashMap<String, T>> for PrelimMap<T> {
 
 impl<T: Prelim> Prelim for PrelimMap<T> {
     fn into_content(self, _txn: &mut Transaction, ptr: TypePtr) -> (ItemContent, Option<Self>) {
-        let inner = InnerRef::new(Inner::new(ptr, TYPE_REFS_MAP, None));
+        let inner = BranchRef::new(Branch::new(ptr, TYPE_REFS_MAP, None));
         (ItemContent::Type(inner), Some(self))
     }
 
-    fn integrate(self, txn: &mut Transaction, inner_ref: InnerRef) {
+    fn integrate(self, txn: &mut Transaction, inner_ref: BranchRef) {
         let map = Map::from(inner_ref);
         for (key, value) in self.0 {
             map.insert(txn, key, value);
@@ -231,8 +248,8 @@ mod test {
 
         compare_all(&t1, &m1);
 
-        let update = d1.encode_state_as_update(&t1);
-        d2.apply_update(&mut t2, update.as_slice());
+        let update = d1.encode_state_as_update_v1(&t1);
+        d2.apply_update_v1(&mut t2, update.as_slice());
 
         compare_all(&t2, &m2);
     }
@@ -246,12 +263,12 @@ mod test {
         m1.insert(&mut t1, "stuff".to_owned(), "stuffy");
         m1.insert(&mut t1, "null".to_owned(), None as Option<String>);
 
-        let update = d1.encode_state_as_update(&t1);
+        let update = d1.encode_state_as_update_v1(&t1);
 
         let d2 = Doc::with_client_id(2);
         let mut t2 = d2.transact();
 
-        d2.apply_update(&mut t2, update.as_slice());
+        d2.apply_update_v1(&mut t2, update.as_slice());
 
         let m2 = t2.get_map("map");
         assert_eq!(
@@ -274,11 +291,11 @@ mod test {
         m1.insert(&mut t1, "stuff".to_owned(), "c0");
         m2.insert(&mut t2, "stuff".to_owned(), "c1");
 
-        let u1 = d1.encode_state_as_update(&t1);
-        let u2 = d2.encode_state_as_update(&t2);
+        let u1 = d1.encode_state_as_update_v1(&t1);
+        let u2 = d2.encode_state_as_update_v1(&t2);
 
-        d1.apply_update(&mut t1, u2.as_slice());
-        d2.apply_update(&mut t2, u1.as_slice());
+        d1.apply_update_v1(&mut t1, u2.as_slice());
+        d2.apply_update_v1(&mut t2, u1.as_slice());
 
         assert_eq!(m1.get(&t1, &"stuff".to_owned()), Some(Value::from("c1")));
         assert_eq!(m2.get(&t2, &"stuff".to_owned()), Some(Value::from("c1")));
@@ -327,8 +344,8 @@ mod test {
         let d2 = Doc::with_client_id(2);
         let mut t2 = d2.transact();
 
-        let u1 = d1.encode_state_as_update(&t1);
-        d2.apply_update(&mut t2, u1.as_slice());
+        let u1 = d1.encode_state_as_update_v1(&t1);
+        d2.apply_update_v1(&mut t2, u1.as_slice());
 
         let m2 = t2.get_map("map");
         assert_eq!(m2.len(&t2), 0);

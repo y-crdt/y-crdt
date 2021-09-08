@@ -1,7 +1,7 @@
 use crate::block::{Block, BlockPtr, Item, ItemContent};
 use crate::id_set::{DeleteSet, IdSet};
 use crate::store::Store;
-use crate::types::{Inner, InnerRef, TypePtr, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT};
+use crate::types::{Branch, BranchRef, TypePtr, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT};
 use crate::update::Update;
 use crate::updates::decoder::Decode;
 use crate::updates::encoder::Encode;
@@ -107,7 +107,7 @@ fn text_insert_delete() {
     });
     let mut txn = doc.transact();
     let txt = txn.get_text("type");
-    doc.apply_update(&mut txn, update);
+    doc.apply_update_v1(&mut txn, update);
     assert_eq!(txt.to_string(&txn), "abhi".to_string());
     assert!(visited.get());
 }
@@ -216,7 +216,7 @@ fn xml_fragment_insert() {
             None,
             TypePtr::Named(Rc::new("fragment-name".to_string())),
             None,
-            ItemContent::Type(InnerRef::new(Inner::new(
+            ItemContent::Type(BranchRef::new(Branch::new(
                 TypePtr::Id(BlockPtr::from(ID::new(CLIENT_ID, 0))),
                 TYPE_REFS_XML_TEXT,
                 None,
@@ -230,7 +230,7 @@ fn xml_fragment_insert() {
             None,
             TypePtr::Unknown,
             None,
-            ItemContent::Type(InnerRef::new(Inner::new(
+            ItemContent::Type(BranchRef::new(Branch::new(
                 TypePtr::Id(BlockPtr::from(ID::new(CLIENT_ID, 1))),
                 TYPE_REFS_XML_ELEMENT,
                 Some("node-name".to_string()),

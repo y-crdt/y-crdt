@@ -19,37 +19,64 @@ use std::rc::Rc;
 
 pub type TypeRefs = u8;
 
+/// Type ref identifier for an [Array] type.
 pub const TYPE_REFS_ARRAY: TypeRefs = 0;
+
+/// Type ref identifier for a [Map] type.
 pub const TYPE_REFS_MAP: TypeRefs = 1;
+
+/// Type ref identifier for a [Text] type.
 pub const TYPE_REFS_TEXT: TypeRefs = 2;
+
+/// Type ref identifier for a [XmlElement] type.
 pub const TYPE_REFS_XML_ELEMENT: TypeRefs = 3;
+
+/// Type ref identifier for a [XmlFragment] type. Used for compatibility.
 pub const TYPE_REFS_XML_FRAGMENT: TypeRefs = 4;
+
+/// Type ref identifier for a [XmlHook] type. Used for compatibility.
 pub const TYPE_REFS_XML_HOOK: TypeRefs = 5;
+
+/// Type ref identifier for a [XmlText] type.
 pub const TYPE_REFS_XML_TEXT: TypeRefs = 6;
 
-/// Placeholder for non-specialized AbstractType.
+/// Placeholder type ref identifier for non-specialized AbstractType. Used only for root-level types
+/// which have been integrated from remote peers before they were defined locally.
 pub const TYPE_REFS_UNDEFINED: TypeRefs = 7;
 
+/// A wrapper around [Branch] cell, supplied with a bunch of convenience methods to operate on both
+/// map-like and array-like contents of a [Branch].
 #[derive(Debug, Clone)]
-pub struct InnerRef(Rc<RefCell<Inner>>);
+pub struct BranchRef(Rc<RefCell<Branch>>);
 
-impl InnerRef {
-    pub fn new(inner: Inner) -> Self {
-        InnerRef(Rc::new(RefCell::new(inner)))
+impl BranchRef {
+    pub(crate) fn new(inner: Branch) -> Self {
+        BranchRef(Rc::new(RefCell::new(inner)))
     }
 
-    pub fn borrow(&self) -> Ref<Inner> {
+    /// Returns an immutable ref wrapper to an underlying [Branch].
+    /// This method will panic, if current branch was already mutably borrowed.
+    pub fn borrow(&self) -> Ref<Branch> {
         self.0.borrow()
     }
 
-    pub fn borrow_mut(&self) -> RefMut<Inner> {
+    /// Returns a mutable ref wrapper to an underlying [Branch].
+    /// This method will panic, if current branch was already borrowed (either mutably or immutably)
+    /// somewhere else.
+    pub fn borrow_mut(&self) -> RefMut<Branch> {
         self.0.borrow_mut()
     }
 
-    pub fn try_borrow_mut(&self) -> Result<RefMut<Inner>, BorrowMutError> {
+    /// Returns a result, which may either be a mutable ref wrapper to an underlying [Branch],
+    /// or an error in case when this branch was already borrowed (either mutably or immutably)
+    /// somewhere else.
+    pub fn try_borrow_mut(&self) -> Result<RefMut<Branch>, BorrowMutError> {
         self.0.try_borrow_mut()
     }
 
+    /// Converts current branch data into a [Value]. It uses a type ref information to resolve,
+    /// which value variant is a correct one for this branch. Since branch represent only complex
+    /// types [Value::Any] will never be returned from this method.  
     pub fn into_value(self, txn: &Transaction) -> Value {
         let type_ref = { self.as_ref().type_ref() };
         match type_ref {
@@ -64,7 +91,10 @@ impl InnerRef {
         }
     }
 
-    pub(crate) fn remove_at(&self, txn: &mut Transaction, index: u32, mut len: u32) {
+    /// Removes up to a `len` of countable elements from current branch sequence, starting at the
+    /// given `index`. Returns number of removed elements.
+    pub(crate) fn remove_at(&self, txn: &mut Transaction, index: u32, len: u32) -> u32 {
+        let mut remaining = len;
         let start = {
             let parent = self.borrow();
             parent.start
@@ -72,19 +102,19 @@ impl InnerRef {
         let (_, mut ptr) = if index == 0 {
             (None, start)
         } else {
-            Inner::index_to_ptr(txn, start, index)
+            Branch::index_to_ptr(txn, start, index)
         };
-        while len > 0 {
+        while remaining > 0 {
             if let Some(mut p) = ptr {
                 if let Some(item) = txn.store.blocks.get_item(&p) {
                     if !item.is_deleted() {
                         let item_len = item.len();
-                        let (l, r) = if len < item_len {
-                            p.id.clock += len;
-                            len = 0;
+                        let (l, r) = if remaining < item_len {
+                            p.id.clock += remaining;
+                            remaining = 0;
                             txn.store.blocks.split_block(&p)
                         } else {
-                            len -= item_len;
+                            remaining -= item_len;
                             (ptr, item.right.clone())
                         };
                         txn.delete(&l.unwrap());
@@ -98,11 +128,11 @@ impl InnerRef {
             }
         }
 
-        if len > 0 {
-            panic!("Array length exceeded");
-        }
+        len - remaining
     }
 
+    /// Inserts a preliminary `value` into a current branch indexed sequence component at the given
+    /// `index`. Returns an item reference created as a result of this operation.
     pub(crate) fn insert_at<'t, V: Prelim>(
         &self,
         txn: &'t mut Transaction,
@@ -120,7 +150,7 @@ impl InnerRef {
         let (left, right) = if index == 0 {
             (None, None)
         } else {
-            Inner::index_to_ptr(txn, start, index)
+            Branch::index_to_ptr(txn, start, index)
         };
         let pos = ItemPosition {
             parent,
@@ -133,23 +163,23 @@ impl InnerRef {
     }
 }
 
-impl AsRef<Inner> for InnerRef {
-    fn as_ref<'a>(&'a self) -> &'a Inner {
-        unsafe { &*self.0.as_ptr() as &'a Inner }
+impl AsRef<Branch> for BranchRef {
+    fn as_ref<'a>(&'a self) -> &'a Branch {
+        unsafe { &*self.0.as_ptr() as &'a Branch }
     }
 }
 
-impl Eq for InnerRef {}
+impl Eq for BranchRef {}
 
 #[cfg(not(test))]
-impl PartialEq for InnerRef {
+impl PartialEq for BranchRef {
     fn eq(&self, other: &Self) -> bool {
         Rc::ptr_eq(&self.0, &other.0)
     }
 }
 
 #[cfg(test)]
-impl PartialEq for InnerRef {
+impl PartialEq for BranchRef {
     fn eq(&self, other: &Self) -> bool {
         if Rc::ptr_eq(&self.0, &other.0) {
             true
@@ -159,19 +189,50 @@ impl PartialEq for InnerRef {
     }
 }
 
+/// Branch describes a content of a complex Yrs data structures, such as arrays or maps.
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub struct Inner {
+pub struct Branch {
+    /// A pointer to a first block of a indexed sequence component of this branch node. If `None`,
+    /// it means that sequence is empty or a branch doesn't act as an indexed sequence. Indexed
+    /// sequences include:
+    ///
+    /// - [Array]: all elements are stored as a double linked list, while the head of the list is
+    ///   kept in this field.
+    /// - [XmlElement]: this field acts as a head to a first child element stored within current XML
+    ///   node.
+    /// - [Text] and [XmlText]: this field point to a first chunk of text appended to collaborative
+    ///   text data structure.
     pub start: Option<BlockPtr>,
+
+    /// A map component of this branch node, used by some of the specialized complex types
+    /// including:
+    ///
+    /// - [Map]: all of the map elements are based on this field. The value of each entry points
+    ///   to the last modified value.
+    /// - [XmlElement]: this field stores attributes assigned to a given XML node.
     pub map: HashMap<String, BlockPtr>,
+
+    /// Unique identifier of a current branch node. It can be contain either a named string - which
+    /// means, this branch is a root-level complex data structure - or a block identifier. In latter
+    /// case it means, that this branch is a complex type (eg. Map or Array) nested inside of
+    /// another complex type.
     pub ptr: TypePtr,
+
+    /// A tag name identifier, used only by [XmlElement].
     pub name: Option<String>,
-    pub item: Option<BlockPtr>,
+
+    pub item: Option<BlockPtr>, //TODO: isn't this equivalent to `ptr` field?
+
+    /// A length of an indexed sequence component of a current branch node. Map component elements
+    /// are computed on demand.
     pub len: u32,
+
+    /// An identifier of an underlying complex data type (eg. is it an Array or a Map).
     type_ref: TypeRefs,
 }
 
-impl Inner {
-    pub fn new(ptr: TypePtr, type_ref: TypeRefs, name: Option<String>) -> Self {
+impl Branch {
+    pub(crate) fn new(ptr: TypePtr, type_ref: TypeRefs, name: Option<String>) -> Self {
         Self {
             start: None,
             map: HashMap::default(),
@@ -183,10 +244,13 @@ impl Inner {
         }
     }
 
+    /// Returns an identifier of an underlying complex data type (eg. is it an Array or a Map).
     pub fn type_ref(&self) -> TypeRefs {
         self.type_ref & 0b1111
     }
 
+    /// Returns a length of an indexed sequence component of a current branch node.
+    /// Map component elements are computed on demand.
     pub fn len(&self) -> u32 {
         self.len
     }
@@ -215,6 +279,11 @@ impl Inner {
         }
     }
 
+    /// Given an `index` parameter, returns an item content reference which contains that index
+    /// together with an offset inside of this content, which points precisely to an `index`
+    /// location within wrapping item content.
+    /// If `index` was outside of the array component boundary of current branch node, `None` will
+    /// be returned.
     pub(crate) fn get_at<'a, 'b>(
         &'a self,
         txn: &'b Transaction,
@@ -267,6 +336,17 @@ impl Inner {
         None
     }
 
+    /// Given an `index` and start block `ptr`, returns a pair of block pointers.
+    ///
+    /// If `index` happens to point inside of an existing block content, such block will be split at
+    /// position of an `index`. In such case left tuple value contains start of a block pointer on
+    /// a left side of an `index` and a pointer to a block directly on the right side of an `index`.
+    ///
+    /// If `index` point to the end of a block and no splitting is necessary, tuple will return only
+    /// left side (beginning of a block), while right side will be `None`.
+    ///
+    /// If `index` is outside of the range of an array component of current branch node, both tuple
+    /// values will be `None`.
     fn index_to_ptr(
         txn: &mut Transaction,
         mut ptr: Option<BlockPtr>,
@@ -361,7 +441,7 @@ where
     }
 }
 
-impl std::fmt::Display for Inner {
+impl std::fmt::Display for Branch {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.type_ref() {
             TYPE_REFS_ARRAY => write!(f, "YArray(start: {})", self.start.unwrap()),
@@ -487,6 +567,7 @@ impl<'a, 'txn> Iterator for Iter<'a, 'txn> {
     }
 }
 
+/// Type pointer - used to localize a complex [Branch] node within a scope of a document store.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TypePtr {
     /// Temporary value - used only when block is deserialized right away, but had not been
@@ -508,40 +589,5 @@ impl std::fmt::Display for TypePtr {
             TypePtr::Id(ptr) => write!(f, "{}", ptr),
             TypePtr::Named(name) => write!(f, "'{}'", name),
         }
-    }
-}
-
-#[derive(Default)]
-pub(crate) struct XorHasher(u64);
-
-impl Hasher for XorHasher {
-    fn finish(&self) -> u64 {
-        self.0
-    }
-
-    fn write(&mut self, bytes: &[u8]) {
-        let mut i = 0;
-        let mut buf = [0u8; 8];
-        while i <= bytes.len() - 8 {
-            buf.copy_from_slice(&bytes[i..i + 8]);
-            self.0 ^= u64::from_ne_bytes(buf);
-            i += 8;
-        }
-        while i < bytes.len() {
-            self.0 ^= bytes[i] as u64;
-            i += 1;
-        }
-    }
-
-    fn write_u32(&mut self, value: u32) {
-        self.0 ^= value as u64;
-    }
-
-    fn write_u64(&mut self, value: u64) {
-        self.0 ^= value;
-    }
-
-    fn write_usize(&mut self, value: usize) {
-        self.0 ^= value as u64;
     }
 }

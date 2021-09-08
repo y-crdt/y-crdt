@@ -5,7 +5,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 
-pub struct EventHandler<T>(Rc<RefCell<Subscriptions<T>>>);
+pub(crate) struct EventHandler<T>(Rc<RefCell<Subscriptions<T>>>);
 
 type Subscriptions<T> = HashMap<u32, Box<dyn Fn(&T) -> ()>>;
 
@@ -41,6 +41,8 @@ impl<T> EventHandler<T> {
     }
 }
 
+/// A subscription handle to a custom user-defined callback for an event handler. When dropped,
+/// it will unsubscribe corresponding callback.
 pub struct Subscription<T> {
     id: u32,
     subscriptions: Weak<RefCell<Subscriptions<T>>>,
@@ -54,13 +56,19 @@ impl<T> Drop for Subscription<T> {
     }
 }
 
+/// An update event passed to a callback registered in the event handler. Contains data about the
+/// state of an update.
 pub struct UpdateEvent {
+    /// An update that's about to be applied. Update contains information about all inserted blocks,
+    /// which have been send from a remote peer.
     pub update: Update,
+    /// A delete set that's about to be applied. Delete set contains a compressed information about
+    /// all deleted blocks, as observed by remote peer which send an update.
     pub delete_set: DeleteSet,
 }
 
 impl UpdateEvent {
-    pub fn new(update: Update, delete_set: DeleteSet) -> Self {
+    pub(crate) fn new(update: Update, delete_set: DeleteSet) -> Self {
         UpdateEvent { update, delete_set }
     }
 }
