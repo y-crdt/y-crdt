@@ -36,7 +36,7 @@ mod update;
 mod updates;
 mod utils;
 
-#[cfg(feature = "capi")]
+//#[cfg(feature = "capi")]
 mod capi;
 
 #[cfg(test)]
