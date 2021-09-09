@@ -212,7 +212,7 @@ impl XmlElement {
     /// Removes a range (defined by `len`) of XML nodes from the current XML element, starting at
     /// the given `index`. Returns the result which may contain an error if a number of elements
     /// removed is lesser than the expected one provided in `len` parameter.
-    pub fn remove(&self, txn: &mut Transaction, index: u32, len: u32) {
+    pub fn remove_range(&self, txn: &mut Transaction, index: u32, len: u32) {
         self.0.remove(txn, index, len)
     }
 
@@ -644,7 +644,7 @@ impl XmlText {
     /// Removes a number of characters specified by a `len` parameter from this XML text structure,
     /// starting at given `index`.
     /// This method may panic if `index` if greater than a length of this text.
-    pub fn remove(&self, txn: &mut Transaction, index: u32, len: u32) {
+    pub fn remove_range(&self, txn: &mut Transaction, index: u32, len: u32) {
         self.0.remove_range(txn, index, len)
     }
 }
