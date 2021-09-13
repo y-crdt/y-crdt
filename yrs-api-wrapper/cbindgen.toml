@@ -1,0 +1,5 @@
+language = "C"
+documentation = true
+
+[parse]
+parse_deps = false
