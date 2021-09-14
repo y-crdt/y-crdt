@@ -31,4 +31,4 @@ jobs:
         run: cargo test --verbose
 
       - name: Generate C bindings
-        run: cargo install cbindgen & cbindgen --config .\yrs-api-wrapper\cbindgen.toml --crate yrs-api-wrapper --output .\target\release\yrs.h
+        run: cargo install cbindgen & cbindgen --config ./yrs-api-wrapper/cbindgen.toml --crate yrs-api-wrapper --output ./target/release/yrs-api-wrapper.h
