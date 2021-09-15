@@ -392,7 +392,7 @@ pub unsafe extern "C" fn yarray_insert_range(
     array: *const Array,
     txn: *mut Transaction,
     idx: c_int,
-    values: *const YVal,
+    values: *const *const YVal,
     len: c_int,
 ) {
     assert!(!array.is_null());
@@ -409,9 +409,9 @@ pub unsafe extern "C" fn yarray_insert_range(
 
     // try read as many values a JSON-like primitives and insert them at once
     while i < len {
-        let val = ptr.offset(i);
-        if (*val).tag <= 0 {
-            let any = val_into_any(val.as_ref().unwrap());
+        let val = ptr.offset(i).read().as_ref().unwrap();
+        if val.tag <= 0 {
+            let any = val_into_any(val);
             vec.push(any);
         } else {
             break;
@@ -425,7 +425,7 @@ pub unsafe extern "C" fn yarray_insert_range(
 
     // insert remaining values one by one
     while i < len {
-        let val = ptr.offset(i).read();
+        let val = ptr.offset(i).read().read();
         arr.push_back(txn, val);
         i += 1;
     }

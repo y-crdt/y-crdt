@@ -23,36 +23,22 @@
 //! mediums all at once. We don't have this ecosystem yet in Yrs, but you can
 //! build them easily on your own.
 
-/// cbindgen:ignore
 mod alt;
-/// cbindgen:ignore
 pub mod block;
-/// cbindgen:ignore
 mod block_store;
-/// cbindgen:ignore
 mod doc;
-/// cbindgen:ignore
 mod event;
-/// cbindgen:ignore
 mod id_set;
-/// cbindgen:ignore
 mod store;
-/// cbindgen:ignore
 mod transaction;
-/// cbindgen:ignore
 pub mod types;
-/// cbindgen:ignore
 mod update;
-/// cbindgen:ignore
 pub mod updates;
-/// cbindgen:ignore
 mod utils;
 
-/// cbindgen:ignore
 #[cfg(test)]
 mod compatibility_tests;
 
-/// cbindgen:ignore
 #[cfg(test)]
 mod test_utils;
 
