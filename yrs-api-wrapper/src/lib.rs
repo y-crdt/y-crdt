@@ -1179,93 +1179,93 @@ unsafe fn ymap_entry_list_destroy(map: *const *const YMapEntry, len: c_int) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yval_null() -> YVal {
-    YVal {
+pub unsafe extern "C" fn yval_null() -> *const YVal {
+    Box::into_raw(Box::new(YVal {
         tag: Y_JSON_NULL,
         prelim: 1,
         len: 0,
         value: MaybeUninit::uninit().assume_init(),
-    }
+    }))
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yval_undef() -> YVal {
-    YVal {
+pub unsafe extern "C" fn yval_undef() -> *mut YVal {
+    Box::into_raw(Box::new(YVal {
         tag: Y_JSON_UNDEF,
         prelim: 1,
         len: 0,
         value: MaybeUninit::uninit().assume_init(),
-    }
+    }))
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yval_bool(flag: u8) -> YVal {
-    YVal {
+pub unsafe extern "C" fn yval_bool(flag: u8) -> *mut YVal {
+    Box::into_raw(Box::new(YVal {
         tag: Y_JSON_BOOL,
         prelim: 1,
         len: 1,
         value: YValContent { flag },
-    }
+    }))
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yval_float(num: c_float) -> YVal {
-    YVal {
+pub unsafe extern "C" fn yval_float(num: c_float) -> *mut YVal {
+    Box::into_raw(Box::new(YVal {
         tag: Y_JSON_NUM,
         prelim: 1,
         len: 1,
         value: YValContent { num },
-    }
+    }))
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yval_long(integer: c_long) -> YVal {
-    YVal {
+pub unsafe extern "C" fn yval_long(integer: c_long) -> *mut YVal {
+    Box::into_raw(Box::new(YVal {
         tag: Y_JSON_INT,
         prelim: 1,
         len: 1,
         value: YValContent { integer },
-    }
+    }))
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yval_str(str: *const c_char, len: c_int) -> YVal {
-    YVal {
+pub unsafe extern "C" fn yval_str(str: *const c_char) -> *mut YVal {
+    Box::into_raw(Box::new(YVal {
         tag: Y_JSON_STR,
         prelim: 1,
-        len,
+        len: 1,
         value: YValContent { str },
-    }
+    }))
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yval_buf(buf: *const u8, len: c_int) -> YVal {
-    YVal {
+pub unsafe extern "C" fn yval_buf(buf: *const u8, len: c_int) -> *mut YVal {
+    Box::into_raw(Box::new(YVal {
         tag: Y_JSON_BUF,
         prelim: 1,
         len,
         value: YValContent { buf },
-    }
+    }))
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yval_json_array(json_array: *const *const YVal, len: c_int) -> YVal {
-    YVal {
+pub unsafe extern "C" fn yval_json_array(json_array: *const *const YVal, len: c_int) -> *mut YVal {
+    Box::into_raw(Box::new(YVal {
         tag: Y_JSON_ARR,
         prelim: 1,
         len,
         value: YValContent { array: json_array },
-    }
+    }))
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yval_json_map(json_map: *const *const YMapEntry, len: c_int) -> YVal {
-    YVal {
+pub unsafe extern "C" fn yval_json_map(json_map: *const *const YMapEntry, len: c_int) -> *mut YVal {
+    Box::into_raw(Box::new(YVal {
         tag: Y_JSON_ARR,
         prelim: 1,
         len,
         value: YValContent { map: json_map },
-    }
+    }))
 }
 
 #[no_mangle]
