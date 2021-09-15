@@ -96,8 +96,8 @@ impl Array {
 
     /// Returns an iterator, that can be used to lazely traverse over all values stored in a current
     /// array.
-    pub fn iter<'a, 'b, 'txn>(&'a self, txn: &'b Transaction<'txn>) -> Iter<'b, 'txn> {
-        Iter::new(self, txn)
+    pub fn iter<'a, 'b, 'txn>(&'a self, txn: &'b Transaction<'txn>) -> ArrayIter<'b, 'txn> {
+        ArrayIter::new(self, txn)
     }
 
     /// Converts all contents of current array into a JSON-like representation.
@@ -107,16 +107,16 @@ impl Array {
     }
 }
 
-pub struct Iter<'b, 'txn> {
+pub struct ArrayIter<'b, 'txn> {
     content: VecDeque<Value>,
     ptr: Option<BlockPtr>,
     txn: &'b Transaction<'txn>,
 }
 
-impl<'b, 'txn> Iter<'b, 'txn> {
+impl<'b, 'txn> ArrayIter<'b, 'txn> {
     fn new(array: &Array, txn: &'b Transaction<'txn>) -> Self {
         let inner = array.0.borrow();
-        Iter {
+        ArrayIter {
             ptr: inner.start,
             txn,
             content: VecDeque::default(),
@@ -124,7 +124,7 @@ impl<'b, 'txn> Iter<'b, 'txn> {
     }
 }
 
-impl<'b, 'txn> Iterator for Iter<'b, 'txn> {
+impl<'b, 'txn> Iterator for ArrayIter<'b, 'txn> {
     type Item = Value;
 
     fn next(&mut self) -> Option<Self::Item> {

@@ -513,7 +513,7 @@ impl XmlHook {
     pub fn iter<'a, 'b, 'txn>(
         &self,
         txn: &'b Transaction<'txn>,
-    ) -> crate::types::map::Iter<'b, 'txn> {
+    ) -> crate::types::map::MapIter<'b, 'txn> {
         self.0.iter(txn)
     }
 
