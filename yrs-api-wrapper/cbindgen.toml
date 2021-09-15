@@ -3,3 +3,16 @@ documentation = true
 
 [parse]
 parse_deps = false
+
+[export.rename]
+"Doc" = "YDoc"
+"Transaction" = "YTransaction"
+"Array" = "YArray"
+"Map" = "YMap"
+"Text" = "YText"
+"XmlElement" = "YXmlElement"
+"XmlText" = "YXmlText"
+"MapIter" = "YMapIter"
+"ArrayIter" = "YArrayIter"
+"TreeWalker" = "YXmlTreeWalker"
+"Attributes" = "YXmlAttrIter"

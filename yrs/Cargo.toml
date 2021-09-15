@@ -25,7 +25,3 @@ harness = false
 doctest = true
 bench = true
 doc = true
-
-[features]
-capi = []
-wasm = []
