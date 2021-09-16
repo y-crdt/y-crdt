@@ -1,6 +1,28 @@
 language = "C"
 documentation = true
 
+header = """
+#ifndef YRS_FFI_H
+#define YRS_FFI_H
+
+typedef struct YDoc {} YDoc;
+typedef struct YText {} YText;
+typedef struct YArray {} YArray;
+typedef struct YMap {} YMap;
+typedef struct YXmlElement {} YXmlElement;
+typedef struct YXmlText {} YXmlText;
+
+typedef struct YTransaction {} YTransaction;
+typedef struct YArrayIter {} YArrayIter;
+typedef struct YMapIter {} YMapIter;
+typedef struct YXmlAttrIter {} YXmlAttrIter;
+typedef struct YXmlTreeWalker {} YXmlTreeWalker;
+"""
+
+trailer = """
+#endif
+"""
+
 [parse]
 parse_deps = false
 
