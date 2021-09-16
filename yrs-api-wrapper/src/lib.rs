@@ -319,7 +319,7 @@ pub unsafe extern "C" fn ytext_len(txt: *const Text) -> c_int {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn ytext_string(txt: *const Text, txn: *const Transaction) -> *const c_char {
+pub unsafe extern "C" fn ytext_string(txt: *const Text, txn: *const Transaction) -> *mut c_char {
     assert!(!txt.is_null());
     assert!(!txn.is_null());
 
@@ -606,7 +606,7 @@ pub unsafe extern "C" fn ymap_remove_all(map: *const Map, txn: *mut Transaction)
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yxml_tag(xml: *const XmlElement) -> *const c_char {
+pub unsafe extern "C" fn yxml_tag(xml: *const XmlElement) -> *mut c_char {
     assert!(!xml.is_null());
     let xml = xml.as_ref().unwrap();
     let tag = xml.tag();
@@ -617,7 +617,7 @@ pub unsafe extern "C" fn yxml_tag(xml: *const XmlElement) -> *const c_char {
 pub unsafe extern "C" fn yxml_string(
     xml: *const XmlElement,
     txn: *const Transaction,
-) -> *const c_char {
+) -> *mut c_char {
     assert!(!xml.is_null());
     assert!(!txn.is_null());
 
@@ -671,7 +671,7 @@ pub unsafe extern "C" fn yxml_get_attr(
     xml: *const XmlElement,
     txn: *const Transaction,
     attr_name: *const c_char,
-) -> *const c_char {
+) -> *mut c_char {
     assert!(!xml.is_null());
     assert!(!txn.is_null());
     assert!(!attr_name.is_null());
@@ -683,7 +683,7 @@ pub unsafe extern "C" fn yxml_get_attr(
     if let Some(value) = xml.get_attribute(txn, key) {
         CString::new(value).unwrap().into_raw()
     } else {
-        std::ptr::null()
+        std::ptr::null_mut()
     }
 }
 
@@ -939,7 +939,7 @@ pub unsafe extern "C" fn yxmltext_len(txt: *const XmlText, txn: *const Transacti
 pub unsafe extern "C" fn yxmltext_string(
     txt: *const XmlText,
     txn: *const Transaction,
-) -> *const c_char {
+) -> *mut c_char {
     assert!(!txt.is_null());
     assert!(!txn.is_null());
 
@@ -1026,7 +1026,7 @@ pub unsafe extern "C" fn yxmltext_get_attr(
     txt: *const XmlText,
     txn: *const Transaction,
     attr_name: *const c_char,
-) -> *const c_char {
+) -> *mut c_char {
     assert!(!txt.is_null());
     assert!(!txn.is_null());
     assert!(!attr_name.is_null());
@@ -1038,7 +1038,7 @@ pub unsafe extern "C" fn yxmltext_get_attr(
     if let Some(value) = txt.get_attribute(txn, name) {
         CString::new(value).unwrap().into_raw()
     } else {
-        std::ptr::null()
+        std::ptr::null_mut()
     }
 }
 
@@ -1150,31 +1150,31 @@ union YValContent {
     flag: u8,
     num: c_float,
     integer: c_long,
-    str: *const c_char,
-    buf: *const c_uchar,
-    array: *const *const YVal,
-    map: *const *const YMapEntry,
-    y_array: *const Array,
-    y_map: *const Map,
-    y_text: *const Text,
-    y_xml_elem: *const XmlElement,
-    y_xml_text: *const XmlText,
+    str: *mut c_char,
+    buf: *mut c_uchar,
+    array: *mut *mut YVal,
+    map: *mut *mut YMapEntry,
+    y_array: *mut Array,
+    y_map: *mut Map,
+    y_text: *mut Text,
+    y_xml_elem: *mut XmlElement,
+    y_xml_text: *mut XmlText,
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn yval_destroy(val: *mut YVal) {}
 
-unsafe fn yval_list_destroy(array: *const *const YVal, len: c_int) {
-    let values = Vec::from_raw_parts(array as *mut *const YVal, len as usize, len as usize);
+unsafe fn yval_list_destroy(array: *mut *mut YVal, len: c_int) {
+    let values = Vec::from_raw_parts(array, len as usize, len as usize);
     for ptr in values {
-        yval_destroy(ptr as *mut _);
+        yval_destroy(ptr);
     }
 }
 
-unsafe fn ymap_entry_list_destroy(map: *const *const YMapEntry, len: c_int) {
-    let values = Vec::from_raw_parts(map as *mut *const YMapEntry, len as usize, len as usize);
+unsafe fn ymap_entry_list_destroy(map: *mut *mut YMapEntry, len: c_int) {
+    let values = Vec::from_raw_parts(map, len as usize, len as usize);
     for ptr in values {
-        ymap_entry_destroy(ptr as *mut _);
+        ymap_entry_destroy(ptr);
     }
 }
 
@@ -1234,7 +1234,7 @@ pub unsafe extern "C" fn yval_str(str: *const c_char) -> *mut YVal {
         tag: Y_JSON_STR,
         prelim: 1,
         len: 1,
-        value: YValContent { str },
+        value: YValContent { str: str as *mut c_char },
     }))
 }
 
@@ -1244,12 +1244,12 @@ pub unsafe extern "C" fn yval_buf(buf: *const u8, len: c_int) -> *mut YVal {
         tag: Y_JSON_BUF,
         prelim: 1,
         len,
-        value: YValContent { buf },
+        value: YValContent { buf: buf as *mut u8 },
     }))
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yval_json_array(json_array: *const *const YVal, len: c_int) -> *mut YVal {
+pub unsafe extern "C" fn yval_json_array(json_array: *mut *mut YVal, len: c_int) -> *mut YVal {
     Box::into_raw(Box::new(YVal {
         tag: Y_JSON_ARR,
         prelim: 1,
@@ -1259,12 +1259,52 @@ pub unsafe extern "C" fn yval_json_array(json_array: *const *const YVal, len: c_
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yval_json_map(json_map: *const *const YMapEntry, len: c_int) -> *mut YVal {
+pub unsafe extern "C" fn yval_json_map(json_map: *mut *mut YMapEntry, len: c_int) -> *mut YVal {
     Box::into_raw(Box::new(YVal {
         tag: Y_JSON_ARR,
         prelim: 1,
         len,
         value: YValContent { map: json_map },
+    }))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yval_yarray(array: *mut *mut YVal, len: c_int) -> *mut YVal {
+    Box::into_raw(Box::new(YVal {
+        tag: Y_ARRAY,
+        prelim: 1,
+        len,
+        value: YValContent { array },
+    }))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yval_ymap(map: *mut *mut YMapEntry, len: c_int) -> *mut YVal {
+    Box::into_raw(Box::new(YVal {
+        tag: Y_MAP,
+        prelim: 1,
+        len,
+        value: YValContent { map },
+    }))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yval_yxml_elem(array: *mut *mut YVal, len: c_int) -> *mut YVal {
+    Box::into_raw(Box::new(YVal {
+        tag: Y_XML_ELEM,
+        prelim: 1,
+        len,
+        value: YValContent { array },
+    }))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yval_yxml_text() -> *mut YVal {
+    Box::into_raw(Box::new(YVal {
+        tag: Y_XML_TEXT,
+        prelim: 1,
+        len: 0,
+        value: MaybeUninit::uninit().assume_init(),
     }))
 }
 
@@ -1278,9 +1318,9 @@ pub unsafe extern "C" fn yval_is_json(val: *const YVal) -> c_char {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yval_read_bool(val: *const YVal) -> *const c_char {
+pub unsafe extern "C" fn yval_read_bool(val: *const YVal) -> *const c_uchar {
     if (*val).tag == Y_JSON_BOOL {
-        &(*val).value.flag as *const u8 as *const c_char
+        &(*val).value.flag as *const u8 as *const c_uchar
     } else {
         std::ptr::null()
     }
@@ -1305,11 +1345,11 @@ pub unsafe extern "C" fn yval_read_long(val: *const YVal) -> *const c_long {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yval_read_str(val: *const YVal) -> *const c_char {
+pub unsafe extern "C" fn yval_read_str(val: *const YVal) -> *mut c_char {
     if (*val).tag == Y_JSON_STR {
         (*val).value.str
     } else {
-        std::ptr::null()
+        std::ptr::null_mut()
     }
 }
 
@@ -1323,47 +1363,47 @@ pub unsafe extern "C" fn yval_read_buf(val: *const YVal) -> *const u8 {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yval_read_json_array(val: *const YVal) -> *const *const YVal {
+pub unsafe extern "C" fn yval_read_json_array(val: *const YVal) -> *mut *mut YVal {
     if (*val).tag == Y_JSON_ARR {
         (*val).value.array
     } else {
-        std::ptr::null()
+        std::ptr::null_mut()
     }
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yval_read_json_map(val: *const YVal) -> *const *const YMapEntry {
+pub unsafe extern "C" fn yval_read_json_map(val: *const YVal) -> *mut *mut YMapEntry {
     if (*val).tag == Y_JSON_MAP {
         (*val).value.map
     } else {
-        std::ptr::null()
+        std::ptr::null_mut()
     }
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yval_read_yarray(val: *const YVal) -> *const Array {
+pub unsafe extern "C" fn yval_read_yarray(val: *const YVal) -> *mut Array {
     if (*val).tag == Y_ARRAY {
-        &*(*val).value.y_array as *const _
+        &mut *(*val).value.y_array as *mut _
     } else {
-        std::ptr::null()
+        std::ptr::null_mut()
     }
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yval_read_ymap(val: *const YVal) -> *const Map {
+pub unsafe extern "C" fn yval_read_ymap(val: *const YVal) -> *mut Map {
     if (*val).tag == Y_MAP {
-        &*(*val).value.y_map as *const _
+        &mut *(*val).value.y_map as *mut _
     } else {
-        std::ptr::null()
+        std::ptr::null_mut()
     }
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yval_read_ytext(val: *const YVal) -> *const Text {
+pub unsafe extern "C" fn yval_read_ytext(val: *const YVal) -> *mut Text {
     if (*val).tag == Y_TEXT {
-        &*(*val).value.y_text as *const _
+        &mut *(*val).value.y_text as *mut _
     } else {
-        std::ptr::null()
+        std::ptr::null_mut()
     }
 }
 
@@ -1483,17 +1523,17 @@ fn yval_from_any(v: Any) -> *mut YVal {
             prelim: 0,
             len: v.len() as c_int,
             value: YValContent {
-                buf: Box::into_raw(v) as *const _,
+                buf: Box::into_raw(v) as *mut c_uchar,
             },
         },
         Any::Array(v) => {
             let values: Vec<_> = v
                 .into_iter()
-                .map(|v| yval_from_any(v) as *const YVal)
+                .map(|v| yval_from_any(v))
                 .collect();
             let len = values.len() as c_int;
-            let boxed = values.into_boxed_slice();
-            let array = boxed.as_ptr();
+            let mut boxed = values.into_boxed_slice();
+            let array = boxed.as_mut_ptr();
             forget(boxed);
             YVal {
                 tag: Y_JSON_ARR,
@@ -1508,12 +1548,12 @@ fn yval_from_any(v: Any) -> *mut YVal {
                 .map(|(k, v)| {
                     let key = CString::new(k).unwrap().into_raw();
                     let value = yval_from_any(v);
-                    Box::into_raw(Box::new(YMapEntry { key, value })) as *const YMapEntry
+                    Box::into_raw(Box::new(YMapEntry { key, value }))
                 })
                 .collect();
             let len = entries.len() as c_int;
-            let boxed = entries.into_boxed_slice();
-            let map = boxed.as_ptr();
+            let mut boxed = entries.into_boxed_slice();
+            let map = boxed.as_mut_ptr();
             YVal {
                 tag: Y_JSON_MAP,
                 prelim: 0,
