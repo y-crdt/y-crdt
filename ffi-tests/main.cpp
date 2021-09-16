@@ -2,8 +2,11 @@
 
 #include <stdio.h>
 #include <string.h>
-#include "./include/doctest.h"
-#include "./include/yrs.h"
+#include "include/doctest.h"
+
+extern "C" {
+    #include "include/libyrs.h"
+};
 
 TEST_CASE("YText basic") {
     YDoc* doc = ydoc_new_with_id(1);
