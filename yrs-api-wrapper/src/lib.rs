@@ -150,7 +150,7 @@ pub unsafe extern "C" fn yxml_destroy(value: *mut XmlElement) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yxml_text_destroy(value: *mut XmlText) {
+pub unsafe extern "C" fn yxmltext_destroy(value: *mut XmlText) {
     if !value.is_null() {
         drop(Box::from_raw(value));
     }
@@ -265,14 +265,14 @@ pub unsafe extern "C" fn ytxn_xml_text(txn: *mut Transaction, name: *const c_cha
 pub unsafe extern "C" fn ytxn_state_vector_v1(
     txn: *const Transaction,
     len: *mut c_int,
-) -> *const c_uchar {
+) -> *mut c_uchar {
     assert!(!txn.is_null());
 
     let state_vector = txn.as_ref().unwrap().state_vector();
     let binary = state_vector.encode_v1().into_boxed_slice();
 
     *len = binary.len() as c_int;
-    Box::into_raw(binary) as *const c_uchar
+    Box::into_raw(binary) as *mut c_uchar
 }
 
 #[no_mangle]
@@ -281,7 +281,7 @@ pub unsafe extern "C" fn ytxn_state_diff_v1(
     sv: *const c_uchar,
     sv_len: c_int,
     len: *mut c_int,
-) -> *const c_uchar {
+) -> *mut c_uchar {
     assert!(!txn.is_null());
 
     let sv = {
@@ -297,15 +297,15 @@ pub unsafe extern "C" fn ytxn_state_diff_v1(
     txn.as_ref().unwrap().encode_diff(&sv, &mut encoder);
     let binary = encoder.to_vec().into_boxed_slice();
     *len = binary.len() as c_int;
-    Box::into_raw(binary) as *const c_uchar
+    Box::into_raw(binary) as *mut c_uchar
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn ytxn_apply(txn: *mut Transaction, diff: *const u8, diff_len: c_int) {
+pub unsafe extern "C" fn ytxn_apply(txn: *mut Transaction, diff: *const c_uchar, diff_len: c_int) {
     assert!(!txn.is_null());
     assert!(!diff.is_null());
 
-    let update = std::slice::from_raw_parts(diff, diff_len as usize);
+    let update = std::slice::from_raw_parts(diff as *const u8, diff_len as usize);
     let mut decoder = DecoderV1::from(update);
     let update = Update::decode(&mut decoder);
     let ds = DeleteSet::decode(&mut decoder);
@@ -373,7 +373,7 @@ pub unsafe extern "C" fn yarray_get(
     array: *const Array,
     txn: *mut Transaction,
     idx: c_int,
-) -> *const YVal {
+) -> *mut YVal {
     assert!(!array.is_null());
     assert!(!txn.is_null());
 
@@ -383,7 +383,7 @@ pub unsafe extern "C" fn yarray_get(
     if let Some(val) = array.get(txn, idx as u32) {
         yval_from_value(val)
     } else {
-        std::ptr::null()
+        std::ptr::null_mut()
     }
 }
 
@@ -528,7 +528,7 @@ pub unsafe extern "C" fn ymap_insert(
     txn: *mut Transaction,
     key: *const c_char,
     value: *const YVal,
-) -> *const YMapEntry {
+) -> *mut YMapEntry {
     assert!(!map.is_null());
     assert!(!txn.is_null());
     assert!(!key.is_null());
@@ -546,7 +546,7 @@ pub unsafe extern "C" fn ymap_insert(
             value: yval_from_value(prev),
         }))
     } else {
-        std::ptr::null()
+        std::ptr::null_mut()
     }
 }
 
@@ -555,7 +555,7 @@ pub unsafe extern "C" fn ymap_remove(
     map: *const Map,
     txn: *mut Transaction,
     key: *const c_char,
-) -> *const YVal {
+) -> *mut YVal {
     assert!(!map.is_null());
     assert!(!txn.is_null());
     assert!(!key.is_null());
@@ -568,7 +568,7 @@ pub unsafe extern "C" fn ymap_remove(
     if let Some(value) = map.remove(txn, key) {
         yval_from_value(value)
     } else {
-        std::ptr::null()
+        std::ptr::null_mut()
     }
 }
 
@@ -577,7 +577,7 @@ pub unsafe extern "C" fn ymap_get(
     map: *const Map,
     txn: *const Transaction,
     key: *const c_char,
-) -> *const YVal {
+) -> *mut YVal {
     assert!(!map.is_null());
     assert!(!txn.is_null());
     assert!(!key.is_null());
@@ -590,7 +590,7 @@ pub unsafe extern "C" fn ymap_get(
     if let Some(value) = map.get(txn, key) {
         yval_from_value(value)
     } else {
-        std::ptr::null()
+        std::ptr::null_mut()
     }
 }
 
@@ -739,7 +739,7 @@ pub unsafe extern "C" fn yxml_attr_iter_next(iter: *mut Attributes) -> *mut YXml
 pub unsafe extern "C" fn yxml_next_sibling(
     xml: *const XmlElement,
     txn: *const Transaction,
-) -> *const YVal {
+) -> *mut YVal {
     assert!(!xml.is_null());
     assert!(!txn.is_null());
 
@@ -752,7 +752,7 @@ pub unsafe extern "C" fn yxml_next_sibling(
             Xml::Text(v) => yval_from_value(Value::YXmlText(v)),
         }
     } else {
-        std::ptr::null()
+        std::ptr::null_mut()
     }
 }
 
@@ -760,7 +760,7 @@ pub unsafe extern "C" fn yxml_next_sibling(
 pub unsafe extern "C" fn yxml_prev_sibling(
     xml: *const XmlElement,
     txn: *const Transaction,
-) -> *const YVal {
+) -> *mut YVal {
     assert!(!xml.is_null());
     assert!(!txn.is_null());
 
@@ -773,7 +773,49 @@ pub unsafe extern "C" fn yxml_prev_sibling(
             Xml::Text(v) => yval_from_value(Value::YXmlText(v)),
         }
     } else {
-        std::ptr::null()
+        std::ptr::null_mut()
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yxmltext_next_sibling(
+    xml: *const XmlText,
+    txn: *const Transaction,
+) -> *mut YVal {
+    assert!(!xml.is_null());
+    assert!(!txn.is_null());
+
+    let xml = xml.as_ref().unwrap();
+    let txn = txn.as_ref().unwrap();
+
+    if let Some(next) = xml.next_sibling(txn) {
+        match next {
+            Xml::Element(v) => yval_from_value(Value::YXmlElement(v)),
+            Xml::Text(v) => yval_from_value(Value::YXmlText(v)),
+        }
+    } else {
+        std::ptr::null_mut()
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yxmltext_prev_sibling(
+    xml: *const XmlText,
+    txn: *const Transaction,
+) -> *mut YVal {
+    assert!(!xml.is_null());
+    assert!(!txn.is_null());
+
+    let xml = xml.as_ref().unwrap();
+    let txn = txn.as_ref().unwrap();
+
+    if let Some(next) = xml.prev_sibling(txn) {
+        match next {
+            Xml::Element(v) => yval_from_value(Value::YXmlElement(v)),
+            Xml::Text(v) => yval_from_value(Value::YXmlText(v)),
+        }
+    } else {
+        std::ptr::null_mut()
     }
 }
 
@@ -781,7 +823,7 @@ pub unsafe extern "C" fn yxml_prev_sibling(
 pub unsafe extern "C" fn yxml_parent(
     xml: *const XmlElement,
     txn: *const Transaction,
-) -> *const YVal {
+) -> *mut XmlElement {
     assert!(!xml.is_null());
     assert!(!txn.is_null());
 
@@ -789,9 +831,9 @@ pub unsafe extern "C" fn yxml_parent(
     let txn = txn.as_ref().unwrap();
 
     if let Some(parent) = xml.parent(txn) {
-        yval_from_value(Value::YXmlElement(parent))
+        Box::into_raw(Box::new(parent))
     } else {
-        std::ptr::null()
+        std::ptr::null_mut()
     }
 }
 
@@ -805,6 +847,26 @@ pub unsafe extern "C" fn yxml_child_len(xml: *const XmlElement, txn: *const Tran
 
     xml.len(txn) as c_int
 }
+
+
+#[no_mangle]
+pub unsafe extern "C" fn yxml_first_child(xml: *const XmlElement, txn: *const Transaction) -> *mut YVal {
+    assert!(!xml.is_null());
+    assert!(!txn.is_null());
+
+    let xml = xml.as_ref().unwrap();
+    let txn = txn.as_ref().unwrap();
+
+    if let Some(value) = xml.first_child(txn) {
+        match value {
+            Xml::Element(v) => yval_from_value(Value::YXmlElement(v)),
+            Xml::Text(v) => yval_from_value(Value::YXmlText(v)),
+        }
+    } else {
+        std::ptr::null_mut()
+    }
+}
+
 
 #[no_mangle]
 pub unsafe extern "C" fn yxml_tree_walker(
@@ -828,7 +890,7 @@ pub unsafe extern "C" fn yxml_tree_walker_destroy(iter: *mut TreeWalker) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yxml_tree_walker_next(iter: *mut TreeWalker) -> *const YVal {
+pub unsafe extern "C" fn yxml_tree_walker_next(iter: *mut TreeWalker) -> *mut YVal {
     assert!(!iter.is_null());
 
     let iter = iter.as_mut().unwrap();
@@ -839,7 +901,7 @@ pub unsafe extern "C" fn yxml_tree_walker_next(iter: *mut TreeWalker) -> *const 
             Xml::Text(v) => yval_from_value(Value::YXmlText(v)),
         }
     } else {
-        std::ptr::null()
+        std::ptr::null_mut()
     }
 }
 
@@ -914,13 +976,6 @@ pub unsafe extern "C" fn yxml_get(
         }
     } else {
         std::ptr::null()
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn yxmltext_destroy(txt: *mut XmlText) {
-    if !txt.is_null() {
-        drop(Box::from_raw(txt));
     }
 }
 
@@ -1299,7 +1354,7 @@ pub unsafe extern "C" fn yval_yxml_elem(array: *mut *mut YVal, len: c_int) -> *m
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yval_yxml_text() -> *mut YVal {
+pub unsafe extern "C" fn yval_yxmltext() -> *mut YVal {
     Box::into_raw(Box::new(YVal {
         tag: Y_XML_TEXT,
         prelim: 1,
@@ -1390,6 +1445,15 @@ pub unsafe extern "C" fn yval_read_yarray(val: *const YVal) -> *mut Array {
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn yval_read_yxml_elem(val: *const YVal) -> *mut XmlElement {
+    if (*val).tag == Y_XML_ELEM {
+        &mut *(*val).value.y_xml_elem as *mut _
+    } else {
+        std::ptr::null_mut()
+    }
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn yval_read_ymap(val: *const YVal) -> *mut Map {
     if (*val).tag == Y_MAP {
         &mut *(*val).value.y_map as *mut _
@@ -1408,20 +1472,11 @@ pub unsafe extern "C" fn yval_read_ytext(val: *const YVal) -> *mut Text {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yval_read_yxml_text(val: *const YVal) -> *const XmlText {
+pub unsafe extern "C" fn yval_read_yxmltext(val: *const YVal) -> *mut XmlText {
     if (*val).tag == Y_XML_TEXT {
-        &*(*val).value.y_xml_text as *const _
+        &mut *(*val).value.y_xml_text as *mut _
     } else {
-        std::ptr::null()
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn yval_read_yxml_elem(val: *const YVal) -> *const XmlElement {
-    if (*val).tag == Y_XML_ELEM {
-        &*(*val).value.y_xml_elem as *const _
-    } else {
-        std::ptr::null()
+        std::ptr::null_mut()
     }
 }
 
