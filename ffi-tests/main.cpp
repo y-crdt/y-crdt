@@ -15,8 +15,8 @@ TEST_CASE("Update exchange basic") {
     YText* txt1 = ytxn_text(t1, "test");
 
     YDoc* d2 = ydoc_new_with_id(2);
-    YTransaction* t2 = ytxn_new(d1);
-    YText* txt2 = ytxn_text(t1, "test");
+    YTransaction* t2 = ytxn_new(d2);
+    YText* txt2 = ytxn_text(t2, "test");
 
     // insert data at the same position on both peer texts
     ytext_insert(txt1, t1, 0, "world");
