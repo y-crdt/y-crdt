@@ -1,7 +1,7 @@
 use lib0::any::Any;
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
-use std::mem::{forget, MaybeUninit};
+use std::mem::{forget, MaybeUninit, ManuallyDrop};
 use std::os::raw::{c_char, c_float, c_int, c_long, c_uchar, c_ulong};
 use yrs::block::{ItemContent, Prelim};
 use yrs::types::{
@@ -87,14 +87,23 @@ pub type TreeWalker = yrs::types::xml::TreeWalker<'static, 'static>;
 #[repr(C)]
 pub struct YMapEntry {
     pub key: *const c_char,
-    pub value: *const YVal,
+    pub value: YOutput,
+}
+
+impl YMapEntry {
+    fn new(key: &str, value: Value) -> Self {
+        YMapEntry {
+            key: CString::new(key).unwrap().into_raw(),
+            value: YOutput::from(value),
+        }
+    }
 }
 
 impl Drop for YMapEntry {
     fn drop(&mut self) {
         unsafe {
             drop(CString::from_raw(self.key as *mut c_char));
-            drop(Box::from_raw(self.value as *mut YVal))
+            //self.value.drop();
         }
     }
 }
@@ -143,7 +152,7 @@ pub unsafe extern "C" fn ymap_destroy(value: *mut Map) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yxml_destroy(value: *mut XmlElement) {
+pub unsafe extern "C" fn yxmlelem_destroy(value: *mut XmlElement) {
     if !value.is_null() {
         drop(Box::from_raw(value));
     }
@@ -164,14 +173,14 @@ pub unsafe extern "C" fn ymap_entry_destroy(value: *mut YMapEntry) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yxml_attr_destroy(attr: *mut YXmlAttr) {
+pub unsafe extern "C" fn yxmlelem_attr_destroy(attr: *mut YXmlAttr) {
     if !attr.is_null() {
         drop(Box::from_raw(attr));
     }
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn ystr_destroy(str: *mut c_char) {
+pub unsafe extern "C" fn ystring_destroy(str: *mut c_char) {
     if !str.is_null() {
         drop(CString::from_raw(str));
     }
@@ -195,7 +204,7 @@ pub extern "C" fn ydoc_new_with_id(id: c_ulong) -> *mut Doc {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn ytxn_new(doc: *mut Doc) -> *mut Transaction {
+pub unsafe extern "C" fn ytransaction_new(doc: *mut Doc) -> *mut Transaction {
     assert!(!doc.is_null());
 
     let doc = doc.as_mut().unwrap();
@@ -203,13 +212,13 @@ pub unsafe extern "C" fn ytxn_new(doc: *mut Doc) -> *mut Transaction {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn ytxn_commit(txn: *mut Transaction) {
+pub unsafe extern "C" fn ytransaction_commit(txn: *mut Transaction) {
     assert!(!txn.is_null());
     drop(Box::from_raw(txn)); // transaction is auto-committed when dropped
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn ytxn_text(txn: *mut Transaction, name: *const c_char) -> *mut Text {
+pub unsafe extern "C" fn ytext(txn: *mut Transaction, name: *const c_char) -> *mut Text {
     assert!(!txn.is_null());
     assert!(!name.is_null());
 
@@ -219,7 +228,7 @@ pub unsafe extern "C" fn ytxn_text(txn: *mut Transaction, name: *const c_char) -
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn ytxn_array(txn: *mut Transaction, name: *const c_char) -> *mut Array {
+pub unsafe extern "C" fn yarray(txn: *mut Transaction, name: *const c_char) -> *mut Array {
     assert!(!txn.is_null());
     assert!(!name.is_null());
 
@@ -229,7 +238,7 @@ pub unsafe extern "C" fn ytxn_array(txn: *mut Transaction, name: *const c_char) 
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn ytxn_map(txn: *mut Transaction, name: *const c_char) -> *mut Map {
+pub unsafe extern "C" fn ymap(txn: *mut Transaction, name: *const c_char) -> *mut Map {
     assert!(!txn.is_null());
     assert!(!name.is_null());
 
@@ -239,7 +248,7 @@ pub unsafe extern "C" fn ytxn_map(txn: *mut Transaction, name: *const c_char) ->
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn ytxn_xml_elem(
+pub unsafe extern "C" fn yxmlelem(
     txn: *mut Transaction,
     name: *const c_char,
 ) -> *mut XmlElement {
@@ -252,7 +261,7 @@ pub unsafe extern "C" fn ytxn_xml_elem(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn ytxn_xml_text(txn: *mut Transaction, name: *const c_char) -> *mut XmlText {
+pub unsafe extern "C" fn yxmltext(txn: *mut Transaction, name: *const c_char) -> *mut XmlText {
     assert!(!txn.is_null());
     assert!(!name.is_null());
 
@@ -262,7 +271,7 @@ pub unsafe extern "C" fn ytxn_xml_text(txn: *mut Transaction, name: *const c_cha
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn ytxn_state_vector_v1(
+pub unsafe extern "C" fn ytransaction_state_vector_v1(
     txn: *const Transaction,
     len: *mut c_int,
 ) -> *mut c_uchar {
@@ -276,7 +285,7 @@ pub unsafe extern "C" fn ytxn_state_vector_v1(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn ytxn_state_diff_v1(
+pub unsafe extern "C" fn ytransaction_state_diff_v1(
     txn: *const Transaction,
     sv: *const c_uchar,
     sv_len: c_int,
@@ -301,7 +310,7 @@ pub unsafe extern "C" fn ytxn_state_diff_v1(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn ytxn_apply(txn: *mut Transaction, diff: *const c_uchar, diff_len: c_int) {
+pub unsafe extern "C" fn ytransaction_apply(txn: *mut Transaction, diff: *const c_uchar, diff_len: c_int) {
     assert!(!txn.is_null());
     assert!(!diff.is_null());
 
@@ -373,7 +382,7 @@ pub unsafe extern "C" fn yarray_get(
     array: *const Array,
     txn: *mut Transaction,
     idx: c_int,
-) -> *mut YVal {
+) -> *mut YOutput {
     assert!(!array.is_null());
     assert!(!txn.is_null());
 
@@ -381,7 +390,7 @@ pub unsafe extern "C" fn yarray_get(
     let txn = txn.as_mut().unwrap();
 
     if let Some(val) = array.get(txn, idx as u32) {
-        yval_from_value(val)
+        Box::into_raw(Box::new(YOutput::from(val)))
     } else {
         std::ptr::null_mut()
     }
@@ -392,7 +401,7 @@ pub unsafe extern "C" fn yarray_insert_range(
     array: *const Array,
     txn: *mut Transaction,
     idx: c_int,
-    values: *const *const YVal,
+    values: *const YInput,
     len: c_int,
 ) {
     assert!(!array.is_null());
@@ -405,13 +414,13 @@ pub unsafe extern "C" fn yarray_insert_range(
     let ptr = values;
     let mut i = 0;
     let len = len as isize;
-    let mut vec = Vec::with_capacity(len as usize);
+    let mut vec: Vec<Any> = Vec::with_capacity(len as usize);
 
     // try read as many values a JSON-like primitives and insert them at once
     while i < len {
-        let val = ptr.offset(i).read().as_ref().unwrap();
+        let val = ptr.offset(i).read();
         if val.tag <= 0 {
-            let any = val_into_any(val);
+            let any = val.into();
             vec.push(any);
         } else {
             break;
@@ -425,7 +434,7 @@ pub unsafe extern "C" fn yarray_insert_range(
 
     // insert remaining values one by one
     while i < len {
-        let val = ptr.offset(i).read().read();
+        let val = ptr.offset(i).read();
         arr.push_back(txn, val);
         i += 1;
     }
@@ -468,12 +477,12 @@ pub unsafe extern "C" fn yarray_iter_destroy(iter: *mut ArrayIter) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yarray_iter_next(iter: *mut ArrayIter) -> *mut YVal {
+pub unsafe extern "C" fn yarray_iter_next(iter: *mut ArrayIter) -> *mut YOutput {
     assert!(!iter.is_null());
 
     let iter = iter.as_mut().unwrap();
     if let Some(v) = iter.next() {
-        yval_from_value(v)
+        Box::into_raw(Box::new(YOutput::from(v)))
     } else {
         std::ptr::null_mut()
     }
@@ -502,10 +511,7 @@ pub unsafe extern "C" fn ymap_iter_next(iter: *mut MapIter) -> *mut YMapEntry {
 
     let iter = iter.as_mut().unwrap();
     if let Some((key, value)) = iter.next() {
-        Box::into_raw(Box::new(YMapEntry {
-            key: CString::new(key.as_str()).unwrap().into_raw(),
-            value: yval_from_value(value),
-        }))
+        Box::into_raw(Box::new(YMapEntry::new(key.as_str(), value)))
     } else {
         std::ptr::null_mut()
     }
@@ -527,7 +533,7 @@ pub unsafe extern "C" fn ymap_insert(
     map: *const Map,
     txn: *mut Transaction,
     key: *const c_char,
-    value: *const YVal,
+    value: *const YInput,
 ) -> *mut YMapEntry {
     assert!(!map.is_null());
     assert!(!txn.is_null());
@@ -541,10 +547,7 @@ pub unsafe extern "C" fn ymap_insert(
     let txn = txn.as_mut().unwrap();
 
     if let Some(prev) = map.insert(txn, key, value.read()) {
-        Box::into_raw(Box::new(YMapEntry {
-            key: cstr.as_ptr(),
-            value: yval_from_value(prev),
-        }))
+        Box::into_raw(Box::new(YMapEntry::new(cstr.to_str().unwrap(), prev)))
     } else {
         std::ptr::null_mut()
     }
@@ -555,7 +558,7 @@ pub unsafe extern "C" fn ymap_remove(
     map: *const Map,
     txn: *mut Transaction,
     key: *const c_char,
-) -> *mut YVal {
+) -> *mut YOutput {
     assert!(!map.is_null());
     assert!(!txn.is_null());
     assert!(!key.is_null());
@@ -566,7 +569,7 @@ pub unsafe extern "C" fn ymap_remove(
     let txn = txn.as_mut().unwrap();
 
     if let Some(value) = map.remove(txn, key) {
-        yval_from_value(value)
+        Box::into_raw(Box::new(YOutput::from(value)))
     } else {
         std::ptr::null_mut()
     }
@@ -577,7 +580,7 @@ pub unsafe extern "C" fn ymap_get(
     map: *const Map,
     txn: *const Transaction,
     key: *const c_char,
-) -> *mut YVal {
+) -> *mut YOutput {
     assert!(!map.is_null());
     assert!(!txn.is_null());
     assert!(!key.is_null());
@@ -588,7 +591,7 @@ pub unsafe extern "C" fn ymap_get(
     let txn = txn.as_ref().unwrap();
 
     if let Some(value) = map.get(txn, key) {
-        yval_from_value(value)
+        Box::into_raw(Box::new(YOutput::from(value)))
     } else {
         std::ptr::null_mut()
     }
@@ -606,7 +609,7 @@ pub unsafe extern "C" fn ymap_remove_all(map: *const Map, txn: *mut Transaction)
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yxml_tag(xml: *const XmlElement) -> *mut c_char {
+pub unsafe extern "C" fn yxmlelem_tag(xml: *const XmlElement) -> *mut c_char {
     assert!(!xml.is_null());
     let xml = xml.as_ref().unwrap();
     let tag = xml.tag();
@@ -614,7 +617,7 @@ pub unsafe extern "C" fn yxml_tag(xml: *const XmlElement) -> *mut c_char {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yxml_string(
+pub unsafe extern "C" fn yxmlelem_string(
     xml: *const XmlElement,
     txn: *const Transaction,
 ) -> *mut c_char {
@@ -629,7 +632,7 @@ pub unsafe extern "C" fn yxml_string(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yxml_insert_attr(
+pub unsafe extern "C" fn yxmlelem_insert_attr(
     xml: *const XmlElement,
     txn: *mut Transaction,
     attr_name: *const c_char,
@@ -650,7 +653,7 @@ pub unsafe extern "C" fn yxml_insert_attr(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yxml_remove_attr(
+pub unsafe extern "C" fn yxmlelem_remove_attr(
     xml: *const XmlElement,
     txn: *mut Transaction,
     attr_name: *const c_char,
@@ -667,7 +670,7 @@ pub unsafe extern "C" fn yxml_remove_attr(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yxml_get_attr(
+pub unsafe extern "C" fn yxmlelem_get_attr(
     xml: *const XmlElement,
     txn: *const Transaction,
     attr_name: *const c_char,
@@ -688,18 +691,7 @@ pub unsafe extern "C" fn yxml_get_attr(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yxml_attr_len(xml: *const XmlElement, txn: *const Transaction) -> c_int {
-    assert!(!xml.is_null());
-    assert!(!txn.is_null());
-
-    let xml = xml.as_ref().unwrap();
-    let txn = txn.as_ref().unwrap();
-
-    xml.len(txn) as c_int
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn yxml_attr_iter(
+pub unsafe extern "C" fn yxmlelem_attr_iter(
     xml: *const XmlElement,
     txn: *const Transaction,
 ) -> *mut Attributes {
@@ -713,14 +705,14 @@ pub unsafe extern "C" fn yxml_attr_iter(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yxml_attr_iter_destroy(iter: *mut Attributes) {
+pub unsafe extern "C" fn yxmlelem_attr_iter_destroy(iter: *mut Attributes) {
     if !iter.is_null() {
         drop(Box::from_raw(iter))
     }
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yxml_attr_iter_next(iter: *mut Attributes) -> *mut YXmlAttr {
+pub unsafe extern "C" fn yxmlelem_attr_iter_next(iter: *mut Attributes) -> *mut YXmlAttr {
     assert!(!iter.is_null());
 
     let iter = iter.as_mut().unwrap();
@@ -736,10 +728,10 @@ pub unsafe extern "C" fn yxml_attr_iter_next(iter: *mut Attributes) -> *mut YXml
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yxml_next_sibling(
+pub unsafe extern "C" fn yxmlelem_next_sibling(
     xml: *const XmlElement,
     txn: *const Transaction,
-) -> *mut YVal {
+) -> *mut YOutput {
     assert!(!xml.is_null());
     assert!(!txn.is_null());
 
@@ -748,8 +740,9 @@ pub unsafe extern "C" fn yxml_next_sibling(
 
     if let Some(next) = xml.next_sibling(txn) {
         match next {
-            Xml::Element(v) => yval_from_value(Value::YXmlElement(v)),
-            Xml::Text(v) => yval_from_value(Value::YXmlText(v)),
+            Xml::Element(v) =>
+                Box::into_raw(Box::new(YOutput::from(Value::YXmlElement(v)))),
+            Xml::Text(v) => Box::into_raw(Box::new(YOutput::from(Value::YXmlText(v)))),
         }
     } else {
         std::ptr::null_mut()
@@ -757,10 +750,10 @@ pub unsafe extern "C" fn yxml_next_sibling(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yxml_prev_sibling(
+pub unsafe extern "C" fn yxmlelem_prev_sibling(
     xml: *const XmlElement,
     txn: *const Transaction,
-) -> *mut YVal {
+) -> *mut YOutput {
     assert!(!xml.is_null());
     assert!(!txn.is_null());
 
@@ -769,8 +762,8 @@ pub unsafe extern "C" fn yxml_prev_sibling(
 
     if let Some(next) = xml.prev_sibling(txn) {
         match next {
-            Xml::Element(v) => yval_from_value(Value::YXmlElement(v)),
-            Xml::Text(v) => yval_from_value(Value::YXmlText(v)),
+            Xml::Element(v) => Box::into_raw(Box::new(YOutput::from(Value::YXmlElement(v)))),
+            Xml::Text(v) => Box::into_raw(Box::new(YOutput::from(Value::YXmlText(v)))),
         }
     } else {
         std::ptr::null_mut()
@@ -781,7 +774,7 @@ pub unsafe extern "C" fn yxml_prev_sibling(
 pub unsafe extern "C" fn yxmltext_next_sibling(
     xml: *const XmlText,
     txn: *const Transaction,
-) -> *mut YVal {
+) -> *mut YOutput {
     assert!(!xml.is_null());
     assert!(!txn.is_null());
 
@@ -790,8 +783,8 @@ pub unsafe extern "C" fn yxmltext_next_sibling(
 
     if let Some(next) = xml.next_sibling(txn) {
         match next {
-            Xml::Element(v) => yval_from_value(Value::YXmlElement(v)),
-            Xml::Text(v) => yval_from_value(Value::YXmlText(v)),
+            Xml::Element(v) => Box::into_raw(Box::new(YOutput::from(Value::YXmlElement(v)))),
+            Xml::Text(v) => Box::into_raw(Box::new(YOutput::from(Value::YXmlText(v)))),
         }
     } else {
         std::ptr::null_mut()
@@ -802,7 +795,7 @@ pub unsafe extern "C" fn yxmltext_next_sibling(
 pub unsafe extern "C" fn yxmltext_prev_sibling(
     xml: *const XmlText,
     txn: *const Transaction,
-) -> *mut YVal {
+) -> *mut YOutput {
     assert!(!xml.is_null());
     assert!(!txn.is_null());
 
@@ -811,8 +804,8 @@ pub unsafe extern "C" fn yxmltext_prev_sibling(
 
     if let Some(next) = xml.prev_sibling(txn) {
         match next {
-            Xml::Element(v) => yval_from_value(Value::YXmlElement(v)),
-            Xml::Text(v) => yval_from_value(Value::YXmlText(v)),
+            Xml::Element(v) => Box::into_raw(Box::new(YOutput::from(Value::YXmlElement(v)))),
+            Xml::Text(v) => Box::into_raw(Box::new(YOutput::from(Value::YXmlText(v)))),
         }
     } else {
         std::ptr::null_mut()
@@ -820,7 +813,7 @@ pub unsafe extern "C" fn yxmltext_prev_sibling(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yxml_parent(
+pub unsafe extern "C" fn yxmlelem_parent(
     xml: *const XmlElement,
     txn: *const Transaction,
 ) -> *mut XmlElement {
@@ -838,7 +831,7 @@ pub unsafe extern "C" fn yxml_parent(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yxml_child_len(xml: *const XmlElement, txn: *const Transaction) -> c_int {
+pub unsafe extern "C" fn yxmlelem_child_len(xml: *const XmlElement, txn: *const Transaction) -> c_int {
     assert!(!xml.is_null());
     assert!(!txn.is_null());
 
@@ -850,7 +843,7 @@ pub unsafe extern "C" fn yxml_child_len(xml: *const XmlElement, txn: *const Tran
 
 
 #[no_mangle]
-pub unsafe extern "C" fn yxml_first_child(xml: *const XmlElement, txn: *const Transaction) -> *mut YVal {
+pub unsafe extern "C" fn yxmlelem_first_child(xml: *const XmlElement, txn: *const Transaction) -> *mut YOutput {
     assert!(!xml.is_null());
     assert!(!txn.is_null());
 
@@ -859,8 +852,8 @@ pub unsafe extern "C" fn yxml_first_child(xml: *const XmlElement, txn: *const Tr
 
     if let Some(value) = xml.first_child(txn) {
         match value {
-            Xml::Element(v) => yval_from_value(Value::YXmlElement(v)),
-            Xml::Text(v) => yval_from_value(Value::YXmlText(v)),
+            Xml::Element(v) => Box::into_raw(Box::new(YOutput::from(Value::YXmlElement(v)))),
+            Xml::Text(v) => Box::into_raw(Box::new(YOutput::from(Value::YXmlText(v)))),
         }
     } else {
         std::ptr::null_mut()
@@ -869,7 +862,7 @@ pub unsafe extern "C" fn yxml_first_child(xml: *const XmlElement, txn: *const Tr
 
 
 #[no_mangle]
-pub unsafe extern "C" fn yxml_tree_walker(
+pub unsafe extern "C" fn yxmlelem_tree_walker(
     xml: *const XmlElement,
     txn: *const Transaction,
 ) -> *mut TreeWalker {
@@ -883,22 +876,22 @@ pub unsafe extern "C" fn yxml_tree_walker(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yxml_tree_walker_destroy(iter: *mut TreeWalker) {
+pub unsafe extern "C" fn yxmlelem_tree_walker_destroy(iter: *mut TreeWalker) {
     if !iter.is_null() {
         drop(Box::from_raw(iter))
     }
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yxml_tree_walker_next(iter: *mut TreeWalker) -> *mut YVal {
+pub unsafe extern "C" fn yxmlelem_tree_walker_next(iter: *mut TreeWalker) -> *mut YOutput {
     assert!(!iter.is_null());
 
     let iter = iter.as_mut().unwrap();
 
     if let Some(next) = iter.next() {
         match next {
-            Xml::Element(v) => yval_from_value(Value::YXmlElement(v)),
-            Xml::Text(v) => yval_from_value(Value::YXmlText(v)),
+            Xml::Element(v) => Box::into_raw(Box::new(YOutput::from(Value::YXmlElement(v)))),
+            Xml::Text(v) => Box::into_raw(Box::new(YOutput::from(Value::YXmlText(v)))),
         }
     } else {
         std::ptr::null_mut()
@@ -906,7 +899,7 @@ pub unsafe extern "C" fn yxml_tree_walker_next(iter: *mut TreeWalker) -> *mut YV
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yxml_insert_elem(
+pub unsafe extern "C" fn yxmlelem_insert_elem(
     xml: *const XmlElement,
     txn: *mut Transaction,
     idx: c_int,
@@ -926,7 +919,7 @@ pub unsafe extern "C" fn yxml_insert_elem(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yxml_insert_text(
+pub unsafe extern "C" fn yxmlelem_insert_text(
     xml: *const XmlElement,
     txn: *mut Transaction,
     idx: c_int,
@@ -942,7 +935,7 @@ pub unsafe extern "C" fn yxml_insert_text(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yxml_remove_range(
+pub unsafe extern "C" fn yxmlelem_remove_range(
     xml: *const XmlElement,
     txn: *mut Transaction,
     idx: c_int,
@@ -958,11 +951,11 @@ pub unsafe extern "C" fn yxml_remove_range(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yxml_get(
+pub unsafe extern "C" fn yxmlelem_get(
     xml: *const XmlElement,
     txn: *const Transaction,
     idx: c_int,
-) -> *const YVal {
+) -> *const YOutput {
     assert!(!xml.is_null());
     assert!(!txn.is_null());
 
@@ -971,8 +964,8 @@ pub unsafe extern "C" fn yxml_get(
 
     if let Some(child) = xml.get(txn, idx as u32) {
         match child {
-            Xml::Element(v) => yval_from_value(Value::YXmlElement(v)),
-            Xml::Text(v) => yval_from_value(Value::YXmlText(v)),
+            Xml::Element(v) => Box::into_raw(Box::new(YOutput::from(Value::YXmlElement(v)))),
+            Xml::Text(v) => Box::into_raw(Box::new(YOutput::from(Value::YXmlText(v)))),
         }
     } else {
         std::ptr::null()
@@ -1112,37 +1105,86 @@ pub unsafe extern "C" fn yxmltext_attrs_iter(
 }
 
 #[repr(C)]
-pub struct YVal {
+pub struct YInput {
     pub tag: c_char,
-    pub prelim: u8,
     pub len: c_int,
-    value: YValContent,
+    value: YInputContent,
 }
 
-impl Drop for YVal {
-    fn drop(&mut self) {
+impl YInput {
+    fn into(self) -> Any {
         let tag = self.tag;
         unsafe {
             if tag == Y_JSON_STR {
-                ystr_destroy(self.value.str as *mut _);
-            } else if tag == Y_JSON_BUF {
-                ybinary_destroy(self.value.buf as *mut _, self.len);
+                let str = CStr::from_ptr(self.value.str).to_str().unwrap().to_owned();
+                Any::String(str)
             } else if tag == Y_JSON_ARR {
-                yval_list_destroy(self.value.array, self.len);
-            } else if tag == Y_JSON_MAP {
-                ymap_entry_list_destroy(self.value.map, self.len);
-            } else if self.prelim != 0 {
-                if tag == Y_MAP {
-                    ymap_entry_list_destroy(self.value.map, self.len);
-                } else if tag == Y_ARRAY {
-                    yval_list_destroy(self.value.array, self.len);
+                let ptr = self.value.values;
+                let mut dst: Vec<Any> = Vec::with_capacity(self.len as usize);
+                let mut i = 0;
+                while i < self.len as isize {
+                    let value = ptr.offset(i).read();
+                    let any = value.into();
+                    dst.push(any);
+                    i += 1;
                 }
+                Any::Array(dst)
+            } else if tag == Y_JSON_MAP {
+                let mut dst = HashMap::with_capacity(self.len as usize);
+                let mut keys = self.value.map.keys;
+                let mut values = self.value.map.values;
+                let mut i = 0;
+                while i < self.len as isize {
+                    let key = CStr::from_ptr(keys.offset(i).read()).to_str().unwrap().to_owned();
+                    let value = values.offset(i).read().into();
+                    dst.insert(key, value);
+                    i += 1;
+                }
+                Any::Map(dst)
+            } else if tag == Y_JSON_NULL {
+                Any::Null
+            } else if tag == Y_JSON_UNDEF {
+                Any::Undefined
+            } else if tag == Y_JSON_INT {
+                Any::BigInt(self.value.integer as i64)
+            } else if tag == Y_JSON_NUM {
+                Any::Number(self.value.num as f64)
+            } else if tag == Y_JSON_BOOL {
+                Any::Bool(if self.value.flag == 0 { false } else { true })
+            } else if tag == Y_JSON_BUF {
+                let slice = std::slice::from_raw_parts(self.value.buf as *mut u8, self.len as usize);
+                let buf = Box::from(slice);
+                Any::Buffer(buf)
+            } else {
+                panic!("Unrecognized YVal value tag.")
             }
         }
     }
 }
 
-impl Prelim for YVal {
+#[repr(C)]
+union YInputContent {
+    flag: u8,
+    num: c_float,
+    integer: c_long,
+    str: *mut c_char,
+    buf: *mut c_uchar,
+    values: *mut YInput,
+    map: ManuallyDrop<YMapInputData>,
+}
+
+#[repr(C)]
+struct YMapInputData {
+    keys: *mut *mut c_char,
+    values: *mut YInput,
+}
+
+impl Drop for YInput {
+    fn drop(&mut self) {
+    }
+}
+
+impl Prelim for YInput {
     fn into_content(
         self,
         _txn: &mut yrs::Transaction,
@@ -1150,11 +1192,9 @@ impl Prelim for YVal {
     ) -> (ItemContent, Option<Self>) {
         unsafe {
             if self.tag <= 0 {
-                let value = val_into_any(&self);
+                let value = self.into();
                 (ItemContent::Any(vec![value]), None)
             } else {
-                assert_ne!(self.prelim, 0);
-
                 let type_ref = if self.tag == Y_MAP {
                     TYPE_REFS_MAP
                 } else if self.tag == Y_ARRAY {
@@ -1176,20 +1216,21 @@ impl Prelim for YVal {
         unsafe {
             if self.tag == Y_MAP {
                 let map = Map::from(inner_ref);
-                let src = std::slice::from_raw_parts(self.value.map, self.len as usize);
-                for e in src {
-                    let e = e.as_ref().unwrap();
-                    let key = CStr::from_ptr(e.key).to_str().unwrap().to_owned();
-                    let value = e.value.read();
+                let mut keys = self.value.map.keys;
+                let mut values = self.value.map.values;
+                let mut i = 0;
+                while i < self.len as isize {
+                    let key = CStr::from_ptr(keys.offset(i).read()).to_str().unwrap().to_owned();
+                    let value = values.offset(i).read().into();
                     map.insert(txn, key, value);
                 }
             } else if self.tag == Y_ARRAY {
                 let array = Array::from(inner_ref);
-                let ptr = self.value.array;
+                let ptr = self.value.values;
                 let len = self.len as isize;
                 let mut i = 0;
                 while i < len {
-                    let value = ptr.offset(i).read().read();
+                    let value = ptr.offset(i).read();
                     array.push_back(txn, value);
                     i += 1;
                 }
@@ -1201,179 +1242,319 @@ impl Prelim for YVal {
 }
 
 #[repr(C)]
-union YValContent {
+pub struct YOutput {
+    pub tag: c_char,
+    pub len: c_int,
+    value: YOutputContent,
+}
+
+impl Drop for YOutput {
+    fn drop(&mut self) {
+        let tag = self.tag;
+        unsafe {
+            if tag == Y_JSON_STR {
+                drop(CString::from_raw(self.value.str));
+            } else if tag == Y_MAP {
+                drop(Box::from_raw(self.value.y_map));
+            } else if tag == Y_ARRAY {
+                drop(Box::from_raw(self.value.y_array));
+            } else if tag == Y_JSON_ARR {
+                drop(Vec::from_raw_parts(self.value.array, self.len as usize, self.len as usize));
+            } else if tag == Y_JSON_MAP {
+                drop(Vec::from_raw_parts(self.value.map, self.len as usize, self.len as usize));
+            } else if tag == Y_TEXT {
+                drop(Box::from_raw(self.value.y_text));
+            } else if tag == Y_XML_TEXT {
+                drop(Box::from_raw(self.value.y_xmltext));
+            } else if tag == Y_XML_ELEM {
+                drop(Box::from_raw(self.value.y_xmlelem));
+            } else if tag == Y_JSON_BUF {
+                drop(Vec::from_raw_parts(self.value.buf, self.len as usize, self.len as usize));
+            }
+        }
+    }
+}
+
+impl From<Value> for YOutput {
+    fn from(v: Value) -> Self {
+        match v {
+            Value::Any(v) => Self::from(v),
+            Value::YText(v) => Self::from(v),
+            Value::YArray(v) => Self::from(v),
+            Value::YMap(v) => Self::from(v),
+            Value::YXmlElement(v) => Self::from(v),
+            Value::YXmlText(v) => Self::from(v),
+        }
+    }
+}
+
+impl From<Any> for YOutput {
+    fn from(v: Any) -> Self {
+        unsafe {
+            match v {
+                Any::Null => YOutput {
+                    tag: Y_JSON_NULL,
+                    len: 0,
+                    value: MaybeUninit::uninit().assume_init()
+                },
+                Any::Undefined => YOutput {
+                    tag: Y_JSON_UNDEF,
+                    len: 0,
+                    value: MaybeUninit::uninit().assume_init()
+                },
+                Any::Bool(v) => YOutput {
+                    tag: Y_JSON_BOOL,
+                    len: 1,
+                    value: YOutputContent { flag: if v { 1 } else { 0 } }
+                },
+                Any::Number(v) => YOutput {
+                    tag: Y_JSON_NUM,
+                    len: 1,
+                    value: YOutputContent { num: v as _ }
+                },
+                Any::BigInt(v) => YOutput {
+                    tag: Y_JSON_INT,
+                    len: 1,
+                    value: YOutputContent { integer: v as _ }
+                },
+                Any::String(v) => YOutput {
+                    tag: Y_JSON_STR,
+                    len: v.len() as c_int,
+                    value: YOutputContent { str: CString::new(v).unwrap().into_raw() }
+                },
+                Any::Buffer(v) => YOutput {
+                    tag: Y_JSON_BUF,
+                    len: v.len() as c_int,
+                    value: YOutputContent { buf: Box::into_raw(v) as *mut _ }
+                },
+                Any::Array(v) => {
+                    let len = v.len() as c_int;
+                    let array: Vec<_> = v.into_iter().map(YOutput::from).collect();
+                    let ptr = array.into_boxed_slice().as_mut_ptr();
+                    YOutput {
+                        tag: Y_JSON_ARR,
+                        len,
+                        value: YOutputContent { array: ptr }
+                    }
+                }
+                Any::Map(v) => {
+                    let len = v.len() as c_int;
+                    let array: Vec<_> = v.into_iter()
+                        .map(|(k,v)| YMapEntry::new(k.as_str(), Value::Any(v)))
+                        .collect();
+                    let ptr = array.into_boxed_slice().as_mut_ptr();
+                    YOutput {
+                        tag: Y_JSON_MAP,
+                        len,
+                        value: YOutputContent { map: ptr }
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl From<Text> for YOutput {
+    fn from(v: Text) -> Self {
+        YOutput {
+            tag: Y_TEXT,
+            len: 1,
+            value: YOutputContent { y_text: Box::into_raw(Box::new(v)) }
+        }
+    }
+}
+
+impl From<Array> for YOutput {
+    fn from(v: Array) -> Self {
+        YOutput {
+            tag: Y_ARRAY,
+            len: 1,
+            value: YOutputContent { y_array: Box::into_raw(Box::new(v)) }
+        }
+    }
+}
+
+impl From<Map> for YOutput {
+    fn from(v: Map) -> Self {
+        YOutput {
+            tag: Y_MAP,
+            len: 1,
+            value: YOutputContent { y_map: Box::into_raw(Box::new(v)) }
+        }
+    }
+}
+
+impl From<XmlElement> for YOutput {
+    fn from(v: XmlElement) -> Self {
+        YOutput {
+            tag: Y_XML_ELEM,
+            len: 1,
+            value: YOutputContent { y_xmlelem: Box::into_raw(Box::new(v)) }
+        }
+    }
+}
+
+impl From<XmlText> for YOutput {
+    fn from(v: XmlText) -> Self {
+        YOutput {
+            tag: Y_XML_TEXT,
+            len: 1,
+            value: YOutputContent { y_xmltext: Box::into_raw(Box::new(v)) }
+        }
+    }
+}
+
+#[repr(C)]
+union YOutputContent {
     flag: u8,
     num: c_float,
     integer: c_long,
     str: *mut c_char,
     buf: *mut c_uchar,
-    array: *mut *mut YVal,
-    map: *mut *mut YMapEntry,
+    array: *mut YOutput,
+    map: *mut YMapEntry,
     y_array: *mut Array,
     y_map: *mut Map,
     y_text: *mut Text,
-    y_xml_elem: *mut XmlElement,
-    y_xml_text: *mut XmlText,
+    y_xmlelem: *mut XmlElement,
+    y_xmltext: *mut XmlText,
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yval_destroy(val: *mut YVal) {}
-
-unsafe fn yval_list_destroy(array: *mut *mut YVal, len: c_int) {
-    let values = Vec::from_raw_parts(array, len as usize, len as usize);
-    for ptr in values {
-        yval_destroy(ptr);
-    }
-}
-
-unsafe fn ymap_entry_list_destroy(map: *mut *mut YMapEntry, len: c_int) {
-    let values = Vec::from_raw_parts(map, len as usize, len as usize);
-    for ptr in values {
-        ymap_entry_destroy(ptr);
+pub unsafe extern "C" fn youtput_destroy(val: *mut YOutput) {
+    if !val.is_null() {
+        drop(Box::from_raw(val))
     }
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yval_null() -> *const YVal {
-    Box::into_raw(Box::new(YVal {
+pub unsafe extern "C" fn yinput_null() -> YInput {
+    YInput {
         tag: Y_JSON_NULL,
-        prelim: 1,
         len: 0,
         value: MaybeUninit::uninit().assume_init(),
-    }))
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn yval_undef() -> *mut YVal {
-    Box::into_raw(Box::new(YVal {
-        tag: Y_JSON_UNDEF,
-        prelim: 1,
-        len: 0,
-        value: MaybeUninit::uninit().assume_init(),
-    }))
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn yval_bool(flag: u8) -> *mut YVal {
-    Box::into_raw(Box::new(YVal {
-        tag: Y_JSON_BOOL,
-        prelim: 1,
-        len: 1,
-        value: YValContent { flag },
-    }))
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn yval_float(num: c_float) -> *mut YVal {
-    Box::into_raw(Box::new(YVal {
-        tag: Y_JSON_NUM,
-        prelim: 1,
-        len: 1,
-        value: YValContent { num },
-    }))
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn yval_long(integer: c_long) -> *mut YVal {
-    Box::into_raw(Box::new(YVal {
-        tag: Y_JSON_INT,
-        prelim: 1,
-        len: 1,
-        value: YValContent { integer },
-    }))
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn yval_str(str: *const c_char) -> *mut YVal {
-    Box::into_raw(Box::new(YVal {
-        tag: Y_JSON_STR,
-        prelim: 1,
-        len: 1,
-        value: YValContent { str: str as *mut c_char },
-    }))
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn yval_buf(buf: *const u8, len: c_int) -> *mut YVal {
-    Box::into_raw(Box::new(YVal {
-        tag: Y_JSON_BUF,
-        prelim: 1,
-        len,
-        value: YValContent { buf: buf as *mut u8 },
-    }))
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn yval_json_array(json_array: *mut *mut YVal, len: c_int) -> *mut YVal {
-    Box::into_raw(Box::new(YVal {
-        tag: Y_JSON_ARR,
-        prelim: 1,
-        len,
-        value: YValContent { array: json_array },
-    }))
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn yval_json_map(json_map: *mut *mut YMapEntry, len: c_int) -> *mut YVal {
-    Box::into_raw(Box::new(YVal {
-        tag: Y_JSON_ARR,
-        prelim: 1,
-        len,
-        value: YValContent { map: json_map },
-    }))
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn yval_yarray(array: *mut *mut YVal, len: c_int) -> *mut YVal {
-    Box::into_raw(Box::new(YVal {
-        tag: Y_ARRAY,
-        prelim: 1,
-        len,
-        value: YValContent { array },
-    }))
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn yval_ymap(map: *mut *mut YMapEntry, len: c_int) -> *mut YVal {
-    Box::into_raw(Box::new(YVal {
-        tag: Y_MAP,
-        prelim: 1,
-        len,
-        value: YValContent { map },
-    }))
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn yval_yxml_elem(array: *mut *mut YVal, len: c_int) -> *mut YVal {
-    Box::into_raw(Box::new(YVal {
-        tag: Y_XML_ELEM,
-        prelim: 1,
-        len,
-        value: YValContent { array },
-    }))
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn yval_yxmltext() -> *mut YVal {
-    Box::into_raw(Box::new(YVal {
-        tag: Y_XML_TEXT,
-        prelim: 1,
-        len: 0,
-        value: MaybeUninit::uninit().assume_init(),
-    }))
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn yval_is_json(val: *const YVal) -> c_char {
-    if (*val).tag <= 0 {
-        1
-    } else {
-        0
     }
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yval_read_bool(val: *const YVal) -> *const c_uchar {
+pub unsafe extern "C" fn yinput_undefined() -> YInput {
+    YInput {
+        tag: Y_JSON_UNDEF,
+        len: 0,
+        value: MaybeUninit::uninit().assume_init(),
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yinput_bool(flag: u8) -> YInput {
+    YInput {
+        tag: Y_JSON_BOOL,
+        len: 1,
+        value: YInputContent { flag },
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yinput_float(num: c_float) -> YInput {
+    YInput {
+        tag: Y_JSON_NUM,
+        len: 1,
+        value: YInputContent { num },
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yinput_long(integer: c_long) -> YInput {
+    YInput {
+        tag: Y_JSON_INT,
+        len: 1,
+        value: YInputContent { integer },
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yinput_string(str: *const c_char) -> YInput {
+    YInput {
+        tag: Y_JSON_STR,
+        len: 1,
+        value: YInputContent { str: str as *mut c_char },
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yinput_binary(buf: *const u8, len: c_int) -> YInput {
+    YInput {
+        tag: Y_JSON_BUF,
+        len,
+        value: YInputContent { buf: buf as *mut u8 },
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yinput_json_array(values: *mut YInput, len: c_int) -> YInput {
+    YInput {
+        tag: Y_JSON_ARR,
+        len,
+        value: YInputContent { values },
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yinput_json_map(keys: *mut *mut c_char, values: *mut YInput, len: c_int) -> YInput {
+    YInput {
+        tag: Y_JSON_ARR,
+        len,
+        value: YInputContent { map: ManuallyDrop::new(YMapInputData { keys, values }) },
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yinput_yarray(values: *mut YInput, len: c_int) -> YInput {
+    YInput {
+        tag: Y_ARRAY,
+        len,
+        value: YInputContent { values },
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yinput_ymap(keys: *mut *mut c_char, values: *mut YInput, len: c_int) -> YInput {
+    YInput {
+        tag: Y_MAP,
+        len,
+        value: YInputContent { map: ManuallyDrop::new(YMapInputData { keys, values }) },
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yinput_ytext(str: *mut c_char) -> YInput {
+    YInput {
+        tag: Y_TEXT,
+        len: 1,
+        value: YInputContent { str },
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yinput_yxmlelem(xml_children: *mut YInput, len: c_int) -> YInput {
+    YInput {
+        tag: Y_XML_ELEM,
+        len,
+        value: YInputContent { values: xml_children },
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yinput_yxmltext(str: *mut c_char) -> YInput {
+    YInput {
+        tag: Y_XML_TEXT,
+        len: 1,
+        value: YInputContent { str },
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn youtput_read_bool(val: *const YOutput) -> *const c_uchar {
     if (*val).tag == Y_JSON_BOOL {
         &(*val).value.flag as *const u8 as *const c_uchar
     } else {
@@ -1382,7 +1563,7 @@ pub unsafe extern "C" fn yval_read_bool(val: *const YVal) -> *const c_uchar {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yval_read_float(val: *const YVal) -> *const c_float {
+pub unsafe extern "C" fn youtput_read_float(val: *const YOutput) -> *const c_float {
     if (*val).tag == Y_JSON_NUM {
         &(*val).value.num as *const _
     } else {
@@ -1391,7 +1572,7 @@ pub unsafe extern "C" fn yval_read_float(val: *const YVal) -> *const c_float {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yval_read_long(val: *const YVal) -> *const c_long {
+pub unsafe extern "C" fn youtput_read_long(val: *const YOutput) -> *const c_long {
     if (*val).tag == Y_JSON_INT {
         &(*val).value.integer as *const _
     } else {
@@ -1400,7 +1581,7 @@ pub unsafe extern "C" fn yval_read_long(val: *const YVal) -> *const c_long {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yval_read_str(val: *const YVal) -> *mut c_char {
+pub unsafe extern "C" fn youtput_read_string(val: *const YOutput) -> *mut c_char {
     if (*val).tag == Y_JSON_STR {
         (*val).value.str
     } else {
@@ -1409,7 +1590,7 @@ pub unsafe extern "C" fn yval_read_str(val: *const YVal) -> *mut c_char {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yval_read_buf(val: *const YVal) -> *const u8 {
+pub unsafe extern "C" fn youtput_read_binary(val: *const YOutput) -> *const c_uchar {
     if (*val).tag == Y_JSON_BUF {
         (*val).value.buf
     } else {
@@ -1418,7 +1599,7 @@ pub unsafe extern "C" fn yval_read_buf(val: *const YVal) -> *const u8 {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yval_read_json_array(val: *const YVal) -> *mut *mut YVal {
+pub unsafe extern "C" fn youtput_read_json_array(val: *const YOutput) -> *mut YOutput {
     if (*val).tag == Y_JSON_ARR {
         (*val).value.array
     } else {
@@ -1427,7 +1608,7 @@ pub unsafe extern "C" fn yval_read_json_array(val: *const YVal) -> *mut *mut YVa
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yval_read_json_map(val: *const YVal) -> *mut *mut YMapEntry {
+pub unsafe extern "C" fn youtput_read_json_map(val: *const YOutput) -> *mut YMapEntry {
     if (*val).tag == Y_JSON_MAP {
         (*val).value.map
     } else {
@@ -1436,7 +1617,7 @@ pub unsafe extern "C" fn yval_read_json_map(val: *const YVal) -> *mut *mut YMapE
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yval_read_yarray(val: *const YVal) -> *mut Array {
+pub unsafe extern "C" fn youtput_read_yarray(val: *const YOutput) -> *mut Array {
     if (*val).tag == Y_ARRAY {
         &mut *(*val).value.y_array as *mut _
     } else {
@@ -1445,16 +1626,16 @@ pub unsafe extern "C" fn yval_read_yarray(val: *const YVal) -> *mut Array {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yval_read_yxml_elem(val: *const YVal) -> *mut XmlElement {
+pub unsafe extern "C" fn youtput_read_yxmlelem_elem(val: *const YOutput) -> *mut XmlElement {
     if (*val).tag == Y_XML_ELEM {
-        &mut *(*val).value.y_xml_elem as *mut _
+        &mut *(*val).value.y_xmlelem as *mut _
     } else {
         std::ptr::null_mut()
     }
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yval_read_ymap(val: *const YVal) -> *mut Map {
+pub unsafe extern "C" fn youtput_read_ymap(val: *const YOutput) -> *mut Map {
     if (*val).tag == Y_MAP {
         &mut *(*val).value.y_map as *mut _
     } else {
@@ -1463,7 +1644,7 @@ pub unsafe extern "C" fn yval_read_ymap(val: *const YVal) -> *mut Map {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yval_read_ytext(val: *const YVal) -> *mut Text {
+pub unsafe extern "C" fn youtput_read_ytext(val: *const YOutput) -> *mut Text {
     if (*val).tag == Y_TEXT {
         &mut *(*val).value.y_text as *mut _
     } else {
@@ -1472,196 +1653,44 @@ pub unsafe extern "C" fn yval_read_ytext(val: *const YVal) -> *mut Text {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yval_read_yxmltext(val: *const YVal) -> *mut XmlText {
+pub unsafe extern "C" fn youtput_read_yxmltext(val: *const YOutput) -> *mut XmlText {
     if (*val).tag == Y_XML_TEXT {
-        &mut *(*val).value.y_xml_text as *mut _
+        &mut *(*val).value.y_xmltext as *mut _
     } else {
         std::ptr::null_mut()
     }
 }
 
-unsafe fn val_into_any(val: &YVal) -> Any {
-    let tag = val.tag;
-    if tag == Y_JSON_STR {
-        let str = CStr::from_ptr(val.value.str).to_str().unwrap().to_owned();
-        Any::String(str)
-    } else if tag == Y_JSON_ARR {
-        let ptr = val.value.array;
-        let mut dst = Vec::with_capacity(val.len as usize);
-        let mut i = 0;
-        while i < val.len as isize {
-            let value = ptr.offset(i).read().as_ref().unwrap();
-            let any = val_into_any(value);
-            dst.push(any);
-            i += 1;
-        }
-        Any::Array(dst)
-    } else if tag == Y_JSON_MAP {
-        let ptr = val.value.map;
-        let mut dst = HashMap::with_capacity(val.len as usize);
-        let mut i = 0;
-        while i < val.len as isize {
-            let e = ptr.offset(i).read().as_ref().unwrap();
-            let key = CStr::from_ptr(e.key).to_str().unwrap().to_owned();
-            let value = val_into_any(e.value.as_ref().unwrap());
-            dst.insert(key, value);
-            i += 1;
-        }
-        Any::Map(dst)
-    } else if tag == Y_JSON_NULL {
-        Any::Null
-    } else if tag == Y_JSON_UNDEF {
-        Any::Undefined
-    } else if tag == Y_JSON_INT {
-        Any::BigInt(val.value.integer as i64)
-    } else if tag == Y_JSON_NUM {
-        Any::Number(val.value.num as f64)
-    } else if tag == Y_JSON_BOOL {
-        Any::Bool(if val.value.flag == 0 { false } else { true })
-    } else if tag == Y_JSON_BUF {
-        let slice = std::slice::from_raw_parts(val.value.buf as *mut u8, val.len as usize);
-        let buf = Box::from(slice);
-        Any::Buffer(buf)
-    } else {
-        panic!("Unrecognized YVal value tag.")
-    }
-}
+#[cfg(test)]
+mod test {
+    use crate::*;
 
-fn yval_from_any(v: Any) -> *mut YVal {
-    let result = match v {
-        Any::Null => YVal {
-            tag: Y_JSON_NULL,
-            prelim: 0,
-            len: 0,
-            value: unsafe { MaybeUninit::uninit().assume_init() },
-        },
-        Any::Undefined => YVal {
-            tag: Y_JSON_UNDEF,
-            prelim: 0,
-            len: 0,
-            value: unsafe { MaybeUninit::uninit().assume_init() },
-        },
-        Any::Bool(v) => YVal {
-            tag: Y_JSON_BOOL,
-            prelim: 0,
-            len: 1,
-            value: YValContent {
-                flag: if v { 1 } else { 0 },
-            },
-        },
-        Any::Number(v) => YVal {
-            tag: Y_JSON_NUM,
-            prelim: 0,
-            len: 1,
-            value: YValContent { num: v as c_float },
-        },
-        Any::BigInt(v) => YVal {
-            tag: Y_JSON_INT,
-            prelim: 0,
-            len: 1,
-            value: YValContent {
-                integer: v as c_long,
-            },
-        },
-        Any::String(v) => {
-            let len = v.len() as c_int;
-            let str = CString::new(v).unwrap().into_raw();
-            YVal {
-                tag: Y_JSON_STR,
-                prelim: 0,
-                len,
-                value: YValContent { str },
-            }
-        }
-        Any::Buffer(v) => YVal {
-            tag: Y_JSON_BUF,
-            prelim: 0,
-            len: v.len() as c_int,
-            value: YValContent {
-                buf: Box::into_raw(v) as *mut c_uchar,
-            },
-        },
-        Any::Array(v) => {
-            let values: Vec<_> = v
-                .into_iter()
-                .map(|v| yval_from_any(v))
-                .collect();
-            let len = values.len() as c_int;
-            let mut boxed = values.into_boxed_slice();
-            let array = boxed.as_mut_ptr();
-            forget(boxed);
-            YVal {
-                tag: Y_JSON_ARR,
-                prelim: 0,
-                len,
-                value: YValContent { array },
-            }
-        }
-        Any::Map(v) => {
-            let entries: Vec<_> = v
-                .into_iter()
-                .map(|(k, v)| {
-                    let key = CString::new(k).unwrap().into_raw();
-                    let value = yval_from_any(v);
-                    Box::into_raw(Box::new(YMapEntry { key, value }))
-                })
-                .collect();
-            let len = entries.len() as c_int;
-            let mut boxed = entries.into_boxed_slice();
-            let map = boxed.as_mut_ptr();
-            YVal {
-                tag: Y_JSON_MAP,
-                prelim: 0,
-                len,
-                value: YValContent { map },
-            }
-        }
-    };
-    Box::into_raw(Box::new(result))
-}
+    #[test]
+    fn yval_preliminary_types() {
+        unsafe {
+            let doc = ydoc_new();
+            let txn = ytransaction_new(doc);
+            let array = yarray(txn, CString::new("test").unwrap().as_ptr());
 
-fn yval_from_value(v: Value) -> *mut YVal {
-    match v {
-        Value::Any(v) => yval_from_any(v),
-        Value::YText(v) => Box::into_raw(Box::new(YVal {
-            tag: Y_TEXT,
-            prelim: 0,
-            len: 1,
-            value: YValContent {
-                y_text: Box::into_raw(Box::new(v)),
-            },
-        })),
-        Value::YArray(v) => Box::into_raw(Box::new(YVal {
-            tag: Y_ARRAY,
-            prelim: 0,
-            len: 1,
-            value: YValContent {
-                y_array: Box::into_raw(Box::new(v)),
-            },
-        })),
-        Value::YMap(v) => Box::into_raw(Box::new(YVal {
-            tag: Y_MAP,
-            prelim: 0,
-            len: 1,
-            value: YValContent {
-                y_map: Box::into_raw(Box::new(v)),
-            },
-        })),
-        Value::YXmlElement(v) => Box::into_raw(Box::new(YVal {
-            tag: Y_XML_ELEM,
-            prelim: 0,
-            len: 1,
-            value: YValContent {
-                y_xml_elem: Box::into_raw(Box::new(v)),
-            },
-        })),
-        Value::YXmlText(v) => Box::into_raw(Box::new(YVal {
-            tag: Y_XML_TEXT,
-            prelim: 0,
-            len: 1,
-            value: YValContent {
-                y_xml_text: Box::into_raw(Box::new(v)),
-            },
-        })),
+            let y_true = yinput_bool(1);
+            let y_false = yinput_bool(0);
+            let y_float = yinput_float(0.5);
+            let y_int = yinput_long(11);
+            let y_str = yinput_string(CString::new("hello").unwrap().as_ptr());
+
+            let values = &[
+                y_true,
+                y_false,
+                y_float,
+                y_int,
+                y_str
+            ];
+
+            yarray_insert_range(array, txn, 0, values.as_ptr(), 5);
+
+            ytransaction_commit(txn);
+            ydoc_destroy(doc);
+        }
     }
+
 }

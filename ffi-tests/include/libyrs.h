@@ -32,31 +32,30 @@ typedef YXmlElement YXmlElement;
 
 typedef YXmlText YXmlText;
 
-typedef union YValContent {
+typedef union YOutputContent {
   uint8_t flag;
   float num;
   long integer;
   char *str;
   unsigned char *buf;
-  struct YVal **array;
-  struct YMapEntry **map;
+  struct YOutput *array;
+  struct YMapEntry *map;
   YArray *y_array;
   YMap *y_map;
   YText *y_text;
-  YXmlElement *y_xml_elem;
-  YXmlText *y_xml_text;
-} YValContent;
+  YXmlElement *y_xmlelem;
+  YXmlText *y_xmltext;
+} YOutputContent;
 
-typedef struct YVal {
+typedef struct YOutput {
   char tag;
-  uint8_t prelim;
   int len;
-  union YValContent value;
-} YVal;
+  union YOutputContent value;
+} YOutput;
 
 typedef struct YMapEntry {
   const char *key;
-  const struct YVal *value;
+  struct YOutput value;
 } YMapEntry;
 
 typedef struct YXmlAttr {
@@ -65,6 +64,27 @@ typedef struct YXmlAttr {
 } YXmlAttr;
 
 typedef YTransaction YTransaction;
+
+typedef struct YMapInputData {
+  char **keys;
+  struct YInput *values;
+} YMapInputData;
+
+typedef union YInputContent {
+  uint8_t flag;
+  float num;
+  long integer;
+  char *str;
+  unsigned char *buf;
+  struct YInput *values;
+  struct YMapInputData map;
+} YInputContent;
+
+typedef struct YInput {
+  char tag;
+  int len;
+  union YInputContent value;
+} YInput;
 
 typedef YArrayIter YArrayIter;
 
@@ -110,15 +130,15 @@ void yarray_destroy(YArray *value);
 
 void ymap_destroy(YMap *value);
 
-void yxml_destroy(YXmlElement *value);
+void yxmlelem_destroy(YXmlElement *value);
 
 void yxmltext_destroy(YXmlText *value);
 
 void ymap_entry_destroy(struct YMapEntry *value);
 
-void yxml_attr_destroy(struct YXmlAttr *attr);
+void yxmlelem_attr_destroy(struct YXmlAttr *attr);
 
-void ystr_destroy(char *str);
+void ystring_destroy(char *str);
 
 void ybinary_destroy(unsigned char *ptr, int len);
 
@@ -126,28 +146,28 @@ YDoc *ydoc_new(void);
 
 YDoc *ydoc_new_with_id(unsigned long id);
 
-YTransaction *ytxn_new(YDoc *doc);
+YTransaction *ytransaction_new(YDoc *doc);
 
-void ytxn_commit(YTransaction *txn);
+void ytransaction_commit(YTransaction *txn);
 
-YText *ytxn_text(YTransaction *txn, const char *name);
+YText *ytext(YTransaction *txn, const char *name);
 
-YArray *ytxn_array(YTransaction *txn, const char *name);
+YArray *yarray(YTransaction *txn, const char *name);
 
-YMap *ytxn_map(YTransaction *txn, const char *name);
+YMap *ymap(YTransaction *txn, const char *name);
 
-YXmlElement *ytxn_xml_elem(YTransaction *txn, const char *name);
+YXmlElement *yxmlelem(YTransaction *txn, const char *name);
 
-YXmlText *ytxn_xml_text(YTransaction *txn, const char *name);
+YXmlText *yxmltext(YTransaction *txn, const char *name);
 
-unsigned char *ytxn_state_vector_v1(const YTransaction *txn, int *len);
+unsigned char *ytransaction_state_vector_v1(const YTransaction *txn, int *len);
 
-unsigned char *ytxn_state_diff_v1(const YTransaction *txn,
-                                  const unsigned char *sv,
-                                  int sv_len,
-                                  int *len);
+unsigned char *ytransaction_state_diff_v1(const YTransaction *txn,
+                                          const unsigned char *sv,
+                                          int sv_len,
+                                          int *len);
 
-void ytxn_apply(YTransaction *txn, const unsigned char *diff, int diff_len);
+void ytransaction_apply(YTransaction *txn, const unsigned char *diff, int diff_len);
 
 int ytext_len(const YText *txt);
 
@@ -159,12 +179,12 @@ void ytext_remove_range(const YText *txt, YTransaction *txn, int idx, int len);
 
 int yarray_len(const YArray *array);
 
-struct YVal *yarray_get(const YArray *array, YTransaction *txn, int idx);
+struct YOutput *yarray_get(const YArray *array, YTransaction *txn, int idx);
 
 void yarray_insert_range(const YArray *array,
                          YTransaction *txn,
                          int idx,
-                         const struct YVal *const *values,
+                         const struct YInput *values,
                          int len);
 
 void yarray_remove_range(const YArray *array, YTransaction *txn, int idx, int len);
@@ -173,7 +193,7 @@ YArrayIter *yarray_iter(const YArray *array, const YTransaction *txn);
 
 void yarray_iter_destroy(YArrayIter *iter);
 
-struct YVal *yarray_iter_next(YArrayIter *iter);
+struct YOutput *yarray_iter_next(YArrayIter *iter);
 
 YMapIter *ymap_iter(const YMap *map, const YTransaction *txn);
 
@@ -186,62 +206,63 @@ int ymap_len(const YMap *map, const YTransaction *txn);
 struct YMapEntry *ymap_insert(const YMap *map,
                               YTransaction *txn,
                               const char *key,
-                              const struct YVal *value);
+                              const struct YInput *value);
 
-struct YVal *ymap_remove(const YMap *map, YTransaction *txn, const char *key);
+struct YOutput *ymap_remove(const YMap *map, YTransaction *txn, const char *key);
 
-struct YVal *ymap_get(const YMap *map, const YTransaction *txn, const char *key);
+struct YOutput *ymap_get(const YMap *map, const YTransaction *txn, const char *key);
 
 void ymap_remove_all(const YMap *map, YTransaction *txn);
 
-char *yxml_tag(const YXmlElement *xml);
+char *yxmlelem_tag(const YXmlElement *xml);
 
-char *yxml_string(const YXmlElement *xml, const YTransaction *txn);
+char *yxmlelem_string(const YXmlElement *xml, const YTransaction *txn);
 
-void yxml_insert_attr(const YXmlElement *xml,
-                      YTransaction *txn,
-                      const char *attr_name,
-                      const char *attr_value);
+void yxmlelem_insert_attr(const YXmlElement *xml,
+                          YTransaction *txn,
+                          const char *attr_name,
+                          const char *attr_value);
 
-void yxml_remove_attr(const YXmlElement *xml, YTransaction *txn, const char *attr_name);
+void yxmlelem_remove_attr(const YXmlElement *xml, YTransaction *txn, const char *attr_name);
 
-char *yxml_get_attr(const YXmlElement *xml, const YTransaction *txn, const char *attr_name);
+char *yxmlelem_get_attr(const YXmlElement *xml, const YTransaction *txn, const char *attr_name);
 
-int yxml_attr_len(const YXmlElement *xml, const YTransaction *txn);
+YXmlAttrIter *yxmlelem_attr_iter(const YXmlElement *xml, const YTransaction *txn);
 
-YXmlAttrIter *yxml_attr_iter(const YXmlElement *xml, const YTransaction *txn);
+void yxmlelem_attr_iter_destroy(YXmlAttrIter *iter);
 
-void yxml_attr_iter_destroy(YXmlAttrIter *iter);
+struct YXmlAttr *yxmlelem_attr_iter_next(YXmlAttrIter *iter);
 
-struct YXmlAttr *yxml_attr_iter_next(YXmlAttrIter *iter);
+struct YOutput *yxmlelem_next_sibling(const YXmlElement *xml, const YTransaction *txn);
 
-struct YVal *yxml_next_sibling(const YXmlElement *xml, const YTransaction *txn);
+struct YOutput *yxmlelem_prev_sibling(const YXmlElement *xml, const YTransaction *txn);
 
-struct YVal *yxml_prev_sibling(const YXmlElement *xml, const YTransaction *txn);
+struct YOutput *yxmltext_next_sibling(const YXmlText *xml, const YTransaction *txn);
 
-struct YVal *yxmltext_next_sibling(const YXmlText *xml, const YTransaction *txn);
+struct YOutput *yxmltext_prev_sibling(const YXmlText *xml, const YTransaction *txn);
 
-struct YVal *yxmltext_prev_sibling(const YXmlText *xml, const YTransaction *txn);
+YXmlElement *yxmlelem_parent(const YXmlElement *xml, const YTransaction *txn);
 
-YXmlElement *yxml_parent(const YXmlElement *xml, const YTransaction *txn);
+int yxmlelem_child_len(const YXmlElement *xml, const YTransaction *txn);
 
-int yxml_child_len(const YXmlElement *xml, const YTransaction *txn);
+struct YOutput *yxmlelem_first_child(const YXmlElement *xml, const YTransaction *txn);
 
-struct YVal *yxml_first_child(const YXmlElement *xml, const YTransaction *txn);
+YXmlTreeWalker *yxmlelem_tree_walker(const YXmlElement *xml, const YTransaction *txn);
 
-YXmlTreeWalker *yxml_tree_walker(const YXmlElement *xml, const YTransaction *txn);
+void yxmlelem_tree_walker_destroy(YXmlTreeWalker *iter);
 
-void yxml_tree_walker_destroy(YXmlTreeWalker *iter);
+struct YOutput *yxmlelem_tree_walker_next(YXmlTreeWalker *iter);
 
-struct YVal *yxml_tree_walker_next(YXmlTreeWalker *iter);
+YXmlElement *yxmlelem_insert_elem(const YXmlElement *xml,
+                                  YTransaction *txn,
+                                  int idx,
+                                  const char *name);
 
-YXmlElement *yxml_insert_elem(const YXmlElement *xml, YTransaction *txn, int idx, const char *name);
+YXmlText *yxmlelem_insert_text(const YXmlElement *xml, YTransaction *txn, int idx);
 
-YXmlText *yxml_insert_text(const YXmlElement *xml, YTransaction *txn, int idx);
+void yxmlelem_remove_range(const YXmlElement *xml, YTransaction *txn, int idx, int len);
 
-void yxml_remove_range(const YXmlElement *xml, YTransaction *txn, int idx, int len);
-
-const struct YVal *yxml_get(const YXmlElement *xml, const YTransaction *txn, int idx);
+const struct YOutput *yxmlelem_get(const YXmlElement *xml, const YTransaction *txn, int idx);
 
 int yxmltext_len(const YXmlText *txt, const YTransaction *txn);
 
@@ -262,58 +283,58 @@ char *yxmltext_get_attr(const YXmlText *txt, const YTransaction *txn, const char
 
 YXmlAttrIter *yxmltext_attrs_iter(const YXmlText *txt, const YTransaction *txn);
 
-void yval_destroy(struct YVal *val);
+void youtput_destroy(struct YOutput *val);
 
-const struct YVal *yval_null(void);
+struct YInput yinput_null(void);
 
-struct YVal *yval_undef(void);
+struct YInput yinput_undefined(void);
 
-struct YVal *yval_bool(uint8_t flag);
+struct YInput yinput_bool(uint8_t flag);
 
-struct YVal *yval_float(float num);
+struct YInput yinput_float(float num);
 
-struct YVal *yval_long(long integer);
+struct YInput yinput_long(long integer);
 
-struct YVal *yval_str(const char *str);
+struct YInput yinput_string(const char *str);
 
-struct YVal *yval_buf(const uint8_t *buf, int len);
+struct YInput yinput_binary(const uint8_t *buf, int len);
 
-struct YVal *yval_json_array(struct YVal **json_array, int len);
+struct YInput yinput_json_array(struct YInput *values, int len);
 
-struct YVal *yval_json_map(struct YMapEntry **json_map, int len);
+struct YInput yinput_json_map(char **keys, struct YInput *values, int len);
 
-struct YVal *yval_yarray(struct YVal **array, int len);
+struct YInput yinput_yarray(struct YInput *values, int len);
 
-struct YVal *yval_ymap(struct YMapEntry **map, int len);
+struct YInput yinput_ymap(char **keys, struct YInput *values, int len);
 
-struct YVal *yval_yxml_elem(struct YVal **array, int len);
+struct YInput yinput_ytext(char *str);
 
-struct YVal *yval_yxmltext(void);
+struct YInput yinput_yxmlelem(struct YInput *xml_children, int len);
 
-char yval_is_json(const struct YVal *val);
+struct YInput yinput_yxmltext(char *str);
 
-const unsigned char *yval_read_bool(const struct YVal *val);
+const unsigned char *youtput_read_bool(const struct YOutput *val);
 
-const float *yval_read_float(const struct YVal *val);
+const float *youtput_read_float(const struct YOutput *val);
 
-const long *yval_read_long(const struct YVal *val);
+const long *youtput_read_long(const struct YOutput *val);
 
-char *yval_read_str(const struct YVal *val);
+char *youtput_read_string(const struct YOutput *val);
 
-const uint8_t *yval_read_buf(const struct YVal *val);
+const unsigned char *youtput_read_binary(const struct YOutput *val);
 
-struct YVal **yval_read_json_array(const struct YVal *val);
+struct YOutput *youtput_read_json_array(const struct YOutput *val);
 
-struct YMapEntry **yval_read_json_map(const struct YVal *val);
+struct YMapEntry *youtput_read_json_map(const struct YOutput *val);
 
-YArray *yval_read_yarray(const struct YVal *val);
+YArray *youtput_read_yarray(const struct YOutput *val);
 
-YXmlElement *yval_read_yxml_elem(const struct YVal *val);
+YXmlElement *youtput_read_yxmlelem_elem(const struct YOutput *val);
 
-YMap *yval_read_ymap(const struct YVal *val);
+YMap *youtput_read_ymap(const struct YOutput *val);
 
-YText *yval_read_ytext(const struct YVal *val);
+YText *youtput_read_ytext(const struct YOutput *val);
 
-YXmlText *yval_read_yxmltext(const struct YVal *val);
+YXmlText *youtput_read_yxmltext(const struct YOutput *val);
 
 #endif
