@@ -18,4 +18,7 @@ find_library (
         HINTS "${PROJECT_SOURCE_DIR}/lib" # where to look
         NO_DEFAULT_PATH # do not search system default paths
 )
-target_link_libraries(yrs-ffi-tests LINK_PUBLIC ${YRS_LIB})
+
+link_libraries(ws2_32 wsock32 userenv)
+target_link_libraries(yrs-ffi-tests LINK_PUBLIC ${YRS_LIB} wsock32 ws2_32 userenv)
+#target_link_libraries(yrs-ffi-tests LINK_PUBLIC ${YRS_LIB})
