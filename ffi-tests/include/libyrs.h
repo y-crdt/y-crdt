@@ -33,7 +33,7 @@ typedef YXmlElement YXmlElement;
 typedef YXmlText YXmlText;
 
 typedef union YOutputContent {
-  uint8_t flag;
+  char flag;
   float num;
   long integer;
   char *str;
@@ -71,7 +71,7 @@ typedef struct YMapInputData {
 } YMapInputData;
 
 typedef union YInputContent {
-  uint8_t flag;
+  char flag;
   float num;
   long integer;
   char *str;
@@ -121,6 +121,10 @@ extern const char Y_TEXT;
 extern const char Y_XML_ELEM;
 
 extern const char Y_XML_TEXT;
+
+extern const char Y_TRUE;
+
+extern const char Y_FALSE;
 
 void ydoc_destroy(YDoc *value);
 
@@ -203,12 +207,9 @@ struct YMapEntry *ymap_iter_next(YMapIter *iter);
 
 int ymap_len(const YMap *map, const YTransaction *txn);
 
-struct YMapEntry *ymap_insert(const YMap *map,
-                              YTransaction *txn,
-                              const char *key,
-                              const struct YInput *value);
+void ymap_insert(const YMap *map, YTransaction *txn, const char *key, const struct YInput *value);
 
-struct YOutput *ymap_remove(const YMap *map, YTransaction *txn, const char *key);
+char ymap_remove(const YMap *map, YTransaction *txn, const char *key);
 
 struct YOutput *ymap_get(const YMap *map, const YTransaction *txn, const char *key);
 
@@ -289,7 +290,7 @@ struct YInput yinput_null(void);
 
 struct YInput yinput_undefined(void);
 
-struct YInput yinput_bool(uint8_t flag);
+struct YInput yinput_bool(char flag);
 
 struct YInput yinput_float(float num);
 
@@ -313,7 +314,7 @@ struct YInput yinput_yxmlelem(struct YInput *xml_children, int len);
 
 struct YInput yinput_yxmltext(char *str);
 
-const unsigned char *youtput_read_bool(const struct YOutput *val);
+const char *youtput_read_bool(const struct YOutput *val);
 
 const float *youtput_read_float(const struct YOutput *val);
 
