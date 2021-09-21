@@ -85,23 +85,24 @@ TEST_CASE("YArray basic") {
     YTransaction* txn = ytransaction_new(doc);
     YArray* arr = yarray(txn, "test");
 
-    YInput* nested = (YInput*)malloc(2 * sizeof(YInput*));
+    YInput* nested = (YInput*)malloc(2 * sizeof(YInput));
     nested[0] = yinput_float(0.5);
     nested[1] = yinput_bool(1);
     YInput nested_array = yinput_yarray(nested, 2);
 
     const int ARG_LEN = 3;
 
-    YInput* args = (YInput*)malloc(ARG_LEN * sizeof(YInput*));
+    YInput* args = (YInput*)malloc(ARG_LEN * sizeof(YInput));
     args[0] = nested_array;
     args[1] = yinput_string("hello");
     args[2] = yinput_long(123);
 
-    yarray_insert_range(arr, txn, 0, args, 3); //state after: [ YArray([0.5, true]), 'hello', 123]
+    yarray_insert_range(arr, txn, 0, args, ARG_LEN); //state after: [ YArray([0.5, true]), 'hello', 123]
 
-    yarray_remove_range(arr, txn, 1, 1); //state after: [ YArray([0.5, true]), 123 ]
     free(nested);
     free(args);
+
+    yarray_remove_range(arr, txn, 1, 1); //state after: [ YArray([0.5, true]), 123 ]
 
     REQUIRE_EQ(yarray_len(arr), 2);
 
@@ -129,7 +130,7 @@ TEST_CASE("YArray basic") {
     youtput_destroy(curr);
 
     curr = yarray_iter_next(i);
-    REQUIRE(curr != NULL);
+    REQUIRE(curr == NULL);
 
     yarray_iter_destroy(i);
     yarray_destroy(arr);
@@ -148,7 +149,7 @@ TEST_CASE("YMap basic") {
     ymap_insert(map, txn, "a", &a);
 
     // insert 'b' -> [11,22]
-    YInput* array = (YInput*) malloc(2 * sizeof(YInput*));
+    YInput* array = (YInput*) malloc(2 * sizeof(YInput));
     array[0] = yinput_long(11);
     array[1] = yinput_long(22);
     YInput b = yinput_json_array(array, 2);
@@ -160,36 +161,55 @@ TEST_CASE("YMap basic") {
 
     // iterate over entries
     YMapIter* i = ymap_iter(map, txn);
+    YMapEntry* curr;
 
-    YMapEntry* curr = ymap_iter_next(i);
-    REQUIRE(!strcmp(curr->key, "a"));
-    REQUIRE(!strcmp(youtput_read_string(&curr->value), "value"));
-    ymap_entry_destroy(curr);
-
-    curr = ymap_iter_next(i);
-    REQUIRE(!strcmp(curr->key, "b"));
-    YOutput* output = youtput_read_json_array(&curr->value);
-    REQUIRE_EQ(curr->value.len, 2);
-    REQUIRE_EQ(*youtput_read_long(&output[0]), 11);
-    REQUIRE_EQ(*youtput_read_long(&output[1]), 22);
-    ymap_entry_destroy(curr);
+    YMapEntry** acc = (YMapEntry**)malloc(2 * sizeof(YMapEntry*));
+    acc[0] = ymap_iter_next(i);
+    acc[1] = ymap_iter_next(i);
 
     curr = ymap_iter_next(i);
     REQUIRE(curr == NULL);
 
     ymap_iter_destroy(i);
 
-    // remove 'a' twice - second attempt should return null
-    YOutput* out = ymap_remove(map, txn, "a");
-    REQUIRE(!strcmp(youtput_read_string(out), "value"));
-    youtput_destroy(out);
+    for (int i = 0; i < 2; i++) {
+        curr = acc[i];
+        switch (curr->key[0]) {
+            case 'a': {
+                REQUIRE(!strcmp(curr->key, "a"));
+                REQUIRE(!strcmp(youtput_read_string(&curr->value), "value"));
+                break;
+            }
+            case 'b': {
+                REQUIRE(!strcmp(curr->key, "b"));
+                REQUIRE_EQ(curr->value.len, 2);
+                YOutput* output = youtput_read_json_array(&curr->value);
+                YOutput* fst = &output[0];
+                YOutput* snd = &output[1];
+                REQUIRE_EQ(*youtput_read_long(fst), 11);
+                REQUIRE_EQ(*youtput_read_long(snd), 22);
+                break;
+            }
+            default: {
+                FAIL("Unrecognized case: ", curr->key);
+                break;
+            }
+        }
+        ymap_entry_destroy(curr);
+    }
 
-    out = ymap_remove(map, txn, "a");
-    REQUIRE(out == NULL);
+    free(acc);
+
+    // remove 'a' twice - second attempt should return null
+    char removed = ymap_remove(map, txn, "a");
+    REQUIRE_EQ(removed, 1);
+
+    removed = ymap_remove(map, txn, "a");
+    REQUIRE_EQ(removed, 0);
 
     // get 'b' and read its contents
-    out = ymap_get(map, txn, "b");
-    output = youtput_read_json_array(out);
+    YOutput* out = ymap_get(map, txn, "b");
+    YOutput* output = youtput_read_json_array(out);
     REQUIRE_EQ(out->len, 2);
     REQUIRE_EQ(*youtput_read_long(&output[0]), 11);
     REQUIRE_EQ(*youtput_read_long(&output[1]), 22);

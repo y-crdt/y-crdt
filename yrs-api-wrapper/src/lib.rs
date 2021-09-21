@@ -70,6 +70,14 @@ pub static Y_XML_ELEM: c_char = 4;
 #[export_name = "Y_XML_TEXT"]
 pub static Y_XML_TEXT: c_char = 5;
 
+#[no_mangle]
+#[export_name = "Y_TRUE"]
+pub static Y_TRUE: c_char = 1;
+
+#[no_mangle]
+#[export_name = "Y_FALSE"]
+pub static Y_FALSE: c_char = 0;
+
 /* pub types below are used by cbindgen for c header generation */
 
 pub type Doc = yrs::Doc;
@@ -92,9 +100,10 @@ pub struct YMapEntry {
 
 impl YMapEntry {
     fn new(key: &str, value: Value) -> Self {
+        let value = YOutput::from(value);
         YMapEntry {
             key: CString::new(key).unwrap().into_raw(),
-            value: YOutput::from(value),
+            value,
         }
     }
 }
@@ -534,7 +543,7 @@ pub unsafe extern "C" fn ymap_insert(
     txn: *mut Transaction,
     key: *const c_char,
     value: *const YInput,
-) -> *mut YMapEntry {
+) {
     assert!(!map.is_null());
     assert!(!txn.is_null());
     assert!(!key.is_null());
@@ -546,11 +555,7 @@ pub unsafe extern "C" fn ymap_insert(
     let map = map.as_ref().unwrap();
     let txn = txn.as_mut().unwrap();
 
-    if let Some(prev) = map.insert(txn, key, value.read()) {
-        Box::into_raw(Box::new(YMapEntry::new(cstr.to_str().unwrap(), prev)))
-    } else {
-        std::ptr::null_mut()
-    }
+    map.insert(txn, key, value.read());
 }
 
 #[no_mangle]
@@ -558,7 +563,7 @@ pub unsafe extern "C" fn ymap_remove(
     map: *const Map,
     txn: *mut Transaction,
     key: *const c_char,
-) -> *mut YOutput {
+) -> c_char {
     assert!(!map.is_null());
     assert!(!txn.is_null());
     assert!(!key.is_null());
@@ -568,10 +573,10 @@ pub unsafe extern "C" fn ymap_remove(
     let map = map.as_ref().unwrap();
     let txn = txn.as_mut().unwrap();
 
-    if let Some(value) = map.remove(txn, key) {
-        Box::into_raw(Box::new(YOutput::from(value)))
+    if let Some(_) = map.remove(txn, key) {
+        Y_TRUE
     } else {
-        std::ptr::null_mut()
+        Y_FALSE
     }
 }
 
@@ -1164,7 +1169,7 @@ impl YInput {
 
 #[repr(C)]
 union YInputContent {
-    flag: u8,
+    flag: c_char,
     num: c_float,
     integer: c_long,
     str: *mut c_char,
@@ -1248,6 +1253,55 @@ pub struct YOutput {
     value: YOutputContent,
 }
 
+impl std::fmt::Display for YOutput {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let tag = self.tag;
+        unsafe {
+            if tag == Y_JSON_INT {
+                write!(f, "{}", self.value.integer)
+            } else if tag == Y_JSON_NUM {
+                write!(f, "{}", self.value.num)
+            } else if tag == Y_JSON_BOOL {
+                write!(f, "{}", if self.value.flag == 0 { "false" } else { "true" })
+            } else if tag == Y_JSON_UNDEF {
+                write!(f, "undefined")
+            } else if tag == Y_JSON_NULL {
+                write!(f, "null")
+            } else if tag == Y_JSON_STR {
+                write!(f,"{}", CString::from_raw(self.value.str).to_str().unwrap())
+            } else if tag == Y_MAP {
+                write!(f,"YMap")
+            } else if tag == Y_ARRAY {
+                write!(f,"YArray")
+            } else if tag == Y_JSON_ARR {
+                write!(f,"[")?;
+                let slice = std::slice::from_raw_parts(self.value.array, self.len as usize);
+                for o in slice {
+                    write!(f, ", {}", o)?;
+                }
+                write!(f,"]")
+            } else if tag == Y_JSON_MAP {
+                write!(f,"{{")?;
+                let slice = std::slice::from_raw_parts(self.value.map, self.len as usize);
+                for e in slice {
+                    write!(f, ", '{}' => {}", CStr::from_ptr(e.key).to_str().unwrap(), e.value)?;
+                }
+                write!(f,"}}")
+            } else if tag == Y_TEXT {
+                write!(f,"YText")
+            } else if tag == Y_XML_TEXT {
+                write!(f,"YXmlText")
+            } else if tag == Y_XML_ELEM {
+                write!(f,"YXmlElement", )
+            } else if tag == Y_JSON_BUF {
+                write!(f,"YBinary(len: {})", self.len)
+            } else {
+                Ok(())
+            }
+        }
+    }
+}
+
 impl Drop for YOutput {
     fn drop(&mut self) {
         let tag = self.tag;
@@ -1305,7 +1359,7 @@ impl From<Any> for YOutput {
                 Any::Bool(v) => YOutput {
                     tag: Y_JSON_BOOL,
                     len: 1,
-                    value: YOutputContent { flag: if v { 1 } else { 0 } }
+                    value: YOutputContent { flag: if v { Y_TRUE } else { Y_FALSE } }
                 },
                 Any::Number(v) => YOutput {
                     tag: Y_JSON_NUM,
@@ -1329,7 +1383,7 @@ impl From<Any> for YOutput {
                 },
                 Any::Array(v) => {
                     let len = v.len() as c_int;
-                    let array: Vec<_> = v.into_iter().map(YOutput::from).collect();
+                    let array: Vec<_> = v.into_iter().map(|v| YOutput::from(v)).collect();
                     let ptr = array.into_boxed_slice().as_mut_ptr();
                     YOutput {
                         tag: Y_JSON_ARR,
@@ -1406,7 +1460,7 @@ impl From<XmlText> for YOutput {
 
 #[repr(C)]
 union YOutputContent {
-    flag: u8,
+    flag: c_char,
     num: c_float,
     integer: c_long,
     str: *mut c_char,
@@ -1446,7 +1500,7 @@ pub unsafe extern "C" fn yinput_undefined() -> YInput {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yinput_bool(flag: u8) -> YInput {
+pub unsafe extern "C" fn yinput_bool(flag: c_char) -> YInput {
     YInput {
         tag: Y_JSON_BOOL,
         len: 1,
@@ -1554,9 +1608,10 @@ pub unsafe extern "C" fn yinput_yxmltext(str: *mut c_char) -> YInput {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn youtput_read_bool(val: *const YOutput) -> *const c_uchar {
-    if (*val).tag == Y_JSON_BOOL {
-        &(*val).value.flag as *const u8 as *const c_uchar
+pub unsafe extern "C" fn youtput_read_bool(val: *const YOutput) -> *const c_char {
+    let v = val.as_ref().unwrap();
+    if v.tag == Y_JSON_BOOL {
+        &v.value.flag
     } else {
         std::ptr::null()
     }
@@ -1564,8 +1619,9 @@ pub unsafe extern "C" fn youtput_read_bool(val: *const YOutput) -> *const c_ucha
 
 #[no_mangle]
 pub unsafe extern "C" fn youtput_read_float(val: *const YOutput) -> *const c_float {
-    if (*val).tag == Y_JSON_NUM {
-        &(*val).value.num as *const _
+    let v = val.as_ref().unwrap();
+    if v.tag == Y_JSON_NUM {
+        &v.value.num
     } else {
         std::ptr::null()
     }
@@ -1573,8 +1629,9 @@ pub unsafe extern "C" fn youtput_read_float(val: *const YOutput) -> *const c_flo
 
 #[no_mangle]
 pub unsafe extern "C" fn youtput_read_long(val: *const YOutput) -> *const c_long {
-    if (*val).tag == Y_JSON_INT {
-        &(*val).value.integer as *const _
+    let v = val.as_ref().unwrap();
+    if v.tag == Y_JSON_INT {
+        &v.value.integer
     } else {
         std::ptr::null()
     }
@@ -1582,8 +1639,9 @@ pub unsafe extern "C" fn youtput_read_long(val: *const YOutput) -> *const c_long
 
 #[no_mangle]
 pub unsafe extern "C" fn youtput_read_string(val: *const YOutput) -> *mut c_char {
-    if (*val).tag == Y_JSON_STR {
-        (*val).value.str
+    let v = val.as_ref().unwrap();
+    if v.tag == Y_JSON_STR {
+        v.value.str
     } else {
         std::ptr::null_mut()
     }
@@ -1591,8 +1649,9 @@ pub unsafe extern "C" fn youtput_read_string(val: *const YOutput) -> *mut c_char
 
 #[no_mangle]
 pub unsafe extern "C" fn youtput_read_binary(val: *const YOutput) -> *const c_uchar {
-    if (*val).tag == Y_JSON_BUF {
-        (*val).value.buf
+    let v = val.as_ref().unwrap();
+    if v.tag == Y_JSON_BUF {
+        v.value.buf
     } else {
         std::ptr::null()
     }
@@ -1600,8 +1659,9 @@ pub unsafe extern "C" fn youtput_read_binary(val: *const YOutput) -> *const c_uc
 
 #[no_mangle]
 pub unsafe extern "C" fn youtput_read_json_array(val: *const YOutput) -> *mut YOutput {
-    if (*val).tag == Y_JSON_ARR {
-        (*val).value.array
+    let v = val.as_ref().unwrap();
+    if v.tag == Y_JSON_ARR {
+        v.value.array
     } else {
         std::ptr::null_mut()
     }
@@ -1609,8 +1669,9 @@ pub unsafe extern "C" fn youtput_read_json_array(val: *const YOutput) -> *mut YO
 
 #[no_mangle]
 pub unsafe extern "C" fn youtput_read_json_map(val: *const YOutput) -> *mut YMapEntry {
-    if (*val).tag == Y_JSON_MAP {
-        (*val).value.map
+    let v = val.as_ref().unwrap();
+    if v.tag == Y_JSON_MAP {
+        v.value.map
     } else {
         std::ptr::null_mut()
     }
@@ -1618,8 +1679,9 @@ pub unsafe extern "C" fn youtput_read_json_map(val: *const YOutput) -> *mut YMap
 
 #[no_mangle]
 pub unsafe extern "C" fn youtput_read_yarray(val: *const YOutput) -> *mut Array {
-    if (*val).tag == Y_ARRAY {
-        &mut *(*val).value.y_array as *mut _
+    let v = val.as_ref().unwrap();
+    if v.tag == Y_ARRAY {
+        v.value.y_array
     } else {
         std::ptr::null_mut()
     }
@@ -1627,8 +1689,9 @@ pub unsafe extern "C" fn youtput_read_yarray(val: *const YOutput) -> *mut Array 
 
 #[no_mangle]
 pub unsafe extern "C" fn youtput_read_yxmlelem_elem(val: *const YOutput) -> *mut XmlElement {
-    if (*val).tag == Y_XML_ELEM {
-        &mut *(*val).value.y_xmlelem as *mut _
+    let v = val.as_ref().unwrap();
+    if v.tag == Y_XML_ELEM {
+        v.value.y_xmlelem
     } else {
         std::ptr::null_mut()
     }
@@ -1636,8 +1699,9 @@ pub unsafe extern "C" fn youtput_read_yxmlelem_elem(val: *const YOutput) -> *mut
 
 #[no_mangle]
 pub unsafe extern "C" fn youtput_read_ymap(val: *const YOutput) -> *mut Map {
-    if (*val).tag == Y_MAP {
-        &mut *(*val).value.y_map as *mut _
+    let v = val.as_ref().unwrap();
+    if v.tag == Y_MAP {
+        v.value.y_map
     } else {
         std::ptr::null_mut()
     }
@@ -1645,8 +1709,9 @@ pub unsafe extern "C" fn youtput_read_ymap(val: *const YOutput) -> *mut Map {
 
 #[no_mangle]
 pub unsafe extern "C" fn youtput_read_ytext(val: *const YOutput) -> *mut Text {
-    if (*val).tag == Y_TEXT {
-        &mut *(*val).value.y_text as *mut _
+    let v = val.as_ref().unwrap();
+    if v.tag == Y_TEXT {
+        v.value.y_text
     } else {
         std::ptr::null_mut()
     }
@@ -1654,8 +1719,9 @@ pub unsafe extern "C" fn youtput_read_ytext(val: *const YOutput) -> *mut Text {
 
 #[no_mangle]
 pub unsafe extern "C" fn youtput_read_yxmltext(val: *const YOutput) -> *mut XmlText {
-    if (*val).tag == Y_XML_TEXT {
-        &mut *(*val).value.y_xmltext as *mut _
+    let v = val.as_ref().unwrap();
+    if v.tag == Y_XML_TEXT {
+        v.value.y_xmltext
     } else {
         std::ptr::null_mut()
     }
@@ -1672,8 +1738,8 @@ mod test {
             let txn = ytransaction_new(doc);
             let array = yarray(txn, CString::new("test").unwrap().as_ptr());
 
-            let y_true = yinput_bool(1);
-            let y_false = yinput_bool(0);
+            let y_true = yinput_bool(Y_TRUE);
+            let y_false = yinput_bool(Y_FALSE);
             let y_float = yinput_float(0.5);
             let y_int = yinput_long(11);
             let y_str = yinput_string(CString::new("hello").unwrap().as_ptr());
