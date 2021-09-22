@@ -140,7 +140,7 @@ void yxmltext_destroy(YXmlText *value);
 
 void ymap_entry_destroy(struct YMapEntry *value);
 
-void yxmlelem_attr_destroy(struct YXmlAttr *attr);
+void yxmlattr_destroy(struct YXmlAttr *attr);
 
 void ystring_destroy(char *str);
 
@@ -228,11 +228,11 @@ void yxmlelem_remove_attr(const YXmlElement *xml, YTransaction *txn, const char 
 
 char *yxmlelem_get_attr(const YXmlElement *xml, const YTransaction *txn, const char *attr_name);
 
-YXmlAttrIter *yxmlelem_attr_iter(const YXmlElement *xml, const YTransaction *txn);
+YXmlAttrIter *yxmlattr_iter(const YXmlElement *xml, const YTransaction *txn);
 
-void yxmlelem_attr_iter_destroy(YXmlAttrIter *iter);
+void yxmlattr_iter_destroy(YXmlAttrIter *iter);
 
-struct YXmlAttr *yxmlelem_attr_iter_next(YXmlAttrIter *iter);
+struct YXmlAttr *yxmlattr_iter_next(YXmlAttrIter *iter);
 
 struct YOutput *yxmlelem_next_sibling(const YXmlElement *xml, const YTransaction *txn);
 
@@ -330,7 +330,7 @@ struct YMapEntry *youtput_read_json_map(const struct YOutput *val);
 
 YArray *youtput_read_yarray(const struct YOutput *val);
 
-YXmlElement *youtput_read_yxmlelem_elem(const struct YOutput *val);
+YXmlElement *youtput_read_yxmlelem(const struct YOutput *val);
 
 YMap *youtput_read_ymap(const struct YOutput *val);
 
