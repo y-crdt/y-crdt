@@ -42,6 +42,9 @@ TEST_CASE("Update exchange basic") {
     ytransaction_apply(t1, u2, u2_len);
     ytransaction_apply(t2, u1, u1_len);
 
+    ybinary_destroy(u1, u1_len);
+    ybinary_destroy(u2, u2_len);
+
     // make sure both peers produce the same output
     char* str1 = ytext_string(txt1, t1);
     char* str2 = ytext_string(txt2, t2);
@@ -233,19 +236,37 @@ TEST_CASE("YXmlElement basic") {
     yxmlelem_insert_attr(xml, txn, "key1", "value1");
     yxmlelem_insert_attr(xml, txn, "key2", "value2");
 
-    YXmlAttrIter* i = yxmlelem_attr_iter(xml, txn);
+    YXmlAttrIter* i = yxmlattr_iter(xml, txn);
+    YXmlAttr* attr;
 
-    YXmlAttr* attr = yxmlelem_attr_iter_next(i);
-    REQUIRE(!strcmp(attr->name, "key1"));
-    REQUIRE(!strcmp(attr->value, "value1"));
-    yxmlelem_attr_destroy(attr);
+    YXmlAttr** attrs = (YXmlAttr**)malloc(2 * sizeof(YXmlAttr*));
+    attrs[0] = yxmlattr_iter_next(i);
+    attrs[1] = yxmlattr_iter_next(i);
 
-    attr = yxmlelem_attr_iter_next(i);
-    REQUIRE(!strcmp(attr->name, "key2"));
-    REQUIRE(!strcmp(attr->value, "value2"));
-    yxmlelem_attr_destroy(attr);
+    attr = yxmlattr_iter_next(i);
+    REQUIRE(attr == NULL);
+    yxmlattr_destroy(attr);
 
-    yxmlelem_attr_iter_destroy(i);
+    for (int j = 0; j < 2; ++j) {
+        attr = attrs[j];
+        switch (attr->name[3]) {
+            case '1': {
+                REQUIRE(!strcmp(attr->name, "key1"));
+                REQUIRE(!strcmp(attr->value, "value1"));
+                break;
+            }
+            case '2': {
+                REQUIRE(!strcmp(attr->name, "key2"));
+                REQUIRE(!strcmp(attr->value, "value2"));
+                break;
+            }
+            default: {
+                FAIL("Unrecognized attribute name: ", attr->name);
+                break;
+            }
+        }
+        yxmlattr_destroy(attr);
+    }
 
     // XML children API
     YXmlElement* inner = yxmlelem_insert_elem(xml, txn, 0, "p");
@@ -275,11 +296,10 @@ TEST_CASE("YXmlElement basic") {
 
     parent = yxmlelem_parent(xml, txn);
     REQUIRE(parent == NULL);
-    yxmlelem_destroy(parent);
 
     // check children traversal
     YOutput* curr = yxmlelem_first_child(xml, txn);
-    YXmlElement* first = youtput_read_yxmlelem_elem(curr);
+    YXmlElement* first = youtput_read_yxmlelem(curr);
     REQUIRE(yxmlelem_prev_sibling(first, txn) == NULL);
     char* str = yxmlelem_string(first, txn);
     REQUIRE(!strcmp(str, "<p>hello</p>"));
@@ -292,24 +312,16 @@ TEST_CASE("YXmlElement basic") {
     str = yxmltext_string(second, txn);
     REQUIRE(!(strcmp(str, "world")));
     ystring_destroy(str);
-    youtput_destroy(curr);
 
     // check tree walker - expected order:
-    // - UNDEFINED // (XML root element)
     // - p
     // - hello
     // - world
     YXmlTreeWalker* w = yxmlelem_tree_walker(xml, txn);
+    YXmlElement* e;
 
     curr = yxmlelem_tree_walker_next(w);
-    YXmlElement* e = youtput_read_yxmlelem_elem(curr);
-    str = yxmlelem_string(e, txn);
-    REQUIRE(!strcmp(str, "<UNDEFINED><p>hello</p>world</UNDEFINED>"));
-    ystring_destroy(str);
-    youtput_destroy(curr);
-
-    curr = yxmlelem_tree_walker_next(w);
-    e = youtput_read_yxmlelem_elem(curr);
+    e = youtput_read_yxmlelem(curr);
     str = yxmlelem_string(e, txn);
     REQUIRE(!strcmp(str, "<p>hello</p>"));
     ystring_destroy(str);

@@ -1,8 +1,5 @@
 use crate::block::{Item, ItemContent, ItemPosition, Prelim};
-use crate::types::{
-    Branch, BranchRef, Entries, Map, Text, TypePtr, Value, TYPE_REFS_XML_ELEMENT,
-    TYPE_REFS_XML_TEXT,
-};
+use crate::types::{Branch, BranchRef, Entries, Map, Text, TypePtr, Value, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT, TYPE_REFS_XML_FRAGMENT};
 use crate::Transaction;
 use lib0::any::Any;
 use std::cell::Ref;
@@ -434,7 +431,7 @@ impl<'a, 'txn> Iterator for TreeWalker<'a, 'txn> {
                         let inner = t.borrow();
                         let type_ref = inner.type_ref();
                         if !current.is_deleted()
-                            && (type_ref == TYPE_REFS_XML_ELEMENT || type_ref == TYPE_REFS_XML_TEXT)
+                            && (type_ref == TYPE_REFS_XML_ELEMENT || type_ref == TYPE_REFS_XML_FRAGMENT)
                             && inner.start.is_some()
                         {
                             // walk down in the tree
@@ -462,7 +459,8 @@ impl<'a, 'txn> Iterator for TreeWalker<'a, 'txn> {
                         }
                     }
                     if let Some(current) = n {
-                        current.is_deleted()
+                        let deleted = current.is_deleted();
+                        deleted
                     } else {
                         false
                     }

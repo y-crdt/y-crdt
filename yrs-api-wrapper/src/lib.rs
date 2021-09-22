@@ -182,7 +182,7 @@ pub unsafe extern "C" fn ymap_entry_destroy(value: *mut YMapEntry) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yxmlelem_attr_destroy(attr: *mut YXmlAttr) {
+pub unsafe extern "C" fn yxmlattr_destroy(attr: *mut YXmlAttr) {
     if !attr.is_null() {
         drop(Box::from_raw(attr));
     }
@@ -696,7 +696,7 @@ pub unsafe extern "C" fn yxmlelem_get_attr(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yxmlelem_attr_iter(
+pub unsafe extern "C" fn yxmlattr_iter(
     xml: *const XmlElement,
     txn: *const Transaction,
 ) -> *mut Attributes {
@@ -710,14 +710,14 @@ pub unsafe extern "C" fn yxmlelem_attr_iter(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yxmlelem_attr_iter_destroy(iter: *mut Attributes) {
+pub unsafe extern "C" fn yxmlattr_iter_destroy(iter: *mut Attributes) {
     if !iter.is_null() {
         drop(Box::from_raw(iter))
     }
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yxmlelem_attr_iter_next(iter: *mut Attributes) -> *mut YXmlAttr {
+pub unsafe extern "C" fn yxmlattr_iter_next(iter: *mut Attributes) -> *mut YXmlAttr {
     assert!(!iter.is_null());
 
     let iter = iter.as_mut().unwrap();
@@ -1383,8 +1383,10 @@ impl From<Any> for YOutput {
                 },
                 Any::Array(v) => {
                     let len = v.len() as c_int;
-                    let array: Vec<_> = v.into_iter().map(|v| YOutput::from(v)).collect();
-                    let ptr = array.into_boxed_slice().as_mut_ptr();
+                    let mut array: Vec<_> = v.into_iter().map(|v| YOutput::from(v)).collect();
+                    array.shrink_to_fit();
+                    let ptr = array.as_mut_ptr();
+                    forget(array);
                     YOutput {
                         tag: Y_JSON_ARR,
                         len,
@@ -1393,10 +1395,12 @@ impl From<Any> for YOutput {
                 }
                 Any::Map(v) => {
                     let len = v.len() as c_int;
-                    let array: Vec<_> = v.into_iter()
+                    let mut array: Vec<_> = v.into_iter()
                         .map(|(k,v)| YMapEntry::new(k.as_str(), Value::Any(v)))
                         .collect();
-                    let ptr = array.into_boxed_slice().as_mut_ptr();
+                    array.shrink_to_fit();
+                    let ptr = array.as_mut_ptr();
+                    forget(array);
                     YOutput {
                         tag: Y_JSON_MAP,
                         len,
@@ -1688,7 +1692,7 @@ pub unsafe extern "C" fn youtput_read_yarray(val: *const YOutput) -> *mut Array 
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn youtput_read_yxmlelem_elem(val: *const YOutput) -> *mut XmlElement {
+pub unsafe extern "C" fn youtput_read_yxmlelem(val: *const YOutput) -> *mut XmlElement {
     let v = val.as_ref().unwrap();
     if v.tag == Y_XML_ELEM {
         v.value.y_xmlelem
