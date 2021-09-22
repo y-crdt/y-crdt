@@ -236,7 +236,7 @@ TEST_CASE("YXmlElement basic") {
     yxmlelem_insert_attr(xml, txn, "key1", "value1");
     yxmlelem_insert_attr(xml, txn, "key2", "value2");
 
-    YXmlAttrIter* i = yxmlattr_iter(xml, txn);
+    YXmlAttrIter* i = yxmlelem_attr_iter(xml, txn);
     YXmlAttr* attr;
 
     YXmlAttr** attrs = (YXmlAttr**)malloc(2 * sizeof(YXmlAttr*));
