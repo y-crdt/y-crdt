@@ -7,7 +7,18 @@ use std::error::Error;
 use std::fmt::Formatter;
 
 /// A shared data type used for collaborative text editing. It enables multiple users to add and
-/// remove chunks of text in efficient manner.
+/// remove chunks of text in efficient manner. This type is internally represented as a mutable
+/// double-linked list of text chunks - an optimization occurs during [Transaction::commit], which
+/// allows to squash multiple consecutively inserted characters together as a single chunk of text
+/// even between transaction boundaries in order to preserve more efficient memory model.
+///
+/// [Text] structure internally uses UTF-8 encoding and its length is described in a number of
+/// bytes rather than individual characters (a single UTF-8 code point can consist of many bytes).
+///
+/// Like all Yrs shared data types, [Text] is resistant to the problem of interleaving (situation
+/// when characters inserted one after another may interleave with other peers concurrent inserts
+/// after merging all updates together). In case of Yrs conflict resolution is solved by using
+/// unique document id to determine correct and consistent ordering.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Text(BranchRef);
 

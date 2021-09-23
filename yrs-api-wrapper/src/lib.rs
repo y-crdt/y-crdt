@@ -14,74 +14,74 @@ use yrs::StateVector;
 use yrs::Update;
 use yrs::{DeleteSet, Xml};
 
-/// Flag used by [YInput] and [YOutput] to tag boolean values.
+/// Flag used by `YInput` and `YOutput` to tag boolean values.
 #[no_mangle]
 #[export_name = "Y_JSON_BOOL"]
 pub static Y_JSON_BOOL: c_char = -8;
 
-/// Flag used by [YInput] and [YOutput] to tag floating point numbers.
+/// Flag used by `YInput` and `YOutput` to tag floating point numbers.
 #[no_mangle]
 #[export_name = "Y_JSON_NUM"]
 pub static Y_JSON_NUM: c_char = -7;
 
-/// Flag used by [YInput] and [YOutput] to tag 64-bit integer numbers.
+/// Flag used by `YInput` and `YOutput` to tag 64-bit integer numbers.
 #[no_mangle]
 #[export_name = "Y_JSON_INT"]
 pub static Y_JSON_INT: c_char = -6;
 
-/// Flag used by [YInput] and [YOutput] to tag strings.
+/// Flag used by `YInput` and `YOutput` to tag strings.
 #[no_mangle]
 #[export_name = "Y_JSON_STR"]
 pub static Y_JSON_STR: c_char = -5;
 
-/// Flag used by [YInput] and [YOutput] to tag binary content.
+/// Flag used by `YInput` and `YOutput` to tag binary content.
 #[no_mangle]
 #[export_name = "Y_JSON_BUF"]
 pub static Y_JSON_BUF: c_char = -4;
 
-/// Flag used by [YInput] and [YOutput] to tag embedded JSON-like arrays of values,
-/// which themselves are [YInput] and [YOutput] instances respectively.
+/// Flag used by `YInput` and `YOutput` to tag embedded JSON-like arrays of values,
+/// which themselves are `YInput` and `YOutput` instances respectively.
 #[no_mangle]
 #[export_name = "Y_JSON_ARRAY"]
 pub static Y_JSON_ARR: c_char = -3;
 
-/// Flag used by [YInput] and [YOutput] to tag embedded JSON-like maps of key-value pairs,
-/// where keys are strings and values are [YInput] and [YOutput] instances respectively.
+/// Flag used by `YInput` and `YOutput` to tag embedded JSON-like maps of key-value pairs,
+/// where keys are strings and values are `YInput` and `YOutput` instances respectively.
 #[no_mangle]
 #[export_name = "Y_JSON_MAP"]
 pub static Y_JSON_MAP: c_char = -2;
 
-/// Flag used by [YInput] and [YOutput] to tag JSON-like null values.
+/// Flag used by `YInput` and `YOutput` to tag JSON-like null values.
 #[no_mangle]
 #[export_name = "Y_JSON_NULL"]
 pub static Y_JSON_NULL: c_char = -1;
 
-/// Flag used by [YInput] and [YOutput] to tag JSON-like undefined values.
+/// Flag used by `YInput` and `YOutput` to tag JSON-like undefined values.
 #[no_mangle]
 #[export_name = "Y_JSON_UNDEF"]
 pub static Y_JSON_UNDEF: c_char = 0;
 
-/// Flag used by [YInput] and [YOutput] to tag content, which is an [YArray] shared type.
+/// Flag used by `YInput` and `YOutput` to tag content, which is an `YArray` shared type.
 #[no_mangle]
 #[export_name = "Y_ARRAY"]
 pub static Y_ARRAY: c_char = 1;
 
-/// Flag used by [YInput] and [YOutput] to tag content, which is an [YMap] shared type.
+/// Flag used by `YInput` and `YOutput` to tag content, which is an `YMap` shared type.
 #[no_mangle]
 #[export_name = "Y_MAP"]
 pub static Y_MAP: c_char = 2;
 
-/// Flag used by [YInput] and [YOutput] to tag content, which is an [YText] shared type.
+/// Flag used by `YInput` and `YOutput` to tag content, which is an `YText` shared type.
 #[no_mangle]
 #[export_name = "Y_TEXT"]
 pub static Y_TEXT: c_char = 3;
 
-/// Flag used by [YInput] and [YOutput] to tag content, which is an [YXmlElement] shared type.
+/// Flag used by `YInput` and `YOutput` to tag content, which is an `YXmlElement` shared type.
 #[no_mangle]
 #[export_name = "Y_XML_ELEM"]
 pub static Y_XML_ELEM: c_char = 4;
 
-/// Flag used by [YInput] and [YOutput] to tag content, which is an [YXmlText] shared type.
+/// Flag used by `YInput` and `YOutput` to tag content, which is an `YXmlText` shared type.
 #[no_mangle]
 #[export_name = "Y_XML_TEXT"]
 pub static Y_XML_TEXT: c_char = 5;
@@ -101,7 +101,7 @@ pub static Y_FALSE: c_char = 0;
 /// A Yrs document type. Documents are most important units of collaborative resources management.
 /// All shared collections live within a scope of their corresponding documents. All updates are
 /// generated on per document basis (rather than individual shared type). All operations on shared
-/// collections happen via [Transaction], which lifetime is also bound to a document.
+/// collections happen via `YTransaction`, which lifetime is also bound to a document.
 ///
 /// Document manages so called root types, which are top-level shared types definitions (as opposed
 /// to recursively nested types).
@@ -110,14 +110,101 @@ pub type Doc = yrs::Doc;
 /// Transaction is one of the core types in Yrs. All operations that need to touch a document's
 /// contents (a.k.a. block store), need to be executed in scope of a transaction.
 pub type Transaction = yrs::Transaction<'static>;
+
+/// Collection used to store key-value entries in an unordered manner. Keys are always represented
+/// as UTF-8 strings. Values can be any value type supported by Yrs: JSON-like primitives as well as
+/// shared data types.
+///
+/// In terms of conflict resolution, `YMap` uses logical last-write-wins principle, meaning the past
+/// updates are automatically overridden and discarded by newer ones, while concurrent updates made
+/// by different peers are resolved into a single value using document id seniority to establish
+/// order.
 pub type Map = yrs::Map;
+
+/// A shared data type used for collaborative text editing. It enables multiple users to add and
+/// remove chunks of text in efficient manner. This type is internally represented as a mutable
+/// double-linked list of text chunks - an optimization occurs during [ytransaction_commit], which
+/// allows to squash multiple consecutively inserted characters together as a single chunk of text
+/// even between transaction boundaries in order to preserve more efficient memory model.
+///
+/// `YText` structure internally uses UTF-8 encoding and its length is described in a number of
+/// bytes rather than individual characters (a single UTF-8 code point can consist of many bytes).
+///
+/// Like all Yrs shared data types, `YText` is resistant to the problem of interleaving (situation
+/// when characters inserted one after another may interleave with other peers concurrent inserts
+/// after merging all updates together). In case of Yrs conflict resolution is solved by using
+/// unique document id to determine correct and consistent ordering.
 pub type Text = yrs::Text;
+
+/// A collection used to store data in an indexed sequence structure. This type is internally
+/// implemented as a double linked list, which may squash values inserted directly one after another
+/// into single list node upon transaction commit.
+///
+/// Reading a root-level type as an `YArray` means treating its sequence components as a list, where
+/// every countable element becomes an individual entity:
+///
+/// - JSON-like primitives (booleans, numbers, strings, JSON maps, arrays etc.) are counted
+///   individually.
+/// - Text chunks inserted by `YText` data structure: each character becomes an element of an
+///   array.
+/// - Embedded and binary values: they count as a single element even though they correspond of
+///   multiple bytes.
+///
+/// Like all Yrs shared data types, `YArray` is resistant to the problem of interleaving (situation
+/// when elements inserted one after another may interleave with other peers concurrent inserts
+/// after merging all updates together). In case of Yrs conflict resolution is solved by using
+/// unique document id to determine correct and consistent ordering.
 pub type Array = yrs::Array;
+
+/// XML element data type. It represents an XML node, which can contain key-value attributes
+/// (interpreted as strings) as well as other nested XML elements or rich text (represented by
+/// `YXmlText` type).
+///
+/// In terms of conflict resolution, `YXmlElement` uses following rules:
+///
+/// - Attribute updates use logical last-write-wins principle, meaning the past updates are
+///   automatically overridden and discarded by newer ones, while concurrent updates made by
+///   different peers are resolved into a single value using document id seniority to establish
+///   an order.
+/// - Child node insertion uses sequencing rules from other Yrs collections - elements are inserted
+///   using interleave-resistant algorithm, where order of concurrent inserts at the same index
+///   is established using peer's document id seniority.
 pub type XmlElement = yrs::XmlElement;
+
+/// A shared data type used for collaborative text editing, that can be used in a context of
+/// `YXmlElement` nodee. It enables multiple users to add and remove chunks of text in efficient
+/// manner. This type is internally represented as a mutable double-linked list of text chunks
+/// - an optimization occurs during [ytransaction_commit], which allows to squash multiple
+/// consecutively inserted characters together as a single chunk of text even between transaction
+/// boundaries in order to preserve more efficient memory model.
+///
+/// Just like `YXmlElement`, `YXmlText` can be marked with extra metadata in form of attributes.
+///
+/// `YXmlText` structure internally uses UTF-8 encoding and its length is described in a number of
+/// bytes rather than individual characters (a single UTF-8 code point can consist of many bytes).
+///
+/// Like all Yrs shared data types, `YXmlText` is resistant to the problem of interleaving (situation
+/// when characters inserted one after another may interleave with other peers concurrent inserts
+/// after merging all updates together). In case of Yrs conflict resolution is solved by using
+/// unique document id to determine correct and consistent ordering.
 pub type XmlText = yrs::XmlText;
+
+/// Iterator structure used by shared array data type.
 pub type ArrayIter = yrs::types::array::ArrayIter<'static, 'static>;
+
+/// Iterator structure used by shared map data type. Map iterators are unordered - there's no
+/// specific order in which map entries will be returned during consecutive iterator calls.
 pub type MapIter = yrs::types::map::MapIter<'static, 'static>;
+
+/// Iterator structure used by XML nodes (elements and text) to iterate over node's attributes.
+/// Attribute iterators are unordered - there's no specific order in which map entries will be
+/// returned during consecutive iterator calls.
 pub type Attributes = yrs::types::xml::Attributes<'static, 'static>;
+
+/// Iterator used to traverse over the complex nested tree structure of a XML node. XML node
+/// iterator walks only over `YXmlElement` and `YXmlText` nodes. It does so in ordered manner (using
+/// the order in which children are ordered within their parent nodes) and using **depth-first**
+/// traverse.
 pub type TreeWalker = yrs::types::xml::TreeWalker<'static, 'static>;
 
 /// A structure representing single key-value entry of a map output (used by either
@@ -126,7 +213,7 @@ pub type TreeWalker = yrs::types::xml::TreeWalker<'static, 'static>;
 pub struct YMapEntry {
     /// Null-terminated string representing an entry's key component. Encoded as UTF-8.
     pub key: *const c_char,
-    /// A [YOutput] value representing containing variadic content that can be stored withing map's
+    /// A `YOutput` value representing containing variadic content that can be stored withing map's
     /// entry.
     pub value: YOutput,
 }
@@ -150,7 +237,7 @@ impl Drop for YMapEntry {
     }
 }
 
-/// A structure representing single attribute of an either [XmlElement] or [XmlText] instance.
+/// A structure representing single attribute of an either `YXmlElement` or `YXmlText` instance.
 /// It consists of attribute name and string, both of which are null-terminated UTF-8 strings.
 #[repr(C)]
 pub struct YXmlAttr {
@@ -175,8 +262,8 @@ pub unsafe extern "C" fn ydoc_destroy(value: *mut Doc) {
     }
 }
 
-/// Releases all memory-allocated resources bound to given [Text] instance. It doesn't remove the
-/// [Text] stored inside of a document itself, but rather only parts of it related to a specific
+/// Releases all memory-allocated resources bound to given `YText` instance. It doesn't remove the
+/// `YText` stored inside of a document itself, but rather only parts of it related to a specific
 /// pointer that's a subject of being destroyed.
 #[no_mangle]
 pub unsafe extern "C" fn ytext_destroy(value: *mut Text) {
@@ -185,8 +272,8 @@ pub unsafe extern "C" fn ytext_destroy(value: *mut Text) {
     }
 }
 
-/// Releases all memory-allocated resources bound to given [Array] instance. It doesn't remove the
-/// [Array] stored inside of a document itself, but rather only parts of it related to a specific
+/// Releases all memory-allocated resources bound to given `YArray` instance. It doesn't remove the
+/// `YArray` stored inside of a document itself, but rather only parts of it related to a specific
 /// pointer that's a subject of being destroyed.
 #[no_mangle]
 pub unsafe extern "C" fn yarray_destroy(value: *mut Array) {
@@ -195,8 +282,8 @@ pub unsafe extern "C" fn yarray_destroy(value: *mut Array) {
     }
 }
 
-/// Releases all memory-allocated resources bound to given [Map] instance. It doesn't remove the
-/// [Map] stored inside of a document itself, but rather only parts of it related to a specific
+/// Releases all memory-allocated resources bound to given `YMap` instance. It doesn't remove the
+/// `YMap` stored inside of a document itself, but rather only parts of it related to a specific
 /// pointer that's a subject of being destroyed.
 #[no_mangle]
 pub unsafe extern "C" fn ymap_destroy(value: *mut Map) {
@@ -205,8 +292,8 @@ pub unsafe extern "C" fn ymap_destroy(value: *mut Map) {
     }
 }
 
-/// Releases all memory-allocated resources bound to given [XmlElement] instance. It doesn't remove
-/// the [XmlElement] stored inside of a document itself, but rather only parts of it related to
+/// Releases all memory-allocated resources bound to given `YXmlElement` instance. It doesn't remove
+/// the `YXmlElement` stored inside of a document itself, but rather only parts of it related to
 /// a specific pointer that's a subject of being destroyed.
 #[no_mangle]
 pub unsafe extern "C" fn yxmlelem_destroy(value: *mut XmlElement) {
@@ -215,8 +302,8 @@ pub unsafe extern "C" fn yxmlelem_destroy(value: *mut XmlElement) {
     }
 }
 
-/// Releases all memory-allocated resources bound to given [XmlText] instance. It doesn't remove
-/// the [XmlText] stored inside of a document itself, but rather only parts of it related to
+/// Releases all memory-allocated resources bound to given `YXmlText` instance. It doesn't remove
+/// the `YXmlText` stored inside of a document itself, but rather only parts of it related to
 /// a specific pointer that's a subject of being destroyed.
 #[no_mangle]
 pub unsafe extern "C" fn yxmltext_destroy(value: *mut XmlText) {
@@ -309,12 +396,12 @@ pub unsafe extern "C" fn ytransaction_commit(txn: *mut Transaction) {
     drop(Box::from_raw(txn)); // transaction is auto-committed when dropped
 }
 
-/// Gets or creates a new shared [Text] data type instance as a root-level type of a given document.
+/// Gets or creates a new shared `YText` data type instance as a root-level type of a given document.
 /// This structure can later be accessed using its `name`, which must be a null-terminated UTF-8
 /// compatible string.
 ///
 /// Use [ytext_destroy] in order to release pointer returned that way - keep in mind that this will
-/// not remove [Text] instance from the document itself (once created it'll last for the entire
+/// not remove `YText` instance from the document itself (once created it'll last for the entire
 /// lifecycle of a document).
 #[no_mangle]
 pub unsafe extern "C" fn ytext(txn: *mut Transaction, name: *const c_char) -> *mut Text {
@@ -326,12 +413,12 @@ pub unsafe extern "C" fn ytext(txn: *mut Transaction, name: *const c_char) -> *m
     Box::into_raw(Box::new(value))
 }
 
-/// Gets or creates a new shared [Array] data type instance as a root-level type of a given document.
+/// Gets or creates a new shared `YArray` data type instance as a root-level type of a given document.
 /// This structure can later be accessed using its `name`, which must be a null-terminated UTF-8
 /// compatible string.
 ///
 /// Use [yarray_destroy] in order to release pointer returned that way - keep in mind that this will
-/// not remove [Array] instance from the document itself (once created it'll last for the entire
+/// not remove `YArray` instance from the document itself (once created it'll last for the entire
 /// lifecycle of a document).
 #[no_mangle]
 pub unsafe extern "C" fn yarray(txn: *mut Transaction, name: *const c_char) -> *mut Array {
@@ -343,12 +430,12 @@ pub unsafe extern "C" fn yarray(txn: *mut Transaction, name: *const c_char) -> *
     Box::into_raw(Box::new(value))
 }
 
-/// Gets or creates a new shared [Map] data type instance as a root-level type of a given document.
+/// Gets or creates a new shared `YMap` data type instance as a root-level type of a given document.
 /// This structure can later be accessed using its `name`, which must be a null-terminated UTF-8
 /// compatible string.
 ///
 /// Use [ymap_destroy] in order to release pointer returned that way - keep in mind that this will
-/// not remove [Map] instance from the document itself (once created it'll last for the entire
+/// not remove `YMap` instance from the document itself (once created it'll last for the entire
 /// lifecycle of a document).
 #[no_mangle]
 pub unsafe extern "C" fn ymap(txn: *mut Transaction, name: *const c_char) -> *mut Map {
@@ -360,12 +447,12 @@ pub unsafe extern "C" fn ymap(txn: *mut Transaction, name: *const c_char) -> *mu
     Box::into_raw(Box::new(value))
 }
 
-/// Gets or creates a new shared [XmlElement] data type instance as a root-level type of a given
+/// Gets or creates a new shared `YXmlElement` data type instance as a root-level type of a given
 /// document. This structure can later be accessed using its `name`, which must be a null-terminated
 /// UTF-8 compatible string.
 ///
 /// Use [yxmlelem_destroy] in order to release pointer returned that way - keep in mind that this
-/// will not remove [XmlElement] instance from the document itself (once created it'll last for
+/// will not remove `YXmlElement` instance from the document itself (once created it'll last for
 /// the entire lifecycle of a document).
 #[no_mangle]
 pub unsafe extern "C" fn yxmlelem(
@@ -380,12 +467,12 @@ pub unsafe extern "C" fn yxmlelem(
     Box::into_raw(Box::new(value))
 }
 
-/// Gets or creates a new shared [XmlText] data type instance as a root-level type of a given
+/// Gets or creates a new shared `YXmlText` data type instance as a root-level type of a given
 /// document. This structure can later be accessed using its `name`, which must be a null-terminated
 /// UTF-8 compatible string.
 ///
 /// Use [yxmltext_destroy] in order to release pointer returned that way - keep in mind that this
-/// will not remove [XmlText] instance from the document itself (once created it'll last for
+/// will not remove `YXmlText` instance from the document itself (once created it'll last for
 /// the entire lifecycle of a document).
 #[no_mangle]
 pub unsafe extern "C" fn yxmltext(txn: *mut Transaction, name: *const c_char) -> *mut XmlText {
@@ -475,14 +562,14 @@ pub unsafe extern "C" fn ytransaction_apply(txn: *mut Transaction, diff: *const 
     txn.as_mut().unwrap().apply_update(update, ds)
 }
 
-/// Returns the length of the [Text] string content in bytes (without the null terminator character)
+/// Returns the length of the `YText` string content in bytes (without the null terminator character)
 #[no_mangle]
 pub unsafe extern "C" fn ytext_len(txt: *const Text) -> c_int {
     assert!(!txt.is_null());
     txt.as_ref().unwrap().len() as c_int
 }
 
-/// Returns a null-terminated UTF-8 encoded string content of a current [Text] shared data type.
+/// Returns a null-terminated UTF-8 encoded string content of a current `YText` shared data type.
 ///
 /// Generated string resources should be released using [ystring_destroy] function.
 #[no_mangle]
@@ -496,7 +583,7 @@ pub unsafe extern "C" fn ytext_string(txt: *const Text, txn: *const Transaction)
 }
 
 /// Inserts a null-terminated UTF-8 encoded string a a given `index`. `index` value must be between
-/// 0 and a length of a [Text] (inclusive, accordingly to [ytext_len] return value), otherwise this
+/// 0 and a length of a `YText` (inclusive, accordingly to [ytext_len] return value), otherwise this
 /// function will panic.
 ///
 /// A `str` parameter must be a null-terminated UTF-8 encoded string. This function doesn't take
@@ -520,12 +607,12 @@ pub unsafe extern "C" fn ytext_insert(
 }
 
 /// Removes a range of characters, starting a a given `index`. This range must fit within the bounds
-/// of a current [Text], otherwise this function call will fail.
+/// of a current `YText`, otherwise this function call will fail.
 ///
-/// An `index` value must be between 0 and the length of a [Text] (exclusive, accordingly to
+/// An `index` value must be between 0 and the length of a `YText` (exclusive, accordingly to
 /// [ytext_len] return value).
 ///
-/// A `length` must be lower or equal number of bytes (internally [Text] uses UTF-8 encoding) from
+/// A `length` must be lower or equal number of bytes (internally `YText` uses UTF-8 encoding) from
 /// `index` position to the end of of the string.
 #[no_mangle]
 pub unsafe extern "C" fn ytext_remove_range(
@@ -542,7 +629,7 @@ pub unsafe extern "C" fn ytext_remove_range(
     txt.remove_range(txn, index as u32, length as u32)
 }
 
-/// Returns a number of elements stored within current instance of [Array].
+/// Returns a number of elements stored within current instance of `YArray`.
 #[no_mangle]
 pub unsafe extern "C" fn yarray_len(array: *const Array) -> c_int {
     assert!(!array.is_null());
@@ -551,7 +638,7 @@ pub unsafe extern "C" fn yarray_len(array: *const Array) -> c_int {
     array.len() as c_int
 }
 
-/// Returns a pointer to a [YOutput] value stored at a given `index` of a current [Array].
+/// Returns a pointer to a `YOutput` value stored at a given `index` of a current `YArray`.
 /// If `index` is outside of the bounds of an array, a null pointer will be returned.
 ///
 /// A value returned should be eventually released using [youtput_destroy] function.
@@ -574,14 +661,14 @@ pub unsafe extern "C" fn yarray_get(
     }
 }
 
-/// Inserts a range of `items` into current [Array], starting at given `index`. An `items_len`
+/// Inserts a range of `items` into current `YArray`, starting at given `index`. An `items_len`
 /// parameter is used to determine the size of `items` array - it can also be used to insert
 /// a single element given its pointer.
 ///
 /// An `index` value must be between 0 and (inclusive) length of a current array (use [yarray_len]
 /// to determine its length), otherwise it will panic at runtime.
 ///
-/// [Array] doesn't take ownership over the inserted `items` data - their contents are being copied
+/// `YArray` doesn't take ownership over the inserted `items` data - their contents are being copied
 /// into array structure - therefore caller is responsible for freeing all memory associated with
 /// input params.
 #[no_mangle]
@@ -665,7 +752,7 @@ pub unsafe extern "C" fn yarray_iter(
     Box::into_raw(Box::new(array.iter(txn)))
 }
 
-/// Releases all of an [Array] iterator resources created by calling [yarray_iter].
+/// Releases all of an `YArray` iterator resources created by calling [yarray_iter].
 #[no_mangle]
 pub unsafe extern "C" fn yarray_iter_destroy(iter: *mut ArrayIter) {
     if !iter.is_null() {
@@ -673,7 +760,7 @@ pub unsafe extern "C" fn yarray_iter_destroy(iter: *mut ArrayIter) {
     }
 }
 
-/// Moves current [Array] iterator over to a next element, returning a pointer to it. If an iterator
+/// Moves current `YArray` iterator over to a next element, returning a pointer to it. If an iterator
 /// comes to an end of an array, a null pointer will be returned.
 ///
 /// Returned values should be eventually released using [youtput_destroy] function.
@@ -703,7 +790,7 @@ pub unsafe extern "C" fn ymap_iter(map: *const Map, txn: *const Transaction) -> 
     Box::into_raw(Box::new(map.iter(txn)))
 }
 
-/// Releases all of an [Map] iterator resources created by calling [ymap_iter].
+/// Releases all of an `YMap` iterator resources created by calling [ymap_iter].
 #[no_mangle]
 pub unsafe extern "C" fn ymap_iter_destroy(iter: *mut MapIter) {
     if !iter.is_null() {
@@ -711,7 +798,7 @@ pub unsafe extern "C" fn ymap_iter_destroy(iter: *mut MapIter) {
     }
 }
 
-/// Moves current [Map] iterator over to a next entry, returning a pointer to it. If an iterator
+/// Moves current `YMap` iterator over to a next entry, returning a pointer to it. If an iterator
 /// comes to an end of a map, a null pointer will be returned. Yrs maps are unordered and so are
 /// their iterators.
 ///
@@ -834,7 +921,7 @@ pub unsafe extern "C" fn ymap_remove_all(map: *const Map, txn: *mut Transaction)
     map.clear(txn);
 }
 
-/// Return a name (or an XML tag) of a current [XmlElement]. Root-level XML nodes use "UNDEFINED" as
+/// Return a name (or an XML tag) of a current `YXmlElement`. Root-level XML nodes use "UNDEFINED" as
 /// their tag names.
 ///
 /// Returned value is a null-terminated UTF-8 string, which must be released using [ystring_destroy]
@@ -847,7 +934,7 @@ pub unsafe extern "C" fn yxmlelem_tag(xml: *const XmlElement) -> *mut c_char {
     CString::new(tag).unwrap().into_raw()
 }
 
-/// Converts current [XmlElement] together with its children and attributes into a flat string
+/// Converts current `YXmlElement` together with its children and attributes into a flat string
 /// representation (no padding) eg. `<UNDEFINED><title key="value">sample text</title></UNDEFINED>`.
 ///
 /// Returned value is a null-terminated UTF-8 string, which must be released using [ystring_destroy]
@@ -893,7 +980,7 @@ pub unsafe extern "C" fn yxmlelem_insert_attr(
     xml.insert_attribute(txn, key, value);
 }
 
-/// Removes an attribute from a current [XmlElement], given its name.
+/// Removes an attribute from a current `YXmlElement`, given its name.
 ///
 /// An `attr_name`must be a null-terminated UTF-8 encoded string.
 #[no_mangle]
@@ -913,7 +1000,7 @@ pub unsafe extern "C" fn yxmlelem_remove_attr(
     xml.remove_attribute(txn, key);
 }
 
-/// Returns the value of a current [XmlElement], given its name, or a null pointer if not attribute
+/// Returns the value of a current `YXmlElement`, given its name, or a null pointer if not attribute
 /// with such name has been found. Returned pointer is a null-terminated UTF-8 encoded string, which
 /// should be released using [ystring_destroy] function.
 ///
@@ -939,7 +1026,7 @@ pub unsafe extern "C" fn yxmlelem_get_attr(
     }
 }
 
-/// Returns an iterator over the [XmlElement] attributes.
+/// Returns an iterator over the `YXmlElement` attributes.
 ///
 /// Use [yxmlattr_iter_next] function in order to retrieve a consecutive (**unordered**) attributes.
 /// Use [yxmlattr_iter_destroy] function in order to close the iterator and release its resources.
@@ -957,7 +1044,7 @@ pub unsafe extern "C" fn yxmlelem_attr_iter(
     Box::into_raw(Box::new(xml.attributes(txn)))
 }
 
-/// Returns an iterator over the [XmlText] attributes.
+/// Returns an iterator over the `YXmlText` attributes.
 ///
 /// Use [yxmlattr_iter_next] function in order to retrieve a consecutive (**unordered**) attributes.
 /// Use [yxmlattr_iter_destroy] function in order to close the iterator and release its resources.
@@ -1005,12 +1092,12 @@ pub unsafe extern "C" fn yxmlattr_iter_next(iterator: *mut Attributes) -> *mut Y
     }
 }
 
-/// Returns a next sibling of a current [XmlElement], which can be either another [XmlElement]
-/// or a [XmlText]. Together with [yxmlelem_first_child] it may be used to iterate over the direct
+/// Returns a next sibling of a current `YXmlElement`, which can be either another `YXmlElement`
+/// or a `YXmlText`. Together with [yxmlelem_first_child] it may be used to iterate over the direct
 /// children of an XML node (in order to iterate over the nested XML structure use
 /// [yxmlelem_tree_walker]).
 ///
-/// If current [XmlElement] is the last child, this function returns a null pointer.
+/// If current `YXmlElement` is the last child, this function returns a null pointer.
 /// A returned value should be eventually released using [youtput_destroy] function.
 #[no_mangle]
 pub unsafe extern "C" fn yxmlelem_next_sibling(
@@ -1034,10 +1121,10 @@ pub unsafe extern "C" fn yxmlelem_next_sibling(
     }
 }
 
-/// Returns a previous sibling of a current [XmlElement], which can be either another [XmlElement]
-/// or a [XmlText].
+/// Returns a previous sibling of a current `YXmlElement`, which can be either another `YXmlElement`
+/// or a `YXmlText`.
 ///
-/// If current [XmlElement] is the first child, this function returns a null pointer.
+/// If current `YXmlElement` is the first child, this function returns a null pointer.
 /// A returned value should be eventually released using [youtput_destroy] function.
 #[no_mangle]
 pub unsafe extern "C" fn yxmlelem_prev_sibling(
@@ -1060,12 +1147,12 @@ pub unsafe extern "C" fn yxmlelem_prev_sibling(
     }
 }
 
-/// Returns a next sibling of a current [XmlText], which can be either another [XmlText] or
-/// an [XmlElement]. Together with [yxmlelem_first_child] it may be used to iterate over the direct
+/// Returns a next sibling of a current `YXmlText`, which can be either another `YXmlText` or
+/// an `YXmlElement`. Together with [yxmlelem_first_child] it may be used to iterate over the direct
 /// children of an XML node (in order to iterate over the nested XML structure use
 /// [yxmlelem_tree_walker]).
 ///
-/// If current [XmlText] is the last child, this function returns a null pointer.
+/// If current `YXmlText` is the last child, this function returns a null pointer.
 /// A returned value should be eventually released using [youtput_destroy] function.
 #[no_mangle]
 pub unsafe extern "C" fn yxmltext_next_sibling(
@@ -1088,10 +1175,10 @@ pub unsafe extern "C" fn yxmltext_next_sibling(
     }
 }
 
-/// Returns a previous sibling of a current [XmlText], which can be either another [XmlText] or
-/// an [XmlElement].
+/// Returns a previous sibling of a current `YXmlText`, which can be either another `YXmlText` or
+/// an `YXmlElement`.
 ///
-/// If current [XmlText] is the first child, this function returns a null pointer.
+/// If current `YXmlText` is the first child, this function returns a null pointer.
 /// A returned value should be eventually released using [youtput_destroy] function.
 #[no_mangle]
 pub unsafe extern "C" fn yxmltext_prev_sibling(
@@ -1114,7 +1201,7 @@ pub unsafe extern "C" fn yxmltext_prev_sibling(
     }
 }
 
-/// Returns a parent [XmlElement] of a current node, or null pointer when current [XmlElement] is
+/// Returns a parent `YXmlElement` of a current node, or null pointer when current `YXmlElement` is
 /// a root-level shared data type.
 ///
 /// A returned value should be eventually released using [youtput_destroy] function.
@@ -1136,7 +1223,7 @@ pub unsafe extern "C" fn yxmlelem_parent(
     }
 }
 
-/// Returns a number of child nodes (both [XmlElement] and [XmlText]) living under a current XML
+/// Returns a number of child nodes (both `YXmlElement` and `YXmlText`) living under a current XML
 /// element. This function doesn't count a recursive nodes, only direct children of a current node.
 #[no_mangle]
 pub unsafe extern "C" fn yxmlelem_child_len(xml: *const XmlElement, txn: *const Transaction) -> c_int {
@@ -1149,8 +1236,8 @@ pub unsafe extern "C" fn yxmlelem_child_len(xml: *const XmlElement, txn: *const 
     xml.len(txn) as c_int
 }
 
-/// Returns a first child node of a current [XmlElement], or null pointer if current XML node is
-/// empty. Returned value could be either another [XmlElement] or [XmlText].
+/// Returns a first child node of a current `YXmlElement`, or null pointer if current XML node is
+/// empty. Returned value could be either another `YXmlElement` or `YXmlText`.
 ///
 /// A returned value should be eventually released using [youtput_destroy] function.
 #[no_mangle]
@@ -1171,8 +1258,8 @@ pub unsafe extern "C" fn yxmlelem_first_child(xml: *const XmlElement, txn: *cons
     }
 }
 
-/// Returns an iterator over a nested recursive structure of a current [XmlElement], starting from
-/// first of its children. Returned values can be either [XmlElement] or [XmlText] nodes.
+/// Returns an iterator over a nested recursive structure of a current `YXmlElement`, starting from
+/// first of its children. Returned values can be either `YXmlElement` or `YXmlText` nodes.
 ///
 /// Use [yxmlelem_tree_walker_next] function in order to iterate over to a next node.
 /// Use [yxmlelem_tree_walker_destroy] function to release resources used by the iterator.
@@ -1198,7 +1285,7 @@ pub unsafe extern "C" fn yxmlelem_tree_walker_destroy(iter: *mut TreeWalker) {
     }
 }
 
-/// Moves current `iterator` to a next value (either [XmlElement] or [XmlText]), returning its
+/// Moves current `iterator` to a next value (either `YXmlElement` or `YXmlText`), returning its
 /// pointer or a null, if an `iterator` already reached the last successor node.
 ///
 /// Values returned by this function should be eventually released using [youtput_destroy].
@@ -1218,7 +1305,7 @@ pub unsafe extern "C" fn yxmlelem_tree_walker_next(iterator: *mut TreeWalker) ->
     }
 }
 
-/// Inserts an [XmlElement] as a child of a current node at the given `index` and returns its
+/// Inserts an `YXmlElement` as a child of a current node at the given `index` and returns its
 /// pointer. Node created this way will have a given `name` as its tag (eg. `p` for `<p></p>` node).
 ///
 /// An `index` value must be between 0 and (inclusive) length of a current XML element (use
@@ -1246,7 +1333,7 @@ pub unsafe extern "C" fn yxmlelem_insert_elem(
     Box::into_raw(Box::new(child))
 }
 
-/// Inserts an [XmlText] as a child of a current node at the given `index` and returns its
+/// Inserts an `YXmlText` as a child of a current node at the given `index` and returns its
 /// pointer.
 ///
 /// An `index` value must be between 0 and (inclusive) length of a current XML element (use
@@ -1268,7 +1355,7 @@ pub unsafe extern "C" fn yxmlelem_insert_text(
 }
 
 /// Removes a consecutive range of child elements (of specified length) from the current
-/// [XmlElement], starting at the given `index`. Specified range must fit into boundaries of current
+/// `YXmlElement`, starting at the given `index`. Specified range must fit into boundaries of current
 /// XML node children, otherwise this function will panic at runtime.
 #[no_mangle]
 pub unsafe extern "C" fn yxmlelem_remove_range(
@@ -1286,8 +1373,8 @@ pub unsafe extern "C" fn yxmlelem_remove_range(
     xml.remove_range(txn, index as u32, len as u32)
 }
 
-/// Returns an XML child node (either a [XmlElement] or [XmlText]) stored at a given `index` of
-/// a current [XmlElement]. Returns null pointer if `index` was outside of the bound of current XML
+/// Returns an XML child node (either a `YXmlElement` or `YXmlText`) stored at a given `index` of
+/// a current `YXmlElement`. Returns null pointer if `index` was outside of the bound of current XML
 /// node children.
 ///
 /// Returned value should be eventually released using [youtput_destroy].
@@ -1313,7 +1400,7 @@ pub unsafe extern "C" fn yxmlelem_get(
     }
 }
 
-/// Returns the length of the [XmlText] string content in bytes (without the null terminator
+/// Returns the length of the `YXmlText` string content in bytes (without the null terminator
 /// character)
 #[no_mangle]
 pub unsafe extern "C" fn yxmltext_len(txt: *const XmlText, txn: *const Transaction) -> c_int {
@@ -1326,7 +1413,7 @@ pub unsafe extern "C" fn yxmltext_len(txt: *const XmlText, txn: *const Transacti
     txt.len(txn) as c_int
 }
 
-/// Returns a null-terminated UTF-8 encoded string content of a current [XmlText] shared data type.
+/// Returns a null-terminated UTF-8 encoded string content of a current `YXmlText` shared data type.
 ///
 /// Generated string resources should be released using [ystring_destroy] function.
 #[no_mangle]
@@ -1345,7 +1432,7 @@ pub unsafe extern "C" fn yxmltext_string(
 }
 
 /// Inserts a null-terminated UTF-8 encoded string a a given `index`. `index` value must be between
-/// 0 and a length of a [XmlText] (inclusive, accordingly to [yxmltext_len] return value), otherwise
+/// 0 and a length of a `YXmlText` (inclusive, accordingly to [yxmltext_len] return value), otherwise
 /// this function will panic.
 ///
 /// A `str` parameter must be a null-terminated UTF-8 encoded string. This function doesn't take
@@ -1370,12 +1457,12 @@ pub unsafe extern "C" fn yxmltext_insert(
 }
 
 /// Removes a range of characters, starting a a given `index`. This range must fit within the bounds
-/// of a current [XmlText], otherwise this function call will fail.
+/// of a current `YXmlText`, otherwise this function call will fail.
 ///
-/// An `index` value must be between 0 and the length of a [XmlText] (exclusive, accordingly to
+/// An `index` value must be between 0 and the length of a `YXmlText` (exclusive, accordingly to
 /// [yxmltext_len] return value).
 ///
-/// A `length` must be lower or equal number of bytes (internally [XmlText] uses UTF-8 encoding)
+/// A `length` must be lower or equal number of bytes (internally `YXmlText` uses UTF-8 encoding)
 /// from `index` position to the end of of the string.
 #[no_mangle]
 pub unsafe extern "C" fn yxmltext_remove_range(
@@ -1418,7 +1505,7 @@ pub unsafe extern "C" fn yxmltext_insert_attr(
     txt.insert_attribute(txn, name, value)
 }
 
-/// Removes an attribute from a current [XmlText], given its name.
+/// Removes an attribute from a current `YXmlText`, given its name.
 ///
 /// An `attr_name`must be a null-terminated UTF-8 encoded string.
 #[no_mangle]
@@ -1438,7 +1525,7 @@ pub unsafe extern "C" fn yxmltext_remove_attr(
     txt.remove_attribute(txn, name)
 }
 
-/// Returns the value of a current [XmlText], given its name, or a null pointer if not attribute
+/// Returns the value of a current `YXmlText`, given its name, or a null pointer if not attribute
 /// with such name has been found. Returned pointer is a null-terminated UTF-8 encoded string, which
 /// should be released using [ystring_destroy] function.
 ///
@@ -1467,7 +1554,7 @@ pub unsafe extern "C" fn yxmltext_get_attr(
 /// A data structure that is used to pass input values of various types supported by Yrs into a
 /// shared document store.
 ///
-/// [YInput] constructor function don't allocate any resources on their own, neither they take
+/// `YInput` constructor function don't allocate any resources on their own, neither they take
 /// ownership by pointers to memory blocks allocated by user - for this reason once an input cell
 /// has been used, its content should be freed by the caller.
 #[repr(C)]
@@ -1483,11 +1570,11 @@ pub struct YInput {
     /// - [Y_JSON_MAP] for JSON-like objects build from key-value pairs.
     /// - [Y_JSON_NULL] for JSON-like null values.
     /// - [Y_JSON_UNDEF] for JSON-like undefined values.
-    /// - [Y_ARRAY] for cells which contents should be used to initialize a [YArray] shared type.
-    /// - [Y_MAP] for cells which contents should be used to initialize a [YMap] shared type.
+    /// - [Y_ARRAY] for cells which contents should be used to initialize a `YArray` shared type.
+    /// - [Y_MAP] for cells which contents should be used to initialize a `YMap` shared type.
     pub tag: c_char,
 
-    /// Length of the contents stored by current [YInput] cell.
+    /// Length of the contents stored by current `YInput` cell.
     ///
     /// For [Y_JSON_NULL] and [Y_JSON_UNDEF] its equal to `0`.
     ///
@@ -1646,7 +1733,7 @@ impl Prelim for YInput {
 /// An output value cell returned from yrs API methods. It describes a various types of data
 /// supported by yrs shared data types.
 ///
-/// Since [YOutput] instances are always created by calling the corresponding yrs API functions,
+/// Since `YOutput` instances are always created by calling the corresponding yrs API functions,
 /// they eventually should be deallocated using [youtput_destroy] function.
 #[repr(C)]
 pub struct YOutput {
@@ -1661,14 +1748,14 @@ pub struct YOutput {
     /// - [Y_JSON_MAP] for JSON-like objects build from key-value pairs.
     /// - [Y_JSON_NULL] for JSON-like null values.
     /// - [Y_JSON_UNDEF] for JSON-like undefined values.
-    /// - [Y_TEXT] for pointers to [YText] data types.
-    /// - [Y_ARRAY] for pointers to [YArray] data types.
-    /// - [Y_MAP] for pointers to [YMap] data types.
-    /// - [Y_XML_ELEM] for pointers to [YXmlElement] data types.
-    /// - [Y_XML_TEXT] for pointers to [YXmlText] data types.
+    /// - [Y_TEXT] for pointers to `YText` data types.
+    /// - [Y_ARRAY] for pointers to `YArray` data types.
+    /// - [Y_MAP] for pointers to `YMap` data types.
+    /// - [Y_XML_ELEM] for pointers to `YXmlElement` data types.
+    /// - [Y_XML_TEXT] for pointers to `YXmlText` data types.
     pub tag: c_char,
 
-    /// Length of the contents stored by a current [YOutput] cell.
+    /// Length of the contents stored by a current `YOutput` cell.
     ///
     /// For [Y_JSON_NULL] and [Y_JSON_UNDEF] its equal to `0`.
     ///
@@ -1906,7 +1993,7 @@ union YOutputContent {
     y_xmltext: *mut XmlText,
 }
 
-/// Releases all resources related to a corresponding [YOutput] cell.
+/// Releases all resources related to a corresponding `YOutput` cell.
 #[no_mangle]
 pub unsafe extern "C" fn youtput_destroy(val: *mut YOutput) {
     if !val.is_null() {
@@ -1914,7 +2001,7 @@ pub unsafe extern "C" fn youtput_destroy(val: *mut YOutput) {
     }
 }
 
-/// Function constructor used to create JSON-like NULL [YInput] cell.
+/// Function constructor used to create JSON-like NULL `YInput` cell.
 /// This function doesn't allocate any heap resources.
 #[no_mangle]
 pub unsafe extern "C" fn yinput_null() -> YInput {
@@ -1925,7 +2012,7 @@ pub unsafe extern "C" fn yinput_null() -> YInput {
     }
 }
 
-/// Function constructor used to create JSON-like undefined [YInput] cell.
+/// Function constructor used to create JSON-like undefined `YInput` cell.
 /// This function doesn't allocate any heap resources.
 #[no_mangle]
 pub unsafe extern "C" fn yinput_undefined() -> YInput {
@@ -1936,7 +2023,7 @@ pub unsafe extern "C" fn yinput_undefined() -> YInput {
     }
 }
 
-/// Function constructor used to create JSON-like boolean [YInput] cell.
+/// Function constructor used to create JSON-like boolean `YInput` cell.
 /// This function doesn't allocate any heap resources.
 #[no_mangle]
 pub unsafe extern "C" fn yinput_bool(flag: c_char) -> YInput {
@@ -1947,7 +2034,7 @@ pub unsafe extern "C" fn yinput_bool(flag: c_char) -> YInput {
     }
 }
 
-/// Function constructor used to create JSON-like 64-bit floating point number [YInput] cell.
+/// Function constructor used to create JSON-like 64-bit floating point number `YInput` cell.
 /// This function doesn't allocate any heap resources.
 #[no_mangle]
 pub unsafe extern "C" fn yinput_float(num: c_float) -> YInput {
@@ -1958,7 +2045,7 @@ pub unsafe extern "C" fn yinput_float(num: c_float) -> YInput {
     }
 }
 
-/// Function constructor used to create JSON-like 64-bit signed integer [YInput] cell.
+/// Function constructor used to create JSON-like 64-bit signed integer `YInput` cell.
 /// This function doesn't allocate any heap resources.
 #[no_mangle]
 pub unsafe extern "C" fn yinput_long(integer: c_long) -> YInput {
@@ -1969,7 +2056,7 @@ pub unsafe extern "C" fn yinput_long(integer: c_long) -> YInput {
     }
 }
 
-/// Function constructor used to create a string [YInput] cell. Provided parameter must be
+/// Function constructor used to create a string `YInput` cell. Provided parameter must be
 /// a null-terminated UTF-8 encoded string. This function doesn't allocate any heap resources,
 /// and doesn't release any on its own, therefore its up to a caller to free resources once
 /// a structure is no longer needed.
@@ -1982,7 +2069,7 @@ pub unsafe extern "C" fn yinput_string(str: *const c_char) -> YInput {
     }
 }
 
-/// Function constructor used to create a binary [YInput] cell of a specified length.
+/// Function constructor used to create a binary `YInput` cell of a specified length.
 /// This function doesn't allocate any heap resources and doesn't release any on its own, therefore
 /// its up to a caller to free resources once a structure is no longer needed.
 #[no_mangle]
@@ -1994,7 +2081,7 @@ pub unsafe extern "C" fn yinput_binary(buf: *const u8, len: c_int) -> YInput {
     }
 }
 
-/// Function constructor used to create a JSON-like array [YInput] cell of other JSON-like values of
+/// Function constructor used to create a JSON-like array `YInput` cell of other JSON-like values of
 /// a given length. This function doesn't allocate any heap resources and doesn't release any on its
 /// own, therefore its up to a caller to free resources once a structure is no longer needed.
 #[no_mangle]
@@ -2006,7 +2093,7 @@ pub unsafe extern "C" fn yinput_json_array(values: *mut YInput, len: c_int) -> Y
     }
 }
 
-/// Function constructor used to create a JSON-like map [YInput] cell of other JSON-like key-value
+/// Function constructor used to create a JSON-like map `YInput` cell of other JSON-like key-value
 /// pairs. These pairs are build from corresponding indexes of `keys` and `values`, which must have
 /// the same specified length.
 ///
@@ -2021,7 +2108,7 @@ pub unsafe extern "C" fn yinput_json_map(keys: *mut *mut c_char, values: *mut YI
     }
 }
 
-/// Function constructor used to create a nested [YArray] [YInput] cell prefilled with other
+/// Function constructor used to create a nested `YArray` `YInput` cell prefilled with other
 /// values of a given length. This function doesn't allocate any heap resources and doesn't release
 /// any on its own, therefore its up to a caller to free resources once a structure is no longer
 /// needed.
@@ -2034,7 +2121,7 @@ pub unsafe extern "C" fn yinput_yarray(values: *mut YInput, len: c_int) -> YInpu
     }
 }
 
-/// Function constructor used to create a nested [YMap] [YInput] cell prefilled with other key-value
+/// Function constructor used to create a nested `YMap` `YInput` cell prefilled with other key-value
 /// pairs. These pairs are build from corresponding indexes of `keys` and `values`, which must have
 /// the same specified length.
 ///
@@ -2049,7 +2136,7 @@ pub unsafe extern "C" fn yinput_ymap(keys: *mut *mut c_char, values: *mut YInput
     }
 }
 
-/// Function constructor used to create a nested [YText] [YInput] cell prefilled with a specified
+/// Function constructor used to create a nested `YText` `YInput` cell prefilled with a specified
 /// string, which must be a null-terminated UTF-8 character pointer.
 ///
 /// This function doesn't allocate any heap resources and doesn't release any on its own, therefore
@@ -2063,7 +2150,7 @@ pub unsafe extern "C" fn yinput_ytext(str: *mut c_char) -> YInput {
     }
 }
 
-/// Function constructor used to create a nested [YXmlElement] [YInput] cell with a specified
+/// Function constructor used to create a nested `YXmlElement` `YInput` cell with a specified
 /// tag name, which must be a null-terminated UTF-8 character pointer.
 ///
 /// This function doesn't allocate any heap resources and doesn't release any on its own, therefore
@@ -2077,7 +2164,7 @@ pub unsafe extern "C" fn yinput_yxmlelem(name: *mut c_char) -> YInput {
     }
 }
 
-/// Function constructor used to create a nested [YXmlText] [YInput] cell prefilled with a specified
+/// Function constructor used to create a nested `YXmlText` `YInput` cell prefilled with a specified
 /// string, which must be a null-terminated UTF-8 character pointer.
 ///
 /// This function doesn't allocate any heap resources and doesn't release any on its own, therefore
@@ -2091,9 +2178,9 @@ pub unsafe extern "C" fn yinput_yxmltext(str: *mut c_char) -> YInput {
     }
 }
 
-/// Attempts to read the value for a given [YOutput] pointer as a boolean flag, which can be either
+/// Attempts to read the value for a given `YOutput` pointer as a boolean flag, which can be either
 /// `1` for truthy case and `0` otherwise. Returns a null pointer in case when a value stored under
-/// current [YOutput] cell is not of a boolean type.
+/// current `YOutput` cell is not of a boolean type.
 #[no_mangle]
 pub unsafe extern "C" fn youtput_read_bool(val: *const YOutput) -> *const c_char {
     let v = val.as_ref().unwrap();
@@ -2104,9 +2191,9 @@ pub unsafe extern "C" fn youtput_read_bool(val: *const YOutput) -> *const c_char
     }
 }
 
-/// Attempts to read the value for a given [YOutput] pointer as a 64-bit floating point number.
+/// Attempts to read the value for a given `YOutput` pointer as a 64-bit floating point number.
 ///
-/// Returns a null pointer in case when a value stored under current [YOutput] cell
+/// Returns a null pointer in case when a value stored under current `YOutput` cell
 /// is not a floating point number.
 #[no_mangle]
 pub unsafe extern "C" fn youtput_read_float(val: *const YOutput) -> *const c_float {
@@ -2118,9 +2205,9 @@ pub unsafe extern "C" fn youtput_read_float(val: *const YOutput) -> *const c_flo
     }
 }
 
-/// Attempts to read the value for a given [YOutput] pointer as a 64-bit signed integer.
+/// Attempts to read the value for a given `YOutput` pointer as a 64-bit signed integer.
 ///
-/// Returns a null pointer in case when a value stored under current [YOutput] cell
+/// Returns a null pointer in case when a value stored under current `YOutput` cell
 /// is not a signed integer.
 #[no_mangle]
 pub unsafe extern "C" fn youtput_read_long(val: *const YOutput) -> *const c_long {
@@ -2132,10 +2219,10 @@ pub unsafe extern "C" fn youtput_read_long(val: *const YOutput) -> *const c_long
     }
 }
 
-/// Attempts to read the value for a given [YOutput] pointer as a null-terminated UTF-8 encoded
+/// Attempts to read the value for a given `YOutput` pointer as a null-terminated UTF-8 encoded
 /// string.
 ///
-/// Returns a null pointer in case when a value stored under current [YOutput] cell
+/// Returns a null pointer in case when a value stored under current `YOutput` cell
 /// is not a string. Underlying string is released automatically as part of [youtput_destroy]
 /// destructor.
 #[no_mangle]
@@ -2148,10 +2235,10 @@ pub unsafe extern "C" fn youtput_read_string(val: *const YOutput) -> *mut c_char
     }
 }
 
-/// Attempts to read the value for a given [YOutput] pointer as a binary payload (which length is
+/// Attempts to read the value for a given `YOutput` pointer as a binary payload (which length is
 /// stored within `len` filed of a cell itself).
 ///
-/// Returns a null pointer in case when a value stored under current [YOutput] cell
+/// Returns a null pointer in case when a value stored under current `YOutput` cell
 /// is not a binary type. Underlying binary is released automatically as part of [youtput_destroy]
 /// destructor.
 #[no_mangle]
@@ -2164,10 +2251,10 @@ pub unsafe extern "C" fn youtput_read_binary(val: *const YOutput) -> *const c_uc
     }
 }
 
-/// Attempts to read the value for a given [YOutput] pointer as a JSON-like array of [YOutput]
+/// Attempts to read the value for a given `YOutput` pointer as a JSON-like array of `YOutput`
 /// values (which length is stored within `len` filed of a cell itself).
 ///
-/// Returns a null pointer in case when a value stored under current [YOutput] cell
+/// Returns a null pointer in case when a value stored under current `YOutput` cell
 /// is not a JSON-like array. Underlying heap resources are released automatically as part of
 /// [youtput_destroy] destructor.
 #[no_mangle]
@@ -2180,10 +2267,10 @@ pub unsafe extern "C" fn youtput_read_json_array(val: *const YOutput) -> *mut YO
     }
 }
 
-/// Attempts to read the value for a given [YOutput] pointer as a JSON-like map of key-value entries
+/// Attempts to read the value for a given `YOutput` pointer as a JSON-like map of key-value entries
 /// (which length is stored within `len` filed of a cell itself).
 ///
-/// Returns a null pointer in case when a value stored under current [YOutput] cell
+/// Returns a null pointer in case when a value stored under current `YOutput` cell
 /// is not a JSON-like map. Underlying heap resources are released automatically as part of
 /// [youtput_destroy] destructor.
 #[no_mangle]
@@ -2196,10 +2283,10 @@ pub unsafe extern "C" fn youtput_read_json_map(val: *const YOutput) -> *mut YMap
     }
 }
 
-/// Attempts to read the value for a given [YOutput] pointer as an [Array].
+/// Attempts to read the value for a given `YOutput` pointer as an `YArray`.
 ///
-/// Returns a null pointer in case when a value stored under current [YOutput] cell
-/// is not an [Array]. Underlying heap resources are released automatically as part of
+/// Returns a null pointer in case when a value stored under current `YOutput` cell
+/// is not an `YArray`. Underlying heap resources are released automatically as part of
 /// [youtput_destroy] destructor.
 #[no_mangle]
 pub unsafe extern "C" fn youtput_read_yarray(val: *const YOutput) -> *mut Array {
@@ -2211,10 +2298,10 @@ pub unsafe extern "C" fn youtput_read_yarray(val: *const YOutput) -> *mut Array 
     }
 }
 
-/// Attempts to read the value for a given [YOutput] pointer as an [XmlElement].
+/// Attempts to read the value for a given `YOutput` pointer as an `YXmlElement`.
 ///
-/// Returns a null pointer in case when a value stored under current [YOutput] cell
-/// is not an [XmlElement]. Underlying heap resources are released automatically as part of
+/// Returns a null pointer in case when a value stored under current `YOutput` cell
+/// is not an `YXmlElement`. Underlying heap resources are released automatically as part of
 /// [youtput_destroy] destructor.
 #[no_mangle]
 pub unsafe extern "C" fn youtput_read_yxmlelem(val: *const YOutput) -> *mut XmlElement {
@@ -2226,10 +2313,10 @@ pub unsafe extern "C" fn youtput_read_yxmlelem(val: *const YOutput) -> *mut XmlE
     }
 }
 
-/// Attempts to read the value for a given [YOutput] pointer as an [Map].
+/// Attempts to read the value for a given `YOutput` pointer as an `YMap`.
 ///
-/// Returns a null pointer in case when a value stored under current [YOutput] cell
-/// is not an [Map]. Underlying heap resources are released automatically as part of
+/// Returns a null pointer in case when a value stored under current `YOutput` cell
+/// is not an `YMap`. Underlying heap resources are released automatically as part of
 /// [youtput_destroy] destructor.
 #[no_mangle]
 pub unsafe extern "C" fn youtput_read_ymap(val: *const YOutput) -> *mut Map {
@@ -2241,10 +2328,10 @@ pub unsafe extern "C" fn youtput_read_ymap(val: *const YOutput) -> *mut Map {
     }
 }
 
-/// Attempts to read the value for a given [YOutput] pointer as an [Text].
+/// Attempts to read the value for a given `YOutput` pointer as an `YText`.
 ///
-/// Returns a null pointer in case when a value stored under current [YOutput] cell
-/// is not an [Text]. Underlying heap resources are released automatically as part of
+/// Returns a null pointer in case when a value stored under current `YOutput` cell
+/// is not an `YText`. Underlying heap resources are released automatically as part of
 /// [youtput_destroy] destructor.
 #[no_mangle]
 pub unsafe extern "C" fn youtput_read_ytext(val: *const YOutput) -> *mut Text {
@@ -2256,10 +2343,10 @@ pub unsafe extern "C" fn youtput_read_ytext(val: *const YOutput) -> *mut Text {
     }
 }
 
-/// Attempts to read the value for a given [YOutput] pointer as an [XmlText].
+/// Attempts to read the value for a given `YOutput` pointer as an `YXmlText`.
 ///
-/// Returns a null pointer in case when a value stored under current [YOutput] cell
-/// is not an [XmlText]. Underlying heap resources are released automatically as part of
+/// Returns a null pointer in case when a value stored under current `YOutput` cell
+/// is not an `YXmlText`. Underlying heap resources are released automatically as part of
 /// [youtput_destroy] destructor.
 #[no_mangle]
 pub unsafe extern "C" fn youtput_read_yxmltext(val: *const YOutput) -> *mut XmlText {

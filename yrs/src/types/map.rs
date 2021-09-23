@@ -4,7 +4,14 @@ use crate::*;
 use lib0::any::Any;
 use std::collections::HashMap;
 
-/// Collection used to store key-value entries in an unordered manner.
+/// Collection used to store key-value entries in an unordered manner. Keys are always represented
+/// as UTF-8 strings. Values can be any value type supported by Yrs: JSON-like primitives as well as
+/// shared data types.
+///
+/// In terms of conflict resolution, [Map] uses logical last-write-wins principle, meaning the past
+/// updates are automatically overridden and discarded by newer ones, while concurrent updates made
+/// by different peers are resolved into a single value using document id seniority to establish
+/// order.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Map(BranchRef);
 

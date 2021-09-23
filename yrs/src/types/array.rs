@@ -6,7 +6,24 @@ use std::collections::VecDeque;
 use std::error::Error;
 use std::fmt::Formatter;
 
-/// A collection used to store data in an indexed sequence structure.
+/// A collection used to store data in an indexed sequence structure. This type is internally
+/// implemented as a double linked list, which may squash values inserted directly one after another
+/// into single list node upon transaction commit.
+///
+/// Reading a root-level type as an YArray means treating its sequence components as a list, where
+/// every countable element becomes an individual entity:
+///
+/// - JSON-like primitives (booleans, numbers, strings, JSON maps, arrays etc.) are counted
+///   individually.
+/// - Text chunks inserted by [Text] data structure: each character becomes an element of an
+///   array.
+/// - Embedded and binary values: they count as a single element even though they correspond of
+///   multiple bytes.
+///
+/// Like all Yrs shared data types, YArray is resistant to the problem of interleaving (situation
+/// when elements inserted one after another may interleave with other peers concurrent inserts
+/// after merging all updates together). In case of Yrs conflict resolution is solved by using
+/// unique document id to determine correct and consistent ordering.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Array(BranchRef);
 
@@ -152,8 +169,8 @@ impl From<BranchRef> for Array {
     }
 }
 
-/// A preliminary array. It's can be used to initialize an [Array], when it's about to be nested
-/// into another Yrs data collection, such as [Map] or another [Array].
+/// A preliminary array. It's can be used to initialize an YArray, when it's about to be nested
+/// into another Yrs data collection, such as [Map] or another YArray.
 pub struct PrelimArray<T, V>(T)
 where
     T: IntoIterator<Item = V>;
