@@ -1,6 +1,9 @@
-use js_sys::Uint8Array;
+use js_sys::{Object, Uint8Array};
 use lib0::any::Any;
 use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
+use std::collections::{HashMap, VecDeque};
+use std::fmt::Write;
 use std::mem::ManuallyDrop;
 use std::ops::{Deref, DerefMut};
 use wasm_bindgen::convert::RefFromWasmAbi;
@@ -82,17 +85,17 @@ impl Drop for YTransaction {
 impl YTransaction {
     #[wasm_bindgen(js_name = getText)]
     pub fn get_text(&mut self, name: &str) -> YText {
-        YText(self.0.get_text(name))
+        YText(SharedType::Integrated(self.0.get_text(name)))
     }
 
     #[wasm_bindgen(js_name = getArray)]
     pub fn get_array(&mut self, name: &str) -> YArray {
-        YArray(self.0.get_array(name))
+        YArray(SharedType::Integrated(self.0.get_array(name)))
     }
 
     #[wasm_bindgen(js_name = getMap)]
     pub fn get_map(&mut self, name: &str) -> YMap {
-        YMap(self.0.get_map(name))
+        YMap(SharedType::Integrated(self.0.get_map(name)))
     }
 
     #[wasm_bindgen(js_name = getXmlElement)]
@@ -136,79 +139,149 @@ impl YTransaction {
     }
 }
 
-#[wasm_bindgen]
-pub struct YText(Text);
+enum SharedType<T, U> {
+    Integrated(T),
+    Prelim(U),
+}
 
 #[wasm_bindgen]
-impl YText {
-    #[wasm_bindgen(method, getter)]
-    pub fn length(&self) -> u32 {
-        self.0.len()
-    }
+pub struct YText(SharedType<Text, String>);
 
-    #[wasm_bindgen(js_name = toString)]
-    pub fn to_string(&self, txn: &YTransaction) -> String {
-        self.0.to_string(txn)
-    }
-
-    #[wasm_bindgen(js_name = toJson)]
-    pub fn to_json(&self, txn: &YTransaction) -> JsValue {
-        let str = self.0.to_string(txn);
-        JsValue::from_str(str.as_str())
-    }
-
-    #[wasm_bindgen(js_name = insert)]
-    pub fn insert(&self, txn: &mut YTransaction, index: u32, chunk: &str) {
-        self.0.insert(txn, index, chunk)
-    }
-
-    #[wasm_bindgen(js_name = append)]
-    pub fn append(&self, txn: &mut YTransaction, chunk: &str) {
-        self.0.push(txn, chunk)
-    }
-
-    #[wasm_bindgen(js_name = prepend)]
-    pub fn prepend(&self, txn: &mut YTransaction, chunk: &str) {
-        self.0.insert(txn, 0, chunk)
-    }
-
-    #[wasm_bindgen(js_name = delete)]
-    pub fn delete(&self, txn: &mut YTransaction, index: u32, length: u32) {
-        self.0.remove_range(txn, index, length)
+impl From<Text> for YText {
+    fn from(v: Text) -> Self {
+        YText(SharedType::Integrated(v))
     }
 }
 
 #[wasm_bindgen]
-pub struct YArray(Array);
+impl YText {
+    #[wasm_bindgen(constructor)]
+    pub fn new(str: &str) -> Self {
+        YText(SharedType::Prelim(str.to_string()))
+    }
 
-#[wasm_bindgen]
-impl YArray {
     #[wasm_bindgen(method, getter)]
     pub fn length(&self) -> u32 {
-        self.0.len()
+        match &self.0 {
+            SharedType::Integrated(v) => v.len(),
+            SharedType::Prelim(v) => v.len() as u32,
+        }
+    }
+
+    #[wasm_bindgen(js_name = toString)]
+    pub fn to_string(&self, txn: &YTransaction) -> String {
+        match &self.0 {
+            SharedType::Integrated(v) => v.to_string(txn),
+            SharedType::Prelim(v) => v.clone(),
+        }
     }
 
     #[wasm_bindgen(js_name = toJson)]
     pub fn to_json(&self, txn: &YTransaction) -> JsValue {
-        any_into_js(self.0.to_json(txn))
+        match &self.0 {
+            SharedType::Integrated(v) => {
+                let str = v.to_string(txn);
+                JsValue::from_str(str.as_str())
+            }
+            SharedType::Prelim(v) => JsValue::from_str(v.as_str()),
+        }
     }
 
     #[wasm_bindgen(js_name = insert)]
-    pub fn insert(&self, txn: &mut YTransaction, index: u32, items: Vec<JsValue>) {
+    pub fn insert(&mut self, txn: &mut YTransaction, index: u32, chunk: &str) {
+        match &mut self.0 {
+            SharedType::Integrated(v) => v.insert(txn, index, chunk),
+            SharedType::Prelim(v) => v.insert_str(index as usize, chunk),
+        }
+    }
+
+    #[wasm_bindgen(js_name = append)]
+    pub fn append(&mut self, txn: &mut YTransaction, chunk: &str) {
+        match &mut self.0 {
+            SharedType::Integrated(v) => v.push(txn, chunk),
+            SharedType::Prelim(v) => v.push_str(chunk),
+        }
+    }
+
+    #[wasm_bindgen(js_name = prepend)]
+    pub fn prepend(&mut self, txn: &mut YTransaction, chunk: &str) {
+        match &mut self.0 {
+            SharedType::Integrated(v) => v.insert(txn, 0, chunk),
+            SharedType::Prelim(v) => v.insert_str(0, chunk),
+        }
+    }
+
+    #[wasm_bindgen(js_name = delete)]
+    pub fn delete(&mut self, txn: &mut YTransaction, index: u32, length: u32) {
+        match &mut self.0 {
+            SharedType::Integrated(v) => v.remove_range(txn, index, length),
+            SharedType::Prelim(v) => {
+                let range = index as usize..(index + length) as usize;
+                v.drain(range);
+            }
+        }
+    }
+}
+
+#[wasm_bindgen]
+pub struct YArray(SharedType<Array, Vec<JsValue>>);
+
+#[wasm_bindgen]
+impl YArray {
+    #[wasm_bindgen(constructor)]
+    pub fn new(items: Vec<JsValue>) -> Self {
+        YArray(SharedType::Prelim(items))
+    }
+
+    #[wasm_bindgen(method, getter)]
+    pub fn length(&self) -> u32 {
+        match &self.0 {
+            SharedType::Integrated(v) => v.len(),
+            SharedType::Prelim(v) => v.len() as u32,
+        }
+    }
+
+    #[wasm_bindgen(js_name = toJson)]
+    pub fn to_json(&self, txn: &YTransaction) -> JsValue {
+        match &self.0 {
+            SharedType::Integrated(v) => any_into_js(v.to_json(txn)),
+            SharedType::Prelim(v) => JsValue::from(&v),
+        }
+    }
+
+    #[wasm_bindgen(js_name = insert)]
+    pub fn insert(&mut self, txn: &mut YTransaction, index: u32, items: Vec<JsValue>) {
         todo!()
     }
 
     #[wasm_bindgen(js_name = delete)]
-    pub fn delete(&self, txn: &mut YTransaction, index: u32, length: u32) {
-        self.0.remove_range(txn, index, length)
+    pub fn delete(&mut self, txn: &mut YTransaction, index: u32, length: u32) {
+        match &mut self.0 {
+            SharedType::Integrated(v) => v.remove_range(txn, index, length),
+            SharedType::Prelim(v) => {
+                let range = (index as usize..(index + length) as usize);
+                v.drain(range);
+            }
+        }
     }
 
     #[wasm_bindgen(js_name = get)]
     pub fn get(&self, txn: &YTransaction, index: u32) -> JsValue {
-        if let Some(value) = self.0.get(txn, index) {
-            value_into_js(value)
-        } else {
-            JsValue::undefined()
+        match &self.0 {
+            SharedType::Integrated(v) => {
+                if let Some(value) = v.get(txn, index) {
+                    value_into_js(value)
+                } else {
+                    JsValue::undefined()
+                }
+            }
+            SharedType::Prelim(v) => {
+                if let Some(value) = v.get(index as usize) {
+                    value.clone()
+                } else {
+                    JsValue::undefined()
+                }
+            }
         }
     }
 
@@ -281,18 +354,48 @@ impl YArrayIterator {
 }
 
 #[wasm_bindgen]
-pub struct YMap(Map);
+pub struct YMap(SharedType<Map, HashMap<String, JsValue>>);
 
 #[wasm_bindgen]
 impl YMap {
+    #[wasm_bindgen(constructor, catch)]
+    pub fn new(object: JsValue) -> Result<YMap, JsValue> {
+        if object.is_object() {
+            let mut map = HashMap::new();
+            let o: Object = object.into();
+            for js_val in Object::entries(&o).iter() {
+                let tuple: js_sys::Array = js_sys::Array::from(&js_val);
+                let key = tuple.get(0);
+                let value = tuple.get(1);
+                map.insert(key.as_string().unwrap(), value);
+            }
+            Ok(YMap(SharedType::Prelim(map)))
+        } else {
+            Err(JsValue::from_str(
+                "YMap constructor must be initialized using object",
+            ))
+        }
+    }
     #[wasm_bindgen(method, getter)]
     pub fn length(&self, txn: &YTransaction) -> u32 {
-        self.0.len(txn)
+        match &self.0 {
+            SharedType::Integrated(v) => v.len(txn),
+            SharedType::Prelim(v) => v.len() as u32,
+        }
     }
 
     #[wasm_bindgen(js_name = toJson)]
     pub fn to_json(&self, txn: &YTransaction) -> JsValue {
-        any_into_js(self.0.to_json(txn))
+        match &self.0 {
+            SharedType::Integrated(v) => any_into_js(v.to_json(txn)),
+            SharedType::Prelim(v) => {
+                let mut result = js_sys::Map::new();
+                for (k, v) in v.iter() {
+                    result.set(&JsValue::from(k), v);
+                }
+                result.into()
+            }
+        }
     }
 
     #[wasm_bindgen(js_name = set)]
@@ -301,16 +404,34 @@ impl YMap {
     }
 
     #[wasm_bindgen(js_name = delete)]
-    pub fn delete(&self, txn: &mut YTransaction, key: &str) {
-        self.0.remove(txn, key);
+    pub fn delete(&mut self, txn: &mut YTransaction, key: &str) {
+        match &mut self.0 {
+            SharedType::Integrated(v) => {
+                v.remove(txn, key);
+            }
+            SharedType::Prelim(v) => {
+                v.remove(key);
+            }
+        }
     }
 
     #[wasm_bindgen(js_name = get)]
     pub fn get(&self, txn: &mut YTransaction, key: &str) -> JsValue {
-        if let Some(v) = self.0.get(txn, key) {
-            value_into_js(v)
-        } else {
-            JsValue::undefined()
+        match &self.0 {
+            SharedType::Integrated(v) => {
+                if let Some(v) = v.get(txn, key) {
+                    value_into_js(v)
+                } else {
+                    JsValue::undefined()
+                }
+            }
+            SharedType::Prelim(v) => {
+                if let Some(v) = v.get(key) {
+                    v.clone()
+                } else {
+                    JsValue::undefined()
+                }
+            }
         }
     }
 
@@ -614,7 +735,7 @@ fn any_into_js(v: Any) -> JsValue {
 fn value_into_js(v: Value) -> JsValue {
     match v {
         Value::Any(v) => any_into_js(v),
-        Value::YText(v) => YText(v).into(),
+        Value::YText(v) => YText::from(v).into(),
         Value::YArray(v) => YArray(v).into(),
         Value::YMap(v) => YMap(v).into(),
         Value::YXmlElement(v) => YXmlElement(v).into(),
