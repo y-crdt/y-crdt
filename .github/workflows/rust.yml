@@ -31,4 +31,10 @@ jobs:
         run: cargo test --verbose
 
       - name: Generate C bindings
-        run: cargo install cbindgen & cbindgen --config ./yrs-api-wrapper/cbindgen.toml --crate yrs-api-wrapper --output ./ffi-tests/include/libyrs.h
+        run: cargo install cbindgen && cbindgen --config ./yrs-api-wrapper/cbindgen.toml --crate yrs-api-wrapper --output ./ffi-tests/include/libyrs.h
+
+      - name: Build wasm
+        run: wasm-pack build --target nodejs ./ywasm
+
+      - name: Run tests wasm
+        run: cd ./wasm-tests && npm i && npm test
