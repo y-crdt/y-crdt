@@ -6,7 +6,7 @@ use std::convert::TryFrom;
 use std::mem::ManuallyDrop;
 use std::ops::{Deref, DerefMut};
 use wasm_bindgen::convert::FromWasmAbi;
-use wasm_bindgen::prelude::wasm_bindgen;
+use wasm_bindgen::prelude::{wasm_bindgen, Closure};
 use wasm_bindgen::JsValue;
 use yrs::block::{ItemContent, Prelim};
 use yrs::types::array::ArrayIter;
@@ -34,17 +34,17 @@ pub struct YDoc(Doc);
 #[wasm_bindgen]
 impl YDoc {
     #[wasm_bindgen(constructor)]
-    pub fn new(id: Option<u64>) -> Self {
+    pub fn new(id: Option<f64>) -> Self {
         if let Some(id) = id {
-            YDoc(Doc::with_client_id(id))
+            YDoc(Doc::with_client_id(id as u64))
         } else {
             YDoc(Doc::new())
         }
     }
 
     #[wasm_bindgen(method, getter)]
-    pub fn id(&self) -> u64 {
-        self.0.client_id
+    pub fn id(&self) -> f64 {
+        self.0.client_id as f64
     }
 
     #[wasm_bindgen(js_name = beginTransaction)]
@@ -377,7 +377,7 @@ impl YArray {
 
     #[wasm_bindgen(js_name = values)]
     pub fn values(&self, txn: &YTransaction) -> JsValue {
-        match &*self.0.borrow() {
+        to_iter(match &*self.0.borrow() {
             SharedType::Integrated(v) => unsafe {
                 let this: *const Array = v;
                 let tx: *const Transaction<'static> = txn.0.deref();
@@ -391,8 +391,16 @@ impl YArray {
                     ManuallyDrop::new((*this).iter());
                 PrelimArrayIterator(static_iter).into()
             },
-        }
+        })
     }
+}
+
+fn to_iter(iterator: JsValue) -> JsValue {
+    let iter = js_sys::Object::new();
+    let symbol_iter = js_sys::Symbol::iterator();
+    let cb = Closure::once_into_js(move || iterator);
+    js_sys::Reflect::set(&iter, &symbol_iter.into(), &cb).unwrap();
+    iter.into()
 }
 
 #[wasm_bindgen]
@@ -523,9 +531,9 @@ impl YMap {
         match &*self.0.borrow() {
             SharedType::Integrated(v) => any_into_js(v.to_json(txn)),
             SharedType::Prelim(v) => {
-                let map = js_sys::Map::new();
+                let map = js_sys::Object::new();
                 for (k, v) in v.iter() {
-                    map.set(&JsValue::from(k), v);
+                    js_sys::Reflect::set(&map, &k.into(), v).unwrap();
                 }
                 map.into()
             }
@@ -578,7 +586,7 @@ impl YMap {
 
     #[wasm_bindgen(js_name = entries)]
     pub fn entries(&self, txn: &mut YTransaction) -> JsValue {
-        match &*self.0.borrow() {
+        to_iter(match &*self.0.borrow() {
             SharedType::Integrated(v) => unsafe {
                 let this: *const Map = v;
                 let tx: *const Transaction<'static> = txn.0.deref();
@@ -593,7 +601,7 @@ impl YMap {
                 > = ManuallyDrop::new((*this).iter());
                 PrelimMapIterator(static_iter).into()
             },
-        }
+        })
     }
 }
 
@@ -683,6 +691,11 @@ impl YXmlElement {
         YXmlText(self.0.insert_text(txn, index))
     }
 
+    #[wasm_bindgen(js_name = delete)]
+    pub fn delete(&self, txn: &mut YTransaction, index: u32, length: u32) {
+        self.0.remove_range(txn, index, length)
+    }
+
     #[wasm_bindgen(js_name = pushXmlElement)]
     pub fn push_xml_element(&self, txn: &mut YTransaction, name: &str) -> YXmlElement {
         YXmlElement(self.0.push_elem_back(txn, name))
@@ -741,25 +754,25 @@ impl YXmlElement {
     }
 
     #[wasm_bindgen(js_name = attributes)]
-    pub fn attributes(&self, txn: &YTransaction) -> YXmlAttributes {
-        unsafe {
+    pub fn attributes(&self, txn: &YTransaction) -> JsValue {
+        to_iter(unsafe {
             let this: *const XmlElement = &self.0;
             let tx: *const Transaction<'static> = txn.0.deref();
             let static_iter: ManuallyDrop<Attributes<'static, 'static>> =
                 ManuallyDrop::new((*this).attributes(tx.as_ref().unwrap()));
-            YXmlAttributes(static_iter)
-        }
+            YXmlAttributes(static_iter).into()
+        })
     }
 
     #[wasm_bindgen(js_name = treeWalker)]
-    pub fn tree_walker(&self, txn: &YTransaction) -> YXmlTreeWalker {
-        unsafe {
+    pub fn tree_walker(&self, txn: &YTransaction) -> JsValue {
+        to_iter(unsafe {
             let this: *const XmlElement = &self.0;
             let tx: *const Transaction<'static> = txn.0.deref();
             let static_iter: ManuallyDrop<TreeWalker<'static, 'static>> =
                 ManuallyDrop::new((*this).successors(tx.as_ref().unwrap()));
-            YXmlTreeWalker(static_iter)
-        }
+            YXmlTreeWalker(static_iter).into()
+        })
     }
 }
 
@@ -824,6 +837,21 @@ impl YXmlText {
     #[wasm_bindgen(method, getter)]
     pub fn length(&self) -> u32 {
         self.0.len()
+    }
+
+    #[wasm_bindgen(js_name = insert)]
+    pub fn insert(&self, txn: &mut YTransaction, index: i32, chunk: &str) {
+        self.0.insert(txn, index as u32, chunk)
+    }
+
+    #[wasm_bindgen(js_name = push)]
+    pub fn push(&self, txn: &mut YTransaction, chunk: &str) {
+        self.0.push(txn, chunk)
+    }
+
+    #[wasm_bindgen(js_name = delete)]
+    pub fn delete(&self, txn: &mut YTransaction, index: u32, length: u32) {
+        self.0.remove_range(txn, index, length)
     }
 
     #[wasm_bindgen(js_name = nextSibling)]
@@ -1003,8 +1031,8 @@ fn js_into_any(v: &JsValue) -> Option<Any> {
 
 fn any_into_js(v: Any) -> JsValue {
     match v {
-        Any::Null => JsValue::null(),
-        Any::Undefined => JsValue::undefined(),
+        Any::Null => JsValue::NULL,
+        Any::Undefined => JsValue::UNDEFINED,
         Any::Bool(v) => JsValue::from_bool(v),
         Any::Number(v) => JsValue::from(v),
         Any::BigInt(v) => JsValue::from(v),
@@ -1021,11 +1049,11 @@ fn any_into_js(v: Any) -> JsValue {
             a.into()
         }
         Any::Map(v) => {
-            let m = js_sys::Map::new();
+            let m = js_sys::Object::new();
             for (k, v) in v {
                 let key = JsValue::from(&k);
                 let value = any_into_js(v);
-                m.set(&key, &value);
+                js_sys::Reflect::set(&m, &key, &value).unwrap();
             }
             m.into()
         }
