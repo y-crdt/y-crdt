@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::mem::ManuallyDrop;
 use std::ops::{Deref, DerefMut};
-use wasm_bindgen::convert::FromWasmAbi;
+use wasm_bindgen::__rt::Ref;
 use wasm_bindgen::prelude::{wasm_bindgen, Closure};
 use wasm_bindgen::JsValue;
 use yrs::block::{ItemContent, Prelim};
@@ -909,16 +909,26 @@ struct JsValueWrapper(JsValue);
 
 impl Prelim for JsValueWrapper {
     fn into_content(self, _txn: &mut Transaction, ptr: TypePtr) -> (ItemContent, Option<Self>) {
-        if let Some(any) = js_into_any(&self.0) {
-            return (ItemContent::Any(vec![any]), None);
+        let content = if let Some(any) = js_into_any(&self.0) {
+            ItemContent::Any(vec![any])
         } else if let Ok(shared) = Shared::try_from(&self.0) {
             if shared.is_prelim() {
                 let branch = BranchRef::new(Branch::new(ptr, shared.type_ref(), None));
-                return (ItemContent::Type(branch), Some(self));
+                ItemContent::Type(branch)
+            } else {
+                panic!("Cannot integrate this type")
             }
-        }
+        } else {
+            panic!("Cannot integrate this type")
+        };
 
-        panic!("Cannot integrate this type")
+        let this = if let ItemContent::Type(_) = &content {
+            Some(self)
+        } else {
+            None
+        };
+
+        (content, this)
     }
 
     fn integrate(self, txn: &mut Transaction, inner_ref: BranchRef) {
@@ -1078,15 +1088,22 @@ fn xml_into_js(v: Xml) -> JsValue {
     }
 }
 
-enum Shared {
-    Text(YText),
-    Array(YArray),
-    Map(YMap),
-    XmlElement(YXmlElement),
-    XmlText(YXmlText),
+enum Shared<'a> {
+    Text(Ref<'a, YText>),
+    Array(Ref<'a, YArray>),
+    Map(Ref<'a, YMap>),
+    XmlElement(Ref<'a, YXmlElement>),
+    XmlText(Ref<'a, YXmlText>),
 }
 
-impl<'a> TryFrom<&'a JsValue> for Shared {
+fn as_ref<'a, T>(js: u32) -> Ref<'a, T> {
+    unsafe {
+        let js = js as *mut wasm_bindgen::__rt::WasmRefCell<T>;
+        (*js).borrow()
+    }
+}
+
+impl<'a> TryFrom<&'a JsValue> for Shared<'a> {
     type Error = JsValue;
 
     fn try_from(js: &'a JsValue) -> Result<Self, Self::Error> {
@@ -1095,24 +1112,22 @@ impl<'a> TryFrom<&'a JsValue> for Shared {
         let ptr = Reflect::get(js, &JsValue::from_str("ptr"))?;
         let ptr_u32: u32 = ptr.as_f64().ok_or(JsValue::NULL)? as u32;
         if ctor_name == "YText" {
-            Ok(Shared::Text(unsafe { YText::from_abi(ptr_u32) }))
+            Ok(Shared::Text(as_ref(ptr_u32)))
         } else if ctor_name == "YArray" {
-            Ok(Shared::Array(unsafe { YArray::from_abi(ptr_u32) }))
+            Ok(Shared::Array(as_ref(ptr_u32)))
         } else if ctor_name == "YMap" {
-            Ok(Shared::Map(unsafe { YMap::from_abi(ptr_u32) }))
+            Ok(Shared::Map(as_ref(ptr_u32)))
         } else if ctor_name == "YXmlElement" {
-            Ok(Shared::XmlElement(unsafe {
-                YXmlElement::from_abi(ptr_u32)
-            }))
+            Ok(Shared::XmlElement(as_ref(ptr_u32)))
         } else if ctor_name == "YXmlText" {
-            Ok(Shared::XmlText(unsafe { YXmlText::from_abi(ptr_u32) }))
+            Ok(Shared::XmlText(as_ref(ptr_u32)))
         } else {
             Err(JsValue::NULL)
         }
     }
 }
 
-impl Shared {
+impl<'a> Shared<'a> {
     fn is_prelim(&self) -> bool {
         match self {
             Shared::Text(v) => v.prelim(),
