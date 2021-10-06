@@ -42,6 +42,13 @@ export const testInserts = tc => {
  * @param {t.TestCase} tc
  */
 export const testInsertsNested = tc => {
+    function compare(value, expected) {
+        t.compare(value.length, expected.length)
+        t.compare(value[0], expected[0])
+        t.compare(value[1], expected[1])
+        t.compareArrays(value[2], expected[2])
+    }
+
     const d1 = new Y.YDoc()
     var x = d1.getArray('test');
 
@@ -53,7 +60,7 @@ export const testInsertsNested = tc => {
     const expected = [1, 2, ['hello', 'world']]
 
     var value = d1.transact(txn => x.toJson(txn))
-    t.compareArrays(value, expected)
+    compare(value, expected)
 
     const d2 = new Y.YDoc()
     x = d2.getArray('test');
@@ -61,7 +68,7 @@ export const testInsertsNested = tc => {
     exchangeUpdates([d1, d2])
 
     value = d2.transact(txn => x.toJson(txn))
-    t.compareArrays(value, expected)
+    compare(value, expected)
 }
 
 /**

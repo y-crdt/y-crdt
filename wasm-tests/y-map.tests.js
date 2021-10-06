@@ -34,11 +34,9 @@ export const testSetNested = tc => {
     d1.transact(txn => nested.set(txn, 'b', 'B'))
 
     let json = d1.transact(txn => x.toJson(txn))
-    t.compareObjects(json, {
-        key: {
-            a: 'A',
-            b: 'B'
-        }
+    t.compareObjects(json.key, {
+        a: 'A',
+        b: 'B'
     })
 }
 
