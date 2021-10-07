@@ -28,11 +28,38 @@ use yrs::{
 #[global_allocator]
 static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
 
+/// A ywasm document type. Documents are most important units of collaborative resources management.
+/// All shared collections live within a scope of their corresponding documents. All updates are
+/// generated on per document basis (rather than individual shared type). All operations on shared
+/// collections happen via [YTransaction], which lifetime is also bound to a document.
+///
+/// Document manages so called root types, which are top-level shared types definitions (as opposed
+/// to recursively nested types).
+///
+/// A basic workflow sample:
+///
+/// ```javascript
+/// import YDoc from 'ywasm'
+///
+/// const doc = new YDoc()
+/// const txn = doc.beginTransaction()
+/// try {
+///     const text = txn.getText('name')
+///     text.push(txn, 'hello world')
+///     const output = text.toString(txn)
+///     console.log(output)
+/// } finally {
+///     txn.free()
+/// }
+/// ```
 #[wasm_bindgen]
 pub struct YDoc(Doc);
 
 #[wasm_bindgen]
 impl YDoc {
+    /// Creates a new ywasm document. If `id` parameter was passed it will be used as this document
+    /// globally unique identifier (it's up to caller to ensure that requirement). Otherwise it will
+    /// be assigned a randomly generated number.
     #[wasm_bindgen(constructor)]
     pub fn new(id: Option<f64>) -> Self {
         if let Some(id) = id {
@@ -42,11 +69,39 @@ impl YDoc {
         }
     }
 
+    /// Gets globally unique identifier of this `YDoc` instance.
     #[wasm_bindgen(method, getter)]
     pub fn id(&self) -> f64 {
         self.0.client_id as f64
     }
 
+    /// Returns a new transaction for this document. Ywasm shared data types execute their
+    /// operations in a context of a given transaction. Each document can have only one active
+    /// transaction at the time - subsequent attempts will cause exception to be thrown.
+    ///
+    /// Transactions started with `doc.beginTransaction` can be released using `transaction.free`
+    /// method.
+    ///
+    /// Example:
+    ///
+    /// ```javascript
+    /// import YDoc from 'ywasm'
+    ///
+    /// // helper function used to simplify transaction
+    /// // create/release cycle
+    /// YDoc.prototype.transact = callback => {
+    ///     const txn = this.beginTransaction()
+    ///     try {
+    ///         return callback(txn)
+    ///     } finally {
+    ///         txn.free()
+    ///     }
+    /// }
+    ///
+    /// const doc = new YDoc()
+    /// const text = doc.getText('name')
+    /// doc.transact(txn => text.insert(txn, 0, 'hello world'))
+    /// ```
     #[wasm_bindgen(js_name = beginTransaction)]
     pub fn begin_transaction(&mut self) -> YTransaction {
         unsafe {
@@ -57,47 +112,167 @@ impl YDoc {
         }
     }
 
+    /// Returns a `YText` shared data type, that's accessible for subsequent accesses using given
+    /// `name`.
+    ///
+    /// If there was no instance with this name before, it will be created and then returned.
+    ///
+    /// If there was an instance with this name, but it was of different type, it will be projected
+    /// onto `YText` instance.
     #[wasm_bindgen(js_name = getText)]
     pub fn get_text(&mut self, name: &str) -> YText {
         self.begin_transaction().get_text(name)
     }
 
+    /// Returns a `YArray` shared data type, that's accessible for subsequent accesses using given
+    /// `name`.
+    ///
+    /// If there was no instance with this name before, it will be created and then returned.
+    ///
+    /// If there was an instance with this name, but it was of different type, it will be projected
+    /// onto `YArray` instance.
     #[wasm_bindgen(js_name = getArray)]
     pub fn get_array(&mut self, name: &str) -> YArray {
         self.begin_transaction().get_array(name)
     }
 
+    /// Returns a `YMap` shared data type, that's accessible for subsequent accesses using given
+    /// `name`.
+    ///
+    /// If there was no instance with this name before, it will be created and then returned.
+    ///
+    /// If there was an instance with this name, but it was of different type, it will be projected
+    /// onto `YMap` instance.
     #[wasm_bindgen(js_name = getMap)]
     pub fn get_map(&mut self, name: &str) -> YMap {
         self.begin_transaction().get_map(name)
     }
 
+    /// Returns a `YXmlElement` shared data type, that's accessible for subsequent accesses using
+    /// given `name`.
+    ///
+    /// If there was no instance with this name before, it will be created and then returned.
+    ///
+    /// If there was an instance with this name, but it was of different type, it will be projected
+    /// onto `YXmlElement` instance.
     #[wasm_bindgen(js_name = getXmlElement)]
     pub fn get_xml_element(&mut self, name: &str) -> YXmlElement {
         self.begin_transaction().get_xml_element(name)
     }
 
+    /// Returns a `YXmlText` shared data type, that's accessible for subsequent accesses using given
+    /// `name`.
+    ///
+    /// If there was no instance with this name before, it will be created and then returned.
+    ///
+    /// If there was an instance with this name, but it was of different type, it will be projected
+    /// onto `YXmlText` instance.
     #[wasm_bindgen(js_name = getXmlText)]
     pub fn get_xml_text(&mut self, name: &str) -> YXmlText {
         self.begin_transaction().get_xml_text(name)
     }
 }
 
+/// Encodes a state vector of a given ywasm document into its binary representation using lib0 v1
+/// encoding. State vector is a compact representation of updates performed on a given document and
+/// can be used by `encode_state_as_update` on remote peer to generate a delta update payload to
+/// synchronize changes between peers.
+///
+/// Example:
+///
+/// ```javascript
+/// import {YDoc, encodeStateVector, encodeStateAsUpdate, applyUpdate} from 'ywasm'
+///
+/// /// document on machine A
+/// const localDoc = new YDoc()
+/// const localSV = encodeStateVector(localDoc)
+///
+/// // document on machine B
+/// const remoteDoc = new YDoc()
+/// const remoteDelta = encodeStateAsUpdate(remoteDoc, localSV)
+///
+/// applyUpdate(localDoc, remoteDelta)
+/// ```
 #[wasm_bindgen(js_name = encodeStateVector)]
 pub fn encode_state_vector(doc: &mut YDoc) -> Uint8Array {
     doc.begin_transaction().state_vector_v1()
 }
 
+/// Encodes all updates that have happened since a given version `vector` into a compact delta
+/// representation using lib0 v1 encoding. If `vector` parameter has not been provided, generated
+/// delta payload will contain all changes of a current ywasm document, working effectivelly as its
+/// state snapshot.
+///
+/// Example:
+///
+/// ```javascript
+/// import {YDoc, encodeStateVector, encodeStateAsUpdate, applyUpdate} from 'ywasm'
+///
+/// /// document on machine A
+/// const localDoc = new YDoc()
+/// const localSV = encodeStateVector(localDoc)
+///
+/// // document on machine B
+/// const remoteDoc = new YDoc()
+/// const remoteDelta = encodeStateAsUpdate(remoteDoc, localSV)
+///
+/// applyUpdate(localDoc, remoteDelta)
+/// ```
 #[wasm_bindgen(js_name = encodeStateAsUpdate)]
 pub fn encode_state_as_update(doc: &mut YDoc, vector: Option<Uint8Array>) -> Uint8Array {
     doc.begin_transaction().diff_v1(vector)
 }
 
+/// Applies delta update generated by the remote document replica to a current document. This
+/// method assumes that a payload maintains lib0 v1 encoding format.
+///
+/// Example:
+///
+/// ```javascript
+/// import {YDoc, encodeStateVector, encodeStateAsUpdate, applyUpdate} from 'ywasm'
+///
+/// /// document on machine A
+/// const localDoc = new YDoc()
+/// const localSV = encodeStateVector(localDoc)
+///
+/// // document on machine B
+/// const remoteDoc = new YDoc()
+/// const remoteDelta = encodeStateAsUpdate(remoteDoc, localSV)
+///
+/// applyUpdate(localDoc, remoteDelta)
+/// ```
 #[wasm_bindgen(js_name = applyUpdate)]
 pub fn apply_update(doc: &mut YDoc, diff: Uint8Array) {
     doc.begin_transaction().apply_v1(diff);
 }
 
+/// A transaction that serves as a proxy to document block store. Ywasm shared data types execute
+/// their operations in a context of a given transaction. Each document can have only one active
+/// transaction at the time - subsequent attempts will cause exception to be thrown.
+///
+/// Transactions started with `doc.beginTransaction` can be released using `transaction.free`
+/// method.
+///
+/// Example:
+///
+/// ```javascript
+/// import YDoc from 'ywasm'
+///
+/// // helper function used to simplify transaction
+/// // create/release cycle
+/// YDoc.prototype.transact = callback => {
+///     const txn = this.beginTransaction()
+///     try {
+///         return callback(txn)
+///     } finally {
+///         txn.free()
+///     }
+/// }
+///
+/// const doc = new YDoc()
+/// const text = doc.getText('name')
+/// doc.transact(txn => text.insert(txn, 0, 'hello world'))
+/// ```
 #[wasm_bindgen]
 pub struct YTransaction(ManuallyDrop<Transaction<'static>>);
 
@@ -123,36 +298,101 @@ impl Drop for YTransaction {
 
 #[wasm_bindgen]
 impl YTransaction {
+    /// Returns a `YText` shared data type, that's accessible for subsequent accesses using given
+    /// `name`.
+    ///
+    /// If there was no instance with this name before, it will be created and then returned.
+    ///
+    /// If there was an instance with this name, but it was of different type, it will be projected
+    /// onto `YText` instance.
     #[wasm_bindgen(js_name = getText)]
     pub fn get_text(&mut self, name: &str) -> YText {
         self.0.get_text(name).into()
     }
 
+    /// Returns a `YArray` shared data type, that's accessible for subsequent accesses using given
+    /// `name`.
+    ///
+    /// If there was no instance with this name before, it will be created and then returned.
+    ///
+    /// If there was an instance with this name, but it was of different type, it will be projected
+    /// onto `YArray` instance.
     #[wasm_bindgen(js_name = getArray)]
     pub fn get_array(&mut self, name: &str) -> YArray {
         self.0.get_array(name).into()
     }
 
+    /// Returns a `YMap` shared data type, that's accessible for subsequent accesses using given
+    /// `name`.
+    ///
+    /// If there was no instance with this name before, it will be created and then returned.
+    ///
+    /// If there was an instance with this name, but it was of different type, it will be projected
+    /// onto `YMap` instance.
     #[wasm_bindgen(js_name = getMap)]
     pub fn get_map(&mut self, name: &str) -> YMap {
         self.0.get_map(name).into()
     }
 
+    /// Returns a `YXmlElement` shared data type, that's accessible for subsequent accesses using
+    /// given `name`.
+    ///
+    /// If there was no instance with this name before, it will be created and then returned.
+    ///
+    /// If there was an instance with this name, but it was of different type, it will be projected
+    /// onto `YXmlElement` instance.
     #[wasm_bindgen(js_name = getXmlElement)]
     pub fn get_xml_element(&mut self, name: &str) -> YXmlElement {
         YXmlElement(self.0.get_xml_element(name))
     }
 
+    /// Returns a `YXmlText` shared data type, that's accessible for subsequent accesses using given
+    /// `name`.
+    ///
+    /// If there was no instance with this name before, it will be created and then returned.
+    ///
+    /// If there was an instance with this name, but it was of different type, it will be projected
+    /// onto `YXmlText` instance.
     #[wasm_bindgen(js_name = getXmlText)]
     pub fn get_xml_text(&mut self, name: &str) -> YXmlText {
         YXmlText(self.0.get_xml_text(name))
     }
 
+    /// Triggers a post-update series of operations without `free`ing the transaction. This includes
+    /// compaction and optimization of internal representation of updates, triggering events etc.
+    /// ywasm transactions are auto-committed when they are `free`d.
     #[wasm_bindgen(js_name = commit)]
     pub fn commit(&mut self) {
         self.0.commit()
     }
 
+    /// Encodes a state vector of a given transaction document into its binary representation using
+    /// lib0 v1 encoding. State vector is a compact representation of updates performed on a given
+    /// document and can be used by `encode_state_as_update` on remote peer to generate a delta
+    /// update payload to synchronize changes between peers.
+    ///
+    /// Example:
+    ///
+    /// ```javascript
+    /// import YDoc from 'ywasm'
+    ///
+    /// /// document on machine A
+    /// const localDoc = new YDoc()
+    /// const localTxn = localDoc.beginTransaction()
+    ///
+    /// // document on machine B
+    /// const remoteDoc = new YDoc()
+    /// const remoteTxn = localDoc.beginTransaction()
+    ///
+    /// try {
+    ///     const localSV = localTxn.stateVectorV1()
+    ///     const remoteDelta = remoteTxn.diffV1(localSv)
+    ///     localTxn.applyV1(remoteDelta)
+    /// } finally {
+    ///     localTxn.free()
+    ///     remoteTxn.free()
+    /// }
+    /// ```
     #[wasm_bindgen(js_name = stateVectorV1)]
     pub fn state_vector_v1(&self) -> Uint8Array {
         let sv = self.0.state_vector();
@@ -160,6 +400,33 @@ impl YTransaction {
         Uint8Array::from(&payload[..payload.len()])
     }
 
+    /// Encodes all updates that have happened since a given version `vector` into a compact delta
+    /// representation using lib0 v1 encoding. If `vector` parameter has not been provided, generated
+    /// delta payload will contain all changes of a current ywasm document, working effectively as
+    /// its state snapshot.
+    ///
+    /// Example:
+    ///
+    /// ```javascript
+    /// import YDoc from 'ywasm'
+    ///
+    /// /// document on machine A
+    /// const localDoc = new YDoc()
+    /// const localTxn = localDoc.beginTransaction()
+    ///
+    /// // document on machine B
+    /// const remoteDoc = new YDoc()
+    /// const remoteTxn = localDoc.beginTransaction()
+    ///
+    /// try {
+    ///     const localSV = localTxn.stateVectorV1()
+    ///     const remoteDelta = remoteTxn.diffV1(localSv)
+    ///     localTxn.applyV1(remoteDelta)
+    /// } finally {
+    ///     localTxn.free()
+    ///     remoteTxn.free()
+    /// }
+    /// ```
     #[wasm_bindgen(js_name = diffV1)]
     pub fn diff_v1(&self, vector: Option<Uint8Array>) -> Uint8Array {
         let mut encoder = EncoderV1::new();
@@ -173,6 +440,31 @@ impl YTransaction {
         Uint8Array::from(&payload[..payload.len()])
     }
 
+    /// Applies delta update generated by the remote document replica to a current transaction's
+    /// document. This method assumes that a payload maintains lib0 v1 encoding format.
+    ///
+    /// Example:
+    ///
+    /// ```javascript
+    /// import YDoc from 'ywasm'
+    ///
+    /// /// document on machine A
+    /// const localDoc = new YDoc()
+    /// const localTxn = localDoc.beginTransaction()
+    ///
+    /// // document on machine B
+    /// const remoteDoc = new YDoc()
+    /// const remoteTxn = localDoc.beginTransaction()
+    ///
+    /// try {
+    ///     const localSV = localTxn.stateVectorV1()
+    ///     const remoteDelta = remoteTxn.diffV1(localSv)
+    ///     localTxn.applyV1(remoteDelta)
+    /// } finally {
+    ///     localTxn.free()
+    ///     remoteTxn.free()
+    /// }
+    /// ```
     #[wasm_bindgen(js_name = applyV1)]
     pub fn apply_v1(&mut self, diff: Uint8Array) {
         let diff: Vec<u8> = diff.to_vec();
@@ -200,6 +492,19 @@ impl<T, P> SharedType<T, P> {
     }
 }
 
+/// A shared data type used for collaborative text editing. It enables multiple users to add and
+/// remove chunks of text in efficient manner. This type is internally represented as a mutable
+/// double-linked list of text chunks - an optimization occurs during `YTransaction.commit`, which
+/// allows to squash multiple consecutively inserted characters together as a single chunk of text
+/// even between transaction boundaries in order to preserve more efficient memory model.
+///
+/// `YText` structure internally uses UTF-8 encoding and its length is described in a number of
+/// bytes rather than individual characters (a single UTF-8 code point can consist of many bytes).
+///
+/// Like all Yrs shared data types, `YText` is resistant to the problem of interleaving (situation
+/// when characters inserted one after another may interleave with other peers concurrent inserts
+/// after merging all updates together). In case of Yrs conflict resolution is solved by using
+/// unique document id to determine correct and consistent ordering.
 #[wasm_bindgen]
 pub struct YText(RefCell<SharedType<Text, String>>);
 
@@ -211,11 +516,22 @@ impl From<Text> for YText {
 
 #[wasm_bindgen]
 impl YText {
+    /// Creates a new preliminary instance of a `YText` shared data type, with its state initialized
+    /// to provided parameter.
+    ///
+    /// Preliminary instances can be nested into other shared data types such as `YArray` and `YMap`.
+    /// Once a preliminary instance has been inserted this way, it becomes integrated into ywasm
+    /// document store and cannot be nested again: attempt to do so will result in an exception.
     #[wasm_bindgen(constructor)]
     pub fn new(init: Option<String>) -> Self {
         YText(SharedType::prelim(init.unwrap_or_default()))
     }
 
+    /// Returns true if this is a preliminary instance of `YText`.
+    ///
+    /// Preliminary instances can be nested into other shared data types such as `YArray` and `YMap`.
+    /// Once a preliminary instance has been inserted this way, it becomes integrated into ywasm
+    /// document store and cannot be nested again: attempt to do so will result in an exception.
     #[wasm_bindgen(method, getter)]
     pub fn prelim(&self) -> bool {
         if let SharedType::Prelim(_) = &*self.0.borrow() {
@@ -225,6 +541,8 @@ impl YText {
         }
     }
 
+    /// Returns length of an underlying string stored in this `YText` instance,
+    /// understood as a number of UTF-8 encoded bytes.
     #[wasm_bindgen(method, getter)]
     pub fn length(&self) -> u32 {
         match &*self.0.borrow() {
@@ -233,6 +551,7 @@ impl YText {
         }
     }
 
+    /// Returns an underlying shared string stored in this data type.
     #[wasm_bindgen(js_name = toString)]
     pub fn to_string(&self, txn: &YTransaction) -> String {
         match &*self.0.borrow() {
@@ -241,6 +560,7 @@ impl YText {
         }
     }
 
+    /// Returns an underlying shared string stored in this data type.
     #[wasm_bindgen(js_name = toJson)]
     pub fn to_json(&self, txn: &YTransaction) -> JsValue {
         match &*self.0.borrow() {
@@ -249,6 +569,7 @@ impl YText {
         }
     }
 
+    /// Inserts a given `chunk` of text into this `YText` instance, starting at a given `index`.
     #[wasm_bindgen(js_name = insert)]
     pub fn insert(&self, txn: &mut YTransaction, index: u32, chunk: &str) {
         match &mut *self.0.borrow_mut() {
@@ -257,6 +578,7 @@ impl YText {
         }
     }
 
+    /// Appends a given `chunk` of text at the end of current `YText` instance.
     #[wasm_bindgen(js_name = push)]
     pub fn push(&self, txn: &mut YTransaction, chunk: &str) {
         match &mut *self.0.borrow_mut() {
@@ -265,6 +587,8 @@ impl YText {
         }
     }
 
+    /// Deletes a specified range of of characters, starting at a given `index`.
+    /// Both `index` and `length` are counted in terms of a number of UTF-8 character bytes.
     #[wasm_bindgen(js_name = delete)]
     pub fn delete(&mut self, txn: &mut YTransaction, index: u32, length: u32) {
         match &mut *self.0.borrow_mut() {
@@ -276,6 +600,24 @@ impl YText {
     }
 }
 
+/// A collection used to store data in an indexed sequence structure. This type is internally
+/// implemented as a double linked list, which may squash values inserted directly one after another
+/// into single list node upon transaction commit.
+///
+/// Reading a root-level type as an YArray means treating its sequence components as a list, where
+/// every countable element becomes an individual entity:
+///
+/// - JSON-like primitives (booleans, numbers, strings, JSON maps, arrays etc.) are counted
+///   individually.
+/// - Text chunks inserted by [Text] data structure: each character becomes an element of an
+///   array.
+/// - Embedded and binary values: they count as a single element even though they correspond of
+///   multiple bytes.
+///
+/// Like all Yrs shared data types, YArray is resistant to the problem of interleaving (situation
+/// when elements inserted one after another may interleave with other peers concurrent inserts
+/// after merging all updates together). In case of Yrs conflict resolution is solved by using
+/// unique document id to determine correct and consistent ordering.
 #[wasm_bindgen]
 pub struct YArray(RefCell<SharedType<Array, Vec<JsValue>>>);
 
@@ -287,11 +629,22 @@ impl From<Array> for YArray {
 
 #[wasm_bindgen]
 impl YArray {
+    /// Creates a new preliminary instance of a `YArray` shared data type, with its state
+    /// initialized to provided parameter.
+    ///
+    /// Preliminary instances can be nested into other shared data types such as `YArray` and `YMap`.
+    /// Once a preliminary instance has been inserted this way, it becomes integrated into ywasm
+    /// document store and cannot be nested again: attempt to do so will result in an exception.
     #[wasm_bindgen(constructor)]
     pub fn new(init: Option<Vec<JsValue>>) -> Self {
         YArray(SharedType::prelim(init.unwrap_or_default()))
     }
 
+    /// Returns true if this is a preliminary instance of `YArray`.
+    ///
+    /// Preliminary instances can be nested into other shared data types such as `YArray` and `YMap`.
+    /// Once a preliminary instance has been inserted this way, it becomes integrated into ywasm
+    /// document store and cannot be nested again: attempt to do so will result in an exception.
     #[wasm_bindgen(method, getter)]
     pub fn prelim(&self) -> bool {
         if let SharedType::Prelim(_) = &*self.0.borrow() {
@@ -301,6 +654,7 @@ impl YArray {
         }
     }
 
+    /// Returns a number of elements stored within this instance of `YArray`.
     #[wasm_bindgen(method, getter)]
     pub fn length(&self) -> u32 {
         match &*self.0.borrow() {
@@ -309,6 +663,7 @@ impl YArray {
         }
     }
 
+    /// Converts an underlying contents of this `YArray` instance into their JSON representation.
     #[wasm_bindgen(js_name = toJson)]
     pub fn to_json(&self, txn: &YTransaction) -> JsValue {
         match &*self.0.borrow() {
@@ -323,6 +678,7 @@ impl YArray {
         }
     }
 
+    /// Inserts a given range of `items` into this `YArray` instance, starting at given `index`.
     #[wasm_bindgen(js_name = insert)]
     pub fn insert(&self, txn: &mut YTransaction, index: u32, items: Vec<JsValue>) {
         let mut j = index;
@@ -339,12 +695,15 @@ impl YArray {
         }
     }
 
+    /// Appends a range of `items` at the end of this `YArray` instance.
     #[wasm_bindgen(js_name = push)]
     pub fn push(&self, txn: &mut YTransaction, items: Vec<JsValue>) {
         let index = self.length();
         self.insert(txn, index, items);
     }
 
+    /// Deletes a range of items of given `length` from current `YArray` instance,
+    /// starting from given `index`.
     #[wasm_bindgen(js_name = delete)]
     pub fn delete(&self, txn: &mut YTransaction, index: u32, length: u32) {
         match &mut *self.0.borrow_mut() {
@@ -355,26 +714,48 @@ impl YArray {
         }
     }
 
-    #[wasm_bindgen(js_name = get)]
-    pub fn get(&self, txn: &YTransaction, index: u32) -> JsValue {
+    /// Returns an element stored under given `index`.
+    #[wasm_bindgen(catch, js_name = get)]
+    pub fn get(&self, txn: &YTransaction, index: u32) -> Result<JsValue, JsValue> {
         match &*self.0.borrow() {
             SharedType::Integrated(v) => {
                 if let Some(value) = v.get(txn, index) {
-                    value_into_js(value)
+                    Ok(value_into_js(value))
                 } else {
-                    JsValue::undefined()
+                    Err(JsValue::from("Index outside the bounds of an YArray"))
                 }
             }
             SharedType::Prelim(v) => {
                 if let Some(value) = v.get(index as usize) {
-                    value.clone()
+                    Ok(value.clone())
                 } else {
-                    JsValue::undefined()
+                    Err(JsValue::from("Index outside the bounds of an YArray"))
                 }
             }
         }
     }
 
+    /// Returns an iterator that can be used to traverse over the values stored withing this
+    /// instance of `YArray`.
+    ///
+    /// Example:
+    ///
+    /// ```javascript
+    /// import YDoc from 'ywasm'
+    ///
+    /// /// document on machine A
+    /// const doc = new YDoc()
+    /// const array = doc.getArray('name')
+    /// const txn = doc.beginTransaction()
+    /// try {
+    ///     array.push(txn, ['hello', 'world'])
+    ///     for (let item of array.values(txn)) {
+    ///         console.log(item)
+    ///     }
+    /// } finally {
+    ///     txn.free()
+    /// }
+    /// ```
     #[wasm_bindgen(js_name = values)]
     pub fn values(&self, txn: &YTransaction) -> JsValue {
         to_iter(match &*self.0.borrow() {
@@ -480,6 +861,14 @@ impl PrelimArrayIterator {
     }
 }
 
+/// Collection used to store key-value entries in an unordered manner. Keys are always represented
+/// as UTF-8 strings. Values can be any value type supported by Yrs: JSON-like primitives as well as
+/// shared data types.
+///
+/// In terms of conflict resolution, [Map] uses logical last-write-wins principle, meaning the past
+/// updates are automatically overridden and discarded by newer ones, while concurrent updates made
+/// by different peers are resolved into a single value using document id seniority to establish
+/// order.
 #[wasm_bindgen]
 pub struct YMap(RefCell<SharedType<Map, HashMap<String, JsValue>>>);
 
@@ -491,6 +880,12 @@ impl From<Map> for YMap {
 
 #[wasm_bindgen]
 impl YMap {
+    /// Creates a new preliminary instance of a `YMap` shared data type, with its state
+    /// initialized to provided parameter.
+    ///
+    /// Preliminary instances can be nested into other shared data types such as `YArray` and `YMap`.
+    /// Once a preliminary instance has been inserted this way, it becomes integrated into ywasm
+    /// document store and cannot be nested again: attempt to do so will result in an exception.
     #[wasm_bindgen(constructor)]
     pub fn new(init: Option<js_sys::Object>) -> Self {
         let map = if let Some(object) = init {
@@ -509,6 +904,11 @@ impl YMap {
         YMap(SharedType::prelim(map))
     }
 
+    /// Returns true if this is a preliminary instance of `YMap`.
+    ///
+    /// Preliminary instances can be nested into other shared data types such as `YArray` and `YMap`.
+    /// Once a preliminary instance has been inserted this way, it becomes integrated into ywasm
+    /// document store and cannot be nested again: attempt to do so will result in an exception.
     #[wasm_bindgen(method, getter)]
     pub fn prelim(&self) -> bool {
         if let SharedType::Prelim(_) = &*self.0.borrow() {
@@ -518,6 +918,7 @@ impl YMap {
         }
     }
 
+    /// Returns a number of entries stored within this instance of `YMap`.
     #[wasm_bindgen(method)]
     pub fn length(&self, txn: &YTransaction) -> u32 {
         match &*self.0.borrow() {
@@ -526,6 +927,7 @@ impl YMap {
         }
     }
 
+    /// Converts contents of this `YMap` instance into a JSON representation.
     #[wasm_bindgen(js_name = toJson)]
     pub fn to_json(&self, txn: &YTransaction) -> JsValue {
         match &*self.0.borrow() {
@@ -540,6 +942,8 @@ impl YMap {
         }
     }
 
+    /// Sets a given `key`-`value` entry within this instance of `YMap`. If another entry was
+    /// already stored under given `key`, it will be overridden with new `value`.
     #[wasm_bindgen(js_name = set)]
     pub fn set(&self, txn: &mut YTransaction, key: &str, value: JsValue) {
         match &mut *self.0.borrow_mut() {
@@ -552,6 +956,7 @@ impl YMap {
         }
     }
 
+    /// Removes an entry identified by a given `key` from this instance of `YMap`, if such exists.
     #[wasm_bindgen(js_name = delete)]
     pub fn delete(&mut self, txn: &mut YTransaction, key: &str) {
         match &mut *self.0.borrow_mut() {
@@ -564,6 +969,8 @@ impl YMap {
         }
     }
 
+    /// Returns value of an entry stored under given `key` within this instance of `YMap`,
+    /// or `undefined` if no such entry existed.
     #[wasm_bindgen(js_name = get)]
     pub fn get(&self, txn: &mut YTransaction, key: &str) -> JsValue {
         match &*self.0.borrow() {
@@ -584,6 +991,29 @@ impl YMap {
         }
     }
 
+    /// Returns an iterator that can be used to traverse over all entries stored within this
+    /// instance of `YMap`. Order of entry is not specified.
+    ///
+    /// Example:
+    ///
+    /// ```javascript
+    /// import YDoc from 'ywasm'
+    ///
+    /// /// document on machine A
+    /// const doc = new YDoc()
+    /// const map = doc.getMap('name')
+    /// const txn = doc.beginTransaction()
+    /// try {
+    ///     map.set(txn, 'key1', 'value1')
+    ///     map.set(txn, 'key2', true)
+    ///
+    ///     for (let [key, value] of map.entries(txn)) {
+    ///         console.log(key, value)
+    ///     }
+    /// } finally {
+    ///     txn.free()
+    /// }
+    /// ```
     #[wasm_bindgen(js_name = entries)]
     pub fn entries(&self, txn: &mut YTransaction) -> JsValue {
         to_iter(match &*self.0.borrow() {
@@ -662,20 +1092,37 @@ impl PrelimMapIterator {
     }
 }
 
+/// XML element data type. It represents an XML node, which can contain key-value attributes
+/// (interpreted as strings) as well as other nested XML elements or rich text (represented by
+/// `YXmlText` type).
+///
+/// In terms of conflict resolution, `YXmlElement` uses following rules:
+///
+/// - Attribute updates use logical last-write-wins principle, meaning the past updates are
+///   automatically overridden and discarded by newer ones, while concurrent updates made by
+///   different peers are resolved into a single value using document id seniority to establish
+///   an order.
+/// - Child node insertion uses sequencing rules from other Yrs collections - elements are inserted
+///   using interleave-resistant algorithm, where order of concurrent inserts at the same index
+///   is established using peer's document id seniority.
 #[wasm_bindgen]
 pub struct YXmlElement(XmlElement);
+
 #[wasm_bindgen]
 impl YXmlElement {
+    /// Returns a tag name of this XML node.
     #[wasm_bindgen(method, getter)]
     pub fn name(&self) -> String {
         self.0.tag().to_string()
     }
 
+    /// Returns a number of child XML nodes stored within this `YXMlElement` instance.
     #[wasm_bindgen(js_name = length)]
     pub fn length(&self, txn: &YTransaction) -> u32 {
         self.0.len(txn)
     }
 
+    /// Inserts a new instance of `YXmlElement` as a child of this XML node and returns it.
     #[wasm_bindgen(js_name = insertXmlElement)]
     pub fn insert_xml_element(
         &self,
@@ -686,26 +1133,33 @@ impl YXmlElement {
         YXmlElement(self.0.insert_elem(txn, index, name))
     }
 
+    /// Inserts a new instance of `YXmlText` as a child of this XML node and returns it.
     #[wasm_bindgen(js_name = insertXmlText)]
     pub fn insert_xml_text(&self, txn: &mut YTransaction, index: u32) -> YXmlText {
         YXmlText(self.0.insert_text(txn, index))
     }
 
+    /// Removes a range of children XML nodes from this `YXmlElement` instance,
+    /// starting at given `index`.
     #[wasm_bindgen(js_name = delete)]
     pub fn delete(&self, txn: &mut YTransaction, index: u32, length: u32) {
         self.0.remove_range(txn, index, length)
     }
 
+    /// Appends a new instance of `YXmlElement` as the last child of this XML node and returns it.
     #[wasm_bindgen(js_name = pushXmlElement)]
     pub fn push_xml_element(&self, txn: &mut YTransaction, name: &str) -> YXmlElement {
         YXmlElement(self.0.push_elem_back(txn, name))
     }
 
+    /// Appends a new instance of `YXmlText` as the last child of this XML node and returns it.
     #[wasm_bindgen(js_name = pushXmlText)]
     pub fn push_xml_text(&self, txn: &mut YTransaction) -> YXmlText {
         YXmlText(self.0.push_text_back(txn))
     }
 
+    /// Returns a first child of this XML node.
+    /// It can be either `YXmlElement`, `YXmlText` or `undefined` if current node has not children.
     #[wasm_bindgen(js_name = firstChild)]
     pub fn first_child(&self, txn: &YTransaction) -> JsValue {
         if let Some(xml) = self.0.first_child(txn) {
@@ -715,6 +1169,9 @@ impl YXmlElement {
         }
     }
 
+    /// Returns a next XML sibling node of this XMl node.
+    /// It can be either `YXmlElement`, `YXmlText` or `undefined` if current node is a last child of
+    /// parent XML node.
     #[wasm_bindgen(js_name = nextSibling)]
     pub fn next_sibling(&self, txn: &YTransaction) -> JsValue {
         if let Some(xml) = self.0.next_sibling(txn) {
@@ -724,6 +1181,9 @@ impl YXmlElement {
         }
     }
 
+    /// Returns a previous XML sibling node of this XMl node.
+    /// It can be either `YXmlElement`, `YXmlText` or `undefined` if current node is a first child
+    /// of parent XML node.
     #[wasm_bindgen(js_name = prevSibling)]
     pub fn prev_sibling(&self, txn: &YTransaction) -> JsValue {
         if let Some(xml) = self.0.prev_sibling(txn) {
@@ -733,26 +1193,44 @@ impl YXmlElement {
         }
     }
 
+    /// Returns a parent `YXmlElement` node or `undefined` if current node has no parent assigned.
+    #[wasm_bindgen(js_name = prevSibling)]
+    pub fn parent(&self, txn: &YTransaction) -> JsValue {
+        if let Some(xml) = self.0.parent(txn) {
+            xml_into_js(Xml::Element(xml))
+        } else {
+            JsValue::undefined()
+        }
+    }
+
+    /// Returns a string representation of this XML node.
     #[wasm_bindgen(js_name = toString)]
     pub fn to_string(&self, txn: &YTransaction) -> String {
         self.0.to_string(txn)
     }
 
+    /// Sets a `name` and `value` as new attribute for this XML node. If an attribute with the same
+    /// `name` already existed on that node, its value with be overridden with a provided one.
     #[wasm_bindgen(js_name = setAttribute)]
     pub fn set_attribute(&self, txn: &mut YTransaction, name: &str, value: &str) {
         self.0.insert_attribute(txn, name, value)
     }
 
+    /// Returns a value of an attribute given its `name`. If no attribute with such name existed,
+    /// `null` will be returned.
     #[wasm_bindgen(js_name = getAttribute)]
     pub fn get_attribute(&self, txn: &YTransaction, name: &str) -> Option<String> {
         self.0.get_attribute(txn, name)
     }
 
+    /// Removes an attribute from this XML node, given its `name`.
     #[wasm_bindgen(js_name = removeAttribute)]
     pub fn remove_attribute(&self, txn: &mut YTransaction, name: &str) {
         self.0.remove_attribute(txn, name);
     }
 
+    /// Returns an iterator that enables to traverse over all attributes of this XML node in
+    /// unspecified order.
     #[wasm_bindgen(js_name = attributes)]
     pub fn attributes(&self, txn: &YTransaction) -> JsValue {
         to_iter(unsafe {
@@ -764,6 +1242,8 @@ impl YXmlElement {
         })
     }
 
+    /// Returns an iterator that enables a deep traversal of this XML node - starting from first
+    /// child over this XML node successors using depth-first strategy.
     #[wasm_bindgen(js_name = treeWalker)]
     pub fn tree_walker(&self, txn: &YTransaction) -> JsValue {
         to_iter(unsafe {
@@ -829,31 +1309,56 @@ impl YXmlTreeWalker {
     }
 }
 
+/// A shared data type used for collaborative text editing, that can be used in a context of
+/// `YXmlElement` nodee. It enables multiple users to add and remove chunks of text in efficient
+/// manner. This type is internally represented as a mutable double-linked list of text chunks
+/// - an optimization occurs during `YTransaction.commit`, which allows to squash multiple
+/// consecutively inserted characters together as a single chunk of text even between transaction
+/// boundaries in order to preserve more efficient memory model.
+///
+/// Just like `YXmlElement`, `YXmlText` can be marked with extra metadata in form of attributes.
+///
+/// `YXmlText` structure internally uses UTF-8 encoding and its length is described in a number of
+/// bytes rather than individual characters (a single UTF-8 code point can consist of many bytes).
+///
+/// Like all Yrs shared data types, `YXmlText` is resistant to the problem of interleaving (situation
+/// when characters inserted one after another may interleave with other peers concurrent inserts
+/// after merging all updates together). In case of Yrs conflict resolution is solved by using
+/// unique document id to determine correct and consistent ordering.
 #[wasm_bindgen]
 pub struct YXmlText(XmlText);
 
 #[wasm_bindgen]
 impl YXmlText {
+    /// Returns length of an underlying string stored in this `YXmlText` instance,
+    /// understood as a number of UTF-8 encoded bytes.
     #[wasm_bindgen(method, getter)]
     pub fn length(&self) -> u32 {
         self.0.len()
     }
 
+    /// Inserts a given `chunk` of text into this `YXmlText` instance, starting at a given `index`.
     #[wasm_bindgen(js_name = insert)]
     pub fn insert(&self, txn: &mut YTransaction, index: i32, chunk: &str) {
         self.0.insert(txn, index as u32, chunk)
     }
 
+    /// Appends a given `chunk` of text at the end of `YXmlText` instance.
     #[wasm_bindgen(js_name = push)]
     pub fn push(&self, txn: &mut YTransaction, chunk: &str) {
         self.0.push(txn, chunk)
     }
 
+    /// Deletes a specified range of of characters, starting at a given `index`.
+    /// Both `index` and `length` are counted in terms of a number of UTF-8 character bytes.
     #[wasm_bindgen(js_name = delete)]
     pub fn delete(&self, txn: &mut YTransaction, index: u32, length: u32) {
         self.0.remove_range(txn, index, length)
     }
 
+    /// Returns a next XML sibling node of this XMl node.
+    /// It can be either `YXmlElement`, `YXmlText` or `undefined` if current node is a last child of
+    /// parent XML node.
     #[wasm_bindgen(js_name = nextSibling)]
     pub fn next_sibling(&self, txn: &YTransaction) -> JsValue {
         if let Some(xml) = self.0.next_sibling(txn) {
@@ -863,6 +1368,9 @@ impl YXmlText {
         }
     }
 
+    /// Returns a previous XML sibling node of this XMl node.
+    /// It can be either `YXmlElement`, `YXmlText` or `undefined` if current node is a first child
+    /// of parent XML node.
     #[wasm_bindgen(js_name = prevSibling)]
     pub fn prev_sibling(&self, txn: &YTransaction) -> JsValue {
         if let Some(xml) = self.0.prev_sibling(txn) {
@@ -872,26 +1380,44 @@ impl YXmlText {
         }
     }
 
+    /// Returns a parent `YXmlElement` node or `undefined` if current node has no parent assigned.
+    #[wasm_bindgen(js_name = prevSibling)]
+    pub fn parent(&self, txn: &YTransaction) -> JsValue {
+        if let Some(xml) = self.0.parent(txn) {
+            xml_into_js(Xml::Element(xml))
+        } else {
+            JsValue::undefined()
+        }
+    }
+
+    /// Returns an underlying string stored in this `YXmlText` instance.
     #[wasm_bindgen(js_name = toString)]
     pub fn to_string(&self, txn: &YTransaction) -> String {
         self.0.to_string(txn)
     }
 
+    /// Sets a `name` and `value` as new attribute for this XML node. If an attribute with the same
+    /// `name` already existed on that node, its value with be overridden with a provided one.
     #[wasm_bindgen(js_name = setAttribute)]
     pub fn set_attribute(&self, txn: &mut YTransaction, name: &str, value: &str) {
         self.0.insert_attribute(txn, name, value);
     }
 
+    /// Returns a value of an attribute given its `name`. If no attribute with such name existed,
+    /// `null` will be returned.
     #[wasm_bindgen(js_name = getAttribute)]
     pub fn get_attribute(&self, txn: &YTransaction, name: &str) -> Option<String> {
         self.0.get_attribute(txn, name)
     }
 
+    /// Removes an attribute from this XML node, given its `name`.
     #[wasm_bindgen(js_name = removeAttribute)]
     pub fn remove_attribute(&self, txn: &mut YTransaction, name: &str) {
         self.0.remove_attribute(txn, name);
     }
 
+    /// Returns an iterator that enables to traverse over all attributes of this XML node in
+    /// unspecified order.
     #[wasm_bindgen(js_name = attributes)]
     pub fn attributes(&self, txn: &YTransaction) -> YXmlAttributes {
         unsafe {
