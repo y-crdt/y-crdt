@@ -118,8 +118,10 @@ export const testGet = tc => {
     t.compare(third, 2)
     t.compare(fourth, true)
 
-    const fifth = d1.transact(txn => x.get(txn, 5))
-    t.compare(fifth, undefined)
+    t.fails(() => {
+        // should fail because it's outside of the bounds
+        d1.transact(txn => x.get(txn, 5))
+    })
 }
 
 /**

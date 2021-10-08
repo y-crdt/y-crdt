@@ -1194,7 +1194,7 @@ impl YXmlElement {
     }
 
     /// Returns a parent `YXmlElement` node or `undefined` if current node has no parent assigned.
-    #[wasm_bindgen(js_name = prevSibling)]
+    #[wasm_bindgen(js_name = parent)]
     pub fn parent(&self, txn: &YTransaction) -> JsValue {
         if let Some(xml) = self.0.parent(txn) {
             xml_into_js(Xml::Element(xml))
@@ -1381,7 +1381,7 @@ impl YXmlText {
     }
 
     /// Returns a parent `YXmlElement` node or `undefined` if current node has no parent assigned.
-    #[wasm_bindgen(js_name = prevSibling)]
+    #[wasm_bindgen(js_name = parent)]
     pub fn parent(&self, txn: &YTransaction) -> JsValue {
         if let Some(xml) = self.0.parent(txn) {
             xml_into_js(Xml::Element(xml))
