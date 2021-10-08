@@ -15,6 +15,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Install nodejs
+        uses: actions/setup-node@v2
+        with:
+          node-version: '14'
+
       - name: Checkout sources
         uses: actions/checkout@v2
 
@@ -30,8 +35,14 @@ jobs:
       - name: Run tests
         run: cargo test --verbose
 
+      - name: Install cbindgen
+        run: cargo install cbindgen
+
       - name: Generate C bindings
-        run: cargo install cbindgen && cbindgen --config ./yrs-api-wrapper/cbindgen.toml --crate yrs-api-wrapper --output ./ffi-tests/include/libyrs.h
+        run: cbindgen --config ./yrs-api-wrapper/cbindgen.toml --crate yrs-api-wrapper --output ./ffi-tests/include/libyrs.h
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 
       - name: Build wasm
         run: wasm-pack build --target nodejs ./ywasm
