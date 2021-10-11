@@ -93,8 +93,7 @@ impl Doc {
     pub fn apply_update_v1(&self, tr: &mut Transaction, update: &[u8]) {
         let mut decoder = DecoderV1::from(update);
         let update = Update::decode(&mut decoder);
-        let ds = DeleteSet::decode(&mut decoder);
-        tr.apply_update(update, ds)
+        tr.apply_update(update)
     }
 
     /// Retrieve document state vector in order to encode the document diff. This state vector
@@ -202,7 +201,8 @@ mod test {
         let update = Update::decode_v1(binary.as_slice());
         let pending = update.integrate(&mut t2);
 
-        assert!(pending.is_none());
+        assert!(pending.0.is_none());
+        assert!(pending.1.is_none());
 
         // check if B sees the same thing that A does
         let txt = t2.get_text("test");

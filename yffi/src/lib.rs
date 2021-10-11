@@ -559,8 +559,7 @@ pub unsafe extern "C" fn ytransaction_apply(
     let update = std::slice::from_raw_parts(diff as *const u8, diff_len as usize);
     let mut decoder = DecoderV1::from(update);
     let update = Update::decode(&mut decoder);
-    let ds = DeleteSet::decode(&mut decoder);
-    txn.as_mut().unwrap().apply_update(update, ds)
+    txn.as_mut().unwrap().apply_update(update)
 }
 
 /// Returns the length of the `YText` string content in bytes (without the null terminator character)

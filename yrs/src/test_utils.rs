@@ -124,7 +124,6 @@ impl TestConnector {
                     let mut encoder = EncoderV1::new();
                     encoder.write_uvar(MSG_SYNC_UPDATE);
                     e.update.encode(&mut encoder);
-                    e.delete_set.encode(&mut encoder);
                     encoder.to_vec()
                 };
                 let mut inner = rc.borrow_mut();

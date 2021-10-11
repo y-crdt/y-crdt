@@ -54,7 +54,7 @@ impl<'a> Transaction<'a> {
     }
 
     /// Encodes the difference between remove peer state given its `state_vector` and the state
-    /// of a current local peer  
+    /// of a current local peer
     pub fn encode_diff<E: Encoder>(&self, state_vector: &StateVector, encoder: &mut E) {
         self.store.encode_diff(state_vector, encoder)
     }
@@ -360,14 +360,13 @@ impl<'a> Transaction<'a> {
         result
     }
 
-    pub fn apply_update(&mut self, mut update: Update, mut ds: DeleteSet) {
+    pub fn apply_update(&mut self, mut update: Update) {
         if self.store.update_events.has_subscribers() {
-            let event = UpdateEvent::new(update, ds);
+            let event = UpdateEvent::new(update);
             self.store.update_events.publish(&event);
             update = event.update;
-            ds = event.delete_set;
         }
-        let remaining = update.integrate(self);
+        let (remaining, remainingDs) = update.integrate(self);
 
         let mut retry = false;
         if let Some(mut pending) = self.store.pending.take() {
@@ -384,33 +383,36 @@ impl<'a> Transaction<'a> {
                 for (&client, &clock) in remaining.missing.iter() {
                     pending.missing.set_min(client, clock);
                 }
-                pending.update.merge(remaining.update);
+                pending.update = Update::merge_updates(vec![pending.update, remaining.update]);
                 self.store.pending = Some(pending);
             }
         } else {
             self.store.pending = remaining;
         }
 
-        let ds = self.apply_delete(&ds);
         if let Some(pending) = self.store.pending_ds.take() {
             let ds2 = self.apply_delete(&pending);
-            let ds = match (ds, ds2) {
+            let ds = match (remainingDs, ds2) {
                 (Some(mut a), Some(b)) => {
-                    a.merge(&b);
-                    Some(a)
+                    a.delete_set.merge(&b);
+                    Some(a.delete_set)
                 }
-                (Some(x), _) | (_, Some(x)) => Some(x),
+                (Some(x), _) => Some(x.delete_set),
+                (_, Some(x)) => Some(x),
                 _ => None,
             };
             self.store.pending_ds = ds;
         } else {
-            self.store.pending_ds = ds;
+            self.store.pending_ds = remainingDs.map(|update| update.delete_set);
         }
 
         if retry {
             if let Some(pending) = self.store.pending.take() {
                 let ds = self.store.pending_ds.take().unwrap_or_default();
-                self.apply_update(pending.update, ds);
+                let mut ds_update = Update::new();
+                ds_update.delete_set = ds;
+                self.apply_update(pending.update);
+                self.apply_update(ds_update)
             }
         }
     }
