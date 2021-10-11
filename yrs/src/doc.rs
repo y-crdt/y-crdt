@@ -214,7 +214,7 @@ mod test {
         let mut doc2 = Doc::new();
         let c = counter.clone();
         let sub = doc2.on_update(move |e| {
-            for block in e.update.blocks() {
+            for block in e.update.blocks.blocks() {
                 c.set(c.get() + block.len());
             }
         });
