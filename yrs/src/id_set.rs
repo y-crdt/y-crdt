@@ -279,9 +279,9 @@ impl IdSet {
 
     /// Merges another ID set into a current one, combining their information about observed ID
     /// ranges and squashing them if necessary.
-    pub fn merge(&mut self, other: &Self) {
-        other.0.iter().for_each(|(client, range)| {
-            match self.0.entry(*client) {
+    pub fn merge(&mut self, other: Self) {
+        other.0.into_iter().for_each(|(client, range)| {
+            match self.0.entry(client) {
                 Entry::Occupied(mut e) => {
                     let r = e.get_mut();
                     match (r, range) {
@@ -294,21 +294,21 @@ impl IdSet {
                             }
                         }
                         (IdRange::Fragmented(rs), IdRange::Continuous(r)) => {
-                            rs.push(r.clone());
+                            rs.push(r);
                         }
                         (IdRange::Continuous(r), IdRange::Fragmented(rs)) => {
-                            let mut v = rs.clone();
+                            let mut v = rs;
                             v.push(r.clone());
                             let new = IdRange::Fragmented(v);
                             e.replace_entry(new);
                         }
-                        (IdRange::Fragmented(rs1), IdRange::Fragmented(rs2)) => {
-                            rs1.append(&mut rs2.clone());
+                        (IdRange::Fragmented(rs1), IdRange::Fragmented(mut rs2)) => {
+                            rs1.append(&mut rs2);
                         }
                     }
                 }
                 Entry::Vacant(e) => {
-                    e.insert(range.clone());
+                    e.insert(range);
                 }
             }
         });
@@ -443,8 +443,8 @@ impl DeleteSet {
 
     /// Merges another delete set into a current one, combining their information about deleted
     /// clock ranges.
-    pub fn merge(&mut self, other: &Self) {
-        self.0.merge(&other.0)
+    pub fn merge(&mut self, other: Self) {
+        self.0.merge(other.0)
     }
 
     /// Squashes the contents of a current delete set. This operation means, that in case when

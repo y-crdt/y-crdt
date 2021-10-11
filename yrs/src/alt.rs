@@ -1,7 +1,7 @@
-use crate::update::{Update};
+use crate::update::Update;
 use crate::updates::decoder::{Decode, DecoderV1};
 use crate::updates::encoder::{Encode, Encoder, EncoderV1};
-use crate::{StateVector};
+use crate::StateVector;
 use lib0::decoding::Cursor;
 
 

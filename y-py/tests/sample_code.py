@@ -36,8 +36,6 @@ print('merged', merged)
 
 print('is expected result', numpy.array_equal(merged, [1, 2, 129, 231, 135, 164, 7, 0, 4, 1, 4, 49, 50, 51, 52, 1, 97, 68, 129, 231, 135, 164, 7, 0, 1, 98, 0]))
 
-
-
 # test here the other functions :
 # y_py.merge_updates
 # y_py.diff_updates

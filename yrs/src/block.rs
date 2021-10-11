@@ -155,7 +155,6 @@ impl Block {
             Block::Skip(skip) => Block::Skip(Skip { id: ID { client: skip.id.client, clock: skip.id.clock + offset }, len: skip.len - offset }),
             Block::GC(gc) => Block::GC(GC { id: ID { client: gc.id.client, clock: gc.id.clock + offset }, len: gc.len })
         }
-
     }
 
     /// Tries to cast this [Block] into an immutable [Item] reference, returning `None` if block was
