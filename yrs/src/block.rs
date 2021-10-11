@@ -127,7 +127,7 @@ impl PartialEq for BlockPtr {
 
 /// An enum containing all supported block variants.
 #[derive(Debug, PartialEq, Clone)]
-pub enum Block {
+pub(crate) enum Block {
     /// An active block containing user data.
     Item(Item),
 
