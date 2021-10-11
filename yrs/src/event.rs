@@ -1,4 +1,3 @@
-use crate::id_set::DeleteSet;
 use crate::update::Update;
 use rand::RngCore;
 use std::cell::RefCell;

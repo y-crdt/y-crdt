@@ -3,8 +3,6 @@ use crate::types::{Branch, BranchRef, TypePtr, Value, TYPE_REFS_ARRAY};
 use crate::Transaction;
 use lib0::any::Any;
 use std::collections::VecDeque;
-use std::error::Error;
-use std::fmt::Formatter;
 
 /// A collection used to store data in an indexed sequence structure. This type is internally
 /// implemented as a double linked list, which may squash values inserted directly one after another
