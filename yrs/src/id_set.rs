@@ -3,7 +3,6 @@ use crate::block_store::BlockStore;
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::client_hasher::ClientHasher;
-use crate::*;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::hash::BuildHasherDefault;

@@ -476,7 +476,7 @@ fn merge_updates_helper(block_stores: Vec<Update>) -> Update {
         // write from currDecoder until the next operation is from another client or if filler-struct
         // then we need to reorder the decoders and find the next operation to write
         let mut curr: Option<&Block> = curr_decoder.current;
-        let mut tmp_curr = None;
+        let tmp_curr;
         let first_client = curr.unwrap().id().client;
 
         if let Some(curr_write_block) = &mut curr_write {
@@ -700,11 +700,10 @@ impl<'a> Iterator for Blocks<'a> {
 #[cfg(test)]
 mod test {
     use crate::block::{Block, Item, ItemContent};
-    use crate::id_set::DeleteSet;
     use crate::types::TypePtr;
     use crate::update::Update;
     use crate::updates::decoder::{Decode, DecoderV1};
-    use crate::{Doc, ID, merge_updates};
+    use crate::{Doc, ID};
     use lib0::decoding::Cursor;
     use std::rc::Rc;
 

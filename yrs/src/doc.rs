@@ -1,12 +1,10 @@
 use crate::block_store::StateVector;
 use crate::event::{Subscription, UpdateEvent};
-use crate::id_set::DeleteSet;
 use crate::store::Store;
 use crate::transaction::Transaction;
 use crate::update::Update;
 use crate::updates::decoder::{Decode, DecoderV1};
 use crate::updates::encoder::{Encode, Encoder, EncoderV1};
-use crate::*;
 use rand::Rng;
 use std::cell::RefCell;
 

@@ -366,7 +366,7 @@ impl<'a> Transaction<'a> {
             self.store.update_events.publish(&event);
             update = event.update;
         }
-        let (remaining, remainingDs) = update.integrate(self);
+        let (remaining, remaining_ds) = update.integrate(self);
 
         let mut retry = false;
         if let Some(mut pending) = self.store.pending.take() {
@@ -392,7 +392,7 @@ impl<'a> Transaction<'a> {
 
         if let Some(pending) = self.store.pending_ds.take() {
             let ds2 = self.apply_delete(&pending);
-            let ds = match (remainingDs, ds2) {
+            let ds = match (remaining_ds, ds2) {
                 (Some(mut a), Some(b)) => {
                     a.delete_set.merge(&b);
                     Some(a.delete_set)
@@ -403,7 +403,7 @@ impl<'a> Transaction<'a> {
             };
             self.store.pending_ds = ds;
         } else {
-            self.store.pending_ds = remainingDs.map(|update| update.delete_set);
+            self.store.pending_ds = remaining_ds.map(|update| update.delete_set);
         }
 
         if retry {

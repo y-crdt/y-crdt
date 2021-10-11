@@ -12,7 +12,7 @@ use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1};
 use yrs::StateVector;
 use yrs::Update;
-use yrs::{DeleteSet, Xml};
+use yrs::{Xml};
 
 /// Flag used by `YInput` and `YOutput` to tag boolean values.
 #[no_mangle]
@@ -1616,8 +1616,8 @@ impl YInput {
                 Any::Array(dst)
             } else if tag == Y_JSON_MAP {
                 let mut dst = HashMap::with_capacity(self.len as usize);
-                let mut keys = self.value.map.keys;
-                let mut values = self.value.map.values;
+                let keys = self.value.map.keys;
+                let values = self.value.map.values;
                 let mut i = 0;
                 while i < self.len as isize {
                     let key = CStr::from_ptr(keys.offset(i).read())
@@ -1710,9 +1710,9 @@ impl Prelim for YInput {
         unsafe {
             if self.tag == Y_MAP {
                 let map = Map::from(inner_ref);
-                let mut keys = self.value.map.keys;
-                let mut values = self.value.map.values;
-                let mut i = 0;
+                let keys = self.value.map.keys;
+                let values = self.value.map.values;
+                let i = 0;
                 while i < self.len as isize {
                     let key = CStr::from_ptr(keys.offset(i).read())
                         .to_str()
