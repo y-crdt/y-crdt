@@ -1,36 +1,68 @@
 # Yrs
 
-> Yjs port to Rust (WIP). [Rust Docs](https://docs.rs/yrs/)
+Yrs (read: *wires*) is a Rust port of the [Yjs framework](https://yjs.dev/). 
 
-Yrs "wires" is a Rust port of the Yjs framework. The [Ywasm](https://github.com/yjs/Ywasm) project generates a wasm library based on this package.
+It's a library used on collaborative document editing using Conflict-free Replicated Data Types.
+This enables to provide a shared document editing experience on a client devices without explicit requirement for hosting a single server - CRDTs can resolve potential update conflicts on their own with no central authority - as well as provide first-class offline editing capabilities, where document replicas are modified without having connection to each other, and then synchronize automatically once such connection is enabled.
 
-## Status
+This library contains Rust API, that's used further on by other projects in this repository:
 
-> :warning: Highly experimental. Feedback and involvement is welcome!
+- [C foreign function interface](../yrs-api-wrapper/README.md) to provide native interop that could be used by other host languages like Swift or Java.
+- [ywasm](../ywasm/README.md) which targets Web Assembly bindings and can be used directly from JavaScript.
 
-* Partially implemented the binary encoding protocol. Still need to port the rest of lib0/encoding.
-* Only implements the Text type.
-* No conflict resolution yet.
+## Example
 
-I'm currently mainly experimenting with designing a convenient API for the Yrs CRDT. I want to make it work very similar to Yjs, but contrary to Yjs you should always know what you get back (proper types, no duck typing).
+```rust
+use yrs::*;
 
-## Run an example
+fn main() {    
+    let doc = Doc::new();
+    let mut txn = doc.transact(); // all Yrs operations happen in scope of a transaction
+    let text = txn.get_text("name");
+    // append text to our collaborative document
+    text.push(&mut txn, "hello world"); 
+    
+    // simulate update with remote peer
+    let remote_doc = Doc::new();
+    let mut remote_txn = remote_doc.transact();
+    let remote_text = remote_txn.get_text("name");
 
-```sh
-cargo run --example [example-name]
+    // in order to exchange data with other documents 
+    // we first need to create a state vector
+    let state_vector = remote_doc.get_state_vector(&remote_txn);
+    
+    // now compute a differential update based on remote document's state vector
+    let update = doc.encode_delta_as_update_v1(&txn, &state_vector);
+    
+    // both update and state vector are serializable, we can pass them over the wire
+    // now apply update to a remote document
+    remote_doc.apply_update_v1(&mut remote_txn, update.as_slice());
+
+    println!("{}", remote_text.to_string(&remote_txn));
+}
+
 ```
 
-## Run benchmarks
+## [Documentation](https://docs.rs/yrs/)
 
-```sh
-cargo bench
-```
+## Features
 
-## Run tests & documentation examples
+We're in ongoing process of reaching the feature compatibility with Yjs project. Current feature list:
 
-```sh
-cargo test
-```
+- [x] Yjs update binary format (v1).
+- [ ] Yjs update binary format (v2).
+- [x] Support for state vectors, delta diff updates and merges.
+- [x] Subscription events for incoming updates.
+- [x] Support for shared (CRDT) types:
+  - [x] Text
+  - [x] Array
+  - [x] Map
+  - [x] XML data types (elements and text)
+  - [ ] Subdocuments
+  - [ ] Subscription events on particular data type
+- [ ] Cross-platform support for unicode code points
+- [ ] Undo manager
+- [ ] Text markers
 
 ## Internal Documentation
 
@@ -40,25 +72,16 @@ Eventually Yrs might replace the Yjs module by generating a wasm module from
 this package.
 
 In this package we want to use better terminology and experiment with new data
-structures to index data. Most CRDTs need to iterate the list structure to find
-an insert position. When the document is large, finding the correct position
-might be very expensive. Yjs uses a form of caching to index list positions. In
-Yrs we want to use skip lists to index positions (e.g.
-[skiplistrs](https://github.com/josephg/skiplistrs)).
-
-In Yjs we use the term *Struct* to refer to the building blocks of which Yjs
-types are composed. In some CRDTs, the term operation is prefered. In Yjs the
-document is composed out of the operations objects. Since operations usually
-represent a change on a document, the term seems inapproriate in implementations
-of Yjs. Now the term *Struct* is ambigious in the Rust language because 
-*struct* is a keyword and is used in a different context.
+structures to index data.
 
 Each change on the document generates a small piece of information that is
 integrated into the document. In Yrs we call these small pieces **blocks**.
-Thinks of them as small Lego blocks that compose your document. Each block is
-uniquely identified by an identifier. When you receive a duplicate block, you
-discard it. In some cases blocks can be put together to form a larger block. If
-necessary, blocks can be disassembled if only a part of the composed block is needed.
+Think of them as small Lego blocks that compose your document. Each block is
+uniquely identified by an identifier consisting of client id and sequence number 
+(see: [Lamport Clock](https://en.wikipedia.org/wiki/Lamport_timestamp)). 
+When you receive a duplicate block, you discard it. In some cases blocks can be put 
+together to form a larger block. If necessary, blocks can be disassembled if only 
+a part of the composed block is needed.
 
 More information on the implemented algorithm can be found here:
 
