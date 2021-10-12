@@ -7,3 +7,5 @@ pkg
 .vscode/
 cmake-build-debug/
 ffi-tests/lib
+ywasm/pkg
+node_modules/

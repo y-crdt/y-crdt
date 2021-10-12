@@ -1,5 +1,8 @@
 use crate::block::{Item, ItemContent, ItemPosition, Prelim};
-use crate::types::{Branch, BranchRef, Entries, Map, Text, TypePtr, Value, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT, TYPE_REFS_XML_FRAGMENT};
+use crate::types::{
+    Branch, BranchRef, Entries, Map, Text, TypePtr, Value, TYPE_REFS_XML_ELEMENT,
+    TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_TEXT,
+};
 use crate::Transaction;
 use lib0::any::Any;
 use std::cell::Ref;
@@ -441,7 +444,8 @@ impl<'a, 'txn> Iterator for TreeWalker<'a, 'txn> {
                         let inner = t.borrow();
                         let type_ref = inner.type_ref();
                         if !current.is_deleted()
-                            && (type_ref == TYPE_REFS_XML_ELEMENT || type_ref == TYPE_REFS_XML_FRAGMENT)
+                            && (type_ref == TYPE_REFS_XML_ELEMENT
+                                || type_ref == TYPE_REFS_XML_FRAGMENT)
                             && inner.start.is_some()
                         {
                             // walk down in the tree
@@ -640,7 +644,7 @@ impl XmlText {
     }
 
     /// Returns a number of characters contained under this XML text structure.
-    pub fn len(&self, _txn: &Transaction) -> u32 {
+    pub fn len(&self) -> u32 {
         self.0.len()
     }
 
@@ -658,7 +662,7 @@ impl XmlText {
 
     /// Appends a new string `content` at the end of this XML text structure.
     pub fn push(&self, txn: &mut Transaction, content: &str) {
-        let len = self.len(txn);
+        let len = self.len();
         self.insert(txn, len, content);
     }
 

@@ -1,0 +1,19 @@
+{
+  "name": "wasm-tests",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Test suite for Yrs Web Assembly package.",
+  "main": "index.js",
+  "scripts": {
+    "test": "node  --experimental-wasm-modules index.js"
+  },
+  "contributors": [
+    "Bartosz Sypytkowski <b.sypytkowski@gmail.com>",
+    "Kevin Jahns <kevin.jahns@pm.me>"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "lib0": "^0.2.42",
+    "ywasm": "file:../ywasm/pkg"
+  }
+}
