@@ -1,7 +1,7 @@
 use lib0::any::Any;
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
-use std::mem::{forget, MaybeUninit, ManuallyDrop};
+use std::mem::{forget, ManuallyDrop, MaybeUninit};
 use std::os::raw::{c_char, c_float, c_int, c_long, c_uchar, c_ulong};
 use yrs::block::{ItemContent, Prelim};
 use yrs::types::{
@@ -455,10 +455,7 @@ pub unsafe extern "C" fn ymap(txn: *mut Transaction, name: *const c_char) -> *mu
 /// will not remove `YXmlElement` instance from the document itself (once created it'll last for
 /// the entire lifecycle of a document).
 #[no_mangle]
-pub unsafe extern "C" fn yxmlelem(
-    txn: *mut Transaction,
-    name: *const c_char,
-) -> *mut XmlElement {
+pub unsafe extern "C" fn yxmlelem(txn: *mut Transaction, name: *const c_char) -> *mut XmlElement {
     assert!(!txn.is_null());
     assert!(!name.is_null());
 
@@ -551,7 +548,11 @@ pub unsafe extern "C" fn ytransaction_state_diff_v1(
 ///
 /// A length of generated `diff` binary must be passed within a `diff_len` out parameter.
 #[no_mangle]
-pub unsafe extern "C" fn ytransaction_apply(txn: *mut Transaction, diff: *const c_uchar, diff_len: c_int) {
+pub unsafe extern "C" fn ytransaction_apply(
+    txn: *mut Transaction,
+    diff: *const c_uchar,
+    diff_len: c_int,
+) {
     assert!(!txn.is_null());
     assert!(!diff.is_null());
 
@@ -1112,8 +1113,7 @@ pub unsafe extern "C" fn yxmlelem_next_sibling(
 
     if let Some(next) = xml.next_sibling(txn) {
         match next {
-            Xml::Element(v) =>
-                Box::into_raw(Box::new(YOutput::from(Value::YXmlElement(v)))),
+            Xml::Element(v) => Box::into_raw(Box::new(YOutput::from(Value::YXmlElement(v)))),
             Xml::Text(v) => Box::into_raw(Box::new(YOutput::from(Value::YXmlText(v)))),
         }
     } else {
@@ -1226,7 +1226,10 @@ pub unsafe extern "C" fn yxmlelem_parent(
 /// Returns a number of child nodes (both `YXmlElement` and `YXmlText`) living under a current XML
 /// element. This function doesn't count a recursive nodes, only direct children of a current node.
 #[no_mangle]
-pub unsafe extern "C" fn yxmlelem_child_len(xml: *const XmlElement, txn: *const Transaction) -> c_int {
+pub unsafe extern "C" fn yxmlelem_child_len(
+    xml: *const XmlElement,
+    txn: *const Transaction,
+) -> c_int {
     assert!(!xml.is_null());
     assert!(!txn.is_null());
 
@@ -1241,7 +1244,10 @@ pub unsafe extern "C" fn yxmlelem_child_len(xml: *const XmlElement, txn: *const 
 ///
 /// A returned value should be eventually released using [youtput_destroy] function.
 #[no_mangle]
-pub unsafe extern "C" fn yxmlelem_first_child(xml: *const XmlElement, txn: *const Transaction) -> *mut YOutput {
+pub unsafe extern "C" fn yxmlelem_first_child(
+    xml: *const XmlElement,
+    txn: *const Transaction,
+) -> *mut YOutput {
     assert!(!xml.is_null());
     assert!(!txn.is_null());
 
@@ -1410,7 +1416,7 @@ pub unsafe extern "C" fn yxmltext_len(txt: *const XmlText, txn: *const Transacti
     let txt = txt.as_ref().unwrap();
     let txn = txn.as_ref().unwrap();
 
-    txt.len(txn) as c_int
+    txt.len() as c_int
 }
 
 /// Returns a null-terminated UTF-8 encoded string content of a current `YXmlText` shared data type.
@@ -1612,7 +1618,10 @@ impl YInput {
                 let mut values = self.value.map.values;
                 let mut i = 0;
                 while i < self.len as isize {
-                    let key = CStr::from_ptr(keys.offset(i).read()).to_str().unwrap().to_owned();
+                    let key = CStr::from_ptr(keys.offset(i).read())
+                        .to_str()
+                        .unwrap()
+                        .to_owned();
                     let value = values.offset(i).read().into();
                     dst.insert(key, value);
                     i += 1;
@@ -1629,7 +1638,8 @@ impl YInput {
             } else if tag == Y_JSON_BOOL {
                 Any::Bool(if self.value.flag == 0 { false } else { true })
             } else if tag == Y_JSON_BUF {
-                let slice = std::slice::from_raw_parts(self.value.buf as *mut u8, self.len as usize);
+                let slice =
+                    std::slice::from_raw_parts(self.value.buf as *mut u8, self.len as usize);
                 let buf = Box::from(slice);
                 Any::Buffer(buf)
             } else {
@@ -1657,8 +1667,7 @@ struct YMapInputData {
 }
 
 impl Drop for YInput {
-    fn drop(&mut self) {
-    }
+    fn drop(&mut self) {}
 }
 
 impl Prelim for YInput {
@@ -1703,7 +1712,10 @@ impl Prelim for YInput {
                 let mut values = self.value.map.values;
                 let mut i = 0;
                 while i < self.len as isize {
-                    let key = CStr::from_ptr(keys.offset(i).read()).to_str().unwrap().to_owned();
+                    let key = CStr::from_ptr(keys.offset(i).read())
+                        .to_str()
+                        .unwrap()
+                        .to_owned();
                     let value = values.offset(i).read().into();
                     map.insert(txn, key, value);
                 }
@@ -1777,39 +1789,52 @@ impl std::fmt::Display for YOutput {
             } else if tag == Y_JSON_NUM {
                 write!(f, "{}", self.value.num)
             } else if tag == Y_JSON_BOOL {
-                write!(f, "{}", if self.value.flag == 0 { "false" } else { "true" })
+                write!(
+                    f,
+                    "{}",
+                    if self.value.flag == 0 {
+                        "false"
+                    } else {
+                        "true"
+                    }
+                )
             } else if tag == Y_JSON_UNDEF {
                 write!(f, "undefined")
             } else if tag == Y_JSON_NULL {
                 write!(f, "null")
             } else if tag == Y_JSON_STR {
-                write!(f,"{}", CString::from_raw(self.value.str).to_str().unwrap())
+                write!(f, "{}", CString::from_raw(self.value.str).to_str().unwrap())
             } else if tag == Y_MAP {
-                write!(f,"YMap")
+                write!(f, "YMap")
             } else if tag == Y_ARRAY {
-                write!(f,"YArray")
+                write!(f, "YArray")
             } else if tag == Y_JSON_ARR {
-                write!(f,"[")?;
+                write!(f, "[")?;
                 let slice = std::slice::from_raw_parts(self.value.array, self.len as usize);
                 for o in slice {
                     write!(f, ", {}", o)?;
                 }
-                write!(f,"]")
+                write!(f, "]")
             } else if tag == Y_JSON_MAP {
-                write!(f,"{{")?;
+                write!(f, "{{")?;
                 let slice = std::slice::from_raw_parts(self.value.map, self.len as usize);
                 for e in slice {
-                    write!(f, ", '{}' => {}", CStr::from_ptr(e.key).to_str().unwrap(), e.value)?;
+                    write!(
+                        f,
+                        ", '{}' => {}",
+                        CStr::from_ptr(e.key).to_str().unwrap(),
+                        e.value
+                    )?;
                 }
-                write!(f,"}}")
+                write!(f, "}}")
             } else if tag == Y_TEXT {
-                write!(f,"YText")
+                write!(f, "YText")
             } else if tag == Y_XML_TEXT {
-                write!(f,"YXmlText")
+                write!(f, "YXmlText")
             } else if tag == Y_XML_ELEM {
-                write!(f,"YXmlElement", )
+                write!(f, "YXmlElement",)
             } else if tag == Y_JSON_BUF {
-                write!(f,"YBinary(len: {})", self.len)
+                write!(f, "YBinary(len: {})", self.len)
             } else {
                 Ok(())
             }
@@ -1828,9 +1853,17 @@ impl Drop for YOutput {
             } else if tag == Y_ARRAY {
                 drop(Box::from_raw(self.value.y_array));
             } else if tag == Y_JSON_ARR {
-                drop(Vec::from_raw_parts(self.value.array, self.len as usize, self.len as usize));
+                drop(Vec::from_raw_parts(
+                    self.value.array,
+                    self.len as usize,
+                    self.len as usize,
+                ));
             } else if tag == Y_JSON_MAP {
-                drop(Vec::from_raw_parts(self.value.map, self.len as usize, self.len as usize));
+                drop(Vec::from_raw_parts(
+                    self.value.map,
+                    self.len as usize,
+                    self.len as usize,
+                ));
             } else if tag == Y_TEXT {
                 drop(Box::from_raw(self.value.y_text));
             } else if tag == Y_XML_TEXT {
@@ -1838,7 +1871,11 @@ impl Drop for YOutput {
             } else if tag == Y_XML_ELEM {
                 drop(Box::from_raw(self.value.y_xmlelem));
             } else if tag == Y_JSON_BUF {
-                drop(Vec::from_raw_parts(self.value.buf, self.len as usize, self.len as usize));
+                drop(Vec::from_raw_parts(
+                    self.value.buf,
+                    self.len as usize,
+                    self.len as usize,
+                ));
             }
         }
     }
@@ -1864,37 +1901,43 @@ impl From<Any> for YOutput {
                 Any::Null => YOutput {
                     tag: Y_JSON_NULL,
                     len: 0,
-                    value: MaybeUninit::uninit().assume_init()
+                    value: MaybeUninit::uninit().assume_init(),
                 },
                 Any::Undefined => YOutput {
                     tag: Y_JSON_UNDEF,
                     len: 0,
-                    value: MaybeUninit::uninit().assume_init()
+                    value: MaybeUninit::uninit().assume_init(),
                 },
                 Any::Bool(v) => YOutput {
                     tag: Y_JSON_BOOL,
                     len: 1,
-                    value: YOutputContent { flag: if v { Y_TRUE } else { Y_FALSE } }
+                    value: YOutputContent {
+                        flag: if v { Y_TRUE } else { Y_FALSE },
+                    },
                 },
                 Any::Number(v) => YOutput {
                     tag: Y_JSON_NUM,
                     len: 1,
-                    value: YOutputContent { num: v as _ }
+                    value: YOutputContent { num: v as _ },
                 },
                 Any::BigInt(v) => YOutput {
                     tag: Y_JSON_INT,
                     len: 1,
-                    value: YOutputContent { integer: v as _ }
+                    value: YOutputContent { integer: v as _ },
                 },
                 Any::String(v) => YOutput {
                     tag: Y_JSON_STR,
                     len: v.len() as c_int,
-                    value: YOutputContent { str: CString::new(v).unwrap().into_raw() }
+                    value: YOutputContent {
+                        str: CString::new(v).unwrap().into_raw(),
+                    },
                 },
                 Any::Buffer(v) => YOutput {
                     tag: Y_JSON_BUF,
                     len: v.len() as c_int,
-                    value: YOutputContent { buf: Box::into_raw(v) as *mut _ }
+                    value: YOutputContent {
+                        buf: Box::into_raw(v) as *mut _,
+                    },
                 },
                 Any::Array(v) => {
                     let len = v.len() as c_int;
@@ -1905,13 +1948,14 @@ impl From<Any> for YOutput {
                     YOutput {
                         tag: Y_JSON_ARR,
                         len,
-                        value: YOutputContent { array: ptr }
+                        value: YOutputContent { array: ptr },
                     }
                 }
                 Any::Map(v) => {
                     let len = v.len() as c_int;
-                    let mut array: Vec<_> = v.into_iter()
-                        .map(|(k,v)| YMapEntry::new(k.as_str(), Value::Any(v)))
+                    let mut array: Vec<_> = v
+                        .into_iter()
+                        .map(|(k, v)| YMapEntry::new(k.as_str(), Value::Any(v)))
                         .collect();
                     array.shrink_to_fit();
                     let ptr = array.as_mut_ptr();
@@ -1919,7 +1963,7 @@ impl From<Any> for YOutput {
                     YOutput {
                         tag: Y_JSON_MAP,
                         len,
-                        value: YOutputContent { map: ptr }
+                        value: YOutputContent { map: ptr },
                     }
                 }
             }
@@ -1932,7 +1976,9 @@ impl From<Text> for YOutput {
         YOutput {
             tag: Y_TEXT,
             len: 1,
-            value: YOutputContent { y_text: Box::into_raw(Box::new(v)) }
+            value: YOutputContent {
+                y_text: Box::into_raw(Box::new(v)),
+            },
         }
     }
 }
@@ -1942,7 +1988,9 @@ impl From<Array> for YOutput {
         YOutput {
             tag: Y_ARRAY,
             len: 1,
-            value: YOutputContent { y_array: Box::into_raw(Box::new(v)) }
+            value: YOutputContent {
+                y_array: Box::into_raw(Box::new(v)),
+            },
         }
     }
 }
@@ -1952,7 +2000,9 @@ impl From<Map> for YOutput {
         YOutput {
             tag: Y_MAP,
             len: 1,
-            value: YOutputContent { y_map: Box::into_raw(Box::new(v)) }
+            value: YOutputContent {
+                y_map: Box::into_raw(Box::new(v)),
+            },
         }
     }
 }
@@ -1962,7 +2012,9 @@ impl From<XmlElement> for YOutput {
         YOutput {
             tag: Y_XML_ELEM,
             len: 1,
-            value: YOutputContent { y_xmlelem: Box::into_raw(Box::new(v)) }
+            value: YOutputContent {
+                y_xmlelem: Box::into_raw(Box::new(v)),
+            },
         }
     }
 }
@@ -1972,7 +2024,9 @@ impl From<XmlText> for YOutput {
         YOutput {
             tag: Y_XML_TEXT,
             len: 1,
-            value: YOutputContent { y_xmltext: Box::into_raw(Box::new(v)) }
+            value: YOutputContent {
+                y_xmltext: Box::into_raw(Box::new(v)),
+            },
         }
     }
 }
@@ -2065,7 +2119,9 @@ pub unsafe extern "C" fn yinput_string(str: *const c_char) -> YInput {
     YInput {
         tag: Y_JSON_STR,
         len: 1,
-        value: YInputContent { str: str as *mut c_char },
+        value: YInputContent {
+            str: str as *mut c_char,
+        },
     }
 }
 
@@ -2077,7 +2133,9 @@ pub unsafe extern "C" fn yinput_binary(buf: *const u8, len: c_int) -> YInput {
     YInput {
         tag: Y_JSON_BUF,
         len,
-        value: YInputContent { buf: buf as *mut u8 },
+        value: YInputContent {
+            buf: buf as *mut u8,
+        },
     }
 }
 
@@ -2100,11 +2158,17 @@ pub unsafe extern "C" fn yinput_json_array(values: *mut YInput, len: c_int) -> Y
 /// This function doesn't allocate any heap resources and doesn't release any on its own, therefore
 /// its up to a caller to free resources once a structure is no longer needed.
 #[no_mangle]
-pub unsafe extern "C" fn yinput_json_map(keys: *mut *mut c_char, values: *mut YInput, len: c_int) -> YInput {
+pub unsafe extern "C" fn yinput_json_map(
+    keys: *mut *mut c_char,
+    values: *mut YInput,
+    len: c_int,
+) -> YInput {
     YInput {
         tag: Y_JSON_ARR,
         len,
-        value: YInputContent { map: ManuallyDrop::new(YMapInputData { keys, values }) },
+        value: YInputContent {
+            map: ManuallyDrop::new(YMapInputData { keys, values }),
+        },
     }
 }
 
@@ -2128,11 +2192,17 @@ pub unsafe extern "C" fn yinput_yarray(values: *mut YInput, len: c_int) -> YInpu
 /// This function doesn't allocate any heap resources and doesn't release any on its own, therefore
 /// its up to a caller to free resources once a structure is no longer needed.
 #[no_mangle]
-pub unsafe extern "C" fn yinput_ymap(keys: *mut *mut c_char, values: *mut YInput, len: c_int) -> YInput {
+pub unsafe extern "C" fn yinput_ymap(
+    keys: *mut *mut c_char,
+    values: *mut YInput,
+    len: c_int,
+) -> YInput {
     YInput {
         tag: Y_MAP,
         len,
-        value: YInputContent { map: ManuallyDrop::new(YMapInputData { keys, values }) },
+        value: YInputContent {
+            map: ManuallyDrop::new(YMapInputData { keys, values }),
+        },
     }
 }
 
@@ -2375,13 +2445,7 @@ mod test {
             let y_int = yinput_long(11);
             let y_str = yinput_string(CString::new("hello").unwrap().as_ptr());
 
-            let values = &[
-                y_true,
-                y_false,
-                y_float,
-                y_int,
-                y_str
-            ];
+            let values = &[y_true, y_false, y_float, y_int, y_str];
 
             yarray_insert_range(array, txn, 0, values.as_ptr(), 5);
 
@@ -2389,5 +2453,4 @@ mod test {
             ydoc_destroy(doc);
         }
     }
-
 }

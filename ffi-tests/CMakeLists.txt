@@ -20,5 +20,9 @@ find_library (
 )
 
 link_libraries(ws2_32 wsock32 userenv)
-target_link_libraries(yrs-ffi-tests LINK_PUBLIC ${YRS_LIB} wsock32 ws2_32 userenv)
-#target_link_libraries(yrs-ffi-tests LINK_PUBLIC ${YRS_LIB})
+
+if(WIN32)
+    target_link_libraries(yrs-ffi-tests LINK_PUBLIC ${YRS_LIB} wsock32 ws2_32 userenv)
+else()
+    target_link_libraries(yrs-ffi-tests LINK_PUBLIC ${YRS_LIB})
+endif()
