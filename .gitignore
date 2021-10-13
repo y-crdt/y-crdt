@@ -6,6 +6,6 @@ pkg
 .DS_Store
 .vscode/
 cmake-build-debug/
-ffi-tests/lib
+tests-ffi/lib
 ywasm/pkg
 node_modules/
