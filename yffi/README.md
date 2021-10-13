@@ -5,9 +5,9 @@ This project is a wrapper around [Yrs](../yrs/README.md) and targets native inte
 It's a library used on collaborative document editing using Conflict-free Replicated Data Types.
 This enables to provide a shared document editing experience on a client devices without explicit requirement for hosting a single server - CRDTs can resolve potential update conflicts on their own with no central authority - as well as provide first-class offline editing capabilities, where document replicas are modified without having connection to each other, and then synchronize automatically once such connection is enabled.
 
-## [Documentation](https://docs.rs/yrs-api-wrapper/)
+## [Documentation](https://docs.rs/yffi~~~~/)
 
-It's also possible to read it straight from a generated [C header file](../ffi-tests/include/libyrs.h).
+It's also possible to read it straight from a generated [C header file](../tests-ffi/include/libyrs.h).
 
 ## Example
 

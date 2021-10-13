@@ -28,6 +28,20 @@ use yrs::{
 #[global_allocator]
 static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
 
+/// When called will call console log errors whenever internal panic is called from within
+/// WebAssembly module.
+#[wasm_bindgen(js_name = setPanicHook)]
+pub fn set_panic_hook() {
+    // When the `console_error_panic_hook` feature is enabled, we can call the
+    // `set_panic_hook` function at least once during initialization, and then
+    // we will get better error messages if our code ever panics.
+    //
+    // For more details see
+    // https://github.com/rustwasm/console_error_panic_hook#readme
+    #[cfg(feature = "console_error_panic_hook")]
+    console_error_panic_hook::set_once();
+}
+
 /// A ywasm document type. Documents are most important units of collaborative resources management.
 /// All shared collections live within a scope of their corresponding documents. All updates are
 /// generated on per document basis (rather than individual shared type). All operations on shared
@@ -1496,31 +1510,31 @@ impl Prelim for JsValueWrapper {
 }
 
 fn insert_at(dst: &Array, txn: &mut Transaction, index: u32, src: Vec<JsValue>) {
-    let mut anys = Vec::default();
     let mut j = index;
     let mut i = 0;
     while i < src.len() {
-        let js = &src[i];
-        if let Some(any) = js_into_any(js) {
-            anys.push(any);
-            i += 1;
-        } else {
-            break;
+        let mut anys = Vec::default();
+        while i < src.len() {
+            let js = &src[i];
+            if let Some(any) = js_into_any(js) {
+                anys.push(any);
+                i += 1;
+            } else {
+                break;
+            }
         }
-    }
 
-    if !anys.is_empty() {
-        let len = anys.len() as u32;
-        dst.insert_range(txn, j, anys);
-        j += len;
-    }
-
-    while i < src.len() {
-        let js = &src[i];
-        let wrapper = JsValueWrapper(js.clone());
-        dst.insert(txn, j, wrapper);
-        i += 1;
-        j += 1;
+        if !anys.is_empty() {
+            let len = anys.len() as u32;
+            dst.insert_range(txn, j, anys);
+            j += len;
+        } else {
+            let js = &src[i];
+            let wrapper = JsValueWrapper(js.clone());
+            dst.insert(txn, j, wrapper);
+            i += 1;
+            j += 1;
+        }
     }
 }
 
