@@ -7,7 +7,7 @@ This enables to provide a shared document editing experience on a client devices
 
 This library contains Rust API, that's used further on by other projects in this repository:
 
-- [C foreign function interface](../yrs-api-wrapper/README.md) to provide native interop that could be used by other host languages like Swift or Java.
+- [C foreign function interface](../yffi/README.md) to provide native interop that could be used by other host languages like Swift or Java.
 - [ywasm](../ywasm/README.md) which targets Web Assembly bindings and can be used directly from JavaScript.
 
 ## Example

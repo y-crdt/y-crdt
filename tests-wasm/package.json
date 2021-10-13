@@ -1,5 +1,5 @@
 {
-  "name": "wasm-tests",
+  "name": "tests-wasm",
   "version": "1.0.0",
   "type": "module",
   "description": "Test suite for Yrs Web Assembly package.",
