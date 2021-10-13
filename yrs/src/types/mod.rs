@@ -42,7 +42,7 @@ pub const TYPE_REFS_XML_TEXT: TypeRefs = 6;
 
 /// Placeholder type ref identifier for non-specialized AbstractType. Used only for root-level types
 /// which have been integrated from remote peers before they were defined locally.
-pub const TYPE_REFS_UNDEFINED: TypeRefs = 2 ^ 4 - 1;
+pub const TYPE_REFS_UNDEFINED: TypeRefs = 15;
 
 /// A wrapper around [Branch] cell, supplied with a bunch of convenience methods to operate on both
 /// map-like and array-like contents of a [Branch].

@@ -689,9 +689,10 @@ pub unsafe extern "C" fn yarray_insert_range(
 
     let ptr = items;
     let mut i = 0;
+    let mut j = index as u32;
     let len = items_len as isize;
     while i < len {
-        let mut vec: Vec<Any> = Vec::with_capacity((len - i) as usize);
+        let mut vec: Vec<Any> = Vec::default();
 
         // try read as many values a JSON-like primitives and insert them at once
         while i < len {
@@ -706,11 +707,14 @@ pub unsafe extern "C" fn yarray_insert_range(
         }
 
         if !vec.is_empty() {
-            arr.insert_range(txn, index as u32, vec);
+            let len = vec.len() as u32;
+            arr.insert_range(txn, j, vec);
+            j += len;
         } else {
             let val = ptr.offset(i).read();
-            arr.push_back(txn, val);
+            arr.insert(txn, j, val);
             i += 1;
+            j += 1;
         }
     }
 }
