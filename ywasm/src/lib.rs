@@ -484,8 +484,7 @@ impl YTransaction {
         let diff: Vec<u8> = diff.to_vec();
         let mut decoder = DecoderV1::from(diff.as_slice());
         let update = Update::decode(&mut decoder);
-        let ds = DeleteSet::decode(&mut decoder);
-        self.0.apply_update(update, ds)
+        self.0.apply_update(update)
     }
 }
 
