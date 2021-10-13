@@ -3,15 +3,6 @@
 version = 3
 
 [[package]]
-name = "arbitrary"
-version = "1.0.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "577b08a4acd7b99869f863c50011b01eb73424ccc798ecd996f2e24817adfca7"
-dependencies = [
- "derive_arbitrary",
-]
-
-[[package]]
 name = "atty"
 version = "0.2.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -228,17 +219,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "derive_arbitrary"
-version = "1.0.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b24629208e87a2d8b396ff43b15c4afb0a69cea3fbbaa9ed9b92b7c02f0aed73"
-dependencies = [
- "proc-macro2 1.0.29",
- "quote 1.0.9",
- "syn 1.0.76",
-]
-
-[[package]]
 name = "either"
 version = "1.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -388,7 +368,6 @@ checksum = "e2abad23fbc42b3700f2f279844dc832adb2b2eb069b2df918f455c4e18cc646"
 name = "lib0"
 version = "0.1.0"
 dependencies = [
- "arbitrary",
  "criterion",
  "proptest",
  "proptest-derive",
@@ -889,9 +868,6 @@ name = "serde"
 version = "1.0.130"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f12d06de37cf59146fbdecab66aa99f9fe4f78722e3607577a5375d66bd0c913"
-dependencies = [
- "serde_derive",
-]
 
 [[package]]
 name = "serde_cbor"
@@ -927,9 +903,9 @@ dependencies = [
 
 [[package]]
 name = "smallvec"
-version = "1.6.1"
+version = "1.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fe0f37c9e8f3c5a4a66ad655a93c74daac4ad00c441533bf5c6e7990bb42604e"
+checksum = "1ecab6c735a6bb4139c0caafd0cc3635748bbb3acf4550e8138122099251f309"
 
 [[package]]
 name = "syn"
@@ -1049,8 +1025,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "632f73e236b219150ea279196e54e610f5dbafa5d61786303d4da54f84e47fce"
 dependencies = [
  "cfg-if 1.0.0",
- "serde",
- "serde_json",
  "wasm-bindgen-macro",
 ]
 
@@ -1197,21 +1171,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "yffi"
+version = "0.1.0"
+dependencies = [
+ "lib0",
+ "yrs",
+]
+
+[[package]]
 name = "yrs"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "criterion",
  "lib0",
  "rand 0.7.3",
  "wasm-bindgen",
-]
-
-[[package]]
-name = "yrs-api-wrapper"
-version = "0.1.0"
-dependencies = [
- "lib0",
- "yrs",
 ]
 
 [[package]]
@@ -1221,7 +1195,6 @@ dependencies = [
  "console_error_panic_hook",
  "js-sys",
  "lib0",
- "serde",
  "wasm-bindgen",
  "wasm-bindgen-test",
  "wee_alloc",

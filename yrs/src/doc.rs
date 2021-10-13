@@ -50,7 +50,8 @@ impl Doc {
     /// Creates a new document with a randomized client identifier.
     pub fn new() -> Self {
         let client_id: u64 = rand::thread_rng().gen();
-        Self::with_client_id(client_id)
+        // to keep it aligned with Yjs we only generate 53bit integers
+        Self::with_client_id(client_id & 0x3fffffffffffff)
     }
 
     /// Creates a new document with a specified `client_id`. It's up to a caller to guarantee that
