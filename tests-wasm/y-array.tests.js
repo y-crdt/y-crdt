@@ -7,16 +7,6 @@ import * as t from 'lib0/testing'
  * @param {t.TestCase} tc
  */
 export const testInserts = tc => {
-    function compare(value, expected) {
-        t.compare(value.length, expected.length)
-        t.compare(value[0], expected[0])
-        t.compare(value[1], expected[1])
-        t.compareStrings(value[2], expected[2])
-        t.compareArrays(value[3], expected[3])
-        t.compare(value[4], expected[4])
-        t.compareObjects(value[5], value[5])
-    }
-
     const d1 = new Y.YDoc(1)
     t.compare(d1.id, 1)
     var x = d1.getArray('test');
@@ -27,7 +17,7 @@ export const testInserts = tc => {
     const expected = [1, 2.5, 'hello', ['world'], true, {key:'value'}]
 
     var value = d1.transact(txn => x.toJson(txn))
-    compare(value, expected)
+    t.compare(value, expected)
 
     const d2 = new Y.YDoc(2)
     x = d2.getArray('test');
@@ -35,32 +25,25 @@ export const testInserts = tc => {
     exchangeUpdates([d1, d2])
 
     value = d2.transact(txn => x.toJson(txn))
-    compare(value, expected)
+    t.compare(value, expected)
 }
 
 /**
  * @param {t.TestCase} tc
  */
 export const testInsertsNested = tc => {
-    function compare(value, expected) {
-        t.compare(value.length, expected.length)
-        t.compare(value[0], expected[0])
-        t.compare(value[1], expected[1])
-        t.compareArrays(value[2], expected[2])
-    }
-
     const d1 = new Y.YDoc()
     var x = d1.getArray('test');
 
     const nested = new Y.YArray();
     d1.transact(txn => nested.push(txn, ['world']))
-    d1.transact(txn => x.insert(txn, 0, [1, 2, nested]))
+    d1.transact(txn => x.insert(txn, 0, [1, 2, nested, 3, 4]))
     d1.transact(txn => nested.insert(txn, 0, ['hello']))
 
-    const expected = [1, 2, ['hello', 'world']]
+    const expected = [1, 2, ['hello', 'world'], 3, 4]
 
     var value = d1.transact(txn => x.toJson(txn))
-    compare(value, expected)
+    t.compare(value, expected)
 
     const d2 = new Y.YDoc()
     x = d2.getArray('test');
@@ -68,7 +51,7 @@ export const testInsertsNested = tc => {
     exchangeUpdates([d1, d2])
 
     value = d2.transact(txn => x.toJson(txn))
-    compare(value, expected)
+    t.compare(value, expected)
 }
 
 /**
@@ -85,7 +68,7 @@ export const testDelete = tc => {
     const expected = [1, true]
 
     var value = d1.transact(txn => x.toJson(txn))
-    t.compareArrays(value, expected)
+    t.compare(value, expected)
 
     const d2 = new Y.YDoc(2)
     x = d2.getArray('test')
@@ -93,7 +76,7 @@ export const testDelete = tc => {
     exchangeUpdates([d1, d2])
 
     value = d2.transact(txn => x.toJson(txn))
-    t.compareArrays(value, expected)
+    t.compare(value, expected)
 }
 
 /**
@@ -138,7 +121,7 @@ export const testIterator = tc => {
     try {
         let i = 1;
         for (let v of x.values(txn)) {
-            t.compareObjects(v, i)
+            t.compare(v, i)
             i++
         }
     } finally {
