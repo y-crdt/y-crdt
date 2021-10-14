@@ -13,7 +13,7 @@ readme = "./README.md"
 [dependencies]
 rand = { version = "0.7.0", features = ["wasm-bindgen"] }
 wasm-bindgen = "0.2"
-lib0 = { path = "../lib0" }
+lib0 = "0.1"
 
 [dev-dependencies]
 criterion = "0.3"
