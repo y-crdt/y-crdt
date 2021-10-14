@@ -1,35 +1,13 @@
-use crate::id_set::DeleteSet;
 use crate::update::Update;
-use crate::updates::decoder::{Decode, Decoder, DecoderV1};
+use crate::updates::decoder::{Decode, DecoderV1};
 use crate::updates::encoder::{Encode, Encoder, EncoderV1};
 use crate::StateVector;
 use lib0::decoding::Cursor;
 
-pub fn merge_updates(updates: &[&[u8]]) -> Vec<u8> {
-    match updates.len() {
-        0 => vec![0, 0],
-        1 => updates[0].to_vec(),
-        _ => {
-            let mut iter = updates.iter();
-            let mut decoder = DecoderV1::new(Cursor::new(iter.next().unwrap()));
-            let mut update = Update::decode(&mut decoder);
-            let mut ds = DeleteSet::decode(&mut decoder);
 
-            while let Some(data) = iter.next() {
-                let mut decoder = DecoderV1::new(Cursor::new(data));
-                let u = Update::decode(&mut decoder);
-                let d = DeleteSet::decode(&mut decoder);
-
-                update.merge(u);
-                ds.merge(d);
-            }
-
-            let mut encoder = EncoderV1::new();
-            update.encode_diff(&StateVector::default(), &mut encoder);
-            ds.encode(&mut encoder);
-            encoder.to_vec()
-        }
-    }
+pub fn merge_updates (updates: &[&[u8]]) -> Vec<u8> {
+    let x: Vec<Update> = updates.iter().map(|buf | Update::decode_v1(buf)).into_iter().collect();
+    Update::merge_updates(x).encode_v1()
 }
 
 // Computes the state vector from a document update
@@ -44,14 +22,10 @@ pub fn diff_updates(update: &[u8], state_vector: &[u8]) -> Vec<u8> {
     let cursor = Cursor::new(update);
     let mut decoder = DecoderV1::new(cursor);
     let update = Update::decode(&mut decoder);
-
     let mut encoder = EncoderV1::new();
     update.encode_diff(&sv, &mut encoder);
-
     // for delete set, don't decode/encode it - just copy the remaining part from the decoder
-    let mut result = encoder.to_vec();
-    result.extend_from_slice(decoder.read_to_end());
-    result
+    encoder.to_vec()
 }
 
 #[cfg(test)]
@@ -74,6 +48,23 @@ mod test {
         let actual = merge_updates(&[a, b]);
         assert_eq!(actual, expected);
     }
+
+    #[test]
+    fn merge_updates_compatibility_2() {
+        let a = &[
+            1, 1, 129, 231, 135, 164, 7, 0, 4, 1, 4, 49, 50, 51, 52, 1, 97, 0
+        ];
+        let b = &[
+            1, 1, 129, 231, 135, 164, 7, 1, 68, 129, 231, 135, 164, 7, 0, 1, 98, 0
+        ];
+        let expected = &[
+            1, 2, 129, 231, 135, 164, 7, 0, 4, 1, 4, 49, 50, 51, 52, 1, 97, 68, 129, 231, 135, 164, 7, 0, 1, 98, 0
+        ];
+
+        let actual = merge_updates(&[a, b]);
+        assert_eq!(actual, expected);
+    }
+
 
     #[test]
     fn encode_state_vector_compatibility() {

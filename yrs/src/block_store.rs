@@ -1,4 +1,4 @@
-use crate::block::{Block, BlockPtr, Item, ID};
+use crate::block::{Block, BlockPtr, ID};
 use crate::types::TypePtr;
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};

@@ -3,7 +3,6 @@ use crate::block_store::BlockStore;
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::client_hasher::ClientHasher;
-use crate::*;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::hash::BuildHasherDefault;
@@ -281,7 +280,7 @@ impl IdSet {
     /// Merges another ID set into a current one, combining their information about observed ID
     /// ranges and squashing them if necessary.
     pub fn merge(&mut self, other: Self) {
-        for (client, range) in other.0 {
+        other.0.into_iter().for_each(|(client, range)| {
             match self.0.entry(client) {
                 Entry::Occupied(mut e) => {
                     let r = e.get_mut();
@@ -295,16 +294,16 @@ impl IdSet {
                             }
                         }
                         (IdRange::Fragmented(rs), IdRange::Continuous(r)) => {
-                            rs.push(r.clone());
+                            rs.push(r);
                         }
                         (IdRange::Continuous(r), IdRange::Fragmented(rs)) => {
-                            let mut v = rs.clone();
+                            let mut v = rs;
                             v.push(r.clone());
                             let new = IdRange::Fragmented(v);
                             e.replace_entry(new);
                         }
-                        (IdRange::Fragmented(rs1), IdRange::Fragmented(rs2)) => {
-                            rs1.append(&mut rs2.clone());
+                        (IdRange::Fragmented(rs1), IdRange::Fragmented(mut rs2)) => {
+                            rs1.append(&mut rs2);
                         }
                     }
                 }
@@ -312,8 +311,7 @@ impl IdSet {
                     e.insert(range);
                 }
             }
-        }
-
+        });
         self.squash()
     }
 }

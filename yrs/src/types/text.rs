@@ -3,8 +3,6 @@ use crate::transaction::Transaction;
 use crate::types::{Branch, BranchRef};
 use crate::*;
 use std::cell::Ref;
-use std::error::Error;
-use std::fmt::Formatter;
 
 /// A shared data type used for collaborative text editing. It enables multiple users to add and
 /// remove chunks of text in efficient manner. This type is internally represented as a mutable
