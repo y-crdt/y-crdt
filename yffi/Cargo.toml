@@ -10,8 +10,8 @@ edition = "2018"
 [dev-dependencies]
 
 [dependencies]
-lib0 = { path = "../lib0" }
-yrs = { path = "../yrs" }
+lib0 = "0.1"
+yrs = "0.1"
 
 [lib]
 crate-type = ["staticlib"]
