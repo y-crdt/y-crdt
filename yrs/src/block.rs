@@ -126,7 +126,7 @@ impl PartialEq for BlockPtr {
 }
 
 /// An enum containing all supported block variants.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub(crate) enum Block {
     /// An active block containing user data.
     Item(Item),
@@ -146,6 +146,14 @@ impl Block {
             Block::Item(item) => item.last_id(),
             Block::Skip(skip) => ID::new(skip.id.client, skip.id.clock + skip.len),
             Block::GC(gc) => ID::new(gc.id.client, gc.id.clock + gc.len),
+        }
+    }
+
+    pub fn slice(&self, offset: u32) -> Self {
+        match self {
+            Block::Item(item) => Block::Item(item.slice(offset)),
+            Block::Skip(skip) => Block::Skip(Skip { id: ID { client: skip.id.client, clock: skip.id.clock + offset }, len: skip.len - offset }),
+            Block::GC(gc) => Block::GC(GC { id: ID { client: gc.id.client, clock: gc.id.clock + offset }, len: gc.len })
         }
     }
 
@@ -340,6 +348,18 @@ impl Block {
             _ => false,
         }
     }
+
+    pub fn is_skip(&self) -> bool {
+        if let Block::Skip(_) = self { true } else { false }
+    }
+
+    pub fn is_gc(&self) -> bool {
+        if let Block::GC(_) = self { true } else { false }
+    }
+
+    pub fn is_item(&self) -> bool {
+        if let Block::Item(_) = self { true } else { false }
+    }
 }
 
 /// A helper structure that's used to precisely describe a location of an [Item] to be inserted in
@@ -367,7 +387,7 @@ const ITEM_FLAG_KEEP: u8 = 0b0001;
 /// An item is basic unit of work in Yrs. It contains user data reinforced with all metadata
 /// required for a potential conflict resolution as well as extra fields used for joining blocks
 /// together as a part of indexed sequences or maps.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub(crate) struct Item {
     /// Unique identifier of current item.
     pub id: ID,
@@ -402,7 +422,7 @@ pub(crate) struct Item {
     pub info: Cell<u8>,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Skip {
     pub id: ID,
     pub len: u32,
@@ -418,7 +438,7 @@ impl Skip {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct GC {
     pub id: ID,
     pub len: u32,
@@ -761,6 +781,26 @@ impl Item {
         self.content.len()
     }
 
+    pub fn slice (&self, diff: u32) -> Item {
+        if diff == 0 {
+            self.clone()
+        } else {
+            let client = self.id.client;
+            let clock = self.id.clock;
+            Item {
+                id: ID::new(client, clock + diff),
+                left: Some(BlockPtr::from(ID::new(client, clock + diff - 1))),
+                right: self.right.clone(),
+                origin: Some(ID::new(client, clock + diff - 1)),
+                right_origin: self.right_origin.clone(),
+                content: self.content.clone().splice(diff as usize).unwrap(),
+                parent: self.parent.clone(),
+                parent_sub: self.parent_sub.clone(),
+                info: self.info.clone(),
+            }
+        }
+    }
+
     /// Splits current item in two and a given `diff` offset. Returns a new item created as result
     /// of this split.
     pub fn split(&mut self, diff: u32) -> Item {
@@ -860,7 +900,7 @@ impl Item {
 
 /// An enum describing the type of a user content stored as part of one or more
 /// (if items were squashed) insert operations.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum ItemContent {
     /// Any JSON-like primitive type range.
     Any(Vec<Any>),

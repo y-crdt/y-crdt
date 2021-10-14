@@ -99,10 +99,10 @@ fn text_insert_delete() {
 
     let mut doc = Doc::new();
     let _sub = doc.on_update(move |e| {
-        for (actual, expected) in e.update.blocks().zip(expected_blocks.as_slice()) {
+        for (actual, expected) in e.update.blocks.blocks().zip(expected_blocks.as_slice()) {
             assert_eq!(actual, expected);
         }
-        assert_eq!(&e.delete_set, &expected_ds);
+        assert_eq!(&e.update.delete_set, &expected_ds);
         setter.set(true);
     });
     let mut txn = doc.transact();
@@ -274,7 +274,7 @@ fn state_vector() {
 /// if produced binary is equivalent to `payload`.
 fn roundtrip(payload: &[u8], expected: &[&Block]) {
     let u = Update::decode_v1(payload);
-    let blocks: Vec<&Block> = u.blocks().collect();
+    let blocks: Vec<&Block> = u.blocks.blocks().collect();
     assert_eq!(blocks.as_slice(), expected);
 
     let store: Store = u.into();

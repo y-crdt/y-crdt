@@ -1,4 +1,3 @@
-use crate::id_set::DeleteSet;
 use crate::update::Update;
 use rand::RngCore;
 use std::cell::RefCell;
@@ -62,14 +61,11 @@ pub struct UpdateEvent {
     /// An update that's about to be applied. Update contains information about all inserted blocks,
     /// which have been send from a remote peer.
     pub update: Update,
-    /// A delete set that's about to be applied. Delete set contains a compressed information about
-    /// all deleted blocks, as observed by remote peer which send an update.
-    pub delete_set: DeleteSet,
 }
 
 impl UpdateEvent {
-    pub(crate) fn new(update: Update, delete_set: DeleteSet) -> Self {
-        UpdateEvent { update, delete_set }
+    pub(crate) fn new(update: Update) -> Self {
+        UpdateEvent { update }
     }
 }
 

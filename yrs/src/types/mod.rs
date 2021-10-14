@@ -14,7 +14,6 @@ use lib0::any::Any;
 use std::cell::{BorrowMutError, Ref, RefCell, RefMut};
 use std::collections::HashMap;
 use std::fmt::Formatter;
-use std::hash::Hasher;
 use std::rc::Rc;
 
 pub type TypeRefs = u8;
@@ -76,7 +75,7 @@ impl BranchRef {
 
     /// Converts current branch data into a [Value]. It uses a type ref information to resolve,
     /// which value variant is a correct one for this branch. Since branch represent only complex
-    /// types [Value::Any] will never be returned from this method.  
+    /// types [Value::Any] will never be returned from this method.
     pub fn into_value(self, txn: &Transaction) -> Value {
         let type_ref = { self.as_ref().type_ref() };
         match type_ref {
