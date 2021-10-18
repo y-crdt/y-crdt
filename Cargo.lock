@@ -305,9 +305,9 @@ dependencies = [
 
 [[package]]
 name = "instant"
-version = "0.1.11"
+version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "716d3d89f35ac6a34fd0eed635395f4c3b76fa889338a4632e5231a8684216bd"
+checksum = "7a5bbe824c507c5da5956355e86a746d82e0e1464f65d862cc5e71da70e94b2c"
 dependencies = [
  "cfg-if 1.0.0",
 ]
@@ -1180,8 +1180,8 @@ dependencies = [
 name = "yffi"
 version = "0.1.0"
 dependencies = [
- "lib0 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "yrs 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "lib0 0.1.0",
+ "yrs 0.1.0",
 ]
 
 [[package]]
@@ -1189,7 +1189,7 @@ name = "yrs"
 version = "0.1.0"
 dependencies = [
  "criterion",
- "lib0 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "lib0 0.1.0",
  "rand 0.7.3",
  "wasm-bindgen",
 ]
@@ -1211,9 +1211,9 @@ version = "0.1.0"
 dependencies = [
  "console_error_panic_hook",
  "js-sys",
- "lib0 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "lib0 0.1.0",
  "wasm-bindgen",
  "wasm-bindgen-test",
  "wee_alloc",
- "yrs 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "yrs 0.1.0",
 ]
