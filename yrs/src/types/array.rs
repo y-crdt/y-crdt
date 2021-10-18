@@ -222,11 +222,13 @@ where
 
 #[cfg(test)]
 mod test {
-    use crate::test_utils::exchange_updates;
+    use crate::test_utils::{exchange_updates, run_scenario};
     use crate::types::map::PrelimMap;
     use crate::types::Value;
-    use crate::Doc;
+    use crate::{Doc, PrelimArray};
     use lib0::any::Any;
+    use rand::prelude::ThreadRng;
+    use rand::Rng;
     use std::collections::HashMap;
 
     #[test]
@@ -570,5 +572,192 @@ mod test {
                 other => panic!("Value of array at index {} was no YMap", i),
             }
         }
+    }
+
+    use std::sync::atomic::{AtomicI64, Ordering};
+
+    static UNIQUE_NUMBER: AtomicI64 = AtomicI64::new(0);
+
+    fn get_unique_number() -> i64 {
+        UNIQUE_NUMBER.fetch_add(1, Ordering::SeqCst)
+    }
+
+    fn between(rng: &mut ThreadRng, x: u32, y: u32) -> u32 {
+        let a = x.min(y);
+        let b = x.max(y);
+        if a == b {
+            a
+        } else {
+            rng.gen_range(a, b)
+        }
+    }
+
+    fn array_transactions() -> [Box<dyn Fn(&mut Doc, &mut ThreadRng)>; 4] {
+        fn insert(doc: &mut Doc, rng: &mut ThreadRng) {
+            let mut txn = doc.transact();
+            let yarray = txn.get_array("array");
+            let unique_number = get_unique_number();
+            let len = between(rng, 1, 4);
+            let mut content: Vec<_> = (0..len)
+                .into_iter()
+                .map(|_| Any::BigInt(unique_number))
+                .collect();
+            let mut pos = between(rng, 0, yarray.len()) as usize;
+            if let Any::Array(mut expected) = yarray.to_json(&txn) {
+                yarray.insert_range(&mut txn, pos as u32, content.clone());
+
+                for any in content {
+                    expected.insert(pos, any);
+                    pos += 1;
+                }
+                let actual = yarray.to_json(&txn);
+                assert_eq!(actual, Any::Array(expected))
+            } else {
+                panic!("should not happen")
+            }
+        }
+
+        fn insert_type_array(doc: &mut Doc, rng: &mut ThreadRng) {
+            let mut txn = doc.transact();
+            let yarray = txn.get_array("array");
+            let mut pos = between(rng, 0, yarray.len());
+            yarray.insert(&mut txn, pos, PrelimArray::from([1, 2, 3, 4]));
+            if let Value::YArray(array2) = yarray.get(&txn, pos).unwrap() {
+                let expected: Vec<_> = (1..=4).map(|i| Any::Number(i as f64)).collect();
+                assert_eq!(array2.to_json(&txn), Any::Array(expected));
+            } else {
+                panic!("should not happen")
+            }
+        }
+
+        fn insert_type_map(doc: &mut Doc, rng: &mut ThreadRng) {
+            let mut txn = doc.transact();
+            let yarray = txn.get_array("array");
+            let mut pos = between(rng, 0, yarray.len());
+            yarray.insert(&mut txn, pos, PrelimMap::<i32>::from(HashMap::default()));
+            if let Value::YMap(map) = yarray.get(&txn, pos).unwrap() {
+                map.insert(&mut txn, "someprop".to_string(), 42);
+                map.insert(&mut txn, "someprop".to_string(), 43);
+                map.insert(&mut txn, "someprop".to_string(), 44);
+            } else {
+                panic!("should not happen")
+            }
+        }
+
+        fn delete(doc: &mut Doc, rng: &mut ThreadRng) {
+            let mut txn = doc.transact();
+            let yarray = txn.get_array("array");
+            let len = yarray.len();
+            if len > 0 {
+                let pos = between(rng, 0, len - 1);
+                let del_len = between(rng, 1, 2.min(len - pos));
+                if rng.gen_bool(0.5) {
+                    if let Value::YArray(array2) = yarray.get(&txn, pos).unwrap() {
+                        let pos = between(rng, 0, array2.len() - 1);
+                        let del_len = between(rng, 0, 2.min(array2.len() - pos));
+                        array2.remove_range(&mut txn, pos, del_len);
+                    }
+                } else {
+                    if let Any::Array(mut old_content) = yarray.to_json(&txn) {
+                        yarray.remove_range(&mut txn, pos, del_len);
+                        old_content.drain((pos as usize..(pos + del_len) as usize));
+                        assert_eq!(yarray.to_json(&txn), Any::Array(old_content));
+                    } else {
+                        panic!("should not happen")
+                    }
+                }
+            }
+        }
+
+        [
+            Box::new(insert),
+            Box::new(insert_type_array),
+            Box::new(insert_type_map),
+            Box::new(delete),
+        ]
+    }
+
+    fn fuzzy(iterations: usize) {
+        run_scenario(&array_transactions(), 5, iterations)
+    }
+
+    #[test]
+    fn fuzzy_test_6() {
+        fuzzy(6)
+    }
+
+    #[test]
+    fn fuzzy_test_40() {
+        fuzzy(40)
+    }
+
+    #[test]
+    fn fuzzy_test_42() {
+        fuzzy(42)
+    }
+
+    #[test]
+    fn fuzzy_test_43() {
+        fuzzy(43)
+    }
+
+    #[test]
+    fn fuzzy_test_44() {
+        fuzzy(44)
+    }
+
+    #[test]
+    fn fuzzy_test_45() {
+        fuzzy(45)
+    }
+
+    #[test]
+    fn fuzzy_test_46() {
+        fuzzy(46)
+    }
+
+    #[test]
+    fn fuzzy_test_300() {
+        fuzzy(300)
+    }
+
+    #[test]
+    fn fuzzy_test_400() {
+        fuzzy(400)
+    }
+
+    #[test]
+    fn fuzzy_test_500() {
+        fuzzy(500)
+    }
+
+    #[test]
+    fn fuzzy_test_600() {
+        fuzzy(600)
+    }
+
+    #[test]
+    fn fuzzy_test_1000() {
+        fuzzy(1000)
+    }
+
+    #[test]
+    fn fuzzy_test_1800() {
+        fuzzy(1800)
+    }
+
+    #[test]
+    fn fuzzy_test_3000() {
+        fuzzy(3000)
+    }
+
+    #[test]
+    fn fuzzy_test_5000() {
+        fuzzy(5000)
+    }
+
+    #[test]
+    fn fuzzy_test_30000() {
+        fuzzy(30000)
     }
 }
