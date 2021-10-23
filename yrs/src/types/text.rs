@@ -145,7 +145,7 @@ mod test {
     use crate::test_utils::run_scenario;
     use crate::Doc;
     use rand::distributions::Alphanumeric;
-    use rand::prelude::ThreadRng;
+    use rand::prelude::StdRng;
     use rand::Rng;
 
     #[test]
@@ -465,7 +465,7 @@ mod test {
         assert_eq!(a, "H beautifuld!".to_owned());
     }
 
-    fn between(rng: &mut ThreadRng, x: u32, y: u32) -> u32 {
+    fn between(rng: &mut StdRng, x: u32, y: u32) -> u32 {
         let a = x.min(y);
         let b = x.max(y);
         if a == b {
@@ -475,7 +475,7 @@ mod test {
         }
     }
 
-    fn random_string(rng: &mut ThreadRng) -> String {
+    fn random_string(rng: &mut StdRng) -> String {
         let len = rng.gen_range(1, 10);
         rng.sample_iter(&Alphanumeric)
             .take(len)
@@ -483,8 +483,8 @@ mod test {
             .collect()
     }
 
-    fn text_transactions() -> [Box<dyn Fn(&mut Doc, &mut ThreadRng)>; 2] {
-        fn insert_text(doc: &mut Doc, rng: &mut ThreadRng) {
+    fn text_transactions() -> [Box<dyn Fn(&mut Doc, &mut StdRng)>; 2] {
+        fn insert_text(doc: &mut Doc, rng: &mut StdRng) {
             let mut txn = doc.transact();
             let mut ytext = txn.get_text("text");
             let pos = between(rng, 0, ytext.len());
@@ -492,7 +492,7 @@ mod test {
             ytext.insert(&mut txn, pos, word.as_str());
         }
 
-        fn delete_text(doc: &mut Doc, rng: &mut ThreadRng) {
+        fn delete_text(doc: &mut Doc, rng: &mut StdRng) {
             let mut txn = doc.transact();
             let mut ytext = txn.get_text("text");
             let len = ytext.len();
@@ -507,7 +507,7 @@ mod test {
     }
 
     fn fuzzy(iterations: usize) {
-        run_scenario(&text_transactions(), 5, iterations)
+        run_scenario(0, &text_transactions(), 5, iterations)
     }
 
     #[test]

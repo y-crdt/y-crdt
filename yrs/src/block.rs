@@ -152,8 +152,20 @@ impl Block {
     pub fn slice(&self, offset: u32) -> Self {
         match self {
             Block::Item(item) => Block::Item(item.slice(offset)),
-            Block::Skip(skip) => Block::Skip(Skip { id: ID { client: skip.id.client, clock: skip.id.clock + offset }, len: skip.len - offset }),
-            Block::GC(gc) => Block::GC(GC { id: ID { client: gc.id.client, clock: gc.id.clock + offset }, len: gc.len })
+            Block::Skip(skip) => Block::Skip(Skip {
+                id: ID {
+                    client: skip.id.client,
+                    clock: skip.id.clock + offset,
+                },
+                len: skip.len - offset,
+            }),
+            Block::GC(gc) => Block::GC(GC {
+                id: ID {
+                    client: gc.id.client,
+                    clock: gc.id.clock + offset,
+                },
+                len: gc.len,
+            }),
         }
     }
 
@@ -263,16 +275,7 @@ impl Block {
                     encoder.write_right_id(right_origin_id);
                 }
                 if cant_copy_parent_info {
-                    if let Some(parent) = store.get_type(&item.parent) {
-                        let parent_ref = parent.borrow();
-                        if let Some(parent_ptr) = parent_ref.item {
-                            encoder.write_parent_info(false); // write parent id
-                            encoder.write_left_id(&parent_ptr.id);
-                        } else if let Some(key) = store.get_root_type_key(parent) {
-                            encoder.write_parent_info(true); // write parentYKey
-                            encoder.write_string(key.as_str());
-                        }
-                    } else if let TypePtr::Id(id) = &item.parent {
+                    if let TypePtr::Id(id) = &item.parent {
                         encoder.write_parent_info(false);
                         encoder.write_left_id(&id.id);
                     } else if let TypePtr::Named(name) = &item.parent {
@@ -350,15 +353,41 @@ impl Block {
     }
 
     pub fn is_skip(&self) -> bool {
-        if let Block::Skip(_) = self { true } else { false }
+        if let Block::Skip(_) = self {
+            true
+        } else {
+            false
+        }
     }
 
     pub fn is_gc(&self) -> bool {
-        if let Block::GC(_) = self { true } else { false }
+        if let Block::GC(_) = self {
+            true
+        } else {
+            false
+        }
     }
 
     pub fn is_item(&self) -> bool {
-        if let Block::Item(_) = self { true } else { false }
+        if let Block::Item(_) = self {
+            true
+        } else {
+            false
+        }
+    }
+
+    pub(crate) fn gc(&mut self, txn: &Transaction, parent_gced: bool) {
+        if let Block::Item(item) = self {
+            if item.is_deleted() {
+                item.content.gc(txn);
+                let len = item.len();
+                if parent_gced {
+                    *self = Block::GC(GC::new(item.id, len));
+                } else {
+                    item.content = ItemContent::Deleted(len);
+                }
+            }
+        }
     }
 }
 
@@ -781,7 +810,7 @@ impl Item {
         self.content.len()
     }
 
-    pub fn slice (&self, diff: u32) -> Item {
+    pub fn slice(&self, diff: u32) -> Item {
         if diff == 0 {
             self.clone()
         } else {
@@ -1220,6 +1249,66 @@ impl ItemContent {
             _ => false,
         }
     }
+
+    pub(crate) fn gc(&self, txn: &Transaction) {
+        match self {
+            ItemContent::Type(branch_ref) => {
+                let mut branch = branch_ref.borrow_mut();
+                let mut curr = branch.start.take();
+                while let Some(ptr) = curr {
+                    if let Some(block) = txn.store.blocks.get_block_mut(&ptr) {
+                        if let Block::Item(item) = block {
+                            curr = item.right.clone();
+                            block.gc(txn, true);
+                            continue;
+                        }
+                    }
+                    break;
+                }
+
+                for (_, ptr) in branch.map.drain() {
+                    curr = Some(ptr);
+                    while let Some(ptr) = curr {
+                        if let Some(block) = txn.store.blocks.get_block_mut(&ptr) {
+                            if let Block::Item(item) = block {
+                                curr = item.left.clone();
+                                block.gc(txn, true);
+                                continue;
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+            ItemContent::Doc(_, _) => {
+                /*
+                if (doc._item) {
+                  console.error('This document was already integrated as a sub-document. You should create a second instance instead with the same guid.')
+                }
+                /**
+                 * @type {Doc}
+                 */
+                this.doc = doc
+                /**
+                 * @type {any}
+                 */
+                const opts = {}
+                this.opts = opts
+                if (!doc.gc) {
+                  opts.gc = false
+                }
+                if (doc.autoLoad) {
+                  opts.autoLoad = true
+                }
+                if (doc.meta !== null) {
+                  opts.meta = doc.meta
+                }
+                 */
+                todo!()
+            }
+            _ => {}
+        }
+    }
 }
 
 impl std::fmt::Display for Item {
@@ -1282,7 +1371,13 @@ impl std::fmt::Display for ItemContent {
             ItemContent::Type(t) => {
                 let inner = t.borrow();
                 match inner.type_ref() {
-                    TYPE_REFS_ARRAY => write!(f, "<array(head: {})>", inner.start.unwrap()),
+                    TYPE_REFS_ARRAY => {
+                        if let Some(ptr) = inner.start {
+                            write!(f, "<array(head: {})>", ptr)
+                        } else {
+                            write!(f, "<array>")
+                        }
+                    }
                     TYPE_REFS_MAP => {
                         write!(f, "<map({{")?;
                         let mut iter = inner.map.iter();

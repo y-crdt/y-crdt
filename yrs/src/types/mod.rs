@@ -296,9 +296,10 @@ impl Branch {
                 if index < len {
                     return Some((&item.content, index as usize));
                 }
+
+                index -= len;
+                ptr = item.right.clone();
             }
-            index -= len;
-            ptr = item.right.clone();
         }
 
         None
@@ -443,7 +444,13 @@ where
 impl std::fmt::Display for Branch {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.type_ref() {
-            TYPE_REFS_ARRAY => write!(f, "YArray(start: {})", self.start.unwrap()),
+            TYPE_REFS_ARRAY => {
+                if let Some(ptr) = self.start {
+                    write!(f, "YArray(start: {})", ptr)
+                } else {
+                    write!(f, "YArray")
+                }
+            }
             TYPE_REFS_MAP => {
                 write!(f, "YMap(")?;
                 let mut iter = self.map.iter();
@@ -455,7 +462,13 @@ impl std::fmt::Display for Branch {
                 }
                 write!(f, ")")
             }
-            TYPE_REFS_TEXT => write!(f, "YText(start: {})", self.start.unwrap()),
+            TYPE_REFS_TEXT => {
+                if let Some(ptr) = self.start.as_ref() {
+                    write!(f, "YText(start: {})", ptr)
+                } else {
+                    write!(f, "YText")
+                }
+            }
             TYPE_REFS_XML_ELEMENT => {
                 write!(f, "YXmlElement")?;
                 if let Some(start) = self.start.as_ref() {
@@ -485,7 +498,13 @@ impl std::fmt::Display for Branch {
                 }
                 write!(f, ")")
             }
-            TYPE_REFS_XML_TEXT => write!(f, "YXmlText(start: {})", self.start.unwrap()),
+            TYPE_REFS_XML_TEXT => {
+                if let Some(ptr) = self.start {
+                    write!(f, "YXmlText(start: {})", ptr)
+                } else {
+                    write!(f, "YXmlText")
+                }
+            }
             other => {
                 write!(f, "UnknownRef")?;
                 if let Some(start) = self.start.as_ref() {

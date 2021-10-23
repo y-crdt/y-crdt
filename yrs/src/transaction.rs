@@ -187,7 +187,7 @@ impl<'a> Transaction<'a> {
     pub(crate) fn find_index_clean_start(&mut self, client: &u64, clock: u32) -> Option<usize> {
         let blocks = self.store.blocks.get_mut(client)?;
         let index = blocks.find_pivot(clock)?;
-        let block = &mut blocks[index];
+        let block = blocks.get_mut(index);
         if let Some(item) = block.as_item_mut() {
             if item.id.clock < clock {
                 // if we run over the clock, we need to the split item
@@ -235,7 +235,7 @@ impl<'a> Transaction<'a> {
                     // We can ignore the case of GC and Delete structs, because we are going to skip them
                     if let Some(mut index) = blocks.find_pivot(clock) {
                         // We can ignore the case of GC and Delete structs, because we are going to skip them
-                        if let Some(item) = blocks[index].as_item_mut() {
+                        if let Some(item) = blocks.get_mut(index).as_item_mut() {
                             // split the first item if necessary
                             if !item.is_deleted() && item.id.clock < clock {
                                 let split_ptr = BlockPtr::new(
@@ -251,7 +251,7 @@ impl<'a> Transaction<'a> {
                             }
 
                             while index < blocks.len() {
-                                let block = &mut blocks[index];
+                                let block = blocks.get_mut(index);
                                 if let Some(item) = block.as_item_mut() {
                                     if item.id.clock < clock_end {
                                         if !item.is_deleted() {
@@ -534,43 +534,20 @@ impl<'a> Transaction<'a> {
         // 12. emit 'subdocs'
     }
 
-    fn try_gc(&mut self) {
+    fn try_gc(&self) {
         for (client, range) in self.delete_set.iter() {
-            if let Some(blocks) = self.store.blocks.get_mut(client) {
+            if let Some(blocks) = self.store.blocks.get(client) {
                 for delete_item in range.iter().rev() {
                     let mut start = delete_item.start;
                     if let Some(mut i) = blocks.find_pivot(start) {
                         while i < blocks.len() {
-                            let block = &mut blocks[i];
+                            let block = blocks.get_mut(i);
                             let len = block.len();
                             start += len;
                             if start > delete_item.end {
                                 break;
                             } else {
-                                if let Block::Item(item) = block {
-                                    if item.is_deleted() {
-                                        if let ItemContent::Type(t) = &item.content {
-                                            /*
-                                            let item = this.type._start
-                                            while (item !== null) {
-                                              item.gc(store, true)
-                                              item = item.right
-                                            }
-                                            this.type._start = null
-                                            this.type._map.forEach(/** @param {Item | null} item */ (item) => {
-                                              while (item !== null) {
-                                                item.gc(store, true)
-                                                item = item.left
-                                              }
-                                            })
-                                            this.type._map = new Map()
-                                            */
-                                            todo!()
-                                        }
-
-                                        item.content = ItemContent::Deleted(len);
-                                    }
-                                }
+                                block.gc(self, false);
                                 i += 1;
                             }
                         }
