@@ -1,12 +1,12 @@
 use crate::updates::decoder::{Decode, Decoder, DecoderV1};
 use crate::updates::encoder::{Encode, Encoder, EncoderV1};
-use crate::{Doc, StateVector};
+use crate::{Doc, StateVector, Update};
 use lib0::decoding::{Cursor, Read};
 use lib0::encoding::Write;
-use rand::prelude::SliceRandom;
-use rand::rngs::ThreadRng;
-use rand::{thread_rng, Rng};
+use rand::prelude::{SliceRandom, StdRng};
+use rand::{random, thread_rng, Rng, SeedableRng};
 use std::cell::{RefCell, RefMut};
+use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 
@@ -31,12 +31,18 @@ const MSG_SYNC_STEP_1: usize = 0;
 const MSG_SYNC_STEP_2: usize = 1;
 const MSG_SYNC_UPDATE: usize = 2;
 
-pub fn run_scenario<F>(mods: &[F], users: usize, iterations: usize)
+pub fn run_scenario<F>(mut seed: u64, mods: &[F], users: usize, iterations: usize)
 where
-    F: Fn(&mut Doc, &mut ThreadRng),
+    F: Fn(&mut Doc, &mut StdRng),
 {
-    let mut tc = TestConnector::with_peer_num(thread_rng(), users as u64);
-    for _i in 0..iterations {
+    if seed == 0 {
+        seed = random();
+        println!("run scenario with seed: {}", seed);
+    }
+
+    let rng = StdRng::seed_from_u64(seed);
+    let mut tc = TestConnector::with_peer_num(rng, users as u64);
+    for i in 0..iterations {
         if tc.0.borrow_mut().rng.gen_range(0, 100) <= 2 {
             // 2% chance to disconnect/reconnect a random user
             if tc.0.borrow_mut().rng.gen_bool(0.5) {
@@ -67,7 +73,7 @@ where
 pub struct TestConnector(Rc<RefCell<Inner>>);
 
 struct Inner {
-    rng: ThreadRng,
+    rng: StdRng,
     peers: Vec<TestPeer>,
     /// Maps all Client IDs to indexes in the `docs` vector.
     all: HashMap<u64, usize>,
@@ -78,11 +84,11 @@ struct Inner {
 impl TestConnector {
     /// Create new [TestConnector] with random seed.
     pub fn new() -> Self {
-        Self::with_rng(thread_rng())
+        Self::with_rng(StdRng::from_rng(thread_rng()).unwrap())
     }
 
     /// Create new [TestConnector] with provided randomizer.
-    pub fn with_rng(rng: ThreadRng) -> Self {
+    pub fn with_rng(rng: StdRng) -> Self {
         TestConnector(Rc::new(RefCell::new(Inner {
             rng,
             peers: Vec::new(),
@@ -92,7 +98,7 @@ impl TestConnector {
     }
 
     /// Create a new [TestConnector] with pre-initialized number of peers.
-    pub fn with_peer_num(rng: ThreadRng, peer_num: u64) -> Self {
+    pub fn with_peer_num(rng: StdRng, peer_num: u64) -> Self {
         let mut tc = Self::with_rng(rng);
         for client_id in 0..peer_num {
             let peer = tc.create_peer(client_id);
@@ -105,7 +111,7 @@ impl TestConnector {
     }
 
     /// Returns random number generator attached to current [TestConnector].
-    pub fn rng(&self) -> RefMut<ThreadRng> {
+    pub fn rng(&self) -> RefMut<StdRng> {
         let inner = self.0.borrow_mut();
         RefMut::map(inner, |i| &mut i.rng)
     }
@@ -384,7 +390,8 @@ impl TestConnector {
     fn read_sync_step2<D: Decoder>(peer: &TestPeer, decoder: &mut D) {
         let mut txn = peer.doc.transact();
 
-        peer.doc.apply_update_v1(&mut txn, decoder.read_buf());
+        let update = Update::decode_v1(decoder.read_buf());
+        txn.apply_update(update);
     }
 
     fn read_update<D: Decoder>(peer: &TestPeer, decoder: &mut D) {
@@ -423,8 +430,8 @@ impl TestConnector {
         */
         let inner = self.0.borrow();
         for i in 0..(inner.peers.len() - 1) {
-            let a = inner.peers[i].doc.transact();
-            let b = inner.peers[i + 1].doc.transact();
+            let mut a = inner.peers[i].doc.transact();
+            let mut b = inner.peers[i + 1].doc.transact();
 
             assert_eq!(a.store.blocks, b.store.blocks);
             assert_eq!(a.store.pending, b.store.pending);

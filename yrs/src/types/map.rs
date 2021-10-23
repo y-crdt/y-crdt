@@ -206,7 +206,7 @@ mod test {
     use crate::{Doc, PrelimArray, PrelimMap, Transaction};
     use lib0::any::Any;
     use rand::distributions::Alphanumeric;
-    use rand::prelude::{SliceRandom, ThreadRng};
+    use rand::prelude::{SliceRandom, StdRng};
     use rand::Rng;
     use std::collections::HashMap;
 
@@ -529,7 +529,7 @@ mod test {
         }
     }
 
-    fn random_string(rng: &mut ThreadRng) -> String {
+    fn random_string(rng: &mut StdRng) -> String {
         let len = rng.gen_range(1, 10);
         rng.sample_iter(&Alphanumeric)
             .take(len)
@@ -537,8 +537,8 @@ mod test {
             .collect()
     }
 
-    fn map_transactions() -> [Box<dyn Fn(&mut Doc, &mut ThreadRng)>; 3] {
-        fn set(doc: &mut Doc, rng: &mut ThreadRng) {
+    fn map_transactions() -> [Box<dyn Fn(&mut Doc, &mut StdRng)>; 3] {
+        fn set(doc: &mut Doc, rng: &mut StdRng) {
             let mut txn = doc.transact();
             let map = txn.get_map("map");
             let key = ["one", "two"].choose(rng).unwrap();
@@ -546,7 +546,7 @@ mod test {
             map.insert(&mut txn, key.to_string(), value);
         }
 
-        fn set_type(doc: &mut Doc, rng: &mut ThreadRng) {
+        fn set_type(doc: &mut Doc, rng: &mut StdRng) {
             let mut txn = doc.transact();
             let map = txn.get_map("map");
             let key = ["one", "two"].choose(rng).unwrap();
@@ -569,7 +569,7 @@ mod test {
             }
         }
 
-        fn delete(doc: &mut Doc, rng: &mut ThreadRng) {
+        fn delete(doc: &mut Doc, rng: &mut StdRng) {
             let mut txn = doc.transact();
             let map = txn.get_map("map");
             let key = ["one", "two"].choose(rng).unwrap();
@@ -579,7 +579,7 @@ mod test {
     }
 
     fn fuzzy(iterations: usize) {
-        run_scenario(&map_transactions(), 5, iterations)
+        run_scenario(0, &map_transactions(), 5, iterations)
     }
 
     #[test]

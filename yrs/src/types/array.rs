@@ -227,7 +227,7 @@ mod test {
     use crate::types::Value;
     use crate::{Doc, PrelimArray};
     use lib0::any::Any;
-    use rand::prelude::ThreadRng;
+    use rand::prelude::StdRng;
     use rand::Rng;
     use std::collections::HashMap;
 
@@ -582,7 +582,7 @@ mod test {
         UNIQUE_NUMBER.fetch_add(1, Ordering::SeqCst)
     }
 
-    fn between(rng: &mut ThreadRng, x: u32, y: u32) -> u32 {
+    fn between(rng: &mut StdRng, x: u32, y: u32) -> u32 {
         let a = x.min(y);
         let b = x.max(y);
         if a == b {
@@ -592,8 +592,8 @@ mod test {
         }
     }
 
-    fn array_transactions() -> [Box<dyn Fn(&mut Doc, &mut ThreadRng)>; 4] {
-        fn insert(doc: &mut Doc, rng: &mut ThreadRng) {
+    fn array_transactions() -> [Box<dyn Fn(&mut Doc, &mut StdRng)>; 4] {
+        fn insert(doc: &mut Doc, rng: &mut StdRng) {
             let mut txn = doc.transact();
             let yarray = txn.get_array("array");
             let unique_number = get_unique_number();
@@ -617,7 +617,7 @@ mod test {
             }
         }
 
-        fn insert_type_array(doc: &mut Doc, rng: &mut ThreadRng) {
+        fn insert_type_array(doc: &mut Doc, rng: &mut StdRng) {
             let mut txn = doc.transact();
             let yarray = txn.get_array("array");
             let mut pos = between(rng, 0, yarray.len());
@@ -630,7 +630,7 @@ mod test {
             }
         }
 
-        fn insert_type_map(doc: &mut Doc, rng: &mut ThreadRng) {
+        fn insert_type_map(doc: &mut Doc, rng: &mut StdRng) {
             let mut txn = doc.transact();
             let yarray = txn.get_array("array");
             let mut pos = between(rng, 0, yarray.len());
@@ -640,11 +640,11 @@ mod test {
                 map.insert(&mut txn, "someprop".to_string(), 43);
                 map.insert(&mut txn, "someprop".to_string(), 44);
             } else {
-                panic!("should not happen")
+                panic!("should not happen: {}", txn.store)
             }
         }
 
-        fn delete(doc: &mut Doc, rng: &mut ThreadRng) {
+        fn delete(doc: &mut Doc, rng: &mut StdRng) {
             let mut txn = doc.transact();
             let yarray = txn.get_array("array");
             let len = yarray.len();
@@ -678,7 +678,7 @@ mod test {
     }
 
     fn fuzzy(iterations: usize) {
-        run_scenario(&array_transactions(), 5, iterations)
+        run_scenario(0, &array_transactions(), 5, iterations)
     }
 
     #[test]
