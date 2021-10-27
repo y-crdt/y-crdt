@@ -82,11 +82,6 @@ struct Inner {
 }
 
 impl TestConnector {
-    /// Create new [TestConnector] with random seed.
-    pub fn new() -> Self {
-        Self::with_rng(StdRng::from_rng(thread_rng()).unwrap())
-    }
-
     /// Create new [TestConnector] with provided randomizer.
     pub fn with_rng(rng: StdRng) -> Self {
         TestConnector(Rc::new(RefCell::new(Inner {
@@ -433,7 +428,11 @@ impl TestConnector {
             let mut a = inner.peers[i].doc.transact();
             let mut b = inner.peers[i + 1].doc.transact();
 
-            assert_eq!(a.store.blocks, b.store.blocks);
+            assert_eq!(
+                a.store.blocks, b.store.blocks,
+                "Block stores {} and {} differ: {:#?} vs {:#?}",
+                a.store.client_id, b.store.client_id, a.store.blocks, b.store.blocks
+            );
             assert_eq!(a.store.pending, b.store.pending);
             assert_eq!(a.store.pending_ds, b.store.pending_ds);
         }

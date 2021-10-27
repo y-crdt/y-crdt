@@ -5,5 +5,5 @@ members = [
   "ywasm",
   "lib0",
   "yffi",
-  "y-py"
+  #"y-py"
 ]

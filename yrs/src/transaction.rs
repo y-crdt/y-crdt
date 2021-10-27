@@ -299,8 +299,9 @@ impl<'a> Transaction<'a> {
         let mut recurse = Vec::new();
         let mut result = false;
 
-        if let Some(item) = self.store.blocks.get_item(&ptr) {
+        if let Some(item) = self.store.blocks.get_item_mut(&ptr) {
             if !item.is_deleted() {
+                println!("Client {} deleting {}", self.store.client_id, item);
                 if item.parent_sub.is_none() && item.is_countable() {
                     if let Some(parent) = self.store.get_type(&item.parent) {
                         let mut inner = parent.borrow_mut();
@@ -310,7 +311,25 @@ impl<'a> Transaction<'a> {
 
                 item.mark_as_deleted();
                 self.delete_set.insert(item.id.clone(), item.len());
-                // addChangedTypeToTransaction(transaction, item.type, item.parentSub)
+
+                match &item.parent {
+                    TypePtr::Named(_) => {
+                        self.changed
+                            .entry(item.parent.clone())
+                            .or_default()
+                            .insert(item.parent_sub.clone());
+                    }
+                    TypePtr::Id(ptr)
+                        if ptr.id.clock < self.before_state.get(&ptr.id.client)
+                            && self.store.blocks.get_item(ptr).unwrap().is_deleted() =>
+                    {
+                        self.changed
+                            .entry(item.parent.clone())
+                            .or_default()
+                            .insert(item.parent_sub.clone());
+                    }
+                    _ => {}
+                }
                 if item.id.clock < self.before_state.get(&item.id.client) {
                     let set = self.changed.entry(item.parent.clone()).or_default();
                     set.insert(item.parent_sub.clone());
@@ -343,9 +362,7 @@ impl<'a> Transaction<'a> {
                             recurse.push(ptr.clone());
                         }
                     }
-                    _ => {
-                        // nothing to do for other content types
-                    }
+                    _ => { /* nothing to do for other content types */ }
                 }
                 result = true;
             }
@@ -493,7 +510,7 @@ impl<'a> Transaction<'a> {
         self.try_gc(); //TODO: eventually this is a configurable variant: if (doc.gc)
 
         // 5. try merge delete set
-        self.delete_set.try_compact(&self.store.blocks);
+        self.delete_set.try_squash_with(&mut self.store.blocks);
 
         // 6. get transaction after state and try to merge to left
         for (client, &clock) in self.after_state.iter() {
@@ -557,14 +574,22 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    pub(crate) fn add_changed_type(&mut self, parent: &mut Branch, parent_sub: Option<&String>) {
-        // TODO:
-        /*
-              const item = type._item
-              if (item === null || (item.id.clock < (transaction.beforeState.get(item.id.client) || 0) && !item.deleted)) {
-                map.setIfUndefined(transaction.changed, type, set.create).add(parentSub)
-              }
-        */
+    pub(crate) fn add_changed_type(&mut self, parent: &Branch, parent_sub: Option<&String>) {
+        let trigger = match parent.item.as_ref() {
+            None => true,
+            Some(ptr) if ptr.id.clock < (self.before_state.get(&ptr.id.client)) => {
+                if let Some(item) = self.store.blocks.get_item(ptr) {
+                    !item.is_deleted()
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        };
+        if trigger {
+            let mut e = self.changed.entry(parent.ptr.clone()).or_default();
+            e.insert(parent_sub.cloned());
+        }
     }
 }
 

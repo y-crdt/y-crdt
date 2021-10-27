@@ -7,7 +7,6 @@ use crate::updates::decoder::Decoder;
 use crate::updates::encoder::Encoder;
 use crate::*;
 use lib0::any::Any;
-use std::cell::Cell;
 use std::collections::HashSet;
 use std::hash::Hash;
 use std::panic;
@@ -61,7 +60,7 @@ pub const HAS_PARENT_SUB: u8 = 0b00100000;
 ///
 /// [ID] corresponds to a [Lamport timestamp](https://en.wikipedia.org/wiki/Lamport_timestamp) in
 /// terms of its properties and guarantees.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash)]
 pub struct ID {
     /// Unique identifier of a client, which inserted corresponding item.
     pub client: u64,
@@ -73,6 +72,12 @@ pub struct ID {
     pub clock: u32,
 }
 
+impl std::fmt::Debug for ID {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "<{}#{}>", self.client, self.clock)
+    }
+}
+
 impl ID {
     pub fn new(client: u64, clock: u32) -> Self {
         ID { client, clock }
@@ -81,7 +86,7 @@ impl ID {
 
 /// A logical block pointer. It contains a unique block [ID], but also contains a helper metadata
 /// which allows to faster locate block it points to within a block store.
-#[derive(Debug, Clone, Copy, Hash)]
+#[derive(Clone, Copy, Hash)]
 pub struct BlockPtr {
     /// Unique identifier of a corresponding block.
     pub id: ID,
@@ -92,6 +97,12 @@ pub struct BlockPtr {
     /// it's used. If such check fails, search algorithm falls back to binary search and upon
     /// completion re-adjusts the pivot information.
     pivot: u32,
+}
+
+impl std::fmt::Debug for BlockPtr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "({}->{})", self.id, self.pivot)
+    }
 }
 
 impl BlockPtr {
@@ -216,6 +227,7 @@ impl Block {
         match (self, other) {
             (Block::Item(v1), Block::Item(v2)) => v1.try_squash(v2),
             (Block::GC(v1), Block::GC(v2)) => {
+                println!("squashing {:?} with {:?}", v1, v2);
                 v1.merge(v2);
                 true
             }
@@ -385,6 +397,7 @@ impl Block {
                     *self = Block::GC(GC::new(item.id, len));
                 } else {
                     item.content = ItemContent::Deleted(len);
+                    item.info = (item.info & !ITEM_FLAG_COUNTABLE);
                 }
             }
         }
@@ -448,7 +461,7 @@ pub(crate) struct Item {
     pub parent_sub: Option<String>, //TODO: Rc since it's already used in Branch.map component
 
     /// Bit flag field which contains information about specifics of this item.
-    pub info: Cell<u8>,
+    pub info: u8,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -518,34 +531,35 @@ impl Item {
             content,
             parent,
             parent_sub,
-            info: Cell::new(info),
+            info: info,
         }
     }
 
     //TODO: not used yet
     pub fn marked(&self) -> bool {
-        self.info.get() & ITEM_FLAG_MARKED == ITEM_FLAG_MARKED
+        self.info & ITEM_FLAG_MARKED == ITEM_FLAG_MARKED
     }
 
     //TODO: not used yet
     pub fn keep(&self) -> bool {
-        self.info.get() & ITEM_FLAG_KEEP == ITEM_FLAG_KEEP
+        self.info & ITEM_FLAG_KEEP == ITEM_FLAG_KEEP
     }
 
     /// Checks if current item is marked as deleted (tombstoned). Yrs uses soft item deletion
     /// mechanism.
     pub fn is_deleted(&self) -> bool {
-        self.info.get() & ITEM_FLAG_DELETED == ITEM_FLAG_DELETED
+        self.info & ITEM_FLAG_DELETED == ITEM_FLAG_DELETED
     }
 
     /// Checks if item content can be considered countable. Countable elements can be split
     /// and joined together.
     pub fn is_countable(&self) -> bool {
-        self.info.get() & ITEM_FLAG_COUNTABLE == ITEM_FLAG_COUNTABLE
+        self.info & ITEM_FLAG_COUNTABLE == ITEM_FLAG_COUNTABLE
     }
 
-    pub(crate) fn mark_as_deleted(&self) {
-        self.info.set(self.info.get() | ITEM_FLAG_DELETED);
+    pub(crate) fn mark_as_deleted(&mut self) {
+        println!("Block::mark_as_deleted: {}", self);
+        self.info |= ITEM_FLAG_DELETED;
     }
 
     /// Assign left/right neighbors of the block. This may require for origin/right_origin
@@ -779,7 +793,7 @@ impl Item {
             }
 
             self.integrate_content(txn, pivot, &mut *parent_ref);
-            txn.add_changed_type(&mut *parent_ref, self.parent_sub.as_ref());
+            txn.add_changed_type(&*parent_ref, self.parent_sub.as_ref());
             let parent_deleted = self.is_deleted();
             if parent_deleted || (self.parent_sub.is_some() && self.right.is_some()) {
                 // delete if parent is deleted or if this is not the current attribute value of parent
@@ -866,7 +880,7 @@ impl Item {
             && self.content.try_squash(&other.content)
         {
             self.right = other.right;
-            // self.right.left = self
+            //TODO: self.right.left = self
             true
         } else {
             false

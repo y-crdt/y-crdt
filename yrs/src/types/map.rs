@@ -120,11 +120,7 @@ impl Map {
     pub fn clear(&self, txn: &mut Transaction<'_>) {
         let t = self.0.borrow();
         for (_, ptr) in t.map.iter() {
-            if let Some(item) = txn.store.blocks.get_item(ptr) {
-                if !item.is_deleted() {
-                    item.mark_as_deleted();
-                }
-            }
+            txn.delete(ptr);
         }
     }
 }
