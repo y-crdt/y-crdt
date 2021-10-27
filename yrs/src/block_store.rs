@@ -134,10 +134,16 @@ impl Encode for StateVector {
 }
 
 /// A resizable list of blocks inserted by a single client.
-#[derive(Debug)]
 pub(crate) struct ClientBlockList {
     list: Vec<UnsafeCell<block::Block>>,
     integrated_len: usize,
+}
+
+impl std::fmt::Debug for ClientBlockList {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ClientBlockList")?;
+        f.debug_list().entries(self.iter()).finish()
+    }
 }
 
 impl PartialEq for ClientBlockList {
@@ -152,6 +158,7 @@ impl PartialEq for ClientBlockList {
                 if x != y {
                     return false;
                 }
+                i += 1;
             }
             true
         }

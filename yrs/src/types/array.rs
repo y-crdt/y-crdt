@@ -678,7 +678,7 @@ mod test {
     }
 
     fn fuzzy(iterations: usize) {
-        run_scenario(0, &array_transactions(), 5, iterations)
+        run_scenario(659982590918149556, &array_transactions(), 5, iterations)
     }
 
     #[test]
