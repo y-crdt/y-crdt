@@ -763,12 +763,6 @@ impl Item {
                     }
                     r.cloned()
                 } else {
-                    if parent_ref.type_ref() == TYPE_REFS_MAP {
-                        panic!(
-                            "WTF: self.parent {} - parent({}, start: {:?})",
-                            self.parent, parent_ref.ptr, parent_ref.start
-                        );
-                    }
                     let start = parent_ref.start.replace(BlockPtr::new(self.id, pivot));
                     start
                 };
@@ -857,9 +851,6 @@ impl Item {
     /// Splits current item in two and a given `diff` offset. Returns a new item created as result
     /// of this split.
     pub fn split(&mut self, diff: u32) -> Item {
-        if diff == 0 || diff >= self.content.len() {
-            panic!("Tried to split block {} at position {}", self, diff);
-        }
         let client = self.id.client;
         let clock = self.id.clock;
         let other = Item {
