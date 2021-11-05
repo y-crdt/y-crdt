@@ -15,7 +15,6 @@ use std::collections::hash_map::Entry;
 use std::collections::{HashMap, VecDeque};
 use std::hash::BuildHasherDefault;
 use std::rc::Rc;
-use std::vec::IntoIter;
 
 #[derive(Debug, PartialEq, Default, Clone)]
 pub(crate) struct UpdateBlocks {
@@ -67,6 +66,20 @@ impl UpdateBlocks {
             }
             blocks.insert(index, Block::Item(right_split));
         };
+    }
+}
+
+impl std::fmt::Display for UpdateBlocks {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "{{")?;
+        for (client, blocks) in self.clients.iter() {
+            writeln!(f, "\t{} -> [", client)?;
+            for block in blocks {
+                writeln!(f, "\t\t{}", block)?;
+            }
+            write!(f, "\t]")?;
+        }
+        writeln!(f, "}}")
     }
 }
 
@@ -666,15 +679,14 @@ impl PendingUpdate {}
 
 impl std::fmt::Display for Update {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{{")?;
-        for (k, v) in self.blocks.clients.iter() {
-            writeln!(f, "\t{} -> [", k)?;
-            for block in v.iter() {
-                writeln!(f, "\t\t{}", block)?;
-            }
-            writeln!(f, "\t]")?;
+        if self.is_empty() && self.delete_set.is_empty() {
+            write!(f, "{{}}")
+        } else {
+            write!(f, "{{")?;
+            write!(f, "body: {}", self.blocks)?;
+            write!(f, "delete_set: {}", self.delete_set)?;
+            write!(f, "}}")
         }
-        write!(f, "}}")
     }
 }
 
@@ -793,11 +805,11 @@ mod test {
 
     #[test]
     fn update_merge() {
-        let d1 = Doc::new();
+        let d1 = Doc::with_client_id(1);
         let mut t1 = d1.transact();
         let txt1 = t1.get_text("test");
 
-        let d2 = Doc::new();
+        let d2 = Doc::with_client_id(2);
         let mut t2 = d2.transact();
         let txt2 = t2.get_text("test");
 
@@ -820,7 +832,7 @@ mod test {
         // the same output as sequence of updates applied individually
         let u12 = Update::merge_updates(vec![u1, u2]);
 
-        let d3 = Doc::new();
+        let d3 = Doc::with_client_id(3);
         let mut t3 = d3.transact();
         let txt3 = t3.get_text("test");
         t3.apply_update(u12);

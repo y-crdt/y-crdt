@@ -1,4 +1,4 @@
-use crate::block::ItemContent;
+use crate::block::{Block, ItemContent};
 use crate::block_store::{BlockStore, SquashResult, StateVector};
 use crate::event::{EventHandler, UpdateEvent};
 use crate::id_set::DeleteSet;
@@ -84,16 +84,10 @@ impl Store {
     /// (defined by the user at document level) of such type didn't exist before, it will be created
     /// and returned. For other (recursively nested) types, they will be returned only if they
     /// already existed. Otherwise a `None` will be returned.
-    pub fn init_type_from_ptr(
-        &mut self,
-        ptr: &types::TypePtr,
-        content: &ItemContent,
-    ) -> Option<BranchRef> {
+    pub fn init_type_from_ptr(&mut self, ptr: &types::TypePtr) -> Option<BranchRef> {
         match ptr {
             types::TypePtr::Named(name) => {
-                if let ItemContent::Type(inner) = content {
-                    let e = self.types.entry(name.clone());
-                    let inner = e.or_insert(inner.clone());
+                if let Some(inner) = self.types.get(name) {
                     Some(inner.clone())
                 } else {
                     let inner = self.init_type_ref(name.clone(), None, TYPE_REFS_UNDEFINED);
@@ -175,9 +169,9 @@ impl Store {
             encoder.write_uvar(clock);
             let first_block = &blocks[start];
             // write first struct with an offset
-            first_block.encode(self, encoder);
+            first_block.encode(encoder);
             for i in (start + 1)..blocks.integrated_len() {
-                blocks[i].encode(self, encoder);
+                blocks[i].encode(encoder);
             }
         }
     }
@@ -198,7 +192,7 @@ impl Store {
         diff
     }
 
-    pub(crate) fn gc_cleanup(&mut self, compaction: SquashResult) {
+    pub(crate) fn gc_cleanup(&self, compaction: SquashResult) {
         if let Some(parent_sub) = compaction.parent_sub {
             if let Some(parent) = self.get_type(&compaction.parent) {
                 let mut inner = parent.borrow_mut();

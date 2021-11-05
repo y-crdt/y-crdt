@@ -1,4 +1,3 @@
-use crate::store::Store;
 use crate::types::{
     Branch, BranchRef, TypePtr, Value, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
     TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_HOOK, TYPE_REFS_XML_TEXT,
@@ -227,7 +226,6 @@ impl Block {
         match (self, other) {
             (Block::Item(v1), Block::Item(v2)) => v1.try_squash(v2),
             (Block::GC(v1), Block::GC(v2)) => {
-                println!("squashing {:?} with {:?}", v1, v2);
                 v1.merge(v2);
                 true
             }
@@ -274,7 +272,7 @@ impl Block {
         }
     }
 
-    pub fn encode<E: Encoder>(&self, store: &Store, encoder: &mut E) {
+    pub fn encode<E: Encoder>(&self, encoder: &mut E) {
         match self {
             Block::Item(item) => {
                 let info = item.info();
@@ -397,7 +395,7 @@ impl Block {
                     *self = Block::GC(GC::new(item.id, len));
                 } else {
                     item.content = ItemContent::Deleted(len);
-                    item.info = (item.info & !ITEM_FLAG_COUNTABLE);
+                    item.info = item.info & !ITEM_FLAG_COUNTABLE;
                 }
             }
         }
@@ -558,7 +556,6 @@ impl Item {
     }
 
     pub(crate) fn mark_as_deleted(&mut self) {
-        println!("Block::mark_as_deleted: {}", self);
         self.info |= ITEM_FLAG_DELETED;
     }
 
@@ -570,10 +567,9 @@ impl Item {
         if let Some(origin_id) = self.origin {
             let ptr = BlockPtr::from(origin_id);
             if let Some(item) = txn.store.blocks.get_item(&ptr) {
-                let id = self.origin.unwrap();
                 let len = item.len();
-                if id.clock == item.id.clock + len - 1 {
-                    self.left = Some(ptr);
+                if origin_id.clock == item.id.clock + len - 1 {
+                    self.left = Some(BlockPtr::new(item.id, ptr.pivot));
                 } else {
                     let ptr =
                         BlockPtr::new(ID::new(origin_id.client, origin_id.clock + 1), ptr.pivot);
@@ -637,7 +633,7 @@ impl Item {
             if let Some(mut left) = left {
                 if let Some(origin) = txn.store.blocks.get_item(&left) {
                     self.origin = Some(origin.last_id());
-                    left.id = origin.last_id();
+                    left.id = origin.id;
                     self.left = Some(left);
                 }
             } else {
@@ -648,7 +644,7 @@ impl Item {
         }
 
         let parent = match txn.store.get_type(&self.parent).cloned() {
-            None => txn.store.init_type_from_ptr(&self.parent, &self.content),
+            None => txn.store.init_type_from_ptr(&self.parent),
             parent => parent,
         };
 
@@ -767,6 +763,12 @@ impl Item {
                     }
                     r.cloned()
                 } else {
+                    if parent_ref.type_ref() == TYPE_REFS_MAP {
+                        panic!(
+                            "WTF: self.parent {} - parent({}, start: {:?})",
+                            self.parent, parent_ref.ptr, parent_ref.start
+                        );
+                    }
                     let start = parent_ref.start.replace(BlockPtr::new(self.id, pivot));
                     start
                 };
@@ -794,7 +796,15 @@ impl Item {
 
             self.integrate_content(txn, pivot, &mut *parent_ref);
             txn.add_changed_type(&*parent_ref, self.parent_sub.as_ref());
-            let parent_deleted = self.is_deleted();
+            let parent_deleted = if let TypePtr::Id(ptr) = &self.parent {
+                if let Some(item) = txn.store.blocks.get_item(ptr) {
+                    item.is_deleted()
+                } else {
+                    true
+                }
+            } else {
+                false
+            };
             if parent_deleted || (self.parent_sub.is_some() && self.right.is_some()) {
                 // delete if parent is deleted or if this is not the current attribute value of parent
                 true
@@ -847,11 +857,14 @@ impl Item {
     /// Splits current item in two and a given `diff` offset. Returns a new item created as result
     /// of this split.
     pub fn split(&mut self, diff: u32) -> Item {
+        if diff == 0 || diff >= self.content.len() {
+            panic!("Tried to split block {} at position {}", self, diff);
+        }
         let client = self.id.client;
         let clock = self.id.clock;
         let other = Item {
             id: ID::new(client, clock + diff),
-            left: Some(BlockPtr::from(ID::new(client, clock + diff - 1))),
+            left: Some(BlockPtr::from(self.id)),
             right: self.right.clone(),
             origin: Some(ID::new(client, clock + diff - 1)),
             right_origin: self.right_origin.clone(),
@@ -1410,7 +1423,7 @@ impl std::fmt::Display for ItemContent {
                     TYPE_REFS_XML_FRAGMENT => write!(f, "<xml fragment>"),
                     TYPE_REFS_XML_HOOK => write!(f, "<xml hook>"),
                     TYPE_REFS_XML_TEXT => write!(f, "<xml text>"),
-                    other => write!(f, "<undefined type ref>"),
+                    _ => write!(f, "<undefined type ref>"),
                 }
             }
             _ => Ok(()),
@@ -1452,23 +1465,23 @@ impl<T> Prelim for T
 where
     T: Into<Any>,
 {
-    fn into_content(self, txn: &mut Transaction, ptr: TypePtr) -> (ItemContent, Option<Self>) {
+    fn into_content(self, _txn: &mut Transaction, _ptr: TypePtr) -> (ItemContent, Option<Self>) {
         let value: Any = self.into();
         (ItemContent::Any(vec![value]), None)
     }
 
-    fn integrate(self, txn: &mut Transaction, inner_ref: BranchRef) {}
+    fn integrate(self, _txn: &mut Transaction, _inner_ref: BranchRef) {}
 }
 
 #[derive(Debug)]
 pub struct PrelimText(pub String);
 
 impl Prelim for PrelimText {
-    fn into_content(self, txn: &mut Transaction, ptr: TypePtr) -> (ItemContent, Option<Self>) {
+    fn into_content(self, _txn: &mut Transaction, _ptr: TypePtr) -> (ItemContent, Option<Self>) {
         (ItemContent::String(self.0), None)
     }
 
-    fn integrate(self, txn: &mut Transaction, inner_ref: BranchRef) {}
+    fn integrate(self, _txn: &mut Transaction, _inner_ref: BranchRef) {}
 }
 
 impl std::fmt::Display for ID {

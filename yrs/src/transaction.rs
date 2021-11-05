@@ -301,7 +301,6 @@ impl<'a> Transaction<'a> {
 
         if let Some(item) = self.store.blocks.get_item_mut(&ptr) {
             if !item.is_deleted() {
-                println!("Client {} deleting {}", self.store.client_id, item);
                 if item.parent_sub.is_none() && item.is_countable() {
                     if let Some(parent) = self.store.get_type(&item.parent) {
                         let mut inner = parent.borrow_mut();
@@ -370,6 +369,10 @@ impl<'a> Transaction<'a> {
 
         for ptr in recurse.iter() {
             if !self.delete(ptr) {
+                // Whis will be gc'd later and we want to merge it if possible
+                // We try to merge all deleted items after each transaction,
+                // but we have no knowledge about that this needs to be merged
+                // since it is not in transaction.ds. Hence we add it to transaction._mergeStructs
                 self.merge_blocks.push(ptr.id);
             }
         }
@@ -479,9 +482,12 @@ impl<'a> Transaction<'a> {
             parent_sub,
             content,
         );
+
         item.integrate(self, pivot, 0);
+
         let local_block_list = self.store.blocks.get_client_blocks_mut(client_id);
         local_block_list.push(block::Block::Item(item));
+
         let idx = local_block_list.len() - 1;
 
         if let Some(remainder) = remainder {
@@ -510,7 +516,7 @@ impl<'a> Transaction<'a> {
         self.try_gc(); //TODO: eventually this is a configurable variant: if (doc.gc)
 
         // 5. try merge delete set
-        self.delete_set.try_squash_with(&mut self.store.blocks);
+        self.delete_set.try_squash_with(&mut self.store);
 
         // 6. get transaction after state and try to merge to left
         for (client, &clock) in self.after_state.iter() {
@@ -587,7 +593,7 @@ impl<'a> Transaction<'a> {
             _ => false,
         };
         if trigger {
-            let mut e = self.changed.entry(parent.ptr.clone()).or_default();
+            let e = self.changed.entry(parent.ptr.clone()).or_default();
             e.insert(parent_sub.cloned());
         }
     }

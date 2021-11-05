@@ -486,7 +486,7 @@ mod test {
     fn text_transactions() -> [Box<dyn Fn(&mut Doc, &mut StdRng)>; 2] {
         fn insert_text(doc: &mut Doc, rng: &mut StdRng) {
             let mut txn = doc.transact();
-            let mut ytext = txn.get_text("text");
+            let ytext = txn.get_text("text");
             let pos = between(rng, 0, ytext.len());
             let word = random_string(rng);
             ytext.insert(&mut txn, pos, word.as_str());
@@ -494,7 +494,7 @@ mod test {
 
         fn delete_text(doc: &mut Doc, rng: &mut StdRng) {
             let mut txn = doc.transact();
-            let mut ytext = txn.get_text("text");
+            let ytext = txn.get_text("text");
             let len = ytext.len();
             if len > 0 {
                 let pos = between(rng, 0, len - 1);
@@ -513,30 +513,5 @@ mod test {
     #[test]
     fn fuzzy_test_3() {
         fuzzy(3)
-    }
-
-    #[test]
-    fn fuzzy_test_30() {
-        fuzzy(30)
-    }
-
-    #[test]
-    fn fuzzy_test_40() {
-        fuzzy(40)
-    }
-
-    #[test]
-    fn fuzzy_test_70() {
-        fuzzy(70)
-    }
-
-    #[test]
-    fn fuzzy_test_100() {
-        fuzzy(100)
-    }
-
-    #[test]
-    fn fuzzy_test_300() {
-        fuzzy(300)
     }
 }
