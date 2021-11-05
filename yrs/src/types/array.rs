@@ -194,12 +194,12 @@ where
     T: IntoIterator<Item = V>,
     V: Into<Any>,
 {
-    fn into_content(self, txn: &mut Transaction, ptr: TypePtr) -> (ItemContent, Option<Self>) {
+    fn into_content(self, _txn: &mut Transaction, _ptr: TypePtr) -> (ItemContent, Option<Self>) {
         let vec: Vec<Any> = self.0.into_iter().map(|v| v.into()).collect();
         (ItemContent::Any(vec), None)
     }
 
-    fn integrate(self, txn: &mut Transaction, inner_ref: BranchRef) {}
+    fn integrate(self, _txn: &mut Transaction, _inner_ref: BranchRef) {}
 }
 
 impl<T, V> Prelim for PrelimArray<T, V>
@@ -207,7 +207,7 @@ where
     V: Prelim,
     T: IntoIterator<Item = V>,
 {
-    fn into_content(self, txn: &mut Transaction, ptr: TypePtr) -> (ItemContent, Option<Self>) {
+    fn into_content(self, _txn: &mut Transaction, ptr: TypePtr) -> (ItemContent, Option<Self>) {
         let inner = BranchRef::new(Branch::new(ptr, TYPE_REFS_ARRAY, None));
         (ItemContent::Type(inner), Some(self))
     }
@@ -566,10 +566,10 @@ mod test {
             let mut expected = HashMap::new();
             expected.insert("value".to_owned(), Any::Number(i as f64));
             match value {
-                Value::YMap(ref map) => {
+                Value::YMap(_) => {
                     assert_eq!(value.to_json(&txn), Any::Map(expected))
                 }
-                other => panic!("Value of array at index {} was no YMap", i),
+                _ => panic!("Value of array at index {} was no YMap", i),
             }
         }
     }
@@ -598,7 +598,7 @@ mod test {
             let yarray = txn.get_array("array");
             let unique_number = get_unique_number();
             let len = between(rng, 1, 4);
-            let mut content: Vec<_> = (0..len)
+            let content: Vec<_> = (0..len)
                 .into_iter()
                 .map(|_| Any::BigInt(unique_number))
                 .collect();
@@ -620,7 +620,7 @@ mod test {
         fn insert_type_array(doc: &mut Doc, rng: &mut StdRng) {
             let mut txn = doc.transact();
             let yarray = txn.get_array("array");
-            let mut pos = between(rng, 0, yarray.len());
+            let pos = between(rng, 0, yarray.len());
             yarray.insert(&mut txn, pos, PrelimArray::from([1, 2, 3, 4]));
             if let Value::YArray(array2) = yarray.get(&txn, pos).unwrap() {
                 let expected: Vec<_> = (1..=4).map(|i| Any::Number(i as f64)).collect();
@@ -633,7 +633,7 @@ mod test {
         fn insert_type_map(doc: &mut Doc, rng: &mut StdRng) {
             let mut txn = doc.transact();
             let yarray = txn.get_array("array");
-            let mut pos = between(rng, 0, yarray.len());
+            let pos = between(rng, 0, yarray.len());
             yarray.insert(&mut txn, pos, PrelimMap::<i32>::from(HashMap::default()));
             if let Value::YMap(map) = yarray.get(&txn, pos).unwrap() {
                 map.insert(&mut txn, "someprop".to_string(), 42);
@@ -660,7 +660,7 @@ mod test {
                 } else {
                     if let Any::Array(mut old_content) = yarray.to_json(&txn) {
                         yarray.remove_range(&mut txn, pos, del_len);
-                        old_content.drain((pos as usize..(pos + del_len) as usize));
+                        old_content.drain(pos as usize..(pos + del_len) as usize);
                         assert_eq!(yarray.to_json(&txn), Any::Array(old_content));
                     } else {
                         panic!("should not happen")
@@ -678,86 +678,11 @@ mod test {
     }
 
     fn fuzzy(iterations: usize) {
-        run_scenario(659982590918149556, &array_transactions(), 5, iterations)
+        run_scenario(0, &array_transactions(), 5, iterations)
     }
 
     #[test]
     fn fuzzy_test_6() {
         fuzzy(6)
-    }
-
-    #[test]
-    fn fuzzy_test_40() {
-        fuzzy(40)
-    }
-
-    #[test]
-    fn fuzzy_test_42() {
-        fuzzy(42)
-    }
-
-    #[test]
-    fn fuzzy_test_43() {
-        fuzzy(43)
-    }
-
-    #[test]
-    fn fuzzy_test_44() {
-        fuzzy(44)
-    }
-
-    #[test]
-    fn fuzzy_test_45() {
-        fuzzy(45)
-    }
-
-    #[test]
-    fn fuzzy_test_46() {
-        fuzzy(46)
-    }
-
-    #[test]
-    fn fuzzy_test_300() {
-        fuzzy(300)
-    }
-
-    #[test]
-    fn fuzzy_test_400() {
-        fuzzy(400)
-    }
-
-    #[test]
-    fn fuzzy_test_500() {
-        fuzzy(500)
-    }
-
-    #[test]
-    fn fuzzy_test_600() {
-        fuzzy(600)
-    }
-
-    #[test]
-    fn fuzzy_test_1000() {
-        fuzzy(1000)
-    }
-
-    #[test]
-    fn fuzzy_test_1800() {
-        fuzzy(1800)
-    }
-
-    #[test]
-    fn fuzzy_test_3000() {
-        fuzzy(3000)
-    }
-
-    #[test]
-    fn fuzzy_test_5000() {
-        fuzzy(5000)
-    }
-
-    #[test]
-    fn fuzzy_test_30000() {
-        fuzzy(30000)
     }
 }

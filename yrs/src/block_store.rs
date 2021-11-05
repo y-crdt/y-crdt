@@ -4,11 +4,11 @@ use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::client_hasher::ClientHasher;
 use crate::*;
-use std::cell::{RefCell, UnsafeCell};
+use std::cell::UnsafeCell;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::hash::BuildHasherDefault;
-use std::ops::{Index, IndexMut};
+use std::ops::Index;
 use std::vec::Vec;
 
 /// State vector is a compact representation of all known blocks inserted and integrated into
@@ -253,6 +253,7 @@ impl ClientBlockList {
             //todo: does it even make sense to pivot the search?
             // If a good split misses, it might actually increase the time to find the correct item.
             // Currently, the only advantage is that search with pivoting might find the item on the first try.
+            //let clock = clock.min(right as u32);
             let div = current_clock + block.len() - 1;
             let mut mid = ((clock / div) * right as u32) as usize;
             while left <= right {
@@ -350,6 +351,7 @@ impl ClientBlockList {
 }
 
 /// A structure describing a changes made during block squashing.
+#[derive(Debug)]
 pub(crate) struct SquashResult {
     pub parent: TypePtr,
     pub parent_sub: Option<String>,
@@ -450,8 +452,7 @@ impl BlockStore {
     /// Returns mutable reference to an item, given its pointer. Returns `None` if not such block
     /// could be found.
     pub(crate) fn get_item_mut(&self, ptr: &block::BlockPtr) -> Option<&mut block::Item> {
-        let blocks = self.clients.get(&ptr.id.client)?;
-        let block = blocks.try_get_mut(ptr.pivot())?;
+        let block = self.get_block_mut(ptr)?;
         block.as_item_mut()
     }
 

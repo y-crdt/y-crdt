@@ -4,9 +4,8 @@ use crate::{Doc, StateVector, Update};
 use lib0::decoding::{Cursor, Read};
 use lib0::encoding::Write;
 use rand::prelude::{SliceRandom, StdRng};
-use rand::{random, thread_rng, Rng, SeedableRng};
+use rand::{random, Rng, SeedableRng};
 use std::cell::{RefCell, RefMut};
-use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 
@@ -41,8 +40,8 @@ where
     }
 
     let rng = StdRng::seed_from_u64(seed);
-    let mut tc = TestConnector::with_peer_num(rng, users as u64);
-    for i in 0..iterations {
+    let tc = TestConnector::with_peer_num(rng, users as u64);
+    for _ in 0..iterations {
         if tc.0.borrow_mut().rng.gen_range(0, 100) <= 2 {
             // 2% chance to disconnect/reconnect a random user
             if tc.0.borrow_mut().rng.gen_bool(0.5) {
@@ -428,10 +427,16 @@ impl TestConnector {
             let mut a = inner.peers[i].doc.transact();
             let mut b = inner.peers[i + 1].doc.transact();
 
+            let aarray = a.get_array("array");
+            let barray = b.get_array("array");
+
+            let ajson = aarray.to_json(&a);
+            let bjson = barray.to_json(&b);
+
             assert_eq!(
                 a.store.blocks, b.store.blocks,
-                "Block stores {} and {} differ: {:#?} vs {:#?}",
-                a.store.client_id, b.store.client_id, a.store.blocks, b.store.blocks
+                "Block stores {} and {} differ: {:#?} vs {:#?} - materialized: {} vs {}",
+                a.store.client_id, b.store.client_id, a.store.blocks, b.store.blocks, ajson, bjson
             );
             assert_eq!(a.store.pending, b.store.pending);
             assert_eq!(a.store.pending_ds, b.store.pending_ds);

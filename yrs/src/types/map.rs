@@ -196,7 +196,6 @@ impl<T: Prelim> Prelim for PrelimMap<T> {
 
 #[cfg(test)]
 mod test {
-    use crate::block::Prelim;
     use crate::test_utils::{exchange_updates, run_scenario};
     use crate::types::{Map, Value};
     use crate::{Doc, PrelimArray, PrelimMap, Transaction};
@@ -581,80 +580,5 @@ mod test {
     #[test]
     fn fuzzy_test_6() {
         fuzzy(6)
-    }
-
-    #[test]
-    fn fuzzy_test_40() {
-        fuzzy(40)
-    }
-
-    #[test]
-    fn fuzzy_test_42() {
-        fuzzy(42)
-    }
-
-    #[test]
-    fn fuzzy_test_43() {
-        fuzzy(43)
-    }
-
-    #[test]
-    fn fuzzy_test_44() {
-        fuzzy(44)
-    }
-
-    #[test]
-    fn fuzzy_test_45() {
-        fuzzy(45)
-    }
-
-    #[test]
-    fn fuzzy_test_46() {
-        fuzzy(46)
-    }
-
-    #[test]
-    fn fuzzy_test_300() {
-        fuzzy(300)
-    }
-
-    #[test]
-    fn fuzzy_test_400() {
-        fuzzy(400)
-    }
-
-    #[test]
-    fn fuzzy_test_500() {
-        fuzzy(500)
-    }
-
-    #[test]
-    fn fuzzy_test_600() {
-        fuzzy(600)
-    }
-
-    #[test]
-    fn fuzzy_test_1000() {
-        fuzzy(1000)
-    }
-
-    #[test]
-    fn fuzzy_test_1800() {
-        fuzzy(1800)
-    }
-
-    #[test]
-    fn fuzzy_test_3000() {
-        fuzzy(3000)
-    }
-
-    #[test]
-    fn fuzzy_test_5000() {
-        fuzzy(5000)
-    }
-
-    #[test]
-    fn fuzzy_test_30000() {
-        fuzzy(30000)
     }
 }

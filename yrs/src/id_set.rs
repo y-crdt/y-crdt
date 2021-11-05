@@ -1,5 +1,6 @@
-use crate::block::ID;
+use crate::block::{Block, ID};
 use crate::block_store::BlockStore;
+use crate::store::Store;
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::client_hasher::ClientHasher;
@@ -455,17 +456,27 @@ impl DeleteSet {
         self.0.squash()
     }
 
-    pub(crate) fn try_squash_with(&mut self, blocks: &mut BlockStore) {
+    pub(crate) fn try_squash_with(&mut self, store: &mut Store) {
         // try to merge deleted / gc'd items
         for (client, range) in self.iter() {
-            if let Some(blocks) = blocks.get_mut(client) {
+            if let Some(mut blocks) = store.blocks.get_mut(client) {
                 for r in range.iter().rev() {
                     // start with merging the item next to the last deleted item
                     let mut si = (blocks.len() - 1)
                         .min(1 + blocks.find_pivot(r.end - 1).unwrap_or_default());
                     let mut block = &blocks[si];
                     while si > 0 && block.id().clock >= r.start {
-                        blocks.squash_left(si);
+                        if let Some(compaction) = blocks.squash_left(si) {
+                            if let Some(right) = compaction.new_right {
+                                right.fix_pivot((right.pivot().max(1) - 1) as u32);
+                                if let Block::Item(item) =
+                                    store.blocks.get_block_mut(&right).unwrap()
+                                {
+                                    item.left = Some(compaction.replacement);
+                                }
+                                blocks = store.blocks.get_mut(client).unwrap();
+                            }
+                        }
                         si -= 1;
                         block = &blocks[si];
                     }
