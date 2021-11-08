@@ -581,9 +581,9 @@ impl<'a> Transaction<'a> {
     }
 
     pub(crate) fn add_changed_type(&mut self, parent: &Branch, parent_sub: Option<&String>) {
-        let trigger = match parent.item.as_ref() {
-            None => true,
-            Some(ptr) if ptr.id.clock < (self.before_state.get(&ptr.id.client)) => {
+        let trigger = match &parent.ptr {
+            TypePtr::Named(_) => true,
+            TypePtr::Id(ptr) if ptr.id.clock < (self.before_state.get(&ptr.id.client)) => {
                 if let Some(item) = self.store.blocks.get_item(ptr) {
                     !item.is_deleted()
                 } else {

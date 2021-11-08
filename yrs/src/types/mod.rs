@@ -220,8 +220,6 @@ pub struct Branch {
     /// A tag name identifier, used only by [XmlElement].
     pub name: Option<String>,
 
-    pub item: Option<BlockPtr>, //TODO: isn't this equivalent to `ptr` field?
-
     /// A length of an indexed sequence component of a current branch node. Map component elements
     /// are computed on demand.
     pub len: u32,
@@ -236,7 +234,6 @@ impl Branch {
             start: None,
             map: HashMap::default(),
             len: 0,
-            item: None,
             ptr,
             name,
             type_ref,

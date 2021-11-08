@@ -462,12 +462,12 @@ impl<'a, 'txn> Iterator for TreeWalker<'a, 'txn> {
                                 } else if current.parent == self.root {
                                     n = None;
                                 } else {
-                                    n = self
-                                        .txn
-                                        .store
-                                        .get_type(&current.parent)
-                                        .and_then(|t| t.as_ref().item.as_ref())
-                                        .and_then(|ptr| self.txn.store.blocks.get_item(ptr));
+                                    n = self.txn.store.get_type(&current.parent).and_then(|t| {
+                                        match &t.as_ref().ptr {
+                                            TypePtr::Id(ptr) => self.txn.store.blocks.get_item(ptr),
+                                            _ => None,
+                                        }
+                                    });
                                 }
                             }
                         }
@@ -652,7 +652,7 @@ impl XmlText {
     /// This method may panic if `index` if greater than a length of this text.
     pub fn insert(&self, txn: &mut Transaction, index: u32, content: &str) {
         if let Some(mut pos) = self.0.find_position(txn, index) {
-            let parent = { TypePtr::Id(self.inner().item.unwrap()) };
+            let parent = { self.inner().ptr.clone() };
             pos.parent = parent;
             txn.create_item(&pos, crate::block::PrelimText(content.to_owned()), None);
         } else {
@@ -712,10 +712,11 @@ impl Prelim for PrelimXml {
 }
 
 fn next_sibling(inner: Ref<Branch>, txn: &Transaction) -> Option<Xml> {
-    let mut current = inner
-        .item
-        .as_ref()
-        .and_then(|ptr| txn.store.blocks.get_item(ptr));
+    let mut current = if let TypePtr::Id(ptr) = &inner.ptr {
+        txn.store.blocks.get_item(ptr)
+    } else {
+        None
+    };
     while let Some(item) = current {
         current = item
             .right
@@ -734,10 +735,11 @@ fn next_sibling(inner: Ref<Branch>, txn: &Transaction) -> Option<Xml> {
 }
 
 fn prev_sibling(inner: Ref<Branch>, txn: &Transaction) -> Option<Xml> {
-    let mut current = inner
-        .item
-        .as_ref()
-        .and_then(|ptr| txn.store.blocks.get_item(ptr));
+    let mut current = if let TypePtr::Id(ptr) = &inner.ptr {
+        txn.store.blocks.get_item(ptr)
+    } else {
+        None
+    };
     while let Some(item) = current {
         current = item
             .left
@@ -756,9 +758,13 @@ fn prev_sibling(inner: Ref<Branch>, txn: &Transaction) -> Option<Xml> {
 }
 
 fn parent(inner: Ref<Branch>, txn: &Transaction) -> Option<XmlElement> {
-    let item = txn.store.blocks.get_item(inner.item.as_ref()?)?;
-    let parent = txn.store.get_type(&item.parent)?;
-    Some(XmlElement::from(parent.clone()))
+    if let TypePtr::Id(ptr) = &inner.ptr {
+        let item = txn.store.blocks.get_item(ptr)?;
+        let parent = txn.store.get_type(&item.parent)?;
+        Some(XmlElement::from(parent.clone()))
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]

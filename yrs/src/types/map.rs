@@ -2,7 +2,7 @@ use crate::block::{ItemContent, ItemPosition, Prelim};
 use crate::types::{Branch, BranchRef, Entries, TypePtr, Value, TYPE_REFS_MAP};
 use crate::*;
 use lib0::any::Any;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Collection used to store key-value entries in an unordered manner. Keys are always represented
 /// as UTF-8 strings. Values can be any value type supported by Yrs: JSON-like primitives as well as
@@ -192,6 +192,12 @@ impl<T: Prelim> Prelim for PrelimMap<T> {
             map.insert(txn, key, value);
         }
     }
+}
+
+pub struct MapEvent<'a, 'txn> {
+    target: Map,
+    transaction: &'a Transaction<'txn>,
+    keys: HashSet<&'a str>,
 }
 
 #[cfg(test)]

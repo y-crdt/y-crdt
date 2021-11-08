@@ -920,11 +920,11 @@ impl Item {
             }
             ItemContent::Type(inner) => {
                 // this.type._integrate(transaction.doc, item)
-                let ptr = Some(BlockPtr::new(self.id.clone(), pivot));
-                match inner.try_borrow_mut() {
-                    Ok(mut parent) => parent.item = ptr,
-                    Err(_) => parent.item = ptr,
-                }
+                //let ptr = Some(BlockPtr::new(self.id.clone(), pivot));
+                //match inner.try_borrow_mut() {
+                //    Ok(mut parent) => parent.item = ptr,
+                //    Err(_) => parent.item = ptr,
+                //}
             }
             _ => {
                 // other types don't define integration-specific actions
