@@ -1,4 +1,4 @@
-use crate::block::{Block, ItemContent};
+use crate::block::ItemContent;
 use crate::block_store::{BlockStore, SquashResult, StateVector};
 use crate::event::{EventHandler, UpdateEvent};
 use crate::id_set::DeleteSet;

@@ -129,7 +129,6 @@ impl Update {
                     while i1 < blocks.len() {
                         let a = &mut blocks[i1];
                         if let Some(b) = n2.as_ref() {
-                            print!("Update::merge");
                             if a.try_squash(b) {
                                 n2 = i2.next();
                                 continue;
@@ -520,10 +519,10 @@ impl Update {
                 // remember: first the high client-ids are written
 
                 loop {
-                    if let Some(_curr) = &curr {
-                        if _curr.id().clock + _curr.len()
+                    if let Some(block) = curr {
+                        if block.id().clock + block.len()
                             < curr_write_block.id().clock + curr_write_block.len()
-                            && _curr.id().client >= curr_write_block.id().client
+                            && block.id().client >= curr_write_block.id().client
                         {
                             curr = curr_decoder.next();
                             iterated = true;
@@ -592,7 +591,6 @@ impl Update {
                                 curr = tmp_curr.as_ref();
                             }
                         }
-                        print!("Update::merge_updates");
                         if curr_write_block.try_squash(&curr_unwrapped) {
                             result.blocks.add_block(curr_write_block, 0);
                             curr_write = Some(curr_unwrapped.clone());

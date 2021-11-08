@@ -142,9 +142,8 @@ impl From<BranchRef> for Text {
 
 #[cfg(test)]
 mod test {
-    use crate::test_utils::run_scenario;
+    use crate::test_utils::{run_scenario, RngExt};
     use crate::Doc;
-    use rand::distributions::Alphanumeric;
     use rand::prelude::StdRng;
     use rand::Rng;
 
@@ -465,30 +464,12 @@ mod test {
         assert_eq!(a, "H beautifuld!".to_owned());
     }
 
-    fn between(rng: &mut StdRng, x: u32, y: u32) -> u32 {
-        let a = x.min(y);
-        let b = x.max(y);
-        if a == b {
-            a
-        } else {
-            rng.gen_range(a, b)
-        }
-    }
-
-    fn random_string(rng: &mut StdRng) -> String {
-        let len = rng.gen_range(1, 10);
-        rng.sample_iter(&Alphanumeric)
-            .take(len)
-            .map(char::from)
-            .collect()
-    }
-
     fn text_transactions() -> [Box<dyn Fn(&mut Doc, &mut StdRng)>; 2] {
         fn insert_text(doc: &mut Doc, rng: &mut StdRng) {
             let mut txn = doc.transact();
             let ytext = txn.get_text("text");
-            let pos = between(rng, 0, ytext.len());
-            let word = random_string(rng);
+            let pos = rng.between(0, ytext.len());
+            let word = rng.random_string();
             ytext.insert(&mut txn, pos, word.as_str());
         }
 
@@ -497,8 +478,8 @@ mod test {
             let ytext = txn.get_text("text");
             let len = ytext.len();
             if len > 0 {
-                let pos = between(rng, 0, len - 1);
-                let to_delete = between(rng, 2, len - pos);
+                let pos = rng.between(0, len - 1);
+                let to_delete = rng.between(2, len - pos);
                 ytext.remove_range(&mut txn, pos, to_delete);
             }
         }
