@@ -3,8 +3,9 @@ use crate::updates::encoder::{Encode, Encoder, EncoderV1};
 use crate::{Doc, StateVector, Update};
 use lib0::decoding::{Cursor, Read};
 use lib0::encoding::Write;
+use rand::distributions::Alphanumeric;
 use rand::prelude::{SliceRandom, StdRng};
-use rand::{random, Rng, SeedableRng};
+use rand::{random, Rng, RngCore, SeedableRng};
 use std::cell::{RefCell, RefMut};
 use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
@@ -424,20 +425,10 @@ impl TestConnector {
         */
         let inner = self.0.borrow();
         for i in 0..(inner.peers.len() - 1) {
-            let mut a = inner.peers[i].doc.transact();
-            let mut b = inner.peers[i + 1].doc.transact();
+            let a = inner.peers[i].doc.transact();
+            let b = inner.peers[i + 1].doc.transact();
 
-            let aarray = a.get_array("array");
-            let barray = b.get_array("array");
-
-            let ajson = aarray.to_json(&a);
-            let bjson = barray.to_json(&b);
-
-            assert_eq!(
-                a.store.blocks, b.store.blocks,
-                "Block stores {} and {} differ: {:#?} vs {:#?} - materialized: {} vs {}",
-                a.store.client_id, b.store.client_id, a.store.blocks, b.store.blocks, ajson, bjson
-            );
+            assert_eq!(a.store.blocks, b.store.blocks);
             assert_eq!(a.store.pending, b.store.pending);
             assert_eq!(a.store.pending_ds, b.store.pending_ds);
         }
@@ -494,3 +485,25 @@ impl TestPeer {
         messages.push_back(message);
     }
 }
+
+pub(crate) trait RngExt: RngCore {
+    fn between(&mut self, x: u32, y: u32) -> u32 {
+        let a = x.min(y);
+        let b = x.max(y);
+        if a == b {
+            a
+        } else {
+            self.gen_range(a, b)
+        }
+    }
+
+    fn random_string(&mut self) -> String {
+        let len = self.gen_range(1, 10);
+        self.sample_iter(&Alphanumeric)
+            .take(len)
+            .map(char::from)
+            .collect()
+    }
+}
+
+impl<T> RngExt for T where T: RngCore {}

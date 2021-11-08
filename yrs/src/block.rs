@@ -59,7 +59,7 @@ pub const HAS_PARENT_SUB: u8 = 0b00100000;
 ///
 /// [ID] corresponds to a [Lamport timestamp](https://en.wikipedia.org/wiki/Lamport_timestamp) in
 /// terms of its properties and guarantees.
-#[derive(Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct ID {
     /// Unique identifier of a client, which inserted corresponding item.
     pub client: u64,
@@ -71,12 +71,6 @@ pub struct ID {
     pub clock: u32,
 }
 
-impl std::fmt::Debug for ID {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "<{}#{}>", self.client, self.clock)
-    }
-}
-
 impl ID {
     pub fn new(client: u64, clock: u32) -> Self {
         ID { client, clock }
@@ -85,7 +79,7 @@ impl ID {
 
 /// A logical block pointer. It contains a unique block [ID], but also contains a helper metadata
 /// which allows to faster locate block it points to within a block store.
-#[derive(Clone, Copy, Hash)]
+#[derive(Debug, Clone, Copy, Hash)]
 pub struct BlockPtr {
     /// Unique identifier of a corresponding block.
     pub id: ID,
@@ -96,12 +90,6 @@ pub struct BlockPtr {
     /// it's used. If such check fails, search algorithm falls back to binary search and upon
     /// completion re-adjusts the pivot information.
     pivot: u32,
-}
-
-impl std::fmt::Debug for BlockPtr {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "({}->{})", self.id, self.pivot)
-    }
 }
 
 impl BlockPtr {

@@ -222,7 +222,7 @@ where
 
 #[cfg(test)]
 mod test {
-    use crate::test_utils::{exchange_updates, run_scenario};
+    use crate::test_utils::{exchange_updates, run_scenario, RngExt};
     use crate::types::map::PrelimMap;
     use crate::types::Value;
     use crate::{Doc, PrelimArray};
@@ -582,27 +582,17 @@ mod test {
         UNIQUE_NUMBER.fetch_add(1, Ordering::SeqCst)
     }
 
-    fn between(rng: &mut StdRng, x: u32, y: u32) -> u32 {
-        let a = x.min(y);
-        let b = x.max(y);
-        if a == b {
-            a
-        } else {
-            rng.gen_range(a, b)
-        }
-    }
-
     fn array_transactions() -> [Box<dyn Fn(&mut Doc, &mut StdRng)>; 4] {
         fn insert(doc: &mut Doc, rng: &mut StdRng) {
             let mut txn = doc.transact();
             let yarray = txn.get_array("array");
             let unique_number = get_unique_number();
-            let len = between(rng, 1, 4);
+            let len = rng.between(1, 4);
             let content: Vec<_> = (0..len)
                 .into_iter()
                 .map(|_| Any::BigInt(unique_number))
                 .collect();
-            let mut pos = between(rng, 0, yarray.len()) as usize;
+            let mut pos = rng.between(0, yarray.len()) as usize;
             if let Any::Array(mut expected) = yarray.to_json(&txn) {
                 yarray.insert_range(&mut txn, pos as u32, content.clone());
 
@@ -620,7 +610,7 @@ mod test {
         fn insert_type_array(doc: &mut Doc, rng: &mut StdRng) {
             let mut txn = doc.transact();
             let yarray = txn.get_array("array");
-            let pos = between(rng, 0, yarray.len());
+            let pos = rng.between(0, yarray.len());
             yarray.insert(&mut txn, pos, PrelimArray::from([1, 2, 3, 4]));
             if let Value::YArray(array2) = yarray.get(&txn, pos).unwrap() {
                 let expected: Vec<_> = (1..=4).map(|i| Any::Number(i as f64)).collect();
@@ -633,7 +623,7 @@ mod test {
         fn insert_type_map(doc: &mut Doc, rng: &mut StdRng) {
             let mut txn = doc.transact();
             let yarray = txn.get_array("array");
-            let pos = between(rng, 0, yarray.len());
+            let pos = rng.between(0, yarray.len());
             yarray.insert(&mut txn, pos, PrelimMap::<i32>::from(HashMap::default()));
             if let Value::YMap(map) = yarray.get(&txn, pos).unwrap() {
                 map.insert(&mut txn, "someprop".to_string(), 42);
@@ -649,12 +639,12 @@ mod test {
             let yarray = txn.get_array("array");
             let len = yarray.len();
             if len > 0 {
-                let pos = between(rng, 0, len - 1);
-                let del_len = between(rng, 1, 2.min(len - pos));
+                let pos = rng.between(0, len - 1);
+                let del_len = rng.between(1, 2.min(len - pos));
                 if rng.gen_bool(0.5) {
                     if let Value::YArray(array2) = yarray.get(&txn, pos).unwrap() {
-                        let pos = between(rng, 0, array2.len() - 1);
-                        let del_len = between(rng, 0, 2.min(array2.len() - pos));
+                        let pos = rng.between(0, array2.len() - 1);
+                        let del_len = rng.between(0, 2.min(array2.len() - pos));
                         array2.remove_range(&mut txn, pos, del_len);
                     }
                 } else {
