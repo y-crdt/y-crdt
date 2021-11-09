@@ -120,7 +120,7 @@ impl TestConnector {
             let rc = self.0.clone();
             let inner = unsafe { self.0.as_ptr().as_mut().unwrap() };
             let mut instance = TestPeer::new(client_id);
-            instance.doc.on_update(move |e| {
+            instance.doc.on_update(move |txn, e| {
                 let payload = {
                     let mut encoder = EncoderV1::new();
                     encoder.write_uvar(MSG_SYNC_UPDATE);

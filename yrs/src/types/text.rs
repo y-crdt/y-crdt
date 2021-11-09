@@ -1,6 +1,6 @@
 use crate::block::{BlockPtr, ItemContent};
 use crate::transaction::Transaction;
-use crate::types::{Branch, BranchRef};
+use crate::types::{Branch, BranchRef, Observer, SharedEvent};
 use crate::*;
 use std::cell::Ref;
 
@@ -126,6 +126,14 @@ impl Text {
             panic!("Couldn't remove {} elements from an array. Only {} of them were successfully removed.", len, removed);
         }
     }
+
+    pub fn observe<F>(&self, f: F) -> Observer
+    where
+        F: Fn(&Transaction, TextEvent) -> () + 'static,
+    {
+        let mut branch = self.0.borrow_mut();
+        branch.observe(move |txn, e| f(txn, e.into()))
+    }
 }
 
 impl Into<ItemContent> for Text {
@@ -140,12 +148,19 @@ impl From<BranchRef> for Text {
     }
 }
 
+pub struct TextEvent {}
+
+impl From<SharedEvent> for TextEvent {
+    fn from(_: SharedEvent) -> Self {
+        todo!()
+    }
+}
+
 #[cfg(test)]
 mod test {
     use crate::test_utils::{run_scenario, RngExt};
     use crate::Doc;
     use rand::prelude::StdRng;
-    use rand::Rng;
 
     #[test]
     fn append_single_character_blocks() {

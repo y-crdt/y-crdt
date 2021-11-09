@@ -1,5 +1,5 @@
 use crate::block::{BlockPtr, ItemContent, ItemPosition, Prelim};
-use crate::types::{Branch, BranchRef, TypePtr, Value, TYPE_REFS_ARRAY};
+use crate::types::{Branch, BranchRef, Observer, SharedEvent, TypePtr, Value, TYPE_REFS_ARRAY};
 use crate::Transaction;
 use lib0::any::Any;
 use std::collections::VecDeque;
@@ -119,6 +119,22 @@ impl Array {
     pub fn to_json(&self, txn: &Transaction) -> Any {
         let res = self.iter(txn).map(|v| v.to_json(txn)).collect();
         Any::Array(res)
+    }
+
+    pub fn observe<F>(&self, f: F) -> Observer
+    where
+        F: Fn(&Transaction, ArrayEvent) -> () + 'static,
+    {
+        let mut branch = self.0.borrow_mut();
+        branch.observe(move |txn, e| f(txn, e.into()))
+    }
+}
+
+pub struct ArrayEvent {}
+
+impl From<SharedEvent> for ArrayEvent {
+    fn from(e: SharedEvent) -> Self {
+        todo!()
     }
 }
 

@@ -8,11 +8,12 @@ pub use map::Map;
 pub use text::Text;
 
 use crate::block::{BlockPtr, Item, ItemContent, ItemPosition, Prelim};
+use crate::event::{EventHandler, Subscription};
 use crate::types::array::Array;
 use crate::types::xml::{XmlElement, XmlText};
 use lib0::any::Any;
 use std::cell::{BorrowMutError, Ref, RefCell, RefMut};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Formatter;
 use std::rc::Rc;
 
@@ -160,6 +161,14 @@ impl BranchRef {
 
         txn.create_item(&pos, value, None)
     }
+
+    pub(crate) fn trigger(&self, txn: &Transaction, keys: HashSet<Option<String>>) {
+        let e = SharedEvent::new(self.clone(), keys);
+        let branch_ref = self.borrow();
+        if let Some(h) = branch_ref.observers.as_ref() {
+            h.publish(txn, &e);
+        }
+    }
 }
 
 impl AsRef<Branch> for BranchRef {
@@ -189,7 +198,6 @@ impl PartialEq for BranchRef {
 }
 
 /// Branch describes a content of a complex Yrs data structures, such as arrays or maps.
-#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Branch {
     /// A pointer to a first block of a indexed sequence component of this branch node. If `None`,
     /// it means that sequence is empty or a branch doesn't act as an indexed sequence. Indexed
@@ -226,6 +234,34 @@ pub struct Branch {
 
     /// An identifier of an underlying complex data type (eg. is it an Array or a Map).
     type_ref: TypeRefs,
+
+    pub observers: Option<EventHandler<SharedEvent>>,
+}
+
+impl std::fmt::Debug for Branch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Branch")
+            .field("start", &self.start)
+            .field("map", &self.map)
+            .field("ptr", &self.ptr)
+            .field("name", &self.name)
+            .field("len", &self.len)
+            .field("type_ref", &self.type_ref)
+            .finish()
+    }
+}
+
+impl Eq for Branch {}
+
+impl PartialEq for Branch {
+    fn eq(&self, other: &Self) -> bool {
+        self.ptr == other.ptr
+            && self.start == other.start
+            && self.map == other.map
+            && self.name == other.name
+            && self.len == other.len
+            && self.type_ref == other.type_ref
+    }
 }
 
 impl Branch {
@@ -237,6 +273,7 @@ impl Branch {
             ptr,
             name,
             type_ref,
+            observers: None,
         }
     }
 
@@ -380,7 +417,28 @@ impl Branch {
         }
         (None, None)
     }
+
+    pub(crate) fn observe<F: Fn(&Transaction, &SharedEvent) -> () + 'static>(
+        &mut self,
+        f: F,
+    ) -> Observer {
+        let handler = self.observers.get_or_insert_with(EventHandler::default);
+        Observer(handler.subscribe(f))
+    }
 }
+
+pub(crate) struct SharedEvent {
+    target: BranchRef,
+    keys: HashSet<Option<String>>,
+}
+
+impl SharedEvent {
+    pub(crate) fn new(target: BranchRef, keys: HashSet<Option<String>>) -> Self {
+        SharedEvent { target, keys }
+    }
+}
+
+pub(crate) struct Observer(Subscription<SharedEvent>);
 
 /// Value that can be returned by Yrs data types. This includes [Any] which is an extension
 /// representation of JSON, but also nested complex collaborative structures specific to Yrs.

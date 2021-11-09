@@ -105,7 +105,7 @@ impl Doc {
     /// unsubscribe function when dropped.
     pub fn on_update<F>(&mut self, f: F) -> Subscription<UpdateEvent>
     where
-        F: Fn(&UpdateEvent) -> () + 'static,
+        F: Fn(&Transaction, &UpdateEvent) -> () + 'static,
     {
         let mut store = self.store.borrow_mut();
         store.update_events.subscribe(f)
@@ -213,7 +213,7 @@ mod test {
         let doc = Doc::new();
         let mut doc2 = Doc::new();
         let c = counter.clone();
-        let sub = doc2.on_update(move |e| {
+        let sub = doc2.on_update(move |txn, e| {
             for block in e.update.blocks.blocks() {
                 c.set(c.get() + block.len());
             }

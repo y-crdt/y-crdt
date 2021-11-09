@@ -1,8 +1,10 @@
 use crate::block::{ItemContent, ItemPosition, Prelim};
-use crate::types::{Branch, BranchRef, Entries, TypePtr, Value, TYPE_REFS_MAP};
+use crate::types::{
+    Branch, BranchRef, Entries, Observer, SharedEvent, TypePtr, Value, TYPE_REFS_MAP,
+};
 use crate::*;
 use lib0::any::Any;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 /// Collection used to store key-value entries in an unordered manner. Keys are always represented
 /// as UTF-8 strings. Values can be any value type supported by Yrs: JSON-like primitives as well as
@@ -123,6 +125,14 @@ impl Map {
             txn.delete(ptr);
         }
     }
+
+    pub fn observe<F>(&self, f: F) -> Observer
+    where
+        F: Fn(&Transaction, MapEvent) -> () + 'static,
+    {
+        let mut branch = self.0.borrow_mut();
+        branch.observe(move |txn, e| f(txn, e.into()))
+    }
 }
 
 pub struct MapIter<'a, 'txn>(Entries<'a, 'txn>);
@@ -194,10 +204,12 @@ impl<T: Prelim> Prelim for PrelimMap<T> {
     }
 }
 
-pub struct MapEvent<'a, 'txn> {
-    target: Map,
-    transaction: &'a Transaction<'txn>,
-    keys: HashSet<&'a str>,
+pub struct MapEvent {}
+
+impl From<SharedEvent> for MapEvent {
+    fn from(e: SharedEvent) -> Self {
+        todo!()
+    }
 }
 
 #[cfg(test)]

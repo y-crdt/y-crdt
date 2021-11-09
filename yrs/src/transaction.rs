@@ -383,7 +383,7 @@ impl<'a> Transaction<'a> {
     pub fn apply_update(&mut self, mut update: Update) {
         if self.store.update_events.has_subscribers() {
             let event = UpdateEvent::new(update);
-            self.store.update_events.publish(&event);
+            self.store.update_events.publish(self, &event);
             update = event.update;
         }
         let (remaining, remaining_ds) = update.integrate(self);
@@ -512,6 +512,12 @@ impl<'a> Transaction<'a> {
 
         // 2. emit 'beforeObserverCalls'
         // 3. for each change observed by the transaction call 'afterTransaction'
+        let drained: Vec<_> = self.changed.drain().collect();
+        for (ptr, subs) in drained {
+            if let Some(branch) = self.store.get_type(&ptr) {
+                branch.trigger(self, subs);
+            }
+        }
         // 4. try GC delete set
         self.try_gc(); //TODO: eventually this is a configurable variant: if (doc.gc)
 

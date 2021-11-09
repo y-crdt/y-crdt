@@ -1,7 +1,8 @@
 use crate::block::{Item, ItemContent, ItemPosition, Prelim};
+use crate::types::text::TextEvent;
 use crate::types::{
-    Branch, BranchRef, Entries, Map, Text, TypePtr, Value, TYPE_REFS_XML_ELEMENT,
-    TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_TEXT,
+    Branch, BranchRef, Entries, Map, Observer, SharedEvent, Text, TypePtr, Value,
+    TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_TEXT,
 };
 use crate::Transaction;
 use lib0::any::Any;
@@ -253,6 +254,13 @@ impl XmlElement {
     pub fn get(&self, txn: &Transaction, index: u32) -> Option<Xml> {
         self.0.get(txn, index)
     }
+
+    pub fn observe<F>(&self, f: F) -> Observer
+    where
+        F: Fn(&Transaction, XmlEvent) -> () + 'static,
+    {
+        self.0.observe(move |txn, e| f(txn, e.into()))
+    }
 }
 
 impl Into<ItemContent> for XmlElement {
@@ -397,11 +405,27 @@ impl XmlFragment {
             None
         }
     }
+
+    pub fn observe<F>(&self, f: F) -> Observer
+    where
+        F: Fn(&Transaction, XmlEvent) -> () + 'static,
+    {
+        let mut branch_ref = self.0.borrow_mut();
+        branch_ref.observe(move |txn, e| f(txn, e.into()))
+    }
 }
 
 impl Into<ItemContent> for XmlFragment {
     fn into(self) -> ItemContent {
         ItemContent::Type(self.0.clone())
+    }
+}
+
+pub struct XmlEvent {}
+
+impl From<SharedEvent> for XmlEvent {
+    fn from(e: SharedEvent) -> Self {
+        todo!()
     }
 }
 
@@ -671,6 +695,13 @@ impl XmlText {
     /// This method may panic if `index` if greater than a length of this text.
     pub fn remove_range(&self, txn: &mut Transaction, index: u32, len: u32) {
         self.0.remove_range(txn, index, len)
+    }
+
+    pub fn observe<F>(&self, f: F) -> Observer
+    where
+        F: Fn(&Transaction, TextEvent) -> () + 'static,
+    {
+        self.0.observe(move |txn, e| f(txn, e.into()))
     }
 }
 
