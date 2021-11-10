@@ -120,11 +120,7 @@ impl Map {
     pub fn clear(&self, txn: &mut Transaction<'_>) {
         let t = self.0.borrow();
         for (_, ptr) in t.map.iter() {
-            if let Some(item) = txn.store.blocks.get_item(ptr) {
-                if !item.is_deleted() {
-                    item.mark_as_deleted();
-                }
-            }
+            txn.delete(ptr);
         }
     }
 }
@@ -200,10 +196,13 @@ impl<T: Prelim> Prelim for PrelimMap<T> {
 
 #[cfg(test)]
 mod test {
-    use crate::test_utils::exchange_updates;
+    use crate::test_utils::{exchange_updates, run_scenario};
     use crate::types::{Map, Value};
-    use crate::{Doc, Transaction};
+    use crate::{Doc, PrelimArray, PrelimMap, Transaction};
     use lib0::any::Any;
+    use rand::distributions::Alphanumeric;
+    use rand::prelude::{SliceRandom, StdRng};
+    use rand::Rng;
     use std::collections::HashMap;
 
     #[test]
@@ -523,5 +522,63 @@ mod test {
                 doc.client_id
             );
         }
+    }
+
+    fn random_string(rng: &mut StdRng) -> String {
+        let len = rng.gen_range(1, 10);
+        rng.sample_iter(&Alphanumeric)
+            .take(len)
+            .map(char::from)
+            .collect()
+    }
+
+    fn map_transactions() -> [Box<dyn Fn(&mut Doc, &mut StdRng)>; 3] {
+        fn set(doc: &mut Doc, rng: &mut StdRng) {
+            let mut txn = doc.transact();
+            let map = txn.get_map("map");
+            let key = ["one", "two"].choose(rng).unwrap();
+            let value: String = random_string(rng);
+            map.insert(&mut txn, key.to_string(), value);
+        }
+
+        fn set_type(doc: &mut Doc, rng: &mut StdRng) {
+            let mut txn = doc.transact();
+            let map = txn.get_map("map");
+            let key = ["one", "two"].choose(rng).unwrap();
+            if rng.gen_bool(0.5) {
+                map.insert(
+                    &mut txn,
+                    key.to_string(),
+                    PrelimArray::from(vec![1, 2, 3, 4]),
+                );
+            } else {
+                map.insert(
+                    &mut txn,
+                    key.to_string(),
+                    PrelimMap::from({
+                        let mut map = HashMap::default();
+                        map.insert("deepkey".to_owned(), "deepvalue");
+                        map
+                    }),
+                );
+            }
+        }
+
+        fn delete(doc: &mut Doc, rng: &mut StdRng) {
+            let mut txn = doc.transact();
+            let map = txn.get_map("map");
+            let key = ["one", "two"].choose(rng).unwrap();
+            map.remove(&mut txn, key);
+        }
+        [Box::new(set), Box::new(set_type), Box::new(delete)]
+    }
+
+    fn fuzzy(iterations: usize) {
+        run_scenario(0, &map_transactions(), 5, iterations)
+    }
+
+    #[test]
+    fn fuzzy_test_6() {
+        fuzzy(6)
     }
 }

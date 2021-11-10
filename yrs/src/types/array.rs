@@ -194,12 +194,12 @@ where
     T: IntoIterator<Item = V>,
     V: Into<Any>,
 {
-    fn into_content(self, txn: &mut Transaction, ptr: TypePtr) -> (ItemContent, Option<Self>) {
+    fn into_content(self, _txn: &mut Transaction, _ptr: TypePtr) -> (ItemContent, Option<Self>) {
         let vec: Vec<Any> = self.0.into_iter().map(|v| v.into()).collect();
         (ItemContent::Any(vec), None)
     }
 
-    fn integrate(self, txn: &mut Transaction, inner_ref: BranchRef) {}
+    fn integrate(self, _txn: &mut Transaction, _inner_ref: BranchRef) {}
 }
 
 impl<T, V> Prelim for PrelimArray<T, V>
@@ -207,7 +207,7 @@ where
     V: Prelim,
     T: IntoIterator<Item = V>,
 {
-    fn into_content(self, txn: &mut Transaction, ptr: TypePtr) -> (ItemContent, Option<Self>) {
+    fn into_content(self, _txn: &mut Transaction, ptr: TypePtr) -> (ItemContent, Option<Self>) {
         let inner = BranchRef::new(Branch::new(ptr, TYPE_REFS_ARRAY, None));
         (ItemContent::Type(inner), Some(self))
     }
@@ -222,11 +222,13 @@ where
 
 #[cfg(test)]
 mod test {
-    use crate::test_utils::exchange_updates;
+    use crate::test_utils::{exchange_updates, run_scenario, RngExt};
     use crate::types::map::PrelimMap;
     use crate::types::Value;
-    use crate::Doc;
+    use crate::{Doc, PrelimArray};
     use lib0::any::Any;
+    use rand::prelude::StdRng;
+    use rand::Rng;
     use std::collections::HashMap;
 
     #[test]
@@ -564,11 +566,113 @@ mod test {
             let mut expected = HashMap::new();
             expected.insert("value".to_owned(), Any::Number(i as f64));
             match value {
-                Value::YMap(ref map) => {
+                Value::YMap(_) => {
                     assert_eq!(value.to_json(&txn), Any::Map(expected))
                 }
-                other => panic!("Value of array at index {} was no YMap", i),
+                _ => panic!("Value of array at index {} was no YMap", i),
             }
         }
+    }
+
+    use std::sync::atomic::{AtomicI64, Ordering};
+
+    static UNIQUE_NUMBER: AtomicI64 = AtomicI64::new(0);
+
+    fn get_unique_number() -> i64 {
+        UNIQUE_NUMBER.fetch_add(1, Ordering::SeqCst)
+    }
+
+    fn array_transactions() -> [Box<dyn Fn(&mut Doc, &mut StdRng)>; 4] {
+        fn insert(doc: &mut Doc, rng: &mut StdRng) {
+            let mut txn = doc.transact();
+            let yarray = txn.get_array("array");
+            let unique_number = get_unique_number();
+            let len = rng.between(1, 4);
+            let content: Vec<_> = (0..len)
+                .into_iter()
+                .map(|_| Any::BigInt(unique_number))
+                .collect();
+            let mut pos = rng.between(0, yarray.len()) as usize;
+            if let Any::Array(mut expected) = yarray.to_json(&txn) {
+                yarray.insert_range(&mut txn, pos as u32, content.clone());
+
+                for any in content {
+                    expected.insert(pos, any);
+                    pos += 1;
+                }
+                let actual = yarray.to_json(&txn);
+                assert_eq!(actual, Any::Array(expected))
+            } else {
+                panic!("should not happen")
+            }
+        }
+
+        fn insert_type_array(doc: &mut Doc, rng: &mut StdRng) {
+            let mut txn = doc.transact();
+            let yarray = txn.get_array("array");
+            let pos = rng.between(0, yarray.len());
+            yarray.insert(&mut txn, pos, PrelimArray::from([1, 2, 3, 4]));
+            if let Value::YArray(array2) = yarray.get(&txn, pos).unwrap() {
+                let expected: Vec<_> = (1..=4).map(|i| Any::Number(i as f64)).collect();
+                assert_eq!(array2.to_json(&txn), Any::Array(expected));
+            } else {
+                panic!("should not happen")
+            }
+        }
+
+        fn insert_type_map(doc: &mut Doc, rng: &mut StdRng) {
+            let mut txn = doc.transact();
+            let yarray = txn.get_array("array");
+            let pos = rng.between(0, yarray.len());
+            yarray.insert(&mut txn, pos, PrelimMap::<i32>::from(HashMap::default()));
+            if let Value::YMap(map) = yarray.get(&txn, pos).unwrap() {
+                map.insert(&mut txn, "someprop".to_string(), 42);
+                map.insert(&mut txn, "someprop".to_string(), 43);
+                map.insert(&mut txn, "someprop".to_string(), 44);
+            } else {
+                panic!("should not happen: {}", txn.store)
+            }
+        }
+
+        fn delete(doc: &mut Doc, rng: &mut StdRng) {
+            let mut txn = doc.transact();
+            let yarray = txn.get_array("array");
+            let len = yarray.len();
+            if len > 0 {
+                let pos = rng.between(0, len - 1);
+                let del_len = rng.between(1, 2.min(len - pos));
+                if rng.gen_bool(0.5) {
+                    if let Value::YArray(array2) = yarray.get(&txn, pos).unwrap() {
+                        let pos = rng.between(0, array2.len() - 1);
+                        let del_len = rng.between(0, 2.min(array2.len() - pos));
+                        array2.remove_range(&mut txn, pos, del_len);
+                    }
+                } else {
+                    if let Any::Array(mut old_content) = yarray.to_json(&txn) {
+                        yarray.remove_range(&mut txn, pos, del_len);
+                        old_content.drain(pos as usize..(pos + del_len) as usize);
+                        assert_eq!(yarray.to_json(&txn), Any::Array(old_content));
+                    } else {
+                        panic!("should not happen")
+                    }
+                }
+            }
+        }
+
+        [
+            Box::new(insert),
+            Box::new(insert_type_array),
+            Box::new(insert_type_map),
+            Box::new(delete),
+        ]
+    }
+
+    fn fuzzy(iterations: usize) {
+        run_scenario(0, &array_transactions(), 5, iterations)
+    }
+
+    #[test]
+    fn fuzzy_test_6() {
+        fuzzy(6)
     }
 }

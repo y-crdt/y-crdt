@@ -14,7 +14,7 @@ struct YProvider {
 fn main() {
     // this doc will receive updates from doc1
     let doc_synced = Rc::from(Doc::new());
-    let provider = Rc::new(YProvider {
+    let _provider = Rc::new(YProvider {
         doc: doc_synced.clone(),
     });
 

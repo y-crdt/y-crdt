@@ -18,7 +18,7 @@ default = ["console_error_panic_hook"]
 
 [dependencies]
 lib0 = { path = "../lib0"}
-yrs = { path = "../yrs" }
+yrs = { path = "../yrs"}
 wasm-bindgen = { version = "0.2" }
 
 # The `console_error_panic_hook` crate provides better debugging of panics by

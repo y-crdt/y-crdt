@@ -187,7 +187,7 @@ impl<'a> Transaction<'a> {
     pub(crate) fn find_index_clean_start(&mut self, client: &u64, clock: u32) -> Option<usize> {
         let blocks = self.store.blocks.get_mut(client)?;
         let index = blocks.find_pivot(clock)?;
-        let block = &mut blocks[index];
+        let block = blocks.get_mut(index);
         if let Some(item) = block.as_item_mut() {
             if item.id.clock < clock {
                 // if we run over the clock, we need to the split item
@@ -235,7 +235,7 @@ impl<'a> Transaction<'a> {
                     // We can ignore the case of GC and Delete structs, because we are going to skip them
                     if let Some(mut index) = blocks.find_pivot(clock) {
                         // We can ignore the case of GC and Delete structs, because we are going to skip them
-                        if let Some(item) = blocks[index].as_item_mut() {
+                        if let Some(item) = blocks.get_mut(index).as_item_mut() {
                             // split the first item if necessary
                             if !item.is_deleted() && item.id.clock < clock {
                                 let split_ptr = BlockPtr::new(
@@ -251,7 +251,7 @@ impl<'a> Transaction<'a> {
                             }
 
                             while index < blocks.len() {
-                                let block = &mut blocks[index];
+                                let block = blocks.get_mut(index);
                                 if let Some(item) = block.as_item_mut() {
                                     if item.id.clock < clock_end {
                                         if !item.is_deleted() {
@@ -299,7 +299,7 @@ impl<'a> Transaction<'a> {
         let mut recurse = Vec::new();
         let mut result = false;
 
-        if let Some(item) = self.store.blocks.get_item(&ptr) {
+        if let Some(item) = self.store.blocks.get_item_mut(&ptr) {
             if !item.is_deleted() {
                 if item.parent_sub.is_none() && item.is_countable() {
                     if let Some(parent) = self.store.get_type(&item.parent) {
@@ -310,7 +310,25 @@ impl<'a> Transaction<'a> {
 
                 item.mark_as_deleted();
                 self.delete_set.insert(item.id.clone(), item.len());
-                // addChangedTypeToTransaction(transaction, item.type, item.parentSub)
+
+                match &item.parent {
+                    TypePtr::Named(_) => {
+                        self.changed
+                            .entry(item.parent.clone())
+                            .or_default()
+                            .insert(item.parent_sub.clone());
+                    }
+                    TypePtr::Id(ptr)
+                        if ptr.id.clock < self.before_state.get(&ptr.id.client)
+                            && self.store.blocks.get_item(ptr).unwrap().is_deleted() =>
+                    {
+                        self.changed
+                            .entry(item.parent.clone())
+                            .or_default()
+                            .insert(item.parent_sub.clone());
+                    }
+                    _ => {}
+                }
                 if item.id.clock < self.before_state.get(&item.id.client) {
                     let set = self.changed.entry(item.parent.clone()).or_default();
                     set.insert(item.parent_sub.clone());
@@ -343,9 +361,7 @@ impl<'a> Transaction<'a> {
                             recurse.push(ptr.clone());
                         }
                     }
-                    _ => {
-                        // nothing to do for other content types
-                    }
+                    _ => { /* nothing to do for other content types */ }
                 }
                 result = true;
             }
@@ -353,6 +369,10 @@ impl<'a> Transaction<'a> {
 
         for ptr in recurse.iter() {
             if !self.delete(ptr) {
+                // Whis will be gc'd later and we want to merge it if possible
+                // We try to merge all deleted items after each transaction,
+                // but we have no knowledge about that this needs to be merged
+                // since it is not in transaction.ds. Hence we add it to transaction._mergeStructs
                 self.merge_blocks.push(ptr.id);
             }
         }
@@ -462,9 +482,12 @@ impl<'a> Transaction<'a> {
             parent_sub,
             content,
         );
+
         item.integrate(self, pivot, 0);
+
         let local_block_list = self.store.blocks.get_client_blocks_mut(client_id);
         local_block_list.push(block::Block::Item(item));
+
         let idx = local_block_list.len() - 1;
 
         if let Some(remainder) = remainder {
@@ -493,7 +516,7 @@ impl<'a> Transaction<'a> {
         self.try_gc(); //TODO: eventually this is a configurable variant: if (doc.gc)
 
         // 5. try merge delete set
-        self.delete_set.try_compact(&self.store.blocks);
+        self.delete_set.try_squash_with(&mut self.store);
 
         // 6. get transaction after state and try to merge to left
         for (client, &clock) in self.after_state.iter() {
@@ -534,43 +557,20 @@ impl<'a> Transaction<'a> {
         // 12. emit 'subdocs'
     }
 
-    fn try_gc(&mut self) {
+    fn try_gc(&self) {
         for (client, range) in self.delete_set.iter() {
-            if let Some(blocks) = self.store.blocks.get_mut(client) {
+            if let Some(blocks) = self.store.blocks.get(client) {
                 for delete_item in range.iter().rev() {
                     let mut start = delete_item.start;
                     if let Some(mut i) = blocks.find_pivot(start) {
                         while i < blocks.len() {
-                            let block = &mut blocks[i];
+                            let block = blocks.get_mut(i);
                             let len = block.len();
                             start += len;
                             if start > delete_item.end {
                                 break;
                             } else {
-                                if let Block::Item(item) = block {
-                                    if item.is_deleted() {
-                                        if let ItemContent::Type(t) = &item.content {
-                                            /*
-                                            let item = this.type._start
-                                            while (item !== null) {
-                                              item.gc(store, true)
-                                              item = item.right
-                                            }
-                                            this.type._start = null
-                                            this.type._map.forEach(/** @param {Item | null} item */ (item) => {
-                                              while (item !== null) {
-                                                item.gc(store, true)
-                                                item = item.left
-                                              }
-                                            })
-                                            this.type._map = new Map()
-                                            */
-                                            todo!()
-                                        }
-
-                                        item.content = ItemContent::Deleted(len);
-                                    }
-                                }
+                                block.gc(self, false);
                                 i += 1;
                             }
                         }
@@ -580,14 +580,22 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    pub(crate) fn add_changed_type(&mut self, parent: &mut Branch, parent_sub: Option<&String>) {
-        // TODO:
-        /*
-              const item = type._item
-              if (item === null || (item.id.clock < (transaction.beforeState.get(item.id.client) || 0) && !item.deleted)) {
-                map.setIfUndefined(transaction.changed, type, set.create).add(parentSub)
-              }
-        */
+    pub(crate) fn add_changed_type(&mut self, parent: &Branch, parent_sub: Option<&String>) {
+        let trigger = match parent.item.as_ref() {
+            None => true,
+            Some(ptr) if ptr.id.clock < (self.before_state.get(&ptr.id.client)) => {
+                if let Some(item) = self.store.blocks.get_item(ptr) {
+                    !item.is_deleted()
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        };
+        if trigger {
+            let e = self.changed.entry(parent.ptr.clone()).or_default();
+            e.insert(parent_sub.cloned());
+        }
     }
 }
 

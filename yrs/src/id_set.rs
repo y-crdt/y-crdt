@@ -1,5 +1,6 @@
-use crate::block::ID;
+use crate::block::{Block, ID};
 use crate::block_store::BlockStore;
+use crate::store::Store;
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::client_hasher::ClientHasher;
@@ -280,8 +281,10 @@ impl IdSet {
     /// Merges another ID set into a current one, combining their information about observed ID
     /// ranges and squashing them if necessary.
     pub fn merge(&mut self, other: Self) {
-        other.0.into_iter().for_each(|(client, range)| {
-            match self.0.entry(client) {
+        other
+            .0
+            .into_iter()
+            .for_each(|(client, range)| match self.0.entry(client) {
                 Entry::Occupied(mut e) => {
                     let r = e.get_mut();
                     match (r, range) {
@@ -310,8 +313,7 @@ impl IdSet {
                 Entry::Vacant(e) => {
                     e.insert(range);
                 }
-            }
-        });
+            });
         self.squash()
     }
 }
@@ -454,8 +456,33 @@ impl DeleteSet {
         self.0.squash()
     }
 
-    pub(crate) fn try_compact(&mut self, blocks: &BlockStore) {
-        //TODO
+    pub(crate) fn try_squash_with(&mut self, store: &mut Store) {
+        // try to merge deleted / gc'd items
+        for (client, range) in self.iter() {
+            if let Some(mut blocks) = store.blocks.get_mut(client) {
+                for r in range.iter().rev() {
+                    // start with merging the item next to the last deleted item
+                    let mut si = (blocks.len() - 1)
+                        .min(1 + blocks.find_pivot(r.end - 1).unwrap_or_default());
+                    let mut block = &blocks[si];
+                    while si > 0 && block.id().clock >= r.start {
+                        if let Some(compaction) = blocks.squash_left(si) {
+                            if let Some(right) = compaction.new_right {
+                                right.fix_pivot((right.pivot().max(1) - 1) as u32);
+                                if let Block::Item(item) =
+                                    store.blocks.get_block_mut(&right).unwrap()
+                                {
+                                    item.left = Some(compaction.replacement);
+                                }
+                                blocks = store.blocks.get_mut(client).unwrap();
+                            }
+                        }
+                        si -= 1;
+                        block = &blocks[si];
+                    }
+                }
+            }
+        }
     }
 }
 

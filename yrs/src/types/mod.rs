@@ -76,7 +76,7 @@ impl BranchRef {
     /// Converts current branch data into a [Value]. It uses a type ref information to resolve,
     /// which value variant is a correct one for this branch. Since branch represent only complex
     /// types [Value::Any] will never be returned from this method.
-    pub fn into_value(self, txn: &Transaction) -> Value {
+    pub fn into_value(self, _txn: &Transaction) -> Value {
         let type_ref = { self.as_ref().type_ref() };
         match type_ref {
             TYPE_REFS_ARRAY => Value::YArray(Array::from(self)),
@@ -296,9 +296,10 @@ impl Branch {
                 if index < len {
                     return Some((&item.content, index as usize));
                 }
+
+                index -= len;
+                ptr = item.right.clone();
             }
-            index -= len;
-            ptr = item.right.clone();
         }
 
         None
@@ -443,7 +444,13 @@ where
 impl std::fmt::Display for Branch {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.type_ref() {
-            TYPE_REFS_ARRAY => write!(f, "YArray(start: {})", self.start.unwrap()),
+            TYPE_REFS_ARRAY => {
+                if let Some(ptr) = self.start {
+                    write!(f, "YArray(start: {})", ptr)
+                } else {
+                    write!(f, "YArray")
+                }
+            }
             TYPE_REFS_MAP => {
                 write!(f, "YMap(")?;
                 let mut iter = self.map.iter();
@@ -455,7 +462,13 @@ impl std::fmt::Display for Branch {
                 }
                 write!(f, ")")
             }
-            TYPE_REFS_TEXT => write!(f, "YText(start: {})", self.start.unwrap()),
+            TYPE_REFS_TEXT => {
+                if let Some(ptr) = self.start.as_ref() {
+                    write!(f, "YText(start: {})", ptr)
+                } else {
+                    write!(f, "YText")
+                }
+            }
             TYPE_REFS_XML_ELEMENT => {
                 write!(f, "YXmlElement")?;
                 if let Some(start) = self.start.as_ref() {
@@ -485,8 +498,14 @@ impl std::fmt::Display for Branch {
                 }
                 write!(f, ")")
             }
-            TYPE_REFS_XML_TEXT => write!(f, "YXmlText(start: {})", self.start.unwrap()),
-            other => {
+            TYPE_REFS_XML_TEXT => {
+                if let Some(ptr) = self.start {
+                    write!(f, "YXmlText(start: {})", ptr)
+                } else {
+                    write!(f, "YXmlText")
+                }
+            }
+            _ => {
                 write!(f, "UnknownRef")?;
                 if let Some(start) = self.start.as_ref() {
                     write!(f, "(start: {})", start)?;
