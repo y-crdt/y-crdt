@@ -374,6 +374,14 @@ impl Block {
         }
     }
 
+    pub fn contains(&self, id: &ID) -> bool {
+        match self {
+            Block::Item(v) => v.contains(id),
+            Block::Skip(v) => v.contains(id),
+            Block::GC(v) => v.contains(id),
+        }
+    }
+
     pub(crate) fn gc(&mut self, txn: &Transaction, parent_gced: bool) {
         if let Block::Item(item) = self {
             if item.is_deleted() {
@@ -460,9 +468,16 @@ impl Skip {
     pub fn new(id: ID, len: u32) -> Self {
         Skip { id, len }
     }
+
     #[inline]
     pub fn merge(&mut self, other: &Self) {
         self.len += other.len;
+    }
+
+    pub fn contains(&self, id: &ID) -> bool {
+        self.id.client == id.client
+            && id.clock >= self.id.clock
+            && id.clock < self.id.clock + self.len
     }
 }
 
@@ -489,6 +504,12 @@ impl GC {
     #[inline]
     pub fn merge(&mut self, other: &Self) {
         self.len += other.len;
+    }
+
+    pub fn contains(&self, id: &ID) -> bool {
+        self.id.client == id.client
+            && id.clock >= self.id.clock
+            && id.clock < self.id.clock + self.len
     }
 }
 
@@ -519,6 +540,12 @@ impl Item {
             parent_sub,
             info: info,
         }
+    }
+
+    pub fn contains(&self, id: &ID) -> bool {
+        self.id.client == id.client
+            && id.clock >= self.id.clock
+            && id.clock < self.id.clock + self.len()
     }
 
     //TODO: not used yet
