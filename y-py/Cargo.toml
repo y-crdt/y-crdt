@@ -12,6 +12,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 yrs = { path = "../yrs" }
+lib0 = { path = "../lib0" }
 pythonize = "0.13.0"
 
 [dependencies.pyo3]
