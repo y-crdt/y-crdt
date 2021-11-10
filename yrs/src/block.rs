@@ -1,4 +1,3 @@
-use crate::store::Store;
 use crate::types::{
     Branch, BranchRef, TypePtr, Value, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
     TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_HOOK, TYPE_REFS_XML_TEXT,
@@ -7,7 +6,6 @@ use crate::updates::decoder::Decoder;
 use crate::updates::encoder::Encoder;
 use crate::*;
 use lib0::any::Any;
-use std::cell::Cell;
 use std::collections::HashSet;
 use std::hash::Hash;
 use std::panic;
@@ -152,8 +150,20 @@ impl Block {
     pub fn slice(&self, offset: u32) -> Self {
         match self {
             Block::Item(item) => Block::Item(item.slice(offset)),
-            Block::Skip(skip) => Block::Skip(Skip { id: ID { client: skip.id.client, clock: skip.id.clock + offset }, len: skip.len - offset }),
-            Block::GC(gc) => Block::GC(GC { id: ID { client: gc.id.client, clock: gc.id.clock + offset }, len: gc.len })
+            Block::Skip(skip) => Block::Skip(Skip {
+                id: ID {
+                    client: skip.id.client,
+                    clock: skip.id.clock + offset,
+                },
+                len: skip.len - offset,
+            }),
+            Block::GC(gc) => Block::GC(GC {
+                id: ID {
+                    client: gc.id.client,
+                    clock: gc.id.clock + offset,
+                },
+                len: gc.len,
+            }),
         }
     }
 
@@ -250,7 +260,7 @@ impl Block {
         }
     }
 
-    pub fn encode<E: Encoder>(&self, store: &Store, encoder: &mut E) {
+    pub fn encode<E: Encoder>(&self, encoder: &mut E) {
         match self {
             Block::Item(item) => {
                 let info = item.info();
@@ -263,16 +273,7 @@ impl Block {
                     encoder.write_right_id(right_origin_id);
                 }
                 if cant_copy_parent_info {
-                    if let Some(parent) = store.get_type(&item.parent) {
-                        let parent_ref = parent.borrow();
-                        if let Some(parent_ptr) = parent_ref.item {
-                            encoder.write_parent_info(false); // write parent id
-                            encoder.write_left_id(&parent_ptr.id);
-                        } else if let Some(key) = store.get_root_type_key(parent) {
-                            encoder.write_parent_info(true); // write parentYKey
-                            encoder.write_string(key.as_str());
-                        }
-                    } else if let TypePtr::Id(id) = &item.parent {
+                    if let TypePtr::Id(id) = &item.parent {
                         encoder.write_parent_info(false);
                         encoder.write_left_id(&id.id);
                     } else if let TypePtr::Named(name) = &item.parent {
@@ -350,15 +351,50 @@ impl Block {
     }
 
     pub fn is_skip(&self) -> bool {
-        if let Block::Skip(_) = self { true } else { false }
+        if let Block::Skip(_) = self {
+            true
+        } else {
+            false
+        }
     }
 
     pub fn is_gc(&self) -> bool {
-        if let Block::GC(_) = self { true } else { false }
+        if let Block::GC(_) = self {
+            true
+        } else {
+            false
+        }
     }
 
     pub fn is_item(&self) -> bool {
-        if let Block::Item(_) = self { true } else { false }
+        if let Block::Item(_) = self {
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn contains(&self, id: &ID) -> bool {
+        match self {
+            Block::Item(v) => v.contains(id),
+            Block::Skip(v) => v.contains(id),
+            Block::GC(v) => v.contains(id),
+        }
+    }
+
+    pub(crate) fn gc(&mut self, txn: &Transaction, parent_gced: bool) {
+        if let Block::Item(item) = self {
+            if item.is_deleted() {
+                item.content.gc(txn);
+                let len = item.len();
+                if parent_gced {
+                    *self = Block::GC(GC::new(item.id, len));
+                } else {
+                    item.content = ItemContent::Deleted(len);
+                    item.info = item.info & !ITEM_FLAG_COUNTABLE;
+                }
+            }
+        }
     }
 }
 
@@ -419,7 +455,7 @@ pub(crate) struct Item {
     pub parent_sub: Option<String>, //TODO: Rc since it's already used in Branch.map component
 
     /// Bit flag field which contains information about specifics of this item.
-    pub info: Cell<u8>,
+    pub info: u8,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -432,9 +468,16 @@ impl Skip {
     pub fn new(id: ID, len: u32) -> Self {
         Skip { id, len }
     }
+
     #[inline]
     pub fn merge(&mut self, other: &Self) {
         self.len += other.len;
+    }
+
+    pub fn contains(&self, id: &ID) -> bool {
+        self.id.client == id.client
+            && id.clock >= self.id.clock
+            && id.clock < self.id.clock + self.len
     }
 }
 
@@ -461,6 +504,12 @@ impl GC {
     #[inline]
     pub fn merge(&mut self, other: &Self) {
         self.len += other.len;
+    }
+
+    pub fn contains(&self, id: &ID) -> bool {
+        self.id.client == id.client
+            && id.clock >= self.id.clock
+            && id.clock < self.id.clock + self.len
     }
 }
 
@@ -489,34 +538,40 @@ impl Item {
             content,
             parent,
             parent_sub,
-            info: Cell::new(info),
+            info: info,
         }
+    }
+
+    pub fn contains(&self, id: &ID) -> bool {
+        self.id.client == id.client
+            && id.clock >= self.id.clock
+            && id.clock < self.id.clock + self.len()
     }
 
     //TODO: not used yet
     pub fn marked(&self) -> bool {
-        self.info.get() & ITEM_FLAG_MARKED == ITEM_FLAG_MARKED
+        self.info & ITEM_FLAG_MARKED == ITEM_FLAG_MARKED
     }
 
     //TODO: not used yet
     pub fn keep(&self) -> bool {
-        self.info.get() & ITEM_FLAG_KEEP == ITEM_FLAG_KEEP
+        self.info & ITEM_FLAG_KEEP == ITEM_FLAG_KEEP
     }
 
     /// Checks if current item is marked as deleted (tombstoned). Yrs uses soft item deletion
     /// mechanism.
     pub fn is_deleted(&self) -> bool {
-        self.info.get() & ITEM_FLAG_DELETED == ITEM_FLAG_DELETED
+        self.info & ITEM_FLAG_DELETED == ITEM_FLAG_DELETED
     }
 
     /// Checks if item content can be considered countable. Countable elements can be split
     /// and joined together.
     pub fn is_countable(&self) -> bool {
-        self.info.get() & ITEM_FLAG_COUNTABLE == ITEM_FLAG_COUNTABLE
+        self.info & ITEM_FLAG_COUNTABLE == ITEM_FLAG_COUNTABLE
     }
 
-    pub(crate) fn mark_as_deleted(&self) {
-        self.info.set(self.info.get() | ITEM_FLAG_DELETED);
+    pub(crate) fn mark_as_deleted(&mut self) {
+        self.info |= ITEM_FLAG_DELETED;
     }
 
     /// Assign left/right neighbors of the block. This may require for origin/right_origin
@@ -527,10 +582,9 @@ impl Item {
         if let Some(origin_id) = self.origin {
             let ptr = BlockPtr::from(origin_id);
             if let Some(item) = txn.store.blocks.get_item(&ptr) {
-                let id = self.origin.unwrap();
                 let len = item.len();
-                if id.clock == item.id.clock + len - 1 {
-                    self.left = Some(ptr);
+                if origin_id.clock == item.id.clock + len - 1 {
+                    self.left = Some(BlockPtr::new(item.id, ptr.pivot));
                 } else {
                     let ptr =
                         BlockPtr::new(ID::new(origin_id.client, origin_id.clock + 1), ptr.pivot);
@@ -594,7 +648,7 @@ impl Item {
             if let Some(mut left) = left {
                 if let Some(origin) = txn.store.blocks.get_item(&left) {
                     self.origin = Some(origin.last_id());
-                    left.id = origin.last_id();
+                    left.id = origin.id;
                     self.left = Some(left);
                 }
             } else {
@@ -605,7 +659,7 @@ impl Item {
         }
 
         let parent = match txn.store.get_type(&self.parent).cloned() {
-            None => txn.store.init_type_from_ptr(&self.parent, &self.content),
+            None => txn.store.init_type_from_ptr(&self.parent),
             parent => parent,
         };
 
@@ -750,8 +804,16 @@ impl Item {
             }
 
             self.integrate_content(txn, pivot, &mut *parent_ref);
-            txn.add_changed_type(&mut *parent_ref, self.parent_sub.as_ref());
-            let parent_deleted = self.is_deleted();
+            txn.add_changed_type(&*parent_ref, self.parent_sub.as_ref());
+            let parent_deleted = if let TypePtr::Id(ptr) = &self.parent {
+                if let Some(item) = txn.store.blocks.get_item(ptr) {
+                    item.is_deleted()
+                } else {
+                    true
+                }
+            } else {
+                false
+            };
             if parent_deleted || (self.parent_sub.is_some() && self.right.is_some()) {
                 // delete if parent is deleted or if this is not the current attribute value of parent
                 true
@@ -781,7 +843,7 @@ impl Item {
         self.content.len()
     }
 
-    pub fn slice (&self, diff: u32) -> Item {
+    pub fn slice(&self, diff: u32) -> Item {
         if diff == 0 {
             self.clone()
         } else {
@@ -808,7 +870,7 @@ impl Item {
         let clock = self.id.clock;
         let other = Item {
             id: ID::new(client, clock + diff),
-            left: Some(BlockPtr::from(ID::new(client, clock + diff - 1))),
+            left: Some(BlockPtr::from(self.id)),
             right: self.right.clone(),
             origin: Some(ID::new(client, clock + diff - 1)),
             right_origin: self.right_origin.clone(),
@@ -837,7 +899,7 @@ impl Item {
             && self.content.try_squash(&other.content)
         {
             self.right = other.right;
-            // self.right.left = self
+            //TODO: self.right.left = self
             true
         } else {
             false
@@ -1220,6 +1282,66 @@ impl ItemContent {
             _ => false,
         }
     }
+
+    pub(crate) fn gc(&self, txn: &Transaction) {
+        match self {
+            ItemContent::Type(branch_ref) => {
+                let mut branch = branch_ref.borrow_mut();
+                let mut curr = branch.start.take();
+                while let Some(ptr) = curr {
+                    if let Some(block) = txn.store.blocks.get_block_mut(&ptr) {
+                        if let Block::Item(item) = block {
+                            curr = item.right.clone();
+                            block.gc(txn, true);
+                            continue;
+                        }
+                    }
+                    break;
+                }
+
+                for (_, ptr) in branch.map.drain() {
+                    curr = Some(ptr);
+                    while let Some(ptr) = curr {
+                        if let Some(block) = txn.store.blocks.get_block_mut(&ptr) {
+                            if let Block::Item(item) = block {
+                                curr = item.left.clone();
+                                block.gc(txn, true);
+                                continue;
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+            ItemContent::Doc(_, _) => {
+                /*
+                if (doc._item) {
+                  console.error('This document was already integrated as a sub-document. You should create a second instance instead with the same guid.')
+                }
+                /**
+                 * @type {Doc}
+                 */
+                this.doc = doc
+                /**
+                 * @type {any}
+                 */
+                const opts = {}
+                this.opts = opts
+                if (!doc.gc) {
+                  opts.gc = false
+                }
+                if (doc.autoLoad) {
+                  opts.autoLoad = true
+                }
+                if (doc.meta !== null) {
+                  opts.meta = doc.meta
+                }
+                 */
+                todo!()
+            }
+            _ => {}
+        }
+    }
 }
 
 impl std::fmt::Display for Item {
@@ -1282,7 +1404,13 @@ impl std::fmt::Display for ItemContent {
             ItemContent::Type(t) => {
                 let inner = t.borrow();
                 match inner.type_ref() {
-                    TYPE_REFS_ARRAY => write!(f, "<array(head: {})>", inner.start.unwrap()),
+                    TYPE_REFS_ARRAY => {
+                        if let Some(ptr) = inner.start {
+                            write!(f, "<array(head: {})>", ptr)
+                        } else {
+                            write!(f, "<array>")
+                        }
+                    }
                     TYPE_REFS_MAP => {
                         write!(f, "<map({{")?;
                         let mut iter = inner.map.iter();
@@ -1301,7 +1429,7 @@ impl std::fmt::Display for ItemContent {
                     TYPE_REFS_XML_FRAGMENT => write!(f, "<xml fragment>"),
                     TYPE_REFS_XML_HOOK => write!(f, "<xml hook>"),
                     TYPE_REFS_XML_TEXT => write!(f, "<xml text>"),
-                    other => write!(f, "<undefined type ref>"),
+                    _ => write!(f, "<undefined type ref>"),
                 }
             }
             _ => Ok(()),
@@ -1343,23 +1471,23 @@ impl<T> Prelim for T
 where
     T: Into<Any>,
 {
-    fn into_content(self, txn: &mut Transaction, ptr: TypePtr) -> (ItemContent, Option<Self>) {
+    fn into_content(self, _txn: &mut Transaction, _ptr: TypePtr) -> (ItemContent, Option<Self>) {
         let value: Any = self.into();
         (ItemContent::Any(vec![value]), None)
     }
 
-    fn integrate(self, txn: &mut Transaction, inner_ref: BranchRef) {}
+    fn integrate(self, _txn: &mut Transaction, _inner_ref: BranchRef) {}
 }
 
 #[derive(Debug)]
 pub struct PrelimText(pub String);
 
 impl Prelim for PrelimText {
-    fn into_content(self, txn: &mut Transaction, ptr: TypePtr) -> (ItemContent, Option<Self>) {
+    fn into_content(self, _txn: &mut Transaction, _ptr: TypePtr) -> (ItemContent, Option<Self>) {
         (ItemContent::String(self.0), None)
     }
 
-    fn integrate(self, txn: &mut Transaction, inner_ref: BranchRef) {}
+    fn integrate(self, _txn: &mut Transaction, _inner_ref: BranchRef) {}
 }
 
 impl std::fmt::Display for ID {

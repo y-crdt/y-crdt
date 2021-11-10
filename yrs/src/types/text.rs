@@ -142,7 +142,10 @@ impl From<BranchRef> for Text {
 
 #[cfg(test)]
 mod test {
+    use crate::test_utils::{run_scenario, RngExt};
     use crate::Doc;
+    use rand::prelude::StdRng;
+    use rand::Rng;
 
     #[test]
     fn append_single_character_blocks() {
@@ -459,5 +462,37 @@ mod test {
 
         assert_eq!(a, b);
         assert_eq!(a, "H beautifuld!".to_owned());
+    }
+
+    fn text_transactions() -> [Box<dyn Fn(&mut Doc, &mut StdRng)>; 2] {
+        fn insert_text(doc: &mut Doc, rng: &mut StdRng) {
+            let mut txn = doc.transact();
+            let ytext = txn.get_text("text");
+            let pos = rng.between(0, ytext.len());
+            let word = rng.random_string();
+            ytext.insert(&mut txn, pos, word.as_str());
+        }
+
+        fn delete_text(doc: &mut Doc, rng: &mut StdRng) {
+            let mut txn = doc.transact();
+            let ytext = txn.get_text("text");
+            let len = ytext.len();
+            if len > 0 {
+                let pos = rng.between(0, len - 1);
+                let to_delete = rng.between(2, len - pos);
+                ytext.remove_range(&mut txn, pos, to_delete);
+            }
+        }
+
+        [Box::new(insert_text), Box::new(delete_text)]
+    }
+
+    fn fuzzy(iterations: usize) {
+        run_scenario(0, &text_transactions(), 5, iterations)
+    }
+
+    #[test]
+    fn fuzzy_test_3() {
+        fuzzy(3)
     }
 }

@@ -1,11 +1,11 @@
 use crate::updates::decoder::{Decode, Decoder, DecoderV1};
 use crate::updates::encoder::{Encode, Encoder, EncoderV1};
-use crate::{Doc, StateVector};
+use crate::{Doc, StateVector, Update};
 use lib0::decoding::{Cursor, Read};
 use lib0::encoding::Write;
-use rand::prelude::SliceRandom;
-use rand::rngs::ThreadRng;
-use rand::{thread_rng, Rng};
+use rand::distributions::Alphanumeric;
+use rand::prelude::{SliceRandom, StdRng};
+use rand::{random, Rng, RngCore, SeedableRng};
 use std::cell::{RefCell, RefMut};
 use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
@@ -31,12 +31,18 @@ const MSG_SYNC_STEP_1: usize = 0;
 const MSG_SYNC_STEP_2: usize = 1;
 const MSG_SYNC_UPDATE: usize = 2;
 
-pub fn run_scenario<F>(mods: &[F], users: usize, iterations: usize)
+pub fn run_scenario<F>(mut seed: u64, mods: &[F], users: usize, iterations: usize)
 where
-    F: Fn(&mut Doc, &mut ThreadRng),
+    F: Fn(&mut Doc, &mut StdRng),
 {
-    let mut tc = TestConnector::with_peer_num(thread_rng(), users as u64);
-    for _i in 0..iterations {
+    if seed == 0 {
+        seed = random();
+        println!("run scenario with seed: {}", seed);
+    }
+
+    let rng = StdRng::seed_from_u64(seed);
+    let tc = TestConnector::with_peer_num(rng, users as u64);
+    for _ in 0..iterations {
         if tc.0.borrow_mut().rng.gen_range(0, 100) <= 2 {
             // 2% chance to disconnect/reconnect a random user
             if tc.0.borrow_mut().rng.gen_bool(0.5) {
@@ -67,7 +73,7 @@ where
 pub struct TestConnector(Rc<RefCell<Inner>>);
 
 struct Inner {
-    rng: ThreadRng,
+    rng: StdRng,
     peers: Vec<TestPeer>,
     /// Maps all Client IDs to indexes in the `docs` vector.
     all: HashMap<u64, usize>,
@@ -76,13 +82,8 @@ struct Inner {
 }
 
 impl TestConnector {
-    /// Create new [TestConnector] with random seed.
-    pub fn new() -> Self {
-        Self::with_rng(thread_rng())
-    }
-
     /// Create new [TestConnector] with provided randomizer.
-    pub fn with_rng(rng: ThreadRng) -> Self {
+    pub fn with_rng(rng: StdRng) -> Self {
         TestConnector(Rc::new(RefCell::new(Inner {
             rng,
             peers: Vec::new(),
@@ -92,7 +93,7 @@ impl TestConnector {
     }
 
     /// Create a new [TestConnector] with pre-initialized number of peers.
-    pub fn with_peer_num(rng: ThreadRng, peer_num: u64) -> Self {
+    pub fn with_peer_num(rng: StdRng, peer_num: u64) -> Self {
         let mut tc = Self::with_rng(rng);
         for client_id in 0..peer_num {
             let peer = tc.create_peer(client_id);
@@ -105,7 +106,7 @@ impl TestConnector {
     }
 
     /// Returns random number generator attached to current [TestConnector].
-    pub fn rng(&self) -> RefMut<ThreadRng> {
+    pub fn rng(&self) -> RefMut<StdRng> {
         let inner = self.0.borrow_mut();
         RefMut::map(inner, |i| &mut i.rng)
     }
@@ -384,7 +385,8 @@ impl TestConnector {
     fn read_sync_step2<D: Decoder>(peer: &TestPeer, decoder: &mut D) {
         let mut txn = peer.doc.transact();
 
-        peer.doc.apply_update_v1(&mut txn, decoder.read_buf());
+        let update = Update::decode_v1(decoder.read_buf());
+        txn.apply_update(update);
     }
 
     fn read_update<D: Decoder>(peer: &TestPeer, decoder: &mut D) {
@@ -483,3 +485,25 @@ impl TestPeer {
         messages.push_back(message);
     }
 }
+
+pub(crate) trait RngExt: RngCore {
+    fn between(&mut self, x: u32, y: u32) -> u32 {
+        let a = x.min(y);
+        let b = x.max(y);
+        if a == b {
+            a
+        } else {
+            self.gen_range(a, b)
+        }
+    }
+
+    fn random_string(&mut self) -> String {
+        let len = self.gen_range(1, 10);
+        self.sample_iter(&Alphanumeric)
+            .take(len)
+            .map(char::from)
+            .collect()
+    }
+}
+
+impl<T> RngExt for T where T: RngCore {}

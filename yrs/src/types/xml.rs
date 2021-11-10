@@ -698,7 +698,7 @@ enum PrelimXml {
 }
 
 impl Prelim for PrelimXml {
-    fn into_content(self, txn: &mut Transaction, ptr: TypePtr) -> (ItemContent, Option<Self>) {
+    fn into_content(self, _txn: &mut Transaction, ptr: TypePtr) -> (ItemContent, Option<Self>) {
         let inner = match self {
             PrelimXml::Elem(node_name) => {
                 BranchRef::new(Branch::new(ptr, TYPE_REFS_XML_ELEMENT, Some(node_name)))
@@ -708,7 +708,7 @@ impl Prelim for PrelimXml {
         (ItemContent::Type(inner), None)
     }
 
-    fn integrate(self, txn: &mut Transaction, inner_ref: BranchRef) {}
+    fn integrate(self, _txn: &mut Transaction, _inner_ref: BranchRef) {}
 }
 
 fn next_sibling(inner: Ref<Branch>, txn: &Transaction) -> Option<Xml> {
