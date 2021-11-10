@@ -232,7 +232,7 @@ impl ClientBlockList {
     /// Returns `None` if no block with such reference could be found.
     pub(crate) fn find(&mut self, ptr: &BlockPtr) -> Option<&mut Block> {
         match self.try_get_mut(ptr.pivot()) {
-            Some(block) if *block.id() == ptr.id => return Some(block),
+            Some(block) if block.contains(&ptr.id) => return Some(block),
             _ => {
                 let pivot = self.find_pivot(ptr.id.clock)?;
                 self.try_get_mut(pivot)
@@ -461,7 +461,7 @@ impl BlockStore {
     pub(crate) fn get_block(&self, ptr: &block::BlockPtr) -> Option<&block::Block> {
         let clients = self.clients.get(&ptr.id.client)?;
         if let Some(block) = clients.try_get(ptr.pivot()) {
-            if block.id().clock == ptr.id.clock {
+            if block.contains(&ptr.id) {
                 return Some(&*block);
             }
         }
@@ -476,7 +476,7 @@ impl BlockStore {
     pub(crate) fn get_block_mut(&self, ptr: &block::BlockPtr) -> Option<&mut block::Block> {
         let clients = self.clients.get(&ptr.id.client)?;
         if let Some(block) = clients.try_get_mut(ptr.pivot()) {
-            if block.id().clock == ptr.id.clock {
+            if block.contains(&ptr.id) {
                 return Some(&mut *block);
             }
         }
