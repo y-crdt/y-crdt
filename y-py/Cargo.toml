@@ -13,8 +13,7 @@ crate-type = ["cdylib"]
 [dependencies]
 yrs = { path = "../yrs" }
 lib0 = { path = "../lib0" }
-pythonize = "0.13.0"
 
 [dependencies.pyo3]
-version = "0.13.2"
+version = "0.14.5"
 features = ["extension-module"]
