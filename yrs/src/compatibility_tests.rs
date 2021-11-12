@@ -137,7 +137,7 @@ fn map_set() {
             None,
             None,
             TypePtr::Named(Rc::new("test".to_string())),
-            Some("k1".to_string()),
+            Some("k1".into()),
             ItemContent::Any(vec![Any::String("v1".to_string())]),
         )),
         &Block::Item(Item::new(
@@ -147,7 +147,7 @@ fn map_set() {
             None,
             None,
             TypePtr::Named(Rc::new("test".to_string())),
-            Some("k2".to_string()),
+            Some("k2".into()),
             ItemContent::Any(vec![Any::String("v2".to_string())]),
         )),
     ];

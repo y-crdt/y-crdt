@@ -9,6 +9,7 @@ use lib0::any::Any;
 use std::collections::HashSet;
 use std::hash::Hash;
 use std::panic;
+use std::rc::Rc;
 
 /// Bit flag used to identify [Block::GC].
 pub const BLOCK_GC_REF_NUMBER: u8 = 0;
@@ -253,7 +254,7 @@ impl Block {
                 }
 
                 if let Some(parent_sub) = item.parent_sub.as_ref() {
-                    encoder.write_string(parent_sub.as_str());
+                    encoder.write_string(parent_sub.as_ref());
                 }
             }
             item.content.encode_with_offset(encoder, offset);
@@ -284,7 +285,7 @@ impl Block {
                     }
 
                     if let Some(parent_sub) = item.parent_sub.as_ref() {
-                        encoder.write_string(parent_sub.as_str());
+                        encoder.write_string(parent_sub.as_ref());
                     }
                 }
                 item.content.encode(encoder);
@@ -452,7 +453,7 @@ pub(crate) struct Item {
 
     /// Used only when current item is used by map-like types. In such case this item works as a
     /// key-value entry of a map, and this field contains a key used by map.
-    pub parent_sub: Option<String>, //TODO: Rc since it's already used in Branch.map component
+    pub parent_sub: Option<Rc<str>>, //TODO: Rc since it's already used in Branch.map component
 
     /// Bit flag field which contains information about specifics of this item.
     pub info: u8,
@@ -521,7 +522,7 @@ impl Item {
         right: Option<BlockPtr>,
         right_origin: Option<ID>,
         parent: TypePtr,
-        parent_sub: Option<String>,
+        parent_sub: Option<Rc<str>>,
         content: ItemContent,
     ) -> Self {
         let info = if content.is_countable() {
@@ -804,7 +805,7 @@ impl Item {
             }
 
             self.integrate_content(txn, pivot, &mut *parent_ref);
-            txn.add_changed_type(&*parent_ref, self.parent_sub.as_ref());
+            txn.add_changed_type(&*parent_ref, self.parent_sub.clone());
             let parent_deleted = if let TypePtr::Id(ptr) = &self.parent {
                 if let Some(item) = txn.store.blocks.get_item(ptr) {
                     item.is_deleted()

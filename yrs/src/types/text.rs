@@ -150,8 +150,8 @@ impl From<BranchRef> for Text {
 
 pub struct TextEvent {}
 
-impl From<SharedEvent> for TextEvent {
-    fn from(_: SharedEvent) -> Self {
+impl<'a> From<&'a SharedEvent> for TextEvent {
+    fn from(e: &'a SharedEvent) -> Self {
         todo!()
     }
 }

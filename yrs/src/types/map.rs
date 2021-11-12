@@ -5,6 +5,7 @@ use crate::types::{
 use crate::*;
 use lib0::any::Any;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 /// Collection used to store key-value entries in an unordered manner. Keys are always represented
 /// as UTF-8 strings. Values can be any value type supported by Yrs: JSON-like primitives as well as
@@ -30,7 +31,7 @@ impl Map {
                     } else {
                         Any::Null
                     };
-                    res.insert(key.clone(), any);
+                    res.insert(key.to_string(), any);
                 }
             }
         }
@@ -76,7 +77,13 @@ impl Map {
 
     /// Inserts a new `value` under given `key` into current map. Returns a value stored previously
     /// under the same key (if any existed).
-    pub fn insert<V: Prelim>(&self, txn: &mut Transaction, key: String, value: V) -> Option<Value> {
+    pub fn insert<K: Into<Rc<str>>, V: Prelim>(
+        &self,
+        txn: &mut Transaction,
+        key: K,
+        value: V,
+    ) -> Option<Value> {
+        let key = key.into();
         let previous = self.get(txn, &key);
         let pos = {
             let inner = self.0.borrow();
@@ -138,7 +145,7 @@ impl Map {
 pub struct MapIter<'a, 'txn>(Entries<'a, 'txn>);
 
 impl<'a, 'txn> Iterator for MapIter<'a, 'txn> {
-    type Item = (&'a String, Value);
+    type Item = (&'a str, Value);
 
     fn next(&mut self) -> Option<Self::Item> {
         let (key, item) = self.0.next()?;
@@ -154,7 +161,7 @@ impl<'a, 'txn> Iterator for MapIter<'a, 'txn> {
 pub struct Keys<'a, 'txn>(Entries<'a, 'txn>);
 
 impl<'a, 'txn> Iterator for Keys<'a, 'txn> {
-    type Item = &'a String;
+    type Item = &'a str;
 
     fn next(&mut self) -> Option<Self::Item> {
         let (key, _) = self.0.next()?;
@@ -206,8 +213,8 @@ impl<T: Prelim> Prelim for PrelimMap<T> {
 
 pub struct MapEvent {}
 
-impl From<SharedEvent> for MapEvent {
-    fn from(e: SharedEvent) -> Self {
+impl<'a> From<&'a SharedEvent> for MapEvent {
+    fn from(e: &'a SharedEvent) -> Self {
         todo!()
     }
 }

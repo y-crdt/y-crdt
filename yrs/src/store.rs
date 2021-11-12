@@ -196,7 +196,7 @@ impl Store {
         if let Some(parent_sub) = compaction.parent_sub {
             if let Some(parent) = self.get_type(&compaction.parent) {
                 let mut inner = parent.borrow_mut();
-                match inner.map.entry(parent_sub) {
+                match inner.map.entry(parent_sub.clone()) {
                     Entry::Occupied(e) => {
                         let cell = e.into_mut();
                         if cell.id == compaction.old_right {

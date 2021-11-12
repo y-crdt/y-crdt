@@ -15,6 +15,7 @@ use crate::update::Update;
 use std::cell::RefMut;
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
+use std::rc::Rc;
 use updates::encoder::*;
 
 /// Transaction is one of the core types in Yrs. All operations that need to touch a document's
@@ -32,7 +33,7 @@ pub struct Transaction<'a> {
     pub delete_set: DeleteSet,
     /// All types that were directly modified (property added or child inserted/deleted).
     /// New types are not included in this Set.
-    changed: HashMap<TypePtr, HashSet<Option<String>>>,
+    changed: HashMap<TypePtr, HashSet<Option<Rc<str>>>>,
 }
 
 impl<'a> Transaction<'a> {
@@ -441,7 +442,7 @@ impl<'a> Transaction<'a> {
         &mut self,
         pos: &block::ItemPosition,
         value: T,
-        parent_sub: Option<String>,
+        parent_sub: Option<Rc<str>>,
     ) -> &Item {
         let left = pos.left;
         let right = pos.right;
@@ -586,7 +587,7 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    pub(crate) fn add_changed_type(&mut self, parent: &Branch, parent_sub: Option<&String>) {
+    pub(crate) fn add_changed_type(&mut self, parent: &Branch, parent_sub: Option<Rc<str>>) {
         let trigger = match &parent.ptr {
             TypePtr::Named(_) => true,
             TypePtr::Id(ptr) if ptr.id.clock < (self.before_state.get(&ptr.id.client)) => {
@@ -600,7 +601,7 @@ impl<'a> Transaction<'a> {
         };
         if trigger {
             let e = self.changed.entry(parent.ptr.clone()).or_default();
-            e.insert(parent_sub.cloned());
+            e.insert(parent_sub.clone());
         }
     }
 }

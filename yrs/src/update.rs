@@ -376,7 +376,7 @@ impl Update {
                     TypePtr::Unknown
                 };
                 let parent_sub = if cant_copy_parent_info && (info & HAS_PARENT_SUB != 0) {
-                    Some(decoder.read_string().to_owned())
+                    Some(decoder.read_string().into())
                 } else {
                     None
                 };
@@ -795,7 +795,7 @@ mod test {
             None,
             None,
             TypePtr::Named(Rc::new("".to_owned())),
-            Some("keyB".to_owned()),
+            Some("keyB".into()),
             ItemContent::Any(vec!["valueB".into()]),
         )));
         assert_eq!(block, &expected);

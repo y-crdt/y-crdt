@@ -162,7 +162,7 @@ impl BranchRef {
         txn.create_item(&pos, value, None)
     }
 
-    pub(crate) fn trigger(&self, txn: &Transaction, keys: HashSet<Option<String>>) {
+    pub(crate) fn trigger(&self, txn: &Transaction, keys: HashSet<Option<Rc<str>>>) {
         let e = SharedEvent::new(self.clone(), keys);
         let branch_ref = self.borrow();
         if let Some(h) = branch_ref.observers.as_ref() {
@@ -217,7 +217,7 @@ pub struct Branch {
     /// - [Map]: all of the map elements are based on this field. The value of each entry points
     ///   to the last modified value.
     /// - [XmlElement]: this field stores attributes assigned to a given XML node.
-    pub map: HashMap<String, BlockPtr>,
+    pub map: HashMap<Rc<str>, BlockPtr>,
 
     /// Unique identifier of a current branch node. It can be contain either a named string - which
     /// means, this branch is a root-level complex data structure - or a block identifier. In latter
@@ -235,7 +235,7 @@ pub struct Branch {
     /// An identifier of an underlying complex data type (eg. is it an Array or a Map).
     type_ref: TypeRefs,
 
-    pub observers: Option<EventHandler<SharedEvent>>,
+    observers: Option<EventHandler<SharedEvent>>,
 }
 
 impl std::fmt::Debug for Branch {
@@ -429,16 +429,16 @@ impl Branch {
 
 pub(crate) struct SharedEvent {
     target: BranchRef,
-    keys: HashSet<Option<String>>,
+    keys: HashSet<Option<Rc<str>>>,
 }
 
 impl SharedEvent {
-    pub(crate) fn new(target: BranchRef, keys: HashSet<Option<String>>) -> Self {
+    pub(crate) fn new(target: BranchRef, keys: HashSet<Option<Rc<str>>>) -> Self {
         SharedEvent { target, keys }
     }
 }
 
-pub(crate) struct Observer(Subscription<SharedEvent>);
+pub struct Observer(Subscription<SharedEvent>);
 
 /// Value that can be returned by Yrs data types. This includes [Any] which is an extension
 /// representation of JSON, but also nested complex collaborative structures specific to Yrs.
@@ -584,7 +584,7 @@ impl std::fmt::Display for Branch {
 
 pub(crate) struct Entries<'a, 'txn> {
     pub txn: &'a Transaction<'txn>,
-    iter: std::collections::hash_map::Iter<'a, String, BlockPtr>,
+    iter: std::collections::hash_map::Iter<'a, Rc<str>, BlockPtr>,
 }
 
 impl<'a, 'txn> Entries<'a, 'txn> {
@@ -596,7 +596,7 @@ impl<'a, 'txn> Entries<'a, 'txn> {
 }
 
 impl<'a, 'txn> Iterator for Entries<'a, 'txn> {
-    type Item = (&'a String, &'a Item);
+    type Item = (&'a str, &'a Item);
 
     fn next(&mut self) -> Option<Self::Item> {
         let (mut key, ptr) = self.iter.next()?;

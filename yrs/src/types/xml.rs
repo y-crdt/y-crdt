@@ -8,6 +8,7 @@ use crate::Transaction;
 use lib0::any::Any;
 use std::cell::Ref;
 use std::fmt::Write;
+use std::rc::Rc;
 
 /// An return type from XML elements retrieval methods. It's an enum of all supported values, that
 /// can be nested inside of [XmlElement]. These are other [XmlElement]s or [XmlText] values.
@@ -81,18 +82,18 @@ impl XmlElement {
     }
 
     /// Removes an attribute recognized by an `attr_name` from a current XML element.
-    pub fn remove_attribute(&self, txn: &mut Transaction, attr_name: &str) {
+    pub fn remove_attribute(&self, txn: &mut Transaction, attr_name: &String) {
         self.inner().remove(txn, attr_name);
     }
 
     /// Inserts an attribute entry into current XML element.
-    pub fn insert_attribute<K: ToString, V: ToString>(
+    pub fn insert_attribute<K: Into<Rc<str>>, V: ToString>(
         &self,
         txn: &mut Transaction,
         attr_name: K,
         attr_value: V,
     ) {
-        let key = attr_name.to_string();
+        let key = attr_name.into();
         let value = crate::block::PrelimText(attr_value.to_string());
         let pos = {
             let inner = self.inner();
@@ -289,7 +290,7 @@ impl<'a, 'txn> Iterator for Attributes<'a, 'txn> {
             .map(|v| v.to_string(self.0.txn))
             .unwrap_or(String::default());
 
-        Some((key.as_str(), value))
+        Some((key.as_ref(), value))
     }
 }
 
@@ -423,8 +424,8 @@ impl Into<ItemContent> for XmlFragment {
 
 pub struct XmlEvent {}
 
-impl From<SharedEvent> for XmlEvent {
-    fn from(e: SharedEvent) -> Self {
+impl<'a> From<&'a SharedEvent> for XmlEvent {
+    fn from(e: &'a SharedEvent) -> Self {
         todo!()
     }
 }
@@ -618,13 +619,13 @@ impl XmlText {
         self.inner().remove(txn, attr_name);
     }
 
-    pub fn insert_attribute<K: ToString, V: ToString>(
+    pub fn insert_attribute<K: Into<Rc<str>>, V: ToString>(
         &self,
         txn: &mut Transaction,
         attr_name: K,
         attr_value: V,
     ) {
-        let key = attr_name.to_string();
+        let key = attr_name.into();
         let value = crate::block::PrelimText(attr_value.to_string());
         let pos = {
             let inner = self.inner();

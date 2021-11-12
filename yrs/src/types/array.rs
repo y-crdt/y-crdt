@@ -132,8 +132,8 @@ impl Array {
 
 pub struct ArrayEvent {}
 
-impl From<SharedEvent> for ArrayEvent {
-    fn from(e: SharedEvent) -> Self {
+impl<'a> From<&'a SharedEvent> for ArrayEvent {
+    fn from(e: &'a SharedEvent) -> Self {
         todo!()
     }
 }
