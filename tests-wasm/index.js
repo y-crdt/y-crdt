@@ -1,4 +1,3 @@
-import * as Y from 'ywasm'
 import * as array from './y-array.tests.js'
 import * as map from './y-map.tests.js'
 import * as text from './y-text.tests.js'

@@ -9,3 +9,4 @@ cmake-build-debug/
 tests-ffi/lib
 ywasm/pkg
 node_modules/
+dist/

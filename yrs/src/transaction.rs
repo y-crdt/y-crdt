@@ -238,10 +238,8 @@ impl<'a> Transaction<'a> {
                         if let Some(item) = blocks.get_mut(index).as_item_mut() {
                             // split the first item if necessary
                             if !item.is_deleted() && item.id.clock < clock {
-                                let split_ptr = BlockPtr::new(
-                                    ID::new(*client, clock - item.id.clock),
-                                    index as u32,
-                                );
+                                let split_ptr =
+                                    BlockPtr::new(ID::new(*client, clock), index as u32);
                                 let (_, right) = self.store.blocks.split_block(&split_ptr);
                                 if let Some(right) = right {
                                     index += 1;
