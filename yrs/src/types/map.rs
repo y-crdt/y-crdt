@@ -1,7 +1,5 @@
 use crate::block::{ItemContent, ItemPosition, Prelim};
-use crate::types::{
-    Branch, BranchRef, Entries, Observer, SharedEvent, TypePtr, Value, TYPE_REFS_MAP,
-};
+use crate::types::{Branch, BranchRef, Entries, Event, Observer, TypePtr, Value, TYPE_REFS_MAP};
 use crate::*;
 use lib0::any::Any;
 use std::collections::HashMap;
@@ -135,10 +133,10 @@ impl Map {
 
     pub fn observe<F>(&self, f: F) -> Observer
     where
-        F: Fn(&Transaction, MapEvent) -> () + 'static,
+        F: Fn(&Transaction, &Event) -> () + 'static,
     {
         let mut branch = self.0.borrow_mut();
-        branch.observe(move |txn, e| f(txn, e.into()))
+        branch.observe(f)
     }
 }
 
@@ -208,14 +206,6 @@ impl<T: Prelim> Prelim for PrelimMap<T> {
         for (key, value) in self.0 {
             map.insert(txn, key, value);
         }
-    }
-}
-
-pub struct MapEvent {}
-
-impl<'a> From<&'a SharedEvent> for MapEvent {
-    fn from(e: &'a SharedEvent) -> Self {
-        todo!()
     }
 }
 

@@ -368,7 +368,7 @@ impl Update {
                 };
                 let parent = if cant_copy_parent_info {
                     if decoder.read_parent_info() {
-                        TypePtr::Named(Rc::new(decoder.read_string().to_owned()))
+                        TypePtr::Named(decoder.read_string().into())
                     } else {
                         TypePtr::Id(BlockPtr::from(decoder.read_left_id()))
                     }
@@ -794,7 +794,7 @@ mod test {
             None,
             None,
             None,
-            TypePtr::Named(Rc::new("".to_owned())),
+            TypePtr::Named("".into()),
             Some("keyB".into()),
             ItemContent::Any(vec!["valueB".into()]),
         )));

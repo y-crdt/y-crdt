@@ -8,12 +8,13 @@ pub use map::Map;
 pub use text::Text;
 
 use crate::block::{BlockPtr, Item, ItemContent, ItemPosition, Prelim};
+use crate::block_store::BlockStore;
 use crate::event::{EventHandler, Subscription};
 use crate::types::array::Array;
 use crate::types::xml::{XmlElement, XmlText};
 use lib0::any::Any;
 use std::cell::{BorrowMutError, Ref, RefCell, RefMut};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Formatter;
 use std::rc::Rc;
 
@@ -163,7 +164,7 @@ impl BranchRef {
     }
 
     pub(crate) fn trigger(&self, txn: &Transaction, keys: HashSet<Option<Rc<str>>>) {
-        let e = SharedEvent::new(self.clone(), keys);
+        let e = Event::new(self.clone(), keys);
         let branch_ref = self.borrow();
         if let Some(h) = branch_ref.observers.as_ref() {
             h.publish(txn, &e);
@@ -235,7 +236,7 @@ pub struct Branch {
     /// An identifier of an underlying complex data type (eg. is it an Array or a Map).
     type_ref: TypeRefs,
 
-    observers: Option<EventHandler<SharedEvent>>,
+    observers: Option<EventHandler<Event>>,
 }
 
 impl std::fmt::Debug for Branch {
@@ -319,12 +320,12 @@ impl Branch {
     /// be returned.
     pub(crate) fn get_at<'a, 'b>(
         &'a self,
-        txn: &'b Transaction,
+        blocks: &'b BlockStore,
         mut index: u32,
     ) -> Option<(&'b ItemContent, usize)> {
         let mut ptr = self.start;
         while let Some(p) = ptr {
-            let item = txn.store.blocks.get_item(&p)?;
+            let item = blocks.get_item(&p)?;
             let len = item.len();
             if !item.is_deleted() && item.is_countable() {
                 if index < len {
@@ -418,7 +419,7 @@ impl Branch {
         (None, None)
     }
 
-    pub(crate) fn observe<F: Fn(&Transaction, &SharedEvent) -> () + 'static>(
+    pub(crate) fn observe<F: Fn(&Transaction, &Event) -> () + 'static>(
         &mut self,
         f: F,
     ) -> Observer {
@@ -427,18 +428,158 @@ impl Branch {
     }
 }
 
-pub(crate) struct SharedEvent {
+pub type Path = VecDeque<PathSegment>;
+
+pub enum PathSegment {
+    Key(Rc<str>),
+    Index(u32),
+}
+
+pub struct Changes<'a, 'txn> {
+    txn: &'a Transaction<'txn>,
+    subs: &'a HashSet<Option<Rc<str>>>,
+    branch_ref: &'a BranchRef,
+    curr: Option<BlockPtr>,
+    last_op: Option<Change<'a>>,
+}
+
+impl<'a, 'txn> Changes<'a, 'txn> {
+    fn new(
+        branch_ref: &'a BranchRef,
+        subs: &'a HashSet<Option<Rc<str>>>,
+        txn: &'a Transaction<'txn>,
+    ) -> Self {
+        let curr = { branch_ref.borrow().start.clone() };
+        Changes {
+            txn,
+            subs,
+            branch_ref,
+            curr,
+            last_op: None,
+        }
+    }
+}
+
+impl<'a, 'txn> Iterator for Changes<'a, 'txn> {
+    type Item = Change<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let ptr = self.curr.as_ref()?;
+        let item = self.txn.store.blocks.get_item(ptr)?;
+        if item.is_deleted() {
+            if self.txn.delete_set.is_deleted(&item.id)
+                && item.id.clock >= self.txn.before_state.get(&item.id.client)
+            {}
+            todo!()
+        } else {
+            todo!()
+        }
+    }
+}
+
+pub enum Change<'a> {
+    Add { key: &'a str },
+    Update { key: &'a str },
+    Remove { key: &'a str },
+}
+
+pub struct KeysChanged<'a>(std::collections::hash_set::Iter<'a, Option<Rc<str>>>);
+
+impl<'a> KeysChanged<'a> {
+    fn new(inner: std::collections::hash_set::Iter<'a, Option<Rc<str>>>) -> Self {
+        KeysChanged(inner)
+    }
+}
+
+impl<'a> Iterator for KeysChanged<'a> {
+    type Item = &'a str;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let next = self.0.next()?;
+        if let Some(s) = next {
+            Some(s.as_ref())
+        } else {
+            self.next()
+        }
+    }
+}
+
+pub struct Event {
+    current_target: BranchRef,
     target: BranchRef,
     keys: HashSet<Option<Rc<str>>>,
 }
 
-impl SharedEvent {
+impl Event {
     pub(crate) fn new(target: BranchRef, keys: HashSet<Option<Rc<str>>>) -> Self {
-        SharedEvent { target, keys }
+        Event {
+            current_target: target.clone(),
+            target,
+            keys,
+        }
+    }
+
+    pub fn target(&self) -> Value {
+        let type_ref = { self.target.borrow().type_ref() };
+        let branch_ref = self.target.clone();
+        match type_ref {
+            TYPE_REFS_ARRAY => Value::YArray(Array::from(branch_ref)),
+            TYPE_REFS_MAP => Value::YMap(Map::from(branch_ref)),
+            TYPE_REFS_TEXT => Value::YText(Text::from(branch_ref)),
+            TYPE_REFS_XML_ELEMENT => Value::YXmlElement(XmlElement::from(branch_ref)),
+            TYPE_REFS_XML_TEXT => Value::YXmlText(XmlText::from(branch_ref)),
+            _ => panic!("Unknown type ref"),
+        }
+    }
+
+    pub fn path(&self, txn: &Transaction) -> Path {
+        let parent = self.current_target.borrow();
+        let mut child = self.target.borrow();
+        let mut path = VecDeque::default();
+        while let TypePtr::Id(ptr) = &child.ptr {
+            if parent.ptr == child.ptr {
+                break;
+            }
+            let item = txn.store.blocks.get_item(ptr).unwrap();
+            if let Some(parent_sub) = item.parent_sub.clone() {
+                // parent is map-ish
+                path.push_front(PathSegment::Key(parent_sub));
+                child = txn.store.get_type(&item.parent).unwrap().borrow();
+            } else {
+                // parent is array-ish
+                let mut i = 0;
+                child = txn.store.get_type(&item.parent).unwrap().borrow();
+                let mut c = child.start.clone();
+                while let Some(ptr) = c {
+                    if ptr.id == item.id {
+                        break;
+                    }
+                    let cc = txn.store.blocks.get_block(&ptr).unwrap();
+                    if !cc.is_deleted() {
+                        i += 1;
+                    }
+                    if let Some(cci) = cc.as_item() {
+                        c = cci.right.clone();
+                    } else {
+                        break;
+                    }
+                }
+                path.push_front(PathSegment::Index(i));
+            }
+        }
+        path
+    }
+
+    pub fn keys_changed<'a>(&'a self) -> KeysChanged<'a> {
+        KeysChanged::new(self.keys.iter())
+    }
+
+    pub fn changes<'a, 'txn>(&'a self, txn: &'a Transaction<'txn>) -> Changes<'a, 'txn> {
+        Changes::new(&self.target, &self.keys, txn)
     }
 }
 
-pub struct Observer(Subscription<SharedEvent>);
+pub struct Observer(Subscription<Event>);
 
 /// Value that can be returned by Yrs data types. This includes [Any] which is an extension
 /// representation of JSON, but also nested complex collaborative structures specific to Yrs.
@@ -652,7 +793,7 @@ pub enum TypePtr {
     Id(block::BlockPtr),
 
     /// Pointer to a root-level type.
-    Named(Rc<String>),
+    Named(Rc<str>),
 }
 
 impl std::fmt::Display for TypePtr {
@@ -660,7 +801,7 @@ impl std::fmt::Display for TypePtr {
         match self {
             TypePtr::Unknown => write!(f, "unknown"),
             TypePtr::Id(ptr) => write!(f, "{}", ptr),
-            TypePtr::Named(name) => write!(f, "'{}'", name),
+            TypePtr::Named(name) => write!(f, "'{}'", name.as_ref()),
         }
     }
 }

@@ -1,6 +1,6 @@
 use crate::block::{BlockPtr, ItemContent};
 use crate::transaction::Transaction;
-use crate::types::{Branch, BranchRef, Observer, SharedEvent};
+use crate::types::{Branch, BranchRef, Event, Observer};
 use crate::*;
 use std::cell::Ref;
 
@@ -129,10 +129,10 @@ impl Text {
 
     pub fn observe<F>(&self, f: F) -> Observer
     where
-        F: Fn(&Transaction, TextEvent) -> () + 'static,
+        F: Fn(&Transaction, &Event) -> () + 'static,
     {
         let mut branch = self.0.borrow_mut();
-        branch.observe(move |txn, e| f(txn, e.into()))
+        branch.observe(f)
     }
 }
 
@@ -145,14 +145,6 @@ impl Into<ItemContent> for Text {
 impl From<BranchRef> for Text {
     fn from(inner: BranchRef) -> Self {
         Text(inner)
-    }
-}
-
-pub struct TextEvent {}
-
-impl<'a> From<&'a SharedEvent> for TextEvent {
-    fn from(e: &'a SharedEvent) -> Self {
-        todo!()
     }
 }
 

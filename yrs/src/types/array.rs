@@ -1,5 +1,5 @@
 use crate::block::{BlockPtr, ItemContent, ItemPosition, Prelim};
-use crate::types::{Branch, BranchRef, Observer, SharedEvent, TypePtr, Value, TYPE_REFS_ARRAY};
+use crate::types::{Branch, BranchRef, Event, Observer, TypePtr, Value, TYPE_REFS_ARRAY};
 use crate::Transaction;
 use lib0::any::Any;
 use std::collections::VecDeque;
@@ -105,7 +105,7 @@ impl Array {
     /// of the range of a current array.
     pub fn get(&self, txn: &Transaction, index: u32) -> Option<Value> {
         let inner = self.0.borrow();
-        let (content, idx) = inner.get_at(txn, index)?;
+        let (content, idx) = inner.get_at(&txn.store.blocks, index)?;
         Some(content.get_content(txn).remove(idx))
     }
 
@@ -123,18 +123,10 @@ impl Array {
 
     pub fn observe<F>(&self, f: F) -> Observer
     where
-        F: Fn(&Transaction, ArrayEvent) -> () + 'static,
+        F: Fn(&Transaction, &Event) -> () + 'static,
     {
         let mut branch = self.0.borrow_mut();
-        branch.observe(move |txn, e| f(txn, e.into()))
-    }
-}
-
-pub struct ArrayEvent {}
-
-impl<'a> From<&'a SharedEvent> for ArrayEvent {
-    fn from(e: &'a SharedEvent) -> Self {
-        todo!()
+        branch.observe(f)
     }
 }
 

@@ -3,7 +3,7 @@ use crate::block_store::{BlockStore, SquashResult, StateVector};
 use crate::event::{EventHandler, UpdateEvent};
 use crate::id_set::DeleteSet;
 use crate::types;
-use crate::types::{BranchRef, TypePtr, TypeRefs, TYPE_REFS_UNDEFINED};
+use crate::types::{BranchRef, Path, PathSegment, TypePtr, TypeRefs, TYPE_REFS_UNDEFINED};
 use crate::update::PendingUpdate;
 use crate::updates::encoder::{Encode, Encoder};
 use std::collections::hash_map::Entry;
@@ -20,7 +20,7 @@ pub(crate) struct Store {
     /// Root types (a.k.a. top-level types). These types are defined by users at the document level,
     /// they have their own unique names and represent core shared types that expose operations
     /// which can be called concurrently by remote peers in a conflict-free manner.
-    pub types: HashMap<Rc<String>, BranchRef>,
+    pub types: HashMap<Rc<str>, BranchRef>,
 
     /// A block store of a current document. It represent all blocks (inserted or tombstoned
     /// operations) integrated - and therefore visible - into a current document.
@@ -113,13 +113,13 @@ impl Store {
         node_name: Option<String>,
         type_ref: TypeRefs,
     ) -> BranchRef {
-        let rc = Rc::new(name.to_owned());
+        let rc: Rc<str> = name.into();
         self.init_type_ref(rc.clone(), node_name, type_ref)
     }
 
     pub(crate) fn init_type_ref(
         &mut self,
-        name: Rc<String>,
+        name: Rc<str>,
         node_name: Option<String>,
         type_ref: TypeRefs,
     ) -> BranchRef {
@@ -216,7 +216,7 @@ impl Store {
         }
     }
 
-    pub(crate) fn get_root_type_key(&self, value: &BranchRef) -> Option<&Rc<String>> {
+    pub(crate) fn get_root_type_key(&self, value: &BranchRef) -> Option<&Rc<str>> {
         for (k, v) in self.types.iter() {
             if v == value {
                 return Some(k);
@@ -224,6 +224,39 @@ impl Store {
         }
 
         None
+    }
+
+    pub fn get_type_from_path(&self, path: &Path) -> Option<&BranchRef> {
+        let mut i = path.iter();
+        if let Some(PathSegment::Key(root_name)) = i.next() {
+            let mut current = self.get_type(&TypePtr::Named(root_name.clone()))?;
+            while let Some(segment) = i.next() {
+                let branch_ref = current.borrow();
+                match segment {
+                    PathSegment::Key(key) => {
+                        let child_ptr = branch_ref.map.get(key)?;
+                        let child = self.blocks.get_item(child_ptr)?;
+                        if let ItemContent::Type(child_branch) = &child.content {
+                            current = child_branch;
+                        } else {
+                            return None;
+                        }
+                    }
+                    PathSegment::Index(index) => {
+                        if let Some((ItemContent::Type(child_branch), _)) =
+                            branch_ref.get_at(&self.blocks, *index)
+                        {
+                            current = child_branch;
+                        } else {
+                            return None;
+                        }
+                    }
+                }
+            }
+            Some(current)
+        } else {
+            None
+        }
     }
 }
 
@@ -247,7 +280,7 @@ impl std::fmt::Display for Store {
         if !self.types.is_empty() {
             writeln!(f, "\ttypes: {{")?;
             for (k, v) in self.types.iter() {
-                writeln!(f, "\t\t'{}': {}", k.as_str(), *v.borrow())?;
+                writeln!(f, "\t\t'{}': {}", k.as_ref(), *v.borrow())?;
             }
 
             writeln!(f, "\t}}")?;

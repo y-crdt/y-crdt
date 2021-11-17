@@ -1,8 +1,7 @@
 use crate::block::{Item, ItemContent, ItemPosition, Prelim};
-use crate::types::text::TextEvent;
 use crate::types::{
-    Branch, BranchRef, Entries, Map, Observer, SharedEvent, Text, TypePtr, Value,
-    TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_TEXT,
+    Branch, BranchRef, Entries, Event, Map, Observer, Text, TypePtr, Value, TYPE_REFS_XML_ELEMENT,
+    TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_TEXT,
 };
 use crate::Transaction;
 use lib0::any::Any;
@@ -258,9 +257,9 @@ impl XmlElement {
 
     pub fn observe<F>(&self, f: F) -> Observer
     where
-        F: Fn(&Transaction, XmlEvent) -> () + 'static,
+        F: Fn(&Transaction, &Event) -> () + 'static,
     {
-        self.0.observe(move |txn, e| f(txn, e.into()))
+        self.0.observe(f)
     }
 }
 
@@ -399,7 +398,7 @@ impl XmlFragment {
 
     pub fn get<T: From<BranchRef>>(&self, txn: &Transaction, index: u32) -> Option<T> {
         let inner = self.inner();
-        let (content, _) = inner.get_at(txn, index)?;
+        let (content, _) = inner.get_at(&txn.store.blocks, index)?;
         if let ItemContent::Type(inner) = content {
             Some(T::from(inner.clone()))
         } else {
@@ -409,24 +408,16 @@ impl XmlFragment {
 
     pub fn observe<F>(&self, f: F) -> Observer
     where
-        F: Fn(&Transaction, XmlEvent) -> () + 'static,
+        F: Fn(&Transaction, &Event) -> () + 'static,
     {
         let mut branch_ref = self.0.borrow_mut();
-        branch_ref.observe(move |txn, e| f(txn, e.into()))
+        branch_ref.observe(f)
     }
 }
 
 impl Into<ItemContent> for XmlFragment {
     fn into(self) -> ItemContent {
         ItemContent::Type(self.0.clone())
-    }
-}
-
-pub struct XmlEvent {}
-
-impl<'a> From<&'a SharedEvent> for XmlEvent {
-    fn from(e: &'a SharedEvent) -> Self {
-        todo!()
     }
 }
 
@@ -700,9 +691,9 @@ impl XmlText {
 
     pub fn observe<F>(&self, f: F) -> Observer
     where
-        F: Fn(&Transaction, TextEvent) -> () + 'static,
+        F: Fn(&Transaction, &Event) -> () + 'static,
     {
-        self.0.observe(move |txn, e| f(txn, e.into()))
+        self.0.observe(f)
     }
 }
 

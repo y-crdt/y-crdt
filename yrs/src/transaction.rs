@@ -8,7 +8,7 @@ use crate::store::Store;
 use crate::types::array::Array;
 use crate::types::xml::{XmlElement, XmlText};
 use crate::types::{
-    Branch, Map, Text, TypePtr, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
+    Branch, Event, Map, Text, TypePtr, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
     TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT,
 };
 use crate::update::Update;
@@ -44,8 +44,8 @@ impl<'a> Transaction<'a> {
             before_state: begin_timestamp,
             merge_blocks: Vec::new(),
             delete_set: DeleteSet::new(),
-            changed: HashMap::new(),
             after_state: StateVector::default(),
+            changed: HashMap::new(),
         }
     }
 
@@ -513,12 +513,14 @@ impl<'a> Transaction<'a> {
 
         // 2. emit 'beforeObserverCalls'
         // 3. for each change observed by the transaction call 'afterTransaction'
-        let drained: Vec<_> = self.changed.drain().collect();
-        for (ptr, subs) in drained {
-            if let Some(branch) = self.store.get_type(&ptr) {
-                branch.trigger(self, subs);
+        if !self.changed.is_empty() {
+            for (ptr, subs) in self.changed.iter() {
+                if let Some(branch) = self.store.get_type(ptr) {
+                    branch.trigger(self, subs.clone());
+                }
             }
         }
+
         // 4. try GC delete set
         self.try_gc(); //TODO: eventually this is a configurable variant: if (doc.gc)
 
