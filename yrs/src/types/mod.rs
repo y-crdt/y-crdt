@@ -13,7 +13,7 @@ use crate::event::{EventHandler, Subscription};
 use crate::types::array::Array;
 use crate::types::xml::{XmlElement, XmlText};
 use lib0::any::Any;
-use std::cell::{BorrowMutError, Ref, RefCell, RefMut};
+use std::cell::{BorrowMutError, Ref, RefCell, RefMut, UnsafeCell};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Formatter;
 use std::rc::Rc;
@@ -435,52 +435,10 @@ pub enum PathSegment {
     Index(u32),
 }
 
-pub struct Changes<'a, 'txn> {
-    txn: &'a Transaction<'txn>,
-    subs: &'a HashSet<Option<Rc<str>>>,
-    branch_ref: &'a BranchRef,
-    curr: Option<BlockPtr>,
-    last_op: Option<Change<'a>>,
-}
-
-impl<'a, 'txn> Changes<'a, 'txn> {
-    fn new(
-        branch_ref: &'a BranchRef,
-        subs: &'a HashSet<Option<Rc<str>>>,
-        txn: &'a Transaction<'txn>,
-    ) -> Self {
-        let curr = { branch_ref.borrow().start.clone() };
-        Changes {
-            txn,
-            subs,
-            branch_ref,
-            curr,
-            last_op: None,
-        }
-    }
-}
-
-impl<'a, 'txn> Iterator for Changes<'a, 'txn> {
-    type Item = Change<'a>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let ptr = self.curr.as_ref()?;
-        let item = self.txn.store.blocks.get_item(ptr)?;
-        if item.is_deleted() {
-            if self.txn.delete_set.is_deleted(&item.id)
-                && item.id.clock >= self.txn.before_state.get(&item.id.client)
-            {}
-            todo!()
-        } else {
-            todo!()
-        }
-    }
-}
-
-pub enum Change<'a> {
-    Add { key: &'a str },
-    Update { key: &'a str },
-    Remove { key: &'a str },
+pub struct ChangeSet {
+    added: HashSet<ID>,
+    deleted: HashSet<ID>,
+    delta: Vec<Change>,
 }
 
 pub struct KeysChanged<'a>(std::collections::hash_set::Iter<'a, Option<Rc<str>>>);
@@ -508,6 +466,7 @@ pub struct Event {
     current_target: BranchRef,
     target: BranchRef,
     keys: HashSet<Option<Rc<str>>>,
+    change_set: UnsafeCell<Option<ChangeSet>>,
 }
 
 impl Event {
@@ -516,6 +475,7 @@ impl Event {
             current_target: target.clone(),
             target,
             keys,
+            change_set: UnsafeCell::new(None),
         }
     }
 
@@ -574,9 +534,99 @@ impl Event {
         KeysChanged::new(self.keys.iter())
     }
 
-    pub fn changes<'a, 'txn>(&'a self, txn: &'a Transaction<'txn>) -> Changes<'a, 'txn> {
-        Changes::new(&self.target, &self.keys, txn)
+    pub fn inserts(&self, txn: &Transaction) -> &HashSet<ID> {
+        &self.changes(txn).added
     }
+
+    pub fn removes(&self, txn: &Transaction) -> &HashSet<ID> {
+        &self.changes(txn).deleted
+    }
+
+    pub fn delta(&self, txn: &Transaction) -> &[Change] {
+        self.changes(txn).delta.as_slice()
+    }
+
+    fn changes(&self, txn: &Transaction) -> &ChangeSet {
+        let start = { self.target.borrow().start.clone() };
+        let cell = unsafe { self.change_set.get().as_mut().unwrap() };
+        cell.get_or_insert_with(|| Self::change_set_inner(start, txn))
+    }
+
+    fn change_set_inner(start: Option<BlockPtr>, txn: &Transaction) -> ChangeSet {
+        let mut added = HashSet::new();
+        let mut deleted = HashSet::new();
+        let mut delta = Vec::new();
+
+        let mut last_op = None;
+
+        let mut current = start.and_then(|ptr| txn.store.blocks.get_item(&ptr));
+
+        while let Some(item) = current {
+            if item.is_deleted() {
+                if txn.delete_set.is_deleted(&item.id)
+                    && item.id.clock < txn.before_state.get(&item.id.client)
+                {
+                    let removed = match last_op.take() {
+                        None => 0,
+                        Some(Change::Removed(c)) => c,
+                        Some(other) => {
+                            delta.push(other);
+                            0
+                        }
+                    };
+                    last_op = Some(Change::Removed(removed + item.len()));
+                    deleted.insert(item.id);
+                } // else nop
+            } else {
+                if item.id.clock >= txn.before_state.get(&item.id.client) {
+                    let mut inserts = match last_op.take() {
+                        None => Vec::with_capacity(item.len() as usize),
+                        Some(Change::Added(values)) => values,
+                        Some(other) => {
+                            delta.push(other);
+                            Vec::with_capacity(item.len() as usize)
+                        }
+                    };
+                    inserts.append(&mut item.content.get_content(txn));
+                    last_op = Some(Change::Added(inserts));
+                    added.insert(item.id);
+                } else {
+                    let retain = match last_op.take() {
+                        None => 0,
+                        Some(Change::Retain(c)) => c,
+                        Some(other) => {
+                            delta.push(other);
+                            0
+                        }
+                    };
+                    last_op = Some(Change::Retain(retain + item.len()));
+                }
+            }
+
+            current = item
+                .right
+                .as_ref()
+                .and_then(|ptr| txn.store.blocks.get_item(ptr));
+        }
+
+        match last_op.take() {
+            Some(Change::Retain(_)) => { /* do nothing */ }
+            Some(change) => delta.push(change),
+            None => { /* do nothing */ }
+        }
+
+        ChangeSet {
+            added,
+            deleted,
+            delta,
+        }
+    }
+}
+
+pub enum Change {
+    Added(Vec<Value>),
+    Removed(u32),
+    Retain(u32),
 }
 
 pub struct Observer(Subscription<Event>);
