@@ -81,8 +81,8 @@ impl XmlElement {
     }
 
     /// Removes an attribute recognized by an `attr_name` from a current XML element.
-    pub fn remove_attribute(&self, txn: &mut Transaction, attr_name: &String) {
-        self.inner().remove(txn, attr_name);
+    pub fn remove_attribute<K: AsRef<str>>(&self, txn: &mut Transaction, attr_name: &K) {
+        self.inner().remove(txn, attr_name.as_ref());
     }
 
     /// Inserts an attribute entry into current XML element.
@@ -255,6 +255,14 @@ impl XmlElement {
         self.0.get(txn, index)
     }
 
+    /// Subscribes a given callback to be triggered whenever current XML node is changed.
+    /// A callback is triggered whenever a transaction gets committed. This function does not
+    /// trigger if changes have been observed by nested shared collections.
+    ///
+    /// Children node changes can be tracked by using [Event::delta] method.
+    /// Attribute changes can be tracked by using [Event::keys] method.
+    ///
+    /// Returns an [Observer] which, when dropped, will unsubscribe current callback.
     pub fn observe<F>(&self, f: F) -> Observer
     where
         F: Fn(&Transaction, &Event) -> () + 'static,
@@ -689,6 +697,15 @@ impl XmlText {
         self.0.remove_range(txn, index, len)
     }
 
+    /// Subscribes a given callback to be triggered whenever current XML text is changed.
+    /// A callback is triggered whenever a transaction gets committed. This function does not
+    /// trigger if changes have been observed by nested shared collections.
+    ///
+    /// XML text changes can be tracked by using [Event::delta] method: keep in mind that delta
+    /// contains collection of individual characters rather than strings.
+    /// XML text attribute changes can be tracked using [Event::keys] method.
+    ///
+    /// Returns an [Observer] which, when dropped, will unsubscribe current callback.
     pub fn observe<F>(&self, f: F) -> Observer
     where
         F: Fn(&Transaction, &Event) -> () + 'static,
@@ -793,7 +810,14 @@ fn parent(inner: Ref<Branch>, txn: &Transaction) -> Option<XmlElement> {
 #[cfg(test)]
 mod test {
     use crate::types::xml::Xml;
-    use crate::Doc;
+    use crate::types::{Change, EntryChange, Value};
+    use crate::updates::decoder::Decode;
+    use crate::updates::encoder::{Encoder, EncoderV1};
+    use crate::{Doc, Update};
+    use lib0::any::Any;
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    use std::rc::Rc;
 
     #[test]
     fn insert_attribute() {
@@ -940,5 +964,140 @@ mod test {
         ];
         let u1 = d1.encode_state_as_update_v1(&t1);
         assert_eq!(u1.as_slice(), expected);
+    }
+
+    #[test]
+    fn event_observers() {
+        let mut d1 = Doc::with_client_id(1);
+        let xml = {
+            let mut txn = d1.transact();
+            txn.get_xml_element("xml")
+        };
+
+        let mut attributes = Rc::new(RefCell::new(None));
+        let mut nodes = Rc::new(RefCell::new(None));
+        let mut attributes_c = attributes.clone();
+        let mut nodes_c = nodes.clone();
+        let _sub = xml.observe(move |txn, e| {
+            attributes_c.borrow_mut().insert(e.keys(txn).clone());
+            nodes_c.borrow_mut().insert(e.delta(txn).to_vec());
+        });
+
+        // insert attribute
+        {
+            let mut txn = d1.transact();
+            xml.insert_attribute(&mut txn, "key1", "value1");
+            xml.insert_attribute(&mut txn, "key2", "value2");
+        }
+        assert!(nodes.borrow_mut().take().unwrap().is_empty());
+        assert_eq!(
+            attributes.borrow_mut().take(),
+            Some(HashMap::from([
+                (
+                    "key1".into(),
+                    EntryChange::Inserted(Any::String("value1".to_string()).into())
+                ),
+                (
+                    "key2".into(),
+                    EntryChange::Inserted(Any::String("value2".to_string()).into())
+                )
+            ]))
+        );
+
+        // change and remove attribute
+        {
+            let mut txn = d1.transact();
+            xml.insert_attribute(&mut txn, "key1", "value11");
+            xml.remove_attribute(&mut txn, &"key2");
+        }
+        assert!(nodes.borrow_mut().take().unwrap().is_empty());
+        assert_eq!(
+            attributes.borrow_mut().take(),
+            Some(HashMap::from([
+                (
+                    "key1".into(),
+                    EntryChange::Updated(
+                        Any::String("value1".to_string()).into(),
+                        Any::String("value11".to_string()).into()
+                    )
+                ),
+                (
+                    "key2".into(),
+                    EntryChange::Removed(Any::String("value2".to_string()).into())
+                )
+            ]))
+        );
+
+        // add xml elements
+        let (nested_txt, nested_xml) = {
+            let mut txn = d1.transact();
+            let txt = xml.insert_text(&mut txn, 0);
+            let xml2 = xml.insert_elem(&mut txn, 1, "div");
+            (txt, xml2)
+        };
+        assert_eq!(
+            nodes.borrow_mut().take(),
+            Some(vec![Change::Added(vec![
+                Value::YXmlText(nested_txt.clone()),
+                Value::YXmlElement(nested_xml.clone())
+            ])])
+        );
+        assert_eq!(attributes.borrow_mut().take(), Some(HashMap::new()));
+
+        // remove and add
+        let nested_xml2 = {
+            let mut txn = d1.transact();
+            xml.remove_range(&mut txn, 1, 1);
+            xml.insert_elem(&mut txn, 1, "p")
+        };
+        assert_eq!(
+            nodes.borrow_mut().take(),
+            Some(vec![
+                Change::Retain(1),
+                Change::Added(vec![Value::YXmlElement(nested_xml2.clone())]),
+                Change::Removed(1),
+            ])
+        );
+        assert_eq!(attributes.borrow_mut().take(), Some(HashMap::new()));
+
+        // copy updates over
+        let mut d2 = Doc::with_client_id(2);
+        let xml2 = {
+            let mut txn = d2.transact();
+            txn.get_xml_element("xml")
+        };
+
+        let mut attributes = Rc::new(RefCell::new(None));
+        let mut nodes = Rc::new(RefCell::new(None));
+        let mut attributes_c = attributes.clone();
+        let mut nodes_c = nodes.clone();
+        let _sub = xml2.observe(move |txn, e| {
+            attributes_c.borrow_mut().insert(e.keys(txn).clone());
+            nodes_c.borrow_mut().insert(e.delta(txn).to_vec());
+        });
+
+        {
+            let t1 = d1.transact();
+            let mut t2 = d2.transact();
+
+            let sv = t2.state_vector();
+            let mut encoder = EncoderV1::new();
+            t1.encode_diff(&sv, &mut encoder);
+            t2.apply_update(Update::decode_v1(encoder.to_vec().as_slice()));
+        }
+        assert_eq!(
+            nodes.borrow_mut().take(),
+            Some(vec![Change::Added(vec![
+                Value::YXmlText(nested_txt),
+                Value::YXmlElement(nested_xml2)
+            ])])
+        );
+        assert_eq!(
+            attributes.borrow_mut().take(),
+            Some(HashMap::from([(
+                "key1".into(),
+                EntryChange::Inserted(Any::String("value11".to_string()).into())
+            )]))
+        );
     }
 }

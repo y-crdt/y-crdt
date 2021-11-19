@@ -441,27 +441,8 @@ pub struct ChangeSet {
     delta: Vec<Change>,
 }
 
-pub struct KeysChanged<'a>(std::collections::hash_set::Iter<'a, Option<Rc<str>>>);
-
-impl<'a> KeysChanged<'a> {
-    fn new(inner: std::collections::hash_set::Iter<'a, Option<Rc<str>>>) -> Self {
-        KeysChanged(inner)
-    }
-}
-
-impl<'a> Iterator for KeysChanged<'a> {
-    type Item = &'a str;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let next = self.0.next()?;
-        if let Some(s) = next {
-            Some(s.as_ref())
-        } else {
-            self.next()
-        }
-    }
-}
-
+/// An event type, triggered upon transaction commit and passed over to function callbacks
+/// registered using `observe` method on corresponding shared data types.
 #[derive(Debug)]
 pub struct Event {
     current_target: BranchRef,
@@ -482,6 +463,8 @@ impl Event {
         }
     }
 
+    /// Returns enum containing a reference to a shared data type on which current event has been
+    /// fired.  
     pub fn target(&self) -> Value {
         let type_ref = { self.target.borrow().type_ref() };
         let branch_ref = self.target.clone();
@@ -495,6 +478,8 @@ impl Event {
         }
     }
 
+    /// Returns a path From root level type down to a current shared data type being
+    /// a [Self::target].
     pub fn path(&self, txn: &Transaction) -> Path {
         let parent = self.current_target.borrow();
         let mut child = self.target.borrow();
@@ -533,6 +518,10 @@ impl Event {
         path
     }
 
+    /// Returns all changes done upon map component of a current shared data type (which can be
+    /// accessed using [Self::target]) within a bounds of corresponding transaction `txn`. These
+    /// changes are done in result of operations made on [Map] data type or attribute changes of
+    /// [XmlElement] and [XmlText] types.
     pub fn keys(&self, txn: &Transaction) -> &HashMap<Rc<str>, EntryChange> {
         let mut keys = unsafe { self.keys.get().as_mut().unwrap() };
         keys.get_or_insert_with(|| {
@@ -595,18 +584,21 @@ impl Event {
         })
     }
 
-    pub fn keys_changed(&self) -> KeysChanged {
-        KeysChanged::new(self.keys_changed.iter())
-    }
-
+    /// Returns identifiers of all new blocks inserted within a bounds of current transaction `txn`.
     pub fn inserts(&self, txn: &Transaction) -> &HashSet<ID> {
         &self.changes(txn).added
     }
 
+    /// Returns identifiers of all new blocks tombstoned within a bounds of current transaction
+    /// `txn`.
     pub fn removes(&self, txn: &Transaction) -> &HashSet<ID> {
         &self.changes(txn).deleted
     }
 
+    /// Returns collection of all changes done over an array component of a current shared data
+    /// type (which can be accessed using [Self::target]). These changes are usually done in result
+    /// of operations done on [Array] and [Text]/[XmlText] types, but also whenever [XmlElement]
+    /// children nodes list is modified.
     pub fn delta(&self, txn: &Transaction) -> &[Change] {
         self.changes(txn).delta.as_slice()
     }
@@ -686,20 +678,42 @@ impl Event {
     }
 }
 
+/// A single change done over an array-component of shared data type.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Change {
+    /// Determines a change that resulted in adding a consecutive number of new elements:
+    /// - For [Text]/[XmlText] it's a chunk of text (recognized as a vector of individual
+    ///   characters).
+    /// - For [Array] it's a range of inserted elements.
+    /// - For [XmlElement] it's a range of inserted child XML nodes.
     Added(Vec<Value>),
+
+    /// Determines a change that resulted in removing a consecutive range of existing elements,
+    /// either string characters in case of [Text]/[XmlText], XML child nodes for [XmlElement] or
+    /// various elements stored in an [Array].
     Removed(u32),
+
+    /// Determines a number of consecutive unchanged elements. Used to recognize non-edited spaces
+    /// between [Change::Added] and/or [Change::Removed] chunks.
     Retain(u32),
 }
 
+/// A single change done over a map-component of shared data type.
 #[derive(Debug, Clone, PartialEq)]
 pub enum EntryChange {
+    /// Informs about a new value inserted under specified entry.
     Inserted(Value),
+
+    /// Informs about a change of old value (1st field) to a new one (2nd field) under
+    /// a corresponding entry.
     Updated(Value, Value),
+
+    /// Informs about a removal of a corresponding entry - contains a removed value.
     Removed(Value),
 }
 
+/// Subscription handler returned by `observe` method of shared data types. When dropped, causes
+/// previously registered callbacks to be unsubscribed.
 pub struct Observer(Subscription<Event>);
 
 /// Value that can be returned by Yrs data types. This includes [Any] which is an extension

@@ -121,6 +121,13 @@ impl Array {
         Any::Array(res)
     }
 
+    /// Subscribes a given callback to be triggered whenever current array is changed.
+    /// A callback is triggered whenever a transaction gets committed. This function does not
+    /// trigger if changes have been observed by nested shared collections.
+    ///
+    /// All array changes can be tracked by using [Event::delta] method.
+    ///
+    /// Returns an [Observer] which, when dropped, will unsubscribe current callback.
     pub fn observe<F>(&self, f: F) -> Observer
     where
         F: Fn(&Transaction, &Event) -> () + 'static,
@@ -668,7 +675,6 @@ mod test {
         {
             let mut txn = d1.transact();
             array.remove_range(&mut txn, 0, 1);
-            // txn is committed at the end of this scope
         }
         assert_eq!(added.borrow_mut().take(), Some(HashSet::new()));
         assert_eq!(
@@ -680,7 +686,6 @@ mod test {
         {
             let mut txn = d1.transact();
             array.insert(&mut txn, 1, 0.5);
-            // txn is committed at the end of this scope
         }
         assert_eq!(
             added.borrow_mut().take(),

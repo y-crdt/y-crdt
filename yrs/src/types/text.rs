@@ -127,6 +127,14 @@ impl Text {
         }
     }
 
+    /// Subscribes a given callback to be triggered whenever current text is changed.
+    /// A callback is triggered whenever a transaction gets committed. This function does not
+    /// trigger if changes have been observed by nested shared collections.
+    ///
+    /// All text changes can be tracked by using [Event::delta] method: keep in mind that delta
+    /// contains collection of individual characters rather than strings.
+    ///
+    /// Returns an [Observer] which, when dropped, will unsubscribe current callback.
     pub fn observe<F>(&self, f: F) -> Observer
     where
         F: Fn(&Transaction, &Event) -> () + 'static,
@@ -151,8 +159,14 @@ impl From<BranchRef> for Text {
 #[cfg(test)]
 mod test {
     use crate::test_utils::{run_scenario, RngExt};
-    use crate::Doc;
+    use crate::types::Change;
+    use crate::updates::decoder::Decode;
+    use crate::updates::encoder::{Encoder, EncoderV1};
+    use crate::{Doc, Update};
+    use lib0::any::Any;
     use rand::prelude::StdRng;
+    use std::cell::RefCell;
+    use std::rc::Rc;
 
     #[test]
     fn append_single_character_blocks() {
@@ -469,6 +483,92 @@ mod test {
 
         assert_eq!(a, b);
         assert_eq!(a, "H beautifuld!".to_owned());
+    }
+
+    #[test]
+    fn insert_and_remove_event_changes() {
+        let d1 = Doc::with_client_id(1);
+        let txt = {
+            let mut txn = d1.transact();
+            txn.get_text("text")
+        };
+        let mut delta = Rc::new(RefCell::new(None));
+        let delta_c = delta.clone();
+        let _sub = txt.observe(move |txn, e| {
+            delta_c.borrow_mut().insert(e.delta(txn).to_vec());
+        });
+
+        // insert initial string
+        {
+            let mut txn = d1.transact();
+            txt.insert(&mut txn, 0, "abcd");
+        }
+        assert_eq!(
+            delta.borrow_mut().take(),
+            Some(vec![Change::Added(vec![
+                Any::String("a".to_string()).into(),
+                Any::String("b".to_string()).into(),
+                Any::String("c".to_string()).into(),
+                Any::String("d".to_string()).into()
+            ])])
+        );
+
+        // remove middle
+        {
+            let mut txn = d1.transact();
+            txt.remove_range(&mut txn, 1, 2);
+        }
+        assert_eq!(
+            delta.borrow_mut().take(),
+            Some(vec![Change::Retain(1), Change::Removed(2)])
+        );
+
+        // insert again
+        {
+            let mut txn = d1.transact();
+            txt.insert(&mut txn, 1, "ef");
+        }
+        assert_eq!(
+            delta.borrow_mut().take(),
+            Some(vec![
+                Change::Retain(1),
+                Change::Added(vec![
+                    Any::String("e".to_string()).into(),
+                    Any::String("f".to_string()).into()
+                ])
+            ])
+        );
+
+        // replicate data to another peer
+        let d2 = Doc::with_client_id(2);
+        let txt = {
+            let mut txn = d2.transact();
+            txn.get_text("text")
+        };
+        let delta_c = delta.clone();
+        let _sub = txt.observe(move |txn, e| {
+            delta_c.borrow_mut().insert(e.delta(txn).to_vec());
+        });
+
+        {
+            let t1 = d1.transact();
+            let mut t2 = d2.transact();
+
+            let sv = t2.state_vector();
+            let mut encoder = EncoderV1::new();
+            t1.encode_diff(&sv, &mut encoder);
+            t2.apply_update(Update::decode_v1(encoder.to_vec().as_slice()));
+        }
+
+        assert_eq!(
+            delta.borrow_mut().take(),
+            Some(vec![Change::Added(vec![
+                Any::String("a".to_string()).into(),
+                Any::String("e".to_string()).into(),
+                Any::String("f".to_string()).into(),
+                Any::String("d".to_string()).into()
+            ])])
+        );
     }
 
     fn text_transactions() -> [Box<dyn Fn(&mut Doc, &mut StdRng)>; 2] {
