@@ -212,13 +212,17 @@ impl<T: Prelim> Prelim for PrelimMap<T> {
 #[cfg(test)]
 mod test {
     use crate::test_utils::{exchange_updates, run_scenario};
-    use crate::types::{Map, Value};
-    use crate::{Doc, PrelimArray, PrelimMap, Transaction};
+    use crate::types::{EntryChange, Map, Value};
+    use crate::updates::decoder::Decode;
+    use crate::updates::encoder::{Encoder, EncoderV1};
+    use crate::{Doc, PrelimArray, PrelimMap, Transaction, Update};
     use lib0::any::Any;
     use rand::distributions::Alphanumeric;
     use rand::prelude::{SliceRandom, StdRng};
     use rand::Rng;
+    use std::cell::RefCell;
     use std::collections::HashMap;
+    use std::rc::Rc;
 
     #[test]
     fn map_basic() {
@@ -537,6 +541,128 @@ mod test {
                 doc.client_id
             );
         }
+    }
+
+    #[test]
+    fn insert_and_remove_events() {
+        let mut d1 = Doc::with_client_id(1);
+        let m1 = {
+            let mut txn = d1.transact();
+            txn.get_map("map")
+        };
+
+        let mut entries = Rc::new(RefCell::new(None));
+        let mut entries_c = entries.clone();
+        let _sub = m1.observe(move |txn, e| {
+            let keys = e.keys(txn);
+            entries_c.borrow_mut().insert(keys.clone());
+        });
+
+        // insert new entry
+        {
+            let mut txn = d1.transact();
+            m1.insert(&mut txn, "a", 1);
+        }
+        assert_eq!(
+            entries.take(),
+            Some(HashMap::from([(
+                "a".into(),
+                EntryChange::Inserted(Any::Number(1.0).into())
+            )]))
+        );
+
+        // update existing entry once
+        {
+            let mut txn = d1.transact();
+            m1.insert(&mut txn, "a", 2);
+        }
+        assert_eq!(
+            entries.take(),
+            Some(HashMap::from([(
+                "a".into(),
+                EntryChange::Updated(Any::Number(1.0).into(), Any::Number(2.0).into())
+            )]))
+        );
+
+        // update existing entry twice
+        {
+            let mut txn = d1.transact();
+            m1.insert(&mut txn, "a", 3);
+            m1.insert(&mut txn, "a", 4);
+        }
+        assert_eq!(
+            entries.take(),
+            Some(HashMap::from([(
+                "a".into(),
+                EntryChange::Updated(Any::Number(2.0).into(), Any::Number(4.0).into())
+            )]))
+        );
+
+        // remove existing entry
+        {
+            let mut txn = d1.transact();
+            m1.remove(&mut txn, "a");
+        }
+        assert_eq!(
+            entries.take(),
+            Some(HashMap::from([(
+                "a".into(),
+                EntryChange::Removed(Any::Number(4.0).into())
+            )]))
+        );
+
+        // add another entry and update it
+        {
+            let mut txn = d1.transact();
+            m1.insert(&mut txn, "b", 1);
+            m1.insert(&mut txn, "b", 2);
+        }
+        assert_eq!(
+            entries.take(),
+            Some(HashMap::from([(
+                "b".into(),
+                EntryChange::Inserted(Any::Number(2.0).into())
+            )]))
+        );
+
+        // add and remove an entry
+        {
+            let mut txn = d1.transact();
+            m1.insert(&mut txn, "c", 1);
+            m1.remove(&mut txn, "c");
+        }
+        assert_eq!(entries.take(), Some(HashMap::new()));
+
+        // copy updates over
+        let mut d2 = Doc::with_client_id(2);
+        let m2 = {
+            let mut txn = d2.transact();
+            txn.get_map("map")
+        };
+
+        let mut entries = Rc::new(RefCell::new(None));
+        let mut entries_c = entries.clone();
+        let _sub = m2.observe(move |txn, e| {
+            let keys = e.keys(txn);
+            entries_c.borrow_mut().insert(keys.clone());
+        });
+
+        {
+            let t1 = d1.transact();
+            let mut t2 = d2.transact();
+
+            let sv = t2.state_vector();
+            let mut encoder = EncoderV1::new();
+            t1.encode_diff(&sv, &mut encoder);
+            t2.apply_update(Update::decode_v1(encoder.to_vec().as_slice()));
+        }
+        assert_eq!(
+            entries.take(),
+            Some(HashMap::from([(
+                "b".into(),
+                EntryChange::Inserted(Any::Number(2.0).into())
+            )]))
+        );
     }
 
     fn random_string(rng: &mut StdRng) -> String {

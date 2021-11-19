@@ -232,12 +232,14 @@ where
 mod test {
     use crate::test_utils::{exchange_updates, run_scenario, RngExt};
     use crate::types::map::PrelimMap;
-    use crate::types::Value;
-    use crate::{Doc, PrelimArray};
+    use crate::types::{Change, Value};
+    use crate::{Doc, PrelimArray, Update, ID};
     use lib0::any::Any;
     use rand::prelude::StdRng;
     use rand::Rng;
-    use std::collections::HashMap;
+    use std::cell::{Cell, RefCell};
+    use std::collections::{HashMap, HashSet};
+    use std::rc::Rc;
 
     #[test]
     fn push_back() {
@@ -582,6 +584,189 @@ mod test {
         }
     }
 
+    #[test]
+    fn insert_and_remove_events() {
+        let d = Doc::with_client_id(1);
+        let array = {
+            let mut txn = d.transact();
+            txn.get_array("array")
+        };
+        let mut happened = Rc::new(Cell::new(false));
+        let happened_clone = happened.clone();
+        let _sub = array.observe(move |txn, e| {
+            happened_clone.set(true);
+        });
+
+        {
+            let mut txn = d.transact();
+            array.insert_range(&mut txn, 0, [0, 1, 2]);
+            // txn is committed at the end of this scope
+        }
+        assert!(
+            happened.replace(false),
+            "insert of [0,1,2] should trigger event"
+        );
+
+        {
+            let mut txn = d.transact();
+            array.remove_range(&mut txn, 0, 1);
+            // txn is committed at the end of this scope
+        }
+        assert!(
+            happened.replace(false),
+            "removal of [0] should trigger event"
+        );
+
+        {
+            let mut txn = d.transact();
+            array.remove_range(&mut txn, 0, 2);
+            // txn is committed at the end of this scope
+        }
+        assert!(
+            happened.replace(false),
+            "removal of [1,2] should trigger event"
+        );
+    }
+
+    #[test]
+    fn insert_and_remove_event_changes() {
+        let d1 = Doc::with_client_id(1);
+        let array = {
+            let mut txn = d1.transact();
+            txn.get_array("array")
+        };
+        let mut added = Rc::new(RefCell::new(None));
+        let mut removed = Rc::new(RefCell::new(None));
+        let mut delta = Rc::new(RefCell::new(None));
+
+        let (added_c, removed_c, delta_c) = (added.clone(), removed.clone(), delta.clone());
+        let _sub = array.observe(move |txn, e| {
+            added_c.borrow_mut().insert(e.inserts(txn).clone());
+            removed_c.borrow_mut().insert(e.removes(txn).clone());
+            delta_c.borrow_mut().insert(e.delta(txn).to_vec());
+        });
+
+        {
+            let mut txn = d1.transact();
+            array.push_back(&mut txn, 4);
+            array.push_back(&mut txn, "dtrn");
+            // txn is committed at the end of this scope
+        }
+        assert_eq!(
+            added.borrow_mut().take(),
+            Some(HashSet::from([ID::new(1, 0), ID::new(1, 1)]))
+        );
+        assert_eq!(removed.borrow_mut().take(), Some(HashSet::new()));
+        assert_eq!(
+            delta.borrow_mut().take(),
+            Some(vec![Change::Added(vec![
+                Any::Number(4.0).into(),
+                Any::String("dtrn".to_string()).into()
+            ])])
+        );
+
+        {
+            let mut txn = d1.transact();
+            array.remove_range(&mut txn, 0, 1);
+            // txn is committed at the end of this scope
+        }
+        assert_eq!(added.borrow_mut().take(), Some(HashSet::new()));
+        assert_eq!(
+            removed.borrow_mut().take(),
+            Some(HashSet::from([ID::new(1, 0)]))
+        );
+        assert_eq!(delta.borrow_mut().take(), Some(vec![Change::Removed(1)]));
+
+        {
+            let mut txn = d1.transact();
+            array.insert(&mut txn, 1, 0.5);
+            // txn is committed at the end of this scope
+        }
+        assert_eq!(
+            added.borrow_mut().take(),
+            Some(HashSet::from([ID::new(1, 2)]))
+        );
+        assert_eq!(removed.borrow_mut().take(), Some(HashSet::new()));
+        assert_eq!(
+            delta.borrow_mut().take(),
+            Some(vec![
+                Change::Retain(1),
+                Change::Added(vec![Any::Number(0.5).into()])
+            ])
+        );
+
+        let d2 = Doc::with_client_id(2);
+        let array2 = {
+            let mut txn = d2.transact();
+            txn.get_array("array")
+        };
+        let (added_c, removed_c, delta_c) = (added.clone(), removed.clone(), delta.clone());
+        let _sub = array2.observe(move |txn, e| {
+            added_c.borrow_mut().insert(e.inserts(txn).clone());
+            removed_c.borrow_mut().insert(e.removes(txn).clone());
+            delta_c.borrow_mut().insert(e.delta(txn).to_vec());
+        });
+
+        {
+            let t1 = d1.transact();
+            let mut t2 = d2.transact();
+
+            let sv = t2.state_vector();
+            let mut encoder = EncoderV1::new();
+            t1.encode_diff(&sv, &mut encoder);
+            t2.apply_update(Update::decode_v1(encoder.to_vec().as_slice()));
+        }
+
+        assert_eq!(
+            added.borrow_mut().take(),
+            Some(HashSet::from([ID::new(1, 1)]))
+        );
+        assert_eq!(removed.borrow_mut().take(), Some(HashSet::new()));
+        assert_eq!(
+            delta.borrow_mut().take(),
+            Some(vec![Change::Added(vec![
+                Any::String("dtrn".to_string()).into(),
+                Any::Number(0.5).into(),
+            ])])
+        );
+    }
+
+    #[test]
+    fn target_on_local_and_remote() {
+        let d1 = Doc::with_client_id(1);
+        let d2 = Doc::with_client_id(2);
+        let a1 = {
+            let mut txn = d1.transact();
+            txn.get_array("array")
+        };
+        let a2 = {
+            let mut txn = d2.transact();
+            txn.get_array("array")
+        };
+
+        let c1 = Rc::new(RefCell::new(None));
+        let c1c = c1.clone();
+        let _s1 = a1.observe(move |txn, e| {
+            c1c.borrow_mut().insert(e.target());
+        });
+        let c2 = Rc::new(RefCell::new(None));
+        let c2c = c2.clone();
+        let _s2 = a2.observe(move |txn, e| {
+            c2c.borrow_mut().insert(e.target());
+        });
+
+        {
+            let mut t1 = d1.transact();
+            a1.insert_range(&mut t1, 0, [1, 2]);
+        }
+        exchange_updates(&[&d1, &d2]);
+
+        assert_eq!(c1.borrow_mut().take(), Some(Value::YArray(a1)));
+        assert_eq!(c2.borrow_mut().take(), Some(Value::YArray(a2)));
+    }
+
+    use crate::updates::decoder::Decode;
+    use crate::updates::encoder::{Encoder, EncoderV1};
     use std::sync::atomic::{AtomicI64, Ordering};
 
     static UNIQUE_NUMBER: AtomicI64 = AtomicI64::new(0);

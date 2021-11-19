@@ -462,20 +462,23 @@ impl<'a> Iterator for KeysChanged<'a> {
     }
 }
 
+#[derive(Debug)]
 pub struct Event {
     current_target: BranchRef,
     target: BranchRef,
-    keys: HashSet<Option<Rc<str>>>,
-    change_set: UnsafeCell<Option<ChangeSet>>,
+    keys_changed: HashSet<Option<Rc<str>>>,
+    change_set: UnsafeCell<Option<Box<ChangeSet>>>,
+    keys: UnsafeCell<Option<Box<HashMap<Rc<str>, EntryChange>>>>,
 }
 
 impl Event {
-    pub(crate) fn new(target: BranchRef, keys: HashSet<Option<Rc<str>>>) -> Self {
+    pub(crate) fn new(target: BranchRef, keys_changed: HashSet<Option<Rc<str>>>) -> Self {
         Event {
             current_target: target.clone(),
             target,
-            keys,
+            keys_changed,
             change_set: UnsafeCell::new(None),
+            keys: UnsafeCell::new(None),
         }
     }
 
@@ -530,8 +533,70 @@ impl Event {
         path
     }
 
-    pub fn keys_changed<'a>(&'a self) -> KeysChanged<'a> {
-        KeysChanged::new(self.keys.iter())
+    pub fn keys(&self, txn: &Transaction) -> &HashMap<Rc<str>, EntryChange> {
+        let mut keys = unsafe { self.keys.get().as_mut().unwrap() };
+        keys.get_or_insert_with(|| {
+            let mut keys = HashMap::new();
+            let target = self.target.borrow();
+            for opt in self.keys_changed.iter() {
+                if let Some(key) = opt {
+                    let item = target
+                        .map
+                        .get(key.as_ref())
+                        .and_then(|ptr| txn.store.blocks.get_item(ptr));
+                    if let Some(item) = item {
+                        if item.id.clock >= txn.before_state.get(&item.id.client) {
+                            let mut prev = item
+                                .left
+                                .as_ref()
+                                .and_then(|ptr| txn.store.blocks.get_item(ptr));
+                            while let Some(p) = prev {
+                                if !txn.has_added(&p.id) {
+                                    break;
+                                }
+                                prev = p
+                                    .left
+                                    .as_ref()
+                                    .and_then(|ptr| txn.store.blocks.get_item(ptr));
+                            }
+
+                            if txn.has_deleted(&item.id) {
+                                if let Some(prev) = prev {
+                                    if txn.has_deleted(&prev.id) {
+                                        let old_value = prev.content.get_content_last(txn).unwrap();
+                                        keys.insert(key.clone(), EntryChange::Removed(old_value));
+                                    }
+                                }
+                            } else {
+                                let new_value = item.content.get_content_last(txn).unwrap();
+                                if let Some(prev) = prev {
+                                    if txn.has_deleted(&prev.id) {
+                                        let old_value = prev.content.get_content_last(txn).unwrap();
+                                        keys.insert(
+                                            key.clone(),
+                                            EntryChange::Updated(old_value, new_value),
+                                        );
+
+                                        continue;
+                                    }
+                                }
+
+                                keys.insert(key.clone(), EntryChange::Inserted(new_value));
+                            }
+                        } else if txn.has_deleted(&item.id) {
+                            let old_value = item.content.get_content_last(txn).unwrap();
+                            keys.insert(key.clone(), EntryChange::Removed(old_value));
+                        }
+                    }
+                }
+            }
+
+            Box::new(keys)
+        })
+    }
+
+    pub fn keys_changed(&self) -> KeysChanged {
+        KeysChanged::new(self.keys_changed.iter())
     }
 
     pub fn inserts(&self, txn: &Transaction) -> &HashSet<ID> {
@@ -549,7 +614,7 @@ impl Event {
     fn changes(&self, txn: &Transaction) -> &ChangeSet {
         let start = { self.target.borrow().start.clone() };
         let cell = unsafe { self.change_set.get().as_mut().unwrap() };
-        cell.get_or_insert_with(|| Self::change_set_inner(start, txn))
+        cell.get_or_insert_with(|| Box::new(Self::change_set_inner(start, txn)))
     }
 
     fn change_set_inner(start: Option<BlockPtr>, txn: &Transaction) -> ChangeSet {
@@ -563,9 +628,7 @@ impl Event {
 
         while let Some(item) = current {
             if item.is_deleted() {
-                if txn.delete_set.is_deleted(&item.id)
-                    && item.id.clock < txn.before_state.get(&item.id.client)
-                {
+                if txn.has_deleted(&item.id) && !txn.has_added(&item.id) {
                     let removed = match last_op.take() {
                         None => 0,
                         Some(Change::Removed(c)) => c,
@@ -578,7 +641,7 @@ impl Event {
                     deleted.insert(item.id);
                 } // else nop
             } else {
-                if item.id.clock >= txn.before_state.get(&item.id.client) {
+                if txn.has_added(&item.id) {
                     let mut inserts = match last_op.take() {
                         None => Vec::with_capacity(item.len() as usize),
                         Some(Change::Added(values)) => values,
@@ -623,10 +686,18 @@ impl Event {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
 pub enum Change {
     Added(Vec<Value>),
     Removed(u32),
     Retain(u32),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum EntryChange {
+    Inserted(Value),
+    Updated(Value, Value),
+    Removed(Value),
 }
 
 pub struct Observer(Subscription<Event>);

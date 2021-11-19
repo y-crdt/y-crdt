@@ -8,7 +8,7 @@ use crate::store::Store;
 use crate::types::array::Array;
 use crate::types::xml::{XmlElement, XmlText};
 use crate::types::{
-    Branch, Event, Map, Text, TypePtr, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
+    Branch, Map, Text, TypePtr, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
     TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT,
 };
 use crate::update::Update;
@@ -605,6 +605,16 @@ impl<'a> Transaction<'a> {
             let e = self.changed.entry(parent.ptr.clone()).or_default();
             e.insert(parent_sub.clone());
         }
+    }
+
+    /// Checks if item with a given `id` has been added to a block store within this transaction.
+    pub(crate) fn has_added(&self, id: &ID) -> bool {
+        id.clock >= self.before_state.get(&id.client)
+    }
+
+    /// Checks if item with a given `id` has been deleted within this transaction.
+    pub(crate) fn has_deleted(&self, id: &ID) -> bool {
+        self.delete_set.is_deleted(id)
     }
 }
 
