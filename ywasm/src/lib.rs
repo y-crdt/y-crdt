@@ -18,9 +18,7 @@ use yrs::types::{
 };
 use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1};
-use yrs::{
-    Array, DeleteSet, Doc, Map, StateVector, Text, Transaction, Update, Xml, XmlElement, XmlText,
-};
+use yrs::{Array, Doc, Map, StateVector, Text, Transaction, Update, Xml, XmlElement, XmlText};
 
 // When the `wee_alloc` feature is enabled, use `wee_alloc` as the global
 // allocator.
@@ -1057,8 +1055,8 @@ impl Drop for YMapIterator {
     }
 }
 
-impl<'a> From<Option<(&'a String, Value)>> for IteratorNext {
-    fn from(entry: Option<(&'a String, Value)>) -> Self {
+impl<'a> From<Option<(&'a str, Value)>> for IteratorNext {
+    fn from(entry: Option<(&'a str, Value)>) -> Self {
         match entry {
             None => IteratorNext::finished(),
             Some((k, v)) => {
@@ -1239,7 +1237,7 @@ impl YXmlElement {
     /// Removes an attribute from this XML node, given its `name`.
     #[wasm_bindgen(js_name = removeAttribute)]
     pub fn remove_attribute(&self, txn: &mut YTransaction, name: &str) {
-        self.0.remove_attribute(txn, name);
+        self.0.remove_attribute(txn, &name);
     }
 
     /// Returns an iterator that enables to traverse over all attributes of this XML node in

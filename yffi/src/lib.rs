@@ -12,7 +12,7 @@ use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1};
 use yrs::StateVector;
 use yrs::Update;
-use yrs::{Xml};
+use yrs::Xml;
 
 /// Flag used by `YInput` and `YOutput` to tag boolean values.
 #[no_mangle]
@@ -812,7 +812,7 @@ pub unsafe extern "C" fn ymap_iter_next(iter: *mut MapIter) -> *mut YMapEntry {
 
     let iter = iter.as_mut().unwrap();
     if let Some((key, value)) = iter.next() {
-        Box::into_raw(Box::new(YMapEntry::new(key.as_str(), value)))
+        Box::into_raw(Box::new(YMapEntry::new(key, value)))
     } else {
         std::ptr::null_mut()
     }
@@ -1000,7 +1000,7 @@ pub unsafe extern "C" fn yxmlelem_remove_attr(
     let txn = txn.as_mut().unwrap();
 
     let key = CStr::from_ptr(attr_name).to_str().unwrap();
-    xml.remove_attribute(txn, key);
+    xml.remove_attribute(txn, &key);
 }
 
 /// Returns the value of a current `YXmlElement`, given its name, or a null pointer if not attribute
