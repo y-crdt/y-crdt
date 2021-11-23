@@ -13,8 +13,8 @@ use yrs::types::array::ArrayIter;
 use yrs::types::map::MapIter;
 use yrs::types::xml::{Attributes, TreeWalker};
 use yrs::types::{
-    Branch, BranchRef, TypePtr, TypeRefs, Value, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
-    TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT,
+    Branch, BranchRef, Change, EntryChange, Event, Observer, PathSegment, TypePtr, TypeRefs, Value,
+    TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT,
 };
 use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1};
@@ -486,6 +486,161 @@ impl YTransaction {
     }
 }
 
+/// An event send to shared type's callbacks subscribed via `observe` methods. It's triggered once
+/// transaction is being committed.
+#[wasm_bindgen]
+pub struct YEvent {
+    inner: *const Event,
+    txn: *const Transaction<'static>,
+    delta: Option<JsValue>,
+    keys: Option<JsValue>,
+}
+
+#[wasm_bindgen]
+impl YEvent {
+    fn new(event: &Event, txn: &Transaction) -> Self {
+        let inner = event as *const Event;
+        let txn = txn as *const Transaction;
+        YEvent {
+            inner,
+            txn,
+            delta: None,
+            keys: None,
+        }
+    }
+
+    fn inner(&self) -> &Event {
+        unsafe { self.inner.as_ref().unwrap() }
+    }
+
+    fn txn(&self) -> &Transaction {
+        unsafe { self.txn.as_ref().unwrap() }
+    }
+
+    /// Returns a current shared type instance, that current event changes refer to.
+    #[wasm_bindgen(method, getter)]
+    pub fn target(&self) -> JsValue {
+        let target = self.inner().target();
+        value_into_js(target)
+    }
+
+    /// Returns an array of keys and indexes creating a path from root type down to current instance
+    /// of shared type (accessible via `target` getter).
+    #[wasm_bindgen(method)]
+    pub fn path(&self) -> JsValue {
+        let path = self.inner().path(self.txn());
+        let mut result = js_sys::Array::new();
+        for segment in path {
+            match segment {
+                PathSegment::Key(key) => {
+                    result.push(&JsValue::from(key.as_ref()));
+                }
+                PathSegment::Index(idx) => {
+                    result.push(&JsValue::from(idx));
+                }
+            }
+        }
+        result.into()
+    }
+
+    /// Returns all changes done upon map component of a current shared data type (which can be
+    /// accessed via `target`) within a bounds of corresponding transaction `txn`. These
+    /// changes are done in result of operations made on `YMap` data type or attribute changes of
+    /// `YXmlElement` and `YXmlText` types.
+    #[wasm_bindgen(method, getter)]
+    pub fn keys(&mut self) -> JsValue {
+        if let Some(keys) = &self.keys {
+            keys.clone()
+        } else {
+            let keys = self.inner().keys(self.txn());
+            let result = js_sys::Object::new();
+            for (key, value) in keys.iter() {
+                let key = JsValue::from(key.as_ref());
+                let value = entry_change_into_js(value);
+                js_sys::Reflect::set(&result, &key, &value).unwrap();
+            }
+            let keys: JsValue = result.into();
+            self.keys = Some(keys.clone());
+            keys
+        }
+    }
+
+    /// Returns collection of all changes done over an array component of a current shared data
+    /// type (which can be accessed via `target` property). These changes are usually done in result
+    /// of operations done on `YArray` and `YText`/`XmlText` types, but also whenever `XmlElement`
+    /// children nodes list is modified.
+    #[wasm_bindgen(method, getter)]
+    pub fn delta(&mut self) -> JsValue {
+        if let Some(delta) = &self.delta {
+            delta.clone()
+        } else {
+            let delta = self.inner().delta(self.txn());
+            let mut result = js_sys::Array::new_with_length(delta.len() as u32);
+            for change in delta {
+                result.push(&change_into_js(change));
+            }
+            let delta: JsValue = result.into();
+            self.delta = Some(delta.clone());
+            delta
+        }
+    }
+}
+
+fn entry_change_into_js(change: &EntryChange) -> JsValue {
+    let result = js_sys::Object::new();
+    let action = JsValue::from("action");
+    match change {
+        EntryChange::Inserted(new) => {
+            let new_value = value_into_js(new.clone());
+            js_sys::Reflect::set(&result, &action, &JsValue::from("add")).unwrap();
+            js_sys::Reflect::set(&result, &JsValue::from("oldValue"), &new_value).unwrap();
+        }
+        EntryChange::Updated(old, new) => {
+            let old_value = value_into_js(old.clone());
+            let new_value = value_into_js(new.clone());
+            js_sys::Reflect::set(&result, &action, &JsValue::from("update")).unwrap();
+            js_sys::Reflect::set(&result, &JsValue::from("oldValue"), &old_value).unwrap();
+            js_sys::Reflect::set(&result, &JsValue::from("newValue"), &new_value).unwrap();
+        }
+        EntryChange::Removed(old) => {
+            let old_value = value_into_js(old.clone());
+            js_sys::Reflect::set(&result, &action, &JsValue::from("delete")).unwrap();
+            js_sys::Reflect::set(&result, &JsValue::from("oldValue"), &old_value).unwrap();
+        }
+    }
+    result.into()
+}
+
+fn change_into_js(change: &Change) -> JsValue {
+    let result = js_sys::Object::new();
+    match change {
+        Change::Added(values) => {
+            let mut array = js_sys::Array::new_with_length(values.len() as u32);
+            for value in values.iter() {
+                let js = value_into_js(value.clone());
+                array.push(&js);
+            }
+            js_sys::Reflect::set(&result, &JsValue::from("insert"), &array).unwrap();
+        }
+        Change::Removed(len) => {
+            js_sys::Reflect::set(&result, &JsValue::from("delete"), &JsValue::from(*len)).unwrap();
+        }
+        Change::Retain(len) => {
+            js_sys::Reflect::set(&result, &JsValue::from("retain"), &JsValue::from(*len)).unwrap();
+        }
+    }
+    result.into()
+}
+
+#[wasm_bindgen]
+pub struct YObserver(Observer);
+
+impl From<Observer> for YObserver {
+    fn from(o: Observer) -> Self {
+        YObserver(o)
+    }
+}
+
 enum SharedType<T, P> {
     Integrated(T),
     Prelim(P),
@@ -606,6 +761,25 @@ impl YText {
             SharedType::Integrated(v) => v.remove_range(txn, index, length),
             SharedType::Prelim(v) => {
                 v.drain((index as usize)..(index + length) as usize);
+            }
+        }
+    }
+
+    /// Subscribes to all operations happening over this instance of `YText`. All changes are
+    /// batched and eventually triggered during transaction commit phase.
+    /// Returns an `YObserver` which, when free'd, will unsubscribe current callback.
+    #[wasm_bindgen(js_name = observe)]
+    pub fn observe(&mut self, f: js_sys::Function) -> YObserver {
+        match &mut *self.0.borrow_mut() {
+            SharedType::Integrated(v) => v
+                .observe(move |txn, e| {
+                    let e = YEvent::new(e, txn);
+                    let arg: JsValue = e.into();
+                    f.call1(&JsValue::UNDEFINED, &arg);
+                })
+                .into(),
+            SharedType::Prelim(v) => {
+                panic!("YText.observe is not supported on preliminary type.")
             }
         }
     }
@@ -784,6 +958,25 @@ impl YArray {
                 PrelimArrayIterator(static_iter).into()
             },
         })
+    }
+
+    /// Subscribes to all operations happening over this instance of `YArray`. All changes are
+    /// batched and eventually triggered during transaction commit phase.
+    /// Returns an `YObserver` which, when free'd, will unsubscribe current callback.
+    #[wasm_bindgen(js_name = observe)]
+    pub fn observe(&mut self, f: js_sys::Function) -> YObserver {
+        match &mut *self.0.borrow_mut() {
+            SharedType::Integrated(v) => v
+                .observe(move |txn, e| {
+                    let e = YEvent::new(e, txn);
+                    let arg: JsValue = e.into();
+                    f.call1(&JsValue::UNDEFINED, &arg);
+                })
+                .into(),
+            SharedType::Prelim(v) => {
+                panic!("YArray.observe is not supported on preliminary type.")
+            }
+        }
     }
 }
 
@@ -1044,6 +1237,25 @@ impl YMap {
             },
         })
     }
+
+    /// Subscribes to all operations happening over this instance of `YMap`. All changes are
+    /// batched and eventually triggered during transaction commit phase.
+    /// Returns an `YObserver` which, when free'd, will unsubscribe current callback.
+    #[wasm_bindgen(js_name = observe)]
+    pub fn observe(&mut self, f: js_sys::Function) -> YObserver {
+        match &mut *self.0.borrow_mut() {
+            SharedType::Integrated(v) => v
+                .observe(move |txn, e| {
+                    let e = YEvent::new(e, txn);
+                    let arg: JsValue = e.into();
+                    f.call1(&JsValue::UNDEFINED, &arg);
+                })
+                .into(),
+            SharedType::Prelim(v) => {
+                panic!("YMap.observe is not supported on preliminary type.")
+            }
+        }
+    }
 }
 
 #[wasm_bindgen]
@@ -1265,6 +1477,20 @@ impl YXmlElement {
             YXmlTreeWalker(static_iter).into()
         })
     }
+
+    /// Subscribes to all operations happening over this instance of `YXmlElement`. All changes are
+    /// batched and eventually triggered during transaction commit phase.
+    /// Returns an `YObserver` which, when free'd, will unsubscribe current callback.
+    #[wasm_bindgen(js_name = observe)]
+    pub fn observe(&mut self, f: js_sys::Function) -> YObserver {
+        self.0
+            .observe(move |txn, e| {
+                let e = YEvent::new(e, txn);
+                let arg: JsValue = e.into();
+                f.call1(&JsValue::UNDEFINED, &arg);
+            })
+            .into()
+    }
 }
 
 #[wasm_bindgen]
@@ -1438,6 +1664,20 @@ impl YXmlText {
                 ManuallyDrop::new((*this).attributes(tx.as_ref().unwrap()));
             YXmlAttributes(static_iter)
         }
+    }
+
+    /// Subscribes to all operations happening over this instance of `YXmlText`. All changes are
+    /// batched and eventually triggered during transaction commit phase.
+    /// Returns an `YObserver` which, when free'd, will unsubscribe current callback.
+    #[wasm_bindgen(js_name = observe)]
+    pub fn observe(&mut self, f: js_sys::Function) -> YObserver {
+        self.0
+            .observe(move |txn, e| {
+                let e = YEvent::new(e, txn);
+                let arg: JsValue = e.into();
+                f.call1(&JsValue::UNDEFINED, &arg);
+            })
+            .into()
     }
 }
 

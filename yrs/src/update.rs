@@ -14,7 +14,6 @@ use std::cmp::Ordering;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, VecDeque};
 use std::hash::BuildHasherDefault;
-use std::rc::Rc;
 
 #[derive(Debug, PartialEq, Default, Clone)]
 pub(crate) struct UpdateBlocks {
