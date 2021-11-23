@@ -4,6 +4,7 @@ use lib0::any::Any;
 use pyo3::exceptions::PyIndexError;
 use pyo3::prelude::*;
 use pyo3::types as pytypes;
+use pyo3::types::PyTuple;
 use pyo3::types::{PyAny, PyByteArray, PyDict};
 use pyo3::wrap_pyfunction;
 use std::borrow::Borrow;
@@ -115,6 +116,14 @@ impl YDoc {
                 ManuallyDrop::new((*doc).transact());
             YTransaction(static_txn)
         }
+    }
+
+    pub fn transact(&mut self, callback: PyObject) -> PyResult<PyObject> {
+        let txn = self.begin_transaction();
+        Python::with_gil(|py| {
+            let args = PyTuple::new(py, std::iter::once(txn.into_py(py)));
+            callback.call(py, args, None)
+        })
     }
 
     /// Returns a `YMap` shared data type, that's accessible for subsequent accesses using given
@@ -474,7 +483,6 @@ impl YTransaction {
         _traceback: Option<&'p PyAny>,
     ) -> PyResult<bool> {
         self.commit();
-        // TODO: delete self as well
         drop(self);
         return Ok(true);
     }
@@ -639,8 +647,7 @@ impl YArray {
     /// document store and cannot be nested again: attempt to do so will result in an exception.
     #[new]
     pub fn new(init: Option<Vec<PyObject>>) -> Self {
-        // TODO: Create a default value
-        YArray(SharedType::prelim(init.unwrap()))
+        YArray(SharedType::prelim(init.unwrap_or_default()))
     }
 
     /// Returns true if this is a preliminary instance of `YArray`.
@@ -829,8 +836,12 @@ impl Drop for YArrayIterator {
 
 #[pymethods]
 impl YArrayIterator {
-    pub fn next(&mut self) -> IteratorNext {
-        self.0.next().into()
+    pub fn __iter__(slf: PyRef<Self>) -> PyRef<Self> {
+        slf
+    }
+
+    pub fn __next__(mut slf: PyRefMut<Self>) -> IteratorNext {
+        slf.0.next().into()
     }
 }
 

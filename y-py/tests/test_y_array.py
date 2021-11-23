@@ -26,9 +26,9 @@ def testInserts():
 
 def testInsertsNested():
     d1 = Y.YDoc()
-    x = d1.get_array('test');
+    x = d1.get_array('test')
 
-    nested = Y.YArray();
+    nested = Y.YArray()
     d1.transact(lambda txn : nested.push(txn, ['world']))
     d1.transact(lambda txn : x.insert(txn, 0, [1, 2, nested, 3, 4]))
     d1.transact(lambda txn : nested.insert(txn, 0, ['hello']))
@@ -90,10 +90,8 @@ def test_get():
 
     assert fourth == True
 
-    # t.fails(() => {
-    #     // should fail because it's outside of the bounds
-    #     d1.transact(lambda txn : x.get(txn, 5))
-    # })
+    with pytest.raises(IndexError):
+        x = d1.transact(lambda txn : x.get(txn, 20))
 
 def test_iterator():
     d1 = Y.YDoc()
@@ -102,11 +100,8 @@ def test_iterator():
     d1.transact(lambda txn : x.insert(txn, 0, [1, 2, 3]))
     assert x.length == 3
 
-    txn = d1.begin_transaction()
-    try:
+    with d1.begin_transaction() as txn:
         i = 1
         for v in x.values(txn):
             assert v == i
             i+=1
-    finally:
-        txn.free()

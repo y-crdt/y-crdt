@@ -5,7 +5,6 @@ def transact(self,callback):
         return callback(txn)
 
 
-Y.YDoc.transact = transact
 
 def exchange_updates(docs):
     for d1 in docs:
