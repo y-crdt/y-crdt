@@ -6,6 +6,7 @@ use pyo3::prelude::*;
 use pyo3::types as pytypes;
 use pyo3::types::{PyAny, PyByteArray, PyDict};
 use pyo3::wrap_pyfunction;
+use std::borrow::Borrow;
 use std::cell::Ref;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -112,7 +113,7 @@ impl YDoc {
             let doc: *mut Doc = &mut self.inner;
             let static_txn: ManuallyDrop<Transaction<'static>> =
                 ManuallyDrop::new((*doc).transact());
-            YTransaction { inner: static_txn }
+            YTransaction(static_txn)
         }
     }
 
@@ -156,9 +157,9 @@ impl YDoc {
     ///
     /// If there was an instance with this name, but it was of different type, it will be projected
     /// onto `YArray` instance.
-    // pub fn get_array(&mut self, name: &str) -> YArray {
-    //     self.begin_transaction().get_array(name)
-    // }
+    pub fn get_array(&mut self, name: &str) -> YArray {
+        self.begin_transaction().get_array(name)
+    }
 
     /// Returns a `YText` shared data type, that's accessible for subsequent accesses using given
     /// `name`.
@@ -273,27 +274,25 @@ pub fn apply_update(doc: &mut YDoc, diff: Vec<u8>) {
 /// doc.transact(txn => text.insert(txn, 0, 'hello world'))
 /// ```
 #[pyclass(unsendable)]
-pub struct YTransaction {
-    inner: ManuallyDrop<Transaction<'static>>,
-}
+pub struct YTransaction(ManuallyDrop<Transaction<'static>>);
 
 impl Deref for YTransaction {
     type Target = Transaction<'static>;
 
     fn deref(&self) -> &Self::Target {
-        self.inner.deref()
+        self.0.deref()
     }
 }
 
 impl DerefMut for YTransaction {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.inner.deref_mut()
+        self.0.deref_mut()
     }
 }
 
 impl Drop for YTransaction {
     fn drop(&mut self) {
-        unsafe { ManuallyDrop::drop(&mut self.inner) }
+        unsafe { ManuallyDrop::drop(&mut self.0) }
     }
 }
 
@@ -307,7 +306,7 @@ impl YTransaction {
     /// If there was an instance with this name, but it was of different type, it will be projected
     /// onto `YText` instance.
     pub fn get_text(&mut self, name: &str) -> YText {
-        self.inner.get_text(name).into()
+        self.0.get_text(name).into()
     }
 
     /// Returns a `YArray` shared data type, that's accessible for subsequent accesses using given
@@ -317,9 +316,9 @@ impl YTransaction {
     ///
     /// If there was an instance with this name, but it was of different type, it will be projected
     /// onto `YArray` instance.
-    // pub fn get_array(&mut self, name: &str) -> YArray {
-    //     self.inner.get_array(name).into()
-    // }
+    pub fn get_array(&mut self, name: &str) -> YArray {
+        self.0.get_array(name).into()
+    }
 
     /// Returns a `YMap` shared data type, that's accessible for subsequent accesses using given
     /// `name`.
@@ -358,7 +357,7 @@ impl YTransaction {
     /// compaction and optimization of internal representation of updates, triggering events etc.
     /// ywasm transactions are auto-committed when they are `free`d.
     pub fn commit(&mut self) {
-        self.inner.commit()
+        self.0.commit()
     }
 
     /// Encodes a state vector of a given transaction document into its binary representation using
@@ -389,7 +388,7 @@ impl YTransaction {
     /// }
     /// ```
     pub fn state_vector_v1(&self) -> Vec<u8> {
-        let sv = self.inner.state_vector();
+        let sv = self.0.state_vector();
         let payload = sv.encode_v1();
         payload
     }
@@ -428,7 +427,7 @@ impl YTransaction {
         } else {
             StateVector::default()
         };
-        self.inner.encode_diff(&sv, &mut encoder);
+        self.0.encode_diff(&sv, &mut encoder);
         encoder.to_vec()
     }
 
@@ -461,11 +460,10 @@ impl YTransaction {
         let diff: Vec<u8> = diff.to_vec();
         let mut decoder = DecoderV1::from(diff.as_slice());
         let update = Update::decode(&mut decoder);
-        self.inner.apply_update(update)
+        self.0.apply_update(update)
     }
 
     fn __enter__<'p>(slf: PyRef<'p, Self>, _py: Python<'p>) -> PyResult<PyRef<'p, Self>> {
-        println!("started");
         Ok(slf)
     }
 
@@ -475,7 +473,6 @@ impl YTransaction {
         _exc_value: Option<&'p PyAny>,
         _traceback: Option<&'p PyAny>,
     ) -> PyResult<bool> {
-        println!("Ended");
         self.commit();
         // TODO: delete self as well
         drop(self);
@@ -515,15 +512,11 @@ impl<T, P> SharedType<T, P> {
 /// unique document id to determine correct and consistent ordering.
 #[pyclass(unsendable)]
 #[derive(Clone)]
-pub struct YText {
-    inner: Rc<RefCell<SharedType<Text, String>>>,
-}
+pub struct YText(Rc<RefCell<SharedType<Text, String>>>);
 
 impl From<Text> for YText {
     fn from(v: Text) -> Self {
-        YText {
-            inner: Rc::new(SharedType::new(v)),
-        }
+        YText(Rc::new(SharedType::new(v)))
     }
 }
 
@@ -537,9 +530,7 @@ impl YText {
     /// document store and cannot be nested again: attempt to do so will result in an exception.
     #[new]
     pub fn new(init: Option<String>) -> Self {
-        YText {
-            inner: Rc::new(SharedType::prelim(init.unwrap_or_default())),
-        }
+        YText(Rc::new(SharedType::prelim(init.unwrap_or_default())))
     }
 
     /// Returns true if this is a preliminary instance of `YText`.
@@ -549,10 +540,10 @@ impl YText {
     /// document store and cannot be nested again: attempt to do so will result in an exception.
     #[getter]
     pub fn prelim(&self) -> bool {
-        if let SharedType::Prelim(_) = &*self.inner.borrow() {
-            true
-        } else {
-            false
+        let s = &*self.0.deref().borrow();
+        match s {
+            SharedType::Prelim(_) => true,
+            _ => false,
         }
     }
 
@@ -560,7 +551,7 @@ impl YText {
     /// understood as a number of UTF-8 encoded bytes.
     #[getter]
     pub fn length(&self) -> u32 {
-        match &*self.inner.borrow() {
+        match &*self.0.deref().borrow() {
             SharedType::Integrated(v) => v.len(),
             SharedType::Prelim(v) => v.len() as u32,
         }
@@ -569,7 +560,7 @@ impl YText {
     /// Returns an underlying shared string stored in this data type.
     // TODO: Make this a native __str__ dunder function
     pub fn to_string(&self, txn: &YTransaction) -> String {
-        match &*self.inner.borrow() {
+        match &*self.0.deref().borrow() {
             SharedType::Integrated(v) => v.to_string(txn),
             SharedType::Prelim(v) => v.clone(),
         }
@@ -577,7 +568,7 @@ impl YText {
 
     /// Returns an underlying shared string stored in this data type.
     pub fn to_json(&self, txn: &YTransaction) -> String {
-        match &*self.inner.borrow() {
+        match &*self.0.deref().borrow() {
             SharedType::Integrated(v) => v.to_string(txn),
             SharedType::Prelim(v) => v.clone(),
         }
@@ -585,7 +576,7 @@ impl YText {
 
     /// Inserts a given `chunk` of text into this `YText` instance, starting at a given `index`.
     pub fn insert(&self, txn: &mut YTransaction, index: u32, chunk: &str) {
-        match &mut *self.inner.borrow_mut() {
+        match &mut *self.0.deref().borrow_mut() {
             SharedType::Integrated(v) => v.insert(txn, index, chunk),
             SharedType::Prelim(v) => v.insert_str(index as usize, chunk),
         }
@@ -593,7 +584,7 @@ impl YText {
 
     /// Appends a given `chunk` of text at the end of current `YText` instance.
     pub fn push(&self, txn: &mut YTransaction, chunk: &str) {
-        match &mut *self.inner.borrow_mut() {
+        match &mut *self.0.deref().borrow_mut() {
             SharedType::Integrated(v) => v.push(txn, chunk),
             SharedType::Prelim(v) => v.push_str(chunk),
         }
@@ -602,7 +593,7 @@ impl YText {
     /// Deletes a specified range of of characters, starting at a given `index`.
     /// Both `index` and `length` are counted in terms of a number of UTF-8 character bytes.
     pub fn delete(&mut self, txn: &mut YTransaction, index: u32, length: u32) {
-        match &mut *self.inner.borrow_mut() {
+        match &mut *self.0.deref().borrow_mut() {
             SharedType::Integrated(v) => v.remove_range(txn, index, length),
             SharedType::Prelim(v) => {
                 v.drain((index as usize)..(index + length) as usize);
@@ -629,238 +620,240 @@ impl YText {
 /// when elements inserted one after another may interleave with other peers concurrent inserts
 /// after merging all updates together). In case of Yrs conflict resolution is solved by using
 /// unique document id to determine correct and consistent ordering.
-// #[pyclass(unsendable)]
-// pub struct YArray {
-//     inner: RefCell<SharedType<Array, Vec<PyAny>>>,
-// }
+#[pyclass(unsendable)]
+pub struct YArray(RefCell<SharedType<Array, Vec<PyObject>>>);
 
-// impl From<Array> for YArray {
-//     fn from(v: Array) -> Self {
-//         YArray {
-//             inner: SharedType::new(v),
-//         }
-//     }
-// }
+impl From<Array> for YArray {
+    fn from(v: Array) -> Self {
+        YArray(SharedType::new(v))
+    }
+}
 
-// #[pymethods]
-// impl YArray {
-//     /// Creates a new preliminary instance of a `YArray` shared data type, with its state
-//     /// initialized to provided parameter.
-//     ///
-//     /// Preliminary instances can be nested into other shared data types such as `YArray` and `YMap`.
-//     /// Once a preliminary instance has been inserted this way, it becomes integrated into ywasm
-//     /// document store and cannot be nested again: attempt to do so will result in an exception.
-//     #[new]
-//     pub fn new(init: Option<Vec<PyAny>>) -> Self {
-//         YArray {
-//             inner: SharedType::prelim(init.unwrap_or_default()),
-//         }
-//     }
+#[pymethods]
+impl YArray {
+    /// Creates a new preliminary instance of a `YArray` shared data type, with its state
+    /// initialized to provided parameter.
+    ///
+    /// Preliminary instances can be nested into other shared data types such as `YArray` and `YMap`.
+    /// Once a preliminary instance has been inserted this way, it becomes integrated into ywasm
+    /// document store and cannot be nested again: attempt to do so will result in an exception.
+    #[new]
+    pub fn new(init: Option<Vec<PyObject>>) -> Self {
+        // TODO: Create a default value
+        YArray(SharedType::prelim(init.unwrap()))
+    }
 
-//     /// Returns true if this is a preliminary instance of `YArray`.
-//     ///
-//     /// Preliminary instances can be nested into other shared data types such as `YArray` and `YMap`.
-//     /// Once a preliminary instance has been inserted this way, it becomes integrated into ywasm
-//     /// document store and cannot be nested again: attempt to do so will result in an exception.
-//     #[getter]
-//     pub fn prelim(&self) -> bool {
-//         if let SharedType::Prelim(_) = &*self.inner.borrow() {
-//             true
-//         } else {
-//             false
-//         }
-//     }
+    /// Returns true if this is a preliminary instance of `YArray`.
+    ///
+    /// Preliminary instances can be nested into other shared data types such as `YArray` and `YMap`.
+    /// Once a preliminary instance has been inserted this way, it becomes integrated into ywasm
+    /// document store and cannot be nested again: attempt to do so will result in an exception.
+    #[getter]
+    pub fn prelim(&self) -> bool {
+        if let SharedType::Prelim(_) = &*self.0.borrow() {
+            true
+        } else {
+            false
+        }
+    }
 
-//     /// Returns a number of elements stored within this instance of `YArray`.
-//     #[getter]
-//     pub fn length(&self) -> u32 {
-//         match &*self.inner.borrow() {
-//             SharedType::Integrated(v) => v.len(),
-//             SharedType::Prelim(v) => v.len() as u32,
-//         }
-//     }
+    /// Returns a number of elements stored within this instance of `YArray`.
+    #[getter]
+    pub fn length(&self) -> u32 {
+        match &*self.0.borrow() {
+            SharedType::Integrated(v) => v.len(),
+            SharedType::Prelim(v) => v.len() as u32,
+        }
+    }
 
-//     /// Converts an underlying contents of this `YArray` instance into their JSON representation.
-//     pub fn to_json(&self, txn: &YTransaction) -> PyDict {
-//         match &*self.inner.borrow() {
-//             SharedType::Integrated(v) => any_into_py(v.to_json(txn)),
-//             SharedType::Prelim(v) => v.into(),
-//         }
-//     }
+    /// Converts an underlying contents of this `YArray` instance into their JSON representation.
+    pub fn to_json(&self, txn: &YTransaction) -> PyObject {
+        Python::with_gil(|py| match &*self.0.borrow() {
+            SharedType::Integrated(v) => AnyWrapper(v.to_json(txn)).into_py(py),
+            SharedType::Prelim(v) => {
+                let py_ptrs: Vec<PyObject> = v.iter().map(|ptr| ptr.clone()).collect();
+                py_ptrs.into_py(py)
+            }
+        })
+    }
 
-//     /// Inserts a given range of `items` into this `YArray` instance, starting at given `index`.
-//     pub fn insert(&self, txn: &mut YTransaction, index: u32, items: Vec<PyAny>) {
-//         let mut j = index;
-//         match &mut *self.inner.borrow_mut() {
-//             SharedType::Integrated(array) => {
-//                 insert_at(array, txn, index, items);
-//             }
-//             SharedType::Prelim(vec) => {
-//                 for el in items {
-//                     vec.insert(j as usize, el);
-//                     j += 1;
-//                 }
-//             }
-//         }
-//     }
+    /// Inserts a given range of `items` into this `YArray` instance, starting at given `index`.
+    pub fn insert(&self, txn: &mut YTransaction, index: u32, items: Vec<PyObject>) {
+        let mut j = index;
+        match &mut *self.0.borrow_mut() {
+            SharedType::Integrated(array) => {
+                insert_at(array, txn, index, items);
+            }
+            SharedType::Prelim(vec) => {
+                for el in items {
+                    vec.insert(j as usize, el);
+                    j += 1;
+                }
+            }
+        }
+    }
 
-//     /// Appends a range of `items` at the end of this `YArray` instance.
-//     pub fn push(&self, txn: &mut YTransaction, items: Vec<PyAny>) {
-//         let index = self.length();
-//         self.insert(txn, index, items);
-//     }
+    /// Appends a range of `items` at the end of this `YArray` instance.
+    pub fn push(&self, txn: &mut YTransaction, items: Vec<PyObject>) {
+        let index = self.length();
+        self.insert(txn, index, items);
+    }
 
-//     /// Deletes a range of items of given `length` from current `YArray` instance,
-//     /// starting from given `index`.
-//     pub fn delete(&self, txn: &mut YTransaction, index: u32, length: u32) {
-//         match &mut *self.inner.borrow_mut() {
-//             SharedType::Integrated(v) => v.remove_range(txn, index, length),
-//             SharedType::Prelim(v) => {
-//                 v.drain((index as usize)..(index + length) as usize);
-//             }
-//         }
-//     }
+    /// Deletes a range of items of given `length` from current `YArray` instance,
+    /// starting from given `index`.
+    pub fn delete(&self, txn: &mut YTransaction, index: u32, length: u32) {
+        match &mut *self.0.borrow_mut() {
+            SharedType::Integrated(v) => v.remove_range(txn, index, length),
+            SharedType::Prelim(v) => {
+                v.drain((index as usize)..(index + length) as usize);
+            }
+        }
+    }
 
-//     /// Returns an element stored under given `index`.
-//     pub fn get(&self, txn: &YTransaction, index: u32) -> PyResult<PyAny> {
-//         match &*self.inner.borrow() {
-//             SharedType::Integrated(v) => {
-//                 if let Some(value) = v.get(txn, index) {
-//                     Ok(value_into_py(value))
-//                 } else {
-//                     Err(PyIndexError::new_err(
-//                         "Index outside the bounds of an YArray",
-//                     ))
-//                 }
-//             }
-//             SharedType::Prelim(v) => {
-//                 if let Some(value) = v.get(index as usize) {
-//                     Ok(value.clone())
-//                 } else {
-//                     Err(PyIndexError::new_err(
-//                         "Index outside the bounds of an YArray",
-//                     ))
-//                 }
-//             }
-//         }
-//     }
+    /// Returns an element stored under given `index`.
+    pub fn get(&self, txn: &YTransaction, index: u32) -> PyResult<PyObject> {
+        match &*self.0.borrow() {
+            SharedType::Integrated(v) => {
+                if let Some(value) = v.get(txn, index) {
+                    Ok(Python::with_gil(|py| ValueWrapper(value).into_py(py)))
+                } else {
+                    Err(PyIndexError::new_err(
+                        "Index outside the bounds of an YArray",
+                    ))
+                }
+            }
+            SharedType::Prelim(v) => {
+                if let Some(value) = v.get(index as usize) {
+                    Ok(value.clone())
+                } else {
+                    Err(PyIndexError::new_err(
+                        "Index outside the bounds of an YArray",
+                    ))
+                }
+            }
+        }
+    }
 
-//     /// Returns an iterator that can be used to traverse over the values stored withing this
-//     /// instance of `YArray`.
-//     ///
-//     /// Example:
-//     ///
-//     /// ```javascript
-//     /// import YDoc from 'ywasm'
-//     ///
-//     /// /// document on machine A
-//     /// const doc = new YDoc()
-//     /// const array = doc.getArray('name')
-//     /// const txn = doc.beginTransaction()
-//     /// try {
-//     ///     array.push(txn, ['hello', 'world'])
-//     ///     for (let item of array.values(txn)) {
-//     ///         console.log(item)
-//     ///     }
-//     /// } finally {
-//     ///     txn.free()
-//     /// }
-//     /// ```
-//     pub fn values(&self, txn: &YTransaction) -> PyAny {
-//         match &*self.inner.borrow() {
-//             SharedType::Integrated(v) => unsafe {
-//                 let this: *const Array = v;
-//                 let tx: *const Transaction<'static> = txn.0.deref();
-//                 let static_iter: ManuallyDrop<ArrayIter<'static, 'static>> =
-//                     ManuallyDrop::new((*this).iter(tx.as_ref().unwrap()));
-//                 YArrayIterator {inner: static_iter}.into()
-//             },
-//             SharedType::Prelim(v) => unsafe {
-//                 let this: *const Vec<PyAny> = v;
-//                 let static_iter: ManuallyDrop<std::slice::Iter<'static, PyAny>> =
-//                     ManuallyDrop::new((*this).iter());
-//                 PrelimArrayIterator {inner : static_iter}.into()
-//             },
-//         }
-//     }
-// }
+    /// Returns an iterator that can be used to traverse over the values stored withing this
+    /// instance of `YArray`.
+    ///
+    /// Example:
+    ///
+    /// ```javascript
+    /// import YDoc from 'ywasm'
+    ///
+    /// /// document on machine A
+    /// const doc = new YDoc()
+    /// const array = doc.getArray('name')
+    /// const txn = doc.beginTransaction()
+    /// try {
+    ///     array.push(txn, ['hello', 'world'])
+    ///     for (let item of array.values(txn)) {
+    ///         console.log(item)
+    ///     }
+    /// } finally {
+    ///     txn.free()
+    /// }
+    /// ```
+    pub fn values(&self, txn: &YTransaction) -> PyObject {
+        Python::with_gil(|py| match &*self.0.borrow() {
+            SharedType::Integrated(v) => unsafe {
+                let this: *const Array = v;
+                let tx: *const Transaction<'static> = txn.0.deref();
+                let static_iter: ManuallyDrop<ArrayIter<'static, 'static>> =
+                    ManuallyDrop::new((*this).iter(tx.as_ref().unwrap()));
+                YArrayIterator(static_iter).into_py(py)
+            },
+            SharedType::Prelim(v) => unsafe {
+                let this: *const Vec<PyObject> = v;
+                let static_iter: ManuallyDrop<std::slice::Iter<'static, PyObject>> =
+                    ManuallyDrop::new((*this).iter());
+                PrelimArrayIterator(static_iter).into_py(py)
+            },
+        })
+    }
+}
 
-// #[pyclass(unsendable)]
-// pub struct IteratorNext {
-//     value: PyAny,
-//     done: bool,
-// }
+#[pyclass]
+pub struct IteratorNext {
+    value: PyObject,
+    done: bool,
+}
 
-// #[pymethods]
-// impl IteratorNext {
-//     #[new]
-//     fn new(value: PyAny) -> Self {
-//         IteratorNext { done: false, value }
-//     }
+#[pymethods]
+impl IteratorNext {
+    #[new]
+    fn new(value: PyObject) -> Self {
+        IteratorNext { done: false, value }
+    }
 
-//     #[staticmethod] // TODO: Check if this is really static
-//     fn finished() -> Self {
-//         IteratorNext {
-//             done: true,
-//             value: PyAny::undefined(),
-//         }
-//     }
+    #[staticmethod] // TODO: Check if this is really static
+    fn finished() -> Self {
+        Python::with_gil(|py| -> IteratorNext {
+            IteratorNext {
+                done: true,
+                value: py.None(),
+            }
+        })
+    }
 
-//     #[getter]
-//     pub fn value(&self) -> PyAny {
-//         self.value.clone()
-//     }
+    #[getter]
+    pub fn value(&self) -> PyObject {
+        // TODO: should we clone?
+        self.value.clone()
+    }
 
-//     #[getter]
-//     pub fn done(&self) -> bool {
-//         self.done
-//     }
-// }
+    #[getter]
+    pub fn done(&self) -> bool {
+        self.done
+    }
+}
 
-// impl From<Option<Value>> for IteratorNext {
-//     fn from(v: Option<Value>) -> Self {
-//         match v {
-//             None => IteratorNext::finished(),
-//             Some(v) => IteratorNext::new(value_into_py(v)),
-//         }
-//     }
-// }
+impl From<Option<Value>> for IteratorNext {
+    fn from(v: Option<Value>) -> Self {
+        match v {
+            None => IteratorNext::finished(),
+            Some(v) => Python::with_gil(|py| IteratorNext::new(ValueWrapper(v).into_py(py))),
+        }
+    }
+}
 
-// #[pyclass(unsendable)]
-// pub struct YArrayIterator{ inner: ManuallyDrop<ArrayIter<'static, 'static>>};
+#[pyclass(unsendable)]
+pub struct YArrayIterator(ManuallyDrop<ArrayIter<'static, 'static>>);
 
-// impl Drop for YArrayIterator {
-//     fn drop(&mut self) {
-//         unsafe { ManuallyDrop::drop(&mut self.inner) }
-//     }
-// }
+impl Drop for YArrayIterator {
+    fn drop(&mut self) {
+        unsafe { ManuallyDrop::drop(&mut self.0) }
+    }
+}
 
-// #[pymethods]
-// impl YArrayIterator {
-//     pub fn next(&mut self) -> IteratorNext {
-//         self.inner.next().into()
-//     }
-// }
+#[pymethods]
+impl YArrayIterator {
+    pub fn next(&mut self) -> IteratorNext {
+        self.0.next().into()
+    }
+}
 
-// #[pyclass(unsendable)]
-// pub struct PrelimArrayIterator{inner: ManuallyDrop<std::slice::Iter<'static, PyAny>>};
+#[pyclass(unsendable)]
+pub struct PrelimArrayIterator(ManuallyDrop<std::slice::Iter<'static, PyObject>>);
 
-// impl Drop for PrelimArrayIterator {
-//     fn drop(&mut self) {
-//         unsafe { ManuallyDrop::drop(&mut self.inner) }
-//     }
-// }
+impl Drop for PrelimArrayIterator {
+    fn drop(&mut self) {
+        unsafe { ManuallyDrop::drop(&mut self.0) }
+    }
+}
 
-// #[pymethods]
-// impl PrelimArrayIterator {
-//     pub fn next(&mut self) -> IteratorNext {
-//         if let Some(js) = self.inner.next() {
-//             IteratorNext::new(js.clone())
-//         } else {
-//             IteratorNext::finished()
-//         }
-//     }
-// }
+#[pymethods]
+impl PrelimArrayIterator {
+    pub fn next(&mut self) -> IteratorNext {
+        if let Some(py) = self.0.next() {
+            let py = py.clone();
+            IteratorNext::new(py)
+        } else {
+            IteratorNext::finished()
+        }
+    }
+}
 
 /// Collection used to store key-value entries in an unordered manner. Keys are always represented
 /// as UTF-8 strings. Values can be any value type supported by Yrs: JSON-like primitives as well as
@@ -1419,15 +1412,15 @@ impl YText {
 //     }
 // }
 
-struct PyAnyWrapper {
-    inner: PyAny,
-}
+struct PyObjectWrapper(PyObject);
 
-impl Prelim for PyAnyWrapper {
+impl Prelim for PyObjectWrapper {
     fn into_content(self, _txn: &mut Transaction, ptr: TypePtr) -> (ItemContent, Option<Self>) {
-        let content = if let Some(any) = py_into_any(&self.inner) {
+        let guard = Python::acquire_gil();
+        let py = guard.python();
+        let content = if let Some(any) = py_into_any(self.0.clone()) {
             ItemContent::Any(vec![any])
-        } else if let Ok(shared) = Shared::extract(&self.inner) {
+        } else if let Ok(shared) = Shared::extract(self.0.as_ref(py)) {
             if shared.is_prelim() {
                 let branch = BranchRef::new(Branch::new(ptr, shared.type_ref(), None));
                 ItemContent::Type(branch)
@@ -1448,26 +1441,30 @@ impl Prelim for PyAnyWrapper {
     }
 
     fn integrate(self, txn: &mut Transaction, inner_ref: BranchRef) {
-        if let Ok(shared) = Shared::extract(&self.inner) {
+        let guard = Python::acquire_gil();
+        let py = guard.python();
+        let obj_ref = self.0.as_ref(py);
+        if let Ok(shared) = Shared::extract(obj_ref) {
             if shared.is_prelim() {
                 match shared {
                     Shared::Text(v) => {
                         let text = Text::from(inner_ref);
                         if let SharedType::Prelim(v) =
-                            v.inner.replace(SharedType::Integrated(text.clone()))
+                            v.0.replace(SharedType::Integrated(text.clone()))
                         {
                             text.push(txn, v.as_str());
                         }
                     }
-                    // Shared::Array(v) => {
-                    //     let array = Array::from(inner_ref);
-                    //     if let SharedType::Prelim(items) =
-                    //         v.0.replace(SharedType::Integrated(array.clone()))
-                    //     {
-                    //         let len = array.len();
-                    //         insert_at(&array, txn, len, items);
-                    //     }
-                    // }
+                    Shared::Array(v) => {
+                        let array = Array::from(inner_ref);
+                        if let SharedType::Prelim(items) = Python::with_gil(|py| {
+                            let arr = v.borrow(py);
+                            arr.0.replace(SharedType::Integrated(array.clone()))
+                        }) {
+                            let len = array.len();
+                            insert_at(&array, txn, len, items);
+                        }
+                    }
                     // Shared::Map(v) => {
                     //     let map = Map::from(inner_ref);
                     //     if let SharedType::Prelim(entries) =
@@ -1485,87 +1482,88 @@ impl Prelim for PyAnyWrapper {
     }
 }
 
-// fn insert_at(dst: &Array, txn: &mut Transaction, index: u32, src: Vec<PyAny>) {
-//     let mut j = index;
-//     let mut i = 0;
-//     while i < src.len() {
-//         let mut anys = Vec::default();
-//         while i < src.len() {
-//             let py = &src[i];
-//             if let Some(any) = py_into_any(py) {
-//                 anys.push(any);
-//                 i += 1;
-//             } else {
-//                 break;
-//             }
-//         }
-
-//         if !anys.is_empty() {
-//             let len = anys.len() as u32;
-//             dst.insert_range(txn, j, anys);
-//             j += len;
-//         } else {
-//             let wrapper = PyAnyWrapper { inner: src[i] };
-//             dst.insert(txn, j, wrapper);
-//             i += 1;
-//             j += 1;
-//         }
-//     }
-// }
-
-fn py_into_any(v: &PyAny) -> Option<Any> {
-    if let Ok(s) = v.downcast::<pytypes::PyString>() {
-        Some(Any::String(s.extract().unwrap()))
-    } else if let Ok(l) = v.downcast::<pytypes::PyLong>() {
-        let i: f64 = l.extract().unwrap();
-        Some(Any::BigInt(i as i64))
-    }
-    // TODO: Handle Null vals
-    // else if let Ok(s) = v.downcast::<pytypes::Null>() {
-    //     Some(Any::Null)
-    // }
-    // else if v.is_undefined() {
-    //     Some(Any::Undefined)
-    // }
-    else if let Ok(f) = v.downcast::<pytypes::PyFloat>() {
-        Some(Any::Number(f.extract().unwrap()))
-    } else if let Ok(b) = v.downcast::<pytypes::PyBool>() {
-        Some(Any::Bool(b.extract().unwrap()))
-    } else if let Ok(list) = v.downcast::<pytypes::PyList>() {
-        let mut result = Vec::with_capacity(list.len());
-        for value in list.iter() {
-            result.push(py_into_any(&value)?);
-        }
-        Some(Any::Array(result))
-    } else if let Ok(dict) = v.downcast::<pytypes::PyDict>() {
-        if let Ok(_) = Shared::extract(v) {
-            None
-        } else {
-            let mut result = HashMap::new();
-            for (k, v) in dict.iter() {
-                // TODO: Handle non string keys
-                let key = k
-                    .downcast::<pytypes::PyString>()
-                    .unwrap()
-                    .extract()
-                    .unwrap();
-                let value = py_into_any(v)?;
-                result.insert(key, value);
+fn insert_at(dst: &Array, txn: &mut Transaction, index: u32, src: Vec<PyObject>) {
+    let mut j = index;
+    let mut i = 0;
+    while i < src.len() {
+        let mut anys = Vec::default();
+        while i < src.len() {
+            if let Some(any) = py_into_any(src[i].clone()) {
+                anys.push(any);
+                i += 1;
+            } else {
+                break;
             }
-            Some(Any::Map(result))
         }
-    } else {
-        None
+
+        if !anys.is_empty() {
+            let len = anys.len() as u32;
+            dst.insert_range(txn, j, anys);
+            j += len;
+        } else {
+            let wrapper = PyObjectWrapper(src[i].clone());
+            dst.insert(txn, j, wrapper);
+            i += 1;
+            j += 1;
+        }
     }
 }
 
-pub struct AnyWrapper {
-    inner: Any,
+fn py_into_any(v: PyObject) -> Option<Any> {
+    Python::with_gil(|py| -> Option<Any> {
+        let v = v.as_ref(py);
+
+        if let Ok(s) = v.downcast::<pytypes::PyString>() {
+            Some(Any::String(s.extract().unwrap()))
+        } else if let Ok(l) = v.downcast::<pytypes::PyLong>() {
+            let i: f64 = l.extract().unwrap();
+            Some(Any::BigInt(i as i64))
+        }
+        // TODO: Handle Null vals
+        // else if let Ok(s) = v.downcast::<pytypes::Null>() {
+        //     Some(Any::Null)
+        // }
+        // else if v.is_undefined() {
+        //     Some(Any::Undefined)
+        // }
+        else if let Ok(f) = v.downcast::<pytypes::PyFloat>() {
+            Some(Any::Number(f.extract().unwrap()))
+        } else if let Ok(b) = v.downcast::<pytypes::PyBool>() {
+            Some(Any::Bool(b.extract().unwrap()))
+        } else if let Ok(list) = v.downcast::<pytypes::PyList>() {
+            let mut result = Vec::with_capacity(list.len());
+            for value in list.iter() {
+                result.push(py_into_any(value.into())?);
+            }
+            Some(Any::Array(result))
+        } else if let Ok(dict) = v.downcast::<pytypes::PyDict>() {
+            if let Ok(_) = Shared::extract(v) {
+                None
+            } else {
+                let mut result = HashMap::new();
+                for (k, v) in dict.iter() {
+                    // TODO: Handle non string keys
+                    let key = k
+                        .downcast::<pytypes::PyString>()
+                        .unwrap()
+                        .extract()
+                        .unwrap();
+                    let value = py_into_any(v.into())?;
+                    result.insert(key, value);
+                }
+                Some(Any::Map(result))
+            }
+        } else {
+            None
+        }
+    })
 }
+
+pub struct AnyWrapper(Any);
 
 impl IntoPy<pyo3::PyObject> for AnyWrapper {
     fn into_py(self, py: Python) -> pyo3::PyObject {
-        match self.inner {
+        match self.0 {
             Any::Null | Any::Undefined => py.None(),
             Any::Bool(v) => v.into_py(py),
             Any::Number(v) => v.into_py(py),
@@ -1581,7 +1579,7 @@ impl IntoPy<pyo3::PyObject> for AnyWrapper {
             Any::Array(v) => {
                 let mut a = Vec::new();
                 for value in v {
-                    let value = AnyWrapper { inner: value };
+                    let value = AnyWrapper(value);
                     a.push(value);
                 }
                 a.into_py(py)
@@ -1589,7 +1587,7 @@ impl IntoPy<pyo3::PyObject> for AnyWrapper {
             Any::Map(v) => {
                 let mut m = HashMap::new();
                 for (k, v) in v {
-                    let value = AnyWrapper { inner: v };
+                    let value = AnyWrapper(v);
                     m.insert(k, value);
                 }
                 m.into_py(py)
@@ -1601,18 +1599,16 @@ impl IntoPy<pyo3::PyObject> for AnyWrapper {
 impl Deref for AnyWrapper {
     type Target = Any;
     fn deref(&self) -> &Self::Target {
-        &self.inner
+        &self.0
     }
 }
 
-pub struct ValueWrapper {
-    inner: Value,
-}
+pub struct ValueWrapper(Value);
 
 impl IntoPy<pyo3::PyObject> for ValueWrapper {
     fn into_py(self, py: Python) -> pyo3::PyObject {
-        match self.inner {
-            Value::Any(v) => AnyWrapper { inner: v }.into_py(py),
+        match self.0 {
+            Value::Any(v) => AnyWrapper(v).into_py(py),
             Value::YText(v) => YText::from(v).into_py(py),
             //YText::from(v).into(),
             Value::YArray(v) => unreachable!(),
@@ -1637,7 +1633,7 @@ impl IntoPy<pyo3::PyObject> for ValueWrapper {
 #[derive(FromPyObject)]
 enum Shared {
     Text(YText),
-    // Array(Ref<'a, YArray>),
+    Array(Py<YArray>),
     // Map(Ref<'a, YMap>),
     // XmlElement(Ref<'a, YXmlElement>),
     // XmlText(Ref<'a, YXmlText>),
@@ -1680,7 +1676,7 @@ impl Shared {
     fn is_prelim(&self) -> bool {
         match self {
             Shared::Text(v) => v.prelim(),
-            // Shared::Array(v) => v.prelim(),
+            Shared::Array(v) => Python::with_gil(|py| v.borrow(py).prelim()),
             // Shared::Map(v) => v.prelim(),
             // Shared::XmlElement(_) | Shared::XmlText(_) => false,
         }
@@ -1689,7 +1685,7 @@ impl Shared {
     fn type_ref(&self) -> TypeRefs {
         match self {
             Shared::Text(_) => TYPE_REFS_TEXT,
-            // Shared::Array(_) => TYPE_REFS_ARRAY,
+            Shared::Array(_) => TYPE_REFS_ARRAY,
             // Shared::Map(_) => TYPE_REFS_MAP,
             // Shared::XmlElement(_) => TYPE_REFS_XML_ELEMENT,
             // Shared::XmlText(_) => TYPE_REFS_XML_TEXT,
@@ -1701,6 +1697,8 @@ impl Shared {
 pub fn y_py(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<YDoc>()?;
     m.add_class::<YText>()?;
+    m.add_class::<YArray>()?;
+    m.add_class::<YArrayIterator>()?;
     m.add_wrapped(wrap_pyfunction!(encode_state_vector))?;
     m.add_wrapped(wrap_pyfunction!(encode_state_as_update))?;
     m.add_wrapped(wrap_pyfunction!(apply_update))?;
