@@ -8,16 +8,10 @@ def test_inserts():
     d1 = Y.YDoc()
     x = d1.get_text('test')
 
-    with d1.begin_transaction() as txn:
-        x.push(txn, "hello!")
-    
-    with d1.begin_transaction() as txn:
-        x.insert(txn, 5, " world")
-
+    d1.transact(lambda txn : x.push(txn, "hello "))
+    d1.transact(lambda txn : x.push(txn, "world!"))
     expected = "hello world!"
-
-    with d1.begin_transaction() as txn:
-        value = x.to_string(txn)
+    value = d1.transact(lambda txn : x.to_string(txn))
     assert value == expected
 
     d2 = Y.YDoc(2)
