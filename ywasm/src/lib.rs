@@ -593,7 +593,7 @@ fn entry_change_into_js(change: &EntryChange) -> JsValue {
         EntryChange::Inserted(new) => {
             let new_value = value_into_js(new.clone());
             js_sys::Reflect::set(&result, &action, &JsValue::from("add")).unwrap();
-            js_sys::Reflect::set(&result, &JsValue::from("oldValue"), &new_value).unwrap();
+            js_sys::Reflect::set(&result, &JsValue::from("newValue"), &new_value).unwrap();
         }
         EntryChange::Updated(old, new) => {
             let old_value = value_into_js(old.clone());
