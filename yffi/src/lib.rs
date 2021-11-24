@@ -1,12 +1,13 @@
 use lib0::any::Any;
 use std::collections::HashMap;
-use std::ffi::{CStr, CString};
+use std::ffi::{c_void, CStr, CString};
 use std::mem::{forget, ManuallyDrop, MaybeUninit};
 use std::os::raw::{c_char, c_float, c_int, c_long, c_uchar, c_ulong};
+use std::ptr::null;
 use yrs::block::{ItemContent, Prelim};
 use yrs::types::{
-    Branch, BranchRef, TypePtr, Value, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_XML_ELEMENT,
-    TYPE_REFS_XML_TEXT,
+    Branch, BranchRef, Change, EntryChange, Event, Observer, PathSegment, TypePtr, Value,
+    TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT,
 };
 use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1};
@@ -2427,6 +2428,361 @@ pub unsafe extern "C" fn youtput_read_yxmltext(val: *const YOutput) -> *mut XmlT
         v.value.y_xmltext
     } else {
         std::ptr::null_mut()
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn ytext_observe(
+    txt: *const Text,
+    state: *mut c_void,
+    cb: extern "C" fn(*mut c_void, *const YEvent),
+) -> *mut Observer {
+    assert!(!txt.is_null());
+
+    let txt = txt.as_ref().unwrap();
+    let observer = txt.observe(move |txn, e| {
+        let e = YEvent::new(e, txn);
+        cb(state, &e as *const YEvent);
+    });
+    Box::into_raw(Box::new(observer)) as *mut _
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn ymap_observe(
+    map: *const Map,
+    state: *mut c_void,
+    cb: extern "C" fn(*mut c_void, *const YEvent),
+) -> *mut Observer {
+    assert!(!map.is_null());
+
+    let map = map.as_ref().unwrap();
+    let observer = map.observe(move |txn, e| {
+        let e = YEvent::new(e, txn);
+        cb(state, &e as *const YEvent);
+    });
+    Box::into_raw(Box::new(observer)) as *mut _
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yarray_observe(
+    array: *const Array,
+    state: *mut c_void,
+    cb: extern "C" fn(*mut c_void, *const YEvent),
+) -> *mut Observer {
+    assert!(!array.is_null());
+
+    let array = array.as_ref().unwrap();
+    let observer = array.observe(move |txn, e| {
+        let e = YEvent::new(e, txn);
+        cb(state, &e as *const YEvent);
+    });
+    Box::into_raw(Box::new(observer)) as *mut _
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yxml_element_observe(
+    xml: *const XmlElement,
+    state: *mut c_void,
+    cb: extern "C" fn(*mut c_void, *const YEvent),
+) -> *mut Observer {
+    assert!(!xml.is_null());
+
+    let xml = xml.as_ref().unwrap();
+    let observer = xml.observe(move |txn, e| {
+        let e = YEvent::new(e, txn);
+        cb(state, &e as *const YEvent);
+    });
+    Box::into_raw(Box::new(observer)) as *mut _
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yxml_text_observe(
+    xml: *const XmlText,
+    state: *mut c_void,
+    cb: extern "C" fn(*mut c_void, *const YEvent),
+) -> *mut Observer {
+    assert!(!xml.is_null());
+
+    let xml = xml.as_ref().unwrap();
+    let observer = xml.observe(move |txn, e| {
+        let e = YEvent::new(e, txn);
+        cb(state, &e as *const YEvent);
+    });
+    Box::into_raw(Box::new(observer)) as *mut _
+}
+
+#[repr(C)]
+pub struct YEvent {
+    inner: *const Event,
+    pub txn: *const Transaction,
+}
+
+impl YEvent {
+    fn new(inner: &Event, txn: &Transaction) -> Self {
+        let inner = inner as *const Event;
+        let txn = txn as *const Transaction;
+        YEvent { inner, txn }
+    }
+}
+
+impl YEvent {
+    unsafe fn inner(&self) -> &Event {
+        &*self.inner
+    }
+
+    unsafe fn txn(&self) -> &Transaction {
+        &*self.txn
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yobserver_destroy(e: *mut Observer) {
+    if !e.is_null() {
+        drop(e.read());
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yevent_target(e: *const YEvent) -> *mut YOutput {
+    assert!(!e.is_null());
+    let out: YOutput = (&*e).inner().target().into();
+    Box::into_raw(Box::new(out)) as *mut _
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yevent_path(e: *const YEvent, len: *mut c_int) -> *mut YPathSegment {
+    assert!(!e.is_null());
+    let path: Vec<_> = (&*e)
+        .inner()
+        .path((&*e).txn())
+        .into_iter()
+        .map(YPathSegment::from)
+        .collect();
+    let out = path.into_boxed_slice();
+    *len = out.len() as c_int;
+    Box::into_raw(out) as *mut _
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yevent_path_destroy(path: *mut YPathSegment, len: c_int) {
+    if !path.is_null() {
+        drop(Vec::from_raw_parts(path, len as usize, len as usize));
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yevent_delta(e: *const YEvent, len: *mut c_int) -> *mut YEventChange {
+    assert!(!e.is_null());
+    let delta: Vec<_> = (&*e)
+        .inner()
+        .delta((&*e).txn())
+        .into_iter()
+        .map(YEventChange::from)
+        .collect();
+
+    let out = delta.into_boxed_slice();
+    *len = out.len() as c_int;
+    Box::into_raw(out) as *mut _
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yevent_delta_destroy(delta: *mut YEventChange, len: c_int) {
+    if !delta.is_null() {
+        drop(Vec::from_raw_parts(delta, len as usize, len as usize));
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yevent_keys(e: *const YEvent, len: *mut c_int) -> *mut YEventKeyChange {
+    assert!(!e.is_null());
+    let delta: Vec<_> = (&*e)
+        .inner()
+        .keys((&*e).txn())
+        .into_iter()
+        .map(|(k, v)| YEventKeyChange::new(k.as_ref(), v))
+        .collect();
+
+    let out = delta.into_boxed_slice();
+    *len = out.len() as c_int;
+    Box::into_raw(out) as *mut _
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yevent_keys_destroy(keys: *mut YEventKeyChange, len: c_int) {
+    if !keys.is_null() {
+        drop(Vec::from_raw_parts(keys, len as usize, len as usize));
+    }
+}
+
+#[no_mangle]
+#[export_name = "Y_EVENT_PATH_KEY"]
+pub static Y_EVENT_PATH_KEY: c_char = 1;
+
+#[no_mangle]
+#[export_name = "Y_EVENT_PATH_INDEX"]
+pub static Y_EVENT_PATH_INDEX: c_char = 2;
+
+#[repr(C)]
+pub struct YPathSegment {
+    pub tag: c_char,
+    pub value: YPathSegmentCase,
+}
+
+impl From<PathSegment> for YPathSegment {
+    fn from(ps: PathSegment) -> Self {
+        match ps {
+            PathSegment::Key(key) => {
+                let key = CString::new(key.as_ref()).unwrap().into_raw() as *const _;
+                YPathSegment {
+                    tag: Y_EVENT_PATH_KEY,
+                    value: YPathSegmentCase { key },
+                }
+            }
+            PathSegment::Index(index) => YPathSegment {
+                tag: Y_EVENT_PATH_INDEX,
+                value: YPathSegmentCase {
+                    index: index as c_int,
+                },
+            },
+        }
+    }
+}
+
+impl Drop for YPathSegment {
+    fn drop(&mut self) {
+        if self.tag == Y_EVENT_PATH_KEY {
+            unsafe {
+                ystring_destroy(self.value.key as *mut _);
+            }
+        }
+    }
+}
+
+#[repr(C)]
+pub union YPathSegmentCase {
+    pub key: *const c_char,
+    pub index: c_int,
+}
+
+#[no_mangle]
+#[export_name = "Y_EVENT_CHANGE_ADD"]
+pub static Y_EVENT_CHANGE_ADD: c_char = 1;
+
+#[no_mangle]
+#[export_name = "Y_EVENT_CHANGE_DELETE"]
+pub static Y_EVENT_CHANGE_DELETE: c_char = 2;
+
+#[no_mangle]
+#[export_name = "Y_EVENT_CHANGE_RETAIN"]
+pub static Y_EVENT_CHANGE_RETAIN: c_char = 3;
+
+#[repr(C)]
+pub struct YEventChange {
+    pub tag: c_char,
+    pub len: c_int,
+    pub values: *const YOutput,
+}
+
+impl<'a> From<&'a Change> for YEventChange {
+    fn from(change: &'a Change) -> Self {
+        match change {
+            Change::Added(values) => {
+                let out: Vec<_> = values
+                    .into_iter()
+                    .map(|v| YOutput::from(v.clone()))
+                    .collect();
+                let len = out.len() as c_int;
+                let out = out.into_boxed_slice();
+                let values = Box::into_raw(out) as *mut _;
+
+                YEventChange {
+                    tag: Y_EVENT_CHANGE_ADD,
+                    len,
+                    values,
+                }
+            }
+            Change::Removed(len) => YEventChange {
+                tag: Y_EVENT_CHANGE_DELETE,
+                len: *len as c_int,
+                values: null(),
+            },
+            Change::Retain(len) => YEventChange {
+                tag: Y_EVENT_CHANGE_RETAIN,
+                len: *len as c_int,
+                values: null(),
+            },
+        }
+    }
+}
+
+impl Drop for YEventChange {
+    fn drop(&mut self) {
+        if self.tag == Y_EVENT_CHANGE_ADD {
+            let mut i = 0;
+            while i < self.len {
+                unsafe {
+                    let current = self.values.offset(i as isize);
+                    youtput_destroy(current as *mut _);
+                }
+                i += 1;
+            }
+        }
+    }
+}
+
+#[no_mangle]
+#[export_name = "Y_EVENT_KEY_CHANGE_ADD"]
+pub static Y_EVENT_KEY_CHANGE_ADD: c_char = 4;
+
+#[no_mangle]
+#[export_name = "Y_EVENT_KEY_CHANGE_DELETE"]
+pub static Y_EVENT_KEY_CHANGE_DELETE: c_char = 5;
+
+#[no_mangle]
+#[export_name = "Y_EVENT_KEY_CHANGE_UPDATE"]
+pub static Y_EVENT_KEY_CHANGE_UPDATE: c_char = 6;
+
+#[repr(C)]
+pub struct YEventKeyChange {
+    pub key: *const c_char,
+    pub tag: c_char,
+    pub old_value: *const YOutput,
+    pub new_value: *const YOutput,
+}
+
+impl YEventKeyChange {
+    fn new(key: &str, change: &EntryChange) -> Self {
+        let key = CString::new(key).unwrap().into_raw() as *const _;
+        match change {
+            EntryChange::Inserted(new) => YEventKeyChange {
+                key,
+                tag: Y_EVENT_KEY_CHANGE_ADD,
+                old_value: null(),
+                new_value: Box::into_raw(Box::new(YOutput::from(new.clone()))),
+            },
+            EntryChange::Updated(old, new) => YEventKeyChange {
+                key,
+                tag: Y_EVENT_KEY_CHANGE_UPDATE,
+                old_value: Box::into_raw(Box::new(YOutput::from(old.clone()))),
+                new_value: Box::into_raw(Box::new(YOutput::from(new.clone()))),
+            },
+            EntryChange::Removed(old) => YEventKeyChange {
+                key,
+                tag: Y_EVENT_KEY_CHANGE_DELETE,
+                old_value: Box::into_raw(Box::new(YOutput::from(old.clone()))),
+                new_value: null(),
+            },
+        }
+    }
+}
+
+impl Drop for YEventKeyChange {
+    fn drop(&mut self) {
+        unsafe {
+            ystring_destroy(self.key as *mut _);
+            youtput_destroy(self.old_value as *mut _);
+            youtput_destroy(self.new_value as *mut _);
+        }
     }
 }
 
