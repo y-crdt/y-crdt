@@ -105,13 +105,13 @@ impl Array {
     /// of the range of a current array.
     pub fn get(&self, txn: &Transaction, index: u32) -> Option<Value> {
         let inner = self.0.borrow();
-        let (content, idx) = inner.get_at(&txn.store.blocks, index)?;
+        let (content, idx) = inner.get_at(&txn.store().blocks, index)?;
         Some(content.get_content(txn).remove(idx))
     }
 
     /// Returns an iterator, that can be used to lazely traverse over all values stored in a current
     /// array.
-    pub fn iter<'a, 'b, 'txn>(&'a self, txn: &'b Transaction<'txn>) -> ArrayIter<'b, 'txn> {
+    pub fn iter<'a, 'b>(&'a self, txn: &'b Transaction) -> ArrayIter<'b> {
         ArrayIter::new(self, txn)
     }
 
@@ -137,14 +137,14 @@ impl Array {
     }
 }
 
-pub struct ArrayIter<'b, 'txn> {
+pub struct ArrayIter<'b> {
     content: VecDeque<Value>,
     ptr: Option<BlockPtr>,
-    txn: &'b Transaction<'txn>,
+    txn: &'b Transaction,
 }
 
-impl<'b, 'txn> ArrayIter<'b, 'txn> {
-    fn new(array: &Array, txn: &'b Transaction<'txn>) -> Self {
+impl<'b> ArrayIter<'b> {
+    fn new(array: &Array, txn: &'b Transaction) -> Self {
         let inner = array.0.borrow();
         ArrayIter {
             ptr: inner.start,
@@ -154,14 +154,14 @@ impl<'b, 'txn> ArrayIter<'b, 'txn> {
     }
 }
 
-impl<'b, 'txn> Iterator for ArrayIter<'b, 'txn> {
+impl<'b> Iterator for ArrayIter<'b> {
     type Item = Value;
 
     fn next(&mut self) -> Option<Self::Item> {
         match self.content.pop_front() {
             None => {
                 if let Some(ptr) = self.ptr.take() {
-                    let item = self.txn.store.blocks.get_item(&ptr)?;
+                    let item = self.txn.store().blocks.get_item(&ptr)?;
                     self.ptr = item.right.clone();
                     if !item.is_deleted() && item.is_countable() {
                         self.content = item.content.get_content(self.txn).into();
@@ -828,7 +828,7 @@ mod test {
                 map.insert(&mut txn, "someprop".to_string(), 43);
                 map.insert(&mut txn, "someprop".to_string(), 44);
             } else {
-                panic!("should not happen: {}", txn.store)
+                panic!("should not happen: {}", txn.store())
             }
         }
 

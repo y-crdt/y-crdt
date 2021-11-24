@@ -1,3 +1,4 @@
+use crate::store::Store;
 use crate::types::{
     Branch, BranchRef, TypePtr, Value, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
     TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_HOOK, TYPE_REFS_XML_TEXT,
@@ -197,7 +198,7 @@ impl Block {
     }
 
     /// Integrates a new incoming block into a block store.
-    pub fn integrate(&mut self, txn: &mut Transaction<'_>, pivot: u32, offset: u32) -> bool {
+    pub fn integrate(&mut self, txn: &mut Transaction, pivot: u32, offset: u32) -> bool {
         match self {
             Block::Item(item) => item.integrate(txn, pivot, offset),
             Block::GC(gc) => gc.integrate(offset),
@@ -579,24 +580,24 @@ impl Item {
     /// blocks to be already present in block store - which may not be the case during block
     /// decoding. We decode entire update first, and apply individual blocks second, hence
     /// repair function is called before applying the block rather than on decode.
-    pub fn repair(&mut self, txn: &mut Transaction<'_>) {
+    pub(crate) fn repair(&mut self, store: &mut Store) {
         if let Some(origin_id) = self.origin {
             let ptr = BlockPtr::from(origin_id);
-            if let Some(item) = txn.store.blocks.get_item(&ptr) {
+            if let Some(item) = store.blocks.get_item(&ptr) {
                 let len = item.len();
                 if origin_id.clock == item.id.clock + len - 1 {
                     self.left = Some(BlockPtr::new(item.id, ptr.pivot));
                 } else {
                     let ptr =
                         BlockPtr::new(ID::new(origin_id.client, origin_id.clock + 1), ptr.pivot);
-                    let (l, _) = txn.store.blocks.split_block(&ptr);
+                    let (l, _) = store.blocks.split_block(&ptr);
                     self.left = l;
                 }
             }
         }
 
         if let Some(id) = self.right_origin {
-            let (l, r) = txn.store.blocks.split_block(&BlockPtr::from(id));
+            let (l, r) = store.blocks.split_block(&BlockPtr::from(id));
             // if we got a split, point to right-side
             // if right side is None, then no split happened and `l` is right neighbor
             self.right = r.or(l);
@@ -613,9 +614,9 @@ impl Item {
         match &self.parent {
             TypePtr::Unknown => {
                 let src = if let Some(l) = self.left.as_ref() {
-                    txn.store.blocks.get_item(l)
+                    store.blocks.get_item(l)
                 } else if let Some(r) = self.right.as_ref() {
-                    txn.store.blocks.get_item(r)
+                    store.blocks.get_item(r)
                 } else {
                     None
                 };
@@ -626,7 +627,7 @@ impl Item {
                 }
             }
             TypePtr::Id(parent_ptr) => {
-                if let Some(i) = txn.store.blocks.get_item(parent_ptr) {
+                if let Some(i) = store.blocks.get_item(parent_ptr) {
                     if let ItemContent::Type(t) = &i.content {
                         let inner = t.borrow();
                         self.parent = inner.ptr.clone();
@@ -639,15 +640,15 @@ impl Item {
 
     /// Integrates current block into block store.
     /// If it returns true, it means that the block should be deleted after being added to a block store.
-    pub fn integrate(&mut self, txn: &mut Transaction<'_>, pivot: u32, offset: u32) -> bool {
+    pub fn integrate(&mut self, txn: &mut Transaction, pivot: u32, offset: u32) -> bool {
+        let mut store = txn.store_mut();
         if offset > 0 {
             self.id.clock += offset;
-            let (left, _) = txn
-                .store
+            let (left, _) = store
                 .blocks
                 .split_block(&BlockPtr::from(ID::new(self.id.client, self.id.clock - 1)));
             if let Some(mut left) = left {
-                if let Some(origin) = txn.store.blocks.get_item(&left) {
+                if let Some(origin) = store.blocks.get_item(&left) {
                     self.origin = Some(origin.last_id());
                     left.id = origin.id;
                     self.left = Some(left);
@@ -659,20 +660,20 @@ impl Item {
             self.content.splice(offset as usize);
         }
 
-        let parent = match txn.store.get_type(&self.parent).cloned() {
-            None => txn.store.init_type_from_ptr(&self.parent),
+        let parent = match store.get_type(&self.parent).cloned() {
+            None => store.init_type_from_ptr(&self.parent),
             parent => parent,
         };
 
         let left = self
             .left
             .as_ref()
-            .and_then(|ptr| txn.store.blocks.get_block(ptr));
+            .and_then(|ptr| store.blocks.get_block(ptr));
 
         let right = self
             .right
             .as_ref()
-            .and_then(|ptr| txn.store.blocks.get_block(ptr));
+            .and_then(|ptr| store.blocks.get_block(ptr));
 
         let right_is_null_or_has_left = match right {
             None => true,
@@ -694,7 +695,7 @@ impl Item {
                 } else if let Some(sub) = &self.parent_sub {
                     let mut o = parent_ref.map.get(sub);
                     while let Some(ptr) = o {
-                        if let Some(item) = txn.store.blocks.get_item(ptr) {
+                        if let Some(item) = store.blocks.get_item(ptr) {
                             if item.left.is_some() {
                                 o = item.left.as_ref();
                                 continue;
@@ -721,7 +722,7 @@ impl Item {
 
                     items_before_origin.insert(ptr.id.clone());
                     conflicting_items.insert(ptr.id.clone());
-                    if let Some(Block::Item(item)) = txn.store.blocks.get_block(&ptr) {
+                    if let Some(Block::Item(item)) = store.blocks.get_block(&ptr) {
                         if self.origin == item.origin {
                             // case 1
                             if ptr.id.client < self.id.client {
@@ -760,7 +761,7 @@ impl Item {
 
             // reconnect left/right
             if let Some(left_id) = self.left.as_ref() {
-                if let Some(left) = txn.store.blocks.get_item_mut(left_id) {
+                if let Some(left) = store.blocks.get_item_mut(left_id) {
                     self.right = left.right.replace(BlockPtr::new(self.id, pivot));
                 }
             } else {
@@ -769,7 +770,7 @@ impl Item {
                     let mut r = start.as_ref();
 
                     while let Some(ptr) = r {
-                        if let Some(item) = txn.store.blocks.get_item(ptr) {
+                        if let Some(item) = store.blocks.get_item(ptr) {
                             if item.left.is_some() {
                                 r = item.left.as_ref();
                                 continue;
@@ -786,7 +787,7 @@ impl Item {
             }
 
             if let Some(right_id) = self.right.as_ref() {
-                if let Some(right) = txn.store.blocks.get_item_mut(right_id) {
+                if let Some(right) = store.blocks.get_item_mut(right_id) {
                     right.left = Some(BlockPtr::new(self.id, pivot));
                 }
             } else if let Some(parent_sub) = &self.parent_sub {
@@ -806,8 +807,9 @@ impl Item {
 
             self.integrate_content(txn, pivot, &mut *parent_ref);
             txn.add_changed_type(&*parent_ref, self.parent_sub.clone());
+            store = txn.store_mut();
             let parent_deleted = if let TypePtr::Id(ptr) = &self.parent {
-                if let Some(item) = txn.store.blocks.get_item(ptr) {
+                if let Some(item) = store.blocks.get_item(ptr) {
                     item.is_deleted()
                 } else {
                     true
@@ -927,7 +929,7 @@ impl Item {
         info
     }
 
-    fn integrate_content(&mut self, txn: &mut Transaction<'_>, pivot: u32, parent: &mut Branch) {
+    fn integrate_content(&mut self, txn: &mut Transaction, pivot: u32, parent: &mut Branch) {
         match &mut self.content {
             ItemContent::Deleted(len) => {
                 txn.delete_set.insert(self.id, *len);
@@ -1054,7 +1056,7 @@ impl ItemContent {
     /// it will return a target type of a branch node (eg. Yrs [Array], [Map] or [XmlElement]). For
     /// other types it will returns a vector of elements stored within current block. Since block
     /// may describe a chunk of values within it, it always returns a vector of values.
-    pub fn get_content(&self, txn: &Transaction<'_>) -> Vec<Value> {
+    pub fn get_content(&self, txn: &Transaction) -> Vec<Value> {
         match self {
             ItemContent::Any(v) => v.iter().map(|a| Value::Any(a.clone())).collect(),
             ItemContent::Binary(v) => vec![Value::Any(Any::Buffer(v.clone().into_boxed_slice()))],
@@ -1078,7 +1080,7 @@ impl ItemContent {
 
     /// Similar to [get_content], but it only returns the latest result and doesn't materialize
     /// others for performance reasons.
-    pub fn get_content_last(&self, txn: &Transaction<'_>) -> Option<Value> {
+    pub fn get_content_last(&self, txn: &Transaction) -> Option<Value> {
         match self {
             ItemContent::Any(v) => v.last().map(|a| Value::Any(a.clone())),
             ItemContent::Binary(v) => Some(Value::Any(Any::Buffer(v.clone().into_boxed_slice()))),
@@ -1287,10 +1289,11 @@ impl ItemContent {
     pub(crate) fn gc(&self, txn: &Transaction) {
         match self {
             ItemContent::Type(branch_ref) => {
+                let store = txn.store();
                 let mut branch = branch_ref.borrow_mut();
                 let mut curr = branch.start.take();
                 while let Some(ptr) = curr {
-                    if let Some(block) = txn.store.blocks.get_block_mut(&ptr) {
+                    if let Some(block) = store.blocks.get_block_mut(&ptr) {
                         if let Block::Item(item) = block {
                             curr = item.right.clone();
                             block.gc(txn, true);
@@ -1303,7 +1306,7 @@ impl ItemContent {
                 for (_, ptr) in branch.map.drain() {
                     curr = Some(ptr);
                     while let Some(ptr) = curr {
-                        if let Some(block) = txn.store.blocks.get_block_mut(&ptr) {
+                        if let Some(block) = store.blocks.get_block_mut(&ptr) {
                             if let Block::Item(item) = block {
                                 curr = item.left.clone();
                                 block.gc(txn, true);

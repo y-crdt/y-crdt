@@ -428,9 +428,9 @@ impl TestConnector {
             let a = inner.peers[i].doc.transact();
             let b = inner.peers[i + 1].doc.transact();
 
-            assert_eq!(a.store.blocks, b.store.blocks);
-            assert_eq!(a.store.pending, b.store.pending);
-            assert_eq!(a.store.pending_ds, b.store.pending_ds);
+            assert_eq!(a.store().blocks, b.store().blocks);
+            assert_eq!(a.store().pending, b.store().pending);
+            assert_eq!(a.store().pending_ds, b.store().pending_ds);
         }
     }
 

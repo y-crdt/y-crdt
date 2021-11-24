@@ -23,12 +23,13 @@ pub struct Text(BranchRef);
 impl Text {
     /// Converts context of this text data structure into a single string value.
     #[allow(clippy::inherent_to_string)]
-    pub fn to_string(&self, txn: &Transaction<'_>) -> String {
+    pub fn to_string(&self, txn: &Transaction) -> String {
         let inner = self.0.as_ref();
         let mut start = inner.start;
         let mut s = String::new();
+        let store = txn.store();
         while let Some(a) = start.as_ref() {
-            if let Some(item) = txn.store.blocks.get_item(&a) {
+            if let Some(item) = store.blocks.get_item(&a) {
                 if !item.is_deleted() {
                     if let block::ItemContent::String(item_string) = &item.content {
                         s.push_str(item_string);
@@ -53,7 +54,7 @@ impl Text {
 
     pub(crate) fn find_position(
         &self,
-        txn: &mut Transaction<'_>,
+        txn: &mut Transaction,
         mut count: u32,
     ) -> Option<block::ItemPosition> {
         let mut pos = {
@@ -66,12 +67,13 @@ impl Text {
             }
         };
 
+        let store = txn.store_mut();
         while let Some(right_ptr) = pos.right.as_ref() {
             if count == 0 {
                 break;
             }
 
-            if let Some(mut right) = txn.store.blocks.get_item(right_ptr) {
+            if let Some(mut right) = store.blocks.get_item(right_ptr) {
                 if !right.is_deleted() {
                     let mut right_len = right.len();
                     if count < right_len {
@@ -80,8 +82,8 @@ impl Text {
                             ID::new(right.id.client, right.id.clock + count),
                             right_ptr.pivot() as u32,
                         );
-                        let (_, _) = txn.store.blocks.split_block(&split_ptr);
-                        right = txn.store.blocks.get_item(right_ptr).unwrap();
+                        let (_, _) = store.blocks.split_block(&split_ptr);
+                        right = store.blocks.get_item(right_ptr).unwrap();
                         right_len = right.len();
                     }
                     pos.index += right_len;

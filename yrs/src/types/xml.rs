@@ -1,4 +1,5 @@
 use crate::block::{Item, ItemContent, ItemPosition, Prelim};
+use crate::store::Store;
 use crate::types::{
     Branch, BranchRef, Entries, Event, Map, Observer, Text, TypePtr, Value, TYPE_REFS_XML_ELEMENT,
     TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_TEXT,
@@ -118,7 +119,7 @@ impl XmlElement {
 
     /// Returns an unordered iterator over all attributes (key-value pairs), that can be found
     /// inside of a current XML element.
-    pub fn attributes<'a, 'b, 'txn>(&'a self, txn: &'b Transaction<'txn>) -> Attributes<'b, 'txn> {
+    pub fn attributes<'a, 'b>(&'a self, txn: &'b Transaction) -> Attributes<'b> {
         let inner = self.inner();
         let blocks = inner.entries(txn);
         Attributes(blocks)
@@ -193,7 +194,7 @@ impl XmlElement {
     ///    - again
     /// */
     /// ```
-    pub fn successors<'a, 'b, 'txn>(&'a self, txn: &'b Transaction<'txn>) -> TreeWalker<'b, 'txn> {
+    pub fn successors<'a, 'b>(&'a self, txn: &'b Transaction) -> TreeWalker<'b> {
         self.0.iter(txn)
     }
 
@@ -284,9 +285,9 @@ impl From<BranchRef> for XmlElement {
 }
 
 /// Iterator over the attributes (key-value pairs represented as a strings) of an [XmlElement].
-pub struct Attributes<'a, 'txn>(Entries<'a, 'txn>);
+pub struct Attributes<'a>(Entries<'a>);
 
-impl<'a, 'txn> Iterator for Attributes<'a, 'txn> {
+impl<'a> Iterator for Attributes<'a> {
     type Item = (&'a str, String);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -339,7 +340,7 @@ impl XmlFragment {
         self.inner().len()
     }
 
-    pub fn iter<'a, 'b, 'txn>(&'a self, txn: &'b Transaction<'txn>) -> TreeWalker<'b, 'txn> {
+    pub fn iter<'a, 'b>(&'a self, txn: &'b Transaction) -> TreeWalker<'b> {
         TreeWalker::new(txn, &*self.inner())
     }
 
@@ -406,7 +407,7 @@ impl XmlFragment {
 
     pub fn get<T: From<BranchRef>>(&self, txn: &Transaction, index: u32) -> Option<T> {
         let inner = self.inner();
-        let (content, _) = inner.get_at(&txn.store.blocks, index)?;
+        let (content, _) = inner.get_at(&txn.store().blocks, index)?;
         if let ItemContent::Type(inner) = content {
             Some(T::from(inner.clone()))
         } else {
@@ -430,23 +431,21 @@ impl Into<ItemContent> for XmlFragment {
 }
 
 /// An iterator over [XmlElement] successors, working in a recursive depth-first manner.
-pub struct TreeWalker<'a, 'txn> {
-    txn: &'a Transaction<'txn>,
+pub struct TreeWalker<'a> {
+    store: &'a Store,
     current: Option<&'a Item>,
     root: TypePtr,
     first_call: bool,
 }
 
-impl<'a, 'txn> TreeWalker<'a, 'txn> {
-    fn new<'b>(txn: &'a Transaction<'txn>, parent: &'b Branch) -> Self {
+impl<'a> TreeWalker<'a> {
+    fn new<'b>(txn: &'a Transaction, parent: &'b Branch) -> Self {
         let root = parent.ptr.clone();
-        let current = parent
-            .start
-            .as_ref()
-            .and_then(|p| txn.store.blocks.get_item(p));
+        let store = txn.store();
+        let current = parent.start.as_ref().and_then(|p| store.blocks.get_item(p));
 
         TreeWalker {
-            txn,
+            store,
             current,
             root,
             first_call: true,
@@ -454,7 +453,7 @@ impl<'a, 'txn> TreeWalker<'a, 'txn> {
     }
 }
 
-impl<'a, 'txn> Iterator for TreeWalker<'a, 'txn> {
+impl<'a> Iterator for TreeWalker<'a> {
     type Item = Xml;
 
     /// Tree walker used depth-first search to move over the xml tree.
@@ -476,21 +475,22 @@ impl<'a, 'txn> Iterator for TreeWalker<'a, 'txn> {
                             n = inner
                                 .start
                                 .as_ref()
-                                .and_then(|ptr| self.txn.store.blocks.get_item(ptr));
+                                .and_then(|ptr| self.store.blocks.get_item(ptr));
                         } else {
                             // walk right or up in the tree
                             while let Some(current) = n {
                                 if let Some(right) = current.right.as_ref() {
-                                    n = self.txn.store.blocks.get_item(right);
+                                    n = self.store.blocks.get_item(right);
                                     break;
                                 } else if current.parent == self.root {
                                     n = None;
                                 } else {
-                                    n = self.txn.store.get_type(&current.parent).and_then(|t| {
-                                        match &t.as_ref().ptr {
-                                            TypePtr::Id(ptr) => self.txn.store.blocks.get_item(ptr),
-                                            _ => None,
-                                        }
+                                    n = self.store.get_type(&current.parent).and_then(|t| match &t
+                                        .as_ref()
+                                        .ptr
+                                    {
+                                        TypePtr::Id(ptr) => self.store.blocks.get_item(ptr),
+                                        _ => None,
                                     });
                                 }
                             }
@@ -531,24 +531,15 @@ impl XmlHook {
         self.0.to_json(txn)
     }
 
-    pub fn keys<'a, 'b, 'txn>(
-        &'a self,
-        txn: &'b Transaction<'txn>,
-    ) -> crate::types::map::Keys<'b, 'txn> {
+    pub fn keys<'a, 'b>(&'a self, txn: &'b Transaction) -> crate::types::map::Keys<'b> {
         self.0.keys(txn)
     }
 
-    pub fn values<'a, 'b, 'txn>(
-        &self,
-        txn: &'b Transaction<'txn>,
-    ) -> crate::types::map::Values<'b, 'txn> {
+    pub fn values<'a, 'b>(&self, txn: &'b Transaction) -> crate::types::map::Values<'b> {
         self.0.values(txn)
     }
 
-    pub fn iter<'a, 'b, 'txn>(
-        &self,
-        txn: &'b Transaction<'txn>,
-    ) -> crate::types::map::MapIter<'b, 'txn> {
+    pub fn iter<'a, 'b>(&self, txn: &'b Transaction) -> crate::types::map::MapIter<'b> {
         self.0.iter(txn)
     }
 
@@ -646,7 +637,7 @@ impl XmlText {
         Some(value.to_string(txn))
     }
 
-    pub fn attributes<'a, 'b, 'txn>(&'a self, txn: &'b Transaction<'txn>) -> Attributes<'b, 'txn> {
+    pub fn attributes<'a, 'b>(&'a self, txn: &'b Transaction) -> Attributes<'b> {
         Attributes(self.inner().entries(txn))
     }
 
@@ -752,8 +743,9 @@ impl Prelim for PrelimXml {
 }
 
 fn next_sibling(inner: Ref<Branch>, txn: &Transaction) -> Option<Xml> {
+    let store = txn.store();
     let mut current = if let TypePtr::Id(ptr) = &inner.ptr {
-        txn.store.blocks.get_item(ptr)
+        store.blocks.get_item(ptr)
     } else {
         None
     };
@@ -761,7 +753,7 @@ fn next_sibling(inner: Ref<Branch>, txn: &Transaction) -> Option<Xml> {
         current = item
             .right
             .as_ref()
-            .and_then(|ptr| txn.store.blocks.get_item(ptr));
+            .and_then(|ptr| store.blocks.get_item(ptr));
         if let Some(right) = current {
             if !right.is_deleted() {
                 if let ItemContent::Type(inner) = &right.content {
@@ -775,8 +767,9 @@ fn next_sibling(inner: Ref<Branch>, txn: &Transaction) -> Option<Xml> {
 }
 
 fn prev_sibling(inner: Ref<Branch>, txn: &Transaction) -> Option<Xml> {
+    let store = txn.store();
     let mut current = if let TypePtr::Id(ptr) = &inner.ptr {
-        txn.store.blocks.get_item(ptr)
+        store.blocks.get_item(ptr)
     } else {
         None
     };
@@ -784,7 +777,7 @@ fn prev_sibling(inner: Ref<Branch>, txn: &Transaction) -> Option<Xml> {
         current = item
             .left
             .as_ref()
-            .and_then(|ptr| txn.store.blocks.get_item(ptr));
+            .and_then(|ptr| store.blocks.get_item(ptr));
         if let Some(left) = current {
             if !left.is_deleted() {
                 if let ItemContent::Type(inner) = &left.content {
@@ -799,8 +792,9 @@ fn prev_sibling(inner: Ref<Branch>, txn: &Transaction) -> Option<Xml> {
 
 fn parent(inner: Ref<Branch>, txn: &Transaction) -> Option<XmlElement> {
     if let TypePtr::Id(ptr) = &inner.ptr {
-        let item = txn.store.blocks.get_item(ptr)?;
-        let parent = txn.store.get_type(&item.parent)?;
+        let store = txn.store();
+        let item = store.blocks.get_item(ptr)?;
+        let parent = store.get_type(&item.parent)?;
         Some(XmlElement::from(parent.clone()))
     } else {
         None

@@ -110,7 +110,7 @@ pub type Doc = yrs::Doc;
 
 /// Transaction is one of the core types in Yrs. All operations that need to touch a document's
 /// contents (a.k.a. block store), need to be executed in scope of a transaction.
-pub type Transaction = yrs::Transaction<'static>;
+pub type Transaction = yrs::Transaction;
 
 /// Collection used to store key-value entries in an unordered manner. Keys are always represented
 /// as UTF-8 strings. Values can be any value type supported by Yrs: JSON-like primitives as well as
@@ -191,22 +191,22 @@ pub type XmlElement = yrs::XmlElement;
 pub type XmlText = yrs::XmlText;
 
 /// Iterator structure used by shared array data type.
-pub type ArrayIter = yrs::types::array::ArrayIter<'static, 'static>;
+pub type ArrayIter = yrs::types::array::ArrayIter<'static>;
 
 /// Iterator structure used by shared map data type. Map iterators are unordered - there's no
 /// specific order in which map entries will be returned during consecutive iterator calls.
-pub type MapIter = yrs::types::map::MapIter<'static, 'static>;
+pub type MapIter = yrs::types::map::MapIter<'static>;
 
 /// Iterator structure used by XML nodes (elements and text) to iterate over node's attributes.
 /// Attribute iterators are unordered - there's no specific order in which map entries will be
 /// returned during consecutive iterator calls.
-pub type Attributes = yrs::types::xml::Attributes<'static, 'static>;
+pub type Attributes = yrs::types::xml::Attributes<'static>;
 
 /// Iterator used to traverse over the complex nested tree structure of a XML node. XML node
 /// iterator walks only over `YXmlElement` and `YXmlText` nodes. It does so in ordered manner (using
 /// the order in which children are ordered within their parent nodes) and using **depth-first**
 /// traverse.
-pub type TreeWalker = yrs::types::xml::TreeWalker<'static, 'static>;
+pub type TreeWalker = yrs::types::xml::TreeWalker<'static>;
 
 /// A structure representing single key-value entry of a map output (used by either
 /// embedded JSON-like maps or YMaps).

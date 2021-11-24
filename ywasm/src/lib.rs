@@ -116,12 +116,7 @@ impl YDoc {
     /// ```
     #[wasm_bindgen(js_name = beginTransaction)]
     pub fn begin_transaction(&mut self) -> YTransaction {
-        unsafe {
-            let doc: *mut Doc = &mut self.0;
-            let static_txn: ManuallyDrop<Transaction<'static>> =
-                ManuallyDrop::new((*doc).transact());
-            YTransaction(static_txn)
-        }
+        YTransaction(self.0.transact())
     }
 
     /// Returns a `YText` shared data type, that's accessible for subsequent accesses using given
@@ -286,25 +281,19 @@ pub fn apply_update(doc: &mut YDoc, diff: Uint8Array) {
 /// doc.transact(txn => text.insert(txn, 0, 'hello world'))
 /// ```
 #[wasm_bindgen]
-pub struct YTransaction(ManuallyDrop<Transaction<'static>>);
+pub struct YTransaction(Transaction);
 
 impl Deref for YTransaction {
-    type Target = Transaction<'static>;
+    type Target = Transaction;
 
     fn deref(&self) -> &Self::Target {
-        self.0.deref()
+        &self.0
     }
 }
 
 impl DerefMut for YTransaction {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.0.deref_mut()
-    }
-}
-
-impl Drop for YTransaction {
-    fn drop(&mut self) {
-        unsafe { ManuallyDrop::drop(&mut self.0) }
+        &mut self.0
     }
 }
 
@@ -491,7 +480,7 @@ impl YTransaction {
 #[wasm_bindgen]
 pub struct YEvent {
     inner: *const Event,
-    txn: *const Transaction<'static>,
+    txn: *const Transaction,
     delta: Option<JsValue>,
     keys: Option<JsValue>,
 }
@@ -946,8 +935,8 @@ impl YArray {
         to_iter(match &*self.0.borrow() {
             SharedType::Integrated(v) => unsafe {
                 let this: *const Array = v;
-                let tx: *const Transaction<'static> = txn.0.deref();
-                let static_iter: ManuallyDrop<ArrayIter<'static, 'static>> =
+                let tx: *const Transaction = txn.deref() as *const _;
+                let static_iter: ManuallyDrop<ArrayIter<'static>> =
                     ManuallyDrop::new((*this).iter(tx.as_ref().unwrap()));
                 YArrayIterator(static_iter).into()
             },
@@ -1028,7 +1017,7 @@ impl From<Option<Value>> for IteratorNext {
 }
 
 #[wasm_bindgen]
-pub struct YArrayIterator(ManuallyDrop<ArrayIter<'static, 'static>>);
+pub struct YArrayIterator(ManuallyDrop<ArrayIter<'static>>);
 
 impl Drop for YArrayIterator {
     fn drop(&mut self) {
@@ -1223,8 +1212,8 @@ impl YMap {
         to_iter(match &*self.0.borrow() {
             SharedType::Integrated(v) => unsafe {
                 let this: *const Map = v;
-                let tx: *const Transaction<'static> = txn.0.deref();
-                let static_iter: ManuallyDrop<MapIter<'static, 'static>> =
+                let tx: *const Transaction = &txn.0 as *const _;
+                let static_iter: ManuallyDrop<MapIter<'static>> =
                     ManuallyDrop::new((*this).iter(tx.as_ref().unwrap()));
                 YMapIterator(static_iter).into()
             },
@@ -1259,7 +1248,7 @@ impl YMap {
 }
 
 #[wasm_bindgen]
-pub struct YMapIterator(ManuallyDrop<MapIter<'static, 'static>>);
+pub struct YMapIterator(ManuallyDrop<MapIter<'static>>);
 
 impl Drop for YMapIterator {
     fn drop(&mut self) {
@@ -1458,8 +1447,8 @@ impl YXmlElement {
     pub fn attributes(&self, txn: &YTransaction) -> JsValue {
         to_iter(unsafe {
             let this: *const XmlElement = &self.0;
-            let tx: *const Transaction<'static> = txn.0.deref();
-            let static_iter: ManuallyDrop<Attributes<'static, 'static>> =
+            let tx: *const Transaction = txn.deref() as *const _;
+            let static_iter: ManuallyDrop<Attributes<'static>> =
                 ManuallyDrop::new((*this).attributes(tx.as_ref().unwrap()));
             YXmlAttributes(static_iter).into()
         })
@@ -1471,8 +1460,8 @@ impl YXmlElement {
     pub fn tree_walker(&self, txn: &YTransaction) -> JsValue {
         to_iter(unsafe {
             let this: *const XmlElement = &self.0;
-            let tx: *const Transaction<'static> = txn.0.deref();
-            let static_iter: ManuallyDrop<TreeWalker<'static, 'static>> =
+            let tx: *const Transaction = txn.deref() as *const _;
+            let static_iter: ManuallyDrop<TreeWalker<'static>> =
                 ManuallyDrop::new((*this).successors(tx.as_ref().unwrap()));
             YXmlTreeWalker(static_iter).into()
         })
@@ -1494,7 +1483,7 @@ impl YXmlElement {
 }
 
 #[wasm_bindgen]
-pub struct YXmlAttributes(ManuallyDrop<Attributes<'static, 'static>>);
+pub struct YXmlAttributes(ManuallyDrop<Attributes<'static>>);
 
 impl Drop for YXmlAttributes {
     fn drop(&mut self) {
@@ -1525,7 +1514,7 @@ impl YXmlAttributes {
 }
 
 #[wasm_bindgen]
-pub struct YXmlTreeWalker(ManuallyDrop<TreeWalker<'static, 'static>>);
+pub struct YXmlTreeWalker(ManuallyDrop<TreeWalker<'static>>);
 
 impl Drop for YXmlTreeWalker {
     fn drop(&mut self) {
@@ -1659,8 +1648,8 @@ impl YXmlText {
     pub fn attributes(&self, txn: &YTransaction) -> YXmlAttributes {
         unsafe {
             let this: *const XmlText = &self.0;
-            let tx: *const Transaction<'static> = txn.0.deref();
-            let static_iter: ManuallyDrop<Attributes<'static, 'static>> =
+            let tx: *const Transaction = txn.deref() as *const _;
+            let static_iter: ManuallyDrop<Attributes<'static>> =
                 ManuallyDrop::new((*this).attributes(tx.as_ref().unwrap()));
             YXmlAttributes(static_iter)
         }

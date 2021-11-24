@@ -18,11 +18,11 @@ pub struct Map(BranchRef);
 
 impl Map {
     /// Converts all entries of a current map into JSON-like object representation.
-    pub fn to_json(&self, txn: &Transaction<'_>) -> Any {
+    pub fn to_json(&self, txn: &Transaction) -> Any {
         let inner = self.0.as_ref();
         let mut res = HashMap::new();
         for (key, ptr) in inner.map.iter() {
-            if let Some(item) = txn.store.blocks.get_item(ptr) {
+            if let Some(item) = txn.store().blocks.get_item(ptr) {
                 if !item.is_deleted() {
                     let any = if let Some(value) = item.content.get_content_last(txn) {
                         value.to_json(txn)
@@ -37,12 +37,12 @@ impl Map {
     }
 
     /// Returns a number of entries stored within current map.
-    pub fn len(&self, txn: &Transaction<'_>) -> u32 {
+    pub fn len(&self, txn: &Transaction) -> u32 {
         let mut len = 0;
         let inner = self.0.borrow();
         for ptr in inner.map.values() {
             //TODO: maybe it would be better to just cache len in the map itself?
-            if let Some(item) = txn.store.blocks.get_item(ptr) {
+            if let Some(item) = txn.store().blocks.get_item(ptr) {
                 if !item.is_deleted() {
                     len += 1;
                 }
@@ -51,25 +51,25 @@ impl Map {
         len
     }
 
-    fn entries<'a, 'b, 'txn>(&'a self, txn: &'b Transaction<'txn>) -> Entries<'b, 'txn> {
+    fn entries<'a, 'b>(&'a self, txn: &'b Transaction) -> Entries<'b> {
         let ptr = &self.0.borrow().ptr;
         Entries::new(ptr, txn)
     }
 
     /// Returns an iterator that enables to traverse over all keys of entries stored within
     /// current map. These keys are not ordered.
-    pub fn keys<'a, 'b, 'txn>(&'a self, txn: &'b Transaction<'txn>) -> Keys<'b, 'txn> {
+    pub fn keys<'a, 'b>(&'a self, txn: &'b Transaction) -> Keys<'b> {
         Keys(self.entries(txn))
     }
 
     /// Returns an iterator that enables to traverse over all values stored within current map.
-    pub fn values<'a, 'b, 'txn>(&'a self, txn: &'b Transaction<'txn>) -> Values<'b, 'txn> {
+    pub fn values<'a, 'b>(&'a self, txn: &'b Transaction) -> Values<'b> {
         Values(self.entries(txn))
     }
 
     /// Returns an iterator that enables to traverse over all entries - tuple of key-value pairs -
     /// stored within current map.
-    pub fn iter<'a, 'b, 'txn>(&'a self, txn: &'b Transaction<'txn>) -> MapIter<'b, 'txn> {
+    pub fn iter<'a, 'b>(&'a self, txn: &'b Transaction) -> MapIter<'b> {
         MapIter(self.entries(txn))
     }
 
@@ -116,7 +116,7 @@ impl Map {
     pub fn contains(&self, txn: &Transaction, key: &str) -> bool {
         let t = self.0.borrow();
         if let Some(ptr) = t.map.get(key) {
-            if let Some(item) = txn.store.blocks.get_item(ptr) {
+            if let Some(item) = txn.store().blocks.get_item(ptr) {
                 return !item.is_deleted();
             }
         }
@@ -124,7 +124,7 @@ impl Map {
     }
 
     /// Clears the contents of current map, effectively removing all of its entries.
-    pub fn clear(&self, txn: &mut Transaction<'_>) {
+    pub fn clear(&self, txn: &mut Transaction) {
         let t = self.0.borrow();
         for (_, ptr) in t.map.iter() {
             txn.delete(ptr);
@@ -147,9 +147,9 @@ impl Map {
     }
 }
 
-pub struct MapIter<'a, 'txn>(Entries<'a, 'txn>);
+pub struct MapIter<'a>(Entries<'a>);
 
-impl<'a, 'txn> Iterator for MapIter<'a, 'txn> {
+impl<'a> Iterator for MapIter<'a> {
     type Item = (&'a str, Value);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -163,9 +163,9 @@ impl<'a, 'txn> Iterator for MapIter<'a, 'txn> {
 }
 
 /// An unordered iterator over the keys of a [Map].
-pub struct Keys<'a, 'txn>(Entries<'a, 'txn>);
+pub struct Keys<'a>(Entries<'a>);
 
-impl<'a, 'txn> Iterator for Keys<'a, 'txn> {
+impl<'a> Iterator for Keys<'a> {
     type Item = &'a str;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -175,9 +175,9 @@ impl<'a, 'txn> Iterator for Keys<'a, 'txn> {
 }
 
 /// Iterator over the values of a [Map].
-pub struct Values<'a, 'txn>(Entries<'a, 'txn>);
+pub struct Values<'a>(Entries<'a>);
 
-impl<'a, 'txn> Iterator for Values<'a, 'txn> {
+impl<'a> Iterator for Values<'a> {
     type Item = Vec<Value>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -261,7 +261,7 @@ mod test {
         //m1m.insert(&mut t1, "y-text".to_owned(), m1a);
 
         //TODO: YArray within YMap
-        fn compare_all(t: &Transaction<'_>, m: &Map) {
+        fn compare_all(t: &Transaction, m: &Map) {
             assert_eq!(m.len(&t), 5);
             assert_eq!(m.get(&t, &"number".to_owned()), Some(Value::from(1f64)));
             assert_eq!(m.get(&t, &"boolean0".to_owned()), Some(Value::from(false)));
