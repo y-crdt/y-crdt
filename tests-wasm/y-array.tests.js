@@ -134,6 +134,10 @@ export const testIterator = tc => {
  */
 export const testObserver = tc => {
     const d1 = new Y.YDoc()
+    /**
+     * @param {Y.YArray} tc
+     */
+    const getValue = (x) => d1.transact(txn => x.toJson(txn))
     const x = d1.getArray('test')
     let target = null
     let delta = null
@@ -144,21 +148,21 @@ export const testObserver = tc => {
 
     // insert initial data to an empty YArray
     d1.transact(txn => x.insert(txn, 0, [1,2,3,4]))
-    t.compare(target, x)
+    t.compare(getValue(target), getValue(x))
     t.compare(delta, [{insert: [1,2,3,4]}])
     target = null
     delta = null
 
     // remove 2 items from the middle
     d1.transact(txn => x.delete(txn, 1, 2))
-    t.compare(target, x)
+    t.compare(getValue(target), getValue(x))
     t.compare(delta, [{retain:1}, {delete: 2}])
     target = null
     delta = null
 
     // insert new item in the middle
     d1.transact(txn => x.insert(txn, 1, [5]))
-    t.compare(target, x)
+    t.compare(getValue(target), getValue(x))
     t.compare(delta, [{retain:1}, {insert: [5]}])
     target = null
     delta = null

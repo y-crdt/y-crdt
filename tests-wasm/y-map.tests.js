@@ -103,6 +103,10 @@ export const testIterator = tc => {
  */
 export const testObserver = tc => {
     const d1 = new Y.YDoc()
+    /**
+     * @param {Y.YMap} tc
+     */
+    const getValue = (x) => d1.transact(txn => x.toJson(txn))
     const x = d1.getMap('test')
     let target = null
     let entries = null
@@ -116,7 +120,7 @@ export const testObserver = tc => {
         x.set(txn, 'key1', 'value1')
         x.set(txn, 'key2', 2)
     })
-    t.compare(target, x)
+    t.compare(getValue(target), getValue(x))
     t.compare(entries, {
         key1: { action: 'add', newValue: 'value1' },
         key2: { action: 'add', newValue: 2 }
@@ -129,7 +133,7 @@ export const testObserver = tc => {
         x.delete(txn, 'key1')
         x.set(txn, 'key2', 'value2')
     })
-    t.compare(target, x)
+    t.compare(getValue(target), getValue(x))
     t.compare(entries, {
         key1: { action: 'delete', oldValue: 'value1' },
         key2: { action: 'update', oldValue: 2, newValue: 'value2' }

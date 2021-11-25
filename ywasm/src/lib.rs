@@ -481,6 +481,7 @@ impl YTransaction {
 pub struct YEvent {
     inner: *const Event,
     txn: *const Transaction,
+    target: Option<JsValue>,
     delta: Option<JsValue>,
     keys: Option<JsValue>,
 }
@@ -493,6 +494,7 @@ impl YEvent {
         YEvent {
             inner,
             txn,
+            target: None,
             delta: None,
             keys: None,
         }
@@ -508,9 +510,14 @@ impl YEvent {
 
     /// Returns a current shared type instance, that current event changes refer to.
     #[wasm_bindgen(method, getter)]
-    pub fn target(&self) -> JsValue {
-        let target = self.inner().target();
-        value_into_js(target)
+    pub fn target(&mut self) -> JsValue {
+        if let Some(target) = self.target.as_ref() {
+            target.clone()
+        } else {
+            let target = value_into_js(self.inner().target());
+            self.target = Some(target.clone());
+            target
+        }
     }
 
     /// Returns an array of keys and indexes creating a path from root type down to current instance
@@ -518,7 +525,7 @@ impl YEvent {
     #[wasm_bindgen(method)]
     pub fn path(&self) -> JsValue {
         let path = self.inner().path(self.txn());
-        let mut result = js_sys::Array::new();
+        let result = js_sys::Array::new();
         for segment in path {
             match segment {
                 PathSegment::Key(key) => {
@@ -563,11 +570,13 @@ impl YEvent {
         if let Some(delta) = &self.delta {
             delta.clone()
         } else {
-            let delta = self.inner().delta(self.txn());
-            let mut result = js_sys::Array::new_with_length(delta.len() as u32);
-            for change in delta {
-                result.push(&change_into_js(change));
-            }
+            let delta = self
+                .inner()
+                .delta(self.txn())
+                .into_iter()
+                .map(change_into_js);
+            let mut result = js_sys::Array::new();
+            result.extend(delta);
             let delta: JsValue = result.into();
             self.delta = Some(delta.clone());
             delta
@@ -604,11 +613,8 @@ fn change_into_js(change: &Change) -> JsValue {
     let result = js_sys::Object::new();
     match change {
         Change::Added(values) => {
-            let mut array = js_sys::Array::new_with_length(values.len() as u32);
-            for value in values.iter() {
-                let js = value_into_js(value.clone());
-                array.push(&js);
-            }
+            let mut array = js_sys::Array::new();
+            array.extend(values.iter().map(|v| value_into_js(v.clone())));
             js_sys::Reflect::set(&result, &JsValue::from("insert"), &array).unwrap();
         }
         Change::Removed(len) => {
@@ -764,10 +770,10 @@ impl YText {
                 .observe(move |txn, e| {
                     let e = YEvent::new(e, txn);
                     let arg: JsValue = e.into();
-                    f.call1(&JsValue::UNDEFINED, &arg);
+                    f.call1(&JsValue::UNDEFINED, &arg).unwrap();
                 })
                 .into(),
-            SharedType::Prelim(v) => {
+            SharedType::Prelim(_) => {
                 panic!("YText.observe is not supported on preliminary type.")
             }
         }
@@ -798,6 +804,16 @@ pub struct YArray(RefCell<SharedType<Array, Vec<JsValue>>>);
 impl From<Array> for YArray {
     fn from(v: Array) -> Self {
         YArray(SharedType::new(v))
+    }
+}
+
+impl PartialEq for YArray {
+    fn eq(&self, other: &Self) -> bool {
+        match (&*self.0.borrow(), &*other.0.borrow()) {
+            (SharedType::Integrated(v1), SharedType::Integrated(v2)) => v1 == v2,
+            (SharedType::Prelim(v1), SharedType::Prelim(v2)) => v1 == v2,
+            _ => false,
+        }
     }
 }
 
@@ -959,10 +975,10 @@ impl YArray {
                 .observe(move |txn, e| {
                     let e = YEvent::new(e, txn);
                     let arg: JsValue = e.into();
-                    f.call1(&JsValue::UNDEFINED, &arg);
+                    f.call1(&JsValue::UNDEFINED, &arg).unwrap();
                 })
                 .into(),
-            SharedType::Prelim(v) => {
+            SharedType::Prelim(_) => {
                 panic!("YArray.observe is not supported on preliminary type.")
             }
         }
@@ -1237,10 +1253,10 @@ impl YMap {
                 .observe(move |txn, e| {
                     let e = YEvent::new(e, txn);
                     let arg: JsValue = e.into();
-                    f.call1(&JsValue::UNDEFINED, &arg);
+                    f.call1(&JsValue::UNDEFINED, &arg).unwrap();
                 })
                 .into(),
-            SharedType::Prelim(v) => {
+            SharedType::Prelim(_) => {
                 panic!("YMap.observe is not supported on preliminary type.")
             }
         }
@@ -1476,7 +1492,7 @@ impl YXmlElement {
             .observe(move |txn, e| {
                 let e = YEvent::new(e, txn);
                 let arg: JsValue = e.into();
-                f.call1(&JsValue::UNDEFINED, &arg);
+                f.call1(&JsValue::UNDEFINED, &arg).unwrap();
             })
             .into()
     }
@@ -1664,7 +1680,7 @@ impl YXmlText {
             .observe(move |txn, e| {
                 let e = YEvent::new(e, txn);
                 let arg: JsValue = e.into();
-                f.call1(&JsValue::UNDEFINED, &arg);
+                f.call1(&JsValue::UNDEFINED, &arg).unwrap();
             })
             .into()
     }
