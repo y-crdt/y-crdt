@@ -254,13 +254,12 @@ export const testXmlElementObserver = tc => {
     nodes = null
 
     // add children
-    let [div,p] = d1.transact(txn => {
-        let div = x.insertXmlElement(txn, 0, 'div')
-        let p = x.insertXmlElement(txn, 1, 'p')
-        return [div, p]
+    d1.transact(txn => {
+        x.insertXmlElement(txn, 0, 'div')
+        x.insertXmlElement(txn, 1, 'p')
     })
     t.compare(getValue(target), getValue(x))
-    t.compare(nodes, [{ insert: [div, p] }])
+    t.compare(nodes[0].insert.length, 2) // [{ insert: [div, p] }]
     t.compare(attributes,  {})
     target = null
     attributes = null
@@ -270,7 +269,7 @@ export const testXmlElementObserver = tc => {
     d1.transact(txn => x.delete(txn, 0, 1))
     t.compare(getValue(target), getValue(x))
     t.compare(nodes, [{ delete: 1 }])
-    t.compare(attributes,  {})
+    t.compare(attributes, {})
     target = null
     attributes = null
     nodes = null

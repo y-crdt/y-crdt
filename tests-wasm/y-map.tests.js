@@ -143,7 +143,7 @@ export const testObserver = tc => {
 
     // free the observer and make sure that callback is no longer called
     observer.free()
-    d1.transact(txn => x.insert(txn, 1, [6]))
+    d1.transact(txn => x.set(txn, 'key1', [6]))
     t.compare(target, null)
     t.compare(entries, null)
 }

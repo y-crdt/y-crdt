@@ -760,7 +760,6 @@ mod test {
     use crate::updates::decoder::{Decode, DecoderV1};
     use crate::{Doc, ID};
     use lib0::decoding::Cursor;
-    use std::rc::Rc;
 
     #[test]
     fn update_decode() {

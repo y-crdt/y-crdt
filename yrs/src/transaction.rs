@@ -33,6 +33,7 @@ pub struct Transaction {
     /// All types that were directly modified (property added or child inserted/deleted).
     /// New types are not included in this Set.
     changed: HashMap<TypePtr, HashSet<Option<Rc<str>>>>,
+    committed: bool,
 }
 
 impl Transaction {
@@ -45,6 +46,7 @@ impl Transaction {
             delete_set: DeleteSet::new(),
             after_state: StateVector::default(),
             changed: HashMap::new(),
+            committed: false,
         }
     }
 
@@ -477,6 +479,11 @@ impl Transaction {
     /// This step is performed automatically when a transaction is about to be dropped (its life
     /// scope comes to an end).
     pub fn commit(&mut self) {
+        if self.committed {
+            return;
+        }
+
+        self.committed = true;
         // 1. sort and merge delete set
         let store = unsafe { &mut *self.store.get() };
         self.delete_set.squash();

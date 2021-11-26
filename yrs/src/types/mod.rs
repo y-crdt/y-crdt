@@ -552,7 +552,8 @@ impl Event {
                             if txn.has_deleted(&item.id) {
                                 if let Some(prev) = prev {
                                     if txn.has_deleted(&prev.id) {
-                                        let old_value = prev.content.get_content_last(txn).unwrap();
+                                        let old_value =
+                                            prev.content.get_content_last(txn).unwrap_or_default();
                                         keys.insert(key.clone(), EntryChange::Removed(old_value));
                                     }
                                 }
@@ -560,7 +561,8 @@ impl Event {
                                 let new_value = item.content.get_content_last(txn).unwrap();
                                 if let Some(prev) = prev {
                                     if txn.has_deleted(&prev.id) {
-                                        let old_value = prev.content.get_content_last(txn).unwrap();
+                                        let old_value =
+                                            prev.content.get_content_last(txn).unwrap_or_default();
                                         keys.insert(
                                             key.clone(),
                                             EntryChange::Updated(old_value, new_value),
@@ -573,7 +575,7 @@ impl Event {
                                 keys.insert(key.clone(), EntryChange::Inserted(new_value));
                             }
                         } else if txn.has_deleted(&item.id) {
-                            let old_value = item.content.get_content_last(txn).unwrap();
+                            let old_value = item.content.get_content_last(txn).unwrap_or_default();
                             keys.insert(key.clone(), EntryChange::Removed(old_value));
                         }
                     }
@@ -727,6 +729,12 @@ pub enum Value {
     YMap(Map),
     YXmlElement(XmlElement),
     YXmlText(XmlText),
+}
+
+impl Default for Value {
+    fn default() -> Self {
+        Value::Any(Any::Null)
+    }
 }
 
 impl Value {
