@@ -313,7 +313,7 @@ impl Transaction {
                     ItemContent::Type(t) => {
                         let inner = t.borrow_mut();
                         let mut ptr = inner.start;
-                        self.changed.remove(&item.parent);
+                        //TODO: self.changed.remove(&item.parent);
 
                         while let Some(item) =
                             ptr.and_then(|ptr| self.store().blocks.get_item(&ptr))
@@ -482,8 +482,8 @@ impl Transaction {
         if self.committed {
             return;
         }
-
         self.committed = true;
+
         // 1. sort and merge delete set
         let store = unsafe { &mut *self.store.get() };
         self.delete_set.squash();
