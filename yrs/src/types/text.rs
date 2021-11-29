@@ -573,6 +573,20 @@ mod test {
         );
     }
 
+    #[test]
+    fn unicode_support() {
+        let mut d = Doc::with_client_id(1);
+        let mut txn = d.transact();
+        let txt = txn.get_text("test");
+
+        txt.insert(&mut txn, 0, "😀🙄"); // emoji are a 4-byte unicode points
+        assert_eq!(txt.to_string(&txn), "😀🙄");
+        assert_eq!(txt.len(), 2);
+        txt.insert(&mut txn, 1, "🥰");
+        assert_eq!(txt.to_string(&txn), "😀🥰🙄");
+        assert_eq!(txt.len(), 3);
+    }
+
     fn text_transactions() -> [Box<dyn Fn(&mut Doc, &mut StdRng)>; 2] {
         fn insert_text(doc: &mut Doc, rng: &mut StdRng) {
             let mut txn = doc.transact();

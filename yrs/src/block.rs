@@ -1042,10 +1042,7 @@ impl ItemContent {
     pub fn len(&self) -> u32 {
         match self {
             ItemContent::Deleted(deleted) => *deleted,
-            ItemContent::String(str) => {
-                // @todo this should return the length in utf16!
-                str.len() as u32
-            }
+            ItemContent::String(str) => str.chars().count() as u32,
             ItemContent::Any(v) => v.len() as u32,
             ItemContent::JSON(v) => v.len() as u32,
             _ => 1,
@@ -1229,6 +1226,8 @@ impl ItemContent {
                 Some(ItemContent::Any(right))
             }
             ItemContent::String(string) => {
+                // compute offset given in unicode code points into byte position
+                let offset = string.char_indices().map(|(i, _)| i).nth(offset).unwrap();
                 let (left, right) = string.split_at(offset);
                 let left = left.to_string();
                 let right = right.to_string();
