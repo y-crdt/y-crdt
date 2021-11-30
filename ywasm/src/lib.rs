@@ -473,6 +473,12 @@ impl YTransaction {
         let update = Update::decode(&mut decoder);
         self.0.apply_update(update)
     }
+
+    #[wasm_bindgen(js_name = encodeUpdate)]
+    pub fn encode_update(&mut self) -> Uint8Array {
+        let diff = self.0.encode_update_v1();
+        Uint8Array::from(&diff[..diff.len()])
+    }
 }
 
 /// An event send to shared type's callbacks subscribed via `observe` methods. It's triggered once

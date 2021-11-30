@@ -2,18 +2,26 @@
 
 y-py is a Pythong binding to Yrs using Maturin, using pyo3.
 
-Reference : 
+Reference :
 https://docs.rs/crate/maturin/0.10.3
 
 
-### install maturin 
+### install maturin
 
 maturin is necessary to build y-py
 ```
 pip install maturin
 ```
 
-### Build y-py : 
+### install rust
+
+You need to install nightly Rust
+```
+rustup install nightly
+rustup override set nightly
+```
+
+### Build y-py :
 - Build and install locally as a python module : ``` maturin develop ```
 - Build the wheels and stores them in `target/wheels` : ```maturin build```
 
