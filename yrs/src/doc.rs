@@ -6,7 +6,8 @@ use crate::update::Update;
 use crate::updates::decoder::{Decode, DecoderV1};
 use crate::updates::encoder::{Encode, Encoder, EncoderV1};
 use rand::Rng;
-use std::cell::RefCell;
+use std::cell::UnsafeCell;
+use std::rc::Rc;
 
 /// A Yrs document type. Documents are most important units of collaborative resources management.
 /// All shared collections live within a scope of their corresponding documents. All updates are
@@ -41,7 +42,7 @@ use std::cell::RefCell;
 pub struct Doc {
     /// A unique client identifier, that's also a unique identifier of current document replica.
     pub client_id: u64,
-    store: RefCell<Store>,
+    store: Rc<UnsafeCell<Store>>,
 }
 
 impl Doc {
@@ -57,34 +58,34 @@ impl Doc {
     pub fn with_client_id(client_id: u64) -> Self {
         Doc {
             client_id,
-            store: RefCell::from(Store::new(client_id)),
+            store: Rc::new(UnsafeCell::new(Store::new(client_id))),
         }
     }
 
     /// Encode entire state of a current block store using ver. 1 encoding.
     /// This state can be persisted so that later the entire document will be recovered.
     /// To apply state update use [Self::apply_update] method.
-    pub fn encode_state_as_update_v1(&self, txn: &Transaction<'_>) -> Vec<u8> {
-        txn.store.encode_v1()
+    pub fn encode_state_as_update_v1(&self, txn: &Transaction) -> Vec<u8> {
+        txn.store().encode_v1()
     }
 
     /// Encode state vector of a current block store using ver. 1 encoding.
-    pub fn encode_state_vector_v1(&self, txn: &Transaction<'_>) -> Vec<u8> {
-        txn.store.blocks.get_state_vector().encode_v1()
+    pub fn encode_state_vector_v1(&self, txn: &Transaction) -> Vec<u8> {
+        txn.store().blocks.get_state_vector().encode_v1()
     }
 
     /// Encodes a difference between current block store and a remote one based on its state vector.
     /// Such update contains only blocks not observed by a remote peer together with a delete set.
     pub fn encode_delta_as_update_v1(&self, txn: &Transaction, remote_sv: &StateVector) -> Vec<u8> {
         let mut encoder = EncoderV1::new();
-        txn.store.encode_diff(remote_sv, &mut encoder);
+        txn.store().encode_diff(remote_sv, &mut encoder);
         encoder.to_vec()
     }
 
     /// Creates a transaction used for all kind of block store operations.
     /// Transaction cleanups & calling event handles happen when the transaction struct is dropped.
     pub fn transact(&self) -> Transaction {
-        Transaction::new(self.store.borrow_mut())
+        Transaction::new(self.store.clone())
     }
 
     /// Apply a document update assuming it's encoded using lib0 ver.1 data format.
@@ -98,16 +99,16 @@ impl Doc {
     /// contains compressed information about all inserted blocks observed by the current block
     /// store.
     pub fn get_state_vector(&self, tr: &Transaction) -> StateVector {
-        tr.store.blocks.get_state_vector()
+        tr.store().blocks.get_state_vector()
     }
 
     /// Subscribe callback function for incoming update events. Returns a subscription, which will
     /// unsubscribe function when dropped.
     pub fn on_update<F>(&mut self, f: F) -> Subscription<UpdateEvent>
     where
-        F: Fn(&UpdateEvent) -> () + 'static,
+        F: Fn(&Transaction, &UpdateEvent) -> () + 'static,
     {
-        let mut store = self.store.borrow_mut();
+        let mut store = unsafe { &mut *self.store.get() };
         store.update_events.subscribe(f)
     }
 }
@@ -191,7 +192,7 @@ mod test {
 
         // create an update A->B based on B's state vector
         let mut encoder = EncoderV1::new();
-        t1.store
+        t1.store()
             .encode_diff(&StateVector::decode_v1(sv.as_slice()), &mut encoder);
         let binary = encoder.to_vec();
 
@@ -213,7 +214,7 @@ mod test {
         let doc = Doc::new();
         let mut doc2 = Doc::new();
         let c = counter.clone();
-        let sub = doc2.on_update(move |e| {
+        let sub = doc2.on_update(move |txn, e| {
             for block in e.update.blocks.blocks() {
                 c.set(c.get() + block.len());
             }

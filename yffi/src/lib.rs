@@ -1,100 +1,69 @@
 use lib0::any::Any;
 use std::collections::HashMap;
-use std::ffi::{CStr, CString};
+use std::ffi::{c_void, CStr, CString};
 use std::mem::{forget, ManuallyDrop, MaybeUninit};
 use std::os::raw::{c_char, c_float, c_int, c_long, c_uchar, c_ulong};
+use std::ptr::null;
 use yrs::block::{ItemContent, Prelim};
 use yrs::types::{
-    Branch, BranchRef, TypePtr, Value, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_XML_ELEMENT,
-    TYPE_REFS_XML_TEXT,
+    Branch, BranchRef, Change, EntryChange, Event, PathSegment, TypePtr, Value, TYPE_REFS_ARRAY,
+    TYPE_REFS_MAP, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT,
 };
 use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1};
 use yrs::StateVector;
 use yrs::Update;
-use yrs::{Xml};
+use yrs::Xml;
 
 /// Flag used by `YInput` and `YOutput` to tag boolean values.
-#[no_mangle]
-#[export_name = "Y_JSON_BOOL"]
-pub static Y_JSON_BOOL: c_char = -8;
+pub const Y_JSON_BOOL: c_char = -8;
 
 /// Flag used by `YInput` and `YOutput` to tag floating point numbers.
-#[no_mangle]
-#[export_name = "Y_JSON_NUM"]
-pub static Y_JSON_NUM: c_char = -7;
+pub const Y_JSON_NUM: c_char = -7;
 
 /// Flag used by `YInput` and `YOutput` to tag 64-bit integer numbers.
-#[no_mangle]
-#[export_name = "Y_JSON_INT"]
-pub static Y_JSON_INT: c_char = -6;
+pub const Y_JSON_INT: c_char = -6;
 
 /// Flag used by `YInput` and `YOutput` to tag strings.
-#[no_mangle]
-#[export_name = "Y_JSON_STR"]
-pub static Y_JSON_STR: c_char = -5;
+pub const Y_JSON_STR: c_char = -5;
 
 /// Flag used by `YInput` and `YOutput` to tag binary content.
-#[no_mangle]
-#[export_name = "Y_JSON_BUF"]
-pub static Y_JSON_BUF: c_char = -4;
+pub const Y_JSON_BUF: c_char = -4;
 
 /// Flag used by `YInput` and `YOutput` to tag embedded JSON-like arrays of values,
 /// which themselves are `YInput` and `YOutput` instances respectively.
-#[no_mangle]
-#[export_name = "Y_JSON_ARRAY"]
-pub static Y_JSON_ARR: c_char = -3;
+pub const Y_JSON_ARR: c_char = -3;
 
 /// Flag used by `YInput` and `YOutput` to tag embedded JSON-like maps of key-value pairs,
-/// where keys are strings and values are `YInput` and `YOutput` instances respectively.
-#[no_mangle]
-#[export_name = "Y_JSON_MAP"]
-pub static Y_JSON_MAP: c_char = -2;
+/// where keys are strings and v
+pub const Y_JSON_MAP: c_char = -2;
 
 /// Flag used by `YInput` and `YOutput` to tag JSON-like null values.
-#[no_mangle]
-#[export_name = "Y_JSON_NULL"]
-pub static Y_JSON_NULL: c_char = -1;
+pub const Y_JSON_NULL: c_char = -1;
 
 /// Flag used by `YInput` and `YOutput` to tag JSON-like undefined values.
-#[no_mangle]
-#[export_name = "Y_JSON_UNDEF"]
-pub static Y_JSON_UNDEF: c_char = 0;
+pub const Y_JSON_UNDEF: c_char = 0;
 
 /// Flag used by `YInput` and `YOutput` to tag content, which is an `YArray` shared type.
-#[no_mangle]
-#[export_name = "Y_ARRAY"]
-pub static Y_ARRAY: c_char = 1;
+pub const Y_ARRAY: c_char = 1;
 
 /// Flag used by `YInput` and `YOutput` to tag content, which is an `YMap` shared type.
-#[no_mangle]
-#[export_name = "Y_MAP"]
-pub static Y_MAP: c_char = 2;
+pub const Y_MAP: c_char = 2;
 
 /// Flag used by `YInput` and `YOutput` to tag content, which is an `YText` shared type.
-#[no_mangle]
-#[export_name = "Y_TEXT"]
-pub static Y_TEXT: c_char = 3;
+pub const Y_TEXT: c_char = 3;
 
 /// Flag used by `YInput` and `YOutput` to tag content, which is an `YXmlElement` shared type.
-#[no_mangle]
-#[export_name = "Y_XML_ELEM"]
-pub static Y_XML_ELEM: c_char = 4;
+pub const Y_XML_ELEM: c_char = 4;
 
 /// Flag used by `YInput` and `YOutput` to tag content, which is an `YXmlText` shared type.
-#[no_mangle]
-#[export_name = "Y_XML_TEXT"]
-pub static Y_XML_TEXT: c_char = 5;
+pub const Y_XML_TEXT: c_char = 5;
 
 /// Flag used to mark a truthy boolean numbers.
-#[no_mangle]
-#[export_name = "Y_TRUE"]
-pub static Y_TRUE: c_char = 1;
+pub const Y_TRUE: c_char = 1;
 
 /// Flag used to mark a falsy boolean numbers.
-#[no_mangle]
-#[export_name = "Y_FALSE"]
-pub static Y_FALSE: c_char = 0;
+pub const Y_FALSE: c_char = 0;
 
 /* pub types below are used by cbindgen for c header generation */
 
@@ -109,7 +78,7 @@ pub type Doc = yrs::Doc;
 
 /// Transaction is one of the core types in Yrs. All operations that need to touch a document's
 /// contents (a.k.a. block store), need to be executed in scope of a transaction.
-pub type Transaction = yrs::Transaction<'static>;
+pub type Transaction = yrs::Transaction;
 
 /// Collection used to store key-value entries in an unordered manner. Keys are always represented
 /// as UTF-8 strings. Values can be any value type supported by Yrs: JSON-like primitives as well as
@@ -190,22 +159,26 @@ pub type XmlElement = yrs::XmlElement;
 pub type XmlText = yrs::XmlText;
 
 /// Iterator structure used by shared array data type.
-pub type ArrayIter = yrs::types::array::ArrayIter<'static, 'static>;
+pub type ArrayIter = yrs::types::array::ArrayIter<'static>;
 
 /// Iterator structure used by shared map data type. Map iterators are unordered - there's no
 /// specific order in which map entries will be returned during consecutive iterator calls.
-pub type MapIter = yrs::types::map::MapIter<'static, 'static>;
+pub type MapIter = yrs::types::map::MapIter<'static>;
 
 /// Iterator structure used by XML nodes (elements and text) to iterate over node's attributes.
 /// Attribute iterators are unordered - there's no specific order in which map entries will be
 /// returned during consecutive iterator calls.
-pub type Attributes = yrs::types::xml::Attributes<'static, 'static>;
+pub type Attributes = yrs::types::xml::Attributes<'static>;
 
 /// Iterator used to traverse over the complex nested tree structure of a XML node. XML node
 /// iterator walks only over `YXmlElement` and `YXmlText` nodes. It does so in ordered manner (using
 /// the order in which children are ordered within their parent nodes) and using **depth-first**
 /// traverse.
-pub type TreeWalker = yrs::types::xml::TreeWalker<'static, 'static>;
+pub type TreeWalker = yrs::types::xml::TreeWalker<'static>;
+
+/// Subscription handle returned by observe functions. It can be released via `yobserver_destroy`
+/// function in order to cancel subscribed callback.
+pub type Observer = yrs::types::Observer;
 
 /// A structure representing single key-value entry of a map output (used by either
 /// embedded JSON-like maps or YMaps).
@@ -812,7 +785,7 @@ pub unsafe extern "C" fn ymap_iter_next(iter: *mut MapIter) -> *mut YMapEntry {
 
     let iter = iter.as_mut().unwrap();
     if let Some((key, value)) = iter.next() {
-        Box::into_raw(Box::new(YMapEntry::new(key.as_str(), value)))
+        Box::into_raw(Box::new(YMapEntry::new(key, value)))
     } else {
         std::ptr::null_mut()
     }
@@ -1000,7 +973,7 @@ pub unsafe extern "C" fn yxmlelem_remove_attr(
     let txn = txn.as_mut().unwrap();
 
     let key = CStr::from_ptr(attr_name).to_str().unwrap();
-    xml.remove_attribute(txn, key);
+    xml.remove_attribute(txn, &key);
 }
 
 /// Returns the value of a current `YXmlElement`, given its name, or a null pointer if not attribute
@@ -2427,6 +2400,463 @@ pub unsafe extern "C" fn youtput_read_yxmltext(val: *const YOutput) -> *mut XmlT
         v.value.y_xmltext
     } else {
         std::ptr::null_mut()
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn ytext_observe(
+    txt: *const Text,
+    state: *mut c_void,
+    cb: extern "C" fn(*mut c_void, *const YEvent),
+) -> *mut Observer {
+    assert!(!txt.is_null());
+
+    let txt = txt.as_ref().unwrap();
+    let observer = txt.observe(move |txn, e| {
+        let e = YEvent::new(e, txn);
+        cb(state, &e as *const YEvent);
+    });
+    Box::into_raw(Box::new(observer)) as *mut _
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn ymap_observe(
+    map: *const Map,
+    state: *mut c_void,
+    cb: extern "C" fn(*mut c_void, *const YEvent),
+) -> *mut Observer {
+    assert!(!map.is_null());
+
+    let map = map.as_ref().unwrap();
+    let observer = map.observe(move |txn, e| {
+        let e = YEvent::new(e, txn);
+        cb(state, &e as *const YEvent);
+    });
+    Box::into_raw(Box::new(observer)) as *mut _
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yarray_observe(
+    array: *const Array,
+    state: *mut c_void,
+    cb: extern "C" fn(*mut c_void, *const YEvent),
+) -> *mut Observer {
+    assert!(!array.is_null());
+
+    let array = array.as_ref().unwrap();
+    let observer = array.observe(move |txn, e| {
+        let e = YEvent::new(e, txn);
+        cb(state, &e as *const YEvent);
+    });
+    Box::into_raw(Box::new(observer)) as *mut _
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yxmlelem_observe(
+    xml: *const XmlElement,
+    state: *mut c_void,
+    cb: extern "C" fn(*mut c_void, *const YEvent),
+) -> *mut Observer {
+    assert!(!xml.is_null());
+
+    let xml = xml.as_ref().unwrap();
+    let observer = xml.observe(move |txn, e| {
+        let e = YEvent::new(e, txn);
+        cb(state, &e as *const YEvent);
+    });
+    Box::into_raw(Box::new(observer)) as *mut _
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yxmltext_observe(
+    xml: *const XmlText,
+    state: *mut c_void,
+    cb: extern "C" fn(*mut c_void, *const YEvent),
+) -> *mut Observer {
+    assert!(!xml.is_null());
+
+    let xml = xml.as_ref().unwrap();
+    let observer = xml.observe(move |txn, e| {
+        let e = YEvent::new(e, txn);
+        cb(state, &e as *const YEvent);
+    });
+    Box::into_raw(Box::new(observer)) as *mut _
+}
+
+/// Event passed over to a callbacks subscribed via <shared_type>_observe functions. It enables
+/// tracking changes happening over different shared collection types, which can be separated into:
+///
+/// 1. `yevent_delta` function, which returns changes over a sequence component of shared types,
+/// such as `YArray`, `YText`, `YXmlText` and XML nodes added to `YXmlElement`. Data returned this
+/// way should be disposed eventually via `yevent_delta_destroy` function.
+/// 2. `yevent_keys` function, which returns changes over a map component of shared types, such as
+/// `YMap` entries and `YXmlElement`/`YXmlText` attribute changed. Data returned this way should be
+/// disposed eventually via `yevent_keys_destroy` function.
+#[repr(C)]
+pub struct YEvent {
+    inner: *const Event,
+    pub txn: *const Transaction,
+}
+
+impl YEvent {
+    fn new(inner: &Event, txn: &Transaction) -> Self {
+        let inner = inner as *const Event;
+        let txn = txn as *const Transaction;
+        YEvent { inner, txn }
+    }
+}
+
+impl YEvent {
+    unsafe fn inner(&self) -> &Event {
+        &*self.inner
+    }
+
+    unsafe fn txn(&self) -> &Transaction {
+        &*self.txn
+    }
+}
+
+/// Releases a callback subscribed via `<shared_type>_observe` function represented by passed
+/// observer parameter.
+#[no_mangle]
+pub unsafe extern "C" fn yobserver_destroy(e: *mut Observer) {
+    if !e.is_null() {
+        drop(e.read());
+    }
+}
+
+/// Returns a pointer to a shared collection, which triggered passed event `e`.
+#[no_mangle]
+pub unsafe extern "C" fn yevent_target(e: *const YEvent) -> *mut YOutput {
+    assert!(!e.is_null());
+    let out: YOutput = (&*e).inner().target().into();
+    Box::into_raw(Box::new(out)) as *mut _
+}
+
+/// Returns a path from a root type down to a current shared collection (which can be obtained using
+/// `yevent_target` function). It can consist of either integer indexes (used by sequence
+/// components) of *char keys (used by map components). `len` output parameter is used to provide
+/// information about length of the path.
+///
+/// Path returned this way should be eventually released using `yevent_path_destroy`.
+#[no_mangle]
+pub unsafe extern "C" fn yevent_path(e: *const YEvent, len: *mut c_int) -> *mut YPathSegment {
+    assert!(!e.is_null());
+    let path: Vec<_> = (&*e)
+        .inner()
+        .path((&*e).txn())
+        .into_iter()
+        .map(YPathSegment::from)
+        .collect();
+    let out = path.into_boxed_slice();
+    *len = out.len() as c_int;
+    Box::into_raw(out) as *mut _
+}
+
+/// Releases allocated memory used by objects returned from `yevent_path` function.
+#[no_mangle]
+pub unsafe extern "C" fn yevent_path_destroy(path: *mut YPathSegment, len: c_int) {
+    if !path.is_null() {
+        drop(Vec::from_raw_parts(path, len as usize, len as usize));
+    }
+}
+
+/// Returns a sequence of changes produced by sequence component of shared collections (such as
+/// `YText`, `YXmlText` and XML nodes added to `YXmlElement`). `len` output parameter is used to
+/// provide information about number of changes produced.
+///
+/// Delta returned from this function should eventually be released using `yevent_delta_destroy`
+/// function.
+#[no_mangle]
+pub unsafe extern "C" fn yevent_delta(e: *const YEvent, len: *mut c_int) -> *mut YEventChange {
+    assert!(!e.is_null());
+    let delta: Vec<_> = (&*e)
+        .inner()
+        .delta((&*e).txn())
+        .into_iter()
+        .map(YEventChange::from)
+        .collect();
+
+    let out = delta.into_boxed_slice();
+    *len = out.len() as c_int;
+    Box::into_raw(out) as *mut _
+}
+
+/// Releases memory allocated by the object returned from `yevent_delta` function.
+#[no_mangle]
+pub unsafe extern "C" fn yevent_delta_destroy(delta: *mut YEventChange, len: c_int) {
+    if !delta.is_null() {
+        let delta = Vec::from_raw_parts(delta, len as usize, len as usize);
+        drop(delta);
+    }
+}
+
+/// Returns a sequence of changes produced by map component of shared collections (such as
+/// `YMap` and `YXmlText`/`YXmlElement` attribute changes). `len` output parameter is used to
+/// provide information about number of changes produced.
+///
+/// Delta returned from this function should eventually be released using `yevent_keys_destroy`
+/// function.
+#[no_mangle]
+pub unsafe extern "C" fn yevent_keys(e: *const YEvent, len: *mut c_int) -> *mut YEventKeyChange {
+    assert!(!e.is_null());
+    let delta: Vec<_> = (&*e)
+        .inner()
+        .keys((&*e).txn())
+        .into_iter()
+        .map(|(k, v)| YEventKeyChange::new(k.as_ref(), v))
+        .collect();
+
+    let out = delta.into_boxed_slice();
+    *len = out.len() as c_int;
+    Box::into_raw(out) as *mut _
+}
+
+/// Releases memory allocated by the object returned from `yevent_keys` function.
+#[no_mangle]
+pub unsafe extern "C" fn yevent_keys_destroy(keys: *mut YEventKeyChange, len: c_int) {
+    if !keys.is_null() {
+        drop(Vec::from_raw_parts(keys, len as usize, len as usize));
+    }
+}
+
+/// Tag used to identify `YPathSegment` storing a *char parameter.
+pub const Y_EVENT_PATH_KEY: c_char = 1;
+
+/// Tag used to identify `YPathSegment` storing an int parameter.
+pub const Y_EVENT_PATH_INDEX: c_char = 2;
+
+/// A single segment of a path returned from `yevent_path` function. It can be one of two cases,
+/// recognized by it's `tag` field:
+///
+/// 1. `Y_EVENT_PATH_KEY` means that segment value can be accessed by `segment.value.key` and is
+/// referring to a string key used by map component (eg. `YMap` entry).
+/// 2. `Y_EVENT_PATH_INDEX` means that segment value can be accessed by `segment.value.index` and is
+/// referring to an int index used by sequence component (eg. `YArray` item or `YXmlElement` child).
+#[repr(C)]
+pub struct YPathSegment {
+    /// Tag used to identify which case current segment is referring to:
+    ///
+    /// 1. `Y_EVENT_PATH_KEY` means that segment value can be accessed by `segment.value.key` and is
+    /// referring to a string key used by map component (eg. `YMap` entry).
+    /// 2. `Y_EVENT_PATH_INDEX` means that segment value can be accessed by `segment.value.index`
+    /// and is referring to an int index used by sequence component (eg. `YArray` item or
+    /// `YXmlElement` child).
+    pub tag: c_char,
+
+    /// Union field containing either `key` or `index`. A particular case can be recognized by using
+    /// segment's `tag` field.
+    pub value: YPathSegmentCase,
+}
+
+impl From<PathSegment> for YPathSegment {
+    fn from(ps: PathSegment) -> Self {
+        match ps {
+            PathSegment::Key(key) => {
+                let key = CString::new(key.as_ref()).unwrap().into_raw() as *const _;
+                YPathSegment {
+                    tag: Y_EVENT_PATH_KEY,
+                    value: YPathSegmentCase { key },
+                }
+            }
+            PathSegment::Index(index) => YPathSegment {
+                tag: Y_EVENT_PATH_INDEX,
+                value: YPathSegmentCase {
+                    index: index as c_int,
+                },
+            },
+        }
+    }
+}
+
+impl Drop for YPathSegment {
+    fn drop(&mut self) {
+        if self.tag == Y_EVENT_PATH_KEY {
+            unsafe {
+                ystring_destroy(self.value.key as *mut _);
+            }
+        }
+    }
+}
+
+#[repr(C)]
+pub union YPathSegmentCase {
+    pub key: *const c_char,
+    pub index: c_int,
+}
+
+/// Tag used to identify `YEventChange` (see: `yevent_delta` function) case, when a new element
+/// has been added to an observed collection.
+pub const Y_EVENT_CHANGE_ADD: c_char = 1;
+
+/// Tag used to identify `YEventChange` (see: `yevent_delta` function) case, when an existing
+/// element has been removed from an observed collection.
+pub const Y_EVENT_CHANGE_DELETE: c_char = 2;
+
+/// Tag used to identify `YEventChange` (see: `yevent_delta` function) case, when no changes have
+/// been detected for a particular range of observed collection.
+pub const Y_EVENT_CHANGE_RETAIN: c_char = 3;
+
+/// A data type representing a single change detected over an observed shared collection. A type
+/// of change can be detected using a `tag` field:
+///
+/// 1. `Y_EVENT_CHANGE_ADD` marks a new elements added to a collection. In this case `values` field
+/// contains a pointer to a list of newly inserted values, while `len` field informs about their
+/// count.
+/// 2. `Y_EVENT_CHANGE_DELETE` marks an existing elements removed from the collection. In this case
+/// `len` field informs about number of removed elements.
+/// 3. `Y_EVENT_CHANGE_RETAIN` marks a number of elements that have not been changed, counted from
+/// the previous element. `len` field informs about number of retained elements.
+///
+/// A list of changes returned by `yevent_delta` enables to locate a position of all changes within
+/// an observed collection by using a combination of added/deleted change structs separated by
+/// retained changes (marking eg. number of elements that can be safely skipped, since they
+/// remained unchanged).
+#[repr(C)]
+pub struct YEventChange {
+    /// Tag field used to identify particular type of change made:
+    ///
+    /// 1. `Y_EVENT_CHANGE_ADD` marks a new elements added to a collection. In this case `values`
+    /// field contains a pointer to a list of newly inserted values, while `len` field informs about
+    /// their count.
+    /// 2. `Y_EVENT_CHANGE_DELETE` marks an existing elements removed from the collection. In this
+    /// case `len` field informs about number of removed elements.
+    /// 3. `Y_EVENT_CHANGE_RETAIN` marks a number of elements that have not been changed, counted
+    /// from the previous element. `len` field informs about number of retained elements.
+    pub tag: c_char,
+
+    /// Number of element affected by current type of a change. It can refer to a number of
+    /// inserted `values`, number of deleted element or a number of retained (unchanged) values.  
+    pub len: c_int,
+
+    /// Used in case when current change is of `Y_EVENT_CHANGE_ADD` type. Contains a list (of
+    /// length stored in `len` field) of newly inserted values.
+    pub values: *const YOutput,
+}
+
+impl<'a> From<&'a Change> for YEventChange {
+    fn from(change: &'a Change) -> Self {
+        match change {
+            Change::Added(values) => {
+                let out: Vec<_> = values
+                    .into_iter()
+                    .map(|v| YOutput::from(v.clone()))
+                    .collect();
+                let len = out.len() as c_int;
+                let out = out.into_boxed_slice();
+                let values = Box::into_raw(out) as *mut _;
+
+                YEventChange {
+                    tag: Y_EVENT_CHANGE_ADD,
+                    len,
+                    values,
+                }
+            }
+            Change::Removed(len) => YEventChange {
+                tag: Y_EVENT_CHANGE_DELETE,
+                len: *len as c_int,
+                values: null(),
+            },
+            Change::Retain(len) => YEventChange {
+                tag: Y_EVENT_CHANGE_RETAIN,
+                len: *len as c_int,
+                values: null(),
+            },
+        }
+    }
+}
+
+impl Drop for YEventChange {
+    fn drop(&mut self) {
+        if self.tag == Y_EVENT_CHANGE_ADD {
+            unsafe {
+                let len = self.len as usize;
+                let values = Vec::from_raw_parts(self.values as *mut YOutput, len, len);
+                drop(values);
+            }
+        }
+    }
+}
+
+/// Tag used to identify `YEventKeyChange` (see: `yevent_keys` function) case, when a new entry has
+/// been inserted into a map component of shared collection.
+pub const Y_EVENT_KEY_CHANGE_ADD: c_char = 4;
+
+/// Tag used to identify `YEventKeyChange` (see: `yevent_keys` function) case, when an existing
+/// entry has been removed from a map component of shared collection.
+pub const Y_EVENT_KEY_CHANGE_DELETE: c_char = 5;
+
+/// Tag used to identify `YEventKeyChange` (see: `yevent_keys` function) case, when an existing
+/// entry has been overridden with a new value within a map component of shared collection.
+pub const Y_EVENT_KEY_CHANGE_UPDATE: c_char = 6;
+
+/// A data type representing a single change made over a map component of shared collection types,
+/// such as `YMap` entries or `YXmlText`/`YXmlElement` attributes. A `key` field provides a
+/// corresponding unique key string of a changed entry, while `tag` field informs about specific
+/// type of change being done:
+///
+/// 1. `Y_EVENT_KEY_CHANGE_ADD` used to identify a newly added entry. In this case an `old_value`
+/// field is NULL, while `new_value` field contains an inserted value.
+/// 1. `Y_EVENT_KEY_CHANGE_DELETE` used to identify an existing entry being removed. In this case
+/// an `old_value` field contains the removed value.
+/// 1. `Y_EVENT_KEY_CHANGE_UPDATE` used to identify an existing entry, which value has been changed.
+/// In this case `old_value` field contains replaced value, while `new_value` contains a newly
+/// inserted one.
+#[repr(C)]
+pub struct YEventKeyChange {
+    /// A UTF8-encoded null-terminated string containing a key of a changed entry.
+    pub key: *const c_char,
+    /// Tag field informing about type of change current struct refers to:
+    ///
+    /// 1. `Y_EVENT_KEY_CHANGE_ADD` used to identify a newly added entry. In this case an
+    /// `old_value` field is NULL, while `new_value` field contains an inserted value.
+    /// 1. `Y_EVENT_KEY_CHANGE_DELETE` used to identify an existing entry being removed. In this
+    /// case an `old_value` field contains the removed value.
+    /// 1. `Y_EVENT_KEY_CHANGE_UPDATE` used to identify an existing entry, which value has been
+    /// changed. In this case `old_value` field contains replaced value, while `new_value` contains
+    /// a newly inserted one.
+    pub tag: c_char,
+
+    /// Contains a removed entry's value or replaced value of an updated entry.
+    pub old_value: *const YOutput,
+
+    /// Contains a value of newly inserted entry or an updated entry's new value.
+    pub new_value: *const YOutput,
+}
+
+impl YEventKeyChange {
+    fn new(key: &str, change: &EntryChange) -> Self {
+        let key = CString::new(key).unwrap().into_raw() as *const _;
+        match change {
+            EntryChange::Inserted(new) => YEventKeyChange {
+                key,
+                tag: Y_EVENT_KEY_CHANGE_ADD,
+                old_value: null(),
+                new_value: Box::into_raw(Box::new(YOutput::from(new.clone()))),
+            },
+            EntryChange::Updated(old, new) => YEventKeyChange {
+                key,
+                tag: Y_EVENT_KEY_CHANGE_UPDATE,
+                old_value: Box::into_raw(Box::new(YOutput::from(old.clone()))),
+                new_value: Box::into_raw(Box::new(YOutput::from(new.clone()))),
+            },
+            EntryChange::Removed(old) => YEventKeyChange {
+                key,
+                tag: Y_EVENT_KEY_CHANGE_DELETE,
+                old_value: Box::into_raw(Box::new(YOutput::from(old.clone()))),
+                new_value: null(),
+            },
+        }
+    }
+}
+
+impl Drop for YEventKeyChange {
+    fn drop(&mut self) {
+        unsafe {
+            ystring_destroy(self.key as *mut _);
+            youtput_destroy(self.old_value as *mut _);
+            youtput_destroy(self.new_value as *mut _);
+        }
     }
 }
 

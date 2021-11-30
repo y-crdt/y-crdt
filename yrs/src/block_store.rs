@@ -9,6 +9,7 @@ use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::hash::BuildHasherDefault;
 use std::ops::Index;
+use std::rc::Rc;
 use std::vec::Vec;
 
 /// State vector is a compact representation of all known blocks inserted and integrated into
@@ -354,7 +355,7 @@ impl ClientBlockList {
 #[derive(Debug)]
 pub(crate) struct SquashResult {
     pub parent: TypePtr,
-    pub parent_sub: Option<String>,
+    pub parent_sub: Option<Rc<str>>,
     /// Pointer to a block that resulted from compaction of two adjacent blocks.
     pub replacement: BlockPtr,
     /// Pointer to a neighbor, that's now on the right side of the `replacement` block.

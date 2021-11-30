@@ -1,6 +1,6 @@
 use crate::block::{BlockPtr, ItemContent};
 use crate::transaction::Transaction;
-use crate::types::{Branch, BranchRef};
+use crate::types::{Branch, BranchRef, Event, Observer};
 use crate::*;
 use std::cell::Ref;
 
@@ -23,12 +23,13 @@ pub struct Text(BranchRef);
 impl Text {
     /// Converts context of this text data structure into a single string value.
     #[allow(clippy::inherent_to_string)]
-    pub fn to_string(&self, txn: &Transaction<'_>) -> String {
+    pub fn to_string(&self, txn: &Transaction) -> String {
         let inner = self.0.as_ref();
         let mut start = inner.start;
         let mut s = String::new();
+        let store = txn.store();
         while let Some(a) = start.as_ref() {
-            if let Some(item) = txn.store.blocks.get_item(&a) {
+            if let Some(item) = store.blocks.get_item(&a) {
                 if !item.is_deleted() {
                     if let block::ItemContent::String(item_string) = &item.content {
                         s.push_str(item_string);
@@ -53,7 +54,7 @@ impl Text {
 
     pub(crate) fn find_position(
         &self,
-        txn: &mut Transaction<'_>,
+        txn: &mut Transaction,
         mut count: u32,
     ) -> Option<block::ItemPosition> {
         let mut pos = {
@@ -66,12 +67,13 @@ impl Text {
             }
         };
 
+        let store = txn.store_mut();
         while let Some(right_ptr) = pos.right.as_ref() {
             if count == 0 {
                 break;
             }
 
-            if let Some(mut right) = txn.store.blocks.get_item(right_ptr) {
+            if let Some(mut right) = store.blocks.get_item(right_ptr) {
                 if !right.is_deleted() {
                     let mut right_len = right.len();
                     if count < right_len {
@@ -80,8 +82,8 @@ impl Text {
                             ID::new(right.id.client, right.id.clock + count),
                             right_ptr.pivot() as u32,
                         );
-                        let (_, _) = txn.store.blocks.split_block(&split_ptr);
-                        right = txn.store.blocks.get_item(right_ptr).unwrap();
+                        let (_, _) = store.blocks.split_block(&split_ptr);
+                        right = store.blocks.get_item(right_ptr).unwrap();
                         right_len = right.len();
                     }
                     pos.index += right_len;
@@ -126,6 +128,22 @@ impl Text {
             panic!("Couldn't remove {} elements from an array. Only {} of them were successfully removed.", len, removed);
         }
     }
+
+    /// Subscribes a given callback to be triggered whenever current text is changed.
+    /// A callback is triggered whenever a transaction gets committed. This function does not
+    /// trigger if changes have been observed by nested shared collections.
+    ///
+    /// All text changes can be tracked by using [Event::delta] method: keep in mind that delta
+    /// contains collection of individual characters rather than strings.
+    ///
+    /// Returns an [Observer] which, when dropped, will unsubscribe current callback.
+    pub fn observe<F>(&self, f: F) -> Observer
+    where
+        F: Fn(&Transaction, &Event) -> () + 'static,
+    {
+        let mut branch = self.0.borrow_mut();
+        branch.observe(f)
+    }
 }
 
 impl Into<ItemContent> for Text {
@@ -143,9 +161,14 @@ impl From<BranchRef> for Text {
 #[cfg(test)]
 mod test {
     use crate::test_utils::{run_scenario, RngExt};
-    use crate::Doc;
+    use crate::types::Change;
+    use crate::updates::decoder::Decode;
+    use crate::updates::encoder::{Encoder, EncoderV1};
+    use crate::{Doc, Update};
+    use lib0::any::Any;
     use rand::prelude::StdRng;
-    use rand::Rng;
+    use std::cell::RefCell;
+    use std::rc::Rc;
 
     #[test]
     fn append_single_character_blocks() {
@@ -462,6 +485,106 @@ mod test {
 
         assert_eq!(a, b);
         assert_eq!(a, "H beautifuld!".to_owned());
+    }
+
+    #[test]
+    fn insert_and_remove_event_changes() {
+        let d1 = Doc::with_client_id(1);
+        let txt = {
+            let mut txn = d1.transact();
+            txn.get_text("text")
+        };
+        let mut delta = Rc::new(RefCell::new(None));
+        let delta_c = delta.clone();
+        let _sub = txt.observe(move |txn, e| {
+            delta_c.borrow_mut().insert(e.delta(txn).to_vec());
+        });
+
+        // insert initial string
+        {
+            let mut txn = d1.transact();
+            txt.insert(&mut txn, 0, "abcd");
+        }
+        assert_eq!(
+            delta.borrow_mut().take(),
+            Some(vec![Change::Added(vec![
+                Any::String("a".to_string()).into(),
+                Any::String("b".to_string()).into(),
+                Any::String("c".to_string()).into(),
+                Any::String("d".to_string()).into()
+            ])])
+        );
+
+        // remove middle
+        {
+            let mut txn = d1.transact();
+            txt.remove_range(&mut txn, 1, 2);
+        }
+        assert_eq!(
+            delta.borrow_mut().take(),
+            Some(vec![Change::Retain(1), Change::Removed(2)])
+        );
+
+        // insert again
+        {
+            let mut txn = d1.transact();
+            txt.insert(&mut txn, 1, "ef");
+        }
+        assert_eq!(
+            delta.borrow_mut().take(),
+            Some(vec![
+                Change::Retain(1),
+                Change::Added(vec![
+                    Any::String("e".to_string()).into(),
+                    Any::String("f".to_string()).into()
+                ])
+            ])
+        );
+
+        // replicate data to another peer
+        let d2 = Doc::with_client_id(2);
+        let txt = {
+            let mut txn = d2.transact();
+            txn.get_text("text")
+        };
+        let delta_c = delta.clone();
+        let _sub = txt.observe(move |txn, e| {
+            delta_c.borrow_mut().insert(e.delta(txn).to_vec());
+        });
+
+        {
+            let t1 = d1.transact();
+            let mut t2 = d2.transact();
+
+            let sv = t2.state_vector();
+            let mut encoder = EncoderV1::new();
+            t1.encode_diff(&sv, &mut encoder);
+            t2.apply_update(Update::decode_v1(encoder.to_vec().as_slice()));
+        }
+
+        assert_eq!(
+            delta.borrow_mut().take(),
+            Some(vec![Change::Added(vec![
+                Any::String("a".to_string()).into(),
+                Any::String("e".to_string()).into(),
+                Any::String("f".to_string()).into(),
+                Any::String("d".to_string()).into()
+            ])])
+        );
+    }
+
+    #[test]
+    fn unicode_support() {
+        let mut d = Doc::with_client_id(1);
+        let mut txn = d.transact();
+        let txt = txn.get_text("test");
+
+        txt.insert(&mut txn, 0, "😀🙄"); // emoji are a 4-byte unicode points
+        assert_eq!(txt.to_string(&txn), "😀🙄");
+        assert_eq!(txt.len(), 2);
+        txt.insert(&mut txn, 1, "🥰");
+        assert_eq!(txt.to_string(&txn), "😀🥰🙄");
+        assert_eq!(txt.len(), 3);
     }
 
     fn text_transactions() -> [Box<dyn Fn(&mut Doc, &mut StdRng)>; 2] {

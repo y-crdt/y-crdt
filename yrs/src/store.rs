@@ -1,13 +1,14 @@
-use crate::block::ItemContent;
+use crate::block::{Block, BlockPtr, ItemContent};
 use crate::block_store::{BlockStore, SquashResult, StateVector};
 use crate::event::{EventHandler, UpdateEvent};
 use crate::id_set::DeleteSet;
-use crate::types;
-use crate::types::{BranchRef, TypePtr, TypeRefs, TYPE_REFS_UNDEFINED};
+use crate::types::{BranchRef, Path, PathSegment, TypePtr, TypeRefs, TYPE_REFS_UNDEFINED};
 use crate::update::PendingUpdate;
 use crate::updates::encoder::{Encode, Encoder};
+use crate::{types, ID};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::ops::Range;
 use std::rc::Rc;
 
 /// Store is a core element of a document. It contains all of the information, like block store
@@ -20,7 +21,7 @@ pub(crate) struct Store {
     /// Root types (a.k.a. top-level types). These types are defined by users at the document level,
     /// they have their own unique names and represent core shared types that expose operations
     /// which can be called concurrently by remote peers in a conflict-free manner.
-    pub types: HashMap<Rc<String>, BranchRef>,
+    pub types: HashMap<Rc<str>, BranchRef>,
 
     /// A block store of a current document. It represent all blocks (inserted or tombstoned
     /// operations) integrated - and therefore visible - into a current document.
@@ -113,13 +114,13 @@ impl Store {
         node_name: Option<String>,
         type_ref: TypeRefs,
     ) -> BranchRef {
-        let rc = Rc::new(name.to_owned());
+        let rc: Rc<str> = name.into();
         self.init_type_ref(rc.clone(), node_name, type_ref)
     }
 
     pub(crate) fn init_type_ref(
         &mut self,
-        name: Rc<String>,
+        name: Rc<str>,
         node_name: Option<String>,
         type_ref: TypeRefs,
     ) -> BranchRef {
@@ -130,6 +131,52 @@ impl Store {
             BranchRef::new(inner)
         });
         value.clone()
+    }
+
+    pub(crate) fn find_index_clean_start(&mut self, client: &u64, clock: u32) -> Option<usize> {
+        let blocks = self.blocks.get_mut(client)?;
+        let index = blocks.find_pivot(clock)?;
+        let block = blocks.get_mut(index);
+        if let Some(item) = block.as_item_mut() {
+            if item.id.clock < clock {
+                // if we run over the clock, we need to the split item
+                let id = ID::new(*client, clock - item.id.clock);
+                self.blocks.split_block(&BlockPtr::new(id, index as u32));
+                return Some(index + 1);
+            }
+        }
+
+        Some(index)
+    }
+
+    pub(crate) fn iterate_structs<F>(&mut self, client: &u64, range: &Range<u32>, f: &F)
+    where
+        F: Fn(&Block) -> (),
+    {
+        let clock_start = range.start;
+        let clock_end = range.end;
+
+        if clock_start == clock_end {
+            return;
+        }
+
+        if let Some(mut index) = self.find_index_clean_start(client, clock_start) {
+            let mut blocks = self.blocks.get(client).unwrap();
+            let mut block = &blocks[index];
+
+            while index < blocks.len() && block.id().clock < clock_end {
+                if clock_end < block.clock_end() {
+                    self.find_index_clean_start(client, clock_start);
+                    blocks = self.blocks.get(client).unwrap();
+                    block = &blocks[index];
+                }
+
+                f(block);
+                index += 1;
+
+                block = &blocks[index];
+            }
+        }
     }
 
     /// Compute a diff to sync with another client.
@@ -196,7 +243,7 @@ impl Store {
         if let Some(parent_sub) = compaction.parent_sub {
             if let Some(parent) = self.get_type(&compaction.parent) {
                 let mut inner = parent.borrow_mut();
-                match inner.map.entry(parent_sub) {
+                match inner.map.entry(parent_sub.clone()) {
                     Entry::Occupied(e) => {
                         let cell = e.into_mut();
                         if cell.id == compaction.old_right {
@@ -216,7 +263,7 @@ impl Store {
         }
     }
 
-    pub(crate) fn get_root_type_key(&self, value: &BranchRef) -> Option<&Rc<String>> {
+    pub(crate) fn get_root_type_key(&self, value: &BranchRef) -> Option<&Rc<str>> {
         for (k, v) in self.types.iter() {
             if v == value {
                 return Some(k);
@@ -224,6 +271,39 @@ impl Store {
         }
 
         None
+    }
+
+    pub fn get_type_from_path(&self, path: &Path) -> Option<&BranchRef> {
+        let mut i = path.iter();
+        if let Some(PathSegment::Key(root_name)) = i.next() {
+            let mut current = self.get_type(&TypePtr::Named(root_name.clone()))?;
+            while let Some(segment) = i.next() {
+                let branch_ref = current.borrow();
+                match segment {
+                    PathSegment::Key(key) => {
+                        let child_ptr = branch_ref.map.get(key)?;
+                        let child = self.blocks.get_item(child_ptr)?;
+                        if let ItemContent::Type(child_branch) = &child.content {
+                            current = child_branch;
+                        } else {
+                            return None;
+                        }
+                    }
+                    PathSegment::Index(index) => {
+                        if let Some((ItemContent::Type(child_branch), _)) =
+                            branch_ref.get_at(&self.blocks, *index)
+                        {
+                            current = child_branch;
+                        } else {
+                            return None;
+                        }
+                    }
+                }
+            }
+            Some(current)
+        } else {
+            None
+        }
     }
 }
 
@@ -247,7 +327,7 @@ impl std::fmt::Display for Store {
         if !self.types.is_empty() {
             writeln!(f, "\ttypes: {{")?;
             for (k, v) in self.types.iter() {
-                writeln!(f, "\t\t'{}': {}", k.as_str(), *v.borrow())?;
+                writeln!(f, "\t\t'{}': {}", k.as_ref(), *v.borrow())?;
             }
 
             writeln!(f, "\t}}")?;

@@ -12,16 +12,16 @@ use crate::types::{
     TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT,
 };
 use crate::update::Update;
-use std::cell::RefMut;
+use std::cell::UnsafeCell;
 use std::collections::{HashMap, HashSet};
-use std::ops::Range;
+use std::rc::Rc;
 use updates::encoder::*;
 
 /// Transaction is one of the core types in Yrs. All operations that need to touch a document's
 /// contents (a.k.a. block store), need to be executed in scope of a transaction.
-pub struct Transaction<'a> {
+pub struct Transaction {
     /// Store containing the state of the document.
-    pub(crate) store: RefMut<'a, Store>,
+    store: Rc<UnsafeCell<Store>>,
     /// State vector of a current transaction at the moment of its creation.
     pub before_state: StateVector,
     /// Current state vector of a transaction, which includes all performed updates.
@@ -32,31 +32,41 @@ pub struct Transaction<'a> {
     pub delete_set: DeleteSet,
     /// All types that were directly modified (property added or child inserted/deleted).
     /// New types are not included in this Set.
-    changed: HashMap<TypePtr, HashSet<Option<String>>>,
+    changed: HashMap<TypePtr, HashSet<Option<Rc<str>>>>,
+    committed: bool,
 }
 
-impl<'a> Transaction<'a> {
-    pub(crate) fn new(store: RefMut<'a, Store>) -> Transaction {
-        let begin_timestamp = store.blocks.get_state_vector();
+impl Transaction {
+    pub(crate) fn new(store: Rc<UnsafeCell<Store>>) -> Transaction {
+        let begin_timestamp = unsafe { (&*store.get()).blocks.get_state_vector() };
         Transaction {
             store,
             before_state: begin_timestamp,
             merge_blocks: Vec::new(),
             delete_set: DeleteSet::new(),
-            changed: HashMap::new(),
             after_state: StateVector::default(),
+            changed: HashMap::new(),
+            committed: false,
         }
+    }
+
+    pub(crate) fn store(&self) -> &Store {
+        unsafe { self.store.get().as_ref().unwrap() }
+    }
+
+    pub(crate) fn store_mut(&mut self) -> &mut Store {
+        unsafe { self.store.get().as_mut().unwrap() }
     }
 
     /// Returns state vector describing current state of the updates.
     pub fn state_vector(&self) -> StateVector {
-        self.store.blocks.get_state_vector()
+        self.store().blocks.get_state_vector()
     }
 
     /// Encodes the difference between remove peer state given its `state_vector` and the state
     /// of a current local peer
     pub fn encode_diff<E: Encoder>(&self, state_vector: &StateVector, encoder: &mut E) {
-        self.store.encode_diff(state_vector, encoder)
+        self.store().encode_diff(state_vector, encoder)
     }
 
     /// Returns a [Text] data structure stored under a given `name`. Text structures are used for
@@ -70,7 +80,7 @@ impl<'a> Transaction<'a> {
     /// reinterpreted as a text (in such case a sequence component of complex data type will be
     /// interpreted as a list of text chunks).
     pub fn get_text(&mut self, name: &str) -> Text {
-        let c = self.store.create_type(name, None, TYPE_REFS_TEXT);
+        let c = self.store_mut().create_type(name, None, TYPE_REFS_TEXT);
         Text::from(c)
     }
 
@@ -86,7 +96,7 @@ impl<'a> Transaction<'a> {
     /// reinterpreted as a map (in such case a map component of complex data type will be
     /// interpreted as native map).
     pub fn get_map(&mut self, name: &str) -> Map {
-        let c = self.store.create_type(name, None, TYPE_REFS_MAP);
+        let c = self.store_mut().create_type(name, None, TYPE_REFS_MAP);
         Map::from(c)
     }
 
@@ -101,7 +111,7 @@ impl<'a> Transaction<'a> {
     /// reinterpreted as an array (in such case a sequence component of complex data type will be
     /// interpreted as a list of inserted values).
     pub fn get_array(&mut self, name: &str) -> Array {
-        let c = self.store.create_type(name, None, TYPE_REFS_ARRAY);
+        let c = self.store_mut().create_type(name, None, TYPE_REFS_ARRAY);
         Array::from(c)
     }
 
@@ -118,9 +128,11 @@ impl<'a> Transaction<'a> {
     /// interpreted as map of its attributes, while a sequence component - as a list of its child
     /// XML nodes).
     pub fn get_xml_element(&mut self, name: &str) -> XmlElement {
-        let c = self
-            .store
-            .create_type(name, Some("UNDEFINED".to_string()), TYPE_REFS_XML_ELEMENT);
+        let c = self.store_mut().create_type(
+            name,
+            Some("UNDEFINED".to_string()),
+            TYPE_REFS_XML_ELEMENT,
+        );
         XmlElement::from(c)
     }
 
@@ -135,7 +147,7 @@ impl<'a> Transaction<'a> {
     /// reinterpreted as a text (in such case a sequence component of complex data type will be
     /// interpreted as a list of text chunks).
     pub fn get_xml_text(&mut self, name: &str) -> XmlText {
-        let c = self.store.create_type(name, None, TYPE_REFS_XML_TEXT);
+        let c = self.store_mut().create_type(name, None, TYPE_REFS_XML_TEXT);
         XmlText::from(c)
     }
 
@@ -149,57 +161,9 @@ impl<'a> Transaction<'a> {
     ///   is extracted and integrated into the document structure.
     pub fn encode_update_v1(&self) -> Vec<u8> {
         let mut update_encoder = updates::encoder::EncoderV1::new();
-        self.store
+        self.store()
             .encode_diff(&self.before_state, &mut update_encoder);
         update_encoder.to_vec()
-    }
-
-    pub(crate) fn iterate_structs<F>(&mut self, client: &u64, range: &Range<u32>, f: &F)
-    where
-        F: Fn(&Block) -> (),
-    {
-        let clock_start = range.start;
-        let clock_end = range.end;
-
-        if clock_start == clock_end {
-            return;
-        }
-
-        if let Some(mut index) = self.find_index_clean_start(client, clock_start) {
-            let mut blocks = self.store.blocks.get(client).unwrap();
-            let mut block = &blocks[index];
-
-            while index < blocks.len() && block.id().clock < clock_end {
-                if clock_end < block.clock_end() {
-                    self.find_index_clean_start(client, clock_start);
-                    blocks = self.store.blocks.get(client).unwrap();
-                    block = &blocks[index];
-                }
-
-                f(block);
-                index += 1;
-
-                block = &blocks[index];
-            }
-        }
-    }
-
-    pub(crate) fn find_index_clean_start(&mut self, client: &u64, clock: u32) -> Option<usize> {
-        let blocks = self.store.blocks.get_mut(client)?;
-        let index = blocks.find_pivot(clock)?;
-        let block = blocks.get_mut(index);
-        if let Some(item) = block.as_item_mut() {
-            if item.id.clock < clock {
-                // if we run over the clock, we need to the split item
-                let id = ID::new(*client, clock - item.id.clock);
-                self.store
-                    .blocks
-                    .split_block(&BlockPtr::new(id, index as u32));
-                return Some(index + 1);
-            }
-        }
-
-        Some(index)
     }
 
     pub(crate) fn apply_ranges<F>(&mut self, set: &IdSet, f: &F)
@@ -207,10 +171,11 @@ impl<'a> Transaction<'a> {
         F: Fn(&Block) -> (),
     {
         // equivalent of JS: Y.iterateDeletedStructs
+        let store = self.store_mut();
         for (client, ranges) in set.iter() {
-            if self.store.blocks.contains_client(client) {
+            if store.blocks.contains_client(client) {
                 for range in ranges.iter() {
-                    self.iterate_structs(client, range, f);
+                    store.iterate_structs(client, range, f);
                 }
             }
         }
@@ -221,7 +186,7 @@ impl<'a> Transaction<'a> {
     pub(crate) fn apply_delete(&mut self, ds: &DeleteSet) -> Option<DeleteSet> {
         let mut unapplied = DeleteSet::new();
         for (client, ranges) in ds.iter() {
-            let mut blocks = self.store.blocks.get_mut(client).unwrap();
+            let mut blocks = self.store_mut().blocks.get_mut(client).unwrap();
             let state = blocks.get_state();
 
             for range in ranges.iter() {
@@ -238,14 +203,16 @@ impl<'a> Transaction<'a> {
                         if let Some(item) = blocks.get_mut(index).as_item_mut() {
                             // split the first item if necessary
                             if !item.is_deleted() && item.id.clock < clock {
-                                let split_ptr =
-                                    BlockPtr::new(ID::new(*client, clock), index as u32);
-                                let (_, right) = self.store.blocks.split_block(&split_ptr);
+                                let split_ptr = BlockPtr::new(
+                                    ID::new(*client, clock - item.id.clock),
+                                    index as u32,
+                                );
+                                let (_, right) = self.store_mut().blocks.split_block(&split_ptr);
                                 if let Some(right) = right {
                                     index += 1;
                                     self.merge_blocks.push(right.id);
                                 }
-                                blocks = self.store.blocks.get_mut(client).unwrap();
+                                blocks = self.store_mut().blocks.get_mut(client).unwrap();
                             }
 
                             while index < blocks.len() {
@@ -260,14 +227,15 @@ impl<'a> Transaction<'a> {
                                                 let mut split_ptr = delete_ptr.clone();
                                                 split_ptr.id.clock += diff;
                                                 let (_, right) =
-                                                    self.store.blocks.split_block(&split_ptr);
+                                                    self.store_mut().blocks.split_block(&split_ptr);
                                                 if let Some(right) = right {
                                                     self.merge_blocks.push(right.id);
                                                     index += 1;
                                                 }
                                             }
                                             self.delete(&delete_ptr);
-                                            blocks = self.store.blocks.get_mut(client).unwrap();
+                                            blocks =
+                                                self.store_mut().blocks.get_mut(client).unwrap();
                                             // just to make the borrow checker happy
                                         }
                                     } else {
@@ -297,10 +265,11 @@ impl<'a> Transaction<'a> {
         let mut recurse = Vec::new();
         let mut result = false;
 
-        if let Some(item) = self.store.blocks.get_item_mut(&ptr) {
+        let store = unsafe { &mut *self.store.get() };
+        if let Some(item) = store.blocks.get_item_mut(&ptr) {
             if !item.is_deleted() {
                 if item.parent_sub.is_none() && item.is_countable() {
-                    if let Some(parent) = self.store.get_type(&item.parent) {
+                    if let Some(parent) = self.store().get_type(&item.parent) {
                         let mut inner = parent.borrow_mut();
                         inner.len -= item.len();
                     }
@@ -318,7 +287,7 @@ impl<'a> Transaction<'a> {
                     }
                     TypePtr::Id(ptr)
                         if ptr.id.clock < self.before_state.get(&ptr.id.client)
-                            && self.store.blocks.get_item(ptr).unwrap().is_deleted() =>
+                            && self.store().blocks.get_item(ptr).unwrap().is_deleted() =>
                     {
                         self.changed
                             .entry(item.parent.clone())
@@ -344,9 +313,10 @@ impl<'a> Transaction<'a> {
                     ItemContent::Type(t) => {
                         let inner = t.borrow_mut();
                         let mut ptr = inner.start;
-                        self.changed.remove(&item.parent);
+                        //TODO: self.changed.remove(&item.parent);
 
-                        while let Some(item) = ptr.and_then(|ptr| self.store.blocks.get_item(&ptr))
+                        while let Some(item) =
+                            ptr.and_then(|ptr| self.store().blocks.get_item(&ptr))
                         {
                             if !item.is_deleted() {
                                 recurse.push(ptr.unwrap());
@@ -379,36 +349,37 @@ impl<'a> Transaction<'a> {
     }
 
     pub fn apply_update(&mut self, mut update: Update) {
-        if self.store.update_events.has_subscribers() {
+        if self.store().update_events.has_subscribers() {
             let event = UpdateEvent::new(update);
-            self.store.update_events.publish(&event);
+            self.store().update_events.publish(self, &event);
             update = event.update;
         }
         let (remaining, remaining_ds) = update.integrate(self);
-
         let mut retry = false;
-        if let Some(mut pending) = self.store.pending.take() {
-            // check if we can apply something
-            for (client, &clock) in pending.missing.iter() {
-                if clock < self.store.blocks.get_state(client) {
-                    retry = true;
-                    break;
+        {
+            let store = self.store_mut();
+            if let Some(mut pending) = store.pending.take() {
+                // check if we can apply something
+                for (client, &clock) in pending.missing.iter() {
+                    if clock < store.blocks.get_state(client) {
+                        retry = true;
+                        break;
+                    }
                 }
-            }
 
-            if let Some(remaining) = remaining {
-                // merge restStructs into store.pending
-                for (&client, &clock) in remaining.missing.iter() {
-                    pending.missing.set_min(client, clock);
+                if let Some(remaining) = remaining {
+                    // merge restStructs into store.pending
+                    for (&client, &clock) in remaining.missing.iter() {
+                        pending.missing.set_min(client, clock);
+                    }
+                    pending.update = Update::merge_updates(vec![pending.update, remaining.update]);
+                    store.pending = Some(pending);
                 }
-                pending.update = Update::merge_updates(vec![pending.update, remaining.update]);
-                self.store.pending = Some(pending);
+            } else {
+                store.pending = remaining;
             }
-        } else {
-            self.store.pending = remaining;
         }
-
-        if let Some(pending) = self.store.pending_ds.take() {
+        if let Some(pending) = self.store_mut().pending_ds.take() {
             let ds2 = self.apply_delete(&pending);
             let ds = match (remaining_ds, ds2) {
                 (Some(mut a), Some(b)) => {
@@ -419,14 +390,15 @@ impl<'a> Transaction<'a> {
                 (_, Some(x)) => Some(x),
                 _ => None,
             };
-            self.store.pending_ds = ds;
+            self.store_mut().pending_ds = ds;
         } else {
-            self.store.pending_ds = remaining_ds.map(|update| update.delete_set);
+            self.store_mut().pending_ds = remaining_ds.map(|update| update.delete_set);
         }
 
         if retry {
-            if let Some(pending) = self.store.pending.take() {
-                let ds = self.store.pending_ds.take().unwrap_or_default();
+            let store = self.store_mut();
+            if let Some(pending) = store.pending.take() {
+                let ds = store.pending_ds.take().unwrap_or_default();
                 let mut ds_update = Update::new();
                 ds_update.delete_set = ds;
                 self.apply_update(pending.update);
@@ -439,39 +411,42 @@ impl<'a> Transaction<'a> {
         &mut self,
         pos: &block::ItemPosition,
         value: T,
-        parent_sub: Option<String>,
+        parent_sub: Option<Rc<str>>,
     ) -> &Item {
-        let left = pos.left;
-        let right = pos.right;
-        let origin = if let Some(ptr) = pos.left.as_ref() {
-            if let Some(item) = self.store.blocks.get_item(ptr) {
-                Some(item.last_id())
+        let (left, right, origin, ptr) = {
+            let store = self.store_mut();
+            let left = pos.left;
+            let right = pos.right;
+            let origin = if let Some(ptr) = pos.left.as_ref() {
+                if let Some(item) = store.blocks.get_item(ptr) {
+                    Some(item.last_id())
+                } else {
+                    None
+                }
             } else {
                 None
-            }
-        } else {
-            None
-        };
-        let client_id = self.store.client_id;
-        let id = block::ID {
-            client: client_id,
-            clock: self.store.get_local_state(),
-        };
-        let pivot = self
-            .store
-            .blocks
-            .get_client_blocks_mut(client_id)
-            .integrated_len() as u32;
+            };
+            let client_id = store.client_id;
+            let id = block::ID {
+                client: client_id,
+                clock: store.get_local_state(),
+            };
+            let pivot = store
+                .blocks
+                .get_client_blocks_mut(client_id)
+                .integrated_len() as u32;
 
-        let ptr = BlockPtr::new(id, pivot);
-        let (content, remainder) = value.into_content(self, TypePtr::Id(ptr));
+            let ptr = BlockPtr::new(id, pivot);
+            (left, right, origin, ptr)
+        };
+        let (content, remainder) = value.into_content(self, TypePtr::Id(ptr.clone()));
         let inner_ref = if let ItemContent::Type(inner_ref) = &content {
             Some(inner_ref.clone())
         } else {
             None
         };
         let mut item = Item::new(
-            id,
+            ptr.id,
             left,
             origin,
             right,
@@ -481,9 +456,9 @@ impl<'a> Transaction<'a> {
             content,
         );
 
-        item.integrate(self, pivot, 0);
+        item.integrate(self, ptr.pivot() as u32, 0);
 
-        let local_block_list = self.store.blocks.get_client_blocks_mut(client_id);
+        let local_block_list = self.store_mut().blocks.get_client_blocks_mut(ptr.id.client);
         local_block_list.push(block::Block::Item(item));
 
         let idx = local_block_list.len() - 1;
@@ -492,7 +467,7 @@ impl<'a> Transaction<'a> {
             remainder.integrate(self, inner_ref.unwrap())
         }
 
-        self.store.blocks.get_client_blocks_mut(client_id)[idx]
+        self.store_mut().blocks.get_client_blocks_mut(ptr.id.client)[idx]
             .as_item()
             .unwrap()
     }
@@ -504,29 +479,42 @@ impl<'a> Transaction<'a> {
     /// This step is performed automatically when a transaction is about to be dropped (its life
     /// scope comes to an end).
     pub fn commit(&mut self) {
-        // 1. sort and merge delete set
-        self.delete_set.squash();
-        self.after_state = self.store.blocks.get_state_vector();
+        if self.committed {
+            return;
+        }
+        self.committed = true;
 
+        // 1. sort and merge delete set
+        let store = unsafe { &mut *self.store.get() };
+        self.delete_set.squash();
+        self.after_state = store.blocks.get_state_vector();
         // 2. emit 'beforeObserverCalls'
         // 3. for each change observed by the transaction call 'afterTransaction'
+        if !self.changed.is_empty() {
+            for (ptr, subs) in self.changed.iter() {
+                if let Some(branch) = store.get_type(ptr) {
+                    branch.trigger(self, subs.clone());
+                }
+            }
+        }
+
         // 4. try GC delete set
         self.try_gc(); //TODO: eventually this is a configurable variant: if (doc.gc)
 
         // 5. try merge delete set
-        self.delete_set.try_squash_with(&mut self.store);
+        self.delete_set.try_squash_with(store);
 
         // 6. get transaction after state and try to merge to left
         for (client, &clock) in self.after_state.iter() {
             let before_clock = self.before_state.get(client);
             if before_clock != clock {
-                let mut blocks = self.store.blocks.get_mut(client).unwrap();
+                let mut blocks = store.blocks.get_mut(client).unwrap();
                 let first_change = blocks.find_pivot(before_clock).unwrap().max(1);
                 let mut i = blocks.len() - 1;
                 while i >= first_change {
                     if let Some(compaction) = blocks.squash_left(i) {
-                        self.store.gc_cleanup(compaction);
-                        blocks = self.store.blocks.get_mut(client).unwrap();
+                        store.gc_cleanup(compaction);
+                        blocks = store.blocks.get_mut(client).unwrap();
                     }
                     i -= 1;
                 }
@@ -536,15 +524,15 @@ impl<'a> Transaction<'a> {
         for id in self.merge_blocks.iter() {
             let client = id.client;
             let clock = id.clock;
-            let blocks = self.store.blocks.get_mut(&client).unwrap();
+            let blocks = store.blocks.get_mut(&client).unwrap();
             let replaced_pos = blocks.find_pivot(clock).unwrap();
             if replaced_pos + 1 < blocks.len() {
                 if let Some(compaction) = blocks.squash_left(replaced_pos + 1) {
-                    self.store.gc_cleanup(compaction);
+                    store.gc_cleanup(compaction);
                 }
             } else if replaced_pos > 0 {
                 if let Some(compaction) = blocks.squash_left(replaced_pos) {
-                    self.store.gc_cleanup(compaction);
+                    store.gc_cleanup(compaction);
                 }
             }
         }
@@ -556,8 +544,9 @@ impl<'a> Transaction<'a> {
     }
 
     fn try_gc(&self) {
+        let store = self.store();
         for (client, range) in self.delete_set.iter() {
-            if let Some(blocks) = self.store.blocks.get(client) {
+            if let Some(blocks) = store.blocks.get(client) {
                 for delete_item in range.iter().rev() {
                     let mut start = delete_item.start;
                     if let Some(mut i) = blocks.find_pivot(start) {
@@ -578,11 +567,11 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    pub(crate) fn add_changed_type(&mut self, parent: &Branch, parent_sub: Option<&String>) {
-        let trigger = match parent.item.as_ref() {
-            None => true,
-            Some(ptr) if ptr.id.clock < (self.before_state.get(&ptr.id.client)) => {
-                if let Some(item) = self.store.blocks.get_item(ptr) {
+    pub(crate) fn add_changed_type(&mut self, parent: &Branch, parent_sub: Option<Rc<str>>) {
+        let trigger = match &parent.ptr {
+            TypePtr::Named(_) => true,
+            TypePtr::Id(ptr) if ptr.id.clock < (self.before_state.get(&ptr.id.client)) => {
+                if let Some(item) = self.store().blocks.get_item(ptr) {
                     !item.is_deleted()
                 } else {
                     false
@@ -592,12 +581,22 @@ impl<'a> Transaction<'a> {
         };
         if trigger {
             let e = self.changed.entry(parent.ptr.clone()).or_default();
-            e.insert(parent_sub.cloned());
+            e.insert(parent_sub.clone());
         }
+    }
+
+    /// Checks if item with a given `id` has been added to a block store within this transaction.
+    pub(crate) fn has_added(&self, id: &ID) -> bool {
+        id.clock >= self.before_state.get(&id.client)
+    }
+
+    /// Checks if item with a given `id` has been deleted within this transaction.
+    pub(crate) fn has_deleted(&self, id: &ID) -> bool {
+        self.delete_set.is_deleted(id)
     }
 }
 
-impl<'a> Drop for Transaction<'a> {
+impl Drop for Transaction {
     fn drop(&mut self) {
         self.commit()
     }

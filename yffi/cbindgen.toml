@@ -161,6 +161,14 @@ typedef struct YXmlAttrIter {} YXmlAttrIter;
  * traverse.
  */
 typedef struct YXmlTreeWalker {} YXmlTreeWalker;
+
+/**
+ * Subscription handle returned by observe functions. It can be released via `yobserver_destroy`
+ * function in order to cancel subscribed callback.
+ */
+typedef struct YObserver {} YObserver;
+
+typedef struct Event {} Event;
 """
 
 trailer = """
@@ -182,3 +190,4 @@ parse_deps = false
 "ArrayIter" = "YArrayIter"
 "TreeWalker" = "YXmlTreeWalker"
 "Attributes" = "YXmlAttrIter"
+"Observer" = "YObserver"
