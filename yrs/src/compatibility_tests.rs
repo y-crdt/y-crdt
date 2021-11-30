@@ -43,7 +43,7 @@ fn text_insert_delete() {
             None,
             None,
             None,
-            TypePtr::Named(Rc::new("type".to_string())),
+            TypePtr::Named("type".into()),
             None,
             ItemContent::Deleted(3),
         )),
@@ -98,7 +98,7 @@ fn text_insert_delete() {
     let setter = visited.clone();
 
     let mut doc = Doc::new();
-    let _sub = doc.on_update(move |e| {
+    let _sub = doc.on_update(move |txn, e| {
         for (actual, expected) in e.update.blocks.blocks().zip(expected_blocks.as_slice()) {
             assert_eq!(actual, expected);
         }
@@ -136,8 +136,8 @@ fn map_set() {
             None,
             None,
             None,
-            TypePtr::Named(Rc::new("test".to_string())),
-            Some("k1".to_string()),
+            TypePtr::Named("test".into()),
+            Some("k1".into()),
             ItemContent::Any(vec![Any::String("v1".to_string())]),
         )),
         &Block::Item(Item::new(
@@ -146,8 +146,8 @@ fn map_set() {
             None,
             None,
             None,
-            TypePtr::Named(Rc::new("test".to_string())),
-            Some("k2".to_string()),
+            TypePtr::Named("test".into()),
+            Some("k2".into()),
             ItemContent::Any(vec![Any::String("v2".to_string())]),
         )),
     ];
@@ -177,7 +177,7 @@ fn array_insert() {
         None,
         None,
         None,
-        TypePtr::Named(Rc::new("test".to_string())),
+        TypePtr::Named("test".into()),
         None,
         ItemContent::Any(vec![
             Any::String("a".to_string()),
@@ -214,7 +214,7 @@ fn xml_fragment_insert() {
             None,
             None,
             None,
-            TypePtr::Named(Rc::new("fragment-name".to_string())),
+            TypePtr::Named("fragment-name".into()),
             None,
             ItemContent::Type(BranchRef::new(Branch::new(
                 TypePtr::Id(BlockPtr::from(ID::new(CLIENT_ID, 0))),

@@ -14,7 +14,6 @@ use std::cmp::Ordering;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, VecDeque};
 use std::hash::BuildHasherDefault;
-use std::rc::Rc;
 
 #[derive(Debug, PartialEq, Default, Clone)]
 pub(crate) struct UpdateBlocks {
@@ -165,13 +164,11 @@ impl Update {
     /// pending update object is returned which contains blocks that couldn't be integrated, most
     /// likely because there were missing blocks that are used as a dependencies of other blocks
     /// contained in this update.
-    pub fn integrate(
-        mut self,
-        txn: &mut Transaction<'_>,
-    ) -> (Option<PendingUpdate>, Option<Update>) {
+    pub fn integrate(mut self, txn: &mut Transaction) -> (Option<PendingUpdate>, Option<Update>) {
         let remaining_blocks = if self.blocks.is_empty() {
             None
         } else {
+            let mut store = txn.store_mut();
             let mut client_block_ref_ids: Vec<u64> = self.blocks.clients.keys().cloned().collect();
             client_block_ref_ids.sort_by(|a, b| b.cmp(a));
 
@@ -180,7 +177,7 @@ impl Update {
                 current_client_id.and_then(|id| self.blocks.clients.get_mut(&id));
             let mut stack_head = Self::next(&mut current_target);
 
-            let mut local_sv = txn.store.blocks.get_state_vector();
+            let mut local_sv = store.blocks.get_state_vector();
             let mut missing_sv = StateVector::default();
             let mut remaining = UpdateBlocks::default();
             let mut stack = Vec::new();
@@ -192,7 +189,7 @@ impl Update {
                     if let Some(dep) = Self::missing(&block, &local_sv) {
                         stack.push(block);
                         // get the struct reader that has the missing struct
-                        let block_refs = txn.store.blocks.get_client_blocks_mut(dep);
+                        let block_refs = store.blocks.get_client_blocks_mut(dep);
                         if block_refs.integrated_len() == block_refs.len() {
                             // This update message causally depends on another update message that doesn't exist yet
                             missing_sv.set_min(dep, local_sv.get(&dep));
@@ -208,7 +205,7 @@ impl Update {
                         let offset = offset as u32;
                         let client = id.client;
                         local_sv.set_max(client, id.clock + block.len());
-                        block.as_item_mut().map(|item| item.repair(txn));
+                        block.as_item_mut().map(|item| item.repair(store));
                         let should_delete = block.integrate(txn, offset, offset);
                         let delete_ptr = if should_delete {
                             Some(BlockPtr::new(block.id().clone(), offset))
@@ -216,12 +213,14 @@ impl Update {
                             None
                         };
 
-                        let blocks = txn.store.blocks.get_client_blocks_mut(client);
+                        store = txn.store_mut();
+                        let blocks = store.blocks.get_client_blocks_mut(client);
                         blocks.push(block);
 
                         if let Some(ptr) = delete_ptr {
                             txn.delete(&ptr);
                         }
+                        store = txn.store_mut();
                     }
                 } else {
                     // update from the same client is missing
@@ -368,7 +367,7 @@ impl Update {
                 };
                 let parent = if cant_copy_parent_info {
                     if decoder.read_parent_info() {
-                        TypePtr::Named(Rc::new(decoder.read_string().to_owned()))
+                        TypePtr::Named(decoder.read_string().into())
                     } else {
                         TypePtr::Id(BlockPtr::from(decoder.read_left_id()))
                     }
@@ -376,7 +375,7 @@ impl Update {
                     TypePtr::Unknown
                 };
                 let parent_sub = if cant_copy_parent_info && (info & HAS_PARENT_SUB != 0) {
-                    Some(decoder.read_string().to_owned())
+                    Some(decoder.read_string().into())
                 } else {
                     None
                 };
@@ -761,7 +760,6 @@ mod test {
     use crate::updates::decoder::{Decode, DecoderV1};
     use crate::{Doc, ID};
     use lib0::decoding::Cursor;
-    use std::rc::Rc;
 
     #[test]
     fn update_decode() {
@@ -794,8 +792,8 @@ mod test {
             None,
             None,
             None,
-            TypePtr::Named(Rc::new("".to_owned())),
-            Some("keyB".to_owned()),
+            TypePtr::Named("".into()),
+            Some("keyB".into()),
             ItemContent::Any(vec!["valueB".into()]),
         )));
         assert_eq!(block, &expected);

@@ -1,12 +1,14 @@
 use crate::block::{Item, ItemContent, ItemPosition, Prelim};
+use crate::store::Store;
 use crate::types::{
-    Branch, BranchRef, Entries, Map, Text, TypePtr, Value, TYPE_REFS_XML_ELEMENT,
+    Branch, BranchRef, Entries, Event, Map, Observer, Text, TypePtr, Value, TYPE_REFS_XML_ELEMENT,
     TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_TEXT,
 };
 use crate::Transaction;
 use lib0::any::Any;
 use std::cell::Ref;
 use std::fmt::Write;
+use std::rc::Rc;
 
 /// An return type from XML elements retrieval methods. It's an enum of all supported values, that
 /// can be nested inside of [XmlElement]. These are other [XmlElement]s or [XmlText] values.
@@ -80,18 +82,18 @@ impl XmlElement {
     }
 
     /// Removes an attribute recognized by an `attr_name` from a current XML element.
-    pub fn remove_attribute(&self, txn: &mut Transaction, attr_name: &str) {
-        self.inner().remove(txn, attr_name);
+    pub fn remove_attribute<K: AsRef<str>>(&self, txn: &mut Transaction, attr_name: &K) {
+        self.inner().remove(txn, attr_name.as_ref());
     }
 
     /// Inserts an attribute entry into current XML element.
-    pub fn insert_attribute<K: ToString, V: ToString>(
+    pub fn insert_attribute<K: Into<Rc<str>>, V: ToString>(
         &self,
         txn: &mut Transaction,
         attr_name: K,
         attr_value: V,
     ) {
-        let key = attr_name.to_string();
+        let key = attr_name.into();
         let value = crate::block::PrelimText(attr_value.to_string());
         let pos = {
             let inner = self.inner();
@@ -117,7 +119,7 @@ impl XmlElement {
 
     /// Returns an unordered iterator over all attributes (key-value pairs), that can be found
     /// inside of a current XML element.
-    pub fn attributes<'a, 'b, 'txn>(&'a self, txn: &'b Transaction<'txn>) -> Attributes<'b, 'txn> {
+    pub fn attributes<'a, 'b>(&'a self, txn: &'b Transaction) -> Attributes<'b> {
         let inner = self.inner();
         let blocks = inner.entries(txn);
         Attributes(blocks)
@@ -192,7 +194,7 @@ impl XmlElement {
     ///    - again
     /// */
     /// ```
-    pub fn successors<'a, 'b, 'txn>(&'a self, txn: &'b Transaction<'txn>) -> TreeWalker<'b, 'txn> {
+    pub fn successors<'a, 'b>(&'a self, txn: &'b Transaction) -> TreeWalker<'b> {
         self.0.iter(txn)
     }
 
@@ -253,6 +255,21 @@ impl XmlElement {
     pub fn get(&self, txn: &Transaction, index: u32) -> Option<Xml> {
         self.0.get(txn, index)
     }
+
+    /// Subscribes a given callback to be triggered whenever current XML node is changed.
+    /// A callback is triggered whenever a transaction gets committed. This function does not
+    /// trigger if changes have been observed by nested shared collections.
+    ///
+    /// Children node changes can be tracked by using [Event::delta] method.
+    /// Attribute changes can be tracked by using [Event::keys] method.
+    ///
+    /// Returns an [Observer] which, when dropped, will unsubscribe current callback.
+    pub fn observe<F>(&self, f: F) -> Observer
+    where
+        F: Fn(&Transaction, &Event) -> () + 'static,
+    {
+        self.0.observe(f)
+    }
 }
 
 impl Into<ItemContent> for XmlElement {
@@ -268,9 +285,9 @@ impl From<BranchRef> for XmlElement {
 }
 
 /// Iterator over the attributes (key-value pairs represented as a strings) of an [XmlElement].
-pub struct Attributes<'a, 'txn>(Entries<'a, 'txn>);
+pub struct Attributes<'a>(Entries<'a>);
 
-impl<'a, 'txn> Iterator for Attributes<'a, 'txn> {
+impl<'a> Iterator for Attributes<'a> {
     type Item = (&'a str, String);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -281,7 +298,7 @@ impl<'a, 'txn> Iterator for Attributes<'a, 'txn> {
             .map(|v| v.to_string(self.0.txn))
             .unwrap_or(String::default());
 
-        Some((key.as_str(), value))
+        Some((key.as_ref(), value))
     }
 }
 
@@ -323,7 +340,7 @@ impl XmlFragment {
         self.inner().len()
     }
 
-    pub fn iter<'a, 'b, 'txn>(&'a self, txn: &'b Transaction<'txn>) -> TreeWalker<'b, 'txn> {
+    pub fn iter<'a, 'b>(&'a self, txn: &'b Transaction) -> TreeWalker<'b> {
         TreeWalker::new(txn, &*self.inner())
     }
 
@@ -390,12 +407,20 @@ impl XmlFragment {
 
     pub fn get<T: From<BranchRef>>(&self, txn: &Transaction, index: u32) -> Option<T> {
         let inner = self.inner();
-        let (content, _) = inner.get_at(txn, index)?;
+        let (content, _) = inner.get_at(&txn.store().blocks, index)?;
         if let ItemContent::Type(inner) = content {
             Some(T::from(inner.clone()))
         } else {
             None
         }
+    }
+
+    pub fn observe<F>(&self, f: F) -> Observer
+    where
+        F: Fn(&Transaction, &Event) -> () + 'static,
+    {
+        let mut branch_ref = self.0.borrow_mut();
+        branch_ref.observe(f)
     }
 }
 
@@ -406,23 +431,21 @@ impl Into<ItemContent> for XmlFragment {
 }
 
 /// An iterator over [XmlElement] successors, working in a recursive depth-first manner.
-pub struct TreeWalker<'a, 'txn> {
-    txn: &'a Transaction<'txn>,
+pub struct TreeWalker<'a> {
+    store: &'a Store,
     current: Option<&'a Item>,
     root: TypePtr,
     first_call: bool,
 }
 
-impl<'a, 'txn> TreeWalker<'a, 'txn> {
-    fn new<'b>(txn: &'a Transaction<'txn>, parent: &'b Branch) -> Self {
+impl<'a> TreeWalker<'a> {
+    fn new<'b>(txn: &'a Transaction, parent: &'b Branch) -> Self {
         let root = parent.ptr.clone();
-        let current = parent
-            .start
-            .as_ref()
-            .and_then(|p| txn.store.blocks.get_item(p));
+        let store = txn.store();
+        let current = parent.start.as_ref().and_then(|p| store.blocks.get_item(p));
 
         TreeWalker {
-            txn,
+            store,
             current,
             root,
             first_call: true,
@@ -430,7 +453,7 @@ impl<'a, 'txn> TreeWalker<'a, 'txn> {
     }
 }
 
-impl<'a, 'txn> Iterator for TreeWalker<'a, 'txn> {
+impl<'a> Iterator for TreeWalker<'a> {
     type Item = Xml;
 
     /// Tree walker used depth-first search to move over the xml tree.
@@ -452,22 +475,23 @@ impl<'a, 'txn> Iterator for TreeWalker<'a, 'txn> {
                             n = inner
                                 .start
                                 .as_ref()
-                                .and_then(|ptr| self.txn.store.blocks.get_item(ptr));
+                                .and_then(|ptr| self.store.blocks.get_item(ptr));
                         } else {
                             // walk right or up in the tree
                             while let Some(current) = n {
                                 if let Some(right) = current.right.as_ref() {
-                                    n = self.txn.store.blocks.get_item(right);
+                                    n = self.store.blocks.get_item(right);
                                     break;
                                 } else if current.parent == self.root {
                                     n = None;
                                 } else {
-                                    n = self
-                                        .txn
-                                        .store
-                                        .get_type(&current.parent)
-                                        .and_then(|t| t.as_ref().item.as_ref())
-                                        .and_then(|ptr| self.txn.store.blocks.get_item(ptr));
+                                    n = self.store.get_type(&current.parent).and_then(|t| match &t
+                                        .as_ref()
+                                        .ptr
+                                    {
+                                        TypePtr::Id(ptr) => self.store.blocks.get_item(ptr),
+                                        _ => None,
+                                    });
                                 }
                             }
                         }
@@ -507,24 +531,15 @@ impl XmlHook {
         self.0.to_json(txn)
     }
 
-    pub fn keys<'a, 'b, 'txn>(
-        &'a self,
-        txn: &'b Transaction<'txn>,
-    ) -> crate::types::map::Keys<'b, 'txn> {
+    pub fn keys<'a, 'b>(&'a self, txn: &'b Transaction) -> crate::types::map::Keys<'b> {
         self.0.keys(txn)
     }
 
-    pub fn values<'a, 'b, 'txn>(
-        &self,
-        txn: &'b Transaction<'txn>,
-    ) -> crate::types::map::Values<'b, 'txn> {
+    pub fn values<'a, 'b>(&self, txn: &'b Transaction) -> crate::types::map::Values<'b> {
         self.0.values(txn)
     }
 
-    pub fn iter<'a, 'b, 'txn>(
-        &self,
-        txn: &'b Transaction<'txn>,
-    ) -> crate::types::map::MapIter<'b, 'txn> {
+    pub fn iter<'a, 'b>(&self, txn: &'b Transaction) -> crate::types::map::MapIter<'b> {
         self.0.iter(txn)
     }
 
@@ -594,13 +609,13 @@ impl XmlText {
         self.inner().remove(txn, attr_name);
     }
 
-    pub fn insert_attribute<K: ToString, V: ToString>(
+    pub fn insert_attribute<K: Into<Rc<str>>, V: ToString>(
         &self,
         txn: &mut Transaction,
         attr_name: K,
         attr_value: V,
     ) {
-        let key = attr_name.to_string();
+        let key = attr_name.into();
         let value = crate::block::PrelimText(attr_value.to_string());
         let pos = {
             let inner = self.inner();
@@ -622,7 +637,7 @@ impl XmlText {
         Some(value.to_string(txn))
     }
 
-    pub fn attributes<'a, 'b, 'txn>(&'a self, txn: &'b Transaction<'txn>) -> Attributes<'b, 'txn> {
+    pub fn attributes<'a, 'b>(&'a self, txn: &'b Transaction) -> Attributes<'b> {
         Attributes(self.inner().entries(txn))
     }
 
@@ -652,7 +667,7 @@ impl XmlText {
     /// This method may panic if `index` if greater than a length of this text.
     pub fn insert(&self, txn: &mut Transaction, index: u32, content: &str) {
         if let Some(mut pos) = self.0.find_position(txn, index) {
-            let parent = { TypePtr::Id(self.inner().item.unwrap()) };
+            let parent = { self.inner().ptr.clone() };
             pos.parent = parent;
             txn.create_item(&pos, crate::block::PrelimText(content.to_owned()), None);
         } else {
@@ -671,6 +686,22 @@ impl XmlText {
     /// This method may panic if `index` if greater than a length of this text.
     pub fn remove_range(&self, txn: &mut Transaction, index: u32, len: u32) {
         self.0.remove_range(txn, index, len)
+    }
+
+    /// Subscribes a given callback to be triggered whenever current XML text is changed.
+    /// A callback is triggered whenever a transaction gets committed. This function does not
+    /// trigger if changes have been observed by nested shared collections.
+    ///
+    /// XML text changes can be tracked by using [Event::delta] method: keep in mind that delta
+    /// contains collection of individual characters rather than strings.
+    /// XML text attribute changes can be tracked using [Event::keys] method.
+    ///
+    /// Returns an [Observer] which, when dropped, will unsubscribe current callback.
+    pub fn observe<F>(&self, f: F) -> Observer
+    where
+        F: Fn(&Transaction, &Event) -> () + 'static,
+    {
+        self.0.observe(f)
     }
 }
 
@@ -712,15 +743,17 @@ impl Prelim for PrelimXml {
 }
 
 fn next_sibling(inner: Ref<Branch>, txn: &Transaction) -> Option<Xml> {
-    let mut current = inner
-        .item
-        .as_ref()
-        .and_then(|ptr| txn.store.blocks.get_item(ptr));
+    let store = txn.store();
+    let mut current = if let TypePtr::Id(ptr) = &inner.ptr {
+        store.blocks.get_item(ptr)
+    } else {
+        None
+    };
     while let Some(item) = current {
         current = item
             .right
             .as_ref()
-            .and_then(|ptr| txn.store.blocks.get_item(ptr));
+            .and_then(|ptr| store.blocks.get_item(ptr));
         if let Some(right) = current {
             if !right.is_deleted() {
                 if let ItemContent::Type(inner) = &right.content {
@@ -734,15 +767,17 @@ fn next_sibling(inner: Ref<Branch>, txn: &Transaction) -> Option<Xml> {
 }
 
 fn prev_sibling(inner: Ref<Branch>, txn: &Transaction) -> Option<Xml> {
-    let mut current = inner
-        .item
-        .as_ref()
-        .and_then(|ptr| txn.store.blocks.get_item(ptr));
+    let store = txn.store();
+    let mut current = if let TypePtr::Id(ptr) = &inner.ptr {
+        store.blocks.get_item(ptr)
+    } else {
+        None
+    };
     while let Some(item) = current {
         current = item
             .left
             .as_ref()
-            .and_then(|ptr| txn.store.blocks.get_item(ptr));
+            .and_then(|ptr| store.blocks.get_item(ptr));
         if let Some(left) = current {
             if !left.is_deleted() {
                 if let ItemContent::Type(inner) = &left.content {
@@ -756,15 +791,27 @@ fn prev_sibling(inner: Ref<Branch>, txn: &Transaction) -> Option<Xml> {
 }
 
 fn parent(inner: Ref<Branch>, txn: &Transaction) -> Option<XmlElement> {
-    let item = txn.store.blocks.get_item(inner.item.as_ref()?)?;
-    let parent = txn.store.get_type(&item.parent)?;
-    Some(XmlElement::from(parent.clone()))
+    if let TypePtr::Id(ptr) = &inner.ptr {
+        let store = txn.store();
+        let item = store.blocks.get_item(ptr)?;
+        let parent = store.get_type(&item.parent)?;
+        Some(XmlElement::from(parent.clone()))
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
 mod test {
     use crate::types::xml::Xml;
-    use crate::Doc;
+    use crate::types::{Change, EntryChange, Value};
+    use crate::updates::decoder::Decode;
+    use crate::updates::encoder::{Encoder, EncoderV1};
+    use crate::{Doc, Update};
+    use lib0::any::Any;
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    use std::rc::Rc;
 
     #[test]
     fn insert_attribute() {
@@ -911,5 +958,140 @@ mod test {
         ];
         let u1 = d1.encode_state_as_update_v1(&t1);
         assert_eq!(u1.as_slice(), expected);
+    }
+
+    #[test]
+    fn event_observers() {
+        let mut d1 = Doc::with_client_id(1);
+        let xml = {
+            let mut txn = d1.transact();
+            txn.get_xml_element("xml")
+        };
+
+        let mut attributes = Rc::new(RefCell::new(None));
+        let mut nodes = Rc::new(RefCell::new(None));
+        let mut attributes_c = attributes.clone();
+        let mut nodes_c = nodes.clone();
+        let _sub = xml.observe(move |txn, e| {
+            attributes_c.borrow_mut().insert(e.keys(txn).clone());
+            nodes_c.borrow_mut().insert(e.delta(txn).to_vec());
+        });
+
+        // insert attribute
+        {
+            let mut txn = d1.transact();
+            xml.insert_attribute(&mut txn, "key1", "value1");
+            xml.insert_attribute(&mut txn, "key2", "value2");
+        }
+        assert!(nodes.borrow_mut().take().unwrap().is_empty());
+        assert_eq!(
+            attributes.borrow_mut().take(),
+            Some(HashMap::from([
+                (
+                    "key1".into(),
+                    EntryChange::Inserted(Any::String("value1".to_string()).into())
+                ),
+                (
+                    "key2".into(),
+                    EntryChange::Inserted(Any::String("value2".to_string()).into())
+                )
+            ]))
+        );
+
+        // change and remove attribute
+        {
+            let mut txn = d1.transact();
+            xml.insert_attribute(&mut txn, "key1", "value11");
+            xml.remove_attribute(&mut txn, &"key2");
+        }
+        assert!(nodes.borrow_mut().take().unwrap().is_empty());
+        assert_eq!(
+            attributes.borrow_mut().take(),
+            Some(HashMap::from([
+                (
+                    "key1".into(),
+                    EntryChange::Updated(
+                        Any::String("value1".to_string()).into(),
+                        Any::String("value11".to_string()).into()
+                    )
+                ),
+                (
+                    "key2".into(),
+                    EntryChange::Removed(Any::String("value2".to_string()).into())
+                )
+            ]))
+        );
+
+        // add xml elements
+        let (nested_txt, nested_xml) = {
+            let mut txn = d1.transact();
+            let txt = xml.insert_text(&mut txn, 0);
+            let xml2 = xml.insert_elem(&mut txn, 1, "div");
+            (txt, xml2)
+        };
+        assert_eq!(
+            nodes.borrow_mut().take(),
+            Some(vec![Change::Added(vec![
+                Value::YXmlText(nested_txt.clone()),
+                Value::YXmlElement(nested_xml.clone())
+            ])])
+        );
+        assert_eq!(attributes.borrow_mut().take(), Some(HashMap::new()));
+
+        // remove and add
+        let nested_xml2 = {
+            let mut txn = d1.transact();
+            xml.remove_range(&mut txn, 1, 1);
+            xml.insert_elem(&mut txn, 1, "p")
+        };
+        assert_eq!(
+            nodes.borrow_mut().take(),
+            Some(vec![
+                Change::Retain(1),
+                Change::Added(vec![Value::YXmlElement(nested_xml2.clone())]),
+                Change::Removed(1),
+            ])
+        );
+        assert_eq!(attributes.borrow_mut().take(), Some(HashMap::new()));
+
+        // copy updates over
+        let mut d2 = Doc::with_client_id(2);
+        let xml2 = {
+            let mut txn = d2.transact();
+            txn.get_xml_element("xml")
+        };
+
+        let mut attributes = Rc::new(RefCell::new(None));
+        let mut nodes = Rc::new(RefCell::new(None));
+        let mut attributes_c = attributes.clone();
+        let mut nodes_c = nodes.clone();
+        let _sub = xml2.observe(move |txn, e| {
+            attributes_c.borrow_mut().insert(e.keys(txn).clone());
+            nodes_c.borrow_mut().insert(e.delta(txn).to_vec());
+        });
+
+        {
+            let t1 = d1.transact();
+            let mut t2 = d2.transact();
+
+            let sv = t2.state_vector();
+            let mut encoder = EncoderV1::new();
+            t1.encode_diff(&sv, &mut encoder);
+            t2.apply_update(Update::decode_v1(encoder.to_vec().as_slice()));
+        }
+        assert_eq!(
+            nodes.borrow_mut().take(),
+            Some(vec![Change::Added(vec![
+                Value::YXmlText(nested_txt),
+                Value::YXmlElement(nested_xml2)
+            ])])
+        );
+        assert_eq!(
+            attributes.borrow_mut().take(),
+            Some(HashMap::from([(
+                "key1".into(),
+                EntryChange::Inserted(Any::String("value11".to_string()).into())
+            )]))
+        );
     }
 }

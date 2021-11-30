@@ -158,11 +158,147 @@ typedef struct YXmlAttrIter {} YXmlAttrIter;
  */
 typedef struct YXmlTreeWalker {} YXmlTreeWalker;
 
+/**
+ * Subscription handle returned by observe functions. It can be released via `yobserver_destroy`
+ * function in order to cancel subscribed callback.
+ */
+typedef struct YObserver {} YObserver;
+
+typedef struct Event {} Event;
+
 
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
+
+/**
+ * Flag used by `YInput` and `YOutput` to tag boolean values.
+ */
+#define Y_JSON_BOOL -8
+
+/**
+ * Flag used by `YInput` and `YOutput` to tag floating point numbers.
+ */
+#define Y_JSON_NUM -7
+
+/**
+ * Flag used by `YInput` and `YOutput` to tag 64-bit integer numbers.
+ */
+#define Y_JSON_INT -6
+
+/**
+ * Flag used by `YInput` and `YOutput` to tag strings.
+ */
+#define Y_JSON_STR -5
+
+/**
+ * Flag used by `YInput` and `YOutput` to tag binary content.
+ */
+#define Y_JSON_BUF -4
+
+/**
+ * Flag used by `YInput` and `YOutput` to tag embedded JSON-like arrays of values,
+ * which themselves are `YInput` and `YOutput` instances respectively.
+ */
+#define Y_JSON_ARR -3
+
+/**
+ * Flag used by `YInput` and `YOutput` to tag embedded JSON-like maps of key-value pairs,
+ * where keys are strings and v
+ */
+#define Y_JSON_MAP -2
+
+/**
+ * Flag used by `YInput` and `YOutput` to tag JSON-like null values.
+ */
+#define Y_JSON_NULL -1
+
+/**
+ * Flag used by `YInput` and `YOutput` to tag JSON-like undefined values.
+ */
+#define Y_JSON_UNDEF 0
+
+/**
+ * Flag used by `YInput` and `YOutput` to tag content, which is an `YArray` shared type.
+ */
+#define Y_ARRAY 1
+
+/**
+ * Flag used by `YInput` and `YOutput` to tag content, which is an `YMap` shared type.
+ */
+#define Y_MAP 2
+
+/**
+ * Flag used by `YInput` and `YOutput` to tag content, which is an `YText` shared type.
+ */
+#define Y_TEXT 3
+
+/**
+ * Flag used by `YInput` and `YOutput` to tag content, which is an `YXmlElement` shared type.
+ */
+#define Y_XML_ELEM 4
+
+/**
+ * Flag used by `YInput` and `YOutput` to tag content, which is an `YXmlText` shared type.
+ */
+#define Y_XML_TEXT 5
+
+/**
+ * Flag used to mark a truthy boolean numbers.
+ */
+#define Y_TRUE 1
+
+/**
+ * Flag used to mark a falsy boolean numbers.
+ */
+#define Y_FALSE 0
+
+/**
+ * Tag used to identify `YPathSegment` storing a *char parameter.
+ */
+#define Y_EVENT_PATH_KEY 1
+
+/**
+ * Tag used to identify `YPathSegment` storing an int parameter.
+ */
+#define Y_EVENT_PATH_INDEX 2
+
+/**
+ * Tag used to identify `YEventChange` (see: `yevent_delta` function) case, when a new element
+ * has been added to an observed collection.
+ */
+#define Y_EVENT_CHANGE_ADD 1
+
+/**
+ * Tag used to identify `YEventChange` (see: `yevent_delta` function) case, when an existing
+ * element has been removed from an observed collection.
+ */
+#define Y_EVENT_CHANGE_DELETE 2
+
+/**
+ * Tag used to identify `YEventChange` (see: `yevent_delta` function) case, when no changes have
+ * been detected for a particular range of observed collection.
+ */
+#define Y_EVENT_CHANGE_RETAIN 3
+
+/**
+ * Tag used to identify `YEventKeyChange` (see: `yevent_keys` function) case, when a new entry has
+ * been inserted into a map component of shared collection.
+ */
+#define Y_EVENT_KEY_CHANGE_ADD 4
+
+/**
+ * Tag used to identify `YEventKeyChange` (see: `yevent_keys` function) case, when an existing
+ * entry has been removed from a map component of shared collection.
+ */
+#define Y_EVENT_KEY_CHANGE_DELETE 5
+
+/**
+ * Tag used to identify `YEventKeyChange` (see: `yevent_keys` function) case, when an existing
+ * entry has been overridden with a new value within a map component of shared collection.
+ */
+#define Y_EVENT_KEY_CHANGE_UPDATE 6
 
 /**
  * A Yrs document type. Documents are most important units of collaborative resources management.
@@ -435,37 +571,142 @@ typedef YXmlAttrIter YXmlAttrIter;
  */
 typedef YXmlTreeWalker YXmlTreeWalker;
 
-extern const char Y_JSON_BOOL;
+/**
+ * Subscription handle returned by observe functions. It can be released via `yobserver_destroy`
+ * function in order to cancel subscribed callback.
+ */
+typedef YObserver YObserver;
 
-extern const char Y_JSON_NUM;
+/**
+ * Event passed over to a callbacks subscribed via <shared_type>_observe functions. It enables
+ * tracking changes happening over different shared collection types, which can be separated into:
+ *
+ * 1. `yevent_delta` function, which returns changes over a sequence component of shared types,
+ * such as `YArray`, `YText`, `YXmlText` and XML nodes added to `YXmlElement`. Data returned this
+ * way should be disposed eventually via `yevent_delta_destroy` function.
+ * 2. `yevent_keys` function, which returns changes over a map component of shared types, such as
+ * `YMap` entries and `YXmlElement`/`YXmlText` attribute changed. Data returned this way should be
+ * disposed eventually via `yevent_keys_destroy` function.
+ */
+typedef struct YEvent {
+  const Event *inner;
+  const YTransaction *txn;
+} YEvent;
 
-extern const char Y_JSON_INT;
+typedef union YPathSegmentCase {
+  const char *key;
+  int index;
+} YPathSegmentCase;
 
-extern const char Y_JSON_STR;
+/**
+ * A single segment of a path returned from `yevent_path` function. It can be one of two cases,
+ * recognized by it's `tag` field:
+ *
+ * 1. `Y_EVENT_PATH_KEY` means that segment value can be accessed by `segment.value.key` and is
+ * referring to a string key used by map component (eg. `YMap` entry).
+ * 2. `Y_EVENT_PATH_INDEX` means that segment value can be accessed by `segment.value.index` and is
+ * referring to an int index used by sequence component (eg. `YArray` item or `YXmlElement` child).
+ */
+typedef struct YPathSegment {
+  /**
+   * Tag used to identify which case current segment is referring to:
+   *
+   * 1. `Y_EVENT_PATH_KEY` means that segment value can be accessed by `segment.value.key` and is
+   * referring to a string key used by map component (eg. `YMap` entry).
+   * 2. `Y_EVENT_PATH_INDEX` means that segment value can be accessed by `segment.value.index`
+   * and is referring to an int index used by sequence component (eg. `YArray` item or
+   * `YXmlElement` child).
+   */
+  char tag;
+  /**
+   * Union field containing either `key` or `index`. A particular case can be recognized by using
+   * segment's `tag` field.
+   */
+  union YPathSegmentCase value;
+} YPathSegment;
 
-extern const char Y_JSON_BUF;
+/**
+ * A data type representing a single change detected over an observed shared collection. A type
+ * of change can be detected using a `tag` field:
+ *
+ * 1. `Y_EVENT_CHANGE_ADD` marks a new elements added to a collection. In this case `values` field
+ * contains a pointer to a list of newly inserted values, while `len` field informs about their
+ * count.
+ * 2. `Y_EVENT_CHANGE_DELETE` marks an existing elements removed from the collection. In this case
+ * `len` field informs about number of removed elements.
+ * 3. `Y_EVENT_CHANGE_RETAIN` marks a number of elements that have not been changed, counted from
+ * the previous element. `len` field informs about number of retained elements.
+ *
+ * A list of changes returned by `yevent_delta` enables to locate a position of all changes within
+ * an observed collection by using a combination of added/deleted change structs separated by
+ * retained changes (marking eg. number of elements that can be safely skipped, since they
+ * remained unchanged).
+ */
+typedef struct YEventChange {
+  /**
+   * Tag field used to identify particular type of change made:
+   *
+   * 1. `Y_EVENT_CHANGE_ADD` marks a new elements added to a collection. In this case `values`
+   * field contains a pointer to a list of newly inserted values, while `len` field informs about
+   * their count.
+   * 2. `Y_EVENT_CHANGE_DELETE` marks an existing elements removed from the collection. In this
+   * case `len` field informs about number of removed elements.
+   * 3. `Y_EVENT_CHANGE_RETAIN` marks a number of elements that have not been changed, counted
+   * from the previous element. `len` field informs about number of retained elements.
+   */
+  char tag;
+  /**
+   * Number of element affected by current type of a change. It can refer to a number of
+   * inserted `values`, number of deleted element or a number of retained (unchanged) values.
+   */
+  int len;
+  /**
+   * Used in case when current change is of `Y_EVENT_CHANGE_ADD` type. Contains a list (of
+   * length stored in `len` field) of newly inserted values.
+   */
+  const struct YOutput *values;
+} YEventChange;
 
-extern const char Y_JSON_ARR;
-
-extern const char Y_JSON_MAP;
-
-extern const char Y_JSON_NULL;
-
-extern const char Y_JSON_UNDEF;
-
-extern const char Y_ARRAY;
-
-extern const char Y_MAP;
-
-extern const char Y_TEXT;
-
-extern const char Y_XML_ELEM;
-
-extern const char Y_XML_TEXT;
-
-extern const char Y_TRUE;
-
-extern const char Y_FALSE;
+/**
+ * A data type representing a single change made over a map component of shared collection types,
+ * such as `YMap` entries or `YXmlText`/`YXmlElement` attributes. A `key` field provides a
+ * corresponding unique key string of a changed entry, while `tag` field informs about specific
+ * type of change being done:
+ *
+ * 1. `Y_EVENT_KEY_CHANGE_ADD` used to identify a newly added entry. In this case an `old_value`
+ * field is NULL, while `new_value` field contains an inserted value.
+ * 1. `Y_EVENT_KEY_CHANGE_DELETE` used to identify an existing entry being removed. In this case
+ * an `old_value` field contains the removed value.
+ * 1. `Y_EVENT_KEY_CHANGE_UPDATE` used to identify an existing entry, which value has been changed.
+ * In this case `old_value` field contains replaced value, while `new_value` contains a newly
+ * inserted one.
+ */
+typedef struct YEventKeyChange {
+  /**
+   * A UTF8-encoded null-terminated string containing a key of a changed entry.
+   */
+  const char *key;
+  /**
+   * Tag field informing about type of change current struct refers to:
+   *
+   * 1. `Y_EVENT_KEY_CHANGE_ADD` used to identify a newly added entry. In this case an
+   * `old_value` field is NULL, while `new_value` field contains an inserted value.
+   * 1. `Y_EVENT_KEY_CHANGE_DELETE` used to identify an existing entry being removed. In this
+   * case an `old_value` field contains the removed value.
+   * 1. `Y_EVENT_KEY_CHANGE_UPDATE` used to identify an existing entry, which value has been
+   * changed. In this case `old_value` field contains replaced value, while `new_value` contains
+   * a newly inserted one.
+   */
+  char tag;
+  /**
+   * Contains a removed entry's value or replaced value of an updated entry.
+   */
+  const struct YOutput *old_value;
+  /**
+   * Contains a value of newly inserted entry or an updated entry's new value.
+   */
+  const struct YOutput *new_value;
+} YEventKeyChange;
 
 /**
  * Releases all memory-allocated resources bound to given document.
@@ -1307,5 +1548,77 @@ YText *youtput_read_ytext(const struct YOutput *val);
  * [youtput_destroy] destructor.
  */
 YXmlText *youtput_read_yxmltext(const struct YOutput *val);
+
+YObserver *ytext_observe(const YText *txt, void *state, void (*cb)(void*, const struct YEvent*));
+
+YObserver *ymap_observe(const YMap *map, void *state, void (*cb)(void*, const struct YEvent*));
+
+YObserver *yarray_observe(const YArray *array,
+                          void *state,
+                          void (*cb)(void*, const struct YEvent*));
+
+YObserver *yxmlelem_observe(const YXmlElement *xml,
+                            void *state,
+                            void (*cb)(void*, const struct YEvent*));
+
+YObserver *yxmltext_observe(const YXmlText *xml,
+                            void *state,
+                            void (*cb)(void*, const struct YEvent*));
+
+/**
+ * Releases a callback subscribed via `<shared_type>_observe` function represented by passed
+ * observer parameter.
+ */
+void yobserver_destroy(YObserver *e);
+
+/**
+ * Returns a pointer to a shared collection, which triggered passed event `e`.
+ */
+struct YOutput *yevent_target(const struct YEvent *e);
+
+/**
+ * Returns a path from a root type down to a current shared collection (which can be obtained using
+ * `yevent_target` function). It can consist of either integer indexes (used by sequence
+ * components) of *char keys (used by map components). `len` output parameter is used to provide
+ * information about length of the path.
+ *
+ * Path returned this way should be eventually released using `yevent_path_destroy`.
+ */
+struct YPathSegment *yevent_path(const struct YEvent *e, int *len);
+
+/**
+ * Releases allocated memory used by objects returned from `yevent_path` function.
+ */
+void yevent_path_destroy(struct YPathSegment *path, int len);
+
+/**
+ * Returns a sequence of changes produced by sequence component of shared collections (such as
+ * `YText`, `YXmlText` and XML nodes added to `YXmlElement`). `len` output parameter is used to
+ * provide information about number of changes produced.
+ *
+ * Delta returned from this function should eventually be released using `yevent_delta_destroy`
+ * function.
+ */
+struct YEventChange *yevent_delta(const struct YEvent *e, int *len);
+
+/**
+ * Releases memory allocated by the object returned from `yevent_delta` function.
+ */
+void yevent_delta_destroy(struct YEventChange *delta, int len);
+
+/**
+ * Returns a sequence of changes produced by map component of shared collections (such as
+ * `YMap` and `YXmlText`/`YXmlElement` attribute changes). `len` output parameter is used to
+ * provide information about number of changes produced.
+ *
+ * Delta returned from this function should eventually be released using `yevent_keys_destroy`
+ * function.
+ */
+struct YEventKeyChange *yevent_keys(const struct YEvent *e, int *len);
+
+/**
+ * Releases memory allocated by the object returned from `yevent_keys` function.
+ */
+void yevent_keys_destroy(struct YEventKeyChange *keys, int len);
 
 #endif

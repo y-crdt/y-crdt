@@ -120,7 +120,7 @@ impl TestConnector {
             let rc = self.0.clone();
             let inner = unsafe { self.0.as_ptr().as_mut().unwrap() };
             let mut instance = TestPeer::new(client_id);
-            instance.doc.on_update(move |e| {
+            instance.doc.on_update(move |txn, e| {
                 let payload = {
                     let mut encoder = EncoderV1::new();
                     encoder.write_uvar(MSG_SYNC_UPDATE);
@@ -428,9 +428,9 @@ impl TestConnector {
             let a = inner.peers[i].doc.transact();
             let b = inner.peers[i + 1].doc.transact();
 
-            assert_eq!(a.store.blocks, b.store.blocks);
-            assert_eq!(a.store.pending, b.store.pending);
-            assert_eq!(a.store.pending_ds, b.store.pending_ds);
+            assert_eq!(a.store().blocks, b.store().blocks);
+            assert_eq!(a.store().pending, b.store().pending);
+            assert_eq!(a.store().pending_ds, b.store().pending_ds);
         }
     }
 
