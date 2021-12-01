@@ -1,35 +1,27 @@
-#![feature()]
-
 use lib0::any::Any;
 use pyo3::exceptions::PyIndexError;
 use pyo3::prelude::*;
 use pyo3::types as pytypes;
 use pyo3::types::PyTuple;
-use pyo3::types::{PyAny, PyByteArray, PyDict};
+use pyo3::types::{PyAny, PyDict};
 use pyo3::wrap_pyfunction;
-use std::borrow::Borrow;
-use std::cell::Ref;
+use pyo3::PyIterProtocol;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::mem::ManuallyDrop;
 use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
-use std::sync::{Arc, Mutex};
 use yrs;
 use yrs::block::{ItemContent, Prelim};
 use yrs::types::array::ArrayIter;
 use yrs::types::map::MapIter;
-use yrs::types::xml::{Attributes, TreeWalker};
 use yrs::types::{
     Branch, BranchRef, TypePtr, TypeRefs, Value, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
-    TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT,
 };
 use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1};
-use yrs::{
-    Array, DeleteSet, Doc, Map, StateVector, Text, Transaction, Update, Xml, XmlElement, XmlText,
-};
+use yrs::{Array, Doc, Map, StateVector, Text, Transaction, Update};
 
 /// A ywasm document type. Documents are most important units of collaborative resources management.
 /// All shared collections live within a scope of their corresponding documents. All updates are
@@ -41,24 +33,22 @@ use yrs::{
 ///
 /// A basic workflow sample:
 ///
-/// ```javascript
-/// import YDoc from 'ywasm'
+/// ```python
+/// import YDoc from y_py
 ///
-/// const doc = new YDoc()
-/// const txn = doc.beginTransaction()
+/// doc = YDoc()
+/// txn = doc.begin_transaction()
 /// try {
-///     const text = txn.getText('name')
+///     text = txn.getText('name')
 ///     text.push(txn, 'hello world')
-///     const output = text.toString(txn)
+///     output = text.toString(txn)
 ///     console.log(output)
 /// } finally {
 ///     txn.free()
 /// }
 /// ```
 #[pyclass(unsendable)]
-pub struct YDoc {
-    inner: Doc,
-}
+pub struct YDoc(Doc);
 
 #[pymethods]
 impl YDoc {
@@ -68,18 +58,16 @@ impl YDoc {
     #[new]
     pub fn new(id: Option<f64>) -> Self {
         if let Some(id) = id {
-            YDoc {
-                inner: Doc::with_client_id(id as u64),
-            }
+            YDoc(Doc::with_client_id(id as u64))
         } else {
-            YDoc { inner: Doc::new() }
+            YDoc(Doc::new())
         }
     }
 
     /// Gets globally unique identifier of this `YDoc` instance.
     #[getter]
     pub fn id(&self) -> f64 {
-        self.inner.client_id as f64
+        self.0.client_id as f64
     }
 
     /// Returns a new transaction for this document. Ywasm shared data types execute their
@@ -111,7 +99,7 @@ impl YDoc {
     /// ```
     pub fn begin_transaction(&mut self) -> YTransaction {
         unsafe {
-            let doc: *mut Doc = &mut self.inner;
+            let doc: *mut Doc = &mut self.0;
             let static_txn: ManuallyDrop<Transaction<'static>> =
                 ManuallyDrop::new((*doc).transact());
             YTransaction(static_txn)
@@ -133,9 +121,9 @@ impl YDoc {
     ///
     /// If there was an instance with this name, but it was of different type, it will be projected
     /// onto `YMap` instance.
-    // pub fn get_map(&mut self, name: &str) -> YMap {
-    //     self.begin_transaction().get_map(name)
-    // }
+    pub fn get_map(&mut self, name: &str) -> YMap {
+        self.begin_transaction().get_map(name)
+    }
 
     /// Returns a `YXmlElement` shared data type, that's accessible for subsequent accesses using
     /// given `name`.
@@ -336,9 +324,9 @@ impl YTransaction {
     ///
     /// If there was an instance with this name, but it was of different type, it will be projected
     /// onto `YMap` instance.
-    // pub fn get_map(&mut self, name: &str) -> YMap {
-    //     self.inner.get_map(name).into()
-    // }
+    pub fn get_map(&mut self, name: &str) -> YMap {
+        self.0.get_map(name).into()
+    }
 
     /// Returns a `YXmlElement` shared data type, that's accessible for subsequent accesses using
     /// given `name`.
@@ -473,6 +461,7 @@ impl YTransaction {
     }
 
     fn __enter__<'p>(slf: PyRef<'p, Self>, _py: Python<'p>) -> PyResult<PyRef<'p, Self>> {
+        println!("Entered");
         Ok(slf)
     }
 
@@ -840,8 +829,8 @@ impl YArrayIterator {
         slf
     }
 
-    pub fn __next__(mut slf: PyRefMut<Self>) -> IteratorNext {
-        slf.0.next().into()
+    pub fn __next__(mut slf: PyRefMut<Self>) -> Option<ValueWrapper> {
+        slf.0.next().map(|v| ValueWrapper(v))
     }
 }
 
@@ -874,182 +863,173 @@ impl PrelimArrayIterator {
 /// updates are automatically overridden and discarded by newer ones, while concurrent updates made
 /// by different peers are resolved into a single value using document id seniority to establish
 /// order.
-// #[pyclass]
-// pub struct YMap(RefCell<SharedType<Map, HashMap<String, PyAny>>>);
+#[pyclass(unsendable)]
+pub struct YMap(RefCell<SharedType<Map, HashMap<String, PyObject>>>);
 
-// impl From<Map> for YMap {
-//     fn from(v: Map) -> Self {
-//         YMap(SharedType::new(v))
-//     }
-// }
+impl From<Map> for YMap {
+    fn from(v: Map) -> Self {
+        YMap(SharedType::new(v))
+    }
+}
 
-// #[pymethods]
-// impl YMap {
-//     /// Creates a new preliminary instance of a `YMap` shared data type, with its state
-//     /// initialized to provided parameter.
-//     ///
-//     /// Preliminary instances can be nested into other shared data types such as `YArray` and `YMap`.
-//     /// Once a preliminary instance has been inserted this way, it becomes integrated into ywasm
-//     /// document store and cannot be nested again: attempt to do so will result in an exception.
-//     #[new]
-//     pub fn new(init: Option<js_sys::Object>) -> Self {
-//         let map = if let Some(object) = init {
-//             let mut map = HashMap::new();
-//             let entries = js_sys::Object::entries(&object);
-//             for tuple in entries.iter() {
-//                 let tuple = js_sys::Array::from(&tuple);
-//                 let key = tuple.get(0).as_string().unwrap();
-//                 let value = tuple.get(1);
-//                 map.insert(key, value);
-//             }
-//             map
-//         } else {
-//             HashMap::new()
-//         };
-//         YMap(SharedType::prelim(map))
-//     }
+#[pymethods]
+impl YMap {
+    /// Creates a new preliminary instance of a `YMap` shared data type, with its state
+    /// initialized to provided parameter.
+    ///
+    /// Preliminary instances can be nested into other shared data types such as `YArray` and `YMap`.
+    /// Once a preliminary instance has been inserted this way, it becomes integrated into ywasm
+    /// document store and cannot be nested again: attempt to do so will result in an exception.
+    #[new]
+    pub fn new(dict: &PyDict) -> PyResult<Self> {
+        let mut map: HashMap<String, PyObject> = HashMap::new();
+        for (k, v) in dict.iter() {
+            let k = k.downcast::<pyo3::types::PyString>()?.to_string();
+            let v: PyObject = v.into();
+            map.insert(k, v);
+        }
+        Ok(YMap(RefCell::new(SharedType::Prelim(map))))
+    }
 
-//     /// Returns true if this is a preliminary instance of `YMap`.
-//     ///
-//     /// Preliminary instances can be nested into other shared data types such as `YArray` and `YMap`.
-//     /// Once a preliminary instance has been inserted this way, it becomes integrated into ywasm
-//     /// document store and cannot be nested again: attempt to do so will result in an exception.
-//     #[getter]
-//     pub fn prelim(&self) -> bool {
-//         if let SharedType::Prelim(_) = &*self.inner.borrow() {
-//             true
-//         } else {
-//             false
-//         }
-//     }
+    /// Returns true if this is a preliminary instance of `YMap`.
+    ///
+    /// Preliminary instances can be nested into other shared data types such as `YArray` and `YMap`.
+    /// Once a preliminary instance has been inserted this way, it becomes integrated into ywasm
+    /// document store and cannot be nested again: attempt to do so will result in an exception.
+    #[getter]
+    pub fn prelim(&self) -> bool {
+        if let SharedType::Prelim(_) = &*self.0.borrow() {
+            true
+        } else {
+            false
+        }
+    }
 
-//     /// Returns a number of entries stored within this instance of `YMap`.
-//     pub fn length(&self, txn: &YTransaction) -> u32 {
-//         match &*self.inner.borrow() {
-//             SharedType::Integrated(v) => v.len(txn),
-//             SharedType::Prelim(v) => v.len() as u32,
-//         }
-//     }
+    /// Returns a number of entries stored within this instance of `YMap`.
+    pub fn length(&self, txn: &YTransaction) -> u32 {
+        match &*self.0.borrow() {
+            SharedType::Integrated(v) => v.len(txn),
+            SharedType::Prelim(v) => v.len() as u32,
+        }
+    }
 
-//     /// Converts contents of this `YMap` instance into a JSON representation.
-//     pub fn to_json(&self, txn: &YTransaction) -> PyAny {
-//         match &*self.inner.borrow() {
-//             SharedType::Integrated(v) => any_into_py(v.to_json(txn)),
-//             SharedType::Prelim(v) => {
-//                 let map = js_sys::Object::new();
-//                 for (k, v) in v.iter() {
-//                     js_sys::Reflect::set(&map, &k.into(), v).unwrap();
-//                 }
-//                 map.into()
-//             }
-//         }
-//     }
+    /// Converts contents of this `YMap` instance into a JSON representation.
+    pub fn to_json(&self, txn: &YTransaction) -> PyResult<PyObject> {
+        Python::with_gil(|py| match &*self.0.borrow() {
+            SharedType::Integrated(v) => Ok(AnyWrapper(v.to_json(txn)).into_py(py)),
+            SharedType::Prelim(v) => {
+                let dict = PyDict::new(py);
+                for (k, v) in v.iter() {
+                    dict.set_item(k, v)?;
+                }
+                Ok(dict.into())
+            }
+        })
+    }
 
-//     /// Sets a given `key`-`value` entry within this instance of `YMap`. If another entry was
-//     /// already stored under given `key`, it will be overridden with new `value`.
-//     pub fn set(&self, txn: &mut YTransaction, key: &str, value: PyAny) {
-//         match &mut *self.inner.borrow_mut() {
-//             SharedType::Integrated(v) => {
-//                 v.insert(txn, key.to_string(), PyAnyWrapper(value));
-//             }
-//             SharedType::Prelim(v) => {
-//                 v.insert(key.to_string(), value);
-//             }
-//         }
-//     }
+    /// Sets a given `key`-`value` entry within this instance of `YMap`. If another entry was
+    /// already stored under given `key`, it will be overridden with new `value`.
+    pub fn set(&self, txn: &mut YTransaction, key: &str, value: PyObject) {
+        println!("Called set");
+        match &mut *self.0.borrow_mut() {
+            SharedType::Integrated(v) => {
+                v.insert(txn, key.to_string(), PyValueWrapper(value));
+            }
+            SharedType::Prelim(v) => {
+                v.insert(key.to_string(), value);
+            }
+        }
+    }
 
-//     /// Removes an entry identified by a given `key` from this instance of `YMap`, if such exists.
-//     pub fn delete(&mut self, txn: &mut YTransaction, key: &str) {
-//         match &mut *self.inner.borrow_mut() {
-//             SharedType::Integrated(v) => {
-//                 v.remove(txn, key);
-//             }
-//             SharedType::Prelim(v) => {
-//                 v.remove(key);
-//             }
-//         }
-//     }
+    /// Removes an entry identified by a given `key` from this instance of `YMap`, if such exists.
+    pub fn delete(&mut self, txn: &mut YTransaction, key: &str) {
+        match &mut *self.0.borrow_mut() {
+            SharedType::Integrated(v) => {
+                v.remove(txn, key);
+            }
+            SharedType::Prelim(v) => {
+                v.remove(key);
+            }
+        }
+    }
 
-//     /// Returns value of an entry stored under given `key` within this instance of `YMap`,
-//     /// or `undefined` if no such entry existed.
-//     pub fn get(&self, txn: &mut YTransaction, key: &str) -> PyAny {
-//         match &*self.inner.borrow() {
-//             SharedType::Integrated(v) => {
-//                 if let Some(value) = v.get(txn, key) {
-//                     value_into_py(value)
-//                 } else {
-//                     PyAny::undefined()
-//                 }
-//             }
-//             SharedType::Prelim(v) => {
-//                 if let Some(value) = v.get(key) {
-//                     value.clone()
-//                 } else {
-//                     PyAny::undefined()
-//                 }
-//             }
-//         }
-//     }
+    /// Returns value of an entry stored under given `key` within this instance of `YMap`,
+    /// or `undefined` if no such entry existed.
+    /// TODO: sort out undefined calls
+    pub fn get(&self, txn: &mut YTransaction, key: &str) -> PyObject {
+        match &*self.0.borrow() {
+            SharedType::Integrated(v) => {
+                if let Some(value) = v.get(txn, key) {
+                    Python::with_gil(|py| ValueWrapper(value).into_py(py))
+                } else {
+                    Python::with_gil(|py| py.None())
+                }
+            }
+            SharedType::Prelim(v) => {
+                if let Some(value) = v.get(key) {
+                    value.clone()
+                } else {
+                    Python::with_gil(|py| py.None())
+                }
+            }
+        }
+    }
 
-//     /// Returns an iterator that can be used to traverse over all entries stored within this
-//     /// instance of `YMap`. Order of entry is not specified.
-//     ///
-//     /// Example:
-//     ///
-//     /// ```javascript
-//     /// import YDoc from 'ywasm'
-//     ///
-//     /// /// document on machine A
-//     /// const doc = new YDoc()
-//     /// const map = doc.getMap('name')
-//     /// const txn = doc.beginTransaction()
-//     /// try {
-//     ///     map.set(txn, 'key1', 'value1')
-//     ///     map.set(txn, 'key2', true)
-//     ///
-//     ///     for (let [key, value] of map.entries(txn)) {
-//     ///         console.log(key, value)
-//     ///     }
-//     /// } finally {
-//     ///     txn.free()
-//     /// }
-//     /// ```
-//     pub fn entries(&self, txn: &mut YTransaction) -> PyAny {
-//         to_iter(match &*self.inner.borrow() {
-//             SharedType::Integrated(v) => unsafe {
-//                 let this: *const Map = v;
-//                 let tx: *const Transaction<'static> = txn.0.deref();
-//                 let static_iter: ManuallyDrop<MapIter<'static, 'static>> =
-//                     ManuallyDrop::new((*this).iter(tx.as_ref().unwrap()));
-//                 YMapIterator(static_iter).into()
-//             },
-//             SharedType::Prelim(v) => unsafe {
-//                 let this: *const HashMap<String, PyAny> = v;
-//                 let static_iter: ManuallyDrop<
-//                     std::collections::hash_map::Iter<'static, String, PyAny>,
-//                 > = ManuallyDrop::new((*this).iter());
-//                 PrelimMapIterator(static_iter).into()
-//             },
-//         })
-//     }
-// }
+    /// Returns an iterator that can be used to traverse over all entries stored within this
+    /// instance of `YMap`. Order of entry is not specified.
+    ///
+    /// Example:
+    ///
+    /// ```javascript
+    /// import YDoc from 'ywasm'
+    ///
+    /// /// document on machine A
+    /// const doc = new YDoc()
+    /// const map = doc.getMap('name')
+    /// const txn = doc.beginTransaction()
+    /// try {
+    ///     map.set(txn, 'key1', 'value1')
+    ///     map.set(txn, 'key2', true)
+    ///
+    ///     for (let [key, value] of map.entries(txn)) {
+    ///         console.log(key, value)
+    ///     }
+    /// } finally {
+    ///     txn.free()
+    /// }
+    /// ```
+    pub fn entries(&self, txn: &mut YTransaction) -> YMapIterator {
+        // Maybe return something that implements the PyIterator?
+        match &*self.0.borrow() {
+            SharedType::Integrated(val) => unsafe {
+                let this: *const Map = val;
+                let tx: *const Transaction<'static> = txn.0.deref();
+                let shared_iter =
+                    SharedYMapIterator::Integrated((*this).iter(tx.as_ref().unwrap()));
+                YMapIterator(ManuallyDrop::new(shared_iter))
+            },
+            SharedType::Prelim(val) => unsafe {
+                let this: *const HashMap<String, PyObject> = val;
+                let shared_iter = SharedYMapIterator::Prelim((*this).iter());
+                YMapIterator(ManuallyDrop::new(shared_iter))
+            },
+        }
+    }
+}
 
-// #[pyclass(unsendable)]
-// pub struct YMapIterator {
-//     inner: ManuallyDrop<MapIter<'static, 'static>>,
-// }
+pub enum SharedYMapIterator {
+    Integrated(MapIter<'static, 'static>),
+    Prelim(std::collections::hash_map::Iter<'static, String, PyObject>),
+}
 
-// impl Deref for YMapIterator {
-//     fn deref(self) {
-//         self.inner.deref();
-//     }
-// }
+#[pyclass(unsendable)]
+pub struct YMapIterator(ManuallyDrop<SharedYMapIterator>);
 
-// impl Drop for YMapIterator {
-//     fn drop(&mut self) {
-//         unsafe { ManuallyDrop::drop(&mut self.inner) }
-//     }
-// }
+impl Drop for YMapIterator {
+    fn drop(&mut self) {
+        unsafe { ManuallyDrop::drop(&mut self.0) }
+    }
+}
 
 // impl<'a> From<Option<(&'a String, Value)>> for IteratorNext {
 //     fn from(entry: Option<(&'a String, Value)>) -> Self {
@@ -1065,37 +1045,39 @@ impl PrelimArrayIterator {
 //     }
 // }
 
-// #[pymethods]
-// impl YMapIterator {
-//     pub fn next(&mut self) -> IteratorNext {
-//         self.inner.next().into()
-//     }
-// }
+#[pyproto]
+impl<'p> PyIterProtocol for YMapIterator {
+    fn __iter__(slf: PyRef<Self>) -> PyRef<Self> {
+        slf
+    }
+    fn __next__(mut slf: PyRefMut<Self>) -> Option<(String, PyObject)> {
+        match slf.0.deref_mut() {
+            SharedYMapIterator::Integrated(iter) => Python::with_gil(|py| {
+                iter.next()
+                    .map(|(k, v)| (k.clone(), ValueWrapper(v).into_py(py)))
+            }),
+            SharedYMapIterator::Prelim(iter) => iter.next().map(|(k, v)| (k.clone(), v.clone())),
+        }
+    }
+}
 
-// #[pyclass]
-// pub struct PrelimMapIterator(
-//     ManuallyDrop<std::collections::hash_map::Iter<'static, String, PyAny>>,
-// );
+#[pyclass(unsendable)]
+pub struct PrelimMapIterator(
+    ManuallyDrop<std::collections::hash_map::Iter<'static, String, PyObject>>,
+);
 
-// impl Drop for PrelimMapIterator {
-//     fn drop(&mut self) {
-//         unsafe { ManuallyDrop::drop(&mut self.inner) }
-//     }
-// }
+impl Drop for PrelimMapIterator {
+    fn drop(&mut self) {
+        unsafe { ManuallyDrop::drop(&mut self.0) }
+    }
+}
 
-// #[pymethods]
-// impl PrelimMapIterator {
-//     pub fn next(&mut self) -> IteratorNext {
-//         if let Some((key, value)) = self.inner.next() {
-//             let array = js_sys::Array::new_with_length(2);
-//             array.push(&PyAny::from(key));
-//             array.push(value);
-//             IteratorNext::new(array.into())
-//         } else {
-//             IteratorNext::finished()
-//         }
-//     }
-// }
+#[pymethods]
+impl PrelimMapIterator {
+    pub fn next(&mut self) -> Option<(String, PyObject)> {
+        self.0.next().map(|(k, v)| (k.clone(), v.clone()))
+    }
+}
 
 // /// XML element data type. It represents an XML node, which can contain key-value attributes
 // /// (interpreted as strings) as well as other nested XML elements or rich text (represented by
@@ -1457,37 +1439,38 @@ impl Prelim for PyObjectWrapper {
         let obj_ref = self.0.as_ref(py);
         if let Ok(shared) = Shared::extract(obj_ref) {
             if shared.is_prelim() {
-                match shared {
+                Python::with_gil(|py| match shared {
                     Shared::Text(v) => {
                         let text = Text::from(inner_ref);
                         if let SharedType::Prelim(v) =
-                            v.0.replace(SharedType::Integrated(text.clone()))
+                            v.borrow(py).0.replace(SharedType::Integrated(text.clone()))
                         {
                             text.push(txn, v.as_str());
                         }
                     }
                     Shared::Array(v) => {
                         let array = Array::from(inner_ref);
-                        if let SharedType::Prelim(items) = Python::with_gil(|py| {
-                            let arr = v.borrow(py);
-                            arr.0.replace(SharedType::Integrated(array.clone()))
-                        }) {
+                        if let SharedType::Prelim(items) = v
+                            .borrow(py)
+                            .0
+                            .replace(SharedType::Integrated(array.clone()))
+                        {
                             let len = array.len();
                             insert_at(&array, txn, len, items);
                         }
                     }
-                    // Shared::Map(v) => {
-                    //     let map = Map::from(inner_ref);
-                    //     if let SharedType::Prelim(entries) =
-                    //         v.0.replace(SharedType::Integrated(map.clone()))
-                    //     {
-                    //         for (k, v) in entries {
-                    //             map.insert(txn, k, PyAnyWrapper { inner: v });
-                    //         }
-                    //     }
-                    // }
+                    Shared::Map(v) => {
+                        let map = Map::from(inner_ref);
+                        if let SharedType::Prelim(entries) =
+                            v.borrow(py).0.replace(SharedType::Integrated(map.clone()))
+                        {
+                            for (k, v) in entries {
+                                map.insert(txn, k, PyValueWrapper(v));
+                            }
+                        }
+                    }
                     _ => panic!("Cannot integrate this type"),
-                }
+                })
             }
         }
     }
@@ -1529,8 +1512,10 @@ fn py_into_any(v: PyObject) -> Option<Any> {
         } else if let Ok(l) = v.downcast::<pytypes::PyLong>() {
             let i: f64 = l.extract().unwrap();
             Some(Any::BigInt(i as i64))
+        } else if v == py.None().as_ref(py) {
+            Some(Any::Null)
         }
-        // TODO: Handle Null vals
+        // TODO: Handle undefined vals?
         // else if let Ok(s) = v.downcast::<pytypes::Null>() {
         //     Some(Any::Null)
         // }
@@ -1622,7 +1607,7 @@ impl IntoPy<pyo3::PyObject> for ValueWrapper {
             Value::Any(v) => AnyWrapper(v).into_py(py),
             Value::YText(v) => YText::from(v).into_py(py),
             //YText::from(v).into(),
-            Value::YArray(v) => unreachable!(),
+            Value::YArray(v) => YArray::from(v).into_py(py),
             // YArray::from(v).into(),
             Value::YMap(v) => unreachable!(),
             //YMap::from(v).into(),
@@ -1630,6 +1615,72 @@ impl IntoPy<pyo3::PyObject> for ValueWrapper {
             //YXmlElement(v).into(),
             Value::YXmlText(v) => unreachable!(),
             // YXmlText(v).into(),
+        }
+    }
+}
+
+struct PyValueWrapper(PyObject);
+
+impl Prelim for PyValueWrapper {
+    fn into_content(self, _txn: &mut Transaction, ptr: TypePtr) -> (ItemContent, Option<Self>) {
+        let content = if let Some(any) = py_into_any(self.0.clone()) {
+            ItemContent::Any(vec![any])
+        } else if let Ok(shared) = Shared::try_from(self.0.clone()) {
+            if shared.is_prelim() {
+                let branch = BranchRef::new(Branch::new(ptr, shared.type_ref(), None));
+                ItemContent::Type(branch)
+            } else {
+                panic!("Cannot integrate this type")
+            }
+        } else {
+            panic!("Cannot integrate this type")
+        };
+
+        let this = if let ItemContent::Type(_) = &content {
+            Some(self)
+        } else {
+            None
+        };
+
+        (content, this)
+    }
+
+    fn integrate(self, txn: &mut Transaction, inner_ref: BranchRef) {
+        if let Ok(shared) = Shared::try_from(self.0) {
+            if shared.is_prelim() {
+                match shared {
+                    Shared::Text(v) => {
+                        let text = Text::from(inner_ref);
+                        if let SharedType::Prelim(v) = Python::with_gil(|py| {
+                            v.borrow(py).0.replace(SharedType::Integrated(text.clone()))
+                        }) {
+                            text.push(txn, v.as_str());
+                        }
+                    }
+                    Shared::Array(v) => {
+                        let array = Array::from(inner_ref);
+                        if let SharedType::Prelim(items) = Python::with_gil(|py| {
+                            v.borrow(py)
+                                .0
+                                .replace(SharedType::Integrated(array.clone()))
+                        }) {
+                            let len = array.len();
+                            insert_at(&array, txn, len, items);
+                        }
+                    }
+                    Shared::Map(v) => {
+                        let map = Map::from(inner_ref);
+                        if let SharedType::Prelim(entries) = Python::with_gil(|py| {
+                            v.borrow(py).0.replace(SharedType::Integrated(map.clone()))
+                        }) {
+                            for (k, v) in entries {
+                                map.insert(txn, k, PyValueWrapper(v));
+                            }
+                        }
+                    }
+                    _ => panic!("Cannot integrate this type"),
+                }
+            }
         }
     }
 }
@@ -1643,64 +1694,55 @@ impl IntoPy<pyo3::PyObject> for ValueWrapper {
 
 #[derive(FromPyObject)]
 enum Shared {
-    Text(YText),
+    Text(Py<YText>),
     Array(Py<YArray>),
-    // Map(Ref<'a, YMap>),
+    Map(Py<YMap>),
     // XmlElement(Ref<'a, YXmlElement>),
     // XmlText(Ref<'a, YXmlText>),
 }
-// TODO: pointer deref?
-// fn as_ref<'a, T>(py: u32) -> Ref<'a, T> {
-//     unsafe {
-//         let py = py as *mut wasm_bindgen::__rt::WasmRefCell<T>;
-//         (*py).borrow()
-//     }
-// }
-
-// impl<'a> TryFrom<&'a PyAny> for Shared<'a> {
-//     type Error = PyAny;
-
-//     // TODO
-//     fn try_from(py: &'a PyAny) -> Result<Self, Self::Error> {
-//         let ctor_name = Object::get_prototype_of(py).constructor().name();
-//         let ptr = Reflect::get(py, &PyAny::from_str("ptr"))?;
-//         let ptr_u32: u32 = ptr.as_f64().ok_or(PyAny::NULL)? as u32;
-//         if ctor_name == "YText" {
-//             Ok(Shared::Text(as_ref(ptr_u32)))
-//         }
-//         else if ctor_name == "YArray" {
-//             Ok(Shared::Array(as_ref(ptr_u32)))
-//         } else if ctor_name == "YMap" {
-//             Ok(Shared::Map(as_ref(ptr_u32)))
-//         } else if ctor_name == "YXmlElement" {
-//             Ok(Shared::XmlElement(as_ref(ptr_u32)))
-//         } else if ctor_name == "YXmlText" {
-//             Ok(Shared::XmlText(as_ref(ptr_u32)))
-//         }
-//         else {
-//             Err(PyAny::NULL)
-//         }
-//     }
-// }
 
 impl Shared {
     fn is_prelim(&self) -> bool {
-        match self {
-            Shared::Text(v) => v.prelim(),
-            Shared::Array(v) => Python::with_gil(|py| v.borrow(py).prelim()),
-            // Shared::Map(v) => v.prelim(),
-            // Shared::XmlElement(_) | Shared::XmlText(_) => false,
-        }
+        Python::with_gil(|py| {
+            match self {
+                Shared::Text(v) => v.borrow(py).prelim(),
+                Shared::Array(v) => v.borrow(py).prelim(),
+                Shared::Map(v) => v.borrow(py).prelim(),
+                // Shared::XmlElement(_) | Shared::XmlText(_) => false,
+            }
+        })
     }
 
     fn type_ref(&self) -> TypeRefs {
         match self {
             Shared::Text(_) => TYPE_REFS_TEXT,
             Shared::Array(_) => TYPE_REFS_ARRAY,
-            // Shared::Map(_) => TYPE_REFS_MAP,
+            Shared::Map(_) => TYPE_REFS_MAP,
             // Shared::XmlElement(_) => TYPE_REFS_XML_ELEMENT,
             // Shared::XmlText(_) => TYPE_REFS_XML_TEXT,
         }
+    }
+}
+
+impl TryFrom<PyObject> for Shared {
+    type Error = PyErr;
+
+    fn try_from(value: PyObject) -> Result<Self, Self::Error> {
+        Python::with_gil(|py| {
+            let value = value.as_ref(py);
+
+            if let Ok(text) = value.extract() {
+                Ok(Shared::Text(text))
+            } else if let Ok(array) = value.extract() {
+                Ok(Shared::Array(array))
+            } else if let Ok(map) = value.extract() {
+                Ok(Shared::Map(map))
+            } else {
+                Err(pyo3::exceptions::PyValueError::new_err(
+                    "Could not extract Python value into a shared type.",
+                ))
+            }
+        })
     }
 }
 
@@ -1710,6 +1752,8 @@ pub fn y_py(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<YText>()?;
     m.add_class::<YArray>()?;
     m.add_class::<YArrayIterator>()?;
+    m.add_class::<YMap>()?;
+    m.add_class::<YMapIterator>()?;
     m.add_wrapped(wrap_pyfunction!(encode_state_vector))?;
     m.add_wrapped(wrap_pyfunction!(encode_state_as_update))?;
     m.add_wrapped(wrap_pyfunction!(apply_update))?;
