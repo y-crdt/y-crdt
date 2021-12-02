@@ -197,7 +197,7 @@ impl Store {
         delete_set.encode(encoder);
     }
 
-    fn write_blocks<E: Encoder>(&self, remote_sv: &StateVector, encoder: &mut E) {
+    pub(crate) fn write_blocks<E: Encoder>(&self, remote_sv: &StateVector, encoder: &mut E) {
         let local_sv = self.blocks.get_state_vector();
         let mut diff = Self::diff_state_vectors(&local_sv, remote_sv);
 

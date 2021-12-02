@@ -55,7 +55,7 @@ fn text_insert_delete() {
             Some(ID::new(CLIENT_ID, 0)),
             TypePtr::Unknown,
             None,
-            ItemContent::String("ab".to_string()),
+            ItemContent::String("ab".into()),
         )),
         Block::Item(Item::new(
             ID::new(CLIENT_ID, 5),
@@ -85,7 +85,7 @@ fn text_insert_delete() {
             None,
             TypePtr::Unknown,
             None,
-            ItemContent::String("hi".to_string()),
+            ItemContent::String("hi".into()),
         )),
     ];
     let expected_ds = {

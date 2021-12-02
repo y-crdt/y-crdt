@@ -49,7 +49,6 @@ impl Transaction {
             committed: false,
         }
     }
-
     pub(crate) fn store(&self) -> &Store {
         unsafe { self.store.get().as_ref().unwrap() }
     }
@@ -160,10 +159,11 @@ impl Transaction {
     /// * Even if an update contains known information, the unknown information
     ///   is extracted and integrated into the document structure.
     pub fn encode_update_v1(&self) -> Vec<u8> {
-        let mut update_encoder = updates::encoder::EncoderV1::new();
-        self.store()
-            .encode_diff(&self.before_state, &mut update_encoder);
-        update_encoder.to_vec()
+        let mut enc = updates::encoder::EncoderV1::new();
+        let store = self.store();
+        store.write_blocks(&self.before_state, &mut enc);
+        self.delete_set.encode(&mut enc);
+        enc.to_vec()
     }
 
     pub(crate) fn apply_ranges<F>(&mut self, set: &IdSet, f: &F)
@@ -203,10 +203,8 @@ impl Transaction {
                         if let Some(item) = blocks.get_mut(index).as_item_mut() {
                             // split the first item if necessary
                             if !item.is_deleted() && item.id.clock < clock {
-                                let split_ptr = BlockPtr::new(
-                                    ID::new(*client, clock - item.id.clock),
-                                    index as u32,
-                                );
+                                let split_ptr =
+                                    BlockPtr::new(ID::new(*client, clock), index as u32);
                                 let (_, right) = self.store_mut().blocks.split_block(&split_ptr);
                                 if let Some(right) = right {
                                     index += 1;
@@ -220,8 +218,10 @@ impl Transaction {
                                 if let Some(item) = block.as_item_mut() {
                                     if item.id.clock < clock_end {
                                         if !item.is_deleted() {
-                                            let delete_ptr =
-                                                BlockPtr::new(item.id.clone(), index as u32);
+                                            let delete_ptr = BlockPtr::new(
+                                                ID::new(*client, item.id.clock),
+                                                index as u32,
+                                            );
                                             if item.id.clock + item.len() > clock_end {
                                                 let diff = clock_end - item.id.clock;
                                                 let mut split_ptr = delete_ptr.clone();
@@ -313,7 +313,7 @@ impl Transaction {
                     ItemContent::Type(t) => {
                         let inner = t.borrow_mut();
                         let mut ptr = inner.start;
-                        //TODO: self.changed.remove(&item.parent);
+                        //TODO: self.changed.remove(&item.parent); // uncomment when deep observe is complete
 
                         while let Some(item) =
                             ptr.and_then(|ptr| self.store().blocks.get_item(&ptr))

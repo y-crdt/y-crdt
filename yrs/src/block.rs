@@ -9,6 +9,7 @@ use crate::*;
 use lib0::any::Any;
 use std::collections::HashSet;
 use std::hash::Hash;
+use std::ops::Deref;
 use std::panic;
 use std::rc::Rc;
 
@@ -950,16 +951,70 @@ impl Item {
             }
             ItemContent::Type(inner) => {
                 // this.type._integrate(transaction.doc, item)
-                //let ptr = Some(BlockPtr::new(self.id.clone(), pivot));
-                //match inner.try_borrow_mut() {
-                //    Ok(mut parent) => parent.item = ptr,
-                //    Err(_) => parent.item = ptr,
-                //}
             }
             _ => {
                 // other types don't define integration-specific actions
             }
         }
+    }
+}
+
+#[derive(PartialEq, PartialOrd, Eq, Ord, Debug, Clone)]
+pub struct Unicode(String, usize);
+
+impl Unicode {
+    #[inline(always)]
+    pub fn count(&self) -> usize {
+        self.1
+    }
+
+    pub fn split_at(&self, offset: usize) -> (&str, &str) {
+        let offset = self.0.char_indices().map(|(i, _)| i).nth(offset).unwrap();
+        self.0.split_at(offset)
+    }
+
+    pub fn push_str(&mut self, str: &str) {
+        let count = str.chars().count();
+        self.0.push_str(str);
+        self.1 += count;
+    }
+}
+
+impl std::fmt::Display for Unicode {
+    #[inline(always)]
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl Into<String> for Unicode {
+    #[inline(always)]
+    fn into(self) -> String {
+        self.0
+    }
+}
+
+impl From<String> for Unicode {
+    fn from(str: String) -> Self {
+        let len = str.chars().count();
+        Unicode(str, len)
+    }
+}
+
+impl<'a> From<&'a str> for Unicode {
+    fn from(str: &'a str) -> Self {
+        let str = str.to_string();
+        let len = str.chars().count();
+        Unicode(str, len)
+    }
+}
+
+impl Deref for Unicode {
+    type Target = String;
+
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 
@@ -986,7 +1041,7 @@ pub enum ItemContent {
     Format(String, String), // key, value: JSON
 
     /// A chunk of text, usually applied by collaborative text insertion.
-    String(String),
+    String(Unicode),
 
     /// A reference of a branch node. Branch nodes define a complex collection types, such as
     /// arrays, maps or XML elements.
@@ -1042,7 +1097,7 @@ impl ItemContent {
     pub fn len(&self) -> u32 {
         match self {
             ItemContent::Deleted(deleted) => *deleted,
-            ItemContent::String(str) => str.chars().count() as u32,
+            ItemContent::String(str) => str.count() as u32,
             ItemContent::Any(v) => v.len() as u32,
             ItemContent::JSON(v) => v.len() as u32,
             _ => 1,
@@ -1086,7 +1141,7 @@ impl ItemContent {
             ItemContent::JSON(v) => v.last().map(|v| Value::Any(Any::String(v.clone()))),
             ItemContent::Embed(v) => Some(Value::Any(Any::String(v.clone()))),
             ItemContent::Format(_, _) => None,
-            ItemContent::String(v) => Some(Value::Any(Any::String(v.clone()))),
+            ItemContent::String(v) => Some(Value::Any(Any::String(v.clone().into()))),
             ItemContent::Type(c) => Some(c.clone().into_value(txn)),
         }
     }
@@ -1180,7 +1235,7 @@ impl ItemContent {
                 ItemContent::JSON(buf)
             }
             BLOCK_ITEM_BINARY_REF_NUMBER => ItemContent::Binary(decoder.read_buf().to_owned()),
-            BLOCK_ITEM_STRING_REF_NUMBER => ItemContent::String(decoder.read_string().to_owned()),
+            BLOCK_ITEM_STRING_REF_NUMBER => ItemContent::String(decoder.read_string().into()),
             BLOCK_ITEM_EMBED_REF_NUMBER => ItemContent::Embed(decoder.read_string().to_owned()),
             BLOCK_ITEM_FORMAT_REF_NUMBER => ItemContent::Format(
                 decoder.read_string().to_owned(),
@@ -1227,10 +1282,9 @@ impl ItemContent {
             }
             ItemContent::String(string) => {
                 // compute offset given in unicode code points into byte position
-                let offset = string.char_indices().map(|(i, _)| i).nth(offset).unwrap();
                 let (left, right) = string.split_at(offset);
-                let left = left.to_string();
-                let right = right.to_string();
+                let left: Unicode = left.into();
+                let right: Unicode = right.into();
 
                 //TODO: do we need that in Rust?
                 //let split_point = left.chars().last().unwrap();
@@ -1487,7 +1541,7 @@ pub struct PrelimText(pub String);
 
 impl Prelim for PrelimText {
     fn into_content(self, _txn: &mut Transaction, _ptr: TypePtr) -> (ItemContent, Option<Self>) {
-        (ItemContent::String(self.0), None)
+        (ItemContent::String(self.0.into()), None)
     }
 
     fn integrate(self, _txn: &mut Transaction, _inner_ref: BranchRef) {}
