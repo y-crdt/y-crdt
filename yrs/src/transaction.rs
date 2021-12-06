@@ -1,9 +1,9 @@
 use crate::*;
 
-use crate::block::{Block, BlockPtr, Item, ItemContent, Prelim, ID};
+use crate::block::{BlockPtr, Item, ItemContent, Prelim, ID};
 use crate::block_store::StateVector;
 use crate::event::UpdateEvent;
-use crate::id_set::{DeleteSet, IdSet};
+use crate::id_set::DeleteSet;
 use crate::store::Store;
 use crate::types::array::Array;
 use crate::types::xml::{XmlElement, XmlText};
@@ -164,21 +164,6 @@ impl Transaction {
         store.write_blocks(&self.before_state, &mut enc);
         self.delete_set.encode(&mut enc);
         enc.to_vec()
-    }
-
-    pub(crate) fn apply_ranges<F>(&mut self, set: &IdSet, f: &F)
-    where
-        F: Fn(&Block) -> (),
-    {
-        // equivalent of JS: Y.iterateDeletedStructs
-        let store = self.store_mut();
-        for (client, ranges) in set.iter() {
-            if store.blocks.contains_client(client) {
-                for range in ranges.iter() {
-                    store.iterate_structs(client, range, f);
-                }
-            }
-        }
     }
 
     /// Applies given `id_set` onto current transaction to run multi-range deletion.

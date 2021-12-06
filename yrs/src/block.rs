@@ -334,15 +334,6 @@ impl Block {
         }
     }
 
-    /// Returns an ID of a block, current item depends upon
-    /// (meaning: dependency must appear in the store before current item).
-    pub fn dependency(&self) -> Option<&ID> {
-        match self {
-            Block::Item(item) => item.dependency(),
-            _ => None,
-        }
-    }
-
     /// Checks if two blocks are of the same type.
     pub fn same_type(&self, other: &Self) -> bool {
         match (self, other) {
@@ -910,18 +901,6 @@ impl Item {
         }
     }
 
-    /// Returns an ID of a block, current item depends upon
-    /// (meaning: dependency must appear in the store before current item).
-    pub fn dependency(&self) -> Option<&ID> {
-        self.origin
-            .as_ref()
-            .or_else(|| self.right_origin.as_ref())
-            .or_else(|| match &self.parent {
-                TypePtr::Id(ptr) => Some(&ptr.id),
-                _ => None,
-            })
-    }
-
     fn info(&self) -> u8 {
         let info = if self.origin.is_some() { HAS_ORIGIN } else { 0 } // is left null
             | if self.right_origin.is_some() { HAS_RIGHT_ORIGIN } else { 0 } // is right null
@@ -930,7 +909,7 @@ impl Item {
         info
     }
 
-    fn integrate_content(&mut self, txn: &mut Transaction, pivot: u32, parent: &mut Branch) {
+    fn integrate_content(&mut self, txn: &mut Transaction, _pivot: u32, _parent: &mut Branch) {
         match &mut self.content {
             ItemContent::Deleted(len) => {
                 txn.delete_set.insert(self.id, *len);
@@ -949,7 +928,7 @@ impl Item {
                 // @todo searchmarker are currently unsupported for rich text documents
                 // /** @type {AbstractType<any>} */ (item.parent)._searchMarker = null
             }
-            ItemContent::Type(inner) => {
+            ItemContent::Type(_inner) => {
                 // this.type._integrate(transaction.doc, item)
             }
             _ => {

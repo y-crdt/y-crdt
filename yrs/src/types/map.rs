@@ -552,17 +552,17 @@ mod test {
 
     #[test]
     fn insert_and_remove_events() {
-        let mut d1 = Doc::with_client_id(1);
+        let d1 = Doc::with_client_id(1);
         let m1 = {
             let mut txn = d1.transact();
             txn.get_map("map")
         };
 
-        let mut entries = Rc::new(RefCell::new(None));
-        let mut entries_c = entries.clone();
+        let entries = Rc::new(RefCell::new(None));
+        let entries_c = entries.clone();
         let _sub = m1.observe(move |txn, e| {
             let keys = e.keys(txn);
-            entries_c.borrow_mut().insert(keys.clone());
+            *entries_c.borrow_mut() = Some(keys.clone());
         });
 
         // insert new entry
@@ -642,17 +642,17 @@ mod test {
         assert_eq!(entries.take(), Some(HashMap::new()));
 
         // copy updates over
-        let mut d2 = Doc::with_client_id(2);
+        let d2 = Doc::with_client_id(2);
         let m2 = {
             let mut txn = d2.transact();
             txn.get_map("map")
         };
 
-        let mut entries = Rc::new(RefCell::new(None));
-        let mut entries_c = entries.clone();
+        let entries = Rc::new(RefCell::new(None));
+        let entries_c = entries.clone();
         let _sub = m2.observe(move |txn, e| {
             let keys = e.keys(txn);
-            entries_c.borrow_mut().insert(keys.clone());
+            *entries_c.borrow_mut() = Some(keys.clone());
         });
 
         {
