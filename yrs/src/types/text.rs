@@ -494,10 +494,10 @@ mod test {
             let mut txn = d1.transact();
             txn.get_text("text")
         };
-        let mut delta = Rc::new(RefCell::new(None));
+        let delta = Rc::new(RefCell::new(None));
         let delta_c = delta.clone();
         let _sub = txt.observe(move |txn, e| {
-            delta_c.borrow_mut().insert(e.delta(txn).to_vec());
+            *delta_c.borrow_mut() = Some(e.delta(txn).to_vec());
         });
 
         // insert initial string
@@ -549,7 +549,7 @@ mod test {
         };
         let delta_c = delta.clone();
         let _sub = txt.observe(move |txn, e| {
-            delta_c.borrow_mut().insert(e.delta(txn).to_vec());
+            *delta_c.borrow_mut() = Some(e.delta(txn).to_vec());
         });
 
         {
@@ -575,7 +575,7 @@ mod test {
 
     #[test]
     fn unicode_support() {
-        let mut d = Doc::with_client_id(1);
+        let d = Doc::with_client_id(1);
         let mut txn = d.transact();
         let txt = txn.get_text("test");
 

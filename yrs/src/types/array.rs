@@ -598,9 +598,9 @@ mod test {
             let mut txn = d.transact();
             txn.get_array("array")
         };
-        let mut happened = Rc::new(Cell::new(false));
+        let happened = Rc::new(Cell::new(false));
         let happened_clone = happened.clone();
-        let _sub = array.observe(move |txn, e| {
+        let _sub = array.observe(move |_, _| {
             happened_clone.set(true);
         });
 
@@ -642,15 +642,15 @@ mod test {
             let mut txn = d1.transact();
             txn.get_array("array")
         };
-        let mut added = Rc::new(RefCell::new(None));
-        let mut removed = Rc::new(RefCell::new(None));
-        let mut delta = Rc::new(RefCell::new(None));
+        let added = Rc::new(RefCell::new(None));
+        let removed = Rc::new(RefCell::new(None));
+        let delta = Rc::new(RefCell::new(None));
 
         let (added_c, removed_c, delta_c) = (added.clone(), removed.clone(), delta.clone());
         let _sub = array.observe(move |txn, e| {
-            added_c.borrow_mut().insert(e.inserts(txn).clone());
-            removed_c.borrow_mut().insert(e.removes(txn).clone());
-            delta_c.borrow_mut().insert(e.delta(txn).to_vec());
+            *added_c.borrow_mut() = Some(e.inserts(txn).clone());
+            *removed_c.borrow_mut() = Some(e.removes(txn).clone());
+            *delta_c.borrow_mut() = Some(e.delta(txn).to_vec());
         });
 
         {
@@ -707,9 +707,9 @@ mod test {
         };
         let (added_c, removed_c, delta_c) = (added.clone(), removed.clone(), delta.clone());
         let _sub = array2.observe(move |txn, e| {
-            added_c.borrow_mut().insert(e.inserts(txn).clone());
-            removed_c.borrow_mut().insert(e.removes(txn).clone());
-            delta_c.borrow_mut().insert(e.delta(txn).to_vec());
+            *added_c.borrow_mut() = Some(e.inserts(txn).clone());
+            *removed_c.borrow_mut() = Some(e.removes(txn).clone());
+            *delta_c.borrow_mut() = Some(e.delta(txn).to_vec());
         });
 
         {
@@ -751,13 +751,13 @@ mod test {
 
         let c1 = Rc::new(RefCell::new(None));
         let c1c = c1.clone();
-        let _s1 = a1.observe(move |txn, e| {
-            c1c.borrow_mut().insert(e.target());
+        let _s1 = a1.observe(move |_, e| {
+            *c1c.borrow_mut() = Some(e.target());
         });
         let c2 = Rc::new(RefCell::new(None));
         let c2c = c2.clone();
-        let _s2 = a2.observe(move |txn, e| {
-            c2c.borrow_mut().insert(e.target());
+        let _s2 = a2.observe(move |_, e| {
+            *c2c.borrow_mut() = Some(e.target());
         });
 
         {

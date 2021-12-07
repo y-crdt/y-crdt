@@ -420,11 +420,6 @@ impl BlockStore {
         self.clients.is_empty()
     }
 
-    /// Checks if the were any blocks integrated from a given `client`.
-    pub fn contains_client(&self, client: &u64) -> bool {
-        self.clients.contains_key(client)
-    }
-
     /// Returns an immutable reference to a block list for a particular `client`. Returns `None` if
     /// no block list existed for provided `client` in current block store.
     pub fn get(&self, client: &u64) -> Option<&ClientBlockList> {

@@ -916,7 +916,7 @@ mod test {
         let r1 = t1.get_xml_element("root");
         let first = r1.push_text_back(&mut t1);
         first.push(&mut t1, "hello");
-        let second = r1.push_elem_back(&mut t1, "p");
+        r1.push_elem_back(&mut t1, "p");
 
         let expected = "<UNDEFINED>hello<p></p></UNDEFINED>";
         assert_eq!(r1.to_string(&t1), expected);
@@ -938,7 +938,7 @@ mod test {
         let r1 = t1.get_xml_element("root");
         let first = r1.push_text_back(&mut t1);
         first.push(&mut t1, "hello");
-        let second = r1.push_elem_back(&mut t1, "p");
+        r1.push_elem_back(&mut t1, "p");
 
         /* This binary is result of following Yjs code (matching Rust code above):
         ```js
@@ -962,19 +962,19 @@ mod test {
 
     #[test]
     fn event_observers() {
-        let mut d1 = Doc::with_client_id(1);
+        let d1 = Doc::with_client_id(1);
         let xml = {
             let mut txn = d1.transact();
             txn.get_xml_element("xml")
         };
 
-        let mut attributes = Rc::new(RefCell::new(None));
-        let mut nodes = Rc::new(RefCell::new(None));
-        let mut attributes_c = attributes.clone();
-        let mut nodes_c = nodes.clone();
+        let attributes = Rc::new(RefCell::new(None));
+        let nodes = Rc::new(RefCell::new(None));
+        let attributes_c = attributes.clone();
+        let nodes_c = nodes.clone();
         let _sub = xml.observe(move |txn, e| {
-            attributes_c.borrow_mut().insert(e.keys(txn).clone());
-            nodes_c.borrow_mut().insert(e.delta(txn).to_vec());
+            *attributes_c.borrow_mut() = Some(e.keys(txn).clone());
+            *nodes_c.borrow_mut() = Some(e.delta(txn).to_vec());
         });
 
         // insert attribute
@@ -1055,19 +1055,19 @@ mod test {
         assert_eq!(attributes.borrow_mut().take(), Some(HashMap::new()));
 
         // copy updates over
-        let mut d2 = Doc::with_client_id(2);
+        let d2 = Doc::with_client_id(2);
         let xml2 = {
             let mut txn = d2.transact();
             txn.get_xml_element("xml")
         };
 
-        let mut attributes = Rc::new(RefCell::new(None));
-        let mut nodes = Rc::new(RefCell::new(None));
-        let mut attributes_c = attributes.clone();
-        let mut nodes_c = nodes.clone();
+        let attributes = Rc::new(RefCell::new(None));
+        let nodes = Rc::new(RefCell::new(None));
+        let attributes_c = attributes.clone();
+        let nodes_c = nodes.clone();
         let _sub = xml2.observe(move |txn, e| {
-            attributes_c.borrow_mut().insert(e.keys(txn).clone());
-            nodes_c.borrow_mut().insert(e.delta(txn).to_vec());
+            *attributes_c.borrow_mut() = Some(e.keys(txn).clone());
+            *nodes_c.borrow_mut() = Some(e.delta(txn).to_vec());
         });
 
         {

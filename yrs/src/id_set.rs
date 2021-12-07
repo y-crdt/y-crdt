@@ -96,7 +96,11 @@ impl IdRange {
         match self {
             IdRange::Continuous(r) => {
                 if r.end >= range.start {
-                    r.end = range.end; // two ranges overlap, we can eagerly merge them
+                    if r.start > range.end {
+                        *self = IdRange::Fragmented(vec![range, r.clone()])
+                    } else {
+                        r.end = range.end; // two ranges overlap, we can eagerly merge them
+                    }
                 } else {
                     *self = IdRange::Fragmented(vec![r.clone(), range])
                 }
