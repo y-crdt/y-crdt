@@ -1,14 +1,13 @@
-use crate::block::{Block, BlockPtr, ItemContent};
+use crate::block::ItemContent;
 use crate::block_store::{BlockStore, SquashResult, StateVector};
 use crate::event::{EventHandler, UpdateEvent};
 use crate::id_set::DeleteSet;
+use crate::types;
 use crate::types::{BranchRef, Path, PathSegment, TypePtr, TypeRefs, TYPE_REFS_UNDEFINED};
 use crate::update::PendingUpdate;
 use crate::updates::encoder::{Encode, Encoder};
-use crate::{types, ID};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
-use std::ops::Range;
 use std::rc::Rc;
 
 /// Store is a core element of a document. It contains all of the information, like block store
@@ -133,52 +132,6 @@ impl Store {
         value.clone()
     }
 
-    pub(crate) fn find_index_clean_start(&mut self, client: &u64, clock: u32) -> Option<usize> {
-        let blocks = self.blocks.get_mut(client)?;
-        let index = blocks.find_pivot(clock)?;
-        let block = blocks.get_mut(index);
-        if let Some(item) = block.as_item_mut() {
-            if item.id.clock < clock {
-                // if we run over the clock, we need to the split item
-                let id = ID::new(*client, clock - item.id.clock);
-                self.blocks.split_block(&BlockPtr::new(id, index as u32));
-                return Some(index + 1);
-            }
-        }
-
-        Some(index)
-    }
-
-    pub(crate) fn iterate_structs<F>(&mut self, client: &u64, range: &Range<u32>, f: &F)
-    where
-        F: Fn(&Block) -> (),
-    {
-        let clock_start = range.start;
-        let clock_end = range.end;
-
-        if clock_start == clock_end {
-            return;
-        }
-
-        if let Some(mut index) = self.find_index_clean_start(client, clock_start) {
-            let mut blocks = self.blocks.get(client).unwrap();
-            let mut block = &blocks[index];
-
-            while index < blocks.len() && block.id().clock < clock_end {
-                if clock_end < block.clock_end() {
-                    self.find_index_clean_start(client, clock_start);
-                    blocks = self.blocks.get(client).unwrap();
-                    block = &blocks[index];
-                }
-
-                f(block);
-                index += 1;
-
-                block = &blocks[index];
-            }
-        }
-    }
-
     /// Compute a diff to sync with another client.
     ///
     /// This is the most efficient method to sync with another client by only
@@ -197,7 +150,7 @@ impl Store {
         delete_set.encode(encoder);
     }
 
-    fn write_blocks<E: Encoder>(&self, remote_sv: &StateVector, encoder: &mut E) {
+    pub(crate) fn write_blocks<E: Encoder>(&self, remote_sv: &StateVector, encoder: &mut E) {
         let local_sv = self.blocks.get_state_vector();
         let mut diff = Self::diff_state_vectors(&local_sv, remote_sv);
 
@@ -261,16 +214,6 @@ impl Store {
                 item.left = Some(compaction.replacement);
             }
         }
-    }
-
-    pub(crate) fn get_root_type_key(&self, value: &BranchRef) -> Option<&Rc<str>> {
-        for (k, v) in self.types.iter() {
-            if v == value {
-                return Some(k);
-            }
-        }
-
-        None
     }
 
     pub fn get_type_from_path(&self, path: &Path) -> Option<&BranchRef> {

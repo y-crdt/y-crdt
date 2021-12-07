@@ -1389,7 +1389,6 @@ pub unsafe extern "C" fn yxmltext_len(txt: *const XmlText, txn: *const Transacti
     assert!(!txn.is_null());
 
     let txt = txt.as_ref().unwrap();
-    let txn = txn.as_ref().unwrap();
 
     txt.len() as c_int
 }
@@ -2869,13 +2868,15 @@ mod test {
         unsafe {
             let doc = ydoc_new();
             let txn = ytransaction_new(doc);
-            let array = yarray(txn, CString::new("test").unwrap().as_ptr());
+            let array_name = CString::new("test").unwrap();
+            let array = yarray(txn, array_name.as_ptr());
 
             let y_true = yinput_bool(Y_TRUE);
             let y_false = yinput_bool(Y_FALSE);
             let y_float = yinput_float(0.5);
             let y_int = yinput_long(11);
-            let y_str = yinput_string(CString::new("hello").unwrap().as_ptr());
+            let input = CString::new("hello").unwrap();
+            let y_str = yinput_string(input.as_ptr());
 
             let values = &[y_true, y_false, y_float, y_int, y_str];
 

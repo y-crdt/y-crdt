@@ -108,7 +108,7 @@ impl Doc {
     where
         F: Fn(&Transaction, &UpdateEvent) -> () + 'static,
     {
-        let mut store = unsafe { &mut *self.store.get() };
+        let store = unsafe { &mut *self.store.get() };
         store.update_events.subscribe(f)
     }
 }
@@ -214,7 +214,7 @@ mod test {
         let doc = Doc::new();
         let mut doc2 = Doc::new();
         let c = counter.clone();
-        let sub = doc2.on_update(move |txn, e| {
+        let sub = doc2.on_update(move |_txn, e| {
             for block in e.update.blocks.blocks() {
                 c.set(c.get() + block.len());
             }
