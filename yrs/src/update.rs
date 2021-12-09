@@ -2,6 +2,7 @@ use crate::block::{
     Block, BlockPtr, Item, ItemContent, Skip, BLOCK_GC_REF_NUMBER, BLOCK_SKIP_REF_NUMBER, GC,
     HAS_ORIGIN, HAS_PARENT_SUB, HAS_RIGHT_ORIGIN,
 };
+use crate::doc::Options;
 use crate::id_set::DeleteSet;
 #[cfg(test)]
 use crate::store::Store;
@@ -691,7 +692,7 @@ impl std::fmt::Display for Update {
 #[cfg(test)]
 impl Into<Store> for Update {
     fn into(self) -> Store {
-        let mut store = Store::new(0);
+        let mut store = Store::new(Options::with_client_id(0));
         for (client_id, vec) in self.blocks.clients {
             let blocks = store
                 .blocks

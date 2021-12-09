@@ -160,7 +160,7 @@ impl From<BranchRef> for Text {
 
 #[cfg(test)]
 mod test {
-    use crate::test_utils::{run_scenario, RngExt};
+    use crate::test_utils::{exchange_updates, run_scenario, RngExt};
     use crate::types::Change;
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encoder, EncoderV1};
@@ -575,16 +575,50 @@ mod test {
 
     #[test]
     fn unicode_support() {
-        let d = Doc::with_client_id(1);
-        let mut txn = d.transact();
-        let txt = txn.get_text("test");
+        let d1 = Doc::with_client_id(1);
+        let txt1 = {
+            let mut txn = d1.transact();
+            txn.get_text("test")
+        };
 
-        txt.insert(&mut txn, 0, "😀🙄"); // emoji are a 4-byte unicode points
-        assert_eq!(txt.to_string(&txn), "😀🙄");
-        assert_eq!(txt.len(), 2);
-        txt.insert(&mut txn, 1, "🥰");
-        assert_eq!(txt.to_string(&txn), "😀🥰🙄");
-        assert_eq!(txt.len(), 3);
+        let d2 = Doc::with_client_id(2);
+        let txt2 = {
+            let mut txn = d2.transact();
+            txn.get_text("test")
+        };
+
+        {
+            let mut txn = d1.transact();
+
+            txt1.insert(&mut txn, 0, "Zażółć gęślą jaźń");
+            assert_eq!(txt1.to_string(&txn), "Zażółć gęślą jaźń");
+            assert_eq!(txt1.len(), 17);
+        }
+
+        exchange_updates(&[&d1, &d2]);
+
+        {
+            let txn = d2.transact();
+            assert_eq!(txt2.to_string(&txn), "Zażółć gęślą jaźń");
+            assert_eq!(txt2.len(), 17);
+        }
+
+        {
+            let mut txn = d1.transact();
+            txt1.remove_range(&mut txn, 9, 3);
+            txt1.insert(&mut txn, 9, "si");
+
+            assert_eq!(txt1.to_string(&txn), "Zażółć gęsi jaźń");
+            assert_eq!(txt1.len(), 16);
+        }
+
+        exchange_updates(&[&d1, &d2]);
+
+        {
+            let txn = d2.transact();
+            assert_eq!(txt2.to_string(&txn), "Zażółć gęsi jaźń");
+            assert_eq!(txt2.len(), 16);
+        }
     }
 
     fn text_transactions() -> [Box<dyn Fn(&mut Doc, &mut StdRng)>; 2] {
