@@ -18,7 +18,10 @@ use yrs::types::{
 };
 use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1};
-use yrs::{Array, Doc, Map, StateVector, Text, Transaction, Update, Xml, XmlElement, XmlText};
+use yrs::{
+    Array, Doc, Encoding, Map, Options, StateVector, Text, Transaction, Update, Xml, XmlElement,
+    XmlText,
+};
 
 // When the `wee_alloc` feature is enabled, use `wee_alloc` as the global
 // allocator.
@@ -74,11 +77,14 @@ impl YDoc {
     /// be assigned a randomly generated number.
     #[wasm_bindgen(constructor)]
     pub fn new(id: Option<f64>) -> Self {
-        if let Some(id) = id {
-            YDoc(Doc::with_client_id(id as u64))
+        let mut options = if let Some(id) = id {
+            Options::with_client_id(id as u64)
         } else {
-            YDoc(Doc::new())
-        }
+            Options::default()
+        };
+
+        options.encoding = Encoding::Utf16;
+        YDoc(Doc::with_options(options))
     }
 
     /// Gets globally unique identifier of this `YDoc` instance.
