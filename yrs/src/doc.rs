@@ -129,7 +129,7 @@ pub struct Options {
     /// Encoding used for text operations.
     pub encoding: Encoding,
     /// Determines if transactions commits should try to perform GC-ing of deleted items.
-    pub gc: bool,
+    pub skip_gc: bool,
 }
 
 impl Options {
@@ -137,7 +137,7 @@ impl Options {
         Options {
             client_id,
             encoding: Encoding::Bytes,
-            gc: true,
+            skip_gc: false,
         }
     }
 }

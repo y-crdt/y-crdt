@@ -313,13 +313,26 @@ impl Block {
         }
     }
 
+    /// Returns a length of a block. For most situation it works like [Block::content_len] with a
+    /// difference to a [Text]/[XmlText] contents - in order to achieve compatibility with
+    /// Yjs we need to calculate string length in terms of UTF-16 character encoding.
+    /// However depending on used [Encoding] scheme we may calculate string length/offsets
+    /// differently.
+    pub fn len(&self) -> u32 {
+        match self {
+            Block::Item(item) => item.len(),
+            Block::Skip(skip) => skip.len,
+            Block::GC(gc) => gc.len,
+        }
+    }
+
     /// Returns a number of elements stored within this block. These elements don't have to exists
     /// in reality ie. when block was garbage collected or tombstoned, corresponding content no
     /// longer exists but `len` still refers to a number of elements current block used to
     /// represent.
-    pub fn len(&self) -> u32 {
+    pub fn content_len(&self, encoding: Encoding) -> u32 {
         match self {
-            Block::Item(item) => item.len(),
+            Block::Item(item) => item.content_len(encoding),
             Block::Skip(skip) => skip.len,
             Block::GC(gc) => gc.len,
         }
@@ -635,6 +648,7 @@ impl Item {
     /// If it returns true, it means that the block should be deleted after being added to a block store.
     pub fn integrate(&mut self, txn: &mut Transaction, pivot: u32, offset: u32) -> bool {
         let mut store = txn.store_mut();
+        let encoding = store.options.encoding;
         if offset > 0 {
             self.id.clock += offset;
             let (left, _) = store
@@ -795,7 +809,8 @@ impl Item {
             }
 
             if self.parent_sub.is_none() && self.is_countable() && !self.is_deleted() {
-                parent_ref.len += self.len();
+                parent_ref.block_len += self.len();
+                parent_ref.content_len += self.content_len(encoding);
             }
 
             self.integrate_content(txn, pivot, &mut *parent_ref);
@@ -836,7 +851,11 @@ impl Item {
     /// in reality ie. when item has been deleted, corresponding content no longer exists but `len`
     /// still refers to a number of elements current block used to represent.
     pub fn len(&self) -> u32 {
-        self.content.len()
+        self.content.len(Encoding::Utf16)
+    }
+
+    pub fn content_len(&self, encoding: Encoding) -> u32 {
+        self.content.len(encoding)
     }
 
     pub fn slice(&self, diff: u32) -> Item {
@@ -966,10 +985,37 @@ impl SplittableString {
     pub fn split_at(&self, offset: usize, encoding: Encoding) -> (&str, &str) {
         let off = match encoding {
             Encoding::Bytes => offset,
-            Encoding::Utf16 => self.map_utf16_offset(offset),
-            Encoding::Unicode => self.map_unicode_offset(offset),
+            Encoding::Utf16 => self.map_utf16_offset(offset as u32) as usize,
+            Encoding::Unicode => self.map_unicode_offset(offset as u32) as usize,
         };
         self.content.split_at(off)
+    }
+
+    /// Maps given offset onto block offset. This means, that given an `offset` provided
+    /// in given `encoding` we want the output as a UTF-16 compatible offset (required
+    /// by Yjs for compatibility reasons).
+    pub(crate) fn block_offset(&self, offset: u32, encoding: Encoding) -> u32 {
+        match encoding {
+            Encoding::Utf16 => offset,
+            Encoding::Bytes => {
+                let mut remaining = offset;
+                let mut i = 0;
+                for c in self.content.encode_utf16() {
+                    if remaining == 0 {
+                        break;
+                    }
+                    let utf8_len = if c < 0x80 { 1 } else { 2 };
+                    remaining -= utf8_len;
+                    i += 1;
+                }
+                i
+            }
+            Encoding::Unicode => self
+                .content
+                .chars()
+                .take(offset as usize)
+                .fold(0, |sum, c| sum + c.len_utf16() as u32),
+        }
     }
 
     pub fn push_str(&mut self, str: &str) {
@@ -978,7 +1024,7 @@ impl SplittableString {
         self.utf16_len += count;
     }
 
-    fn map_utf16_offset(&self, offset: usize) -> usize {
+    fn map_utf16_offset(&self, offset: u32) -> u32 {
         let mut off = 0;
         let mut i = 0;
         for c in self.content.encode_utf16() {
@@ -991,7 +1037,7 @@ impl SplittableString {
         off
     }
 
-    fn map_unicode_offset(&self, offset: usize) -> usize {
+    fn map_unicode_offset(&self, offset: u32) -> u32 {
         let mut off = 0;
         let mut i = 0;
         for c in self.content.chars() {
@@ -1001,7 +1047,7 @@ impl SplittableString {
             off += c.len_utf8();
             i += 1;
         }
-        off
+        off as u32
     }
 }
 
@@ -1117,10 +1163,10 @@ impl ItemContent {
     ///
     /// In cases of counting number of visible elements, `len` method should be used together with
     /// [ItemContent::is_countable].
-    pub fn len(&self) -> u32 {
+    pub fn len(&self, encoding: Encoding) -> u32 {
         match self {
             ItemContent::Deleted(deleted) => *deleted,
-            ItemContent::String(str) => str.utf16_len() as u32,
+            ItemContent::String(str) => str.len(encoding) as u32,
             ItemContent::Any(v) => v.len() as u32,
             ItemContent::JSON(v) => v.len() as u32,
             _ => 1,
