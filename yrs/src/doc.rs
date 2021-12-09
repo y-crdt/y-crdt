@@ -48,17 +48,19 @@ pub struct Doc {
 impl Doc {
     /// Creates a new document with a randomized client identifier.
     pub fn new() -> Self {
-        let client_id: u64 = rand::thread_rng().gen();
-        // to keep it aligned with Yjs we only generate 53bit integers
-        Self::with_client_id(client_id & 0x3fffffffffffff)
+        Self::with_options(Options::default())
     }
 
     /// Creates a new document with a specified `client_id`. It's up to a caller to guarantee that
     /// this identifier is unique across all communicating replicas of that document.
     pub fn with_client_id(client_id: u64) -> Self {
+        Self::with_options(Options::with_client_id(client_id))
+    }
+
+    pub fn with_options(options: Options) -> Self {
         Doc {
-            client_id,
-            store: Rc::new(UnsafeCell::new(Store::new(client_id))),
+            client_id: options.client_id,
+            store: Rc::new(UnsafeCell::new(Store::new(options))),
         }
     }
 
@@ -117,6 +119,45 @@ impl Default for Doc {
     fn default() -> Self {
         Doc::new()
     }
+}
+
+/// Configuration options of [Doc] instance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Options {
+    /// Globally unique 53-bit long client identifier.
+    pub client_id: u64,
+    /// Encoding used for text operations.
+    pub encoding: Encoding,
+    /// Determines if transactions commits should try to perform GC-ing of deleted items.
+    pub gc: bool,
+}
+
+impl Options {
+    pub fn with_client_id(client_id: u64) -> Self {
+        Options {
+            client_id,
+            encoding: Encoding::Bytes,
+            gc: true,
+        }
+    }
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        let client_id: u64 = rand::thread_rng().gen();
+        Self::with_client_id(client_id & 0x3fffffffffffff)
+    }
+}
+
+/// Determines how string and length offsets of [Text]/[XmlText] are being determined.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Encoding {
+    /// Compute editable strings length and offset using UTF-8 byte count.
+    Bytes,
+    /// Compute editable strings length and offset using UTF-16 chars count.
+    Utf16,
+    /// Compute editable strings length and offset using Unicode code points number.
+    Unicode,
 }
 
 #[cfg(test)]

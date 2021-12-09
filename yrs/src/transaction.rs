@@ -411,7 +411,7 @@ impl Transaction {
             } else {
                 None
             };
-            let client_id = store.client_id;
+            let client_id = store.options.client_id;
             let id = block::ID {
                 client: client_id,
                 clock: store.get_local_state(),
