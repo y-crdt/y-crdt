@@ -989,11 +989,11 @@ mod test {
             Some(HashMap::from([
                 (
                     "key1".into(),
-                    EntryChange::Inserted(Any::String("value1".to_string()).into())
+                    EntryChange::Inserted(Any::String("value1".into()).into())
                 ),
                 (
                     "key2".into(),
-                    EntryChange::Inserted(Any::String("value2".to_string()).into())
+                    EntryChange::Inserted(Any::String("value2".into()).into())
                 )
             ]))
         );
@@ -1011,13 +1011,13 @@ mod test {
                 (
                     "key1".into(),
                     EntryChange::Updated(
-                        Any::String("value1".to_string()).into(),
-                        Any::String("value11".to_string()).into()
+                        Any::String("value1".into()).into(),
+                        Any::String("value11".into()).into()
                     )
                 ),
                 (
                     "key2".into(),
-                    EntryChange::Removed(Any::String("value2".to_string()).into())
+                    EntryChange::Removed(Any::String("value2".into()).into())
                 )
             ]))
         );
@@ -1090,7 +1090,7 @@ mod test {
             attributes.borrow_mut().take(),
             Some(HashMap::from([(
                 "key1".into(),
-                EntryChange::Inserted(Any::String("value11".to_string()).into())
+                EntryChange::Inserted(Any::String("value11".into()).into())
             )]))
         );
     }

@@ -769,11 +769,11 @@ impl Value {
     pub fn to_json(self, txn: &Transaction) -> Any {
         match self {
             Value::Any(a) => a,
-            Value::YText(v) => Any::String(v.to_string(txn)),
+            Value::YText(v) => Any::String(v.to_string(txn).into_boxed_str()),
             Value::YArray(v) => v.to_json(txn),
             Value::YMap(v) => v.to_json(txn),
-            Value::YXmlElement(v) => Any::String(v.to_string(txn)),
-            Value::YXmlText(v) => Any::String(v.to_string(txn)),
+            Value::YXmlElement(v) => Any::String(v.to_string(txn).into_boxed_str()),
+            Value::YXmlText(v) => Any::String(v.to_string(txn).into_boxed_str()),
         }
     }
 
