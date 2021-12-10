@@ -87,14 +87,14 @@ impl XmlElement {
     }
 
     /// Inserts an attribute entry into current XML element.
-    pub fn insert_attribute<K: Into<Rc<str>>, V: ToString>(
+    pub fn insert_attribute<K: Into<Rc<str>>, V: AsRef<str>>(
         &self,
         txn: &mut Transaction,
         attr_name: K,
         attr_value: V,
     ) {
         let key = attr_name.into();
-        let value = crate::block::PrelimText(attr_value.to_string());
+        let value = crate::block::PrelimText(attr_value.as_ref().into());
         let pos = {
             let inner = self.inner();
             let left = inner.map.get(&key);
@@ -609,14 +609,14 @@ impl XmlText {
         self.inner().remove(txn, attr_name);
     }
 
-    pub fn insert_attribute<K: Into<Rc<str>>, V: ToString>(
+    pub fn insert_attribute<K: Into<Rc<str>>, V: AsRef<str>>(
         &self,
         txn: &mut Transaction,
         attr_name: K,
         attr_value: V,
     ) {
         let key = attr_name.into();
-        let value = crate::block::PrelimText(attr_value.to_string());
+        let value = crate::block::PrelimText(attr_value.as_ref().into());
         let pos = {
             let inner = self.inner();
             let left = inner.map.get(&key);
@@ -669,7 +669,7 @@ impl XmlText {
         if let Some(mut pos) = self.0.find_position(txn, index) {
             let parent = { self.inner().ptr.clone() };
             pos.parent = parent;
-            txn.create_item(&pos, crate::block::PrelimText(content.to_owned()), None);
+            txn.create_item(&pos, crate::block::PrelimText(content.into()), None);
         } else {
             panic!("Cannot insert string content into an XML text: provided index is outside of the current text range!");
         }
@@ -818,7 +818,7 @@ mod test {
         let d1 = Doc::with_client_id(1);
         let mut t1 = d1.transact();
         let xml1 = t1.get_xml_element("xml");
-        xml1.insert_attribute(&mut t1, "height", 10);
+        xml1.insert_attribute(&mut t1, "height", 10.to_string());
         assert_eq!(xml1.get_attribute(&t1, "height"), Some("10".to_string()));
 
         let d2 = Doc::with_client_id(1);
@@ -866,7 +866,7 @@ mod test {
         let doc = Doc::with_client_id(1);
         let mut txn = doc.transact();
         let txt = txn.get_xml_text("txt");
-        txt.insert_attribute(&mut txn, "test", 42);
+        txt.insert_attribute(&mut txn, "test", 42.to_string());
 
         assert_eq!(txt.get_attribute(&txn, "test"), Some("42".to_string()));
         let actual: Vec<_> = txt.attributes(&txn).collect();

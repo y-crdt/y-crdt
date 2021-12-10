@@ -116,7 +116,7 @@ impl Text {
     /// This method will panic if provided `index` is greater than the length of a current text.
     pub fn insert(&self, tr: &mut Transaction, index: u32, chunk: &str) {
         if let Some(pos) = self.find_position(tr, index) {
-            let value = crate::block::PrelimText(chunk.to_owned());
+            let value = crate::block::PrelimText(chunk.into());
             tr.create_item(&pos, value, None);
         } else {
             panic!("The type or the position doesn't exist!");
