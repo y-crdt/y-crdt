@@ -1,22 +1,25 @@
 from test_helper import exchange_updates
 import pytest
 
-import y_py as Y
+from y_py import YDoc, YArray
 
-def testInserts():
-    d1 = Y.YDoc(1)
+def test_inserts():
+    d1 = YDoc(1)
     assert d1.id == 1
     x = d1.get_array('test');
 
-    d1.transact(lambda txn : x.insert(txn, 0, [1, 2.5, 'hello', ['world'], True]))
-    d1.transact(lambda txn : x.push(txn, [{"key":'value'}]))
+    with d1.begin_transaction() as txn:
+        x.insert(txn, 0, [1, 2.5, 'hello', ['world'], True])
+    
+    with d1.begin_transaction() as txn:
+        x.push(txn, [{"key":'value'}])
 
     expected = [1, 2.5, 'hello', ['world'], True, {"key":'value'}]
 
     value = d1.transact(lambda txn : x.to_json(txn))
     assert value == expected # TODO: Make this an arr cmp
 
-    d2 = Y.YDoc(2)
+    d2 = YDoc(2)
     x = d2.get_array('test');
 
     exchange_updates([d1, d2])
@@ -24,11 +27,11 @@ def testInserts():
     value = d2.transact(lambda txn : x.to_json(txn))
     assert value ==expected
 
-def testInsertsNested():
-    d1 = Y.YDoc()
+def test_inserts_nested():
+    d1 = YDoc()
     x = d1.get_array('test')
 
-    nested = Y.YArray()
+    nested = YArray()
     d1.transact(lambda txn : nested.push(txn, ['world']))
     d1.transact(lambda txn : x.insert(txn, 0, [1, 2, nested, 3, 4]))
     d1.transact(lambda txn : nested.insert(txn, 0, ['hello']))
@@ -38,7 +41,7 @@ def testInsertsNested():
     value = d1.transact(lambda txn : x.to_json(txn))
     assert value ==expected
 
-    d2 = Y.YDoc()
+    d2 = YDoc()
     x = d2.get_array('test');
 
     exchange_updates([d1, d2])
@@ -46,8 +49,8 @@ def testInsertsNested():
     value = d2.transact(lambda txn : x.to_json(txn))
     assert value ==expected
 
-def test_delete ():
-    d1 = Y.YDoc(1)
+def test_delete():
+    d1 = YDoc(1)
     assert d1.id == 1
     x = d1.get_array('test')
 
@@ -59,7 +62,7 @@ def test_delete ():
     value = d1.transact(lambda txn : x.to_json(txn))
     assert value ==expected
 
-    d2 = Y.YDoc(2)
+    d2 = YDoc(2)
     x = d2.get_array('test')
 
     exchange_updates([d1, d2])
@@ -68,7 +71,7 @@ def test_delete ():
     assert value ==expected
 
 def test_get():
-    d1 = Y.YDoc()
+    d1 = YDoc()
     x = d1.get_array('test')
 
     d1.transact(lambda txn : x.insert(txn, 0, [1, 2, True]))
@@ -94,7 +97,7 @@ def test_get():
         x = d1.transact(lambda txn : x.get(txn, 20))
 
 def test_iterator():
-    d1 = Y.YDoc()
+    d1 = YDoc()
     x = d1.get_array('test')
 
     d1.transact(lambda txn : x.insert(txn, 0, [1, 2, 3]))

@@ -23,7 +23,7 @@ use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1};
 use yrs::{Array, Doc, Map, StateVector, Text, Transaction, Update};
 
-/// A ywasm document type. Documents are most important units of collaborative resources management.
+/// A y-py document type. Documents are most important units of collaborative resources management.
 /// All shared collections live within a scope of their corresponding documents. All updates are
 /// generated on per document basis (rather than individual shared type). All operations on shared
 /// collections happen via [YTransaction], which lifetime is also bound to a document.
@@ -34,25 +34,24 @@ use yrs::{Array, Doc, Map, StateVector, Text, Transaction, Update};
 /// A basic workflow sample:
 ///
 /// ```python
-/// import YDoc from y_py
+/// from y_py import YDoc
 ///
 /// doc = YDoc()
-/// txn = doc.begin_transaction()
-/// try {
-///     text = txn.getText('name')
+/// with doc.begin_transaction() as txn:
+///     text = txn.get_text('name')
 ///     text.push(txn, 'hello world')
-///     output = text.toString(txn)
-///     console.log(output)
-/// } finally {
-///     txn.free()
-/// }
+///     output = text.to_string(txn)
+///     print(output)
 /// ```
 #[pyclass(unsendable)]
 pub struct YDoc(Doc);
 
 #[pymethods]
 impl YDoc {
-    /// Creates a new ywasm document. If `id` parameter was passed it will be used as this document
+    /// Doc(id)
+    /// --
+    ///
+    /// Creates a new y-py document. If `id` parameter was passed it will be used as this document
     /// globally unique identifier (it's up to caller to ensure that requirement). Otherwise it will
     /// be assigned a randomly generated number.
     #[new]
@@ -70,40 +69,27 @@ impl YDoc {
         self.0.client_id as f64
     }
 
-    /// Returns a new transaction for this document. Ywasm shared data types execute their
+    /// begin_transaction(/)
+    /// --
+    ///
+    /// Returns a new transaction for this document. y-py shared data types execute their
     /// operations in a context of a given transaction. Each document can have only one active
     /// transaction at the time - subsequent attempts will cause exception to be thrown.
     ///
-    /// Transactions started with `doc.beginTransaction` can be released using `transaction.free`
+    /// Transactions started with `doc.begin_transaction` can be released by deleting the transaction object
     /// method.
     ///
     /// Example:
     ///
-    /// ```javascript
-    /// import YDoc from 'ywasm'
-    ///
-    /// // helper function used to simplify transaction
-    /// // create/release cycle
-    /// YDoc.prototype.transact = callback => {
-    ///     const txn = this.beginTransaction()
-    ///     try {
-    ///         return callback(txn)
-    ///     } finally {
-    ///         txn.free()
-    ///     }
-    /// }
-    ///
-    /// const doc = new YDoc()
-    /// const text = doc.getText('name')
-    /// doc.transact(txn => text.insert(txn, 0, 'hello world'))
+    /// ```python
+    /// from y_py import YDoc
+    /// doc = YDoc()
+    /// text = doc.get_text('name')
+    /// with doc.begin_transaction() as txn:
+    ///     text.insert(txn, 0, 'hello world')
     /// ```
     pub fn begin_transaction(&mut self) -> YTransaction {
-        unsafe {
-            let doc: *mut Doc = &mut self.0;
-            let static_txn: ManuallyDrop<Transaction<'static>> =
-                ManuallyDrop::new((*doc).transact());
-            YTransaction(static_txn)
-        }
+        YTransaction(self.0.transact())
     }
 
     pub fn transact(&mut self, callback: PyObject) -> PyResult<PyObject> {
@@ -124,28 +110,6 @@ impl YDoc {
     pub fn get_map(&mut self, name: &str) -> YMap {
         self.begin_transaction().get_map(name)
     }
-
-    /// Returns a `YXmlElement` shared data type, that's accessible for subsequent accesses using
-    /// given `name`.
-    ///
-    /// If there was no instance with this name before, it will be created and then returned.
-    ///
-    /// If there was an instance with this name, but it was of different type, it will be projected
-    /// onto `YXmlElement` instance.
-    // pub fn get_xml_element(&mut self, name: &str) -> YXmlElement {
-    //     self.begin_transaction().get_xml_element(name)
-    // }
-
-    /// Returns a `YXmlText` shared data type, that's accessible for subsequent accesses using given
-    /// `name`.
-    ///
-    /// If there was no instance with this name before, it will be created and then returned.
-    ///
-    /// If there was an instance with this name, but it was of different type, it will be projected
-    /// onto `YXmlText` instance.
-    // pub fn get_xml_text(&mut self, name: &str) -> YXmlText {
-    //     self.begin_transaction().get_xml_text(name)
-    // }
 
     /// Returns a `YArray` shared data type, that's accessible for subsequent accesses using given
     /// `name`.
@@ -170,25 +134,25 @@ impl YDoc {
     }
 }
 
-/// Encodes a state vector of a given ywasm document into its binary representation using lib0 v1
+/// Encodes a state vector of a given y-py document into its binary representation using lib0 v1
 /// encoding. State vector is a compact representation of updates performed on a given document and
 /// can be used by `encode_state_as_update` on remote peer to generate a delta update payload to
 /// synchronize changes between peers.
 ///
 /// Example:
 ///
-/// ```javascript
-/// import {YDoc, encodeStateVector, encodeStateAsUpdate, applyUpdate} from 'ywasm'
+/// ```python
+/// from y_py import YDoc, encode_state_vector, encode_state_as_update, apply_update from y_py
 ///
-/// /// document on machine A
-/// const localDoc = new YDoc()
-/// const localSV = encodeStateVector(localDoc)
+/// # document on machine A
+/// local_doc = YDoc()
+/// local_sv = encode_state_vector(local_doc)
 ///
-/// // document on machine B
-/// const remoteDoc = new YDoc()
-/// const remoteDelta = encodeStateAsUpdate(remoteDoc, localSV)
+/// # document on machine B
+/// remote_doc = YDoc()
+/// remote_delta = encode_state_as_update(remote_doc, local_sv)
 ///
-/// applyUpdate(localDoc, remoteDelta)
+/// apply_update(local_doc, remote_delta)
 /// ```
 #[pyfunction]
 pub fn encode_state_vector(doc: &mut YDoc) -> Vec<u8> {
@@ -197,23 +161,23 @@ pub fn encode_state_vector(doc: &mut YDoc) -> Vec<u8> {
 
 /// Encodes all updates that have happened since a given version `vector` into a compact delta
 /// representation using lib0 v1 encoding. If `vector` parameter has not been provided, generated
-/// delta payload will contain all changes of a current ywasm document, working effectivelly as its
+/// delta payload will contain all changes of a current y-py document, working effectively as its
 /// state snapshot.
 ///
 /// Example:
 ///
-/// ```javascript
-/// import {YDoc, encodeStateVector, encodeStateAsUpdate, applyUpdate} from 'ywasm'
+/// ```python
+/// from y_py import YDoc, encode_state_vector, encode_state_as_update, apply_update
 ///
-/// /// document on machine A
-/// const localDoc = new YDoc()
-/// const localSV = encodeStateVector(localDoc)
+/// # document on machine A
+/// local_doc = YDoc()
+/// local_sv = encode_state_vector(local_doc)
 ///
-/// // document on machine B
-/// const remoteDoc = new YDoc()
-/// const remoteDelta = encodeStateAsUpdate(remoteDoc, localSV)
+/// # document on machine B
+/// remote_doc = YDoc()
+/// remote_delta = encode_state_as_update(remote_doc, local_sv)
 ///
-/// applyUpdate(localDoc, remoteDelta)
+/// apply_update(local_doc, remote_delta)
 /// ```
 #[pyfunction]
 pub fn encode_state_as_update(doc: &mut YDoc, vector: Option<Vec<u8>>) -> Vec<u8> {
@@ -225,71 +189,54 @@ pub fn encode_state_as_update(doc: &mut YDoc, vector: Option<Vec<u8>>) -> Vec<u8
 ///
 /// Example:
 ///
-/// ```javascript
-/// import {YDoc, encodeStateVector, encodeStateAsUpdate, applyUpdate} from 'ywasm'
+/// ```python
+/// from y_py import YDoc, encode_state_vector, encode_state_as_update, apply_update
 ///
-/// /// document on machine A
-/// const localDoc = new YDoc()
-/// const localSV = encodeStateVector(localDoc)
+/// # document on machine A
+/// local_doc = YDoc()
+/// local_sv = encode_state_vector(local_doc)
 ///
-/// // document on machine B
-/// const remoteDoc = new YDoc()
-/// const remoteDelta = encodeStateAsUpdate(remoteDoc, localSV)
+/// # document on machine B
+/// remote_doc = YDoc()
+/// remote_delta = encode_state_as_update(remote_doc, local_sv)
 ///
-/// applyUpdate(localDoc, remoteDelta)
+/// apply_update(local_doc, remote_delta)
 /// ```
 #[pyfunction]
 pub fn apply_update(doc: &mut YDoc, diff: Vec<u8>) {
     doc.begin_transaction().apply_v1(diff);
 }
 
-/// A transaction that serves as a proxy to document block store. Ywasm shared data types execute
+/// A transaction that serves as a proxy to document block store. y-py shared data types execute
 /// their operations in a context of a given transaction. Each document can have only one active
 /// transaction at the time - subsequent attempts will cause exception to be thrown.
 ///
-/// Transactions started with `doc.beginTransaction` can be released using `transaction.free`
+/// Transactions started with `doc.begin_transaction` can be released by deleting the transaction object
 /// method.
 ///
 /// Example:
 ///
-/// ```javascript
-/// import YDoc from 'ywasm'
-///
-/// // helper function used to simplify transaction
-/// // create/release cycle
-/// YDoc.prototype.transact = callback => {
-///     const txn = this.beginTransaction()
-///     try {
-///         return callback(txn)
-///     } finally {
-///         txn.free()
-///     }
-/// }
-///
-/// const doc = new YDoc()
-/// const text = doc.getText('name')
-/// doc.transact(txn => text.insert(txn, 0, 'hello world'))
+/// ```python
+/// from y_py import YDoc
+/// doc = YDoc()
+/// text = doc.get_text('name')
+/// with doc.begin_transaction() as txn:
+///     text.insert(txn, 0, 'hello world')
 /// ```
 #[pyclass(unsendable)]
-pub struct YTransaction(ManuallyDrop<Transaction<'static>>);
+pub struct YTransaction(Transaction);
 
 impl Deref for YTransaction {
-    type Target = Transaction<'static>;
+    type Target = Transaction;
 
     fn deref(&self) -> &Self::Target {
-        self.0.deref()
+        &self.0
     }
 }
 
 impl DerefMut for YTransaction {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.0.deref_mut()
-    }
-}
-
-impl Drop for YTransaction {
-    fn drop(&mut self) {
-        unsafe { ManuallyDrop::drop(&mut self.0) }
+        &mut self.0
     }
 }
 
@@ -328,31 +275,9 @@ impl YTransaction {
         self.0.get_map(name).into()
     }
 
-    /// Returns a `YXmlElement` shared data type, that's accessible for subsequent accesses using
-    /// given `name`.
-    ///
-    /// If there was no instance with this name before, it will be created and then returned.
-    ///
-    /// If there was an instance with this name, but it was of different type, it will be projected
-    /// onto `YXmlElement` instance.
-    // pub fn get_xml_element(&mut self, name: &str) -> YXmlElement {
-    //     YXmlElement(self.inner.get_xml_element(name))
-    // }
-
-    /// Returns a `YXmlText` shared data type, that's accessible for subsequent accesses using given
-    /// `name`.
-    ///
-    /// If there was no instance with this name before, it will be created and then returned.
-    ///
-    /// If there was an instance with this name, but it was of different type, it will be projected
-    /// onto `YXmlText` instance.
-    // pub fn get_xml_text(&mut self, name: &str) -> YXmlText {
-    //     YXmlText(self.inner.get_xml_text(name))
-    // }
-
     /// Triggers a post-update series of operations without `free`ing the transaction. This includes
     /// compaction and optimization of internal representation of updates, triggering events etc.
-    /// ywasm transactions are auto-committed when they are `free`d.
+    /// y-py transactions are auto-committed when they are `free`d.
     pub fn commit(&mut self) {
         self.0.commit()
     }
@@ -364,25 +289,25 @@ impl YTransaction {
     ///
     /// Example:
     ///
-    /// ```javascript
-    /// import YDoc from 'ywasm'
+    /// ```python
+    /// from y_py import YDoc
     ///
-    /// /// document on machine A
-    /// const localDoc = new YDoc()
-    /// const localTxn = localDoc.beginTransaction()
+    /// # document on machine A
+    /// local_doc = YDoc()
+    /// local_txn = local_doc.begin_transaction()
     ///
-    /// // document on machine B
-    /// const remoteDoc = new YDoc()
-    /// const remoteTxn = localDoc.beginTransaction()
+    /// # document on machine B
+    /// remote_doc = YDoc()
+    /// remote_txn = local_doc.begin_transaction()
     ///
-    /// try {
-    ///     const localSV = localTxn.stateVectorV1()
-    ///     const remoteDelta = remoteTxn.diffV1(localSv)
-    ///     localTxn.applyV1(remoteDelta)
-    /// } finally {
-    ///     localTxn.free()
-    ///     remoteTxn.free()
-    /// }
+    /// try:
+    ///     local_sv = local_txn.state_vector_v1()
+    ///     remote_delta = remote_txn.diff_v1(local_sv)
+    ///     local_txn.applyV1(remote_delta)
+    /// finally:
+    ///     del local_txn
+    ///     del remote_txn
+    ///
     /// ```
     pub fn state_vector_v1(&self) -> Vec<u8> {
         let sv = self.0.state_vector();
@@ -392,30 +317,29 @@ impl YTransaction {
 
     /// Encodes all updates that have happened since a given version `vector` into a compact delta
     /// representation using lib0 v1 encoding. If `vector` parameter has not been provided, generated
-    /// delta payload will contain all changes of a current ywasm document, working effectively as
+    /// delta payload will contain all changes of a current y-py document, working effectively as
     /// its state snapshot.
     ///
     /// Example:
     ///
-    /// ```javascript
-    /// import YDoc from 'ywasm'
+    /// ```python
+    /// from y_py import YDoc
     ///
-    /// /// document on machine A
-    /// const localDoc = new YDoc()
-    /// const localTxn = localDoc.beginTransaction()
+    /// # document on machine A
+    /// local_doc = YDoc()
+    /// local_txn = local_doc.begin_transaction()
     ///
-    /// // document on machine B
-    /// const remoteDoc = new YDoc()
-    /// const remoteTxn = localDoc.beginTransaction()
+    /// # document on machine B
+    /// remote_doc = YDoc()
+    /// remote_txn = local_doc.begin_transaction()
     ///
-    /// try {
-    ///     const localSV = localTxn.stateVectorV1()
-    ///     const remoteDelta = remoteTxn.diffV1(localSv)
-    ///     localTxn.applyV1(remoteDelta)
-    /// } finally {
-    ///     localTxn.free()
-    ///     remoteTxn.free()
-    /// }
+    /// try:
+    ///     local_sv = local_txn.state_vector_v1()
+    ///     remote_delta = remote_txn.diff_v1(local_sv)
+    ///     local_txn.applyV1(remote_delta)
+    /// finally:
+    ///     del local_txn
+    ///     del remote_txn
     /// ```
     pub fn diff_v1(&self, vector: Option<Vec<u8>>) -> Vec<u8> {
         let mut encoder = EncoderV1::new();
@@ -433,25 +357,24 @@ impl YTransaction {
     ///
     /// Example:
     ///
-    /// ```javascript
-    /// import YDoc from 'ywasm'
+    /// ```python
+    /// from y_py import YDoc
     ///
-    /// /// document on machine A
-    /// const localDoc = new YDoc()
-    /// const localTxn = localDoc.beginTransaction()
+    /// # document on machine A
+    /// local_doc = YDoc()
+    /// local_txn = local_doc.begin_transaction()
     ///
-    /// // document on machine B
-    /// const remoteDoc = new YDoc()
-    /// const remoteTxn = localDoc.beginTransaction()
+    /// # document on machine B
+    /// remote_doc = YDoc()
+    /// remote_txn = local_doc.begin_transaction()
     ///
-    /// try {
-    ///     const localSV = localTxn.stateVectorV1()
-    ///     const remoteDelta = remoteTxn.diffV1(localSv)
-    ///     localTxn.applyV1(remoteDelta)
-    /// } finally {
-    ///     localTxn.free()
-    ///     remoteTxn.free()
-    /// }
+    /// try:
+    ///     local_sv = local_txn.state_vector_v1()
+    ///     remote_delta = remote_txn.diff_v1(local_sv)
+    ///     local_txn.applyV1(remote_delta)
+    /// finally:
+    ///     del local_txn
+    ///     del remote_txn
     /// ```
     pub fn apply_v1(&mut self, diff: Vec<u8>) {
         let diff: Vec<u8> = diff.to_vec();
@@ -460,11 +383,36 @@ impl YTransaction {
         self.0.apply_update(update)
     }
 
+    /// Allows YTransaction to be used with a Python context block.
+    ///
+    /// Example
+    /// ```python
+    /// from y_py import YDoc
+    ///
+    /// doc = YDoc()
+    ///
+    /// with doc.begin_transaction() as txn:
+    ///     # Perform updates within this block
+    ///
+    /// ```
     fn __enter__<'p>(slf: PyRef<'p, Self>, _py: Python<'p>) -> PyResult<PyRef<'p, Self>> {
-        println!("Entered");
         Ok(slf)
     }
 
+    /// Allows YTransaction to be used with a Python context block.
+    /// Commits the results when the `with` context closes.
+    ///
+    /// Example
+    /// ```python
+    /// from y_py import YDoc
+    ///
+    /// doc = YDoc()
+    ///
+    /// with doc.begin_transaction() as txn:
+    ///     # Updates
+    /// # Commit is called here when the context exits
+    ///
+    /// ```
     fn __exit__<'p>(
         &'p mut self,
         _exc_type: Option<&'p PyAny>,
@@ -523,7 +471,7 @@ impl YText {
     /// to provided parameter.
     ///
     /// Preliminary instances can be nested into other shared data types such as `YArray` and `YMap`.
-    /// Once a preliminary instance has been inserted this way, it becomes integrated into ywasm
+    /// Once a preliminary instance has been inserted this way, it becomes integrated into y-py
     /// document store and cannot be nested again: attempt to do so will result in an exception.
     #[new]
     pub fn new(init: Option<String>) -> Self {
@@ -533,7 +481,7 @@ impl YText {
     /// Returns true if this is a preliminary instance of `YText`.
     ///
     /// Preliminary instances can be nested into other shared data types such as `YArray` and `YMap`.
-    /// Once a preliminary instance has been inserted this way, it becomes integrated into ywasm
+    /// Once a preliminary instance has been inserted this way, it becomes integrated into y-py
     /// document store and cannot be nested again: attempt to do so will result in an exception.
     #[getter]
     pub fn prelim(&self) -> bool {
@@ -632,7 +580,7 @@ impl YArray {
     /// initialized to provided parameter.
     ///
     /// Preliminary instances can be nested into other shared data types such as `YArray` and `YMap`.
-    /// Once a preliminary instance has been inserted this way, it becomes integrated into ywasm
+    /// Once a preliminary instance has been inserted this way, it becomes integrated into y-py
     /// document store and cannot be nested again: attempt to do so will result in an exception.
     #[new]
     pub fn new(init: Option<Vec<PyObject>>) -> Self {
@@ -642,7 +590,7 @@ impl YArray {
     /// Returns true if this is a preliminary instance of `YArray`.
     ///
     /// Preliminary instances can be nested into other shared data types such as `YArray` and `YMap`.
-    /// Once a preliminary instance has been inserted this way, it becomes integrated into ywasm
+    /// Once a preliminary instance has been inserted this way, it becomes integrated into y-py
     /// document store and cannot be nested again: attempt to do so will result in an exception.
     #[getter]
     pub fn prelim(&self) -> bool {
@@ -735,28 +683,24 @@ impl YArray {
     ///
     /// Example:
     ///
-    /// ```javascript
-    /// import YDoc from 'ywasm'
+    /// ```python
+    /// from y_py import YDoc
     ///
-    /// /// document on machine A
-    /// const doc = new YDoc()
-    /// const array = doc.getArray('name')
-    /// const txn = doc.beginTransaction()
-    /// try {
+    /// # document on machine A
+    /// doc = YDoc()
+    /// array = doc.get_array('name')
+    ///
+    /// with doc.begin_transaction() as txn:
     ///     array.push(txn, ['hello', 'world'])
-    ///     for (let item of array.values(txn)) {
-    ///         console.log(item)
-    ///     }
-    /// } finally {
-    ///     txn.free()
-    /// }
+    ///     for item in array.values(txn)):
+    ///         print(item)
     /// ```
     pub fn values(&self, txn: &YTransaction) -> PyObject {
         Python::with_gil(|py| match &*self.0.borrow() {
             SharedType::Integrated(v) => unsafe {
                 let this: *const Array = v;
-                let tx: *const Transaction<'static> = txn.0.deref();
-                let static_iter: ManuallyDrop<ArrayIter<'static, 'static>> =
+                let tx: *const Transaction = txn.deref() as *const _;
+                let static_iter: ManuallyDrop<ArrayIter<'static>> =
                     ManuallyDrop::new((*this).iter(tx.as_ref().unwrap()));
                 YArrayIterator(static_iter).into_py(py)
             },
@@ -783,7 +727,7 @@ impl IteratorNext {
         IteratorNext { done: false, value }
     }
 
-    #[staticmethod] // TODO: Check if this is really static
+    #[staticmethod]
     fn finished() -> Self {
         Python::with_gil(|py| -> IteratorNext {
             IteratorNext {
@@ -815,7 +759,7 @@ impl From<Option<Value>> for IteratorNext {
 }
 
 #[pyclass(unsendable)]
-pub struct YArrayIterator(ManuallyDrop<ArrayIter<'static, 'static>>);
+pub struct YArrayIterator(ManuallyDrop<ArrayIter<'static>>);
 
 impl Drop for YArrayIterator {
     fn drop(&mut self) {
@@ -878,7 +822,7 @@ impl YMap {
     /// initialized to provided parameter.
     ///
     /// Preliminary instances can be nested into other shared data types such as `YArray` and `YMap`.
-    /// Once a preliminary instance has been inserted this way, it becomes integrated into ywasm
+    /// Once a preliminary instance has been inserted this way, it becomes integrated into y-py
     /// document store and cannot be nested again: attempt to do so will result in an exception.
     #[new]
     pub fn new(dict: &PyDict) -> PyResult<Self> {
@@ -894,7 +838,7 @@ impl YMap {
     /// Returns true if this is a preliminary instance of `YMap`.
     ///
     /// Preliminary instances can be nested into other shared data types such as `YArray` and `YMap`.
-    /// Once a preliminary instance has been inserted this way, it becomes integrated into ywasm
+    /// Once a preliminary instance has been inserted this way, it becomes integrated into y-py
     /// document store and cannot be nested again: attempt to do so will result in an exception.
     #[getter]
     pub fn prelim(&self) -> bool {
@@ -975,35 +919,32 @@ impl YMap {
         }
     }
 
+    /// entries(self, txn)
+    /// --
+    ///
     /// Returns an iterator that can be used to traverse over all entries stored within this
     /// instance of `YMap`. Order of entry is not specified.
     ///
     /// Example:
     ///
-    /// ```javascript
-    /// import YDoc from 'ywasm'
+    /// ```python
+    /// from y_py import YDoc
     ///
-    /// /// document on machine A
-    /// const doc = new YDoc()
-    /// const map = doc.getMap('name')
-    /// const txn = doc.beginTransaction()
-    /// try {
+    /// # document on machine A
+    /// const doc = YDoc()
+    /// const map = doc.get_map('name')
+    /// with doc.begin_transaction() as txn:
     ///     map.set(txn, 'key1', 'value1')
     ///     map.set(txn, 'key2', true)
-    ///
-    ///     for (let [key, value] of map.entries(txn)) {
-    ///         console.log(key, value)
-    ///     }
-    /// } finally {
-    ///     txn.free()
-    /// }
+    ///     for (key, value) in map.entries(txn)):
+    ///         print(key, value)
     /// ```
     pub fn entries(&self, txn: &mut YTransaction) -> YMapIterator {
         // Maybe return something that implements the PyIterator?
         match &*self.0.borrow() {
             SharedType::Integrated(val) => unsafe {
                 let this: *const Map = val;
-                let tx: *const Transaction<'static> = txn.0.deref();
+                let tx: *const Transaction = &txn.0 as *const _;
                 let shared_iter =
                     SharedYMapIterator::Integrated((*this).iter(tx.as_ref().unwrap()));
                 YMapIterator(ManuallyDrop::new(shared_iter))
@@ -1018,7 +959,7 @@ impl YMap {
 }
 
 pub enum SharedYMapIterator {
-    Integrated(MapIter<'static, 'static>),
+    Integrated(MapIter<'static>),
     Prelim(std::collections::hash_map::Iter<'static, String, PyObject>),
 }
 
@@ -1054,7 +995,7 @@ impl<'p> PyIterProtocol for YMapIterator {
         match slf.0.deref_mut() {
             SharedYMapIterator::Integrated(iter) => Python::with_gil(|py| {
                 iter.next()
-                    .map(|(k, v)| (k.clone(), ValueWrapper(v).into_py(py)))
+                    .map(|(k, v)| (k.to_string(), ValueWrapper(v).into_py(py)))
             }),
             SharedYMapIterator::Prelim(iter) => iter.next().map(|(k, v)| (k.clone(), v.clone())),
         }
@@ -1078,332 +1019,6 @@ impl PrelimMapIterator {
         self.0.next().map(|(k, v)| (k.clone(), v.clone()))
     }
 }
-
-// /// XML element data type. It represents an XML node, which can contain key-value attributes
-// /// (interpreted as strings) as well as other nested XML elements or rich text (represented by
-// /// `YXmlText` type).
-// ///
-// /// In terms of conflict resolution, `YXmlElement` uses following rules:
-// ///
-// /// - Attribute updates use logical last-write-wins principle, meaning the past updates are
-// ///   automatically overridden and discarded by newer ones, while concurrent updates made by
-// ///   different peers are resolved into a single value using document id seniority to establish
-// ///   an order.
-// /// - Child node insertion uses sequencing rules from other Yrs collections - elements are inserted
-// ///   using interleave-resistant algorithm, where order of concurrent inserts at the same index
-// ///   is established using peer's document id seniority.
-// #[pyclass]
-// pub struct YXmlElement(XmlElement);
-
-// #[pymethods]
-// impl YXmlElement {
-//     /// Returns a tag name of this XML node.
-//     #[getter]
-//     pub fn name(&self) -> String {
-//         self.inner.tag().to_string()
-//     }
-
-//     /// Returns a number of child XML nodes stored within this `YXMlElement` instance.
-//     pub fn length(&self, txn: &YTransaction) -> u32 {
-//         self.inner.len(txn)
-//     }
-
-//     /// Inserts a new instance of `YXmlElement` as a child of this XML node and returns it.
-//     pub fn insert_xml_element(
-//         &self,
-//         txn: &mut YTransaction,
-//         index: u32,
-//         name: &str,
-//     ) -> YXmlElement {
-//         YXmlElement(self.inner.insert_elem(txn, index, name))
-//     }
-
-//     /// Inserts a new instance of `YXmlText` as a child of this XML node and returns it.
-//     pub fn insert_xml_text(&self, txn: &mut YTransaction, index: u32) -> YXmlText {
-//         YXmlText(self.inner.insert_text(txn, index))
-//     }
-
-//     /// Removes a range of children XML nodes from this `YXmlElement` instance,
-//     /// starting at given `index`.
-
-//     pub fn delete(&self, txn: &mut YTransaction, index: u32, length: u32) {
-//         self.inner.remove_range(txn, index, length)
-//     }
-
-//     /// Appends a new instance of `YXmlElement` as the last child of this XML node and returns it.
-//     pub fn push_xml_element(&self, txn: &mut YTransaction, name: &str) -> YXmlElement {
-//         YXmlElement(self.inner.push_elem_back(txn, name))
-//     }
-
-//     /// Appends a new instance of `YXmlText` as the last child of this XML node and returns it.
-//     pub fn push_xml_text(&self, txn: &mut YTransaction) -> YXmlText {
-//         YXmlText(self.inner.push_text_back(txn))
-//     }
-
-//     /// Returns a first child of this XML node.
-//     /// It can be either `YXmlElement`, `YXmlText` or `undefined` if current node has not children.
-//     pub fn first_child(&self, txn: &YTransaction) -> PyAny {
-//         if let Some(xml) = self.inner.first_child(txn) {
-//             xml_into_js(xml)
-//         } else {
-//             PyAny::undefined()
-//         }
-//     }
-
-//     /// Returns a next XML sibling node of this XMl node.
-//     /// It can be either `YXmlElement`, `YXmlText` or `undefined` if current node is a last child of
-//     /// parent XML node.
-//     pub fn next_sibling(&self, txn: &YTransaction) -> PyAny {
-//         if let Some(xml) = self.inner.next_sibling(txn) {
-//             xml_into_js(xml)
-//         } else {
-//             PyAny::undefined()
-//         }
-//     }
-
-//     /// Returns a previous XML sibling node of this XMl node.
-//     /// It can be either `YXmlElement`, `YXmlText` or `undefined` if current node is a first child
-//     /// of parent XML node.
-//     pub fn prev_sibling(&self, txn: &YTransaction) -> PyAny {
-//         if let Some(xml) = self.inner.prev_sibling(txn) {
-//             xml_into_js(xml)
-//         } else {
-//             PyAny::undefined()
-//         }
-//     }
-
-//     /// Returns a parent `YXmlElement` node or `undefined` if current node has no parent assigned.
-//     pub fn parent(&self, txn: &YTransaction) -> PyAny {
-//         if let Some(xml) = self.inner.parent(txn) {
-//             xml_into_js(Xml::Element(xml))
-//         } else {
-//             PyAny::undefined()
-//         }
-//     }
-
-//     /// Returns a string representation of this XML node.
-//     pub fn to_string(&self, txn: &YTransaction) -> String {
-//         self.inner.to_string(txn)
-//     }
-
-//     /// Sets a `name` and `value` as new attribute for this XML node. If an attribute with the same
-//     /// `name` already existed on that node, its value with be overridden with a provided one.
-//     pub fn set_attribute(&self, txn: &mut YTransaction, name: &str, value: &str) {
-//         self.inner.insert_attribute(txn, name, value)
-//     }
-
-//     /// Returns a value of an attribute given its `name`. If no attribute with such name existed,
-//     /// `null` will be returned.
-//     pub fn get_attribute(&self, txn: &YTransaction, name: &str) -> Option<String> {
-//         self.inner.get_attribute(txn, name)
-//     }
-
-//     /// Removes an attribute from this XML node, given its `name`.
-
-//     pub fn remove_attribute(&self, txn: &mut YTransaction, name: &str) {
-//         self.inner.remove_attribute(txn, name);
-//     }
-
-//     /// Returns an iterator that enables to traverse over all attributes of this XML node in
-//     /// unspecified order.
-
-//     pub fn attributes(&self, txn: &YTransaction) -> PyAny {
-//         to_iter(unsafe {
-//             let this: *const XmlElement = &self.inner;
-//             let tx: *const Transaction<'static> = txn.0.deref();
-//             let static_iter: ManuallyDrop<Attributes<'static, 'static>> =
-//                 ManuallyDrop::new((*this).attributes(tx.as_ref().unwrap()));
-//             YXmlAttributes(static_iter).into()
-//         })
-//     }
-
-//     /// Returns an iterator that enables a deep traversal of this XML node - starting from first
-//     /// child over this XML node successors using depth-first strategy.
-
-//     pub fn tree_walker(&self, txn: &YTransaction) -> PyAny {
-//         to_iter(unsafe {
-//             let this: *const XmlElement = &self.inner;
-//             let tx: *const Transaction<'static> = txn.0.deref();
-//             let static_iter: ManuallyDrop<TreeWalker<'static, 'static>> =
-//                 ManuallyDrop::new((*this).successors(tx.as_ref().unwrap()));
-//             YXmlTreeWalker(static_iter).into()
-//         })
-//     }
-// }
-
-// #[pyclass]
-// pub struct YXmlAttributes(ManuallyDrop<Attributes<'static, 'static>>);
-
-// impl Drop for YXmlAttributes {
-//     fn drop(&mut self) {
-//         unsafe { ManuallyDrop::drop(&mut self.inner) }
-//     }
-// }
-
-// impl<'a> From<Option<(&'a str, String)>> for IteratorNext {
-//     fn from(o: Option<(&'a str, String)>) -> Self {
-//         match o {
-//             None => IteratorNext::finished(),
-//             Some((name, value)) => {
-//                 let tuple = js_sys::Array::new_with_length(2);
-//                 tuple.set(0, PyAny::from_str(name));
-//                 tuple.set(1, PyAny::from(&value));
-//                 IteratorNext::new(tuple.into())
-//             }
-//         }
-//     }
-// }
-
-// #[pymethods]
-// impl YXmlAttributes {
-//     pub fn next(&mut self) -> IteratorNext {
-//         self.inner.next().into()
-//     }
-// }
-
-// #[pyclass]
-// pub struct YXmlTreeWalker(ManuallyDrop<TreeWalker<'static, 'static>>);
-
-// impl Drop for YXmlTreeWalker {
-//     fn drop(&mut self) {
-//         unsafe { ManuallyDrop::drop(&mut self.inner) }
-//     }
-// }
-
-// #[pymethods]
-// impl YXmlTreeWalker {
-//     pub fn next(&mut self) -> IteratorNext {
-//         if let Some(xml) = self.inner.next() {
-//             let js_val = xml_into_js(xml);
-//             IteratorNext::new(js_val)
-//         } else {
-//             IteratorNext::finished()
-//         }
-//     }
-// }
-
-// /// A shared data type used for collaborative text editing, that can be used in a context of
-// /// `YXmlElement` nodee. It enables multiple users to add and remove chunks of text in efficient
-// /// manner. This type is internally represented as a mutable double-linked list of text chunks
-// /// - an optimization occurs during `YTransaction.commit`, which allows to squash multiple
-// /// consecutively inserted characters together as a single chunk of text even between transaction
-// /// boundaries in order to preserve more efficient memory model.
-// ///
-// /// Just like `YXmlElement`, `YXmlText` can be marked with extra metadata in form of attributes.
-// ///
-// /// `YXmlText` structure internally uses UTF-8 encoding and its length is described in a number of
-// /// bytes rather than individual characters (a single UTF-8 code point can consist of many bytes).
-// ///
-// /// Like all Yrs shared data types, `YXmlText` is resistant to the problem of interleaving (situation
-// /// when characters inserted one after another may interleave with other peers concurrent inserts
-// /// after merging all updates together). In case of Yrs conflict resolution is solved by using
-// /// unique document id to determine correct and consistent ordering.
-// #[pyclass]
-// pub struct YXmlText {
-//     inner: XmlText,
-// }
-
-// #[pymethods]
-// impl YXmlText {
-//     /// Returns length of an underlying string stored in this `YXmlText` instance,
-//     /// understood as a number of UTF-8 encoded bytes.
-//     #[getter]
-//     pub fn length(&self) -> u32 {
-//         self.inner.len()
-//     }
-
-//     /// Inserts a given `chunk` of text into this `YXmlText` instance, starting at a given `index`.
-
-//     pub fn insert(&self, txn: &mut YTransaction, index: i32, chunk: &str) {
-//         self.inner.insert(txn, index as u32, chunk)
-//     }
-
-//     /// Appends a given `chunk` of text at the end of `YXmlText` instance.
-
-//     pub fn push(&self, txn: &mut YTransaction, chunk: &str) {
-//         self.inner.push(txn, chunk)
-//     }
-
-//     /// Deletes a specified range of of characters, starting at a given `index`.
-//     /// Both `index` and `length` are counted in terms of a number of UTF-8 character bytes.
-
-//     pub fn delete(&self, txn: &mut YTransaction, index: u32, length: u32) {
-//         self.inner.remove_range(txn, index, length)
-//     }
-
-//     /// Returns a next XML sibling node of this XMl node.
-//     /// It can be either `YXmlElement`, `YXmlText` or `undefined` if current node is a last child of
-//     /// parent XML node.
-
-//     pub fn next_sibling(&self, txn: &YTransaction) -> PyAny {
-//         if let Some(xml) = self.inner.next_sibling(txn) {
-//             xml_into_js(xml)
-//         } else {
-//             PyAny::undefined()
-//         }
-//     }
-
-//     /// Returns a previous XML sibling node of this XMl node.
-//     /// It can be either `YXmlElement`, `YXmlText` or `undefined` if current node is a first child
-//     /// of parent XML node.
-
-//     pub fn prev_sibling(&self, txn: &YTransaction) -> PyAny {
-//         if let Some(xml) = self.inner.prev_sibling(txn) {
-//             xml_into_js(xml)
-//         } else {
-//             PyAny::undefined()
-//         }
-//     }
-
-//     /// Returns a parent `YXmlElement` node or `undefined` if current node has no parent assigned.
-
-//     pub fn parent(&self, txn: &YTransaction) -> PyAny {
-//         if let Some(xml) = self.inner.parent(txn) {
-//             xml_into_js(Xml::Element(xml))
-//         } else {
-//             PyAny::undefined()
-//         }
-//     }
-
-//     /// Returns an underlying string stored in this `YXmlText` instance.
-
-//     pub fn to_string(&self, txn: &YTransaction) -> String {
-//         self.inner.to_string(txn)
-//     }
-
-//     /// Sets a `name` and `value` as new attribute for this XML node. If an attribute with the same
-//     /// `name` already existed on that node, its value with be overridden with a provided one.
-
-//     pub fn set_attribute(&self, txn: &mut YTransaction, name: &str, value: &str) {
-//         self.inner.insert_attribute(txn, name, value);
-//     }
-
-//     /// Returns a value of an attribute given its `name`. If no attribute with such name existed,
-//     /// `null` will be returned.
-
-//     pub fn get_attribute(&self, txn: &YTransaction, name: &str) -> Option<String> {
-//         self.inner.get_attribute(txn, name)
-//     }
-
-//     /// Removes an attribute from this XML node, given its `name`.
-
-//     pub fn remove_attribute(&self, txn: &mut YTransaction, name: &str) {
-//         self.inner.remove_attribute(txn, name);
-//     }
-
-//     /// Returns an iterator that enables to traverse over all attributes of this XML node in
-//     /// unspecified order.
-
-//     pub fn attributes(&self, txn: &YTransaction) -> YXmlAttributes {
-//         unsafe {
-//             let this: *const XmlText = &self.inner;
-//             let tx: *const Transaction<'static> = txn.0.deref();
-//             let static_iter: ManuallyDrop<Attributes<'static, 'static>> =
-//                 ManuallyDrop::new((*this).attributes(tx.as_ref().unwrap()));
-//             YXmlAttributes(static_iter)
-//         }
-//     }
-// }
 
 struct PyObjectWrapper(PyObject);
 
@@ -1538,7 +1153,6 @@ fn py_into_any(v: PyObject) -> Option<Any> {
             } else {
                 let mut result = HashMap::new();
                 for (k, v) in dict.iter() {
-                    // TODO: Handle non string keys
                     let key = k
                         .downcast::<pytypes::PyString>()
                         .unwrap()
@@ -1565,8 +1179,9 @@ impl IntoPy<pyo3::PyObject> for AnyWrapper {
             Any::Number(v) => v.into_py(py),
             Any::BigInt(v) => v.into_py(py),
             Any::String(v) => v.into_py(py),
-            Any::Buffer(v) => {
+            Any::Buffer(_v) => {
                 unreachable!();
+                // TODO: support PyByteArray
                 // pytypes::PyByteArray::new(v)
                 // pytypes::PyByteArray::from(v)
                 // let v = Vec::<u8>::from(v.as_ref());
@@ -1606,15 +1221,10 @@ impl IntoPy<pyo3::PyObject> for ValueWrapper {
         match self.0 {
             Value::Any(v) => AnyWrapper(v).into_py(py),
             Value::YText(v) => YText::from(v).into_py(py),
-            //YText::from(v).into(),
             Value::YArray(v) => YArray::from(v).into_py(py),
-            // YArray::from(v).into(),
-            Value::YMap(v) => unreachable!(),
-            //YMap::from(v).into(),
-            Value::YXmlElement(v) => unreachable!(),
-            //YXmlElement(v).into(),
-            Value::YXmlText(v) => unreachable!(),
-            // YXmlText(v).into(),
+            Value::YMap(v) => YMap::from(v).into_py(py),
+            Value::YXmlElement(_v) => unreachable!(),
+            Value::YXmlText(_v) => unreachable!(),
         }
     }
 }
@@ -1685,13 +1295,6 @@ impl Prelim for PyValueWrapper {
     }
 }
 
-// fn xml_into_js(v: Xml) -> PyAny {
-//     match v {
-//         Xml::Element(v) => YXmlElement(v).into(),
-//         Xml::Text(v) => YXmlText(v).into(),
-//     }
-// }
-
 #[derive(FromPyObject)]
 enum Shared {
     Text(Py<YText>),
@@ -1746,6 +1349,7 @@ impl TryFrom<PyObject> for Shared {
     }
 }
 
+/// Python bindings for Y.rs
 #[pymodule]
 pub fn y_py(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<YDoc>()?;
