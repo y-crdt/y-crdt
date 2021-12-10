@@ -584,7 +584,7 @@ mod test {
             expected.insert("value".to_owned(), Any::Number(i as f64));
             match value {
                 Value::YMap(_) => {
-                    assert_eq!(value.to_json(&txn), Any::Map(expected))
+                    assert_eq!(value.to_json(&txn), Any::Map(Box::new(expected)))
                 }
                 _ => panic!("Value of array at index {} was no YMap", i),
             }
@@ -668,7 +668,7 @@ mod test {
             delta.borrow_mut().take(),
             Some(vec![Change::Added(vec![
                 Any::Number(4.0).into(),
-                Any::String("dtrn".to_string()).into()
+                Any::String("dtrn".into()).into()
             ])])
         );
 
@@ -730,7 +730,7 @@ mod test {
         assert_eq!(
             delta.borrow_mut().take(),
             Some(vec![Change::Added(vec![
-                Any::String("dtrn".to_string()).into(),
+                Any::String("dtrn".into()).into(),
                 Any::Number(0.5).into(),
             ])])
         );
@@ -791,7 +791,8 @@ mod test {
                 .map(|_| Any::BigInt(unique_number))
                 .collect();
             let mut pos = rng.between(0, yarray.len()) as usize;
-            if let Any::Array(mut expected) = yarray.to_json(&txn) {
+            if let Any::Array(expected) = yarray.to_json(&txn) {
+                let mut expected = Vec::from(expected);
                 yarray.insert_range(&mut txn, pos as u32, content.clone());
 
                 for any in content {
@@ -799,7 +800,7 @@ mod test {
                     pos += 1;
                 }
                 let actual = yarray.to_json(&txn);
-                assert_eq!(actual, Any::Array(expected))
+                assert_eq!(actual, Any::Array(expected.into_boxed_slice()))
             } else {
                 panic!("should not happen")
             }
@@ -811,7 +812,7 @@ mod test {
             let pos = rng.between(0, yarray.len());
             yarray.insert(&mut txn, pos, PrelimArray::from([1, 2, 3, 4]));
             if let Value::YArray(array2) = yarray.get(&txn, pos).unwrap() {
-                let expected: Vec<_> = (1..=4).map(|i| Any::Number(i as f64)).collect();
+                let expected: Box<[Any]> = (1..=4).map(|i| Any::Number(i as f64)).collect();
                 assert_eq!(array2.to_json(&txn), Any::Array(expected));
             } else {
                 panic!("should not happen")
@@ -846,10 +847,14 @@ mod test {
                         array2.remove_range(&mut txn, pos, del_len);
                     }
                 } else {
-                    if let Any::Array(mut old_content) = yarray.to_json(&txn) {
+                    if let Any::Array(old_content) = yarray.to_json(&txn) {
+                        let mut old_content = Vec::from(old_content);
                         yarray.remove_range(&mut txn, pos, del_len);
                         old_content.drain(pos as usize..(pos + del_len) as usize);
-                        assert_eq!(yarray.to_json(&txn), Any::Array(old_content));
+                        assert_eq!(
+                            yarray.to_json(&txn),
+                            Any::Array(old_content.into_boxed_slice())
+                        );
                     } else {
                         panic!("should not happen")
                     }

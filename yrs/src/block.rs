@@ -1065,6 +1065,13 @@ impl Into<String> for SplittableString {
     }
 }
 
+impl Into<Box<str>> for SplittableString {
+    #[inline(always)]
+    fn into(self) -> Box<str> {
+        self.content.into_boxed_str()
+    }
+}
+
 impl From<String> for SplittableString {
     fn from(content: String) -> Self {
         let utf16_len = content.encode_utf16().count();
@@ -1101,13 +1108,13 @@ pub enum ItemContent {
     /// Deleted elements also don't contribute to an overall length of containing collection type.
     Deleted(u32),
 
-    Doc(String, Any),
+    Doc(Box<str>, Box<Any>),
     JSON(Vec<String>), // String is JSON
     Embed(String),     // String is JSON
 
     /// Formatting attribute entry. Format attributes are not considered countable and don't
     /// contribute to an overall length of a collection they are applied to.
-    Format(String, String), // key, value: JSON
+    Format(Box<str>, Box<str>), // key, value: JSON
 
     /// A chunk of text, usually applied by collaborative text insertion.
     String(SplittableString),
@@ -1182,16 +1189,16 @@ impl ItemContent {
             ItemContent::Any(v) => v.iter().map(|a| Value::Any(a.clone())).collect(),
             ItemContent::Binary(v) => vec![Value::Any(Any::Buffer(v.clone().into_boxed_slice()))],
             ItemContent::Deleted(_) => Vec::default(),
-            ItemContent::Doc(_, v) => vec![Value::Any(v.clone())],
+            ItemContent::Doc(_, v) => vec![Value::Any(*v.clone())],
             ItemContent::JSON(v) => v
                 .iter()
-                .map(|v| Value::Any(Any::String(v.clone())))
+                .map(|v| Value::Any(Any::String(v.clone().into_boxed_str())))
                 .collect(),
-            ItemContent::Embed(v) => vec![Value::Any(Any::String(v.clone()))],
+            ItemContent::Embed(v) => vec![Value::Any(Any::String(v.clone().into_boxed_str()))],
             ItemContent::Format(_, _) => Vec::default(),
             ItemContent::String(v) => v
                 .chars()
-                .map(|c| Value::Any(Any::String(c.to_string())))
+                .map(|c| Value::Any(Any::String(c.to_string().into_boxed_str())))
                 .collect(),
             ItemContent::Type(c) => {
                 vec![c.clone().into_value(txn)]
@@ -1206,9 +1213,11 @@ impl ItemContent {
             ItemContent::Any(v) => v.last().map(|a| Value::Any(a.clone())),
             ItemContent::Binary(v) => Some(Value::Any(Any::Buffer(v.clone().into_boxed_slice()))),
             ItemContent::Deleted(_) => None,
-            ItemContent::Doc(_, v) => Some(Value::Any(v.clone())),
-            ItemContent::JSON(v) => v.last().map(|v| Value::Any(Any::String(v.clone()))),
-            ItemContent::Embed(v) => Some(Value::Any(Any::String(v.clone()))),
+            ItemContent::Doc(_, v) => Some(Value::Any(*v.clone())),
+            ItemContent::JSON(v) => v
+                .last()
+                .map(|v| Value::Any(Any::String(v.clone().into_boxed_str()))),
+            ItemContent::Embed(v) => Some(Value::Any(Any::String(v.clone().into_boxed_str()))),
             ItemContent::Format(_, _) => None,
             ItemContent::String(v) => Some(Value::Any(Any::String(v.clone().into()))),
             ItemContent::Type(c) => Some(c.clone().into_value(txn)),
@@ -1228,8 +1237,8 @@ impl ItemContent {
                 }
             }
             ItemContent::Format(k, v) => {
-                encoder.write_string(k.as_str());
-                encoder.write_string(v.as_str());
+                encoder.write_string(k.as_ref());
+                encoder.write_string(v.as_ref());
             }
             ItemContent::Type(c) => {
                 let inner = c.borrow();
@@ -1247,7 +1256,7 @@ impl ItemContent {
                 }
             }
             ItemContent::Doc(key, any) => {
-                encoder.write_string(key.as_str());
+                encoder.write_string(key.as_ref());
                 encoder.write_any(any);
             }
         }
@@ -1266,8 +1275,8 @@ impl ItemContent {
                 }
             }
             ItemContent::Format(k, v) => {
-                encoder.write_string(k.as_str());
-                encoder.write_string(v.as_str());
+                encoder.write_string(k.as_ref());
+                encoder.write_string(v.as_ref());
             }
             ItemContent::Type(c) => {
                 let inner = c.borrow();
@@ -1285,7 +1294,7 @@ impl ItemContent {
                 }
             }
             ItemContent::Doc(key, any) => {
-                encoder.write_string(key.as_str());
+                encoder.write_string(key.as_ref());
                 encoder.write_any(any);
             }
         }
@@ -1306,10 +1315,9 @@ impl ItemContent {
             BLOCK_ITEM_BINARY_REF_NUMBER => ItemContent::Binary(decoder.read_buf().to_owned()),
             BLOCK_ITEM_STRING_REF_NUMBER => ItemContent::String(decoder.read_string().into()),
             BLOCK_ITEM_EMBED_REF_NUMBER => ItemContent::Embed(decoder.read_string().to_owned()),
-            BLOCK_ITEM_FORMAT_REF_NUMBER => ItemContent::Format(
-                decoder.read_string().to_owned(),
-                decoder.read_string().to_owned(),
-            ),
+            BLOCK_ITEM_FORMAT_REF_NUMBER => {
+                ItemContent::Format(decoder.read_string().into(), decoder.read_string().into())
+            }
             BLOCK_ITEM_TYPE_REF_NUMBER => {
                 let type_ref = decoder.read_type_ref();
                 let name = if type_ref == types::TYPE_REFS_XML_ELEMENT
@@ -1334,7 +1342,7 @@ impl ItemContent {
                 ItemContent::Any(values)
             }
             BLOCK_ITEM_DOC_REF_NUMBER => {
-                ItemContent::Doc(decoder.read_string().to_owned(), decoder.read_any())
+                ItemContent::Doc(decoder.read_string().into(), Box::new(decoder.read_any()))
             }
             info => panic!("ItemContent::decode unrecognized info flag: {}", info),
         }
