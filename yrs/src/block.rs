@@ -8,6 +8,7 @@ use crate::updates::decoder::Decoder;
 use crate::updates::encoder::Encoder;
 use crate::*;
 use lib0::any::Any;
+use smallstr::SmallString;
 use std::collections::HashSet;
 use std::hash::Hash;
 use std::ops::Deref;
@@ -960,7 +961,7 @@ impl Item {
 
 #[derive(PartialEq, PartialOrd, Eq, Ord, Debug, Clone)]
 pub struct SplittableString {
-    content: String,
+    content: SmallString<[u8; 8]>,
     utf16_len: usize,
 }
 
@@ -971,6 +972,11 @@ impl SplittableString {
             Encoding::Utf16 => self.utf16_len(),
             Encoding::Unicode => self.unicode_len(),
         }
+    }
+
+    #[inline(always)]
+    pub fn as_str(&self) -> &str {
+        self.content.as_str()
     }
 
     #[inline(always)]
@@ -1058,9 +1064,9 @@ impl std::fmt::Display for SplittableString {
     }
 }
 
-impl Into<String> for SplittableString {
+impl Into<SmallString<[u8; 8]>> for SplittableString {
     #[inline(always)]
-    fn into(self) -> String {
+    fn into(self) -> SmallString<[u8; 8]> {
         self.content
     }
 }
@@ -1068,12 +1074,12 @@ impl Into<String> for SplittableString {
 impl Into<Box<str>> for SplittableString {
     #[inline(always)]
     fn into(self) -> Box<str> {
-        self.content.into_boxed_str()
+        self.content.into_string().into_boxed_str()
     }
 }
 
-impl From<String> for SplittableString {
-    fn from(content: String) -> Self {
+impl From<SmallString<[u8; 8]>> for SplittableString {
+    fn from(content: SmallString<[u8; 8]>) -> Self {
         let utf16_len = content.encode_utf16().count();
         SplittableString { content, utf16_len }
     }
@@ -1081,12 +1087,12 @@ impl From<String> for SplittableString {
 
 impl<'a> From<&'a str> for SplittableString {
     fn from(str: &'a str) -> Self {
-        Self::from(str.to_string())
+        Self::from(SmallString::from_str(str))
     }
 }
 
 impl Deref for SplittableString {
-    type Target = String;
+    type Target = str;
 
     #[inline(always)]
     fn deref(&self) -> &Self::Target {
@@ -1614,7 +1620,7 @@ where
 }
 
 #[derive(Debug)]
-pub struct PrelimText(pub String);
+pub struct PrelimText(pub SmallString<[u8; 8]>);
 
 impl Prelim for PrelimText {
     fn into_content(self, _txn: &mut Transaction, _ptr: TypePtr) -> (ItemContent, Option<Self>) {
