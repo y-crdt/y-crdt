@@ -153,6 +153,39 @@ impl IdRange {
             }
         }
     }
+
+    fn merge(&mut self, other: IdRange) {
+        let mut raw = std::mem::take(self);
+        *self = match (raw, other) {
+            (IdRange::Continuous(mut a), IdRange::Continuous(b)) => {
+                if a.end >= b.start && a.start <= b.start {
+                    a.end = b.end;
+                    IdRange::Continuous(a)
+                } else {
+                    IdRange::Fragmented(vec![a, b])
+                }
+            }
+            (IdRange::Fragmented(mut a), IdRange::Continuous(b)) => {
+                a.push(b);
+                IdRange::Fragmented(a)
+            }
+            (IdRange::Continuous(a), IdRange::Fragmented(b)) => {
+                let mut v = b;
+                v.push(a.clone());
+                IdRange::Fragmented(v)
+            }
+            (IdRange::Fragmented(mut a), IdRange::Fragmented(mut b)) => {
+                a.append(&mut b);
+                IdRange::Fragmented(a)
+            }
+        };
+    }
+}
+
+impl Default for IdRange {
+    fn default() -> Self {
+        IdRange::Continuous(0..0)
+    }
 }
 
 impl Encode for IdRange {
@@ -285,39 +318,13 @@ impl IdSet {
     /// Merges another ID set into a current one, combining their information about observed ID
     /// ranges and squashing them if necessary.
     pub fn merge(&mut self, other: Self) {
-        other
-            .0
-            .into_iter()
-            .for_each(|(client, range)| match self.0.entry(client) {
-                Entry::Occupied(mut e) => {
-                    let r = e.get_mut();
-                    match (r, range) {
-                        (IdRange::Continuous(r1), IdRange::Continuous(r2)) => {
-                            if r1.end >= r2.start && r1.start <= r2.start {
-                                r1.end = r2.end;
-                            } else {
-                                let new = IdRange::Fragmented(vec![r1.clone(), r2.clone()]);
-                                e.replace_entry(new);
-                            }
-                        }
-                        (IdRange::Fragmented(rs), IdRange::Continuous(r)) => {
-                            rs.push(r);
-                        }
-                        (IdRange::Continuous(r), IdRange::Fragmented(rs)) => {
-                            let mut v = rs;
-                            v.push(r.clone());
-                            let new = IdRange::Fragmented(v);
-                            e.replace_entry(new);
-                        }
-                        (IdRange::Fragmented(rs1), IdRange::Fragmented(mut rs2)) => {
-                            rs1.append(&mut rs2);
-                        }
-                    }
-                }
-                Entry::Vacant(e) => {
-                    e.insert(range);
-                }
-            });
+        other.0.into_iter().for_each(|(client, range)| {
+            if let Some(r) = self.0.get_mut(&client) {
+                r.merge(range)
+            } else {
+                self.0.insert(client, range);
+            }
+        });
         self.squash()
     }
 }
