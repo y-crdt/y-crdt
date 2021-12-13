@@ -1,5 +1,3 @@
-#![feature(new_uninit)]
-#![feature(map_entry_replace)]
 //! Yrs "wires" is a high performance CRDT implementation based on the idea of **Shared
 //! Types**. It is a compatible port of the [Yjs](https://github.com/yjs/yjs) CRDT.
 //!
