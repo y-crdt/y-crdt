@@ -8,6 +8,15 @@ extern "C" {
     #include "include/libyrs.h"
 };
 
+YDoc* ydoc_new_with_id(int id) {
+    YOptions o;
+    o.encoding = Y_ENCODING_UTF16;
+    o.id = id;
+    o.skip_gc = 0;
+
+    return ydoc_new_with_options(o);
+}
+
 TEST_CASE("Update exchange basic") {
     // init
     YDoc* d1 = ydoc_new_with_id(1);

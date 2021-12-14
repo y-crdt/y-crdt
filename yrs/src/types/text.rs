@@ -45,7 +45,7 @@ impl Text {
 
     /// Returns a number of characters visible in a current text data structure.
     pub fn len(&self) -> u32 {
-        self.0.borrow().len()
+        self.0.borrow().content_len
     }
 
     pub(crate) fn inner(&self) -> Ref<Branch> {
@@ -55,7 +55,7 @@ impl Text {
     pub(crate) fn find_position(
         &self,
         txn: &mut Transaction,
-        mut count: u32,
+        index: u32,
     ) -> Option<block::ItemPosition> {
         let mut pos = {
             let inner = self.0.borrow();
@@ -68,26 +68,36 @@ impl Text {
         };
 
         let store = txn.store_mut();
+        let encoding = store.options.encoding;
+        let mut remaining = index;
         while let Some(right_ptr) = pos.right.as_ref() {
-            if count == 0 {
+            if remaining == 0 {
                 break;
             }
 
             if let Some(mut right) = store.blocks.get_item(right_ptr) {
                 if !right.is_deleted() {
-                    let mut right_len = right.len();
-                    if count < right_len {
+                    let mut block_len = right.len();
+                    let content_len = right.content_len(encoding);
+                    if remaining < content_len {
                         // split right item
+                        let offset = if let ItemContent::String(str) = &right.content {
+                            str.block_offset(remaining, encoding)
+                        } else {
+                            remaining
+                        };
                         let split_ptr = BlockPtr::new(
-                            ID::new(right.id.client, right.id.clock + count),
+                            ID::new(right.id.client, right.id.clock + offset),
                             right_ptr.pivot() as u32,
                         );
                         let (_, _) = store.blocks.split_block(&split_ptr);
                         right = store.blocks.get_item(right_ptr).unwrap();
-                        right_len = right.len();
+                        block_len = right.len();
+                        remaining = 0;
+                    } else {
+                        remaining -= content_len;
                     }
-                    pos.index += right_len;
-                    count -= right_len;
+                    pos.index += block_len;
                 }
                 pos.left = pos.right.take();
                 pos.right = right.right.clone();
@@ -160,7 +170,8 @@ impl From<BranchRef> for Text {
 
 #[cfg(test)]
 mod test {
-    use crate::test_utils::{run_scenario, RngExt};
+    use crate::doc::{Encoding, Options};
+    use crate::test_utils::{exchange_updates, run_scenario, RngExt};
     use crate::types::Change;
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encoder, EncoderV1};
@@ -575,16 +586,58 @@ mod test {
 
     #[test]
     fn unicode_support() {
-        let d = Doc::with_client_id(1);
-        let mut txn = d.transact();
-        let txt = txn.get_text("test");
+        let d1 = {
+            let mut options = Options::with_client_id(1);
+            options.encoding = Encoding::Unicode;
+            Doc::with_options(options)
+        };
+        let txt1 = {
+            let mut txn = d1.transact();
+            txn.get_text("test")
+        };
 
-        txt.insert(&mut txn, 0, "😀🙄"); // emoji are a 4-byte unicode points
-        assert_eq!(txt.to_string(&txn), "😀🙄");
-        assert_eq!(txt.len(), 2);
-        txt.insert(&mut txn, 1, "🥰");
-        assert_eq!(txt.to_string(&txn), "😀🥰🙄");
-        assert_eq!(txt.len(), 3);
+        let d2 = {
+            let mut options = Options::with_client_id(2);
+            options.encoding = Encoding::Bytes;
+            Doc::with_options(options)
+        };
+        let txt2 = {
+            let mut txn = d2.transact();
+            txn.get_text("test")
+        };
+
+        {
+            let mut txn = d1.transact();
+
+            txt1.insert(&mut txn, 0, "Zażółć gęślą jaźń");
+            assert_eq!(txt1.to_string(&txn), "Zażółć gęślą jaźń");
+            assert_eq!(txt1.len(), 17);
+        }
+
+        exchange_updates(&[&d1, &d2]);
+
+        {
+            let txn = d2.transact();
+            assert_eq!(txt2.to_string(&txn), "Zażółć gęślą jaźń");
+            assert_eq!(txt2.len(), 26);
+        }
+
+        {
+            let mut txn = d1.transact();
+            txt1.remove_range(&mut txn, 9, 3);
+            txt1.insert(&mut txn, 9, "si");
+
+            assert_eq!(txt1.to_string(&txn), "Zażółć gęsi jaźń");
+            assert_eq!(txt1.len(), 16);
+        }
+
+        exchange_updates(&[&d1, &d2]);
+
+        {
+            let txn = d2.transact();
+            assert_eq!(txt2.to_string(&txn), "Zażółć gęsi jaźń");
+            assert_eq!(txt2.len(), 23);
+        }
     }
 
     fn text_transactions() -> [Box<dyn Fn(&mut Doc, &mut StdRng)>; 2] {
