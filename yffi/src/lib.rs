@@ -11,9 +11,9 @@ use yrs::types::{
 };
 use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1};
-use yrs::StateVector;
-use yrs::Update;
 use yrs::Xml;
+use yrs::{Encoding, Update};
+use yrs::{Options, StateVector};
 
 /// Flag used by `YInput` and `YOutput` to tag boolean values.
 pub const Y_JSON_BOOL: c_char = -8;
@@ -65,6 +65,18 @@ pub const Y_TRUE: c_char = 1;
 /// Flag used to mark a falsy boolean numbers.
 pub const Y_FALSE: c_char = 0;
 
+/// Flag used by `YOptions` to determine, that text operations offsets and length will be counted by
+/// the byte number of UTF8-encoded string.
+pub const Y_ENCODING_BYTES: c_int = 0;
+
+/// Flag used by `YOptions` to determine, that text operations offsets and length will be counted by
+/// UTF-16 chars of encoded string.
+pub const Y_ENCODING_UTF16: c_int = 1;
+
+/// Flag used by `YOptions` to determine, that text operations offsets and length will be counted by
+/// by UTF-32 chars of encoded string.
+pub const Y_ENCODING_UTF32: c_int = 2;
+
 /* pub types below are used by cbindgen for c header generation */
 
 /// A Yrs document type. Documents are most important units of collaborative resources management.
@@ -96,8 +108,8 @@ pub type Map = yrs::Map;
 /// allows to squash multiple consecutively inserted characters together as a single chunk of text
 /// even between transaction boundaries in order to preserve more efficient memory model.
 ///
-/// `YText` structure internally uses UTF-8 encoding and its length is described in a number of
-/// bytes rather than individual characters (a single UTF-8 code point can consist of many bytes).
+/// `YText` structure internally uses UTF-8 encoding and its length depends on encoding configured
+/// on `YDoc` instance (using UTF-8 byte length by default).
 ///
 /// Like all Yrs shared data types, `YText` is resistant to the problem of interleaving (situation
 /// when characters inserted one after another may interleave with other peers concurrent inserts
@@ -149,8 +161,8 @@ pub type XmlElement = yrs::XmlElement;
 ///
 /// Just like `YXmlElement`, `YXmlText` can be marked with extra metadata in form of attributes.
 ///
-/// `YXmlText` structure internally uses UTF-8 encoding and its length is described in a number of
-/// bytes rather than individual characters (a single UTF-8 code point can consist of many bytes).
+/// `YXmlText` structure internally uses UTF-8 encoding and its length depends on encoding
+/// configured on `YDoc` instance (using UTF-8 byte length by default).
 ///
 /// Like all Yrs shared data types, `YXmlText` is resistant to the problem of interleaving (situation
 /// when characters inserted one after another may interleave with other peers concurrent inserts
@@ -223,6 +235,46 @@ impl Drop for YXmlAttr {
         unsafe {
             drop(CString::from_raw(self.name as *mut _));
             drop(CString::from_raw(self.value as *mut _));
+        }
+    }
+}
+
+/// Configuration object used by `YDoc`.
+#[repr(C)]
+pub struct YOptions {
+    /// Globally unique 53-bit integer assigned to corresponding document replica as its identifier.
+    ///
+    /// If two clients share the same `id` and will perform any updates, it will result in
+    /// unrecoverable document state corruption. The same thing may happen if the client restored
+    /// document state from snapshot, that didn't contain all of that clients updates that were sent
+    /// to other peers.
+    pub id: c_ulong,
+
+    /// Encoding used by text editing operations on this document. It's used to compute
+    /// `YText`/`YXmlText` insertion offsets and text lengths. Either:
+    ///
+    /// - `Y_ENCODING_BYTES`
+    /// - `Y_ENCODING_UTF16`
+    /// - `Y_ENCODING_UTF32`
+    pub encoding: c_int,
+
+    /// Boolean flag used to determine if deleted blocks should be garbage collected or not
+    /// during the transaction commits. Setting this value to 0 means GC will be performed.
+    pub skip_gc: c_int,
+}
+
+impl Into<Options> for YOptions {
+    fn into(self) -> Options {
+        let encoding = match self.encoding {
+            Y_ENCODING_BYTES => Encoding::Bytes,
+            Y_ENCODING_UTF16 => Encoding::Utf16,
+            Y_ENCODING_UTF32 => Encoding::Unicode,
+            _ => panic!("Unrecognized YOptions.encoding type"),
+        };
+        Options {
+            client_id: self.id as u64 & 0x3fffffffffffff,
+            skip_gc: if self.skip_gc == 0 { false } else { true },
+            encoding,
         }
     }
 }
@@ -329,17 +381,12 @@ pub extern "C" fn ydoc_new() -> *mut Doc {
     Box::into_raw(Box::new(Doc::new()))
 }
 
-/// Creates a new [Doc] instance with a specified client `id`. Provided `id` must be unique across
-/// all collaborating clients.
-///
-/// If two clients share the same `id` and will perform any updates, it will result in unrecoverable
-/// document state corruption. The same thing may happen if the client restored document state from
-/// snapshot, that didn't contain all of that clients updates that were sent to other peers.
+/// Creates a new [Doc] instance with a specified `options`.
 ///
 /// Use [ydoc_destroy] in order to release created [Doc] resources.
 #[no_mangle]
-pub extern "C" fn ydoc_new_with_id(id: c_ulong) -> *mut Doc {
-    Box::into_raw(Box::new(Doc::with_client_id(id as u64)))
+pub extern "C" fn ydoc_new_with_options(options: YOptions) -> *mut Doc {
+    Box::into_raw(Box::new(Doc::with_options(options.into())))
 }
 
 /// Returns a unique client identifier of this [Doc] instance.
@@ -585,8 +632,8 @@ pub unsafe extern "C" fn ytext_insert(
 /// An `index` value must be between 0 and the length of a `YText` (exclusive, accordingly to
 /// [ytext_len] return value).
 ///
-/// A `length` must be lower or equal number of bytes (internally `YText` uses UTF-8 encoding) from
-/// `index` position to the end of of the string.
+/// A `length` must be lower or equal number of characters (counted as UTF chars depending on the
+/// encoding configured by `YDoc`) from `index` position to the end of of the string.
 #[no_mangle]
 pub unsafe extern "C" fn ytext_remove_range(
     txt: *const Text,
@@ -1442,8 +1489,8 @@ pub unsafe extern "C" fn yxmltext_insert(
 /// An `index` value must be between 0 and the length of a `YXmlText` (exclusive, accordingly to
 /// [yxmltext_len] return value).
 ///
-/// A `length` must be lower or equal number of bytes (internally `YXmlText` uses UTF-8 encoding)
-/// from `index` position to the end of of the string.
+/// A `length` must be lower or equal number of characters (counted as UTF chars depending on the
+/// encoding configured by `YDoc`) from `index` position to the end of of the string.
 #[no_mangle]
 pub unsafe extern "C" fn yxmltext_remove_range(
     txt: *const XmlText,

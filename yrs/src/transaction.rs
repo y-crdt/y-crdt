@@ -256,7 +256,8 @@ impl Transaction {
                 if item.parent_sub.is_none() && item.is_countable() {
                     if let Some(parent) = self.store().get_type(&item.parent) {
                         let mut inner = parent.borrow_mut();
-                        inner.len -= item.len();
+                        inner.block_len -= item.len();
+                        inner.content_len -= item.content_len(store.options.encoding);
                     }
                 }
 
@@ -411,7 +412,7 @@ impl Transaction {
             } else {
                 None
             };
-            let client_id = store.client_id;
+            let client_id = store.options.client_id;
             let id = block::ID {
                 client: client_id,
                 clock: store.get_local_state(),
@@ -484,7 +485,9 @@ impl Transaction {
         }
 
         // 4. try GC delete set
-        self.try_gc(); //TODO: eventually this is a configurable variant: if (doc.gc)
+        if !store.options.skip_gc {
+            self.try_gc();
+        }
 
         // 5. try merge delete set
         self.delete_set.try_squash_with(store);

@@ -1,5 +1,6 @@
 use crate::block::ItemContent;
 use crate::block_store::{BlockStore, SquashResult, StateVector};
+use crate::doc::Options;
 use crate::event::{EventHandler, UpdateEvent};
 use crate::id_set::DeleteSet;
 use crate::types;
@@ -14,8 +15,7 @@ use std::rc::Rc;
 /// map of root types, pending updates waiting to be applied once a missing update information
 /// arrives and all subscribed callbacks.
 pub(crate) struct Store {
-    /// An unique identifier of a current document replica.
-    pub client_id: u64,
+    pub options: Options,
 
     /// Root types (a.k.a. top-level types). These types are defined by users at the document level,
     /// they have their own unique names and represent core shared types that expose operations
@@ -43,9 +43,9 @@ pub(crate) struct Store {
 
 impl Store {
     /// Create a new empty store in context of a given `client_id`.
-    pub fn new(client_id: u64) -> Self {
+    pub fn new(options: Options) -> Self {
         Store {
-            client_id,
+            options,
             types: Default::default(),
             blocks: BlockStore::new(),
             pending: None,
@@ -59,7 +59,7 @@ impl Store {
     /// block that's about to be inserted. You cannot use that clock value to find any existing
     /// block content.
     pub fn get_local_state(&self) -> u32 {
-        self.blocks.get_state(&self.client_id)
+        self.blocks.get_state(&self.options.client_id)
     }
 
     /// Returns a branch reference to a complex type identified by its pointer. Returns `None` if
@@ -266,7 +266,7 @@ impl Encode for Store {
 
 impl std::fmt::Display for Store {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "Store(ID: {}) {{", self.client_id)?;
+        writeln!(f, "Store(ID: {}) {{", self.options.client_id)?;
         if !self.types.is_empty() {
             writeln!(f, "\ttypes: {{")?;
             for (k, v) in self.types.iter() {

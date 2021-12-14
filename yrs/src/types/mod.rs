@@ -9,6 +9,7 @@ pub use text::Text;
 
 use crate::block::{BlockPtr, Item, ItemContent, ItemPosition, Prelim};
 use crate::block_store::BlockStore;
+use crate::doc::Encoding;
 use crate::event::{EventHandler, Subscription};
 use crate::types::array::Array;
 use crate::types::xml::{XmlElement, XmlText};
@@ -107,15 +108,21 @@ impl BranchRef {
         };
         while remaining > 0 {
             if let Some(mut p) = ptr {
+                let encoding = txn.store().options.encoding;
                 if let Some(item) = txn.store().blocks.get_item(&p) {
                     if !item.is_deleted() {
-                        let item_len = item.len();
-                        let (l, r) = if remaining < item_len {
-                            p.id.clock += remaining;
+                        let content_len = item.content_len(encoding);
+                        let (l, r) = if remaining < content_len {
+                            let offset = if let ItemContent::String(s) = &item.content {
+                                s.block_offset(remaining, encoding)
+                            } else {
+                                remaining
+                            };
+                            p.id.clock += offset;
                             remaining = 0;
                             txn.store_mut().blocks.split_block(&p)
                         } else {
-                            remaining -= item_len;
+                            remaining -= content_len;
                             (ptr, item.right.clone())
                         };
                         txn.delete(&l.unwrap());
@@ -231,7 +238,9 @@ pub struct Branch {
 
     /// A length of an indexed sequence component of a current branch node. Map component elements
     /// are computed on demand.
-    pub len: u32,
+    pub block_len: u32,
+
+    pub content_len: u32,
 
     /// An identifier of an underlying complex data type (eg. is it an Array or a Map).
     type_ref: TypeRefs,
@@ -246,7 +255,7 @@ impl std::fmt::Debug for Branch {
             .field("map", &self.map)
             .field("ptr", &self.ptr)
             .field("name", &self.name)
-            .field("len", &self.len)
+            .field("len", &self.block_len)
             .field("type_ref", &self.type_ref)
             .finish()
     }
@@ -260,7 +269,7 @@ impl PartialEq for Branch {
             && self.start == other.start
             && self.map == other.map
             && self.name == other.name
-            && self.len == other.len
+            && self.block_len == other.block_len
             && self.type_ref == other.type_ref
     }
 }
@@ -270,7 +279,8 @@ impl Branch {
         Self {
             start: None,
             map: HashMap::default(),
-            len: 0,
+            block_len: 0,
+            content_len: 0,
             ptr,
             name,
             type_ref,
@@ -286,7 +296,11 @@ impl Branch {
     /// Returns a length of an indexed sequence component of a current branch node.
     /// Map component elements are computed on demand.
     pub fn len(&self) -> u32 {
-        self.len
+        self.block_len
+    }
+
+    pub fn content_len(&self, txn: &Transaction) -> u32 {
+        self.content_len
     }
 
     /// Get iterator over (String, Block) entries of a map component of a current root type.
@@ -387,32 +401,38 @@ impl Branch {
         mut ptr: Option<BlockPtr>,
         mut index: u32,
     ) -> (Option<BlockPtr>, Option<BlockPtr>) {
+        let store = txn.store_mut();
+        let encoding = store.options.encoding;
         while let Some(p) = ptr {
-            let item = txn
-                .store()
+            let item = store
                 .blocks
                 .get_item(&p)
                 .expect("No item for a given pointer was found.");
-            let len = item.len();
+            let content_len = item.content_len(encoding);
             if !item.is_deleted() && item.is_countable() {
-                if index == len {
+                if index == content_len {
                     let left = Some(p.clone());
                     let right = item.right.clone();
                     return (left, right);
-                } else if index < len {
+                } else if index < content_len {
+                    let index = if let ItemContent::String(s) = &item.content {
+                        s.block_offset(index, encoding)
+                    } else {
+                        index
+                    };
                     let split_point = ID::new(item.id.client, item.id.clock + index);
                     let ptr = BlockPtr::new(split_point, p.pivot() as u32);
-                    let (left, mut right) = txn.store_mut().blocks.split_block(&ptr);
+                    let (left, mut right) = store.blocks.split_block(&ptr);
                     if right.is_none() {
                         if let Some(left_ptr) = left.as_ref() {
-                            if let Some(left) = txn.store().blocks.get_item(left_ptr) {
+                            if let Some(left) = store.blocks.get_item(left_ptr) {
                                 right = left.right.clone();
                             }
                         }
                     }
                     return (left, right);
                 }
-                index -= len;
+                index -= content_len;
             }
             ptr = item.right.clone();
         }
