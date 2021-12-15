@@ -1,4 +1,4 @@
-use crate::doc::Encoding;
+use crate::doc::OffsetKind;
 use crate::store::Store;
 use crate::types::{
     Branch, BranchRef, TypePtr, Value, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
@@ -637,7 +637,7 @@ impl Item {
     /// If it returns true, it means that the block should be deleted after being added to a block store.
     pub fn integrate(&mut self, txn: &mut Transaction, pivot: u32, offset: u32) -> bool {
         let mut store = txn.store_mut();
-        let encoding = store.options.encoding;
+        let encoding = store.options.offset_kind;
         if offset > 0 {
             self.id.clock += offset;
             let (left, _) = store
@@ -840,11 +840,11 @@ impl Item {
     /// in reality ie. when item has been deleted, corresponding content no longer exists but `len`
     /// still refers to a number of elements current block used to represent.
     pub fn len(&self) -> u32 {
-        self.content.len(Encoding::Utf16)
+        self.content.len(OffsetKind::Utf16)
     }
 
-    pub fn content_len(&self, encoding: Encoding) -> u32 {
-        self.content.len(encoding)
+    pub fn content_len(&self, kind: OffsetKind) -> u32 {
+        self.content.len(kind)
     }
 
     pub fn slice(&self, diff: u32) -> Item {
@@ -954,11 +954,11 @@ pub struct SplittableString {
 }
 
 impl SplittableString {
-    pub fn len(&self, encoding: Encoding) -> usize {
-        match encoding {
-            Encoding::Bytes => self.content.len(),
-            Encoding::Utf16 => self.utf16_len(),
-            Encoding::Unicode => self.unicode_len(),
+    pub fn len(&self, kind: OffsetKind) -> usize {
+        match kind {
+            OffsetKind::Bytes => self.content.len(),
+            OffsetKind::Utf16 => self.utf16_len(),
+            OffsetKind::Utf32 => self.unicode_len(),
         }
     }
 
@@ -976,11 +976,11 @@ impl SplittableString {
         self.content.chars().count()
     }
 
-    pub fn split_at(&self, offset: usize, encoding: Encoding) -> (&str, &str) {
-        let off = match encoding {
-            Encoding::Bytes => offset,
-            Encoding::Utf16 => self.map_utf16_offset(offset as u32) as usize,
-            Encoding::Unicode => self.map_unicode_offset(offset as u32) as usize,
+    pub fn split_at(&self, offset: usize, kind: OffsetKind) -> (&str, &str) {
+        let off = match kind {
+            OffsetKind::Bytes => offset,
+            OffsetKind::Utf16 => self.map_utf16_offset(offset as u32) as usize,
+            OffsetKind::Utf32 => self.map_unicode_offset(offset as u32) as usize,
         };
         self.content.split_at(off)
     }
@@ -988,10 +988,10 @@ impl SplittableString {
     /// Maps given offset onto block offset. This means, that given an `offset` provided
     /// in given `encoding` we want the output as a UTF-16 compatible offset (required
     /// by Yjs for compatibility reasons).
-    pub(crate) fn block_offset(&self, offset: u32, encoding: Encoding) -> u32 {
-        match encoding {
-            Encoding::Utf16 => offset,
-            Encoding::Bytes => {
+    pub(crate) fn block_offset(&self, offset: u32, kind: OffsetKind) -> u32 {
+        match kind {
+            OffsetKind::Utf16 => offset,
+            OffsetKind::Bytes => {
                 let mut remaining = offset;
                 let mut i = 0;
                 for c in self.content.encode_utf16() {
@@ -1004,7 +1004,7 @@ impl SplittableString {
                 }
                 i
             }
-            Encoding::Unicode => self
+            OffsetKind::Utf32 => self
                 .content
                 .chars()
                 .take(offset as usize)
@@ -1164,10 +1164,10 @@ impl ItemContent {
     ///
     /// In cases of counting number of visible elements, `len` method should be used together with
     /// [ItemContent::is_countable].
-    pub fn len(&self, encoding: Encoding) -> u32 {
+    pub fn len(&self, kind: OffsetKind) -> u32 {
         match self {
             ItemContent::Deleted(deleted) => *deleted,
-            ItemContent::String(str) => str.len(encoding) as u32,
+            ItemContent::String(str) => str.len(kind) as u32,
             ItemContent::Any(v) => v.len() as u32,
             ItemContent::JSON(v) => v.len() as u32,
             _ => 1,
@@ -1353,7 +1353,7 @@ impl ItemContent {
             }
             ItemContent::String(string) => {
                 // compute offset given in unicode code points into byte position
-                let (left, right) = string.split_at(offset, Encoding::Utf16);
+                let (left, right) = string.split_at(offset, OffsetKind::Utf16);
                 let left: SplittableString = left.into();
                 let right: SplittableString = right.into();
 
@@ -1643,7 +1643,7 @@ impl std::fmt::Display for Block {
 #[cfg(test)]
 mod test {
     use crate::block::{BlockPtr, SplittableString};
-    use crate::doc::Encoding;
+    use crate::doc::OffsetKind;
     use crate::ID;
     use std::ops::Deref;
 
@@ -1659,9 +1659,9 @@ mod test {
     fn splittable_string_len() {
         let s: SplittableString = "Zażółć gęślą jaźń😀 女".into();
 
-        assert_eq!(s.len(Encoding::Bytes), 34, "wrong byte length");
-        assert_eq!(s.len(Encoding::Utf16), 21, "wrong UTF-16 length");
-        assert_eq!(s.len(Encoding::Unicode), 20, "wrong Unicode chars count");
+        assert_eq!(s.len(OffsetKind::Bytes), 34, "wrong byte length");
+        assert_eq!(s.len(OffsetKind::Utf16), 21, "wrong UTF-16 length");
+        assert_eq!(s.len(OffsetKind::Utf32), 20, "wrong Unicode chars count");
     }
 
     #[test]
@@ -1674,24 +1674,24 @@ mod test {
             &"Zażółć gęślą jaźń😀ありがとうございます".to_string()
         );
 
-        assert_eq!(s.len(Encoding::Bytes), 60, "wrong byte length");
-        assert_eq!(s.len(Encoding::Utf16), 29, "wrong UTF-16 length");
-        assert_eq!(s.len(Encoding::Unicode), 28, "wrong Unicode chars count");
+        assert_eq!(s.len(OffsetKind::Bytes), 60, "wrong byte length");
+        assert_eq!(s.len(OffsetKind::Utf16), 29, "wrong UTF-16 length");
+        assert_eq!(s.len(OffsetKind::Utf32), 28, "wrong Unicode chars count");
     }
 
     #[test]
     fn splittable_string_split_str() {
         let s: SplittableString = "Zażółć gęślą jaźń😀ありがとうございます".into();
 
-        let (a, b) = s.split_at(18, Encoding::Unicode);
+        let (a, b) = s.split_at(18, OffsetKind::Utf32);
         assert_eq!(a, "Zażółć gęślą jaźń😀");
         assert_eq!(b, "ありがとうございます");
 
-        let (a, b) = s.split_at(19, Encoding::Utf16);
+        let (a, b) = s.split_at(19, OffsetKind::Utf16);
         assert_eq!(a, "Zażółć gęślą jaźń😀");
         assert_eq!(b, "ありがとうございます");
 
-        let (a, b) = s.split_at(30, Encoding::Bytes);
+        let (a, b) = s.split_at(30, OffsetKind::Bytes);
         assert_eq!(a, "Zażółć gęślą jaźń😀");
         assert_eq!(b, "ありがとうございます");
     }
