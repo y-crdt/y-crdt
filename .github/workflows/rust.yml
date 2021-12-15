@@ -23,10 +23,10 @@ jobs:
       - name: Checkout sources
         uses: actions/checkout@v2
 
-      - name: Install nightly toolchain with rustfmt available
+      - name: Stable with rustfmt and clippy
         uses: actions-rs/toolchain@v1
         with:
-          toolchain: nightly
+          toolchain: stable
           override: true
 
       - name: Build
