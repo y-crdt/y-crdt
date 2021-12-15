@@ -19,7 +19,7 @@ use yrs::types::{
 use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1};
 use yrs::{
-    Array, Doc, Encoding, Map, Options, StateVector, Text, Transaction, Update, Xml, XmlElement,
+    Array, Doc, Map, OffsetKind, Options, StateVector, Text, Transaction, Update, Xml, XmlElement,
     XmlText,
 };
 
@@ -83,7 +83,7 @@ impl YDoc {
             Options::default()
         };
 
-        options.encoding = Encoding::Utf16;
+        options.offset_kind = OffsetKind::Utf16;
         YDoc(Doc::with_options(options))
     }
 

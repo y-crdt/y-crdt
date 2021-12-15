@@ -12,7 +12,7 @@ use yrs::types::{
 use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1};
 use yrs::Xml;
-use yrs::{Encoding, Update};
+use yrs::{OffsetKind, Update};
 use yrs::{Options, StateVector};
 
 /// Flag used by `YInput` and `YOutput` to tag boolean values.
@@ -67,15 +67,15 @@ pub const Y_FALSE: c_char = 0;
 
 /// Flag used by `YOptions` to determine, that text operations offsets and length will be counted by
 /// the byte number of UTF8-encoded string.
-pub const Y_ENCODING_BYTES: c_int = 0;
+pub const Y_OFFSET_BYTES: c_int = 0;
 
 /// Flag used by `YOptions` to determine, that text operations offsets and length will be counted by
 /// UTF-16 chars of encoded string.
-pub const Y_ENCODING_UTF16: c_int = 1;
+pub const Y_OFFSET_UTF16: c_int = 1;
 
 /// Flag used by `YOptions` to determine, that text operations offsets and length will be counted by
 /// by UTF-32 chars of encoded string.
-pub const Y_ENCODING_UTF32: c_int = 2;
+pub const Y_OFFSET_UTF32: c_int = 2;
 
 /* pub types below are used by cbindgen for c header generation */
 
@@ -266,15 +266,15 @@ pub struct YOptions {
 impl Into<Options> for YOptions {
     fn into(self) -> Options {
         let encoding = match self.encoding {
-            Y_ENCODING_BYTES => Encoding::Bytes,
-            Y_ENCODING_UTF16 => Encoding::Utf16,
-            Y_ENCODING_UTF32 => Encoding::Unicode,
+            Y_OFFSET_BYTES => OffsetKind::Bytes,
+            Y_OFFSET_UTF16 => OffsetKind::Utf16,
+            Y_OFFSET_UTF32 => OffsetKind::Utf32,
             _ => panic!("Unrecognized YOptions.encoding type"),
         };
         Options {
             client_id: self.id as u64 & 0x3fffffffffffff,
             skip_gc: if self.skip_gc == 0 { false } else { true },
-            encoding,
+            offset_kind: encoding,
         }
     }
 }

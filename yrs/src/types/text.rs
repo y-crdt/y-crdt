@@ -68,7 +68,7 @@ impl Text {
         };
 
         let store = txn.store_mut();
-        let encoding = store.options.encoding;
+        let encoding = store.options.offset_kind;
         let mut remaining = index;
         while let Some(right_ptr) = pos.right.as_ref() {
             if remaining == 0 {
@@ -170,7 +170,7 @@ impl From<BranchRef> for Text {
 
 #[cfg(test)]
 mod test {
-    use crate::doc::{Encoding, Options};
+    use crate::doc::{OffsetKind, Options};
     use crate::test_utils::{exchange_updates, run_scenario, RngExt};
     use crate::types::Change;
     use crate::updates::decoder::Decode;
@@ -588,7 +588,7 @@ mod test {
     fn unicode_support() {
         let d1 = {
             let mut options = Options::with_client_id(1);
-            options.encoding = Encoding::Unicode;
+            options.offset_kind = OffsetKind::Utf32;
             Doc::with_options(options)
         };
         let txt1 = {
@@ -598,7 +598,7 @@ mod test {
 
         let d2 = {
             let mut options = Options::with_client_id(2);
-            options.encoding = Encoding::Bytes;
+            options.offset_kind = OffsetKind::Bytes;
             Doc::with_options(options)
         };
         let txt2 = {
