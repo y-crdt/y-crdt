@@ -9,7 +9,6 @@ pub use text::Text;
 
 use crate::block::{BlockPtr, Item, ItemContent, ItemPosition, Prelim};
 use crate::block_store::BlockStore;
-use crate::doc::Encoding;
 use crate::event::{EventHandler, Subscription};
 use crate::types::array::Array;
 use crate::types::xml::{XmlElement, XmlText};
@@ -299,7 +298,7 @@ impl Branch {
         self.block_len
     }
 
-    pub fn content_len(&self, txn: &Transaction) -> u32 {
+    pub fn content_len(&self, _: &Transaction) -> u32 {
         self.content_len
     }
 
