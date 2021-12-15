@@ -258,19 +258,19 @@ typedef struct Event {} Event;
  * Flag used by `YOptions` to determine, that text operations offsets and length will be counted by
  * the byte number of UTF8-encoded string.
  */
-#define Y_ENCODING_BYTES 0
+#define Y_OFFSET_BYTES 0
 
 /**
  * Flag used by `YOptions` to determine, that text operations offsets and length will be counted by
  * UTF-16 chars of encoded string.
  */
-#define Y_ENCODING_UTF16 1
+#define Y_OFFSET_UTF16 1
 
 /**
  * Flag used by `YOptions` to determine, that text operations offsets and length will be counted by
  * by UTF-32 chars of encoded string.
  */
-#define Y_ENCODING_UTF32 2
+#define Y_OFFSET_UTF32 2
 
 /**
  * Tag used to identify `YPathSegment` storing a *char parameter.
