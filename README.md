@@ -26,3 +26,7 @@ other.
 * **[./yrs](./yrs)** Contains the CRDT implementation (including shared types)
   that is the baseline for the other projects.
 * **[./ywasm](./ywasm)** Maintains the wasm bindings and the npm module.
+
+## Sponsors
+
+[![NLNET](https://nlnet.nl/image/logo_nlnet.svg)](https://nlnet.nl/)

@@ -327,18 +327,6 @@ impl Block {
         }
     }
 
-    /// Returns a number of elements stored within this block. These elements don't have to exists
-    /// in reality ie. when block was garbage collected or tombstoned, corresponding content no
-    /// longer exists but `len` still refers to a number of elements current block used to
-    /// represent.
-    pub fn content_len(&self, encoding: Encoding) -> u32 {
-        match self {
-            Block::Item(item) => item.content_len(encoding),
-            Block::Skip(skip) => skip.len,
-            Block::GC(gc) => gc.len,
-        }
-    }
-
     /// Returns a last clock value of a current block. This is exclusive value meaning, that
     /// using it with current block's client ID will point to the beginning of a next block.
     pub fn clock_end(&self) -> u32 {
@@ -1693,7 +1681,7 @@ mod test {
 
     #[test]
     fn splittable_string_split_str() {
-        let mut s: SplittableString = "Zażółć gęślą jaźń😀ありがとうございます".into();
+        let s: SplittableString = "Zażółć gęślą jaźń😀ありがとうございます".into();
 
         let (a, b) = s.split_at(18, Encoding::Unicode);
         assert_eq!(a, "Zażółć gęślą jaźń😀");
