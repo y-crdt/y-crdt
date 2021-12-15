@@ -1620,7 +1620,7 @@ impl YInput {
         let tag = self.tag;
         unsafe {
             if tag == Y_JSON_STR {
-                let str = CStr::from_ptr(self.value.str).to_str().unwrap().to_owned();
+                let str: Box<str> = CStr::from_ptr(self.value.str).to_str().unwrap().into();
                 Any::String(str)
             } else if tag == Y_JSON_ARR {
                 let ptr = self.value.values;
@@ -1632,7 +1632,7 @@ impl YInput {
                     dst.push(any);
                     i += 1;
                 }
-                Any::Array(dst)
+                Any::Array(dst.into_boxed_slice())
             } else if tag == Y_JSON_MAP {
                 let mut dst = HashMap::with_capacity(self.len as usize);
                 let keys = self.value.map.keys;
@@ -1647,7 +1647,7 @@ impl YInput {
                     dst.insert(key, value);
                     i += 1;
                 }
-                Any::Map(dst)
+                Any::Map(Box::new(dst))
             } else if tag == Y_JSON_NULL {
                 Any::Null
             } else if tag == Y_JSON_UNDEF {
@@ -1950,18 +1950,19 @@ impl From<Any> for YOutput {
                     tag: Y_JSON_STR,
                     len: v.len() as c_int,
                     value: YOutputContent {
-                        str: CString::new(v).unwrap().into_raw(),
+                        str: CString::new(v.as_ref()).unwrap().into_raw(),
                     },
                 },
                 Any::Buffer(v) => YOutput {
                     tag: Y_JSON_BUF,
                     len: v.len() as c_int,
                     value: YOutputContent {
-                        buf: Box::into_raw(v) as *mut _,
+                        buf: Box::into_raw(v.clone()) as *mut _,
                     },
                 },
                 Any::Array(v) => {
                     let len = v.len() as c_int;
+                    let v = Vec::from(v);
                     let mut array: Vec<_> = v.into_iter().map(|v| YOutput::from(v)).collect();
                     array.shrink_to_fit();
                     let ptr = array.as_mut_ptr();
@@ -1974,6 +1975,7 @@ impl From<Any> for YOutput {
                 }
                 Any::Map(v) => {
                     let len = v.len() as c_int;
+                    let v = *v;
                     let mut array: Vec<_> = v
                         .into_iter()
                         .map(|(k, v)| YMapEntry::new(k.as_str(), Value::Any(v)))

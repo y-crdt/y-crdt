@@ -869,7 +869,7 @@ impl YArray {
     #[wasm_bindgen(js_name = toJson)]
     pub fn to_json(&self, txn: &YTransaction) -> JsValue {
         match &*self.0.borrow() {
-            SharedType::Integrated(v) => any_into_js(v.to_json(txn)),
+            SharedType::Integrated(v) => any_into_js(&v.to_json(txn)),
             SharedType::Prelim(v) => {
                 let array = js_sys::Array::new();
                 for js in v.iter() {
@@ -1152,7 +1152,7 @@ impl YMap {
     #[wasm_bindgen(js_name = toJson)]
     pub fn to_json(&self, txn: &YTransaction) -> JsValue {
         match &*self.0.borrow() {
-            SharedType::Integrated(v) => any_into_js(v.to_json(txn)),
+            SharedType::Integrated(v) => any_into_js(&v.to_json(txn)),
             SharedType::Prelim(v) => {
                 let map = js_sys::Object::new();
                 for (k, v) in v.iter() {
@@ -1794,7 +1794,7 @@ fn insert_at(dst: &Array, txn: &mut Transaction, index: u32, src: Vec<JsValue>) 
 
 fn js_into_any(v: &JsValue) -> Option<Any> {
     if v.is_string() {
-        Some(Any::String(v.as_string()?))
+        Some(Any::String(v.as_string()?.into_boxed_str()))
     } else if v.is_bigint() {
         let i = js_sys::BigInt::from(v.clone()).as_f64()?;
         Some(Any::BigInt(i as i64))
@@ -1812,7 +1812,7 @@ fn js_into_any(v: &JsValue) -> Option<Any> {
         for value in array.iter() {
             result.push(js_into_any(&value)?);
         }
-        Some(Any::Array(result))
+        Some(Any::Array(result.into_boxed_slice()))
     } else if v.is_object() {
         if let Ok(_) = Shared::try_from(v) {
             None
@@ -1826,36 +1826,36 @@ fn js_into_any(v: &JsValue) -> Option<Any> {
                 let value = js_into_any(&tuple.get(1))?;
                 result.insert(key, value);
             }
-            Some(Any::Map(result))
+            Some(Any::Map(Box::new(result)))
         }
     } else {
         None
     }
 }
 
-fn any_into_js(v: Any) -> JsValue {
+fn any_into_js(v: &Any) -> JsValue {
     match v {
         Any::Null => JsValue::NULL,
         Any::Undefined => JsValue::UNDEFINED,
-        Any::Bool(v) => JsValue::from_bool(v),
-        Any::Number(v) => JsValue::from(v),
-        Any::BigInt(v) => JsValue::from(v),
-        Any::String(v) => JsValue::from(&v),
+        Any::Bool(v) => JsValue::from_bool(*v),
+        Any::Number(v) => JsValue::from(*v),
+        Any::BigInt(v) => JsValue::from(*v),
+        Any::String(v) => JsValue::from(v.as_ref()),
         Any::Buffer(v) => {
             let v = Uint8Array::from(v.as_ref());
             v.into()
         }
         Any::Array(v) => {
             let a = js_sys::Array::new();
-            for value in v {
+            for value in v.as_ref() {
                 a.push(&any_into_js(value));
             }
             a.into()
         }
         Any::Map(v) => {
             let m = js_sys::Object::new();
-            for (k, v) in v {
-                let key = JsValue::from(&k);
+            for (k, v) in v.as_ref() {
+                let key = JsValue::from(k);
                 let value = any_into_js(v);
                 js_sys::Reflect::set(&m, &key, &value).unwrap();
             }
@@ -1866,7 +1866,7 @@ fn any_into_js(v: Any) -> JsValue {
 
 fn value_into_js(v: Value) -> JsValue {
     match v {
-        Value::Any(v) => any_into_js(v),
+        Value::Any(v) => any_into_js(&v),
         Value::YText(v) => YText::from(v).into(),
         Value::YArray(v) => YArray::from(v).into(),
         Value::YMap(v) => YMap::from(v).into(),

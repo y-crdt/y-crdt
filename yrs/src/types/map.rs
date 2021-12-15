@@ -33,7 +33,7 @@ impl Map {
                 }
             }
         }
-        Any::Map(res)
+        Any::Map(Box::new(res))
     }
 
     /// Returns a number of entries stored within current map.
@@ -275,8 +275,8 @@ mod test {
                 Some(Value::from({
                     let mut m = HashMap::new();
                     let mut n = HashMap::new();
-                    n.insert("key2".to_owned(), Any::String("value".to_owned()));
-                    m.insert("key".to_owned(), Any::Map(n));
+                    n.insert("key2".to_owned(), Any::String("value".into()));
+                    m.insert("key".to_owned(), Any::Map(Box::new(n)));
                     m
                 }))
             );

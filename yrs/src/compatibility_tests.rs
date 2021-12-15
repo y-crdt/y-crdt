@@ -138,7 +138,7 @@ fn map_set() {
             None,
             TypePtr::Named("test".into()),
             Some("k1".into()),
-            ItemContent::Any(vec![Any::String("v1".to_string())]),
+            ItemContent::Any(vec![Any::String("v1".into())]),
         )),
         &Block::Item(Item::new(
             ID::new(CLIENT_ID, 1),
@@ -148,7 +148,7 @@ fn map_set() {
             None,
             TypePtr::Named("test".into()),
             Some("k2".into()),
-            ItemContent::Any(vec![Any::String("v2".to_string())]),
+            ItemContent::Any(vec![Any::String("v2".into())]),
         )),
     ];
 
@@ -179,10 +179,7 @@ fn array_insert() {
         None,
         TypePtr::Named("test".into()),
         None,
-        ItemContent::Any(vec![
-            Any::String("a".to_string()),
-            Any::String("b".to_string()),
-        ]),
+        ItemContent::Any(vec![Any::String("a".into()), Any::String("b".into())]),
     ))];
 
     roundtrip(payload, expected);

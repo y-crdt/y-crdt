@@ -8,6 +8,7 @@ use crate::updates::decoder::Decoder;
 use crate::updates::encoder::Encoder;
 use crate::*;
 use lib0::any::Any;
+use smallstr::SmallString;
 use std::collections::HashSet;
 use std::hash::Hash;
 use std::ops::Deref;
@@ -321,18 +322,6 @@ impl Block {
     pub fn len(&self) -> u32 {
         match self {
             Block::Item(item) => item.len(),
-            Block::Skip(skip) => skip.len,
-            Block::GC(gc) => gc.len,
-        }
-    }
-
-    /// Returns a number of elements stored within this block. These elements don't have to exists
-    /// in reality ie. when block was garbage collected or tombstoned, corresponding content no
-    /// longer exists but `len` still refers to a number of elements current block used to
-    /// represent.
-    pub fn content_len(&self, encoding: Encoding) -> u32 {
-        match self {
-            Block::Item(item) => item.content_len(encoding),
             Block::Skip(skip) => skip.len,
             Block::GC(gc) => gc.len,
         }
@@ -960,7 +949,7 @@ impl Item {
 
 #[derive(PartialEq, PartialOrd, Eq, Ord, Debug, Clone)]
 pub struct SplittableString {
-    content: String,
+    content: SmallString<[u8; 8]>,
     utf16_len: usize,
 }
 
@@ -971,6 +960,11 @@ impl SplittableString {
             Encoding::Utf16 => self.utf16_len(),
             Encoding::Unicode => self.unicode_len(),
         }
+    }
+
+    #[inline(always)]
+    pub fn as_str(&self) -> &str {
+        self.content.as_str()
     }
 
     #[inline(always)]
@@ -1058,15 +1052,22 @@ impl std::fmt::Display for SplittableString {
     }
 }
 
-impl Into<String> for SplittableString {
+impl Into<SmallString<[u8; 8]>> for SplittableString {
     #[inline(always)]
-    fn into(self) -> String {
+    fn into(self) -> SmallString<[u8; 8]> {
         self.content
     }
 }
 
-impl From<String> for SplittableString {
-    fn from(content: String) -> Self {
+impl Into<Box<str>> for SplittableString {
+    #[inline(always)]
+    fn into(self) -> Box<str> {
+        self.content.into_string().into_boxed_str()
+    }
+}
+
+impl From<SmallString<[u8; 8]>> for SplittableString {
+    fn from(content: SmallString<[u8; 8]>) -> Self {
         let utf16_len = content.encode_utf16().count();
         SplittableString { content, utf16_len }
     }
@@ -1074,12 +1075,12 @@ impl From<String> for SplittableString {
 
 impl<'a> From<&'a str> for SplittableString {
     fn from(str: &'a str) -> Self {
-        Self::from(str.to_string())
+        Self::from(SmallString::from_str(str))
     }
 }
 
 impl Deref for SplittableString {
-    type Target = String;
+    type Target = str;
 
     #[inline(always)]
     fn deref(&self) -> &Self::Target {
@@ -1101,13 +1102,13 @@ pub enum ItemContent {
     /// Deleted elements also don't contribute to an overall length of containing collection type.
     Deleted(u32),
 
-    Doc(String, Any),
+    Doc(Box<str>, Box<Any>),
     JSON(Vec<String>), // String is JSON
     Embed(String),     // String is JSON
 
     /// Formatting attribute entry. Format attributes are not considered countable and don't
     /// contribute to an overall length of a collection they are applied to.
-    Format(String, String), // key, value: JSON
+    Format(Box<str>, Box<str>), // key, value: JSON
 
     /// A chunk of text, usually applied by collaborative text insertion.
     String(SplittableString),
@@ -1182,16 +1183,16 @@ impl ItemContent {
             ItemContent::Any(v) => v.iter().map(|a| Value::Any(a.clone())).collect(),
             ItemContent::Binary(v) => vec![Value::Any(Any::Buffer(v.clone().into_boxed_slice()))],
             ItemContent::Deleted(_) => Vec::default(),
-            ItemContent::Doc(_, v) => vec![Value::Any(v.clone())],
+            ItemContent::Doc(_, v) => vec![Value::Any(*v.clone())],
             ItemContent::JSON(v) => v
                 .iter()
-                .map(|v| Value::Any(Any::String(v.clone())))
+                .map(|v| Value::Any(Any::String(v.clone().into_boxed_str())))
                 .collect(),
-            ItemContent::Embed(v) => vec![Value::Any(Any::String(v.clone()))],
+            ItemContent::Embed(v) => vec![Value::Any(Any::String(v.clone().into_boxed_str()))],
             ItemContent::Format(_, _) => Vec::default(),
             ItemContent::String(v) => v
                 .chars()
-                .map(|c| Value::Any(Any::String(c.to_string())))
+                .map(|c| Value::Any(Any::String(c.to_string().into_boxed_str())))
                 .collect(),
             ItemContent::Type(c) => {
                 vec![c.clone().into_value(txn)]
@@ -1206,9 +1207,11 @@ impl ItemContent {
             ItemContent::Any(v) => v.last().map(|a| Value::Any(a.clone())),
             ItemContent::Binary(v) => Some(Value::Any(Any::Buffer(v.clone().into_boxed_slice()))),
             ItemContent::Deleted(_) => None,
-            ItemContent::Doc(_, v) => Some(Value::Any(v.clone())),
-            ItemContent::JSON(v) => v.last().map(|v| Value::Any(Any::String(v.clone()))),
-            ItemContent::Embed(v) => Some(Value::Any(Any::String(v.clone()))),
+            ItemContent::Doc(_, v) => Some(Value::Any(*v.clone())),
+            ItemContent::JSON(v) => v
+                .last()
+                .map(|v| Value::Any(Any::String(v.clone().into_boxed_str()))),
+            ItemContent::Embed(v) => Some(Value::Any(Any::String(v.clone().into_boxed_str()))),
             ItemContent::Format(_, _) => None,
             ItemContent::String(v) => Some(Value::Any(Any::String(v.clone().into()))),
             ItemContent::Type(c) => Some(c.clone().into_value(txn)),
@@ -1228,8 +1231,8 @@ impl ItemContent {
                 }
             }
             ItemContent::Format(k, v) => {
-                encoder.write_string(k.as_str());
-                encoder.write_string(v.as_str());
+                encoder.write_string(k.as_ref());
+                encoder.write_string(v.as_ref());
             }
             ItemContent::Type(c) => {
                 let inner = c.borrow();
@@ -1247,7 +1250,7 @@ impl ItemContent {
                 }
             }
             ItemContent::Doc(key, any) => {
-                encoder.write_string(key.as_str());
+                encoder.write_string(key.as_ref());
                 encoder.write_any(any);
             }
         }
@@ -1266,8 +1269,8 @@ impl ItemContent {
                 }
             }
             ItemContent::Format(k, v) => {
-                encoder.write_string(k.as_str());
-                encoder.write_string(v.as_str());
+                encoder.write_string(k.as_ref());
+                encoder.write_string(v.as_ref());
             }
             ItemContent::Type(c) => {
                 let inner = c.borrow();
@@ -1285,7 +1288,7 @@ impl ItemContent {
                 }
             }
             ItemContent::Doc(key, any) => {
-                encoder.write_string(key.as_str());
+                encoder.write_string(key.as_ref());
                 encoder.write_any(any);
             }
         }
@@ -1306,10 +1309,9 @@ impl ItemContent {
             BLOCK_ITEM_BINARY_REF_NUMBER => ItemContent::Binary(decoder.read_buf().to_owned()),
             BLOCK_ITEM_STRING_REF_NUMBER => ItemContent::String(decoder.read_string().into()),
             BLOCK_ITEM_EMBED_REF_NUMBER => ItemContent::Embed(decoder.read_string().to_owned()),
-            BLOCK_ITEM_FORMAT_REF_NUMBER => ItemContent::Format(
-                decoder.read_string().to_owned(),
-                decoder.read_string().to_owned(),
-            ),
+            BLOCK_ITEM_FORMAT_REF_NUMBER => {
+                ItemContent::Format(decoder.read_string().into(), decoder.read_string().into())
+            }
             BLOCK_ITEM_TYPE_REF_NUMBER => {
                 let type_ref = decoder.read_type_ref();
                 let name = if type_ref == types::TYPE_REFS_XML_ELEMENT
@@ -1334,7 +1336,7 @@ impl ItemContent {
                 ItemContent::Any(values)
             }
             BLOCK_ITEM_DOC_REF_NUMBER => {
-                ItemContent::Doc(decoder.read_string().to_owned(), decoder.read_any())
+                ItemContent::Doc(decoder.read_string().into(), Box::new(decoder.read_any()))
             }
             info => panic!("ItemContent::decode unrecognized info flag: {}", info),
         }
@@ -1606,7 +1608,7 @@ where
 }
 
 #[derive(Debug)]
-pub struct PrelimText(pub String);
+pub struct PrelimText(pub SmallString<[u8; 8]>);
 
 impl Prelim for PrelimText {
     fn into_content(self, _txn: &mut Transaction, _ptr: TypePtr) -> (ItemContent, Option<Self>) {
@@ -1679,7 +1681,7 @@ mod test {
 
     #[test]
     fn splittable_string_split_str() {
-        let mut s: SplittableString = "Zażółć gęślą jaźń😀ありがとうございます".into();
+        let s: SplittableString = "Zażółć gęślą jaźń😀ありがとうございます".into();
 
         let (a, b) = s.split_at(18, Encoding::Unicode);
         assert_eq!(a, "Zażółć gęślą jaźń😀");

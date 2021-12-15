@@ -11,10 +11,10 @@ pub enum Any {
     Bool(bool),
     Number(f64),
     BigInt(i64),
-    String(String),
+    String(Box<str>),
     Buffer(Box<[u8]>),
-    Array(Vec<Any>),
-    Map(HashMap<String, Any>),
+    Array(Box<[Any]>),
+    Map(Box<HashMap<String, Any>>),
 }
 
 impl Any {
@@ -37,7 +37,7 @@ impl Any {
             // CASE 120: boolean (true)
             120 => Any::Bool(true),
             // CASE 119: string
-            119 => Any::String(decoder.read_string().to_owned()),
+            119 => Any::String(decoder.read_string().into()),
             // CASE 118: Map<string,Any>
             118 => {
                 let len: usize = decoder.read_uvar();
@@ -46,7 +46,7 @@ impl Any {
                     let key = decoder.read_string();
                     map.insert(key.to_owned(), Any::decode(decoder));
                 }
-                Any::Map(map)
+                Any::Map(Box::new(map))
             }
             // CASE 117: Array<Any>
             117 => {
@@ -55,7 +55,7 @@ impl Any {
                 for _ in 0..len {
                     arr.push(Any::decode(decoder));
                 }
-                Any::Array(arr)
+                Any::Array(arr.into_boxed_slice())
             }
             // CASE 116: buffer
             116 => Any::Buffer(Box::from(decoder.read_buf().to_owned())),
@@ -152,7 +152,7 @@ impl Any {
                 // TYPE 118: Map
                 encoder.write_u8(118);
                 encoder.write_uvar(map.len() as u64);
-                for (key, value) in map {
+                for (key, value) in map.as_ref() {
                     encoder.write_string(&key);
                     value.encode(encoder);
                 }
@@ -237,13 +237,13 @@ impl Into<Any> for i32 {
 
 impl Into<Any> for String {
     fn into(self) -> Any {
-        Any::String(self)
+        Any::String(self.into_boxed_str())
     }
 }
 
 impl Into<Any> for &str {
     fn into(self) -> Any {
-        Any::String(self.to_string())
+        Any::String(self.into())
     }
 }
 
@@ -280,7 +280,7 @@ where
         for value in self {
             array.push(value.into())
         }
-        Any::Array(array)
+        Any::Array(array.into_boxed_slice())
     }
 }
 
@@ -293,7 +293,7 @@ where
         for (key, value) in self {
             map.insert(key, value.into());
         }
-        Any::Map(map)
+        Any::Map(Box::new(map))
     }
 }
 
