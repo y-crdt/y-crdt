@@ -107,7 +107,7 @@ impl BranchRef {
         };
         while remaining > 0 {
             if let Some(mut p) = ptr {
-                let encoding = txn.store().options.encoding;
+                let encoding = txn.store().options.offset_kind;
                 if let Some(item) = txn.store().blocks.get_item(&p) {
                     if !item.is_deleted() {
                         let content_len = item.content_len(encoding);
@@ -401,7 +401,7 @@ impl Branch {
         mut index: u32,
     ) -> (Option<BlockPtr>, Option<BlockPtr>) {
         let store = txn.store_mut();
-        let encoding = store.options.encoding;
+        let encoding = store.options.offset_kind;
         while let Some(p) = ptr {
             let item = store
                 .blocks

@@ -257,7 +257,7 @@ impl Transaction {
                     if let Some(parent) = self.store().get_type(&item.parent) {
                         let mut inner = parent.borrow_mut();
                         inner.block_len -= item.len();
-                        inner.content_len -= item.content_len(store.options.encoding);
+                        inner.content_len -= item.content_len(store.options.offset_kind);
                     }
                 }
 

@@ -126,8 +126,8 @@ impl Default for Doc {
 pub struct Options {
     /// Globally unique 53-bit long client identifier.
     pub client_id: u64,
-    /// Encoding used for text operations.
-    pub encoding: Encoding,
+    /// How to we count offsets and lengths used in text operations.
+    pub offset_kind: OffsetKind,
     /// Determines if transactions commits should try to perform GC-ing of deleted items.
     pub skip_gc: bool,
 }
@@ -136,7 +136,7 @@ impl Options {
     pub fn with_client_id(client_id: u64) -> Self {
         Options {
             client_id,
-            encoding: Encoding::Bytes,
+            offset_kind: OffsetKind::Bytes,
             skip_gc: false,
         }
     }
@@ -149,15 +149,15 @@ impl Default for Options {
     }
 }
 
-/// Determines how string and length offsets of [Text]/[XmlText] are being determined.
+/// Determines how string length and offsets of [Text]/[XmlText] are being determined.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Encoding {
+pub enum OffsetKind {
     /// Compute editable strings length and offset using UTF-8 byte count.
     Bytes,
     /// Compute editable strings length and offset using UTF-16 chars count.
     Utf16,
     /// Compute editable strings length and offset using Unicode code points number.
-    Unicode,
+    Utf32,
 }
 
 #[cfg(test)]
