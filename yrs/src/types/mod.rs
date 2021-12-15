@@ -9,7 +9,6 @@ pub use text::Text;
 
 use crate::block::{BlockPtr, Item, ItemContent, ItemPosition, Prelim};
 use crate::block_store::BlockStore;
-use crate::doc::Encoding;
 use crate::event::{EventHandler, Subscription};
 use crate::types::array::Array;
 use crate::types::xml::{XmlElement, XmlText};
@@ -299,7 +298,7 @@ impl Branch {
         self.block_len
     }
 
-    pub fn content_len(&self, txn: &Transaction) -> u32 {
+    pub fn content_len(&self, _: &Transaction) -> u32 {
         self.content_len
     }
 
@@ -769,11 +768,11 @@ impl Value {
     pub fn to_json(self, txn: &Transaction) -> Any {
         match self {
             Value::Any(a) => a,
-            Value::YText(v) => Any::String(v.to_string(txn)),
+            Value::YText(v) => Any::String(v.to_string(txn).into_boxed_str()),
             Value::YArray(v) => v.to_json(txn),
             Value::YMap(v) => v.to_json(txn),
-            Value::YXmlElement(v) => Any::String(v.to_string(txn)),
-            Value::YXmlText(v) => Any::String(v.to_string(txn)),
+            Value::YXmlElement(v) => Any::String(v.to_string(txn).into_boxed_str()),
+            Value::YXmlText(v) => Any::String(v.to_string(txn).into_boxed_str()),
         }
     }
 

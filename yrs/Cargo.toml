@@ -14,6 +14,7 @@ readme = "./README.md"
 rand = { version = "0.7.0", features = ["wasm-bindgen"] }
 wasm-bindgen = "0.2"
 lib0 = { path = "../lib0"}
+smallstr = { version = "0.2", features = ["union"]}
 
 [dev-dependencies]
 criterion = "0.3"

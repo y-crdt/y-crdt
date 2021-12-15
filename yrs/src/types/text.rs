@@ -116,7 +116,7 @@ impl Text {
     /// This method will panic if provided `index` is greater than the length of a current text.
     pub fn insert(&self, tr: &mut Transaction, index: u32, chunk: &str) {
         if let Some(pos) = self.find_position(tr, index) {
-            let value = crate::block::PrelimText(chunk.to_owned());
+            let value = crate::block::PrelimText(chunk.into());
             tr.create_item(&pos, value, None);
         } else {
             panic!("The type or the position doesn't exist!");
@@ -519,10 +519,10 @@ mod test {
         assert_eq!(
             delta.borrow_mut().take(),
             Some(vec![Change::Added(vec![
-                Any::String("a".to_string()).into(),
-                Any::String("b".to_string()).into(),
-                Any::String("c".to_string()).into(),
-                Any::String("d".to_string()).into()
+                Any::String("a".into()).into(),
+                Any::String("b".into()).into(),
+                Any::String("c".into()).into(),
+                Any::String("d".into()).into()
             ])])
         );
 
@@ -546,8 +546,8 @@ mod test {
             Some(vec![
                 Change::Retain(1),
                 Change::Added(vec![
-                    Any::String("e".to_string()).into(),
-                    Any::String("f".to_string()).into()
+                    Any::String("e".into()).into(),
+                    Any::String("f".into()).into()
                 ])
             ])
         );
@@ -576,10 +576,10 @@ mod test {
         assert_eq!(
             delta.borrow_mut().take(),
             Some(vec![Change::Added(vec![
-                Any::String("a".to_string()).into(),
-                Any::String("e".to_string()).into(),
-                Any::String("f".to_string()).into(),
-                Any::String("d".to_string()).into()
+                Any::String("a".into()).into(),
+                Any::String("e".into()).into(),
+                Any::String("f".into()).into(),
+                Any::String("d".into()).into()
             ])])
         );
     }
