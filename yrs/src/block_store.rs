@@ -562,16 +562,26 @@ impl BlockStore {
                         let right_split_id = right_split.id.clone();
                         let right_ptr = right_split.right.clone();
                         if let Some(right_ptr) = right_ptr {
-                            blocks = if right_ptr.id.client == ptr.id.client {
-                                blocks
+                            let right_left =
+                                Some(BlockPtr::new(right_split.id.clone(), index as u32));
+
+                            if right_ptr.id.client == ptr.id.client {
+                                if let Block::Item(item) = blocks.find(&right_ptr).unwrap() {
+                                    item.left = right_left;
+                                }
                             } else {
-                                self.clients.get_mut(&right_ptr.id.client).unwrap()
+                                if let Block::Item(item) = self
+                                    .clients
+                                    .get_mut(&right_ptr.id.client)
+                                    .unwrap()
+                                    .find(&right_ptr)
+                                    .unwrap()
+                                {
+                                    item.left = right_left;
+                                }
+
+                                blocks = self.clients.get_mut(&ptr.id.client).unwrap();
                             };
-                            let right = blocks.find(&right_ptr).unwrap();
-                            if let Some(right_item) = right.as_item_mut() {
-                                right_item.left =
-                                    Some(BlockPtr::new(right_split.id.clone(), index as u32));
-                            }
                         }
                         blocks.insert(index, Block::Item(right_split));
                         Some(BlockPtr::new(right_split_id, index as u32))
