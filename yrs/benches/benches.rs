@@ -1,12 +1,15 @@
 use criterion::*;
+use lib0::decoding::{Cursor, Read};
 use rand::distributions::Alphanumeric;
 use rand::prelude::StdRng;
 use rand::{Rng, RngCore, SeedableRng};
 use std::cell::Cell;
+use std::collections::HashMap;
 use yrs::updates::decoder::Decode;
-use yrs::{Array, Doc, Text, Transaction, Update};
+use yrs::{Array, Doc, Map, Text, Transaction, Update};
 
 const N: usize = 6000;
+const SQRT_N: usize = 77 * 20;
 const SEED: u64 = 0xdeadbeaf;
 
 enum TextOp {
@@ -214,11 +217,11 @@ where
     F: FnOnce(&mut StdRng, usize) -> Vec<(TextOp, TextOp)>,
 {
     let input = {
-        let d1 = Doc::with_client_id(1);
+        let d1 = Doc::new();
         let mut txn = d1.transact();
         let t1 = txn.get_text("text");
 
-        let d2 = Doc::with_client_id(2);
+        let d2 = Doc::new();
         let mut txn = d2.transact();
         let t2 = txn.get_text("text");
 
@@ -333,6 +336,133 @@ fn b2_4<R: RngCore>(rng: &mut R, size: usize) -> Vec<(TextOp, TextOp)> {
         .collect()
 }
 
+fn n_concurrent_map_benchmark<F>(c: &mut Criterion, name: &str, f: F)
+where
+    F: Fn(&Map, &mut Transaction, usize),
+{
+    let input: Vec<_> = (0..SQRT_N)
+        .into_iter()
+        .map(|i| {
+            let doc = Doc::new();
+            let mut txn = doc.transact();
+            let map = txn.get_map("map");
+            f(&map, &mut txn, i);
+            (doc, txn.encode_update_v1())
+        })
+        .collect();
+
+    c.bench_with_input(BenchmarkId::new(name, SQRT_N), &input, |b, input| {
+        b.iter(|| {
+            let mut iter = input.into_iter();
+            let (doc, _) = iter.next().unwrap();
+            let mut txn = doc.transact();
+            while let Some((_, update)) = iter.next() {
+                doc.apply_update_v1(&mut txn, update.as_slice());
+            }
+        });
+    });
+}
+
+fn b3_1(map: &Map, txn: &mut Transaction, i: usize) {
+    map.insert(txn, "v", i as u32);
+}
+
+fn b3_2(map: &Map, txn: &mut Transaction, i: usize) {
+    let mut o = HashMap::with_capacity(2);
+    o.insert("name".to_string(), i.to_string());
+    o.insert("address".to_string(), "here".to_string());
+
+    map.insert(txn, "v", o);
+}
+
+fn b3_3(map: &Map, txn: &mut Transaction, i: usize) {
+    let mut str = String::with_capacity(i * SQRT_N);
+    for _ in 0..SQRT_N {
+        str.push_str(i.to_string().as_str());
+    }
+    map.insert(txn, "v", str);
+}
+
+fn b3_4(c: &mut Criterion, name: &str) {
+    let input: Vec<_> = (0..SQRT_N)
+        .into_iter()
+        .map(|i| {
+            let doc = Doc::new();
+            let mut txn = doc.transact();
+            let array = txn.get_array("array");
+            array.insert(&mut txn, 0, i.to_string());
+            (doc, txn.encode_update_v1())
+        })
+        .collect();
+
+    c.bench_with_input(BenchmarkId::new(name, SQRT_N), &input, |b, input| {
+        b.iter(|| {
+            let mut iter = input.into_iter();
+            let (doc, _) = iter.next().unwrap();
+            let mut txn = doc.transact();
+            while let Some((_, update)) = iter.next() {
+                doc.apply_update_v1(&mut txn, update.as_slice());
+            }
+        });
+    });
+}
+
+fn b4(c: &mut Criterion, name: &str) {
+    let doc = Doc::new();
+    let txt = {
+        let mut txn = doc.transact();
+        txn.get_text("text")
+    };
+    let input = read_input("./yrs/benches/input/b4-editing-trace.bin");
+
+    c.bench_with_input(
+        BenchmarkId::new(name, input.len()),
+        &(doc, txt, input),
+        |b, (doc, txt, input)| {
+            b.iter(|| {
+                for i in input {
+                    let mut txn = doc.transact();
+                    match i {
+                        TextOp::Insert(idx, chunk) => txt.insert(&mut txn, *idx, chunk),
+                        TextOp::Delete(idx, len) => txt.remove_range(&mut txn, *idx, *len),
+                    }
+                }
+            });
+        },
+    );
+}
+
+fn read_input(fpath: &str) -> Vec<TextOp> {
+    use std::fs::File;
+    use yrs::updates::decoder::DecoderV1;
+
+    let mut f = File::open(fpath).unwrap();
+    let mut buf = Vec::new();
+    std::io::Read::read_to_end(&mut f, &mut buf).unwrap();
+    let mut decoder = DecoderV1::new(Cursor::new(buf.as_slice()));
+    let len: usize = decoder.read_uvar();
+    let mut result = Vec::with_capacity(len);
+    for _ in 0..len {
+        let op = {
+            match decoder.read_uvar() {
+                1u32 => {
+                    let idx = decoder.read_uvar();
+                    let chunk = decoder.read_string();
+                    TextOp::Insert(idx, chunk.to_string())
+                }
+                2u32 => {
+                    let idx = decoder.read_uvar();
+                    let len = decoder.read_uvar();
+                    TextOp::Delete(idx, len)
+                }
+                other => panic!("unrecognized TextOp tag type: {}", other),
+            }
+        };
+        result.push(op);
+    }
+    result
+}
+
 fn bench(c: &mut Criterion) {
     text_benchmark(c, "[B1.1] Append N characters", b1_1);
     text_benchmark(c, "[B1.2] Insert string of length N", b1_2);
@@ -362,6 +492,24 @@ fn bench(c: &mut Criterion) {
         b2_3,
     );
     concurrent_text_benchmark(c, "[B2.4] Concurrently insert & delete", b2_4);
+
+    n_concurrent_map_benchmark(
+        c,
+        "[B3.1] 20√N clients concurrently set number in Map",
+        b3_1,
+    );
+    n_concurrent_map_benchmark(
+        c,
+        "[B3.2] 20√N clients concurrently set Object in Map",
+        b3_2,
+    );
+    n_concurrent_map_benchmark(
+        c,
+        "[B3.3] 20√N clients concurrently set String in Map",
+        b3_3,
+    );
+    b3_4(c, "[B3.4] 20√N clients concurrently insert text in Array");
+    b4(c, "[B4] Apply real-world editing dataset");
 }
 
 criterion_group! {
