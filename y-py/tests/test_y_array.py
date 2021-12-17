@@ -5,7 +5,6 @@ from y_py import YDoc, YArray
 
 def test_inserts():
     d1 = YDoc(1)
-    assert d1.id == 1
     x = d1.get_array('test');
 
     with d1.begin_transaction() as txn:
