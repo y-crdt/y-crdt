@@ -19,6 +19,8 @@ use yrs::types::{
 };
 use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1};
+use yrs::OffsetKind;
+use yrs::Options;
 use yrs::{Array, Doc, Map, StateVector, Text, Transaction, Update};
 
 /// A y-py document type. Documents are most important units of collaborative resources management.
@@ -53,12 +55,35 @@ impl YDoc {
     /// globally unique identifier (it's up to caller to ensure that requirement). Otherwise it will
     /// be assigned a randomly generated number.
     #[new]
-    pub fn new(id: Option<f64>) -> Self {
-        if let Some(id) = id {
-            YDoc(Doc::with_client_id(id as u64))
-        } else {
-            YDoc(Doc::new())
+    pub fn new(
+        client_id: Option<u64>,
+        offset_kind: Option<String>,
+        skip_gc: Option<bool>,
+    ) -> PyResult<Self> {
+        let mut options = Options::default();
+        if let Some(client_id) = client_id {
+            options.client_id = client_id;
         }
+
+        if let Some(raw_offset) = offset_kind {
+            let clean_offset = raw_offset.to_lowercase().replace("-", "");
+            let offset = match clean_offset.as_str() {
+                "utf8" => Ok(OffsetKind::Bytes),
+                "utf16" => Ok(OffsetKind::Utf16),
+                "utf32" => Ok(OffsetKind::Utf32),
+                _ => Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "'{}' is not a valid offset kind (utf8, utf16, or utf32).",
+                    clean_offset
+                ))),
+            }?;
+            options.offset_kind = offset;
+        }
+
+        if let Some(skip_gc) = skip_gc {
+            options.skip_gc = skip_gc;
+        }
+
+        Ok(YDoc(Doc::with_options(options)))
     }
 
     /// Gets globally unique identifier of this `YDoc` instance.
@@ -1025,21 +1050,14 @@ fn py_into_any(v: PyObject) -> Option<Any> {
         let v = v.as_ref(py);
 
         if let Ok(s) = v.downcast::<pytypes::PyString>() {
-            Some(Any::String(s.extract().unwrap()))
+            let string: String = s.extract().unwrap();
+            Some(Any::String(string.into_boxed_str()))
         } else if let Ok(l) = v.downcast::<pytypes::PyLong>() {
             let i: f64 = l.extract().unwrap();
             Some(Any::BigInt(i as i64))
         } else if v == py.None().as_ref(py) {
             Some(Any::Null)
-        }
-        // TODO: Handle undefined vals?
-        // else if let Ok(s) = v.downcast::<pytypes::Null>() {
-        //     Some(Any::Null)
-        // }
-        // else if v.is_undefined() {
-        //     Some(Any::Undefined)
-        // }
-        else if let Ok(f) = v.downcast::<pytypes::PyFloat>() {
+        } else if let Ok(f) = v.downcast::<pytypes::PyFloat>() {
             Some(Any::Number(f.extract().unwrap()))
         } else if let Ok(b) = v.downcast::<pytypes::PyBool>() {
             Some(Any::Bool(b.extract().unwrap()))
@@ -1048,7 +1066,7 @@ fn py_into_any(v: PyObject) -> Option<Any> {
             for value in list.iter() {
                 result.push(py_into_any(value.into())?);
             }
-            Some(Any::Array(result))
+            Some(Any::Array(result.into_boxed_slice()))
         } else if let Ok(dict) = v.downcast::<pytypes::PyDict>() {
             if let Ok(_) = Shared::extract(v) {
                 None
@@ -1063,7 +1081,7 @@ fn py_into_any(v: PyObject) -> Option<Any> {
                     let value = py_into_any(v.into())?;
                     result.insert(key, value);
                 }
-                Some(Any::Map(result))
+                Some(Any::Map(Box::new(result)))
             }
         } else {
             None
@@ -1091,16 +1109,16 @@ impl IntoPy<pyo3::PyObject> for AnyWrapper {
             }
             Any::Array(v) => {
                 let mut a = Vec::new();
-                for value in v {
-                    let value = AnyWrapper(value);
+                for value in v.iter() {
+                    let value = AnyWrapper(value.to_owned());
                     a.push(value);
                 }
                 a.into_py(py)
             }
             Any::Map(v) => {
                 let mut m = HashMap::new();
-                for (k, v) in v {
-                    let value = AnyWrapper(v);
+                for (k, v) in v.iter() {
+                    let value = AnyWrapper(v.to_owned());
                     m.insert(k, value);
                 }
                 m.into_py(py)
