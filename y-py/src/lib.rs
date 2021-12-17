@@ -615,7 +615,7 @@ impl YArray {
         Python::with_gil(|py| match &*self.0.borrow() {
             SharedType::Integrated(v) => AnyWrapper(v.to_json(txn)).into_py(py),
             SharedType::Prelim(v) => {
-                let py_ptrs: Vec<PyObject> = v.iter().map(|ptr| ptr.clone()).collect();
+                let py_ptrs: Vec<PyObject> = v.iter().cloned().collect();
                 py_ptrs.into_py(py)
             }
         })
@@ -695,71 +695,29 @@ impl YArray {
     ///     for item in array.values(txn)):
     ///         print(item)
     /// ```
-    pub fn values(&self, txn: &YTransaction) -> PyObject {
-        Python::with_gil(|py| match &*self.0.borrow() {
+    pub fn values(&self, txn: &YTransaction) -> YArrayIterator {
+        let inner_iter = match &*self.0.borrow() {
             SharedType::Integrated(v) => unsafe {
                 let this: *const Array = v;
                 let tx: *const Transaction = txn.deref() as *const _;
-                let static_iter: ManuallyDrop<ArrayIter<'static>> =
-                    ManuallyDrop::new((*this).iter(tx.as_ref().unwrap()));
-                YArrayIterator(static_iter).into_py(py)
+                InnerYArrayIter::Integrated((*this).iter(tx.as_ref().unwrap()))
             },
             SharedType::Prelim(v) => unsafe {
                 let this: *const Vec<PyObject> = v;
-                let static_iter: ManuallyDrop<std::slice::Iter<'static, PyObject>> =
-                    ManuallyDrop::new((*this).iter());
-                PrelimArrayIterator(static_iter).into_py(py)
+                InnerYArrayIter::Prelim((*this).iter())
             },
-        })
+        };
+        YArrayIterator(ManuallyDrop::new(inner_iter))
     }
 }
 
-#[pyclass]
-pub struct IteratorNext {
-    value: PyObject,
-    done: bool,
-}
-
-#[pymethods]
-impl IteratorNext {
-    #[new]
-    fn new(value: PyObject) -> Self {
-        IteratorNext { done: false, value }
-    }
-
-    #[staticmethod]
-    fn finished() -> Self {
-        Python::with_gil(|py| -> IteratorNext {
-            IteratorNext {
-                done: true,
-                value: py.None(),
-            }
-        })
-    }
-
-    #[getter]
-    pub fn value(&self) -> PyObject {
-        // TODO: should we clone?
-        self.value.clone()
-    }
-
-    #[getter]
-    pub fn done(&self) -> bool {
-        self.done
-    }
-}
-
-impl From<Option<Value>> for IteratorNext {
-    fn from(v: Option<Value>) -> Self {
-        match v {
-            None => IteratorNext::finished(),
-            Some(v) => Python::with_gil(|py| IteratorNext::new(ValueWrapper(v).into_py(py))),
-        }
-    }
+enum InnerYArrayIter {
+    Integrated(ArrayIter<'static>),
+    Prelim(std::slice::Iter<'static, PyObject>),
 }
 
 #[pyclass(unsendable)]
-pub struct YArrayIterator(ManuallyDrop<ArrayIter<'static>>);
+pub struct YArrayIterator(ManuallyDrop<InnerYArrayIter>);
 
 impl Drop for YArrayIterator {
     fn drop(&mut self) {
@@ -773,28 +731,12 @@ impl YArrayIterator {
         slf
     }
 
-    pub fn __next__(mut slf: PyRefMut<Self>) -> Option<ValueWrapper> {
-        slf.0.next().map(|v| ValueWrapper(v))
-    }
-}
-
-#[pyclass(unsendable)]
-pub struct PrelimArrayIterator(ManuallyDrop<std::slice::Iter<'static, PyObject>>);
-
-impl Drop for PrelimArrayIterator {
-    fn drop(&mut self) {
-        unsafe { ManuallyDrop::drop(&mut self.0) }
-    }
-}
-
-#[pymethods]
-impl PrelimArrayIterator {
-    pub fn next(&mut self) -> IteratorNext {
-        if let Some(py) = self.0.next() {
-            let py = py.clone();
-            IteratorNext::new(py)
-        } else {
-            IteratorNext::finished()
+    pub fn __next__(mut slf: PyRefMut<Self>) -> Option<PyObject> {
+        match slf.0.deref_mut() {
+            InnerYArrayIter::Integrated(iter) => {
+                Python::with_gil(|py| iter.next().map(|v| ValueWrapper(v).into_py(py)))
+            }
+            InnerYArrayIter::Prelim(iter) => iter.next().cloned(),
         }
     }
 }
@@ -940,7 +882,6 @@ impl YMap {
     ///         print(key, value)
     /// ```
     pub fn entries(&self, txn: &mut YTransaction) -> YMapIterator {
-        // Maybe return something that implements the PyIterator?
         match &*self.0.borrow() {
             SharedType::Integrated(val) => unsafe {
                 let this: *const Map = val;
@@ -972,20 +913,6 @@ impl Drop for YMapIterator {
     }
 }
 
-// impl<'a> From<Option<(&'a String, Value)>> for IteratorNext {
-//     fn from(entry: Option<(&'a String, Value)>) -> Self {
-//         match entry {
-//             None => IteratorNext::finished(),
-//             Some((k, v)) => {
-//                 let tuple = js_sys::Array::new_with_length(2);
-//                 tuple.set(0, PyAny::from(k));
-//                 tuple.set(1, value_into_py(v));
-//                 IteratorNext::new(tuple.into())
-//             }
-//         }
-//     }
-// }
-
 #[pyproto]
 impl<'p> PyIterProtocol for YMapIterator {
     fn __iter__(slf: PyRef<Self>) -> PyRef<Self> {
@@ -999,24 +926,6 @@ impl<'p> PyIterProtocol for YMapIterator {
             }),
             SharedYMapIterator::Prelim(iter) => iter.next().map(|(k, v)| (k.clone(), v.clone())),
         }
-    }
-}
-
-#[pyclass(unsendable)]
-pub struct PrelimMapIterator(
-    ManuallyDrop<std::collections::hash_map::Iter<'static, String, PyObject>>,
-);
-
-impl Drop for PrelimMapIterator {
-    fn drop(&mut self) {
-        unsafe { ManuallyDrop::drop(&mut self.0) }
-    }
-}
-
-#[pymethods]
-impl PrelimMapIterator {
-    pub fn next(&mut self) -> Option<(String, PyObject)> {
-        self.0.next().map(|(k, v)| (k.clone(), v.clone()))
     }
 }
 
