@@ -108,3 +108,19 @@ def test_iterator():
         for v in x.values(txn):
             assert v == i
             i+=1
+
+def test_borrow_mut_edge_case():
+    """
+    Tests for incorrect overlap in successive mutable borrows of YTransaction and YArray.
+    """
+    doc = YDoc()
+    arr = doc.get_array('test')
+    with doc.begin_transaction() as txn:
+        arr.insert(txn, 0, [1,2,3])
+    
+    # Ensure multiple transactions can be called in a row with the same variable name `txn`
+    with doc.begin_transaction() as txn:
+        # Ensure that multiple mutable borrow functions can be called in a tight loop
+        for i in range(2000):
+            arr.insert(txn, [1,2,3])
+            arr.delete(txn, 0, 3)
