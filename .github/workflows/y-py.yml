@@ -1,36 +1,47 @@
-name: Rust
+name: Y-Py
 
 on:
+  workflow_dispatch:
+  
   push:
     branches: [ main ]
+    paths:
+      - 'y-py/**'
   pull_request:
     branches: [ main ]
-
+    paths:
+      - 'y-py/**'
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   test:
-
+    defaults:
+      run:
+        working-directory: y-py
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v2
       - name: Install Python
-        uses: actions/setup-python@v1
+        uses: actions/setup-python@v2
+        with:
+          python-version: 3.9
       - name: Install Rust Nightly
         uses: actions-rs/toolchain@v1
         with:
             toolchain: nightly
-            override: true
-            components: rustfmt, clippy
-      
-      - name: Install Python Dependencies
-        run: pip install maturin pytest
-      - name: Build Y-Py
-        run: maturin develop
-        working-directory: y-py
+            profile: minimal
+            default: true
+      - name: Build Package
+        uses: messense/maturin-action@v1
+        with:
+          maturin-version: latest
+          command: build
+          args: --release --out dist -m y-py/Cargo.toml
+      - name: Install Dependencies
+        run: |
+          pip install pytest
+          pip install y-py --no-index --find-links dist --force-reinstall
       - name: Run Tests
         run: pytest
-        working-directory: y-py
