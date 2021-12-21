@@ -1,8 +1,6 @@
 name: Y-Py
 
 on:
-  workflow_dispatch:
-  
   push:
     branches: [ main ]
     paths:
@@ -34,11 +32,9 @@ jobs:
             profile: minimal
             default: true
       - name: Build Package
-        uses: messense/maturin-action@v1
-        with:
-          maturin-version: latest
-          command: build
-          args: --release --out dist -m y-py/Cargo.toml
+        run: |
+          pip install maturin
+          maturin build --release --out dist
       - name: Install Dependencies
         run: |
           pip install pytest
