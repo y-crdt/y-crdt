@@ -1,0 +1,36 @@
+name: Rust
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v2
+      - name: Install Python
+        uses: actions/setup-python@v1
+      - name: Install Rust Nightly
+        uses: actions-rs/toolchain@v1
+        with:
+            toolchain: nightly
+            override: true
+            components: rustfmt, clippy
+      
+      - name: Install Python Dependencies
+        run: pip install maturin pytest
+      - name: Build Y-Py
+        run: maturin develop
+        working-directory: y-py
+      - name: Run Tests
+        run: pytest
+        working-directory: y-py
