@@ -1,8 +1,10 @@
-use crate::block::{BlockPtr, ItemContent};
+use crate::block::{Block, BlockPtr, ItemContent, ItemPosition};
 use crate::transaction::Transaction;
 use crate::types::{Branch, BranchRef, Event, Observer};
 use crate::*;
+use lib0::any::Any;
 use std::cell::Ref;
+use std::collections::HashMap;
 
 /// A shared data type used for collaborative text editing. It enables multiple users to add and
 /// remove chunks of text in efficient manner. This type is internally represented as a mutable
@@ -121,6 +123,55 @@ impl Text {
         } else {
             panic!("The type or the position doesn't exist!");
         }
+    }
+
+    pub fn format<K, V>(&self, txn: &mut Transaction, index: u32, len: u32, attrs: HashMap<K, V>)
+    where
+        K: Into<String>,
+        V: Into<Any>,
+    {
+        if len == 0 {
+            return;
+        }
+
+        if let Some(pos) = self.find_position(tr, index) {
+            self.insert_format(txn, pos, len, attrs)
+        } else {
+            panic!("The type or the position doesn't exist!");
+        }
+    }
+
+    fn insert_format<K, V>(
+        &self,
+        txn: &mut Transaction,
+        pos: ItemPosition,
+        len: u32,
+        attrs: HashMap<K, V>,
+    ) where
+        K: Into<String>,
+        V: Into<Any>,
+    {
+        todo!()
+    }
+
+    fn minimalize_attr_changes<K, V>(
+        attrs: &mut HashMap<K, V>,
+        txn: &Transaction,
+        mut right: Option<&BlockPtr>,
+    ) -> Option<&BlockPtr>
+    where
+        K: Into<String>,
+        V: Into<Any>,
+    {
+        while let Some(r) = right {
+            let block = txn.store().blocks.get_block(r).unwrap();
+            match block {
+                Block::Item(item) => {}
+                _ => block.is_deleted(),
+            }
+        }
+
+        right
     }
 
     /// Appends a given `chunk` of text at the end of a current text structure.

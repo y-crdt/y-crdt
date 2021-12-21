@@ -331,6 +331,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "lib0"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "05fad49c5d02931c16d77281563d70b9d595724ca87ccfa431d0197654464adc"
+
+[[package]]
 name = "libc"
 version = "0.2.106"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1134,19 +1140,19 @@ checksum = "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f"
 
 [[package]]
 name = "y-py"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
- "lib0",
+ "lib0 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "pyo3",
- "yrs",
+ "yrs 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
 name = "yffi"
 version = "0.2.1"
 dependencies = [
- "lib0",
- "yrs",
+ "lib0 0.2.1",
+ "yrs 0.2.1",
 ]
 
 [[package]]
@@ -1154,7 +1160,19 @@ name = "yrs"
 version = "0.2.1"
 dependencies = [
  "criterion",
- "lib0",
+ "lib0 0.2.1",
+ "rand 0.7.3",
+ "smallstr",
+ "wasm-bindgen",
+]
+
+[[package]]
+name = "yrs"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2369ffbcacfae3d0da988b8a8724c0d68b56b24bed6d6cce83b4ab4103634b57"
+dependencies = [
+ "lib0 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.7.3",
  "smallstr",
  "wasm-bindgen",
@@ -1166,9 +1184,9 @@ version = "0.2.1"
 dependencies = [
  "console_error_panic_hook",
  "js-sys",
- "lib0",
+ "lib0 0.2.1",
  "wasm-bindgen",
  "wasm-bindgen-test",
  "wee_alloc",
- "yrs",
+ "yrs 0.2.1",
 ]

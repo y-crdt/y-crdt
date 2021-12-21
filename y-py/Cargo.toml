@@ -1,6 +1,6 @@
 [package]
 name = "y-py"
-version = "0.2.0"
+version = "0.2.1"
 authors = ["Pierre-Olivier Simonard <pierre.olivier.simonard@gmail.com>", "Kevin Jahns <kevin.jahns@protonmail.com>", "John Waidhofer <waidhoferj@gmail.com>"]
 edition = "2018"
 
@@ -11,8 +11,8 @@ name = "y_py"
 crate-type = ["cdylib"]
 
 [dependencies]
-yrs = { path = "../yrs" }
-lib0 = { path = "../lib0" }
+yrs = "0.2.1"
+lib0 = "0.2.1"
 
 [dependencies.pyo3]
 version = "0.14.5"
