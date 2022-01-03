@@ -91,6 +91,7 @@ impl Map {
                 left: left.cloned(),
                 right: None,
                 index: 0,
+                current_attrs: None,
             }
         };
 

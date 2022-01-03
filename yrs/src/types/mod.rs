@@ -164,6 +164,7 @@ impl BranchRef {
             left,
             right,
             index: 0,
+            current_attrs: None,
         };
 
         txn.create_item(&pos, value, None)
