@@ -1,8 +1,10 @@
-use crate::block::{BlockPtr, ItemContent};
+use crate::block::{BlockPtr, Item, ItemContent, ItemPosition};
 use crate::transaction::Transaction;
-use crate::types::{Branch, BranchRef, Event, Observer};
+use crate::types::{Branch, BranchRef, Event, Observer, Value};
 use crate::*;
-use std::cell::Ref;
+use lib0::any::Any;
+use std::cell::{Cell, Ref};
+use std::collections::HashMap;
 
 /// A shared data type used for collaborative text editing. It enables multiple users to add and
 /// remove chunks of text in efficient manner. This type is internally represented as a mutable
@@ -64,6 +66,7 @@ impl Text {
                 left: None,
                 right: inner.start,
                 index: 0,
+                current_attrs: None,
             }
         };
 
@@ -114,10 +117,26 @@ impl Text {
     /// If `index` is equal to current data structure length, this `chunk` will be appended at
     /// the end of it.
     /// This method will panic if provided `index` is greater than the length of a current text.
-    pub fn insert(&self, tr: &mut Transaction, index: u32, chunk: &str) {
-        if let Some(pos) = self.find_position(tr, index) {
+    pub fn insert(&self, txn: &mut Transaction, index: u32, chunk: &str) {
+        if let Some(pos) = self.find_position(txn, index) {
             let value = crate::block::PrelimText(chunk.into());
-            tr.create_item(&pos, value, None);
+            txn.create_item(&pos, value, None);
+        } else {
+            panic!("The type or the position doesn't exist!");
+        }
+    }
+
+    pub fn insert_with_attributes(
+        &self,
+        txn: &mut Transaction,
+        index: u32,
+        chunk: &str,
+        attrs: Attrs,
+    ) {
+        if let Some(pos) = self.find_position(txn, index) {
+            let value = crate::block::PrelimText(chunk.into());
+            let len = { txn.create_item(&pos, value, None).len() };
+            self.insert_format(txn, pos, len, attrs);
         } else {
             panic!("The type or the position doesn't exist!");
         }
@@ -139,6 +158,183 @@ impl Text {
         }
     }
 
+    pub fn format(&self, txn: &mut Transaction, index: u32, len: u32, attrs: Attrs) {
+        if let Some(pos) = self.find_position(txn, index) {
+            self.insert_format(txn, pos, len, attrs)
+        } else {
+            panic!("Index {} is outside of the range.", index);
+        }
+    }
+
+    fn insert_format(
+        &self,
+        txn: &mut Transaction,
+        mut pos: ItemPosition,
+        mut len: u32,
+        attrs: Attrs,
+    ) {
+        Self::minimize_attr_changes(&mut pos, txn, &attrs);
+        let mut negated_attrs = self.insert_attributes(txn, &mut pos, attrs.clone()); //TODO: remove `attrs.clone()`
+        let encoding = txn.store().options.offset_kind;
+        while let Some(right) = pos.right.as_ref() {
+            if len <= 0 {
+                break;
+            }
+
+            if let Some(block) = txn.store().blocks.get_item_mut(right) {
+                if !block.is_deleted() {
+                    match &block.content {
+                        ItemContent::Format(key, value) => {
+                            if let Some(v) = attrs.get(key) {
+                                if v == value.as_ref() {
+                                    negated_attrs.remove(key);
+                                } else {
+                                    negated_attrs.insert(key.clone(), *value.clone());
+                                }
+                            }
+                        }
+                        _ => {
+                            let content_len = block.content_len(encoding);
+                            if len < content_len {
+                                let mut split_ptr = right.clone();
+                                split_ptr.id.clock += len;
+                                let (_, r) = txn.store_mut().blocks.split_block(&split_ptr);
+                                pos.right = r;
+                                break;
+                            }
+                            len -= content_len;
+                        }
+                    }
+                }
+            }
+
+            if !pos.forward(txn) {
+                break;
+            }
+        }
+
+        self.insert_negated_attributes(txn, &mut pos, negated_attrs);
+    }
+
+    fn minimize_attr_changes(pos: &mut ItemPosition, txn: &mut Transaction, attrs: &Attrs) {
+        // go right while attrs[right.key] === right.value (or right is deleted)
+        while let Some(right) = pos.right.as_ref() {
+            if let Some(i) = txn.store().blocks.get_item(right) {
+                if !i.is_deleted() {
+                    if let ItemContent::Format(k, v) = &i.content {
+                        if let Some(v2) = attrs.get(k) {
+                            if (v.as_ref()).eq(v2) {
+                                pos.forward(txn);
+                                continue;
+                            }
+                        }
+                    }
+                } else {
+                    pos.forward(txn);
+                    continue;
+                }
+            }
+            break;
+        }
+    }
+
+    fn insert_attributes(
+        &self,
+        txn: &mut Transaction,
+        pos: &mut ItemPosition,
+        attrs: Attrs,
+    ) -> Attrs {
+        let mut negated_attrs = HashMap::with_capacity(attrs.len());
+        let mut store = txn.store_mut();
+        for (k, v) in attrs {
+            let current_value = pos
+                .current_attrs
+                .as_ref()
+                .and_then(|a| a.get(&k))
+                .unwrap_or(&Any::Null);
+            if v.ne(current_value) {
+                // save negated attribute (set null if currentVal undefined)
+                negated_attrs.insert(k.clone(), current_value.clone());
+
+                let client_id = store.options.client_id;
+                let parent = { self.0.borrow().ptr.clone() };
+                let mut item = Item::new(
+                    ID::new(client_id, store.blocks.get_state(&client_id)),
+                    pos.left.clone(),
+                    pos.left
+                        .map(|ptr| store.blocks.get_block(&ptr).unwrap().last_id()),
+                    pos.right.clone(),
+                    pos.right.map(|ptr| ptr.id.clone()),
+                    parent,
+                    None,
+                    ItemContent::Format(k, v.into()),
+                );
+                pos.right = Some(BlockPtr::from(item.id));
+                item.integrate(txn, 0, 0);
+
+                let local_block_list = txn.store_mut().blocks.get_client_blocks_mut(item.id.client);
+                local_block_list.push(block::Block::Item(item));
+
+                pos.forward(txn);
+                store = txn.store_mut();
+            }
+        }
+        negated_attrs
+    }
+
+    fn insert_negated_attributes(
+        &self,
+        txn: &mut Transaction,
+        pos: &mut ItemPosition,
+        mut attrs: Attrs,
+    ) {
+        while let Some(right) = pos.right.as_ref() {
+            if let Some(item) = txn.store().blocks.get_item(right) {
+                if !item.is_deleted() {
+                    if let ItemContent::Format(key, value) = &item.content {
+                        if let Some(curr_val) = attrs.get(key) {
+                            if curr_val == value.as_ref() {
+                                attrs.remove(key);
+
+                                pos.forward(txn);
+                                continue;
+                            }
+                        }
+                    }
+                } else {
+                    pos.forward(txn);
+                    continue;
+                }
+            }
+            break;
+        }
+
+        let mut store = txn.store_mut();
+        for (k, v) in attrs {
+            let client_id = store.options.client_id;
+            let parent = { self.0.borrow().ptr.clone() };
+            let mut item = Item::new(
+                ID::new(client_id, store.blocks.get_state(&client_id)),
+                pos.left.clone(),
+                pos.left
+                    .map(|ptr| store.blocks.get_block(&ptr).unwrap().last_id()),
+                pos.right.clone(),
+                pos.right.map(|ptr| ptr.id.clone()),
+                parent,
+                None,
+                ItemContent::Format(k, v.into()),
+            );
+            pos.right = Some(BlockPtr::from(item.id));
+            item.integrate(txn, 0, 0);
+
+            let local_block_list = txn.store_mut().blocks.get_client_blocks_mut(item.id.client);
+            local_block_list.push(block::Block::Item(item));
+
+            pos.forward(txn);
+            store = txn.store_mut();
+        }
+    }
+
     /// Subscribes a given callback to be triggered whenever current text is changed.
     /// A callback is triggered whenever a transaction gets committed. This function does not
     /// trigger if changes have been observed by nested shared collections.
@@ -154,6 +350,205 @@ impl Text {
         let mut branch = self.0.borrow_mut();
         branch.observe(f)
     }
+
+    pub fn delta(&self, txn: &Transaction) -> Vec<Delta> {
+        #[derive(Clone, Copy, Eq, PartialEq)]
+        enum Action {
+            Insert,
+            Retain,
+            Delete,
+        }
+
+        #[derive(Default)]
+        struct DeltaAssembler {
+            action: Option<Action>,
+            insert: Option<Value>,
+            insert_string: Option<String>,
+            retain: u32,
+            delete: u32,
+            attrs: Attrs,
+            current_attrs: Attrs,
+            delta: Vec<Delta>,
+        }
+
+        impl DeltaAssembler {
+            fn add_op(&mut self) {
+                match self.action.take() {
+                    None => {}
+                    Some(Action::Delete) => {
+                        let len = self.delete;
+                        self.delete = 0;
+                        self.delta.push(Delta::Delete(len))
+                    }
+                    Some(Action::Insert) => {
+                        let value = if let Some(str) = self.insert.take() {
+                            str
+                        } else {
+                            let value = self.insert_string.take().unwrap().into_boxed_str();
+                            Any::String(value).into()
+                        };
+                        let attrs = if self.current_attrs.is_empty() {
+                            None
+                        } else {
+                            Some(Box::new(self.current_attrs.clone()))
+                        };
+                        self.delta.push(Delta::Insert(value, attrs))
+                    }
+                    Some(Action::Retain) => {
+                        let len = self.retain;
+                        self.retain = 0;
+                        let attrs = if self.current_attrs.is_empty() {
+                            None
+                        } else {
+                            Some(Box::new(self.current_attrs.clone()))
+                        };
+                        self.delta.push(Delta::Retain(len, attrs))
+                    }
+                }
+            }
+
+            fn finish(mut self) -> Vec<Delta> {
+                while let Some(last) = self.delta.pop() {
+                    match last {
+                        Delta::Retain(_, None) => {
+                            // retain delta's if they don't assign attributes
+                        }
+                        other => {
+                            self.delta.push(other);
+                            return self.delta;
+                        }
+                    }
+                }
+                self.delta
+            }
+        }
+
+        let encoding = txn.store().options.offset_kind;
+        let mut old_attrs = HashMap::new();
+        let mut asm = DeltaAssembler::default();
+        let mut current = self
+            .0
+            .borrow()
+            .start
+            .as_ref()
+            .and_then(|ptr| txn.store().blocks.get_item(ptr));
+
+        while let Some(item) = current {
+            match &item.content {
+                ItemContent::Type(_) | ItemContent::Embed(_) => {
+                    if txn.has_added(&item.id) {
+                        if !txn.has_deleted(&item.id) {
+                            asm.add_op();
+                            asm.action = Some(Action::Insert);
+                            asm.insert = item.content.get_content_last(txn);
+                            asm.add_op();
+                        }
+                    } else if txn.has_deleted(&item.id) {
+                        if asm.action != Some(Action::Delete) {
+                            asm.add_op();
+                            asm.action = Some(Action::Delete);
+                        }
+                        asm.delete += 1;
+                    } else if !item.is_deleted() {
+                        if asm.action != Some(Action::Retain) {
+                            asm.add_op();
+                            asm.action = Some(Action::Retain);
+                        }
+                        asm.retain += 1;
+                    }
+                }
+                ItemContent::String(s) => {
+                    if txn.has_added(&item.id) {
+                        if !txn.has_deleted(&item.id) {
+                            if asm.action != Some(Action::Insert) {
+                                asm.add_op();
+                                asm.action = Some(Action::Insert);
+                            }
+                            let buf = asm.insert_string.get_or_insert_with(String::default);
+                            buf.push_str(s.as_str());
+                        }
+                    } else if txn.has_deleted(&item.id) {
+                        if asm.action != Some(Action::Delete) {
+                            asm.add_op();
+                            asm.action = Some(Action::Delete);
+                        }
+                        asm.delete += item.content_len(encoding);
+                    } else if !item.is_deleted() {
+                        if asm.action != Some(Action::Retain) {
+                            asm.add_op();
+                            asm.action = Some(Action::Retain);
+                        }
+                        asm.retain += item.content_len(encoding);
+                    }
+                }
+                ItemContent::Format(key, value) => {
+                    if txn.has_added(&item.id) {
+                        if !txn.has_deleted(&item.id) {
+                            let current_val = asm.current_attrs.get(key);
+                            if current_val != Some(value) {
+                                if asm.action == Some(Action::Retain) {
+                                    asm.add_op();
+                                }
+                                if Some(value) == old_attrs.get(key) {
+                                    asm.attrs.remove(key);
+                                } else {
+                                    asm.attrs.insert(key.clone(), *value.clone());
+                                }
+                            } else {
+                                // item.delete(transaction)
+                            }
+                        }
+                    } else if txn.has_deleted(&item.id) {
+                        old_attrs.insert(key.clone(), value.clone());
+                        let current_val = asm.current_attrs.get(key);
+                        if current_val != Some(value) {
+                            if asm.action == Some(Action::Retain) {
+                                asm.add_op();
+                            }
+                            asm.attrs.insert(key.clone(), *value.clone());
+                        }
+                    } else if !item.is_deleted() {
+                        old_attrs.insert(key.clone(), value.clone());
+                        let attr = asm.attrs.get(key);
+                        if let Some(attr) = attr {
+                            if attr != value.as_ref() {
+                                if asm.action == Some(Action::Retain) {
+                                    asm.add_op();
+                                }
+                                if value.as_ref() == &Any::Null {
+                                    asm.attrs.remove(key);
+                                } else {
+                                    asm.attrs.insert(key.clone(), *value.clone());
+                                }
+                            } else {
+                                // item.delete(transaction)
+                            }
+                        }
+                    }
+
+                    if !item.is_deleted() {
+                        if asm.action == Some(Action::Insert) {
+                            asm.add_op();
+                        }
+                        ItemPosition::update_current_attributes(
+                            Some(&mut asm.current_attrs),
+                            key,
+                            Some(value.clone()),
+                        );
+                    }
+                }
+                _ => {}
+            }
+
+            current = item
+                .right
+                .as_ref()
+                .and_then(|ptr| txn.store().blocks.get_item(ptr));
+        }
+
+        asm.add_op();
+        asm.finish()
+    }
 }
 
 impl Into<ItemContent> for Text {
@@ -168,10 +563,20 @@ impl From<BranchRef> for Text {
     }
 }
 
+pub type Attrs = HashMap<Box<str>, Any>;
+
+#[derive(Debug, PartialEq)]
+pub enum Delta {
+    Insert(Value, Option<Box<Attrs>>),
+    Retain(u32, Option<Box<Attrs>>),
+    Delete(u32),
+}
+
 #[cfg(test)]
 mod test {
     use crate::doc::{OffsetKind, Options};
     use crate::test_utils::{exchange_updates, run_scenario, RngExt};
+    use crate::types::text::{Attrs, Delta};
     use crate::types::Change;
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encoder, EncoderV1};
@@ -179,6 +584,7 @@ mod test {
     use lib0::any::Any;
     use rand::prelude::StdRng;
     use std::cell::RefCell;
+    use std::collections::HashMap;
     use std::rc::Rc;
 
     #[test]
@@ -670,5 +1076,131 @@ mod test {
     #[test]
     fn fuzzy_test_3() {
         fuzzy(3)
+    }
+
+    #[test]
+    fn basic_format() {
+        let d1 = Doc::with_client_id(1);
+        let txt1 = {
+            let mut txn = d1.transact();
+            txn.get_text("text")
+        };
+        let mut delta = Rc::new(RefCell::new(None));
+        let delta_clone = delta.clone();
+        let _sub = txt1.observe(move |txn, e| {
+            delta_clone.replace(Some(e.delta(txn).to_vec()));
+        });
+
+        let a: Attrs = HashMap::from([("bold".into(), Any::Bool(true))]);
+
+        // step 1
+        {
+            let mut txn = d1.transact();
+            txt1.insert_with_attributes(&mut txn, 0, "abc", a.clone());
+            txn.commit();
+
+            assert_eq!(txt1.to_string(&txn), "abc".to_string());
+            assert_eq!(
+                txt1.delta(&txn),
+                vec![Delta::Insert("abc".into(), Some(Box::new(a.clone())))]
+            );
+            assert_eq!(
+                delta.take(),
+                Some(vec![Change::Added(
+                    vec!["a".into(), "b".into(), "c".into()] //, Some(Box::new(a.clone()))
+                )])
+            );
+        }
+
+        // step 2
+        {
+            let mut txn = d1.transact();
+            txt1.remove_range(&mut txn, 0, 1);
+            txn.commit();
+
+            assert_eq!(txt1.to_string(&txn), "bc".to_string());
+            assert_eq!(
+                txt1.delta(&txn),
+                vec![Delta::Insert("bc".into(), Some(Box::new(a.clone())))]
+            );
+            assert_eq!(delta.take(), Some(vec![Change::Removed(1)]));
+        }
+
+        // step 3
+        {
+            let mut txn = d1.transact();
+            txt1.remove_range(&mut txn, 1, 1);
+            txn.commit();
+
+            assert_eq!(txt1.to_string(&txn), "b".to_string());
+            assert_eq!(
+                txt1.delta(&txn),
+                vec![Delta::Insert("b".into(), Some(Box::new(a.clone())))]
+            );
+            assert_eq!(
+                delta.take(),
+                Some(vec![Change::Retain(1), Change::Removed(1)])
+            );
+        }
+
+        // step 4
+        {
+            let mut txn = d1.transact();
+            txt1.insert_with_attributes(&mut txn, 0, "z", a.clone());
+            txn.commit();
+
+            assert_eq!(txt1.to_string(&txn), "zb".to_string());
+            assert_eq!(
+                txt1.delta(&txn),
+                vec![Delta::Insert("zb".into(), Some(Box::new(a.clone())))]
+            );
+            assert_eq!(
+                delta.take(),
+                Some(vec![Change::Added(
+                    vec!["z".into(), "b".into()] // , Some(Box::new(a.clone()))
+                )])
+            );
+        }
+
+        // step 5
+        {
+            let mut txn = d1.transact();
+            txt1.insert(&mut txn, 0, "y");
+            txn.commit();
+
+            assert_eq!(txt1.to_string(&txn), "yzb".to_string());
+            assert_eq!(
+                txt1.delta(&txn),
+                vec![
+                    Delta::Insert("y".into(), None),
+                    Delta::Insert("zb".into(), Some(Box::new(a.clone())))
+                ]
+            );
+            assert_eq!(delta.take(), Some(vec![Change::Added(vec!["y".into()])]));
+        }
+
+        // step 6
+        {
+            let mut txn = d1.transact();
+            let b: Attrs = HashMap::from([("bold".into(), Any::Null)]);
+            txt1.format(&mut txn, 0, 2, b.clone());
+            txn.commit();
+
+            assert_eq!(txt1.to_string(&txn), "yzb".to_string());
+            assert_eq!(
+                txt1.delta(&txn),
+                vec![
+                    Delta::Insert("yz".into(), None),
+                    Delta::Insert("b".into(), Some(Box::new(a.clone())))
+                ]
+            );
+            assert_eq!(
+                delta.take(),
+                Some(vec![
+                    Change::Retain(1),
+                    Change::Retain(1 /*, Some(Box::new(b))*/),
+                ])
+            );
+        }
     }
 }

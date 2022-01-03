@@ -103,6 +103,7 @@ impl XmlElement {
                 left: left.cloned(),
                 right: None,
                 index: 0,
+                current_attrs: None,
             }
         };
 
@@ -625,6 +626,7 @@ impl XmlText {
                 left: left.cloned(),
                 right: None,
                 index: 0,
+                current_attrs: None,
             }
         };
 

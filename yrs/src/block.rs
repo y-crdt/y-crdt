@@ -1,5 +1,6 @@
 use crate::doc::OffsetKind;
 use crate::store::Store;
+use crate::types::text::Attrs;
 use crate::types::{
     Branch, BranchRef, TypePtr, Value, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
     TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_HOOK, TYPE_REFS_XML_TEXT,
@@ -403,6 +404,44 @@ pub(crate) struct ItemPosition {
     pub left: Option<BlockPtr>,
     pub right: Option<BlockPtr>,
     pub index: u32,
+    pub current_attrs: Option<Box<Attrs>>,
+}
+
+impl ItemPosition {
+    pub fn forward(&mut self, txn: &Transaction) -> bool {
+        if let Some(right) = self.right.as_ref() {
+            if let Some(item) = txn.store().blocks.get_item(right) {
+                if !item.is_deleted() {
+                    if let ItemContent::Format(key, value) = &item.content {
+                        let attrs = self.current_attrs.as_mut().map(|m| m.as_mut());
+                        Self::update_current_attributes(attrs, key, Some(value.clone()));
+                    } else {
+                        self.index += item.len();
+                    }
+                }
+
+                self.left = self.right.take();
+                self.right = item.right.clone();
+
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn update_current_attributes(
+        attrs: Option<&mut Attrs>,
+        key: &str,
+        value: Option<Box<Any>>,
+    ) {
+        if let Some(attrs) = attrs {
+            if let Some(value) = value {
+                attrs.insert(key.into(), *value);
+            } else {
+                attrs.remove(key);
+            }
+        }
+    }
 }
 
 /// Bit flag (4th bit) for a marked item - not used atm.
@@ -1108,7 +1147,7 @@ pub enum ItemContent {
 
     /// Formatting attribute entry. Format attributes are not considered countable and don't
     /// contribute to an overall length of a collection they are applied to.
-    Format(Box<str>, Box<str>), // key, value: JSON
+    Format(Box<str>, Box<Any>),
 
     /// A chunk of text, usually applied by collaborative text insertion.
     String(SplittableString),
@@ -1232,7 +1271,7 @@ impl ItemContent {
             }
             ItemContent::Format(k, v) => {
                 encoder.write_string(k.as_ref());
-                encoder.write_string(v.as_ref());
+                encoder.write_any(v.as_ref());
             }
             ItemContent::Type(c) => {
                 let inner = c.borrow();
@@ -1270,7 +1309,7 @@ impl ItemContent {
             }
             ItemContent::Format(k, v) => {
                 encoder.write_string(k.as_ref());
-                encoder.write_string(v.as_ref());
+                encoder.write_any(v.as_ref());
             }
             ItemContent::Type(c) => {
                 let inner = c.borrow();
@@ -1310,7 +1349,7 @@ impl ItemContent {
             BLOCK_ITEM_STRING_REF_NUMBER => ItemContent::String(decoder.read_string().into()),
             BLOCK_ITEM_EMBED_REF_NUMBER => ItemContent::Embed(decoder.read_string().to_owned()),
             BLOCK_ITEM_FORMAT_REF_NUMBER => {
-                ItemContent::Format(decoder.read_string().into(), decoder.read_string().into())
+                ItemContent::Format(decoder.read_string().into(), decoder.read_any().into())
             }
             BLOCK_ITEM_TYPE_REF_NUMBER => {
                 let type_ref = decoder.read_type_ref();
@@ -1527,6 +1566,7 @@ impl std::fmt::Display for ItemContent {
                 }
                 write!(f, "}}")
             }
+            ItemContent::Format(k, v) => write!(f, "<{}={}>", k, v),
             ItemContent::Deleted(s) => write!(f, "deleted({})", s),
             ItemContent::Binary(s) => write!(f, "{:?}", s),
             ItemContent::Type(t) => {

@@ -155,7 +155,7 @@ impl IdRange {
     }
 
     fn merge(&mut self, other: IdRange) {
-        let mut raw = std::mem::take(self);
+        let raw = std::mem::take(self);
         *self = match (raw, other) {
             (IdRange::Continuous(mut a), IdRange::Continuous(b)) => {
                 if a.end >= b.start && a.start <= b.start {
