@@ -414,7 +414,7 @@ impl ItemPosition {
                 if !item.is_deleted() {
                     if let ItemContent::Format(key, value) = &item.content {
                         let attrs = self.current_attrs.as_mut().map(|m| m.as_mut());
-                        Self::update_current_attributes(attrs, key, Some(value.clone()));
+                        Text::update_current_attributes(attrs, key, Some(value.as_ref()));
                     } else {
                         self.index += item.len();
                     }
@@ -427,20 +427,6 @@ impl ItemPosition {
             }
         }
         false
-    }
-
-    pub fn update_current_attributes(
-        attrs: Option<&mut Attrs>,
-        key: &str,
-        value: Option<Box<Any>>,
-    ) {
-        if let Some(attrs) = attrs {
-            if let Some(value) = value {
-                attrs.insert(key.into(), *value);
-            } else {
-                attrs.remove(key);
-            }
-        }
     }
 }
 
