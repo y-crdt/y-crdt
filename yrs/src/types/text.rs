@@ -152,10 +152,115 @@ impl Text {
     /// This method panics in case when not all expected characters were removed (due to
     /// insufficient number of characters to remove) or `index` is outside of the bounds of text.
     pub fn remove_range(&self, txn: &mut Transaction, index: u32, len: u32) {
-        let removed = self.0.remove_at(txn, index, len);
-        if removed != len {
-            panic!("Couldn't remove {} elements from an array. Only {} of them were successfully removed.", len, removed);
+        if let Some(pos) = self.find_position(txn, index) {
+            Self::remove(txn, pos, len)
+        } else {
+            panic!("The type or the position doesn't exist!");
         }
+    }
+
+    fn remove(txn: &mut Transaction, mut pos: ItemPosition, len: u32) {
+        let encoding = txn.store().options.offset_kind;
+        let mut remaining = len;
+        let start = pos.right.clone();
+        let start_attrs = pos.current_attrs.clone();
+        while let Some(item) = pos
+            .right
+            .as_ref()
+            .and_then(|p| txn.store().blocks.get_item_mut(p))
+        {
+            if remaining == 0 {
+                break;
+            }
+
+            if !item.is_deleted() {
+                match &item.content {
+                    ItemContent::Embed(_) | ItemContent::String(_) | ItemContent::Type(_) => {
+                        let content_len = item.content_len(encoding);
+                        let mut ptr = pos.right.unwrap();
+                        if remaining < content_len {
+                            // split block
+                            let offset = if let ItemContent::String(s) = &item.content {
+                                s.block_offset(remaining, encoding)
+                            } else {
+                                len
+                            };
+                            ptr.id.clock += offset;
+                            remaining = 0;
+                            let (l, _) = txn.store_mut().blocks.split_block(&ptr);
+                            ptr = l.unwrap();
+                        } else {
+                            remaining -= content_len;
+                        };
+                        txn.delete(&ptr);
+                    }
+                    _ => {}
+                }
+            }
+
+            pos.forward(txn);
+        }
+
+        if remaining > 0 {
+            panic!("Couldn't remove {} elements from an array. Only {} of them were successfully removed.", len, len - remaining);
+        }
+
+        if let (Some(start), Some(start_attrs), Some(end_attrs)) =
+            (start, start_attrs, pos.current_attrs.as_mut())
+        {
+            Self::clean_format_gap(
+                txn,
+                Some(start),
+                pos.right,
+                start_attrs.as_ref(),
+                end_attrs.as_mut(),
+            );
+        }
+    }
+
+    fn clean_format_gap(
+        txn: &mut Transaction,
+        mut start: Option<BlockPtr>,
+        mut end: Option<BlockPtr>,
+        start_attrs: &Attrs,
+        end_attrs: &mut Attrs,
+    ) -> u32 {
+        let mut store = txn.store();
+        while let Some(item) = end.as_ref().and_then(|ptr| store.blocks.get_item(ptr)) {
+            if item.is_countable() && item.is_deleted() {
+                break;
+            }
+            if item.is_deleted() {
+                if let ItemContent::Format(key, value) = &item.content {
+                    Self::update_current_attributes(Some(end_attrs), key.as_ref(), Some(value));
+                }
+            }
+            end = item.right.clone();
+        }
+
+        let mut cleanups = 0;
+        while start != end {
+            if let Some(item) = start
+                .as_ref()
+                .and_then(|ptr| txn.store().blocks.get_item(ptr))
+            {
+                let right = item.right.clone();
+                if !item.is_deleted() {
+                    if let ItemContent::Format(key, value) = &item.content {
+                        let e = end_attrs.get(key).unwrap_or(&Any::Null);
+                        let s = start_attrs.get(key).unwrap_or(&Any::Null);
+                        if e != value.as_ref() || s == value.as_ref() {
+                            txn.delete(&start.unwrap());
+                            cleanups += 1;
+                        }
+                    }
+                }
+                start = right;
+            } else {
+                break;
+            }
+        }
+        cleanups
     }
 
     pub fn format(&self, txn: &mut Transaction, index: u32, len: u32, attrs: Attrs) {
@@ -351,6 +456,20 @@ impl Text {
         branch.observe(f)
     }
 
+    pub(crate) fn update_current_attributes(
+        attrs: Option<&mut Attrs>,
+        key: &str,
+        value: Option<&Any>,
+    ) {
+        if let Some(attrs) = attrs {
+            if let Some(value) = value {
+                attrs.insert(key.into(), value.clone());
+            } else {
+                attrs.remove(key);
+            }
+        }
+    }
+
     pub fn delta(&self, txn: &Transaction) -> Vec<Delta> {
         #[derive(Clone, Copy, Eq, PartialEq)]
         enum Action {
@@ -530,10 +649,10 @@ impl Text {
                         if asm.action == Some(Action::Insert) {
                             asm.add_op();
                         }
-                        ItemPosition::update_current_attributes(
+                        Self::update_current_attributes(
                             Some(&mut asm.current_attrs),
                             key,
-                            Some(value.clone()),
+                            Some(value.as_ref()),
                         );
                     }
                 }
