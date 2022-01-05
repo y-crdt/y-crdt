@@ -1,8 +1,12 @@
 use crate::block::{ItemContent, ItemPosition, Prelim};
-use crate::types::{Branch, BranchRef, Entries, Event, Observer, TypePtr, Value, TYPE_REFS_MAP};
+use crate::types::{
+    event_keys, Branch, BranchRef, Entries, EntryChange, Observer, Observers, Path, TypePtr, Value,
+    TYPE_REFS_MAP,
+};
 use crate::*;
 use lib0::any::Any;
-use std::collections::HashMap;
+use std::cell::UnsafeCell;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 /// Collection used to store key-value entries in an unordered manner. Keys are always represented
@@ -139,12 +143,16 @@ impl Map {
     /// All map changes can be tracked by using [Event::keys] method.
     ///
     /// Returns an [Observer] which, when dropped, will unsubscribe current callback.
-    pub fn observe<F>(&self, f: F) -> Observer
+    pub fn observe<F>(&self, f: F) -> Observer<MapEvent>
     where
-        F: Fn(&Transaction, &Event) -> () + 'static,
+        F: Fn(&Transaction, &MapEvent) -> () + 'static,
     {
         let mut branch = self.0.borrow_mut();
-        branch.observe(f)
+        if let Observers::Map(eh) = branch.observers.get_or_insert_with(Observers::map) {
+            Observer(eh.subscribe(f))
+        } else {
+            panic!("Observed collection is of different type") //TODO: this should be Result::Err
+        }
     }
 }
 
@@ -213,6 +221,50 @@ impl<T: Prelim> Prelim for PrelimMap<T> {
         let map = Map::from(inner_ref);
         for (key, value) in self.0 {
             map.insert(txn, key, value);
+        }
+    }
+}
+
+pub struct MapEvent {
+    target: Map,
+    current_target: BranchRef,
+    keys: UnsafeCell<Result<HashMap<Rc<str>, EntryChange>, HashSet<Option<Rc<str>>>>>,
+}
+
+impl MapEvent {
+    pub(crate) fn new(branch_ref: BranchRef, key_changes: HashSet<Option<Rc<str>>>) -> Self {
+        let current_target = branch_ref.clone();
+        MapEvent {
+            target: Map::from(branch_ref),
+            current_target,
+            keys: UnsafeCell::new(Err(key_changes)),
+        }
+    }
+
+    pub fn target(&self) -> &Map {
+        &self.target
+    }
+
+    pub fn path(&self, txn: &Transaction) -> Path {
+        Branch::path(&self.current_target, &self.target.0, txn)
+    }
+
+    pub fn keys(&self, txn: &Transaction) -> &HashMap<Rc<str>, EntryChange> {
+        let keys = unsafe { self.keys.get().as_mut().unwrap() };
+
+        match keys {
+            Ok(keys) => {
+                return keys;
+            }
+            Err(subs) => {
+                let subs = event_keys(txn, &self.target.0, subs);
+                *keys = Ok(subs);
+                if let Ok(keys) = keys {
+                    keys
+                } else {
+                    panic!("Defect: should not happen");
+                }
+            }
         }
     }
 }
