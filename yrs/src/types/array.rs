@@ -1,8 +1,12 @@
 use crate::block::{BlockPtr, ItemContent, ItemPosition, Prelim};
-use crate::types::{Branch, BranchRef, Event, Observer, TypePtr, Value, TYPE_REFS_ARRAY};
-use crate::Transaction;
+use crate::types::{
+    event_change_set, Branch, BranchRef, Change, ChangeSet, Observer, Observers, Path, TypePtr,
+    Value, TYPE_REFS_ARRAY,
+};
+use crate::{Transaction, ID};
 use lib0::any::Any;
-use std::collections::VecDeque;
+use std::cell::UnsafeCell;
+use std::collections::{HashSet, VecDeque};
 
 /// A collection used to store data in an indexed sequence structure. This type is internally
 /// implemented as a double linked list, which may squash values inserted directly one after another
@@ -129,12 +133,16 @@ impl Array {
     /// All array changes can be tracked by using [Event::delta] method.
     ///
     /// Returns an [Observer] which, when dropped, will unsubscribe current callback.
-    pub fn observe<F>(&self, f: F) -> Observer
+    pub fn observe<F>(&self, f: F) -> Observer<ArrayEvent>
     where
-        F: Fn(&Transaction, &Event) -> () + 'static,
+        F: Fn(&Transaction, &ArrayEvent) -> () + 'static,
     {
         let mut branch = self.0.borrow_mut();
-        branch.observe(f)
+        if let Observers::Array(eh) = branch.observers.get_or_insert_with(Observers::array) {
+            Observer(eh.subscribe(f))
+        } else {
+            panic!("Observed collection is of different type") //TODO: this should be Result::Err
+        }
     }
 }
 
@@ -233,6 +241,49 @@ where
         for value in self.0 {
             array.push_back(txn, value);
         }
+    }
+}
+pub struct ArrayEvent {
+    target: Array,
+    current_target: BranchRef,
+    change_set: UnsafeCell<Option<Box<ChangeSet<Change>>>>,
+}
+
+impl ArrayEvent {
+    pub(crate) fn new(branch_ref: BranchRef) -> Self {
+        let current_target = branch_ref.clone();
+        ArrayEvent {
+            target: Array::from(branch_ref),
+            current_target,
+            change_set: UnsafeCell::new(None),
+        }
+    }
+
+    pub fn target(&self) -> &Array {
+        &self.target
+    }
+
+    pub fn path(&self, txn: &Transaction) -> Path {
+        Branch::path(&self.current_target, &self.target.0, txn)
+    }
+
+    pub fn delta(&self, txn: &Transaction) -> &[Change] {
+        self.changes(txn).delta.as_slice()
+    }
+
+    pub fn inserts(&self, txn: &Transaction) -> &HashSet<ID> {
+        &self.changes(txn).added
+    }
+
+    pub fn removes(&self, txn: &Transaction) -> &HashSet<ID> {
+        &self.changes(txn).deleted
+    }
+
+    fn changes(&self, txn: &Transaction) -> &ChangeSet<Change> {
+        let change_set = unsafe { self.change_set.get().as_mut().unwrap() };
+        change_set.get_or_insert_with(|| {
+            Box::new(event_change_set(txn, self.target.0.borrow().start.as_ref()))
+        })
     }
 }
 
@@ -753,12 +804,12 @@ mod test {
         let c1 = Rc::new(RefCell::new(None));
         let c1c = c1.clone();
         let _s1 = a1.observe(move |_, e| {
-            *c1c.borrow_mut() = Some(e.target());
+            *c1c.borrow_mut() = Some(e.target().clone());
         });
         let c2 = Rc::new(RefCell::new(None));
         let c2c = c2.clone();
         let _s2 = a2.observe(move |_, e| {
-            *c2c.borrow_mut() = Some(e.target());
+            *c2c.borrow_mut() = Some(e.target().clone());
         });
 
         {
@@ -767,8 +818,8 @@ mod test {
         }
         exchange_updates(&[&d1, &d2]);
 
-        assert_eq!(c1.borrow_mut().take(), Some(Value::YArray(a1)));
-        assert_eq!(c2.borrow_mut().take(), Some(Value::YArray(a2)));
+        assert_eq!(c1.borrow_mut().take(), Some(a1));
+        assert_eq!(c2.borrow_mut().take(), Some(a2));
     }
 
     use crate::updates::decoder::Decode;

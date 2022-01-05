@@ -1,9 +1,10 @@
 use crate::block::{BlockPtr, Item, ItemContent, ItemPosition};
+use crate::block_store::Snapshot;
 use crate::transaction::Transaction;
-use crate::types::{Branch, BranchRef, Event, Observer, Value};
+use crate::types::{Branch, BranchRef, Observer, Observers, Path, Value};
 use crate::*;
 use lib0::any::Any;
-use std::cell::{Cell, Ref};
+use std::cell::{Ref, UnsafeCell};
 use std::collections::HashMap;
 
 /// A shared data type used for collaborative text editing. It enables multiple users to add and
@@ -225,7 +226,7 @@ impl Text {
         start_attrs: &Attrs,
         end_attrs: &mut Attrs,
     ) -> u32 {
-        let mut store = txn.store();
+        let store = txn.store();
         while let Some(item) = end.as_ref().and_then(|ptr| store.blocks.get_item(ptr)) {
             if item.is_countable() && item.is_deleted() {
                 break;
@@ -448,12 +449,16 @@ impl Text {
     /// contains collection of individual characters rather than strings.
     ///
     /// Returns an [Observer] which, when dropped, will unsubscribe current callback.
-    pub fn observe<F>(&self, f: F) -> Observer
+    pub fn observe<F>(&self, f: F) -> Observer<TextEvent>
     where
-        F: Fn(&Transaction, &Event) -> () + 'static,
+        F: Fn(&Transaction, &TextEvent) -> () + 'static,
     {
         let mut branch = self.0.borrow_mut();
-        branch.observe(f)
+        if let Observers::Text(eh) = branch.observers.get_or_insert_with(Observers::text) {
+            Observer(eh.subscribe(f))
+        } else {
+            panic!("Observed collection is of different type") //TODO: this should be Result::Err
+        }
     }
 
     pub(crate) fn update_current_attributes(
@@ -470,7 +475,185 @@ impl Text {
         }
     }
 
-    pub fn delta(&self, txn: &Transaction) -> Vec<Delta> {
+    pub fn diff(&self, txn: &mut Transaction) -> Vec<Diff> {
+        self.diff_range(txn, None, None)
+    }
+
+    /// Returns the Delta representation of this YText type.
+    pub fn diff_range(
+        &self,
+        txn: &mut Transaction,
+        hi: Option<&Snapshot>,
+        lo: Option<&Snapshot>,
+    ) -> Vec<Diff> {
+        #[derive(Default)]
+        struct DiffAssembler {
+            ops: Vec<Diff>,
+            buf: String,
+            curr_attrs: Attrs,
+        }
+
+        impl DiffAssembler {
+            fn pack_str(&mut self) {
+                if !self.buf.is_empty() {
+                    let attrs = self.attrs_boxed();
+                    let mut buf = std::mem::replace(&mut self.buf, String::new());
+                    buf.shrink_to_fit();
+                    let op = Diff::Insert(Value::Any(buf.into()), attrs);
+                    self.ops.push(op);
+                }
+            }
+
+            fn finish(self) -> Vec<Diff> {
+                self.ops
+            }
+
+            fn attrs_boxed(&mut self) -> Option<Box<Attrs>> {
+                if self.curr_attrs.is_empty() {
+                    None
+                } else {
+                    let attrs = std::mem::replace(&mut self.curr_attrs, Attrs::new());
+                    Some(Box::new(attrs))
+                }
+            }
+        }
+
+        fn seen(snapshot: Option<&Snapshot>, item: &Item) -> bool {
+            if let Some(s) = snapshot {
+                s.is_visible(&item.id)
+            } else {
+                !item.is_deleted()
+            }
+        }
+
+        if let Some(snapshot) = hi {
+            txn.split_by_snapshot(snapshot);
+        }
+
+        if let Some(snapshot) = lo {
+            txn.split_by_snapshot(snapshot);
+        }
+
+        let mut asm = DiffAssembler::default();
+        let mut n = self
+            .0
+            .borrow()
+            .start
+            .as_ref()
+            .and_then(|ptr| txn.store().blocks.get_item(ptr));
+        while let Some(item) = n {
+            if seen(hi, item) || (lo.is_some() && seen(lo, item)) {
+                match &item.content {
+                    ItemContent::String(s) => {
+                        /*TODO:
+                        const cur = currentAttributes.get('ychange')
+                        if (snapshot !== undefined && !isVisible(n, snapshot)) {
+                          if (cur === undefined || cur.user !== n.id.client || cur.state !== 'removed') {
+                            packStr()
+                            currentAttributes.set('ychange', computeYChange ? computeYChange('removed', n.id) : { type: 'removed' })
+                          }
+                        } else if (prevSnapshot !== undefined && !isVisible(n, prevSnapshot)) {
+                          if (cur === undefined || cur.user !== n.id.client || cur.state !== 'added') {
+                            packStr()
+                            currentAttributes.set('ychange', computeYChange ? computeYChange('added', n.id) : { type: 'added' })
+                          }
+                        } else if (cur !== undefined) {
+                          packStr()
+                          currentAttributes.delete('ychange')
+                        }
+                         */
+                        asm.buf.push_str(s.as_str());
+                    }
+                    ItemContent::Type(_) | ItemContent::Embed(_) => {
+                        asm.pack_str();
+                        if let Some(value) = item.content.get_content_last(&txn) {
+                            let attrs = asm.attrs_boxed();
+                            asm.ops.push(Diff::Insert(value, attrs));
+                        }
+                    }
+                    ItemContent::Format(key, value) => {
+                        if seen(hi, item) {
+                            asm.pack_str();
+                            Self::update_current_attributes(
+                                Some(&mut asm.curr_attrs),
+                                key,
+                                Some(value.as_ref()),
+                            );
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            n = item
+                .right
+                .as_ref()
+                .and_then(|ptr| txn.store().blocks.get_item(ptr));
+        }
+
+        asm.pack_str();
+        asm.finish()
+    }
+}
+
+impl Into<ItemContent> for Text {
+    fn into(self) -> ItemContent {
+        ItemContent::Type(self.0.clone())
+    }
+}
+
+impl From<BranchRef> for Text {
+    fn from(inner: BranchRef) -> Self {
+        Text(inner)
+    }
+}
+
+pub type Attrs = HashMap<Box<str>, Any>;
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Delta {
+    Insert(Value, Option<Box<Attrs>>),
+    Retain(u32, Option<Box<Attrs>>),
+    Delete(u32),
+}
+
+#[derive(Debug, PartialEq)]
+pub enum Diff {
+    Insert(Value, Option<Box<Attrs>>),
+}
+
+pub struct TextEvent {
+    target: Text,
+    current_target: BranchRef,
+    delta: UnsafeCell<Option<Vec<Delta>>>,
+}
+
+impl TextEvent {
+    pub(crate) fn new(branch_ref: BranchRef) -> Self {
+        let current_target = branch_ref.clone();
+        let target = Text::from(branch_ref);
+        TextEvent {
+            target,
+            current_target,
+            delta: UnsafeCell::new(None),
+        }
+    }
+
+    pub fn target(&self) -> &Text {
+        &self.target
+    }
+
+    pub fn path(&self, txn: &Transaction) -> Path {
+        Branch::path(&self.current_target, &self.target.0, txn)
+    }
+
+    pub fn delta(&self, txn: &Transaction) -> &[Delta] {
+        let delta = unsafe { self.delta.get().as_mut().unwrap() };
+        delta
+            .get_or_insert_with(|| Self::get_delta(&self.target.0, txn))
+            .as_slice()
+    }
+
+    fn get_delta(target: &BranchRef, txn: &Transaction) -> Vec<Delta> {
         #[derive(Clone, Copy, Eq, PartialEq)]
         enum Action {
             Insert,
@@ -545,8 +728,7 @@ impl Text {
         let encoding = txn.store().options.offset_kind;
         let mut old_attrs = HashMap::new();
         let mut asm = DeltaAssembler::default();
-        let mut current = self
-            .0
+        let mut current = target
             .borrow()
             .start
             .as_ref()
@@ -649,7 +831,7 @@ impl Text {
                         if asm.action == Some(Action::Insert) {
                             asm.add_op();
                         }
-                        Self::update_current_attributes(
+                        Text::update_current_attributes(
                             Some(&mut asm.current_attrs),
                             key,
                             Some(value.as_ref()),
@@ -670,33 +852,11 @@ impl Text {
     }
 }
 
-impl Into<ItemContent> for Text {
-    fn into(self) -> ItemContent {
-        ItemContent::Type(self.0.clone())
-    }
-}
-
-impl From<BranchRef> for Text {
-    fn from(inner: BranchRef) -> Self {
-        Text(inner)
-    }
-}
-
-pub type Attrs = HashMap<Box<str>, Any>;
-
-#[derive(Debug, PartialEq)]
-pub enum Delta {
-    Insert(Value, Option<Box<Attrs>>),
-    Retain(u32, Option<Box<Attrs>>),
-    Delete(u32),
-}
-
 #[cfg(test)]
 mod test {
     use crate::doc::{OffsetKind, Options};
     use crate::test_utils::{exchange_updates, run_scenario, RngExt};
-    use crate::types::text::{Attrs, Delta};
-    use crate::types::Change;
+    use crate::types::text::{Attrs, Delta, Diff};
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encoder, EncoderV1};
     use crate::{Doc, Update};
@@ -1043,12 +1203,7 @@ mod test {
         }
         assert_eq!(
             delta.borrow_mut().take(),
-            Some(vec![Change::Added(vec![
-                Any::String("a".into()).into(),
-                Any::String("b".into()).into(),
-                Any::String("c".into()).into(),
-                Any::String("d".into()).into()
-            ])])
+            Some(vec![Delta::Insert("abcd".into(), None)])
         );
 
         // remove middle
@@ -1058,7 +1213,7 @@ mod test {
         }
         assert_eq!(
             delta.borrow_mut().take(),
-            Some(vec![Change::Retain(1), Change::Removed(2)])
+            Some(vec![Delta::Retain(1, None), Delta::Delete(2)])
         );
 
         // insert again
@@ -1069,11 +1224,8 @@ mod test {
         assert_eq!(
             delta.borrow_mut().take(),
             Some(vec![
-                Change::Retain(1),
-                Change::Added(vec![
-                    Any::String("e".into()).into(),
-                    Any::String("f".into()).into()
-                ])
+                Delta::Retain(1, None),
+                Delta::Insert("ef".into(), None)
             ])
         );
 
@@ -1100,12 +1252,7 @@ mod test {
 
         assert_eq!(
             delta.borrow_mut().take(),
-            Some(vec![Change::Added(vec![
-                Any::String("a".into()).into(),
-                Any::String("e".into()).into(),
-                Any::String("f".into()).into(),
-                Any::String("d".into()).into()
-            ])])
+            Some(vec![Delta::Insert("aefd".into(), None)])
         );
     }
 
@@ -1204,7 +1351,7 @@ mod test {
             let mut txn = d1.transact();
             txn.get_text("text")
         };
-        let mut delta = Rc::new(RefCell::new(None));
+        let delta = Rc::new(RefCell::new(None));
         let delta_clone = delta.clone();
         let _sub = txt1.observe(move |txn, e| {
             delta_clone.replace(Some(e.delta(txn).to_vec()));
@@ -1220,14 +1367,12 @@ mod test {
 
             assert_eq!(txt1.to_string(&txn), "abc".to_string());
             assert_eq!(
-                txt1.delta(&txn),
-                vec![Delta::Insert("abc".into(), Some(Box::new(a.clone())))]
+                txt1.diff(&mut txn),
+                vec![Diff::Insert("abc".into(), Some(Box::new(a.clone())))]
             );
             assert_eq!(
                 delta.take(),
-                Some(vec![Change::Added(
-                    vec!["a".into(), "b".into(), "c".into()] //, Some(Box::new(a.clone()))
-                )])
+                Some(vec![Delta::Insert("abc".into(), Some(Box::new(a.clone())))])
             );
         }
 
@@ -1239,10 +1384,10 @@ mod test {
 
             assert_eq!(txt1.to_string(&txn), "bc".to_string());
             assert_eq!(
-                txt1.delta(&txn),
-                vec![Delta::Insert("bc".into(), Some(Box::new(a.clone())))]
+                txt1.diff(&mut txn),
+                vec![Diff::Insert("bc".into(), Some(Box::new(a.clone())))]
             );
-            assert_eq!(delta.take(), Some(vec![Change::Removed(1)]));
+            assert_eq!(delta.take(), Some(vec![Delta::Delete(1)]));
         }
 
         // step 3
@@ -1253,12 +1398,12 @@ mod test {
 
             assert_eq!(txt1.to_string(&txn), "b".to_string());
             assert_eq!(
-                txt1.delta(&txn),
-                vec![Delta::Insert("b".into(), Some(Box::new(a.clone())))]
+                txt1.diff(&mut txn),
+                vec![Diff::Insert("b".into(), Some(Box::new(a.clone())))]
             );
             assert_eq!(
                 delta.take(),
-                Some(vec![Change::Retain(1), Change::Removed(1)])
+                Some(vec![Delta::Retain(1, None), Delta::Delete(1)])
             );
         }
 
@@ -1270,15 +1415,10 @@ mod test {
 
             assert_eq!(txt1.to_string(&txn), "zb".to_string());
             assert_eq!(
-                txt1.delta(&txn),
-                vec![Delta::Insert("zb".into(), Some(Box::new(a.clone())))]
+                txt1.diff(&mut txn),
+                vec![Diff::Insert("zb".into(), Some(Box::new(a.clone())))]
             );
-            assert_eq!(
-                delta.take(),
-                Some(vec![Change::Added(
-                    vec!["z".into(), "b".into()] // , Some(Box::new(a.clone()))
-                )])
-            );
+            assert_eq!(delta.take(), Some(vec![Delta::Insert("zb".into(), None)]));
         }
 
         // step 5
@@ -1289,13 +1429,13 @@ mod test {
 
             assert_eq!(txt1.to_string(&txn), "yzb".to_string());
             assert_eq!(
-                txt1.delta(&txn),
+                txt1.diff(&mut txn),
                 vec![
-                    Delta::Insert("y".into(), None),
-                    Delta::Insert("zb".into(), Some(Box::new(a.clone())))
+                    Diff::Insert("y".into(), None),
+                    Diff::Insert("zb".into(), Some(Box::new(a.clone())))
                 ]
             );
-            assert_eq!(delta.take(), Some(vec![Change::Added(vec!["y".into()])]));
+            assert_eq!(delta.take(), Some(vec![Delta::Insert("y".into(), None)]));
         }
 
         // step 6
@@ -1307,17 +1447,17 @@ mod test {
 
             assert_eq!(txt1.to_string(&txn), "yzb".to_string());
             assert_eq!(
-                txt1.delta(&txn),
+                txt1.diff(&mut txn),
                 vec![
-                    Delta::Insert("yz".into(), None),
-                    Delta::Insert("b".into(), Some(Box::new(a.clone())))
+                    Diff::Insert("yz".into(), None),
+                    Diff::Insert("b".into(), Some(Box::new(a.clone())))
                 ]
             );
             assert_eq!(
                 delta.take(),
                 Some(vec![
-                    Change::Retain(1),
-                    Change::Retain(1 /*, Some(Box::new(b))*/),
+                    Delta::Retain(1, None),
+                    Delta::Retain(1, Some(Box::new(b))),
                 ])
             );
         }

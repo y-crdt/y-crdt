@@ -1,12 +1,15 @@
 use crate::block::{Item, ItemContent, ItemPosition, Prelim};
 use crate::store::Store;
+use crate::types::text::TextEvent;
 use crate::types::{
-    Branch, BranchRef, Entries, Event, Map, Observer, Text, TypePtr, Value, TYPE_REFS_XML_ELEMENT,
-    TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_TEXT,
+    event_change_set, event_keys, Branch, BranchRef, Change, ChangeSet, Entries, EntryChange, Map,
+    Observer, Observers, Path, Text, TypePtr, Value, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT,
+    TYPE_REFS_XML_TEXT,
 };
-use crate::Transaction;
+use crate::{Transaction, ID};
 use lib0::any::Any;
-use std::cell::Ref;
+use std::cell::{Ref, UnsafeCell};
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 use std::rc::Rc;
 
@@ -265,9 +268,9 @@ impl XmlElement {
     /// Attribute changes can be tracked by using [Event::keys] method.
     ///
     /// Returns an [Observer] which, when dropped, will unsubscribe current callback.
-    pub fn observe<F>(&self, f: F) -> Observer
+    pub fn observe<F>(&self, f: F) -> Observer<XmlEvent>
     where
-        F: Fn(&Transaction, &Event) -> () + 'static,
+        F: Fn(&Transaction, &XmlEvent) -> () + 'static,
     {
         self.0.observe(f)
     }
@@ -416,12 +419,16 @@ impl XmlFragment {
         }
     }
 
-    pub fn observe<F>(&self, f: F) -> Observer
+    pub fn observe<F>(&self, f: F) -> Observer<XmlEvent>
     where
-        F: Fn(&Transaction, &Event) -> () + 'static,
+        F: Fn(&Transaction, &XmlEvent) -> () + 'static,
     {
-        let mut branch_ref = self.0.borrow_mut();
-        branch_ref.observe(f)
+        let mut branch = self.0.borrow_mut();
+        if let Observers::Xml(eh) = branch.observers.get_or_insert_with(Observers::xml) {
+            Observer(eh.subscribe(f))
+        } else {
+            panic!("Observed collection is of different type") //TODO: this should be Result::Err
+        }
     }
 }
 
@@ -699,9 +706,9 @@ impl XmlText {
     /// XML text attribute changes can be tracked using [Event::keys] method.
     ///
     /// Returns an [Observer] which, when dropped, will unsubscribe current callback.
-    pub fn observe<F>(&self, f: F) -> Observer
+    pub fn observe<F>(&self, f: F) -> Observer<TextEvent>
     where
-        F: Fn(&Transaction, &Event) -> () + 'static,
+        F: Fn(&Transaction, &TextEvent) -> () + 'static,
     {
         self.0.observe(f)
     }
@@ -800,6 +807,74 @@ fn parent(inner: Ref<Branch>, txn: &Transaction) -> Option<XmlElement> {
         Some(XmlElement::from(parent.clone()))
     } else {
         None
+    }
+}
+
+pub struct XmlEvent {
+    target: XmlElement,
+    current_target: BranchRef,
+    change_set: UnsafeCell<Option<Box<ChangeSet<Change>>>>,
+    keys: UnsafeCell<Result<HashMap<Rc<str>, EntryChange>, HashSet<Option<Rc<str>>>>>,
+    children_changed: bool,
+}
+
+impl XmlEvent {
+    pub(crate) fn new(branch_ref: BranchRef, key_changes: HashSet<Option<Rc<str>>>) -> Self {
+        let current_target = branch_ref.clone();
+        let children_changed = key_changes.iter().any(Option::is_none);
+        XmlEvent {
+            target: XmlElement::from(branch_ref),
+            current_target,
+            change_set: UnsafeCell::new(None),
+            keys: UnsafeCell::new(Err(key_changes)),
+            children_changed,
+        }
+    }
+
+    pub fn target(&self) -> &XmlElement {
+        &self.target
+    }
+
+    pub fn path(&self, txn: &Transaction) -> Path {
+        let from = &self.current_target;
+        let to = &self.target.0 .0;
+        Branch::path(from, to, txn)
+    }
+
+    pub fn delta(&self, txn: &Transaction) -> &[Change] {
+        self.changes(txn).delta.as_slice()
+    }
+
+    pub fn added(&self, txn: &Transaction) -> &HashSet<ID> {
+        &self.changes(txn).added
+    }
+
+    pub fn deleted(&self, txn: &Transaction) -> &HashSet<ID> {
+        &self.changes(txn).deleted
+    }
+
+    pub fn keys(&self, txn: &Transaction) -> &HashMap<Rc<str>, EntryChange> {
+        let keys = unsafe { self.keys.get().as_mut().unwrap() };
+
+        match keys {
+            Ok(keys) => keys,
+            Err(subs) => {
+                let subs = event_keys(txn, &self.target.0 .0, subs);
+                *keys = Ok(subs);
+                if let Ok(keys) = keys {
+                    keys
+                } else {
+                    panic!("Defect: should not happen");
+                }
+            }
+        }
+    }
+
+    fn changes(&self, txn: &Transaction) -> &ChangeSet<Change> {
+        let change_set = unsafe { self.change_set.get().as_mut().unwrap() };
+        change_set.get_or_insert_with(|| {
+            Box::new(event_change_set(txn, self.target.inner().start.as_ref()))
+        })
     }
 }
 
