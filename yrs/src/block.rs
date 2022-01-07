@@ -412,11 +412,17 @@ impl ItemPosition {
         if let Some(right) = self.right.as_ref() {
             if let Some(item) = txn.store().blocks.get_item(right) {
                 if !item.is_deleted() {
-                    if let ItemContent::Format(key, value) = &item.content {
-                        let attrs = self.current_attrs.as_mut().map(|m| m.as_mut());
-                        Text::update_current_attributes(attrs, key, Some(value.as_ref()));
-                    } else {
-                        self.index += item.len();
+                    match &item.content {
+                        ItemContent::String(_) | ItemContent::Embed(_) => {
+                            self.index += item.len();
+                        }
+                        ItemContent::Format(key, value) => {
+                            let attrs = self
+                                .current_attrs
+                                .get_or_insert_with(|| Box::new(Attrs::new()));
+                            Text::update_current_attributes(attrs.as_mut(), key, value.as_ref());
+                        }
+                        _ => {}
                     }
                 }
 

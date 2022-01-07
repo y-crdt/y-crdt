@@ -81,27 +81,34 @@ impl Text {
 
             if let Some(mut right) = store.blocks.get_item(right_ptr) {
                 if !right.is_deleted() {
-                    let mut block_len = right.len();
-                    let content_len = right.content_len(encoding);
-                    if remaining < content_len {
-                        // split right item
-                        let offset = if let ItemContent::String(str) = &right.content {
-                            str.block_offset(remaining, encoding)
-                        } else {
-                            remaining
-                        };
-                        let split_ptr = BlockPtr::new(
-                            ID::new(right.id.client, right.id.clock + offset),
-                            right_ptr.pivot() as u32,
-                        );
-                        let (_, _) = store.blocks.split_block(&split_ptr);
-                        right = store.blocks.get_item(right_ptr).unwrap();
-                        block_len = right.len();
-                        remaining = 0;
+                    if let ItemContent::Format(key, value) = &right.content {
+                        let attrs = pos
+                            .current_attrs
+                            .get_or_insert_with(|| Box::new(Attrs::new()));
+                        Text::update_current_attributes(attrs, key, value.as_ref());
                     } else {
-                        remaining -= content_len;
+                        let mut block_len = right.len();
+                        let content_len = right.content_len(encoding);
+                        if remaining < content_len {
+                            // split right item
+                            let offset = if let ItemContent::String(str) = &right.content {
+                                str.block_offset(remaining, encoding)
+                            } else {
+                                remaining
+                            };
+                            let split_ptr = BlockPtr::new(
+                                ID::new(right.id.client, right.id.clock + offset),
+                                right_ptr.pivot() as u32,
+                            );
+                            let (_, _) = store.blocks.split_block(&split_ptr);
+                            right = store.blocks.get_item(right_ptr).unwrap();
+                            block_len = right.len();
+                            remaining = 0;
+                        } else {
+                            remaining -= content_len;
+                        }
+                        pos.index += block_len;
                     }
-                    pos.index += block_len;
                 }
                 pos.left = pos.right.take();
                 pos.right = right.right.clone();
@@ -134,10 +141,17 @@ impl Text {
         chunk: &str,
         attrs: Attrs,
     ) {
-        if let Some(pos) = self.find_position(txn, index) {
+        if let Some(mut pos) = self.find_position(txn, index) {
+            Text::minimize_attr_changes(&mut pos, txn, &attrs);
+            let negated_attrs = self.insert_attributes(txn, &mut pos, attrs);
+
             let value = crate::block::PrelimText(chunk.into());
-            let len = { txn.create_item(&pos, value, None).len() };
-            self.insert_format(txn, pos, len, attrs);
+            let item = txn.create_item(&pos, value, None);
+
+            pos.right = Some(BlockPtr::from(item.id));
+            pos.forward(txn);
+
+            self.insert_negated_attributes(txn, &mut pos, negated_attrs);
         } else {
             panic!("The type or the position doesn't exist!");
         }
@@ -228,13 +242,12 @@ impl Text {
     ) -> u32 {
         let store = txn.store();
         while let Some(item) = end.as_ref().and_then(|ptr| store.blocks.get_item(ptr)) {
-            if item.is_countable() && item.is_deleted() {
-                break;
-            }
-            if item.is_deleted() {
-                if let ItemContent::Format(key, value) = &item.content {
-                    Self::update_current_attributes(Some(end_attrs), key.as_ref(), Some(value));
+            match &item.content {
+                ItemContent::String(_) | ItemContent::Embed(_) => break,
+                ItemContent::Format(key, value) if !item.is_deleted() => {
+                    Self::update_current_attributes(end_attrs, key.as_ref(), value);
                 }
+                _ => {}
             }
             end = item.right.clone();
         }
@@ -297,6 +310,7 @@ impl Text {
                                 } else {
                                     negated_attrs.insert(key.clone(), *value.clone());
                                 }
+                                txn.delete(right);
                             }
                         }
                         _ => {
@@ -358,7 +372,7 @@ impl Text {
                 .as_ref()
                 .and_then(|a| a.get(&k))
                 .unwrap_or(&Any::Null);
-            if v.ne(current_value) {
+            if &v != current_value {
                 // save negated attribute (set null if currentVal undefined)
                 negated_attrs.insert(k.clone(), current_value.clone());
 
@@ -461,17 +475,11 @@ impl Text {
         }
     }
 
-    pub(crate) fn update_current_attributes(
-        attrs: Option<&mut Attrs>,
-        key: &str,
-        value: Option<&Any>,
-    ) {
-        if let Some(attrs) = attrs {
-            if let Some(value) = value {
-                attrs.insert(key.into(), value.clone());
-            } else {
-                attrs.remove(key);
-            }
+    pub(crate) fn update_current_attributes(attrs: &mut Attrs, key: &str, value: &Any) {
+        if let Any::Null = value {
+            attrs.remove(key);
+        } else {
+            attrs.insert(key.into(), value.clone());
         }
     }
 
@@ -575,9 +583,9 @@ impl Text {
                         if seen(hi, item) {
                             asm.pack_str();
                             Self::update_current_attributes(
-                                Some(&mut asm.curr_attrs),
+                                &mut asm.curr_attrs,
                                 key,
-                                Some(value.as_ref()),
+                                value.as_ref(),
                             );
                         }
                     }
@@ -699,10 +707,10 @@ impl TextEvent {
                     Some(Action::Retain) => {
                         let len = self.retain;
                         self.retain = 0;
-                        let attrs = if self.current_attrs.is_empty() {
+                        let attrs = if self.attrs.is_empty() {
                             None
                         } else {
-                            Some(Box::new(self.current_attrs.clone()))
+                            Some(Box::new(self.attrs.clone()))
                         };
                         self.delta.push(Delta::Retain(len, attrs))
                     }
@@ -790,10 +798,16 @@ impl TextEvent {
                                 if asm.action == Some(Action::Retain) {
                                     asm.add_op();
                                 }
-                                if Some(value) == old_attrs.get(key) {
-                                    asm.attrs.remove(key);
-                                } else {
-                                    asm.attrs.insert(key.clone(), *value.clone());
+                                match old_attrs.get(key) {
+                                    None if value.as_ref() == &Any::Null => {
+                                        asm.attrs.remove(key);
+                                    }
+                                    Some(v) if v == value => {
+                                        asm.attrs.remove(key);
+                                    }
+                                    _ => {
+                                        asm.attrs.insert(key.clone(), *value.clone());
+                                    }
                                 }
                             } else {
                                 // item.delete(transaction)
@@ -801,12 +815,13 @@ impl TextEvent {
                         }
                     } else if txn.has_deleted(&item.id) {
                         old_attrs.insert(key.clone(), value.clone());
-                        let current_val = asm.current_attrs.get(key);
-                        if current_val != Some(value) {
+                        let current_val = asm.current_attrs.get(key).unwrap_or(&Any::Null);
+                        if current_val != value.as_ref() {
+                            let curr_val_clone = current_val.clone();
                             if asm.action == Some(Action::Retain) {
                                 asm.add_op();
                             }
-                            asm.attrs.insert(key.clone(), *value.clone());
+                            asm.attrs.insert(key.clone(), curr_val_clone);
                         }
                     } else if !item.is_deleted() {
                         old_attrs.insert(key.clone(), value.clone());
@@ -832,9 +847,9 @@ impl TextEvent {
                             asm.add_op();
                         }
                         Text::update_current_attributes(
-                            Some(&mut asm.current_attrs),
+                            &mut asm.current_attrs,
                             key,
-                            Some(value.as_ref()),
+                            value.as_ref(),
                         );
                     }
                 }
@@ -1418,7 +1433,10 @@ mod test {
                 txt1.diff(&mut txn),
                 vec![Diff::Insert("zb".into(), Some(Box::new(a.clone())))]
             );
-            assert_eq!(delta.take(), Some(vec![Delta::Insert("zb".into(), None)]));
+            assert_eq!(
+                delta.take(),
+                Some(vec![Delta::Insert("z".into(), Some(Box::new(a.clone())))])
+            );
         }
 
         // step 5
