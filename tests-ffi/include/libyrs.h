@@ -1664,7 +1664,7 @@ void yarray_unobserve(YArray *array, unsigned int subscription_id);
  * Releases a callback subscribed via `<shared_type>_observe` function represented by passed
  * observer parameter.
  */
-void ymap_unobserve(YArray *map, unsigned int subscription_id);
+void ymap_unobserve(YMap *map, unsigned int subscription_id);
 
 /**
  * Releases a callback subscribed via `<shared_type>_observe` function represented by passed

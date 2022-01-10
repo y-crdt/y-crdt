@@ -9,7 +9,7 @@ pub use text::Text;
 
 use crate::block::{BlockPtr, Item, ItemContent, ItemPosition, Prelim};
 use crate::block_store::BlockStore;
-use crate::event::{EventHandler, Subscription};
+use crate::event::EventHandler;
 use crate::types::array::{Array, ArrayEvent};
 use crate::types::map::MapEvent;
 use crate::types::text::TextEvent;

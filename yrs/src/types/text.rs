@@ -478,7 +478,7 @@ impl Text {
 
     pub fn unobserve(&self, subscription_id: u32) {
         let mut branch = self.0.borrow_mut();
-        if let Some(Observers::Array(eh)) = branch.observers.as_mut() {
+        if let Some(Observers::Text(eh)) = branch.observers.as_mut() {
             eh.unsubscribe(subscription_id);
         }
     }

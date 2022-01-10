@@ -10,7 +10,7 @@ extern "C" {
 
 YDoc* ydoc_new_with_id(int id) {
     YOptions o;
-    o.encoding = Y_ENCODING_UTF16;
+    o.encoding = Y_OFFSET_UTF16;
     o.id = id;
     o.skip_gc = 0;
 
@@ -364,39 +364,32 @@ TEST_CASE("YXmlElement basic") {
     ydoc_destroy(doc);
 }
 
-typedef struct YEventTest {
+typedef struct YTextEventTest {
     int delta_len;
-    int keys_len;
-    YEventChange* delta;
-    YEventKeyChange *keys;
-    YOutput* target;
+    YDelta* delta;
+    YText* target;
 } YEventTest;
 
-YEventTest* yevent_test_new() {
-    YEventTest* t = (YEventTest*)malloc(sizeof(YEventTest));
+YTextEventTest* ytext_event_test_new() {
+    YTextEventTest* t = (YTextEventTest*)malloc(sizeof(YTextEventTest));
     t->target = NULL;
     t->delta = NULL;
-    t->keys = NULL;
     t->delta_len = 0;
-    t->keys_len = 0;
 
     return t;
 }
 
-void test_observe(void* state, const YEvent* e) {
-    YEventTest* t = (YEventTest*) state;
-    t->target = yevent_target(e);
-    t->delta = yevent_delta(e, &t->delta_len);
-    t->keys = yevent_keys(e, &t->keys_len);
+void ytext_test_observe(void* state, const YTextEvent* e) {
+    YTextEventTest* t = (YTextEventTest*) state;
+    t->target = ytext_event_target(e);
+    t->delta = ytext_event_delta(e, &t->delta_len);
 }
 
-void test_clean(YEventTest* t) {
-    youtput_destroy(t->target);
-    yevent_delta_destroy(t->delta, t->delta_len);
-    yevent_keys_destroy(t->keys, t->keys_len);
+void ytext_test_clean(YTextEventTest* t) {
+    ytext_destroy(t->target);
+    ytext_delta_destroy(t->delta, t->delta_len);
     t->target = NULL;
     t->delta = NULL;
-    t->keys = NULL;
 }
 
 TEST_CASE("YText observe") {
@@ -404,25 +397,25 @@ TEST_CASE("YText observe") {
     YTransaction* txn = ytransaction_new(doc);
     YText* txt = ytext(txn, "test");
 
-    YEventTest* t = yevent_test_new();
-    YObserver* sub = ytext_observe(txt, (void*)t, &test_observe);
+    YTextEventTest* t = ytext_event_test_new();
+    unsigned int sub = ytext_observe(txt, (void*)t, &ytext_test_observe);
 
     // insert initial data to an empty YText
     ytext_insert(txt, txn, 0, "abcd");
     ytransaction_commit(txn);
 
-    REQUIRE(t->target->tag == Y_TEXT);
+    REQUIRE(t->target != NULL);
     REQUIRE(t->delta_len == 1);
     REQUIRE(t->delta[0].tag == Y_EVENT_CHANGE_ADD);
-    REQUIRE(t->delta[0].len == 4);
+    REQUIRE(t->delta[0].insert->len == 4);
 
     // remove 2 chars from the middle
-    test_clean(t);
+    ytext_test_clean(t);
     txn = ytransaction_new(doc);
     ytext_remove_range(txt, txn, 1, 2);
     ytransaction_commit(txn);
 
-    REQUIRE(t->target->tag == Y_TEXT);
+    REQUIRE(t->target != NULL);
     REQUIRE(t->delta_len == 2);
     REQUIRE(t->delta[0].tag == Y_EVENT_CHANGE_RETAIN);
     REQUIRE(t->delta[0].len == 1);
@@ -430,12 +423,12 @@ TEST_CASE("YText observe") {
     REQUIRE(t->delta[1].len == 2);
 
     // insert new item in the middle
-    test_clean(t);
+    ytext_test_clean(t);
     txn = ytransaction_new(doc);
     ytext_insert(txt, txn, 1, "e");
     ytransaction_commit(txn);
 
-    REQUIRE(t->target->tag == Y_TEXT);
+    REQUIRE(t->target != NULL);
     REQUIRE(t->delta_len == 2);
     REQUIRE(t->delta[0].tag == Y_EVENT_CHANGE_RETAIN);
     REQUIRE(t->delta[0].len == 1);
@@ -443,8 +436,8 @@ TEST_CASE("YText observe") {
     REQUIRE(t->delta[1].len == 1);
 
     // free the observer and make sure that callback is no longer called
-    test_clean(t);
-    yobserver_destroy(sub);
+    ytext_test_clean(t);
+    ytext_unobserve(txt, sub);
 
     txn = ytransaction_new(doc);
     ytext_insert(txt, txn, 1, "fgh");
@@ -458,13 +451,41 @@ TEST_CASE("YText observe") {
     ydoc_destroy(doc);
 }
 
+typedef struct YArrayEventTest {
+    int delta_len;
+    YEventChange* delta;
+    YArray* target;
+} YArrayEventTest;
+
+YArrayEventTest* yarray_event_test_new() {
+    YArrayEventTest* t = (YArrayEventTest*)malloc(sizeof(YArrayEventTest));
+    t->target = NULL;
+    t->delta = NULL;
+    t->delta_len = 0;
+
+    return t;
+}
+
+void yarray_test_observe(void* state, const YArrayEvent* e) {
+    YArrayEventTest* t = (YArrayEventTest*) state;
+    t->target = yarray_event_target(e);
+    t->delta = yarray_event_delta(e, &t->delta_len);
+}
+
+void yarray_test_clean(YArrayEventTest* t) {
+    yarray_destroy(t->target);
+    yevent_delta_destroy(t->delta, t->delta_len);
+    t->target = NULL;
+    t->delta = NULL;
+}
+
 TEST_CASE("YArray observe") {
     YDoc* doc = ydoc_new_with_id(1);
     YTransaction* txn = ytransaction_new(doc);
     YArray* array = yarray(txn, "test");
 
-    YEventTest* t = yevent_test_new();
-    YObserver* sub = yarray_observe(array, (void*)t, &test_observe);
+    YArrayEventTest* t = yarray_event_test_new();
+    unsigned int sub = yarray_observe(array, (void*)t, &yarray_test_observe);
 
     // insert initial data to an empty YArray
     YInput* i = (YInput*)malloc(4 * sizeof(YInput));
@@ -477,25 +498,25 @@ TEST_CASE("YArray observe") {
     ytransaction_commit(txn);
     free(i);
 
-    REQUIRE(t->target->tag == Y_ARRAY);
+    REQUIRE(t->target != NULL);
     REQUIRE(t->delta_len == 1);
     REQUIRE(t->delta[0].tag == Y_EVENT_CHANGE_ADD);
     REQUIRE(t->delta[0].len == 4);
 
     // remove 2 items from the middle
-    test_clean(t);
+    yarray_test_clean(t);
     txn = ytransaction_new(doc);
     yarray_remove_range(array, txn, 1, 2);
     ytransaction_commit(txn);
 
-    REQUIRE(t->target->tag == Y_ARRAY);
+    REQUIRE(t->target != NULL);
     REQUIRE(t->delta_len == 2);
     REQUIRE(t->delta[0].tag == Y_EVENT_CHANGE_RETAIN);
     REQUIRE(t->delta[0].len == 1);
     REQUIRE(t->delta[1].tag == Y_EVENT_CHANGE_DELETE);
     REQUIRE(t->delta[1].len == 2);
 
-    test_clean(t);
+    yarray_test_clean(t);
 
     // insert new item in the middle
     i = (YInput*)malloc(1 * sizeof(YInput));
@@ -506,17 +527,17 @@ TEST_CASE("YArray observe") {
     ytransaction_commit(txn);
     free(i);
 
-    REQUIRE(t->target->tag == Y_ARRAY);
+    REQUIRE(t->target != NULL);
     REQUIRE(t->delta_len == 2);
     REQUIRE(t->delta[0].tag == Y_EVENT_CHANGE_RETAIN);
     REQUIRE(t->delta[0].len == 1);
     REQUIRE(t->delta[1].tag == Y_EVENT_CHANGE_ADD);
     REQUIRE(t->delta[1].len == 1);
 
-    test_clean(t);
+    yarray_test_clean(t);
 
     // free the observer and make sure that callback is no longer called
-    yobserver_destroy(sub);
+    yarray_unobserve(array, sub);
 
     i = (YInput*)malloc(1 * sizeof(YInput));
     i[0] = yinput_long(5);
@@ -534,13 +555,41 @@ TEST_CASE("YArray observe") {
     ydoc_destroy(doc);
 }
 
+typedef struct YMapEventTest {
+    int keys_len;
+    YEventKeyChange * keys;
+    YMap* target;
+} YMapEventTest;
+
+YMapEventTest* ymap_event_test_new() {
+    YMapEventTest* t = (YMapEventTest*)malloc(sizeof(YMapEventTest));
+    t->target = NULL;
+    t->keys = NULL;
+    t->keys_len = 0;
+
+    return t;
+}
+
+void ymap_test_observe(void* state, const YMapEvent* e) {
+    YMapEventTest* t = (YMapEventTest*) state;
+    t->target = ymap_event_target(e);
+    t->keys = ymap_event_keys(e, &t->keys_len);
+}
+
+void ymap_test_clean(YMapEventTest* t) {
+    ymap_destroy(t->target);
+    yevent_keys_destroy(t->keys, t->keys_len);
+    t->target = NULL;
+    t->keys = NULL;
+}
+
 TEST_CASE("YMap observe") {
     YDoc* doc = ydoc_new_with_id(1);
     YTransaction* txn = ytransaction_new(doc);
     YMap* map = ymap(txn, "test");
 
-    YEventTest* t = yevent_test_new();
-    YObserver* sub = ymap_observe(map, (void*)t, &test_observe);
+    YMapEventTest* t = ymap_event_test_new();
+    unsigned int sub = ymap_observe(map, (void*)t, &ymap_test_observe);
 
     // insert initial data to an empty YMap
     YInput i1 = yinput_string("value1");
@@ -549,7 +598,7 @@ TEST_CASE("YMap observe") {
     ymap_insert(map, txn, "key2", &i2);
     ytransaction_commit(txn);
 
-    REQUIRE(t->target->tag == Y_MAP);
+    REQUIRE(t->target != NULL);
     REQUIRE(t->keys_len == 2);
 
     for (int i = 0; i < t->keys_len; i++) {
@@ -574,14 +623,14 @@ TEST_CASE("YMap observe") {
     }
 
     // remove an entry and update another on
-    test_clean(t);
+    ymap_test_clean(t);
     txn = ytransaction_new(doc);
     ymap_remove(map, txn, "key1");
     i2 = yinput_string("value2");
     ymap_insert(map, txn, "key2", &i2);
     ytransaction_commit(txn);
 
-    REQUIRE(t->target->tag == Y_MAP);
+    REQUIRE(t->target != NULL);
     REQUIRE(t->keys_len == 2);
 
     for (int i = 0; i < t->keys_len; i++) {
@@ -606,8 +655,8 @@ TEST_CASE("YMap observe") {
     }
 
     // free the observer and make sure that callback is no longer called
-    test_clean(t);
-    yobserver_destroy(sub);
+    ymap_test_clean(t);
+    ymap_unobserve(map, sub);
     txn = ytransaction_new(doc);
     ymap_remove(map, txn, "key2");
     ytransaction_commit(txn);
@@ -624,25 +673,25 @@ TEST_CASE("YXmlText observe") {
     YTransaction* txn = ytransaction_new(doc);
     YXmlText* txt = yxmltext(txn, "test");
 
-    YEventTest* t = yevent_test_new();
-    YObserver* sub = yxmltext_observe(txt, (void*)t, &test_observe);
+    YTextEventTest* t = ytext_event_test_new();
+    unsigned int sub = yxmltext_observe(txt, (void*)t, &ytext_test_observe);
 
     // insert initial data to an empty YText
     yxmltext_insert(txt, txn, 0, "abcd");
     ytransaction_commit(txn);
 
-    REQUIRE(t->target->tag == Y_XML_TEXT);
+    REQUIRE(t->target != NULL);
     REQUIRE(t->delta_len == 1);
     REQUIRE(t->delta[0].tag == Y_EVENT_CHANGE_ADD);
-    REQUIRE(t->delta[0].len == 4);
+    REQUIRE(t->delta[0].insert->len == 4);
 
     // remove 2 chars from the middle
-    test_clean(t);
+    ytext_test_clean(t);
     txn = ytransaction_new(doc);
     yxmltext_remove_range(txt, txn, 1, 2);
     ytransaction_commit(txn);
 
-    REQUIRE(t->target->tag == Y_XML_TEXT);
+    REQUIRE(t->target != NULL);
     REQUIRE(t->delta_len == 2);
     REQUIRE(t->delta[0].tag == Y_EVENT_CHANGE_RETAIN);
     REQUIRE(t->delta[0].len == 1);
@@ -650,12 +699,12 @@ TEST_CASE("YXmlText observe") {
     REQUIRE(t->delta[1].len == 2);
 
     // insert new item in the middle
-    test_clean(t);
+    ytext_test_clean(t);
     txn = ytransaction_new(doc);
     yxmltext_insert(txt, txn, 1, "e");
     ytransaction_commit(txn);
 
-    REQUIRE(t->target->tag == Y_XML_TEXT);
+    REQUIRE(t->target != NULL);
     REQUIRE(t->delta_len == 2);
     REQUIRE(t->delta[0].tag == Y_EVENT_CHANGE_RETAIN);
     REQUIRE(t->delta[0].len == 1);
@@ -663,8 +712,8 @@ TEST_CASE("YXmlText observe") {
     REQUIRE(t->delta[1].len == 1);
 
     // free the observer and make sure that callback is no longer called
-    test_clean(t);
-    yobserver_destroy(sub);
+    ytext_test_clean(t);
+    yxmltext_unobserve(txt, sub);
 
     txn = ytransaction_new(doc);
     yxmltext_insert(txt, txn, 1, "fgh");
@@ -678,20 +727,57 @@ TEST_CASE("YXmlText observe") {
     ydoc_destroy(doc);
 }
 
+typedef struct YXmlEventTest {
+    YXmlElement * target;
+    int keys_len;
+    YEventKeyChange * keys;
+    int delta_len;
+    YEventChange* delta;
+} YXmlEventTest;
+
+YXmlEventTest* yxml_event_test_new() {
+    YXmlEventTest* t = (YXmlEventTest*)malloc(sizeof(YXmlEventTest));
+    t->target = NULL;
+    t->keys = NULL;
+    t->keys_len = 0;
+    t->delta_len = 0;
+    t->delta = NULL;
+
+    return t;
+}
+
+void yxml_test_observe(void* state, const YXmlEvent* e) {
+    YXmlEventTest* t = (YXmlEventTest*) state;
+    t->target = yxml_event_target(e);
+    t->keys = yxml_event_keys(e, &t->keys_len);
+    t->delta = yxml_event_delta(e, &t->delta_len);
+}
+
+void yxml_test_clean(YXmlEventTest* t) {
+    yxmlelem_destroy(t->target);
+    yevent_keys_destroy(t->keys, t->keys_len);
+    yevent_delta_destroy(t->delta, t->delta_len);
+    t->target = NULL;
+    t->keys = NULL;
+    t->delta = NULL;
+    t->delta_len = 0;
+    t->keys_len = 0;
+}
+
 TEST_CASE("YXmlElement observe") {
     YDoc* doc = ydoc_new_with_id(1);
     YTransaction* txn = ytransaction_new(doc);
     YXmlElement* xml = yxmlelem(txn, "test");
 
-    YEventTest* t = yevent_test_new();
-    YObserver* sub = yxmlelem_observe(xml, (void*)t, &test_observe);
+    YXmlEventTest* t = yxml_event_test_new();
+    unsigned int sub = yxmlelem_observe(xml, (void*)t, &yxml_test_observe);
 
     // insert initial attributes
     yxmlelem_insert_attr(xml, txn, "attr1", "value1");
     yxmlelem_insert_attr(xml, txn, "attr2", "value2");
     ytransaction_commit(txn);
 
-    REQUIRE(t->target->tag == Y_XML_ELEM);
+    REQUIRE(t->target != NULL);
     REQUIRE(t->keys_len == 2);
 
     for (int i = 0; i < t->keys_len; i++) {
@@ -716,13 +802,13 @@ TEST_CASE("YXmlElement observe") {
     }
 
     // update attributes
-    test_clean(t);
+    yxml_test_clean(t);
     txn = ytransaction_new(doc);
     yxmlelem_insert_attr(xml, txn, "attr1", "value11");
     yxmlelem_remove_attr(xml, txn, "attr2");
     ytransaction_commit(txn);
 
-    REQUIRE(t->target->tag == Y_XML_ELEM);
+    REQUIRE(t->target != NULL);
     REQUIRE(t->keys_len == 2);
 
     for (int i = 0; i < t->keys_len; i++) {
@@ -747,13 +833,13 @@ TEST_CASE("YXmlElement observe") {
     }
 
     // add children
-    test_clean(t);
+    yxml_test_clean(t);
     txn = ytransaction_new(doc);
     YXmlElement* div = yxmlelem_insert_elem(xml, txn, 0, "div");
     YXmlElement* p = yxmlelem_insert_elem(xml, txn, 1, "p");
     ytransaction_commit(txn);
 
-    REQUIRE(t->target->tag == Y_XML_ELEM);
+    REQUIRE(t->target != NULL);
     REQUIRE(t->delta_len == 1);
 
     REQUIRE(t->delta[0].tag == Y_EVENT_CHANGE_ADD);
@@ -763,12 +849,12 @@ TEST_CASE("YXmlElement observe") {
     yxmlelem_destroy(p);
 
     // remove a child
-    test_clean(t);
+    yxml_test_clean(t);
     txn = ytransaction_new(doc);
     yxmlelem_remove_range(xml, txn, 1, 1);
     ytransaction_commit(txn);
 
-    REQUIRE(t->target->tag == Y_XML_ELEM);
+    REQUIRE(t->target != NULL);
     REQUIRE(t->delta_len == 2);
     REQUIRE(t->delta[0].tag == Y_EVENT_CHANGE_RETAIN);
     REQUIRE(t->delta[0].len == 1);
@@ -776,12 +862,12 @@ TEST_CASE("YXmlElement observe") {
     REQUIRE(t->delta[1].len == 1);
 
     // insert child again
-    test_clean(t);
+    yxml_test_clean(t);
     txn = ytransaction_new(doc);
     div = yxmlelem_insert_elem(xml, txn, 1, "div");
     ytransaction_commit(txn);
 
-    REQUIRE(t->target->tag == Y_XML_ELEM);
+    REQUIRE(t->target != NULL);
     REQUIRE(t->delta_len == 2);
     REQUIRE(t->delta[0].tag == Y_EVENT_CHANGE_RETAIN);
     REQUIRE(t->delta[0].len == 1);
@@ -791,8 +877,8 @@ TEST_CASE("YXmlElement observe") {
     yxmlelem_destroy(div);
 
     // free the observer and make sure that callback is no longer called
-    test_clean(t);
-    yobserver_destroy(sub);
+    yxml_test_clean(t);
+    yxmlelem_unobserve(xml, sub);
     txn = ytransaction_new(doc);
     YXmlElement* inner = yxmlelem_insert_elem(xml, txn, 0, "head");
     ytransaction_commit(txn);
