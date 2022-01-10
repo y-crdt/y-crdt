@@ -1,10 +1,8 @@
 use crate::update::Update;
 use crate::Transaction;
 use rand::RngCore;
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ptr::NonNull;
-use std::rc::{Rc, Weak};
 
 pub(crate) struct EventHandler<T>(Box<Subscriptions<T>>);
 

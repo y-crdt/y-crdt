@@ -2660,7 +2660,7 @@ pub unsafe extern "C" fn yarray_unobserve(array: *mut Array, subscription_id: c_
 /// Releases a callback subscribed via `<shared_type>_observe` function represented by passed
 /// observer parameter.
 #[no_mangle]
-pub unsafe extern "C" fn ymap_unobserve(map: *mut Array, subscription_id: c_uint) {
+pub unsafe extern "C" fn ymap_unobserve(map: *mut Map, subscription_id: c_uint) {
     let txt = map.as_ref().unwrap();
     txt.unobserve(subscription_id as SubscriptionId);
 }
