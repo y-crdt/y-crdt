@@ -1,9 +1,10 @@
 use crate::block::{Item, ItemContent, ItemPosition, Prelim};
+use crate::event::Subscription;
 use crate::store::Store;
 use crate::types::text::TextEvent;
 use crate::types::{
     event_change_set, event_keys, Branch, BranchRef, Change, ChangeSet, Entries, EntryChange, Map,
-    Observer, Observers, Path, Text, TypePtr, Value, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT,
+    Observers, Path, Text, TypePtr, Value, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT,
     TYPE_REFS_XML_TEXT,
 };
 use crate::{Transaction, ID};
@@ -268,11 +269,15 @@ impl XmlElement {
     /// Attribute changes can be tracked by using [Event::keys] method.
     ///
     /// Returns an [Observer] which, when dropped, will unsubscribe current callback.
-    pub fn observe<F>(&self, f: F) -> Observer<XmlEvent>
+    pub fn observe<F>(&self, f: F) -> Subscription<XmlEvent>
     where
         F: Fn(&Transaction, &XmlEvent) -> () + 'static,
     {
         self.0.observe(f)
+    }
+
+    pub fn unobserve(&self, subscription_id: u32) {
+        self.0.unobserve(subscription_id);
     }
 }
 
@@ -419,15 +424,22 @@ impl XmlFragment {
         }
     }
 
-    pub fn observe<F>(&self, f: F) -> Observer<XmlEvent>
+    pub fn observe<F>(&self, f: F) -> Subscription<XmlEvent>
     where
         F: Fn(&Transaction, &XmlEvent) -> () + 'static,
     {
         let mut branch = self.0.borrow_mut();
         if let Observers::Xml(eh) = branch.observers.get_or_insert_with(Observers::xml) {
-            Observer(eh.subscribe(f))
+            eh.subscribe(f)
         } else {
             panic!("Observed collection is of different type") //TODO: this should be Result::Err
+        }
+    }
+
+    pub fn unobserve(&self, subscription_id: u32) {
+        let mut branch = self.0.borrow_mut();
+        if let Some(Observers::Array(eh)) = branch.observers.as_mut() {
+            eh.unsubscribe(subscription_id);
         }
     }
 }
@@ -706,11 +718,15 @@ impl XmlText {
     /// XML text attribute changes can be tracked using [Event::keys] method.
     ///
     /// Returns an [Observer] which, when dropped, will unsubscribe current callback.
-    pub fn observe<F>(&self, f: F) -> Observer<TextEvent>
+    pub fn observe<F>(&self, f: F) -> Subscription<TextEvent>
     where
         F: Fn(&Transaction, &TextEvent) -> () + 'static,
     {
         self.0.observe(f)
+    }
+
+    pub fn unobserve(&self, subscription_id: u32) {
+        self.0.unobserve(subscription_id)
     }
 }
 
@@ -829,6 +845,10 @@ impl XmlEvent {
             keys: UnsafeCell::new(Err(key_changes)),
             children_changed,
         }
+    }
+
+    pub fn children_changed(&self) -> bool {
+        self.children_changed
     }
 
     pub fn target(&self) -> &XmlElement {

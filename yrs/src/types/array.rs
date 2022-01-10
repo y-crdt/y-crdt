@@ -1,7 +1,8 @@
 use crate::block::{BlockPtr, ItemContent, ItemPosition, Prelim};
+use crate::event::Subscription;
 use crate::types::{
-    event_change_set, Branch, BranchRef, Change, ChangeSet, Observer, Observers, Path, TypePtr,
-    Value, TYPE_REFS_ARRAY,
+    event_change_set, Branch, BranchRef, Change, ChangeSet, Observers, Path, TypePtr, Value,
+    TYPE_REFS_ARRAY,
 };
 use crate::{Transaction, ID};
 use lib0::any::Any;
@@ -133,15 +134,22 @@ impl Array {
     /// All array changes can be tracked by using [Event::delta] method.
     ///
     /// Returns an [Observer] which, when dropped, will unsubscribe current callback.
-    pub fn observe<F>(&self, f: F) -> Observer<ArrayEvent>
+    pub fn observe<F>(&self, f: F) -> Subscription<ArrayEvent>
     where
         F: Fn(&Transaction, &ArrayEvent) -> () + 'static,
     {
         let mut branch = self.0.borrow_mut();
         if let Observers::Array(eh) = branch.observers.get_or_insert_with(Observers::array) {
-            Observer(eh.subscribe(f))
+            eh.subscribe(f)
         } else {
             panic!("Observed collection is of different type") //TODO: this should be Result::Err
+        }
+    }
+
+    pub fn unobserve(&self, subscription_id: u32) {
+        let mut branch = self.0.borrow_mut();
+        if let Some(Observers::Array(eh)) = branch.observers.as_mut() {
+            eh.unsubscribe(subscription_id);
         }
     }
 }

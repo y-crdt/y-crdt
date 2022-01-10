@@ -1,7 +1,8 @@
 use crate::block::{BlockPtr, Item, ItemContent, ItemPosition};
 use crate::block_store::Snapshot;
+use crate::event::Subscription;
 use crate::transaction::Transaction;
-use crate::types::{Branch, BranchRef, Observer, Observers, Path, Value};
+use crate::types::{Branch, BranchRef, Observers, Path, Value};
 use crate::*;
 use lib0::any::Any;
 use std::cell::{Ref, UnsafeCell};
@@ -463,15 +464,22 @@ impl Text {
     /// contains collection of individual characters rather than strings.
     ///
     /// Returns an [Observer] which, when dropped, will unsubscribe current callback.
-    pub fn observe<F>(&self, f: F) -> Observer<TextEvent>
+    pub fn observe<F>(&self, f: F) -> Subscription<TextEvent>
     where
         F: Fn(&Transaction, &TextEvent) -> () + 'static,
     {
         let mut branch = self.0.borrow_mut();
         if let Observers::Text(eh) = branch.observers.get_or_insert_with(Observers::text) {
-            Observer(eh.subscribe(f))
+            eh.subscribe(f)
         } else {
             panic!("Observed collection is of different type") //TODO: this should be Result::Err
+        }
+    }
+
+    pub fn unobserve(&self, subscription_id: u32) {
+        let mut branch = self.0.borrow_mut();
+        if let Some(Observers::Array(eh)) = branch.observers.as_mut() {
+            eh.unsubscribe(subscription_id);
         }
     }
 

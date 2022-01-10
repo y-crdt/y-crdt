@@ -1,6 +1,7 @@
 use crate::block::{ItemContent, ItemPosition, Prelim};
+use crate::event::Subscription;
 use crate::types::{
-    event_keys, Branch, BranchRef, Entries, EntryChange, Observer, Observers, Path, TypePtr, Value,
+    event_keys, Branch, BranchRef, Entries, EntryChange, Observers, Path, TypePtr, Value,
     TYPE_REFS_MAP,
 };
 use crate::*;
@@ -143,15 +144,22 @@ impl Map {
     /// All map changes can be tracked by using [Event::keys] method.
     ///
     /// Returns an [Observer] which, when dropped, will unsubscribe current callback.
-    pub fn observe<F>(&self, f: F) -> Observer<MapEvent>
+    pub fn observe<F>(&self, f: F) -> Subscription<MapEvent>
     where
         F: Fn(&Transaction, &MapEvent) -> () + 'static,
     {
         let mut branch = self.0.borrow_mut();
         if let Observers::Map(eh) = branch.observers.get_or_insert_with(Observers::map) {
-            Observer(eh.subscribe(f))
+            eh.subscribe(f)
         } else {
             panic!("Observed collection is of different type") //TODO: this should be Result::Err
+        }
+    }
+
+    pub fn unobserve(&self, subscription_id: u32) {
+        let mut branch = self.0.borrow_mut();
+        if let Some(Observers::Array(eh)) = branch.observers.as_mut() {
+            eh.unsubscribe(subscription_id);
         }
     }
 }
