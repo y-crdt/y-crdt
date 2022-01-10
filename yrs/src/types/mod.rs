@@ -802,10 +802,6 @@ pub enum EntryChange {
     Removed(Value),
 }
 
-/// Subscription handler returned by `observe` method of shared data types. When dropped, causes
-/// previously registered callbacks to be unsubscribed.
-pub struct Observer<T>(Subscription<T>);
-
 pub(crate) fn event_keys(
     txn: &Transaction,
     target: &BranchRef,

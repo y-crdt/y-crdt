@@ -3,15 +3,18 @@ use crate::Transaction;
 use rand::RngCore;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::ptr::NonNull;
 use std::rc::{Rc, Weak};
 
-pub(crate) struct EventHandler<T>(Rc<RefCell<Subscriptions<T>>>);
+pub(crate) struct EventHandler<T>(Box<Subscriptions<T>>);
 
-type Subscriptions<T> = HashMap<u32, Box<dyn Fn(&Transaction, &T) -> ()>>;
+pub type SubscriptionId = u32;
+
+type Subscriptions<T> = HashMap<SubscriptionId, Box<dyn Fn(&Transaction, &T) -> ()>>;
 
 impl<T> EventHandler<T> {
     pub fn new() -> Self {
-        EventHandler(Rc::new(RefCell::new(Subscriptions::new())))
+        EventHandler(Box::new(Subscriptions::new()))
     }
 
     pub fn subscribe<F>(&mut self, f: F) -> Subscription<T>
@@ -20,24 +23,27 @@ impl<T> EventHandler<T> {
     {
         let mut rng = rand::thread_rng();
         let id = rng.next_u32();
-        self.0.borrow_mut().insert(id, Box::new(f));
-        let subscriptions = Rc::downgrade(&self.0);
+        self.0.insert(id, Box::new(f));
+        let subscriptions = NonNull::from(self.0.as_mut());
         Subscription { id, subscriptions }
     }
 
+    pub fn unsubscribe(&mut self, subscription_id: u32) {
+        self.0.remove(&subscription_id);
+    }
+
     pub fn publish(&self, txn: &Transaction, arg: &T) {
-        let subscriptions = self.0.borrow_mut();
-        for f in subscriptions.values() {
+        for f in self.0.values() {
             f(txn, arg);
         }
     }
 
     pub fn has_subscribers(&self) -> bool {
-        !self.0.borrow().is_empty()
+        !self.0.is_empty()
     }
 
     fn subscription_count(&self) -> usize {
-        self.0.borrow().len()
+        self.0.len()
     }
 }
 
@@ -50,15 +56,22 @@ impl<T> Default for EventHandler<T> {
 /// A subscription handle to a custom user-defined callback for an event handler. When dropped,
 /// it will unsubscribe corresponding callback.
 pub struct Subscription<T> {
-    id: u32,
-    subscriptions: Weak<RefCell<Subscriptions<T>>>,
+    id: SubscriptionId,
+    subscriptions: NonNull<Subscriptions<T>>,
+}
+
+impl<T> Into<SubscriptionId> for Subscription<T> {
+    fn into(self) -> SubscriptionId {
+        let id = self.id;
+        std::mem::forget(self);
+        id
+    }
 }
 
 impl<T> Drop for Subscription<T> {
     fn drop(&mut self) {
-        if let Some(cell) = self.subscriptions.upgrade() {
-            cell.borrow_mut().remove(&self.id);
-        }
+        let subs = unsafe { self.subscriptions.as_mut() };
+        subs.remove(&self.id);
     }
 }
 

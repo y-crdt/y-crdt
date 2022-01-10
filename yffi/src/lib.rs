@@ -2,18 +2,23 @@ use lib0::any::Any;
 use std::collections::HashMap;
 use std::ffi::{c_void, CStr, CString};
 use std::mem::{forget, ManuallyDrop, MaybeUninit};
-use std::os::raw::{c_char, c_float, c_int, c_long, c_uchar, c_ulong};
-use std::ptr::null;
+use std::ops::Deref;
+use std::os::raw::{c_char, c_float, c_int, c_long, c_uchar, c_uint, c_ulong};
+use std::ptr::{null, null_mut};
 use yrs::block::{ItemContent, Prelim};
+use yrs::types::array::ArrayEvent;
+use yrs::types::map::MapEvent;
+use yrs::types::text::{Attrs, Delta, TextEvent};
+use yrs::types::xml::XmlEvent;
 use yrs::types::{
-    Branch, BranchRef, Change, EntryChange, Event, PathSegment, TypePtr, Value, TYPE_REFS_ARRAY,
+    Branch, BranchRef, Change, EntryChange, PathSegment, TypePtr, Value, TYPE_REFS_ARRAY,
     TYPE_REFS_MAP, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT,
 };
 use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1};
-use yrs::Xml;
 use yrs::{OffsetKind, Update};
 use yrs::{Options, StateVector};
+use yrs::{SubscriptionId, Xml};
 
 /// Flag used by `YInput` and `YOutput` to tag boolean values.
 pub const Y_JSON_BOOL: c_char = -8;
@@ -187,10 +192,6 @@ pub type Attributes = yrs::types::xml::Attributes<'static>;
 /// the order in which children are ordered within their parent nodes) and using **depth-first**
 /// traverse.
 pub type TreeWalker = yrs::types::xml::TreeWalker<'static>;
-
-/// Subscription handle returned by observe functions. It can be released via `yobserver_destroy`
-/// function in order to cancel subscribed callback.
-pub type Observer = yrs::types::Observer;
 
 /// A structure representing single key-value entry of a map output (used by either
 /// embedded JSON-like maps or YMaps).
@@ -2455,129 +2456,260 @@ pub unsafe extern "C" fn youtput_read_yxmltext(val: *const YOutput) -> *mut XmlT
 pub unsafe extern "C" fn ytext_observe(
     txt: *const Text,
     state: *mut c_void,
-    cb: extern "C" fn(*mut c_void, *const YEvent),
-) -> *mut Observer {
+    cb: extern "C" fn(*mut c_void, *const YTextEvent),
+) -> c_uint {
     assert!(!txt.is_null());
 
     let txt = txt.as_ref().unwrap();
     let observer = txt.observe(move |txn, e| {
-        let e = YEvent::new(e, txn);
-        cb(state, &e as *const YEvent);
+        let e = YTextEvent::new(e, txn);
+        cb(state, &e as *const YTextEvent);
     });
-    Box::into_raw(Box::new(observer)) as *mut _
+    let subscription_id: u32 = observer.into();
+    subscription_id as c_uint
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn ymap_observe(
     map: *const Map,
     state: *mut c_void,
-    cb: extern "C" fn(*mut c_void, *const YEvent),
-) -> *mut Observer {
+    cb: extern "C" fn(*mut c_void, *const YMapEvent),
+) -> c_uint {
     assert!(!map.is_null());
 
     let map = map.as_ref().unwrap();
     let observer = map.observe(move |txn, e| {
-        let e = YEvent::new(e, txn);
-        cb(state, &e as *const YEvent);
+        let e = YMapEvent::new(e, txn);
+        cb(state, &e as *const YMapEvent);
     });
-    Box::into_raw(Box::new(observer)) as *mut _
+    let subscription_id: u32 = observer.into();
+    subscription_id as c_uint
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn yarray_observe(
     array: *const Array,
     state: *mut c_void,
-    cb: extern "C" fn(*mut c_void, *const YEvent),
-) -> *mut Observer {
+    cb: extern "C" fn(*mut c_void, *const YArrayEvent),
+) -> c_uint {
     assert!(!array.is_null());
 
     let array = array.as_ref().unwrap();
     let observer = array.observe(move |txn, e| {
-        let e = YEvent::new(e, txn);
-        cb(state, &e as *const YEvent);
+        let e = YArrayEvent::new(e, txn);
+        cb(state, &e as *const YArrayEvent);
     });
-    Box::into_raw(Box::new(observer)) as *mut _
+    let subscription_id: u32 = observer.into();
+    subscription_id as c_uint
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn yxmlelem_observe(
     xml: *const XmlElement,
     state: *mut c_void,
-    cb: extern "C" fn(*mut c_void, *const YEvent),
-) -> *mut Observer {
+    cb: extern "C" fn(*mut c_void, *const YXmlEvent),
+) -> c_uint {
     assert!(!xml.is_null());
 
     let xml = xml.as_ref().unwrap();
     let observer = xml.observe(move |txn, e| {
-        let e = YEvent::new(e, txn);
-        cb(state, &e as *const YEvent);
+        let e = YXmlEvent::new(e, txn);
+        cb(state, &e as *const YXmlEvent);
     });
-    Box::into_raw(Box::new(observer)) as *mut _
+    let subscription_id: u32 = observer.into();
+    subscription_id as c_uint
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn yxmltext_observe(
     xml: *const XmlText,
     state: *mut c_void,
-    cb: extern "C" fn(*mut c_void, *const YEvent),
-) -> *mut Observer {
+    cb: extern "C" fn(*mut c_void, *const YTextEvent),
+) -> c_uint {
     assert!(!xml.is_null());
 
     let xml = xml.as_ref().unwrap();
     let observer = xml.observe(move |txn, e| {
-        let e = YEvent::new(e, txn);
-        cb(state, &e as *const YEvent);
+        let e = YTextEvent::new(e, txn);
+        cb(state, &e as *const YTextEvent);
     });
-    Box::into_raw(Box::new(observer)) as *mut _
+    let subscription_id: u32 = observer.into();
+    subscription_id as c_uint
 }
 
-/// Event passed over to a callbacks subscribed via <shared_type>_observe functions. It enables
-/// tracking changes happening over different shared collection types, which can be separated into:
-///
-/// 1. `yevent_delta` function, which returns changes over a sequence component of shared types,
-/// such as `YArray`, `YText`, `YXmlText` and XML nodes added to `YXmlElement`. Data returned this
-/// way should be disposed eventually via `yevent_delta_destroy` function.
-/// 2. `yevent_keys` function, which returns changes over a map component of shared types, such as
-/// `YMap` entries and `YXmlElement`/`YXmlText` attribute changed. Data returned this way should be
-/// disposed eventually via `yevent_keys_destroy` function.
 #[repr(C)]
-pub struct YEvent {
-    inner: *const Event,
+pub struct YTextEvent {
+    inner: *const c_void,
     pub txn: *const Transaction,
 }
 
-impl YEvent {
-    fn new(inner: &Event, txn: &Transaction) -> Self {
-        let inner = inner as *const Event;
+impl YTextEvent {
+    fn new(inner: &TextEvent, txn: &Transaction) -> Self {
+        let inner = inner as *const TextEvent as *const _;
         let txn = txn as *const Transaction;
-        YEvent { inner, txn }
+        YTextEvent { inner, txn }
+    }
+
+    fn txn(&self) -> &Transaction {
+        unsafe { self.txn.as_ref().unwrap() }
     }
 }
 
-impl YEvent {
-    unsafe fn inner(&self) -> &Event {
-        &*self.inner
+impl Deref for YTextEvent {
+    type Target = TextEvent;
+
+    fn deref(&self) -> &Self::Target {
+        unsafe { (self.inner as *const TextEvent).as_ref().unwrap() }
+    }
+}
+
+#[repr(C)]
+pub struct YArrayEvent {
+    inner: *const c_void,
+    pub txn: *const Transaction,
+}
+
+impl YArrayEvent {
+    fn new(inner: &ArrayEvent, txn: &Transaction) -> Self {
+        let inner = inner as *const ArrayEvent as *const _;
+        let txn = txn as *const Transaction;
+        YArrayEvent { inner, txn }
     }
 
-    unsafe fn txn(&self) -> &Transaction {
-        &*self.txn
+    fn txn(&self) -> &Transaction {
+        unsafe { self.txn.as_ref().unwrap() }
+    }
+}
+
+impl Deref for YArrayEvent {
+    type Target = ArrayEvent;
+
+    fn deref(&self) -> &Self::Target {
+        unsafe { (self.inner as *const ArrayEvent).as_ref().unwrap() }
+    }
+}
+
+#[repr(C)]
+pub struct YMapEvent {
+    inner: *const c_void,
+    pub txn: *const Transaction,
+}
+
+impl YMapEvent {
+    fn new(inner: &MapEvent, txn: &Transaction) -> Self {
+        let inner = inner as *const MapEvent as *const _;
+        let txn = txn as *const Transaction;
+        YMapEvent { inner, txn }
+    }
+
+    fn txn(&self) -> &Transaction {
+        unsafe { self.txn.as_ref().unwrap() }
+    }
+}
+
+impl Deref for YMapEvent {
+    type Target = MapEvent;
+
+    fn deref(&self) -> &Self::Target {
+        unsafe { (self.inner as *const MapEvent).as_ref().unwrap() }
+    }
+}
+
+#[repr(C)]
+pub struct YXmlEvent {
+    inner: *const c_void,
+    pub txn: *const Transaction,
+}
+
+impl YXmlEvent {
+    fn new(inner: &XmlEvent, txn: &Transaction) -> Self {
+        let inner = inner as *const XmlEvent as *const _;
+        let txn = txn as *const Transaction;
+        YXmlEvent { inner, txn }
+    }
+
+    fn txn(&self) -> &Transaction {
+        unsafe { self.txn.as_ref().unwrap() }
+    }
+}
+
+impl Deref for YXmlEvent {
+    type Target = XmlEvent;
+
+    fn deref(&self) -> &Self::Target {
+        unsafe { (self.inner as *const XmlEvent).as_ref().unwrap() }
     }
 }
 
 /// Releases a callback subscribed via `<shared_type>_observe` function represented by passed
 /// observer parameter.
 #[no_mangle]
-pub unsafe extern "C" fn yobserver_destroy(e: *mut Observer) {
-    if !e.is_null() {
-        drop(e.read());
-    }
+pub unsafe extern "C" fn ytext_unobserve(text: *mut Text, subscription_id: c_uint) {
+    let txt = text.as_ref().unwrap();
+    txt.unobserve(subscription_id as SubscriptionId);
+}
+
+/// Releases a callback subscribed via `<shared_type>_observe` function represented by passed
+/// observer parameter.
+#[no_mangle]
+pub unsafe extern "C" fn yarray_unobserve(array: *mut Array, subscription_id: c_uint) {
+    let txt = array.as_ref().unwrap();
+    txt.unobserve(subscription_id as SubscriptionId);
+}
+
+/// Releases a callback subscribed via `<shared_type>_observe` function represented by passed
+/// observer parameter.
+#[no_mangle]
+pub unsafe extern "C" fn ymap_unobserve(map: *mut Array, subscription_id: c_uint) {
+    let txt = map.as_ref().unwrap();
+    txt.unobserve(subscription_id as SubscriptionId);
+}
+
+/// Releases a callback subscribed via `<shared_type>_observe` function represented by passed
+/// observer parameter.
+#[no_mangle]
+pub unsafe extern "C" fn yxmlelem_unobserve(xml: *mut XmlElement, subscription_id: c_uint) {
+    let xml = xml.as_ref().unwrap();
+    xml.unobserve(subscription_id as SubscriptionId);
+}
+
+/// Releases a callback subscribed via `<shared_type>_observe` function represented by passed
+/// observer parameter.
+#[no_mangle]
+pub unsafe extern "C" fn yxmltext_unobserve(xml: *mut XmlText, subscription_id: c_uint) {
+    let xml = xml.as_ref().unwrap();
+    xml.unobserve(subscription_id as SubscriptionId);
 }
 
 /// Returns a pointer to a shared collection, which triggered passed event `e`.
 #[no_mangle]
-pub unsafe extern "C" fn yevent_target(e: *const YEvent) -> *mut YOutput {
+pub unsafe extern "C" fn ytext_event_target(e: *const YTextEvent) -> *mut Text {
     assert!(!e.is_null());
-    let out: YOutput = (&*e).inner().target().into();
+    let out = (&*e).target().clone();
+    Box::into_raw(Box::new(out)) as *mut _
+}
+
+/// Returns a pointer to a shared collection, which triggered passed event `e`.
+#[no_mangle]
+pub unsafe extern "C" fn yarray_event_target(e: *const YArrayEvent) -> *mut Array {
+    assert!(!e.is_null());
+    let out = (&*e).target().clone();
+    Box::into_raw(Box::new(out)) as *mut _
+}
+
+/// Returns a pointer to a shared collection, which triggered passed event `e`.
+#[no_mangle]
+pub unsafe extern "C" fn ymap_event_target(e: *const YMapEvent) -> *mut Map {
+    assert!(!e.is_null());
+    let out = (&*e).target().clone();
+    Box::into_raw(Box::new(out)) as *mut _
+}
+
+/// Returns a pointer to a shared collection, which triggered passed event `e`.
+#[no_mangle]
+pub unsafe extern "C" fn yxml_event_target(e: *const YXmlEvent) -> *mut XmlElement {
+    assert!(!e.is_null());
+    let out = (&*e).target().clone();
     Box::into_raw(Box::new(out)) as *mut _
 }
 
@@ -2588,11 +2720,83 @@ pub unsafe extern "C" fn yevent_target(e: *const YEvent) -> *mut YOutput {
 ///
 /// Path returned this way should be eventually released using `yevent_path_destroy`.
 #[no_mangle]
-pub unsafe extern "C" fn yevent_path(e: *const YEvent, len: *mut c_int) -> *mut YPathSegment {
+pub unsafe extern "C" fn ytext_event_path(
+    e: *const YTextEvent,
+    len: *mut c_int,
+) -> *mut YPathSegment {
     assert!(!e.is_null());
-    let path: Vec<_> = (&*e)
-        .inner()
-        .path((&*e).txn())
+    let e = &*e;
+    let path: Vec<_> = e
+        .path(e.txn())
+        .into_iter()
+        .map(YPathSegment::from)
+        .collect();
+    let out = path.into_boxed_slice();
+    *len = out.len() as c_int;
+    Box::into_raw(out) as *mut _
+}
+
+/// Returns a path from a root type down to a current shared collection (which can be obtained using
+/// `yevent_target` function). It can consist of either integer indexes (used by sequence
+/// components) of *char keys (used by map components). `len` output parameter is used to provide
+/// information about length of the path.
+///
+/// Path returned this way should be eventually released using `yevent_path_destroy`.
+#[no_mangle]
+pub unsafe extern "C" fn ymap_event_path(
+    e: *const YMapEvent,
+    len: *mut c_int,
+) -> *mut YPathSegment {
+    assert!(!e.is_null());
+    let e = &*e;
+    let path: Vec<_> = e
+        .path(e.txn())
+        .into_iter()
+        .map(YPathSegment::from)
+        .collect();
+    let out = path.into_boxed_slice();
+    *len = out.len() as c_int;
+    Box::into_raw(out) as *mut _
+}
+
+/// Returns a path from a root type down to a current shared collection (which can be obtained using
+/// `yevent_target` function). It can consist of either integer indexes (used by sequence
+/// components) of *char keys (used by map components). `len` output parameter is used to provide
+/// information about length of the path.
+///
+/// Path returned this way should be eventually released using `yevent_path_destroy`.
+#[no_mangle]
+pub unsafe extern "C" fn yxml_event_path(
+    e: *const YXmlEvent,
+    len: *mut c_int,
+) -> *mut YPathSegment {
+    assert!(!e.is_null());
+    let e = &*e;
+    let path: Vec<_> = e
+        .path(e.txn())
+        .into_iter()
+        .map(YPathSegment::from)
+        .collect();
+    let out = path.into_boxed_slice();
+    *len = out.len() as c_int;
+    Box::into_raw(out) as *mut _
+}
+
+/// Returns a path from a root type down to a current shared collection (which can be obtained using
+/// `yevent_target` function). It can consist of either integer indexes (used by sequence
+/// components) of *char keys (used by map components). `len` output parameter is used to provide
+/// information about length of the path.
+///
+/// Path returned this way should be eventually released using `yevent_path_destroy`.
+#[no_mangle]
+pub unsafe extern "C" fn yarray_event_path(
+    e: *const YArrayEvent,
+    len: *mut c_int,
+) -> *mut YPathSegment {
+    assert!(!e.is_null());
+    let e = &*e;
+    let path: Vec<_> = e
+        .path(e.txn())
         .into_iter()
         .map(YPathSegment::from)
         .collect();
@@ -2603,7 +2807,7 @@ pub unsafe extern "C" fn yevent_path(e: *const YEvent, len: *mut c_int) -> *mut 
 
 /// Releases allocated memory used by objects returned from `yevent_path` function.
 #[no_mangle]
-pub unsafe extern "C" fn yevent_path_destroy(path: *mut YPathSegment, len: c_int) {
+pub unsafe extern "C" fn ypath_destroy(path: *mut YPathSegment, len: c_int) {
     if !path.is_null() {
         drop(Vec::from_raw_parts(path, len as usize, len as usize));
     }
@@ -2616,11 +2820,31 @@ pub unsafe extern "C" fn yevent_path_destroy(path: *mut YPathSegment, len: c_int
 /// Delta returned from this function should eventually be released using `yevent_delta_destroy`
 /// function.
 #[no_mangle]
-pub unsafe extern "C" fn yevent_delta(e: *const YEvent, len: *mut c_int) -> *mut YEventChange {
+pub unsafe extern "C" fn ytext_event_delta(e: *const YTextEvent, len: *mut c_int) -> *mut YDelta {
     assert!(!e.is_null());
-    let delta: Vec<_> = (&*e)
-        .inner()
-        .delta((&*e).txn())
+    let e = &*e;
+    let delta: Vec<_> = e.delta(e.txn()).into_iter().map(YDelta::from).collect();
+
+    let out = delta.into_boxed_slice();
+    *len = out.len() as c_int;
+    Box::into_raw(out) as *mut _
+}
+
+/// Returns a sequence of changes produced by sequence component of shared collections (such as
+/// `YText`, `YXmlText` and XML nodes added to `YXmlElement`). `len` output parameter is used to
+/// provide information about number of changes produced.
+///
+/// Delta returned from this function should eventually be released using `yevent_delta_destroy`
+/// function.
+#[no_mangle]
+pub unsafe extern "C" fn yarray_event_delta(
+    e: *const YArrayEvent,
+    len: *mut c_int,
+) -> *mut YEventChange {
+    assert!(!e.is_null());
+    let e = &*e;
+    let delta: Vec<_> = e
+        .delta(e.txn())
         .into_iter()
         .map(YEventChange::from)
         .collect();
@@ -2628,6 +2852,39 @@ pub unsafe extern "C" fn yevent_delta(e: *const YEvent, len: *mut c_int) -> *mut
     let out = delta.into_boxed_slice();
     *len = out.len() as c_int;
     Box::into_raw(out) as *mut _
+}
+
+/// Returns a sequence of changes produced by sequence component of shared collections (such as
+/// `YText`, `YXmlText` and XML nodes added to `YXmlElement`). `len` output parameter is used to
+/// provide information about number of changes produced.
+///
+/// Delta returned from this function should eventually be released using `yevent_delta_destroy`
+/// function.
+#[no_mangle]
+pub unsafe extern "C" fn yxml_event_delta(
+    e: *const YXmlEvent,
+    len: *mut c_int,
+) -> *mut YEventChange {
+    assert!(!e.is_null());
+    let e = &*e;
+    let delta: Vec<_> = e
+        .delta(e.txn())
+        .into_iter()
+        .map(YEventChange::from)
+        .collect();
+
+    let out = delta.into_boxed_slice();
+    *len = out.len() as c_int;
+    Box::into_raw(out) as *mut _
+}
+
+/// Releases memory allocated by the object returned from `yevent_delta` function.
+#[no_mangle]
+pub unsafe extern "C" fn ytext_delta_destroy(delta: *mut YDelta, len: c_int) {
+    if !delta.is_null() {
+        let delta = Vec::from_raw_parts(delta, len as usize, len as usize);
+        drop(delta);
+    }
 }
 
 /// Releases memory allocated by the object returned from `yevent_delta` function.
@@ -2646,11 +2903,38 @@ pub unsafe extern "C" fn yevent_delta_destroy(delta: *mut YEventChange, len: c_i
 /// Delta returned from this function should eventually be released using `yevent_keys_destroy`
 /// function.
 #[no_mangle]
-pub unsafe extern "C" fn yevent_keys(e: *const YEvent, len: *mut c_int) -> *mut YEventKeyChange {
+pub unsafe extern "C" fn ymap_event_keys(
+    e: *const YMapEvent,
+    len: *mut c_int,
+) -> *mut YEventKeyChange {
     assert!(!e.is_null());
-    let delta: Vec<_> = (&*e)
-        .inner()
-        .keys((&*e).txn())
+    let e = &*e;
+    let delta: Vec<_> = e
+        .keys(e.txn())
+        .into_iter()
+        .map(|(k, v)| YEventKeyChange::new(k.as_ref(), v))
+        .collect();
+
+    let out = delta.into_boxed_slice();
+    *len = out.len() as c_int;
+    Box::into_raw(out) as *mut _
+}
+
+/// Returns a sequence of changes produced by map component of shared collections (such as
+/// `YMap` and `YXmlText`/`YXmlElement` attribute changes). `len` output parameter is used to
+/// provide information about number of changes produced.
+///
+/// Delta returned from this function should eventually be released using `yevent_keys_destroy`
+/// function.
+#[no_mangle]
+pub unsafe extern "C" fn yxml_event_keys(
+    e: *const YXmlEvent,
+    len: *mut c_int,
+) -> *mut YEventKeyChange {
+    assert!(!e.is_null());
+    let e = &*e;
+    let delta: Vec<_> = e
+        .keys(e.txn())
         .into_iter()
         .map(|(k, v)| YEventKeyChange::new(k.as_ref(), v))
         .collect();
@@ -2823,6 +3107,141 @@ impl Drop for YEventChange {
                 drop(values);
             }
         }
+    }
+}
+
+/// A data type representing a single change detected over an observed shared collection. A type
+/// of change can be detected using a `tag` field:
+///
+/// 1. `Y_EVENT_CHANGE_ADD` marks a new elements added to a collection. In this case `values` field
+/// contains a pointer to a list of newly inserted values, while `len` field informs about their
+/// count.
+/// 2. `Y_EVENT_CHANGE_DELETE` marks an existing elements removed from the collection. In this case
+/// `len` field informs about number of removed elements.
+/// 3. `Y_EVENT_CHANGE_RETAIN` marks a number of elements that have not been changed, counted from
+/// the previous element. `len` field informs about number of retained elements.
+///
+/// A list of changes returned by `yevent_delta` enables to locate a position of all changes within
+/// an observed collection by using a combination of added/deleted change structs separated by
+/// retained changes (marking eg. number of elements that can be safely skipped, since they
+/// remained unchanged).
+#[repr(C)]
+pub struct YDelta {
+    /// Tag field used to identify particular type of change made:
+    ///
+    /// 1. `Y_EVENT_CHANGE_ADD` marks a new elements added to a collection. In this case `values`
+    /// field contains a pointer to a list of newly inserted values, while `len` field informs about
+    /// their count.
+    /// 2. `Y_EVENT_CHANGE_DELETE` marks an existing elements removed from the collection. In this
+    /// case `len` field informs about number of removed elements.
+    /// 3. `Y_EVENT_CHANGE_RETAIN` marks a number of elements that have not been changed, counted
+    /// from the previous element. `len` field informs about number of retained elements.
+    pub tag: c_char,
+
+    /// Number of element affected by current type of a change. It can refer to a number of
+    /// inserted `values`, number of deleted element or a number of retained (unchanged) values.  
+    pub len: c_int,
+
+    /// Used in case when current change is of `Y_EVENT_CHANGE_ADD` type. Contains a list (of
+    /// length stored in `len` field) of newly inserted values.
+    pub insert: *mut YOutput,
+
+    pub attributes_len: c_int,
+
+    pub attributes: *mut YDeltaAttr,
+}
+
+impl YDelta {
+    fn insert(value: &Value, attrs: &Option<Box<Attrs>>) -> Self {
+        let insert = Box::into_raw(Box::new(YOutput::from(value.clone())));
+        let (attributes_len, attributes) = if let Some(attrs) = attrs {
+            let len = attrs.len() as c_int;
+            let attrs: Vec<_> = attrs.iter().map(|(k, v)| YDeltaAttr::new(k, v)).collect();
+            let attrs = Box::into_raw(attrs.into_boxed_slice()) as *mut _;
+            (len, attrs)
+        } else {
+            (0, null_mut())
+        };
+
+        YDelta {
+            tag: Y_EVENT_CHANGE_ADD,
+            len: 1,
+            insert,
+            attributes_len,
+            attributes,
+        }
+    }
+
+    fn retain(len: u32, attrs: &Option<Box<Attrs>>) -> Self {
+        let (attributes_len, attributes) = if let Some(attrs) = attrs {
+            let len = attrs.len() as c_int;
+            let attrs: Vec<_> = attrs.iter().map(|(k, v)| YDeltaAttr::new(k, v)).collect();
+            let attrs = Box::into_raw(attrs.into_boxed_slice()) as *mut _;
+            (len, attrs)
+        } else {
+            (0, null_mut())
+        };
+        YDelta {
+            tag: Y_EVENT_CHANGE_RETAIN,
+            len: len as c_int,
+            insert: null_mut(),
+            attributes_len,
+            attributes,
+        }
+    }
+
+    fn delete(len: u32) -> Self {
+        YDelta {
+            tag: Y_EVENT_CHANGE_DELETE,
+            len: len as c_int,
+            insert: null_mut(),
+            attributes_len: 0,
+            attributes: null_mut(),
+        }
+    }
+}
+
+impl<'a> From<&'a Delta> for YDelta {
+    fn from(d: &Delta) -> Self {
+        match d {
+            Delta::Insert(value, attrs) => YDelta::insert(value, attrs),
+            Delta::Retain(len, attrs) => YDelta::retain(*len, attrs),
+            Delta::Delete(len) => YDelta::delete(*len),
+        }
+    }
+}
+
+impl Drop for YDelta {
+    fn drop(&mut self) {
+        unsafe {
+            if !self.attributes.is_null() {
+                let len = self.attributes_len as usize;
+                drop(Vec::from_raw_parts(self.attributes, len, len));
+            }
+            if !self.attributes.is_null() {
+                drop(Box::from_raw(self.insert));
+            }
+        }
+    }
+}
+
+#[repr(C)]
+pub struct YDeltaAttr {
+    key: *const c_char,
+    value: YOutput,
+}
+
+impl YDeltaAttr {
+    fn new(k: &Box<str>, v: &Any) -> Self {
+        let key = CString::new(k.as_ref()).unwrap().into_raw() as *const _;
+        let value = YOutput::from(v.clone());
+        YDeltaAttr { key, value }
+    }
+}
+
+impl Drop for YDeltaAttr {
+    fn drop(&mut self) {
+        unsafe { ystring_destroy(self.key as *mut _) }
     }
 }
 
