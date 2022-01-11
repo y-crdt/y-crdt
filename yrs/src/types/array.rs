@@ -272,7 +272,7 @@ impl ArrayEvent {
     }
 
     pub fn path(&self, txn: &Transaction) -> Path {
-        Branch::path(&self.current_target, &self.target.0, txn)
+        Branch::path(self.current_target.borrow(), self.target.0.borrow(), txn)
     }
 
     pub fn delta(&self, txn: &Transaction) -> &[Change] {

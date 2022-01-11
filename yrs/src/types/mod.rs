@@ -13,7 +13,7 @@ use crate::event::EventHandler;
 use crate::types::array::{Array, ArrayEvent};
 use crate::types::map::MapEvent;
 use crate::types::text::TextEvent;
-use crate::types::xml::{XmlElement, XmlEvent, XmlText};
+use crate::types::xml::{XmlElement, XmlEvent, XmlText, XmlTextEvent};
 use lib0::any::Any;
 use std::cell::{BorrowMutError, Ref, RefCell, RefMut};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -439,9 +439,9 @@ impl Branch {
         (None, None)
     }
 
-    pub(crate) fn path(from: &BranchRef, to: &BranchRef, txn: &Transaction) -> Path {
-        let parent = from.borrow();
-        let mut child = to.borrow();
+    pub(crate) fn path(from: Ref<Branch>, to: Ref<Branch>, txn: &Transaction) -> Path {
+        let parent = from;
+        let mut child = to;
         let mut path = VecDeque::default();
         while let TypePtr::Id(ptr) = &child.ptr {
             if parent.ptr == child.ptr {
@@ -714,6 +714,7 @@ enum Observers {
     Array(EventHandler<crate::types::array::ArrayEvent>),
     Map(EventHandler<crate::types::map::MapEvent>),
     Xml(EventHandler<crate::types::xml::XmlEvent>),
+    XmlText(EventHandler<crate::types::xml::XmlTextEvent>),
 }
 
 impl Observers {
@@ -729,6 +730,9 @@ impl Observers {
     pub fn xml() -> Self {
         Observers::Xml(EventHandler::default())
     }
+    pub fn xml_text() -> Self {
+        Observers::XmlText(EventHandler::default())
+    }
 
     pub fn publish(
         &self,
@@ -741,6 +745,7 @@ impl Observers {
             Observers::Array(eh) => eh.publish(txn, &ArrayEvent::new(branch_ref)),
             Observers::Map(eh) => eh.publish(txn, &MapEvent::new(branch_ref, keys)),
             Observers::Xml(eh) => eh.publish(txn, &XmlEvent::new(branch_ref, keys)),
+            Observers::XmlText(eh) => eh.publish(txn, &XmlTextEvent::new(branch_ref, keys)),
         }
     }
 }
@@ -802,13 +807,21 @@ pub enum EntryChange {
     Removed(Value),
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum Delta {
+    Insert(Value, Option<Box<Attrs>>),
+    Retain(u32, Option<Box<Attrs>>),
+    Delete(u32),
+}
+
+pub type Attrs = HashMap<Box<str>, Any>;
+
 pub(crate) fn event_keys(
     txn: &Transaction,
-    target: &BranchRef,
+    target: Ref<Branch>,
     keys_changed: &HashSet<Option<Rc<str>>>,
 ) -> HashMap<Rc<str>, EntryChange> {
     let mut keys = HashMap::new();
-    let target = target.borrow();
     for opt in keys_changed.iter() {
         if let Some(key) = opt {
             let item = target

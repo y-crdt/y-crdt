@@ -630,6 +630,11 @@ typedef struct YXmlEvent {
   const YTransaction *txn;
 } YXmlEvent;
 
+typedef struct YXmlTextEvent {
+  const void *inner;
+  const YTransaction *txn;
+} YXmlTextEvent;
+
 typedef union YPathSegmentCase {
   const char *key;
   int index;
@@ -1666,7 +1671,7 @@ unsigned int yxmlelem_observe(const YXmlElement *xml,
 
 unsigned int yxmltext_observe(const YXmlText *xml,
                               void *state,
-                              void (*cb)(void*, const struct YTextEvent*));
+                              void (*cb)(void*, const struct YXmlTextEvent*));
 
 /**
  * Releases a callback subscribed via `<shared_type>_observe` function represented by passed
@@ -1716,50 +1721,66 @@ YMap *ymap_event_target(const struct YMapEvent *e);
 /**
  * Returns a pointer to a shared collection, which triggered passed event `e`.
  */
-YXmlElement *yxml_event_target(const struct YXmlEvent *e);
+YXmlElement *yxmlelem_event_target(const struct YXmlEvent *e);
+
+/**
+ * Returns a pointer to a shared collection, which triggered passed event `e`.
+ */
+YXmlText *yxmltext_event_target(const struct YXmlTextEvent *e);
 
 /**
  * Returns a path from a root type down to a current shared collection (which can be obtained using
- * `yevent_target` function). It can consist of either integer indexes (used by sequence
+ * `ymap_event_target` function). It can consist of either integer indexes (used by sequence
  * components) of *char keys (used by map components). `len` output parameter is used to provide
  * information about length of the path.
  *
- * Path returned this way should be eventually released using `yevent_path_destroy`.
+ * Path returned this way should be eventually released using `ypath_destroy`.
  */
 struct YPathSegment *ytext_event_path(const struct YTextEvent *e, int *len);
 
 /**
  * Returns a path from a root type down to a current shared collection (which can be obtained using
- * `yevent_target` function). It can consist of either integer indexes (used by sequence
+ * `ymap_event_target` function). It can consist of either integer indexes (used by sequence
  * components) of *char keys (used by map components). `len` output parameter is used to provide
  * information about length of the path.
  *
- * Path returned this way should be eventually released using `yevent_path_destroy`.
+ * Path returned this way should be eventually released using `ypath_destroy`.
  */
 struct YPathSegment *ymap_event_path(const struct YMapEvent *e, int *len);
 
 /**
  * Returns a path from a root type down to a current shared collection (which can be obtained using
- * `yevent_target` function). It can consist of either integer indexes (used by sequence
+ * `yxmlelem_event_path` function). It can consist of either integer indexes (used by sequence
  * components) of *char keys (used by map components). `len` output parameter is used to provide
  * information about length of the path.
  *
- * Path returned this way should be eventually released using `yevent_path_destroy`.
+ * Path returned this way should be eventually released using `ypath_destroy`.
  */
-struct YPathSegment *yxml_event_path(const struct YXmlEvent *e, int *len);
+struct YPathSegment *yxmlelem_event_path(const struct YXmlEvent *e, int *len);
 
 /**
  * Returns a path from a root type down to a current shared collection (which can be obtained using
- * `yevent_target` function). It can consist of either integer indexes (used by sequence
+ * `yxmltext_event_path` function). It can consist of either integer indexes (used by sequence
  * components) of *char keys (used by map components). `len` output parameter is used to provide
  * information about length of the path.
  *
- * Path returned this way should be eventually released using `yevent_path_destroy`.
+ * Path returned this way should be eventually released using `ypath_destroy`.
+ */
+struct YPathSegment *yxmltext_event_path(const struct YXmlTextEvent *e, int *len);
+
+/**
+ * Returns a path from a root type down to a current shared collection (which can be obtained using
+ * `yarray_event_target` function). It can consist of either integer indexes (used by sequence
+ * components) of *char keys (used by map components). `len` output parameter is used to provide
+ * information about length of the path.
+ *
+ * Path returned this way should be eventually released using `ypath_destroy`.
  */
 struct YPathSegment *yarray_event_path(const struct YArrayEvent *e, int *len);
 
 /**
- * Releases allocated memory used by objects returned from `yevent_path` function.
+ * Releases allocated memory used by objects returned from path accessor functions of shared type
+ * events.
  */
 void ypath_destroy(struct YPathSegment *path, int len);
 
@@ -1781,6 +1802,16 @@ struct YDelta *ytext_event_delta(const struct YTextEvent *e, int *len);
  * Delta returned from this function should eventually be released using `yevent_delta_destroy`
  * function.
  */
+struct YDelta *yxmltext_event_delta(const struct YXmlTextEvent *e, int *len);
+
+/**
+ * Returns a sequence of changes produced by sequence component of shared collections (such as
+ * `YText`, `YXmlText` and XML nodes added to `YXmlElement`). `len` output parameter is used to
+ * provide information about number of changes produced.
+ *
+ * Delta returned from this function should eventually be released using `yevent_delta_destroy`
+ * function.
+ */
 struct YEventChange *yarray_event_delta(const struct YArrayEvent *e, int *len);
 
 /**
@@ -1791,7 +1822,7 @@ struct YEventChange *yarray_event_delta(const struct YArrayEvent *e, int *len);
  * Delta returned from this function should eventually be released using `yevent_delta_destroy`
  * function.
  */
-struct YEventChange *yxml_event_delta(const struct YXmlEvent *e, int *len);
+struct YEventChange *yxmlelem_event_delta(const struct YXmlEvent *e, int *len);
 
 /**
  * Releases memory allocated by the object returned from `yevent_delta` function.
@@ -1821,7 +1852,17 @@ struct YEventKeyChange *ymap_event_keys(const struct YMapEvent *e, int *len);
  * Delta returned from this function should eventually be released using `yevent_keys_destroy`
  * function.
  */
-struct YEventKeyChange *yxml_event_keys(const struct YXmlEvent *e, int *len);
+struct YEventKeyChange *yxmlelem_event_keys(const struct YXmlEvent *e, int *len);
+
+/**
+ * Returns a sequence of changes produced by map component of shared collections (such as
+ * `YMap` and `YXmlText`/`YXmlElement` attribute changes). `len` output parameter is used to
+ * provide information about number of changes produced.
+ *
+ * Delta returned from this function should eventually be released using `yevent_keys_destroy`
+ * function.
+ */
+struct YEventKeyChange *yxmltext_event_keys(const struct YXmlTextEvent *e, int *len);
 
 /**
  * Releases memory allocated by the object returned from `yevent_keys` function.

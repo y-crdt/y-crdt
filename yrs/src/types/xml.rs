@@ -1,15 +1,15 @@
 use crate::block::{Item, ItemContent, ItemPosition, Prelim};
 use crate::event::Subscription;
 use crate::store::Store;
-use crate::types::text::{Attrs, TextEvent};
+use crate::types::text::TextEvent;
 use crate::types::{
-    event_change_set, event_keys, Branch, BranchRef, Change, ChangeSet, Entries, EntryChange, Map,
-    Observers, Path, Text, TypePtr, Value, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT,
-    TYPE_REFS_XML_TEXT,
+    event_change_set, event_keys, Attrs, Branch, BranchRef, Change, ChangeSet, Delta, Entries,
+    EntryChange, Map, Observers, Path, Text, TypePtr, Value, TYPE_REFS_XML_ELEMENT,
+    TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_TEXT,
 };
 use crate::{Transaction, ID};
 use lib0::any::Any;
-use std::cell::{Ref, UnsafeCell};
+use std::cell::{Ref, RefMut, UnsafeCell};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 use std::rc::Rc;
@@ -620,6 +620,10 @@ impl XmlText {
         self.0.inner()
     }
 
+    fn inner_mut(&self) -> RefMut<Branch> {
+        self.0.inner_mut()
+    }
+
     /// Returns a string representation of a current XML text.
     pub fn to_string(&self, txn: &Transaction) -> String {
         self.0.to_string(txn)
@@ -732,15 +736,23 @@ impl XmlText {
     /// XML text attribute changes can be tracked using [Event::keys] method.
     ///
     /// Returns an [Observer] which, when dropped, will unsubscribe current callback.
-    pub fn observe<F>(&self, f: F) -> Subscription<TextEvent>
+    pub fn observe<F>(&self, f: F) -> Subscription<XmlTextEvent>
     where
-        F: Fn(&Transaction, &TextEvent) -> () + 'static,
+        F: Fn(&Transaction, &XmlTextEvent) -> () + 'static,
     {
-        self.0.observe(f)
+        let mut branch = self.inner_mut();
+        if let Observers::XmlText(eh) = branch.observers.get_or_insert_with(Observers::xml_text) {
+            eh.subscribe(f)
+        } else {
+            panic!("Observed collection is of different type") //TODO: this should be Result::Err
+        }
     }
 
     pub fn unobserve(&self, subscription_id: u32) {
-        self.0.unobserve(subscription_id)
+        let mut branch = self.inner_mut();
+        if let Some(Observers::XmlText(eh)) = branch.observers.as_mut() {
+            eh.unsubscribe(subscription_id);
+        }
     }
 }
 
@@ -759,6 +771,60 @@ impl From<BranchRef> for XmlText {
 impl Into<XmlText> for Text {
     fn into(self) -> XmlText {
         XmlText(self)
+    }
+}
+
+pub struct XmlTextEvent {
+    target: XmlText,
+    current_target: BranchRef,
+    delta: UnsafeCell<Option<Vec<Delta>>>,
+    keys: UnsafeCell<Result<HashMap<Rc<str>, EntryChange>, HashSet<Option<Rc<str>>>>>,
+}
+
+impl XmlTextEvent {
+    pub(crate) fn new(branch_ref: BranchRef, key_changes: HashSet<Option<Rc<str>>>) -> Self {
+        let current_target = branch_ref.clone();
+        let target = XmlText::from(branch_ref);
+        XmlTextEvent {
+            target,
+            current_target,
+            delta: UnsafeCell::new(None),
+            keys: UnsafeCell::new(Err(key_changes)),
+        }
+    }
+
+    pub fn target(&self) -> &XmlText {
+        &self.target
+    }
+
+    pub fn path(&self, txn: &Transaction) -> Path {
+        Branch::path(self.current_target.borrow(), self.target.inner(), txn)
+    }
+
+    pub fn delta(&self, txn: &Transaction) -> &[Delta] {
+        let delta = unsafe { self.delta.get().as_mut().unwrap() };
+        delta
+            .get_or_insert_with(|| TextEvent::get_delta(self.target.inner(), txn))
+            .as_slice()
+    }
+
+    pub fn keys(&self, txn: &Transaction) -> &HashMap<Rc<str>, EntryChange> {
+        let keys = unsafe { self.keys.get().as_mut().unwrap() };
+
+        match keys {
+            Ok(keys) => {
+                return keys;
+            }
+            Err(subs) => {
+                let subs = event_keys(txn, self.target.inner(), subs);
+                *keys = Ok(subs);
+                if let Ok(keys) = keys {
+                    keys
+                } else {
+                    panic!("Defect: should not happen");
+                }
+            }
+        }
     }
 }
 
@@ -870,9 +936,7 @@ impl XmlEvent {
     }
 
     pub fn path(&self, txn: &Transaction) -> Path {
-        let from = &self.current_target;
-        let to = &self.target.0 .0;
-        Branch::path(from, to, txn)
+        Branch::path(self.current_target.borrow(), self.target.inner(), txn)
     }
 
     pub fn delta(&self, txn: &Transaction) -> &[Change] {
@@ -893,7 +957,7 @@ impl XmlEvent {
         match keys {
             Ok(keys) => keys,
             Err(subs) => {
-                let subs = event_keys(txn, &self.target.0 .0, subs);
+                let subs = event_keys(txn, self.target.inner(), subs);
                 *keys = Ok(subs);
                 if let Ok(keys) = keys {
                     keys

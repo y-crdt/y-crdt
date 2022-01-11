@@ -173,7 +173,7 @@ export const testXmlTextObserver = tc => {
     // insert initial data to an empty YText
     d1.transact(txn => x.insert(txn, 0, 'abcd'))
     t.compare(getValue(target), getValue(x))
-    t.compare(delta, [{insert: ['a','b','c','d']}])
+    t.compare(delta, [{insert: 'abcd'}])
     t.compare(attributes, {})
     target = null
     attributes = null
@@ -191,7 +191,7 @@ export const testXmlTextObserver = tc => {
     // insert new item in the middle
     d1.transact(txn => x.insert(txn, 1, 'e'))
     t.compare(getValue(target), getValue(x))
-    t.compare(delta, [{retain:1}, {insert: ['e']}])
+    t.compare(delta, [{retain:1}, {insert: 'e'}])
     t.compare(attributes, {})
     target = null
     attributes = null
