@@ -1,7 +1,7 @@
 use crate::block::{Item, ItemContent, ItemPosition, Prelim};
 use crate::event::Subscription;
 use crate::store::Store;
-use crate::types::text::TextEvent;
+use crate::types::text::{Attrs, TextEvent};
 use crate::types::{
     event_change_set, event_keys, Branch, BranchRef, Change, ChangeSet, Entries, EntryChange, Map,
     Observers, Path, Text, TypePtr, Value, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT,
@@ -694,6 +694,20 @@ impl XmlText {
         } else {
             panic!("Cannot insert string content into an XML text: provided index is outside of the current text range!");
         }
+    }
+
+    pub fn insert_with_attributes(
+        &self,
+        txn: &mut Transaction,
+        index: u32,
+        content: &str,
+        attrs: Attrs,
+    ) {
+        self.0.insert_with_attributes(txn, index, content, attrs);
+    }
+
+    pub fn format(&self, txn: &mut Transaction, index: u32, len: u32, attrs: Attrs) {
+        self.0.format(txn, index, len, attrs);
     }
 
     /// Appends a new string `content` at the end of this XML text structure.

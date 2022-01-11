@@ -616,6 +616,7 @@ pub unsafe extern "C" fn ytext_insert(
     txn: *mut Transaction,
     index: c_int,
     value: *const c_char,
+    attrs: *const YInput,
 ) {
     assert!(!txt.is_null());
     assert!(!txn.is_null());
@@ -624,7 +625,51 @@ pub unsafe extern "C" fn ytext_insert(
     let chunk = CStr::from_ptr(value).to_str().unwrap();
     let txn = txn.as_mut().unwrap();
     let txt = txt.as_ref().unwrap();
-    txt.insert(txn, index as u32, chunk)
+    let index = index as u32;
+    if attrs.is_null() {
+        txt.insert(txn, index, chunk)
+    } else {
+        if let Some(attrs) = map_attrs(attrs.read().into()) {
+            txt.insert_with_attributes(txn, index, chunk, attrs)
+        } else {
+            panic!("ytext_insert: passed attributes are not of map type")
+        }
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn ytext_format(
+    txt: *const Text,
+    txn: *mut Transaction,
+    index: c_int,
+    len: c_int,
+    attrs: *const YInput,
+) {
+    assert!(!txt.is_null());
+    assert!(!txn.is_null());
+    assert!(!attrs.is_null());
+
+    if let Some(attrs) = map_attrs(attrs.read().into()) {
+        let txt = txt.as_ref().unwrap();
+        let txn = txn.as_mut().unwrap();
+        let index = index as u32;
+        let len = len as u32;
+        txt.format(txn, index, len, attrs);
+    } else {
+        panic!("ytext_format: passed attributes are not of map type")
+    }
+}
+
+fn map_attrs(attrs: Any) -> Option<Attrs> {
+    if let Any::Map(attrs) = attrs {
+        let attrs = attrs
+            .into_iter()
+            .map(|(k, v)| (k.into_boxed_str(), v))
+            .collect();
+        Some(attrs)
+    } else {
+        None
+    }
 }
 
 /// Removes a range of characters, starting a a given `index`. This range must fit within the bounds
@@ -1472,6 +1517,7 @@ pub unsafe extern "C" fn yxmltext_insert(
     txn: *mut Transaction,
     index: c_int,
     str: *const c_char,
+    attrs: *const YInput,
 ) {
     assert!(!txt.is_null());
     assert!(!txn.is_null());
@@ -1479,9 +1525,40 @@ pub unsafe extern "C" fn yxmltext_insert(
 
     let txt = txt.as_ref().unwrap();
     let txn = txn.as_mut().unwrap();
-
     let chunk = CStr::from_ptr(str).to_str().unwrap();
-    txt.insert(txn, index as u32, chunk)
+
+    if attrs.is_null() {
+        txt.insert(txn, index as u32, chunk)
+    } else {
+        if let Some(attrs) = map_attrs(attrs.read().into()) {
+            txt.insert_with_attributes(txn, index as u32, chunk, attrs)
+        } else {
+            panic!("yxmltext_insert: passed attributes are not of map type")
+        }
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yxmltext_format(
+    txt: *const XmlText,
+    txn: *mut Transaction,
+    index: c_int,
+    len: c_int,
+    attrs: *const YInput,
+) {
+    assert!(!txt.is_null());
+    assert!(!txn.is_null());
+    assert!(!attrs.is_null());
+
+    if let Some(attrs) = map_attrs(attrs.read().into()) {
+        let txt = txt.as_ref().unwrap();
+        let txn = txn.as_mut().unwrap();
+        let index = index as u32;
+        let len = len as u32;
+        txt.format(txn, index, len, attrs);
+    } else {
+        panic!("yxmltext_format: passed attributes are not of map type")
+    }
 }
 
 /// Removes a range of characters, starting a a given `index`. This range must fit within the bounds
@@ -2188,7 +2265,7 @@ pub unsafe extern "C" fn yinput_json_map(
     len: c_int,
 ) -> YInput {
     YInput {
-        tag: Y_JSON_ARR,
+        tag: Y_JSON_MAP,
         len,
         value: YInputContent {
             map: ManuallyDrop::new(YMapInputData { keys, values }),

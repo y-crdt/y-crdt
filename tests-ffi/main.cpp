@@ -28,8 +28,8 @@ TEST_CASE("Update exchange basic") {
     YText* txt2 = ytext(t2, "test");
 
     // insert data at the same position on both peer texts
-    ytext_insert(txt1, t1, 0, "world");
-    ytext_insert(txt2, t2, 0, "hello ");
+    ytext_insert(txt1, t1, 0, "world", NULL);
+    ytext_insert(txt2, t2, 0, "hello ", NULL);
 
     // exchange updates
     int sv1_len = 0;
@@ -77,8 +77,8 @@ TEST_CASE("YText basic") {
     YTransaction* txn = ytransaction_new(doc);
     YText* txt = ytext(txn, "test");
 
-    ytext_insert(txt, txn, 0, "hello");
-    ytext_insert(txt, txn, 5, " world");
+    ytext_insert(txt, txn, 0, "hello", NULL);
+    ytext_insert(txt, txn, 5, " world", NULL);
     ytext_remove_range(txt, txn, 0, 6);
 
     REQUIRE_EQ(ytext_len(txt), 5);
@@ -280,12 +280,12 @@ TEST_CASE("YXmlElement basic") {
     // XML children API
     YXmlElement* inner = yxmlelem_insert_elem(xml, txn, 0, "p");
     YXmlText* inner_txt = yxmlelem_insert_text(inner, txn, 0);
-    yxmltext_insert(inner_txt, txn, 0, "hello");
+    yxmltext_insert(inner_txt, txn, 0, "hello", NULL);
 
     REQUIRE_EQ(yxmlelem_child_len(xml, txn), 1);
 
     YXmlText* txt = yxmlelem_insert_text(xml, txn, 1);
-    yxmltext_insert(txt, txn, 0, "world");
+    yxmltext_insert(txt, txn, 0, "world", NULL);
 
     // check tag names
     char* tag = yxmlelem_tag(inner);
@@ -401,7 +401,7 @@ TEST_CASE("YText observe") {
     unsigned int sub = ytext_observe(txt, (void*)t, &ytext_test_observe);
 
     // insert initial data to an empty YText
-    ytext_insert(txt, txn, 0, "abcd");
+    ytext_insert(txt, txn, 0, "abcd", NULL);
     ytransaction_commit(txn);
 
     REQUIRE(t->target != NULL);
@@ -425,7 +425,7 @@ TEST_CASE("YText observe") {
     // insert new item in the middle
     ytext_test_clean(t);
     txn = ytransaction_new(doc);
-    ytext_insert(txt, txn, 1, "e");
+    ytext_insert(txt, txn, 1, "e", NULL);
     ytransaction_commit(txn);
 
     REQUIRE(t->target != NULL);
@@ -440,7 +440,7 @@ TEST_CASE("YText observe") {
     ytext_unobserve(txt, sub);
 
     txn = ytransaction_new(doc);
-    ytext_insert(txt, txn, 1, "fgh");
+    ytext_insert(txt, txn, 1, "fgh", NULL);
     ytransaction_commit(txn);
 
     REQUIRE(t->target == NULL);
@@ -677,7 +677,7 @@ TEST_CASE("YXmlText observe") {
     unsigned int sub = yxmltext_observe(txt, (void*)t, &ytext_test_observe);
 
     // insert initial data to an empty YText
-    yxmltext_insert(txt, txn, 0, "abcd");
+    yxmltext_insert(txt, txn, 0, "abcd", NULL);
     ytransaction_commit(txn);
 
     REQUIRE(t->target != NULL);
@@ -701,7 +701,7 @@ TEST_CASE("YXmlText observe") {
     // insert new item in the middle
     ytext_test_clean(t);
     txn = ytransaction_new(doc);
-    yxmltext_insert(txt, txn, 1, "e");
+    yxmltext_insert(txt, txn, 1, "e", NULL);
     ytransaction_commit(txn);
 
     REQUIRE(t->target != NULL);
@@ -716,7 +716,7 @@ TEST_CASE("YXmlText observe") {
     yxmltext_unobserve(txt, sub);
 
     txn = ytransaction_new(doc);
-    yxmltext_insert(txt, txn, 1, "fgh");
+    yxmltext_insert(txt, txn, 1, "fgh", NULL);
     ytransaction_commit(txn);
 
     REQUIRE(t->target == NULL);

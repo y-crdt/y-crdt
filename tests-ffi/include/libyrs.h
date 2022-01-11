@@ -1010,7 +1010,17 @@ char *ytext_string(const YText *txt, const YTransaction *txn);
  * ownership over a passed value - it will be copied and therefore a string parameter must be
  * released by the caller.
  */
-void ytext_insert(const YText *txt, YTransaction *txn, int index, const char *value);
+void ytext_insert(const YText *txt,
+                  YTransaction *txn,
+                  int index,
+                  const char *value,
+                  const struct YInput *attrs);
+
+void ytext_format(const YText *txt,
+                  YTransaction *txn,
+                  int index,
+                  int len,
+                  const struct YInput *attrs);
 
 /**
  * Removes a range of characters, starting a a given `index`. This range must fit within the bounds
@@ -1368,7 +1378,17 @@ char *yxmltext_string(const YXmlText *txt, const YTransaction *txn);
  * ownership over a passed value - it will be copied and therefore a string parameter must be
  * released by the caller.
  */
-void yxmltext_insert(const YXmlText *txt, YTransaction *txn, int index, const char *str);
+void yxmltext_insert(const YXmlText *txt,
+                     YTransaction *txn,
+                     int index,
+                     const char *str,
+                     const struct YInput *attrs);
+
+void yxmltext_format(const YXmlText *txt,
+                     YTransaction *txn,
+                     int index,
+                     int len,
+                     const struct YInput *attrs);
 
 /**
  * Removes a range of characters, starting a a given `index`. This range must fit within the bounds
