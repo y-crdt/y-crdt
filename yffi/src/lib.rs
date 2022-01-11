@@ -8,11 +8,11 @@ use std::ptr::{null, null_mut};
 use yrs::block::{ItemContent, Prelim};
 use yrs::types::array::ArrayEvent;
 use yrs::types::map::MapEvent;
-use yrs::types::text::{Attrs, Delta, TextEvent};
-use yrs::types::xml::XmlEvent;
+use yrs::types::text::TextEvent;
+use yrs::types::xml::{XmlEvent, XmlTextEvent};
 use yrs::types::{
-    Branch, BranchRef, Change, EntryChange, PathSegment, TypePtr, Value, TYPE_REFS_ARRAY,
-    TYPE_REFS_MAP, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT,
+    Attrs, Branch, BranchRef, Change, Delta, EntryChange, PathSegment, TypePtr, Value,
+    TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT,
 };
 use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1};
@@ -2601,14 +2601,14 @@ pub unsafe extern "C" fn yxmlelem_observe(
 pub unsafe extern "C" fn yxmltext_observe(
     xml: *const XmlText,
     state: *mut c_void,
-    cb: extern "C" fn(*mut c_void, *const YTextEvent),
+    cb: extern "C" fn(*mut c_void, *const YXmlTextEvent),
 ) -> c_uint {
     assert!(!xml.is_null());
 
     let xml = xml.as_ref().unwrap();
     let observer = xml.observe(move |txn, e| {
-        let e = YTextEvent::new(e, txn);
-        cb(state, &e as *const YTextEvent);
+        let e = YXmlTextEvent::new(e, txn);
+        cb(state, &e as *const YXmlTextEvent);
     });
     let subscription_id: u32 = observer.into();
     subscription_id as c_uint
@@ -2718,6 +2718,32 @@ impl Deref for YXmlEvent {
     }
 }
 
+#[repr(C)]
+pub struct YXmlTextEvent {
+    inner: *const c_void,
+    pub txn: *const Transaction,
+}
+
+impl YXmlTextEvent {
+    fn new(inner: &XmlTextEvent, txn: &Transaction) -> Self {
+        let inner = inner as *const XmlTextEvent as *const _;
+        let txn = txn as *const Transaction;
+        YXmlTextEvent { inner, txn }
+    }
+
+    fn txn(&self) -> &Transaction {
+        unsafe { self.txn.as_ref().unwrap() }
+    }
+}
+
+impl Deref for YXmlTextEvent {
+    type Target = XmlTextEvent;
+
+    fn deref(&self) -> &Self::Target {
+        unsafe { (self.inner as *const XmlTextEvent).as_ref().unwrap() }
+    }
+}
+
 /// Releases a callback subscribed via `<shared_type>_observe` function represented by passed
 /// observer parameter.
 #[no_mangle]
@@ -2784,18 +2810,26 @@ pub unsafe extern "C" fn ymap_event_target(e: *const YMapEvent) -> *mut Map {
 
 /// Returns a pointer to a shared collection, which triggered passed event `e`.
 #[no_mangle]
-pub unsafe extern "C" fn yxml_event_target(e: *const YXmlEvent) -> *mut XmlElement {
+pub unsafe extern "C" fn yxmlelem_event_target(e: *const YXmlEvent) -> *mut XmlElement {
+    assert!(!e.is_null());
+    let out = (&*e).target().clone();
+    Box::into_raw(Box::new(out)) as *mut _
+}
+
+/// Returns a pointer to a shared collection, which triggered passed event `e`.
+#[no_mangle]
+pub unsafe extern "C" fn yxmltext_event_target(e: *const YXmlTextEvent) -> *mut XmlText {
     assert!(!e.is_null());
     let out = (&*e).target().clone();
     Box::into_raw(Box::new(out)) as *mut _
 }
 
 /// Returns a path from a root type down to a current shared collection (which can be obtained using
-/// `yevent_target` function). It can consist of either integer indexes (used by sequence
+/// `ymap_event_target` function). It can consist of either integer indexes (used by sequence
 /// components) of *char keys (used by map components). `len` output parameter is used to provide
 /// information about length of the path.
 ///
-/// Path returned this way should be eventually released using `yevent_path_destroy`.
+/// Path returned this way should be eventually released using `ypath_destroy`.
 #[no_mangle]
 pub unsafe extern "C" fn ytext_event_path(
     e: *const YTextEvent,
@@ -2814,11 +2848,11 @@ pub unsafe extern "C" fn ytext_event_path(
 }
 
 /// Returns a path from a root type down to a current shared collection (which can be obtained using
-/// `yevent_target` function). It can consist of either integer indexes (used by sequence
+/// `ymap_event_target` function). It can consist of either integer indexes (used by sequence
 /// components) of *char keys (used by map components). `len` output parameter is used to provide
 /// information about length of the path.
 ///
-/// Path returned this way should be eventually released using `yevent_path_destroy`.
+/// Path returned this way should be eventually released using `ypath_destroy`.
 #[no_mangle]
 pub unsafe extern "C" fn ymap_event_path(
     e: *const YMapEvent,
@@ -2837,13 +2871,13 @@ pub unsafe extern "C" fn ymap_event_path(
 }
 
 /// Returns a path from a root type down to a current shared collection (which can be obtained using
-/// `yevent_target` function). It can consist of either integer indexes (used by sequence
+/// `yxmlelem_event_path` function). It can consist of either integer indexes (used by sequence
 /// components) of *char keys (used by map components). `len` output parameter is used to provide
 /// information about length of the path.
 ///
-/// Path returned this way should be eventually released using `yevent_path_destroy`.
+/// Path returned this way should be eventually released using `ypath_destroy`.
 #[no_mangle]
-pub unsafe extern "C" fn yxml_event_path(
+pub unsafe extern "C" fn yxmlelem_event_path(
     e: *const YXmlEvent,
     len: *mut c_int,
 ) -> *mut YPathSegment {
@@ -2860,11 +2894,34 @@ pub unsafe extern "C" fn yxml_event_path(
 }
 
 /// Returns a path from a root type down to a current shared collection (which can be obtained using
-/// `yevent_target` function). It can consist of either integer indexes (used by sequence
+/// `yxmltext_event_path` function). It can consist of either integer indexes (used by sequence
 /// components) of *char keys (used by map components). `len` output parameter is used to provide
 /// information about length of the path.
 ///
-/// Path returned this way should be eventually released using `yevent_path_destroy`.
+/// Path returned this way should be eventually released using `ypath_destroy`.
+#[no_mangle]
+pub unsafe extern "C" fn yxmltext_event_path(
+    e: *const YXmlTextEvent,
+    len: *mut c_int,
+) -> *mut YPathSegment {
+    assert!(!e.is_null());
+    let e = &*e;
+    let path: Vec<_> = e
+        .path(e.txn())
+        .into_iter()
+        .map(YPathSegment::from)
+        .collect();
+    let out = path.into_boxed_slice();
+    *len = out.len() as c_int;
+    Box::into_raw(out) as *mut _
+}
+
+/// Returns a path from a root type down to a current shared collection (which can be obtained using
+/// `yarray_event_target` function). It can consist of either integer indexes (used by sequence
+/// components) of *char keys (used by map components). `len` output parameter is used to provide
+/// information about length of the path.
+///
+/// Path returned this way should be eventually released using `ypath_destroy`.
 #[no_mangle]
 pub unsafe extern "C" fn yarray_event_path(
     e: *const YArrayEvent,
@@ -2882,7 +2939,8 @@ pub unsafe extern "C" fn yarray_event_path(
     Box::into_raw(out) as *mut _
 }
 
-/// Releases allocated memory used by objects returned from `yevent_path` function.
+/// Releases allocated memory used by objects returned from path accessor functions of shared type
+/// events.
 #[no_mangle]
 pub unsafe extern "C" fn ypath_destroy(path: *mut YPathSegment, len: c_int) {
     if !path.is_null() {
@@ -2898,6 +2956,26 @@ pub unsafe extern "C" fn ypath_destroy(path: *mut YPathSegment, len: c_int) {
 /// function.
 #[no_mangle]
 pub unsafe extern "C" fn ytext_event_delta(e: *const YTextEvent, len: *mut c_int) -> *mut YDelta {
+    assert!(!e.is_null());
+    let e = &*e;
+    let delta: Vec<_> = e.delta(e.txn()).into_iter().map(YDelta::from).collect();
+
+    let out = delta.into_boxed_slice();
+    *len = out.len() as c_int;
+    Box::into_raw(out) as *mut _
+}
+
+/// Returns a sequence of changes produced by sequence component of shared collections (such as
+/// `YText`, `YXmlText` and XML nodes added to `YXmlElement`). `len` output parameter is used to
+/// provide information about number of changes produced.
+///
+/// Delta returned from this function should eventually be released using `yevent_delta_destroy`
+/// function.
+#[no_mangle]
+pub unsafe extern "C" fn yxmltext_event_delta(
+    e: *const YXmlTextEvent,
+    len: *mut c_int,
+) -> *mut YDelta {
     assert!(!e.is_null());
     let e = &*e;
     let delta: Vec<_> = e.delta(e.txn()).into_iter().map(YDelta::from).collect();
@@ -2938,7 +3016,7 @@ pub unsafe extern "C" fn yarray_event_delta(
 /// Delta returned from this function should eventually be released using `yevent_delta_destroy`
 /// function.
 #[no_mangle]
-pub unsafe extern "C" fn yxml_event_delta(
+pub unsafe extern "C" fn yxmlelem_event_delta(
     e: *const YXmlEvent,
     len: *mut c_int,
 ) -> *mut YEventChange {
@@ -3004,8 +3082,32 @@ pub unsafe extern "C" fn ymap_event_keys(
 /// Delta returned from this function should eventually be released using `yevent_keys_destroy`
 /// function.
 #[no_mangle]
-pub unsafe extern "C" fn yxml_event_keys(
+pub unsafe extern "C" fn yxmlelem_event_keys(
     e: *const YXmlEvent,
+    len: *mut c_int,
+) -> *mut YEventKeyChange {
+    assert!(!e.is_null());
+    let e = &*e;
+    let delta: Vec<_> = e
+        .keys(e.txn())
+        .into_iter()
+        .map(|(k, v)| YEventKeyChange::new(k.as_ref(), v))
+        .collect();
+
+    let out = delta.into_boxed_slice();
+    *len = out.len() as c_int;
+    Box::into_raw(out) as *mut _
+}
+
+/// Returns a sequence of changes produced by map component of shared collections (such as
+/// `YMap` and `YXmlText`/`YXmlElement` attribute changes). `len` output parameter is used to
+/// provide information about number of changes produced.
+///
+/// Delta returned from this function should eventually be released using `yevent_keys_destroy`
+/// function.
+#[no_mangle]
+pub unsafe extern "C" fn yxmltext_event_keys(
+    e: *const YXmlTextEvent,
     len: *mut c_int,
 ) -> *mut YEventKeyChange {
     assert!(!e.is_null());

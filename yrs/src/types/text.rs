@@ -2,10 +2,10 @@ use crate::block::{BlockPtr, Item, ItemContent, ItemPosition};
 use crate::block_store::Snapshot;
 use crate::event::Subscription;
 use crate::transaction::Transaction;
-use crate::types::{Branch, BranchRef, Observers, Path, Value};
+use crate::types::{Attrs, Branch, BranchRef, Delta, Observers, Path, Value};
 use crate::*;
 use lib0::any::Any;
-use std::cell::{Ref, UnsafeCell};
+use std::cell::{Ref, RefMut, UnsafeCell};
 use std::collections::HashMap;
 
 /// A shared data type used for collaborative text editing. It enables multiple users to add and
@@ -54,6 +54,10 @@ impl Text {
 
     pub(crate) fn inner(&self) -> Ref<Branch> {
         self.0.borrow()
+    }
+
+    pub(crate) fn inner_mut(&self) -> RefMut<Branch> {
+        self.0.borrow_mut()
     }
 
     pub(crate) fn find_position(
@@ -623,15 +627,6 @@ impl From<BranchRef> for Text {
     }
 }
 
-pub type Attrs = HashMap<Box<str>, Any>;
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum Delta {
-    Insert(Value, Option<Box<Attrs>>),
-    Retain(u32, Option<Box<Attrs>>),
-    Delete(u32),
-}
-
 #[derive(Debug, PartialEq)]
 pub enum Diff {
     Insert(Value, Option<Box<Attrs>>),
@@ -659,17 +654,17 @@ impl TextEvent {
     }
 
     pub fn path(&self, txn: &Transaction) -> Path {
-        Branch::path(&self.current_target, &self.target.0, txn)
+        Branch::path(self.current_target.borrow(), self.target.0.borrow(), txn)
     }
 
     pub fn delta(&self, txn: &Transaction) -> &[Delta] {
         let delta = unsafe { self.delta.get().as_mut().unwrap() };
         delta
-            .get_or_insert_with(|| Self::get_delta(&self.target.0, txn))
+            .get_or_insert_with(|| Self::get_delta(self.target.0.borrow(), txn))
             .as_slice()
     }
 
-    fn get_delta(target: &BranchRef, txn: &Transaction) -> Vec<Delta> {
+    pub(crate) fn get_delta(target: Ref<Branch>, txn: &Transaction) -> Vec<Delta> {
         #[derive(Clone, Copy, Eq, PartialEq)]
         enum Action {
             Insert,
@@ -745,7 +740,6 @@ impl TextEvent {
         let mut old_attrs = HashMap::new();
         let mut asm = DeltaAssembler::default();
         let mut current = target
-            .borrow()
             .start
             .as_ref()
             .and_then(|ptr| txn.store().blocks.get_item(ptr));

@@ -1,10 +1,8 @@
 use js_sys::Uint8Array;
 use lib0::any::Any;
-use std::borrow::{Borrow, BorrowMut};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::convert::TryFrom;
-use std::hash::Hash;
 use std::mem::ManuallyDrop;
 use std::ops::{Deref, DerefMut};
 use wasm_bindgen::__rt::Ref;
@@ -13,11 +11,12 @@ use wasm_bindgen::JsValue;
 use yrs::block::{ItemContent, Prelim};
 use yrs::types::array::{ArrayEvent, ArrayIter};
 use yrs::types::map::{MapEvent, MapIter};
-use yrs::types::text::{Attrs, Delta, TextEvent};
-use yrs::types::xml::{Attributes, TreeWalker, XmlEvent};
+use yrs::types::text::TextEvent;
+use yrs::types::xml::{Attributes, TreeWalker, XmlEvent, XmlTextEvent};
 use yrs::types::{
-    Branch, BranchRef, Change, EntryChange, Path, PathSegment, TypePtr, TypeRefs, Value,
-    TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT,
+    Attrs, Branch, BranchRef, Change, Delta, EntryChange, Path, PathSegment, TypePtr, TypeRefs,
+    Value, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT, TYPE_REFS_XML_ELEMENT,
+    TYPE_REFS_XML_TEXT,
 };
 use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1};
@@ -790,6 +789,97 @@ impl YXmlEvent {
     }
 }
 
+#[wasm_bindgen]
+pub struct YXmlTextEvent {
+    inner: *const XmlTextEvent,
+    txn: *const Transaction,
+    target: Option<JsValue>,
+    delta: Option<JsValue>,
+    keys: Option<JsValue>,
+}
+
+#[wasm_bindgen]
+impl YXmlTextEvent {
+    fn new(event: &XmlTextEvent, txn: &Transaction) -> Self {
+        let inner = event as *const XmlTextEvent;
+        let txn = txn as *const Transaction;
+        YXmlTextEvent {
+            inner,
+            txn,
+            target: None,
+            delta: None,
+            keys: None,
+        }
+    }
+
+    fn inner(&self) -> &XmlTextEvent {
+        unsafe { self.inner.as_ref().unwrap() }
+    }
+
+    fn txn(&self) -> &Transaction {
+        unsafe { self.txn.as_ref().unwrap() }
+    }
+
+    /// Returns a current shared type instance, that current event changes refer to.
+    #[wasm_bindgen(method, getter)]
+    pub fn target(&mut self) -> JsValue {
+        if let Some(target) = self.target.as_ref() {
+            target.clone()
+        } else {
+            let target: JsValue = YXmlText(self.inner().target().clone()).into();
+            self.target = Some(target.clone());
+            target
+        }
+    }
+
+    /// Returns an array of keys and indexes creating a path from root type down to current instance
+    /// of shared type (accessible via `target` getter).
+    #[wasm_bindgen(method)]
+    pub fn path(&self) -> JsValue {
+        path_into_js(self.inner().path(self.txn()))
+    }
+
+    /// Returns collection of all changes done over an array component of a current shared data
+    /// type (which can be accessed via `target` property). These changes are usually done in result
+    /// of operations done on `YArray` and `YText`/`XmlText` types, but also whenever `XmlElement`
+    /// children nodes list is modified.
+    #[wasm_bindgen(method, getter)]
+    pub fn delta(&mut self) -> JsValue {
+        if let Some(delta) = &self.delta {
+            delta.clone()
+        } else {
+            let delta = self
+                .inner()
+                .delta(self.txn())
+                .into_iter()
+                .map(ytext_delta_into_js);
+            let mut result = js_sys::Array::new();
+            result.extend(delta);
+            let delta: JsValue = result.into();
+            self.delta = Some(delta.clone());
+            delta
+        }
+    }
+
+    #[wasm_bindgen(method, getter)]
+    pub fn keys(&mut self) -> JsValue {
+        if let Some(keys) = &self.keys {
+            keys.clone()
+        } else {
+            let keys = self.inner().keys(self.txn());
+            let result = js_sys::Object::new();
+            for (key, value) in keys.iter() {
+                let key = JsValue::from(key.as_ref());
+                let value = entry_change_into_js(value);
+                js_sys::Reflect::set(&result, &key, &value).unwrap();
+            }
+            let keys: JsValue = result.into();
+            self.keys = Some(keys.clone());
+            keys
+        }
+    }
+}
+
 fn path_into_js(path: Path) -> JsValue {
     let result = js_sys::Array::new();
     for segment in path {
@@ -927,6 +1017,15 @@ pub struct YXmlObserver(Subscription<XmlEvent>);
 impl From<Subscription<XmlEvent>> for YXmlObserver {
     fn from(o: Subscription<XmlEvent>) -> Self {
         YXmlObserver(o)
+    }
+}
+
+#[wasm_bindgen]
+pub struct YXmlTextObserver(Subscription<XmlTextEvent>);
+
+impl From<Subscription<XmlTextEvent>> for YXmlTextObserver {
+    fn from(o: Subscription<XmlTextEvent>) -> Self {
+        YXmlTextObserver(o)
     }
 }
 
@@ -1917,6 +2016,7 @@ impl YXmlText {
     }
 
     /// Inserts a given `chunk` of text into this `YXmlText` instance, starting at a given `index`.
+    /// Optional `attrs` will be used to enhance text with formatting metadata.
     #[wasm_bindgen(js_name = insert)]
     pub fn insert(&self, txn: &mut YTransaction, index: i32, chunk: &str, attrs: JsValue) {
         if let Some(attrs) = YText::parse_attrs(attrs) {
@@ -1927,7 +2027,9 @@ impl YXmlText {
         }
     }
 
-    #[wasm_bindgen(js_name = insert)]
+    /// Formats text within bounds specified by `index` and `len` with a given formatting
+    /// attributes.
+    #[wasm_bindgen(js_name = format)]
     pub fn format(&self, txn: &mut YTransaction, index: i32, len: i32, attrs: JsValue) {
         if let Some(attrs) = YText::parse_attrs(attrs) {
             self.0.format(txn, index as u32, len as u32, attrs)
@@ -1938,8 +2040,9 @@ impl YXmlText {
 
     /// Appends a given `chunk` of text at the end of `YXmlText` instance.
     #[wasm_bindgen(js_name = push)]
-    pub fn push(&self, txn: &mut YTransaction, chunk: &str) {
-        self.0.push(txn, chunk)
+    pub fn push(&self, txn: &mut YTransaction, chunk: &str, attrs: JsValue) {
+        let index = self.0.len();
+        self.insert(txn, index as i32, chunk, attrs)
     }
 
     /// Deletes a specified range of of characters, starting at a given `index`.
@@ -2026,10 +2129,10 @@ impl YXmlText {
     /// batched and eventually triggered during transaction commit phase.
     /// Returns an `YObserver` which, when free'd, will unsubscribe current callback.
     #[wasm_bindgen(js_name = observe)]
-    pub fn observe(&mut self, f: js_sys::Function) -> YTextObserver {
+    pub fn observe(&mut self, f: js_sys::Function) -> YXmlTextObserver {
         self.0
             .observe(move |txn, e| {
-                let e = YTextEvent::new(e, txn);
+                let e = YXmlTextEvent::new(e, txn);
                 let arg: JsValue = e.into();
                 f.call1(&JsValue::UNDEFINED, &arg).unwrap();
             })

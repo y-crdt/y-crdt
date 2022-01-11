@@ -254,7 +254,7 @@ impl MapEvent {
     }
 
     pub fn path(&self, txn: &Transaction) -> Path {
-        Branch::path(&self.current_target, &self.target.0, txn)
+        Branch::path(self.current_target.borrow(), self.target.0.borrow(), txn)
     }
 
     pub fn keys(&self, txn: &Transaction) -> &HashMap<Rc<str>, EntryChange> {
@@ -265,7 +265,7 @@ impl MapEvent {
                 return keys;
             }
             Err(subs) => {
-                let subs = event_keys(txn, &self.target.0, subs);
+                let subs = event_keys(txn, self.target.0.borrow(), subs);
                 *keys = Ok(subs);
                 if let Ok(keys) = keys {
                     keys
