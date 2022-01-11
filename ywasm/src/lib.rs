@@ -1,8 +1,10 @@
 use js_sys::Uint8Array;
 use lib0::any::Any;
+use std::borrow::{Borrow, BorrowMut};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::convert::TryFrom;
+use std::hash::Hash;
 use std::mem::ManuallyDrop;
 use std::ops::{Deref, DerefMut};
 use wasm_bindgen::__rt::Ref;
@@ -1024,10 +1026,53 @@ impl YText {
 
     /// Inserts a given `chunk` of text into this `YText` instance, starting at a given `index`.
     #[wasm_bindgen(js_name = insert)]
-    pub fn insert(&self, txn: &mut YTransaction, index: u32, chunk: &str) {
+    pub fn insert(&self, txn: &mut YTransaction, index: u32, chunk: &str, attrs: JsValue) {
         match &mut *self.0.borrow_mut() {
-            SharedType::Integrated(v) => v.insert(txn, index, chunk),
-            SharedType::Prelim(v) => v.insert_str(index as usize, chunk),
+            SharedType::Integrated(v) => {
+                if let Some(attrs) = Self::parse_attrs(attrs) {
+                    v.insert_with_attributes(txn, index, chunk, attrs)
+                } else {
+                    v.insert(txn, index, chunk)
+                }
+            }
+            SharedType::Prelim(v) => {
+                if attrs.is_object() {
+                    panic!("insert with attributes requires YText instance to be integrated first.")
+                } else {
+                    v.insert_str(index as usize, chunk)
+                }
+            }
+        }
+    }
+
+    #[wasm_bindgen(js_name = format)]
+    pub fn format(&self, txn: &mut YTransaction, index: u32, len: u32, attrs: JsValue) {
+        if let Some(attrs) = Self::parse_attrs(attrs) {
+            match &mut *self.0.borrow_mut() {
+                SharedType::Integrated(v) => {
+                    v.format(txn, index, len, attrs);
+                }
+                SharedType::Prelim(_) => {
+                    panic!("format with attributes requires YText instance to be integrated first.")
+                }
+            }
+        }
+    }
+
+    fn parse_attrs(attrs: JsValue) -> Option<Attrs> {
+        if attrs.is_object() {
+            let mut map = Attrs::new();
+            let object = js_sys::Object::from(attrs);
+            let entries = js_sys::Object::entries(&object);
+            for tuple in entries.iter() {
+                let tuple = js_sys::Array::from(&tuple);
+                let key: String = tuple.get(0).as_string()?;
+                let value = js_into_any(&tuple.get(1))?;
+                map.insert(key.into_boxed_str(), value);
+            }
+            Some(map)
+        } else {
+            None
         }
     }
 
@@ -1873,8 +1918,22 @@ impl YXmlText {
 
     /// Inserts a given `chunk` of text into this `YXmlText` instance, starting at a given `index`.
     #[wasm_bindgen(js_name = insert)]
-    pub fn insert(&self, txn: &mut YTransaction, index: i32, chunk: &str) {
-        self.0.insert(txn, index as u32, chunk)
+    pub fn insert(&self, txn: &mut YTransaction, index: i32, chunk: &str, attrs: JsValue) {
+        if let Some(attrs) = YText::parse_attrs(attrs) {
+            self.0
+                .insert_with_attributes(txn, index as u32, chunk, attrs)
+        } else {
+            self.0.insert(txn, index as u32, chunk)
+        }
+    }
+
+    #[wasm_bindgen(js_name = insert)]
+    pub fn format(&self, txn: &mut YTransaction, index: i32, len: i32, attrs: JsValue) {
+        if let Some(attrs) = YText::parse_attrs(attrs) {
+            self.0.format(txn, index as u32, len as u32, attrs)
+        } else {
+            panic!("couldn't parse format attributes")
+        }
     }
 
     /// Appends a given `chunk` of text at the end of `YXmlText` instance.
@@ -2097,16 +2156,16 @@ fn js_into_any(v: &JsValue) -> Option<Any> {
         if let Ok(_) = Shared::try_from(v) {
             None
         } else {
+            let mut map = HashMap::new();
             let object = js_sys::Object::from(v.clone());
-            let mut result = HashMap::new();
             let entries = js_sys::Object::entries(&object);
             for tuple in entries.iter() {
                 let tuple = js_sys::Array::from(&tuple);
-                let key = tuple.get(0).as_string()?;
+                let key: String = tuple.get(0).as_string()?;
                 let value = js_into_any(&tuple.get(1))?;
-                result.insert(key, value);
+                map.insert(key, value);
             }
-            Some(Any::Map(Box::new(result)))
+            Some(Any::Map(Box::new(map)))
         }
     } else {
         None
