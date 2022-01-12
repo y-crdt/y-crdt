@@ -610,6 +610,9 @@ pub unsafe extern "C" fn ytext_string(txt: *const Text, txn: *const Transaction)
 /// A `str` parameter must be a null-terminated UTF-8 encoded string. This function doesn't take
 /// ownership over a passed value - it will be copied and therefore a string parameter must be
 /// released by the caller.
+///
+/// A nullable pointer with defined `attrs` will be used to wrap provided text with
+/// a formatting blocks. `attrs` must be a map-like type.
 #[no_mangle]
 pub unsafe extern "C" fn ytext_insert(
     txt: *const Text,
@@ -637,6 +640,8 @@ pub unsafe extern "C" fn ytext_insert(
     }
 }
 
+/// Wraps an existing piece of text within a range described by `index`-`len` parameters with
+/// formatting blocks containing provided `attrs` metadata. `attrs` must be a map-like type.
 #[no_mangle]
 pub unsafe extern "C" fn ytext_format(
     txt: *const Text,
@@ -1511,6 +1516,9 @@ pub unsafe extern "C" fn yxmltext_string(
 /// A `str` parameter must be a null-terminated UTF-8 encoded string. This function doesn't take
 /// ownership over a passed value - it will be copied and therefore a string parameter must be
 /// released by the caller.
+///
+/// A nullable pointer with defined `attrs` will be used to wrap provided text with
+/// a formatting blocks. `attrs` must be a map-like type.
 #[no_mangle]
 pub unsafe extern "C" fn yxmltext_insert(
     txt: *const XmlText,
@@ -1538,6 +1546,8 @@ pub unsafe extern "C" fn yxmltext_insert(
     }
 }
 
+/// Wraps an existing piece of text within a range described by `index`-`len` parameters with
+/// formatting blocks containing provided `attrs` metadata. `attrs` must be a map-like type.
 #[no_mangle]
 pub unsafe extern "C" fn yxmltext_format(
     txt: *const XmlText,
@@ -2529,6 +2539,10 @@ pub unsafe extern "C" fn youtput_read_yxmltext(val: *const YOutput) -> *mut XmlT
     }
 }
 
+/// Subscribes a given callback function `cb` to changes made by this `YText` instance. Callbacks
+/// are triggered whenever a `ytransaction_commit` is called.
+/// Returns a subscription ID which can be then used to unsubscribe this callback by using
+/// `ytext_unobserve` function.
 #[no_mangle]
 pub unsafe extern "C" fn ytext_observe(
     txt: *const Text,
@@ -2546,6 +2560,10 @@ pub unsafe extern "C" fn ytext_observe(
     subscription_id as c_uint
 }
 
+/// Subscribes a given callback function `cb` to changes made by this `YMap` instance. Callbacks
+/// are triggered whenever a `ytransaction_commit` is called.
+/// Returns a subscription ID which can be then used to unsubscribe this callback by using
+/// `ymap_unobserve` function.
 #[no_mangle]
 pub unsafe extern "C" fn ymap_observe(
     map: *const Map,
@@ -2563,6 +2581,10 @@ pub unsafe extern "C" fn ymap_observe(
     subscription_id as c_uint
 }
 
+/// Subscribes a given callback function `cb` to changes made by this `YArray` instance. Callbacks
+/// are triggered whenever a `ytransaction_commit` is called.
+/// Returns a subscription ID which can be then used to unsubscribe this callback by using
+/// `yarray_unobserve` function.
 #[no_mangle]
 pub unsafe extern "C" fn yarray_observe(
     array: *const Array,
@@ -2580,6 +2602,10 @@ pub unsafe extern "C" fn yarray_observe(
     subscription_id as c_uint
 }
 
+/// Subscribes a given callback function `cb` to changes made by this `YXmlElement` instance.
+/// Callbacks are triggered whenever a `ytransaction_commit` is called.
+/// Returns a subscription ID which can be then used to unsubscribe this callback by using
+/// `yxmlelem_unobserve` function.
 #[no_mangle]
 pub unsafe extern "C" fn yxmlelem_observe(
     xml: *const XmlElement,
@@ -2597,6 +2623,10 @@ pub unsafe extern "C" fn yxmlelem_observe(
     subscription_id as c_uint
 }
 
+/// Subscribes a given callback function `cb` to changes made by this `YXmlText` instance. Callbacks
+/// are triggered whenever a `ytransaction_commit` is called.
+/// Returns a subscription ID which can be then used to unsubscribe this callback by using
+/// `yxmltext_unobserve` function.
 #[no_mangle]
 pub unsafe extern "C" fn yxmltext_observe(
     xml: *const XmlText,
@@ -2614,6 +2644,9 @@ pub unsafe extern "C" fn yxmltext_observe(
     subscription_id as c_uint
 }
 
+/// Event pushed into callbacks registered with `ytext_observe` function. It contains delta of all
+/// text changes made within a scope of corresponding transaction (see: `ytext_event_delta`) as
+/// well as navigation data used to identify a `YText` instance which triggered this event.
 #[repr(C)]
 pub struct YTextEvent {
     inner: *const c_void,
@@ -2640,6 +2673,9 @@ impl Deref for YTextEvent {
     }
 }
 
+/// Event pushed into callbacks registered with `yarray_observe` function. It contains delta of all
+/// content changes made within a scope of corresponding transaction (see: `yarray_event_delta`) as
+/// well as navigation data used to identify a `YArray` instance which triggered this event.
 #[repr(C)]
 pub struct YArrayEvent {
     inner: *const c_void,
@@ -2666,6 +2702,9 @@ impl Deref for YArrayEvent {
     }
 }
 
+/// Event pushed into callbacks registered with `ymap_observe` function. It contains all
+/// key-value changes made within a scope of corresponding transaction (see: `ymap_event_keys`) as
+/// well as navigation data used to identify a `YMap` instance which triggered this event.
 #[repr(C)]
 pub struct YMapEvent {
     inner: *const c_void,
@@ -2692,6 +2731,10 @@ impl Deref for YMapEvent {
     }
 }
 
+/// Event pushed into callbacks registered with `yxmlelem_observe` function. It contains
+/// all attribute changes made within a scope of corresponding transaction
+/// (see: `yxmlelem_event_keys`) as well as child XML nodes changes (see: `yxmlelem_event_delta`)
+/// and navigation data used to identify a `YXmlElement` instance which triggered this event.
 #[repr(C)]
 pub struct YXmlEvent {
     inner: *const c_void,
@@ -2718,6 +2761,10 @@ impl Deref for YXmlEvent {
     }
 }
 
+/// Event pushed into callbacks registered with `yxmltext_observe` function. It contains
+/// all attribute changes made within a scope of corresponding transaction
+/// (see: `yxmltext_event_keys`) as well as text edits (see: `yxmltext_event_delta`)
+/// and navigation data used to identify a `YXmlText` instance which triggered this event.
 #[repr(C)]
 pub struct YXmlTextEvent {
     inner: *const c_void,
@@ -2744,7 +2791,7 @@ impl Deref for YXmlTextEvent {
     }
 }
 
-/// Releases a callback subscribed via `<shared_type>_observe` function represented by passed
+/// Releases a callback subscribed via `ytext_observe` function represented by passed
 /// observer parameter.
 #[no_mangle]
 pub unsafe extern "C" fn ytext_unobserve(text: *mut Text, subscription_id: c_uint) {
@@ -2752,7 +2799,7 @@ pub unsafe extern "C" fn ytext_unobserve(text: *mut Text, subscription_id: c_uin
     txt.unobserve(subscription_id as SubscriptionId);
 }
 
-/// Releases a callback subscribed via `<shared_type>_observe` function represented by passed
+/// Releases a callback subscribed via `yarray_observe` function represented by passed
 /// observer parameter.
 #[no_mangle]
 pub unsafe extern "C" fn yarray_unobserve(array: *mut Array, subscription_id: c_uint) {
@@ -2760,7 +2807,7 @@ pub unsafe extern "C" fn yarray_unobserve(array: *mut Array, subscription_id: c_
     txt.unobserve(subscription_id as SubscriptionId);
 }
 
-/// Releases a callback subscribed via `<shared_type>_observe` function represented by passed
+/// Releases a callback subscribed via `ymap_observe` function represented by passed
 /// observer parameter.
 #[no_mangle]
 pub unsafe extern "C" fn ymap_unobserve(map: *mut Map, subscription_id: c_uint) {
@@ -2768,7 +2815,7 @@ pub unsafe extern "C" fn ymap_unobserve(map: *mut Map, subscription_id: c_uint) 
     txt.unobserve(subscription_id as SubscriptionId);
 }
 
-/// Releases a callback subscribed via `<shared_type>_observe` function represented by passed
+/// Releases a callback subscribed via `yxmlelem_observe` function represented by passed
 /// observer parameter.
 #[no_mangle]
 pub unsafe extern "C" fn yxmlelem_unobserve(xml: *mut XmlElement, subscription_id: c_uint) {
@@ -2776,7 +2823,7 @@ pub unsafe extern "C" fn yxmlelem_unobserve(xml: *mut XmlElement, subscription_i
     xml.unobserve(subscription_id as SubscriptionId);
 }
 
-/// Releases a callback subscribed via `<shared_type>_observe` function represented by passed
+/// Releases a callback subscribed via `yxmltext_observe` function represented by passed
 /// observer parameter.
 #[no_mangle]
 pub unsafe extern "C" fn yxmltext_unobserve(xml: *mut XmlText, subscription_id: c_uint) {
@@ -2825,7 +2872,7 @@ pub unsafe extern "C" fn yxmltext_event_target(e: *const YXmlTextEvent) -> *mut 
 }
 
 /// Returns a path from a root type down to a current shared collection (which can be obtained using
-/// `ymap_event_target` function). It can consist of either integer indexes (used by sequence
+/// `ytext_event_target` function). It can consist of either integer indexes (used by sequence
 /// components) of *char keys (used by map components). `len` output parameter is used to provide
 /// information about length of the path.
 ///
@@ -3075,9 +3122,8 @@ pub unsafe extern "C" fn ymap_event_keys(
     Box::into_raw(out) as *mut _
 }
 
-/// Returns a sequence of changes produced by map component of shared collections (such as
-/// `YMap` and `YXmlText`/`YXmlElement` attribute changes). `len` output parameter is used to
-/// provide information about number of changes produced.
+/// Returns a sequence of changes produced by map component of shared collections.
+/// `len` output parameter is used to provide information about number of changes produced.
 ///
 /// Delta returned from this function should eventually be released using `yevent_keys_destroy`
 /// function.
@@ -3099,9 +3145,8 @@ pub unsafe extern "C" fn yxmlelem_event_keys(
     Box::into_raw(out) as *mut _
 }
 
-/// Returns a sequence of changes produced by map component of shared collections (such as
-/// `YMap` and `YXmlText`/`YXmlElement` attribute changes). `len` output parameter is used to
-/// provide information about number of changes produced.
+/// Returns a sequence of changes produced by map component of shared collections.
+/// `len` output parameter is used to provide information about number of changes produced.
 ///
 /// Delta returned from this function should eventually be released using `yevent_keys_destroy`
 /// function.
@@ -3123,7 +3168,8 @@ pub unsafe extern "C" fn yxmltext_event_keys(
     Box::into_raw(out) as *mut _
 }
 
-/// Releases memory allocated by the object returned from `yevent_keys` function.
+/// Releases memory allocated by the object returned from `yxml_event_keys` and `ymap_event_keys`
+/// functions.
 #[no_mangle]
 pub unsafe extern "C" fn yevent_keys_destroy(keys: *mut YEventKeyChange, len: c_int) {
     if !keys.is_null() {
@@ -3219,10 +3265,10 @@ pub const Y_EVENT_CHANGE_RETAIN: c_char = 3;
 /// 3. `Y_EVENT_CHANGE_RETAIN` marks a number of elements that have not been changed, counted from
 /// the previous element. `len` field informs about number of retained elements.
 ///
-/// A list of changes returned by `yevent_delta` enables to locate a position of all changes within
-/// an observed collection by using a combination of added/deleted change structs separated by
-/// retained changes (marking eg. number of elements that can be safely skipped, since they
-/// remained unchanged).
+/// A list of changes returned by `yarray_event_delta`/`yxml_event_delta` enables to locate a
+/// position of all changes within an observed collection by using a combination of added/deleted
+/// change structs separated by retained changes (marking eg. number of elements that can be safely
+/// skipped, since they remained unchanged).
 #[repr(C)]
 pub struct YEventChange {
     /// Tag field used to identify particular type of change made:
@@ -3289,21 +3335,24 @@ impl Drop for YEventChange {
     }
 }
 
-/// A data type representing a single change detected over an observed shared collection. A type
+/// A data type representing a single change detected over an observed `YText`/`YXmlText`. A type
 /// of change can be detected using a `tag` field:
 ///
-/// 1. `Y_EVENT_CHANGE_ADD` marks a new elements added to a collection. In this case `values` field
-/// contains a pointer to a list of newly inserted values, while `len` field informs about their
-/// count.
+/// 1. `Y_EVENT_CHANGE_ADD` marks a new characters added to a collection. In this case `insert`
+/// field contains a pointer to a list of newly inserted values, while `len` field informs about
+/// their count. Additionally `attributes_len` nad `attributes` carry information about optional
+/// formatting attributes applied to edited blocks.
 /// 2. `Y_EVENT_CHANGE_DELETE` marks an existing elements removed from the collection. In this case
 /// `len` field informs about number of removed elements.
-/// 3. `Y_EVENT_CHANGE_RETAIN` marks a number of elements that have not been changed, counted from
-/// the previous element. `len` field informs about number of retained elements.
+/// 3. `Y_EVENT_CHANGE_RETAIN` marks a number of characters that have not been changed, counted from
+/// the previous element. `len` field informs about number of retained elements. Additionally
+/// `attributes_len` nad `attributes` carry information about optional formatting attributes applied
+/// to edited blocks.
 ///
-/// A list of changes returned by `yevent_delta` enables to locate a position of all changes within
-/// an observed collection by using a combination of added/deleted change structs separated by
-/// retained changes (marking eg. number of elements that can be safely skipped, since they
-/// remained unchanged).
+/// A list of changes returned by `ytext_event_delta`/`yxmltext_event_delta` enables to locate
+/// a position of all changes within an observed collection by using a combination of added/deleted
+/// change structs separated by retained changes (marking eg. number of elements that can be safely
+/// skipped, since they remained unchanged).
 #[repr(C)]
 pub struct YDelta {
     /// Tag field used to identify particular type of change made:
@@ -3325,8 +3374,11 @@ pub struct YDelta {
     /// length stored in `len` field) of newly inserted values.
     pub insert: *mut YOutput,
 
+    /// A number of formatting attributes assigned to an edited area represented by this delta.
     pub attributes_len: c_int,
 
+    /// A nullable pointer to a list of formatting attributes assigned to an edited area represented
+    /// by this delta.
     pub attributes: *mut YDeltaAttr,
 }
 
@@ -3383,9 +3435,9 @@ impl YDelta {
 impl<'a> From<&'a Delta> for YDelta {
     fn from(d: &Delta) -> Self {
         match d {
-            Delta::Insert(value, attrs) => YDelta::insert(value, attrs),
+            Delta::Inserted(value, attrs) => YDelta::insert(value, attrs),
             Delta::Retain(len, attrs) => YDelta::retain(*len, attrs),
-            Delta::Delete(len) => YDelta::delete(*len),
+            Delta::Deleted(len) => YDelta::delete(*len),
         }
     }
 }
@@ -3404,10 +3456,13 @@ impl Drop for YDelta {
     }
 }
 
+/// A single instance of formatting attribute stored as part of `YDelta` instance.
 #[repr(C)]
 pub struct YDeltaAttr {
-    key: *const c_char,
-    value: YOutput,
+    /// A null-terminated UTF-8 encoded string containing a unique formatting attribute name.
+    pub key: *const c_char,
+    /// A value assigned to a formatting attribute.
+    pub value: YOutput,
 }
 
 impl YDeltaAttr {

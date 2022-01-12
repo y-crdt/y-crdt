@@ -750,10 +750,19 @@ impl Observers {
     }
 }
 
+/// A path describing nesting structure between shared collections containing each other. It's a
+/// collection of segments which refer to either index (in case of [Array] or [XmlElement]) or
+/// string key (in case of [Map]) where successor shared collection can be found within subsequent
+/// parent types.
 pub type Path = VecDeque<PathSegment>;
 
+/// A single segment of a [Path].
 pub enum PathSegment {
+    /// Key segments are used to inform how to access child shared collections within a [Map] types.
     Key(Rc<str>),
+
+    /// Index segments are used to inform how to access child shared collections within an [Array]
+    /// or [XmlElement] types.
     Index(u32),
 }
 
@@ -777,15 +786,12 @@ impl<D> ChangeSet<D> {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Change {
     /// Determines a change that resulted in adding a consecutive number of new elements:
-    /// - For [Text]/[XmlText] it's a chunk of text (recognized as a vector of individual
-    ///   characters).
     /// - For [Array] it's a range of inserted elements.
     /// - For [XmlElement] it's a range of inserted child XML nodes.
     Added(Vec<Value>),
 
     /// Determines a change that resulted in removing a consecutive range of existing elements,
-    /// either string characters in case of [Text]/[XmlText], XML child nodes for [XmlElement] or
-    /// various elements stored in an [Array].
+    /// either XML child nodes for [XmlElement] or various elements stored in an [Array].
     Removed(u32),
 
     /// Determines a number of consecutive unchanged elements. Used to recognize non-edited spaces
@@ -807,13 +813,23 @@ pub enum EntryChange {
     Removed(Value),
 }
 
+/// A single change done over a text-like types: [Text] or [XmlText].
 #[derive(Debug, Clone, PartialEq)]
 pub enum Delta {
-    Insert(Value, Option<Box<Attrs>>),
+    /// Determines a change that resulted in insertion of a piece of text, which optionally could
+    /// have been formatted with provided set of attributes.
+    Inserted(Value, Option<Box<Attrs>>),
+
+    /// Determines a change that resulted in removing a consecutive range of characters.
+    Deleted(u32),
+
+    /// Determines a number of consecutive unchanged characters. Used to recognize non-edited spaces
+    /// between [Delta::Inserted] and/or [Delta::Deleted] chunks. Can contain an optional set of
+    /// attributes, which have been used to format an existing piece of text.
     Retain(u32, Option<Box<Attrs>>),
-    Delete(u32),
 }
 
+/// An alias for map of attributes used as formatting parameters by [Text] and [XmlText] types.
 pub type Attrs = HashMap<Box<str>, Any>;
 
 pub(crate) fn event_keys(
