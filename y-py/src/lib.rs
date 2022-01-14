@@ -21,6 +21,7 @@ use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1};
 use yrs::OffsetKind;
 use yrs::Options;
+use yrs::Xml;
 use yrs::{Array, Doc, Map, StateVector, Text, Transaction, Update};
 
 /// A y-py document type. Documents are most important units of collaborative resources management.
@@ -132,6 +133,28 @@ impl YDoc {
     /// onto `YMap` instance.
     pub fn get_map(&mut self, name: &str) -> YMap {
         self.begin_transaction().get_map(name)
+    }
+
+    /// Returns a `YXmlElement` shared data type, that's accessible for subsequent accesses using
+    /// given `name`.
+    ///
+    /// If there was no instance with this name before, it will be created and then returned.
+    ///
+    /// If there was an instance with this name, but it was of different type, it will be projected
+    /// onto `YXmlElement` instance.
+    pub fn get_xml_element(&mut self, name: &str) -> YXmlElement {
+        self.begin_transaction().get_xml_element(name)
+    }
+
+    /// Returns a `YXmlText` shared data type, that's accessible for subsequent accesses using given
+    /// `name`.
+    ///
+    /// If there was no instance with this name before, it will be created and then returned.
+    ///
+    /// If there was an instance with this name, but it was of different type, it will be projected
+    /// onto `YXmlText` instance.
+    pub fn get_xml_text(&mut self, name: &str) -> YXmlText {
+        self.begin_transaction().get_xml_text(name)
     }
 
     /// Returns a `YArray` shared data type, that's accessible for subsequent accesses using given
@@ -948,6 +971,167 @@ impl<'p> PyIterProtocol for YMapIterator {
     }
 }
 
+/// XML element data type. It represents an XML node, which can contain key-value attributes
+/// (interpreted as strings) as well as other nested XML elements or rich text (represented by
+/// `YXmlText` type).
+///
+/// In terms of conflict resolution, `YXmlElement` uses following rules:
+///
+/// - Attribute updates use logical last-write-wins principle, meaning the past updates are
+///   automatically overridden and discarded by newer ones, while concurrent updates made by
+///   different peers are resolved into a single value using document id seniority to establish
+///   an order.
+/// - Child node insertion uses sequencing rules from other Yrs collections - elements are inserted
+///   using interleave-resistant algorithm, where order of concurrent inserts at the same index
+///   is established using peer's document id seniority.
+#[pyclass]
+pub struct YXmlElement(XmlElement);
+
+#[pymethods]
+impl YXmlElement {
+    /// Returns a tag name of this XML node.
+    #[getter]
+    pub fn name(&self) -> String {
+        self.0.tag().to_string()
+    }
+
+    /// Returns a number of child XML nodes stored within this `YXMlElement` instance.
+    pub fn length(&self, txn: &YTransaction) -> u32 {
+        self.0.len(txn)
+    }
+
+    /// Inserts a new instance of `YXmlElement` as a child of this XML node and returns it.
+    pub fn insert_xml_element(
+        &self,
+        txn: &mut YTransaction,
+        index: u32,
+        name: &str,
+    ) -> YXmlElement {
+        YXmlElement(self.0.insert_elem(txn, index, name))
+    }
+
+    /// Inserts a new instance of `YXmlText` as a child of this XML node and returns it.
+    pub fn insert_xml_text(&self, txn: &mut YTransaction, index: u32) -> YXmlText {
+        YXmlText(self.0.insert_text(txn, index))
+    }
+
+    /// Removes a range of children XML nodes from this `YXmlElement` instance,
+    /// starting at given `index`.
+    pub fn delete(&self, txn: &mut YTransaction, index: u32, length: u32) {
+        self.0.remove_range(txn, index, length)
+    }
+
+    /// Appends a new instance of `YXmlElement` as the last child of this XML node and returns it.
+    pub fn push_xml_element(&self, txn: &mut YTransaction, name: &str) -> YXmlElement {
+        YXmlElement(self.0.push_elem_back(txn, name))
+    }
+
+    /// Appends a new instance of `YXmlText` as the last child of this XML node and returns it.
+    pub fn push_xml_text(&self, txn: &mut YTransaction) -> YXmlText {
+        YXmlText(self.0.push_text_back(txn))
+    }
+
+    /// Returns a first child of this XML node.
+    /// It can be either `YXmlElement`, `YXmlText` or `undefined` if current node has not children.
+    pub fn first_child(&self, txn: &YTransaction) -> PyObject {
+        Python::with_gil(|py| {
+            self.0
+                .first_child(txn)
+                .map_or(py.None(), |xml| XmlWrapper(xml).into_py(py))
+        })
+    }
+
+    /// Returns a next XML sibling node of this XMl node.
+    /// It can be either `YXmlElement`, `YXmlText` or `undefined` if current node is a last child of
+    /// parent XML node.
+    pub fn next_sibling(&self, txn: &YTransaction) -> PyObject {
+        Python::with_gil(|py| {
+            self.0
+                .next_sibling(txn)
+                .map_or(py.None(), |xml| XmlWrapper(xml).into_py(py))
+        })
+    }
+
+    /// Returns a previous XML sibling node of this XMl node.
+    /// It can be either `YXmlElement`, `YXmlText` or `undefined` if current node is a first child
+    /// of parent XML node.
+    pub fn prev_sibling(&self, txn: &YTransaction) -> PyObject {
+        Python::with_gil(|py| {
+            self.0
+                .prev_sibling(txn)
+                .map_or(py.None(), |xml| XmlWrapper(xml).into_py(py))
+        })
+    }
+
+    /// Returns a parent `YXmlElement` node or `undefined` if current node has no parent assigned.
+    pub fn parent(&self, txn: &YTransaction) -> PyObject {
+        Python::with_gil(|py| {
+            self.0
+                .parent(txn)
+                .map_or(py.None(), |xml| XmlWrapper(xml).into_py(py))
+        })
+    }
+
+    /// Returns a string representation of this XML node.
+    pub fn to_string(&self, txn: &YTransaction) -> String {
+        self.0.to_string(txn)
+    }
+
+    /// Sets a `name` and `value` as new attribute for this XML node. If an attribute with the same
+    /// `name` already existed on that node, its value with be overridden with a provided one.
+    pub fn set_attribute(&self, txn: &mut YTransaction, name: &str, value: &str) {
+        self.0.insert_attribute(txn, name, value)
+    }
+
+    /// Returns a value of an attribute given its `name`. If no attribute with such name existed,
+    /// `null` will be returned.
+    pub fn get_attribute(&self, txn: &YTransaction, name: &str) -> Option<String> {
+        self.0.get_attribute(txn, name)
+    }
+
+    /// Removes an attribute from this XML node, given its `name`.
+    pub fn remove_attribute(&self, txn: &mut YTransaction, name: &str) {
+        self.0.remove_attribute(txn, &name);
+    }
+
+    /// Returns an iterator that enables to traverse over all attributes of this XML node in
+    /// unspecified order.
+    pub fn attributes(&self, txn: &YTransaction) -> PyObject {
+        to_iter(unsafe {
+            let this: *const XmlElement = &self.0;
+            let tx: *const Transaction = txn.deref() as *const _;
+            let static_iter: ManuallyDrop<Attributes<'static>> =
+                ManuallyDrop::new((*this).attributes(tx.as_ref().unwrap()));
+            YXmlAttributes(static_iter).into()
+        })
+    }
+
+    /// Returns an iterator that enables a deep traversal of this XML node - starting from first
+    /// child over this XML node successors using depth-first strategy.
+    pub fn tree_walker(&self, txn: &YTransaction) -> PyObject {
+        to_iter(unsafe {
+            let this: *const XmlElement = &self.0;
+            let tx: *const Transaction = txn.deref() as *const _;
+            let static_iter: ManuallyDrop<TreeWalker<'static>> =
+                ManuallyDrop::new((*this).successors(tx.as_ref().unwrap()));
+            YXmlTreeWalker(static_iter).into()
+        })
+    }
+
+    /// Subscribes to all operations happening over this instance of `YXmlElement`. All changes are
+    /// batched and eventually triggered during transaction commit phase.
+    /// Returns an `YObserver` which, when free'd, will unsubscribe current callback.
+    pub fn observe(&mut self, f: js_sys::Function) -> YObserver {
+        self.0
+            .observe(move |txn, e| {
+                let e = YEvent::new(e, txn);
+                let arg: PyObject = e.into();
+                f.call1(&PyObject::UNDEFINED, &arg).unwrap();
+            })
+            .into()
+    }
+}
+
 struct PyObjectWrapper(PyObject);
 
 impl Prelim for PyObjectWrapper {
@@ -1087,6 +1271,17 @@ fn py_into_any(v: PyObject) -> Option<Any> {
             None
         }
     })
+}
+
+pub struct XmlWrapper(Xml);
+
+impl IntoPy<PyObject> for XmlWrapper {
+    fn into_py(self, py: Python) -> PyObject {
+        match self.0 {
+            Xml::Element(v) => YXmlElement(v).into_py(py),
+            Xml::Text(v) => YXmlText(v).into_py(py),
+        }
+    }
 }
 
 pub struct AnyWrapper(Any);
