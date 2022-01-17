@@ -729,6 +729,36 @@ impl XmlText {
         self.0.format(txn, index, len, attrs);
     }
 
+    /// Inserts an embed `content` at a given `index`.
+    ///
+    /// If `index` is `0`, this `content` will be inserted at the beginning of a current text.
+    /// If `index` is equal to current data structure length, this `embed` will be appended at
+    /// the end of it.
+    ///
+    /// This method will panic if provided `index` is greater than the length of a current text.
+    pub fn insert_embed(&self, txn: &mut Transaction, index: u32, content: Any) {
+        self.0.insert_embed(txn, index, content)
+    }
+
+    /// Inserts an embed `content` of text at a given `index`.
+    /// If `index` is `0`, this `content` will be inserted at the beginning of a current text.
+    /// If `index` is equal to current data structure length, this `chunk` will be appended at
+    /// the end of it.
+    /// Collection of supplied `attributes` will be used to wrap provided text `content` range with
+    /// a formatting blocks.
+    ///
+    /// This method will panic if provided `index` is greater than the length of a current text.
+    pub fn insert_embed_with_attributes(
+        &self,
+        txn: &mut Transaction,
+        index: u32,
+        content: Any,
+        attributes: Attrs,
+    ) {
+        self.0
+            .insert_embed_with_attributes(txn, index, content, attributes)
+    }
+
     /// Appends a new string `content` at the end of this XML text structure.
     pub fn push(&self, txn: &mut Transaction, content: &str) {
         let len = self.len();
