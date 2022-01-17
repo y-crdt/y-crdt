@@ -54,6 +54,10 @@ pub trait Decoder: Read {
     /// Object Notation.
     fn read_any(&mut self) -> lib0::any::Any;
 
+    /// Decode an embedded JSON string into [Any] struct. It's a complex type which is an extension
+    /// of native JavaScript Object Notation.
+    fn read_json(&mut self) -> lib0::any::Any;
+
     /// Read key string.
     fn read_key(&mut self) -> &str;
 
@@ -143,6 +147,11 @@ impl<'a> Decoder for DecoderV1<'a> {
 
     fn read_any(&mut self) -> Any {
         Any::decode(self)
+    }
+
+    fn read_json(&mut self) -> Any {
+        let src = self.read_string();
+        Any::from_json(src)
     }
 
     fn read_key(&mut self) -> &str {

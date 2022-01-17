@@ -164,18 +164,86 @@ impl Any {
             }
         }
     }
+
+    pub fn to_json(&self, buf: &mut String) {
+        use std::fmt::Write;
+
+        fn quoted(buf: &mut String, s: &str) {
+            buf.reserve(s.len() + 2);
+            buf.push('"');
+            for c in s.chars() {
+                match c {
+                    '\\' => buf.push_str("\\\\"),
+                    '\u{0008}' => buf.push_str("\\b"),
+                    '\u{000c}' => buf.push_str("\\f"),
+                    '\n' => buf.push_str("\\n"),
+                    '\r' => buf.push_str("\\r"),
+                    '\t' => buf.push_str("\\t"),
+                    '"' => buf.push_str("\\\""),
+                    c if c.is_control() => write!(buf, "\\u{:04x}", c as u32).unwrap(),
+                    c => buf.push(c),
+                }
+            }
+            buf.push('"');
+        }
+
+        match self {
+            Any::Null => buf.push_str("null"),
+            Any::Bool(value) => write!(buf, "{}", value).unwrap(),
+            Any::Number(value) => write!(buf, "{}", value).unwrap(),
+            Any::BigInt(value) => write!(buf, "{}", value).unwrap(),
+            Any::String(value) => quoted(buf, value.as_ref()),
+            Any::Array(values) => {
+                buf.push('[');
+                let mut i = values.iter();
+                if let Some(value) = i.next() {
+                    value.to_json(buf);
+                }
+                while let Some(value) = i.next() {
+                    buf.push(',');
+                    value.to_json(buf);
+                }
+                buf.push(']');
+            }
+            Any::Map(entries) => {
+                buf.push('{');
+                let mut i = entries.iter();
+                if let Some((key, value)) = i.next() {
+                    quoted(buf, key.as_str());
+                    buf.push(':');
+                    value.to_json(buf);
+                }
+                while let Some((key, value)) = i.next() {
+                    buf.push(',');
+                    quoted(buf, key.as_str());
+                    buf.push(':');
+                    value.to_json(buf);
+                }
+                buf.push('}');
+            }
+            other => panic!(
+                "Serialization of {} into JSON representation is not supported",
+                other
+            ),
+        }
+    }
+
+    pub fn from_json(src: &str) -> Self {
+        use crate::json_parser::JsonParser;
+        let mut parser = JsonParser::new(src.chars());
+        parser.parse().unwrap()
+    }
 }
 
 impl std::fmt::Display for Any {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Any::Null => write!(f, "null")?,
-            Any::Undefined => write!(f, "undefined")?,
-            Any::Bool(value) => write!(f, "{}", value)?,
-            Any::Number(value) => write!(f, "{}", value)?,
-            Any::BigInt(value) => write!(f, "{}", value)?,
-            Any::String(value) => write!(f, "{}", value)?,
-            Any::Buffer(value) => write!(f, "[binary: {} bytes]", value.len())?, //TODO: use base64?
+            Any::Null => f.write_str("null"),
+            Any::Undefined => f.write_str("undefined"),
+            Any::Bool(value) => write!(f, "{}", value),
+            Any::Number(value) => write!(f, "{}", value),
+            Any::BigInt(value) => write!(f, "{}", value),
+            Any::String(value) => f.write_str(value.as_ref()),
             Any::Array(values) => {
                 write!(f, "[")?;
                 let mut i = values.iter();
@@ -186,22 +254,27 @@ impl std::fmt::Display for Any {
                     write!(f, ", ")?;
                     value.fmt(f)?;
                 }
-                write!(f, "]")?;
+                write!(f, "]")
             }
             Any::Map(entries) => {
                 write!(f, "{{")?;
                 let mut i = entries.iter();
                 if let Some((key, value)) = i.next() {
-                    write!(f, "\"{}\": {}", key, value)?;
+                    write!(f, "{}: {}", key, value)?;
                 }
                 while let Some((key, value)) = i.next() {
-                    write!(f, ", \"{}\": {}", key, value)?;
+                    write!(f, ", {}: {}", key, value)?;
                 }
-                write!(f, "}}")?;
+                write!(f, "}}")
+            }
+            Any::Buffer(value) => {
+                f.write_str("0x")?;
+                for &byte in value.iter() {
+                    write!(f, "{:02x}", byte)?;
+                }
+                Ok(())
             }
         }
-
-        Ok(())
     }
 }
 

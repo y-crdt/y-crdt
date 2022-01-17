@@ -1134,7 +1134,7 @@ pub enum ItemContent {
 
     Doc(Box<str>, Box<Any>),
     JSON(Vec<String>), // String is JSON
-    Embed(String),     // String is JSON
+    Embed(Box<Any>),
 
     /// Formatting attribute entry. Format attributes are not considered countable and don't
     /// contribute to an overall length of a collection they are applied to.
@@ -1218,7 +1218,7 @@ impl ItemContent {
                 .iter()
                 .map(|v| Value::Any(Any::String(v.clone().into_boxed_str())))
                 .collect(),
-            ItemContent::Embed(v) => vec![Value::Any(Any::String(v.clone().into_boxed_str()))],
+            ItemContent::Embed(v) => vec![Value::Any(v.as_ref().clone())],
             ItemContent::Format(_, _) => Vec::default(),
             ItemContent::String(v) => v
                 .chars()
@@ -1241,7 +1241,7 @@ impl ItemContent {
             ItemContent::JSON(v) => v
                 .last()
                 .map(|v| Value::Any(Any::String(v.clone().into_boxed_str()))),
-            ItemContent::Embed(v) => Some(Value::Any(Any::String(v.clone().into_boxed_str()))),
+            ItemContent::Embed(v) => Some(Value::Any(v.as_ref().clone())),
             ItemContent::Format(_, _) => None,
             ItemContent::String(v) => Some(Value::Any(Any::String(v.clone().into()))),
             ItemContent::Type(c) => Some(c.clone().into_value(txn)),
@@ -1253,7 +1253,7 @@ impl ItemContent {
             ItemContent::Deleted(len) => encoder.write_len(*len - offset),
             ItemContent::Binary(buf) => encoder.write_buf(buf),
             ItemContent::String(s) => encoder.write_string(&s.as_str()[(offset as usize)..]),
-            ItemContent::Embed(s) => encoder.write_string(s.as_str()),
+            ItemContent::Embed(s) => encoder.write_json(s.as_ref()),
             ItemContent::JSON(s) => {
                 encoder.write_len(s.len() as u32 - offset);
                 for i in (offset as usize)..s.len() {
@@ -1262,7 +1262,7 @@ impl ItemContent {
             }
             ItemContent::Format(k, v) => {
                 encoder.write_string(k.as_ref());
-                encoder.write_any(v.as_ref());
+                encoder.write_json(v.as_ref());
             }
             ItemContent::Type(c) => {
                 let inner = c.borrow();
@@ -1291,7 +1291,7 @@ impl ItemContent {
             ItemContent::Deleted(len) => encoder.write_len(*len),
             ItemContent::Binary(buf) => encoder.write_buf(buf),
             ItemContent::String(s) => encoder.write_string(s.as_str()),
-            ItemContent::Embed(s) => encoder.write_string(s.as_str()),
+            ItemContent::Embed(s) => encoder.write_json(s.as_ref()),
             ItemContent::JSON(s) => {
                 encoder.write_len(s.len() as u32);
                 for json in s.iter() {
@@ -1300,7 +1300,7 @@ impl ItemContent {
             }
             ItemContent::Format(k, v) => {
                 encoder.write_string(k.as_ref());
-                encoder.write_any(v.as_ref());
+                encoder.write_json(v.as_ref());
             }
             ItemContent::Type(c) => {
                 let inner = c.borrow();
@@ -1338,9 +1338,9 @@ impl ItemContent {
             }
             BLOCK_ITEM_BINARY_REF_NUMBER => ItemContent::Binary(decoder.read_buf().to_owned()),
             BLOCK_ITEM_STRING_REF_NUMBER => ItemContent::String(decoder.read_string().into()),
-            BLOCK_ITEM_EMBED_REF_NUMBER => ItemContent::Embed(decoder.read_string().to_owned()),
+            BLOCK_ITEM_EMBED_REF_NUMBER => ItemContent::Embed(decoder.read_json().into()),
             BLOCK_ITEM_FORMAT_REF_NUMBER => {
-                ItemContent::Format(decoder.read_string().into(), decoder.read_any().into())
+                ItemContent::Format(decoder.read_string().into(), decoder.read_json().into())
             }
             BLOCK_ITEM_TYPE_REF_NUMBER => {
                 let type_ref = decoder.read_type_ref();
