@@ -603,7 +603,7 @@ pub unsafe extern "C" fn ytext_string(txt: *const Text, txn: *const Transaction)
     CString::new(str).unwrap().into_raw()
 }
 
-/// Inserts a null-terminated UTF-8 encoded string a a given `index`. `index` value must be between
+/// Inserts a null-terminated UTF-8 encoded string a given `index`. `index` value must be between
 /// 0 and a length of a `YText` (inclusive, accordingly to [ytext_len] return value), otherwise this
 /// function will panic.
 ///
@@ -662,6 +662,43 @@ pub unsafe extern "C" fn ytext_format(
         txt.format(txn, index, len, attrs);
     } else {
         panic!("ytext_format: passed attributes are not of map type")
+    }
+}
+
+/// Inserts an embed content given `index`. `index` value must be between 0 and a length of a
+/// `YText` (inclusive, accordingly to [ytext_len] return value), otherwise this
+/// function will panic.
+///
+/// A `str` parameter must be a null-terminated UTF-8 encoded string. This function doesn't take
+/// ownership over a passed value - it will be copied and therefore a string parameter must be
+/// released by the caller.
+///
+/// A nullable pointer with defined `attrs` will be used to wrap provided text with
+/// a formatting blocks. `attrs` must be a map-like type.
+#[no_mangle]
+pub unsafe extern "C" fn ytext_insert_embed(
+    txt: *const Text,
+    txn: *mut Transaction,
+    index: c_int,
+    content: *const YInput,
+    attrs: *const YInput,
+) {
+    assert!(!txt.is_null());
+    assert!(!txn.is_null());
+    assert!(!content.is_null());
+
+    let txn = txn.as_mut().unwrap();
+    let txt = txt.as_ref().unwrap();
+    let index = index as u32;
+    let content: Any = content.read().into();
+    if attrs.is_null() {
+        txt.insert_embed(txn, index, content)
+    } else {
+        if let Some(attrs) = map_attrs(attrs.read().into()) {
+            txt.insert_embed_with_attributes(txn, index, content, attrs)
+        } else {
+            panic!("ytext_insert_embed: passed attributes are not of map type")
+        }
     }
 }
 
@@ -1542,6 +1579,43 @@ pub unsafe extern "C" fn yxmltext_insert(
             txt.insert_with_attributes(txn, index as u32, chunk, attrs)
         } else {
             panic!("yxmltext_insert: passed attributes are not of map type")
+        }
+    }
+}
+
+/// Inserts an embed content given `index`. `index` value must be between 0 and a length of a
+/// `YXmlText` (inclusive, accordingly to [ytext_len] return value), otherwise this
+/// function will panic.
+///
+/// A `str` parameter must be a null-terminated UTF-8 encoded string. This function doesn't take
+/// ownership over a passed value - it will be copied and therefore a string parameter must be
+/// released by the caller.
+///
+/// A nullable pointer with defined `attrs` will be used to wrap provided text with
+/// a formatting blocks. `attrs` must be a map-like type.
+#[no_mangle]
+pub unsafe extern "C" fn yxmltext_insert_embed(
+    txt: *const XmlText,
+    txn: *mut Transaction,
+    index: c_int,
+    content: *const YInput,
+    attrs: *const YInput,
+) {
+    assert!(!txt.is_null());
+    assert!(!txn.is_null());
+    assert!(!content.is_null());
+
+    let txn = txn.as_mut().unwrap();
+    let txt = txt.as_ref().unwrap();
+    let index = index as u32;
+    let content: Any = content.read().into();
+    if attrs.is_null() {
+        txt.insert_embed(txn, index, content)
+    } else {
+        if let Some(attrs) = map_attrs(attrs.read().into()) {
+            txt.insert_embed_with_attributes(txn, index, content, attrs)
+        } else {
+            panic!("yxmltext_insert_embed: passed attributes are not of map type")
         }
     }
 }
