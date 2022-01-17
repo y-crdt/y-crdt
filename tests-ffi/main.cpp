@@ -451,6 +451,66 @@ TEST_CASE("YText observe") {
     ydoc_destroy(doc);
 }
 
+TEST_CASE("YText insert embed") {
+    YDoc *doc = ydoc_new_with_id(1);
+    YTransaction *txn = ytransaction_new(doc);
+    YText *txt = ytext(txn, "test");
+
+    YTextEventTest *t = ytext_event_test_new();
+    unsigned int sub = ytext_observe(txt, (void *) t, &ytext_test_observe);
+
+    char* _bold = (char*)"bold";
+    YInput _true = yinput_bool(1);
+    YInput attrs1 = yinput_json_map(&_bold, &_true, 1);
+
+    char* _width = (char*)"width";
+    YInput _100 = yinput_long(100);
+    YInput attrs2 = yinput_json_map(&_width, &_100, 1);
+
+    char* _image = (char*)"image";
+    YInput _image_src = yinput_string("imageSrc.png");
+    YInput embed = yinput_json_map(&_image, &_image_src, 1);
+
+    ytext_insert(txt, txn, 0, "ab", &attrs1);
+    ytext_insert_embed(txt, txn, 1, &embed, &attrs2);
+    ytransaction_commit(txn);
+
+    REQUIRE(t->delta_len == 3);
+
+    YDelta d = t->delta[0];
+    REQUIRE(d.tag == Y_EVENT_CHANGE_ADD);
+    REQUIRE(d.insert->len == 1);
+    REQUIRE(strcmp(youtput_read_string(d.insert), "a") == 0);
+    REQUIRE(d.attributes_len == 1);
+    REQUIRE(strcmp(d.attributes->key, "bold") == 0);
+    REQUIRE(*youtput_read_bool(&d.attributes->value) == 1);
+
+    d = t->delta[1];
+    REQUIRE(d.tag == Y_EVENT_CHANGE_ADD);
+    REQUIRE(d.len == 1);
+    REQUIRE(d.attributes_len == 1);
+    REQUIRE(strcmp(d.attributes->key, "width") == 0);
+    REQUIRE(*youtput_read_long(&d.attributes->value) == 100);
+    YMapEntry* e = youtput_read_json_map(d.insert);
+    REQUIRE(d.insert->len == 1);
+    REQUIRE(strcmp(e->key, "image") == 0);
+    REQUIRE(strcmp(youtput_read_string(&e->value), "imageSrc.png") == 0);
+
+    d = t->delta[2];
+    REQUIRE(d.tag == Y_EVENT_CHANGE_ADD);
+    REQUIRE(d.insert->len == 1);
+    REQUIRE(strcmp(youtput_read_string(d.insert), "b") == 0);
+    REQUIRE(d.attributes_len == 1);
+    REQUIRE(strcmp(d.attributes->key, "bold") == 0);
+    REQUIRE(*youtput_read_bool(&d.attributes->value) == 1);
+
+    ytext_test_clean(t);
+    ytext_unobserve(txt, sub);
+    free(t);
+    ytext_destroy(txt);
+    ydoc_destroy(doc);
+}
+
 typedef struct YArrayEventTest {
     int delta_len;
     YEventChange* delta;
