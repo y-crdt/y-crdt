@@ -1053,7 +1053,7 @@ int ytext_len(const YText *txt);
 char *ytext_string(const YText *txt, const YTransaction *txn);
 
 /**
- * Inserts a null-terminated UTF-8 encoded string a a given `index`. `index` value must be between
+ * Inserts a null-terminated UTF-8 encoded string a given `index`. `index` value must be between
  * 0 and a length of a `YText` (inclusive, accordingly to [ytext_len] return value), otherwise this
  * function will panic.
  *
@@ -1079,6 +1079,24 @@ void ytext_format(const YText *txt,
                   int index,
                   int len,
                   const struct YInput *attrs);
+
+/**
+ * Inserts an embed content given `index`. `index` value must be between 0 and a length of a
+ * `YText` (inclusive, accordingly to [ytext_len] return value), otherwise this
+ * function will panic.
+ *
+ * A `str` parameter must be a null-terminated UTF-8 encoded string. This function doesn't take
+ * ownership over a passed value - it will be copied and therefore a string parameter must be
+ * released by the caller.
+ *
+ * A nullable pointer with defined `attrs` will be used to wrap provided text with
+ * a formatting blocks. `attrs` must be a map-like type.
+ */
+void ytext_insert_embed(const YText *txt,
+                        YTransaction *txn,
+                        int index,
+                        const struct YInput *content,
+                        const struct YInput *attrs);
 
 /**
  * Removes a range of characters, starting a a given `index`. This range must fit within the bounds
@@ -1444,6 +1462,24 @@ void yxmltext_insert(const YXmlText *txt,
                      int index,
                      const char *str,
                      const struct YInput *attrs);
+
+/**
+ * Inserts an embed content given `index`. `index` value must be between 0 and a length of a
+ * `YXmlText` (inclusive, accordingly to [ytext_len] return value), otherwise this
+ * function will panic.
+ *
+ * A `str` parameter must be a null-terminated UTF-8 encoded string. This function doesn't take
+ * ownership over a passed value - it will be copied and therefore a string parameter must be
+ * released by the caller.
+ *
+ * A nullable pointer with defined `attrs` will be used to wrap provided text with
+ * a formatting blocks. `attrs` must be a map-like type.
+ */
+void yxmltext_insert_embed(const YXmlText *txt,
+                           YTransaction *txn,
+                           int index,
+                           const struct YInput *content,
+                           const struct YInput *attrs);
 
 /**
  * Wraps an existing piece of text within a range described by `index`-`len` parameters with
