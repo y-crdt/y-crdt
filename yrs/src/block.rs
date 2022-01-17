@@ -1639,11 +1639,22 @@ where
 }
 
 #[derive(Debug)]
-pub struct PrelimText(pub SmallString<[u8; 8]>);
+pub(crate) struct PrelimText(pub SmallString<[u8; 8]>);
 
 impl Prelim for PrelimText {
     fn into_content(self, _txn: &mut Transaction, _ptr: TypePtr) -> (ItemContent, Option<Self>) {
         (ItemContent::String(self.0.into()), None)
+    }
+
+    fn integrate(self, _txn: &mut Transaction, _inner_ref: BranchRef) {}
+}
+
+#[derive(Debug)]
+pub(crate) struct PrelimEmbed(pub Any);
+
+impl Prelim for PrelimEmbed {
+    fn into_content(self, _txn: &mut Transaction, _ptr: TypePtr) -> (ItemContent, Option<Self>) {
+        (ItemContent::Embed(Box::new(self.0)), None)
     }
 
     fn integrate(self, _txn: &mut Transaction, _inner_ref: BranchRef) {}

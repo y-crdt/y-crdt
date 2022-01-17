@@ -171,6 +171,53 @@ impl Text {
         }
     }
 
+    /// Inserts an embed `content` at a given `index`.
+    ///
+    /// If `index` is `0`, this `content` will be inserted at the beginning of a current text.
+    /// If `index` is equal to current data structure length, this `embed` will be appended at
+    /// the end of it.
+    ///
+    /// This method will panic if provided `index` is greater than the length of a current text.
+    pub fn insert_embed(&self, txn: &mut Transaction, index: u32, content: Any) {
+        if let Some(pos) = self.find_position(txn, index) {
+            let value = crate::block::PrelimEmbed(content);
+            txn.create_item(&pos, value, None);
+        } else {
+            panic!("The type or the position doesn't exist!");
+        }
+    }
+
+    /// Inserts an embed `content` of text at a given `index`.
+    /// If `index` is `0`, this `content` will be inserted at the beginning of a current text.
+    /// If `index` is equal to current data structure length, this `chunk` will be appended at
+    /// the end of it.
+    /// Collection of supplied `attributes` will be used to wrap provided text `content` range with
+    /// a formatting blocks.
+    ///
+    /// This method will panic if provided `index` is greater than the length of a current text.
+    pub fn insert_embed_with_attributes(
+        &self,
+        txn: &mut Transaction,
+        index: u32,
+        embed: Any,
+        attributes: Attrs,
+    ) {
+        if let Some(mut pos) = self.find_position(txn, index) {
+            Text::minimize_attr_changes(&mut pos, txn, &attributes);
+            let negated_attrs = self.insert_attributes(txn, &mut pos, attributes);
+
+            let value = crate::block::PrelimEmbed(embed);
+            let item = txn.create_item(&pos, value, None);
+
+            pos.right = Some(BlockPtr::from(item.id));
+            pos.forward(txn);
+
+            self.insert_negated_attributes(txn, &mut pos, negated_attrs);
+        } else {
+            panic!("The type or the position doesn't exist!");
+        }
+    }
+
     /// Appends a given `chunk` of text at the end of a current text structure.
     pub fn push(&self, txn: &mut Transaction, chunk: &str) {
         let idx = self.len();
@@ -1561,6 +1608,45 @@ mod test {
 
             assert_eq!(txt2.to_string(&txn), "yzb".to_string());
             assert_eq!(delta2.take(), expected);
+        }
+    }
+
+    #[test]
+    fn embed_with_attributes() {
+        let d1 = Doc::with_client_id(1);
+        let txt1 = {
+            let mut txn = d1.transact();
+            txn.get_text("text")
+        };
+
+        let delta1 = Rc::new(RefCell::new(None));
+        let delta_clone = delta1.clone();
+        let _sub1 = txt1.observe(move |txn, e| {
+            delta_clone.replace(Some(e.delta(txn).to_vec()));
+        });
+
+        {
+            let mut txn = d1.transact();
+            let a1: Attrs = HashMap::from([("bold".into(), true.into())]);
+            txt1.insert_with_attributes(&mut txn, 0, "ab", a1.clone());
+
+            let embed: Any = Any::Map(Box::new(HashMap::from([(
+                "image".into(),
+                "imageSrc.png".into(),
+            )])));
+            let a2: Attrs = HashMap::from([("bold".into(), true.into())]);
+            txt1.insert_embed_with_attributes(&mut txn, 1, embed.clone(), a2.clone());
+            txn.commit();
+
+            let a1 = Some(Box::new(a1));
+            let a2 = Some(Box::new(a2));
+
+            let expected = Some(vec![
+                Delta::Inserted("a".into(), a1.clone()),
+                Delta::Inserted(embed.into(), a2),
+                Delta::Inserted("b".into(), a1.clone()),
+            ]);
+            assert_eq!(delta1.take(), expected);
         }
     }
 }
