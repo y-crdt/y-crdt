@@ -1385,9 +1385,22 @@ mod test {
             let mut txn = d1.transact();
             txn.get_text("text")
         };
-        let delta = Rc::new(RefCell::new(None));
-        let delta_clone = delta.clone();
-        let _sub = txt1.observe(move |txn, e| {
+
+        let delta1 = Rc::new(RefCell::new(None));
+        let delta_clone = delta1.clone();
+        let _sub1 = txt1.observe(move |txn, e| {
+            delta_clone.replace(Some(e.delta(txn).to_vec()));
+        });
+
+        let d2 = Doc::with_client_id(2);
+        let txt2 = {
+            let mut txn = d2.transact();
+            txn.get_text("text")
+        };
+
+        let delta2 = Rc::new(RefCell::new(None));
+        let delta_clone = delta2.clone();
+        let _sub2 = txt2.observe(move |txn, e| {
             delta_clone.replace(Some(e.delta(txn).to_vec()));
         });
 
@@ -1397,75 +1410,109 @@ mod test {
         {
             let mut txn = d1.transact();
             txt1.insert_with_attributes(&mut txn, 0, "abc", a.clone());
+            let update = txn.encode_update_v1();
             txn.commit();
+
+            let expected = Some(vec![Delta::Inserted(
+                "abc".into(),
+                Some(Box::new(a.clone())),
+            )]);
 
             assert_eq!(txt1.to_string(&txn), "abc".to_string());
             assert_eq!(
                 txt1.diff(&mut txn),
                 vec![Diff::Insert("abc".into(), Some(Box::new(a.clone())))]
             );
-            assert_eq!(
-                delta.take(),
-                Some(vec![Delta::Inserted(
-                    "abc".into(),
-                    Some(Box::new(a.clone()))
-                )])
-            );
+            assert_eq!(delta1.take(), expected);
+
+            let mut txn = d2.transact();
+            d2.apply_update_v1(&mut txn, update.as_slice());
+            txn.commit();
+
+            assert_eq!(txt2.to_string(&txn), "abc".to_string());
+            assert_eq!(delta2.take(), expected);
         }
 
         // step 2
         {
             let mut txn = d1.transact();
             txt1.remove_range(&mut txn, 0, 1);
+            let update = txn.encode_update_v1();
             txn.commit();
+
+            let expected = Some(vec![Delta::Deleted(1)]);
 
             assert_eq!(txt1.to_string(&txn), "bc".to_string());
             assert_eq!(
                 txt1.diff(&mut txn),
                 vec![Diff::Insert("bc".into(), Some(Box::new(a.clone())))]
             );
-            assert_eq!(delta.take(), Some(vec![Delta::Deleted(1)]));
+            assert_eq!(delta1.take(), expected);
+
+            let mut txn = d2.transact();
+            d2.apply_update_v1(&mut txn, update.as_slice());
+            txn.commit();
+
+            assert_eq!(txt2.to_string(&txn), "bc".to_string());
+            assert_eq!(delta2.take(), expected);
         }
 
         // step 3
         {
             let mut txn = d1.transact();
             txt1.remove_range(&mut txn, 1, 1);
+            let update = txn.encode_update_v1();
             txn.commit();
+
+            let expected = Some(vec![Delta::Retain(1, None), Delta::Deleted(1)]);
 
             assert_eq!(txt1.to_string(&txn), "b".to_string());
             assert_eq!(
                 txt1.diff(&mut txn),
                 vec![Diff::Insert("b".into(), Some(Box::new(a.clone())))]
             );
-            assert_eq!(
-                delta.take(),
-                Some(vec![Delta::Retain(1, None), Delta::Deleted(1)])
-            );
+            assert_eq!(delta1.take(), expected);
+
+            let mut txn = d2.transact();
+            d2.apply_update_v1(&mut txn, update.as_slice());
+            txn.commit();
+
+            assert_eq!(txt2.to_string(&txn), "b".to_string());
+            assert_eq!(delta2.take(), expected);
         }
 
         // step 4
         {
             let mut txn = d1.transact();
             txt1.insert_with_attributes(&mut txn, 0, "z", a.clone());
+            let update = txn.encode_update_v1();
             txn.commit();
+
+            let expected = Some(vec![Delta::Inserted("z".into(), Some(Box::new(a.clone())))]);
 
             assert_eq!(txt1.to_string(&txn), "zb".to_string());
             assert_eq!(
                 txt1.diff(&mut txn),
                 vec![Diff::Insert("zb".into(), Some(Box::new(a.clone())))]
             );
-            assert_eq!(
-                delta.take(),
-                Some(vec![Delta::Inserted("z".into(), Some(Box::new(a.clone())))])
-            );
+            assert_eq!(delta1.take(), expected);
+
+            let mut txn = d2.transact();
+            d2.apply_update_v1(&mut txn, update.as_slice());
+            txn.commit();
+
+            assert_eq!(txt2.to_string(&txn), "zb".to_string());
+            assert_eq!(delta2.take(), expected);
         }
 
         // step 5
         {
             let mut txn = d1.transact();
             txt1.insert(&mut txn, 0, "y");
+            let update = txn.encode_update_v1();
             txn.commit();
+
+            let expected = Some(vec![Delta::Inserted("y".into(), None)]);
 
             assert_eq!(txt1.to_string(&txn), "yzb".to_string());
             assert_eq!(
@@ -1475,7 +1522,14 @@ mod test {
                     Diff::Insert("zb".into(), Some(Box::new(a.clone())))
                 ]
             );
-            assert_eq!(delta.take(), Some(vec![Delta::Inserted("y".into(), None)]));
+            assert_eq!(delta1.take(), expected);
+
+            let mut txn = d2.transact();
+            d2.apply_update_v1(&mut txn, update.as_slice());
+            txn.commit();
+
+            assert_eq!(txt2.to_string(&txn), "yzb".to_string());
+            assert_eq!(delta2.take(), expected);
         }
 
         // step 6
@@ -1483,7 +1537,13 @@ mod test {
             let mut txn = d1.transact();
             let b: Attrs = HashMap::from([("bold".into(), Any::Null)]);
             txt1.format(&mut txn, 0, 2, b.clone());
+            let update = txn.encode_update_v1();
             txn.commit();
+
+            let expected = Some(vec![
+                Delta::Retain(1, None),
+                Delta::Retain(1, Some(Box::new(b))),
+            ]);
 
             assert_eq!(txt1.to_string(&txn), "yzb".to_string());
             assert_eq!(
@@ -1493,13 +1553,14 @@ mod test {
                     Diff::Insert("b".into(), Some(Box::new(a.clone())))
                 ]
             );
-            assert_eq!(
-                delta.take(),
-                Some(vec![
-                    Delta::Retain(1, None),
-                    Delta::Retain(1, Some(Box::new(b))),
-                ])
-            );
+            assert_eq!(delta1.take(), expected);
+
+            let mut txn = d2.transact();
+            d2.apply_update_v1(&mut txn, update.as_slice());
+            txn.commit();
+
+            assert_eq!(txt2.to_string(&txn), "yzb".to_string());
+            assert_eq!(delta2.take(), expected);
         }
     }
 }
