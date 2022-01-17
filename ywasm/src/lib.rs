@@ -1173,6 +1173,34 @@ impl YText {
         }
     }
 
+    /// Inserts a given `embed` object into this `YText` instance, starting at a given `index`.
+    ///
+    /// Optional object with defined `attributes` will be used to wrap provided `embed`
+    /// with a formatting blocks.`attributes` are only supported for a `YText` instance which
+    /// already has been integrated into document store.
+    #[wasm_bindgen(js_name = insertEmbed)]
+    pub fn insert_embed(
+        &self,
+        txn: &mut YTransaction,
+        index: u32,
+        embed: JsValue,
+        attributes: JsValue,
+    ) {
+        match &mut *self.0.borrow_mut() {
+            SharedType::Integrated(v) => {
+                let content = js_into_any(&embed).unwrap();
+                if let Some(attrs) = Self::parse_attrs(attributes) {
+                    v.insert_embed_with_attributes(txn, index, content, attrs)
+                } else {
+                    v.insert_embed(txn, index, content)
+                }
+            }
+            SharedType::Prelim(_) => {
+                panic!("insert embeds requires YText instance to be integrated first.")
+            }
+        }
+    }
+
     /// Wraps an existing piece of text within a range described by `index`-`length` parameters with
     /// formatting blocks containing provided `attributes` metadata. This method only works for
     /// `YText` instances that already have been integrated into document store.
@@ -2084,6 +2112,28 @@ impl YXmlText {
             self.0.format(txn, index as u32, len as u32, attrs)
         } else {
             panic!("couldn't parse format attributes")
+        }
+    }
+
+    /// Inserts a given `embed` object into this `YXmlText` instance, starting at a given `index`.
+    ///
+    /// Optional object with defined `attributes` will be used to wrap provided `embed`
+    /// with a formatting blocks.`attributes` are only supported for a `YXmlText` instance which
+    /// already has been integrated into document store.
+    #[wasm_bindgen(js_name = insertEmbed)]
+    pub fn insert_embed(
+        &self,
+        txn: &mut YTransaction,
+        index: u32,
+        embed: JsValue,
+        attributes: JsValue,
+    ) {
+        let content = js_into_any(&embed).unwrap();
+        if let Some(attrs) = YText::parse_attrs(attributes) {
+            self.0
+                .insert_embed_with_attributes(txn, index, content, attrs)
+        } else {
+            self.0.insert_embed(txn, index, content)
         }
     }
 

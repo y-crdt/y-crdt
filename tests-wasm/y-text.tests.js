@@ -106,3 +106,28 @@ export const testObserver = tc => {
     t.compare(target, null)
     t.compare(delta, null)
 }
+
+/**
+ * @param {t.TestCase} tc
+ */
+export const testToDeltaEmbedAttributes = tc => {
+    const d1 = new Y.YDoc()
+    const text = d1.getText('test')
+
+    let delta = null
+    let observer = text.observe(e => {
+        delta = e.delta
+    })
+
+    d1.transact(txn => {
+        text.insert(txn, 0, 'ab', { bold: true })
+        text.insertEmbed(txn, 1, { image: 'imageSrc.png' }, { width: 100 })
+    })
+    console.log(delta)
+    t.compare(delta, [
+        { insert: 'a', attributes: { bold: true } },
+        { insert: { image: 'imageSrc.png' }, attributes: { width: 100 } },
+        { insert: 'b', attributes: { bold: true } }
+    ])
+    observer.free()
+}
