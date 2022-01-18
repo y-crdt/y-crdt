@@ -1,7 +1,7 @@
 use crate::doc::OffsetKind;
 use crate::store::Store;
 use crate::types::{
-    Branch, BranchRef, TypePtr, Value, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
+    Attrs, Branch, BranchRef, TypePtr, Value, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
     TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_HOOK, TYPE_REFS_XML_TEXT,
 };
 use crate::updates::decoder::Decoder;
@@ -403,6 +403,50 @@ pub(crate) struct ItemPosition {
     pub left: Option<BlockPtr>,
     pub right: Option<BlockPtr>,
     pub index: u32,
+    pub current_attrs: Option<Box<Attrs>>,
+}
+
+impl ItemPosition {
+    pub fn forward(&mut self, txn: &Transaction) -> bool {
+        if let Some(right) = self.right.as_ref() {
+            if let Some(item) = txn.store().blocks.get_item(right) {
+                if !item.is_deleted() {
+                    match &item.content {
+                        ItemContent::String(_) | ItemContent::Embed(_) => {
+                            self.index += item.len();
+                        }
+                        ItemContent::Format(key, value) => {
+                            let attrs = self
+                                .current_attrs
+                                .get_or_insert_with(|| Box::new(Attrs::new()));
+                            Text::update_current_attributes(attrs.as_mut(), key, value.as_ref());
+                        }
+                        _ => {}
+                    }
+                }
+
+                self.left = self.right.take();
+                self.right = item.right.clone();
+
+                return true;
+            }
+        }
+        false
+    }
+
+    /// If current `attributes` don't confirm the same keys as the formatting wrapping
+    /// current insert position, they should be unset.
+    pub fn unset_missing(&self, attributes: &mut Attrs) {
+        if let Some(attrs) = self.current_attrs.as_ref() {
+            // if current `attributes` don't confirm the same keys as the formatting wrapping
+            // current insert position, they should be unset
+            for (k, v) in attrs.iter() {
+                if !attributes.contains_key(k) {
+                    attributes.insert(k.clone(), Any::Null);
+                }
+            }
+        }
+    }
 }
 
 /// Bit flag (4th bit) for a marked item - not used atm.
@@ -1104,11 +1148,11 @@ pub enum ItemContent {
 
     Doc(Box<str>, Box<Any>),
     JSON(Vec<String>), // String is JSON
-    Embed(String),     // String is JSON
+    Embed(Box<Any>),
 
     /// Formatting attribute entry. Format attributes are not considered countable and don't
     /// contribute to an overall length of a collection they are applied to.
-    Format(Box<str>, Box<str>), // key, value: JSON
+    Format(Box<str>, Box<Any>),
 
     /// A chunk of text, usually applied by collaborative text insertion.
     String(SplittableString),
@@ -1188,7 +1232,7 @@ impl ItemContent {
                 .iter()
                 .map(|v| Value::Any(Any::String(v.clone().into_boxed_str())))
                 .collect(),
-            ItemContent::Embed(v) => vec![Value::Any(Any::String(v.clone().into_boxed_str()))],
+            ItemContent::Embed(v) => vec![Value::Any(v.as_ref().clone())],
             ItemContent::Format(_, _) => Vec::default(),
             ItemContent::String(v) => v
                 .chars()
@@ -1211,7 +1255,7 @@ impl ItemContent {
             ItemContent::JSON(v) => v
                 .last()
                 .map(|v| Value::Any(Any::String(v.clone().into_boxed_str()))),
-            ItemContent::Embed(v) => Some(Value::Any(Any::String(v.clone().into_boxed_str()))),
+            ItemContent::Embed(v) => Some(Value::Any(v.as_ref().clone())),
             ItemContent::Format(_, _) => None,
             ItemContent::String(v) => Some(Value::Any(Any::String(v.clone().into()))),
             ItemContent::Type(c) => Some(c.clone().into_value(txn)),
@@ -1223,7 +1267,7 @@ impl ItemContent {
             ItemContent::Deleted(len) => encoder.write_len(*len - offset),
             ItemContent::Binary(buf) => encoder.write_buf(buf),
             ItemContent::String(s) => encoder.write_string(&s.as_str()[(offset as usize)..]),
-            ItemContent::Embed(s) => encoder.write_string(s.as_str()),
+            ItemContent::Embed(s) => encoder.write_json(s.as_ref()),
             ItemContent::JSON(s) => {
                 encoder.write_len(s.len() as u32 - offset);
                 for i in (offset as usize)..s.len() {
@@ -1232,7 +1276,7 @@ impl ItemContent {
             }
             ItemContent::Format(k, v) => {
                 encoder.write_string(k.as_ref());
-                encoder.write_string(v.as_ref());
+                encoder.write_json(v.as_ref());
             }
             ItemContent::Type(c) => {
                 let inner = c.borrow();
@@ -1261,7 +1305,7 @@ impl ItemContent {
             ItemContent::Deleted(len) => encoder.write_len(*len),
             ItemContent::Binary(buf) => encoder.write_buf(buf),
             ItemContent::String(s) => encoder.write_string(s.as_str()),
-            ItemContent::Embed(s) => encoder.write_string(s.as_str()),
+            ItemContent::Embed(s) => encoder.write_json(s.as_ref()),
             ItemContent::JSON(s) => {
                 encoder.write_len(s.len() as u32);
                 for json in s.iter() {
@@ -1270,7 +1314,7 @@ impl ItemContent {
             }
             ItemContent::Format(k, v) => {
                 encoder.write_string(k.as_ref());
-                encoder.write_string(v.as_ref());
+                encoder.write_json(v.as_ref());
             }
             ItemContent::Type(c) => {
                 let inner = c.borrow();
@@ -1308,9 +1352,9 @@ impl ItemContent {
             }
             BLOCK_ITEM_BINARY_REF_NUMBER => ItemContent::Binary(decoder.read_buf().to_owned()),
             BLOCK_ITEM_STRING_REF_NUMBER => ItemContent::String(decoder.read_string().into()),
-            BLOCK_ITEM_EMBED_REF_NUMBER => ItemContent::Embed(decoder.read_string().to_owned()),
+            BLOCK_ITEM_EMBED_REF_NUMBER => ItemContent::Embed(decoder.read_json().into()),
             BLOCK_ITEM_FORMAT_REF_NUMBER => {
-                ItemContent::Format(decoder.read_string().into(), decoder.read_string().into())
+                ItemContent::Format(decoder.read_string().into(), decoder.read_json().into())
             }
             BLOCK_ITEM_TYPE_REF_NUMBER => {
                 let type_ref = decoder.read_type_ref();
@@ -1527,6 +1571,7 @@ impl std::fmt::Display for ItemContent {
                 }
                 write!(f, "}}")
             }
+            ItemContent::Format(k, v) => write!(f, "<{}={}>", k, v),
             ItemContent::Deleted(s) => write!(f, "deleted({})", s),
             ItemContent::Binary(s) => write!(f, "{:?}", s),
             ItemContent::Type(t) => {
@@ -1608,11 +1653,22 @@ where
 }
 
 #[derive(Debug)]
-pub struct PrelimText(pub SmallString<[u8; 8]>);
+pub(crate) struct PrelimText(pub SmallString<[u8; 8]>);
 
 impl Prelim for PrelimText {
     fn into_content(self, _txn: &mut Transaction, _ptr: TypePtr) -> (ItemContent, Option<Self>) {
         (ItemContent::String(self.0.into()), None)
+    }
+
+    fn integrate(self, _txn: &mut Transaction, _inner_ref: BranchRef) {}
+}
+
+#[derive(Debug)]
+pub(crate) struct PrelimEmbed(pub Any);
+
+impl Prelim for PrelimEmbed {
+    fn into_content(self, _txn: &mut Transaction, _ptr: TypePtr) -> (ItemContent, Option<Self>) {
+        (ItemContent::Embed(Box::new(self.0)), None)
     }
 
     fn integrate(self, _txn: &mut Transaction, _inner_ref: BranchRef) {}

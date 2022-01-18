@@ -1,7 +1,7 @@
 use crate::*;
 
 use crate::block::{BlockPtr, Item, ItemContent, Prelim, ID};
-use crate::block_store::StateVector;
+use crate::block_store::{Snapshot, StateVector};
 use crate::event::UpdateEvent;
 use crate::id_set::DeleteSet;
 use crate::store::Store;
@@ -60,6 +60,13 @@ impl Transaction {
     /// Returns state vector describing current state of the updates.
     pub fn state_vector(&self) -> StateVector {
         self.store().blocks.get_state_vector()
+    }
+
+    pub fn snapshot(&self) -> Snapshot {
+        let blocks = &self.store().blocks;
+        let sv = blocks.get_state_vector();
+        let ds = DeleteSet::from(blocks);
+        Snapshot::new(sv, ds)
     }
 
     /// Encodes the difference between remove peer state given its `state_vector` and the state
@@ -581,6 +588,44 @@ impl Transaction {
     /// Checks if item with a given `id` has been deleted within this transaction.
     pub(crate) fn has_deleted(&self, id: &ID) -> bool {
         self.delete_set.is_deleted(id)
+    }
+
+    pub(crate) fn split_by_snapshot(&mut self, snapshot: &Snapshot) {
+        let blocks = &mut self.store_mut().blocks;
+        for (client, &clock) in snapshot.state_map.iter() {
+            if let Some(list) = blocks.get(client) {
+                if clock < list.get_state() {
+                    let ptr = BlockPtr::new(ID::new(*client, clock), (list.len() - 1) as u32);
+                    blocks.split_block(&ptr);
+                }
+            }
+        }
+
+        for (client, range) in snapshot.delete_set.iter() {
+            if let Some(mut list) = blocks.get(client) {
+                for r in range.iter() {
+                    if let Some(pivot) = list.find_pivot(r.start) {
+                        let block = &list[pivot];
+                        if block.id().clock < r.start {
+                            blocks.split_block(&BlockPtr::new(
+                                ID::new(*client, r.start),
+                                pivot as u32,
+                            ));
+                            list = blocks.get(client).unwrap();
+                        }
+                    }
+
+                    if let Some(pivot) = list.find_pivot(r.end) {
+                        let block = &list[pivot];
+                        if block.id().clock + block.len() > r.end {
+                            blocks
+                                .split_block(&BlockPtr::new(ID::new(*client, r.end), pivot as u32));
+                            list = blocks.get(client).unwrap();
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

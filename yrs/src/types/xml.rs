@@ -1,12 +1,16 @@
 use crate::block::{Item, ItemContent, ItemPosition, Prelim};
+use crate::event::Subscription;
 use crate::store::Store;
+use crate::types::text::TextEvent;
 use crate::types::{
-    Branch, BranchRef, Entries, Event, Map, Observer, Text, TypePtr, Value, TYPE_REFS_XML_ELEMENT,
+    event_change_set, event_keys, Attrs, Branch, BranchRef, Change, ChangeSet, Delta, Entries,
+    EntryChange, Map, Observers, Path, Text, TypePtr, Value, TYPE_REFS_XML_ELEMENT,
     TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_TEXT,
 };
-use crate::Transaction;
+use crate::{SubscriptionId, Transaction, ID};
 use lib0::any::Any;
-use std::cell::Ref;
+use std::cell::{Ref, RefMut, UnsafeCell};
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 use std::rc::Rc;
 
@@ -103,6 +107,7 @@ impl XmlElement {
                 left: left.cloned(),
                 right: None,
                 index: 0,
+                current_attrs: None,
             }
         };
 
@@ -264,11 +269,16 @@ impl XmlElement {
     /// Attribute changes can be tracked by using [Event::keys] method.
     ///
     /// Returns an [Observer] which, when dropped, will unsubscribe current callback.
-    pub fn observe<F>(&self, f: F) -> Observer
+    pub fn observe<F>(&self, f: F) -> Subscription<XmlEvent>
     where
-        F: Fn(&Transaction, &Event) -> () + 'static,
+        F: Fn(&Transaction, &XmlEvent) -> () + 'static,
     {
         self.0.observe(f)
+    }
+
+    /// Unsubscribes a previously subscribed event callback identified by given `subscription_id`.
+    pub fn unobserve(&self, subscription_id: SubscriptionId) {
+        self.0.unobserve(subscription_id);
     }
 }
 
@@ -415,12 +425,23 @@ impl XmlFragment {
         }
     }
 
-    pub fn observe<F>(&self, f: F) -> Observer
+    pub fn observe<F>(&self, f: F) -> Subscription<XmlEvent>
     where
-        F: Fn(&Transaction, &Event) -> () + 'static,
+        F: Fn(&Transaction, &XmlEvent) -> () + 'static,
     {
-        let mut branch_ref = self.0.borrow_mut();
-        branch_ref.observe(f)
+        let mut branch = self.0.borrow_mut();
+        if let Observers::Xml(eh) = branch.observers.get_or_insert_with(Observers::xml) {
+            eh.subscribe(f)
+        } else {
+            panic!("Observed collection is of different type") //TODO: this should be Result::Err
+        }
+    }
+
+    pub fn unobserve(&self, subscription_id: u32) {
+        let mut branch = self.0.borrow_mut();
+        if let Some(Observers::Xml(eh)) = branch.observers.as_mut() {
+            eh.unsubscribe(subscription_id);
+        }
     }
 }
 
@@ -600,6 +621,10 @@ impl XmlText {
         self.0.inner()
     }
 
+    fn inner_mut(&self) -> RefMut<Branch> {
+        self.0.inner_mut()
+    }
+
     /// Returns a string representation of a current XML text.
     pub fn to_string(&self, txn: &Transaction) -> String {
         self.0.to_string(txn)
@@ -625,6 +650,7 @@ impl XmlText {
                 left: left.cloned(),
                 right: None,
                 index: 0,
+                current_attrs: None,
             }
         };
 
@@ -663,8 +689,12 @@ impl XmlText {
         self.0.len()
     }
 
-    /// Inserts a new string `content` into this XML text structure at the given `index`.
-    /// This method may panic if `index` if greater than a length of this text.
+    /// Inserts a `chunk` of text at a given `index`.
+    /// If `index` is `0`, this `chunk` will be inserted at the beginning of a current text.
+    /// If `index` is equal to current data structure length, this `chunk` will be appended at
+    /// the end of it.
+    ///
+    /// This method will panic if provided `index` is greater than the length of a current text.
     pub fn insert(&self, txn: &mut Transaction, index: u32, content: &str) {
         if let Some(mut pos) = self.0.find_position(txn, index) {
             let parent = { self.inner().ptr.clone() };
@@ -673,6 +703,60 @@ impl XmlText {
         } else {
             panic!("Cannot insert string content into an XML text: provided index is outside of the current text range!");
         }
+    }
+
+    /// Inserts a `chunk` of text at a given `index`.
+    /// If `index` is `0`, this `chunk` will be inserted at the beginning of a current text.
+    /// If `index` is equal to current data structure length, this `chunk` will be appended at
+    /// the end of it.
+    /// Collection of supplied `attributes` will be used to wrap provided text `chunk` range with a
+    /// formatting blocks.
+    ///
+    /// This method will panic if provided `index` is greater than the length of a current text.
+    pub fn insert_with_attributes(
+        &self,
+        txn: &mut Transaction,
+        index: u32,
+        content: &str,
+        attrs: Attrs,
+    ) {
+        self.0.insert_with_attributes(txn, index, content, attrs);
+    }
+
+    /// Wraps an existing piece of text within a range described by `index`-`len` parameters with
+    /// formatting blocks containing provided `attributes` metadata.
+    pub fn format(&self, txn: &mut Transaction, index: u32, len: u32, attrs: Attrs) {
+        self.0.format(txn, index, len, attrs);
+    }
+
+    /// Inserts an embed `content` at a given `index`.
+    ///
+    /// If `index` is `0`, this `content` will be inserted at the beginning of a current text.
+    /// If `index` is equal to current data structure length, this `embed` will be appended at
+    /// the end of it.
+    ///
+    /// This method will panic if provided `index` is greater than the length of a current text.
+    pub fn insert_embed(&self, txn: &mut Transaction, index: u32, content: Any) {
+        self.0.insert_embed(txn, index, content)
+    }
+
+    /// Inserts an embed `content` of text at a given `index`.
+    /// If `index` is `0`, this `content` will be inserted at the beginning of a current text.
+    /// If `index` is equal to current data structure length, this `chunk` will be appended at
+    /// the end of it.
+    /// Collection of supplied `attributes` will be used to wrap provided text `content` range with
+    /// a formatting blocks.
+    ///
+    /// This method will panic if provided `index` is greater than the length of a current text.
+    pub fn insert_embed_with_attributes(
+        &self,
+        txn: &mut Transaction,
+        index: u32,
+        content: Any,
+        attributes: Attrs,
+    ) {
+        self.0
+            .insert_embed_with_attributes(txn, index, content, attributes)
     }
 
     /// Appends a new string `content` at the end of this XML text structure.
@@ -697,11 +781,24 @@ impl XmlText {
     /// XML text attribute changes can be tracked using [Event::keys] method.
     ///
     /// Returns an [Observer] which, when dropped, will unsubscribe current callback.
-    pub fn observe<F>(&self, f: F) -> Observer
+    pub fn observe<F>(&self, f: F) -> Subscription<XmlTextEvent>
     where
-        F: Fn(&Transaction, &Event) -> () + 'static,
+        F: Fn(&Transaction, &XmlTextEvent) -> () + 'static,
     {
-        self.0.observe(f)
+        let mut branch = self.inner_mut();
+        if let Observers::XmlText(eh) = branch.observers.get_or_insert_with(Observers::xml_text) {
+            eh.subscribe(f)
+        } else {
+            panic!("Observed collection is of different type") //TODO: this should be Result::Err
+        }
+    }
+
+    /// Unsubscribes a previously subscribed event callback identified by given `subscription_id`.
+    pub fn unobserve(&self, subscription_id: SubscriptionId) {
+        let mut branch = self.inner_mut();
+        if let Some(Observers::XmlText(eh)) = branch.observers.as_mut() {
+            eh.unsubscribe(subscription_id);
+        }
     }
 }
 
@@ -720,6 +817,67 @@ impl From<BranchRef> for XmlText {
 impl Into<XmlText> for Text {
     fn into(self) -> XmlText {
         XmlText(self)
+    }
+}
+
+/// Event generated by [XmlText::observe] method. Emitted during transaction commit phase.
+pub struct XmlTextEvent {
+    target: XmlText,
+    current_target: BranchRef,
+    delta: UnsafeCell<Option<Vec<Delta>>>,
+    keys: UnsafeCell<Result<HashMap<Rc<str>, EntryChange>, HashSet<Option<Rc<str>>>>>,
+}
+
+impl XmlTextEvent {
+    pub(crate) fn new(branch_ref: BranchRef, key_changes: HashSet<Option<Rc<str>>>) -> Self {
+        let current_target = branch_ref.clone();
+        let target = XmlText::from(branch_ref);
+        XmlTextEvent {
+            target,
+            current_target,
+            delta: UnsafeCell::new(None),
+            keys: UnsafeCell::new(Err(key_changes)),
+        }
+    }
+
+    /// Returns a [XmlText] instance which emitted this event.
+    pub fn target(&self) -> &XmlText {
+        &self.target
+    }
+
+    /// Returns a path from root type down to [XmlText] instance which emitted this event.
+    pub fn path(&self, txn: &Transaction) -> Path {
+        Branch::path(self.current_target.borrow(), self.target.inner(), txn)
+    }
+
+    /// Returns a summary of text changes made over corresponding [XmlText] collection within
+    /// bounds of current transaction.
+    pub fn delta(&self, txn: &Transaction) -> &[Delta] {
+        let delta = unsafe { self.delta.get().as_mut().unwrap() };
+        delta
+            .get_or_insert_with(|| TextEvent::get_delta(self.target.inner(), txn))
+            .as_slice()
+    }
+
+    /// Returns a summary of attribute changes made over corresponding [XmlText] collection within
+    /// bounds of current transaction.
+    pub fn keys(&self, txn: &Transaction) -> &HashMap<Rc<str>, EntryChange> {
+        let keys = unsafe { self.keys.get().as_mut().unwrap() };
+
+        match keys {
+            Ok(keys) => {
+                return keys;
+            }
+            Err(subs) => {
+                let subs = event_keys(txn, self.target.inner(), subs);
+                *keys = Ok(subs);
+                if let Ok(keys) = keys {
+                    keys
+                } else {
+                    panic!("Defect: should not happen");
+                }
+            }
+        }
     }
 }
 
@@ -798,6 +956,88 @@ fn parent(inner: Ref<Branch>, txn: &Transaction) -> Option<XmlElement> {
         Some(XmlElement::from(parent.clone()))
     } else {
         None
+    }
+}
+
+/// Event generated by [XmlElement::observe] method. Emitted during transaction commit phase.
+pub struct XmlEvent {
+    target: XmlElement,
+    current_target: BranchRef,
+    change_set: UnsafeCell<Option<Box<ChangeSet<Change>>>>,
+    keys: UnsafeCell<Result<HashMap<Rc<str>, EntryChange>, HashSet<Option<Rc<str>>>>>,
+    children_changed: bool,
+}
+
+impl XmlEvent {
+    pub(crate) fn new(branch_ref: BranchRef, key_changes: HashSet<Option<Rc<str>>>) -> Self {
+        let current_target = branch_ref.clone();
+        let children_changed = key_changes.iter().any(Option::is_none);
+        XmlEvent {
+            target: XmlElement::from(branch_ref),
+            current_target,
+            change_set: UnsafeCell::new(None),
+            keys: UnsafeCell::new(Err(key_changes)),
+            children_changed,
+        }
+    }
+
+    /// True if any child XML nodes have been changed within bounds of current transaction.
+    pub fn children_changed(&self) -> bool {
+        self.children_changed
+    }
+
+    /// Returns a [XmlElement] instance which emitted this event.
+    pub fn target(&self) -> &XmlElement {
+        &self.target
+    }
+
+    /// Returns a path from root type down to [XmlElement] instance which emitted this event.
+    pub fn path(&self, txn: &Transaction) -> Path {
+        Branch::path(self.current_target.borrow(), self.target.inner(), txn)
+    }
+
+    /// Returns a summary of XML child nodes changed within corresponding [XmlElement] collection
+    /// within bounds of current transaction.
+    pub fn delta(&self, txn: &Transaction) -> &[Change] {
+        self.changes(txn).delta.as_slice()
+    }
+
+    /// Returns a collection of block identifiers that have been added within a bounds of
+    /// current transaction.
+    pub fn added(&self, txn: &Transaction) -> &HashSet<ID> {
+        &self.changes(txn).added
+    }
+
+    /// Returns a collection of block identifiers that have been removed within a bounds of
+    /// current transaction.
+    pub fn deleted(&self, txn: &Transaction) -> &HashSet<ID> {
+        &self.changes(txn).deleted
+    }
+
+    /// Returns a summary of attribute changes made over corresponding [XmlElement] collection
+    /// within bounds of current transaction.
+    pub fn keys(&self, txn: &Transaction) -> &HashMap<Rc<str>, EntryChange> {
+        let keys = unsafe { self.keys.get().as_mut().unwrap() };
+
+        match keys {
+            Ok(keys) => keys,
+            Err(subs) => {
+                let subs = event_keys(txn, self.target.inner(), subs);
+                *keys = Ok(subs);
+                if let Ok(keys) = keys {
+                    keys
+                } else {
+                    panic!("Defect: should not happen");
+                }
+            }
+        }
+    }
+
+    fn changes(&self, txn: &Transaction) -> &ChangeSet<Change> {
+        let change_set = unsafe { self.change_set.get().as_mut().unwrap() };
+        change_set.get_or_insert_with(|| {
+            Box::new(event_change_set(txn, self.target.inner().start.as_ref()))
+        })
     }
 }
 

@@ -134,6 +134,40 @@ impl Encode for StateVector {
     }
 }
 
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
+pub struct Snapshot {
+    pub delete_set: DeleteSet,
+    pub state_map: StateVector,
+}
+
+impl Snapshot {
+    pub fn new(state_map: StateVector, delete_set: DeleteSet) -> Self {
+        Snapshot {
+            state_map,
+            delete_set,
+        }
+    }
+
+    pub(crate) fn is_visible(&self, id: &ID) -> bool {
+        self.state_map.contains(id) && !self.delete_set.is_deleted(id)
+    }
+}
+
+impl Encode for Snapshot {
+    fn encode<E: Encoder>(&self, encoder: &mut E) {
+        self.delete_set.encode(encoder);
+        self.state_map.encode(encoder);
+    }
+}
+
+impl Decode for Snapshot {
+    fn decode<D: Decoder>(decoder: &mut D) -> Self {
+        let ds = DeleteSet::decode(decoder);
+        let sm = StateVector::decode(decoder);
+        Snapshot::new(sm, ds)
+    }
+}
+
 /// A resizable list of blocks inserted by a single client.
 pub(crate) struct ClientBlockList {
     list: Vec<UnsafeCell<block::Block>>,
