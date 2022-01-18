@@ -153,9 +153,10 @@ impl Text {
         txn: &mut Transaction,
         index: u32,
         chunk: &str,
-        attributes: Attrs,
+        mut attributes: Attrs,
     ) {
         if let Some(mut pos) = self.find_position(txn, index) {
+            pos.unset_missing(&mut attributes);
             Text::minimize_attr_changes(&mut pos, txn, &attributes);
             let negated_attrs = self.insert_attributes(txn, &mut pos, attributes);
 
@@ -200,9 +201,10 @@ impl Text {
         txn: &mut Transaction,
         index: u32,
         embed: Any,
-        attributes: Attrs,
+        mut attributes: Attrs,
     ) {
         if let Some(mut pos) = self.find_position(txn, index) {
+            pos.unset_missing(&mut attributes);
             Text::minimize_attr_changes(&mut pos, txn, &attributes);
             let negated_attrs = self.insert_attributes(txn, &mut pos, attributes);
 
@@ -1622,7 +1624,8 @@ mod test {
         let delta1 = Rc::new(RefCell::new(None));
         let delta_clone = delta1.clone();
         let _sub1 = txt1.observe(move |txn, e| {
-            delta_clone.replace(Some(e.delta(txn).to_vec()));
+            let delta = e.delta(txn).to_vec();
+            delta_clone.replace(Some(delta));
         });
 
         {
@@ -1634,7 +1637,7 @@ mod test {
                 "image".into(),
                 "imageSrc.png".into(),
             )])));
-            let a2: Attrs = HashMap::from([("bold".into(), true.into())]);
+            let a2: Attrs = HashMap::from([("width".into(), Any::BigInt(100))]);
             txt1.insert_embed_with_attributes(&mut txn, 1, embed.clone(), a2.clone());
             txn.commit();
 
@@ -1643,10 +1646,18 @@ mod test {
 
             let expected = Some(vec![
                 Delta::Inserted("a".into(), a1.clone()),
-                Delta::Inserted(embed.into(), a2),
+                Delta::Inserted(embed.clone().into(), a2.clone()),
                 Delta::Inserted("b".into(), a1.clone()),
             ]);
             assert_eq!(delta1.take(), expected);
+
+            let expected = vec![
+                Diff::Insert("a".into(), a1.clone()),
+                Diff::Insert(embed.into(), a2),
+                Diff::Insert("b".into(), a1.clone()),
+            ];
+            let mut txn = d1.transact();
+            assert_eq!(txt1.diff(&mut txn), expected);
         }
     }
 }

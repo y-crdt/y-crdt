@@ -433,6 +433,20 @@ impl ItemPosition {
         }
         false
     }
+
+    /// If current `attributes` don't confirm the same keys as the formatting wrapping
+    /// current insert position, they should be unset.
+    pub fn unset_missing(&self, attributes: &mut Attrs) {
+        if let Some(attrs) = self.current_attrs.as_ref() {
+            // if current `attributes` don't confirm the same keys as the formatting wrapping
+            // current insert position, they should be unset
+            for (k, v) in attrs.iter() {
+                if !attributes.contains_key(k) {
+                    attributes.insert(k.clone(), Any::Null);
+                }
+            }
+        }
+    }
 }
 
 /// Bit flag (4th bit) for a marked item - not used atm.
