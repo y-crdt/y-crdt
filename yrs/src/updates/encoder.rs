@@ -60,6 +60,10 @@ pub trait Encoder: Write {
     /// Object Notation with some extra cases.
     fn write_any(&mut self, any: &lib0::any::Any);
 
+    /// Encode JSON-like data type as nested JSON string. This is a complex structure which is an
+    /// extension to JavaScript Object Notation with some extra cases.
+    fn write_json(&mut self, any: &lib0::any::Any);
+
     /// Write a string key.
     fn write_key(&mut self, string: &str);
 }
@@ -138,6 +142,12 @@ impl Encoder for EncoderV1 {
 
     fn write_any(&mut self, any: &Any) {
         any.encode(self)
+    }
+
+    fn write_json(&mut self, any: &Any) {
+        let mut buf = String::new();
+        any.to_json(&mut buf);
+        self.write_string(buf.as_str())
     }
 
     fn write_key(&mut self, key: &str) {

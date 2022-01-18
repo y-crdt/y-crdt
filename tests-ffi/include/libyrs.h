@@ -158,14 +158,6 @@ typedef struct YXmlAttrIter {} YXmlAttrIter;
  */
 typedef struct YXmlTreeWalker {} YXmlTreeWalker;
 
-/**
- * Subscription handle returned by observe functions. It can be released via `yobserver_destroy`
- * function in order to cancel subscribed callback.
- */
-typedef struct YObserver {} YObserver;
-
-typedef struct Event {} Event;
-
 
 #include <stdarg.h>
 #include <stdbool.h>
@@ -619,26 +611,56 @@ typedef YXmlAttrIter YXmlAttrIter;
 typedef YXmlTreeWalker YXmlTreeWalker;
 
 /**
- * Subscription handle returned by observe functions. It can be released via `yobserver_destroy`
- * function in order to cancel subscribed callback.
+ * Event pushed into callbacks registered with `ytext_observe` function. It contains delta of all
+ * text changes made within a scope of corresponding transaction (see: `ytext_event_delta`) as
+ * well as navigation data used to identify a `YText` instance which triggered this event.
  */
-typedef YObserver YObserver;
+typedef struct YTextEvent {
+  const void *inner;
+  const YTransaction *txn;
+} YTextEvent;
 
 /**
- * Event passed over to a callbacks subscribed via <shared_type>_observe functions. It enables
- * tracking changes happening over different shared collection types, which can be separated into:
- *
- * 1. `yevent_delta` function, which returns changes over a sequence component of shared types,
- * such as `YArray`, `YText`, `YXmlText` and XML nodes added to `YXmlElement`. Data returned this
- * way should be disposed eventually via `yevent_delta_destroy` function.
- * 2. `yevent_keys` function, which returns changes over a map component of shared types, such as
- * `YMap` entries and `YXmlElement`/`YXmlText` attribute changed. Data returned this way should be
- * disposed eventually via `yevent_keys_destroy` function.
+ * Event pushed into callbacks registered with `ymap_observe` function. It contains all
+ * key-value changes made within a scope of corresponding transaction (see: `ymap_event_keys`) as
+ * well as navigation data used to identify a `YMap` instance which triggered this event.
  */
-typedef struct YEvent {
-  const Event *inner;
+typedef struct YMapEvent {
+  const void *inner;
   const YTransaction *txn;
-} YEvent;
+} YMapEvent;
+
+/**
+ * Event pushed into callbacks registered with `yarray_observe` function. It contains delta of all
+ * content changes made within a scope of corresponding transaction (see: `yarray_event_delta`) as
+ * well as navigation data used to identify a `YArray` instance which triggered this event.
+ */
+typedef struct YArrayEvent {
+  const void *inner;
+  const YTransaction *txn;
+} YArrayEvent;
+
+/**
+ * Event pushed into callbacks registered with `yxmlelem_observe` function. It contains
+ * all attribute changes made within a scope of corresponding transaction
+ * (see: `yxmlelem_event_keys`) as well as child XML nodes changes (see: `yxmlelem_event_delta`)
+ * and navigation data used to identify a `YXmlElement` instance which triggered this event.
+ */
+typedef struct YXmlEvent {
+  const void *inner;
+  const YTransaction *txn;
+} YXmlEvent;
+
+/**
+ * Event pushed into callbacks registered with `yxmltext_observe` function. It contains
+ * all attribute changes made within a scope of corresponding transaction
+ * (see: `yxmltext_event_keys`) as well as text edits (see: `yxmltext_event_delta`)
+ * and navigation data used to identify a `YXmlText` instance which triggered this event.
+ */
+typedef struct YXmlTextEvent {
+  const void *inner;
+  const YTransaction *txn;
+} YXmlTextEvent;
 
 typedef union YPathSegmentCase {
   const char *key;
@@ -673,6 +695,74 @@ typedef struct YPathSegment {
 } YPathSegment;
 
 /**
+ * A single instance of formatting attribute stored as part of `YDelta` instance.
+ */
+typedef struct YDeltaAttr {
+  /**
+   * A null-terminated UTF-8 encoded string containing a unique formatting attribute name.
+   */
+  const char *key;
+  /**
+   * A value assigned to a formatting attribute.
+   */
+  struct YOutput value;
+} YDeltaAttr;
+
+/**
+ * A data type representing a single change detected over an observed `YText`/`YXmlText`. A type
+ * of change can be detected using a `tag` field:
+ *
+ * 1. `Y_EVENT_CHANGE_ADD` marks a new characters added to a collection. In this case `insert`
+ * field contains a pointer to a list of newly inserted values, while `len` field informs about
+ * their count. Additionally `attributes_len` nad `attributes` carry information about optional
+ * formatting attributes applied to edited blocks.
+ * 2. `Y_EVENT_CHANGE_DELETE` marks an existing elements removed from the collection. In this case
+ * `len` field informs about number of removed elements.
+ * 3. `Y_EVENT_CHANGE_RETAIN` marks a number of characters that have not been changed, counted from
+ * the previous element. `len` field informs about number of retained elements. Additionally
+ * `attributes_len` nad `attributes` carry information about optional formatting attributes applied
+ * to edited blocks.
+ *
+ * A list of changes returned by `ytext_event_delta`/`yxmltext_event_delta` enables to locate
+ * a position of all changes within an observed collection by using a combination of added/deleted
+ * change structs separated by retained changes (marking eg. number of elements that can be safely
+ * skipped, since they remained unchanged).
+ */
+typedef struct YDelta {
+  /**
+   * Tag field used to identify particular type of change made:
+   *
+   * 1. `Y_EVENT_CHANGE_ADD` marks a new elements added to a collection. In this case `values`
+   * field contains a pointer to a list of newly inserted values, while `len` field informs about
+   * their count.
+   * 2. `Y_EVENT_CHANGE_DELETE` marks an existing elements removed from the collection. In this
+   * case `len` field informs about number of removed elements.
+   * 3. `Y_EVENT_CHANGE_RETAIN` marks a number of elements that have not been changed, counted
+   * from the previous element. `len` field informs about number of retained elements.
+   */
+  char tag;
+  /**
+   * Number of element affected by current type of a change. It can refer to a number of
+   * inserted `values`, number of deleted element or a number of retained (unchanged) values.
+   */
+  int len;
+  /**
+   * Used in case when current change is of `Y_EVENT_CHANGE_ADD` type. Contains a list (of
+   * length stored in `len` field) of newly inserted values.
+   */
+  struct YOutput *insert;
+  /**
+   * A number of formatting attributes assigned to an edited area represented by this delta.
+   */
+  int attributes_len;
+  /**
+   * A nullable pointer to a list of formatting attributes assigned to an edited area represented
+   * by this delta.
+   */
+  struct YDeltaAttr *attributes;
+} YDelta;
+
+/**
  * A data type representing a single change detected over an observed shared collection. A type
  * of change can be detected using a `tag` field:
  *
@@ -684,10 +774,10 @@ typedef struct YPathSegment {
  * 3. `Y_EVENT_CHANGE_RETAIN` marks a number of elements that have not been changed, counted from
  * the previous element. `len` field informs about number of retained elements.
  *
- * A list of changes returned by `yevent_delta` enables to locate a position of all changes within
- * an observed collection by using a combination of added/deleted change structs separated by
- * retained changes (marking eg. number of elements that can be safely skipped, since they
- * remained unchanged).
+ * A list of changes returned by `yarray_event_delta`/`yxml_event_delta` enables to locate a
+ * position of all changes within an observed collection by using a combination of added/deleted
+ * change structs separated by retained changes (marking eg. number of elements that can be safely
+ * skipped, since they remained unchanged).
  */
 typedef struct YEventChange {
   /**
@@ -963,15 +1053,50 @@ int ytext_len(const YText *txt);
 char *ytext_string(const YText *txt, const YTransaction *txn);
 
 /**
- * Inserts a null-terminated UTF-8 encoded string a a given `index`. `index` value must be between
+ * Inserts a null-terminated UTF-8 encoded string a given `index`. `index` value must be between
  * 0 and a length of a `YText` (inclusive, accordingly to [ytext_len] return value), otherwise this
  * function will panic.
  *
  * A `str` parameter must be a null-terminated UTF-8 encoded string. This function doesn't take
  * ownership over a passed value - it will be copied and therefore a string parameter must be
  * released by the caller.
+ *
+ * A nullable pointer with defined `attrs` will be used to wrap provided text with
+ * a formatting blocks. `attrs` must be a map-like type.
  */
-void ytext_insert(const YText *txt, YTransaction *txn, int index, const char *value);
+void ytext_insert(const YText *txt,
+                  YTransaction *txn,
+                  int index,
+                  const char *value,
+                  const struct YInput *attrs);
+
+/**
+ * Wraps an existing piece of text within a range described by `index`-`len` parameters with
+ * formatting blocks containing provided `attrs` metadata. `attrs` must be a map-like type.
+ */
+void ytext_format(const YText *txt,
+                  YTransaction *txn,
+                  int index,
+                  int len,
+                  const struct YInput *attrs);
+
+/**
+ * Inserts an embed content given `index`. `index` value must be between 0 and a length of a
+ * `YText` (inclusive, accordingly to [ytext_len] return value), otherwise this
+ * function will panic.
+ *
+ * A `str` parameter must be a null-terminated UTF-8 encoded string. This function doesn't take
+ * ownership over a passed value - it will be copied and therefore a string parameter must be
+ * released by the caller.
+ *
+ * A nullable pointer with defined `attrs` will be used to wrap provided text with
+ * a formatting blocks. `attrs` must be a map-like type.
+ */
+void ytext_insert_embed(const YText *txt,
+                        YTransaction *txn,
+                        int index,
+                        const struct YInput *content,
+                        const struct YInput *attrs);
 
 /**
  * Removes a range of characters, starting a a given `index`. This range must fit within the bounds
@@ -1328,8 +1453,43 @@ char *yxmltext_string(const YXmlText *txt, const YTransaction *txn);
  * A `str` parameter must be a null-terminated UTF-8 encoded string. This function doesn't take
  * ownership over a passed value - it will be copied and therefore a string parameter must be
  * released by the caller.
+ *
+ * A nullable pointer with defined `attrs` will be used to wrap provided text with
+ * a formatting blocks. `attrs` must be a map-like type.
  */
-void yxmltext_insert(const YXmlText *txt, YTransaction *txn, int index, const char *str);
+void yxmltext_insert(const YXmlText *txt,
+                     YTransaction *txn,
+                     int index,
+                     const char *str,
+                     const struct YInput *attrs);
+
+/**
+ * Inserts an embed content given `index`. `index` value must be between 0 and a length of a
+ * `YXmlText` (inclusive, accordingly to [ytext_len] return value), otherwise this
+ * function will panic.
+ *
+ * A `str` parameter must be a null-terminated UTF-8 encoded string. This function doesn't take
+ * ownership over a passed value - it will be copied and therefore a string parameter must be
+ * released by the caller.
+ *
+ * A nullable pointer with defined `attrs` will be used to wrap provided text with
+ * a formatting blocks. `attrs` must be a map-like type.
+ */
+void yxmltext_insert_embed(const YXmlText *txt,
+                           YTransaction *txn,
+                           int index,
+                           const struct YInput *content,
+                           const struct YInput *attrs);
+
+/**
+ * Wraps an existing piece of text within a range described by `index`-`len` parameters with
+ * formatting blocks containing provided `attrs` metadata. `attrs` must be a map-like type.
+ */
+void yxmltext_format(const YXmlText *txt,
+                     YTransaction *txn,
+                     int index,
+                     int len,
+                     const struct YInput *attrs);
 
 /**
  * Removes a range of characters, starting a a given `index`. This range must fit within the bounds
@@ -1591,47 +1751,164 @@ YText *youtput_read_ytext(const struct YOutput *val);
  */
 YXmlText *youtput_read_yxmltext(const struct YOutput *val);
 
-YObserver *ytext_observe(const YText *txt, void *state, void (*cb)(void*, const struct YEvent*));
-
-YObserver *ymap_observe(const YMap *map, void *state, void (*cb)(void*, const struct YEvent*));
-
-YObserver *yarray_observe(const YArray *array,
-                          void *state,
-                          void (*cb)(void*, const struct YEvent*));
-
-YObserver *yxmlelem_observe(const YXmlElement *xml,
-                            void *state,
-                            void (*cb)(void*, const struct YEvent*));
-
-YObserver *yxmltext_observe(const YXmlText *xml,
-                            void *state,
-                            void (*cb)(void*, const struct YEvent*));
+/**
+ * Subscribes a given callback function `cb` to changes made by this `YText` instance. Callbacks
+ * are triggered whenever a `ytransaction_commit` is called.
+ * Returns a subscription ID which can be then used to unsubscribe this callback by using
+ * `ytext_unobserve` function.
+ */
+unsigned int ytext_observe(const YText *txt,
+                           void *state,
+                           void (*cb)(void*, const struct YTextEvent*));
 
 /**
- * Releases a callback subscribed via `<shared_type>_observe` function represented by passed
+ * Subscribes a given callback function `cb` to changes made by this `YMap` instance. Callbacks
+ * are triggered whenever a `ytransaction_commit` is called.
+ * Returns a subscription ID which can be then used to unsubscribe this callback by using
+ * `ymap_unobserve` function.
+ */
+unsigned int ymap_observe(const YMap *map, void *state, void (*cb)(void*, const struct YMapEvent*));
+
+/**
+ * Subscribes a given callback function `cb` to changes made by this `YArray` instance. Callbacks
+ * are triggered whenever a `ytransaction_commit` is called.
+ * Returns a subscription ID which can be then used to unsubscribe this callback by using
+ * `yarray_unobserve` function.
+ */
+unsigned int yarray_observe(const YArray *array,
+                            void *state,
+                            void (*cb)(void*, const struct YArrayEvent*));
+
+/**
+ * Subscribes a given callback function `cb` to changes made by this `YXmlElement` instance.
+ * Callbacks are triggered whenever a `ytransaction_commit` is called.
+ * Returns a subscription ID which can be then used to unsubscribe this callback by using
+ * `yxmlelem_unobserve` function.
+ */
+unsigned int yxmlelem_observe(const YXmlElement *xml,
+                              void *state,
+                              void (*cb)(void*, const struct YXmlEvent*));
+
+/**
+ * Subscribes a given callback function `cb` to changes made by this `YXmlText` instance. Callbacks
+ * are triggered whenever a `ytransaction_commit` is called.
+ * Returns a subscription ID which can be then used to unsubscribe this callback by using
+ * `yxmltext_unobserve` function.
+ */
+unsigned int yxmltext_observe(const YXmlText *xml,
+                              void *state,
+                              void (*cb)(void*, const struct YXmlTextEvent*));
+
+/**
+ * Releases a callback subscribed via `ytext_observe` function represented by passed
  * observer parameter.
  */
-void yobserver_destroy(YObserver *e);
+void ytext_unobserve(YText *text, unsigned int subscription_id);
+
+/**
+ * Releases a callback subscribed via `yarray_observe` function represented by passed
+ * observer parameter.
+ */
+void yarray_unobserve(YArray *array, unsigned int subscription_id);
+
+/**
+ * Releases a callback subscribed via `ymap_observe` function represented by passed
+ * observer parameter.
+ */
+void ymap_unobserve(YMap *map, unsigned int subscription_id);
+
+/**
+ * Releases a callback subscribed via `yxmlelem_observe` function represented by passed
+ * observer parameter.
+ */
+void yxmlelem_unobserve(YXmlElement *xml, unsigned int subscription_id);
+
+/**
+ * Releases a callback subscribed via `yxmltext_observe` function represented by passed
+ * observer parameter.
+ */
+void yxmltext_unobserve(YXmlText *xml, unsigned int subscription_id);
 
 /**
  * Returns a pointer to a shared collection, which triggered passed event `e`.
  */
-struct YOutput *yevent_target(const struct YEvent *e);
+YText *ytext_event_target(const struct YTextEvent *e);
+
+/**
+ * Returns a pointer to a shared collection, which triggered passed event `e`.
+ */
+YArray *yarray_event_target(const struct YArrayEvent *e);
+
+/**
+ * Returns a pointer to a shared collection, which triggered passed event `e`.
+ */
+YMap *ymap_event_target(const struct YMapEvent *e);
+
+/**
+ * Returns a pointer to a shared collection, which triggered passed event `e`.
+ */
+YXmlElement *yxmlelem_event_target(const struct YXmlEvent *e);
+
+/**
+ * Returns a pointer to a shared collection, which triggered passed event `e`.
+ */
+YXmlText *yxmltext_event_target(const struct YXmlTextEvent *e);
 
 /**
  * Returns a path from a root type down to a current shared collection (which can be obtained using
- * `yevent_target` function). It can consist of either integer indexes (used by sequence
+ * `ytext_event_target` function). It can consist of either integer indexes (used by sequence
  * components) of *char keys (used by map components). `len` output parameter is used to provide
  * information about length of the path.
  *
- * Path returned this way should be eventually released using `yevent_path_destroy`.
+ * Path returned this way should be eventually released using `ypath_destroy`.
  */
-struct YPathSegment *yevent_path(const struct YEvent *e, int *len);
+struct YPathSegment *ytext_event_path(const struct YTextEvent *e, int *len);
 
 /**
- * Releases allocated memory used by objects returned from `yevent_path` function.
+ * Returns a path from a root type down to a current shared collection (which can be obtained using
+ * `ymap_event_target` function). It can consist of either integer indexes (used by sequence
+ * components) of *char keys (used by map components). `len` output parameter is used to provide
+ * information about length of the path.
+ *
+ * Path returned this way should be eventually released using `ypath_destroy`.
  */
-void yevent_path_destroy(struct YPathSegment *path, int len);
+struct YPathSegment *ymap_event_path(const struct YMapEvent *e, int *len);
+
+/**
+ * Returns a path from a root type down to a current shared collection (which can be obtained using
+ * `yxmlelem_event_path` function). It can consist of either integer indexes (used by sequence
+ * components) of *char keys (used by map components). `len` output parameter is used to provide
+ * information about length of the path.
+ *
+ * Path returned this way should be eventually released using `ypath_destroy`.
+ */
+struct YPathSegment *yxmlelem_event_path(const struct YXmlEvent *e, int *len);
+
+/**
+ * Returns a path from a root type down to a current shared collection (which can be obtained using
+ * `yxmltext_event_path` function). It can consist of either integer indexes (used by sequence
+ * components) of *char keys (used by map components). `len` output parameter is used to provide
+ * information about length of the path.
+ *
+ * Path returned this way should be eventually released using `ypath_destroy`.
+ */
+struct YPathSegment *yxmltext_event_path(const struct YXmlTextEvent *e, int *len);
+
+/**
+ * Returns a path from a root type down to a current shared collection (which can be obtained using
+ * `yarray_event_target` function). It can consist of either integer indexes (used by sequence
+ * components) of *char keys (used by map components). `len` output parameter is used to provide
+ * information about length of the path.
+ *
+ * Path returned this way should be eventually released using `ypath_destroy`.
+ */
+struct YPathSegment *yarray_event_path(const struct YArrayEvent *e, int *len);
+
+/**
+ * Releases allocated memory used by objects returned from path accessor functions of shared type
+ * events.
+ */
+void ypath_destroy(struct YPathSegment *path, int len);
 
 /**
  * Returns a sequence of changes produced by sequence component of shared collections (such as
@@ -1641,7 +1918,42 @@ void yevent_path_destroy(struct YPathSegment *path, int len);
  * Delta returned from this function should eventually be released using `yevent_delta_destroy`
  * function.
  */
-struct YEventChange *yevent_delta(const struct YEvent *e, int *len);
+struct YDelta *ytext_event_delta(const struct YTextEvent *e, int *len);
+
+/**
+ * Returns a sequence of changes produced by sequence component of shared collections (such as
+ * `YText`, `YXmlText` and XML nodes added to `YXmlElement`). `len` output parameter is used to
+ * provide information about number of changes produced.
+ *
+ * Delta returned from this function should eventually be released using `yevent_delta_destroy`
+ * function.
+ */
+struct YDelta *yxmltext_event_delta(const struct YXmlTextEvent *e, int *len);
+
+/**
+ * Returns a sequence of changes produced by sequence component of shared collections (such as
+ * `YText`, `YXmlText` and XML nodes added to `YXmlElement`). `len` output parameter is used to
+ * provide information about number of changes produced.
+ *
+ * Delta returned from this function should eventually be released using `yevent_delta_destroy`
+ * function.
+ */
+struct YEventChange *yarray_event_delta(const struct YArrayEvent *e, int *len);
+
+/**
+ * Returns a sequence of changes produced by sequence component of shared collections (such as
+ * `YText`, `YXmlText` and XML nodes added to `YXmlElement`). `len` output parameter is used to
+ * provide information about number of changes produced.
+ *
+ * Delta returned from this function should eventually be released using `yevent_delta_destroy`
+ * function.
+ */
+struct YEventChange *yxmlelem_event_delta(const struct YXmlEvent *e, int *len);
+
+/**
+ * Releases memory allocated by the object returned from `yevent_delta` function.
+ */
+void ytext_delta_destroy(struct YDelta *delta, int len);
 
 /**
  * Releases memory allocated by the object returned from `yevent_delta` function.
@@ -1656,10 +1968,29 @@ void yevent_delta_destroy(struct YEventChange *delta, int len);
  * Delta returned from this function should eventually be released using `yevent_keys_destroy`
  * function.
  */
-struct YEventKeyChange *yevent_keys(const struct YEvent *e, int *len);
+struct YEventKeyChange *ymap_event_keys(const struct YMapEvent *e, int *len);
 
 /**
- * Releases memory allocated by the object returned from `yevent_keys` function.
+ * Returns a sequence of changes produced by map component of shared collections.
+ * `len` output parameter is used to provide information about number of changes produced.
+ *
+ * Delta returned from this function should eventually be released using `yevent_keys_destroy`
+ * function.
+ */
+struct YEventKeyChange *yxmlelem_event_keys(const struct YXmlEvent *e, int *len);
+
+/**
+ * Returns a sequence of changes produced by map component of shared collections.
+ * `len` output parameter is used to provide information about number of changes produced.
+ *
+ * Delta returned from this function should eventually be released using `yevent_keys_destroy`
+ * function.
+ */
+struct YEventKeyChange *yxmltext_event_keys(const struct YXmlTextEvent *e, int *len);
+
+/**
+ * Releases memory allocated by the object returned from `yxml_event_keys` and `ymap_event_keys`
+ * functions.
  */
 void yevent_keys_destroy(struct YEventKeyChange *keys, int len);
 

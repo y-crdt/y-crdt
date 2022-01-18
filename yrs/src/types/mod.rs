@@ -9,11 +9,13 @@ pub use text::Text;
 
 use crate::block::{BlockPtr, Item, ItemContent, ItemPosition, Prelim};
 use crate::block_store::BlockStore;
-use crate::event::{EventHandler, Subscription};
-use crate::types::array::Array;
-use crate::types::xml::{XmlElement, XmlText};
+use crate::event::EventHandler;
+use crate::types::array::{Array, ArrayEvent};
+use crate::types::map::MapEvent;
+use crate::types::text::TextEvent;
+use crate::types::xml::{XmlElement, XmlEvent, XmlText, XmlTextEvent};
 use lib0::any::Any;
-use std::cell::{BorrowMutError, Ref, RefCell, RefMut, UnsafeCell};
+use std::cell::{BorrowMutError, Ref, RefCell, RefMut};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Formatter;
 use std::rc::Rc;
@@ -164,16 +166,15 @@ impl BranchRef {
             left,
             right,
             index: 0,
+            current_attrs: None,
         };
 
         txn.create_item(&pos, value, None)
     }
 
     pub(crate) fn trigger(&self, txn: &Transaction, keys: HashSet<Option<Rc<str>>>) {
-        let e = Event::new(self.clone(), keys);
-        let branch_ref = self.borrow();
-        if let Some(h) = branch_ref.observers.as_ref() {
-            h.publish(txn, &e);
+        if let Some(o) = self.borrow().observers.as_ref() {
+            o.publish(self.clone(), txn, keys);
         }
     }
 }
@@ -244,7 +245,7 @@ pub struct Branch {
     /// An identifier of an underlying complex data type (eg. is it an Array or a Map).
     type_ref: TypeRefs,
 
-    observers: Option<EventHandler<Event>>,
+    observers: Option<Observers>,
 }
 
 impl std::fmt::Debug for Branch {
@@ -438,70 +439,9 @@ impl Branch {
         (None, None)
     }
 
-    pub(crate) fn observe<F: Fn(&Transaction, &Event) -> () + 'static>(
-        &mut self,
-        f: F,
-    ) -> Observer {
-        let handler = self.observers.get_or_insert_with(EventHandler::default);
-        Observer(handler.subscribe(f))
-    }
-}
-
-pub type Path = VecDeque<PathSegment>;
-
-pub enum PathSegment {
-    Key(Rc<str>),
-    Index(u32),
-}
-
-pub struct ChangeSet {
-    added: HashSet<ID>,
-    deleted: HashSet<ID>,
-    delta: Vec<Change>,
-}
-
-/// An event type, triggered upon transaction commit and passed over to function callbacks
-/// registered using `observe` method on corresponding shared data types.
-#[derive(Debug)]
-pub struct Event {
-    current_target: BranchRef,
-    target: BranchRef,
-    keys_changed: HashSet<Option<Rc<str>>>,
-    change_set: UnsafeCell<Option<Box<ChangeSet>>>,
-    keys: UnsafeCell<Option<Box<HashMap<Rc<str>, EntryChange>>>>,
-}
-
-impl Event {
-    pub(crate) fn new(target: BranchRef, keys_changed: HashSet<Option<Rc<str>>>) -> Self {
-        Event {
-            current_target: target.clone(),
-            target,
-            keys_changed,
-            change_set: UnsafeCell::new(None),
-            keys: UnsafeCell::new(None),
-        }
-    }
-
-    /// Returns enum containing a reference to a shared data type on which current event has been
-    /// fired.  
-    pub fn target(&self) -> Value {
-        let type_ref = { self.target.borrow().type_ref() };
-        let branch_ref = self.target.clone();
-        match type_ref {
-            TYPE_REFS_ARRAY => Value::YArray(Array::from(branch_ref)),
-            TYPE_REFS_MAP => Value::YMap(Map::from(branch_ref)),
-            TYPE_REFS_TEXT => Value::YText(Text::from(branch_ref)),
-            TYPE_REFS_XML_ELEMENT => Value::YXmlElement(XmlElement::from(branch_ref)),
-            TYPE_REFS_XML_TEXT => Value::YXmlText(XmlText::from(branch_ref)),
-            _ => panic!("Unknown type ref"),
-        }
-    }
-
-    /// Returns a path From root level type down to a current shared data type being
-    /// a [Self::target].
-    pub fn path(&self, txn: &Transaction) -> Path {
-        let parent = self.current_target.borrow();
-        let mut child = self.target.borrow();
+    pub(crate) fn path(from: Ref<Branch>, to: Ref<Branch>, txn: &Transaction) -> Path {
+        let parent = from;
+        let mut child = to;
         let mut path = VecDeque::default();
         while let TypePtr::Id(ptr) = &child.ptr {
             if parent.ptr == child.ptr {
@@ -536,206 +476,7 @@ impl Event {
         }
         path
     }
-
-    /// Returns all changes done upon map component of a current shared data type (which can be
-    /// accessed using [Self::target]) within a bounds of corresponding transaction `txn`. These
-    /// changes are done in result of operations made on [Map] data type or attribute changes of
-    /// [XmlElement] and [XmlText] types.
-    pub fn keys(&self, txn: &Transaction) -> &HashMap<Rc<str>, EntryChange> {
-        let keys = unsafe { self.keys.get().as_mut().unwrap() };
-        keys.get_or_insert_with(|| {
-            let mut keys = HashMap::new();
-            let target = self.target.borrow();
-            for opt in self.keys_changed.iter() {
-                if let Some(key) = opt {
-                    let item = target
-                        .map
-                        .get(key.as_ref())
-                        .and_then(|ptr| txn.store().blocks.get_item(ptr));
-                    if let Some(item) = item {
-                        if item.id.clock >= txn.before_state.get(&item.id.client) {
-                            let mut prev = item
-                                .left
-                                .as_ref()
-                                .and_then(|ptr| txn.store().blocks.get_item(ptr));
-                            while let Some(p) = prev {
-                                if !txn.has_added(&p.id) {
-                                    break;
-                                }
-                                prev = p
-                                    .left
-                                    .as_ref()
-                                    .and_then(|ptr| txn.store().blocks.get_item(ptr));
-                            }
-
-                            if txn.has_deleted(&item.id) {
-                                if let Some(prev) = prev {
-                                    if txn.has_deleted(&prev.id) {
-                                        let old_value =
-                                            prev.content.get_content_last(txn).unwrap_or_default();
-                                        keys.insert(key.clone(), EntryChange::Removed(old_value));
-                                    }
-                                }
-                            } else {
-                                let new_value = item.content.get_content_last(txn).unwrap();
-                                if let Some(prev) = prev {
-                                    if txn.has_deleted(&prev.id) {
-                                        let old_value =
-                                            prev.content.get_content_last(txn).unwrap_or_default();
-                                        keys.insert(
-                                            key.clone(),
-                                            EntryChange::Updated(old_value, new_value),
-                                        );
-
-                                        continue;
-                                    }
-                                }
-
-                                keys.insert(key.clone(), EntryChange::Inserted(new_value));
-                            }
-                        } else if txn.has_deleted(&item.id) {
-                            let old_value = item.content.get_content_last(txn).unwrap_or_default();
-                            keys.insert(key.clone(), EntryChange::Removed(old_value));
-                        }
-                    }
-                }
-            }
-
-            Box::new(keys)
-        })
-    }
-
-    /// Returns identifiers of all new blocks inserted within a bounds of current transaction `txn`.
-    pub fn inserts(&self, txn: &Transaction) -> &HashSet<ID> {
-        &self.changes(txn).added
-    }
-
-    /// Returns identifiers of all new blocks tombstoned within a bounds of current transaction
-    /// `txn`.
-    pub fn removes(&self, txn: &Transaction) -> &HashSet<ID> {
-        &self.changes(txn).deleted
-    }
-
-    /// Returns collection of all changes done over an array component of a current shared data
-    /// type (which can be accessed using [Self::target]). These changes are usually done in result
-    /// of operations done on [Array] and [Text]/[XmlText] types, but also whenever [XmlElement]
-    /// children nodes list is modified.
-    pub fn delta(&self, txn: &Transaction) -> &[Change] {
-        self.changes(txn).delta.as_slice()
-    }
-
-    fn changes(&self, txn: &Transaction) -> &ChangeSet {
-        let start = { self.target.borrow().start.clone() };
-        let cell = unsafe { self.change_set.get().as_mut().unwrap() };
-        cell.get_or_insert_with(|| Box::new(Self::change_set_inner(start, txn)))
-    }
-
-    fn change_set_inner(start: Option<BlockPtr>, txn: &Transaction) -> ChangeSet {
-        let mut added = HashSet::new();
-        let mut deleted = HashSet::new();
-        let mut delta = Vec::new();
-
-        let mut last_op = None;
-
-        let mut current = start.and_then(|ptr| txn.store().blocks.get_item(&ptr));
-
-        while let Some(item) = current {
-            if item.is_deleted() {
-                if txn.has_deleted(&item.id) && !txn.has_added(&item.id) {
-                    let removed = match last_op.take() {
-                        None => 0,
-                        Some(Change::Removed(c)) => c,
-                        Some(other) => {
-                            delta.push(other);
-                            0
-                        }
-                    };
-                    last_op = Some(Change::Removed(removed + item.len()));
-                    deleted.insert(item.id);
-                } // else nop
-            } else {
-                if txn.has_added(&item.id) {
-                    let mut inserts = match last_op.take() {
-                        None => Vec::with_capacity(item.len() as usize),
-                        Some(Change::Added(values)) => values,
-                        Some(other) => {
-                            delta.push(other);
-                            Vec::with_capacity(item.len() as usize)
-                        }
-                    };
-                    inserts.append(&mut item.content.get_content(txn));
-                    last_op = Some(Change::Added(inserts));
-                    added.insert(item.id);
-                } else {
-                    let retain = match last_op.take() {
-                        None => 0,
-                        Some(Change::Retain(c)) => c,
-                        Some(other) => {
-                            delta.push(other);
-                            0
-                        }
-                    };
-                    last_op = Some(Change::Retain(retain + item.len()));
-                }
-            }
-
-            current = item
-                .right
-                .as_ref()
-                .and_then(|ptr| txn.store().blocks.get_item(ptr));
-        }
-
-        match last_op.take() {
-            Some(Change::Retain(_)) => { /* do nothing */ }
-            Some(change) => delta.push(change),
-            None => { /* do nothing */ }
-        }
-
-        ChangeSet {
-            added,
-            deleted,
-            delta,
-        }
-    }
 }
-
-/// A single change done over an array-component of shared data type.
-#[derive(Debug, Clone, PartialEq)]
-pub enum Change {
-    /// Determines a change that resulted in adding a consecutive number of new elements:
-    /// - For [Text]/[XmlText] it's a chunk of text (recognized as a vector of individual
-    ///   characters).
-    /// - For [Array] it's a range of inserted elements.
-    /// - For [XmlElement] it's a range of inserted child XML nodes.
-    Added(Vec<Value>),
-
-    /// Determines a change that resulted in removing a consecutive range of existing elements,
-    /// either string characters in case of [Text]/[XmlText], XML child nodes for [XmlElement] or
-    /// various elements stored in an [Array].
-    Removed(u32),
-
-    /// Determines a number of consecutive unchanged elements. Used to recognize non-edited spaces
-    /// between [Change::Added] and/or [Change::Removed] chunks.
-    Retain(u32),
-}
-
-/// A single change done over a map-component of shared data type.
-#[derive(Debug, Clone, PartialEq)]
-pub enum EntryChange {
-    /// Informs about a new value inserted under specified entry.
-    Inserted(Value),
-
-    /// Informs about a change of old value (1st field) to a new one (2nd field) under
-    /// a corresponding entry.
-    Updated(Value, Value),
-
-    /// Informs about a removal of a corresponding entry - contains a removed value.
-    Removed(Value),
-}
-
-/// Subscription handler returned by `observe` method of shared data types. When dropped, causes
-/// previously registered callbacks to be unsubscribed.
-pub struct Observer(Subscription<Event>);
 
 /// Value that can be returned by Yrs data types. This includes [Any] which is an extension
 /// representation of JSON, but also nested complex collaborative structures specific to Yrs.
@@ -966,4 +707,255 @@ impl std::fmt::Display for TypePtr {
             TypePtr::Named(name) => write!(f, "'{}'", name.as_ref()),
         }
     }
+}
+
+enum Observers {
+    Text(EventHandler<crate::types::text::TextEvent>),
+    Array(EventHandler<crate::types::array::ArrayEvent>),
+    Map(EventHandler<crate::types::map::MapEvent>),
+    Xml(EventHandler<crate::types::xml::XmlEvent>),
+    XmlText(EventHandler<crate::types::xml::XmlTextEvent>),
+}
+
+impl Observers {
+    pub fn text() -> Self {
+        Observers::Text(EventHandler::default())
+    }
+    pub fn array() -> Self {
+        Observers::Array(EventHandler::default())
+    }
+    pub fn map() -> Self {
+        Observers::Map(EventHandler::default())
+    }
+    pub fn xml() -> Self {
+        Observers::Xml(EventHandler::default())
+    }
+    pub fn xml_text() -> Self {
+        Observers::XmlText(EventHandler::default())
+    }
+
+    pub fn publish(
+        &self,
+        branch_ref: BranchRef,
+        txn: &Transaction,
+        keys: HashSet<Option<Rc<str>>>,
+    ) {
+        match self {
+            Observers::Text(eh) => eh.publish(txn, &TextEvent::new(branch_ref)),
+            Observers::Array(eh) => eh.publish(txn, &ArrayEvent::new(branch_ref)),
+            Observers::Map(eh) => eh.publish(txn, &MapEvent::new(branch_ref, keys)),
+            Observers::Xml(eh) => eh.publish(txn, &XmlEvent::new(branch_ref, keys)),
+            Observers::XmlText(eh) => eh.publish(txn, &XmlTextEvent::new(branch_ref, keys)),
+        }
+    }
+}
+
+/// A path describing nesting structure between shared collections containing each other. It's a
+/// collection of segments which refer to either index (in case of [Array] or [XmlElement]) or
+/// string key (in case of [Map]) where successor shared collection can be found within subsequent
+/// parent types.
+pub type Path = VecDeque<PathSegment>;
+
+/// A single segment of a [Path].
+pub enum PathSegment {
+    /// Key segments are used to inform how to access child shared collections within a [Map] types.
+    Key(Rc<str>),
+
+    /// Index segments are used to inform how to access child shared collections within an [Array]
+    /// or [XmlElement] types.
+    Index(u32),
+}
+
+pub(crate) struct ChangeSet<D> {
+    added: HashSet<ID>,
+    deleted: HashSet<ID>,
+    delta: Vec<D>,
+}
+
+impl<D> ChangeSet<D> {
+    pub fn new(added: HashSet<ID>, deleted: HashSet<ID>, delta: Vec<D>) -> Self {
+        ChangeSet {
+            added,
+            deleted,
+            delta,
+        }
+    }
+}
+
+/// A single change done over an array-component of shared data type.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Change {
+    /// Determines a change that resulted in adding a consecutive number of new elements:
+    /// - For [Array] it's a range of inserted elements.
+    /// - For [XmlElement] it's a range of inserted child XML nodes.
+    Added(Vec<Value>),
+
+    /// Determines a change that resulted in removing a consecutive range of existing elements,
+    /// either XML child nodes for [XmlElement] or various elements stored in an [Array].
+    Removed(u32),
+
+    /// Determines a number of consecutive unchanged elements. Used to recognize non-edited spaces
+    /// between [Change::Added] and/or [Change::Removed] chunks.
+    Retain(u32),
+}
+
+/// A single change done over a map-component of shared data type.
+#[derive(Debug, Clone, PartialEq)]
+pub enum EntryChange {
+    /// Informs about a new value inserted under specified entry.
+    Inserted(Value),
+
+    /// Informs about a change of old value (1st field) to a new one (2nd field) under
+    /// a corresponding entry.
+    Updated(Value, Value),
+
+    /// Informs about a removal of a corresponding entry - contains a removed value.
+    Removed(Value),
+}
+
+/// A single change done over a text-like types: [Text] or [XmlText].
+#[derive(Debug, Clone, PartialEq)]
+pub enum Delta {
+    /// Determines a change that resulted in insertion of a piece of text, which optionally could
+    /// have been formatted with provided set of attributes.
+    Inserted(Value, Option<Box<Attrs>>),
+
+    /// Determines a change that resulted in removing a consecutive range of characters.
+    Deleted(u32),
+
+    /// Determines a number of consecutive unchanged characters. Used to recognize non-edited spaces
+    /// between [Delta::Inserted] and/or [Delta::Deleted] chunks. Can contain an optional set of
+    /// attributes, which have been used to format an existing piece of text.
+    Retain(u32, Option<Box<Attrs>>),
+}
+
+/// An alias for map of attributes used as formatting parameters by [Text] and [XmlText] types.
+pub type Attrs = HashMap<Box<str>, Any>;
+
+pub(crate) fn event_keys(
+    txn: &Transaction,
+    target: Ref<Branch>,
+    keys_changed: &HashSet<Option<Rc<str>>>,
+) -> HashMap<Rc<str>, EntryChange> {
+    let mut keys = HashMap::new();
+    for opt in keys_changed.iter() {
+        if let Some(key) = opt {
+            let item = target
+                .map
+                .get(key.as_ref())
+                .and_then(|ptr| txn.store().blocks.get_item(ptr));
+            if let Some(item) = item {
+                if item.id.clock >= txn.before_state.get(&item.id.client) {
+                    let mut prev = item
+                        .left
+                        .as_ref()
+                        .and_then(|ptr| txn.store().blocks.get_item(ptr));
+                    while let Some(p) = prev {
+                        if !txn.has_added(&p.id) {
+                            break;
+                        }
+                        prev = p
+                            .left
+                            .as_ref()
+                            .and_then(|ptr| txn.store().blocks.get_item(ptr));
+                    }
+
+                    if txn.has_deleted(&item.id) {
+                        if let Some(prev) = prev {
+                            if txn.has_deleted(&prev.id) {
+                                let old_value =
+                                    prev.content.get_content_last(txn).unwrap_or_default();
+                                keys.insert(key.clone(), EntryChange::Removed(old_value));
+                            }
+                        }
+                    } else {
+                        let new_value = item.content.get_content_last(txn).unwrap();
+                        if let Some(prev) = prev {
+                            if txn.has_deleted(&prev.id) {
+                                let old_value =
+                                    prev.content.get_content_last(txn).unwrap_or_default();
+                                keys.insert(
+                                    key.clone(),
+                                    EntryChange::Updated(old_value, new_value),
+                                );
+
+                                continue;
+                            }
+                        }
+
+                        keys.insert(key.clone(), EntryChange::Inserted(new_value));
+                    }
+                } else if txn.has_deleted(&item.id) {
+                    let old_value = item.content.get_content_last(txn).unwrap_or_default();
+                    keys.insert(key.clone(), EntryChange::Removed(old_value));
+                }
+            }
+        }
+    }
+
+    keys
+}
+
+pub(crate) fn event_change_set(txn: &Transaction, start: Option<&BlockPtr>) -> ChangeSet<Change> {
+    let mut added = HashSet::new();
+    let mut deleted = HashSet::new();
+    let mut delta = Vec::new();
+
+    let mut last_op = None;
+
+    let mut current = start.and_then(|ptr| txn.store().blocks.get_item(&ptr));
+
+    while let Some(item) = current {
+        if item.is_deleted() {
+            if txn.has_deleted(&item.id) && !txn.has_added(&item.id) {
+                let removed = match last_op.take() {
+                    None => 0,
+                    Some(Change::Removed(c)) => c,
+                    Some(other) => {
+                        delta.push(other);
+                        0
+                    }
+                };
+                last_op = Some(Change::Removed(removed + item.len()));
+                deleted.insert(item.id);
+            } // else nop
+        } else {
+            if txn.has_added(&item.id) {
+                let mut inserts = match last_op.take() {
+                    None => Vec::with_capacity(item.len() as usize),
+                    Some(Change::Added(values)) => values,
+                    Some(other) => {
+                        delta.push(other);
+                        Vec::with_capacity(item.len() as usize)
+                    }
+                };
+                inserts.append(&mut item.content.get_content(txn));
+                last_op = Some(Change::Added(inserts));
+                added.insert(item.id);
+            } else {
+                let retain = match last_op.take() {
+                    None => 0,
+                    Some(Change::Retain(c)) => c,
+                    Some(other) => {
+                        delta.push(other);
+                        0
+                    }
+                };
+                last_op = Some(Change::Retain(retain + item.len()));
+            }
+        }
+
+        current = item
+            .right
+            .as_ref()
+            .and_then(|ptr| txn.store().blocks.get_item(ptr));
+    }
+
+    match last_op.take() {
+        Some(Change::Retain(_)) => { /* do nothing */ }
+        Some(change) => delta.push(change),
+        None => { /* do nothing */ }
+    }
+
+    ChangeSet::new(added, deleted, delta)
 }
