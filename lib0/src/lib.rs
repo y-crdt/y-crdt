@@ -4,3 +4,6 @@ pub mod decoding;
 pub mod encoding;
 mod json_parser;
 pub mod number;
+
+#[cfg(feature = "serde")]
+pub mod serde;
