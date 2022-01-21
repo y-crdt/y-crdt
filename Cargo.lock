@@ -1143,7 +1143,7 @@ dependencies = [
 
 [[package]]
 name = "yffi"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "lib0",
  "yrs",
