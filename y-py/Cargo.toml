@@ -11,7 +11,7 @@ name = "y_py"
 crate-type = ["cdylib"]
 
 [dependencies]
-yrs = { path = "../yrs", version = "0.3.0"}
+yrs = { path = "../yrs", version = "0.4.0"}
 lib0 = { path = "../lib0", version = "0.4.0"}
 
 [dependencies.pyo3]
