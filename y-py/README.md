@@ -1,43 +1,61 @@
-# y-py
+# Y-Py
 
-y-py is a Pythong binding to Yrs using Maturin, using pyo3.
+Y-Py is a Python binding for Y-CRDT. It provides distributed data types that enable real-time collaboration between devices. Y-Py can sync data with any other platform that has a Y-CRDT binding, allowing for seamless cross-domain communication. The library is a thin wrapper around Yrs, taking advantage of the safety and performance of Rust.
 
-Reference :
-https://docs.rs/crate/maturin/0.10.3
+## Installation
+```
+pip install y-py
+```
 
+## Getting Started
+Y-Py provides many of the same shared data types as [Yjs](https://docs.yjs.dev/). All objects are shared within a `YDoc` and get modified within a transaction block. 
 
-### install maturin
+```python
+import y_py as Y
 
-maturin is necessary to build y-py
+d1 = Y.YDoc()
+# Create a new YText object in the YDoc
+text = d1.get_text('test')
+# Start a transaction in order to update the text
+with d1.begin_transaction() as txn:
+    # Add text contents
+    text.push(txn, "hello world!")
+
+# Create another document
+d2 = Y.YDoc()
+# Share state with the original document
+state_vector = Y.encode_state_vector(d2)
+diff = Y.encode_state_as_update(d1, state_vector)
+Y.apply_update(d2, diff)
+
+with d2.begin_transaction() as txn: 
+    value = d2.get_text('test').to_string(txn)
+
+assert value == "hello world!"
+```
+
+## Development Setup
+0. Install Rust Nightly and Python
+1. Install `maturin` in order to build Y-Py 
 ```
 pip install maturin
 ```
+2. Create a development build of the library
+``` maturin develop ```
 
-### install rust
-
-You need to install nightly Rust
+## Tests
+All tests are located in `/tests`. You can run them with `pytest`.
 ```
-rustup install nightly
-rustup override set nightly
+pytest
 ```
 
-### Build y-py :
-- Build and install locally as a python module : ``` maturin develop ```
-- Build the wheels and stores them in `target/wheels` : ```maturin build```
-
-
-
-### use y-py :
-
+## Build Y-Py :
+Build the library as a wheel and store them in `target/wheels` : 
 ```
-import y_py
-
-# shows all the functions available in module y_py
-print(dir(y_py))
-
-# To be completed with working examples
-
+maturin build
 ```
+
+
 
 
 
