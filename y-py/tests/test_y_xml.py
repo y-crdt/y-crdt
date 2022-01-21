@@ -159,7 +159,7 @@ def test_xml_text_observer():
     with d1.begin_transaction() as txn:
         x.insert(txn, 0, 'abcd')
     assert get_value(target), get_value(x)
-    assert delta, [{"insert": ['a','b','c','d']}]
+    assert delta == [{"insert": "abcd"}] 
     assert attributes == {}
     target = None
     attributes = None

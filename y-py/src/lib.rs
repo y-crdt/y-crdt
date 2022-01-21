@@ -284,7 +284,6 @@ pub fn apply_update(doc: &mut YDoc, diff: Vec<u8>) {
 ///     text.insert(txn, 0, 'hello world')
 /// ```
 #[pyclass(unsendable)]
-#[pyo3(text_signature = "this is a test docstring")]
 pub struct YTransaction(Transaction);
 
 impl Deref for YTransaction {
@@ -1982,8 +1981,6 @@ pub fn y_py(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<YMapIterator>()?;
     m.add_class::<YXmlText>()?;
     m.add_class::<YXmlElement>()?;
-    m.add_class::<YXmlEvent>()?;
-    m.add_class::<YXmlAttributes>()?;
     m.add_wrapped(wrap_pyfunction!(encode_state_vector))?;
     m.add_wrapped(wrap_pyfunction!(encode_state_as_update))?;
     m.add_wrapped(wrap_pyfunction!(apply_update))?;
