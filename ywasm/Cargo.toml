@@ -17,7 +17,7 @@ crate-type = ["cdylib", "rlib"]
 default = ["console_error_panic_hook"]
 
 [dependencies]
-lib0 = { path = "../lib0", version = "0.3.0"}
+lib0 = { path = "../lib0", version = "0.4.0"}
 yrs = { path = "../yrs", version = "0.3.0"}
 wasm-bindgen = { version = "0.2" }
 
