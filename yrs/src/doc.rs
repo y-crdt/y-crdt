@@ -45,6 +45,8 @@ pub struct Doc {
     store: Rc<UnsafeCell<Store>>,
 }
 
+unsafe impl Send for Doc { }
+
 impl Doc {
     /// Creates a new document with a randomized client identifier.
     pub fn new() -> Self {
