@@ -1,6 +1,6 @@
 [package]
 name = "y-py"
-version = "0.2.0"
+version = "0.2.2"
 authors = ["Pierre-Olivier Simonard <pierre.olivier.simonard@gmail.com>", "Kevin Jahns <kevin.jahns@protonmail.com>", "John Waidhofer <waidhoferj@gmail.com>"]
 edition = "2018"
 
