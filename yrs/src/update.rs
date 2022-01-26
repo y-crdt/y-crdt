@@ -14,6 +14,7 @@ use std::cmp::Ordering;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, VecDeque};
 use std::hash::BuildHasherDefault;
+use std::rc::Rc;
 
 #[derive(Debug, PartialEq, Default, Clone)]
 pub(crate) struct UpdateBlocks {
@@ -25,17 +26,11 @@ impl UpdateBlocks {
     @todo this should be refactored.
     I'm currently using this to add blocks to the Update
     */
-    pub(crate) fn add_block(&mut self, block: &Block, offset: u32) {
-        let copy = block.slice(offset);
-        match self.clients.entry(copy.id().client) {
-            Entry::Occupied(e) => e.into_mut().push_back(copy),
-            Entry::Vacant(e) => {
-                let mut q = VecDeque::new();
-                q.push_back(copy);
-                e.insert(q);
-            }
-        }
+    pub(crate) fn add_block(&mut self, block: Block) {
+        let e = self.clients.entry(block.id().client).or_default();
+        e.push_back(block);
     }
+
     pub fn is_empty(&self) -> bool {
         self.clients.is_empty()
     }
@@ -374,11 +369,12 @@ impl Update {
                 } else {
                     TypePtr::Unknown
                 };
-                let parent_sub = if cant_copy_parent_info && (info & HAS_PARENT_SUB != 0) {
-                    Some(decoder.read_string().into())
-                } else {
-                    None
-                };
+                let parent_sub: Option<Rc<str>> =
+                    if cant_copy_parent_info && (info & HAS_PARENT_SUB != 0) {
+                        Some(decoder.read_string().into())
+                    } else {
+                        None
+                    };
                 let content = ItemContent::decode(decoder, info, BlockPtr::from(id.clone()));
                 let item = Item::new(
                     id,

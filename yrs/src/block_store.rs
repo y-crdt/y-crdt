@@ -134,9 +134,12 @@ impl Encode for StateVector {
     }
 }
 
+/// Snapshot describes a state of a document store at a given point in (logical) time.
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct Snapshot {
+    /// Compressed information about all deleted blocks at current snapshot time.
     pub delete_set: DeleteSet,
+    /// Logical clock describing a current snapshot time.
     pub state_map: StateVector,
 }
 
