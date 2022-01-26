@@ -24,7 +24,7 @@ pub struct Map(BranchRef);
 impl Map {
     /// Converts all entries of a current map into JSON-like object representation.
     pub fn to_json(&self, txn: &Transaction) -> Any {
-        let inner = self.0.as_ref();
+        let inner = self.0;
         let mut res = HashMap::new();
         for (key, ptr) in inner.map.iter() {
             if let Some(item) = txn.store().blocks.get_item(ptr) {
@@ -44,7 +44,7 @@ impl Map {
     /// Returns a number of entries stored within current map.
     pub fn len(&self, txn: &Transaction) -> u32 {
         let mut len = 0;
-        let inner = self.0.borrow();
+        let inner = self.0;
         for ptr in inner.map.values() {
             //TODO: maybe it would be better to just cache len in the map itself?
             if let Some(item) = txn.store().blocks.get_item(ptr) {
@@ -57,7 +57,7 @@ impl Map {
     }
 
     fn entries<'a, 'b>(&'a self, txn: &'b Transaction) -> Entries<'b> {
-        let ptr = &self.0.borrow().ptr;
+        let ptr = &self.0.ptr;
         Entries::new(ptr, txn)
     }
 
@@ -89,7 +89,7 @@ impl Map {
         let key = key.into();
         let previous = self.get(txn, &key);
         let pos = {
-            let inner = self.0.borrow();
+            let inner = self.0;
             let left = inner.map.get(&key);
             ItemPosition {
                 parent: inner.ptr.clone(),
@@ -107,21 +107,18 @@ impl Map {
     /// Removes a stored within current map under a given `key`. Returns that value or `None` if
     /// no entry with a given `key` was present in current map.
     pub fn remove(&self, txn: &mut Transaction, key: &str) -> Option<Value> {
-        let t = self.0.borrow();
-        t.remove(txn, key)
+        self.0.remove(txn, key)
     }
 
     /// Returns a value stored under a given `key` within current map, or `None` if no entry
     /// with such `key` existed.
     pub fn get(&self, txn: &Transaction, key: &str) -> Option<Value> {
-        let t = self.0.borrow();
-        t.get(txn, key)
+        self.0.get(txn, key)
     }
 
     /// Checks if an entry with given `key` can be found within current map.
     pub fn contains(&self, txn: &Transaction, key: &str) -> bool {
-        let t = self.0.borrow();
-        if let Some(ptr) = t.map.get(key) {
+        if let Some(ptr) = self.0.map.get(key) {
             if let Some(item) = txn.store().blocks.get_item(ptr) {
                 return !item.is_deleted();
             }
@@ -131,8 +128,7 @@ impl Map {
 
     /// Clears the contents of current map, effectively removing all of its entries.
     pub fn clear(&self, txn: &mut Transaction) {
-        let t = self.0.borrow();
-        for (_, ptr) in t.map.iter() {
+        for (_, ptr) in self.0.map.iter() {
             txn.delete(ptr);
         }
     }
@@ -148,8 +144,7 @@ impl Map {
     where
         F: Fn(&Transaction, &MapEvent) -> () + 'static,
     {
-        let mut branch = self.0.borrow_mut();
-        if let Observers::Map(eh) = branch.observers.get_or_insert_with(Observers::map) {
+        if let Observers::Map(eh) = self.0.observers.get_or_insert_with(Observers::map) {
             eh.subscribe(f)
         } else {
             panic!("Observed collection is of different type") //TODO: this should be Result::Err
@@ -158,8 +153,7 @@ impl Map {
 
     /// Unsubscribes a previously subscribed event callback identified by given `subscription_id`.
     pub fn unobserve(&self, subscription_id: SubscriptionId) {
-        let mut branch = self.0.borrow_mut();
-        if let Some(Observers::Map(eh)) = branch.observers.as_mut() {
+        if let Some(Observers::Map(eh)) = self.0.observers.as_mut() {
             eh.unsubscribe(subscription_id);
         }
     }
@@ -222,7 +216,7 @@ impl<T> From<HashMap<String, T>> for PrelimMap<T> {
 
 impl<T: Prelim> Prelim for PrelimMap<T> {
     fn into_content(self, _txn: &mut Transaction, ptr: TypePtr) -> (ItemContent, Option<Self>) {
-        let inner = BranchRef::new(Branch::new(ptr, TYPE_REFS_MAP, None));
+        let inner = Box::new(Branch::new(ptr, TYPE_REFS_MAP, None));
         (ItemContent::Type(inner), Some(self))
     }
 
@@ -258,7 +252,7 @@ impl MapEvent {
 
     /// Returns a path from root type down to [Map] instance which emitted this event.
     pub fn path(&self, txn: &Transaction) -> Path {
-        Branch::path(self.current_target.borrow(), self.target.0.borrow(), txn)
+        Branch::path(self.current_target, self.target.0, txn)
     }
 
     /// Returns a summary of key-value changes made over corresponding [Map] collection within
@@ -271,7 +265,7 @@ impl MapEvent {
                 return keys;
             }
             Err(subs) => {
-                let subs = event_keys(txn, self.target.0.borrow(), subs);
+                let subs = event_keys(txn, self.target.0, subs);
                 *keys = Ok(subs);
                 if let Ok(keys) = keys {
                     keys
