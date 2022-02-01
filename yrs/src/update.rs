@@ -500,10 +500,11 @@ impl Update {
 
             if let Some(mut curr_decoder) = lazy_struct_decoders.pop_front() {
                 let mut curr = curr_decoder.next();
-                if let Some(curr_block) = curr {
+                let mut first_client = 0;
+                if let Some(curr_block) = curr.take() {
                     // write from currDecoder until the next operation is from another client or if filler-struct
                     // then we need to reorder the decoders and find the next operation to write
-                    let first_client = curr_block.id().client;
+                    first_client = curr_block.id().client;
                     if let Some(mut curr_write_block) = curr_write.take() {
                         let mut iterated = false;
 
@@ -519,6 +520,7 @@ impl Update {
                                 forwarder = curr_decoder.next();
                                 iterated = true;
                             } else {
+                                forwarder = Some(block);
                                 break;
                             }
                         }
@@ -564,7 +566,7 @@ impl Update {
                                         }
                                     }
 
-                                    if curr_write_block.try_squash(&curr_block) {
+                                    if !curr_write_block.try_squash(&curr_block) {
                                         result.blocks.add_block(curr_write_block);
                                         curr_write = Some(curr_block);
                                         curr = curr_decoder.next();
@@ -579,21 +581,20 @@ impl Update {
                         curr_write = Some(curr_block);
                         curr = curr_decoder.next();
                     }
-
-                    while let Some(next) = curr.take() {
-                        let block = curr_write.take().unwrap();
-                        let nid = next.id();
-                        if nid.client == first_client && nid.clock == block.id().clock + block.len()
-                        {
-                            result.blocks.add_block(block);
-                            curr_write = Some(next);
-                            curr = curr_decoder.next();
-                        } else {
-                            break;
-                        }
-                    }
                 } else {
                     continue;
+                }
+
+                while let Some(next) = curr.take() {
+                    let block = curr_write.take().unwrap();
+                    let nid = next.id();
+                    if nid.client == first_client && nid.clock == block.id().clock + block.len() {
+                        result.blocks.add_block(block);
+                        curr_write = Some(next);
+                        curr = curr_decoder.next();
+                    } else {
+                        break;
+                    }
                 }
             } else {
                 break;
