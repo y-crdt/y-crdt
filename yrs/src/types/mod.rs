@@ -702,7 +702,7 @@ impl std::fmt::Display for TypePtr {
     }
 }
 
-enum Observers {
+pub(crate) enum Observers {
     Text(EventHandler<crate::types::text::TextEvent>),
     Array(EventHandler<crate::types::array::ArrayEvent>),
     Map(EventHandler<crate::types::map::MapEvent>),
