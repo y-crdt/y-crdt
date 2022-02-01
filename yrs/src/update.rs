@@ -16,7 +16,7 @@ use std::collections::{HashMap, VecDeque};
 use std::hash::BuildHasherDefault;
 use std::rc::Rc;
 
-#[derive(Debug, PartialEq, Default, Clone)]
+#[derive(Debug, PartialEq, Default)]
 pub(crate) struct UpdateBlocks {
     clients: HashMap<u64, VecDeque<Block>, BuildHasherDefault<ClientHasher>>,
 }
@@ -39,6 +39,12 @@ impl UpdateBlocks {
     /// which consist into this [Update].
     pub(crate) fn blocks(&self) -> Blocks<'_> {
         Blocks::new(self)
+    }
+
+    /// Returns an iterator that allows a traversal of all of the blocks
+    /// which consist into this [Update].
+    pub(crate) fn into_blocks(self) -> IntoBlocks {
+        IntoBlocks::new(self)
     }
 
     fn split_item(&mut self, client: u64, mut index: usize, diff: u32) {
@@ -83,7 +89,7 @@ impl std::fmt::Display for UpdateBlocks {
 /// relations.
 ///
 /// Update is conceptually similar to a block store itself, however the work patters are different.
-#[derive(Debug, PartialEq, Default, Clone)]
+#[derive(Debug, PartialEq, Default)]
 pub struct Update {
     pub(crate) blocks: UpdateBlocks,
     pub(crate) delete_set: DeleteSet,
@@ -438,7 +444,10 @@ impl Update {
         self.delete_set.encode(encoder);
     }
 
-    pub fn merge_updates<T: std::iter::IntoIterator<Item = Update>>(block_stores: T) -> Update {
+    pub fn merge_updates<T>(block_stores: T) -> Update
+    where
+        T: IntoIterator<Item = Update>,
+    {
         let mut result = Update::new();
         let update_blocks: Vec<UpdateBlocks> = block_stores
             .into_iter()
@@ -448,13 +457,13 @@ impl Update {
             })
             .collect();
 
-        let mut lazy_struct_decoders: Vec<Blocks> = update_blocks
-            .iter()
+        let mut lazy_struct_decoders: VecDeque<_> = update_blocks
+            .into_iter()
             .filter(|block_store| !block_store.is_empty())
             .map(|update_blocks| {
-                let mut blocks = update_blocks.blocks();
-                blocks.next();
-                blocks
+                let mut memo = update_blocks.into_blocks().memoized();
+                memo.advance();
+                memo
             })
             .collect();
 
@@ -464,157 +473,137 @@ impl Update {
         // Note: Should merge document updates whenever possible - even from different updates
         // Note: Should handle that some operations cannot be applied yet ()
         loop {
-            // Remove the decoder if we consumed all of its blocks.
-            if !lazy_struct_decoders.is_empty() && lazy_struct_decoders[0].current.is_none() {
-                lazy_struct_decoders.remove(0);
-            }
-            if lazy_struct_decoders.is_empty() {
-                break;
-            }
-            // Write higher clients first ⇒ sort by clientID & clock and remove decoders without content
-            lazy_struct_decoders.sort_by(|dec1, dec2| {
-                let left = dec1.current.unwrap();
-                let right = dec2.current.unwrap();
-                if left.id().client == right.id().client {
-                    let clock_diff = left.id().clock - right.id().clock;
-                    if clock_diff == 0 {
-                        return if left.same_type(right) {
-                            Ordering::Equal
-                        } else {
-                            if left.is_skip() {
-                                Ordering::Greater
-                            } else {
-                                Ordering::Less
-                            }
-                        };
-                    } else {
-                        if clock_diff <= 0 && (!left.is_skip() || right.is_skip()) {
-                            Ordering::Less
-                        } else {
-                            Ordering::Greater
+            {
+                // sort
+                lazy_struct_decoders
+                    .make_contiguous()
+                    .sort_by(|dec1, dec2| {
+                        // Write higher clients first ⇒ sort by clientID & clock and remove decoders without content
+                        let left = dec1.current().unwrap();
+                        let right = dec2.current().unwrap();
+                        let lid = left.id();
+                        let rid = right.id();
+                        match lid.client.cmp(&rid.client) {
+                            Ordering::Equal => match lid.clock.cmp(&rid.clock) {
+                                Ordering::Equal if left.same_type(right) => Ordering::Equal,
+                                Ordering::Equal if left.is_skip() => Ordering::Greater,
+                                Ordering::Equal => Ordering::Less,
+                                Ordering::Less if !left.is_skip() || right.is_skip() => {
+                                    Ordering::Less
+                                }
+                                ordering => ordering,
+                            },
+                            ordering => ordering,
                         }
-                    }
-                } else {
-                    right.id().client.cmp(&left.id().client)
-                }
-            });
+                    });
+            }
 
-            let curr_decoder = &mut lazy_struct_decoders[0];
+            if let Some(mut curr_decoder) = lazy_struct_decoders.pop_front() {
+                let mut curr = curr_decoder.next();
+                if let Some(curr_block) = curr {
+                    // write from currDecoder until the next operation is from another client or if filler-struct
+                    // then we need to reorder the decoders and find the next operation to write
+                    let first_client = curr_block.id().client;
+                    if let Some(mut curr_write_block) = curr_write.take() {
+                        let mut iterated = false;
 
-            // write from currDecoder until the next operation is from another client or if filler-struct
-            // then we need to reorder the decoders and find the next operation to write
-            let mut curr: Option<&Block> = curr_decoder.current;
-            let tmp_curr;
-            let first_client = curr.unwrap().id().client;
+                        // iterate until we find something that we haven't written already
+                        // remember: first the high client-ids are written
+                        let curr_write_last = curr_write_block.id().clock + curr_write_block.len();
+                        let mut forwarder = Some(curr_block);
+                        while let Some(block) = forwarder.take() {
+                            let last = block.id().clock + block.len();
+                            if last < curr_write_last
+                                && block.id().client >= curr_write_block.id().client
+                            {
+                                forwarder = curr_decoder.next();
+                                iterated = true;
+                            } else {
+                                break;
+                            }
+                        }
 
-            if let Some(curr_write_block) = &mut curr_write {
-                let mut iterated = false;
+                        if let Some(mut curr_block) = forwarder.take() {
+                            let cid = curr_block.id();
+                            if cid.client != first_client || // check whether there is another decoder that has has updates from `firstClient`
+                                (iterated && cid.clock > curr_write_last)
+                            // the above while loop was used and we are potentially missing updates
+                            {
+                                continue;
+                            }
 
-                // iterate until we find something that we haven't written already
-                // remember: first the high client-ids are written
+                            if first_client != curr_write_block.id().client {
+                                result.blocks.add_block(curr_write_block);
+                                curr_write = Some(curr_block);
+                                curr = curr_decoder.next();
+                            } else {
+                                if curr_write_last < curr_block.id().clock {
+                                    //TODO: write currStruct & set currStruct = Skip(clock = currStruct.id.clock + currStruct.length, length = curr.id.clock - self.clock)
+                                    let skip = if let Block::Skip(mut skip) = curr_write_block {
+                                        // extend existing skip
+                                        skip.len = curr_block.id().clock + curr_block.len()
+                                            - skip.id.clock;
+                                        skip
+                                    } else {
+                                        result.blocks.add_block(curr_write_block);
+                                        let diff = curr_block.id().clock - curr_write_last;
+                                        Skip::new(ID::new(first_client, curr_write_last), diff)
+                                    };
+                                    curr_write_block = Block::Skip(skip);
+                                } else {
+                                    // if (currWrite.struct.id.clock + currWrite.struct.length >= curr.id.clock) {
+                                    let diff =
+                                        curr_write_last as i32 - curr_block.id().clock as i32;
 
-                loop {
-                    if let Some(block) = curr {
-                        if block.id().clock + block.len()
-                            < curr_write_block.id().clock + curr_write_block.len()
-                            && block.id().client >= curr_write_block.id().client
-                        {
-                            curr = curr_decoder.next();
-                            iterated = true;
+                                    if diff > 0 {
+                                        if let Block::Skip(skip) = &mut curr_write_block {
+                                            // prefer to slice Skip because the other struct might contain more information
+                                            skip.len -= diff as u32;
+                                        } else {
+                                            curr_block = curr_block.slice(diff as u32).unwrap();
+                                        }
+                                    }
+
+                                    if curr_write_block.try_squash(&curr_block) {
+                                        result.blocks.add_block(curr_write_block);
+                                        curr_write = Some(curr_block);
+                                        curr = curr_decoder.next();
+                                    }
+                                }
+                            }
+                        } else {
+                            // current decoder is empty
                             continue;
                         }
-                    }
-                    break;
-                }
-                if curr.is_none() {
-                    // continue if decoder is empty
-                    continue;
-                }
-                let curr_unwrapped = curr.clone().unwrap();
-                if
-                // check whether there is another decoder that has has updates from `first_client`
-                curr_unwrapped.id().client != first_client ||
-                    // the above while loop was used and we are potentially missing updates
-                    (iterated && curr_unwrapped.id().clock > curr_write_block.id().clock + curr_write_block.len())
-                {
-                    continue;
-                }
-
-                if first_client != curr_write_block.id().client {
-                    result.blocks.add_block(&curr_unwrapped, 0);
-                    curr = curr_decoder.next();
-                } else {
-                    if curr_write_block.id().clock + curr_write_block.len()
-                        < curr_unwrapped.id().clock
-                    {
-                        // @todo write currStruct & set currStruct = Skip(clock = currStruct.id.clock + currStruct.length, length = curr.id.clock - self.clock)
-                        if let Block::Skip(curr_write_skip) = curr_write_block {
-                            // extend existing skip
-                            let len = curr_unwrapped.id().clock + curr_unwrapped.len()
-                                - curr_write_skip.id.clock;
-                            curr_write = Some(Block::Skip(Skip {
-                                id: curr_write_skip.id,
-                                len,
-                            }));
-                        } else {
-                            result.blocks.add_block(curr_write_block, 0);
-                            let diff = curr_unwrapped.id().clock
-                                - curr_write_block.id().clock
-                                - curr_write_block.len();
-
-                            let next_id = ID {
-                                client: first_client,
-                                clock: curr_write_block.id().clock + curr_write_block.len(),
-                            };
-
-                            curr_write = Some(Block::Skip(Skip {
-                                id: next_id,
-                                len: diff,
-                            }));
-                        }
                     } else {
-                        // if (currWrite.struct.id.clock + currWrite.struct.length >= curr.id.clock) {
+                        curr_write = Some(curr_block);
+                        curr = curr_decoder.next();
+                    }
 
-                        let diff = curr_write_block.id().clock + curr_write_block.len()
-                            - curr_unwrapped.id().clock;
-                        if diff > 0 {
-                            if let Block::Skip(curr_write_skip) = curr_write_block {
-                                // prefer to slice Skip because the other struct might contain more information
-                                curr_write_skip.len -= diff;
-                            } else {
-                                tmp_curr = Some(curr_unwrapped.slice(diff));
-                                curr = tmp_curr.as_ref();
-                            }
-                        }
-                        if curr_write_block.try_squash(&curr_unwrapped) {
-                            result.blocks.add_block(curr_write_block, 0);
-                            curr_write = Some(curr_unwrapped.clone());
+                    while let Some(next) = curr.take() {
+                        let block = curr_write.take().unwrap();
+                        let nid = next.id();
+                        if nid.client == first_client && nid.clock == block.id().clock + block.len()
+                        {
+                            result.blocks.add_block(block);
+                            curr_write = Some(next);
                             curr = curr_decoder.next();
+                        } else {
+                            break;
                         }
                     }
+                } else {
+                    continue;
                 }
             } else {
-                curr_write = curr_decoder.current.cloned();
-                curr = curr_decoder.next();
-            }
-            loop {
-                if let Some(next) = curr {
-                    let curr_write_block = curr_write.as_ref().unwrap();
-                    if next.id().client == first_client
-                        && next.id().clock == curr_write_block.id().clock + curr_write_block.len()
-                    {
-                        result.blocks.add_block(&curr_write.unwrap(), 0);
-                        curr_write = Some(next.slice(0));
-                        curr_decoder.next();
-                        continue;
-                    }
-                }
                 break;
             }
         }
-        if let Some(curr_write_block) = &curr_write {
-            result.blocks.add_block(&curr_write_block, 0);
+
+        if let Some(block) = curr_write.take() {
+            result.blocks.add_block(block);
         }
+
         result
     }
 }
@@ -655,6 +644,55 @@ impl Decode for Update {
         // read delete set
         let delete_set = DeleteSet::decode(decoder);
         Update { blocks, delete_set }
+    }
+}
+
+/// Similar to [Peekable], but can be used in situation when [Peekable::peek] is not allowed
+/// due to a lack of of `&mut self` reference. [Memo] can be proactively advanced using
+/// [Memo::advance] which works similar to [Peekable::peek], but later peeked element can still be
+/// accessed using [Memo::current] which doesn't require mutable reference.
+struct Memo<I: Iterator + ?Sized> {
+    current: Option<I::Item>,
+    iter: I,
+}
+
+impl<I: Iterator> Memo<I> {
+    fn current(&self) -> Option<&I::Item> {
+        self.current.as_ref()
+    }
+
+    fn advance(&mut self) -> bool {
+        match self.iter.next() {
+            None => false,
+            other => {
+                self.current = other;
+                true
+            }
+        }
+    }
+}
+
+impl<I: Iterator> Iterator for Memo<I> {
+    type Item = I::Item;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.current.take() {
+            None => self.iter.next(),
+            Some(n) => Some(n),
+        }
+    }
+}
+
+trait Memoizable: Iterator {
+    fn memoized(self) -> Memo<Self>;
+}
+
+impl<T: Iterator> Memoizable for T {
+    fn memoized(self) -> Memo<Self> {
+        Memo {
+            iter: self,
+            current: None,
+        }
     }
 }
 
@@ -705,7 +743,6 @@ impl Into<Store> for Update {
 pub(crate) struct Blocks<'a> {
     current_client: std::vec::IntoIter<(&'a u64, &'a VecDeque<Block>)>,
     current_block: Option<std::collections::vec_deque::Iter<'a, Block>>,
-    pub(crate) current: Option<&'a Block>,
 }
 
 impl<'a> Blocks<'a> {
@@ -720,11 +757,14 @@ impl<'a> Blocks<'a> {
         Blocks {
             current_client,
             current_block,
-            current: None,
         }
     }
+}
 
-    fn _next(&mut self) -> Option<&'a Block> {
+impl<'a> Iterator for Blocks<'a> {
+    type Item = &'a Block;
+
+    fn next(&mut self) -> Option<Self::Item> {
         if let Some(blocks) = self.current_block.as_mut() {
             let block = blocks.next();
             if block.is_some() {
@@ -741,12 +781,43 @@ impl<'a> Blocks<'a> {
     }
 }
 
-impl<'a> Iterator for Blocks<'a> {
-    type Item = &'a Block;
+pub(crate) struct IntoBlocks {
+    current_client: std::vec::IntoIter<(u64, VecDeque<Block>)>,
+    current_block: Option<std::collections::vec_deque::IntoIter<Block>>,
+}
+
+impl IntoBlocks {
+    fn new(update: UpdateBlocks) -> Self {
+        let mut client_blocks: Vec<(u64, VecDeque<Block>)> = update.clients.into_iter().collect();
+        // sorting to return higher client ids first
+        client_blocks.sort_by(|a, b| b.0.cmp(&a.0));
+        let mut current_client = client_blocks.into_iter();
+
+        let current_block = current_client.next().map(|(_, v)| v.into_iter());
+        IntoBlocks {
+            current_client,
+            current_block,
+        }
+    }
+}
+
+impl Iterator for IntoBlocks {
+    type Item = Block;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.current = self._next();
-        self.current
+        if let Some(blocks) = self.current_block.as_mut() {
+            let block = blocks.next();
+            if block.is_some() {
+                return block;
+            }
+        }
+
+        if let Some(entry) = self.current_client.next() {
+            self.current_block = Some(entry.1.into_iter());
+            self.next()
+        } else {
+            None
+        }
     }
 }
 
