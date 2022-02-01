@@ -140,7 +140,7 @@ impl Map {
     /// All map changes can be tracked by using [Event::keys] method.
     ///
     /// Returns an [Observer] which, when dropped, will unsubscribe current callback.
-    pub fn observe<F>(&self, f: F) -> Subscription<MapEvent>
+    pub fn observe<F>(&mut self, f: F) -> Subscription<MapEvent>
     where
         F: Fn(&Transaction, &MapEvent) -> () + 'static,
     {
@@ -152,7 +152,7 @@ impl Map {
     }
 
     /// Unsubscribes a previously subscribed event callback identified by given `subscription_id`.
-    pub fn unobserve(&self, subscription_id: SubscriptionId) {
+    pub fn unobserve(&mut self, subscription_id: SubscriptionId) {
         if let Some(Observers::Map(eh)) = self.0.observers.as_mut() {
             eh.unsubscribe(subscription_id);
         }
@@ -614,7 +614,7 @@ mod test {
     #[test]
     fn insert_and_remove_events() {
         let d1 = Doc::with_client_id(1);
-        let m1 = {
+        let mut m1 = {
             let mut txn = d1.transact();
             txn.get_map("map")
         };
@@ -704,7 +704,7 @@ mod test {
 
         // copy updates over
         let d2 = Doc::with_client_id(2);
-        let m2 = {
+        let mut m2 = {
             let mut txn = d2.transact();
             txn.get_map("map")
         };

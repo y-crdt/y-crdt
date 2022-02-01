@@ -726,7 +726,7 @@ impl Item {
             _ => false,
         };
 
-        if let Some(parent_ref) = parent {
+        if let Some(mut parent_ref) = parent {
             if (left.is_none() && right_is_null_or_has_left) || left_has_other_right_than_self {
                 // set the first conflicting item
                 let mut o = if let Some(Block::Item(left)) = left {
@@ -1452,9 +1452,9 @@ impl ItemContent {
         }
     }
 
-    pub(crate) fn gc(&self, txn: &Transaction) {
+    pub(crate) fn gc(&mut self, txn: &Transaction) {
         match self {
-            ItemContent::Type(mut branch) => {
+            ItemContent::Type(branch) => {
                 let store = txn.store();
                 let mut curr = branch.start.take();
                 while let Some(ptr) = curr {

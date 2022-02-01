@@ -65,17 +65,22 @@ impl Store {
     /// Returns a branch reference to a complex type identified by its pointer. Returns `None` if
     /// no such type could be found or was ever defined.
     pub fn get_type(&self, ptr: &TypePtr) -> Option<BranchRef> {
+        let branch = self.get_type_raw(ptr)?;
+        Some(BranchRef::from(branch))
+    }
+
+    pub(crate) fn get_type_raw(&self, ptr: &TypePtr) -> Option<&Box<Branch>> {
         match ptr {
             TypePtr::Id(id) => {
                 // @todo the item might not exist
                 let item = self.blocks.get_item(id)?;
                 if let ItemContent::Type(c) = &item.content {
-                    Some(c.into())
+                    Some(c)
                 } else {
                     None
                 }
             }
-            TypePtr::Named(name) => Some(self.types.get(name)?.into()),
+            TypePtr::Named(name) => Some(self.types.get(name)?),
             TypePtr::Unknown => None,
         }
     }
@@ -194,7 +199,7 @@ impl Store {
 
     pub(crate) fn gc_cleanup(&self, compaction: SquashResult) {
         if let Some(parent_sub) = compaction.parent_sub {
-            if let Some(inner) = self.get_type(&compaction.parent) {
+            if let Some(mut inner) = self.get_type(&compaction.parent) {
                 match inner.map.entry(parent_sub.clone()) {
                     Entry::Occupied(e) => {
                         let cell = e.into_mut();

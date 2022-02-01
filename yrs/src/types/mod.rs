@@ -626,7 +626,7 @@ pub(crate) struct Entries<'a> {
 
 impl<'a> Entries<'a> {
     pub(crate) fn new<'b>(ptr: &'b TypePtr, txn: &'a Transaction) -> Self {
-        let inner = txn.store().get_type(ptr).unwrap();
+        let inner = txn.store().get_type_raw(ptr).unwrap();
         let iter = inner.map.iter();
         Entries { txn, iter }
     }

@@ -81,7 +81,7 @@ impl XmlElement {
 
     /// A tag name of a current top-level XML node, eg. node `<p></p>` has "p" as it's tag name.
     pub fn tag(&self) -> &str {
-        let inner = self.0.inner();
+        let inner = &self.0 .0;
         inner.name.as_ref().unwrap()
     }
 
@@ -269,7 +269,7 @@ impl XmlElement {
     /// Attribute changes can be tracked by using [Event::keys] method.
     ///
     /// Returns an [Observer] which, when dropped, will unsubscribe current callback.
-    pub fn observe<F>(&self, f: F) -> Subscription<XmlEvent>
+    pub fn observe<F>(&mut self, f: F) -> Subscription<XmlEvent>
     where
         F: Fn(&Transaction, &XmlEvent) -> () + 'static,
     {
@@ -277,7 +277,7 @@ impl XmlElement {
     }
 
     /// Unsubscribes a previously subscribed event callback identified by given `subscription_id`.
-    pub fn unobserve(&self, subscription_id: SubscriptionId) {
+    pub fn unobserve(&mut self, subscription_id: SubscriptionId) {
         self.0.unobserve(subscription_id);
     }
 }
@@ -420,7 +420,7 @@ impl XmlFragment {
         }
     }
 
-    pub fn observe<F>(&self, f: F) -> Subscription<XmlEvent>
+    pub fn observe<F>(&mut self, f: F) -> Subscription<XmlEvent>
     where
         F: Fn(&Transaction, &XmlEvent) -> () + 'static,
     {
@@ -431,7 +431,7 @@ impl XmlFragment {
         }
     }
 
-    pub fn unobserve(&self, subscription_id: u32) {
+    pub fn unobserve(&mut self, subscription_id: u32) {
         if let Some(Observers::Xml(eh)) = self.0.observers.as_mut() {
             eh.unsubscribe(subscription_id);
         }
@@ -1181,7 +1181,7 @@ mod test {
     #[test]
     fn event_observers() {
         let d1 = Doc::with_client_id(1);
-        let xml = {
+        let mut xml = {
             let mut txn = d1.transact();
             txn.get_xml_element("xml")
         };
@@ -1274,7 +1274,7 @@ mod test {
 
         // copy updates over
         let d2 = Doc::with_client_id(2);
-        let xml2 = {
+        let mut xml2 = {
             let mut txn = d2.transact();
             txn.get_xml_element("xml")
         };

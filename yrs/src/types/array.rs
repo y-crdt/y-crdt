@@ -131,7 +131,7 @@ impl Array {
     /// All array changes can be tracked by using [Event::delta] method.
     ///
     /// Returns an [Observer] which, when dropped, will unsubscribe current callback.
-    pub fn observe<F>(&self, f: F) -> Subscription<ArrayEvent>
+    pub fn observe<F>(&mut self, f: F) -> Subscription<ArrayEvent>
     where
         F: Fn(&Transaction, &ArrayEvent) -> () + 'static,
     {
@@ -143,7 +143,7 @@ impl Array {
     }
 
     /// Unsubscribes a previously subscribed event callback identified by given `subscription_id`.
-    pub fn unobserve(&self, subscription_id: SubscriptionId) {
+    pub fn unobserve(&mut self, subscription_id: SubscriptionId) {
         if let Some(Observers::Array(eh)) = self.0.observers.as_mut() {
             eh.unsubscribe(subscription_id);
         }
@@ -658,7 +658,7 @@ mod test {
     #[test]
     fn insert_and_remove_events() {
         let d = Doc::with_client_id(1);
-        let array = {
+        let mut array = {
             let mut txn = d.transact();
             txn.get_array("array")
         };
@@ -702,7 +702,7 @@ mod test {
     #[test]
     fn insert_and_remove_event_changes() {
         let d1 = Doc::with_client_id(1);
-        let array = {
+        let mut array = {
             let mut txn = d1.transact();
             txn.get_array("array")
         };
@@ -765,7 +765,7 @@ mod test {
         );
 
         let d2 = Doc::with_client_id(2);
-        let array2 = {
+        let mut array2 = {
             let mut txn = d2.transact();
             txn.get_array("array")
         };
@@ -804,11 +804,11 @@ mod test {
     fn target_on_local_and_remote() {
         let d1 = Doc::with_client_id(1);
         let d2 = Doc::with_client_id(2);
-        let a1 = {
+        let mut a1 = {
             let mut txn = d1.transact();
             txn.get_array("array")
         };
-        let a2 = {
+        let mut a2 = {
             let mut txn = d2.transact();
             txn.get_array("array")
         };

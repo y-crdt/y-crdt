@@ -523,7 +523,7 @@ impl Text {
     /// contains collection of individual characters rather than strings.
     ///
     /// Returns an [Observer] which, when dropped, will unsubscribe current callback.
-    pub fn observe<F>(&self, f: F) -> Subscription<TextEvent>
+    pub fn observe<F>(&mut self, f: F) -> Subscription<TextEvent>
     where
         F: Fn(&Transaction, &TextEvent) -> () + 'static,
     {
@@ -535,7 +535,7 @@ impl Text {
     }
 
     /// Unsubscribes a previously subscribed event callback identified by given `subscription_id`.
-    pub fn unobserve(&self, subscription_id: SubscriptionId) {
+    pub fn unobserve(&mut self, subscription_id: SubscriptionId) {
         if let Some(Observers::Text(eh)) = self.0.observers.as_mut() {
             eh.unsubscribe(subscription_id);
         }
@@ -1255,7 +1255,7 @@ mod test {
     #[test]
     fn insert_and_remove_event_changes() {
         let d1 = Doc::with_client_id(1);
-        let txt = {
+        let mut txt = {
             let mut txn = d1.transact();
             txn.get_text("text")
         };
@@ -1300,7 +1300,7 @@ mod test {
 
         // replicate data to another peer
         let d2 = Doc::with_client_id(2);
-        let txt = {
+        let mut txt = {
             let mut txn = d2.transact();
             txn.get_text("text")
         };
@@ -1416,7 +1416,7 @@ mod test {
     #[test]
     fn basic_format() {
         let d1 = Doc::with_client_id(1);
-        let txt1 = {
+        let mut txt1 = {
             let mut txn = d1.transact();
             txn.get_text("text")
         };
@@ -1428,7 +1428,7 @@ mod test {
         });
 
         let d2 = Doc::with_client_id(2);
-        let txt2 = {
+        let mut txt2 = {
             let mut txn = d2.transact();
             txn.get_text("text")
         };
@@ -1602,7 +1602,7 @@ mod test {
     #[test]
     fn embed_with_attributes() {
         let d1 = Doc::with_client_id(1);
-        let txt1 = {
+        let mut txt1 = {
             let mut txn = d1.transact();
             txn.get_text("text")
         };
