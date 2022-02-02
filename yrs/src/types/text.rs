@@ -7,6 +7,7 @@ use crate::*;
 use lib0::any::Any;
 use std::cell::UnsafeCell;
 use std::collections::HashMap;
+use std::ops::Deref;
 
 /// A shared data type used for collaborative text editing. It enables multiple users to add and
 /// remove chunks of text in efficient manner. This type is internally represented as a mutable
@@ -21,6 +22,7 @@ use std::collections::HashMap;
 /// when characters inserted one after another may interleave with other peers concurrent inserts
 /// after merging all updates together). In case of Yrs conflict resolution is solved by using
 /// unique document id to determine correct and consistent ordering.
+#[repr(transparent)]
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Text(BranchRef);
 
@@ -61,7 +63,7 @@ impl Text {
         index: u32,
     ) -> Option<block::ItemPosition> {
         let mut pos = {
-            let inner = self.0;
+            let inner = self.0.deref();
             block::ItemPosition {
                 parent: inner.ptr.clone(),
                 left: None,

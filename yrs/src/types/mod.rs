@@ -17,6 +17,7 @@ use crate::types::xml::{XmlElement, XmlEvent, XmlText, XmlTextEvent};
 use lib0::any::Any;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Formatter;
+use std::mem::ManuallyDrop;
 use std::ops::{Deref, DerefMut};
 use std::ptr::NonNull;
 use std::rc::Rc;
@@ -50,9 +51,9 @@ pub const TYPE_REFS_UNDEFINED: TypeRefs = 15;
 
 /// A wrapper around [Branch] cell, supplied with a bunch of convenience methods to operate on both
 /// map-like and array-like contents of a [Branch].
-#[derive(Debug, Clone, Copy)]
 #[repr(transparent)]
-pub struct BranchRef(NonNull<Branch>);
+#[derive(Debug, Clone, Copy)]
+pub struct BranchRef(ManuallyDrop<NonNull<Branch>>);
 
 impl Deref for BranchRef {
     type Target = Branch;
@@ -71,7 +72,7 @@ impl DerefMut for BranchRef {
 impl<'a> From<&'a mut Box<Branch>> for BranchRef {
     fn from(branch: &'a mut Box<Branch>) -> Self {
         let ptr = NonNull::from(branch.as_mut());
-        BranchRef(ptr)
+        BranchRef(ManuallyDrop::new(ptr))
     }
 }
 
@@ -80,7 +81,7 @@ impl<'a> From<&'a Box<Branch>> for BranchRef {
         let b: &Branch = &*branch;
         unsafe {
             let ptr = NonNull::new_unchecked(b as *const Branch as *mut Branch);
-            BranchRef(ptr)
+            BranchRef(ManuallyDrop::new(ptr))
         }
     }
 }

@@ -46,6 +46,7 @@ impl From<BranchRef> for Xml {
 /// - Child node insertion uses sequencing rules from other Yrs collections - elements are inserted
 ///   using interleave-resistant algorithm, where order of concurrent inserts at the same index
 ///   is established using peer's document id seniority.
+#[repr(transparent)]
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct XmlElement(XmlFragment);
 
@@ -312,6 +313,7 @@ impl Into<XmlElement> for XmlFragment {
     }
 }
 
+#[repr(transparent)]
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct XmlFragment(BranchRef);
 
@@ -599,6 +601,7 @@ impl Into<XmlHook> for Map {
 /// when characters inserted one after another may interleave with other peers concurrent inserts
 /// after merging all updates together). In case of Yrs conflict resolution is solved by using
 /// unique document id to determine correct and consistent ordering.
+#[repr(transparent)]
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct XmlText(Text);
 
@@ -763,7 +766,7 @@ impl XmlText {
     /// XML text attribute changes can be tracked using [Event::keys] method.
     ///
     /// Returns an [Observer] which, when dropped, will unsubscribe current callback.
-    pub fn observe<F>(&self, f: F) -> Subscription<XmlTextEvent>
+    pub fn observe<F>(&mut self, f: F) -> Subscription<XmlTextEvent>
     where
         F: Fn(&Transaction, &XmlTextEvent) -> () + 'static,
     {
@@ -779,7 +782,7 @@ impl XmlText {
     }
 
     /// Unsubscribes a previously subscribed event callback identified by given `subscription_id`.
-    pub fn unobserve(&self, subscription_id: SubscriptionId) {
+    pub fn unobserve(&mut self, subscription_id: SubscriptionId) {
         if let Some(Observers::XmlText(eh)) = self.inner().observers.as_mut() {
             eh.unsubscribe(subscription_id);
         }

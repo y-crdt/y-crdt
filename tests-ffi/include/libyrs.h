@@ -322,23 +322,6 @@ typedef struct YXmlTreeWalker {} YXmlTreeWalker;
 typedef YDoc YDoc;
 
 /**
- * A shared data type used for collaborative text editing. It enables multiple users to add and
- * remove chunks of text in efficient manner. This type is internally represented as a mutable
- * double-linked list of text chunks - an optimization occurs during [ytransaction_commit], which
- * allows to squash multiple consecutively inserted characters together as a single chunk of text
- * even between transaction boundaries in order to preserve more efficient memory model.
- *
- * `YText` structure internally uses UTF-8 encoding and its length depends on encoding configured
- * on `YDoc` instance (using UTF-8 byte length by default).
- *
- * Like all Yrs shared data types, `YText` is resistant to the problem of interleaving (situation
- * when characters inserted one after another may interleave with other peers concurrent inserts
- * after merging all updates together). In case of Yrs conflict resolution is solved by using
- * unique document id to determine correct and consistent ordering.
- */
-typedef YText YText;
-
-/**
  * A collection used to store data in an indexed sequence structure. This type is internally
  * implemented as a double linked list, which may squash values inserted directly one after another
  * into single list node upon transaction commit.
@@ -371,6 +354,23 @@ typedef YArray YArray;
  * order.
  */
 typedef YMap YMap;
+
+/**
+ * A shared data type used for collaborative text editing. It enables multiple users to add and
+ * remove chunks of text in efficient manner. This type is internally represented as a mutable
+ * double-linked list of text chunks - an optimization occurs during [ytransaction_commit], which
+ * allows to squash multiple consecutively inserted characters together as a single chunk of text
+ * even between transaction boundaries in order to preserve more efficient memory model.
+ *
+ * `YText` structure internally uses UTF-8 encoding and its length depends on encoding configured
+ * on `YDoc` instance (using UTF-8 byte length by default).
+ *
+ * Like all Yrs shared data types, `YText` is resistant to the problem of interleaving (situation
+ * when characters inserted one after another may interleave with other peers concurrent inserts
+ * after merging all updates together). In case of Yrs conflict resolution is solved by using
+ * unique document id to determine correct and consistent ordering.
+ */
+typedef YText YText;
 
 /**
  * XML element data type. It represents an XML node, which can contain key-value attributes
@@ -417,11 +417,11 @@ typedef union YOutputContent {
   unsigned char *buf;
   struct YOutput *array;
   struct YMapEntry *map;
-  YArray *y_array;
-  YMap *y_map;
-  YText *y_text;
-  YXmlElement *y_xmlelem;
-  YXmlText *y_xmltext;
+  YArray y_array;
+  YMap y_map;
+  YText y_text;
+  YXmlElement y_xmlelem;
+  YXmlText y_xmltext;
 } YOutputContent;
 
 /**
@@ -851,41 +851,6 @@ typedef struct YEventKeyChange {
 void ydoc_destroy(YDoc *value);
 
 /**
- * Releases all memory-allocated resources bound to given `YText` instance. It doesn't remove the
- * `YText` stored inside of a document itself, but rather only parts of it related to a specific
- * pointer that's a subject of being destroyed.
- */
-void ytext_destroy(YText *value);
-
-/**
- * Releases all memory-allocated resources bound to given `YArray` instance. It doesn't remove the
- * `YArray` stored inside of a document itself, but rather only parts of it related to a specific
- * pointer that's a subject of being destroyed.
- */
-void yarray_destroy(YArray *value);
-
-/**
- * Releases all memory-allocated resources bound to given `YMap` instance. It doesn't remove the
- * `YMap` stored inside of a document itself, but rather only parts of it related to a specific
- * pointer that's a subject of being destroyed.
- */
-void ymap_destroy(YMap *value);
-
-/**
- * Releases all memory-allocated resources bound to given `YXmlElement` instance. It doesn't remove
- * the `YXmlElement` stored inside of a document itself, but rather only parts of it related to
- * a specific pointer that's a subject of being destroyed.
- */
-void yxmlelem_destroy(YXmlElement *value);
-
-/**
- * Releases all memory-allocated resources bound to given `YXmlText` instance. It doesn't remove
- * the `YXmlText` stored inside of a document itself, but rather only parts of it related to
- * a specific pointer that's a subject of being destroyed.
- */
-void yxmltext_destroy(YXmlText *value);
-
-/**
  * Frees all memory-allocated resources bound to a given [YMapEntry].
  */
 void ymap_entry_destroy(struct YMapEntry *value);
@@ -951,7 +916,7 @@ void ytransaction_commit(YTransaction *txn);
  * not remove `YText` instance from the document itself (once created it'll last for the entire
  * lifecycle of a document).
  */
-YText *ytext(YTransaction *txn, const char *name);
+YText ytext(YTransaction *txn, const char *name);
 
 /**
  * Gets or creates a new shared `YArray` data type instance as a root-level type of a given document.
@@ -962,8 +927,8 @@ YText *ytext(YTransaction *txn, const char *name);
  * not remove `YArray` instance from the document itself (once created it'll last for the entire
  * lifecycle of a document).
  */
-YArray *yarray(YTransaction *txn,
-               const char *name);
+YArray yarray(YTransaction *txn,
+              const char *name);
 
 /**
  * Gets or creates a new shared `YMap` data type instance as a root-level type of a given document.
@@ -974,7 +939,7 @@ YArray *yarray(YTransaction *txn,
  * not remove `YMap` instance from the document itself (once created it'll last for the entire
  * lifecycle of a document).
  */
-YMap *ymap(YTransaction *txn, const char *name);
+YMap ymap(YTransaction *txn, const char *name);
 
 /**
  * Gets or creates a new shared `YXmlElement` data type instance as a root-level type of a given
@@ -985,7 +950,7 @@ YMap *ymap(YTransaction *txn, const char *name);
  * will not remove `YXmlElement` instance from the document itself (once created it'll last for
  * the entire lifecycle of a document).
  */
-YXmlElement *yxmlelem(YTransaction *txn, const char *name);
+YXmlElement yxmlelem(YTransaction *txn, const char *name);
 
 /**
  * Gets or creates a new shared `YXmlText` data type instance as a root-level type of a given
@@ -996,7 +961,7 @@ YXmlElement *yxmlelem(YTransaction *txn, const char *name);
  * will not remove `YXmlText` instance from the document itself (once created it'll last for
  * the entire lifecycle of a document).
  */
-YXmlText *yxmltext(YTransaction *txn, const char *name);
+YXmlText yxmltext(YTransaction *txn, const char *name);
 
 /**
  * Returns a state vector of a current transaction's document, serialized using lib0 version 1
@@ -1402,10 +1367,10 @@ struct YOutput *yxmlelem_tree_walker_next(YXmlTreeWalker *iterator);
  * A `name` must be a null-terminated UTF-8 encoded string, which will be copied into current
  * document. Therefore `name` should be freed by the function caller.
  */
-YXmlElement *yxmlelem_insert_elem(const YXmlElement *xml,
-                                  YTransaction *txn,
-                                  int index,
-                                  const char *name);
+YXmlElement yxmlelem_insert_elem(const YXmlElement *xml,
+                                 YTransaction *txn,
+                                 int index,
+                                 const char *name);
 
 /**
  * Inserts an `YXmlText` as a child of a current node at the given `index` and returns its
@@ -1414,7 +1379,7 @@ YXmlElement *yxmlelem_insert_elem(const YXmlElement *xml,
  * An `index` value must be between 0 and (inclusive) length of a current XML element (use
  * [yxmlelem_child_len] function to determine its length).
  */
-YXmlText *yxmlelem_insert_text(const YXmlElement *xml, YTransaction *txn, int index);
+YXmlText yxmlelem_insert_text(const YXmlElement *xml, YTransaction *txn, int index);
 
 /**
  * Removes a consecutive range of child elements (of specified length) from the current
@@ -1757,9 +1722,7 @@ YXmlText *youtput_read_yxmltext(const struct YOutput *val);
  * Returns a subscription ID which can be then used to unsubscribe this callback by using
  * `ytext_unobserve` function.
  */
-unsigned int ytext_observe(const YText *txt,
-                           void *state,
-                           void (*cb)(void*, const struct YTextEvent*));
+unsigned int ytext_observe(YText *txt, void *state, void (*cb)(void*, const struct YTextEvent*));
 
 /**
  * Subscribes a given callback function `cb` to changes made by this `YMap` instance. Callbacks
@@ -1767,7 +1730,7 @@ unsigned int ytext_observe(const YText *txt,
  * Returns a subscription ID which can be then used to unsubscribe this callback by using
  * `ymap_unobserve` function.
  */
-unsigned int ymap_observe(const YMap *map, void *state, void (*cb)(void*, const struct YMapEvent*));
+unsigned int ymap_observe(YMap *map, void *state, void (*cb)(void*, const struct YMapEvent*));
 
 /**
  * Subscribes a given callback function `cb` to changes made by this `YArray` instance. Callbacks
@@ -1775,7 +1738,7 @@ unsigned int ymap_observe(const YMap *map, void *state, void (*cb)(void*, const 
  * Returns a subscription ID which can be then used to unsubscribe this callback by using
  * `yarray_unobserve` function.
  */
-unsigned int yarray_observe(const YArray *array,
+unsigned int yarray_observe(YArray *array,
                             void *state,
                             void (*cb)(void*, const struct YArrayEvent*));
 
@@ -1785,7 +1748,7 @@ unsigned int yarray_observe(const YArray *array,
  * Returns a subscription ID which can be then used to unsubscribe this callback by using
  * `yxmlelem_unobserve` function.
  */
-unsigned int yxmlelem_observe(const YXmlElement *xml,
+unsigned int yxmlelem_observe(YXmlElement *xml,
                               void *state,
                               void (*cb)(void*, const struct YXmlEvent*));
 
@@ -1795,7 +1758,7 @@ unsigned int yxmlelem_observe(const YXmlElement *xml,
  * Returns a subscription ID which can be then used to unsubscribe this callback by using
  * `yxmltext_unobserve` function.
  */
-unsigned int yxmltext_observe(const YXmlText *xml,
+unsigned int yxmltext_observe(YXmlText *xml,
                               void *state,
                               void (*cb)(void*, const struct YXmlTextEvent*));
 

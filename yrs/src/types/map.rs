@@ -18,6 +18,7 @@ use std::rc::Rc;
 /// updates are automatically overridden and discarded by newer ones, while concurrent updates made
 /// by different peers are resolved into a single value using document id seniority to establish
 /// order.
+#[repr(transparent)]
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Map(BranchRef);
 
