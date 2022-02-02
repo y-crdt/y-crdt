@@ -27,6 +27,7 @@ use std::collections::{HashSet, VecDeque};
 /// when elements inserted one after another may interleave with other peers concurrent inserts
 /// after merging all updates together). In case of Yrs conflict resolution is solved by using
 /// unique document id to determine correct and consistent ordering.
+#[repr(transparent)]
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Array(BranchRef);
 
