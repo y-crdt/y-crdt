@@ -8,6 +8,7 @@ use crate::{SubscriptionId, Transaction, ID};
 use lib0::any::Any;
 use std::cell::UnsafeCell;
 use std::collections::{HashSet, VecDeque};
+use std::ops::Deref;
 
 /// A collection used to store data in an indexed sequence structure. This type is internally
 /// implemented as a double linked list, which may squash values inserted directly one after another
@@ -148,6 +149,12 @@ impl Array {
         if let Some(Observers::Array(eh)) = self.0.observers.as_mut() {
             eh.unsubscribe(subscription_id);
         }
+    }
+}
+
+impl AsRef<Branch> for Array {
+    fn as_ref(&self) -> &Branch {
+        self.0.deref()
     }
 }
 

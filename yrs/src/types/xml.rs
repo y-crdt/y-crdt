@@ -12,6 +12,7 @@ use lib0::any::Any;
 use std::cell::UnsafeCell;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
+use std::ops::Deref;
 use std::rc::Rc;
 
 /// An return type from XML elements retrieval methods. It's an enum of all supported values, that
@@ -283,6 +284,12 @@ impl XmlElement {
     }
 }
 
+impl AsRef<Branch> for XmlElement {
+    fn as_ref(&self) -> &Branch {
+        self.0.as_ref()
+    }
+}
+
 impl From<BranchRef> for XmlElement {
     fn from(inner: BranchRef) -> Self {
         XmlElement(XmlFragment::new(inner))
@@ -437,6 +444,12 @@ impl XmlFragment {
         if let Some(Observers::Xml(eh)) = self.0.observers.as_mut() {
             eh.unsubscribe(subscription_id);
         }
+    }
+}
+
+impl AsRef<Branch> for XmlFragment {
+    fn as_ref(&self) -> &Branch {
+        self.0.deref()
     }
 }
 
@@ -786,6 +799,12 @@ impl XmlText {
         if let Some(Observers::XmlText(eh)) = self.inner().observers.as_mut() {
             eh.unsubscribe(subscription_id);
         }
+    }
+}
+
+impl AsRef<Branch> for XmlText {
+    fn as_ref(&self) -> &Branch {
+        self.0.as_ref()
     }
 }
 

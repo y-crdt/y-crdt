@@ -28,7 +28,6 @@ pub struct Text(BranchRef);
 
 impl Text {
     /// Converts context of this text data structure into a single string value.
-    #[allow(clippy::inherent_to_string)]
     pub fn to_string(&self, txn: &Transaction) -> String {
         let mut start = self.0.start;
         let mut s = String::new();
@@ -63,7 +62,7 @@ impl Text {
         index: u32,
     ) -> Option<block::ItemPosition> {
         let mut pos = {
-            let inner = self.0.deref();
+            let inner = self.as_ref();
             block::ItemPosition {
                 parent: inner.ptr.clone(),
                 left: None,
@@ -673,6 +672,12 @@ impl Text {
 impl From<BranchRef> for Text {
     fn from(inner: BranchRef) -> Self {
         Text(inner)
+    }
+}
+
+impl AsRef<Branch> for Text {
+    fn as_ref(&self) -> &Branch {
+        self.0.deref()
     }
 }
 
