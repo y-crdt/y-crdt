@@ -86,6 +86,15 @@ impl<'a> From<&'a Box<Branch>> for BranchRef {
     }
 }
 
+impl<'a> From<&'a Branch> for BranchRef {
+    fn from(branch: &'a Branch) -> Self {
+        unsafe {
+            let ptr = NonNull::new_unchecked(branch as *const Branch as *mut Branch);
+            BranchRef(ManuallyDrop::new(ptr))
+        }
+    }
+}
+
 impl Into<Value> for BranchRef {
     /// Converts current branch data into a [Value]. It uses a type ref information to resolve,
     /// which value variant is a correct one for this branch. Since branch represent only complex

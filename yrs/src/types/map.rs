@@ -8,6 +8,7 @@ use crate::*;
 use lib0::any::Any;
 use std::cell::UnsafeCell;
 use std::collections::{HashMap, HashSet};
+use std::ops::Deref;
 use std::rc::Rc;
 
 /// Collection used to store key-value entries in an unordered manner. Keys are always represented
@@ -157,6 +158,12 @@ impl Map {
         if let Some(Observers::Map(eh)) = self.0.observers.as_mut() {
             eh.unsubscribe(subscription_id);
         }
+    }
+}
+
+impl AsRef<Branch> for Map {
+    fn as_ref(&self) -> &Branch {
+        self.0.deref()
     }
 }
 
