@@ -347,8 +347,8 @@ impl Branch {
                 }
 
                 index -= len;
-                ptr = item.right.clone();
             }
+            ptr = item.right.clone();
         }
 
         None
