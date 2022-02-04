@@ -951,15 +951,15 @@ mod test {
     }
 
     #[test]
-    fn get_before_removed() {
+    fn get_at_removed_index() {
         let d1 = Doc::with_client_id(1);
         let mut t1 = d1.transact();
 
         let a1 = t1.get_array("array");
-        a1.insert_range(&mut t1, 0, ["A", "B"]);
+        a1.insert_range(&mut t1, 0, ["A"]);
         a1.remove(&mut t1, 0);
 
         let actual = t1.get_array("array").get(&mut t1, 0);
-        assert_eq!(actual, Some("B".into()));
+        assert_eq!(actual, None);
     }
 }
