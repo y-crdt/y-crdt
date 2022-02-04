@@ -21,48 +21,48 @@ use yrs::{Options, StateVector};
 use yrs::{SubscriptionId, Xml};
 
 /// Flag used by `YInput` and `YOutput` to tag boolean values.
-pub const Y_JSON_BOOL: c_char = -8;
+pub const Y_JSON_BOOL: i8 = -8;
 
 /// Flag used by `YInput` and `YOutput` to tag floating point numbers.
-pub const Y_JSON_NUM: c_char = -7;
+pub const Y_JSON_NUM: i8 = -7;
 
 /// Flag used by `YInput` and `YOutput` to tag 64-bit integer numbers.
-pub const Y_JSON_INT: c_char = -6;
+pub const Y_JSON_INT: i8 = -6;
 
 /// Flag used by `YInput` and `YOutput` to tag strings.
-pub const Y_JSON_STR: c_char = -5;
+pub const Y_JSON_STR: i8 = -5;
 
 /// Flag used by `YInput` and `YOutput` to tag binary content.
-pub const Y_JSON_BUF: c_char = -4;
+pub const Y_JSON_BUF: i8 = -4;
 
 /// Flag used by `YInput` and `YOutput` to tag embedded JSON-like arrays of values,
 /// which themselves are `YInput` and `YOutput` instances respectively.
-pub const Y_JSON_ARR: c_char = -3;
+pub const Y_JSON_ARR: i8 = -3;
 
 /// Flag used by `YInput` and `YOutput` to tag embedded JSON-like maps of key-value pairs,
 /// where keys are strings and v
-pub const Y_JSON_MAP: c_char = -2;
+pub const Y_JSON_MAP: i8 = -2;
 
 /// Flag used by `YInput` and `YOutput` to tag JSON-like null values.
-pub const Y_JSON_NULL: c_char = -1;
+pub const Y_JSON_NULL: i8 = -1;
 
 /// Flag used by `YInput` and `YOutput` to tag JSON-like undefined values.
-pub const Y_JSON_UNDEF: c_char = 0;
+pub const Y_JSON_UNDEF: i8 = 0;
 
 /// Flag used by `YInput` and `YOutput` to tag content, which is an `YArray` shared type.
-pub const Y_ARRAY: c_char = 1;
+pub const Y_ARRAY: i8 = 1;
 
 /// Flag used by `YInput` and `YOutput` to tag content, which is an `YMap` shared type.
-pub const Y_MAP: c_char = 2;
+pub const Y_MAP: i8 = 2;
 
 /// Flag used by `YInput` and `YOutput` to tag content, which is an `YText` shared type.
-pub const Y_TEXT: c_char = 3;
+pub const Y_TEXT: i8 = 3;
 
 /// Flag used by `YInput` and `YOutput` to tag content, which is an `YXmlElement` shared type.
-pub const Y_XML_ELEM: c_char = 4;
+pub const Y_XML_ELEM: i8 = 4;
 
 /// Flag used by `YInput` and `YOutput` to tag content, which is an `YXmlText` shared type.
-pub const Y_XML_TEXT: c_char = 5;
+pub const Y_XML_TEXT: i8 = 5;
 
 /// Flag used to mark a truthy boolean numbers.
 pub const Y_TRUE: c_char = 1;
@@ -1761,7 +1761,7 @@ pub struct YInput {
     /// - [Y_JSON_UNDEF] for JSON-like undefined values.
     /// - [Y_ARRAY] for cells which contents should be used to initialize a `YArray` shared type.
     /// - [Y_MAP] for cells which contents should be used to initialize a `YMap` shared type.
-    pub tag: c_char,
+    pub tag: i8,
 
     /// Length of the contents stored by current `YInput` cell.
     ///
@@ -1948,7 +1948,7 @@ pub struct YOutput {
     /// - [Y_MAP] for pointers to `YMap` data types.
     /// - [Y_XML_ELEM] for pointers to `YXmlElement` data types.
     /// - [Y_XML_TEXT] for pointers to `YXmlText` data types.
-    pub tag: c_char,
+    pub tag: i8,
 
     /// Length of the contents stored by a current `YOutput` cell.
     ///
