@@ -53,7 +53,7 @@ pub const TYPE_REFS_UNDEFINED: TypeRefs = 15;
 /// map-like and array-like contents of a [Branch].
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy)]
-pub struct BranchRef(ManuallyDrop<NonNull<Branch>>);
+pub struct BranchRef(NonNull<Branch>);
 
 impl Deref for BranchRef {
     type Target = Branch;
@@ -72,7 +72,7 @@ impl DerefMut for BranchRef {
 impl<'a> From<&'a mut Box<Branch>> for BranchRef {
     fn from(branch: &'a mut Box<Branch>) -> Self {
         let ptr = NonNull::from(branch.as_mut());
-        BranchRef(ManuallyDrop::new(ptr))
+        BranchRef(ptr)
     }
 }
 
@@ -81,7 +81,7 @@ impl<'a> From<&'a Box<Branch>> for BranchRef {
         let b: &Branch = &*branch;
         unsafe {
             let ptr = NonNull::new_unchecked(b as *const Branch as *mut Branch);
-            BranchRef(ManuallyDrop::new(ptr))
+            BranchRef(ptr)
         }
     }
 }
@@ -90,7 +90,7 @@ impl<'a> From<&'a Branch> for BranchRef {
     fn from(branch: &'a Branch) -> Self {
         unsafe {
             let ptr = NonNull::new_unchecked(branch as *const Branch as *mut Branch);
-            BranchRef(ManuallyDrop::new(ptr))
+            BranchRef(ptr)
         }
     }
 }

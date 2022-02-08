@@ -292,7 +292,7 @@ typedef struct YOutput {
    * - [Y_XML_ELEM] for pointers to `YXmlElement` data types.
    * - [Y_XML_TEXT] for pointers to `YXmlText` data types.
    */
-  char tag;
+  int8_t tag;
   /**
    * Length of the contents stored by a current `YOutput` cell.
    *
@@ -408,7 +408,7 @@ typedef struct YInput {
    * - [Y_ARRAY] for cells which contents should be used to initialize a `YArray` shared type.
    * - [Y_MAP] for cells which contents should be used to initialize a `YMap` shared type.
    */
-  char tag;
+  int8_t tag;
   /**
    * Length of the contents stored by current `YInput` cell.
    *
