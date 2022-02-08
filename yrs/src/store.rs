@@ -9,6 +9,7 @@ use crate::update::PendingUpdate;
 use crate::updates::encoder::{Encode, Encoder};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::pin::Pin;
 use std::rc::Rc;
 
 /// Store is a core element of a document. It contains all of the information, like block store
@@ -20,7 +21,7 @@ pub(crate) struct Store {
     /// Root types (a.k.a. top-level types). These types are defined by users at the document level,
     /// they have their own unique names and represent core shared types that expose operations
     /// which can be called concurrently by remote peers in a conflict-free manner.
-    pub types: HashMap<Rc<str>, Box<Branch>>,
+    pub types: HashMap<Rc<str>, Pin<Box<Branch>>>,
 
     /// A block store of a current document. It represent all blocks (inserted or tombstoned
     /// operations) integrated - and therefore visible - into a current document.
@@ -69,7 +70,7 @@ impl Store {
         Some(BranchRef::from(branch))
     }
 
-    pub(crate) fn get_type_raw(&self, ptr: &TypePtr) -> Option<&Box<Branch>> {
+    pub(crate) fn get_type_raw(&self, ptr: &TypePtr) -> Option<&Branch> {
         match ptr {
             TypePtr::Id(id) => {
                 // @todo the item might not exist
@@ -131,8 +132,7 @@ impl Store {
         let e = self.types.entry(name.clone());
         let value = e.or_insert_with(|| {
             let type_ptr = types::TypePtr::Named(name.clone());
-            let inner = types::Branch::new(type_ptr, type_ref, node_name);
-            Box::new(inner)
+            types::Branch::new(type_ptr, type_ref, node_name)
         });
         value.into()
     }

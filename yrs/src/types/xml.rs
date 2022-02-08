@@ -889,10 +889,8 @@ enum PrelimXml {
 impl Prelim for PrelimXml {
     fn into_content(self, _txn: &mut Transaction, ptr: TypePtr) -> (ItemContent, Option<Self>) {
         let inner = match self {
-            PrelimXml::Elem(node_name) => {
-                Box::new(Branch::new(ptr, TYPE_REFS_XML_ELEMENT, Some(node_name)))
-            }
-            PrelimXml::Text => Box::new(Branch::new(ptr, TYPE_REFS_XML_TEXT, None)),
+            PrelimXml::Elem(node_name) => Branch::new(ptr, TYPE_REFS_XML_ELEMENT, Some(node_name)),
+            PrelimXml::Text => Branch::new(ptr, TYPE_REFS_XML_TEXT, None),
         };
         (ItemContent::Type(inner), None)
     }

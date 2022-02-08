@@ -13,6 +13,7 @@ use std::collections::HashSet;
 use std::hash::Hash;
 use std::ops::Deref;
 use std::panic;
+use std::pin::Pin;
 use std::rc::Rc;
 
 /// Bit flag used to identify [Block::GC].
@@ -1158,7 +1159,7 @@ pub enum ItemContent {
 
     /// A reference of a branch node. Branch nodes define a complex collection types, such as
     /// arrays, maps or XML elements.
-    Type(Box<Branch>),
+    Type(Pin<Box<Branch>>),
 }
 
 impl ItemContent {
@@ -1365,7 +1366,7 @@ impl ItemContent {
                 };
                 let inner_ptr = types::TypePtr::Id(ptr);
                 let inner = types::Branch::new(inner_ptr, type_ref, name);
-                ItemContent::Type(Box::new(inner))
+                ItemContent::Type(inner)
             }
             BLOCK_ITEM_ANY_REF_NUMBER => {
                 let len = decoder.read_len() as usize;
