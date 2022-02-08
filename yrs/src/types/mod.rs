@@ -15,9 +15,11 @@ use crate::types::map::MapEvent;
 use crate::types::text::TextEvent;
 use crate::types::xml::{XmlElement, XmlEvent, XmlText, XmlTextEvent};
 use lib0::any::Any;
-use std::cell::{BorrowMutError, Ref, RefCell, RefMut};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Formatter;
+use std::ops::{Deref, DerefMut};
+use std::pin::Pin;
+use std::ptr::NonNull;
 use std::rc::Rc;
 
 pub type TypeRefs = u8;
@@ -49,40 +51,56 @@ pub const TYPE_REFS_UNDEFINED: TypeRefs = 15;
 
 /// A wrapper around [Branch] cell, supplied with a bunch of convenience methods to operate on both
 /// map-like and array-like contents of a [Branch].
-#[derive(Debug, Clone)]
-pub struct BranchRef(Rc<RefCell<Branch>>);
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy)]
+pub struct BranchRef(NonNull<Branch>);
 
-impl BranchRef {
-    pub fn new(inner: Branch) -> Self {
-        BranchRef(Rc::new(RefCell::new(inner)))
+impl Deref for BranchRef {
+    type Target = Branch;
+
+    fn deref(&self) -> &Self::Target {
+        unsafe { self.0.as_ref() }
     }
+}
 
-    /// Returns an immutable ref wrapper to an underlying [Branch].
-    /// This method will panic, if current branch was already mutably borrowed.
-    pub fn borrow(&self) -> Ref<Branch> {
-        self.0.borrow()
+impl DerefMut for BranchRef {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe { self.0.as_mut() }
     }
+}
 
-    /// Returns a mutable ref wrapper to an underlying [Branch].
-    /// This method will panic, if current branch was already borrowed (either mutably or immutably)
-    /// somewhere else.
-    pub fn borrow_mut(&self) -> RefMut<Branch> {
-        self.0.borrow_mut()
+impl<'a> From<&'a mut Pin<Box<Branch>>> for BranchRef {
+    fn from(branch: &'a mut Pin<Box<Branch>>) -> Self {
+        let ptr = NonNull::from(branch.as_mut().get_mut());
+        BranchRef(ptr)
     }
+}
 
-    /// Returns a result, which may either be a mutable ref wrapper to an underlying [Branch],
-    /// or an error in case when this branch was already borrowed (either mutably or immutably)
-    /// somewhere else.
-    pub fn try_borrow_mut(&self) -> Result<RefMut<Branch>, BorrowMutError> {
-        self.0.try_borrow_mut()
+impl<'a> From<&'a Pin<Box<Branch>>> for BranchRef {
+    fn from(branch: &'a Pin<Box<Branch>>) -> Self {
+        let b: &Branch = &*branch;
+        unsafe {
+            let ptr = NonNull::new_unchecked(b as *const Branch as *mut Branch);
+            BranchRef(ptr)
+        }
     }
+}
 
+impl<'a> From<&'a Branch> for BranchRef {
+    fn from(branch: &'a Branch) -> Self {
+        unsafe {
+            let ptr = NonNull::new_unchecked(branch as *const Branch as *mut Branch);
+            BranchRef(ptr)
+        }
+    }
+}
+
+impl Into<Value> for BranchRef {
     /// Converts current branch data into a [Value]. It uses a type ref information to resolve,
     /// which value variant is a correct one for this branch. Since branch represent only complex
     /// types [Value::Any] will never be returned from this method.
-    pub fn into_value(self, _txn: &Transaction) -> Value {
-        let type_ref = { self.as_ref().type_ref() };
-        match type_ref {
+    fn into(self) -> Value {
+        match self.type_ref() {
             TYPE_REFS_ARRAY => Value::YArray(Array::from(self)),
             TYPE_REFS_MAP => Value::YMap(Map::from(self)),
             TYPE_REFS_TEXT => Value::YText(Text::from(self)),
@@ -93,96 +111,6 @@ impl BranchRef {
             other => panic!("Cannot convert to value - unsupported type ref: {}", other),
         }
     }
-
-    /// Removes up to a `len` of countable elements from current branch sequence, starting at the
-    /// given `index`. Returns number of removed elements.
-    pub(crate) fn remove_at(&self, txn: &mut Transaction, index: u32, len: u32) -> u32 {
-        let mut remaining = len;
-        let start = {
-            let parent = self.borrow();
-            parent.start
-        };
-        let (_, mut ptr) = if index == 0 {
-            (None, start)
-        } else {
-            Branch::index_to_ptr(txn, start, index)
-        };
-        while remaining > 0 {
-            if let Some(mut p) = ptr {
-                let encoding = txn.store().options.offset_kind;
-                if let Some(item) = txn.store().blocks.get_item(&p) {
-                    if !item.is_deleted() {
-                        let content_len = item.content_len(encoding);
-                        let (l, r) = if remaining < content_len {
-                            let offset = if let ItemContent::String(s) = &item.content {
-                                s.block_offset(remaining, encoding)
-                            } else {
-                                remaining
-                            };
-                            p.id.clock += offset;
-                            remaining = 0;
-                            txn.store_mut().blocks.split_block(&p)
-                        } else {
-                            remaining -= content_len;
-                            (ptr, item.right.clone())
-                        };
-                        txn.delete(&l.unwrap());
-                        ptr = r;
-                    } else {
-                        ptr = item.right.clone();
-                    }
-                }
-            } else {
-                break;
-            }
-        }
-
-        len - remaining
-    }
-
-    /// Inserts a preliminary `value` into a current branch indexed sequence component at the given
-    /// `index`. Returns an item reference created as a result of this operation.
-    pub(crate) fn insert_at<'t, V: Prelim>(
-        &self,
-        txn: &'t mut Transaction,
-        index: u32,
-        value: V,
-    ) -> &'t Item {
-        let (start, parent) = {
-            let parent = self.borrow();
-            if index <= parent.len() {
-                (parent.start, parent.ptr.clone())
-            } else {
-                panic!("Cannot insert item at index over the length of an array")
-            }
-        };
-        let (left, right) = if index == 0 {
-            (None, None)
-        } else {
-            Branch::index_to_ptr(txn, start, index)
-        };
-        let pos = ItemPosition {
-            parent,
-            left,
-            right,
-            index: 0,
-            current_attrs: None,
-        };
-
-        txn.create_item(&pos, value, None)
-    }
-
-    pub(crate) fn trigger(&self, txn: &Transaction, keys: HashSet<Option<Rc<str>>>) {
-        if let Some(o) = self.borrow().observers.as_ref() {
-            o.publish(self.clone(), txn, keys);
-        }
-    }
-}
-
-impl AsRef<Branch> for BranchRef {
-    fn as_ref<'a>(&'a self) -> &'a Branch {
-        unsafe { &*self.0.as_ptr() as &'a Branch }
-    }
 }
 
 impl Eq for BranchRef {}
@@ -190,17 +118,19 @@ impl Eq for BranchRef {}
 #[cfg(not(test))]
 impl PartialEq for BranchRef {
     fn eq(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.0, &other.0)
+        NonNull::eq(&self.0, &other.0)
     }
 }
 
 #[cfg(test)]
 impl PartialEq for BranchRef {
     fn eq(&self, other: &Self) -> bool {
-        if Rc::ptr_eq(&self.0, &other.0) {
+        if NonNull::eq(&self.0, &other.0) {
             true
         } else {
-            self.0.borrow().eq(&other.0.borrow())
+            let a: &Branch = self.deref();
+            let b: &Branch = other.deref();
+            a.eq(b)
         }
     }
 }
@@ -245,7 +175,7 @@ pub struct Branch {
     /// An identifier of an underlying complex data type (eg. is it an Array or a Map).
     type_ref: TypeRefs,
 
-    observers: Option<Observers>,
+    pub(crate) observers: Option<Observers>,
 }
 
 impl std::fmt::Debug for Branch {
@@ -275,8 +205,8 @@ impl PartialEq for Branch {
 }
 
 impl Branch {
-    pub fn new(ptr: TypePtr, type_ref: TypeRefs, name: Option<String>) -> Self {
-        Self {
+    pub fn new(ptr: TypePtr, type_ref: TypeRefs, name: Option<String>) -> Pin<Box<Self>> {
+        Pin::new(Box::new(Self {
             start: None,
             map: HashMap::default(),
             block_len: 0,
@@ -285,7 +215,7 @@ impl Branch {
             name,
             type_ref,
             observers: None,
-        }
+        }))
     }
 
     /// Returns an identifier of an underlying complex data type (eg. is it an Array or a Map).
@@ -438,8 +368,81 @@ impl Branch {
         }
         (None, None)
     }
+    /// Removes up to a `len` of countable elements from current branch sequence, starting at the
+    /// given `index`. Returns number of removed elements.
+    pub(crate) fn remove_at(&self, txn: &mut Transaction, index: u32, len: u32) -> u32 {
+        let mut remaining = len;
+        let start = { self.start };
+        let (_, mut ptr) = if index == 0 {
+            (None, start)
+        } else {
+            Branch::index_to_ptr(txn, start, index)
+        };
+        while remaining > 0 {
+            if let Some(mut p) = ptr {
+                let encoding = txn.store().options.offset_kind;
+                if let Some(item) = txn.store().blocks.get_item(&p) {
+                    if !item.is_deleted() {
+                        let content_len = item.content_len(encoding);
+                        let (l, r) = if remaining < content_len {
+                            let offset = if let ItemContent::String(s) = &item.content {
+                                s.block_offset(remaining, encoding)
+                            } else {
+                                remaining
+                            };
+                            p.id.clock += offset;
+                            remaining = 0;
+                            txn.store_mut().blocks.split_block(&p)
+                        } else {
+                            remaining -= content_len;
+                            (ptr, item.right.clone())
+                        };
+                        txn.delete(&l.unwrap());
+                        ptr = r;
+                    } else {
+                        ptr = item.right.clone();
+                    }
+                }
+            } else {
+                break;
+            }
+        }
 
-    pub(crate) fn path(from: Ref<Branch>, to: Ref<Branch>, txn: &Transaction) -> Path {
+        len - remaining
+    }
+
+    /// Inserts a preliminary `value` into a current branch indexed sequence component at the given
+    /// `index`. Returns an item reference created as a result of this operation.
+    pub(crate) fn insert_at<'t, V: Prelim>(
+        &self,
+        txn: &'t mut Transaction,
+        index: u32,
+        value: V,
+    ) -> &'t Item {
+        let (start, parent) = {
+            if index <= self.len() {
+                (self.start, self.ptr.clone())
+            } else {
+                panic!("Cannot insert item at index over the length of an array")
+            }
+        };
+        let (left, right) = if index == 0 {
+            (None, None)
+        } else {
+            Branch::index_to_ptr(txn, start, index)
+        };
+        let pos = ItemPosition {
+            parent,
+            left,
+            right,
+            index: 0,
+            current_attrs: None,
+        };
+
+        txn.create_item(&pos, value, None)
+    }
+
+    pub(crate) fn path(from: BranchRef, to: BranchRef, txn: &Transaction) -> Path {
         let parent = from;
         let mut child = to;
         let mut path = VecDeque::default();
@@ -451,11 +454,11 @@ impl Branch {
             if let Some(parent_sub) = item.parent_sub.clone() {
                 // parent is map-ish
                 path.push_front(PathSegment::Key(parent_sub));
-                child = txn.store().get_type(&item.parent).unwrap().borrow();
+                child = txn.store().get_type(&item.parent).unwrap().clone();
             } else {
                 // parent is array-ish
                 let mut i = 0;
-                child = txn.store().get_type(&item.parent).unwrap().borrow();
+                child = txn.store().get_type(&item.parent).unwrap();
                 let mut c = child.start.clone();
                 while let Some(ptr) = c {
                     if ptr.id == item.id {
@@ -633,8 +636,8 @@ pub(crate) struct Entries<'a> {
 
 impl<'a> Entries<'a> {
     pub(crate) fn new<'b>(ptr: &'b TypePtr, txn: &'a Transaction) -> Self {
-        let inner = txn.store().get_type(ptr).unwrap();
-        let iter = inner.as_ref().map.iter();
+        let inner = txn.store().get_type_raw(ptr).unwrap();
+        let iter = inner.map.iter();
         Entries { txn, iter }
     }
 }
@@ -709,7 +712,7 @@ impl std::fmt::Display for TypePtr {
     }
 }
 
-enum Observers {
+pub(crate) enum Observers {
     Text(EventHandler<crate::types::text::TextEvent>),
     Array(EventHandler<crate::types::array::ArrayEvent>),
     Map(EventHandler<crate::types::map::MapEvent>),
@@ -834,7 +837,7 @@ pub type Attrs = HashMap<Box<str>, Any>;
 
 pub(crate) fn event_keys(
     txn: &Transaction,
-    target: Ref<Branch>,
+    target: BranchRef,
     keys_changed: &HashSet<Option<Rc<str>>>,
 ) -> HashMap<Rc<str>, EntryChange> {
     let mut keys = HashMap::new();

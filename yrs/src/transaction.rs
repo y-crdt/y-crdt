@@ -8,7 +8,7 @@ use crate::store::Store;
 use crate::types::array::Array;
 use crate::types::xml::{XmlElement, XmlText};
 use crate::types::{
-    Branch, Map, Text, TypePtr, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
+    Branch, BranchRef, Map, Text, TypePtr, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
     TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT,
 };
 use crate::update::Update;
@@ -261,10 +261,9 @@ impl Transaction {
         if let Some(item) = store.blocks.get_item_mut(&ptr) {
             if !item.is_deleted() {
                 if item.parent_sub.is_none() && item.is_countable() {
-                    if let Some(parent) = self.store().get_type(&item.parent) {
-                        let mut inner = parent.borrow_mut();
-                        inner.block_len -= item.len();
-                        inner.content_len -= item.content_len(store.options.offset_kind);
+                    if let Some(mut parent) = self.store().get_type(&item.parent) {
+                        parent.block_len -= item.len();
+                        parent.content_len -= item.content_len(store.options.offset_kind);
                     }
                 }
 
@@ -303,8 +302,7 @@ impl Transaction {
                         //}
                         todo!()
                     }
-                    ItemContent::Type(t) => {
-                        let inner = t.borrow_mut();
+                    ItemContent::Type(inner) => {
                         let mut ptr = inner.start;
                         //TODO: self.changed.remove(&item.parent); // uncomment when deep observe is complete
 
@@ -434,7 +432,7 @@ impl Transaction {
         };
         let (content, remainder) = value.into_content(self, TypePtr::Id(ptr.clone()));
         let inner_ref = if let ItemContent::Type(inner_ref) = &content {
-            Some(inner_ref.clone())
+            Some(BranchRef::from(inner_ref))
         } else {
             None
         };
@@ -457,7 +455,7 @@ impl Transaction {
         let idx = local_block_list.len() - 1;
 
         if let Some(remainder) = remainder {
-            remainder.integrate(self, inner_ref.unwrap())
+            remainder.integrate(self, inner_ref.unwrap().into())
         }
 
         self.store_mut().blocks.get_client_blocks_mut(ptr.id.client)[idx]
@@ -486,7 +484,9 @@ impl Transaction {
         if !self.changed.is_empty() {
             for (ptr, subs) in self.changed.iter() {
                 if let Some(branch) = store.get_type(ptr) {
-                    branch.trigger(self, subs.clone());
+                    if let Some(o) = branch.observers.as_ref() {
+                        o.publish(branch.clone(), self, subs.clone());
+                    }
                 }
             }
         }

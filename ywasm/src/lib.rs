@@ -2251,7 +2251,7 @@ impl Prelim for JsValueWrapper {
             ItemContent::Any(vec![any])
         } else if let Ok(shared) = Shared::try_from(&self.0) {
             if shared.is_prelim() {
-                let branch = BranchRef::new(Branch::new(ptr, shared.type_ref(), None));
+                let branch = Branch::new(ptr, shared.type_ref(), None);
                 ItemContent::Type(branch)
             } else {
                 panic!("Cannot integrate this type")

@@ -43,92 +43,15 @@ header = """
 typedef struct YDoc {} YDoc;
 
 /**
- * A shared data type used for collaborative text editing. It enables multiple users to add and
- * remove chunks of text in efficient manner. This type is internally represented as a mutable
- * double-linked list of text chunks - an optimization occurs during [ytransaction_commit], which
- * allows to squash multiple consecutively inserted characters together as a single chunk of text
- * even between transaction boundaries in order to preserve more efficient memory model.
+ * A common shared data type. All Yrs instances can be refered to using this data type (use
+ * `ytype_kind` function if a specific type needs to be determined). Branch pointers are passed
+ * over type-specific functions like `ytext_insert`, `yarray_insert` or `ymap_insert` to perform
+ * a specific shared type operations.
  *
- * `YText` structure internally uses UTF-8 encoding and its length is described in a number of
- * bytes rather than individual characters (a single UTF-8 code point can consist of many bytes).
- *
- * Like all Yrs shared data types, `YText` is resistant to the problem of interleaving (situation
- * when characters inserted one after another may interleave with other peers concurrent inserts
- * after merging all updates together). In case of Yrs conflict resolution is solved by using
- * unique document id to determine correct and consistent ordering.
+ * Using write methods of different shared types (eg. `ytext_insert` and `yarray_insert`) over
+ * the same branch may result in undefined behavior.
  */
-typedef struct YText {} YText;
-
-/**
- * A collection used to store data in an indexed sequence structure. This type is internally
- * implemented as a double linked list, which may squash values inserted directly one after another
- * into single list node upon transaction commit.
- *
- * Reading a root-level type as an `YArray` means treating its sequence components as a list, where
- * every countable element becomes an individual entity:
- *
- * - JSON-like primitives (booleans, numbers, strings, JSON maps, arrays etc.) are counted
- *   individually.
- * - Text chunks inserted by `YText` data structure: each character becomes an element of an
- *   array.
- * - Embedded and binary values: they count as a single element even though they correspond of
- *   multiple bytes.
- *
- * Like all Yrs shared data types, `YArray` is resistant to the problem of interleaving (situation
- * when elements inserted one after another may interleave with other peers concurrent inserts
- * after merging all updates together). In case of Yrs conflict resolution is solved by using
- * unique document id to determine correct and consistent ordering.
- */
-typedef struct YArray {} YArray;
-
-/**
- * Collection used to store key-value entries in an unordered manner. Keys are always represented
- * as UTF-8 strings. Values can be any value type supported by Yrs: JSON-like primitives as well as
- * shared data types.
- *
- * In terms of conflict resolution, `YMap` uses logical last-write-wins principle, meaning the past
- * updates are automatically overridden and discarded by newer ones, while concurrent updates made
- * by different peers are resolved into a single value using document id seniority to establish
- * order.
- */
-typedef struct YMap {} YMap;
-
-/**
- * XML element data type. It represents an XML node, which can contain key-value attributes
- * (interpreted as strings) as well as other nested XML elements or rich text (represented by
- * `YXmlText` type).
- *
- * In terms of conflict resolution, `YXmlElement` uses following rules:
- *
- * - Attribute updates use logical last-write-wins principle, meaning the past updates are
- *   automatically overridden and discarded by newer ones, while concurrent updates made by
- *   different peers are resolved into a single value using document id seniority to establish
- *   an order.
- * - Child node insertion uses sequencing rules from other Yrs collections - elements are inserted
- *   using interleave-resistant algorithm, where order of concurrent inserts at the same index
- *   is established using peer's document id seniority.
- */
-typedef struct YXmlElement {} YXmlElement;
-
-/**
- * A shared data type used for collaborative text editing, that can be used in a context of
- * `YXmlElement` nodee. It enables multiple users to add and remove chunks of text in efficient
- * manner. This type is internally represented as a mutable double-linked list of text chunks
- * - an optimization occurs during [ytransaction_commit], which allows to squash multiple
- * consecutively inserted characters together as a single chunk of text even between transaction
- * boundaries in order to preserve more efficient memory model.
- *
- * Just like `YXmlElement`, `YXmlText` can be marked with extra metadata in form of attributes.
- *
- * `YXmlText` structure internally uses UTF-8 encoding and its length is described in a number of
- * bytes rather than individual characters (a single UTF-8 code point can consist of many bytes).
- *
- * Like all Yrs shared data types, `YXmlText` is resistant to the problem of interleaving (situation
- * when characters inserted one after another may interleave with other peers concurrent inserts
- * after merging all updates together). In case of Yrs conflict resolution is solved by using
- * unique document id to determine correct and consistent ordering.
- */
-typedef struct YXmlText {} YXmlText;
+typedef struct Branch {} Branch;
 
 /**
  * Transaction is one of the core types in Yrs. All operations that need to touch a document's

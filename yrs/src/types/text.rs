@@ -5,8 +5,9 @@ use crate::transaction::Transaction;
 use crate::types::{Attrs, Branch, BranchRef, Delta, Observers, Path, Value};
 use crate::*;
 use lib0::any::Any;
-use std::cell::{Ref, RefMut, UnsafeCell};
+use std::cell::UnsafeCell;
 use std::collections::HashMap;
+use std::ops::Deref;
 
 /// A shared data type used for collaborative text editing. It enables multiple users to add and
 /// remove chunks of text in efficient manner. This type is internally represented as a mutable
@@ -21,15 +22,14 @@ use std::collections::HashMap;
 /// when characters inserted one after another may interleave with other peers concurrent inserts
 /// after merging all updates together). In case of Yrs conflict resolution is solved by using
 /// unique document id to determine correct and consistent ordering.
+#[repr(transparent)]
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Text(BranchRef);
 
 impl Text {
     /// Converts context of this text data structure into a single string value.
-    #[allow(clippy::inherent_to_string)]
     pub fn to_string(&self, txn: &Transaction) -> String {
-        let inner = self.0.as_ref();
-        let mut start = inner.start;
+        let mut start = self.0.start;
         let mut s = String::new();
         let store = txn.store();
         while let Some(a) = start.as_ref() {
@@ -49,15 +49,11 @@ impl Text {
 
     /// Returns a number of characters visible in a current text data structure.
     pub fn len(&self) -> u32 {
-        self.0.borrow().content_len
+        self.0.content_len
     }
 
-    pub(crate) fn inner(&self) -> Ref<Branch> {
-        self.0.borrow()
-    }
-
-    pub(crate) fn inner_mut(&self) -> RefMut<Branch> {
-        self.0.borrow_mut()
+    pub(crate) fn inner(&self) -> BranchRef {
+        self.0
     }
 
     pub(crate) fn find_position(
@@ -66,7 +62,7 @@ impl Text {
         index: u32,
     ) -> Option<block::ItemPosition> {
         let mut pos = {
-            let inner = self.0.borrow();
+            let inner = self.as_ref();
             block::ItemPosition {
                 parent: inner.ptr.clone(),
                 left: None,
@@ -442,7 +438,7 @@ impl Text {
                 negated_attrs.insert(k.clone(), current_value.clone());
 
                 let client_id = store.options.client_id;
-                let parent = { self.0.borrow().ptr.clone() };
+                let parent = { self.0.ptr.clone() };
                 let mut item = Item::new(
                     ID::new(client_id, store.blocks.get_state(&client_id)),
                     pos.left.clone(),
@@ -497,7 +493,7 @@ impl Text {
         let mut store = txn.store_mut();
         for (k, v) in attrs {
             let client_id = store.options.client_id;
-            let parent = { self.0.borrow().ptr.clone() };
+            let parent = { self.0.ptr.clone() };
             let mut item = Item::new(
                 ID::new(client_id, store.blocks.get_state(&client_id)),
                 pos.left.clone(),
@@ -528,12 +524,11 @@ impl Text {
     /// contains collection of individual characters rather than strings.
     ///
     /// Returns an [Observer] which, when dropped, will unsubscribe current callback.
-    pub fn observe<F>(&self, f: F) -> Subscription<TextEvent>
+    pub fn observe<F>(&mut self, f: F) -> Subscription<TextEvent>
     where
         F: Fn(&Transaction, &TextEvent) -> () + 'static,
     {
-        let mut branch = self.0.borrow_mut();
-        if let Observers::Text(eh) = branch.observers.get_or_insert_with(Observers::text) {
+        if let Observers::Text(eh) = self.0.observers.get_or_insert_with(Observers::text) {
             eh.subscribe(f)
         } else {
             panic!("Observed collection is of different type") //TODO: this should be Result::Err
@@ -541,9 +536,8 @@ impl Text {
     }
 
     /// Unsubscribes a previously subscribed event callback identified by given `subscription_id`.
-    pub fn unobserve(&self, subscription_id: SubscriptionId) {
-        let mut branch = self.0.borrow_mut();
-        if let Some(Observers::Text(eh)) = branch.observers.as_mut() {
+    pub fn unobserve(&mut self, subscription_id: SubscriptionId) {
+        if let Some(Observers::Text(eh)) = self.0.observers.as_mut() {
             eh.unsubscribe(subscription_id);
         }
     }
@@ -618,7 +612,6 @@ impl Text {
         let mut asm = DiffAssembler::default();
         let mut n = self
             .0
-            .borrow()
             .start
             .as_ref()
             .and_then(|ptr| txn.store().blocks.get_item(ptr));
@@ -676,15 +669,15 @@ impl Text {
     }
 }
 
-impl Into<ItemContent> for Text {
-    fn into(self) -> ItemContent {
-        ItemContent::Type(self.0.clone())
-    }
-}
-
 impl From<BranchRef> for Text {
     fn from(inner: BranchRef) -> Self {
         Text(inner)
+    }
+}
+
+impl AsRef<Branch> for Text {
+    fn as_ref(&self) -> &Branch {
+        self.0.deref()
     }
 }
 
@@ -718,7 +711,7 @@ impl TextEvent {
 
     /// Returns a path from root type down to [Text] instance which emitted this event.
     pub fn path(&self, txn: &Transaction) -> Path {
-        Branch::path(self.current_target.borrow(), self.target.0.borrow(), txn)
+        Branch::path(self.current_target, self.target.0, txn)
     }
 
     /// Returns a summary of text changes made over corresponding [Text] collection within
@@ -726,11 +719,11 @@ impl TextEvent {
     pub fn delta(&self, txn: &Transaction) -> &[Delta] {
         let delta = unsafe { self.delta.get().as_mut().unwrap() };
         delta
-            .get_or_insert_with(|| Self::get_delta(self.target.0.borrow(), txn))
+            .get_or_insert_with(|| Self::get_delta(self.target.0, txn))
             .as_slice()
     }
 
-    pub(crate) fn get_delta(target: Ref<Branch>, txn: &Transaction) -> Vec<Delta> {
+    pub(crate) fn get_delta(target: BranchRef, txn: &Transaction) -> Vec<Delta> {
         #[derive(Clone, Copy, Eq, PartialEq)]
         enum Action {
             Insert,
@@ -1269,7 +1262,7 @@ mod test {
     #[test]
     fn insert_and_remove_event_changes() {
         let d1 = Doc::with_client_id(1);
-        let txt = {
+        let mut txt = {
             let mut txn = d1.transact();
             txn.get_text("text")
         };
@@ -1314,7 +1307,7 @@ mod test {
 
         // replicate data to another peer
         let d2 = Doc::with_client_id(2);
-        let txt = {
+        let mut txt = {
             let mut txn = d2.transact();
             txn.get_text("text")
         };
@@ -1430,7 +1423,7 @@ mod test {
     #[test]
     fn basic_format() {
         let d1 = Doc::with_client_id(1);
-        let txt1 = {
+        let mut txt1 = {
             let mut txn = d1.transact();
             txn.get_text("text")
         };
@@ -1442,7 +1435,7 @@ mod test {
         });
 
         let d2 = Doc::with_client_id(2);
-        let txt2 = {
+        let mut txt2 = {
             let mut txn = d2.transact();
             txn.get_text("text")
         };
@@ -1616,7 +1609,7 @@ mod test {
     #[test]
     fn embed_with_attributes() {
         let d1 = Doc::with_client_id(1);
-        let txt1 = {
+        let mut txt1 = {
             let mut txn = d1.transact();
             txn.get_text("text")
         };

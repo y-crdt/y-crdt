@@ -8,6 +8,7 @@ use crate::{SubscriptionId, Transaction, ID};
 use lib0::any::Any;
 use std::cell::UnsafeCell;
 use std::collections::{HashSet, VecDeque};
+use std::ops::Deref;
 
 /// A collection used to store data in an indexed sequence structure. This type is internally
 /// implemented as a double linked list, which may squash values inserted directly one after another
@@ -27,14 +28,14 @@ use std::collections::{HashSet, VecDeque};
 /// when elements inserted one after another may interleave with other peers concurrent inserts
 /// after merging all updates together). In case of Yrs conflict resolution is solved by using
 /// unique document id to determine correct and consistent ordering.
+#[repr(transparent)]
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Array(BranchRef);
 
 impl Array {
     /// Returns a number of elements stored in current array.
     pub fn len(&self) -> u32 {
-        let inner = self.0.borrow();
-        inner.len()
+        self.0.len()
     }
 
     /// Inserts a `value` at the given `index`. Inserting at index `0` is equivalent to prepending
@@ -44,9 +45,8 @@ impl Array {
     /// Using `index` value that's higher than current array length results in panic.
     pub fn insert<V: Prelim>(&self, txn: &mut Transaction, index: u32, value: V) {
         let (start, parent) = {
-            let parent = self.0.borrow();
-            if index <= parent.len() {
-                (parent.start, parent.ptr.clone())
+            if index <= self.0.len() {
+                (self.0.start, self.0.ptr.clone())
             } else {
                 panic!("Cannot insert item at index over the length of an array")
             }
@@ -110,8 +110,7 @@ impl Array {
     /// Retrieves a value stored at a given `index`. Returns `None` when provided index was out
     /// of the range of a current array.
     pub fn get(&self, txn: &Transaction, index: u32) -> Option<Value> {
-        let inner = self.0.borrow();
-        let (content, idx) = inner.get_at(&txn.store().blocks, index)?;
+        let (content, idx) = self.0.get_at(&txn.store().blocks, index)?;
         Some(content.get_content(txn).remove(idx))
     }
 
@@ -134,12 +133,11 @@ impl Array {
     /// All array changes can be tracked by using [Event::delta] method.
     ///
     /// Returns an [Observer] which, when dropped, will unsubscribe current callback.
-    pub fn observe<F>(&self, f: F) -> Subscription<ArrayEvent>
+    pub fn observe<F>(&mut self, f: F) -> Subscription<ArrayEvent>
     where
         F: Fn(&Transaction, &ArrayEvent) -> () + 'static,
     {
-        let mut branch = self.0.borrow_mut();
-        if let Observers::Array(eh) = branch.observers.get_or_insert_with(Observers::array) {
+        if let Observers::Array(eh) = self.0.observers.get_or_insert_with(Observers::array) {
             eh.subscribe(f)
         } else {
             panic!("Observed collection is of different type") //TODO: this should be Result::Err
@@ -147,11 +145,16 @@ impl Array {
     }
 
     /// Unsubscribes a previously subscribed event callback identified by given `subscription_id`.
-    pub fn unobserve(&self, subscription_id: SubscriptionId) {
-        let mut branch = self.0.borrow_mut();
-        if let Some(Observers::Array(eh)) = branch.observers.as_mut() {
+    pub fn unobserve(&mut self, subscription_id: SubscriptionId) {
+        if let Some(Observers::Array(eh)) = self.0.observers.as_mut() {
             eh.unsubscribe(subscription_id);
         }
+    }
+}
+
+impl AsRef<Branch> for Array {
+    fn as_ref(&self) -> &Branch {
+        self.0.deref()
     }
 }
 
@@ -163,9 +166,8 @@ pub struct ArrayIter<'b> {
 
 impl<'b> ArrayIter<'b> {
     fn new(array: &Array, txn: &'b Transaction) -> Self {
-        let inner = array.0.borrow();
         ArrayIter {
-            ptr: inner.start,
+            ptr: array.0.start,
             txn,
             content: VecDeque::default(),
         }
@@ -241,7 +243,7 @@ where
     T: IntoIterator<Item = V>,
 {
     fn into_content(self, _txn: &mut Transaction, ptr: TypePtr) -> (ItemContent, Option<Self>) {
-        let inner = BranchRef::new(Branch::new(ptr, TYPE_REFS_ARRAY, None));
+        let inner = Branch::new(ptr, TYPE_REFS_ARRAY, None);
         (ItemContent::Type(inner), Some(self))
     }
 
@@ -277,7 +279,7 @@ impl ArrayEvent {
 
     /// Returns a path from root type down to [Text] instance which emitted this event.
     pub fn path(&self, txn: &Transaction) -> Path {
-        Branch::path(self.current_target.borrow(), self.target.0.borrow(), txn)
+        Branch::path(self.current_target, self.target.0, txn)
     }
 
     /// Returns summary of changes made over corresponding [Array] collection within
@@ -300,9 +302,8 @@ impl ArrayEvent {
 
     fn changes(&self, txn: &Transaction) -> &ChangeSet<Change> {
         let change_set = unsafe { self.change_set.get().as_mut().unwrap() };
-        change_set.get_or_insert_with(|| {
-            Box::new(event_change_set(txn, self.target.0.borrow().start.as_ref()))
-        })
+        change_set
+            .get_or_insert_with(|| Box::new(event_change_set(txn, self.target.0.start.as_ref())))
     }
 }
 
@@ -665,7 +666,7 @@ mod test {
     #[test]
     fn insert_and_remove_events() {
         let d = Doc::with_client_id(1);
-        let array = {
+        let mut array = {
             let mut txn = d.transact();
             txn.get_array("array")
         };
@@ -709,7 +710,7 @@ mod test {
     #[test]
     fn insert_and_remove_event_changes() {
         let d1 = Doc::with_client_id(1);
-        let array = {
+        let mut array = {
             let mut txn = d1.transact();
             txn.get_array("array")
         };
@@ -772,7 +773,7 @@ mod test {
         );
 
         let d2 = Doc::with_client_id(2);
-        let array2 = {
+        let mut array2 = {
             let mut txn = d2.transact();
             txn.get_array("array")
         };
@@ -811,11 +812,11 @@ mod test {
     fn target_on_local_and_remote() {
         let d1 = Doc::with_client_id(1);
         let d2 = Doc::with_client_id(2);
-        let a1 = {
+        let mut a1 = {
             let mut txn = d1.transact();
             txn.get_array("array")
         };
-        let a2 = {
+        let mut a2 = {
             let mut txn = d2.transact();
             txn.get_array("array")
         };
