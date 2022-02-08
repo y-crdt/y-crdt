@@ -1756,7 +1756,7 @@ impl Prelim for YInput {
                 } else {
                     None
                 };
-                let inner = Box::new(Branch::new(ptr, type_ref, name));
+                let inner = Branch::new(ptr, type_ref, name);
                 (ItemContent::Type(inner), Some(self))
             }
         }

@@ -243,7 +243,7 @@ where
     T: IntoIterator<Item = V>,
 {
     fn into_content(self, _txn: &mut Transaction, ptr: TypePtr) -> (ItemContent, Option<Self>) {
-        let inner = Box::new(Branch::new(ptr, TYPE_REFS_ARRAY, None));
+        let inner = Branch::new(ptr, TYPE_REFS_ARRAY, None);
         (ItemContent::Type(inner), Some(self))
     }
 

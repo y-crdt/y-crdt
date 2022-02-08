@@ -17,8 +17,8 @@ use crate::types::xml::{XmlElement, XmlEvent, XmlText, XmlTextEvent};
 use lib0::any::Any;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Formatter;
-use std::mem::ManuallyDrop;
 use std::ops::{Deref, DerefMut};
+use std::pin::Pin;
 use std::ptr::NonNull;
 use std::rc::Rc;
 
@@ -69,15 +69,15 @@ impl DerefMut for BranchRef {
     }
 }
 
-impl<'a> From<&'a mut Box<Branch>> for BranchRef {
-    fn from(branch: &'a mut Box<Branch>) -> Self {
-        let ptr = NonNull::from(branch.as_mut());
+impl<'a> From<&'a mut Pin<Box<Branch>>> for BranchRef {
+    fn from(branch: &'a mut Pin<Box<Branch>>) -> Self {
+        let ptr = NonNull::from(branch.as_mut().get_mut());
         BranchRef(ptr)
     }
 }
 
-impl<'a> From<&'a Box<Branch>> for BranchRef {
-    fn from(branch: &'a Box<Branch>) -> Self {
+impl<'a> From<&'a Pin<Box<Branch>>> for BranchRef {
+    fn from(branch: &'a Pin<Box<Branch>>) -> Self {
         let b: &Branch = &*branch;
         unsafe {
             let ptr = NonNull::new_unchecked(b as *const Branch as *mut Branch);
@@ -205,8 +205,8 @@ impl PartialEq for Branch {
 }
 
 impl Branch {
-    pub fn new(ptr: TypePtr, type_ref: TypeRefs, name: Option<String>) -> Self {
-        Self {
+    pub fn new(ptr: TypePtr, type_ref: TypeRefs, name: Option<String>) -> Pin<Box<Self>> {
+        Pin::new(Box::new(Self {
             start: None,
             map: HashMap::default(),
             block_len: 0,
@@ -215,7 +215,7 @@ impl Branch {
             name,
             type_ref,
             observers: None,
-        }
+        }))
     }
 
     /// Returns an identifier of an underlying complex data type (eg. is it an Array or a Map).

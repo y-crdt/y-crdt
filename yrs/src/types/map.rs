@@ -224,7 +224,7 @@ impl<T> From<HashMap<String, T>> for PrelimMap<T> {
 
 impl<T: Prelim> Prelim for PrelimMap<T> {
     fn into_content(self, _txn: &mut Transaction, ptr: TypePtr) -> (ItemContent, Option<Self>) {
-        let inner = Box::new(Branch::new(ptr, TYPE_REFS_MAP, None));
+        let inner = Branch::new(ptr, TYPE_REFS_MAP, None);
         (ItemContent::Type(inner), Some(self))
     }
 
