@@ -4,11 +4,12 @@ use crate::doc::Options;
 use crate::event::{EventHandler, UpdateEvent};
 use crate::id_set::DeleteSet;
 use crate::types;
-use crate::types::{BranchRef, Path, PathSegment, TypePtr, TypeRefs, TYPE_REFS_UNDEFINED};
+use crate::types::{Branch, BranchRef, Path, PathSegment, TypePtr, TypeRefs, TYPE_REFS_UNDEFINED};
 use crate::update::PendingUpdate;
 use crate::updates::encoder::{Encode, Encoder};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::pin::Pin;
 use std::rc::Rc;
 
 /// Store is a core element of a document. It contains all of the information, like block store
@@ -20,7 +21,7 @@ pub(crate) struct Store {
     /// Root types (a.k.a. top-level types). These types are defined by users at the document level,
     /// they have their own unique names and represent core shared types that expose operations
     /// which can be called concurrently by remote peers in a conflict-free manner.
-    pub types: HashMap<Rc<str>, BranchRef>,
+    pub types: HashMap<Rc<str>, Pin<Box<Branch>>>,
 
     /// A block store of a current document. It represent all blocks (inserted or tombstoned
     /// operations) integrated - and therefore visible - into a current document.
@@ -64,7 +65,12 @@ impl Store {
 
     /// Returns a branch reference to a complex type identified by its pointer. Returns `None` if
     /// no such type could be found or was ever defined.
-    pub fn get_type(&self, ptr: &TypePtr) -> Option<&BranchRef> {
+    pub fn get_type(&self, ptr: &TypePtr) -> Option<BranchRef> {
+        let branch = self.get_type_raw(ptr)?;
+        Some(BranchRef::from(branch))
+    }
+
+    pub(crate) fn get_type_raw(&self, ptr: &TypePtr) -> Option<&Branch> {
         match ptr {
             TypePtr::Id(id) => {
                 // @todo the item might not exist
@@ -75,7 +81,7 @@ impl Store {
                     None
                 }
             }
-            TypePtr::Named(name) => self.types.get(name),
+            TypePtr::Named(name) => Some(self.types.get(name)?),
             TypePtr::Unknown => None,
         }
     }
@@ -88,7 +94,7 @@ impl Store {
         match ptr {
             types::TypePtr::Named(name) => {
                 if let Some(inner) = self.types.get(name) {
-                    Some(inner.clone())
+                    Some(inner.into())
                 } else {
                     let inner = self.init_type_ref(name.clone(), None, TYPE_REFS_UNDEFINED);
                     Some(inner)
@@ -126,10 +132,9 @@ impl Store {
         let e = self.types.entry(name.clone());
         let value = e.or_insert_with(|| {
             let type_ptr = types::TypePtr::Named(name.clone());
-            let inner = types::Branch::new(type_ptr, type_ref, node_name);
-            BranchRef::new(inner)
+            types::Branch::new(type_ptr, type_ref, node_name)
         });
-        value.clone()
+        value.into()
     }
 
     /// Compute a diff to sync with another client.
@@ -194,8 +199,7 @@ impl Store {
 
     pub(crate) fn gc_cleanup(&self, compaction: SquashResult) {
         if let Some(parent_sub) = compaction.parent_sub {
-            if let Some(parent) = self.get_type(&compaction.parent) {
-                let mut inner = parent.borrow_mut();
+            if let Some(mut inner) = self.get_type(&compaction.parent) {
                 match inner.map.entry(parent_sub.clone()) {
                     Entry::Occupied(e) => {
                         let cell = e.into_mut();
@@ -216,27 +220,26 @@ impl Store {
         }
     }
 
-    pub fn get_type_from_path(&self, path: &Path) -> Option<&BranchRef> {
+    pub fn get_type_from_path(&self, path: &Path) -> Option<BranchRef> {
         let mut i = path.iter();
         if let Some(PathSegment::Key(root_name)) = i.next() {
             let mut current = self.get_type(&TypePtr::Named(root_name.clone()))?;
             while let Some(segment) = i.next() {
-                let branch_ref = current.borrow();
                 match segment {
                     PathSegment::Key(key) => {
-                        let child_ptr = branch_ref.map.get(key)?;
+                        let child_ptr = current.map.get(key)?;
                         let child = self.blocks.get_item(child_ptr)?;
                         if let ItemContent::Type(child_branch) = &child.content {
-                            current = child_branch;
+                            current = child_branch.into();
                         } else {
                             return None;
                         }
                     }
                     PathSegment::Index(index) => {
                         if let Some((ItemContent::Type(child_branch), _)) =
-                            branch_ref.get_at(&self.blocks, *index)
+                            current.get_at(&self.blocks, *index)
                         {
-                            current = child_branch;
+                            current = child_branch.into();
                         } else {
                             return None;
                         }
@@ -270,7 +273,7 @@ impl std::fmt::Display for Store {
         if !self.types.is_empty() {
             writeln!(f, "\ttypes: {{")?;
             for (k, v) in self.types.iter() {
-                writeln!(f, "\t\t'{}': {}", k.as_ref(), *v.borrow())?;
+                writeln!(f, "\t\t'{}': {}", k.as_ref(), v)?;
             }
 
             writeln!(f, "\t}}")?;

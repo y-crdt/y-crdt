@@ -9,9 +9,10 @@ use crate::types::{
 };
 use crate::{SubscriptionId, Transaction, ID};
 use lib0::any::Any;
-use std::cell::{Ref, RefMut, UnsafeCell};
+use std::cell::UnsafeCell;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
+use std::ops::Deref;
 use std::rc::Rc;
 
 /// An return type from XML elements retrieval methods. It's an enum of all supported values, that
@@ -24,7 +25,7 @@ pub enum Xml {
 
 impl From<BranchRef> for Xml {
     fn from(inner: BranchRef) -> Self {
-        let type_ref = { inner.borrow().type_ref & 0b1111 };
+        let type_ref = { inner.type_ref & 0b1111 };
         match type_ref {
             TYPE_REFS_XML_ELEMENT => Xml::Element(XmlElement::from(inner)),
             TYPE_REFS_XML_TEXT => Xml::Text(XmlText::from(inner)),
@@ -46,11 +47,12 @@ impl From<BranchRef> for Xml {
 /// - Child node insertion uses sequencing rules from other Yrs collections - elements are inserted
 ///   using interleave-resistant algorithm, where order of concurrent inserts at the same index
 ///   is established using peer's document id seniority.
+#[repr(transparent)]
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct XmlElement(XmlFragment);
 
 impl XmlElement {
-    fn inner(&self) -> Ref<Branch> {
+    fn inner(&self) -> BranchRef {
         self.0.inner()
     }
 
@@ -81,7 +83,7 @@ impl XmlElement {
 
     /// A tag name of a current top-level XML node, eg. node `<p></p>` has "p" as it's tag name.
     pub fn tag(&self) -> &str {
-        let inner = self.0 .0.as_ref();
+        let inner = &self.0 .0;
         inner.name.as_ref().unwrap()
     }
 
@@ -117,7 +119,7 @@ impl XmlElement {
     /// Returns a value of an attribute given its `attr_name`. Returns `None` if no such attribute
     /// can be found inside of a current XML element.
     pub fn get_attribute(&self, txn: &Transaction, attr_name: &str) -> Option<String> {
-        let inner: Ref<_> = self.inner();
+        let inner = self.inner();
         let value = inner.get(txn, attr_name)?;
         Some(value.to_string(txn))
     }
@@ -269,7 +271,7 @@ impl XmlElement {
     /// Attribute changes can be tracked by using [Event::keys] method.
     ///
     /// Returns an [Observer] which, when dropped, will unsubscribe current callback.
-    pub fn observe<F>(&self, f: F) -> Subscription<XmlEvent>
+    pub fn observe<F>(&mut self, f: F) -> Subscription<XmlEvent>
     where
         F: Fn(&Transaction, &XmlEvent) -> () + 'static,
     {
@@ -277,14 +279,14 @@ impl XmlElement {
     }
 
     /// Unsubscribes a previously subscribed event callback identified by given `subscription_id`.
-    pub fn unobserve(&self, subscription_id: SubscriptionId) {
+    pub fn unobserve(&mut self, subscription_id: SubscriptionId) {
         self.0.unobserve(subscription_id);
     }
 }
 
-impl Into<ItemContent> for XmlElement {
-    fn into(self) -> ItemContent {
-        self.0.into()
+impl AsRef<Branch> for XmlElement {
+    fn as_ref(&self) -> &Branch {
+        self.0.as_ref()
     }
 }
 
@@ -318,6 +320,7 @@ impl Into<XmlElement> for XmlFragment {
     }
 }
 
+#[repr(transparent)]
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct XmlFragment(BranchRef);
 
@@ -326,8 +329,8 @@ impl XmlFragment {
         XmlFragment(inner)
     }
 
-    fn inner(&self) -> Ref<Branch> {
-        self.0.borrow()
+    fn inner(&self) -> BranchRef {
+        self.0
     }
 
     pub fn first_child(&self, txn: &Transaction) -> Option<Xml> {
@@ -335,7 +338,7 @@ impl XmlFragment {
         let first = inner.first(txn)?;
         match &first.content {
             ItemContent::Type(c) => {
-                let value = Xml::from(c.clone());
+                let value = Xml::from(BranchRef::from(c));
                 Some(value)
             }
             _ => None,
@@ -375,7 +378,7 @@ impl XmlFragment {
             .0
             .insert_at(txn, index, PrelimXml::Elem(name.to_string()));
         if let ItemContent::Type(inner) = &item.content {
-            XmlElement::from(inner.clone())
+            XmlElement::from(BranchRef::from(inner))
         } else {
             panic!("Defect: inserted XML element returned primitive value block")
         }
@@ -384,7 +387,7 @@ impl XmlFragment {
     pub fn insert_text(&self, txn: &mut Transaction, index: u32) -> XmlText {
         let item = self.0.insert_at(txn, index, PrelimXml::Text);
         if let ItemContent::Type(inner) = &item.content {
-            XmlText::from(inner.clone())
+            XmlText::from(BranchRef::from(inner))
         } else {
             panic!("Defect: inserted XML element returned primitive value block")
         }
@@ -419,35 +422,34 @@ impl XmlFragment {
         let inner = self.inner();
         let (content, _) = inner.get_at(&txn.store().blocks, index)?;
         if let ItemContent::Type(inner) = content {
-            Some(T::from(inner.clone()))
+            let branch_ref: BranchRef = inner.into();
+            Some(T::from(branch_ref))
         } else {
             None
         }
     }
 
-    pub fn observe<F>(&self, f: F) -> Subscription<XmlEvent>
+    pub fn observe<F>(&mut self, f: F) -> Subscription<XmlEvent>
     where
         F: Fn(&Transaction, &XmlEvent) -> () + 'static,
     {
-        let mut branch = self.0.borrow_mut();
-        if let Observers::Xml(eh) = branch.observers.get_or_insert_with(Observers::xml) {
+        if let Observers::Xml(eh) = self.0.observers.get_or_insert_with(Observers::xml) {
             eh.subscribe(f)
         } else {
             panic!("Observed collection is of different type") //TODO: this should be Result::Err
         }
     }
 
-    pub fn unobserve(&self, subscription_id: u32) {
-        let mut branch = self.0.borrow_mut();
-        if let Some(Observers::Xml(eh)) = branch.observers.as_mut() {
+    pub fn unobserve(&mut self, subscription_id: u32) {
+        if let Some(Observers::Xml(eh)) = self.0.observers.as_mut() {
             eh.unsubscribe(subscription_id);
         }
     }
 }
 
-impl Into<ItemContent> for XmlFragment {
-    fn into(self) -> ItemContent {
-        ItemContent::Type(self.0.clone())
+impl AsRef<Branch> for XmlFragment {
+    fn as_ref(&self) -> &Branch {
+        self.0.deref()
     }
 }
 
@@ -485,7 +487,7 @@ impl<'a> Iterator for TreeWalker<'a> {
             if !self.first_call || current.is_deleted() {
                 while {
                     if let ItemContent::Type(t) = &current.content {
-                        let inner = t.borrow();
+                        let inner = BranchRef::from(t);
                         let type_ref = inner.type_ref();
                         if !current.is_deleted()
                             && (type_ref == TYPE_REFS_XML_ELEMENT
@@ -507,7 +509,6 @@ impl<'a> Iterator for TreeWalker<'a> {
                                     n = None;
                                 } else {
                                     n = self.store.get_type(&current.parent).and_then(|t| match &t
-                                        .as_ref()
                                         .ptr
                                     {
                                         TypePtr::Id(ptr) => self.store.blocks.get_item(ptr),
@@ -529,7 +530,7 @@ impl<'a> Iterator for TreeWalker<'a> {
         }
         if let Some(current) = self.current {
             if let ItemContent::Type(t) = &current.content {
-                result = Some(Xml::from(t.clone()));
+                result = Some(Xml::from(BranchRef::from(t)));
             }
         }
         result
@@ -613,16 +614,13 @@ impl Into<XmlHook> for Map {
 /// when characters inserted one after another may interleave with other peers concurrent inserts
 /// after merging all updates together). In case of Yrs conflict resolution is solved by using
 /// unique document id to determine correct and consistent ordering.
+#[repr(transparent)]
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct XmlText(Text);
 
 impl XmlText {
-    fn inner(&self) -> Ref<Branch> {
+    fn inner(&self) -> BranchRef {
         self.0.inner()
-    }
-
-    fn inner_mut(&self) -> RefMut<Branch> {
-        self.0.inner_mut()
     }
 
     /// Returns a string representation of a current XML text.
@@ -658,7 +656,7 @@ impl XmlText {
     }
 
     pub fn get_attribute(&self, txn: &Transaction, attr_name: &str) -> Option<String> {
-        let inner: Ref<_> = self.inner();
+        let inner = self.inner();
         let value = inner.get(txn, attr_name)?;
         Some(value.to_string(txn))
     }
@@ -781,12 +779,15 @@ impl XmlText {
     /// XML text attribute changes can be tracked using [Event::keys] method.
     ///
     /// Returns an [Observer] which, when dropped, will unsubscribe current callback.
-    pub fn observe<F>(&self, f: F) -> Subscription<XmlTextEvent>
+    pub fn observe<F>(&mut self, f: F) -> Subscription<XmlTextEvent>
     where
         F: Fn(&Transaction, &XmlTextEvent) -> () + 'static,
     {
-        let mut branch = self.inner_mut();
-        if let Observers::XmlText(eh) = branch.observers.get_or_insert_with(Observers::xml_text) {
+        if let Observers::XmlText(eh) = self
+            .inner()
+            .observers
+            .get_or_insert_with(Observers::xml_text)
+        {
             eh.subscribe(f)
         } else {
             panic!("Observed collection is of different type") //TODO: this should be Result::Err
@@ -794,17 +795,16 @@ impl XmlText {
     }
 
     /// Unsubscribes a previously subscribed event callback identified by given `subscription_id`.
-    pub fn unobserve(&self, subscription_id: SubscriptionId) {
-        let mut branch = self.inner_mut();
-        if let Some(Observers::XmlText(eh)) = branch.observers.as_mut() {
+    pub fn unobserve(&mut self, subscription_id: SubscriptionId) {
+        if let Some(Observers::XmlText(eh)) = self.inner().observers.as_mut() {
             eh.unsubscribe(subscription_id);
         }
     }
 }
 
-impl Into<ItemContent> for XmlText {
-    fn into(self) -> ItemContent {
-        self.0.into()
+impl AsRef<Branch> for XmlText {
+    fn as_ref(&self) -> &Branch {
+        self.0.as_ref()
     }
 }
 
@@ -847,7 +847,7 @@ impl XmlTextEvent {
 
     /// Returns a path from root type down to [XmlText] instance which emitted this event.
     pub fn path(&self, txn: &Transaction) -> Path {
-        Branch::path(self.current_target.borrow(), self.target.inner(), txn)
+        Branch::path(self.current_target, self.target.inner(), txn)
     }
 
     /// Returns a summary of text changes made over corresponding [XmlText] collection within
@@ -889,10 +889,8 @@ enum PrelimXml {
 impl Prelim for PrelimXml {
     fn into_content(self, _txn: &mut Transaction, ptr: TypePtr) -> (ItemContent, Option<Self>) {
         let inner = match self {
-            PrelimXml::Elem(node_name) => {
-                BranchRef::new(Branch::new(ptr, TYPE_REFS_XML_ELEMENT, Some(node_name)))
-            }
-            PrelimXml::Text => BranchRef::new(Branch::new(ptr, TYPE_REFS_XML_TEXT, None)),
+            PrelimXml::Elem(node_name) => Branch::new(ptr, TYPE_REFS_XML_ELEMENT, Some(node_name)),
+            PrelimXml::Text => Branch::new(ptr, TYPE_REFS_XML_TEXT, None),
         };
         (ItemContent::Type(inner), None)
     }
@@ -900,7 +898,7 @@ impl Prelim for PrelimXml {
     fn integrate(self, _txn: &mut Transaction, _inner_ref: BranchRef) {}
 }
 
-fn next_sibling(inner: Ref<Branch>, txn: &Transaction) -> Option<Xml> {
+fn next_sibling(inner: BranchRef, txn: &Transaction) -> Option<Xml> {
     let store = txn.store();
     let mut current = if let TypePtr::Id(ptr) = &inner.ptr {
         store.blocks.get_item(ptr)
@@ -915,7 +913,7 @@ fn next_sibling(inner: Ref<Branch>, txn: &Transaction) -> Option<Xml> {
         if let Some(right) = current {
             if !right.is_deleted() {
                 if let ItemContent::Type(inner) = &right.content {
-                    return Some(Xml::from(inner.clone()));
+                    return Some(Xml::from(BranchRef::from(inner)));
                 }
             }
         }
@@ -924,7 +922,7 @@ fn next_sibling(inner: Ref<Branch>, txn: &Transaction) -> Option<Xml> {
     None
 }
 
-fn prev_sibling(inner: Ref<Branch>, txn: &Transaction) -> Option<Xml> {
+fn prev_sibling(inner: BranchRef, txn: &Transaction) -> Option<Xml> {
     let store = txn.store();
     let mut current = if let TypePtr::Id(ptr) = &inner.ptr {
         store.blocks.get_item(ptr)
@@ -939,7 +937,7 @@ fn prev_sibling(inner: Ref<Branch>, txn: &Transaction) -> Option<Xml> {
         if let Some(left) = current {
             if !left.is_deleted() {
                 if let ItemContent::Type(inner) = &left.content {
-                    return Some(Xml::from(inner.clone()));
+                    return Some(Xml::from(BranchRef::from(inner)));
                 }
             }
         }
@@ -948,7 +946,7 @@ fn prev_sibling(inner: Ref<Branch>, txn: &Transaction) -> Option<Xml> {
     None
 }
 
-fn parent(inner: Ref<Branch>, txn: &Transaction) -> Option<XmlElement> {
+fn parent(inner: BranchRef, txn: &Transaction) -> Option<XmlElement> {
     if let TypePtr::Id(ptr) = &inner.ptr {
         let store = txn.store();
         let item = store.blocks.get_item(ptr)?;
@@ -993,7 +991,7 @@ impl XmlEvent {
 
     /// Returns a path from root type down to [XmlElement] instance which emitted this event.
     pub fn path(&self, txn: &Transaction) -> Path {
-        Branch::path(self.current_target.borrow(), self.target.inner(), txn)
+        Branch::path(self.current_target, self.target.inner(), txn)
     }
 
     /// Returns a summary of XML child nodes changed within corresponding [XmlElement] collection
@@ -1203,7 +1201,7 @@ mod test {
     #[test]
     fn event_observers() {
         let d1 = Doc::with_client_id(1);
-        let xml = {
+        let mut xml = {
             let mut txn = d1.transact();
             txn.get_xml_element("xml")
         };
@@ -1296,7 +1294,7 @@ mod test {
 
         // copy updates over
         let d2 = Doc::with_client_id(2);
-        let xml2 = {
+        let mut xml2 = {
             let mut txn = d2.transact();
             txn.get_xml_element("xml")
         };

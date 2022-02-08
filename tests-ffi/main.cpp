@@ -21,11 +21,11 @@ TEST_CASE("Update exchange basic") {
     // init
     YDoc* d1 = ydoc_new_with_id(1);
     YTransaction* t1 = ytransaction_new(d1);
-    YText* txt1 = ytext(t1, "test");
+    Branch* txt1 = ytext(t1, "test");
 
     YDoc* d2 = ydoc_new_with_id(2);
     YTransaction* t2 = ytransaction_new(d2);
-    YText* txt2 = ytext(t2, "test");
+    Branch* txt2 = ytext(t2, "test");
 
     // insert data at the same position on both peer texts
     ytext_insert(txt1, t1, 0, "world", NULL);
@@ -63,11 +63,9 @@ TEST_CASE("Update exchange basic") {
     ystring_destroy(str1);
     ystring_destroy(str2);
 
-    ytext_destroy(txt2);
     ytransaction_commit(t2);
     ydoc_destroy(d2);
 
-    ytext_destroy(txt1);
     ytransaction_commit(t1);
     ydoc_destroy(d1);
 }
@@ -75,7 +73,7 @@ TEST_CASE("Update exchange basic") {
 TEST_CASE("YText basic") {
     YDoc* doc = ydoc_new_with_id(1);
     YTransaction* txn = ytransaction_new(doc);
-    YText* txt = ytext(txn, "test");
+    Branch* txt = ytext(txn, "test");
 
     ytext_insert(txt, txn, 0, "hello", NULL);
     ytext_insert(txt, txn, 5, " world", NULL);
@@ -87,7 +85,6 @@ TEST_CASE("YText basic") {
     REQUIRE(!strcmp(str, "world"));
 
     ystring_destroy(str);
-    ytext_destroy(txt);
     ytransaction_commit(txn);
     ydoc_destroy(doc);
 }
@@ -95,7 +92,7 @@ TEST_CASE("YText basic") {
 TEST_CASE("YArray basic") {
     YDoc* doc = ydoc_new_with_id(1);
     YTransaction* txn = ytransaction_new(doc);
-    YArray* arr = yarray(txn, "test");
+    Branch* arr = yarray(txn, "test");
 
     YInput* nested = (YInput*)malloc(2 * sizeof(YInput));
     nested[0] = yinput_float(0.5);
@@ -122,7 +119,7 @@ TEST_CASE("YArray basic") {
 
     // first outer YArray element should be another YArray([0.5, true])
     YOutput* curr = yarray_iter_next(i);
-    YArray* a = youtput_read_yarray(curr);
+    Branch* a = youtput_read_yarray(curr);
     REQUIRE_EQ(yarray_len(a), 2);
 
     // read 0th element of inner YArray
@@ -145,7 +142,6 @@ TEST_CASE("YArray basic") {
     REQUIRE(curr == NULL);
 
     yarray_iter_destroy(i);
-    yarray_destroy(arr);
     ytransaction_commit(txn);
     ydoc_destroy(doc);
 }
@@ -153,7 +149,7 @@ TEST_CASE("YArray basic") {
 TEST_CASE("YMap basic") {
     YDoc* doc = ydoc_new_with_id(1);
     YTransaction* txn = ytransaction_new(doc);
-    YMap* map = ymap(txn, "test");
+    Branch* map = ymap(txn, "test");
 
     // insert 'a' => 'value'
     YInput a = yinput_string("value");
@@ -231,7 +227,6 @@ TEST_CASE("YMap basic") {
     ymap_remove_all(map, txn);
     REQUIRE_EQ(ymap_len(map, txn), 0);
 
-    ymap_destroy(map);
     ytransaction_commit(txn);
     ydoc_destroy(doc);
 }
@@ -239,7 +234,7 @@ TEST_CASE("YMap basic") {
 TEST_CASE("YXmlElement basic") {
     YDoc* doc = ydoc_new_with_id(1);
     YTransaction* txn = ytransaction_new(doc);
-    YXmlElement* xml = yxmlelem(txn, "test");
+    Branch* xml = yxmlelem(txn, "test");
 
     // XML attributes API
     yxmlelem_insert_attr(xml, txn, "key1", "value1");
@@ -278,13 +273,13 @@ TEST_CASE("YXmlElement basic") {
     }
 
     // XML children API
-    YXmlElement* inner = yxmlelem_insert_elem(xml, txn, 0, "p");
-    YXmlText* inner_txt = yxmlelem_insert_text(inner, txn, 0);
+    Branch* inner = yxmlelem_insert_elem(xml, txn, 0, "p");
+    Branch* inner_txt = yxmlelem_insert_text(inner, txn, 0);
     yxmltext_insert(inner_txt, txn, 0, "hello", NULL);
 
     REQUIRE_EQ(yxmlelem_child_len(xml, txn), 1);
 
-    YXmlText* txt = yxmlelem_insert_text(xml, txn, 1);
+    Branch* txt = yxmlelem_insert_text(xml, txn, 1);
     yxmltext_insert(txt, txn, 0, "world", NULL);
 
     // check tag names
@@ -297,18 +292,17 @@ TEST_CASE("YXmlElement basic") {
     ystring_destroy(tag);
 
     // check parents
-    YXmlElement* parent = yxmlelem_parent(inner, txn);
+    Branch* parent = yxmlelem_parent(inner, txn);
     tag = yxmlelem_tag(parent);
     REQUIRE(!strcmp(tag, "UNDEFINED"));
     ystring_destroy(tag);
-    yxmlelem_destroy(parent);
 
     parent = yxmlelem_parent(xml, txn);
     REQUIRE(parent == NULL);
 
     // check children traversal
     YOutput* curr = yxmlelem_first_child(xml, txn);
-    YXmlElement* first = youtput_read_yxmlelem(curr);
+    Branch* first = youtput_read_yxmlelem(curr);
     REQUIRE(yxmlelem_prev_sibling(first, txn) == NULL);
     char* str = yxmlelem_string(first, txn);
     REQUIRE(!strcmp(str, "<p>hello</p>"));
@@ -316,7 +310,7 @@ TEST_CASE("YXmlElement basic") {
 
     YOutput* next = yxmlelem_next_sibling(first, txn);
     youtput_destroy(curr);
-    YXmlText* second = youtput_read_yxmltext(next);
+    Branch* second = youtput_read_yxmltext(next);
     REQUIRE(yxmltext_next_sibling(second, txn) == NULL);
     str = yxmltext_string(second, txn);
     REQUIRE(!(strcmp(str, "world")));
@@ -327,7 +321,7 @@ TEST_CASE("YXmlElement basic") {
     // - hello
     // - world
     YXmlTreeWalker* w = yxmlelem_tree_walker(xml, txn);
-    YXmlElement* e;
+    Branch* e;
 
     curr = yxmlelem_tree_walker_next(w);
     e = youtput_read_yxmlelem(curr);
@@ -337,7 +331,7 @@ TEST_CASE("YXmlElement basic") {
     youtput_destroy(curr);
 
     curr = yxmlelem_tree_walker_next(w);
-    YXmlText* t = youtput_read_yxmltext(curr);
+    Branch* t = youtput_read_yxmltext(curr);
     str = yxmltext_string(t, txn);
     REQUIRE(!strcmp(str, "hello"));
     ystring_destroy(str);
@@ -355,11 +349,6 @@ TEST_CASE("YXmlElement basic") {
 
     yxmlelem_tree_walker_destroy(w);
 
-    yxmltext_destroy(inner_txt);
-    yxmltext_destroy(txt);
-    yxmlelem_destroy(inner);
-
-    yxmlelem_destroy(xml);
     ytransaction_commit(txn);
     ydoc_destroy(doc);
 }
@@ -367,7 +356,7 @@ TEST_CASE("YXmlElement basic") {
 typedef struct YTextEventTest {
     int delta_len;
     YDelta* delta;
-    YText* target;
+    Branch* target;
 } YEventTest;
 
 YTextEventTest* ytext_event_test_new() {
@@ -386,7 +375,6 @@ void ytext_test_observe(void* state, const YTextEvent* e) {
 }
 
 void ytext_test_clean(YTextEventTest* t) {
-    ytext_destroy(t->target);
     ytext_delta_destroy(t->delta, t->delta_len);
     t->target = NULL;
     t->delta = NULL;
@@ -395,7 +383,7 @@ void ytext_test_clean(YTextEventTest* t) {
 TEST_CASE("YText observe") {
     YDoc* doc = ydoc_new_with_id(1);
     YTransaction* txn = ytransaction_new(doc);
-    YText* txt = ytext(txn, "test");
+    Branch* txt = ytext(txn, "test");
 
     YTextEventTest* t = ytext_event_test_new();
     unsigned int sub = ytext_observe(txt, (void*)t, &ytext_test_observe);
@@ -447,14 +435,13 @@ TEST_CASE("YText observe") {
     REQUIRE(t->delta == NULL);
 
     free(t);
-    ytext_destroy(txt);
     ydoc_destroy(doc);
 }
 
 TEST_CASE("YText insert embed") {
     YDoc *doc = ydoc_new_with_id(1);
     YTransaction *txn = ytransaction_new(doc);
-    YText *txt = ytext(txn, "test");
+    Branch* txt = ytext(txn, "test");
 
     YTextEventTest *t = ytext_event_test_new();
     unsigned int sub = ytext_observe(txt, (void *) t, &ytext_test_observe);
@@ -507,14 +494,13 @@ TEST_CASE("YText insert embed") {
     ytext_test_clean(t);
     ytext_unobserve(txt, sub);
     free(t);
-    ytext_destroy(txt);
     ydoc_destroy(doc);
 }
 
 typedef struct YArrayEventTest {
     int delta_len;
     YEventChange* delta;
-    YArray* target;
+    Branch* target;
 } YArrayEventTest;
 
 YArrayEventTest* yarray_event_test_new() {
@@ -533,7 +519,6 @@ void yarray_test_observe(void* state, const YArrayEvent* e) {
 }
 
 void yarray_test_clean(YArrayEventTest* t) {
-    yarray_destroy(t->target);
     yevent_delta_destroy(t->delta, t->delta_len);
     t->target = NULL;
     t->delta = NULL;
@@ -542,7 +527,7 @@ void yarray_test_clean(YArrayEventTest* t) {
 TEST_CASE("YArray observe") {
     YDoc* doc = ydoc_new_with_id(1);
     YTransaction* txn = ytransaction_new(doc);
-    YArray* array = yarray(txn, "test");
+    Branch* array = yarray(txn, "test");
 
     YArrayEventTest* t = yarray_event_test_new();
     unsigned int sub = yarray_observe(array, (void*)t, &yarray_test_observe);
@@ -611,14 +596,13 @@ TEST_CASE("YArray observe") {
     REQUIRE(t->delta == NULL);
 
     free(t);
-    yarray_destroy(array);
     ydoc_destroy(doc);
 }
 
 typedef struct YMapEventTest {
     int keys_len;
     YEventKeyChange * keys;
-    YMap* target;
+    Branch* target;
 } YMapEventTest;
 
 YMapEventTest* ymap_event_test_new() {
@@ -637,7 +621,6 @@ void ymap_test_observe(void* state, const YMapEvent* e) {
 }
 
 void ymap_test_clean(YMapEventTest* t) {
-    ymap_destroy(t->target);
     yevent_keys_destroy(t->keys, t->keys_len);
     t->target = NULL;
     t->keys = NULL;
@@ -646,7 +629,7 @@ void ymap_test_clean(YMapEventTest* t) {
 TEST_CASE("YMap observe") {
     YDoc* doc = ydoc_new_with_id(1);
     YTransaction* txn = ytransaction_new(doc);
-    YMap* map = ymap(txn, "test");
+    Branch* map = ymap(txn, "test");
 
     YMapEventTest* t = ymap_event_test_new();
     unsigned int sub = ymap_observe(map, (void*)t, &ymap_test_observe);
@@ -724,7 +707,6 @@ TEST_CASE("YMap observe") {
     REQUIRE(t->target == NULL);
     REQUIRE(t->keys == NULL);
 
-    ymap_destroy(map);
     ydoc_destroy(doc);
 }
 
@@ -732,7 +714,7 @@ typedef struct YXmlTextEventTest {
     int delta_len;
     int keys_len;
     YDelta* delta;
-    YXmlText* target;
+    Branch* target;
     YEventKeyChange *keys;
 } YXmlTextEventTest;
 
@@ -755,7 +737,6 @@ void yxmltext_test_observe(void* state, const YXmlTextEvent* e) {
 }
 
 void yxmltext_test_clean(YXmlTextEventTest* t) {
-    yxmltext_destroy(t->target);
     ytext_delta_destroy(t->delta, t->delta_len);
     yevent_keys_destroy(t->keys, t->keys_len);
     t->target = NULL;
@@ -766,7 +747,7 @@ void yxmltext_test_clean(YXmlTextEventTest* t) {
 TEST_CASE("YXmlText observe") {
     YDoc* doc = ydoc_new_with_id(1);
     YTransaction* txn = ytransaction_new(doc);
-    YXmlText* txt = yxmltext(txn, "test");
+    Branch* txt = yxmltext(txn, "test");
 
     YXmlTextEventTest* t = yxmltext_event_test_new();
     unsigned int sub = yxmltext_observe(txt, (void*)t, &yxmltext_test_observe);
@@ -818,12 +799,11 @@ TEST_CASE("YXmlText observe") {
     REQUIRE(t->delta == NULL);
 
     free(t);
-    yxmltext_destroy(txt);
     ydoc_destroy(doc);
 }
 
 typedef struct YXmlEventTest {
-    YXmlElement * target;
+    Branch* target;
     int keys_len;
     YEventKeyChange * keys;
     int delta_len;
@@ -849,7 +829,6 @@ void yxml_test_observe(void* state, const YXmlEvent* e) {
 }
 
 void yxml_test_clean(YXmlEventTest* t) {
-    yxmlelem_destroy(t->target);
     yevent_keys_destroy(t->keys, t->keys_len);
     yevent_delta_destroy(t->delta, t->delta_len);
     t->target = NULL;
@@ -862,7 +841,7 @@ void yxml_test_clean(YXmlEventTest* t) {
 TEST_CASE("YXmlElement observe") {
     YDoc* doc = ydoc_new_with_id(1);
     YTransaction* txn = ytransaction_new(doc);
-    YXmlElement* xml = yxmlelem(txn, "test");
+    Branch* xml = yxmlelem(txn, "test");
 
     YXmlEventTest* t = yxml_event_test_new();
     unsigned int sub = yxmlelem_observe(xml, (void*)t, &yxml_test_observe);
@@ -930,8 +909,8 @@ TEST_CASE("YXmlElement observe") {
     // add children
     yxml_test_clean(t);
     txn = ytransaction_new(doc);
-    YXmlElement* div = yxmlelem_insert_elem(xml, txn, 0, "div");
-    YXmlElement* p = yxmlelem_insert_elem(xml, txn, 1, "p");
+    Branch* div = yxmlelem_insert_elem(xml, txn, 0, "div");
+    Branch* p = yxmlelem_insert_elem(xml, txn, 1, "p");
     ytransaction_commit(txn);
 
     REQUIRE(t->target != NULL);
@@ -939,9 +918,6 @@ TEST_CASE("YXmlElement observe") {
 
     REQUIRE(t->delta[0].tag == Y_EVENT_CHANGE_ADD);
     REQUIRE(t->delta[0].len == 2);
-
-    yxmlelem_destroy(div);
-    yxmlelem_destroy(p);
 
     // remove a child
     yxml_test_clean(t);
@@ -969,21 +945,18 @@ TEST_CASE("YXmlElement observe") {
     REQUIRE(t->delta[1].tag == Y_EVENT_CHANGE_ADD);
     REQUIRE(t->delta[1].len == 1);
 
-    yxmlelem_destroy(div);
 
     // free the observer and make sure that callback is no longer called
     yxml_test_clean(t);
     yxmlelem_unobserve(xml, sub);
     txn = ytransaction_new(doc);
-    YXmlElement* inner = yxmlelem_insert_elem(xml, txn, 0, "head");
+    Branch* inner = yxmlelem_insert_elem(xml, txn, 0, "head");
     ytransaction_commit(txn);
 
     REQUIRE(t->target == NULL);
     REQUIRE(t->delta == NULL);
     REQUIRE(t->keys == NULL);
 
-    yxmlelem_destroy(inner);
     free(t);
-    yxmlelem_destroy(xml);
     ydoc_destroy(doc);
 }

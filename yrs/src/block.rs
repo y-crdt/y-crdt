@@ -13,6 +13,7 @@ use std::collections::HashSet;
 use std::hash::Hash;
 use std::ops::Deref;
 use std::panic;
+use std::pin::Pin;
 use std::rc::Rc;
 
 /// Bit flag used to identify [Block::GC].
@@ -129,7 +130,7 @@ impl PartialEq for BlockPtr {
 }
 
 /// An enum containing all supported block variants.
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq)]
 pub(crate) enum Block {
     /// An active block containing user data.
     Item(Item),
@@ -152,23 +153,25 @@ impl Block {
         }
     }
 
-    pub fn slice(&self, offset: u32) -> Self {
-        match self {
-            Block::Item(item) => Block::Item(item.slice(offset)),
-            Block::Skip(skip) => Block::Skip(Skip {
-                id: ID {
-                    client: skip.id.client,
-                    clock: skip.id.clock + offset,
-                },
-                len: skip.len - offset,
-            }),
-            Block::GC(gc) => Block::GC(GC {
-                id: ID {
-                    client: gc.id.client,
-                    clock: gc.id.clock + offset,
-                },
-                len: gc.len,
-            }),
+    pub fn slice(&mut self, offset: u32) -> Option<Self> {
+        if offset == 0 {
+            None
+        } else {
+            match self {
+                Block::Item(item) => Some(Block::Item(item.slice(offset)?)),
+                Block::Skip(skip) => {
+                    let mut next = skip.clone();
+                    next.id.clock += offset;
+                    next.len -= offset;
+                    Some(Block::Skip(next))
+                }
+                Block::GC(gc) => {
+                    let mut next = gc.clone();
+                    next.id.clock += offset;
+                    next.len -= offset;
+                    Some(Block::GC(next))
+                }
+            }
         }
     }
 
@@ -464,7 +467,7 @@ const ITEM_FLAG_KEEP: u8 = 0b0001;
 /// An item is basic unit of work in Yrs. It contains user data reinforced with all metadata
 /// required for a potential conflict resolution as well as extra fields used for joining blocks
 /// together as a part of indexed sequences or maps.
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq)]
 pub(crate) struct Item {
     /// Unique identifier of current item.
     pub id: ID,
@@ -668,8 +671,7 @@ impl Item {
             TypePtr::Id(parent_ptr) => {
                 if let Some(i) = store.blocks.get_item(parent_ptr) {
                     if let ItemContent::Type(t) = &i.content {
-                        let inner = t.borrow();
-                        self.parent = inner.ptr.clone();
+                        self.parent = t.ptr.clone();
                     }
                 }
             }
@@ -700,7 +702,7 @@ impl Item {
             self.content.splice(offset as usize);
         }
 
-        let parent = match store.get_type(&self.parent).cloned() {
+        let parent = match store.get_type(&self.parent) {
             None => store.init_type_from_ptr(&self.parent),
             parent => parent,
         };
@@ -725,9 +727,7 @@ impl Item {
             _ => false,
         };
 
-        if let Some(p) = parent {
-            let mut parent_ref = p.borrow_mut();
-
+        if let Some(mut parent_ref) = parent {
             if (left.is_none() && right_is_null_or_has_left) || left_has_other_right_than_self {
                 // set the first conflicting item
                 let mut o = if let Some(Block::Item(left)) = left {
@@ -891,23 +891,23 @@ impl Item {
         self.content.len(kind)
     }
 
-    pub fn slice(&self, diff: u32) -> Item {
+    pub fn slice(&mut self, diff: u32) -> Option<Item> {
         if diff == 0 {
-            self.clone()
+            None
         } else {
             let client = self.id.client;
             let clock = self.id.clock;
-            Item {
+            Some(Item {
                 id: ID::new(client, clock + diff),
                 left: Some(BlockPtr::from(ID::new(client, clock + diff - 1))),
                 right: self.right.clone(),
                 origin: Some(ID::new(client, clock + diff - 1)),
                 right_origin: self.right_origin.clone(),
-                content: self.content.clone().splice(diff as usize).unwrap(),
+                content: self.content.splice(diff as usize).unwrap(),
                 parent: self.parent.clone(),
                 parent_sub: self.parent_sub.clone(),
                 info: self.info.clone(),
-            }
+            })
         }
     }
 
@@ -1134,7 +1134,7 @@ impl Deref for SplittableString {
 
 /// An enum describing the type of a user content stored as part of one or more
 /// (if items were squashed) insert operations.
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq)]
 pub enum ItemContent {
     /// Any JSON-like primitive type range.
     Any(Vec<Any>),
@@ -1159,7 +1159,7 @@ pub enum ItemContent {
 
     /// A reference of a branch node. Branch nodes define a complex collection types, such as
     /// arrays, maps or XML elements.
-    Type(BranchRef),
+    Type(Pin<Box<Branch>>),
 }
 
 impl ItemContent {
@@ -1239,7 +1239,8 @@ impl ItemContent {
                 .map(|c| Value::Any(Any::String(c.to_string().into_boxed_str())))
                 .collect(),
             ItemContent::Type(c) => {
-                vec![c.clone().into_value(txn)]
+                let branch_ref = BranchRef::from(c);
+                vec![branch_ref.into()]
             }
         }
     }
@@ -1258,7 +1259,7 @@ impl ItemContent {
             ItemContent::Embed(v) => Some(Value::Any(v.as_ref().clone())),
             ItemContent::Format(_, _) => None,
             ItemContent::String(v) => Some(Value::Any(Any::String(v.clone().into()))),
-            ItemContent::Type(c) => Some(c.clone().into_value(txn)),
+            ItemContent::Type(c) => Some(BranchRef::from(c).into()),
         }
     }
 
@@ -1278,8 +1279,7 @@ impl ItemContent {
                 encoder.write_string(k.as_ref());
                 encoder.write_json(v.as_ref());
             }
-            ItemContent::Type(c) => {
-                let inner = c.borrow();
+            ItemContent::Type(inner) => {
                 encoder.write_type_ref(inner.type_ref());
                 let type_ref = inner.type_ref();
                 if type_ref == types::TYPE_REFS_XML_ELEMENT || type_ref == types::TYPE_REFS_XML_HOOK
@@ -1316,8 +1316,7 @@ impl ItemContent {
                 encoder.write_string(k.as_ref());
                 encoder.write_json(v.as_ref());
             }
-            ItemContent::Type(c) => {
-                let inner = c.borrow();
+            ItemContent::Type(inner) => {
                 let type_ref = inner.type_ref();
                 encoder.write_type_ref(type_ref);
                 if type_ref == types::TYPE_REFS_XML_ELEMENT || type_ref == types::TYPE_REFS_XML_HOOK
@@ -1367,7 +1366,7 @@ impl ItemContent {
                 };
                 let inner_ptr = types::TypePtr::Id(ptr);
                 let inner = types::Branch::new(inner_ptr, type_ref, name);
-                ItemContent::Type(BranchRef::new(inner))
+                ItemContent::Type(inner)
             }
             BLOCK_ITEM_ANY_REF_NUMBER => {
                 let len = decoder.read_len() as usize;
@@ -1454,11 +1453,10 @@ impl ItemContent {
         }
     }
 
-    pub(crate) fn gc(&self, txn: &Transaction) {
+    pub(crate) fn gc(&mut self, txn: &Transaction) {
         match self {
-            ItemContent::Type(branch_ref) => {
+            ItemContent::Type(branch) => {
                 let store = txn.store();
-                let mut branch = branch_ref.borrow_mut();
                 let mut curr = branch.start.take();
                 while let Some(ptr) = curr {
                     if let Some(block) = store.blocks.get_block_mut(&ptr) {
@@ -1574,37 +1572,34 @@ impl std::fmt::Display for ItemContent {
             ItemContent::Format(k, v) => write!(f, "<{}={}>", k, v),
             ItemContent::Deleted(s) => write!(f, "deleted({})", s),
             ItemContent::Binary(s) => write!(f, "{:?}", s),
-            ItemContent::Type(t) => {
-                let inner = t.borrow();
-                match inner.type_ref() {
-                    TYPE_REFS_ARRAY => {
-                        if let Some(ptr) = inner.start {
-                            write!(f, "<array(head: {})>", ptr)
-                        } else {
-                            write!(f, "<array>")
-                        }
+            ItemContent::Type(inner) => match inner.type_ref() {
+                TYPE_REFS_ARRAY => {
+                    if let Some(ptr) = inner.start {
+                        write!(f, "<array(head: {})>", ptr)
+                    } else {
+                        write!(f, "<array>")
                     }
-                    TYPE_REFS_MAP => {
-                        write!(f, "<map({{")?;
-                        let mut iter = inner.map.iter();
-                        if let Some((k, ptr)) = iter.next() {
-                            write!(f, "'{}': {}", k, ptr)?;
-                        }
-                        while let Some((k, ptr)) = iter.next() {
-                            write!(f, ", '{}': {}", k, ptr)?;
-                        }
-                        write!(f, "}})>")
-                    }
-                    TYPE_REFS_TEXT => write!(f, "<text(head: {})>", inner.start.unwrap()),
-                    TYPE_REFS_XML_ELEMENT => {
-                        write!(f, "<xml element: {}>", inner.name.as_ref().unwrap())
-                    }
-                    TYPE_REFS_XML_FRAGMENT => write!(f, "<xml fragment>"),
-                    TYPE_REFS_XML_HOOK => write!(f, "<xml hook>"),
-                    TYPE_REFS_XML_TEXT => write!(f, "<xml text>"),
-                    _ => write!(f, "<undefined type ref>"),
                 }
-            }
+                TYPE_REFS_MAP => {
+                    write!(f, "<map({{")?;
+                    let mut iter = inner.map.iter();
+                    if let Some((k, ptr)) = iter.next() {
+                        write!(f, "'{}': {}", k, ptr)?;
+                    }
+                    while let Some((k, ptr)) = iter.next() {
+                        write!(f, ", '{}': {}", k, ptr)?;
+                    }
+                    write!(f, "}})>")
+                }
+                TYPE_REFS_TEXT => write!(f, "<text(head: {})>", inner.start.unwrap()),
+                TYPE_REFS_XML_ELEMENT => {
+                    write!(f, "<xml element: {}>", inner.name.as_ref().unwrap())
+                }
+                TYPE_REFS_XML_FRAGMENT => write!(f, "<xml fragment>"),
+                TYPE_REFS_XML_HOOK => write!(f, "<xml hook>"),
+                TYPE_REFS_XML_TEXT => write!(f, "<xml text>"),
+                _ => write!(f, "<undefined type ref>"),
+            },
             _ => Ok(()),
         }
     }
