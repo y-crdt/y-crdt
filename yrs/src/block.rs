@@ -135,11 +135,9 @@ pub(crate) enum Block {
     /// An active block containing user data.
     Item(Item),
 
-    Skip(Skip),
-
     /// Block, which is a subject of garbage collection after an [Item] has been deleted and its
     /// safe for the transaction to remove it.
-    GC(GC),
+    GC(BlockRange),
 }
 
 impl Block {
@@ -148,8 +146,7 @@ impl Block {
     pub fn last_id(&self) -> ID {
         match self {
             Block::Item(item) => item.last_id(),
-            Block::Skip(skip) => ID::new(skip.id.client, skip.id.clock + skip.len),
-            Block::GC(gc) => ID::new(gc.id.client, gc.id.clock + gc.len),
+            Block::GC(gc) => gc.last_id(),
         }
     }
 
@@ -159,18 +156,7 @@ impl Block {
         } else {
             match self {
                 Block::Item(item) => Some(Block::Item(item.slice(offset)?)),
-                Block::Skip(skip) => {
-                    let mut next = skip.clone();
-                    next.id.clock += offset;
-                    next.len -= offset;
-                    Some(Block::Skip(next))
-                }
-                Block::GC(gc) => {
-                    let mut next = gc.clone();
-                    next.id.clock += offset;
-                    next.len -= offset;
-                    Some(Block::GC(next))
-                }
+                Block::GC(gc) => Some(Block::GC(gc.slice(offset))),
             }
         }
     }
@@ -198,7 +184,6 @@ impl Block {
     pub fn is_deleted(&self) -> bool {
         match self {
             Block::Item(item) => item.is_deleted(),
-            Block::Skip(_) => false,
             Block::GC(_) => true,
         }
     }
@@ -208,9 +193,6 @@ impl Block {
         match self {
             Block::Item(item) => item.integrate(txn, pivot, offset),
             Block::GC(gc) => gc.integrate(offset),
-            Block::Skip(_) => {
-                panic!("Block::Skip cannot be integrated")
-            }
         }
     }
 
@@ -225,46 +207,48 @@ impl Block {
                 v1.merge(v2);
                 true
             }
-            (Block::Skip(v1), Block::Skip(v2)) => {
-                v1.merge(v2);
-                true
-            }
             _ => false,
         }
     }
 
     pub fn encode_with_offset<E: Encoder>(&self, encoder: &mut E, offset: u32) {
-        if let Block::Item(item) = self {
-            let origin = if offset > 0 {
-                Some(ID::new(item.id.client, item.id.clock + offset - 1))
-            } else {
-                item.origin
-            };
-            let info = item.info();
-            let cant_copy_parent_info = info & (HAS_ORIGIN | HAS_RIGHT_ORIGIN) == 0;
-            encoder.write_info(info);
-            if let Some(origin_id) = origin {
-                encoder.write_left_id(&origin_id);
-            }
-            if let Some(right_origin_id) = item.right_origin.as_ref() {
-                encoder.write_right_id(right_origin_id);
-            }
-            if cant_copy_parent_info {
-                if let TypePtr::Id(id) = &item.parent {
-                    encoder.write_parent_info(false);
-                    encoder.write_left_id(&id.id);
-                } else if let TypePtr::Named(name) = &item.parent {
-                    encoder.write_parent_info(true);
-                    encoder.write_string(name)
+        match self {
+            Block::Item(item) => {
+                let origin = if offset > 0 {
+                    Some(ID::new(item.id.client, item.id.clock + offset - 1))
                 } else {
-                    panic!("Couldn't get item's parent")
+                    item.origin
+                };
+                let info = item.info();
+                let cant_copy_parent_info = info & (HAS_ORIGIN | HAS_RIGHT_ORIGIN) == 0;
+                encoder.write_info(info);
+                if let Some(origin_id) = origin {
+                    encoder.write_left_id(&origin_id);
                 }
+                if let Some(right_origin_id) = item.right_origin.as_ref() {
+                    encoder.write_right_id(right_origin_id);
+                }
+                if cant_copy_parent_info {
+                    if let TypePtr::Id(id) = &item.parent {
+                        encoder.write_parent_info(false);
+                        encoder.write_left_id(&id.id);
+                    } else if let TypePtr::Named(name) = &item.parent {
+                        encoder.write_parent_info(true);
+                        encoder.write_string(name)
+                    } else {
+                        panic!("Couldn't get item's parent")
+                    }
 
-                if let Some(parent_sub) = item.parent_sub.as_ref() {
-                    encoder.write_string(parent_sub.as_ref());
+                    if let Some(parent_sub) = item.parent_sub.as_ref() {
+                        encoder.write_string(parent_sub.as_ref());
+                    }
                 }
+                item.content.encode_with_offset(encoder, offset);
             }
-            item.content.encode_with_offset(encoder, offset);
+            Block::GC(gc) => {
+                encoder.write_info(BLOCK_GC_REF_NUMBER);
+                encoder.write_len(gc.len - offset);
+            }
         }
     }
 
@@ -297,10 +281,6 @@ impl Block {
                 }
                 item.content.encode(encoder);
             }
-            Block::Skip(skip) => {
-                encoder.write_info(BLOCK_SKIP_REF_NUMBER);
-                encoder.write_len(skip.len);
-            }
             Block::GC(gc) => {
                 encoder.write_info(BLOCK_GC_REF_NUMBER);
                 encoder.write_len(gc.len);
@@ -312,7 +292,6 @@ impl Block {
     pub fn id(&self) -> &ID {
         match self {
             Block::Item(item) => &item.id,
-            Block::Skip(skip) => &skip.id,
             Block::GC(gc) => &gc.id,
         }
     }
@@ -325,7 +304,6 @@ impl Block {
     pub fn len(&self) -> u32 {
         match self {
             Block::Item(item) => item.len(),
-            Block::Skip(skip) => skip.len,
             Block::GC(gc) => gc.len,
         }
     }
@@ -335,7 +313,6 @@ impl Block {
     pub fn clock_end(&self) -> u32 {
         match self {
             Block::Item(item) => item.id.clock + item.len(),
-            Block::Skip(skip) => skip.id.clock + skip.len,
             Block::GC(gc) => gc.id.clock + gc.len,
         }
     }
@@ -343,18 +320,8 @@ impl Block {
     /// Checks if two blocks are of the same type.
     pub fn same_type(&self, other: &Self) -> bool {
         match (self, other) {
-            (Block::Item(_), Block::Item(_))
-            | (Block::GC(_), Block::GC(_))
-            | (Block::Skip(_), Block::Skip(_)) => true,
+            (Block::Item(_), Block::Item(_)) | (Block::GC(_), Block::GC(_)) => true,
             _ => false,
-        }
-    }
-
-    pub fn is_skip(&self) -> bool {
-        if let Block::Skip(_) = self {
-            true
-        } else {
-            false
         }
     }
 
@@ -377,7 +344,6 @@ impl Block {
     pub fn contains(&self, id: &ID) -> bool {
         match self {
             Block::Item(v) => v.contains(id),
-            Block::Skip(v) => v.contains(id),
             Block::GC(v) => v.contains(id),
         }
     }
@@ -388,7 +354,7 @@ impl Block {
                 item.content.gc(txn);
                 let len = item.len();
                 if parent_gced {
-                    *self = Block::GC(GC::new(item.id, len));
+                    *self = Block::GC(BlockRange::new(item.id, len));
                 } else {
                     item.content = ItemContent::Deleted(len);
                     item.info = item.info & !ITEM_FLAG_COUNTABLE;
@@ -503,37 +469,25 @@ pub(crate) struct Item {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct Skip {
+pub struct BlockRange {
     pub id: ID,
     pub len: u32,
 }
 
-impl Skip {
+impl BlockRange {
     pub fn new(id: ID, len: u32) -> Self {
-        Skip { id, len }
+        BlockRange { id, len }
     }
 
-    #[inline]
-    pub fn merge(&mut self, other: &Self) {
-        self.len += other.len;
+    pub fn last_id(&self) -> ID {
+        ID::new(self.id.client, self.id.clock + self.len)
     }
 
-    pub fn contains(&self, id: &ID) -> bool {
-        self.id.client == id.client
-            && id.clock >= self.id.clock
-            && id.clock < self.id.clock + self.len
-    }
-}
-
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub struct GC {
-    pub id: ID,
-    pub len: u32,
-}
-
-impl GC {
-    pub fn new(id: ID, len: u32) -> Self {
-        GC { id, len }
+    pub fn slice(&mut self, offset: u32) -> Self {
+        let mut next = self.clone();
+        next.id.clock += offset;
+        next.len -= offset;
+        next
     }
 
     pub fn integrate(&mut self, pivot: u32) -> bool {
