@@ -433,7 +433,7 @@ const ITEM_FLAG_KEEP: u8 = 0b0001;
 /// An item is basic unit of work in Yrs. It contains user data reinforced with all metadata
 /// required for a potential conflict resolution as well as extra fields used for joining blocks
 /// together as a part of indexed sequences or maps.
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 pub(crate) struct Item {
     /// Unique identifier of current item.
     pub id: ID,
@@ -536,7 +536,28 @@ impl Item {
             content,
             parent,
             parent_sub,
-            info: info,
+            info,
+        }
+    }
+
+    pub fn try_eq(&self, other: &Item) -> Option<bool> {
+        if self.id == other.id
+            && self.info == other.info
+            && self.origin == other.origin
+            && self.right_origin == other.right_origin
+            && self.content == other.content
+            && self.parent == other.parent
+            && self.parent_sub == other.parent_sub
+        {
+            if self.left != other.left {
+                return None;
+            } else if self.right != other.right {
+                return None;
+            } else {
+                Some(true)
+            }
+        } else {
+            Some(false)
         }
     }
 
@@ -942,6 +963,13 @@ impl Item {
                 // other types don't define integration-specific actions
             }
         }
+    }
+}
+
+impl PartialEq for Item {
+    fn eq(&self, other: &Self) -> bool {
+        self.try_eq(other)
+            .expect(format!("Item equality was not possible: {} vs {}", self, other).as_str())
     }
 }
 

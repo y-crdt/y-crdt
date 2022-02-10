@@ -474,6 +474,10 @@ impl BlockStore {
         self.clients.iter()
     }
 
+    pub(crate) fn blocks(&self) -> Blocks<'_> {
+        Blocks::new(self)
+    }
+
     /// Returns a state vector, which is a compact representation of the state of blocks integrated
     /// into a current block store. This state vector can later be encoded and send to a remote
     /// peers in order to calculate differences between two stored and produce a compact update,
@@ -588,7 +592,10 @@ impl BlockStore {
                 }
             };
 
-            let left_split_ptr = BlockPtr::new(block.id().clone(), pivot as u32);
+            let left_split_ptr = {
+                let mut id = block.id().clone();
+                BlockPtr::new(id, pivot as u32)
+            };
             let right_split_ptr = match block {
                 Block::Item(item) => {
                     let len = item.len();
@@ -659,5 +666,103 @@ impl std::fmt::Display for BlockStore {
             writeln!(f, "\t{} ->{}", k, v)?;
         }
         writeln!(f, "}}")
+    }
+}
+
+pub(crate) struct Blocks<'a> {
+    current_client: std::vec::IntoIter<(&'a u64, &'a ClientBlockList)>,
+    current_block: Option<ClientBlockListIter<'a>>,
+}
+
+impl<'a> Blocks<'a> {
+    fn new(update: &'a BlockStore) -> Self {
+        let mut client_blocks: Vec<(&'a u64, &'a ClientBlockList)> =
+            update.clients.iter().collect();
+        // sorting to return higher client ids first
+        client_blocks.sort_by(|a, b| b.0.cmp(a.0));
+        let mut current_client = client_blocks.into_iter();
+
+        let current_block = current_client.next().map(|(_, v)| v.iter());
+        Blocks {
+            current_client,
+            current_block,
+        }
+    }
+}
+
+impl<'a> Iterator for Blocks<'a> {
+    type Item = &'a Block;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(blocks) = self.current_block.as_mut() {
+            let block = blocks.next();
+            if block.is_some() {
+                return block;
+            }
+        }
+
+        if let Some(entry) = self.current_client.next() {
+            self.current_block = Some(entry.1.iter());
+            self.next()
+        } else {
+            None
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::block::{Block, BlockPtr, Item, ItemContent};
+    use crate::block_store::BlockStore;
+    use crate::types::TypePtr;
+    use crate::updates::decoder::Decode;
+    use crate::{Doc, Update, ID};
+
+    #[test]
+    fn split_blocks() {
+        let doc = Doc::with_client_id(1);
+        let mut txn = doc.transact();
+        let txt = txn.get_text("text");
+        txt.insert(&mut txn, 0, "aabb");
+        txt.insert(&mut txn, 2, "ccc");
+        let actual: Vec<&Block> = txn.store().blocks.blocks().collect();
+        let expected: Vec<Block> = vec![
+            Block::Item(Item::new(
+                ID::new(1, 0),
+                None,
+                None,
+                Some(BlockPtr::from(ID::new(1, 4))),
+                None,
+                TypePtr::Named("text".into()),
+                None,
+                ItemContent::String("aa".into()),
+            ))
+            .into(),
+            Block::Item(Item::new(
+                ID::new(1, 2),
+                Some(BlockPtr::from(ID::new(1, 4))),
+                Some(ID::new(1, 1)),
+                None,
+                None,
+                TypePtr::Named("text".into()),
+                None,
+                ItemContent::String("bb".into()),
+            ))
+            .into(),
+            Block::Item(Item::new(
+                ID::new(1, 4),
+                Some(BlockPtr::from(ID::new(1, 0))), // left pointer points at the end of left neighbor block
+                Some(ID::new(1, 1)),
+                Some(BlockPtr::from(ID::new(1, 2))),
+                Some(ID::new(1, 2)),
+                TypePtr::Named("text".into()),
+                None,
+                ItemContent::String("ccc".into()),
+            ))
+            .into(),
+        ];
+
+        let expected: Vec<&Block> = expected.iter().collect();
+        assert_eq!(actual, expected);
     }
 }

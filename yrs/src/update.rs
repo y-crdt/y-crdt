@@ -128,27 +128,6 @@ impl PartialEq for UpdateBlocks {
             }
         }
 
-        fn item_eq(a: &Item, this: &UpdateBlocks, b: &Item, other: &UpdateBlocks) -> bool {
-            if a.id == b.id
-                && a.info == b.info
-                && a.origin == b.origin
-                && a.right_origin == b.right_origin
-                && a.content == b.content
-                && a.parent == b.parent
-                && a.parent_sub == b.parent_sub
-            {
-                if !block_ptr_eq(a.left.as_ref(), this, b.left.as_ref(), other) {
-                    false
-                } else if !block_ptr_eq(a.left.as_ref(), this, b.left.as_ref(), other) {
-                    false
-                } else {
-                    true
-                }
-            } else {
-                false
-            }
-        }
-
         if self.clients.len() != other.clients.len() {
             return false;
         }
@@ -178,11 +157,23 @@ impl PartialEq for UpdateBlocks {
                             (
                                 BlockCarrier::Block(Block::Item(a)),
                                 BlockCarrier::Block(Block::Item(b)),
-                            ) => {
-                                if !item_eq(a, self, b, other) {
-                                    return false;
+                            ) => match a.try_eq(b) {
+                                None => {
+                                    if !block_ptr_eq(a.left.as_ref(), self, b.left.as_ref(), other)
+                                    {
+                                        return false;
+                                    } else if !block_ptr_eq(
+                                        a.right.as_ref(),
+                                        self,
+                                        b.right.as_ref(),
+                                        other,
+                                    ) {
+                                        return false;
+                                    }
                                 }
-                            }
+                                Some(false) => return false,
+                                Some(true) => {}
+                            },
                             _ => return false,
                         }
                     }
