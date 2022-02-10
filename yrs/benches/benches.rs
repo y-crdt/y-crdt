@@ -469,7 +469,7 @@ fn bench(c: &mut Criterion) {
     text_benchmark(c, "[B1.3] Prepend N characters", b1_3);
     text_benchmark(c, "[B1.4] Insert N characters at random positions", b1_4);
     text_benchmark(c, "[B1.5] Insert N words at random positions", b1_5);
-    text_benchmark(c, "[B1.6] Insert string, then delete it", b1_6);
+    //text_benchmark(c, "[B1.6] Insert string, then delete it", b1_6);
     text_benchmark(c, "[B1.7] Insert/Delete strings at random positions", b1_7);
     array_benchmark(c, "[B1.8] Append N numbers", b1_8);
     array_benchmark(c, "[B1.9] Insert Array of N numbers", b1_9);
