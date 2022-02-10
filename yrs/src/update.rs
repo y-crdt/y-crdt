@@ -12,11 +12,11 @@ use crate::utils::client_hasher::ClientHasher;
 use crate::{StateVector, Transaction, ID};
 use std::cmp::Ordering;
 use std::collections::hash_map::Entry;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::hash::BuildHasherDefault;
 use std::rc::Rc;
 
-#[derive(Debug, PartialEq, Default)]
+#[derive(Debug, Default)]
 pub(crate) struct UpdateBlocks {
     clients: HashMap<u64, VecDeque<BlockCarrier>, BuildHasherDefault<ClientHasher>>,
 }
@@ -29,6 +29,36 @@ impl UpdateBlocks {
     pub(crate) fn add_block(&mut self, block: BlockCarrier) {
         let e = self.clients.entry(block.id().client).or_default();
         e.push_back(block);
+    }
+
+    pub fn get(&self, ptr: &BlockPtr) -> Option<&BlockCarrier> {
+        let clients = self.clients.get(&ptr.id.client)?;
+        let mut left = 0;
+        let clock = ptr.id.clock;
+        let mut right = clients.len() - 1;
+        let mut block = &clients[right];
+        let mut current_clock = block.id().clock;
+        if current_clock == clock {
+            Some(block)
+        } else {
+            let div = current_clock + block.len() - 1;
+            let mut mid = ((clock / div) * right as u32) as usize;
+            while left <= right {
+                block = &clients[mid];
+                current_clock = block.id().clock;
+                if current_clock <= clock {
+                    if clock < current_clock + block.len() {
+                        return Some(block);
+                    }
+                    left = mid + 1;
+                } else {
+                    right = mid - 1;
+                }
+                mid = (left + right) / 2;
+            }
+
+            None
+        }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -69,6 +99,101 @@ impl UpdateBlocks {
     }
 }
 
+impl PartialEq for UpdateBlocks {
+    fn eq(&self, other: &Self) -> bool {
+        fn block_ptr_eq(
+            a: Option<&BlockPtr>,
+            this: &UpdateBlocks,
+            b: Option<&BlockPtr>,
+            other: &UpdateBlocks,
+        ) -> bool {
+            match (a, b) {
+                (None, None) => true,
+                (Some(a), Some(b)) => {
+                    if a.id == b.id {
+                        true
+                    } else {
+                        // since BlockPtr may point in the middle of a block,
+                        // we need to retrieve blocks and compare their ids
+                        match (this.get(a), other.get(b)) {
+                            (
+                                Some(BlockCarrier::Block(Block::Item(i1))),
+                                Some(BlockCarrier::Block(Block::Item(i2))),
+                            ) => i1.id == i2.id,
+                            _ => false,
+                        }
+                    }
+                }
+                _ => false,
+            }
+        }
+
+        fn item_eq(a: &Item, this: &UpdateBlocks, b: &Item, other: &UpdateBlocks) -> bool {
+            if a.id == b.id
+                && a.info == b.info
+                && a.origin == b.origin
+                && a.right_origin == b.right_origin
+                && a.content == b.content
+                && a.parent == b.parent
+                && a.parent_sub == b.parent_sub
+            {
+                if !block_ptr_eq(a.left.as_ref(), this, b.left.as_ref(), other) {
+                    false
+                } else if !block_ptr_eq(a.left.as_ref(), this, b.left.as_ref(), other) {
+                    false
+                } else {
+                    true
+                }
+            } else {
+                false
+            }
+        }
+
+        if self.clients.len() != other.clients.len() {
+            return false;
+        }
+
+        let mut client_ids: BTreeSet<u64> = self.clients.keys().cloned().collect();
+        for &client in other.clients.keys() {
+            client_ids.insert(client);
+        }
+        for id in client_ids {
+            match (self.clients.get(&id), other.clients.get(&id)) {
+                (Some(a), Some(b)) => {
+                    if a.len() != b.len() {
+                        return false;
+                    }
+
+                    for i in 0..a.len() {
+                        match (&a[i], &b[i]) {
+                            (BlockCarrier::Skip(a), BlockCarrier::Skip(b))
+                            | (
+                                BlockCarrier::Block(Block::GC(a)),
+                                BlockCarrier::Block(Block::GC(b)),
+                            ) => {
+                                if a != b {
+                                    return false;
+                                }
+                            }
+                            (
+                                BlockCarrier::Block(Block::Item(a)),
+                                BlockCarrier::Block(Block::Item(b)),
+                            ) => {
+                                if !item_eq(a, self, b, other) {
+                                    return false;
+                                }
+                            }
+                            _ => return false,
+                        }
+                    }
+                }
+                _ => return false,
+            }
+        }
+        true
+    }
+}
+
 impl std::fmt::Display for UpdateBlocks {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "{{")?;
@@ -87,7 +212,7 @@ impl std::fmt::Display for BlockCarrier {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             BlockCarrier::Block(x) => x.fmt(f),
-            BlockCarrier::Skip(x) => Ok(()),
+            BlockCarrier::Skip(_) => Ok(()),
         }
     }
 }
@@ -98,7 +223,7 @@ impl std::fmt::Display for BlockCarrier {
 /// relations.
 ///
 /// Update is conceptually similar to a block store itself, however the work patters are different.
-#[derive(Debug, PartialEq, Default)]
+#[derive(Debug, Default, PartialEq)]
 pub struct Update {
     pub(crate) blocks: UpdateBlocks,
     pub(crate) delete_set: DeleteSet,
