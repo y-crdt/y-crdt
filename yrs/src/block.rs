@@ -118,6 +118,23 @@ impl BlockPtr {
     pub fn fix_pivot(&self, pivot: u32) {
         unsafe { std::ptr::write(&self.pivot as *const u32 as *mut u32, pivot) };
     }
+
+    /// Returns a block pointer to an element with a clock 1 less than a current one.
+    pub fn predecessor(&self) -> BlockPtr {
+        let mut ptr = self.clone();
+        ptr.id.clock -= 1;
+        if ptr.pivot > 0 {
+            ptr.pivot -= 1;
+        }
+        ptr
+    }
+
+    /// Returns a block pointer to an element with a clock 1 less than a current one.
+    pub fn successor(&self) -> BlockPtr {
+        let mut ptr = self.clone();
+        ptr.id.clock += 1;
+        ptr
+    }
 }
 
 impl Eq for BlockPtr {}
@@ -605,19 +622,21 @@ impl Item {
                 if origin_id.clock == item.id.clock + len - 1 {
                     self.left = Some(BlockPtr::new(item.id, ptr.pivot));
                 } else {
-                    let ptr =
-                        BlockPtr::new(ID::new(origin_id.client, origin_id.clock + 1), ptr.pivot);
-                    let (l, _) = store.blocks.split_block(&ptr);
-                    self.left = l;
+                    store.blocks.split_block(&ptr.successor());
+                    self.left = Some(ptr);
                 }
             }
         }
 
         if let Some(id) = self.right_origin {
-            let (l, r) = store.blocks.split_block(&BlockPtr::from(id));
             // if we got a split, point to right-side
             // if right side is None, then no split happened and `l` is right neighbor
-            self.right = r.or(l);
+            let split_ptr = BlockPtr::from(id);
+            self.right = if store.blocks.split_block(&split_ptr) {
+                Some(split_ptr.predecessor())
+            } else {
+                Some(split_ptr)
+            };
         }
 
         // We have all missing ids, now find the items
@@ -661,15 +680,16 @@ impl Item {
         let encoding = store.options.offset_kind;
         if offset > 0 {
             self.id.clock += offset;
-            let (left, _) = store
-                .blocks
-                .split_block(&BlockPtr::from(ID::new(self.id.client, self.id.clock - 1)));
-            if let Some(mut left) = left {
-                if let Some(origin) = store.blocks.get_item(&left) {
-                    self.origin = Some(origin.last_id());
-                    left.id = origin.id;
-                    self.left = Some(left);
-                }
+            let mut split_ptr = BlockPtr::from(ID::new(self.id.client, self.id.clock - 1));
+            if store.blocks.split_block(&split_ptr) {
+                let left = split_ptr.predecessor();
+                self.origin = Some(left.id);
+                self.left = Some(left);
+            } else if let Some(item) = store.blocks.get_item(&split_ptr) {
+                let last_id = item.last_id();
+                split_ptr.id.clock = last_id.clock; // point at the end of a left block
+                self.origin = Some(last_id);
+                self.left = Some(split_ptr);
             } else {
                 self.left = None;
                 self.origin = None;
@@ -803,7 +823,7 @@ impl Item {
 
             if let Some(right_id) = self.right.as_ref() {
                 if let Some(right) = store.blocks.get_item_mut(right_id) {
-                    right.left = Some(BlockPtr::new(self.id, pivot));
+                    right.left = Some(BlockPtr::new(self.last_id(), pivot));
                 }
             } else if let Some(parent_sub) = &self.parent_sub {
                 // set as current parent value if right === null and this is parentSub
