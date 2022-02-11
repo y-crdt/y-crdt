@@ -101,7 +101,7 @@ impl Text {
                                 ID::new(right.id.client, right.id.clock + offset),
                                 right_ptr.pivot() as u32,
                             );
-                            let (_, _) = store.blocks.split_block(&split_ptr);
+                            store.blocks.split_block(&split_ptr);
                             right = store.blocks.get_item(right_ptr).unwrap();
                             block_len = right.len();
                             remaining = 0;
@@ -261,8 +261,8 @@ impl Text {
                             };
                             ptr.id.clock += offset;
                             remaining = 0;
-                            let (l, _) = txn.store_mut().blocks.split_block(&ptr);
-                            ptr = l.unwrap();
+                            txn.store_mut().blocks.split_block(&ptr);
+                            ptr = ptr.predecessor();
                         } else {
                             remaining -= content_len;
                         };
@@ -379,8 +379,8 @@ impl Text {
                             if len < content_len {
                                 let mut split_ptr = right.clone();
                                 split_ptr.id.clock += len;
-                                let (_, r) = txn.store_mut().blocks.split_block(&split_ptr);
-                                pos.right = r;
+                                txn.store_mut().blocks.split_block(&split_ptr);
+                                pos.right = Some(split_ptr);
                                 break;
                             }
                             len -= content_len;

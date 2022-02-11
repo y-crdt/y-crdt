@@ -197,10 +197,9 @@ impl Transaction {
                             if !item.is_deleted() && item.id.clock < clock {
                                 let split_ptr =
                                     BlockPtr::new(ID::new(*client, clock), index as u32);
-                                let (_, right) = self.store_mut().blocks.split_block(&split_ptr);
-                                if let Some(right) = right {
+                                if self.store_mut().blocks.split_block(&split_ptr) {
                                     index += 1;
-                                    self.merge_blocks.push(right.id);
+                                    self.merge_blocks.push(split_ptr.id);
                                 }
                                 blocks = self.store_mut().blocks.get_mut(client).unwrap();
                             }
@@ -218,10 +217,8 @@ impl Transaction {
                                                 let diff = clock_end - item.id.clock;
                                                 let mut split_ptr = delete_ptr.clone();
                                                 split_ptr.id.clock += diff;
-                                                let (_, right) =
-                                                    self.store_mut().blocks.split_block(&split_ptr);
-                                                if let Some(right) = right {
-                                                    self.merge_blocks.push(right.id);
+                                                if self.store_mut().blocks.split_block(&split_ptr) {
+                                                    self.merge_blocks.push(split_ptr.id);
                                                     index += 1;
                                                 }
                                             }

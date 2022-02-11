@@ -6,7 +6,7 @@ use crate::utils::client_hasher::ClientHasher;
 use crate::*;
 use std::cell::UnsafeCell;
 use std::collections::hash_map::Entry;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::hash::BuildHasherDefault;
 use std::ops::Index;
 use std::rc::Rc;
@@ -429,9 +429,85 @@ impl<'a> Iterator for ClientBlockListIter<'a> {
 /// Block store is a collection of all blocks known to a document owning instance of this type.
 /// Blocks are organized per client ID and contain a resizable list of all blocks inserted by that
 /// client.
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 pub(crate) struct BlockStore {
     clients: HashMap<u64, ClientBlockList, BuildHasherDefault<ClientHasher>>,
+}
+
+impl PartialEq for BlockStore {
+    fn eq(&self, other: &Self) -> bool {
+        fn block_ptr_eq(
+            a: Option<&BlockPtr>,
+            this: &BlockStore,
+            b: Option<&BlockPtr>,
+            other: &BlockStore,
+        ) -> bool {
+            match (a, b) {
+                (None, None) => true,
+                (Some(a), Some(b)) => {
+                    if a.id == b.id {
+                        true
+                    } else {
+                        // since BlockPtr may point in the middle of a block,
+                        // we need to retrieve blocks and compare their ids
+                        match (this.get_item(a), other.get_item(b)) {
+                            (Some(i1), Some(i2)) => i1.id == i2.id,
+                            _ => false,
+                        }
+                    }
+                }
+                _ => false,
+            }
+        }
+
+        if self.clients.len() != other.clients.len() {
+            return false;
+        }
+
+        let mut client_ids: BTreeSet<u64> = self.clients.keys().cloned().collect();
+        for &client in other.clients.keys() {
+            client_ids.insert(client);
+        }
+        for id in client_ids {
+            match (self.clients.get(&id), other.clients.get(&id)) {
+                (Some(a), Some(b)) => {
+                    if a.len() != b.len() {
+                        return false;
+                    }
+
+                    for i in 0..a.len() {
+                        match (&a[i], &b[i]) {
+                            (Block::GC(a), Block::GC(b)) => {
+                                if a != b {
+                                    return false;
+                                }
+                            }
+                            (Block::Item(a), Block::Item(b)) => match a.try_eq(b) {
+                                None => {
+                                    if !block_ptr_eq(a.left.as_ref(), self, b.left.as_ref(), other)
+                                    {
+                                        return false;
+                                    } else if !block_ptr_eq(
+                                        a.right.as_ref(),
+                                        self,
+                                        b.right.as_ref(),
+                                        other,
+                                    ) {
+                                        return false;
+                                    }
+                                }
+                                Some(false) => return false,
+                                Some(true) => {}
+                            },
+                            _ => return false,
+                        }
+                    }
+                }
+                _ => return false,
+            }
+        }
+        true
+    }
 }
 
 pub(crate) type Iter<'a> = std::collections::hash_map::Iter<'a, u64, ClientBlockList>;
@@ -455,6 +531,14 @@ impl BlockStore {
     /// nor tombstoned.
     pub fn is_empty(&self) -> bool {
         self.clients.is_empty()
+    }
+
+    pub fn contains(&self, id: &ID) -> bool {
+        if let Some(clients) = self.clients.get(&id.client) {
+            id.clock <= clients.last().last_id().clock
+        } else {
+            false
+        }
     }
 
     /// Returns an immutable reference to a block list for a particular `client`. Returns `None` if
@@ -561,14 +645,15 @@ impl BlockStore {
             .or_insert_with(|| ClientBlockList::with_capacity(capacity))
     }
 
-    /// Given block pointer, tries to split it, returning a pointers to left and right halves
-    /// of a newly split block.
+    /// Given block pointer, tries to split it, returning a true, if block was split in result of
+    /// calling this action, and false otherwise.
     ///
-    /// If split was not necessary (eg. because block `ptr` was not inside of any block),
-    /// the right half returned wll be None.
-    ///
-    /// If no block for given `ptr` was found, then both returned options will be None.
-    pub fn split_block(&mut self, ptr: &BlockPtr) -> (Option<BlockPtr>, Option<BlockPtr>) {
+    /// Examples:
+    /// 1. Splitting block `(<1#1>, len: 3)` by ptr: `<1#3>` will result in constructing two
+    /// blocks: `(<1#1>, len: 2)` and `(<1#3>, len: 1)` and return `true`.
+    /// 1. Splitting block `(<1#1>, len: 3)` by ptr: `<1#1>` will result in preserving the block
+    /// structure and return `false`.
+    pub fn split_block(&mut self, ptr: &BlockPtr) -> bool {
         let mut pivot = ptr.pivot();
         if let Some(mut blocks) = self.clients.get_mut(&ptr.id.client) {
             let block: &mut Block = {
@@ -587,27 +672,22 @@ impl BlockStore {
                         pivot = p;
                         blocks.get_mut(pivot)
                     } else {
-                        return (None, None);
+                        return false;
                     }
                 }
             };
 
-            let left_split_ptr = {
-                let mut id = block.id().clone();
-                BlockPtr::new(id, pivot as u32)
-            };
-            let right_split_ptr = match block {
+            match block {
                 Block::Item(item) => {
                     let len = item.len();
                     if ptr.id.clock > item.id.clock && ptr.id.clock <= item.id.clock + len {
                         let index = pivot + 1;
                         let diff = ptr.id.clock - item.id.clock;
                         let right_split = item.split(diff);
-                        let right_split_id = right_split.id.clone();
                         let right_ptr = right_split.right.clone();
                         if let Some(right_ptr) = right_ptr {
                             let right_left =
-                                Some(BlockPtr::new(right_split.id.clone(), index as u32));
+                                Some(BlockPtr::new(right_split.last_id(), index as u32));
 
                             if right_ptr.id.client == ptr.id.client {
                                 if let Block::Item(item) = blocks.find(&right_ptr).unwrap() {
@@ -628,16 +708,15 @@ impl BlockStore {
                             };
                         }
                         blocks.insert(index, Block::Item(right_split));
-                        Some(BlockPtr::new(right_split_id, index as u32))
+                        true
                     } else {
-                        None
+                        false
                     }
                 }
-                _ => None,
-            };
-            (Some(left_split_ptr), right_split_ptr)
+                _ => false,
+            }
         } else {
-            (None, None)
+            false
         }
     }
 }
@@ -707,62 +786,5 @@ impl<'a> Iterator for Blocks<'a> {
         } else {
             None
         }
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use crate::block::{Block, BlockPtr, Item, ItemContent};
-    use crate::block_store::BlockStore;
-    use crate::types::TypePtr;
-    use crate::updates::decoder::Decode;
-    use crate::{Doc, Update, ID};
-
-    #[test]
-    fn split_blocks() {
-        let doc = Doc::with_client_id(1);
-        let mut txn = doc.transact();
-        let txt = txn.get_text("text");
-        txt.insert(&mut txn, 0, "aabb");
-        txt.insert(&mut txn, 2, "ccc");
-        let actual: Vec<&Block> = txn.store().blocks.blocks().collect();
-        let expected: Vec<Block> = vec![
-            Block::Item(Item::new(
-                ID::new(1, 0),
-                None,
-                None,
-                Some(BlockPtr::from(ID::new(1, 4))),
-                None,
-                TypePtr::Named("text".into()),
-                None,
-                ItemContent::String("aa".into()),
-            ))
-            .into(),
-            Block::Item(Item::new(
-                ID::new(1, 2),
-                Some(BlockPtr::from(ID::new(1, 4))),
-                Some(ID::new(1, 1)),
-                None,
-                None,
-                TypePtr::Named("text".into()),
-                None,
-                ItemContent::String("bb".into()),
-            ))
-            .into(),
-            Block::Item(Item::new(
-                ID::new(1, 4),
-                Some(BlockPtr::from(ID::new(1, 0))), // left pointer points at the end of left neighbor block
-                Some(ID::new(1, 1)),
-                Some(BlockPtr::from(ID::new(1, 2))),
-                Some(ID::new(1, 2)),
-                TypePtr::Named("text".into()),
-                None,
-                ItemContent::String("ccc".into()),
-            ))
-            .into(),
-        ];
-
-        let expected: Vec<&Block> = expected.iter().collect();
-        assert_eq!(actual, expected);
     }
 }
