@@ -172,7 +172,7 @@ impl Block {
             None
         } else {
             match self {
-                Block::Item(item) => Some(Block::Item(item.slice(offset)?)),
+                Block::Item(item) => Some(Block::Item(item.splice(offset)?)),
                 Block::GC(gc) => Some(Block::GC(gc.slice(offset))),
             }
         }
@@ -455,6 +455,8 @@ pub(crate) struct Item {
     /// Unique identifier of current item.
     pub id: ID,
 
+    pub len: u32,
+
     /// Pointer to left neighbor of this item. Used in sequenced collections.
     /// If `None` current item is a first one on it's `parent` collection.
     pub left: Option<BlockPtr>,
@@ -544,8 +546,10 @@ impl Item {
         } else {
             0
         };
+        let len = content.len(OffsetKind::Utf16);
         Item {
             id,
+            len,
             left,
             right,
             origin,
@@ -695,6 +699,7 @@ impl Item {
                 self.origin = None;
             }
             self.content.splice(offset as usize);
+            self.len -= offset;
         }
 
         let parent = match store.get_type(&self.parent) {
@@ -879,26 +884,29 @@ impl Item {
     /// in reality ie. when item has been deleted, corresponding content no longer exists but `len`
     /// still refers to a number of elements current block used to represent.
     pub fn len(&self) -> u32 {
-        self.content.len(OffsetKind::Utf16)
+        self.len
     }
 
     pub fn content_len(&self, kind: OffsetKind) -> u32 {
         self.content.len(kind)
     }
 
-    pub fn slice(&mut self, diff: u32) -> Option<Item> {
-        if diff == 0 {
+    pub fn splice(&mut self, offset: u32) -> Option<Item> {
+        if offset == 0 {
             None
         } else {
             let client = self.id.client;
             let clock = self.id.clock;
+            let content = self.content.splice(offset as usize).unwrap();
+            self.len = offset;
             Some(Item {
-                id: ID::new(client, clock + diff),
-                left: Some(BlockPtr::from(ID::new(client, clock + diff - 1))),
+                id: ID::new(client, clock + offset),
+                len: content.len(OffsetKind::Utf16),
+                left: Some(BlockPtr::from(ID::new(client, clock + offset - 1))),
                 right: self.right.clone(),
-                origin: Some(ID::new(client, clock + diff - 1)),
+                origin: Some(ID::new(client, clock + offset - 1)),
                 right_origin: self.right_origin.clone(),
-                content: self.content.splice(diff as usize).unwrap(),
+                content,
                 parent: self.parent.clone(),
                 parent_sub: self.parent_sub.clone(),
                 info: self.info.clone(),
@@ -908,20 +916,23 @@ impl Item {
 
     /// Splits current item in two and a given `diff` offset. Returns a new item created as result
     /// of this split.
-    pub fn split(&mut self, diff: u32) -> Item {
+    pub fn split(&mut self, offset: u32) -> Item {
         let client = self.id.client;
         let clock = self.id.clock;
+        let content = self.content.splice(offset as usize).unwrap();
         let other = Item {
-            id: ID::new(client, clock + diff),
+            id: ID::new(client, clock + offset),
+            len: content.len(OffsetKind::Utf16),
             left: Some(BlockPtr::from(self.id)),
             right: self.right.clone(),
-            origin: Some(ID::new(client, clock + diff - 1)),
+            origin: Some(ID::new(client, clock + offset - 1)),
             right_origin: self.right_origin.clone(),
-            content: self.content.splice(diff as usize).unwrap(),
+            content,
             parent: self.parent.clone(),
             parent_sub: self.parent_sub.clone(),
             info: self.info.clone(),
         };
+        self.len = offset;
         self.right = Some(BlockPtr::from(other.id));
         other
     }
@@ -941,6 +952,7 @@ impl Item {
             && self.is_deleted() == other.is_deleted()
             && self.content.try_squash(&other.content)
         {
+            self.len = self.content.len(OffsetKind::Utf16);
             self.right = other.right;
             //TODO: self.right.left = self
             true
@@ -996,7 +1008,6 @@ impl PartialEq for Item {
 #[derive(PartialEq, PartialOrd, Eq, Ord, Debug, Clone)]
 pub struct SplittableString {
     content: SmallString<[u8; 8]>,
-    utf16_len: usize,
 }
 
 impl SplittableString {
@@ -1015,7 +1026,7 @@ impl SplittableString {
 
     #[inline(always)]
     pub fn utf16_len(&self) -> usize {
-        self.utf16_len
+        self.encode_utf16().count()
     }
 
     pub fn unicode_len(&self) -> usize {
@@ -1059,9 +1070,7 @@ impl SplittableString {
     }
 
     pub fn push_str(&mut self, str: &str) {
-        let count = str.encode_utf16().count();
         self.content.push_str(str);
-        self.utf16_len += count;
     }
 
     fn map_utf16_offset(&self, offset: u32) -> u32 {
@@ -1114,8 +1123,7 @@ impl Into<Box<str>> for SplittableString {
 
 impl From<SmallString<[u8; 8]>> for SplittableString {
     fn from(content: SmallString<[u8; 8]>) -> Self {
-        let utf16_len = content.encode_utf16().count();
-        SplittableString { content, utf16_len }
+        SplittableString { content }
     }
 }
 
@@ -1518,7 +1526,7 @@ impl ItemContent {
 
 impl std::fmt::Display for Item {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "({}", self.id)?;
+        write!(f, "({}, len: {}", self.id, self.len)?;
         write!(f, ", parent: {}", self.parent)?;
         if let Some(origin) = self.origin.as_ref() {
             write!(f, ", origin-l: {}", origin)?;
