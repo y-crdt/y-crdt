@@ -1012,10 +1012,15 @@ pub struct SplittableString {
 
 impl SplittableString {
     pub fn len(&self, kind: OffsetKind) -> usize {
-        match kind {
-            OffsetKind::Bytes => self.content.len(),
-            OffsetKind::Utf16 => self.utf16_len(),
-            OffsetKind::Utf32 => self.unicode_len(),
+        let len = self.content.len();
+        if len == 1 {
+            len // quite often strings are single-letter, so we don't care about OffsetKind
+        } else {
+            match kind {
+                OffsetKind::Bytes => len,
+                OffsetKind::Utf16 => self.utf16_len(),
+                OffsetKind::Utf32 => self.unicode_len(),
+            }
         }
     }
 

@@ -407,7 +407,7 @@ fn b3_4(c: &mut Criterion, name: &str) {
     });
 }
 
-fn b4(c: &mut Criterion, name: &str) {
+fn b4_1(c: &mut Criterion, name: &str) {
     let doc = Doc::new();
     let txt = {
         let mut txn = doc.transact();
@@ -427,6 +427,28 @@ fn b4(c: &mut Criterion, name: &str) {
                         TextOp::Delete(idx, len) => txt.remove_range(&mut txn, *idx, *len),
                     }
                 }
+            });
+        },
+    );
+}
+
+fn b4_2(c: &mut Criterion, name: &str) {
+    let doc = Doc::new();
+    let txt = {
+        let mut txn = doc.transact();
+        txn.get_text("text")
+    };
+    let mut buf = Vec::with_capacity(400 * 1024);
+    let mut f = std::fs::File::open("./yrs/benches/input/b4-update.bin").unwrap();
+    std::io::Read::read_to_end(&mut f, &mut buf).unwrap();
+
+    c.bench_with_input(
+        BenchmarkId::new(name, buf.len()),
+        &(doc, txt, buf),
+        |b, (doc, txt, buf)| {
+            b.iter(|| {
+                let mut txn = doc.transact();
+                doc.apply_update_v1(&mut txn, buf.as_slice());
             });
         },
     );
@@ -509,7 +531,8 @@ fn bench(c: &mut Criterion) {
         b3_3,
     );
     b3_4(c, "[B3.4] 20√N clients concurrently insert text in Array");
-    b4(c, "[B4] Apply real-world editing dataset");
+    b4_2(c, "[B4.2] Apply real-world document snapshot of size");
+    b4_1(c, "[B4.1] Apply real-world editing dataset");
 }
 
 criterion_group! {
