@@ -429,85 +429,9 @@ impl<'a> Iterator for ClientBlockListIter<'a> {
 /// Block store is a collection of all blocks known to a document owning instance of this type.
 /// Blocks are organized per client ID and contain a resizable list of all blocks inserted by that
 /// client.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub(crate) struct BlockStore {
     clients: HashMap<u64, ClientBlockList, BuildHasherDefault<ClientHasher>>,
-}
-
-impl PartialEq for BlockStore {
-    fn eq(&self, other: &Self) -> bool {
-        fn block_ptr_eq(
-            a: Option<&BlockPtr>,
-            this: &BlockStore,
-            b: Option<&BlockPtr>,
-            other: &BlockStore,
-        ) -> bool {
-            match (a, b) {
-                (None, None) => true,
-                (Some(a), Some(b)) => {
-                    if a.id == b.id {
-                        true
-                    } else {
-                        // since BlockPtr may point in the middle of a block,
-                        // we need to retrieve blocks and compare their ids
-                        match (this.get_item(a), other.get_item(b)) {
-                            (Some(i1), Some(i2)) => i1.id == i2.id,
-                            _ => false,
-                        }
-                    }
-                }
-                _ => false,
-            }
-        }
-
-        if self.clients.len() != other.clients.len() {
-            return false;
-        }
-
-        let mut client_ids: BTreeSet<u64> = self.clients.keys().cloned().collect();
-        for &client in other.clients.keys() {
-            client_ids.insert(client);
-        }
-        for id in client_ids {
-            match (self.clients.get(&id), other.clients.get(&id)) {
-                (Some(a), Some(b)) => {
-                    if a.len() != b.len() {
-                        return false;
-                    }
-
-                    for i in 0..a.len() {
-                        match (&a[i], &b[i]) {
-                            (Block::GC(a), Block::GC(b)) => {
-                                if a != b {
-                                    return false;
-                                }
-                            }
-                            (Block::Item(a), Block::Item(b)) => match a.try_eq(b) {
-                                None => {
-                                    if !block_ptr_eq(a.left.as_ref(), self, b.left.as_ref(), other)
-                                    {
-                                        return false;
-                                    } else if !block_ptr_eq(
-                                        a.right.as_ref(),
-                                        self,
-                                        b.right.as_ref(),
-                                        other,
-                                    ) {
-                                        return false;
-                                    }
-                                }
-                                Some(false) => return false,
-                                Some(true) => {}
-                            },
-                            _ => return false,
-                        }
-                    }
-                }
-                _ => return false,
-            }
-        }
-        true
-    }
 }
 
 pub(crate) type Iter<'a> = std::collections::hash_map::Iter<'a, u64, ClientBlockList>;

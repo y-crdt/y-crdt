@@ -16,7 +16,7 @@ use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::hash::BuildHasherDefault;
 use std::rc::Rc;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq)]
 pub(crate) struct UpdateBlocks {
     clients: HashMap<u64, VecDeque<BlockCarrier>, BuildHasherDefault<ClientHasher>>,
 }
@@ -97,92 +97,6 @@ impl UpdateBlocks {
                 blocks.insert(index, BlockCarrier::Block(Block::Item(right_split)));
             }
         };
-    }
-}
-
-impl PartialEq for UpdateBlocks {
-    fn eq(&self, other: &Self) -> bool {
-        fn block_ptr_eq(
-            a: Option<&BlockPtr>,
-            this: &UpdateBlocks,
-            b: Option<&BlockPtr>,
-            other: &UpdateBlocks,
-        ) -> bool {
-            match (a, b) {
-                (None, None) => true,
-                (Some(a), Some(b)) => {
-                    if a.id == b.id {
-                        true
-                    } else {
-                        // since BlockPtr may point in the middle of a block,
-                        // we need to retrieve blocks and compare their ids
-                        match (this.get(a), other.get(b)) {
-                            (
-                                Some(BlockCarrier::Block(Block::Item(i1))),
-                                Some(BlockCarrier::Block(Block::Item(i2))),
-                            ) => i1.id == i2.id,
-                            _ => false,
-                        }
-                    }
-                }
-                _ => false,
-            }
-        }
-
-        if self.clients.len() != other.clients.len() {
-            return false;
-        }
-
-        let mut client_ids: BTreeSet<u64> = self.clients.keys().cloned().collect();
-        for &client in other.clients.keys() {
-            client_ids.insert(client);
-        }
-        for id in client_ids {
-            match (self.clients.get(&id), other.clients.get(&id)) {
-                (Some(a), Some(b)) => {
-                    if a.len() != b.len() {
-                        return false;
-                    }
-
-                    for i in 0..a.len() {
-                        match (&a[i], &b[i]) {
-                            (BlockCarrier::Skip(a), BlockCarrier::Skip(b))
-                            | (
-                                BlockCarrier::Block(Block::GC(a)),
-                                BlockCarrier::Block(Block::GC(b)),
-                            ) => {
-                                if a != b {
-                                    return false;
-                                }
-                            }
-                            (
-                                BlockCarrier::Block(Block::Item(a)),
-                                BlockCarrier::Block(Block::Item(b)),
-                            ) => match a.try_eq(b) {
-                                None => {
-                                    if !block_ptr_eq(a.left.as_ref(), self, b.left.as_ref(), other)
-                                    {
-                                        return false;
-                                    } else if !block_ptr_eq(
-                                        a.right.as_ref(),
-                                        self,
-                                        b.right.as_ref(),
-                                        other,
-                                    ) {
-                                        return false;
-                                    }
-                                }
-                                Some(false) => return false,
-                                Some(true) => {}
-                            },
-                            _ => return false,
-                        }
-                    }
-                }
-                _ => return false,
-            }
-        }
-        true
     }
 }
 
