@@ -446,7 +446,7 @@ impl Branch {
         let parent = from;
         let mut child = to;
         let mut path = VecDeque::default();
-        while let TypePtr::Id(ptr) = &child.ptr {
+        while let TypePtr::Block(ptr) = &child.ptr {
             if parent.ptr == child.ptr {
                 break;
             }
@@ -696,7 +696,7 @@ pub enum TypePtr {
     Unknown,
 
     /// Pointer to another block. Used in nested data types ie. YMap containing another YMap.
-    Id(block::BlockPtr),
+    Block(block::BlockPtr),
 
     /// Pointer to a root-level type.
     Named(Rc<str>),
@@ -706,7 +706,7 @@ impl std::fmt::Display for TypePtr {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             TypePtr::Unknown => write!(f, "unknown"),
-            TypePtr::Id(ptr) => write!(f, "{}", ptr),
+            TypePtr::Block(ptr) => write!(f, "{}", ptr),
             TypePtr::Named(name) => write!(f, "'{}'", name.as_ref()),
         }
     }

@@ -274,7 +274,7 @@ impl Transaction {
                             .or_default()
                             .insert(item.parent_sub.clone());
                     }
-                    TypePtr::Id(ptr)
+                    TypePtr::Block(ptr)
                         if ptr.id.clock < self.before_state.get(&ptr.id.client)
                             && self.store().blocks.get_item(ptr).unwrap().is_deleted() =>
                     {
@@ -427,7 +427,7 @@ impl Transaction {
             let ptr = BlockPtr::new(id, pivot);
             (left, right, origin, ptr)
         };
-        let (content, remainder) = value.into_content(self, TypePtr::Id(ptr.clone()));
+        let (content, remainder) = value.into_content(self, TypePtr::Block(ptr.clone()));
         let inner_ref = if let ItemContent::Type(inner_ref) = &content {
             Some(BranchRef::from(inner_ref))
         } else {
@@ -562,7 +562,7 @@ impl Transaction {
     pub(crate) fn add_changed_type(&mut self, parent: &Branch, parent_sub: Option<Rc<str>>) {
         let trigger = match &parent.ptr {
             TypePtr::Named(_) => true,
-            TypePtr::Id(ptr) if ptr.id.clock < (self.before_state.get(&ptr.id.client)) => {
+            TypePtr::Block(ptr) if ptr.id.clock < (self.before_state.get(&ptr.id.client)) => {
                 if let Some(item) = self.store().blocks.get_item(ptr) {
                     !item.is_deleted()
                 } else {

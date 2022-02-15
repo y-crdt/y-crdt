@@ -426,7 +426,7 @@ impl Update {
                 if right_origin.client != item.id.client && !local_sv.contains(&item.id) {
                     return Some(right_origin.client);
                 }
-            } else if let TypePtr::Id(parent) = item.parent {
+            } else if let TypePtr::Block(parent) = item.parent {
                 if parent.id.client != item.id.client && !local_sv.contains(&item.id) {
                     return Some(parent.id.client);
                 }
@@ -503,7 +503,7 @@ impl Update {
                     if decoder.read_parent_info() {
                         TypePtr::Named(decoder.read_string().into())
                     } else {
-                        TypePtr::Id(BlockPtr::from(decoder.read_left_id()))
+                        TypePtr::Block(BlockPtr::from(decoder.read_left_id()))
                     }
                 } else {
                     TypePtr::Unknown

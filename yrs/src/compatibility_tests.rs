@@ -222,7 +222,7 @@ fn xml_fragment_insert() {
             TypePtr::Named("fragment-name".into()),
             None,
             ItemContent::Type(Branch::new(
-                TypePtr::Id(BlockPtr::from(ID::new(CLIENT_ID, 0))),
+                TypePtr::Block(BlockPtr::from(ID::new(CLIENT_ID, 0))),
                 TYPE_REFS_XML_TEXT,
                 None,
             )),
@@ -237,7 +237,7 @@ fn xml_fragment_insert() {
             TypePtr::Unknown,
             None,
             ItemContent::Type(Branch::new(
-                TypePtr::Id(BlockPtr::from(ID::new(CLIENT_ID, 1))),
+                TypePtr::Block(BlockPtr::from(ID::new(CLIENT_ID, 1))),
                 TYPE_REFS_XML_ELEMENT,
                 Some("node-name".to_string()),
             )),
