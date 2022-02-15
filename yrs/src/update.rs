@@ -81,20 +81,21 @@ impl UpdateBlocks {
         let mut blocks = self.clients.get_mut(&client).unwrap();
         if let BlockCarrier::Block(Block::Item(item)) = &mut blocks[index] {
             index += 1;
-            let right_split = item.split(diff);
-            let right_ptr = right_split.right.clone();
-            if let Some(right_ptr) = right_ptr {
-                blocks = if right_ptr.id.client == client {
-                    blocks
-                } else {
-                    self.clients.get_mut(&right_ptr.id.client).unwrap()
-                };
-                let right = &mut blocks[right_ptr.pivot()];
-                if let BlockCarrier::Block(Block::Item(right_item)) = right {
-                    right_item.left = Some(BlockPtr::new(right_split.id.clone(), index as u32));
+            if let Some(right_split) = item.splice(diff) {
+                let right_ptr = right_split.right.clone();
+                if let Some(right_ptr) = right_ptr {
+                    blocks = if right_ptr.id.client == client {
+                        blocks
+                    } else {
+                        self.clients.get_mut(&right_ptr.id.client).unwrap()
+                    };
+                    let right = &mut blocks[right_ptr.pivot()];
+                    if let BlockCarrier::Block(Block::Item(right_item)) = right {
+                        right_item.left = Some(BlockPtr::new(right_split.id.clone(), index as u32));
+                    }
                 }
+                blocks.insert(index, BlockCarrier::Block(Block::Item(right_split)));
             }
-            blocks.insert(index, BlockCarrier::Block(Block::Item(right_split)));
         };
     }
 }
@@ -844,7 +845,7 @@ impl BlockCarrier {
     pub(crate) fn slice(&mut self, offset: u32) -> Option<Self> {
         match self {
             BlockCarrier::Block(x) => {
-                let next = x.slice(offset)?;
+                let next = x.splice(offset)?;
                 Some(BlockCarrier::Block(next))
             }
             BlockCarrier::Skip(x) => {

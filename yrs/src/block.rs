@@ -167,7 +167,7 @@ impl Block {
         }
     }
 
-    pub fn slice(&mut self, offset: u32) -> Option<Self> {
+    pub fn splice(&mut self, offset: u32) -> Option<Self> {
         if offset == 0 {
             None
         } else {
@@ -899,7 +899,7 @@ impl Item {
             let clock = self.id.clock;
             let content = self.content.splice(offset as usize).unwrap();
             self.len = offset;
-            Some(Item {
+            let item = Item {
                 id: ID::new(client, clock + offset),
                 len: content.len(OffsetKind::Utf16),
                 left: Some(BlockPtr::from(ID::new(client, clock + offset - 1))),
@@ -910,31 +910,10 @@ impl Item {
                 parent: self.parent.clone(),
                 parent_sub: self.parent_sub.clone(),
                 info: self.info.clone(),
-            })
+            };
+            self.right = Some(BlockPtr::from(item.id));
+            Some(item)
         }
-    }
-
-    /// Splits current item in two and a given `diff` offset. Returns a new item created as result
-    /// of this split.
-    pub fn split(&mut self, offset: u32) -> Item {
-        let client = self.id.client;
-        let clock = self.id.clock;
-        let content = self.content.splice(offset as usize).unwrap();
-        let other = Item {
-            id: ID::new(client, clock + offset),
-            len: content.len(OffsetKind::Utf16),
-            left: Some(BlockPtr::from(self.id)),
-            right: self.right.clone(),
-            origin: Some(ID::new(client, clock + offset - 1)),
-            right_origin: self.right_origin.clone(),
-            content,
-            parent: self.parent.clone(),
-            parent_sub: self.parent_sub.clone(),
-            info: self.info.clone(),
-        };
-        self.len = offset;
-        self.right = Some(BlockPtr::from(other.id));
-        other
     }
 
     /// Returns an ID of the last element that can be considered a part of this item.

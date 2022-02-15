@@ -683,30 +683,7 @@ impl BlockStore {
                     if ptr.id.clock > item.id.clock && ptr.id.clock <= item.id.clock + len {
                         let index = pivot + 1;
                         let diff = ptr.id.clock - item.id.clock;
-                        let right_split = item.split(diff);
-                        let right_ptr = right_split.right.clone();
-                        if let Some(right_ptr) = right_ptr {
-                            let right_left =
-                                Some(BlockPtr::new(right_split.last_id(), index as u32));
-
-                            if right_ptr.id.client == ptr.id.client {
-                                if let Block::Item(item) = blocks.find(&right_ptr).unwrap() {
-                                    item.left = right_left;
-                                }
-                            } else {
-                                if let Block::Item(item) = self
-                                    .clients
-                                    .get_mut(&right_ptr.id.client)
-                                    .unwrap()
-                                    .find(&right_ptr)
-                                    .unwrap()
-                                {
-                                    item.left = right_left;
-                                }
-
-                                blocks = self.clients.get_mut(&ptr.id.client).unwrap();
-                            };
-                        }
+                        let right_split = item.splice(diff).unwrap();
                         blocks.insert(index, Block::Item(right_split));
                         true
                     } else {
