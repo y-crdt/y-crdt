@@ -511,7 +511,7 @@ impl<'a> Iterator for TreeWalker<'a> {
                                     n = self.store.get_type(&current.parent).and_then(|t| match &t
                                         .ptr
                                     {
-                                        TypePtr::Id(ptr) => self.store.blocks.get_item(ptr),
+                                        TypePtr::Block(ptr) => self.store.blocks.get_item(ptr),
                                         _ => None,
                                     });
                                 }
@@ -900,7 +900,7 @@ impl Prelim for PrelimXml {
 
 fn next_sibling(inner: BranchRef, txn: &Transaction) -> Option<Xml> {
     let store = txn.store();
-    let mut current = if let TypePtr::Id(ptr) = &inner.ptr {
+    let mut current = if let TypePtr::Block(ptr) = &inner.ptr {
         store.blocks.get_item(ptr)
     } else {
         None
@@ -924,7 +924,7 @@ fn next_sibling(inner: BranchRef, txn: &Transaction) -> Option<Xml> {
 
 fn prev_sibling(inner: BranchRef, txn: &Transaction) -> Option<Xml> {
     let store = txn.store();
-    let mut current = if let TypePtr::Id(ptr) = &inner.ptr {
+    let mut current = if let TypePtr::Block(ptr) = &inner.ptr {
         store.blocks.get_item(ptr)
     } else {
         None
@@ -947,7 +947,7 @@ fn prev_sibling(inner: BranchRef, txn: &Transaction) -> Option<Xml> {
 }
 
 fn parent(inner: BranchRef, txn: &Transaction) -> Option<XmlElement> {
-    if let TypePtr::Id(ptr) = &inner.ptr {
+    if let TypePtr::Block(ptr) = &inner.ptr {
         let store = txn.store();
         let item = store.blocks.get_item(ptr)?;
         let parent = store.get_type(&item.parent)?;

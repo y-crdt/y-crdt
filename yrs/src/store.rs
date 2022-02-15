@@ -72,7 +72,7 @@ impl Store {
 
     pub(crate) fn get_type_raw(&self, ptr: &TypePtr) -> Option<&Branch> {
         match ptr {
-            TypePtr::Id(id) => {
+            TypePtr::Block(id) => {
                 // @todo the item might not exist
                 let item = self.blocks.get_item(id)?;
                 if let ItemContent::Type(c) = &item.content {

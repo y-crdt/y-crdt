@@ -11,9 +11,10 @@ use lib0::any::Any;
 use smallstr::SmallString;
 use std::collections::HashSet;
 use std::hash::Hash;
-use std::ops::Deref;
+use std::ops::{Deref, DerefMut};
 use std::panic;
 use std::pin::Pin;
+use std::ptr::NonNull;
 use std::rc::Rc;
 
 /// Bit flag used to identify [Block::GC].
@@ -85,55 +86,33 @@ impl ID {
 
 /// A logical block pointer. It contains a unique block [ID], but also contains a helper metadata
 /// which allows to faster locate block it points to within a block store.
+#[repr(transparent)]
 #[derive(Debug, Clone, Copy, Hash)]
-pub struct BlockPtr {
-    /// Unique identifier of a corresponding block.
-    pub id: ID,
+pub struct BlockPtr(NonNull<Block>);
 
-    /// An information about offset at which current block can be found within block store.
-    ///
-    /// Atm. this value is not always precise, so a conservative check is performed every time
-    /// it's used. If such check fails, search algorithm falls back to binary search and upon
-    /// completion re-adjusts the pivot information.
-    pivot: u32,
+impl Deref for BlockPtr {
+    type Target = Block;
+
+    fn deref(&self) -> &Self::Target {
+        unsafe { self.0.as_ref() }
+    }
 }
 
-impl BlockPtr {
-    pub fn new(id: ID, pivot: u32) -> Self {
-        BlockPtr { id, pivot }
+impl DerefMut for BlockPtr {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe { self.0.as_mut() }
     }
+}
 
-    pub fn from(id: ID) -> Self {
-        BlockPtr {
-            id,
-            pivot: id.clock,
-        }
+impl<'a> From<&'a mut Block> for BlockPtr {
+    fn from(block: &'a mut Block) -> Self {
+        BlockPtr(NonNull::from(block))
     }
+}
 
-    #[inline]
-    pub fn pivot(&self) -> usize {
-        self.pivot as usize
-    }
-
-    pub fn fix_pivot(&self, pivot: u32) {
-        unsafe { std::ptr::write(&self.pivot as *const u32 as *mut u32, pivot) };
-    }
-
-    /// Returns a block pointer to an element with a clock 1 less than a current one.
-    pub fn predecessor(&self) -> BlockPtr {
-        let mut ptr = self.clone();
-        ptr.id.clock -= 1;
-        if ptr.pivot > 0 {
-            ptr.pivot -= 1;
-        }
-        ptr
-    }
-
-    /// Returns a block pointer to an element with a clock 1 less than a current one.
-    pub fn successor(&self) -> BlockPtr {
-        let mut ptr = self.clone();
-        ptr.id.clock += 1;
-        ptr
+impl<'a> From<&'a Block> for BlockPtr {
+    fn from(block: &'a Block) -> Self {
+        BlockPtr(unsafe { NonNull::new_unchecked(block as *const Block as *mut Block) })
     }
 }
 
@@ -142,7 +121,7 @@ impl Eq for BlockPtr {}
 impl PartialEq for BlockPtr {
     fn eq(&self, other: &Self) -> bool {
         // BlockPtr.pivot may differ, but logically it doesn't affect block equality
-        self.id == other.id
+        self.id() == other.id()
     }
 }
 
@@ -246,9 +225,9 @@ impl Block {
                     encoder.write_right_id(right_origin_id);
                 }
                 if cant_copy_parent_info {
-                    if let TypePtr::Id(id) = &item.parent {
+                    if let TypePtr::Block(b) = &item.parent {
                         encoder.write_parent_info(false);
-                        encoder.write_left_id(&id.id);
+                        encoder.write_left_id(b.id());
                     } else if let TypePtr::Named(name) = &item.parent {
                         encoder.write_parent_info(true);
                         encoder.write_string(name)
@@ -282,9 +261,9 @@ impl Block {
                     encoder.write_right_id(right_origin_id);
                 }
                 if cant_copy_parent_info {
-                    if let TypePtr::Id(id) = &item.parent {
+                    if let TypePtr::Block(b) = &item.parent {
                         encoder.write_parent_info(false);
-                        encoder.write_left_id(&id.id);
+                        encoder.write_left_id(b.id());
                     } else if let TypePtr::Named(name) = &item.parent {
                         encoder.write_parent_info(true);
                         encoder.write_string(name)
@@ -393,29 +372,27 @@ pub(crate) struct ItemPosition {
 }
 
 impl ItemPosition {
-    pub fn forward(&mut self, txn: &Transaction) -> bool {
-        if let Some(right) = self.right.as_ref() {
-            if let Some(item) = txn.store().blocks.get_item(right) {
-                if !item.is_deleted() {
-                    match &item.content {
-                        ItemContent::String(_) | ItemContent::Embed(_) => {
-                            self.index += item.len();
-                        }
-                        ItemContent::Format(key, value) => {
-                            let attrs = self
-                                .current_attrs
-                                .get_or_insert_with(|| Box::new(Attrs::new()));
-                            Text::update_current_attributes(attrs.as_mut(), key, value.as_ref());
-                        }
-                        _ => {}
+    pub fn forward(&mut self) -> bool {
+        if let Some(Block::Item(right)) = self.right.as_deref() {
+            if !right.is_deleted() {
+                match &right.content {
+                    ItemContent::String(_) | ItemContent::Embed(_) => {
+                        self.index += right.len();
                     }
+                    ItemContent::Format(key, value) => {
+                        let attrs = self
+                            .current_attrs
+                            .get_or_insert_with(|| Box::new(Attrs::new()));
+                        Text::update_current_attributes(attrs.as_mut(), key, value.as_ref());
+                    }
+                    _ => {}
                 }
-
-                self.left = self.right.take();
-                self.right = item.right.clone();
-
-                return true;
             }
+
+            self.left = self.right.take();
+            self.right = right.right.clone();
+
+            return true;
         }
         false
     }
@@ -620,11 +597,9 @@ impl Item {
     /// repair function is called before applying the block rather than on decode.
     pub(crate) fn repair(&mut self, store: &mut Store) {
         if let Some(origin_id) = self.origin {
-            let ptr = BlockPtr::from(origin_id);
-            if let Some(item) = store.blocks.get_item(&ptr) {
-                let len = item.len();
-                if origin_id.clock == item.id.clock + len - 1 {
-                    self.left = Some(BlockPtr::new(item.id, ptr.pivot));
+            if let Some(Block::Item(item)) = store.blocks.get_block(&origin_id) {
+                if origin_id.clock == item.last_id() {
+                    self.left = Some(item.into());
                 } else {
                     store.blocks.split_block(&ptr.successor());
                     self.left = Some(ptr);
@@ -635,7 +610,6 @@ impl Item {
         if let Some(id) = self.right_origin {
             // if we got a split, point to right-side
             // if right side is None, then no split happened and `l` is right neighbor
-            let split_ptr = BlockPtr::from(id);
             self.right = if store.blocks.split_block(&split_ptr) {
                 Some(split_ptr.predecessor())
             } else {
@@ -666,7 +640,7 @@ impl Item {
                     self.parent_sub = item.parent_sub.clone();
                 }
             }
-            TypePtr::Id(parent_ptr) => {
+            TypePtr::Block(parent_ptr) => {
                 if let Some(i) = store.blocks.get_item(parent_ptr) {
                     if let ItemContent::Type(t) = &i.content {
                         self.parent = t.ptr.clone();
@@ -849,7 +823,7 @@ impl Item {
             self.integrate_content(txn, pivot, &mut *parent_ref);
             txn.add_changed_type(&*parent_ref, self.parent_sub.clone());
             store = txn.store_mut();
-            let parent_deleted = if let TypePtr::Id(ptr) = &self.parent {
+            let parent_deleted = if let TypePtr::Block(ptr) = &self.parent {
                 if let Some(item) = store.blocks.get_item(ptr) {
                     item.is_deleted()
                 } else {
@@ -916,14 +890,16 @@ impl Item {
 
     /// Splits current item in two and a given `diff` offset. Returns a new item created as result
     /// of this split.
-    pub fn split(&mut self, offset: u32) -> Item {
+    pub fn split(&mut self, offset: u32) -> Box<Block> {
         let client = self.id.client;
         let clock = self.id.clock;
         let content = self.content.splice(offset as usize).unwrap();
-        let other = Item {
+        self.len = offset;
+
+        let mut new = Box::new(Block::Item(Item {
             id: ID::new(client, clock + offset),
             len: content.len(OffsetKind::Utf16),
-            left: Some(BlockPtr::from(self.id)),
+            left: Some(BlockPtr::from(self)),
             right: self.right.clone(),
             origin: Some(ID::new(client, clock + offset - 1)),
             right_origin: self.right_origin.clone(),
@@ -931,10 +907,14 @@ impl Item {
             parent: self.parent.clone(),
             parent_sub: self.parent_sub.clone(),
             info: self.info.clone(),
-        };
-        self.len = offset;
-        self.right = Some(BlockPtr::from(other.id));
-        other
+        }));
+        let new_ptr = BlockPtr::from(new.as_mut());
+
+        if let Some(Block::Item(right)) = self.right.as_mut() {
+            right.left = Some(new_ptr);
+        }
+        self.right = Some(new_ptr);
+        new
     }
 
     /// Returns an ID of the last element that can be considered a part of this item.
@@ -1379,7 +1359,7 @@ impl ItemContent {
                 } else {
                     None
                 };
-                let inner_ptr = types::TypePtr::Id(ptr);
+                let inner_ptr = types::TypePtr::Block(ptr);
                 let inner = types::Branch::new(inner_ptr, type_ref, name);
                 ItemContent::Type(inner)
             }

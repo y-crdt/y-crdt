@@ -4,11 +4,11 @@ use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::client_hasher::ClientHasher;
 use crate::*;
-use std::cell::UnsafeCell;
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeSet, HashMap};
 use std::hash::BuildHasherDefault;
 use std::ops::Index;
+use std::ptr::{NonNull, Unique};
 use std::rc::Rc;
 use std::vec::Vec;
 
@@ -173,7 +173,7 @@ impl Decode for Snapshot {
 
 /// A resizable list of blocks inserted by a single client.
 pub(crate) struct ClientBlockList {
-    list: Vec<UnsafeCell<block::Block>>,
+    list: Vec<Unique<block::Block>>,
     integrated_len: usize,
 }
 
@@ -220,13 +220,11 @@ impl ClientBlockList {
     }
 
     pub fn get(&self, index: usize) -> &Block {
-        let ptr = self.list[index].get();
-        unsafe { &*ptr }
+        unsafe { self.list[index].as_ref() }
     }
 
     pub fn get_mut(&self, index: usize) -> &mut Block {
-        let ptr = self.list[index].get();
-        unsafe { &mut *ptr }
+        unsafe { self.list[index]() }
     }
 
     pub fn try_get(&self, index: usize) -> Option<&Block> {
@@ -264,18 +262,6 @@ impl ClientBlockList {
     /// stay non-empty.
     pub(crate) fn last(&self) -> &Block {
         self.get(self.integrated_len - 1)
-    }
-
-    /// Returns a mutable block reference, given a pointer identifier of that block.
-    /// Returns `None` if no block with such reference could be found.
-    pub(crate) fn find(&mut self, ptr: &BlockPtr) -> Option<&mut Block> {
-        match self.try_get_mut(ptr.pivot()) {
-            Some(block) if block.contains(&ptr.id) => return Some(block),
-            _ => {
-                let pivot = self.find_pivot(ptr.id.clock)?;
-                self.try_get_mut(pivot)
-            }
-        }
     }
 
     /// Given a block's identifier clock value, return an offset under which this block could be
@@ -322,15 +308,17 @@ impl ClientBlockList {
     }
 
     /// Pushes a new block at the end of this block list.
-    pub(crate) fn push(&mut self, block: block::Block) {
-        self.list.push(UnsafeCell::new(block));
+    pub(crate) fn push(&mut self, block: Box<block::Block>) {
+        let ptr = unsafe { Unique::new_unchecked(Box::into_raw(block)) };
+        self.list.push(ptr);
         self.integrated_len += 1;
     }
 
     /// Inserts a new block at a given `index` position within this block list. This method may
     /// panic if `index` is greater than a length of the list.
-    fn insert(&mut self, index: usize, block: block::Block) {
-        self.list.insert(index, UnsafeCell::new(block));
+    fn insert(&mut self, index: usize, block: Box<block::Block>) {
+        let ptr = unsafe { Unique::new_unchecked(Box::into_raw(block)) };
+        self.list.insert(index, ptr);
         self.integrated_len += 1;
     }
 
@@ -415,7 +403,7 @@ impl Index<usize> for ClientBlockList {
     }
 }
 
-pub(crate) struct ClientBlockListIter<'a>(std::slice::Iter<'a, UnsafeCell<block::Block>>);
+pub(crate) struct ClientBlockListIter<'a>(std::slice::Iter<'a, Unique<block::Block>>);
 
 impl<'a> Iterator for ClientBlockListIter<'a> {
     type Item = &'a Block;
@@ -570,48 +558,35 @@ impl BlockStore {
         StateVector::from(self)
     }
 
-    /// Returns mutable reference to an item, given its pointer. Returns `None` if not such block
-    /// could be found.
-    pub(crate) fn get_item_mut(&self, ptr: &block::BlockPtr) -> Option<&mut block::Item> {
-        let block = self.get_block_mut(ptr)?;
-        block.as_item_mut()
-    }
-
     /// Returns immutable reference to a block, given its pointer. Returns `None` if not such
     /// block could be found.
-    pub(crate) fn get_block(&self, ptr: &block::BlockPtr) -> Option<&block::Block> {
-        let clients = self.clients.get(&ptr.id.client)?;
-        if let Some(block) = clients.try_get(ptr.pivot()) {
-            if block.contains(&ptr.id) {
-                return Some(&*block);
-            }
-        }
-        // ptr.pivot missed - go slow path to find it
-        let pivot = clients.find_pivot(ptr.id.clock)?;
-        ptr.fix_pivot(pivot as u32);
+    pub(crate) fn get_block(&self, id: &ID) -> Option<&Block> {
+        let clients = self.clients.get(&id.client)?;
+        let pivot = clients.find_pivot(id.clock)?;
         clients.try_get(pivot)
     }
 
     /// Returns immutable reference to a block, given its pointer. Returns `None` if not such
     /// block could be found.
-    pub(crate) fn get_block_mut(&self, ptr: &block::BlockPtr) -> Option<&mut block::Block> {
-        let clients = self.clients.get(&ptr.id.client)?;
-        if let Some(block) = clients.try_get_mut(ptr.pivot()) {
-            if block.contains(&ptr.id) {
-                return Some(&mut *block);
-            }
-        }
-        // ptr.pivot missed - go slow path to find it
-        let pivot = clients.find_pivot(ptr.id.clock)?;
-        ptr.fix_pivot(pivot as u32);
+    pub(crate) fn get_block_mut(&self, id: &ID) -> Option<&mut Block> {
+        let clients = self.clients.get(&id.client)?;
+        let pivot = clients.find_pivot(id.clock)?;
         clients.try_get_mut(pivot)
     }
 
-    /// Returns immutable reference to an item, given its pointer. Returns `None` if not such
-    /// block could be found.
-    pub(crate) fn get_item(&self, ptr: &block::BlockPtr) -> Option<&block::Item> {
-        let block = self.get_block(ptr)?;
-        block.as_item()
+    pub(crate) fn get_item_clean_start(&mut self, id: &ID) -> Option<&mut Block> {
+        todo!()
+    }
+
+    pub(crate) fn get_item_clean_end(&mut self, id: &ID) -> Option<&mut Block> {
+        let blocks = self.clients.get_mut(&id.client)?;
+        let index = blocks.find_pivot(id.clock)?;
+        if let Block::Item(item) = &mut blocks[index] {
+            if id.clock != item.id.clock + item.len - 1 {
+                self.split_block(&ID::new(id.client, id.clock - item.id.clock + 1));
+            }
+        }
+        Some(&mut blocks[index])
     }
 
     /// Returns the last observed clock sequence number for a given `client`. This is exclusive
@@ -647,76 +622,35 @@ impl BlockStore {
 
     /// Given block pointer, tries to split it, returning a true, if block was split in result of
     /// calling this action, and false otherwise.
-    ///
-    /// Examples:
-    /// 1. Splitting block `(<1#1>, len: 3)` by ptr: `<1#3>` will result in constructing two
-    /// blocks: `(<1#1>, len: 2)` and `(<1#3>, len: 1)` and return `true`.
-    /// 1. Splitting block `(<1#1>, len: 3)` by ptr: `<1#1>` will result in preserving the block
-    /// structure and return `false`.
-    pub fn split_block(&mut self, ptr: &BlockPtr) -> bool {
-        let mut pivot = ptr.pivot();
-        if let Some(mut blocks) = self.clients.get_mut(&ptr.id.client) {
-            let block: &mut Block = {
-                let found = blocks.try_get_mut(pivot).and_then(|b| {
-                    if ptr.id.clock >= b.id().clock && ptr.id.clock < b.clock_end() {
-                        Some(&mut *b)
-                    } else {
-                        None
-                    }
-                });
-                if let Some(block) = found {
-                    block
+    pub fn split_block(&mut self, id: &ID) -> (Option<BlockPtr>, Option<BlockPtr>) {
+        let index;
+        if let Some(blocks) = self.clients.get_mut(&id.client) {
+            let curr: &mut Block = {
+                // search by pivot missed: perform standard lookup to find correct block
+                if let Some(p) = blocks.find_pivot(id.clock) {
+                    index = p;
+                    blocks.get_mut(index)
                 } else {
-                    // search by pivot missed: perform standard lookup to find correct block
-                    if let Some(p) = blocks.find_pivot(ptr.id.clock) {
-                        pivot = p;
-                        blocks.get_mut(pivot)
-                    } else {
-                        return false;
-                    }
+                    return (None, None);
                 }
             };
+            let curr_ptr = BlockPtr::from(curr);
 
-            match block {
-                Block::Item(item) => {
-                    let len = item.len();
-                    if ptr.id.clock > item.id.clock && ptr.id.clock <= item.id.clock + len {
-                        let index = pivot + 1;
-                        let diff = ptr.id.clock - item.id.clock;
-                        let right_split = item.split(diff);
-                        let right_ptr = right_split.right.clone();
-                        if let Some(right_ptr) = right_ptr {
-                            let right_left =
-                                Some(BlockPtr::new(right_split.last_id(), index as u32));
+            if let Block::Item(curr) = curr {
+                let len = curr.len();
+                if id.clock > curr.id.clock && id.clock <= curr.id.clock + len {
+                    let index = index + 1;
+                    let diff = id.clock - curr.id.clock;
+                    let mut new = curr.split(diff);
+                    let new_ptr = BlockPtr::from(new.as_mut());
+                    blocks.insert(index, new);
 
-                            if right_ptr.id.client == ptr.id.client {
-                                if let Block::Item(item) = blocks.find(&right_ptr).unwrap() {
-                                    item.left = right_left;
-                                }
-                            } else {
-                                if let Block::Item(item) = self
-                                    .clients
-                                    .get_mut(&right_ptr.id.client)
-                                    .unwrap()
-                                    .find(&right_ptr)
-                                    .unwrap()
-                                {
-                                    item.left = right_left;
-                                }
-
-                                blocks = self.clients.get_mut(&ptr.id.client).unwrap();
-                            };
-                        }
-                        blocks.insert(index, Block::Item(right_split));
-                        true
-                    } else {
-                        false
-                    }
+                    return (Some(curr_ptr), Some(new_ptr));
                 }
-                _ => false,
             }
+            (Some(curr_ptr), None)
         } else {
-            false
+            (None, None)
         }
     }
 }
