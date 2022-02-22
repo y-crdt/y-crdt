@@ -12,11 +12,11 @@ use crate::utils::client_hasher::ClientHasher;
 use crate::{StateVector, Transaction, ID};
 use std::cmp::Ordering;
 use std::collections::hash_map::Entry;
-use std::collections::{BTreeSet, HashMap, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::hash::BuildHasherDefault;
 use std::rc::Rc;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq)]
 pub(crate) struct UpdateBlocks {
     clients: HashMap<u64, VecDeque<BlockCarrier>, BuildHasherDefault<ClientHasher>>,
 }
@@ -29,36 +29,6 @@ impl UpdateBlocks {
     pub(crate) fn add_block(&mut self, block: BlockCarrier) {
         let e = self.clients.entry(block.id().client).or_default();
         e.push_back(block);
-    }
-
-    pub fn get(&self, ptr: &BlockPtr) -> Option<&BlockCarrier> {
-        let clients = self.clients.get(&ptr.id.client)?;
-        let mut left = 0;
-        let clock = ptr.id.clock;
-        let mut right = clients.len() - 1;
-        let mut block = &clients[right];
-        let mut current_clock = block.id().clock;
-        if current_clock == clock {
-            Some(block)
-        } else {
-            let div = current_clock + block.len() - 1;
-            let mut mid = ((clock / div) * right as u32) as usize;
-            while left <= right {
-                block = &clients[mid];
-                current_clock = block.id().clock;
-                if current_clock <= clock {
-                    if clock < current_clock + block.len() {
-                        return Some(block);
-                    }
-                    left = mid + 1;
-                } else {
-                    right = mid - 1;
-                }
-                mid = (left + right) / 2;
-            }
-
-            None
-        }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -77,111 +47,15 @@ impl UpdateBlocks {
         IntoBlocks::new(self)
     }
 
-    fn split_item(&mut self, client: u64, mut index: usize, diff: u32) {
-        let mut blocks = self.clients.get_mut(&client).unwrap();
-        if let BlockCarrier::Block(Block::Item(item)) = &mut blocks[index] {
-            index += 1;
-            let right_split = item.split(diff);
-            let right_ptr = right_split.right.clone();
-            if let Some(right_ptr) = right_ptr {
-                blocks = if right_ptr.id.client == client {
-                    blocks
-                } else {
-                    self.clients.get_mut(&right_ptr.id.client).unwrap()
-                };
-                let right = &mut blocks[right_ptr.pivot()];
-                if let BlockCarrier::Block(Block::Item(right_item)) = right {
-                    right_item.left = Some(BlockPtr::new(right_split.id.clone(), index as u32));
-                }
+    fn split_item(&mut self, block: &mut BlockCarrier, diff: u32, index: usize) {
+        if let BlockCarrier::Block(block) = block {
+            let mut block = BlockPtr::from(block);
+            if let Some(new_right) = block.splice(diff) {
+                let id = block.id();
+                let clients = self.clients.get_mut(&id.client).unwrap();
+                clients.insert(index + 1, BlockCarrier::Block(new_right));
             }
-            blocks.insert(index, BlockCarrier::Block(Block::Item(right_split)));
         };
-    }
-}
-
-impl PartialEq for UpdateBlocks {
-    fn eq(&self, other: &Self) -> bool {
-        fn block_ptr_eq(
-            a: Option<&BlockPtr>,
-            this: &UpdateBlocks,
-            b: Option<&BlockPtr>,
-            other: &UpdateBlocks,
-        ) -> bool {
-            match (a, b) {
-                (None, None) => true,
-                (Some(a), Some(b)) => {
-                    if a.id == b.id {
-                        true
-                    } else {
-                        // since BlockPtr may point in the middle of a block,
-                        // we need to retrieve blocks and compare their ids
-                        match (this.get(a), other.get(b)) {
-                            (
-                                Some(BlockCarrier::Block(Block::Item(i1))),
-                                Some(BlockCarrier::Block(Block::Item(i2))),
-                            ) => i1.id == i2.id,
-                            _ => false,
-                        }
-                    }
-                }
-                _ => false,
-            }
-        }
-
-        if self.clients.len() != other.clients.len() {
-            return false;
-        }
-
-        let mut client_ids: BTreeSet<u64> = self.clients.keys().cloned().collect();
-        for &client in other.clients.keys() {
-            client_ids.insert(client);
-        }
-        for id in client_ids {
-            match (self.clients.get(&id), other.clients.get(&id)) {
-                (Some(a), Some(b)) => {
-                    if a.len() != b.len() {
-                        return false;
-                    }
-
-                    for i in 0..a.len() {
-                        match (&a[i], &b[i]) {
-                            (BlockCarrier::Skip(a), BlockCarrier::Skip(b))
-                            | (
-                                BlockCarrier::Block(Block::GC(a)),
-                                BlockCarrier::Block(Block::GC(b)),
-                            ) => {
-                                if a != b {
-                                    return false;
-                                }
-                            }
-                            (
-                                BlockCarrier::Block(Block::Item(a)),
-                                BlockCarrier::Block(Block::Item(b)),
-                            ) => match a.try_eq(b) {
-                                None => {
-                                    if !block_ptr_eq(a.left.as_ref(), self, b.left.as_ref(), other)
-                                    {
-                                        return false;
-                                    } else if !block_ptr_eq(
-                                        a.right.as_ref(),
-                                        self,
-                                        b.right.as_ref(),
-                                        other,
-                                    ) {
-                                        return false;
-                                    }
-                                }
-                                Some(false) => return false,
-                                Some(true) => {}
-                            },
-                            _ => return false,
-                        }
-                    }
-                }
-                _ => return false,
-            }
-        }
-        true
     }
 }
 
@@ -257,13 +131,16 @@ impl Update {
                             if a.try_squash(b) {
                                 n2 = i2.next();
                                 continue;
-                            } else if let BlockCarrier::Block(Block::Item(a)) = a {
-                                // we only can split Block::Item
-                                let diff = (a.id.clock + a.len()) as isize - b.id().clock as isize;
-                                if diff > 0 {
-                                    // `b`'s clock position is inside of `a` -> we need to split `a`
-                                    self.blocks.split_item(client, i1, diff as u32);
-                                    blocks = self.blocks.clients.get_mut(&client).unwrap();
+                            } else if let BlockCarrier::Block(block) = a {
+                                if block.is_item() {
+                                    // we only can split Block::Item
+                                    let diff = (block.id().clock + block.len()) as isize
+                                        - b.id().clock as isize;
+                                    if diff > 0 {
+                                        // `b`'s clock position is inside of `a` -> we need to split `a`
+                                        self.blocks.split_item(a, diff as u32, i1);
+                                        blocks = self.blocks.clients.get_mut(&client).unwrap();
+                                    }
                                 }
                             }
                             i1 += 1;
@@ -331,12 +208,14 @@ impl Update {
                         let offset = offset as u32;
                         let client = id.client;
                         local_sv.set_max(client, id.clock + block.len());
-                        if let BlockCarrier::Block(Block::Item(item)) = &mut block {
-                            item.repair(store);
+                        if let BlockCarrier::Block(block) = &mut block {
+                            if let Block::Item(item) = block.as_mut() {
+                                item.repair(store);
+                            }
                         }
-                        let should_delete = block.integrate(txn, offset, offset);
+                        let should_delete = block.integrate(txn, offset);
                         let delete_ptr = if should_delete {
-                            Some(BlockPtr::new(block.id().clone(), offset))
+                            block.as_block_ptr()
                         } else {
                             None
                         };
@@ -348,7 +227,7 @@ impl Update {
                         }
 
                         if let Some(ptr) = delete_ptr {
-                            txn.delete(&ptr);
+                            txn.delete(ptr);
                         }
                         store = txn.store_mut();
                     }
@@ -417,18 +296,21 @@ impl Update {
     }
 
     fn missing(block: &BlockCarrier, local_sv: &StateVector) -> Option<u64> {
-        if let BlockCarrier::Block(Block::Item(item)) = block {
-            if let Some(origin) = item.origin {
-                if origin.client != item.id.client && !local_sv.contains(&item.id) {
-                    return Some(origin.client);
-                }
-            } else if let Some(right_origin) = item.right_origin {
-                if right_origin.client != item.id.client && !local_sv.contains(&item.id) {
-                    return Some(right_origin.client);
-                }
-            } else if let TypePtr::Block(parent) = item.parent {
-                if parent.id.client != item.id.client && !local_sv.contains(&item.id) {
-                    return Some(parent.id.client);
+        if let BlockCarrier::Block(block) = block {
+            if let Block::Item(item) = block.as_ref() {
+                if let Some(origin) = item.origin {
+                    if origin.client != item.id.client && !local_sv.contains(&item.id) {
+                        return Some(origin.client);
+                    }
+                } else if let Some(right_origin) = item.right_origin {
+                    if right_origin.client != item.id.client && !local_sv.contains(&item.id) {
+                        return Some(right_origin.client);
+                    }
+                } else if let TypePtr::Block(parent) = item.parent {
+                    let parent_client = parent.id().client;
+                    if parent_client != item.id.client && !local_sv.contains(&item.id) {
+                        return Some(parent_client);
+                    }
                 }
             }
         }
@@ -485,7 +367,7 @@ impl Update {
             }
             BLOCK_GC_REF_NUMBER => {
                 let len: u32 = decoder.read_uvar();
-                Block::GC(BlockRange { id, len }).into()
+                Box::new(Block::GC(BlockRange { id, len })).into()
             }
             info => {
                 let cant_copy_parent_info = info & (HAS_ORIGIN | HAS_RIGHT_ORIGIN) == 0;
@@ -503,7 +385,7 @@ impl Update {
                     if decoder.read_parent_info() {
                         TypePtr::Named(decoder.read_string().into())
                     } else {
-                        TypePtr::Block(BlockPtr::from(decoder.read_left_id()))
+                        TypePtr::ID(decoder.read_left_id())
                     }
                 } else {
                     TypePtr::Unknown
@@ -514,7 +396,7 @@ impl Update {
                     } else {
                         None
                     };
-                let content = ItemContent::decode(decoder, info, BlockPtr::from(id.clone()));
+                let content = ItemContent::decode(decoder, info);
                 let item = Item::new(
                     id,
                     None,
@@ -525,7 +407,7 @@ impl Update {
                     parent_sub,
                     content,
                 );
-                Block::Item(item).into()
+                item.into()
             }
         }
     }
@@ -699,7 +581,7 @@ impl Update {
                                             // prefer to slice Skip because the other struct might contain more information
                                             skip.len -= diff as u32;
                                         } else {
-                                            curr_block = curr_block.slice(diff as u32).unwrap();
+                                            curr_block = curr_block.splice(diff as u32).unwrap();
                                         }
                                     }
 
@@ -836,15 +718,15 @@ impl<T: Iterator> Memoizable for T {
 
 #[derive(Debug, PartialEq)]
 pub(crate) enum BlockCarrier {
-    Block(Block),
+    Block(Box<Block>),
     Skip(BlockRange),
 }
 
 impl BlockCarrier {
-    pub(crate) fn slice(&mut self, offset: u32) -> Option<Self> {
+    pub(crate) fn splice(&mut self, offset: u32) -> Option<Self> {
         match self {
             BlockCarrier::Block(x) => {
-                let next = x.slice(offset)?;
+                let next = BlockPtr::from(x).splice(offset)?;
                 Some(BlockCarrier::Block(next))
             }
             BlockCarrier::Skip(x) => {
@@ -885,7 +767,9 @@ impl BlockCarrier {
 
     pub(crate) fn try_squash(&mut self, other: &BlockCarrier) -> bool {
         match (self, other) {
-            (BlockCarrier::Block(a), BlockCarrier::Block(b)) => a.try_squash(b),
+            (BlockCarrier::Block(a), BlockCarrier::Block(b)) => {
+                BlockPtr::from(a).try_squash(BlockPtr::from(b))
+            }
             (BlockCarrier::Skip(a), BlockCarrier::Skip(b)) => {
                 a.merge(b);
                 true
@@ -894,7 +778,15 @@ impl BlockCarrier {
         }
     }
 
-    pub fn into_block(self) -> Option<Block> {
+    pub fn as_block_ptr(&mut self) -> Option<BlockPtr> {
+        if let BlockCarrier::Block(block) = self {
+            Some(BlockPtr::from(block))
+        } else {
+            None
+        }
+    }
+
+    pub fn into_block(self) -> Option<Box<Block>> {
         if let BlockCarrier::Block(block) = self {
             Some(block)
         } else {
@@ -919,16 +811,16 @@ impl BlockCarrier {
         }
     }
 
-    pub fn integrate(&mut self, txn: &mut Transaction, pivot: u32, offset: u32) -> bool {
+    pub fn integrate(&mut self, txn: &mut Transaction, offset: u32) -> bool {
         match self {
-            BlockCarrier::Block(x) => x.integrate(txn, pivot, offset),
+            BlockCarrier::Block(x) => BlockPtr::from(x).integrate(txn, offset),
             BlockCarrier::Skip(x) => x.integrate(offset),
         }
     }
 }
 
-impl From<Block> for BlockCarrier {
-    fn from(block: Block) -> Self {
+impl From<Box<Block>> for BlockCarrier {
+    fn from(block: Box<Block>) -> Self {
         BlockCarrier::Block(block)
     }
 }
@@ -1077,9 +969,9 @@ impl Iterator for IntoBlocks {
 
 #[cfg(test)]
 mod test {
-    use crate::block::{Block, Item, ItemContent};
+    use crate::block::{Item, ItemContent};
     use crate::types::TypePtr;
-    use crate::update::Update;
+    use crate::update::{BlockCarrier, Update};
     use crate::updates::decoder::{Decode, DecoderV1};
     use crate::{Doc, ID};
     use lib0::decoding::Cursor;
@@ -1108,9 +1000,9 @@ mod test {
 
         let id = ID::new(2026372272, 0);
         let block = u.blocks.clients.get(&id.client).unwrap();
-        let mut expected = Vec::new();
+        let mut expected: Vec<BlockCarrier> = Vec::new();
         expected.push(
-            Block::Item(Item::new(
+            Item::new(
                 id,
                 None,
                 None,
@@ -1119,7 +1011,7 @@ mod test {
                 TypePtr::Named("".into()),
                 Some("keyB".into()),
                 ItemContent::Any(vec!["valueB".into()]),
-            ))
+            )
             .into(),
         );
         assert_eq!(block, &expected);
@@ -1159,9 +1051,9 @@ mod test {
         let txt3 = t3.get_text("test");
         t3.apply_update(u12);
 
-        let str1 = txt1.to_string(&t1);
-        let str2 = txt2.to_string(&t2);
-        let str3 = txt3.to_string(&t3);
+        let str1 = txt1.to_string();
+        let str2 = txt2.to_string();
+        let str3 = txt3.to_string();
 
         assert_eq!(str1, str2);
         assert_eq!(str2, str3);

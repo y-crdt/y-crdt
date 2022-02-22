@@ -1,6 +1,6 @@
 use crate::*;
 
-use crate::block::{BlockPtr, Item, ItemContent, Prelim, ID};
+use crate::block::{Block, BlockPtr, Item, ItemContent, Prelim, ID};
 use crate::block_store::{Snapshot, StateVector};
 use crate::event::UpdateEvent;
 use crate::id_set::DeleteSet;
@@ -14,6 +14,7 @@ use crate::types::{
 use crate::update::Update;
 use std::cell::UnsafeCell;
 use std::collections::{HashMap, HashSet};
+use std::ops::DerefMut;
 use std::rc::Rc;
 use updates::encoder::*;
 
@@ -27,7 +28,7 @@ pub struct Transaction {
     /// Current state vector of a transaction, which includes all performed updates.
     pub after_state: StateVector,
     /// ID's of the blocks to be merged.
-    pub merge_blocks: Vec<ID>,
+    pub merge_blocks: Vec<BlockPtr>,
     /// Describes the set of deleted items by ids.
     pub delete_set: DeleteSet,
     /// All types that were directly modified (property added or child inserted/deleted).
@@ -192,37 +193,36 @@ impl Transaction {
                     // We can ignore the case of GC and Delete structs, because we are going to skip them
                     if let Some(mut index) = blocks.find_pivot(clock) {
                         // We can ignore the case of GC and Delete structs, because we are going to skip them
-                        if let Some(item) = blocks.get_mut(index).as_item_mut() {
+                        let mut ptr = blocks.get(index);
+                        if let Block::Item(item) = ptr.deref_mut() {
                             // split the first item if necessary
                             if !item.is_deleted() && item.id.clock < clock {
-                                let split_ptr =
-                                    BlockPtr::new(ID::new(*client, clock), index as u32);
-                                if self.store_mut().blocks.split_block(&split_ptr) {
+                                let store = self.store_mut();
+                                if let Some(split) =
+                                    store.blocks.split_block(ptr, clock - item.id.clock)
+                                {
                                     index += 1;
-                                    self.merge_blocks.push(split_ptr.id);
+                                    self.merge_blocks.push(split);
                                 }
                                 blocks = self.store_mut().blocks.get_mut(client).unwrap();
                             }
 
                             while index < blocks.len() {
-                                let block = blocks.get_mut(index);
-                                if let Some(item) = block.as_item_mut() {
+                                let mut block = blocks.get(index);
+                                if let Block::Item(item) = block.deref_mut() {
                                     if item.id.clock < clock_end {
                                         if !item.is_deleted() {
-                                            let delete_ptr = BlockPtr::new(
-                                                ID::new(*client, item.id.clock),
-                                                index as u32,
-                                            );
                                             if item.id.clock + item.len() > clock_end {
-                                                let diff = clock_end - item.id.clock;
-                                                let mut split_ptr = delete_ptr.clone();
-                                                split_ptr.id.clock += diff;
-                                                if self.store_mut().blocks.split_block(&split_ptr) {
-                                                    self.merge_blocks.push(split_ptr.id);
+                                                if let Some(split) = self
+                                                    .store_mut()
+                                                    .blocks
+                                                    .split_block(block, clock_end - item.id.clock)
+                                                {
+                                                    self.merge_blocks.push(split);
                                                     index += 1;
                                                 }
                                             }
-                                            self.delete(&delete_ptr);
+                                            self.delete(block);
                                             blocks =
                                                 self.store_mut().blocks.get_mut(client).unwrap();
                                             // just to make the borrow checker happy
@@ -250,12 +250,12 @@ impl Transaction {
 
     /// Delete item under given pointer.
     /// Returns true if block was successfully deleted, false if it was already deleted in the past.
-    pub(crate) fn delete(&mut self, ptr: &BlockPtr) -> bool {
+    pub(crate) fn delete(&mut self, mut ptr: BlockPtr) -> bool {
         let mut recurse = Vec::new();
         let mut result = false;
 
         let store = unsafe { &mut *self.store.get() };
-        if let Some(item) = store.blocks.get_item_mut(&ptr) {
+        if let Block::Item(item) = ptr.deref_mut() {
             if !item.is_deleted() {
                 if item.parent_sub.is_none() && item.is_countable() {
                     if let Some(mut parent) = self.store().get_type(&item.parent) {
@@ -275,8 +275,8 @@ impl Transaction {
                             .insert(item.parent_sub.clone());
                     }
                     TypePtr::Block(ptr)
-                        if ptr.id.clock < self.before_state.get(&ptr.id.client)
-                            && self.store().blocks.get_item(ptr).unwrap().is_deleted() =>
+                        if ptr.id().clock < self.before_state.get(&ptr.id().client)
+                            && ptr.is_deleted() =>
                     {
                         self.changed
                             .entry(item.parent.clone())
@@ -303,9 +303,7 @@ impl Transaction {
                         let mut ptr = inner.start;
                         //TODO: self.changed.remove(&item.parent); // uncomment when deep observe is complete
 
-                        while let Some(item) =
-                            ptr.and_then(|ptr| self.store().blocks.get_item(&ptr))
-                        {
+                        while let Some(Block::Item(item)) = ptr.as_deref() {
                             if !item.is_deleted() {
                                 recurse.push(ptr.unwrap());
                             }
@@ -324,12 +322,12 @@ impl Transaction {
         }
 
         for ptr in recurse.iter() {
-            if !self.delete(ptr) {
+            if !self.delete(*ptr) {
                 // Whis will be gc'd later and we want to merge it if possible
                 // We try to merge all deleted items after each transaction,
                 // but we have no knowledge about that this needs to be merged
                 // since it is not in transaction.ds. Hence we add it to transaction._mergeStructs
-                self.merge_blocks.push(ptr.id);
+                self.merge_blocks.push(*ptr);
             }
         }
 
@@ -400,64 +398,49 @@ impl Transaction {
         pos: &block::ItemPosition,
         value: T,
         parent_sub: Option<Rc<str>>,
-    ) -> &Item {
-        let (left, right, origin, ptr) = {
+    ) -> BlockPtr {
+        let (left, right, origin, id) = {
             let store = self.store_mut();
             let left = pos.left;
             let right = pos.right;
-            let origin = if let Some(ptr) = pos.left.as_ref() {
-                if let Some(item) = store.blocks.get_item(ptr) {
-                    Some(item.last_id())
-                } else {
-                    None
-                }
+            let origin = if let Some(Block::Item(item)) = pos.left.as_deref() {
+                Some(item.last_id())
             } else {
                 None
             };
             let client_id = store.options.client_id;
-            let id = block::ID {
-                client: client_id,
-                clock: store.get_local_state(),
-            };
-            let pivot = store
-                .blocks
-                .get_client_blocks_mut(client_id)
-                .integrated_len() as u32;
+            let id = ID::new(client_id, store.get_local_state());
 
-            let ptr = BlockPtr::new(id, pivot);
-            (left, right, origin, ptr)
+            (left, right, origin, id)
         };
-        let (content, remainder) = value.into_content(self, TypePtr::Block(ptr.clone()));
+        let (content, remainder) = value.into_content(self);
         let inner_ref = if let ItemContent::Type(inner_ref) = &content {
             Some(BranchRef::from(inner_ref))
         } else {
             None
         };
-        let mut item = Item::new(
-            ptr.id,
+        let mut block = Item::new(
+            id,
             left,
             origin,
             right,
-            right.map(|r| r.id),
+            right.map(|r| r.id().clone()),
             pos.parent.clone(),
             parent_sub,
             content,
         );
+        let mut block_ptr = BlockPtr::from(&mut block);
 
-        item.integrate(self, ptr.pivot() as u32, 0);
+        block_ptr.integrate(self, 0);
 
-        let local_block_list = self.store_mut().blocks.get_client_blocks_mut(ptr.id.client);
-        local_block_list.push(block::Block::Item(item));
-
-        let idx = local_block_list.len() - 1;
+        let local_block_list = self.store_mut().blocks.get_client_blocks_mut(id.client);
+        local_block_list.push(block);
 
         if let Some(remainder) = remainder {
             remainder.integrate(self, inner_ref.unwrap().into())
         }
 
-        self.store_mut().blocks.get_client_blocks_mut(ptr.id.client)[idx]
-            .as_item()
-            .unwrap()
+        block_ptr
     }
 
     /// Commits current transaction. This step involves cleaning up and optimizing changes performed
@@ -513,11 +496,10 @@ impl Transaction {
             }
         }
         // 7. get merge_structs and try to merge to left
-        for id in self.merge_blocks.iter() {
-            let client = id.client;
-            let clock = id.clock;
-            let blocks = store.blocks.get_mut(&client).unwrap();
-            let replaced_pos = blocks.find_pivot(clock).unwrap();
+        for ptr in self.merge_blocks.iter() {
+            let id = ptr.id();
+            let blocks = store.blocks.get_mut(&id.client).unwrap();
+            let replaced_pos = blocks.find_pivot(id.clock).unwrap();
             if replaced_pos + 1 < blocks.len() {
                 if let Some(compaction) = blocks.squash_left(replaced_pos + 1) {
                     store.gc_cleanup(compaction);
@@ -543,7 +525,7 @@ impl Transaction {
                     let mut start = delete_item.start;
                     if let Some(mut i) = blocks.find_pivot(start) {
                         while i < blocks.len() {
-                            let block = blocks.get_mut(i);
+                            let mut block = blocks.get(i);
                             let len = block.len();
                             start += len;
                             if start > delete_item.end {
@@ -562,12 +544,8 @@ impl Transaction {
     pub(crate) fn add_changed_type(&mut self, parent: &Branch, parent_sub: Option<Rc<str>>) {
         let trigger = match &parent.ptr {
             TypePtr::Named(_) => true,
-            TypePtr::Block(ptr) if ptr.id.clock < (self.before_state.get(&ptr.id.client)) => {
-                if let Some(item) = self.store().blocks.get_item(ptr) {
-                    !item.is_deleted()
-                } else {
-                    false
-                }
+            TypePtr::Block(ptr) if ptr.id().clock < (self.before_state.get(&ptr.id().client)) => {
+                ptr.is_deleted()
             }
             _ => false,
         };
@@ -591,9 +569,11 @@ impl Transaction {
         let blocks = &mut self.store_mut().blocks;
         for (client, &clock) in snapshot.state_map.iter() {
             if let Some(list) = blocks.get(client) {
-                if clock < list.get_state() {
-                    let ptr = BlockPtr::new(ID::new(*client, clock), (list.len() - 1) as u32);
-                    blocks.split_block(&ptr);
+                if let Some(ptr) = list.get_block(clock) {
+                    let ptr_clock = ptr.id().clock;
+                    if ptr_clock < clock {
+                        blocks.split_block(ptr, clock - ptr_clock);
+                    }
                 }
             }
         }
@@ -602,21 +582,20 @@ impl Transaction {
             if let Some(mut list) = blocks.get(client) {
                 for r in range.iter() {
                     if let Some(pivot) = list.find_pivot(r.start) {
-                        let block = &list[pivot];
-                        if block.id().clock < r.start {
-                            blocks.split_block(&BlockPtr::new(
-                                ID::new(*client, r.start),
-                                pivot as u32,
-                            ));
+                        let block = list.get(pivot);
+                        let clock = block.id().clock;
+                        if clock < r.start {
+                            blocks.split_block(block, r.start - clock);
                             list = blocks.get(client).unwrap();
                         }
                     }
 
                     if let Some(pivot) = list.find_pivot(r.end) {
-                        let block = &list[pivot];
-                        if block.id().clock + block.len() > r.end {
-                            blocks
-                                .split_block(&BlockPtr::new(ID::new(*client, r.end), pivot as u32));
+                        let mut block = list.get(pivot);
+                        let block_id = block.id();
+                        let block_len = block.len();
+                        if block_id.clock + block_len > r.end {
+                            blocks.split_block(block, block_id.clock + block_len - r.end);
                             list = blocks.get(client).unwrap();
                         }
                     }

@@ -45,7 +45,7 @@ pub struct Doc {
     store: Rc<UnsafeCell<Store>>,
 }
 
-unsafe impl Send for Doc { }
+unsafe impl Send for Doc {}
 
 impl Doc {
     /// Creates a new document with a randomized client identifier.
@@ -193,7 +193,7 @@ mod test {
         let mut tr = doc.transact();
         doc.apply_update_v1(&mut tr, update);
 
-        let actual = tr.get_text("type").to_string(&tr);
+        let actual = tr.get_text("type").to_string();
         assert_eq!(actual, "210".to_owned());
     }
 
@@ -226,7 +226,7 @@ mod test {
         txt.insert(&mut t1, 5, " ");
         txt.insert(&mut t1, 6, "world");
 
-        assert_eq!(txt.to_string(&t1), "hello world".to_string());
+        assert_eq!(txt.to_string(), "hello world".to_string());
 
         // create document at B
         let d2 = Doc::new();
@@ -248,7 +248,7 @@ mod test {
 
         // check if B sees the same thing that A does
         let txt = t2.get_text("test");
-        assert_eq!(txt.to_string(&t2), "hello world".to_string());
+        assert_eq!(txt.to_string(), "hello world".to_string());
     }
 
     #[test]

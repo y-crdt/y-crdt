@@ -1,8 +1,7 @@
 use crate::block::{BlockPtr, ItemContent, ItemPosition, Prelim};
 use crate::event::Subscription;
 use crate::types::{
-    event_change_set, Branch, BranchRef, Change, ChangeSet, Observers, Path, TypePtr, Value,
-    TYPE_REFS_ARRAY,
+    event_change_set, Branch, BranchRef, Change, ChangeSet, Observers, Path, Value, TYPE_REFS_ARRAY,
 };
 use crate::{SubscriptionId, Transaction, ID};
 use lib0::any::Any;
@@ -109,9 +108,9 @@ impl Array {
 
     /// Retrieves a value stored at a given `index`. Returns `None` when provided index was out
     /// of the range of a current array.
-    pub fn get(&self, txn: &Transaction, index: u32) -> Option<Value> {
-        let (content, idx) = self.0.get_at(&txn.store().blocks, index)?;
-        Some(content.get_content(txn).remove(idx))
+    pub fn get(&self, index: u32) -> Option<Value> {
+        let (content, idx) = self.0.get_at(index)?;
+        Some(content.get_content().remove(idx))
     }
 
     /// Returns an iterator, that can be used to lazely traverse over all values stored in a current
@@ -181,10 +180,10 @@ impl<'b> Iterator for ArrayIter<'b> {
         match self.content.pop_front() {
             None => {
                 if let Some(ptr) = self.ptr.take() {
-                    let item = self.txn.store().blocks.get_item(&ptr)?;
+                    let item = ptr.as_item()?;
                     self.ptr = item.right.clone();
                     if !item.is_deleted() && item.is_countable() {
-                        self.content = item.content.get_content(self.txn).into();
+                        self.content = item.content.get_content().into();
                     }
                     self.next()
                 } else {
@@ -229,7 +228,7 @@ where
     T: IntoIterator<Item = V>,
     V: Into<Any>,
 {
-    fn into_content(self, _txn: &mut Transaction, _ptr: TypePtr) -> (ItemContent, Option<Self>) {
+    fn into_content(self, _txn: &mut Transaction) -> (ItemContent, Option<Self>) {
         let vec: Vec<Any> = self.0.into_iter().map(|v| v.into()).collect();
         (ItemContent::Any(vec), None)
     }
@@ -242,8 +241,8 @@ where
     V: Prelim,
     T: IntoIterator<Item = V>,
 {
-    fn into_content(self, _txn: &mut Transaction, ptr: TypePtr) -> (ItemContent, Option<Self>) {
-        let inner = Branch::new(ptr, TYPE_REFS_ARRAY, None);
+    fn into_content(self, _txn: &mut Transaction) -> (ItemContent, Option<Self>) {
+        let inner = Branch::block(TYPE_REFS_ARRAY, None);
         (ItemContent::Type(inner), Some(self))
     }
 
@@ -302,8 +301,7 @@ impl ArrayEvent {
 
     fn changes(&self, txn: &Transaction) -> &ChangeSet<Change> {
         let change_set = unsafe { self.change_set.get().as_mut().unwrap() };
-        change_set
-            .get_or_insert_with(|| Box::new(event_change_set(txn, self.target.0.start.as_ref())))
+        change_set.get_or_insert_with(|| Box::new(event_change_set(txn, self.target.0.start)))
     }
 }
 
@@ -883,7 +881,7 @@ mod test {
             let yarray = txn.get_array("array");
             let pos = rng.between(0, yarray.len());
             yarray.insert(&mut txn, pos, PrelimArray::from([1, 2, 3, 4]));
-            if let Value::YArray(array2) = yarray.get(&txn, pos).unwrap() {
+            if let Value::YArray(array2) = yarray.get(pos).unwrap() {
                 let expected: Box<[Any]> = (1..=4).map(|i| Any::Number(i as f64)).collect();
                 assert_eq!(array2.to_json(&txn), Any::Array(expected));
             } else {
@@ -896,7 +894,7 @@ mod test {
             let yarray = txn.get_array("array");
             let pos = rng.between(0, yarray.len());
             yarray.insert(&mut txn, pos, PrelimMap::<i32>::from(HashMap::default()));
-            if let Value::YMap(map) = yarray.get(&txn, pos).unwrap() {
+            if let Value::YMap(map) = yarray.get(pos).unwrap() {
                 map.insert(&mut txn, "someprop".to_string(), 42);
                 map.insert(&mut txn, "someprop".to_string(), 43);
                 map.insert(&mut txn, "someprop".to_string(), 44);
@@ -913,7 +911,7 @@ mod test {
                 let pos = rng.between(0, len - 1);
                 let del_len = rng.between(1, 2.min(len - pos));
                 if rng.gen_bool(0.5) {
-                    if let Value::YArray(array2) = yarray.get(&txn, pos).unwrap() {
+                    if let Value::YArray(array2) = yarray.get(pos).unwrap() {
                         let pos = rng.between(0, array2.len() - 1);
                         let del_len = rng.between(0, 2.min(array2.len() - pos));
                         array2.remove_range(&mut txn, pos, del_len);
@@ -960,7 +958,7 @@ mod test {
         a1.insert_range(&mut t1, 0, ["A"]);
         a1.remove(&mut t1, 0);
 
-        let actual = t1.get_array("array").get(&mut t1, 0);
+        let actual = t1.get_array("array").get(0);
         assert_eq!(actual, None);
     }
 }

@@ -1,8 +1,7 @@
-use crate::block::{ItemContent, ItemPosition, Prelim};
+use crate::block::{Block, ItemContent, ItemPosition, Prelim};
 use crate::event::Subscription;
 use crate::types::{
-    event_keys, Branch, BranchRef, Entries, EntryChange, Observers, Path, TypePtr, Value,
-    TYPE_REFS_MAP,
+    event_keys, Branch, BranchRef, Entries, EntryChange, Observers, Path, Value, TYPE_REFS_MAP,
 };
 use crate::*;
 use lib0::any::Any;
@@ -29,9 +28,9 @@ impl Map {
         let inner = self.0;
         let mut res = HashMap::new();
         for (key, ptr) in inner.map.iter() {
-            if let Some(item) = txn.store().blocks.get_item(ptr) {
+            if let Block::Item(item) = ptr.deref() {
                 if !item.is_deleted() {
-                    let any = if let Some(value) = item.content.get_content_last(txn) {
+                    let any = if let Some(value) = item.content.get_content_last() {
                         value.to_json(txn)
                     } else {
                         Any::Null
@@ -49,7 +48,7 @@ impl Map {
         let inner = self.0;
         for ptr in inner.map.values() {
             //TODO: maybe it would be better to just cache len in the map itself?
-            if let Some(item) = txn.store().blocks.get_item(ptr) {
+            if let Block::Item(item) = ptr.deref() {
                 if !item.is_deleted() {
                     len += 1;
                 }
@@ -89,7 +88,7 @@ impl Map {
         value: V,
     ) -> Option<Value> {
         let key = key.into();
-        let previous = self.get(txn, &key);
+        let previous = self.get(&key);
         let pos = {
             let inner = self.0;
             let left = inner.map.get(&key);
@@ -114,14 +113,14 @@ impl Map {
 
     /// Returns a value stored under a given `key` within current map, or `None` if no entry
     /// with such `key` existed.
-    pub fn get(&self, txn: &Transaction, key: &str) -> Option<Value> {
-        self.0.get(txn, key)
+    pub fn get(&self, key: &str) -> Option<Value> {
+        self.0.get(key)
     }
 
     /// Checks if an entry with given `key` can be found within current map.
-    pub fn contains(&self, txn: &Transaction, key: &str) -> bool {
+    pub fn contains(&self, key: &str) -> bool {
         if let Some(ptr) = self.0.map.get(key) {
-            if let Some(item) = txn.store().blocks.get_item(ptr) {
+            if let Block::Item(item) = ptr.deref() {
                 return !item.is_deleted();
             }
         }
@@ -131,7 +130,7 @@ impl Map {
     /// Clears the contents of current map, effectively removing all of its entries.
     pub fn clear(&self, txn: &mut Transaction) {
         for (_, ptr) in self.0.map.iter() {
-            txn.delete(ptr);
+            txn.delete(ptr.clone());
         }
     }
 
@@ -174,7 +173,7 @@ impl<'a> Iterator for MapIter<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         let (key, item) = self.0.next()?;
-        if let Some(content) = item.content.get_content_last(self.0.txn) {
+        if let Some(content) = item.content.get_content_last() {
             Some((key, content))
         } else {
             self.next()
@@ -202,7 +201,7 @@ impl<'a> Iterator for Values<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         let (_, item) = self.0.next()?;
-        Some(item.content.get_content(self.0.txn))
+        Some(item.content.get_content())
     }
 }
 
@@ -223,8 +222,8 @@ impl<T> From<HashMap<String, T>> for PrelimMap<T> {
 }
 
 impl<T: Prelim> Prelim for PrelimMap<T> {
-    fn into_content(self, _txn: &mut Transaction, ptr: TypePtr) -> (ItemContent, Option<Self>) {
-        let inner = Branch::new(ptr, TYPE_REFS_MAP, None);
+    fn into_content(self, _txn: &mut Transaction) -> (ItemContent, Option<Self>) {
+        let inner = Branch::block(TYPE_REFS_MAP, None);
         (ItemContent::Type(inner), Some(self))
     }
 
@@ -332,15 +331,12 @@ mod test {
         //TODO: YArray within YMap
         fn compare_all(t: &Transaction, m: &Map) {
             assert_eq!(m.len(&t), 5);
-            assert_eq!(m.get(&t, &"number".to_owned()), Some(Value::from(1f64)));
-            assert_eq!(m.get(&t, &"boolean0".to_owned()), Some(Value::from(false)));
-            assert_eq!(m.get(&t, &"boolean1".to_owned()), Some(Value::from(true)));
+            assert_eq!(m.get(&"number".to_owned()), Some(Value::from(1f64)));
+            assert_eq!(m.get(&"boolean0".to_owned()), Some(Value::from(false)));
+            assert_eq!(m.get(&"boolean1".to_owned()), Some(Value::from(true)));
+            assert_eq!(m.get(&"string".to_owned()), Some(Value::from("hello Y")));
             assert_eq!(
-                m.get(&t, &"string".to_owned()),
-                Some(Value::from("hello Y"))
-            );
-            assert_eq!(
-                m.get(&t, &"object".to_owned()),
+                m.get(&"object".to_owned()),
                 Some(Value::from({
                     let mut m = HashMap::new();
                     let mut n = HashMap::new();
@@ -376,11 +372,8 @@ mod test {
         d2.apply_update_v1(&mut t2, update.as_slice());
 
         let m2 = t2.get_map("map");
-        assert_eq!(
-            m2.get(&t2, &"stuff".to_owned()),
-            Some(Value::from("stuffy"))
-        );
-        assert_eq!(m2.get(&t2, &"null".to_owned()), Some(Value::Any(Any::Null)));
+        assert_eq!(m2.get(&"stuff".to_owned()), Some(Value::from("stuffy")));
+        assert_eq!(m2.get(&"null".to_owned()), Some(Value::Any(Any::Null)));
     }
 
     #[test]
@@ -402,8 +395,8 @@ mod test {
         d1.apply_update_v1(&mut t1, u2.as_slice());
         d2.apply_update_v1(&mut t2, u1.as_slice());
 
-        assert_eq!(m1.get(&t1, &"stuff".to_owned()), Some(Value::from("c1")));
-        assert_eq!(m2.get(&t2, &"stuff".to_owned()), Some(Value::from("c1")));
+        assert_eq!(m1.get(&"stuff".to_owned()), Some(Value::from("c1")));
+        assert_eq!(m2.get(&"stuff".to_owned()), Some(Value::from("c1")));
     }
 
     #[test]
@@ -443,8 +436,8 @@ mod test {
         m1.clear(&mut t1);
 
         assert_eq!(m1.len(&t1), 0);
-        assert_eq!(m1.get(&t1, &"key1".to_owned()), None);
-        assert_eq!(m1.get(&t1, &"key2".to_owned()), None);
+        assert_eq!(m1.get(&"key1".to_owned()), None);
+        assert_eq!(m1.get(&"key2".to_owned()), None);
 
         let d2 = Doc::with_client_id(2);
         let mut t2 = d2.transact();
@@ -454,8 +447,8 @@ mod test {
 
         let m2 = t2.get_map("map");
         assert_eq!(m2.len(&t2), 0);
-        assert_eq!(m2.get(&t2, &"key1".to_owned()), None);
-        assert_eq!(m2.get(&t2, &"key2".to_owned()), None);
+        assert_eq!(m2.get(&"key1".to_owned()), None);
+        assert_eq!(m2.get(&"key2".to_owned()), None);
     }
 
     #[test]
@@ -505,13 +498,13 @@ mod test {
             let map = txn.get_map("map");
 
             assert_eq!(
-                map.get(&txn, &"key1".to_owned()),
+                map.get(&"key1".to_owned()),
                 None,
                 "'key1' entry for peer {} should be removed",
                 doc.client_id
             );
             assert_eq!(
-                map.get(&txn, &"key2".to_owned()),
+                map.get(&"key2".to_owned()),
                 None,
                 "'key2' entry for peer {} should be removed",
                 doc.client_id
@@ -554,7 +547,7 @@ mod test {
             let map = txn.get_map("map");
 
             assert_eq!(
-                map.get(&txn, &"stuff".to_owned()),
+                map.get(&"stuff".to_owned()),
                 Some(Value::from("c3")),
                 "peer {} - map entry resolved to unexpected value",
                 doc.client_id
@@ -611,7 +604,7 @@ mod test {
             let map = txn.get_map("map");
 
             assert_eq!(
-                map.get(&txn, &"key1".to_owned()),
+                map.get(&"key1".to_owned()),
                 None,
                 "entry 'key1' on peer {} should be removed",
                 doc.client_id
