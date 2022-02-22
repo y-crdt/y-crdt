@@ -360,7 +360,7 @@ impl ClientBlockList {
             let right = unsafe { &*r[0].get() };
             if left.is_deleted() == right.is_deleted() && left.same_type(right) {
                 if left.try_squash(right) {
-                    let new_ptr = BlockPtr::new(left.id().clone(), index as u32 - 1);
+                    let new_ptr = BlockPtr::new(left.last_id(), index as u32 - 1);
                     Some(new_ptr)
                 } else {
                     None
