@@ -603,7 +603,7 @@ impl Item {
             if let Some(item) = store.blocks.get_item(&ptr) {
                 let len = item.len();
                 if origin_id.clock == item.id.clock + len - 1 {
-                    self.left = Some(BlockPtr::new(item.id, ptr.pivot));
+                    self.left = Some(BlockPtr::new(item.last_id(), ptr.pivot));
                 } else {
                     store.blocks.split_block(&ptr.successor());
                     self.left = Some(ptr);
