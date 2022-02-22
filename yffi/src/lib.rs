@@ -11,8 +11,8 @@ use yrs::types::map::MapEvent;
 use yrs::types::text::TextEvent;
 use yrs::types::xml::{XmlEvent, XmlTextEvent};
 use yrs::types::{
-    Attrs, BranchRef, Change, Delta, EntryChange, PathSegment, TypePtr, TypeRefs, Value,
-    TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT,
+    Attrs, BranchRef, Change, Delta, EntryChange, PathSegment, TypePtr, Value, TYPE_REFS_ARRAY,
+    TYPE_REFS_MAP, TYPE_REFS_TEXT, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT,
 };
 use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1};

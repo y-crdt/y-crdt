@@ -318,7 +318,7 @@ impl Branch {
     /// Given an `index` and start block `ptr`, returns a pair of block pointers.
     ///
     /// If `index` happens to point inside of an existing block content, such block will be split at
-    /// position of an `index`. In such case left tuple value contains start of a block pointer on
+    /// position of an `index`. In such case left tuple value contains end of a block pointer on
     /// a left side of an `index` and a pointer to a block directly on the right side of an `index`.
     ///
     /// If `index` point to the end of a block and no splitting is necessary, tuple will return only
@@ -352,15 +352,11 @@ impl Branch {
                     };
                     let split_point = ID::new(item.id.client, item.id.clock + index);
                     let ptr = BlockPtr::new(split_point, p.pivot() as u32);
-                    let (left, mut right) = store.blocks.split_block(&ptr);
-                    if right.is_none() {
-                        if let Some(left_ptr) = left.as_ref() {
-                            if let Some(left) = store.blocks.get_item(left_ptr) {
-                                right = left.right.clone();
-                            }
-                        }
+                    if store.blocks.split_block(&ptr) {
+                        return (Some(ptr.predecessor()), Some(ptr));
+                    } else {
+                        return (Some(ptr.predecessor()), None);
                     }
-                    return (left, right);
                 }
                 index -= content_len;
             }
@@ -392,12 +388,16 @@ impl Branch {
                             };
                             p.id.clock += offset;
                             remaining = 0;
-                            txn.store_mut().blocks.split_block(&p)
+                            if txn.store_mut().blocks.split_block(&p) {
+                                (p.predecessor(), ptr)
+                            } else {
+                                (p, None)
+                            }
                         } else {
                             remaining -= content_len;
-                            (ptr, item.right.clone())
+                            (p, item.right.clone())
                         };
-                        txn.delete(&l.unwrap());
+                        txn.delete(&l);
                         ptr = r;
                     } else {
                         ptr = item.right.clone();
