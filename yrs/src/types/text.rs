@@ -1,4 +1,4 @@
-use crate::block::{BlockPtr, Item, ItemContent, ItemPosition};
+use crate::block::{Block, BlockPtr, Item, ItemContent, ItemPosition};
 use crate::block_store::Snapshot;
 use crate::event::Subscription;
 use crate::transaction::Transaction;
@@ -7,7 +7,7 @@ use crate::*;
 use lib0::any::Any;
 use std::cell::UnsafeCell;
 use std::collections::HashMap;
-use std::ops::Deref;
+use std::ops::{Deref, DerefMut};
 
 /// A shared data type used for collaborative text editing. It enables multiple users to add and
 /// remove chunks of text in efficient manner. This type is internally represented as a mutable
@@ -28,21 +28,16 @@ pub struct Text(BranchRef);
 
 impl Text {
     /// Converts context of this text data structure into a single string value.
-    pub fn to_string(&self, txn: &Transaction) -> String {
+    pub fn to_string(&self) -> String {
         let mut start = self.0.start;
         let mut s = String::new();
-        let store = txn.store();
-        while let Some(a) = start.as_ref() {
-            if let Some(item) = store.blocks.get_item(&a) {
-                if !item.is_deleted() {
-                    if let block::ItemContent::String(item_string) = &item.content {
-                        s.push_str(item_string);
-                    }
+        while let Some(Block::Item(item)) = start.as_deref() {
+            if !item.is_deleted() {
+                if let block::ItemContent::String(item_string) = &item.content {
+                    s.push_str(item_string);
                 }
-                start = item.right.clone();
-            } else {
-                break;
             }
+            start = item.right.clone();
         }
         s
     }
@@ -75,12 +70,13 @@ impl Text {
         let store = txn.store_mut();
         let encoding = store.options.offset_kind;
         let mut remaining = index;
-        while let Some(right_ptr) = pos.right.as_ref() {
+        while let Some(mut right_ptr) = pos.right {
             if remaining == 0 {
                 break;
             }
 
-            if let Some(mut right) = store.blocks.get_item(right_ptr) {
+            if let Block::Item(right) = right_ptr.deref_mut() {
+                let mut right = right;
                 if !right.is_deleted() {
                     if let ItemContent::Format(key, value) = &right.content {
                         let attrs = pos
@@ -97,12 +93,8 @@ impl Text {
                             } else {
                                 remaining
                             };
-                            let split_ptr = BlockPtr::new(
-                                ID::new(right.id.client, right.id.clock + offset),
-                                right_ptr.pivot() as u32,
-                            );
-                            store.blocks.split_block(&split_ptr);
-                            right = store.blocks.get_item(right_ptr).unwrap();
+                            let new_right = store.blocks.split_block(right_ptr, offset);
+                            right = new_right.and_then(|mut p| p.as_item_mut()).unwrap();
                             block_len = right.len();
                             remaining = 0;
                         } else {
@@ -159,8 +151,8 @@ impl Text {
             let value = crate::block::PrelimText(chunk.into());
             let item = txn.create_item(&pos, value, None);
 
-            pos.right = Some(BlockPtr::from(item.id));
-            pos.forward(txn);
+            pos.right = Some(item);
+            pos.forward();
 
             self.insert_negated_attributes(txn, &mut pos, negated_attrs);
         } else {
@@ -207,8 +199,8 @@ impl Text {
             let value = crate::block::PrelimEmbed(embed);
             let item = txn.create_item(&pos, value, None);
 
-            pos.right = Some(BlockPtr::from(item.id));
-            pos.forward(txn);
+            pos.right = Some(item);
+            pos.forward();
 
             self.insert_negated_attributes(txn, &mut pos, negated_attrs);
         } else {
@@ -238,11 +230,7 @@ impl Text {
         let mut remaining = len;
         let start = pos.right.clone();
         let start_attrs = pos.current_attrs.clone();
-        while let Some(item) = pos
-            .right
-            .as_ref()
-            .and_then(|p| txn.store().blocks.get_item_mut(p))
-        {
+        while let Some(Block::Item(item)) = pos.right.as_deref() {
             if remaining == 0 {
                 break;
             }
@@ -259,20 +247,18 @@ impl Text {
                             } else {
                                 len
                             };
-                            ptr.id.clock += offset;
                             remaining = 0;
-                            txn.store_mut().blocks.split_block(&ptr);
-                            ptr = ptr.predecessor();
+                            txn.store_mut().blocks.split_block(ptr, offset);
                         } else {
                             remaining -= content_len;
                         };
-                        txn.delete(&ptr);
+                        txn.delete(ptr);
                     }
                     _ => {}
                 }
             }
 
-            pos.forward(txn);
+            pos.forward();
         }
 
         if remaining > 0 {
@@ -299,8 +285,7 @@ impl Text {
         start_attrs: &Attrs,
         end_attrs: &mut Attrs,
     ) -> u32 {
-        let store = txn.store();
-        while let Some(item) = end.as_ref().and_then(|ptr| store.blocks.get_item(ptr)) {
+        while let Some(Block::Item(item)) = end.as_deref() {
             match &item.content {
                 ItemContent::String(_) | ItemContent::Embed(_) => break,
                 ItemContent::Format(key, value) if !item.is_deleted() => {
@@ -313,17 +298,14 @@ impl Text {
 
         let mut cleanups = 0;
         while start != end {
-            if let Some(item) = start
-                .as_ref()
-                .and_then(|ptr| txn.store().blocks.get_item(ptr))
-            {
+            if let Some(Block::Item(item)) = start.as_deref() {
                 let right = item.right.clone();
                 if !item.is_deleted() {
                     if let ItemContent::Format(key, value) = &item.content {
                         let e = end_attrs.get(key).unwrap_or(&Any::Null);
                         let s = start_attrs.get(key).unwrap_or(&Any::Null);
                         if e != value.as_ref() || s == value.as_ref() {
-                            txn.delete(&start.unwrap());
+                            txn.delete(start.unwrap());
                             cleanups += 1;
                         }
                     }
@@ -356,14 +338,14 @@ impl Text {
         Self::minimize_attr_changes(&mut pos, txn, &attrs);
         let mut negated_attrs = self.insert_attributes(txn, &mut pos, attrs.clone()); //TODO: remove `attrs.clone()`
         let encoding = txn.store().options.offset_kind;
-        while let Some(right) = pos.right.as_ref() {
+        while let Some(right) = pos.right {
             if len <= 0 {
                 break;
             }
 
-            if let Some(block) = txn.store().blocks.get_item_mut(right) {
-                if !block.is_deleted() {
-                    match &block.content {
+            if let Block::Item(item) = right.deref() {
+                if !item.is_deleted() {
+                    match &item.content {
                         ItemContent::Format(key, value) => {
                             if let Some(v) = attrs.get(key) {
                                 if v == value.as_ref() {
@@ -375,12 +357,10 @@ impl Text {
                             }
                         }
                         _ => {
-                            let content_len = block.content_len(encoding);
+                            let content_len = item.content_len(encoding);
                             if len < content_len {
-                                let mut split_ptr = right.clone();
-                                split_ptr.id.clock += len;
-                                txn.store_mut().blocks.split_block(&split_ptr);
-                                pos.right = Some(split_ptr);
+                                let new_right = txn.store_mut().blocks.split_block(right, len);
+                                pos.right = new_right;
                                 break;
                             }
                             len -= content_len;
@@ -389,7 +369,7 @@ impl Text {
                 }
             }
 
-            if !pos.forward(txn) {
+            if !pos.forward() {
                 break;
             }
         }
@@ -399,23 +379,18 @@ impl Text {
 
     fn minimize_attr_changes(pos: &mut ItemPosition, txn: &mut Transaction, attrs: &Attrs) {
         // go right while attrs[right.key] === right.value (or right is deleted)
-        while let Some(right) = pos.right.as_ref() {
-            if let Some(i) = txn.store().blocks.get_item(right) {
-                if !i.is_deleted() {
-                    if let ItemContent::Format(k, v) = &i.content {
-                        if let Some(v2) = attrs.get(k) {
-                            if (v.as_ref()).eq(v2) {
-                                pos.forward(txn);
-                                continue;
-                            }
+        while let Some(Block::Item(i)) = pos.right.as_deref() {
+            if !i.is_deleted() {
+                if let ItemContent::Format(k, v) = &i.content {
+                    if let Some(v2) = attrs.get(k) {
+                        if (v.as_ref()).eq(v2) {
+                            pos.forward();
                         }
                     }
-                } else {
-                    pos.forward(txn);
-                    continue;
                 }
+            } else {
+                pos.forward();
             }
-            break;
         }
     }
 
@@ -442,21 +417,24 @@ impl Text {
                 let mut item = Item::new(
                     ID::new(client_id, store.blocks.get_state(&client_id)),
                     pos.left.clone(),
-                    pos.left
-                        .map(|ptr| store.blocks.get_block(&ptr).unwrap().last_id()),
+                    pos.left.map(|ptr| ptr.last_id()),
                     pos.right.clone(),
-                    pos.right.map(|ptr| ptr.id.clone()),
+                    pos.right.map(|ptr| ptr.id().clone()),
                     parent,
                     None,
                     ItemContent::Format(k, v.into()),
                 );
-                pos.right = Some(BlockPtr::from(item.id));
-                item.integrate(txn, 0, 0);
+                let mut item_ptr = BlockPtr::from(&mut item);
+                pos.right = Some(item_ptr);
+                item_ptr.integrate(txn, 0);
 
-                let local_block_list = txn.store_mut().blocks.get_client_blocks_mut(item.id.client);
-                local_block_list.push(block::Block::Item(item));
+                let local_block_list = txn
+                    .store_mut()
+                    .blocks
+                    .get_client_blocks_mut(item.id().client);
+                local_block_list.push(item);
 
-                pos.forward(txn);
+                pos.forward();
                 store = txn.store_mut();
             }
         }
@@ -469,25 +447,20 @@ impl Text {
         pos: &mut ItemPosition,
         mut attrs: Attrs,
     ) {
-        while let Some(right) = pos.right.as_ref() {
-            if let Some(item) = txn.store().blocks.get_item(right) {
-                if !item.is_deleted() {
-                    if let ItemContent::Format(key, value) = &item.content {
-                        if let Some(curr_val) = attrs.get(key) {
-                            if curr_val == value.as_ref() {
-                                attrs.remove(key);
+        while let Some(Block::Item(item)) = pos.right.as_deref() {
+            if !item.is_deleted() {
+                if let ItemContent::Format(key, value) = &item.content {
+                    if let Some(curr_val) = attrs.get(key) {
+                        if curr_val == value.as_ref() {
+                            attrs.remove(key);
 
-                                pos.forward(txn);
-                                continue;
-                            }
+                            pos.forward();
                         }
                     }
-                } else {
-                    pos.forward(txn);
-                    continue;
                 }
+            } else {
+                pos.forward();
             }
-            break;
         }
 
         let mut store = txn.store_mut();
@@ -497,21 +470,24 @@ impl Text {
             let mut item = Item::new(
                 ID::new(client_id, store.blocks.get_state(&client_id)),
                 pos.left.clone(),
-                pos.left
-                    .map(|ptr| store.blocks.get_block(&ptr).unwrap().last_id()),
+                pos.left.map(|ptr| ptr.last_id()),
                 pos.right.clone(),
-                pos.right.map(|ptr| ptr.id.clone()),
+                pos.right.map(|ptr| ptr.id().clone()),
                 parent,
                 None,
                 ItemContent::Format(k, v.into()),
             );
-            pos.right = Some(BlockPtr::from(item.id));
-            item.integrate(txn, 0, 0);
+            let mut item_ptr = BlockPtr::from(&mut item);
+            pos.right = Some(item_ptr);
+            item_ptr.integrate(txn, 0);
 
-            let local_block_list = txn.store_mut().blocks.get_client_blocks_mut(item.id.client);
-            local_block_list.push(block::Block::Item(item));
+            let local_block_list = txn
+                .store_mut()
+                .blocks
+                .get_client_blocks_mut(item.id().client);
+            local_block_list.push(item);
 
-            pos.forward(txn);
+            pos.forward();
             store = txn.store_mut();
         }
     }
@@ -610,12 +586,8 @@ impl Text {
         }
 
         let mut asm = DiffAssembler::default();
-        let mut n = self
-            .0
-            .start
-            .as_ref()
-            .and_then(|ptr| txn.store().blocks.get_item(ptr));
-        while let Some(item) = n {
+        let mut n = self.0.start;
+        while let Some(Block::Item(item)) = n.as_deref() {
             if seen(hi, item) || (lo.is_some() && seen(lo, item)) {
                 match &item.content {
                     ItemContent::String(s) => {
@@ -640,7 +612,7 @@ impl Text {
                     }
                     ItemContent::Type(_) | ItemContent::Embed(_) => {
                         asm.pack_str();
-                        if let Some(value) = item.content.get_content_last(&txn) {
+                        if let Some(value) = item.content.get_content_last() {
                             let attrs = asm.attrs_boxed();
                             asm.ops.push(Diff::Insert(value, attrs));
                         }
@@ -658,10 +630,7 @@ impl Text {
                     _ => {}
                 }
             }
-            n = item
-                .right
-                .as_ref()
-                .and_then(|ptr| txn.store().blocks.get_item(ptr));
+            n = item.right;
         }
 
         asm.pack_str();
@@ -798,19 +767,16 @@ impl TextEvent {
         let encoding = txn.store().options.offset_kind;
         let mut old_attrs = HashMap::new();
         let mut asm = DeltaAssembler::default();
-        let mut current = target
-            .start
-            .as_ref()
-            .and_then(|ptr| txn.store().blocks.get_item(ptr));
+        let mut current = target.start;
 
-        while let Some(item) = current {
+        while let Some(Block::Item(item)) = current.as_deref() {
             match &item.content {
                 ItemContent::Type(_) | ItemContent::Embed(_) => {
                     if txn.has_added(&item.id) {
                         if !txn.has_deleted(&item.id) {
                             asm.add_op();
                             asm.action = Some(Action::Insert);
-                            asm.insert = item.content.get_content_last(txn);
+                            asm.insert = item.content.get_content_last();
                             asm.add_op();
                         }
                     } else if txn.has_deleted(&item.id) {
@@ -917,10 +883,7 @@ impl TextEvent {
                 _ => {}
             }
 
-            current = item
-                .right
-                .as_ref()
-                .and_then(|ptr| txn.store().blocks.get_item(ptr));
+            current = item.right;
         }
 
         asm.add_op();
@@ -952,7 +915,7 @@ mod test {
         txt.insert(&mut txn, 1, "b");
         txt.insert(&mut txn, 2, "c");
 
-        assert_eq!(txt.to_string(&txn).as_str(), "abc");
+        assert_eq!(txt.to_string().as_str(), "abc");
     }
 
     #[test]
@@ -965,7 +928,7 @@ mod test {
         txt.insert(&mut txn, 5, " ");
         txt.insert(&mut txn, 6, "world");
 
-        assert_eq!(txt.to_string(&txn).as_str(), "hello world");
+        assert_eq!(txt.to_string().as_str(), "hello world");
     }
 
     #[test]
@@ -978,7 +941,7 @@ mod test {
         txt.insert(&mut txn, 0, "b");
         txt.insert(&mut txn, 0, "c");
 
-        assert_eq!(txt.to_string(&txn).as_str(), "cba");
+        assert_eq!(txt.to_string().as_str(), "cba");
     }
 
     #[test]
@@ -991,7 +954,7 @@ mod test {
         txt.insert(&mut txn, 0, " ");
         txt.insert(&mut txn, 0, "world");
 
-        assert_eq!(txt.to_string(&txn).as_str(), "world hello");
+        assert_eq!(txt.to_string().as_str(), "world hello");
     }
 
     #[test]
@@ -1005,7 +968,7 @@ mod test {
         txt.insert(&mut txn, 6, "world");
         txt.insert(&mut txn, 6, "beautiful ");
 
-        assert_eq!(txt.to_string(&txn).as_str(), "hello beautiful world");
+        assert_eq!(txt.to_string().as_str(), "hello beautiful world");
     }
 
     #[test]
@@ -1017,7 +980,7 @@ mod test {
         txt.insert(&mut txn, 0, "it was expected");
         txt.insert(&mut txn, 6, " not");
 
-        assert_eq!(txt.to_string(&txn).as_str(), "it was not expected");
+        assert_eq!(txt.to_string().as_str(), "it was not expected");
     }
 
     #[test]
@@ -1043,8 +1006,8 @@ mod test {
         d1.apply_update_v1(&mut t1, u2.as_slice());
         d2.apply_update_v1(&mut t2, u1.as_slice());
 
-        let a = txt1.to_string(&t1);
-        let b = txt2.to_string(&t2);
+        let a = txt1.to_string();
+        let b = txt2.to_string();
 
         assert_eq!(a, b);
         assert_eq!(a.as_str(), "hello world");
@@ -1057,7 +1020,7 @@ mod test {
         let txt1 = t1.get_text("test");
 
         txt1.insert(&mut t1, 0, "I expect that");
-        assert_eq!(txt1.to_string(&t1).as_str(), "I expect that");
+        assert_eq!(txt1.to_string().as_str(), "I expect that");
 
         let d2 = Doc::with_client_id(2);
         let mut t2 = d2.transact();
@@ -1067,14 +1030,14 @@ mod test {
         d2.apply_update_v1(&mut t2, u1.as_slice());
 
         let txt2 = t2.get_text("test");
-        assert_eq!(txt2.to_string(&t2).as_str(), "I expect that");
+        assert_eq!(txt2.to_string().as_str(), "I expect that");
 
         txt2.insert(&mut t2, 1, " have");
         txt2.insert(&mut t2, 13, "ed");
-        assert_eq!(txt2.to_string(&t2).as_str(), "I have expected that");
+        assert_eq!(txt2.to_string().as_str(), "I have expected that");
 
         txt1.insert(&mut t1, 1, " didn't");
-        assert_eq!(txt1.to_string(&t1).as_str(), "I didn't expect that");
+        assert_eq!(txt1.to_string().as_str(), "I didn't expect that");
 
         let d2_sv = d2.get_state_vector(&t2);
         let d1_sv = d1.get_state_vector(&t1);
@@ -1083,8 +1046,8 @@ mod test {
         d1.apply_update_v1(&mut t1, u2.as_slice());
         d2.apply_update_v1(&mut t2, u1.as_slice());
 
-        let a = txt1.to_string(&t1);
-        let b = txt2.to_string(&t2);
+        let a = txt1.to_string();
+        let b = txt2.to_string();
 
         assert_eq!(a, b);
         assert_eq!(a.as_str(), "I didn't have expected that");
@@ -1097,7 +1060,7 @@ mod test {
         let txt1 = t1.get_text("test");
 
         txt1.insert(&mut t1, 0, "aaa");
-        assert_eq!(txt1.to_string(&t1).as_str(), "aaa");
+        assert_eq!(txt1.to_string().as_str(), "aaa");
 
         let d2 = Doc::with_client_id(2);
         let mut t2 = d2.transact();
@@ -1107,14 +1070,14 @@ mod test {
         d2.apply_update_v1(&mut t2, u1.as_slice());
 
         let txt2 = t2.get_text("test");
-        assert_eq!(txt2.to_string(&t2).as_str(), "aaa");
+        assert_eq!(txt2.to_string().as_str(), "aaa");
 
         txt2.insert(&mut t2, 3, "bbb");
         txt2.insert(&mut t2, 6, "bbb");
-        assert_eq!(txt2.to_string(&t2).as_str(), "aaabbbbbb");
+        assert_eq!(txt2.to_string().as_str(), "aaabbbbbb");
 
         txt1.insert(&mut t1, 3, "aaa");
-        assert_eq!(txt1.to_string(&t1).as_str(), "aaaaaa");
+        assert_eq!(txt1.to_string().as_str(), "aaaaaa");
 
         let d2_sv = d2.get_state_vector(&t2);
         let d1_sv = d1.get_state_vector(&t1);
@@ -1124,8 +1087,8 @@ mod test {
         d1.apply_update_v1(&mut t1, u2.as_slice());
         d2.apply_update_v1(&mut t2, u1.as_slice());
 
-        let a = txt1.to_string(&t1);
-        let b = txt2.to_string(&t2);
+        let a = txt1.to_string();
+        let b = txt2.to_string();
 
         assert_eq!(a.as_str(), "aaaaaabbbbbb");
         assert_eq!(a, b);
@@ -1142,7 +1105,7 @@ mod test {
         txt.remove_range(&mut txn, 0, 3);
 
         assert_eq!(txt.len(), 3);
-        assert_eq!(txt.to_string(&txn).as_str(), "bbb");
+        assert_eq!(txt.to_string().as_str(), "bbb");
     }
 
     #[test]
@@ -1155,7 +1118,7 @@ mod test {
         txt.insert(&mut txn, 0, "aaa");
         txt.remove_range(&mut txn, 3, 3);
 
-        assert_eq!(txt.to_string(&txn).as_str(), "aaa");
+        assert_eq!(txt.to_string().as_str(), "aaa");
     }
 
     #[test]
@@ -1169,13 +1132,13 @@ mod test {
         txt.insert(&mut txn, 2, "c");
 
         txt.remove_range(&mut txn, 1, 1);
-        assert_eq!(txt.to_string(&txn).as_str(), "ac");
+        assert_eq!(txt.to_string().as_str(), "ac");
 
         txt.remove_range(&mut txn, 1, 1);
-        assert_eq!(txt.to_string(&txn).as_str(), "a");
+        assert_eq!(txt.to_string().as_str(), "a");
 
         txt.remove_range(&mut txn, 0, 1);
-        assert_eq!(txt.to_string(&txn).as_str(), "");
+        assert_eq!(txt.to_string().as_str(), "");
     }
 
     #[test]
@@ -1187,7 +1150,7 @@ mod test {
         txt.insert(&mut txn, 0, "abc");
         txt.remove_range(&mut txn, 1, 1);
 
-        assert_eq!(txt.to_string(&txn).as_str(), "ac");
+        assert_eq!(txt.to_string().as_str(), "ac");
     }
 
     #[test]
@@ -1201,7 +1164,7 @@ mod test {
         txt.insert(&mut txn, 15, " world");
 
         txt.remove_range(&mut txn, 5, 11);
-        assert_eq!(txt.to_string(&txn).as_str(), "helloworld");
+        assert_eq!(txt.to_string().as_str(), "helloworld");
     }
 
     #[test]
@@ -1214,7 +1177,7 @@ mod test {
         txt.remove_range(&mut txn, 0, 5);
         txt.insert(&mut txn, 1, "world");
 
-        assert_eq!(txt.to_string(&txn).as_str(), " world");
+        assert_eq!(txt.to_string().as_str(), " world");
     }
 
     #[test]
@@ -1224,7 +1187,7 @@ mod test {
         let txt1 = t1.get_text("test");
 
         txt1.insert(&mut t1, 0, "hello world");
-        assert_eq!(txt1.to_string(&t1).as_str(), "hello world");
+        assert_eq!(txt1.to_string().as_str(), "hello world");
 
         let u1 = d1.encode_state_as_update_v1(&t1);
 
@@ -1232,17 +1195,17 @@ mod test {
         let mut t2 = d2.transact();
         d2.apply_update_v1(&mut t2, u1.as_slice());
         let txt2 = t2.get_text("test");
-        assert_eq!(txt2.to_string(&t2).as_str(), "hello world");
+        assert_eq!(txt2.to_string().as_str(), "hello world");
 
         txt1.insert(&mut t1, 5, " beautiful");
         txt1.insert(&mut t1, 21, "!");
         txt1.remove_range(&mut t1, 0, 5);
-        assert_eq!(txt1.to_string(&t1).as_str(), " beautiful world!");
+        assert_eq!(txt1.to_string().as_str(), " beautiful world!");
 
         txt2.remove_range(&mut t2, 5, 5);
         txt2.remove_range(&mut t2, 0, 1);
         txt2.insert(&mut t2, 0, "H");
-        assert_eq!(txt2.to_string(&t2).as_str(), "Hellod");
+        assert_eq!(txt2.to_string().as_str(), "Hellod");
 
         let sv1 = d1.get_state_vector(&t1);
         let sv2 = d2.get_state_vector(&t2);
@@ -1252,8 +1215,8 @@ mod test {
         d1.apply_update_v1(&mut t1, u2.as_slice());
         d2.apply_update_v1(&mut t2, u1.as_slice());
 
-        let a = txt1.to_string(&t1);
-        let b = txt2.to_string(&t2);
+        let a = txt1.to_string();
+        let b = txt2.to_string();
 
         assert_eq!(a, b);
         assert_eq!(a, "H beautifuld!".to_owned());
@@ -1358,7 +1321,7 @@ mod test {
             let mut txn = d1.transact();
 
             txt1.insert(&mut txn, 0, "Zażółć gęślą jaźń");
-            assert_eq!(txt1.to_string(&txn), "Zażółć gęślą jaźń");
+            assert_eq!(txt1.to_string(), "Zażółć gęślą jaźń");
             assert_eq!(txt1.len(), 17);
         }
 
@@ -1366,7 +1329,7 @@ mod test {
 
         {
             let txn = d2.transact();
-            assert_eq!(txt2.to_string(&txn), "Zażółć gęślą jaźń");
+            assert_eq!(txt2.to_string(), "Zażółć gęślą jaźń");
             assert_eq!(txt2.len(), 26);
         }
 
@@ -1375,7 +1338,7 @@ mod test {
             txt1.remove_range(&mut txn, 9, 3);
             txt1.insert(&mut txn, 9, "si");
 
-            assert_eq!(txt1.to_string(&txn), "Zażółć gęsi jaźń");
+            assert_eq!(txt1.to_string(), "Zażółć gęsi jaźń");
             assert_eq!(txt1.len(), 16);
         }
 
@@ -1383,7 +1346,7 @@ mod test {
 
         {
             let txn = d2.transact();
-            assert_eq!(txt2.to_string(&txn), "Zażółć gęsi jaźń");
+            assert_eq!(txt2.to_string(), "Zażółć gęsi jaźń");
             assert_eq!(txt2.len(), 23);
         }
     }
@@ -1460,7 +1423,7 @@ mod test {
                 Some(Box::new(a.clone())),
             )]);
 
-            assert_eq!(txt1.to_string(&txn), "abc".to_string());
+            assert_eq!(txt1.to_string(), "abc".to_string());
             assert_eq!(
                 txt1.diff(&mut txn),
                 vec![Diff::Insert("abc".into(), Some(Box::new(a.clone())))]
@@ -1471,7 +1434,7 @@ mod test {
             d2.apply_update_v1(&mut txn, update.as_slice());
             txn.commit();
 
-            assert_eq!(txt2.to_string(&txn), "abc".to_string());
+            assert_eq!(txt2.to_string(), "abc".to_string());
             assert_eq!(delta2.take(), expected);
         }
 
@@ -1484,7 +1447,7 @@ mod test {
 
             let expected = Some(vec![Delta::Deleted(1)]);
 
-            assert_eq!(txt1.to_string(&txn), "bc".to_string());
+            assert_eq!(txt1.to_string(), "bc".to_string());
             assert_eq!(
                 txt1.diff(&mut txn),
                 vec![Diff::Insert("bc".into(), Some(Box::new(a.clone())))]
@@ -1495,7 +1458,7 @@ mod test {
             d2.apply_update_v1(&mut txn, update.as_slice());
             txn.commit();
 
-            assert_eq!(txt2.to_string(&txn), "bc".to_string());
+            assert_eq!(txt2.to_string(), "bc".to_string());
             assert_eq!(delta2.take(), expected);
         }
 
@@ -1508,7 +1471,7 @@ mod test {
 
             let expected = Some(vec![Delta::Retain(1, None), Delta::Deleted(1)]);
 
-            assert_eq!(txt1.to_string(&txn), "b".to_string());
+            assert_eq!(txt1.to_string(), "b".to_string());
             assert_eq!(
                 txt1.diff(&mut txn),
                 vec![Diff::Insert("b".into(), Some(Box::new(a.clone())))]
@@ -1519,7 +1482,7 @@ mod test {
             d2.apply_update_v1(&mut txn, update.as_slice());
             txn.commit();
 
-            assert_eq!(txt2.to_string(&txn), "b".to_string());
+            assert_eq!(txt2.to_string(), "b".to_string());
             assert_eq!(delta2.take(), expected);
         }
 
@@ -1532,7 +1495,7 @@ mod test {
 
             let expected = Some(vec![Delta::Inserted("z".into(), Some(Box::new(a.clone())))]);
 
-            assert_eq!(txt1.to_string(&txn), "zb".to_string());
+            assert_eq!(txt1.to_string(), "zb".to_string());
             assert_eq!(
                 txt1.diff(&mut txn),
                 vec![Diff::Insert("zb".into(), Some(Box::new(a.clone())))]
@@ -1543,7 +1506,7 @@ mod test {
             d2.apply_update_v1(&mut txn, update.as_slice());
             txn.commit();
 
-            assert_eq!(txt2.to_string(&txn), "zb".to_string());
+            assert_eq!(txt2.to_string(), "zb".to_string());
             assert_eq!(delta2.take(), expected);
         }
 
@@ -1556,7 +1519,7 @@ mod test {
 
             let expected = Some(vec![Delta::Inserted("y".into(), None)]);
 
-            assert_eq!(txt1.to_string(&txn), "yzb".to_string());
+            assert_eq!(txt1.to_string(), "yzb".to_string());
             assert_eq!(
                 txt1.diff(&mut txn),
                 vec![
@@ -1570,7 +1533,7 @@ mod test {
             d2.apply_update_v1(&mut txn, update.as_slice());
             txn.commit();
 
-            assert_eq!(txt2.to_string(&txn), "yzb".to_string());
+            assert_eq!(txt2.to_string(), "yzb".to_string());
             assert_eq!(delta2.take(), expected);
         }
 
@@ -1587,7 +1550,7 @@ mod test {
                 Delta::Retain(1, Some(Box::new(b))),
             ]);
 
-            assert_eq!(txt1.to_string(&txn), "yzb".to_string());
+            assert_eq!(txt1.to_string(), "yzb".to_string());
             assert_eq!(
                 txt1.diff(&mut txn),
                 vec![
@@ -1601,7 +1564,7 @@ mod test {
             d2.apply_update_v1(&mut txn, update.as_slice());
             txn.commit();
 
-            assert_eq!(txt2.to_string(&txn), "yzb".to_string());
+            assert_eq!(txt2.to_string(), "yzb".to_string());
             assert_eq!(delta2.take(), expected);
         }
     }

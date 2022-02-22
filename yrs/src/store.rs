@@ -1,4 +1,4 @@
-use crate::block::ItemContent;
+use crate::block::{Block, ItemContent};
 use crate::block_store::{BlockStore, SquashResult, StateVector};
 use crate::doc::Options;
 use crate::event::{EventHandler, UpdateEvent};
@@ -9,6 +9,7 @@ use crate::update::PendingUpdate;
 use crate::updates::encoder::{Encode, Encoder};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::ops::Deref;
 use std::pin::Pin;
 use std::rc::Rc;
 
@@ -72,17 +73,17 @@ impl Store {
 
     pub(crate) fn get_type_raw(&self, ptr: &TypePtr) -> Option<&Branch> {
         match ptr {
-            TypePtr::Block(id) => {
+            TypePtr::Block(ptr) => {
                 // @todo the item might not exist
-                let item = self.blocks.get_item(id)?;
-                if let ItemContent::Type(c) = &item.content {
-                    Some(c)
-                } else {
-                    None
+                if let Block::Item(item) = ptr.deref() {
+                    if let ItemContent::Type(c) = &item.content {
+                        return Some(c);
+                    }
                 }
+                None
             }
             TypePtr::Named(name) => Some(self.types.get(name)?),
-            TypePtr::Unknown => None,
+            _ => None,
         }
     }
 
@@ -130,10 +131,7 @@ impl Store {
         type_ref: TypeRefs,
     ) -> BranchRef {
         let e = self.types.entry(name.clone());
-        let value = e.or_insert_with(|| {
-            let type_ptr = types::TypePtr::Named(name.clone());
-            types::Branch::new(type_ptr, type_ref, node_name)
-        });
+        let value = e.or_insert_with(|| types::Branch::named(name, type_ref, node_name));
         value.into()
     }
 
@@ -172,11 +170,11 @@ impl Store {
             encoder.write_uvar(blocks.integrated_len() - start);
             encoder.write_client(client);
             encoder.write_uvar(clock);
-            let first_block = &blocks[start];
+            let first_block = blocks.get(start);
             // write first struct with an offset
             first_block.encode(encoder);
             for i in (start + 1)..blocks.integrated_len() {
-                blocks[i].encode(encoder);
+                blocks.get(i).encode(encoder);
             }
         }
     }
@@ -197,13 +195,13 @@ impl Store {
         diff
     }
 
-    pub(crate) fn gc_cleanup(&self, compaction: SquashResult) {
+    pub(crate) fn gc_cleanup(&self, mut compaction: SquashResult) {
         if let Some(parent_sub) = compaction.parent_sub {
             if let Some(mut inner) = self.get_type(&compaction.parent) {
                 match inner.map.entry(parent_sub.clone()) {
-                    Entry::Occupied(e) => {
-                        let cell = e.into_mut();
-                        if cell.id == compaction.old_right {
+                    Entry::Occupied(mut e) => {
+                        let cell = e.get_mut();
+                        if cell.id() == &compaction.old_right {
                             *cell = compaction.replacement;
                         }
                     }
@@ -213,10 +211,8 @@ impl Store {
                 }
             }
         }
-        if let Some(right) = compaction.new_right {
-            if let Some(item) = self.blocks.get_item_mut(&right) {
-                item.left = Some(compaction.replacement);
-            }
+        if let Some(Block::Item(right)) = compaction.new_right.as_deref_mut() {
+            right.left = Some(compaction.replacement);
         }
     }
 
@@ -227,8 +223,7 @@ impl Store {
             while let Some(segment) = i.next() {
                 match segment {
                     PathSegment::Key(key) => {
-                        let child_ptr = current.map.get(key)?;
-                        let child = self.blocks.get_item(child_ptr)?;
+                        let child = current.map.get(key)?.as_item()?;
                         if let ItemContent::Type(child_branch) = &child.content {
                             current = child_branch.into();
                         } else {
@@ -236,9 +231,7 @@ impl Store {
                         }
                     }
                     PathSegment::Index(index) => {
-                        if let Some((ItemContent::Type(child_branch), _)) =
-                            current.get_at(&self.blocks, *index)
-                        {
+                        if let Some((ItemContent::Type(child_branch), _)) = current.get_at(*index) {
                             current = child_branch.into();
                         } else {
                             return None;

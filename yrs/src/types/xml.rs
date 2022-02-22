@@ -1,4 +1,4 @@
-use crate::block::{Item, ItemContent, ItemPosition, Prelim};
+use crate::block::{Block, Item, ItemContent, ItemPosition, Prelim};
 use crate::event::Subscription;
 use crate::store::Store;
 use crate::types::text::TextEvent;
@@ -73,7 +73,7 @@ impl XmlElement {
         }
         write!(&mut s, ">").unwrap();
         for i in inner.iter(txn) {
-            for content in i.content.get_content(txn) {
+            for content in i.content.get_content() {
                 write!(&mut s, "{}", content.to_string(txn)).unwrap();
             }
         }
@@ -120,7 +120,7 @@ impl XmlElement {
     /// can be found inside of a current XML element.
     pub fn get_attribute(&self, txn: &Transaction, attr_name: &str) -> Option<String> {
         let inner = self.inner();
-        let value = inner.get(txn, attr_name)?;
+        let value = inner.get(attr_name)?;
         Some(value.to_string(txn))
     }
 
@@ -150,8 +150,8 @@ impl XmlElement {
 
     /// Returns a first child XML node (either [XmlElement] or [XmlText]), that can be found in
     /// a current XML element. Returns `None` if current element is empty.
-    pub fn first_child(&self, txn: &Transaction) -> Option<Xml> {
-        self.0.first_child(txn)
+    pub fn first_child(&self) -> Option<Xml> {
+        self.0.first_child()
     }
 
     /// Returns a number of child XML nodes, that can be found inside of a current XML element.
@@ -306,7 +306,7 @@ impl<'a> Iterator for Attributes<'a> {
         let (key, block) = self.0.next()?;
         let value = block
             .content
-            .get_content_last(self.0.txn)
+            .get_content_last()
             .map(|v| v.to_string(self.0.txn))
             .unwrap_or(String::default());
 
@@ -333,9 +333,9 @@ impl XmlFragment {
         self.0
     }
 
-    pub fn first_child(&self, txn: &Transaction) -> Option<Xml> {
+    pub fn first_child(&self) -> Option<Xml> {
         let inner = self.inner();
-        let first = inner.first(txn)?;
+        let first = inner.first()?;
         match &first.content {
             ItemContent::Type(c) => {
                 let value = Xml::from(BranchRef::from(c));
@@ -361,7 +361,7 @@ impl XmlFragment {
         let mut s = String::new();
         let inner = self.inner();
         for i in inner.iter(txn) {
-            for content in i.content.get_content(txn) {
+            for content in i.content.get_content() {
                 write!(&mut s, "{}", content.to_string(txn)).unwrap();
             }
         }
@@ -420,7 +420,7 @@ impl XmlFragment {
 
     pub fn get<T: From<BranchRef>>(&self, txn: &Transaction, index: u32) -> Option<T> {
         let inner = self.inner();
-        let (content, _) = inner.get_at(&txn.store().blocks, index)?;
+        let (content, _) = inner.get_at(index)?;
         if let ItemContent::Type(inner) = content {
             let branch_ref: BranchRef = inner.into();
             Some(T::from(branch_ref))
@@ -465,7 +465,7 @@ impl<'a> TreeWalker<'a> {
     fn new<'b>(txn: &'a Transaction, parent: &'b Branch) -> Self {
         let root = parent.ptr.clone();
         let store = txn.store();
-        let current = parent.start.as_ref().and_then(|p| store.blocks.get_item(p));
+        let current = parent.start.and_then(|p| p.as_item());
 
         TreeWalker {
             store,
@@ -495,15 +495,12 @@ impl<'a> Iterator for TreeWalker<'a> {
                             && inner.start.is_some()
                         {
                             // walk down in the tree
-                            n = inner
-                                .start
-                                .as_ref()
-                                .and_then(|ptr| self.store.blocks.get_item(ptr));
+                            n = inner.start.and_then(|ptr| ptr.as_item());
                         } else {
                             // walk right or up in the tree
                             while let Some(current) = n {
-                                if let Some(right) = current.right.as_ref() {
-                                    n = self.store.blocks.get_item(right);
+                                if let Some(right) = current.right {
+                                    n = right.as_item();
                                     break;
                                 } else if current.parent == self.root {
                                     n = None;
@@ -511,7 +508,7 @@ impl<'a> Iterator for TreeWalker<'a> {
                                     n = self.store.get_type(&current.parent).and_then(|t| match &t
                                         .ptr
                                     {
-                                        TypePtr::Block(ptr) => self.store.blocks.get_item(ptr),
+                                        TypePtr::Block(ptr) => ptr.as_item(),
                                         _ => None,
                                     });
                                 }
@@ -573,12 +570,12 @@ impl XmlHook {
         self.0.remove(txn, key)
     }
 
-    pub fn get(&self, txn: &Transaction, key: &str) -> Option<Value> {
-        self.0.get(txn, key)
+    pub fn get(&self, key: &str) -> Option<Value> {
+        self.0.get(key)
     }
 
-    pub fn contains(&self, txn: &Transaction, key: &String) -> bool {
-        self.0.contains(txn, key)
+    pub fn contains(&self, key: &String) -> bool {
+        self.0.contains(key)
     }
 
     pub fn clear(&self, txn: &mut Transaction) {
@@ -624,8 +621,8 @@ impl XmlText {
     }
 
     /// Returns a string representation of a current XML text.
-    pub fn to_string(&self, txn: &Transaction) -> String {
-        self.0.to_string(txn)
+    pub fn to_string(&self) -> String {
+        self.0.to_string()
     }
 
     pub fn remove_attribute(&self, txn: &mut Transaction, attr_name: &str) {
@@ -657,7 +654,7 @@ impl XmlText {
 
     pub fn get_attribute(&self, txn: &Transaction, attr_name: &str) -> Option<String> {
         let inner = self.inner();
-        let value = inner.get(txn, attr_name)?;
+        let value = inner.get(attr_name)?;
         Some(value.to_string(txn))
     }
 
@@ -887,10 +884,10 @@ enum PrelimXml {
 }
 
 impl Prelim for PrelimXml {
-    fn into_content(self, _txn: &mut Transaction, ptr: TypePtr) -> (ItemContent, Option<Self>) {
+    fn into_content(self, _txn: &mut Transaction) -> (ItemContent, Option<Self>) {
         let inner = match self {
-            PrelimXml::Elem(node_name) => Branch::new(ptr, TYPE_REFS_XML_ELEMENT, Some(node_name)),
-            PrelimXml::Text => Branch::new(ptr, TYPE_REFS_XML_TEXT, None),
+            PrelimXml::Elem(node_name) => Branch::block(TYPE_REFS_XML_ELEMENT, Some(node_name)),
+            PrelimXml::Text => Branch::block(TYPE_REFS_XML_TEXT, None),
         };
         (ItemContent::Type(inner), None)
     }
@@ -901,15 +898,12 @@ impl Prelim for PrelimXml {
 fn next_sibling(inner: BranchRef, txn: &Transaction) -> Option<Xml> {
     let store = txn.store();
     let mut current = if let TypePtr::Block(ptr) = &inner.ptr {
-        store.blocks.get_item(ptr)
+        ptr.as_item()
     } else {
         None
     };
     while let Some(item) = current {
-        current = item
-            .right
-            .as_ref()
-            .and_then(|ptr| store.blocks.get_item(ptr));
+        current = item.right.and_then(|p| p.as_item());
         if let Some(right) = current {
             if !right.is_deleted() {
                 if let ItemContent::Type(inner) = &right.content {
@@ -925,16 +919,13 @@ fn next_sibling(inner: BranchRef, txn: &Transaction) -> Option<Xml> {
 fn prev_sibling(inner: BranchRef, txn: &Transaction) -> Option<Xml> {
     let store = txn.store();
     let mut current = if let TypePtr::Block(ptr) = &inner.ptr {
-        store.blocks.get_item(ptr)
+        Some(*ptr)
     } else {
         None
     };
-    while let Some(item) = current {
-        current = item
-            .left
-            .as_ref()
-            .and_then(|ptr| store.blocks.get_item(ptr));
-        if let Some(left) = current {
+    while let Some(Block::Item(item)) = current.as_deref() {
+        current = item.left;
+        if let Some(Block::Item(left)) = current.as_deref() {
             if !left.is_deleted() {
                 if let ItemContent::Type(inner) = &left.content {
                     return Some(Xml::from(BranchRef::from(inner)));
@@ -948,9 +939,8 @@ fn prev_sibling(inner: BranchRef, txn: &Transaction) -> Option<Xml> {
 
 fn parent(inner: BranchRef, txn: &Transaction) -> Option<XmlElement> {
     if let TypePtr::Block(ptr) = &inner.ptr {
-        let store = txn.store();
-        let item = store.blocks.get_item(ptr)?;
-        let parent = store.get_type(&item.parent)?;
+        let item = ptr.as_item()?;
+        let parent = txn.store().get_type(&item.parent)?;
         Some(XmlElement::from(parent.clone()))
     } else {
         None
@@ -1033,9 +1023,7 @@ impl XmlEvent {
 
     fn changes(&self, txn: &Transaction) -> &ChangeSet<Change> {
         let change_set = unsafe { self.change_set.get().as_mut().unwrap() };
-        change_set.get_or_insert_with(|| {
-            Box::new(event_change_set(txn, self.target.inner().start.as_ref()))
-        })
+        change_set.get_or_insert_with(|| Box::new(event_change_set(txn, self.target.inner().start)))
     }
 }
 
@@ -1141,7 +1129,7 @@ mod test {
             "root parent should not exist"
         );
         assert_eq!(
-            root.first_child(&txn).as_ref(),
+            root.first_child().as_ref(),
             Some(&Xml::Text(first)),
             "root.first_child should point to first"
         );
