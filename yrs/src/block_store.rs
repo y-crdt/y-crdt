@@ -6,7 +6,7 @@ use crate::utils::client_hasher::ClientHasher;
 use crate::*;
 use std::cell::UnsafeCell;
 use std::collections::hash_map::Entry;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::hash::BuildHasherDefault;
 use std::ops::Index;
 use std::rc::Rc;
@@ -360,7 +360,7 @@ impl ClientBlockList {
             let right = unsafe { &*r[0].get() };
             if left.is_deleted() == right.is_deleted() && left.same_type(right) {
                 if left.try_squash(right) {
-                    let new_ptr = BlockPtr::new(left.id().clone(), index as u32 - 1);
+                    let new_ptr = BlockPtr::new(left.last_id(), index as u32 - 1);
                     Some(new_ptr)
                 } else {
                     None
@@ -457,6 +457,14 @@ impl BlockStore {
         self.clients.is_empty()
     }
 
+    pub fn contains(&self, id: &ID) -> bool {
+        if let Some(clients) = self.clients.get(&id.client) {
+            id.clock <= clients.last().last_id().clock
+        } else {
+            false
+        }
+    }
+
     /// Returns an immutable reference to a block list for a particular `client`. Returns `None` if
     /// no block list existed for provided `client` in current block store.
     pub fn get(&self, client: &u64) -> Option<&ClientBlockList> {
@@ -472,6 +480,10 @@ impl BlockStore {
     /// Returns an iterator over the client and block lists pairs known to a current block store.
     pub fn iter(&self) -> Iter<'_> {
         self.clients.iter()
+    }
+
+    pub(crate) fn blocks(&self) -> Blocks<'_> {
+        Blocks::new(self)
     }
 
     /// Returns a state vector, which is a compact representation of the state of blocks integrated
@@ -557,14 +569,15 @@ impl BlockStore {
             .or_insert_with(|| ClientBlockList::with_capacity(capacity))
     }
 
-    /// Given block pointer, tries to split it, returning a pointers to left and right halves
-    /// of a newly split block.
+    /// Given block pointer, tries to split it, returning a true, if block was split in result of
+    /// calling this action, and false otherwise.
     ///
-    /// If split was not necessary (eg. because block `ptr` was not inside of any block),
-    /// the right half returned wll be None.
-    ///
-    /// If no block for given `ptr` was found, then both returned options will be None.
-    pub fn split_block(&mut self, ptr: &BlockPtr) -> (Option<BlockPtr>, Option<BlockPtr>) {
+    /// Examples:
+    /// 1. Splitting block `(<1#1>, len: 3)` by ptr: `<1#3>` will result in constructing two
+    /// blocks: `(<1#1>, len: 2)` and `(<1#3>, len: 1)` and return `true`.
+    /// 1. Splitting block `(<1#1>, len: 3)` by ptr: `<1#1>` will result in preserving the block
+    /// structure and return `false`.
+    pub fn split_block(&mut self, ptr: &BlockPtr) -> bool {
         let mut pivot = ptr.pivot();
         if let Some(mut blocks) = self.clients.get_mut(&ptr.id.client) {
             let block: &mut Block = {
@@ -583,54 +596,28 @@ impl BlockStore {
                         pivot = p;
                         blocks.get_mut(pivot)
                     } else {
-                        return (None, None);
+                        return false;
                     }
                 }
             };
 
-            let left_split_ptr = BlockPtr::new(block.id().clone(), pivot as u32);
-            let right_split_ptr = match block {
+            match block {
                 Block::Item(item) => {
                     let len = item.len();
                     if ptr.id.clock > item.id.clock && ptr.id.clock <= item.id.clock + len {
                         let index = pivot + 1;
                         let diff = ptr.id.clock - item.id.clock;
-                        let right_split = item.split(diff);
-                        let right_split_id = right_split.id.clone();
-                        let right_ptr = right_split.right.clone();
-                        if let Some(right_ptr) = right_ptr {
-                            let right_left =
-                                Some(BlockPtr::new(right_split.id.clone(), index as u32));
-
-                            if right_ptr.id.client == ptr.id.client {
-                                if let Block::Item(item) = blocks.find(&right_ptr).unwrap() {
-                                    item.left = right_left;
-                                }
-                            } else {
-                                if let Block::Item(item) = self
-                                    .clients
-                                    .get_mut(&right_ptr.id.client)
-                                    .unwrap()
-                                    .find(&right_ptr)
-                                    .unwrap()
-                                {
-                                    item.left = right_left;
-                                }
-
-                                blocks = self.clients.get_mut(&ptr.id.client).unwrap();
-                            };
-                        }
+                        let right_split = item.splice(diff).unwrap();
                         blocks.insert(index, Block::Item(right_split));
-                        Some(BlockPtr::new(right_split_id, index as u32))
+                        true
                     } else {
-                        None
+                        false
                     }
                 }
-                _ => None,
-            };
-            (Some(left_split_ptr), right_split_ptr)
+                _ => false,
+            }
         } else {
-            (None, None)
+            false
         }
     }
 }
@@ -659,5 +646,46 @@ impl std::fmt::Display for BlockStore {
             writeln!(f, "\t{} ->{}", k, v)?;
         }
         writeln!(f, "}}")
+    }
+}
+
+pub(crate) struct Blocks<'a> {
+    current_client: std::vec::IntoIter<(&'a u64, &'a ClientBlockList)>,
+    current_block: Option<ClientBlockListIter<'a>>,
+}
+
+impl<'a> Blocks<'a> {
+    fn new(update: &'a BlockStore) -> Self {
+        let mut client_blocks: Vec<(&'a u64, &'a ClientBlockList)> =
+            update.clients.iter().collect();
+        // sorting to return higher client ids first
+        client_blocks.sort_by(|a, b| b.0.cmp(a.0));
+        let mut current_client = client_blocks.into_iter();
+
+        let current_block = current_client.next().map(|(_, v)| v.iter());
+        Blocks {
+            current_client,
+            current_block,
+        }
+    }
+}
+
+impl<'a> Iterator for Blocks<'a> {
+    type Item = &'a Block;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(blocks) = self.current_block.as_mut() {
+            let block = blocks.next();
+            if block.is_some() {
+                return block;
+            }
+        }
+
+        if let Some(entry) = self.current_client.next() {
+            self.current_block = Some(entry.1.iter());
+            self.next()
+        } else {
+            None
+        }
     }
 }

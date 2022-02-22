@@ -407,7 +407,7 @@ fn b3_4(c: &mut Criterion, name: &str) {
     });
 }
 
-fn b4(c: &mut Criterion, name: &str) {
+fn b4_1(c: &mut Criterion, name: &str) {
     let doc = Doc::new();
     let txt = {
         let mut txn = doc.transact();
@@ -427,6 +427,28 @@ fn b4(c: &mut Criterion, name: &str) {
                         TextOp::Delete(idx, len) => txt.remove_range(&mut txn, *idx, *len),
                     }
                 }
+            });
+        },
+    );
+}
+
+fn b4_2(c: &mut Criterion, name: &str) {
+    let doc = Doc::new();
+    let txt = {
+        let mut txn = doc.transact();
+        txn.get_text("text")
+    };
+    let mut buf = Vec::with_capacity(400 * 1024);
+    let mut f = std::fs::File::open("./yrs/benches/input/b4-update.bin").unwrap();
+    std::io::Read::read_to_end(&mut f, &mut buf).unwrap();
+
+    c.bench_with_input(
+        BenchmarkId::new(name, buf.len()),
+        &(doc, txt, buf),
+        |b, (doc, txt, buf)| {
+            b.iter(|| {
+                let mut txn = doc.transact();
+                doc.apply_update_v1(&mut txn, buf.as_slice());
             });
         },
     );
@@ -469,7 +491,7 @@ fn bench(c: &mut Criterion) {
     text_benchmark(c, "[B1.3] Prepend N characters", b1_3);
     text_benchmark(c, "[B1.4] Insert N characters at random positions", b1_4);
     text_benchmark(c, "[B1.5] Insert N words at random positions", b1_5);
-    text_benchmark(c, "[B1.6] Insert string, then delete it", b1_6);
+    //text_benchmark(c, "[B1.6] Insert string, then delete it", b1_6);
     text_benchmark(c, "[B1.7] Insert/Delete strings at random positions", b1_7);
     array_benchmark(c, "[B1.8] Append N numbers", b1_8);
     array_benchmark(c, "[B1.9] Insert Array of N numbers", b1_9);
@@ -509,7 +531,8 @@ fn bench(c: &mut Criterion) {
         b3_3,
     );
     b3_4(c, "[B3.4] 20√N clients concurrently insert text in Array");
-    b4(c, "[B4] Apply real-world editing dataset");
+    b4_2(c, "[B4.2] Apply real-world document snapshot of size");
+    b4_1(c, "[B4.1] Apply real-world editing dataset");
 }
 
 criterion_group! {

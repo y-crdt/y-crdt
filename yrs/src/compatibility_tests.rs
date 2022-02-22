@@ -2,7 +2,7 @@ use crate::block::{Block, BlockPtr, Item, ItemContent};
 use crate::id_set::{DeleteSet, IdSet};
 use crate::store::Store;
 use crate::types::{Branch, TypePtr, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT};
-use crate::update::Update;
+use crate::update::{BlockCarrier, Update};
 use crate::updates::decoder::Decode;
 use crate::updates::encoder::Encode;
 use crate::{Doc, StateVector, ID};
@@ -46,7 +46,8 @@ fn text_insert_delete() {
             TypePtr::Named("type".into()),
             None,
             ItemContent::Deleted(3),
-        )),
+        ))
+        .into(),
         Block::Item(Item::new(
             ID::new(CLIENT_ID, 3),
             None,
@@ -56,7 +57,8 @@ fn text_insert_delete() {
             TypePtr::Unknown,
             None,
             ItemContent::String("ab".into()),
-        )),
+        ))
+        .into(),
         Block::Item(Item::new(
             ID::new(CLIENT_ID, 5),
             None,
@@ -66,7 +68,8 @@ fn text_insert_delete() {
             TypePtr::Unknown,
             None,
             ItemContent::Deleted(1),
-        )),
+        ))
+        .into(),
         Block::Item(Item::new(
             ID::new(CLIENT_ID, 6),
             None,
@@ -76,7 +79,8 @@ fn text_insert_delete() {
             TypePtr::Unknown,
             None,
             ItemContent::Deleted(1),
-        )),
+        ))
+        .into(),
         Block::Item(Item::new(
             ID::new(CLIENT_ID, 7),
             None,
@@ -86,7 +90,8 @@ fn text_insert_delete() {
             TypePtr::Unknown,
             None,
             ItemContent::String("hi".into()),
-        )),
+        ))
+        .into(),
     ];
     let expected_ds = {
         let mut ds = IdSet::new();
@@ -139,7 +144,8 @@ fn map_set() {
             TypePtr::Named("test".into()),
             Some("k1".into()),
             ItemContent::Any(vec![Any::String("v1".into())]),
-        )),
+        ))
+        .into(),
         &Block::Item(Item::new(
             ID::new(CLIENT_ID, 1),
             None,
@@ -149,7 +155,8 @@ fn map_set() {
             TypePtr::Named("test".into()),
             Some("k2".into()),
             ItemContent::Any(vec![Any::String("v2".into())]),
-        )),
+        ))
+        .into(),
     ];
 
     roundtrip(payload, expected);
@@ -180,7 +187,8 @@ fn array_insert() {
         TypePtr::Named("test".into()),
         None,
         ItemContent::Any(vec![Any::String("a".into()), Any::String("b".into())]),
-    ))];
+    ))
+    .into()];
 
     roundtrip(payload, expected);
 }
@@ -218,7 +226,8 @@ fn xml_fragment_insert() {
                 TYPE_REFS_XML_TEXT,
                 None,
             )),
-        )),
+        ))
+        .into(),
         &Block::Item(Item::new(
             ID::new(CLIENT_ID, 1),
             None,
@@ -232,7 +241,8 @@ fn xml_fragment_insert() {
                 TYPE_REFS_XML_ELEMENT,
                 Some("node-name".to_string()),
             )),
-        )),
+        ))
+        .into(),
     ];
 
     roundtrip(payload, expected);
@@ -269,9 +279,9 @@ fn state_vector() {
 /// Verify if given `payload` can be deserialized into series
 /// of `expected` blocks, then serialize them back and check
 /// if produced binary is equivalent to `payload`.
-fn roundtrip(payload: &[u8], expected: &[&Block]) {
+fn roundtrip(payload: &[u8], expected: &[&BlockCarrier]) {
     let u = Update::decode_v1(payload);
-    let blocks: Vec<&Block> = u.blocks.blocks().collect();
+    let blocks: Vec<_> = u.blocks.blocks().collect();
     assert_eq!(blocks.as_slice(), expected);
 
     let store: Store = u.into();
