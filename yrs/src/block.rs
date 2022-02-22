@@ -772,7 +772,10 @@ impl Item {
                         break;
                     }
                 }
-                self.left = left;
+                self.left = left.as_ref().map(|ptr| {
+                    let item = store.blocks.get_item(ptr).unwrap();
+                    BlockPtr::new(item.last_id(), ptr.pivot)
+                });
             }
 
             self.try_reassign_parent_sub(left);
