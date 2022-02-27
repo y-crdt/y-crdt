@@ -333,8 +333,8 @@ impl ClientBlockList {
     pub(crate) fn squash_left(&mut self, index: usize) -> Option<SquashResult> {
         let replacement = {
             let (l, r) = self.list.split_at_mut(index);
-            let mut left = BlockPtr::from(unsafe { &mut l[index - 1] });
-            let right = BlockPtr::from(unsafe { &r[0] });
+            let mut left = BlockPtr::from(&mut l[index - 1]);
+            let right = BlockPtr::from(&r[0]);
             if left.is_deleted() == right.is_deleted() && left.same_type(right.deref()) {
                 if left.try_squash(right) {
                     Some(left)
@@ -544,8 +544,8 @@ impl std::fmt::Display for ClientBlockList {
         let mut i = 0;
         writeln!(f, "")?;
         while i < self.list.len() {
-            let block = self.get(i).deref();
-            writeln!(f, "\t\t{}", block)?;
+            let block = self.get(i);
+            writeln!(f, "\t\t{}", block.deref())?;
             if i == self.integrated_len {
                 writeln!(f, "---")?;
             }

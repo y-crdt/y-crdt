@@ -1,4 +1,4 @@
-use crate::block::{Block, Item, ItemContent, ItemPosition, Prelim};
+use crate::block::{Block, BlockPtr, Item, ItemContent, ItemPosition, Prelim};
 use crate::event::Subscription;
 use crate::store::Store;
 use crate::types::text::TextEvent;
@@ -144,8 +144,8 @@ impl XmlElement {
 
     /// Returns a parent XML element, current node can be found within.
     /// Returns `None`, if current node is a root.
-    pub fn parent(&self, txn: &Transaction) -> Option<XmlElement> {
-        self.0.parent(txn)
+    pub fn parent(&self) -> Option<XmlElement> {
+        self.0.parent()
     }
 
     /// Returns a first child XML node (either [XmlElement] or [XmlText]), that can be found in
@@ -345,8 +345,8 @@ impl XmlFragment {
         }
     }
 
-    pub fn parent(&self, txn: &Transaction) -> Option<XmlElement> {
-        parent(self.inner(), txn)
+    pub fn parent(&self) -> Option<XmlElement> {
+        parent(self.inner())
     }
 
     pub fn len(&self, _txn: &Transaction) -> u32 {
@@ -354,7 +354,7 @@ impl XmlFragment {
     }
 
     pub fn iter<'a, 'b>(&'a self, txn: &'b Transaction) -> TreeWalker<'b> {
-        TreeWalker::new(txn, &*self.inner())
+        TreeWalker::new(txn, self.inner())
     }
 
     pub fn to_string(&self, txn: &Transaction) -> String {
@@ -462,10 +462,14 @@ pub struct TreeWalker<'a> {
 }
 
 impl<'a> TreeWalker<'a> {
-    fn new<'b>(txn: &'a Transaction, parent: &'b Branch) -> Self {
+    fn new<'b>(txn: &'a Transaction, parent: BranchRef) -> Self {
         let root = parent.ptr.clone();
         let store = txn.store();
-        let current = parent.start.and_then(|p| p.as_item());
+        let current = if let Some(Block::Item(item)) = parent.start.as_deref() {
+            Some(item)
+        } else {
+            None
+        };
 
         TreeWalker {
             store,
@@ -505,12 +509,8 @@ impl<'a> Iterator for TreeWalker<'a> {
                                 } else if current.parent == self.root {
                                     n = None;
                                 } else {
-                                    n = self.store.get_type(&current.parent).and_then(|t| match &t
-                                        .ptr
-                                    {
-                                        TypePtr::Block(ptr) => ptr.as_item(),
-                                        _ => None,
-                                    });
+                                    let ptr: BlockPtr = (&current.parent).into();
+                                    n = ptr.as_item();
                                 }
                             }
                         }
@@ -543,7 +543,7 @@ impl XmlHook {
     }
 
     pub fn len(&self, txn: &Transaction) -> u32 {
-        self.0.len(txn)
+        self.0.len()
     }
 
     pub fn to_json(&self, txn: &Transaction) -> Any {
@@ -675,8 +675,8 @@ impl XmlText {
     }
 
     /// Returns a parent XML element containing this XML text value.
-    pub fn parent(&self, txn: &Transaction) -> Option<XmlElement> {
-        parent(self.inner(), txn)
+    pub fn parent(&self) -> Option<XmlElement> {
+        parent(self.inner())
     }
 
     /// Returns a number of characters contained under this XML text structure.
@@ -843,8 +843,8 @@ impl XmlTextEvent {
     }
 
     /// Returns a path from root type down to [XmlText] instance which emitted this event.
-    pub fn path(&self, txn: &Transaction) -> Path {
-        Branch::path(self.current_target, self.target.inner(), txn)
+    pub fn path(&self) -> Path {
+        Branch::path(self.current_target, self.target.inner())
     }
 
     /// Returns a summary of text changes made over corresponding [XmlText] collection within
@@ -886,8 +886,8 @@ enum PrelimXml {
 impl Prelim for PrelimXml {
     fn into_content(self, _txn: &mut Transaction) -> (ItemContent, Option<Self>) {
         let inner = match self {
-            PrelimXml::Elem(node_name) => Branch::block(TYPE_REFS_XML_ELEMENT, Some(node_name)),
-            PrelimXml::Text => Branch::block(TYPE_REFS_XML_TEXT, None),
+            PrelimXml::Elem(node_name) => Branch::new(TYPE_REFS_XML_ELEMENT, Some(node_name)),
+            PrelimXml::Text => Branch::new(TYPE_REFS_XML_TEXT, None),
         };
         (ItemContent::Type(inner), None)
     }
@@ -937,10 +937,11 @@ fn prev_sibling(inner: BranchRef, txn: &Transaction) -> Option<Xml> {
     None
 }
 
-fn parent(inner: BranchRef, txn: &Transaction) -> Option<XmlElement> {
+fn parent(inner: BranchRef) -> Option<XmlElement> {
     if let TypePtr::Block(ptr) = &inner.ptr {
         let item = ptr.as_item()?;
-        let parent = txn.store().get_type(&item.parent)?;
+        let ptr: BlockPtr = (&item.parent).into();
+        let parent = ptr.as_branch()?;
         Some(XmlElement::from(parent.clone()))
     } else {
         None
@@ -980,8 +981,8 @@ impl XmlEvent {
     }
 
     /// Returns a path from root type down to [XmlElement] instance which emitted this event.
-    pub fn path(&self, txn: &Transaction) -> Path {
-        Branch::path(self.current_target, self.target.inner(), txn)
+    pub fn path(&self) -> Path {
+        Branch::path(self.current_target, self.target.inner())
     }
 
     /// Returns a summary of XML child nodes changed within corresponding [XmlElement] collection
@@ -1119,15 +1120,11 @@ mod test {
             "second.prev_sibling should point to first"
         );
         assert_eq!(
-            first.parent(&txn).as_ref(),
+            first.parent().as_ref(),
             Some(&root),
             "first.parent should point to root"
         );
-        assert_eq!(
-            root.parent(&txn).as_ref(),
-            None,
-            "root parent should not exist"
-        );
+        assert_eq!(root.parent().as_ref(), None, "root parent should not exist");
         assert_eq!(
             root.first_child().as_ref(),
             Some(&Xml::Text(first)),

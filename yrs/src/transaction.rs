@@ -87,7 +87,9 @@ impl Transaction {
     /// reinterpreted as a text (in such case a sequence component of complex data type will be
     /// interpreted as a list of text chunks).
     pub fn get_text(&mut self, name: &str) -> Text {
-        let c = self.store_mut().create_type(name, None, TYPE_REFS_TEXT);
+        let c = self
+            .store_mut()
+            .get_or_create_type(name, None, TYPE_REFS_TEXT);
         Text::from(c)
     }
 
@@ -103,7 +105,9 @@ impl Transaction {
     /// reinterpreted as a map (in such case a map component of complex data type will be
     /// interpreted as native map).
     pub fn get_map(&mut self, name: &str) -> Map {
-        let c = self.store_mut().create_type(name, None, TYPE_REFS_MAP);
+        let c = self
+            .store_mut()
+            .get_or_create_type(name, None, TYPE_REFS_MAP);
         Map::from(c)
     }
 
@@ -118,7 +122,9 @@ impl Transaction {
     /// reinterpreted as an array (in such case a sequence component of complex data type will be
     /// interpreted as a list of inserted values).
     pub fn get_array(&mut self, name: &str) -> Array {
-        let c = self.store_mut().create_type(name, None, TYPE_REFS_ARRAY);
+        let c = self
+            .store_mut()
+            .get_or_create_type(name, None, TYPE_REFS_ARRAY);
         Array::from(c)
     }
 
@@ -135,7 +141,7 @@ impl Transaction {
     /// interpreted as map of its attributes, while a sequence component - as a list of its child
     /// XML nodes).
     pub fn get_xml_element(&mut self, name: &str) -> XmlElement {
-        let c = self.store_mut().create_type(
+        let c = self.store_mut().get_or_create_type(
             name,
             Some("UNDEFINED".to_string()),
             TYPE_REFS_XML_ELEMENT,
@@ -154,7 +160,9 @@ impl Transaction {
     /// reinterpreted as a text (in such case a sequence component of complex data type will be
     /// interpreted as a list of text chunks).
     pub fn get_xml_text(&mut self, name: &str) -> XmlText {
-        let c = self.store_mut().create_type(name, None, TYPE_REFS_XML_TEXT);
+        let c = self
+            .store_mut()
+            .get_or_create_type(name, None, TYPE_REFS_XML_TEXT);
         XmlText::from(c)
     }
 
@@ -193,8 +201,8 @@ impl Transaction {
                     // We can ignore the case of GC and Delete structs, because we are going to skip them
                     if let Some(mut index) = blocks.find_pivot(clock) {
                         // We can ignore the case of GC and Delete structs, because we are going to skip them
-                        let mut ptr = blocks.get(index);
-                        if let Block::Item(item) = ptr.deref_mut() {
+                        let ptr = blocks.get(index);
+                        if let Block::Item(item) = ptr.clone().deref_mut() {
                             // split the first item if necessary
                             if !item.is_deleted() && item.id.clock < clock {
                                 let store = self.store_mut();
@@ -208,8 +216,8 @@ impl Transaction {
                             }
 
                             while index < blocks.len() {
-                                let mut block = blocks.get(index);
-                                if let Block::Item(item) = block.deref_mut() {
+                                let block = blocks.get(index);
+                                if let Block::Item(item) = block.clone().deref_mut() {
                                     if item.id.clock < clock_end {
                                         if !item.is_deleted() {
                                             if item.id.clock + item.len() > clock_end {
@@ -258,7 +266,8 @@ impl Transaction {
         if let Block::Item(item) = ptr.deref_mut() {
             if !item.is_deleted() {
                 if item.parent_sub.is_none() && item.is_countable() {
-                    if let Some(mut parent) = self.store().get_type(&item.parent) {
+                    let parent: BlockPtr = (&item.parent).into();
+                    if let Some(mut parent) = parent.as_branch() {
                         parent.block_len -= item.len();
                         parent.content_len -= item.content_len(store.options.offset_kind);
                     }
@@ -268,12 +277,6 @@ impl Transaction {
                 self.delete_set.insert(item.id.clone(), item.len());
 
                 match &item.parent {
-                    TypePtr::Named(_) => {
-                        self.changed
-                            .entry(item.parent.clone())
-                            .or_default()
-                            .insert(item.parent_sub.clone());
-                    }
                     TypePtr::Block(ptr)
                         if ptr.id().clock < self.before_state.get(&ptr.id().client)
                             && ptr.is_deleted() =>
@@ -463,7 +466,8 @@ impl Transaction {
         // 3. for each change observed by the transaction call 'afterTransaction'
         if !self.changed.is_empty() {
             for (ptr, subs) in self.changed.iter() {
-                if let Some(branch) = store.get_type(ptr) {
+                let ptr: BlockPtr = ptr.into();
+                if let Some(branch) = ptr.as_branch() {
                     if let Some(o) = branch.observers.as_ref() {
                         o.publish(branch.clone(), self, subs.clone());
                     }
@@ -591,7 +595,7 @@ impl Transaction {
                     }
 
                     if let Some(pivot) = list.find_pivot(r.end) {
-                        let mut block = list.get(pivot);
+                        let block = list.get(pivot);
                         let block_id = block.id();
                         let block_len = block.len();
                         if block_id.clock + block_len > r.end {

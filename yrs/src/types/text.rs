@@ -679,8 +679,8 @@ impl TextEvent {
     }
 
     /// Returns a path from root type down to [Text] instance which emitted this event.
-    pub fn path(&self, txn: &Transaction) -> Path {
-        Branch::path(self.current_target, self.target.0, txn)
+    pub fn path(&self) -> Path {
+        Branch::path(self.current_target, self.target.0)
     }
 
     /// Returns a summary of text changes made over corresponding [Text] collection within

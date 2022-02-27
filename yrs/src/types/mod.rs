@@ -16,9 +16,7 @@ use crate::types::xml::{XmlElement, XmlEvent, XmlText, XmlTextEvent};
 use lib0::any::Any;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Formatter;
-use std::mem::MaybeUninit;
 use std::ops::{Deref, DerefMut};
-use std::pin::Pin;
 use std::ptr::NonNull;
 use std::rc::Rc;
 
@@ -69,15 +67,15 @@ impl DerefMut for BranchRef {
     }
 }
 
-impl<'a> From<&'a mut Pin<Box<Branch>>> for BranchRef {
-    fn from(branch: &'a mut Pin<Box<Branch>>) -> Self {
-        let ptr = NonNull::from(branch.as_mut().get_mut());
+impl<'a> From<&'a mut Box<Branch>> for BranchRef {
+    fn from(branch: &'a mut Box<Branch>) -> Self {
+        let ptr = NonNull::from(branch.as_mut());
         BranchRef(ptr)
     }
 }
 
-impl<'a> From<&'a Pin<Box<Branch>>> for BranchRef {
-    fn from(branch: &'a Pin<Box<Branch>>) -> Self {
+impl<'a> From<&'a Box<Branch>> for BranchRef {
+    fn from(branch: &'a Box<Branch>) -> Self {
         let b: &Branch = &*branch;
         unsafe {
             let ptr = NonNull::new_unchecked(b as *const Branch as *mut Branch);
@@ -205,30 +203,17 @@ impl PartialEq for Branch {
 }
 
 impl Branch {
-    pub fn block(type_ref: TypeRefs, name: Option<String>) -> Pin<Box<Self>> {
-        Pin::new(Box::new(Self {
+    pub fn new(type_ref: TypeRefs, name: Option<String>) -> Box<Self> {
+        Box::new(Self {
             start: None,
             map: HashMap::default(),
             block_len: 0,
             content_len: 0,
-            ptr: unsafe { MaybeUninit::uninit().assume_init() },
+            ptr: TypePtr::Unknown,
             name,
             type_ref,
             observers: None,
-        }))
-    }
-
-    pub fn named(parent: Rc<str>, type_ref: TypeRefs, name: Option<String>) -> Pin<Box<Self>> {
-        Pin::new(Box::new(Self {
-            start: None,
-            map: HashMap::default(),
-            block_len: 0,
-            content_len: 0,
-            ptr: TypePtr::Named(parent),
-            name,
-            type_ref,
-            observers: None,
-        }))
+        })
     }
 
     /// Returns an identifier of an underlying complex data type (eg. is it an Array or a Map).
@@ -249,7 +234,7 @@ impl Branch {
     /// Get iterator over (String, Block) entries of a map component of a current root type.
     /// Deleted blocks are skipped by this iterator.
     pub(crate) fn entries<'a, 'b>(&'a self, txn: &'b Transaction) -> Entries<'b> {
-        Entries::new(&self.ptr, txn)
+        Entries::new((&self.ptr).into(), txn)
     }
 
     /// Get iterator over Block entries of an array component of a current root type.
@@ -430,7 +415,7 @@ impl Branch {
         txn.create_item(&pos, value, None).as_item().unwrap()
     }
 
-    pub(crate) fn path(from: BranchRef, to: BranchRef, txn: &Transaction) -> Path {
+    pub(crate) fn path(from: BranchRef, to: BranchRef) -> Path {
         let parent = from;
         let mut child = to;
         let mut path = VecDeque::default();
@@ -439,14 +424,14 @@ impl Branch {
                 break;
             }
             let item = ptr.as_item().unwrap();
+            let ptr: BlockPtr = (&item.parent).into();
+            child = ptr.as_branch().unwrap();
             if let Some(parent_sub) = item.parent_sub.clone() {
                 // parent is map-ish
                 path.push_front(PathSegment::Key(parent_sub));
-                child = txn.store().get_type(&item.parent).unwrap().clone();
             } else {
                 // parent is array-ish
                 let mut i = 0;
-                child = txn.store().get_type(&item.parent).unwrap();
                 let mut c = child.start;
                 while let Some(ptr) = c {
                     if ptr.id() == &item.id {
@@ -622,9 +607,8 @@ pub(crate) struct Entries<'a> {
 }
 
 impl<'a> Entries<'a> {
-    pub(crate) fn new<'b>(ptr: &'b TypePtr, txn: &'a Transaction) -> Self {
-        let inner = txn.store().get_type_raw(ptr).unwrap();
-        let iter = inner.map.iter();
+    pub(crate) fn new(ptr: BlockPtr, txn: &'a Transaction) -> Self {
+        let iter = ptr.as_branch().unwrap().map.iter();
         Entries { txn, iter }
     }
 }
@@ -686,6 +670,17 @@ pub enum TypePtr {
     Block(block::BlockPtr),
 
     ID(ID),
+    Named(Rc<str>),
+}
+
+impl<'a> Into<BlockPtr> for &'a TypePtr {
+    fn into(self) -> BlockPtr {
+        if let TypePtr::Block(ptr) = self {
+            ptr.clone()
+        } else {
+            panic!("Defect: TypePtr was not initialized")
+        }
+    }
 }
 
 impl std::fmt::Display for TypePtr {
@@ -693,7 +688,8 @@ impl std::fmt::Display for TypePtr {
         match self {
             TypePtr::Unknown => write!(f, "unknown"),
             TypePtr::Block(ptr) => write!(f, "{}", ptr),
-            TypePtr::Named(name) => write!(f, "'{}'", name.as_ref()),
+            TypePtr::ID(id) => write!(f, "{}", id),
+            TypePtr::Named(name) => write!(f, "{}", name),
         }
     }
 }

@@ -1,4 +1,4 @@
-use crate::block::{Block, BlockPtr, Item, ItemContent};
+use crate::block::{Item, ItemContent};
 use crate::id_set::{DeleteSet, IdSet};
 use crate::store::Store;
 use crate::types::{Branch, TypePtr, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT};
@@ -8,7 +8,6 @@ use crate::updates::encoder::Encode;
 use crate::{Doc, StateVector, ID};
 use lib0::any::Any;
 use std::cell::Cell;
-use std::mem::MaybeUninit;
 use std::rc::Rc;
 
 #[test]
@@ -133,7 +132,7 @@ fn map_set() {
     ];
     const CLIENT_ID: u64 = 880095927;
     let expected = vec![
-        &Item::new(
+        Item::new(
             ID::new(CLIENT_ID, 0),
             None,
             None,
@@ -144,7 +143,7 @@ fn map_set() {
             ItemContent::Any(vec![Any::String("v1".into())]),
         )
         .into(),
-        &Item::new(
+        Item::new(
             ID::new(CLIENT_ID, 1),
             None,
             None,
@@ -176,7 +175,7 @@ fn array_insert() {
         1, 1, 199, 195, 202, 51, 0, 8, 1, 4, 116, 101, 115, 116, 2, 119, 1, 97, 119, 1, 98, 0,
     ];
     const CLIENT_ID: u64 = 108175815;
-    let expected = vec![&Item::new(
+    let expected = vec![Item::new(
         ID::new(CLIENT_ID, 0),
         None,
         None,
@@ -211,7 +210,7 @@ fn xml_fragment_insert() {
     ];
     const CLIENT_ID: u64 = 517330651;
     let expected = vec![
-        &Item::new(
+        Item::new(
             ID::new(CLIENT_ID, 0),
             None,
             None,
@@ -219,10 +218,10 @@ fn xml_fragment_insert() {
             None,
             TypePtr::Named("fragment-name".into()),
             None,
-            ItemContent::Type(Branch::block(TYPE_REFS_XML_TEXT, None)),
+            ItemContent::Type(Branch::new(TYPE_REFS_XML_TEXT, None)),
         )
         .into(),
-        &Item::new(
+        Item::new(
             ID::new(CLIENT_ID, 1),
             None,
             Some(ID::new(CLIENT_ID, 0)),
@@ -230,7 +229,7 @@ fn xml_fragment_insert() {
             None,
             TypePtr::Unknown,
             None,
-            ItemContent::Type(Branch::block(
+            ItemContent::Type(Branch::new(
                 TYPE_REFS_XML_ELEMENT,
                 Some("node-name".to_string()),
             )),
@@ -272,9 +271,10 @@ fn state_vector() {
 /// Verify if given `payload` can be deserialized into series
 /// of `expected` blocks, then serialize them back and check
 /// if produced binary is equivalent to `payload`.
-fn roundtrip(payload: &[u8], expected: Vec<&BlockCarrier>) {
+fn roundtrip(payload: &[u8], expected: Vec<BlockCarrier>) {
     let u = Update::decode_v1(payload);
-    let blocks: Vec<_> = u.blocks.blocks().collect();
+    let expected: Vec<&BlockCarrier> = expected.iter().collect();
+    let blocks: Vec<&BlockCarrier> = u.blocks.blocks().collect();
     assert_eq!(blocks, expected);
 
     let store: Store = u.into();

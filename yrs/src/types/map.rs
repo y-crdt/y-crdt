@@ -43,7 +43,7 @@ impl Map {
     }
 
     /// Returns a number of entries stored within current map.
-    pub fn len(&self, txn: &Transaction) -> u32 {
+    pub fn len(&self) -> u32 {
         let mut len = 0;
         let inner = self.0;
         for ptr in inner.map.values() {
@@ -58,7 +58,7 @@ impl Map {
     }
 
     fn entries<'a, 'b>(&'a self, txn: &'b Transaction) -> Entries<'b> {
-        let ptr = &self.0.ptr;
+        let ptr = (&self.0.ptr).into();
         Entries::new(ptr, txn)
     }
 
@@ -223,7 +223,7 @@ impl<T> From<HashMap<String, T>> for PrelimMap<T> {
 
 impl<T: Prelim> Prelim for PrelimMap<T> {
     fn into_content(self, _txn: &mut Transaction) -> (ItemContent, Option<Self>) {
-        let inner = Branch::block(TYPE_REFS_MAP, None);
+        let inner = Branch::new(TYPE_REFS_MAP, None);
         (ItemContent::Type(inner), Some(self))
     }
 
@@ -258,8 +258,8 @@ impl MapEvent {
     }
 
     /// Returns a path from root type down to [Map] instance which emitted this event.
-    pub fn path(&self, txn: &Transaction) -> Path {
-        Branch::path(self.current_target, self.target.0, txn)
+    pub fn path(&self) -> Path {
+        Branch::path(self.current_target, self.target.0)
     }
 
     /// Returns a summary of key-value changes made over corresponding [Map] collection within
@@ -330,7 +330,7 @@ mod test {
 
         //TODO: YArray within YMap
         fn compare_all(t: &Transaction, m: &Map) {
-            assert_eq!(m.len(&t), 5);
+            assert_eq!(m.len(), 5);
             assert_eq!(m.get(&"number".to_owned()), Some(Value::from(1f64)));
             assert_eq!(m.get(&"boolean0".to_owned()), Some(Value::from(false)));
             assert_eq!(m.get(&"boolean1".to_owned()), Some(Value::from(true)));
@@ -410,19 +410,19 @@ mod test {
 
         m1.insert(&mut t1, key1.clone(), "c0");
         m1.insert(&mut t1, key2.clone(), "c1");
-        assert_eq!(m1.len(&t1), 2);
+        assert_eq!(m1.len(), 2);
 
         // remove 'stuff'
         assert_eq!(m1.remove(&mut t1, &key1), Some(Value::from("c0")));
-        assert_eq!(m1.len(&t1), 1);
+        assert_eq!(m1.len(), 1);
 
         // remove 'stuff' again - nothing should happen
         assert_eq!(m1.remove(&mut t1, &key1), None);
-        assert_eq!(m1.len(&t1), 1);
+        assert_eq!(m1.len(), 1);
 
         // remove 'other-stuff'
         assert_eq!(m1.remove(&mut t1, &key2), Some(Value::from("c1")));
-        assert_eq!(m1.len(&t1), 0);
+        assert_eq!(m1.len(), 0);
     }
 
     #[test]
@@ -435,7 +435,7 @@ mod test {
         m1.insert(&mut t1, "key2".to_owned(), "c1");
         m1.clear(&mut t1);
 
-        assert_eq!(m1.len(&t1), 0);
+        assert_eq!(m1.len(), 0);
         assert_eq!(m1.get(&"key1".to_owned()), None);
         assert_eq!(m1.get(&"key2".to_owned()), None);
 
@@ -446,7 +446,7 @@ mod test {
         d2.apply_update_v1(&mut t2, u1.as_slice());
 
         let m2 = t2.get_map("map");
-        assert_eq!(m2.len(&t2), 0);
+        assert_eq!(m2.len(), 0);
         assert_eq!(m2.get(&"key1".to_owned()), None);
         assert_eq!(m2.get(&"key2".to_owned()), None);
     }
@@ -510,7 +510,7 @@ mod test {
                 doc.client_id
             );
             assert_eq!(
-                map.len(&txn),
+                map.len(),
                 0,
                 "all entries for peer {} should be removed",
                 doc.client_id
