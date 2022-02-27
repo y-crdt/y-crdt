@@ -13,7 +13,6 @@ use std::collections::HashSet;
 use std::hash::Hash;
 use std::ops::{Deref, DerefMut};
 use std::panic;
-use std::pin::Pin;
 use std::ptr::NonNull;
 use std::rc::Rc;
 
@@ -92,6 +91,7 @@ pub struct BlockPtr(NonNull<Block>);
 
 impl BlockPtr {
     pub fn splice(&mut self, offset: u32) -> Option<Box<Block>> {
+        let self_ptr = self.clone();
         if offset == 0 {
             None
         } else {
@@ -104,7 +104,7 @@ impl BlockPtr {
                     let mut new = Box::new(Block::Item(Item {
                         id: ID::new(client, clock + offset),
                         len: content.len(OffsetKind::Utf16),
-                        left: Some(*self),
+                        left: Some(self_ptr),
                         right: item.right.clone(),
                         origin: Some(ID::new(client, clock + offset - 1)),
                         right_origin: item.right_origin.clone(),
@@ -129,6 +129,7 @@ impl BlockPtr {
     /// Integrates current block into block store.
     /// If it returns true, it means that the block should be deleted after being added to a block store.
     pub fn integrate(&mut self, txn: &mut Transaction, offset: u32) -> bool {
+        let self_ptr = self.clone();
         match self.deref_mut() {
             Block::GC(this) => this.integrate(offset),
             Block::Item(this) => {
@@ -144,9 +145,9 @@ impl BlockPtr {
                     this.len -= offset;
                 }
 
-                let parent = match store.get_type(&this.parent) {
-                    None => store.init_type_from_ptr(&this.parent),
-                    parent => parent,
+                let parent = match &this.parent {
+                    TypePtr::Block(block) => block.as_branch(),
+                    _ => None,
                 };
 
                 let left: Option<&Block> = this.left.as_deref();
@@ -236,7 +237,7 @@ impl BlockPtr {
 
                     // reconnect left/right
                     if let Some(Block::Item(left)) = this.left.as_deref_mut() {
-                        this.right = left.right.replace(*self);
+                        this.right = left.right.replace(self_ptr);
                     } else {
                         let r = if let Some(parent_sub) = &this.parent_sub {
                             let start = parent_ref.map.get(parent_sub).cloned();
@@ -253,17 +254,17 @@ impl BlockPtr {
                             }
                             r
                         } else {
-                            let start = parent_ref.start.replace(*self);
+                            let start = parent_ref.start.replace(self_ptr);
                             start
                         };
                         this.right = r;
                     }
 
                     if let Some(Block::Item(right)) = this.right.as_deref_mut() {
-                        right.left = Some(*self);
+                        right.left = Some(self_ptr);
                     } else if let Some(parent_sub) = &this.parent_sub {
                         // set as current parent value if right === null and this is parentSub
-                        parent_ref.map.insert(parent_sub.clone(), *self);
+                        parent_ref.map.insert(parent_sub.clone(), self_ptr);
                         if let Some(left) = this.left {
                             // this is the current attribute value of parent. delete right
                             txn.delete(left);
@@ -316,19 +317,21 @@ impl BlockPtr {
     /// parent data structure, their IDs are sequenced directly one after another and they point to
     /// each other as their left/right neighbors respectively.
     pub fn try_squash(&mut self, mut other: BlockPtr) -> bool {
+        let self_ptr = self.clone();
+        let other_ptr = other.clone();
         match (self.deref_mut(), other.deref_mut()) {
             (Block::Item(v1), Block::Item(v2)) => {
                 if v1.id.client == v2.id.client
                     && v1.id.clock + v1.len() == v2.id.clock
                     && v2.origin == Some(v1.last_id())
-                    && v1.right == Some(other)
                     && v1.right_origin == v2.right_origin
+                    && v1.right == Some(other_ptr)
                     && v1.is_deleted() == v2.is_deleted()
                     && v1.content.try_squash(&v2.content)
                 {
                     v1.len = v1.content.len(OffsetKind::Utf16);
                     if let Some(Block::Item(right_right)) = v2.right.as_deref_mut() {
-                        right_right.left = Some(*self);
+                        right_right.left = Some(self_ptr);
                     }
                     v1.right = v2.right;
                     true
@@ -341,6 +344,15 @@ impl BlockPtr {
                 true
             }
             _ => false,
+        }
+    }
+
+    pub(crate) fn as_branch(self) -> Option<BranchRef> {
+        let item = self.as_item()?;
+        if let ItemContent::Type(branch) = &item.content {
+            Some(BranchRef::from(branch))
+        } else {
+            None
         }
     }
 }
@@ -486,6 +498,7 @@ impl Block {
                         encoder.write_parent_info(false);
                         encoder.write_left_id(b.id());
                     } else if let TypePtr::Named(name) = &item.parent {
+                        // this edge case was added by differential updates
                         encoder.write_parent_info(true);
                         encoder.write_string(name)
                     } else {
@@ -742,8 +755,8 @@ impl Item {
             parent_sub,
             info,
         }));
+        let item_ptr = TypePtr::Block(BlockPtr::from(&mut item));
         if let ItemContent::Type(branch) = &mut item.as_item_mut().unwrap().content {
-            let item_ptr = TypePtr::Block(BlockPtr::from(&mut item));
             branch.ptr = item_ptr;
         }
         item
@@ -811,14 +824,11 @@ impl Item {
                     self.parent_sub = item.parent_sub.clone();
                 }
             }
-            TypePtr::Block(ptr) => {
-                if let Block::Item(item) = ptr.deref() {
-                    if let ItemContent::Type(t) = &item.content {
-                        self.parent = t.ptr.clone();
-                    }
-                }
+            TypePtr::ID(id) => {
+                let ptr = store.blocks.get_block(id).unwrap();
+                self.parent = TypePtr::Block(ptr);
             }
-            TypePtr::Named(_) => {}
+            _ => {}
         }
     }
 
@@ -1055,7 +1065,7 @@ pub enum ItemContent {
 
     /// A reference of a branch node. Branch nodes define a complex collection types, such as
     /// arrays, maps or XML elements.
-    Type(Pin<Box<Branch>>),
+    Type(Box<Branch>),
 }
 
 impl ItemContent {
@@ -1260,7 +1270,7 @@ impl ItemContent {
                 } else {
                     None
                 };
-                let inner = types::Branch::block(type_ref, name);
+                let inner = types::Branch::new(type_ref, name);
                 ItemContent::Type(inner)
             }
             BLOCK_ITEM_ANY_REF_NUMBER => {

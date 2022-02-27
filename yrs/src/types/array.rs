@@ -242,7 +242,7 @@ where
     T: IntoIterator<Item = V>,
 {
     fn into_content(self, _txn: &mut Transaction) -> (ItemContent, Option<Self>) {
-        let inner = Branch::block(TYPE_REFS_ARRAY, None);
+        let inner = Branch::new(TYPE_REFS_ARRAY, None);
         (ItemContent::Type(inner), Some(self))
     }
 
@@ -277,8 +277,8 @@ impl ArrayEvent {
     }
 
     /// Returns a path from root type down to [Text] instance which emitted this event.
-    pub fn path(&self, txn: &Transaction) -> Path {
-        Branch::path(self.current_target, self.target.0, txn)
+    pub fn path(&self) -> Path {
+        Branch::path(self.current_target, self.target.0)
     }
 
     /// Returns summary of changes made over corresponding [Array] collection within
