@@ -8,7 +8,7 @@ use crate::store::Store;
 use crate::types::array::Array;
 use crate::types::xml::{XmlElement, XmlText};
 use crate::types::{
-    Branch, BranchRef, Map, Text, TypePtr, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
+    Branch, BranchPtr, Map, Text, TypePtr, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
     TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT,
 };
 use crate::update::Update;
@@ -28,7 +28,7 @@ pub struct Transaction {
     /// Current state vector of a transaction, which includes all performed updates.
     pub after_state: StateVector,
     /// ID's of the blocks to be merged.
-    pub merge_blocks: Vec<BlockPtr>,
+    pub(crate) merge_blocks: Vec<BlockPtr>,
     /// Describes the set of deleted items by ids.
     pub delete_set: DeleteSet,
     /// All types that were directly modified (property added or child inserted/deleted).
@@ -266,7 +266,7 @@ impl Transaction {
         if let Block::Item(item) = ptr.deref_mut() {
             if !item.is_deleted() {
                 if item.parent_sub.is_none() && item.is_countable() {
-                    let parent: BlockPtr = (&item.parent).into();
+                    let parent: &BlockPtr = (&item.parent).into();
                     if let Some(mut parent) = parent.as_branch() {
                         parent.block_len -= item.len();
                         parent.content_len -= item.content_len(store.options.offset_kind);
@@ -418,7 +418,7 @@ impl Transaction {
         };
         let (content, remainder) = value.into_content(self);
         let inner_ref = if let ItemContent::Type(inner_ref) = &content {
-            Some(BranchRef::from(inner_ref))
+            Some(BranchPtr::from(inner_ref))
         } else {
             None
         };
@@ -466,7 +466,7 @@ impl Transaction {
         // 3. for each change observed by the transaction call 'afterTransaction'
         if !self.changed.is_empty() {
             for (ptr, subs) in self.changed.iter() {
-                let ptr: BlockPtr = ptr.into();
+                let ptr: &BlockPtr = ptr.into();
                 if let Some(branch) = ptr.as_branch() {
                     if let Some(o) = branch.observers.as_ref() {
                         o.publish(branch.clone(), self, subs.clone());

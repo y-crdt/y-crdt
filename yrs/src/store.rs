@@ -3,7 +3,7 @@ use crate::block_store::{BlockStore, SquashResult, StateVector};
 use crate::doc::Options;
 use crate::event::{EventHandler, UpdateEvent};
 use crate::id_set::DeleteSet;
-use crate::types::{Branch, BranchRef, Path, PathSegment, TypePtr, TypeRefs};
+use crate::types::{Branch, BranchPtr, Path, PathSegment, TypePtr, TypeRefs};
 use crate::update::PendingUpdate;
 use crate::updates::encoder::{Encode, Encoder};
 use std::collections::hash_map::Entry;
@@ -65,7 +65,8 @@ impl Store {
     /// no such type could be found or was ever defined.
     pub fn get_type<K: Into<Rc<str>>>(&self, key: K) -> Option<BlockPtr> {
         let ptr = &self.types.get(&key.into())?.ptr;
-        Some(ptr.into())
+        let ptr: &BlockPtr = ptr.into();
+        Some(ptr.clone())
     }
 
     /// Returns a branch reference to a complex type identified by its pointer. Returns `None` if
@@ -75,13 +76,13 @@ impl Store {
         key: K,
         node_name: Option<String>,
         type_ref: TypeRefs,
-    ) -> BranchRef {
+    ) -> BranchPtr {
         let key = key.into();
         match self.types.entry(key.clone()) {
-            Entry::Occupied(mut e) => BranchRef::from(e.get_mut()),
+            Entry::Occupied(mut e) => BranchPtr::from(e.get_mut()),
             Entry::Vacant(e) => {
                 let mut branch = Branch::new(type_ref, node_name);
-                let branch_ref = BranchRef::from(&mut branch);
+                let branch_ref = BranchPtr::from(&mut branch);
                 e.insert(branch);
                 branch_ref
             }
@@ -150,8 +151,8 @@ impl Store {
 
     pub(crate) fn gc_cleanup(&self, mut compaction: SquashResult) {
         if let Some(parent_sub) = compaction.parent_sub {
-            if let TypePtr::Block(mut ptr) = compaction.parent {
-                if let Some(inner) = ptr.as_branch() {
+            if let TypePtr::Block(ptr) = compaction.parent {
+                if let Some(mut inner) = ptr.as_branch() {
                     match inner.map.entry(parent_sub.clone()) {
                         Entry::Occupied(mut e) => {
                             let cell = e.get_mut();
@@ -171,7 +172,7 @@ impl Store {
         }
     }
 
-    pub fn get_type_from_path(&self, path: &Path) -> Option<BranchRef> {
+    pub fn get_type_from_path(&self, path: &Path) -> Option<BranchPtr> {
         let mut i = path.iter();
         if let Some(PathSegment::Key(root_name)) = i.next() {
             let mut current = self.get_type(root_name.clone())?.as_branch()?;

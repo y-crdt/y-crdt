@@ -14,7 +14,7 @@ use yrs::types::map::{MapEvent, MapIter};
 use yrs::types::text::TextEvent;
 use yrs::types::xml::{Attributes, TreeWalker, XmlEvent, XmlTextEvent};
 use yrs::types::{
-    Attrs, Branch, BranchRef, Change, Delta, EntryChange, Path, PathSegment, TypePtr, TypeRefs,
+    Attrs, Branch, BranchPtr, Change, Delta, EntryChange, Path, PathSegment, TypePtr, TypeRefs,
     Value, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT, TYPE_REFS_XML_ELEMENT,
     TYPE_REFS_XML_TEXT,
 };
@@ -2269,7 +2269,7 @@ impl Prelim for JsValueWrapper {
         (content, this)
     }
 
-    fn integrate(self, txn: &mut Transaction, inner_ref: BranchRef) {
+    fn integrate(self, txn: &mut Transaction, inner_ref: BranchPtr) {
         if let Ok(shared) = Shared::try_from(&self.0) {
             if shared.is_prelim() {
                 match shared {

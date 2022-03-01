@@ -11,7 +11,7 @@ use yrs::types::map::MapEvent;
 use yrs::types::text::TextEvent;
 use yrs::types::xml::{XmlEvent, XmlTextEvent};
 use yrs::types::{
-    Attrs, BranchRef, Change, Delta, EntryChange, PathSegment, TypePtr, Value, TYPE_REFS_ARRAY,
+    Attrs, BranchPtr, Change, Delta, EntryChange, PathSegment, TypePtr, Value, TYPE_REFS_ARRAY,
     TYPE_REFS_MAP, TYPE_REFS_TEXT, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT,
 };
 use yrs::updates::decoder::{Decode, DecoderV1};
@@ -1762,7 +1762,7 @@ impl Prelim for YInput {
         }
     }
 
-    fn integrate(self, txn: &mut yrs::Transaction, inner_ref: BranchRef) {
+    fn integrate(self, txn: &mut yrs::Transaction, inner_ref: BranchPtr) {
         unsafe {
             if self.tag == Y_MAP {
                 let map = Map::from(inner_ref);
@@ -3522,7 +3522,7 @@ trait BranchPointable {
 
 impl<T> BranchPointable for T
 where
-    T: AsRef<Branch> + From<BranchRef>,
+    T: AsRef<Branch> + From<BranchPtr>,
 {
     fn into_raw_branch(self) -> *mut Branch {
         let branch_ref = self.as_ref();
@@ -3531,7 +3531,7 @@ where
 
     fn from_raw_branch(branch: *const Branch) -> Self {
         let b = unsafe { branch.as_ref().unwrap() };
-        let branch_ref = BranchRef::from(b);
+        let branch_ref = BranchPtr::from(b);
         T::from(branch_ref)
     }
 }
