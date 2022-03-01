@@ -138,8 +138,10 @@ impl Update {
                                         - b.id().clock as isize;
                                     if diff > 0 {
                                         // `b`'s clock position is inside of `a` -> we need to split `a`
-                                        self.blocks.split_item(a, diff as u32, i1);
-                                        blocks = self.blocks.clients.get_mut(&client).unwrap();
+                                        if let Some(new) = a.splice(diff as u32) {
+                                            blocks.insert(i1 + 1, new);
+                                        }
+                                        //blocks = self.blocks.clients.get_mut(&client).unwrap();
                                     }
                                 }
                             }

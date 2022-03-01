@@ -51,9 +51,9 @@ pub const TYPE_REFS_UNDEFINED: TypeRefs = 15;
 /// map-like and array-like contents of a [Branch].
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy)]
-pub struct BranchRef(NonNull<Branch>);
+pub struct BranchPtr(NonNull<Branch>);
 
-impl Deref for BranchRef {
+impl Deref for BranchPtr {
     type Target = Branch;
 
     fn deref(&self) -> &Self::Target {
@@ -61,39 +61,39 @@ impl Deref for BranchRef {
     }
 }
 
-impl DerefMut for BranchRef {
+impl DerefMut for BranchPtr {
     fn deref_mut(&mut self) -> &mut Self::Target {
         unsafe { self.0.as_mut() }
     }
 }
 
-impl<'a> From<&'a mut Box<Branch>> for BranchRef {
+impl<'a> From<&'a mut Box<Branch>> for BranchPtr {
     fn from(branch: &'a mut Box<Branch>) -> Self {
         let ptr = NonNull::from(branch.as_mut());
-        BranchRef(ptr)
+        BranchPtr(ptr)
     }
 }
 
-impl<'a> From<&'a Box<Branch>> for BranchRef {
+impl<'a> From<&'a Box<Branch>> for BranchPtr {
     fn from(branch: &'a Box<Branch>) -> Self {
         let b: &Branch = &*branch;
         unsafe {
             let ptr = NonNull::new_unchecked(b as *const Branch as *mut Branch);
-            BranchRef(ptr)
+            BranchPtr(ptr)
         }
     }
 }
 
-impl<'a> From<&'a Branch> for BranchRef {
+impl<'a> From<&'a Branch> for BranchPtr {
     fn from(branch: &'a Branch) -> Self {
         unsafe {
             let ptr = NonNull::new_unchecked(branch as *const Branch as *mut Branch);
-            BranchRef(ptr)
+            BranchPtr(ptr)
         }
     }
 }
 
-impl Into<Value> for BranchRef {
+impl Into<Value> for BranchPtr {
     /// Converts current branch data into a [Value]. It uses a type ref information to resolve,
     /// which value variant is a correct one for this branch. Since branch represent only complex
     /// types [Value::Any] will never be returned from this method.
@@ -111,17 +111,17 @@ impl Into<Value> for BranchRef {
     }
 }
 
-impl Eq for BranchRef {}
+impl Eq for BranchPtr {}
 
 #[cfg(not(test))]
-impl PartialEq for BranchRef {
+impl PartialEq for BranchPtr {
     fn eq(&self, other: &Self) -> bool {
         NonNull::eq(&self.0, &other.0)
     }
 }
 
 #[cfg(test)]
-impl PartialEq for BranchRef {
+impl PartialEq for BranchPtr {
     fn eq(&self, other: &Self) -> bool {
         if NonNull::eq(&self.0, &other.0) {
             true
@@ -145,7 +145,7 @@ pub struct Branch {
     ///   node.
     /// - [Text] and [XmlText]: this field point to a first chunk of text appended to collaborative
     ///   text data structure.
-    pub start: Option<BlockPtr>,
+    pub(crate) start: Option<BlockPtr>,
 
     /// A map component of this branch node, used by some of the specialized complex types
     /// including:
@@ -153,13 +153,13 @@ pub struct Branch {
     /// - [Map]: all of the map elements are based on this field. The value of each entry points
     ///   to the last modified value.
     /// - [XmlElement]: this field stores attributes assigned to a given XML node.
-    pub map: HashMap<Rc<str>, BlockPtr>,
+    pub(crate) map: HashMap<Rc<str>, BlockPtr>,
 
     /// Unique identifier of a current branch node. It can be contain either a named string - which
     /// means, this branch is a root-level complex data structure - or a block identifier. In latter
     /// case it means, that this branch is a complex type (eg. Map or Array) nested inside of
     /// another complex type.
-    pub ptr: TypePtr,
+    pub(crate) ptr: TypePtr,
 
     /// A tag name identifier, used only by [XmlElement].
     pub name: Option<String>,
@@ -216,6 +216,11 @@ impl Branch {
         })
     }
 
+    pub(crate) fn as_item(&self) -> &Item {
+        let ptr: &BlockPtr = (&self.ptr).into();
+        ptr.as_item().unwrap()
+    }
+
     /// Returns an identifier of an underlying complex data type (eg. is it an Array or a Map).
     pub fn type_ref(&self) -> TypeRefs {
         self.type_ref & 0b1111
@@ -233,14 +238,14 @@ impl Branch {
 
     /// Get iterator over (String, Block) entries of a map component of a current root type.
     /// Deleted blocks are skipped by this iterator.
-    pub(crate) fn entries<'a, 'b>(&'a self, txn: &'b Transaction) -> Entries<'b> {
-        Entries::new((&self.ptr).into(), txn)
+    pub(crate) fn entries(&self) -> Entries {
+        Entries::new(&self.map)
     }
 
     /// Get iterator over Block entries of an array component of a current root type.
     /// Deleted blocks are skipped by this iterator.
-    pub(crate) fn iter<'a, 'b>(&'a self, txn: &'b Transaction) -> Iter<'b> {
-        Iter::new(self.start, txn)
+    pub(crate) fn iter(&self) -> Iter {
+        Iter::new(self.start.as_ref())
     }
 
     /// Returns a materialized value of non-deleted entry under a given `key` of a map component
@@ -258,9 +263,9 @@ impl Branch {
     /// location within wrapping item content.
     /// If `index` was outside of the array component boundary of current branch node, `None` will
     /// be returned.
-    pub(crate) fn get_at<'a, 'b>(&'a self, mut index: u32) -> Option<(&'b ItemContent, usize)> {
-        let mut ptr = self.start;
-        while let Some(Block::Item(item)) = ptr.as_deref() {
+    pub(crate) fn get_at(&self, mut index: u32) -> Option<(&ItemContent, usize)> {
+        let mut ptr = self.start.as_ref();
+        while let Some(Block::Item(item)) = ptr.map(BlockPtr::deref) {
             let len = item.len();
             if !item.is_deleted() && item.is_countable() {
                 if index < len {
@@ -269,7 +274,7 @@ impl Branch {
 
                 index -= len;
             }
-            ptr = item.right.clone();
+            ptr = item.right.as_ref();
         }
 
         None
@@ -288,11 +293,11 @@ impl Branch {
     }
 
     /// Returns a first non-deleted item from an array component of a current root type.
-    pub(crate) fn first<'a, 'b>(&'a self) -> Option<&'b Item> {
-        let mut ptr = self.start;
-        while let Some(Block::Item(item)) = ptr.as_deref() {
+    pub(crate) fn first(&self) -> Option<&Item> {
+        let mut ptr = self.start.as_ref();
+        while let Some(Block::Item(item)) = ptr.map(BlockPtr::deref) {
             if item.is_deleted() {
-                ptr = item.right;
+                ptr = item.right.as_ref();
             } else {
                 return Some(item);
             }
@@ -352,7 +357,7 @@ impl Branch {
             Branch::index_to_ptr(txn, start, index)
         };
         while remaining > 0 {
-            if let Some(mut p) = ptr {
+            if let Some(p) = ptr {
                 let encoding = txn.store().options.offset_kind;
                 if let Block::Item(item) = p.deref() {
                     if !item.is_deleted() {
@@ -386,12 +391,12 @@ impl Branch {
 
     /// Inserts a preliminary `value` into a current branch indexed sequence component at the given
     /// `index`. Returns an item reference created as a result of this operation.
-    pub(crate) fn insert_at<'t, V: Prelim>(
+    pub(crate) fn insert_at<V: Prelim>(
         &self,
-        txn: &'t mut Transaction,
+        txn: &mut Transaction,
         index: u32,
         value: V,
-    ) -> &'t Item {
+    ) -> BlockPtr {
         let (start, parent) = {
             if index <= self.len() {
                 (self.start, self.ptr.clone())
@@ -412,10 +417,10 @@ impl Branch {
             current_attrs: None,
         };
 
-        txn.create_item(&pos, value, None).as_item().unwrap()
+        txn.create_item(&pos, value, None)
     }
 
-    pub(crate) fn path(from: BranchRef, to: BranchRef) -> Path {
+    pub(crate) fn path(from: BranchPtr, to: BranchPtr) -> Path {
         let parent = from;
         let mut child = to;
         let mut path = VecDeque::default();
@@ -424,9 +429,11 @@ impl Branch {
                 break;
             }
             let item = ptr.as_item().unwrap();
-            let ptr: BlockPtr = (&item.parent).into();
-            child = ptr.as_branch().unwrap();
-            if let Some(parent_sub) = item.parent_sub.clone() {
+            let item_id = item.id.clone();
+            let parent_sub = item.parent_sub.clone();
+            let ptr: &BlockPtr = (&item.parent).into();
+            child = (*ptr).as_branch().unwrap();
+            if let Some(parent_sub) = parent_sub {
                 // parent is map-ish
                 path.push_front(PathSegment::Key(parent_sub));
             } else {
@@ -434,7 +441,7 @@ impl Branch {
                 let mut i = 0;
                 let mut c = child.start;
                 while let Some(ptr) = c {
-                    if ptr.id() == &item.id {
+                    if ptr.id() == &item_id {
                         break;
                     }
                     if !ptr.is_deleted() {
@@ -481,25 +488,25 @@ impl Value {
     /// - [Value::YMap] is converted into JSON-like object map.
     /// - [Value::YText], [Value::YXmlText] and [Value::YXmlElement] are converted into strings
     ///   (XML types are stringified XML representation).
-    pub fn to_json(self, txn: &Transaction) -> Any {
+    pub fn to_json(self) -> Any {
         match self {
             Value::Any(a) => a,
             Value::YText(v) => Any::String(v.to_string().into_boxed_str()),
-            Value::YArray(v) => v.to_json(txn),
-            Value::YMap(v) => v.to_json(txn),
-            Value::YXmlElement(v) => Any::String(v.to_string(txn).into_boxed_str()),
+            Value::YArray(v) => v.to_json(),
+            Value::YMap(v) => v.to_json(),
+            Value::YXmlElement(v) => Any::String(v.to_string().into_boxed_str()),
             Value::YXmlText(v) => Any::String(v.to_string().into_boxed_str()),
         }
     }
 
     /// Converts current value into stringified representation.
-    pub fn to_string(self, txn: &Transaction) -> String {
+    pub fn to_string(self) -> String {
         match self {
             Value::Any(a) => a.to_string(),
             Value::YText(v) => v.to_string(),
-            Value::YArray(v) => v.to_json(txn).to_string(),
-            Value::YMap(v) => v.to_json(txn).to_string(),
-            Value::YXmlElement(v) => v.to_string(txn),
+            Value::YArray(v) => v.to_json().to_string(),
+            Value::YMap(v) => v.to_json().to_string(),
+            Value::YXmlElement(v) => v.to_string(),
             Value::YXmlText(v) => v.to_string(),
         }
     }
@@ -602,14 +609,14 @@ impl std::fmt::Display for Branch {
 }
 
 pub(crate) struct Entries<'a> {
-    pub txn: &'a Transaction,
     iter: std::collections::hash_map::Iter<'a, Rc<str>, BlockPtr>,
 }
 
 impl<'a> Entries<'a> {
-    pub(crate) fn new(ptr: BlockPtr, txn: &'a Transaction) -> Self {
-        let iter = ptr.as_branch().unwrap().map.iter();
-        Entries { txn, iter }
+    pub(crate) fn new(source: &'a HashMap<Rc<str>, BlockPtr>) -> Self {
+        Entries {
+            iter: source.iter(),
+        }
     }
 }
 
@@ -618,7 +625,7 @@ impl<'a> Iterator for Entries<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         let (mut key, ptr) = self.iter.next()?;
-        let mut block = *ptr;
+        let mut block = ptr;
         loop {
             match block.deref() {
                 Block::Item(item) if !item.is_deleted() => {
@@ -627,7 +634,7 @@ impl<'a> Iterator for Entries<'a> {
                 _ => {
                     let (k, ptr) = self.iter.next()?;
                     key = k;
-                    block = *ptr;
+                    block = ptr;
                 }
             }
         }
@@ -637,13 +644,12 @@ impl<'a> Iterator for Entries<'a> {
 }
 
 pub(crate) struct Iter<'a> {
-    ptr: Option<BlockPtr>,
-    txn: &'a Transaction,
+    ptr: Option<&'a BlockPtr>,
 }
 
 impl<'a> Iter<'a> {
-    fn new(start: Option<BlockPtr>, txn: &'a Transaction) -> Self {
-        Iter { ptr: start, txn }
+    fn new(ptr: Option<&'a BlockPtr>) -> Self {
+        Iter { ptr }
     }
 }
 
@@ -653,14 +659,14 @@ impl<'a> Iterator for Iter<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         let ptr = self.ptr.take()?;
         let item = ptr.as_item()?;
-        self.ptr = item.right;
+        self.ptr = item.right.as_ref();
         Some(item)
     }
 }
 
 /// Type pointer - used to localize a complex [Branch] node within a scope of a document store.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum TypePtr {
+pub(crate) enum TypePtr {
     /// Temporary value - used only when block is deserialized right away, but had not been
     /// integrated into block store yet. As part of block integration process, items are
     /// repaired and their fields (including parent) are being rewired.
@@ -673,10 +679,10 @@ pub enum TypePtr {
     Named(Rc<str>),
 }
 
-impl<'a> Into<BlockPtr> for &'a TypePtr {
-    fn into(self) -> BlockPtr {
+impl<'a> Into<&'a BlockPtr> for &'a TypePtr {
+    fn into(self) -> &'a BlockPtr {
         if let TypePtr::Block(ptr) = self {
-            ptr.clone()
+            ptr
         } else {
             panic!("Defect: TypePtr was not initialized")
         }
@@ -721,7 +727,7 @@ impl Observers {
 
     pub fn publish(
         &self,
-        branch_ref: BranchRef,
+        branch_ref: BranchPtr,
         txn: &Transaction,
         keys: HashSet<Option<Rc<str>>>,
     ) {
@@ -819,7 +825,7 @@ pub type Attrs = HashMap<Box<str>, Any>;
 
 pub(crate) fn event_keys(
     txn: &Transaction,
-    target: BranchRef,
+    target: BranchPtr,
     keys_changed: &HashSet<Option<Rc<str>>>,
 ) -> HashMap<Rc<str>, EntryChange> {
     let mut keys = HashMap::new();

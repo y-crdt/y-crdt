@@ -1,7 +1,7 @@
 use crate::doc::OffsetKind;
 use crate::store::Store;
 use crate::types::{
-    Attrs, Branch, BranchRef, TypePtr, Value, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
+    Attrs, Branch, BranchPtr, TypePtr, Value, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
     TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_HOOK, TYPE_REFS_XML_TEXT,
 };
 use crate::updates::decoder::Decoder;
@@ -87,10 +87,10 @@ impl ID {
 /// which allows to faster locate block it points to within a block store.
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, Hash)]
-pub struct BlockPtr(NonNull<Block>);
+pub(crate) struct BlockPtr(NonNull<Block>);
 
 impl BlockPtr {
-    pub fn splice(&mut self, offset: u32) -> Option<Box<Block>> {
+    pub(crate) fn splice(&mut self, offset: u32) -> Option<Box<Block>> {
         let self_ptr = self.clone();
         if offset == 0 {
             None
@@ -133,7 +133,7 @@ impl BlockPtr {
         match self.deref_mut() {
             Block::GC(this) => this.integrate(offset),
             Block::Item(this) => {
-                let mut store = txn.store_mut();
+                let store = txn.store_mut();
                 let encoding = store.options.offset_kind;
                 if offset > 0 {
                     this.id.clock += offset;
@@ -232,8 +232,15 @@ impl BlockPtr {
                         this.left = left;
                     }
 
-                    this.try_reassign_parent_sub(left);
-                    this.try_reassign_parent_sub(right);
+                    if this.parent_sub.is_none() {
+                        if let Some(Block::Item(item)) = this.left.as_deref() {
+                            if item.parent_sub.is_some() {
+                                this.parent_sub = item.parent_sub.clone();
+                            } else if let Some(Block::Item(item)) = this.right.as_deref() {
+                                this.parent_sub = item.parent_sub.clone();
+                            }
+                        }
+                    }
 
                     // reconnect left/right
                     if let Some(Block::Item(left)) = this.left.as_deref_mut() {
@@ -278,7 +285,6 @@ impl BlockPtr {
 
                     this.integrate_content(txn, &mut *parent_ref);
                     txn.add_changed_type(&*parent_ref, this.parent_sub.clone());
-                    store = txn.store_mut();
                     let parent_deleted = if let TypePtr::Block(ptr) = &this.parent {
                         ptr.is_deleted()
                     } else {
@@ -303,7 +309,11 @@ impl BlockPtr {
                 item.content.gc(txn);
                 let len = item.len();
                 if parent_gced {
-                    std::mem::replace(self.deref_mut(), Block::GC(BlockRange::new(item.id, len)));
+                    unsafe {
+                        let gc = Block::GC(BlockRange::new(item.id, len));
+                        let self_mut = self.0.as_mut();
+                        std::mem::replace(self_mut, gc);
+                    }
                 } else {
                     item.content = ItemContent::Deleted(len);
                     item.info = item.info & !ITEM_FLAG_COUNTABLE;
@@ -347,10 +357,10 @@ impl BlockPtr {
         }
     }
 
-    pub(crate) fn as_branch(self) -> Option<BranchRef> {
+    pub(crate) fn as_branch(self) -> Option<BranchPtr> {
         let item = self.as_item()?;
         if let ItemContent::Type(branch) = &item.content {
-            Some(BranchRef::from(branch))
+            Some(BranchPtr::from(branch))
         } else {
             None
         }
@@ -608,8 +618,9 @@ impl ItemPosition {
                 }
             }
 
+            let new = right.right.clone();
             self.left = self.right.take();
-            self.right = right.right.clone();
+            self.right = new;
 
             return true;
         }
@@ -622,7 +633,7 @@ impl ItemPosition {
         if let Some(attrs) = self.current_attrs.as_ref() {
             // if current `attributes` don't confirm the same keys as the formatting wrapping
             // current insert position, they should be unset
-            for (k, v) in attrs.iter() {
+            for (k, _) in attrs.iter() {
                 if !attributes.contains_key(k) {
                     attributes.insert(k.clone(), Any::Null);
                 }
@@ -829,17 +840,6 @@ impl Item {
                 self.parent = TypePtr::Block(ptr);
             }
             _ => {}
-        }
-    }
-
-    fn try_reassign_parent_sub(&mut self, block: Option<&Block>) {
-        if self.parent_sub.is_none() {
-            if let Some(Block::Item(item)) = block {
-                //TODO: make parent_sub Rc<String> and clone from left unconditionally
-                if item.parent_sub.is_some() {
-                    self.parent_sub = item.parent_sub.clone();
-                }
-            }
         }
     }
 
@@ -1145,7 +1145,7 @@ impl ItemContent {
                 .map(|c| Value::Any(Any::String(c.to_string().into_boxed_str())))
                 .collect(),
             ItemContent::Type(c) => {
-                let branch_ref = BranchRef::from(c);
+                let branch_ref = BranchPtr::from(c);
                 vec![branch_ref.into()]
             }
         }
@@ -1165,7 +1165,7 @@ impl ItemContent {
             ItemContent::Embed(v) => Some(Value::Any(v.as_ref().clone())),
             ItemContent::Format(_, _) => None,
             ItemContent::String(v) => Some(Value::Any(Any::String(v.clone().into()))),
-            ItemContent::Type(c) => Some(BranchRef::from(c).into()),
+            ItemContent::Type(c) => Some(BranchPtr::from(c).into()),
         }
     }
 
@@ -1361,7 +1361,6 @@ impl ItemContent {
     pub(crate) fn gc(&mut self, txn: &Transaction) {
         match self {
             ItemContent::Type(branch) => {
-                let store = txn.store();
                 let mut curr = branch.start.take();
                 while let Some(mut ptr) = curr {
                     if let Block::Item(item) = ptr.deref_mut() {
@@ -1533,7 +1532,7 @@ pub trait Prelim: Sized {
     /// Method called once an original item filled with content from [Self::into_content] has been
     /// added to block store. This method is used by complex types such as maps or arrays to append
     /// the original contents of prelim struct into YMap, YArray etc.
-    fn integrate(self, txn: &mut Transaction, inner_ref: BranchRef);
+    fn integrate(self, txn: &mut Transaction, inner_ref: BranchPtr);
 }
 
 impl<T> Prelim for T
@@ -1545,7 +1544,7 @@ where
         (ItemContent::Any(vec![value]), None)
     }
 
-    fn integrate(self, _txn: &mut Transaction, _inner_ref: BranchRef) {}
+    fn integrate(self, _txn: &mut Transaction, _inner_ref: BranchPtr) {}
 }
 
 #[derive(Debug)]
@@ -1556,7 +1555,7 @@ impl Prelim for PrelimText {
         (ItemContent::String(self.0.into()), None)
     }
 
-    fn integrate(self, _txn: &mut Transaction, _inner_ref: BranchRef) {}
+    fn integrate(self, _txn: &mut Transaction, _inner_ref: BranchPtr) {}
 }
 
 #[derive(Debug)]
@@ -1567,7 +1566,7 @@ impl Prelim for PrelimEmbed {
         (ItemContent::Embed(Box::new(self.0)), None)
     }
 
-    fn integrate(self, _txn: &mut Transaction, _inner_ref: BranchRef) {}
+    fn integrate(self, _txn: &mut Transaction, _inner_ref: BranchPtr) {}
 }
 
 impl std::fmt::Display for ID {

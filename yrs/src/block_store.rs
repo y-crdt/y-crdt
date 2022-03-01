@@ -390,7 +390,7 @@ impl<'a> Iterator for ClientBlockListIter<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         let next = self.0.next()?;
-        Some(unsafe { next.as_ref() })
+        Some(next.as_ref())
     }
 }
 
