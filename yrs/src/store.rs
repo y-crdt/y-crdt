@@ -1,4 +1,4 @@
-use crate::block::{Block, BlockPtr, ItemContent};
+use crate::block::{Block, ItemContent};
 use crate::block_store::{BlockStore, SquashResult, StateVector};
 use crate::doc::Options;
 use crate::event::{EventHandler, UpdateEvent};
@@ -8,6 +8,7 @@ use crate::update::PendingUpdate;
 use crate::updates::encoder::{Encode, Encoder};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::ops::Deref;
 use std::rc::Rc;
 
 /// Store is a core element of a document. It contains all of the information, like block store
@@ -63,10 +64,9 @@ impl Store {
 
     /// Returns a branch reference to a complex type identified by its pointer. Returns `None` if
     /// no such type could be found or was ever defined.
-    pub fn get_type<K: Into<Rc<str>>>(&self, key: K) -> Option<BlockPtr> {
-        let ptr = &self.types.get(&key.into())?.ptr;
-        let ptr: &BlockPtr = ptr.into();
-        Some(ptr.clone())
+    pub fn get_type<K: Into<Rc<str>>>(&self, key: K) -> Option<BranchPtr> {
+        let ptr = self.types.get(&key.into())?;
+        Some(BranchPtr::from(ptr))
     }
 
     /// Returns a branch reference to a complex type identified by its pointer. Returns `None` if
@@ -87,6 +87,17 @@ impl Store {
                 branch_ref
             }
         }
+    }
+
+    pub(crate) fn get_type_key(&self, ptr: BranchPtr) -> Option<&Rc<str>> {
+        let branch = ptr.deref() as *const Branch;
+        for (k, v) in self.types.iter() {
+            let target = v.as_ref() as *const Branch;
+            if std::ptr::eq(target, branch) {
+                return Some(k);
+            }
+        }
+        None
     }
 
     /// Compute a diff to sync with another client.
@@ -126,9 +137,9 @@ impl Store {
             encoder.write_uvar(clock);
             let first_block = blocks.get(start);
             // write first struct with an offset
-            first_block.encode(encoder);
+            first_block.encode(Some(self), encoder);
             for i in (start + 1)..blocks.integrated_len() {
-                blocks.get(i).encode(encoder);
+                blocks.get(i).encode(Some(self), encoder);
             }
         }
     }
@@ -151,18 +162,16 @@ impl Store {
 
     pub(crate) fn gc_cleanup(&self, mut compaction: SquashResult) {
         if let Some(parent_sub) = compaction.parent_sub {
-            if let TypePtr::Block(ptr) = compaction.parent {
-                if let Some(mut inner) = ptr.as_branch() {
-                    match inner.map.entry(parent_sub.clone()) {
-                        Entry::Occupied(mut e) => {
-                            let cell = e.get_mut();
-                            if cell.id() == &compaction.old_right {
-                                *cell = compaction.replacement;
-                            }
+            if let TypePtr::Branch(mut inner) = compaction.parent {
+                match inner.map.entry(parent_sub.clone()) {
+                    Entry::Occupied(mut e) => {
+                        let cell = e.get_mut();
+                        if cell.id() == &compaction.old_right {
+                            *cell = compaction.replacement;
                         }
-                        Entry::Vacant(e) => {
-                            e.insert(compaction.replacement);
-                        }
+                    }
+                    Entry::Vacant(e) => {
+                        e.insert(compaction.replacement);
                     }
                 }
             }
@@ -175,7 +184,7 @@ impl Store {
     pub fn get_type_from_path(&self, path: &Path) -> Option<BranchPtr> {
         let mut i = path.iter();
         if let Some(PathSegment::Key(root_name)) = i.next() {
-            let mut current = self.get_type(root_name.clone())?.as_branch()?;
+            let mut current = self.get_type(root_name.clone())?;
             while let Some(segment) = i.next() {
                 match segment {
                     PathSegment::Key(key) => {

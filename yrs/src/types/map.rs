@@ -92,7 +92,7 @@ impl Map {
             let inner = self.0;
             let left = inner.map.get(&key);
             ItemPosition {
-                parent: inner.ptr.clone(),
+                parent: inner.into(),
                 left: left.cloned(),
                 right: None,
                 index: 0,

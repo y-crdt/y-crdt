@@ -8,7 +8,7 @@ use crate::store::Store;
 use crate::types::array::Array;
 use crate::types::xml::{XmlElement, XmlText};
 use crate::types::{
-    Branch, BranchPtr, Map, Text, TypePtr, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
+    BranchPtr, Map, Text, TypePtr, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
     TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT,
 };
 use crate::update::Update;
@@ -266,8 +266,7 @@ impl Transaction {
         if let Block::Item(item) = ptr.deref_mut() {
             if !item.is_deleted() {
                 if item.parent_sub.is_none() && item.is_countable() {
-                    let parent: &BlockPtr = (&item.parent).into();
-                    if let Some(mut parent) = parent.as_branch() {
+                    if let TypePtr::Branch(mut parent) = item.parent {
                         parent.block_len -= item.len();
                         parent.content_len -= item.content_len(store.options.offset_kind);
                     }
@@ -275,23 +274,8 @@ impl Transaction {
 
                 item.mark_as_deleted();
                 self.delete_set.insert(item.id.clone(), item.len());
-
-                match &item.parent {
-                    TypePtr::Block(ptr)
-                        if ptr.id().clock < self.before_state.get(&ptr.id().client)
-                            && ptr.is_deleted() =>
-                    {
-                        self.changed
-                            .entry(item.parent.clone())
-                            .or_default()
-                            .insert(item.parent_sub.clone());
-                    }
-                    _ => {}
-                }
-                if item.id.clock < self.before_state.get(&item.id.client) {
-                    let set = self.changed.entry(item.parent.clone()).or_default();
-                    set.insert(item.parent_sub.clone());
-                }
+                let parent = *item.parent.as_branch().unwrap();
+                self.add_changed_type(parent, item.parent_sub.clone());
 
                 match &item.content {
                     ItemContent::Doc(_, _) => {
@@ -466,8 +450,7 @@ impl Transaction {
         // 3. for each change observed by the transaction call 'afterTransaction'
         if !self.changed.is_empty() {
             for (ptr, subs) in self.changed.iter() {
-                let ptr: &BlockPtr = ptr.into();
-                if let Some(branch) = ptr.as_branch() {
+                if let TypePtr::Branch(branch) = ptr {
                     if let Some(o) = branch.observers.as_ref() {
                         o.publish(branch.clone(), self, subs.clone());
                     }
@@ -545,16 +528,14 @@ impl Transaction {
         }
     }
 
-    pub(crate) fn add_changed_type(&mut self, parent: &Branch, parent_sub: Option<Rc<str>>) {
-        let trigger = match &parent.ptr {
-            TypePtr::Named(_) => true,
-            TypePtr::Block(ptr) if ptr.id().clock < (self.before_state.get(&ptr.id().client)) => {
-                ptr.is_deleted()
-            }
-            _ => false,
+    pub(crate) fn add_changed_type(&mut self, parent: BranchPtr, parent_sub: Option<Rc<str>>) {
+        let trigger = if let Some(ptr) = parent.item {
+            (ptr.id().clock < (self.before_state.get(&ptr.id().client))) && ptr.is_deleted()
+        } else {
+            true
         };
         if trigger {
-            let e = self.changed.entry(parent.ptr.clone()).or_default();
+            let e = self.changed.entry(parent.into()).or_default();
             e.insert(parent_sub.clone());
         }
     }
