@@ -45,7 +45,7 @@ impl Array {
     pub fn insert<V: Prelim>(&self, txn: &mut Transaction, index: u32, value: V) {
         let (start, parent) = {
             if index <= self.0.len() {
-                (self.0.start, self.0.ptr.clone())
+                (self.0.start, self.0)
             } else {
                 panic!("Cannot insert item at index over the length of an array")
             }
@@ -56,7 +56,7 @@ impl Array {
             Branch::index_to_ptr(txn, start, index)
         };
         let pos = ItemPosition {
-            parent,
+            parent: parent.into(),
             left,
             right,
             index: 0,

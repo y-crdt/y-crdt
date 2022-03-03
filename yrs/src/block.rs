@@ -2,7 +2,8 @@ use crate::doc::OffsetKind;
 use crate::store::Store;
 use crate::types::{
     Attrs, Branch, BranchPtr, TypePtr, Value, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
-    TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_HOOK, TYPE_REFS_XML_TEXT,
+    TYPE_REFS_UNDEFINED, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_HOOK,
+    TYPE_REFS_XML_TEXT,
 };
 use crate::updates::decoder::Decoder;
 use crate::updates::encoder::Encoder;
@@ -146,7 +147,25 @@ impl BlockPtr {
                 }
 
                 let parent = match &this.parent {
-                    TypePtr::Block(block) => block.as_branch(),
+                    TypePtr::Branch(branch) => Some(*branch),
+                    TypePtr::Named(name) => {
+                        let branch =
+                            store.get_or_create_type(name.clone(), None, TYPE_REFS_UNDEFINED);
+                        this.parent = TypePtr::Branch(branch);
+                        Some(branch)
+                    }
+                    TypePtr::ID(id) => {
+                        if let Some(block) = store.blocks.get_block(id) {
+                            if let Some(branch) = block.as_branch() {
+                                this.parent = TypePtr::Branch(branch);
+                                Some(branch)
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    }
                     _ => None,
                 };
 
@@ -284,9 +303,13 @@ impl BlockPtr {
                     }
 
                     this.integrate_content(txn, &mut *parent_ref);
-                    txn.add_changed_type(&*parent_ref, this.parent_sub.clone());
-                    let parent_deleted = if let TypePtr::Block(ptr) = &this.parent {
-                        ptr.is_deleted()
+                    txn.add_changed_type(parent_ref, this.parent_sub.clone());
+                    let parent_deleted = if let TypePtr::Branch(ptr) = &this.parent {
+                        if let Some(block) = ptr.item {
+                            block.is_deleted()
+                        } else {
+                            false
+                        }
                     } else {
                         false
                     };
@@ -450,7 +473,12 @@ impl Block {
         }
     }
 
-    pub fn encode_with_offset<E: Encoder>(&self, encoder: &mut E, offset: u32) {
+    pub fn encode_with_offset<E: Encoder>(
+        &self,
+        store: Option<&Store>,
+        encoder: &mut E,
+        offset: u32,
+    ) {
         match self {
             Block::Item(item) => {
                 let origin = if offset > 0 {
@@ -468,14 +496,28 @@ impl Block {
                     encoder.write_right_id(right_origin_id);
                 }
                 if cant_copy_parent_info {
-                    if let TypePtr::Block(b) = &item.parent {
-                        encoder.write_parent_info(false);
-                        encoder.write_left_id(b.id());
-                    } else if let TypePtr::Named(name) = &item.parent {
-                        encoder.write_parent_info(true);
-                        encoder.write_string(name)
-                    } else {
-                        panic!("Couldn't get item's parent")
+                    match &item.parent {
+                        TypePtr::Branch(branch) => {
+                            if let Some(block) = branch.item {
+                                encoder.write_parent_info(false);
+                                encoder.write_left_id(block.id());
+                            } else if let Some(store) = store {
+                                let name = store.get_type_key(*branch).unwrap();
+                                encoder.write_parent_info(true);
+                                encoder.write_string(name);
+                            }
+                        }
+                        TypePtr::Named(name) => {
+                            encoder.write_parent_info(true);
+                            encoder.write_string(name);
+                        }
+                        TypePtr::ID(id) => {
+                            encoder.write_parent_info(false);
+                            encoder.write_left_id(id);
+                        }
+                        TypePtr::Unknown => {
+                            panic!("Couldn't get item's parent")
+                        }
                     }
 
                     if let Some(parent_sub) = item.parent_sub.as_ref() {
@@ -491,7 +533,7 @@ impl Block {
         }
     }
 
-    pub fn encode<E: Encoder>(&self, encoder: &mut E) {
+    pub fn encode<E: Encoder>(&self, store: Option<&Store>, encoder: &mut E) {
         match self {
             Block::Item(item) => {
                 let info = item.info();
@@ -504,17 +546,29 @@ impl Block {
                     encoder.write_right_id(right_origin_id);
                 }
                 if cant_copy_parent_info {
-                    if let TypePtr::Block(b) = &item.parent {
-                        encoder.write_parent_info(false);
-                        encoder.write_left_id(b.id());
-                    } else if let TypePtr::Named(name) = &item.parent {
-                        // this edge case was added by differential updates
-                        encoder.write_parent_info(true);
-                        encoder.write_string(name)
-                    } else {
-                        panic!("Couldn't get item's parent")
+                    match &item.parent {
+                        TypePtr::Branch(branch) => {
+                            if let Some(block) = branch.item {
+                                encoder.write_parent_info(false);
+                                encoder.write_left_id(block.id());
+                            } else if let Some(store) = store {
+                                let name = store.get_type_key(*branch).unwrap();
+                                encoder.write_parent_info(true);
+                                encoder.write_string(name);
+                            }
+                        }
+                        TypePtr::Named(name) => {
+                            encoder.write_parent_info(true);
+                            encoder.write_string(name);
+                        }
+                        TypePtr::ID(id) => {
+                            encoder.write_parent_info(false);
+                            encoder.write_left_id(id);
+                        }
+                        TypePtr::Unknown => {
+                            panic!("Couldn't get item's parent")
+                        }
                     }
-
                     if let Some(parent_sub) = item.parent_sub.as_ref() {
                         encoder.write_string(parent_sub.as_ref());
                     }
@@ -766,9 +820,9 @@ impl Item {
             parent_sub,
             info,
         }));
-        let item_ptr = TypePtr::Block(BlockPtr::from(&mut item));
+        let item_ptr = BlockPtr::from(&mut item);
         if let ItemContent::Type(branch) = &mut item.as_item_mut().unwrap().content {
-            branch.ptr = item_ptr;
+            branch.item = Some(item_ptr);
         }
         item
     }
@@ -826,18 +880,36 @@ impl Item {
         //
         // Here since we decode all blocks first, then apply them, we might not find them in
         // the block store during decoding. Therefore we retroactively reattach it here.
+
         match &self.parent {
             TypePtr::Unknown => {
-                let src = self.left.or(self.right);
-
-                if let Some(Block::Item(item)) = src.as_deref() {
+                if let Some(Block::Item(item)) = self.left.as_deref() {
+                    if let TypePtr::Unknown = item.parent {
+                        if let Some(Block::Item(item)) = self.right.as_deref() {
+                            self.parent = item.parent.clone();
+                            self.parent_sub = item.parent_sub.clone();
+                        }
+                    } else {
+                        self.parent = item.parent.clone();
+                        self.parent_sub = item.parent_sub.clone();
+                    }
+                } else if let Some(Block::Item(item)) = self.right.as_deref() {
                     self.parent = item.parent.clone();
                     self.parent_sub = item.parent_sub.clone();
                 }
             }
+            TypePtr::Named(name) => {
+                let branch = store.get_or_create_type(name.clone(), None, TYPE_REFS_UNDEFINED);
+                self.parent = branch.into();
+            }
             TypePtr::ID(id) => {
                 let ptr = store.blocks.get_block(id).unwrap();
-                self.parent = TypePtr::Block(ptr);
+                let item = ptr.as_item().unwrap();
+                if let ItemContent::Type(branch) = &item.content {
+                    self.parent = TypePtr::Branch(BranchPtr::from(branch));
+                } else {
+                    panic!("Defect: parent points to a block which is not a shared type");
+                }
             }
             _ => {}
         }

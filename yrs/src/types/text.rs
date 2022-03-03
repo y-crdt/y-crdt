@@ -59,7 +59,7 @@ impl Text {
         let mut pos = {
             let inner = self.as_ref();
             block::ItemPosition {
-                parent: inner.ptr.clone(),
+                parent: self.0.into(),
                 left: None,
                 right: inner.start,
                 index: 0,
@@ -411,7 +411,7 @@ impl Text {
                 negated_attrs.insert(k.clone(), current_value.clone());
 
                 let client_id = store.options.client_id;
-                let parent = { self.0.ptr.clone() };
+                let parent = { self.0.into() };
                 let mut item = Item::new(
                     ID::new(client_id, store.blocks.get_state(&client_id)),
                     pos.left.clone(),
@@ -464,7 +464,7 @@ impl Text {
         let mut store = txn.store_mut();
         for (k, v) in attrs {
             let client_id = store.options.client_id;
-            let parent = { self.0.ptr.clone() };
+            let parent = { self.0.into() };
             let mut item = Item::new(
                 ID::new(client_id, store.blocks.get_state(&client_id)),
                 pos.left.clone(),

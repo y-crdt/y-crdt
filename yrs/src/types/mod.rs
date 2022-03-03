@@ -50,8 +50,14 @@ pub const TYPE_REFS_UNDEFINED: TypeRefs = 15;
 /// A wrapper around [Branch] cell, supplied with a bunch of convenience methods to operate on both
 /// map-like and array-like contents of a [Branch].
 #[repr(transparent)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Hash)]
 pub struct BranchPtr(NonNull<Branch>);
+
+impl Into<TypePtr> for BranchPtr {
+    fn into(self) -> TypePtr {
+        TypePtr::Branch(self)
+    }
+}
 
 impl Deref for BranchPtr {
     type Target = Branch;
@@ -159,7 +165,7 @@ pub struct Branch {
     /// means, this branch is a root-level complex data structure - or a block identifier. In latter
     /// case it means, that this branch is a complex type (eg. Map or Array) nested inside of
     /// another complex type.
-    pub(crate) ptr: TypePtr,
+    pub(crate) item: Option<BlockPtr>,
 
     /// A tag name identifier, used only by [XmlElement].
     pub name: Option<String>,
@@ -181,7 +187,7 @@ impl std::fmt::Debug for Branch {
         f.debug_struct("Branch")
             .field("start", &self.start)
             .field("map", &self.map)
-            .field("ptr", &self.ptr)
+            .field("ptr", &self.item)
             .field("name", &self.name)
             .field("len", &self.block_len)
             .field("type_ref", &self.type_ref)
@@ -193,7 +199,7 @@ impl Eq for Branch {}
 
 impl PartialEq for Branch {
     fn eq(&self, other: &Self) -> bool {
-        self.ptr == other.ptr
+        self.item == other.item
             && self.start == other.start
             && self.map == other.map
             && self.name == other.name
@@ -209,16 +215,11 @@ impl Branch {
             map: HashMap::default(),
             block_len: 0,
             content_len: 0,
-            ptr: TypePtr::Unknown,
+            item: None,
             name,
             type_ref,
             observers: None,
         })
-    }
-
-    pub(crate) fn as_item(&self) -> &Item {
-        let ptr: &BlockPtr = (&self.ptr).into();
-        ptr.as_item().unwrap()
     }
 
     /// Returns an identifier of an underlying complex data type (eg. is it an Array or a Map).
@@ -399,7 +400,7 @@ impl Branch {
     ) -> BlockPtr {
         let (start, parent) = {
             if index <= self.len() {
-                (self.start, self.ptr.clone())
+                (self.start, BranchPtr::from(self))
             } else {
                 panic!("Cannot insert item at index over the length of an array")
             }
@@ -410,7 +411,7 @@ impl Branch {
             Branch::index_to_ptr(txn, start, index)
         };
         let pos = ItemPosition {
-            parent,
+            parent: parent.into(),
             left,
             right,
             index: 0,
@@ -424,15 +425,14 @@ impl Branch {
         let parent = from;
         let mut child = to;
         let mut path = VecDeque::default();
-        while let TypePtr::Block(ptr) = &child.ptr {
-            if parent.ptr == child.ptr {
+        while let Some(ptr) = &child.item {
+            if parent.item == child.item {
                 break;
             }
             let item = ptr.as_item().unwrap();
             let item_id = item.id.clone();
             let parent_sub = item.parent_sub.clone();
-            let ptr: &BlockPtr = (&item.parent).into();
-            child = (*ptr).as_branch().unwrap();
+            child = *item.parent.as_branch().unwrap();
             if let Some(parent_sub) = parent_sub {
                 // parent is map-ish
                 path.push_front(PathSegment::Key(parent_sub));
@@ -673,18 +673,21 @@ pub(crate) enum TypePtr {
     Unknown,
 
     /// Pointer to another block. Used in nested data types ie. YMap containing another YMap.
-    Block(block::BlockPtr),
+    Branch(BranchPtr),
 
-    ID(ID),
+    /// Temporary state representing top-level type.
     Named(Rc<str>),
+
+    /// Temporary state representing nested-level type.
+    ID(ID),
 }
 
-impl<'a> Into<&'a BlockPtr> for &'a TypePtr {
-    fn into(self) -> &'a BlockPtr {
-        if let TypePtr::Block(ptr) = self {
-            ptr
+impl TypePtr {
+    pub(crate) fn as_branch(&self) -> Option<&BranchPtr> {
+        if let TypePtr::Branch(ptr) = self {
+            Some(ptr)
         } else {
-            panic!("Defect: TypePtr was not initialized")
+            None
         }
     }
 }
@@ -693,7 +696,13 @@ impl std::fmt::Display for TypePtr {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             TypePtr::Unknown => write!(f, "unknown"),
-            TypePtr::Block(ptr) => write!(f, "{}", ptr),
+            TypePtr::Branch(ptr) => {
+                if let Some(i) = ptr.item {
+                    write!(f, "{}", i.id())
+                } else {
+                    write!(f, "null")
+                }
+            }
             TypePtr::ID(id) => write!(f, "{}", id),
             TypePtr::Named(name) => write!(f, "{}", name),
         }

@@ -119,7 +119,7 @@ impl Update {
         for (client, other_blocks) in other.blocks.clients {
             match self.blocks.clients.entry(client) {
                 Entry::Occupied(e) => {
-                    let mut blocks = e.into_mut();
+                    let blocks = e.into_mut();
                     let mut i2 = other_blocks.into_iter();
                     let mut n2 = i2.next();
 
@@ -308,10 +308,12 @@ impl Update {
                     if right_origin.client != item.id.client && !local_sv.contains(&item.id) {
                         return Some(right_origin.client);
                     }
-                } else if let TypePtr::Block(parent) = item.parent {
-                    let parent_client = parent.id().client;
-                    if parent_client != item.id.client && !local_sv.contains(&item.id) {
-                        return Some(parent_client);
+                } else if let TypePtr::Branch(parent) = item.parent {
+                    if let Some(block) = parent.item {
+                        let parent_client = block.id().client;
+                        if parent_client != item.id.client && !local_sv.contains(&item.id) {
+                            return Some(parent_client);
+                        }
                     }
                 }
             }
@@ -805,7 +807,7 @@ impl BlockCarrier {
     }
     pub fn encode_with_offset<E: Encoder>(&self, encoder: &mut E, offset: u32) {
         match self {
-            BlockCarrier::Block(x) => x.encode_with_offset(encoder, offset),
+            BlockCarrier::Block(x) => x.encode_with_offset(None, encoder, offset),
             BlockCarrier::Skip(x) => {
                 encoder.write_info(BLOCK_SKIP_REF_NUMBER);
                 encoder.write_len(x.len - offset);
@@ -830,7 +832,7 @@ impl From<Box<Block>> for BlockCarrier {
 impl Encode for BlockCarrier {
     fn encode<E: Encoder>(&self, encoder: &mut E) {
         match self {
-            BlockCarrier::Block(block) => block.encode(encoder),
+            BlockCarrier::Block(block) => block.encode(None, encoder),
             BlockCarrier::Skip(skip) => {
                 encoder.write_info(BLOCK_SKIP_REF_NUMBER);
                 encoder.write_len(skip.len);
