@@ -102,7 +102,11 @@ impl Text {
                     }
                 }
                 pos.left = pos.right.take();
-                pos.right = right_ptr.as_item().unwrap().right.clone();
+                pos.right = if let Some(Block::Item(item)) = pos.left.as_deref() {
+                    item.right
+                } else {
+                    None
+                };
             } else {
                 return None;
             }
@@ -383,9 +387,12 @@ impl Text {
                     if let Some(v2) = attrs.get(k) {
                         if (v.as_ref()).eq(v2) {
                             pos.forward();
+                            continue;
                         }
                     }
                 }
+
+                break;
             } else {
                 pos.forward();
             }
@@ -451,11 +458,13 @@ impl Text {
                     if let Some(curr_val) = attrs.get(key) {
                         if curr_val == value.as_ref() {
                             attrs.remove(key);
-
                             pos.forward();
+                            continue;
                         }
                     }
                 }
+
+                break;
             } else {
                 pos.forward();
             }

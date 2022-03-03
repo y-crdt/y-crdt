@@ -183,10 +183,10 @@ impl XmlElement {
     /// let txt = html.push_text_back(&mut txn);
     /// txt.push(&mut txn, "again");
     ///
-    /// for node in html.successors(&txn) {
+    /// for node in html.successors() {
     ///     match node {
     ///         Xml::Element(elem) => println!("- {}", elem.tag()),
-    ///         Xml::Text(txt) => println!("- {}", txt.to_string(&txn))
+    ///         Xml::Text(txt) => println!("- {}", txt.to_string())
     ///     }
     /// }
     /// /* will print:
