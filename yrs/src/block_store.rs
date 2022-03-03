@@ -485,9 +485,9 @@ impl BlockStore {
         let blocks = self.clients.get_mut(&id.client)?;
         let index = blocks.find_pivot(id.clock)?;
         let mut block = blocks.get(index);
-        let offset = id.clock as i32 - block.id().clock as i32 + 1;
-        if offset > 0 {
-            let new = block.splice(offset as u32).unwrap();
+        let block_id = block.id();
+        if id.clock != block_id.clock + block.len() - 1 {
+            let new = block.splice(1 + id.clock - block_id.clock).unwrap();
             blocks.insert(index + 1, new);
         }
         Some(BlockPtr::from(block))
