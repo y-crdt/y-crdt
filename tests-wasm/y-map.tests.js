@@ -10,15 +10,15 @@ export const testSet = tc => {
     const d1 = new Y.YDoc()
     const x = d1.getMap('test')
 
-    var value = d1.transact(txn => x.get(txn, 'key'))
+    var value = x.get('key')
     t.compare(value, undefined)
 
     d1.transact(txn => x.set(txn, 'key', 'value1'))
-    value = d1.transact(txn => x.get(txn, 'key'))
+    value = x.get('key')
     t.compare(value, 'value1')
 
     d1.transact(txn => x.set(txn, 'key', 'value2'))
-    value = d1.transact(txn => x.get(txn, 'key'))
+    value = x.get('key')
     t.compare(value, 'value2')
 }
 
@@ -33,7 +33,7 @@ export const testSetNested = tc => {
     d1.transact(txn => x.set(txn, 'key', nested))
     d1.transact(txn => nested.set(txn, 'b', 'B'))
 
-    let json = d1.transact(txn => x.toJson(txn))
+    let json = x.toJson()
     t.compare(json, {
         key: {
             a: 'A',
@@ -50,20 +50,20 @@ export const testDelete = tc => {
     const x = d1.getMap('test')
 
     d1.transact(txn => x.set(txn, 'key', 'value1'))
-    var len = d1.transact(txn => x.length(txn))
-    var value = d1.transact(txn => x.get(txn, 'key'))
+    var len = x.length()
+    var value = x.get('key')
     t.compare(len, 1)
     t.compare(value, 'value1')
 
     d1.transact(txn => x.delete(txn, 'key'))
-    len = d1.transact(txn => x.length(txn))
-    value = d1.transact(txn => x.get(txn, 'key'))
+    len = x.length()
+    value = x.get('key')
     t.compare(len, 0)
     t.compare(value, undefined)
 
     d1.transact(txn => x.set(txn, 'key', 'value2'))
-    len = d1.transact(txn => x.length(txn))
-    value = d1.transact(txn => x.get(txn, 'key'))
+    len = x.length()
+    value = x.get('key')
     t.compare(len, 1)
     t.compare(value, 'value2')
 }
@@ -81,20 +81,15 @@ export const testIterator = tc => {
         x.set(txn, 'c', 3)
     })
 
-    let txn = d1.beginTransaction()
-    try {
-        let expected = {
-            'a': 1,
-            'b': 2,
-            'c': 3
-        }
-        for (let [key, value] of x.entries(txn)) {
-            let v = expected[key]
-            t.compare(value, v)
-            delete expected[key]
-        }
-    } finally {
-        txn.free()
+    let expected = {
+        'a': 1,
+        'b': 2,
+        'c': 3
+    }
+    for (let [key, value] of x.entries()) {
+        let v = expected[key]
+        t.compare(value, v)
+        delete expected[key]
     }
 }
 
@@ -106,7 +101,6 @@ export const testObserver = tc => {
     /**
      * @param {Y.YMap} tc
      */
-    const getValue = (x) => d1.transact(txn => x.toJson(txn))
     const x = d1.getMap('test')
     let target = null
     let entries = null
@@ -120,7 +114,7 @@ export const testObserver = tc => {
         x.set(txn, 'key1', 'value1')
         x.set(txn, 'key2', 2)
     })
-    t.compare(getValue(target), getValue(x))
+    t.compare(target.toJson(), x.toJson())
     t.compare(entries, {
         key1: { action: 'add', newValue: 'value1' },
         key2: { action: 'add', newValue: 2 }
@@ -133,7 +127,7 @@ export const testObserver = tc => {
         x.delete(txn, 'key1')
         x.set(txn, 'key2', 'value2')
     })
-    t.compare(getValue(target), getValue(x))
+    t.compare(target.toJson(), x.toJson())
     t.compare(entries, {
         key1: { action: 'delete', oldValue: 'value1' },
         key2: { action: 'update', oldValue: 2, newValue: 'value2' }

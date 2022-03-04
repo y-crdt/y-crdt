@@ -17,7 +17,7 @@ export const testInsert = tc => {
         aa.push(txn, 'hello')
         b.push(txn, 'world')
 
-        return root.toString(txn)
+        return root.toString()
     })
 
     t.compareStrings(s, '<UNDEFINED><p>hello</p>world</UNDEFINED>')
@@ -34,7 +34,7 @@ export const testAttributes = tc => {
         root.setAttribute(txn, 'key2', 'value2')
 
         let obj = {}
-        for (let [key,value] of root.attributes(txn)) {
+        for (let [key,value] of root.attributes()) {
             obj[key] = value
         }
         return obj
@@ -48,8 +48,8 @@ export const testAttributes = tc => {
     actual = d1.transact(txn => {
         root.removeAttribute(txn, 'key1')
         return {
-            key1: root.getAttribute(txn, 'key1'),
-            key2: root.getAttribute(txn, 'key2')
+            key1: root.getAttribute('key1'),
+            key2: root.getAttribute('key2')
         }
     })
 
@@ -76,15 +76,15 @@ export const testSiblings = tc => {
         return a
     })
 
-    t.compare(d1.transact(txn => first.prevSibling(txn)), undefined)
+    t.compare(first.prevSibling(), undefined)
 
-    let second = d1.transact(txn => first.nextSibling(txn))
-    let s = d1.transact(txn => second.toString(txn))
+    let second = first.nextSibling()
+    let s = second.toString()
     t.compare(s, 'world')
-    t.compare(d1.transact(txn => second.nextSibling(txn)), undefined)
+    t.compare(second.nextSibling(), undefined)
 
-    let actual = d1.transact(txn => second.prevSibling(txn).toString(txn))
-    let expected = d1.transact(txn => first.toString(txn))
+    let actual = second.prevSibling().toString()
+    let expected = first.toString()
     t.compare(actual, expected)
 }
 
@@ -103,22 +103,17 @@ export const testTreeWalker = tc => {
         b.push(txn, 'world')
     })
 
-    const txn = d1.beginTransaction()
-    try {
-        const actual = []
-        for (let child of root.treeWalker(txn)) {
-            actual.push(child.toString(txn))
-        }
-
-        const expected = [
-            '<p>hello</p>',
-            'hello',
-            'world'
-        ]
-        t.compareArrays(actual, expected)
-    } finally {
-        txn.free()
+    const actual = []
+    for (let child of root.treeWalker()) {
+        actual.push(child.toString())
     }
+
+    const expected = [
+        '<p>hello</p>',
+        'hello',
+        'world'
+    ]
+    t.compareArrays(actual, expected)
 }
 
 /**
@@ -129,7 +124,6 @@ export const testXmlTextObserver = tc => {
     /**
      * @param {Y.YXmlText} tc
      */
-    const getValue = (x) => d1.transact(txn => x.toString(txn))
     const x = d1.getXmlText('test')
     let target = null
     let attributes = null
@@ -145,7 +139,7 @@ export const testXmlTextObserver = tc => {
         x.setAttribute(txn, 'attr1', 'value1')
         x.setAttribute(txn, 'attr2', 'value2')
     })
-    t.compare(getValue(target), getValue(x))
+    t.compare(target.toString(), x.toString())
     t.compare(delta, [])
     t.compare(attributes, {
         attr1: { action: 'add', newValue: 'value1' },
@@ -160,7 +154,7 @@ export const testXmlTextObserver = tc => {
         x.setAttribute(txn, 'attr1', 'value11')
         x.removeAttribute(txn, 'attr2')
     })
-    t.compare(getValue(target), getValue(x))
+    t.compare(target.toString(), x.toString())
     t.compare(delta, [])
     t.compare(attributes, {
         attr1: { action: 'update', oldValue: 'value1', newValue: 'value11' },
@@ -172,7 +166,7 @@ export const testXmlTextObserver = tc => {
 
     // insert initial data to an empty YText
     d1.transact(txn => x.insert(txn, 0, 'abcd'))
-    t.compare(getValue(target), getValue(x))
+    t.compare(target.toString(), x.toString())
     t.compare(delta, [{insert: 'abcd'}])
     t.compare(attributes, {})
     target = null
@@ -181,7 +175,7 @@ export const testXmlTextObserver = tc => {
 
     // remove 2 chars from the middle
     d1.transact(txn => x.delete(txn, 1, 2))
-    t.compare(getValue(target), getValue(x))
+    t.compare(target.toString(), x.toString())
     t.compare(delta, [{retain:1}, {delete: 2}])
     t.compare(attributes, {})
     target = null
@@ -190,7 +184,7 @@ export const testXmlTextObserver = tc => {
 
     // insert new item in the middle
     d1.transact(txn => x.insert(txn, 1, 'e'))
-    t.compare(getValue(target), getValue(x))
+    t.compare(target.toString(), x.toString())
     t.compare(delta, [{retain:1}, {insert: 'e'}])
     t.compare(attributes, {})
     target = null
@@ -212,7 +206,6 @@ export const testXmlElementObserver = tc => {
     /**
      * @param {Y.YXmlElement} tc
      */
-    const getValue = (x) => d1.transact(txn => x.toString(txn))
     const x = d1.getXmlElement('test')
     let target = null
     let attributes = null
@@ -228,7 +221,7 @@ export const testXmlElementObserver = tc => {
         x.setAttribute(txn, 'attr1', 'value1')
         x.setAttribute(txn, 'attr2', 'value2')
     })
-    t.compare(getValue(target), getValue(x))
+    t.compare(target.toString(), x.toString())
     t.compare(nodes, [])
     t.compare(attributes, {
         attr1: { action: 'add', newValue: 'value1' },
@@ -243,7 +236,7 @@ export const testXmlElementObserver = tc => {
         x.setAttribute(txn, 'attr1', 'value11')
         x.removeAttribute(txn, 'attr2')
     })
-    t.compare(getValue(target), getValue(x))
+    t.compare(target.toString(), x.toString())
     t.compare(nodes, [])
     t.compare(attributes, {
         attr1: { action: 'update', oldValue: 'value1', newValue: 'value11' },
@@ -258,7 +251,7 @@ export const testXmlElementObserver = tc => {
         x.insertXmlElement(txn, 0, 'div')
         x.insertXmlElement(txn, 1, 'p')
     })
-    t.compare(getValue(target), getValue(x))
+    t.compare(target.toString(), x.toString())
     t.compare(nodes[0].insert.length, 2) // [{ insert: [div, p] }]
     t.compare(attributes,  {})
     target = null
@@ -267,7 +260,7 @@ export const testXmlElementObserver = tc => {
 
     // remove a child
     d1.transact(txn => x.delete(txn, 0, 1))
-    t.compare(getValue(target), getValue(x))
+    t.compare(target.toString(), x.toString())
     t.compare(nodes, [{ delete: 1 }])
     t.compare(attributes, {})
     target = null
@@ -276,7 +269,7 @@ export const testXmlElementObserver = tc => {
 
     // insert child again
     let txt = d1.transact(txn => x.insertXmlText(txn, x.length(txn)))
-    t.compare(getValue(target), getValue(x))
+    t.compare(target.toString(), x.toString())
     t.compare(nodes[0], { retain: 1 });
     t.assert(nodes[1].insert != null)
     t.compare(attributes,  {})

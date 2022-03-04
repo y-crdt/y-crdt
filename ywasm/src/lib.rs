@@ -14,9 +14,8 @@ use yrs::types::map::{MapEvent, MapIter};
 use yrs::types::text::TextEvent;
 use yrs::types::xml::{Attributes, TreeWalker, XmlEvent, XmlTextEvent};
 use yrs::types::{
-    Attrs, Branch, BranchPtr, Change, Delta, EntryChange, Path, PathSegment, TypePtr, TypeRefs,
-    Value, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT, TYPE_REFS_XML_ELEMENT,
-    TYPE_REFS_XML_TEXT,
+    Attrs, Branch, BranchPtr, Change, Delta, EntryChange, Path, PathSegment, TypeRefs, Value,
+    TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT,
 };
 use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1};
@@ -535,7 +534,7 @@ impl YArrayEvent {
     /// of shared type (accessible via `target` getter).
     #[wasm_bindgen(method)]
     pub fn path(&self) -> JsValue {
-        path_into_js(self.inner().path(self.txn()))
+        path_into_js(self.inner().path())
     }
 
     /// Returns a list of text changes made over corresponding `YArray` collection within
@@ -609,7 +608,7 @@ impl YMapEvent {
     /// of shared type (accessible via `target` getter).
     #[wasm_bindgen(method)]
     pub fn path(&self) -> JsValue {
-        path_into_js(self.inner().path(self.txn()))
+        path_into_js(self.inner().path())
     }
 
     /// Returns a list of key-value changes made over corresponding `YMap` collection within
@@ -681,7 +680,7 @@ impl YTextEvent {
     /// of shared type (accessible via `target` getter).
     #[wasm_bindgen(method)]
     pub fn path(&self) -> JsValue {
-        path_into_js(self.inner().path(self.txn()))
+        path_into_js(self.inner().path())
     }
 
     /// Returns a list of text changes made over corresponding `YText` collection within
@@ -757,7 +756,7 @@ impl YXmlEvent {
     /// of shared type (accessible via `target` getter).
     #[wasm_bindgen(method)]
     pub fn path(&self) -> JsValue {
-        path_into_js(self.inner().path(self.txn()))
+        path_into_js(self.inner().path())
     }
 
     /// Returns a list of attribute changes made over corresponding `YXmlText` collection within
@@ -855,7 +854,7 @@ impl YXmlTextEvent {
     /// of shared type (accessible via `target` getter).
     #[wasm_bindgen(method)]
     pub fn path(&self) -> JsValue {
-        path_into_js(self.inner().path(self.txn()))
+        path_into_js(self.inner().path())
     }
 
     /// Returns a list of text changes made over corresponding `YXmlText` collection within
@@ -1132,18 +1131,18 @@ impl YText {
 
     /// Returns an underlying shared string stored in this data type.
     #[wasm_bindgen(js_name = toString)]
-    pub fn to_string(&self, txn: &YTransaction) -> String {
+    pub fn to_string(&self) -> String {
         match &*self.0.borrow() {
-            SharedType::Integrated(v) => v.to_string(txn),
+            SharedType::Integrated(v) => v.to_string(),
             SharedType::Prelim(v) => v.clone(),
         }
     }
 
     /// Returns an underlying shared string stored in this data type.
     #[wasm_bindgen(js_name = toJson)]
-    pub fn to_json(&self, txn: &YTransaction) -> JsValue {
+    pub fn to_json(&self) -> JsValue {
         match &*self.0.borrow() {
-            SharedType::Integrated(v) => JsValue::from(&v.to_string(txn)),
+            SharedType::Integrated(v) => JsValue::from(&v.to_string()),
             SharedType::Prelim(v) => JsValue::from(v),
         }
     }
@@ -1366,9 +1365,9 @@ impl YArray {
 
     /// Converts an underlying contents of this `YArray` instance into their JSON representation.
     #[wasm_bindgen(js_name = toJson)]
-    pub fn to_json(&self, txn: &YTransaction) -> JsValue {
+    pub fn to_json(&self) -> JsValue {
         match &*self.0.borrow() {
-            SharedType::Integrated(v) => any_into_js(&v.to_json(txn)),
+            SharedType::Integrated(v) => any_into_js(&v.to_json()),
             SharedType::Prelim(v) => {
                 let array = js_sys::Array::new();
                 for js in v.iter() {
@@ -1417,10 +1416,10 @@ impl YArray {
 
     /// Returns an element stored under given `index`.
     #[wasm_bindgen(catch, js_name = get)]
-    pub fn get(&self, txn: &YTransaction, index: u32) -> Result<JsValue, JsValue> {
+    pub fn get(&self, index: u32) -> Result<JsValue, JsValue> {
         match &*self.0.borrow() {
             SharedType::Integrated(v) => {
-                if let Some(value) = v.get(txn, index) {
+                if let Some(value) = v.get(index) {
                     Ok(value_into_js(value))
                 } else {
                     Err(JsValue::from("Index outside the bounds of an YArray"))
@@ -1458,13 +1457,12 @@ impl YArray {
     /// }
     /// ```
     #[wasm_bindgen(js_name = values)]
-    pub fn values(&self, txn: &YTransaction) -> JsValue {
+    pub fn values(&self) -> JsValue {
         to_iter(match &*self.0.borrow() {
             SharedType::Integrated(v) => unsafe {
                 let this: *const Array = v;
-                let tx: *const Transaction = txn.deref() as *const _;
                 let static_iter: ManuallyDrop<ArrayIter<'static>> =
-                    ManuallyDrop::new((*this).iter(tx.as_ref().unwrap()));
+                    ManuallyDrop::new((*this).iter());
                 YArrayIterator(static_iter).into()
             },
             SharedType::Prelim(v) => unsafe {
@@ -1640,18 +1638,18 @@ impl YMap {
 
     /// Returns a number of entries stored within this instance of `YMap`.
     #[wasm_bindgen(method)]
-    pub fn length(&self, txn: &YTransaction) -> u32 {
+    pub fn length(&self) -> u32 {
         match &*self.0.borrow() {
-            SharedType::Integrated(v) => v.len(txn),
+            SharedType::Integrated(v) => v.len(),
             SharedType::Prelim(v) => v.len() as u32,
         }
     }
 
     /// Converts contents of this `YMap` instance into a JSON representation.
     #[wasm_bindgen(js_name = toJson)]
-    pub fn to_json(&self, txn: &YTransaction) -> JsValue {
+    pub fn to_json(&self) -> JsValue {
         match &*self.0.borrow() {
-            SharedType::Integrated(v) => any_into_js(&v.to_json(txn)),
+            SharedType::Integrated(v) => any_into_js(&v.to_json()),
             SharedType::Prelim(v) => {
                 let map = js_sys::Object::new();
                 for (k, v) in v.iter() {
@@ -1692,10 +1690,10 @@ impl YMap {
     /// Returns value of an entry stored under given `key` within this instance of `YMap`,
     /// or `undefined` if no such entry existed.
     #[wasm_bindgen(js_name = get)]
-    pub fn get(&self, txn: &mut YTransaction, key: &str) -> JsValue {
+    pub fn get(&self, key: &str) -> JsValue {
         match &*self.0.borrow() {
             SharedType::Integrated(v) => {
-                if let Some(value) = v.get(txn, key) {
+                if let Some(value) = v.get(key) {
                     value_into_js(value)
                 } else {
                     JsValue::undefined()
@@ -1735,13 +1733,11 @@ impl YMap {
     /// }
     /// ```
     #[wasm_bindgen(js_name = entries)]
-    pub fn entries(&self, txn: &mut YTransaction) -> JsValue {
+    pub fn entries(&self) -> JsValue {
         to_iter(match &*self.0.borrow() {
             SharedType::Integrated(v) => unsafe {
                 let this: *const Map = v;
-                let tx: *const Transaction = &txn.0 as *const _;
-                let static_iter: ManuallyDrop<MapIter<'static>> =
-                    ManuallyDrop::new((*this).iter(tx.as_ref().unwrap()));
+                let static_iter: ManuallyDrop<MapIter<'static>> = ManuallyDrop::new((*this).iter());
                 YMapIterator(static_iter).into()
             },
             SharedType::Prelim(v) => unsafe {
@@ -1857,8 +1853,8 @@ impl YXmlElement {
 
     /// Returns a number of child XML nodes stored within this `YXMlElement` instance.
     #[wasm_bindgen(js_name = length)]
-    pub fn length(&self, txn: &YTransaction) -> u32 {
-        self.0.len(txn)
+    pub fn length(&self) -> u32 {
+        self.0.len()
     }
 
     /// Inserts a new instance of `YXmlElement` as a child of this XML node and returns it.
@@ -1900,8 +1896,8 @@ impl YXmlElement {
     /// Returns a first child of this XML node.
     /// It can be either `YXmlElement`, `YXmlText` or `undefined` if current node has not children.
     #[wasm_bindgen(js_name = firstChild)]
-    pub fn first_child(&self, txn: &YTransaction) -> JsValue {
-        if let Some(xml) = self.0.first_child(txn) {
+    pub fn first_child(&self) -> JsValue {
+        if let Some(xml) = self.0.first_child() {
             xml_into_js(xml)
         } else {
             JsValue::undefined()
@@ -1912,8 +1908,8 @@ impl YXmlElement {
     /// It can be either `YXmlElement`, `YXmlText` or `undefined` if current node is a last child of
     /// parent XML node.
     #[wasm_bindgen(js_name = nextSibling)]
-    pub fn next_sibling(&self, txn: &YTransaction) -> JsValue {
-        if let Some(xml) = self.0.next_sibling(txn) {
+    pub fn next_sibling(&self) -> JsValue {
+        if let Some(xml) = self.0.next_sibling() {
             xml_into_js(xml)
         } else {
             JsValue::undefined()
@@ -1924,8 +1920,8 @@ impl YXmlElement {
     /// It can be either `YXmlElement`, `YXmlText` or `undefined` if current node is a first child
     /// of parent XML node.
     #[wasm_bindgen(js_name = prevSibling)]
-    pub fn prev_sibling(&self, txn: &YTransaction) -> JsValue {
-        if let Some(xml) = self.0.prev_sibling(txn) {
+    pub fn prev_sibling(&self) -> JsValue {
+        if let Some(xml) = self.0.prev_sibling() {
             xml_into_js(xml)
         } else {
             JsValue::undefined()
@@ -1934,8 +1930,8 @@ impl YXmlElement {
 
     /// Returns a parent `YXmlElement` node or `undefined` if current node has no parent assigned.
     #[wasm_bindgen(js_name = parent)]
-    pub fn parent(&self, txn: &YTransaction) -> JsValue {
-        if let Some(xml) = self.0.parent(txn) {
+    pub fn parent(&self) -> JsValue {
+        if let Some(xml) = self.0.parent() {
             xml_into_js(Xml::Element(xml))
         } else {
             JsValue::undefined()
@@ -1944,8 +1940,8 @@ impl YXmlElement {
 
     /// Returns a string representation of this XML node.
     #[wasm_bindgen(js_name = toString)]
-    pub fn to_string(&self, txn: &YTransaction) -> String {
-        self.0.to_string(txn)
+    pub fn to_string(&self) -> String {
+        self.0.to_string()
     }
 
     /// Sets a `name` and `value` as new attribute for this XML node. If an attribute with the same
@@ -1958,8 +1954,8 @@ impl YXmlElement {
     /// Returns a value of an attribute given its `name`. If no attribute with such name existed,
     /// `null` will be returned.
     #[wasm_bindgen(js_name = getAttribute)]
-    pub fn get_attribute(&self, txn: &YTransaction, name: &str) -> Option<String> {
-        self.0.get_attribute(txn, name)
+    pub fn get_attribute(&self, name: &str) -> Option<String> {
+        self.0.get_attribute(name)
     }
 
     /// Removes an attribute from this XML node, given its `name`.
@@ -1971,12 +1967,11 @@ impl YXmlElement {
     /// Returns an iterator that enables to traverse over all attributes of this XML node in
     /// unspecified order.
     #[wasm_bindgen(js_name = attributes)]
-    pub fn attributes(&self, txn: &YTransaction) -> JsValue {
+    pub fn attributes(&self) -> JsValue {
         to_iter(unsafe {
             let this: *const XmlElement = &self.0;
-            let tx: *const Transaction = txn.deref() as *const _;
             let static_iter: ManuallyDrop<Attributes<'static>> =
-                ManuallyDrop::new((*this).attributes(tx.as_ref().unwrap()));
+                ManuallyDrop::new((*this).attributes());
             YXmlAttributes(static_iter).into()
         })
     }
@@ -1984,12 +1979,11 @@ impl YXmlElement {
     /// Returns an iterator that enables a deep traversal of this XML node - starting from first
     /// child over this XML node successors using depth-first strategy.
     #[wasm_bindgen(js_name = treeWalker)]
-    pub fn tree_walker(&self, txn: &YTransaction) -> JsValue {
+    pub fn tree_walker(&self) -> JsValue {
         to_iter(unsafe {
             let this: *const XmlElement = &self.0;
-            let tx: *const Transaction = txn.deref() as *const _;
             let static_iter: ManuallyDrop<TreeWalker<'static>> =
-                ManuallyDrop::new((*this).successors(tx.as_ref().unwrap()));
+                ManuallyDrop::new((*this).successors());
             YXmlTreeWalker(static_iter).into()
         })
     }
@@ -2158,8 +2152,8 @@ impl YXmlText {
     /// It can be either `YXmlElement`, `YXmlText` or `undefined` if current node is a last child of
     /// parent XML node.
     #[wasm_bindgen(js_name = nextSibling)]
-    pub fn next_sibling(&self, txn: &YTransaction) -> JsValue {
-        if let Some(xml) = self.0.next_sibling(txn) {
+    pub fn next_sibling(&self) -> JsValue {
+        if let Some(xml) = self.0.next_sibling() {
             xml_into_js(xml)
         } else {
             JsValue::undefined()
@@ -2170,8 +2164,8 @@ impl YXmlText {
     /// It can be either `YXmlElement`, `YXmlText` or `undefined` if current node is a first child
     /// of parent XML node.
     #[wasm_bindgen(js_name = prevSibling)]
-    pub fn prev_sibling(&self, txn: &YTransaction) -> JsValue {
-        if let Some(xml) = self.0.prev_sibling(txn) {
+    pub fn prev_sibling(&self) -> JsValue {
+        if let Some(xml) = self.0.prev_sibling() {
             xml_into_js(xml)
         } else {
             JsValue::undefined()
@@ -2180,8 +2174,8 @@ impl YXmlText {
 
     /// Returns a parent `YXmlElement` node or `undefined` if current node has no parent assigned.
     #[wasm_bindgen(js_name = parent)]
-    pub fn parent(&self, txn: &YTransaction) -> JsValue {
-        if let Some(xml) = self.0.parent(txn) {
+    pub fn parent(&self) -> JsValue {
+        if let Some(xml) = self.0.parent() {
             xml_into_js(Xml::Element(xml))
         } else {
             JsValue::undefined()
@@ -2190,8 +2184,8 @@ impl YXmlText {
 
     /// Returns an underlying string stored in this `YXmlText` instance.
     #[wasm_bindgen(js_name = toString)]
-    pub fn to_string(&self, txn: &YTransaction) -> String {
-        self.0.to_string(txn)
+    pub fn to_string(&self) -> String {
+        self.0.to_string()
     }
 
     /// Sets a `name` and `value` as new attribute for this XML node. If an attribute with the same
@@ -2204,8 +2198,8 @@ impl YXmlText {
     /// Returns a value of an attribute given its `name`. If no attribute with such name existed,
     /// `null` will be returned.
     #[wasm_bindgen(js_name = getAttribute)]
-    pub fn get_attribute(&self, txn: &YTransaction, name: &str) -> Option<String> {
-        self.0.get_attribute(txn, name)
+    pub fn get_attribute(&self, name: &str) -> Option<String> {
+        self.0.get_attribute(name)
     }
 
     /// Removes an attribute from this XML node, given its `name`.
@@ -2217,12 +2211,11 @@ impl YXmlText {
     /// Returns an iterator that enables to traverse over all attributes of this XML node in
     /// unspecified order.
     #[wasm_bindgen(js_name = attributes)]
-    pub fn attributes(&self, txn: &YTransaction) -> YXmlAttributes {
+    pub fn attributes(&self) -> YXmlAttributes {
         unsafe {
             let this: *const XmlText = &self.0;
-            let tx: *const Transaction = txn.deref() as *const _;
             let static_iter: ManuallyDrop<Attributes<'static>> =
-                ManuallyDrop::new((*this).attributes(tx.as_ref().unwrap()));
+                ManuallyDrop::new((*this).attributes());
             YXmlAttributes(static_iter)
         }
     }
@@ -2246,12 +2239,12 @@ impl YXmlText {
 struct JsValueWrapper(JsValue);
 
 impl Prelim for JsValueWrapper {
-    fn into_content(self, _txn: &mut Transaction, ptr: TypePtr) -> (ItemContent, Option<Self>) {
+    fn into_content(self, _txn: &mut Transaction) -> (ItemContent, Option<Self>) {
         let content = if let Some(any) = js_into_any(&self.0) {
             ItemContent::Any(vec![any])
         } else if let Ok(shared) = Shared::try_from(&self.0) {
             if shared.is_prelim() {
-                let branch = Branch::new(ptr, shared.type_ref(), None);
+                let branch = Branch::new(shared.type_ref(), None);
                 ItemContent::Type(branch)
             } else {
                 panic!("Cannot integrate this type")
