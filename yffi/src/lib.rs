@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::ffi::{c_void, CStr, CString};
 use std::mem::{forget, ManuallyDrop, MaybeUninit};
 use std::ops::Deref;
-use std::os::raw::{c_char, c_float, c_int, c_long, c_uchar, c_uint, c_ulong};
+use std::os::raw::{c_char, c_float, c_int, c_long, c_longlong, c_uchar, c_uint, c_ulong};
 use std::ptr::{null, null_mut};
 use yrs::block::{ItemContent, Prelim};
 use yrs::types::array::ArrayEvent;
@@ -11,7 +11,7 @@ use yrs::types::map::MapEvent;
 use yrs::types::text::TextEvent;
 use yrs::types::xml::{XmlEvent, XmlTextEvent};
 use yrs::types::{
-    Attrs, BranchPtr, Change, Delta, EntryChange, PathSegment, TypePtr, Value, TYPE_REFS_ARRAY,
+    Attrs, BranchPtr, Change, Delta, EntryChange, PathSegment, Value, TYPE_REFS_ARRAY,
     TYPE_REFS_MAP, TYPE_REFS_TEXT, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT,
 };
 use yrs::updates::decoder::{Decode, DecoderV1};
@@ -475,13 +475,11 @@ pub unsafe extern "C" fn ytext_len(txt: *const Branch) -> c_int {
 ///
 /// Generated string resources should be released using [ystring_destroy] function.
 #[no_mangle]
-pub unsafe extern "C" fn ytext_string(txt: *const Branch, txn: *const Transaction) -> *mut c_char {
+pub unsafe extern "C" fn ytext_string(txt: *const Branch) -> *mut c_char {
     assert!(!txt.is_null());
-    assert!(!txn.is_null());
 
-    let txn = txn.as_ref().unwrap();
     let txt = Text::from_raw_branch(txt);
-    let str = txt.to_string(txn);
+    let str = txt.to_string();
     CString::new(str).unwrap().into_raw()
 }
 
@@ -633,18 +631,12 @@ pub unsafe extern "C" fn yarray_len(array: *const Branch) -> c_int {
 ///
 /// A value returned should be eventually released using [youtput_destroy] function.
 #[no_mangle]
-pub unsafe extern "C" fn yarray_get(
-    array: *const Branch,
-    txn: *mut Transaction,
-    index: c_int,
-) -> *mut YOutput {
+pub unsafe extern "C" fn yarray_get(array: *const Branch, index: c_int) -> *mut YOutput {
     assert!(!array.is_null());
-    assert!(!txn.is_null());
 
     let array = Array::from_raw_branch(array);
-    let txn = txn.as_mut().unwrap();
 
-    if let Some(val) = array.get(txn, index as u32) {
+    if let Some(val) = array.get(index as u32) {
         Box::into_raw(Box::new(YOutput::from(val)))
     } else {
         std::ptr::null_mut()
@@ -733,16 +725,11 @@ pub unsafe extern "C" fn yarray_remove_range(
 /// Use [yarray_iter_next] function in order to retrieve a consecutive array elements.
 /// Use [yarray_iter_destroy] function in order to close the iterator and release its resources.
 #[no_mangle]
-pub unsafe extern "C" fn yarray_iter(
-    array: *const Branch,
-    txn: *const Transaction,
-) -> *mut ArrayIter {
+pub unsafe extern "C" fn yarray_iter(array: *const Branch) -> *mut ArrayIter {
     assert!(!array.is_null());
-    assert!(!txn.is_null());
 
-    let array = Array::from_raw_branch(array);
-    let txn = txn.as_ref().unwrap();
-    Box::into_raw(Box::new(array.iter(txn)))
+    let array = &Array::from_raw_branch(array) as *const Array;
+    Box::into_raw(Box::new(array.as_ref().unwrap().iter()))
 }
 
 /// Releases all of an `YArray` iterator resources created by calling [yarray_iter].
@@ -763,7 +750,8 @@ pub unsafe extern "C" fn yarray_iter_next(iterator: *mut ArrayIter) -> *mut YOut
 
     let iter = iterator.as_mut().unwrap();
     if let Some(v) = iter.next() {
-        Box::into_raw(Box::new(YOutput::from(v)))
+        let out = YOutput::from(v);
+        Box::into_raw(Box::new(out))
     } else {
         std::ptr::null_mut()
     }
@@ -774,13 +762,11 @@ pub unsafe extern "C" fn yarray_iter_next(iterator: *mut ArrayIter) -> *mut YOut
 /// Use [ymap_iter_next] function in order to retrieve a consecutive (**unordered**) map entries.
 /// Use [ymap_iter_destroy] function in order to close the iterator and release its resources.
 #[no_mangle]
-pub unsafe extern "C" fn ymap_iter(map: *const Branch, txn: *const Transaction) -> *mut MapIter {
+pub unsafe extern "C" fn ymap_iter(map: *const Branch) -> *mut MapIter {
     assert!(!map.is_null());
-    assert!(!txn.is_null());
 
-    let map = Map::from_raw_branch(map);
-    let txn = txn.as_ref().unwrap();
-    Box::into_raw(Box::new(map.iter(txn)))
+    let map = &Map::from_raw_branch(map) as *const Map;
+    Box::into_raw(Box::new(map.as_ref().unwrap().iter()))
 }
 
 /// Releases all of an `YMap` iterator resources created by calling [ymap_iter].
@@ -810,14 +796,12 @@ pub unsafe extern "C" fn ymap_iter_next(iter: *mut MapIter) -> *mut YMapEntry {
 
 /// Returns a number of entries stored within a `map`.
 #[no_mangle]
-pub unsafe extern "C" fn ymap_len(map: *const Branch, txn: *const Transaction) -> c_int {
+pub unsafe extern "C" fn ymap_len(map: *const Branch) -> c_int {
     assert!(!map.is_null());
-    assert!(!txn.is_null());
 
     let map = Map::from_raw_branch(map);
-    let txn = txn.as_ref().unwrap();
 
-    map.len(txn) as c_int
+    map.len() as c_int
 }
 
 /// Inserts a new entry (specified as `key`-`value` pair) into a current `map`. If entry under such
@@ -881,21 +865,15 @@ pub unsafe extern "C" fn ymap_remove(
 ///
 /// A `key` must be a null-terminated UTF-8 encoded string.
 #[no_mangle]
-pub unsafe extern "C" fn ymap_get(
-    map: *const Branch,
-    txn: *const Transaction,
-    key: *const c_char,
-) -> *mut YOutput {
+pub unsafe extern "C" fn ymap_get(map: *const Branch, key: *const c_char) -> *mut YOutput {
     assert!(!map.is_null());
-    assert!(!txn.is_null());
     assert!(!key.is_null());
 
     let key = CStr::from_ptr(key).to_str().unwrap();
 
     let map = Map::from_raw_branch(map);
-    let txn = txn.as_ref().unwrap();
 
-    if let Some(value) = map.get(txn, key) {
+    if let Some(value) = map.get(key) {
         Box::into_raw(Box::new(YOutput::from(value)))
     } else {
         std::ptr::null_mut()
@@ -933,17 +911,12 @@ pub unsafe extern "C" fn yxmlelem_tag(xml: *const Branch) -> *mut c_char {
 /// Returned value is a null-terminated UTF-8 string, which must be released using [ystring_destroy]
 /// function.
 #[no_mangle]
-pub unsafe extern "C" fn yxmlelem_string(
-    xml: *const Branch,
-    txn: *const Transaction,
-) -> *mut c_char {
+pub unsafe extern "C" fn yxmlelem_string(xml: *const Branch) -> *mut c_char {
     assert!(!xml.is_null());
-    assert!(!txn.is_null());
 
     let xml = XmlElement::from_raw_branch(xml);
-    let txn = txn.as_ref().unwrap();
 
-    let str = xml.to_string(txn);
+    let str = xml.to_string();
     CString::new(str).unwrap().into_raw()
 }
 
@@ -1001,18 +974,15 @@ pub unsafe extern "C" fn yxmlelem_remove_attr(
 #[no_mangle]
 pub unsafe extern "C" fn yxmlelem_get_attr(
     xml: *const Branch,
-    txn: *const Transaction,
     attr_name: *const c_char,
 ) -> *mut c_char {
     assert!(!xml.is_null());
-    assert!(!txn.is_null());
     assert!(!attr_name.is_null());
 
     let xml = XmlElement::from_raw_branch(xml);
-    let txn = txn.as_ref().unwrap();
 
     let key = CStr::from_ptr(attr_name).to_str().unwrap();
-    if let Some(value) = xml.get_attribute(txn, key) {
+    if let Some(value) = xml.get_attribute(key) {
         CString::new(value).unwrap().into_raw()
     } else {
         std::ptr::null_mut()
@@ -1024,17 +994,11 @@ pub unsafe extern "C" fn yxmlelem_get_attr(
 /// Use [yxmlattr_iter_next] function in order to retrieve a consecutive (**unordered**) attributes.
 /// Use [yxmlattr_iter_destroy] function in order to close the iterator and release its resources.
 #[no_mangle]
-pub unsafe extern "C" fn yxmlelem_attr_iter(
-    xml: *const Branch,
-    txn: *const Transaction,
-) -> *mut Attributes {
+pub unsafe extern "C" fn yxmlelem_attr_iter(xml: *const Branch) -> *mut Attributes {
     assert!(!xml.is_null());
-    assert!(!txn.is_null());
 
-    let xml = XmlElement::from_raw_branch(xml);
-    let txn = txn.as_ref().unwrap();
-
-    Box::into_raw(Box::new(xml.attributes(txn)))
+    let xml = &XmlElement::from_raw_branch(xml) as *const XmlElement;
+    Box::into_raw(Box::new(xml.as_ref().unwrap().attributes()))
 }
 
 /// Returns an iterator over the `YXmlText` attributes.
@@ -1042,17 +1006,11 @@ pub unsafe extern "C" fn yxmlelem_attr_iter(
 /// Use [yxmlattr_iter_next] function in order to retrieve a consecutive (**unordered**) attributes.
 /// Use [yxmlattr_iter_destroy] function in order to close the iterator and release its resources.
 #[no_mangle]
-pub unsafe extern "C" fn yxmltext_attr_iter(
-    xml: *const Branch,
-    txn: *const Transaction,
-) -> *mut Attributes {
+pub unsafe extern "C" fn yxmltext_attr_iter(xml: *const Branch) -> *mut Attributes {
     assert!(!xml.is_null());
-    assert!(!txn.is_null());
 
-    let xml = XmlElement::from_raw_branch(xml);
-    let txn = txn.as_ref().unwrap();
-
-    Box::into_raw(Box::new(xml.attributes(txn)))
+    let xml = &XmlText::from_raw_branch(xml) as *const XmlText;
+    Box::into_raw(Box::new(xml.as_ref().unwrap().attributes()))
 }
 
 /// Releases all of attributes iterator resources created by calling [yxmlelem_attr_iter]
@@ -1093,17 +1051,12 @@ pub unsafe extern "C" fn yxmlattr_iter_next(iterator: *mut Attributes) -> *mut Y
 /// If current `YXmlElement` is the last child, this function returns a null pointer.
 /// A returned value should be eventually released using [youtput_destroy] function.
 #[no_mangle]
-pub unsafe extern "C" fn yxmlelem_next_sibling(
-    xml: *const Branch,
-    txn: *const Transaction,
-) -> *mut YOutput {
+pub unsafe extern "C" fn yxmlelem_next_sibling(xml: *const Branch) -> *mut YOutput {
     assert!(!xml.is_null());
-    assert!(!txn.is_null());
 
     let xml = XmlElement::from_raw_branch(xml);
-    let txn = txn.as_ref().unwrap();
 
-    if let Some(next) = xml.next_sibling(txn) {
+    if let Some(next) = xml.next_sibling() {
         match next {
             Xml::Element(v) => Box::into_raw(Box::new(YOutput::from(Value::YXmlElement(v)))),
             Xml::Text(v) => Box::into_raw(Box::new(YOutput::from(Value::YXmlText(v)))),
@@ -1119,17 +1072,12 @@ pub unsafe extern "C" fn yxmlelem_next_sibling(
 /// If current `YXmlElement` is the first child, this function returns a null pointer.
 /// A returned value should be eventually released using [youtput_destroy] function.
 #[no_mangle]
-pub unsafe extern "C" fn yxmlelem_prev_sibling(
-    xml: *const Branch,
-    txn: *const Transaction,
-) -> *mut YOutput {
+pub unsafe extern "C" fn yxmlelem_prev_sibling(xml: *const Branch) -> *mut YOutput {
     assert!(!xml.is_null());
-    assert!(!txn.is_null());
 
     let xml = XmlElement::from_raw_branch(xml);
-    let txn = txn.as_ref().unwrap();
 
-    if let Some(next) = xml.prev_sibling(txn) {
+    if let Some(next) = xml.prev_sibling() {
         match next {
             Xml::Element(v) => Box::into_raw(Box::new(YOutput::from(Value::YXmlElement(v)))),
             Xml::Text(v) => Box::into_raw(Box::new(YOutput::from(Value::YXmlText(v)))),
@@ -1147,17 +1095,12 @@ pub unsafe extern "C" fn yxmlelem_prev_sibling(
 /// If current `YXmlText` is the last child, this function returns a null pointer.
 /// A returned value should be eventually released using [youtput_destroy] function.
 #[no_mangle]
-pub unsafe extern "C" fn yxmltext_next_sibling(
-    xml: *const Branch,
-    txn: *const Transaction,
-) -> *mut YOutput {
+pub unsafe extern "C" fn yxmltext_next_sibling(xml: *const Branch) -> *mut YOutput {
     assert!(!xml.is_null());
-    assert!(!txn.is_null());
 
     let xml = XmlElement::from_raw_branch(xml);
-    let txn = txn.as_ref().unwrap();
 
-    if let Some(next) = xml.next_sibling(txn) {
+    if let Some(next) = xml.next_sibling() {
         match next {
             Xml::Element(v) => Box::into_raw(Box::new(YOutput::from(Value::YXmlElement(v)))),
             Xml::Text(v) => Box::into_raw(Box::new(YOutput::from(Value::YXmlText(v)))),
@@ -1173,17 +1116,12 @@ pub unsafe extern "C" fn yxmltext_next_sibling(
 /// If current `YXmlText` is the first child, this function returns a null pointer.
 /// A returned value should be eventually released using [youtput_destroy] function.
 #[no_mangle]
-pub unsafe extern "C" fn yxmltext_prev_sibling(
-    xml: *const Branch,
-    txn: *const Transaction,
-) -> *mut YOutput {
+pub unsafe extern "C" fn yxmltext_prev_sibling(xml: *const Branch) -> *mut YOutput {
     assert!(!xml.is_null());
-    assert!(!txn.is_null());
 
     let xml = XmlElement::from_raw_branch(xml);
-    let txn = txn.as_ref().unwrap();
 
-    if let Some(next) = xml.prev_sibling(txn) {
+    if let Some(next) = xml.prev_sibling() {
         match next {
             Xml::Element(v) => Box::into_raw(Box::new(YOutput::from(Value::YXmlElement(v)))),
             Xml::Text(v) => Box::into_raw(Box::new(YOutput::from(Value::YXmlText(v)))),
@@ -1198,17 +1136,12 @@ pub unsafe extern "C" fn yxmltext_prev_sibling(
 ///
 /// A returned value should be eventually released using [youtput_destroy] function.
 #[no_mangle]
-pub unsafe extern "C" fn yxmlelem_parent(
-    xml: *const Branch,
-    txn: *const Transaction,
-) -> *mut Branch {
+pub unsafe extern "C" fn yxmlelem_parent(xml: *const Branch) -> *mut Branch {
     assert!(!xml.is_null());
-    assert!(!txn.is_null());
 
     let xml = XmlElement::from_raw_branch(xml);
-    let txn = txn.as_ref().unwrap();
 
-    if let Some(parent) = xml.parent(txn) {
+    if let Some(parent) = xml.parent() {
         parent.into_raw_branch()
     } else {
         std::ptr::null_mut()
@@ -1218,14 +1151,12 @@ pub unsafe extern "C" fn yxmlelem_parent(
 /// Returns a number of child nodes (both `YXmlElement` and `YXmlText`) living under a current XML
 /// element. This function doesn't count a recursive nodes, only direct children of a current node.
 #[no_mangle]
-pub unsafe extern "C" fn yxmlelem_child_len(xml: *const Branch, txn: *const Transaction) -> c_int {
+pub unsafe extern "C" fn yxmlelem_child_len(xml: *const Branch) -> c_int {
     assert!(!xml.is_null());
-    assert!(!txn.is_null());
 
     let xml = XmlElement::from_raw_branch(xml);
-    let txn = txn.as_ref().unwrap();
 
-    xml.len(txn) as c_int
+    xml.len() as c_int
 }
 
 /// Returns a first child node of a current `YXmlElement`, or null pointer if current XML node is
@@ -1233,17 +1164,12 @@ pub unsafe extern "C" fn yxmlelem_child_len(xml: *const Branch, txn: *const Tran
 ///
 /// A returned value should be eventually released using [youtput_destroy] function.
 #[no_mangle]
-pub unsafe extern "C" fn yxmlelem_first_child(
-    xml: *const Branch,
-    txn: *const Transaction,
-) -> *mut YOutput {
+pub unsafe extern "C" fn yxmlelem_first_child(xml: *const Branch) -> *mut YOutput {
     assert!(!xml.is_null());
-    assert!(!txn.is_null());
 
     let xml = XmlElement::from_raw_branch(xml);
-    let txn = txn.as_ref().unwrap();
 
-    if let Some(value) = xml.first_child(txn) {
+    if let Some(value) = xml.first_child() {
         match value {
             Xml::Element(v) => Box::into_raw(Box::new(YOutput::from(Value::YXmlElement(v)))),
             Xml::Text(v) => Box::into_raw(Box::new(YOutput::from(Value::YXmlText(v)))),
@@ -1259,17 +1185,11 @@ pub unsafe extern "C" fn yxmlelem_first_child(
 /// Use [yxmlelem_tree_walker_next] function in order to iterate over to a next node.
 /// Use [yxmlelem_tree_walker_destroy] function to release resources used by the iterator.
 #[no_mangle]
-pub unsafe extern "C" fn yxmlelem_tree_walker(
-    xml: *const Branch,
-    txn: *const Transaction,
-) -> *mut TreeWalker {
+pub unsafe extern "C" fn yxmlelem_tree_walker(xml: *const Branch) -> *mut TreeWalker {
     assert!(!xml.is_null());
-    assert!(!txn.is_null());
 
-    let xml = XmlElement::from_raw_branch(xml);
-    let txn = txn.as_ref().unwrap();
-
-    Box::into_raw(Box::new(xml.successors(txn)))
+    let xml = &XmlElement::from_raw_branch(xml) as *const XmlElement;
+    Box::into_raw(Box::new(xml.as_ref().unwrap().successors()))
 }
 
 /// Releases resources associated with a current XML tree walker iterator.
@@ -1370,18 +1290,12 @@ pub unsafe extern "C" fn yxmlelem_remove_range(
 ///
 /// Returned value should be eventually released using [youtput_destroy].
 #[no_mangle]
-pub unsafe extern "C" fn yxmlelem_get(
-    xml: *const Branch,
-    txn: *const Transaction,
-    index: c_int,
-) -> *const YOutput {
+pub unsafe extern "C" fn yxmlelem_get(xml: *const Branch, index: c_int) -> *const YOutput {
     assert!(!xml.is_null());
-    assert!(!txn.is_null());
 
     let xml = XmlElement::from_raw_branch(xml);
-    let txn = txn.as_ref().unwrap();
 
-    if let Some(child) = xml.get(txn, index as u32) {
+    if let Some(child) = xml.get(index as u32) {
         match child {
             Xml::Element(v) => Box::into_raw(Box::new(YOutput::from(Value::YXmlElement(v)))),
             Xml::Text(v) => Box::into_raw(Box::new(YOutput::from(Value::YXmlText(v)))),
@@ -1407,17 +1321,12 @@ pub unsafe extern "C" fn yxmltext_len(txt: *const Branch, txn: *const Transactio
 ///
 /// Generated string resources should be released using [ystring_destroy] function.
 #[no_mangle]
-pub unsafe extern "C" fn yxmltext_string(
-    txt: *const Branch,
-    txn: *const Transaction,
-) -> *mut c_char {
+pub unsafe extern "C" fn yxmltext_string(txt: *const Branch) -> *mut c_char {
     assert!(!txt.is_null());
-    assert!(!txn.is_null());
 
     let txt = XmlText::from_raw_branch(txt);
-    let txn = txn.as_ref().unwrap();
 
-    let str = txt.to_string(txn);
+    let str = txt.to_string();
     CString::new(str).unwrap().into_raw()
 }
 
@@ -1597,18 +1506,15 @@ pub unsafe extern "C" fn yxmltext_remove_attr(
 #[no_mangle]
 pub unsafe extern "C" fn yxmltext_get_attr(
     txt: *const Branch,
-    txn: *const Transaction,
     attr_name: *const c_char,
 ) -> *mut c_char {
     assert!(!txt.is_null());
-    assert!(!txn.is_null());
     assert!(!attr_name.is_null());
 
     let txt = XmlText::from_raw_branch(txt);
-    let txn = txn.as_ref().unwrap();
     let name = CStr::from_ptr(attr_name).to_str().unwrap();
 
-    if let Some(value) = txt.get_attribute(txn, name) {
+    if let Some(value) = txt.get_attribute(name) {
         CString::new(value).unwrap().into_raw()
     } else {
         std::ptr::null_mut()
@@ -1729,11 +1635,7 @@ impl Drop for YInput {
 }
 
 impl Prelim for YInput {
-    fn into_content(
-        self,
-        _txn: &mut yrs::Transaction,
-        ptr: TypePtr,
-    ) -> (ItemContent, Option<Self>) {
+    fn into_content(self, _txn: &mut Transaction) -> (ItemContent, Option<Self>) {
         unsafe {
             if self.tag <= 0 {
                 let value = self.into();
@@ -1756,7 +1658,7 @@ impl Prelim for YInput {
                 } else {
                     None
                 };
-                let inner = Branch::new(ptr, type_ref, name);
+                let inner = Branch::new(type_ref, name);
                 (ItemContent::Type(inner), Some(self))
             }
         }
@@ -1806,6 +1708,7 @@ impl Prelim for YInput {
 /// Since `YOutput` instances are always created by calling the corresponding yrs API functions,
 /// they eventually should be deallocated using [youtput_destroy] function.
 #[repr(C)]
+
 pub struct YOutput {
     /// Tag describing, which `value` type is being stored by this input cell. Can be one of:
     ///
@@ -1971,7 +1874,9 @@ impl From<Any> for YOutput {
                 Any::BigInt(v) => YOutput {
                     tag: Y_JSON_INT,
                     len: 1,
-                    value: YOutputContent { integer: v as _ },
+                    value: YOutputContent {
+                        integer: v as c_longlong,
+                    },
                 },
                 Any::String(v) => YOutput {
                     tag: Y_JSON_STR,
@@ -2085,7 +1990,7 @@ impl From<XmlText> for YOutput {
 union YOutputContent {
     flag: c_char,
     num: c_float,
-    integer: c_long,
+    integer: c_longlong,
     str: *mut c_char,
     buf: *mut c_uchar,
     array: *mut YOutput,
@@ -2326,7 +2231,7 @@ pub unsafe extern "C" fn youtput_read_float(val: *const YOutput) -> *const c_flo
 /// Returns a null pointer in case when a value stored under current `YOutput` cell
 /// is not a signed integer.
 #[no_mangle]
-pub unsafe extern "C" fn youtput_read_long(val: *const YOutput) -> *const c_long {
+pub unsafe extern "C" fn youtput_read_long(val: *const YOutput) -> *const c_longlong {
     let v = val.as_ref().unwrap();
     if v.tag == Y_JSON_INT {
         &v.value.integer
@@ -2819,11 +2724,7 @@ pub unsafe extern "C" fn ytext_event_path(
 ) -> *mut YPathSegment {
     assert!(!e.is_null());
     let e = &*e;
-    let path: Vec<_> = e
-        .path(e.txn())
-        .into_iter()
-        .map(YPathSegment::from)
-        .collect();
+    let path: Vec<_> = e.path().into_iter().map(YPathSegment::from).collect();
     let out = path.into_boxed_slice();
     *len = out.len() as c_int;
     Box::into_raw(out) as *mut _
@@ -2842,11 +2743,7 @@ pub unsafe extern "C" fn ymap_event_path(
 ) -> *mut YPathSegment {
     assert!(!e.is_null());
     let e = &*e;
-    let path: Vec<_> = e
-        .path(e.txn())
-        .into_iter()
-        .map(YPathSegment::from)
-        .collect();
+    let path: Vec<_> = e.path().into_iter().map(YPathSegment::from).collect();
     let out = path.into_boxed_slice();
     *len = out.len() as c_int;
     Box::into_raw(out) as *mut _
@@ -2865,11 +2762,7 @@ pub unsafe extern "C" fn yxmlelem_event_path(
 ) -> *mut YPathSegment {
     assert!(!e.is_null());
     let e = &*e;
-    let path: Vec<_> = e
-        .path(e.txn())
-        .into_iter()
-        .map(YPathSegment::from)
-        .collect();
+    let path: Vec<_> = e.path().into_iter().map(YPathSegment::from).collect();
     let out = path.into_boxed_slice();
     *len = out.len() as c_int;
     Box::into_raw(out) as *mut _
@@ -2888,11 +2781,7 @@ pub unsafe extern "C" fn yxmltext_event_path(
 ) -> *mut YPathSegment {
     assert!(!e.is_null());
     let e = &*e;
-    let path: Vec<_> = e
-        .path(e.txn())
-        .into_iter()
-        .map(YPathSegment::from)
-        .collect();
+    let path: Vec<_> = e.path().into_iter().map(YPathSegment::from).collect();
     let out = path.into_boxed_slice();
     *len = out.len() as c_int;
     Box::into_raw(out) as *mut _
@@ -2911,11 +2800,7 @@ pub unsafe extern "C" fn yarray_event_path(
 ) -> *mut YPathSegment {
     assert!(!e.is_null());
     let e = &*e;
-    let path: Vec<_> = e
-        .path(e.txn())
-        .into_iter()
-        .map(YPathSegment::from)
-        .collect();
+    let path: Vec<_> = e.path().into_iter().map(YPathSegment::from).collect();
     let out = path.into_boxed_slice();
     *len = out.len() as c_int;
     Box::into_raw(out) as *mut _

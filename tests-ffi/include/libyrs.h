@@ -258,7 +258,7 @@ typedef Branch Branch;
 typedef union YOutputContent {
   char flag;
   float num;
-  long integer;
+  long long integer;
   char *str;
   unsigned char *buf;
   struct YOutput *array;
@@ -857,7 +857,7 @@ int ytext_len(const Branch *txt);
  *
  * Generated string resources should be released using [ystring_destroy] function.
  */
-char *ytext_string(const Branch *txt, const YTransaction *txn);
+char *ytext_string(const Branch *txt);
 
 /**
  * Inserts a null-terminated UTF-8 encoded string a given `index`. `index` value must be between
@@ -928,7 +928,7 @@ int yarray_len(const Branch *array);
  *
  * A value returned should be eventually released using [youtput_destroy] function.
  */
-struct YOutput *yarray_get(const Branch *array, YTransaction *txn, int index);
+struct YOutput *yarray_get(const Branch *array, int index);
 
 /**
  * Inserts a range of `items` into current `YArray`, starting at given `index`. An `items_len`
@@ -962,7 +962,7 @@ void yarray_remove_range(const Branch *array, YTransaction *txn, int index, int 
  * Use [yarray_iter_next] function in order to retrieve a consecutive array elements.
  * Use [yarray_iter_destroy] function in order to close the iterator and release its resources.
  */
-YArrayIter *yarray_iter(const Branch *array, const YTransaction *txn);
+YArrayIter *yarray_iter(const Branch *array);
 
 /**
  * Releases all of an `YArray` iterator resources created by calling [yarray_iter].
@@ -983,7 +983,7 @@ struct YOutput *yarray_iter_next(YArrayIter *iterator);
  * Use [ymap_iter_next] function in order to retrieve a consecutive (**unordered**) map entries.
  * Use [ymap_iter_destroy] function in order to close the iterator and release its resources.
  */
-YMapIter *ymap_iter(const Branch *map, const YTransaction *txn);
+YMapIter *ymap_iter(const Branch *map);
 
 /**
  * Releases all of an `YMap` iterator resources created by calling [ymap_iter].
@@ -1002,7 +1002,7 @@ struct YMapEntry *ymap_iter_next(YMapIter *iter);
 /**
  * Returns a number of entries stored within a `map`.
  */
-int ymap_len(const Branch *map, const YTransaction *txn);
+int ymap_len(const Branch *map);
 
 /**
  * Inserts a new entry (specified as `key`-`value` pair) into a current `map`. If entry under such
@@ -1031,7 +1031,7 @@ char ymap_remove(const Branch *map, YTransaction *txn, const char *key);
  *
  * A `key` must be a null-terminated UTF-8 encoded string.
  */
-struct YOutput *ymap_get(const Branch *map, const YTransaction *txn, const char *key);
+struct YOutput *ymap_get(const Branch *map, const char *key);
 
 /**
  * Removes all entries from a current `map`.
@@ -1054,7 +1054,7 @@ char *yxmlelem_tag(const Branch *xml);
  * Returned value is a null-terminated UTF-8 string, which must be released using [ystring_destroy]
  * function.
  */
-char *yxmlelem_string(const Branch *xml, const YTransaction *txn);
+char *yxmlelem_string(const Branch *xml);
 
 /**
  * Inserts an XML attribute described using `attr_name` and `attr_value`. If another attribute with
@@ -1082,7 +1082,7 @@ void yxmlelem_remove_attr(const Branch *xml, YTransaction *txn, const char *attr
  *
  * An `attr_name` must be a null-terminated UTF-8 encoded string.
  */
-char *yxmlelem_get_attr(const Branch *xml, const YTransaction *txn, const char *attr_name);
+char *yxmlelem_get_attr(const Branch *xml, const char *attr_name);
 
 /**
  * Returns an iterator over the `YXmlElement` attributes.
@@ -1090,7 +1090,7 @@ char *yxmlelem_get_attr(const Branch *xml, const YTransaction *txn, const char *
  * Use [yxmlattr_iter_next] function in order to retrieve a consecutive (**unordered**) attributes.
  * Use [yxmlattr_iter_destroy] function in order to close the iterator and release its resources.
  */
-YXmlAttrIter *yxmlelem_attr_iter(const Branch *xml, const YTransaction *txn);
+YXmlAttrIter *yxmlelem_attr_iter(const Branch *xml);
 
 /**
  * Returns an iterator over the `YXmlText` attributes.
@@ -1098,7 +1098,7 @@ YXmlAttrIter *yxmlelem_attr_iter(const Branch *xml, const YTransaction *txn);
  * Use [yxmlattr_iter_next] function in order to retrieve a consecutive (**unordered**) attributes.
  * Use [yxmlattr_iter_destroy] function in order to close the iterator and release its resources.
  */
-YXmlAttrIter *yxmltext_attr_iter(const Branch *xml, const YTransaction *txn);
+YXmlAttrIter *yxmltext_attr_iter(const Branch *xml);
 
 /**
  * Releases all of attributes iterator resources created by calling [yxmlelem_attr_iter]
@@ -1124,7 +1124,7 @@ struct YXmlAttr *yxmlattr_iter_next(YXmlAttrIter *iterator);
  * If current `YXmlElement` is the last child, this function returns a null pointer.
  * A returned value should be eventually released using [youtput_destroy] function.
  */
-struct YOutput *yxmlelem_next_sibling(const Branch *xml, const YTransaction *txn);
+struct YOutput *yxmlelem_next_sibling(const Branch *xml);
 
 /**
  * Returns a previous sibling of a current `YXmlElement`, which can be either another `YXmlElement`
@@ -1133,7 +1133,7 @@ struct YOutput *yxmlelem_next_sibling(const Branch *xml, const YTransaction *txn
  * If current `YXmlElement` is the first child, this function returns a null pointer.
  * A returned value should be eventually released using [youtput_destroy] function.
  */
-struct YOutput *yxmlelem_prev_sibling(const Branch *xml, const YTransaction *txn);
+struct YOutput *yxmlelem_prev_sibling(const Branch *xml);
 
 /**
  * Returns a next sibling of a current `YXmlText`, which can be either another `YXmlText` or
@@ -1144,7 +1144,7 @@ struct YOutput *yxmlelem_prev_sibling(const Branch *xml, const YTransaction *txn
  * If current `YXmlText` is the last child, this function returns a null pointer.
  * A returned value should be eventually released using [youtput_destroy] function.
  */
-struct YOutput *yxmltext_next_sibling(const Branch *xml, const YTransaction *txn);
+struct YOutput *yxmltext_next_sibling(const Branch *xml);
 
 /**
  * Returns a previous sibling of a current `YXmlText`, which can be either another `YXmlText` or
@@ -1153,7 +1153,7 @@ struct YOutput *yxmltext_next_sibling(const Branch *xml, const YTransaction *txn
  * If current `YXmlText` is the first child, this function returns a null pointer.
  * A returned value should be eventually released using [youtput_destroy] function.
  */
-struct YOutput *yxmltext_prev_sibling(const Branch *xml, const YTransaction *txn);
+struct YOutput *yxmltext_prev_sibling(const Branch *xml);
 
 /**
  * Returns a parent `YXmlElement` of a current node, or null pointer when current `YXmlElement` is
@@ -1161,13 +1161,13 @@ struct YOutput *yxmltext_prev_sibling(const Branch *xml, const YTransaction *txn
  *
  * A returned value should be eventually released using [youtput_destroy] function.
  */
-Branch *yxmlelem_parent(const Branch *xml, const YTransaction *txn);
+Branch *yxmlelem_parent(const Branch *xml);
 
 /**
  * Returns a number of child nodes (both `YXmlElement` and `YXmlText`) living under a current XML
  * element. This function doesn't count a recursive nodes, only direct children of a current node.
  */
-int yxmlelem_child_len(const Branch *xml, const YTransaction *txn);
+int yxmlelem_child_len(const Branch *xml);
 
 /**
  * Returns a first child node of a current `YXmlElement`, or null pointer if current XML node is
@@ -1175,7 +1175,7 @@ int yxmlelem_child_len(const Branch *xml, const YTransaction *txn);
  *
  * A returned value should be eventually released using [youtput_destroy] function.
  */
-struct YOutput *yxmlelem_first_child(const Branch *xml, const YTransaction *txn);
+struct YOutput *yxmlelem_first_child(const Branch *xml);
 
 /**
  * Returns an iterator over a nested recursive structure of a current `YXmlElement`, starting from
@@ -1184,7 +1184,7 @@ struct YOutput *yxmlelem_first_child(const Branch *xml, const YTransaction *txn)
  * Use [yxmlelem_tree_walker_next] function in order to iterate over to a next node.
  * Use [yxmlelem_tree_walker_destroy] function to release resources used by the iterator.
  */
-YXmlTreeWalker *yxmlelem_tree_walker(const Branch *xml, const YTransaction *txn);
+YXmlTreeWalker *yxmlelem_tree_walker(const Branch *xml);
 
 /**
  * Releases resources associated with a current XML tree walker iterator.
@@ -1234,7 +1234,7 @@ void yxmlelem_remove_range(const Branch *xml, YTransaction *txn, int index, int 
  *
  * Returned value should be eventually released using [youtput_destroy].
  */
-const struct YOutput *yxmlelem_get(const Branch *xml, const YTransaction *txn, int index);
+const struct YOutput *yxmlelem_get(const Branch *xml, int index);
 
 /**
  * Returns the length of the `YXmlText` string content in bytes (without the null terminator
@@ -1247,7 +1247,7 @@ int yxmltext_len(const Branch *txt, const YTransaction *txn);
  *
  * Generated string resources should be released using [ystring_destroy] function.
  */
-char *yxmltext_string(const Branch *txt, const YTransaction *txn);
+char *yxmltext_string(const Branch *txt);
 
 /**
  * Inserts a null-terminated UTF-8 encoded string a a given `index`. `index` value must be between
@@ -1333,7 +1333,7 @@ void yxmltext_remove_attr(const Branch *txt, YTransaction *txn, const char *attr
  *
  * An `attr_name` must be a null-terminated UTF-8 encoded string.
  */
-char *yxmltext_get_attr(const Branch *txt, const YTransaction *txn, const char *attr_name);
+char *yxmltext_get_attr(const Branch *txt, const char *attr_name);
 
 /**
  * Releases all resources related to a corresponding `YOutput` cell.
@@ -1468,7 +1468,7 @@ const float *youtput_read_float(const struct YOutput *val);
  * Returns a null pointer in case when a value stored under current `YOutput` cell
  * is not a signed integer.
  */
-const long *youtput_read_long(const struct YOutput *val);
+const long long *youtput_read_long(const struct YOutput *val);
 
 /**
  * Attempts to read the value for a given `YOutput` pointer as a null-terminated UTF-8 encoded
