@@ -454,7 +454,7 @@ impl<'a> StringDecoder<'a> {
         let buf = cursor.buf;
         let mut next = cursor.next;
         let str = unsafe { std::str::from_utf8_unchecked(DecoderV2::read_buf(buf, &mut next)) };
-        let mut len_decoder = UIntOptRleDecoder::new(Cursor { buf, next });
+        let len_decoder = UIntOptRleDecoder::new(Cursor { buf, next });
         StringDecoder {
             pos: 0,
             buf: str,
