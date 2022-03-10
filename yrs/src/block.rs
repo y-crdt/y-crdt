@@ -335,7 +335,7 @@ impl BlockPtr {
                     unsafe {
                         let gc = Block::GC(BlockRange::new(item.id, len));
                         let self_mut = self.0.as_mut();
-                        std::mem::replace(self_mut, gc);
+                        *self_mut = gc;
                     }
                 } else {
                     item.content = ItemContent::Deleted(len);

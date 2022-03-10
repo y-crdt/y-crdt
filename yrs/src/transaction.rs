@@ -182,6 +182,22 @@ impl Transaction {
         enc.to_vec()
     }
 
+    /// Encodes the document state to a binary format.
+    ///
+    /// Document updates are idempotent and commutative. Caveats:
+    /// * It doesn't matter in which order document updates are applied.
+    /// * As long as all clients receive the same document updates, all clients
+    ///   end up with the same content.
+    /// * Even if an update contains known information, the unknown information
+    ///   is extracted and integrated into the document structure.
+    pub fn encode_update_v2(&self) -> Vec<u8> {
+        let mut enc = updates::encoder::EncoderV2::new();
+        let store = self.store();
+        store.write_blocks(&self.before_state, &mut enc);
+        self.delete_set.encode(&mut enc);
+        enc.to_vec()
+    }
+
     /// Applies given `id_set` onto current transaction to run multi-range deletion.
     /// Returns a remaining of original ID set, that couldn't be applied.
     pub(crate) fn apply_delete(&mut self, ds: &DeleteSet) -> Option<DeleteSet> {
