@@ -3,7 +3,7 @@ use crate::event::{Subscription, UpdateEvent};
 use crate::store::Store;
 use crate::transaction::Transaction;
 use crate::update::Update;
-use crate::updates::decoder::{Decode, DecoderV1};
+use crate::updates::decoder::{Decode, DecoderV1, DecoderV2};
 use crate::updates::encoder::{Encode, Encoder, EncoderV1};
 use rand::Rng;
 use std::cell::UnsafeCell;
@@ -99,6 +99,13 @@ impl Doc {
         tr.apply_update(update)
     }
 
+    /// Apply a document update assuming it's encoded using lib0 ver.2 data format.
+    pub fn apply_update_v2(&self, tr: &mut Transaction, update: &[u8]) {
+        let mut decoder = DecoderV2::from(update);
+        let update = Update::decode(&mut decoder);
+        tr.apply_update(update)
+    }
+
     /// Retrieve document state vector in order to encode the document diff. This state vector
     /// contains compressed information about all inserted blocks observed by the current block
     /// store.
@@ -172,7 +179,7 @@ mod test {
     use std::rc::Rc;
 
     #[test]
-    fn apply_update_basic() {
+    fn apply_update_basic_v1() {
         /* Result of calling following code:
         ```javascript
         const doc = new Y.Doc()
@@ -192,6 +199,32 @@ mod test {
         let doc = Doc::new();
         let mut tr = doc.transact();
         doc.apply_update_v1(&mut tr, update);
+
+        let actual = tr.get_text("type").to_string();
+        assert_eq!(actual, "210".to_owned());
+    }
+
+    #[test]
+    fn apply_update_basic_v2() {
+        /* Result of calling following code:
+        ```javascript
+        const doc = new Y.Doc()
+        const ytext = doc.getText('type')
+        doc.transact(function () {
+            for (let i = 0; i < 3; i++) {
+                ytext.insert(0, (i % 10).toString())
+            }
+        })
+        const update = Y.encodeStateAsUpdateV2(doc)
+        ```
+         */
+        let update = &[
+            0, 0, 6, 195, 187, 207, 162, 7, 1, 0, 2, 0, 2, 3, 4, 0, 68, 11, 7, 116, 121, 112, 101,
+            48, 49, 50, 4, 65, 1, 1, 1, 0, 0, 1, 3, 0, 0,
+        ];
+        let doc = Doc::new();
+        let mut tr = doc.transact();
+        doc.apply_update_v2(&mut tr, update);
 
         let actual = tr.get_text("type").to_string();
         assert_eq!(actual, "210".to_owned());

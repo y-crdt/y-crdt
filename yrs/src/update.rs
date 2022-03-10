@@ -370,7 +370,7 @@ impl Update {
                 BlockCarrier::Skip(BlockRange { id, len })
             }
             BLOCK_GC_REF_NUMBER => {
-                let len: u32 = decoder.read_uvar();
+                let len: u32 = decoder.read_len();
                 Box::new(Block::GC(BlockRange { id, len })).into()
             }
             info => {
@@ -450,7 +450,7 @@ impl Update {
         encoder.write_uvar(sorted_clients.len());
         for (&client, (offset, blocks)) in sorted_clients {
             encoder.write_uvar(blocks.len());
-            encoder.write_uvar(client);
+            encoder.write_client(client);
 
             let mut block = blocks[0];
             encoder.write_uvar(block.id().clock + offset);
