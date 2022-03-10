@@ -122,15 +122,13 @@ fn map_set() {
            const x = doc.getMap('test')
            x.set('k1', 'v1')
            x.set('k2', 'v2')
-           const update = Y.encodeStateAsUpdate(doc)
-           console.log(update);
+           const payload_v1 = Y.encodeStateAsUpdate(doc)
+           console.log(payload_v1);
+           const payload_v2 = Y.encodeStateAsUpdateV2(doc)
+           console.log(payload_v2);
         ```
     */
-    let payload = &[
-        1, 2, 183, 229, 212, 163, 3, 0, 40, 1, 4, 116, 101, 115, 116, 2, 107, 49, 1, 119, 2, 118,
-        49, 40, 1, 4, 116, 101, 115, 116, 2, 107, 50, 1, 119, 2, 118, 50, 0,
-    ];
-    const CLIENT_ID: u64 = 880095927;
+    const CLIENT_ID: u64 = 440166001;
     let expected = vec![
         Item::new(
             ID::new(CLIENT_ID, 0),
@@ -156,7 +154,18 @@ fn map_set() {
         .into(),
     ];
 
-    roundtrip(payload, expected);
+    let payload = &[
+        1, 2, 241, 204, 241, 209, 1, 0, 40, 1, 4, 116, 101, 115, 116, 2, 107, 49, 1, 119, 2, 118,
+        49, 40, 1, 4, 116, 101, 115, 116, 2, 107, 50, 1, 119, 2, 118, 50, 0,
+    ];
+    roundtrip_v1(payload, &expected);
+
+    let payload = &[
+        0, 0, 5, 177, 153, 227, 163, 3, 0, 0, 1, 40, 17, 12, 116, 101, 115, 116, 107, 49, 116, 101,
+        115, 116, 107, 50, 4, 2, 4, 2, 1, 1, 0, 2, 65, 0, 1, 2, 0, 119, 2, 118, 49, 119, 2, 118,
+        50, 0,
+    ];
+    roundtrip_v2(payload, &expected);
 }
 
 #[test]
@@ -167,14 +176,13 @@ fn array_insert() {
            const x = doc.getArray('test')
            x.push(['a']);
            x.push(['b']);
-           const update = Y.encodeStateAsUpdate(doc)
-           console.log(update);
+           const payload_v1 = Y.encodeStateAsUpdate(doc)
+           console.log(payload_v1);
+           const payload_v2 = Y.encodeStateAsUpdateV2(doc)
+           console.log(payload_v2);
         ```
     */
-    let payload = &[
-        1, 1, 199, 195, 202, 51, 0, 8, 1, 4, 116, 101, 115, 116, 2, 119, 1, 97, 119, 1, 98, 0,
-    ];
-    const CLIENT_ID: u64 = 108175815;
+    const CLIENT_ID: u64 = 2525665872;
     let expected = vec![Item::new(
         ID::new(CLIENT_ID, 0),
         None,
@@ -187,7 +195,16 @@ fn array_insert() {
     )
     .into()];
 
-    roundtrip(payload, expected);
+    let payload = &[
+        1, 1, 208, 180, 170, 180, 9, 0, 8, 1, 4, 116, 101, 115, 116, 2, 119, 1, 97, 119, 1, 98, 0,
+    ];
+    roundtrip_v1(payload, &expected);
+
+    let payload = &[
+        0, 0, 5, 144, 233, 212, 232, 18, 0, 0, 1, 8, 6, 4, 116, 101, 115, 116, 4, 1, 1, 0, 1, 2, 1,
+        1, 0, 119, 1, 97, 119, 1, 98, 0,
+    ];
+    roundtrip_v2(payload, &expected);
 }
 
 #[test]
@@ -201,14 +218,13 @@ fn xml_fragment_insert() {
            yxmlFragment.insert(0, [yxmlText])
            yxmlFragment.firstChild === yxmlText
            yxmlFragment.insertAfter(yxmlText, [new Y.XmlElement('node-name')])
+           const payload_v1 = Y.encodeStateAsUpdate(ydoc)
+           console.log(payload_v1);
+           const payload_v2 = Y.encodeStateAsUpdateV2(ydoc)
+           console.log(payload_v2);
         ```
     */
-    let payload = &[
-        1, 2, 219, 173, 215, 246, 1, 0, 7, 1, 13, 102, 114, 97, 103, 109, 101, 110, 116, 45, 110,
-        97, 109, 101, 6, 135, 219, 173, 215, 246, 1, 0, 3, 9, 110, 111, 100, 101, 45, 110, 97, 109,
-        101, 0,
-    ];
-    const CLIENT_ID: u64 = 517330651;
+    const CLIENT_ID: u64 = 2459881872;
     let expected = vec![
         Item::new(
             ID::new(CLIENT_ID, 0),
@@ -237,7 +253,19 @@ fn xml_fragment_insert() {
         .into(),
     ];
 
-    roundtrip(payload, expected);
+    let payload = &[
+        1, 2, 144, 163, 251, 148, 9, 0, 7, 1, 13, 102, 114, 97, 103, 109, 101, 110, 116, 45, 110,
+        97, 109, 101, 6, 135, 144, 163, 251, 148, 9, 0, 3, 9, 110, 111, 100, 101, 45, 110, 97, 109,
+        101, 0,
+    ];
+    roundtrip_v1(payload, &expected);
+
+    let payload = &[
+        0, 1, 0, 6, 208, 198, 246, 169, 18, 0, 1, 0, 0, 3, 7, 0, 135, 25, 22, 102, 114, 97, 103,
+        109, 101, 110, 116, 45, 110, 97, 109, 101, 110, 111, 100, 101, 45, 110, 97, 109, 101, 13,
+        9, 1, 1, 2, 6, 3, 0, 1, 2, 0, 0,
+    ];
+    roundtrip_v2(payload, &expected);
 }
 
 #[test]
@@ -271,13 +299,25 @@ fn state_vector() {
 /// Verify if given `payload` can be deserialized into series
 /// of `expected` blocks, then serialize them back and check
 /// if produced binary is equivalent to `payload`.
-fn roundtrip(payload: &[u8], expected: Vec<BlockCarrier>) {
+fn roundtrip_v1(payload: &[u8], expected: &Vec<BlockCarrier>) {
     let u = Update::decode_v1(payload);
     let expected: Vec<&BlockCarrier> = expected.iter().collect();
     let blocks: Vec<&BlockCarrier> = u.blocks.blocks().collect();
-    assert_eq!(blocks, expected);
+    assert_eq!(blocks, expected, "failed to decode V1");
 
     let store: Store = u.into();
     let serialized = store.encode_v1();
-    assert_eq!(serialized, payload);
+    assert_eq!(serialized, payload, "failed to encode V1");
+}
+
+/// Same as [roundtrip_v2] but using lib0 v2 encoding.
+fn roundtrip_v2(payload: &[u8], expected: &Vec<BlockCarrier>) {
+    let u = Update::decode_v2(payload);
+    let expected: Vec<&BlockCarrier> = expected.iter().collect();
+    let blocks: Vec<&BlockCarrier> = u.blocks.blocks().collect();
+    assert_eq!(blocks, expected, "failed to decode V2");
+
+    let store: Store = u.into();
+    let serialized = store.encode_v2();
+    assert_eq!(serialized, payload, "failed to encode V2");
 }

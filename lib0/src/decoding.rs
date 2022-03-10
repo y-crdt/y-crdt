@@ -12,6 +12,10 @@ impl<'a> Cursor<'a> {
     pub fn new(buf: &'a [u8]) -> Cursor<'a> {
         Cursor { buf, next: 0 }
     }
+
+    pub fn has_content(&self) -> bool {
+        self.next != self.buf.len()
+    }
 }
 
 impl<'a, R> From<&'a R> for Cursor<'a>

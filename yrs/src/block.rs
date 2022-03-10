@@ -1254,7 +1254,7 @@ impl ItemContent {
                 }
             }
             ItemContent::Format(k, v) => {
-                encoder.write_string(k.as_ref());
+                encoder.write_key(k.as_ref());
                 encoder.write_json(v.as_ref());
             }
             ItemContent::Type(inner) => {
