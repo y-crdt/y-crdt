@@ -106,7 +106,17 @@ impl IdRange {
                 }
             }
             IdRange::Fragmented(ranges) => {
-                ranges.push(range);
+                if ranges.is_empty() {
+                    *self = IdRange::Continuous(range);
+                } else {
+                    let last_idx = ranges.len() - 1;
+                    let last = &mut ranges[last_idx];
+                    if last.end >= range.start {
+                        last.end = last.end.max(range.end);
+                    } else {
+                        ranges.push(range);
+                    }
+                }
             }
         }
     }

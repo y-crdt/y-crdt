@@ -122,8 +122,16 @@ impl Text {
     ///
     /// This method will panic if provided `index` is greater than the length of a current text.
     pub fn insert(&self, txn: &mut Transaction, index: u32, chunk: &str) {
-        if let Some(pos) = self.find_position(txn, index) {
+        if let Some(mut pos) = self.find_position(txn, index) {
             let value = crate::block::PrelimText(chunk.into());
+            while let Some(right) = pos.right.as_ref() {
+                if right.is_deleted() {
+                    // skip over deleted blocks, just like Yjs does
+                    pos.forward();
+                } else {
+                    break;
+                }
+            }
             txn.create_item(&pos, value, None);
         } else {
             panic!("The type or the position doesn't exist!");
