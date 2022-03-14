@@ -897,7 +897,7 @@ mod test {
                 map.insert(&mut txn, "someprop".to_string(), 43);
                 map.insert(&mut txn, "someprop".to_string(), 44);
             } else {
-                panic!("should not happen: {}", txn.store())
+                panic!("should not happen")
             }
         }
 
