@@ -109,7 +109,7 @@ fn text_insert_delete() {
     });
     let mut txn = doc.transact();
     let txt = txn.get_text("type");
-    doc.apply_update_v1(&mut txn, update);
+    txn.apply_update(Update::decode_v1(update));
     assert_eq!(txt.to_string(), "abhi".to_string());
     assert!(visited.get());
 }
