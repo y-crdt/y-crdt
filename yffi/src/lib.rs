@@ -1308,9 +1308,8 @@ pub unsafe extern "C" fn yxmlelem_get(xml: *const Branch, index: c_int) -> *cons
 /// Returns the length of the `YXmlText` string content in bytes (without the null terminator
 /// character)
 #[no_mangle]
-pub unsafe extern "C" fn yxmltext_len(txt: *const Branch, txn: *const Transaction) -> c_int {
+pub unsafe extern "C" fn yxmltext_len(txt: *const Branch) -> c_int {
     assert!(!txt.is_null());
-    assert!(!txn.is_null());
 
     let txt = XmlText::from_raw_branch(txt);
 
