@@ -19,9 +19,9 @@ pub fn exchange_updates(docs: &[&Doc]) {
                 let b = docs[j];
                 let mut tb = b.transact();
 
-                let sv = b.get_state_vector(&tb);
-                let update = a.encode_delta_as_update_v1(&ta, &sv);
-                b.apply_update_v1(&mut tb, update.as_slice());
+                let sv = tb.state_vector().encode_v1();
+                let update = ta.encode_diff_v1(&StateVector::decode_v1(sv.as_slice()));
+                tb.apply_update(Update::decode_v1(update.as_slice()));
             }
         }
     }
@@ -398,7 +398,7 @@ impl TestConnector {
         let txn = peer.doc.transact();
 
         encoder.write_uvar(MSG_SYNC_STEP_1);
-        encoder.write_buf(peer.doc.encode_state_vector_v1(&txn));
+        encoder.write_buf(txn.state_vector().encode_v1());
     }
 
     fn write_step2<E: Encoder>(peer: &TestPeer, sv: &[u8], encoder: &mut E) {
@@ -406,7 +406,7 @@ impl TestConnector {
         let remote_sv = StateVector::decode_v1(sv);
 
         encoder.write_uvar(MSG_SYNC_STEP_2);
-        encoder.write_buf(peer.doc.encode_delta_as_update_v1(&txn, &remote_sv));
+        encoder.write_buf(txn.encode_diff_v1(&remote_sv));
     }
 
     pub fn assert_final_state(mut self) {

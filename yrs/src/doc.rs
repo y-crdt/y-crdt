@@ -1,10 +1,6 @@
-use crate::block_store::StateVector;
 use crate::event::{Subscription, UpdateEvent};
 use crate::store::Store;
 use crate::transaction::Transaction;
-use crate::update::Update;
-use crate::updates::decoder::{Decode, DecoderV1};
-use crate::updates::encoder::{Encode, Encoder, EncoderV1};
 use rand::Rng;
 use std::cell::UnsafeCell;
 use std::rc::Rc;
@@ -20,7 +16,9 @@ use std::rc::Rc;
 /// A basic workflow sample:
 ///
 /// ```
-/// use yrs::Doc;
+/// use yrs::{Doc, StateVector, Update};
+/// use yrs::updates::decoder::Decode;
+/// use yrs::updates::encoder::Encode;
 ///
 /// let doc = Doc::new();
 /// let mut txn = doc.transact(); // all Yrs operations happen in scope of a transaction
@@ -30,14 +28,14 @@ use std::rc::Rc;
 /// // in order to exchange data with other documents we first need to create a state vector
 /// let remote_doc = Doc::new();
 /// let mut remote_txn = remote_doc.transact();
-/// let state_vector = remote_doc.get_state_vector(&remote_txn);
+/// let state_vector = remote_txn.state_vector().encode_v1();
 ///
 /// // now compute a differential update based on remote document's state vector
-/// let update = doc.encode_delta_as_update_v1(&txn, &state_vector);
+/// let update = txn.encode_diff_v1(&StateVector::decode_v1(&state_vector));
 ///
 /// // both update and state vector are serializable, we can pass the over the wire
 /// // now apply update to a remote document
-/// remote_doc.apply_update_v1(&mut remote_txn, update.as_slice());
+/// remote_txn.apply_update(Update::decode_v1(update.as_slice()));
 /// ```
 pub struct Doc {
     /// A unique client identifier, that's also a unique identifier of current document replica.
@@ -66,44 +64,10 @@ impl Doc {
         }
     }
 
-    /// Encode entire state of a current block store using ver. 1 encoding.
-    /// This state can be persisted so that later the entire document will be recovered.
-    /// To apply state update use [Self::apply_update] method.
-    pub fn encode_state_as_update_v1(&self, txn: &Transaction) -> Vec<u8> {
-        txn.encode_update_v1()
-    }
-
-    /// Encode state vector of a current block store using ver. 1 encoding.
-    pub fn encode_state_vector_v1(&self, txn: &Transaction) -> Vec<u8> {
-        txn.store().blocks.get_state_vector().encode_v1()
-    }
-
-    /// Encodes a difference between current block store and a remote one based on its state vector.
-    /// Such update contains only blocks not observed by a remote peer together with a delete set.
-    pub fn encode_delta_as_update_v1(&self, txn: &Transaction, remote_sv: &StateVector) -> Vec<u8> {
-        let mut encoder = EncoderV1::new();
-        txn.encode_diff(remote_sv, &mut encoder);
-        encoder.to_vec()
-    }
-
     /// Creates a transaction used for all kind of block store operations.
     /// Transaction cleanups & calling event handles happen when the transaction struct is dropped.
     pub fn transact(&self) -> Transaction {
         Transaction::new(self.store.clone())
-    }
-
-    /// Apply a document update assuming it's encoded using lib0 ver.1 data format.
-    pub fn apply_update_v1(&self, tr: &mut Transaction, update: &[u8]) {
-        let mut decoder = DecoderV1::from(update);
-        let update = Update::decode(&mut decoder);
-        tr.apply_update(update)
-    }
-
-    /// Retrieve document state vector in order to encode the document diff. This state vector
-    /// contains compressed information about all inserted blocks observed by the current block
-    /// store.
-    pub fn get_state_vector(&self, tr: &Transaction) -> StateVector {
-        tr.store().blocks.get_state_vector()
     }
 
     /// Subscribe callback function for incoming update events. Returns a subscription, which will
@@ -191,7 +155,7 @@ mod test {
         ];
         let doc = Doc::new();
         let mut tr = doc.transact();
-        doc.apply_update_v1(&mut tr, update);
+        tr.apply_update(Update::decode_v1(update));
 
         let actual = tr.get_text("type").to_string();
         assert_eq!(actual, "210".to_owned());
@@ -206,7 +170,7 @@ mod test {
         txt.insert(&mut t, 0, "1");
         txt.insert(&mut t, 0, "2");
 
-        let encoded = doc.encode_state_as_update_v1(&t);
+        let encoded = t.encode_update_v1(); // doc.encode_state_as_update_v1
         let expected = &[
             1, 3, 227, 214, 245, 198, 5, 0, 4, 1, 4, 116, 121, 112, 101, 1, 48, 68, 227, 214, 245,
             198, 5, 0, 1, 49, 68, 227, 214, 245, 198, 5, 1, 1, 50, 0,
@@ -231,7 +195,7 @@ mod test {
         // create document at B
         let d2 = Doc::new();
         let mut t2 = d2.transact();
-        let sv = d2.get_state_vector(&mut t2).encode_v1();
+        let sv = t2.state_vector().encode_v1();
 
         // create an update A->B based on B's state vector
         let mut encoder = EncoderV1::new();
@@ -266,15 +230,17 @@ mod test {
         let txt = txn.get_text("test");
 
         txt.insert(&mut txn, 0, "abc");
-        let u = doc.encode_delta_as_update_v1(&txn, &doc2.get_state_vector(&txn2));
-        doc2.apply_update_v1(&mut txn2, u.as_slice());
+        let sv = txn2.state_vector().encode_v1();
+        let u = txn.encode_diff_v1(&StateVector::decode_v1(sv.as_slice()));
+        txn2.apply_update(Update::decode_v1(u.as_slice()));
         assert_eq!(counter.get(), 3); // update has been propagated
 
         drop(sub);
 
         txt.insert(&mut txn, 3, "de");
-        let u = doc.encode_delta_as_update_v1(&txn, &doc2.get_state_vector(&txn2));
-        doc2.apply_update_v1(&mut txn2, u.as_slice());
+        let sv = txn2.state_vector().encode_v1();
+        let u = txn.encode_diff_v1(&StateVector::decode_v1(sv.as_slice()));
+        txn2.apply_update(Update::decode_v1(u.as_slice()));
         assert_eq!(counter.get(), 3); // since subscription has been dropped, update was not propagated
     }
 }

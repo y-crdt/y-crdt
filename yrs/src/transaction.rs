@@ -77,6 +77,12 @@ impl Transaction {
         self.store().encode_diff(state_vector, encoder)
     }
 
+    pub fn encode_diff_v1(&self, state_vector: &StateVector) -> Vec<u8> {
+        let mut encoder = EncoderV1::new();
+        self.encode_diff(state_vector, &mut encoder);
+        encoder.to_vec()
+    }
+
     /// Returns a [Text] data structure stored under a given `name`. Text structures are used for
     /// collaborative text editing: they expose operations to append and remove chunks of text,
     /// which are free to execute concurrently by multiple peers over remote boundaries.
@@ -176,11 +182,23 @@ impl Transaction {
     /// * Even if an update contains known information, the unknown information
     ///   is extracted and integrated into the document structure.
     pub fn encode_update_v1(&self) -> Vec<u8> {
-        let mut enc = updates::encoder::EncoderV1::new();
+        let mut encoder = updates::encoder::EncoderV1::new();
+        self.encode_update(&mut encoder);
+        encoder.to_vec()
+    }
+
+    /// Encodes the document state to a binary format.
+    ///
+    /// Document updates are idempotent and commutative. Caveats:
+    /// * It doesn't matter in which order document updates are applied.
+    /// * As long as all clients receive the same document updates, all clients
+    ///   end up with the same content.
+    /// * Even if an update contains known information, the unknown information
+    ///   is extracted and integrated into the document structure.
+    pub fn encode_update<E: Encoder>(&self, encoder: &mut E) {
         let store = self.store();
-        store.write_blocks(&self.before_state, &mut enc);
-        self.delete_set.encode(&mut enc);
-        enc.to_vec()
+        store.write_blocks(&self.before_state, encoder);
+        self.delete_set.encode(encoder);
     }
 
     /// Applies given `id_set` onto current transaction to run multi-range deletion.
@@ -322,6 +340,7 @@ impl Transaction {
         result
     }
 
+    /// Applies a deserialized update contents into a document owning current transaction.
     pub fn apply_update(&mut self, mut update: Update) {
         {
             let store = self.store();
