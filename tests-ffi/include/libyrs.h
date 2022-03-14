@@ -1240,7 +1240,7 @@ const struct YOutput *yxmlelem_get(const Branch *xml, int index);
  * Returns the length of the `YXmlText` string content in bytes (without the null terminator
  * character)
  */
-int yxmltext_len(const Branch *txt, const YTransaction *txn);
+int yxmltext_len(const Branch *txt);
 
 /**
  * Returns a null-terminated UTF-8 encoded string content of a current `YXmlText` shared data type.
