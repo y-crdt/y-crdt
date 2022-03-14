@@ -99,7 +99,9 @@ impl IdRange {
                     if r.start > range.end {
                         *self = IdRange::Fragmented(vec![range, r.clone()])
                     } else {
-                        r.end = range.end; // two ranges overlap, we can eagerly merge them
+                        // two ranges overlap - merge them
+                        r.end = range.end.max(r.end);
+                        r.start = range.start.min(r.start);
                     }
                 } else {
                     *self = IdRange::Fragmented(vec![r.clone(), range])

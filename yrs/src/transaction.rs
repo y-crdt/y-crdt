@@ -64,7 +64,8 @@ impl Transaction {
     }
 
     pub fn snapshot(&self) -> Snapshot {
-        let blocks = &self.store().blocks;
+        let store = self.store();
+        let blocks = &store.blocks;
         let sv = blocks.get_state_vector();
         let ds = DeleteSet::from(blocks);
         Snapshot::new(sv, ds)
@@ -322,10 +323,13 @@ impl Transaction {
     }
 
     pub fn apply_update(&mut self, mut update: Update) {
-        if self.store().update_events.has_subscribers() {
-            let event = UpdateEvent::new(update);
-            self.store().update_events.publish(self, &event);
-            update = event.update;
+        {
+            let store = self.store();
+            if store.update_events.has_subscribers() {
+                let event = UpdateEvent::new(update);
+                store.update_events.publish(self, &event);
+                update = event.update;
+            }
         }
         let (remaining, remaining_ds) = update.integrate(self);
         let mut retry = false;
@@ -518,7 +522,7 @@ impl Transaction {
                             if start > delete_item.end {
                                 break;
                             } else {
-                                block.gc(self, false);
+                                block.gc(false);
                                 i += 1;
                             }
                         }

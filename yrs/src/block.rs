@@ -326,10 +326,10 @@ impl BlockPtr {
         }
     }
 
-    pub(crate) fn gc(&mut self, txn: &Transaction, parent_gced: bool) {
+    pub(crate) fn gc(&mut self, parent_gced: bool) {
         if let Block::Item(item) = self.deref_mut() {
             if item.is_deleted() {
-                item.content.gc(txn);
+                item.content.gc();
                 let len = item.len();
                 if parent_gced {
                     unsafe {
@@ -1430,14 +1430,14 @@ impl ItemContent {
         }
     }
 
-    pub(crate) fn gc(&mut self, txn: &Transaction) {
+    pub(crate) fn gc(&mut self) {
         match self {
             ItemContent::Type(branch) => {
                 let mut curr = branch.start.take();
                 while let Some(mut ptr) = curr {
                     if let Block::Item(item) = ptr.deref_mut() {
                         curr = item.right.clone();
-                        ptr.gc(txn, true);
+                        ptr.gc(true);
                         continue;
                     }
                     break;
@@ -1448,7 +1448,7 @@ impl ItemContent {
                     while let Some(mut ptr) = curr {
                         if let Block::Item(item) = ptr.deref_mut() {
                             curr = item.left.clone();
-                            ptr.gc(txn, true);
+                            ptr.gc(true);
                             continue;
                         }
                         break;

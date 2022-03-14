@@ -70,7 +70,7 @@ impl Doc {
     /// This state can be persisted so that later the entire document will be recovered.
     /// To apply state update use [Self::apply_update] method.
     pub fn encode_state_as_update_v1(&self, txn: &Transaction) -> Vec<u8> {
-        txn.store().encode_v1()
+        txn.encode_update_v1()
     }
 
     /// Encode state vector of a current block store using ver. 1 encoding.
@@ -82,7 +82,7 @@ impl Doc {
     /// Such update contains only blocks not observed by a remote peer together with a delete set.
     pub fn encode_delta_as_update_v1(&self, txn: &Transaction, remote_sv: &StateVector) -> Vec<u8> {
         let mut encoder = EncoderV1::new();
-        txn.store().encode_diff(remote_sv, &mut encoder);
+        txn.encode_diff(remote_sv, &mut encoder);
         encoder.to_vec()
     }
 
@@ -235,8 +235,7 @@ mod test {
 
         // create an update A->B based on B's state vector
         let mut encoder = EncoderV1::new();
-        t1.store()
-            .encode_diff(&StateVector::decode_v1(sv.as_slice()), &mut encoder);
+        t1.encode_diff(&StateVector::decode_v1(sv.as_slice()), &mut encoder);
         let binary = encoder.to_vec();
 
         // decode an update incoming from A and integrate it at B
