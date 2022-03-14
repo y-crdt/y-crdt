@@ -357,7 +357,7 @@ where
             let (doc, _) = iter.next().unwrap();
             let mut txn = doc.transact();
             while let Some((_, update)) = iter.next() {
-                doc.apply_update_v1(&mut txn, update.as_slice());
+                txn.apply_update(Update::decode_v1(update.as_slice()));
             }
         });
     });
@@ -401,7 +401,7 @@ fn b3_4(c: &mut Criterion, name: &str) {
             let (doc, _) = iter.next().unwrap();
             let mut txn = doc.transact();
             while let Some((_, update)) = iter.next() {
-                doc.apply_update_v1(&mut txn, update.as_slice());
+                txn.apply_update(Update::decode_v1(update.as_slice()));
             }
         });
     });
@@ -448,7 +448,7 @@ fn b4_2(c: &mut Criterion, name: &str) {
         |b, (doc, txt, buf)| {
             b.iter(|| {
                 let mut txn = doc.transact();
-                doc.apply_update_v1(&mut txn, buf.as_slice());
+                txn.apply_update(Update::decode_v1(buf.as_slice()));
             });
         },
     );
