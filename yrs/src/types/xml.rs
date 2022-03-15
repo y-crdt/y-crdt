@@ -1,9 +1,9 @@
 use crate::block::{Block, Item, ItemContent, ItemPosition, Prelim};
-use crate::event::Subscription;
+use crate::event::{EventHandler, Subscription};
 use crate::types::text::TextEvent;
 use crate::types::{
     event_change_set, event_keys, Attrs, Branch, BranchPtr, Change, ChangeSet, Delta, Entries,
-    EntryChange, Map, Observers, Path, Text, TypePtr, Value, TYPE_REFS_XML_ELEMENT,
+    EntryChange, Event, Map, Observers, Path, Text, TypePtr, Value, TYPE_REFS_XML_ELEMENT,
     TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_TEXT,
 };
 use crate::{SubscriptionId, Transaction, ID};
@@ -279,6 +279,17 @@ impl XmlElement {
     pub fn unobserve(&mut self, subscription_id: SubscriptionId) {
         self.0.unobserve(subscription_id);
     }
+
+    pub fn observe_deep<F>(&mut self, f: F) -> Subscription<Event>
+    where
+        F: Fn(&Transaction, &Event) -> () + 'static,
+    {
+        self.0.observe_deep(f)
+    }
+
+    pub fn unobserve_deep(&mut self, subscription_id: SubscriptionId) {
+        self.0.unobserve_deep(subscription_id)
+    }
 }
 
 impl AsRef<Branch> for XmlElement {
@@ -441,6 +452,23 @@ impl XmlFragment {
 
     pub fn unobserve(&mut self, subscription_id: u32) {
         if let Some(Observers::Xml(eh)) = self.0.observers.as_mut() {
+            eh.unsubscribe(subscription_id);
+        }
+    }
+
+    pub fn observe_deep<F>(&mut self, f: F) -> Subscription<Event>
+    where
+        F: Fn(&Transaction, &Event) -> () + 'static,
+    {
+        let eh = self
+            .0
+            .deep_observers
+            .get_or_insert_with(EventHandler::default);
+        eh.subscribe(f)
+    }
+
+    pub fn unobserve_deep(&mut self, subscription_id: SubscriptionId) {
+        if let Some(eh) = self.0.deep_observers.as_mut() {
             eh.unsubscribe(subscription_id);
         }
     }
@@ -794,6 +822,17 @@ impl XmlText {
         if let Some(Observers::XmlText(eh)) = self.inner().observers.as_mut() {
             eh.unsubscribe(subscription_id);
         }
+    }
+
+    pub fn observe_deep<F>(&mut self, f: F) -> Subscription<Event>
+    where
+        F: Fn(&Transaction, &Event) -> () + 'static,
+    {
+        self.0.observe_deep(f)
+    }
+
+    pub fn unobserve_deep(&mut self, subscription_id: SubscriptionId) {
+        self.0.unobserve_deep(subscription_id)
     }
 }
 
