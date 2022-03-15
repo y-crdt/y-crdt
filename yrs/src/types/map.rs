@@ -1,7 +1,8 @@
 use crate::block::{Block, ItemContent, ItemPosition, Prelim};
-use crate::event::Subscription;
+use crate::event::{EventHandler, Subscription};
 use crate::types::{
-    event_keys, Branch, BranchPtr, Entries, EntryChange, Observers, Path, Value, TYPE_REFS_MAP,
+    event_keys, Branch, BranchPtr, Entries, EntryChange, Event, Observers, Path, Value,
+    TYPE_REFS_MAP,
 };
 use crate::*;
 use lib0::any::Any;
@@ -157,6 +158,23 @@ impl Map {
             eh.unsubscribe(subscription_id);
         }
     }
+
+    pub fn observe_deep<F>(&mut self, f: F) -> Subscription<Event>
+    where
+        F: Fn(&Transaction, &Event) -> () + 'static,
+    {
+        let eh = self
+            .0
+            .deep_observers
+            .get_or_insert_with(EventHandler::default);
+        eh.subscribe(f)
+    }
+
+    pub fn unobserve_deep(&mut self, subscription_id: SubscriptionId) {
+        if let Some(eh) = self.0.deep_observers.as_mut() {
+            eh.unsubscribe(subscription_id);
+        }
+    }
 }
 
 impl AsRef<Branch> for Map {
@@ -213,6 +231,12 @@ impl From<BranchPtr> for Map {
 /// A preliminary map. It can be used to early initialize the contents of a [Map], when it's about
 /// to be inserted into another Yrs collection, such as [Array] or another [Map].
 pub struct PrelimMap<T>(HashMap<String, T>);
+
+impl<T> PrelimMap<T> {
+    pub fn new() -> Self {
+        PrelimMap(HashMap::default())
+    }
+}
 
 impl<T> From<HashMap<String, T>> for PrelimMap<T> {
     fn from(map: HashMap<String, T>) -> Self {

@@ -1,8 +1,8 @@
 use crate::block::{Block, BlockPtr, Item, ItemContent, ItemPosition};
 use crate::block_store::Snapshot;
-use crate::event::Subscription;
+use crate::event::{EventHandler, Subscription};
 use crate::transaction::Transaction;
-use crate::types::{Attrs, Branch, BranchPtr, Delta, Observers, Path, Value};
+use crate::types::{Attrs, Branch, BranchPtr, Delta, Event, Observers, Path, Value};
 use crate::*;
 use lib0::any::Any;
 use std::cell::UnsafeCell;
@@ -529,6 +529,23 @@ impl Text {
     /// Unsubscribes a previously subscribed event callback identified by given `subscription_id`.
     pub fn unobserve(&mut self, subscription_id: SubscriptionId) {
         if let Some(Observers::Text(eh)) = self.0.observers.as_mut() {
+            eh.unsubscribe(subscription_id);
+        }
+    }
+
+    pub fn observe_deep<F>(&mut self, f: F) -> Subscription<Event>
+    where
+        F: Fn(&Transaction, &Event) -> () + 'static,
+    {
+        let eh = self
+            .0
+            .deep_observers
+            .get_or_insert_with(EventHandler::default);
+        eh.subscribe(f)
+    }
+
+    pub fn unobserve_deep(&mut self, subscription_id: SubscriptionId) {
+        if let Some(eh) = self.0.deep_observers.as_mut() {
             eh.unsubscribe(subscription_id);
         }
     }

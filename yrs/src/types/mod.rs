@@ -180,6 +180,8 @@ pub struct Branch {
     type_ref: TypeRefs,
 
     pub(crate) observers: Option<Observers>,
+
+    pub(crate) deep_observers: Option<EventHandler<Event>>,
 }
 
 impl std::fmt::Debug for Branch {
@@ -219,6 +221,7 @@ impl Branch {
             name,
             type_ref,
             observers: None,
+            deep_observers: None,
         })
     }
 
@@ -508,6 +511,46 @@ impl Value {
             Value::YMap(v) => v.to_json().to_string(),
             Value::YXmlElement(v) => v.to_string(),
             Value::YXmlText(v) => v.to_string(),
+        }
+    }
+
+    pub fn to_ytext(self) -> Option<Text> {
+        if let Value::YText(text) = self {
+            Some(text)
+        } else {
+            None
+        }
+    }
+
+    pub fn to_yarray(self) -> Option<Array> {
+        if let Value::YArray(array) = self {
+            Some(array)
+        } else {
+            None
+        }
+    }
+
+    pub fn to_ymap(self) -> Option<Map> {
+        if let Value::YMap(map) = self {
+            Some(map)
+        } else {
+            None
+        }
+    }
+
+    pub fn to_yxml_elem(self) -> Option<XmlElement> {
+        if let Value::YXmlElement(xml) = self {
+            Some(xml)
+        } else {
+            None
+        }
+    }
+
+    pub fn to_yxml_text(self) -> Option<XmlText> {
+        if let Value::YXmlText(xml) = self {
+            Some(xml)
+        } else {
+            None
         }
     }
 }
@@ -944,4 +987,34 @@ pub(crate) fn event_change_set(txn: &Transaction, start: Option<BlockPtr>) -> Ch
     }
 
     ChangeSet::new(added, deleted, delta)
+}
+
+pub enum Event {
+    YText(TextEvent),
+    YArray(ArrayEvent),
+    YMap(MapEvent),
+    YXmlElement(XmlEvent),
+    YXmlText(XmlTextEvent),
+}
+
+impl Event {
+    pub fn path(&self) -> Path {
+        match self {
+            Event::YText(e) => e.path(),
+            Event::YArray(e) => e.path(),
+            Event::YMap(e) => e.path(),
+            Event::YXmlElement(e) => e.path(),
+            Event::YXmlText(e) => e.path(),
+        }
+    }
+
+    pub fn target(&self) -> Value {
+        match self {
+            Event::YText(e) => Value::YText(e.target().clone()),
+            Event::YArray(e) => Value::YArray(e.target().clone()),
+            Event::YMap(e) => Value::YMap(e.target().clone()),
+            Event::YXmlElement(e) => Value::YXmlElement(e.target().clone()),
+            Event::YXmlText(e) => Value::YXmlText(e.target().clone()),
+        }
+    }
 }
