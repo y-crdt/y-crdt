@@ -1,15 +1,14 @@
-use crate::block::ItemContent;
+use crate::block::{Block, ItemContent};
 use crate::block_store::{BlockStore, SquashResult, StateVector};
 use crate::doc::Options;
 use crate::event::{EventHandler, UpdateEvent};
 use crate::id_set::DeleteSet;
-use crate::types;
-use crate::types::{Branch, BranchRef, Path, PathSegment, TypePtr, TypeRefs, TYPE_REFS_UNDEFINED};
+use crate::types::{Branch, BranchPtr, Path, PathSegment, TypePtr, TypeRefs};
 use crate::update::PendingUpdate;
 use crate::updates::encoder::{Encode, Encoder};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
-use std::pin::Pin;
+use std::ops::Deref;
 use std::rc::Rc;
 
 /// Store is a core element of a document. It contains all of the information, like block store
@@ -21,7 +20,7 @@ pub(crate) struct Store {
     /// Root types (a.k.a. top-level types). These types are defined by users at the document level,
     /// they have their own unique names and represent core shared types that expose operations
     /// which can be called concurrently by remote peers in a conflict-free manner.
-    pub types: HashMap<Rc<str>, Pin<Box<Branch>>>,
+    pub types: HashMap<Rc<str>, Box<Branch>>,
 
     /// A block store of a current document. It represent all blocks (inserted or tombstoned
     /// operations) integrated - and therefore visible - into a current document.
@@ -65,76 +64,40 @@ impl Store {
 
     /// Returns a branch reference to a complex type identified by its pointer. Returns `None` if
     /// no such type could be found or was ever defined.
-    pub fn get_type(&self, ptr: &TypePtr) -> Option<BranchRef> {
-        let branch = self.get_type_raw(ptr)?;
-        Some(BranchRef::from(branch))
+    pub fn get_type<K: Into<Rc<str>>>(&self, key: K) -> Option<BranchPtr> {
+        let ptr = self.types.get(&key.into())?;
+        Some(BranchPtr::from(ptr))
     }
 
-    pub(crate) fn get_type_raw(&self, ptr: &TypePtr) -> Option<&Branch> {
-        match ptr {
-            TypePtr::Id(id) => {
-                // @todo the item might not exist
-                let item = self.blocks.get_item(id)?;
-                if let ItemContent::Type(c) = &item.content {
-                    Some(c)
-                } else {
-                    None
-                }
-            }
-            TypePtr::Named(name) => Some(self.types.get(name)?),
-            TypePtr::Unknown => None,
-        }
-    }
-
-    /// Retrieves a complex data structure reference given its type pointer. In case of root types
-    /// (defined by the user at document level) of such type didn't exist before, it will be created
-    /// and returned. For other (recursively nested) types, they will be returned only if they
-    /// already existed. Otherwise a `None` will be returned.
-    pub fn init_type_from_ptr(&mut self, ptr: &types::TypePtr) -> Option<BranchRef> {
-        match ptr {
-            types::TypePtr::Named(name) => {
-                if let Some(inner) = self.types.get(name) {
-                    Some(inner.into())
-                } else {
-                    let inner = self.init_type_ref(name.clone(), None, TYPE_REFS_UNDEFINED);
-                    Some(inner)
-                }
-            }
-            _ => {
-                if let Some(inner) = self.get_type(ptr) {
-                    return Some(inner.clone());
-                } else {
-                    None
-                }
+    /// Returns a branch reference to a complex type identified by its pointer. Returns `None` if
+    /// no such type could be found or was ever defined.
+    pub fn get_or_create_type<K: Into<Rc<str>>>(
+        &mut self,
+        key: K,
+        node_name: Option<String>,
+        type_ref: TypeRefs,
+    ) -> BranchPtr {
+        let key = key.into();
+        match self.types.entry(key.clone()) {
+            Entry::Occupied(mut e) => BranchPtr::from(e.get_mut()),
+            Entry::Vacant(e) => {
+                let mut branch = Branch::new(type_ref, node_name);
+                let branch_ref = BranchPtr::from(&mut branch);
+                e.insert(branch);
+                branch_ref
             }
         }
     }
 
-    /// Creates or returns a new empty root type (defined by user at the document level). This type
-    /// has user-specified `name`, a `node_name` (which is used only in case of XML elements) and a
-    /// type ref describing which shared type does this instance represent.
-    pub fn create_type(
-        &mut self,
-        name: &str,
-        node_name: Option<String>,
-        type_ref: TypeRefs,
-    ) -> BranchRef {
-        let rc: Rc<str> = name.into();
-        self.init_type_ref(rc.clone(), node_name, type_ref)
-    }
-
-    pub(crate) fn init_type_ref(
-        &mut self,
-        name: Rc<str>,
-        node_name: Option<String>,
-        type_ref: TypeRefs,
-    ) -> BranchRef {
-        let e = self.types.entry(name.clone());
-        let value = e.or_insert_with(|| {
-            let type_ptr = types::TypePtr::Named(name.clone());
-            types::Branch::new(type_ptr, type_ref, node_name)
-        });
-        value.into()
+    pub(crate) fn get_type_key(&self, ptr: BranchPtr) -> Option<&Rc<str>> {
+        let branch = ptr.deref() as *const Branch;
+        for (k, v) in self.types.iter() {
+            let target = v.as_ref() as *const Branch;
+            if std::ptr::eq(target, branch) {
+                return Some(k);
+            }
+        }
+        None
     }
 
     /// Compute a diff to sync with another client.
@@ -172,11 +135,11 @@ impl Store {
             encoder.write_uvar(blocks.integrated_len() - start);
             encoder.write_client(client);
             encoder.write_uvar(clock);
-            let first_block = &blocks[start];
+            let first_block = blocks.get(start);
             // write first struct with an offset
-            first_block.encode(encoder);
+            first_block.encode(Some(self), encoder);
             for i in (start + 1)..blocks.integrated_len() {
-                blocks[i].encode(encoder);
+                blocks.get(i).encode(Some(self), encoder);
             }
         }
     }
@@ -197,13 +160,13 @@ impl Store {
         diff
     }
 
-    pub(crate) fn gc_cleanup(&self, compaction: SquashResult) {
+    pub(crate) fn gc_cleanup(&self, mut compaction: SquashResult) {
         if let Some(parent_sub) = compaction.parent_sub {
-            if let Some(mut inner) = self.get_type(&compaction.parent) {
+            if let TypePtr::Branch(mut inner) = compaction.parent {
                 match inner.map.entry(parent_sub.clone()) {
-                    Entry::Occupied(e) => {
-                        let cell = e.into_mut();
-                        if cell.id == compaction.old_right {
+                    Entry::Occupied(mut e) => {
+                        let cell = e.get_mut();
+                        if cell.id() == &compaction.old_right {
                             *cell = compaction.replacement;
                         }
                     }
@@ -213,22 +176,19 @@ impl Store {
                 }
             }
         }
-        if let Some(right) = compaction.new_right {
-            if let Some(item) = self.blocks.get_item_mut(&right) {
-                item.left = Some(compaction.replacement);
-            }
+        if let Some(Block::Item(right)) = compaction.new_right.as_deref_mut() {
+            right.left = Some(compaction.replacement);
         }
     }
 
-    pub fn get_type_from_path(&self, path: &Path) -> Option<BranchRef> {
+    pub fn get_type_from_path(&self, path: &Path) -> Option<BranchPtr> {
         let mut i = path.iter();
         if let Some(PathSegment::Key(root_name)) = i.next() {
-            let mut current = self.get_type(&TypePtr::Named(root_name.clone()))?;
+            let mut current = self.get_type(root_name.clone())?;
             while let Some(segment) = i.next() {
                 match segment {
                     PathSegment::Key(key) => {
-                        let child_ptr = current.map.get(key)?;
-                        let child = self.blocks.get_item(child_ptr)?;
+                        let child = current.map.get(key)?.as_item()?;
                         if let ItemContent::Type(child_branch) = &child.content {
                             current = child_branch.into();
                         } else {
@@ -236,9 +196,7 @@ impl Store {
                         }
                     }
                     PathSegment::Index(index) => {
-                        if let Some((ItemContent::Type(child_branch), _)) =
-                            current.get_at(&self.blocks, *index)
-                        {
+                        if let Some((ItemContent::Type(child_branch), _)) = current.get_at(*index) {
                             current = child_branch.into();
                         } else {
                             return None;

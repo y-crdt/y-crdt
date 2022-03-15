@@ -15,7 +15,7 @@ export const testInserts = tc => {
 
     const expected = "hello world!"
 
-    var value = d1.transact(txn => x.toString(txn))
+    var value = x.toString()
     t.compareStrings(value, expected)
 
     const d2 = new Y.YDoc(2)
@@ -23,7 +23,7 @@ export const testInserts = tc => {
 
     exchangeUpdates([d1, d2])
 
-    value = d2.transact(txn => x.toString(txn))
+    value = x.toString()
     t.compareStrings(value, expected)
 }
 
@@ -43,7 +43,7 @@ export const testDeletes = tc => {
 
     const expected = "hello Yrs!"
 
-    var value = d1.transact(txn => x.toString(txn))
+    var value = x.toString()
     t.compareStrings(value, expected)
 
     const d2 = new Y.YDoc(2)
@@ -51,7 +51,7 @@ export const testDeletes = tc => {
 
     exchangeUpdates([d1, d2])
 
-    value = d2.transact(txn => x.toString(txn))
+    value = x.toString()
     t.compareStrings(value, expected)
 }
 
@@ -63,7 +63,6 @@ export const testObserver = tc => {
     /**
      * @param {Y.YText} tc
      */
-    const getValue = (x) => d1.transact(txn => x.toString(txn))
     const x = d1.getText('test')
     let target = null
     let delta = null
@@ -74,28 +73,28 @@ export const testObserver = tc => {
 
     // insert initial data to an empty YText
     d1.transact(txn => x.insert(txn, 0, 'abcd'))
-    t.compare(getValue(target), getValue(x))
+    t.compare(target.toJson(), x.toJson())
     t.compare(delta, [{ insert: 'abcd' }])
     target = null
     delta = null
 
     // remove 2 chars from the middle
     d1.transact(txn => x.delete(txn, 1, 2))
-    t.compare(getValue(target), getValue(x))
+    t.compare(target.toJson(), x.toJson())
     t.compare(delta, [{ retain: 1 }, { delete: 2 }])
     target = null
     delta = null
 
     // insert new item in the middle
     d1.transact(txn => x.insert(txn, 1, 'e', { bold: true }))
-    t.compare(getValue(target), getValue(x))
+    t.compare(target.toJson(), x.toJson())
     t.compare(delta, [{ retain: 1 }, { insert: 'e', attributes: { bold: true } }])
     target = null
     delta = null
 
     // remove formatting
     d1.transact(txn => x.format(txn, 1, 1, { bold: null }))
-    t.compare(getValue(target), getValue(x))
+    t.compare(target.toJson(), x.toJson())
     t.compare(delta, [{ retain: 1 }, { retain: 1, attributes: { bold: null } }])
     target = null
     delta = null

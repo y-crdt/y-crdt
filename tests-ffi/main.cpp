@@ -55,8 +55,8 @@ TEST_CASE("Update exchange basic") {
     ybinary_destroy(u2, u2_len);
 
     // make sure both peers produce the same output
-    char* str1 = ytext_string(txt1, t1);
-    char* str2 = ytext_string(txt2, t2);
+    char* str1 = ytext_string(txt1);
+    char* str2 = ytext_string(txt2);
 
     REQUIRE(!strcmp(str1, str2));
 
@@ -81,7 +81,7 @@ TEST_CASE("YText basic") {
 
     REQUIRE_EQ(ytext_len(txt), 5);
 
-    char* str = ytext_string(txt, txn);
+    char* str = ytext_string(txt);
     REQUIRE(!strcmp(str, "world"));
 
     ystring_destroy(str);
@@ -115,7 +115,7 @@ TEST_CASE("YArray basic") {
 
     REQUIRE_EQ(yarray_len(arr), 2);
 
-    YArrayIter* i = yarray_iter(arr, txn);
+    YArrayIter* i = yarray_iter(arr);
 
     // first outer YArray element should be another YArray([0.5, true])
     YOutput* curr = yarray_iter_next(i);
@@ -123,12 +123,12 @@ TEST_CASE("YArray basic") {
     REQUIRE_EQ(yarray_len(a), 2);
 
     // read 0th element of inner YArray
-    YOutput* elem = yarray_get(a, txn, 0);
+    YOutput* elem = yarray_get(a, 0);
     REQUIRE_EQ(*youtput_read_float(elem), 0.5);
     youtput_destroy(elem);
 
     // read 1st element of inner YArray
-    elem = yarray_get(a, txn, 1);
+    elem = yarray_get(a, 1);
     REQUIRE_EQ(*youtput_read_bool(elem), 1); // in C we use 1 to mark TRUE
     youtput_destroy(elem);
     youtput_destroy(curr);
@@ -165,10 +165,10 @@ TEST_CASE("YMap basic") {
     ymap_insert(map, txn, "b", &b);
     free(array);
 
-    REQUIRE_EQ(ymap_len(map, txn), 2);
+    REQUIRE_EQ(ymap_len(map), 2);
 
     // iterate over entries
-    YMapIter* i = ymap_iter(map, txn);
+    YMapIter* i = ymap_iter(map);
     YMapEntry* curr;
 
     YMapEntry** acc = (YMapEntry**)malloc(2 * sizeof(YMapEntry*));
@@ -216,7 +216,7 @@ TEST_CASE("YMap basic") {
     REQUIRE_EQ(removed, 0);
 
     // get 'b' and read its contents
-    YOutput* out = ymap_get(map, txn, "b");
+    YOutput* out = ymap_get(map, "b");
     YOutput* output = youtput_read_json_array(out);
     REQUIRE_EQ(out->len, 2);
     REQUIRE_EQ(*youtput_read_long(&output[0]), 11);
@@ -225,7 +225,7 @@ TEST_CASE("YMap basic") {
 
     // clear map
     ymap_remove_all(map, txn);
-    REQUIRE_EQ(ymap_len(map, txn), 0);
+    REQUIRE_EQ(ymap_len(map), 0);
 
     ytransaction_commit(txn);
     ydoc_destroy(doc);
@@ -240,7 +240,7 @@ TEST_CASE("YXmlElement basic") {
     yxmlelem_insert_attr(xml, txn, "key1", "value1");
     yxmlelem_insert_attr(xml, txn, "key2", "value2");
 
-    YXmlAttrIter* i = yxmlelem_attr_iter(xml, txn);
+    YXmlAttrIter* i = yxmlelem_attr_iter(xml);
     YXmlAttr* attr;
 
     YXmlAttr** attrs = (YXmlAttr**)malloc(2 * sizeof(YXmlAttr*));
@@ -277,7 +277,7 @@ TEST_CASE("YXmlElement basic") {
     Branch* inner_txt = yxmlelem_insert_text(inner, txn, 0);
     yxmltext_insert(inner_txt, txn, 0, "hello", NULL);
 
-    REQUIRE_EQ(yxmlelem_child_len(xml, txn), 1);
+    REQUIRE_EQ(yxmlelem_child_len(xml), 1);
 
     Branch* txt = yxmlelem_insert_text(xml, txn, 1);
     yxmltext_insert(txt, txn, 0, "world", NULL);
@@ -292,27 +292,27 @@ TEST_CASE("YXmlElement basic") {
     ystring_destroy(tag);
 
     // check parents
-    Branch* parent = yxmlelem_parent(inner, txn);
+    Branch* parent = yxmlelem_parent(inner);
     tag = yxmlelem_tag(parent);
     REQUIRE(!strcmp(tag, "UNDEFINED"));
     ystring_destroy(tag);
 
-    parent = yxmlelem_parent(xml, txn);
+    parent = yxmlelem_parent(xml);
     REQUIRE(parent == NULL);
 
     // check children traversal
-    YOutput* curr = yxmlelem_first_child(xml, txn);
+    YOutput* curr = yxmlelem_first_child(xml);
     Branch* first = youtput_read_yxmlelem(curr);
-    REQUIRE(yxmlelem_prev_sibling(first, txn) == NULL);
-    char* str = yxmlelem_string(first, txn);
+    REQUIRE(yxmlelem_prev_sibling(first) == NULL);
+    char* str = yxmlelem_string(first);
     REQUIRE(!strcmp(str, "<p>hello</p>"));
     ystring_destroy(str);
 
-    YOutput* next = yxmlelem_next_sibling(first, txn);
+    YOutput* next = yxmlelem_next_sibling(first);
     youtput_destroy(curr);
     Branch* second = youtput_read_yxmltext(next);
-    REQUIRE(yxmltext_next_sibling(second, txn) == NULL);
-    str = yxmltext_string(second, txn);
+    REQUIRE(yxmltext_next_sibling(second) == NULL);
+    str = yxmltext_string(second);
     REQUIRE(!(strcmp(str, "world")));
     ystring_destroy(str);
 
@@ -320,26 +320,26 @@ TEST_CASE("YXmlElement basic") {
     // - p
     // - hello
     // - world
-    YXmlTreeWalker* w = yxmlelem_tree_walker(xml, txn);
+    YXmlTreeWalker* w = yxmlelem_tree_walker(xml);
     Branch* e;
 
     curr = yxmlelem_tree_walker_next(w);
     e = youtput_read_yxmlelem(curr);
-    str = yxmlelem_string(e, txn);
+    str = yxmlelem_string(e);
     REQUIRE(!strcmp(str, "<p>hello</p>"));
     ystring_destroy(str);
     youtput_destroy(curr);
 
     curr = yxmlelem_tree_walker_next(w);
     Branch* t = youtput_read_yxmltext(curr);
-    str = yxmltext_string(t, txn);
+    str = yxmltext_string(t);
     REQUIRE(!strcmp(str, "hello"));
     ystring_destroy(str);
     youtput_destroy(curr);
 
     curr = yxmlelem_tree_walker_next(w);
     t = youtput_read_yxmltext(curr);
-    str = yxmltext_string(t, txn);
+    str = yxmltext_string(t);
     REQUIRE(!strcmp(str, "world"));
     ystring_destroy(str);
     youtput_destroy(curr);

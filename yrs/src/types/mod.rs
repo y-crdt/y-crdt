@@ -7,8 +7,7 @@ use crate::*;
 pub use map::Map;
 pub use text::Text;
 
-use crate::block::{BlockPtr, Item, ItemContent, ItemPosition, Prelim};
-use crate::block_store::BlockStore;
+use crate::block::{Block, BlockPtr, Item, ItemContent, ItemPosition, Prelim};
 use crate::event::EventHandler;
 use crate::types::array::{Array, ArrayEvent};
 use crate::types::map::MapEvent;
@@ -18,7 +17,6 @@ use lib0::any::Any;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Formatter;
 use std::ops::{Deref, DerefMut};
-use std::pin::Pin;
 use std::ptr::NonNull;
 use std::rc::Rc;
 
@@ -52,10 +50,16 @@ pub const TYPE_REFS_UNDEFINED: TypeRefs = 15;
 /// A wrapper around [Branch] cell, supplied with a bunch of convenience methods to operate on both
 /// map-like and array-like contents of a [Branch].
 #[repr(transparent)]
-#[derive(Debug, Clone, Copy)]
-pub struct BranchRef(NonNull<Branch>);
+#[derive(Debug, Clone, Copy, Hash)]
+pub struct BranchPtr(NonNull<Branch>);
 
-impl Deref for BranchRef {
+impl Into<TypePtr> for BranchPtr {
+    fn into(self) -> TypePtr {
+        TypePtr::Branch(self)
+    }
+}
+
+impl Deref for BranchPtr {
     type Target = Branch;
 
     fn deref(&self) -> &Self::Target {
@@ -63,39 +67,39 @@ impl Deref for BranchRef {
     }
 }
 
-impl DerefMut for BranchRef {
+impl DerefMut for BranchPtr {
     fn deref_mut(&mut self) -> &mut Self::Target {
         unsafe { self.0.as_mut() }
     }
 }
 
-impl<'a> From<&'a mut Pin<Box<Branch>>> for BranchRef {
-    fn from(branch: &'a mut Pin<Box<Branch>>) -> Self {
-        let ptr = NonNull::from(branch.as_mut().get_mut());
-        BranchRef(ptr)
+impl<'a> From<&'a mut Box<Branch>> for BranchPtr {
+    fn from(branch: &'a mut Box<Branch>) -> Self {
+        let ptr = NonNull::from(branch.as_mut());
+        BranchPtr(ptr)
     }
 }
 
-impl<'a> From<&'a Pin<Box<Branch>>> for BranchRef {
-    fn from(branch: &'a Pin<Box<Branch>>) -> Self {
+impl<'a> From<&'a Box<Branch>> for BranchPtr {
+    fn from(branch: &'a Box<Branch>) -> Self {
         let b: &Branch = &*branch;
         unsafe {
             let ptr = NonNull::new_unchecked(b as *const Branch as *mut Branch);
-            BranchRef(ptr)
+            BranchPtr(ptr)
         }
     }
 }
 
-impl<'a> From<&'a Branch> for BranchRef {
+impl<'a> From<&'a Branch> for BranchPtr {
     fn from(branch: &'a Branch) -> Self {
         unsafe {
             let ptr = NonNull::new_unchecked(branch as *const Branch as *mut Branch);
-            BranchRef(ptr)
+            BranchPtr(ptr)
         }
     }
 }
 
-impl Into<Value> for BranchRef {
+impl Into<Value> for BranchPtr {
     /// Converts current branch data into a [Value]. It uses a type ref information to resolve,
     /// which value variant is a correct one for this branch. Since branch represent only complex
     /// types [Value::Any] will never be returned from this method.
@@ -113,17 +117,17 @@ impl Into<Value> for BranchRef {
     }
 }
 
-impl Eq for BranchRef {}
+impl Eq for BranchPtr {}
 
 #[cfg(not(test))]
-impl PartialEq for BranchRef {
+impl PartialEq for BranchPtr {
     fn eq(&self, other: &Self) -> bool {
         NonNull::eq(&self.0, &other.0)
     }
 }
 
 #[cfg(test)]
-impl PartialEq for BranchRef {
+impl PartialEq for BranchPtr {
     fn eq(&self, other: &Self) -> bool {
         if NonNull::eq(&self.0, &other.0) {
             true
@@ -147,7 +151,7 @@ pub struct Branch {
     ///   node.
     /// - [Text] and [XmlText]: this field point to a first chunk of text appended to collaborative
     ///   text data structure.
-    pub start: Option<BlockPtr>,
+    pub(crate) start: Option<BlockPtr>,
 
     /// A map component of this branch node, used by some of the specialized complex types
     /// including:
@@ -155,13 +159,13 @@ pub struct Branch {
     /// - [Map]: all of the map elements are based on this field. The value of each entry points
     ///   to the last modified value.
     /// - [XmlElement]: this field stores attributes assigned to a given XML node.
-    pub map: HashMap<Rc<str>, BlockPtr>,
+    pub(crate) map: HashMap<Rc<str>, BlockPtr>,
 
     /// Unique identifier of a current branch node. It can be contain either a named string - which
     /// means, this branch is a root-level complex data structure - or a block identifier. In latter
     /// case it means, that this branch is a complex type (eg. Map or Array) nested inside of
     /// another complex type.
-    pub ptr: TypePtr,
+    pub(crate) item: Option<BlockPtr>,
 
     /// A tag name identifier, used only by [XmlElement].
     pub name: Option<String>,
@@ -183,7 +187,7 @@ impl std::fmt::Debug for Branch {
         f.debug_struct("Branch")
             .field("start", &self.start)
             .field("map", &self.map)
-            .field("ptr", &self.ptr)
+            .field("ptr", &self.item)
             .field("name", &self.name)
             .field("len", &self.block_len)
             .field("type_ref", &self.type_ref)
@@ -195,7 +199,7 @@ impl Eq for Branch {}
 
 impl PartialEq for Branch {
     fn eq(&self, other: &Self) -> bool {
-        self.ptr == other.ptr
+        self.item == other.item
             && self.start == other.start
             && self.map == other.map
             && self.name == other.name
@@ -205,17 +209,17 @@ impl PartialEq for Branch {
 }
 
 impl Branch {
-    pub fn new(ptr: TypePtr, type_ref: TypeRefs, name: Option<String>) -> Pin<Box<Self>> {
-        Pin::new(Box::new(Self {
+    pub fn new(type_ref: TypeRefs, name: Option<String>) -> Box<Self> {
+        Box::new(Self {
             start: None,
             map: HashMap::default(),
             block_len: 0,
             content_len: 0,
-            ptr,
+            item: None,
             name,
             type_ref,
             observers: None,
-        }))
+        })
     }
 
     /// Returns an identifier of an underlying complex data type (eg. is it an Array or a Map).
@@ -235,25 +239,23 @@ impl Branch {
 
     /// Get iterator over (String, Block) entries of a map component of a current root type.
     /// Deleted blocks are skipped by this iterator.
-    pub(crate) fn entries<'a, 'b>(&'a self, txn: &'b Transaction) -> Entries<'b> {
-        Entries::new(&self.ptr, txn)
+    pub(crate) fn entries(&self) -> Entries {
+        Entries::new(&self.map)
     }
 
     /// Get iterator over Block entries of an array component of a current root type.
     /// Deleted blocks are skipped by this iterator.
-    pub(crate) fn iter<'a, 'b>(&'a self, txn: &'b Transaction) -> Iter<'b> {
-        Iter::new(self.start, txn)
+    pub(crate) fn iter(&self) -> Iter {
+        Iter::new(self.start.as_ref())
     }
 
     /// Returns a materialized value of non-deleted entry under a given `key` of a map component
     /// of a current root type.
-    pub(crate) fn get(&self, txn: &Transaction, key: &str) -> Option<Value> {
-        let ptr = self.map.get(key)?;
-        let item = txn.store().blocks.get_item(ptr)?;
-        if item.is_deleted() {
-            None
-        } else {
-            item.content.get_content_last(txn)
+    pub(crate) fn get(&self, key: &str) -> Option<Value> {
+        let block = self.map.get(key)?;
+        match block.deref() {
+            Block::Item(item) if !item.is_deleted() => item.content.get_content_last(),
+            _ => None,
         }
     }
 
@@ -262,14 +264,9 @@ impl Branch {
     /// location within wrapping item content.
     /// If `index` was outside of the array component boundary of current branch node, `None` will
     /// be returned.
-    pub(crate) fn get_at<'a, 'b>(
-        &'a self,
-        blocks: &'b BlockStore,
-        mut index: u32,
-    ) -> Option<(&'b ItemContent, usize)> {
-        let mut ptr = self.start;
-        while let Some(p) = ptr {
-            let item = blocks.get_item(&p)?;
+    pub(crate) fn get_at(&self, mut index: u32) -> Option<(&ItemContent, usize)> {
+        let mut ptr = self.start.as_ref();
+        while let Some(Block::Item(item)) = ptr.map(BlockPtr::deref) {
             let len = item.len();
             if !item.is_deleted() && item.is_countable() {
                 if index < len {
@@ -278,7 +275,7 @@ impl Branch {
 
                 index -= len;
             }
-            ptr = item.right.clone();
+            ptr = item.right.as_ref();
         }
 
         None
@@ -287,26 +284,21 @@ impl Branch {
     /// Removes an entry under given `key` of a map component of a current root type, returning
     /// a materialized representation of value stored underneath if entry existed prior deletion.
     pub(crate) fn remove(&self, txn: &mut Transaction, key: &str) -> Option<Value> {
-        let ptr = self.map.get(key)?;
-        let prev = {
-            let item = txn.store().blocks.get_item(ptr)?;
-            if item.is_deleted() {
-                None
-            } else {
-                item.content.get_content_last(txn)
-            }
+        let ptr = *self.map.get(key)?;
+        let prev = match ptr.deref() {
+            Block::Item(item) if !item.is_deleted() => item.content.get_content_last(),
+            _ => None,
         };
         txn.delete(ptr);
         prev
     }
 
     /// Returns a first non-deleted item from an array component of a current root type.
-    pub(crate) fn first<'a, 'b>(&'a self, txn: &'b Transaction) -> Option<&'b Item> {
-        let mut ptr = self.start;
-        while let Some(p) = ptr {
-            let item = txn.store().blocks.get_item(&p)?;
+    pub(crate) fn first(&self) -> Option<&Item> {
+        let mut ptr = self.start.as_ref();
+        while let Some(Block::Item(item)) = ptr.map(BlockPtr::deref) {
             if item.is_deleted() {
-                ptr = item.right.clone();
+                ptr = item.right.as_ref();
             } else {
                 return Some(item);
             }
@@ -333,15 +325,11 @@ impl Branch {
     ) -> (Option<BlockPtr>, Option<BlockPtr>) {
         let store = txn.store_mut();
         let encoding = store.options.offset_kind;
-        while let Some(p) = ptr {
-            let item = store
-                .blocks
-                .get_item(&p)
-                .expect("No item for a given pointer was found.");
+        while let Some(Block::Item(item)) = ptr.as_deref() {
             let content_len = item.content_len(encoding);
             if !item.is_deleted() && item.is_countable() {
                 if index == content_len {
-                    let left = Some(p.clone());
+                    let left = ptr;
                     let right = item.right.clone();
                     return (left, right);
                 } else if index < content_len {
@@ -350,13 +338,8 @@ impl Branch {
                     } else {
                         index
                     };
-                    let split_point = ID::new(item.id.client, item.id.clock + index);
-                    let ptr = BlockPtr::new(split_point, p.pivot() as u32);
-                    if store.blocks.split_block(&ptr) {
-                        return (Some(ptr.predecessor()), Some(ptr));
-                    } else {
-                        return (Some(ptr.predecessor()), None);
-                    }
+                    let right = store.blocks.split_block(ptr.unwrap(), index);
+                    return (ptr, right);
                 }
                 index -= content_len;
             }
@@ -375,9 +358,9 @@ impl Branch {
             Branch::index_to_ptr(txn, start, index)
         };
         while remaining > 0 {
-            if let Some(mut p) = ptr {
+            if let Some(p) = ptr {
                 let encoding = txn.store().options.offset_kind;
-                if let Some(item) = txn.store().blocks.get_item(&p) {
+                if let Block::Item(item) = p.deref() {
                     if !item.is_deleted() {
                         let content_len = item.content_len(encoding);
                         let (l, r) = if remaining < content_len {
@@ -386,18 +369,14 @@ impl Branch {
                             } else {
                                 remaining
                             };
-                            p.id.clock += offset;
                             remaining = 0;
-                            if txn.store_mut().blocks.split_block(&p) {
-                                (p.predecessor(), ptr)
-                            } else {
-                                (p, None)
-                            }
+                            let new_right = txn.store_mut().blocks.split_block(p, offset);
+                            (p, new_right)
                         } else {
                             remaining -= content_len;
                             (p, item.right.clone())
                         };
-                        txn.delete(&l);
+                        txn.delete(l);
                         ptr = r;
                     } else {
                         ptr = item.right.clone();
@@ -413,15 +392,15 @@ impl Branch {
 
     /// Inserts a preliminary `value` into a current branch indexed sequence component at the given
     /// `index`. Returns an item reference created as a result of this operation.
-    pub(crate) fn insert_at<'t, V: Prelim>(
+    pub(crate) fn insert_at<V: Prelim>(
         &self,
-        txn: &'t mut Transaction,
+        txn: &mut Transaction,
         index: u32,
         value: V,
-    ) -> &'t Item {
+    ) -> BlockPtr {
         let (start, parent) = {
             if index <= self.len() {
-                (self.start, self.ptr.clone())
+                (self.start, BranchPtr::from(self))
             } else {
                 panic!("Cannot insert item at index over the length of an array")
             }
@@ -432,7 +411,7 @@ impl Branch {
             Branch::index_to_ptr(txn, start, index)
         };
         let pos = ItemPosition {
-            parent,
+            parent: parent.into(),
             left,
             right,
             index: 0,
@@ -442,34 +421,34 @@ impl Branch {
         txn.create_item(&pos, value, None)
     }
 
-    pub(crate) fn path(from: BranchRef, to: BranchRef, txn: &Transaction) -> Path {
+    pub(crate) fn path(from: BranchPtr, to: BranchPtr) -> Path {
         let parent = from;
         let mut child = to;
         let mut path = VecDeque::default();
-        while let TypePtr::Id(ptr) = &child.ptr {
-            if parent.ptr == child.ptr {
+        while let Some(ptr) = &child.item {
+            if parent.item == child.item {
                 break;
             }
-            let item = txn.store().blocks.get_item(ptr).unwrap();
-            if let Some(parent_sub) = item.parent_sub.clone() {
+            let item = ptr.as_item().unwrap();
+            let item_id = item.id.clone();
+            let parent_sub = item.parent_sub.clone();
+            child = *item.parent.as_branch().unwrap();
+            if let Some(parent_sub) = parent_sub {
                 // parent is map-ish
                 path.push_front(PathSegment::Key(parent_sub));
-                child = txn.store().get_type(&item.parent).unwrap().clone();
             } else {
                 // parent is array-ish
                 let mut i = 0;
-                child = txn.store().get_type(&item.parent).unwrap();
-                let mut c = child.start.clone();
+                let mut c = child.start;
                 while let Some(ptr) = c {
-                    if ptr.id == item.id {
+                    if ptr.id() == &item_id {
                         break;
                     }
-                    let cc = txn.store().blocks.get_block(&ptr).unwrap();
-                    if !cc.is_deleted() {
+                    if !ptr.is_deleted() {
                         i += 1;
                     }
-                    if let Some(cci) = cc.as_item() {
-                        c = cci.right.clone();
+                    if let Block::Item(cci) = ptr.deref() {
+                        c = cci.right;
                     } else {
                         break;
                     }
@@ -509,26 +488,26 @@ impl Value {
     /// - [Value::YMap] is converted into JSON-like object map.
     /// - [Value::YText], [Value::YXmlText] and [Value::YXmlElement] are converted into strings
     ///   (XML types are stringified XML representation).
-    pub fn to_json(self, txn: &Transaction) -> Any {
+    pub fn to_json(self) -> Any {
         match self {
             Value::Any(a) => a,
-            Value::YText(v) => Any::String(v.to_string(txn).into_boxed_str()),
-            Value::YArray(v) => v.to_json(txn),
-            Value::YMap(v) => v.to_json(txn),
-            Value::YXmlElement(v) => Any::String(v.to_string(txn).into_boxed_str()),
-            Value::YXmlText(v) => Any::String(v.to_string(txn).into_boxed_str()),
+            Value::YText(v) => Any::String(v.to_string().into_boxed_str()),
+            Value::YArray(v) => v.to_json(),
+            Value::YMap(v) => v.to_json(),
+            Value::YXmlElement(v) => Any::String(v.to_string().into_boxed_str()),
+            Value::YXmlText(v) => Any::String(v.to_string().into_boxed_str()),
         }
     }
 
     /// Converts current value into stringified representation.
-    pub fn to_string(self, txn: &Transaction) -> String {
+    pub fn to_string(self) -> String {
         match self {
             Value::Any(a) => a.to_string(),
-            Value::YText(v) => v.to_string(txn),
-            Value::YArray(v) => v.to_json(txn).to_string(),
-            Value::YMap(v) => v.to_json(txn).to_string(),
-            Value::YXmlElement(v) => v.to_string(txn),
-            Value::YXmlText(v) => v.to_string(txn),
+            Value::YText(v) => v.to_string(),
+            Value::YArray(v) => v.to_json().to_string(),
+            Value::YMap(v) => v.to_json().to_string(),
+            Value::YXmlElement(v) => v.to_string(),
+            Value::YXmlText(v) => v.to_string(),
         }
     }
 }
@@ -630,15 +609,14 @@ impl std::fmt::Display for Branch {
 }
 
 pub(crate) struct Entries<'a> {
-    pub txn: &'a Transaction,
     iter: std::collections::hash_map::Iter<'a, Rc<str>, BlockPtr>,
 }
 
 impl<'a> Entries<'a> {
-    pub(crate) fn new<'b>(ptr: &'b TypePtr, txn: &'a Transaction) -> Self {
-        let inner = txn.store().get_type_raw(ptr).unwrap();
-        let iter = inner.map.iter();
-        Entries { txn, iter }
+    pub(crate) fn new(source: &'a HashMap<Rc<str>, BlockPtr>) -> Self {
+        Entries {
+            iter: source.iter(),
+        }
     }
 }
 
@@ -647,32 +625,31 @@ impl<'a> Iterator for Entries<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         let (mut key, ptr) = self.iter.next()?;
-        let mut block = self.txn.store().blocks.get_item(ptr);
+        let mut block = ptr;
         loop {
-            match block {
-                Some(item) if !item.is_deleted() => {
+            match block.deref() {
+                Block::Item(item) if !item.is_deleted() => {
                     break;
                 }
                 _ => {
                     let (k, ptr) = self.iter.next()?;
                     key = k;
-                    block = self.txn.store().blocks.get_item(ptr);
+                    block = ptr;
                 }
             }
         }
-        let item = block.unwrap();
+        let item = block.as_item().unwrap();
         Some((key, item))
     }
 }
 
 pub(crate) struct Iter<'a> {
-    ptr: Option<BlockPtr>,
-    txn: &'a Transaction,
+    ptr: Option<&'a BlockPtr>,
 }
 
 impl<'a> Iter<'a> {
-    fn new(start: Option<BlockPtr>, txn: &'a Transaction) -> Self {
-        Iter { ptr: start, txn }
+    fn new(ptr: Option<&'a BlockPtr>) -> Self {
+        Iter { ptr }
     }
 }
 
@@ -681,33 +658,53 @@ impl<'a> Iterator for Iter<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         let ptr = self.ptr.take()?;
-        let item = self.txn.store().blocks.get_item(&ptr)?;
-        self.ptr = item.right;
+        let item = ptr.as_item()?;
+        self.ptr = item.right.as_ref();
         Some(item)
     }
 }
 
 /// Type pointer - used to localize a complex [Branch] node within a scope of a document store.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum TypePtr {
+pub(crate) enum TypePtr {
     /// Temporary value - used only when block is deserialized right away, but had not been
     /// integrated into block store yet. As part of block integration process, items are
     /// repaired and their fields (including parent) are being rewired.
     Unknown,
 
     /// Pointer to another block. Used in nested data types ie. YMap containing another YMap.
-    Id(block::BlockPtr),
+    Branch(BranchPtr),
 
-    /// Pointer to a root-level type.
+    /// Temporary state representing top-level type.
     Named(Rc<str>),
+
+    /// Temporary state representing nested-level type.
+    ID(ID),
+}
+
+impl TypePtr {
+    pub(crate) fn as_branch(&self) -> Option<&BranchPtr> {
+        if let TypePtr::Branch(ptr) = self {
+            Some(ptr)
+        } else {
+            None
+        }
+    }
 }
 
 impl std::fmt::Display for TypePtr {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             TypePtr::Unknown => write!(f, "unknown"),
-            TypePtr::Id(ptr) => write!(f, "{}", ptr),
-            TypePtr::Named(name) => write!(f, "'{}'", name.as_ref()),
+            TypePtr::Branch(ptr) => {
+                if let Some(i) = ptr.item {
+                    write!(f, "{}", i.id())
+                } else {
+                    write!(f, "null")
+                }
+            }
+            TypePtr::ID(id) => write!(f, "{}", id),
+            TypePtr::Named(name) => write!(f, "{}", name),
         }
     }
 }
@@ -739,7 +736,7 @@ impl Observers {
 
     pub fn publish(
         &self,
-        branch_ref: BranchRef,
+        branch_ref: BranchPtr,
         txn: &Transaction,
         keys: HashSet<Option<Rc<str>>>,
     ) {
@@ -837,46 +834,35 @@ pub type Attrs = HashMap<Box<str>, Any>;
 
 pub(crate) fn event_keys(
     txn: &Transaction,
-    target: BranchRef,
+    target: BranchPtr,
     keys_changed: &HashSet<Option<Rc<str>>>,
 ) -> HashMap<Rc<str>, EntryChange> {
     let mut keys = HashMap::new();
     for opt in keys_changed.iter() {
         if let Some(key) = opt {
-            let item = target
-                .map
-                .get(key.as_ref())
-                .and_then(|ptr| txn.store().blocks.get_item(ptr));
-            if let Some(item) = item {
+            let block = target.map.get(key.as_ref()).cloned();
+            if let Some(Block::Item(item)) = block.as_deref() {
                 if item.id.clock >= txn.before_state.get(&item.id.client) {
-                    let mut prev = item
-                        .left
-                        .as_ref()
-                        .and_then(|ptr| txn.store().blocks.get_item(ptr));
-                    while let Some(p) = prev {
+                    let mut prev = item.left;
+                    while let Some(Block::Item(p)) = prev.as_deref() {
                         if !txn.has_added(&p.id) {
                             break;
                         }
-                        prev = p
-                            .left
-                            .as_ref()
-                            .and_then(|ptr| txn.store().blocks.get_item(ptr));
+                        prev = p.left;
                     }
 
                     if txn.has_deleted(&item.id) {
-                        if let Some(prev) = prev {
+                        if let Some(Block::Item(prev)) = prev.as_deref() {
                             if txn.has_deleted(&prev.id) {
-                                let old_value =
-                                    prev.content.get_content_last(txn).unwrap_or_default();
+                                let old_value = prev.content.get_content_last().unwrap_or_default();
                                 keys.insert(key.clone(), EntryChange::Removed(old_value));
                             }
                         }
                     } else {
-                        let new_value = item.content.get_content_last(txn).unwrap();
-                        if let Some(prev) = prev {
+                        let new_value = item.content.get_content_last().unwrap();
+                        if let Some(Block::Item(prev)) = prev.as_deref() {
                             if txn.has_deleted(&prev.id) {
-                                let old_value =
-                                    prev.content.get_content_last(txn).unwrap_or_default();
+                                let old_value = prev.content.get_content_last().unwrap_or_default();
                                 keys.insert(
                                     key.clone(),
                                     EntryChange::Updated(old_value, new_value),
@@ -889,7 +875,7 @@ pub(crate) fn event_keys(
                         keys.insert(key.clone(), EntryChange::Inserted(new_value));
                     }
                 } else if txn.has_deleted(&item.id) {
-                    let old_value = item.content.get_content_last(txn).unwrap_or_default();
+                    let old_value = item.content.get_content_last().unwrap_or_default();
                     keys.insert(key.clone(), EntryChange::Removed(old_value));
                 }
             }
@@ -899,16 +885,16 @@ pub(crate) fn event_keys(
     keys
 }
 
-pub(crate) fn event_change_set(txn: &Transaction, start: Option<&BlockPtr>) -> ChangeSet<Change> {
+pub(crate) fn event_change_set(txn: &Transaction, start: Option<BlockPtr>) -> ChangeSet<Change> {
     let mut added = HashSet::new();
     let mut deleted = HashSet::new();
     let mut delta = Vec::new();
 
     let mut last_op = None;
 
-    let mut current = start.and_then(|ptr| txn.store().blocks.get_item(&ptr));
+    let mut current = start;
 
-    while let Some(item) = current {
+    while let Some(Block::Item(item)) = current.as_deref() {
         if item.is_deleted() {
             if txn.has_deleted(&item.id) && !txn.has_added(&item.id) {
                 let removed = match last_op.take() {
@@ -932,7 +918,7 @@ pub(crate) fn event_change_set(txn: &Transaction, start: Option<&BlockPtr>) -> C
                         Vec::with_capacity(item.len() as usize)
                     }
                 };
-                inserts.append(&mut item.content.get_content(txn));
+                inserts.append(&mut item.content.get_content());
                 last_op = Some(Change::Added(inserts));
                 added.insert(item.id);
             } else {
@@ -948,10 +934,7 @@ pub(crate) fn event_change_set(txn: &Transaction, start: Option<&BlockPtr>) -> C
             }
         }
 
-        current = item
-            .right
-            .as_ref()
-            .and_then(|ptr| txn.store().blocks.get_item(ptr));
+        current = item.right;
     }
 
     match last_op.take() {

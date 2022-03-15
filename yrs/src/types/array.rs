@@ -1,8 +1,7 @@
 use crate::block::{BlockPtr, ItemContent, ItemPosition, Prelim};
 use crate::event::Subscription;
 use crate::types::{
-    event_change_set, Branch, BranchRef, Change, ChangeSet, Observers, Path, TypePtr, Value,
-    TYPE_REFS_ARRAY,
+    event_change_set, Branch, BranchPtr, Change, ChangeSet, Observers, Path, Value, TYPE_REFS_ARRAY,
 };
 use crate::{SubscriptionId, Transaction, ID};
 use lib0::any::Any;
@@ -30,7 +29,7 @@ use std::ops::Deref;
 /// unique document id to determine correct and consistent ordering.
 #[repr(transparent)]
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub struct Array(BranchRef);
+pub struct Array(BranchPtr);
 
 impl Array {
     /// Returns a number of elements stored in current array.
@@ -46,7 +45,7 @@ impl Array {
     pub fn insert<V: Prelim>(&self, txn: &mut Transaction, index: u32, value: V) {
         let (start, parent) = {
             if index <= self.0.len() {
-                (self.0.start, self.0.ptr.clone())
+                (self.0.start, self.0)
             } else {
                 panic!("Cannot insert item at index over the length of an array")
             }
@@ -57,7 +56,7 @@ impl Array {
             Branch::index_to_ptr(txn, start, index)
         };
         let pos = ItemPosition {
-            parent,
+            parent: parent.into(),
             left,
             right,
             index: 0,
@@ -109,20 +108,20 @@ impl Array {
 
     /// Retrieves a value stored at a given `index`. Returns `None` when provided index was out
     /// of the range of a current array.
-    pub fn get(&self, txn: &Transaction, index: u32) -> Option<Value> {
-        let (content, idx) = self.0.get_at(&txn.store().blocks, index)?;
-        Some(content.get_content(txn).remove(idx))
+    pub fn get(&self, index: u32) -> Option<Value> {
+        let (content, idx) = self.0.get_at(index)?;
+        Some(content.get_content().remove(idx))
     }
 
     /// Returns an iterator, that can be used to lazely traverse over all values stored in a current
     /// array.
-    pub fn iter<'a, 'b>(&'a self, txn: &'b Transaction) -> ArrayIter<'b> {
-        ArrayIter::new(self, txn)
+    pub fn iter(&self) -> ArrayIter {
+        ArrayIter::new(self)
     }
 
     /// Converts all contents of current array into a JSON-like representation.
-    pub fn to_json(&self, txn: &Transaction) -> Any {
-        let res = self.iter(txn).map(|v| v.to_json(txn)).collect();
+    pub fn to_json(&self) -> Any {
+        let res = self.iter().map(|v| v.to_json()).collect();
         Any::Array(res)
     }
 
@@ -158,17 +157,15 @@ impl AsRef<Branch> for Array {
     }
 }
 
-pub struct ArrayIter<'b> {
+pub struct ArrayIter<'a> {
     content: VecDeque<Value>,
-    ptr: Option<BlockPtr>,
-    txn: &'b Transaction,
+    ptr: Option<&'a BlockPtr>,
 }
 
-impl<'b> ArrayIter<'b> {
-    fn new(array: &Array, txn: &'b Transaction) -> Self {
+impl<'a> ArrayIter<'a> {
+    fn new(array: &'a Array) -> Self {
         ArrayIter {
-            ptr: array.0.start,
-            txn,
+            ptr: array.0.start.as_ref(),
             content: VecDeque::default(),
         }
     }
@@ -181,10 +178,10 @@ impl<'b> Iterator for ArrayIter<'b> {
         match self.content.pop_front() {
             None => {
                 if let Some(ptr) = self.ptr.take() {
-                    let item = self.txn.store().blocks.get_item(&ptr)?;
-                    self.ptr = item.right.clone();
+                    let item = ptr.as_item()?;
+                    self.ptr = item.right.as_ref();
                     if !item.is_deleted() && item.is_countable() {
-                        self.content = item.content.get_content(self.txn).into();
+                        self.content = item.content.get_content().into();
                     }
                     self.next()
                 } else {
@@ -196,8 +193,8 @@ impl<'b> Iterator for ArrayIter<'b> {
     }
 }
 
-impl From<BranchRef> for Array {
-    fn from(inner: BranchRef) -> Self {
+impl From<BranchPtr> for Array {
+    fn from(inner: BranchPtr) -> Self {
         Array(inner)
     }
 }
@@ -229,12 +226,12 @@ where
     T: IntoIterator<Item = V>,
     V: Into<Any>,
 {
-    fn into_content(self, _txn: &mut Transaction, _ptr: TypePtr) -> (ItemContent, Option<Self>) {
+    fn into_content(self, _txn: &mut Transaction) -> (ItemContent, Option<Self>) {
         let vec: Vec<Any> = self.0.into_iter().map(|v| v.into()).collect();
         (ItemContent::Any(vec), None)
     }
 
-    fn integrate(self, _txn: &mut Transaction, _inner_ref: BranchRef) {}
+    fn integrate(self, _txn: &mut Transaction, _inner_ref: BranchPtr) {}
 }
 
 impl<T, V> Prelim for PrelimArray<T, V>
@@ -242,12 +239,12 @@ where
     V: Prelim,
     T: IntoIterator<Item = V>,
 {
-    fn into_content(self, _txn: &mut Transaction, ptr: TypePtr) -> (ItemContent, Option<Self>) {
-        let inner = Branch::new(ptr, TYPE_REFS_ARRAY, None);
+    fn into_content(self, _txn: &mut Transaction) -> (ItemContent, Option<Self>) {
+        let inner = Branch::new(TYPE_REFS_ARRAY, None);
         (ItemContent::Type(inner), Some(self))
     }
 
-    fn integrate(self, txn: &mut Transaction, inner_ref: BranchRef) {
+    fn integrate(self, txn: &mut Transaction, inner_ref: BranchPtr) {
         let array = Array::from(inner_ref);
         for value in self.0 {
             array.push_back(txn, value);
@@ -258,12 +255,12 @@ where
 /// Event generated by [Array::observe] method. Emitted during transaction commit phase.
 pub struct ArrayEvent {
     target: Array,
-    current_target: BranchRef,
+    current_target: BranchPtr,
     change_set: UnsafeCell<Option<Box<ChangeSet<Change>>>>,
 }
 
 impl ArrayEvent {
-    pub(crate) fn new(branch_ref: BranchRef) -> Self {
+    pub(crate) fn new(branch_ref: BranchPtr) -> Self {
         let current_target = branch_ref.clone();
         ArrayEvent {
             target: Array::from(branch_ref),
@@ -278,8 +275,8 @@ impl ArrayEvent {
     }
 
     /// Returns a path from root type down to [Text] instance which emitted this event.
-    pub fn path(&self, txn: &Transaction) -> Path {
-        Branch::path(self.current_target, self.target.0, txn)
+    pub fn path(&self) -> Path {
+        Branch::path(self.current_target, self.target.0)
     }
 
     /// Returns summary of changes made over corresponding [Array] collection within
@@ -302,8 +299,7 @@ impl ArrayEvent {
 
     fn changes(&self, txn: &Transaction) -> &ChangeSet<Change> {
         let change_set = unsafe { self.change_set.get().as_mut().unwrap() };
-        change_set
-            .get_or_insert_with(|| Box::new(event_change_set(txn, self.target.0.start.as_ref())))
+        change_set.get_or_insert_with(|| Box::new(event_change_set(txn, self.target.0.start)))
     }
 }
 
@@ -330,7 +326,7 @@ mod test {
         a.push_back(&mut txn, "b");
         a.push_back(&mut txn, "c");
 
-        let actual: Vec<_> = a.iter(&txn).collect();
+        let actual: Vec<_> = a.iter().collect();
         assert_eq!(actual, vec!["a".into(), "b".into(), "c".into()]);
     }
 
@@ -344,7 +340,7 @@ mod test {
         a.push_front(&mut txn, "b");
         a.push_front(&mut txn, "a");
 
-        let actual: Vec<_> = a.iter(&txn).collect();
+        let actual: Vec<_> = a.iter().collect();
         assert_eq!(actual, vec!["a".into(), "b".into(), "c".into()]);
     }
 
@@ -358,7 +354,7 @@ mod test {
         a.insert(&mut txn, 1, "c");
         a.insert(&mut txn, 1, "b");
 
-        let actual: Vec<_> = a.iter(&txn).collect();
+        let actual: Vec<_> = a.iter().collect();
         assert_eq!(actual, vec!["a".into(), "b".into(), "c".into()]);
     }
 
@@ -371,12 +367,12 @@ mod test {
         let a1 = t1.get_array("array");
 
         a1.insert(&mut t1, 0, "Hi");
-        let update = d1.encode_state_as_update_v1(&t1);
+        let update = t1.encode_update_v1(); //d1.encode_state_as_update_v1
 
         let mut t2 = d2.transact();
-        d2.apply_update_v1(&mut t2, update.as_slice());
+        t2.apply_update(Update::decode_v1(update.as_slice()));
         let a2 = t2.get_array("array");
-        let actual: Vec<_> = a2.iter(&t2).collect();
+        let actual: Vec<_> = a2.iter().collect();
 
         assert_eq!(actual, vec!["Hi".into()]);
     }
@@ -447,7 +443,7 @@ mod test {
             a1.push_back(&mut t1, 1);
             a1.push_back(&mut t1, true);
             a1.push_back(&mut t1, false);
-            let actual: Vec<_> = a1.iter(&t1).collect();
+            let actual: Vec<_> = a1.iter().collect();
             assert_eq!(
                 actual,
                 vec![Value::from(1.0), Value::from(true), Value::from(false)]
@@ -458,7 +454,7 @@ mod test {
 
         let mut t2 = d2.transact();
         let a2 = t2.get_array("array");
-        let actual: Vec<_> = a2.iter(&t2).collect();
+        let actual: Vec<_> = a2.iter().collect();
         assert_eq!(
             actual,
             vec![Value::from(1.0), Value::from(true), Value::from(false)]
@@ -501,7 +497,7 @@ mod test {
     fn to_array(d: &Doc) -> Vec<Value> {
         let mut txn = d.transact();
         let a = txn.get_array("array");
-        a.iter(&txn).collect()
+        a.iter().collect()
     }
 
     #[test]
@@ -651,12 +647,12 @@ mod test {
             a.push_back(&mut txn, PrelimMap::from(m));
         }
 
-        for (i, value) in a.iter(&txn).enumerate() {
+        for (i, value) in a.iter().enumerate() {
             let mut expected = HashMap::new();
             expected.insert("value".to_owned(), Any::Number(i as f64));
             match value {
                 Value::YMap(_) => {
-                    assert_eq!(value.to_json(&txn), Any::Map(Box::new(expected)))
+                    assert_eq!(value.to_json(), Any::Map(Box::new(expected)))
                 }
                 _ => panic!("Value of array at index {} was no YMap", i),
             }
@@ -863,7 +859,7 @@ mod test {
                 .map(|_| Any::BigInt(unique_number))
                 .collect();
             let mut pos = rng.between(0, yarray.len()) as usize;
-            if let Any::Array(expected) = yarray.to_json(&txn) {
+            if let Any::Array(expected) = yarray.to_json() {
                 let mut expected = Vec::from(expected);
                 yarray.insert_range(&mut txn, pos as u32, content.clone());
 
@@ -871,7 +867,7 @@ mod test {
                     expected.insert(pos, any);
                     pos += 1;
                 }
-                let actual = yarray.to_json(&txn);
+                let actual = yarray.to_json();
                 assert_eq!(actual, Any::Array(expected.into_boxed_slice()))
             } else {
                 panic!("should not happen")
@@ -883,9 +879,9 @@ mod test {
             let yarray = txn.get_array("array");
             let pos = rng.between(0, yarray.len());
             yarray.insert(&mut txn, pos, PrelimArray::from([1, 2, 3, 4]));
-            if let Value::YArray(array2) = yarray.get(&txn, pos).unwrap() {
+            if let Value::YArray(array2) = yarray.get(pos).unwrap() {
                 let expected: Box<[Any]> = (1..=4).map(|i| Any::Number(i as f64)).collect();
-                assert_eq!(array2.to_json(&txn), Any::Array(expected));
+                assert_eq!(array2.to_json(), Any::Array(expected));
             } else {
                 panic!("should not happen")
             }
@@ -896,12 +892,12 @@ mod test {
             let yarray = txn.get_array("array");
             let pos = rng.between(0, yarray.len());
             yarray.insert(&mut txn, pos, PrelimMap::<i32>::from(HashMap::default()));
-            if let Value::YMap(map) = yarray.get(&txn, pos).unwrap() {
+            if let Value::YMap(map) = yarray.get(pos).unwrap() {
                 map.insert(&mut txn, "someprop".to_string(), 42);
                 map.insert(&mut txn, "someprop".to_string(), 43);
                 map.insert(&mut txn, "someprop".to_string(), 44);
             } else {
-                panic!("should not happen: {}", txn.store())
+                panic!("should not happen")
             }
         }
 
@@ -913,20 +909,17 @@ mod test {
                 let pos = rng.between(0, len - 1);
                 let del_len = rng.between(1, 2.min(len - pos));
                 if rng.gen_bool(0.5) {
-                    if let Value::YArray(array2) = yarray.get(&txn, pos).unwrap() {
+                    if let Value::YArray(array2) = yarray.get(pos).unwrap() {
                         let pos = rng.between(0, array2.len() - 1);
                         let del_len = rng.between(0, 2.min(array2.len() - pos));
                         array2.remove_range(&mut txn, pos, del_len);
                     }
                 } else {
-                    if let Any::Array(old_content) = yarray.to_json(&txn) {
+                    if let Any::Array(old_content) = yarray.to_json() {
                         let mut old_content = Vec::from(old_content);
                         yarray.remove_range(&mut txn, pos, del_len);
                         old_content.drain(pos as usize..(pos + del_len) as usize);
-                        assert_eq!(
-                            yarray.to_json(&txn),
-                            Any::Array(old_content.into_boxed_slice())
-                        );
+                        assert_eq!(yarray.to_json(), Any::Array(old_content.into_boxed_slice()));
                     } else {
                         panic!("should not happen")
                     }
@@ -960,7 +953,7 @@ mod test {
         a1.insert_range(&mut t1, 0, ["A"]);
         a1.remove(&mut t1, 0);
 
-        let actual = t1.get_array("array").get(&mut t1, 0);
+        let actual = t1.get_array("array").get(0);
         assert_eq!(actual, None);
     }
 }
