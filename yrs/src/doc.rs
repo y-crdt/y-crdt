@@ -1,6 +1,8 @@
 use crate::event::{Subscription, UpdateEvent};
 use crate::store::Store;
 use crate::transaction::Transaction;
+use crate::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
+use crate::{DeleteSet, StateVector};
 use rand::Rng;
 use std::cell::UnsafeCell;
 use std::rc::Rc;
@@ -78,6 +80,25 @@ impl Doc {
     {
         let store = unsafe { &mut *self.store.get() };
         store.update_events.subscribe(f)
+    }
+
+    pub fn encode_state_as_update<E: Encoder>(&self, sv: &StateVector, encoder: &mut E) {
+        let store = unsafe { self.store.get().as_ref().unwrap() };
+        store.write_blocks(sv, encoder);
+        let ds = DeleteSet::from(&store.blocks);
+        ds.encode(encoder);
+    }
+
+    pub fn encode_state_as_update_v1(&self, sv: &StateVector) -> Vec<u8> {
+        let mut encoder = EncoderV1::new();
+        self.encode_state_as_update(sv, &mut encoder);
+        encoder.to_vec()
+    }
+
+    pub fn encode_state_as_update_v2(&self, sv: &StateVector) -> Vec<u8> {
+        let mut encoder = EncoderV2::new();
+        self.encode_state_as_update(sv, &mut encoder);
+        encoder.to_vec()
     }
 }
 
@@ -181,7 +202,7 @@ mod test {
         ];
         let doc = Doc::new();
         let mut tr = doc.transact();
-        doc.apply_update_v2(&mut tr, update);
+        tr.apply_update(Update::decode_v2(update));
 
         let actual = tr.get_text("type").to_string();
         assert_eq!(actual, "210".to_owned());
@@ -196,7 +217,7 @@ mod test {
         txt.insert(&mut t, 0, "1");
         txt.insert(&mut t, 0, "2");
 
-        let encoded = t.encode_update_v1(); // doc.encode_state_as_update_v1
+        let encoded = doc.encode_state_as_update_v1(&StateVector::default());
         let expected = &[
             1, 3, 227, 214, 245, 198, 5, 0, 4, 1, 4, 116, 121, 112, 101, 1, 48, 68, 227, 214, 245,
             198, 5, 0, 1, 49, 68, 227, 214, 245, 198, 5, 1, 1, 50, 0,
