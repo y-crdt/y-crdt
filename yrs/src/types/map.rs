@@ -1,8 +1,7 @@
-use crate::block::{ItemContent, ItemPosition, Prelim};
+use crate::block::{Block, ItemContent, ItemPosition, Prelim};
 use crate::event::Subscription;
 use crate::types::{
-    event_keys, Branch, BranchRef, Entries, EntryChange, Observers, Path, TypePtr, Value,
-    TYPE_REFS_MAP,
+    event_keys, Branch, BranchPtr, Entries, EntryChange, Observers, Path, Value, TYPE_REFS_MAP,
 };
 use crate::*;
 use lib0::any::Any;
@@ -21,18 +20,18 @@ use std::rc::Rc;
 /// order.
 #[repr(transparent)]
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub struct Map(BranchRef);
+pub struct Map(BranchPtr);
 
 impl Map {
     /// Converts all entries of a current map into JSON-like object representation.
-    pub fn to_json(&self, txn: &Transaction) -> Any {
+    pub fn to_json(&self) -> Any {
         let inner = self.0;
         let mut res = HashMap::new();
         for (key, ptr) in inner.map.iter() {
-            if let Some(item) = txn.store().blocks.get_item(ptr) {
+            if let Block::Item(item) = ptr.deref() {
                 if !item.is_deleted() {
-                    let any = if let Some(value) = item.content.get_content_last(txn) {
-                        value.to_json(txn)
+                    let any = if let Some(value) = item.content.get_content_last() {
+                        value.to_json()
                     } else {
                         Any::Null
                     };
@@ -44,12 +43,12 @@ impl Map {
     }
 
     /// Returns a number of entries stored within current map.
-    pub fn len(&self, txn: &Transaction) -> u32 {
+    pub fn len(&self) -> u32 {
         let mut len = 0;
         let inner = self.0;
         for ptr in inner.map.values() {
             //TODO: maybe it would be better to just cache len in the map itself?
-            if let Some(item) = txn.store().blocks.get_item(ptr) {
+            if let Block::Item(item) = ptr.deref() {
                 if !item.is_deleted() {
                     len += 1;
                 }
@@ -58,26 +57,25 @@ impl Map {
         len
     }
 
-    fn entries<'a, 'b>(&'a self, txn: &'b Transaction) -> Entries<'b> {
-        let ptr = &self.0.ptr;
-        Entries::new(ptr, txn)
+    fn entries(&self) -> Entries {
+        Entries::new(&self.0.map)
     }
 
     /// Returns an iterator that enables to traverse over all keys of entries stored within
     /// current map. These keys are not ordered.
-    pub fn keys<'a, 'b>(&'a self, txn: &'b Transaction) -> Keys<'b> {
-        Keys(self.entries(txn))
+    pub fn keys(&self) -> Keys {
+        Keys(self.entries())
     }
 
     /// Returns an iterator that enables to traverse over all values stored within current map.
-    pub fn values<'a, 'b>(&'a self, txn: &'b Transaction) -> Values<'b> {
-        Values(self.entries(txn))
+    pub fn values(&self) -> Values {
+        Values(self.entries())
     }
 
     /// Returns an iterator that enables to traverse over all entries - tuple of key-value pairs -
     /// stored within current map.
-    pub fn iter<'a, 'b>(&'a self, txn: &'b Transaction) -> MapIter<'b> {
-        MapIter(self.entries(txn))
+    pub fn iter(&self) -> MapIter {
+        MapIter(self.entries())
     }
 
     /// Inserts a new `value` under given `key` into current map. Returns a value stored previously
@@ -89,12 +87,12 @@ impl Map {
         value: V,
     ) -> Option<Value> {
         let key = key.into();
-        let previous = self.get(txn, &key);
+        let previous = self.get(&key);
         let pos = {
             let inner = self.0;
             let left = inner.map.get(&key);
             ItemPosition {
-                parent: inner.ptr.clone(),
+                parent: inner.into(),
                 left: left.cloned(),
                 right: None,
                 index: 0,
@@ -114,14 +112,14 @@ impl Map {
 
     /// Returns a value stored under a given `key` within current map, or `None` if no entry
     /// with such `key` existed.
-    pub fn get(&self, txn: &Transaction, key: &str) -> Option<Value> {
-        self.0.get(txn, key)
+    pub fn get(&self, key: &str) -> Option<Value> {
+        self.0.get(key)
     }
 
     /// Checks if an entry with given `key` can be found within current map.
-    pub fn contains(&self, txn: &Transaction, key: &str) -> bool {
+    pub fn contains(&self, key: &str) -> bool {
         if let Some(ptr) = self.0.map.get(key) {
-            if let Some(item) = txn.store().blocks.get_item(ptr) {
+            if let Block::Item(item) = ptr.deref() {
                 return !item.is_deleted();
             }
         }
@@ -131,7 +129,7 @@ impl Map {
     /// Clears the contents of current map, effectively removing all of its entries.
     pub fn clear(&self, txn: &mut Transaction) {
         for (_, ptr) in self.0.map.iter() {
-            txn.delete(ptr);
+            txn.delete(ptr.clone());
         }
     }
 
@@ -174,7 +172,7 @@ impl<'a> Iterator for MapIter<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         let (key, item) = self.0.next()?;
-        if let Some(content) = item.content.get_content_last(self.0.txn) {
+        if let Some(content) = item.content.get_content_last() {
             Some((key, content))
         } else {
             self.next()
@@ -202,12 +200,12 @@ impl<'a> Iterator for Values<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         let (_, item) = self.0.next()?;
-        Some(item.content.get_content(self.0.txn))
+        Some(item.content.get_content())
     }
 }
 
-impl From<BranchRef> for Map {
-    fn from(inner: BranchRef) -> Self {
+impl From<BranchPtr> for Map {
+    fn from(inner: BranchPtr) -> Self {
         Map(inner)
     }
 }
@@ -223,12 +221,12 @@ impl<T> From<HashMap<String, T>> for PrelimMap<T> {
 }
 
 impl<T: Prelim> Prelim for PrelimMap<T> {
-    fn into_content(self, _txn: &mut Transaction, ptr: TypePtr) -> (ItemContent, Option<Self>) {
-        let inner = Branch::new(ptr, TYPE_REFS_MAP, None);
+    fn into_content(self, _txn: &mut Transaction) -> (ItemContent, Option<Self>) {
+        let inner = Branch::new(TYPE_REFS_MAP, None);
         (ItemContent::Type(inner), Some(self))
     }
 
-    fn integrate(self, txn: &mut Transaction, inner_ref: BranchRef) {
+    fn integrate(self, txn: &mut Transaction, inner_ref: BranchPtr) {
         let map = Map::from(inner_ref);
         for (key, value) in self.0 {
             map.insert(txn, key, value);
@@ -239,12 +237,12 @@ impl<T: Prelim> Prelim for PrelimMap<T> {
 /// Event generated by [Map::observe] method. Emitted during transaction commit phase.
 pub struct MapEvent {
     target: Map,
-    current_target: BranchRef,
+    current_target: BranchPtr,
     keys: UnsafeCell<Result<HashMap<Rc<str>, EntryChange>, HashSet<Option<Rc<str>>>>>,
 }
 
 impl MapEvent {
-    pub(crate) fn new(branch_ref: BranchRef, key_changes: HashSet<Option<Rc<str>>>) -> Self {
+    pub(crate) fn new(branch_ref: BranchPtr, key_changes: HashSet<Option<Rc<str>>>) -> Self {
         let current_target = branch_ref.clone();
         MapEvent {
             target: Map::from(branch_ref),
@@ -259,8 +257,8 @@ impl MapEvent {
     }
 
     /// Returns a path from root type down to [Map] instance which emitted this event.
-    pub fn path(&self, txn: &Transaction) -> Path {
-        Branch::path(self.current_target, self.target.0, txn)
+    pub fn path(&self) -> Path {
+        Branch::path(self.current_target, self.target.0)
     }
 
     /// Returns a summary of key-value changes made over corresponding [Map] collection within
@@ -291,7 +289,7 @@ mod test {
     use crate::types::{EntryChange, Map, Value};
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encoder, EncoderV1};
-    use crate::{Doc, PrelimArray, PrelimMap, Transaction, Update};
+    use crate::{Doc, PrelimArray, PrelimMap, Update};
     use lib0::any::Any;
     use rand::distributions::Alphanumeric;
     use rand::prelude::{SliceRandom, StdRng};
@@ -330,17 +328,14 @@ mod test {
         //m1m.insert(&mut t1, "y-text".to_owned(), m1a);
 
         //TODO: YArray within YMap
-        fn compare_all(t: &Transaction, m: &Map) {
-            assert_eq!(m.len(&t), 5);
-            assert_eq!(m.get(&t, &"number".to_owned()), Some(Value::from(1f64)));
-            assert_eq!(m.get(&t, &"boolean0".to_owned()), Some(Value::from(false)));
-            assert_eq!(m.get(&t, &"boolean1".to_owned()), Some(Value::from(true)));
+        fn compare_all(m: &Map) {
+            assert_eq!(m.len(), 5);
+            assert_eq!(m.get(&"number".to_owned()), Some(Value::from(1f64)));
+            assert_eq!(m.get(&"boolean0".to_owned()), Some(Value::from(false)));
+            assert_eq!(m.get(&"boolean1".to_owned()), Some(Value::from(true)));
+            assert_eq!(m.get(&"string".to_owned()), Some(Value::from("hello Y")));
             assert_eq!(
-                m.get(&t, &"string".to_owned()),
-                Some(Value::from("hello Y"))
-            );
-            assert_eq!(
-                m.get(&t, &"object".to_owned()),
+                m.get(&"object".to_owned()),
                 Some(Value::from({
                     let mut m = HashMap::new();
                     let mut n = HashMap::new();
@@ -351,12 +346,12 @@ mod test {
             );
         }
 
-        compare_all(&t1, &m1);
+        compare_all(&m1);
 
-        let update = d1.encode_state_as_update_v1(&t1);
-        d2.apply_update_v1(&mut t2, update.as_slice());
+        let update = t1.encode_update_v1(); // d1.encode_state_as_update_v1
+        t2.apply_update(Update::decode_v1(update.as_slice()));
 
-        compare_all(&t2, &m2);
+        compare_all(&m2);
     }
 
     #[test]
@@ -368,19 +363,16 @@ mod test {
         m1.insert(&mut t1, "stuff".to_owned(), "stuffy");
         m1.insert(&mut t1, "null".to_owned(), None as Option<String>);
 
-        let update = d1.encode_state_as_update_v1(&t1);
+        let update = t1.encode_update_v1(); //d1.encode_state_as_update_v1(&t1);
 
         let d2 = Doc::with_client_id(2);
         let mut t2 = d2.transact();
 
-        d2.apply_update_v1(&mut t2, update.as_slice());
+        t2.apply_update(Update::decode_v1(update.as_slice()));
 
         let m2 = t2.get_map("map");
-        assert_eq!(
-            m2.get(&t2, &"stuff".to_owned()),
-            Some(Value::from("stuffy"))
-        );
-        assert_eq!(m2.get(&t2, &"null".to_owned()), Some(Value::Any(Any::Null)));
+        assert_eq!(m2.get(&"stuff".to_owned()), Some(Value::from("stuffy")));
+        assert_eq!(m2.get(&"null".to_owned()), Some(Value::Any(Any::Null)));
     }
 
     #[test]
@@ -396,14 +388,14 @@ mod test {
         m1.insert(&mut t1, "stuff".to_owned(), "c0");
         m2.insert(&mut t2, "stuff".to_owned(), "c1");
 
-        let u1 = d1.encode_state_as_update_v1(&t1);
-        let u2 = d2.encode_state_as_update_v1(&t2);
+        let u1 = t1.encode_update_v1(); //d1.encode_state_as_update_v1(&t1);
+        let u2 = t2.encode_update_v1(); //d2.encode_state_as_update_v1(&t2);
 
-        d1.apply_update_v1(&mut t1, u2.as_slice());
-        d2.apply_update_v1(&mut t2, u1.as_slice());
+        t1.apply_update(Update::decode_v1(u2.as_slice()));
+        t2.apply_update(Update::decode_v1(u1.as_slice()));
 
-        assert_eq!(m1.get(&t1, &"stuff".to_owned()), Some(Value::from("c1")));
-        assert_eq!(m2.get(&t2, &"stuff".to_owned()), Some(Value::from("c1")));
+        assert_eq!(m1.get(&"stuff".to_owned()), Some(Value::from("c1")));
+        assert_eq!(m2.get(&"stuff".to_owned()), Some(Value::from("c1")));
     }
 
     #[test]
@@ -417,19 +409,19 @@ mod test {
 
         m1.insert(&mut t1, key1.clone(), "c0");
         m1.insert(&mut t1, key2.clone(), "c1");
-        assert_eq!(m1.len(&t1), 2);
+        assert_eq!(m1.len(), 2);
 
         // remove 'stuff'
         assert_eq!(m1.remove(&mut t1, &key1), Some(Value::from("c0")));
-        assert_eq!(m1.len(&t1), 1);
+        assert_eq!(m1.len(), 1);
 
         // remove 'stuff' again - nothing should happen
         assert_eq!(m1.remove(&mut t1, &key1), None);
-        assert_eq!(m1.len(&t1), 1);
+        assert_eq!(m1.len(), 1);
 
         // remove 'other-stuff'
         assert_eq!(m1.remove(&mut t1, &key2), Some(Value::from("c1")));
-        assert_eq!(m1.len(&t1), 0);
+        assert_eq!(m1.len(), 0);
     }
 
     #[test]
@@ -442,20 +434,20 @@ mod test {
         m1.insert(&mut t1, "key2".to_owned(), "c1");
         m1.clear(&mut t1);
 
-        assert_eq!(m1.len(&t1), 0);
-        assert_eq!(m1.get(&t1, &"key1".to_owned()), None);
-        assert_eq!(m1.get(&t1, &"key2".to_owned()), None);
+        assert_eq!(m1.len(), 0);
+        assert_eq!(m1.get(&"key1".to_owned()), None);
+        assert_eq!(m1.get(&"key2".to_owned()), None);
 
         let d2 = Doc::with_client_id(2);
         let mut t2 = d2.transact();
 
-        let u1 = d1.encode_state_as_update_v1(&t1);
-        d2.apply_update_v1(&mut t2, u1.as_slice());
+        let u1 = t1.encode_update_v1(); //d1.encode_state_as_update_v1(&t1);
+        t2.apply_update(Update::decode_v1(u1.as_slice()));
 
         let m2 = t2.get_map("map");
-        assert_eq!(m2.len(&t2), 0);
-        assert_eq!(m2.get(&t2, &"key1".to_owned()), None);
-        assert_eq!(m2.get(&t2, &"key2".to_owned()), None);
+        assert_eq!(m2.len(), 0);
+        assert_eq!(m2.get(&"key1".to_owned()), None);
+        assert_eq!(m2.get(&"key2".to_owned()), None);
     }
 
     #[test]
@@ -505,19 +497,19 @@ mod test {
             let map = txn.get_map("map");
 
             assert_eq!(
-                map.get(&txn, &"key1".to_owned()),
+                map.get(&"key1".to_owned()),
                 None,
                 "'key1' entry for peer {} should be removed",
                 doc.client_id
             );
             assert_eq!(
-                map.get(&txn, &"key2".to_owned()),
+                map.get(&"key2".to_owned()),
                 None,
                 "'key2' entry for peer {} should be removed",
                 doc.client_id
             );
             assert_eq!(
-                map.len(&txn),
+                map.len(),
                 0,
                 "all entries for peer {} should be removed",
                 doc.client_id
@@ -554,7 +546,7 @@ mod test {
             let map = txn.get_map("map");
 
             assert_eq!(
-                map.get(&txn, &"stuff".to_owned()),
+                map.get(&"stuff".to_owned()),
                 Some(Value::from("c3")),
                 "peer {} - map entry resolved to unexpected value",
                 doc.client_id
@@ -611,7 +603,7 @@ mod test {
             let map = txn.get_map("map");
 
             assert_eq!(
-                map.get(&txn, &"key1".to_owned()),
+                map.get(&"key1".to_owned()),
                 None,
                 "entry 'key1' on peer {} should be removed",
                 doc.client_id

@@ -7,7 +7,7 @@ use crate::utils::client_hasher::ClientHasher;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::hash::BuildHasherDefault;
-use std::ops::Range;
+use std::ops::{DerefMut, Range};
 
 // Note: use native Rust [Range](https://doc.rust-lang.org/std/ops/struct.Range.html)
 // as it's left-inclusive/right-exclusive and defines the exact capabilities we care about here.
@@ -99,14 +99,26 @@ impl IdRange {
                     if r.start > range.end {
                         *self = IdRange::Fragmented(vec![range, r.clone()])
                     } else {
-                        r.end = range.end; // two ranges overlap, we can eagerly merge them
+                        // two ranges overlap - merge them
+                        r.end = range.end.max(r.end);
+                        r.start = range.start.min(r.start);
                     }
                 } else {
                     *self = IdRange::Fragmented(vec![r.clone(), range])
                 }
             }
             IdRange::Fragmented(ranges) => {
-                ranges.push(range);
+                if ranges.is_empty() {
+                    *self = IdRange::Continuous(range);
+                } else {
+                    let last_idx = ranges.len() - 1;
+                    let last = &mut ranges[last_idx];
+                    if last.end >= range.start {
+                        last.end = last.end.max(range.end);
+                    } else {
+                        ranges.push(range);
+                    }
+                }
             }
         }
     }
@@ -475,21 +487,18 @@ impl DeleteSet {
                     // start with merging the item next to the last deleted item
                     let mut si = (blocks.len() - 1)
                         .min(1 + blocks.find_pivot(r.end - 1).unwrap_or_default());
-                    let mut block = &blocks[si];
+                    let mut block = blocks.get(si);
                     while si > 0 && block.id().clock >= r.start {
                         if let Some(compaction) = blocks.squash_left(si) {
-                            if let Some(right) = compaction.new_right {
-                                right.fix_pivot((right.pivot().max(1) - 1) as u32);
-                                if let Block::Item(item) =
-                                    store.blocks.get_block_mut(&right).unwrap()
-                                {
+                            if let Some(mut right) = compaction.new_right {
+                                if let Block::Item(item) = right.deref_mut() {
                                     item.left = Some(compaction.replacement);
                                 }
                                 blocks = store.blocks.get_mut(client).unwrap();
                             }
                         }
                         si -= 1;
-                        block = &blocks[si];
+                        block = blocks.get(si);
                     }
                 }
             }

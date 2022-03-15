@@ -16,7 +16,7 @@ export const testInserts = tc => {
 
     const expected = [1, 2.5, 'hello', ['world'], true, {key:'value'}]
 
-    var value = d1.transact(txn => x.toJson(txn))
+    var value = x.toJson()
     t.compare(value, expected)
 
     const d2 = new Y.YDoc(2)
@@ -24,7 +24,7 @@ export const testInserts = tc => {
 
     exchangeUpdates([d1, d2])
 
-    value = d2.transact(txn => x.toJson(txn))
+    value = x.toJson()
     t.compare(value, expected)
 }
 
@@ -42,7 +42,7 @@ export const testInsertsNested = tc => {
 
     const expected = [1, 2, ['hello', 'world'], 3, 4]
 
-    var value = d1.transact(txn => x.toJson(txn))
+    var value = x.toJson()
     t.compare(value, expected)
 
     const d2 = new Y.YDoc()
@@ -50,7 +50,7 @@ export const testInsertsNested = tc => {
 
     exchangeUpdates([d1, d2])
 
-    value = d2.transact(txn => x.toJson(txn))
+    value = x.toJson()
     t.compare(value, expected)
 }
 
@@ -67,7 +67,7 @@ export const testDelete = tc => {
 
     const expected = [1, true]
 
-    var value = d1.transact(txn => x.toJson(txn))
+    var value = x.toJson()
     t.compare(value, expected)
 
     const d2 = new Y.YDoc(2)
@@ -75,7 +75,7 @@ export const testDelete = tc => {
 
     exchangeUpdates([d1, d2])
 
-    value = d2.transact(txn => x.toJson(txn))
+    value = x.toJson()
     t.compare(value, expected)
 }
 
@@ -89,11 +89,11 @@ export const testGet = tc => {
     d1.transact(txn => x.insert(txn, 0, [1, 2, true]))
     d1.transact(txn => x.insert(txn, 1, ['hello', 'world']));
 
-    const zeroed = d1.transact(txn => x.get(txn, 0))
-    const first = d1.transact(txn => x.get(txn, 1))
-    const second = d1.transact(txn => x.get(txn, 2))
-    const third = d1.transact(txn => x.get(txn, 3))
-    const fourth = d1.transact(txn => x.get(txn, 4))
+    const zeroed = x.get(0)
+    const first = x.get(1)
+    const second = x.get(2)
+    const third = x.get(3)
+    const fourth = x.get(4)
 
     t.compare(zeroed, 1)
     t.compare(first, 'hello')
@@ -103,7 +103,7 @@ export const testGet = tc => {
 
     t.fails(() => {
         // should fail because it's outside of the bounds
-        d1.transact(txn => x.get(txn, 5))
+        x.get(5)
     })
 }
 
@@ -117,15 +117,10 @@ export const testIterator = tc => {
     d1.transact(txn => x.insert(txn, 0, [1, 2, 3]))
     t.compare(x.length, 3)
 
-    const txn = d1.beginTransaction()
-    try {
-        let i = 1;
-        for (let v of x.values(txn)) {
-            t.compare(v, i)
-            i++
-        }
-    } finally {
-        txn.free()
+    let i = 1;
+    for (let v of x.values()) {
+        t.compare(v, i)
+        i++
     }
 }
 
@@ -137,7 +132,6 @@ export const testObserver = tc => {
     /**
      * @param {Y.YArray} tc
      */
-    const getValue = (x) => d1.transact(txn => x.toJson(txn))
     const x = d1.getArray('test')
     let target = null
     let delta = null
@@ -148,21 +142,21 @@ export const testObserver = tc => {
 
     // insert initial data to an empty YArray
     d1.transact(txn => x.insert(txn, 0, [1,2,3,4]))
-    t.compare(getValue(target), getValue(x))
+    t.compare(target.toJson(), x.toJson())
     t.compare(delta, [{insert: [1,2,3,4]}])
     target = null
     delta = null
 
     // remove 2 items from the middle
     d1.transact(txn => x.delete(txn, 1, 2))
-    t.compare(getValue(target), getValue(x))
+    t.compare(target.toJson(), x.toJson())
     t.compare(delta, [{retain:1}, {delete: 2}])
     target = null
     delta = null
 
     // insert new item in the middle
     d1.transact(txn => x.insert(txn, 1, [5]))
-    t.compare(getValue(target), getValue(x))
+    t.compare(target.toJson(), x.toJson())
     t.compare(delta, [{retain:1}, {insert: [5]}])
     target = null
     delta = null

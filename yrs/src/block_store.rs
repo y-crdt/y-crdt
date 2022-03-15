@@ -4,11 +4,10 @@ use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::client_hasher::ClientHasher;
 use crate::*;
-use std::cell::UnsafeCell;
 use std::collections::hash_map::Entry;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 use std::hash::BuildHasherDefault;
-use std::ops::Index;
+use std::ops::Deref;
 use std::rc::Rc;
 use std::vec::Vec;
 
@@ -173,7 +172,7 @@ impl Decode for Snapshot {
 
 /// A resizable list of blocks inserted by a single client.
 pub(crate) struct ClientBlockList {
-    list: Vec<UnsafeCell<block::Block>>,
+    list: Vec<Box<block::Block>>,
     integrated_len: usize,
 }
 
@@ -219,24 +218,14 @@ impl ClientBlockList {
         }
     }
 
-    pub fn get(&self, index: usize) -> &Block {
-        let ptr = self.list[index].get();
-        unsafe { &*ptr }
+    pub fn try_get(&self, index: usize) -> Option<BlockPtr> {
+        let block_ref = self.list.get(index)?;
+        Some(BlockPtr::from(block_ref))
     }
 
-    pub fn get_mut(&self, index: usize) -> &mut Block {
-        let ptr = self.list[index].get();
-        unsafe { &mut *ptr }
-    }
-
-    pub fn try_get(&self, index: usize) -> Option<&Block> {
-        let ptr = self.list.get(index)?.get();
-        Some(unsafe { &*ptr })
-    }
-
-    pub fn try_get_mut(&self, index: usize) -> Option<&mut Block> {
-        let ptr = self.list.get(index)?.get();
-        Some(unsafe { &mut *ptr })
+    pub fn get(&self, index: usize) -> BlockPtr {
+        let block_ref = &self.list[index];
+        BlockPtr::from(block_ref)
     }
 
     /// Gets the last clock sequence number representing the state of inserts made by client
@@ -255,27 +244,15 @@ impl ClientBlockList {
     /// Returns first block on the list - since we only initialize [ClientBlockList]
     /// when we're sure, we're about to add new elements to it, it always should
     /// stay non-empty.
-    pub(crate) fn first(&self) -> &Block {
+    pub(crate) fn first(&self) -> BlockPtr {
         self.get(0)
     }
 
     /// Returns last block on the list - since we only initialize [ClientBlockList]
     /// when we're sure, we're about to add new elements to it, it always should
     /// stay non-empty.
-    pub(crate) fn last(&self) -> &Block {
+    pub(crate) fn last(&self) -> BlockPtr {
         self.get(self.integrated_len - 1)
-    }
-
-    /// Returns a mutable block reference, given a pointer identifier of that block.
-    /// Returns `None` if no block with such reference could be found.
-    pub(crate) fn find(&mut self, ptr: &BlockPtr) -> Option<&mut Block> {
-        match self.try_get_mut(ptr.pivot()) {
-            Some(block) if block.contains(&ptr.id) => return Some(block),
-            _ => {
-                let pivot = self.find_pivot(ptr.id.clock)?;
-                self.try_get_mut(pivot)
-            }
-        }
     }
 
     /// Given a block's identifier clock value, return an offset under which this block could be
@@ -316,21 +293,21 @@ impl ClientBlockList {
     /// list. Clocks are considered to work in left-side inclusive way, meaning that block with
     /// an ID (<client-id>, 0) and length 2, with contain all elements with clock values
     /// corresponding to {0,1} but not 2.
-    pub(crate) fn find_block(&self, clock: u32) -> Option<&Block> {
+    pub(crate) fn get_block(&self, clock: u32) -> Option<BlockPtr> {
         let idx = self.find_pivot(clock)?;
         self.try_get(idx)
     }
 
     /// Pushes a new block at the end of this block list.
-    pub(crate) fn push(&mut self, block: block::Block) {
-        self.list.push(UnsafeCell::new(block));
+    pub(crate) fn push(&mut self, block: Box<block::Block>) {
+        self.list.push(block);
         self.integrated_len += 1;
     }
 
     /// Inserts a new block at a given `index` position within this block list. This method may
     /// panic if `index` is greater than a length of the list.
-    fn insert(&mut self, index: usize, block: block::Block) {
-        self.list.insert(index, UnsafeCell::new(block));
+    fn insert(&mut self, index: usize, block: Box<block::Block>) {
+        self.list.insert(index, block);
         self.integrated_len += 1;
     }
 
@@ -356,12 +333,11 @@ impl ClientBlockList {
     pub(crate) fn squash_left(&mut self, index: usize) -> Option<SquashResult> {
         let replacement = {
             let (l, r) = self.list.split_at_mut(index);
-            let left = unsafe { &mut *l[index - 1].get() };
-            let right = unsafe { &*r[0].get() };
-            if left.is_deleted() == right.is_deleted() && left.same_type(right) {
+            let mut left = BlockPtr::from(&mut l[index - 1]);
+            let right = BlockPtr::from(&r[0]);
+            if left.is_deleted() == right.is_deleted() && left.same_type(right.deref()) {
                 if left.try_squash(right) {
-                    let new_ptr = BlockPtr::new(left.last_id(), index as u32 - 1);
-                    Some(new_ptr)
+                    Some(left)
                 } else {
                     None
                 }
@@ -371,9 +347,9 @@ impl ClientBlockList {
         };
 
         if let Some(replacement) = replacement {
-            let block = self.list.remove(index).into_inner();
+            let block = self.list.remove(index);
             self.integrated_len -= 1;
-            if let Block::Item(item) = block {
+            if let Block::Item(item) = *block {
                 return Some(SquashResult {
                     parent: item.parent,
                     parent_sub: item.parent_sub,
@@ -407,22 +383,14 @@ impl Default for ClientBlockList {
     }
 }
 
-impl Index<usize> for ClientBlockList {
-    type Output = block::Block;
-
-    fn index(&self, index: usize) -> &Self::Output {
-        self.get(index)
-    }
-}
-
-pub(crate) struct ClientBlockListIter<'a>(std::slice::Iter<'a, UnsafeCell<block::Block>>);
+pub(crate) struct ClientBlockListIter<'a>(std::slice::Iter<'a, Box<block::Block>>);
 
 impl<'a> Iterator for ClientBlockListIter<'a> {
     type Item = &'a Block;
 
     fn next(&mut self) -> Option<Self::Item> {
         let next = self.0.next()?;
-        Some(unsafe { &*next.get() })
+        Some(next.as_ref())
     }
 }
 
@@ -494,48 +462,35 @@ impl BlockStore {
         StateVector::from(self)
     }
 
-    /// Returns mutable reference to an item, given its pointer. Returns `None` if not such block
-    /// could be found.
-    pub(crate) fn get_item_mut(&self, ptr: &block::BlockPtr) -> Option<&mut block::Item> {
-        let block = self.get_block_mut(ptr)?;
-        block.as_item_mut()
-    }
-
     /// Returns immutable reference to a block, given its pointer. Returns `None` if not such
     /// block could be found.
-    pub(crate) fn get_block(&self, ptr: &block::BlockPtr) -> Option<&block::Block> {
-        let clients = self.clients.get(&ptr.id.client)?;
-        if let Some(block) = clients.try_get(ptr.pivot()) {
-            if block.contains(&ptr.id) {
-                return Some(&*block);
-            }
-        }
-        // ptr.pivot missed - go slow path to find it
-        let pivot = clients.find_pivot(ptr.id.clock)?;
-        ptr.fix_pivot(pivot as u32);
+    pub(crate) fn get_block(&self, id: &ID) -> Option<BlockPtr> {
+        let clients = self.clients.get(&id.client)?;
+        let pivot = clients.find_pivot(id.clock)?;
         clients.try_get(pivot)
     }
 
-    /// Returns immutable reference to a block, given its pointer. Returns `None` if not such
-    /// block could be found.
-    pub(crate) fn get_block_mut(&self, ptr: &block::BlockPtr) -> Option<&mut block::Block> {
-        let clients = self.clients.get(&ptr.id.client)?;
-        if let Some(block) = clients.try_get_mut(ptr.pivot()) {
-            if block.contains(&ptr.id) {
-                return Some(&mut *block);
-            }
+    pub(crate) fn get_item_clean_start(&mut self, id: &ID) -> Option<BlockPtr> {
+        let blocks = self.clients.get_mut(&id.client)?;
+        let mut index = blocks.find_pivot(id.clock)?;
+        let mut ptr = blocks.get(index);
+        if let Some(new) = ptr.splice(id.clock - ptr.id().clock) {
+            blocks.insert(index + 1, new);
+            index += 1;
         }
-        // ptr.pivot missed - go slow path to find it
-        let pivot = clients.find_pivot(ptr.id.clock)?;
-        ptr.fix_pivot(pivot as u32);
-        clients.try_get_mut(pivot)
+        Some(blocks.get(index))
     }
 
-    /// Returns immutable reference to an item, given its pointer. Returns `None` if not such
-    /// block could be found.
-    pub(crate) fn get_item(&self, ptr: &block::BlockPtr) -> Option<&block::Item> {
-        let block = self.get_block(ptr)?;
-        block.as_item()
+    pub(crate) fn get_item_clean_end(&mut self, id: &ID) -> Option<BlockPtr> {
+        let blocks = self.clients.get_mut(&id.client)?;
+        let index = blocks.find_pivot(id.clock)?;
+        let mut block = blocks.get(index);
+        let block_id = block.id();
+        if id.clock != block_id.clock + block.len() - 1 {
+            let new = block.splice(1 + id.clock - block_id.clock).unwrap();
+            blocks.insert(index + 1, new);
+        }
+        Some(BlockPtr::from(block))
     }
 
     /// Returns the last observed clock sequence number for a given `client`. This is exclusive
@@ -571,54 +526,15 @@ impl BlockStore {
 
     /// Given block pointer, tries to split it, returning a true, if block was split in result of
     /// calling this action, and false otherwise.
-    ///
-    /// Examples:
-    /// 1. Splitting block `(<1#1>, len: 3)` by ptr: `<1#3>` will result in constructing two
-    /// blocks: `(<1#1>, len: 2)` and `(<1#3>, len: 1)` and return `true`.
-    /// 1. Splitting block `(<1#1>, len: 3)` by ptr: `<1#1>` will result in preserving the block
-    /// structure and return `false`.
-    pub fn split_block(&mut self, ptr: &BlockPtr) -> bool {
-        let mut pivot = ptr.pivot();
-        if let Some(mut blocks) = self.clients.get_mut(&ptr.id.client) {
-            let block: &mut Block = {
-                let found = blocks.try_get_mut(pivot).and_then(|b| {
-                    if ptr.id.clock >= b.id().clock && ptr.id.clock < b.clock_end() {
-                        Some(&mut *b)
-                    } else {
-                        None
-                    }
-                });
-                if let Some(block) = found {
-                    block
-                } else {
-                    // search by pivot missed: perform standard lookup to find correct block
-                    if let Some(p) = blocks.find_pivot(ptr.id.clock) {
-                        pivot = p;
-                        blocks.get_mut(pivot)
-                    } else {
-                        return false;
-                    }
-                }
-            };
+    pub fn split_block(&mut self, mut block: BlockPtr, offset: u32) -> Option<BlockPtr> {
+        let id = block.id().clone();
+        let blocks = self.clients.get_mut(&id.client)?;
+        let index = blocks.find_pivot(id.clock)?;
+        let mut right = block.splice(offset)?;
+        let right_ptr = BlockPtr::from(&mut right);
+        blocks.insert(index + 1, right);
 
-            match block {
-                Block::Item(item) => {
-                    let len = item.len();
-                    if ptr.id.clock > item.id.clock && ptr.id.clock <= item.id.clock + len {
-                        let index = pivot + 1;
-                        let diff = ptr.id.clock - item.id.clock;
-                        let right_split = item.splice(diff).unwrap();
-                        blocks.insert(index, Block::Item(right_split));
-                        true
-                    } else {
-                        false
-                    }
-                }
-                _ => false,
-            }
-        } else {
-            false
-        }
+        Some(right_ptr)
     }
 }
 
@@ -628,8 +544,8 @@ impl std::fmt::Display for ClientBlockList {
         let mut i = 0;
         writeln!(f, "")?;
         while i < self.list.len() {
-            let block = &self[i];
-            writeln!(f, "\t\t{}", block)?;
+            let block = self.get(i);
+            writeln!(f, "\t\t{}", block.deref())?;
             if i == self.integrated_len {
                 writeln!(f, "---")?;
             }

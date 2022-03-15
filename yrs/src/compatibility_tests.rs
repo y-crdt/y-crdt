@@ -1,4 +1,4 @@
-use crate::block::{Block, BlockPtr, Item, ItemContent};
+use crate::block::{Item, ItemContent};
 use crate::id_set::{DeleteSet, IdSet};
 use crate::store::Store;
 use crate::types::{Branch, TypePtr, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT};
@@ -37,7 +37,7 @@ fn text_insert_delete() {
     ];
     const CLIENT_ID: u64 = 264992024;
     let expected_blocks = vec![
-        Block::Item(Item::new(
+        Item::new(
             ID::new(CLIENT_ID, 0),
             None,
             None,
@@ -46,9 +46,8 @@ fn text_insert_delete() {
             TypePtr::Named("type".into()),
             None,
             ItemContent::Deleted(3),
-        ))
-        .into(),
-        Block::Item(Item::new(
+        ),
+        Item::new(
             ID::new(CLIENT_ID, 3),
             None,
             None,
@@ -57,9 +56,8 @@ fn text_insert_delete() {
             TypePtr::Unknown,
             None,
             ItemContent::String("ab".into()),
-        ))
-        .into(),
-        Block::Item(Item::new(
+        ),
+        Item::new(
             ID::new(CLIENT_ID, 5),
             None,
             Some(ID::new(CLIENT_ID, 4)),
@@ -68,9 +66,8 @@ fn text_insert_delete() {
             TypePtr::Unknown,
             None,
             ItemContent::Deleted(1),
-        ))
-        .into(),
-        Block::Item(Item::new(
+        ),
+        Item::new(
             ID::new(CLIENT_ID, 6),
             None,
             Some(ID::new(CLIENT_ID, 2)),
@@ -79,9 +76,8 @@ fn text_insert_delete() {
             TypePtr::Unknown,
             None,
             ItemContent::Deleted(1),
-        ))
-        .into(),
-        Block::Item(Item::new(
+        ),
+        Item::new(
             ID::new(CLIENT_ID, 7),
             None,
             Some(ID::new(CLIENT_ID, 6)),
@@ -90,8 +86,7 @@ fn text_insert_delete() {
             TypePtr::Unknown,
             None,
             ItemContent::String("hi".into()),
-        ))
-        .into(),
+        ),
     ];
     let expected_ds = {
         let mut ds = IdSet::new();
@@ -105,15 +100,17 @@ fn text_insert_delete() {
     let mut doc = Doc::new();
     let _sub = doc.on_update(move |_, e| {
         for (actual, expected) in e.update.blocks.blocks().zip(expected_blocks.as_slice()) {
-            assert_eq!(actual, expected);
+            if let BlockCarrier::Block(block) = actual {
+                assert_eq!(block, expected);
+            }
         }
         assert_eq!(&e.update.delete_set, &expected_ds);
         setter.set(true);
     });
     let mut txn = doc.transact();
     let txt = txn.get_text("type");
-    doc.apply_update_v1(&mut txn, update);
-    assert_eq!(txt.to_string(&txn), "abhi".to_string());
+    txn.apply_update(Update::decode_v1(update));
+    assert_eq!(txt.to_string(), "abhi".to_string());
     assert!(visited.get());
 }
 
@@ -134,8 +131,8 @@ fn map_set() {
         49, 40, 1, 4, 116, 101, 115, 116, 2, 107, 50, 1, 119, 2, 118, 50, 0,
     ];
     const CLIENT_ID: u64 = 880095927;
-    let expected = &[
-        &Block::Item(Item::new(
+    let expected = vec![
+        Item::new(
             ID::new(CLIENT_ID, 0),
             None,
             None,
@@ -144,9 +141,9 @@ fn map_set() {
             TypePtr::Named("test".into()),
             Some("k1".into()),
             ItemContent::Any(vec![Any::String("v1".into())]),
-        ))
+        )
         .into(),
-        &Block::Item(Item::new(
+        Item::new(
             ID::new(CLIENT_ID, 1),
             None,
             None,
@@ -155,7 +152,7 @@ fn map_set() {
             TypePtr::Named("test".into()),
             Some("k2".into()),
             ItemContent::Any(vec![Any::String("v2".into())]),
-        ))
+        )
         .into(),
     ];
 
@@ -178,7 +175,7 @@ fn array_insert() {
         1, 1, 199, 195, 202, 51, 0, 8, 1, 4, 116, 101, 115, 116, 2, 119, 1, 97, 119, 1, 98, 0,
     ];
     const CLIENT_ID: u64 = 108175815;
-    let expected = &[&Block::Item(Item::new(
+    let expected = vec![Item::new(
         ID::new(CLIENT_ID, 0),
         None,
         None,
@@ -187,7 +184,7 @@ fn array_insert() {
         TypePtr::Named("test".into()),
         None,
         ItemContent::Any(vec![Any::String("a".into()), Any::String("b".into())]),
-    ))
+    )
     .into()];
 
     roundtrip(payload, expected);
@@ -212,8 +209,8 @@ fn xml_fragment_insert() {
         101, 0,
     ];
     const CLIENT_ID: u64 = 517330651;
-    let expected = &[
-        &Block::Item(Item::new(
+    let expected = vec![
+        Item::new(
             ID::new(CLIENT_ID, 0),
             None,
             None,
@@ -221,14 +218,10 @@ fn xml_fragment_insert() {
             None,
             TypePtr::Named("fragment-name".into()),
             None,
-            ItemContent::Type(Branch::new(
-                TypePtr::Id(BlockPtr::from(ID::new(CLIENT_ID, 0))),
-                TYPE_REFS_XML_TEXT,
-                None,
-            )),
-        ))
+            ItemContent::Type(Branch::new(TYPE_REFS_XML_TEXT, None)),
+        )
         .into(),
-        &Block::Item(Item::new(
+        Item::new(
             ID::new(CLIENT_ID, 1),
             None,
             Some(ID::new(CLIENT_ID, 0)),
@@ -237,11 +230,10 @@ fn xml_fragment_insert() {
             TypePtr::Unknown,
             None,
             ItemContent::Type(Branch::new(
-                TypePtr::Id(BlockPtr::from(ID::new(CLIENT_ID, 1))),
                 TYPE_REFS_XML_ELEMENT,
                 Some("node-name".to_string()),
             )),
-        ))
+        )
         .into(),
     ];
 
@@ -279,10 +271,11 @@ fn state_vector() {
 /// Verify if given `payload` can be deserialized into series
 /// of `expected` blocks, then serialize them back and check
 /// if produced binary is equivalent to `payload`.
-fn roundtrip(payload: &[u8], expected: &[&BlockCarrier]) {
+fn roundtrip(payload: &[u8], expected: Vec<BlockCarrier>) {
     let u = Update::decode_v1(payload);
-    let blocks: Vec<_> = u.blocks.blocks().collect();
-    assert_eq!(blocks.as_slice(), expected);
+    let expected: Vec<&BlockCarrier> = expected.iter().collect();
+    let blocks: Vec<&BlockCarrier> = u.blocks.blocks().collect();
+    assert_eq!(blocks, expected);
 
     let store: Store = u.into();
     let serialized = store.encode_v1();
