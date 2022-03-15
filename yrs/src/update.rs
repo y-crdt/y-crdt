@@ -1040,8 +1040,8 @@ mod test {
         let binary1 = t1.encode_update_v1();
         let binary2 = t2.encode_update_v1();
 
-        d1.apply_update_v1(&mut t1, binary2.as_slice());
-        d2.apply_update_v1(&mut t2, binary1.as_slice());
+        t1.apply_update(Update::decode_v1(binary2.as_slice()));
+        t2.apply_update(Update::decode_v1(binary1.as_slice()));
 
         let u1 = Update::decode(&mut DecoderV1::new(Cursor::new(binary1.as_slice())));
         let u2 = Update::decode(&mut DecoderV1::new(Cursor::new(binary2.as_slice())));
