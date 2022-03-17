@@ -8,7 +8,7 @@ use crate::store::Store;
 use crate::types::array::Array;
 use crate::types::xml::{XmlElement, XmlText};
 use crate::types::{
-    BranchPtr, Map, Text, TypePtr, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
+    BranchPtr, Event, Map, Text, TypePtr, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
     TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT,
 };
 use crate::update::Update;
@@ -472,42 +472,60 @@ impl Transaction {
         // 2. emit 'beforeObserverCalls'
         // 3. for each change observed by the transaction call 'afterTransaction'
         if !self.changed.is_empty() {
+            let mut changed_parents: HashMap<BranchPtr, Vec<usize>> = HashMap::new();
+            let mut event_cache = Vec::new();
+
             for (ptr, subs) in self.changed.iter() {
                 if let TypePtr::Branch(branch) = ptr {
-                    if let Some(o) = branch.observers.as_ref() {
-                        o.publish(branch.clone(), self, subs.clone());
+                    if let Some(e) = branch.trigger(self, subs.clone()) {
+                        event_cache.push(e);
+
+                        let mut current = *branch;
+                        loop {
+                            if branch.deep_observers.is_some() {
+                                let entries = changed_parents.entry(current).or_default();
+                                entries.push(event_cache.len() - 1);
+                            }
+
+                            if let Some(Block::Item(item)) = branch.item.as_deref() {
+                                if let TypePtr::Branch(parent) = item.parent {
+                                    current = parent;
+                                    continue;
+                                }
+                            }
+
+                            break;
+                        }
                     }
                 }
             }
-        }
 
-        // deep observe events
-        todo!();
+            // deep observe events
+            for (&branch, events) in changed_parents.iter() {
+                // sort events by path length so that top-level events are fired first.
+                let mut sorted: Vec<&Event> = Vec::with_capacity(events.len());
 
-        /*
-        transaction.changedParentTypes.forEach((events, type) =>
-          fs.push(() => {
-            // We need to think about the possibility that the user transforms the
-            // Y.Doc in the event.
-            if (type._item === null || !type._item.deleted) {
-              events = events
-                .filter(event =>
-                  event.target._item === null || !event.target._item.deleted
-                )
-              events
-                .forEach(event => {
-                  event.currentTarget = type
-                })
-              // sort events by path length so that top-level events are fired first.
-              events
-                .sort((event1, event2) => event1.path.length - event2.path.length)
-              // We don't need to check for events.length
-              // because we know it has at least one element
-              callEventHandlerListeners(type._dEH, events, transaction)
+                for &i in events.iter() {
+                    let e = &mut event_cache[i];
+                    e.set_current_target(branch);
+                }
+
+                for &i in events.iter() {
+                    sorted.push(&event_cache[i]);
+                }
+
+                sorted.sort_by(|&a, &b| {
+                    let path1 = a.path();
+                    let path2 = b.path();
+                    path1.len().cmp(&path2.len())
+                });
+                // We don't need to check for events.length
+                // because we know it has at least one element
+                for e in sorted.iter_mut() {
+                    branch.trigger_deep(self, e);
+                }
             }
-          })
-        )
-         */
+        }
 
         // 4. try GC delete set
         if !store.options.skip_gc {
