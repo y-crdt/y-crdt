@@ -53,6 +53,22 @@ pub const TYPE_REFS_UNDEFINED: TypeRefs = 15;
 #[derive(Debug, Clone, Copy, Hash)]
 pub struct BranchPtr(NonNull<Branch>);
 
+impl BranchPtr {
+    pub(crate) fn trigger(
+        &self,
+        txn: &Transaction,
+        subs: HashSet<Option<Rc<str>>>,
+    ) -> Option<Event> {
+        let observers = self.observers.as_ref()?;
+        Some(observers.publish(*self, txn, subs))
+    }
+    pub(crate) fn trigger_deep(&self, txn: &Transaction, e: &Event) {
+        if let Some(observers) = self.deep_observers.as_ref() {
+            observers.publish(txn, e);
+        }
+    }
+}
+
 impl Into<TypePtr> for BranchPtr {
     fn into(self) -> TypePtr {
         TypePtr::Branch(self)
@@ -782,13 +798,33 @@ impl Observers {
         branch_ref: BranchPtr,
         txn: &Transaction,
         keys: HashSet<Option<Rc<str>>>,
-    ) {
+    ) -> Event {
         match self {
-            Observers::Text(eh) => eh.publish(txn, &TextEvent::new(branch_ref)),
-            Observers::Array(eh) => eh.publish(txn, &ArrayEvent::new(branch_ref)),
-            Observers::Map(eh) => eh.publish(txn, &MapEvent::new(branch_ref, keys)),
-            Observers::Xml(eh) => eh.publish(txn, &XmlEvent::new(branch_ref, keys)),
-            Observers::XmlText(eh) => eh.publish(txn, &XmlTextEvent::new(branch_ref, keys)),
+            Observers::Text(eh) => {
+                let e = TextEvent::new(branch_ref);
+                eh.publish(txn, &e);
+                Event::YText(e)
+            }
+            Observers::Array(eh) => {
+                let e = ArrayEvent::new(branch_ref);
+                eh.publish(txn, &e);
+                Event::YArray(e)
+            }
+            Observers::Map(eh) => {
+                let e = MapEvent::new(branch_ref, keys);
+                eh.publish(txn, &e);
+                Event::YMap(e)
+            }
+            Observers::Xml(eh) => {
+                let e = XmlEvent::new(branch_ref, keys);
+                eh.publish(txn, &e);
+                Event::YXmlElement(e)
+            }
+            Observers::XmlText(eh) => {
+                let e = XmlTextEvent::new(branch_ref, keys);
+                eh.publish(txn, &e);
+                Event::YXmlText(e)
+            }
         }
     }
 }
@@ -800,6 +836,7 @@ impl Observers {
 pub type Path = VecDeque<PathSegment>;
 
 /// A single segment of a [Path].
+#[derive(Debug, Clone, PartialEq)]
 pub enum PathSegment {
     /// Key segments are used to inform how to access child shared collections within a [Map] types.
     Key(Rc<str>),
@@ -998,6 +1035,16 @@ pub enum Event {
 }
 
 impl Event {
+    pub(crate) fn set_current_target(&mut self, target: BranchPtr) {
+        match self {
+            Event::YText(e) => e.current_target = target,
+            Event::YArray(e) => e.current_target = target,
+            Event::YMap(e) => e.current_target = target,
+            Event::YXmlElement(e) => e.current_target = target,
+            Event::YXmlText(e) => e.current_target = target,
+        }
+    }
+
     pub fn path(&self) -> Path {
         match self {
             Event::YText(e) => e.path(),
