@@ -745,7 +745,8 @@ impl BlockCarrier {
     pub(crate) fn same_type(&self, other: &BlockCarrier) -> bool {
         match (self, other) {
             (BlockCarrier::Skip(_), BlockCarrier::Skip(_)) => true,
-            (a, b) => a.same_type(b),
+            (BlockCarrier::Block(a), BlockCarrier::Block(b)) => a.same_type(b),
+            (_, _) => false,
         }
     }
     pub(crate) fn id(&self) -> &ID {
