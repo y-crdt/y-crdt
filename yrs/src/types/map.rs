@@ -1,14 +1,13 @@
 use crate::block::{Block, ItemContent, ItemPosition, Prelim};
-use crate::event::{EventHandler, Subscription};
+use crate::event::Subscription;
 use crate::types::{
-    event_keys, Branch, BranchPtr, Entries, EntryChange, Event, Observers, Path, Value,
-    TYPE_REFS_MAP,
+    event_keys, Branch, BranchPtr, Entries, EntryChange, Observers, Path, Value, TYPE_REFS_MAP,
 };
 use crate::*;
 use lib0::any::Any;
 use std::cell::UnsafeCell;
 use std::collections::{HashMap, HashSet};
-use std::ops::Deref;
+use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
 
 /// Collection used to store key-value entries in an unordered manner. Keys are always represented
@@ -158,28 +157,17 @@ impl Map {
             eh.unsubscribe(subscription_id);
         }
     }
-
-    pub fn observe_deep<F>(&mut self, f: F) -> Subscription<Event>
-    where
-        F: Fn(&Transaction, &Event) -> () + 'static,
-    {
-        let eh = self
-            .0
-            .deep_observers
-            .get_or_insert_with(EventHandler::default);
-        eh.subscribe(f)
-    }
-
-    pub fn unobserve_deep(&mut self, subscription_id: SubscriptionId) {
-        if let Some(eh) = self.0.deep_observers.as_mut() {
-            eh.unsubscribe(subscription_id);
-        }
-    }
 }
 
 impl AsRef<Branch> for Map {
     fn as_ref(&self) -> &Branch {
         self.0.deref()
+    }
+}
+
+impl AsMut<Branch> for Map {
+    fn as_mut(&mut self) -> &mut Branch {
+        self.0.deref_mut()
     }
 }
 

@@ -1,14 +1,13 @@
 use crate::block::{BlockPtr, ItemContent, ItemPosition, Prelim};
-use crate::event::{EventHandler, Subscription};
+use crate::event::Subscription;
 use crate::types::{
-    event_change_set, Branch, BranchPtr, Change, ChangeSet, Event, Observers, Path, Value,
-    TYPE_REFS_ARRAY,
+    event_change_set, Branch, BranchPtr, Change, ChangeSet, Observers, Path, Value, TYPE_REFS_ARRAY,
 };
 use crate::{SubscriptionId, Transaction, ID};
 use lib0::any::Any;
 use std::cell::UnsafeCell;
 use std::collections::{HashSet, VecDeque};
-use std::ops::Deref;
+use std::ops::{Deref, DerefMut};
 
 /// A collection used to store data in an indexed sequence structure. This type is internally
 /// implemented as a double linked list, which may squash values inserted directly one after another
@@ -150,28 +149,17 @@ impl Array {
             eh.unsubscribe(subscription_id);
         }
     }
-
-    pub fn observe_deep<F>(&mut self, f: F) -> Subscription<Event>
-    where
-        F: Fn(&Transaction, &Event) -> () + 'static,
-    {
-        let eh = self
-            .0
-            .deep_observers
-            .get_or_insert_with(EventHandler::default);
-        eh.subscribe(f)
-    }
-
-    pub fn unobserve_deep(&mut self, subscription_id: SubscriptionId) {
-        if let Some(eh) = self.0.deep_observers.as_mut() {
-            eh.unsubscribe(subscription_id);
-        }
-    }
 }
 
 impl AsRef<Branch> for Array {
     fn as_ref(&self) -> &Branch {
         self.0.deref()
+    }
+}
+
+impl AsMut<Branch> for Array {
+    fn as_mut(&mut self) -> &mut Branch {
+        self.0.deref_mut()
     }
 }
 
@@ -325,7 +313,7 @@ impl ArrayEvent {
 mod test {
     use crate::test_utils::{exchange_updates, run_scenario, RngExt};
     use crate::types::map::PrelimMap;
-    use crate::types::{Change, Value};
+    use crate::types::{Change, DeepObservable, Path, PathSegment, Value};
     use crate::{Doc, PrelimArray, Update, ID};
     use lib0::any::Any;
     use rand::prelude::StdRng;
@@ -985,12 +973,12 @@ mod test {
 
         let paths = Rc::new(RefCell::new(Vec::new()));
         let paths_copy = paths.clone();
-        let _sub = array.observe_deep(move |txn, e| {
+        array.insert(&mut doc.transact(), 0, PrelimMap::<String>::new());
+
+        let _sub = array.observe_deep(move |_txn, e| {
             let path = e.path();
-            println!("{:?}", path);
             paths_copy.borrow_mut().push(path);
         });
-        array.insert(&mut doc.transact(), 0, PrelimMap::<String>::new());
 
         {
             let mut txn = doc.transact();
@@ -999,16 +987,8 @@ mod test {
             array.insert(&mut txn, 0, 0);
         }
 
-        let mut i = 1;
-        let results = paths.borrow();
-        assert!(!results.is_empty());
-        while i < results.len() {
-            let a = &results[i - 1];
-            let b = &results[i];
-            assert!(
-                a.len() <= b.len(),
-                "path size increases, fire top-level events first"
-            );
-        }
+        let expected = &[Path::default(), Path::from([PathSegment::Index(1)])];
+        let actual = RefCell::borrow(&paths);
+        assert_eq!(actual.as_slice(), expected);
     }
 }

@@ -482,12 +482,12 @@ impl Transaction {
 
                         let mut current = *branch;
                         loop {
-                            if branch.deep_observers.is_some() {
+                            if current.deep_observers.is_some() {
                                 let entries = changed_parents.entry(current).or_default();
                                 entries.push(event_cache.len() - 1);
                             }
 
-                            if let Some(Block::Item(item)) = branch.item.as_deref() {
+                            if let Some(Block::Item(item)) = current.item.as_deref() {
                                 if let TypePtr::Branch(parent) = item.parent {
                                     current = parent;
                                     continue;
@@ -599,7 +599,7 @@ impl Transaction {
 
     pub(crate) fn add_changed_type(&mut self, parent: BranchPtr, parent_sub: Option<Rc<str>>) {
         let trigger = if let Some(ptr) = parent.item {
-            (ptr.id().clock < (self.before_state.get(&ptr.id().client))) && ptr.is_deleted()
+            (ptr.id().clock < self.before_state.get(&ptr.id().client)) && !ptr.is_deleted()
         } else {
             true
         };

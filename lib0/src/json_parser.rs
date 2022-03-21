@@ -437,7 +437,6 @@ mod test {
         // encode
         let mut buf = String::new();
         any.to_json(&mut buf);
-        println!("{}", buf);
         // decode
         Any::from_json(buf.as_str())
     }
