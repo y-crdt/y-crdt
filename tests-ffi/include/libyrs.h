@@ -1639,9 +1639,7 @@ unsigned int yxmltext_observe(const Branch *xml,
  * Returns a subscription ID which can be then used to unsubscribe this callback by using
  * `yunobserve_deep` function.
  */
-unsigned int yobserve_deep(const Branch *ytype,
-                           void *state,
-                           void (*cb)(void*, const struct YEvent*));
+unsigned int yobserve_deep(Branch *ytype, void *state, void (*cb)(void*, const struct YEvent*));
 
 /**
  * Releases a callback subscribed via `ytext_observe` function represented by passed
@@ -1677,7 +1675,7 @@ void yxmltext_unobserve(const Branch *xml, unsigned int subscription_id);
  * Releases a callback subscribed via `yobserve_deep` function represented by passed
  * observer parameter.
  */
-void yunobserve_deep(const Branch *ytype, unsigned int subscription_id);
+void yunobserve_deep(Branch *ytype, unsigned int subscription_id);
 
 /**
  * Returns a pointer to a shared collection, which triggered passed event `e`.
