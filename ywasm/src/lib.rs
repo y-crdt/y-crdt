@@ -14,8 +14,9 @@ use yrs::types::map::{MapEvent, MapIter};
 use yrs::types::text::TextEvent;
 use yrs::types::xml::{Attributes, TreeWalker, XmlEvent, XmlTextEvent};
 use yrs::types::{
-    Attrs, Branch, BranchPtr, Change, Delta, EntryChange, Path, PathSegment, TypeRefs, Value,
-    TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT,
+    Attrs, Branch, BranchPtr, Change, DeepObservable, Delta, EntryChange, Event, Path, PathSegment,
+    TypeRefs, Value, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT, TYPE_REFS_XML_ELEMENT,
+    TYPE_REFS_XML_TEXT,
 };
 use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1};
@@ -1053,6 +1054,15 @@ impl From<Subscription<XmlTextEvent>> for YXmlTextObserver {
     }
 }
 
+#[wasm_bindgen]
+pub struct YEventObserver(Subscription<Event>);
+
+impl From<Subscription<Event>> for YEventObserver {
+    fn from(o: Subscription<Event>) -> Self {
+        YEventObserver(o)
+    }
+}
+
 enum SharedType<T, P> {
     Integrated(T),
     Prelim(P),
@@ -1272,7 +1282,7 @@ impl YText {
 
     /// Subscribes to all operations happening over this instance of `YText`. All changes are
     /// batched and eventually triggered during transaction commit phase.
-    /// Returns an `YObserver` which, when free'd, will unsubscribe current callback.
+    /// Returns an `YTextObserver` which, when free'd, will unsubscribe current callback.
     #[wasm_bindgen(js_name = observe)]
     pub fn observe(&mut self, f: js_sys::Function) -> YTextObserver {
         match &mut *self.0.borrow_mut() {
@@ -1285,6 +1295,25 @@ impl YText {
                 .into(),
             SharedType::Prelim(_) => {
                 panic!("YText.observe is not supported on preliminary type.")
+            }
+        }
+    }
+
+    /// Subscribes to all operations happening over this Y shared type, as well as events in
+    /// shared types stored within this one. All changes are batched and eventually triggered
+    /// during transaction commit phase.
+    /// Returns an `YEventObserver` which, when free'd, will unsubscribe current callback.
+    #[wasm_bindgen(js_name = observeDeep)]
+    pub fn observe_deep(&mut self, f: js_sys::Function) -> YEventObserver {
+        match &mut *self.0.borrow_mut() {
+            SharedType::Integrated(v) => v
+                .observe_deep(move |txn, e| {
+                    let arg = event_into_js(txn, e);
+                    f.call1(&JsValue::UNDEFINED, &arg).unwrap();
+                })
+                .into(),
+            SharedType::Prelim(_) => {
+                panic!("YText.observeDeep is not supported on preliminary type.")
             }
         }
     }
@@ -1489,6 +1518,25 @@ impl YArray {
                 .into(),
             SharedType::Prelim(_) => {
                 panic!("YArray.observe is not supported on preliminary type.")
+            }
+        }
+    }
+
+    /// Subscribes to all operations happening over this Y shared type, as well as events in
+    /// shared types stored within this one. All changes are batched and eventually triggered
+    /// during transaction commit phase.
+    /// Returns an `YEventObserver` which, when free'd, will unsubscribe current callback.
+    #[wasm_bindgen(js_name = observeDeep)]
+    pub fn observe_deep(&mut self, f: js_sys::Function) -> YEventObserver {
+        match &mut *self.0.borrow_mut() {
+            SharedType::Integrated(v) => v
+                .observe_deep(move |txn, e| {
+                    let arg = event_into_js(txn, e);
+                    f.call1(&JsValue::UNDEFINED, &arg).unwrap();
+                })
+                .into(),
+            SharedType::Prelim(_) => {
+                panic!("YText.observeDeep is not supported on preliminary type.")
             }
         }
     }
@@ -1768,6 +1816,25 @@ impl YMap {
             }
         }
     }
+
+    /// Subscribes to all operations happening over this Y shared type, as well as events in
+    /// shared types stored within this one. All changes are batched and eventually triggered
+    /// during transaction commit phase.
+    /// Returns an `YEventObserver` which, when free'd, will unsubscribe current callback.
+    #[wasm_bindgen(js_name = observeDeep)]
+    pub fn observe_deep(&mut self, f: js_sys::Function) -> YEventObserver {
+        match &mut *self.0.borrow_mut() {
+            SharedType::Integrated(v) => v
+                .observe_deep(move |txn, e| {
+                    let arg = event_into_js(txn, e);
+                    f.call1(&JsValue::UNDEFINED, &arg).unwrap();
+                })
+                .into(),
+            SharedType::Prelim(_) => {
+                panic!("YText.observeDeep is not supported on preliminary type.")
+            }
+        }
+    }
 }
 
 #[wasm_bindgen]
@@ -1997,6 +2064,20 @@ impl YXmlElement {
             .observe(move |txn, e| {
                 let e = YXmlEvent::new(e, txn);
                 let arg: JsValue = e.into();
+                f.call1(&JsValue::UNDEFINED, &arg).unwrap();
+            })
+            .into()
+    }
+
+    /// Subscribes to all operations happening over this Y shared type, as well as events in
+    /// shared types stored within this one. All changes are batched and eventually triggered
+    /// during transaction commit phase.
+    /// Returns an `YEventObserver` which, when free'd, will unsubscribe current callback.
+    #[wasm_bindgen(js_name = observeDeep)]
+    pub fn observe_deep(&mut self, f: js_sys::Function) -> YEventObserver {
+        self.0
+            .observe_deep(move |txn, e| {
+                let arg = event_into_js(txn, e);
                 f.call1(&JsValue::UNDEFINED, &arg).unwrap();
             })
             .into()
@@ -2233,6 +2314,20 @@ impl YXmlText {
             })
             .into()
     }
+
+    /// Subscribes to all operations happening over this Y shared type, as well as events in
+    /// shared types stored within this one. All changes are batched and eventually triggered
+    /// during transaction commit phase.
+    /// Returns an `YEventObserver` which, when free'd, will unsubscribe current callback.
+    #[wasm_bindgen(js_name = observeDeep)]
+    pub fn observe_deep(&mut self, f: js_sys::Function) -> YEventObserver {
+        self.0
+            .observe_deep(move |txn, e| {
+                let arg = event_into_js(txn, e);
+                f.call1(&JsValue::UNDEFINED, &arg).unwrap();
+            })
+            .into()
+    }
 }
 
 #[repr(transparent)]
@@ -2416,6 +2511,16 @@ fn xml_into_js(v: Xml) -> JsValue {
     match v {
         Xml::Element(v) => YXmlElement(v).into(),
         Xml::Text(v) => YXmlText(v).into(),
+    }
+}
+
+fn event_into_js(txn: &Transaction, e: &Event) -> JsValue {
+    match e {
+        Event::Text(e) => YTextEvent::new(e, txn).into(),
+        Event::Array(e) => YArrayEvent::new(e, txn).into(),
+        Event::Map(e) => YMapEvent::new(e, txn).into(),
+        Event::XmlElement(e) => YXmlEvent::new(e, txn).into(),
+        Event::XmlText(e) => YXmlTextEvent::new(e, txn).into(),
     }
 }
 
