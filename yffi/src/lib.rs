@@ -2491,13 +2491,13 @@ pub unsafe extern "C" fn yxmltext_observe(
 /// `yunobserve_deep` function.
 #[no_mangle]
 pub unsafe extern "C" fn yobserve_deep(
-    ytype: *const Branch,
+    ytype: *mut Branch,
     state: *mut c_void,
     cb: extern "C" fn(*mut c_void, *const YEvent),
 ) -> c_uint {
     assert!(!ytype.is_null());
 
-    let mut branch = ytype.as_ref().unwrap();
+    let mut branch = ytype.as_mut().unwrap();
     let observer = branch.observe_deep(move |txn, e| {
         let e = YEvent::new(txn, e);
         cb(state, &e as *const YEvent);
@@ -2572,6 +2572,7 @@ pub union YEventContent {
 /// text changes made within a scope of corresponding transaction (see: `ytext_event_delta`) as
 /// well as navigation data used to identify a `YText` instance which triggered this event.
 #[repr(C)]
+#[derive(Copy, Clone)]
 pub struct YTextEvent {
     inner: *const c_void,
     pub txn: *const Transaction,
@@ -2601,6 +2602,7 @@ impl Deref for YTextEvent {
 /// content changes made within a scope of corresponding transaction (see: `yarray_event_delta`) as
 /// well as navigation data used to identify a `YArray` instance which triggered this event.
 #[repr(C)]
+#[derive(Copy, Clone)]
 pub struct YArrayEvent {
     inner: *const c_void,
     pub txn: *const Transaction,
@@ -2630,6 +2632,7 @@ impl Deref for YArrayEvent {
 /// key-value changes made within a scope of corresponding transaction (see: `ymap_event_keys`) as
 /// well as navigation data used to identify a `YMap` instance which triggered this event.
 #[repr(C)]
+#[derive(Copy, Clone)]
 pub struct YMapEvent {
     inner: *const c_void,
     pub txn: *const Transaction,
@@ -2660,6 +2663,7 @@ impl Deref for YMapEvent {
 /// (see: `yxmlelem_event_keys`) as well as child XML nodes changes (see: `yxmlelem_event_delta`)
 /// and navigation data used to identify a `YXmlElement` instance which triggered this event.
 #[repr(C)]
+#[derive(Copy, Clone)]
 pub struct YXmlEvent {
     inner: *const c_void,
     pub txn: *const Transaction,
@@ -2690,6 +2694,7 @@ impl Deref for YXmlEvent {
 /// (see: `yxmltext_event_keys`) as well as text edits (see: `yxmltext_event_delta`)
 /// and navigation data used to identify a `YXmlText` instance which triggered this event.
 #[repr(C)]
+#[derive(Copy, Clone)]
 pub struct YXmlTextEvent {
     inner: *const c_void,
     pub txn: *const Transaction,
@@ -2758,9 +2763,9 @@ pub unsafe extern "C" fn yxmltext_unobserve(xml: *const Branch, subscription_id:
 /// Releases a callback subscribed via `yobserve_deep` function represented by passed
 /// observer parameter.
 #[no_mangle]
-pub unsafe extern "C" fn yunobserve_deep(ytype: *const Branch, subscription_id: c_uint) {
+pub unsafe extern "C" fn yunobserve_deep(ytype: *mut Branch, subscription_id: c_uint) {
     assert!(!ytype.is_null());
-    let mut branch = ytype.as_ref().unwrap();
+    let mut branch = ytype.as_mut().unwrap();
     branch.unobserve_deep(subscription_id as SubscriptionId);
 }
 
