@@ -1,8 +1,8 @@
 use crate::block::{Block, BlockPtr, Item, ItemContent, ItemPosition};
 use crate::block_store::Snapshot;
-use crate::event::{EventHandler, Subscription};
+use crate::event::Subscription;
 use crate::transaction::Transaction;
-use crate::types::{Attrs, Branch, BranchPtr, Delta, Event, Observers, Path, Value};
+use crate::types::{Attrs, Branch, BranchPtr, Delta, Observers, Path, Value};
 use crate::*;
 use lib0::any::Any;
 use std::cell::UnsafeCell;
@@ -533,23 +533,6 @@ impl Text {
         }
     }
 
-    pub fn observe_deep<F>(&mut self, f: F) -> Subscription<Event>
-    where
-        F: Fn(&Transaction, &Event) -> () + 'static,
-    {
-        let eh = self
-            .0
-            .deep_observers
-            .get_or_insert_with(EventHandler::default);
-        eh.subscribe(f)
-    }
-
-    pub fn unobserve_deep(&mut self, subscription_id: SubscriptionId) {
-        if let Some(eh) = self.0.deep_observers.as_mut() {
-            eh.unsubscribe(subscription_id);
-        }
-    }
-
     pub(crate) fn update_current_attributes(attrs: &mut Attrs, key: &str, value: &Any) {
         if let Any::Null = value {
             attrs.remove(key);
@@ -679,6 +662,12 @@ impl From<BranchPtr> for Text {
 impl AsRef<Branch> for Text {
     fn as_ref(&self) -> &Branch {
         self.0.deref()
+    }
+}
+
+impl AsMut<Branch> for Text {
+    fn as_mut(&mut self) -> &mut Branch {
+        self.0.deref_mut()
     }
 }
 

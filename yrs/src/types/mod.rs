@@ -59,9 +59,20 @@ impl BranchPtr {
         txn: &Transaction,
         subs: HashSet<Option<Rc<str>>>,
     ) -> Option<Event> {
-        let observers = self.observers.as_ref()?;
-        Some(observers.publish(*self, txn, subs))
+        if let Some(observers) = self.observers.as_ref() {
+            Some(observers.publish(*self, txn, subs))
+        } else {
+            match self.type_ref() {
+                TYPE_REFS_TEXT => Some(Event::Text(TextEvent::new(*self))),
+                TYPE_REFS_MAP => Some(Event::Map(MapEvent::new(*self, subs))),
+                TYPE_REFS_ARRAY => Some(Event::Array(ArrayEvent::new(*self))),
+                TYPE_REFS_XML_TEXT => Some(Event::XmlText(XmlTextEvent::new(*self, subs))),
+                TYPE_REFS_XML_ELEMENT => Some(Event::XmlElement(XmlEvent::new(*self, subs))),
+                _ => None,
+            }
+        }
     }
+
     pub(crate) fn trigger_deep(&self, txn: &Transaction, e: &Event) {
         if let Some(observers) = self.deep_observers.as_ref() {
             observers.publish(txn, e);
@@ -205,7 +216,7 @@ impl std::fmt::Debug for Branch {
         f.debug_struct("Branch")
             .field("start", &self.start)
             .field("map", &self.map)
-            .field("ptr", &self.item)
+            .field("item", &self.item)
             .field("name", &self.name)
             .field("len", &self.block_len)
             .field("type_ref", &self.type_ref)
@@ -244,6 +255,13 @@ impl Branch {
     /// Returns an identifier of an underlying complex data type (eg. is it an Array or a Map).
     pub fn type_ref(&self) -> TypeRefs {
         self.type_ref & 0b1111
+    }
+
+    pub(crate) fn repair_type_ref(&mut self, type_ref: TypeRefs) {
+        if self.type_ref() == TYPE_REFS_UNDEFINED {
+            // cleanup the TYPE_REFS_UNDEFINED bytes and set a new type ref
+            self.type_ref = (type_ref & (!TYPE_REFS_UNDEFINED)) | type_ref;
+        }
     }
 
     /// Returns a length of an indexed sequence component of a current branch node.
@@ -476,6 +494,56 @@ impl Branch {
             }
         }
         path
+    }
+
+    pub(crate) fn observe_deep<F>(&mut self, f: F) -> Subscription<Event>
+    where
+        F: Fn(&Transaction, &Event) -> () + 'static,
+    {
+        let eh = self
+            .deep_observers
+            .get_or_insert_with(EventHandler::default);
+        eh.subscribe(f)
+    }
+
+    pub(crate) fn unobserve_deep(&mut self, subscription_id: SubscriptionId) {
+        if let Some(eh) = self.deep_observers.as_mut() {
+            eh.unsubscribe(subscription_id);
+        }
+    }
+}
+
+/// Trait implemented by all Y-types, allowing for observing events which are emitted by
+/// nested types.
+pub trait DeepObservable {
+    /// Subscribe a callback `f` for all events emitted by this and nested collaborative types.
+    /// Callback is accepting transaction which triggered that event and event itself, wrapped
+    /// within an [Event] structure.
+    ///
+    /// This method returns a subscription, which will automatically unsubscribe current callback
+    /// when dropped.
+    fn observe_deep<F>(&mut self, f: F) -> Subscription<Event>
+    where
+        F: Fn(&Transaction, &Event) -> () + 'static;
+
+    /// Unobserves callback identified by `subscription_id` (which can be obtained by consuming
+    /// [Subscription] using `into` cast).
+    fn unobserve_deep(&mut self, subscription_id: SubscriptionId);
+}
+
+impl<T> DeepObservable for T
+where
+    T: AsMut<Branch>,
+{
+    fn observe_deep<F>(&mut self, f: F) -> Subscription<Event>
+    where
+        F: Fn(&Transaction, &Event) -> () + 'static,
+    {
+        self.as_mut().observe_deep(f)
+    }
+
+    fn unobserve_deep(&mut self, subscription_id: SubscriptionId) {
+        self.as_mut().unobserve_deep(subscription_id)
     }
 }
 
@@ -803,27 +871,27 @@ impl Observers {
             Observers::Text(eh) => {
                 let e = TextEvent::new(branch_ref);
                 eh.publish(txn, &e);
-                Event::YText(e)
+                Event::Text(e)
             }
             Observers::Array(eh) => {
                 let e = ArrayEvent::new(branch_ref);
                 eh.publish(txn, &e);
-                Event::YArray(e)
+                Event::Array(e)
             }
             Observers::Map(eh) => {
                 let e = MapEvent::new(branch_ref, keys);
                 eh.publish(txn, &e);
-                Event::YMap(e)
+                Event::Map(e)
             }
             Observers::Xml(eh) => {
                 let e = XmlEvent::new(branch_ref, keys);
                 eh.publish(txn, &e);
-                Event::YXmlElement(e)
+                Event::XmlElement(e)
             }
             Observers::XmlText(eh) => {
                 let e = XmlTextEvent::new(branch_ref, keys);
                 eh.publish(txn, &e);
-                Event::YXmlText(e)
+                Event::XmlText(e)
             }
         }
     }
@@ -1026,42 +1094,46 @@ pub(crate) fn event_change_set(txn: &Transaction, start: Option<BlockPtr>) -> Ch
     ChangeSet::new(added, deleted, delta)
 }
 
+/// Generalized wrapper around events fired by specialized shared data types.
 pub enum Event {
-    YText(TextEvent),
-    YArray(ArrayEvent),
-    YMap(MapEvent),
-    YXmlElement(XmlEvent),
-    YXmlText(XmlTextEvent),
+    Text(TextEvent),
+    Array(ArrayEvent),
+    Map(MapEvent),
+    XmlElement(XmlEvent),
+    XmlText(XmlTextEvent),
 }
 
 impl Event {
     pub(crate) fn set_current_target(&mut self, target: BranchPtr) {
         match self {
-            Event::YText(e) => e.current_target = target,
-            Event::YArray(e) => e.current_target = target,
-            Event::YMap(e) => e.current_target = target,
-            Event::YXmlElement(e) => e.current_target = target,
-            Event::YXmlText(e) => e.current_target = target,
+            Event::Text(e) => e.current_target = target,
+            Event::Array(e) => e.current_target = target,
+            Event::Map(e) => e.current_target = target,
+            Event::XmlElement(e) => e.current_target = target,
+            Event::XmlText(e) => e.current_target = target,
         }
     }
 
+    /// Returns a path from root type to a shared type which triggered current [Event]. This path
+    /// consists of string names or indexes, which can be used to access nested type.
     pub fn path(&self) -> Path {
         match self {
-            Event::YText(e) => e.path(),
-            Event::YArray(e) => e.path(),
-            Event::YMap(e) => e.path(),
-            Event::YXmlElement(e) => e.path(),
-            Event::YXmlText(e) => e.path(),
+            Event::Text(e) => e.path(),
+            Event::Array(e) => e.path(),
+            Event::Map(e) => e.path(),
+            Event::XmlElement(e) => e.path(),
+            Event::XmlText(e) => e.path(),
         }
     }
 
+    /// Returns a shared data types which triggered current [Event].
     pub fn target(&self) -> Value {
         match self {
-            Event::YText(e) => Value::YText(e.target().clone()),
-            Event::YArray(e) => Value::YArray(e.target().clone()),
-            Event::YMap(e) => Value::YMap(e.target().clone()),
-            Event::YXmlElement(e) => Value::YXmlElement(e.target().clone()),
-            Event::YXmlText(e) => Value::YXmlText(e.target().clone()),
+            Event::Text(e) => Value::YText(e.target().clone()),
+            Event::Array(e) => Value::YArray(e.target().clone()),
+            Event::Map(e) => Value::YMap(e.target().clone()),
+            Event::XmlElement(e) => Value::YXmlElement(e.target().clone()),
+            Event::XmlText(e) => Value::YXmlText(e.target().clone()),
         }
     }
 }

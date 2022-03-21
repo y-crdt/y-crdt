@@ -1,9 +1,9 @@
 use crate::block::{Block, Item, ItemContent, ItemPosition, Prelim};
-use crate::event::{EventHandler, Subscription};
+use crate::event::Subscription;
 use crate::types::text::TextEvent;
 use crate::types::{
     event_change_set, event_keys, Attrs, Branch, BranchPtr, Change, ChangeSet, Delta, Entries,
-    EntryChange, Event, Map, Observers, Path, Text, TypePtr, Value, TYPE_REFS_XML_ELEMENT,
+    EntryChange, Map, Observers, Path, Text, TypePtr, Value, TYPE_REFS_XML_ELEMENT,
     TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_TEXT,
 };
 use crate::{SubscriptionId, Transaction, ID};
@@ -11,7 +11,7 @@ use lib0::any::Any;
 use std::cell::UnsafeCell;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
-use std::ops::Deref;
+use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
 
 /// An return type from XML elements retrieval methods. It's an enum of all supported values, that
@@ -279,22 +279,17 @@ impl XmlElement {
     pub fn unobserve(&mut self, subscription_id: SubscriptionId) {
         self.0.unobserve(subscription_id);
     }
-
-    pub fn observe_deep<F>(&mut self, f: F) -> Subscription<Event>
-    where
-        F: Fn(&Transaction, &Event) -> () + 'static,
-    {
-        self.0.observe_deep(f)
-    }
-
-    pub fn unobserve_deep(&mut self, subscription_id: SubscriptionId) {
-        self.0.unobserve_deep(subscription_id)
-    }
 }
 
 impl AsRef<Branch> for XmlElement {
     fn as_ref(&self) -> &Branch {
         self.0.as_ref()
+    }
+}
+
+impl AsMut<Branch> for XmlElement {
+    fn as_mut(&mut self) -> &mut Branch {
+        self.0.as_mut()
     }
 }
 
@@ -455,28 +450,17 @@ impl XmlFragment {
             eh.unsubscribe(subscription_id);
         }
     }
-
-    pub fn observe_deep<F>(&mut self, f: F) -> Subscription<Event>
-    where
-        F: Fn(&Transaction, &Event) -> () + 'static,
-    {
-        let eh = self
-            .0
-            .deep_observers
-            .get_or_insert_with(EventHandler::default);
-        eh.subscribe(f)
-    }
-
-    pub fn unobserve_deep(&mut self, subscription_id: SubscriptionId) {
-        if let Some(eh) = self.0.deep_observers.as_mut() {
-            eh.unsubscribe(subscription_id);
-        }
-    }
 }
 
 impl AsRef<Branch> for XmlFragment {
     fn as_ref(&self) -> &Branch {
         self.0.deref()
+    }
+}
+
+impl AsMut<Branch> for XmlFragment {
+    fn as_mut(&mut self) -> &mut Branch {
+        self.0.deref_mut()
     }
 }
 
@@ -823,22 +807,17 @@ impl XmlText {
             eh.unsubscribe(subscription_id);
         }
     }
-
-    pub fn observe_deep<F>(&mut self, f: F) -> Subscription<Event>
-    where
-        F: Fn(&Transaction, &Event) -> () + 'static,
-    {
-        self.0.observe_deep(f)
-    }
-
-    pub fn unobserve_deep(&mut self, subscription_id: SubscriptionId) {
-        self.0.unobserve_deep(subscription_id)
-    }
 }
 
 impl AsRef<Branch> for XmlText {
     fn as_ref(&self) -> &Branch {
         self.0.as_ref()
+    }
+}
+
+impl AsMut<Branch> for XmlText {
+    fn as_mut(&mut self) -> &mut Branch {
+        self.0.as_mut()
     }
 }
 
