@@ -504,6 +504,32 @@ typedef struct YXmlTextEvent {
   const YTransaction *txn;
 } YXmlTextEvent;
 
+typedef union YEventContent {
+  struct YTextEvent text;
+  struct YMapEvent map;
+  struct YArrayEvent array;
+  struct YXmlEvent xml_elem;
+  struct YXmlTextEvent xml_text;
+} YEventContent;
+
+typedef struct YEvent {
+  /**
+   * Tag describing, which shared type emitted this event.
+   *
+   * - [Y_TEXT] for pointers to `YText` data types.
+   * - [Y_ARRAY] for pointers to `YArray` data types.
+   * - [Y_MAP] for pointers to `YMap` data types.
+   * - [Y_XML_ELEM] for pointers to `YXmlElement` data types.
+   * - [Y_XML_TEXT] for pointers to `YXmlText` data types.
+   */
+  int8_t tag;
+  /**
+   * A nested event type, specific for a shared data type that triggered it. Type of an
+   * event can be verified using `tag` field.
+   */
+  union YEventContent content;
+} YEvent;
+
 typedef union YPathSegmentCase {
   const char *key;
   int index;
@@ -1606,6 +1632,18 @@ unsigned int yxmltext_observe(const Branch *xml,
                               void (*cb)(void*, const struct YXmlTextEvent*));
 
 /**
+ * Subscribes a given callback function `cb` to changes made by this shared type instance as well
+ * as all nested shared types living within it. Callbacks are triggered whenever a
+ * `ytransaction_commit` is called.
+ *
+ * Returns a subscription ID which can be then used to unsubscribe this callback by using
+ * `yunobserve_deep` function.
+ */
+unsigned int yobserve_deep(const Branch *ytype,
+                           void *state,
+                           void (*cb)(void*, const struct YEvent*));
+
+/**
  * Releases a callback subscribed via `ytext_observe` function represented by passed
  * observer parameter.
  */
@@ -1634,6 +1672,12 @@ void yxmlelem_unobserve(const Branch *xml, unsigned int subscription_id);
  * observer parameter.
  */
 void yxmltext_unobserve(const Branch *xml, unsigned int subscription_id);
+
+/**
+ * Releases a callback subscribed via `yobserve_deep` function represented by passed
+ * observer parameter.
+ */
+void yunobserve_deep(const Branch *ytype, unsigned int subscription_id);
 
 /**
  * Returns a pointer to a shared collection, which triggered passed event `e`.

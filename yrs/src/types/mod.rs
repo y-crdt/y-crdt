@@ -496,7 +496,7 @@ impl Branch {
         path
     }
 
-    pub(crate) fn observe_deep<F>(&mut self, f: F) -> Subscription<Event>
+    pub fn observe_deep<F>(&mut self, f: F) -> Subscription<Event>
     where
         F: Fn(&Transaction, &Event) -> () + 'static,
     {
@@ -506,7 +506,7 @@ impl Branch {
         eh.subscribe(f)
     }
 
-    pub(crate) fn unobserve_deep(&mut self, subscription_id: SubscriptionId) {
+    pub fn unobserve_deep(&mut self, subscription_id: SubscriptionId) {
         if let Some(eh) = self.deep_observers.as_mut() {
             eh.unsubscribe(subscription_id);
         }

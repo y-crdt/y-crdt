@@ -298,7 +298,7 @@ impl MapEvent {
 #[cfg(test)]
 mod test {
     use crate::test_utils::{exchange_updates, run_scenario};
-    use crate::types::{EntryChange, Map, Value};
+    use crate::types::{DeepObservable, EntryChange, Map, Path, PathSegment, Value};
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encoder, EncoderV1};
     use crate::{Doc, PrelimArray, PrelimMap, Update};
@@ -306,9 +306,11 @@ mod test {
     use rand::distributions::Alphanumeric;
     use rand::prelude::{SliceRandom, StdRng};
     use rand::Rng;
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
     use std::collections::HashMap;
+    use std::ops::{Deref, DerefMut};
     use std::rc::Rc;
+    use std::sync::atomic::AtomicUsize;
 
     #[test]
     fn map_basic() {
@@ -802,5 +804,46 @@ mod test {
     #[test]
     fn fuzzy_test_6() {
         fuzzy(6)
+    }
+
+    #[test]
+    fn observe_deep() {
+        let doc = Doc::with_client_id(1);
+        let mut map = doc.transact().get_map("map");
+
+        let paths = Rc::new(RefCell::new(vec![]));
+        let calls = Rc::new(RefCell::new(0));
+        let mut paths_copy = paths.clone();
+        let mut calls_copy = calls.clone();
+        let _sub = map.observe_deep(move |txn, e| {
+            paths_copy.borrow_mut().push(e.path());
+            let mut count = calls_copy.borrow_mut();
+            let count = count.deref_mut();
+            *count += 1;
+        });
+
+        map.insert(&mut doc.transact(), "map", PrelimMap::<String>::new());
+        let mut nested = map.get("map").unwrap().to_ymap().unwrap();
+        nested.insert(
+            &mut doc.transact(),
+            "array",
+            PrelimArray::from(Vec::<String>::default()),
+        );
+        let mut nested2 = nested.get("array").unwrap().to_yarray().unwrap();
+        nested2.insert(&mut doc.transact(), 0, "content");
+
+        assert_eq!(*calls.borrow().deref(), 3);
+        let actual = paths.borrow();
+        assert_eq!(
+            actual.as_slice(),
+            &[
+                Path::from(vec![]),
+                Path::from(vec![PathSegment::Key("map".into())]),
+                Path::from(vec![
+                    PathSegment::Key("map".into()),
+                    PathSegment::Key("array".into())
+                ]),
+            ]
+        );
     }
 }

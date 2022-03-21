@@ -973,6 +973,7 @@ mod test {
 
         let paths = Rc::new(RefCell::new(Vec::new()));
         let paths_copy = paths.clone();
+
         array.insert(&mut doc.transact(), 0, PrelimMap::<String>::new());
 
         let _sub = array.observe_deep(move |_txn, e| {

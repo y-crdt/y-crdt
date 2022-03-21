@@ -11,7 +11,7 @@ use yrs::types::map::MapEvent;
 use yrs::types::text::TextEvent;
 use yrs::types::xml::{XmlEvent, XmlTextEvent};
 use yrs::types::{
-    Attrs, BranchPtr, Change, Delta, EntryChange, PathSegment, Value, TYPE_REFS_ARRAY,
+    Attrs, BranchPtr, Change, Delta, EntryChange, Event, PathSegment, Value, TYPE_REFS_ARRAY,
     TYPE_REFS_MAP, TYPE_REFS_TEXT, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT,
 };
 use yrs::updates::decoder::{Decode, DecoderV1};
@@ -2483,6 +2483,91 @@ pub unsafe extern "C" fn yxmltext_observe(
     subscription_id as c_uint
 }
 
+/// Subscribes a given callback function `cb` to changes made by this shared type instance as well
+/// as all nested shared types living within it. Callbacks are triggered whenever a
+/// `ytransaction_commit` is called.
+///
+/// Returns a subscription ID which can be then used to unsubscribe this callback by using
+/// `yunobserve_deep` function.
+#[no_mangle]
+pub unsafe extern "C" fn yobserve_deep(
+    ytype: *const Branch,
+    state: *mut c_void,
+    cb: extern "C" fn(*mut c_void, *const YEvent),
+) -> c_uint {
+    assert!(!ytype.is_null());
+
+    let mut branch = ytype.as_ref().unwrap();
+    let observer = branch.observe_deep(move |txn, e| {
+        let e = YEvent::new(txn, e);
+        cb(state, &e as *const YEvent);
+    });
+    let subscription_id: u32 = observer.into();
+    subscription_id as c_uint
+}
+
+#[repr(C)]
+pub struct YEvent {
+    /// Tag describing, which shared type emitted this event.
+    ///
+    /// - [Y_TEXT] for pointers to `YText` data types.
+    /// - [Y_ARRAY] for pointers to `YArray` data types.
+    /// - [Y_MAP] for pointers to `YMap` data types.
+    /// - [Y_XML_ELEM] for pointers to `YXmlElement` data types.
+    /// - [Y_XML_TEXT] for pointers to `YXmlText` data types.
+    pub tag: i8,
+
+    /// A nested event type, specific for a shared data type that triggered it. Type of an
+    /// event can be verified using `tag` field.
+    pub content: YEventContent,
+}
+
+impl YEvent {
+    fn new(txn: &Transaction, e: &Event) -> YEvent {
+        match e {
+            Event::Text(e) => YEvent {
+                tag: Y_TEXT,
+                content: YEventContent {
+                    text: YTextEvent::new(e, txn),
+                },
+            },
+            Event::Array(e) => YEvent {
+                tag: Y_ARRAY,
+                content: YEventContent {
+                    array: YArrayEvent::new(e, txn),
+                },
+            },
+            Event::Map(e) => YEvent {
+                tag: Y_MAP,
+                content: YEventContent {
+                    map: YMapEvent::new(e, txn),
+                },
+            },
+            Event::XmlElement(e) => YEvent {
+                tag: Y_XML_ELEM,
+                content: YEventContent {
+                    xml_elem: YXmlEvent::new(e, txn),
+                },
+            },
+            Event::XmlText(e) => YEvent {
+                tag: Y_XML_TEXT,
+                content: YEventContent {
+                    xml_text: YXmlTextEvent::new(e, txn),
+                },
+            },
+        }
+    }
+}
+
+#[repr(C)]
+pub union YEventContent {
+    pub text: YTextEvent,
+    pub map: YMapEvent,
+    pub array: YArrayEvent,
+    pub xml_elem: YXmlEvent,
+    pub xml_text: YXmlTextEvent,
+}
+
 /// Event pushed into callbacks registered with `ytext_observe` function. It contains delta of all
 /// text changes made within a scope of corresponding transaction (see: `ytext_event_delta`) as
 /// well as navigation data used to identify a `YText` instance which triggered this event.
@@ -2668,6 +2753,15 @@ pub unsafe extern "C" fn yxmlelem_unobserve(xml: *const Branch, subscription_id:
 pub unsafe extern "C" fn yxmltext_unobserve(xml: *const Branch, subscription_id: c_uint) {
     let mut xml = XmlText::from_raw_branch(xml);
     xml.unobserve(subscription_id as SubscriptionId);
+}
+
+/// Releases a callback subscribed via `yobserve_deep` function represented by passed
+/// observer parameter.
+#[no_mangle]
+pub unsafe extern "C" fn yunobserve_deep(ytype: *const Branch, subscription_id: c_uint) {
+    assert!(!ytype.is_null());
+    let mut branch = ytype.as_ref().unwrap();
+    branch.unobserve_deep(subscription_id as SubscriptionId);
 }
 
 /// Returns a pointer to a shared collection, which triggered passed event `e`.
