@@ -122,7 +122,6 @@ export const testToDeltaEmbedAttributes = tc => {
         text.insert(txn, 0, 'ab', { bold: true })
         text.insertEmbed(txn, 1, { image: 'imageSrc.png' }, { width: 100 })
     })
-    console.log(delta)
     t.compare(delta, [
         { insert: 'a', attributes: { bold: true } },
         { insert: { image: 'imageSrc.png' }, attributes: { width: 100 } },

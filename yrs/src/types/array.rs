@@ -308,7 +308,7 @@ mod test {
     use crate::test_utils::{exchange_updates, run_scenario, RngExt};
     use crate::types::map::PrelimMap;
     use crate::types::{Change, Value};
-    use crate::{Doc, PrelimArray, Update, ID};
+    use crate::{Doc, PrelimArray, StateVector, Update, ID};
     use lib0::any::Any;
     use rand::prelude::StdRng;
     use rand::Rng;
@@ -367,7 +367,7 @@ mod test {
         let a1 = t1.get_array("array");
 
         a1.insert(&mut t1, 0, "Hi");
-        let update = t1.encode_update_v1(); //d1.encode_state_as_update_v1
+        let update = d1.encode_state_as_update_v1(&StateVector::default());
 
         let mut t2 = d2.transact();
         t2.apply_update(Update::decode_v1(update.as_slice()));

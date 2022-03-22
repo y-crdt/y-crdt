@@ -1204,7 +1204,7 @@ mod test {
         txt1.insert(&mut t1, 0, "hello world");
         assert_eq!(txt1.to_string().as_str(), "hello world");
 
-        let u1 = t1.encode_update_v1(); // d1.encode_state_as_update_v1(&t1);
+        let u1 = d1.encode_state_as_update_v1(&StateVector::default());
 
         let d2 = Doc::with_client_id(2);
         let mut t2 = d2.transact();
