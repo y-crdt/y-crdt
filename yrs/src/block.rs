@@ -119,7 +119,18 @@ impl BlockPtr {
                     if let Some(Block::Item(right)) = item.right.as_deref_mut() {
                         right.left = Some(new_ptr);
                     }
+
+                    if let Some(parent_sub) = item.parent_sub.as_ref() {
+                        if item.right.is_none() {
+                            // update parent.map
+                            if let TypePtr::Branch(mut branch) = item.parent {
+                                branch.map.insert(parent_sub.clone(), new_ptr);
+                            }
+                        }
+                    }
+
                     item.right = Some(new_ptr);
+
                     Some(new)
                 }
                 Block::GC(gc) => Some(Box::new(Block::GC(gc.slice(offset)))),

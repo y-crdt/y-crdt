@@ -590,13 +590,16 @@ impl Transaction {
     }
 
     pub(crate) fn split_by_snapshot(&mut self, snapshot: &Snapshot) {
+        let mut merge_blocks = Vec::new();
         let blocks = &mut self.store_mut().blocks;
         for (client, &clock) in snapshot.state_map.iter() {
             if let Some(list) = blocks.get(client) {
                 if let Some(ptr) = list.get_block(clock) {
                     let ptr_clock = ptr.id().clock;
                     if ptr_clock < clock {
-                        blocks.split_block(ptr, clock - ptr_clock);
+                        if let Some(ptr) = blocks.split_block(ptr, clock - ptr_clock) {
+                            merge_blocks.push(ptr);
+                        }
                     }
                 }
             }
@@ -609,7 +612,9 @@ impl Transaction {
                         let block = list.get(pivot);
                         let clock = block.id().clock;
                         if clock < r.start {
-                            blocks.split_block(block, r.start - clock);
+                            if let Some(ptr) = blocks.split_block(block, r.start - clock) {
+                                merge_blocks.push(ptr);
+                            }
                             list = blocks.get(client).unwrap();
                         }
                     }
@@ -619,13 +624,19 @@ impl Transaction {
                         let block_id = block.id();
                         let block_len = block.len();
                         if block_id.clock + block_len > r.end {
-                            blocks.split_block(block, block_id.clock + block_len - r.end);
+                            if let Some(ptr) =
+                                blocks.split_block(block, block_id.clock + block_len - r.end)
+                            {
+                                merge_blocks.push(ptr);
+                            }
                             list = blocks.get(client).unwrap();
                         }
                     }
                 }
             }
         }
+
+        self.merge_blocks.append(&mut merge_blocks);
     }
 }
 
