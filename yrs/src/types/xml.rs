@@ -1018,7 +1018,7 @@ mod test {
     use crate::types::{Change, EntryChange, Value};
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encoder, EncoderV1};
-    use crate::{Doc, Update};
+    use crate::{Doc, StateVector, Update};
     use lib0::any::Any;
     use std::cell::RefCell;
     use std::collections::HashMap;
@@ -1035,7 +1035,7 @@ mod test {
         let d2 = Doc::with_client_id(1);
         let mut t2 = d2.transact();
         let xml2 = t2.get_xml_element("xml");
-        let u = t1.encode_update_v1(); // d1.encode_state_as_update_v1
+        let u = d1.encode_state_as_update_v1(&StateVector::default());
         t2.apply_update(Update::decode_v1(u.as_slice()));
         assert_eq!(xml2.get_attribute("height"), Some("10".to_string()));
     }
@@ -1129,7 +1129,7 @@ mod test {
         let expected = "<UNDEFINED>hello<p></p></UNDEFINED>";
         assert_eq!(r1.to_string(), expected);
 
-        let u1 = t1.encode_update_v1(); //d1.encode_state_as_update_v1(&t1);
+        let u1 = d1.encode_state_as_update_v1(&StateVector::default());
 
         let d2 = Doc::with_client_id(2);
         let mut t2 = d2.transact();
@@ -1164,7 +1164,7 @@ mod test {
             1, 3, 1, 0, 7, 1, 4, 114, 111, 111, 116, 6, 4, 0, 1, 0, 5, 104, 101, 108, 108, 111,
             135, 1, 0, 3, 1, 112, 0,
         ];
-        let u1 = t1.encode_update_v1(); //d1.encode_state_as_update_v1(&t1);
+        let u1 = d1.encode_state_as_update_v1(&StateVector::default());
         assert_eq!(u1.as_slice(), expected);
     }
 

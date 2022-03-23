@@ -119,7 +119,18 @@ impl BlockPtr {
                     if let Some(Block::Item(right)) = item.right.as_deref_mut() {
                         right.left = Some(new_ptr);
                     }
+
+                    if let Some(parent_sub) = item.parent_sub.as_ref() {
+                        if item.right.is_none() {
+                            // update parent.map
+                            if let TypePtr::Branch(mut branch) = item.parent {
+                                branch.map.insert(parent_sub.clone(), new_ptr);
+                            }
+                        }
+                    }
+
                     item.right = Some(new_ptr);
+
                     Some(new)
                 }
                 Block::GC(gc) => Some(Box::new(Block::GC(gc.slice(offset)))),
@@ -335,7 +346,7 @@ impl BlockPtr {
                     unsafe {
                         let gc = Block::GC(BlockRange::new(item.id, len));
                         let self_mut = self.0.as_mut();
-                        std::mem::replace(self_mut, gc);
+                        *self_mut = gc;
                     }
                 } else {
                     item.content = ItemContent::Deleted(len);
@@ -1254,7 +1265,7 @@ impl ItemContent {
                 }
             }
             ItemContent::Format(k, v) => {
-                encoder.write_string(k.as_ref());
+                encoder.write_key(k.as_ref());
                 encoder.write_json(v.as_ref());
             }
             ItemContent::Type(inner) => {

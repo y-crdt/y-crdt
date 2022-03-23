@@ -1,6 +1,8 @@
 use crate::event::{Subscription, UpdateEvent};
 use crate::store::Store;
 use crate::transaction::Transaction;
+use crate::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
+use crate::{DeleteSet, StateVector};
 use rand::Rng;
 use std::cell::UnsafeCell;
 use std::rc::Rc;
@@ -79,6 +81,25 @@ impl Doc {
         let store = unsafe { &mut *self.store.get() };
         store.update_events.subscribe(f)
     }
+
+    pub fn encode_state_as_update<E: Encoder>(&self, sv: &StateVector, encoder: &mut E) {
+        let store = unsafe { self.store.get().as_ref().unwrap() };
+        store.write_blocks(sv, encoder);
+        let ds = DeleteSet::from(&store.blocks);
+        ds.encode(encoder);
+    }
+
+    pub fn encode_state_as_update_v1(&self, sv: &StateVector) -> Vec<u8> {
+        let mut encoder = EncoderV1::new();
+        self.encode_state_as_update(sv, &mut encoder);
+        encoder.to_vec()
+    }
+
+    pub fn encode_state_as_update_v2(&self, sv: &StateVector) -> Vec<u8> {
+        let mut encoder = EncoderV2::new();
+        self.encode_state_as_update(sv, &mut encoder);
+        encoder.to_vec()
+    }
 }
 
 impl Default for Doc {
@@ -136,7 +157,7 @@ mod test {
     use std::rc::Rc;
 
     #[test]
-    fn apply_update_basic() {
+    fn apply_update_basic_v1() {
         /* Result of calling following code:
         ```javascript
         const doc = new Y.Doc()
@@ -162,6 +183,32 @@ mod test {
     }
 
     #[test]
+    fn apply_update_basic_v2() {
+        /* Result of calling following code:
+        ```javascript
+        const doc = new Y.Doc()
+        const ytext = doc.getText('type')
+        doc.transact(function () {
+            for (let i = 0; i < 3; i++) {
+                ytext.insert(0, (i % 10).toString())
+            }
+        })
+        const update = Y.encodeStateAsUpdateV2(doc)
+        ```
+         */
+        let update = &[
+            0, 0, 6, 195, 187, 207, 162, 7, 1, 0, 2, 0, 2, 3, 4, 0, 68, 11, 7, 116, 121, 112, 101,
+            48, 49, 50, 4, 65, 1, 1, 1, 0, 0, 1, 3, 0, 0,
+        ];
+        let doc = Doc::new();
+        let mut tr = doc.transact();
+        tr.apply_update(Update::decode_v2(update));
+
+        let actual = tr.get_text("type").to_string();
+        assert_eq!(actual, "210".to_owned());
+    }
+
+    #[test]
     fn encode_basic() {
         let doc = Doc::with_client_id(1490905955);
         let mut t = doc.transact();
@@ -170,7 +217,7 @@ mod test {
         txt.insert(&mut t, 0, "1");
         txt.insert(&mut t, 0, "2");
 
-        let encoded = t.encode_update_v1(); // doc.encode_state_as_update_v1
+        let encoded = doc.encode_state_as_update_v1(&StateVector::default());
         let expected = &[
             1, 3, 227, 214, 245, 198, 5, 0, 4, 1, 4, 116, 121, 112, 101, 1, 48, 68, 227, 214, 245,
             198, 5, 0, 1, 49, 68, 227, 214, 245, 198, 5, 1, 1, 50, 0,
