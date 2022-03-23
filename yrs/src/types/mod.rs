@@ -371,9 +371,6 @@ impl Branch {
                             };
                             remaining = 0;
                             let new_right = txn.store_mut().blocks.split_block(p, offset);
-                            if let Some(ptr) = new_right {
-                                txn.merge_blocks.push(ptr);
-                            }
                             (p, new_right)
                         } else {
                             remaining -= content_len;
