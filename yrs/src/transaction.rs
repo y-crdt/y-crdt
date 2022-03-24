@@ -8,7 +8,7 @@ use crate::store::Store;
 use crate::types::array::Array;
 use crate::types::xml::{XmlElement, XmlText};
 use crate::types::{
-    BranchPtr, Event, Map, Text, TypePtr, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
+    BranchPtr, Event, Events, Map, Text, TypePtr, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
     TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT,
 };
 use crate::update::Update;
@@ -519,7 +519,7 @@ impl Transaction {
             // deep observe events
             for (&branch, events) in changed_parents.iter() {
                 // sort events by path length so that top-level events are fired first.
-                let mut sorted: Vec<&Event> = Vec::with_capacity(events.len());
+                let mut unsorted: Vec<&Event> = Vec::with_capacity(events.len());
 
                 for &i in events.iter() {
                     let e = &mut event_cache[i];
@@ -527,19 +527,13 @@ impl Transaction {
                 }
 
                 for &i in events.iter() {
-                    sorted.push(&event_cache[i]);
+                    unsorted.push(&event_cache[i]);
                 }
 
-                sorted.sort_by(|&a, &b| {
-                    let path1 = a.path();
-                    let path2 = b.path();
-                    path1.len().cmp(&path2.len())
-                });
                 // We don't need to check for events.length
                 // because we know it has at least one element
-                for e in sorted.iter_mut() {
-                    branch.trigger_deep(self, e);
-                }
+                let events = Events::new(&mut unsorted);
+                branch.trigger_deep(self, &events);
             }
         }
 

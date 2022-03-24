@@ -73,7 +73,7 @@ impl BranchPtr {
         }
     }
 
-    pub(crate) fn trigger_deep(&self, txn: &Transaction, e: &Event) {
+    pub(crate) fn trigger_deep(&self, txn: &Transaction, e: &Events) {
         if let Some(observers) = self.deep_observers.as_ref() {
             observers.publish(txn, e);
         }
@@ -208,7 +208,7 @@ pub struct Branch {
 
     pub(crate) observers: Option<Observers>,
 
-    pub(crate) deep_observers: Option<EventHandler<Event>>,
+    pub(crate) deep_observers: Option<EventHandler<Events>>,
 }
 
 impl std::fmt::Debug for Branch {
@@ -496,9 +496,9 @@ impl Branch {
         path
     }
 
-    pub fn observe_deep<F>(&mut self, f: F) -> Subscription<Event>
+    pub fn observe_deep<F>(&mut self, f: F) -> Subscription<Events>
     where
-        F: Fn(&Transaction, &Event) -> () + 'static,
+        F: Fn(&Transaction, &Events) -> () + 'static,
     {
         let eh = self
             .deep_observers
@@ -522,9 +522,9 @@ pub trait DeepObservable {
     ///
     /// This method returns a subscription, which will automatically unsubscribe current callback
     /// when dropped.
-    fn observe_deep<F>(&mut self, f: F) -> Subscription<Event>
+    fn observe_deep<F>(&mut self, f: F) -> Subscription<Events>
     where
-        F: Fn(&Transaction, &Event) -> () + 'static;
+        F: Fn(&Transaction, &Events) -> () + 'static;
 
     /// Unobserves callback identified by `subscription_id` (which can be obtained by consuming
     /// [Subscription] using `into` cast).
@@ -535,9 +535,9 @@ impl<T> DeepObservable for T
 where
     T: AsMut<Branch>,
 {
-    fn observe_deep<F>(&mut self, f: F) -> Subscription<Event>
+    fn observe_deep<F>(&mut self, f: F) -> Subscription<Events>
     where
-        F: Fn(&Transaction, &Event) -> () + 'static,
+        F: Fn(&Transaction, &Events) -> () + 'static,
     {
         self.as_mut().observe_deep(f)
     }
@@ -1092,6 +1092,48 @@ pub(crate) fn event_change_set(txn: &Transaction, start: Option<BlockPtr>) -> Ch
     }
 
     ChangeSet::new(added, deleted, delta)
+}
+
+pub struct Events(Vec<NonNull<Event>>);
+
+impl Events {
+    pub(crate) fn new(events: &mut Vec<&Event>) -> Self {
+        events.sort_by(|&a, &b| {
+            let path1 = a.path();
+            let path2 = b.path();
+            path1.len().cmp(&path2.len())
+        });
+        let mut inner = Vec::with_capacity(events.len());
+        for &e in events.iter() {
+            inner.push(unsafe { NonNull::new_unchecked(e as *const Event as *mut Event) });
+        }
+        Events(inner)
+    }
+
+    pub fn iter(&self) -> EventsIter {
+        EventsIter(self.0.iter())
+    }
+}
+
+pub struct EventsIter<'a>(std::slice::Iter<'a, NonNull<Event>>);
+
+impl<'a> Iterator for EventsIter<'a> {
+    type Item = &'a Event;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let e = self.0.next()?;
+        Some(unsafe { e.as_ref() })
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.0.size_hint()
+    }
+}
+
+impl<'a> ExactSizeIterator for EventsIter<'a> {
+    fn len(&self) -> usize {
+        self.0.len()
+    }
 }
 
 /// Generalized wrapper around events fired by specialized shared data types.

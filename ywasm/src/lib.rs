@@ -14,9 +14,9 @@ use yrs::types::map::{MapEvent, MapIter};
 use yrs::types::text::TextEvent;
 use yrs::types::xml::{Attributes, TreeWalker, XmlEvent, XmlTextEvent};
 use yrs::types::{
-    Attrs, Branch, BranchPtr, Change, DeepObservable, Delta, EntryChange, Event, Path, PathSegment,
-    TypeRefs, Value, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT, TYPE_REFS_XML_ELEMENT,
-    TYPE_REFS_XML_TEXT,
+    Attrs, Branch, BranchPtr, Change, DeepObservable, Delta, EntryChange, Event, Events, Path,
+    PathSegment, TypeRefs, Value, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
+    TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT,
 };
 use yrs::updates::decoder::{Decode, DecoderV1, DecoderV2};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
@@ -1182,10 +1182,10 @@ impl From<Subscription<XmlTextEvent>> for YXmlTextObserver {
 }
 
 #[wasm_bindgen]
-pub struct YEventObserver(Subscription<Event>);
+pub struct YEventObserver(Subscription<Events>);
 
-impl From<Subscription<Event>> for YEventObserver {
-    fn from(o: Subscription<Event>) -> Self {
+impl From<Subscription<Events>> for YEventObserver {
+    fn from(o: Subscription<Events>) -> Self {
         YEventObserver(o)
     }
 }
@@ -1435,7 +1435,7 @@ impl YText {
         match &mut *self.0.borrow_mut() {
             SharedType::Integrated(v) => v
                 .observe_deep(move |txn, e| {
-                    let arg = event_into_js(txn, e);
+                    let arg = events_into_js(txn, e);
                     f.call1(&JsValue::UNDEFINED, &arg).unwrap();
                 })
                 .into(),
@@ -1658,7 +1658,7 @@ impl YArray {
         match &mut *self.0.borrow_mut() {
             SharedType::Integrated(v) => v
                 .observe_deep(move |txn, e| {
-                    let arg = event_into_js(txn, e);
+                    let arg = events_into_js(txn, e);
                     f.call1(&JsValue::UNDEFINED, &arg).unwrap();
                 })
                 .into(),
@@ -1953,7 +1953,7 @@ impl YMap {
         match &mut *self.0.borrow_mut() {
             SharedType::Integrated(v) => v
                 .observe_deep(move |txn, e| {
-                    let arg = event_into_js(txn, e);
+                    let arg = events_into_js(txn, e);
                     f.call1(&JsValue::UNDEFINED, &arg).unwrap();
                 })
                 .into(),
@@ -2204,7 +2204,7 @@ impl YXmlElement {
     pub fn observe_deep(&mut self, f: js_sys::Function) -> YEventObserver {
         self.0
             .observe_deep(move |txn, e| {
-                let arg = event_into_js(txn, e);
+                let arg = events_into_js(txn, e);
                 f.call1(&JsValue::UNDEFINED, &arg).unwrap();
             })
             .into()
@@ -2450,7 +2450,7 @@ impl YXmlText {
     pub fn observe_deep(&mut self, f: js_sys::Function) -> YEventObserver {
         self.0
             .observe_deep(move |txn, e| {
-                let arg = event_into_js(txn, e);
+                let arg = events_into_js(txn, e);
                 f.call1(&JsValue::UNDEFINED, &arg).unwrap();
             })
             .into()
@@ -2641,14 +2641,20 @@ fn xml_into_js(v: Xml) -> JsValue {
     }
 }
 
-fn event_into_js(txn: &Transaction, e: &Event) -> JsValue {
-    match e {
-        Event::Text(e) => YTextEvent::new(e, txn).into(),
-        Event::Array(e) => YArrayEvent::new(e, txn).into(),
-        Event::Map(e) => YMapEvent::new(e, txn).into(),
-        Event::XmlElement(e) => YXmlEvent::new(e, txn).into(),
-        Event::XmlText(e) => YXmlTextEvent::new(e, txn).into(),
-    }
+fn events_into_js(txn: &Transaction, e: &Events) -> JsValue {
+    let mut array = js_sys::Array::new();
+    let mapped = e.iter().map(|e| {
+        let js: JsValue = match e {
+            Event::Text(e) => YTextEvent::new(e, txn).into(),
+            Event::Array(e) => YArrayEvent::new(e, txn).into(),
+            Event::Map(e) => YMapEvent::new(e, txn).into(),
+            Event::XmlElement(e) => YXmlEvent::new(e, txn).into(),
+            Event::XmlText(e) => YXmlTextEvent::new(e, txn).into(),
+        };
+        js
+    });
+    array.extend(mapped);
+    array.into()
 }
 
 enum Shared<'a> {
