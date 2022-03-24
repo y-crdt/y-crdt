@@ -313,7 +313,7 @@ impl ArrayEvent {
 mod test {
     use crate::test_utils::{exchange_updates, run_scenario, RngExt};
     use crate::types::map::PrelimMap;
-    use crate::types::{Change, DeepObservable, Path, PathSegment, Value};
+    use crate::types::{Change, DeepObservable, Event, Path, PathSegment, Value};
     use crate::{Doc, PrelimArray, StateVector, Update, ID};
     use lib0::any::Any;
     use rand::prelude::StdRng;
@@ -974,12 +974,12 @@ mod test {
         let paths = Rc::new(RefCell::new(Vec::new()));
         let paths_copy = paths.clone();
 
-        array.insert(&mut doc.transact(), 0, PrelimMap::<String>::new());
-
         let _sub = array.observe_deep(move |_txn, e| {
-            let path = e.path();
+            let path: Vec<Path> = e.iter().map(Event::path).collect();
             paths_copy.borrow_mut().push(path);
         });
+
+        array.insert(&mut doc.transact(), 0, PrelimMap::<String>::new());
 
         {
             let mut txn = doc.transact();
@@ -988,7 +988,10 @@ mod test {
             array.insert(&mut txn, 0, 0);
         }
 
-        let expected = &[Path::default(), Path::from([PathSegment::Index(1)])];
+        let expected = &[
+            vec![Path::default()],
+            vec![Path::default(), Path::from([PathSegment::Index(1)])],
+        ];
         let actual = RefCell::borrow(&paths);
         assert_eq!(actual.as_slice(), expected);
     }

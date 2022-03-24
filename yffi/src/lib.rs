@@ -2551,14 +2551,15 @@ pub unsafe extern "C" fn yxmltext_observe(
 pub unsafe extern "C" fn yobserve_deep(
     ytype: *mut Branch,
     state: *mut c_void,
-    cb: extern "C" fn(*mut c_void, *const YEvent),
+    cb: extern "C" fn(*mut c_void, c_int, *const YEvent),
 ) -> c_uint {
     assert!(!ytype.is_null());
 
     let mut branch = ytype.as_mut().unwrap();
-    let observer = branch.observe_deep(move |txn, e| {
-        let e = YEvent::new(txn, e);
-        cb(state, &e as *const YEvent);
+    let observer = branch.observe_deep(move |txn, events| {
+        let events: Vec<_> = events.iter().map(|e| YEvent::new(txn, e)).collect();
+        let len = events.len() as c_int;
+        cb(state, len, events.as_ptr());
     });
     let subscription_id: u32 = observer.into();
     subscription_id as c_uint
