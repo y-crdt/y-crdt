@@ -201,6 +201,22 @@ impl Transaction {
         self.delete_set.encode(encoder);
     }
 
+    /// Encodes the document state to a binary format.
+    ///
+    /// Document updates are idempotent and commutative. Caveats:
+    /// * It doesn't matter in which order document updates are applied.
+    /// * As long as all clients receive the same document updates, all clients
+    ///   end up with the same content.
+    /// * Even if an update contains known information, the unknown information
+    ///   is extracted and integrated into the document structure.
+    pub fn encode_update_v2(&self) -> Vec<u8> {
+        let mut enc = updates::encoder::EncoderV2::new();
+        let store = self.store();
+        store.write_blocks(&self.before_state, &mut enc);
+        self.delete_set.encode(&mut enc);
+        enc.to_vec()
+    }
+
     /// Applies given `id_set` onto current transaction to run multi-range deletion.
     /// Returns a remaining of original ID set, that couldn't be applied.
     pub(crate) fn apply_delete(&mut self, ds: &DeleteSet) -> Option<DeleteSet> {
@@ -620,13 +636,16 @@ impl Transaction {
     }
 
     pub(crate) fn split_by_snapshot(&mut self, snapshot: &Snapshot) {
+        let mut merge_blocks = Vec::new();
         let blocks = &mut self.store_mut().blocks;
         for (client, &clock) in snapshot.state_map.iter() {
             if let Some(list) = blocks.get(client) {
                 if let Some(ptr) = list.get_block(clock) {
                     let ptr_clock = ptr.id().clock;
                     if ptr_clock < clock {
-                        blocks.split_block(ptr, clock - ptr_clock);
+                        if let Some(ptr) = blocks.split_block(ptr, clock - ptr_clock) {
+                            merge_blocks.push(ptr);
+                        }
                     }
                 }
             }
@@ -639,7 +658,9 @@ impl Transaction {
                         let block = list.get(pivot);
                         let clock = block.id().clock;
                         if clock < r.start {
-                            blocks.split_block(block, r.start - clock);
+                            if let Some(ptr) = blocks.split_block(block, r.start - clock) {
+                                merge_blocks.push(ptr);
+                            }
                             list = blocks.get(client).unwrap();
                         }
                     }
@@ -649,13 +670,19 @@ impl Transaction {
                         let block_id = block.id();
                         let block_len = block.len();
                         if block_id.clock + block_len > r.end {
-                            blocks.split_block(block, block_id.clock + block_len - r.end);
+                            if let Some(ptr) =
+                                blocks.split_block(block, block_id.clock + block_len - r.end)
+                            {
+                                merge_blocks.push(ptr);
+                            }
                             list = blocks.get(client).unwrap();
                         }
                     }
                 }
             }
         }
+
+        self.merge_blocks.append(&mut merge_blocks);
     }
 }
 
