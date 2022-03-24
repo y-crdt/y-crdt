@@ -204,11 +204,11 @@ impl Encode for IdRange {
     fn encode<E: Encoder>(&self, encoder: &mut E) {
         match self {
             IdRange::Continuous(range) => {
-                encoder.write_len(1);
+                encoder.write_uvar(1u32);
                 range.encode(encoder);
             }
             IdRange::Fragmented(ranges) => {
-                encoder.write_len(ranges.len() as u32);
+                encoder.write_uvar(ranges.len() as u32);
                 for range in ranges.iter() {
                     range.encode(encoder);
                 }
@@ -219,7 +219,7 @@ impl Encode for IdRange {
 
 impl Decode for IdRange {
     fn decode<D: Decoder>(decoder: &mut D) -> Self {
-        match decoder.read_len() {
+        match decoder.read_uvar::<u32>() {
             1 => {
                 let range = Range::decode(decoder);
                 IdRange::Continuous(range)
@@ -343,10 +343,10 @@ impl IdSet {
 
 impl Encode for IdSet {
     fn encode<E: Encoder>(&self, encoder: &mut E) {
-        encoder.write_len(self.0.len() as u32);
+        encoder.write_uvar(self.0.len() as u32);
         for (&client_id, block) in self.0.iter() {
             encoder.reset_ds_cur_val();
-            encoder.write_client(client_id);
+            encoder.write_uvar(client_id);
             block.encode(encoder);
         }
     }
@@ -355,11 +355,11 @@ impl Encode for IdSet {
 impl Decode for IdSet {
     fn decode<D: Decoder>(decoder: &mut D) -> Self {
         let mut set = Self::new();
-        let client_len = decoder.read_len();
+        let client_len: u32 = decoder.read_uvar();
         let mut i = 0;
         while i < client_len {
             decoder.reset_ds_cur_val();
-            let client = decoder.read_client();
+            let client = decoder.read_uvar();
             let range = IdRange::decode(decoder);
             set.0.insert(client, range);
             i += 1;
