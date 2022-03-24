@@ -63,7 +63,7 @@ impl XmlElement {
         let tag = inner
             .name
             .as_ref()
-            .map(|s| s.as_str())
+            .map(|s| s.as_ref())
             .unwrap_or(&"UNDEFINED");
         write!(&mut s, "<{}", tag).unwrap();
         let attributes = Attributes(inner.entries());
@@ -207,7 +207,7 @@ impl XmlElement {
     /// If `index` is equal to length of current XML element, new element will be inserted as a last
     /// child.
     /// This method will panic if `index` is greater than the length of current XML element.
-    pub fn insert_elem<S: ToString>(
+    pub fn insert_elem<S: Into<Rc<str>>>(
         &self,
         txn: &mut Transaction,
         index: u32,
@@ -234,13 +234,13 @@ impl XmlElement {
 
     /// Pushes a new [XmlElement] with a given tag `name` as the last child of a current one and
     /// returns it.
-    pub fn push_elem_back<S: ToString>(&self, txn: &mut Transaction, name: S) -> XmlElement {
+    pub fn push_elem_back<S: Into<Rc<str>>>(&self, txn: &mut Transaction, name: S) -> XmlElement {
         self.0.push_elem_back(txn, name)
     }
 
     /// Pushes a new [XmlElement] with a given tag `name` as the first child of a current one and
     /// returns it.
-    pub fn push_elem_front<S: ToString>(&self, txn: &mut Transaction, name: S) -> XmlElement {
+    pub fn push_elem_front<S: Into<Rc<str>>>(&self, txn: &mut Transaction, name: S) -> XmlElement {
         self.0.push_elem_front(txn, name)
     }
 
@@ -365,15 +365,13 @@ impl XmlFragment {
         s
     }
 
-    pub fn insert_elem<S: ToString>(
+    pub fn insert_elem<S: Into<Rc<str>>>(
         &self,
         txn: &mut Transaction,
         index: u32,
         name: S,
     ) -> XmlElement {
-        let ptr = self
-            .0
-            .insert_at(txn, index, PrelimXml::Elem(name.to_string()));
+        let ptr = self.0.insert_at(txn, index, PrelimXml::Elem(name.into()));
         let item = ptr.as_item().unwrap();
         if let ItemContent::Type(inner) = &item.content {
             XmlElement::from(BranchPtr::from(inner))
@@ -399,12 +397,12 @@ impl XmlFragment {
         }
     }
 
-    pub fn push_elem_back<S: ToString>(&self, txn: &mut Transaction, name: S) -> XmlElement {
+    pub fn push_elem_back<S: Into<Rc<str>>>(&self, txn: &mut Transaction, name: S) -> XmlElement {
         let len = self.len();
         self.insert_elem(txn, len, name)
     }
 
-    pub fn push_elem_front<S: ToString>(&self, txn: &mut Transaction, name: S) -> XmlElement {
+    pub fn push_elem_front<S: Into<Rc<str>>>(&self, txn: &mut Transaction, name: S) -> XmlElement {
         self.insert_elem(txn, 0, name)
     }
 
@@ -877,7 +875,7 @@ impl XmlTextEvent {
 }
 
 enum PrelimXml {
-    Elem(String),
+    Elem(Rc<str>),
     Text,
 }
 

@@ -74,7 +74,7 @@ impl Store {
     pub fn get_or_create_type<K: Into<Rc<str>>>(
         &mut self,
         key: K,
-        node_name: Option<String>,
+        node_name: Option<Rc<str>>,
         type_ref: TypeRefs,
     ) -> BranchPtr {
         let key = key.into();

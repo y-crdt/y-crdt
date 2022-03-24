@@ -5,6 +5,7 @@ use std::mem::{forget, ManuallyDrop, MaybeUninit};
 use std::ops::Deref;
 use std::os::raw::{c_char, c_float, c_int, c_long, c_longlong, c_uchar, c_uint, c_ulong};
 use std::ptr::{null, null_mut};
+use std::rc::Rc;
 use yrs::block::{ItemContent, Prelim};
 use yrs::types::array::ArrayEvent;
 use yrs::types::map::MapEvent;
@@ -642,10 +643,7 @@ pub unsafe extern "C" fn ytext_insert_embed(
 
 fn map_attrs(attrs: Any) -> Option<Attrs> {
     if let Any::Map(attrs) = attrs {
-        let attrs = attrs
-            .into_iter()
-            .map(|(k, v)| (k.into_boxed_str(), v))
-            .collect();
+        let attrs = attrs.into_iter().map(|(k, v)| (k.into(), v)).collect();
         Some(attrs)
     } else {
         None
@@ -1710,7 +1708,7 @@ impl Prelim for YInput {
                     panic!("Unrecognized YVal value tag.")
                 };
                 let name = if type_ref == TYPE_REFS_XML_ELEMENT {
-                    let name = CStr::from_ptr(self.value.str).to_str().unwrap().to_owned();
+                    let name: Rc<str> = CStr::from_ptr(self.value.str).to_str().unwrap().into();
                     Some(name)
                 } else {
                     None
@@ -3362,7 +3360,7 @@ pub struct YDeltaAttr {
 }
 
 impl YDeltaAttr {
-    fn new(k: &Box<str>, v: &Any) -> Self {
+    fn new(k: &Rc<str>, v: &Any) -> Self {
         let key = CString::new(k.as_ref()).unwrap().into_raw() as *const _;
         let value = YOutput::from(v.clone());
         YDeltaAttr { key, value }
