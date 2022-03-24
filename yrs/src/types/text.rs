@@ -258,9 +258,7 @@ impl Text {
                                 len
                             };
                             remaining = 0;
-                            if let Some(ptr) = txn.store_mut().blocks.split_block(ptr, offset) {
-                                txn.merge_blocks.push(ptr);
-                            }
+                            txn.store_mut().blocks.split_block(ptr, offset);
                         } else {
                             remaining -= content_len;
                         };
