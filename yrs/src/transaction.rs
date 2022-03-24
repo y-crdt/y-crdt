@@ -150,7 +150,7 @@ impl Transaction {
     pub fn get_xml_element(&mut self, name: &str) -> XmlElement {
         let c = self.store_mut().get_or_create_type(
             name,
-            Some("UNDEFINED".to_string()),
+            Some("UNDEFINED".into()),
             TYPE_REFS_XML_ELEMENT,
         );
         XmlElement::from(c)

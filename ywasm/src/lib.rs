@@ -1353,7 +1353,7 @@ impl YText {
                 let tuple = js_sys::Array::from(&tuple);
                 let key: String = tuple.get(0).as_string()?;
                 let value = js_into_any(&tuple.get(1))?;
-                map.insert(key.into_boxed_str(), value);
+                map.insert(key.into(), value);
             }
             Some(map)
         } else {

@@ -245,10 +245,7 @@ fn xml_fragment_insert() {
             None,
             TypePtr::Unknown,
             None,
-            ItemContent::Type(Branch::new(
-                TYPE_REFS_XML_ELEMENT,
-                Some("node-name".to_string()),
-            )),
+            ItemContent::Type(Branch::new(TYPE_REFS_XML_ELEMENT, Some("node-name".into()))),
         )
         .into(),
     ];
