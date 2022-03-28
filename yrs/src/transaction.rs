@@ -323,7 +323,8 @@ impl Transaction {
                     }
                     ItemContent::Type(inner) => {
                         let mut ptr = inner.start;
-                        //TODO: self.changed.remove(&item.parent); // uncomment when deep observe is complete
+                        self.changed
+                            .remove(&TypePtr::Branch(BranchPtr::from(inner)));
 
                         while let Some(Block::Item(item)) = ptr.as_deref() {
                             if !item.is_deleted() {
