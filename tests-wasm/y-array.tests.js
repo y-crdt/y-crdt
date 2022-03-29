@@ -167,3 +167,26 @@ export const testObserver = tc => {
     t.compare(target, null)
     t.compare(delta, null)
 }
+
+/**
+ * @param {t.TestCase} tc
+ */
+export const testObserveDeepEventOrder = tc => {
+    const d1 = new Y.YDoc()
+    const arr = d1.getArray('array')
+
+    /**
+     * @type {Array<any>}
+     */
+    let paths = []
+    let subscription = arr.observeDeep(events => {
+        paths = events.map(e => e.path())
+    })
+    d1.transact(txn => arr.insert(txn, 0, [new Y.YMap()]))
+    d1.transact(txn => {
+        arr.get(0).set(txn, 'a', 'a')
+        arr.insert(txn, 0, [0])
+    })
+    t.compare(paths, [ [], [ 1 ] ])
+    subscription.free()
+}

@@ -53,6 +53,33 @@ pub const TYPE_REFS_UNDEFINED: TypeRefs = 15;
 #[derive(Debug, Clone, Copy, Hash)]
 pub struct BranchPtr(NonNull<Branch>);
 
+impl BranchPtr {
+    pub(crate) fn trigger(
+        &self,
+        txn: &Transaction,
+        subs: HashSet<Option<Rc<str>>>,
+    ) -> Option<Event> {
+        if let Some(observers) = self.observers.as_ref() {
+            Some(observers.publish(*self, txn, subs))
+        } else {
+            match self.type_ref() {
+                TYPE_REFS_TEXT => Some(Event::Text(TextEvent::new(*self))),
+                TYPE_REFS_MAP => Some(Event::Map(MapEvent::new(*self, subs))),
+                TYPE_REFS_ARRAY => Some(Event::Array(ArrayEvent::new(*self))),
+                TYPE_REFS_XML_TEXT => Some(Event::XmlText(XmlTextEvent::new(*self, subs))),
+                TYPE_REFS_XML_ELEMENT => Some(Event::XmlElement(XmlEvent::new(*self, subs))),
+                _ => None,
+            }
+        }
+    }
+
+    pub(crate) fn trigger_deep(&self, txn: &Transaction, e: &Events) {
+        if let Some(observers) = self.deep_observers.as_ref() {
+            observers.publish(txn, e);
+        }
+    }
+}
+
 impl Into<TypePtr> for BranchPtr {
     fn into(self) -> TypePtr {
         TypePtr::Branch(self)
@@ -180,6 +207,8 @@ pub struct Branch {
     type_ref: TypeRefs,
 
     pub(crate) observers: Option<Observers>,
+
+    pub(crate) deep_observers: Option<EventHandler<Events>>,
 }
 
 impl std::fmt::Debug for Branch {
@@ -187,7 +216,7 @@ impl std::fmt::Debug for Branch {
         f.debug_struct("Branch")
             .field("start", &self.start)
             .field("map", &self.map)
-            .field("ptr", &self.item)
+            .field("item", &self.item)
             .field("name", &self.name)
             .field("len", &self.block_len)
             .field("type_ref", &self.type_ref)
@@ -219,12 +248,20 @@ impl Branch {
             name,
             type_ref,
             observers: None,
+            deep_observers: None,
         })
     }
 
     /// Returns an identifier of an underlying complex data type (eg. is it an Array or a Map).
     pub fn type_ref(&self) -> TypeRefs {
         self.type_ref & 0b1111
+    }
+
+    pub(crate) fn repair_type_ref(&mut self, type_ref: TypeRefs) {
+        if self.type_ref() == TYPE_REFS_UNDEFINED {
+            // cleanup the TYPE_REFS_UNDEFINED bytes and set a new type ref
+            self.type_ref = (type_ref & (!TYPE_REFS_UNDEFINED)) | type_ref;
+        }
     }
 
     /// Returns a length of an indexed sequence component of a current branch node.
@@ -458,6 +495,56 @@ impl Branch {
         }
         path
     }
+
+    pub fn observe_deep<F>(&mut self, f: F) -> Subscription<Events>
+    where
+        F: Fn(&Transaction, &Events) -> () + 'static,
+    {
+        let eh = self
+            .deep_observers
+            .get_or_insert_with(EventHandler::default);
+        eh.subscribe(f)
+    }
+
+    pub fn unobserve_deep(&mut self, subscription_id: SubscriptionId) {
+        if let Some(eh) = self.deep_observers.as_mut() {
+            eh.unsubscribe(subscription_id);
+        }
+    }
+}
+
+/// Trait implemented by all Y-types, allowing for observing events which are emitted by
+/// nested types.
+pub trait DeepObservable {
+    /// Subscribe a callback `f` for all events emitted by this and nested collaborative types.
+    /// Callback is accepting transaction which triggered that event and event itself, wrapped
+    /// within an [Event] structure.
+    ///
+    /// This method returns a subscription, which will automatically unsubscribe current callback
+    /// when dropped.
+    fn observe_deep<F>(&mut self, f: F) -> Subscription<Events>
+    where
+        F: Fn(&Transaction, &Events) -> () + 'static;
+
+    /// Unobserves callback identified by `subscription_id` (which can be obtained by consuming
+    /// [Subscription] using `into` cast).
+    fn unobserve_deep(&mut self, subscription_id: SubscriptionId);
+}
+
+impl<T> DeepObservable for T
+where
+    T: AsMut<Branch>,
+{
+    fn observe_deep<F>(&mut self, f: F) -> Subscription<Events>
+    where
+        F: Fn(&Transaction, &Events) -> () + 'static,
+    {
+        self.as_mut().observe_deep(f)
+    }
+
+    fn unobserve_deep(&mut self, subscription_id: SubscriptionId) {
+        self.as_mut().unobserve_deep(subscription_id)
+    }
 }
 
 /// Value that can be returned by Yrs data types. This includes [Any] which is an extension
@@ -508,6 +595,46 @@ impl Value {
             Value::YMap(v) => v.to_json().to_string(),
             Value::YXmlElement(v) => v.to_string(),
             Value::YXmlText(v) => v.to_string(),
+        }
+    }
+
+    pub fn to_ytext(self) -> Option<Text> {
+        if let Value::YText(text) = self {
+            Some(text)
+        } else {
+            None
+        }
+    }
+
+    pub fn to_yarray(self) -> Option<Array> {
+        if let Value::YArray(array) = self {
+            Some(array)
+        } else {
+            None
+        }
+    }
+
+    pub fn to_ymap(self) -> Option<Map> {
+        if let Value::YMap(map) = self {
+            Some(map)
+        } else {
+            None
+        }
+    }
+
+    pub fn to_yxml_elem(self) -> Option<XmlElement> {
+        if let Value::YXmlElement(xml) = self {
+            Some(xml)
+        } else {
+            None
+        }
+    }
+
+    pub fn to_yxml_text(self) -> Option<XmlText> {
+        if let Value::YXmlText(xml) = self {
+            Some(xml)
+        } else {
+            None
         }
     }
 }
@@ -739,13 +866,33 @@ impl Observers {
         branch_ref: BranchPtr,
         txn: &Transaction,
         keys: HashSet<Option<Rc<str>>>,
-    ) {
+    ) -> Event {
         match self {
-            Observers::Text(eh) => eh.publish(txn, &TextEvent::new(branch_ref)),
-            Observers::Array(eh) => eh.publish(txn, &ArrayEvent::new(branch_ref)),
-            Observers::Map(eh) => eh.publish(txn, &MapEvent::new(branch_ref, keys)),
-            Observers::Xml(eh) => eh.publish(txn, &XmlEvent::new(branch_ref, keys)),
-            Observers::XmlText(eh) => eh.publish(txn, &XmlTextEvent::new(branch_ref, keys)),
+            Observers::Text(eh) => {
+                let e = TextEvent::new(branch_ref);
+                eh.publish(txn, &e);
+                Event::Text(e)
+            }
+            Observers::Array(eh) => {
+                let e = ArrayEvent::new(branch_ref);
+                eh.publish(txn, &e);
+                Event::Array(e)
+            }
+            Observers::Map(eh) => {
+                let e = MapEvent::new(branch_ref, keys);
+                eh.publish(txn, &e);
+                Event::Map(e)
+            }
+            Observers::Xml(eh) => {
+                let e = XmlEvent::new(branch_ref, keys);
+                eh.publish(txn, &e);
+                Event::XmlElement(e)
+            }
+            Observers::XmlText(eh) => {
+                let e = XmlTextEvent::new(branch_ref, keys);
+                eh.publish(txn, &e);
+                Event::XmlText(e)
+            }
         }
     }
 }
@@ -757,6 +904,7 @@ impl Observers {
 pub type Path = VecDeque<PathSegment>;
 
 /// A single segment of a [Path].
+#[derive(Debug, Clone, PartialEq)]
 pub enum PathSegment {
     /// Key segments are used to inform how to access child shared collections within a [Map] types.
     Key(Rc<str>),
@@ -944,4 +1092,90 @@ pub(crate) fn event_change_set(txn: &Transaction, start: Option<BlockPtr>) -> Ch
     }
 
     ChangeSet::new(added, deleted, delta)
+}
+
+pub struct Events(Vec<NonNull<Event>>);
+
+impl Events {
+    pub(crate) fn new(events: &mut Vec<&Event>) -> Self {
+        events.sort_by(|&a, &b| {
+            let path1 = a.path();
+            let path2 = b.path();
+            path1.len().cmp(&path2.len())
+        });
+        let mut inner = Vec::with_capacity(events.len());
+        for &e in events.iter() {
+            inner.push(unsafe { NonNull::new_unchecked(e as *const Event as *mut Event) });
+        }
+        Events(inner)
+    }
+
+    pub fn iter(&self) -> EventsIter {
+        EventsIter(self.0.iter())
+    }
+}
+
+pub struct EventsIter<'a>(std::slice::Iter<'a, NonNull<Event>>);
+
+impl<'a> Iterator for EventsIter<'a> {
+    type Item = &'a Event;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let e = self.0.next()?;
+        Some(unsafe { e.as_ref() })
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.0.size_hint()
+    }
+}
+
+impl<'a> ExactSizeIterator for EventsIter<'a> {
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+}
+
+/// Generalized wrapper around events fired by specialized shared data types.
+pub enum Event {
+    Text(TextEvent),
+    Array(ArrayEvent),
+    Map(MapEvent),
+    XmlElement(XmlEvent),
+    XmlText(XmlTextEvent),
+}
+
+impl Event {
+    pub(crate) fn set_current_target(&mut self, target: BranchPtr) {
+        match self {
+            Event::Text(e) => e.current_target = target,
+            Event::Array(e) => e.current_target = target,
+            Event::Map(e) => e.current_target = target,
+            Event::XmlElement(e) => e.current_target = target,
+            Event::XmlText(e) => e.current_target = target,
+        }
+    }
+
+    /// Returns a path from root type to a shared type which triggered current [Event]. This path
+    /// consists of string names or indexes, which can be used to access nested type.
+    pub fn path(&self) -> Path {
+        match self {
+            Event::Text(e) => e.path(),
+            Event::Array(e) => e.path(),
+            Event::Map(e) => e.path(),
+            Event::XmlElement(e) => e.path(),
+            Event::XmlText(e) => e.path(),
+        }
+    }
+
+    /// Returns a shared data types which triggered current [Event].
+    pub fn target(&self) -> Value {
+        match self {
+            Event::Text(e) => Value::YText(e.target().clone()),
+            Event::Array(e) => Value::YArray(e.target().clone()),
+            Event::Map(e) => Value::YMap(e.target().clone()),
+            Event::XmlElement(e) => Value::YXmlElement(e.target().clone()),
+            Event::XmlText(e) => Value::YXmlText(e.target().clone()),
+        }
+    }
 }

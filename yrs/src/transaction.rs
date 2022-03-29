@@ -8,7 +8,7 @@ use crate::store::Store;
 use crate::types::array::Array;
 use crate::types::xml::{XmlElement, XmlText};
 use crate::types::{
-    BranchPtr, Map, Text, TypePtr, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
+    BranchPtr, Event, Events, Map, Text, TypePtr, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
     TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT,
 };
 use crate::update::Update;
@@ -323,7 +323,8 @@ impl Transaction {
                     }
                     ItemContent::Type(inner) => {
                         let mut ptr = inner.start;
-                        //TODO: self.changed.remove(&item.parent); // uncomment when deep observe is complete
+                        self.changed
+                            .remove(&TypePtr::Branch(BranchPtr::from(inner)));
 
                         while let Some(Block::Item(item)) = ptr.as_deref() {
                             if !item.is_deleted() {
@@ -488,12 +489,52 @@ impl Transaction {
         // 2. emit 'beforeObserverCalls'
         // 3. for each change observed by the transaction call 'afterTransaction'
         if !self.changed.is_empty() {
+            let mut changed_parents: HashMap<BranchPtr, Vec<usize>> = HashMap::new();
+            let mut event_cache = Vec::new();
+
             for (ptr, subs) in self.changed.iter() {
                 if let TypePtr::Branch(branch) = ptr {
-                    if let Some(o) = branch.observers.as_ref() {
-                        o.publish(branch.clone(), self, subs.clone());
+                    if let Some(e) = branch.trigger(self, subs.clone()) {
+                        event_cache.push(e);
+
+                        let mut current = *branch;
+                        loop {
+                            if current.deep_observers.is_some() {
+                                let entries = changed_parents.entry(current).or_default();
+                                entries.push(event_cache.len() - 1);
+                            }
+
+                            if let Some(Block::Item(item)) = current.item.as_deref() {
+                                if let TypePtr::Branch(parent) = item.parent {
+                                    current = parent;
+                                    continue;
+                                }
+                            }
+
+                            break;
+                        }
                     }
                 }
+            }
+
+            // deep observe events
+            for (&branch, events) in changed_parents.iter() {
+                // sort events by path length so that top-level events are fired first.
+                let mut unsorted: Vec<&Event> = Vec::with_capacity(events.len());
+
+                for &i in events.iter() {
+                    let e = &mut event_cache[i];
+                    e.set_current_target(branch);
+                }
+
+                for &i in events.iter() {
+                    unsorted.push(&event_cache[i]);
+                }
+
+                // We don't need to check for events.length
+                // because we know it has at least one element
+                let events = Events::new(&mut unsorted);
+                branch.trigger_deep(self, &events);
             }
         }
 
@@ -569,7 +610,7 @@ impl Transaction {
 
     pub(crate) fn add_changed_type(&mut self, parent: BranchPtr, parent_sub: Option<Rc<str>>) {
         let trigger = if let Some(ptr) = parent.item {
-            (ptr.id().clock < (self.before_state.get(&ptr.id().client))) && ptr.is_deleted()
+            (ptr.id().clock < self.before_state.get(&ptr.id().client)) && !ptr.is_deleted()
         } else {
             true
         };
