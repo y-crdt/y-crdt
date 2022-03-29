@@ -65,8 +65,8 @@ impl Store {
     /// Returns a branch reference to a complex type identified by its pointer. Returns `None` if
     /// no such type could be found or was ever defined.
     pub fn get_type<K: Into<Rc<str>>>(&self, key: K) -> Option<BranchPtr> {
-        let ptr = self.types.get(&key.into())?;
-        Some(BranchPtr::from(ptr))
+        let ptr = BranchPtr::from(self.types.get(&key.into())?);
+        Some(ptr)
     }
 
     /// Returns a branch reference to a complex type identified by its pointer. Returns `None` if
@@ -79,7 +79,11 @@ impl Store {
     ) -> BranchPtr {
         let key = key.into();
         match self.types.entry(key.clone()) {
-            Entry::Occupied(mut e) => BranchPtr::from(e.get_mut()),
+            Entry::Occupied(mut e) => {
+                let branch = e.get_mut();
+                branch.repair_type_ref(type_ref);
+                BranchPtr::from(branch)
+            }
             Entry::Vacant(e) => {
                 let mut branch = Branch::new(type_ref, node_name);
                 let branch_ref = BranchPtr::from(&mut branch);

@@ -960,3 +960,154 @@ TEST_CASE("YXmlElement observe") {
     free(t);
     ydoc_destroy(doc);
 }
+
+typedef struct YDeepObserveTest {
+    YPathSegment* path[4];
+    int path_lens[4];
+    int count;
+} YDeepObserveTest;
+
+YDeepObserveTest* new_ydeepobserve_test() {
+    YDeepObserveTest* e = (YDeepObserveTest*)malloc(sizeof(YDeepObserveTest));
+    memset(e->path, 0, sizeof(YPathSegment*) * 4);
+    memset(e->path_lens, 0, sizeof(int) * 4);
+    e->count = 0;
+    return e;
+}
+
+void ydeepobserve_test_clean(YDeepObserveTest* test) {
+    for (int i = 0; i < test->count; i++) {
+        ypath_destroy(test->path[i], test->path_lens[i]);
+    }
+    test->count = 0;
+}
+
+void ydeepobserve_test(void* state, int event_count, const YEvent* events) {
+    YDeepObserveTest* test = (YDeepObserveTest*)state;
+    // cleanup previous state
+    ydeepobserve_test_clean(test);
+
+    for (int i = 0; i < event_count; i++) {
+        YEvent e = events[i];
+        int path_len = 0;
+        switch (e.tag) {
+            case Y_ARRAY: {
+                YArrayEvent nested = e.content.array;
+                test->path[i] = yarray_event_path(&nested, &path_len);
+                test->path_lens[i] = path_len;
+                test->count++;
+                break;
+            }
+            case Y_MAP: {
+                YMapEvent nested = e.content.map;
+                test->path[i] = ymap_event_path(&nested, &path_len);
+                test->path_lens[i] = path_len;
+                test->count++;
+                break;
+            }
+            // we don't use other Y types in this test
+        }
+    }
+}
+
+TEST_CASE("YArray deep observe") {
+    YDoc* doc = ydoc_new_with_id(1);
+    YTransaction* txn = ytransaction_new(doc);
+    Branch* array = yarray(txn, "test");
+    ytransaction_commit(txn);
+
+    YDeepObserveTest* state = new_ydeepobserve_test();
+    unsigned int subscription_id = yobserve_deep(array, (void *) state, ydeepobserve_test);
+
+    txn = ytransaction_new(doc);
+    YInput input = yinput_ymap(NULL, NULL, 0);
+    yarray_insert_range(array, txn, 0, &input, 1);
+    ytransaction_commit(txn);
+
+    txn = ytransaction_new(doc);
+    YOutput* output = yarray_get(array, 0);
+    Branch* map = youtput_read_ymap(output);
+    input = yinput_string("value");
+    ymap_insert(map, txn, "key", &input);
+    input = yinput_long(0);
+    yarray_insert_range(array, txn, 0, &input, 1);
+    ytransaction_commit(txn);
+
+    REQUIRE(state->count == 2);
+    int path_len = state->path_lens[0];
+    YPathSegment* path = state->path[0];
+    REQUIRE(path_len == 0);
+    path_len = state->path_lens[1];
+    path = state->path[1];
+    REQUIRE(path_len == 1);
+    REQUIRE(path[0].tag == Y_EVENT_PATH_INDEX);
+    REQUIRE(path[0].value.index == 1);
+
+    yunobserve_deep(array, subscription_id);
+    ydeepobserve_test_clean(state);
+    free(state);
+    ydoc_destroy(doc);
+}
+
+TEST_CASE("YMap deep observe") {
+    YDoc* doc = ydoc_new_with_id(1);
+    YTransaction* txn = ytransaction_new(doc);
+    Branch* map = ymap(txn, "test");
+    ytransaction_commit(txn);
+
+    YDeepObserveTest* state = new_ydeepobserve_test();
+    unsigned int subscription_id = yobserve_deep(map, (void *) state, ydeepobserve_test);
+
+    /* map.set(txn, 'map', new Y.YMap()) */
+    txn = ytransaction_new(doc);
+    YInput input = yinput_ymap(NULL, NULL, 0);
+    ymap_insert(map, txn, "map", &input);
+    ytransaction_commit(txn);
+
+    // path: []
+    REQUIRE(state->count == 1);
+    int path_len = state->path_lens[0];
+    YPathSegment* path = state->path[0];
+    REQUIRE(path_len == 0);
+
+    /* map.get('map').set(txn, 'array', new Y.YArray()) */
+    txn = ytransaction_new(doc);
+    YOutput* output = ymap_get(map, "map");
+    Branch* nested = youtput_read_ymap(output);
+    input = yinput_yarray(NULL, 0);
+    ymap_insert(nested, txn, "array", &input);
+    ytransaction_commit(txn);
+
+    // path: ['map']
+    REQUIRE(state->count == 1);
+    path_len = state->path_lens[0];
+    path = state->path[0];
+    REQUIRE(path_len == 1);
+    REQUIRE(path[0].tag == Y_EVENT_PATH_KEY);
+    REQUIRE(!strcmp(path[0].value.key, "map"));
+
+    /* map.get('map').get('array').insert(txn, 0, ['content']) */
+    txn = ytransaction_new(doc);
+    output = ymap_get(map, "map");
+    nested = youtput_read_ymap(output);
+    output = ymap_get(nested, "array");
+    nested = youtput_read_yarray(output);
+    input = yinput_string("content");
+    yarray_insert_range(nested, txn, 0, &input, 1);
+    ytransaction_commit(txn);
+
+    // path: ['map', 'array']
+    REQUIRE(state->count == 1);
+    path_len = state->path_lens[0];
+    path = state->path[0];
+    REQUIRE(path_len == 2);
+    REQUIRE(path[0].tag == Y_EVENT_PATH_KEY);
+    REQUIRE(!strcmp(path[0].value.key, "map"));
+    REQUIRE(path[1].tag == Y_EVENT_PATH_KEY);
+    REQUIRE(!strcmp(path[1].value.key, "array"));
+
+    yunobserve_deep(map, subscription_id);
+    ydeepobserve_test_clean(state);
+    free(state);
+    ydoc_destroy(doc);
+}

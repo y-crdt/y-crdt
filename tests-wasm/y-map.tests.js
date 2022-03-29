@@ -141,3 +141,27 @@ export const testObserver = tc => {
     t.compare(target, null)
     t.compare(entries, null)
 }
+/**
+ * @param {t.TestCase} tc
+ */
+export const testObserversUsingObservedeep = tc => {
+    const d1 = new Y.YDoc()
+    const map = d1.getMap('map')
+
+    /**
+     * @type {Array<Array<string|number>>}
+     */
+    const paths = []
+    let calls = 0
+    map.observeDeep(events => {
+        for (let e of events) {
+            paths.push(e.path())
+        }
+        calls++
+    })
+    d1.transact(txn => map.set(txn, 'map', new Y.YMap()))
+    d1.transact(txn => map.get('map').set(txn, 'array', new Y.YArray()))
+    d1.transact(txn => map.get('map').get('array').insert(txn, 0, ['content']))
+    t.assert(calls === 3)
+    t.compare(paths, [[], ['map'], ['map', 'array']])
+}
