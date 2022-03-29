@@ -195,7 +195,7 @@ pub struct Branch {
     pub(crate) item: Option<BlockPtr>,
 
     /// A tag name identifier, used only by [XmlElement].
-    pub name: Option<String>,
+    pub name: Option<Rc<str>>,
 
     /// A length of an indexed sequence component of a current branch node. Map component elements
     /// are computed on demand.
@@ -238,7 +238,7 @@ impl PartialEq for Branch {
 }
 
 impl Branch {
-    pub fn new(type_ref: TypeRefs, name: Option<String>) -> Box<Self> {
+    pub fn new(type_ref: TypeRefs, name: Option<Rc<str>>) -> Box<Self> {
         Box::new(Self {
             start: None,
             map: HashMap::default(),
@@ -978,7 +978,7 @@ pub enum Delta {
 }
 
 /// An alias for map of attributes used as formatting parameters by [Text] and [XmlText] types.
-pub type Attrs = HashMap<Box<str>, Any>;
+pub type Attrs = HashMap<Rc<str>, Any>;
 
 pub(crate) fn event_keys(
     txn: &Transaction,

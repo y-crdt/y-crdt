@@ -2,6 +2,7 @@ use crate::types::TypeRefs;
 use crate::*;
 use lib0::decoding::Read;
 use lib0::{any::Any, decoding::Cursor};
+use std::rc::Rc;
 
 /// A trait that can be implemented by any other type in order to support lib0 decoding capability.
 pub trait Decode: Sized {
@@ -66,7 +67,7 @@ pub trait Decoder: Read {
     fn read_json(&mut self) -> lib0::any::Any;
 
     /// Read key string.
-    fn read_key(&mut self) -> &str;
+    fn read_key(&mut self) -> Rc<str>;
 
     /// Consume a rest of the decoded buffer data and return it without parsing.
     fn read_to_end(&mut self) -> &[u8];
@@ -161,8 +162,8 @@ impl<'a> Decoder for DecoderV1<'a> {
         Any::from_json(src)
     }
 
-    fn read_key(&mut self) -> &str {
-        self.read_string()
+    fn read_key(&mut self) -> Rc<str> {
+        self.read_string().into()
     }
 
     fn read_to_end(&mut self) -> &[u8] {
@@ -173,7 +174,7 @@ impl<'a> Decoder for DecoderV1<'a> {
 /// Version 2 of lib0 decoder.
 pub struct DecoderV2<'a> {
     cursor: Cursor<'a>,
-    keys: Vec<&'a str>,
+    keys: Vec<Rc<str>>,
     ds_curr_val: u32,
     key_clock_decoder: IntDiffOptRleDecoder<'a>,
     client_decoder: UIntOptRleDecoder<'a>,
@@ -330,13 +331,13 @@ impl<'a> Decoder for DecoderV2<'a> {
         Any::from_json(self.cursor.read_string())
     }
 
-    fn read_key(&mut self) -> &str {
+    fn read_key(&mut self) -> Rc<str> {
         let key_clock = self.key_clock_decoder.read_u32();
-        if let Some(&key) = self.keys.get(key_clock as usize) {
-            key
+        if let Some(key) = self.keys.get(key_clock as usize) {
+            key.clone()
         } else {
-            let key = self.string_decoder.read_str();
-            self.keys.push(key);
+            let key: Rc<str> = self.string_decoder.read_str().into();
+            self.keys.push(key.clone());
             key
         }
     }

@@ -1141,7 +1141,7 @@ pub enum ItemContent {
 
     /// Formatting attribute entry. Format attributes are not considered countable and don't
     /// contribute to an overall length of a collection they are applied to.
-    Format(Box<str>, Box<Any>),
+    Format(Rc<str>, Box<Any>),
 
     /// A chunk of text, usually applied by collaborative text insertion.
     String(SplittableString),
@@ -1273,7 +1273,7 @@ impl ItemContent {
                 let type_ref = inner.type_ref();
                 if type_ref == types::TYPE_REFS_XML_ELEMENT || type_ref == types::TYPE_REFS_XML_HOOK
                 {
-                    encoder.write_key(inner.name.as_ref().unwrap().as_str())
+                    encoder.write_key(inner.name.as_ref().unwrap().as_ref())
                 }
             }
             ItemContent::Any(any) => {
@@ -1302,7 +1302,7 @@ impl ItemContent {
                 }
             }
             ItemContent::Format(k, v) => {
-                encoder.write_string(k.as_ref());
+                encoder.write_key(k.as_ref());
                 encoder.write_json(v.as_ref());
             }
             ItemContent::Type(inner) => {
@@ -1310,7 +1310,7 @@ impl ItemContent {
                 encoder.write_type_ref(type_ref);
                 if type_ref == types::TYPE_REFS_XML_ELEMENT || type_ref == types::TYPE_REFS_XML_HOOK
                 {
-                    encoder.write_key(inner.name.as_ref().unwrap().as_str())
+                    encoder.write_key(inner.name.as_ref().unwrap().as_ref())
                 }
             }
             ItemContent::Any(any) => {
@@ -1342,7 +1342,7 @@ impl ItemContent {
             BLOCK_ITEM_STRING_REF_NUMBER => ItemContent::String(decoder.read_string().into()),
             BLOCK_ITEM_EMBED_REF_NUMBER => ItemContent::Embed(decoder.read_json().into()),
             BLOCK_ITEM_FORMAT_REF_NUMBER => {
-                ItemContent::Format(decoder.read_string().into(), decoder.read_json().into())
+                ItemContent::Format(decoder.read_key(), decoder.read_json().into())
             }
             BLOCK_ITEM_TYPE_REF_NUMBER => {
                 let type_ref = decoder.read_type_ref();
