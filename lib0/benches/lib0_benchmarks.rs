@@ -177,8 +177,8 @@ fn bench_serialization(c: &mut Criterion) {
     custom_group.finish();
 }
 
-#[cfg(feature = "serde")]
+#[cfg(feature = "lib0-serde")]
 criterion_group!(benches, bench_encoding, bench_serialization);
-#[cfg(not(feature = "serde"))]
+#[cfg(not(feature = "lib0-serde"))]
 criterion_group!(benches, bench_encoding);
 criterion_main!(benches);
