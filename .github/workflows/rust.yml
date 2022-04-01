@@ -11,29 +11,27 @@ env:
 
 jobs:
   build:
-
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [macos-latest, ubuntu-latest]
 
     steps:
-      - name: Install nodejs
-        uses: actions/setup-node@v2
-        with:
-          node-version: '14'
 
       - name: Checkout sources
         uses: actions/checkout@v2
 
-      - name: Stable with rustfmt and clippy
+      - name: install Rust toolchain
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           override: true
 
-      - name: Build
-        run: cargo build --verbose
+      - name: build default
+        run: cargo build --verbose --release
 
-      - name: Run tests
-        run: cargo test --verbose
+      #- name: build --feature lib0-serde
+      #  run: cargo build --verbose --features lib0-serde
 
       - name: Install cbindgen
         run: cargo install cbindgen
@@ -41,11 +39,59 @@ jobs:
       - name: Generate C bindings
         run: cbindgen --config ./yffi/cbindgen.toml --crate yffi --output ./tests-ffi/include/libyrs.h
 
+  test-linux:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v2
+
+      - name: test
+        run: cargo test --release
+
+  test-windows:
+    runs-on: windows-latest
+    needs: build
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v2
+
+      - name: test
+        run: cargo test --release
+
+  test-macos:
+    runs-on: macos-latest
+    needs: build
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v2
+
+      - name: test
+        run: cargo test --release
+
+  wasm:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v2
+
+      - name: install Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      - name: Install nodejs
+        uses: actions/setup-node@v2
+        with:
+          node-version: '16'
+
       - name: Install wasm-pack
-        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+        run: npm install -g wasm-pack
 
       - name: Build wasm
         run: wasm-pack build --target nodejs ./ywasm
 
-      - name: Run tests wasm
+      - name: test web assembly
         run: cd ./tests-wasm && npm i && npm test
