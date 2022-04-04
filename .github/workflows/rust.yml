@@ -112,8 +112,14 @@ jobs:
       - name: install cmake
         uses: lukka/get-cmake@latest
 
-      - name: build tests-ffi
+      - name: build libyrs
+        run: cargo build -p yffi
+
+      - name: generate Makefile
         run: mkdir ./tests-ffi/cmake-build-debug && cd ./tests-ffi && cmake -DCMAKE_BUILD_TYPE=Debug .
 
-      - name: run cmake tests
-        run: cd ./tests-ffi && cmake --build ./cmake-build-debug --target yrs-ffi-tests
+      - name: build c-ffi test project
+        run: cd ./tests-ffi && make all
+
+      - name: run tests
+        run: ./tests-ffi/yrs-ffi-tests
