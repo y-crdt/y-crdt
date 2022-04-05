@@ -165,6 +165,7 @@ impl Any {
         }
     }
 
+    #[cfg(not(feature = "lib0-serde"))]
     pub fn to_json(&self, buf: &mut String) {
         use std::fmt::Write;
 
@@ -228,10 +229,28 @@ impl Any {
         }
     }
 
+    #[cfg(not(feature = "lib0-serde"))]
     pub fn from_json(src: &str) -> Self {
         use crate::json_parser::JsonParser;
         let mut parser = JsonParser::new(src.chars());
         parser.parse().unwrap()
+    }
+
+    #[cfg(feature = "lib0-serde")]
+    pub fn from_json(src: &str) -> Self {
+        serde_json::from_str(src).unwrap()
+    }
+
+    #[cfg(feature = "lib0-serde")]
+    pub fn to_json(&self, buf: &mut String) {
+        use serde::Serialize;
+        use serde_json::Serializer;
+
+        let buf = unsafe { buf.as_mut_vec() };
+        let mut cursor = std::io::Cursor::new(buf);
+
+        let mut s = Serializer::new(cursor);
+        self.serialize(&mut s).unwrap();
     }
 }
 

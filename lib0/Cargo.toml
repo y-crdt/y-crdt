@@ -8,7 +8,12 @@ description = "Efficient binary encoding library for Yrs"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[features]
+lib0-serde = ["serde", "serde_json"]
+
 [dependencies]
+serde = { version = "1.0", optional = true, default-features = false }
+serde_json = { version = "1.0", optional = true }
 
 [dev-dependencies]
 criterion = "^0.3"
