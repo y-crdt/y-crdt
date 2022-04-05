@@ -1,0 +1,125 @@
+name: Main
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+
+    steps:
+
+      - name: checkout sources
+        uses: actions/checkout@v2
+
+      - name: install Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      - name: build default
+        run: cargo build --verbose --release
+
+      #- name: build --feature lib0-serde
+      #  run: cargo build --verbose --features lib0-serde
+
+  test-linux:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: checkout sources
+        uses: actions/checkout@v2
+
+      - name: test
+        run: cargo test --release
+
+  test-windows:
+    runs-on: windows-latest
+    needs: build
+    steps:
+      - name: checkout sources
+        uses: actions/checkout@v2
+
+      - name: test
+        run: cargo test --release
+
+  test-macos:
+    runs-on: macos-latest
+    needs: build
+    steps:
+      - name: checkout sources
+        uses: actions/checkout@v2
+
+      - name: test
+        run: cargo test --release
+
+  wasm:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: checkout sources
+        uses: actions/checkout@v2
+
+      - name: install Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      - name: install nodejs
+        uses: actions/setup-node@v2
+        with:
+          node-version: '16'
+
+      - name: install wasm-pack
+        run: npm install -g wasm-pack
+
+      - name: build wasm
+        run: wasm-pack build --target nodejs ./ywasm
+
+      - name: test web assembly
+        run: cd ./tests-wasm && npm i && npm test
+
+  c-ffi:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: checkout sources
+        uses: actions/checkout@v2
+
+      - name: install Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      - name: install cbindgen
+        run: cargo install cbindgen
+
+      - name: generate C bindings
+        run: cbindgen --config ./yffi/cbindgen.toml --crate yffi --output ./tests-ffi/include/libyrs.h
+
+      - name: install cmake
+        uses: lukka/get-cmake@latest
+
+      - name: build libyrs
+        run: cargo build -p yffi
+
+      - name: generate Makefile
+        run: mkdir ./tests-ffi/cmake-build-debug && cd ./tests-ffi && cmake -DCMAKE_BUILD_TYPE=Debug .
+
+      - name: build c-ffi test project
+        run: cd ./tests-ffi && make all
+
+      - name: run tests
+        run: ./tests-ffi/yrs-ffi-tests
