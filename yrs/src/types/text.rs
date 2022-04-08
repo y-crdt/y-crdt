@@ -370,6 +370,7 @@ impl Text {
                             let content_len = item.content_len(encoding);
                             if len < content_len {
                                 let new_right = txn.store_mut().blocks.split_block(right, len);
+                                pos.left = Some(right);
                                 pos.right = new_right;
                                 break;
                             }
@@ -440,7 +441,6 @@ impl Text {
                 let mut item_ptr = BlockPtr::from(&mut item);
                 pos.right = Some(item_ptr);
                 item_ptr.integrate(txn, 0);
-
                 let local_block_list = txn
                     .store_mut()
                     .blocks
@@ -714,14 +714,14 @@ impl TextEvent {
     }
 
     pub(crate) fn get_delta(target: BranchPtr, txn: &Transaction) -> Vec<Delta> {
-        #[derive(Clone, Copy, Eq, PartialEq)]
+        #[derive(Debug, Clone, Copy, Eq, PartialEq)]
         enum Action {
             Insert,
             Retain,
             Delete,
         }
 
-        #[derive(Default)]
+        #[derive(Debug, Default)]
         struct DeltaAssembler {
             action: Option<Action>,
             insert: Option<Value>,
@@ -764,7 +764,7 @@ impl TextEvent {
                         } else {
                             Some(Box::new(self.attrs.clone()))
                         };
-                        self.delta.push(Delta::Retain(len, attrs))
+                        self.delta.push(Delta::Retain(len, attrs));
                     }
                 }
             }
@@ -1634,5 +1634,30 @@ mod test {
             let mut txn = d1.transact();
             assert_eq!(txt1.diff(&mut txn), expected);
         }
+    }
+
+    #[test]
+    fn issue_101() {
+        let d1 = Doc::with_client_id(1);
+        let mut txt1 = d1.transact().get_text("text");
+        let delta = Rc::new(RefCell::new(None));
+        let delta_copy = delta.clone();
+
+        let attrs: Attrs = HashMap::from([("bold".into(), true.into())]);
+
+        txt1.insert(&mut d1.transact(), 0, "abcd");
+
+        let _sub = txt1.observe(move |txn, e| {
+            let mut d = delta_copy.borrow_mut();
+            *d = Some(e.delta(txn).to_vec());
+        });
+        txt1.format(&mut d1.transact(), 1, 2, attrs.clone());
+
+        let expected = vec![
+            Delta::Retain(1, None),
+            Delta::Retain(2, Some(Box::new(attrs))),
+        ];
+        let actual = delta.borrow();
+        assert_eq!(actual.as_ref(), Some(&expected));
     }
 }
