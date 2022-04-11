@@ -300,19 +300,25 @@ impl Update {
     fn missing(block: &BlockCarrier, local_sv: &StateVector) -> Option<u64> {
         if let BlockCarrier::Block(block) = block {
             if let Block::Item(item) = block.as_ref() {
-                if let Some(origin) = item.origin {
-                    if origin.client != item.id.client && !local_sv.contains(&item.id) {
+                if let Some(origin) = &item.origin {
+                    if origin.client != item.id.client
+                        && origin.clock >= local_sv.get(&origin.client)
+                    {
                         return Some(origin.client);
                     }
-                } else if let Some(right_origin) = item.right_origin {
-                    if right_origin.client != item.id.client && !local_sv.contains(&item.id) {
+                } else if let Some(right_origin) = &item.right_origin {
+                    if right_origin.client != item.id.client
+                        && right_origin.clock >= local_sv.get(&right_origin.client)
+                    {
                         return Some(right_origin.client);
                     }
-                } else if let TypePtr::Branch(parent) = item.parent {
-                    if let Some(block) = parent.item {
-                        let parent_client = block.id().client;
-                        if parent_client != item.id.client && !local_sv.contains(&item.id) {
-                            return Some(parent_client);
+                } else if let TypePtr::Branch(parent) = &item.parent {
+                    if let Some(block) = &parent.item {
+                        let parent_id = block.id();
+                        if parent_id.client != item.id.client
+                            && parent_id.clock >= local_sv.get(&parent_id.client)
+                        {
+                            return Some(parent_id.client);
                         }
                     }
                 }
