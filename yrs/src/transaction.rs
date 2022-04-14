@@ -2,7 +2,7 @@ use crate::*;
 
 use crate::block::{Block, BlockPtr, Item, ItemContent, Prelim, ID};
 use crate::block_store::{Snapshot, StateVector};
-use crate::event::UpdateEvent;
+use crate::event::{TransactionCleanupEvent, UpdateEvent};
 use crate::id_set::DeleteSet;
 use crate::store::Store;
 use crate::types::array::Array;
@@ -14,7 +14,7 @@ use crate::types::{
 use crate::update::Update;
 use std::cell::UnsafeCell;
 use std::collections::{HashMap, HashSet};
-use std::ops::DerefMut;
+use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
 use updates::encoder::*;
 
@@ -578,6 +578,13 @@ impl Transaction {
             }
         }
         // 8. emit 'afterTransactionCleanup'
+        if let Some(transaction_cleanup_events) = store.transaction_cleanup_events.deref() {
+            let event = TransactionCleanupEvent {
+                delete_set: self.delete_set.clone(),
+                after_state: self.after_state.clone(),
+            };
+            transaction_cleanup_events.publish(&self, &event);
+        }
         // 9. emit 'update'
         // 10. emit 'updateV2'
         // 11. add and remove subdocs

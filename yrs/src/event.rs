@@ -1,5 +1,5 @@
 use crate::update::Update;
-use crate::Transaction;
+use crate::{DeleteSet, StateVector, Transaction};
 use rand::RngCore;
 use std::collections::HashMap;
 use std::ptr::NonNull;
@@ -85,6 +85,11 @@ impl UpdateEvent {
     pub(crate) fn new(update: Update) -> Self {
         UpdateEvent { update }
     }
+}
+
+pub struct TransactionCleanupEvent {
+    pub delete_set: DeleteSet,
+    pub after_state: StateVector,
 }
 
 #[cfg(test)]
