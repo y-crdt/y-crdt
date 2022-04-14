@@ -1,5 +1,5 @@
 use crate::block::ClientID;
-use crate::event::{Subscription, UpdateEvent};
+use crate::event::{EventHandler, Subscription, TransactionCleanupEvent, UpdateEvent};
 use crate::store::Store;
 use crate::transaction::Transaction;
 use crate::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
@@ -81,6 +81,20 @@ impl Doc {
     {
         let store = unsafe { &mut *self.store.get() };
         store.update_events.subscribe(f)
+    }
+
+    pub fn on_transaction_cleanup<F>(&mut self, f: F) -> Subscription<TransactionCleanupEvent>
+    where
+        F: Fn(&Transaction, &TransactionCleanupEvent) -> () + 'static,
+    {
+        let store = unsafe { &mut *self.store.get() };
+        if store.transaction_cleanup_events.is_none() {
+            store.transaction_cleanup_events = Box::new(Some(EventHandler::new()));
+        }
+        match store.transaction_cleanup_events.as_mut() {
+            Some(handler) => handler.subscribe(f),
+            _ => unreachable!(),
+        }
     }
 
     pub fn encode_state_as_update<E: Encoder>(&self, sv: &StateVector, encoder: &mut E) {
