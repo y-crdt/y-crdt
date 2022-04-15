@@ -1,3 +1,4 @@
+use crate::block::ClientID;
 use crate::event::{Subscription, UpdateEvent};
 use crate::store::Store;
 use crate::transaction::Transaction;
@@ -41,7 +42,7 @@ use std::rc::Rc;
 /// ```
 pub struct Doc {
     /// A unique client identifier, that's also a unique identifier of current document replica.
-    pub client_id: u64,
+    pub client_id: ClientID,
     store: Rc<UnsafeCell<Store>>,
 }
 
@@ -112,7 +113,7 @@ impl Default for Doc {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Options {
     /// Globally unique 53-bit long client identifier.
-    pub client_id: u64,
+    pub client_id: ClientID,
     /// How to we count offsets and lengths used in text operations.
     pub offset_kind: OffsetKind,
     /// Determines if transactions commits should try to perform GC-ing of deleted items.
@@ -120,7 +121,7 @@ pub struct Options {
 }
 
 impl Options {
-    pub fn with_client_id(client_id: u64) -> Self {
+    pub fn with_client_id(client_id: ClientID) -> Self {
         Options {
             client_id,
             offset_kind: OffsetKind::Bytes,
@@ -132,7 +133,7 @@ impl Options {
 impl Default for Options {
     fn default() -> Self {
         let client_id: u32 = rand::thread_rng().gen();
-        Self::with_client_id(client_id as u64)
+        Self::with_client_id(client_id as ClientID)
     }
 }
 

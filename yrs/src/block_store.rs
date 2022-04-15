@@ -1,4 +1,4 @@
-use crate::block::{Block, BlockPtr, ID};
+use crate::block::{Block, BlockPtr, ClientID, ID};
 use crate::types::TypePtr;
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
@@ -19,7 +19,7 @@ use std::vec::Vec;
 /// Another popular name for the concept represented by state vector is
 /// [Version Vector](https://en.wikipedia.org/wiki/Version_vector).
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
-pub struct StateVector(HashMap<u64, u32, BuildHasherDefault<ClientHasher>>);
+pub struct StateVector(HashMap<ClientID, u32, BuildHasherDefault<ClientHasher>>);
 
 impl StateVector {
     /// Checks if current state vector contains any data.
@@ -51,7 +51,7 @@ impl StateVector {
 
     /// Get the latest clock sequence number value for a given `client_id` as observed from
     /// the perspective of a current state vector.
-    pub fn get(&self, client_id: &u64) -> u32 {
+    pub fn get(&self, client_id: &ClientID) -> u32 {
         match self.0.get(client_id) {
             Some(state) => *state,
             None => 0,
@@ -60,7 +60,7 @@ impl StateVector {
 
     /// Updates a state vector observed clock sequence number for a given `client` by incrementing
     /// it by a given `delta`.
-    pub fn inc_by(&mut self, client: u64, delta: u32) {
+    pub fn inc_by(&mut self, client: ClientID, delta: u32) {
         if delta > 0 {
             let e = self.0.entry(client).or_default();
             *e = *e + delta;
@@ -70,7 +70,7 @@ impl StateVector {
     /// Updates a state vector observed clock sequence number for a given `client` by setting it to
     /// a minimum value between an already present one and the provided `clock`. In case if state
     /// vector didn't contain any value for that `client`, a `clock` value will be used.
-    pub fn set_min(&mut self, client: u64, clock: u32) {
+    pub fn set_min(&mut self, client: ClientID, clock: u32) {
         match self.0.entry(client) {
             Entry::Occupied(e) => {
                 let value = e.into_mut();
@@ -85,7 +85,7 @@ impl StateVector {
     /// Updates a state vector observed clock sequence number for a given `client` by setting it to
     /// a maximum value between an already present one and the provided `clock`. In case if state
     /// vector didn't contain any value for that `client`, a `clock` value will be used.
-    pub fn set_max(&mut self, client: u64, clock: u32) {
+    pub fn set_max(&mut self, client: ClientID, clock: u32) {
         let e = self.0.entry(client).or_default();
         *e = (*e).max(clock);
     }
@@ -392,7 +392,7 @@ impl<'a> Iterator for ClientBlockListIter<'a> {
 /// client.
 #[derive(PartialEq)]
 pub(crate) struct BlockStore {
-    clients: HashMap<u64, ClientBlockList, BuildHasherDefault<ClientHasher>>,
+    clients: HashMap<ClientID, ClientBlockList, BuildHasherDefault<ClientHasher>>,
 }
 
 pub(crate) type Iter<'a> = std::collections::hash_map::Iter<'a, u64, ClientBlockList>;
@@ -400,7 +400,7 @@ pub(crate) type Iter<'a> = std::collections::hash_map::Iter<'a, u64, ClientBlock
 impl BlockStore {
     /// Creates a new block store instance from a given collection.
     pub(crate) fn from(
-        clients: HashMap<u64, ClientBlockList, BuildHasherDefault<ClientHasher>>,
+        clients: HashMap<ClientID, ClientBlockList, BuildHasherDefault<ClientHasher>>,
     ) -> Self {
         Self { clients }
     }
@@ -428,13 +428,13 @@ impl BlockStore {
 
     /// Returns an immutable reference to a block list for a particular `client`. Returns `None` if
     /// no block list existed for provided `client` in current block store.
-    pub fn get(&self, client: &u64) -> Option<&ClientBlockList> {
+    pub fn get(&self, client: &ClientID) -> Option<&ClientBlockList> {
         self.clients.get(client)
     }
 
     /// Returns a mutable reference to a block list for a particular `client`. Returns `None` if
     /// no block list existed for provided `client` in current block store.
-    pub fn get_mut(&mut self, client: &u64) -> Option<&mut ClientBlockList> {
+    pub fn get_mut(&mut self, client: &ClientID) -> Option<&mut ClientBlockList> {
         self.clients.get_mut(client)
     }
 
@@ -489,7 +489,7 @@ impl BlockStore {
     /// Returns the last observed clock sequence number for a given `client`. This is exclusive
     /// value meaning it describes a clock value of the beginning of the next block that's about
     /// to be inserted. You cannot use that clock value to find any existing block content.
-    pub fn get_state(&self, client: &u64) -> u32 {
+    pub fn get_state(&self, client: &ClientID) -> u32 {
         if let Some(client_structs) = self.clients.get(client) {
             client_structs.get_state()
         } else {
@@ -499,7 +499,7 @@ impl BlockStore {
 
     /// Returns a mutable reference to block list for the given `client`. In case when no such list
     /// existed, a new one will be created and returned.
-    pub(crate) fn get_client_blocks_mut(&mut self, client: u64) -> &mut ClientBlockList {
+    pub(crate) fn get_client_blocks_mut(&mut self, client: ClientID) -> &mut ClientBlockList {
         self.clients
             .entry(client)
             .or_insert_with(ClientBlockList::new)
@@ -509,7 +509,7 @@ impl BlockStore {
     /// existed, a new one will be created with predefined `capacity` and returned.
     pub(crate) fn get_client_blocks_with_capacity_mut(
         &mut self,
-        client: u64,
+        client: ClientID,
         capacity: usize,
     ) -> &mut ClientBlockList {
         self.clients
@@ -566,7 +566,7 @@ pub(crate) struct Blocks<'a> {
 
 impl<'a> Blocks<'a> {
     fn new(update: &'a BlockStore) -> Self {
-        let mut client_blocks: Vec<(&'a u64, &'a ClientBlockList)> =
+        let mut client_blocks: Vec<(&'a ClientID, &'a ClientBlockList)> =
             update.clients.iter().collect();
         // sorting to return higher client ids first
         client_blocks.sort_by(|a, b| b.0.cmp(a.0));

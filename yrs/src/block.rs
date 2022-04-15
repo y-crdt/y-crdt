@@ -60,6 +60,9 @@ pub const HAS_ORIGIN: u8 = 0b10000000;
 /// for blocks which act as map-like types entries.
 pub const HAS_PARENT_SUB: u8 = 0b00100000;
 
+/// Globally unique client identifier.
+pub type ClientID = u64;
+
 /// Block identifier, which allows to uniquely identify any element insertion in a global scope
 /// (across different replicas of the same document). It consists of client ID (which is unique
 /// document replica identifier) and monotonically incrementing clock value.
@@ -69,7 +72,7 @@ pub const HAS_PARENT_SUB: u8 = 0b00100000;
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct ID {
     /// Unique identifier of a client, which inserted corresponding item.
-    pub client: u64,
+    pub client: ClientID,
 
     /// Monotonically incrementing sequence number, which informs about order of inserted item
     /// operation in a scope of a given `client`. This value doesn't have to increase by 1, but
@@ -79,7 +82,7 @@ pub struct ID {
 }
 
 impl ID {
-    pub fn new(client: u64, clock: u32) -> Self {
+    pub fn new(client: ClientID, clock: u32) -> Self {
         ID { client, clock }
     }
 }
