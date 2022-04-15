@@ -56,7 +56,7 @@ impl Doc {
 
     /// Creates a new document with a specified `client_id`. It's up to a caller to guarantee that
     /// this identifier is unique across all communicating replicas of that document.
-    pub fn with_client_id(client_id: u64) -> Self {
+    pub fn with_client_id(client_id: ClientID) -> Self {
         Self::with_options(Options::with_client_id(client_id))
     }
 

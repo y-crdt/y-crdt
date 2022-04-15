@@ -275,7 +275,7 @@ impl<'a> DoubleEndedIterator for IdRangeIter<'a> {
 #[derive(Default, Clone, PartialEq, Eq)]
 pub struct IdSet(HashMap<ClientID, IdRange, BuildHasherDefault<ClientHasher>>);
 
-pub(crate) type Iter<'a> = std::collections::hash_map::Iter<'a, u64, IdRange>;
+pub(crate) type Iter<'a> = std::collections::hash_map::Iter<'a, ClientID, IdRange>;
 
 //TODO: I'd say we should split IdSet and DeleteSet into two structures. While DeleteSet can be
 // implemented in terms of IdSet, it has more specific methods (related to deletion process), while

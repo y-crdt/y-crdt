@@ -179,7 +179,8 @@ impl Update {
             None
         } else {
             let mut store = txn.store_mut();
-            let mut client_block_ref_ids: Vec<u64> = self.blocks.clients.keys().cloned().collect();
+            let mut client_block_ref_ids: Vec<ClientID> =
+                self.blocks.clients.keys().cloned().collect();
             client_block_ref_ids.sort_by(|a, b| b.cmp(a));
 
             let mut current_client_id = client_block_ref_ids.pop();
@@ -302,7 +303,7 @@ impl Update {
         }
     }
 
-    fn missing(block: &BlockCarrier, local_sv: &StateVector) -> Option<u64> {
+    fn missing(block: &BlockCarrier, local_sv: &StateVector) -> Option<ClientID> {
         if let BlockCarrier::Block(block) = block {
             if let Block::Item(item) = block.as_ref() {
                 if let Some(origin) = &item.origin {
@@ -333,9 +334,9 @@ impl Update {
     }
 
     fn next_target<'a, 'b>(
-        client_block_ref_ids: &'a mut Vec<u64>,
+        client_block_ref_ids: &'a mut Vec<ClientID>,
         blocks: &'b mut UpdateBlocks,
-    ) -> Option<(u64, &'b mut VecDeque<BlockCarrier>)> {
+    ) -> Option<(ClientID, &'b mut VecDeque<BlockCarrier>)> {
         loop {
             if let Some((id, Some(client_blocks))) = client_block_ref_ids
                 .pop()
@@ -906,13 +907,13 @@ impl Into<Store> for Update {
 }
 
 pub(crate) struct Blocks<'a> {
-    current_client: std::vec::IntoIter<(&'a u64, &'a VecDeque<BlockCarrier>)>,
+    current_client: std::vec::IntoIter<(&'a ClientID, &'a VecDeque<BlockCarrier>)>,
     current_block: Option<std::collections::vec_deque::Iter<'a, BlockCarrier>>,
 }
 
 impl<'a> Blocks<'a> {
     fn new(update: &'a UpdateBlocks) -> Self {
-        let mut client_blocks: Vec<(&'a u64, &'a VecDeque<BlockCarrier>)> =
+        let mut client_blocks: Vec<(&'a ClientID, &'a VecDeque<BlockCarrier>)> =
             update.clients.iter().collect();
         // sorting to return higher client ids first
         client_blocks.sort_by(|a, b| b.0.cmp(a.0));
@@ -947,13 +948,13 @@ impl<'a> Iterator for Blocks<'a> {
 }
 
 pub(crate) struct IntoBlocks {
-    current_client: std::vec::IntoIter<(u64, VecDeque<BlockCarrier>)>,
+    current_client: std::vec::IntoIter<(ClientID, VecDeque<BlockCarrier>)>,
     current_block: Option<std::collections::vec_deque::IntoIter<BlockCarrier>>,
 }
 
 impl IntoBlocks {
     fn new(update: UpdateBlocks) -> Self {
-        let mut client_blocks: Vec<(u64, VecDeque<BlockCarrier>)> =
+        let mut client_blocks: Vec<(ClientID, VecDeque<BlockCarrier>)> =
             update.clients.into_iter().collect();
         // sorting to return higher client ids first
         client_blocks.sort_by(|a, b| b.0.cmp(&a.0));
