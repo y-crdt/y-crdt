@@ -1,6 +1,6 @@
 use crate::block::{
-    Block, BlockPtr, BlockRange, Item, ItemContent, BLOCK_GC_REF_NUMBER, BLOCK_SKIP_REF_NUMBER,
-    HAS_ORIGIN, HAS_PARENT_SUB, HAS_RIGHT_ORIGIN,
+    Block, BlockPtr, BlockRange, ClientID, Item, ItemContent, BLOCK_GC_REF_NUMBER,
+    BLOCK_SKIP_REF_NUMBER, HAS_ORIGIN, HAS_PARENT_SUB, HAS_RIGHT_ORIGIN,
 };
 use crate::id_set::DeleteSet;
 #[cfg(test)]
@@ -18,7 +18,7 @@ use std::rc::Rc;
 
 #[derive(Debug, Default, PartialEq)]
 pub(crate) struct UpdateBlocks {
-    clients: HashMap<u64, VecDeque<BlockCarrier>, BuildHasherDefault<ClientHasher>>,
+    clients: HashMap<ClientID, VecDeque<BlockCarrier>, BuildHasherDefault<ClientHasher>>,
 }
 
 impl UpdateBlocks {
@@ -73,11 +73,16 @@ impl std::fmt::Display for UpdateBlocks {
     }
 }
 
+impl std::fmt::Debug for BlockCarrier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
+    }
+}
 impl std::fmt::Display for BlockCarrier {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             BlockCarrier::Block(x) => x.fmt(f),
-            BlockCarrier::Skip(_) => Ok(()),
+            BlockCarrier::Skip(x) => write!(f, "Skip{}", x),
         }
     }
 }
@@ -88,7 +93,7 @@ impl std::fmt::Display for BlockCarrier {
 /// relations.
 ///
 /// Update is conceptually similar to a block store itself, however the work patters are different.
-#[derive(Debug, Default, PartialEq)]
+#[derive(Default, PartialEq)]
 pub struct Update {
     pub(crate) blocks: UpdateBlocks,
     pub(crate) delete_set: DeleteSet,
@@ -174,7 +179,8 @@ impl Update {
             None
         } else {
             let mut store = txn.store_mut();
-            let mut client_block_ref_ids: Vec<u64> = self.blocks.clients.keys().cloned().collect();
+            let mut client_block_ref_ids: Vec<ClientID> =
+                self.blocks.clients.keys().cloned().collect();
             client_block_ref_ids.sort_by(|a, b| b.cmp(a));
 
             let mut current_client_id = client_block_ref_ids.pop();
@@ -297,7 +303,7 @@ impl Update {
         }
     }
 
-    fn missing(block: &BlockCarrier, local_sv: &StateVector) -> Option<u64> {
+    fn missing(block: &BlockCarrier, local_sv: &StateVector) -> Option<ClientID> {
         if let BlockCarrier::Block(block) = block {
             if let Block::Item(item) = block.as_ref() {
                 if let Some(origin) = &item.origin {
@@ -328,9 +334,9 @@ impl Update {
     }
 
     fn next_target<'a, 'b>(
-        client_block_ref_ids: &'a mut Vec<u64>,
+        client_block_ref_ids: &'a mut Vec<ClientID>,
         blocks: &'b mut UpdateBlocks,
-    ) -> Option<(u64, &'b mut VecDeque<BlockCarrier>)> {
+    ) -> Option<(ClientID, &'b mut VecDeque<BlockCarrier>)> {
         loop {
             if let Some((id, Some(client_blocks))) = client_block_ref_ids
                 .pop()
@@ -726,7 +732,7 @@ impl<T: Iterator> Memoizable for T {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(PartialEq)]
 pub(crate) enum BlockCarrier {
     Block(Box<Block>),
     Skip(BlockRange),
@@ -858,18 +864,22 @@ pub struct PendingUpdate {
     pub missing: StateVector,
 }
 
-impl PendingUpdate {}
+impl std::fmt::Debug for Update {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
+    }
+}
 
 impl std::fmt::Display for Update {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.is_empty() && self.delete_set.is_empty() {
-            write!(f, "{{}}")
-        } else {
-            write!(f, "{{")?;
-            write!(f, "body: {}", self.blocks)?;
-            write!(f, "delete_set: {}", self.delete_set)?;
-            write!(f, "}}")
+        let mut s = f.debug_struct("");
+        if !self.blocks.is_empty() {
+            s.field("blocks", &self.blocks);
         }
+        if !self.delete_set.is_empty() {
+            s.field("delete set", &self.delete_set);
+        }
+        s.finish()
     }
 }
 
@@ -897,13 +907,13 @@ impl Into<Store> for Update {
 }
 
 pub(crate) struct Blocks<'a> {
-    current_client: std::vec::IntoIter<(&'a u64, &'a VecDeque<BlockCarrier>)>,
+    current_client: std::vec::IntoIter<(&'a ClientID, &'a VecDeque<BlockCarrier>)>,
     current_block: Option<std::collections::vec_deque::Iter<'a, BlockCarrier>>,
 }
 
 impl<'a> Blocks<'a> {
     fn new(update: &'a UpdateBlocks) -> Self {
-        let mut client_blocks: Vec<(&'a u64, &'a VecDeque<BlockCarrier>)> =
+        let mut client_blocks: Vec<(&'a ClientID, &'a VecDeque<BlockCarrier>)> =
             update.clients.iter().collect();
         // sorting to return higher client ids first
         client_blocks.sort_by(|a, b| b.0.cmp(a.0));
@@ -938,13 +948,13 @@ impl<'a> Iterator for Blocks<'a> {
 }
 
 pub(crate) struct IntoBlocks {
-    current_client: std::vec::IntoIter<(u64, VecDeque<BlockCarrier>)>,
+    current_client: std::vec::IntoIter<(ClientID, VecDeque<BlockCarrier>)>,
     current_block: Option<std::collections::vec_deque::IntoIter<BlockCarrier>>,
 }
 
 impl IntoBlocks {
     fn new(update: UpdateBlocks) -> Self {
-        let mut client_blocks: Vec<(u64, VecDeque<BlockCarrier>)> =
+        let mut client_blocks: Vec<(ClientID, VecDeque<BlockCarrier>)> =
             update.clients.into_iter().collect();
         // sorting to return higher client ids first
         client_blocks.sort_by(|a, b| b.0.cmp(&a.0));

@@ -8,7 +8,7 @@ use std::ops::{Deref, DerefMut};
 use wasm_bindgen::__rt::Ref;
 use wasm_bindgen::prelude::{wasm_bindgen, Closure};
 use wasm_bindgen::JsValue;
-use yrs::block::{ItemContent, Prelim};
+use yrs::block::{ClientID, ItemContent, Prelim};
 use yrs::types::array::{ArrayEvent, ArrayIter};
 use yrs::types::map::{MapEvent, MapIter};
 use yrs::types::text::TextEvent;
@@ -80,7 +80,7 @@ impl YDoc {
     #[wasm_bindgen(constructor)]
     pub fn new(id: Option<f64>) -> Self {
         let mut options = if let Some(id) = id {
-            Options::with_client_id(id as u64)
+            Options::with_client_id(id as ClientID)
         } else {
             Options::default()
         };

@@ -213,14 +213,7 @@ pub struct Branch {
 
 impl std::fmt::Debug for Branch {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Branch")
-            .field("start", &self.start)
-            .field("map", &self.map)
-            .field("item", &self.item)
-            .field("name", &self.name)
-            .field("len", &self.block_len)
-            .field("type_ref", &self.type_ref)
-            .finish()
+        std::fmt::Display::fmt(self, f)
     }
 }
 
