@@ -273,7 +273,7 @@ impl<'a> DoubleEndedIterator for IdRangeIter<'a> {
 /// - We read a DeleteSet as a apart of sync/update message. In this case the DeleteSet is already
 ///   sorted and merged.
 #[derive(Default, Clone, PartialEq, Eq)]
-pub struct IdSet(HashMap<u64, IdRange, BuildHasherDefault<ClientHasher>>);
+pub struct IdSet(HashMap<ClientID, IdRange, BuildHasherDefault<ClientHasher>>);
 
 pub(crate) type Iter<'a> = std::collections::hash_map::Iter<'a, u64, IdRange>;
 
@@ -359,9 +359,9 @@ impl Decode for IdSet {
         let mut i = 0;
         while i < client_len {
             decoder.reset_ds_cur_val();
-            let client = decoder.read_uvar();
+            let client: u32 = decoder.read_uvar();
             let range = IdRange::decode(decoder);
-            set.0.insert(client, range);
+            set.0.insert(client as ClientID, range);
             i += 1;
         }
         set
