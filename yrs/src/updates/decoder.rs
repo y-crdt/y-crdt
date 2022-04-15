@@ -1,3 +1,4 @@
+use crate::block::ClientID;
 use crate::types::TypeRefs;
 use crate::*;
 use lib0::decoding::Read;
@@ -86,7 +87,7 @@ impl<'a> DecoderV1<'a> {
     fn read_id(&mut self) -> block::ID {
         let client: u32 = self.read_uvar();
         let clock = self.read_uvar();
-        ID::new(client as u64, clock)
+        ID::new(client as ClientID, clock)
     }
 }
 

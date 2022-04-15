@@ -1,4 +1,4 @@
-use crate::block::{Block, ID};
+use crate::block::{Block, ClientID, ID};
 use crate::block_store::BlockStore;
 use crate::store::Store;
 use crate::updates::decoder::{Decode, Decoder};
@@ -323,7 +323,7 @@ impl IdSet {
     }
 
     /// Inserts a new ID `range` corresponding with a given `client`.
-    pub fn insert_range(&mut self, client: u64, range: IdRange) {
+    pub fn insert_range(&mut self, client: ClientID, range: IdRange) {
         self.0.insert(client, range);
     }
 

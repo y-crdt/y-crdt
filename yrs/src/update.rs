@@ -1,6 +1,6 @@
 use crate::block::{
-    Block, BlockPtr, BlockRange, Item, ItemContent, BLOCK_GC_REF_NUMBER, BLOCK_SKIP_REF_NUMBER,
-    HAS_ORIGIN, HAS_PARENT_SUB, HAS_RIGHT_ORIGIN,
+    Block, BlockPtr, BlockRange, ClientID, Item, ItemContent, BLOCK_GC_REF_NUMBER,
+    BLOCK_SKIP_REF_NUMBER, HAS_ORIGIN, HAS_PARENT_SUB, HAS_RIGHT_ORIGIN,
 };
 use crate::id_set::DeleteSet;
 #[cfg(test)]
@@ -18,7 +18,7 @@ use std::rc::Rc;
 
 #[derive(Debug, Default, PartialEq)]
 pub(crate) struct UpdateBlocks {
-    clients: HashMap<u64, VecDeque<BlockCarrier>, BuildHasherDefault<ClientHasher>>,
+    clients: HashMap<ClientID, VecDeque<BlockCarrier>, BuildHasherDefault<ClientHasher>>,
 }
 
 impl UpdateBlocks {
