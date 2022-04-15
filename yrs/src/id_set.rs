@@ -29,7 +29,7 @@ impl Decode for Range<u32> {
 
 /// [IdRange] describes a single space of an [ID] clock values, belonging to the same client.
 /// It can contain from a single continuous space, or multiple ones having "holes" between them.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum IdRange {
     /// A single continuous range of clocks.
     Continuous(Range<u32>),
@@ -272,7 +272,7 @@ impl<'a> DoubleEndedIterator for IdRangeIter<'a> {
 ///   directly from StructStore.
 /// - We read a DeleteSet as a apart of sync/update message. In this case the DeleteSet is already
 ///   sorted and merged.
-#[derive(Default, Debug, Clone, PartialEq, Eq)]
+#[derive(Default, Clone, PartialEq, Eq)]
 pub struct IdSet(HashMap<u64, IdRange, BuildHasherDefault<ClientHasher>>);
 
 pub(crate) type Iter<'a> = std::collections::hash_map::Iter<'a, u64, IdRange>;
@@ -370,7 +370,7 @@ impl Decode for IdSet {
 
 /// [DeleteSet] contains information about all blocks (described by clock ranges) that have been
 /// subjected to delete process.
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct DeleteSet(IdSet);
 
 impl From<IdSet> for DeleteSet {
@@ -408,22 +408,37 @@ impl Default for DeleteSet {
     }
 }
 
+impl std::fmt::Debug for DeleteSet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
+    }
+}
 impl std::fmt::Display for DeleteSet {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
+        std::fmt::Display::fmt(&self.0, f)
     }
 }
 
+impl std::fmt::Debug for IdSet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
+    }
+}
 impl std::fmt::Display for IdSet {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "{{")?;
-        for (k, v) in self.0.iter() {
-            writeln!(f, "\t{}:{}", k, v)?;
+        let mut s = f.debug_struct("");
+        for (k, v) in self.iter() {
+            s.field(&k.to_string(), v);
         }
-        writeln!(f, "}}")
+        s.finish()
     }
 }
 
+impl std::fmt::Debug for IdRange {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
+    }
+}
 impl std::fmt::Display for IdRange {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

@@ -84,7 +84,9 @@ impl<'a> DecoderV1<'a> {
     }
 
     fn read_id(&mut self) -> block::ID {
-        ID::new(self.read_uvar(), self.read_uvar())
+        let client = self.read_uvar();
+        let clock = self.read_uvar();
+        ID::new(client, clock)
     }
 }
 

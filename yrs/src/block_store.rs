@@ -176,13 +176,6 @@ pub(crate) struct ClientBlockList {
     integrated_len: usize,
 }
 
-impl std::fmt::Debug for ClientBlockList {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "ClientBlockList")?;
-        f.debug_list().entries(self.iter()).finish()
-    }
-}
-
 impl PartialEq for ClientBlockList {
     fn eq(&self, other: &Self) -> bool {
         if self.integrated_len != other.integrated_len || self.list.len() != other.list.len() {
@@ -397,7 +390,7 @@ impl<'a> Iterator for ClientBlockListIter<'a> {
 /// Block store is a collection of all blocks known to a document owning instance of this type.
 /// Blocks are organized per client ID and contain a resizable list of all blocks inserted by that
 /// client.
-#[derive(Debug, PartialEq)]
+#[derive(PartialEq)]
 pub(crate) struct BlockStore {
     clients: HashMap<u64, ClientBlockList, BuildHasherDefault<ClientHasher>>,
 }
@@ -538,30 +531,31 @@ impl BlockStore {
     }
 }
 
+impl std::fmt::Debug for ClientBlockList {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
+    }
+}
+
 impl std::fmt::Display for ClientBlockList {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "[")?;
-        let mut i = 0;
-        writeln!(f, "")?;
-        while i < self.list.len() {
-            let block = self.get(i);
-            writeln!(f, "\t\t{}", block.deref())?;
-            if i == self.integrated_len {
-                writeln!(f, "---")?;
-            }
-            i += 1;
-        }
-        write!(f, "\t]")
+        f.debug_list().entries(self.list.iter()).finish()
+    }
+}
+
+impl std::fmt::Debug for BlockStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
     }
 }
 
 impl std::fmt::Display for BlockStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "{{")?;
-        for (k, v) in self.iter() {
-            writeln!(f, "\t{} ->{}", k, v)?;
+        let mut s = f.debug_struct("");
+        for (k, v) in self.clients.iter() {
+            s.field(&k.to_string(), v);
         }
-        writeln!(f, "}}")
+        s.finish()
     }
 }
 

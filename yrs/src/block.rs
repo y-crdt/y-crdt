@@ -437,7 +437,7 @@ impl PartialEq for BlockPtr {
 }
 
 /// An enum containing all supported block variants.
-#[derive(Debug, PartialEq)]
+#[derive(PartialEq)]
 pub(crate) enum Block {
     /// An active block containing user data.
     Item(Item),
@@ -722,7 +722,7 @@ const ITEM_FLAG_KEEP: u8 = 0b0001;
 /// An item is basic unit of work in Yrs. It contains user data reinforced with all metadata
 /// required for a potential conflict resolution as well as extra fields used for joining blocks
 /// together as a part of indexed sequences or maps.
-#[derive(Debug, PartialEq)]
+#[derive(PartialEq)]
 pub(crate) struct Item {
     /// Unique identifier of current item.
     pub id: ID,
@@ -759,7 +759,7 @@ pub(crate) struct Item {
     pub info: u8,
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(PartialEq, Eq, Clone)]
 pub struct BlockRange {
     pub id: ID,
     pub len: u32,
@@ -799,6 +799,18 @@ impl BlockRange {
         self.id.client == id.client
             && id.clock >= self.id.clock
             && id.clock < self.id.clock + self.len
+    }
+}
+
+impl std::fmt::Debug for BlockRange {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
+    }
+}
+
+impl std::fmt::Display for BlockRange {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "({}-{})", self.id, self.len)
     }
 }
 
@@ -1497,6 +1509,12 @@ impl ItemContent {
     }
 }
 
+impl std::fmt::Debug for Item {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
+    }
+}
+
 impl std::fmt::Display for Item {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "({}, len: {}", self.id, self.len)?;
@@ -1521,7 +1539,7 @@ impl std::fmt::Display for Item {
         if self.is_deleted() {
             write!(f, " ~{}~)", &self.content)
         } else {
-            write!(f, " '{}')", &self.content)
+            write!(f, " {})", &self.content)
         }
     }
 }
@@ -1529,7 +1547,7 @@ impl std::fmt::Display for Item {
 impl std::fmt::Display for ItemContent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ItemContent::String(s) => write!(f, "{}", s),
+            ItemContent::String(s) => write!(f, "'{}'", s),
             ItemContent::Any(s) => {
                 write!(f, "[")?;
                 let mut iter = s.iter();
@@ -1666,11 +1684,16 @@ impl std::fmt::Display for BlockPtr {
 
 impl std::fmt::Display for Block {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if let Block::Item(item) = self {
-            item.fmt(f)
-        } else {
-            Ok(())
+        match self {
+            Block::Item(item) => write!(f, "Item{}", item),
+            Block::GC(gc) => write!(f, "GC{}", gc),
         }
+    }
+}
+
+impl std::fmt::Debug for Block {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
     }
 }
 

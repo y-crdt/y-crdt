@@ -229,21 +229,27 @@ impl Encode for Store {
     }
 }
 
+impl std::fmt::Debug for Store {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
+    }
+}
 impl std::fmt::Display for Store {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "Store(ID: {}) {{", self.options.client_id)?;
+        let mut s = f.debug_struct(&self.options.client_id.to_string());
         if !self.types.is_empty() {
-            writeln!(f, "\ttypes: {{")?;
-            for (k, v) in self.types.iter() {
-                writeln!(f, "\t\t'{}': {}", k.as_ref(), v)?;
-            }
-
-            writeln!(f, "\t}}")?;
+            s.field("root types", &self.types);
         }
         if !self.blocks.is_empty() {
-            writeln!(f, "\tblocks: {}", self.blocks)?;
+            s.field("blocks", &self.blocks);
+        }
+        if let Some(pending) = self.pending.as_ref() {
+            s.field("pending", pending);
+        }
+        if let Some(pending_ds) = self.pending_ds.as_ref() {
+            s.field("pending delete set", pending_ds);
         }
 
-        writeln!(f, "}}")
+        s.finish()
     }
 }
