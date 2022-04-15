@@ -1,4 +1,4 @@
-use crate::block::{Block, ItemContent};
+use crate::block::{Block, ClientID, ItemContent};
 use crate::block_store::{BlockStore, SquashResult, StateVector};
 use crate::doc::Options;
 use crate::event::{EventHandler, UpdateEvent};
@@ -148,7 +148,7 @@ impl Store {
         }
     }
 
-    fn diff_state_vectors(local_sv: &StateVector, remote_sv: &StateVector) -> Vec<(u64, u32)> {
+    fn diff_state_vectors(local_sv: &StateVector, remote_sv: &StateVector) -> Vec<(ClientID, u32)> {
         let mut diff = Vec::new();
         for (client, &remote_clock) in remote_sv.iter() {
             let local_clock = local_sv.get(client);

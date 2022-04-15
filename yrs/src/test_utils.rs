@@ -1,3 +1,4 @@
+use crate::block::ClientID;
 use crate::updates::decoder::{Decode, Decoder, DecoderV1};
 use crate::updates::encoder::{Encode, Encoder, EncoderV1};
 use crate::{Doc, StateVector, Update};
@@ -76,9 +77,9 @@ struct Inner {
     rng: StdRng,
     peers: Vec<TestPeer>,
     /// Maps all Client IDs to indexes in the `docs` vector.
-    all: HashMap<u64, usize>,
+    all: HashMap<ClientID, usize>,
     /// Maps online Client IDs to indexes in the `docs` vector.
-    online: HashMap<u64, usize>,
+    online: HashMap<ClientID, usize>,
 }
 
 impl TestConnector {
@@ -96,7 +97,7 @@ impl TestConnector {
     pub fn with_peer_num(rng: StdRng, peer_num: u64) -> Self {
         let mut tc = Self::with_rng(rng);
         for client_id in 0..peer_num {
-            let peer = tc.create_peer(client_id);
+            let peer = tc.create_peer(client_id as ClientID);
             let mut txn = peer.doc.transact();
             txn.get_text("text");
             txn.get_map("map");
@@ -113,7 +114,7 @@ impl TestConnector {
 
     /// Create a new [TestPeer] with provided `client_id` or return one, if such `client_id`
     /// was already created before.
-    pub fn create_peer(&self, client_id: u64) -> &mut TestPeer {
+    pub fn create_peer(&self, client_id: ClientID) -> &mut TestPeer {
         if let Some(peer) = self.get_mut(&client_id) {
             peer
         } else {
@@ -138,7 +139,7 @@ impl TestConnector {
         }
     }
 
-    fn broadcast(inner: &mut RefMut<Inner>, sender: u64, payload: &Vec<u8>) {
+    fn broadcast(inner: &mut RefMut<Inner>, sender: ClientID, payload: &Vec<u8>) {
         let online: Vec<_> = inner
             .online
             .iter()
@@ -151,7 +152,7 @@ impl TestConnector {
     }
 
     /// Try to retrieve a reference to [TestPeer] for a given `client_id`, if such node was created.
-    pub fn get(&self, client_id: &u64) -> Option<&TestPeer> {
+    pub fn get(&self, client_id: &ClientID) -> Option<&TestPeer> {
         let inner = unsafe { self.0.as_ptr().as_ref().unwrap() };
         let idx = inner.all.get(client_id)?;
         Some(&inner.peers[*idx])
@@ -159,7 +160,7 @@ impl TestConnector {
 
     /// Try to retrieve a mutable reference to [TestPeer] for a given `client_id`,
     /// if such node was created.
-    pub fn get_mut(&self, client_id: &u64) -> Option<&mut TestPeer> {
+    pub fn get_mut(&self, client_id: &ClientID) -> Option<&mut TestPeer> {
         let inner = self.0.borrow_mut();
         let idx = *inner.all.get(client_id)?;
         unsafe {
@@ -170,7 +171,7 @@ impl TestConnector {
     }
 
     /// Disconnects test node with given `client_id` from the rest of known nodes.
-    pub fn disconnect(&self, client_id: u64) {
+    pub fn disconnect(&self, client_id: ClientID) {
         if let Some(peer) = self.get_mut(&client_id) {
             peer.receiving.clear();
         }
@@ -180,12 +181,12 @@ impl TestConnector {
 
     /// Append `client_id` to the list of known Y instances in [TestConnector].
     /// Also initiate sync with all clients.
-    pub fn connect(&self, client_id: u64) {
+    pub fn connect(&self, client_id: ClientID) {
         let mut inner = self.0.borrow_mut();
         Self::connect_inner(&mut inner, client_id);
     }
 
-    fn connect_inner(inner: &mut RefMut<Inner>, client_id: u64) {
+    fn connect_inner(inner: &mut RefMut<Inner>, client_id: ClientID) {
         if !inner.online.contains_key(&client_id) {
             let idx = *inner.all.get(&client_id).expect("unknown client_id");
             inner.online.insert(client_id, idx);
@@ -455,12 +456,12 @@ impl<'a> Iterator for Peers<'a> {
 
 pub struct TestPeer {
     doc: Doc,
-    receiving: HashMap<u64, VecDeque<Vec<u8>>>,
+    receiving: HashMap<ClientID, VecDeque<Vec<u8>>>,
     updates: VecDeque<Vec<u8>>,
 }
 
 impl TestPeer {
-    pub fn new(client_id: u64) -> Self {
+    pub fn new(client_id: ClientID) -> Self {
         TestPeer {
             doc: Doc::with_client_id(client_id),
             receiving: HashMap::new(),
@@ -468,7 +469,7 @@ impl TestPeer {
         }
     }
 
-    pub fn client_id(&self) -> u64 {
+    pub fn client_id(&self) -> ClientID {
         self.doc.client_id
     }
 
@@ -482,7 +483,7 @@ impl TestPeer {
 
     /// Receive a message from another client. This message is only appended to the list of
     /// receiving messages. TestConnector decides when this client actually reads this message.
-    fn receive(&mut self, from: u64, message: Vec<u8>) {
+    fn receive(&mut self, from: ClientID, message: Vec<u8>) {
         let messages = self.receiving.entry(from).or_default();
         messages.push_back(message);
     }

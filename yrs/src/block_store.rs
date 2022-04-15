@@ -92,7 +92,7 @@ impl StateVector {
 
     /// Returns an iterator which enables to traverse over all clients and their known clock values
     /// described by a current state vector.
-    pub fn iter(&self) -> std::collections::hash_map::Iter<u64, u32> {
+    pub fn iter(&self) -> std::collections::hash_map::Iter<ClientID, u32> {
         self.0.iter()
     }
 
@@ -395,7 +395,7 @@ pub(crate) struct BlockStore {
     clients: HashMap<ClientID, ClientBlockList, BuildHasherDefault<ClientHasher>>,
 }
 
-pub(crate) type Iter<'a> = std::collections::hash_map::Iter<'a, u64, ClientBlockList>;
+pub(crate) type Iter<'a> = std::collections::hash_map::Iter<'a, ClientID, ClientBlockList>;
 
 impl BlockStore {
     /// Creates a new block store instance from a given collection.
@@ -408,7 +408,8 @@ impl BlockStore {
     /// Creates a new empty block store instance.
     pub fn new() -> Self {
         Self {
-            clients: HashMap::<u64, ClientBlockList, BuildHasherDefault<ClientHasher>>::default(),
+            clients:
+                HashMap::<ClientID, ClientBlockList, BuildHasherDefault<ClientHasher>>::default(),
         }
     }
 
@@ -560,7 +561,7 @@ impl std::fmt::Display for BlockStore {
 }
 
 pub(crate) struct Blocks<'a> {
-    current_client: std::vec::IntoIter<(&'a u64, &'a ClientBlockList)>,
+    current_client: std::vec::IntoIter<(&'a ClientID, &'a ClientBlockList)>,
     current_block: Option<ClientBlockListIter<'a>>,
 }
 

@@ -1,4 +1,4 @@
-use crate::block::{Item, ItemContent};
+use crate::block::{ClientID, Item, ItemContent};
 use crate::id_set::{DeleteSet, IdSet};
 use crate::store::Store;
 use crate::types::{Branch, TypePtr, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT};
@@ -35,7 +35,7 @@ fn text_insert_delete() {
         97, 98, 193, 152, 234, 173, 126, 4, 152, 234, 173, 126, 0, 1, 129, 152, 234, 173, 126, 2,
         1, 132, 152, 234, 173, 126, 6, 2, 104, 105, 1, 152, 234, 173, 126, 2, 0, 3, 5, 2,
     ];
-    const CLIENT_ID: u64 = 264992024;
+    const CLIENT_ID: ClientID = 264992024;
     let expected_blocks = vec![
         Item::new(
             ID::new(CLIENT_ID, 0),
@@ -128,7 +128,7 @@ fn map_set() {
            console.log(payload_v2);
         ```
     */
-    const CLIENT_ID: u64 = 440166001;
+    const CLIENT_ID: ClientID = 440166001;
     let expected = vec![
         Item::new(
             ID::new(CLIENT_ID, 0),
@@ -182,7 +182,7 @@ fn array_insert() {
            console.log(payload_v2);
         ```
     */
-    const CLIENT_ID: u64 = 2525665872;
+    const CLIENT_ID: ClientID = 2525665872;
     let expected = vec![Item::new(
         ID::new(CLIENT_ID, 0),
         None,
@@ -224,7 +224,7 @@ fn xml_fragment_insert() {
            console.log(payload_v2);
         ```
     */
-    const CLIENT_ID: u64 = 2459881872;
+    const CLIENT_ID: ClientID = 2459881872;
     let expected = vec![
         Item::new(
             ID::new(CLIENT_ID, 0),
