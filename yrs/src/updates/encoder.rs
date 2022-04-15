@@ -1,3 +1,4 @@
+use crate::block::ClientID;
 use crate::*;
 use lib0::any::Any;
 use lib0::encoding::Write;
@@ -48,7 +49,7 @@ pub trait Encoder: Write {
     fn write_right_id(&mut self, id: &block::ID);
 
     /// Write currently encoded client identifier.
-    fn write_client(&mut self, client: u64);
+    fn write_client(&mut self, client: ClientID);
 
     /// Write currently encoded [Block]'s info flags. These contain information about which fields
     /// have been provided and which should be skipped during decoding process as well as a type of
@@ -128,7 +129,7 @@ impl Encoder for EncoderV1 {
         self.write_id(id)
     }
 
-    fn write_client(&mut self, client: u64) {
+    fn write_client(&mut self, client: ClientID) {
         self.write_uvar(client)
     }
 
@@ -257,17 +258,17 @@ impl Encoder for EncoderV2 {
     }
 
     fn write_left_id(&mut self, id: &ID) {
-        self.client_encoder.write_u64(id.client);
+        self.client_encoder.write_u64(id.client as u64);
         self.left_clock_encoder.write_u32(id.clock);
     }
 
     fn write_right_id(&mut self, id: &ID) {
-        self.client_encoder.write_u64(id.client);
+        self.client_encoder.write_u64(id.client as u64);
         self.right_clock_encoder.write_u32(id.clock);
     }
 
-    fn write_client(&mut self, client: u64) {
-        self.client_encoder.write_u64(client);
+    fn write_client(&mut self, client: ClientID) {
+        self.client_encoder.write_u64(client as u64);
     }
 
     fn write_info(&mut self, info: u8) {

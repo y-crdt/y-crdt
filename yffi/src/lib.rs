@@ -6,7 +6,7 @@ use std::ops::Deref;
 use std::os::raw::{c_char, c_float, c_int, c_long, c_longlong, c_uchar, c_uint, c_ulong};
 use std::ptr::{null, null_mut};
 use std::rc::Rc;
-use yrs::block::{ItemContent, Prelim};
+use yrs::block::{ClientID, ItemContent, Prelim};
 use yrs::types::array::ArrayEvent;
 use yrs::types::map::MapEvent;
 use yrs::types::text::TextEvent;
@@ -205,7 +205,7 @@ impl Into<Options> for YOptions {
             _ => panic!("Unrecognized YOptions.encoding type"),
         };
         Options {
-            client_id: self.id as u64 & 0x3fffffffffffff,
+            client_id: self.id as ClientID,
             skip_gc: if self.skip_gc == 0 { false } else { true },
             offset_kind: encoding,
         }

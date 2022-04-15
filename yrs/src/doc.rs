@@ -1,3 +1,4 @@
+use crate::block::ClientID;
 use crate::event::{Subscription, UpdateEvent};
 use crate::store::Store;
 use crate::transaction::Transaction;
@@ -41,7 +42,7 @@ use std::rc::Rc;
 /// ```
 pub struct Doc {
     /// A unique client identifier, that's also a unique identifier of current document replica.
-    pub client_id: u64,
+    pub client_id: ClientID,
     store: Rc<UnsafeCell<Store>>,
 }
 
@@ -55,7 +56,7 @@ impl Doc {
 
     /// Creates a new document with a specified `client_id`. It's up to a caller to guarantee that
     /// this identifier is unique across all communicating replicas of that document.
-    pub fn with_client_id(client_id: u64) -> Self {
+    pub fn with_client_id(client_id: ClientID) -> Self {
         Self::with_options(Options::with_client_id(client_id))
     }
 
@@ -112,7 +113,7 @@ impl Default for Doc {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Options {
     /// Globally unique 53-bit long client identifier.
-    pub client_id: u64,
+    pub client_id: ClientID,
     /// How to we count offsets and lengths used in text operations.
     pub offset_kind: OffsetKind,
     /// Determines if transactions commits should try to perform GC-ing of deleted items.
@@ -120,7 +121,7 @@ pub struct Options {
 }
 
 impl Options {
-    pub fn with_client_id(client_id: u64) -> Self {
+    pub fn with_client_id(client_id: ClientID) -> Self {
         Options {
             client_id,
             offset_kind: OffsetKind::Bytes,
@@ -131,8 +132,8 @@ impl Options {
 
 impl Default for Options {
     fn default() -> Self {
-        let client_id: u64 = rand::thread_rng().gen();
-        Self::with_client_id(client_id & 0x3fffffffffffff)
+        let client_id: u32 = rand::thread_rng().gen();
+        Self::with_client_id(client_id as ClientID)
     }
 }
 
@@ -289,5 +290,61 @@ mod test {
         let u = txn.encode_diff_v1(&StateVector::decode_v1(sv.as_slice()));
         txn2.apply_update(Update::decode_v1(u.as_slice()));
         assert_eq!(counter.get(), 3); // since subscription has been dropped, update was not propagated
+    }
+
+    #[test]
+    fn pending_update_integration() {
+        let doc = Doc::new();
+        let map = doc.transact().get_map("state");
+        let txt = doc.transact().get_text("source");
+
+        let updates = [
+            vec![
+                1, 2, 242, 196, 218, 129, 3, 0, 40, 1, 5, 115, 116, 97, 116, 101, 5, 100, 105, 114,
+                116, 121, 1, 121, 40, 1, 7, 99, 111, 110, 116, 101, 120, 116, 4, 112, 97, 116, 104,
+                1, 119, 13, 117, 110, 116, 105, 116, 108, 101, 100, 52, 46, 116, 120, 116, 0,
+            ],
+            vec![
+                1, 1, 242, 196, 218, 129, 3, 2, 40, 1, 7, 99, 111, 110, 116, 101, 120, 116, 13,
+                108, 97, 115, 116, 95, 109, 111, 100, 105, 102, 105, 101, 100, 1, 119, 27, 50, 48,
+                50, 50, 45, 48, 52, 45, 49, 51, 84, 49, 48, 58, 49, 48, 58, 53, 55, 46, 48, 55, 51,
+                54, 50, 51, 90, 0,
+            ],
+            vec![
+                1, 2, 242, 196, 218, 129, 3, 3, 4, 1, 6, 115, 111, 117, 114, 99, 101, 1, 97, 168,
+                242, 196, 218, 129, 3, 0, 1, 120, 0,
+            ],
+            vec![
+                1, 1, 242, 196, 218, 129, 3, 4, 168, 242, 196, 218, 129, 3, 0, 1, 120, 1, 242, 196,
+                218, 129, 3, 1, 0, 1,
+            ],
+            vec![
+                1, 1, 152, 182, 129, 244, 193, 193, 227, 4, 0, 168, 242, 196, 218, 129, 3, 4, 1,
+                121, 1, 242, 196, 218, 129, 3, 2, 0, 1, 4, 1,
+            ],
+            vec![
+                1, 2, 242, 196, 218, 129, 3, 5, 132, 242, 196, 218, 129, 3, 3, 1, 98, 168, 152,
+                190, 167, 244, 1, 0, 1, 120, 0,
+            ],
+            vec![
+                1, 1, 242, 196, 218, 129, 3, 6, 168, 152, 190, 167, 244, 1, 0, 1, 120, 1, 152, 190,
+                167, 244, 1, 1, 0, 1,
+            ],
+            vec![
+                1, 1, 242, 196, 218, 129, 3, 7, 132, 242, 196, 218, 129, 3, 5, 1, 99, 0,
+            ],
+            vec![
+                1, 1, 242, 196, 218, 129, 3, 8, 132, 242, 196, 218, 129, 3, 7, 1, 100, 0,
+            ],
+        ];
+
+        let mut i = 1;
+        for u in updates {
+            let mut txn = doc.transact();
+            let u = Update::decode_v1(u.as_slice());
+            txn.apply_update(u);
+            i += 1;
+        }
+        assert_eq!(txt.to_string(), "abcd".to_string());
     }
 }

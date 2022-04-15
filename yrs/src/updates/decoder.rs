@@ -1,3 +1,4 @@
+use crate::block::ClientID;
 use crate::types::TypeRefs;
 use crate::*;
 use lib0::decoding::Read;
@@ -44,7 +45,7 @@ pub trait Decoder: Read {
     fn read_right_id(&mut self) -> block::ID;
 
     /// Read currently decoded client identifier.
-    fn read_client(&mut self) -> u64;
+    fn read_client(&mut self) -> ClientID;
 
     /// Read info bit flags of a currently decoded [Block].
     fn read_info(&mut self) -> u8;
@@ -84,7 +85,9 @@ impl<'a> DecoderV1<'a> {
     }
 
     fn read_id(&mut self) -> block::ID {
-        ID::new(self.read_uvar(), self.read_uvar())
+        let client: u32 = self.read_uvar();
+        let clock = self.read_uvar();
+        ID::new(client as ClientID, clock)
     }
 }
 
@@ -131,8 +134,9 @@ impl<'a> Decoder for DecoderV1<'a> {
         self.read_id()
     }
 
-    fn read_client(&mut self) -> u64 {
-        self.cursor.read_uvar()
+    fn read_client(&mut self) -> ClientID {
+        let client: u32 = self.cursor.read_uvar();
+        client as ClientID
     }
 
     fn read_info(&mut self) -> u8 {
@@ -291,20 +295,20 @@ impl<'a> Decoder for DecoderV2<'a> {
 
     fn read_left_id(&mut self) -> ID {
         ID::new(
-            self.client_decoder.read_u64(),
+            self.client_decoder.read_u64() as ClientID,
             self.left_clock_decoder.read_u32(),
         )
     }
 
     fn read_right_id(&mut self) -> ID {
         ID::new(
-            self.client_decoder.read_u64(),
+            self.client_decoder.read_u64() as ClientID,
             self.right_clock_decoder.read_u32(),
         )
     }
 
-    fn read_client(&mut self) -> u64 {
-        self.client_decoder.read_u64()
+    fn read_client(&mut self) -> ClientID {
+        self.client_decoder.read_u64() as ClientID
     }
 
     fn read_info(&mut self) -> u8 {
