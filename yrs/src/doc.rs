@@ -131,8 +131,8 @@ impl Options {
 
 impl Default for Options {
     fn default() -> Self {
-        let client_id: u64 = rand::thread_rng().gen();
-        Self::with_client_id(client_id & 0x3fffffffffffff)
+        let client_id: u32 = rand::thread_rng().gen();
+        Self::with_client_id(client_id as u64)
     }
 }
 
@@ -337,15 +337,10 @@ mod test {
             ],
         ];
 
-        Update::decode_v1(&updates[4]);
-
         let mut i = 1;
         for u in updates {
             let mut txn = doc.transact();
             let u = Update::decode_v1(u.as_slice());
-            //println!("---Applying({})---", i);
-            //println!("update:\n\t{:#?}", u);
-            //println!("into:\n\t{:#?}", txn.store());
             txn.apply_update(u);
             i += 1;
         }

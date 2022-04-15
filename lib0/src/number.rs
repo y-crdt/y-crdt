@@ -23,7 +23,7 @@ impl Uint for u32 {
     }
     #[inline]
     fn unshift_add(&mut self, unshift: usize, add: u8) {
-        *self |= (add as Self) << unshift;
+        *self |= u32::wrapping_shl(add as Self, unshift as u32);
     }
     #[inline]
     fn is_null(&self) -> bool {
