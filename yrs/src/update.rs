@@ -73,11 +73,16 @@ impl std::fmt::Display for UpdateBlocks {
     }
 }
 
+impl std::fmt::Debug for BlockCarrier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
+    }
+}
 impl std::fmt::Display for BlockCarrier {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             BlockCarrier::Block(x) => x.fmt(f),
-            BlockCarrier::Skip(_) => Ok(()),
+            BlockCarrier::Skip(x) => write!(f, "Skip{}", x),
         }
     }
 }
@@ -88,7 +93,7 @@ impl std::fmt::Display for BlockCarrier {
 /// relations.
 ///
 /// Update is conceptually similar to a block store itself, however the work patters are different.
-#[derive(Debug, Default, PartialEq)]
+#[derive(Default, PartialEq)]
 pub struct Update {
     pub(crate) blocks: UpdateBlocks,
     pub(crate) delete_set: DeleteSet,
@@ -726,7 +731,7 @@ impl<T: Iterator> Memoizable for T {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(PartialEq)]
 pub(crate) enum BlockCarrier {
     Block(Box<Block>),
     Skip(BlockRange),
@@ -858,18 +863,22 @@ pub struct PendingUpdate {
     pub missing: StateVector,
 }
 
-impl PendingUpdate {}
+impl std::fmt::Debug for Update {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
+    }
+}
 
 impl std::fmt::Display for Update {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.is_empty() && self.delete_set.is_empty() {
-            write!(f, "{{}}")
-        } else {
-            write!(f, "{{")?;
-            write!(f, "body: {}", self.blocks)?;
-            write!(f, "delete_set: {}", self.delete_set)?;
-            write!(f, "}}")
+        let mut s = f.debug_struct("");
+        if !self.blocks.is_empty() {
+            s.field("blocks", &self.blocks);
         }
+        if !self.delete_set.is_empty() {
+            s.field("delete set", &self.delete_set);
+        }
+        s.finish()
     }
 }
 
