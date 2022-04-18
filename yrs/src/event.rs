@@ -87,9 +87,11 @@ impl UpdateEvent {
     }
 }
 
-pub struct TransactionCleanupEvent {
-    pub delete_set: DeleteSet,
+/// Holds transaction update information from a commit after state vectors have been compressed.
+pub struct AfterTransactionEvent {
+    pub before_state: StateVector,
     pub after_state: StateVector,
+    pub delete_set: DeleteSet,
 }
 
 #[cfg(test)]
