@@ -2,7 +2,7 @@ use crate::*;
 
 use crate::block::{Block, BlockPtr, Item, ItemContent, Prelim, ID};
 use crate::block_store::{Snapshot, StateVector};
-use crate::event::{TransactionCleanupEvent, UpdateEvent};
+use crate::event::{AfterTransactionEvent, UpdateEvent};
 use crate::id_set::DeleteSet;
 use crate::store::Store;
 use crate::types::array::Array;
@@ -578,12 +578,13 @@ impl Transaction {
             }
         }
         // 8. emit 'afterTransactionCleanup'
-        if let Some(transaction_cleanup_events) = store.transaction_cleanup_events.deref() {
-            let event = TransactionCleanupEvent {
-                delete_set: self.delete_set.clone(),
+        if let Some(after_transaction_events) = store.after_transaction_events.deref() {
+            let event = AfterTransactionEvent {
+                before_state: self.before_state.clone(),
                 after_state: self.after_state.clone(),
+                delete_set: self.delete_set.clone(),
             };
-            transaction_cleanup_events.publish(&self, &event);
+            after_transaction_events.publish(&self, &event);
         }
         // 9. emit 'update'
         // 10. emit 'updateV2'
