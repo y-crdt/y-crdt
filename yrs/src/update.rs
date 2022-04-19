@@ -181,7 +181,7 @@ impl Update {
             let mut store = txn.store_mut();
             let mut client_block_ref_ids: Vec<ClientID> =
                 self.blocks.clients.keys().cloned().collect();
-            client_block_ref_ids.sort_by(|a, b| b.cmp(a));
+            client_block_ref_ids.sort();
 
             let mut current_client_id = client_block_ref_ids.pop();
             let mut current_target =
