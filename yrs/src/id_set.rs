@@ -113,8 +113,14 @@ impl IdRange {
                 } else {
                     let last_idx = ranges.len() - 1;
                     let last = &mut ranges[last_idx];
-                    if last.end >= range.start {
+                    if range.start >= last.start && range.start <= last.end {
+                        // start of a current range is inside of or adjacent to last range
+                        // merge end of a current range with last one
                         last.end = last.end.max(range.end);
+                    } else if range.end >= last.start && range.end < last.end {
+                        // end of a current range is inside of or adjacent to last range
+                        // merge start of a current range with last one
+                        last.start = last.start.min(range.start);
                     } else {
                         ranges.push(range);
                     }
@@ -137,9 +143,14 @@ impl IdRange {
                     let mut i = 1;
                     while i < len {
                         let next = head.offset(i).as_ref().unwrap();
-                        if next.start <= current.end {
-                            // merge next to current eg. curr=[0,5) & next=[3,6) => curr=[0,6)
-                            current.end = next.end;
+                        if next.start >= current.start && next.start <= current.end {
+                            // start of a next range is inside of or adjacent to current range
+                            // merge end of a current range with the next one
+                            current.end = current.end.max(next.end);
+                        } else if next.end >= current.start && next.end < current.end {
+                            // end of a next range is inside of or adjacent to current range
+                            // merge start of a current range with the next one
+                            current.start = current.start.min(next.start);
                         } else {
                             // current and next are disjoined eg. [0,5) & [6,9)
 
@@ -158,7 +169,7 @@ impl IdRange {
                 }
 
                 if new_len == 1 {
-                    *self = IdRange::Continuous(ranges.pop().unwrap())
+                    *self = IdRange::Continuous(ranges[0].clone())
                 } else if ranges.len() != new_len as usize {
                     ranges.truncate(new_len as usize);
                 }
