@@ -113,15 +113,7 @@ impl IdRange {
                 } else {
                     let last_idx = ranges.len() - 1;
                     let last = &mut ranges[last_idx];
-                    if range.start >= last.start && range.start <= last.end {
-                        // start of a current range is inside of or adjacent to last range
-                        // merge end of a current range with last one
-                        last.end = last.end.max(range.end);
-                    } else if range.end >= last.start && range.end < last.end {
-                        // end of a current range is inside of or adjacent to last range
-                        // merge start of a current range with last one
-                        last.start = last.start.min(range.start);
-                    } else {
+                    if !Self::try_join(last, &range) {
                         ranges.push(range);
                     }
                 }
@@ -143,15 +135,7 @@ impl IdRange {
                     let mut i = 1;
                     while i < len {
                         let next = head.offset(i).as_ref().unwrap();
-                        if next.start >= current.start && next.start <= current.end {
-                            // start of a next range is inside of or adjacent to current range
-                            // merge end of a current range with the next one
-                            current.end = current.end.max(next.end);
-                        } else if next.end >= current.start && next.end < current.end {
-                            // end of a next range is inside of or adjacent to current range
-                            // merge start of a current range with the next one
-                            current.start = current.start.min(next.start);
-                        } else {
+                        if !Self::try_join(current, next) {
                             // current and next are disjoined eg. [0,5) & [6,9)
 
                             // move current pointer one index to the left: by using new_len we
@@ -202,6 +186,22 @@ impl IdRange {
                 IdRange::Fragmented(a)
             }
         };
+    }
+
+    #[inline]
+    fn try_join(a: &mut Range<u32>, b: &Range<u32>) -> bool {
+        if Self::disjoint(a, b) {
+            false
+        } else {
+            a.start = a.start.min(b.start);
+            a.end = a.end.max(b.end);
+            true
+        }
+    }
+
+    #[inline]
+    fn disjoint(a: &Range<u32>, b: &Range<u32>) -> bool {
+        a.start > b.end || b.start > a.end
     }
 }
 
