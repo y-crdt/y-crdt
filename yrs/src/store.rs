@@ -136,13 +136,13 @@ impl Store {
             let clock = clock.max(blocks.first().id().clock); // make sure the first id exists
             let start = blocks.find_pivot(clock).unwrap();
             // write # encoded structs
-            encoder.write_uvar(blocks.integrated_len() - start);
+            encoder.write_uvar(blocks.len() - start);
             encoder.write_client(client);
             encoder.write_uvar(clock);
             let first_block = blocks.get(start);
             // write first struct with an offset
             first_block.encode(Some(self), encoder);
-            for i in (start + 1)..blocks.integrated_len() {
+            for i in (start + 1)..blocks.len() {
                 blocks.get(i).encode(Some(self), encoder);
             }
         }

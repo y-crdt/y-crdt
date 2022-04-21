@@ -829,7 +829,8 @@ impl TextEvent {
                             asm.add_op();
                             asm.action = Some(Action::Delete);
                         }
-                        asm.delete += item.content_len(encoding);
+                        let content_len = item.content_len(encoding);
+                        asm.delete += content_len;
                     } else if !item.is_deleted() {
                         if asm.action != Some(Action::Retain) {
                             asm.add_op();
@@ -1659,5 +1660,58 @@ mod test {
         ];
         let actual = delta.borrow();
         assert_eq!(actual.as_ref(), Some(&expected));
+    }
+
+    #[test]
+    fn yrs_delete() {
+        let doc = Doc::with_options(Options {
+            offset_kind: OffsetKind::Utf32,
+            ..Default::default()
+        });
+
+        let text1 = r#"
+		Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Eleifend mi in nulla posuere sollicitudin. Lorem mollis aliquam ut porttitor. Enim ut sem viverra aliquet eget sit amet. Sed turpis tincidunt id aliquet risus feugiat in ante metus. Accumsan lacus vel facilisis volutpat. Non consectetur a erat nam at lectus urna. Enim diam vulputate ut pharetra sit amet. In dictum non consectetur a erat. Bibendum at varius vel pharetra vel turpis nunc eget lorem. Blandit cursus risus at ultrices. Sed lectus vestibulum mattis ullamcorper velit sed ullamcorper. Sagittis nisl rhoncus mattis rhoncus.
+
+		Sed vulputate odio ut enim. Erat pellentesque adipiscing commodo elit at imperdiet dui. Ultricies tristique nulla aliquet enim tortor at auctor urna nunc. Tincidunt eget nullam non nisi est sit amet. Sed adipiscing diam donec adipiscing tristique risus nec. Risus commodo viverra maecenas accumsan lacus vel facilisis volutpat est. Donec enim diam vulputate ut pharetra sit amet aliquam id. Netus et malesuada fames ac turpis egestas sed tempus urna. Augue mauris augue neque gravida. Tellus orci ac auctor augue mauris augue. Ante metus dictum at tempor. Feugiat in ante metus dictum at. Vitae elementum curabitur vitae nunc sed velit dignissim. Non arcu risus quis varius quam quisque id diam vel. Fermentum leo vel orci porta non. Donec adipiscing tristique risus nec feugiat in fermentum posuere. Duis convallis convallis tellus id interdum velit laoreet id. Vel eros donec ac odio tempor orci dapibus ultrices in. At varius vel pharetra vel turpis nunc eget lorem. Blandit aliquam etiam erat velit scelerisque in.
+		"#;
+
+        let text2 = r#"test"#;
+
+        {
+            let mut txn = doc.transact();
+            let text = txn.get_text("content");
+            text.insert(&mut txn, 0, text1);
+            txn.commit();
+        }
+
+        {
+            let mut txn = doc.transact();
+            let text = txn.get_text("content");
+            text.insert(&mut txn, 100, text2);
+            txn.commit();
+        }
+
+        {
+            let mut txn = doc.transact();
+            let mut text = txn.get_text("content");
+
+            let c1 = text1.chars().count();
+            let c2 = text2.chars().count();
+            let count = c1 as u32 + c2 as u32;
+
+            let _observer = text.observe(move |txn, edit| {
+                // THIS ASSERT FAILS!
+                assert_eq!(edit.delta(txn)[0], Delta::Deleted(count))
+            });
+
+            text.remove_range(&mut txn, 0, count);
+            txn.commit();
+        }
+
+        {
+            let mut txn = doc.transact();
+            let text = txn.get_text("content");
+            assert_eq!(text.to_string(), "");
+        }
     }
 }

@@ -113,9 +113,7 @@ impl IdRange {
                 } else {
                     let last_idx = ranges.len() - 1;
                     let last = &mut ranges[last_idx];
-                    if last.end >= range.start {
-                        last.end = last.end.max(range.end);
-                    } else {
+                    if !Self::try_join(last, &range) {
                         ranges.push(range);
                     }
                 }
@@ -137,10 +135,7 @@ impl IdRange {
                     let mut i = 1;
                     while i < len {
                         let next = head.offset(i).as_ref().unwrap();
-                        if next.start <= current.end {
-                            // merge next to current eg. curr=[0,5) & next=[3,6) => curr=[0,6)
-                            current.end = next.end;
-                        } else {
+                        if !Self::try_join(current, next) {
                             // current and next are disjoined eg. [0,5) & [6,9)
 
                             // move current pointer one index to the left: by using new_len we
@@ -158,7 +153,7 @@ impl IdRange {
                 }
 
                 if new_len == 1 {
-                    *self = IdRange::Continuous(ranges.pop().unwrap())
+                    *self = IdRange::Continuous(ranges[0].clone())
                 } else if ranges.len() != new_len as usize {
                     ranges.truncate(new_len as usize);
                 }
@@ -191,6 +186,22 @@ impl IdRange {
                 IdRange::Fragmented(a)
             }
         };
+    }
+
+    #[inline]
+    fn try_join(a: &mut Range<u32>, b: &Range<u32>) -> bool {
+        if Self::disjoint(a, b) {
+            false
+        } else {
+            a.start = a.start.min(b.start);
+            a.end = a.end.max(b.end);
+            true
+        }
+    }
+
+    #[inline]
+    fn disjoint(a: &Range<u32>, b: &Range<u32>) -> bool {
+        a.start > b.end || b.start > a.end
     }
 }
 

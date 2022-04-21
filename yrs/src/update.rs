@@ -181,7 +181,7 @@ impl Update {
             let mut store = txn.store_mut();
             let mut client_block_ref_ids: Vec<ClientID> =
                 self.blocks.clients.keys().cloned().collect();
-            client_block_ref_ids.sort_by(|a, b| b.cmp(a));
+            client_block_ref_ids.sort();
 
             let mut current_client_id = client_block_ref_ids.pop();
             let mut current_target =
@@ -200,17 +200,20 @@ impl Update {
                     if let Some(dep) = Self::missing(&block, &local_sv) {
                         stack.push(block);
                         // get the struct reader that has the missing struct
-                        let block_refs = store.blocks.get_client_blocks_mut(dep);
-                        if block_refs.integrated_len() == block_refs.len() {
-                            // This update message causally depends on another update message that doesn't exist yet
-                            missing_sv.set_min(dep, local_sv.get(&dep));
-                            Self::return_stack(stack, &mut self.blocks, &mut remaining);
-                            current_target =
-                                current_client_id.and_then(|id| self.blocks.clients.get_mut(&id));
-                            stack = Vec::new();
-                        } else {
-                            stack_head = Self::next(&mut current_target);
-                            continue;
+                        match self.blocks.clients.get_mut(&dep) {
+                            Some(block_refs) if !block_refs.is_empty() => {
+                                current_target = Some(block_refs);
+                                stack_head = Self::next(&mut current_target);
+                                continue;
+                            }
+                            _ => {
+                                // This update message causally depends on another update message that doesn't exist yet
+                                missing_sv.set_min(dep, local_sv.get(&dep));
+                                Self::return_stack(stack, &mut self.blocks, &mut remaining);
+                                current_target = current_client_id
+                                    .and_then(|id| self.blocks.clients.get_mut(&id));
+                                stack = Vec::new();
+                            }
                         }
                     } else if offset == 0 || (offset as u32) < block.len() {
                         let offset = offset as u32;
@@ -254,20 +257,16 @@ impl Update {
                     stack_head = stack.pop();
                 } else {
                     current_target = match current_target.take() {
-                        None => None,
-                        Some(v) => {
-                            if !v.is_empty() {
-                                Some(v)
+                        Some(v) if !v.is_empty() => Some(v),
+                        _ => {
+                            if let Some((client_id, target)) =
+                                Self::next_target(&mut client_block_ref_ids, &mut self.blocks)
+                            {
+                                current_client_id = Some(client_id);
+                                Some(target)
                             } else {
-                                if let Some((client_id, target)) =
-                                    Self::next_target(&mut client_block_ref_ids, &mut self.blocks)
-                                {
-                                    current_client_id = Some(client_id);
-                                    Some(target)
-                                } else {
-                                    current_client_id = None;
-                                    None
-                                }
+                                current_client_id = None;
+                                None
                             }
                         }
                     };
