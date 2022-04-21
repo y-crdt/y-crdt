@@ -295,7 +295,6 @@ mod test {
     #[test]
     fn pending_update_integration() {
         let doc = Doc::new();
-        let map = doc.transact().get_map("state");
         let txt = doc.transact().get_text("source");
 
         let updates = [
@@ -338,13 +337,72 @@ mod test {
             ],
         ];
 
-        let mut i = 1;
         for u in updates {
             let mut txn = doc.transact();
             let u = Update::decode_v1(u.as_slice());
             txn.apply_update(u);
-            i += 1;
         }
         assert_eq!(txt.to_string(), "abcd".to_string());
+    }
+
+    #[test]
+    fn ypy_issue_32() {
+        let d1 = Doc::with_client_id(1971027812);
+        let source_1 = d1.transact().get_text("source");
+        source_1.push(&mut d1.transact(), "a");
+
+        let updates = [
+            vec![
+                1, 2, 201, 210, 153, 56, 0, 40, 1, 5, 115, 116, 97, 116, 101, 5, 100, 105, 114,
+                116, 121, 1, 121, 40, 1, 7, 99, 111, 110, 116, 101, 120, 116, 4, 112, 97, 116, 104,
+                1, 119, 13, 117, 110, 116, 105, 116, 108, 101, 100, 52, 46, 116, 120, 116, 0,
+            ],
+            vec![
+                1, 1, 201, 210, 153, 56, 2, 168, 201, 210, 153, 56, 0, 1, 120, 1, 201, 210, 153,
+                56, 1, 0, 1,
+            ],
+            vec![
+                1, 1, 201, 210, 153, 56, 3, 40, 1, 7, 99, 111, 110, 116, 101, 120, 116, 13, 108,
+                97, 115, 116, 95, 109, 111, 100, 105, 102, 105, 101, 100, 1, 119, 27, 50, 48, 50,
+                50, 45, 48, 52, 45, 49, 54, 84, 49, 52, 58, 48, 51, 58, 53, 51, 46, 57, 51, 48, 52,
+                54, 56, 90, 0,
+            ],
+            vec![
+                1, 1, 201, 210, 153, 56, 4, 168, 201, 210, 153, 56, 2, 1, 121, 1, 201, 210, 153,
+                56, 1, 2, 1,
+            ],
+        ];
+        for u in updates {
+            let u = Update::decode_v1(&u);
+            d1.transact().apply_update(u);
+        }
+
+        assert_eq!("a", source_1.to_string());
+
+        let d2 = Doc::new();
+        let source_2 = d2.transact().get_text("source");
+        let state_2 = d2.transact().state_vector().encode_v1();
+        let update = d1.encode_state_as_update_v1(&StateVector::decode_v1(&state_2));
+        let update = Update::decode_v1(&update);
+        d2.transact().apply_update(update);
+
+        assert_eq!("a", source_2.to_string());
+
+        let update = Update::decode_v1(&[
+            1, 2, 201, 210, 153, 56, 5, 132, 228, 254, 237, 171, 7, 0, 1, 98, 168, 201, 210, 153,
+            56, 4, 1, 120, 0,
+        ]);
+        d1.transact().apply_update(update);
+        assert_eq!("ab", source_1.to_string());
+
+        let d3 = Doc::new();
+        let source_3 = d3.transact().get_text("source");
+        let state_3 = d3.transact().state_vector().encode_v1();
+        let state_3 = StateVector::decode_v1(&state_3);
+        let update = d1.encode_state_as_update_v1(&state_3);
+        let update = Update::decode_v1(&update);
+        d3.transact().apply_update(update);
+
+        assert_eq!("ab", source_3.to_string());
     }
 }
