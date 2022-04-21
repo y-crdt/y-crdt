@@ -1,7 +1,7 @@
 use crate::block::{Block, ClientID, ItemContent};
 use crate::block_store::{BlockStore, SquashResult, StateVector};
 use crate::doc::Options;
-use crate::event::{EventHandler, UpdateEvent};
+use crate::event::{AfterTransactionEvent, EventHandler, UpdateEvent};
 use crate::id_set::DeleteSet;
 use crate::types::{Branch, BranchPtr, Path, PathSegment, TypePtr, TypeRefs};
 use crate::update::PendingUpdate;
@@ -25,6 +25,10 @@ pub(crate) struct Store {
     /// A block store of a current document. It represent all blocks (inserted or tombstoned
     /// operations) integrated - and therefore visible - into a current document.
     pub(crate) blocks: BlockStore,
+
+    /// Handles subscriptions for the `afterTransactionCleanup` event. Events are called with the
+    /// newest updates once they are committed and compacted.
+    pub(crate) after_transaction_events: Box<Option<EventHandler<AfterTransactionEvent>>>,
 
     /// A pending update. It contains blocks, which are not yet integrated into `blocks`, usually
     /// because due to issues in update exchange, there were some missing blocks that need to be
@@ -51,6 +55,7 @@ impl Store {
             pending: None,
             pending_ds: None,
             update_events: EventHandler::new(),
+            after_transaction_events: None.into(),
         }
     }
 

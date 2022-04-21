@@ -1,5 +1,5 @@
 use crate::update::Update;
-use crate::Transaction;
+use crate::{DeleteSet, StateVector, Transaction};
 use rand::RngCore;
 use std::collections::HashMap;
 use std::ptr::NonNull;
@@ -85,6 +85,13 @@ impl UpdateEvent {
     pub(crate) fn new(update: Update) -> Self {
         UpdateEvent { update }
     }
+}
+
+/// Holds transaction update information from a commit after state vectors have been compressed.
+pub struct AfterTransactionEvent {
+    pub before_state: StateVector,
+    pub after_state: StateVector,
+    pub delete_set: DeleteSet,
 }
 
 #[cfg(test)]

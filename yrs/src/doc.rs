@@ -1,5 +1,6 @@
 use crate::block::ClientID;
-use crate::event::{Subscription, UpdateEvent};
+
+use crate::event::{AfterTransactionEvent, EventHandler, Subscription, UpdateEvent};
 use crate::store::Store;
 use crate::transaction::Transaction;
 use crate::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
@@ -83,6 +84,20 @@ impl Doc {
         store.update_events.subscribe(f)
     }
 
+    /// Subscribe callback function to updates on the `Doc`. The callback will receive state updates and
+    /// deletions when a document transaction is committed.
+    pub fn on_transaction_cleanup<F>(&mut self, f: F) -> Subscription<AfterTransactionEvent>
+    where
+        F: Fn(&Transaction, &AfterTransactionEvent) -> () + 'static,
+    {
+        let store = unsafe { &mut *self.store.get() };
+
+        store
+            .after_transaction_events
+            .get_or_insert_with(EventHandler::new)
+            .subscribe(f)
+    }
+
     pub fn encode_state_as_update<E: Encoder>(&self, sv: &StateVector, encoder: &mut E) {
         let store = unsafe { self.store.get().as_ref().unwrap() };
         store.write_blocks(sv, encoder);
@@ -153,7 +168,7 @@ mod test {
     use crate::update::Update;
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
-    use crate::{Doc, StateVector};
+    use crate::{DeleteSet, Doc, StateVector};
     use std::cell::Cell;
     use std::rc::Rc;
 
@@ -404,5 +419,43 @@ mod test {
         d3.transact().apply_update(update);
 
         assert_eq!("ab", source_3.to_string());
+    }
+
+    #[test]
+    fn on_transaction_cleanup() {
+        // Setup
+        let mut doc = Doc::new();
+        let mut txn = doc.transact();
+        let text = txn.get_text("test");
+        let before_state = Rc::new(Cell::new(StateVector::default()));
+        let after_state = Rc::new(Cell::new(StateVector::default()));
+        let delete_set = Rc::new(Cell::new(DeleteSet::default()));
+        // Create interior mutable references for the callback.
+        let before_ref = Rc::clone(&before_state);
+        let after_ref = Rc::clone(&after_state);
+        let delete_ref = Rc::clone(&delete_set);
+        // Subscribe callback
+
+        let sub = doc.on_transaction_cleanup(move |_, event| {
+            before_ref.set(event.before_state.clone());
+            after_ref.set(event.after_state.clone());
+            delete_ref.set(event.delete_set.clone());
+        });
+
+        // Update the document
+        text.insert(&mut txn, 0, "abc");
+        text.remove_range(&mut txn, 1, 2);
+        txn.commit();
+
+        // Compare values
+        assert_eq!(before_state.take(), txn.before_state);
+        assert_eq!(after_state.take(), txn.after_state);
+        assert_eq!(delete_set.take(), txn.delete_set);
+
+        // Ensure that the subscription is successfully dropped.
+        drop(sub);
+        text.insert(&mut txn, 0, "should not update");
+        txn.commit();
+        assert_ne!(after_state.take(), txn.after_state);
     }
 }
