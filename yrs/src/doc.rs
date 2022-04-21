@@ -295,7 +295,6 @@ mod test {
     #[test]
     fn pending_update_integration() {
         let doc = Doc::new();
-        let map = doc.transact().get_map("state");
         let txt = doc.transact().get_text("source");
 
         let updates = [
@@ -338,12 +337,10 @@ mod test {
             ],
         ];
 
-        let mut i = 1;
         for u in updates {
             let mut txn = doc.transact();
             let u = Update::decode_v1(u.as_slice());
             txn.apply_update(u);
-            i += 1;
         }
         assert_eq!(txt.to_string(), "abcd".to_string());
     }

@@ -1699,7 +1699,7 @@ mod test {
             let c2 = text2.chars().count();
             let count = c1 as u32 + c2 as u32;
 
-            let observer = text.observe(move |txn, edit| {
+            let _observer = text.observe(move |txn, edit| {
                 // THIS ASSERT FAILS!
                 assert_eq!(edit.delta(txn)[0], Delta::Deleted(count))
             });
