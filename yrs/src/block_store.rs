@@ -173,12 +173,11 @@ impl Decode for Snapshot {
 /// A resizable list of blocks inserted by a single client.
 pub(crate) struct ClientBlockList {
     list: Vec<Box<block::Block>>,
-    integrated_len: usize,
 }
 
 impl PartialEq for ClientBlockList {
     fn eq(&self, other: &Self) -> bool {
-        if self.integrated_len != other.integrated_len || self.list.len() != other.list.len() {
+        if self.list.len() != other.list.len() {
             false
         } else {
             let mut i = 0;
@@ -197,17 +196,13 @@ impl PartialEq for ClientBlockList {
 
 impl ClientBlockList {
     fn new() -> ClientBlockList {
-        ClientBlockList {
-            list: Vec::new(),
-            integrated_len: 0,
-        }
+        ClientBlockList { list: Vec::new() }
     }
 
     /// Creates a new instance of aclient block list with a predefined capacity.
     pub fn with_capacity(capacity: usize) -> ClientBlockList {
         ClientBlockList {
             list: Vec::with_capacity(capacity),
-            integrated_len: 0,
         }
     }
 
@@ -226,12 +221,8 @@ impl ClientBlockList {
     /// describes a clock sequence number that **will be** assigned, when a new block will be
     /// appended to current list.
     pub fn get_state(&self) -> u32 {
-        if self.integrated_len == 0 {
-            0
-        } else {
-            let item = self.get(self.integrated_len - 1);
-            item.id().clock + item.len()
-        }
+        let item = self.get(self.list.len() - 1);
+        item.id().clock + item.len()
     }
 
     /// Returns first block on the list - since we only initialize [ClientBlockList]
@@ -245,7 +236,7 @@ impl ClientBlockList {
     /// when we're sure, we're about to add new elements to it, it always should
     /// stay non-empty.
     pub(crate) fn last(&self) -> BlockPtr {
-        self.get(self.integrated_len - 1)
+        self.get(self.len() - 1)
     }
 
     /// Given a block's identifier clock value, return an offset under which this block could be
@@ -294,24 +285,17 @@ impl ClientBlockList {
     /// Pushes a new block at the end of this block list.
     pub(crate) fn push(&mut self, block: Box<block::Block>) {
         self.list.push(block);
-        self.integrated_len += 1;
     }
 
     /// Inserts a new block at a given `index` position within this block list. This method may
     /// panic if `index` is greater than a length of the list.
     fn insert(&mut self, index: usize, block: Box<block::Block>) {
         self.list.insert(index, block);
-        self.integrated_len += 1;
     }
 
     /// Returns a number of blocks stored within this list.
     pub fn len(&self) -> usize {
         self.list.len()
-    }
-
-    /// Returns a number of blocks successfully integrated within this list.
-    pub fn integrated_len(&self) -> usize {
-        self.integrated_len
     }
 
     pub(crate) fn iter(&self) -> ClientBlockListIter<'_> {
@@ -341,7 +325,6 @@ impl ClientBlockList {
 
         if let Some(replacement) = replacement {
             let block = self.list.remove(index);
-            self.integrated_len -= 1;
             if let Block::Item(item) = *block {
                 return Some(SquashResult {
                     parent: item.parent,
