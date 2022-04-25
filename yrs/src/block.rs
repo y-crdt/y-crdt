@@ -229,8 +229,8 @@ impl BlockPtr {
                                 break;
                             }
 
-                            items_before_origin.insert(ptr.id().clone());
-                            conflicting_items.insert(ptr.id().clone());
+                            items_before_origin.insert(ptr);
+                            conflicting_items.insert(ptr);
                             if let Block::Item(item) = ptr.deref() {
                                 if this.origin == item.origin {
                                     // case 1
@@ -244,9 +244,13 @@ impl BlockPtr {
                                         break;
                                     }
                                 } else {
-                                    if let Some(item_origin) = item.origin {
-                                        if items_before_origin.contains(&item_origin) {
-                                            if !conflicting_items.contains(&item_origin) {
+                                    if let Some(origin_ptr) = item
+                                        .origin
+                                        .as_ref()
+                                        .and_then(|id| store.blocks.get_block(id))
+                                    {
+                                        if items_before_origin.contains(&origin_ptr) {
+                                            if !conflicting_items.contains(&origin_ptr) {
                                                 left = Some(ptr.clone());
                                                 conflicting_items.clear();
                                             }
@@ -930,12 +934,15 @@ impl Item {
             }
             TypePtr::ID(id) => {
                 let ptr = store.blocks.get_block(id).unwrap();
-                let item = ptr.as_item().unwrap();
-                if let ItemContent::Type(branch) = &item.content {
-                    self.parent = TypePtr::Branch(BranchPtr::from(branch));
+                self.parent = if let Block::Item(item) = ptr.deref() {
+                    match &item.content {
+                        ItemContent::Type(branch) => TypePtr::Branch(BranchPtr::from(branch)),
+                        ItemContent::Deleted(_) => TypePtr::Unknown,
+                        _ => panic!("Defect: parent points to a block which is not a shared type"),
+                    }
                 } else {
-                    panic!("Defect: parent points to a block which is not a shared type");
-                }
+                    TypePtr::Unknown
+                };
             }
             _ => {}
         }
@@ -1521,7 +1528,15 @@ impl std::fmt::Debug for Item {
 impl std::fmt::Display for Item {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "({}, len: {}", self.id, self.len)?;
-        write!(f, ", parent: {}", self.parent)?;
+        match &self.parent {
+            TypePtr::Unknown => {}
+            TypePtr::Branch(ptr) => {
+                write!(f, ", parent: <branch>")?;
+            }
+            other => {
+                write!(f, ", parent: {}", other)?;
+            }
+        }
         if let Some(origin) = self.origin.as_ref() {
             write!(f, ", origin-l: {}", origin)?;
         }
