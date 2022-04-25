@@ -222,64 +222,69 @@ impl Transaction {
     pub(crate) fn apply_delete(&mut self, ds: &DeleteSet) -> Option<DeleteSet> {
         let mut unapplied = DeleteSet::new();
         for (client, ranges) in ds.iter() {
-            let mut blocks = self.store_mut().blocks.get_mut(client).unwrap();
-            let state = blocks.get_state();
+            if let Some(mut blocks) = self.store_mut().blocks.get_mut(client) {
+                let state = blocks.get_state();
 
-            for range in ranges.iter() {
-                let clock = range.start;
-                let clock_end = range.end;
+                for range in ranges.iter() {
+                    let clock = range.start;
+                    let clock_end = range.end;
 
-                if clock < state {
-                    if state < clock_end {
-                        unapplied.insert(ID::new(*client, clock), clock_end - state);
-                    }
-                    // We can ignore the case of GC and Delete structs, because we are going to skip them
-                    if let Some(mut index) = blocks.find_pivot(clock) {
+                    if clock < state {
+                        if state < clock_end {
+                            unapplied.insert(ID::new(*client, clock), clock_end - state);
+                        }
                         // We can ignore the case of GC and Delete structs, because we are going to skip them
-                        let ptr = blocks.get(index);
-                        if let Block::Item(item) = ptr.clone().deref_mut() {
-                            // split the first item if necessary
-                            if !item.is_deleted() && item.id.clock < clock {
-                                let store = self.store_mut();
-                                if let Some(split) =
-                                    store.blocks.split_block(ptr, clock - item.id.clock)
-                                {
-                                    index += 1;
-                                    self.merge_blocks.push(split);
+                        if let Some(mut index) = blocks.find_pivot(clock) {
+                            // We can ignore the case of GC and Delete structs, because we are going to skip them
+                            let ptr = blocks.get(index);
+                            if let Block::Item(item) = ptr.clone().deref_mut() {
+                                // split the first item if necessary
+                                if !item.is_deleted() && item.id.clock < clock {
+                                    let store = self.store_mut();
+                                    if let Some(split) =
+                                        store.blocks.split_block(ptr, clock - item.id.clock)
+                                    {
+                                        index += 1;
+                                        self.merge_blocks.push(split);
+                                    }
+                                    blocks = self.store_mut().blocks.get_mut(client).unwrap();
                                 }
-                                blocks = self.store_mut().blocks.get_mut(client).unwrap();
-                            }
 
-                            while index < blocks.len() {
-                                let block = blocks.get(index);
-                                if let Block::Item(item) = block.clone().deref_mut() {
-                                    if item.id.clock < clock_end {
-                                        if !item.is_deleted() {
-                                            if item.id.clock + item.len() > clock_end {
-                                                if let Some(split) = self
+                                while index < blocks.len() {
+                                    let block = blocks.get(index);
+                                    if let Block::Item(item) = block.clone().deref_mut() {
+                                        if item.id.clock < clock_end {
+                                            if !item.is_deleted() {
+                                                if item.id.clock + item.len() > clock_end {
+                                                    if let Some(split) =
+                                                        self.store_mut().blocks.split_block(
+                                                            block,
+                                                            clock_end - item.id.clock,
+                                                        )
+                                                    {
+                                                        self.merge_blocks.push(split);
+                                                        index += 1;
+                                                    }
+                                                }
+                                                self.delete(block);
+                                                blocks = self
                                                     .store_mut()
                                                     .blocks
-                                                    .split_block(block, clock_end - item.id.clock)
-                                                {
-                                                    self.merge_blocks.push(split);
-                                                    index += 1;
-                                                }
+                                                    .get_mut(client)
+                                                    .unwrap();
+                                                // just to make the borrow checker happy
                                             }
-                                            self.delete(block);
-                                            blocks =
-                                                self.store_mut().blocks.get_mut(client).unwrap();
-                                            // just to make the borrow checker happy
+                                        } else {
+                                            break;
                                         }
-                                    } else {
-                                        break;
                                     }
+                                    index += 1;
                                 }
-                                index += 1;
                             }
                         }
+                    } else {
+                        unapplied.insert(ID::new(*client, clock), clock_end - clock);
                     }
-                } else {
-                    unapplied.insert(ID::new(*client, clock), clock_end - clock);
                 }
             }
         }
