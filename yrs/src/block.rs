@@ -284,9 +284,7 @@ impl BlockPtr {
                         this.right = left.right.replace(self_ptr);
                     } else {
                         let r = if let Some(parent_sub) = &this.parent_sub {
-                            let start = parent_ref.map.get(parent_sub).cloned();
-                            let mut r = start;
-
+                            let mut r = parent_ref.map.get(parent_sub).cloned();
                             while let Some(ptr) = r {
                                 if let Block::Item(item) = ptr.deref() {
                                     if item.left.is_some() {
@@ -338,7 +336,7 @@ impl BlockPtr {
                         false
                     }
                 } else {
-                    panic!("Defect: item has no parent")
+                    panic!("Defect: item has no parent: {} - {:#?}", this, store);
                 }
             }
         }
@@ -937,11 +935,11 @@ impl Item {
                 self.parent = if let Block::Item(item) = ptr.deref() {
                     match &item.content {
                         ItemContent::Type(branch) => TypePtr::Branch(BranchPtr::from(branch)),
-                        ItemContent::Deleted(_) => TypePtr::Unknown,
+                        ItemContent::Deleted(_) => TypePtr::ID(*id),
                         _ => panic!("Defect: parent points to a block which is not a shared type"),
                     }
                 } else {
-                    TypePtr::Unknown
+                    TypePtr::ID(*id)
                 };
             }
             _ => {}
@@ -1530,9 +1528,6 @@ impl std::fmt::Display for Item {
         write!(f, "({}, len: {}", self.id, self.len)?;
         match &self.parent {
             TypePtr::Unknown => {}
-            TypePtr::Branch(ptr) => {
-                write!(f, ", parent: <branch>")?;
-            }
             other => {
                 write!(f, ", parent: {}", other)?;
             }
