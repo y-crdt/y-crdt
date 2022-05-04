@@ -333,17 +333,21 @@ impl Update {
         client_block_ref_ids: &'a mut Vec<ClientID>,
         blocks: &'b mut UpdateBlocks,
     ) -> Option<(ClientID, &'b mut VecDeque<BlockCarrier>)> {
-        loop {
-            if let Some((id, Some(client_blocks))) = client_block_ref_ids
-                .pop()
-                .map(move |id| (id, blocks.clients.get_mut(&id)))
-            {
-                if !client_blocks.is_empty() {
+        while let Some(id) = client_block_ref_ids.pop() {
+            match blocks.clients.get(&id) {
+                Some(client_blocks) if !client_blocks.is_empty() => {
+                    // we need to borrow client_blocks in mutable context AND we're
+                    // doing so in a loop at the same time - this combination causes
+                    // Rust borrow checker go nuts. TODO: remove the unsafe block
+                    let client_blocks = unsafe {
+                        (client_blocks as *const _ as *mut VecDeque<BlockCarrier>)
+                            .as_mut()
+                            .unwrap()
+                    };
                     return Some((id, client_blocks));
                 }
+                _ => {}
             }
-
-            break;
         }
         None
     }
