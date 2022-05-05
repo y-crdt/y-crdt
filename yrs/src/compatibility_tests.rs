@@ -301,14 +301,14 @@ fn test_small_data_set() {
     test_data_set("./benches/input/small-test-dataset.bin")
 }
 
-//#[test]
+#[test]
 fn test_medium_data_set() {
-    test_data_set("./benches/input/medium-test-dataset.txt")
+    test_data_set("./benches/input/medium-test-dataset.bin")
 }
 
 //#[test]
 fn test_large_data_set() {
-    test_data_set("./benches/input/large-test-dataset.txt")
+    test_data_set("./benches/input/large-test-dataset.bin")
 }
 
 fn test_data_set<P: AsRef<std::path::Path>>(path: P) {
