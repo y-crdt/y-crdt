@@ -1,5 +1,4 @@
 use crate::block::{Block, BlockPtr, ClientID, ID};
-use crate::types::TypePtr;
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::client_hasher::ClientHasher;
@@ -8,7 +7,6 @@ use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::hash::BuildHasherDefault;
 use std::ops::Deref;
-use std::rc::Rc;
 use std::vec::Vec;
 
 /// State vector is a compact representation of all known blocks inserted and integrated into
@@ -307,50 +305,28 @@ impl ClientBlockList {
     /// squashed into its left neighbor. In such case a squash result will be returned in order to
     /// later on rewire left/right neighbor changes that may have occurred as a result of squashing
     /// and block removal.
-    pub(crate) fn squash_left(&mut self, index: usize) -> Option<SquashResult> {
-        let replacement = {
-            let (l, r) = self.list.split_at_mut(index);
-            let mut left = BlockPtr::from(&mut l[index - 1]);
-            let right = BlockPtr::from(&r[0]);
-            if left.is_deleted() == right.is_deleted() && left.same_type(right.deref()) {
-                if left.try_squash(right) {
-                    Some(left)
-                } else {
-                    None
+    pub(crate) fn squash_left(&mut self, index: usize) {
+        let (l, r) = self.list.split_at_mut(index);
+        let mut left = BlockPtr::from(&mut l[index - 1]);
+        let right = BlockPtr::from(&r[0]);
+        if left.is_deleted() == right.is_deleted() && left.same_type(right.deref()) {
+            if left.try_squash(right) {
+                let mut right = self.list.remove(index);
+                let right_ptr = BlockPtr::from(&mut right);
+                if let Block::Item(item) = *right {
+                    if let Some(parent_sub) = item.parent_sub {
+                        let mut parent = item.parent.as_branch().unwrap().clone();
+                        if let Entry::Occupied(mut e) = parent.map.entry(parent_sub) {
+                            let r = e.get_mut();
+                            if *r == right_ptr {
+                                *r = left;
+                            }
+                        }
+                    }
                 }
-            } else {
-                None
-            }
-        };
-
-        if let Some(replacement) = replacement {
-            let block = self.list.remove(index);
-            if let Block::Item(item) = *block {
-                return Some(SquashResult {
-                    parent: item.parent,
-                    parent_sub: item.parent_sub,
-                    new_right: item.right,
-                    old_right: item.id,
-                    replacement,
-                });
             }
         }
-
-        None
     }
-}
-
-/// A structure describing a changes made during block squashing.
-#[derive(Debug)]
-pub(crate) struct SquashResult {
-    pub parent: TypePtr,
-    pub parent_sub: Option<Rc<str>>,
-    /// Pointer to a block that resulted from compaction of two adjacent blocks.
-    pub replacement: BlockPtr,
-    /// Pointer to a neighbor, that's now on the right side of the `replacement` block.
-    pub new_right: Option<BlockPtr>,
-    /// ID of the block that was compacted into left block. Left block ID is in `replacement`.
-    pub old_right: ID,
 }
 
 impl Default for ClientBlockList {

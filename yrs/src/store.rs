@@ -1,5 +1,5 @@
 use crate::block::{Block, ClientID, ItemContent};
-use crate::block_store::{BlockStore, SquashResult, StateVector};
+use crate::block_store::{BlockStore, StateVector};
 use crate::doc::Options;
 use crate::event::{AfterTransactionEvent, EventHandler, UpdateEvent};
 use crate::id_set::DeleteSet;
@@ -167,27 +167,6 @@ impl Store {
             }
         }
         diff
-    }
-
-    pub(crate) fn gc_cleanup(&self, mut compaction: SquashResult) {
-        if let Some(parent_sub) = compaction.parent_sub {
-            if let TypePtr::Branch(mut inner) = compaction.parent {
-                match inner.map.entry(parent_sub.clone()) {
-                    Entry::Occupied(mut e) => {
-                        let cell = e.get_mut();
-                        if cell.id() == &compaction.old_right {
-                            *cell = compaction.replacement;
-                        }
-                    }
-                    Entry::Vacant(e) => {
-                        e.insert(compaction.replacement);
-                    }
-                }
-            }
-        }
-        if let Some(Block::Item(right)) = compaction.new_right.as_deref_mut() {
-            right.left = Some(compaction.replacement);
-        }
     }
 
     pub fn get_type_from_path(&self, path: &Path) -> Option<BranchPtr> {

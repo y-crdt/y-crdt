@@ -1,4 +1,4 @@
-use crate::block::{Block, ClientID, ID};
+use crate::block::{ClientID, ID};
 use crate::block_store::BlockStore;
 use crate::store::Store;
 use crate::updates::decoder::{Decode, Decoder};
@@ -7,7 +7,7 @@ use crate::utils::client_hasher::ClientHasher;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::hash::BuildHasherDefault;
-use std::ops::{DerefMut, Range};
+use std::ops::Range;
 
 // Note: use native Rust [Range](https://doc.rust-lang.org/std/ops/struct.Range.html)
 // as it's left-inclusive/right-exclusive and defines the exact capabilities we care about here.
@@ -508,21 +508,14 @@ impl DeleteSet {
     pub(crate) fn try_squash_with(&mut self, store: &mut Store) {
         // try to merge deleted / gc'd items
         for (client, range) in self.iter() {
-            if let Some(mut blocks) = store.blocks.get_mut(client) {
+            if let Some(blocks) = store.blocks.get_mut(client) {
                 for r in range.iter().rev() {
                     // start with merging the item next to the last deleted item
                     let mut si = (blocks.len() - 1)
                         .min(1 + blocks.find_pivot(r.end - 1).unwrap_or_default());
                     let mut block = blocks.get(si);
                     while si > 0 && block.id().clock >= r.start {
-                        if let Some(compaction) = blocks.squash_left(si) {
-                            if let Some(mut right) = compaction.new_right {
-                                if let Block::Item(item) = right.deref_mut() {
-                                    item.left = Some(compaction.replacement);
-                                }
-                                blocks = store.blocks.get_mut(client).unwrap();
-                            }
-                        }
+                        blocks.squash_left(si);
                         si -= 1;
                         block = blocks.get(si);
                     }
