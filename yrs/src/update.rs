@@ -64,7 +64,7 @@ impl std::fmt::Display for UpdateBlocks {
         writeln!(f, "{{")?;
         for (client, blocks) in self.clients.iter() {
             writeln!(f, "\t{} -> [", client)?;
-            for block in blocks {
+            for block in blocks.iter() {
                 writeln!(f, "\t\t{}", block)?;
             }
             write!(f, "\t]")?;
@@ -308,13 +308,17 @@ impl Update {
                     {
                         return Some(origin.client);
                     }
-                } else if let Some(right_origin) = &item.right_origin {
+                }
+
+                if let Some(right_origin) = &item.right_origin {
                     if right_origin.client != item.id.client
                         && right_origin.clock >= local_sv.get(&right_origin.client)
                     {
                         return Some(right_origin.client);
                     }
-                } else if let TypePtr::Branch(parent) = &item.parent {
+                }
+
+                if let TypePtr::Branch(parent) = &item.parent {
                     if let Some(block) = &parent.item {
                         let parent_id = block.id();
                         if parent_id.client != item.id.client
@@ -340,7 +344,8 @@ impl Update {
                     // doing so in a loop at the same time - this combination causes
                     // Rust borrow checker go nuts. TODO: remove the unsafe block
                     let client_blocks = unsafe {
-                        (client_blocks as *const _ as *mut VecDeque<BlockCarrier>)
+                        (client_blocks as *const VecDeque<BlockCarrier>
+                            as *mut VecDeque<BlockCarrier>)
                             .as_mut()
                             .unwrap()
                     };
@@ -992,10 +997,11 @@ impl Iterator for IntoBlocks {
 mod test {
     use crate::block::{Item, ItemContent};
     use crate::types::TypePtr;
-    use crate::update::{BlockCarrier, Update};
+    use crate::update::Update;
     use crate::updates::decoder::{Decode, DecoderV1};
     use crate::{Doc, ID};
     use lib0::decoding::Cursor;
+    use std::collections::VecDeque;
 
     #[test]
     fn update_decode() {
@@ -1021,8 +1027,8 @@ mod test {
 
         let id = ID::new(2026372272, 0);
         let block = u.blocks.clients.get(&id.client).unwrap();
-        let mut expected: Vec<BlockCarrier> = Vec::new();
-        expected.push(
+        let mut expected = VecDeque::with_capacity(1);
+        expected.push_back(
             Item::new(
                 id,
                 None,

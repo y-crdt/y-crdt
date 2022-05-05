@@ -3,11 +3,14 @@ use crate::id_set::{DeleteSet, IdSet};
 use crate::store::Store;
 use crate::types::{Branch, TypePtr, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT};
 use crate::update::{BlockCarrier, Update};
-use crate::updates::decoder::Decode;
+use crate::updates::decoder::{Decode, Decoder, DecoderV1};
 use crate::updates::encoder::Encode;
 use crate::{Doc, StateVector, ID};
 use lib0::any::Any;
+use lib0::decoding::Read;
 use std::cell::Cell;
+use std::fs::File;
+use std::io::BufReader;
 use std::rc::Rc;
 
 #[test]
@@ -291,6 +294,54 @@ fn state_vector() {
 
     let serialized = sv.encode_v1();
     assert_eq!(serialized.as_slice(), payload);
+}
+
+#[test]
+fn test_small_data_set() {
+    test_data_set("./benches/input/small-test-dataset.bin")
+}
+
+//#[test]
+fn test_medium_data_set() {
+    test_data_set("./benches/input/medium-test-dataset.txt")
+}
+
+//#[test]
+fn test_large_data_set() {
+    test_data_set("./benches/input/large-test-dataset.txt")
+}
+
+fn test_data_set<P: AsRef<std::path::Path>>(path: P) {
+    let data = {
+        let mut reader = BufReader::new(File::open(path).unwrap());
+        let mut buf = Vec::new();
+        std::io::Read::read_to_end(&mut reader, &mut buf).unwrap();
+        buf
+    };
+    let mut decoder = DecoderV1::from(data.as_slice());
+    let test_count: u32 = decoder.read_uvar();
+    for test_num in 0..test_count {
+        let updates_len: u32 = decoder.read_uvar();
+        let doc = Doc::new();
+        let mut txn = doc.transact();
+        let txt = txn.get_text("text");
+        let map = txn.get_map("map");
+        let arr = txn.get_array("array");
+        drop(txn);
+        for i in 0..updates_len {
+            let update = Update::decode_v1(decoder.read_buf());
+            doc.transact().apply_update(update);
+        }
+        let expected = decoder.read_string();
+        assert_eq!(txt.to_string(), expected, "failed at {} run", test_num);
+
+        let expected = decoder.read_any();
+        let actual = map.to_json();
+        assert_eq!(actual, expected, "failed at {} run", test_num);
+
+        let expected = decoder.read_any();
+        assert_eq!(arr.to_json(), expected, "failed at {} run", test_num);
+    }
 }
 
 /// Verify if given `payload` can be deserialized into series

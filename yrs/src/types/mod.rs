@@ -646,20 +646,35 @@ impl std::fmt::Display for Branch {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.type_ref() {
             TYPE_REFS_ARRAY => {
-                if let Some(ptr) = self.start {
-                    write!(f, "YArray(start: {})", ptr)
-                } else {
-                    write!(f, "YArray")
+                write!(f, "YArray(")?;
+                let mut ptr = self.start;
+                if let Some(block) = ptr {
+                    write!(f, "{}", block)?;
+                    ptr = if let Block::Item(item) = block.deref() {
+                        item.right
+                    } else {
+                        None
+                    };
                 }
+                while let Some(block) = ptr {
+                    write!(f, ", {}", block)?;
+                    ptr = if let Block::Item(item) = block.deref() {
+                        item.right
+                    } else {
+                        None
+                    };
+                }
+                write!(f, ")")
             }
             TYPE_REFS_MAP => {
-                write!(f, "YMap(")?;
-                let mut iter = self.map.iter();
+                write!(f, "Ymap(")?;
+                let x: Vec<_> = self.map.iter().collect();
+                let mut iter = x.iter();
                 if let Some((k, v)) = iter.next() {
-                    write!(f, "'{}': {}", k, v)?;
+                    write!(f, "{}: '{}'", k, v)?;
                 }
                 while let Some((k, v)) = iter.next() {
-                    write!(f, ", '{}': {}", k, v)?;
+                    write!(f, ", {}: '{}'", k, v)?;
                 }
                 write!(f, ")")
             }
@@ -818,13 +833,13 @@ impl std::fmt::Display for TypePtr {
             TypePtr::Unknown => write!(f, "unknown"),
             TypePtr::Branch(ptr) => {
                 if let Some(i) = ptr.item {
-                    write!(f, "{}", i.id())
+                    write!(f, "<branch({})>", i.id())
                 } else {
-                    write!(f, "null")
+                    write!(f, "<branch(null)>")
                 }
             }
             TypePtr::ID(id) => write!(f, "{}", id),
-            TypePtr::Named(name) => write!(f, "{}", name),
+            TypePtr::Named(name) => write!(f, "'{}'", name),
         }
     }
 }
