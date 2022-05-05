@@ -1,31 +1,61 @@
-# Y CRDT Ports
+# Y CRDT
 
-[![Join the chat at https://gitter.im/Yjs/y-crdt](https://badges.gitter.im/Yjs/y-crdt.svg)](https://gitter.im/Yjs/y-crdt?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
+It's a collection of Rust libraries oriented around implementing [Yjs](https://yjs.dev/) algorithm and protocol with cross-language and cross-platform support in mind. It aims to maintain behavior and binary protocol compatibility with Yjs, therefore projects using Yjs/Yrs should be able to interoperate with each other.
 
-> Yjs ports to other programming languages (WIP).
+Project organization:
 
-Yrs "wires" is a Rust port of the Yjs framework. The
-[Ywasm](https://github.com/yjs/Ywasm) project generates a wasm library based on
-this package.
+- **lib0** is a serialization library used for efficient (and fairly fast) data exchange.
+- **yrs** (read: *wires*) is a core Rust library, a foundation stone for other projects.
+- **yffi** (read: *wifi*) is a wrapper around *yrs* use to provide a native C foreign function interface. See also: [C header file](https://github.com/y-crdt/y-crdt/blob/main/tests-ffi/include/libyrs.h).
+- **ywasm** is a wrapper around *yrs* that targets Web Assembly and JavaScript API.
 
-## Status
+Other projects using *yrs*:
 
-> :warning: Highly experimental. Feedback and involvement is welcome!
+- [ypy](https://github.com/y-crdt/ypy) - Python bindings.
+- [y-rb](https://gitlab.com/gitlab-org/incubation-engineering/real-time-editing/y-rb) - Ruby bindings.
 
-* Partially implemented the binary encoding protocol. Still need to port the rest of lib0/encoding.
-* Only implements the Text type.
-* No conflict resolution yet.
+## Feature parity with Yjs project
 
-I'm currently mainly experimenting with designing a convenient API for the Yrs CRDT. I want to make it work very similar to Yjs, but contrary to Yjs you should always know what you get back (proper types, no duck typing).
+-  Supported collaborative types:
+  - [x] Text
+    - [x] text insertion (with variable offsets including configurable UTF-8, UTF-16 and UTF-32 mappings)
+    - [x] embedded elements insertion
+    - [x] insertion of formatting attributes
+    - [x] observe events and deltas
+  - [x] Map
+    - [x] insertion, update and removal of primitive JSON-like elements
+    - [x] recursive insertion, update and removal of other collaborative elements of any type
+    - [x] observe events and deltas
+    - [x] deep observe events bubbling up from nested collections
+  - [x] Array
+    - [x] insertion and removal of primitive JSON-like elements
+    - [x] recursive insertion of other collaborative elements of any type
+    - [x] observe events and deltas
+    - [x] deep observe events bubbling up from nested collections
+  - [x] XmlElement
+    - [x] insertion, update and removal of XML attributes
+    - [x] insertion, update and removal of XML children nodes
+    - [x] observe events and deltas
+    - [x] deep observe events bubbling up from nested collections
+  - [x] XmlText
+    - [x] insertion, update and removal of XML attributes
+    - [x] text insertion (with variable offsets including configurable UTF-8, UTF-16 and UTF-32 mappings)
+    - [x] observe events and deltas
+  - [ ] XmlFragment
+  - [ ] XmlHook (*deprecated*)
+  - [ ] Sub documents
+- Encoding formats:
+  - [x] lib0 v1 encoding
+  - [x] lib0 v2 encoding
+- Transaction events:
+  - [x] on event update
+  - [x] on after transaction
 
-## Project Organization
+## Maintainers
 
-The Yrs project is organized in a monorepo of components that work with each
-other.
-
-* **[./yrs](./yrs)** Contains the CRDT implementation (including shared types)
-  that is the baseline for the other projects.
-* **[./ywasm](./ywasm)** Maintains the wasm bindings and the npm module.
+- [Bartosz Sypytkowski](https://github.com/Horusiath)
+- [Kevin Jahns](https://github.com/dmonad)
+- [John Waidhofer](https://github.com/Waidhoferj)
 
 ## Sponsors
 
