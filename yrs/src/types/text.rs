@@ -122,6 +122,9 @@ impl Text {
     ///
     /// This method will panic if provided `index` is greater than the length of a current text.
     pub fn insert(&self, txn: &mut Transaction, index: u32, chunk: &str) {
+        if chunk.is_empty() {
+            return;
+        }
         if let Some(mut pos) = self.find_position(txn, index) {
             let value = crate::block::PrelimText(chunk.into());
             while let Some(right) = pos.right.as_ref() {
@@ -926,6 +929,22 @@ mod test {
     use std::cell::RefCell;
     use std::collections::HashMap;
     use std::rc::Rc;
+
+    #[test]
+    fn insert_empty_string() {
+        let doc = Doc::new();
+        let mut txn = doc.transact();
+
+        let txt = txn.get_text("test");
+        assert_eq!(txt.to_string().as_str(), "");
+
+        txt.push(&mut txn, "");
+        assert_eq!(txt.to_string().as_str(), "");
+
+        txt.push(&mut txn, "abc");
+        txt.push(&mut txn, "");
+        assert_eq!(txt.to_string().as_str(), "abc");
+    }
 
     #[test]
     fn append_single_character_blocks() {

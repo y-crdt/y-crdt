@@ -298,7 +298,8 @@ impl Transaction {
 
     /// Delete item under given pointer.
     /// Returns true if block was successfully deleted, false if it was already deleted in the past.
-    pub(crate) fn delete(&mut self, mut ptr: BlockPtr) -> bool {
+    pub(crate) fn delete(&mut self, block: BlockPtr) -> bool {
+        let mut ptr = block;
         let mut recurse = Vec::new();
         let mut result = false;
 
@@ -555,14 +556,11 @@ impl Transaction {
         for (client, &clock) in self.after_state.iter() {
             let before_clock = self.before_state.get(client);
             if before_clock != clock {
-                let mut blocks = store.blocks.get_mut(client).unwrap();
+                let blocks = store.blocks.get_mut(client).unwrap();
                 let first_change = blocks.find_pivot(before_clock).unwrap().max(1);
                 let mut i = blocks.len() - 1;
                 while i >= first_change {
-                    if let Some(compaction) = blocks.squash_left(i) {
-                        store.gc_cleanup(compaction);
-                        blocks = store.blocks.get_mut(client).unwrap();
-                    }
+                    blocks.squash_left(i);
                     i -= 1;
                 }
             }
@@ -573,13 +571,9 @@ impl Transaction {
             let blocks = store.blocks.get_mut(&id.client).unwrap();
             let replaced_pos = blocks.find_pivot(id.clock).unwrap();
             if replaced_pos + 1 < blocks.len() {
-                if let Some(compaction) = blocks.squash_left(replaced_pos + 1) {
-                    store.gc_cleanup(compaction);
-                }
+                blocks.squash_left(replaced_pos + 1);
             } else if replaced_pos > 0 {
-                if let Some(compaction) = blocks.squash_left(replaced_pos) {
-                    store.gc_cleanup(compaction);
-                }
+                blocks.squash_left(replaced_pos);
             }
         }
         // 8. emit 'afterTransactionCleanup'

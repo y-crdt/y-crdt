@@ -10,3 +10,4 @@ tests-ffi/lib
 ywasm/pkg
 node_modules/
 dist/
+large-test-dataset.bin

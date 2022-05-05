@@ -183,10 +183,13 @@ impl Update {
                 self.blocks.clients.keys().cloned().collect();
             client_block_ref_ids.sort();
 
-            let mut current_client_id = client_block_ref_ids.pop();
-            let mut current_target =
-                current_client_id.and_then(|id| self.blocks.clients.get_mut(&id));
-            let mut stack_head = Self::next(&mut current_target);
+            let mut current_client_id = client_block_ref_ids.pop().unwrap();
+            let mut current_target = self.blocks.clients.get_mut(&current_client_id);
+            let mut stack_head = if let Some(v) = current_target.as_mut() {
+                v.pop_front()
+            } else {
+                None
+            };
 
             let mut local_sv = store.blocks.get_state_vector();
             let mut missing_sv = StateVector::default();
@@ -194,24 +197,23 @@ impl Update {
             let mut stack = Vec::new();
 
             while let Some(mut block) = stack_head {
-                let id = block.id();
-                if local_sv.contains(id) {
+                let id = *block.id();
+                if local_sv.contains(&id) {
                     let offset = local_sv.get(&id.client) as i32 - id.clock as i32;
                     if let Some(dep) = Self::missing(&block, &local_sv) {
                         stack.push(block);
                         // get the struct reader that has the missing struct
                         match self.blocks.clients.get_mut(&dep) {
                             Some(block_refs) if !block_refs.is_empty() => {
-                                current_target = Some(block_refs);
-                                stack_head = Self::next(&mut current_target);
+                                stack_head = block_refs.pop_front();
+                                current_target = self.blocks.clients.get_mut(&current_client_id);
                                 continue;
                             }
                             _ => {
                                 // This update message causally depends on another update message that doesn't exist yet
                                 missing_sv.set_min(dep, local_sv.get(&dep));
                                 Self::return_stack(stack, &mut self.blocks, &mut remaining);
-                                current_target = current_client_id
-                                    .and_then(|id| self.blocks.clients.get_mut(&id));
+                                current_target = self.blocks.clients.get_mut(&current_client_id);
                                 stack = Vec::new();
                             }
                         }
@@ -226,11 +228,11 @@ impl Update {
                         }
                         let should_delete = block.integrate(txn, offset);
                         let delete_ptr = if should_delete {
-                            block.as_block_ptr()
+                            let ptr = block.as_block_ptr();
+                            ptr
                         } else {
                             None
                         };
-
                         if let BlockCarrier::Block(block) = block {
                             store = txn.store_mut();
                             let blocks = store.blocks.get_client_blocks_mut(client);
@@ -247,8 +249,7 @@ impl Update {
                     stack.push(block);
                     // hid a dead wall, add all items from stack to restSS
                     Self::return_stack(stack, &mut self.blocks, &mut remaining);
-                    current_target =
-                        current_client_id.and_then(|id| self.blocks.clients.get_mut(&id));
+                    current_target = self.blocks.clients.get_mut(&current_client_id);
                     stack = Vec::new();
                 }
 
@@ -256,23 +257,27 @@ impl Update {
                 if !stack.is_empty() {
                     stack_head = stack.pop();
                 } else {
-                    current_target = match current_target.take() {
-                        Some(v) if !v.is_empty() => Some(v),
+                    match current_target.take() {
+                        Some(v) if !v.is_empty() => {
+                            stack_head = v.pop_front();
+                            current_target = Some(v);
+                        }
                         _ => {
                             if let Some((client_id, target)) =
                                 Self::next_target(&mut client_block_ref_ids, &mut self.blocks)
                             {
-                                current_client_id = Some(client_id);
-                                Some(target)
+                                stack_head = target.pop_front();
+                                current_client_id = client_id;
+                                current_target = Some(target);
                             } else {
-                                current_client_id = None;
-                                None
+                                // we're done
+                                break;
                             }
                         }
                     };
-                    stack_head = Self::next(&mut current_target);
                 }
             }
+
             if remaining.is_empty() {
                 None
             } else {
@@ -294,14 +299,6 @@ impl Update {
         return (remaining_blocks, remaining_ds);
     }
 
-    fn next(target: &mut Option<&mut VecDeque<BlockCarrier>>) -> Option<BlockCarrier> {
-        if let Some(v) = target {
-            v.pop_front()
-        } else {
-            None
-        }
-    }
-
     fn missing(block: &BlockCarrier, local_sv: &StateVector) -> Option<ClientID> {
         if let BlockCarrier::Block(block) = block {
             if let Block::Item(item) = block.as_ref() {
@@ -311,13 +308,17 @@ impl Update {
                     {
                         return Some(origin.client);
                     }
-                } else if let Some(right_origin) = &item.right_origin {
+                }
+
+                if let Some(right_origin) = &item.right_origin {
                     if right_origin.client != item.id.client
                         && right_origin.clock >= local_sv.get(&right_origin.client)
                     {
                         return Some(right_origin.client);
                     }
-                } else if let TypePtr::Branch(parent) = &item.parent {
+                }
+
+                if let TypePtr::Branch(parent) = &item.parent {
                     if let Some(block) = &parent.item {
                         let parent_id = block.id();
                         if parent_id.client != item.id.client
@@ -336,17 +337,22 @@ impl Update {
         client_block_ref_ids: &'a mut Vec<ClientID>,
         blocks: &'b mut UpdateBlocks,
     ) -> Option<(ClientID, &'b mut VecDeque<BlockCarrier>)> {
-        loop {
-            if let Some((id, Some(client_blocks))) = client_block_ref_ids
-                .pop()
-                .map(move |id| (id, blocks.clients.get_mut(&id)))
-            {
-                if !client_blocks.is_empty() {
+        while let Some(id) = client_block_ref_ids.pop() {
+            match blocks.clients.get(&id) {
+                Some(client_blocks) if !client_blocks.is_empty() => {
+                    // we need to borrow client_blocks in mutable context AND we're
+                    // doing so in a loop at the same time - this combination causes
+                    // Rust borrow checker go nuts. TODO: remove the unsafe block
+                    let client_blocks = unsafe {
+                        (client_blocks as *const VecDeque<BlockCarrier>
+                            as *mut VecDeque<BlockCarrier>)
+                            .as_mut()
+                            .unwrap()
+                    };
                     return Some((id, client_blocks));
                 }
+                _ => {}
             }
-
-            break;
         }
         None
     }

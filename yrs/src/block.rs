@@ -284,9 +284,7 @@ impl BlockPtr {
                         this.right = left.right.replace(self_ptr);
                     } else {
                         let r = if let Some(parent_sub) = &this.parent_sub {
-                            let start = parent_ref.map.get(parent_sub).cloned();
-                            let mut r = start;
-
+                            let mut r = parent_ref.map.get(parent_sub).cloned();
                             while let Some(ptr) = r {
                                 if let Block::Item(item) = ptr.deref() {
                                     if item.left.is_some() {
