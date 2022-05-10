@@ -86,7 +86,7 @@ impl Doc {
 
     /// Subscribe callback function to updates on the `Doc`. The callback will receive state updates and
     /// deletions when a document transaction is committed.
-    pub fn on_transaction_cleanup<F>(&mut self, f: F) -> Subscription<AfterTransactionEvent>
+    pub fn observe_transaction_cleanup<F>(&mut self, f: F) -> Subscription<AfterTransactionEvent>
     where
         F: Fn(&Transaction, &AfterTransactionEvent) -> () + 'static,
     {
@@ -429,7 +429,7 @@ mod test {
     }
 
     #[test]
-    fn on_transaction_cleanup() {
+    fn observe_transaction_cleanup() {
         // Setup
         let mut doc = Doc::new();
         let mut txn = doc.transact();
@@ -444,7 +444,7 @@ mod test {
         // Subscribe callback
 
         let sub: SubscriptionId = doc
-            .on_transaction_cleanup(move |_, event| {
+            .observe_transaction_cleanup(move |_, event| {
                 before_ref.set(event.before_state.clone());
                 after_ref.set(event.after_state.clone());
                 delete_ref.set(event.delete_set.clone());
