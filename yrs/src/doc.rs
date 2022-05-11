@@ -4,7 +4,7 @@ use crate::event::{AfterTransactionEvent, EventHandler, Subscription, UpdateEven
 use crate::store::Store;
 use crate::transaction::Transaction;
 use crate::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
-use crate::{DeleteSet, StateVector};
+use crate::{DeleteSet, StateVector, SubscriptionId};
 use rand::Rng;
 use std::cell::UnsafeCell;
 use std::rc::Rc;
@@ -86,7 +86,7 @@ impl Doc {
 
     /// Subscribe callback function to updates on the `Doc`. The callback will receive state updates and
     /// deletions when a document transaction is committed.
-    pub fn on_transaction_cleanup<F>(&mut self, f: F) -> Subscription<AfterTransactionEvent>
+    pub fn observe_transaction_cleanup<F>(&mut self, f: F) -> Subscription<AfterTransactionEvent>
     where
         F: Fn(&Transaction, &AfterTransactionEvent) -> () + 'static,
     {
@@ -96,6 +96,13 @@ impl Doc {
             .after_transaction_events
             .get_or_insert_with(EventHandler::new)
             .subscribe(f)
+    }
+    /// Cancels the transaction cleanup callback associated with the `subscription_id`
+    pub fn unobserve_transaction_cleanup(&mut self, subscription_id: SubscriptionId) {
+        let store = unsafe { &mut *self.store.get() };
+        if let Some(handler) = store.after_transaction_events.as_mut() {
+            (*handler).unsubscribe(subscription_id);
+        }
     }
 
     pub fn encode_state_as_update<E: Encoder>(&self, sv: &StateVector, encoder: &mut E) {
@@ -168,7 +175,7 @@ mod test {
     use crate::update::Update;
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
-    use crate::{DeleteSet, Doc, StateVector};
+    use crate::{DeleteSet, Doc, StateVector, SubscriptionId};
     use std::cell::Cell;
     use std::rc::Rc;
 
@@ -422,7 +429,7 @@ mod test {
     }
 
     #[test]
-    fn on_transaction_cleanup() {
+    fn observe_transaction_cleanup() {
         // Setup
         let mut doc = Doc::new();
         let mut txn = doc.transact();
@@ -436,11 +443,13 @@ mod test {
         let delete_ref = Rc::clone(&delete_set);
         // Subscribe callback
 
-        let sub = doc.on_transaction_cleanup(move |_, event| {
-            before_ref.set(event.before_state.clone());
-            after_ref.set(event.after_state.clone());
-            delete_ref.set(event.delete_set.clone());
-        });
+        let sub: SubscriptionId = doc
+            .observe_transaction_cleanup(move |_, event| {
+                before_ref.set(event.before_state.clone());
+                after_ref.set(event.after_state.clone());
+                delete_ref.set(event.delete_set.clone());
+            })
+            .into();
 
         // Update the document
         text.insert(&mut txn, 0, "abc");
@@ -453,7 +462,7 @@ mod test {
         assert_eq!(delete_set.take(), txn.delete_set);
 
         // Ensure that the subscription is successfully dropped.
-        drop(sub);
+        doc.unobserve_transaction_cleanup(sub);
         text.insert(&mut txn, 0, "should not update");
         txn.commit();
         assert_ne!(after_state.take(), txn.after_state);
