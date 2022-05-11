@@ -4,7 +4,7 @@ use crate::block::{Block, BlockPtr, Item, ItemContent, Prelim, ID};
 use crate::block_store::{Snapshot, StateVector};
 use crate::event::AfterTransactionEvent;
 use crate::id_set::DeleteSet;
-use crate::store::Store;
+use crate::store::{Store, StoreRef};
 use crate::types::array::Array;
 use crate::types::xml::{XmlElement, XmlText};
 use crate::types::{
@@ -12,7 +12,6 @@ use crate::types::{
     TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT,
 };
 use crate::update::Update;
-use std::cell::UnsafeCell;
 use std::collections::{HashMap, HashSet};
 use std::ops::DerefMut;
 use std::rc::Rc;
@@ -22,7 +21,7 @@ use updates::encoder::*;
 /// contents (a.k.a. block store), need to be executed in scope of a transaction.
 pub struct Transaction {
     /// Store containing the state of the document.
-    store: Rc<UnsafeCell<Store>>,
+    pub(crate) store: StoreRef,
     /// State vector of a current transaction at the moment of its creation.
     pub before_state: StateVector,
     /// Current state vector of a transaction, which includes all performed updates.
@@ -31,6 +30,9 @@ pub struct Transaction {
     pub(crate) merge_blocks: Vec<BlockPtr>,
     /// Describes the set of deleted items by ids.
     pub delete_set: DeleteSet,
+    /// We store the reference that last moved an item. This is needed to compute the delta
+    /// when multiple ContentMove move the same item.
+    pub(crate) prev_moved: HashMap<BlockPtr, BlockPtr>,
     /// All types that were directly modified (property added or child inserted/deleted).
     /// New types are not included in this Set.
     changed: HashMap<TypePtr, HashSet<Option<Rc<str>>>>,
@@ -38,8 +40,8 @@ pub struct Transaction {
 }
 
 impl Transaction {
-    pub(crate) fn new(store: Rc<UnsafeCell<Store>>) -> Transaction {
-        let begin_timestamp = unsafe { (&*store.get()).blocks.get_state_vector() };
+    pub(crate) fn new(store: StoreRef) -> Transaction {
+        let begin_timestamp = store.blocks.get_state_vector();
         Transaction {
             store,
             before_state: begin_timestamp,
@@ -47,15 +49,19 @@ impl Transaction {
             delete_set: DeleteSet::new(),
             after_state: StateVector::default(),
             changed: HashMap::new(),
+            prev_moved: HashMap::default(),
             committed: false,
         }
     }
+
+    #[inline]
     pub(crate) fn store(&self) -> &Store {
-        unsafe { self.store.get().as_ref().unwrap() }
+        self.store.deref()
     }
 
+    #[inline]
     pub(crate) fn store_mut(&mut self) -> &mut Store {
-        unsafe { self.store.get().as_mut().unwrap() }
+        self.store.deref_mut()
     }
 
     /// Returns state vector describing current state of the updates.
@@ -301,7 +307,7 @@ impl Transaction {
         let mut recurse = Vec::new();
         let mut result = false;
 
-        let store = unsafe { &mut *self.store.get() };
+        let store = self.store.deref();
         if let Block::Item(item) = ptr.deref_mut() {
             if !item.is_deleted() {
                 if item.parent_sub.is_none() && item.is_countable() {
@@ -479,9 +485,8 @@ impl Transaction {
         self.committed = true;
 
         // 1. sort and merge delete set
-        let store = unsafe { &mut *self.store.get() };
         self.delete_set.squash();
-        self.after_state = store.blocks.get_state_vector();
+        self.after_state = self.store.blocks.get_state_vector();
         // 2. emit 'beforeObserverCalls'
         // 3. for each change observed by the transaction call 'afterTransaction'
         if !self.changed.is_empty() {
@@ -535,18 +540,18 @@ impl Transaction {
         }
 
         // 4. try GC delete set
-        if !store.options.skip_gc {
+        if !self.store.options.skip_gc {
             self.try_gc();
         }
 
         // 5. try merge delete set
-        self.delete_set.try_squash_with(store);
+        self.delete_set.try_squash_with(&mut self.store);
 
         // 6. get transaction after state and try to merge to left
         for (client, &clock) in self.after_state.iter() {
             let before_clock = self.before_state.get(client);
             if before_clock != clock {
-                let blocks = store.blocks.get_mut(client).unwrap();
+                let blocks = self.store.blocks.get_mut(client).unwrap();
                 let first_change = blocks.find_pivot(before_clock).unwrap().max(1);
                 let mut i = blocks.len() - 1;
                 while i >= first_change {
@@ -558,7 +563,7 @@ impl Transaction {
         // 7. get merge_structs and try to merge to left
         for ptr in self.merge_blocks.iter() {
             let id = ptr.id();
-            let blocks = store.blocks.get_mut(&id.client).unwrap();
+            let blocks = self.store.blocks.get_mut(&id.client).unwrap();
             let replaced_pos = blocks.find_pivot(id.clock).unwrap();
             if replaced_pos + 1 < blocks.len() {
                 blocks.squash_left(replaced_pos + 1);

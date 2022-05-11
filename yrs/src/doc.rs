@@ -1,13 +1,12 @@
 use crate::block::ClientID;
 
 use crate::event::{AfterTransactionEvent, EventHandler, Subscription, UpdateEvent};
-use crate::store::Store;
+use crate::store::{Store, StoreRef};
 use crate::transaction::Transaction;
 use crate::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use crate::{DeleteSet, StateVector, SubscriptionId};
 use rand::Rng;
-use std::cell::UnsafeCell;
-use std::rc::Rc;
+use std::ops::Deref;
 
 /// A Yrs document type. Documents are most important units of collaborative resources management.
 /// All shared collections live within a scope of their corresponding documents. All updates are
@@ -44,7 +43,7 @@ use std::rc::Rc;
 pub struct Doc {
     /// A unique client identifier, that's also a unique identifier of current document replica.
     pub client_id: ClientID,
-    store: Rc<UnsafeCell<Store>>,
+    store: StoreRef,
 }
 
 unsafe impl Send for Doc {}
@@ -64,7 +63,7 @@ impl Doc {
     pub fn with_options(options: Options) -> Self {
         Doc {
             client_id: options.client_id,
-            store: Rc::new(UnsafeCell::new(Store::new(options))),
+            store: Store::new(options).into(),
         }
     }
 
@@ -154,7 +153,7 @@ impl Doc {
     }
 
     pub fn encode_state_as_update<E: Encoder>(&self, sv: &StateVector, encoder: &mut E) {
-        let store = unsafe { self.store.get().as_ref().unwrap() };
+        let store = self.store.deref();
         store.write_blocks(sv, encoder);
         let ds = DeleteSet::from(&store.blocks);
         ds.encode(encoder);

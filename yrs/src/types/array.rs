@@ -1,12 +1,15 @@
-use crate::block::{BlockPtr, ItemContent, ItemPosition, Prelim};
+use crate::block::{ItemContent, ItemPosition, Prelim};
+use crate::block_iter::{BlockIter, SliceConcat};
 use crate::event::Subscription;
+use crate::moving::RelativePosition;
 use crate::types::{
     event_change_set, Branch, BranchPtr, Change, ChangeSet, Observers, Path, Value, TYPE_REFS_ARRAY,
 };
 use crate::{SubscriptionId, Transaction, ID};
 use lib0::any::Any;
 use std::cell::UnsafeCell;
-use std::collections::{HashSet, VecDeque};
+use std::collections::HashSet;
+use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 
 /// A collection used to store data in an indexed sequence structure. This type is internally
@@ -43,27 +46,8 @@ impl Array {
     ///
     /// Using `index` value that's higher than current array length results in panic.
     pub fn insert<V: Prelim>(&self, txn: &mut Transaction, index: u32, value: V) {
-        let (start, parent) = {
-            if index <= self.0.len() {
-                (self.0.start, self.0)
-            } else {
-                panic!("Cannot insert item at index over the length of an array")
-            }
-        };
-        let (left, right) = if index == 0 {
-            (None, None)
-        } else {
-            Branch::index_to_ptr(txn, start, index)
-        };
-        let pos = ItemPosition {
-            parent: parent.into(),
-            left,
-            right,
-            index: 0,
-            current_attrs: None,
-        };
-
-        txn.create_item(&pos, value, None);
+        let walker = self.use_search_marker(txn, index);
+        walker.inser_array_value(value)
     }
 
     /// Inserts multiple `values` at the given `index`. Inserting at index `0` is equivalent to
@@ -100,17 +84,113 @@ impl Array {
     /// not all expected elements were removed (due to insufficient number of elements in an array)
     /// or `index` is outside of the bounds of an array.
     pub fn remove_range(&self, txn: &mut Transaction, index: u32, len: u32) {
-        let removed = self.0.remove_at(txn, index, len);
-        if removed != len {
-            panic!("Couldn't remove {} elements from an array. Only {} of them were successfully removed.", len, removed);
-        }
+        let mut walker = self.use_search_marker(txn, index);
+        walker.delete(txn, len)
     }
 
     /// Retrieves a value stored at a given `index`. Returns `None` when provided index was out
     /// of the range of a current array.
     pub fn get(&self, index: u32) -> Option<Value> {
-        let (content, idx) = self.0.get_at(index)?;
-        Some(content.get_content().remove(idx))
+        let mut txn = self.0.try_transact().expect("Array is not integrated");
+        let mut walker = self.use_search_marker(&mut txn, index);
+        walker.read_value()
+    }
+
+    pub fn move_to(&self, txn: &mut Transaction, source: u32, target: u32) {
+        if source == target || source + 1 == target {
+            // It doesn't make sense to move a range into the same range (it's basically a no-op).
+            return;
+        }
+        let left = RelativePosition::from_type_index(txn, self.0, 1, true);
+        let mut right = left.clone();
+        right.assoc = false;
+        let mut walker = self.use_search_marker(txn, target);
+        walker.insert_move(txn, left, right);
+    }
+
+    pub fn move_range_to(
+        &self,
+        txn: &mut Transaction,
+        start: u32,
+        assoc_start: bool,
+        end: u32,
+        assoc_end: bool,
+        target: u32,
+    ) {
+        if start <= target && target <= end {
+            // It doesn't make sense to move a range into the same range (it's basically a no-op).
+            return;
+        }
+        let left = RelativePosition::from_type_index(txn, self.0, start, assoc_start);
+        let right = RelativePosition::from_type_index(txn, self.0, end + 1, assoc_end);
+        let mut walker = self.use_search_marker(txn, target);
+        walker.insert_move(txn, left, right);
+    }
+
+    fn use_search_marker(&self, txn: &mut Transaction, index: u32) -> BlockIter {
+        let mut i = BlockIter::new(self.0);
+        i.forward(txn, index);
+        i
+        /*
+              const searchMarker = yarray._searchMarker
+        if (searchMarker === null || yarray._start === null) { // @todo add condition `index < 5`
+          return f(new ListIterator(yarray).forward(tr, index))
+        }
+        if (searchMarker.length === 0) {
+          const sm = new ListIterator(yarray).forward(tr, index)
+          searchMarker.push(sm)
+          if (sm.nextItem) sm.nextItem.marker = true
+        }
+        const sm = searchMarker.reduce(
+          (a, b, arrayIndex) => math.abs(index - a.index) < math.abs(index - b.index) ? a : b
+        )
+        const newIsCheaper = math.abs(sm.index - index) > index // @todo use >= index
+        const createFreshMarker = searchMarker.length < maxSearchMarker && (math.abs(sm.index - index) > 5 || newIsCheaper)
+        const fsm = createFreshMarker ? (newIsCheaper ? new ListIterator(yarray) : sm.clone()) : sm
+        const prevItem = /** @type {Item} */ (sm.nextItem)
+        if (createFreshMarker) {
+          searchMarker.push(fsm)
+        }
+        const diff = fsm.index - index
+        if (diff > 0) {
+          fsm.backward(tr, diff)
+        } else {
+          fsm.forward(tr, -diff)
+        }
+        // @todo remove this test
+        /*
+        const otherTesting = new ListIterator(yarray)
+        otherTesting.forward(tr, index)
+        if (otherTesting.nextItem !== fsm.nextItem || otherTesting.index !== fsm.index || otherTesting.reachedEnd !== fsm.reachedEnd) {
+          throw new Error('udtirane')
+        }
+        */
+        const result = f(fsm)
+        if (fsm.reachedEnd) {
+          fsm.reachedEnd = false
+          const nextItem = /** @type {Item} */ (fsm.nextItem)
+          if (nextItem.countable && !nextItem.deleted) {
+            fsm.index -= nextItem.length
+          }
+          fsm.rel = 0
+        }
+        fsm.index -= fsm.rel
+        fsm.rel = 0
+        if (!createFreshMarker) {
+          // reused old marker and we moved to a different position
+          prevItem.marker = false
+        }
+        const fsmItem = fsm.nextItem
+        if (fsmItem) {
+          if (fsmItem.marker) {
+            // already marked, forget current iterator
+            searchMarker.splice(searchMarker.findIndex(m => m === fsm), 1)
+          } else {
+            fsmItem.marker = true
+          }
+        }
+        return result
+               */
     }
 
     /// Returns an iterator, that can be used to lazely traverse over all values stored in a current
@@ -164,15 +244,15 @@ impl AsMut<Branch> for Array {
 }
 
 pub struct ArrayIter<'a> {
-    content: VecDeque<Value>,
-    ptr: Option<&'a BlockPtr>,
+    inner: BlockIter,
+    _marker: PhantomData<&'a Array>,
 }
 
 impl<'a> ArrayIter<'a> {
     fn new(array: &'a Array) -> Self {
         ArrayIter {
-            ptr: array.0.start.as_ref(),
-            content: VecDeque::default(),
+            inner: BlockIter::new(array.0),
+            _marker: PhantomData,
         }
     }
 }
@@ -181,21 +261,7 @@ impl<'b> Iterator for ArrayIter<'b> {
     type Item = Value;
 
     fn next(&mut self) -> Option<Self::Item> {
-        match self.content.pop_front() {
-            None => {
-                if let Some(ptr) = self.ptr.take() {
-                    let item = ptr.as_item()?;
-                    self.ptr = item.right.as_ref();
-                    if !item.is_deleted() && item.is_countable() {
-                        self.content = item.content.get_content().into();
-                    }
-                    self.next()
-                } else {
-                    None // end of iterator
-                }
-            }
-            value => value,
-        }
+        self.inner.next()
     }
 }
 
@@ -309,6 +375,29 @@ impl ArrayEvent {
     }
 }
 
+pub(crate) struct ArraySliceConcat;
+
+impl SliceConcat for ArraySliceConcat {
+    fn slice(content: &mut ItemContent, offset: usize, len: usize) -> Vec<Value> {
+        let mut content = content.get_content();
+        if content.len() <= len && offset == 0 {
+            content
+        } else {
+            if offset != 0 {
+                for _ in content.drain(0..offset) { /* do nothing */ }
+            }
+            for _ in content.drain((offset + len)..) { /* do nothing */ }
+            content
+        }
+    }
+
+    #[inline]
+    fn concat(mut a: Vec<Value>, b: Vec<Value>) -> Vec<Value> {
+        a.extend(b);
+        a
+    }
+}
+
 #[cfg(test)]
 mod test {
     use crate::test_utils::{exchange_updates, run_scenario, RngExt};
@@ -320,6 +409,7 @@ mod test {
     use rand::Rng;
     use std::cell::{Cell, RefCell};
     use std::collections::{HashMap, HashSet};
+    use std::ops::Deref;
     use std::rc::Rc;
 
     #[test]
@@ -994,5 +1084,134 @@ mod test {
         ];
         let actual = RefCell::borrow(&paths);
         assert_eq!(actual.as_slice(), expected);
+    }
+
+    #[test]
+    fn move_1() {
+        let d1 = Doc::with_client_id(1);
+        let mut a1 = d1.transact().get_array("array");
+
+        let d2 = Doc::with_client_id(2);
+        let mut a2 = d2.transact().get_array("array");
+
+        let e1: Rc<RefCell<Vec<Change>>> = Rc::new(RefCell::new(Vec::default()));
+        let inner = e1.clone();
+        let _s1 = a1.observe(move |txn, e| {
+            let mut x = inner.as_ref().borrow_mut();
+            *x = e.delta(txn).to_vec();
+        });
+
+        let e2: Rc<RefCell<Vec<Change>>> = Rc::new(RefCell::new(Vec::default()));
+        let inner = e2.clone();
+        let _s2 = a2.observe(move |txn, e| {
+            let mut x = inner.borrow_mut();
+            *x = e.delta(txn).to_vec();
+        });
+
+        a1.insert_range(&mut d1.transact(), 0, [1, 2, 3]);
+        a1.move_to(&mut d1.transact(), 1, 0);
+        assert_eq!(a1.to_json(), vec![2, 1, 3].into());
+
+        exchange_updates(&[&d1, &d2]);
+
+        assert_eq!(a2.to_json(), vec![2, 1, 3].into());
+        let actual = e2.as_ref().borrow();
+        assert_eq!(
+            actual.deref(),
+            &vec![Change::Added(vec![2.into(), 1.into(), 3.into()])]
+        );
+
+        a1.move_to(&mut d1.transact(), 0, 2);
+
+        assert_eq!(a1.to_json(), vec![1, 2, 3].into());
+        let actual = e1.as_ref().borrow();
+        assert_eq!(
+            actual.deref(),
+            &vec![
+                Change::Removed(1),
+                Change::Retain(1),
+                Change::Added(vec![2.into()])
+            ]
+        )
+    }
+
+    #[test]
+    fn move_2() {
+        let d1 = Doc::with_client_id(1);
+        let mut a1 = d1.transact().get_array("array");
+
+        let d2 = Doc::with_client_id(2);
+        let mut a2 = d2.transact().get_array("array");
+
+        let e1: Rc<RefCell<Vec<Change>>> = Rc::new(RefCell::new(Vec::default()));
+        let inner = e1.clone();
+        let _s1 = a1.observe(move |txn, e| {
+            let mut x = inner.as_ref().borrow_mut();
+            *x = e.delta(txn).to_vec();
+        });
+
+        let e2: Rc<RefCell<Vec<Change>>> = Rc::new(RefCell::new(Vec::default()));
+        let inner = e2.clone();
+        let _s2 = a2.observe(move |txn, e| {
+            let mut x = inner.borrow_mut();
+            *x = e.delta(txn).to_vec();
+        });
+
+        a1.insert_range(&mut d1.transact(), 0, [1, 2]);
+        a1.move_to(&mut d1.transact(), 1, 0);
+        assert_eq!(a1.to_json(), vec![2, 1].into());
+        let actual = e1.as_ref().borrow();
+        assert_eq!(
+            actual.deref(),
+            &vec![
+                Change::Added(vec![2.into()]),
+                Change::Retain(1),
+                Change::Removed(1)
+            ]
+        );
+
+        exchange_updates(&[&d1, &d2]);
+
+        assert_eq!(a2.to_json(), vec![2, 1].into());
+        let actual = e2.as_ref().borrow();
+        assert_eq!(
+            actual.deref(),
+            &vec![Change::Added(vec![2.into(), 1.into()])]
+        );
+
+        a1.move_to(&mut d1.transact(), 0, 2);
+        assert_eq!(a1.to_json(), vec![1, 2].into());
+        let actual = e1.as_ref().borrow();
+        assert_eq!(
+            actual.deref(),
+            &vec![
+                Change::Removed(1),
+                Change::Retain(1),
+                Change::Added(vec![2.into()])
+            ]
+        );
+    }
+
+    #[test]
+    fn move_cycles() {
+        let d1 = Doc::with_client_id(1);
+        let a1 = d1.transact().get_array("array");
+
+        let d2 = Doc::with_client_id(2);
+        let a2 = d2.transact().get_array("array");
+
+        a1.insert_range(&mut d1.transact(), 0, [1, 2, 3, 4]);
+        exchange_updates(&[&d1, &d2]);
+
+        a1.move_range_to(&mut d1.transact(), 0, true, 1, false, 3);
+        assert_eq!(a1.to_json(), vec![3, 1, 2, 4].into());
+
+        a2.move_range_to(&mut d2.transact(), 2, true, 3, false, 1);
+        assert_eq!(a2.to_json(), vec![1, 3, 4, 2].into());
+
+        exchange_updates(&[&d1, &d2]);
+
+        assert_eq!(a1.len(), 4);
+        assert_eq!(a1.to_json(), a2.to_json());
     }
 }
