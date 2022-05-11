@@ -72,6 +72,8 @@ pub trait Decoder: Read {
 
     /// Consume a rest of the decoded buffer data and return it without parsing.
     fn read_to_end(&mut self) -> &[u8];
+
+    fn has_content(&self) -> bool;
 }
 
 /// Version 1 of lib0 decoder.
@@ -88,10 +90,6 @@ impl<'a> DecoderV1<'a> {
         let client: u32 = self.read_uvar();
         let clock = self.read_uvar();
         ID::new(client as ClientID, clock)
-    }
-
-    pub fn has_content(&self) -> bool {
-        self.cursor.has_content()
     }
 }
 
@@ -118,6 +116,10 @@ impl<'a> Read for DecoderV1<'a> {
 }
 
 impl<'a> Decoder for DecoderV1<'a> {
+    fn has_content(&self) -> bool {
+        self.cursor.has_content()
+    }
+
     fn reset_ds_cur_val(&mut self) {
         /* no op */
     }
@@ -352,6 +354,10 @@ impl<'a> Decoder for DecoderV2<'a> {
 
     fn read_to_end(&mut self) -> &[u8] {
         &self.cursor.buf[self.cursor.next..]
+    }
+
+    fn has_content(&self) -> bool {
+        self.cursor.has_content()
     }
 }
 

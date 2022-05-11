@@ -9,6 +9,7 @@ pub use text::Text;
 
 use crate::block::{Block, BlockPtr, Item, ItemContent, ItemPosition, Prelim};
 use crate::event::EventHandler;
+use crate::store::StoreRef;
 use crate::types::array::{Array, ArrayEvent};
 use crate::types::map::MapEvent;
 use crate::types::text::TextEvent;
@@ -194,6 +195,8 @@ pub struct Branch {
     /// another complex type.
     pub(crate) item: Option<BlockPtr>,
 
+    pub(crate) store: Option<StoreRef>,
+
     /// A tag name identifier, used only by [XmlElement].
     pub name: Option<Rc<str>>,
 
@@ -238,11 +241,17 @@ impl Branch {
             block_len: 0,
             content_len: 0,
             item: None,
+            store: None,
             name,
             type_ref,
             observers: None,
             deep_observers: None,
         })
+    }
+
+    pub(crate) fn try_transact(&self) -> Option<Transaction> {
+        let store = self.store.clone()?;
+        Some(Transaction::new(store))
     }
 
     /// Returns an identifier of an underlying complex data type (eg. is it an Array or a Map).
@@ -263,7 +272,7 @@ impl Branch {
         self.block_len
     }
 
-    pub fn content_len(&self, _: &Transaction) -> u32 {
+    pub fn content_len(&self) -> u32 {
         self.content_len
     }
 
