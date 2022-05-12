@@ -12,7 +12,7 @@ Project organization:
 Other projects using *yrs*:
 
 - [ypy](https://github.com/y-crdt/ypy) - Python bindings.
-- [y-rb](https://gitlab.com/gitlab-org/incubation-engineering/real-time-editing/y-rb) - Ruby bindings.
+- [yrb](https://github.com/y-crdt/yrb) - Ruby bindings.
 
 ## Feature parity with Yjs project
 
