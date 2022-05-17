@@ -1,4 +1,4 @@
-use crate::block::{Block, BlockPtr, ItemContent};
+use crate::block::{Block, BlockPtr, ItemContent, Prelim};
 use crate::block_iter::BlockIter;
 use crate::types::BranchPtr;
 use crate::updates::decoder::{Decode, Decoder};
@@ -48,6 +48,7 @@ impl Move {
         txn: &mut Transaction,
     ) -> (Option<BlockPtr>, Option<BlockPtr>) {
         let start = match &self.start.kind {
+            RelativePositionKind::Item(id) => Self::get_item_ptr(txn, id, self.start.assoc),
             RelativePositionKind::Type(id) => {
                 if let Some(Block::Item(item)) = txn.store().blocks.get_block(id).as_deref() {
                     if let ItemContent::Type(branch) = &item.content {
@@ -59,7 +60,6 @@ impl Move {
                     None
                 }
             }
-            RelativePositionKind::Item(id) => Self::get_item_ptr(txn, id, self.start.assoc),
             RelativePositionKind::TypeName(name) => {
                 if let Some(branch) = txn.store().types.get(name) {
                     branch.start
@@ -125,7 +125,7 @@ impl Move {
         e.insert(ptr);
     }
 
-    pub(crate) fn integrate(&mut self, txn: &mut Transaction, item: BlockPtr) {
+    pub(crate) fn integrate_block(&mut self, txn: &mut Transaction, item: BlockPtr) {
         let (mut start, end) = self.get_moved_coords(txn);
         let mut max_priority = 0i32;
         let adapt_priority = self.priority < 0;
@@ -215,7 +215,7 @@ impl Move {
                             }
                         }
                     } else {
-                        content.integrate(txn, ptr_copy)
+                        content.integrate_block(txn, ptr_copy)
                     }
                 }
             }
@@ -257,6 +257,41 @@ impl Decode for Move {
     }
 }
 
+impl Prelim for Move {
+    #[inline]
+    fn into_content(self, _: &mut Transaction) -> (ItemContent, Option<Self>) {
+        (ItemContent::Move(Box::new(self)), None)
+    }
+
+    #[inline]
+    fn integrate(self, _: &mut Transaction, _inner_ref: BranchPtr) {}
+}
+
+impl std::fmt::Display for Move {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "move(")?;
+        write!(f, "{}", self.start)?;
+        if self.start != self.end {
+            write!(f, "..{}", self.end)?;
+        }
+        if self.priority != 0 {
+            write!(f, ", prio: {}", self.priority)?;
+        }
+        if let Some(overrides) = self.overrides.as_ref() {
+            write!(f, ", overrides: [")?;
+            let mut i = overrides.iter();
+            if let Some(b) = i.next() {
+                write!(f, "{}", b.id())?;
+            }
+            while let Some(b) = i.next() {
+                write!(f, ", {}", b.id())?;
+            }
+            write!(f, "]")?;
+        }
+        write!(f, ")")
+    }
+}
+
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct RelativePosition {
     pub kind: RelativePositionKind,
@@ -265,8 +300,8 @@ pub struct RelativePosition {
 }
 
 impl RelativePosition {
-    fn create(txn: &Transaction, branch: BranchPtr, id: Option<ID>, assoc: Assoc) -> Self {
-        let kind = if let Some(id) = id {
+    fn create(txn: &Transaction, branch: BranchPtr, item: Option<ID>, assoc: Assoc) -> Self {
+        let kind = if let Some(id) = item {
             RelativePositionKind::Item(id)
         } else if let Some(item) = branch.item {
             RelativePositionKind::Type(*item.id())
@@ -278,7 +313,7 @@ impl RelativePosition {
     }
 
     pub(crate) fn from_type_index(
-        txn: &Transaction,
+        txn: &mut Transaction,
         branch: BranchPtr,
         mut index: u32,
         assoc: Assoc,
@@ -290,7 +325,8 @@ impl RelativePosition {
             index -= 1;
         }
 
-        let walker = BlockIter::new(branch);
+        let mut walker = BlockIter::new(branch);
+        walker.forward(txn, index);
         if walker.finished() {
             let id = if !assoc {
                 walker.next_item().map(|ptr| ptr.last_id())
@@ -324,6 +360,18 @@ impl RelativePosition {
     }
 }
 
+impl std::fmt::Display for RelativePosition {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if !self.assoc {
+            write!(f, "<")?;
+        }
+        write!(f, "{}", self.kind)?;
+        if self.assoc {
+            write!(f, ">")?;
+        }
+        Ok(())
+    }
+}
 const RELATIVE_POSITION_TAG_ITEM: u8 = 0;
 const RELATIVE_POSITION_TAG_TYPE_NAME: u8 = 1;
 const RELATIVE_POSITION_TAG_TYPE: u8 = 2;
@@ -390,9 +438,19 @@ impl Decode for RelativePosition {
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum RelativePositionKind {
-    Type(ID),
     Item(ID),
+    Type(ID),
     TypeName(Rc<str>),
+}
+
+impl std::fmt::Display for RelativePositionKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RelativePositionKind::Item(id) => write!(f, "{}", id),
+            RelativePositionKind::Type(id) => write!(f, ":{}", id),
+            RelativePositionKind::TypeName(tname) => write!(f, "'{}'", tname),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

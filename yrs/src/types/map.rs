@@ -30,7 +30,7 @@ impl Map {
         for (key, ptr) in inner.map.iter() {
             if let Block::Item(item) = ptr.deref() {
                 if !item.is_deleted() {
-                    let any = if let Some(value) = item.content.get_content_last() {
+                    let any = if let Some(value) = item.content.get_last() {
                         value.to_json()
                     } else {
                         Any::Null
@@ -178,7 +178,7 @@ impl<'a> Iterator for MapIter<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         let (key, item) = self.0.next()?;
-        if let Some(content) = item.content.get_content_last() {
+        if let Some(content) = item.content.get_last() {
             Some((key, content))
         } else {
             self.next()

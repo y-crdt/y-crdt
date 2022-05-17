@@ -100,9 +100,10 @@ impl Transaction {
     /// reinterpreted as a text (in such case a sequence component of complex data type will be
     /// interpreted as a list of text chunks).
     pub fn get_text(&mut self, name: &str) -> Text {
-        let c = self
+        let mut c = self
             .store_mut()
             .get_or_create_type(name, None, TYPE_REFS_TEXT);
+        c.store = Some(self.store.clone());
         Text::from(c)
     }
 
@@ -118,9 +119,10 @@ impl Transaction {
     /// reinterpreted as a map (in such case a map component of complex data type will be
     /// interpreted as native map).
     pub fn get_map(&mut self, name: &str) -> Map {
-        let c = self
+        let mut c = self
             .store_mut()
             .get_or_create_type(name, None, TYPE_REFS_MAP);
+        c.store = Some(self.store.clone());
         Map::from(c)
     }
 
@@ -135,9 +137,10 @@ impl Transaction {
     /// reinterpreted as an array (in such case a sequence component of complex data type will be
     /// interpreted as a list of inserted values).
     pub fn get_array(&mut self, name: &str) -> Array {
-        let c = self
+        let mut c = self
             .store_mut()
             .get_or_create_type(name, None, TYPE_REFS_ARRAY);
+        c.store = Some(self.store.clone());
         Array::from(c)
     }
 
@@ -154,11 +157,12 @@ impl Transaction {
     /// interpreted as map of its attributes, while a sequence component - as a list of its child
     /// XML nodes).
     pub fn get_xml_element(&mut self, name: &str) -> XmlElement {
-        let c = self.store_mut().get_or_create_type(
+        let mut c = self.store_mut().get_or_create_type(
             name,
             Some("UNDEFINED".into()),
             TYPE_REFS_XML_ELEMENT,
         );
+        c.store = Some(self.store.clone());
         XmlElement::from(c)
     }
 
@@ -173,9 +177,10 @@ impl Transaction {
     /// reinterpreted as a text (in such case a sequence component of complex data type will be
     /// interpreted as a list of text chunks).
     pub fn get_xml_text(&mut self, name: &str) -> XmlText {
-        let c = self
+        let mut c = self
             .store_mut()
             .get_or_create_type(name, None, TYPE_REFS_XML_TEXT);
+        c.store = Some(self.store.clone());
         XmlText::from(c)
     }
 

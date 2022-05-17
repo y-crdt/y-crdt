@@ -1,4 +1,4 @@
-use crate::block::{Block, BlockPtr, Item, ItemContent};
+use crate::block::{Block, BlockPtr, Item, ItemContent, Prelim};
 use crate::moving::{Move, RelativePosition};
 use crate::types::array::ArraySliceConcat;
 use crate::types::{BranchPtr, TypePtr, Value};
@@ -42,7 +42,7 @@ impl BlockIter {
 
     #[inline]
     pub fn finished(&self) -> bool {
-        self.reached_end
+        self.reached_end || self.index == self.branch.content_len
     }
 
     #[inline]
@@ -145,16 +145,15 @@ impl BlockIter {
                         continue;
                     }
                 }
+            }
 
-                if self.reached_end {
-                    panic!("Defect: unexpected case during block iter forward");
-                }
+            if self.reached_end {
+                panic!("Defect: unexpected case during block iter forward");
+            }
 
-                if i.right.is_some() {
-                    item = i.right;
-                } else {
-                    self.reached_end = true; //TODO: we need to ensure to iterate further if this.currMoveEnd === null
-                }
+            match item.as_deref() {
+                Some(Block::Item(i)) if i.right.is_some() => item = i.right,
+                _ => self.reached_end = true, //TODO: we need to ensure to iterate further if this.currMoveEnd === null
             }
         }
 
@@ -339,12 +338,17 @@ impl BlockIter {
         self.next_item = item;
     }
 
-    fn slice<T>(&mut self, txn: &mut Transaction, mut len: u32, mut value: Vec<Value>) -> Vec<Value>
+    pub(crate) fn slice<T>(
+        &mut self,
+        txn: &mut Transaction,
+        mut len: u32,
+        mut value: Vec<Value>,
+    ) -> Vec<Value>
     where
         T: SliceConcat,
     {
-        if self.index + len == self.branch.content_len() {
-            panic!("Length exceeded")
+        if self.index + len > self.branch.content_len() {
+            panic!("Length exceeded");
         }
         self.index += len;
         let mut next_item = self.next_item;
@@ -384,7 +388,7 @@ impl BlockIter {
                     break;
                 }
             }
-            if (!self.reached_end || self.curr_move.is_none()) && len > 0 {
+            if (!self.reached_end || self.curr_move.is_some()) && len > 0 {
                 // always set nextItem before any method call
                 self.next_item = next_item;
                 self.forward(txn, 0);
@@ -412,42 +416,48 @@ impl BlockIter {
         }
     }
 
-    pub fn insert_contents<I>(&mut self, txn: &mut Transaction, contents: I)
-    where
-        I: IntoIterator<Item = ItemContent>,
-    {
+    pub(crate) fn read_value(&mut self, txn: &mut Transaction) -> Option<Value> {
+        let mut res = self.slice::<ArraySliceConcat>(txn, 1, Vec::default());
+        res.pop()
+    }
+
+    pub fn insert_contents<V: Prelim>(&mut self, txn: &mut Transaction, value: V) {
         self.reduce_moves(txn);
         self.split_rel(txn);
+        let id = {
+            let store = txn.store();
+            let client_id = store.options.client_id;
+            let clock = store.blocks.get_state(&client_id);
+            ID::new(client_id, clock)
+        };
         let parent = TypePtr::Branch(self.branch);
         let right = self.right();
-        let mut left = self.left();
-        for c in contents.into_iter() {
-            let item_id = {
-                let store = txn.store();
-                let client = store.options.client_id;
-                let clock = store.get_local_state();
-                ID::new(client, clock)
-            };
-            let origin = left.map(|ptr| ptr.last_id());
-            let right_origin = right.map(|ptr| ptr.id().clone());
-            let mut block = Item::new(
-                item_id,
-                left,
-                origin,
-                right,
-                right_origin,
-                parent.clone(),
-                None,
-                c,
-            );
-            let mut ptr = BlockPtr::from(&mut block);
-            ptr.integrate(txn, 0);
-            left = Some(ptr);
+        let left = self.left();
+        let (content, remainder) = value.into_content(txn);
+        let inner_ref = if let ItemContent::Type(inner_ref) = &content {
+            Some(BranchPtr::from(inner_ref))
+        } else {
+            None
+        };
+        let mut block = Item::new(
+            id,
+            left,
+            left.map(|ptr| ptr.last_id()),
+            right,
+            right.map(|r| *r.id()),
+            parent,
+            None,
+            content,
+        );
+        let mut block_ptr = BlockPtr::from(&mut block);
 
-            let store = txn.store_mut();
-            let own_client_id = store.options.client_id;
-            let local_block_list = store.blocks.get_client_blocks_mut(own_client_id);
-            local_block_list.push(block);
+        block_ptr.integrate(txn, 0);
+
+        let local_block_list = txn.store_mut().blocks.get_client_blocks_mut(id.client);
+        local_block_list.push(block);
+
+        if let Some(remainder) = remainder {
+            remainder.integrate(txn, inner_ref.unwrap().into())
         }
 
         if let Some(Block::Item(item)) = right.as_deref() {
@@ -464,20 +474,11 @@ impl BlockIter {
         start: RelativePosition,
         end: RelativePosition,
     ) {
-        let content = ItemContent::Move(Box::new(Move::new(start, end, -1)));
-        self.insert_contents(txn, [content]);
+        self.insert_contents(txn, Move::new(start, end, -1));
     }
 
     pub fn values<'a, 'txn>(&'a mut self, txn: &'txn mut Transaction) -> Values<'a, 'txn> {
         Values::new(self, txn)
-    }
-}
-
-impl Iterator for BlockIter {
-    type Item = Value;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        todo!()
     }
 }
 

@@ -94,7 +94,7 @@ impl ID {
 /// A logical block pointer. It contains a unique block [ID], but also contains a helper metadata
 /// which allows to faster locate block it points to within a block store.
 #[repr(transparent)]
-#[derive(Debug, Clone, Copy, Hash)]
+#[derive(Clone, Copy, Hash)]
 pub(crate) struct BlockPtr(NonNull<Block>);
 
 impl BlockPtr {
@@ -359,7 +359,7 @@ impl BlockPtr {
                                 let ptr_clone = ptr.clone();
                                 if let Block::Item(i) = ptr.deref_mut() {
                                     if let ItemContent::Move(m) = &mut i.content {
-                                        m.integrate(txn, ptr_clone);
+                                        m.integrate_block(txn, ptr_clone);
                                     }
                                 }
                             }
@@ -374,7 +374,30 @@ impl BlockPtr {
                         }
                     }
 
-                    this.integrate_content(txn, &mut *parent_ref);
+                    match &mut this.content {
+                        ItemContent::Deleted(len) => {
+                            txn.delete_set.insert(this.id, *len);
+                            this.mark_as_deleted();
+                        }
+                        ItemContent::Move(m) => m.integrate_block(txn, self_ptr),
+                        ItemContent::Doc(_, _) => {
+                            //// this needs to be reflected in doc.destroy as well
+                            //this.doc._item = item
+                            //transaction.subdocsAdded.add(this.doc)
+                            //if (this.doc.shouldLoad) {
+                            //    transaction.subdocsLoaded.add(this.doc)
+                            //}
+                            todo!()
+                        }
+                        ItemContent::Format(_, _) => {
+                            // @todo searchmarker are currently unsupported for rich text documents
+                            // /** @type {AbstractType<any>} */ (item.parent)._searchMarker = null
+                        }
+                        ItemContent::Type(branch) => branch.store = Some(txn.store.clone()),
+                        _ => {
+                            // other types don't define integration-specific actions
+                        }
+                    }
                     txn.add_changed_type(parent_ref, this.parent_sub.clone());
                     let parent_deleted = if let TypePtr::Branch(ptr) = &this.parent {
                         if let Some(block) = ptr.item {
@@ -432,6 +455,7 @@ impl BlockPtr {
                     && v1.right_origin == v2.right_origin
                     && v1.right == Some(other_ptr)
                     && v1.is_deleted() == v2.is_deleted()
+                    && v1.moved == v2.moved
                     && v1.content.try_squash(&v2.content)
                 {
                     v1.len = v1.content.len(OffsetKind::Utf16);
@@ -674,15 +698,6 @@ impl Block {
         match self {
             Block::Item(item) => item.len(),
             Block::GC(gc) => gc.len,
-        }
-    }
-
-    /// Returns a last clock value of a current block. This is exclusive value meaning, that
-    /// using it with current block's client ID will point to the beginning of a next block.
-    pub fn clock_end(&self) -> u32 {
-        match self {
-            Block::Item(item) => item.id.clock + item.len(),
-            Block::GC(gc) => gc.id.clock + gc.len,
         }
     }
 
@@ -1089,32 +1104,6 @@ impl Item {
             | (self.content.get_ref_number() & 0b1111);
         info
     }
-
-    fn integrate_content(&mut self, txn: &mut Transaction, _parent: &mut Branch) {
-        match &mut self.content {
-            ItemContent::Deleted(len) => {
-                txn.delete_set.insert(self.id, *len);
-                self.mark_as_deleted();
-            }
-            ItemContent::Doc(_, _) => {
-                //// this needs to be reflected in doc.destroy as well
-                //this.doc._item = item
-                //transaction.subdocsAdded.add(this.doc)
-                //if (this.doc.shouldLoad) {
-                //    transaction.subdocsLoaded.add(this.doc)
-                //}
-                todo!()
-            }
-            ItemContent::Format(_, _) => {
-                // @todo searchmarker are currently unsupported for rich text documents
-                // /** @type {AbstractType<any>} */ (item.parent)._searchMarker = null
-            }
-            ItemContent::Type(branch) => branch.store = Some(txn.store.clone()),
-            _ => {
-                // other types don't define integration-specific actions
-            }
-        }
-    }
 }
 
 #[derive(PartialEq, PartialOrd, Eq, Ord, Debug, Clone)]
@@ -1378,7 +1367,7 @@ impl ItemContent {
 
     /// Similar to [get_content], but it only returns the latest result and doesn't materialize
     /// others for performance reasons.
-    pub fn get_content_last(&self) -> Option<Value> {
+    pub fn get_last(&self) -> Option<Value> {
         match self {
             ItemContent::Any(v) => v.last().map(|a| Value::Any(a.clone())),
             ItemContent::Binary(v) => Some(Value::Any(Any::Buffer(v.clone().into_boxed_slice()))),
@@ -1387,6 +1376,25 @@ impl ItemContent {
             ItemContent::Doc(_, v) => Some(Value::Any(*v.clone())),
             ItemContent::JSON(v) => v
                 .last()
+                .map(|v| Value::Any(Any::String(v.clone().into_boxed_str()))),
+            ItemContent::Embed(v) => Some(Value::Any(v.as_ref().clone())),
+            ItemContent::Format(_, _) => None,
+            ItemContent::String(v) => Some(Value::Any(Any::String(v.clone().into()))),
+            ItemContent::Type(c) => Some(BranchPtr::from(c).into()),
+        }
+    }
+
+    /// Similar to [get_content], but it only returns the latest result and doesn't materialize
+    /// others for performance reasons.
+    pub fn get_first(&self) -> Option<Value> {
+        match self {
+            ItemContent::Any(v) => v.first().map(|a| Value::Any(a.clone())),
+            ItemContent::Binary(v) => Some(Value::Any(Any::Buffer(v.clone().into_boxed_slice()))),
+            ItemContent::Deleted(_) => None,
+            ItemContent::Move(_) => None,
+            ItemContent::Doc(_, v) => Some(Value::Any(*v.clone())),
+            ItemContent::JSON(v) => v
+                .first()
                 .map(|v| Value::Any(Any::String(v.clone().into_boxed_str()))),
             ItemContent::Embed(v) => Some(Value::Any(v.as_ref().clone())),
             ItemContent::Format(_, _) => None,
@@ -1665,6 +1673,9 @@ impl std::fmt::Display for Item {
                 write!(f, ", parent: {}", other)?;
             }
         }
+        if let Some(m) = self.moved {
+            write!(f, ", moved-to: {}", m)?;
+        }
         if let Some(origin) = self.origin.as_ref() {
             write!(f, ", origin-l: {}", origin)?;
         }
@@ -1753,6 +1764,7 @@ impl std::fmt::Display for ItemContent {
                 TYPE_REFS_XML_TEXT => write!(f, "<xml text>"),
                 _ => write!(f, "<undefined type ref>"),
             },
+            ItemContent::Move(m) => std::fmt::Display::fmt(m.as_ref(), f),
             _ => Ok(()),
         }
     }
@@ -1825,6 +1837,13 @@ impl Prelim for PrelimEmbed {
 impl std::fmt::Display for ID {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "<{}#{}>", self.client, self.clock)
+    }
+}
+
+impl std::fmt::Debug for BlockPtr {
+    #[inline]
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
     }
 }
 

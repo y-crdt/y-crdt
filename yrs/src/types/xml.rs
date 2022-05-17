@@ -332,7 +332,7 @@ impl<'a> Iterator for Attributes<'a> {
         let (key, block) = self.0.next()?;
         let value = block
             .content
-            .get_content_last()
+            .get_last()
             .map(|v| v.to_string())
             .unwrap_or(String::default());
 
@@ -921,11 +921,12 @@ enum PrelimXml {
 }
 
 impl Prelim for PrelimXml {
-    fn into_content(self, _txn: &mut Transaction) -> (ItemContent, Option<Self>) {
-        let inner = match self {
+    fn into_content(self, txn: &mut Transaction) -> (ItemContent, Option<Self>) {
+        let mut inner = match self {
             PrelimXml::Elem(node_name) => Branch::new(TYPE_REFS_XML_ELEMENT, Some(node_name)),
             PrelimXml::Text => Branch::new(TYPE_REFS_XML_TEXT, None),
         };
+        inner.as_mut().store = Some(txn.store.clone());
         (ItemContent::Type(inner), None)
     }
 
