@@ -630,7 +630,7 @@ impl Text {
                     }
                     ItemContent::Type(_) | ItemContent::Embed(_) => {
                         asm.pack_str();
-                        if let Some(value) = item.content.get_content_last() {
+                        if let Some(value) = item.content.get_last() {
                             let attrs = asm.attrs_boxed();
                             asm.ops.push(Diff::Insert(value, attrs));
                         }
@@ -800,7 +800,7 @@ impl TextEvent {
                         if !txn.has_deleted(&item.id) {
                             asm.add_op();
                             asm.action = Some(Action::Insert);
-                            asm.insert = item.content.get_content_last();
+                            asm.insert = item.content.get_last();
                             asm.add_op();
                         }
                     } else if txn.has_deleted(&item.id) {

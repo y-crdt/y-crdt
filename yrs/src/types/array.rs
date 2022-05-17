@@ -1,4 +1,4 @@
-use crate::block::{ItemContent, ItemPosition, Prelim};
+use crate::block::{ItemContent, Prelim};
 use crate::block_iter::{BlockIter, SliceConcat};
 use crate::event::Subscription;
 use crate::moving::RelativePosition;
@@ -46,8 +46,8 @@ impl Array {
     ///
     /// Using `index` value that's higher than current array length results in panic.
     pub fn insert<V: Prelim>(&self, txn: &mut Transaction, index: u32, value: V) {
-        let walker = self.use_search_marker(txn, index);
-        walker.inser_array_value(value)
+        let mut walker = self.use_search_marker(txn, index);
+        walker.insert_contents(txn, value)
     }
 
     /// Inserts multiple `values` at the given `index`. Inserting at index `0` is equivalent to
@@ -93,7 +93,7 @@ impl Array {
     pub fn get(&self, index: u32) -> Option<Value> {
         let mut txn = self.0.try_transact().expect("Array is not integrated");
         let mut walker = self.use_search_marker(&mut txn, index);
-        walker.read_value()
+        walker.read_value(&mut txn)
     }
 
     pub fn move_to(&self, txn: &mut Transaction, source: u32, target: u32) {
@@ -245,6 +245,7 @@ impl AsMut<Branch> for Array {
 
 pub struct ArrayIter<'a> {
     inner: BlockIter,
+    txn: Transaction,
     _marker: PhantomData<&'a Array>,
 }
 
@@ -252,6 +253,7 @@ impl<'a> ArrayIter<'a> {
     fn new(array: &'a Array) -> Self {
         ArrayIter {
             inner: BlockIter::new(array.0),
+            txn: array.0.try_transact().unwrap(),
             _marker: PhantomData,
         }
     }
@@ -261,7 +263,14 @@ impl<'b> Iterator for ArrayIter<'b> {
     type Item = Value;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.inner.next()
+        if self.inner.finished() {
+            None
+        } else {
+            let mut res = self
+                .inner
+                .slice::<ArraySliceConcat>(&mut self.txn, 1, Vec::default());
+            res.pop()
+        }
     }
 }
 
@@ -1113,6 +1122,8 @@ mod test {
         assert_eq!(a1.to_json(), vec![2, 1, 3].into());
 
         exchange_updates(&[&d1, &d2]);
+        //println!("{:#?}", d1.transact().store());
+        //println!("{:#?}", d2.transact().store());
 
         assert_eq!(a2.to_json(), vec![2, 1, 3].into());
         let actual = e2.as_ref().borrow();

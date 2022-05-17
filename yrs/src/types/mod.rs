@@ -51,7 +51,7 @@ pub const TYPE_REFS_UNDEFINED: TypeRefs = 15;
 /// A wrapper around [Branch] cell, supplied with a bunch of convenience methods to operate on both
 /// map-like and array-like contents of a [Branch].
 #[repr(transparent)]
-#[derive(Debug, Clone, Copy, Hash)]
+#[derive(Clone, Copy, Hash)]
 pub struct BranchPtr(NonNull<Branch>);
 
 impl BranchPtr {
@@ -164,6 +164,13 @@ impl PartialEq for BranchPtr {
             let b: &Branch = other.deref();
             a.eq(b)
         }
+    }
+}
+
+impl std::fmt::Debug for BranchPtr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let branch: &Branch = &self;
+        write!(f, "{}", branch)
     }
 }
 
@@ -293,7 +300,7 @@ impl Branch {
     pub(crate) fn get(&self, key: &str) -> Option<Value> {
         let block = self.map.get(key)?;
         match block.deref() {
-            Block::Item(item) if !item.is_deleted() => item.content.get_content_last(),
+            Block::Item(item) if !item.is_deleted() => item.content.get_last(),
             _ => None,
         }
     }
@@ -325,7 +332,7 @@ impl Branch {
     pub(crate) fn remove(&self, txn: &mut Transaction, key: &str) -> Option<Value> {
         let ptr = *self.map.get(key)?;
         let prev = match ptr.deref() {
-            Block::Item(item) if !item.is_deleted() => item.content.get_content_last(),
+            Block::Item(item) if !item.is_deleted() => item.content.get_last(),
             _ => None,
         };
         txn.delete(ptr);
@@ -1004,15 +1011,15 @@ pub(crate) fn event_keys(
                     if txn.has_deleted(&item.id) {
                         if let Some(Block::Item(prev)) = prev.as_deref() {
                             if txn.has_deleted(&prev.id) {
-                                let old_value = prev.content.get_content_last().unwrap_or_default();
+                                let old_value = prev.content.get_last().unwrap_or_default();
                                 keys.insert(key.clone(), EntryChange::Removed(old_value));
                             }
                         }
                     } else {
-                        let new_value = item.content.get_content_last().unwrap();
+                        let new_value = item.content.get_last().unwrap();
                         if let Some(Block::Item(prev)) = prev.as_deref() {
                             if txn.has_deleted(&prev.id) {
-                                let old_value = prev.content.get_content_last().unwrap_or_default();
+                                let old_value = prev.content.get_last().unwrap_or_default();
                                 keys.insert(
                                     key.clone(),
                                     EntryChange::Updated(old_value, new_value),
@@ -1025,7 +1032,7 @@ pub(crate) fn event_keys(
                         keys.insert(key.clone(), EntryChange::Inserted(new_value));
                     }
                 } else if txn.has_deleted(&item.id) {
-                    let old_value = item.content.get_content_last().unwrap_or_default();
+                    let old_value = item.content.get_last().unwrap_or_default();
                     keys.insert(key.clone(), EntryChange::Removed(old_value));
                 }
             }
