@@ -101,7 +101,7 @@ impl Array {
             // It doesn't make sense to move a range into the same range (it's basically a no-op).
             return;
         }
-        let left = RelativePosition::from_type_index(txn, self.0, 1, true);
+        let left = RelativePosition::from_type_index(txn, self.0, source, true);
         let mut right = left.clone();
         right.assoc = false;
         let mut walker = self.use_search_marker(txn, target);
@@ -1117,13 +1117,14 @@ mod test {
             *x = e.delta(txn).to_vec();
         });
 
-        a1.insert_range(&mut d1.transact(), 0, [1, 2, 3]);
-        a1.move_to(&mut d1.transact(), 1, 0);
+        {
+            let mut txn = d1.transact();
+            a1.insert_range(&mut txn, 0, [1, 2, 3]);
+            a1.move_to(&mut txn, 1, 0);
+        }
         assert_eq!(a1.to_json(), vec![2, 1, 3].into());
 
         exchange_updates(&[&d1, &d2]);
-        //println!("{:#?}", d1.transact().store());
-        //println!("{:#?}", d2.transact().store());
 
         assert_eq!(a2.to_json(), vec![2, 1, 3].into());
         let actual = e2.as_ref().borrow();
