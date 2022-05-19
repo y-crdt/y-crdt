@@ -197,7 +197,7 @@ impl YDoc {
         self.0
             .observe_update(move |txn, e| {
                 let mut u = e.update.encode_v1();
-                let arg = unsafe { Uint8Array::view(&mut u) };
+                let arg = Uint8Array::from(u.as_slice());
                 f.call1(&JsValue::UNDEFINED, &arg).unwrap();
             })
             .into()
@@ -213,7 +213,7 @@ impl YDoc {
         self.0
             .observe_update(move |txn, e| {
                 let mut u = e.update.encode_v2();
-                let arg = unsafe { Uint8Array::view(&mut u) };
+                let arg = Uint8Array::from(u.as_slice());
                 f.call1(&JsValue::UNDEFINED, &arg).unwrap();
             })
             .into()
@@ -224,8 +224,13 @@ impl YDoc {
     ///
     /// Returns an observer, which can be freed in order to unsubscribe this callback.
     #[wasm_bindgen(js_name = onAfterTransaction)]
-    pub fn on_after_transaction(&mut self, f: js_sys::Function) -> YTransactionCleanupObserver {
-        todo!()
+    pub fn on_after_transaction(&mut self, f: js_sys::Function) -> YAfterTransactionObserver {
+        self.0
+            .observe_transaction_cleanup(move |txn, e| {
+                let arg: JsValue = YAfterTransactionEvent::new(e).into();
+                f.call1(&JsValue::UNDEFINED, &arg).unwrap();
+            })
+            .into()
     }
 }
 
@@ -1247,11 +1252,11 @@ impl YAfterTransactionEvent {
 }
 
 #[wasm_bindgen]
-pub struct YTransactionCleanupObserver(Subscription<YAfterTransactionEvent>);
+pub struct YAfterTransactionObserver(Subscription<AfterTransactionEvent>);
 
-impl From<Subscription<YAfterTransactionEvent>> for YTransactionCleanupObserver {
-    fn from(o: Subscription<YAfterTransactionEvent>) -> Self {
-        YTransactionCleanupObserver(o)
+impl From<Subscription<AfterTransactionEvent>> for YAfterTransactionObserver {
+    fn from(o: Subscription<AfterTransactionEvent>) -> Self {
+        YAfterTransactionObserver(o)
     }
 }
 

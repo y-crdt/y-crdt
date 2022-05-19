@@ -34,7 +34,7 @@ export const testOnUpdate = tc => {
 }
 
 /**
- * @param {t.TestCase} tc
+ * @param {t.TestCase} tccls
  */
 export const testOnUpdateV2 = tc => {
     const d1 = new Y.YDoc(1)
