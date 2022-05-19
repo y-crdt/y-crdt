@@ -1169,8 +1169,11 @@ mod test {
             *x = e.delta(txn).to_vec();
         });
 
-        a1.insert_range(&mut d1.transact(), 0, [1, 2]);
-        a1.move_to(&mut d1.transact(), 1, 0);
+        {
+            let mut txn = d1.transact();
+            a1.insert_range(&mut txn, 0, [1, 2]);
+            a1.move_to(&mut txn, 1, 0);
+        }
         assert_eq!(a1.to_json(), vec![2, 1].into());
         let actual = e1.as_ref().borrow();
         assert_eq!(
