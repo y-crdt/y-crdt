@@ -75,13 +75,23 @@ export const testOnAfterTransaction = tc => {
     doc.transact(txn => text.insert(txn, 0, 'hello world'))
 
     t.compare(event.beforeState, new Map());
-    t.compare(event.afterState, new Map([[1, 10]]));
+    let state = new Map()
+    state.set(1n, 11)
+    t.compare(event.afterState, state);
     t.compare(event.deleteSet, new Map());
 
     event = null
     doc.transact(txn => text.delete(txn, 2, 7))
 
-    t.compare(event.beforeState, new Map([[1, 10]]));
-    t.compare(event.afterState, new Map([[1, 10]]));
-    t.compare(event.deleteSet, new Map([1, [[2,7]]]));
+    t.compare(event.beforeState, state);
+    t.compare(event.afterState, state);
+    state = new Map()
+    state.set(1n, [[2,7]])
+    t.compare(event.deleteSet, state);
+
+    sub.free()
+    event = null
+    doc.transact(txn => text.insert(txn, 4, ' the door'))
+
+    t.compare(event, null)
 }
