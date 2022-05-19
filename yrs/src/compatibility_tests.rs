@@ -101,7 +101,7 @@ fn text_insert_delete() {
     let setter = visited.clone();
 
     let mut doc = Doc::new();
-    let _sub = doc.on_update(move |_, e| {
+    let _sub = doc.observe_update(move |_, e| {
         for (actual, expected) in e.update.blocks.blocks().zip(expected_blocks.as_slice()) {
             if let BlockCarrier::Block(block) = actual {
                 assert_eq!(block, expected);

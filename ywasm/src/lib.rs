@@ -21,8 +21,8 @@ use yrs::types::{
 use yrs::updates::decoder::{Decode, DecoderV1, DecoderV2};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use yrs::{
-    Array, Doc, Map, OffsetKind, Options, StateVector, Subscription, Text, Transaction, Update,
-    Xml, XmlElement, XmlText,
+    AfterTransactionEvent, Array, DeleteSet, Doc, Map, OffsetKind, Options, StateVector,
+    Subscription, Text, Transaction, Update, UpdateEvent, Xml, XmlElement, XmlText,
 };
 
 // When the `wee_alloc` feature is enabled, use `wee_alloc` as the global
@@ -185,6 +185,47 @@ impl YDoc {
     #[wasm_bindgen(js_name = getXmlText)]
     pub fn get_xml_text(&mut self, name: &str) -> YXmlText {
         self.begin_transaction().get_xml_text(name)
+    }
+
+    /// Subscribes given function to be called any time, a remote update is being applied to this
+    /// document. Function takes an `Uint8Array` as a parameter which contains a lib0 v1 encoded
+    /// update.
+    ///
+    /// Returns an observer, which can be freed in order to unsubscribe this callback.
+    #[wasm_bindgen(js_name = onUpdate)]
+    pub fn on_update(&mut self, f: js_sys::Function) -> YUpdateObserver {
+        self.0
+            .observe_update(move |txn, e| {
+                let mut u = e.update.encode_v1();
+                let arg = unsafe { Uint8Array::view(&mut u) };
+                f.call1(&JsValue::UNDEFINED, &arg).unwrap();
+            })
+            .into()
+    }
+
+    /// Subscribes given function to be called any time, a remote update is being applied to this
+    /// document. Function takes an `Uint8Array` as a parameter which contains a lib0 v2 encoded
+    /// update.
+    ///
+    /// Returns an observer, which can be freed in order to unsubscribe this callback.
+    #[wasm_bindgen(js_name = onUpdateV2)]
+    pub fn on_update_v2(&mut self, f: js_sys::Function) -> YUpdateObserver {
+        self.0
+            .observe_update(move |txn, e| {
+                let mut u = e.update.encode_v2();
+                let arg = unsafe { Uint8Array::view(&mut u) };
+                f.call1(&JsValue::UNDEFINED, &arg).unwrap();
+            })
+            .into()
+    }
+
+    /// Subscribes given function to be called, whenever a transaction created by this document is
+    /// being committed.
+    ///
+    /// Returns an observer, which can be freed in order to unsubscribe this callback.
+    #[wasm_bindgen(js_name = onAfterTransaction)]
+    pub fn on_after_transaction(&mut self, f: js_sys::Function) -> YTransactionCleanupObserver {
+        todo!()
     }
 }
 
@@ -1134,6 +1175,93 @@ fn change_into_js(change: &Change) -> JsValue {
         }
     }
     result.into()
+}
+
+fn state_vector_into_map(sv: &StateVector) -> js_sys::Map {
+    let mut m = js_sys::Map::new();
+    for (&k, &v) in sv.iter() {
+        let key: JsValue = k.into();
+        let value: JsValue = v.into();
+        m.set(&key, &value);
+    }
+    m
+}
+
+fn delete_set_into_map(ds: &DeleteSet) -> js_sys::Map {
+    let mut m = js_sys::Map::new();
+    for (&k, v) in ds.iter() {
+        let key: JsValue = k.into();
+        let iter = v.iter().map(|r| {
+            let start = r.start;
+            let len = r.end - r.start;
+            let res: JsValue = js_sys::Array::of2(&start.into(), &len.into()).into();
+            res
+        });
+        let mut value = js_sys::Array::new();
+        for v in iter {
+            value.push(&v);
+        }
+        m.set(&key, &value);
+    }
+    m
+}
+
+#[wasm_bindgen]
+pub struct YAfterTransactionEvent {
+    before_state: js_sys::Map,
+    after_state: js_sys::Map,
+    delete_set: js_sys::Map,
+}
+
+#[wasm_bindgen]
+impl YAfterTransactionEvent {
+    /// Returns a state vector - a map of entries (clientId, clock) - that represents logical
+    /// time descriptor at the moment when transaction was originally created, prior to any changes
+    /// made in scope of this transaction.
+    #[wasm_bindgen(method, getter, js_name = beforeState)]
+    pub fn before_state(&self) -> js_sys::Map {
+        self.before_state.clone()
+    }
+
+    /// Returns a state vector - a map of entries (clientId, clock) - that represents logical
+    /// time descriptor at the moment when transaction was comitted.
+    #[wasm_bindgen(method, getter, js_name = afterState)]
+    pub fn after_state(&self) -> js_sys::Map {
+        self.after_state.clone()
+    }
+
+    /// Returns a delete set - a map of entries (clientId, (clock, len)[]) - that represents a range
+    /// of all blocks deleted as part of current transaction.
+    #[wasm_bindgen(method, getter, js_name = deleteSet)]
+    pub fn delete_set(&self) -> js_sys::Map {
+        self.delete_set.clone()
+    }
+
+    fn new(e: &AfterTransactionEvent) -> Self {
+        YAfterTransactionEvent {
+            before_state: state_vector_into_map(&e.before_state),
+            after_state: state_vector_into_map(&e.after_state),
+            delete_set: delete_set_into_map(&e.delete_set),
+        }
+    }
+}
+
+#[wasm_bindgen]
+pub struct YTransactionCleanupObserver(Subscription<YAfterTransactionEvent>);
+
+impl From<Subscription<YAfterTransactionEvent>> for YTransactionCleanupObserver {
+    fn from(o: Subscription<YAfterTransactionEvent>) -> Self {
+        YTransactionCleanupObserver(o)
+    }
+}
+
+#[wasm_bindgen]
+pub struct YUpdateObserver(Subscription<UpdateEvent>);
+
+impl From<Subscription<UpdateEvent>> for YUpdateObserver {
+    fn from(o: Subscription<UpdateEvent>) -> Self {
+        YUpdateObserver(o)
+    }
 }
 
 #[wasm_bindgen]

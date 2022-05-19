@@ -76,12 +76,18 @@ impl Doc {
 
     /// Subscribe callback function for incoming update events. Returns a subscription, which will
     /// unsubscribe function when dropped.
-    pub fn on_update<F>(&mut self, f: F) -> Subscription<UpdateEvent>
+    pub fn observe_update<F>(&mut self, f: F) -> Subscription<UpdateEvent>
     where
         F: Fn(&Transaction, &UpdateEvent) -> () + 'static,
     {
         let store = unsafe { &mut *self.store.get() };
         store.update_events.subscribe(f)
+    }
+
+    /// Manually unsubscribes from a callback used in [Doc::observe_update] method.
+    pub fn unobserve_update(&mut self, subscription_id: SubscriptionId) {
+        let store = unsafe { &mut *self.store.get() };
+        store.update_events.unsubscribe(subscription_id);
     }
 
     /// Subscribe callback function to updates on the `Doc`. The callback will receive state updates and
@@ -290,7 +296,7 @@ mod test {
         let doc = Doc::new();
         let mut doc2 = Doc::new();
         let c = counter.clone();
-        let sub = doc2.on_update(move |_txn, e| {
+        let sub = doc2.observe_update(move |_txn, e| {
             for block in e.update.blocks.blocks() {
                 c.set(c.get() + block.len());
             }
