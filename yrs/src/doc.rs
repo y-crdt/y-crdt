@@ -473,4 +473,22 @@ mod test {
         txn.commit();
         assert_ne!(after_state.take(), txn.after_state);
     }
+
+    #[test]
+    fn partially_duplicated_update() {
+        let d1 = Doc::with_client_id(1);
+        let txt1 = d1.transact().get_text("text");
+        txt1.insert(&mut d1.transact(), 0, "hello");
+        let u = d1.encode_state_as_update_v1(&StateVector::default());
+
+        let d2 = Doc::with_client_id(2);
+        let txt2 = d2.transact().get_text("text");
+        d2.transact().apply_update(Update::decode_v1(&u));
+
+        txt1.insert(&mut d1.transact(), 5, "world");
+        let u = d1.encode_state_as_update_v1(&StateVector::default());
+        d2.transact().apply_update(Update::decode_v1(&u));
+
+        assert_eq!(txt1.to_string(), txt2.to_string());
+    }
 }
