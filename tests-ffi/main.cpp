@@ -1111,3 +1111,220 @@ TEST_CASE("YMap deep observe") {
     free(state);
     ydoc_destroy(doc);
 }
+
+typedef struct {
+    int len;
+    unsigned char* update;
+    int incoming_len;
+    unsigned char* incoming_update;
+} ObserveUpdatesTest;
+
+void reset_observe_updates(ObserveUpdatesTest* t) {
+    free(t->incoming_update);
+    free(t->update);
+    t->incoming_update = NULL;
+    t->update = NULL;
+    t->len = 0;
+    t->incoming_len = NULL;
+}
+
+void observe_updates(void* state, int len, unsigned char* bytes) {
+    ObserveUpdatesTest* t = (ObserveUpdatesTest*)state;
+    t->incoming_len = len;
+    memcpy((void*)t->incoming_update, (void*)bytes, (size_t)len);
+}
+
+TEST_CASE("YDoc observe updates V1") {
+    YDoc *doc1 = ydoc_new_with_id(1);
+    YTransaction *txn = ytransaction_new(doc1);
+    Branch *txt1 = ytext(txn, "test");
+    ytext_insert(txt1, txn, 0, "hello", NULL);
+    ObserveUpdatesTest t;
+    t.incoming_len = 0;
+    t.incoming_update = NULL;
+    t.update = ytransaction_state_diff_v1(txn, NULL, &t.len);
+    ytransaction_commit(txn);
+
+    YDoc *doc2 = ydoc_new_with_id(2);
+    txn = ytransaction_new(doc2);
+    Branch *txt2 = ytext(txn, "test");
+    unsigned int subscription_id = ydoc_observe_updates_v1(doc2, &t, ydoc_observe_updates);
+    ytransaction_apply(txn, t.update, t.len);
+    ytransaction_commit(txn);
+
+    REQUIRE_EQ(t.len, t.incoming_len);
+    REQUIRE(memcmp((void*)t.update, (void*)t.incoming_update, (size_t)t.len));
+    reset_observe_updates(&t);
+
+    // check unsubscribe
+    ydoc_unobserve_updates(doc2, subscription_id);
+
+    txn = ytransaction_new(doc1);
+    ytext_insert(txt1, txn, 5, " world", NULL);
+    t.update = ytransaction_state_diff_v1(txn, NULL, &t.len);
+    ytransaction_commit(txn);
+
+    txn = ytransaction_new(doc2);
+    ytransaction_apply(txn, t.update, t.len);
+    ytransaction_commit(txn);
+
+    REQUIRE_EQ(t.incoming_len, 0);
+    REQUIRE(t.incoming_update == NULL);
+
+    ydoc_destroy(doc);
+}
+
+TEST_CASE("YDoc observe updates V2") {
+    YDoc *doc1 = ydoc_new_with_id(1);
+    YTransaction *txn = ytransaction_new(doc1);
+    Branch *txt1 = ytext(txn, "test");
+    ytext_insert(txt1, txn, 0, "hello", NULL);
+    ObserveUpdatesTest t;
+    t.incoming_len = 0;
+    t.incoming_update = NULL;
+    t.update = ytransaction_state_diff_v2(txn, NULL, &t.len);
+    ytransaction_commit(txn);
+
+    YDoc *doc2 = ydoc_new_with_id(2);
+    txn = ytransaction_new(doc2);
+    Branch *txt2 = ytext(txn, "test");
+    unsigned int subscription_id = ydoc_observe_updates_v2(doc2, &t, observe_updates);
+    ytransaction_apply_v2(txn, t.update, t.len);
+    ytransaction_commit(txn);
+
+    REQUIRE_EQ(t.len, t.incoming_len);
+    REQUIRE(memcmp((void*)t.update, (void*)t.incoming_update, (size_t)t.len));
+    reset_observe_updates(&t);
+
+    // check unsubscribe
+    ydoc_unobserve_updates(doc2, subscription_id);
+
+    txn = ytransaction_new(doc1);
+    ytext_insert(txt1, txn, 5, " world", NULL);
+    t.update = ytransaction_state_diff_v2(txn, NULL, &t.len);
+    ytransaction_commit(txn);
+
+    txn = ytransaction_new(doc2);
+    ytransaction_apply_v2(txn, t.update, t.len);
+    ytransaction_commit(txn);
+
+    REQUIRE_EQ(t.incoming_len, 0);
+    REQUIRE(t.incoming_update == NULL);
+
+    ydoc_destroy(doc);
+}
+
+
+int ystate_vector_eq(YStateVector* a, YStateVector* b) {
+    if (a->entries_count != b->entries_count)
+        return 0;
+
+    for (int i = 0; i < a->entries_count; i++) {
+        long ida = a->client_ids[i];
+        long idb = b->client_ids[i];
+        if (ida != idb)
+            return 0;
+
+        int clocka = a->clocks[i];
+        int clockb = b->clocks[i];
+        if (clocka != clockb)
+            return 0;
+    }
+
+    return 1;
+}
+
+int ydelete_set_eq(YDeleteSet* a, YDeleteSet* b) {
+    if (a->entries_count != b->entries_count)
+        return 0;
+
+    for (int i = 0; i < a->entries_count; i++) {
+        long ida = a->client_ids[i];
+        long idb = b->client_ids[i];
+        if (ida != idb)
+            return 0;
+
+        YIdRangeSeq seqa = a->ranges[i];
+        YIdRangeSeq seqb = b->ranges[i];
+
+        if (seqa.len != seqb.len)
+            return 0;
+
+        for (int j = 0; j < seqa.len; j++) {
+            YIdRange ra = seqa[j];
+            YIdRange rb = seqb[j];
+
+            if (ra.start != rb.start || ra.end != rb.end)
+                return 0;
+        }
+    }
+
+    return 1;
+}
+
+typedef struct {
+    int calls;
+    YStateVector before_state;
+    YStateVector after_state;
+    YDeleteSet delete_set;
+} AfterTransactionTest;
+
+void observe_after_transaction(void* state, YAfterTransactionEvent* e) {
+    AfterTransactionTest* t = (AfterTransactionTest*)state;
+    t.calls++;
+    REQUIRE(ystate_vector_eq(t->before_state, e->before_state));
+    REQUIRE(ystate_vector_eq(t->after_state, e->after_state));
+    REQUIRE(ydelete_set_eq(t->delete_set, e->delete_set));
+}
+
+TEST_CASE("YDoc observe after transaction") {
+    long long CLIENT_ID = 1;
+    AfterTransactionTest t;
+    t.calls = 0;
+    t.delete_set.entries_count = 0;
+    t.before_state.entries_count = 0;
+
+    t.after_state.entries_count = 1;
+    t.after_state.client_ids = &CLIENT_ID;
+    t.after_state.clocks = &11;
+
+    YDoc *doc1 = ydoc_new_with_id(CLIENT_ID);
+    unsigned int subscription_id = ydoc_observe_after_transaction(doc1, &t, observe_after_transaction);
+
+    YTransaction *txn = ytransaction_new(doc1);
+    Branch *txt1 = ytext(txn, "test");
+    ytext_insert(txt1, txn, 0, "hello world");
+    ytransaction_commit(txn);
+
+    REQUIRE_EQ(t.calls, 1);
+
+    // on the second transaction, before state will be equal after state from previous transaction
+    t.before_state.entries_count = t.after_state.entries_count;
+    t.before_state.client_ids = t.after_state.client_ids;
+    t.before_state.clocks = t.after_state.clocks;
+
+    t.delete_set.entries_count = 1;
+    t.delete_set.client_ids = &CLIENT_ID;
+    t.delete_set.ranges = (YIdRangeSeq*)malloc(sizeof(YIdRangeSeq*) * 1);
+    t.delete_set.ranges[0].len = 1;
+    YIdRange range;
+    range.start = 2;
+    range.end = 9;
+    t.delete_set.ranges[0].seq = &range;
+
+    txn = ytransaction_new(doc1);
+    ytext_remove_range(txt1, txn, 2, 7);
+    ytransaction_commit(txn);
+
+    REQUIRE_EQ(t.calls, 2);
+
+    ydoc_unobserve_after_transaction(doc1, subscription_id);
+
+    txn = ytransaction_new(doc1);
+    ytext_insert(txt1, txn, 4, " the door");
+    ytransaction_commit(txn);
+
+    REQUIRE_EQ(t.calls, 2); // number of calls should remain unchanged
+
+    ydoc_destroy(doc1);
+}

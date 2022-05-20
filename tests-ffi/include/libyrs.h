@@ -364,6 +364,94 @@ typedef struct YOptions {
 } YOptions;
 
 /**
+ * Struct representing a state of a document. It contains the last seen clocks for blocks submitted
+ * per any of the clients collaborating on document updates.
+ */
+typedef struct YStateVector {
+  /**
+   * Number of clients. It describes a length of both `client_ids` and `clocks` arrays.
+   */
+  int entries_count;
+  /**
+   * Array of unique client identifiers (length is given in `entries_count` field). Each client
+   * ID has corresponding clock attached, which can be found in `clocks` field under the same
+   * index.
+   */
+  long long *client_ids;
+  /**
+   * Array of clocks (length is given in `entries_count` field) known for each client. Each clock
+   * has a corresponding client identifier attached, which can be found in `client_ids` field
+   * under the same index.
+   */
+  int *clocks;
+} YStateVector;
+
+typedef struct YIdRange {
+  int start;
+  int end;
+} YIdRange;
+
+/**
+ * Fixed-length sequence of ID ranges. Each range is a pair of [start, end) values, describing the
+ * range of items identified by clock values, that this range refers to.
+ */
+typedef struct YIdRangeSeq {
+  /**
+   * Number of ranges stored in this sequence.
+   */
+  int len;
+  /**
+   * Array (length is stored in `len` field) or ranges. Each range is a pair of [start, end)
+   * values, describing continuous collection of items produced by the same client, identified
+   * by clock values, that this range refers to.
+   */
+  struct YIdRange *seq;
+} YIdRangeSeq;
+
+/**
+ * Delete set is a map of `(ClientID, Range[])` entries. Length of a map is stored in
+ * `entries_count` field. ClientIDs reside under `client_ids` and their corresponding range
+ * sequences can be found under the same index of `ranges` field.
+ */
+typedef struct YDeleteSet {
+  /**
+   * Number of client identifier entries.
+   */
+  int entries_count;
+  /**
+   * Array of unique client identifiers (length is given in `entries_count` field). Each client
+   * ID has corresponding sequence of ranges attached, which can be found in `ranges` field under
+   * the same index.
+   */
+  long long *client_ids;
+  /**
+   * Array of range sequences (length is given in `entries_count` field). Each sequence has
+   * a corresponding client ID attached, which can be found in `client_ids` field under
+   * the same index.
+   */
+  struct YIdRangeSeq *ranges;
+} YDeleteSet;
+
+/**
+ * Event generated for callbacks subscribed using `ydoc_observe_after_transaction`. It contains
+ * snapshot of changes made within any committed transaction.
+ */
+typedef struct YAfterTransactionEvent {
+  /**
+   * Descriptor of a document state at the moment of creating the transaction.
+   */
+  struct YStateVector before_state;
+  /**
+   * Descriptor of a document state at the moment of committing the transaction.
+   */
+  struct YStateVector after_state;
+  /**
+   * Information about all items deleted within the scope of a transaction.
+   */
+  struct YDeleteSet delete_set;
+} YAfterTransactionEvent;
+
+/**
  * Transaction is one of the core types in Yrs. All operations that need to touch a document's
  * contents (a.k.a. block store), need to be executed in scope of a transaction.
  */
@@ -760,6 +848,22 @@ YDoc *ydoc_new_with_options(struct YOptions options);
  * Returns a unique client identifier of this [Doc] instance.
  */
 unsigned long ydoc_id(YDoc *doc);
+
+unsigned int ydoc_observe_updates_v1(YDoc *doc,
+                                     void *state,
+                                     void (*cb)(void*, int, unsigned char*));
+
+unsigned int ydoc_observe_updates_v2(YDoc *doc,
+                                     void *state,
+                                     void (*cb)(void*, int, unsigned char*));
+
+void ydoc_unobserve_updates(YDoc *doc, unsigned int subscription_id);
+
+unsigned int ydoc_observe_after_transaction(YDoc *doc,
+                                            void *state,
+                                            void (*cb)(void*, struct YAfterTransactionEvent*));
+
+void ydoc_unobserve_after_transaction(YDoc *doc, unsigned int subscription_id);
 
 /**
  * Starts a new read-write transaction on a given document. All other operations happen in context
