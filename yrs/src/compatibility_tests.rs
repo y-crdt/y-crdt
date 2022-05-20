@@ -101,7 +101,7 @@ fn text_insert_delete() {
     let setter = visited.clone();
 
     let mut doc = Doc::new();
-    let _sub = doc.on_update(move |_, e| {
+    let _sub = doc.observe_update(move |_, e| {
         for (actual, expected) in e.update.blocks.blocks().zip(expected_blocks.as_slice()) {
             if let BlockCarrier::Block(block) = actual {
                 assert_eq!(block, expected);
@@ -354,7 +354,7 @@ fn test_data_set<P: AsRef<std::path::Path>>(path: P) {
         let map = txn.get_map("map");
         let arr = txn.get_array("array");
         drop(txn);
-        for i in 0..updates_len {
+        for _ in 0..updates_len {
             let update = Update::decode_v1(decoder.read_buf());
             doc.transact().apply_update(update);
         }

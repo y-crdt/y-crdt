@@ -1,9 +1,9 @@
-use crate::block::{Block, ClientID, ItemContent};
+use crate::block::{ClientID, ItemContent};
 use crate::block_store::{BlockStore, StateVector};
 use crate::doc::Options;
 use crate::event::{AfterTransactionEvent, EventHandler, UpdateEvent};
 use crate::id_set::DeleteSet;
-use crate::types::{Branch, BranchPtr, Path, PathSegment, TypePtr, TypeRefs};
+use crate::types::{Branch, BranchPtr, Path, PathSegment, TypeRefs};
 use crate::update::PendingUpdate;
 use crate::updates::encoder::{Encode, Encoder};
 use std::collections::hash_map::Entry;

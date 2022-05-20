@@ -17,7 +17,9 @@ use yrs::types::{
 };
 use yrs::updates::decoder::{Decode, DecoderV1, DecoderV2};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
-use yrs::{Array, Map, OffsetKind, Text, Update, XmlElement, XmlText};
+use yrs::{
+    AfterTransactionEvent, Array, DeleteSet, Map, OffsetKind, Text, Update, XmlElement, XmlText,
+};
 use yrs::{Options, StateVector};
 use yrs::{SubscriptionId, Xml};
 
@@ -277,6 +279,65 @@ pub extern "C" fn ydoc_new_with_options(options: YOptions) -> *mut Doc {
 pub unsafe extern "C" fn ydoc_id(doc: *mut Doc) -> c_ulong {
     let doc = doc.as_ref().unwrap();
     doc.client_id as c_ulong
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn ydoc_observe_updates_v1(
+    doc: *mut Doc,
+    state: *mut c_void,
+    cb: extern "C" fn(*mut c_void, c_int, *mut c_uchar),
+) -> c_uint {
+    let doc = doc.as_mut().unwrap();
+    let observer = doc.observe_update(move |_, e| {
+        let mut bytes = e.update.encode_v1();
+        let len = bytes.len();
+        cb(state, len as c_int, bytes.as_mut_ptr() as *mut c_uchar)
+    });
+    let subscription_id: u32 = observer.into();
+    subscription_id as c_uint
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn ydoc_observe_updates_v2(
+    doc: *mut Doc,
+    state: *mut c_void,
+    cb: extern "C" fn(*mut c_void, c_int, *mut c_uchar),
+) -> c_uint {
+    let doc = doc.as_mut().unwrap();
+    let observer = doc.observe_update(move |_, e| {
+        let mut bytes = e.update.encode_v2();
+        let len = bytes.len();
+        cb(state, len as c_int, bytes.as_mut_ptr() as *mut c_uchar)
+    });
+    let subscription_id: u32 = observer.into();
+    subscription_id as c_uint
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn ydoc_unobserve_updates(doc: *mut Doc, subscription_id: c_uint) {
+    let doc = doc.as_mut().unwrap();
+    doc.unobserve_update(subscription_id as SubscriptionId);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn ydoc_observe_after_transaction(
+    doc: *mut Doc,
+    state: *mut c_void,
+    cb: extern "C" fn(*mut c_void, *mut YAfterTransactionEvent),
+) -> c_uint {
+    let doc = doc.as_mut().unwrap();
+    let observer = doc.observe_transaction_cleanup(move |_, e| {
+        let mut event = YAfterTransactionEvent::new(e);
+        cb(state, (&mut event) as *mut _);
+    });
+    let subscription_id: u32 = observer.into();
+    subscription_id as c_uint
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn ydoc_unobserve_after_transaction(doc: *mut Doc, subscription_id: c_uint) {
+    let doc = doc.as_mut().unwrap();
+    doc.unobserve_transaction_cleanup(subscription_id as SubscriptionId);
 }
 
 /// Starts a new read-write transaction on a given document. All other operations happen in context
@@ -2553,7 +2614,7 @@ pub unsafe extern "C" fn yobserve_deep(
 ) -> c_uint {
     assert!(!ytype.is_null());
 
-    let mut branch = ytype.as_mut().unwrap();
+    let branch = ytype.as_mut().unwrap();
     let observer = branch.observe_deep(move |txn, events| {
         let events: Vec<_> = events.iter().map(|e| YEvent::new(txn, e)).collect();
         let len = events.len() as c_int;
@@ -2561,6 +2622,149 @@ pub unsafe extern "C" fn yobserve_deep(
     });
     let subscription_id: u32 = observer.into();
     subscription_id as c_uint
+}
+
+/// Event generated for callbacks subscribed using `ydoc_observe_after_transaction`. It contains
+/// snapshot of changes made within any committed transaction.
+#[repr(C)]
+pub struct YAfterTransactionEvent {
+    /// Descriptor of a document state at the moment of creating the transaction.
+    pub before_state: YStateVector,
+    /// Descriptor of a document state at the moment of committing the transaction.
+    pub after_state: YStateVector,
+    /// Information about all items deleted within the scope of a transaction.
+    pub delete_set: YDeleteSet,
+}
+
+impl YAfterTransactionEvent {
+    unsafe fn new(e: &AfterTransactionEvent) -> Self {
+        YAfterTransactionEvent {
+            before_state: YStateVector::new(&e.before_state),
+            after_state: YStateVector::new(&e.after_state),
+            delete_set: YDeleteSet::new(&e.delete_set),
+        }
+    }
+}
+
+/// Struct representing a state of a document. It contains the last seen clocks for blocks submitted
+/// per any of the clients collaborating on document updates.
+#[repr(C)]
+pub struct YStateVector {
+    /// Number of clients. It describes a length of both `client_ids` and `clocks` arrays.
+    pub entries_count: c_int,
+    /// Array of unique client identifiers (length is given in `entries_count` field). Each client
+    /// ID has corresponding clock attached, which can be found in `clocks` field under the same
+    /// index.
+    pub client_ids: *mut c_longlong,
+    /// Array of clocks (length is given in `entries_count` field) known for each client. Each clock
+    /// has a corresponding client identifier attached, which can be found in `client_ids` field
+    /// under the same index.
+    pub clocks: *mut c_int,
+}
+
+impl YStateVector {
+    unsafe fn new(sv: &StateVector) -> Self {
+        let entries_count = sv.len() as c_int;
+        let mut client_ids = Vec::with_capacity(sv.len());
+        let mut clocks = Vec::with_capacity(sv.len());
+        for (&client, &clock) in sv.iter() {
+            client_ids.push(client as c_longlong);
+            clocks.push(clock as c_int);
+        }
+
+        YStateVector {
+            entries_count,
+            client_ids: Box::into_raw(client_ids.into_boxed_slice()) as *mut _,
+            clocks: Box::into_raw(clocks.into_boxed_slice()) as *mut _,
+        }
+    }
+}
+
+impl Drop for YStateVector {
+    fn drop(&mut self) {
+        let len = self.entries_count as usize;
+        drop(unsafe { Vec::from_raw_parts(self.client_ids, len, len) });
+        drop(unsafe { Vec::from_raw_parts(self.clocks, len, len) });
+    }
+}
+
+/// Delete set is a map of `(ClientID, Range[])` entries. Length of a map is stored in
+/// `entries_count` field. ClientIDs reside under `client_ids` and their corresponding range
+/// sequences can be found under the same index of `ranges` field.
+#[repr(C)]
+pub struct YDeleteSet {
+    /// Number of client identifier entries.
+    pub entries_count: c_int,
+    /// Array of unique client identifiers (length is given in `entries_count` field). Each client
+    /// ID has corresponding sequence of ranges attached, which can be found in `ranges` field under
+    /// the same index.
+    pub client_ids: *mut c_longlong,
+    /// Array of range sequences (length is given in `entries_count` field). Each sequence has
+    /// a corresponding client ID attached, which can be found in `client_ids` field under
+    /// the same index.
+    pub ranges: *mut YIdRangeSeq,
+}
+
+impl YDeleteSet {
+    unsafe fn new(ds: &DeleteSet) -> Self {
+        let len = ds.len();
+        let mut client_ids = Vec::with_capacity(len);
+        let mut ranges = Vec::with_capacity(len);
+
+        for (&client, range) in ds.iter() {
+            client_ids.push(client as c_longlong);
+            let seq: Vec<_> = range
+                .iter()
+                .map(|r| YIdRange {
+                    start: r.start as c_int,
+                    end: r.end as c_int,
+                })
+                .collect();
+            ranges.push(YIdRangeSeq {
+                len: seq.len() as c_int,
+                seq: Box::into_raw(seq.into_boxed_slice()) as *mut _,
+            })
+        }
+
+        YDeleteSet {
+            entries_count: len as c_int,
+            client_ids: Box::into_raw(client_ids.into_boxed_slice()) as *mut _,
+            ranges: Box::into_raw(ranges.into_boxed_slice()) as *mut _,
+        }
+    }
+}
+
+impl Drop for YDeleteSet {
+    fn drop(&mut self) {
+        let len = self.entries_count as usize;
+        drop(unsafe { Vec::from_raw_parts(self.client_ids, len, len) });
+        drop(unsafe { Vec::from_raw_parts(self.ranges, len, len) });
+    }
+}
+
+/// Fixed-length sequence of ID ranges. Each range is a pair of [start, end) values, describing the
+/// range of items identified by clock values, that this range refers to.
+#[repr(C)]
+pub struct YIdRangeSeq {
+    /// Number of ranges stored in this sequence.
+    pub len: c_int,
+    /// Array (length is stored in `len` field) or ranges. Each range is a pair of [start, end)
+    /// values, describing continuous collection of items produced by the same client, identified
+    /// by clock values, that this range refers to.
+    pub seq: *mut YIdRange,
+}
+
+impl Drop for YIdRangeSeq {
+    fn drop(&mut self) {
+        let len = self.len as usize;
+        drop(unsafe { Vec::from_raw_parts(self.seq, len, len) })
+    }
+}
+
+#[repr(C)]
+pub struct YIdRange {
+    pub start: c_int,
+    pub end: c_int,
 }
 
 #[repr(C)]
@@ -2822,7 +3026,7 @@ pub unsafe extern "C" fn yxmltext_unobserve(xml: *const Branch, subscription_id:
 #[no_mangle]
 pub unsafe extern "C" fn yunobserve_deep(ytype: *mut Branch, subscription_id: c_uint) {
     assert!(!ytype.is_null());
-    let mut branch = ytype.as_mut().unwrap();
+    let branch = ytype.as_mut().unwrap();
     branch.unobserve_deep(subscription_id as SubscriptionId);
 }
 

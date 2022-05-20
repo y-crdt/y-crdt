@@ -156,7 +156,7 @@ impl BlockPtr {
                         .blocks
                         .get_item_clean_end(&ID::new(this.id.client, this.id.clock - 1));
                     this.origin = this.left.as_deref().map(|b: &Block| b.last_id());
-                    this.content.splice(offset as usize);
+                    this.content = this.content.splice(offset as usize).unwrap();
                     this.len -= offset;
                 }
 
@@ -1528,7 +1528,7 @@ impl std::fmt::Display for Item {
         write!(f, "({}, len: {}", self.id, self.len)?;
         match &self.parent {
             TypePtr::Unknown => {}
-            TypePtr::Branch(ptr) => {
+            TypePtr::Branch(_) => {
                 write!(f, ", parent: <branch>")?;
             }
             other => {

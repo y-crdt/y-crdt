@@ -296,6 +296,11 @@ impl IdSet {
         Self::default()
     }
 
+    /// Returns number of clients stored;
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
     pub(crate) fn iter(&self) -> Iter<'_> {
         self.0.iter()
     }
@@ -475,6 +480,11 @@ impl DeleteSet {
     /// inside of a current delete set.
     pub fn insert(&mut self, id: ID, len: u32) {
         self.0.insert(id, len)
+    }
+
+    /// Returns number of clients stored;
+    pub fn len(&self) -> usize {
+        self.0.len()
     }
 
     /// Checks if delete set contains any clock ranges.
