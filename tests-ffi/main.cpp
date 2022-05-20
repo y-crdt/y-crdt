@@ -1131,7 +1131,9 @@ void reset_observe_updates(ObserveUpdatesTest* t) {
 void observe_updates(void* state, int len, unsigned char* bytes) {
     ObserveUpdatesTest* t = (ObserveUpdatesTest*)state;
     t->incoming_len = len;
-    memcpy((void*)t->incoming_update, (void*)bytes, (size_t)len);
+    void* buf = malloc(sizeof(unsigned char*) * len);
+    memcpy(buf, (void*)bytes, (size_t)len);
+    t->incoming_update = (unsigned char*)buf;
 }
 
 TEST_CASE("YDoc observe updates V1") {
@@ -1153,7 +1155,7 @@ TEST_CASE("YDoc observe updates V1") {
     ytransaction_commit(txn);
 
     REQUIRE_EQ(t.len, t.incoming_len);
-    REQUIRE(memcmp((void*)t.update, (void*)t.incoming_update, (size_t)t.len));
+    REQUIRE(0 == memcmp((void*)t.update, (void*)t.incoming_update, (size_t)t.len));
     reset_observe_updates(&t);
 
     // check unsubscribe
@@ -1194,7 +1196,7 @@ TEST_CASE("YDoc observe updates V2") {
     ytransaction_commit(txn);
 
     REQUIRE_EQ(t.len, t.incoming_len);
-    REQUIRE(memcmp((void*)t.update, (void*)t.incoming_update, (size_t)t.len));
+    REQUIRE(0 == memcmp((void*)t.update, (void*)t.incoming_update, (size_t)t.len));
     reset_observe_updates(&t);
 
     // check unsubscribe
