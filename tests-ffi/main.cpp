@@ -1253,8 +1253,8 @@ int ydelete_set_eq(YDeleteSet* a, YDeleteSet* b) {
             return 0;
 
         for (int j = 0; j < seqa.len; j++) {
-            YIdRange ra = seqa[j];
-            YIdRange rb = seqb[j];
+            YIdRange ra = seqa.seq[j];
+            YIdRange rb = seqb.seq[j];
 
             if (ra.start != rb.start || ra.end != rb.end)
                 return 0;
