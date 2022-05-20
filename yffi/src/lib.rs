@@ -18,8 +18,7 @@ use yrs::types::{
 use yrs::updates::decoder::{Decode, DecoderV1, DecoderV2};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use yrs::{
-    AfterTransactionEvent, Array, DeleteSet, Map, OffsetKind, Subscription, Text, Update,
-    XmlElement, XmlText,
+    AfterTransactionEvent, Array, DeleteSet, Map, OffsetKind, Text, Update, XmlElement, XmlText,
 };
 use yrs::{Options, StateVector};
 use yrs::{SubscriptionId, Xml};
@@ -289,7 +288,7 @@ pub unsafe extern "C" fn ydoc_observe_updates_v1(
     cb: extern "C" fn(*mut c_void, c_int, *mut c_uchar),
 ) -> c_uint {
     let doc = doc.as_mut().unwrap();
-    let observer = doc.observe_update(move |txn, e| {
+    let observer = doc.observe_update(move |_, e| {
         let mut bytes = e.update.encode_v1();
         let len = bytes.len();
         cb(state, len as c_int, bytes.as_mut_ptr() as *mut c_uchar)
@@ -305,7 +304,7 @@ pub unsafe extern "C" fn ydoc_observe_updates_v2(
     cb: extern "C" fn(*mut c_void, c_int, *mut c_uchar),
 ) -> c_uint {
     let doc = doc.as_mut().unwrap();
-    let observer = doc.observe_update(move |txn, e| {
+    let observer = doc.observe_update(move |_, e| {
         let mut bytes = e.update.encode_v2();
         let len = bytes.len();
         cb(state, len as c_int, bytes.as_mut_ptr() as *mut c_uchar)
@@ -327,7 +326,7 @@ pub unsafe extern "C" fn ydoc_observe_after_transaction(
     cb: extern "C" fn(*mut c_void, *mut YAfterTransactionEvent),
 ) -> c_uint {
     let doc = doc.as_mut().unwrap();
-    let observer = doc.observe_transaction_cleanup(move |txn, e| {
+    let observer = doc.observe_transaction_cleanup(move |_, e| {
         let mut event = YAfterTransactionEvent::new(e);
         cb(state, (&mut event) as *mut _);
     });
@@ -2615,7 +2614,7 @@ pub unsafe extern "C" fn yobserve_deep(
 ) -> c_uint {
     assert!(!ytype.is_null());
 
-    let mut branch = ytype.as_mut().unwrap();
+    let branch = ytype.as_mut().unwrap();
     let observer = branch.observe_deep(move |txn, events| {
         let events: Vec<_> = events.iter().map(|e| YEvent::new(txn, e)).collect();
         let len = events.len() as c_int;
@@ -3027,7 +3026,7 @@ pub unsafe extern "C" fn yxmltext_unobserve(xml: *const Branch, subscription_id:
 #[no_mangle]
 pub unsafe extern "C" fn yunobserve_deep(ytype: *mut Branch, subscription_id: c_uint) {
     assert!(!ytype.is_null());
-    let mut branch = ytype.as_mut().unwrap();
+    let branch = ytype.as_mut().unwrap();
     branch.unobserve_deep(subscription_id as SubscriptionId);
 }
 

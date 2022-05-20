@@ -354,7 +354,7 @@ fn test_data_set<P: AsRef<std::path::Path>>(path: P) {
         let map = txn.get_map("map");
         let arr = txn.get_array("array");
         drop(txn);
-        for i in 0..updates_len {
+        for _ in 0..updates_len {
             let update = Update::decode_v1(decoder.read_buf());
             doc.transact().apply_update(update);
         }

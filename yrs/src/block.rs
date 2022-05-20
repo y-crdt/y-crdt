@@ -1528,7 +1528,7 @@ impl std::fmt::Display for Item {
         write!(f, "({}, len: {}", self.id, self.len)?;
         match &self.parent {
             TypePtr::Unknown => {}
-            TypePtr::Branch(ptr) => {
+            TypePtr::Branch(_) => {
                 write!(f, ", parent: <branch>")?;
             }
             other => {

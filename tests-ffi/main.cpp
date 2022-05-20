@@ -1125,7 +1125,7 @@ void reset_observe_updates(ObserveUpdatesTest* t) {
     t->incoming_update = NULL;
     t->update = NULL;
     t->len = 0;
-    t->incoming_len = NULL;
+    t->incoming_len = 0;
 }
 
 void observe_updates(void* state, int len, unsigned char* bytes) {
@@ -1142,13 +1142,13 @@ TEST_CASE("YDoc observe updates V1") {
     ObserveUpdatesTest t;
     t.incoming_len = 0;
     t.incoming_update = NULL;
-    t.update = ytransaction_state_diff_v1(txn, NULL, &t.len);
+    t.update = ytransaction_state_diff_v1(txn, NULL, 0, &t.len);
     ytransaction_commit(txn);
 
     YDoc *doc2 = ydoc_new_with_id(2);
     txn = ytransaction_new(doc2);
     Branch *txt2 = ytext(txn, "test");
-    unsigned int subscription_id = ydoc_observe_updates_v1(doc2, &t, ydoc_observe_updates);
+    unsigned int subscription_id = ydoc_observe_updates_v1(doc2, &t, observe_updates);
     ytransaction_apply(txn, t.update, t.len);
     ytransaction_commit(txn);
 
@@ -1161,7 +1161,7 @@ TEST_CASE("YDoc observe updates V1") {
 
     txn = ytransaction_new(doc1);
     ytext_insert(txt1, txn, 5, " world", NULL);
-    t.update = ytransaction_state_diff_v1(txn, NULL, &t.len);
+    t.update = ytransaction_state_diff_v1(txn, NULL, 0, &t.len);
     ytransaction_commit(txn);
 
     txn = ytransaction_new(doc2);
@@ -1171,7 +1171,8 @@ TEST_CASE("YDoc observe updates V1") {
     REQUIRE_EQ(t.incoming_len, 0);
     REQUIRE(t.incoming_update == NULL);
 
-    ydoc_destroy(doc);
+    ydoc_destroy(doc1);
+    ydoc_destroy(doc2);
 }
 
 TEST_CASE("YDoc observe updates V2") {
@@ -1182,7 +1183,7 @@ TEST_CASE("YDoc observe updates V2") {
     ObserveUpdatesTest t;
     t.incoming_len = 0;
     t.incoming_update = NULL;
-    t.update = ytransaction_state_diff_v2(txn, NULL, &t.len);
+    t.update = ytransaction_state_diff_v2(txn, NULL, 0, &t.len);
     ytransaction_commit(txn);
 
     YDoc *doc2 = ydoc_new_with_id(2);
@@ -1201,7 +1202,7 @@ TEST_CASE("YDoc observe updates V2") {
 
     txn = ytransaction_new(doc1);
     ytext_insert(txt1, txn, 5, " world", NULL);
-    t.update = ytransaction_state_diff_v2(txn, NULL, &t.len);
+    t.update = ytransaction_state_diff_v2(txn, NULL, 0, &t.len);
     ytransaction_commit(txn);
 
     txn = ytransaction_new(doc2);
@@ -1211,7 +1212,8 @@ TEST_CASE("YDoc observe updates V2") {
     REQUIRE_EQ(t.incoming_len, 0);
     REQUIRE(t.incoming_update == NULL);
 
-    ydoc_destroy(doc);
+    ydoc_destroy(doc1);
+    ydoc_destroy(doc2);
 }
 
 
@@ -1271,10 +1273,10 @@ typedef struct {
 
 void observe_after_transaction(void* state, YAfterTransactionEvent* e) {
     AfterTransactionTest* t = (AfterTransactionTest*)state;
-    t.calls++;
-    REQUIRE(ystate_vector_eq(t->before_state, e->before_state));
-    REQUIRE(ystate_vector_eq(t->after_state, e->after_state));
-    REQUIRE(ydelete_set_eq(t->delete_set, e->delete_set));
+    t->calls++;
+    REQUIRE(ystate_vector_eq(&t->before_state, &e->before_state));
+    REQUIRE(ystate_vector_eq(&t->after_state, &e->after_state));
+    REQUIRE(ydelete_set_eq(&t->delete_set, &e->delete_set));
 }
 
 TEST_CASE("YDoc observe after transaction") {
@@ -1286,14 +1288,15 @@ TEST_CASE("YDoc observe after transaction") {
 
     t.after_state.entries_count = 1;
     t.after_state.client_ids = &CLIENT_ID;
-    t.after_state.clocks = &11;
+    int CLOCK = 11;
+    t.after_state.clocks = &CLOCK;
 
     YDoc *doc1 = ydoc_new_with_id(CLIENT_ID);
     unsigned int subscription_id = ydoc_observe_after_transaction(doc1, &t, observe_after_transaction);
 
     YTransaction *txn = ytransaction_new(doc1);
     Branch *txt1 = ytext(txn, "test");
-    ytext_insert(txt1, txn, 0, "hello world");
+    ytext_insert(txt1, txn, 0, "hello world", NULL);
     ytransaction_commit(txn);
 
     REQUIRE_EQ(t.calls, 1);
@@ -1321,7 +1324,7 @@ TEST_CASE("YDoc observe after transaction") {
     ydoc_unobserve_after_transaction(doc1, subscription_id);
 
     txn = ytransaction_new(doc1);
-    ytext_insert(txt1, txn, 4, " the door");
+    ytext_insert(txt1, txn, 4, " the door", NULL);
     ytransaction_commit(txn);
 
     REQUIRE_EQ(t.calls, 2); // number of calls should remain unchanged

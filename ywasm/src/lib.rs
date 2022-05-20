@@ -195,8 +195,8 @@ impl YDoc {
     #[wasm_bindgen(js_name = onUpdate)]
     pub fn on_update(&mut self, f: js_sys::Function) -> YUpdateObserver {
         self.0
-            .observe_update(move |txn, e| {
-                let mut u = e.update.encode_v1();
+            .observe_update(move |_, e| {
+                let u = e.update.encode_v1();
                 let arg = Uint8Array::from(u.as_slice());
                 f.call1(&JsValue::UNDEFINED, &arg).unwrap();
             })
@@ -211,8 +211,8 @@ impl YDoc {
     #[wasm_bindgen(js_name = onUpdateV2)]
     pub fn on_update_v2(&mut self, f: js_sys::Function) -> YUpdateObserver {
         self.0
-            .observe_update(move |txn, e| {
-                let mut u = e.update.encode_v2();
+            .observe_update(move |_, e| {
+                let u = e.update.encode_v2();
                 let arg = Uint8Array::from(u.as_slice());
                 f.call1(&JsValue::UNDEFINED, &arg).unwrap();
             })
@@ -226,7 +226,7 @@ impl YDoc {
     #[wasm_bindgen(js_name = onAfterTransaction)]
     pub fn on_after_transaction(&mut self, f: js_sys::Function) -> YAfterTransactionObserver {
         self.0
-            .observe_transaction_cleanup(move |txn, e| {
+            .observe_transaction_cleanup(move |_, e| {
                 let arg: JsValue = YAfterTransactionEvent::new(e).into();
                 f.call1(&JsValue::UNDEFINED, &arg).unwrap();
             })
@@ -1183,7 +1183,7 @@ fn change_into_js(change: &Change) -> JsValue {
 }
 
 fn state_vector_into_map(sv: &StateVector) -> js_sys::Map {
-    let mut m = js_sys::Map::new();
+    let m = js_sys::Map::new();
     for (&k, &v) in sv.iter() {
         let key: JsValue = k.into();
         let value: JsValue = v.into();
@@ -1193,7 +1193,7 @@ fn state_vector_into_map(sv: &StateVector) -> js_sys::Map {
 }
 
 fn delete_set_into_map(ds: &DeleteSet) -> js_sys::Map {
-    let mut m = js_sys::Map::new();
+    let m = js_sys::Map::new();
     for (&k, v) in ds.iter() {
         let key: JsValue = k.into();
         let iter = v.iter().map(|r| {
@@ -1202,7 +1202,7 @@ fn delete_set_into_map(ds: &DeleteSet) -> js_sys::Map {
             let res: JsValue = js_sys::Array::of2(&start.into(), &len.into()).into();
             res
         });
-        let mut value = js_sys::Array::new();
+        let value = js_sys::Array::new();
         for v in iter {
             value.push(&v);
         }
