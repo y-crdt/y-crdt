@@ -94,7 +94,7 @@ impl ID {
 pub(crate) struct BlockPtr(NonNull<Block>);
 
 impl BlockPtr {
-    pub(crate) fn splice(&mut self, offset: u32) -> Option<Box<Block>> {
+    pub(crate) fn splice(&mut self, offset: u32, encoding: OffsetKind) -> Option<Box<Block>> {
         let self_ptr = self.clone();
         if offset == 0 {
             None
@@ -103,7 +103,7 @@ impl BlockPtr {
                 Block::Item(item) => {
                     let client = item.id.client;
                     let clock = item.id.clock;
-                    let content = item.content.splice(offset as usize).unwrap();
+                    let content = item.content.splice(offset as usize, encoding).unwrap();
                     item.len = offset;
                     let mut new = Box::new(Block::Item(Item {
                         id: ID::new(client, clock + offset),
@@ -151,12 +151,13 @@ impl BlockPtr {
                 let store = txn.store_mut();
                 let encoding = store.options.offset_kind;
                 if offset > 0 {
+                    // offset is used only for locally integrated items
                     this.id.clock += offset;
                     this.left = store
                         .blocks
                         .get_item_clean_end(&ID::new(this.id.client, this.id.clock - 1));
                     this.origin = this.left.as_deref().map(|b: &Block| b.last_id());
-                    this.content = this.content.splice(offset as usize).unwrap();
+                    this.content = this.content.splice(offset as usize, encoding).unwrap();
                     this.len -= offset;
                 }
 
@@ -755,26 +756,6 @@ impl ItemFlags {
     }
 
     #[inline]
-    pub fn get_encoding(&self) -> OffsetKind {
-        if self.check(ITEM_FLAG_ENCODING_UTF16) {
-            OffsetKind::Utf16
-        } else if self.check(ITEM_FLAG_ENCODING_UTF32) {
-            OffsetKind::Utf32
-        } else {
-            OffsetKind::Bytes
-        }
-    }
-
-    #[inline]
-    pub fn set_encoding(&mut self, encoding: OffsetKind) {
-        match encoding {
-            OffsetKind::Bytes => { /* this is default setting */ }
-            OffsetKind::Utf16 => self.set(ITEM_FLAG_ENCODING_UTF16),
-            OffsetKind::Utf32 => self.set(ITEM_FLAG_ENCODING_UTF32),
-        }
-    }
-
-    #[inline]
     pub fn is_keep(&self) -> bool {
         self.check(ITEM_FLAG_KEEP)
     }
@@ -1093,14 +1074,6 @@ impl SplittableString {
         if len == 1 {
             len // quite often strings are single-letter, so we don't care about OffsetKind
         } else {
-            println!(
-                "'{}' length: {} (utf-8), {} (utf-16), {} (utf-32)",
-                self.content,
-                self.content.len(),
-                self.utf16_len(),
-                self.unicode_len()
-            );
-
             match kind {
                 OffsetKind::Bytes => len,
                 OffsetKind::Utf16 => self.utf16_len(),
@@ -1129,10 +1102,6 @@ impl SplittableString {
             OffsetKind::Utf16 => self.map_utf16_offset(offset as u32) as usize,
             OffsetKind::Utf32 => self.map_unicode_offset(offset as u32) as usize,
         };
-        println!(
-            "'{}' mapped offset {} -> {} ({:?})",
-            self.content, offset, off, kind
-        );
         self.content.split_at(off)
     }
 
@@ -1488,7 +1457,7 @@ impl ItemContent {
         }
     }
 
-    pub(crate) fn splice(&mut self, offset: usize) -> Option<ItemContent> {
+    pub(crate) fn splice(&mut self, offset: usize, encoding: OffsetKind) -> Option<ItemContent> {
         match self {
             ItemContent::Any(value) => {
                 let (left, right) = value.split_at(offset);
@@ -1499,7 +1468,7 @@ impl ItemContent {
             }
             ItemContent::String(string) => {
                 // compute offset given in unicode code points into byte position
-                let (left, right) = string.split_at(offset, OffsetKind::Utf16);
+                let (left, right) = string.split_at(offset, encoding);
                 let left: SplittableString = left.into();
                 let right: SplittableString = right.into();
 
@@ -1810,9 +1779,8 @@ impl std::fmt::Debug for Block {
 
 #[cfg(test)]
 mod test {
-    use crate::block::{Block, SplittableString};
+    use crate::block::SplittableString;
     use crate::doc::OffsetKind;
-    use std::mem::size_of;
     use std::ops::Deref;
 
     #[test]
@@ -1854,14 +1822,5 @@ mod test {
         let (a, b) = s.split_at(30, OffsetKind::Bytes);
         assert_eq!(a, "Zażółć gęślą jaźń😀");
         assert_eq!(b, "ありがとうございます");
-    }
-
-    #[test]
-    fn block_sizeof() {
-        println!("sizeof Block: {}B", size_of::<Block>());
-        println!(
-            "sizeof SplittableString: {}B",
-            size_of::<SplittableString>()
-        );
     }
 }

@@ -51,14 +51,10 @@ impl Text {
         self.0
     }
 
-    pub(crate) fn find_position(
-        &self,
-        txn: &mut Transaction,
-        index: u32,
-    ) -> Option<block::ItemPosition> {
+    pub(crate) fn find_position(&self, txn: &mut Transaction, index: u32) -> Option<ItemPosition> {
         let mut pos = {
             let inner = self.as_ref();
-            block::ItemPosition {
+            ItemPosition {
                 parent: self.0.into(),
                 left: None,
                 right: inner.start,
@@ -92,7 +88,10 @@ impl Text {
                             } else {
                                 remaining
                             };
-                            right_ptr = store.blocks.split_block(right_ptr, offset).unwrap();
+                            right_ptr = store
+                                .blocks
+                                .split_block(right_ptr, offset, encoding)
+                                .unwrap();
                             block_len -= offset;
                             remaining = 0;
                         } else {
@@ -261,7 +260,7 @@ impl Text {
                                 len
                             };
                             remaining = 0;
-                            txn.store_mut().blocks.split_block(ptr, offset);
+                            txn.store_mut().blocks.split_block(ptr, offset, encoding);
                         } else {
                             remaining -= content_len;
                         };
@@ -372,7 +371,8 @@ impl Text {
                         _ => {
                             let content_len = item.content_len(encoding);
                             if len < content_len {
-                                let new_right = txn.store_mut().blocks.split_block(right, len);
+                                let new_right =
+                                    txn.store_mut().blocks.split_block(right, len, encoding);
                                 pos.left = Some(right);
                                 pos.right = new_right;
                                 break;
@@ -1334,6 +1334,19 @@ mod test {
             delta.borrow_mut().take(),
             Some(vec![Delta::Inserted("aefd".into(), None)])
         );
+    }
+
+    #[test]
+    fn utf32_encoding() {
+        let mut options = Options::with_client_id(1);
+        options.offset_kind = OffsetKind::Utf32;
+        let doc = Doc::with_options(options);
+        let txt = doc.transact().get_text("content");
+
+        txt.insert(&mut doc.transact(), 0, r#"“”"#); // these chars are 3B long each
+        txt.insert(&mut doc.transact(), 1, r#"test"#);
+
+        assert_eq!(txt.to_string(), r#"“test”"#);
     }
 
     #[test]

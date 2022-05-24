@@ -242,7 +242,7 @@ impl Transaction {
                                 if !item.is_deleted() && item.id.clock < clock {
                                     let store = self.store_mut();
                                     if let Some(split) =
-                                        store.blocks.split_block(ptr, clock - item.id.clock)
+                                        store.blocks.split_block_inner(ptr, clock - item.id.clock)
                                     {
                                         index += 1;
                                         self.merge_blocks.push(split);
@@ -257,7 +257,7 @@ impl Transaction {
                                             if !item.is_deleted() {
                                                 if item.id.clock + item.len() > clock_end {
                                                     if let Some(split) =
-                                                        self.store_mut().blocks.split_block(
+                                                        self.store_mut().blocks.split_block_inner(
                                                             block,
                                                             clock_end - item.id.clock,
                                                         )
@@ -645,7 +645,7 @@ impl Transaction {
                 if let Some(ptr) = list.get_block(clock) {
                     let ptr_clock = ptr.id().clock;
                     if ptr_clock < clock {
-                        if let Some(ptr) = blocks.split_block(ptr, clock - ptr_clock) {
+                        if let Some(ptr) = blocks.split_block_inner(ptr, clock - ptr_clock) {
                             merge_blocks.push(ptr);
                         }
                     }
@@ -660,7 +660,7 @@ impl Transaction {
                         let block = list.get(pivot);
                         let clock = block.id().clock;
                         if clock < r.start {
-                            if let Some(ptr) = blocks.split_block(block, r.start - clock) {
+                            if let Some(ptr) = blocks.split_block_inner(block, r.start - clock) {
                                 merge_blocks.push(ptr);
                             }
                             list = blocks.get(client).unwrap();
@@ -673,7 +673,7 @@ impl Transaction {
                         let block_len = block.len();
                         if block_id.clock + block_len > r.end {
                             if let Some(ptr) =
-                                blocks.split_block(block, block_id.clock + block_len - r.end)
+                                blocks.split_block_inner(block, block_id.clock + block_len - r.end)
                             {
                                 merge_blocks.push(ptr);
                             }
