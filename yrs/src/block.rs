@@ -713,12 +713,6 @@ impl ItemPosition {
     }
 }
 
-/// Bit flag (6th bit) used to mark that item content is using UTF-32 string encoding.
-const ITEM_FLAG_ENCODING_UTF32: u8 = 0b0010_0000;
-
-/// Bit flag (5th bit) used to mark that item content is using UTF-16 string encoding.
-const ITEM_FLAG_ENCODING_UTF16: u8 = 0b0001_0000;
-
 /// Bit flag (4th bit) for a marked item - not used atm.
 const ITEM_FLAG_MARKED: u8 = 0b0000_1000;
 
