@@ -1666,7 +1666,13 @@ impl std::fmt::Display for ItemContent {
                     }
                     write!(f, "}})>")
                 }
-                TYPE_REFS_TEXT => write!(f, "<text(head: {})>", inner.start.unwrap()),
+                TYPE_REFS_TEXT => {
+                    if let Some(start) = inner.start {
+                        write!(f, "<text(head: {})>", start)
+                    } else {
+                        write!(f, "<text>")
+                    }
+                }
                 TYPE_REFS_XML_ELEMENT => {
                     write!(f, "<xml element: {}>", inner.name.as_ref().unwrap())
                 }

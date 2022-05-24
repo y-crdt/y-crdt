@@ -10,6 +10,7 @@ use crate::{SubscriptionId, Transaction, ID};
 use lib0::any::Any;
 use std::cell::UnsafeCell;
 use std::collections::{HashMap, HashSet};
+use std::convert::TryInto;
 use std::fmt::Write;
 use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
@@ -20,6 +21,28 @@ use std::rc::Rc;
 pub enum Xml {
     Element(XmlElement),
     Text(XmlText),
+}
+
+impl TryInto<XmlElement> for Xml {
+    type Error = XmlText;
+
+    fn try_into(self) -> Result<XmlElement, Self::Error> {
+        match self {
+            Xml::Element(xml) => Ok(xml),
+            Xml::Text(xml) => Err(xml),
+        }
+    }
+}
+
+impl TryInto<XmlText> for Xml {
+    type Error = XmlElement;
+
+    fn try_into(self) -> Result<XmlText, Self::Error> {
+        match self {
+            Xml::Text(xml) => Ok(xml),
+            Xml::Element(xml) => Err(xml),
+        }
+    }
 }
 
 impl From<BranchPtr> for Xml {
