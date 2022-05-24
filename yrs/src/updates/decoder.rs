@@ -472,9 +472,18 @@ impl<'a> StringDecoder<'a> {
     }
 
     fn read_str(&mut self) -> &'a str {
-        let end = self.pos + self.len_decoder.read_u64() as usize;
-        let result = &self.buf[self.pos..end];
-        self.pos = end;
+        let mut remaining = self.len_decoder.read_u64() as usize;
+        let mut i = 0;
+        let start = &self.buf[self.pos..];
+        for c in start.chars() {
+            if remaining == 0 {
+                break;
+            }
+            i += c.len_utf8(); // rust uses offsets as utf-8 bytes
+            remaining -= c.len_utf16(); // but yjs provides them as utf-16
+        }
+        let result = &start[..i];
+        self.pos += i;
         result
     }
 }

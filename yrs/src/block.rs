@@ -94,7 +94,7 @@ impl ID {
 pub(crate) struct BlockPtr(NonNull<Block>);
 
 impl BlockPtr {
-    pub(crate) fn splice(&mut self, offset: u32) -> Option<Box<Block>> {
+    pub(crate) fn splice(&mut self, offset: u32, encoding: OffsetKind) -> Option<Box<Block>> {
         let self_ptr = self.clone();
         if offset == 0 {
             None
@@ -103,7 +103,7 @@ impl BlockPtr {
                 Block::Item(item) => {
                     let client = item.id.client;
                     let clock = item.id.clock;
-                    let content = item.content.splice(offset as usize).unwrap();
+                    let content = item.content.splice(offset as usize, encoding).unwrap();
                     item.len = offset;
                     let mut new = Box::new(Block::Item(Item {
                         id: ID::new(client, clock + offset),
@@ -151,12 +151,13 @@ impl BlockPtr {
                 let store = txn.store_mut();
                 let encoding = store.options.offset_kind;
                 if offset > 0 {
+                    // offset is used only for locally integrated items
                     this.id.clock += offset;
                     this.left = store
                         .blocks
                         .get_item_clean_end(&ID::new(this.id.client, this.id.clock - 1));
                     this.origin = this.left.as_deref().map(|b: &Block| b.last_id());
-                    this.content = this.content.splice(offset as usize).unwrap();
+                    this.content = this.content.splice(offset as usize, encoding).unwrap();
                     this.len -= offset;
                 }
 
@@ -355,7 +356,7 @@ impl BlockPtr {
                     }
                 } else {
                     item.content = ItemContent::Deleted(len);
-                    item.info = item.info & !ITEM_FLAG_COUNTABLE;
+                    item.info.clear_countable();
                 }
             }
         }
@@ -713,16 +714,83 @@ impl ItemPosition {
 }
 
 /// Bit flag (4th bit) for a marked item - not used atm.
-const ITEM_FLAG_MARKED: u8 = 0b1000;
+const ITEM_FLAG_MARKED: u8 = 0b0000_1000;
 
 /// Bit flag (3rd bit) for a tombstoned (deleted) item.
-const ITEM_FLAG_DELETED: u8 = 0b0100;
+const ITEM_FLAG_DELETED: u8 = 0b0000_0100;
 
 /// Bit flag (2nd bit) for an item, which contents are considered countable.
-const ITEM_FLAG_COUNTABLE: u8 = 0b0010;
+const ITEM_FLAG_COUNTABLE: u8 = 0b0000_0010;
 
 /// Bit flag (1st bit) used for an item which should be kept - not used atm.
-const ITEM_FLAG_KEEP: u8 = 0b0001;
+const ITEM_FLAG_KEEP: u8 = 0b0000_0001;
+
+#[repr(transparent)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct ItemFlags(u8);
+
+impl ItemFlags {
+    pub fn new(source: u8) -> Self {
+        ItemFlags(source)
+    }
+
+    #[inline]
+    fn set(&mut self, value: u8) {
+        self.0 |= value
+    }
+
+    #[inline]
+    fn clear(&mut self, value: u8) {
+        self.0 &= !value
+    }
+
+    #[inline]
+    fn check(&self, value: u8) -> bool {
+        self.0 & value == value
+    }
+
+    #[inline]
+    pub fn is_keep(&self) -> bool {
+        self.check(ITEM_FLAG_KEEP)
+    }
+
+    #[inline]
+    pub fn set_countable(&mut self) {
+        self.set(ITEM_FLAG_COUNTABLE)
+    }
+
+    #[inline]
+    pub fn clear_countable(&mut self) {
+        self.clear(ITEM_FLAG_COUNTABLE)
+    }
+
+    #[inline]
+    pub fn is_countable(&self) -> bool {
+        self.check(ITEM_FLAG_COUNTABLE)
+    }
+
+    #[inline]
+    pub fn set_deleted(&mut self) {
+        self.set(ITEM_FLAG_DELETED)
+    }
+
+    #[inline]
+    pub fn is_deleted(&self) -> bool {
+        self.check(ITEM_FLAG_DELETED)
+    }
+
+    #[inline]
+    pub fn is_marked(&self) -> bool {
+        self.check(ITEM_FLAG_MARKED)
+    }
+}
+
+impl Into<u8> for ItemFlags {
+    #[inline]
+    fn into(self) -> u8 {
+        self.0
+    }
+}
 
 /// An item is basic unit of work in Yrs. It contains user data reinforced with all metadata
 /// required for a potential conflict resolution as well as extra fields used for joining blocks
@@ -761,7 +829,7 @@ pub(crate) struct Item {
     pub parent_sub: Option<Rc<str>>, //TODO: Rc since it's already used in Branch.map component
 
     /// Bit flag field which contains information about specifics of this item.
-    pub info: u8,
+    pub info: ItemFlags,
 }
 
 #[derive(PartialEq, Eq, Clone)]
@@ -830,11 +898,11 @@ impl Item {
         parent_sub: Option<Rc<str>>,
         content: ItemContent,
     ) -> Box<Block> {
-        let info = if content.is_countable() {
+        let info = ItemFlags::new(if content.is_countable() {
             ITEM_FLAG_COUNTABLE
         } else {
             0
-        };
+        });
         let len = content.len(OffsetKind::Utf16);
         let mut item = Box::new(Block::Item(Item {
             id,
@@ -861,30 +929,20 @@ impl Item {
             && id.clock < self.id.clock + self.len()
     }
 
-    //TODO: not used yet
-    pub fn marked(&self) -> bool {
-        self.info & ITEM_FLAG_MARKED == ITEM_FLAG_MARKED
-    }
-
-    //TODO: not used yet
-    pub fn keep(&self) -> bool {
-        self.info & ITEM_FLAG_KEEP == ITEM_FLAG_KEEP
-    }
-
     /// Checks if current item is marked as deleted (tombstoned). Yrs uses soft item deletion
     /// mechanism.
     pub fn is_deleted(&self) -> bool {
-        self.info & ITEM_FLAG_DELETED == ITEM_FLAG_DELETED
+        self.info.is_deleted()
     }
 
     /// Checks if item content can be considered countable. Countable elements can be split
     /// and joined together.
     pub fn is_countable(&self) -> bool {
-        self.info & ITEM_FLAG_COUNTABLE == ITEM_FLAG_COUNTABLE
+        self.info.is_countable()
     }
 
     pub(crate) fn mark_as_deleted(&mut self) {
-        self.info |= ITEM_FLAG_DELETED;
+        self.info.set_deleted()
     }
 
     /// Assign left/right neighbors of the block. This may require for origin/right_origin
@@ -1393,7 +1451,7 @@ impl ItemContent {
         }
     }
 
-    pub(crate) fn splice(&mut self, offset: usize) -> Option<ItemContent> {
+    pub(crate) fn splice(&mut self, offset: usize, encoding: OffsetKind) -> Option<ItemContent> {
         match self {
             ItemContent::Any(value) => {
                 let (left, right) = value.split_at(offset);
@@ -1404,7 +1462,7 @@ impl ItemContent {
             }
             ItemContent::String(string) => {
                 // compute offset given in unicode code points into byte position
-                let (left, right) = string.split_at(offset, OffsetKind::Utf16);
+                let (left, right) = string.split_at(offset, encoding);
                 let left: SplittableString = left.into();
                 let right: SplittableString = right.into();
 
@@ -1608,7 +1666,13 @@ impl std::fmt::Display for ItemContent {
                     }
                     write!(f, "}})>")
                 }
-                TYPE_REFS_TEXT => write!(f, "<text(head: {})>", inner.start.unwrap()),
+                TYPE_REFS_TEXT => {
+                    if let Some(start) = inner.start {
+                        write!(f, "<text(head: {})>", start)
+                    } else {
+                        write!(f, "<text>")
+                    }
+                }
                 TYPE_REFS_XML_ELEMENT => {
                     write!(f, "<xml element: {}>", inner.name.as_ref().unwrap())
                 }

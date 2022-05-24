@@ -9,7 +9,7 @@ use crate::types::TypePtr;
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::client_hasher::ClientHasher;
-use crate::{StateVector, Transaction, ID};
+use crate::{OffsetKind, StateVector, Transaction, ID};
 use std::cmp::Ordering;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, VecDeque};
@@ -45,17 +45,6 @@ impl UpdateBlocks {
     /// which consist into this [Update].
     pub(crate) fn into_blocks(self) -> IntoBlocks {
         IntoBlocks::new(self)
-    }
-
-    fn split_item(&mut self, block: &mut BlockCarrier, diff: u32, index: usize) {
-        if let BlockCarrier::Block(block) = block {
-            let mut block = BlockPtr::from(block);
-            if let Some(new_right) = block.splice(diff) {
-                let id = block.id();
-                let clients = self.clients.get_mut(&id.client).unwrap();
-                clients.insert(index + 1, BlockCarrier::Block(new_right));
-            }
-        };
     }
 }
 
@@ -747,7 +736,7 @@ impl BlockCarrier {
     pub(crate) fn splice(&mut self, offset: u32) -> Option<Self> {
         match self {
             BlockCarrier::Block(x) => {
-                let next = BlockPtr::from(x).splice(offset)?;
+                let next = BlockPtr::from(x).splice(offset, OffsetKind::Utf16)?;
                 Some(BlockCarrier::Block(next))
             }
             BlockCarrier::Skip(x) => {

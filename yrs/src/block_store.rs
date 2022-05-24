@@ -427,7 +427,7 @@ impl BlockStore {
         let blocks = self.clients.get_mut(&id.client)?;
         let mut index = blocks.find_pivot(id.clock)?;
         let mut ptr = blocks.get(index);
-        if let Some(new) = ptr.splice(id.clock - ptr.id().clock) {
+        if let Some(new) = ptr.splice(id.clock - ptr.id().clock, OffsetKind::Utf16) {
             blocks.insert(index + 1, new);
             index += 1;
         }
@@ -440,7 +440,9 @@ impl BlockStore {
         let mut block = blocks.get(index);
         let block_id = block.id();
         if id.clock != block_id.clock + block.len() - 1 {
-            let new = block.splice(1 + id.clock - block_id.clock).unwrap();
+            let new = block
+                .splice(1 + id.clock - block_id.clock, OffsetKind::Utf16)
+                .unwrap();
             blocks.insert(index + 1, new);
         }
         Some(BlockPtr::from(block))
@@ -479,15 +481,24 @@ impl BlockStore {
 
     /// Given block pointer, tries to split it, returning a true, if block was split in result of
     /// calling this action, and false otherwise.
-    pub fn split_block(&mut self, mut block: BlockPtr, offset: u32) -> Option<BlockPtr> {
+    pub fn split_block(
+        &mut self,
+        mut block: BlockPtr,
+        offset: u32,
+        encoding: OffsetKind,
+    ) -> Option<BlockPtr> {
         let id = block.id().clone();
         let blocks = self.clients.get_mut(&id.client)?;
         let index = blocks.find_pivot(id.clock)?;
-        let mut right = block.splice(offset)?;
+        let mut right = block.splice(offset, encoding)?;
         let right_ptr = BlockPtr::from(&mut right);
         blocks.insert(index + 1, right);
 
         Some(right_ptr)
+    }
+
+    pub(crate) fn split_block_inner(&mut self, block: BlockPtr, offset: u32) -> Option<BlockPtr> {
+        self.split_block(block, offset, OffsetKind::Utf16)
     }
 }
 

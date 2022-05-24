@@ -368,7 +368,7 @@ impl Branch {
                     } else {
                         index
                     };
-                    let right = store.blocks.split_block(ptr.unwrap(), index);
+                    let right = store.blocks.split_block(ptr.unwrap(), index, encoding);
                     return (ptr, right);
                 }
                 index -= content_len;
@@ -400,7 +400,7 @@ impl Branch {
                                 remaining
                             };
                             remaining = 0;
-                            let new_right = txn.store_mut().blocks.split_block(p, offset);
+                            let new_right = txn.store_mut().blocks.split_block(p, offset, encoding);
                             (p, new_right)
                         } else {
                             remaining -= content_len;

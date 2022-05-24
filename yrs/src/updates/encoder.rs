@@ -489,8 +489,9 @@ impl StringEncoder {
     }
 
     fn write(&mut self, str: &str) {
+        let utf16_len = str.encode_utf16().count(); // Yjs encodes offsets using utf-16
         self.buf.push_str(str);
-        self.len_encoder.write_u64(str.len() as u64);
+        self.len_encoder.write_u64(utf16_len as u64);
     }
 
     fn to_vec(self) -> Vec<u8> {

@@ -166,6 +166,7 @@ impl Default for Options {
 }
 
 /// Determines how string length and offsets of [Text]/[XmlText] are being determined.
+#[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OffsetKind {
     /// Compute editable strings length and offset using UTF-8 byte count.
