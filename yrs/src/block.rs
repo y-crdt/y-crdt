@@ -355,7 +355,7 @@ impl BlockPtr {
                     }
                 } else {
                     item.content = ItemContent::Deleted(len);
-                    item.info = item.info & !ITEM_FLAG_COUNTABLE;
+                    item.info.clear_countable();
                 }
             }
         }
@@ -712,17 +712,110 @@ impl ItemPosition {
     }
 }
 
+/// Bit flag (6th bit) used to mark that item content is using UTF-32 string encoding.
+const ITEM_FLAG_ENCODING_UTF32: u8 = 0b0010_0000;
+
+/// Bit flag (5th bit) used to mark that item content is using UTF-16 string encoding.
+const ITEM_FLAG_ENCODING_UTF16: u8 = 0b0001_0000;
+
 /// Bit flag (4th bit) for a marked item - not used atm.
-const ITEM_FLAG_MARKED: u8 = 0b1000;
+const ITEM_FLAG_MARKED: u8 = 0b0000_1000;
 
 /// Bit flag (3rd bit) for a tombstoned (deleted) item.
-const ITEM_FLAG_DELETED: u8 = 0b0100;
+const ITEM_FLAG_DELETED: u8 = 0b0000_0100;
 
 /// Bit flag (2nd bit) for an item, which contents are considered countable.
-const ITEM_FLAG_COUNTABLE: u8 = 0b0010;
+const ITEM_FLAG_COUNTABLE: u8 = 0b0000_0010;
 
 /// Bit flag (1st bit) used for an item which should be kept - not used atm.
-const ITEM_FLAG_KEEP: u8 = 0b0001;
+const ITEM_FLAG_KEEP: u8 = 0b0000_0001;
+
+#[repr(transparent)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct ItemFlags(u8);
+
+impl ItemFlags {
+    pub fn new(source: u8) -> Self {
+        ItemFlags(source)
+    }
+
+    #[inline]
+    fn set(&mut self, value: u8) {
+        self.0 |= value
+    }
+
+    #[inline]
+    fn clear(&mut self, value: u8) {
+        self.0 &= !value
+    }
+
+    #[inline]
+    fn check(&self, value: u8) -> bool {
+        self.0 & value == value
+    }
+
+    #[inline]
+    pub fn get_encoding(&self) -> OffsetKind {
+        if self.check(ITEM_FLAG_ENCODING_UTF16) {
+            OffsetKind::Utf16
+        } else if self.check(ITEM_FLAG_ENCODING_UTF32) {
+            OffsetKind::Utf32
+        } else {
+            OffsetKind::Bytes
+        }
+    }
+
+    #[inline]
+    pub fn set_encoding(&mut self, encoding: OffsetKind) {
+        match encoding {
+            OffsetKind::Bytes => { /* this is default setting */ }
+            OffsetKind::Utf16 => self.set(ITEM_FLAG_ENCODING_UTF16),
+            OffsetKind::Utf32 => self.set(ITEM_FLAG_ENCODING_UTF32),
+        }
+    }
+
+    #[inline]
+    pub fn is_keep(&self) -> bool {
+        self.check(ITEM_FLAG_KEEP)
+    }
+
+    #[inline]
+    pub fn set_countable(&mut self) {
+        self.set(ITEM_FLAG_COUNTABLE)
+    }
+
+    #[inline]
+    pub fn clear_countable(&mut self) {
+        self.clear(ITEM_FLAG_COUNTABLE)
+    }
+
+    #[inline]
+    pub fn is_countable(&self) -> bool {
+        self.check(ITEM_FLAG_COUNTABLE)
+    }
+
+    #[inline]
+    pub fn set_deleted(&mut self) {
+        self.set(ITEM_FLAG_DELETED)
+    }
+
+    #[inline]
+    pub fn is_deleted(&self) -> bool {
+        self.check(ITEM_FLAG_DELETED)
+    }
+
+    #[inline]
+    pub fn is_marked(&self) -> bool {
+        self.check(ITEM_FLAG_MARKED)
+    }
+}
+
+impl Into<u8> for ItemFlags {
+    #[inline]
+    fn into(self) -> u8 {
+        self.0
+    }
+}
 
 /// An item is basic unit of work in Yrs. It contains user data reinforced with all metadata
 /// required for a potential conflict resolution as well as extra fields used for joining blocks
@@ -761,7 +854,7 @@ pub(crate) struct Item {
     pub parent_sub: Option<Rc<str>>, //TODO: Rc since it's already used in Branch.map component
 
     /// Bit flag field which contains information about specifics of this item.
-    pub info: u8,
+    pub info: ItemFlags,
 }
 
 #[derive(PartialEq, Eq, Clone)]
@@ -830,11 +923,11 @@ impl Item {
         parent_sub: Option<Rc<str>>,
         content: ItemContent,
     ) -> Box<Block> {
-        let info = if content.is_countable() {
+        let info = ItemFlags::new(if content.is_countable() {
             ITEM_FLAG_COUNTABLE
         } else {
             0
-        };
+        });
         let len = content.len(OffsetKind::Utf16);
         let mut item = Box::new(Block::Item(Item {
             id,
@@ -861,30 +954,20 @@ impl Item {
             && id.clock < self.id.clock + self.len()
     }
 
-    //TODO: not used yet
-    pub fn marked(&self) -> bool {
-        self.info & ITEM_FLAG_MARKED == ITEM_FLAG_MARKED
-    }
-
-    //TODO: not used yet
-    pub fn keep(&self) -> bool {
-        self.info & ITEM_FLAG_KEEP == ITEM_FLAG_KEEP
-    }
-
     /// Checks if current item is marked as deleted (tombstoned). Yrs uses soft item deletion
     /// mechanism.
     pub fn is_deleted(&self) -> bool {
-        self.info & ITEM_FLAG_DELETED == ITEM_FLAG_DELETED
+        self.info.is_deleted()
     }
 
     /// Checks if item content can be considered countable. Countable elements can be split
     /// and joined together.
     pub fn is_countable(&self) -> bool {
-        self.info & ITEM_FLAG_COUNTABLE == ITEM_FLAG_COUNTABLE
+        self.info.is_countable()
     }
 
     pub(crate) fn mark_as_deleted(&mut self) {
-        self.info |= ITEM_FLAG_DELETED;
+        self.info.set_deleted()
     }
 
     /// Assign left/right neighbors of the block. This may require for origin/right_origin
@@ -1010,6 +1093,14 @@ impl SplittableString {
         if len == 1 {
             len // quite often strings are single-letter, so we don't care about OffsetKind
         } else {
+            println!(
+                "'{}' length: {} (utf-8), {} (utf-16), {} (utf-32)",
+                self.content,
+                self.content.len(),
+                self.utf16_len(),
+                self.unicode_len()
+            );
+
             match kind {
                 OffsetKind::Bytes => len,
                 OffsetKind::Utf16 => self.utf16_len(),
@@ -1038,6 +1129,10 @@ impl SplittableString {
             OffsetKind::Utf16 => self.map_utf16_offset(offset as u32) as usize,
             OffsetKind::Utf32 => self.map_unicode_offset(offset as u32) as usize,
         };
+        println!(
+            "'{}' mapped offset {} -> {} ({:?})",
+            self.content, offset, off, kind
+        );
         self.content.split_at(off)
     }
 
@@ -1715,8 +1810,9 @@ impl std::fmt::Debug for Block {
 
 #[cfg(test)]
 mod test {
-    use crate::block::SplittableString;
+    use crate::block::{Block, SplittableString};
     use crate::doc::OffsetKind;
+    use std::mem::size_of;
     use std::ops::Deref;
 
     #[test]
@@ -1758,5 +1854,14 @@ mod test {
         let (a, b) = s.split_at(30, OffsetKind::Bytes);
         assert_eq!(a, "Zażółć gęślą jaźń😀");
         assert_eq!(b, "ありがとうございます");
+    }
+
+    #[test]
+    fn block_sizeof() {
+        println!("sizeof Block: {}B", size_of::<Block>());
+        println!(
+            "sizeof SplittableString: {}B",
+            size_of::<SplittableString>()
+        );
     }
 }
