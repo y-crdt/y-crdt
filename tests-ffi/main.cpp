@@ -1128,7 +1128,7 @@ void reset_observe_updates(ObserveUpdatesTest* t) {
     t->incoming_len = 0;
 }
 
-void observe_updates(void* state, int len, unsigned char* bytes) {
+void observe_updates(void* state, int len, const unsigned char* bytes) {
     ObserveUpdatesTest* t = (ObserveUpdatesTest*)state;
     t->incoming_len = len;
     void* buf = malloc(sizeof(unsigned char*) * len);
@@ -1159,7 +1159,7 @@ TEST_CASE("YDoc observe updates V1") {
     reset_observe_updates(&t);
 
     // check unsubscribe
-    ydoc_unobserve_updates(doc2, subscription_id);
+    ydoc_unobserve_updates_v1(doc2, subscription_id);
 
     txn = ytransaction_new(doc1);
     ytext_insert(txt1, txn, 5, " world", NULL);
@@ -1200,7 +1200,7 @@ TEST_CASE("YDoc observe updates V2") {
     reset_observe_updates(&t);
 
     // check unsubscribe
-    ydoc_unobserve_updates(doc2, subscription_id);
+    ydoc_unobserve_updates_v2(doc2, subscription_id);
 
     txn = ytransaction_new(doc1);
     ytext_insert(txt1, txn, 5, " world", NULL);

@@ -851,13 +851,15 @@ unsigned long ydoc_id(YDoc *doc);
 
 unsigned int ydoc_observe_updates_v1(YDoc *doc,
                                      void *state,
-                                     void (*cb)(void*, int, unsigned char*));
+                                     void (*cb)(void*, int, const unsigned char*));
 
 unsigned int ydoc_observe_updates_v2(YDoc *doc,
                                      void *state,
-                                     void (*cb)(void*, int, unsigned char*));
+                                     void (*cb)(void*, int, const unsigned char*));
 
-void ydoc_unobserve_updates(YDoc *doc, unsigned int subscription_id);
+void ydoc_unobserve_updates_v1(YDoc *doc, unsigned int subscription_id);
+
+void ydoc_unobserve_updates_v2(YDoc *doc, unsigned int subscription_id);
 
 unsigned int ydoc_observe_after_transaction(YDoc *doc,
                                             void *state,

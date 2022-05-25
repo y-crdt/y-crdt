@@ -2,7 +2,7 @@ use crate::*;
 
 use crate::block::{Block, BlockPtr, Item, ItemContent, Prelim, ID};
 use crate::block_store::{Snapshot, StateVector};
-use crate::event::{AfterTransactionEvent, UpdateEvent};
+use crate::event::AfterTransactionEvent;
 use crate::id_set::DeleteSet;
 use crate::store::Store;
 use crate::types::array::Array;
@@ -14,7 +14,7 @@ use crate::types::{
 use crate::update::Update;
 use std::cell::UnsafeCell;
 use std::collections::{HashMap, HashSet};
-use std::ops::{Deref, DerefMut};
+use std::ops::DerefMut;
 use std::rc::Rc;
 use updates::encoder::*;
 
@@ -365,14 +365,6 @@ impl Transaction {
 
     /// Applies a deserialized update contents into a document owning current transaction.
     pub fn apply_update(&mut self, mut update: Update) {
-        {
-            let store = self.store();
-            if store.update_events.has_subscribers() {
-                let event = UpdateEvent::new(update);
-                store.update_events.publish(self, &event);
-                update = event.update;
-            }
-        }
         let (remaining, remaining_ds) = update.integrate(self);
         let mut retry = false;
         {
@@ -577,16 +569,30 @@ impl Transaction {
             }
         }
         // 8. emit 'afterTransactionCleanup'
-        if let Some(after_transaction_events) = store.after_transaction_events.deref() {
+        if let Some(eh) = store.after_transaction_events.as_ref() {
             let event = AfterTransactionEvent {
                 before_state: self.before_state.clone(),
                 after_state: self.after_state.clone(),
                 delete_set: self.delete_set.clone(),
             };
-            after_transaction_events.publish(&self, &event);
+            eh.publish(&self, &event);
         }
         // 9. emit 'update'
+        if let Some(eh) = store.update_v1_events.as_ref() {
+            if !self.delete_set.is_empty() || self.after_state != self.before_state {
+                // produce update only if anything changed
+                let update = UpdateEvent::new(self.encode_update_v1());
+                eh.publish(&self, &update);
+            }
+        }
         // 10. emit 'updateV2'
+        if let Some(eh) = store.update_v2_events.as_ref() {
+            if !self.delete_set.is_empty() || self.after_state != self.before_state {
+                // produce update only if anything changed
+                let update = UpdateEvent::new(self.encode_update_v2());
+                eh.publish(&self, &update);
+            }
+        }
         // 11. add and remove subdocs
         // 12. emit 'subdocs'
     }

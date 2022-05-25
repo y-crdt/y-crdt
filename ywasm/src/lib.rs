@@ -195,9 +195,8 @@ impl YDoc {
     #[wasm_bindgen(js_name = onUpdate)]
     pub fn on_update(&mut self, f: js_sys::Function) -> YUpdateObserver {
         self.0
-            .observe_update(move |_, e| {
-                let u = e.update.encode_v1();
-                let arg = Uint8Array::from(u.as_slice());
+            .observe_update_v1(move |_, e| {
+                let arg = Uint8Array::from(e.update.as_slice());
                 f.call1(&JsValue::UNDEFINED, &arg).unwrap();
             })
             .into()
@@ -211,9 +210,8 @@ impl YDoc {
     #[wasm_bindgen(js_name = onUpdateV2)]
     pub fn on_update_v2(&mut self, f: js_sys::Function) -> YUpdateObserver {
         self.0
-            .observe_update(move |_, e| {
-                let u = e.update.encode_v2();
-                let arg = Uint8Array::from(u.as_slice());
+            .observe_update_v2(move |_, e| {
+                let arg = Uint8Array::from(e.update.as_slice());
                 f.call1(&JsValue::UNDEFINED, &arg).unwrap();
             })
             .into()

@@ -3,7 +3,6 @@ use crate::updates::decoder::{Decode, Decoder, DecoderV1};
 use crate::updates::encoder::{Encode, Encoder, EncoderV1};
 use crate::{Doc, StateVector, Update};
 use lib0::decoding::{Cursor, Read};
-use lib0::encoding::Write;
 use rand::distributions::Alphanumeric;
 use rand::prelude::{SliceRandom, StdRng};
 use rand::{random, Rng, RngCore, SeedableRng};
@@ -121,15 +120,9 @@ impl TestConnector {
             let rc = self.0.clone();
             let inner = unsafe { self.0.as_ptr().as_mut().unwrap() };
             let mut instance = TestPeer::new(client_id);
-            instance.doc.observe_update(move |_, e| {
-                let payload = {
-                    let mut encoder = EncoderV1::new();
-                    encoder.write_uvar(MSG_SYNC_UPDATE);
-                    e.update.encode(&mut encoder);
-                    encoder.to_vec()
-                };
+            instance.doc.observe_update_v1(move |_, e| {
                 let mut inner = rc.borrow_mut();
-                Self::broadcast(&mut inner, client_id, &payload);
+                Self::broadcast(&mut inner, client_id, &e.update);
             });
             let idx = inner.peers.len();
             inner.peers.push(instance);
