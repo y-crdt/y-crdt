@@ -31,12 +31,12 @@ jobs:
           CRATES_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
       - name: cargo publish yffi
-        run: sleep 10 && cd ./yffi && cargo publish --token ${CRATES_TOKEN}
+        run: sleep 20 && cd ./yffi && cargo publish --token ${CRATES_TOKEN}
         env:
           CRATES_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
       - name: cargo publish ywasm
-        run: sleep 10 && cd ./ywasm && cargo publish --token ${CRATES_TOKEN}
+        run: sleep 20 && cd ./ywasm && cargo publish --token ${CRATES_TOKEN}
         env:
           CRATES_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
