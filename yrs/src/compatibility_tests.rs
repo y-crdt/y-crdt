@@ -1,11 +1,11 @@
 use crate::block::{ClientID, Item, ItemContent};
 use crate::id_set::{DeleteSet, IdSet};
 use crate::store::Store;
-use crate::types::{Attrs, Branch, TypePtr, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT};
+use crate::types::{Branch, TypePtr, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT};
 use crate::update::{BlockCarrier, Update};
 use crate::updates::decoder::{Decode, Decoder, DecoderV1};
 use crate::updates::encoder::Encode;
-use crate::{Doc, StateVector, Xml, XmlElement, XmlText, ID};
+use crate::{Doc, StateVector, XmlElement, XmlText, ID};
 use lib0::any::Any;
 use lib0::decoding::Read;
 use std::cell::Cell;
@@ -103,18 +103,21 @@ fn text_insert_delete() {
     let setter = visited.clone();
 
     let mut doc = Doc::new();
-    let _sub = doc.observe_update(move |_, e| {
-        for (actual, expected) in e.update.blocks.blocks().zip(expected_blocks.as_slice()) {
+    let txt = doc.transact().get_text("type");
+    let _sub = doc.observe_update_v1(move |_, e| {
+        let u = Update::decode_v1(&e.update);
+        for (actual, expected) in u.blocks.blocks().zip(expected_blocks.as_slice()) {
             if let BlockCarrier::Block(block) = actual {
                 assert_eq!(block, expected);
             }
         }
-        assert_eq!(&e.update.delete_set, &expected_ds);
+        assert_eq!(u.delete_set, expected_ds);
         setter.set(true);
     });
-    let mut txn = doc.transact();
-    let txt = txn.get_text("type");
-    txn.apply_update(Update::decode_v1(update));
+    {
+        let mut txn = doc.transact();
+        txn.apply_update(Update::decode_v1(update));
+    }
     assert_eq!(txt.to_string(), "abhi".to_string());
     assert!(visited.get());
 }

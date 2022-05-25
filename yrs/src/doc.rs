@@ -68,26 +68,68 @@ impl Doc {
         }
     }
 
+    fn store_mut(&self) -> &mut Store {
+        unsafe { self.store.get().as_mut().unwrap() }
+    }
+
+    fn store(&self) -> &Store {
+        unsafe { self.store.get().as_ref().unwrap() }
+    }
+
     /// Creates a transaction used for all kind of block store operations.
     /// Transaction cleanups & calling event handles happen when the transaction struct is dropped.
     pub fn transact(&self) -> Transaction {
         Transaction::new(self.store.clone())
     }
 
-    /// Subscribe callback function for incoming update events. Returns a subscription, which will
-    /// unsubscribe function when dropped.
-    pub fn observe_update<F>(&mut self, f: F) -> Subscription<UpdateEvent>
+    /// Subscribe callback function for any changes performed within transaction scope. These
+    /// changes are encoded using lib0 v1 encoding and can be decoded using [Update::decode_v1] if
+    /// necessary or passed to remote peers right away. This callback is triggered on function
+    /// commit.
+    ///
+    /// Returns a subscription, which will unsubscribe function when dropped.
+    pub fn observe_update_v1<F>(&mut self, f: F) -> Subscription<UpdateEvent>
     where
         F: Fn(&Transaction, &UpdateEvent) -> () + 'static,
     {
-        let store = unsafe { &mut *self.store.get() };
-        store.update_events.subscribe(f)
+        let store = self.store_mut();
+        let mut eh = store.update_v1_events.get_or_insert_with(EventHandler::new);
+        eh.subscribe(f)
     }
 
-    /// Manually unsubscribes from a callback used in [Doc::observe_update] method.
-    pub fn unobserve_update(&mut self, subscription_id: SubscriptionId) {
-        let store = unsafe { &mut *self.store.get() };
-        store.update_events.unsubscribe(subscription_id);
+    /// Manually unsubscribes from a callback used in [Doc::observe_update_v1] method.
+    pub fn unobserve_update_v1(&mut self, subscription_id: SubscriptionId) {
+        let store = self.store_mut();
+        store
+            .update_v1_events
+            .as_mut()
+            .unwrap()
+            .unsubscribe(subscription_id);
+    }
+
+    /// Subscribe callback function for any changes performed within transaction scope. These
+    /// changes are encoded using lib0 v1 encoding and can be decoded using [Update::decode_v2] if
+    /// necessary or passed to remote peers right away. This callback is triggered on function
+    /// commit.
+    ///
+    /// Returns a subscription, which will unsubscribe function when dropped.
+    pub fn observe_update_v2<F>(&mut self, f: F) -> Subscription<UpdateEvent>
+    where
+        F: Fn(&Transaction, &UpdateEvent) -> () + 'static,
+    {
+        let store = self.store_mut();
+        let mut eh = store.update_v2_events.get_or_insert_with(EventHandler::new);
+        eh.subscribe(f)
+    }
+
+    /// Manually unsubscribes from a callback used in [Doc::observe_update_v1] method.
+    pub fn unobserve_update_v2(&mut self, subscription_id: SubscriptionId) {
+        let store = self.store_mut();
+        store
+            .update_v2_events
+            .as_mut()
+            .unwrap()
+            .unsubscribe(subscription_id);
     }
 
     /// Subscribe callback function to updates on the `Doc`. The callback will receive state updates and
@@ -96,7 +138,7 @@ impl Doc {
     where
         F: Fn(&Transaction, &AfterTransactionEvent) -> () + 'static,
     {
-        let store = unsafe { &mut *self.store.get() };
+        let store = self.store_mut();
 
         store
             .after_transaction_events
@@ -297,27 +339,32 @@ mod test {
         let doc = Doc::new();
         let mut doc2 = Doc::new();
         let c = counter.clone();
-        let sub = doc2.observe_update(move |_txn, e| {
-            for block in e.update.blocks.blocks() {
+        let sub = doc2.observe_update_v1(move |_txn, e| {
+            let u = Update::decode_v1(&e.update);
+            for block in u.blocks.blocks() {
                 c.set(c.get() + block.len());
             }
         });
         let mut txn = doc.transact();
-        let mut txn2 = doc2.transact();
         let txt = txn.get_text("test");
-
-        txt.insert(&mut txn, 0, "abc");
-        let sv = txn2.state_vector().encode_v1();
-        let u = txn.encode_diff_v1(&StateVector::decode_v1(sv.as_slice()));
-        txn2.apply_update(Update::decode_v1(u.as_slice()));
+        {
+            txt.insert(&mut txn, 0, "abc");
+            let mut txn2 = doc2.transact();
+            let sv = txn2.state_vector().encode_v1();
+            let u = txn.encode_diff_v1(&StateVector::decode_v1(sv.as_slice()));
+            txn2.apply_update(Update::decode_v1(u.as_slice()));
+        }
         assert_eq!(counter.get(), 3); // update has been propagated
 
         drop(sub);
 
-        txt.insert(&mut txn, 3, "de");
-        let sv = txn2.state_vector().encode_v1();
-        let u = txn.encode_diff_v1(&StateVector::decode_v1(sv.as_slice()));
-        txn2.apply_update(Update::decode_v1(u.as_slice()));
+        {
+            txt.insert(&mut txn, 3, "de");
+            let mut txn2 = doc2.transact();
+            let sv = txn2.state_vector().encode_v1();
+            let u = txn.encode_diff_v1(&StateVector::decode_v1(sv.as_slice()));
+            txn2.apply_update(Update::decode_v1(u.as_slice()));
+        }
         assert_eq!(counter.get(), 3); // since subscription has been dropped, update was not propagated
     }
 

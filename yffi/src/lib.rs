@@ -285,13 +285,13 @@ pub unsafe extern "C" fn ydoc_id(doc: *mut Doc) -> c_ulong {
 pub unsafe extern "C" fn ydoc_observe_updates_v1(
     doc: *mut Doc,
     state: *mut c_void,
-    cb: extern "C" fn(*mut c_void, c_int, *mut c_uchar),
+    cb: extern "C" fn(*mut c_void, c_int, *const c_uchar),
 ) -> c_uint {
     let doc = doc.as_mut().unwrap();
-    let observer = doc.observe_update(move |_, e| {
-        let mut bytes = e.update.encode_v1();
+    let observer = doc.observe_update_v1(move |_, e| {
+        let mut bytes = &e.update;
         let len = bytes.len();
-        cb(state, len as c_int, bytes.as_mut_ptr() as *mut c_uchar)
+        cb(state, len as c_int, bytes.as_ptr() as *const c_uchar)
     });
     let subscription_id: u32 = observer.into();
     subscription_id as c_uint
@@ -301,22 +301,28 @@ pub unsafe extern "C" fn ydoc_observe_updates_v1(
 pub unsafe extern "C" fn ydoc_observe_updates_v2(
     doc: *mut Doc,
     state: *mut c_void,
-    cb: extern "C" fn(*mut c_void, c_int, *mut c_uchar),
+    cb: extern "C" fn(*mut c_void, c_int, *const c_uchar),
 ) -> c_uint {
     let doc = doc.as_mut().unwrap();
-    let observer = doc.observe_update(move |_, e| {
-        let mut bytes = e.update.encode_v2();
+    let observer = doc.observe_update_v2(move |_, e| {
+        let mut bytes = &e.update;
         let len = bytes.len();
-        cb(state, len as c_int, bytes.as_mut_ptr() as *mut c_uchar)
+        cb(state, len as c_int, bytes.as_ptr() as *const c_uchar)
     });
     let subscription_id: u32 = observer.into();
     subscription_id as c_uint
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn ydoc_unobserve_updates(doc: *mut Doc, subscription_id: c_uint) {
+pub unsafe extern "C" fn ydoc_unobserve_updates_v1(doc: *mut Doc, subscription_id: c_uint) {
     let doc = doc.as_mut().unwrap();
-    doc.unobserve_update(subscription_id as SubscriptionId);
+    doc.unobserve_update_v1(subscription_id as SubscriptionId);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn ydoc_unobserve_updates_v2(doc: *mut Doc, subscription_id: c_uint) {
+    let doc = doc.as_mut().unwrap();
+    doc.unobserve_update_v2(subscription_id as SubscriptionId);
 }
 
 #[no_mangle]

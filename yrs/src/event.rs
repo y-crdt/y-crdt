@@ -1,9 +1,9 @@
-use crate::update::Update;
 use crate::{DeleteSet, StateVector, Transaction};
 use rand::RngCore;
 use std::collections::HashMap;
 use std::ptr::NonNull;
 
+#[repr(transparent)]
 pub(crate) struct EventHandler<T>(Box<Subscriptions<T>>);
 
 pub type SubscriptionId = u32;
@@ -78,11 +78,11 @@ impl<T> Drop for Subscription<T> {
 pub struct UpdateEvent {
     /// An update that's about to be applied. Update contains information about all inserted blocks,
     /// which have been send from a remote peer.
-    pub update: Update,
+    pub update: Vec<u8>,
 }
 
 impl UpdateEvent {
-    pub(crate) fn new(update: Update) -> Self {
+    pub(crate) fn new(update: Vec<u8>) -> Self {
         UpdateEvent { update }
     }
 }

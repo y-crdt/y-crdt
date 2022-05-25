@@ -1,11 +1,12 @@
 use crate::block::{ClientID, ItemContent};
 use crate::block_store::{BlockStore, StateVector};
 use crate::doc::Options;
-use crate::event::{AfterTransactionEvent, EventHandler, UpdateEvent};
+use crate::event::{AfterTransactionEvent, EventHandler};
 use crate::id_set::DeleteSet;
 use crate::types::{Branch, BranchPtr, Path, PathSegment, TypeRefs};
 use crate::update::PendingUpdate;
 use crate::updates::encoder::{Encode, Encoder};
+use crate::UpdateEvent;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::ops::Deref;
@@ -26,10 +27,6 @@ pub(crate) struct Store {
     /// operations) integrated - and therefore visible - into a current document.
     pub(crate) blocks: BlockStore,
 
-    /// Handles subscriptions for the `afterTransactionCleanup` event. Events are called with the
-    /// newest updates once they are committed and compacted.
-    pub(crate) after_transaction_events: Box<Option<EventHandler<AfterTransactionEvent>>>,
-
     /// A pending update. It contains blocks, which are not yet integrated into `blocks`, usually
     /// because due to issues in update exchange, there were some missing blocks that need to be
     /// integrated first before the data from `pending` can be applied safely.
@@ -40,9 +37,17 @@ pub(crate) struct Store {
     /// into `blocks`.
     pub pending_ds: Option<DeleteSet>,
 
+    /// Handles subscriptions for the `afterTransactionCleanup` event. Events are called with the
+    /// newest updates once they are committed and compacted.
+    pub(crate) after_transaction_events: Option<EventHandler<AfterTransactionEvent>>,
+
     /// A subscription handler. It contains all callbacks with registered by user functions that
     /// are supposed to be called, once a new update arrives.
-    pub(crate) update_events: EventHandler<UpdateEvent>,
+    pub(crate) update_v1_events: Option<EventHandler<UpdateEvent>>,
+
+    /// A subscription handler. It contains all callbacks with registered by user functions that
+    /// are supposed to be called, once a new update arrives.
+    pub(crate) update_v2_events: Option<EventHandler<UpdateEvent>>,
 }
 
 impl Store {
@@ -54,8 +59,9 @@ impl Store {
             blocks: BlockStore::new(),
             pending: None,
             pending_ds: None,
-            update_events: EventHandler::new(),
-            after_transaction_events: None.into(),
+            update_v1_events: None,
+            update_v2_events: None,
+            after_transaction_events: None,
         }
     }
 
