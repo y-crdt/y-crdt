@@ -67,14 +67,6 @@ impl Doc {
         }
     }
 
-    fn store_mut(&self) -> &mut Store {
-        unsafe { self.store.get().as_mut().unwrap() }
-    }
-
-    fn store(&self) -> &Store {
-        unsafe { self.store.get().as_ref().unwrap() }
-    }
-
     /// Creates a transaction used for all kind of block store operations.
     /// Transaction cleanups & calling event handles happen when the transaction struct is dropped.
     pub fn transact(&self) -> Transaction {
@@ -91,15 +83,16 @@ impl Doc {
     where
         F: Fn(&Transaction, &UpdateEvent) -> () + 'static,
     {
-        let store = self.store_mut();
-        let eh = store.update_v1_events.get_or_insert_with(EventHandler::new);
+        let eh = self
+            .store
+            .update_v1_events
+            .get_or_insert_with(EventHandler::new);
         eh.subscribe(f)
     }
 
     /// Manually unsubscribes from a callback used in [Doc::observe_update_v1] method.
     pub fn unobserve_update_v1(&mut self, subscription_id: SubscriptionId) {
-        let store = self.store_mut();
-        store
+        self.store
             .update_v1_events
             .as_mut()
             .unwrap()
@@ -116,15 +109,16 @@ impl Doc {
     where
         F: Fn(&Transaction, &UpdateEvent) -> () + 'static,
     {
-        let store = self.store_mut();
-        let eh = store.update_v2_events.get_or_insert_with(EventHandler::new);
+        let eh = self
+            .store
+            .update_v2_events
+            .get_or_insert_with(EventHandler::new);
         eh.subscribe(f)
     }
 
     /// Manually unsubscribes from a callback used in [Doc::observe_update_v1] method.
     pub fn unobserve_update_v2(&mut self, subscription_id: SubscriptionId) {
-        let store = self.store_mut();
-        store
+        self.store
             .update_v2_events
             .as_mut()
             .unwrap()
@@ -137,17 +131,14 @@ impl Doc {
     where
         F: Fn(&Transaction, &AfterTransactionEvent) -> () + 'static,
     {
-        let store = self.store_mut();
-
-        store
+        self.store
             .after_transaction_events
             .get_or_insert_with(EventHandler::new)
             .subscribe(f)
     }
     /// Cancels the transaction cleanup callback associated with the `subscription_id`
     pub fn unobserve_transaction_cleanup(&mut self, subscription_id: SubscriptionId) {
-        let store = unsafe { &mut *self.store.get() };
-        if let Some(handler) = store.after_transaction_events.as_mut() {
+        if let Some(handler) = self.store.after_transaction_events.as_mut() {
             (*handler).unsubscribe(subscription_id);
         }
     }
