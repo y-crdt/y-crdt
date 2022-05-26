@@ -13,7 +13,7 @@ use crate::types::{
 };
 use crate::update::Update;
 use std::collections::{HashMap, HashSet};
-use std::ops::DerefMut;
+use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
 use updates::encoder::*;
 
@@ -56,12 +56,12 @@ impl Transaction {
 
     #[inline]
     pub(crate) fn store(&self) -> &Store {
-        self.store.deref()
+        &self.store
     }
 
     #[inline]
     pub(crate) fn store_mut(&mut self) -> &mut Store {
-        self.store.deref_mut()
+        &mut self.store
     }
 
     /// Returns state vector describing current state of the updates.
@@ -576,6 +576,8 @@ impl Transaction {
                 blocks.squash_left(replaced_pos);
             }
         }
+
+        let store = self.store();
         // 8. emit 'afterTransactionCleanup'
         if let Some(eh) = store.after_transaction_events.as_ref() {
             let event = AfterTransactionEvent {
