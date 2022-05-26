@@ -498,12 +498,15 @@ impl Block {
     ) {
         match self {
             Block::Item(item) => {
+                let mut info = item.info();
                 let origin = if offset > 0 {
                     Some(ID::new(item.id.client, item.id.clock + offset - 1))
                 } else {
                     item.origin
                 };
-                let info = item.info();
+                if origin.is_some() {
+                    info |= HAS_ORIGIN;
+                }
                 let cant_copy_parent_info = info & (HAS_ORIGIN | HAS_RIGHT_ORIGIN) == 0;
                 encoder.write_info(info);
                 if let Some(origin_id) = origin {
@@ -1334,7 +1337,10 @@ impl ItemContent {
         match self {
             ItemContent::Deleted(len) => encoder.write_len(*len - offset),
             ItemContent::Binary(buf) => encoder.write_buf(buf),
-            ItemContent::String(s) => encoder.write_string(&s.as_str()[(offset as usize)..]),
+            ItemContent::String(s) => {
+                let (_, right) = s.split_at(offset as usize, OffsetKind::Utf16);
+                encoder.write_string(right)
+            }
             ItemContent::Embed(s) => encoder.write_json(s.as_ref()),
             ItemContent::JSON(s) => {
                 encoder.write_len(s.len() as u32 - offset);

@@ -93,7 +93,7 @@ impl Doc {
         F: Fn(&Transaction, &UpdateEvent) -> () + 'static,
     {
         let store = self.store_mut();
-        let mut eh = store.update_v1_events.get_or_insert_with(EventHandler::new);
+        let eh = store.update_v1_events.get_or_insert_with(EventHandler::new);
         eh.subscribe(f)
     }
 
@@ -118,7 +118,7 @@ impl Doc {
         F: Fn(&Transaction, &UpdateEvent) -> () + 'static,
     {
         let store = self.store_mut();
-        let mut eh = store.update_v2_events.get_or_insert_with(EventHandler::new);
+        let eh = store.update_v2_events.get_or_insert_with(EventHandler::new);
         eh.subscribe(f)
     }
 
@@ -221,11 +221,12 @@ pub enum OffsetKind {
 
 #[cfg(test)]
 mod test {
+    use crate::block::{Block, ItemContent};
     use crate::update::Update;
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
     use crate::{DeleteSet, Doc, StateVector, SubscriptionId};
-    use std::cell::Cell;
+    use std::cell::{Cell, RefCell};
     use std::rc::Rc;
 
     #[test]
@@ -538,5 +539,64 @@ mod test {
         d2.transact().apply_update(Update::decode_v1(&u));
 
         assert_eq!(txt1.to_string(), txt2.to_string());
+    }
+
+    #[test]
+    fn incremental_observe_update() {
+        const INPUT: &'static str = "hello";
+
+        let mut d1 = Doc::with_client_id(1);
+        let txt1 = d1.transact().get_text("text");
+        let acc = Rc::new(RefCell::new(String::new()));
+
+        let a = acc.clone();
+        let _sub = d1.observe_update_v1(move |_, e| {
+            let u = Update::decode_v1(&e.update);
+            for mut block in u.blocks.into_blocks() {
+                match block.as_block_ptr().as_deref() {
+                    Some(Block::Item(item)) => {
+                        if let ItemContent::String(s) = &item.content {
+                            // each character is appended in individual transaction 1-by-1,
+                            // therefore each update should contain a single string with only
+                            // one element
+                            let mut aref = a.borrow_mut();
+                            aref.push_str(s.as_str());
+                        } else {
+                            panic!("unexpected content type")
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        });
+
+        for c in INPUT.chars() {
+            // append characters 1-by-1 (1 transactions per character)
+            txt1.push(&mut d1.transact(), &c.to_string());
+        }
+
+        assert_eq!(acc.take(), INPUT);
+
+        // test incremental deletes
+        let acc = Rc::new(RefCell::new(Vec::new()));
+        let a = acc.clone();
+        let _sub = d1.observe_update_v1(move |_, e| {
+            let u = Update::decode_v1(&e.update);
+            for (&client_id, range) in u.delete_set.iter() {
+                if client_id == 1 {
+                    let mut aref = a.borrow_mut();
+                    for r in range.iter() {
+                        aref.push(r.clone());
+                    }
+                }
+            }
+        });
+
+        for _ in 0..INPUT.len() as u32 {
+            txt1.remove_range(&mut d1.transact(), 0, 1);
+        }
+
+        let expected = vec![(0..1), (1..2), (2..3), (3..4), (4..5)];
+        assert_eq!(acc.take(), expected);
     }
 }
