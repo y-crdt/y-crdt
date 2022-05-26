@@ -152,7 +152,8 @@ impl Store {
             encoder.write_uvar(clock);
             let first_block = blocks.get(start);
             // write first struct with an offset
-            first_block.encode(Some(self), encoder);
+            let offset = clock - first_block.id().clock;
+            first_block.encode_with_offset(Some(self), encoder, offset);
             for i in (start + 1)..blocks.len() {
                 blocks.get(i).encode(Some(self), encoder);
             }

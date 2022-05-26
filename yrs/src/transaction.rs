@@ -195,10 +195,10 @@ impl Transaction {
     ///   end up with the same content.
     /// * Even if an update contains known information, the unknown information
     ///   is extracted and integrated into the document structure.
-    pub fn encode_update<E: Encoder>(&self, encoder: &mut E) {
-        let store = self.store();
-        store.write_blocks(&self.before_state, encoder);
-        self.delete_set.encode(encoder);
+    pub fn encode_update_v2(&self) -> Vec<u8> {
+        let mut encoder = updates::encoder::EncoderV2::new();
+        self.encode_update(&mut encoder);
+        encoder.to_vec()
     }
 
     /// Encodes the document state to a binary format.
@@ -209,12 +209,10 @@ impl Transaction {
     ///   end up with the same content.
     /// * Even if an update contains known information, the unknown information
     ///   is extracted and integrated into the document structure.
-    pub fn encode_update_v2(&self) -> Vec<u8> {
-        let mut enc = updates::encoder::EncoderV2::new();
+    pub fn encode_update<E: Encoder>(&self, encoder: &mut E) {
         let store = self.store();
-        store.write_blocks(&self.before_state, &mut enc);
-        self.delete_set.encode(&mut enc);
-        enc.to_vec()
+        store.write_blocks(&self.before_state, encoder);
+        self.delete_set.encode(encoder);
     }
 
     /// Applies given `id_set` onto current transaction to run multi-range deletion.
@@ -364,7 +362,7 @@ impl Transaction {
     }
 
     /// Applies a deserialized update contents into a document owning current transaction.
-    pub fn apply_update(&mut self, mut update: Update) {
+    pub fn apply_update(&mut self, update: Update) {
         let (remaining, remaining_ds) = update.integrate(self);
         let mut retry = false;
         {
