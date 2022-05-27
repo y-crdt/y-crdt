@@ -122,7 +122,7 @@ impl XmlElement {
         attr_value: V,
     ) {
         let key = attr_name.into();
-        let value = crate::block::PrelimText(attr_value.as_ref().into());
+        let value = crate::block::PrelimString(attr_value.as_ref().into());
         let pos = {
             let inner = self.inner();
             let left = inner.map.get(&key);
@@ -668,7 +668,7 @@ impl XmlText {
         attr_value: V,
     ) {
         let key = attr_name.into();
-        let value = crate::block::PrelimText(attr_value.as_ref().into());
+        let value = crate::block::PrelimString(attr_value.as_ref().into());
         let pos = {
             let inner = self.inner();
             let left = inner.map.get(&key);
@@ -725,7 +725,7 @@ impl XmlText {
     pub fn insert(&self, txn: &mut Transaction, index: u32, content: &str) {
         if let Some(mut pos) = self.0.find_position(txn, index) {
             pos.parent = TypePtr::Branch(self.inner());
-            txn.create_item(&pos, crate::block::PrelimText(content.into()), None);
+            txn.create_item(&pos, crate::block::PrelimString(content.into()), None);
         } else {
             panic!("Cannot insert string content into an XML text: provided index is outside of the current text range!");
         }

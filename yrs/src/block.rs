@@ -1735,9 +1735,9 @@ where
 }
 
 #[derive(Debug)]
-pub(crate) struct PrelimText(pub SmallString<[u8; 8]>);
+pub(crate) struct PrelimString(pub SmallString<[u8; 8]>);
 
-impl Prelim for PrelimText {
+impl Prelim for PrelimString {
     fn into_content(self, _txn: &mut Transaction) -> (ItemContent, Option<Self>) {
         (ItemContent::String(self.0.into()), None)
     }

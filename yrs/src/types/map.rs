@@ -298,6 +298,7 @@ impl MapEvent {
 #[cfg(test)]
 mod test {
     use crate::test_utils::{exchange_updates, run_scenario};
+    use crate::types::text::PrelimText;
     use crate::types::{DeepObservable, EntryChange, Event, Map, Path, PathSegment, Value};
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encoder, EncoderV1};
@@ -767,13 +768,15 @@ mod test {
         fn set_type(doc: &mut Doc, rng: &mut StdRng) {
             let mut txn = doc.transact();
             let map = txn.get_map("map");
-            let key = ["one", "two"].choose(rng).unwrap();
-            if rng.gen_bool(0.5) {
+            let key = ["one", "two", "three"].choose(rng).unwrap();
+            if rng.gen_bool(0.33) {
                 map.insert(
                     &mut txn,
                     key.to_string(),
                     PrelimArray::from(vec![1, 2, 3, 4]),
                 );
+            } else if rng.gen_bool(0.33) {
+                map.insert(&mut txn, key.to_string(), PrelimText("deeptext"));
             } else {
                 map.insert(
                     &mut txn,
@@ -832,7 +835,11 @@ mod test {
         let nested2 = nested.get("array").unwrap().to_yarray().unwrap();
         nested2.insert(&mut doc.transact(), 0, "content");
 
-        assert_eq!(*calls.borrow().deref(), 3);
+        nested.insert(&mut doc.transact(), "text", PrelimText("text"));
+        let nested_text = nested.get("text").unwrap().to_ytext().unwrap();
+        nested_text.push(&mut doc.transact(), "!");
+
+        assert_eq!(*calls.borrow().deref(), 5);
         let actual = paths.borrow();
         assert_eq!(
             actual.as_slice(),
@@ -842,6 +849,11 @@ mod test {
                 vec![Path::from(vec![
                     PathSegment::Key("map".into()),
                     PathSegment::Key("array".into())
+                ])],
+                vec![Path::from(vec![PathSegment::Key("map".into()),])],
+                vec![Path::from(vec![
+                    PathSegment::Key("map".into()),
+                    PathSegment::Key("text".into()),
                 ])],
             ]
         );
