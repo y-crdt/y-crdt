@@ -326,7 +326,9 @@ impl RelativePosition {
         }
 
         let mut walker = BlockIter::new(branch);
-        walker.forward(txn, index);
+        if !walker.try_forward(txn, index) {
+            panic!("Block iter couldn't move forward");
+        }
         if walker.finished() {
             let id = if !assoc {
                 walker.next_item().map(|ptr| ptr.last_id())

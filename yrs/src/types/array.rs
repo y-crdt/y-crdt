@@ -46,8 +46,12 @@ impl Array {
     ///
     /// Using `index` value that's higher than current array length results in panic.
     pub fn insert<V: Prelim>(&self, txn: &mut Transaction, index: u32, value: V) {
-        let mut walker = self.use_search_marker(txn, index);
-        walker.insert_contents(txn, value)
+        let mut walker = BlockIter::new(self.0);
+        if walker.try_forward(txn, index) {
+            walker.insert_contents(txn, value)
+        } else {
+            panic!("Index {} is outside of the range of an array", index);
+        }
     }
 
     /// Inserts multiple `values` at the given `index`. Inserting at index `0` is equivalent to
@@ -84,16 +88,24 @@ impl Array {
     /// not all expected elements were removed (due to insufficient number of elements in an array)
     /// or `index` is outside of the bounds of an array.
     pub fn remove_range(&self, txn: &mut Transaction, index: u32, len: u32) {
-        let mut walker = self.use_search_marker(txn, index);
-        walker.delete(txn, len)
+        let mut walker = BlockIter::new(self.0);
+        if walker.try_forward(txn, index) {
+            walker.delete(txn, len)
+        } else {
+            panic!("Index {} is outside of the range of an array", index);
+        }
     }
 
     /// Retrieves a value stored at a given `index`. Returns `None` when provided index was out
     /// of the range of a current array.
     pub fn get(&self, index: u32) -> Option<Value> {
         let mut txn = self.0.try_transact().expect("Array is not integrated");
-        let mut walker = self.use_search_marker(&mut txn, index);
-        walker.read_value(&mut txn)
+        let mut walker = BlockIter::new(self.0);
+        if walker.try_forward(&mut txn, index) {
+            walker.read_value(&mut txn)
+        } else {
+            None
+        }
     }
 
     pub fn move_to(&self, txn: &mut Transaction, source: u32, target: u32) {
@@ -104,8 +116,12 @@ impl Array {
         let left = RelativePosition::from_type_index(txn, self.0, source, true);
         let mut right = left.clone();
         right.assoc = false;
-        let mut walker = self.use_search_marker(txn, target);
-        walker.insert_move(txn, left, right);
+        let mut walker = BlockIter::new(self.0);
+        if walker.try_forward(txn, target) {
+            walker.insert_move(txn, left, right);
+        } else {
+            panic!("Index {} is outside of the range of an array", target);
+        }
     }
 
     pub fn move_range_to(
@@ -123,74 +139,12 @@ impl Array {
         }
         let left = RelativePosition::from_type_index(txn, self.0, start, assoc_start);
         let right = RelativePosition::from_type_index(txn, self.0, end + 1, assoc_end);
-        let mut walker = self.use_search_marker(txn, target);
-        walker.insert_move(txn, left, right);
-    }
-
-    fn use_search_marker(&self, txn: &mut Transaction, index: u32) -> BlockIter {
-        let mut i = BlockIter::new(self.0);
-        i.forward(txn, index);
-        i
-        /*
-              const searchMarker = yarray._searchMarker
-        if (searchMarker === null || yarray._start === null) { // @todo add condition `index < 5`
-          return f(new ListIterator(yarray).forward(tr, index))
-        }
-        if (searchMarker.length === 0) {
-          const sm = new ListIterator(yarray).forward(tr, index)
-          searchMarker.push(sm)
-          if (sm.nextItem) sm.nextItem.marker = true
-        }
-        const sm = searchMarker.reduce(
-          (a, b, arrayIndex) => math.abs(index - a.index) < math.abs(index - b.index) ? a : b
-        )
-        const newIsCheaper = math.abs(sm.index - index) > index // @todo use >= index
-        const createFreshMarker = searchMarker.length < maxSearchMarker && (math.abs(sm.index - index) > 5 || newIsCheaper)
-        const fsm = createFreshMarker ? (newIsCheaper ? new ListIterator(yarray) : sm.clone()) : sm
-        const prevItem = /** @type {Item} */ (sm.nextItem)
-        if (createFreshMarker) {
-          searchMarker.push(fsm)
-        }
-        const diff = fsm.index - index
-        if (diff > 0) {
-          fsm.backward(tr, diff)
+        let mut walker = BlockIter::new(self.0);
+        if walker.try_forward(txn, target) {
+            walker.insert_move(txn, left, right);
         } else {
-          fsm.forward(tr, -diff)
+            panic!("Index {} is outside of the range of an array", target);
         }
-        // @todo remove this test
-        /*
-        const otherTesting = new ListIterator(yarray)
-        otherTesting.forward(tr, index)
-        if (otherTesting.nextItem !== fsm.nextItem || otherTesting.index !== fsm.index || otherTesting.reachedEnd !== fsm.reachedEnd) {
-          throw new Error('udtirane')
-        }
-        */
-        const result = f(fsm)
-        if (fsm.reachedEnd) {
-          fsm.reachedEnd = false
-          const nextItem = /** @type {Item} */ (fsm.nextItem)
-          if (nextItem.countable && !nextItem.deleted) {
-            fsm.index -= nextItem.length
-          }
-          fsm.rel = 0
-        }
-        fsm.index -= fsm.rel
-        fsm.rel = 0
-        if (!createFreshMarker) {
-          // reused old marker and we moved to a different position
-          prevItem.marker = false
-        }
-        const fsmItem = fsm.nextItem
-        if (fsmItem) {
-          if (fsmItem.marker) {
-            // already marked, forget current iterator
-            searchMarker.splice(searchMarker.findIndex(m => m === fsm), 1)
-          } else {
-            fsmItem.marker = true
-          }
-        }
-        return result
-               */
     }
 
     /// Returns an iterator, that can be used to lazely traverse over all values stored in a current
@@ -268,7 +222,7 @@ impl<'b> Iterator for ArrayIter<'b> {
         } else {
             let mut res = self
                 .inner
-                .slice::<ArraySliceConcat>(&mut self.txn, 1, Vec::default());
+                .slice::<ArraySliceConcat>(&mut self.txn, 1, Vec::default())?;
             res.pop()
         }
     }
@@ -395,7 +349,7 @@ impl SliceConcat for ArraySliceConcat {
             if offset != 0 {
                 for _ in content.drain(0..offset) { /* do nothing */ }
             }
-            for _ in content.drain((offset + len)..) { /* do nothing */ }
+            for _ in content.drain(len..) { /* do nothing */ }
             content
         }
     }

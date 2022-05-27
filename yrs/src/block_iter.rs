@@ -70,7 +70,9 @@ impl BlockIter {
 
     pub fn move_to(&mut self, index: u32, txn: &mut Transaction) {
         if index > self.index {
-            self.forward(txn, index - self.index)
+            if !self.try_forward(txn, index - self.index) {
+                panic!("Block iter couldn't move forward");
+            }
         } else if index < self.index {
             self.backward(txn, self.index - index)
         }
@@ -92,13 +94,13 @@ impl BlockIter {
         false
     }
 
-    pub fn forward(&mut self, txn: &mut Transaction, mut len: u32) {
+    pub fn try_forward(&mut self, txn: &mut Transaction, mut len: u32) -> bool {
         if len == 0 && self.next_item.is_none() {
-            return;
+            return true;
         }
 
         if self.index + len > self.branch.content_len() || self.next_item.is_none() {
-            panic!("Defect: length exceeded");
+            return false;
         }
 
         let mut item = self.next_item;
@@ -116,7 +118,7 @@ impl BlockIter {
                 item = self.curr_move; // we iterate to the right after the current condition
                 self.pop(txn);
             } else if item.is_none() {
-                panic!("Defect: unexpected case during block iter forward");
+                return false;
             } else if let Some(Block::Item(i)) = item.as_deref() {
                 if i.is_countable() && !i.is_deleted() && i.moved == self.curr_move && len > 0 {
                     let item_len = i.content_len(encoding);
@@ -148,7 +150,7 @@ impl BlockIter {
             }
 
             if self.reached_end {
-                panic!("Defect: unexpected case during block iter forward");
+                return false;
             }
 
             match item.as_deref() {
@@ -159,6 +161,7 @@ impl BlockIter {
 
         self.index -= len;
         self.next_item = item;
+        true
     }
 
     fn reduce_moves(&mut self, txn: &mut Transaction) {
@@ -331,8 +334,11 @@ impl BlockIter {
             }
             if len > 0 {
                 self.next_item = item;
-                self.forward(txn, 0);
-                item = self.next_item;
+                if self.try_forward(txn, 0) {
+                    item = self.next_item;
+                } else {
+                    panic!("Block iter couldn't move forward");
+                }
             }
         }
         self.next_item = item;
@@ -343,12 +349,12 @@ impl BlockIter {
         txn: &mut Transaction,
         mut len: u32,
         mut value: Vec<Value>,
-    ) -> Vec<Value>
+    ) -> Option<Vec<Value>>
     where
         T: SliceConcat,
     {
         if self.index + len > self.branch.content_len() {
-            panic!("Length exceeded");
+            return None;
         }
         self.index += len;
         let mut next_item = self.next_item;
@@ -391,9 +397,8 @@ impl BlockIter {
             if (!self.reached_end || self.curr_move.is_some()) && len > 0 {
                 // always set nextItem before any method call
                 self.next_item = next_item;
-                self.forward(txn, 0);
-                if self.next_item.is_none() {
-                    panic!("Defect: block iterator slice has no next item")
+                if !self.try_forward(txn, 0) || self.next_item.is_none() {
+                    return None;
                 }
                 next_item = self.next_item;
             }
@@ -402,7 +407,7 @@ impl BlockIter {
         if len < 0 {
             self.index -= len;
         }
-        value
+        Some(value)
     }
 
     fn split_rel(&mut self, txn: &mut Transaction) {
@@ -417,7 +422,7 @@ impl BlockIter {
     }
 
     pub(crate) fn read_value(&mut self, txn: &mut Transaction) -> Option<Value> {
-        let mut res = self.slice::<ArraySliceConcat>(txn, 1, Vec::default());
+        let mut res = self.slice::<ArraySliceConcat>(txn, 1, Vec::default())?;
         res.pop()
     }
 
@@ -502,7 +507,7 @@ impl<'a, 'txn> Iterator for Values<'a, 'txn> {
         } else {
             let mut content = self
                 .iter
-                .slice::<ArraySliceConcat>(self.txn, 1, Vec::default());
+                .slice::<ArraySliceConcat>(self.txn, 1, Vec::default())?;
             content.pop()
         }
     }
