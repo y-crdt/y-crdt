@@ -6,8 +6,8 @@ license = "MIT"
 authors = ["Kevin Jahns <kevin.jahns@pm.me>", "Bartosz Sypytkowski <b.sypytkowski@gmail.com>"]
 keywords = ["crdt", "yrs"]
 edition = "2018"
-homepage = "https://github.com/yjs/yrs/"
-repository = "https://github.com/yjs/yrs/"
+homepage = "https://github.com/y-crdt/y-crdt/"
+repository = "https://github.com/y-crdt/y-crdt/"
 readme = "./README.md"
 
 [dependencies]
