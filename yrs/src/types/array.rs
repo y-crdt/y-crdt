@@ -155,7 +155,13 @@ impl Array {
 
     /// Converts all contents of current array into a JSON-like representation.
     pub fn to_json(&self) -> Any {
-        let res = self.iter().map(|v| v.to_json()).collect();
+        let len = self.0.len();
+        let mut walker = BlockIter::new(self.0);
+        let mut txn = self.0.try_transact().unwrap();
+        let values = walker
+            .slice::<ArraySliceConcat>(&mut txn, len, Vec::default())
+            .unwrap();
+        let res = values.into_iter().map(Value::to_json).collect();
         Any::Array(res)
     }
 
