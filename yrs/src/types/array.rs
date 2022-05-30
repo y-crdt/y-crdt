@@ -1110,10 +1110,10 @@ mod test {
     #[test]
     fn move_2() {
         let d1 = Doc::with_client_id(1);
-        let mut a1 = d1.transact().get_array("array");
+        let mut a1 = { d1.transact().get_array("array") };
 
         let d2 = Doc::with_client_id(2);
-        let mut a2 = d2.transact().get_array("array");
+        let mut a2 = { d2.transact().get_array("array") };
 
         let e1: Rc<RefCell<Vec<Change>>> = Rc::new(RefCell::new(Vec::default()));
         let inner = e1.clone();
@@ -1129,42 +1129,45 @@ mod test {
             *x = e.delta(txn).to_vec();
         });
 
-        {
-            let mut txn = d1.transact();
-            a1.insert_range(&mut txn, 0, [1, 2]);
-            a1.move_to(&mut txn, 1, 0);
-        }
+        a1.insert_range(&mut d1.transact(), 0, [1, 2]);
+        a1.move_to(&mut d1.transact(), 1, 0);
         assert_eq!(a1.to_json(), vec![2, 1].into());
-        let actual = e1.as_ref().borrow();
-        assert_eq!(
-            actual.deref(),
-            &vec![
-                Change::Added(vec![2.into()]),
-                Change::Retain(1),
-                Change::Removed(1)
-            ]
-        );
+        {
+            let actual = e1.as_ref().borrow();
+            assert_eq!(
+                actual.deref(),
+                &vec![
+                    Change::Added(vec![2.into()]),
+                    Change::Retain(1),
+                    Change::Removed(1)
+                ]
+            );
+        }
 
         exchange_updates(&[&d1, &d2]);
 
         assert_eq!(a2.to_json(), vec![2, 1].into());
-        let actual = e2.as_ref().borrow();
-        assert_eq!(
-            actual.deref(),
-            &vec![Change::Added(vec![2.into(), 1.into()])]
-        );
+        {
+            let actual = e2.as_ref().borrow();
+            assert_eq!(
+                actual.deref(),
+                &vec![Change::Added(vec![2.into(), 1.into()])]
+            );
+        }
 
         a1.move_to(&mut d1.transact(), 0, 2);
         assert_eq!(a1.to_json(), vec![1, 2].into());
-        let actual = e1.as_ref().borrow();
-        assert_eq!(
-            actual.deref(),
-            &vec![
-                Change::Removed(1),
-                Change::Retain(1),
-                Change::Added(vec![2.into()])
-            ]
-        );
+        {
+            let actual = e1.as_ref().borrow();
+            assert_eq!(
+                actual.deref(),
+                &vec![
+                    Change::Removed(1),
+                    Change::Retain(1),
+                    Change::Added(vec![2.into()])
+                ]
+            );
+        }
     }
 
     #[test]
