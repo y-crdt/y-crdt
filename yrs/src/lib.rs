@@ -41,6 +41,7 @@ mod compatibility_tests;
 mod alloc;
 
 mod block_iter;
+mod cursor;
 mod moving;
 #[cfg(test)]
 mod test_utils;
