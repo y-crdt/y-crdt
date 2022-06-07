@@ -327,6 +327,12 @@ impl Into<Any> for i32 {
     }
 }
 
+impl Into<Any> for i64 {
+    fn into(self) -> Any {
+        Any::BigInt(self)
+    }
+}
+
 impl Into<Any> for String {
     fn into(self) -> Any {
         Any::String(self.into_boxed_str())
