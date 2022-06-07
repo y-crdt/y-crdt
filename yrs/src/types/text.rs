@@ -1,8 +1,8 @@
-use crate::block::{Block, BlockPtr, Item, ItemContent, ItemPosition};
+use crate::block::{Block, BlockPtr, Item, ItemContent, ItemPosition, Prelim};
 use crate::block_store::Snapshot;
 use crate::event::Subscription;
 use crate::transaction::Transaction;
-use crate::types::{Attrs, Branch, BranchPtr, Delta, Observers, Path, Value};
+use crate::types::{Attrs, Branch, BranchPtr, Delta, Observers, Path, Value, TYPE_REFS_TEXT};
 use crate::*;
 use lib0::any::Any;
 use std::cell::UnsafeCell;
@@ -125,7 +125,7 @@ impl Text {
             return;
         }
         if let Some(mut pos) = self.find_position(txn, index) {
-            let value = crate::block::PrelimText(chunk.into());
+            let value = crate::block::PrelimString(chunk.into());
             while let Some(right) = pos.right.as_ref() {
                 if right.is_deleted() {
                     // skip over deleted blocks, just like Yjs does
@@ -160,7 +160,7 @@ impl Text {
             Text::minimize_attr_changes(&mut pos, &attributes);
             let negated_attrs = self.insert_attributes(txn, &mut pos, attributes);
 
-            let value = crate::block::PrelimText(chunk.into());
+            let value = crate::block::PrelimString(chunk.into());
             let item = txn.create_item(&pos, value, None);
 
             pos.right = Some(item);
@@ -913,6 +913,23 @@ impl TextEvent {
 
         asm.add_op();
         asm.finish()
+    }
+}
+
+/// A preliminary text. It's can be used to initialize a Text, when it's about to be nested
+/// into another Yrs data collection, such as [Map] or [Array].
+#[derive(Debug)]
+pub struct PrelimText<'a>(pub &'a str);
+
+impl Prelim for PrelimText<'_> {
+    fn into_content(self, _txn: &mut Transaction) -> (ItemContent, Option<Self>) {
+        let inner = Branch::new(TYPE_REFS_TEXT, None);
+        (ItemContent::Type(inner), Some(self))
+    }
+
+    fn integrate(self, txn: &mut Transaction, inner_ref: BranchPtr) {
+        let text = Text::from(inner_ref);
+        text.push(txn, self.0);
     }
 }
 
