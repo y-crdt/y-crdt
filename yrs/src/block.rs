@@ -98,7 +98,6 @@ impl ID {
 pub(crate) struct BlockPtr(NonNull<Block>);
 
 impl BlockPtr {
-    
     pub(crate) fn delete_as_cleanup(&self, txn: &mut Transaction) {
         txn.delete(*self);
         txn.delete_set.insert(*self.id(), self.len());
@@ -110,7 +109,7 @@ impl BlockPtr {
             Block::GC(_) => false,
         }
     }
-    
+
     pub(crate) fn splice(&mut self, offset: u32, encoding: OffsetKind) -> Option<Box<Block>> {
         let self_ptr = self.clone();
         if offset == 0 {
@@ -131,7 +130,7 @@ impl BlockPtr {
                         right_origin: item.right_origin.clone(),
                         content,
                         parent: item.parent.clone(),
-                        moved: None,
+                        moved: item.moved.clone(),
                         parent_sub: item.parent_sub.clone(),
                         info: item.info.clone(),
                     }));

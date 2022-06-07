@@ -94,6 +94,12 @@ impl BlockIter {
         false
     }
 
+    pub fn forward(&mut self, txn: &mut Transaction, len: u32) {
+        if !self.try_forward(txn, len) {
+            panic!("Length exceeded")
+        }
+    }
+
     pub fn try_forward(&mut self, txn: &mut Transaction, mut len: u32) -> bool {
         if len == 0 && self.next_item.is_none() {
             return true;
