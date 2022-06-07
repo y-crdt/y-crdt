@@ -1188,6 +1188,7 @@ mod test {
         assert_eq!(a2.to_json(), vec![1, 3, 4, 2].into());
 
         exchange_updates(&[&d1, &d2]);
+        exchange_updates(&[&d1, &d2]); // move cycles may not be detected within a single update exchange
 
         assert_eq!(a1.len(), 4);
         assert_eq!(a1.to_json(), a2.to_json());

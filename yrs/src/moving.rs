@@ -292,7 +292,7 @@ impl std::fmt::Display for Move {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
 pub struct RelativePosition {
     pub kind: RelativePositionKind,
     /// If true - associate to the right block. Otherwise associate to the left one.
@@ -300,7 +300,12 @@ pub struct RelativePosition {
 }
 
 impl RelativePosition {
-    fn create(txn: &Transaction, branch: BranchPtr, item: Option<ID>, assoc: Assoc) -> Self {
+    pub(crate) fn create(
+        txn: &Transaction,
+        branch: BranchPtr,
+        item: Option<ID>,
+        assoc: Assoc,
+    ) -> Self {
         let kind = if let Some(id) = item {
             RelativePositionKind::Item(id)
         } else if let Some(item) = branch.item {
@@ -438,7 +443,7 @@ impl Decode for RelativePosition {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
 pub enum RelativePositionKind {
     Item(ID),
     Type(ID),

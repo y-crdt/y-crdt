@@ -353,6 +353,7 @@ impl Transaction {
                             recurse.push(ptr.clone());
                         }
                     }
+                    ItemContent::Move(m) => m.delete(self, block),
                     _ => { /* nothing to do for other content types */ }
                 }
                 result = true;
