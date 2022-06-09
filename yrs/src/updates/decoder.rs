@@ -336,7 +336,6 @@ impl<'a> Decoder for DecoderV2<'a> {
     }
 
     fn read_json(&mut self) -> Any {
-        // Backward compatibility for DecoderV1
         Any::decode(&mut self.cursor)
     }
 
