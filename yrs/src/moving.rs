@@ -1,5 +1,6 @@
 use crate::block::{Block, BlockPtr, ItemContent, Prelim};
 use crate::block_iter::BlockIter;
+use crate::cursor::CursorRange;
 use crate::types::BranchPtr;
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
@@ -9,13 +10,14 @@ use std::ops::DerefMut;
 use std::rc::Rc;
 
 /// Association type. If true, associate with right block. Otherwise with the left one.
-pub type Assoc = bool;
+pub enum Assoc {
+    Left,
+    Right,
+}
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Move {
-    pub start: RelativePosition,
-    pub end: RelativePosition,
-    pub priority: i32,
+    pub range: CursorRange,
 
     /// We store which Items+ContentMove we override. Once we delete
     /// this ContentMove, we need to re-integrate the overridden items.
@@ -27,11 +29,9 @@ pub struct Move {
 }
 
 impl Move {
-    pub fn new(start: RelativePosition, end: RelativePosition, priority: i32) -> Self {
+    pub fn new(range: CursorRange) -> Self {
         Move {
-            start,
-            end,
-            priority,
+            range,
             overrides: None,
         }
     }
@@ -229,6 +229,13 @@ impl Move {
     }
 }
 
+impl From<CursorRange> for Move {
+    #[inline]
+    fn from(range: CursorRange) -> Self {
+        Move::new(range)
+    }
+}
+
 impl Encode for Move {
     fn encode<E: Encoder>(&self, encoder: &mut E) {
         let is_collapsed = self.is_collapsed();
@@ -247,7 +254,7 @@ impl Decode for Move {
         let start = RelativePosition::decode(decoder);
         let end = if is_collapsed {
             let mut end = start.clone();
-            end.assoc = false;
+            end.assoc = Assoc::Left;
             end
         } else {
             RelativePosition::decode(decoder)

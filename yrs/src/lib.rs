@@ -40,9 +40,9 @@ mod compatibility_tests;
 #[cfg(test)]
 mod alloc;
 
-mod block_iter;
 mod cursor;
-mod moving;
+//mod block_iter;
+//mod moving;
 #[cfg(test)]
 mod test_utils;
 

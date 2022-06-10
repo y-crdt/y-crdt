@@ -1,5 +1,5 @@
+use crate::cursor::{CursorRange, Move};
 use crate::doc::OffsetKind;
-use crate::moving::Move;
 use crate::store::Store;
 use crate::types::{
     Attrs, Branch, BranchPtr, TypePtr, Value, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
@@ -1523,8 +1523,8 @@ impl ItemContent {
                 ItemContent::Doc(decoder.read_string().into(), Box::new(decoder.read_any()))
             }
             BLOCK_ITEM_MOVE_REF_NUMBER => {
-                let m = Move::decode(decoder);
-                ItemContent::Move(Box::new(m))
+                let range = CursorRange::decode(decoder);
+                ItemContent::Move(range.into())
             }
             info => panic!("ItemContent::decode unrecognized info flag: {}", info),
         }

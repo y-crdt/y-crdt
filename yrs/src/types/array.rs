@@ -1,7 +1,6 @@
 use crate::block::{ItemContent, Prelim};
-use crate::block_iter::{BlockIter, SliceConcat};
+use crate::cursor::{ArrayCursor, Assoc, Cursor};
 use crate::event::Subscription;
-use crate::moving::RelativePosition;
 use crate::types::{
     event_change_set, Branch, BranchPtr, Change, ChangeSet, Observers, Path, Value, TYPE_REFS_ARRAY,
 };
@@ -40,18 +39,23 @@ impl Array {
         self.0.len()
     }
 
+    /// Returns a cursor, which is set up at a given `index` position.
+    pub fn seek(&self, index: u32) -> ArrayCursor {
+        let mut cursor = ArrayCursor::new(self.0);
+        if index != 0 {
+            cursor.forward(index as usize);
+        }
+        cursor
+    }
+
     /// Inserts a `value` at the given `index`. Inserting at index `0` is equivalent to prepending
     /// current array with given `value`, while inserting at array length is equivalent to appending
     /// that value at the end of it.
     ///
     /// Using `index` value that's higher than current array length results in panic.
     pub fn insert<V: Prelim>(&self, txn: &mut Transaction, index: u32, value: V) {
-        let mut walker = BlockIter::new(self.0);
-        if walker.try_forward(txn, index) {
-            walker.insert_contents(txn, value)
-        } else {
-            panic!("Index {} is outside of the range of an array", index);
-        }
+        let mut cursor = self.seek(index);
+        cursor.insert(txn, value)
     }
 
     /// Inserts multiple `values` at the given `index`. Inserting at index `0` is equivalent to
@@ -88,24 +92,18 @@ impl Array {
     /// not all expected elements were removed (due to insufficient number of elements in an array)
     /// or `index` is outside of the bounds of an array.
     pub fn remove_range(&self, txn: &mut Transaction, index: u32, len: u32) {
-        let mut walker = BlockIter::new(self.0);
-        if walker.try_forward(txn, index) {
-            walker.delete(txn, len)
-        } else {
-            panic!("Index {} is outside of the range of an array", index);
-        }
+        let mut cursor = self.seek(index);
+        cursor.remove(txn, len as usize)
     }
 
     /// Retrieves a value stored at a given `index`. Returns `None` when provided index was out
     /// of the range of a current array.
     pub fn get(&self, index: u32) -> Option<Value> {
-        let mut txn = self.0.try_transact().expect("Array is not integrated");
-        let mut walker = BlockIter::new(self.0);
-        if walker.try_forward(&mut txn, index) {
-            walker.read_value(&mut txn)
-        } else {
-            None
+        if index >= self.len() {
+            return None;
         }
+        let mut cursor = self.seek(index);
+        cursor.next()
     }
 
     pub fn move_to(&self, txn: &mut Transaction, source: u32, target: u32) {
@@ -113,38 +111,32 @@ impl Array {
             // It doesn't make sense to move a range into the same range (it's basically a no-op).
             return;
         }
-        let left = RelativePosition::from_type_index(txn, self.0, source, true);
-        let mut right = left.clone();
-        right.assoc = false;
-        let mut walker = BlockIter::new(self.0);
-        if walker.try_forward(txn, target) {
-            walker.insert_move(txn, left, right);
-        } else {
-            panic!("Index {} is outside of the range of an array", target);
-        }
+        let mut cursor = self.seek(source);
+        let range = cursor.range(1, Assoc::Right, Assoc::Left, 0);
+
+        cursor = self.seek(target);
+        cursor.move_range(txn, range);
     }
 
     pub fn move_range_to(
         &self,
         txn: &mut Transaction,
         start: u32,
-        assoc_start: bool,
+        assoc_start: Assoc,
         end: u32,
-        assoc_end: bool,
+        assoc_end: Assoc,
         target: u32,
     ) {
         if start <= target && target <= end {
             // It doesn't make sense to move a range into the same range (it's basically a no-op).
             return;
         }
-        let left = RelativePosition::from_type_index(txn, self.0, start, assoc_start);
-        let right = RelativePosition::from_type_index(txn, self.0, end + 1, assoc_end);
-        let mut walker = BlockIter::new(self.0);
-        if walker.try_forward(txn, target) {
-            walker.insert_move(txn, left, right);
-        } else {
-            panic!("Index {} is outside of the range of an array", target);
-        }
+        let mut cursor = self.seek(start);
+        let len = end - start + 1;
+        let range = cursor.range(len as usize, assoc_start, assoc_end, 0);
+
+        cursor = self.seek(target);
+        cursor.move_range(txn, range);
     }
 
     /// Returns an iterator, that can be used to lazely traverse over all values stored in a current
@@ -155,14 +147,12 @@ impl Array {
 
     /// Converts all contents of current array into a JSON-like representation.
     pub fn to_json(&self) -> Any {
-        let len = self.0.len();
-        let mut walker = BlockIter::new(self.0);
-        let mut txn = self.0.try_transact().unwrap();
-        let values = walker
-            .slice::<ArraySliceConcat>(&mut txn, len, Vec::default())
-            .unwrap();
-        let res = values.into_iter().map(Value::to_json).collect();
-        Any::Array(res)
+        let mut cursor = self.seek(0);
+        let len = self.len() as usize;
+        let mut buf = Vec::with_capacity(len);
+        cursor.read(&mut buf);
+        let result = buf.into_iter().map(Value::to_json).collect();
+        Any::Array(result)
     }
 
     /// Subscribes a given callback to be triggered whenever current array is changed.
@@ -204,16 +194,14 @@ impl AsMut<Branch> for Array {
 }
 
 pub struct ArrayIter<'a> {
-    inner: BlockIter,
-    txn: Transaction,
+    cursor: ArrayCursor,
     _marker: PhantomData<&'a Array>,
 }
 
 impl<'a> ArrayIter<'a> {
     fn new(array: &'a Array) -> Self {
         ArrayIter {
-            inner: BlockIter::new(array.0),
-            txn: array.0.try_transact().unwrap(),
+            cursor: ArrayCursor::new(array.0),
             _marker: PhantomData,
         }
     }
@@ -223,14 +211,7 @@ impl<'b> Iterator for ArrayIter<'b> {
     type Item = Value;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.inner.finished() {
-            None
-        } else {
-            let mut res = self
-                .inner
-                .slice::<ArraySliceConcat>(&mut self.txn, 1, Vec::default())?;
-            res.pop()
-        }
+        self.cursor.next()
     }
 }
 
@@ -341,29 +322,6 @@ impl ArrayEvent {
     fn changes(&self, txn: &Transaction) -> &ChangeSet<Change> {
         let change_set = unsafe { self.change_set.get().as_mut().unwrap() };
         change_set.get_or_insert_with(|| Box::new(event_change_set(txn, self.target.0.start)))
-    }
-}
-
-pub(crate) struct ArraySliceConcat;
-
-impl SliceConcat for ArraySliceConcat {
-    fn slice(content: &mut ItemContent, offset: usize, len: usize) -> Vec<Value> {
-        let mut content = content.get_content();
-        if content.len() <= len && offset == 0 {
-            content
-        } else {
-            if offset != 0 {
-                for _ in content.drain(0..offset) { /* do nothing */ }
-            }
-            for _ in content.drain(len..) { /* do nothing */ }
-            content
-        }
-    }
-
-    #[inline]
-    fn concat(mut a: Vec<Value>, b: Vec<Value>) -> Vec<Value> {
-        a.extend(b);
-        a
     }
 }
 
@@ -903,6 +861,7 @@ mod test {
         assert_eq!(c2.borrow_mut().take(), Some(a2));
     }
 
+    use crate::cursor::Assoc;
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encoder, EncoderV1};
     use std::sync::atomic::{AtomicI64, Ordering};
@@ -1181,10 +1140,10 @@ mod test {
         a1.insert_range(&mut d1.transact(), 0, [1, 2, 3, 4]);
         exchange_updates(&[&d1, &d2]);
 
-        a1.move_range_to(&mut d1.transact(), 0, true, 1, false, 3);
+        a1.move_range_to(&mut d1.transact(), 0, Assoc::Right, 1, Assoc::Left, 3);
         assert_eq!(a1.to_json(), vec![3, 1, 2, 4].into());
 
-        a2.move_range_to(&mut d2.transact(), 2, true, 3, false, 1);
+        a2.move_range_to(&mut d2.transact(), 2, Assoc::Right, 3, Assoc::Left, 1);
         assert_eq!(a2.to_json(), vec![1, 3, 4, 2].into());
 
         exchange_updates(&[&d1, &d2]);

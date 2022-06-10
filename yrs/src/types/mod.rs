@@ -1086,7 +1086,8 @@ pub(crate) fn event_change_set(txn: &Transaction, start: Option<BlockPtr>) -> Ch
                                     .as_mut()
                                     .unwrap()
                             };
-                            let (start, end) = m.get_moved_coords(txn);
+                            let start = m.range.start.block();
+                            let end = m.range.end.block();
                             curr_move = current;
                             curr_move_end = end;
                             curr_move_is_new = txn.has_added(&item.id);

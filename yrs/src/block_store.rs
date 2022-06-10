@@ -487,6 +487,9 @@ impl BlockStore {
         let right_ptr = BlockPtr::from(&mut right);
         blocks.insert(index + 1, right);
 
+        //TODO: if this block was a target of a move operation, we may need to reposition
+        // CursorRangeEdge::ptr value to
+
         Some(right_ptr)
     }
 
