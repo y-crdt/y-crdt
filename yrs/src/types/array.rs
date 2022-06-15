@@ -8,6 +8,7 @@ use crate::{SubscriptionId, Transaction, ID};
 use lib0::any::Any;
 use std::cell::UnsafeCell;
 use std::collections::HashSet;
+use std::convert::TryFrom;
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 
@@ -42,9 +43,7 @@ impl Array {
     /// Returns a cursor, which is set up at a given `index` position.
     pub fn seek(&self, index: u32) -> ArrayCursor {
         let mut cursor = ArrayCursor::new(self.0);
-        if index != 0 {
-            cursor.forward(index as usize);
-        }
+        cursor.forward(index as usize);
         cursor
     }
 
@@ -153,6 +152,16 @@ impl Array {
         cursor.read(&mut buf);
         let result = buf.into_iter().map(Value::to_json).collect();
         Any::Array(result)
+    }
+
+    pub fn to_vec<T: TryFrom<Value>>(&self) -> Result<Vec<T>, T::Error> {
+        let mut cursor = self.seek(0);
+        let mut buf = Vec::with_capacity(self.len() as usize);
+        while let Some(v) = cursor.next() {
+            let x = T::try_from(v)?;
+            buf.push(x);
+        }
+        Ok(buf)
     }
 
     /// Subscribes a given callback to be triggered whenever current array is changed.
@@ -408,40 +417,52 @@ mod test {
             let mut txn = d.transact();
             let a = txn.get_array("array");
 
-            a.push_back(&mut txn, 0); // len: 1
-            a.push_back(&mut txn, 1); // len: 2
-            a.push_back(&mut txn, 2); // len: 3
-            a.push_back(&mut txn, 3); // len: 4
+            a.push_back(&mut txn, 0); // [0]
+            assert_eq!(a.to_vec::<u32>().unwrap(), vec![0]);
+            a.push_back(&mut txn, 1); // [0,1]
+            assert_eq!(a.to_vec::<u32>().unwrap(), vec![0, 1]);
+            a.push_back(&mut txn, 2); // [0,1,2]
+            assert_eq!(a.to_vec::<u32>().unwrap(), vec![0, 1, 2]);
+            a.push_back(&mut txn, 3); // [0,1,2,3]
+            assert_eq!(a.to_vec::<u32>().unwrap(), vec![0, 1, 2, 3]);
 
-            a.remove_range(&mut txn, 0, 1); // len: 3
-            a.insert(&mut txn, 0, 0); // len: 4
+            a.remove_range(&mut txn, 0, 1); // [1,2,3]
+            a.insert(&mut txn, 0, 0); // [0,1,2,3]
 
             assert_eq!(a.len(), 4);
         }
         {
             let mut txn = d.transact();
             let a = txn.get_array("array");
-            a.remove_range(&mut txn, 1, 1); // len: 3
+            a.remove_range(&mut txn, 1, 1); // [0,2,3]
+            assert_eq!(a.to_vec::<u32>().unwrap(), vec![0, 2, 3]);
             assert_eq!(a.len(), 3);
 
-            a.insert(&mut txn, 1, 1); // len: 4
+            a.insert(&mut txn, 1, 1); // [0,1,2,3]
+            assert_eq!(a.to_vec::<u32>().unwrap(), vec![0, 1, 2, 3]);
             assert_eq!(a.len(), 4);
 
-            a.remove_range(&mut txn, 2, 1); // len: 3
+            println!("{:#?}", txn.store());
+            a.remove_range(&mut txn, 2, 1); // [0,1,3]
+            assert_eq!(a.to_vec::<u32>().unwrap(), vec![0, 1, 3]);
             assert_eq!(a.len(), 3);
 
-            a.insert(&mut txn, 2, 2); // len: 4
+            a.insert(&mut txn, 2, 2); // [0,1,2,3]
+            assert_eq!(a.to_vec::<u32>().unwrap(), vec![0, 1, 2, 3]);
             assert_eq!(a.len(), 4);
         }
 
         let mut txn = d.transact();
-        let a = txn.get_array("array");
+        let a = txn.get_array("array"); // [0,1,2,3]
+        assert_eq!(a.to_vec::<u32>().unwrap(), vec![0, 1, 2, 3]);
         assert_eq!(a.len(), 4);
 
-        a.remove_range(&mut txn, 1, 1);
+        a.remove_range(&mut txn, 1, 1); // [0,2,3]
+        assert_eq!(a.to_vec::<u32>().unwrap(), vec![0, 2, 3]);
         assert_eq!(a.len(), 3);
 
-        a.insert(&mut txn, 1, 1);
+        a.insert(&mut txn, 1, 1); // [0,1,2,3]
+        assert_eq!(a.to_vec::<u32>().unwrap(), vec![0, 1, 2, 3]);
         assert_eq!(a.len(), 4);
     }
 
@@ -892,7 +913,7 @@ mod test {
                     pos += 1;
                 }
                 let actual = yarray.to_json();
-                assert_eq!(actual, Any::Array(expected.into_boxed_slice()))
+                assert_eq!(actual, Any::Array(expected))
             } else {
                 panic!("should not happen")
             }
@@ -904,7 +925,7 @@ mod test {
             let pos = rng.between(0, yarray.len());
             yarray.insert(&mut txn, pos, PrelimArray::from([1, 2, 3, 4]));
             if let Value::YArray(array2) = yarray.get(pos).unwrap() {
-                let expected: Box<[Any]> = (1..=4).map(|i| Any::Number(i as f64)).collect();
+                let expected: Vec<_> = (1..=4).map(|i| Any::Number(i as f64)).collect();
                 assert_eq!(array2.to_json(), Any::Array(expected));
             } else {
                 panic!("should not happen")
@@ -943,7 +964,7 @@ mod test {
                         let mut old_content = Vec::from(old_content);
                         yarray.remove_range(&mut txn, pos, del_len);
                         old_content.drain(pos as usize..(pos + del_len) as usize);
-                        assert_eq!(yarray.to_json(), Any::Array(old_content.into_boxed_slice()));
+                        assert_eq!(yarray.to_json(), Any::Array(old_content));
                     } else {
                         panic!("should not happen")
                     }

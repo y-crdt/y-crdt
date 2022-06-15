@@ -16,7 +16,9 @@ use crate::types::text::TextEvent;
 use crate::types::xml::{XmlElement, XmlEvent, XmlText, XmlTextEvent};
 use lib0::any::Any;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::convert::TryFrom;
 use std::fmt::Formatter;
+use std::hash::Hash;
 use std::ops::{Deref, DerefMut};
 use std::ptr::NonNull;
 use std::rc::Rc;
@@ -587,11 +589,11 @@ impl Value {
     pub fn to_json(self) -> Any {
         match self {
             Value::Any(a) => a,
-            Value::YText(v) => Any::String(v.to_string().into_boxed_str()),
+            Value::YText(v) => Any::String(v.to_string()),
             Value::YArray(v) => v.to_json(),
             Value::YMap(v) => v.to_json(),
-            Value::YXmlElement(v) => Any::String(v.to_string().into_boxed_str()),
-            Value::YXmlText(v) => Any::String(v.to_string().into_boxed_str()),
+            Value::YXmlElement(v) => Any::String(v.to_string()),
+            Value::YXmlText(v) => Any::String(v.to_string()),
         }
     }
 
@@ -608,43 +610,23 @@ impl Value {
     }
 
     pub fn to_ytext(self) -> Option<Text> {
-        if let Value::YText(text) = self {
-            Some(text)
-        } else {
-            None
-        }
+        Text::try_from(self).ok()
     }
 
     pub fn to_yarray(self) -> Option<Array> {
-        if let Value::YArray(array) = self {
-            Some(array)
-        } else {
-            None
-        }
+        Array::try_from(self).ok()
     }
 
     pub fn to_ymap(self) -> Option<Map> {
-        if let Value::YMap(map) = self {
-            Some(map)
-        } else {
-            None
-        }
+        Map::try_from(self).ok()
     }
 
     pub fn to_yxml_elem(self) -> Option<XmlElement> {
-        if let Value::YXmlElement(xml) = self {
-            Some(xml)
-        } else {
-            None
-        }
+        XmlElement::try_from(self).ok()
     }
 
     pub fn to_yxml_text(self) -> Option<XmlText> {
-        if let Value::YXmlText(xml) = self {
-            Some(xml)
-        } else {
-            None
-        }
+        XmlText::try_from(self).ok()
     }
 }
 
@@ -657,6 +639,135 @@ where
         Value::Any(any)
     }
 }
+
+impl TryFrom<Value> for Any {
+    type Error = Value;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::Any(any) => Ok(any),
+            other => Err(other),
+        }
+    }
+}
+
+impl TryFrom<Value> for Text {
+    type Error = Value;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::YText(v) => Ok(v),
+            other => Err(other),
+        }
+    }
+}
+
+impl TryFrom<Value> for Array {
+    type Error = Value;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::YArray(v) => Ok(v),
+            other => Err(other),
+        }
+    }
+}
+
+impl TryFrom<Value> for Map {
+    type Error = Value;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::YMap(v) => Ok(v),
+            other => Err(other),
+        }
+    }
+}
+
+impl TryFrom<Value> for XmlElement {
+    type Error = Value;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::YXmlElement(v) => Ok(v),
+            other => Err(other),
+        }
+    }
+}
+
+impl TryFrom<Value> for XmlText {
+    type Error = Value;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::YXmlText(v) => Ok(v),
+            other => Err(other),
+        }
+    }
+}
+
+impl<K, V> TryFrom<Value> for HashMap<K, V>
+where
+    K: Hash + Eq + From<String>,
+    V: TryFrom<Any, Error = Any>,
+{
+    type Error = Value;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::Any(v) => {
+                let res = HashMap::try_from(v)?;
+                Ok(res)
+            }
+            other => Err(other),
+        }
+    }
+}
+
+macro_rules! impl_try_from_any {
+    ($t:ty) => {
+        impl TryFrom<Value> for $t {
+            type Error = Value;
+
+            fn try_from(value: Value) -> Result<Self, Self::Error> {
+                match value {
+                    Value::Any(v) => {
+                        let res = <$t>::try_from(v)?;
+                        Ok(res)
+                    }
+                    other => Err(other),
+                }
+            }
+        }
+    };
+}
+
+impl_try_from_any!(String);
+impl_try_from_any!(bool);
+impl_try_from_any!(usize);
+impl_try_from_any!(isize);
+impl_try_from_any!(f64);
+impl_try_from_any!(f32);
+impl_try_from_any!(u64);
+impl_try_from_any!(u32);
+impl_try_from_any!(u16);
+impl_try_from_any!(i64);
+impl_try_from_any!(i32);
+impl_try_from_any!(i16);
+impl_try_from_any!(Vec<u8>);
+
+impl_try_from_any!(Option<String>);
+impl_try_from_any!(Option<bool>);
+impl_try_from_any!(Option<usize>);
+impl_try_from_any!(Option<isize>);
+impl_try_from_any!(Option<f64>);
+impl_try_from_any!(Option<f32>);
+impl_try_from_any!(Option<u64>);
+impl_try_from_any!(Option<u32>);
+impl_try_from_any!(Option<u16>);
+impl_try_from_any!(Option<i64>);
+impl_try_from_any!(Option<i32>);
+impl_try_from_any!(Option<i16>);
 
 impl std::fmt::Display for Branch {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

@@ -2,7 +2,8 @@ use crate::decoding::Read;
 use crate::encoding::Write;
 use std::cmp::PartialEq;
 use std::collections::HashMap;
-use std::convert::TryInto;
+use std::convert::{TryFrom, TryInto};
+use std::hash::Hash;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Any {
@@ -11,9 +12,9 @@ pub enum Any {
     Bool(bool),
     Number(f64),
     BigInt(i64),
-    String(Box<str>),
-    Buffer(Box<[u8]>),
-    Array(Box<[Any]>),
+    String(String),
+    Buffer(Vec<u8>),
+    Array(Vec<Any>),
     Map(Box<HashMap<String, Any>>),
 }
 
@@ -55,10 +56,10 @@ impl Any {
                 for _ in 0..len {
                     arr.push(Any::decode(decoder));
                 }
-                Any::Array(arr.into_boxed_slice())
+                Any::Array(arr)
             }
             // CASE 116: buffer
-            116 => Any::Buffer(Box::from(decoder.read_buf().to_owned())),
+            116 => Any::Buffer(decoder.read_buf().to_owned()),
             _ => {
                 panic!("Unable to read Any content");
             }
@@ -335,7 +336,7 @@ impl Into<Any> for i64 {
 
 impl Into<Any> for String {
     fn into(self) -> Any {
-        Any::String(self.into_boxed_str())
+        Any::String(self)
     }
 }
 
@@ -347,13 +348,13 @@ impl Into<Any> for &str {
 
 impl Into<Any> for Box<[u8]> {
     fn into(self) -> Any {
-        Any::Buffer(self)
+        Any::Buffer(self.to_vec())
     }
 }
 
 impl Into<Any> for Vec<u8> {
     fn into(self) -> Any {
-        Any::Buffer(self.into_boxed_slice())
+        Any::Buffer(self)
     }
 }
 
@@ -378,7 +379,7 @@ where
         for value in self {
             array.push(value.into())
         }
-        Any::Array(array.into_boxed_slice())
+        Any::Array(array)
     }
 }
 
@@ -425,3 +426,133 @@ impl TryInto<Any> for usize {
         (self as u64).try_into()
     }
 }
+
+impl TryFrom<Any> for bool {
+    type Error = Any;
+
+    fn try_from(value: Any) -> Result<Self, Self::Error> {
+        match value {
+            Any::Bool(x) => Ok(x),
+            other => Err(other),
+        }
+    }
+}
+
+impl TryFrom<Any> for String {
+    type Error = Any;
+
+    fn try_from(value: Any) -> Result<Self, Self::Error> {
+        match value {
+            Any::String(x) => Ok(x.to_string()),
+            other => Err(other),
+        }
+    }
+}
+
+impl TryFrom<Any> for Vec<u8> {
+    type Error = Any;
+
+    fn try_from(value: Any) -> Result<Self, Self::Error> {
+        match value {
+            Any::Buffer(x) => Ok(x.to_vec()),
+            other => Err(other),
+        }
+    }
+}
+
+impl<T> TryFrom<Any> for Vec<T>
+where
+    T: TryFrom<Any, Error = Any>,
+{
+    type Error = Any;
+
+    fn try_from(value: Any) -> Result<Self, Self::Error> {
+        match value {
+            Any::Array(x) => {
+                let mut buf = Vec::with_capacity(x.len());
+                for any in x {
+                    let value = T::try_from(any)?;
+                    buf.push(value);
+                }
+                Ok(buf)
+            }
+            other => Err(other),
+        }
+    }
+}
+
+impl<K, V> TryFrom<Any> for HashMap<K, V>
+where
+    K: Hash + Eq + From<String>,
+    V: TryFrom<Any, Error = Any>,
+{
+    type Error = Any;
+
+    fn try_from(value: Any) -> Result<Self, Self::Error> {
+        match value {
+            Any::Map(x) => {
+                let mut map = HashMap::with_capacity(x.len());
+                for (k, v) in x.into_iter() {
+                    map.insert(K::from(k), V::try_from(v)?);
+                }
+                Ok(map)
+            }
+            other => Err(other),
+        }
+    }
+}
+
+macro_rules! impl_try_from_num {
+    ($t:ty) => {
+        impl TryFrom<Any> for $t {
+            type Error = Any;
+
+            fn try_from(value: Any) -> Result<Self, Self::Error> {
+                match value {
+                    Any::Number(x) => Ok(x as Self),
+                    Any::BigInt(x) => Ok(x as Self),
+                    other => Err(other),
+                }
+            }
+        }
+    };
+}
+
+impl_try_from_num!(usize);
+impl_try_from_num!(isize);
+impl_try_from_num!(f64);
+impl_try_from_num!(f32);
+impl_try_from_num!(u64);
+impl_try_from_num!(u32);
+impl_try_from_num!(u16);
+impl_try_from_num!(i64);
+impl_try_from_num!(i32);
+impl_try_from_num!(i16);
+
+macro_rules! impl_try_from_option {
+    ($t:ty) => {
+        impl TryFrom<Any> for Option<$t> {
+            type Error = Any;
+
+            fn try_from(value: Any) -> Result<Self, Self::Error> {
+                match value {
+                    Any::Null | Any::Undefined => Ok(None),
+                    other => Ok(Some(<$t>::try_from(other)?)),
+                }
+            }
+        }
+    };
+}
+
+impl_try_from_option!(String);
+impl_try_from_option!(bool);
+impl_try_from_option!(usize);
+impl_try_from_option!(isize);
+impl_try_from_option!(f64);
+impl_try_from_option!(f32);
+impl_try_from_option!(u64);
+impl_try_from_option!(u32);
+impl_try_from_option!(u16);
+impl_try_from_option!(i64);
+impl_try_from_option!(i32);
+impl_try_from_option!(i16);

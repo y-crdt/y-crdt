@@ -490,7 +490,7 @@ impl<'a> ContentReader for &'a mut [Value] {
                 i
             }
             ItemContent::Binary(v) => {
-                self[0] = Value::Any(Any::Buffer(v.clone().into_boxed_slice()));
+                self[0] = Value::Any(Any::Buffer(v.clone()));
                 1
             }
             ItemContent::Doc(_, v) => {
@@ -509,7 +509,7 @@ impl<'a> ContentReader for &'a mut [Value] {
             ItemContent::JSON(v) => {
                 let mut i = 0;
                 while i < self.len() && offset < v.len() {
-                    self[i] = Value::Any(Any::String(v[offset].clone().into_boxed_str()));
+                    self[i] = Value::Any(Any::String(v[offset].clone()));
                     i += 1;
                     offset += 1;
                 }
@@ -520,7 +520,7 @@ impl<'a> ContentReader for &'a mut [Value] {
                 let mut i = 0;
                 while let Some(c) = iter.next() {
                     if i < self.len() {
-                        self[i] = Value::Any(Any::String(c.to_string().into_boxed_str()));
+                        self[i] = Value::Any(Any::String(c.to_string()));
                     } else {
                         break;
                     }
@@ -545,7 +545,7 @@ impl ContentReader for Value {
                 }
             }
             ItemContent::Binary(v) => {
-                *self = Value::Any(Any::Buffer(v.clone().into_boxed_slice()));
+                *self = Value::Any(Any::Buffer(v.clone()));
                 1
             }
             ItemContent::Doc(_, v) => {
@@ -563,7 +563,7 @@ impl ContentReader for Value {
             }
             ItemContent::JSON(v) => {
                 if let Some(v) = v.get(offset) {
-                    *self = Value::Any(Any::String(v.clone().into_boxed_str()));
+                    *self = Value::Any(Any::String(v.clone()));
                     1
                 } else {
                     0
@@ -572,7 +572,7 @@ impl ContentReader for Value {
             ItemContent::String(v) => {
                 let mut iter = v.chars().skip(offset);
                 if let Some(c) = iter.next() {
-                    *self = Value::Any(Any::String(c.to_string().into_boxed_str()));
+                    *self = Value::Any(Any::String(c.to_string()));
                     c.len_utf16()
                 } else {
                     0
@@ -635,7 +635,9 @@ impl ArrayCursor {
     pub fn read(&mut self, buf: &mut [Value]) -> usize {
         let mut read = 0;
         if let Some(Block::Item(item)) = self.current_block.as_deref() {
-            if !item.is_deleted() {
+            // check if current cursor position doesn't point at the end of the current_block
+            // or that the current_block has been deleted
+            if self.current_block_offset != item.len as usize && !item.is_deleted() {
                 let mut slice = &mut buf[read..];
                 let r = slice.read_content(&item.content, self.current_block_offset);
                 read += r;
@@ -693,7 +695,7 @@ impl Cursor for ArrayCursor {
             if let Some(Block::Item(item)) = self.current_block.as_deref() {
                 if !item.is_deleted() && item.is_countable() {
                     let item_len = item.len() as usize;
-                    if remaining < item_len {
+                    if remaining <= item_len {
                         self.current_block_offset = remaining;
                         remaining = 0;
                         break;
@@ -745,11 +747,16 @@ impl Cursor for ArrayCursor {
 
     fn insert<P: Prelim>(&mut self, txn: &mut Transaction, value: P) {
         let (left, right) = if let Some(ptr) = self.current_block.clone() {
-            let right = txn.store.blocks.split_block(
-                ptr,
-                self.current_block_offset as u32,
-                OffsetKind::Utf16,
-            );
+            let len = ptr.len() as usize;
+            let right = if self.current_block_offset == len {
+                ptr.as_item().and_then(|item| item.right)
+            } else {
+                txn.store.blocks.split_block(
+                    ptr,
+                    self.current_block_offset as u32,
+                    OffsetKind::Utf16,
+                )
+            };
             (self.current_block, right)
         } else {
             (None, None)
