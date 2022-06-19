@@ -1685,7 +1685,7 @@ impl YInput {
         let tag = self.tag;
         unsafe {
             if tag == Y_JSON_STR {
-                let str: Box<str> = CStr::from_ptr(self.value.str).to_str().unwrap().into();
+                let str: String = CStr::from_ptr(self.value.str).to_str().unwrap().into();
                 Any::String(str)
             } else if tag == Y_JSON_ARR {
                 let ptr = self.value.values;
@@ -1697,7 +1697,7 @@ impl YInput {
                     dst.push(any);
                     i += 1;
                 }
-                Any::Array(dst.into_boxed_slice())
+                Any::Array(dst)
             } else if tag == Y_JSON_MAP {
                 let mut dst = HashMap::with_capacity(self.len as usize);
                 let keys = self.value.map.keys;
@@ -1724,9 +1724,11 @@ impl YInput {
             } else if tag == Y_JSON_BOOL {
                 Any::Bool(if self.value.flag == 0 { false } else { true })
             } else if tag == Y_JSON_BUF {
-                let slice =
-                    std::slice::from_raw_parts(self.value.buf as *mut u8, self.len as usize);
-                let buf = Box::from(slice);
+                let buf = Vec::from_raw_parts(
+                    self.value.buf as *mut u8,
+                    self.len as usize,
+                    self.len as usize,
+                );
                 Any::Buffer(buf)
             } else {
                 panic!("Unrecognized YVal value tag.")
@@ -2004,14 +2006,18 @@ impl From<Any> for YOutput {
                     tag: Y_JSON_STR,
                     len: v.len() as c_int,
                     value: YOutputContent {
-                        str: CString::new(v.as_ref()).unwrap().into_raw(),
+                        str: CString::new(v).unwrap().into_raw(),
                     },
                 },
-                Any::Buffer(v) => YOutput {
+                Any::Buffer(mut v) => YOutput {
                     tag: Y_JSON_BUF,
                     len: v.len() as c_int,
                     value: YOutputContent {
-                        buf: Box::into_raw(v.clone()) as *mut _,
+                        buf: {
+                            let ptr = v.as_mut_ptr();
+                            forget(v);
+                            ptr
+                        },
                     },
                 },
                 Any::Array(v) => {

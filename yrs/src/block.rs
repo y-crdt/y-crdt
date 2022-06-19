@@ -6,8 +6,8 @@ use crate::types::{
     TYPE_REFS_UNDEFINED, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_HOOK,
     TYPE_REFS_XML_TEXT,
 };
-use crate::updates::decoder::{Decode, Decoder};
-use crate::updates::encoder::{Encode, Encoder};
+use crate::updates::decoder::Decoder;
+use crate::updates::encoder::Encoder;
 use crate::*;
 use lib0::any::Any;
 use smallstr::SmallString;
@@ -165,6 +165,7 @@ impl BlockPtr {
         match self.deref_mut() {
             Block::GC(this) => this.integrate(offset),
             Block::Item(this) => {
+                println!("{}", this);
                 let store = txn.store_mut();
                 let encoding = store.options.offset_kind;
                 if offset > 0 {
@@ -622,7 +623,7 @@ impl Block {
                         encoder.write_string(parent_sub.as_ref());
                     }
                 }
-                item.content.encode_with_offset(encoder, offset);
+                item.content.encode_with_offset(encoder, offset, store);
             }
             Block::GC(gc) => {
                 encoder.write_info(BLOCK_GC_REF_NUMBER);
@@ -671,7 +672,7 @@ impl Block {
                         encoder.write_string(parent_sub.as_ref());
                     }
                 }
-                item.content.encode(encoder);
+                item.content.encode(encoder, store);
             }
             Block::GC(gc) => {
                 encoder.write_info(BLOCK_GC_REF_NUMBER);
@@ -1078,6 +1079,10 @@ impl Item {
             }
             _ => {}
         }
+
+        if let ItemContent::Move(m) = &mut self.content {
+            m.range.repair(store);
+        }
     }
 
     /// Returns a number of elements stored within this item. These elements don't have to exists
@@ -1398,7 +1403,12 @@ impl ItemContent {
         }
     }
 
-    pub fn encode_with_offset<E: Encoder>(&self, encoder: &mut E, offset: u32) {
+    pub(crate) fn encode_with_offset<E: Encoder>(
+        &self,
+        encoder: &mut E,
+        offset: u32,
+        store: Option<&Store>,
+    ) {
         match self {
             ItemContent::Deleted(len) => encoder.write_len(*len - offset),
             ItemContent::Binary(buf) => encoder.write_buf(buf),
@@ -1435,11 +1445,11 @@ impl ItemContent {
                 encoder.write_string(key.as_ref());
                 encoder.write_any(any);
             }
-            ItemContent::Move(m) => m.encode(encoder),
+            ItemContent::Move(m) => m.encode(encoder, store),
         }
     }
 
-    pub fn encode<E: Encoder>(&self, encoder: &mut E) {
+    pub(crate) fn encode<E: Encoder>(&self, encoder: &mut E, store: Option<&Store>) {
         match self {
             ItemContent::Deleted(len) => encoder.write_len(*len),
             ItemContent::Binary(buf) => encoder.write_buf(buf),
@@ -1473,7 +1483,7 @@ impl ItemContent {
                 encoder.write_string(key.as_ref());
                 encoder.write_any(any);
             }
-            ItemContent::Move(m) => m.encode(encoder),
+            ItemContent::Move(m) => m.encode(encoder, store),
         }
     }
 

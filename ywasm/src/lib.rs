@@ -2684,7 +2684,7 @@ fn insert_at(dst: &Array, txn: &mut Transaction, index: u32, src: Vec<JsValue>) 
 
 fn js_into_any(v: &JsValue) -> Option<Any> {
     if v.is_string() {
-        Some(Any::String(v.as_string()?.into_boxed_str()))
+        Some(Any::String(v.as_string()?))
     } else if v.is_bigint() {
         let i = js_sys::BigInt::from(v.clone()).as_f64()?;
         Some(Any::BigInt(i as i64))
@@ -2702,7 +2702,7 @@ fn js_into_any(v: &JsValue) -> Option<Any> {
         for value in array.iter() {
             result.push(js_into_any(&value)?);
         }
-        Some(Any::Array(result.into_boxed_slice()))
+        Some(Any::Array(result))
     } else if v.is_object() {
         if let Ok(_) = Shared::try_from(v) {
             None
@@ -2730,14 +2730,14 @@ fn any_into_js(v: &Any) -> JsValue {
         Any::Bool(v) => JsValue::from_bool(*v),
         Any::Number(v) => JsValue::from(*v),
         Any::BigInt(v) => JsValue::from(*v),
-        Any::String(v) => JsValue::from(v.as_ref()),
+        Any::String(v) => JsValue::from(v),
         Any::Buffer(v) => {
             let v = Uint8Array::from(v.as_ref());
             v.into()
         }
         Any::Array(v) => {
             let a = js_sys::Array::new();
-            for value in v.as_ref() {
+            for value in v.iter() {
                 a.push(&any_into_js(value));
             }
             a.into()

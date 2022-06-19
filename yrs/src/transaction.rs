@@ -308,7 +308,7 @@ impl Transaction {
     /// Delete item under given pointer.
     /// Returns true if block was successfully deleted, false if it was already deleted in the past.
     pub(crate) fn delete(&mut self, block: BlockPtr) -> bool {
-        println!("delete: {}", block);
+        println!("deleting: {:?}", block.as_item());
         let mut ptr = block;
         let mut recurse = Vec::new();
         let mut result = false;

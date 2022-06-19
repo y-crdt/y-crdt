@@ -939,6 +939,12 @@ impl TypePtr {
     }
 }
 
+impl Default for TypePtr {
+    fn default() -> Self {
+        TypePtr::Unknown
+    }
+}
+
 impl std::fmt::Display for TypePtr {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -1197,8 +1203,8 @@ pub(crate) fn event_change_set(txn: &Transaction, start: Option<BlockPtr>) -> Ch
                                     .as_mut()
                                     .unwrap()
                             };
-                            let start = m.range.start.block();
-                            let end = m.range.end.block();
+                            let start = m.range.start_block();
+                            let end = m.range.end_block();
                             curr_move = current;
                             curr_move_end = end;
                             curr_move_is_new = txn.has_added(&item.id);

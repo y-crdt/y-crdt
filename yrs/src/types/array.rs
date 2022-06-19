@@ -43,7 +43,9 @@ impl Array {
     /// Returns a cursor, which is set up at a given `index` position.
     pub fn seek(&self, index: u32) -> ArrayCursor {
         let mut cursor = ArrayCursor::new(self.0);
-        cursor.forward(index as usize);
+        if index != 0 {
+            cursor.forward(index as usize);
+        }
         cursor
     }
 
@@ -372,8 +374,8 @@ mod test {
         a.push_front(&mut txn, "b");
         a.push_front(&mut txn, "a");
 
-        let actual: Vec<_> = a.iter().collect();
-        assert_eq!(actual, vec!["a".into(), "b".into(), "c".into()]);
+        let actual: Vec<String> = a.to_vec().unwrap();
+        assert_eq!(actual, vec!["a".to_string(), "b".into(), "c".into()]);
     }
 
     #[test]
@@ -386,8 +388,8 @@ mod test {
         a.insert(&mut txn, 1, "c");
         a.insert(&mut txn, 1, "b");
 
-        let actual: Vec<_> = a.iter().collect();
-        assert_eq!(actual, vec!["a".into(), "b".into(), "c".into()]);
+        let actual: Vec<String> = a.to_vec().unwrap();
+        assert_eq!(actual, vec!["a".to_string(), "b".into(), "c".into()]);
     }
 
     #[test]
@@ -442,7 +444,6 @@ mod test {
             assert_eq!(a.to_vec::<u32>().unwrap(), vec![0, 1, 2, 3]);
             assert_eq!(a.len(), 4);
 
-            println!("{:#?}", txn.store());
             a.remove_range(&mut txn, 2, 1); // [0,1,3]
             assert_eq!(a.to_vec::<u32>().unwrap(), vec![0, 1, 3]);
             assert_eq!(a.len(), 3);

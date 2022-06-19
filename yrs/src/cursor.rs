@@ -1,5 +1,6 @@
 use crate::block::{Block, BlockPtr, ItemContent, ItemPosition, Prelim};
-use crate::types::{BranchPtr, TypePtr, Value};
+use crate::store::Store;
+use crate::types::{Branch, BranchPtr, TypePtr, Value};
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::{OffsetKind, Transaction, ID};
@@ -44,8 +45,13 @@ pub trait Cursor {
 
     /// Returns a cursor range matching a range of elements, starting at the current cursor
     /// position and ending after `len` of elements.
-    fn range(&self, len: usize, start_assoc: Assoc, end_assoc: Assoc, priority: u32)
-        -> CursorRange;
+    fn range(
+        &mut self,
+        len: usize,
+        start_assoc: Assoc,
+        end_assoc: Assoc,
+        priority: u32,
+    ) -> CursorRange;
 
     /// Moves a `range` of elements into a current cursor position.
     fn move_range(&mut self, txn: &mut Transaction, range: CursorRange);
@@ -73,8 +79,8 @@ impl Move {
     }
 
     pub(crate) fn delete(&self, txn: &mut Transaction, item: BlockPtr) {
-        let mut start = self.range.start.block();
-        let end = self.range.end.block();
+        let mut start = self.range.start_block();
+        let end = self.range.end_block();
         while start != end && start.is_some() {
             if let Some(Block::Item(i)) = start.as_deref_mut() {
                 if i.moved == Some(item) {
@@ -113,8 +119,8 @@ impl Move {
     }
 
     pub(crate) fn integrate_block(&mut self, txn: &mut Transaction, item: BlockPtr) {
-        let mut start = self.range.start.block();
-        let end = self.range.end.block();
+        let mut start = self.range.start_block();
+        let end = self.range.end_block();
         let mut max_priority = 0;
         let adapt_priority = self.priority < 0;
         while start != end && start.is_some() {
@@ -250,33 +256,115 @@ impl Decode for Assoc {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CursorRange {
     /// Start of a cursor range.
-    pub start: CursorRangeEdge,
+    start: Option<CursorRangeEdge>,
     /// End of a cursor range.
-    pub end: CursorRangeEdge,
+    end: Option<CursorRangeEdge>,
+    /// Shared type that owns this branch.
+    parent: TypePtr,
     /// Priority that this cursor range has over other concurrent ranges.
     priority: u32,
 }
 
 impl CursorRange {
-    fn new(start: CursorRangeEdge, end: CursorRangeEdge, priority: u32) -> Self {
+    fn new(
+        start: Option<CursorRangeEdge>,
+        end: Option<CursorRangeEdge>,
+        parent: TypePtr,
+        priority: u32,
+    ) -> Self {
         CursorRange {
             start,
             end,
+            parent,
             priority,
         }
     }
 
-    fn is_collapsed(&self) -> bool {
-        self.start.id == self.end.id
+    pub fn start(&self) -> Option<&CursorRangeEdge> {
+        self.start.as_ref()
+    }
+
+    pub(crate) fn start_block(&self) -> Option<BlockPtr> {
+        if let Some(edge) = self.start.as_ref() {
+            edge.ptr.get()
+        } else {
+            None
+        }
+    }
+
+    pub fn end(&self) -> Option<&CursorRangeEdge> {
+        self.end.as_ref()
+    }
+
+    pub(crate) fn end_block(&self) -> Option<BlockPtr> {
+        if let Some(edge) = self.start.as_ref() {
+            edge.ptr.get()
+        } else {
+            None
+        }
+    }
+
+    pub fn is_collapsed(&self) -> bool {
+        match (self.start(), self.end()) {
+            (Some(s), Some(e)) => s.id == e.id,
+            _ => false,
+        }
     }
 
     fn contains(&self, id: &ID) -> bool {
-        *id >= self.start.id && *id <= self.end.id
+        let id = *id;
+        if let Some(edge) = self.start.as_ref() {
+            if id < edge.id {
+                return false;
+            }
+        }
+        if let Some(edge) = self.end.as_ref() {
+            if id > edge.id {
+                return false;
+            }
+        }
+
+        true
     }
 
-    fn repair(&self, txn: &mut Transaction) {
-        self.start.repair(txn);
-        self.end.repair(txn);
+    pub(crate) fn repair(&mut self, store: &mut Store) {
+        if let Some(edge) = self.start.as_ref() {
+            edge.repair(store);
+        }
+        if let Some(edge) = self.end.as_ref() {
+            edge.repair(store);
+        }
+        let parent = match std::mem::take(&mut self.parent) {
+            TypePtr::Unknown => {
+                // pick the parent from start/end
+                let edge = self.start.as_ref().or(self.end.as_ref()).unwrap();
+                if let Some(Block::Item(item)) = edge.ptr.get().as_deref() {
+                    item.parent.clone()
+                } else {
+                    TypePtr::Unknown
+                }
+            }
+            TypePtr::Named(name) => {
+                if let Some(branch) = store.get_type(name.as_ref()) {
+                    TypePtr::Branch(branch)
+                } else {
+                    TypePtr::Named(name)
+                }
+            }
+            TypePtr::ID(id) => {
+                if let Some(Block::Item(item)) = store.blocks.get_block(&id).as_deref() {
+                    if let ItemContent::Type(branch) = &item.content {
+                        TypePtr::Branch(BranchPtr::from(branch))
+                    } else {
+                        TypePtr::ID(id)
+                    }
+                } else {
+                    TypePtr::ID(id)
+                }
+            }
+            other => other,
+        };
+        self.parent = parent;
     }
 
     pub(crate) fn find_move_loop(
@@ -288,8 +376,8 @@ impl CursorRange {
             true
         } else {
             tracked_moved_items.insert(moved.clone());
-            let mut start = self.start.block();
-            let end = self.end.block();
+            let mut start = self.start_block();
+            let end = self.end_block();
             while let Some(start_ptr) = start {
                 match start_ptr.deref() {
                     Block::Item(item) if Some(start_ptr) != end => {
@@ -310,39 +398,105 @@ impl CursorRange {
             false
         }
     }
-}
 
-impl Encode for CursorRange {
-    fn encode<E: Encoder>(&self, encoder: &mut E) {
+    fn encode_type_ptr<E: Encoder>(type_ptr: &TypePtr, store: Option<&Store>, encoder: &mut E) {
+        match type_ptr {
+            TypePtr::Branch(ptr) => {
+                if let Some(item) = ptr.item {
+                    encoder.write_u8(RELATIVE_POSITION_TAG_TYPE_ID);
+                    let id = item.id();
+                    encoder.write_uvar(id.client);
+                    encoder.write_uvar(id.clock);
+                } else {
+                    encoder.write_u8(RELATIVE_POSITION_TAG_TYPE_NAME);
+                    let name = store.unwrap().get_type_key(*ptr).unwrap();
+                    encoder.write_string(name.as_ref());
+                }
+            }
+            TypePtr::Named(name) => {
+                encoder.write_u8(RELATIVE_POSITION_TAG_TYPE_NAME);
+                encoder.write_string(name.as_ref());
+            }
+            TypePtr::ID(id) => {
+                encoder.write_u8(RELATIVE_POSITION_TAG_TYPE_ID);
+                encoder.write_uvar(id.client);
+                encoder.write_uvar(id.clock);
+            }
+            TypePtr::Unknown => panic!("Cursor range parent is unknown"),
+        }
+    }
+
+    pub(crate) fn encode<E: Encoder>(&self, encoder: &mut E, store: Option<&Store>) {
         let is_collapsed = self.is_collapsed();
         encoder.write_u8(if is_collapsed { 1 } else { 0 });
-        self.start.encode(encoder);
+        if let Some(edge) = self.start.as_ref() {
+            edge.encode(encoder);
+        } else {
+            Self::encode_type_ptr(&self.parent, store, encoder);
+        }
         if !is_collapsed {
-            self.end.encode(encoder);
+            if let Some(edge) = self.end.as_ref() {
+                edge.encode(encoder);
+            } else {
+                Self::encode_type_ptr(&self.parent, store, encoder);
+            }
         }
         encoder.write_uvar(self.priority);
     }
-}
 
-impl Decode for CursorRange {
-    fn decode<D: Decoder>(decoder: &mut D) -> Self {
+    pub(crate) fn decode<D: Decoder>(decoder: &mut D) -> Self {
         let is_collapsed = decoder.read_u8() != 0;
-        let start = CursorRangeEdge::decode(decoder);
+        let mut parent = TypePtr::Unknown;
+        let start = match CursorRangeEdge::decode(decoder) {
+            Ok(edge) => Some(edge),
+            Err(tag) => {
+                parent = match tag {
+                    RELATIVE_POSITION_TAG_TYPE_ID => {
+                        let id = ID::new(decoder.read_uvar(), decoder.read_uvar());
+                        TypePtr::ID(id)
+                    }
+                    RELATIVE_POSITION_TAG_TYPE_NAME => {
+                        let name = decoder.read_string();
+                        TypePtr::Named(name.into())
+                    }
+                    other => panic!("Unsupported relative position tag: {}", other),
+                };
+                None
+            }
+        };
         let end = if is_collapsed {
-            let mut end = start.clone();
-            end.assoc = Assoc::Left;
-            end
+            if let Some(mut end) = start.clone() {
+                end.assoc = Assoc::Left;
+                Some(end)
+            } else {
+                None
+            }
         } else {
-            CursorRangeEdge::decode(decoder)
+            match CursorRangeEdge::decode(decoder) {
+                Ok(edge) => Some(edge),
+                Err(tag) => {
+                    match tag {
+                        RELATIVE_POSITION_TAG_TYPE_ID => {
+                            let id = ID::new(decoder.read_uvar(), decoder.read_uvar());
+                            assert_eq!(TypePtr::ID(id), parent);
+                        }
+                        RELATIVE_POSITION_TAG_TYPE_NAME => {
+                            let name = decoder.read_string();
+                            assert_eq!(TypePtr::Named(name.into()), parent);
+                        }
+                        other => panic!("Unsupported relative position tag: {}", other),
+                    };
+                    None
+                }
+            }
         };
         let priority = decoder.read_uvar();
-        CursorRange::new(start, end, priority)
+        CursorRange::new(start, end, parent, priority)
     }
 }
 
 impl Prelim for CursorRange {
-    fn into_content(self, txn: &mut Transaction) -> (ItemContent, Option<Self>) {
-        self.repair(txn);
+    fn into_content(mut self, txn: &mut Transaction) -> (ItemContent, Option<Self>) {
         (ItemContent::Move(self.into()), None)
     }
 
@@ -357,9 +511,14 @@ impl Into<Box<Move>> for CursorRange {
 
 impl std::fmt::Display for CursorRange {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.start)?;
+        if let Some(edge) = self.start.as_ref() {
+            write!(f, "{}", edge)?;
+        }
         if self.start != self.end {
-            write!(f, "..{}", self.end)?;
+            write!(f, "..")?;
+        }
+        if let Some(edge) = self.end.as_ref() {
+            write!(f, "{}", edge)?;
         }
         if self.priority != 0 {
             write!(f, ", prio: {}", self.priority)?;
@@ -381,6 +540,8 @@ pub struct CursorRangeEdge {
 }
 
 const RELATIVE_POSITION_TAG_ITEM: u8 = 0;
+const RELATIVE_POSITION_TAG_TYPE_NAME: u8 = 2;
+const RELATIVE_POSITION_TAG_TYPE_ID: u8 = 2;
 
 impl CursorRangeEdge {
     fn new(id: ID, assoc: Assoc, ptr: Option<BlockPtr>) -> Self {
@@ -411,14 +572,10 @@ impl CursorRangeEdge {
         self.ptr.get()
     }
 
-    fn repair(&self, txn: &mut Transaction) {
+    fn repair(&self, store: &mut Store) {
         let ptr = if self.assoc == Assoc::Right {
-            txn.store_mut().blocks.get_item_clean_start(&self.id)
-        } else if let Some(Block::Item(item)) = txn
-            .store_mut()
-            .blocks
-            .get_item_clean_end(&self.id)
-            .as_deref()
+            store.blocks.get_item_clean_start(&self.id)
+        } else if let Some(Block::Item(item)) = store.blocks.get_item_clean_end(&self.id).as_deref()
         {
             item.right
         } else {
@@ -426,19 +583,8 @@ impl CursorRangeEdge {
         };
         self.ptr.set(ptr);
     }
-}
 
-impl Encode for CursorRangeEdge {
-    fn encode<E: Encoder>(&self, encoder: &mut E) {
-        encoder.write_u8(RELATIVE_POSITION_TAG_ITEM);
-        encoder.write_uvar(self.id.client);
-        encoder.write_uvar(self.id.clock);
-        self.assoc.encode(encoder)
-    }
-}
-
-impl Decode for CursorRangeEdge {
-    fn decode<D: Decoder>(decoder: &mut D) -> Self {
+    fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, u8> {
         let tag = decoder.read_u8();
         if tag == RELATIVE_POSITION_TAG_ITEM {
             let client = decoder.read_uvar();
@@ -449,10 +595,17 @@ impl Decode for CursorRangeEdge {
             } else {
                 Assoc::Right
             };
-            Self::new(id, assoc, None)
+            Ok(Self::new(id, assoc, None))
         } else {
-            panic!("CursorRangeEdge::decode - unknown tag: {}", tag);
+            Err(tag)
         }
+    }
+
+    fn encode<E: Encoder>(&self, encoder: &mut E) {
+        encoder.write_u8(RELATIVE_POSITION_TAG_ITEM);
+        encoder.write_uvar(self.id.client);
+        encoder.write_uvar(self.id.clock);
+        self.assoc.encode(encoder)
     }
 }
 
@@ -612,7 +765,7 @@ pub struct ArrayCursor {
 
 impl ArrayCursor {
     pub(crate) fn new(branch: BranchPtr) -> Self {
-        let iter = MoveIter::new(branch.start);
+        let iter = MoveIter::new(branch.deref());
         ArrayCursor {
             branch,
             iter,
@@ -623,7 +776,7 @@ impl ArrayCursor {
     }
 
     pub fn reset(&mut self) {
-        self.iter = MoveIter::new(self.branch.start);
+        self.iter = MoveIter::new(self.branch.deref());
         self.current_block = None;
         self.current_block_offset = 0;
         self.index = 0;
@@ -695,11 +848,13 @@ impl Cursor for ArrayCursor {
             if let Some(Block::Item(item)) = self.current_block.as_deref() {
                 if !item.is_deleted() && item.is_countable() {
                     let item_len = item.len() as usize;
-                    if remaining <= item_len {
+                    if remaining < item_len {
+                        // we're still inside of a block
                         self.current_block_offset = remaining;
                         remaining = 0;
                         break;
                     } else {
+                        // we need to move to the next block
                         remaining -= item_len;
                     }
                 }
@@ -774,31 +929,87 @@ impl Cursor for ArrayCursor {
     }
 
     fn range(
-        &self,
+        &mut self,
         len: usize,
         start_assoc: Assoc,
         end_assoc: Assoc,
         priority: u32,
     ) -> CursorRange {
-        todo!()
+        let start = match start_assoc {
+            Assoc::Right => {
+                if let Some(ptr) = self.current_block {
+                    Some(CursorRangeEdge::new(ptr.last_id(), start_assoc, Some(ptr)))
+                } else {
+                    None
+                }
+            }
+            Assoc::Left => {
+                todo!()
+            }
+        };
+
+        self.forward(len);
+
+        let end = match end_assoc {
+            Assoc::Left => {
+                if let Some(ptr) = self.current_block {
+                    Some(CursorRangeEdge::new(*ptr.id(), end_assoc, Some(ptr)))
+                } else {
+                    None
+                }
+            }
+            Assoc::Right => {
+                todo!()
+            }
+        };
+        CursorRange::new(start, end, TypePtr::Branch(self.branch.clone()), 0)
     }
 
     fn move_range(&mut self, txn: &mut Transaction, range: CursorRange) {
-        todo!()
+        self.insert(txn, range);
     }
 
     fn remove(&mut self, txn: &mut Transaction, len: usize) {
         let mut remaining = len as u32;
+
+        if let Some(Block::Item(item)) = self.current_block.as_deref() {
+            if !item.is_deleted() {
+                let item_len = item.len;
+                let offset = self.current_block_offset as u32;
+                if offset < item_len {
+                    let store = txn.store_mut();
+                    let mut remove = self.current_block.unwrap();
+                    if offset > 0 {
+                        //split and keep the right part around
+                        remove = store.blocks.split_block_inner(remove, offset).unwrap();
+                    }
+
+                    if offset + remaining < item_len {
+                        // split and keep the left part around
+                        store.blocks.split_block_inner(remove, remaining);
+                    }
+
+                    self.current_block = Some(remove);
+                    self.current_block_offset = item_len.min(remaining) as usize;
+                    txn.delete(remove);
+
+                    return;
+                }
+            }
+        }
+
         while remaining > 0 {
             if let Some(mut ptr) = self.iter.next() {
-                let len = ptr.len();
-                if remaining >= len {
-                    txn.delete(ptr);
-                    remaining -= len;
-                } else {
-                    txn.store.blocks.split_block_inner(ptr, remaining);
-                    txn.delete(ptr);
-                    remaining = 0;
+                if !ptr.is_deleted() {
+                    let len = ptr.len();
+                    if remaining >= len {
+                        txn.delete(ptr);
+                        remaining -= len;
+                    } else {
+                        txn.store.blocks.split_block_inner(ptr, remaining);
+                        txn.delete(ptr);
+                        remaining = 0;
+                    }
                 }
             } else {
                 break;
@@ -834,14 +1045,20 @@ impl Iterator for ArrayCursor {
 struct MoveIter {
     current: Option<BlockPtr>,
     move_stack: MoveStackRef,
+    finished: bool,
 }
 
 impl MoveIter {
-    fn new(start: Option<BlockPtr>) -> Self {
+    fn new(branch: &Branch) -> Self {
         MoveIter {
-            current: start,
+            current: branch.start,
             move_stack: MoveStackRef::default(),
+            finished: false,
         }
+    }
+
+    fn current(&self) -> Option<BlockPtr> {
+        self.current
     }
 }
 
@@ -849,42 +1066,55 @@ impl Iterator for MoveIter {
     type Item = BlockPtr;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let mut current = self.current.clone();
-        let mut retry = false;
-        self.current = if let Some(Block::Item(item)) = current.clone().as_deref() {
-            if let Some(move_destination) = item.moved {
-                if Some(move_destination) != self.move_stack.current_move() {
-                    // skip over this block, it was move elsewhere
-                    retry = true;
-                    item.right
-                } else if item.right == self.move_stack.current_end() {
-                    // we reached the end of current move scope, pop back and continue
-                    let stack = self.move_stack.as_mut();
-                    let block = stack.destination;
-                    stack.pop();
-                    if let Some(Block::Item(item)) = block.as_deref() {
+        if self.finished {
+            return None;
+        } else {
+            let mut retry = false;
+            let mut current = self.current.clone();
+            self.current = if let Some(Block::Item(item)) = current.clone().as_deref() {
+                if let Some(move_destination) = item.moved {
+                    if Some(move_destination) != self.move_stack.current_move() {
+                        // skip over this block, it was moved elsewhere
+                        retry = true;
                         item.right
+                    } else if item.right == self.move_stack.current_end() {
+                        // we reached the end of current move scope, pop back and continue
+                        let stack = self.move_stack.as_mut();
+                        let block = stack.destination;
+                        stack.pop();
+                        if let Some(Block::Item(item)) = block.as_deref() {
+                            item.right
+                        } else {
+                            None
+                        }
+                    } else if let ItemContent::Move(moved) = &item.content {
+                        // this item represents new moved pointer
+                        let stack = self.move_stack.as_mut();
+                        stack.descend(current.unwrap(), &moved);
+                        retry = true;
+                        moved
+                            .range
+                            .start_block()
+                            .or_else(|| moved.range.parent.as_branch().and_then(|b| b.start))
                     } else {
-                        None
+                        item.right
                     }
-                } else if let ItemContent::Move(moved) = &item.content {
-                    // this item represents new moved pointer
-                    let stack = self.move_stack.as_mut();
-                    stack.descend(current.unwrap(), &moved);
-                    todo!()
-                } else {
+                } else if item.right.is_some() {
                     item.right
+                } else {
+                    self.finished = true;
+                    None
                 }
             } else {
-                item.right
+                self.finished = true;
+                None
+            };
+
+            if retry {
+                self.next() // this should become tail recursive call
+            } else {
+                current
             }
-        } else {
-            None
-        };
-        if retry {
-            self.next() // this should become tail recursive call
-        } else {
-            current
         }
     }
 }
@@ -949,7 +1179,7 @@ struct MoveStack {
     destination: Option<BlockPtr>,
     start: Option<BlockPtr>,
     end: Option<BlockPtr>,
-    stack: Vec<StackItem>,
+    stack: Vec<MoveFrame>,
 }
 
 impl MoveStack {
@@ -980,7 +1210,7 @@ impl MoveStack {
 
     fn descend(&mut self, destination: BlockPtr, m: &Move) {
         if let Some(destination) = self.destination {
-            let item = StackItem::new(self.start, self.end, destination);
+            let item = MoveFrame::new(self.start, self.end, destination);
             self.stack.push(item);
         }
 
@@ -989,15 +1219,15 @@ impl MoveStack {
 }
 
 #[derive(Debug, Clone)]
-struct StackItem {
+struct MoveFrame {
     start: Option<BlockPtr>,
     end: Option<BlockPtr>,
     destination: BlockPtr,
 }
 
-impl StackItem {
+impl MoveFrame {
     fn new(start: Option<BlockPtr>, end: Option<BlockPtr>, destination: BlockPtr) -> Self {
-        StackItem {
+        MoveFrame {
             start,
             end,
             destination,
@@ -1021,7 +1251,7 @@ mod test {
         txt.insert(&mut doc.transact(), 5, " wonderful");
         txt.remove_range(&mut doc.transact(), 0, 6);
 
-        let mut i = MoveIter::new(txt.as_ref().start);
+        let mut i = MoveIter::new(txt.as_ref());
 
         let block = i.next().unwrap(); // <1#0> -> deleted: 'hello'
         assert_eq!(*block.id(), ID::new(1, 0));
@@ -1054,7 +1284,7 @@ mod test {
         array.insert_range(&mut doc.transact(), 0, [1, 2, 3, 4]);
         array.move_range_to(&mut doc.transact(), 2, Assoc::Right, 3, Assoc::Left, 1);
 
-        let mut i = MoveIter::new(array.as_ref().start);
+        let mut i = MoveIter::new(array.as_ref());
 
         let block = i.next().unwrap();
         let item = block.as_item().unwrap(); // <1#0> -> 1
@@ -1072,29 +1302,5 @@ mod test {
         assert_eq!(item.content, ItemContent::Any(vec![2.into()]));
 
         assert_eq!(i.next(), None);
-    }
-
-    #[test]
-    fn move_iter_next_back() {
-        let doc = Doc::with_client_id(1);
-        let map = doc.transact().get_map("map");
-
-        map.insert(&mut doc.transact(), "key", 1);
-        map.insert(&mut doc.transact(), "key", 2);
-        map.insert(&mut doc.transact(), "key", 3);
-
-        let mut i = MoveIter::new(map.as_ref().map.get("key").cloned());
-
-        let block = i.next_back().unwrap(); // <1#2> -> 'key' => 3
-        assert_eq!(*block.id(), ID::new(1, 2));
-        assert_eq!(block.len(), 1);
-        assert!(!block.is_deleted());
-
-        let block = i.next_back().unwrap(); // <1#0> -> deleted: 2 items
-        assert_eq!(*block.id(), ID::new(1, 0));
-        assert_eq!(block.len(), 2);
-        assert!(block.is_deleted());
-
-        assert_eq!(i.next_back(), None);
     }
 }
