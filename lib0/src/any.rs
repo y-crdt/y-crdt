@@ -234,15 +234,15 @@ impl Any {
     }
 
     #[cfg(not(feature = "lib0-serde"))]
-    pub fn from_json(src: &str) -> Self {
+    pub fn from_json(src: &str) -> Result<Self, Error> {
         use crate::json_parser::JsonParser;
         let mut parser = JsonParser::new(src.chars());
-        parser.parse().unwrap()
+        Ok(parser.parse()?)
     }
 
     #[cfg(feature = "lib0-serde")]
-    pub fn from_json(src: &str) -> Self {
-        serde_json::from_str(src).unwrap()
+    pub fn from_json(src: &str) -> Result<Self, Error> {
+        Ok(serde_json::from_str(src)?)
     }
 
     #[cfg(feature = "lib0-serde")]

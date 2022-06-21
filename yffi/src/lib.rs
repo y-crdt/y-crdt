@@ -588,7 +588,8 @@ pub const ERR_CODE_IO: c_int = 1;
 pub const ERR_CODE_VAR_INT: c_int = 2;
 pub const ERR_CODE_EOF: c_int = 3;
 pub const ERR_CODE_UNEXPECTED_VALUE: c_int = 4;
-pub const ERR_CODE_OTHER: c_int = 5;
+pub const ERR_CODE_INVALID_JSON: c_int = 5;
+pub const ERR_CODE_OTHER: c_int = 6;
 
 fn err_code(e: Error) -> c_int {
     match e {
@@ -597,6 +598,7 @@ fn err_code(e: Error) -> c_int {
         Error::EndOfBuffer => ERR_CODE_EOF,
         Error::UnexpectedValue => ERR_CODE_UNEXPECTED_VALUE,
         Error::Other(_) => ERR_CODE_OTHER,
+        Error::InvalidJSON(_) => ERR_CODE_INVALID_JSON,
     }
 }
 

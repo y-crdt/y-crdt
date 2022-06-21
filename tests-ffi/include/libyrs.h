@@ -195,7 +195,9 @@ typedef struct YXmlTreeWalker {} YXmlTreeWalker;
 
 #define ERR_CODE_UNEXPECTED_VALUE 4
 
-#define ERR_CODE_OTHER 5
+#define ERR_CODE_INVALID_JSON 5
+
+#define ERR_CODE_OTHER 6
 
 /**
  * Tag used to identify `YPathSegment` storing a *char parameter.

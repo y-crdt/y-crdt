@@ -181,7 +181,7 @@ impl<'a> Decoder for DecoderV1<'a> {
 
     fn read_json(&mut self) -> Result<Any, Error> {
         let src = self.read_string()?;
-        Ok(Any::from_json(src))
+        Any::from_json(src)
     }
 
     #[inline]
