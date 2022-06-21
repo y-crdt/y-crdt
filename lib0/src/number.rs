@@ -2,6 +2,7 @@ use crate::decoding::Read;
 use crate::encoding::Write;
 use crate::error::Error;
 use std::convert::TryInto;
+use std::mem::size_of;
 
 pub const F64_MAX_SAFE_INTEGER: f64 = (i64::pow(2, 53) - 1) as f64;
 pub const F64_MIN_SAFE_INTEGER: f64 = -F64_MAX_SAFE_INTEGER;
@@ -46,8 +47,8 @@ impl VarInt for u128 {
             if r < 0b10000000 {
                 return Ok(num);
             }
-            if len > 128 {
-                return Err(Error::VarIntSizeExceeded);
+            if len > 180 {
+                return Err(Error::VarIntSizeExceeded(180));
             }
         }
     }
@@ -85,7 +86,11 @@ impl VarInt for u16 {
 
     fn read<R: Read>(r: &mut R) -> Result<Self, Error> {
         let value = read_var_u32(r)?;
-        Ok(value.try_into()?)
+        if let Ok(value) = value.try_into() {
+            Ok(value)
+        } else {
+            Err(Error::VarIntSizeExceeded((size_of::<Self>() * 8) as u8))
+        }
     }
 }
 
@@ -97,7 +102,11 @@ impl VarInt for u8 {
 
     fn read<R: Read>(r: &mut R) -> Result<Self, Error> {
         let value = read_var_u32(r)?;
-        Ok(value.try_into()?)
+        if let Ok(value) = value.try_into() {
+            Ok(value)
+        } else {
+            Err(Error::VarIntSizeExceeded((size_of::<Self>() * 8) as u8))
+        }
     }
 }
 
@@ -109,7 +118,11 @@ impl VarInt for isize {
 
     fn read<R: Read>(r: &mut R) -> Result<Self, Error> {
         let value = read_var_i64(r)?;
-        Ok(value.try_into()?)
+        if let Ok(value) = value.try_into() {
+            Ok(value)
+        } else {
+            Err(Error::VarIntSizeExceeded((size_of::<Self>() * 8) as u8))
+        }
     }
 }
 
@@ -133,7 +146,11 @@ impl VarInt for i32 {
 
     fn read<R: Read>(r: &mut R) -> Result<Self, Error> {
         let value = read_var_i64(r)?;
-        Ok(value.try_into()?)
+        if let Ok(value) = value.try_into() {
+            Ok(value)
+        } else {
+            Err(Error::VarIntSizeExceeded((size_of::<Self>() * 8) as u8))
+        }
     }
 }
 
@@ -145,7 +162,11 @@ impl VarInt for i16 {
 
     fn read<R: Read>(r: &mut R) -> Result<Self, Error> {
         let value = read_var_i64(r)?;
-        Ok(value.try_into()?)
+        if let Ok(value) = value.try_into() {
+            Ok(value)
+        } else {
+            Err(Error::VarIntSizeExceeded((size_of::<Self>() * 8) as u8))
+        }
     }
 }
 
@@ -157,7 +178,11 @@ impl VarInt for i8 {
 
     fn read<R: Read>(r: &mut R) -> Result<Self, Error> {
         let value = read_var_i64(r)?;
-        Ok(value.try_into()?)
+        if let Ok(value) = value.try_into() {
+            Ok(value)
+        } else {
+            Err(Error::VarIntSizeExceeded((size_of::<Self>() * 8) as u8))
+        }
     }
 }
 
@@ -215,8 +240,8 @@ fn read_var_u64<R: Read>(r: &mut R) -> Result<u64, Error> {
         if r < 0b10000000 {
             return Ok(num);
         }
-        if len > 50 {
-            return Err(Error::VarIntSizeExceeded);
+        if len > 70 {
+            return Err(Error::VarIntSizeExceeded(70));
         }
     }
 }
@@ -231,8 +256,10 @@ fn read_var_u32<R: Read>(r: &mut R) -> Result<u32, Error> {
         if r < 0b10000000 {
             return Ok(num);
         }
-        if len > 35 {
-            return Err(Error::VarIntSizeExceeded);
+        if len > 70 {
+            // a proper setting for 32bit int would be 35 bits, however for Yjs compatibility
+            // we allow wrap up up to 64bit ints (with int overflow wrap)
+            return Err(Error::VarIntSizeExceeded(70));
         }
     }
 }
@@ -252,8 +279,8 @@ fn read_var_i64<R: Read>(reader: &mut R) -> Result<i64, Error> {
         if r < 0b10000000 as u8 {
             return Ok(if is_negative { -num } else { num });
         }
-        if len > 50 {
-            return Err(Error::VarIntSizeExceeded);
+        if len > 70 {
+            return Err(Error::VarIntSizeExceeded(70));
         }
     }
 }

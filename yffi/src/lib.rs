@@ -593,7 +593,7 @@ pub const ERR_CODE_OTHER: c_int = 5;
 fn err_code(e: Error) -> c_int {
     match e {
         Error::IO(_) => ERR_CODE_IO,
-        Error::VarIntSizeExceeded => ERR_CODE_VAR_INT,
+        Error::VarIntSizeExceeded(_) => ERR_CODE_VAR_INT,
         Error::EndOfBuffer => ERR_CODE_EOF,
         Error::UnexpectedValue => ERR_CODE_UNEXPECTED_VALUE,
         Error::Other(_) => ERR_CODE_OTHER,

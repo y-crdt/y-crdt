@@ -35,11 +35,11 @@ use std::rc::Rc;
 /// let state_vector = remote_txn.state_vector().encode_v1();
 ///
 /// // now compute a differential update based on remote document's state vector
-/// let update = txn.encode_diff_v1(&StateVector::decode_v1(&state_vector));
+/// let update = txn.encode_diff_v1(&StateVector::decode_v1(&state_vector).unwrap());
 ///
 /// // both update and state vector are serializable, we can pass the over the wire
 /// // now apply update to a remote document
-/// remote_txn.apply_update(Update::decode_v1(update.as_slice()));
+/// remote_txn.apply_update(Update::decode_v1(update.as_slice()).unwrap());
 /// ```
 pub struct Doc {
     /// A unique client identifier, that's also a unique identifier of current document replica.
