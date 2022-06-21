@@ -1058,11 +1058,11 @@ mod test {
         let d1_sv = t1.state_vector().encode_v1();
         let d2_sv = t2.state_vector().encode_v1();
 
-        let u1 = t1.encode_diff_v1(&StateVector::decode_v1(&d2_sv));
-        let u2 = t2.encode_diff_v1(&StateVector::decode_v1(&d1_sv));
+        let u1 = t1.encode_diff_v1(&StateVector::decode_v1(&d2_sv).unwrap());
+        let u2 = t2.encode_diff_v1(&StateVector::decode_v1(&d1_sv).unwrap());
 
-        t1.apply_update(Update::decode_v1(u2.as_slice()));
-        t2.apply_update(Update::decode_v1(u1.as_slice()));
+        t1.apply_update(Update::decode_v1(u2.as_slice()).unwrap());
+        t2.apply_update(Update::decode_v1(u1.as_slice()).unwrap());
 
         let a = txt1.to_string();
         let b = txt2.to_string();
@@ -1084,8 +1084,8 @@ mod test {
         let mut t2 = d2.transact();
 
         let d2_sv = t2.state_vector().encode_v1();
-        let u1 = t1.encode_diff_v1(&StateVector::decode_v1(&d2_sv));
-        t2.apply_update(Update::decode_v1(u1.as_slice()));
+        let u1 = t1.encode_diff_v1(&StateVector::decode_v1(&d2_sv).unwrap());
+        t2.apply_update(Update::decode_v1(u1.as_slice()).unwrap());
 
         let txt2 = t2.get_text("test");
         assert_eq!(txt2.to_string().as_str(), "I expect that");
@@ -1099,10 +1099,10 @@ mod test {
 
         let d2_sv = t2.state_vector().encode_v1();
         let d1_sv = t1.state_vector().encode_v1();
-        let u1 = t1.encode_diff_v1(&StateVector::decode_v1(&d2_sv.as_slice()));
-        let u2 = t2.encode_diff_v1(&StateVector::decode_v1(&d1_sv.as_slice()));
-        t1.apply_update(Update::decode_v1(u2.as_slice()));
-        t2.apply_update(Update::decode_v1(u1.as_slice()));
+        let u1 = t1.encode_diff_v1(&StateVector::decode_v1(&d2_sv.as_slice()).unwrap());
+        let u2 = t2.encode_diff_v1(&StateVector::decode_v1(&d1_sv.as_slice()).unwrap());
+        t1.apply_update(Update::decode_v1(u2.as_slice()).unwrap());
+        t2.apply_update(Update::decode_v1(u1.as_slice()).unwrap());
 
         let a = txt1.to_string();
         let b = txt2.to_string();
@@ -1124,8 +1124,8 @@ mod test {
         let mut t2 = d2.transact();
 
         let d2_sv = t2.state_vector().encode_v1();
-        let u1 = t1.encode_diff_v1(&StateVector::decode_v1(&d2_sv.as_slice()));
-        t2.apply_update(Update::decode_v1(u1.as_slice()));
+        let u1 = t1.encode_diff_v1(&StateVector::decode_v1(&d2_sv.as_slice()).unwrap());
+        t2.apply_update(Update::decode_v1(u1.as_slice()).unwrap());
 
         let txt2 = t2.get_text("test");
         assert_eq!(txt2.to_string().as_str(), "aaa");
@@ -1139,11 +1139,11 @@ mod test {
 
         let d2_sv = t2.state_vector().encode_v1();
         let d1_sv = t1.state_vector().encode_v1();
-        let u1 = t1.encode_diff_v1(&StateVector::decode_v1(&d2_sv.as_slice()));
-        let u2 = t2.encode_diff_v1(&StateVector::decode_v1(&d1_sv.as_slice()));
+        let u1 = t1.encode_diff_v1(&StateVector::decode_v1(&d2_sv.as_slice()).unwrap());
+        let u2 = t2.encode_diff_v1(&StateVector::decode_v1(&d1_sv.as_slice()).unwrap());
 
-        t1.apply_update(Update::decode_v1(u2.as_slice()));
-        t2.apply_update(Update::decode_v1(u1.as_slice()));
+        t1.apply_update(Update::decode_v1(u2.as_slice()).unwrap());
+        t2.apply_update(Update::decode_v1(u1.as_slice()).unwrap());
 
         let a = txt1.to_string();
         let b = txt2.to_string();
@@ -1251,7 +1251,7 @@ mod test {
 
         let d2 = Doc::with_client_id(2);
         let mut t2 = d2.transact();
-        t2.apply_update(Update::decode_v1(u1.as_slice()));
+        t2.apply_update(Update::decode_v1(u1.as_slice()).unwrap());
         let txt2 = t2.get_text("test");
         assert_eq!(txt2.to_string().as_str(), "hello world");
 
@@ -1267,11 +1267,11 @@ mod test {
 
         let sv1 = t1.state_vector().encode_v1();
         let sv2 = t2.state_vector().encode_v1();
-        let u1 = t1.encode_diff_v1(&StateVector::decode_v1(&sv2.as_slice()));
-        let u2 = t2.encode_diff_v1(&StateVector::decode_v1(&sv1.as_slice()));
+        let u1 = t1.encode_diff_v1(&StateVector::decode_v1(&sv2.as_slice()).unwrap());
+        let u2 = t2.encode_diff_v1(&StateVector::decode_v1(&sv1.as_slice()).unwrap());
 
-        t1.apply_update(Update::decode_v1(u2.as_slice()));
-        t2.apply_update(Update::decode_v1(u1.as_slice()));
+        t1.apply_update(Update::decode_v1(u2.as_slice()).unwrap());
+        t2.apply_update(Update::decode_v1(u1.as_slice()).unwrap());
 
         let a = txt1.to_string();
         let b = txt2.to_string();
@@ -1344,7 +1344,7 @@ mod test {
             let sv = t2.state_vector();
             let mut encoder = EncoderV1::new();
             t1.encode_diff(&sv, &mut encoder);
-            t2.apply_update(Update::decode_v1(encoder.to_vec().as_slice()));
+            t2.apply_update(Update::decode_v1(encoder.to_vec().as_slice()).unwrap());
         }
 
         assert_eq!(
@@ -1500,7 +1500,7 @@ mod test {
             assert_eq!(delta1.take(), expected);
 
             let mut txn = d2.transact();
-            txn.apply_update(Update::decode_v1(update.as_slice()));
+            txn.apply_update(Update::decode_v1(update.as_slice()).unwrap());
             txn.commit();
 
             assert_eq!(txt2.to_string(), "abc".to_string());
@@ -1524,7 +1524,7 @@ mod test {
             assert_eq!(delta1.take(), expected);
 
             let mut txn = d2.transact();
-            txn.apply_update(Update::decode_v1(update.as_slice()));
+            txn.apply_update(Update::decode_v1(update.as_slice()).unwrap());
             txn.commit();
 
             assert_eq!(txt2.to_string(), "bc".to_string());
@@ -1548,7 +1548,7 @@ mod test {
             assert_eq!(delta1.take(), expected);
 
             let mut txn = d2.transact();
-            txn.apply_update(Update::decode_v1(update.as_slice()));
+            txn.apply_update(Update::decode_v1(update.as_slice()).unwrap());
             txn.commit();
 
             assert_eq!(txt2.to_string(), "b".to_string());
@@ -1572,7 +1572,7 @@ mod test {
             assert_eq!(delta1.take(), expected);
 
             let mut txn = d2.transact();
-            txn.apply_update(Update::decode_v1(update.as_slice()));
+            txn.apply_update(Update::decode_v1(update.as_slice()).unwrap());
             txn.commit();
 
             assert_eq!(txt2.to_string(), "zb".to_string());
@@ -1599,7 +1599,7 @@ mod test {
             assert_eq!(delta1.take(), expected);
 
             let mut txn = d2.transact();
-            txn.apply_update(Update::decode_v1(update.as_slice()));
+            txn.apply_update(Update::decode_v1(update.as_slice()).unwrap());
             txn.commit();
 
             assert_eq!(txt2.to_string(), "yzb".to_string());
@@ -1630,7 +1630,7 @@ mod test {
             assert_eq!(delta1.take(), expected);
 
             let mut txn = d2.transact();
-            txn.apply_update(Update::decode_v1(update.as_slice()));
+            txn.apply_update(Update::decode_v1(update.as_slice()).unwrap());
             txn.commit();
 
             assert_eq!(txt2.to_string(), "yzb".to_string());

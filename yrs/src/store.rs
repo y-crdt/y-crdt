@@ -141,15 +141,15 @@ impl Store {
         // This heavily improves the conflict algorithm.
         diff.sort_by(|a, b| b.0.cmp(&a.0));
 
-        encoder.write_uvar(diff.len());
+        encoder.write_var(diff.len());
         for (client, clock) in diff {
             let blocks = self.blocks.get(&client).unwrap();
             let clock = clock.max(blocks.first().id().clock); // make sure the first id exists
             let start = blocks.find_pivot(clock).unwrap();
             // write # encoded structs
-            encoder.write_uvar(blocks.len() - start);
+            encoder.write_var(blocks.len() - start);
             encoder.write_client(client);
-            encoder.write_uvar(clock);
+            encoder.write_var(clock);
             let first_block = blocks.get(start);
             // write first struct with an offset
             let offset = clock - first_block.id().clock;

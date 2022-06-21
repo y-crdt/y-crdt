@@ -105,7 +105,7 @@ fn text_insert_delete() {
     let mut doc = Doc::new();
     let txt = doc.transact().get_text("type");
     let _sub = doc.observe_update_v1(move |_, e| {
-        let u = Update::decode_v1(&e.update);
+        let u = Update::decode_v1(&e.update).unwrap();
         for (actual, expected) in u.blocks.blocks().zip(expected_blocks.as_slice()) {
             if let BlockCarrier::Block(block) = actual {
                 assert_eq!(block, expected);
@@ -116,7 +116,7 @@ fn text_insert_delete() {
     });
     {
         let mut txn = doc.transact();
-        txn.apply_update(Update::decode_v1(update));
+        txn.apply_update(Update::decode_v1(update).unwrap());
     }
     assert_eq!(txt.to_string(), "abhi".to_string());
     assert!(visited.get());
@@ -294,7 +294,7 @@ fn state_vector() {
     expected.inc_by(14182974, 2);
     expected.inc_by(93760946, 3);
 
-    let sv = StateVector::decode_v1(payload);
+    let sv = StateVector::decode_v1(payload).unwrap();
     assert_eq!(sv, expected);
 
     let serialized = sv.encode_v1();
@@ -329,7 +329,7 @@ fn utf32_lib0_v2_decoding() {
     ];
     let doc = Doc::new();
     let mut txn = doc.transact();
-    let update = Update::decode_v2(data);
+    let update = Update::decode_v2(data).unwrap();
     txn.apply_update(update);
     let xml = txn.get_xml_element("prosemirror");
     let actual: XmlElement = xml.get(0).unwrap().try_into().unwrap();
@@ -352,7 +352,7 @@ fn utf32_lib0_v2_decoding() {
 /// of `expected` blocks, then serialize them back and check
 /// if produced binary is equivalent to `payload`.
 fn roundtrip_v1(payload: &[u8], expected: &Vec<BlockCarrier>) {
-    let u = Update::decode_v1(payload);
+    let u = Update::decode_v1(payload).unwrap();
     let expected: Vec<&BlockCarrier> = expected.iter().collect();
     let blocks: Vec<&BlockCarrier> = u.blocks.blocks().collect();
     assert_eq!(blocks, expected, "failed to decode V1");
@@ -364,7 +364,7 @@ fn roundtrip_v1(payload: &[u8], expected: &Vec<BlockCarrier>) {
 
 /// Same as [roundtrip_v2] but using lib0 v2 encoding.
 fn roundtrip_v2(payload: &[u8], expected: &Vec<BlockCarrier>) {
-    let u = Update::decode_v2(payload);
+    let u = Update::decode_v2(payload).unwrap();
     let expected: Vec<&BlockCarrier> = expected.iter().collect();
     let blocks: Vec<&BlockCarrier> = u.blocks.blocks().collect();
     assert_eq!(blocks, expected, "failed to decode V2");
@@ -397,9 +397,9 @@ fn test_data_set<P: AsRef<std::path::Path>>(path: P) {
         buf
     };
     let mut decoder = DecoderV1::from(data.as_slice());
-    let test_count: u32 = decoder.read_uvar();
+    let test_count: u32 = decoder.read_var().unwrap();
     for test_num in 0..test_count {
-        let updates_len: u32 = decoder.read_uvar();
+        let updates_len: u32 = decoder.read_var().unwrap();
         let doc = Doc::new();
         let mut txn = doc.transact();
         let txt = txn.get_text("text");
@@ -407,17 +407,17 @@ fn test_data_set<P: AsRef<std::path::Path>>(path: P) {
         let arr = txn.get_array("array");
         drop(txn);
         for _ in 0..updates_len {
-            let update = Update::decode_v1(decoder.read_buf());
+            let update = Update::decode_v1(decoder.read_buf().unwrap()).unwrap();
             doc.transact().apply_update(update);
         }
-        let expected = decoder.read_string();
+        let expected = decoder.read_string().unwrap();
         assert_eq!(txt.to_string(), expected, "failed at {} run", test_num);
 
-        let expected = decoder.read_any();
+        let expected = decoder.read_any().unwrap();
         let actual = map.to_json();
         assert_eq!(actual, expected, "failed at {} run", test_num);
 
-        let expected = decoder.read_any();
+        let expected = decoder.read_any().unwrap();
         assert_eq!(arr.to_json(), expected, "failed at {} run", test_num);
     }
 }
