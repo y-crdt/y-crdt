@@ -20,8 +20,8 @@ int main(void) {
     YTransaction* txn = ytransaction_new(doc);
     YText* txt = ytext(txn, "name");
     
-    // append text to our collaborative document
-    ytext_insert(txt1, t1, 0, "hello world");
+    // append text to our collaborative document with no attributes
+    ytext_insert(txt, txn, 0, "hello world", null);
     
     // simulate update with remote peer
     YDoc* remote_doc = ydoc_new();
@@ -39,7 +39,6 @@ int main(void) {
     
     // release resources no longer in use in the rest of the example
     ybinary_destroy(remote_sv, sv_length);
-    ytext_destroy(txt);
     ytransaction_commit(txn);
     ydoc_destroy(doc);
     
@@ -49,12 +48,11 @@ int main(void) {
     ybinary_destroy(update, update_length);
     
     // retrieve string from remote peer YText instance
-    char* str = ytext_string(remote_txt, remote_txn);
+    char* str = ytext_string(remote_txt);
     printf("%s", str);
     
     // release remaining resources
     ystring_destroy(str);
-    ytext_destroy(remote_txt);
     ytransaction_commit(remote_txn);
     ydoc_destroy(remote_doc);
     
