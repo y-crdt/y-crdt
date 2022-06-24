@@ -20,8 +20,8 @@ pub fn exchange_updates(docs: &[&Doc]) {
                 let mut tb = b.transact();
 
                 let sv = tb.state_vector().encode_v1();
-                let update = ta.encode_diff_v1(&StateVector::decode_v1(sv.as_slice()));
-                tb.apply_update(Update::decode_v1(update.as_slice()));
+                let update = ta.encode_diff_v1(&StateVector::decode_v1(sv.as_slice()).unwrap());
+                tb.apply_update(Update::decode_v1(update.as_slice()).unwrap());
             }
         }
     }
@@ -278,9 +278,11 @@ impl TestConnector {
                 // If update message, add the received message to the list of received messages
                 {
                     let mut decoder = DecoderV1::new(Cursor::new(m.as_slice()));
-                    let msg_type: usize = decoder.read_uvar();
+                    let msg_type: usize = decoder.read_var().unwrap();
                     if msg_type == MSG_SYNC_STEP_2 || msg_type == MSG_SYNC_UPDATE {
-                        receiver.updates.push_back(decoder.read_buf().to_vec())
+                        receiver
+                            .updates
+                            .push_back(decoder.read_buf().unwrap().to_vec())
                     }
                 }
                 true
@@ -358,7 +360,7 @@ impl TestConnector {
         decoder: &mut D,
         encoder: &mut E,
     ) -> usize {
-        let msg_type = decoder.read_uvar();
+        let msg_type = decoder.read_var().unwrap();
         match msg_type {
             MSG_SYNC_STEP_1 => Self::read_sync_step1(peer, decoder, encoder),
             MSG_SYNC_STEP_2 => Self::read_sync_step2(peer, decoder),
@@ -373,13 +375,13 @@ impl TestConnector {
     }
 
     fn read_sync_step1<D: Decoder, E: Encoder>(peer: &TestPeer, decoder: &mut D, encoder: &mut E) {
-        Self::write_step2(peer, decoder.read_buf(), encoder)
+        Self::write_step2(peer, decoder.read_buf().unwrap(), encoder)
     }
 
     fn read_sync_step2<D: Decoder>(peer: &TestPeer, decoder: &mut D) {
         let mut txn = peer.doc.transact();
 
-        let update = Update::decode_v1(decoder.read_buf());
+        let update = Update::decode_v1(decoder.read_buf().unwrap()).unwrap();
         txn.apply_update(update);
     }
 
@@ -391,15 +393,15 @@ impl TestConnector {
     fn write_step1<E: Encoder>(peer: &TestPeer, encoder: &mut E) {
         let txn = peer.doc.transact();
 
-        encoder.write_uvar(MSG_SYNC_STEP_1);
+        encoder.write_var(MSG_SYNC_STEP_1);
         encoder.write_buf(txn.state_vector().encode_v1());
     }
 
     fn write_step2<E: Encoder>(peer: &TestPeer, sv: &[u8], encoder: &mut E) {
         let txn = peer.doc.transact();
-        let remote_sv = StateVector::decode_v1(sv);
+        let remote_sv = StateVector::decode_v1(sv).unwrap();
 
-        encoder.write_uvar(MSG_SYNC_STEP_2);
+        encoder.write_var(MSG_SYNC_STEP_2);
         encoder.write_buf(txn.encode_diff_v1(&remote_sv));
     }
 

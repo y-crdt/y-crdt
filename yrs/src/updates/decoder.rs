@@ -2,21 +2,22 @@ use crate::block::ClientID;
 use crate::types::TypeRefs;
 use crate::*;
 use lib0::decoding::Read;
+use lib0::error::Error;
 use lib0::{any::Any, decoding::Cursor};
 use std::rc::Rc;
 
 /// A trait that can be implemented by any other type in order to support lib0 decoding capability.
 pub trait Decode: Sized {
-    fn decode<D: Decoder>(decoder: &mut D) -> Self;
+    fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, Error>;
 
     /// Helper function for decoding 1st version of lib0 encoding.
-    fn decode_v1(data: &[u8]) -> Self {
+    fn decode_v1(data: &[u8]) -> Result<Self, Error> {
         let mut decoder = DecoderV1::from(data);
         Self::decode(&mut decoder)
     }
 
     /// Helper function for decoding 2nd version of lib0 encoding.
-    fn decode_v2(data: &[u8]) -> Self {
+    fn decode_v2(data: &[u8]) -> Result<Self, Error> {
         let mut decoder = DecoderV2::from(data);
         Self::decode(&mut decoder)
     }
@@ -33,45 +34,45 @@ pub trait Decoder: Read {
     fn reset_ds_cur_val(&mut self);
 
     /// Read next [DeleteSet] clock value.
-    fn read_ds_clock(&mut self) -> u32;
+    fn read_ds_clock(&mut self) -> Result<u32, Error>;
 
     /// Read the number of clients stored in encoded [DeleteSet].
-    fn read_ds_len(&mut self) -> u32;
+    fn read_ds_len(&mut self) -> Result<u32, Error>;
 
     /// Read left origin of a currently decoded [Block].
-    fn read_left_id(&mut self) -> block::ID;
+    fn read_left_id(&mut self) -> Result<ID, Error>;
 
     /// Read right origin of a currently decoded [Block].
-    fn read_right_id(&mut self) -> block::ID;
+    fn read_right_id(&mut self) -> Result<ID, Error>;
 
     /// Read currently decoded client identifier.
-    fn read_client(&mut self) -> ClientID;
+    fn read_client(&mut self) -> Result<ClientID, Error>;
 
     /// Read info bit flags of a currently decoded [Block].
-    fn read_info(&mut self) -> u8;
+    fn read_info(&mut self) -> Result<u8, Error>;
 
     /// Read bit flags determining type of parent of a currently decoded [Block].
-    fn read_parent_info(&mut self) -> bool;
+    fn read_parent_info(&mut self) -> Result<bool, Error>;
 
     /// Read type ref info of a currently decoded [Block] parent.
-    fn read_type_ref(&mut self) -> types::TypeRefs;
+    fn read_type_ref(&mut self) -> Result<TypeRefs, Error>;
 
     /// Read length parameter.
-    fn read_len(&mut self) -> u32;
+    fn read_len(&mut self) -> Result<u32, Error>;
 
     /// Decode a JSON-like data type. It's a complex type which is an extension of native JavaScript
     /// Object Notation.
-    fn read_any(&mut self) -> lib0::any::Any;
+    fn read_any(&mut self) -> Result<Any, Error>;
 
     /// Decode an embedded JSON string into [Any] struct. It's a complex type which is an extension
     /// of native JavaScript Object Notation.
-    fn read_json(&mut self) -> lib0::any::Any;
+    fn read_json(&mut self) -> Result<Any, Error>;
 
     /// Read key string.
-    fn read_key(&mut self) -> Rc<str>;
+    fn read_key(&mut self) -> Result<Rc<str>, Error>;
 
     /// Consume a rest of the decoded buffer data and return it without parsing.
-    fn read_to_end(&mut self) -> &[u8];
+    fn read_to_end(&mut self) -> Result<&[u8], Error>;
 }
 
 /// Version 1 of lib0 decoder.
@@ -84,10 +85,10 @@ impl<'a> DecoderV1<'a> {
         DecoderV1 { cursor }
     }
 
-    fn read_id(&mut self) -> block::ID {
-        let client: u32 = self.read_uvar();
-        let clock = self.read_uvar();
-        ID::new(client as ClientID, clock)
+    fn read_id(&mut self) -> Result<ID, Error> {
+        let client: u32 = self.read_var()?;
+        let clock = self.read_var()?;
+        Ok(ID::new(client as ClientID, clock))
     }
 
     pub fn has_content(&self) -> bool {
@@ -108,74 +109,90 @@ impl<'a> From<&'a [u8]> for DecoderV1<'a> {
 }
 
 impl<'a> Read for DecoderV1<'a> {
-    fn read_u8(&mut self) -> u8 {
+    #[inline]
+    fn read_u8(&mut self) -> Result<u8, Error> {
         self.cursor.read_u8()
     }
 
-    fn read(&mut self, len: usize) -> &[u8] {
-        self.cursor.read(len)
+    #[inline]
+    fn read_exact(&mut self, len: usize) -> Result<&[u8], Error> {
+        self.cursor.read_exact(len)
     }
 }
 
 impl<'a> Decoder for DecoderV1<'a> {
+    #[inline]
     fn reset_ds_cur_val(&mut self) {
         /* no op */
     }
 
-    fn read_ds_clock(&mut self) -> u32 {
-        self.read_uvar()
+    #[inline]
+    fn read_ds_clock(&mut self) -> Result<u32, Error> {
+        self.read_var()
     }
 
-    fn read_ds_len(&mut self) -> u32 {
-        self.read_uvar()
+    #[inline]
+    fn read_ds_len(&mut self) -> Result<u32, Error> {
+        self.read_var()
     }
 
-    fn read_left_id(&mut self) -> ID {
+    #[inline]
+    fn read_left_id(&mut self) -> Result<ID, Error> {
         self.read_id()
     }
 
-    fn read_right_id(&mut self) -> ID {
+    #[inline]
+    fn read_right_id(&mut self) -> Result<ID, Error> {
         self.read_id()
     }
 
-    fn read_client(&mut self) -> ClientID {
-        let client: u32 = self.cursor.read_uvar();
-        client as ClientID
+    #[inline]
+    fn read_client(&mut self) -> Result<ClientID, Error> {
+        let client: u32 = self.cursor.read_var()?;
+        Ok(client as ClientID)
     }
 
-    fn read_info(&mut self) -> u8 {
+    #[inline]
+    fn read_info(&mut self) -> Result<u8, Error> {
         self.cursor.read_u8()
     }
 
-    fn read_parent_info(&mut self) -> bool {
-        let info: u32 = self.cursor.read_uvar();
-        info == 1
+    #[inline]
+    fn read_parent_info(&mut self) -> Result<bool, Error> {
+        let info: u32 = self.cursor.read_var()?;
+        Ok(info == 1)
     }
 
-    fn read_type_ref(&mut self) -> u8 {
+    #[inline]
+    fn read_type_ref(&mut self) -> Result<u8, Error> {
         // In Yjs we use read_var_uint but use only 7 bit. So this is equivalent.
         self.cursor.read_u8()
     }
 
-    fn read_len(&mut self) -> u32 {
-        self.read_uvar()
+    #[inline]
+    fn read_len(&mut self) -> Result<u32, Error> {
+        self.read_var()
     }
 
-    fn read_any(&mut self) -> Any {
+    #[inline]
+    fn read_any(&mut self) -> Result<Any, Error> {
         Any::decode(self)
     }
 
-    fn read_json(&mut self) -> Any {
-        let src = self.read_string();
+    fn read_json(&mut self) -> Result<Any, Error> {
+        let src = self.read_string()?;
         Any::from_json(src)
     }
 
-    fn read_key(&mut self) -> Rc<str> {
-        self.read_string().into()
+    #[inline]
+    fn read_key(&mut self) -> Result<Rc<str>, Error> {
+        let str: Rc<str> = self.read_string()?.into();
+        Ok(str)
     }
 
-    fn read_to_end(&mut self) -> &[u8] {
-        &self.cursor.buf[self.cursor.next..]
+    #[inline]
+    fn read_to_end(&mut self) -> Result<&[u8], Error> {
+        Ok(&self.cursor.buf[self.cursor.next..])
     }
 }
 
@@ -197,7 +214,10 @@ pub struct DecoderV2<'a> {
 
 impl<'a> DecoderV2<'a> {
     pub fn new(mut cursor: Cursor<'a>) -> Self {
-        let _: u32 = cursor.read_uvar(); // read feature flag - currently unused
+        if cursor.has_content() {
+            // read feature flag - currently unused
+            let _: u8 = cursor.read_u8().unwrap();
+        }
         let mut idx = cursor.next;
         let buf = cursor.buf;
 
@@ -268,15 +288,18 @@ impl<'a> From<&'a [u8]> for DecoderV2<'a> {
 }
 
 impl<'a> Read for DecoderV2<'a> {
-    fn read_u8(&mut self) -> u8 {
+    #[inline]
+    fn read_exact(&mut self, len: usize) -> Result<&[u8], Error> {
+        self.cursor.read_exact(len)
+    }
+
+    #[inline]
+    fn read_u8(&mut self) -> Result<u8, Error> {
         self.cursor.read_u8()
     }
 
-    fn read(&mut self, len: usize) -> &[u8] {
-        self.cursor.read(len)
-    }
-
-    fn read_string(&mut self) -> &str {
+    #[inline]
+    fn read_string(&mut self) -> Result<&str, Error> {
         self.string_decoder.read_str()
     }
 }
@@ -286,72 +309,73 @@ impl<'a> Decoder for DecoderV2<'a> {
         self.ds_curr_val = 0;
     }
 
-    fn read_ds_clock(&mut self) -> u32 {
-        self.ds_curr_val += self.cursor.read_uvar::<u32>();
-        self.ds_curr_val
+    fn read_ds_clock(&mut self) -> Result<u32, Error> {
+        self.ds_curr_val += self.cursor.read_var::<u32>()?;
+        Ok(self.ds_curr_val)
     }
 
-    fn read_ds_len(&mut self) -> u32 {
-        let diff = self.cursor.read_uvar::<u32>() + 1;
+    fn read_ds_len(&mut self) -> Result<u32, Error> {
+        let diff = self.cursor.read_var::<u32>()? + 1;
         self.ds_curr_val += diff;
-        diff
+        Ok(diff)
     }
 
-    fn read_left_id(&mut self) -> ID {
-        ID::new(
-            self.client_decoder.read_u64() as ClientID,
-            self.left_clock_decoder.read_u32(),
-        )
+    fn read_left_id(&mut self) -> Result<ID, Error> {
+        Ok(ID::new(
+            self.client_decoder.read_u64()? as ClientID,
+            self.left_clock_decoder.read_u32()?,
+        ))
     }
 
-    fn read_right_id(&mut self) -> ID {
-        ID::new(
-            self.client_decoder.read_u64() as ClientID,
-            self.right_clock_decoder.read_u32(),
-        )
+    fn read_right_id(&mut self) -> Result<ID, Error> {
+        Ok(ID::new(
+            self.client_decoder.read_u64()? as ClientID,
+            self.right_clock_decoder.read_u32()?,
+        ))
     }
 
-    fn read_client(&mut self) -> ClientID {
-        self.client_decoder.read_u64() as ClientID
+    fn read_client(&mut self) -> Result<ClientID, Error> {
+        Ok(self.client_decoder.read_u64()? as ClientID)
     }
 
-    fn read_info(&mut self) -> u8 {
+    fn read_info(&mut self) -> Result<u8, Error> {
         self.info_decoder.read_u8()
     }
 
-    fn read_parent_info(&mut self) -> bool {
-        self.parent_info_decoder.read_u8() == 1
+    fn read_parent_info(&mut self) -> Result<bool, Error> {
+        Ok(self.parent_info_decoder.read_u8()? == 1)
     }
 
-    fn read_type_ref(&mut self) -> TypeRefs {
-        self.type_ref_decoder.read_u64() as u8
+    fn read_type_ref(&mut self) -> Result<TypeRefs, Error> {
+        Ok(self.type_ref_decoder.read_u64()? as u8)
     }
 
-    fn read_len(&mut self) -> u32 {
-        self.len_decoder.read_u64() as u32
+    fn read_len(&mut self) -> Result<u32, Error> {
+        Ok(self.len_decoder.read_u64()? as u32)
     }
 
-    fn read_any(&mut self) -> Any {
+    fn read_any(&mut self) -> Result<Any, Error> {
         Any::decode(&mut self.cursor)
     }
 
-    fn read_json(&mut self) -> Any {
+    fn read_json(&mut self) -> Result<Any, Error> {
         Any::decode(&mut self.cursor)
     }
 
-    fn read_key(&mut self) -> Rc<str> {
-        let key_clock = self.key_clock_decoder.read_u32();
+    fn read_key(&mut self) -> Result<Rc<str>, Error> {
+        let key_clock = self.key_clock_decoder.read_u32()?;
         if let Some(key) = self.keys.get(key_clock as usize) {
-            key.clone()
+            Ok(key.clone())
         } else {
-            let key: Rc<str> = self.string_decoder.read_str().into();
+            let key: Rc<str> = self.string_decoder.read_str()?.into();
             self.keys.push(key.clone());
-            key
+            Ok(key)
         }
     }
 
-    fn read_to_end(&mut self) -> &[u8] {
-        &self.cursor.buf[self.cursor.next..]
+    #[inline]
+    fn read_to_end(&mut self) -> Result<&[u8], Error> {
+        Ok(&self.cursor.buf[self.cursor.next..])
     }
 }
 
@@ -372,21 +396,21 @@ impl<'a> IntDiffOptRleDecoder<'a> {
         }
     }
 
-    fn read_u32(&mut self) -> u32 {
+    fn read_u32(&mut self) -> Result<u32, Error> {
         if self.count == 0 {
-            let diff = self.cursor.read_ivar();
+            let diff = self.cursor.read_var::<i32>()?;
             // if the first bit is set, we read more data
             let has_count = diff & 1;
             self.diff = (diff >> 1) as i32;
             self.count = if has_count != 0 {
-                self.cursor.read_uvar::<u32>() + 2
+                self.cursor.read_var::<u32>()? + 2
             } else {
                 1
             };
         }
         self.last = ((self.last as i32) + self.diff) as u32;
         self.count -= 1;
-        self.last
+        Ok(self.last)
     }
 }
 
@@ -405,13 +429,13 @@ impl<'a> UIntOptRleDecoder<'a> {
         }
     }
 
-    fn read_u64(&mut self) -> u64 {
+    fn read_u64(&mut self) -> Result<u64, Error> {
         if self.count == 0 {
-            let s = self.cursor.read_ivar();
+            let s = self.cursor.read_var::<i64>()?;
             // if the sign is negative, we read the count too, otherwise count is 1
             let is_negative = s.is_negative();
             if is_negative {
-                self.count = self.cursor.read_uvar::<u32>() + 2;
+                self.count = self.cursor.read_var::<u32>()? + 2;
                 self.last = (-s) as u64;
             } else {
                 self.count = 1;
@@ -419,7 +443,7 @@ impl<'a> UIntOptRleDecoder<'a> {
             }
         }
         self.count -= 1;
-        self.last
+        Ok(self.last)
     }
 }
 
@@ -438,17 +462,17 @@ impl<'a> RleDecoder<'a> {
         }
     }
 
-    fn read_u8(&mut self) -> u8 {
+    fn read_u8(&mut self) -> Result<u8, Error> {
         if self.count == 0 {
-            self.last = self.cursor.read_u8();
+            self.last = self.cursor.read_u8()?;
             if self.cursor.has_content() {
-                self.count = (self.cursor.read_uvar::<u32>() as i32) + 1; // see encoder implementation for the reason why this is incremented
+                self.count = (self.cursor.read_var::<u32>()? as i32) + 1; // see encoder implementation for the reason why this is incremented
             } else {
                 self.count = -1; // read the current value forever
             }
         }
         self.count -= 1;
-        self.last
+        Ok(self.last)
     }
 }
 
@@ -471,8 +495,8 @@ impl<'a> StringDecoder<'a> {
         }
     }
 
-    fn read_str(&mut self) -> &'a str {
-        let mut remaining = self.len_decoder.read_u64() as usize;
+    fn read_str(&mut self) -> Result<&'a str, Error> {
+        let mut remaining = self.len_decoder.read_u64()? as usize;
         let mut i = 0;
         let start = &self.buf[self.pos..];
         for c in start.chars() {
@@ -484,6 +508,6 @@ impl<'a> StringDecoder<'a> {
         }
         let result = &start[..i];
         self.pos += i;
-        result
+        Ok(result)
     }
 }

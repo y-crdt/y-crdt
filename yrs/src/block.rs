@@ -9,6 +9,7 @@ use crate::updates::decoder::Decoder;
 use crate::updates::encoder::Encoder;
 use crate::*;
 use lib0::any::Any;
+use lib0::error::Error;
 use smallstr::SmallString;
 use std::collections::HashSet;
 use std::hash::Hash;
@@ -1410,50 +1411,50 @@ impl ItemContent {
         }
     }
 
-    pub fn decode<D: Decoder>(decoder: &mut D, ref_num: u8) -> Self {
+    pub fn decode<D: Decoder>(decoder: &mut D, ref_num: u8) -> Result<Self, Error> {
         match ref_num & 0b1111 {
-            BLOCK_ITEM_DELETED_REF_NUMBER => ItemContent::Deleted(decoder.read_len()),
+            BLOCK_ITEM_DELETED_REF_NUMBER => Ok(ItemContent::Deleted(decoder.read_len()?)),
             BLOCK_ITEM_JSON_REF_NUMBER => {
-                let mut remaining = decoder.read_len() as i32;
+                let mut remaining = decoder.read_len()? as i32;
                 let mut buf = Vec::with_capacity(remaining as usize);
                 while remaining >= 0 {
-                    buf.push(decoder.read_string().to_owned());
+                    buf.push(decoder.read_string()?.to_owned());
                     remaining -= 1;
                 }
-                ItemContent::JSON(buf)
+                Ok(ItemContent::JSON(buf))
             }
-            BLOCK_ITEM_BINARY_REF_NUMBER => ItemContent::Binary(decoder.read_buf().to_owned()),
-            BLOCK_ITEM_STRING_REF_NUMBER => ItemContent::String(decoder.read_string().into()),
-            BLOCK_ITEM_EMBED_REF_NUMBER => ItemContent::Embed(decoder.read_json().into()),
-            BLOCK_ITEM_FORMAT_REF_NUMBER => {
-                ItemContent::Format(decoder.read_key(), decoder.read_json().into())
-            }
+            BLOCK_ITEM_BINARY_REF_NUMBER => Ok(ItemContent::Binary(decoder.read_buf()?.to_owned())),
+            BLOCK_ITEM_STRING_REF_NUMBER => Ok(ItemContent::String(decoder.read_string()?.into())),
+            BLOCK_ITEM_EMBED_REF_NUMBER => Ok(ItemContent::Embed(decoder.read_json()?.into())),
+            BLOCK_ITEM_FORMAT_REF_NUMBER => Ok(ItemContent::Format(
+                decoder.read_key()?,
+                decoder.read_json()?.into(),
+            )),
             BLOCK_ITEM_TYPE_REF_NUMBER => {
-                let type_ref = decoder.read_type_ref();
-                let name = if type_ref == types::TYPE_REFS_XML_ELEMENT
-                    || type_ref == types::TYPE_REFS_XML_HOOK
-                {
-                    Some(decoder.read_key().to_owned())
+                let type_ref = decoder.read_type_ref()?;
+                let name = if type_ref == TYPE_REFS_XML_ELEMENT || type_ref == TYPE_REFS_XML_HOOK {
+                    Some(decoder.read_key()?.to_owned())
                 } else {
                     None
                 };
-                let inner = types::Branch::new(type_ref, name);
-                ItemContent::Type(inner)
+                let inner = Branch::new(type_ref, name);
+                Ok(ItemContent::Type(inner))
             }
             BLOCK_ITEM_ANY_REF_NUMBER => {
-                let len = decoder.read_len() as usize;
+                let len = decoder.read_len()? as usize;
                 let mut values = Vec::with_capacity(len);
                 let mut i = 0;
                 while i < len {
-                    values.push(decoder.read_any());
+                    values.push(decoder.read_any()?);
                     i += 1;
                 }
-                ItemContent::Any(values)
+                Ok(ItemContent::Any(values))
             }
-            BLOCK_ITEM_DOC_REF_NUMBER => {
-                ItemContent::Doc(decoder.read_string().into(), Box::new(decoder.read_any()))
-            }
-            info => panic!("ItemContent::decode unrecognized info flag: {}", info),
+            BLOCK_ITEM_DOC_REF_NUMBER => Ok(ItemContent::Doc(
+                decoder.read_string()?.into(),
+                Box::new(decoder.read_any()?),
+            )),
+            _ => Err(Error::UnexpectedValue),
         }
     }
 

@@ -67,11 +67,11 @@ pub trait Encoder: Write {
 
     /// Encode JSON-like data type. This is a complex structure which is an extension to JavaScript
     /// Object Notation with some extra cases.
-    fn write_any(&mut self, any: &lib0::any::Any);
+    fn write_any(&mut self, any: &Any);
 
     /// Encode JSON-like data type as nested JSON string. This is a complex structure which is an
     /// extension to JavaScript Object Notation with some extra cases.
-    fn write_json(&mut self, any: &lib0::any::Any);
+    fn write_json(&mut self, any: &Any);
 
     /// Write a string key.
     fn write_key(&mut self, string: &str);
@@ -89,66 +89,80 @@ impl EncoderV1 {
     }
 
     fn write_id(&mut self, id: &ID) {
-        self.write_uvar(id.client);
-        self.write_uvar(id.clock);
+        self.write_var(id.client);
+        self.write_var(id.clock)
     }
 }
 
 impl Write for EncoderV1 {
-    fn write_u8(&mut self, value: u8) {
-        self.buf.write_u8(value)
+    #[inline]
+    fn write_all(&mut self, buf: &[u8]) {
+        self.buf.write_all(buf)
     }
 
-    fn write(&mut self, buf: &[u8]) {
-        self.buf.write(buf)
+    #[inline]
+    fn write_u8(&mut self, value: u8) {
+        self.buf.write_u8(value)
     }
 }
 
 impl Encoder for EncoderV1 {
+    #[inline]
     fn to_vec(self) -> Vec<u8> {
         self.buf
     }
 
+    #[inline]
     fn reset_ds_cur_val(&mut self) {
         /* no op */
     }
 
+    #[inline]
     fn write_ds_clock(&mut self, clock: u32) {
-        self.write_uvar(clock)
+        self.write_var(clock)
     }
 
+    #[inline]
     fn write_ds_len(&mut self, len: u32) {
-        self.write_uvar(len)
+        self.write_var(len)
     }
 
+    #[inline]
     fn write_left_id(&mut self, id: &ID) {
         self.write_id(id)
     }
 
+    #[inline]
     fn write_right_id(&mut self, id: &ID) {
         self.write_id(id)
     }
 
+    #[inline]
     fn write_client(&mut self, client: ClientID) {
-        self.write_uvar(client)
+        self.write_var(client)
     }
 
+    #[inline]
     fn write_info(&mut self, info: u8) {
         self.write_u8(info)
     }
 
+    #[inline]
     fn write_parent_info(&mut self, is_y_key: bool) {
-        self.write_uvar(if is_y_key { 1 as u32 } else { 0 as u32 })
+        self.write_var(if is_y_key { 1 as u32 } else { 0 as u32 })
     }
 
+    #[inline]
     fn write_type_ref(&mut self, info: u8) {
         self.write_u8(info)
     }
 
+    #[inline]
     fn write_len(&mut self, len: u32) {
-        self.write_uvar(len)
+        self.write_var(len)
     }
 
+    #[inline]
     fn write_any(&mut self, any: &Any) {
         any.encode(self)
     }
@@ -159,6 +173,7 @@ impl Encoder for EncoderV1 {
         self.write_string(buf.as_str())
     }
 
+    #[inline]
     fn write_key(&mut self, key: &str) {
         self.write_string(key)
     }
@@ -201,14 +216,17 @@ impl EncoderV2 {
 }
 
 impl Write for EncoderV2 {
+    #[inline]
+    fn write_all(&mut self, buf: &[u8]) {
+        self.buf.write_buf(buf)
+    }
+
+    #[inline]
     fn write_u8(&mut self, value: u8) {
         self.buf.write_u8(value)
     }
 
-    fn write(&mut self, buf: &[u8]) {
-        self.buf.write_buf(buf)
-    }
-
+    #[inline]
     fn write_string(&mut self, str: &str) {
         self.string_encoder.write(str)
     }
@@ -237,10 +255,11 @@ impl Encoder for EncoderV2 {
         buf.write_buf(parent_info);
         buf.write_buf(type_ref);
         buf.write_buf(len);
-        buf.write(rest.as_slice());
+        buf.write_all(rest.as_slice());
         buf
     }
 
+    #[inline]
     fn reset_ds_cur_val(&mut self) {
         self.ds_curr_val = 0;
     }
@@ -248,46 +267,52 @@ impl Encoder for EncoderV2 {
     fn write_ds_clock(&mut self, clock: u32) {
         let diff = clock - self.ds_curr_val;
         self.ds_curr_val = clock;
-        self.buf.write_uvar(diff);
+        self.buf.write_var(diff)
     }
 
     fn write_ds_len(&mut self, len: u32) {
         debug_assert!(len != 0);
-        self.buf.write_uvar(len - 1);
+        self.buf.write_var(len - 1);
         self.ds_curr_val += len;
     }
 
     fn write_left_id(&mut self, id: &ID) {
         self.client_encoder.write_u64(id.client as u64);
-        self.left_clock_encoder.write_u32(id.clock);
+        self.left_clock_encoder.write_u32(id.clock)
     }
 
     fn write_right_id(&mut self, id: &ID) {
         self.client_encoder.write_u64(id.client as u64);
-        self.right_clock_encoder.write_u32(id.clock);
+        self.right_clock_encoder.write_u32(id.clock)
     }
 
+    #[inline]
     fn write_client(&mut self, client: ClientID) {
-        self.client_encoder.write_u64(client as u64);
+        self.client_encoder.write_u64(client as u64)
     }
 
+    #[inline]
     fn write_info(&mut self, info: u8) {
-        self.info_encoder.write_u8(info);
+        self.info_encoder.write_u8(info)
     }
 
+    #[inline]
     fn write_parent_info(&mut self, is_y_key: bool) {
         self.parent_info_encoder
-            .write_u8(if is_y_key { 1 } else { 0 });
+            .write_u8(if is_y_key { 1 } else { 0 })
     }
 
+    #[inline]
     fn write_type_ref(&mut self, info: u8) {
         self.type_ref_encoder.write_u64(info as u64)
     }
 
+    #[inline]
     fn write_len(&mut self, len: u32) {
         self.len_encoder.write_u64(len as u64);
     }
 
+    #[inline]
     fn write_any(&mut self, any: &Any) {
         let mut encoder = EncoderV1 {
             buf: std::mem::take(&mut self.buf),
@@ -364,9 +389,9 @@ impl IntDiffOptRleEncoder {
             // flush counter, unless this is the first value (count = 0)
             // case 1: just a single value. set first bit to positive
             // case 2: write several values. set first bit to negative to indicate that there is a length coming
-            self.buf.write_ivar(encode_diff as i64);
+            self.buf.write_var(encode_diff as i64);
             if self.count > 1 {
-                self.buf.write_uvar(self.count - 2);
+                self.buf.write_var(self.count - 2);
             }
         }
     }
@@ -419,10 +444,10 @@ impl UIntOptRleEncoder {
             // case 1: just a single value. set sign to positive
             // case 2: write several values. set sign to negative to indicate that there is a length coming
             if self.count == 1 {
-                self.buf.write_ivar(self.last as i64);
+                self.buf.write_var(self.last as i64);
             } else {
-                self.buf.write_ivar(-(self.last as i64));
-                self.buf.write_uvar(self.count - 2);
+                self.buf.write_var(-(self.last as i64));
+                self.buf.write_var(self.count - 2);
             }
         }
     }
@@ -454,7 +479,7 @@ impl RleEncoder {
         } else {
             if self.count > 0 {
                 // flush counter, unless this is the first value (count = 0)
-                self.buf.write_uvar(self.count - 1);
+                self.buf.write_var(self.count - 1);
             }
             self.count = 1;
             self.buf.write_u8(value);
@@ -498,7 +523,7 @@ impl StringEncoder {
         let lengths = self.len_encoder.to_vec();
         let mut buf = Vec::with_capacity(self.buf.len() + lengths.len());
         buf.write_string(&self.buf);
-        buf.write(lengths.as_slice());
+        buf.write_all(lengths.as_slice());
         buf
     }
 }

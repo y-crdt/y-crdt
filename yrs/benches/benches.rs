@@ -462,19 +462,19 @@ fn read_input(fpath: &str) -> Vec<TextOp> {
     let mut buf = Vec::new();
     std::io::Read::read_to_end(&mut f, &mut buf).unwrap();
     let mut decoder = DecoderV1::new(Cursor::new(buf.as_slice()));
-    let len: usize = decoder.read_uvar();
+    let len: usize = decoder.read_var();
     let mut result = Vec::with_capacity(len);
     for _ in 0..len {
         let op = {
-            match decoder.read_uvar() {
+            match decoder.read_var() {
                 1u32 => {
-                    let idx = decoder.read_uvar();
+                    let idx = decoder.read_var();
                     let chunk = decoder.read_string();
                     TextOp::Insert(idx, chunk.to_string())
                 }
                 2u32 => {
-                    let idx = decoder.read_uvar();
-                    let len = decoder.read_uvar();
+                    let idx = decoder.read_var();
+                    let len = decoder.read_var();
                     TextOp::Delete(idx, len)
                 }
                 other => panic!("unrecognized TextOp tag type: {}", other),
