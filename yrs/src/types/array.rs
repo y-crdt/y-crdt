@@ -113,7 +113,7 @@ impl Array {
             return;
         }
         let mut cursor = self.seek(source);
-        let range = cursor.range(1, Assoc::Right, Assoc::Left, 0);
+        let range = cursor.range(1, Assoc::Right, Assoc::Left, -1);
 
         cursor = self.seek(target);
         cursor.move_range(txn, range);
@@ -134,7 +134,7 @@ impl Array {
         }
         let mut cursor = self.seek(start);
         let len = end - start + 1;
-        let range = cursor.range(len as usize, assoc_start, assoc_end, 0);
+        let range = cursor.range(len as usize, assoc_start, assoc_end, -1);
 
         cursor = self.seek(target);
         cursor.move_range(txn, range);
@@ -150,8 +150,9 @@ impl Array {
     pub fn to_json(&self) -> Any {
         let mut cursor = self.seek(0);
         let len = self.len() as usize;
-        let mut buf = Vec::with_capacity(len);
-        cursor.read(&mut buf);
+        let mut buf = vec![Value::default(); len];
+        let read = cursor.read(&mut buf);
+        debug_assert_eq!(read, len);
         let result = buf.into_iter().map(Value::to_json).collect();
         Any::Array(result)
     }
@@ -429,40 +430,42 @@ mod test {
             assert_eq!(a.to_vec::<u32>().unwrap(), vec![0, 1, 2, 3]);
 
             a.remove_range(&mut txn, 0, 1); // [1,2,3]
+            assert_eq!(a.to_vec::<u32>().unwrap(), vec![1, 2, 3]);
             a.insert(&mut txn, 0, 0); // [0,1,2,3]
+            assert_eq!(a.to_vec::<u32>().unwrap(), vec![0, 1, 2, 3]);
 
             assert_eq!(a.len(), 4);
         }
         {
             let mut txn = d.transact();
             let a = txn.get_array("array");
-            a.remove_range(&mut txn, 1, 1); // [0,2,3]
+            a.remove_range(&mut txn, 1, 1);
             assert_eq!(a.to_vec::<u32>().unwrap(), vec![0, 2, 3]);
             assert_eq!(a.len(), 3);
 
-            a.insert(&mut txn, 1, 1); // [0,1,2,3]
+            a.insert(&mut txn, 1, 1);
             assert_eq!(a.to_vec::<u32>().unwrap(), vec![0, 1, 2, 3]);
             assert_eq!(a.len(), 4);
 
-            a.remove_range(&mut txn, 2, 1); // [0,1,3]
+            a.remove_range(&mut txn, 2, 1);
             assert_eq!(a.to_vec::<u32>().unwrap(), vec![0, 1, 3]);
             assert_eq!(a.len(), 3);
 
-            a.insert(&mut txn, 2, 2); // [0,1,2,3]
+            a.insert(&mut txn, 2, 2);
             assert_eq!(a.to_vec::<u32>().unwrap(), vec![0, 1, 2, 3]);
             assert_eq!(a.len(), 4);
         }
 
         let mut txn = d.transact();
-        let a = txn.get_array("array"); // [0,1,2,3]
+        let a = txn.get_array("array");
         assert_eq!(a.to_vec::<u32>().unwrap(), vec![0, 1, 2, 3]);
         assert_eq!(a.len(), 4);
 
-        a.remove_range(&mut txn, 1, 1); // [0,2,3]
+        a.remove_range(&mut txn, 1, 1);
         assert_eq!(a.to_vec::<u32>().unwrap(), vec![0, 2, 3]);
         assert_eq!(a.len(), 3);
 
-        a.insert(&mut txn, 1, 1); // [0,1,2,3]
+        a.insert(&mut txn, 1, 1);
         assert_eq!(a.to_vec::<u32>().unwrap(), vec![0, 1, 2, 3]);
         assert_eq!(a.len(), 4);
     }
@@ -488,10 +491,11 @@ mod test {
             a1.push_back(&mut t1, 1);
             a1.push_back(&mut t1, true);
             a1.push_back(&mut t1, false);
-            let actual: Vec<_> = a1.iter().collect();
+
+            let actual = a1.to_json();
             assert_eq!(
                 actual,
-                vec![Value::from(1.0), Value::from(true), Value::from(false)]
+                Any::Array(vec![(1.0).into(), true.into(), false.into()])
             );
         }
 

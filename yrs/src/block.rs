@@ -165,7 +165,6 @@ impl BlockPtr {
         match self.deref_mut() {
             Block::GC(this) => this.integrate(offset),
             Block::Item(this) => {
-                println!("{}", this);
                 let store = txn.store_mut();
                 let encoding = store.options.offset_kind;
                 if offset > 0 {
