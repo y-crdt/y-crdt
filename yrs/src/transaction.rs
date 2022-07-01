@@ -360,13 +360,14 @@ impl Transaction {
             }
         }
 
-        for ptr in recurse.iter() {
-            if !self.delete(*ptr) {
+        for &ptr in recurse.iter() {
+            if !self.delete(ptr) {
                 // Whis will be gc'd later and we want to merge it if possible
                 // We try to merge all deleted items after each transaction,
                 // but we have no knowledge about that this needs to be merged
                 // since it is not in transaction.ds. Hence we add it to transaction._mergeStructs
-                self.merge_blocks.push(*ptr);
+                //println!("merge block 3: {}", ptr);
+                //self.merge_blocks.push(ptr);
             }
         }
 

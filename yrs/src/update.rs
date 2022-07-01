@@ -10,6 +10,7 @@ use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::client_hasher::ClientHasher;
 use crate::{OffsetKind, StateVector, Transaction, ID};
+use lib0::error::Error;
 use std::cmp::Ordering;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, VecDeque};
@@ -368,45 +369,45 @@ impl Update {
         }
     }
 
-    fn decode_block<D: Decoder>(id: ID, decoder: &mut D) -> BlockCarrier {
-        let info = decoder.read_info();
+    fn decode_block<D: Decoder>(id: ID, decoder: &mut D) -> Result<BlockCarrier, Error> {
+        let info = decoder.read_info()?;
         match info {
             BLOCK_SKIP_REF_NUMBER => {
-                let len: u32 = decoder.read_uvar();
-                BlockCarrier::Skip(BlockRange { id, len })
+                let len: u32 = decoder.read_var()?;
+                Ok(BlockCarrier::Skip(BlockRange { id, len }))
             }
             BLOCK_GC_REF_NUMBER => {
-                let len: u32 = decoder.read_len();
-                Box::new(Block::GC(BlockRange { id, len })).into()
+                let len: u32 = decoder.read_len()?;
+                Ok(Box::new(Block::GC(BlockRange { id, len })).into())
             }
             info => {
                 let cant_copy_parent_info = info & (HAS_ORIGIN | HAS_RIGHT_ORIGIN) == 0;
                 let origin = if info & HAS_ORIGIN != 0 {
-                    Some(decoder.read_left_id())
+                    Some(decoder.read_left_id()?)
                 } else {
                     None
                 };
                 let right_origin = if info & HAS_RIGHT_ORIGIN != 0 {
-                    Some(decoder.read_right_id())
+                    Some(decoder.read_right_id()?)
                 } else {
                     None
                 };
                 let parent = if cant_copy_parent_info {
-                    if decoder.read_parent_info() {
-                        TypePtr::Named(decoder.read_string().into())
+                    if decoder.read_parent_info()? {
+                        TypePtr::Named(decoder.read_string()?.into())
                     } else {
-                        TypePtr::ID(decoder.read_left_id())
+                        TypePtr::ID(decoder.read_left_id()?)
                     }
                 } else {
                     TypePtr::Unknown
                 };
                 let parent_sub: Option<Rc<str>> =
                     if cant_copy_parent_info && (info & HAS_PARENT_SUB != 0) {
-                        Some(decoder.read_string().into())
+                        Some(decoder.read_string()?.into())
                     } else {
                         None
                     };
-                let content = ItemContent::decode(decoder, info);
+                let content = ItemContent::decode(decoder, info)?;
                 let item = Item::new(
                     id,
                     None,
@@ -417,7 +418,8 @@ impl Update {
                     parent_sub,
                     content,
                 );
-                item.into()
+                let block: BlockCarrier = item.into();
+                Ok(block)
             }
         }
     }
@@ -453,20 +455,20 @@ impl Update {
         sorted_clients.sort_by(|&(x_id, _), &(y_id, _)| y_id.cmp(x_id));
 
         // finish lazy struct writing
-        encoder.write_uvar(sorted_clients.len());
+        encoder.write_var(sorted_clients.len());
         for (&client, (offset, blocks)) in sorted_clients {
-            encoder.write_uvar(blocks.len());
+            encoder.write_var(blocks.len());
             encoder.write_client(client);
 
             let mut block = blocks[0];
-            encoder.write_uvar(block.id().clock + offset);
+            encoder.write_var(block.id().clock + offset);
             block.encode_with_offset(encoder, *offset);
             for i in 1..blocks.len() {
                 block = blocks[i];
                 block.encode_with_offset(encoder, 0);
             }
         }
-        self.delete_set.encode(encoder);
+        self.delete_set.encode(encoder)
     }
 
     pub fn merge_updates<T>(block_stores: T) -> Update
@@ -639,15 +641,16 @@ impl Update {
 }
 
 impl Encode for Update {
+    #[inline]
     fn encode<E: Encoder>(&self, encoder: &mut E) {
-        self.encode_diff(&StateVector::default(), encoder);
+        self.encode_diff(&StateVector::default(), encoder)
     }
 }
 
 impl Decode for Update {
-    fn decode<D: Decoder>(decoder: &mut D) -> Self {
+    fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, Error> {
         // read blocks
-        let clients_len: u32 = decoder.read_uvar();
+        let clients_len: u32 = decoder.read_var()?;
         let mut blocks = UpdateBlocks {
             clients: HashMap::with_capacity_and_hasher(
                 clients_len as usize,
@@ -655,10 +658,10 @@ impl Decode for Update {
             ),
         };
         for _ in 0..clients_len {
-            let blocks_len = decoder.read_uvar::<u32>() as usize;
+            let blocks_len = decoder.read_var::<u32>()? as usize;
 
-            let client = decoder.read_client();
-            let mut clock: u32 = decoder.read_uvar();
+            let client = decoder.read_client()?;
+            let mut clock: u32 = decoder.read_var()?;
             let blocks = blocks
                 .clients
                 .entry(client)
@@ -666,14 +669,14 @@ impl Decode for Update {
 
             for _ in 0..blocks_len {
                 let id = ID::new(client, clock);
-                let block = Self::decode_block(id, decoder);
+                let block = Self::decode_block(id, decoder)?;
                 clock += block.len();
                 blocks.push_back(block);
             }
         }
         // read delete set
-        let delete_set = DeleteSet::decode(decoder);
-        Update { blocks, delete_set }
+        let delete_set = DeleteSet::decode(decoder)?;
+        Ok(Update { blocks, delete_set })
     }
 }
 
@@ -842,7 +845,7 @@ impl Encode for BlockCarrier {
             BlockCarrier::Block(block) => block.encode(None, encoder),
             BlockCarrier::Skip(skip) => {
                 encoder.write_info(BLOCK_SKIP_REF_NUMBER);
-                encoder.write_len(skip.len);
+                encoder.write_len(skip.len)
             }
         }
     }
@@ -1011,7 +1014,7 @@ mod test {
             108, 117, 101, 66, 0,
         ];
         let mut decoder = DecoderV1::from(update);
-        let u = Update::decode(&mut decoder);
+        let u = Update::decode(&mut decoder).unwrap();
 
         let id = ID::new(2026372272, 0);
         let block = u.blocks.clients.get(&id.client).unwrap();
@@ -1051,11 +1054,11 @@ mod test {
         let binary1 = t1.encode_update_v1();
         let binary2 = t2.encode_update_v1();
 
-        t1.apply_update(Update::decode_v1(binary2.as_slice()));
-        t2.apply_update(Update::decode_v1(binary1.as_slice()));
+        t1.apply_update(Update::decode_v1(binary2.as_slice()).unwrap());
+        t2.apply_update(Update::decode_v1(binary1.as_slice()).unwrap());
 
-        let u1 = Update::decode(&mut DecoderV1::new(Cursor::new(binary1.as_slice())));
-        let u2 = Update::decode(&mut DecoderV1::new(Cursor::new(binary2.as_slice())));
+        let u1 = Update::decode(&mut DecoderV1::new(Cursor::new(binary1.as_slice()))).unwrap();
+        let u2 = Update::decode(&mut DecoderV1::new(Cursor::new(binary2.as_slice()))).unwrap();
 
         // a crux of our test: merged update upon applying should produce
         // the same output as sequence of updates applied individually

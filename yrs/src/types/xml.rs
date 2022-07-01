@@ -1076,7 +1076,7 @@ mod test {
         let mut t2 = d2.transact();
         let xml2 = t2.get_xml_element("xml");
         let u = d1.encode_state_as_update_v1(&StateVector::default());
-        t2.apply_update(Update::decode_v1(u.as_slice()));
+        t2.apply_update(Update::decode_v1(u.as_slice()).unwrap());
         assert_eq!(xml2.get_attribute("height"), Some("10".to_string()));
     }
 
@@ -1175,7 +1175,7 @@ mod test {
         let mut t2 = d2.transact();
         let r2 = t2.get_xml_element("root");
 
-        t2.apply_update(Update::decode_v1(u1.as_slice()));
+        t2.apply_update(Update::decode_v1(u1.as_slice()).unwrap());
         assert_eq!(r2.to_string(), expected);
     }
 
@@ -1325,7 +1325,7 @@ mod test {
             let sv = t2.state_vector();
             let mut encoder = EncoderV1::new();
             t1.encode_diff(&sv, &mut encoder);
-            t2.apply_update(Update::decode_v1(encoder.to_vec().as_slice()));
+            t2.apply_update(Update::decode_v1(encoder.to_vec().as_slice()).unwrap());
         }
         assert_eq!(
             nodes.borrow_mut().take(),

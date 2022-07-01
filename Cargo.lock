@@ -291,13 +291,14 @@ checksum = "e2abad23fbc42b3700f2f279844dc832adb2b2eb069b2df918f455c4e18cc646"
 
 [[package]]
 name = "lib0"
-version = "0.9.1"
+version = "0.9.3"
 dependencies = [
  "criterion",
  "proptest",
  "proptest-derive",
  "serde",
  "serde_json",
+ "thiserror",
 ]
 
 [[package]]
@@ -781,6 +782,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "thiserror"
+version = "1.0.31"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bd829fe32373d27f76265620b5309d0340cb8550f523c1dda251d6298069069a"
+dependencies = [
+ "thiserror-impl",
+]
+
+[[package]]
+name = "thiserror-impl"
+version = "1.0.31"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0396bc89e626244658bef819e22d0cc459e795a5ebe878e6ec336d1674a8d79a"
+dependencies = [
+ "proc-macro2 1.0.32",
+ "quote 1.0.10",
+ "syn 1.0.81",
+]
+
+[[package]]
 name = "tinytemplate"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -985,7 +1006,7 @@ checksum = "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f"
 
 [[package]]
 name = "yffi"
-version = "0.9.1"
+version = "0.9.3"
 dependencies = [
  "lib0",
  "yrs",
@@ -993,7 +1014,7 @@ dependencies = [
 
 [[package]]
 name = "yrs"
-version = "0.9.1"
+version = "0.9.3"
 dependencies = [
  "criterion",
  "lib0",
@@ -1003,7 +1024,7 @@ dependencies = [
 
 [[package]]
 name = "ywasm"
-version = "0.9.1"
+version = "0.9.3"
 dependencies = [
  "console_error_panic_hook",
  "js-sys",

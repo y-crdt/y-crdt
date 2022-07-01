@@ -4,6 +4,7 @@ use crate::store::Store;
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::client_hasher::ClientHasher;
+use lib0::error::Error;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::hash::BuildHasherDefault;
@@ -15,15 +16,15 @@ use std::ops::Range;
 impl Encode for Range<u32> {
     fn encode<E: Encoder>(&self, encoder: &mut E) {
         encoder.write_ds_clock(self.start);
-        encoder.write_ds_len(self.end - self.start);
+        encoder.write_ds_len(self.end - self.start)
     }
 }
 
 impl Decode for Range<u32> {
-    fn decode<D: Decoder>(decoder: &mut D) -> Self {
-        let clock = decoder.read_ds_clock();
-        let len = decoder.read_ds_len();
-        clock..(clock + len)
+    fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, Error> {
+        let clock = decoder.read_ds_clock()?;
+        let len = decoder.read_ds_len()?;
+        Ok(clock..(clock + len))
     }
 }
 
@@ -215,11 +216,11 @@ impl Encode for IdRange {
     fn encode<E: Encoder>(&self, encoder: &mut E) {
         match self {
             IdRange::Continuous(range) => {
-                encoder.write_uvar(1u32);
-                range.encode(encoder);
+                encoder.write_var(1u32);
+                range.encode(encoder)
             }
             IdRange::Fragmented(ranges) => {
-                encoder.write_uvar(ranges.len() as u32);
+                encoder.write_var(ranges.len() as u32);
                 for range in ranges.iter() {
                     range.encode(encoder);
                 }
@@ -229,20 +230,20 @@ impl Encode for IdRange {
 }
 
 impl Decode for IdRange {
-    fn decode<D: Decoder>(decoder: &mut D) -> Self {
-        match decoder.read_uvar::<u32>() {
+    fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, Error> {
+        match decoder.read_var::<u32>()? {
             1 => {
-                let range = Range::decode(decoder);
-                IdRange::Continuous(range)
+                let range = Range::decode(decoder)?;
+                Ok(IdRange::Continuous(range))
             }
             len => {
                 let mut ranges = Vec::with_capacity(len as usize);
                 let mut i = 0;
                 while i < len {
-                    ranges.push(Range::decode(decoder));
+                    ranges.push(Range::decode(decoder)?);
                     i += 1;
                 }
-                IdRange::Fragmented(ranges)
+                Ok(IdRange::Fragmented(ranges))
             }
         }
     }
@@ -359,28 +360,28 @@ impl IdSet {
 
 impl Encode for IdSet {
     fn encode<E: Encoder>(&self, encoder: &mut E) {
-        encoder.write_uvar(self.0.len() as u32);
+        encoder.write_var(self.0.len() as u32);
         for (&client_id, block) in self.0.iter() {
             encoder.reset_ds_cur_val();
-            encoder.write_uvar(client_id);
+            encoder.write_var(client_id);
             block.encode(encoder);
         }
     }
 }
 
 impl Decode for IdSet {
-    fn decode<D: Decoder>(decoder: &mut D) -> Self {
+    fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, Error> {
         let mut set = Self::new();
-        let client_len: u32 = decoder.read_uvar();
+        let client_len: u32 = decoder.read_var()?;
         let mut i = 0;
         while i < client_len {
             decoder.reset_ds_cur_val();
-            let client: u32 = decoder.read_uvar();
-            let range = IdRange::decode(decoder);
+            let client: u32 = decoder.read_var()?;
+            let range = IdRange::decode(decoder)?;
             set.0.insert(client as ClientID, range);
             i += 1;
         }
-        set
+        Ok(set)
     }
 }
 
@@ -536,12 +537,13 @@ impl DeleteSet {
 }
 
 impl Decode for DeleteSet {
-    fn decode<D: Decoder>(decoder: &mut D) -> Self {
-        DeleteSet(IdSet::decode(decoder))
+    fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, Error> {
+        Ok(DeleteSet(IdSet::decode(decoder)?))
     }
 }
 
 impl Encode for DeleteSet {
+    #[inline]
     fn encode<E: Encoder>(&self, encoder: &mut E) {
         self.0.encode(encoder)
     }
@@ -636,7 +638,7 @@ mod test {
         value.encode(&mut encoder);
         let buf = encoder.to_vec();
         let mut decoder = DecoderV1::from(buf.as_slice());
-        let decoded = T::decode(&mut decoder);
+        let decoded = T::decode(&mut decoder).unwrap();
 
         assert_eq!(value, &decoded);
     }

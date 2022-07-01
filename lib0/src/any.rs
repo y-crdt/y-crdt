@@ -1,5 +1,6 @@
 use crate::decoding::Read;
 use crate::encoding::Write;
+use crate::error::Error;
 use std::cmp::PartialEq;
 use std::collections::HashMap;
 use std::convert::{TryFrom, TryInto};
@@ -19,51 +20,54 @@ pub enum Any {
 }
 
 impl Any {
-    pub fn decode<R: Read>(decoder: &mut R) -> Self {
-        match decoder.read_u8() {
+    pub fn decode<R: Read>(decoder: &mut R) -> Result<Self, Error> {
+        Ok(match decoder.read_u8()? {
             // CASE 127: undefined
             127 => Any::Undefined,
             // CASE 126: null
             126 => Any::Null,
             // CASE 125: integer
-            125 => Any::Number(decoder.read_ivar() as f64),
+            125 => Any::Number(decoder.read_var::<i64>()? as f64),
             // CASE 124: float32
-            124 => Any::Number(decoder.read_f32() as f64),
+            124 => Any::Number(decoder.read_f32()? as f64),
             // CASE 123: float64
-            123 => Any::Number(decoder.read_f64()),
+            123 => Any::Number(decoder.read_f64()?),
             // CASE 122: bigint
-            122 => Any::BigInt(decoder.read_i64()),
+            122 => Any::BigInt(decoder.read_i64()?),
             // CASE 121: boolean (false)
             121 => Any::Bool(false),
             // CASE 120: boolean (true)
             120 => Any::Bool(true),
             // CASE 119: string
-            119 => Any::String(decoder.read_string().into()),
+            119 => {
+                let str = decoder.read_string()?;
+                Any::String(Box::from(str))
+            }
             // CASE 118: Map<string,Any>
             118 => {
-                let len: usize = decoder.read_uvar();
+                let len: usize = decoder.read_var()?;
                 let mut map = HashMap::with_capacity(len);
                 for _ in 0..len {
-                    let key = decoder.read_string();
-                    map.insert(key.to_owned(), Any::decode(decoder));
+                    let key = decoder.read_string()?;
+                    map.insert(key.to_owned(), Any::decode(decoder)?);
                 }
                 Any::Map(Box::new(map))
             }
             // CASE 117: Array<Any>
             117 => {
-                let len: usize = decoder.read_uvar();
+                let len: usize = decoder.read_var()?;
                 let mut arr = Vec::with_capacity(len);
                 for _ in 0..len {
-                    arr.push(Any::decode(decoder));
+                    arr.push(Any::decode(decoder)?);
                 }
                 Any::Array(arr)
             }
             // CASE 116: buffer
-            116 => Any::Buffer(decoder.read_buf().to_owned()),
+            116 => Any::Buffer(Box::from(decoder.read_buf()?.to_owned())),
             _ => {
                 panic!("Unable to read Any content");
             }
-        }
+        })
     }
 
     // Encode data with efficient binary format.
@@ -115,7 +119,7 @@ impl Any {
             Any::String(str) => {
                 // TYPE 119: String
                 encoder.write_u8(119);
-                encoder.write_string(&str);
+                encoder.write_string(&str)
             }
             Any::Number(num) => {
                 let num_truncated = num.trunc();
@@ -125,26 +129,26 @@ impl Any {
                 {
                     // TYPE 125: INTEGER
                     encoder.write_u8(125);
-                    encoder.write_ivar(num_truncated as i64);
+                    encoder.write_var(num_truncated as i64)
                 } else if ((*num as f32) as f64) == *num {
                     // TYPE 124: FLOAT32
                     encoder.write_u8(124);
-                    encoder.write_f32(*num as f32);
+                    encoder.write_f32(*num as f32)
                 } else {
                     // TYPE 123: FLOAT64
                     encoder.write_u8(123);
-                    encoder.write_f64(*num);
+                    encoder.write_f64(*num)
                 }
             }
             Any::BigInt(num) => {
                 // TYPE 122: BigInt
                 encoder.write_u8(122);
-                encoder.write_i64(*num);
+                encoder.write_i64(*num)
             }
             Any::Array(arr) => {
                 // TYPE 117: Array
                 encoder.write_u8(117);
-                encoder.write_uvar(arr.len() as u64);
+                encoder.write_var(arr.len() as u64);
                 for el in arr.iter() {
                     el.encode(encoder);
                 }
@@ -152,7 +156,7 @@ impl Any {
             Any::Map(map) => {
                 // TYPE 118: Map
                 encoder.write_u8(118);
-                encoder.write_uvar(map.len() as u64);
+                encoder.write_var(map.len() as u64);
                 for (key, value) in map.as_ref() {
                     encoder.write_string(&key);
                     value.encode(encoder);
@@ -231,15 +235,15 @@ impl Any {
     }
 
     #[cfg(not(feature = "lib0-serde"))]
-    pub fn from_json(src: &str) -> Self {
+    pub fn from_json(src: &str) -> Result<Self, Error> {
         use crate::json_parser::JsonParser;
         let mut parser = JsonParser::new(src.chars());
-        parser.parse().unwrap()
+        Ok(parser.parse()?)
     }
 
     #[cfg(feature = "lib0-serde")]
-    pub fn from_json(src: &str) -> Self {
-        serde_json::from_str(src).unwrap()
+    pub fn from_json(src: &str) -> Result<Self, Error> {
+        Ok(serde_json::from_str(src)?)
     }
 
     #[cfg(feature = "lib0-serde")]

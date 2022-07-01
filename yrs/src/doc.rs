@@ -34,11 +34,11 @@ use std::ops::Deref;
 /// let state_vector = remote_txn.state_vector().encode_v1();
 ///
 /// // now compute a differential update based on remote document's state vector
-/// let update = txn.encode_diff_v1(&StateVector::decode_v1(&state_vector));
+/// let update = txn.encode_diff_v1(&StateVector::decode_v1(&state_vector).unwrap());
 ///
 /// // both update and state vector are serializable, we can pass the over the wire
 /// // now apply update to a remote document
-/// remote_txn.apply_update(Update::decode_v1(update.as_slice()));
+/// remote_txn.apply_update(Update::decode_v1(update.as_slice()).unwrap());
 /// ```
 pub struct Doc {
     /// A unique client identifier, that's also a unique identifier of current document replica.
@@ -239,7 +239,7 @@ mod test {
         ];
         let doc = Doc::new();
         let mut tr = doc.transact();
-        tr.apply_update(Update::decode_v1(update));
+        tr.apply_update(Update::decode_v1(update).unwrap());
 
         let actual = tr.get_text("type").to_string();
         assert_eq!(actual, "210".to_owned());
@@ -265,7 +265,7 @@ mod test {
         ];
         let doc = Doc::new();
         let mut tr = doc.transact();
-        tr.apply_update(Update::decode_v2(update));
+        tr.apply_update(Update::decode_v2(update).unwrap());
 
         let actual = tr.get_text("type").to_string();
         assert_eq!(actual, "210".to_owned());
@@ -309,11 +309,14 @@ mod test {
 
         // create an update A->B based on B's state vector
         let mut encoder = EncoderV1::new();
-        t1.encode_diff(&StateVector::decode_v1(sv.as_slice()), &mut encoder);
+        t1.encode_diff(
+            &StateVector::decode_v1(sv.as_slice()).unwrap(),
+            &mut encoder,
+        );
         let binary = encoder.to_vec();
 
         // decode an update incoming from A and integrate it at B
-        let update = Update::decode_v1(binary.as_slice());
+        let update = Update::decode_v1(binary.as_slice()).unwrap();
         let pending = update.integrate(&mut t2);
 
         assert!(pending.0.is_none());
@@ -331,7 +334,7 @@ mod test {
         let mut doc2 = Doc::new();
         let c = counter.clone();
         let sub = doc2.observe_update_v1(move |_txn, e| {
-            let u = Update::decode_v1(&e.update);
+            let u = Update::decode_v1(&e.update).unwrap();
             for block in u.blocks.blocks() {
                 c.set(c.get() + block.len());
             }
@@ -342,8 +345,8 @@ mod test {
             txt.insert(&mut txn, 0, "abc");
             let mut txn2 = doc2.transact();
             let sv = txn2.state_vector().encode_v1();
-            let u = txn.encode_diff_v1(&StateVector::decode_v1(sv.as_slice()));
-            txn2.apply_update(Update::decode_v1(u.as_slice()));
+            let u = txn.encode_diff_v1(&StateVector::decode_v1(sv.as_slice()).unwrap());
+            txn2.apply_update(Update::decode_v1(u.as_slice()).unwrap());
         }
         assert_eq!(counter.get(), 3); // update has been propagated
 
@@ -353,8 +356,8 @@ mod test {
             txt.insert(&mut txn, 3, "de");
             let mut txn2 = doc2.transact();
             let sv = txn2.state_vector().encode_v1();
-            let u = txn.encode_diff_v1(&StateVector::decode_v1(sv.as_slice()));
-            txn2.apply_update(Update::decode_v1(u.as_slice()));
+            let u = txn.encode_diff_v1(&StateVector::decode_v1(sv.as_slice()).unwrap());
+            txn2.apply_update(Update::decode_v1(u.as_slice()).unwrap());
         }
         assert_eq!(counter.get(), 3); // since subscription has been dropped, update was not propagated
     }
@@ -406,7 +409,7 @@ mod test {
 
         for u in updates {
             let mut txn = doc.transact();
-            let u = Update::decode_v1(u.as_slice());
+            let u = Update::decode_v1(u.as_slice()).unwrap();
             txn.apply_update(u);
         }
         assert_eq!(txt.to_string(), "abcd".to_string());
@@ -440,7 +443,7 @@ mod test {
             ],
         ];
         for u in updates {
-            let u = Update::decode_v1(&u);
+            let u = Update::decode_v1(&u).unwrap();
             d1.transact().apply_update(u);
         }
 
@@ -449,8 +452,8 @@ mod test {
         let d2 = Doc::new();
         let source_2 = d2.transact().get_text("source");
         let state_2 = d2.transact().state_vector().encode_v1();
-        let update = d1.encode_state_as_update_v1(&StateVector::decode_v1(&state_2));
-        let update = Update::decode_v1(&update);
+        let update = d1.encode_state_as_update_v1(&StateVector::decode_v1(&state_2).unwrap());
+        let update = Update::decode_v1(&update).unwrap();
         d2.transact().apply_update(update);
 
         assert_eq!("a", source_2.to_string());
@@ -458,16 +461,17 @@ mod test {
         let update = Update::decode_v1(&[
             1, 2, 201, 210, 153, 56, 5, 132, 228, 254, 237, 171, 7, 0, 1, 98, 168, 201, 210, 153,
             56, 4, 1, 120, 0,
-        ]);
+        ])
+        .unwrap();
         d1.transact().apply_update(update);
         assert_eq!("ab", source_1.to_string());
 
         let d3 = Doc::new();
         let source_3 = d3.transact().get_text("source");
         let state_3 = d3.transact().state_vector().encode_v1();
-        let state_3 = StateVector::decode_v1(&state_3);
+        let state_3 = StateVector::decode_v1(&state_3).unwrap();
         let update = d1.encode_state_as_update_v1(&state_3);
-        let update = Update::decode_v1(&update);
+        let update = Update::decode_v1(&update).unwrap();
         d3.transact().apply_update(update);
 
         assert_eq!("ab", source_3.to_string());
@@ -522,11 +526,11 @@ mod test {
 
         let d2 = Doc::with_client_id(2);
         let txt2 = d2.transact().get_text("text");
-        d2.transact().apply_update(Update::decode_v1(&u));
+        d2.transact().apply_update(Update::decode_v1(&u).unwrap());
 
         txt1.insert(&mut d1.transact(), 5, "world");
         let u = d1.encode_state_as_update_v1(&StateVector::default());
-        d2.transact().apply_update(Update::decode_v1(&u));
+        d2.transact().apply_update(Update::decode_v1(&u).unwrap());
 
         assert_eq!(txt1.to_string(), txt2.to_string());
     }
@@ -541,7 +545,7 @@ mod test {
 
         let a = acc.clone();
         let _sub = d1.observe_update_v1(move |_, e| {
-            let u = Update::decode_v1(&e.update);
+            let u = Update::decode_v1(&e.update).unwrap();
             for mut block in u.blocks.into_blocks() {
                 match block.as_block_ptr().as_deref() {
                     Some(Block::Item(item)) => {
@@ -571,7 +575,7 @@ mod test {
         let acc = Rc::new(RefCell::new(Vec::new()));
         let a = acc.clone();
         let _sub = d1.observe_update_v1(move |_, e| {
-            let u = Update::decode_v1(&e.update);
+            let u = Update::decode_v1(&e.update).unwrap();
             for (&client_id, range) in u.delete_set.iter() {
                 if client_id == 1 {
                     let mut aref = a.borrow_mut();

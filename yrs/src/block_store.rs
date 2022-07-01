@@ -3,6 +3,7 @@ use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::client_hasher::ClientHasher;
 use crate::*;
+use lib0::error::Error;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::hash::BuildHasherDefault;
@@ -107,26 +108,26 @@ impl StateVector {
 }
 
 impl Decode for StateVector {
-    fn decode<D: Decoder>(decoder: &mut D) -> Self {
-        let len = decoder.read_uvar::<u32>() as usize;
+    fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, Error> {
+        let len = decoder.read_var::<u32>()? as usize;
         let mut sv = HashMap::with_capacity_and_hasher(len, BuildHasherDefault::default());
         let mut i = 0;
         while i < len {
-            let client = decoder.read_uvar();
-            let clock = decoder.read_uvar();
+            let client = decoder.read_var()?;
+            let clock = decoder.read_var()?;
             sv.insert(client, clock);
             i += 1;
         }
-        StateVector(sv)
+        Ok(StateVector(sv))
     }
 }
 
 impl Encode for StateVector {
     fn encode<E: Encoder>(&self, encoder: &mut E) {
-        encoder.write_uvar(self.len());
+        encoder.write_var(self.len());
         for (&client, &clock) in self.iter() {
-            encoder.write_uvar(client);
-            encoder.write_uvar(clock);
+            encoder.write_var(client);
+            encoder.write_var(clock);
         }
     }
 }
@@ -156,15 +157,15 @@ impl Snapshot {
 impl Encode for Snapshot {
     fn encode<E: Encoder>(&self, encoder: &mut E) {
         self.delete_set.encode(encoder);
-        self.state_map.encode(encoder);
+        self.state_map.encode(encoder)
     }
 }
 
 impl Decode for Snapshot {
-    fn decode<D: Decoder>(decoder: &mut D) -> Self {
-        let ds = DeleteSet::decode(decoder);
-        let sm = StateVector::decode(decoder);
-        Snapshot::new(sm, ds)
+    fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, Error> {
+        let ds = DeleteSet::decode(decoder)?;
+        let sm = StateVector::decode(decoder)?;
+        Ok(Snapshot::new(sm, ds))
     }
 }
 
