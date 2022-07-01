@@ -7,7 +7,6 @@ use crate::{OffsetKind, Transaction, ID};
 use lib0::any::Any;
 use std::cell::Cell;
 use std::collections::HashSet;
-use std::mem::MaybeUninit;
 use std::ops::{Deref, DerefMut};
 
 pub trait Cursor {
@@ -45,13 +44,7 @@ pub trait Cursor {
 
     /// Returns a cursor range matching a range of elements, starting at the current cursor
     /// position and ending after `len` of elements.
-    fn range(
-        &mut self,
-        len: usize,
-        start_assoc: Assoc,
-        end_assoc: Assoc,
-        priority: i32,
-    ) -> CursorRange;
+    fn range(&mut self, len: usize, start_assoc: Assoc, end_assoc: Assoc) -> CursorRange;
 
     /// Moves a `range` of elements into a current cursor position.
     fn move_range(&mut self, txn: &mut Transaction, range: CursorRange);
@@ -123,61 +116,61 @@ impl Move {
         let end = self.range.end_block();
         let mut max_priority = 0;
         let adapt_priority = self.priority < 0;
-        while {
+        while let Some(Block::Item(start_item)) = start.clone().as_deref_mut() {
             let start_ptr = start.unwrap().clone();
-            if let Some(Block::Item(start_item)) = start.as_deref_mut() {
-                let mut curr_moved = start_item.moved;
-                let next_prio = if let Some(Block::Item(m)) = curr_moved.as_deref() {
-                    if let ItemContent::Move(next) = &m.content {
-                        next.priority
-                    } else {
-                        0
-                    }
+            let mut curr_moved = start_item.moved;
+            let next_prio = if let Some(Block::Item(m)) = curr_moved.as_deref() {
+                if let ItemContent::Move(next) = &m.content {
+                    next.priority
                 } else {
                     0
-                };
+                }
+            } else {
+                0
+            };
 
-                if adapt_priority
-                    || next_prio < self.priority
-                    || (curr_moved.is_some()
-                        && next_prio == self.priority
-                        && (*curr_moved.unwrap().id() < *item.id()))
-                {
-                    if let Some(moved_ptr) = curr_moved.clone() {
-                        self.overrides.insert(moved_ptr);
-                    }
-                    max_priority = max_priority.max(next_prio);
-                    // was already moved
-                    let prev_move = start_item.moved;
-                    if let Some(prev_move) = prev_move {
-                        if !txn.prev_moved.contains_key(&prev_move)
-                            && prev_move.id().clock < txn.before_state.get(&prev_move.id().client)
-                        {
-                            // only override prevMoved if the prevMoved item is not new
-                            // we need to know which item previously moved an item
-                            txn.prev_moved.insert(start_ptr, prev_move);
-                        }
-                    }
-                    start_item.moved = Some(item);
-                    if !start_item.is_deleted() {
-                        if let ItemContent::Move(m) = &start_item.content {
-                            if m.find_move_loop(start_ptr, &mut HashSet::from([item])) {
-                                item.delete_as_cleanup(txn);
-                                return;
-                            }
-                        }
-                    }
-                } else if let Some(Block::Item(moved_item)) = curr_moved.as_deref_mut() {
-                    if let ItemContent::Move(m) = &mut moved_item.content {
-                        m.overrides.insert(item);
+            if adapt_priority
+                || next_prio < self.priority
+                || (curr_moved.is_some()
+                    && next_prio == self.priority
+                    && (*curr_moved.unwrap().id() < *item.id()))
+            {
+                if let Some(moved_ptr) = curr_moved.clone() {
+                    self.overrides.insert(moved_ptr);
+                }
+                max_priority = max_priority.max(next_prio);
+                // was already moved
+                let prev_move = start_item.moved;
+                if let Some(prev_move) = prev_move {
+                    if !txn.prev_moved.contains_key(&prev_move)
+                        && prev_move.id().clock < txn.before_state.get(&prev_move.id().client)
+                    {
+                        // only override prevMoved if the prevMoved item is not new
+                        // we need to know which item previously moved an item
+                        txn.prev_moved.insert(start_ptr, prev_move);
                     }
                 }
-                start = start_item.right;
-                start != end && start.is_some()
-            } else {
-                false
+                start_item.moved = Some(item);
+                if !start_item.is_deleted() {
+                    if let ItemContent::Move(m) = &start_item.content {
+                        if m.find_move_loop(start_ptr, &mut HashSet::from([item])) {
+                            item.delete_as_cleanup(txn);
+                            return;
+                        }
+                    }
+                }
+            } else if let Some(Block::Item(moved_item)) = curr_moved.as_deref_mut() {
+                if let ItemContent::Move(m) = &mut moved_item.content {
+                    m.overrides.insert(item);
+                }
             }
-        } {}
+
+            if start == end {
+                break;
+            } else {
+                start = start_item.right;
+            }
+        }
 
         if adapt_priority {
             self.range.priority = max_priority + 1;
@@ -773,7 +766,6 @@ impl ArrayCursor {
             current_block_offset: 0,
             index: 0,
         };
-        cursor.skip_deleted_items();
         cursor
     }
 
@@ -796,7 +788,6 @@ impl ArrayCursor {
         self.iter = MoveIter::new(self.branch.deref());
         self.current_block_offset = 0;
         self.index = 0;
-        self.skip_deleted_items();
     }
 
     /// Tries to fill the `buf` slice with cursor content, advancing cursor position to the right,
@@ -804,19 +795,17 @@ impl ArrayCursor {
     /// Returns a number of elements read.
     pub fn read(&mut self, buf: &mut [Value]) -> usize {
         let mut read = 0;
-        if self.current_block_offset != 0 {
-            if let Some(Block::Item(item)) = self.current().as_deref() {
-                // check if current cursor position doesn't point at the end of the current_block
-                // or that the current_block has been deleted
-                if self.current_block_offset != item.len as usize && !item.is_deleted() {
-                    let mut slice = &mut buf[read..];
-                    let r = slice.read_content(&item.content, self.current_block_offset);
-                    read += r;
-                    if r == 0 || read == buf.len() {
-                        // it was enough to read contents of the current block
-                        self.current_block_offset += read;
-                        return read;
-                    }
+        if let Some(Block::Item(item)) = self.current().as_deref() {
+            // check if current cursor position doesn't point at the end of the current_block
+            // or that the current_block has been deleted
+            if self.current_block_offset != item.len as usize && !item.is_deleted() {
+                let mut slice = &mut buf[read..];
+                let r = slice.read_content(&item.content, self.current_block_offset);
+                read += r;
+                if r == 0 || read == buf.len() {
+                    // it was enough to read contents of the current block
+                    self.current_block_offset += read;
+                    return read;
                 }
             }
         }
@@ -869,17 +858,12 @@ impl ArrayCursor {
             None
         }
     }
-}
 
-impl Cursor for ArrayCursor {
-    fn seek(&mut self, index: usize) -> bool {
-        self.reset();
-        self.forward(index) == index
-    }
-
-    fn insert<P: Prelim>(&mut self, txn: &mut Transaction, value: P) {
+    /// Returns block pointers for left and right blocks of the current cursor position.
+    /// If cursor position is within a block, it'll be split.
+    fn neighbours(&self, txn: &mut Transaction) -> (Option<BlockPtr>, Option<BlockPtr>) {
         let current = self.current();
-        let (left, right) = if let Some(ptr) = current {
+        if let Some(ptr) = current {
             if self.current_block_offset != 0 {
                 if self.current_block_offset as u32 == ptr.len() {
                     if let Block::Item(item) = ptr.deref() {
@@ -906,7 +890,18 @@ impl Cursor for ArrayCursor {
             }
         } else {
             (None, None)
-        };
+        }
+    }
+}
+
+impl Cursor for ArrayCursor {
+    fn seek(&mut self, index: usize) -> bool {
+        self.reset();
+        self.forward(index) == index
+    }
+
+    fn insert<P: Prelim>(&mut self, txn: &mut Transaction, value: P) {
+        let (left, right) = self.neighbours(txn);
         let pos = ItemPosition {
             parent: TypePtr::Branch(self.branch),
             left,
@@ -1037,19 +1032,13 @@ impl Cursor for ArrayCursor {
         offset - remaining
     }
 
-    fn range(
-        &mut self,
-        len: usize,
-        start_assoc: Assoc,
-        end_assoc: Assoc,
-        priority: i32,
-    ) -> CursorRange {
+    fn range(&mut self, len: usize, start_assoc: Assoc, end_assoc: Assoc) -> CursorRange {
         let start = self.get_edge(start_assoc);
 
         self.forward(len);
 
         let end = self.get_edge(end_assoc);
-        CursorRange::new(start, end, TypePtr::Branch(self.branch.clone()), priority)
+        CursorRange::new(start, end, TypePtr::Branch(self.branch.clone()), -1)
     }
 
     fn move_range(&mut self, txn: &mut Transaction, mut range: CursorRange) {
@@ -1067,7 +1056,7 @@ impl Iterator for ArrayCursor {
     type Item = Value;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let mut buf: [Value; 1] = [unsafe { MaybeUninit::uninit().assume_init() }; 1];
+        let mut buf: [Value; 1] = [Value::default(); 1];
         if self.read(&mut buf) != 0 {
             Some(std::mem::take(&mut buf[0]))
         } else {
@@ -1130,12 +1119,11 @@ impl Iterator for MoveIter {
                         // skip over this block, it's not within current move frame
                         retry = true;
                         item.right
-                    } else if item.right.is_none() || item.right == self.move_stack.current_end() {
+                    } else if self.next == self.move_stack.current_end() {
                         // we reached the end of current move scope, pop move stack and continue
                         let stack = self.move_stack.as_mut();
                         let block = stack.pop();
                         if let Some(Block::Item(item)) = block.as_deref() {
-                            retry = true;
                             item.right
                         } else {
                             None
@@ -1146,6 +1134,7 @@ impl Iterator for MoveIter {
                 } else if let ItemContent::Move(moved) = &item.content {
                     // this item represents a new moved range frame, put it onto move stack
                     let stack = self.move_stack.as_mut();
+                    retry = true;
                     stack.descend(ptr, &moved);
                     moved
                         .range
@@ -1165,31 +1154,20 @@ impl Iterator for MoveIter {
             } else {
                 self.current
             }
+        } else if let Some(stack) = self.move_stack.0.as_deref_mut() {
+            if let Some(Block::Item(item)) = stack.pop().as_deref() {
+                // self.next was empty but we still had items on move stack - retry
+                self.next = item.right;
+                self.next()
+            } else {
+                // move stack is empty and self.next is empty
+                self.finished = true;
+                None
+            }
         } else {
             self.finished = true;
             None
         }
-        /*
-        if self.finished() {
-            return None;
-        } else {
-            let mut retry = false;
-            let next = if let Some(Block::Item(item)) = current.clone().as_deref() {
-
-            } else {
-                None
-            };
-
-            if self.next.is_some() {
-                self.current = self.next;
-            }
-
-            if retry {
-                self.next() // this should become tail recursive call
-            } else {
-                current
-            }
-        } */
     }
 }
 

@@ -43,9 +43,7 @@ impl Array {
     /// Returns a cursor, which is set up at a given `index` position.
     pub fn seek(&self, index: u32) -> ArrayCursor {
         let mut cursor = ArrayCursor::new(self.0);
-        if index != 0 {
-            cursor.forward(index as usize);
-        }
+        cursor.forward(index as usize);
         cursor
     }
 
@@ -113,7 +111,7 @@ impl Array {
             return;
         }
         let mut cursor = self.seek(source);
-        let range = cursor.range(1, Assoc::Right, Assoc::Left, -1);
+        let range = cursor.range(1, Assoc::Right, Assoc::Left);
 
         cursor = self.seek(target);
         cursor.move_range(txn, range);
@@ -134,7 +132,7 @@ impl Array {
         }
         let mut cursor = self.seek(start);
         let len = end - start + 1;
-        let range = cursor.range(len as usize, assoc_start, assoc_end, -1);
+        let range = cursor.range(len as usize, assoc_start, assoc_end);
 
         cursor = self.seek(target);
         cursor.move_range(txn, range);
@@ -148,17 +146,17 @@ impl Array {
 
     /// Converts all contents of current array into a JSON-like representation.
     pub fn to_json(&self) -> Any {
-        let mut cursor = self.seek(0);
+        let mut cursor = ArrayCursor::new(self.0);
         let len = self.len() as usize;
         let mut buf = vec![Value::default(); len];
         let read = cursor.read(&mut buf);
-        debug_assert_eq!(read, len);
+        debug_assert_eq!(read, len, "YArray didn't read all elements");
         let result = buf.into_iter().map(Value::to_json).collect();
         Any::Array(result)
     }
 
     pub fn to_vec<T: TryFrom<Value>>(&self) -> Result<Vec<T>, T::Error> {
-        let mut cursor = self.seek(0);
+        let mut cursor = ArrayCursor::new(self.0);
         let mut buf = Vec::with_capacity(self.len() as usize);
         while let Some(v) = cursor.next() {
             let x = T::try_from(v)?;
@@ -929,11 +927,12 @@ mod test {
             let yarray = txn.get_array("array");
             let pos = rng.between(0, yarray.len());
             yarray.insert(&mut txn, pos, PrelimArray::from([1, 2, 3, 4]));
-            if let Value::YArray(array2) = yarray.get(pos).unwrap() {
-                let expected: Vec<_> = (1..=4).map(|i| Any::Number(i as f64)).collect();
-                assert_eq!(array2.to_json(), Any::Array(expected));
-            } else {
-                panic!("should not happen")
+            match yarray.get(pos) {
+                Some(Value::YArray(array2)) => {
+                    let expected: Vec<_> = (1..=4).map(|i| Any::Number(i as f64)).collect();
+                    assert_eq!(array2.to_json(), Any::Array(expected));
+                }
+                other => panic!("Defect: expected YArray but got {:#?}", other),
             }
         }
 
@@ -942,12 +941,13 @@ mod test {
             let yarray = txn.get_array("array");
             let pos = rng.between(0, yarray.len());
             yarray.insert(&mut txn, pos, PrelimMap::<i32>::from(HashMap::default()));
-            if let Value::YMap(map) = yarray.get(pos).unwrap() {
-                map.insert(&mut txn, "someprop".to_string(), 42);
-                map.insert(&mut txn, "someprop".to_string(), 43);
-                map.insert(&mut txn, "someprop".to_string(), 44);
-            } else {
-                panic!("should not happen")
+            match yarray.get(pos) {
+                Some(Value::YMap(map)) => {
+                    map.insert(&mut txn, "someprop".to_string(), 42);
+                    map.insert(&mut txn, "someprop".to_string(), 43);
+                    map.insert(&mut txn, "someprop".to_string(), 44);
+                }
+                other => panic!("Defect: expected YMap but got {:#?}", other),
             }
         }
 
