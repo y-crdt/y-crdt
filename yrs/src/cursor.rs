@@ -46,7 +46,7 @@ pub trait Cursor {
     /// position and ending after `len` of elements.
     fn range(&mut self, len: usize, start_assoc: Assoc, end_assoc: Assoc) -> CursorRange;
 
-    /// Moves a `range` of elements into a current cursor position.
+    /// Moves the `range` of elements into a current cursor position.
     fn move_range(&mut self, txn: &mut Transaction, range: CursorRange);
 }
 
@@ -533,8 +533,15 @@ pub struct CursorRangeEdge {
     ptr: Cell<Option<BlockPtr>>,
 }
 
+/// Serialization tag used whenever [CursorEdgeRange] was given for a encoded [CursorRange].
 const RELATIVE_POSITION_TAG_ITEM: u8 = 0;
+
+/// Serialization tag used whenever [CursorEdgeRange] was absent for a encoded [CursorRange],
+/// which itself refers to a root-level shared type.
 const RELATIVE_POSITION_TAG_TYPE_NAME: u8 = 1;
+
+/// Serialization tag used whenever [CursorEdgeRange] was absent for a encoded [CursorRange],
+/// which itself refers to a nested shared type.
 const RELATIVE_POSITION_TAG_TYPE_ID: u8 = 2;
 
 impl CursorRangeEdge {
@@ -566,6 +573,9 @@ impl CursorRangeEdge {
         self.ptr.get()
     }
 
+    /// Repair process triggered before [Move] block containing current cursor range edge is
+    /// integrated. Cursor range boundaries may be places inside of a blocks they refer to. This
+    /// method splits these blocks by the given boundary.
     fn repair(&self, store: &mut Store) {
         let ptr = if self.assoc == Assoc::Right {
             store.blocks.get_item_clean_start(&self.id)
@@ -616,7 +626,12 @@ impl std::fmt::Display for CursorRangeEdge {
     }
 }
 
+/// Content reader trait used to read contents of a block.
 pub trait ContentReader {
+    /// Request to read a `content` into a current reader, starting at given position (if `content`
+    /// has multiple elements).
+    ///
+    /// Returns a number of elements read into a current reader.
     fn read_content(&mut self, content: &ItemContent, offset: usize) -> usize;
 }
 
@@ -750,11 +765,15 @@ impl ContentReader for String {
     }
 }
 
+/// Cursor used to traverse [Array] elements.
 pub struct ArrayCursor {
+    /// Internal move-aware iterator, used to abstract complexity of [Move] block traversals.
     iter: MoveIter,
+    /// Parent branch of a current cursor - it should always be an [Array].
     branch: BranchPtr,
+    /// In case when move iterator points at the block that has multiple elements, this field
+    /// contains last visited index number within that block.
     current_block_offset: usize,
-    index: usize,
 }
 
 impl ArrayCursor {
@@ -764,30 +783,20 @@ impl ArrayCursor {
             branch,
             iter,
             current_block_offset: 0,
-            index: 0,
         };
         cursor
     }
 
-    fn skip_deleted_items(&mut self) {
-        while let Some(Block::Item(item)) = self.iter.peek().as_deref() {
-            if item.is_deleted() {
-                self.iter.next();
-            } else {
-                break;
-            }
-        }
-    }
-
+    /// Returns a last visited block pointer.
     #[inline]
     fn current(&self) -> Option<BlockPtr> {
         self.iter.current()
     }
 
+    /// Reset current cursor position to point at the beginning of a corresponding [Array].
     pub fn reset(&mut self) {
         self.iter = MoveIter::new(self.branch.deref());
         self.current_block_offset = 0;
-        self.index = 0;
     }
 
     /// Tries to fill the `buf` slice with cursor content, advancing cursor position to the right,
@@ -865,6 +874,7 @@ impl ArrayCursor {
         let current = self.current();
         if let Some(ptr) = current {
             if self.current_block_offset != 0 {
+                // current cursor position is inside of a multi-element block
                 if self.current_block_offset as u32 == ptr.len() {
                     if let Block::Item(item) = ptr.deref() {
                         (current, item.right)
@@ -880,8 +890,10 @@ impl ArrayCursor {
                     (current, right)
                 }
             } else if self.iter.finished() {
+                // current cursor position points at the end of an Y-array
                 (current, None)
             } else {
+                // current cursor position points at the beginning of a block
                 if let Block::Item(item) = ptr.deref() {
                     (item.left, current)
                 } else {
@@ -889,6 +901,7 @@ impl ArrayCursor {
                 }
             }
         } else {
+            // cursor existing within bounds of an empty array
             (None, None)
         }
     }
@@ -1073,9 +1086,14 @@ impl Iterator for ArrayCursor {
 /// their move destination positions, while blocks with [ItemContent::Move] are skipped over.
 #[derive(Debug, Clone)]
 struct MoveIter {
+    /// Last visited block - if block list is not empty and Self::next has been called,
+    /// this should never be None.
     current: Option<BlockPtr>,
+    /// next block to be visited
     next: Option<BlockPtr>,
+    /// When true, this iterator points at the end of a block list.
     finished: bool,
+    /// Stack reference - it remains uninitialized until a [Move] block has been detected.
     move_stack: MoveStackRef,
 }
 
@@ -1135,7 +1153,7 @@ impl Iterator for MoveIter {
                     // this item represents a new moved range frame, put it onto move stack
                     let stack = self.move_stack.as_mut();
                     retry = true;
-                    stack.descend(ptr, &moved);
+                    stack.descend(ptr, &moved.range);
                     moved
                         .range
                         .start_block()
@@ -1204,16 +1222,20 @@ impl MoveStackRef {
         self.0.as_deref_mut()
     }
 
+    /// Returns a current [Move] block that points a destination where items within current
+    /// move frame should be moved.
     fn current_move(&self) -> Option<BlockPtr> {
         let stack = self.try_get()?;
         stack.destination
     }
 
+    /// Returns the beginning of a moved range of blocks. It's inclusive.
     fn current_start(&self) -> Option<BlockPtr> {
         let stack = self.try_get()?;
         stack.start
     }
 
+    /// Returns the end of a moved range of blocks. It's inclusive.
     fn current_end(&self) -> Option<BlockPtr> {
         let stack = self.try_get()?;
         stack.start
@@ -1228,13 +1250,19 @@ impl AsMut<MoveStack> for MoveStackRef {
 
 #[derive(Debug, Clone, Default)]
 struct MoveStack {
+    /// A destination location of blocks within currently processed stack frame range.
     destination: Option<BlockPtr>,
+    /// An inclusive beginning of a block range of currently processed stack frame.
     start: Option<BlockPtr>,
+    /// An inclusive end of a block range of currently processed stack frame.
     end: Option<BlockPtr>,
+
+    /// In case of multiple recursive moves, subsequent moves are pushed onto this stack.
     stack: Vec<MoveFrame>,
 }
 
 impl MoveStack {
+    /// Removes currently processed move stack frame and returns its destination block.
     fn pop(&mut self) -> Option<BlockPtr> {
         let mut start = None;
         let mut end = None;
@@ -1244,17 +1272,6 @@ impl MoveStack {
             moved = Some(stack_item.destination);
             start = stack_item.start;
             end = stack_item.end;
-
-            //let moved_item = stack_item.destination.as_item().unwrap();
-            //if let ItemContent::Move(m) = &moved_item.content {
-            //    if m.range.start.assoc == Assoc::Right && (m.range.start.within_range(start))
-            //        || (m.range.end.within_range(end))
-            //    {
-            //        let (s, e) = m.get_moved_coords(txn);
-            //        start = s;
-            //        end = e;
-            //    }
-            //}
         }
         self.destination = moved;
         self.start = start;
@@ -1262,15 +1279,17 @@ impl MoveStack {
         result
     }
 
-    fn descend(&mut self, destination: BlockPtr, m: &Move) {
+    /// Promotes current `destination` block and move `range` as currently processed ones.
+    /// If prior this call another range was being processed, it's being stacked.
+    fn descend(&mut self, destination: BlockPtr, range: &CursorRange) {
         if let Some(destination) = self.destination {
             let item = MoveFrame::new(self.start, self.end, destination);
             self.stack.push(item);
         }
 
         self.destination = Some(destination);
-        self.start = m.range.start_block();
-        self.end = m.range.end_block();
+        self.start = range.start_block();
+        self.end = range.end_block();
     }
 }
 
