@@ -1,6 +1,5 @@
 use crate::error::Error;
 use crate::number::VarInt;
-use std::mem::MaybeUninit;
 
 #[derive(Default)]
 pub struct Cursor<'a> {
@@ -100,10 +99,7 @@ pub trait Read: Sized {
 
     /// Read float32 in big endian order
     fn read_f32(&mut self) -> Result<f32, Error> {
-        let mut buf = unsafe {
-            let b: [MaybeUninit<u8>; 4] = MaybeUninit::uninit().assume_init();
-            std::mem::transmute::<_, [u8; 4]>(b)
-        };
+        let mut buf = [0; 4];
         let slice = self.read_exact(4)?;
         buf.copy_from_slice(slice);
         Ok(f32::from_be_bytes(buf))
@@ -112,10 +108,7 @@ pub trait Read: Sized {
     /// Read float64 in big endian order
     // @todo there must be a more elegant way to convert a slice to a fixed-length buffer.
     fn read_f64(&mut self) -> Result<f64, Error> {
-        let mut buf = unsafe {
-            let b: [MaybeUninit<u8>; 8] = MaybeUninit::uninit().assume_init();
-            std::mem::transmute::<_, [u8; 8]>(b)
-        };
+        let mut buf = [0; 8];
         let slice = self.read_exact(8)?;
         buf.copy_from_slice(slice);
         Ok(f64::from_be_bytes(buf))
@@ -123,10 +116,7 @@ pub trait Read: Sized {
 
     /// Read BigInt64 in big endian order
     fn read_i64(&mut self) -> Result<i64, Error> {
-        let mut buf = unsafe {
-            let b: [MaybeUninit<u8>; 8] = MaybeUninit::uninit().assume_init();
-            std::mem::transmute::<_, [u8; 8]>(b)
-        };
+        let mut buf = [0; 8];
         let slice = self.read_exact(8)?;
         buf.copy_from_slice(slice);
         Ok(i64::from_be_bytes(buf))
@@ -134,10 +124,7 @@ pub trait Read: Sized {
 
     /// read BigUInt64 in big endian order
     fn read_u64(&mut self) -> Result<u64, Error> {
-        let mut buf = unsafe {
-            let b: [MaybeUninit<u8>; 8] = MaybeUninit::uninit().assume_init();
-            std::mem::transmute::<_, [u8; 8]>(b)
-        };
+        let mut buf = [0; 8];
         let slice = self.read_exact(8)?;
         buf.copy_from_slice(slice);
         Ok(u64::from_be_bytes(buf))
