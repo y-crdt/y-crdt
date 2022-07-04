@@ -173,7 +173,7 @@ impl Transaction {
         XmlText::from(c)
     }
 
-    /// Encodes the document state to a binary format.
+    /// Encodes changes made within the scope of the current transaction using lib0 v1 encoding.
     ///
     /// Document updates are idempotent and commutative. Caveats:
     /// * It doesn't matter in which order document updates are applied.
@@ -187,7 +187,7 @@ impl Transaction {
         encoder.to_vec()
     }
 
-    /// Encodes the document state to a binary format.
+    /// Encodes changes made within the scope of the current transaction using lib0 v2 encoding.
     ///
     /// Document updates are idempotent and commutative. Caveats:
     /// * It doesn't matter in which order document updates are applied.
@@ -201,7 +201,7 @@ impl Transaction {
         encoder.to_vec()
     }
 
-    /// Encodes the document state to a binary format.
+    /// Encodes changes made within the scope of the current transaction.
     ///
     /// Document updates are idempotent and commutative. Caveats:
     /// * It doesn't matter in which order document updates are applied.
