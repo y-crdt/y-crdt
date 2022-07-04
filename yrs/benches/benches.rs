@@ -251,8 +251,8 @@ where
                     apply(&mut txn2, t2, o2);
                     let u2 = txn2.encode_update_v1();
 
-                    txn1.apply_update(Update::decode_v1(u2.as_slice()));
-                    txn2.apply_update(Update::decode_v1(u1.as_slice()));
+                    txn1.apply_update(Update::decode_v1(u2.as_slice()).unwrap());
+                    txn2.apply_update(Update::decode_v1(u1.as_slice()).unwrap());
                 }
             });
         },
@@ -357,7 +357,7 @@ where
             let (doc, _) = iter.next().unwrap();
             let mut txn = doc.transact();
             while let Some((_, update)) = iter.next() {
-                txn.apply_update(Update::decode_v1(update.as_slice()));
+                txn.apply_update(Update::decode_v1(update.as_slice()).unwrap());
             }
         });
     });
@@ -401,7 +401,7 @@ fn b3_4(c: &mut Criterion, name: &str) {
             let (doc, _) = iter.next().unwrap();
             let mut txn = doc.transact();
             while let Some((_, update)) = iter.next() {
-                txn.apply_update(Update::decode_v1(update.as_slice()));
+                txn.apply_update(Update::decode_v1(update.as_slice()).unwrap());
             }
         });
     });
@@ -448,7 +448,7 @@ fn b4_2(c: &mut Criterion, name: &str) {
         |b, (doc, txt, buf)| {
             b.iter(|| {
                 let mut txn = doc.transact();
-                txn.apply_update(Update::decode_v1(buf.as_slice()));
+                txn.apply_update(Update::decode_v1(buf.as_slice()).unwrap());
             });
         },
     );
@@ -462,19 +462,19 @@ fn read_input(fpath: &str) -> Vec<TextOp> {
     let mut buf = Vec::new();
     std::io::Read::read_to_end(&mut f, &mut buf).unwrap();
     let mut decoder = DecoderV1::new(Cursor::new(buf.as_slice()));
-    let len: usize = decoder.read_var();
+    let len: usize = decoder.read_var().unwrap();
     let mut result = Vec::with_capacity(len);
     for _ in 0..len {
         let op = {
-            match decoder.read_var() {
+            match decoder.read_var().unwrap() {
                 1u32 => {
-                    let idx = decoder.read_var();
-                    let chunk = decoder.read_string();
+                    let idx = decoder.read_var().unwrap();
+                    let chunk = decoder.read_string().unwrap();
                     TextOp::Insert(idx, chunk.to_string())
                 }
                 2u32 => {
-                    let idx = decoder.read_var();
-                    let len = decoder.read_var();
+                    let idx = decoder.read_var().unwrap();
+                    let len = decoder.read_var().unwrap();
                     TextOp::Delete(idx, len)
                 }
                 other => panic!("unrecognized TextOp tag type: {}", other),

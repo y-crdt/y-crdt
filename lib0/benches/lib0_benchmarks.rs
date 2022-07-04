@@ -12,11 +12,11 @@ fn bench_encoding(c: &mut Criterion) {
         b.iter(|| {
             let mut encoder = Vec::with_capacity(BENCHMARK_SIZE as usize * 8);
             for i in 0..(BENCHMARK_SIZE as i64) {
-                encoder.write_ivar(i);
+                encoder.write_var(i);
             }
             let mut decoder = Cursor::from(&encoder);
             for i in 0..(BENCHMARK_SIZE as i64) {
-                let num: i64 = decoder.read_ivar();
+                let num: i64 = decoder.read_var().unwrap();
                 assert_eq!(num, i);
             }
         })
@@ -30,7 +30,7 @@ fn bench_encoding(c: &mut Criterion) {
             }
             let mut decoder = Cursor::from(&encoder);
             for i in 0..BENCHMARK_SIZE {
-                let num: u32 = decoder.read_var();
+                let num: u32 = decoder.read_var().unwrap();
                 assert_eq!(num, i);
             }
         })
@@ -44,7 +44,7 @@ fn bench_encoding(c: &mut Criterion) {
             }
             let mut decoder = Cursor::from(&encoder);
             for i in 0..BENCHMARK_SIZE {
-                let num: u32 = decoder.read_u32();
+                let num: u32 = decoder.read_u32().unwrap();
                 assert_eq!(num, i);
             }
         })
@@ -58,7 +58,7 @@ fn bench_encoding(c: &mut Criterion) {
             }
             let mut decoder = Cursor::from(&encoder);
             for i in 0..(BENCHMARK_SIZE as u64) {
-                let num: u64 = decoder.read_var();
+                let num: u64 = decoder.read_var().unwrap();
                 assert_eq!(num, i);
             }
         })
@@ -72,7 +72,7 @@ fn bench_encoding(c: &mut Criterion) {
             }
             let mut decoder = Cursor::from(&encoder);
             for i in 0..(BENCHMARK_SIZE as u64) {
-                let num = decoder.read_u64();
+                let num = decoder.read_u64().unwrap();
                 assert_eq!(num, i);
             }
         })
