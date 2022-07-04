@@ -38,9 +38,6 @@ mod utils;
 mod compatibility_tests;
 
 #[cfg(test)]
-mod alloc;
-
-#[cfg(test)]
 mod test_utils;
 
 pub use crate::alt::{
