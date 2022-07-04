@@ -5,9 +5,11 @@ use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::{OffsetKind, Transaction, ID};
 use lib0::any::Any;
+use lib0::error::Error;
 use std::cell::Cell;
 use std::collections::HashSet;
 use std::ops::{Deref, DerefMut};
+use std::rc::Rc;
 
 pub trait Cursor {
     /// Advances cursor left (if `offset` is negative) or right by a number of elements specified
@@ -230,18 +232,19 @@ pub enum Assoc {
 impl Encode for Assoc {
     fn encode<E: Encoder>(&self, encoder: &mut E) {
         match self {
-            Assoc::Left => encoder.write_ivar(-1),
-            Assoc::Right => encoder.write_ivar(1),
+            Assoc::Left => encoder.write_var(-1),
+            Assoc::Right => encoder.write_var(1),
         }
     }
 }
 
 impl Decode for Assoc {
-    fn decode<D: Decoder>(decoder: &mut D) -> Self {
-        if decoder.read_ivar() >= 0 {
-            Assoc::Right
+    fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, Error> {
+        let value: i32 = decoder.read_var()?;
+        if value >= 0 {
+            Ok(Assoc::Right)
         } else {
-            Assoc::Left
+            Ok(Assoc::Left)
         }
     }
 }
@@ -399,8 +402,8 @@ impl CursorRange {
                 if let Some(item) = ptr.item {
                     encoder.write_u8(RELATIVE_POSITION_TAG_TYPE_ID);
                     let id = item.id();
-                    encoder.write_uvar(id.client);
-                    encoder.write_uvar(id.clock);
+                    encoder.write_var(id.client);
+                    encoder.write_var(id.clock);
                 } else {
                     encoder.write_u8(RELATIVE_POSITION_TAG_TYPE_NAME);
                     let name = store.unwrap().get_type_key(*ptr).unwrap();
@@ -413,8 +416,8 @@ impl CursorRange {
             }
             TypePtr::ID(id) => {
                 encoder.write_u8(RELATIVE_POSITION_TAG_TYPE_ID);
-                encoder.write_uvar(id.client);
-                encoder.write_uvar(id.clock);
+                encoder.write_var(id.client);
+                encoder.write_var(id.clock);
             }
             TypePtr::Unknown => panic!("Cursor range parent is unknown"),
         }
@@ -435,23 +438,23 @@ impl CursorRange {
                 Self::encode_type_ptr(&self.parent, store, encoder);
             }
         }
-        encoder.write_uvar(self.priority as u32);
+        encoder.write_var(self.priority as u32);
     }
 
-    pub(crate) fn decode<D: Decoder>(decoder: &mut D) -> Self {
-        let is_collapsed = decoder.read_u8() != 0;
+    pub(crate) fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, Error> {
+        let is_collapsed = decoder.read_u8()? != 0;
         let mut parent = TypePtr::Unknown;
-        let start = match CursorRangeEdge::decode(decoder) {
+        let start = match CursorRangeEdge::decode(decoder)? {
             Ok(edge) => Some(edge),
             Err(tag) => {
                 parent = match tag {
                     RELATIVE_POSITION_TAG_TYPE_ID => {
-                        let id = ID::new(decoder.read_uvar(), decoder.read_uvar());
+                        let id = ID::new(decoder.read_var()?, decoder.read_var()?);
                         TypePtr::ID(id)
                     }
                     RELATIVE_POSITION_TAG_TYPE_NAME => {
-                        let name = decoder.read_string();
-                        TypePtr::Named(name.into())
+                        let name = decoder.read_string()?;
+                        TypePtr::Named(Rc::from(name))
                     }
                     other => panic!("Unsupported relative position tag: {}", other),
                 };
@@ -466,16 +469,16 @@ impl CursorRange {
                 None
             }
         } else {
-            match CursorRangeEdge::decode(decoder) {
+            match CursorRangeEdge::decode(decoder)? {
                 Ok(edge) => Some(edge),
                 Err(tag) => {
                     match tag {
                         RELATIVE_POSITION_TAG_TYPE_ID => {
-                            let id = ID::new(decoder.read_uvar(), decoder.read_uvar());
+                            let id = ID::new(decoder.read_var()?, decoder.read_var()?);
                             assert_eq!(TypePtr::ID(id), parent);
                         }
                         RELATIVE_POSITION_TAG_TYPE_NAME => {
-                            let name = decoder.read_string();
+                            let name = decoder.read_string()?;
                             assert_eq!(TypePtr::Named(name.into()), parent);
                         }
                         other => panic!("Unsupported relative position tag: {}", other),
@@ -484,8 +487,8 @@ impl CursorRange {
                 }
             }
         };
-        let priority: u32 = decoder.read_uvar();
-        CursorRange::new(start, end, parent, priority as i32)
+        let priority: u32 = decoder.read_var()?;
+        Ok(CursorRange::new(start, end, parent, priority as i32))
     }
 }
 
@@ -588,27 +591,35 @@ impl CursorRangeEdge {
         self.ptr.set(ptr);
     }
 
-    fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, u8> {
-        let tag = decoder.read_u8();
+    fn decode<D: Decoder>(decoder: &mut D) -> Result<Result<Self, u8>, Error> {
+        let tag = decoder.read_u8()?;
         if tag == RELATIVE_POSITION_TAG_ITEM {
-            let client = decoder.read_uvar();
-            let clock = decoder.read_uvar();
-            let id = ID::new(client, clock);
-            let assoc = if decoder.has_content() {
-                Assoc::decode(decoder)
-            } else {
-                Assoc::Right
-            };
-            Ok(Self::new(id, assoc, None))
+            let item = Self::decode_item(decoder)?;
+            Ok(Ok(item))
         } else {
-            Err(tag)
+            Ok(Err(tag))
         }
+    }
+
+    fn decode_item<D: Decoder>(decoder: &mut D) -> Result<Self, Error> {
+        let client = decoder.read_var()?;
+        let clock = decoder.read_var()?;
+        let id = ID::new(client, clock);
+        let assoc = match decoder.read_var::<i32>() {
+            Ok(value) if value >= 0 => Assoc::Right,
+            Ok(_value) => Assoc::Left,
+            Err(Error::EndOfBuffer) => Assoc::Right,
+            Err(e) => {
+                return Err(e);
+            }
+        };
+        Ok(Self::new(id, assoc, None))
     }
 
     fn encode<E: Encoder>(&self, encoder: &mut E) {
         encoder.write_u8(RELATIVE_POSITION_TAG_ITEM);
-        encoder.write_uvar(self.id.client);
-        encoder.write_uvar(self.id.clock);
+        encoder.write_var(self.id.client);
+        encoder.write_var(self.id.clock);
         self.assoc.encode(encoder)
     }
 }

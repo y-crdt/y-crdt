@@ -41,7 +41,7 @@ impl Any {
             // CASE 119: string
             119 => {
                 let str = decoder.read_string()?;
-                Any::String(Box::from(str))
+                Any::String(str.to_owned())
             }
             // CASE 118: Map<string,Any>
             118 => {
@@ -63,7 +63,7 @@ impl Any {
                 Any::Array(arr)
             }
             // CASE 116: buffer
-            116 => Any::Buffer(Box::from(decoder.read_buf()?.to_owned())),
+            116 => Any::Buffer(decoder.read_buf()?.to_owned()),
             _ => {
                 panic!("Unable to read Any content");
             }

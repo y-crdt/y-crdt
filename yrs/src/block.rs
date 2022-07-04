@@ -1,4 +1,4 @@
-use crate::cursor::{CursorRange, Move};
+use crate::cursor::Move;
 use crate::doc::OffsetKind;
 use crate::store::Store;
 use crate::types::{
