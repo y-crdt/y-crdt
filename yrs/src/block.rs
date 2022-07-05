@@ -1,4 +1,4 @@
-use crate::cursor::Move;
+use crate::cursor::{CursorRange, Move};
 use crate::doc::OffsetKind;
 use crate::store::Store;
 use crate::types::{
@@ -1530,6 +1530,9 @@ impl ItemContent {
                 decoder.read_string()?.into(),
                 Box::new(decoder.read_any()?),
             )),
+            BLOCK_ITEM_MOVE_REF_NUMBER => Ok(ItemContent::Move(Box::new(Move::new(
+                CursorRange::decode(decoder)?,
+            )))),
             _ => Err(Error::UnexpectedValue),
         }
     }

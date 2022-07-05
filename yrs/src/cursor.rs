@@ -66,7 +66,7 @@ pub struct Move {
 }
 
 impl Move {
-    fn new(range: CursorRange) -> Self {
+    pub fn new(range: CursorRange) -> Self {
         Move {
             range,
             overrides: HashSet::new(),
