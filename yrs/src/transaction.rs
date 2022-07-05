@@ -27,7 +27,7 @@ pub struct Transaction {
     /// Current state vector of a transaction, which includes all performed updates.
     pub after_state: StateVector,
     /// ID's of the blocks to be merged.
-    pub(crate) merge_blocks: Vec<BlockPtr>,
+    pub(crate) merge_blocks: Vec<ID>,
     /// Describes the set of deleted items by ids.
     pub delete_set: DeleteSet,
     /// We store the reference that last moved an item. This is needed to compute the delta
@@ -184,7 +184,7 @@ impl Transaction {
         XmlText::from(c)
     }
 
-    /// Encodes the document state to a binary format.
+    /// Encodes changes made within the scope of the current transaction using lib0 v1 encoding.
     ///
     /// Document updates are idempotent and commutative. Caveats:
     /// * It doesn't matter in which order document updates are applied.
@@ -198,7 +198,7 @@ impl Transaction {
         encoder.to_vec()
     }
 
-    /// Encodes the document state to a binary format.
+    /// Encodes changes made within the scope of the current transaction using lib0 v2 encoding.
     ///
     /// Document updates are idempotent and commutative. Caveats:
     /// * It doesn't matter in which order document updates are applied.
@@ -212,7 +212,7 @@ impl Transaction {
         encoder.to_vec()
     }
 
-    /// Encodes the document state to a binary format.
+    /// Encodes changes made within the scope of the current transaction.
     ///
     /// Document updates are idempotent and commutative. Caveats:
     /// * It doesn't matter in which order document updates are applied.
@@ -254,7 +254,7 @@ impl Transaction {
                                         store.blocks.split_block_inner(ptr, clock - item.id.clock)
                                     {
                                         index += 1;
-                                        self.merge_blocks.push(split);
+                                        self.merge_blocks.push(*split.id());
                                     }
                                     blocks = self.store_mut().blocks.get_mut(client).unwrap();
                                 }
@@ -271,7 +271,7 @@ impl Transaction {
                                                             clock_end - item.id.clock,
                                                         )
                                                     {
-                                                        self.merge_blocks.push(split);
+                                                        self.merge_blocks.push(*split.id());
                                                         index += 1;
                                                     }
                                                 }
@@ -361,13 +361,14 @@ impl Transaction {
         }
 
         for &ptr in recurse.iter() {
+            let id = *ptr.id();
             if !self.delete(ptr) {
                 // Whis will be gc'd later and we want to merge it if possible
                 // We try to merge all deleted items after each transaction,
                 // but we have no knowledge about that this needs to be merged
                 // since it is not in transaction.ds. Hence we add it to transaction._mergeStructs
                 //println!("merge block 3: {}", ptr);
-                //self.merge_blocks.push(ptr);
+                self.merge_blocks.push(id);
             }
         }
 
@@ -568,14 +569,15 @@ impl Transaction {
             }
         }
         // 7. get merge_structs and try to merge to left
-        for ptr in self.merge_blocks.iter() {
-            let id = ptr.id();
-            let blocks = self.store.blocks.get_mut(&id.client).unwrap();
-            let replaced_pos = blocks.find_pivot(id.clock).unwrap();
-            if replaced_pos + 1 < blocks.len() {
-                blocks.squash_left(replaced_pos + 1);
-            } else if replaced_pos > 0 {
-                blocks.squash_left(replaced_pos);
+        for id in self.merge_blocks.iter() {
+            if let Some(blocks) = store.blocks.get_mut(&id.client) {
+                if let Some(replaced_pos) = blocks.find_pivot(id.clock) {
+                    if replaced_pos + 1 < blocks.len() {
+                        blocks.squash_left(replaced_pos + 1);
+                    } else if replaced_pos > 0 {
+                        blocks.squash_left(replaced_pos);
+                    }
+                }
             }
         }
 
@@ -656,7 +658,7 @@ impl Transaction {
     }
 
     pub(crate) fn split_by_snapshot(&mut self, snapshot: &Snapshot) {
-        let mut merge_blocks = Vec::new();
+        let mut merge_blocks: Vec<ID> = Vec::new();
         let blocks = &mut self.store_mut().blocks;
         for (client, &clock) in snapshot.state_map.iter() {
             if let Some(list) = blocks.get(client) {
@@ -664,7 +666,7 @@ impl Transaction {
                     let ptr_clock = ptr.id().clock;
                     if ptr_clock < clock {
                         if let Some(ptr) = blocks.split_block_inner(ptr, clock - ptr_clock) {
-                            merge_blocks.push(ptr);
+                            merge_blocks.push(*ptr.id());
                         }
                     }
                 }
@@ -679,7 +681,7 @@ impl Transaction {
                         let clock = block.id().clock;
                         if clock < r.start {
                             if let Some(ptr) = blocks.split_block_inner(block, r.start - clock) {
-                                merge_blocks.push(ptr);
+                                merge_blocks.push(*ptr.id());
                             }
                             list = blocks.get(client).unwrap();
                         }
@@ -693,7 +695,7 @@ impl Transaction {
                             if let Some(ptr) =
                                 blocks.split_block_inner(block, block_id.clock + block_len - r.end)
                             {
-                                merge_blocks.push(ptr);
+                                merge_blocks.push(*ptr.id());
                             }
                             list = blocks.get(client).unwrap();
                         }

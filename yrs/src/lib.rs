@@ -37,9 +37,6 @@ mod utils;
 #[cfg(test)]
 mod compatibility_tests;
 
-#[cfg(test)]
-mod alloc;
-
 mod cursor;
 //mod block_iter;
 //mod moving;
