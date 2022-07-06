@@ -581,8 +581,7 @@ impl Text {
                 if self.curr_attrs.is_empty() {
                     None
                 } else {
-                    let attrs = std::mem::replace(&mut self.curr_attrs, Attrs::new());
-                    Some(Box::new(attrs))
+                    Some(Box::new(self.curr_attrs.clone()))
                 }
             }
         }
@@ -1762,5 +1761,23 @@ mod test {
             let text = txn.get_text("content");
             assert_eq!(text.to_string(), "");
         }
+    }
+
+    #[test]
+    fn text_diff_adjacent() {
+        let doc = Doc::with_client_id(1);
+        let mut txn = doc.transact();
+        let txt = txn.get_text("text");
+        let attrs1 = Attrs::from([("a".into(), "a".into())]);
+        txt.insert_with_attributes(&mut txn, 0, "abc", attrs1.clone());
+        let attrs2 = Attrs::from([("a".into(), "a".into()), ("b".into(), "b".into())]);
+        txt.insert_with_attributes(&mut txn, 3, "def", attrs2.clone());
+
+        let diff = txt.diff(&mut txn);
+        let expected = vec![
+            Diff::Insert("abc".into(), Some(Box::new(attrs1))),
+            Diff::Insert("def".into(), Some(Box::new(attrs2))),
+        ];
+        assert_eq!(diff, expected);
     }
 }
