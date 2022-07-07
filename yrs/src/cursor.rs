@@ -1147,7 +1147,17 @@ impl Iterator for MoveIter {
                     if Some(move_destination) != self.move_stack.current_move() {
                         // skip over this block, it's not within current move frame
                         retry = true;
-                        item.right
+                        if self.next == self.move_stack.current_end() {
+                            let stack = self.move_stack.as_mut();
+                            let block = stack.pop();
+                            if let Some(Block::Item(item)) = block.as_deref() {
+                                item.right
+                            } else {
+                                None
+                            }
+                        } else {
+                            item.right
+                        }
                     } else if self.next == self.move_stack.current_end() {
                         // we reached the end of current move scope, pop move stack and continue
                         let stack = self.move_stack.as_mut();
