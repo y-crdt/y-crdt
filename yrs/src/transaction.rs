@@ -657,6 +657,23 @@ impl Transaction {
         self.delete_set.is_deleted(id)
     }
 
+    pub(crate) fn status(&self, ptr: BlockPtr) -> BlockStatus {
+        let id = ptr.id();
+        if ptr.is_deleted() {
+            if self.has_deleted(id) && !self.has_added(id) {
+                BlockStatus::Removed
+            } else {
+                BlockStatus::Unchanged
+            }
+        } else {
+            if self.has_added(id) {
+                BlockStatus::Added
+            } else {
+                BlockStatus::Unchanged
+            }
+        }
+    }
+
     pub(crate) fn split_by_snapshot(&mut self, snapshot: &Snapshot) {
         let mut merge_blocks: Vec<ID> = Vec::new();
         let blocks = &mut self.store_mut().blocks;
@@ -712,4 +729,11 @@ impl Drop for Transaction {
     fn drop(&mut self) {
         self.commit()
     }
+}
+
+pub(crate) enum BlockStatus {
+    Unchanged,
+    Added,
+    Removed,
+    Moved,
 }

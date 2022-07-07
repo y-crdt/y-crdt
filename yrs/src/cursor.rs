@@ -1096,7 +1096,7 @@ impl Iterator for ArrayCursor {
 /// It aims for maintaining "move transparency", meaning that moved items are iterated over using
 /// their move destination positions, while blocks with [ItemContent::Move] are skipped over.
 #[derive(Debug, Clone)]
-struct MoveIter {
+pub(crate) struct MoveIter {
     /// Last visited block - if block list is not empty and Self::next has been called,
     /// this should never be None.
     current: Option<BlockPtr>,
@@ -1109,7 +1109,7 @@ struct MoveIter {
 }
 
 impl MoveIter {
-    fn new(branch: &Branch) -> Self {
+    pub fn new(branch: &Branch) -> Self {
         MoveIter {
             current: None,
             next: branch.start,
@@ -1119,17 +1119,17 @@ impl MoveIter {
     }
 
     #[inline]
-    fn current(&self) -> Option<BlockPtr> {
+    pub fn current(&self) -> Option<BlockPtr> {
         self.current
     }
 
     #[inline]
-    fn peek(&self) -> Option<BlockPtr> {
+    pub fn peek(&self) -> Option<BlockPtr> {
         self.next
     }
 
     #[inline]
-    fn finished(&self) -> bool {
+    pub fn finished(&self) -> bool {
         self.finished
     }
 }

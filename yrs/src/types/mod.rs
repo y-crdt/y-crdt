@@ -8,8 +8,10 @@ pub use map::Map;
 pub use text::Text;
 
 use crate::block::{Block, BlockPtr, Item, ItemContent, ItemPosition, Prelim};
+use crate::cursor::{ContentReader, MoveIter};
 use crate::event::EventHandler;
 use crate::store::StoreRef;
+use crate::transaction::BlockStatus;
 use crate::types::array::{Array, ArrayEvent};
 use crate::types::map::MapEvent;
 use crate::types::text::TextEvent;
@@ -1159,8 +1161,103 @@ pub(crate) fn event_keys(
     keys
 }
 
-pub(crate) fn event_change_set(txn: &Transaction, start: Option<BlockPtr>) -> ChangeSet<Change> {
-    let mut added = HashSet::new();
+pub(crate) fn event_change_set(txn: &Transaction, branch: BranchPtr) -> ChangeSet<Change> {
+    #[derive(Default)]
+    struct DeltaAssembler {
+        delta: Vec<Change>,
+        added: HashSet<ID>,
+        deleted: HashSet<ID>,
+        last_op: Option<Change>,
+    }
+
+    impl DeltaAssembler {
+        fn retain(&mut self, len: u32) {
+            let op = match self.last_op.take() {
+                Some(Change::Retain(x)) => Change::Retain(x + len),
+                other => {
+                    if let Some(op) = other {
+                        self.delta.push(op);
+                    }
+                    Change::Retain(len)
+                }
+            };
+            self.last_op = Some(op);
+        }
+
+        fn delete(&mut self, id: ID, len: u32) {
+            self.deleted.insert(id);
+            let op = match self.last_op.take() {
+                Some(Change::Removed(x)) => Change::Removed(x + len),
+                other => {
+                    if let Some(op) = other {
+                        self.delta.push(op);
+                    }
+                    Change::Removed(len)
+                }
+            };
+            self.last_op = Some(op);
+        }
+
+        fn add(&mut self, id: ID, values: Vec<Value>) {
+            self.added.insert(id);
+            let op = match self.last_op.take() {
+                Some(Change::Added(mut existing)) => {
+                    existing.extend_from_slice(&values);
+                    Change::Added(existing)
+                }
+                other => {
+                    if let Some(op) = other {
+                        self.delta.push(op);
+                    }
+                    Change::Added(values)
+                }
+            };
+            self.last_op = Some(op);
+        }
+
+        fn finish(mut self) -> ChangeSet<Change> {
+            if let Some(op) = self.last_op.take() {
+                if let Change::Retain(_) = op {
+                    /* ignore last retain */
+                } else {
+                    self.delta.push(op);
+                }
+            }
+            ChangeSet::new(self.added, self.deleted, self.delta)
+        }
+    }
+
+    let mut asm = DeltaAssembler::default();
+    let mut i = MoveIter::new(&branch);
+    let encoding = txn.store.options.offset_kind;
+    while let Some(ptr) = i.next() {
+        let len = ptr.content_len(encoding);
+        match txn.status(ptr) {
+            BlockStatus::Unchanged if ptr.is_deleted() => { /* do nothing */ }
+            BlockStatus::Unchanged => asm.retain(len),
+            BlockStatus::Added => {
+                if let Block::Item(item) = ptr.deref() {
+                    let mut data = vec![Value::default(); len as usize];
+                    let mut buf: &mut [Value] = &mut data;
+                    if buf.read_content(&item.content, 0) != len as usize {
+                        panic!(
+                            "Defect: delta assembler read invalid number of elements {}",
+                            item
+                        );
+                    }
+                    asm.add(item.id, data);
+                }
+            }
+            BlockStatus::Removed => asm.delete(*ptr.id(), len),
+            BlockStatus::Moved => {
+                todo!()
+            }
+        }
+    }
+
+    asm.finish()
+
+    /*let mut added = HashSet::new();
     let mut deleted = HashSet::new();
     let mut delta = Vec::new();
 
@@ -1294,7 +1391,7 @@ pub(crate) fn event_change_set(txn: &Transaction, start: Option<BlockPtr>) -> Ch
         Some(change) => delta.push(change),
     }
 
-    ChangeSet::new(added, deleted, delta)
+    ChangeSet::new(added, deleted, delta)*/
 }
 
 pub struct Events(Vec<NonNull<Event>>);

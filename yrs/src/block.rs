@@ -701,6 +701,13 @@ impl Block {
         }
     }
 
+    pub(crate) fn content_len(&self, kind: OffsetKind) -> u32 {
+        match self {
+            Block::Item(item) => item.content_len(kind),
+            Block::GC(gc) => gc.len,
+        }
+    }
+
     /// Checks if two blocks are of the same type.
     pub fn same_type(&self, other: &Self) -> bool {
         match (self, other) {

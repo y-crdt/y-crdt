@@ -1048,7 +1048,7 @@ impl XmlEvent {
 
     fn changes(&self, txn: &Transaction) -> &ChangeSet<Change> {
         let change_set = unsafe { self.change_set.get().as_mut().unwrap() };
-        change_set.get_or_insert_with(|| Box::new(event_change_set(txn, self.target.inner().start)))
+        change_set.get_or_insert_with(|| Box::new(event_change_set(txn, self.target.inner())))
     }
 }
 
