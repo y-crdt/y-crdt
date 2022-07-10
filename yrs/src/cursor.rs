@@ -1222,6 +1222,124 @@ impl DoubleEndedIterator for MoveIter {
     }
 }
 
+pub(crate) struct ChangeIter<'txn> {
+    next: Option<BlockPtr>,
+    txn: &'txn Transaction,
+    move_stack: MoveStackRef,
+}
+
+impl<'txn> ChangeIter<'txn> {
+    pub fn new(start: Option<BlockPtr>, txn: &'txn Transaction) -> Self {
+        ChangeIter {
+            txn,
+            next: start,
+            move_stack: MoveStackRef::default(),
+        }
+    }
+
+    fn status(&self, ptr: BlockPtr) -> BlockStatus {
+        let id = ptr.id();
+        let moved = if let Some(ptr) = self.move_stack.current_move() {
+            self.txn.has_added(ptr.id())
+        } else {
+            false
+        };
+        if ptr.is_deleted() {
+            if !moved && self.txn.has_deleted(id) && !self.txn.has_added(id) {
+                BlockStatus::Removed(ptr)
+            } else {
+                BlockStatus::Unchanged(ptr)
+            }
+        } else {
+            if self.txn.has_added(id) {
+                BlockStatus::Added(ptr)
+            } else {
+                BlockStatus::Unchanged(ptr)
+            }
+        }
+    }
+}
+
+impl<'txn> Iterator for ChangeIter<'txn> {
+    type Item = BlockStatus;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(ptr) = self.next {
+            let mut result = self.status(ptr);
+            let mut retry = false;
+            self.next = if let Block::Item(item) = ptr.deref() {
+                if let Some(move_destination) = item.moved {
+                    // this block has been moved somewhere else
+                    if Some(move_destination) != self.move_stack.current_move() {
+                        // skip over this block, it's not within current move frame
+                        retry = true;
+                        if self.next == self.move_stack.current_end() {
+                            let stack = self.move_stack.as_mut();
+                            let block = stack.pop();
+                            if let Some(Block::Item(item)) = block.as_deref() {
+                                item.right
+                            } else {
+                                None
+                            }
+                        } else {
+                            item.right
+                        }
+                    } else if self.next == self.move_stack.current_end() {
+                        // we reached the end of current move scope, pop move stack and continue
+                        let stack = self.move_stack.as_mut();
+                        let block = stack.pop();
+                        if let Some(Block::Item(item)) = block.as_deref() {
+                            item.right
+                        } else {
+                            None
+                        }
+                    } else {
+                        item.right
+                    }
+                } else if let ItemContent::Move(moved) = &item.content {
+                    // this item represents a new moved range frame, put it onto move stack
+                    let stack = self.move_stack.as_mut();
+                    retry = true;
+                    stack.descend(ptr, &moved.range);
+                    moved
+                        .range
+                        .start_block()
+                        .or_else(|| moved.range.parent.as_branch().and_then(|b| b.start))
+                } else if item.right.is_some() {
+                    item.right
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            if retry {
+                self.next()
+            } else {
+                Some(result)
+            }
+        } else if let Some(stack) = self.move_stack.0.as_deref_mut() {
+            if let Some(Block::Item(item)) = stack.pop().as_deref() {
+                // self.next was empty but we still had items on move stack - retry
+                self.next = item.right;
+                self.next()
+            } else {
+                // move stack is empty and self.next is empty
+                None
+            }
+        } else {
+            None
+        }
+    }
+}
+
+pub(crate) enum BlockStatus {
+    Unchanged(BlockPtr),
+    Added(BlockPtr),
+    Removed(BlockPtr),
+}
+
 /// Convenient wrapper around [MoveStack] that allows to lazily initialize it when needed.
 #[repr(transparent)]
 #[derive(Debug, Clone, Default)]

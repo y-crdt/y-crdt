@@ -8,10 +8,9 @@ pub use map::Map;
 pub use text::Text;
 
 use crate::block::{Block, BlockPtr, Item, ItemContent, ItemPosition, Prelim};
-use crate::cursor::{ContentReader, MoveIter};
+use crate::cursor::{BlockStatus, ChangeIter, ContentReader};
 use crate::event::EventHandler;
 use crate::store::StoreRef;
-use crate::transaction::BlockStatus;
 use crate::types::array::{Array, ArrayEvent};
 use crate::types::map::MapEvent;
 use crate::types::text::TextEvent;
@@ -1228,15 +1227,15 @@ pub(crate) fn event_change_set(txn: &Transaction, branch: BranchPtr) -> ChangeSe
     }
 
     let mut asm = DeltaAssembler::default();
-    let mut i = MoveIter::new(&branch);
+    let mut i = ChangeIter::new(branch.start, txn);
     let encoding = txn.store.options.offset_kind;
-    while let Some(ptr) = i.next() {
-        let len = ptr.content_len(encoding);
-        match txn.status(ptr) {
-            BlockStatus::Unchanged if ptr.is_deleted() => { /* do nothing */ }
-            BlockStatus::Unchanged => asm.retain(len),
-            BlockStatus::Added => {
+    while let Some(change) = i.next() {
+        match change {
+            BlockStatus::Unchanged(ptr) if ptr.is_deleted() => { /* do nothing */ }
+            BlockStatus::Unchanged(ptr) => asm.retain(ptr.content_len(encoding)),
+            BlockStatus::Added(ptr) => {
                 if let Block::Item(item) = ptr.deref() {
+                    let len = ptr.content_len(encoding);
                     let mut data = vec![Value::default(); len as usize];
                     let mut buf: &mut [Value] = &mut data;
                     if buf.read_content(&item.content, 0) != len as usize {
@@ -1248,10 +1247,7 @@ pub(crate) fn event_change_set(txn: &Transaction, branch: BranchPtr) -> ChangeSe
                     asm.add(item.id, data);
                 }
             }
-            BlockStatus::Removed => asm.delete(*ptr.id(), len),
-            BlockStatus::Moved => {
-                todo!()
-            }
+            BlockStatus::Removed(ptr) => asm.delete(*ptr.id(), ptr.content_len(encoding)),
         }
     }
 
