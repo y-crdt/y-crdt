@@ -260,7 +260,9 @@ impl Text {
                                 len
                             };
                             remaining = 0;
-                            txn.store_mut().blocks.split_block(ptr, offset, encoding);
+                            txn.store_mut()
+                                .blocks
+                                .split_block(ptr, offset, OffsetKind::Utf16);
                         } else {
                             remaining -= content_len;
                         };
@@ -1779,5 +1781,17 @@ mod test {
             Diff::Insert("def".into(), Some(Box::new(attrs2))),
         ];
         assert_eq!(diff, expected);
+    }
+
+    #[test]
+    fn text_remove_multibyte_range() {
+        let doc = Doc::new();
+        let mut txn = doc.transact();
+        let txt = txn.get_text("test");
+
+        txt.insert(&mut txn, 0, "😭😊");
+        txt.remove_range(&mut txn, 0, "😭".len() as u32);
+
+        assert_eq!(txt.to_string().as_str(), "😊");
     }
 }
