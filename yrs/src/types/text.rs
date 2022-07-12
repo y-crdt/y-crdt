@@ -1784,14 +1784,38 @@ mod test {
     }
 
     #[test]
-    fn text_remove_multibyte_range() {
-        let doc = Doc::new();
-        let mut txn = doc.transact();
-        let txt = txn.get_text("test");
+    fn text_remove_4_byte_range() {
+        let d1 = Doc::new();
+        let txt = d1.transact().get_text("test");
 
-        txt.insert(&mut txn, 0, "😭😊");
-        txt.remove_range(&mut txn, 0, "😭".len() as u32);
+        txt.insert(&mut d1.transact(), 0, "😭😊");
 
+        let d2 = Doc::new();
+        exchange_updates(&[&d1, &d2]);
+
+        txt.remove_range(&mut d1.transact(), 0, "😭".len() as u32);
         assert_eq!(txt.to_string().as_str(), "😊");
+
+        exchange_updates(&[&d1, &d2]);
+        let txt = d2.transact().get_text("test");
+        assert_eq!(txt.to_string().as_str(), "😊");
+    }
+
+    #[test]
+    fn text_remove_3_byte_range() {
+        let d1 = Doc::new();
+        let txt = d1.transact().get_text("test");
+
+        txt.insert(&mut d1.transact(), 0, "⏰⏳");
+
+        let d2 = Doc::new();
+        exchange_updates(&[&d1, &d2]);
+
+        txt.remove_range(&mut d1.transact(), 0, "⏰".len() as u32);
+        assert_eq!(txt.to_string().as_str(), "⏳");
+
+        exchange_updates(&[&d1, &d2]);
+        let txt = d2.transact().get_text("test");
+        assert_eq!(txt.to_string().as_str(), "⏳");
     }
 }
