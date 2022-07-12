@@ -1112,13 +1112,14 @@ impl SplittableString {
             OffsetKind::Bytes => {
                 let mut remaining = offset;
                 let mut i = 0;
-                for c in self.content.encode_utf16() {
+                // since this offset is used to splitting later on - and we can only split entire
+                // characters - we're computing by characters
+                for c in self.content.chars() {
                     if remaining == 0 {
                         break;
                     }
-                    let utf8_len = if c < 0x80 { 1 } else { 2 };
-                    remaining -= utf8_len;
-                    i += 1;
+                    remaining -= c.len_utf8() as u32;
+                    i += c.len_utf16() as u32;
                 }
                 i
             }
@@ -1137,12 +1138,12 @@ impl SplittableString {
     fn map_utf16_offset(&self, offset: u32) -> u32 {
         let mut off = 0;
         let mut i = 0;
-        for c in self.content.encode_utf16() {
+        for c in self.content.chars() {
             if i >= offset {
                 break;
             }
-            off += if c < 0x80 { 1 } else { 2 };
-            i += 1;
+            off += c.len_utf8() as u32;
+            i += c.len_utf16() as u32;
         }
         off
     }
