@@ -90,7 +90,7 @@ impl Text {
                             };
                             right_ptr = store
                                 .blocks
-                                .split_block(right_ptr, offset, encoding)
+                                .split_block(right_ptr, offset, OffsetKind::Utf16)
                                 .unwrap();
                             block_len -= offset;
                             remaining = 0;
@@ -156,9 +156,13 @@ impl Text {
         mut attributes: Attrs,
     ) {
         if let Some(mut pos) = self.find_position(txn, index) {
-            pos.unset_missing(&mut attributes);
-            Text::minimize_attr_changes(&mut pos, &attributes);
-            let negated_attrs = self.insert_attributes(txn, &mut pos, attributes);
+            let negated_attrs = if !attributes.is_empty() {
+                pos.unset_missing(&mut attributes);
+                Text::minimize_attr_changes(&mut pos, &attributes);
+                Some(self.insert_attributes(txn, &mut pos, attributes))
+            } else {
+                None
+            };
 
             let value = crate::block::PrelimString(chunk.into());
             let item = txn.create_item(&pos, value, None);
@@ -166,7 +170,9 @@ impl Text {
             pos.right = Some(item);
             pos.forward();
 
-            self.insert_negated_attributes(txn, &mut pos, negated_attrs);
+            if let Some(negated_attrs) = negated_attrs {
+                self.insert_negated_attributes(txn, &mut pos, negated_attrs);
+            }
         } else {
             panic!("The type or the position doesn't exist!");
         }
@@ -204,9 +210,13 @@ impl Text {
         mut attributes: Attrs,
     ) {
         if let Some(mut pos) = self.find_position(txn, index) {
-            pos.unset_missing(&mut attributes);
-            Text::minimize_attr_changes(&mut pos, &attributes);
-            let negated_attrs = self.insert_attributes(txn, &mut pos, attributes);
+            let negated_attrs = if !attributes.is_empty() {
+                pos.unset_missing(&mut attributes);
+                Text::minimize_attr_changes(&mut pos, &attributes);
+                Some(self.insert_attributes(txn, &mut pos, attributes))
+            } else {
+                None
+            };
 
             let value = crate::block::PrelimEmbed(embed);
             let item = txn.create_item(&pos, value, None);
@@ -214,7 +224,9 @@ impl Text {
             pos.right = Some(item);
             pos.forward();
 
-            self.insert_negated_attributes(txn, &mut pos, negated_attrs);
+            if let Some(negated_attrs) = negated_attrs {
+                self.insert_negated_attributes(txn, &mut pos, negated_attrs);
+            }
         } else {
             panic!("The type or the position doesn't exist!");
         }
@@ -335,6 +347,10 @@ impl Text {
     /// Wraps an existing piece of text within a range described by `index`-`len` parameters with
     /// formatting blocks containing provided `attributes` metadata.
     pub fn format(&self, txn: &mut Transaction, index: u32, len: u32, attributes: Attrs) {
+        if attributes.is_empty() {
+            return;
+        }
+
         if let Some(pos) = self.find_position(txn, index) {
             self.insert_format(txn, pos, len, attributes)
         } else {
@@ -1817,5 +1833,103 @@ mod test {
         exchange_updates(&[&d1, &d2]);
         let txt = d2.transact().get_text("test");
         assert_eq!(txt.to_string().as_str(), "⏳");
+    }
+    #[test]
+    fn delete_4_byte_character_from_middle() {
+        let doc = Doc::new();
+        let mut txn = doc.transact();
+        let txt = txn.get_text("test");
+
+        txt.insert(&mut txn, 0, "😊😭");
+        // uncomment the following line will pass the test
+        // txt.format(&mut txn, 0, "😊".len() as u32, HashMap::new());
+        txt.remove_range(&mut txn, "😊".len() as u32, "😭".len() as u32);
+
+        assert_eq!(txt.to_string().as_str(), "😊");
+    }
+
+    #[test]
+    fn delete_3_byte_character_from_middle_1() {
+        let doc = Doc::new();
+        let mut txn = doc.transact();
+        let txt = txn.get_text("test");
+
+        txt.insert(&mut txn, 0, "⏰⏳");
+        // uncomment the following line will pass the test
+        // txt.format(&mut txn, 0, "⏰".len() as u32, HashMap::new());
+        txt.remove_range(&mut txn, "⏰".len() as u32, "⏳".len() as u32);
+
+        assert_eq!(txt.to_string().as_str(), "⏰");
+    }
+
+    #[test]
+    fn delete_3_byte_character_from_middle_2() {
+        let doc = Doc::new();
+        let mut txn = doc.transact();
+        let txt = txn.get_text("test");
+
+        txt.insert(&mut txn, 0, "👯🙇‍♀️🙇‍♀️⏰👩‍❤️‍💋‍👨");
+
+        txt.format(
+            &mut txn,
+            "👯".len() as u32,
+            "🙇‍♀️🙇‍♀️".len() as u32,
+            HashMap::new(),
+        );
+        txt.remove_range(&mut txn, "👯🙇‍♀️🙇‍♀️".len() as u32, "⏰".len() as u32); // will delete ⏰ and 👩‍❤️‍💋‍👨
+
+        assert_eq!(txt.to_string().as_str(), "👯🙇‍♀️🙇‍♀️👩‍❤️‍💋‍👨");
+    }
+
+    #[test]
+    fn delete_3_byte_character_from_middle_after_insert_and_format() {
+        let doc = Doc::new();
+        let mut txn = doc.transact();
+        let txt = txn.get_text("test");
+
+        txt.insert(&mut txn, 0, "🙇‍♀️🙇‍♀️⏰👩‍❤️‍💋‍👨");
+        txt.insert(&mut txn, 0, "👯");
+        txt.format(
+            &mut txn,
+            "👯".len() as u32,
+            "🙇‍♀️🙇‍♀️".len() as u32,
+            HashMap::new(),
+        );
+
+        // will delete ⏰ and 👩‍❤️‍💋‍👨
+        txt.remove_range(&mut txn, "👯🙇‍♀️🙇‍♀️".len() as u32, "⏰".len() as u32); // will delete ⏰ and 👩‍❤️‍💋‍👨
+
+        assert_eq!(&txt.to_string(), "👯🙇‍♀️🙇‍♀️👩‍❤️‍💋‍👨");
+    }
+
+    // panicked at 'called `Option::unwrap()` on a `None` value', /y-crdt/yrs/src/types/text.rs:94:34
+    #[test]
+    fn delete_multi_byte_character_from_middle_after_insert_and_format() {
+        let doc = Doc::new();
+        let mut txn = doc.transact();
+        let txt = txn.get_text("test");
+
+        txt.insert(&mut txn, 0, "❤️❤️🙇‍♀️🙇‍♀️⏰👩‍❤️‍💋‍👨👩‍❤️‍💋‍👨");
+        txt.insert(&mut txn, 0, "👯");
+        txt.format(
+            &mut txn,
+            "👯".len() as u32,
+            "❤️❤️🙇‍♀️🙇‍♀️⏰".len() as u32,
+            HashMap::new(),
+        );
+        txt.insert(&mut txn, "👯❤️❤️🙇‍♀️🙇‍♀️⏰".len() as u32, "⏰");
+        txt.format(
+            &mut txn,
+            "👯❤️❤️🙇‍♀️🙇‍♀️⏰⏰".len() as u32,
+            "👩‍❤️‍💋‍👨".len() as u32,
+            HashMap::new(),
+        );
+        txt.remove_range(
+            &mut txn,
+            "👯❤️❤️🙇‍♀️🙇‍♀️⏰⏰👩‍❤️‍💋‍👩".len() as u32,
+            "👩‍❤️‍💋‍👨".len() as u32,
+        );
+
+        assert_eq!(txt.to_string().as_str(), "👯❤️❤️🙇‍♀️🙇‍♀️⏰⏰👩‍❤️‍💋‍👨");
     }
 }
