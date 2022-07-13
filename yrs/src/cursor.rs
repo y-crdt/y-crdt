@@ -1222,124 +1222,6 @@ impl DoubleEndedIterator for MoveIter {
     }
 }
 
-pub(crate) struct ChangeIter<'txn> {
-    next: Option<BlockPtr>,
-    txn: &'txn Transaction,
-    move_stack: MoveStackRef,
-}
-
-impl<'txn> ChangeIter<'txn> {
-    pub fn new(start: Option<BlockPtr>, txn: &'txn Transaction) -> Self {
-        ChangeIter {
-            txn,
-            next: start,
-            move_stack: MoveStackRef::default(),
-        }
-    }
-
-    fn status(&self, ptr: BlockPtr) -> BlockStatus {
-        let id = ptr.id();
-        let moved = if let Some(ptr) = self.move_stack.current_move() {
-            self.txn.has_added(ptr.id())
-        } else {
-            false
-        };
-        if ptr.is_deleted() {
-            if !moved && self.txn.has_deleted(id) && !self.txn.has_added(id) {
-                BlockStatus::Removed(ptr)
-            } else {
-                BlockStatus::Unchanged(ptr)
-            }
-        } else {
-            if self.txn.has_added(id) {
-                BlockStatus::Added(ptr)
-            } else {
-                BlockStatus::Unchanged(ptr)
-            }
-        }
-    }
-}
-
-impl<'txn> Iterator for ChangeIter<'txn> {
-    type Item = BlockStatus;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if let Some(ptr) = self.next {
-            let mut result = self.status(ptr);
-            let mut retry = false;
-            self.next = if let Block::Item(item) = ptr.deref() {
-                if let Some(move_destination) = item.moved {
-                    // this block has been moved somewhere else
-                    if Some(move_destination) != self.move_stack.current_move() {
-                        // skip over this block, it's not within current move frame
-                        retry = true;
-                        if self.next == self.move_stack.current_end() {
-                            let stack = self.move_stack.as_mut();
-                            let block = stack.pop();
-                            if let Some(Block::Item(item)) = block.as_deref() {
-                                item.right
-                            } else {
-                                None
-                            }
-                        } else {
-                            item.right
-                        }
-                    } else if self.next == self.move_stack.current_end() {
-                        // we reached the end of current move scope, pop move stack and continue
-                        let stack = self.move_stack.as_mut();
-                        let block = stack.pop();
-                        if let Some(Block::Item(item)) = block.as_deref() {
-                            item.right
-                        } else {
-                            None
-                        }
-                    } else {
-                        item.right
-                    }
-                } else if let ItemContent::Move(moved) = &item.content {
-                    // this item represents a new moved range frame, put it onto move stack
-                    let stack = self.move_stack.as_mut();
-                    retry = true;
-                    stack.descend(ptr, &moved.range);
-                    moved
-                        .range
-                        .start_block()
-                        .or_else(|| moved.range.parent.as_branch().and_then(|b| b.start))
-                } else if item.right.is_some() {
-                    item.right
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-
-            if retry {
-                self.next()
-            } else {
-                Some(result)
-            }
-        } else if let Some(stack) = self.move_stack.0.as_deref_mut() {
-            if let Some(Block::Item(item)) = stack.pop().as_deref() {
-                // self.next was empty but we still had items on move stack - retry
-                self.next = item.right;
-                self.next()
-            } else {
-                // move stack is empty and self.next is empty
-                None
-            }
-        } else {
-            None
-        }
-    }
-}
-
-pub(crate) enum BlockStatus {
-    Unchanged(BlockPtr),
-    Added(BlockPtr),
-    Removed(BlockPtr),
-}
-
 /// Convenient wrapper around [MoveStack] that allows to lazily initialize it when needed.
 #[repr(transparent)]
 #[derive(Debug, Clone, Default)]
@@ -1377,7 +1259,7 @@ impl MoveStackRef {
     /// Returns the end of a moved range of blocks. It's inclusive.
     fn current_end(&self) -> Option<BlockPtr> {
         let stack = self.try_get()?;
-        stack.start
+        stack.end
     }
 }
 
@@ -1447,6 +1329,244 @@ impl MoveFrame {
             destination,
         }
     }
+}
+
+pub(crate) struct ChangeIter<'txn> {
+    next: Option<BlockPtr>,
+    txn: &'txn Transaction,
+    move_stack: ChangedStackRef,
+}
+
+impl<'txn> ChangeIter<'txn> {
+    pub fn new(start: Option<BlockPtr>, txn: &'txn Transaction) -> Self {
+        ChangeIter {
+            txn,
+            next: start,
+            move_stack: ChangedStackRef::default(),
+        }
+    }
+
+    fn status(&self, ptr: BlockPtr) -> BlockStatus {
+        match ptr.deref() {
+            Block::Item(item) => {
+                if item.moved != self.move_stack.current_move() {
+                    todo!()
+                } else if item.is_deleted() {
+                    if self.txn.has_deleted(&item.id) && !self.txn.has_added(&item.id) {
+                        BlockStatus::Removed(ptr)
+                    } else {
+                        BlockStatus::Unchanged(ptr)
+                    }
+                } else {
+                    if self.txn.has_added(&item.id) {
+                        BlockStatus::Added(ptr)
+                    } else {
+                        BlockStatus::Unchanged(ptr)
+                    }
+                }
+            }
+            Block::GC(gc) => {
+                if self.txn.has_deleted(&gc.id) && !self.txn.has_added(&gc.id) {
+                    BlockStatus::Removed(ptr)
+                } else {
+                    BlockStatus::Unchanged(ptr)
+                }
+            }
+        }
+    }
+}
+
+impl<'txn> Iterator for ChangeIter<'txn> {
+    type Item = BlockStatus;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(ptr) = self.next {
+            let mut result = self.status(ptr);
+            let mut retry = false;
+            self.next = if let Block::Item(item) = ptr.deref() {
+                if let Some(move_destination) = item.moved {
+                    // this block has been moved somewhere else
+                    if Some(move_destination) != self.move_stack.current_move() {
+                        // skip over this block, it's not within current move frame
+                        retry = true;
+                        if self.next == self.move_stack.current_end() {
+                            let stack = self.move_stack.as_mut();
+                            let block = stack.pop();
+                            if let Some(Block::Item(item)) = block.as_deref() {
+                                item.right
+                            } else {
+                                None
+                            }
+                        } else {
+                            item.right
+                        }
+                    } else if self.next == self.move_stack.current_end() {
+                        // we reached the end of current move scope, pop move stack and continue
+                        let stack = self.move_stack.as_mut();
+                        let block = stack.pop();
+                        if let Some(Block::Item(item)) = block.as_deref() {
+                            item.right
+                        } else {
+                            None
+                        }
+                    } else {
+                        item.right
+                    }
+                } else if let ItemContent::Move(moved) = &item.content {
+                    // this item represents a new moved range frame, put it onto move stack
+                    let stack = self.move_stack.as_mut();
+                    retry = true;
+                    let is_new = stack.is_new || self.txn.has_added(&item.id);
+                    stack.descend(ptr, &moved.range, is_new);
+                    moved
+                        .range
+                        .start_block()
+                        .or_else(|| moved.range.parent.as_branch().and_then(|b| b.start))
+                } else if item.right.is_some() {
+                    item.right
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            if retry {
+                self.next()
+            } else {
+                Some(result)
+            }
+        } else if let Some(stack) = self.move_stack.0.as_deref_mut() {
+            if let Some(Block::Item(item)) = stack.pop().as_deref() {
+                // self.next was empty but we still had items on move stack - retry
+                self.next = item.right;
+                self.next()
+            } else {
+                // move stack is empty and self.next is empty
+                None
+            }
+        } else {
+            None
+        }
+    }
+}
+
+/// Convenient wrapper around [MoveStack] that allows to lazily initialize it when needed.
+#[repr(transparent)]
+#[derive(Debug, Clone, Default)]
+struct ChangedStackRef(Option<Box<ChangedStack>>);
+
+impl ChangedStackRef {
+    #[inline]
+    fn is_initialized(&self) -> bool {
+        self.0.is_some()
+    }
+
+    #[inline]
+    fn try_get(&self) -> Option<&ChangedStack> {
+        self.0.as_deref()
+    }
+
+    #[inline]
+    fn try_get_mut(&mut self) -> Option<&mut ChangedStack> {
+        self.0.as_deref_mut()
+    }
+
+    /// Returns a current [Move] block that points a destination where items within current
+    /// move frame should be moved.
+    fn current_move(&self) -> Option<BlockPtr> {
+        let stack = self.try_get()?;
+        stack.destination
+    }
+
+    /// Returns the beginning of a moved range of blocks. It's inclusive.
+    fn is_new_move(&self) -> bool {
+        if let Some(stack) = self.try_get() {
+            stack.is_new
+        } else {
+            false
+        }
+    }
+
+    /// Returns the end of a moved range of blocks. It's inclusive.
+    fn current_end(&self) -> Option<BlockPtr> {
+        let stack = self.try_get()?;
+        stack.end
+    }
+}
+
+impl AsMut<ChangedStack> for ChangedStackRef {
+    fn as_mut(&mut self) -> &mut ChangedStack {
+        self.0
+            .get_or_insert_with(|| Box::new(ChangedStack::default()))
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+struct ChangedStack {
+    /// A destination location of blocks within currently processed stack frame range.
+    destination: Option<BlockPtr>,
+    /// An inclusive end of a block range of currently processed stack frame.
+    end: Option<BlockPtr>,
+    is_new: bool,
+
+    /// In case of multiple recursive moves, subsequent moves are pushed onto this stack.
+    stack: Vec<ChangedMoveFrame>,
+}
+
+impl ChangedStack {
+    /// Removes currently processed move stack frame and returns its destination block.
+    fn pop(&mut self) -> Option<BlockPtr> {
+        let mut is_new = false;
+        let mut end = None;
+        let mut moved = None;
+        let result = self.destination;
+        if let Some(stack_item) = self.stack.pop() {
+            moved = Some(stack_item.destination);
+            is_new = stack_item.is_new;
+            end = stack_item.end;
+        }
+        self.destination = moved;
+        self.is_new = is_new;
+        self.end = end;
+        result
+    }
+
+    /// Promotes current `destination` block and move `range` as currently processed ones.
+    /// If prior this call another range was being processed, it's being stacked.
+    fn descend(&mut self, destination: BlockPtr, range: &CursorRange, is_new: bool) {
+        if let Some(destination) = self.destination {
+            let item = ChangedMoveFrame::new(self.end, destination, is_new);
+            self.stack.push(item);
+        }
+
+        self.destination = Some(destination);
+        self.end = range.end_block();
+        self.is_new = is_new;
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ChangedMoveFrame {
+    end: Option<BlockPtr>,
+    destination: BlockPtr,
+    is_new: bool,
+}
+
+impl ChangedMoveFrame {
+    fn new(end: Option<BlockPtr>, destination: BlockPtr, is_new: bool) -> Self {
+        ChangedMoveFrame {
+            end,
+            destination,
+            is_new,
+        }
+    }
+}
+
+pub(crate) enum BlockStatus {
+    Unchanged(BlockPtr),
+    Added(BlockPtr),
+    Removed(BlockPtr),
 }
 
 #[cfg(test)]
