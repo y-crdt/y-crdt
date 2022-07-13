@@ -1902,7 +1902,6 @@ mod test {
         assert_eq!(&txt.to_string(), "👯🙇‍♀️🙇‍♀️👩‍❤️‍💋‍👨");
     }
 
-    // panicked at 'called `Option::unwrap()` on a `None` value', /y-crdt/yrs/src/types/text.rs:94:34
     #[test]
     fn delete_multi_byte_character_from_middle_after_insert_and_format() {
         let doc = Doc::new();
