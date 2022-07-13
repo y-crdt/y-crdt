@@ -1,6 +1,6 @@
 [package]
 name = "yrs"
-version = "0.10.4"
+version = "0.10.5"
 description = "High performance implementation of the Yjs CRDT"
 license = "MIT"
 authors = ["Kevin Jahns <kevin.jahns@pm.me>", "Bartosz Sypytkowski <b.sypytkowski@gmail.com>"]
@@ -12,7 +12,7 @@ readme = "./README.md"
 
 [dependencies]
 rand = { version = "0.7.0", features = ["wasm-bindgen"] }
-lib0 = { path = "../lib0", version = "0.10.4" }
+lib0 = { path = "../lib0", version = "0.10.5" }
 smallstr = { version = "0.2", features = ["union"]}
 
 [dev-dependencies]
