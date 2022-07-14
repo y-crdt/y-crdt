@@ -370,11 +370,30 @@ impl Text {
                                 txn.delete(right);
                             }
                         }
-                        _ => {
+                        ItemContent::String(s) => {
                             let content_len = item.content_len(encoding);
                             if len < content_len {
-                                let new_right =
-                                    txn.store_mut().blocks.split_block(right, len, encoding);
+                                // split block
+                                let offset = s.block_offset(len, encoding);
+                                let new_right = txn.store_mut().blocks.split_block(
+                                    right,
+                                    offset,
+                                    OffsetKind::Utf16,
+                                );
+                                pos.left = Some(right);
+                                pos.right = new_right;
+                                break;
+                            }
+                            len -= content_len;
+                        }
+                        _ => {
+                            let content_len = item.len();
+                            if len < content_len {
+                                let new_right = txn.store_mut().blocks.split_block(
+                                    right,
+                                    len,
+                                    OffsetKind::Utf16,
+                                );
                                 pos.left = Some(right);
                                 pos.right = new_right;
                                 break;
@@ -1888,7 +1907,7 @@ mod test {
 
     #[test]
     fn delete_multi_byte_character_from_middle_after_insert_and_format() {
-        let doc = Doc::new();
+        let doc = Doc::with_client_id(1);
         let mut txn = doc.transact();
         let txt = txn.get_text("test");
 
@@ -1912,7 +1931,6 @@ mod test {
             "👯❤️❤️🙇‍♀️🙇‍♀️⏰⏰👩‍❤️‍💋‍👩".len() as u32,
             "👩‍❤️‍💋‍👨".len() as u32,
         );
-
         assert_eq!(txt.to_string().as_str(), "👯❤️❤️🙇‍♀️🙇‍♀️⏰⏰👩‍❤️‍💋‍👨");
     }
 
