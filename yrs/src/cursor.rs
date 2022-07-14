@@ -1346,10 +1346,20 @@ impl<'txn> ChangeIter<'txn> {
         }
     }
 
+    fn is_moved_by_new(&self, mut moved: Option<BlockPtr>) -> bool {
+        while let Some(Block::Item(item)) = moved.as_deref() {
+            if self.txn.has_added(&item.id) {
+                return true;
+            }
+            moved = item.moved;
+        }
+        false
+    }
+
     fn status(&self, ptr: BlockPtr) -> BlockStatus {
         match ptr.deref() {
             Block::Item(item) => {
-                if item.moved != self.move_stack.current_move() {
+                if item.moved.is_some() && item.moved == self.move_stack.current_move() {
                     todo!()
                 } else if item.is_deleted() {
                     if self.txn.has_deleted(&item.id) && !self.txn.has_added(&item.id) {
@@ -1416,8 +1426,9 @@ impl<'txn> Iterator for ChangeIter<'txn> {
                     // this item represents a new moved range frame, put it onto move stack
                     let stack = self.move_stack.as_mut();
                     retry = true;
-                    let is_new = stack.is_new || self.txn.has_added(&item.id);
-                    stack.descend(ptr, &moved.range, is_new);
+                    let is_new = stack.is_new_move || self.txn.has_added(&item.id);
+                    let is_deleted = stack.is_deleted_move || item.is_deleted();
+                    stack.descend(ptr, &moved.range, is_new, is_deleted);
                     moved
                         .range
                         .start_block()
@@ -1479,10 +1490,17 @@ impl ChangedStackRef {
         stack.destination
     }
 
-    /// Returns the beginning of a moved range of blocks. It's inclusive.
     fn is_new_move(&self) -> bool {
         if let Some(stack) = self.try_get() {
-            stack.is_new
+            stack.is_new_move
+        } else {
+            false
+        }
+    }
+
+    fn is_deleted_move(&self) -> bool {
+        if let Some(stack) = self.try_get() {
+            stack.is_deleted_move
         } else {
             false
         }
@@ -1508,7 +1526,8 @@ struct ChangedStack {
     destination: Option<BlockPtr>,
     /// An inclusive end of a block range of currently processed stack frame.
     end: Option<BlockPtr>,
-    is_new: bool,
+    is_new_move: bool,
+    is_deleted_move: bool,
 
     /// In case of multiple recursive moves, subsequent moves are pushed onto this stack.
     stack: Vec<ChangedMoveFrame>,
@@ -1518,31 +1537,41 @@ impl ChangedStack {
     /// Removes currently processed move stack frame and returns its destination block.
     fn pop(&mut self) -> Option<BlockPtr> {
         let mut is_new = false;
+        let mut is_deleted = false;
         let mut end = None;
         let mut moved = None;
         let result = self.destination;
         if let Some(stack_item) = self.stack.pop() {
             moved = Some(stack_item.destination);
             is_new = stack_item.is_new;
+            is_deleted = stack_item.is_deleted;
             end = stack_item.end;
         }
         self.destination = moved;
-        self.is_new = is_new;
+        self.is_new_move = is_new;
+        self.is_deleted_move = is_deleted;
         self.end = end;
         result
     }
 
     /// Promotes current `destination` block and move `range` as currently processed ones.
     /// If prior this call another range was being processed, it's being stacked.
-    fn descend(&mut self, destination: BlockPtr, range: &CursorRange, is_new: bool) {
+    fn descend(
+        &mut self,
+        destination: BlockPtr,
+        range: &CursorRange,
+        is_new: bool,
+        is_deleted: bool,
+    ) {
         if let Some(destination) = self.destination {
-            let item = ChangedMoveFrame::new(self.end, destination, is_new);
+            let item = ChangedMoveFrame::new(self.end, destination, is_new, is_deleted);
             self.stack.push(item);
         }
 
         self.destination = Some(destination);
         self.end = range.end_block();
-        self.is_new = is_new;
+        self.is_new_move = is_new;
+        self.is_deleted_move = is_deleted;
     }
 }
 
@@ -1551,14 +1580,16 @@ struct ChangedMoveFrame {
     end: Option<BlockPtr>,
     destination: BlockPtr,
     is_new: bool,
+    is_deleted: bool,
 }
 
 impl ChangedMoveFrame {
-    fn new(end: Option<BlockPtr>, destination: BlockPtr, is_new: bool) -> Self {
+    fn new(end: Option<BlockPtr>, destination: BlockPtr, is_new: bool, is_deleted: bool) -> Self {
         ChangedMoveFrame {
             end,
             destination,
             is_new,
+            is_deleted,
         }
     }
 }
