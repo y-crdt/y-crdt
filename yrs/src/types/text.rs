@@ -156,13 +156,9 @@ impl Text {
         mut attributes: Attrs,
     ) {
         if let Some(mut pos) = self.find_position(txn, index) {
-            let negated_attrs = if !attributes.is_empty() {
-                pos.unset_missing(&mut attributes);
-                Text::minimize_attr_changes(&mut pos, &attributes);
-                Some(self.insert_attributes(txn, &mut pos, attributes))
-            } else {
-                None
-            };
+            pos.unset_missing(&mut attributes);
+            Text::minimize_attr_changes(&mut pos, &attributes);
+            let negated_attrs = self.insert_attributes(txn, &mut pos, attributes);
 
             let value = crate::block::PrelimString(chunk.into());
             let item = txn.create_item(&pos, value, None);
@@ -170,9 +166,7 @@ impl Text {
             pos.right = Some(item);
             pos.forward();
 
-            if let Some(negated_attrs) = negated_attrs {
-                self.insert_negated_attributes(txn, &mut pos, negated_attrs);
-            }
+            self.insert_negated_attributes(txn, &mut pos, negated_attrs);
         } else {
             panic!("The type or the position doesn't exist!");
         }
@@ -210,13 +204,9 @@ impl Text {
         mut attributes: Attrs,
     ) {
         if let Some(mut pos) = self.find_position(txn, index) {
-            let negated_attrs = if !attributes.is_empty() {
-                pos.unset_missing(&mut attributes);
-                Text::minimize_attr_changes(&mut pos, &attributes);
-                Some(self.insert_attributes(txn, &mut pos, attributes))
-            } else {
-                None
-            };
+            pos.unset_missing(&mut attributes);
+            Text::minimize_attr_changes(&mut pos, &attributes);
+            let negated_attrs = self.insert_attributes(txn, &mut pos, attributes);
 
             let value = crate::block::PrelimEmbed(embed);
             let item = txn.create_item(&pos, value, None);
@@ -224,9 +214,7 @@ impl Text {
             pos.right = Some(item);
             pos.forward();
 
-            if let Some(negated_attrs) = negated_attrs {
-                self.insert_negated_attributes(txn, &mut pos, negated_attrs);
-            }
+            self.insert_negated_attributes(txn, &mut pos, negated_attrs);
         } else {
             panic!("The type or the position doesn't exist!");
         }
@@ -347,10 +335,6 @@ impl Text {
     /// Wraps an existing piece of text within a range described by `index`-`len` parameters with
     /// formatting blocks containing provided `attributes` metadata.
     pub fn format(&self, txn: &mut Transaction, index: u32, len: u32, attributes: Attrs) {
-        if attributes.is_empty() {
-            return;
-        }
-
         if let Some(pos) = self.find_position(txn, index) {
             self.insert_format(txn, pos, len, attributes)
         } else {
@@ -386,11 +370,30 @@ impl Text {
                                 txn.delete(right);
                             }
                         }
-                        _ => {
+                        ItemContent::String(s) => {
                             let content_len = item.content_len(encoding);
                             if len < content_len {
-                                let new_right =
-                                    txn.store_mut().blocks.split_block(right, len, encoding);
+                                // split block
+                                let offset = s.block_offset(len, encoding);
+                                let new_right = txn.store_mut().blocks.split_block(
+                                    right,
+                                    offset,
+                                    OffsetKind::Utf16,
+                                );
+                                pos.left = Some(right);
+                                pos.right = new_right;
+                                break;
+                            }
+                            len -= content_len;
+                        }
+                        _ => {
+                            let content_len = item.len();
+                            if len < content_len {
+                                let new_right = txn.store_mut().blocks.split_block(
+                                    right,
+                                    len,
+                                    OffsetKind::Utf16,
+                                );
                                 pos.left = Some(right);
                                 pos.right = new_right;
                                 break;
@@ -1904,7 +1907,7 @@ mod test {
 
     #[test]
     fn delete_multi_byte_character_from_middle_after_insert_and_format() {
-        let doc = Doc::new();
+        let doc = Doc::with_client_id(1);
         let mut txn = doc.transact();
         let txt = txn.get_text("test");
 
@@ -1928,7 +1931,25 @@ mod test {
             "👯❤️❤️🙇‍♀️🙇‍♀️⏰⏰👩‍❤️‍💋‍👩".len() as u32,
             "👩‍❤️‍💋‍👨".len() as u32,
         );
-
         assert_eq!(txt.to_string().as_str(), "👯❤️❤️🙇‍♀️🙇‍♀️⏰⏰👩‍❤️‍💋‍👨");
+    }
+
+    #[test]
+    fn insert_string_with_no_attribute() {
+        let doc = Doc::new();
+        let mut txn = doc.transact();
+        let txt = txn.get_text("test");
+
+        let attrs = Attrs::from([("a".into(), "a".into())]);
+        txt.insert_with_attributes(&mut txn, 0, "ac", attrs.clone());
+        txt.insert_with_attributes(&mut txn, 1, "b", Attrs::new());
+
+        let expect = vec![
+            Diff::Insert("a".into(), Some(Box::new(attrs.clone()))),
+            Diff::Insert("b".into(), None),
+            Diff::Insert("c".into(), Some(Box::new(attrs.clone()))),
+        ];
+
+        assert!(txt.diff(&mut txn).eq(&expect))
     }
 }
