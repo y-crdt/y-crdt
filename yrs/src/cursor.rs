@@ -934,6 +934,7 @@ impl Cursor for ArrayCursor {
             current_attrs: None,
         };
         let ptr = txn.create_item(&pos, value, None);
+        println!("inserting: {:?}", ptr.as_item());
         self.current_block_offset = 0;
         self.iter.next();
     }
@@ -1359,8 +1360,18 @@ impl<'txn> ChangeIter<'txn> {
     fn status(&self, ptr: BlockPtr) -> BlockStatus {
         match ptr.deref() {
             Block::Item(item) => {
-                if item.moved.is_some() && item.moved == self.move_stack.current_move() {
-                    todo!()
+                if item.moved.is_some() {
+                    if item.moved == self.move_stack.current_move() {
+                        if self.move_stack.is_new_move() {
+                            BlockStatus::Added(ptr)
+                        } else {
+                            BlockStatus::Unchanged(ptr)
+                        }
+                    } else if !self.txn.has_added(&item.id) {
+                        BlockStatus::Removed(ptr)
+                    } else {
+                        BlockStatus::Unchanged(ptr)
+                    }
                 } else if item.is_deleted() {
                     if self.txn.has_deleted(&item.id) && !self.txn.has_added(&item.id) {
                         BlockStatus::Removed(ptr)
@@ -1392,13 +1403,15 @@ impl<'txn> Iterator for ChangeIter<'txn> {
     fn next(&mut self) -> Option<Self::Item> {
         if let Some(ptr) = self.next {
             let mut result = self.status(ptr);
+            println!("result: {:?}", result);
             let mut retry = false;
             self.next = if let Block::Item(item) = ptr.deref() {
                 if let Some(move_destination) = item.moved {
                     // this block has been moved somewhere else
                     if Some(move_destination) != self.move_stack.current_move() {
                         // skip over this block, it's not within current move frame
-                        retry = true;
+                        retry = self.txn.has_added(ptr.id());
+                        println!("retry should be here: {:?}", result);
                         if self.next == self.move_stack.current_end() {
                             let stack = self.move_stack.as_mut();
                             let block = stack.pop();
@@ -1594,6 +1607,7 @@ impl ChangedMoveFrame {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) enum BlockStatus {
     Unchanged(BlockPtr),
     Added(BlockPtr),
