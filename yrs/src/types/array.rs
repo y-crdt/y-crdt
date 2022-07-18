@@ -913,7 +913,34 @@ mod test {
         UNIQUE_NUMBER.fetch_add(1, Ordering::SeqCst)
     }
 
-    fn array_transactions() -> [Box<dyn Fn(&mut Doc, &mut StdRng)>; 4] {
+    fn array_transactions() -> [Box<dyn Fn(&mut Doc, &mut StdRng)>; 5] {
+        fn move_one(doc: &mut Doc, rng: &mut StdRng) {
+            let mut txn = doc.transact();
+            let yarray = txn.get_array("array");
+            if yarray.len() != 0 {
+                let pos = rng.between(0, yarray.len() - 1);
+                let len = 1;
+                let new_pos_adjusted = rng.between(0, yarray.len() - 1);
+                let new_pos = new_pos_adjusted + if new_pos_adjusted > pos { len } else { 0 };
+                if let Any::Array(expected) = yarray.to_json() {
+                    let mut expected = Vec::from(expected);
+                    let moved = expected.remove(pos as usize);
+                    let insert_pos = if pos < new_pos {
+                        new_pos - len
+                    } else {
+                        new_pos
+                    } as usize;
+                    expected.insert(insert_pos, moved);
+
+                    yarray.move_to(&mut txn, pos, new_pos);
+
+                    let actual = yarray.to_json();
+                    assert_eq!(actual, Any::Array(expected.into_boxed_slice()))
+                } else {
+                    panic!("should not happen")
+                }
+            }
+        }
         fn insert(doc: &mut Doc, rng: &mut StdRng) {
             let mut txn = doc.transact();
             let yarray = txn.get_array("array");
@@ -997,6 +1024,7 @@ mod test {
             Box::new(insert_type_array),
             Box::new(insert_type_map),
             Box::new(delete),
+            Box::new(move_one),
         ]
     }
 
@@ -1007,6 +1035,11 @@ mod test {
     #[test]
     fn fuzzy_test_6() {
         fuzzy(6)
+    }
+
+    #[test]
+    fn fuzzy_test_300() {
+        fuzzy(300)
     }
 
     #[test]
