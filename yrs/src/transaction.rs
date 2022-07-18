@@ -567,9 +567,10 @@ impl Transaction {
                 }
             }
         }
+
         // 7. get merge_structs and try to merge to left
         for id in self.merge_blocks.iter() {
-            if let Some(blocks) = store.blocks.get_mut(&id.client) {
+            if let Some(blocks) = self.store.blocks.get_mut(&id.client) {
                 if let Some(replaced_pos) = blocks.find_pivot(id.clock) {
                     if replaced_pos + 1 < blocks.len() {
                         blocks.squash_left(replaced_pos + 1);
@@ -580,8 +581,8 @@ impl Transaction {
             }
         }
 
-        let store = self.store();
         // 8. emit 'afterTransactionCleanup'
+        let store = self.store();
         if let Some(eh) = store.after_transaction_events.as_ref() {
             let event = AfterTransactionEvent {
                 before_state: self.before_state.clone(),

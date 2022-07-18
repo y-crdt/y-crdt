@@ -113,7 +113,8 @@ impl Array {
             // It doesn't make sense to move a range into the same range (it's basically a no-op).
             return;
         }
-        let left = RelativePosition::from_type_index(txn, self.0, source, true);
+        let left = RelativePosition::from_type_index(txn, self.0, source, true)
+            .expect("unbounded relative positions are not supported yet");
         let mut right = left.clone();
         right.assoc = false;
         let mut walker = BlockIter::new(self.0);
@@ -137,8 +138,10 @@ impl Array {
             // It doesn't make sense to move a range into the same range (it's basically a no-op).
             return;
         }
-        let left = RelativePosition::from_type_index(txn, self.0, start, assoc_start);
-        let right = RelativePosition::from_type_index(txn, self.0, end + 1, assoc_end);
+        let left = RelativePosition::from_type_index(txn, self.0, start, assoc_start)
+            .expect("unbounded relative positions are not supported yet");
+        let right = RelativePosition::from_type_index(txn, self.0, end + 1, assoc_end)
+            .expect("unbounded relative positions are not supported yet");
         let mut walker = BlockIter::new(self.0);
         if walker.try_forward(txn, target) {
             walker.insert_move(txn, left, right);

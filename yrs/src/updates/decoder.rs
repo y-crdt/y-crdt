@@ -373,10 +373,6 @@ impl<'a> Decoder for DecoderV2<'a> {
     fn read_to_end(&mut self) -> Result<&[u8], Error> {
         Ok(&self.cursor.buf[self.cursor.next..])
     }
-
-    fn has_content(&self) -> bool {
-        self.cursor.has_content()
-    }
 }
 
 struct IntDiffOptRleDecoder<'a> {

@@ -1523,8 +1523,8 @@ impl ItemContent {
                 Ok(ItemContent::Any(values))
             }
             BLOCK_ITEM_MOVE_REF_NUMBER => {
-                let m = Move::decode(decoder);
-                ItemContent::Move(Box::new(m))
+                let m = Move::decode(decoder)?;
+                Ok(ItemContent::Move(Box::new(m)))
             }
             BLOCK_ITEM_DOC_REF_NUMBER => Ok(ItemContent::Doc(
                 decoder.read_string()?.into(),

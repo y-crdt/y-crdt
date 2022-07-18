@@ -67,10 +67,6 @@ impl Doc {
         }
     }
 
-    fn store_mut(&self) -> &mut Store {
-        unsafe { self.store.get().as_mut().unwrap() }
-    }
-
     /// Creates a transaction used for all kind of block store operations.
     /// Transaction cleanups & calling event handles happen when the transaction struct is dropped.
     pub fn transact(&self) -> Transaction {

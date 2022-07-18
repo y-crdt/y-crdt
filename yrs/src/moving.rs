@@ -4,9 +4,9 @@ use crate::types::BranchPtr;
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::{Transaction, ID};
+use lib0::error::Error;
 use std::collections::HashSet;
 use std::ops::DerefMut;
-use std::rc::Rc;
 
 /// Association type. If true, associate with right block. Otherwise with the left one.
 pub type Assoc = bool;
@@ -37,43 +37,15 @@ impl Move {
     }
 
     pub fn is_collapsed(&self) -> bool {
-        match (&self.start.kind, &self.end.kind) {
-            (RelativePositionKind::Item(a), RelativePositionKind::Item(b)) => a == b,
-            _ => false,
-        }
+        self.start.id == self.end.id
     }
 
     pub(crate) fn get_moved_coords(
         &self,
         txn: &mut Transaction,
     ) -> (Option<BlockPtr>, Option<BlockPtr>) {
-        let start = match &self.start.kind {
-            RelativePositionKind::Item(id) => Self::get_item_ptr(txn, id, self.start.assoc),
-            RelativePositionKind::Type(id) => {
-                if let Some(Block::Item(item)) = txn.store().blocks.get_block(id).as_deref() {
-                    if let ItemContent::Type(branch) = &item.content {
-                        branch.start
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            }
-            RelativePositionKind::TypeName(name) => {
-                if let Some(branch) = txn.store().types.get(name) {
-                    branch.start
-                } else {
-                    None
-                }
-            }
-        };
-
-        let end = if let RelativePositionKind::Item(id) = &self.end.kind {
-            Self::get_item_ptr(txn, id, self.end.assoc)
-        } else {
-            None
-        };
+        let start = Self::get_item_ptr(txn, &self.start.id, self.start.assoc);
+        let end = Self::get_item_ptr(txn, &self.end.id, self.end.assoc);
         (start, end)
     }
 
@@ -232,28 +204,57 @@ impl Move {
 impl Encode for Move {
     fn encode<E: Encoder>(&self, encoder: &mut E) {
         let is_collapsed = self.is_collapsed();
-        encoder.write_u8(if is_collapsed { 1 } else { 0 });
-        self.start.encode(encoder);
+        let flags = {
+            let mut b = 0;
+            if is_collapsed {
+                b |= 1
+            }
+            if self.start.assoc {
+                b |= 2
+            }
+            if self.end.assoc {
+                b |= 4
+            }
+            b |= self.priority << 3;
+            b
+        };
+        encoder.write_var(flags);
+        encoder.write_var(self.start.id.client);
+        encoder.write_var(self.start.id.clock);
         if !is_collapsed {
-            self.end.encode(encoder);
+            encoder.write_var(self.end.id.client);
+            encoder.write_var(self.end.id.clock);
         }
-        encoder.write_uvar(self.priority as u32);
     }
 }
 
 impl Decode for Move {
-    fn decode<D: Decoder>(decoder: &mut D) -> Self {
-        let is_collapsed = if decoder.read_u8() == 0 { false } else { true };
-        let start = RelativePosition::decode(decoder);
-        let end = if is_collapsed {
-            let mut end = start.clone();
-            end.assoc = false;
-            end
+    fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, Error> {
+        /*
+        const info = decoding.readVarUint(decoder.restDecoder)
+        const isCollapsed = (info & 1) === 1
+        const startAssoc = (info & 2) === 2 ? 0 : -1
+        const endAssoc = (info & 4) === 4 ? 0 : -1
+        const priority = info >>> 3
+        const startId = readID(decoder.restDecoder)
+        const start = new RelativePosition(null, null, startId, startAssoc)
+        const end = new RelativePosition(null, null, isCollapsed ? startId : readID(decoder.restDecoder), endAssoc)
+        return new ContentMove(start, end, priority)
+               */
+        let flags: i32 = decoder.read_var()?;
+        let is_collables = flags & 1 == 1;
+        let start_assoc = flags & 2 == 2;
+        let end_assoc = flags & 4 == 4;
+        let priority = flags >> 3;
+        let start_id = ID::new(decoder.read_var()?, decoder.read_var()?);
+        let end_id = if is_collables {
+            start_id
         } else {
-            RelativePosition::decode(decoder)
+            ID::new(decoder.read_var()?, decoder.read_var()?)
         };
-        let priority: u32 = decoder.read_uvar();
-        Move::new(start, end, priority as i32)
+        let start = RelativePosition::create(start_id, start_assoc);
+        let end = RelativePosition::create(end_id, end_assoc);
+        Ok(Move::new(start, end, priority))
     }
 }
 
@@ -294,27 +295,14 @@ impl std::fmt::Display for Move {
 
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
 pub struct RelativePosition {
-    pub kind: RelativePositionKind,
+    pub id: ID,
     /// If true - associate to the right block. Otherwise associate to the left one.
     pub assoc: Assoc,
 }
 
 impl RelativePosition {
-    pub(crate) fn create(
-        txn: &Transaction,
-        branch: BranchPtr,
-        item: Option<ID>,
-        assoc: Assoc,
-    ) -> Self {
-        let kind = if let Some(id) = item {
-            RelativePositionKind::Item(id)
-        } else if let Some(item) = branch.item {
-            RelativePositionKind::Type(*item.id())
-        } else {
-            let name = txn.store().get_type_key(branch).unwrap();
-            RelativePositionKind::TypeName(name.clone())
-        };
-        RelativePosition { assoc, kind }
+    pub(crate) fn create(id: ID, assoc: Assoc) -> Self {
+        RelativePosition { id, assoc }
     }
 
     pub(crate) fn from_type_index(
@@ -322,10 +310,10 @@ impl RelativePosition {
         branch: BranchPtr,
         mut index: u32,
         assoc: Assoc,
-    ) -> Self {
+    ) -> Option<Self> {
         if !assoc {
             if index == 0 {
-                return Self::create(txn, branch, None, assoc);
+                return None;
             }
             index -= 1;
         }
@@ -335,19 +323,18 @@ impl RelativePosition {
             panic!("Block iter couldn't move forward");
         }
         if walker.finished() {
-            let id = if !assoc {
-                walker.next_item().map(|ptr| ptr.last_id())
+            if !assoc {
+                let ptr = walker.next_item()?;
+                let id = ptr.last_id();
+                Some(Self::create(id, assoc))
             } else {
                 None
-            };
-            Self::create(txn, branch, id, assoc)
+            }
         } else {
-            let id = walker.next_item().map(|ptr| {
-                let mut id = ptr.id().clone();
-                id.clock += walker.rel();
-                id
-            });
-            Self::create(txn, branch, id, assoc)
+            let ptr = walker.next_item()?;
+            let mut id = ptr.id().clone();
+            id.clock += walker.rel();
+            Some(Self::create(id, assoc))
         }
     }
 
@@ -355,14 +342,12 @@ impl RelativePosition {
         if !self.assoc {
             return false;
         } else if let Some(Block::Item(item)) = ptr.as_deref() {
-            match (item.left, &self.kind) {
-                (Some(ptr), RelativePositionKind::Item(id)) => ptr.last_id() != *id,
-                _ => false,
+            match item.left {
+                Some(ptr) => ptr.last_id() != self.id,
+                None => false,
             }
-        } else if let RelativePositionKind::Item(_) = self.kind {
-            true
         } else {
-            false
+            true
         }
     }
 }
@@ -372,91 +357,11 @@ impl std::fmt::Display for RelativePosition {
         if !self.assoc {
             write!(f, "<")?;
         }
-        write!(f, "{}", self.kind)?;
+        write!(f, "{}", self.id)?;
         if self.assoc {
             write!(f, ">")?;
         }
         Ok(())
-    }
-}
-const RELATIVE_POSITION_TAG_ITEM: u8 = 0;
-const RELATIVE_POSITION_TAG_TYPE_NAME: u8 = 1;
-const RELATIVE_POSITION_TAG_TYPE: u8 = 2;
-
-impl Encode for RelativePosition {
-    fn encode<E: Encoder>(&self, encoder: &mut E) {
-        match &self.kind {
-            RelativePositionKind::Item(id) => {
-                encoder.write_u8(RELATIVE_POSITION_TAG_ITEM);
-                encoder.write_uvar(id.client);
-                encoder.write_uvar(id.clock);
-            }
-            RelativePositionKind::TypeName(tname) => {
-                encoder.write_u8(RELATIVE_POSITION_TAG_TYPE_NAME);
-                encoder.write_string(&tname);
-            }
-            RelativePositionKind::Type(id) => {
-                encoder.write_u8(RELATIVE_POSITION_TAG_TYPE_NAME);
-                encoder.write_uvar(id.client);
-                encoder.write_uvar(id.clock);
-            }
-        }
-        if self.assoc {
-            encoder.write_ivar(1);
-        } else {
-            encoder.write_ivar(-1);
-        }
-    }
-}
-
-impl Decode for RelativePosition {
-    fn decode<D: Decoder>(decoder: &mut D) -> Self {
-        let tag = decoder.read_u8();
-        let kind = match tag {
-            RELATIVE_POSITION_TAG_ITEM => {
-                let client = decoder.read_uvar();
-                let clock = decoder.read_uvar();
-                RelativePositionKind::Item(ID::new(client, clock))
-            }
-            RELATIVE_POSITION_TAG_TYPE_NAME => {
-                RelativePositionKind::TypeName(decoder.read_string().into())
-            }
-            RELATIVE_POSITION_TAG_TYPE => {
-                let client = decoder.read_uvar();
-                let clock = decoder.read_uvar();
-                RelativePositionKind::Type(ID::new(client, clock))
-            }
-            unknown => panic!("RelativePosition decoder met unknown tag {}", unknown),
-        };
-        let assoc = {
-            if decoder.has_content() {
-                if decoder.read_ivar() >= 0 {
-                    true
-                } else {
-                    false
-                }
-            } else {
-                true
-            }
-        };
-        RelativePosition { kind, assoc }
-    }
-}
-
-#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
-pub enum RelativePositionKind {
-    Item(ID),
-    Type(ID),
-    TypeName(Rc<str>),
-}
-
-impl std::fmt::Display for RelativePositionKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            RelativePositionKind::Item(id) => write!(f, "{}", id),
-            RelativePositionKind::Type(id) => write!(f, ":{}", id),
-            RelativePositionKind::TypeName(tname) => write!(f, "'{}'", tname),
-        }
     }
 }
 
