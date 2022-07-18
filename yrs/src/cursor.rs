@@ -777,6 +777,7 @@ impl ContentReader for String {
 }
 
 /// Cursor used to traverse [Array] elements.
+#[derive(Debug)]
 pub struct ArrayCursor {
     /// Internal move-aware iterator, used to abstract complexity of [Move] block traversals.
     iter: MoveIter,
@@ -1072,6 +1073,15 @@ impl Cursor for ArrayCursor {
         }
         if let Some(edge) = range.end.as_mut() {
             edge.repair(txn.store_mut());
+        }
+        if let Some(current) = self.current() {
+            let len = current.len() as usize;
+            if self.current_block_offset > len {
+                // in result of repairing cursor range edges we've split block that cursor was
+                // currently pointing to
+                self.iter.next();
+                self.current_block_offset -= len;
+            }
         }
         self.insert(txn, range);
     }
@@ -1408,11 +1418,14 @@ impl<'txn> Iterator for ChangeIter<'txn> {
             self.next = if let Block::Item(item) = ptr.deref() {
                 if let Some(move_destination) = item.moved {
                     // this block has been moved somewhere else
-                    if Some(move_destination) != self.move_stack.current_move() {
-                        // skip over this block, it's not within current move frame
-                        retry = self.txn.has_added(ptr.id());
-                        println!("retry should be here: {:?}", result);
+                    let current_move = self.move_stack.current_move();
+                    if Some(move_destination) != current_move {
+                        // skip over this block, if it was just created in this transaction scope
+                        // as this way it has not been seen outside before
+                        retry = self.txn.has_added(&item.id);
                         if self.next == self.move_stack.current_end() {
+                            // currently evaluated block is the last block in the moved range scope
+                            // remove move frame from the stack and move to move_frame.right block
                             let stack = self.move_stack.as_mut();
                             let block = stack.pop();
                             if let Some(Block::Item(item)) = block.as_deref() {
@@ -1421,6 +1434,13 @@ impl<'txn> Iterator for ChangeIter<'txn> {
                                 None
                             }
                         } else {
+                            if let Some(target) = self.txn.prev_moved.get(&ptr).cloned() {
+                                // Current block was in the past moved by another move operation.
+                                // If we are NOT in the context of that outdated move operation,
+                                // we should skip.
+                                retry |= (Some(target) != current_move)
+                                    && self.is_moved_by_new(item.moved);
+                            }
                             item.right
                         }
                     } else if self.next == self.move_stack.current_end() {

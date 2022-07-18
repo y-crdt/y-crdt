@@ -1069,7 +1069,6 @@ mod test {
         }
         assert_eq!(a1.to_json(), vec![2, 1, 3].into());
 
-        println!("{:#?}", d1.transact().store());
         exchange_updates(&[&d1, &d2]);
 
         assert_eq!(a2.to_json(), vec![2, 1, 3].into());
@@ -1079,7 +1078,6 @@ mod test {
             &vec![Change::Added(vec![2.into(), 1.into(), 3.into()])]
         );
 
-        println!("{:#?}", d1.transact().store());
         a1.move_to(&mut d1.transact(), 0, 2);
 
         assert_eq!(a1.to_json(), vec![1, 2, 3].into());

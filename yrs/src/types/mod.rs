@@ -1231,6 +1231,7 @@ pub(crate) fn event_change_set(txn: &Transaction, branch: BranchPtr) -> ChangeSe
     let encoding = txn.store.options.offset_kind;
 
     println!("---");
+    println!("{:#?}", txn.store());
     while let Some(change) = i.next() {
         println!("next change: {:?}", change);
         match change {

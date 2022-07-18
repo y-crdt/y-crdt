@@ -120,6 +120,7 @@ impl BlockPtr {
                 Block::Item(item) => {
                     let client = item.id.client;
                     let clock = item.id.clock;
+                    println!("splicing at {} - {}", offset, item);
                     let content = item.content.splice(offset as usize, encoding).unwrap();
                     item.len = offset;
                     let mut new = Box::new(Block::Item(Item {
