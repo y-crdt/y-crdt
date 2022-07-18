@@ -298,6 +298,7 @@ impl MapEvent {
 #[cfg(test)]
 mod test {
     use crate::test_utils::{exchange_updates, run_scenario};
+    use crate::types::text::PrelimText;
     use crate::types::{DeepObservable, EntryChange, Event, Map, Path, PathSegment, Value};
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encoder, EncoderV1};
@@ -362,7 +363,7 @@ mod test {
         compare_all(&m1);
 
         let update = d1.encode_state_as_update_v1(&StateVector::default());
-        t2.apply_update(Update::decode_v1(update.as_slice()));
+        t2.apply_update(Update::decode_v1(update.as_slice()).unwrap());
 
         compare_all(&m2);
     }
@@ -381,7 +382,7 @@ mod test {
         let d2 = Doc::with_client_id(2);
         let mut t2 = d2.transact();
 
-        t2.apply_update(Update::decode_v1(update.as_slice()));
+        t2.apply_update(Update::decode_v1(update.as_slice()).unwrap());
 
         let m2 = t2.get_map("map");
         assert_eq!(m2.get(&"stuff".to_owned()), Some(Value::from("stuffy")));
@@ -404,8 +405,8 @@ mod test {
         let u1 = d1.encode_state_as_update_v1(&StateVector::default());
         let u2 = d2.encode_state_as_update_v1(&StateVector::default());
 
-        t1.apply_update(Update::decode_v1(u2.as_slice()));
-        t2.apply_update(Update::decode_v1(u1.as_slice()));
+        t1.apply_update(Update::decode_v1(u2.as_slice()).unwrap());
+        t2.apply_update(Update::decode_v1(u1.as_slice()).unwrap());
 
         assert_eq!(m1.get(&"stuff".to_owned()), Some(Value::from("c1")));
         assert_eq!(m2.get(&"stuff".to_owned()), Some(Value::from("c1")));
@@ -455,7 +456,7 @@ mod test {
         let mut t2 = d2.transact();
 
         let u1 = d1.encode_state_as_update_v1(&StateVector::default());
-        t2.apply_update(Update::decode_v1(u1.as_slice()));
+        t2.apply_update(Update::decode_v1(u1.as_slice()).unwrap());
 
         let m2 = t2.get_map("map");
         assert_eq!(m2.len(), 0);
@@ -736,7 +737,7 @@ mod test {
             let sv = t2.state_vector();
             let mut encoder = EncoderV1::new();
             t1.encode_diff(&sv, &mut encoder);
-            t2.apply_update(Update::decode_v1(encoder.to_vec().as_slice()));
+            t2.apply_update(Update::decode_v1(encoder.to_vec().as_slice()).unwrap());
         }
         assert_eq!(
             entries.take(),
@@ -767,13 +768,15 @@ mod test {
         fn set_type(doc: &mut Doc, rng: &mut StdRng) {
             let mut txn = doc.transact();
             let map = txn.get_map("map");
-            let key = ["one", "two"].choose(rng).unwrap();
-            if rng.gen_bool(0.5) {
+            let key = ["one", "two", "three"].choose(rng).unwrap();
+            if rng.gen_bool(0.33) {
                 map.insert(
                     &mut txn,
                     key.to_string(),
                     PrelimArray::from(vec![1, 2, 3, 4]),
                 );
+            } else if rng.gen_bool(0.33) {
+                map.insert(&mut txn, key.to_string(), PrelimText("deeptext"));
             } else {
                 map.insert(
                     &mut txn,
@@ -832,7 +835,11 @@ mod test {
         let nested2 = nested.get("array").unwrap().to_yarray().unwrap();
         nested2.insert(&mut doc.transact(), 0, "content");
 
-        assert_eq!(*calls.borrow().deref(), 3);
+        nested.insert(&mut doc.transact(), "text", PrelimText("text"));
+        let nested_text = nested.get("text").unwrap().to_ytext().unwrap();
+        nested_text.push(&mut doc.transact(), "!");
+
+        assert_eq!(*calls.borrow().deref(), 5);
         let actual = paths.borrow();
         assert_eq!(
             actual.as_slice(),
@@ -842,6 +849,11 @@ mod test {
                 vec![Path::from(vec![
                     PathSegment::Key("map".into()),
                     PathSegment::Key("array".into())
+                ])],
+                vec![Path::from(vec![PathSegment::Key("map".into()),])],
+                vec![Path::from(vec![
+                    PathSegment::Key("map".into()),
+                    PathSegment::Key("text".into()),
                 ])],
             ]
         );

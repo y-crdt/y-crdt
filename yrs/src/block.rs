@@ -10,6 +10,7 @@ use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::*;
 use lib0::any::Any;
+use lib0::error::Error;
 use smallstr::SmallString;
 use std::collections::HashSet;
 use std::hash::Hash;
@@ -1156,13 +1157,14 @@ impl SplittableString {
             OffsetKind::Bytes => {
                 let mut remaining = offset;
                 let mut i = 0;
-                for c in self.content.encode_utf16() {
+                // since this offset is used to splitting later on - and we can only split entire
+                // characters - we're computing by characters
+                for c in self.content.chars() {
                     if remaining == 0 {
                         break;
                     }
-                    let utf8_len = if c < 0x80 { 1 } else { 2 };
-                    remaining -= utf8_len;
-                    i += 1;
+                    remaining -= c.len_utf8() as u32;
+                    i += c.len_utf16() as u32;
                 }
                 i
             }
@@ -1181,12 +1183,12 @@ impl SplittableString {
     fn map_utf16_offset(&self, offset: u32) -> u32 {
         let mut off = 0;
         let mut i = 0;
-        for c in self.content.encode_utf16() {
+        for c in self.content.chars() {
             if i >= offset {
                 break;
             }
-            off += if c < 0x80 { 1 } else { 2 };
-            i += 1;
+            off += c.len_utf8() as u32;
+            i += c.len_utf16() as u32;
         }
         off
     }
@@ -1481,52 +1483,54 @@ impl ItemContent {
         }
     }
 
-    pub fn decode<D: Decoder>(decoder: &mut D, ref_num: u8) -> Self {
+    pub fn decode<D: Decoder>(decoder: &mut D, ref_num: u8) -> Result<Self, Error> {
         match ref_num & 0b1111 {
-            BLOCK_ITEM_DELETED_REF_NUMBER => ItemContent::Deleted(decoder.read_len()),
+            BLOCK_ITEM_DELETED_REF_NUMBER => Ok(ItemContent::Deleted(decoder.read_len()?)),
             BLOCK_ITEM_JSON_REF_NUMBER => {
-                let mut remaining = decoder.read_len() as i32;
+                let mut remaining = decoder.read_len()? as i32;
                 let mut buf = Vec::with_capacity(remaining as usize);
                 while remaining >= 0 {
-                    buf.push(decoder.read_string().to_owned());
+                    buf.push(decoder.read_string()?.to_owned());
                     remaining -= 1;
                 }
-                ItemContent::JSON(buf)
+                Ok(ItemContent::JSON(buf))
             }
-            BLOCK_ITEM_BINARY_REF_NUMBER => ItemContent::Binary(decoder.read_buf().to_owned()),
-            BLOCK_ITEM_STRING_REF_NUMBER => ItemContent::String(decoder.read_string().into()),
-            BLOCK_ITEM_EMBED_REF_NUMBER => ItemContent::Embed(decoder.read_json().into()),
-            BLOCK_ITEM_FORMAT_REF_NUMBER => {
-                ItemContent::Format(decoder.read_key(), decoder.read_json().into())
-            }
+            BLOCK_ITEM_BINARY_REF_NUMBER => Ok(ItemContent::Binary(decoder.read_buf()?.to_owned())),
+            BLOCK_ITEM_STRING_REF_NUMBER => Ok(ItemContent::String(decoder.read_string()?.into())),
+            BLOCK_ITEM_EMBED_REF_NUMBER => Ok(ItemContent::Embed(decoder.read_json()?.into())),
+            BLOCK_ITEM_FORMAT_REF_NUMBER => Ok(ItemContent::Format(
+                decoder.read_key()?,
+                decoder.read_json()?.into(),
+            )),
             BLOCK_ITEM_TYPE_REF_NUMBER => {
-                let type_ref = decoder.read_type_ref();
+                let type_ref = decoder.read_type_ref()?;
                 let name = if type_ref == TYPE_REFS_XML_ELEMENT || type_ref == TYPE_REFS_XML_HOOK {
-                    Some(decoder.read_key().to_owned())
+                    Some(decoder.read_key()?.to_owned())
                 } else {
                     None
                 };
                 let inner = Branch::new(type_ref, name);
-                ItemContent::Type(inner)
+                Ok(ItemContent::Type(inner))
             }
             BLOCK_ITEM_ANY_REF_NUMBER => {
-                let len = decoder.read_len() as usize;
+                let len = decoder.read_len()? as usize;
                 let mut values = Vec::with_capacity(len);
                 let mut i = 0;
                 while i < len {
-                    values.push(decoder.read_any());
+                    values.push(decoder.read_any()?);
                     i += 1;
                 }
-                ItemContent::Any(values)
-            }
-            BLOCK_ITEM_DOC_REF_NUMBER => {
-                ItemContent::Doc(decoder.read_string().into(), Box::new(decoder.read_any()))
+                Ok(ItemContent::Any(values))
             }
             BLOCK_ITEM_MOVE_REF_NUMBER => {
                 let m = Move::decode(decoder);
                 ItemContent::Move(Box::new(m))
             }
-            info => panic!("ItemContent::decode unrecognized info flag: {}", info),
+            BLOCK_ITEM_DOC_REF_NUMBER => Ok(ItemContent::Doc(
+                decoder.read_string()?.into(),
+                Box::new(decoder.read_any()?),
+            )),
+            _ => Err(Error::UnexpectedValue),
         }
     }
 
@@ -1812,9 +1816,9 @@ where
 }
 
 #[derive(Debug)]
-pub(crate) struct PrelimText(pub SmallString<[u8; 8]>);
+pub(crate) struct PrelimString(pub SmallString<[u8; 8]>);
 
-impl Prelim for PrelimText {
+impl Prelim for PrelimString {
     fn into_content(self, _txn: &mut Transaction) -> (ItemContent, Option<Self>) {
         (ItemContent::String(self.0.into()), None)
     }

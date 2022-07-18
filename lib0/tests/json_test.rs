@@ -8,7 +8,7 @@ mod test {
         let mut buf = String::new();
         any.to_json(&mut buf);
         // decode
-        Any::from_json(buf.as_str())
+        Any::from_json(buf.as_str()).unwrap()
     }
 
     #[test]

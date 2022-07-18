@@ -122,7 +122,7 @@ impl XmlElement {
         attr_value: V,
     ) {
         let key = attr_name.into();
-        let value = crate::block::PrelimText(attr_value.as_ref().into());
+        let value = crate::block::PrelimString(attr_value.as_ref().into());
         let pos = {
             let inner = self.inner();
             let left = inner.map.get(&key);
@@ -668,7 +668,7 @@ impl XmlText {
         attr_value: V,
     ) {
         let key = attr_name.into();
-        let value = crate::block::PrelimText(attr_value.as_ref().into());
+        let value = crate::block::PrelimString(attr_value.as_ref().into());
         let pos = {
             let inner = self.inner();
             let left = inner.map.get(&key);
@@ -725,7 +725,7 @@ impl XmlText {
     pub fn insert(&self, txn: &mut Transaction, index: u32, content: &str) {
         if let Some(mut pos) = self.0.find_position(txn, index) {
             pos.parent = TypePtr::Branch(self.inner());
-            txn.create_item(&pos, crate::block::PrelimText(content.into()), None);
+            txn.create_item(&pos, crate::block::PrelimString(content.into()), None);
         } else {
             panic!("Cannot insert string content into an XML text: provided index is outside of the current text range!");
         }
@@ -1076,7 +1076,7 @@ mod test {
         let mut t2 = d2.transact();
         let xml2 = t2.get_xml_element("xml");
         let u = d1.encode_state_as_update_v1(&StateVector::default());
-        t2.apply_update(Update::decode_v1(u.as_slice()));
+        t2.apply_update(Update::decode_v1(u.as_slice()).unwrap());
         assert_eq!(xml2.get_attribute("height"), Some("10".to_string()));
     }
 
@@ -1175,7 +1175,7 @@ mod test {
         let mut t2 = d2.transact();
         let r2 = t2.get_xml_element("root");
 
-        t2.apply_update(Update::decode_v1(u1.as_slice()));
+        t2.apply_update(Update::decode_v1(u1.as_slice()).unwrap());
         assert_eq!(r2.to_string(), expected);
     }
 
@@ -1325,7 +1325,7 @@ mod test {
             let sv = t2.state_vector();
             let mut encoder = EncoderV1::new();
             t1.encode_diff(&sv, &mut encoder);
-            t2.apply_update(Update::decode_v1(encoder.to_vec().as_slice()));
+            t2.apply_update(Update::decode_v1(encoder.to_vec().as_slice()).unwrap());
         }
         assert_eq!(
             nodes.borrow_mut().take(),

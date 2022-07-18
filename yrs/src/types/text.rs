@@ -1,8 +1,8 @@
-use crate::block::{Block, BlockPtr, Item, ItemContent, ItemPosition};
+use crate::block::{Block, BlockPtr, Item, ItemContent, ItemPosition, Prelim};
 use crate::block_store::Snapshot;
 use crate::event::Subscription;
 use crate::transaction::Transaction;
-use crate::types::{Attrs, Branch, BranchPtr, Delta, Observers, Path, Value};
+use crate::types::{Attrs, Branch, BranchPtr, Delta, Observers, Path, Value, TYPE_REFS_TEXT};
 use crate::*;
 use lib0::any::Any;
 use std::cell::UnsafeCell;
@@ -90,7 +90,7 @@ impl Text {
                             };
                             right_ptr = store
                                 .blocks
-                                .split_block(right_ptr, offset, encoding)
+                                .split_block(right_ptr, offset, OffsetKind::Utf16)
                                 .unwrap();
                             block_len -= offset;
                             remaining = 0;
@@ -125,7 +125,7 @@ impl Text {
             return;
         }
         if let Some(mut pos) = self.find_position(txn, index) {
-            let value = crate::block::PrelimText(chunk.into());
+            let value = crate::block::PrelimString(chunk.into());
             while let Some(right) = pos.right.as_ref() {
                 if right.is_deleted() {
                     // skip over deleted blocks, just like Yjs does
@@ -160,7 +160,7 @@ impl Text {
             Text::minimize_attr_changes(&mut pos, &attributes);
             let negated_attrs = self.insert_attributes(txn, &mut pos, attributes);
 
-            let value = crate::block::PrelimText(chunk.into());
+            let value = crate::block::PrelimString(chunk.into());
             let item = txn.create_item(&pos, value, None);
 
             pos.right = Some(item);
@@ -260,7 +260,9 @@ impl Text {
                                 len
                             };
                             remaining = 0;
-                            txn.store_mut().blocks.split_block(ptr, offset, encoding);
+                            txn.store_mut()
+                                .blocks
+                                .split_block(ptr, offset, OffsetKind::Utf16);
                         } else {
                             remaining -= content_len;
                         };
@@ -368,11 +370,30 @@ impl Text {
                                 txn.delete(right);
                             }
                         }
-                        _ => {
+                        ItemContent::String(s) => {
                             let content_len = item.content_len(encoding);
                             if len < content_len {
-                                let new_right =
-                                    txn.store_mut().blocks.split_block(right, len, encoding);
+                                // split block
+                                let offset = s.block_offset(len, encoding);
+                                let new_right = txn.store_mut().blocks.split_block(
+                                    right,
+                                    offset,
+                                    OffsetKind::Utf16,
+                                );
+                                pos.left = Some(right);
+                                pos.right = new_right;
+                                break;
+                            }
+                            len -= content_len;
+                        }
+                        _ => {
+                            let content_len = item.len();
+                            if len < content_len {
+                                let new_right = txn.store_mut().blocks.split_block(
+                                    right,
+                                    len,
+                                    OffsetKind::Utf16,
+                                );
                                 pos.left = Some(right);
                                 pos.right = new_right;
                                 break;
@@ -581,8 +602,7 @@ impl Text {
                 if self.curr_attrs.is_empty() {
                     None
                 } else {
-                    let attrs = std::mem::replace(&mut self.curr_attrs, Attrs::new());
-                    Some(Box::new(attrs))
+                    Some(Box::new(self.curr_attrs.clone()))
                 }
             }
         }
@@ -916,6 +936,23 @@ impl TextEvent {
     }
 }
 
+/// A preliminary text. It's can be used to initialize a Text, when it's about to be nested
+/// into another Yrs data collection, such as [Map] or [Array].
+#[derive(Debug)]
+pub struct PrelimText<'a>(pub &'a str);
+
+impl Prelim for PrelimText<'_> {
+    fn into_content(self, _txn: &mut Transaction) -> (ItemContent, Option<Self>) {
+        let inner = Branch::new(TYPE_REFS_TEXT, None);
+        (ItemContent::Type(inner), Some(self))
+    }
+
+    fn integrate(self, txn: &mut Transaction, inner_ref: BranchPtr) {
+        let text = Text::from(inner_ref);
+        text.push(txn, self.0);
+    }
+}
+
 #[cfg(test)]
 mod test {
     use crate::doc::{OffsetKind, Options};
@@ -1041,11 +1078,11 @@ mod test {
         let d1_sv = t1.state_vector().encode_v1();
         let d2_sv = t2.state_vector().encode_v1();
 
-        let u1 = t1.encode_diff_v1(&StateVector::decode_v1(&d2_sv));
-        let u2 = t2.encode_diff_v1(&StateVector::decode_v1(&d1_sv));
+        let u1 = t1.encode_diff_v1(&StateVector::decode_v1(&d2_sv).unwrap());
+        let u2 = t2.encode_diff_v1(&StateVector::decode_v1(&d1_sv).unwrap());
 
-        t1.apply_update(Update::decode_v1(u2.as_slice()));
-        t2.apply_update(Update::decode_v1(u1.as_slice()));
+        t1.apply_update(Update::decode_v1(u2.as_slice()).unwrap());
+        t2.apply_update(Update::decode_v1(u1.as_slice()).unwrap());
 
         let a = txt1.to_string();
         let b = txt2.to_string();
@@ -1067,8 +1104,8 @@ mod test {
         let mut t2 = d2.transact();
 
         let d2_sv = t2.state_vector().encode_v1();
-        let u1 = t1.encode_diff_v1(&StateVector::decode_v1(&d2_sv));
-        t2.apply_update(Update::decode_v1(u1.as_slice()));
+        let u1 = t1.encode_diff_v1(&StateVector::decode_v1(&d2_sv).unwrap());
+        t2.apply_update(Update::decode_v1(u1.as_slice()).unwrap());
 
         let txt2 = t2.get_text("test");
         assert_eq!(txt2.to_string().as_str(), "I expect that");
@@ -1082,10 +1119,10 @@ mod test {
 
         let d2_sv = t2.state_vector().encode_v1();
         let d1_sv = t1.state_vector().encode_v1();
-        let u1 = t1.encode_diff_v1(&StateVector::decode_v1(&d2_sv.as_slice()));
-        let u2 = t2.encode_diff_v1(&StateVector::decode_v1(&d1_sv.as_slice()));
-        t1.apply_update(Update::decode_v1(u2.as_slice()));
-        t2.apply_update(Update::decode_v1(u1.as_slice()));
+        let u1 = t1.encode_diff_v1(&StateVector::decode_v1(&d2_sv.as_slice()).unwrap());
+        let u2 = t2.encode_diff_v1(&StateVector::decode_v1(&d1_sv.as_slice()).unwrap());
+        t1.apply_update(Update::decode_v1(u2.as_slice()).unwrap());
+        t2.apply_update(Update::decode_v1(u1.as_slice()).unwrap());
 
         let a = txt1.to_string();
         let b = txt2.to_string();
@@ -1107,8 +1144,8 @@ mod test {
         let mut t2 = d2.transact();
 
         let d2_sv = t2.state_vector().encode_v1();
-        let u1 = t1.encode_diff_v1(&StateVector::decode_v1(&d2_sv.as_slice()));
-        t2.apply_update(Update::decode_v1(u1.as_slice()));
+        let u1 = t1.encode_diff_v1(&StateVector::decode_v1(&d2_sv.as_slice()).unwrap());
+        t2.apply_update(Update::decode_v1(u1.as_slice()).unwrap());
 
         let txt2 = t2.get_text("test");
         assert_eq!(txt2.to_string().as_str(), "aaa");
@@ -1122,11 +1159,11 @@ mod test {
 
         let d2_sv = t2.state_vector().encode_v1();
         let d1_sv = t1.state_vector().encode_v1();
-        let u1 = t1.encode_diff_v1(&StateVector::decode_v1(&d2_sv.as_slice()));
-        let u2 = t2.encode_diff_v1(&StateVector::decode_v1(&d1_sv.as_slice()));
+        let u1 = t1.encode_diff_v1(&StateVector::decode_v1(&d2_sv.as_slice()).unwrap());
+        let u2 = t2.encode_diff_v1(&StateVector::decode_v1(&d1_sv.as_slice()).unwrap());
 
-        t1.apply_update(Update::decode_v1(u2.as_slice()));
-        t2.apply_update(Update::decode_v1(u1.as_slice()));
+        t1.apply_update(Update::decode_v1(u2.as_slice()).unwrap());
+        t2.apply_update(Update::decode_v1(u1.as_slice()).unwrap());
 
         let a = txt1.to_string();
         let b = txt2.to_string();
@@ -1234,7 +1271,7 @@ mod test {
 
         let d2 = Doc::with_client_id(2);
         let mut t2 = d2.transact();
-        t2.apply_update(Update::decode_v1(u1.as_slice()));
+        t2.apply_update(Update::decode_v1(u1.as_slice()).unwrap());
         let txt2 = t2.get_text("test");
         assert_eq!(txt2.to_string().as_str(), "hello world");
 
@@ -1250,11 +1287,11 @@ mod test {
 
         let sv1 = t1.state_vector().encode_v1();
         let sv2 = t2.state_vector().encode_v1();
-        let u1 = t1.encode_diff_v1(&StateVector::decode_v1(&sv2.as_slice()));
-        let u2 = t2.encode_diff_v1(&StateVector::decode_v1(&sv1.as_slice()));
+        let u1 = t1.encode_diff_v1(&StateVector::decode_v1(&sv2.as_slice()).unwrap());
+        let u2 = t2.encode_diff_v1(&StateVector::decode_v1(&sv1.as_slice()).unwrap());
 
-        t1.apply_update(Update::decode_v1(u2.as_slice()));
-        t2.apply_update(Update::decode_v1(u1.as_slice()));
+        t1.apply_update(Update::decode_v1(u2.as_slice()).unwrap());
+        t2.apply_update(Update::decode_v1(u1.as_slice()).unwrap());
 
         let a = txt1.to_string();
         let b = txt2.to_string();
@@ -1327,7 +1364,7 @@ mod test {
             let sv = t2.state_vector();
             let mut encoder = EncoderV1::new();
             t1.encode_diff(&sv, &mut encoder);
-            t2.apply_update(Update::decode_v1(encoder.to_vec().as_slice()));
+            t2.apply_update(Update::decode_v1(encoder.to_vec().as_slice()).unwrap());
         }
 
         assert_eq!(
@@ -1483,7 +1520,7 @@ mod test {
             assert_eq!(delta1.take(), expected);
 
             let mut txn = d2.transact();
-            txn.apply_update(Update::decode_v1(update.as_slice()));
+            txn.apply_update(Update::decode_v1(update.as_slice()).unwrap());
             txn.commit();
 
             assert_eq!(txt2.to_string(), "abc".to_string());
@@ -1507,7 +1544,7 @@ mod test {
             assert_eq!(delta1.take(), expected);
 
             let mut txn = d2.transact();
-            txn.apply_update(Update::decode_v1(update.as_slice()));
+            txn.apply_update(Update::decode_v1(update.as_slice()).unwrap());
             txn.commit();
 
             assert_eq!(txt2.to_string(), "bc".to_string());
@@ -1531,7 +1568,7 @@ mod test {
             assert_eq!(delta1.take(), expected);
 
             let mut txn = d2.transact();
-            txn.apply_update(Update::decode_v1(update.as_slice()));
+            txn.apply_update(Update::decode_v1(update.as_slice()).unwrap());
             txn.commit();
 
             assert_eq!(txt2.to_string(), "b".to_string());
@@ -1555,7 +1592,7 @@ mod test {
             assert_eq!(delta1.take(), expected);
 
             let mut txn = d2.transact();
-            txn.apply_update(Update::decode_v1(update.as_slice()));
+            txn.apply_update(Update::decode_v1(update.as_slice()).unwrap());
             txn.commit();
 
             assert_eq!(txt2.to_string(), "zb".to_string());
@@ -1582,7 +1619,7 @@ mod test {
             assert_eq!(delta1.take(), expected);
 
             let mut txn = d2.transact();
-            txn.apply_update(Update::decode_v1(update.as_slice()));
+            txn.apply_update(Update::decode_v1(update.as_slice()).unwrap());
             txn.commit();
 
             assert_eq!(txt2.to_string(), "yzb".to_string());
@@ -1613,7 +1650,7 @@ mod test {
             assert_eq!(delta1.take(), expected);
 
             let mut txn = d2.transact();
-            txn.apply_update(Update::decode_v1(update.as_slice()));
+            txn.apply_update(Update::decode_v1(update.as_slice()).unwrap());
             txn.commit();
 
             assert_eq!(txt2.to_string(), "yzb".to_string());
@@ -1745,5 +1782,174 @@ mod test {
             let text = txn.get_text("content");
             assert_eq!(text.to_string(), "");
         }
+    }
+
+    #[test]
+    fn text_diff_adjacent() {
+        let doc = Doc::with_client_id(1);
+        let mut txn = doc.transact();
+        let txt = txn.get_text("text");
+        let attrs1 = Attrs::from([("a".into(), "a".into())]);
+        txt.insert_with_attributes(&mut txn, 0, "abc", attrs1.clone());
+        let attrs2 = Attrs::from([("a".into(), "a".into()), ("b".into(), "b".into())]);
+        txt.insert_with_attributes(&mut txn, 3, "def", attrs2.clone());
+
+        let diff = txt.diff(&mut txn);
+        let expected = vec![
+            Diff::Insert("abc".into(), Some(Box::new(attrs1))),
+            Diff::Insert("def".into(), Some(Box::new(attrs2))),
+        ];
+        assert_eq!(diff, expected);
+    }
+
+    #[test]
+    fn text_remove_4_byte_range() {
+        let d1 = Doc::new();
+        let txt = d1.transact().get_text("test");
+
+        txt.insert(&mut d1.transact(), 0, "😭😊");
+
+        let d2 = Doc::new();
+        exchange_updates(&[&d1, &d2]);
+
+        txt.remove_range(&mut d1.transact(), 0, "😭".len() as u32);
+        assert_eq!(txt.to_string().as_str(), "😊");
+
+        exchange_updates(&[&d1, &d2]);
+        let txt = d2.transact().get_text("test");
+        assert_eq!(txt.to_string().as_str(), "😊");
+    }
+
+    #[test]
+    fn text_remove_3_byte_range() {
+        let d1 = Doc::new();
+        let txt = d1.transact().get_text("test");
+
+        txt.insert(&mut d1.transact(), 0, "⏰⏳");
+
+        let d2 = Doc::new();
+        exchange_updates(&[&d1, &d2]);
+
+        txt.remove_range(&mut d1.transact(), 0, "⏰".len() as u32);
+        assert_eq!(txt.to_string().as_str(), "⏳");
+
+        exchange_updates(&[&d1, &d2]);
+        let txt = d2.transact().get_text("test");
+        assert_eq!(txt.to_string().as_str(), "⏳");
+    }
+    #[test]
+    fn delete_4_byte_character_from_middle() {
+        let doc = Doc::new();
+        let mut txn = doc.transact();
+        let txt = txn.get_text("test");
+
+        txt.insert(&mut txn, 0, "😊😭");
+        // uncomment the following line will pass the test
+        // txt.format(&mut txn, 0, "😊".len() as u32, HashMap::new());
+        txt.remove_range(&mut txn, "😊".len() as u32, "😭".len() as u32);
+
+        assert_eq!(txt.to_string().as_str(), "😊");
+    }
+
+    #[test]
+    fn delete_3_byte_character_from_middle_1() {
+        let doc = Doc::new();
+        let mut txn = doc.transact();
+        let txt = txn.get_text("test");
+
+        txt.insert(&mut txn, 0, "⏰⏳");
+        // uncomment the following line will pass the test
+        // txt.format(&mut txn, 0, "⏰".len() as u32, HashMap::new());
+        txt.remove_range(&mut txn, "⏰".len() as u32, "⏳".len() as u32);
+
+        assert_eq!(txt.to_string().as_str(), "⏰");
+    }
+
+    #[test]
+    fn delete_3_byte_character_from_middle_2() {
+        let doc = Doc::new();
+        let mut txn = doc.transact();
+        let txt = txn.get_text("test");
+
+        txt.insert(&mut txn, 0, "👯🙇‍♀️🙇‍♀️⏰👩‍❤️‍💋‍👨");
+
+        txt.format(
+            &mut txn,
+            "👯".len() as u32,
+            "🙇‍♀️🙇‍♀️".len() as u32,
+            HashMap::new(),
+        );
+        txt.remove_range(&mut txn, "👯🙇‍♀️🙇‍♀️".len() as u32, "⏰".len() as u32); // will delete ⏰ and 👩‍❤️‍💋‍👨
+
+        assert_eq!(txt.to_string().as_str(), "👯🙇‍♀️🙇‍♀️👩‍❤️‍💋‍👨");
+    }
+
+    #[test]
+    fn delete_3_byte_character_from_middle_after_insert_and_format() {
+        let doc = Doc::new();
+        let mut txn = doc.transact();
+        let txt = txn.get_text("test");
+
+        txt.insert(&mut txn, 0, "🙇‍♀️🙇‍♀️⏰👩‍❤️‍💋‍👨");
+        txt.insert(&mut txn, 0, "👯");
+        txt.format(
+            &mut txn,
+            "👯".len() as u32,
+            "🙇‍♀️🙇‍♀️".len() as u32,
+            HashMap::new(),
+        );
+
+        // will delete ⏰ and 👩‍❤️‍💋‍👨
+        txt.remove_range(&mut txn, "👯🙇‍♀️🙇‍♀️".len() as u32, "⏰".len() as u32); // will delete ⏰ and 👩‍❤️‍💋‍👨
+
+        assert_eq!(&txt.to_string(), "👯🙇‍♀️🙇‍♀️👩‍❤️‍💋‍👨");
+    }
+
+    #[test]
+    fn delete_multi_byte_character_from_middle_after_insert_and_format() {
+        let doc = Doc::with_client_id(1);
+        let mut txn = doc.transact();
+        let txt = txn.get_text("test");
+
+        txt.insert(&mut txn, 0, "❤️❤️🙇‍♀️🙇‍♀️⏰👩‍❤️‍💋‍👨👩‍❤️‍💋‍👨");
+        txt.insert(&mut txn, 0, "👯");
+        txt.format(
+            &mut txn,
+            "👯".len() as u32,
+            "❤️❤️🙇‍♀️🙇‍♀️⏰".len() as u32,
+            HashMap::new(),
+        );
+        txt.insert(&mut txn, "👯❤️❤️🙇‍♀️🙇‍♀️⏰".len() as u32, "⏰");
+        txt.format(
+            &mut txn,
+            "👯❤️❤️🙇‍♀️🙇‍♀️⏰⏰".len() as u32,
+            "👩‍❤️‍💋‍👨".len() as u32,
+            HashMap::new(),
+        );
+        txt.remove_range(
+            &mut txn,
+            "👯❤️❤️🙇‍♀️🙇‍♀️⏰⏰👩‍❤️‍💋‍👩".len() as u32,
+            "👩‍❤️‍💋‍👨".len() as u32,
+        );
+        assert_eq!(txt.to_string().as_str(), "👯❤️❤️🙇‍♀️🙇‍♀️⏰⏰👩‍❤️‍💋‍👨");
+    }
+
+    #[test]
+    fn insert_string_with_no_attribute() {
+        let doc = Doc::new();
+        let mut txn = doc.transact();
+        let txt = txn.get_text("test");
+
+        let attrs = Attrs::from([("a".into(), "a".into())]);
+        txt.insert_with_attributes(&mut txn, 0, "ac", attrs.clone());
+        txt.insert_with_attributes(&mut txn, 1, "b", Attrs::new());
+
+        let expect = vec![
+            Diff::Insert("a".into(), Some(Box::new(attrs.clone()))),
+            Diff::Insert("b".into(), None),
+            Diff::Insert("c".into(), Some(Box::new(attrs.clone()))),
+        ];
+
+        assert!(txt.diff(&mut txn).eq(&expect))
     }
 }

@@ -1,6 +1,5 @@
-use crate::binary;
-use core::panic;
-use std::mem::MaybeUninit;
+use crate::error::Error;
+use crate::number::VarInt;
 
 #[derive(Default)]
 pub struct Cursor<'a> {
@@ -28,146 +27,106 @@ where
 }
 
 impl<'a> Read for Cursor<'a> {
-    /// Read a single byte.
-    fn read_u8(&mut self) -> u8 {
-        let b = self.buf[self.next];
-        self.next += 1;
-        b
+    /// Take a slice of the next `len` bytes and advance the position by `len`.
+    fn read_exact(&mut self, len: usize) -> Result<&[u8], Error> {
+        if self.next + len > self.buf.len() {
+            Err(Error::EndOfBuffer)
+        } else {
+            let slice = &self.buf[self.next..(self.next + len)];
+            self.next += len as usize;
+            Ok(slice)
+        }
     }
 
-    /// Take a slice of the next `len` bytes and advance the position by `len`.
-    fn read(&mut self, len: usize) -> &[u8] {
-        let slice = &self.buf[self.next..(self.next + len)];
-        self.next += len as usize;
-        slice
+    /// Read a single byte.
+    fn read_u8(&mut self) -> Result<u8, Error> {
+        if let Some(&b) = self.buf.get(self.next) {
+            self.next += 1;
+            Ok(b)
+        } else {
+            Err(Error::EndOfBuffer)
+        }
     }
 }
 
-pub trait Read {
-    /// Read a single byte.
-    fn read_u8(&mut self) -> u8;
+pub trait Read: Sized {
+    fn read_exact(&mut self, len: usize) -> Result<&[u8], Error>;
 
-    fn read(&mut self, len: usize) -> &[u8];
+    /// Read a single byte.
+    fn read_u8(&mut self) -> Result<u8, Error> {
+        let buf = self.read_exact(1)?;
+        Ok(buf[0])
+    }
 
     /// Read a variable length buffer.
-    fn read_buf(&mut self) -> &[u8] {
-        let len: u32 = self.read_uvar();
-        self.read(len as usize)
+    fn read_buf(&mut self) -> Result<&[u8], Error> {
+        let len: u32 = self.read_var()?;
+        self.read_exact(len as usize)
     }
 
     /// Read 2 bytes as unsigned integer
-    fn read_u16(&mut self) -> u16 {
-        self.read_u8() as u16 | ((self.read_u8() as u16) << 8)
+    fn read_u16(&mut self) -> Result<u16, Error> {
+        let buf = self.read_exact(2)?;
+        Ok(buf[0] as u16 | ((buf[1] as u16) << 8))
     }
 
     /// Read 4 bytes as unsigned integer
-    fn read_u32(&mut self) -> u32 {
-        self.read_u8() as u32
-            | (self.read_u8() as u32) << 8
-            | (self.read_u8() as u32) << 16
-            | (self.read_u8() as u32) << 24
+    fn read_u32(&mut self) -> Result<u32, Error> {
+        let buf = self.read_exact(4)?;
+        Ok(buf[0] as u32 | (buf[1] as u32) << 8 | (buf[2] as u32) << 16 | (buf[3] as u32) << 24)
     }
 
     /// Read 4 bytes as unsigned integer in big endian order.
     /// (most significant byte first)
-    fn read_u32_be(&mut self) -> u32 {
-        (self.read_u8() as u32) << 24
-            | (self.read_u8() as u32) << 16
-            | (self.read_u8() as u32) << 8
-            | self.read_u8() as u32
+    fn read_u32_be(&mut self) -> Result<u32, Error> {
+        let buf = self.read_exact(4)?;
+        Ok((buf[0] as u32) << 24 | (buf[1] as u32) << 16 | (buf[2] as u32) << 8 | buf[3] as u32)
     }
 
     /// Read unsigned integer with variable length.
     /// * numbers < 2^7 are stored in one byte
     /// * numbers < 2^14 are stored in two bytes
-    // @todo currently, only 32 bits supported
-    fn read_uvar<T: crate::number::Uint>(&mut self) -> T {
-        let mut num: T = Default::default();
-        let mut len: usize = 0;
-        loop {
-            let r = self.read_u8();
-            num.unshift_add(len, r & binary::BITS7);
-            len += 7;
-            if r < binary::BIT8 {
-                return num;
-            }
-            if len > 128 {
-                panic!("Integer out of range!");
-            }
-        }
-    }
-
-    /// Read signed integer with variable length.
-    /// * numbers < 2^7 are stored in one byte
-    /// * numbers < 2^14 are stored in two bytes
-    // @todo currently, only 32 bits supported
-    fn read_ivar(&mut self) -> i64 {
-        let mut r = self.read_u8();
-        let mut num = (r & binary::BITS6 as u8) as i64;
-        let mut len: u32 = 6;
-        let is_negative = r & binary::BIT7 as u8 > 0;
-        if r & binary::BIT8 as u8 == 0 {
-            return if is_negative { -num } else { num };
-        }
-        loop {
-            r = self.read_u8();
-            num |= (r as i64 & binary::BITS7 as i64) << len;
-            len += 7;
-            if r < binary::BIT8 as u8 {
-                return if is_negative { -num } else { num };
-            }
-            if len > 128 {
-                panic!("Integer out of range!");
-            }
-        }
+    #[inline]
+    fn read_var<T: VarInt>(&mut self) -> Result<T, Error> {
+        T::read(self)
     }
 
     /// Read string of variable length.
-    fn read_string(&mut self) -> &str {
-        let buf = self.read_buf();
-        unsafe { std::str::from_utf8_unchecked(buf) }
+    fn read_string(&mut self) -> Result<&str, Error> {
+        let buf = self.read_buf()?;
+        Ok(unsafe { std::str::from_utf8_unchecked(buf) })
     }
 
     /// Read float32 in big endian order
-    fn read_f32(&mut self) -> f32 {
-        let buf = [
-            self.read_u8(),
-            self.read_u8(),
-            self.read_u8(),
-            self.read_u8(),
-        ];
-        f32::from_be_bytes(buf)
+    fn read_f32(&mut self) -> Result<f32, Error> {
+        let mut buf = [0; 4];
+        let slice = self.read_exact(4)?;
+        buf.copy_from_slice(slice);
+        Ok(f32::from_be_bytes(buf))
     }
 
     /// Read float64 in big endian order
     // @todo there must be a more elegant way to convert a slice to a fixed-length buffer.
-    fn read_f64(&mut self) -> f64 {
-        let mut bytes = init_buf();
-        bytes.clone_from_slice(self.read(8));
-        f64::from_be_bytes(bytes)
+    fn read_f64(&mut self) -> Result<f64, Error> {
+        let mut buf = [0; 8];
+        let slice = self.read_exact(8)?;
+        buf.copy_from_slice(slice);
+        Ok(f64::from_be_bytes(buf))
     }
 
     /// Read BigInt64 in big endian order
-    fn read_i64(&mut self) -> i64 {
-        let mut bytes = init_buf();
-        bytes.clone_from_slice(self.read(8));
-        i64::from_be_bytes(bytes)
+    fn read_i64(&mut self) -> Result<i64, Error> {
+        let mut buf = [0; 8];
+        let slice = self.read_exact(8)?;
+        buf.copy_from_slice(slice);
+        Ok(i64::from_be_bytes(buf))
     }
 
     /// read BigUInt64 in big endian order
-    fn read_u64(&mut self) -> u64 {
-        let mut bytes = init_buf();
-        bytes.clone_from_slice(self.read(8));
-        u64::from_be_bytes(bytes)
-    }
-}
-
-/// Create non-zeroed fixed array of 8-bytes and returns it.
-/// Since it's not zeroed it should be filled before use.
-#[inline(always)]
-fn init_buf() -> [u8; 8] {
-    unsafe {
-        let b: [MaybeUninit<u8>; 8] = MaybeUninit::uninit().assume_init();
-        std::mem::transmute::<_, [u8; 8]>(b)
+    fn read_u64(&mut self) -> Result<u64, Error> {
+        let mut buf = [0; 8];
+        let slice = self.read_exact(8)?;
+        buf.copy_from_slice(slice);
+        Ok(u64::from_be_bytes(buf))
     }
 }
