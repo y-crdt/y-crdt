@@ -2577,12 +2577,12 @@ impl YXmlText {
     /// unspecified order.
     #[wasm_bindgen(js_name = attributes)]
     pub fn attributes(&self) -> YXmlAttributes {
-        unsafe {
+        
             let this: *const XmlText = &self.0;
             let static_iter: ManuallyDrop<Attributes<'static>> =
-                ManuallyDrop::new((*this).attributes());
+                unsafe { ManuallyDrop::new((*this).attributes()) };
             YXmlAttributes(static_iter)
-        }
+        
     }
 
     /// Subscribes to all operations happening over this instance of `YXmlText`. All changes are
