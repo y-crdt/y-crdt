@@ -108,6 +108,7 @@ impl Array {
         }
     }
 
+    /// Moves element found at `source` index into `target` index position.
     pub fn move_to(&self, txn: &mut Transaction, source: u32, target: u32) {
         if source == target || source + 1 == target {
             // It doesn't make sense to move a range into the same range (it's basically a no-op).
@@ -125,6 +126,23 @@ impl Array {
         }
     }
 
+    /// Moves all elements found within `start`..`end` indexes range (both side inclusive) into
+    /// new position pointed by `target` index. All elements inserted concurrently by other peers
+    /// inside of moved range will be moved as well after synchronization (although it make take
+    /// more than one sync roundtrip to achieve convergence).
+    ///
+    /// `assoc_start`/`assoc_end` flags are used to mark if ranges should include elements that
+    /// might have been inserted concurrently at the edges of the range definition.
+    ///
+    /// Example:
+    /// ```
+    /// use yrs::Doc;
+    /// let doc = Doc::new();
+    /// let array = doc.transact().get_array("array");
+    /// array.insert_range(&mut doc.transact(), 0, [1,2,3,4]);
+    /// // move elements 2 and 3 after the 4
+    /// array.move_range_to(&mut doc.transact(), 1, true, 2, false, 4);
+    /// ```
     pub fn move_range_to(
         &self,
         txn: &mut Transaction,
