@@ -1,12 +1,13 @@
 use crate::doc::OffsetKind;
+use crate::moving::Move;
 use crate::store::Store;
 use crate::types::{
     Attrs, Branch, BranchPtr, TypePtr, Value, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
     TYPE_REFS_UNDEFINED, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_HOOK,
     TYPE_REFS_XML_TEXT,
 };
-use crate::updates::decoder::Decoder;
-use crate::updates::encoder::Encoder;
+use crate::updates::decoder::{Decode, Decoder};
+use crate::updates::encoder::{Encode, Encoder};
 use crate::*;
 use lib0::any::Any;
 use lib0::error::Error;
@@ -51,6 +52,9 @@ pub const BLOCK_ITEM_DOC_REF_NUMBER: u8 = 9;
 /// Bit flag used to identify [Block::Skip].
 pub const BLOCK_SKIP_REF_NUMBER: u8 = 10;
 
+/// Bit flag used to identify items with content of type [ItemContent::Move].
+pub const BLOCK_ITEM_MOVE_REF_NUMBER: u8 = 11;
+
 /// Bit flag used to tell if encoded item has right origin defined.
 pub const HAS_RIGHT_ORIGIN: u8 = 0b01000000;
 
@@ -70,7 +74,7 @@ pub type ClientID = u64;
 ///
 /// [ID] corresponds to a [Lamport timestamp](https://en.wikipedia.org/wiki/Lamport_timestamp) in
 /// terms of its properties and guarantees.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Copy, Clone, PartialOrd, Ord, PartialEq, Eq, Hash)]
 pub struct ID {
     /// Unique identifier of a client, which inserted corresponding item.
     pub client: ClientID,
@@ -91,10 +95,24 @@ impl ID {
 /// A logical block pointer. It contains a unique block [ID], but also contains a helper metadata
 /// which allows to faster locate block it points to within a block store.
 #[repr(transparent)]
-#[derive(Debug, Clone, Copy, Hash)]
+#[derive(Clone, Copy, Hash)]
 pub(crate) struct BlockPtr(NonNull<Block>);
 
 impl BlockPtr {
+    pub(crate) fn delete_as_cleanup(&self, txn: &mut Transaction, is_local: bool) {
+        txn.delete(*self);
+        if is_local {
+            txn.delete_set.insert(*self.id(), self.len());
+        }
+    }
+
+    pub(crate) fn is_countable(&self) -> bool {
+        match self.deref() {
+            Block::Item(item) => item.is_countable(),
+            Block::GC(_) => false,
+        }
+    }
+
     pub(crate) fn splice(&mut self, offset: u32, encoding: OffsetKind) -> Option<Box<Block>> {
         let self_ptr = self.clone();
         if offset == 0 {
@@ -115,6 +133,7 @@ impl BlockPtr {
                         right_origin: item.right_origin.clone(),
                         content,
                         parent: item.parent.clone(),
+                        moved: item.moved.clone(),
                         parent_sub: item.parent_sub.clone(),
                         info: item.info.clone(),
                     }));
@@ -286,6 +305,7 @@ impl BlockPtr {
                         this.right = left.right.replace(self_ptr);
                     } else {
                         let r = if let Some(parent_sub) = &this.parent_sub {
+                            // update parent map/start if necessary
                             let mut r = parent_ref.map.get(parent_sub).cloned();
                             while let Some(ptr) = r {
                                 if let Block::Item(item) = ptr.deref() {
@@ -315,12 +335,73 @@ impl BlockPtr {
                         }
                     }
 
+                    // adjust length of parent
                     if this.parent_sub.is_none() && this.is_countable() && !this.is_deleted() {
                         parent_ref.block_len += this.len;
                         parent_ref.content_len += this.content_len(encoding);
                     }
 
-                    this.integrate_content(txn, &mut *parent_ref);
+                    // check if this item is in a moved range
+                    let left_moved = if let Some(Block::Item(i)) = this.left.as_deref() {
+                        i.moved
+                    } else {
+                        None
+                    };
+                    let right_moved = if let Some(Block::Item(i)) = this.right.as_deref() {
+                        i.moved
+                    } else {
+                        None
+                    };
+                    if left_moved.is_some() || right_moved.is_some() {
+                        if left_moved == right_moved {
+                            this.moved = left_moved;
+                        } else {
+                            #[inline]
+                            fn try_integrate(mut ptr: BlockPtr, txn: &mut Transaction) {
+                                let ptr_clone = ptr.clone();
+                                if let Block::Item(i) = ptr.deref_mut() {
+                                    if let ItemContent::Move(m) = &mut i.content {
+                                        if !m.is_collapsed() {
+                                            m.integrate_block(txn, ptr_clone);
+                                        }
+                                    }
+                                }
+                            }
+
+                            if let Some(ptr) = left_moved {
+                                try_integrate(ptr, txn);
+                            }
+
+                            if let Some(ptr) = right_moved {
+                                try_integrate(ptr, txn);
+                            }
+                        }
+                    }
+
+                    match &mut this.content {
+                        ItemContent::Deleted(len) => {
+                            txn.delete_set.insert(this.id, *len);
+                            this.mark_as_deleted();
+                        }
+                        ItemContent::Move(m) => m.integrate_block(txn, self_ptr),
+                        ItemContent::Doc(_, _) => {
+                            //// this needs to be reflected in doc.destroy as well
+                            //this.doc._item = item
+                            //transaction.subdocsAdded.add(this.doc)
+                            //if (this.doc.shouldLoad) {
+                            //    transaction.subdocsLoaded.add(this.doc)
+                            //}
+                            todo!()
+                        }
+                        ItemContent::Format(_, _) => {
+                            // @todo searchmarker are currently unsupported for rich text documents
+                            // /** @type {AbstractType<any>} */ (item.parent)._searchMarker = null
+                        }
+                        ItemContent::Type(branch) => branch.store = Some(txn.store.clone()),
+                        _ => {
+                            // other types don't define integration-specific actions
+                        }
+                    }
                     txn.add_changed_type(parent_ref, this.parent_sub.clone());
                     let parent_deleted = if let TypePtr::Branch(ptr) = &this.parent {
                         if let Some(block) = ptr.item {
@@ -378,6 +459,7 @@ impl BlockPtr {
                     && v1.right_origin == v2.right_origin
                     && v1.right == Some(other_ptr)
                     && v1.is_deleted() == v2.is_deleted()
+                    && v1.moved == v2.moved
                     && v1.content.try_squash(&v2.content)
                 {
                     v1.len = v1.content.len(OffsetKind::Utf16);
@@ -623,15 +705,6 @@ impl Block {
         }
     }
 
-    /// Returns a last clock value of a current block. This is exclusive value meaning, that
-    /// using it with current block's client ID will point to the beginning of a next block.
-    pub fn clock_end(&self) -> u32 {
-        match self {
-            Block::Item(item) => item.id.clock + item.len(),
-            Block::GC(gc) => gc.id.clock + gc.len,
-        }
-    }
-
     /// Checks if two blocks are of the same type.
     pub fn same_type(&self, other: &Self) -> bool {
         match (self, other) {
@@ -832,6 +905,9 @@ pub(crate) struct Item {
     /// key-value entry of a map, and this field contains a key used by map.
     pub parent_sub: Option<Rc<str>>, //TODO: Rc since it's already used in Branch.map component
 
+    /// This property is reused by the moved prop. In this case this property refers to an Item.
+    pub moved: Option<BlockPtr>,
+
     /// Bit flag field which contains information about specifics of this item.
     pub info: ItemFlags,
 }
@@ -919,6 +995,7 @@ impl Item {
             parent,
             parent_sub,
             info,
+            moved: None,
         }));
         let item_ptr = BlockPtr::from(&mut item);
         if let ItemContent::Type(branch) = &mut item.as_item_mut().unwrap().content {
@@ -1030,34 +1107,6 @@ impl Item {
             | if self.parent_sub.is_some() { HAS_PARENT_SUB } else { 0 }
             | (self.content.get_ref_number() & 0b1111);
         info
-    }
-
-    fn integrate_content(&mut self, txn: &mut Transaction, _parent: &mut Branch) {
-        match &mut self.content {
-            ItemContent::Deleted(len) => {
-                txn.delete_set.insert(self.id, *len);
-                self.mark_as_deleted();
-            }
-            ItemContent::Doc(_, _) => {
-                //// this needs to be reflected in doc.destroy as well
-                //this.doc._item = item
-                //transaction.subdocsAdded.add(this.doc)
-                //if (this.doc.shouldLoad) {
-                //    transaction.subdocsLoaded.add(this.doc)
-                //}
-                todo!()
-            }
-            ItemContent::Format(_, _) => {
-                // @todo searchmarker are currently unsupported for rich text documents
-                // /** @type {AbstractType<any>} */ (item.parent)._searchMarker = null
-            }
-            ItemContent::Type(_inner) => {
-                // this.type._integrate(transaction.doc, item)
-            }
-            _ => {
-                // other types don't define integration-specific actions
-            }
-        }
     }
 }
 
@@ -1232,6 +1281,7 @@ pub enum ItemContent {
     /// A reference of a branch node. Branch nodes define a complex collection types, such as
     /// arrays, maps or XML elements.
     Type(Box<Branch>),
+    Move(Box<Move>),
 }
 
 impl ItemContent {
@@ -1248,6 +1298,7 @@ impl ItemContent {
             ItemContent::Format(_, _) => BLOCK_ITEM_FORMAT_REF_NUMBER,
             ItemContent::String(_) => BLOCK_ITEM_STRING_REF_NUMBER,
             ItemContent::Type(_) => BLOCK_ITEM_TYPE_REF_NUMBER,
+            ItemContent::Move(_) => BLOCK_ITEM_MOVE_REF_NUMBER,
         }
     }
 
@@ -1266,6 +1317,7 @@ impl ItemContent {
             ItemContent::Type(_) => true,
             ItemContent::Deleted(_) => false,
             ItemContent::Format(_, _) => false,
+            ItemContent::Move(_) => false,
         }
     }
 
@@ -1298,6 +1350,7 @@ impl ItemContent {
         match self {
             ItemContent::Any(v) => v.iter().map(|a| Value::Any(a.clone())).collect(),
             ItemContent::Binary(v) => vec![Value::Any(Any::Buffer(v.clone().into_boxed_slice()))],
+            ItemContent::Move(_) => Vec::default(),
             ItemContent::Deleted(_) => Vec::default(),
             ItemContent::Doc(_, v) => vec![Value::Any(*v.clone())],
             ItemContent::JSON(v) => v
@@ -1319,14 +1372,34 @@ impl ItemContent {
 
     /// Similar to [get_content], but it only returns the latest result and doesn't materialize
     /// others for performance reasons.
-    pub fn get_content_last(&self) -> Option<Value> {
+    pub fn get_last(&self) -> Option<Value> {
         match self {
             ItemContent::Any(v) => v.last().map(|a| Value::Any(a.clone())),
             ItemContent::Binary(v) => Some(Value::Any(Any::Buffer(v.clone().into_boxed_slice()))),
             ItemContent::Deleted(_) => None,
+            ItemContent::Move(_) => None,
             ItemContent::Doc(_, v) => Some(Value::Any(*v.clone())),
             ItemContent::JSON(v) => v
                 .last()
+                .map(|v| Value::Any(Any::String(v.clone().into_boxed_str()))),
+            ItemContent::Embed(v) => Some(Value::Any(v.as_ref().clone())),
+            ItemContent::Format(_, _) => None,
+            ItemContent::String(v) => Some(Value::Any(Any::String(v.clone().into()))),
+            ItemContent::Type(c) => Some(BranchPtr::from(c).into()),
+        }
+    }
+
+    /// Similar to [get_content], but it only returns the latest result and doesn't materialize
+    /// others for performance reasons.
+    pub fn get_first(&self) -> Option<Value> {
+        match self {
+            ItemContent::Any(v) => v.first().map(|a| Value::Any(a.clone())),
+            ItemContent::Binary(v) => Some(Value::Any(Any::Buffer(v.clone().into_boxed_slice()))),
+            ItemContent::Deleted(_) => None,
+            ItemContent::Move(_) => None,
+            ItemContent::Doc(_, v) => Some(Value::Any(*v.clone())),
+            ItemContent::JSON(v) => v
+                .first()
                 .map(|v| Value::Any(Any::String(v.clone().into_boxed_str()))),
             ItemContent::Embed(v) => Some(Value::Any(v.as_ref().clone())),
             ItemContent::Format(_, _) => None,
@@ -1372,6 +1445,7 @@ impl ItemContent {
                 encoder.write_string(key.as_ref());
                 encoder.write_any(any);
             }
+            ItemContent::Move(m) => m.encode(encoder),
         }
     }
 
@@ -1409,6 +1483,7 @@ impl ItemContent {
                 encoder.write_string(key.as_ref());
                 encoder.write_any(any);
             }
+            ItemContent::Move(m) => m.encode(encoder),
         }
     }
 
@@ -1450,6 +1525,10 @@ impl ItemContent {
                     i += 1;
                 }
                 Ok(ItemContent::Any(values))
+            }
+            BLOCK_ITEM_MOVE_REF_NUMBER => {
+                let m = Move::decode(decoder)?;
+                Ok(ItemContent::Move(Box::new(m)))
             }
             BLOCK_ITEM_DOC_REF_NUMBER => Ok(ItemContent::Doc(
                 decoder.read_string()?.into(),
@@ -1601,6 +1680,9 @@ impl std::fmt::Display for Item {
                 write!(f, ", parent: {}", other)?;
             }
         }
+        if let Some(m) = self.moved {
+            write!(f, ", moved-to: {}", m)?;
+        }
         if let Some(origin) = self.origin.as_ref() {
             write!(f, ", origin-l: {}", origin)?;
         }
@@ -1689,6 +1771,7 @@ impl std::fmt::Display for ItemContent {
                 TYPE_REFS_XML_TEXT => write!(f, "<xml text>"),
                 _ => write!(f, "<undefined type ref>"),
             },
+            ItemContent::Move(m) => std::fmt::Display::fmt(m.as_ref(), f),
             _ => Ok(()),
         }
     }
@@ -1761,6 +1844,13 @@ impl Prelim for PrelimEmbed {
 impl std::fmt::Display for ID {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "<{}#{}>", self.client, self.clock)
+    }
+}
+
+impl std::fmt::Debug for BlockPtr {
+    #[inline]
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
     }
 }
 

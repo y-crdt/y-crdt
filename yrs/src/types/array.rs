@@ -1,12 +1,15 @@
-use crate::block::{BlockPtr, ItemContent, ItemPosition, Prelim};
+use crate::block::{ItemContent, Prelim};
+use crate::block_iter::{BlockIter, SliceConcat};
 use crate::event::Subscription;
+use crate::moving::RelativePosition;
 use crate::types::{
     event_change_set, Branch, BranchPtr, Change, ChangeSet, Observers, Path, Value, TYPE_REFS_ARRAY,
 };
 use crate::{SubscriptionId, Transaction, ID};
 use lib0::any::Any;
 use std::cell::UnsafeCell;
-use std::collections::{HashSet, VecDeque};
+use std::collections::HashSet;
+use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 
 /// A collection used to store data in an indexed sequence structure. This type is internally
@@ -43,27 +46,12 @@ impl Array {
     ///
     /// Using `index` value that's higher than current array length results in panic.
     pub fn insert<V: Prelim>(&self, txn: &mut Transaction, index: u32, value: V) {
-        let (start, parent) = {
-            if index <= self.0.len() {
-                (self.0.start, self.0)
-            } else {
-                panic!("Cannot insert item at index over the length of an array")
-            }
-        };
-        let (left, right) = if index == 0 {
-            (None, None)
+        let mut walker = BlockIter::new(self.0);
+        if walker.try_forward(txn, index) {
+            walker.insert_contents(txn, value)
         } else {
-            Branch::index_to_ptr(txn, start, index)
-        };
-        let pos = ItemPosition {
-            parent: parent.into(),
-            left,
-            right,
-            index: 0,
-            current_attrs: None,
-        };
-
-        txn.create_item(&pos, value, None);
+            panic!("Index {} is outside of the range of an array", index);
+        }
     }
 
     /// Inserts multiple `values` at the given `index`. Inserting at index `0` is equivalent to
@@ -100,17 +88,84 @@ impl Array {
     /// not all expected elements were removed (due to insufficient number of elements in an array)
     /// or `index` is outside of the bounds of an array.
     pub fn remove_range(&self, txn: &mut Transaction, index: u32, len: u32) {
-        let removed = self.0.remove_at(txn, index, len);
-        if removed != len {
-            panic!("Couldn't remove {} elements from an array. Only {} of them were successfully removed.", len, removed);
+        let mut walker = BlockIter::new(self.0);
+        if walker.try_forward(txn, index) {
+            walker.delete(txn, len)
+        } else {
+            panic!("Index {} is outside of the range of an array", index);
         }
     }
 
     /// Retrieves a value stored at a given `index`. Returns `None` when provided index was out
     /// of the range of a current array.
     pub fn get(&self, index: u32) -> Option<Value> {
-        let (content, idx) = self.0.get_at(index)?;
-        Some(content.get_content().remove(idx))
+        let mut txn = self.0.try_transact().expect("Array is not integrated");
+        let mut walker = BlockIter::new(self.0);
+        if walker.try_forward(&mut txn, index) {
+            walker.read_value(&mut txn)
+        } else {
+            None
+        }
+    }
+
+    /// Moves element found at `source` index into `target` index position.
+    pub fn move_to(&self, txn: &mut Transaction, source: u32, target: u32) {
+        if source == target || source + 1 == target {
+            // It doesn't make sense to move a range into the same range (it's basically a no-op).
+            return;
+        }
+        let left = RelativePosition::from_type_index(txn, self.0, source, true)
+            .expect("unbounded relative positions are not supported yet");
+        let mut right = left.clone();
+        right.assoc = false;
+        let mut walker = BlockIter::new(self.0);
+        if walker.try_forward(txn, target) {
+            walker.insert_move(txn, left, right);
+        } else {
+            panic!("Index {} is outside of the range of an array", target);
+        }
+    }
+
+    /// Moves all elements found within `start`..`end` indexes range (both side inclusive) into
+    /// new position pointed by `target` index. All elements inserted concurrently by other peers
+    /// inside of moved range will be moved as well after synchronization (although it make take
+    /// more than one sync roundtrip to achieve convergence).
+    ///
+    /// `assoc_start`/`assoc_end` flags are used to mark if ranges should include elements that
+    /// might have been inserted concurrently at the edges of the range definition.
+    ///
+    /// Example:
+    /// ```
+    /// use yrs::Doc;
+    /// let doc = Doc::new();
+    /// let array = doc.transact().get_array("array");
+    /// array.insert_range(&mut doc.transact(), 0, [1,2,3,4]);
+    /// // move elements 2 and 3 after the 4
+    /// array.move_range_to(&mut doc.transact(), 1, true, 2, false, 4);
+    /// ```
+    pub fn move_range_to(
+        &self,
+        txn: &mut Transaction,
+        start: u32,
+        assoc_start: bool,
+        end: u32,
+        assoc_end: bool,
+        target: u32,
+    ) {
+        if start <= target && target <= end {
+            // It doesn't make sense to move a range into the same range (it's basically a no-op).
+            return;
+        }
+        let left = RelativePosition::from_type_index(txn, self.0, start, assoc_start)
+            .expect("unbounded relative positions are not supported yet");
+        let right = RelativePosition::from_type_index(txn, self.0, end + 1, assoc_end)
+            .expect("unbounded relative positions are not supported yet");
+        let mut walker = BlockIter::new(self.0);
+        if walker.try_forward(txn, target) {
+            walker.insert_move(txn, left, right);
+        } else {
+            panic!("Index {} is outside of the range of an array", target);
+        }
     }
 
     /// Returns an iterator, that can be used to lazely traverse over all values stored in a current
@@ -121,7 +176,13 @@ impl Array {
 
     /// Converts all contents of current array into a JSON-like representation.
     pub fn to_json(&self) -> Any {
-        let res = self.iter().map(|v| v.to_json()).collect();
+        let len = self.0.len();
+        let mut walker = BlockIter::new(self.0);
+        let mut txn = self.0.try_transact().unwrap();
+        let values = walker
+            .slice::<ArraySliceConcat>(&mut txn, len, Vec::default())
+            .unwrap();
+        let res = values.into_iter().map(Value::to_json).collect();
         Any::Array(res)
     }
 
@@ -164,15 +225,17 @@ impl AsMut<Branch> for Array {
 }
 
 pub struct ArrayIter<'a> {
-    content: VecDeque<Value>,
-    ptr: Option<&'a BlockPtr>,
+    inner: BlockIter,
+    txn: Transaction,
+    _marker: PhantomData<&'a Array>,
 }
 
 impl<'a> ArrayIter<'a> {
     fn new(array: &'a Array) -> Self {
         ArrayIter {
-            ptr: array.0.start.as_ref(),
-            content: VecDeque::default(),
+            inner: BlockIter::new(array.0),
+            txn: array.0.try_transact().unwrap(),
+            _marker: PhantomData,
         }
     }
 }
@@ -181,20 +244,13 @@ impl<'b> Iterator for ArrayIter<'b> {
     type Item = Value;
 
     fn next(&mut self) -> Option<Self::Item> {
-        match self.content.pop_front() {
-            None => {
-                if let Some(ptr) = self.ptr.take() {
-                    let item = ptr.as_item()?;
-                    self.ptr = item.right.as_ref();
-                    if !item.is_deleted() && item.is_countable() {
-                        self.content = item.content.get_content().into();
-                    }
-                    self.next()
-                } else {
-                    None // end of iterator
-                }
-            }
-            value => value,
+        if self.inner.finished() {
+            None
+        } else {
+            let mut res = self
+                .inner
+                .slice::<ArraySliceConcat>(&mut self.txn, 1, Vec::default())?;
+            res.pop()
         }
     }
 }
@@ -309,6 +365,29 @@ impl ArrayEvent {
     }
 }
 
+pub(crate) struct ArraySliceConcat;
+
+impl SliceConcat for ArraySliceConcat {
+    fn slice(content: &mut ItemContent, offset: usize, len: usize) -> Vec<Value> {
+        let mut content = content.get_content();
+        if content.len() <= len && offset == 0 {
+            content
+        } else {
+            if offset != 0 {
+                for _ in content.drain(0..offset) { /* do nothing */ }
+            }
+            for _ in content.drain(len..) { /* do nothing */ }
+            content
+        }
+    }
+
+    #[inline]
+    fn concat(mut a: Vec<Value>, b: Vec<Value>) -> Vec<Value> {
+        a.extend(b);
+        a
+    }
+}
+
 #[cfg(test)]
 mod test {
     use crate::test_utils::{exchange_updates, run_scenario, RngExt};
@@ -320,6 +399,8 @@ mod test {
     use rand::Rng;
     use std::cell::{Cell, RefCell};
     use std::collections::{HashMap, HashSet};
+    use std::fs::File;
+    use std::ops::Deref;
     use std::rc::Rc;
 
     #[test]
@@ -844,8 +925,9 @@ mod test {
         assert_eq!(c2.borrow_mut().take(), Some(a2));
     }
 
-    use crate::updates::decoder::Decode;
+    use crate::updates::decoder::{Decode, Decoder, DecoderV1};
     use crate::updates::encoder::{Encoder, EncoderV1};
+    use lib0::decoding::{Cursor, Read};
     use std::sync::atomic::{AtomicI64, Ordering};
 
     static UNIQUE_NUMBER: AtomicI64 = AtomicI64::new(0);
@@ -854,7 +936,34 @@ mod test {
         UNIQUE_NUMBER.fetch_add(1, Ordering::SeqCst)
     }
 
-    fn array_transactions() -> [Box<dyn Fn(&mut Doc, &mut StdRng)>; 4] {
+    fn array_transactions() -> [Box<dyn Fn(&mut Doc, &mut StdRng)>; 5] {
+        fn move_one(doc: &mut Doc, rng: &mut StdRng) {
+            let mut txn = doc.transact();
+            let yarray = txn.get_array("array");
+            if yarray.len() != 0 {
+                let pos = rng.between(0, yarray.len() - 1);
+                let len = 1;
+                let new_pos_adjusted = rng.between(0, yarray.len() - 1);
+                let new_pos = new_pos_adjusted + if new_pos_adjusted > pos { len } else { 0 };
+                if let Any::Array(expected) = yarray.to_json() {
+                    let mut expected = Vec::from(expected);
+                    let moved = expected.remove(pos as usize);
+                    let insert_pos = if pos < new_pos {
+                        new_pos - len
+                    } else {
+                        new_pos
+                    } as usize;
+                    expected.insert(insert_pos, moved);
+
+                    yarray.move_to(&mut txn, pos, new_pos);
+
+                    let actual = yarray.to_json();
+                    assert_eq!(actual, Any::Array(expected.into_boxed_slice()))
+                } else {
+                    panic!("should not happen")
+                }
+            }
+        }
         fn insert(doc: &mut Doc, rng: &mut StdRng) {
             let mut txn = doc.transact();
             let yarray = txn.get_array("array");
@@ -938,6 +1047,7 @@ mod test {
             Box::new(insert_type_array),
             Box::new(insert_type_map),
             Box::new(delete),
+            Box::new(move_one),
         ]
     }
 
@@ -948,6 +1058,11 @@ mod test {
     #[test]
     fn fuzzy_test_6() {
         fuzzy(6)
+    }
+
+    #[test]
+    fn fuzzy_test_300() {
+        fuzzy(300)
     }
 
     #[test]
@@ -994,5 +1109,167 @@ mod test {
         ];
         let actual = RefCell::borrow(&paths);
         assert_eq!(actual.as_slice(), expected);
+    }
+
+    #[test]
+    fn move_1() {
+        let d1 = Doc::with_client_id(1);
+        let mut a1 = d1.transact().get_array("array");
+
+        let d2 = Doc::with_client_id(2);
+        let mut a2 = d2.transact().get_array("array");
+
+        let e1: Rc<RefCell<Vec<Change>>> = Rc::new(RefCell::new(Vec::default()));
+        let inner = e1.clone();
+        let _s1 = a1.observe(move |txn, e| {
+            let mut x = inner.as_ref().borrow_mut();
+            *x = e.delta(txn).to_vec();
+        });
+
+        let e2: Rc<RefCell<Vec<Change>>> = Rc::new(RefCell::new(Vec::default()));
+        let inner = e2.clone();
+        let _s2 = a2.observe(move |txn, e| {
+            let mut x = inner.borrow_mut();
+            *x = e.delta(txn).to_vec();
+        });
+
+        {
+            let mut txn = d1.transact();
+            a1.insert_range(&mut txn, 0, [1, 2, 3]);
+            a1.move_to(&mut txn, 1, 0);
+        }
+        assert_eq!(a1.to_json(), vec![2, 1, 3].into());
+
+        exchange_updates(&[&d1, &d2]);
+
+        assert_eq!(a2.to_json(), vec![2, 1, 3].into());
+        let actual = e2.as_ref().borrow();
+        assert_eq!(
+            actual.deref(),
+            &vec![Change::Added(vec![2.into(), 1.into(), 3.into()])]
+        );
+
+        a1.move_to(&mut d1.transact(), 0, 2);
+
+        assert_eq!(a1.to_json(), vec![1, 2, 3].into());
+        let actual = e1.as_ref().borrow();
+        assert_eq!(
+            actual.deref(),
+            &vec![
+                Change::Removed(1),
+                Change::Retain(1),
+                Change::Added(vec![2.into()])
+            ]
+        )
+    }
+
+    #[test]
+    fn move_2() {
+        let d1 = Doc::with_client_id(1);
+        let mut a1 = { d1.transact().get_array("array") };
+
+        let d2 = Doc::with_client_id(2);
+        let mut a2 = { d2.transact().get_array("array") };
+
+        let e1: Rc<RefCell<Vec<Change>>> = Rc::new(RefCell::new(Vec::default()));
+        let inner = e1.clone();
+        let _s1 = a1.observe(move |txn, e| {
+            let mut x = inner.as_ref().borrow_mut();
+            *x = e.delta(txn).to_vec();
+        });
+
+        let e2: Rc<RefCell<Vec<Change>>> = Rc::new(RefCell::new(Vec::default()));
+        let inner = e2.clone();
+        let _s2 = a2.observe(move |txn, e| {
+            let mut x = inner.borrow_mut();
+            *x = e.delta(txn).to_vec();
+        });
+
+        a1.insert_range(&mut d1.transact(), 0, [1, 2]);
+        a1.move_to(&mut d1.transact(), 1, 0);
+        assert_eq!(a1.to_json(), vec![2, 1].into());
+        {
+            let actual = e1.as_ref().borrow();
+            assert_eq!(
+                actual.deref(),
+                &vec![
+                    Change::Added(vec![2.into()]),
+                    Change::Retain(1),
+                    Change::Removed(1)
+                ]
+            );
+        }
+
+        exchange_updates(&[&d1, &d2]);
+
+        assert_eq!(a2.to_json(), vec![2, 1].into());
+        {
+            let actual = e2.as_ref().borrow();
+            assert_eq!(
+                actual.deref(),
+                &vec![Change::Added(vec![2.into(), 1.into()])]
+            );
+        }
+
+        a1.move_to(&mut d1.transact(), 0, 2);
+        assert_eq!(a1.to_json(), vec![1, 2].into());
+        {
+            let actual = e1.as_ref().borrow();
+            assert_eq!(
+                actual.deref(),
+                &vec![
+                    Change::Removed(1),
+                    Change::Retain(1),
+                    Change::Added(vec![2.into()])
+                ]
+            );
+        }
+    }
+
+    #[test]
+    fn move_cycles() {
+        let d1 = Doc::with_client_id(1);
+        let a1 = d1.transact().get_array("array");
+
+        let d2 = Doc::with_client_id(2);
+        let a2 = d2.transact().get_array("array");
+
+        a1.insert_range(&mut d1.transact(), 0, [1, 2, 3, 4]);
+        exchange_updates(&[&d1, &d2]);
+
+        a1.move_range_to(&mut d1.transact(), 0, true, 1, false, 3);
+        assert_eq!(a1.to_json(), vec![3, 1, 2, 4].into());
+
+        a2.move_range_to(&mut d2.transact(), 2, true, 3, false, 1);
+        assert_eq!(a2.to_json(), vec![1, 3, 4, 2].into());
+
+        exchange_updates(&[&d1, &d2]);
+        exchange_updates(&[&d1, &d2]); // move cycles may not be detected within a single update exchange
+
+        assert_eq!(a1.len(), 4);
+        assert_eq!(a1.to_json(), a2.to_json());
+    }
+
+    fn move_tests<P: AsRef<std::path::Path>>(path: P) {
+        let mut file = File::open(path).unwrap();
+        let mut buf = Vec::new();
+        std::io::Read::read_to_end(&mut file, &mut buf).unwrap();
+        let mut decoder = DecoderV1::new(Cursor::new(&buf));
+
+        let test_case_count: u32 = decoder.read_var().unwrap();
+        for i in 0..test_case_count {
+            let mut doc = Doc::new();
+            let array = doc.transact().get_array("array");
+
+            let update_count: u32 = decoder.read_var().unwrap();
+            for j in 0..update_count {
+                let data = decoder.read_buf().unwrap();
+                let update = Update::decode_v1(data).unwrap();
+                doc.transact().apply_update(update);
+            }
+            let expected = decoder.read_any().unwrap();
+            let actual = array.to_json();
+            assert_eq!(actual, expected, "failed at test case nr {}", i);
+        }
     }
 }

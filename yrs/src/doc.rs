@@ -1,13 +1,12 @@
 use crate::block::ClientID;
 
 use crate::event::{AfterTransactionEvent, EventHandler, Subscription, UpdateEvent};
-use crate::store::Store;
+use crate::store::{Store, StoreRef};
 use crate::transaction::Transaction;
 use crate::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use crate::{DeleteSet, StateVector, SubscriptionId};
 use rand::Rng;
-use std::cell::UnsafeCell;
-use std::rc::Rc;
+use std::ops::Deref;
 
 /// A Yrs document type. Documents are most important units of collaborative resources management.
 /// All shared collections live within a scope of their corresponding documents. All updates are
@@ -44,7 +43,7 @@ use std::rc::Rc;
 pub struct Doc {
     /// A unique client identifier, that's also a unique identifier of current document replica.
     pub client_id: ClientID,
-    store: Rc<UnsafeCell<Store>>,
+    store: StoreRef,
 }
 
 unsafe impl Send for Doc {}
@@ -64,12 +63,8 @@ impl Doc {
     pub fn with_options(options: Options) -> Self {
         Doc {
             client_id: options.client_id,
-            store: Rc::new(UnsafeCell::new(Store::new(options))),
+            store: Store::new(options).into(),
         }
-    }
-
-    fn store_mut(&self) -> &mut Store {
-        unsafe { self.store.get().as_mut().unwrap() }
     }
 
     /// Creates a transaction used for all kind of block store operations.
@@ -88,15 +83,16 @@ impl Doc {
     where
         F: Fn(&Transaction, &UpdateEvent) -> () + 'static,
     {
-        let store = self.store_mut();
-        let eh = store.update_v1_events.get_or_insert_with(EventHandler::new);
+        let eh = self
+            .store
+            .update_v1_events
+            .get_or_insert_with(EventHandler::new);
         eh.subscribe(f)
     }
 
     /// Manually unsubscribes from a callback used in [Doc::observe_update_v1] method.
     pub fn unobserve_update_v1(&mut self, subscription_id: SubscriptionId) {
-        let store = self.store_mut();
-        store
+        self.store
             .update_v1_events
             .as_mut()
             .unwrap()
@@ -113,15 +109,16 @@ impl Doc {
     where
         F: Fn(&Transaction, &UpdateEvent) -> () + 'static,
     {
-        let store = self.store_mut();
-        let eh = store.update_v2_events.get_or_insert_with(EventHandler::new);
+        let eh = self
+            .store
+            .update_v2_events
+            .get_or_insert_with(EventHandler::new);
         eh.subscribe(f)
     }
 
     /// Manually unsubscribes from a callback used in [Doc::observe_update_v1] method.
     pub fn unobserve_update_v2(&mut self, subscription_id: SubscriptionId) {
-        let store = self.store_mut();
-        store
+        self.store
             .update_v2_events
             .as_mut()
             .unwrap()
@@ -134,23 +131,20 @@ impl Doc {
     where
         F: Fn(&Transaction, &AfterTransactionEvent) -> () + 'static,
     {
-        let store = self.store_mut();
-
-        store
+        self.store
             .after_transaction_events
             .get_or_insert_with(EventHandler::new)
             .subscribe(f)
     }
     /// Cancels the transaction cleanup callback associated with the `subscription_id`
     pub fn unobserve_transaction_cleanup(&mut self, subscription_id: SubscriptionId) {
-        let store = unsafe { &mut *self.store.get() };
-        if let Some(handler) = store.after_transaction_events.as_mut() {
+        if let Some(handler) = self.store.after_transaction_events.as_mut() {
             (*handler).unsubscribe(subscription_id);
         }
     }
 
     pub fn encode_state_as_update<E: Encoder>(&self, sv: &StateVector, encoder: &mut E) {
-        let store = unsafe { self.store.get().as_ref().unwrap() };
+        let store = self.store.deref();
         store.write_blocks(sv, encoder);
         let ds = DeleteSet::from(&store.blocks);
         ds.encode(encoder);

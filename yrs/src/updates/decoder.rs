@@ -90,10 +90,6 @@ impl<'a> DecoderV1<'a> {
         let clock = self.read_var()?;
         Ok(ID::new(client as ClientID, clock))
     }
-
-    pub fn has_content(&self) -> bool {
-        self.cursor.has_content()
-    }
 }
 
 impl<'a> From<Cursor<'a>> for DecoderV1<'a> {

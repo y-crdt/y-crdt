@@ -37,6 +37,8 @@ mod utils;
 #[cfg(test)]
 mod compatibility_tests;
 
+mod block_iter;
+mod moving;
 #[cfg(test)]
 mod test_utils;
 

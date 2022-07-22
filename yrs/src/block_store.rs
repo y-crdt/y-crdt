@@ -358,13 +358,6 @@ pub(crate) struct BlockStore {
 pub(crate) type Iter<'a> = std::collections::hash_map::Iter<'a, ClientID, ClientBlockList>;
 
 impl BlockStore {
-    /// Creates a new block store instance from a given collection.
-    pub(crate) fn from(
-        clients: HashMap<ClientID, ClientBlockList, BuildHasherDefault<ClientHasher>>,
-    ) -> Self {
-        Self { clients }
-    }
-
     /// Creates a new empty block store instance.
     pub fn new() -> Self {
         Self {

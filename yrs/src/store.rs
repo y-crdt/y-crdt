@@ -7,9 +7,10 @@ use crate::types::{Branch, BranchPtr, Path, PathSegment, TypeRefs};
 use crate::update::PendingUpdate;
 use crate::updates::encoder::{Encode, Encoder};
 use crate::UpdateEvent;
+use std::cell::UnsafeCell;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
-use std::ops::Deref;
+use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
 
 /// Store is a core element of a document. It contains all of the information, like block store
@@ -225,6 +226,7 @@ impl std::fmt::Debug for Store {
         std::fmt::Display::fmt(self, f)
     }
 }
+
 impl std::fmt::Display for Store {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut s = f.debug_struct(&self.options.client_id.to_string());
@@ -242,5 +244,31 @@ impl std::fmt::Display for Store {
         }
 
         s.finish()
+    }
+}
+
+#[repr(transparent)]
+#[derive(Debug, Clone)]
+pub(crate) struct StoreRef(Rc<UnsafeCell<Store>>);
+
+impl Deref for StoreRef {
+    type Target = Store;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        unsafe { (self.0.get() as *const Self::Target).as_ref().unwrap() }
+    }
+}
+
+impl DerefMut for StoreRef {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe { self.0.get().as_mut().unwrap() }
+    }
+}
+
+impl From<Store> for StoreRef {
+    fn from(store: Store) -> Self {
+        StoreRef(Rc::new(UnsafeCell::new(store)))
     }
 }
