@@ -369,8 +369,7 @@ impl Branch {
         mut ptr: Option<BlockPtr>,
         mut index: u32,
     ) -> (Option<BlockPtr>, Option<BlockPtr>) {
-        let store = txn.store_mut();
-        let encoding = store.options.offset_kind;
+        let encoding = txn.store.options.offset_kind;
         while let Some(Block::Item(item)) = ptr.as_deref() {
             let content_len = item.content_len(encoding);
             if !item.is_deleted() && item.is_countable() {
@@ -384,7 +383,17 @@ impl Branch {
                     } else {
                         index
                     };
-                    let right = store.blocks.split_block(ptr.unwrap(), index, encoding);
+                    let p = ptr.unwrap();
+                    let right = txn.store.blocks.split_block(p, index, encoding);
+                    if let Block::Item(item) = p.deref() {
+                        if let Some(dst) = item.moved {
+                            if let Some(src) = right {
+                                if let Some(&prev_dst) = txn.prev_moved.get(&p) {
+                                    txn.prev_moved.insert(src, prev_dst);
+                                }
+                            }
+                        }
+                    }
                     return (ptr, right);
                 }
                 index -= content_len;
@@ -416,7 +425,16 @@ impl Branch {
                                 remaining
                             };
                             remaining = 0;
-                            let new_right = txn.store_mut().blocks.split_block(p, offset, encoding);
+                            let new_right = txn.store.blocks.split_block(p, offset, encoding);
+                            if let Block::Item(item) = p.deref() {
+                                if let Some(dst) = item.moved {
+                                    if let Some(src) = new_right {
+                                        if let Some(&prev_dst) = txn.prev_moved.get(&p) {
+                                            txn.prev_moved.insert(src, prev_dst);
+                                        }
+                                    }
+                                }
+                            }
                             (p, new_right)
                         } else {
                             remaining -= content_len;
@@ -1050,6 +1068,7 @@ pub(crate) fn event_change_set(txn: &Transaction, start: Option<BlockPtr>) -> Ch
     let mut moved_stack = Vec::new();
     let mut curr_move = None;
     let mut curr_move_is_new = false;
+    let mut curr_move_is_deleted = false;
     let mut curr_move_end = None;
     let mut last_op = None;
 
@@ -1058,6 +1077,20 @@ pub(crate) fn event_change_set(txn: &Transaction, start: Option<BlockPtr>) -> Ch
         end: Option<BlockPtr>,
         moved: Option<BlockPtr>,
         is_new: bool,
+        is_deleted: bool,
+    }
+
+    fn is_moved_by_new(ptr: Option<BlockPtr>, txn: &Transaction) -> bool {
+        let mut moved = ptr;
+        while let Some(Block::Item(item)) = moved.as_deref() {
+            if txn.has_added(&item.id) {
+                return true;
+            } else {
+                moved = item.moved;
+            }
+        }
+
+        false
     }
 
     let encoding = txn.store().options.offset_kind;
@@ -1067,6 +1100,7 @@ pub(crate) fn event_change_set(txn: &Transaction, start: Option<BlockPtr>) -> Ch
             current = curr_move;
             let item: MoveStackItem = moved_stack.pop().unwrap_or_default();
             curr_move_is_new = item.is_new;
+            curr_move_is_deleted = item.is_deleted;
             curr_move = item.moved;
             curr_move_end = item.end;
         } else {
@@ -1078,6 +1112,7 @@ pub(crate) fn event_change_set(txn: &Transaction, start: Option<BlockPtr>) -> Ch
                                 end: curr_move_end,
                                 moved: curr_move,
                                 is_new: curr_move_is_new,
+                                is_deleted: curr_move_is_deleted,
                             });
                             let txn = unsafe {
                                 //TODO: remove this - find a way to work with get_moved_coords
@@ -1089,7 +1124,8 @@ pub(crate) fn event_change_set(txn: &Transaction, start: Option<BlockPtr>) -> Ch
                             let (start, end) = m.get_moved_coords(txn);
                             curr_move = current;
                             curr_move_end = end;
-                            curr_move_is_new = txn.has_added(&item.id);
+                            curr_move_is_new = curr_move_is_new || txn.has_added(&item.id);
+                            curr_move_is_deleted = curr_move_is_deleted || item.is_deleted();
                             current = start;
                             continue; // do not move to item.right
                         }
@@ -1098,6 +1134,9 @@ pub(crate) fn event_change_set(txn: &Transaction, start: Option<BlockPtr>) -> Ch
                             && item.is_countable()
                             && (!item.is_deleted() || txn.has_deleted(&item.id))
                             && !txn.has_added(&item.id)
+                            && (item.moved.is_none()
+                                || curr_move_is_deleted
+                                || is_moved_by_new(item.moved, txn))
                             && (txn.prev_moved.get(&ptr).cloned() == curr_move)
                         {
                             match item.moved {
@@ -1119,6 +1158,7 @@ pub(crate) fn event_change_set(txn: &Transaction, start: Option<BlockPtr>) -> Ch
                         if !curr_move_is_new
                             && txn.has_deleted(&item.id)
                             && !txn.has_added(&item.id)
+                            && !txn.prev_moved.contains_key(&ptr)
                         {
                             let removed = match last_op.take() {
                                 None => 0,
@@ -1132,7 +1172,10 @@ pub(crate) fn event_change_set(txn: &Transaction, start: Option<BlockPtr>) -> Ch
                             deleted.insert(item.id);
                         } // else nop
                     } else {
-                        if curr_move_is_new || txn.has_added(&item.id) {
+                        if curr_move_is_new
+                            || txn.has_added(&item.id)
+                            || txn.prev_moved.contains_key(&ptr)
+                        {
                             let mut inserts = match last_op.take() {
                                 None => Vec::with_capacity(item.len() as usize),
                                 Some(Change::Added(values)) => values,

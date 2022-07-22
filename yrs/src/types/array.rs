@@ -381,6 +381,7 @@ mod test {
     use rand::Rng;
     use std::cell::{Cell, RefCell};
     use std::collections::{HashMap, HashSet};
+    use std::fs::File;
     use std::ops::Deref;
     use std::rc::Rc;
 
@@ -906,8 +907,9 @@ mod test {
         assert_eq!(c2.borrow_mut().take(), Some(a2));
     }
 
-    use crate::updates::decoder::Decode;
+    use crate::updates::decoder::{Decode, Decoder, DecoderV1};
     use crate::updates::encoder::{Encoder, EncoderV1};
+    use lib0::decoding::{Cursor, Read};
     use std::sync::atomic::{AtomicI64, Ordering};
 
     static UNIQUE_NUMBER: AtomicI64 = AtomicI64::new(0);
@@ -1228,5 +1230,39 @@ mod test {
 
         assert_eq!(a1.len(), 4);
         assert_eq!(a1.to_json(), a2.to_json());
+    }
+
+    #[test]
+    fn move_tests_small() {
+        move_tests(r#"./benches/input/compat-tests-larger.bin"#);
+    }
+
+    #[test]
+    fn move_tests_large() {
+        move_tests(r#"./benches/input/compat-tests-larger-2.bin"#);
+    }
+
+    fn move_tests<P: AsRef<std::path::Path>>(path: P) {
+        let mut file = File::open(path).unwrap();
+        let mut buf = Vec::new();
+        std::io::Read::read_to_end(&mut file, &mut buf).unwrap();
+        let mut decoder = DecoderV1::new(Cursor::new(&buf));
+
+        let test_case_count: u32 = decoder.read_var().unwrap();
+        for i in 0..test_case_count {
+            println!("test case {}/{}", i, test_case_count);
+            let mut doc = Doc::new();
+            let array = doc.transact().get_array("array");
+
+            let update_count: u32 = decoder.read_var().unwrap();
+            for _ in 0..update_count {
+                let data = decoder.read_buf().unwrap();
+                let update = Update::decode_v1(data).unwrap();
+                doc.transact().apply_update(update);
+            }
+            let expected = decoder.read_any().unwrap();
+            //let actual = array.to_json();
+            //assert_eq!(actual, expected);
+        }
     }
 }

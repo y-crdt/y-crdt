@@ -99,9 +99,11 @@ impl ID {
 pub(crate) struct BlockPtr(NonNull<Block>);
 
 impl BlockPtr {
-    pub(crate) fn delete_as_cleanup(&self, txn: &mut Transaction) {
+    pub(crate) fn delete_as_cleanup(&self, txn: &mut Transaction, is_local: bool) {
         txn.delete(*self);
-        txn.delete_set.insert(*self.id(), self.len());
+        if is_local {
+            txn.delete_set.insert(*self.id(), self.len());
+        }
     }
 
     pub(crate) fn is_countable(&self) -> bool {
@@ -359,7 +361,9 @@ impl BlockPtr {
                                 let ptr_clone = ptr.clone();
                                 if let Block::Item(i) = ptr.deref_mut() {
                                     if let ItemContent::Move(m) = &mut i.content {
-                                        m.integrate_block(txn, ptr_clone);
+                                        if !m.is_collapsed() {
+                                            m.integrate_block(txn, ptr_clone);
+                                        }
                                     }
                                 }
                             }

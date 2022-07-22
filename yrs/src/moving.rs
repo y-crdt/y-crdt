@@ -6,7 +6,7 @@ use crate::updates::encoder::{Encode, Encoder};
 use crate::{Transaction, ID};
 use lib0::error::Error;
 use std::collections::HashSet;
-use std::ops::DerefMut;
+use std::ops::{Deref, DerefMut};
 
 /// Association type. If true, associate with right block. Otherwise with the left one.
 pub type Assoc = bool;
@@ -98,14 +98,15 @@ impl Move {
     }
 
     pub(crate) fn integrate_block(&mut self, txn: &mut Transaction, item: BlockPtr) {
-        let (mut start, end) = self.get_moved_coords(txn);
+        let (init, end) = self.get_moved_coords(txn);
         let mut max_priority = 0i32;
         let adapt_priority = self.priority < 0;
+        let mut start = init;
         while start != end && start.is_some() {
             let start_ptr = start.unwrap().clone();
             if let Some(Block::Item(start_item)) = start.as_deref_mut() {
-                let mut curr_moved = start_item.moved;
-                let next_prio = if let Some(Block::Item(m)) = curr_moved.as_deref() {
+                let mut prev_move = start_item.moved;
+                let next_prio = if let Some(Block::Item(m)) = prev_move.as_deref() {
                     if let ItemContent::Move(next) = &m.content {
                         next.priority
                     } else {
@@ -115,21 +116,36 @@ impl Move {
                     -1
                 };
 
+                #[inline]
+                fn is_lower(a: &ID, b: &ID) -> bool {
+                    a.client < b.client || (a.client == b.client && a.clock < b.clock)
+                }
+
                 if adapt_priority
                     || next_prio < self.priority
-                    || (curr_moved.is_some()
+                    || (prev_move.is_some()
                         && next_prio == self.priority
-                        && (*curr_moved.unwrap().id() < *item.id()))
+                        && is_lower(prev_move.unwrap().id(), item.id()))
                 {
-                    if let Some(moved_ptr) = curr_moved.clone() {
+                    if let Some(moved_ptr) = prev_move.clone() {
+                        if let Block::Item(item) = moved_ptr.deref() {
+                            if let ItemContent::Move(m) = &item.content {
+                                if m.is_collapsed() {
+                                    moved_ptr.delete_as_cleanup(txn, adapt_priority);
+                                }
+                            }
+                        }
                         self.push_override(moved_ptr);
+                        if Some(start_ptr) != init {
+                            // only add this to mergeStructs if this is not the first item
+                            txn.merge_blocks.push(start_item.id);
+                        }
                     }
                     max_priority = max_priority.max(next_prio);
                     // was already moved
                     let prev_move = start_item.moved;
                     if let Some(prev_move) = prev_move {
-                        if !txn.prev_moved.contains_key(&prev_move)
-                            && prev_move.id().clock < txn.before_state.get(&prev_move.id().client)
+                        if !txn.prev_moved.contains_key(&prev_move) && txn.has_added(prev_move.id())
                         {
                             // only override prevMoved if the prevMoved item is not new
                             // we need to know which item previously moved an item
@@ -140,12 +156,12 @@ impl Move {
                     if !start_item.is_deleted() {
                         if let ItemContent::Move(m) = &start_item.content {
                             if m.find_move_loop(txn, start_ptr, &mut HashSet::from([item])) {
-                                item.delete_as_cleanup(txn);
+                                item.delete_as_cleanup(txn, adapt_priority);
                                 return;
                             }
                         }
                     }
-                } else if let Some(Block::Item(moved_item)) = curr_moved.as_deref_mut() {
+                } else if let Some(Block::Item(moved_item)) = prev_move.as_deref_mut() {
                     if let ItemContent::Move(m) = &mut moved_item.content {
                         m.push_override(item);
                     }
@@ -164,13 +180,47 @@ impl Move {
     pub(crate) fn delete(&self, txn: &mut Transaction, item: BlockPtr) {
         let (mut start, end) = self.get_moved_coords(txn);
         while start != end && start.is_some() {
-            if let Some(Block::Item(i)) = start.as_deref_mut() {
-                if i.moved == Some(item) {
-                    i.moved = None;
+            if let Some(start_ptr) = start {
+                if let Block::Item(i) = start_ptr.clone().deref_mut() {
+                    if i.moved == Some(item) {
+                        if let Some(&prev_moved) = txn.prev_moved.get(&start_ptr) {
+                            if txn.has_added(item.id()) {
+                                if prev_moved == item {
+                                    // Edge case: Item has been moved by this move op and it has been created & deleted in the same transaction (hence no effect that should be emitted by the change computation)
+                                    txn.prev_moved.remove(&start_ptr);
+                                }
+                            }
+                        } else {
+                            // Normal case: item has been moved by this move and it has not been created & deleted in the same transaction
+                            txn.prev_moved.insert(start_ptr, item);
+                        }
+                        i.moved = None;
+                    }
+                    start = i.right;
+                    continue;
                 }
-                start = i.right;
-            } else {
-                break;
+            }
+            break;
+        }
+
+        fn check_for_cycles(ptr: BlockPtr, txn: &Transaction, acc: &mut HashSet<BlockPtr>) {
+            if let Block::Item(item) = ptr.deref() {
+                if let ItemContent::Move(m) = &item.content {
+                    if let Some(overrides) = m.overrides.as_ref() {
+                        for &p in overrides {
+                            if acc.insert(p) {
+                                panic!(
+                                    "block {} was already found visited: {:?} - store: {:#?}",
+                                    p.id(),
+                                    overrides,
+                                    txn.store()
+                                )
+                            } else {
+                                check_for_cycles(ptr, txn, acc);
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -193,6 +243,7 @@ impl Move {
             }
         }
 
+        check_for_cycles(item, txn, &mut HashSet::new());
         if let Some(overrides) = &self.overrides {
             for &ptr in overrides {
                 reintegrate(ptr, txn);
