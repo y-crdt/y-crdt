@@ -1232,16 +1232,6 @@ mod test {
         assert_eq!(a1.to_json(), a2.to_json());
     }
 
-    #[test]
-    fn move_tests_small() {
-        move_tests(r#"./benches/input/compat-tests-larger.bin"#);
-    }
-
-    #[test]
-    fn move_tests_large() {
-        move_tests(r#"./benches/input/compat-tests-larger-2.bin"#);
-    }
-
     fn move_tests<P: AsRef<std::path::Path>>(path: P) {
         let mut file = File::open(path).unwrap();
         let mut buf = Vec::new();

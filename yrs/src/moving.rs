@@ -203,27 +203,6 @@ impl Move {
             break;
         }
 
-        fn check_for_cycles(ptr: BlockPtr, txn: &Transaction, acc: &mut HashSet<BlockPtr>) {
-            if let Block::Item(item) = ptr.deref() {
-                if let ItemContent::Move(m) = &item.content {
-                    if let Some(overrides) = m.overrides.as_ref() {
-                        for &p in overrides {
-                            if acc.insert(p) {
-                                panic!(
-                                    "block {} was already found visited: {:?} - store: {:#?}",
-                                    p.id(),
-                                    overrides,
-                                    txn.store()
-                                )
-                            } else {
-                                check_for_cycles(ptr, txn, acc);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
         fn reintegrate(mut ptr: BlockPtr, txn: &mut Transaction) {
             let ptr_copy = ptr.clone();
             if let Block::Item(item) = ptr.deref_mut() {
@@ -243,7 +222,6 @@ impl Move {
             }
         }
 
-        check_for_cycles(item, txn, &mut HashSet::new());
         if let Some(overrides) = &self.overrides {
             for &ptr in overrides {
                 reintegrate(ptr, txn);
@@ -258,15 +236,15 @@ impl Encode for Move {
         let flags = {
             let mut b = 0;
             if is_collapsed {
-                b |= 1
+                b |= 0b0000_0001
             }
             if self.start.assoc {
-                b |= 2
+                b |= 0b0000_0010
             }
             if self.end.assoc {
-                b |= 4
+                b |= 0b0000_0100
             }
-            b |= self.priority << 3;
+            b |= self.priority << 6;
             b
         };
         encoder.write_var(flags);
@@ -281,24 +259,15 @@ impl Encode for Move {
 
 impl Decode for Move {
     fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, Error> {
-        /*
-        const info = decoding.readVarUint(decoder.restDecoder)
-        const isCollapsed = (info & 1) === 1
-        const startAssoc = (info & 2) === 2 ? 0 : -1
-        const endAssoc = (info & 4) === 4 ? 0 : -1
-        const priority = info >>> 3
-        const startId = readID(decoder.restDecoder)
-        const start = new RelativePosition(null, null, startId, startAssoc)
-        const end = new RelativePosition(null, null, isCollapsed ? startId : readID(decoder.restDecoder), endAssoc)
-        return new ContentMove(start, end, priority)
-               */
         let flags: i32 = decoder.read_var()?;
-        let is_collables = flags & 1 == 1;
-        let start_assoc = flags & 2 == 2;
-        let end_assoc = flags & 4 == 4;
-        let priority = flags >> 3;
+        let is_collapsed = flags & 0b0000_0001 != 0;
+        let start_assoc = flags & 0b0000_0010 != 0;
+        let end_assoc = flags & 0b0000_0100 != 0;
+        //TODO use BIT3 & BIT4 to indicate the case `null` is the start/end
+        // BIT5 is reserved for future extensions
+        let priority = flags >> 6;
         let start_id = ID::new(decoder.read_var()?, decoder.read_var()?);
-        let end_id = if is_collables {
+        let end_id = if is_collapsed {
             start_id
         } else {
             ID::new(decoder.read_var()?, decoder.read_var()?)
