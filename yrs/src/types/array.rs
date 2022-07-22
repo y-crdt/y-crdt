@@ -1250,19 +1250,18 @@ mod test {
 
         let test_case_count: u32 = decoder.read_var().unwrap();
         for i in 0..test_case_count {
-            println!("test case {}/{}", i, test_case_count);
             let mut doc = Doc::new();
             let array = doc.transact().get_array("array");
 
             let update_count: u32 = decoder.read_var().unwrap();
-            for _ in 0..update_count {
+            for j in 0..update_count {
                 let data = decoder.read_buf().unwrap();
                 let update = Update::decode_v1(data).unwrap();
                 doc.transact().apply_update(update);
             }
             let expected = decoder.read_any().unwrap();
-            //let actual = array.to_json();
-            //assert_eq!(actual, expected);
+            let actual = array.to_json();
+            assert_eq!(actual, expected, "failed at test case nr {}", i);
         }
     }
 }
