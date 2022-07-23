@@ -454,6 +454,7 @@ impl SerializeStructVariant for AnyStructVariantSerializer {
 
 #[cfg(test)]
 mod test {
+    use super::*;
     use crate::any::Any;
     use crate::serde::serialize_to_any;
     use serde::Serialize;
@@ -659,6 +660,39 @@ mod test {
             },)
             .unwrap(),
         )
+    }
+
+    #[test]
+    fn test_any_serializer_newtype_u64_within_bounds() {
+        #[derive(Debug, Serialize, PartialEq)]
+        struct Test(u64);
+
+        assert_eq!(
+            serialize_to_any(Test(i64::MAX as u64)).unwrap(),
+            Any::BigInt(i64::MAX)
+        )
+    }
+
+    #[test]
+    fn test_any_serializer_u64_error() {
+        #[derive(Debug, Serialize, PartialEq)]
+        struct Test(u64);
+
+        assert!(matches!(
+            serialize_to_any(Test(u64::MAX)).unwrap_err(),
+            AnySerializeError::UnrepresentableInt
+        ))
+    }
+
+    #[test]
+    fn test_any_serializer_non_string_keys_error() {
+        #[derive(Debug, Serialize, PartialEq)]
+        struct Test(HashMap<u32, u32>);
+
+        assert!(matches!(
+            serialize_to_any(Test(HashMap::from([(100, 1)]))).unwrap_err(),
+            AnySerializeError::MapKeyNotString
+        ))
     }
 
     #[test]

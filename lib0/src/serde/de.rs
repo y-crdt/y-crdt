@@ -209,7 +209,7 @@ pub struct AnyDeserializer<'a> {
     value: &'a Any,
 }
 
-impl<'de, 'a: 'de> IntoDeserializer<'de, DeserializeError> for &'a Any {
+impl<'de, 'a: 'de> IntoDeserializer<'de, AnyDeserializeError> for &'a Any {
     type Deserializer = AnyDeserializer<'de>;
 
     fn into_deserializer(self) -> Self::Deserializer {
@@ -218,7 +218,7 @@ impl<'de, 'a: 'de> IntoDeserializer<'de, DeserializeError> for &'a Any {
 }
 
 #[derive(Error, Debug)]
-pub enum DeserializeError {
+pub enum AnyDeserializeError {
     #[error("deserialized int does not fit in field int type")]
     IntDoesNotFit,
     #[error("types do not match. Expected {0}")]
@@ -227,17 +227,17 @@ pub enum DeserializeError {
     Custom(String),
 }
 
-impl serde::de::Error for DeserializeError {
+impl serde::de::Error for AnyDeserializeError {
     fn custom<T>(msg: T) -> Self
     where
         T: Display,
     {
-        DeserializeError::Custom(msg.to_string())
+        AnyDeserializeError::Custom(msg.to_string())
     }
 }
 
 impl<'de> Deserializer<'de> for AnyDeserializer<'de> {
-    type Error = DeserializeError;
+    type Error = AnyDeserializeError;
 
     fn deserialize_any<V>(self, visitor: V) -> Result<V::Value, Self::Error>
     where
@@ -262,7 +262,7 @@ impl<'de> Deserializer<'de> for AnyDeserializer<'de> {
     {
         match self.value {
             Any::Bool(b) => visitor.visit_bool(*b),
-            _ => Err(DeserializeError::TypeMismatch(
+            _ => Err(AnyDeserializeError::TypeMismatch(
                 type_name::<bool>().to_string(),
             )),
         }
@@ -275,10 +275,10 @@ impl<'de> Deserializer<'de> for AnyDeserializer<'de> {
         match self.value {
             Any::BigInt(i) => visitor.visit_i8(
                 (*i).try_into()
-                    .map_err(|_| DeserializeError::IntDoesNotFit)?,
+                    .map_err(|_| AnyDeserializeError::IntDoesNotFit)?,
             ),
             // Any::Number(f) => visitor.visit_i8(i8::try_from(*f).map_err(|_| DeserializeError)?),
-            _ => Err(DeserializeError::TypeMismatch(
+            _ => Err(AnyDeserializeError::TypeMismatch(
                 type_name::<i8>().to_string(),
             )),
         }
@@ -291,9 +291,9 @@ impl<'de> Deserializer<'de> for AnyDeserializer<'de> {
         match self.value {
             Any::BigInt(i) => visitor.visit_i16(
                 (*i).try_into()
-                    .map_err(|_| DeserializeError::IntDoesNotFit)?,
+                    .map_err(|_| AnyDeserializeError::IntDoesNotFit)?,
             ),
-            _ => Err(DeserializeError::TypeMismatch(
+            _ => Err(AnyDeserializeError::TypeMismatch(
                 type_name::<i16>().to_string(),
             )),
         }
@@ -306,9 +306,9 @@ impl<'de> Deserializer<'de> for AnyDeserializer<'de> {
         match self.value {
             Any::BigInt(i) => visitor.visit_i32(
                 (*i).try_into()
-                    .map_err(|_| DeserializeError::IntDoesNotFit)?,
+                    .map_err(|_| AnyDeserializeError::IntDoesNotFit)?,
             ),
-            _ => Err(DeserializeError::TypeMismatch(
+            _ => Err(AnyDeserializeError::TypeMismatch(
                 type_name::<i32>().to_string(),
             )),
         }
@@ -320,7 +320,7 @@ impl<'de> Deserializer<'de> for AnyDeserializer<'de> {
     {
         match self.value {
             Any::BigInt(i) => visitor.visit_i64(*i),
-            _ => Err(DeserializeError::TypeMismatch(
+            _ => Err(AnyDeserializeError::TypeMismatch(
                 type_name::<i64>().to_string(),
             )),
         }
@@ -333,9 +333,9 @@ impl<'de> Deserializer<'de> for AnyDeserializer<'de> {
         match self.value {
             Any::BigInt(i) => visitor.visit_u8(
                 (*i).try_into()
-                    .map_err(|_| DeserializeError::IntDoesNotFit)?,
+                    .map_err(|_| AnyDeserializeError::IntDoesNotFit)?,
             ),
-            _ => Err(DeserializeError::TypeMismatch(
+            _ => Err(AnyDeserializeError::TypeMismatch(
                 type_name::<u8>().to_string(),
             )),
         }
@@ -348,9 +348,9 @@ impl<'de> Deserializer<'de> for AnyDeserializer<'de> {
         match self.value {
             Any::BigInt(i) => visitor.visit_u16(
                 (*i).try_into()
-                    .map_err(|_| DeserializeError::IntDoesNotFit)?,
+                    .map_err(|_| AnyDeserializeError::IntDoesNotFit)?,
             ),
-            _ => Err(DeserializeError::TypeMismatch(
+            _ => Err(AnyDeserializeError::TypeMismatch(
                 type_name::<u16>().to_string(),
             )),
         }
@@ -363,9 +363,9 @@ impl<'de> Deserializer<'de> for AnyDeserializer<'de> {
         match self.value {
             Any::BigInt(i) => visitor.visit_u32(
                 (*i).try_into()
-                    .map_err(|_| DeserializeError::IntDoesNotFit)?,
+                    .map_err(|_| AnyDeserializeError::IntDoesNotFit)?,
             ),
-            _ => Err(DeserializeError::TypeMismatch(
+            _ => Err(AnyDeserializeError::TypeMismatch(
                 type_name::<u32>().to_string(),
             )),
         }
@@ -378,9 +378,9 @@ impl<'de> Deserializer<'de> for AnyDeserializer<'de> {
         match self.value {
             Any::BigInt(i) => visitor.visit_u64(
                 (*i).try_into()
-                    .map_err(|_| DeserializeError::IntDoesNotFit)?,
+                    .map_err(|_| AnyDeserializeError::IntDoesNotFit)?,
             ),
-            _ => Err(DeserializeError::TypeMismatch(
+            _ => Err(AnyDeserializeError::TypeMismatch(
                 type_name::<u64>().to_string(),
             )),
         }
@@ -392,7 +392,7 @@ impl<'de> Deserializer<'de> for AnyDeserializer<'de> {
     {
         match self.value {
             Any::Number(f) => visitor.visit_f32(*f as f32),
-            _ => Err(DeserializeError::TypeMismatch(
+            _ => Err(AnyDeserializeError::TypeMismatch(
                 type_name::<f32>().to_string(),
             )),
         }
@@ -404,7 +404,7 @@ impl<'de> Deserializer<'de> for AnyDeserializer<'de> {
     {
         match self.value {
             Any::Number(f) => visitor.visit_f64(*f),
-            _ => Err(DeserializeError::TypeMismatch(
+            _ => Err(AnyDeserializeError::TypeMismatch(
                 type_name::<f64>().to_string(),
             )),
         }
@@ -420,12 +420,12 @@ impl<'de> Deserializer<'de> for AnyDeserializer<'de> {
                 // Match on first two characters
                 match (chars.next(), chars.next()) {
                     (Some(c), None) => visitor.visit_char(c),
-                    _ => Err(DeserializeError::TypeMismatch(
+                    _ => Err(AnyDeserializeError::TypeMismatch(
                         type_name::<char>().to_string(),
                     )),
                 }
             }
-            _ => Err(DeserializeError::TypeMismatch(
+            _ => Err(AnyDeserializeError::TypeMismatch(
                 type_name::<char>().to_string(),
             )),
         }
@@ -437,7 +437,7 @@ impl<'de> Deserializer<'de> for AnyDeserializer<'de> {
     {
         match self.value {
             Any::String(s) => visitor.visit_borrowed_str(s),
-            _ => Err(DeserializeError::TypeMismatch(
+            _ => Err(AnyDeserializeError::TypeMismatch(
                 type_name::<&str>().to_string(),
             )),
         }
@@ -449,7 +449,7 @@ impl<'de> Deserializer<'de> for AnyDeserializer<'de> {
     {
         match self.value {
             Any::String(s) => visitor.visit_string(s.to_string()),
-            _ => Err(DeserializeError::TypeMismatch(
+            _ => Err(AnyDeserializeError::TypeMismatch(
                 type_name::<String>().to_string(),
             )),
         }
@@ -461,7 +461,7 @@ impl<'de> Deserializer<'de> for AnyDeserializer<'de> {
     {
         match self.value {
             Any::Buffer(b) => visitor.visit_borrowed_bytes(b),
-            _ => Err(DeserializeError::TypeMismatch(
+            _ => Err(AnyDeserializeError::TypeMismatch(
                 type_name::<[u8]>().to_string(),
             )),
         }
@@ -473,7 +473,7 @@ impl<'de> Deserializer<'de> for AnyDeserializer<'de> {
     {
         match self.value {
             Any::Buffer(b) => visitor.visit_bytes(b),
-            _ => Err(DeserializeError::TypeMismatch(
+            _ => Err(AnyDeserializeError::TypeMismatch(
                 type_name::<Vec<u8>>().to_string(),
             )),
         }
@@ -496,7 +496,7 @@ impl<'de> Deserializer<'de> for AnyDeserializer<'de> {
     {
         match self.value {
             Any::Null => visitor.visit_unit(),
-            _ => Err(DeserializeError::TypeMismatch(
+            _ => Err(AnyDeserializeError::TypeMismatch(
                 type_name::<()>().to_string(),
             )),
         }
@@ -561,7 +561,7 @@ impl<'de> Deserializer<'de> for AnyDeserializer<'de> {
             Any::Map(m) => visitor.visit_map(MapDeserializer::new(
                 m.iter().map(|(key, value)| (key.as_str(), value)),
             )),
-            _ => Err(DeserializeError::TypeMismatch(
+            _ => Err(AnyDeserializeError::TypeMismatch(
                 type_name::<V::Value>().to_string(),
             )),
         }
@@ -593,7 +593,7 @@ impl<'de> Deserializer<'de> for AnyDeserializer<'de> {
             Any::Map(m) => visitor.visit_enum(MapAccessDeserializer::new(MapDeserializer::new(
                 m.iter().map(|(key, value)| (key.as_str(), value)),
             ))),
-            _ => Err(DeserializeError::TypeMismatch(
+            _ => Err(AnyDeserializeError::TypeMismatch(
                 type_name::<V::Value>().to_string(),
             )),
         }
@@ -614,7 +614,7 @@ impl<'de> Deserializer<'de> for AnyDeserializer<'de> {
     }
 }
 
-pub fn deserialize_any<'de, T: Deserialize<'de>>(any: &'de Any) -> Result<T, DeserializeError> {
+pub fn deserialize_any<'de, T: Deserialize<'de>>(any: &'de Any) -> Result<T, AnyDeserializeError> {
     let deserializer = AnyDeserializer { value: any };
     T::deserialize(deserializer)
 }
@@ -869,5 +869,37 @@ mod test {
         let any: Any = HashMap::from([("undefined".to_string(), Any::Undefined)]).into();
 
         assert_eq!(Test { undefined: None }, deserialize_any(&any).unwrap())
+    }
+
+    #[test]
+    fn test_any_deserializer_int_does_not_fit_error() {
+        #[derive(Debug, Deserialize, PartialEq)]
+        struct Test {
+            test: i8,
+        }
+
+        let any: Any = HashMap::from([("test".to_string(), Any::BigInt(1000))]).into();
+
+        assert!(matches!(
+            deserialize_any::<Test>(&any).unwrap_err(),
+            AnyDeserializeError::IntDoesNotFit,
+        ))
+    }
+
+    #[test]
+    fn test_any_deserializer_type_mismatch_error() {
+        #[derive(Debug, Deserialize, PartialEq)]
+        struct Test {
+            test: i8,
+        }
+
+        let any: Any = HashMap::from([("test".to_string(), Any::Number(1000f64))]).into();
+
+        let error = deserialize_any::<Test>(&any).unwrap_err();
+
+        match error {
+            AnyDeserializeError::TypeMismatch(s) => assert_eq!("i8", s),
+            _ => assert!(false),
+        }
     }
 }
