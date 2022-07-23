@@ -8,6 +8,13 @@ use std::convert::TryInto;
 use std::fmt::{Display, Formatter};
 use thiserror::Error;
 
+pub fn deserialize_from_any<'de, T: Deserialize<'de>>(
+    any: &'de Any,
+) -> Result<T, AnyDeserializeError> {
+    let deserializer = AnyDeserializer { value: any };
+    T::deserialize(deserializer)
+}
+
 impl<'de> Deserialize<'de> for Any {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -612,11 +619,6 @@ impl<'de> Deserializer<'de> for AnyDeserializer<'de> {
     {
         self.deserialize_any(visitor)
     }
-}
-
-pub fn deserialize_any<'de, T: Deserialize<'de>>(any: &'de Any) -> Result<T, AnyDeserializeError> {
-    let deserializer = AnyDeserializer { value: any };
-    T::deserialize(deserializer)
 }
 
 #[cfg(test)]
