@@ -20,6 +20,9 @@ serde_json = { version = "1.0", optional = true }
 criterion = "^0.3"
 proptest = "^1.0.0"
 proptest-derive = "0.3.0"
+# Serde derive feature required for tests
+serde = { version = "1.0", features = ["derive"]}
+
 
 [[bench]]
 name = "lib0_benchmarks"
