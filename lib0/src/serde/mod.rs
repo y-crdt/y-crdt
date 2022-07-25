@@ -1,8 +1,8 @@
 mod de;
 mod ser;
 
-pub use de::deserialize_any;
-pub use ser::serialize_to_any;
+pub use de::from_any;
+pub use ser::to_any;
 
 #[cfg(test)]
 mod test {
@@ -68,10 +68,7 @@ mod test {
             array: vec![None, Some(Nested { int: 0, other: 0.0 }), None],
         };
 
-        assert_eq!(
-            test,
-            deserialize_any(&serialize_to_any(&test).unwrap()).unwrap()
-        )
+        assert_eq!(test, from_any(&to_any(&test).unwrap()).unwrap())
     }
 
     #[test]
@@ -97,10 +94,7 @@ mod test {
             enum_c: StringEnum::VariantC { test: true },
         };
 
-        assert_eq!(
-            test,
-            deserialize_any(&serialize_to_any(&test).unwrap()).unwrap()
-        )
+        assert_eq!(test, from_any(&to_any(&test).unwrap()).unwrap())
     }
 
     #[test]

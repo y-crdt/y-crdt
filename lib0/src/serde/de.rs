@@ -8,9 +8,7 @@ use std::convert::TryInto;
 use std::fmt::{Display, Formatter};
 use thiserror::Error;
 
-pub fn deserialize_from_any<'de, T: Deserialize<'de>>(
-    any: &'de Any,
-) -> Result<T, AnyDeserializeError> {
+pub fn from_any<'de, T: Deserialize<'de>>(any: &'de Any) -> Result<T, AnyDeserializeError> {
     let deserializer = AnyDeserializer { value: any };
     T::deserialize(deserializer)
 }
@@ -781,7 +779,7 @@ mod test {
                 enum_a: StringEnum::VariantA,
                 enum_b: StringEnum::VariantB
             },
-            deserialize_any(&any).unwrap()
+            from_any(&any).unwrap()
         )
     }
 
@@ -809,7 +807,7 @@ mod test {
             ("enum_b".to_string(), "VariantB".into()),
         ])));
 
-        assert_eq!(any, deserialize_any(&any.clone()).unwrap())
+        assert_eq!(any, from_any(&any.clone()).unwrap())
     }
 
     #[test]
@@ -830,7 +828,7 @@ mod test {
                 str: "String",
                 bytes: b"Bytes"
             },
-            deserialize_any(&any).unwrap()
+            from_any(&any).unwrap()
         )
     }
 
@@ -857,7 +855,7 @@ mod test {
             Test {
                 array: vec![vec![true, false], vec![true]]
             },
-            deserialize_any(&any).unwrap()
+            from_any(&any).unwrap()
         )
     }
 
@@ -870,7 +868,7 @@ mod test {
 
         let any: Any = HashMap::from([("undefined".to_string(), Any::Undefined)]).into();
 
-        assert_eq!(Test { undefined: None }, deserialize_any(&any).unwrap())
+        assert_eq!(Test { undefined: None }, from_any(&any).unwrap())
     }
 
     #[test]
@@ -883,7 +881,7 @@ mod test {
         let any: Any = HashMap::from([("test".to_string(), Any::BigInt(1000))]).into();
 
         assert!(matches!(
-            deserialize_any::<Test>(&any).unwrap_err(),
+            from_any::<Test>(&any).unwrap_err(),
             AnyDeserializeError::IntDoesNotFit,
         ))
     }
@@ -897,7 +895,7 @@ mod test {
 
         let any: Any = HashMap::from([("test".to_string(), Any::Number(1000f64))]).into();
 
-        let error = deserialize_any::<Test>(&any).unwrap_err();
+        let error = from_any::<Test>(&any).unwrap_err();
 
         match error {
             AnyDeserializeError::TypeMismatch(s) => assert_eq!("i8", s),

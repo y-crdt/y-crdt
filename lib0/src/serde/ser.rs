@@ -9,7 +9,7 @@ use std::convert::TryInto;
 use std::fmt::Display;
 use thiserror::Error;
 
-pub fn serialize_to_any<T: Serialize>(value: T) -> Result<Any, AnySerializeError> {
+pub fn to_any<T: Serialize>(value: T) -> Result<Any, AnySerializeError> {
     value.serialize(AnySerializer)
 }
 
@@ -456,7 +456,7 @@ impl SerializeStructVariant for AnyStructVariantSerializer {
 mod test {
     use super::*;
     use crate::any::Any;
-    use crate::serde::serialize_to_any;
+    use crate::serde::to_any;
     use serde::Serialize;
     use serde_json::json;
     use std::collections::HashMap;
@@ -606,7 +606,7 @@ mod test {
 
         assert_eq!(
             any,
-            serialize_to_any(&Test {
+            to_any(&Test {
                 bool: true,
                 int: 1,
                 negative_int: -1,
@@ -655,7 +655,7 @@ mod test {
 
         assert_eq!(
             any,
-            serialize_to_any(&Test {
+            to_any(&Test {
                 array: vec![Test { array: vec![] }, Test { array: vec![] }]
             },)
             .unwrap(),
@@ -668,7 +668,7 @@ mod test {
         struct Test(u64);
 
         assert_eq!(
-            serialize_to_any(Test(i64::MAX as u64)).unwrap(),
+            to_any(Test(i64::MAX as u64)).unwrap(),
             Any::BigInt(i64::MAX)
         )
     }
@@ -679,7 +679,7 @@ mod test {
         struct Test(u64);
 
         assert!(matches!(
-            serialize_to_any(Test(u64::MAX)).unwrap_err(),
+            to_any(Test(u64::MAX)).unwrap_err(),
             AnySerializeError::UnrepresentableInt
         ))
     }
@@ -690,7 +690,7 @@ mod test {
         struct Test(HashMap<u32, u32>);
 
         assert!(matches!(
-            serialize_to_any(Test(HashMap::from([(100, 1)]))).unwrap_err(),
+            to_any(Test(HashMap::from([(100, 1)]))).unwrap_err(),
             AnySerializeError::MapKeyNotString
         ))
     }
@@ -719,6 +719,6 @@ mod test {
             ("enum_b".to_string(), "VariantB".into()),
         ])));
 
-        assert_eq!(any, serialize_to_any(&any.clone()).unwrap())
+        assert_eq!(any, to_any(&any.clone()).unwrap())
     }
 }
