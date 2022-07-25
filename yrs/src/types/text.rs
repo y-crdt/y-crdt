@@ -63,6 +63,7 @@ impl Text {
             }
         };
 
+        let mut format_ptrs = HashMap::new();
         let store = txn.store_mut();
         let encoding = store.options.offset_kind;
         let mut remaining = index;
@@ -73,31 +74,35 @@ impl Text {
 
             if let Block::Item(right) = right_ptr.deref_mut() {
                 if !right.is_deleted() {
-                    if let ItemContent::Format(key, value) = &right.content {
-                        let attrs = pos
-                            .current_attrs
-                            .get_or_insert_with(|| Box::new(Attrs::new()));
-                        Text::update_current_attributes(attrs, key, value.as_ref());
-                    } else {
-                        let mut block_len = right.len();
-                        let content_len = right.content_len(encoding);
-                        if remaining < content_len {
-                            // split right item
-                            let offset = if let ItemContent::String(str) = &right.content {
-                                str.block_offset(remaining, encoding)
+                    match &right.content {
+                        ItemContent::Format(key, value) => {
+                            if let Any::Null = value.as_ref() {
+                                format_ptrs.remove(key);
                             } else {
-                                remaining
-                            };
-                            right_ptr = store
-                                .blocks
-                                .split_block(right_ptr, offset, OffsetKind::Utf16)
-                                .unwrap();
-                            block_len -= offset;
-                            remaining = 0;
-                        } else {
-                            remaining -= content_len;
+                                format_ptrs.insert(key.clone(), pos.right.clone());
+                            }
                         }
-                        pos.index += block_len;
+                        _ => {
+                            let mut block_len = right.len();
+                            let content_len = right.content_len(encoding);
+                            if remaining < content_len {
+                                // split right item
+                                let offset = if let ItemContent::String(str) = &right.content {
+                                    str.block_offset(remaining, encoding)
+                                } else {
+                                    remaining
+                                };
+                                store
+                                    .blocks
+                                    .split_block(right_ptr, offset, OffsetKind::Utf16)
+                                    .unwrap();
+                                block_len -= offset;
+                                remaining = 0;
+                            } else {
+                                remaining -= content_len;
+                            }
+                            pos.index += block_len;
+                        }
                     }
                 }
                 pos.left = pos.right.take();
@@ -111,6 +116,19 @@ impl Text {
             }
         }
 
+        for (_, block_ptr) in format_ptrs {
+            if let Some(mut ptr) = block_ptr {
+                if let Block::Item(item) = ptr.deref_mut() {
+                    if let ItemContent::Format(key, value) = &item.content {
+                        let attrs = pos
+                            .current_attrs
+                            .get_or_insert_with(|| Box::new(Attrs::new()));
+                        Text::update_current_attributes(attrs, key, value.as_ref());
+                    }
+                }
+            }
+        }
+        
         Some(pos)
     }
 
