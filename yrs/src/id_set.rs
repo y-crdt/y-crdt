@@ -129,19 +129,19 @@ impl IdRange {
             if !ranges.is_empty() {
                 ranges.sort_by(|a, b| a.start.cmp(&b.start));
                 let mut new_len = 1;
-                unsafe {
+               
                     let len = ranges.len() as isize;
                     let head = ranges.as_mut_ptr();
-                    let mut current = head.as_mut().unwrap();
+                    let mut current = unsafe { head.as_mut().unwrap() };
                     let mut i = 1;
                     while i < len {
-                        let next = head.offset(i).as_ref().unwrap();
+                        let next = unsafe { head.offset(i).as_ref().unwrap() };
                         if !Self::try_join(current, next) {
                             // current and next are disjoined eg. [0,5) & [6,9)
 
                             // move current pointer one index to the left: by using new_len we
                             // squash ranges possibly already merged to current
-                            current = head.offset(new_len).as_mut().unwrap();
+                            current = unsafe { head.offset(new_len).as_mut().unwrap() };
 
                             // make next a new current
                             current.start = next.start;
@@ -151,7 +151,7 @@ impl IdRange {
 
                         i += 1;
                     }
-                }
+                
 
                 if new_len == 1 {
                     *self = IdRange::Continuous(ranges[0].clone())
