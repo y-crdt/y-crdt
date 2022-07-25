@@ -1,13 +1,14 @@
 use crate::cursor::{CursorRange, Move};
 use crate::doc::OffsetKind;
+use crate::moving::Move;
 use crate::store::Store;
 use crate::types::{
     Attrs, Branch, BranchPtr, TypePtr, Value, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
     TYPE_REFS_UNDEFINED, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_HOOK,
     TYPE_REFS_XML_TEXT,
 };
-use crate::updates::decoder::Decoder;
-use crate::updates::encoder::Encoder;
+use crate::updates::decoder::{Decode, Decoder};
+use crate::updates::encoder::{Encode, Encoder};
 use crate::*;
 use lib0::any::Any;
 use lib0::error::Error;
@@ -99,9 +100,11 @@ impl ID {
 pub(crate) struct BlockPtr(NonNull<Block>);
 
 impl BlockPtr {
-    pub(crate) fn delete_as_cleanup(&self, txn: &mut Transaction) {
+    pub(crate) fn delete_as_cleanup(&self, txn: &mut Transaction, is_local: bool) {
         txn.delete(*self);
-        txn.delete_set.insert(*self.id(), self.len());
+        if is_local {
+            txn.delete_set.insert(*self.id(), self.len());
+        }
     }
 
     pub(crate) fn is_countable(&self) -> bool {
@@ -360,7 +363,9 @@ impl BlockPtr {
                                 let ptr_clone = ptr.clone();
                                 if let Block::Item(i) = ptr.deref_mut() {
                                     if let ItemContent::Move(m) = &mut i.content {
-                                        m.integrate_block(txn, ptr_clone);
+                                        if !m.is_collapsed() {
+                                            m.integrate_block(txn, ptr_clone);
+                                        }
                                     }
                                 }
                             }
@@ -1534,6 +1539,10 @@ impl ItemContent {
                     i += 1;
                 }
                 Ok(ItemContent::Any(values))
+            }
+            BLOCK_ITEM_MOVE_REF_NUMBER => {
+                let m = Move::decode(decoder)?;
+                Ok(ItemContent::Move(Box::new(m)))
             }
             BLOCK_ITEM_DOC_REF_NUMBER => Ok(ItemContent::Doc(
                 decoder.read_string()?.into(),

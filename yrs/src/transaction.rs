@@ -253,6 +253,14 @@ impl Transaction {
                                     if let Some(split) =
                                         store.blocks.split_block_inner(ptr, clock - item.id.clock)
                                     {
+                                        if let Block::Item(item) = ptr.deref() {
+                                            if item.moved.is_some() {
+                                                if let Some(&prev_moved) = self.prev_moved.get(&ptr)
+                                                {
+                                                    self.prev_moved.insert(split, prev_moved);
+                                                }
+                                            }
+                                        }
                                         index += 1;
                                         self.merge_blocks.push(*split.id());
                                     }
@@ -266,11 +274,21 @@ impl Transaction {
                                             if !item.is_deleted() {
                                                 if item.id.clock + item.len() > clock_end {
                                                     if let Some(split) =
-                                                        self.store_mut().blocks.split_block_inner(
+                                                        self.store.blocks.split_block_inner(
                                                             block,
                                                             clock_end - item.id.clock,
                                                         )
                                                     {
+                                                        if let Block::Item(item) = block.deref() {
+                                                            if item.moved.is_some() {
+                                                                if let Some(&prev_moved) =
+                                                                    self.prev_moved.get(&block)
+                                                                {
+                                                                    self.prev_moved
+                                                                        .insert(split, prev_moved);
+                                                                }
+                                                            }
+                                                        }
                                                         self.merge_blocks.push(*split.id());
                                                         index += 1;
                                                     }
@@ -567,6 +585,7 @@ impl Transaction {
                 }
             }
         }
+
         // 7. get merge_structs and try to merge to left
         for id in self.merge_blocks.iter() {
             if let Some(blocks) = self.store.blocks.get_mut(&id.client) {
@@ -580,8 +599,8 @@ impl Transaction {
             }
         }
 
-        let store = self.store();
         // 8. emit 'afterTransactionCleanup'
+        let store = self.store();
         if let Some(eh) = store.after_transaction_events.as_ref() {
             let event = AfterTransactionEvent {
                 before_state: self.before_state.clone(),
@@ -658,14 +677,21 @@ impl Transaction {
 
     pub(crate) fn split_by_snapshot(&mut self, snapshot: &Snapshot) {
         let mut merge_blocks: Vec<ID> = Vec::new();
-        let blocks = &mut self.store_mut().blocks;
+        let blocks = &mut self.store.blocks;
         for (client, &clock) in snapshot.state_map.iter() {
             if let Some(list) = blocks.get(client) {
                 if let Some(ptr) = list.get_block(clock) {
                     let ptr_clock = ptr.id().clock;
                     if ptr_clock < clock {
-                        if let Some(ptr) = blocks.split_block_inner(ptr, clock - ptr_clock) {
-                            merge_blocks.push(*ptr.id());
+                        if let Some(right) = blocks.split_block_inner(ptr, clock - ptr_clock) {
+                            if let Block::Item(item) = ptr.deref() {
+                                if item.moved.is_some() {
+                                    if let Some(&prev_moved) = self.prev_moved.get(&ptr) {
+                                        self.prev_moved.insert(right, prev_moved);
+                                    }
+                                }
+                            }
+                            merge_blocks.push(*right.id());
                         }
                     }
                 }
@@ -680,6 +706,13 @@ impl Transaction {
                         let clock = block.id().clock;
                         if clock < r.start {
                             if let Some(ptr) = blocks.split_block_inner(block, r.start - clock) {
+                                if let Block::Item(item) = block.deref() {
+                                    if item.moved.is_some() {
+                                        if let Some(&prev_moved) = self.prev_moved.get(&block) {
+                                            self.prev_moved.insert(ptr, prev_moved);
+                                        }
+                                    }
+                                }
                                 merge_blocks.push(*ptr.id());
                             }
                             list = blocks.get(client).unwrap();
@@ -694,6 +727,13 @@ impl Transaction {
                             if let Some(ptr) =
                                 blocks.split_block_inner(block, block_id.clock + block_len - r.end)
                             {
+                                if let Block::Item(item) = block.deref() {
+                                    if item.moved.is_some() {
+                                        if let Some(&prev_moved) = self.prev_moved.get(&block) {
+                                            self.prev_moved.insert(ptr, prev_moved);
+                                        }
+                                    }
+                                }
                                 merge_blocks.push(*ptr.id());
                             }
                             list = blocks.get(client).unwrap();

@@ -1,6 +1,7 @@
 use crate::block::{ItemContent, Prelim};
 use crate::cursor::{ArrayCursor, Assoc, Cursor};
 use crate::event::Subscription;
+use crate::moving::RelativePosition;
 use crate::types::{
     event_change_set, Branch, BranchPtr, Change, ChangeSet, Observers, Path, Value, TYPE_REFS_ARRAY,
 };
@@ -332,6 +333,29 @@ impl ArrayEvent {
     fn changes(&self, txn: &Transaction) -> &ChangeSet<Change> {
         let change_set = unsafe { self.change_set.get().as_mut().unwrap() };
         change_set.get_or_insert_with(|| Box::new(event_change_set(txn, self.target.0)))
+    }
+}
+
+pub(crate) struct ArraySliceConcat;
+
+impl SliceConcat for ArraySliceConcat {
+    fn slice(content: &mut ItemContent, offset: usize, len: usize) -> Vec<Value> {
+        let mut content = content.get_content();
+        if content.len() <= len && offset == 0 {
+            content
+        } else {
+            if offset != 0 {
+                for _ in content.drain(0..offset) { /* do nothing */ }
+            }
+            for _ in content.drain(len..) { /* do nothing */ }
+            content
+        }
+    }
+
+    #[inline]
+    fn concat(mut a: Vec<Value>, b: Vec<Value>) -> Vec<Value> {
+        a.extend(b);
+        a
     }
 }
 
@@ -888,6 +912,7 @@ mod test {
     use crate::cursor::Assoc;
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encoder, EncoderV1};
+    use lib0::decoding::{Cursor, Read};
     use std::sync::atomic::{AtomicI64, Ordering};
 
     static UNIQUE_NUMBER: AtomicI64 = AtomicI64::new(0);
@@ -896,7 +921,34 @@ mod test {
         UNIQUE_NUMBER.fetch_add(1, Ordering::SeqCst)
     }
 
-    fn array_transactions() -> [Box<dyn Fn(&mut Doc, &mut StdRng)>; 4] {
+    fn array_transactions() -> [Box<dyn Fn(&mut Doc, &mut StdRng)>; 5] {
+        fn move_one(doc: &mut Doc, rng: &mut StdRng) {
+            let mut txn = doc.transact();
+            let yarray = txn.get_array("array");
+            if yarray.len() != 0 {
+                let pos = rng.between(0, yarray.len() - 1);
+                let len = 1;
+                let new_pos_adjusted = rng.between(0, yarray.len() - 1);
+                let new_pos = new_pos_adjusted + if new_pos_adjusted > pos { len } else { 0 };
+                if let Any::Array(expected) = yarray.to_json() {
+                    let mut expected = Vec::from(expected);
+                    let moved = expected.remove(pos as usize);
+                    let insert_pos = if pos < new_pos {
+                        new_pos - len
+                    } else {
+                        new_pos
+                    } as usize;
+                    expected.insert(insert_pos, moved);
+
+                    yarray.move_to(&mut txn, pos, new_pos);
+
+                    let actual = yarray.to_json();
+                    assert_eq!(actual, Any::Array(expected.into_boxed_slice()))
+                } else {
+                    panic!("should not happen")
+                }
+            }
+        }
         fn insert(doc: &mut Doc, rng: &mut StdRng) {
             let mut txn = doc.transact();
             let yarray = txn.get_array("array");
@@ -982,6 +1034,7 @@ mod test {
             Box::new(insert_type_array),
             Box::new(insert_type_map),
             Box::new(delete),
+            Box::new(move_one),
         ]
     }
 
@@ -992,6 +1045,11 @@ mod test {
     #[test]
     fn fuzzy_test_6() {
         fuzzy(6)
+    }
+
+    #[test]
+    fn fuzzy_test_300() {
+        fuzzy(300)
     }
 
     #[test]
@@ -1177,5 +1235,28 @@ mod test {
 
         assert_eq!(a1.len(), 4);
         assert_eq!(a1.to_json(), a2.to_json());
+    }
+
+    fn move_tests<P: AsRef<std::path::Path>>(path: P) {
+        let mut file = File::open(path).unwrap();
+        let mut buf = Vec::new();
+        std::io::Read::read_to_end(&mut file, &mut buf).unwrap();
+        let mut decoder = DecoderV1::new(Cursor::new(&buf));
+
+        let test_case_count: u32 = decoder.read_var().unwrap();
+        for i in 0..test_case_count {
+            let mut doc = Doc::new();
+            let array = doc.transact().get_array("array");
+
+            let update_count: u32 = decoder.read_var().unwrap();
+            for j in 0..update_count {
+                let data = decoder.read_buf().unwrap();
+                let update = Update::decode_v1(data).unwrap();
+                doc.transact().apply_update(update);
+            }
+            let expected = decoder.read_any().unwrap();
+            let actual = array.to_json();
+            assert_eq!(actual, expected, "failed at test case nr {}", i);
+        }
     }
 }
