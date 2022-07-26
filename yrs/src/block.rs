@@ -431,11 +431,11 @@ impl BlockPtr {
                 item.content.gc();
                 let len = item.len();
                 if parent_gced {
-                    unsafe {
+                    
                         let gc = Block::GC(BlockRange::new(item.id, len));
-                        let self_mut = self.0.as_mut();
+                        let self_mut = unsafe { self.0.as_mut() };
                         *self_mut = gc;
-                    }
+                    
                 } else {
                     item.content = ItemContent::Deleted(len);
                     item.info.clear_countable();
