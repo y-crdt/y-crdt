@@ -319,14 +319,17 @@ impl Update {
                     }
                 }
                 if let ItemContent::Move(m) = &item.content {
-                    let start = m.start.id;
-                    if start.clock >= local_sv.get(&start.client) {
-                        return Some(start.client);
+                    if let Some(start) = m.start() {
+                        if start.id.clock >= local_sv.get(&start.id.client) {
+                            return Some(start.id.client);
+                        }
                     }
+
                     if !m.is_collapsed() {
-                        let end = m.end.id;
-                        if end.clock >= local_sv.get(&end.client) {
-                            return Some(end.client);
+                        if let Some(end) = m.end() {
+                            if end.id.clock >= local_sv.get(&end.id.client) {
+                                return Some(end.id.client);
+                            }
                         }
                     }
                 }

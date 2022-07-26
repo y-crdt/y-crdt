@@ -1,6 +1,5 @@
 use crate::cursor::{CursorRange, Move};
 use crate::doc::OffsetKind;
-use crate::moving::Move;
 use crate::store::Store;
 use crate::types::{
     Attrs, Branch, BranchPtr, TypePtr, Value, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
@@ -123,7 +122,6 @@ impl BlockPtr {
                 Block::Item(item) => {
                     let client = item.id.client;
                     let clock = item.id.clock;
-                    println!("splicing at {} - {}", offset, item);
                     let content = item.content.splice(offset as usize, encoding).unwrap();
                     item.len = offset;
                     let mut new = Box::new(Block::Item(Item {
@@ -629,7 +627,7 @@ impl Block {
                         encoder.write_string(parent_sub.as_ref());
                     }
                 }
-                item.content.encode_with_offset(encoder, offset, store);
+                item.content.encode_with_offset(encoder, offset);
             }
             Block::GC(gc) => {
                 encoder.write_info(BLOCK_GC_REF_NUMBER);
@@ -678,7 +676,7 @@ impl Block {
                         encoder.write_string(parent_sub.as_ref());
                     }
                 }
-                item.content.encode(encoder, store);
+                item.content.encode(encoder);
             }
             Block::GC(gc) => {
                 encoder.write_info(BLOCK_GC_REF_NUMBER);
@@ -1417,12 +1415,7 @@ impl ItemContent {
         }
     }
 
-    pub(crate) fn encode_with_offset<E: Encoder>(
-        &self,
-        encoder: &mut E,
-        offset: u32,
-        store: Option<&Store>,
-    ) {
+    pub(crate) fn encode_with_offset<E: Encoder>(&self, encoder: &mut E, offset: u32) {
         match self {
             ItemContent::Deleted(len) => encoder.write_len(*len - offset),
             ItemContent::Binary(buf) => encoder.write_buf(buf),
@@ -1459,11 +1452,11 @@ impl ItemContent {
                 encoder.write_string(key.as_ref());
                 encoder.write_any(any);
             }
-            ItemContent::Move(m) => m.encode(encoder, store),
+            ItemContent::Move(m) => m.encode(encoder),
         }
     }
 
-    pub(crate) fn encode<E: Encoder>(&self, encoder: &mut E, store: Option<&Store>) {
+    pub(crate) fn encode<E: Encoder>(&self, encoder: &mut E) {
         match self {
             ItemContent::Deleted(len) => encoder.write_len(*len),
             ItemContent::Binary(buf) => encoder.write_buf(buf),
@@ -1497,7 +1490,7 @@ impl ItemContent {
                 encoder.write_string(key.as_ref());
                 encoder.write_any(any);
             }
-            ItemContent::Move(m) => m.encode(encoder, store),
+            ItemContent::Move(m) => m.encode(encoder),
         }
     }
 

@@ -156,7 +156,7 @@ impl Move {
                 if !start_item.is_deleted() {
                     if let ItemContent::Move(m) = &start_item.content {
                         if m.find_move_loop(start_ptr, &mut HashSet::from([item])) {
-                            item.delete_as_cleanup(txn);
+                            item.delete_as_cleanup(txn, adapt_priority);
                             return;
                         }
                     }
@@ -177,6 +177,82 @@ impl Move {
         if adapt_priority {
             self.range.priority = max_priority + 1;
         }
+    }
+}
+
+impl Encode for Move {
+    fn encode<E: Encoder>(&self, encoder: &mut E) {
+        let is_collapsed = self.is_collapsed();
+        let flags = {
+            let mut b = 0;
+            if is_collapsed {
+                b |= 0b0000_0001
+            }
+            if let Some(start) = self.start.as_ref() {
+                if start.assoc == Assoc::Right {
+                    b |= 0b0000_0010
+                }
+            } else {
+                b |= 0b0000_1000
+            }
+            if let Some(end) = self.end.as_ref() {
+                if end.assoc == Assoc::Right {
+                    b |= 0b0000_0100
+                }
+            } else {
+                b |= 0b0001_0000
+            }
+            b |= self.priority << 6;
+            b
+        };
+        encoder.write_var(flags);
+        if let Some(start) = self.start.as_ref() {
+            encoder.write_var(start.id.client);
+            encoder.write_var(start.id.clock);
+        }
+        if !is_collapsed {
+            if let Some(end) = self.end.as_ref() {
+                encoder.write_var(end.id.client);
+                encoder.write_var(end.id.clock);
+            }
+        }
+    }
+}
+
+impl Decode for Move {
+    fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, Error> {
+        let flags: i32 = decoder.read_var()?;
+        let is_collapsed = flags & 0b0000_0001 != 0;
+        let start_assoc = if flags & 0b0000_0010 != 0 {
+            Assoc::Right
+        } else {
+            Assoc::Left
+        };
+        let end_assoc = if flags & 0b0000_0100 != 0 {
+            Assoc::Right
+        } else {
+            Assoc::Left
+        };
+        //TODO use BIT3 & BIT4 to indicate the case `null` is the start/end
+        // BIT5 is reserved for future extensions
+        let priority = flags >> 6;
+        let start = if flags & 0b0000_1000 == 0 {
+            let id = ID::new(decoder.read_var()?, decoder.read_var()?);
+            Some(CursorRangeEdge::new(id, start_assoc, None))
+        } else {
+            None
+        };
+        let end = if is_collapsed {
+            let id = start.as_ref().unwrap().id;
+            Some(CursorRangeEdge::new(id, end_assoc, None))
+        } else if flags & 0b0001_0000 == 0 {
+            let id = ID::new(decoder.read_var()?, decoder.read_var()?);
+            Some(CursorRangeEdge::new(id, end_assoc, None))
+        } else {
+            None
+        };
+        let range = CursorRange::new(start, end, TypePtr::Unknown, priority);
+        Ok(Move::new(range))
     }
 }
 
@@ -531,8 +607,8 @@ impl std::fmt::Display for CursorRange {
 pub struct CursorRangeEdge {
     /// Cursor range edge block ID. If associativity if [Assoc::Left], then ID points at the end of
     /// of a block to include. If it's [Assoc::Right], the ID points at the beginning of a block.
-    id: ID,
-    assoc: Assoc,
+    pub id: ID,
+    pub assoc: Assoc,
     ptr: Cell<Option<BlockPtr>>,
 }
 
@@ -935,7 +1011,6 @@ impl Cursor for ArrayCursor {
             current_attrs: None,
         };
         let ptr = txn.create_item(&pos, value, None);
-        println!("inserting: {:?}", ptr.as_item());
         self.current_block_offset = 0;
         self.iter.next();
     }
@@ -1413,7 +1488,6 @@ impl<'txn> Iterator for ChangeIter<'txn> {
     fn next(&mut self) -> Option<Self::Item> {
         if let Some(ptr) = self.next {
             let mut result = self.status(ptr);
-            println!("result: {:?}", result);
             let mut retry = false;
             self.next = if let Block::Item(item) = ptr.deref() {
                 if let Some(move_destination) = item.moved {

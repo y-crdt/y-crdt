@@ -1248,10 +1248,7 @@ pub(crate) fn event_change_set(txn: &Transaction, branch: BranchPtr) -> ChangeSe
     let mut i = ChangeIter::new(branch.start, txn);
     let encoding = txn.store.options.offset_kind;
 
-    println!("---");
-    println!("{:#?}", txn.store());
     while let Some(change) = i.next() {
-        println!("next change: {:?}", change);
         match change {
             BlockStatus::Unchanged(ptr) if ptr.is_deleted() => { /* do nothing */ }
             BlockStatus::Unchanged(ptr) => asm.retain(ptr.content_len(encoding)),

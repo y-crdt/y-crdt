@@ -1,7 +1,6 @@
 use crate::block::{ItemContent, Prelim};
 use crate::cursor::{ArrayCursor, Assoc, Cursor};
 use crate::event::Subscription;
-use crate::moving::RelativePosition;
 use crate::types::{
     event_change_set, Branch, BranchPtr, Change, ChangeSet, Observers, Path, Value, TYPE_REFS_ARRAY,
 };
@@ -336,29 +335,6 @@ impl ArrayEvent {
     }
 }
 
-pub(crate) struct ArraySliceConcat;
-
-impl SliceConcat for ArraySliceConcat {
-    fn slice(content: &mut ItemContent, offset: usize, len: usize) -> Vec<Value> {
-        let mut content = content.get_content();
-        if content.len() <= len && offset == 0 {
-            content
-        } else {
-            if offset != 0 {
-                for _ in content.drain(0..offset) { /* do nothing */ }
-            }
-            for _ in content.drain(len..) { /* do nothing */ }
-            content
-        }
-    }
-
-    #[inline]
-    fn concat(mut a: Vec<Value>, b: Vec<Value>) -> Vec<Value> {
-        a.extend(b);
-        a
-    }
-}
-
 #[cfg(test)]
 mod test {
     use crate::test_utils::{exchange_updates, run_scenario, RngExt};
@@ -370,6 +346,7 @@ mod test {
     use rand::Rng;
     use std::cell::{Cell, RefCell};
     use std::collections::{HashMap, HashSet};
+    use std::fs::File;
     use std::ops::Deref;
     use std::rc::Rc;
 
@@ -910,7 +887,7 @@ mod test {
     }
 
     use crate::cursor::Assoc;
-    use crate::updates::decoder::Decode;
+    use crate::updates::decoder::{Decode, Decoder, DecoderV1};
     use crate::updates::encoder::{Encoder, EncoderV1};
     use lib0::decoding::{Cursor, Read};
     use std::sync::atomic::{AtomicI64, Ordering};
@@ -943,7 +920,7 @@ mod test {
                     yarray.move_to(&mut txn, pos, new_pos);
 
                     let actual = yarray.to_json();
-                    assert_eq!(actual, Any::Array(expected.into_boxed_slice()))
+                    assert_eq!(actual, Any::Array(expected))
                 } else {
                     panic!("should not happen")
                 }
@@ -1249,7 +1226,7 @@ mod test {
             let array = doc.transact().get_array("array");
 
             let update_count: u32 = decoder.read_var().unwrap();
-            for j in 0..update_count {
+            for _ in 0..update_count {
                 let data = decoder.read_buf().unwrap();
                 let update = Update::decode_v1(data).unwrap();
                 doc.transact().apply_update(update);
