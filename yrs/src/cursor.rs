@@ -658,11 +658,8 @@ impl CursorRangeEdge {
     fn repair(&self, store: &mut Store) {
         let ptr = if self.assoc == Assoc::Right {
             store.blocks.get_item_clean_start(&self.id)
-        } else if let Some(Block::Item(item)) = store.blocks.get_item_clean_end(&self.id).as_deref()
-        {
-            item.right
         } else {
-            None
+            store.blocks.get_item_clean_end(&self.id)
         };
         self.ptr.set(ptr);
     }
@@ -897,6 +894,10 @@ impl ArrayCursor {
             // or that the current_block has been deleted
             if self.current_block_offset != item.len as usize && !item.is_deleted() {
                 let mut slice = &mut buf[read..];
+                println!(
+                    "read(1) - offset: {} item: {}",
+                    self.current_block_offset, item
+                );
                 let r = slice.read_content(&item.content, self.current_block_offset);
                 read += r;
                 if r == 0 || read == buf.len() {
@@ -911,6 +912,10 @@ impl ArrayCursor {
             if let Some(Block::Item(item)) = self.iter.next().as_deref() {
                 self.current_block_offset = 0;
                 if !item.is_deleted() {
+                    println!(
+                        "read(1) - offset: {} item: {}",
+                        self.current_block_offset, item
+                    );
                     let mut slice = &mut buf[read..];
                     let r = slice.read_content(&item.content, self.current_block_offset);
                     read += r;
@@ -1151,9 +1156,14 @@ impl Cursor for ArrayCursor {
         }
         if let Some(current) = self.current() {
             let len = current.len() as usize;
-            if self.current_block_offset > len {
+            while self.current_block_offset > len {
                 // in result of repairing cursor range edges we've split block that cursor was
-                // currently pointing to
+                // currently pointing to, we need to repair it as well
+                self.iter.next = if let Some(Block::Item(item)) = self.current().as_deref() {
+                    item.right
+                } else {
+                    self.iter.next
+                };
                 self.iter.next();
                 self.current_block_offset -= len;
             }
