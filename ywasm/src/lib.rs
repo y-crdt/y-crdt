@@ -257,6 +257,28 @@ pub fn encode_state_vector(doc: &mut YDoc) -> Uint8Array {
     doc.begin_transaction().state_vector_v1()
 }
 
+/// Returns a string dump representation of a given `update` encoded using lib0 v1 encoding.
+#[wasm_bindgen(js_name = debugUpdateV1)]
+pub fn debug_update_v1(update: Uint8Array) -> Result<String, JsValue> {
+    let update: Vec<u8> = update.to_vec();
+    let mut decoder = DecoderV1::from(update.as_slice());
+    match Update::decode(&mut decoder) {
+        Ok(update) => Ok(format!("{:#?}", update)),
+        Err(e) => Err(JsValue::from(e.to_string())),
+    }
+}
+
+/// Returns a string dump representation of a given `update` encoded using lib0 v2 encoding.
+#[wasm_bindgen(js_name = debugUpdateV2)]
+pub fn debug_update_v2(update: Uint8Array) -> Result<String, JsValue> {
+    let update: Vec<u8> = update.to_vec();
+    let mut decoder = DecoderV2::from(update.as_slice());
+    match Update::decode(&mut decoder) {
+        Ok(update) => Ok(format!("{:#?}", update)),
+        Err(e) => Err(JsValue::from(e.to_string())),
+    }
+}
+
 /// Encodes all updates that have happened since a given version `vector` into a compact delta
 /// representation using lib0 v1 encoding. If `vector` parameter has not been provided, generated
 /// delta payload will contain all changes of a current ywasm document, working effectivelly as its
@@ -2590,12 +2612,10 @@ impl YXmlText {
     /// unspecified order.
     #[wasm_bindgen(js_name = attributes)]
     pub fn attributes(&self) -> YXmlAttributes {
-        
-            let this: *const XmlText = &self.0;
-            let static_iter: ManuallyDrop<Attributes<'static>> =
-                unsafe { ManuallyDrop::new((*this).attributes()) };
-            YXmlAttributes(static_iter)
-        
+        let this: *const XmlText = &self.0;
+        let static_iter: ManuallyDrop<Attributes<'static>> =
+            unsafe { ManuallyDrop::new((*this).attributes()) };
+        YXmlAttributes(static_iter)
     }
 
     /// Subscribes to all operations happening over this instance of `YXmlText`. All changes are

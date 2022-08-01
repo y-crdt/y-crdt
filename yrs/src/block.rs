@@ -431,11 +431,9 @@ impl BlockPtr {
                 item.content.gc();
                 let len = item.len();
                 if parent_gced {
-                    
-                        let gc = Block::GC(BlockRange::new(item.id, len));
-                        let self_mut = unsafe { self.0.as_mut() };
-                        *self_mut = gc;
-                    
+                    let gc = Block::GC(BlockRange::new(item.id, len));
+                    let self_mut = unsafe { self.0.as_mut() };
+                    *self_mut = gc;
                 } else {
                     item.content = ItemContent::Deleted(len);
                     item.info.clear_countable();
@@ -1673,8 +1671,12 @@ impl std::fmt::Display for Item {
         write!(f, "({}, len: {}", self.id, self.len)?;
         match &self.parent {
             TypePtr::Unknown => {}
-            TypePtr::Branch(_) => {
-                write!(f, ", parent: <branch>")?;
+            TypePtr::Branch(b) => {
+                if let Some(ptr) = b.item.as_ref() {
+                    write!(f, ", parent: {}", ptr.id())?;
+                } else {
+                    write!(f, ", parent: <root>")?;
+                }
             }
             other => {
                 write!(f, ", parent: {}", other)?;

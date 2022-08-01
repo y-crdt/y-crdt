@@ -216,7 +216,9 @@ mod test {
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
     use crate::{DeleteSet, Doc, StateVector, SubscriptionId};
+    use lib0::any::Any;
     use std::cell::{Cell, RefCell};
+    use std::collections::HashMap;
     use std::rc::Rc;
 
     #[test]
@@ -592,5 +594,45 @@ mod test {
 
         let expected = vec![(0..1), (1..2), (2..3), (3..4), (4..5)];
         assert_eq!(acc.take(), expected);
+    }
+
+    #[test]
+    fn ycrdt_issue_174() {
+        let mut doc = Doc::new();
+        let bin = &[
+            0, 0, 11, 176, 133, 128, 149, 31, 205, 190, 199, 196, 21, 7, 3, 0, 3, 5, 0, 17, 168, 1,
+            8, 0, 40, 0, 8, 0, 40, 0, 8, 0, 40, 0, 33, 1, 39, 110, 91, 49, 49, 49, 114, 111, 111,
+            116, 105, 51, 50, 114, 111, 111, 116, 115, 116, 114, 105, 110, 103, 114, 111, 111, 116,
+            97, 95, 108, 105, 115, 116, 114, 111, 111, 116, 97, 95, 109, 97, 112, 114, 111, 111,
+            116, 105, 51, 50, 95, 108, 105, 115, 116, 114, 111, 111, 116, 105, 51, 50, 95, 109, 97,
+            112, 114, 111, 111, 116, 115, 116, 114, 105, 110, 103, 95, 108, 105, 115, 116, 114,
+            111, 111, 116, 115, 116, 114, 105, 110, 103, 95, 109, 97, 112, 65, 1, 4, 3, 4, 6, 4, 6,
+            4, 5, 4, 8, 4, 7, 4, 11, 4, 10, 3, 0, 5, 1, 6, 0, 1, 0, 1, 0, 1, 2, 65, 8, 2, 8, 0,
+            125, 2, 119, 5, 119, 111, 114, 108, 100, 118, 2, 1, 98, 119, 1, 97, 1, 97, 125, 1, 118,
+            2, 1, 98, 119, 1, 98, 1, 97, 125, 2, 125, 1, 125, 2, 119, 1, 97, 119, 1, 98, 8, 0, 1,
+            141, 223, 163, 226, 10, 1, 0, 1,
+        ];
+        let update = Update::decode_v2(bin).unwrap();
+        doc.transact().apply_update(update);
+
+        let mut txn = doc.transact();
+        let root = txn.get_map("root");
+        let actual = root.to_json();
+        let expected = Any::from_json(
+            r#"{
+              "string": "world",
+              "a_list": [{"b": "a", "a": 1}],
+              "i32_map": {"1": 2},
+              "a_map": {
+                "1": {"a": 2, "b": "b"}
+              },
+              "string_list": ["a"],
+              "i32": 2,
+              "string_map": {"1": "b"},
+              "i32_list": [1]
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(actual, expected);
     }
 }

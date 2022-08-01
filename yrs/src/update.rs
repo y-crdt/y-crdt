@@ -308,16 +308,27 @@ impl Update {
                     }
                 }
 
-                if let TypePtr::Branch(parent) = &item.parent {
-                    if let Some(block) = &parent.item {
-                        let parent_id = block.id();
+                match &item.parent {
+                    TypePtr::Branch(parent) => {
+                        if let Some(block) = &parent.item {
+                            let parent_id = block.id();
+                            if parent_id.client != item.id.client
+                                && parent_id.clock >= local_sv.get(&parent_id.client)
+                            {
+                                return Some(parent_id.client);
+                            }
+                        }
+                    }
+                    TypePtr::ID(parent_id) => {
                         if parent_id.client != item.id.client
                             && parent_id.clock >= local_sv.get(&parent_id.client)
                         {
                             return Some(parent_id.client);
                         }
                     }
+                    _ => {}
                 }
+
                 if let ItemContent::Move(m) = &item.content {
                     let start = m.start.id;
                     if start.clock >= local_sv.get(&start.client) {
