@@ -1120,12 +1120,17 @@ typedef struct {
 } ObserveUpdatesTest;
 
 void reset_observe_updates(ObserveUpdatesTest* t) {
-    free(t->incoming_update);
-    free(t->update);
-    t->incoming_update = NULL;
-    t->update = NULL;
-    t->len = 0;
-    t->incoming_len = 0;
+    if (NULL != t->incoming_update) {
+        free(t->incoming_update);
+        t->incoming_update = NULL;
+        t->incoming_len = 0;
+    }
+    if (NULL != t->update) {
+        //TODO: since on Windows Rust uses HeapAlloc/HeapFree - the code below should take that into account
+        free(t->update);
+        t->update = NULL;
+        t->len = 0;
+    }
 }
 
 void observe_updates(void* state, int len, const unsigned char* bytes) {
@@ -1141,40 +1146,41 @@ TEST_CASE("YDoc observe updates V1") {
     YTransaction *txn = ytransaction_new(doc1);
     Branch *txt1 = ytext(txn, "test");
     ytext_insert(txt1, txn, 0, "hello", NULL);
-    ObserveUpdatesTest t;
-    t.incoming_len = 0;
-    t.incoming_update = NULL;
-    t.update = ytransaction_state_diff_v1(txn, NULL, 0, &t.len);
+    ObserveUpdatesTest* t = (ObserveUpdatesTest*)malloc(sizeof(ObserveUpdatesTest));
+    t->incoming_len = 0;
+    t->incoming_update = NULL;
+    t->update = ytransaction_state_diff_v1(txn, NULL, 0, &t->len);
     ytransaction_commit(txn);
 
     YDoc *doc2 = ydoc_new_with_id(2);
     txn = ytransaction_new(doc2);
     Branch *txt2 = ytext(txn, "test");
-    unsigned int subscription_id = ydoc_observe_updates_v1(doc2, &t, observe_updates);
-    ytransaction_apply(txn, t.update, t.len);
+    unsigned int subscription_id = ydoc_observe_updates_v1(doc2, t, observe_updates);
+    ytransaction_apply(txn, t->update, t->len);
     ytransaction_commit(txn);
 
-    REQUIRE_EQ(t.len, t.incoming_len);
-    REQUIRE(0 == memcmp((void*)t.update, (void*)t.incoming_update, (size_t)t.len));
-    reset_observe_updates(&t);
+    REQUIRE_EQ(t->len, t->incoming_len);
+    REQUIRE(0 == memcmp((void*)t->update, (void*)t->incoming_update, (size_t)t->len));
+    reset_observe_updates(t);
 
     // check unsubscribe
     ydoc_unobserve_updates_v1(doc2, subscription_id);
 
     txn = ytransaction_new(doc1);
     ytext_insert(txt1, txn, 5, " world", NULL);
-    t.update = ytransaction_state_diff_v1(txn, NULL, 0, &t.len);
+    t->update = ytransaction_state_diff_v1(txn, NULL, 0, &t->len);
     ytransaction_commit(txn);
 
     txn = ytransaction_new(doc2);
-    ytransaction_apply(txn, t.update, t.len);
+    ytransaction_apply(txn, t->update, t->len);
     ytransaction_commit(txn);
 
-    REQUIRE_EQ(t.incoming_len, 0);
-    REQUIRE(t.incoming_update == NULL);
+    REQUIRE_EQ(t->incoming_len, 0);
+    REQUIRE(t->incoming_update == NULL);
 
     ydoc_destroy(doc1);
     ydoc_destroy(doc2);
+    free(t);
 }
 
 TEST_CASE("YDoc observe updates V2") {
@@ -1182,40 +1188,41 @@ TEST_CASE("YDoc observe updates V2") {
     YTransaction *txn = ytransaction_new(doc1);
     Branch *txt1 = ytext(txn, "test");
     ytext_insert(txt1, txn, 0, "hello", NULL);
-    ObserveUpdatesTest t;
-    t.incoming_len = 0;
-    t.incoming_update = NULL;
-    t.update = ytransaction_state_diff_v2(txn, NULL, 0, &t.len);
+    ObserveUpdatesTest* t = (ObserveUpdatesTest*)malloc(sizeof(ObserveUpdatesTest));
+    t->incoming_len = 0;
+    t->incoming_update = NULL;
+    t->update = ytransaction_state_diff_v2(txn, NULL, 0, &t->len);
     ytransaction_commit(txn);
 
     YDoc *doc2 = ydoc_new_with_id(2);
     txn = ytransaction_new(doc2);
     Branch *txt2 = ytext(txn, "test");
-    unsigned int subscription_id = ydoc_observe_updates_v2(doc2, &t, observe_updates);
-    ytransaction_apply_v2(txn, t.update, t.len);
+    unsigned int subscription_id = ydoc_observe_updates_v2(doc2, t, observe_updates);
+    ytransaction_apply_v2(txn, t->update, t->len);
     ytransaction_commit(txn);
 
-    REQUIRE_EQ(t.len, t.incoming_len);
-    REQUIRE(0 == memcmp((void*)t.update, (void*)t.incoming_update, (size_t)t.len));
-    reset_observe_updates(&t);
+    REQUIRE_EQ(t->len, t->incoming_len);
+    REQUIRE(0 == memcmp((void*)t->update, (void*)t->incoming_update, (size_t)t->len));
+    reset_observe_updates(t);
 
     // check unsubscribe
     ydoc_unobserve_updates_v2(doc2, subscription_id);
 
     txn = ytransaction_new(doc1);
     ytext_insert(txt1, txn, 5, " world", NULL);
-    t.update = ytransaction_state_diff_v2(txn, NULL, 0, &t.len);
+    t->update = ytransaction_state_diff_v2(txn, NULL, 0, &t->len);
     ytransaction_commit(txn);
 
     txn = ytransaction_new(doc2);
-    ytransaction_apply_v2(txn, t.update, t.len);
+    ytransaction_apply_v2(txn, t->update, t->len);
     ytransaction_commit(txn);
 
-    REQUIRE_EQ(t.incoming_len, 0);
-    REQUIRE(t.incoming_update == NULL);
+    REQUIRE_EQ(t->incoming_len, 0);
+    REQUIRE(t->incoming_update == NULL);
 
     ydoc_destroy(doc1);
     ydoc_destroy(doc2);
+    free(t);
 }
 
 

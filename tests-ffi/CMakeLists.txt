@@ -4,13 +4,22 @@ set(CMAKE_CXX_STANDARD 14)
 
 message(STATUS "current project dir: " ${PROJECT_SOURCE_DIR})
 add_executable(yrs-ffi-tests main.cpp)
+
+if(WIN32)
 add_custom_target(yrs-deps
-  # DEBUG
-  COMMAND ${CMAKE_COMMAND} -E copy "${PROJECT_SOURCE_DIR}/../target/debug/libyrs.a" "${PROJECT_SOURCE_DIR}/lib"
-)
+    # DEBUG
+    COMMAND ${CMAKE_COMMAND} -E copy "${PROJECT_SOURCE_DIR}/../target/debug/yrs.lib" "${PROJECT_SOURCE_DIR}/lib"
+    )
+else()
+    add_custom_target(yrs-deps
+        # DEBUG
+        COMMAND ${CMAKE_COMMAND} -E copy "${PROJECT_SOURCE_DIR}/../target/debug/libyrs.a" "${PROJECT_SOURCE_DIR}/lib"
+    )
+endif()
 
 include_directories(${PROJECT_SOURCE_DIR}/lib)
 include_directories(${PROJECT_SOURCE_DIR}/include)
+
 link_directories(${PROJECT_SOURCE_DIR}/lib)
 add_dependencies(yrs-ffi-tests yrs-deps)
 find_library (
