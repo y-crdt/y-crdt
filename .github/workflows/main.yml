@@ -90,7 +90,7 @@ jobs:
       - name: test web assembly
         run: cd ./tests-wasm && npm i && npm test
 
-  c-ffi:
+  c-ffi-linux:
     runs-on: ubuntu-latest
     needs: build
     steps:
@@ -123,3 +123,46 @@ jobs:
 
       - name: run tests
         run: ./tests-ffi/yrs-ffi-tests
+
+  c-ffi-windows:
+    runs-on: windows-latest
+    needs: build
+    steps:
+      - name: checkout sources
+        uses: actions/checkout@v2
+
+      - name: install Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      - name: install cbindgen
+        run: cargo install cbindgen
+
+      - name: generate C bindings
+        run: cbindgen --config ./yffi/cbindgen.toml --crate yffi --output ./tests-ffi/include/libyrs.h
+
+      - name: install cmake
+        uses: lukka/get-cmake@latest
+
+      - name: Add msbuild to PATH
+        uses: microsoft/setup-msbuild@v1.1
+
+      - name: build libyrs
+        run: cargo build -p yffi
+
+      - name: generate Makefile
+        run: mkdir ./tests-ffi/lib && mkdir ./tests-ffi/cmake-build-debug && cd ./tests-ffi && cmake -S . -B ./cmake-build-debug -DVCPKG_TARGET_TRIPLET=x64-windows -A x64
+
+      - name: list directories
+        run: cd ./tests-ffi/cmake-build-debug && ls
+
+      - name: msbuild build
+        run: cd ./tests-ffi/cmake-build-debug && msbuild ./yrs-ffi-tests.sln
+
+      - name: list directories
+        run: cd ./tests-ffi/cmake-build-debug && ls
+
+      - name: run tests
+        run: ./tests-ffi/cmake-build-debug/yrs-ffi-tests

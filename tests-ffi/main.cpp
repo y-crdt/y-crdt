@@ -1,5 +1,9 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 
+#if defined(_WIN32) || defined(_WIN64) || defined(OS_WINDOWS) || defined(__CYGWIN32__)
+#include <windows.h>
+#include <heapapi.h>
+#endif
 #include <stdio.h>
 #include <string.h>
 #include "include/doctest.h"
@@ -1126,8 +1130,11 @@ void reset_observe_updates(ObserveUpdatesTest* t) {
         t->incoming_len = 0;
     }
     if (NULL != t->update) {
-        //TODO: since on Windows Rust uses HeapAlloc/HeapFree - the code below should take that into account
+#if defined(_WIN32) || defined(_WIN64) || defined(OS_WINDOWS) || defined(__CYGWIN32__)
+        HeapFree(GetProcessHeap(), 0, t->update);
+#else
         free(t->update);
+#endif
         t->update = NULL;
         t->len = 0;
     }
