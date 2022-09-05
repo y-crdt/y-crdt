@@ -419,7 +419,7 @@ impl BlockPtr {
                         false
                     }
                 } else {
-                    panic!("Defect: item has no parent")
+                    true // parent was GC'ed - delete this block
                 }
             }
         }
