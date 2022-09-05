@@ -1881,6 +1881,9 @@ impl std::fmt::Debug for Block {
 mod test {
     use crate::block::SplittableString;
     use crate::doc::OffsetKind;
+    use crate::test_utils::exchange_updates;
+    use crate::updates::decoder::Decode;
+    use crate::{Doc, PrelimArray, Update};
     use std::ops::Deref;
 
     #[test]
@@ -1922,5 +1925,33 @@ mod test {
         let (a, b) = s.split_at(30, OffsetKind::Bytes);
         assert_eq!(a, "Zażółć gęślą jaźń😀");
         assert_eq!(b, "ありがとうございます");
+    }
+
+    #[test]
+    fn integrate_block_of_gc_parent() {
+        let d1 = Doc::with_client_id(1);
+        let a1 = d1.transact().get_array("outer");
+        let mut txn = d1.transact();
+        a1.insert(&mut txn, 0, PrelimArray::from([1, 2]));
+        let a11 = a1.get(0).unwrap().to_yarray().unwrap();
+
+        let update = txn.encode_update_v1();
+
+        let d2 = Doc::with_client_id(1);
+        let a2 = d2.transact().get_array("outer");
+
+        let mut txn = d2.transact();
+        txn.apply_update(Update::decode_v1(&update).unwrap());
+        let a21 = a2.get(0).unwrap().to_yarray().unwrap();
+
+        // delete a11 while updating contents of a21
+        a1.remove(&mut d1.transact(), 0);
+
+        let mut txn = d2.transact();
+        a21.push_back(&mut txn, 3);
+
+        exchange_updates(&[&d1, &d2]);
+
+        assert_eq!(a1.to_json(), a2.to_json());
     }
 }
