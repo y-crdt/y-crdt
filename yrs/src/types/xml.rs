@@ -1,6 +1,7 @@
 use crate::block::{Block, Item, ItemContent, ItemPosition, Prelim};
+use crate::block_store::Snapshot;
 use crate::event::Subscription;
-use crate::types::text::TextEvent;
+use crate::types::text::{Diff, TextEvent};
 use crate::types::{
     event_change_set, event_keys, Attrs, Branch, BranchPtr, Change, ChangeSet, Delta, Entries,
     EntryChange, Map, Observers, Path, Text, TypePtr, Value, TYPE_REFS_XML_ELEMENT,
@@ -796,6 +797,20 @@ impl XmlText {
     /// This method may panic if `index` if greater than a length of this text.
     pub fn remove_range(&self, txn: &mut Transaction, index: u32, len: u32) {
         self.0.remove_range(txn, index, len)
+    }
+
+    pub fn diff(&self, txn: &mut Transaction) -> Vec<Diff> {
+        self.diff_range(txn, None, None)
+    }
+
+    /// Returns the Delta representation of this [XmlText] type.
+    pub fn diff_range(
+        &self,
+        txn: &mut Transaction,
+        hi: Option<&Snapshot>,
+        lo: Option<&Snapshot>,
+    ) -> Vec<Diff> {
+        self.0.diff_range(txn, hi, lo)
     }
 
     /// Subscribes a given callback to be triggered whenever current XML text is changed.
