@@ -41,6 +41,7 @@ mod block_iter;
 mod moving;
 #[cfg(test)]
 mod test_utils;
+mod txn;
 
 pub use crate::alt::{
     diff_updates_v1, diff_updates_v2, encode_state_vector_from_update_v1,
