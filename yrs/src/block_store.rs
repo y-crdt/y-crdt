@@ -41,6 +41,10 @@ impl StateVector {
         sv
     }
 
+    pub fn new(map: HashMap<ClientID, u32, BuildHasherDefault<ClientHasher>>) -> Self {
+        StateVector(map)
+    }
+
     /// Checks if current state vector includes given block identifier. Blocks, which identifiers
     /// can be found in a state vectors don't need to be encoded as part of an update, because they
     /// were already observed by their remote peer, current state vector refers to.
