@@ -1,4 +1,5 @@
 use lib0::any::Any;
+use lib0::decoding::Cursor;
 use lib0::error::Error;
 use std::collections::HashMap;
 use std::ffi::{c_void, CStr, CString};
@@ -653,9 +654,8 @@ pub unsafe extern "C" fn ytransaction_apply_v2(
     assert!(!txn.is_null());
     assert!(!diff.is_null());
 
-    let update = std::slice::from_raw_parts(diff as *const u8, diff_len as usize);
-    let mut decoder = DecoderV2::from(update);
-    match Update::decode(&mut decoder) {
+    let mut update = std::slice::from_raw_parts(diff as *const u8, diff_len as usize);
+    match Update::decode_v2(&mut update) {
         Ok(update) => {
             txn.as_mut().unwrap().apply_update(update);
             0
@@ -686,7 +686,7 @@ fn err_code(e: Error) -> c_int {
     match e {
         Error::IO(_) => ERR_CODE_IO,
         Error::VarIntSizeExceeded(_) => ERR_CODE_VAR_INT,
-        Error::EndOfBuffer => ERR_CODE_EOS,
+        Error::EndOfBuffer(_) => ERR_CODE_EOS,
         Error::UnexpectedValue => ERR_CODE_UNEXPECTED_VALUE,
         Error::Other(_) => ERR_CODE_OTHER,
         Error::InvalidJSON(_) => ERR_CODE_INVALID_JSON,

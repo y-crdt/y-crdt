@@ -218,7 +218,6 @@ mod test {
     use crate::{DeleteSet, Doc, StateVector, SubscriptionId};
     use lib0::any::Any;
     use std::cell::{Cell, RefCell};
-    use std::collections::HashMap;
     use std::rc::Rc;
 
     #[test]

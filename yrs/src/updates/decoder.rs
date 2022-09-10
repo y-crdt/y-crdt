@@ -18,7 +18,7 @@ pub trait Decode: Sized {
 
     /// Helper function for decoding 2nd version of lib0 encoding.
     fn decode_v2(data: &[u8]) -> Result<Self, Error> {
-        let mut decoder = DecoderV2::from(data);
+        let mut decoder = DecoderV2::new(Cursor::new(data))?;
         Self::decode(&mut decoder)
     }
 }
@@ -209,28 +209,28 @@ pub struct DecoderV2<'a> {
 }
 
 impl<'a> DecoderV2<'a> {
-    pub fn new(mut cursor: Cursor<'a>) -> Self {
+    pub fn new(mut cursor: Cursor<'a>) -> Result<Self, Error> {
         if cursor.has_content() {
             // read feature flag - currently unused
-            let _: u8 = cursor.read_u8().unwrap();
+            let _: u8 = cursor.read_u8()?;
         }
         let mut idx = cursor.next;
         let buf = cursor.buf;
 
-        let key_clock_buf = Self::read_buf(buf, &mut idx);
-        let client_buf = Self::read_buf(buf, &mut idx);
-        let left_clock_buf = Self::read_buf(buf, &mut idx);
-        let right_clock_buf = Self::read_buf(buf, &mut idx);
-        let info_buf = Self::read_buf(buf, &mut idx);
-        let string_buf = Self::read_buf(buf, &mut idx);
-        let parent_info_buf = Self::read_buf(buf, &mut idx);
-        let type_ref_buf = Self::read_buf(buf, &mut idx);
-        let len_buf = Self::read_buf(buf, &mut idx);
+        let key_clock_buf = Self::read_buf(buf, &mut idx)?;
+        let client_buf = Self::read_buf(buf, &mut idx)?;
+        let left_clock_buf = Self::read_buf(buf, &mut idx)?;
+        let right_clock_buf = Self::read_buf(buf, &mut idx)?;
+        let info_buf = Self::read_buf(buf, &mut idx)?;
+        let string_buf = Self::read_buf(buf, &mut idx)?;
+        let parent_info_buf = Self::read_buf(buf, &mut idx)?;
+        let type_ref_buf = Self::read_buf(buf, &mut idx)?;
+        let len_buf = Self::read_buf(buf, &mut idx)?;
         let cursor = Cursor {
             buf: &buf[idx..],
             next: 0,
         };
-        DecoderV2 {
+        Ok(DecoderV2 {
             cursor,
             ds_curr_val: 0,
             keys: Vec::new(),
@@ -239,11 +239,11 @@ impl<'a> DecoderV2<'a> {
             left_clock_decoder: IntDiffOptRleDecoder::new(Cursor::new(left_clock_buf)),
             right_clock_decoder: IntDiffOptRleDecoder::new(Cursor::new(right_clock_buf)),
             info_decoder: RleDecoder::new(Cursor::new(info_buf)),
-            string_decoder: StringDecoder::new(Cursor::new(string_buf)),
+            string_decoder: StringDecoder::new(Cursor::new(string_buf))?,
             parent_info_decoder: RleDecoder::new(Cursor::new(parent_info_buf)),
             type_ref_decoder: UIntOptRleDecoder::new(Cursor::new(type_ref_buf)),
             len_decoder: UIntOptRleDecoder::new(Cursor::new(len_buf)),
-        }
+        })
     }
 
     fn read_usize(buf: &[u8], idx: &mut usize) -> usize {
@@ -263,23 +263,17 @@ impl<'a> DecoderV2<'a> {
         }
     }
 
-    fn read_buf(buf: &'a [u8], idx: &mut usize) -> &'a [u8] {
+    fn read_buf(buf: &'a [u8], idx: &mut usize) -> Result<&'a [u8], Error> {
         let len = Self::read_usize(buf, idx);
-        let slice = &buf[*idx..(*idx + len)];
-        *idx += len as usize;
-        slice
-    }
-}
-
-impl<'a> From<Cursor<'a>> for DecoderV2<'a> {
-    fn from(cursor: Cursor<'a>) -> Self {
-        Self::new(cursor)
-    }
-}
-
-impl<'a> From<&'a [u8]> for DecoderV2<'a> {
-    fn from(buf: &'a [u8]) -> Self {
-        Self::new(Cursor::new(buf))
+        let start = *idx;
+        let end = start + len;
+        if end <= buf.len() {
+            let slice = &buf[start..end];
+            *idx += len as usize;
+            Ok(slice)
+        } else {
+            Err(Error::EndOfBuffer(len))
+        }
     }
 }
 
@@ -479,16 +473,17 @@ struct StringDecoder<'a> {
 }
 
 impl<'a> StringDecoder<'a> {
-    fn new(cursor: Cursor<'a>) -> Self {
+    fn new(cursor: Cursor<'a>) -> Result<Self, Error> {
         let buf = cursor.buf;
         let mut next = cursor.next;
-        let str = unsafe { std::str::from_utf8_unchecked(DecoderV2::read_buf(buf, &mut next)) };
+        let str_bin = DecoderV2::read_buf(buf, &mut next)?;
+        let str = unsafe { std::str::from_utf8_unchecked(str_bin) };
         let len_decoder = UIntOptRleDecoder::new(Cursor { buf, next });
-        StringDecoder {
+        Ok(StringDecoder {
             pos: 0,
             buf: str,
             len_decoder,
-        }
+        })
     }
 
     fn read_str(&mut self) -> Result<&'a str, Error> {

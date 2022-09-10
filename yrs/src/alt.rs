@@ -51,7 +51,7 @@ pub fn diff_updates_v1(update: &[u8], state_vector: &[u8]) -> Result<Vec<u8>, Er
 pub fn diff_updates_v2(update: &[u8], state_vector: &[u8]) -> Result<Vec<u8>, Error> {
     let sv = StateVector::decode_v2(state_vector)?;
     let cursor = Cursor::new(update);
-    let mut decoder = DecoderV2::new(cursor);
+    let mut decoder = DecoderV2::new(cursor)?;
     let update = Update::decode(&mut decoder)?;
     let mut encoder = EncoderV2::new();
     update.encode_diff(&sv, &mut encoder);
