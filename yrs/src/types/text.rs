@@ -585,7 +585,7 @@ impl Text {
 
     pub fn diff<T, F>(&self, txn: &mut Transaction, compute_ychange: F) -> Vec<Diff<T>>
     where
-        F: Fn(T, YChange) -> Option<T>,
+        F: Fn(YChange) -> T,
     {
         self.diff_range(txn, None, None, compute_ychange)
     }
@@ -599,22 +599,30 @@ impl Text {
         compute_ychange: F,
     ) -> Vec<Diff<T>>
     where
-        F: Fn(T, YChange) -> Option<T>,
+        F: Fn(YChange) -> T,
     {
-        struct DiffAssembler<T> {
+        struct DiffAssembler<T, F>
+        where
+            F: Fn(YChange) -> T,
+        {
             ops: Vec<Diff<T>>,
             buf: String,
             curr_attrs: Attrs,
-            curr_ychange: Option<T>,
+            curr_ychange: Option<YChange>,
+            compute_ychange: F,
         }
 
-        impl<T> DiffAssembler<T> {
-            fn new() -> Self {
+        impl<T, F> DiffAssembler<T, F>
+        where
+            F: Fn(YChange) -> T,
+        {
+            fn new(compute_ychange: F) -> Self {
                 DiffAssembler {
                     ops: Vec::new(),
                     buf: String::new(),
                     curr_attrs: HashMap::new(),
                     curr_ychange: None,
+                    compute_ychange,
                 }
             }
             fn pack_str(&mut self) {
@@ -622,7 +630,12 @@ impl Text {
                     let attrs = self.attrs_boxed();
                     let mut buf = std::mem::replace(&mut self.buf, String::new());
                     buf.shrink_to_fit();
-                    let op = Diff::new(Value::Any(buf.into()), attrs, self.curr_ychange.take());
+                    let change = if let Some(ychange) = self.curr_ychange.take() {
+                        Some((self.compute_ychange)(ychange))
+                    } else {
+                        None
+                    };
+                    let op = Diff::with_change(Value::Any(buf.into()), attrs, change);
                     self.ops.push(op);
                 }
             }
@@ -656,43 +669,26 @@ impl Text {
             txn.split_by_snapshot(snapshot);
         }
 
-        let mut asm = DiffAssembler::new();
+        let mut asm = DiffAssembler::new(compute_ychange);
         let mut n = self.0.start;
         while let Some(Block::Item(item)) = n.as_deref() {
             if seen(hi, item) || (lo.is_some() && seen(lo, item)) {
                 match &item.content {
                     ItemContent::String(s) => {
                         if let Some(snapshot) = hi {
-                            if snapshot.is_visible(&item.id) {
-                                if let Some(prev) = asm.curr_ychange.take() {
-                                    compute_ychange(prev, YChange::Removed(item.id));
+                            if !snapshot.is_visible(&item.id) {
+                                asm.pack_str();
+                                asm.curr_ychange = Some(YChange::new(ChangeKind::Removed, item.id));
+                            } else if let Some(snapshot) = lo {
+                                if !snapshot.is_visible(&item.id) {
+                                    asm.pack_str();
+                                    asm.curr_ychange =
+                                        Some(YChange::new(ChangeKind::Added, item.id));
+                                } else if asm.curr_ychange.is_some() {
+                                    asm.pack_str();
                                 }
                             }
-                        } else if let Some(snapshot) = lo {
-                            if snapshot.is_visible(&item.id) {
-                                let change = compute_ychange(YChange::Removed(item.id));
-                                todo!()
-                            }
-                        } else if asm.curr_ychange.is_some() {
-                            asm.pack_str();
                         }
-                        /*TODO:
-                        const cur = currentAttributes.get('ychange')
-                        if (snapshot !== undefined && !isVisible(n, snapshot)) {
-                          if (cur === undefined || cur.user !== n.id.client || cur.state !== 'removed') {
-                            packStr()
-                            currentAttributes.set('ychange', computeYChange ? computeYChange('removed', n.id) : { type: 'removed' })
-                          }
-                        } else if (prevSnapshot !== undefined && !isVisible(n, prevSnapshot)) {
-                          if (cur === undefined || cur.user !== n.id.client || cur.state !== 'added') {
-                            packStr()
-                            currentAttributes.set('ychange', computeYChange ? computeYChange('added', n.id) : { type: 'added' })
-                          }
-                        } else if (cur !== undefined) {
-                          packStr()
-                          currentAttributes.delete('ychange')
-                        }
-                         */
                         asm.buf.push_str(s.as_str());
                     }
                     ItemContent::Type(_) | ItemContent::Embed(_) => {
@@ -749,7 +745,10 @@ pub struct Diff<T> {
 }
 
 impl<T> Diff<T> {
-    pub fn new(insert: Value, attributes: Option<Box<Attrs>>, ychange: Option<T>) -> Self {
+    pub fn new(insert: Value, attributes: Option<Box<Attrs>>) -> Self {
+        Self::with_change(insert, attributes, None)
+    }
+    pub fn with_change(insert: Value, attributes: Option<Box<Attrs>>, ychange: Option<T>) -> Self {
         Diff {
             insert,
             attributes,
@@ -759,16 +758,26 @@ impl<T> Diff<T> {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum YChange {
-    Removed(ID),
-    Added(ID),
+pub struct YChange {
+    pub kind: ChangeKind,
+    pub id: ID,
 }
 
 impl YChange {
-    #[inline]
-    pub fn identity(prev: YChange, next: YChange) -> Option<YChange> {
-        Some(next)
+    pub fn new(kind: ChangeKind, id: ID) -> Self {
+        YChange { kind, id }
     }
+
+    #[inline]
+    pub fn identity(change: YChange) -> YChange {
+        change
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChangeKind {
+    Added,
+    Removed,
 }
 
 /// Event generated by [Text::observe] method. Emitted during transaction commit phase.
@@ -1029,10 +1038,10 @@ impl Prelim for PrelimText<'_> {
 mod test {
     use crate::doc::{OffsetKind, Options};
     use crate::test_utils::{exchange_updates, run_scenario, RngExt};
-    use crate::types::text::{Attrs, Delta, Diff, YChange};
+    use crate::types::text::{Attrs, ChangeKind, Delta, Diff, YChange};
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
-    use crate::{Doc, StateVector, Update};
+    use crate::{Doc, StateVector, Update, ID};
     use lib0::any::Any;
     use rand::prelude::StdRng;
     use std::cell::RefCell;
@@ -2040,6 +2049,16 @@ mod test {
             YChange::identity,
         );
 
-        assert_eq!(diff, vec![Diff::new(" world".into(), None)])
+        assert_eq!(
+            diff,
+            vec![
+                Diff::new("hello".into(), None),
+                Diff::with_change(
+                    " world".into(),
+                    None,
+                    Some(YChange::new(ChangeKind::Added, ID::new(1, 5)))
+                )
+            ]
+        )
     }
 }

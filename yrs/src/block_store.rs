@@ -154,7 +154,7 @@ impl Snapshot {
     }
 
     pub(crate) fn is_visible(&self, id: &ID) -> bool {
-        self.state_map.contains(id) && !self.delete_set.is_deleted(id)
+        self.state_map.get(&id.client) > id.clock && !self.delete_set.is_deleted(id)
     }
 }
 

@@ -109,6 +109,7 @@ export const testSnapshots = tc => {
 
     const delta = doc.transact(txn => text.toDelta(txn, next, prev))
     t.compare(delta, [
-        { insert: ' world' }
+        { insert: 'hello' },
+        { insert: ' world', attributes: { ychange: { type: 'added' } } }
     ])
 }

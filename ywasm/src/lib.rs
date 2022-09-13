@@ -3,7 +3,6 @@ use lib0::any::Any;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::convert::TryFrom;
-use std::hash::BuildHasherDefault;
 use std::mem::ManuallyDrop;
 use std::ops::{Deref, DerefMut};
 use wasm_bindgen::__rt::Ref;
@@ -12,7 +11,7 @@ use wasm_bindgen::JsValue;
 use yrs::block::{ClientID, ItemContent, Prelim};
 use yrs::types::array::{ArrayEvent, ArrayIter};
 use yrs::types::map::{MapEvent, MapIter};
-use yrs::types::text::{Diff, TextEvent};
+use yrs::types::text::{ChangeKind, Diff, TextEvent};
 use yrs::types::xml::{Attributes, TreeWalker, XmlEvent, XmlTextEvent};
 use yrs::types::{
     Attrs, Branch, BranchPtr, Change, DeepObservable, Delta, EntryChange, Event, Events, Path,
@@ -1165,6 +1164,23 @@ fn entry_change_into_js(change: &EntryChange) -> JsValue {
     result.into()
 }
 
+fn ytext_change_into_js(change: Diff<JsValue>) -> JsValue {
+    let delta = Delta::Inserted(change.insert, change.attributes);
+    let js = ytext_delta_into_js(&delta);
+    if let Some(ychange) = change.ychange {
+        let attrs = match js_sys::Reflect::get(&js, &JsValue::from("attributes")) {
+            Ok(attrs) => attrs,
+            Err(_) => {
+                let attrs: JsValue = js_sys::Object::new().into();
+                js_sys::Reflect::set(&attrs, &JsValue::from("attributes"), &attrs).unwrap();
+                attrs
+            }
+        };
+        js_sys::Reflect::set(&attrs, &JsValue::from("ychange"), &ychange).unwrap();
+    }
+    js
+}
+
 fn ytext_delta_into_js(delta: &Delta) -> JsValue {
     let result = js_sys::Object::new();
     match delta {
@@ -1594,19 +1610,30 @@ impl YText {
         txn: &mut YTransaction,
         snapshot: Option<YSnapshot>,
         prev_snapshot: Option<YSnapshot>,
+        compute_ychange: Option<js_sys::Function>,
     ) -> JsValue {
-        match &mut *self.0.borrow_mut() {
+        match &*self.0.borrow() {
             SharedType::Prelim(_) => JsValue::UNDEFINED,
             SharedType::Integrated(v) => {
                 let hi = snapshot.map(|s| s.0);
                 let lo = prev_snapshot.map(|s| s.0);
                 let delta = v
-                    .diff_range(txn, hi.as_ref(), lo.as_ref())
-                    .into_iter()
-                    .map(|d| match d {
-                        Diff::Insert(v, attrs) => Delta::Inserted(v, attrs),
+                    .diff_range(txn, hi.as_ref(), lo.as_ref(), move |change| {
+                        let kind = match change.kind {
+                            ChangeKind::Added => JsValue::from("added"),
+                            ChangeKind::Removed => JsValue::from("removed"),
+                        };
+                        if let Some(func) = &compute_ychange {
+                            let id: JsValue = YID(change.id).into();
+                            func.call2(&JsValue::UNDEFINED, &kind, &id).unwrap()
+                        } else {
+                            let js: JsValue = js_sys::Object::new().into();
+                            js_sys::Reflect::set(&js, &JsValue::from("type"), &kind).unwrap();
+                            js
+                        }
                     })
-                    .map(|d| ytext_delta_into_js(&d));
+                    .into_iter()
+                    .map(ytext_change_into_js);
                 let mut result = js_sys::Array::new();
                 result.extend(delta);
                 let delta: JsValue = result.into();
@@ -1655,6 +1682,22 @@ impl YText {
 }
 
 #[wasm_bindgen]
+pub struct YID(yrs::ID);
+
+#[wasm_bindgen]
+impl YID {
+    #[wasm_bindgen(method, getter)]
+    pub fn clock(&self) -> u32 {
+        self.0.clock
+    }
+
+    #[wasm_bindgen(method, getter)]
+    pub fn client(&self) -> u64 {
+        self.0.client
+    }
+}
+
+#[wasm_bindgen]
 pub struct YSnapshot(Snapshot);
 
 #[wasm_bindgen]
@@ -1688,14 +1731,14 @@ pub fn encode_snapshot_v2(snapshot: &YSnapshot) -> Vec<u8> {
 #[wasm_bindgen(catch, js_name = decodeSnapshotV2)]
 pub fn decode_snapshot_v2(snapshot: &[u8]) -> Result<YSnapshot, JsValue> {
     let s = Snapshot::decode_v2(snapshot)
-        .map_err(|e| JsValue::from("failed to deserialize snapshot using lib0 v2 decoding"))?;
+        .map_err(|_| JsValue::from("failed to deserialize snapshot using lib0 v2 decoding"))?;
     Ok(YSnapshot(s))
 }
 
 #[wasm_bindgen(catch, js_name = decodeSnapshotV1)]
 pub fn decode_snapshot_v1(snapshot: &[u8]) -> Result<YSnapshot, JsValue> {
     let s = Snapshot::decode_v1(snapshot)
-        .map_err(|e| JsValue::from("failed to deserialize snapshot using lib0 v1 decoding"))?;
+        .map_err(|_| JsValue::from("failed to deserialize snapshot using lib0 v1 decoding"))?;
     Ok(YSnapshot(s))
 }
 

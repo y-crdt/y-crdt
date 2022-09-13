@@ -801,7 +801,7 @@ impl XmlText {
 
     pub fn diff<T, F>(&self, txn: &mut Transaction, compute_ychange: F) -> Vec<Diff<T>>
     where
-        F: Fn(T, YChange) -> Option<T>,
+        F: Fn(YChange) -> T,
     {
         self.diff_range(txn, None, None, compute_ychange)
     }
@@ -815,7 +815,7 @@ impl XmlText {
         compute_ychange: F,
     ) -> Vec<Diff<T>>
     where
-        F: Fn(T, YChange) -> Option<T>,
+        F: Fn(YChange) -> T,
     {
         self.0.diff_range(txn, hi, lo, compute_ychange)
     }
