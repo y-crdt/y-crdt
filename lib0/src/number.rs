@@ -284,3 +284,67 @@ fn read_var_i64<R: Read>(reader: &mut R) -> Result<i64, Error> {
         }
     }
 }
+
+impl VarInt for f64 {
+    #[inline]
+    fn write<W: Write>(&self, w: &mut W) {
+        write_var_f64(*self, w)
+    }
+
+    fn read<R: Read>(r: &mut R) -> Result<Self, Error> {
+        read_var_f64(r)
+    }
+}
+
+fn write_var_f64<W: Write>(mut value: f64, w: &mut W) {
+    let is_negative = value.is_sign_negative();
+    value = if is_negative { -value } else { value };
+    w.write_u8(
+        // whether to continue reading
+        (if value as i64 > 0b00111111  { 0b10000000 as u8 } else { 0 })
+            // whether number is negative
+            | (if is_negative { 0b01000000 as u8 } else { 0 })
+            // number
+            | (0b00111111 & value as i64) as u8,
+    );
+    value = ((value as i64) >> 6) as f64;
+    while value > 0.0 {
+        w.write_u8(
+            if value as i64 > 0b01111111 {
+                0b10000000 as u8
+            } else {
+                0
+            } | (0b01111111 & value as i64) as u8,
+        );
+        value = ((value as i64) >> 7) as f64;
+    }
+}
+
+fn read_var_f64<R: Read>(reader: &mut R) -> Result<f64, Error> {
+    let mut r = reader.read_u8()?;
+    let mut num = (r & 0b00111111 as u8) as i64;
+    let mut len: u32 = 6;
+    let is_negative = r & 0b01000000 as u8 > 0;
+    if r & 0b10000000 as u8 == 0 {
+        return Ok(if is_negative {
+            -(num as f64)
+        } else {
+            num as f64
+        });
+    }
+    loop {
+        r = reader.read_u8()?;
+        num |= (r as i64 & 0b01111111 as i64) << len;
+        len += 7;
+        if r < 0b10000000 as u8 {
+            return Ok(if is_negative {
+                -(num as f64)
+            } else {
+                num as f64
+            });
+        }
+        if len > 70 {
+            return Err(Error::VarIntSizeExceeded(70));
+        }
+    }
+}
