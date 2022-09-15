@@ -52,6 +52,10 @@ impl StateVector {
         id.clock <= self.get(&id.client)
     }
 
+    pub fn contains_client(&self, client_id: &ClientID) -> bool {
+        self.0.contains_key(client_id)
+    }
+
     /// Get the latest clock sequence number value for a given `client_id` as observed from
     /// the perspective of a current state vector.
     pub fn get(&self, client_id: &ClientID) -> u32 {

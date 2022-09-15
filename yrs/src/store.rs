@@ -6,7 +6,8 @@ use crate::id_set::DeleteSet;
 use crate::types::{Branch, BranchPtr, Path, PathSegment, TypeRefs};
 use crate::update::PendingUpdate;
 use crate::updates::encoder::{Encode, Encoder};
-use crate::UpdateEvent;
+use crate::{Snapshot, UpdateEvent};
+use lib0::error::Error;
 use std::cell::UnsafeCell;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
@@ -116,6 +117,54 @@ impl Store {
         None
     }
 
+    /// Encodes all changes from current transaction block store up to a given `snapshot`.
+    /// This enables to encode state of a document at some specific point in the past.
+    pub fn encode_state_from_snapshot<E: Encoder>(
+        &self,
+        snapshot: &Snapshot,
+        encoder: &mut E,
+    ) -> Result<(), Error> {
+        if !self.options.skip_gc {
+            return Err(Error::Other("Cannot encode past state from the snapshot for a document with GC option flag set on".to_string()));
+        }
+        self.write_blocks_to(&snapshot.state_map, encoder);
+        snapshot.delete_set.encode(encoder);
+
+        Ok(())
+    }
+
+    pub(crate) fn write_blocks_to<E: Encoder>(&self, sv: &StateVector, encoder: &mut E) {
+        let local_sv = self.blocks.get_state_vector();
+        let mut diff = Vec::with_capacity(sv.len());
+        for (&client_id, &clock) in sv.iter() {
+            if local_sv.contains_client(&client_id) {
+                diff.push((client_id, clock.min(local_sv.get(&client_id))));
+            }
+        }
+        // Write items with higher client ids first
+        // This heavily improves the conflict algorithm.
+        diff.sort_by(|a, b| b.0.cmp(&a.0));
+
+        encoder.write_var(diff.len());
+        for (client, clock) in diff {
+            let blocks = self.blocks.get(&client).unwrap();
+            let clock = clock.min(blocks.last().last_id().clock);
+            let last_idx = blocks.find_pivot(clock).unwrap();
+            // write # encoded structs
+            encoder.write_var(last_idx + 1);
+            encoder.write_client(client);
+            encoder.write_var(0);
+            for i in 0..last_idx {
+                let block = blocks.get(i);
+                block.encode(Some(self), encoder);
+            }
+            let last_block = blocks.get(last_idx);
+            // write first struct with an offset
+            let offset = last_block.last_id().clock - clock;
+            last_block.encode_to(Some(self), encoder, offset);
+        }
+    }
+
     /// Compute a diff to sync with another client.
     ///
     /// This is the most efficient method to sync with another client by only
@@ -124,19 +173,19 @@ impl Store {
     /// The sync protocol in Yrs/js is:
     /// * Send StateVector to the other client.
     /// * The other client comutes a minimal diff to sync by using the StateVector.
-    pub fn encode_diff<E: Encoder>(&self, remote_sv: &StateVector, encoder: &mut E) {
+    pub fn encode_diff<E: Encoder>(&self, sv: &StateVector, encoder: &mut E) {
         //TODO: this could be actually 2 steps:
         // 1. create Diff of block store and remote state vector (it can have lifetime of bock store)
         // 2. make Diff implement Encode trait and encode it
         // this way we can add some extra utility method on top of Diff (like introspection) without need of decoding it.
-        self.write_blocks(remote_sv, encoder);
+        self.write_blocks_from(sv, encoder);
         let delete_set = DeleteSet::from(&self.blocks);
         delete_set.encode(encoder);
     }
 
-    pub(crate) fn write_blocks<E: Encoder>(&self, remote_sv: &StateVector, encoder: &mut E) {
+    pub(crate) fn write_blocks_from<E: Encoder>(&self, sv: &StateVector, encoder: &mut E) {
         let local_sv = self.blocks.get_state_vector();
-        let mut diff = Self::diff_state_vectors(&local_sv, remote_sv);
+        let mut diff = Self::diff_state_vectors(&local_sv, sv);
 
         // Write items with higher client ids first
         // This heavily improves the conflict algorithm.
@@ -154,7 +203,7 @@ impl Store {
             let first_block = blocks.get(start);
             // write first struct with an offset
             let offset = clock - first_block.id().clock;
-            first_block.encode_with_offset(Some(self), encoder, offset);
+            first_block.encode_from(Some(self), encoder, offset);
             for i in (start + 1)..blocks.len() {
                 blocks.get(i).encode(Some(self), encoder);
             }

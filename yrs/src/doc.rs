@@ -145,7 +145,7 @@ impl Doc {
 
     pub fn encode_state_as_update<E: Encoder>(&self, sv: &StateVector, encoder: &mut E) {
         let store = self.store.deref();
-        store.write_blocks(sv, encoder);
+        store.write_blocks_from(sv, encoder);
         let ds = DeleteSet::from(&store.blocks);
         ds.encode(encoder);
     }
@@ -215,7 +215,7 @@ mod test {
     use crate::update::Update;
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
-    use crate::{DeleteSet, Doc, StateVector, SubscriptionId};
+    use crate::{DeleteSet, Doc, Options, StateVector, SubscriptionId};
     use lib0::any::Any;
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
@@ -633,5 +633,30 @@ mod test {
         )
         .unwrap();
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn snapshots_update_generation() {
+        let mut options = Options::with_client_id(1);
+        options.skip_gc = true;
+
+        let d1 = Doc::with_options(options);
+        let txt1 = d1.transact().get_text("text");
+        txt1.insert(&mut d1.transact(), 0, "hello");
+        let snapshot = d1.transact().snapshot();
+        txt1.insert(&mut d1.transact(), 5, " world");
+
+        let mut encoder = EncoderV1::new();
+        d1.transact()
+            .encode_state_from_snapshot(&snapshot, &mut encoder)
+            .unwrap();
+        let update = encoder.to_vec();
+
+        let d2 = Doc::with_client_id(2);
+        let txt2 = d2.transact().get_text("text");
+        d2.transact()
+            .apply_update(Update::decode_v1(&update).unwrap());
+
+        assert_eq!(txt2.to_string(), "hello".to_string());
     }
 }
