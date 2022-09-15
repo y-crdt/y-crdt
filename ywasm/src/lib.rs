@@ -1,6 +1,5 @@
 use js_sys::Uint8Array;
 use lib0::any::Any;
-use lib0::error::Error;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::convert::TryFrom;

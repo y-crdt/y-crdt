@@ -5,7 +5,7 @@ use std::ffi::{c_void, CStr, CString};
 use std::mem::{forget, ManuallyDrop, MaybeUninit};
 use std::ops::Deref;
 use std::os::raw::{c_char, c_float, c_int, c_long, c_longlong, c_uchar, c_uint, c_ulong};
-use std::ptr::{null, null_mut, slice_from_raw_parts};
+use std::ptr::{null, null_mut};
 use std::rc::Rc;
 use yrs::block::{ClientID, ItemContent, Prelim};
 use yrs::types::array::ArrayEvent;

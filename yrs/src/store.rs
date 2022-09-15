@@ -149,7 +149,7 @@ impl Store {
         for (client, clock) in diff {
             let blocks = self.blocks.get(&client).unwrap();
             let clock = clock.min(blocks.last().last_id().clock);
-            let last_idx = blocks.find_pivot(clock).unwrap();
+            let last_idx = blocks.find_pivot(clock - 1).unwrap();
             // write # encoded structs
             encoder.write_var(last_idx + 1);
             encoder.write_client(client);
@@ -160,7 +160,7 @@ impl Store {
             }
             let last_block = blocks.get(last_idx);
             // write first struct with an offset
-            let offset = last_block.last_id().clock - clock;
+            let offset = clock - last_block.id().clock;
             last_block.encode_to(Some(self), encoder, offset);
         }
     }
