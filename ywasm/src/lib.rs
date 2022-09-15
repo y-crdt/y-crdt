@@ -1,5 +1,6 @@
 use js_sys::Uint8Array;
 use lib0::any::Any;
+use lib0::error::Error;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::convert::TryFrom;
@@ -78,14 +79,16 @@ impl YDoc {
     /// globally unique identifier (it's up to caller to ensure that requirement). Otherwise it will
     /// be assigned a randomly generated number.
     #[wasm_bindgen(constructor)]
-    pub fn new(id: Option<f64>) -> Self {
+    pub fn new(id: Option<f64>, gc: Option<bool>) -> Self {
         let mut options = if let Some(id) = id {
             Options::with_client_id(id as ClientID)
         } else {
             Options::default()
         };
+        let skip_gc = if let Some(gc) = gc { !gc } else { false };
 
         options.offset_kind = OffsetKind::Utf16;
+        options.skip_gc = skip_gc;
         YDoc(Doc::with_options(options))
     }
 
@@ -1741,6 +1744,32 @@ pub fn decode_snapshot_v1(snapshot: &[u8]) -> Result<YSnapshot, JsValue> {
     let s = Snapshot::decode_v1(snapshot)
         .map_err(|_| JsValue::from("failed to deserialize snapshot using lib0 v1 decoding"))?;
     Ok(YSnapshot(s))
+}
+
+#[wasm_bindgen(catch, js_name = encodeStateFromSnapshotV1)]
+pub fn encode_state_from_snapshot_v1(doc: &YDoc, snapshot: &YSnapshot) -> Result<Vec<u8>, JsValue> {
+    let mut encoder = EncoderV1::new();
+    match doc
+        .0
+        .transact()
+        .encode_state_from_snapshot(&snapshot.0, &mut encoder)
+    {
+        Ok(_) => Ok(encoder.to_vec()),
+        Err(e) => Err(JsValue::from(e.to_string())),
+    }
+}
+
+#[wasm_bindgen(catch, js_name = encodeStateFromSnapshotV2)]
+pub fn encode_state_from_snapshot_v2(doc: &YDoc, snapshot: &YSnapshot) -> Result<Vec<u8>, JsValue> {
+    let mut encoder = EncoderV2::new();
+    match doc
+        .0
+        .transact()
+        .encode_state_from_snapshot(&snapshot.0, &mut encoder)
+    {
+        Ok(_) => Ok(encoder.to_vec()),
+        Err(e) => Err(JsValue::from(e.to_string())),
+    }
 }
 
 /// A collection used to store data in an indexed sequence structure. This type is internally
