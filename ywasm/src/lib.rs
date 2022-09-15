@@ -1169,10 +1169,10 @@ fn ytext_change_into_js(change: Diff<JsValue>) -> JsValue {
     let js = ytext_delta_into_js(&delta);
     if let Some(ychange) = change.ychange {
         let attrs = match js_sys::Reflect::get(&js, &JsValue::from("attributes")) {
-            Ok(attrs) => attrs,
-            Err(_) => {
+            Ok(attrs) if attrs.is_object() => attrs,
+            _ => {
                 let attrs: JsValue = js_sys::Object::new().into();
-                js_sys::Reflect::set(&attrs, &JsValue::from("attributes"), &attrs).unwrap();
+                js_sys::Reflect::set(&js, &JsValue::from("attributes"), &attrs).unwrap();
                 attrs
             }
         };
@@ -1618,19 +1618,20 @@ impl YText {
                 let hi = snapshot.map(|s| s.0);
                 let lo = prev_snapshot.map(|s| s.0);
                 let delta = v
-                    .diff_range(txn, hi.as_ref(), lo.as_ref(), move |change| {
+                    .diff_range(txn, hi.as_ref(), lo.as_ref(), |change| {
                         let kind = match change.kind {
                             ChangeKind::Added => JsValue::from("added"),
                             ChangeKind::Removed => JsValue::from("removed"),
                         };
-                        if let Some(func) = &compute_ychange {
+                        let result = if let Some(func) = &compute_ychange {
                             let id: JsValue = YID(change.id).into();
                             func.call2(&JsValue::UNDEFINED, &kind, &id).unwrap()
                         } else {
                             let js: JsValue = js_sys::Object::new().into();
                             js_sys::Reflect::set(&js, &JsValue::from("type"), &kind).unwrap();
                             js
-                        }
+                        };
+                        result
                     })
                     .into_iter()
                     .map(ytext_change_into_js);
