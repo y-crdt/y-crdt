@@ -47,6 +47,7 @@ pub use crate::alt::{
     encode_state_vector_from_update_v2, merge_updates_v1, merge_updates_v2,
 };
 pub use crate::block::ID;
+pub use crate::block_store::Snapshot;
 pub use crate::block_store::StateVector;
 pub use crate::doc::Doc;
 pub use crate::doc::OffsetKind;

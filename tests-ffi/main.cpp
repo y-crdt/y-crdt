@@ -1340,3 +1340,41 @@ TEST_CASE("YDoc observe after transaction") {
 
     ydoc_destroy(doc1);
 }
+
+TEST_CASE("YDoc snapshots") {
+    YOptions o;
+    o.encoding = Y_OFFSET_UTF16;
+    o.id = 1;
+    o.skip_gc = 1;
+
+    YDoc* doc = ydoc_new_with_options(o);
+    YTransaction* txn = ytransaction_new(doc);
+    Branch* txt = ytext(txn, "test");
+
+    ytext_insert(txt, txn, 0, "hello", NULL);
+
+    int snapshot_len = 0;
+    unsigned char* snapshot = ytransaction_snapshot(txn, &snapshot_len);
+
+    ytext_insert(txt, txn, 5, " world", NULL);
+
+    int update_len = 0;
+    unsigned char* update = ytransaction_encode_state_from_snapshot_v1(txn, snapshot, snapshot_len, &update_len);
+
+    ytransaction_commit(txn);
+    ydoc_destroy(doc);
+
+    doc = ydoc_new_with_id(1);
+    txn = ytransaction_new(doc);
+    txt = ytext(txn, "test");
+
+    ytransaction_apply(txn, update, update_len);
+
+    char* str = ytext_string(txt);
+    printf("result: %s", str);
+    REQUIRE(!strcmp(str, "hello"));
+
+    ystring_destroy(str);
+    ytransaction_commit(txn);
+    ydoc_destroy(doc);
+}

@@ -840,7 +840,7 @@ impl BlockCarrier {
     }
     pub fn encode_with_offset<E: Encoder>(&self, encoder: &mut E, offset: u32) {
         match self {
-            BlockCarrier::Block(x) => x.encode_with_offset(None, encoder, offset),
+            BlockCarrier::Block(x) => x.encode_from(None, encoder, offset),
             BlockCarrier::Skip(x) => {
                 encoder.write_info(BLOCK_SKIP_REF_NUMBER);
                 encoder.write_len(x.len - offset);

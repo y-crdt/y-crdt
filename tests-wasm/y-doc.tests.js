@@ -95,3 +95,39 @@ export const testOnAfterTransaction = tc => {
 
     t.compare(event, null)
 }
+
+/**
+ * @param {t.TestCase} tc
+ */
+export const testSnapshots = tc => {
+    const doc = new Y.YDoc(1)
+    const text = doc.getText('text')
+    doc.transact(txn => text.insert(txn, 0, 'hello'))
+    const prev = Y.snapshot(doc)
+    doc.transact(txn => text.insert(txn, 5, ' world'))
+    const next = Y.snapshot(doc)
+
+    const delta = doc.transact(txn => text.toDelta(txn, next, prev))
+    t.compare(delta, [
+        { insert: 'hello' },
+        { insert: ' world', attributes: { ychange: { type: 'added' } } }
+    ])
+}
+
+/**
+ * @param {t.TestCase} tc
+ */
+export const testSnapshotState = tc => {
+    const d1 = new Y.YDoc(1, false)
+    const txt1 = d1.getText('text')
+    d1.transact(txn => txt1.insert(txn, 0, 'hello'))
+    const prev = Y.snapshot(d1)
+    d1.transact(txn => txt1.insert(txn, 5, ' world'))
+    const state = Y.encodeStateFromSnapshotV1(d1, prev)
+
+    const d2 = new Y.YDoc(2)
+    const txt2 = d2.getText('text')
+    Y.applyUpdate(d2, state)
+
+    t.compare(txt2.toString(), 'hello')
+}
