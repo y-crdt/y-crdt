@@ -1,5 +1,5 @@
 use crate::error::Error;
-use crate::number::VarInt;
+use crate::number::{Signed, SignedVarInt, VarInt};
 
 #[derive(Default)]
 pub struct Cursor<'a> {
@@ -89,6 +89,14 @@ pub trait Read: Sized {
     #[inline]
     fn read_var<T: VarInt>(&mut self) -> Result<T, Error> {
         T::read(self)
+    }
+
+    /// Read unsigned integer with variable length.
+    /// * numbers < 2^7 are stored in one byte
+    /// * numbers < 2^14 are stored in two bytes
+    #[inline]
+    fn read_var_signed<T: SignedVarInt>(&mut self) -> Result<Signed<T>, Error> {
+        T::read_signed(self)
     }
 
     /// Read string of variable length.
