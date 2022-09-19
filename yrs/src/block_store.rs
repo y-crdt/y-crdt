@@ -41,11 +41,19 @@ impl StateVector {
         sv
     }
 
+    pub fn new(map: HashMap<ClientID, u32, BuildHasherDefault<ClientHasher>>) -> Self {
+        StateVector(map)
+    }
+
     /// Checks if current state vector includes given block identifier. Blocks, which identifiers
     /// can be found in a state vectors don't need to be encoded as part of an update, because they
     /// were already observed by their remote peer, current state vector refers to.
     pub fn contains(&self, id: &ID) -> bool {
         id.clock <= self.get(&id.client)
+    }
+
+    pub fn contains_client(&self, client_id: &ClientID) -> bool {
+        self.0.contains_key(client_id)
     }
 
     /// Get the latest clock sequence number value for a given `client_id` as observed from
@@ -150,7 +158,7 @@ impl Snapshot {
     }
 
     pub(crate) fn is_visible(&self, id: &ID) -> bool {
-        self.state_map.contains(id) && !self.delete_set.is_deleted(id)
+        self.state_map.get(&id.client) > id.clock && !self.delete_set.is_deleted(id)
     }
 }
 

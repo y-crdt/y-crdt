@@ -2,6 +2,7 @@ use crate::block::ClientID;
 use crate::*;
 use lib0::any::Any;
 use lib0::encoding::Write;
+use lib0::number::Signed;
 use std::collections::HashMap;
 
 /// A trait that can be implemented by any other type in order to support lib0 encoding capability.
@@ -446,7 +447,8 @@ impl UIntOptRleEncoder {
             if self.count == 1 {
                 self.buf.write_var(self.last as i64);
             } else {
-                self.buf.write_var(-(self.last as i64));
+                let value = Signed::new(-(self.last as i64), true);
+                self.buf.write_var_signed(&value);
                 self.buf.write_var(self.count - 2);
             }
         }

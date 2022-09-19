@@ -128,7 +128,7 @@ impl Text {
                 }
             }
         }
-        
+
         Some(pos)
     }
 
@@ -583,36 +583,64 @@ impl Text {
         }
     }
 
-    pub fn diff(&self, txn: &mut Transaction) -> Vec<Diff> {
-        self.diff_range(txn, None, None)
+    pub fn diff<T, F>(&self, txn: &mut Transaction, compute_ychange: F) -> Vec<Diff<T>>
+    where
+        F: Fn(YChange) -> T,
+    {
+        self.diff_range(txn, None, None, compute_ychange)
     }
 
     /// Returns the Delta representation of this YText type.
-    pub fn diff_range(
+    pub fn diff_range<T, F>(
         &self,
         txn: &mut Transaction,
         hi: Option<&Snapshot>,
         lo: Option<&Snapshot>,
-    ) -> Vec<Diff> {
-        #[derive(Default)]
-        struct DiffAssembler {
-            ops: Vec<Diff>,
+        compute_ychange: F,
+    ) -> Vec<Diff<T>>
+    where
+        F: Fn(YChange) -> T,
+    {
+        struct DiffAssembler<T, F>
+        where
+            F: Fn(YChange) -> T,
+        {
+            ops: Vec<Diff<T>>,
             buf: String,
             curr_attrs: Attrs,
+            curr_ychange: Option<YChange>,
+            compute_ychange: F,
         }
 
-        impl DiffAssembler {
+        impl<T, F> DiffAssembler<T, F>
+        where
+            F: Fn(YChange) -> T,
+        {
+            fn new(compute_ychange: F) -> Self {
+                DiffAssembler {
+                    ops: Vec::new(),
+                    buf: String::new(),
+                    curr_attrs: HashMap::new(),
+                    curr_ychange: None,
+                    compute_ychange,
+                }
+            }
             fn pack_str(&mut self) {
                 if !self.buf.is_empty() {
                     let attrs = self.attrs_boxed();
                     let mut buf = std::mem::replace(&mut self.buf, String::new());
                     buf.shrink_to_fit();
-                    let op = Diff::Insert(Value::Any(buf.into()), attrs);
+                    let change = if let Some(ychange) = self.curr_ychange.take() {
+                        Some((self.compute_ychange)(ychange))
+                    } else {
+                        None
+                    };
+                    let op = Diff::with_change(Value::Any(buf.into()), attrs, change);
                     self.ops.push(op);
                 }
             }
 
-            fn finish(self) -> Vec<Diff> {
+            fn finish(self) -> Vec<Diff<T>> {
                 self.ops
             }
 
@@ -641,36 +669,33 @@ impl Text {
             txn.split_by_snapshot(snapshot);
         }
 
-        let mut asm = DiffAssembler::default();
+        let mut asm = DiffAssembler::new(compute_ychange);
         let mut n = self.0.start;
         while let Some(Block::Item(item)) = n.as_deref() {
             if seen(hi, item) || (lo.is_some() && seen(lo, item)) {
                 match &item.content {
                     ItemContent::String(s) => {
-                        /*TODO:
-                        const cur = currentAttributes.get('ychange')
-                        if (snapshot !== undefined && !isVisible(n, snapshot)) {
-                          if (cur === undefined || cur.user !== n.id.client || cur.state !== 'removed') {
-                            packStr()
-                            currentAttributes.set('ychange', computeYChange ? computeYChange('removed', n.id) : { type: 'removed' })
-                          }
-                        } else if (prevSnapshot !== undefined && !isVisible(n, prevSnapshot)) {
-                          if (cur === undefined || cur.user !== n.id.client || cur.state !== 'added') {
-                            packStr()
-                            currentAttributes.set('ychange', computeYChange ? computeYChange('added', n.id) : { type: 'added' })
-                          }
-                        } else if (cur !== undefined) {
-                          packStr()
-                          currentAttributes.delete('ychange')
+                        if let Some(snapshot) = hi {
+                            if !snapshot.is_visible(&item.id) {
+                                asm.pack_str();
+                                asm.curr_ychange = Some(YChange::new(ChangeKind::Removed, item.id));
+                            } else if let Some(snapshot) = lo {
+                                if !snapshot.is_visible(&item.id) {
+                                    asm.pack_str();
+                                    asm.curr_ychange =
+                                        Some(YChange::new(ChangeKind::Added, item.id));
+                                } else if asm.curr_ychange.is_some() {
+                                    asm.pack_str();
+                                }
+                            }
                         }
-                         */
                         asm.buf.push_str(s.as_str());
                     }
                     ItemContent::Type(_) | ItemContent::Embed(_) => {
                         asm.pack_str();
                         if let Some(value) = item.content.get_last() {
                             let attrs = asm.attrs_boxed();
-                            asm.ops.push(Diff::Insert(value, attrs));
+                            asm.ops.push(Diff::new(value, attrs));
                         }
                     }
                     ItemContent::Format(key, value) => {
@@ -713,8 +738,46 @@ impl AsMut<Branch> for Text {
 }
 
 #[derive(Debug, PartialEq)]
-pub enum Diff {
-    Insert(Value, Option<Box<Attrs>>),
+pub struct Diff<T> {
+    pub insert: Value,
+    pub attributes: Option<Box<Attrs>>,
+    pub ychange: Option<T>,
+}
+
+impl<T> Diff<T> {
+    pub fn new(insert: Value, attributes: Option<Box<Attrs>>) -> Self {
+        Self::with_change(insert, attributes, None)
+    }
+    pub fn with_change(insert: Value, attributes: Option<Box<Attrs>>, ychange: Option<T>) -> Self {
+        Diff {
+            insert,
+            attributes,
+            ychange,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct YChange {
+    pub kind: ChangeKind,
+    pub id: ID,
+}
+
+impl YChange {
+    pub fn new(kind: ChangeKind, id: ID) -> Self {
+        YChange { kind, id }
+    }
+
+    #[inline]
+    pub fn identity(change: YChange) -> YChange {
+        change
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChangeKind {
+    Added,
+    Removed,
 }
 
 /// Event generated by [Text::observe] method. Emitted during transaction commit phase.
@@ -975,10 +1038,10 @@ impl Prelim for PrelimText<'_> {
 mod test {
     use crate::doc::{OffsetKind, Options};
     use crate::test_utils::{exchange_updates, run_scenario, RngExt};
-    use crate::types::text::{Attrs, Delta, Diff};
+    use crate::types::text::{Attrs, ChangeKind, Delta, Diff, YChange};
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
-    use crate::{Doc, StateVector, Update};
+    use crate::{Doc, StateVector, Update, ID};
     use lib0::any::Any;
     use rand::prelude::StdRng;
     use std::cell::RefCell;
@@ -1532,8 +1595,8 @@ mod test {
 
             assert_eq!(txt1.to_string(), "abc".to_string());
             assert_eq!(
-                txt1.diff(&mut txn),
-                vec![Diff::Insert("abc".into(), Some(Box::new(a.clone())))]
+                txt1.diff(&mut txn, YChange::identity),
+                vec![Diff::new("abc".into(), Some(Box::new(a.clone())))]
             );
             assert_eq!(delta1.take(), expected);
 
@@ -1556,8 +1619,8 @@ mod test {
 
             assert_eq!(txt1.to_string(), "bc".to_string());
             assert_eq!(
-                txt1.diff(&mut txn),
-                vec![Diff::Insert("bc".into(), Some(Box::new(a.clone())))]
+                txt1.diff(&mut txn, YChange::identity),
+                vec![Diff::new("bc".into(), Some(Box::new(a.clone())))]
             );
             assert_eq!(delta1.take(), expected);
 
@@ -1580,8 +1643,8 @@ mod test {
 
             assert_eq!(txt1.to_string(), "b".to_string());
             assert_eq!(
-                txt1.diff(&mut txn),
-                vec![Diff::Insert("b".into(), Some(Box::new(a.clone())))]
+                txt1.diff(&mut txn, YChange::identity),
+                vec![Diff::new("b".into(), Some(Box::new(a.clone())))]
             );
             assert_eq!(delta1.take(), expected);
 
@@ -1604,8 +1667,8 @@ mod test {
 
             assert_eq!(txt1.to_string(), "zb".to_string());
             assert_eq!(
-                txt1.diff(&mut txn),
-                vec![Diff::Insert("zb".into(), Some(Box::new(a.clone())))]
+                txt1.diff(&mut txn, YChange::identity),
+                vec![Diff::new("zb".into(), Some(Box::new(a.clone())))]
             );
             assert_eq!(delta1.take(), expected);
 
@@ -1628,10 +1691,10 @@ mod test {
 
             assert_eq!(txt1.to_string(), "yzb".to_string());
             assert_eq!(
-                txt1.diff(&mut txn),
+                txt1.diff(&mut txn, YChange::identity),
                 vec![
-                    Diff::Insert("y".into(), None),
-                    Diff::Insert("zb".into(), Some(Box::new(a.clone())))
+                    Diff::new("y".into(), None),
+                    Diff::new("zb".into(), Some(Box::new(a.clone())))
                 ]
             );
             assert_eq!(delta1.take(), expected);
@@ -1659,10 +1722,10 @@ mod test {
 
             assert_eq!(txt1.to_string(), "yzb".to_string());
             assert_eq!(
-                txt1.diff(&mut txn),
+                txt1.diff(&mut txn, YChange::identity),
                 vec![
-                    Diff::Insert("yz".into(), None),
-                    Diff::Insert("b".into(), Some(Box::new(a.clone())))
+                    Diff::new("yz".into(), None),
+                    Diff::new("b".into(), Some(Box::new(a.clone())))
                 ]
             );
             assert_eq!(delta1.take(), expected);
@@ -1715,12 +1778,12 @@ mod test {
             assert_eq!(delta1.take(), expected);
 
             let expected = vec![
-                Diff::Insert("a".into(), a1.clone()),
-                Diff::Insert(embed.into(), a2),
-                Diff::Insert("b".into(), a1.clone()),
+                Diff::new("a".into(), a1.clone()),
+                Diff::new(embed.into(), a2),
+                Diff::new("b".into(), a1.clone()),
             ];
             let mut txn = d1.transact();
-            assert_eq!(txt1.diff(&mut txn), expected);
+            assert_eq!(txt1.diff(&mut txn, YChange::identity), expected);
         }
     }
 
@@ -1812,10 +1875,10 @@ mod test {
         let attrs2 = Attrs::from([("a".into(), "a".into()), ("b".into(), "b".into())]);
         txt.insert_with_attributes(&mut txn, 3, "def", attrs2.clone());
 
-        let diff = txt.diff(&mut txn);
+        let diff = txt.diff(&mut txn, YChange::identity);
         let expected = vec![
-            Diff::Insert("abc".into(), Some(Box::new(attrs1))),
-            Diff::Insert("def".into(), Some(Box::new(attrs2))),
+            Diff::new("abc".into(), Some(Box::new(attrs1))),
+            Diff::new("def".into(), Some(Box::new(attrs2))),
         ];
         assert_eq!(diff, expected);
     }
@@ -1963,11 +2026,39 @@ mod test {
         txt.insert_with_attributes(&mut txn, 1, "b", Attrs::new());
 
         let expect = vec![
-            Diff::Insert("a".into(), Some(Box::new(attrs.clone()))),
-            Diff::Insert("b".into(), None),
-            Diff::Insert("c".into(), Some(Box::new(attrs.clone()))),
+            Diff::new("a".into(), Some(Box::new(attrs.clone()))),
+            Diff::new("b".into(), None),
+            Diff::new("c".into(), Some(Box::new(attrs.clone()))),
         ];
 
-        assert!(txt.diff(&mut txn).eq(&expect))
+        assert!(txt.diff(&mut txn, YChange::identity).eq(&expect))
+    }
+
+    #[test]
+    fn snapshots() {
+        let doc = Doc::with_client_id(1);
+        let text = doc.transact().get_text("text");
+        text.insert(&mut doc.transact(), 0, "hello");
+        let prev = doc.transact().snapshot();
+        text.insert(&mut doc.transact(), 5, " world");
+        let next = doc.transact().snapshot();
+        let diff = text.diff_range(
+            &mut doc.transact(),
+            Some(&next),
+            Some(&prev),
+            YChange::identity,
+        );
+
+        assert_eq!(
+            diff,
+            vec![
+                Diff::new("hello".into(), None),
+                Diff::with_change(
+                    " world".into(),
+                    None,
+                    Some(YChange::new(ChangeKind::Added, ID::new(1, 5)))
+                )
+            ]
+        )
     }
 }
