@@ -1371,7 +1371,6 @@ TEST_CASE("YDoc snapshots") {
     ytransaction_apply(txn, update, update_len);
 
     char* str = ytext_string(txt);
-    printf("result: %s", str);
     REQUIRE(!strcmp(str, "hello"));
 
     ystring_destroy(str);
