@@ -421,15 +421,15 @@ impl<'a> UIntOptRleDecoder<'a> {
 
     fn read_u64(&mut self) -> Result<u64, Error> {
         if self.count == 0 {
-            let s = self.cursor.read_var::<i64>()?;
+            let s = self.cursor.read_var_signed::<i64>()?;
             // if the sign is negative, we read the count too, otherwise count is 1
             let is_negative = s.is_negative();
             if is_negative {
                 self.count = self.cursor.read_var::<u32>()? + 2;
-                self.last = (-s) as u64;
+                self.last = (-s.value()) as u64;
             } else {
                 self.count = 1;
-                self.last = s as u64;
+                self.last = s.value() as u64;
             }
         }
         self.count -= 1;
