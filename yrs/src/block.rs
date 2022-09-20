@@ -571,12 +571,59 @@ impl Block {
         }
     }
 
-    pub fn encode_with_offset<E: Encoder>(
-        &self,
-        store: Option<&Store>,
-        encoder: &mut E,
-        offset: u32,
-    ) {
+    /// Encodes state of the current block up to a given clock offset within that block.
+    pub fn encode_to<E: Encoder>(&self, store: Option<&Store>, encoder: &mut E, offset: u32) {
+        match self {
+            Block::Item(item) => {
+                let mut info = item.info();
+                let cant_copy_parent_info = info & (HAS_ORIGIN | HAS_RIGHT_ORIGIN) == 0;
+                encoder.write_info(info);
+                if let Some(origin_id) = item.origin.as_ref() {
+                    encoder.write_left_id(origin_id);
+                }
+                if let Some(right_origin_id) = item.right_origin.as_ref() {
+                    encoder.write_right_id(right_origin_id);
+                }
+                if cant_copy_parent_info {
+                    match &item.parent {
+                        TypePtr::Branch(branch) => {
+                            if let Some(block) = branch.item {
+                                encoder.write_parent_info(false);
+                                encoder.write_left_id(block.id());
+                            } else if let Some(store) = store {
+                                let name = store.get_type_key(*branch).unwrap();
+                                encoder.write_parent_info(true);
+                                encoder.write_string(name);
+                            }
+                        }
+                        TypePtr::Named(name) => {
+                            encoder.write_parent_info(true);
+                            encoder.write_string(name);
+                        }
+                        TypePtr::ID(id) => {
+                            encoder.write_parent_info(false);
+                            encoder.write_left_id(id);
+                        }
+                        TypePtr::Unknown => {
+                            panic!("Couldn't get item's parent")
+                        }
+                    }
+
+                    if let Some(parent_sub) = item.parent_sub.as_ref() {
+                        encoder.write_string(parent_sub.as_ref());
+                    }
+                }
+                item.content.encode_to(encoder, offset);
+            }
+            Block::GC(_) => {
+                encoder.write_info(BLOCK_GC_REF_NUMBER);
+                encoder.write_len(offset);
+            }
+        }
+    }
+
+    /// Encodes state of the current block starting from a given clock offset within that block.
+    pub fn encode_from<E: Encoder>(&self, store: Option<&Store>, encoder: &mut E, offset: u32) {
         match self {
             Block::Item(item) => {
                 let mut info = item.info();
@@ -625,7 +672,7 @@ impl Block {
                         encoder.write_string(parent_sub.as_ref());
                     }
                 }
-                item.content.encode_with_offset(encoder, offset);
+                item.content.encode_from(encoder, offset);
             }
             Block::GC(gc) => {
                 encoder.write_info(BLOCK_GC_REF_NUMBER);
@@ -1406,7 +1453,48 @@ impl ItemContent {
         }
     }
 
-    pub fn encode_with_offset<E: Encoder>(&self, encoder: &mut E, offset: u32) {
+    pub fn encode_to<E: Encoder>(&self, encoder: &mut E, offset: u32) {
+        match self {
+            ItemContent::Deleted(len) => encoder.write_len(*len - offset),
+            ItemContent::Binary(buf) => encoder.write_buf(buf),
+            ItemContent::String(s) => {
+                let (left, _) = s.split_at(offset as usize, OffsetKind::Utf16);
+                encoder.write_string(left)
+            }
+            ItemContent::Embed(s) => encoder.write_json(s.as_ref()),
+            ItemContent::JSON(s) => {
+                encoder.write_len(offset);
+                for i in 0..(offset as usize) {
+                    encoder.write_string(s[i].as_str())
+                }
+            }
+            ItemContent::Format(k, v) => {
+                encoder.write_key(k.as_ref());
+                encoder.write_json(v.as_ref());
+            }
+            ItemContent::Type(inner) => {
+                encoder.write_type_ref(inner.type_ref());
+                let type_ref = inner.type_ref();
+                if type_ref == types::TYPE_REFS_XML_ELEMENT || type_ref == types::TYPE_REFS_XML_HOOK
+                {
+                    encoder.write_key(inner.name.as_ref().unwrap().as_ref())
+                }
+            }
+            ItemContent::Any(any) => {
+                encoder.write_len(offset);
+                for i in 0..(offset as usize) {
+                    encoder.write_any(&any[i]);
+                }
+            }
+            ItemContent::Doc(key, any) => {
+                encoder.write_string(key.as_ref());
+                encoder.write_any(any);
+            }
+            ItemContent::Move(m) => m.encode(encoder),
+        }
+    }
+
+    pub fn encode_from<E: Encoder>(&self, encoder: &mut E, offset: u32) {
         match self {
             ItemContent::Deleted(len) => encoder.write_len(*len - offset),
             ItemContent::Binary(buf) => encoder.write_buf(buf),

@@ -5,7 +5,7 @@ use crate::types::{Branch, TypePtr, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT};
 use crate::update::{BlockCarrier, Update};
 use crate::updates::decoder::{Decode, Decoder, DecoderV1};
 use crate::updates::encoder::Encode;
-use crate::{Doc, StateVector, XmlElement, XmlText, ID};
+use crate::{Doc, PrelimArray, PrelimMap, StateVector, XmlElement, XmlText, ID};
 use lib0::any::Any;
 use lib0::decoding::Read;
 use std::cell::Cell;
@@ -372,6 +372,40 @@ fn roundtrip_v2(payload: &[u8], expected: &Vec<BlockCarrier>) {
     let store: Store = u.into();
     let serialized = store.encode_v2();
     assert_eq!(serialized, payload, "failed to encode V2");
+}
+
+#[test]
+fn negative_zero_decoding_v2() {
+    let doc = Doc::new();
+    let mut txn = doc.transact();
+    let root = txn.get_map("root");
+
+    root.insert(&mut txn, "sequence", PrelimMap::<bool>::new()); //NOTE: This is how I put nested map.
+    let sequence = root.get("sequence").unwrap().to_ymap().unwrap();
+    sequence.insert(&mut txn, "id", "V9Uk9pxUKZIrW6cOkC0Rg".to_string());
+    sequence.insert(&mut txn, "cuts", PrelimArray::<_, Any>::from([]));
+    sequence.insert(&mut txn, "name", "new sequence".to_string());
+
+    root.insert(&mut txn, "__version__", 1);
+    root.insert(
+        &mut txn,
+        "face_expressions",
+        PrelimArray::<_, Any>::from([]),
+    );
+    root.insert(&mut txn, "characters", PrelimArray::<_, Any>::from([]));
+    let expected = root.to_json();
+
+    let buffer = doc.encode_state_as_update_v2(&StateVector::default());
+
+    let u = Update::decode_v2(&buffer).unwrap();
+
+    let doc2 = Doc::new();
+    let mut txn = doc.transact();
+    let root = txn.get_map("root");
+    txn.apply_update(u);
+    let actual = root.to_json();
+
+    assert_eq!(actual, expected);
 }
 
 #[test]

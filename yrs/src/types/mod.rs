@@ -111,19 +111,16 @@ impl<'a> From<&'a mut Box<Branch>> for BranchPtr {
 impl<'a> From<&'a Box<Branch>> for BranchPtr {
     fn from(branch: &'a Box<Branch>) -> Self {
         let b: &Branch = &*branch;
-        
-            let ptr = unsafe { NonNull::new_unchecked(b as *const Branch as *mut Branch) };
-            BranchPtr(ptr)
-        
+
+        let ptr = unsafe { NonNull::new_unchecked(b as *const Branch as *mut Branch) };
+        BranchPtr(ptr)
     }
 }
 
 impl<'a> From<&'a Branch> for BranchPtr {
     fn from(branch: &'a Branch) -> Self {
-        
-            let ptr = unsafe { NonNull::new_unchecked(branch as *const Branch as *mut Branch) };
-            BranchPtr(ptr)
-        
+        let ptr = unsafe { NonNull::new_unchecked(branch as *const Branch as *mut Branch) };
+        BranchPtr(ptr)
     }
 }
 
@@ -386,7 +383,7 @@ impl Branch {
                     let p = ptr.unwrap();
                     let right = txn.store.blocks.split_block(p, index, encoding);
                     if let Block::Item(item) = p.deref() {
-                        if let Some(dst) = item.moved {
+                        if let Some(_) = item.moved {
                             if let Some(src) = right {
                                 if let Some(&prev_dst) = txn.prev_moved.get(&p) {
                                     txn.prev_moved.insert(src, prev_dst);
@@ -427,7 +424,7 @@ impl Branch {
                             remaining = 0;
                             let new_right = txn.store.blocks.split_block(p, offset, encoding);
                             if let Block::Item(item) = p.deref() {
-                                if let Some(dst) = item.moved {
+                                if let Some(_) = item.moved {
                                     if let Some(src) = new_right {
                                         if let Some(&prev_dst) = txn.prev_moved.get(&p) {
                                             txn.prev_moved.insert(src, prev_dst);

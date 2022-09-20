@@ -1,5 +1,5 @@
 use crate::error::Error;
-use crate::number::VarInt;
+use crate::number::{Signed, SignedVarInt, VarInt};
 
 #[derive(Default)]
 pub struct Cursor<'a> {
@@ -30,7 +30,7 @@ impl<'a> Read for Cursor<'a> {
     /// Take a slice of the next `len` bytes and advance the position by `len`.
     fn read_exact(&mut self, len: usize) -> Result<&[u8], Error> {
         if self.next + len > self.buf.len() {
-            Err(Error::EndOfBuffer)
+            Err(Error::EndOfBuffer(len))
         } else {
             let slice = &self.buf[self.next..(self.next + len)];
             self.next += len as usize;
@@ -44,7 +44,7 @@ impl<'a> Read for Cursor<'a> {
             self.next += 1;
             Ok(b)
         } else {
-            Err(Error::EndOfBuffer)
+            Err(Error::EndOfBuffer(1))
         }
     }
 }
@@ -89,6 +89,14 @@ pub trait Read: Sized {
     #[inline]
     fn read_var<T: VarInt>(&mut self) -> Result<T, Error> {
         T::read(self)
+    }
+
+    /// Read unsigned integer with variable length.
+    /// * numbers < 2^7 are stored in one byte
+    /// * numbers < 2^14 are stored in two bytes
+    #[inline]
+    fn read_var_signed<T: SignedVarInt>(&mut self) -> Result<Signed<T>, Error> {
+        T::read_signed(self)
     }
 
     /// Read string of variable length.

@@ -1258,7 +1258,7 @@ mod test {
 
         let test_case_count: u32 = decoder.read_var().unwrap();
         for i in 0..test_case_count {
-            let mut doc = Doc::new();
+            let doc = Doc::new();
             let array = doc.transact().get_array("array");
 
             let update_count: u32 = decoder.read_var().unwrap();
