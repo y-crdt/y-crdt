@@ -15,9 +15,9 @@ pub fn exchange_updates(docs: &[&Doc]) {
         for j in 0..docs.len() {
             if i != j {
                 let a = docs[i];
-                let ta = a.transact();
+                let ta = a.transact_mut();
                 let b = docs[j];
-                let mut tb = b.transact();
+                let mut tb = b.transact_mut();
 
                 let sv = tb.state_vector().encode_v1();
                 let update = ta.encode_diff_v1(&StateVector::decode_v1(sv.as_slice()).unwrap());
@@ -97,9 +97,8 @@ impl TestConnector {
         let mut tc = Self::with_rng(rng);
         for client_id in 0..peer_num {
             let peer = tc.create_peer(client_id as ClientID);
-            let mut txn = peer.doc.transact();
-            txn.get_text("text");
-            txn.get_map("map");
+            peer.doc.get_text("text");
+            peer.doc.get_map("map");
         }
         tc.sync_all();
         tc
@@ -379,7 +378,7 @@ impl TestConnector {
     }
 
     fn read_sync_step2<D: Decoder>(peer: &TestPeer, decoder: &mut D) {
-        let mut txn = peer.doc.transact();
+        let mut txn = peer.doc.transact_mut();
 
         let update = Update::decode_v1(decoder.read_buf().unwrap()).unwrap();
         txn.apply_update(update);
@@ -391,14 +390,14 @@ impl TestConnector {
 
     /// Create a sync step 1 message based on the state of the current shared document.
     fn write_step1<E: Encoder>(peer: &TestPeer, encoder: &mut E) {
-        let txn = peer.doc.transact();
+        let txn = peer.doc.transact_mut();
 
         encoder.write_var(MSG_SYNC_STEP_1);
         encoder.write_buf(txn.state_vector().encode_v1());
     }
 
     fn write_step2<E: Encoder>(peer: &TestPeer, sv: &[u8], encoder: &mut E) {
-        let txn = peer.doc.transact();
+        let txn = peer.doc.transact_mut();
         let remote_sv = StateVector::decode_v1(sv).unwrap();
 
         encoder.write_var(MSG_SYNC_STEP_2);
@@ -421,8 +420,8 @@ impl TestConnector {
         */
         let inner = self.0.borrow();
         for i in 0..(inner.peers.len() - 1) {
-            let a = inner.peers[i].doc.transact();
-            let b = inner.peers[i + 1].doc.transact();
+            let a = inner.peers[i].doc.transact_mut();
+            let b = inner.peers[i + 1].doc.transact_mut();
 
             let astore = a.store();
             let bstore = b.store();

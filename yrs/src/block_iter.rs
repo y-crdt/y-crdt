@@ -1,8 +1,9 @@
 use crate::block::{Block, BlockPtr, Item, ItemContent, Prelim};
 use crate::moving::{Move, RelativePosition};
+use crate::transaction::{ReadTxn, TransactionMut};
 use crate::types::array::ArraySliceConcat;
 use crate::types::{BranchPtr, TypePtr, Value};
-use crate::{Transaction, ID};
+use crate::ID;
 use std::ops::DerefMut;
 
 #[derive(Debug, Clone)]
@@ -68,7 +69,7 @@ impl BlockIter {
         }
     }
 
-    pub fn move_to(&mut self, index: u32, txn: &mut Transaction) {
+    pub fn move_to(&mut self, index: u32, txn: &mut TransactionMut) {
         if index > self.index {
             if !self.try_forward(txn, index - self.index) {
                 panic!("Block iter couldn't move forward");
@@ -94,13 +95,13 @@ impl BlockIter {
         false
     }
 
-    pub fn forward(&mut self, txn: &mut Transaction, len: u32) {
+    pub fn forward(&mut self, txn: &mut TransactionMut, len: u32) {
         if !self.try_forward(txn, len) {
             panic!("Length exceeded")
         }
     }
 
-    pub fn try_forward(&mut self, txn: &mut Transaction, mut len: u32) -> bool {
+    pub fn try_forward(&mut self, txn: &mut TransactionMut, mut len: u32) -> bool {
         if len == 0 && self.next_item.is_none() {
             return true;
         }
@@ -170,7 +171,7 @@ impl BlockIter {
         true
     }
 
-    fn reduce_moves(&mut self, txn: &mut Transaction) {
+    fn reduce_moves(&mut self, txn: &mut TransactionMut) {
         let mut item = self.next_item;
         if item.is_some() {
             while item == self.curr_move_start {
@@ -181,7 +182,7 @@ impl BlockIter {
         }
     }
 
-    pub fn backward(&mut self, txn: &mut Transaction, mut len: u32) {
+    pub fn backward(&mut self, txn: &mut TransactionMut, mut len: u32) {
         if self.index < len {
             panic!("Length exceeded");
         }
@@ -269,7 +270,7 @@ impl BlockIter {
     /// item. While the computed item is on the stack, it is possible that a user inserts something
     /// between target and the item on the stack. Then we expect that the newly inserted item
     /// is supposed to be on the new computed item.
-    fn pop(&mut self, txn: &mut Transaction) {
+    fn pop(&mut self, txn: &mut TransactionMut) {
         let mut start = None;
         let mut end = None;
         let mut moved = None;
@@ -293,7 +294,7 @@ impl BlockIter {
         self.reached_end = false;
     }
 
-    pub fn delete(&mut self, txn: &mut Transaction, mut len: u32) {
+    pub fn delete(&mut self, txn: &mut TransactionMut, mut len: u32) {
         let mut item = self.next_item;
         if self.index + len > self.branch.content_len() {
             panic!("Length exceeded");
@@ -352,7 +353,7 @@ impl BlockIter {
 
     pub(crate) fn slice<T>(
         &mut self,
-        txn: &mut Transaction,
+        txn: &mut TransactionMut,
         mut len: u32,
         mut value: Vec<Value>,
     ) -> Option<Vec<Value>>
@@ -416,7 +417,7 @@ impl BlockIter {
         Some(value)
     }
 
-    fn split_rel(&mut self, txn: &mut Transaction) {
+    fn split_rel(&mut self, txn: &mut TransactionMut) {
         if self.rel > 0 {
             if let Some(ptr) = self.next_item {
                 let mut item_id = ptr.id().clone();
@@ -427,12 +428,12 @@ impl BlockIter {
         }
     }
 
-    pub(crate) fn read_value(&mut self, txn: &mut Transaction) -> Option<Value> {
+    pub(crate) fn read_value(&mut self, txn: &mut TransactionMut) -> Option<Value> {
         let mut res = self.slice::<ArraySliceConcat>(txn, 1, Vec::default())?;
         res.pop()
     }
 
-    pub fn insert_contents<V: Prelim>(&mut self, txn: &mut Transaction, value: V) {
+    pub fn insert_contents<V: Prelim>(&mut self, txn: &mut TransactionMut, value: V) {
         self.reduce_moves(txn);
         self.split_rel(txn);
         let id = {
@@ -481,25 +482,28 @@ impl BlockIter {
 
     pub fn insert_move(
         &mut self,
-        txn: &mut Transaction,
+        txn: &mut TransactionMut,
         start: RelativePosition,
         end: RelativePosition,
     ) {
         self.insert_contents(txn, Move::new(start, end, -1));
     }
 
-    pub fn values<'a, 'txn>(&'a mut self, txn: &'txn mut Transaction) -> Values<'a, 'txn> {
+    pub fn values<'a, 'txn, T: ReadTxn>(
+        &'a mut self,
+        txn: &'txn mut TransactionMut<'txn>,
+    ) -> Values<'a, 'txn> {
         Values::new(self, txn)
     }
 }
 
 pub struct Values<'a, 'txn> {
     iter: &'a mut BlockIter,
-    txn: &'txn mut Transaction,
+    txn: &'txn mut TransactionMut<'txn>,
 }
 
 impl<'a, 'txn> Values<'a, 'txn> {
-    fn new(iter: &'a mut BlockIter, txn: &'txn mut Transaction) -> Self {
+    fn new(iter: &'a mut BlockIter, txn: &'txn mut TransactionMut<'txn>) -> Self {
         Values { iter, txn }
     }
 }

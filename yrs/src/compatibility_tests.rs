@@ -21,7 +21,7 @@ fn text_insert_delete() {
         ```js
            const doc = new Y.Doc()
            const ytext = doc.getText('type')
-           doc.transact(function () {
+           doc..transact_mut()(function () {
                ytext.insert(0, 'def')
                ytext.insert(0, 'abc')
                ytext.insert(6, 'ghi')
@@ -103,7 +103,7 @@ fn text_insert_delete() {
     let setter = visited.clone();
 
     let mut doc = Doc::new();
-    let txt = doc.transact().get_text("type");
+    let txt = doc.get_text("type");
     let _sub = doc.observe_update_v1(move |_, e| {
         let u = Update::decode_v1(&e.update).unwrap();
         for (actual, expected) in u.blocks.blocks().zip(expected_blocks.as_slice()) {
@@ -115,7 +115,7 @@ fn text_insert_delete() {
         setter.set(true);
     });
     {
-        let mut txn = doc.transact();
+        let mut txn = doc.transact_mut();
         txn.apply_update(Update::decode_v1(update).unwrap());
     }
     assert_eq!(txt.to_string(), "abhi".to_string());
@@ -328,10 +328,10 @@ fn utf32_lib0_v2_decoding() {
         0, 19, 8, 1, 5, 1, 1, 1, 1, 9, 2, 4, 4, 4, 4, 4,
     ];
     let doc = Doc::new();
-    let mut txn = doc.transact();
+    let xml = doc.get_xml_element("prosemirror");
+    let mut txn = doc.transact_mut();
     let update = Update::decode_v2(data).unwrap();
     txn.apply_update(update);
-    let xml = txn.get_xml_element("prosemirror");
     let actual: XmlElement = xml.get(0).unwrap().try_into().unwrap();
 
     let expected_attrs = HashMap::from([
@@ -377,8 +377,8 @@ fn roundtrip_v2(payload: &[u8], expected: &Vec<BlockCarrier>) {
 #[test]
 fn negative_zero_decoding_v2() {
     let doc = Doc::new();
-    let mut txn = doc.transact();
-    let root = txn.get_map("root");
+    let root = doc.get_map("root");
+    let mut txn = doc.transact_mut();
 
     root.insert(&mut txn, "sequence", PrelimMap::<bool>::new()); //NOTE: This is how I put nested map.
     let sequence = root.get("sequence").unwrap().to_ymap().unwrap();
@@ -400,8 +400,8 @@ fn negative_zero_decoding_v2() {
     let u = Update::decode_v2(&buffer).unwrap();
 
     let doc2 = Doc::new();
-    let mut txn = doc.transact();
-    let root = txn.get_map("root");
+    let root = doc2.get_map("root");
+    let mut txn = doc2.transact_mut();
     txn.apply_update(u);
     let actual = root.to_json();
 
@@ -435,14 +435,12 @@ fn test_data_set<P: AsRef<std::path::Path>>(path: P) {
     for test_num in 0..test_count {
         let updates_len: u32 = decoder.read_var().unwrap();
         let doc = Doc::new();
-        let mut txn = doc.transact();
-        let txt = txn.get_text("text");
-        let map = txn.get_map("map");
-        let arr = txn.get_array("array");
-        drop(txn);
+        let txt = doc.get_text("text");
+        let map = doc.get_map("map");
+        let arr = doc.get_array("array");
         for _ in 0..updates_len {
             let update = Update::decode_v1(decoder.read_buf().unwrap()).unwrap();
-            doc.transact().apply_update(update);
+            doc.transact_mut().apply_update(update);
         }
         let expected = decoder.read_string().unwrap();
         assert_eq!(txt.to_string(), expected, "failed at {} run", test_num);

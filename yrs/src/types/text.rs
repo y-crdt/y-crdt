@@ -1,7 +1,7 @@
 use crate::block::{Block, BlockPtr, Item, ItemContent, ItemPosition, Prelim};
 use crate::block_store::Snapshot;
 use crate::event::Subscription;
-use crate::transaction::Transaction;
+use crate::transaction::TransactionMut;
 use crate::types::{Attrs, Branch, BranchPtr, Delta, Observers, Path, Value, TYPE_REFS_TEXT};
 use crate::*;
 use lib0::any::Any;
@@ -51,7 +51,11 @@ impl Text {
         self.0
     }
 
-    pub(crate) fn find_position(&self, txn: &mut Transaction, index: u32) -> Option<ItemPosition> {
+    pub(crate) fn find_position(
+        &self,
+        txn: &mut TransactionMut,
+        index: u32,
+    ) -> Option<ItemPosition> {
         let mut pos = {
             let inner = self.as_ref();
             ItemPosition {
@@ -138,7 +142,7 @@ impl Text {
     /// the end of it.
     ///
     /// This method will panic if provided `index` is greater than the length of a current text.
-    pub fn insert(&self, txn: &mut Transaction, index: u32, chunk: &str) {
+    pub fn insert(&self, txn: &mut TransactionMut, index: u32, chunk: &str) {
         if chunk.is_empty() {
             return;
         }
@@ -168,7 +172,7 @@ impl Text {
     /// This method will panic if provided `index` is greater than the length of a current text.
     pub fn insert_with_attributes(
         &self,
-        txn: &mut Transaction,
+        txn: &mut TransactionMut,
         index: u32,
         chunk: &str,
         mut attributes: Attrs,
@@ -197,7 +201,7 @@ impl Text {
     /// the end of it.
     ///
     /// This method will panic if provided `index` is greater than the length of a current text.
-    pub fn insert_embed(&self, txn: &mut Transaction, index: u32, content: Any) {
+    pub fn insert_embed(&self, txn: &mut TransactionMut, index: u32, content: Any) {
         if let Some(pos) = self.find_position(txn, index) {
             let value = crate::block::PrelimEmbed(content);
             txn.create_item(&pos, value, None);
@@ -216,7 +220,7 @@ impl Text {
     /// This method will panic if provided `index` is greater than the length of a current text.
     pub fn insert_embed_with_attributes(
         &self,
-        txn: &mut Transaction,
+        txn: &mut TransactionMut,
         index: u32,
         embed: Any,
         mut attributes: Attrs,
@@ -239,7 +243,7 @@ impl Text {
     }
 
     /// Appends a given `chunk` of text at the end of a current text structure.
-    pub fn push(&self, txn: &mut Transaction, chunk: &str) {
+    pub fn push(&self, txn: &mut TransactionMut, chunk: &str) {
         let idx = self.len();
         self.insert(txn, idx, chunk)
     }
@@ -247,7 +251,7 @@ impl Text {
     /// Removes up to a `len` characters from a current text structure, starting at given `index`.
     /// This method panics in case when not all expected characters were removed (due to
     /// insufficient number of characters to remove) or `index` is outside of the bounds of text.
-    pub fn remove_range(&self, txn: &mut Transaction, index: u32, len: u32) {
+    pub fn remove_range(&self, txn: &mut TransactionMut, index: u32, len: u32) {
         if let Some(pos) = self.find_position(txn, index) {
             Self::remove(txn, pos, len)
         } else {
@@ -255,7 +259,7 @@ impl Text {
         }
     }
 
-    fn remove(txn: &mut Transaction, mut pos: ItemPosition, len: u32) {
+    fn remove(txn: &mut TransactionMut, mut pos: ItemPosition, len: u32) {
         let encoding = txn.store().options.offset_kind;
         let mut remaining = len;
         let start = pos.right.clone();
@@ -311,7 +315,7 @@ impl Text {
     }
 
     fn clean_format_gap(
-        txn: &mut Transaction,
+        txn: &mut TransactionMut,
         mut start: Option<BlockPtr>,
         mut end: Option<BlockPtr>,
         start_attrs: &Attrs,
@@ -352,7 +356,7 @@ impl Text {
 
     /// Wraps an existing piece of text within a range described by `index`-`len` parameters with
     /// formatting blocks containing provided `attributes` metadata.
-    pub fn format(&self, txn: &mut Transaction, index: u32, len: u32, attributes: Attrs) {
+    pub fn format(&self, txn: &mut TransactionMut, index: u32, len: u32, attributes: Attrs) {
         if let Some(pos) = self.find_position(txn, index) {
             self.insert_format(txn, pos, len, attributes)
         } else {
@@ -362,7 +366,7 @@ impl Text {
 
     fn insert_format(
         &self,
-        txn: &mut Transaction,
+        txn: &mut TransactionMut,
         mut pos: ItemPosition,
         mut len: u32,
         attrs: Attrs,
@@ -452,7 +456,7 @@ impl Text {
 
     fn insert_attributes(
         &self,
-        txn: &mut Transaction,
+        txn: &mut TransactionMut,
         pos: &mut ItemPosition,
         attrs: Attrs,
     ) -> Attrs {
@@ -498,7 +502,7 @@ impl Text {
 
     fn insert_negated_attributes(
         &self,
-        txn: &mut Transaction,
+        txn: &mut TransactionMut,
         pos: &mut ItemPosition,
         mut attrs: Attrs,
     ) {
@@ -559,7 +563,7 @@ impl Text {
     /// Returns an [Observer] which, when dropped, will unsubscribe current callback.
     pub fn observe<F>(&mut self, f: F) -> Subscription<TextEvent>
     where
-        F: Fn(&Transaction, &TextEvent) -> () + 'static,
+        F: Fn(&TransactionMut, &TextEvent) -> () + 'static,
     {
         if let Observers::Text(eh) = self.0.observers.get_or_insert_with(Observers::text) {
             eh.subscribe(f)
@@ -583,7 +587,7 @@ impl Text {
         }
     }
 
-    pub fn diff<T, F>(&self, txn: &mut Transaction, compute_ychange: F) -> Vec<Diff<T>>
+    pub fn diff<T, F>(&self, txn: &mut TransactionMut, compute_ychange: F) -> Vec<Diff<T>>
     where
         F: Fn(YChange) -> T,
     {
@@ -593,7 +597,7 @@ impl Text {
     /// Returns the Delta representation of this YText type.
     pub fn diff_range<T, F>(
         &self,
-        txn: &mut Transaction,
+        txn: &mut TransactionMut,
         hi: Option<&Snapshot>,
         lo: Option<&Snapshot>,
         compute_ychange: F,
@@ -810,14 +814,14 @@ impl TextEvent {
 
     /// Returns a summary of text changes made over corresponding [Text] collection within
     /// bounds of current transaction.
-    pub fn delta(&self, txn: &Transaction) -> &[Delta] {
+    pub fn delta(&self, txn: &TransactionMut) -> &[Delta] {
         let delta = unsafe { self.delta.get().as_mut().unwrap() };
         delta
             .get_or_insert_with(|| Self::get_delta(self.target.0, txn))
             .as_slice()
     }
 
-    pub(crate) fn get_delta(target: BranchPtr, txn: &Transaction) -> Vec<Delta> {
+    pub(crate) fn get_delta(target: BranchPtr, txn: &TransactionMut) -> Vec<Delta> {
         #[derive(Debug, Clone, Copy, Eq, PartialEq)]
         enum Action {
             Insert,
@@ -1023,12 +1027,12 @@ impl TextEvent {
 pub struct PrelimText<'a>(pub &'a str);
 
 impl Prelim for PrelimText<'_> {
-    fn into_content(self, _txn: &mut Transaction) -> (ItemContent, Option<Self>) {
+    fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
         let inner = Branch::new(TYPE_REFS_TEXT, None);
         (ItemContent::Type(inner), Some(self))
     }
 
-    fn integrate(self, txn: &mut Transaction, inner_ref: BranchPtr) {
+    fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
         let text = Text::from(inner_ref);
         text.push(txn, self.0);
     }
@@ -1051,9 +1055,9 @@ mod test {
     #[test]
     fn insert_empty_string() {
         let doc = Doc::new();
-        let mut txn = doc.transact();
+        let txt = doc.get_text("test");
+        let mut txn = doc.transact_mut();
 
-        let txt = txn.get_text("test");
         assert_eq!(txt.to_string().as_str(), "");
 
         txt.push(&mut txn, "");
@@ -1067,8 +1071,8 @@ mod test {
     #[test]
     fn append_single_character_blocks() {
         let doc = Doc::new();
-        let mut txn = doc.transact();
-        let txt = txn.get_text("test");
+        let txt = doc.get_text("test");
+        let mut txn = doc.transact_mut();
 
         txt.insert(&mut txn, 0, "a");
         txt.insert(&mut txn, 1, "b");
@@ -1080,8 +1084,8 @@ mod test {
     #[test]
     fn append_mutli_character_blocks() {
         let doc = Doc::new();
-        let mut txn = doc.transact();
-        let txt = txn.get_text("test");
+        let txt = doc.get_text("test");
+        let mut txn = doc.transact_mut();
 
         txt.insert(&mut txn, 0, "hello");
         txt.insert(&mut txn, 5, " ");
@@ -1093,8 +1097,8 @@ mod test {
     #[test]
     fn prepend_single_character_blocks() {
         let doc = Doc::new();
-        let mut txn = doc.transact();
-        let txt = txn.get_text("test");
+        let txt = doc.get_text("test");
+        let mut txn = doc.transact_mut();
 
         txt.insert(&mut txn, 0, "a");
         txt.insert(&mut txn, 0, "b");
@@ -1106,8 +1110,8 @@ mod test {
     #[test]
     fn prepend_mutli_character_blocks() {
         let doc = Doc::new();
-        let mut txn = doc.transact();
-        let txt = txn.get_text("test");
+        let txt = doc.get_text("test");
+        let mut txn = doc.transact_mut();
 
         txt.insert(&mut txn, 0, "hello");
         txt.insert(&mut txn, 0, " ");
@@ -1119,8 +1123,8 @@ mod test {
     #[test]
     fn insert_after_block() {
         let doc = Doc::new();
-        let mut txn = doc.transact();
-        let txt = txn.get_text("test");
+        let txt = doc.get_text("test");
+        let mut txn = doc.transact_mut();
 
         txt.insert(&mut txn, 0, "hello");
         txt.insert(&mut txn, 5, " ");
@@ -1133,8 +1137,8 @@ mod test {
     #[test]
     fn insert_inside_of_block() {
         let doc = Doc::new();
-        let mut txn = doc.transact();
-        let txt = txn.get_text("test");
+        let txt = doc.get_text("test");
+        let mut txn = doc.transact_mut();
 
         txt.insert(&mut txn, 0, "it was expected");
         txt.insert(&mut txn, 6, " not");
@@ -1145,14 +1149,14 @@ mod test {
     #[test]
     fn insert_concurrent_root() {
         let d1 = Doc::with_client_id(1);
-        let mut t1 = d1.transact();
-        let txt1 = t1.get_text("test");
+        let txt1 = d1.get_text("test");
+        let mut t1 = d1.transact_mut();
 
         txt1.insert(&mut t1, 0, "hello ");
 
         let d2 = Doc::with_client_id(2);
-        let mut t2 = d2.transact();
-        let txt2 = t2.get_text("test");
+        let txt2 = d2.get_text("test");
+        let mut t2 = d2.transact_mut();
 
         txt2.insert(&mut t2, 0, "world");
 
@@ -1175,20 +1179,20 @@ mod test {
     #[test]
     fn insert_concurrent_in_the_middle() {
         let d1 = Doc::with_client_id(1);
-        let mut t1 = d1.transact();
-        let txt1 = t1.get_text("test");
+        let txt1 = d1.get_text("test");
+        let mut t1 = d1.transact_mut();
 
         txt1.insert(&mut t1, 0, "I expect that");
         assert_eq!(txt1.to_string().as_str(), "I expect that");
 
         let d2 = Doc::with_client_id(2);
-        let mut t2 = d2.transact();
+        let txt2 = d2.get_text("test");
+        let mut t2 = d2.transact_mut();
 
         let d2_sv = t2.state_vector().encode_v1();
         let u1 = t1.encode_diff_v1(&StateVector::decode_v1(&d2_sv).unwrap());
         t2.apply_update(Update::decode_v1(u1.as_slice()).unwrap());
 
-        let txt2 = t2.get_text("test");
         assert_eq!(txt2.to_string().as_str(), "I expect that");
 
         txt2.insert(&mut t2, 1, " have");
@@ -1215,20 +1219,20 @@ mod test {
     #[test]
     fn append_concurrent() {
         let d1 = Doc::with_client_id(1);
-        let mut t1 = d1.transact();
-        let txt1 = t1.get_text("test");
+        let txt1 = d1.get_text("test");
+        let mut t1 = d1.transact_mut();
 
         txt1.insert(&mut t1, 0, "aaa");
         assert_eq!(txt1.to_string().as_str(), "aaa");
 
         let d2 = Doc::with_client_id(2);
-        let mut t2 = d2.transact();
+        let txt2 = d2.get_text("test");
+        let mut t2 = d2.transact_mut();
 
         let d2_sv = t2.state_vector().encode_v1();
         let u1 = t1.encode_diff_v1(&StateVector::decode_v1(&d2_sv.as_slice()).unwrap());
         t2.apply_update(Update::decode_v1(u1.as_slice()).unwrap());
 
-        let txt2 = t2.get_text("test");
         assert_eq!(txt2.to_string().as_str(), "aaa");
 
         txt2.insert(&mut t2, 3, "bbb");
@@ -1256,8 +1260,8 @@ mod test {
     #[test]
     fn delete_single_block_start() {
         let doc = Doc::new();
-        let mut txn = doc.transact();
-        let txt = txn.get_text("test");
+        let txt = doc.get_text("test");
+        let mut txn = doc.transact_mut();
 
         txt.insert(&mut txn, 0, "bbb");
         txt.insert(&mut txn, 0, "aaa");
@@ -1270,8 +1274,8 @@ mod test {
     #[test]
     fn delete_single_block_end() {
         let doc = Doc::new();
-        let mut txn = doc.transact();
-        let txt = txn.get_text("test");
+        let txt = doc.get_text("test");
+        let mut txn = doc.transact_mut();
 
         txt.insert(&mut txn, 0, "bbb");
         txt.insert(&mut txn, 0, "aaa");
@@ -1283,8 +1287,8 @@ mod test {
     #[test]
     fn delete_multiple_whole_blocks() {
         let doc = Doc::new();
-        let mut txn = doc.transact();
-        let txt = txn.get_text("test");
+        let txt = doc.get_text("test");
+        let mut txn = doc.transact_mut();
 
         txt.insert(&mut txn, 0, "a");
         txt.insert(&mut txn, 1, "b");
@@ -1303,8 +1307,8 @@ mod test {
     #[test]
     fn delete_slice_of_block() {
         let doc = Doc::new();
-        let mut txn = doc.transact();
-        let txt = txn.get_text("test");
+        let txt = doc.get_text("test");
+        let mut txn = doc.transact_mut();
 
         txt.insert(&mut txn, 0, "abc");
         txt.remove_range(&mut txn, 1, 1);
@@ -1315,8 +1319,8 @@ mod test {
     #[test]
     fn delete_multiple_blocks_with_slicing() {
         let doc = Doc::new();
-        let mut txn = doc.transact();
-        let txt = txn.get_text("test");
+        let txt = doc.get_text("test");
+        let mut txn = doc.transact_mut();
 
         txt.insert(&mut txn, 0, "hello ");
         txt.insert(&mut txn, 6, "beautiful");
@@ -1329,8 +1333,8 @@ mod test {
     #[test]
     fn insert_after_delete() {
         let doc = Doc::new();
-        let mut txn = doc.transact();
-        let txt = txn.get_text("test");
+        let txt = doc.get_text("test");
+        let mut txn = doc.transact_mut();
 
         txt.insert(&mut txn, 0, "hello ");
         txt.remove_range(&mut txn, 0, 5);
@@ -1342,8 +1346,8 @@ mod test {
     #[test]
     fn concurrent_insert_delete() {
         let d1 = Doc::with_client_id(1);
-        let mut t1 = d1.transact();
-        let txt1 = t1.get_text("test");
+        let txt1 = d1.get_text("test");
+        let mut t1 = d1.transact_mut();
 
         txt1.insert(&mut t1, 0, "hello world");
         assert_eq!(txt1.to_string().as_str(), "hello world");
@@ -1351,9 +1355,9 @@ mod test {
         let u1 = d1.encode_state_as_update_v1(&StateVector::default());
 
         let d2 = Doc::with_client_id(2);
-        let mut t2 = d2.transact();
+        let txt2 = d2.get_text("test");
+        let mut t2 = d2.transact_mut();
         t2.apply_update(Update::decode_v1(u1.as_slice()).unwrap());
-        let txt2 = t2.get_text("test");
         assert_eq!(txt2.to_string().as_str(), "hello world");
 
         txt1.insert(&mut t1, 5, " beautiful");
@@ -1384,10 +1388,7 @@ mod test {
     #[test]
     fn insert_and_remove_event_changes() {
         let d1 = Doc::with_client_id(1);
-        let mut txt = {
-            let mut txn = d1.transact();
-            txn.get_text("text")
-        };
+        let mut txt = d1.get_text("text");
         let delta = Rc::new(RefCell::new(None));
         let delta_c = delta.clone();
         let _sub = txt.observe(move |txn, e| {
@@ -1396,7 +1397,7 @@ mod test {
 
         // insert initial string
         {
-            let mut txn = d1.transact();
+            let mut txn = d1.transact_mut();
             txt.insert(&mut txn, 0, "abcd");
         }
         assert_eq!(
@@ -1406,7 +1407,7 @@ mod test {
 
         // remove middle
         {
-            let mut txn = d1.transact();
+            let mut txn = d1.transact_mut();
             txt.remove_range(&mut txn, 1, 2);
         }
         assert_eq!(
@@ -1416,7 +1417,7 @@ mod test {
 
         // insert again
         {
-            let mut txn = d1.transact();
+            let mut txn = d1.transact_mut();
             txt.insert(&mut txn, 1, "ef");
         }
         assert_eq!(
@@ -1429,18 +1430,15 @@ mod test {
 
         // replicate data to another peer
         let d2 = Doc::with_client_id(2);
-        let mut txt = {
-            let mut txn = d2.transact();
-            txn.get_text("text")
-        };
+        let mut txt = d2.get_text("text");
         let delta_c = delta.clone();
         let _sub = txt.observe(move |txn, e| {
             *delta_c.borrow_mut() = Some(e.delta(txn).to_vec());
         });
 
         {
-            let t1 = d1.transact();
-            let mut t2 = d2.transact();
+            let t1 = d1.transact_mut();
+            let mut t2 = d2.transact_mut();
 
             let sv = t2.state_vector();
             let mut encoder = EncoderV1::new();
@@ -1459,10 +1457,10 @@ mod test {
         let mut options = Options::with_client_id(1);
         options.offset_kind = OffsetKind::Utf32;
         let doc = Doc::with_options(options);
-        let txt = doc.transact().get_text("content");
+        let txt = doc.get_text("content");
 
-        txt.insert(&mut doc.transact(), 0, r#"“”"#); // these chars are 3B long each
-        txt.insert(&mut doc.transact(), 1, r#"test"#);
+        txt.insert(&mut doc.transact_mut(), 0, r#"“”"#); // these chars are 3B long each
+        txt.insert(&mut doc.transact_mut(), 1, r#"test"#);
 
         assert_eq!(txt.to_string(), r#"“test”"#);
     }
@@ -1474,23 +1472,17 @@ mod test {
             options.offset_kind = OffsetKind::Utf32;
             Doc::with_options(options)
         };
-        let txt1 = {
-            let mut txn = d1.transact();
-            txn.get_text("test")
-        };
+        let txt1 = d1.get_text("test");
 
         let d2 = {
             let mut options = Options::with_client_id(2);
             options.offset_kind = OffsetKind::Bytes;
             Doc::with_options(options)
         };
-        let txt2 = {
-            let mut txn = d2.transact();
-            txn.get_text("test")
-        };
+        let txt2 = d2.get_text("test");
 
         {
-            let mut txn = d1.transact();
+            let mut txn = d1.transact_mut();
 
             txt1.insert(&mut txn, 0, "Zażółć gęślą jaźń");
             assert_eq!(txt1.to_string(), "Zażółć gęślą jaźń");
@@ -1505,7 +1497,7 @@ mod test {
         }
 
         {
-            let mut txn = d1.transact();
+            let mut txn = d1.transact_mut();
             txt1.remove_range(&mut txn, 9, 3);
             txt1.insert(&mut txn, 9, "si");
 
@@ -1523,16 +1515,16 @@ mod test {
 
     fn text_transactions() -> [Box<dyn Fn(&mut Doc, &mut StdRng)>; 2] {
         fn insert_text(doc: &mut Doc, rng: &mut StdRng) {
-            let mut txn = doc.transact();
-            let ytext = txn.get_text("text");
+            let ytext = doc.get_text("text");
+            let mut txn = doc.transact_mut();
             let pos = rng.between(0, ytext.len());
             let word = rng.random_string();
             ytext.insert(&mut txn, pos, word.as_str());
         }
 
         fn delete_text(doc: &mut Doc, rng: &mut StdRng) {
-            let mut txn = doc.transact();
-            let ytext = txn.get_text("text");
+            let ytext = doc.get_text("text");
+            let mut txn = doc.transact_mut();
             let len = ytext.len();
             if len > 0 {
                 let pos = rng.between(0, len - 1);
@@ -1556,10 +1548,7 @@ mod test {
     #[test]
     fn basic_format() {
         let d1 = Doc::with_client_id(1);
-        let mut txt1 = {
-            let mut txn = d1.transact();
-            txn.get_text("text")
-        };
+        let mut txt1 = d1.get_text("text");
 
         let delta1 = Rc::new(RefCell::new(None));
         let delta_clone = delta1.clone();
@@ -1568,10 +1557,7 @@ mod test {
         });
 
         let d2 = Doc::with_client_id(2);
-        let mut txt2 = {
-            let mut txn = d2.transact();
-            txn.get_text("text")
-        };
+        let mut txt2 = d2.get_text("text");
 
         let delta2 = Rc::new(RefCell::new(None));
         let delta_clone = delta2.clone();
@@ -1583,7 +1569,7 @@ mod test {
 
         // step 1
         {
-            let mut txn = d1.transact();
+            let mut txn = d1.transact_mut();
             txt1.insert_with_attributes(&mut txn, 0, "abc", a.clone());
             let update = txn.encode_update_v1();
             txn.commit();
@@ -1600,7 +1586,7 @@ mod test {
             );
             assert_eq!(delta1.take(), expected);
 
-            let mut txn = d2.transact();
+            let mut txn = d2.transact_mut();
             txn.apply_update(Update::decode_v1(update.as_slice()).unwrap());
             txn.commit();
 
@@ -1610,7 +1596,7 @@ mod test {
 
         // step 2
         {
-            let mut txn = d1.transact();
+            let mut txn = d1.transact_mut();
             txt1.remove_range(&mut txn, 0, 1);
             let update = txn.encode_update_v1();
             txn.commit();
@@ -1624,7 +1610,7 @@ mod test {
             );
             assert_eq!(delta1.take(), expected);
 
-            let mut txn = d2.transact();
+            let mut txn = d2.transact_mut();
             txn.apply_update(Update::decode_v1(update.as_slice()).unwrap());
             txn.commit();
 
@@ -1634,7 +1620,7 @@ mod test {
 
         // step 3
         {
-            let mut txn = d1.transact();
+            let mut txn = d1.transact_mut();
             txt1.remove_range(&mut txn, 1, 1);
             let update = txn.encode_update_v1();
             txn.commit();
@@ -1648,7 +1634,7 @@ mod test {
             );
             assert_eq!(delta1.take(), expected);
 
-            let mut txn = d2.transact();
+            let mut txn = d2.transact_mut();
             txn.apply_update(Update::decode_v1(update.as_slice()).unwrap());
             txn.commit();
 
@@ -1658,7 +1644,7 @@ mod test {
 
         // step 4
         {
-            let mut txn = d1.transact();
+            let mut txn = d1.transact_mut();
             txt1.insert_with_attributes(&mut txn, 0, "z", a.clone());
             let update = txn.encode_update_v1();
             txn.commit();
@@ -1672,7 +1658,7 @@ mod test {
             );
             assert_eq!(delta1.take(), expected);
 
-            let mut txn = d2.transact();
+            let mut txn = d2.transact_mut();
             txn.apply_update(Update::decode_v1(update.as_slice()).unwrap());
             txn.commit();
 
@@ -1682,7 +1668,7 @@ mod test {
 
         // step 5
         {
-            let mut txn = d1.transact();
+            let mut txn = d1.transact_mut();
             txt1.insert(&mut txn, 0, "y");
             let update = txn.encode_update_v1();
             txn.commit();
@@ -1699,7 +1685,7 @@ mod test {
             );
             assert_eq!(delta1.take(), expected);
 
-            let mut txn = d2.transact();
+            let mut txn = d2.transact_mut();
             txn.apply_update(Update::decode_v1(update.as_slice()).unwrap());
             txn.commit();
 
@@ -1709,7 +1695,7 @@ mod test {
 
         // step 6
         {
-            let mut txn = d1.transact();
+            let mut txn = d1.transact_mut();
             let b: Attrs = HashMap::from([("bold".into(), Any::Null)]);
             txt1.format(&mut txn, 0, 2, b.clone());
             let update = txn.encode_update_v1();
@@ -1730,7 +1716,7 @@ mod test {
             );
             assert_eq!(delta1.take(), expected);
 
-            let mut txn = d2.transact();
+            let mut txn = d2.transact_mut();
             txn.apply_update(Update::decode_v1(update.as_slice()).unwrap());
             txn.commit();
 
@@ -1742,10 +1728,7 @@ mod test {
     #[test]
     fn embed_with_attributes() {
         let d1 = Doc::with_client_id(1);
-        let mut txt1 = {
-            let mut txn = d1.transact();
-            txn.get_text("text")
-        };
+        let mut txt1 = d1.get_text("text");
 
         let delta1 = Rc::new(RefCell::new(None));
         let delta_clone = delta1.clone();
@@ -1755,7 +1738,7 @@ mod test {
         });
 
         {
-            let mut txn = d1.transact();
+            let mut txn = d1.transact_mut();
             let a1: Attrs = HashMap::from([("bold".into(), true.into())]);
             txt1.insert_with_attributes(&mut txn, 0, "ab", a1.clone());
 
@@ -1782,7 +1765,7 @@ mod test {
                 Diff::new(embed.into(), a2),
                 Diff::new("b".into(), a1.clone()),
             ];
-            let mut txn = d1.transact();
+            let mut txn = d1.transact_mut();
             assert_eq!(txt1.diff(&mut txn, YChange::identity), expected);
         }
     }
@@ -1790,19 +1773,19 @@ mod test {
     #[test]
     fn issue_101() {
         let d1 = Doc::with_client_id(1);
-        let mut txt1 = d1.transact().get_text("text");
+        let mut txt1 = d1.get_text("text");
         let delta = Rc::new(RefCell::new(None));
         let delta_copy = delta.clone();
 
         let attrs: Attrs = HashMap::from([("bold".into(), true.into())]);
 
-        txt1.insert(&mut d1.transact(), 0, "abcd");
+        txt1.insert(&mut d1.transact_mut(), 0, "abcd");
 
         let _sub = txt1.observe(move |txn, e| {
             let mut d = delta_copy.borrow_mut();
             *d = Some(e.delta(txn).to_vec());
         });
-        txt1.format(&mut d1.transact(), 1, 2, attrs.clone());
+        txt1.format(&mut d1.transact_mut(), 1, 2, attrs.clone());
 
         let expected = vec![
             Delta::Retain(1, None),
@@ -1828,22 +1811,22 @@ mod test {
         let text2 = r#"test"#;
 
         {
-            let mut txn = doc.transact();
-            let text = txn.get_text("content");
+            let text = doc.get_text("content");
+            let mut txn = doc.transact_mut();
             text.insert(&mut txn, 0, text1);
             txn.commit();
         }
 
         {
-            let mut txn = doc.transact();
-            let text = txn.get_text("content");
+            let text = doc.get_text("content");
+            let mut txn = doc.transact_mut();
             text.insert(&mut txn, 100, text2);
             txn.commit();
         }
 
         {
-            let mut txn = doc.transact();
-            let mut text = txn.get_text("content");
+            let mut text = doc.get_text("content");
+            let mut txn = doc.transact_mut();
 
             let c1 = text1.chars().count();
             let c2 = text2.chars().count();
@@ -1859,8 +1842,8 @@ mod test {
         }
 
         {
-            let mut txn = doc.transact();
-            let text = txn.get_text("content");
+            let text = doc.get_text("content");
+            let mut txn = doc.transact_mut();
             assert_eq!(text.to_string(), "");
         }
     }
@@ -1868,8 +1851,8 @@ mod test {
     #[test]
     fn text_diff_adjacent() {
         let doc = Doc::with_client_id(1);
-        let mut txn = doc.transact();
-        let txt = txn.get_text("text");
+        let txt = doc.get_text("text");
+        let mut txn = doc.transact_mut();
         let attrs1 = Attrs::from([("a".into(), "a".into())]);
         txt.insert_with_attributes(&mut txn, 0, "abc", attrs1.clone());
         let attrs2 = Attrs::from([("a".into(), "a".into()), ("b".into(), "b".into())]);
@@ -1886,43 +1869,43 @@ mod test {
     #[test]
     fn text_remove_4_byte_range() {
         let d1 = Doc::new();
-        let txt = d1.transact().get_text("test");
+        let txt = d1.get_text("test");
 
-        txt.insert(&mut d1.transact(), 0, "😭😊");
+        txt.insert(&mut d1.transact_mut(), 0, "😭😊");
 
         let d2 = Doc::new();
         exchange_updates(&[&d1, &d2]);
 
-        txt.remove_range(&mut d1.transact(), 0, "😭".len() as u32);
+        txt.remove_range(&mut d1.transact_mut(), 0, "😭".len() as u32);
         assert_eq!(txt.to_string().as_str(), "😊");
 
         exchange_updates(&[&d1, &d2]);
-        let txt = d2.transact().get_text("test");
+        let txt = d2.get_text("test");
         assert_eq!(txt.to_string().as_str(), "😊");
     }
 
     #[test]
     fn text_remove_3_byte_range() {
         let d1 = Doc::new();
-        let txt = d1.transact().get_text("test");
+        let txt = d1.get_text("test");
 
-        txt.insert(&mut d1.transact(), 0, "⏰⏳");
+        txt.insert(&mut d1.transact_mut(), 0, "⏰⏳");
 
         let d2 = Doc::new();
         exchange_updates(&[&d1, &d2]);
 
-        txt.remove_range(&mut d1.transact(), 0, "⏰".len() as u32);
+        txt.remove_range(&mut d1.transact_mut(), 0, "⏰".len() as u32);
         assert_eq!(txt.to_string().as_str(), "⏳");
 
         exchange_updates(&[&d1, &d2]);
-        let txt = d2.transact().get_text("test");
+        let txt = d2.get_text("test");
         assert_eq!(txt.to_string().as_str(), "⏳");
     }
     #[test]
     fn delete_4_byte_character_from_middle() {
         let doc = Doc::new();
-        let mut txn = doc.transact();
-        let txt = txn.get_text("test");
+        let txt = doc.get_text("test");
+        let mut txn = doc.transact_mut();
 
         txt.insert(&mut txn, 0, "😊😭");
         // uncomment the following line will pass the test
@@ -1935,8 +1918,8 @@ mod test {
     #[test]
     fn delete_3_byte_character_from_middle_1() {
         let doc = Doc::new();
-        let mut txn = doc.transact();
-        let txt = txn.get_text("test");
+        let txt = doc.get_text("test");
+        let mut txn = doc.transact_mut();
 
         txt.insert(&mut txn, 0, "⏰⏳");
         // uncomment the following line will pass the test
@@ -1949,8 +1932,8 @@ mod test {
     #[test]
     fn delete_3_byte_character_from_middle_2() {
         let doc = Doc::new();
-        let mut txn = doc.transact();
-        let txt = txn.get_text("test");
+        let txt = doc.get_text("test");
+        let mut txn = doc.transact_mut();
 
         txt.insert(&mut txn, 0, "👯🙇‍♀️🙇‍♀️⏰👩‍❤️‍💋‍👨");
 
@@ -1968,8 +1951,8 @@ mod test {
     #[test]
     fn delete_3_byte_character_from_middle_after_insert_and_format() {
         let doc = Doc::new();
-        let mut txn = doc.transact();
-        let txt = txn.get_text("test");
+        let txt = doc.get_text("test");
+        let mut txn = doc.transact_mut();
 
         txt.insert(&mut txn, 0, "🙇‍♀️🙇‍♀️⏰👩‍❤️‍💋‍👨");
         txt.insert(&mut txn, 0, "👯");
@@ -1989,8 +1972,8 @@ mod test {
     #[test]
     fn delete_multi_byte_character_from_middle_after_insert_and_format() {
         let doc = Doc::with_client_id(1);
-        let mut txn = doc.transact();
-        let txt = txn.get_text("test");
+        let txt = doc.get_text("test");
+        let mut txn = doc.transact_mut();
 
         txt.insert(&mut txn, 0, "❤️❤️🙇‍♀️🙇‍♀️⏰👩‍❤️‍💋‍👨👩‍❤️‍💋‍👨");
         txt.insert(&mut txn, 0, "👯");
@@ -2018,8 +2001,8 @@ mod test {
     #[test]
     fn insert_string_with_no_attribute() {
         let doc = Doc::new();
-        let mut txn = doc.transact();
-        let txt = txn.get_text("test");
+        let txt = doc.get_text("test");
+        let mut txn = doc.transact_mut();
 
         let attrs = Attrs::from([("a".into(), "a".into())]);
         txt.insert_with_attributes(&mut txn, 0, "ac", attrs.clone());
@@ -2037,13 +2020,13 @@ mod test {
     #[test]
     fn snapshots() {
         let doc = Doc::with_client_id(1);
-        let text = doc.transact().get_text("text");
-        text.insert(&mut doc.transact(), 0, "hello");
-        let prev = doc.transact().snapshot();
-        text.insert(&mut doc.transact(), 5, " world");
-        let next = doc.transact().snapshot();
+        let text = doc.get_text("text");
+        text.insert(&mut doc.transact_mut(), 0, "hello");
+        let prev = doc.transact_mut().snapshot();
+        text.insert(&mut doc.transact_mut(), 5, " world");
+        let next = doc.transact_mut().snapshot();
         let diff = text.diff_range(
-            &mut doc.transact(),
+            &mut doc.transact_mut(),
             Some(&next),
             Some(&prev),
             YChange::identity,

@@ -8,16 +8,16 @@ use crate::update::PendingUpdate;
 use crate::updates::encoder::{Encode, Encoder};
 use crate::{Snapshot, UpdateEvent};
 use lib0::error::Error;
-use std::cell::UnsafeCell;
+use std::cell::{BorrowError, BorrowMutError, Ref, RefCell, RefMut};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
-use std::ops::{Deref, DerefMut};
+use std::ops::Deref;
 use std::rc::Rc;
 
 /// Store is a core element of a document. It contains all of the information, like block store
 /// map of root types, pending updates waiting to be applied once a missing update information
 /// arrives and all subscribed callbacks.
-pub(crate) struct Store {
+pub struct Store {
     pub options: Options,
 
     /// Root types (a.k.a. top-level types). These types are defined by users at the document level,
@@ -298,26 +298,20 @@ impl std::fmt::Display for Store {
 
 #[repr(transparent)]
 #[derive(Debug, Clone)]
-pub(crate) struct StoreRef(Rc<UnsafeCell<Store>>);
+pub(crate) struct StoreRef(Rc<RefCell<Store>>);
 
-impl Deref for StoreRef {
-    type Target = Store;
-
-    #[inline]
-    fn deref(&self) -> &Self::Target {
-        unsafe { (self.0.get() as *const Self::Target).as_ref().unwrap() }
+impl StoreRef {
+    pub fn try_borrow(&self) -> Result<Ref<Store>, BorrowError> {
+        self.0.try_borrow()
     }
-}
 
-impl DerefMut for StoreRef {
-    #[inline]
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        unsafe { self.0.get().as_mut().unwrap() }
+    pub fn try_borrow_mut(&self) -> Result<RefMut<Store>, BorrowMutError> {
+        self.0.try_borrow_mut()
     }
 }
 
 impl From<Store> for StoreRef {
     fn from(store: Store) -> Self {
-        StoreRef(Rc::new(UnsafeCell::new(store)))
+        StoreRef(Rc::new(RefCell::new(store)))
     }
 }

@@ -1,4 +1,5 @@
-use crate::{DeleteSet, StateVector, Transaction};
+use crate::transaction::TransactionMut;
+use crate::{DeleteSet, StateVector};
 use rand::RngCore;
 use std::collections::HashMap;
 use std::ptr::NonNull;
@@ -8,16 +9,17 @@ pub(crate) struct EventHandler<T>(Box<Subscriptions<T>>);
 
 pub type SubscriptionId = u32;
 
-type Subscriptions<T> = HashMap<SubscriptionId, Box<dyn Fn(&Transaction, &T) -> ()>>;
+type Subscriptions<V> =
+    HashMap<SubscriptionId, Box<dyn for<'doc> Fn(&TransactionMut<'doc>, &V) -> ()>>;
 
-impl<T> EventHandler<T> {
+impl<V> EventHandler<V> {
     pub fn new() -> Self {
         EventHandler(Box::new(Subscriptions::new()))
     }
 
-    pub fn subscribe<F>(&mut self, f: F) -> Subscription<T>
+    pub fn subscribe<F>(&mut self, f: F) -> Subscription<V>
     where
-        F: Fn(&Transaction, &T) -> () + 'static,
+        F: Fn(&TransactionMut, &V) -> () + 'static,
     {
         let mut rng = rand::thread_rng();
         let id = rng.next_u32();
@@ -30,7 +32,7 @@ impl<T> EventHandler<T> {
         self.0.remove(&subscription_id);
     }
 
-    pub fn publish(&self, txn: &Transaction, arg: &T) {
+    pub fn publish(&self, txn: &TransactionMut, arg: &V) {
         for f in self.0.values() {
             f(txn, arg);
         }
@@ -104,7 +106,7 @@ mod test {
     #[test]
     fn subscription() {
         let doc = Doc::new();
-        let txn = doc.transact(); // just for sake of parameter passing
+        let txn = doc.transact_mut(); // just for sake of parameter passing
 
         let mut eh: EventHandler<u32> = EventHandler::new();
         let s1_state = Arc::new(AtomicU32::new(0));

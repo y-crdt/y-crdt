@@ -5,11 +5,13 @@ pub mod xml;
 
 use crate::*;
 pub use map::Map;
+use std::cell::{BorrowError, BorrowMutError};
 pub use text::Text;
 
 use crate::block::{Block, BlockPtr, Item, ItemContent, ItemPosition, Prelim};
 use crate::event::EventHandler;
 use crate::store::StoreRef;
+use crate::transaction::TransactionMut;
 use crate::types::array::{Array, ArrayEvent};
 use crate::types::map::MapEvent;
 use crate::types::text::TextEvent;
@@ -57,7 +59,7 @@ pub struct BranchPtr(NonNull<Branch>);
 impl BranchPtr {
     pub(crate) fn trigger(
         &self,
-        txn: &Transaction,
+        txn: &TransactionMut,
         subs: HashSet<Option<Rc<str>>>,
     ) -> Option<Event> {
         if let Some(observers) = self.observers.as_ref() {
@@ -74,7 +76,7 @@ impl BranchPtr {
         }
     }
 
-    pub(crate) fn trigger_deep(&self, txn: &Transaction, e: &Events) {
+    pub(crate) fn trigger_deep(&self, txn: &TransactionMut, e: &Events) {
         if let Some(observers) = self.deep_observers.as_ref() {
             observers.publish(txn, e);
         }
@@ -253,9 +255,14 @@ impl Branch {
         })
     }
 
-    pub(crate) fn try_transact(&self) -> Option<Transaction> {
-        let store = self.store.clone()?;
-        Some(Transaction::new(store))
+    pub(crate) fn try_transact(&self) -> Result<Transaction, BorrowError> {
+        let store = self.store.as_ref().unwrap();
+        Ok(Transaction::new(store.try_borrow()?))
+    }
+
+    pub(crate) fn try_transact_mut(&self) -> Result<TransactionMut, BorrowMutError> {
+        let store = self.store.as_ref().unwrap();
+        Ok(TransactionMut::new(store.try_borrow_mut()?))
     }
 
     /// Returns an identifier of an underlying complex data type (eg. is it an Array or a Map).
@@ -326,7 +333,7 @@ impl Branch {
 
     /// Removes an entry under given `key` of a map component of a current root type, returning
     /// a materialized representation of value stored underneath if entry existed prior deletion.
-    pub(crate) fn remove(&self, txn: &mut Transaction, key: &str) -> Option<Value> {
+    pub(crate) fn remove(&self, txn: &mut TransactionMut, key: &str) -> Option<Value> {
         let ptr = *self.map.get(key)?;
         let prev = match ptr.deref() {
             Block::Item(item) if !item.is_deleted() => item.content.get_last(),
@@ -362,7 +369,7 @@ impl Branch {
     /// If `index` is outside of the range of an array component of current branch node, both tuple
     /// values will be `None`.
     fn index_to_ptr(
-        txn: &mut Transaction,
+        txn: &mut TransactionMut,
         mut ptr: Option<BlockPtr>,
         mut index: u32,
     ) -> (Option<BlockPtr>, Option<BlockPtr>) {
@@ -401,7 +408,7 @@ impl Branch {
     }
     /// Removes up to a `len` of countable elements from current branch sequence, starting at the
     /// given `index`. Returns number of removed elements.
-    pub(crate) fn remove_at(&self, txn: &mut Transaction, index: u32, len: u32) -> u32 {
+    pub(crate) fn remove_at(&self, txn: &mut TransactionMut, index: u32, len: u32) -> u32 {
         let mut remaining = len;
         let start = { self.start };
         let (_, mut ptr) = if index == 0 {
@@ -455,7 +462,7 @@ impl Branch {
     /// `index`. Returns an item reference created as a result of this operation.
     pub(crate) fn insert_at<V: Prelim>(
         &self,
-        txn: &mut Transaction,
+        txn: &mut TransactionMut,
         index: u32,
         value: V,
     ) -> BlockPtr {
@@ -522,7 +529,7 @@ impl Branch {
 
     pub fn observe_deep<F>(&mut self, f: F) -> Subscription<Events>
     where
-        F: Fn(&Transaction, &Events) -> () + 'static,
+        F: Fn(&TransactionMut, &Events) -> () + 'static,
     {
         let eh = self
             .deep_observers
@@ -548,7 +555,7 @@ pub trait DeepObservable {
     /// when dropped.
     fn observe_deep<F>(&mut self, f: F) -> Subscription<Events>
     where
-        F: Fn(&Transaction, &Events) -> () + 'static;
+        F: Fn(&TransactionMut, &Events) -> () + 'static;
 
     /// Unobserves callback identified by `subscription_id` (which can be obtained by consuming
     /// [Subscription] using `into` cast).
@@ -561,7 +568,7 @@ where
 {
     fn observe_deep<F>(&mut self, f: F) -> Subscription<Events>
     where
-        F: Fn(&Transaction, &Events) -> () + 'static,
+        F: Fn(&TransactionMut, &Events) -> () + 'static,
     {
         self.as_mut().observe_deep(f)
     }
@@ -888,7 +895,7 @@ impl Observers {
     pub fn publish(
         &self,
         branch_ref: BranchPtr,
-        txn: &Transaction,
+        txn: &TransactionMut,
         keys: HashSet<Option<Rc<str>>>,
     ) -> Event {
         match self {
@@ -1005,7 +1012,7 @@ pub enum Delta {
 pub type Attrs = HashMap<Rc<str>, Any>;
 
 pub(crate) fn event_keys(
-    txn: &Transaction,
+    txn: &TransactionMut,
     target: BranchPtr,
     keys_changed: &HashSet<Option<Rc<str>>>,
 ) -> HashMap<Rc<str>, EntryChange> {
@@ -1057,7 +1064,7 @@ pub(crate) fn event_keys(
     keys
 }
 
-pub(crate) fn event_change_set(txn: &Transaction, start: Option<BlockPtr>) -> ChangeSet<Change> {
+pub(crate) fn event_change_set(txn: &TransactionMut, start: Option<BlockPtr>) -> ChangeSet<Change> {
     let mut added = HashSet::new();
     let mut deleted = HashSet::new();
     let mut delta = Vec::new();
@@ -1077,7 +1084,7 @@ pub(crate) fn event_change_set(txn: &Transaction, start: Option<BlockPtr>) -> Ch
         is_deleted: bool,
     }
 
-    fn is_moved_by_new(ptr: Option<BlockPtr>, txn: &Transaction) -> bool {
+    fn is_moved_by_new(ptr: Option<BlockPtr>, txn: &TransactionMut) -> bool {
         let mut moved = ptr;
         while let Some(Block::Item(item)) = moved.as_deref() {
             if txn.has_added(&item.id) {
@@ -1114,7 +1121,7 @@ pub(crate) fn event_change_set(txn: &Transaction, start: Option<BlockPtr>) -> Ch
                             let txn = unsafe {
                                 //TODO: remove this - find a way to work with get_moved_coords
                                 // without need for &mut Transaction
-                                (txn as *const Transaction as *mut Transaction)
+                                (txn as *const TransactionMut as *mut TransactionMut)
                                     .as_mut()
                                     .unwrap()
                             };

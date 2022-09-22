@@ -1,9 +1,10 @@
 use crate::block::{Block, BlockPtr, ItemContent, Prelim};
 use crate::block_iter::BlockIter;
+use crate::transaction::TransactionMut;
 use crate::types::BranchPtr;
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
-use crate::{Transaction, ID};
+use crate::ID;
 use lib0::error::Error;
 use std::collections::HashSet;
 use std::ops::{Deref, DerefMut};
@@ -42,16 +43,16 @@ impl Move {
 
     pub(crate) fn get_moved_coords(
         &self,
-        txn: &mut Transaction,
+        txn: &mut TransactionMut,
     ) -> (Option<BlockPtr>, Option<BlockPtr>) {
         let start = Self::get_item_ptr(txn, &self.start.id, self.start.assoc);
         let end = Self::get_item_ptr(txn, &self.end.id, self.end.assoc);
         (start, end)
     }
 
-    fn get_item_ptr(txn: &mut Transaction, id: &ID, assoc: Assoc) -> Option<BlockPtr> {
+    fn get_item_ptr(txn: &mut TransactionMut, id: &ID, assoc: Assoc) -> Option<BlockPtr> {
         if assoc {
-            txn.store_mut().blocks.get_item_clean_start(id)
+            txn.store.blocks.get_item_clean_start(id)
         } else if let Some(Block::Item(item)) =
             txn.store_mut().blocks.get_item_clean_end(id).as_deref()
         {
@@ -63,7 +64,7 @@ impl Move {
 
     pub(crate) fn find_move_loop(
         &self,
-        txn: &mut Transaction,
+        txn: &mut TransactionMut,
         moved: BlockPtr,
         tracked_moved_items: &mut HashSet<BlockPtr>,
     ) -> bool {
@@ -97,7 +98,7 @@ impl Move {
         e.insert(ptr);
     }
 
-    pub(crate) fn integrate_block(&mut self, txn: &mut Transaction, item: BlockPtr) {
+    pub(crate) fn integrate_block(&mut self, txn: &mut TransactionMut, item: BlockPtr) {
         let (init, end) = self.get_moved_coords(txn);
         let mut max_priority = 0i32;
         let adapt_priority = self.priority < 0;
@@ -177,7 +178,7 @@ impl Move {
         }
     }
 
-    pub(crate) fn delete(&self, txn: &mut Transaction, item: BlockPtr) {
+    pub(crate) fn delete(&self, txn: &mut TransactionMut, item: BlockPtr) {
         let (mut start, end) = self.get_moved_coords(txn);
         while start != end && start.is_some() {
             if let Some(start_ptr) = start {
@@ -203,7 +204,7 @@ impl Move {
             break;
         }
 
-        fn reintegrate(mut ptr: BlockPtr, txn: &mut Transaction) {
+        fn reintegrate(mut ptr: BlockPtr, txn: &mut TransactionMut) {
             let ptr_copy = ptr.clone();
             if let Block::Item(item) = ptr.deref_mut() {
                 let deleted = item.is_deleted();
@@ -280,12 +281,12 @@ impl Decode for Move {
 
 impl Prelim for Move {
     #[inline]
-    fn into_content(self, _: &mut Transaction) -> (ItemContent, Option<Self>) {
+    fn into_content(self, _: &mut TransactionMut) -> (ItemContent, Option<Self>) {
         (ItemContent::Move(Box::new(self)), None)
     }
 
     #[inline]
-    fn integrate(self, _: &mut Transaction, _inner_ref: BranchPtr) {}
+    fn integrate(self, _: &mut TransactionMut, _inner_ref: BranchPtr) {}
 }
 
 impl std::fmt::Display for Move {
@@ -326,7 +327,7 @@ impl RelativePosition {
     }
 
     pub(crate) fn from_type_index(
-        txn: &mut Transaction,
+        txn: &mut TransactionMut,
         branch: BranchPtr,
         mut index: u32,
         assoc: Assoc,

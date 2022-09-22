@@ -1,12 +1,15 @@
 use crate::block::ClientID;
+use std::cell::{BorrowError, BorrowMutError};
 
 use crate::event::{AfterTransactionEvent, EventHandler, Subscription, UpdateEvent};
 use crate::store::{Store, StoreRef};
-use crate::transaction::Transaction;
+use crate::transaction::{Transaction, TransactionMut};
+use crate::types::{
+    TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT,
+};
 use crate::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
-use crate::{DeleteSet, StateVector, SubscriptionId};
+use crate::{Array, DeleteSet, Map, StateVector, SubscriptionId, Text, XmlElement, XmlText};
 use rand::Rng;
-use std::ops::Deref;
 
 /// A Yrs document type. Documents are most important units of collaborative resources management.
 /// All shared collections live within a scope of their corresponding documents. All updates are
@@ -67,10 +70,126 @@ impl Doc {
         }
     }
 
+    /// Returns a [Text] data structure stored under a given `name`. Text structures are used for
+    /// collaborative text editing: they expose operations to append and remove chunks of text,
+    /// which are free to execute concurrently by multiple peers over remote boundaries.
+    ///
+    /// If not structure under defined `name` existed before, it will be created and returned
+    /// instead.
+    ///
+    /// If a structure under defined `name` already existed, but its type was different it will be
+    /// reinterpreted as a text (in such case a sequence component of complex data type will be
+    /// interpreted as a list of text chunks).
+    pub fn get_text(&self, name: &str) -> Text {
+        let mut r = self.store.try_borrow_mut().expect(
+            "tried to get a root level type while another transaction on the document is open",
+        );
+        let mut c = r.get_or_create_type(name, None, TYPE_REFS_TEXT);
+        c.store = Some(self.store.clone());
+        Text::from(c)
+    }
+
+    /// Returns a [Map] data structure stored under a given `name`. Maps are used to store key-value
+    /// pairs associated together. These values can be primitive data (similar but not limited to
+    /// a JavaScript Object Notation) as well as other shared types (Yrs maps, arrays, text
+    /// structures etc.), enabling to construct a complex recursive tree structures.
+    ///
+    /// If not structure under defined `name` existed before, it will be created and returned
+    /// instead.
+    ///
+    /// If a structure under defined `name` already existed, but its type was different it will be
+    /// reinterpreted as a map (in such case a map component of complex data type will be
+    /// interpreted as native map).
+    pub fn get_map(&self, name: &str) -> Map {
+        let mut r = self.store.try_borrow_mut().expect(
+            "tried to get a root level type while another transaction on the document is open",
+        );
+        let mut c = r.get_or_create_type(name, None, TYPE_REFS_MAP);
+        c.store = Some(self.store.clone());
+        Map::from(c)
+    }
+
+    /// Returns an [Array] data structure stored under a given `name`. Array structures are used for
+    /// storing a sequences of elements in ordered manner, positioning given element accordingly
+    /// to its index.
+    ///
+    /// If not structure under defined `name` existed before, it will be created and returned
+    /// instead.
+    ///
+    /// If a structure under defined `name` already existed, but its type was different it will be
+    /// reinterpreted as an array (in such case a sequence component of complex data type will be
+    /// interpreted as a list of inserted values).
+    pub fn get_array(&self, name: &str) -> Array {
+        let mut r = self.store.try_borrow_mut().expect(
+            "tried to get a root level type while another transaction on the document is open",
+        );
+        let mut c = r.get_or_create_type(name, None, TYPE_REFS_ARRAY);
+        c.store = Some(self.store.clone());
+        Array::from(c)
+    }
+
+    /// Returns a [XmlElement] data structure stored under a given `name`. XML elements represent
+    /// nodes of XML document. They can contain attributes (key-value pairs, both of string type)
+    /// as well as other nested XML elements or text values, which are stored in their insertion
+    /// order.
+    ///
+    /// If not structure under defined `name` existed before, it will be created and returned
+    /// instead.
+    ///
+    /// If a structure under defined `name` already existed, but its type was different it will be
+    /// reinterpreted as a XML element (in such case a map component of complex data type will be
+    /// interpreted as map of its attributes, while a sequence component - as a list of its child
+    /// XML nodes).
+    pub fn get_xml_element(&self, name: &str) -> XmlElement {
+        let mut r = self.store.try_borrow_mut().expect(
+            "tried to get a root level type while another transaction on the document is open",
+        );
+        let mut c = r.get_or_create_type(name, Some("UNDEFINED".into()), TYPE_REFS_XML_ELEMENT);
+        c.store = Some(self.store.clone());
+        XmlElement::from(c)
+    }
+
+    /// Returns a [XmlText] data structure stored under a given `name`. Text structures are used for
+    /// collaborative text editing: they expose operations to append and remove chunks of text,
+    /// which are free to execute concurrently by multiple peers over remote boundaries.
+    ///
+    /// If not structure under defined `name` existed before, it will be created and returned
+    /// instead.
+    ///
+    /// If a structure under defined `name` already existed, but its type was different it will be
+    /// reinterpreted as a text (in such case a sequence component of complex data type will be
+    /// interpreted as a list of text chunks).
+    pub fn get_xml_text(&self, name: &str) -> XmlText {
+        let mut r = self.store.try_borrow_mut().expect(
+            "tried to get a root level type while another transaction on the document is open",
+        );
+        let mut c = r.get_or_create_type(name, None, TYPE_REFS_XML_TEXT);
+        c.store = Some(self.store.clone());
+        XmlText::from(c)
+    }
+
+    /// Creates a transaction used for all kind of block store operations.
+    /// Transaction cleanups & calling event handles happen when the transaction struct is dropped.
+    pub fn try_transact(&self) -> Result<Transaction, BorrowError> {
+        Ok(Transaction::new(self.store.try_borrow()?))
+    }
+
+    /// Creates a transaction used for all kind of block store operations.
+    /// Transaction cleanups & calling event handles happen when the transaction struct is dropped.
+    pub fn try_transact_mut(&self) -> Result<TransactionMut, BorrowMutError> {
+        Ok(TransactionMut::new(self.store.try_borrow_mut()?))
+    }
+
     /// Creates a transaction used for all kind of block store operations.
     /// Transaction cleanups & calling event handles happen when the transaction struct is dropped.
     pub fn transact(&self) -> Transaction {
-        Transaction::new(self.store.clone())
+        self.try_transact().unwrap()
+    }
+
+    /// Creates a transaction used for all kind of block store operations.
+    /// Transaction cleanups & calling event handles happen when the transaction struct is dropped.
+    pub fn transact_mut(&self) -> TransactionMut {
+        self.try_transact_mut().unwrap()
     }
 
     /// Subscribe callback function for any changes performed within transaction scope. These
@@ -81,19 +200,17 @@ impl Doc {
     /// Returns a subscription, which will unsubscribe function when dropped.
     pub fn observe_update_v1<F>(&mut self, f: F) -> Subscription<UpdateEvent>
     where
-        F: Fn(&Transaction, &UpdateEvent) -> () + 'static,
+        F: Fn(&TransactionMut, &UpdateEvent) -> () + 'static,
     {
-        let eh = self
-            .store
-            .update_v1_events
-            .get_or_insert_with(EventHandler::new);
+        let mut r = self.store.try_borrow_mut().unwrap();
+        let eh = r.update_v1_events.get_or_insert_with(EventHandler::new);
         eh.subscribe(f)
     }
 
     /// Manually unsubscribes from a callback used in [Doc::observe_update_v1] method.
     pub fn unobserve_update_v1(&mut self, subscription_id: SubscriptionId) {
-        self.store
-            .update_v1_events
+        let mut r = self.store.try_borrow_mut().unwrap();
+        r.update_v1_events
             .as_mut()
             .unwrap()
             .unsubscribe(subscription_id);
@@ -107,19 +224,17 @@ impl Doc {
     /// Returns a subscription, which will unsubscribe function when dropped.
     pub fn observe_update_v2<F>(&mut self, f: F) -> Subscription<UpdateEvent>
     where
-        F: Fn(&Transaction, &UpdateEvent) -> () + 'static,
+        F: Fn(&TransactionMut, &UpdateEvent) -> () + 'static,
     {
-        let eh = self
-            .store
-            .update_v2_events
-            .get_or_insert_with(EventHandler::new);
+        let mut r = self.store.try_borrow_mut().unwrap();
+        let eh = r.update_v2_events.get_or_insert_with(EventHandler::new);
         eh.subscribe(f)
     }
 
     /// Manually unsubscribes from a callback used in [Doc::observe_update_v1] method.
     pub fn unobserve_update_v2(&mut self, subscription_id: SubscriptionId) {
-        self.store
-            .update_v2_events
+        let mut r = self.store.try_borrow_mut().unwrap();
+        r.update_v2_events
             .as_mut()
             .unwrap()
             .unsubscribe(subscription_id);
@@ -129,22 +244,25 @@ impl Doc {
     /// deletions when a document transaction is committed.
     pub fn observe_transaction_cleanup<F>(&mut self, f: F) -> Subscription<AfterTransactionEvent>
     where
-        F: Fn(&Transaction, &AfterTransactionEvent) -> () + 'static,
+        F: Fn(&TransactionMut, &AfterTransactionEvent) -> () + 'static,
     {
-        self.store
-            .after_transaction_events
+        let mut r = self.store.try_borrow_mut().unwrap();
+        r.after_transaction_events
             .get_or_insert_with(EventHandler::new)
             .subscribe(f)
     }
     /// Cancels the transaction cleanup callback associated with the `subscription_id`
     pub fn unobserve_transaction_cleanup(&mut self, subscription_id: SubscriptionId) {
-        if let Some(handler) = self.store.after_transaction_events.as_mut() {
+        let mut r = self.store.try_borrow_mut().unwrap();
+        if let Some(handler) = r.after_transaction_events.as_mut() {
             (*handler).unsubscribe(subscription_id);
         }
     }
 
     pub fn encode_state_as_update<E: Encoder>(&self, sv: &StateVector, encoder: &mut E) {
-        let store = self.store.deref();
+        let store = self.store.try_borrow().expect(
+            "trying to read contents of the document while other transaction may be modifying them",
+        );
         store.write_blocks_from(sv, encoder);
         let ds = DeleteSet::from(&store.blocks);
         ds.encode(encoder);
@@ -212,6 +330,7 @@ pub enum OffsetKind {
 #[cfg(test)]
 mod test {
     use crate::block::{Block, ItemContent};
+    use crate::transaction::TransactionMut;
     use crate::update::Update;
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
@@ -239,10 +358,11 @@ mod test {
             198, 5, 0, 1, 49, 68, 227, 214, 245, 198, 5, 1, 1, 50, 0,
         ];
         let doc = Doc::new();
-        let mut tr = doc.transact();
+        let txt = doc.get_text("type");
+        let mut tr = doc.transact_mut();
         tr.apply_update(Update::decode_v1(update).unwrap());
 
-        let actual = tr.get_text("type").to_string();
+        let actual = txt.to_string();
         assert_eq!(actual, "210".to_owned());
     }
 
@@ -265,18 +385,19 @@ mod test {
             48, 49, 50, 4, 65, 1, 1, 1, 0, 0, 1, 3, 0, 0,
         ];
         let doc = Doc::new();
-        let mut tr = doc.transact();
+        let txt = doc.get_text("type");
+        let mut tr = doc.transact_mut();
         tr.apply_update(Update::decode_v2(update).unwrap());
 
-        let actual = tr.get_text("type").to_string();
+        let actual = txt.to_string();
         assert_eq!(actual, "210".to_owned());
     }
 
     #[test]
     fn encode_basic() {
         let doc = Doc::with_client_id(1490905955);
-        let mut t = doc.transact();
-        let txt = t.get_text("type");
+        let txt = doc.get_text("type");
+        let mut t = doc.transact_mut();
         txt.insert(&mut t, 0, "0");
         txt.insert(&mut t, 0, "1");
         txt.insert(&mut t, 0, "2");
@@ -293,8 +414,8 @@ mod test {
     fn integrate() {
         // create new document at A and add some initial text to it
         let d1 = Doc::new();
-        let mut t1 = d1.transact();
-        let txt = t1.get_text("test");
+        let txt = d1.get_text("test");
+        let mut t1 = d1.transact_mut();
         // Question: why YText.insert uses positions of blocks instead of actual cursor positions
         // in text as seen by user?
         txt.insert(&mut t1, 0, "hello");
@@ -305,7 +426,8 @@ mod test {
 
         // create document at B
         let d2 = Doc::new();
-        let mut t2 = d2.transact();
+        let txt = d2.get_text("test");
+        let mut t2 = d2.transact_mut();
         let sv = t2.state_vector().encode_v1();
 
         // create an update A->B based on B's state vector
@@ -324,7 +446,6 @@ mod test {
         assert!(pending.1.is_none());
 
         // check if B sees the same thing that A does
-        let txt = t2.get_text("test");
         assert_eq!(txt.to_string(), "hello world".to_string());
     }
 
@@ -334,17 +455,17 @@ mod test {
         let doc = Doc::new();
         let mut doc2 = Doc::new();
         let c = counter.clone();
-        let sub = doc2.observe_update_v1(move |_txn, e| {
+        let sub = doc2.observe_update_v1(move |_: &TransactionMut, e| {
             let u = Update::decode_v1(&e.update).unwrap();
             for block in u.blocks.blocks() {
                 c.set(c.get() + block.len());
             }
         });
-        let mut txn = doc.transact();
-        let txt = txn.get_text("test");
+        let txt = doc.get_text("test");
+        let mut txn = doc.transact_mut();
         {
             txt.insert(&mut txn, 0, "abc");
-            let mut txn2 = doc2.transact();
+            let mut txn2 = doc2.transact_mut();
             let sv = txn2.state_vector().encode_v1();
             let u = txn.encode_diff_v1(&StateVector::decode_v1(sv.as_slice()).unwrap());
             txn2.apply_update(Update::decode_v1(u.as_slice()).unwrap());
@@ -355,7 +476,7 @@ mod test {
 
         {
             txt.insert(&mut txn, 3, "de");
-            let mut txn2 = doc2.transact();
+            let mut txn2 = doc2.transact_mut();
             let sv = txn2.state_vector().encode_v1();
             let u = txn.encode_diff_v1(&StateVector::decode_v1(sv.as_slice()).unwrap());
             txn2.apply_update(Update::decode_v1(u.as_slice()).unwrap());
@@ -366,7 +487,7 @@ mod test {
     #[test]
     fn pending_update_integration() {
         let doc = Doc::new();
-        let txt = doc.transact().get_text("source");
+        let txt = doc.get_text("source");
 
         let updates = [
             vec![
@@ -409,7 +530,7 @@ mod test {
         ];
 
         for u in updates {
-            let mut txn = doc.transact();
+            let mut txn = doc.transact_mut();
             let u = Update::decode_v1(u.as_slice()).unwrap();
             txn.apply_update(u);
         }
@@ -419,8 +540,8 @@ mod test {
     #[test]
     fn ypy_issue_32() {
         let d1 = Doc::with_client_id(1971027812);
-        let source_1 = d1.transact().get_text("source");
-        source_1.push(&mut d1.transact(), "a");
+        let source_1 = d1.get_text("source");
+        source_1.push(&mut d1.transact_mut(), "a");
 
         let updates = [
             vec![
@@ -445,17 +566,17 @@ mod test {
         ];
         for u in updates {
             let u = Update::decode_v1(&u).unwrap();
-            d1.transact().apply_update(u);
+            d1.transact_mut().apply_update(u);
         }
 
         assert_eq!("a", source_1.to_string());
 
         let d2 = Doc::new();
-        let source_2 = d2.transact().get_text("source");
-        let state_2 = d2.transact().state_vector().encode_v1();
+        let source_2 = d2.get_text("source");
+        let state_2 = d2.transact_mut().state_vector().encode_v1();
         let update = d1.encode_state_as_update_v1(&StateVector::decode_v1(&state_2).unwrap());
         let update = Update::decode_v1(&update).unwrap();
-        d2.transact().apply_update(update);
+        d2.transact_mut().apply_update(update);
 
         assert_eq!("a", source_2.to_string());
 
@@ -464,16 +585,16 @@ mod test {
             56, 4, 1, 120, 0,
         ])
         .unwrap();
-        d1.transact().apply_update(update);
+        d1.transact_mut().apply_update(update);
         assert_eq!("ab", source_1.to_string());
 
         let d3 = Doc::new();
-        let source_3 = d3.transact().get_text("source");
-        let state_3 = d3.transact().state_vector().encode_v1();
+        let source_3 = d3.get_text("source");
+        let state_3 = d3.transact_mut().state_vector().encode_v1();
         let state_3 = StateVector::decode_v1(&state_3).unwrap();
         let update = d1.encode_state_as_update_v1(&state_3);
         let update = Update::decode_v1(&update).unwrap();
-        d3.transact().apply_update(update);
+        d3.transact_mut().apply_update(update);
 
         assert_eq!("ab", source_3.to_string());
     }
@@ -482,8 +603,7 @@ mod test {
     fn observe_transaction_cleanup() {
         // Setup
         let mut doc = Doc::new();
-        let mut txn = doc.transact();
-        let text = txn.get_text("test");
+        let text = doc.get_text("test");
         let before_state = Rc::new(Cell::new(StateVector::default()));
         let after_state = Rc::new(Cell::new(StateVector::default()));
         let delete_set = Rc::new(Cell::new(DeleteSet::default()));
@@ -494,44 +614,50 @@ mod test {
         // Subscribe callback
 
         let sub: SubscriptionId = doc
-            .observe_transaction_cleanup(move |_, event| {
+            .observe_transaction_cleanup(move |_: &TransactionMut, event| {
                 before_ref.set(event.before_state.clone());
                 after_ref.set(event.after_state.clone());
                 delete_ref.set(event.delete_set.clone());
             })
             .into();
 
-        // Update the document
-        text.insert(&mut txn, 0, "abc");
-        text.remove_range(&mut txn, 1, 2);
-        txn.commit();
+        {
+            let mut txn = doc.transact_mut();
 
-        // Compare values
-        assert_eq!(before_state.take(), txn.before_state);
-        assert_eq!(after_state.take(), txn.after_state);
-        assert_eq!(delete_set.take(), txn.delete_set);
+            // Update the document
+            text.insert(&mut txn, 0, "abc");
+            text.remove_range(&mut txn, 1, 2);
+            txn.commit();
+
+            // Compare values
+            assert_eq!(before_state.take(), txn.before_state);
+            assert_eq!(after_state.take(), txn.after_state);
+            assert_eq!(delete_set.take(), txn.delete_set);
+        }
 
         // Ensure that the subscription is successfully dropped.
         doc.unobserve_transaction_cleanup(sub);
+        let mut txn = doc.transact_mut();
         text.insert(&mut txn, 0, "should not update");
-        txn.commit();
         assert_ne!(after_state.take(), txn.after_state);
     }
 
     #[test]
     fn partially_duplicated_update() {
         let d1 = Doc::with_client_id(1);
-        let txt1 = d1.transact().get_text("text");
-        txt1.insert(&mut d1.transact(), 0, "hello");
+        let txt1 = d1.get_text("text");
+        txt1.insert(&mut d1.transact_mut(), 0, "hello");
         let u = d1.encode_state_as_update_v1(&StateVector::default());
 
         let d2 = Doc::with_client_id(2);
-        let txt2 = d2.transact().get_text("text");
-        d2.transact().apply_update(Update::decode_v1(&u).unwrap());
+        let txt2 = d2.get_text("text");
+        d2.transact_mut()
+            .apply_update(Update::decode_v1(&u).unwrap());
 
-        txt1.insert(&mut d1.transact(), 5, "world");
+        txt1.insert(&mut d1.transact_mut(), 5, "world");
         let u = d1.encode_state_as_update_v1(&StateVector::default());
-        d2.transact().apply_update(Update::decode_v1(&u).unwrap());
+        d2.transact_mut()
+            .apply_update(Update::decode_v1(&u).unwrap());
 
         assert_eq!(txt1.to_string(), txt2.to_string());
     }
@@ -541,11 +667,11 @@ mod test {
         const INPUT: &'static str = "hello";
 
         let mut d1 = Doc::with_client_id(1);
-        let txt1 = d1.transact().get_text("text");
+        let txt1 = d1.get_text("text");
         let acc = Rc::new(RefCell::new(String::new()));
 
         let a = acc.clone();
-        let _sub = d1.observe_update_v1(move |_, e| {
+        let _sub = d1.observe_update_v1(move |_: &TransactionMut, e| {
             let u = Update::decode_v1(&e.update).unwrap();
             for mut block in u.blocks.into_blocks() {
                 match block.as_block_ptr().as_deref() {
@@ -567,7 +693,7 @@ mod test {
 
         for c in INPUT.chars() {
             // append characters 1-by-1 (1 transactions per character)
-            txt1.push(&mut d1.transact(), &c.to_string());
+            txt1.push(&mut d1.transact_mut(), &c.to_string());
         }
 
         assert_eq!(acc.take(), INPUT);
@@ -575,7 +701,7 @@ mod test {
         // test incremental deletes
         let acc = Rc::new(RefCell::new(Vec::new()));
         let a = acc.clone();
-        let _sub = d1.observe_update_v1(move |_, e| {
+        let _sub = d1.observe_update_v1(move |_: &TransactionMut, e| {
             let u = Update::decode_v1(&e.update).unwrap();
             for (&client_id, range) in u.delete_set.iter() {
                 if client_id == 1 {
@@ -588,7 +714,7 @@ mod test {
         });
 
         for _ in 0..INPUT.len() as u32 {
-            txt1.remove_range(&mut d1.transact(), 0, 1);
+            txt1.remove_range(&mut d1.transact_mut(), 0, 1);
         }
 
         let expected = vec![(0..1), (1..2), (2..3), (3..4), (4..5)];
@@ -612,10 +738,10 @@ mod test {
             141, 223, 163, 226, 10, 1, 0, 1,
         ];
         let update = Update::decode_v2(bin).unwrap();
-        doc.transact().apply_update(update);
+        doc.transact_mut().apply_update(update);
 
-        let mut txn = doc.transact();
-        let root = txn.get_map("root");
+        let root = doc.get_map("root");
+        let mut txn = doc.transact_mut();
         let actual = root.to_json();
         let expected = Any::from_json(
             r#"{
@@ -641,20 +767,20 @@ mod test {
         options.skip_gc = true;
 
         let d1 = Doc::with_options(options);
-        let txt1 = d1.transact().get_text("text");
-        txt1.insert(&mut d1.transact(), 0, "hello");
-        let snapshot = d1.transact().snapshot();
-        txt1.insert(&mut d1.transact(), 5, " world");
+        let txt1 = d1.get_text("text");
+        txt1.insert(&mut d1.transact_mut(), 0, "hello");
+        let snapshot = d1.transact_mut().snapshot();
+        txt1.insert(&mut d1.transact_mut(), 5, " world");
 
         let mut encoder = EncoderV1::new();
-        d1.transact()
+        d1.transact_mut()
             .encode_state_from_snapshot(&snapshot, &mut encoder)
             .unwrap();
         let update = encoder.to_vec();
 
         let d2 = Doc::with_client_id(2);
-        let txt2 = d2.transact().get_text("text");
-        d2.transact()
+        let txt2 = d2.get_text("text");
+        d2.transact_mut()
             .apply_update(Update::decode_v1(&update).unwrap());
 
         assert_eq!(txt2.to_string(), "hello".to_string());

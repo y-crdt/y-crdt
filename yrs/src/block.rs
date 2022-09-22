@@ -1,6 +1,7 @@
 use crate::doc::OffsetKind;
 use crate::moving::Move;
 use crate::store::Store;
+use crate::transaction::TransactionMut;
 use crate::types::{
     Attrs, Branch, BranchPtr, TypePtr, Value, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
     TYPE_REFS_UNDEFINED, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_HOOK,
@@ -99,7 +100,7 @@ impl ID {
 pub(crate) struct BlockPtr(NonNull<Block>);
 
 impl BlockPtr {
-    pub(crate) fn delete_as_cleanup(&self, txn: &mut Transaction, is_local: bool) {
+    pub(crate) fn delete_as_cleanup(&self, txn: &mut TransactionMut, is_local: bool) {
         txn.delete(*self);
         if is_local {
             txn.delete_set.insert(*self.id(), self.len());
@@ -163,7 +164,7 @@ impl BlockPtr {
 
     /// Integrates current block into block store.
     /// If it returns true, it means that the block should be deleted after being added to a block store.
-    pub fn integrate(&mut self, txn: &mut Transaction, offset: u32) -> bool {
+    pub fn integrate(&mut self, txn: &mut TransactionMut, offset: u32) -> bool {
         let self_ptr = self.clone();
         match self.deref_mut() {
             Block::GC(this) => this.integrate(offset),
@@ -357,7 +358,7 @@ impl BlockPtr {
                             this.moved = left_moved;
                         } else {
                             #[inline]
-                            fn try_integrate(mut ptr: BlockPtr, txn: &mut Transaction) {
+                            fn try_integrate(mut ptr: BlockPtr, txn: &mut TransactionMut) {
                                 let ptr_clone = ptr.clone();
                                 if let Block::Item(i) = ptr.deref_mut() {
                                     if let ItemContent::Move(m) = &mut i.content {
@@ -397,7 +398,9 @@ impl BlockPtr {
                             // @todo searchmarker are currently unsupported for rich text documents
                             // /** @type {AbstractType<any>} */ (item.parent)._searchMarker = null
                         }
-                        ItemContent::Type(branch) => branch.store = Some(txn.store.clone()),
+                        ItemContent::Type(branch) => {
+                            branch.store = this.parent.as_branch().and_then(|b| b.store.clone())
+                        }
                         _ => {
                             // other types don't define integration-specific actions
                         }
@@ -575,7 +578,7 @@ impl Block {
     pub fn encode_to<E: Encoder>(&self, store: Option<&Store>, encoder: &mut E, offset: u32) {
         match self {
             Block::Item(item) => {
-                let mut info = item.info();
+                let info = item.info();
                 let cant_copy_parent_info = info & (HAS_ORIGIN | HAS_RIGHT_ORIGIN) == 0;
                 encoder.write_info(info);
                 if let Some(origin_id) = item.origin.as_ref() {
@@ -1889,46 +1892,46 @@ pub trait Prelim: Sized {
     /// Since this method may decide to consume `self` or not, a second optional return parameter
     /// is used when `self` was not consumed - which is the case for complex types creation such as
     /// YMap or YArray. In such case it will be passed later on to [Self::integrate] method.
-    fn into_content(self, txn: &mut Transaction) -> (ItemContent, Option<Self>);
+    fn into_content(self, txn: &mut TransactionMut) -> (ItemContent, Option<Self>);
 
     /// Method called once an original item filled with content from [Self::into_content] has been
     /// added to block store. This method is used by complex types such as maps or arrays to append
     /// the original contents of prelim struct into YMap, YArray etc.
-    fn integrate(self, txn: &mut Transaction, inner_ref: BranchPtr);
+    fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr);
 }
 
 impl<T> Prelim for T
 where
     T: Into<Any>,
 {
-    fn into_content(self, _txn: &mut Transaction) -> (ItemContent, Option<Self>) {
+    fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
         let value: Any = self.into();
         (ItemContent::Any(vec![value]), None)
     }
 
-    fn integrate(self, _txn: &mut Transaction, _inner_ref: BranchPtr) {}
+    fn integrate(self, _txn: &mut TransactionMut, _inner_ref: BranchPtr) {}
 }
 
 #[derive(Debug)]
 pub(crate) struct PrelimString(pub SmallString<[u8; 8]>);
 
 impl Prelim for PrelimString {
-    fn into_content(self, _txn: &mut Transaction) -> (ItemContent, Option<Self>) {
+    fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
         (ItemContent::String(self.0.into()), None)
     }
 
-    fn integrate(self, _txn: &mut Transaction, _inner_ref: BranchPtr) {}
+    fn integrate(self, _txn: &mut TransactionMut, _inner_ref: BranchPtr) {}
 }
 
 #[derive(Debug)]
 pub(crate) struct PrelimEmbed(pub Any);
 
 impl Prelim for PrelimEmbed {
-    fn into_content(self, _txn: &mut Transaction) -> (ItemContent, Option<Self>) {
+    fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
         (ItemContent::Embed(Box::new(self.0)), None)
     }
 
-    fn integrate(self, _txn: &mut Transaction, _inner_ref: BranchPtr) {}
+    fn integrate(self, _txn: &mut TransactionMut, _inner_ref: BranchPtr) {}
 }
 
 impl std::fmt::Display for ID {
