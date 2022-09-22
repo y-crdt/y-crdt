@@ -410,10 +410,10 @@ pub fn apply_update_v2(doc: &mut YDoc, diff: Uint8Array) -> Result<(), JsValue> 
 /// doc.transact(txn => text.insert(txn, 0, 'hello world'))
 /// ```
 #[wasm_bindgen]
-pub struct YTransaction(Transaction);
+pub struct YTransaction(ManuallyDrop<TransactionMut<'static>>);
 
 impl Deref for YTransaction {
-    type Target = Transaction;
+    type Target = TransactionMut;
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -423,6 +423,14 @@ impl Deref for YTransaction {
 impl DerefMut for YTransaction {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
+    }
+}
+
+impl Drop for YTransaction {
+    fn drop(&mut self) {
+        unsafe {
+            ManuallyDrop::drop(&mut self.0);
+        }
     }
 }
 
