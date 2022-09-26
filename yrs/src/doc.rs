@@ -22,18 +22,18 @@ use rand::Rng;
 /// A basic workflow sample:
 ///
 /// ```
-/// use yrs::{Doc, StateVector, Update};
+/// use yrs::{Doc, ReadTxn, StateVector, Update};
 /// use yrs::updates::decoder::Decode;
 /// use yrs::updates::encoder::Encode;
 ///
 /// let doc = Doc::new();
-/// let mut txn = doc.transact(); // all Yrs operations happen in scope of a transaction
-/// let root = txn.get_text("root-type-name");
+/// let root = doc.get_text("root-type-name");
+/// let mut txn = doc.transact_mut(); // all Yrs operations happen in scope of a transaction
 /// root.push(&mut txn, "hello world"); // append text to our collaborative document
 ///
 /// // in order to exchange data with other documents we first need to create a state vector
 /// let remote_doc = Doc::new();
-/// let mut remote_txn = remote_doc.transact();
+/// let mut remote_txn = remote_doc.transact_mut();
 /// let state_vector = remote_txn.state_vector().encode_v1();
 ///
 /// // now compute a differential update based on remote document's state vector
@@ -183,13 +183,14 @@ impl Doc {
     /// Creates a transaction used for all kind of block store operations.
     /// Transaction cleanups & calling event handles happen when the transaction struct is dropped.
     pub fn transact(&self) -> Transaction {
-        self.try_transact().unwrap()
+        self.try_transact().expect("cannot read document store contents because another read-write transaction is in progress")
     }
 
     /// Creates a transaction used for all kind of block store operations.
     /// Transaction cleanups & calling event handles happen when the transaction struct is dropped.
     pub fn transact_mut(&self) -> TransactionMut {
-        self.try_transact_mut().unwrap()
+        self.try_transact_mut()
+            .expect("only one read-write transaction can be active at the same time")
     }
 
     /// Subscribe callback function for any changes performed within transaction scope. These
@@ -258,27 +259,6 @@ impl Doc {
             (*handler).unsubscribe(subscription_id);
         }
     }
-
-    pub fn encode_state_as_update<E: Encoder>(&self, sv: &StateVector, encoder: &mut E) {
-        let store = self.store.try_borrow().expect(
-            "trying to read contents of the document while other transaction may be modifying them",
-        );
-        store.write_blocks_from(sv, encoder);
-        let ds = DeleteSet::from(&store.blocks);
-        ds.encode(encoder);
-    }
-
-    pub fn encode_state_as_update_v1(&self, sv: &StateVector) -> Vec<u8> {
-        let mut encoder = EncoderV1::new();
-        self.encode_state_as_update(sv, &mut encoder);
-        encoder.to_vec()
-    }
-
-    pub fn encode_state_as_update_v2(&self, sv: &StateVector) -> Vec<u8> {
-        let mut encoder = EncoderV2::new();
-        self.encode_state_as_update(sv, &mut encoder);
-        encoder.to_vec()
-    }
 }
 
 impl Default for Doc {
@@ -330,7 +310,7 @@ pub enum OffsetKind {
 #[cfg(test)]
 mod test {
     use crate::block::{Block, ItemContent};
-    use crate::transaction::TransactionMut;
+    use crate::transaction::{ReadTxn, TransactionMut};
     use crate::update::Update;
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
@@ -402,7 +382,7 @@ mod test {
         txt.insert(&mut t, 0, "1");
         txt.insert(&mut t, 0, "2");
 
-        let encoded = doc.encode_state_as_update_v1(&StateVector::default());
+        let encoded = t.encode_state_as_update_v1(&StateVector::default());
         let expected = &[
             1, 3, 227, 214, 245, 198, 5, 0, 4, 1, 4, 116, 121, 112, 101, 1, 48, 68, 227, 214, 245,
             198, 5, 0, 1, 49, 68, 227, 214, 245, 198, 5, 1, 1, 50, 0,
@@ -573,8 +553,10 @@ mod test {
 
         let d2 = Doc::new();
         let source_2 = d2.get_text("source");
-        let state_2 = d2.transact_mut().state_vector().encode_v1();
-        let update = d1.encode_state_as_update_v1(&StateVector::decode_v1(&state_2).unwrap());
+        let state_2 = d2.transact().state_vector().encode_v1();
+        let update = d1
+            .transact()
+            .encode_state_as_update_v1(&StateVector::decode_v1(&state_2).unwrap());
         let update = Update::decode_v1(&update).unwrap();
         d2.transact_mut().apply_update(update);
 
@@ -590,9 +572,9 @@ mod test {
 
         let d3 = Doc::new();
         let source_3 = d3.get_text("source");
-        let state_3 = d3.transact_mut().state_vector().encode_v1();
+        let state_3 = d3.transact().state_vector().encode_v1();
         let state_3 = StateVector::decode_v1(&state_3).unwrap();
-        let update = d1.encode_state_as_update_v1(&state_3);
+        let update = d1.transact().encode_state_as_update_v1(&state_3);
         let update = Update::decode_v1(&update).unwrap();
         d3.transact_mut().apply_update(update);
 
@@ -647,7 +629,9 @@ mod test {
         let d1 = Doc::with_client_id(1);
         let txt1 = d1.get_text("text");
         txt1.insert(&mut d1.transact_mut(), 0, "hello");
-        let u = d1.encode_state_as_update_v1(&StateVector::default());
+        let u = d1
+            .transact()
+            .encode_state_as_update_v1(&StateVector::default());
 
         let d2 = Doc::with_client_id(2);
         let txt2 = d2.get_text("text");
@@ -655,7 +639,9 @@ mod test {
             .apply_update(Update::decode_v1(&u).unwrap());
 
         txt1.insert(&mut d1.transact_mut(), 5, "world");
-        let u = d1.encode_state_as_update_v1(&StateVector::default());
+        let u = d1
+            .transact()
+            .encode_state_as_update_v1(&StateVector::default());
         d2.transact_mut()
             .apply_update(Update::decode_v1(&u).unwrap());
 

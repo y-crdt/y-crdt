@@ -1042,6 +1042,7 @@ impl Prelim for PrelimText<'_> {
 mod test {
     use crate::doc::{OffsetKind, Options};
     use crate::test_utils::{exchange_updates, run_scenario, RngExt};
+    use crate::transaction::ReadTxn;
     use crate::types::text::{Attrs, ChangeKind, Delta, Diff, YChange};
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
@@ -1352,7 +1353,7 @@ mod test {
         txt1.insert(&mut t1, 0, "hello world");
         assert_eq!(txt1.to_string().as_str(), "hello world");
 
-        let u1 = d1.encode_state_as_update_v1(&StateVector::default());
+        let u1 = t1.encode_state_as_update_v1(&StateVector::default());
 
         let d2 = Doc::with_client_id(2);
         let txt2 = d2.get_text("test");
@@ -1748,7 +1749,7 @@ mod test {
             )])));
             let a2: Attrs = HashMap::from([("width".into(), Any::BigInt(100))]);
             txt1.insert_embed_with_attributes(&mut txn, 1, embed.clone(), a2.clone());
-            txn.commit();
+            drop(txn);
 
             let a1 = Some(Box::new(a1));
             let a2 = Some(Box::new(a2));

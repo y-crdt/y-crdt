@@ -17,8 +17,60 @@ use updates::encoder::*;
 pub trait ReadTxn {
     fn store(&self) -> &Store;
 
-    fn timestamp(&self) -> StateVector {
+    /// Returns state vector describing current state of the updates.
+    fn state_vector(&self) -> StateVector {
         self.store().blocks.get_state_vector()
+    }
+
+    /// Returns a snapshot which describes a current state of updates and removals made within
+    /// the corresponding document.
+    fn snapshot(&self) -> Snapshot {
+        let store = self.store();
+        let blocks = &store.blocks;
+        let sv = blocks.get_state_vector();
+        let ds = DeleteSet::from(blocks);
+        Snapshot::new(sv, ds)
+    }
+
+    /// Encodes all changes from current transaction block store up to a given `snapshot`.
+    /// This enables to encode state of a document at some specific point in the past.
+    fn encode_state_from_snapshot<E: Encoder>(
+        &self,
+        snapshot: &Snapshot,
+        encoder: &mut E,
+    ) -> Result<(), Error> {
+        self.store().encode_state_from_snapshot(snapshot, encoder)
+    }
+
+    /// Encodes the difference between remove peer state given its `state_vector` and the state
+    /// of a current local peer
+    fn encode_diff<E: Encoder>(&self, state_vector: &StateVector, encoder: &mut E) {
+        self.store().encode_diff(state_vector, encoder)
+    }
+
+    fn encode_diff_v1(&self, state_vector: &StateVector) -> Vec<u8> {
+        let mut encoder = EncoderV1::new();
+        self.encode_diff(state_vector, &mut encoder);
+        encoder.to_vec()
+    }
+
+    fn encode_state_as_update<E: Encoder>(&self, sv: &StateVector, encoder: &mut E) {
+        let store = self.store();
+        store.write_blocks_from(sv, encoder);
+        let ds = DeleteSet::from(&store.blocks);
+        ds.encode(encoder);
+    }
+
+    fn encode_state_as_update_v1(&self, sv: &StateVector) -> Vec<u8> {
+        let mut encoder = EncoderV1::new();
+        self.encode_state_as_update(sv, &mut encoder);
+        encoder.to_vec()
+    }
+
+    fn encode_state_as_update_v2(&self, sv: &StateVector) -> Vec<u8> {
+        let mut encoder = EncoderV2::new();
+        self.encode_state_as_update(sv, &mut encoder);
+        encoder.to_vec()
     }
 }
 
@@ -106,43 +158,6 @@ impl<'doc> TransactionMut<'doc> {
     #[inline]
     pub(crate) fn store_mut(&mut self) -> &mut Store {
         &mut self.store
-    }
-
-    /// Returns state vector describing current state of the updates.
-    pub fn state_vector(&self) -> StateVector {
-        self.store().blocks.get_state_vector()
-    }
-
-    /// Returns a snapshot which describes a current state of updates and removals made within
-    /// the corresponding document.
-    pub fn snapshot(&self) -> Snapshot {
-        let store = self.store();
-        let blocks = &store.blocks;
-        let sv = blocks.get_state_vector();
-        let ds = DeleteSet::from(blocks);
-        Snapshot::new(sv, ds)
-    }
-
-    /// Encodes all changes from current transaction block store up to a given `snapshot`.
-    /// This enables to encode state of a document at some specific point in the past.
-    pub fn encode_state_from_snapshot<E: Encoder>(
-        &self,
-        snapshot: &Snapshot,
-        encoder: &mut E,
-    ) -> Result<(), Error> {
-        self.store().encode_state_from_snapshot(snapshot, encoder)
-    }
-
-    /// Encodes the difference between remove peer state given its `state_vector` and the state
-    /// of a current local peer
-    pub fn encode_diff<E: Encoder>(&self, state_vector: &StateVector, encoder: &mut E) {
-        self.store().encode_diff(state_vector, encoder)
-    }
-
-    pub fn encode_diff_v1(&self, state_vector: &StateVector) -> Vec<u8> {
-        let mut encoder = EncoderV1::new();
-        self.encode_diff(state_vector, &mut encoder);
-        encoder.to_vec()
     }
 
     /// Encodes changes made within the scope of the current transaction using lib0 v1 encoding.

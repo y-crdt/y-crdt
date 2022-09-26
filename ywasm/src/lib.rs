@@ -21,8 +21,9 @@ use yrs::types::{
 use yrs::updates::decoder::{Decode, DecoderV1, DecoderV2};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use yrs::{
-    AfterTransactionEvent, Array, DeleteSet, Doc, Map, OffsetKind, Options, Snapshot, StateVector,
-    Subscription, Text, Transaction, Update, UpdateEvent, Xml, XmlElement, XmlText,
+    AfterTransactionEvent, Array, DeleteSet, Doc, Map, OffsetKind, Options, ReadTxn, Snapshot,
+    StateVector, Subscription, Text, Transaction, TransactionMut, Update, UpdateEvent, Xml,
+    XmlElement, XmlText,
 };
 
 // When the `wee_alloc` feature is enabled, use `wee_alloc` as the global
@@ -126,7 +127,7 @@ impl YDoc {
     /// ```
     #[wasm_bindgen(js_name = beginTransaction)]
     pub fn begin_transaction(&mut self) -> YTransaction {
-        YTransaction(self.0.transact())
+        YTransaction::new(self.0.transact_mut())
     }
 
     /// Returns a `YText` shared data type, that's accessible for subsequent accesses using given
@@ -138,7 +139,7 @@ impl YDoc {
     /// onto `YText` instance.
     #[wasm_bindgen(js_name = getText)]
     pub fn get_text(&mut self, name: &str) -> YText {
-        self.begin_transaction().get_text(name)
+        self.0.get_text(name).into()
     }
 
     /// Returns a `YArray` shared data type, that's accessible for subsequent accesses using given
@@ -150,7 +151,7 @@ impl YDoc {
     /// onto `YArray` instance.
     #[wasm_bindgen(js_name = getArray)]
     pub fn get_array(&mut self, name: &str) -> YArray {
-        self.begin_transaction().get_array(name)
+        self.0.get_array(name).into()
     }
 
     /// Returns a `YMap` shared data type, that's accessible for subsequent accesses using given
@@ -162,7 +163,7 @@ impl YDoc {
     /// onto `YMap` instance.
     #[wasm_bindgen(js_name = getMap)]
     pub fn get_map(&mut self, name: &str) -> YMap {
-        self.begin_transaction().get_map(name)
+        self.0.get_map(name).into()
     }
 
     /// Returns a `YXmlElement` shared data type, that's accessible for subsequent accesses using
@@ -174,7 +175,7 @@ impl YDoc {
     /// onto `YXmlElement` instance.
     #[wasm_bindgen(js_name = getXmlElement)]
     pub fn get_xml_element(&mut self, name: &str) -> YXmlElement {
-        self.begin_transaction().get_xml_element(name)
+        YXmlElement(self.0.get_xml_element(name))
     }
 
     /// Returns a `YXmlText` shared data type, that's accessible for subsequent accesses using given
@@ -186,7 +187,7 @@ impl YDoc {
     /// onto `YXmlText` instance.
     #[wasm_bindgen(js_name = getXmlText)]
     pub fn get_xml_text(&mut self, name: &str) -> YXmlText {
-        self.begin_transaction().get_xml_text(name)
+        YXmlText(self.0.get_xml_text(name))
     }
 
     /// Subscribes given function to be called any time, a remote update is being applied to this
@@ -413,7 +414,7 @@ pub fn apply_update_v2(doc: &mut YDoc, diff: Uint8Array) -> Result<(), JsValue> 
 pub struct YTransaction(ManuallyDrop<TransactionMut<'static>>);
 
 impl Deref for YTransaction {
-    type Target = TransactionMut;
+    type Target = TransactionMut<'static>;
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -434,68 +435,15 @@ impl Drop for YTransaction {
     }
 }
 
+impl YTransaction {
+    fn new(inner: TransactionMut) -> Self {
+        let inner_static: TransactionMut<'static> = unsafe { std::mem::transmute(inner) };
+        YTransaction(ManuallyDrop::new(inner_static))
+    }
+}
+
 #[wasm_bindgen]
 impl YTransaction {
-    /// Returns a `YText` shared data type, that's accessible for subsequent accesses using given
-    /// `name`.
-    ///
-    /// If there was no instance with this name before, it will be created and then returned.
-    ///
-    /// If there was an instance with this name, but it was of different type, it will be projected
-    /// onto `YText` instance.
-    #[wasm_bindgen(js_name = getText)]
-    pub fn get_text(&mut self, name: &str) -> YText {
-        self.0.get_text(name).into()
-    }
-
-    /// Returns a `YArray` shared data type, that's accessible for subsequent accesses using given
-    /// `name`.
-    ///
-    /// If there was no instance with this name before, it will be created and then returned.
-    ///
-    /// If there was an instance with this name, but it was of different type, it will be projected
-    /// onto `YArray` instance.
-    #[wasm_bindgen(js_name = getArray)]
-    pub fn get_array(&mut self, name: &str) -> YArray {
-        self.0.get_array(name).into()
-    }
-
-    /// Returns a `YMap` shared data type, that's accessible for subsequent accesses using given
-    /// `name`.
-    ///
-    /// If there was no instance with this name before, it will be created and then returned.
-    ///
-    /// If there was an instance with this name, but it was of different type, it will be projected
-    /// onto `YMap` instance.
-    #[wasm_bindgen(js_name = getMap)]
-    pub fn get_map(&mut self, name: &str) -> YMap {
-        self.0.get_map(name).into()
-    }
-
-    /// Returns a `YXmlElement` shared data type, that's accessible for subsequent accesses using
-    /// given `name`.
-    ///
-    /// If there was no instance with this name before, it will be created and then returned.
-    ///
-    /// If there was an instance with this name, but it was of different type, it will be projected
-    /// onto `YXmlElement` instance.
-    #[wasm_bindgen(js_name = getXmlElement)]
-    pub fn get_xml_element(&mut self, name: &str) -> YXmlElement {
-        YXmlElement(self.0.get_xml_element(name))
-    }
-
-    /// Returns a `YXmlText` shared data type, that's accessible for subsequent accesses using given
-    /// `name`.
-    ///
-    /// If there was no instance with this name before, it will be created and then returned.
-    ///
-    /// If there was an instance with this name, but it was of different type, it will be projected
-    /// onto `YXmlText` instance.
-    #[wasm_bindgen(js_name = getXmlText)]
-    pub fn get_xml_text(&mut self, name: &str) -> YXmlText {
-        YXmlText(self.0.get_xml_text(name))
-    }
-
     /// Triggers a post-update series of operations without `free`ing the transaction. This includes
     /// compaction and optimization of internal representation of updates, triggering events etc.
     /// ywasm transactions are auto-committed when they are `free`d.
@@ -720,16 +668,17 @@ impl YTransaction {
 #[wasm_bindgen]
 pub struct YArrayEvent {
     inner: *const ArrayEvent,
-    txn: *const Transaction,
+    txn: *const TransactionMut<'static>,
     target: Option<JsValue>,
     delta: Option<JsValue>,
 }
 
 #[wasm_bindgen]
 impl YArrayEvent {
-    fn new(event: &ArrayEvent, txn: &Transaction) -> Self {
+    fn new<'doc>(event: &ArrayEvent, txn: &TransactionMut<'doc>) -> Self {
         let inner = event as *const ArrayEvent;
-        let txn = txn as *const Transaction;
+        let txn: &TransactionMut<'static> = unsafe { std::mem::transmute(txn) };
+        let txn = txn as *const TransactionMut<'static>;
         YArrayEvent {
             inner,
             txn,
@@ -742,7 +691,7 @@ impl YArrayEvent {
         unsafe { self.inner.as_ref().unwrap() }
     }
 
-    fn txn(&self) -> &Transaction {
+    fn txn(&self) -> &TransactionMut {
         unsafe { self.txn.as_ref().unwrap() }
     }
 
@@ -794,16 +743,17 @@ impl YArrayEvent {
 #[wasm_bindgen]
 pub struct YMapEvent {
     inner: *const MapEvent,
-    txn: *const Transaction,
+    txn: *const TransactionMut<'static>,
     target: Option<JsValue>,
     keys: Option<JsValue>,
 }
 
 #[wasm_bindgen]
 impl YMapEvent {
-    fn new(event: &MapEvent, txn: &Transaction) -> Self {
+    fn new<'doc>(event: &MapEvent, txn: &TransactionMut<'doc>) -> Self {
         let inner = event as *const MapEvent;
-        let txn = txn as *const Transaction;
+        let txn: &TransactionMut<'static> = unsafe { std::mem::transmute(txn) };
+        let txn = txn as *const TransactionMut<'static>;
         YMapEvent {
             inner,
             txn,
@@ -816,7 +766,7 @@ impl YMapEvent {
         unsafe { self.inner.as_ref().unwrap() }
     }
 
-    fn txn(&self) -> &Transaction {
+    fn txn(&self) -> &TransactionMut {
         unsafe { self.txn.as_ref().unwrap() }
     }
 
@@ -866,16 +816,17 @@ impl YMapEvent {
 #[wasm_bindgen]
 pub struct YTextEvent {
     inner: *const TextEvent,
-    txn: *const Transaction,
+    txn: *const TransactionMut<'static>,
     target: Option<JsValue>,
     delta: Option<JsValue>,
 }
 
 #[wasm_bindgen]
 impl YTextEvent {
-    fn new(event: &TextEvent, txn: &Transaction) -> Self {
+    fn new<'doc>(event: &TextEvent, txn: &TransactionMut<'doc>) -> Self {
         let inner = event as *const TextEvent;
-        let txn = txn as *const Transaction;
+        let txn: &TransactionMut<'static> = unsafe { std::mem::transmute(txn) };
+        let txn = txn as *const TransactionMut<'static>;
         YTextEvent {
             inner,
             txn,
@@ -888,7 +839,7 @@ impl YTextEvent {
         unsafe { self.inner.as_ref().unwrap() }
     }
 
-    fn txn(&self) -> &Transaction {
+    fn txn(&self) -> &TransactionMut {
         unsafe { self.txn.as_ref().unwrap() }
     }
 
@@ -940,7 +891,7 @@ impl YTextEvent {
 #[wasm_bindgen]
 pub struct YXmlEvent {
     inner: *const XmlEvent,
-    txn: *const Transaction,
+    txn: *const TransactionMut<'static>,
     target: Option<JsValue>,
     keys: Option<JsValue>,
     delta: Option<JsValue>,
@@ -948,9 +899,10 @@ pub struct YXmlEvent {
 
 #[wasm_bindgen]
 impl YXmlEvent {
-    fn new(event: &XmlEvent, txn: &Transaction) -> Self {
+    fn new<'doc>(event: &XmlEvent, txn: &TransactionMut<'doc>) -> Self {
         let inner = event as *const XmlEvent;
-        let txn = txn as *const Transaction;
+        let txn: &TransactionMut<'static> = unsafe { std::mem::transmute(txn) };
+        let txn = txn as *const TransactionMut<'static>;
         YXmlEvent {
             inner,
             txn,
@@ -964,7 +916,7 @@ impl YXmlEvent {
         unsafe { self.inner.as_ref().unwrap() }
     }
 
-    fn txn(&self) -> &Transaction {
+    fn txn(&self) -> &TransactionMut {
         unsafe { self.txn.as_ref().unwrap() }
     }
 
@@ -1038,7 +990,7 @@ impl YXmlEvent {
 #[wasm_bindgen]
 pub struct YXmlTextEvent {
     inner: *const XmlTextEvent,
-    txn: *const Transaction,
+    txn: *const TransactionMut<'static>,
     target: Option<JsValue>,
     delta: Option<JsValue>,
     keys: Option<JsValue>,
@@ -1046,9 +998,10 @@ pub struct YXmlTextEvent {
 
 #[wasm_bindgen]
 impl YXmlTextEvent {
-    fn new(event: &XmlTextEvent, txn: &Transaction) -> Self {
+    fn new<'doc>(event: &XmlTextEvent, txn: &TransactionMut<'doc>) -> Self {
         let inner = event as *const XmlTextEvent;
-        let txn = txn as *const Transaction;
+        let txn: &TransactionMut<'static> = unsafe { std::mem::transmute(txn) };
+        let txn = txn as *const TransactionMut<'static>;
         YXmlTextEvent {
             inner,
             txn,
@@ -1062,7 +1015,7 @@ impl YXmlTextEvent {
         unsafe { self.inner.as_ref().unwrap() }
     }
 
-    fn txn(&self) -> &Transaction {
+    fn txn(&self) -> &TransactionMut {
         unsafe { self.txn.as_ref().unwrap() }
     }
 
@@ -2803,7 +2756,7 @@ impl YXmlText {
 struct JsValueWrapper(JsValue);
 
 impl Prelim for JsValueWrapper {
-    fn into_content(self, _txn: &mut Transaction) -> (ItemContent, Option<Self>) {
+    fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
         let content = if let Some(any) = js_into_any(&self.0) {
             ItemContent::Any(vec![any])
         } else if let Ok(shared) = Shared::try_from(&self.0) {
@@ -2826,7 +2779,7 @@ impl Prelim for JsValueWrapper {
         (content, this)
     }
 
-    fn integrate(self, txn: &mut Transaction, inner_ref: BranchPtr) {
+    fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
         if let Ok(shared) = Shared::try_from(&self.0) {
             if shared.is_prelim() {
                 match shared {
@@ -2864,7 +2817,7 @@ impl Prelim for JsValueWrapper {
     }
 }
 
-fn insert_at(dst: &Array, txn: &mut Transaction, index: u32, src: Vec<JsValue>) {
+fn insert_at(dst: &Array, txn: &mut TransactionMut, index: u32, src: Vec<JsValue>) {
     let mut j = index;
     let mut i = 0;
     while i < src.len() {
@@ -2983,7 +2936,7 @@ fn xml_into_js(v: Xml) -> JsValue {
     }
 }
 
-fn events_into_js(txn: &Transaction, e: &Events) -> JsValue {
+fn events_into_js(txn: &TransactionMut, e: &Events) -> JsValue {
     let mut array = js_sys::Array::new();
     let mapped = e.iter().map(|e| {
         let js: JsValue = match e {

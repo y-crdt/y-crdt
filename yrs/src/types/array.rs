@@ -138,7 +138,7 @@ impl Array {
     /// ```
     /// use yrs::Doc;
     /// let doc = Doc::new();
-    /// let array = doc.transact_mut().get_array("array");
+    /// let array = doc.get_array("array");
     /// array.insert_range(&mut doc.transact_mut(), 0, [1,2,3,4]);
     /// // move elements 2 and 3 after the 4
     /// array.move_range_to(&mut doc.transact_mut(), 1, true, 2, false, 4);
@@ -449,10 +449,11 @@ mod test {
         let d2 = Doc::with_client_id(2);
 
         let a1 = d1.get_array("array");
-        let mut t1 = d1.transact_mut();
 
-        a1.insert(&mut t1, 0, "Hi");
-        let update = d1.encode_state_as_update_v1(&StateVector::default());
+        a1.insert(&mut d1.transact_mut(), 0, "Hi");
+        let update = d1
+            .transact()
+            .encode_state_as_update_v1(&StateVector::default());
 
         let a2 = d2.get_array("array");
         let mut t2 = d2.transact_mut();
@@ -903,6 +904,7 @@ mod test {
         assert_eq!(c2.borrow_mut().take(), Some(a2));
     }
 
+    use crate::transaction::ReadTxn;
     use crate::updates::decoder::{Decode, Decoder, DecoderV1};
     use crate::updates::encoder::{Encoder, EncoderV1};
     use lib0::decoding::{Cursor, Read};

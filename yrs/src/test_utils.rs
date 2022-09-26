@@ -1,4 +1,5 @@
 use crate::block::ClientID;
+use crate::transaction::ReadTxn;
 use crate::updates::decoder::{Decode, Decoder, DecoderV1};
 use crate::updates::encoder::{Encode, Encoder, EncoderV1};
 use crate::{Doc, StateVector, Update};

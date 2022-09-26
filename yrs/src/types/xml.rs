@@ -197,8 +197,8 @@ impl XmlElement {
     /// use yrs::{XmlElement, Doc, Xml};
     ///
     /// let doc = Doc::new();
+    /// let mut html = doc.get_xml_element("div");
     /// let mut txn = doc.transact_mut();
-    /// let mut html = txn.get_xml_element("div");
     /// let p = html.push_elem_back(&mut txn, "p");
     /// let txt = p.push_text_back(&mut txn);
     /// txt.push(&mut txn, "Hello ");
@@ -966,7 +966,7 @@ enum PrelimXml {
 
 impl Prelim for PrelimXml {
     fn into_content(self, txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
-        let mut inner = match self {
+        let inner = match self {
             PrelimXml::Elem(node_name) => Branch::new(TYPE_REFS_XML_ELEMENT, Some(node_name)),
             PrelimXml::Text => Branch::new(TYPE_REFS_XML_TEXT, None),
         };
@@ -1098,6 +1098,7 @@ impl XmlEvent {
 
 #[cfg(test)]
 mod test {
+    use crate::transaction::ReadTxn;
     use crate::types::xml::Xml;
     use crate::types::{Change, EntryChange, Value};
     use crate::updates::decoder::Decode;
@@ -1119,7 +1120,7 @@ mod test {
         let d2 = Doc::with_client_id(1);
         let xml2 = d2.get_xml_element("xml");
         let mut t2 = d2.transact_mut();
-        let u = d1.encode_state_as_update_v1(&StateVector::default());
+        let u = t1.encode_state_as_update_v1(&StateVector::default());
         t2.apply_update(Update::decode_v1(u.as_slice()).unwrap());
         assert_eq!(xml2.get_attribute("height"), Some("10".to_string()));
     }
@@ -1213,7 +1214,7 @@ mod test {
         let expected = "<UNDEFINED>hello<p></p></UNDEFINED>";
         assert_eq!(r1.to_string(), expected);
 
-        let u1 = d1.encode_state_as_update_v1(&StateVector::default());
+        let u1 = t1.encode_state_as_update_v1(&StateVector::default());
 
         let d2 = Doc::with_client_id(2);
         let r2 = d2.get_xml_element("root");
@@ -1248,7 +1249,7 @@ mod test {
             1, 3, 1, 0, 7, 1, 4, 114, 111, 111, 116, 6, 4, 0, 1, 0, 5, 104, 101, 108, 108, 111,
             135, 1, 0, 3, 1, 112, 0,
         ];
-        let u1 = d1.encode_state_as_update_v1(&StateVector::default());
+        let u1 = t1.encode_state_as_update_v1(&StateVector::default());
         assert_eq!(u1.as_slice(), expected);
     }
 

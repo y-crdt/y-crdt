@@ -5,7 +5,7 @@ use crate::types::{Branch, TypePtr, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT};
 use crate::update::{BlockCarrier, Update};
 use crate::updates::decoder::{Decode, Decoder, DecoderV1};
 use crate::updates::encoder::Encode;
-use crate::{Doc, PrelimArray, PrelimMap, StateVector, XmlElement, XmlText, ID};
+use crate::{Doc, PrelimArray, PrelimMap, ReadTxn, StateVector, XmlElement, XmlText, ID};
 use lib0::any::Any;
 use lib0::decoding::Read;
 use std::cell::Cell;
@@ -395,7 +395,7 @@ fn negative_zero_decoding_v2() {
     root.insert(&mut txn, "characters", PrelimArray::<_, Any>::from([]));
     let expected = root.to_json();
 
-    let buffer = doc.encode_state_as_update_v2(&StateVector::default());
+    let buffer = txn.encode_state_as_update_v2(&StateVector::default());
 
     let u = Update::decode_v2(&buffer).unwrap();
 
