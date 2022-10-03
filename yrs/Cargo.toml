@@ -26,3 +26,6 @@ harness = false
 doctest = true
 bench = true
 doc = true
+
+[profile.release]
+codegen-units=1
