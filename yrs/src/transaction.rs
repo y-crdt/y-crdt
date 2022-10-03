@@ -12,6 +12,7 @@ use crate::types::{
     TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT,
 };
 use crate::update::Update;
+use lib0::error::Error;
 use std::collections::{HashMap, HashSet};
 use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
@@ -69,12 +70,24 @@ impl Transaction {
         self.store().blocks.get_state_vector()
     }
 
+    /// Returns a snapshot which describes a current state of updates and removals made within
+    /// the corresponding document.
     pub fn snapshot(&self) -> Snapshot {
         let store = self.store();
         let blocks = &store.blocks;
         let sv = blocks.get_state_vector();
         let ds = DeleteSet::from(blocks);
         Snapshot::new(sv, ds)
+    }
+
+    /// Encodes all changes from current transaction block store up to a given `snapshot`.
+    /// This enables to encode state of a document at some specific point in the past.
+    pub fn encode_state_from_snapshot<E: Encoder>(
+        &self,
+        snapshot: &Snapshot,
+        encoder: &mut E,
+    ) -> Result<(), Error> {
+        self.store().encode_state_from_snapshot(snapshot, encoder)
     }
 
     /// Encodes the difference between remove peer state given its `state_vector` and the state
@@ -222,7 +235,7 @@ impl Transaction {
     ///   is extracted and integrated into the document structure.
     pub fn encode_update<E: Encoder>(&self, encoder: &mut E) {
         let store = self.store();
-        store.write_blocks(&self.before_state, encoder);
+        store.write_blocks_from(&self.before_state, encoder);
         self.delete_set.encode(encoder);
     }
 

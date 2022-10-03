@@ -50,7 +50,7 @@ fn main() {
 We're in ongoing process of reaching the feature compatibility with Yjs project. Current feature list:
 
 - [x] Yjs update binary format (v1).
-- [ ] Yjs update binary format (v2).
+- [x] Yjs update binary format (v2).
 - [x] Support for state vectors, delta diff updates and merges.
 - [x] Subscription events for incoming updates.
 - [x] Support for shared (CRDT) types:
@@ -59,10 +59,10 @@ We're in ongoing process of reaching the feature compatibility with Yjs project.
   - [x] Map
   - [x] XML data types (elements and text)
   - [ ] Subdocuments
-  - [ ] Subscription events on particular data type
-- [ ] Cross-platform support for unicode code points
+  - [x] Subscription events on particular data type
+- [x] Cross-platform support for unicode code points
 - [ ] Undo manager
-- [ ] Text markers
+- [x] Text markers
 
 ## Internal Documentation
 

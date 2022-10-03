@@ -284,3 +284,159 @@ fn read_var_i64<R: Read>(reader: &mut R) -> Result<i64, Error> {
         }
     }
 }
+
+pub trait SignedVarInt: Sized + Copy {
+    fn write_signed<W: Write>(value: &Signed<Self>, w: &mut W);
+    fn read_signed<R: Read>(r: &mut R) -> Result<Signed<Self>, Error>;
+}
+
+/// Struct which recognizes signed integer values. This special case has been build for Yjs encoding
+/// compatibility, which recognizes differences between `0` and `-0`, which is used in some
+/// cases (eg. `UIntOptRleDecoder`).
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct Signed<T: Sized + Copy> {
+    value: T,
+    is_negative: bool,
+}
+
+impl<T: Sized + Copy> Signed<T> {
+    pub fn new(value: T, is_negative: bool) -> Self {
+        Signed { value, is_negative }
+    }
+
+    /// Returns true is stored number is a positive value.
+    pub fn is_positive(&self) -> bool {
+        !self.is_negative
+    }
+
+    /// Returns true is stored number is a negative value (including `-0` as a special case).
+    pub fn is_negative(&self) -> bool {
+        self.is_negative
+    }
+
+    /// Returns a stored value.
+    pub fn value(&self) -> T {
+        self.value
+    }
+
+    /// Maps contents of a [Signed] value container to a new data type, retaining the sign
+    /// information.
+    pub fn map<F, U>(&self, f: F) -> Signed<U>
+    where
+        F: FnOnce(T) -> U,
+        U: Sized + Copy,
+    {
+        let mapped = f(self.value);
+        Signed::new(mapped, self.is_negative)
+    }
+}
+
+impl SignedVarInt for i64 {
+    fn write_signed<W: Write>(s: &Signed<Self>, w: &mut W) {
+        let mut value = s.value;
+        let is_negative = s.is_negative;
+        value = if is_negative { -value } else { value };
+        w.write_u8(
+            // whether to continue reading
+            (if value > 0b00111111 as i64 { 0b10000000 as u8 } else { 0 })
+                // whether number is negative
+                | (if is_negative { 0b01000000 as u8 } else { 0 })
+                // number
+                | (0b00111111 as i64 & value) as u8,
+        );
+        value >>= 6;
+        while value > 0 {
+            w.write_u8(
+                if value > 0b01111111 as i64 {
+                    0b10000000 as u8
+                } else {
+                    0
+                } | (0b01111111 as i64 & value) as u8,
+            );
+            value >>= 7;
+        }
+    }
+
+    fn read_signed<R: Read>(reader: &mut R) -> Result<Signed<Self>, Error> {
+        let mut r = reader.read_u8()?;
+        let mut num = (r & 0b00111111 as u8) as i64;
+        let mut len: u32 = 6;
+        let is_negative = r & 0b01000000 as u8 > 0;
+        if r & 0b10000000 as u8 == 0 {
+            let num = if is_negative { -num } else { num };
+            return Ok(Signed::new(num, is_negative));
+        }
+        loop {
+            r = reader.read_u8()?;
+            num |= (r as i64 & 0b01111111 as i64) << len;
+            len += 7;
+            if r < 0b10000000 as u8 {
+                let num = if is_negative { -num } else { num };
+                return Ok(Signed::new(num, is_negative));
+            }
+            if len > 70 {
+                return Err(Error::VarIntSizeExceeded(70));
+            }
+        }
+    }
+}
+
+impl SignedVarInt for isize {
+    fn write_signed<W: Write>(value: &Signed<Self>, w: &mut W) {
+        let value = value.map(|v| v as i64);
+        i64::write_signed(&value, w)
+    }
+
+    fn read_signed<R: Read>(r: &mut R) -> Result<Signed<Self>, Error> {
+        let result = i64::read_signed(r)?;
+        match result.value.try_into() {
+            Ok(i) => Ok(Signed::new(i, result.is_negative)),
+            Err(_) => Err(Error::VarIntSizeExceeded(70)),
+        }
+    }
+}
+
+impl SignedVarInt for i32 {
+    fn write_signed<W: Write>(value: &Signed<Self>, w: &mut W) {
+        let value = value.map(|v| v as i64);
+        i64::write_signed(&value, w)
+    }
+
+    fn read_signed<R: Read>(r: &mut R) -> Result<Signed<Self>, Error> {
+        let result = i64::read_signed(r)?;
+        match result.value.try_into() {
+            Ok(i) => Ok(Signed::new(i, result.is_negative)),
+            Err(_) => Err(Error::VarIntSizeExceeded(35)),
+        }
+    }
+}
+
+impl SignedVarInt for i16 {
+    fn write_signed<W: Write>(value: &Signed<Self>, w: &mut W) {
+        let value = value.map(|v| v as i64);
+        i64::write_signed(&value, w)
+    }
+
+    fn read_signed<R: Read>(r: &mut R) -> Result<Signed<Self>, Error> {
+        let result = i64::read_signed(r)?;
+        match result.value.try_into() {
+            Ok(i) => Ok(Signed::new(i, result.is_negative)),
+            Err(_) => Err(Error::VarIntSizeExceeded(21)),
+        }
+    }
+}
+
+impl SignedVarInt for i8 {
+    fn write_signed<W: Write>(value: &Signed<Self>, w: &mut W) {
+        let value = value.map(|v| v as i64);
+        i64::write_signed(&value, w)
+    }
+
+    fn read_signed<R: Read>(r: &mut R) -> Result<Signed<Self>, Error> {
+        let result = i64::read_signed(r)?;
+        match result.value.try_into() {
+            Ok(i) => Ok(Signed::new(i, result.is_negative)),
+            Err(_) => Err(Error::VarIntSizeExceeded(14)),
+        }
+    }
+}

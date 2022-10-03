@@ -11,7 +11,7 @@ use wasm_bindgen::JsValue;
 use yrs::block::{ClientID, ItemContent, Prelim};
 use yrs::types::array::{ArrayEvent, ArrayIter};
 use yrs::types::map::{MapEvent, MapIter};
-use yrs::types::text::TextEvent;
+use yrs::types::text::{ChangeKind, Diff, TextEvent};
 use yrs::types::xml::{Attributes, TreeWalker, XmlEvent, XmlTextEvent};
 use yrs::types::{
     Attrs, Branch, BranchPtr, Change, DeepObservable, Delta, EntryChange, Event, Events, Path,
@@ -21,7 +21,7 @@ use yrs::types::{
 use yrs::updates::decoder::{Decode, DecoderV1, DecoderV2};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use yrs::{
-    AfterTransactionEvent, Array, DeleteSet, Doc, Map, OffsetKind, Options, StateVector,
+    AfterTransactionEvent, Array, DeleteSet, Doc, Map, OffsetKind, Options, Snapshot, StateVector,
     Subscription, Text, Transaction, Update, UpdateEvent, Xml, XmlElement, XmlText,
 };
 
@@ -78,14 +78,16 @@ impl YDoc {
     /// globally unique identifier (it's up to caller to ensure that requirement). Otherwise it will
     /// be assigned a randomly generated number.
     #[wasm_bindgen(constructor)]
-    pub fn new(id: Option<f64>) -> Self {
+    pub fn new(id: Option<f64>, gc: Option<bool>) -> Self {
         let mut options = if let Some(id) = id {
             Options::with_client_id(id as ClientID)
         } else {
             Options::default()
         };
+        let skip_gc = if let Some(gc) = gc { !gc } else { false };
 
         options.offset_kind = OffsetKind::Utf16;
+        options.skip_gc = skip_gc;
         YDoc(Doc::with_options(options))
     }
 
@@ -271,9 +273,8 @@ pub fn debug_update_v1(update: Uint8Array) -> Result<String, JsValue> {
 /// Returns a string dump representation of a given `update` encoded using lib0 v2 encoding.
 #[wasm_bindgen(js_name = debugUpdateV2)]
 pub fn debug_update_v2(update: Uint8Array) -> Result<String, JsValue> {
-    let update: Vec<u8> = update.to_vec();
-    let mut decoder = DecoderV2::from(update.as_slice());
-    match Update::decode(&mut decoder) {
+    let mut update: Vec<u8> = update.to_vec();
+    match Update::decode_v2(update.as_mut_slice()) {
         Ok(update) => Ok(format!("{:#?}", update)),
         Err(e) => Err(JsValue::from(e.to_string())),
     }
@@ -684,9 +685,8 @@ impl YTransaction {
     /// ```
     #[wasm_bindgen(catch, js_name = applyV2)]
     pub fn apply_v2(&mut self, diff: Uint8Array) -> Result<(), JsValue> {
-        let diff: Vec<u8> = diff.to_vec();
-        let mut decoder = DecoderV2::from(diff.as_slice());
-        match Update::decode(&mut decoder) {
+        let mut diff: Vec<u8> = diff.to_vec();
+        match Update::decode_v2(&mut diff) {
             Ok(update) => {
                 self.0.apply_update(update);
                 Ok(())
@@ -1164,6 +1164,23 @@ fn entry_change_into_js(change: &EntryChange) -> JsValue {
     result.into()
 }
 
+fn ytext_change_into_js(change: Diff<JsValue>) -> JsValue {
+    let delta = Delta::Inserted(change.insert, change.attributes);
+    let js = ytext_delta_into_js(&delta);
+    if let Some(ychange) = change.ychange {
+        let attrs = match js_sys::Reflect::get(&js, &JsValue::from("attributes")) {
+            Ok(attrs) if attrs.is_object() => attrs,
+            _ => {
+                let attrs: JsValue = js_sys::Object::new().into();
+                js_sys::Reflect::set(&js, &JsValue::from("attributes"), &attrs).unwrap();
+                attrs
+            }
+        };
+        js_sys::Reflect::set(&attrs, &JsValue::from("ychange"), &ychange).unwrap();
+    }
+    js
+}
+
 fn ytext_delta_into_js(delta: &Delta) -> JsValue {
     let result = js_sys::Object::new();
     match delta {
@@ -1586,6 +1603,46 @@ impl YText {
         }
     }
 
+    /// Returns the Delta representation of this YText type.
+    #[wasm_bindgen(js_name = toDelta)]
+    pub fn to_delta(
+        &self,
+        txn: &mut YTransaction,
+        snapshot: Option<YSnapshot>,
+        prev_snapshot: Option<YSnapshot>,
+        compute_ychange: Option<js_sys::Function>,
+    ) -> JsValue {
+        match &*self.0.borrow() {
+            SharedType::Prelim(_) => JsValue::UNDEFINED,
+            SharedType::Integrated(v) => {
+                let hi = snapshot.map(|s| s.0);
+                let lo = prev_snapshot.map(|s| s.0);
+                let delta = v
+                    .diff_range(txn, hi.as_ref(), lo.as_ref(), |change| {
+                        let kind = match change.kind {
+                            ChangeKind::Added => JsValue::from("added"),
+                            ChangeKind::Removed => JsValue::from("removed"),
+                        };
+                        let result = if let Some(func) = &compute_ychange {
+                            let id: JsValue = YID(change.id).into();
+                            func.call2(&JsValue::UNDEFINED, &kind, &id).unwrap()
+                        } else {
+                            let js: JsValue = js_sys::Object::new().into();
+                            js_sys::Reflect::set(&js, &JsValue::from("type"), &kind).unwrap();
+                            js
+                        };
+                        result
+                    })
+                    .into_iter()
+                    .map(ytext_change_into_js);
+                let mut result = js_sys::Array::new();
+                result.extend(delta);
+                let delta: JsValue = result.into();
+                delta
+            }
+        }
+    }
+
     /// Subscribes to all operations happening over this instance of `YText`. All changes are
     /// batched and eventually triggered during transaction commit phase.
     /// Returns an `YTextObserver` which, when free'd, will unsubscribe current callback.
@@ -1622,6 +1679,93 @@ impl YText {
                 panic!("YText.observeDeep is not supported on preliminary type.")
             }
         }
+    }
+}
+
+#[wasm_bindgen]
+pub struct YID(yrs::ID);
+
+#[wasm_bindgen]
+impl YID {
+    #[wasm_bindgen(method, getter)]
+    pub fn clock(&self) -> u32 {
+        self.0.clock
+    }
+
+    #[wasm_bindgen(method, getter)]
+    pub fn client(&self) -> u64 {
+        self.0.client
+    }
+}
+
+#[wasm_bindgen]
+pub struct YSnapshot(Snapshot);
+
+#[wasm_bindgen]
+impl YSnapshot {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self {
+        YSnapshot(Snapshot::default())
+    }
+}
+
+#[wasm_bindgen(js_name = snapshot)]
+pub fn snapshot(doc: &YDoc) -> YSnapshot {
+    YSnapshot(doc.0.transact().snapshot())
+}
+
+#[wasm_bindgen(js_name = equalSnapshots)]
+pub fn equal_snapshots(snap1: &YSnapshot, snap2: &YSnapshot) -> bool {
+    snap1.0 == snap2.0
+}
+
+#[wasm_bindgen(js_name = encodeSnapshotV1)]
+pub fn encode_snapshot_v1(snapshot: &YSnapshot) -> Vec<u8> {
+    snapshot.0.encode_v1()
+}
+
+#[wasm_bindgen(js_name = encodeSnapshotV2)]
+pub fn encode_snapshot_v2(snapshot: &YSnapshot) -> Vec<u8> {
+    snapshot.0.encode_v2()
+}
+
+#[wasm_bindgen(catch, js_name = decodeSnapshotV2)]
+pub fn decode_snapshot_v2(snapshot: &[u8]) -> Result<YSnapshot, JsValue> {
+    let s = Snapshot::decode_v2(snapshot)
+        .map_err(|_| JsValue::from("failed to deserialize snapshot using lib0 v2 decoding"))?;
+    Ok(YSnapshot(s))
+}
+
+#[wasm_bindgen(catch, js_name = decodeSnapshotV1)]
+pub fn decode_snapshot_v1(snapshot: &[u8]) -> Result<YSnapshot, JsValue> {
+    let s = Snapshot::decode_v1(snapshot)
+        .map_err(|_| JsValue::from("failed to deserialize snapshot using lib0 v1 decoding"))?;
+    Ok(YSnapshot(s))
+}
+
+#[wasm_bindgen(catch, js_name = encodeStateFromSnapshotV1)]
+pub fn encode_state_from_snapshot_v1(doc: &YDoc, snapshot: &YSnapshot) -> Result<Vec<u8>, JsValue> {
+    let mut encoder = EncoderV1::new();
+    match doc
+        .0
+        .transact()
+        .encode_state_from_snapshot(&snapshot.0, &mut encoder)
+    {
+        Ok(_) => Ok(encoder.to_vec()),
+        Err(e) => Err(JsValue::from(e.to_string())),
+    }
+}
+
+#[wasm_bindgen(catch, js_name = encodeStateFromSnapshotV2)]
+pub fn encode_state_from_snapshot_v2(doc: &YDoc, snapshot: &YSnapshot) -> Result<Vec<u8>, JsValue> {
+    let mut encoder = EncoderV2::new();
+    match doc
+        .0
+        .transact()
+        .encode_state_from_snapshot(&snapshot.0, &mut encoder)
+    {
+        Ok(_) => Ok(encoder.to_vec()),
+        Err(e) => Err(JsValue::from(e.to_string())),
     }
 }
 
