@@ -1,4 +1,4 @@
-use crate::block::{ClientID, ItemContent};
+use crate::block::{BlockPtr, BlockSlice, ClientID, ItemContent};
 use crate::block_store::{BlockStore, StateVector};
 use crate::doc::Options;
 use crate::event::{AfterTransactionEvent, EventHandler};
@@ -6,7 +6,7 @@ use crate::id_set::DeleteSet;
 use crate::types::{Branch, BranchPtr, Path, PathSegment, TypeRefs};
 use crate::update::PendingUpdate;
 use crate::updates::encoder::{Encode, Encoder};
-use crate::{Snapshot, UpdateEvent};
+use crate::{OffsetKind, Snapshot, UpdateEvent};
 use lib0::error::Error;
 use std::cell::{BorrowError, BorrowMutError, Ref, RefCell, RefMut};
 use std::collections::hash_map::Entry;
@@ -160,8 +160,9 @@ impl Store {
             }
             let last_block = blocks.get(last_idx);
             // write first struct with an offset
-            let offset = clock - last_block.id().clock;
-            last_block.encode_to(Some(self), encoder, offset);
+            let offset = clock - last_block.id().clock - 1;
+            let slice = BlockSlice::new(last_block, 0, offset);
+            slice.encode(encoder, Some(self));
         }
     }
 
@@ -203,7 +204,8 @@ impl Store {
             let first_block = blocks.get(start);
             // write first struct with an offset
             let offset = clock - first_block.id().clock;
-            first_block.encode_from(Some(self), encoder, offset);
+            let slice = BlockSlice::new(first_block, offset, first_block.len() - 1);
+            slice.encode(encoder, Some(self));
             for i in (start + 1)..blocks.len() {
                 blocks.get(i).encode(Some(self), encoder);
             }
@@ -253,6 +255,46 @@ impl Store {
         } else {
             None
         }
+    }
+
+    /// Consumes current block slice view, materializing it into actual memory layout,
+    /// splitting underlying block along [BlockSlice::start]/[BlockSlice::end] offsets.
+    ///
+    /// Returns a block created this way, that represents the boundaries that current [BlockSlice]
+    /// was representing.
+    pub(crate) fn materialize(&mut self, mut slice: BlockSlice) -> BlockPtr {
+        let id = slice.id().clone();
+        let blocks = self.blocks.get_mut(&id.client).unwrap();
+        let mut index = None;
+        let mut ptr = if slice.adjacent_left() {
+            slice.as_ptr()
+        } else {
+            let mut i = blocks.find_pivot(id.clock).unwrap();
+            if let Some(new) = slice.as_ptr().splice(slice.start(), OffsetKind::Utf16) {
+                blocks.insert(i + 1, new);
+                i += 1;
+                //todo: txn merge blocks insert?
+                index = Some(i);
+            }
+            let ptr = blocks.get(i);
+            slice = BlockSlice::new(ptr, 0, slice.end() - slice.start());
+            ptr
+        };
+
+        if !slice.adjacent_right() {
+            // split block on the right side
+            let i = if let Some(i) = index {
+                i
+            } else {
+                let last_id = slice.last_id();
+                blocks.find_pivot(last_id.clock).unwrap()
+            };
+            let new = ptr.splice(slice.len(), OffsetKind::Utf16).unwrap();
+            blocks.insert(i + 1, new);
+            //todo: txn merge blocks insert?
+        }
+
+        ptr
     }
 }
 

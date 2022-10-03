@@ -90,6 +90,7 @@ impl UpdateEvent {
 }
 
 /// Holds transaction update information from a commit after state vectors have been compressed.
+#[derive(Debug, Clone)]
 pub struct AfterTransactionEvent {
     pub before_state: StateVector,
     pub after_state: StateVector,

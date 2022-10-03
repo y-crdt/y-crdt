@@ -1,5 +1,5 @@
 use crate::block::{
-    Block, BlockPtr, BlockRange, ClientID, Item, ItemContent, BLOCK_GC_REF_NUMBER,
+    Block, BlockPtr, BlockRange, BlockSlice, ClientID, Item, ItemContent, BLOCK_GC_REF_NUMBER,
     BLOCK_SKIP_REF_NUMBER, HAS_ORIGIN, HAS_PARENT_SUB, HAS_RIGHT_ORIGIN,
 };
 use crate::id_set::DeleteSet;
@@ -844,7 +844,10 @@ impl BlockCarrier {
     }
     pub fn encode_with_offset<E: Encoder>(&self, encoder: &mut E, offset: u32) {
         match self {
-            BlockCarrier::Block(x) => x.encode_from(None, encoder, offset),
+            BlockCarrier::Block(x) => {
+                let slice = BlockSlice::new(x.into(), offset, x.len() - 1);
+                slice.encode(encoder, None)
+            }
             BlockCarrier::Skip(x) => {
                 encoder.write_info(BLOCK_SKIP_REF_NUMBER);
                 encoder.write_len(x.len - offset);

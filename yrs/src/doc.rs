@@ -7,8 +7,7 @@ use crate::transaction::{Transaction, TransactionMut};
 use crate::types::{
     TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT,
 };
-use crate::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
-use crate::{Array, DeleteSet, Map, StateVector, SubscriptionId, Text, XmlElement, XmlText};
+use crate::{Array, Map, SubscriptionId, Text, XmlElement, XmlText};
 use rand::Rng;
 
 /// A Yrs document type. Documents are most important units of collaborative resources management.
@@ -311,11 +310,13 @@ pub enum OffsetKind {
 mod test {
     use crate::block::{Block, ItemContent};
     use crate::transaction::{ReadTxn, TransactionMut};
+    use crate::types::ToJson;
     use crate::update::Update;
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
     use crate::{DeleteSet, Doc, Options, StateVector, SubscriptionId};
     use lib0::any::Any;
+    use std::borrow::Borrow;
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
 
@@ -621,6 +622,7 @@ mod test {
         doc.unobserve_transaction_cleanup(sub);
         let mut txn = doc.transact_mut();
         text.insert(&mut txn, 0, "should not update");
+        txn.commit();
         assert_ne!(after_state.take(), txn.after_state);
     }
 
@@ -727,8 +729,7 @@ mod test {
         doc.transact_mut().apply_update(update);
 
         let root = doc.get_map("root");
-        let mut txn = doc.transact_mut();
-        let actual = root.to_json();
+        let actual = root.to_json(&doc.transact());
         let expected = Any::from_json(
             r#"{
               "string": "world",

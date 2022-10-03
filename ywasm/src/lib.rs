@@ -15,7 +15,7 @@ use yrs::types::text::{ChangeKind, Diff, TextEvent};
 use yrs::types::xml::{Attributes, TreeWalker, XmlEvent, XmlTextEvent};
 use yrs::types::{
     Attrs, Branch, BranchPtr, Change, DeepObservable, Delta, EntryChange, Event, Events, Path,
-    PathSegment, TypeRefs, Value, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
+    PathSegment, ToJson, TypeRefs, Value, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
     TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT,
 };
 use yrs::updates::decoder::{Decode, DecoderV1, DecoderV2};

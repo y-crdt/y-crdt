@@ -598,32 +598,13 @@ impl Default for Value {
 }
 
 impl Value {
-    /// Converts current value into [Any] object equivalent that resembles enhanced JSON payload.
-    /// Rules are:
-    ///
-    /// - Primitive types ([Value::Any]) are passed right away, as no transformation is needed.
-    /// - [Value::YArray] is converted into JSON-like array.
-    /// - [Value::YMap] is converted into JSON-like object map.
-    /// - [Value::YText], [Value::YXmlText] and [Value::YXmlElement] are converted into strings
-    ///   (XML types are stringified XML representation).
-    pub fn to_json(self) -> Any {
-        match self {
-            Value::Any(a) => a,
-            Value::YText(v) => Any::String(v.to_string().into_boxed_str()),
-            Value::YArray(v) => v.to_json(),
-            Value::YMap(v) => v.to_json(),
-            Value::YXmlElement(v) => Any::String(v.to_string().into_boxed_str()),
-            Value::YXmlText(v) => Any::String(v.to_string().into_boxed_str()),
-        }
-    }
-
     /// Converts current value into stringified representation.
     pub fn to_string(self) -> String {
         match self {
             Value::Any(a) => a.to_string(),
             Value::YText(v) => v.to_string(),
-            Value::YArray(v) => v.to_json().to_string(),
-            Value::YMap(v) => v.to_json().to_string(),
+            Value::YArray(v) => v.to_json(&v.as_ref().try_transact().unwrap()).to_string(),
+            Value::YMap(v) => v.to_json(&v.as_ref().try_transact().unwrap()).to_string(),
             Value::YXmlElement(v) => v.to_string(),
             Value::YXmlText(v) => v.to_string(),
         }
@@ -677,6 +658,27 @@ where
     fn from(v: T) -> Self {
         let any: Any = v.into();
         Value::Any(any)
+    }
+}
+
+impl ToJson for Value {
+    /// Converts current value into [Any] object equivalent that resembles enhanced JSON payload.
+    /// Rules are:
+    ///
+    /// - Primitive types ([Value::Any]) are passed right away, as no transformation is needed.
+    /// - [Value::YArray] is converted into JSON-like array.
+    /// - [Value::YMap] is converted into JSON-like object map.
+    /// - [Value::YText], [Value::YXmlText] and [Value::YXmlElement] are converted into strings
+    ///   (XML types are stringified XML representation).
+    fn to_json<T: ReadTxn>(&self, txn: &T) -> Any {
+        match self {
+            Value::Any(a) => a.clone(),
+            Value::YText(v) => Any::String(v.to_string().into_boxed_str()),
+            Value::YArray(v) => v.to_json(txn),
+            Value::YMap(v) => v.to_json(txn),
+            Value::YXmlElement(v) => Any::String(v.to_string().into_boxed_str()),
+            Value::YXmlText(v) => Any::String(v.to_string().into_boxed_str()),
+        }
     }
 }
 
@@ -1070,10 +1072,10 @@ pub(crate) fn event_change_set(txn: &TransactionMut, start: Option<BlockPtr>) ->
     let mut delta = Vec::new();
 
     let mut moved_stack = Vec::new();
-    let mut curr_move = None;
+    let mut curr_move: Option<BlockPtr> = None;
     let mut curr_move_is_new = false;
     let mut curr_move_is_deleted = false;
-    let mut curr_move_end = None;
+    let mut curr_move_end: Option<BlockPtr> = None;
     let mut last_op = None;
 
     #[derive(Default)]
@@ -1310,4 +1312,9 @@ impl Event {
             Event::XmlText(e) => Value::YXmlText(e.target().clone()),
         }
     }
+}
+
+pub trait ToJson {
+    /// Converts all contents of a current type into a JSON-like representation.
+    fn to_json<T: ReadTxn>(&self, txn: &T) -> Any;
 }

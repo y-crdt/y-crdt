@@ -2,7 +2,8 @@ use crate::block::{Block, ItemContent, ItemPosition, Prelim};
 use crate::event::Subscription;
 use crate::transaction::TransactionMut;
 use crate::types::{
-    event_keys, Branch, BranchPtr, Entries, EntryChange, Observers, Path, Value, TYPE_REFS_MAP,
+    event_keys, Branch, BranchPtr, Entries, EntryChange, Observers, Path, ToJson, Value,
+    TYPE_REFS_MAP,
 };
 use crate::*;
 use lib0::any::Any;
@@ -24,25 +25,6 @@ use std::rc::Rc;
 pub struct Map(BranchPtr);
 
 impl Map {
-    /// Converts all entries of a current map into JSON-like object representation.
-    pub fn to_json(&self) -> Any {
-        let inner = self.0;
-        let mut res = HashMap::new();
-        for (key, ptr) in inner.map.iter() {
-            if let Block::Item(item) = ptr.deref() {
-                if !item.is_deleted() {
-                    let any = if let Some(value) = item.content.get_last() {
-                        value.to_json()
-                    } else {
-                        Any::Null
-                    };
-                    res.insert(key.to_string(), any);
-                }
-            }
-        }
-        Any::Map(Box::new(res))
-    }
-
     /// Returns a number of entries stored within current map.
     pub fn len(&self) -> u32 {
         let mut len = 0;
@@ -160,6 +142,22 @@ impl Map {
     }
 }
 
+impl ToJson for Map {
+    fn to_json<T: ReadTxn>(&self, txn: &T) -> Any {
+        let inner = self.0;
+        let mut res = HashMap::new();
+        for (key, ptr) in inner.map.iter() {
+            if let Block::Item(item) = ptr.deref() {
+                if !item.is_deleted() {
+                    let last = item.content.get_last().unwrap_or(Value::Any(Any::Null));
+                    res.insert(key.to_string(), last.to_json(txn));
+                }
+            }
+        }
+        Any::Map(Box::new(res))
+    }
+}
+
 impl AsRef<Branch> for Map {
     fn as_ref(&self) -> &Branch {
         self.0.deref()
@@ -207,7 +205,13 @@ impl<'a> Iterator for Values<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         let (_, item) = self.0.next()?;
-        Some(item.content.get_content())
+        let len = item.len() as usize;
+        let mut values = vec![Value::default(); len];
+        if item.content.read(0, &mut values) == len {
+            Some(values)
+        } else {
+            panic!("Defect: iterator didn't read all elements")
+        }
     }
 }
 
@@ -510,7 +514,6 @@ mod test {
 
         for doc in [d1, d2, d3, d4] {
             let map = doc.get_map("map");
-            let mut txn = doc.transact_mut();
 
             assert_eq!(
                 map.get(&"key1".to_owned()),
@@ -558,7 +561,6 @@ mod test {
 
         for doc in [d1, d2, d3] {
             let map = doc.get_map("map");
-            let mut txn = doc.transact_mut();
 
             assert_eq!(
                 map.get(&"stuff".to_owned()),
@@ -615,7 +617,6 @@ mod test {
 
         for doc in [d1, d2, d3, d4] {
             let map = doc.get_map("map");
-            let mut txn = doc.transact_mut();
 
             assert_eq!(
                 map.get(&"key1".to_owned()),

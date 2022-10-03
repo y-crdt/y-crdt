@@ -1844,7 +1844,6 @@ mod test {
 
         {
             let text = doc.get_text("content");
-            let mut txn = doc.transact_mut();
             assert_eq!(text.to_string(), "");
         }
     }

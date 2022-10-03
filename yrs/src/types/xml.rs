@@ -5,10 +5,10 @@ use crate::transaction::TransactionMut;
 use crate::types::text::{Diff, TextEvent, YChange};
 use crate::types::{
     event_change_set, event_keys, Attrs, Branch, BranchPtr, Change, ChangeSet, Delta, Entries,
-    EntryChange, Map, Observers, Path, Text, TypePtr, Value, TYPE_REFS_XML_ELEMENT,
+    EntryChange, Map, Observers, Path, Text, ToJson, TypePtr, Value, TYPE_REFS_XML_ELEMENT,
     TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_TEXT,
 };
-use crate::{SubscriptionId, ID};
+use crate::{ReadTxn, SubscriptionId, ID};
 use lib0::any::Any;
 use std::cell::UnsafeCell;
 use std::collections::{HashMap, HashSet};
@@ -596,10 +596,6 @@ impl XmlHook {
         self.0.len()
     }
 
-    pub fn to_json(&self) -> Any {
-        self.0.to_json()
-    }
-
     pub fn keys(&self) -> crate::types::map::Keys {
         self.0.keys()
     }
@@ -635,6 +631,12 @@ impl XmlHook {
 
     pub fn clear(&self, txn: &mut TransactionMut) {
         self.0.clear(txn)
+    }
+}
+
+impl ToJson for XmlHook {
+    fn to_json<T: ReadTxn>(&self, txn: &T) -> Any {
+        self.0.to_json(txn)
     }
 }
 
@@ -965,7 +967,7 @@ enum PrelimXml {
 }
 
 impl Prelim for PrelimXml {
-    fn into_content(self, txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
+    fn into_content(self, _: &mut TransactionMut) -> (ItemContent, Option<Self>) {
         let inner = match self {
             PrelimXml::Elem(node_name) => Branch::new(TYPE_REFS_XML_ELEMENT, Some(node_name)),
             PrelimXml::Text => Branch::new(TYPE_REFS_XML_TEXT, None),

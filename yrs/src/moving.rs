@@ -4,7 +4,7 @@ use crate::transaction::TransactionMut;
 use crate::types::BranchPtr;
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
-use crate::ID;
+use crate::{ReadTxn, WriteTxn, ID};
 use lib0::error::Error;
 use std::collections::HashSet;
 use std::ops::{Deref, DerefMut};
@@ -41,30 +41,67 @@ impl Move {
         self.start.id == self.end.id
     }
 
-    pub(crate) fn get_moved_coords(
+    pub(crate) fn get_moved_coords_mut<T: WriteTxn>(
         &self,
-        txn: &mut TransactionMut,
+        txn: &mut T,
+    ) -> (Option<BlockPtr>, Option<BlockPtr>) {
+        let start = Self::get_item_ptr_mut(txn, &self.start.id, self.start.assoc);
+        let end = Self::get_item_ptr_mut(txn, &self.end.id, self.end.assoc);
+        (start, end)
+    }
+
+    fn get_item_ptr_mut<T: WriteTxn>(txn: &mut T, id: &ID, assoc: Assoc) -> Option<BlockPtr> {
+        let store = txn.store_mut();
+        if assoc {
+            let slice = store.blocks.get_item_clean_start(id)?;
+            if slice.adjacent() {
+                Some(slice.as_ptr())
+            } else {
+                Some(store.materialize(slice))
+            }
+        } else {
+            let slice = store.blocks.get_item_clean_end(id)?;
+            let ptr = if slice.adjacent() {
+                slice.as_ptr()
+            } else {
+                store.materialize(slice)
+            };
+            if let Block::Item(item) = ptr.deref() {
+                item.right
+            } else {
+                None
+            }
+        }
+    }
+
+    pub(crate) fn get_moved_coords<T: ReadTxn>(
+        &self,
+        txn: &T,
     ) -> (Option<BlockPtr>, Option<BlockPtr>) {
         let start = Self::get_item_ptr(txn, &self.start.id, self.start.assoc);
         let end = Self::get_item_ptr(txn, &self.end.id, self.end.assoc);
         (start, end)
     }
 
-    fn get_item_ptr(txn: &mut TransactionMut, id: &ID, assoc: Assoc) -> Option<BlockPtr> {
+    fn get_item_ptr<T: ReadTxn>(txn: &T, id: &ID, assoc: Assoc) -> Option<BlockPtr> {
         if assoc {
-            txn.store.blocks.get_item_clean_start(id)
-        } else if let Some(Block::Item(item)) =
-            txn.store_mut().blocks.get_item_clean_end(id).as_deref()
-        {
-            item.right
+            let slice = txn.store().blocks.get_item_clean_start(id)?;
+            debug_assert!(slice.adjacent()); //TODO: remove once confirmed that slice always fits block range
+            Some(slice.as_ptr())
         } else {
-            None
+            let slice = txn.store().blocks.get_item_clean_end(id)?;
+            debug_assert!(slice.adjacent()); //TODO: remove once confirmed that slice always fits block range
+            if let Block::Item(item) = slice.as_ptr().deref() {
+                item.right
+            } else {
+                None
+            }
         }
     }
 
-    pub(crate) fn find_move_loop(
+    pub(crate) fn find_move_loop<T: ReadTxn>(
         &self,
-        txn: &mut TransactionMut,
+        txn: &mut T,
         moved: BlockPtr,
         tracked_moved_items: &mut HashSet<BlockPtr>,
     ) -> bool {
@@ -99,7 +136,7 @@ impl Move {
     }
 
     pub(crate) fn integrate_block(&mut self, txn: &mut TransactionMut, item: BlockPtr) {
-        let (init, end) = self.get_moved_coords(txn);
+        let (init, end) = self.get_moved_coords_mut(txn);
         let mut max_priority = 0i32;
         let adapt_priority = self.priority < 0;
         let mut start = init;

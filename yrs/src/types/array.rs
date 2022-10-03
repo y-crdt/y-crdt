@@ -1,12 +1,13 @@
 use crate::block::{ItemContent, Prelim};
-use crate::block_iter::{BlockIter, SliceConcat};
+use crate::block_iter::BlockIter;
 use crate::event::Subscription;
 use crate::moving::RelativePosition;
 use crate::transaction::TransactionMut;
 use crate::types::{
-    event_change_set, Branch, BranchPtr, Change, ChangeSet, Observers, Path, Value, TYPE_REFS_ARRAY,
+    event_change_set, Branch, BranchPtr, Change, ChangeSet, Observers, Path, ToJson, Value,
+    TYPE_REFS_ARRAY,
 };
-use crate::{SubscriptionId, ID};
+use crate::{ReadTxn, SubscriptionId, ID};
 use lib0::any::Any;
 use std::cell::UnsafeCell;
 use std::collections::HashSet;
@@ -98,11 +99,10 @@ impl Array {
 
     /// Retrieves a value stored at a given `index`. Returns `None` when provided index was out
     /// of the range of a current array.
-    pub fn get(&self, index: u32) -> Option<Value> {
-        let mut txn = self.0.try_transact_mut().expect("Array is not integrated");
+    pub fn get<T: ReadTxn>(&self, txn: &T, index: u32) -> Option<Value> {
         let mut walker = BlockIter::new(self.0);
-        if walker.try_forward(&mut txn, index) {
-            walker.read_value(&mut txn)
+        if walker.try_forward(txn, index) {
+            walker.read_value(txn)
         } else {
             None
         }
@@ -170,20 +170,8 @@ impl Array {
 
     /// Returns an iterator, that can be used to lazely traverse over all values stored in a current
     /// array.
-    pub fn iter(&self) -> ArrayIter {
-        ArrayIter::new(self)
-    }
-
-    /// Converts all contents of current array into a JSON-like representation.
-    pub fn to_json(&self) -> Any {
-        let len = self.0.len();
-        let mut walker = BlockIter::new(self.0);
-        let mut txn = self.0.try_transact_mut().unwrap();
-        let values = walker
-            .slice::<ArraySliceConcat>(&mut txn, len, Vec::default())
-            .unwrap();
-        let res = values.into_iter().map(Value::to_json).collect();
-        Any::Array(res)
+    pub fn iter<'a, T: ReadTxn>(&self, txn: &'a T) -> ArrayIter<'a, T> {
+        ArrayIter::new(self, txn)
     }
 
     /// Subscribes a given callback to be triggered whenever current array is changed.
@@ -212,6 +200,24 @@ impl Array {
     }
 }
 
+impl ToJson for Array {
+    fn to_json<T: ReadTxn>(&self, txn: &T) -> Any {
+        let mut walker = BlockIter::new(self.0);
+        let len = self.0.len();
+        let mut buf = vec![Value::default(); len as usize];
+        let read = walker.slice(txn, &mut buf);
+        if read == len {
+            let res = buf.into_iter().map(|v| v.to_json(txn)).collect();
+            Any::Array(res)
+        } else {
+            panic!(
+                "Defect: Array::to_json didn't read all elements ({}/{})",
+                read, len
+            )
+        }
+    }
+}
+
 impl AsRef<Branch> for Array {
     fn as_ref(&self) -> &Branch {
         self.0.deref()
@@ -224,31 +230,33 @@ impl AsMut<Branch> for Array {
     }
 }
 
-pub struct ArrayIter<'doc> {
+pub struct ArrayIter<'a, T: ReadTxn> {
     inner: BlockIter,
-    txn: TransactionMut<'doc>,
+    txn: &'a T,
 }
 
-impl<'doc> ArrayIter<'doc> {
-    fn new(array: &'doc Array) -> Self {
+impl<'a, T: ReadTxn> ArrayIter<'a, T> {
+    fn new(array: &Array, txn: &'a T) -> Self {
         ArrayIter {
             inner: BlockIter::new(array.0),
-            txn: array.0.try_transact_mut().unwrap(),
+            txn,
         }
     }
 }
 
-impl<'b> Iterator for ArrayIter<'b> {
+impl<'a, T: ReadTxn> Iterator for ArrayIter<'a, T> {
     type Item = Value;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.inner.finished() {
             None
         } else {
-            let mut res = self
-                .inner
-                .slice::<ArraySliceConcat>(&mut self.txn, 1, Vec::default())?;
-            res.pop()
+            let mut buf = [Value::default(); 1];
+            if self.inner.slice(self.txn, &mut buf) != 0 {
+                Some(std::mem::replace(&mut buf[0], Value::default()))
+            } else {
+                None
+            }
         }
     }
 }
@@ -363,34 +371,11 @@ impl ArrayEvent {
     }
 }
 
-pub(crate) struct ArraySliceConcat;
-
-impl SliceConcat for ArraySliceConcat {
-    fn slice(content: &mut ItemContent, offset: usize, len: usize) -> Vec<Value> {
-        let mut content = content.get_content();
-        if content.len() <= len && offset == 0 {
-            content
-        } else {
-            if offset != 0 {
-                for _ in content.drain(0..offset) { /* do nothing */ }
-            }
-            for _ in content.drain(len..) { /* do nothing */ }
-            content
-        }
-    }
-
-    #[inline]
-    fn concat(mut a: Vec<Value>, b: Vec<Value>) -> Vec<Value> {
-        a.extend(b);
-        a
-    }
-}
-
 #[cfg(test)]
 mod test {
     use crate::test_utils::{exchange_updates, run_scenario, RngExt};
     use crate::types::map::PrelimMap;
-    use crate::types::{Change, DeepObservable, Event, Path, PathSegment, Value};
+    use crate::types::{Change, DeepObservable, Event, Path, PathSegment, ToJson, Value};
     use crate::{Doc, PrelimArray, StateVector, Update, ID};
     use lib0::any::Any;
     use rand::prelude::StdRng;
@@ -411,7 +396,7 @@ mod test {
         a.push_back(&mut txn, "b");
         a.push_back(&mut txn, "c");
 
-        let actual: Vec<_> = a.iter().collect();
+        let actual: Vec<_> = a.iter(&txn).collect();
         assert_eq!(actual, vec!["a".into(), "b".into(), "c".into()]);
     }
 
@@ -425,7 +410,7 @@ mod test {
         a.push_front(&mut txn, "b");
         a.push_front(&mut txn, "a");
 
-        let actual: Vec<_> = a.iter().collect();
+        let actual: Vec<_> = a.iter(&txn).collect();
         assert_eq!(actual, vec!["a".into(), "b".into(), "c".into()]);
     }
 
@@ -439,7 +424,7 @@ mod test {
         a.insert(&mut txn, 1, "c");
         a.insert(&mut txn, 1, "b");
 
-        let actual: Vec<_> = a.iter().collect();
+        let actual: Vec<_> = a.iter(&txn).collect();
         assert_eq!(actual, vec!["a".into(), "b".into(), "c".into()]);
     }
 
@@ -458,7 +443,7 @@ mod test {
         let a2 = d2.get_array("array");
         let mut t2 = d2.transact_mut();
         t2.apply_update(Update::decode_v1(update.as_slice()).unwrap());
-        let actual: Vec<_> = a2.iter().collect();
+        let actual: Vec<_> = a2.iter(&t2).collect();
 
         assert_eq!(actual, vec!["Hi".into()]);
     }
@@ -527,7 +512,7 @@ mod test {
             a1.push_back(&mut t1, 1);
             a1.push_back(&mut t1, true);
             a1.push_back(&mut t1, false);
-            let actual: Vec<_> = a1.iter().collect();
+            let actual: Vec<_> = a1.iter(&t1).collect();
             assert_eq!(
                 actual,
                 vec![Value::from(1.0), Value::from(true), Value::from(false)]
@@ -538,7 +523,7 @@ mod test {
 
         let a2 = d2.get_array("array");
         let mut t2 = d2.transact_mut();
-        let actual: Vec<_> = a2.iter().collect();
+        let actual: Vec<_> = a2.iter(&t2).collect();
         assert_eq!(
             actual,
             vec![Value::from(1.0), Value::from(true), Value::from(false)]
@@ -578,7 +563,7 @@ mod test {
 
     fn to_array(d: &Doc) -> Vec<Value> {
         let a = d.get_array("array");
-        a.iter().collect()
+        a.iter(&d.transact()).collect()
     }
 
     #[test]
@@ -728,12 +713,12 @@ mod test {
             a.push_back(&mut txn, PrelimMap::from(m));
         }
 
-        for (i, value) in a.iter().enumerate() {
+        for (i, value) in a.iter(&txn).enumerate() {
             let mut expected = HashMap::new();
             expected.insert("value".to_owned(), Any::Number(i as f64));
             match value {
                 Value::YMap(_) => {
-                    assert_eq!(value.to_json(), Any::Map(Box::new(expected)))
+                    assert_eq!(value.to_json(&txn), Any::Map(Box::new(expected)))
                 }
                 _ => panic!("Value of array at index {} was no YMap", i),
             }
@@ -925,7 +910,7 @@ mod test {
                 let len = 1;
                 let new_pos_adjusted = rng.between(0, yarray.len() - 1);
                 let new_pos = new_pos_adjusted + if new_pos_adjusted > pos { len } else { 0 };
-                if let Any::Array(expected) = yarray.to_json() {
+                if let Any::Array(expected) = yarray.to_json(&txn) {
                     let mut expected = Vec::from(expected);
                     let moved = expected.remove(pos as usize);
                     let insert_pos = if pos < new_pos {
@@ -937,7 +922,7 @@ mod test {
 
                     yarray.move_to(&mut txn, pos, new_pos);
 
-                    let actual = yarray.to_json();
+                    let actual = yarray.to_json(&txn);
                     assert_eq!(actual, Any::Array(expected.into_boxed_slice()))
                 } else {
                     panic!("should not happen")
@@ -954,7 +939,7 @@ mod test {
                 .map(|_| Any::BigInt(unique_number))
                 .collect();
             let mut pos = rng.between(0, yarray.len()) as usize;
-            if let Any::Array(expected) = yarray.to_json() {
+            if let Any::Array(expected) = yarray.to_json(&txn) {
                 let mut expected = Vec::from(expected);
                 yarray.insert_range(&mut txn, pos as u32, content.clone());
 
@@ -962,7 +947,7 @@ mod test {
                     expected.insert(pos, any);
                     pos += 1;
                 }
-                let actual = yarray.to_json();
+                let actual = yarray.to_json(&txn);
                 assert_eq!(actual, Any::Array(expected.into_boxed_slice()))
             } else {
                 panic!("should not happen")
@@ -974,9 +959,9 @@ mod test {
             let mut txn = doc.transact_mut();
             let pos = rng.between(0, yarray.len());
             yarray.insert(&mut txn, pos, PrelimArray::from([1, 2, 3, 4]));
-            if let Value::YArray(array2) = yarray.get(pos).unwrap() {
+            if let Value::YArray(array2) = yarray.get(&txn, pos).unwrap() {
                 let expected: Box<[Any]> = (1..=4).map(|i| Any::Number(i as f64)).collect();
-                assert_eq!(array2.to_json(), Any::Array(expected));
+                assert_eq!(array2.to_json(&txn), Any::Array(expected));
             } else {
                 panic!("should not happen")
             }
@@ -987,7 +972,7 @@ mod test {
             let mut txn = doc.transact_mut();
             let pos = rng.between(0, yarray.len());
             yarray.insert(&mut txn, pos, PrelimMap::<i32>::from(HashMap::default()));
-            if let Value::YMap(map) = yarray.get(pos).unwrap() {
+            if let Value::YMap(map) = yarray.get(&txn, pos).unwrap() {
                 map.insert(&mut txn, "someprop".to_string(), 42);
                 map.insert(&mut txn, "someprop".to_string(), 43);
                 map.insert(&mut txn, "someprop".to_string(), 44);
@@ -1004,17 +989,20 @@ mod test {
                 let pos = rng.between(0, len - 1);
                 let del_len = rng.between(1, 2.min(len - pos));
                 if rng.gen_bool(0.5) {
-                    if let Value::YArray(array2) = yarray.get(pos).unwrap() {
+                    if let Value::YArray(array2) = yarray.get(&txn, pos).unwrap() {
                         let pos = rng.between(0, array2.len() - 1);
                         let del_len = rng.between(0, 2.min(array2.len() - pos));
                         array2.remove_range(&mut txn, pos, del_len);
                     }
                 } else {
-                    if let Any::Array(old_content) = yarray.to_json() {
+                    if let Any::Array(old_content) = yarray.to_json(&txn) {
                         let mut old_content = Vec::from(old_content);
                         yarray.remove_range(&mut txn, pos, del_len);
                         old_content.drain(pos as usize..(pos + del_len) as usize);
-                        assert_eq!(yarray.to_json(), Any::Array(old_content.into_boxed_slice()));
+                        assert_eq!(
+                            yarray.to_json(&txn),
+                            Any::Array(old_content.into_boxed_slice())
+                        );
                     } else {
                         panic!("should not happen")
                     }
@@ -1054,7 +1042,7 @@ mod test {
         a1.insert_range(&mut t1, 0, ["A"]);
         a1.remove(&mut t1, 0);
 
-        let actual = a1.get(0);
+        let actual = a1.get(&t1, 0);
         assert_eq!(actual, None);
     }
 
@@ -1075,7 +1063,7 @@ mod test {
 
         {
             let mut txn = doc.transact_mut();
-            let map = array.get(0).unwrap().to_ymap().unwrap();
+            let map = array.get(&txn, 0).unwrap().to_ymap().unwrap();
             map.insert(&mut txn, "a", "a");
             array.insert(&mut txn, 0, 0);
         }
@@ -1115,11 +1103,11 @@ mod test {
             a1.insert_range(&mut txn, 0, [1, 2, 3]);
             a1.move_to(&mut txn, 1, 0);
         }
-        assert_eq!(a1.to_json(), vec![2, 1, 3].into());
+        assert_eq!(a1.to_json(&d1.transact()), vec![2, 1, 3].into());
 
         exchange_updates(&[&d1, &d2]);
 
-        assert_eq!(a2.to_json(), vec![2, 1, 3].into());
+        assert_eq!(a2.to_json(&d2.transact()), vec![2, 1, 3].into());
         let actual = e2.as_ref().borrow();
         assert_eq!(
             actual.deref(),
@@ -1128,7 +1116,7 @@ mod test {
 
         a1.move_to(&mut d1.transact_mut(), 0, 2);
 
-        assert_eq!(a1.to_json(), vec![1, 2, 3].into());
+        assert_eq!(a1.to_json(&d1.transact()), vec![1, 2, 3].into());
         let actual = e1.as_ref().borrow();
         assert_eq!(
             actual.deref(),
@@ -1164,7 +1152,7 @@ mod test {
 
         a1.insert_range(&mut d1.transact_mut(), 0, [1, 2]);
         a1.move_to(&mut d1.transact_mut(), 1, 0);
-        assert_eq!(a1.to_json(), vec![2, 1].into());
+        assert_eq!(a1.to_json(&d1.transact()), vec![2, 1].into());
         {
             let actual = e1.as_ref().borrow();
             assert_eq!(
@@ -1179,7 +1167,7 @@ mod test {
 
         exchange_updates(&[&d1, &d2]);
 
-        assert_eq!(a2.to_json(), vec![2, 1].into());
+        assert_eq!(a2.to_json(&d2.transact()), vec![2, 1].into());
         {
             let actual = e2.as_ref().borrow();
             assert_eq!(
@@ -1189,7 +1177,7 @@ mod test {
         }
 
         a1.move_to(&mut d1.transact_mut(), 0, 2);
-        assert_eq!(a1.to_json(), vec![1, 2].into());
+        assert_eq!(a1.to_json(&d1.transact()), vec![1, 2].into());
         {
             let actual = e1.as_ref().borrow();
             assert_eq!(
@@ -1215,16 +1203,16 @@ mod test {
         exchange_updates(&[&d1, &d2]);
 
         a1.move_range_to(&mut d1.transact_mut(), 0, true, 1, false, 3);
-        assert_eq!(a1.to_json(), vec![3, 1, 2, 4].into());
+        assert_eq!(a1.to_json(&d1.transact()), vec![3, 1, 2, 4].into());
 
         a2.move_range_to(&mut d2.transact_mut(), 2, true, 3, false, 1);
-        assert_eq!(a2.to_json(), vec![1, 3, 4, 2].into());
+        assert_eq!(a2.to_json(&d2.transact()), vec![1, 3, 4, 2].into());
 
         exchange_updates(&[&d1, &d2]);
         exchange_updates(&[&d1, &d2]); // move cycles may not be detected within a single update exchange
 
         assert_eq!(a1.len(), 4);
-        assert_eq!(a1.to_json(), a2.to_json());
+        assert_eq!(a1.to_json(&d1.transact()), a2.to_json(&d2.transact()));
     }
 
     fn move_tests<P: AsRef<std::path::Path>>(path: P) {
@@ -1245,7 +1233,7 @@ mod test {
                 doc.transact_mut().apply_update(update);
             }
             let expected = decoder.read_any().unwrap();
-            let actual = array.to_json();
+            let actual = array.to_json(&doc.transact());
             assert_eq!(actual, expected, "failed at test case nr {}", i);
         }
     }

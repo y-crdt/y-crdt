@@ -176,7 +176,8 @@ impl BlockPtr {
                     this.id.clock += offset;
                     this.left = store
                         .blocks
-                        .get_item_clean_end(&ID::new(this.id.client, this.id.clock - 1));
+                        .get_item_clean_end(&ID::new(this.id.client, this.id.clock - 1))
+                        .map(|slice| store.materialize(slice));
                     this.origin = this.left.as_deref().map(|b: &Block| b.last_id());
                     this.content = this.content.splice(offset as usize, encoding).unwrap();
                     this.len -= offset;
@@ -526,6 +527,152 @@ impl PartialEq for BlockPtr {
     }
 }
 
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub(crate) struct BlockSlice {
+    ptr: BlockPtr,
+    start: u32,
+    end: u32,
+}
+
+impl BlockSlice {
+    pub fn new(ptr: BlockPtr, start: u32, end: u32) -> Self {
+        debug_assert!(start <= end);
+        BlockSlice { ptr, start, end }
+    }
+
+    /// Returns the first [ID] covered by this slice (inclusive).
+    pub fn id(&self) -> ID {
+        let mut id = *self.ptr.id();
+        id.clock += self.start;
+        id
+    }
+
+    /// Returns the last [ID] covered by this slice (inclusive).
+    pub fn last_id(&self) -> ID {
+        let mut id = *self.ptr.id();
+        id.clock += self.end;
+        id
+    }
+
+    /// Returns true when current [BlockSlice] left boundary is equal to the boundary of the
+    /// [BlockPtr] this slice wraps.
+    pub fn adjacent_left(&self) -> bool {
+        self.start == 0
+    }
+
+    /// Returns true when current [BlockSlice] right boundary is equal to the boundary of the
+    /// [BlockPtr] this slice wraps.
+    pub fn adjacent_right(&self) -> bool {
+        self.end == self.ptr.len() - 1
+    }
+
+    /// Returns true when boundaries marked by the current [BlockSlice] match the boundaries
+    /// of the underlying [BlockPtr].
+    pub fn adjacent(&self) -> bool {
+        self.adjacent_left() && self.adjacent_right()
+    }
+
+    /// Returns the number of elements (counted as Yjs ID clock length) of the block range described
+    /// by current [BlockSlice].
+    pub fn len(&self) -> u32 {
+        self.end - self.start + 1
+    }
+
+    /// Returns an underlying [BlockPtr].
+    pub fn as_ptr(&self) -> BlockPtr {
+        self.ptr
+    }
+
+    pub fn start(&self) -> u32 {
+        self.start
+    }
+
+    pub fn end(&self) -> u32 {
+        self.end
+    }
+
+    pub fn is_deleted(&self) -> bool {
+        self.ptr.is_deleted()
+    }
+
+    pub fn is_countable(&self) -> bool {
+        self.ptr.is_countable()
+    }
+
+    pub fn contains_id(&self, id: &ID) -> bool {
+        let myself = self.ptr.id();
+        myself.client == id.client
+            && id.clock >= myself.clock + self.start
+            && id.clock <= myself.clock + self.end
+    }
+
+    pub fn encode<E: Encoder>(&self, encoder: &mut E, store: Option<&Store>) {
+        match self.ptr.deref() {
+            Block::Item(item) => {
+                let mut info = item.info();
+                let origin = if self.adjacent_left() {
+                    item.origin
+                } else {
+                    Some(ID::new(item.id.client, item.id.clock + self.start - 1))
+                };
+                if origin.is_some() {
+                    info |= HAS_ORIGIN;
+                }
+                let cant_copy_parent_info = info & (HAS_ORIGIN | HAS_RIGHT_ORIGIN) == 0;
+                encoder.write_info(info);
+                if let Some(origin_id) = origin {
+                    encoder.write_left_id(&origin_id);
+                }
+                if self.adjacent_right() {
+                    if let Some(right_origin_id) = item.right_origin.as_ref() {
+                        encoder.write_right_id(right_origin_id);
+                    }
+                }
+                if cant_copy_parent_info {
+                    match &item.parent {
+                        TypePtr::Branch(branch) => {
+                            if let Some(block) = branch.item {
+                                encoder.write_parent_info(false);
+                                encoder.write_left_id(block.id());
+                            } else if let Some(store) = store {
+                                let name = store.get_type_key(*branch).unwrap();
+                                encoder.write_parent_info(true);
+                                encoder.write_string(name);
+                            }
+                        }
+                        TypePtr::Named(name) => {
+                            encoder.write_parent_info(true);
+                            encoder.write_string(name);
+                        }
+                        TypePtr::ID(id) => {
+                            encoder.write_parent_info(false);
+                            encoder.write_left_id(id);
+                        }
+                        TypePtr::Unknown => {
+                            panic!("Couldn't get item's parent")
+                        }
+                    }
+
+                    if let Some(parent_sub) = item.parent_sub.as_ref() {
+                        encoder.write_string(parent_sub.as_ref());
+                    }
+                }
+                item.content.encode_slice(encoder, self.start, self.end);
+            }
+            Block::GC(_) => {
+                encoder.write_info(BLOCK_GC_REF_NUMBER);
+                encoder.write_len(self.len());
+            }
+        }
+    }
+}
+
+impl From<BlockPtr> for BlockSlice {
+    fn from(ptr: BlockPtr) -> Self {
+        BlockSlice::new(ptr, 0, ptr.len() - 1)
+    }
+}
+
 /// An enum containing all supported block variants.
 #[derive(PartialEq)]
 pub(crate) enum Block {
@@ -571,116 +718,6 @@ impl Block {
         match self {
             Block::Item(item) => item.is_deleted(),
             Block::GC(_) => true,
-        }
-    }
-
-    /// Encodes state of the current block up to a given clock offset within that block.
-    pub fn encode_to<E: Encoder>(&self, store: Option<&Store>, encoder: &mut E, offset: u32) {
-        match self {
-            Block::Item(item) => {
-                let info = item.info();
-                let cant_copy_parent_info = info & (HAS_ORIGIN | HAS_RIGHT_ORIGIN) == 0;
-                encoder.write_info(info);
-                if let Some(origin_id) = item.origin.as_ref() {
-                    encoder.write_left_id(origin_id);
-                }
-                if let Some(right_origin_id) = item.right_origin.as_ref() {
-                    encoder.write_right_id(right_origin_id);
-                }
-                if cant_copy_parent_info {
-                    match &item.parent {
-                        TypePtr::Branch(branch) => {
-                            if let Some(block) = branch.item {
-                                encoder.write_parent_info(false);
-                                encoder.write_left_id(block.id());
-                            } else if let Some(store) = store {
-                                let name = store.get_type_key(*branch).unwrap();
-                                encoder.write_parent_info(true);
-                                encoder.write_string(name);
-                            }
-                        }
-                        TypePtr::Named(name) => {
-                            encoder.write_parent_info(true);
-                            encoder.write_string(name);
-                        }
-                        TypePtr::ID(id) => {
-                            encoder.write_parent_info(false);
-                            encoder.write_left_id(id);
-                        }
-                        TypePtr::Unknown => {
-                            panic!("Couldn't get item's parent")
-                        }
-                    }
-
-                    if let Some(parent_sub) = item.parent_sub.as_ref() {
-                        encoder.write_string(parent_sub.as_ref());
-                    }
-                }
-                item.content.encode_to(encoder, offset);
-            }
-            Block::GC(_) => {
-                encoder.write_info(BLOCK_GC_REF_NUMBER);
-                encoder.write_len(offset);
-            }
-        }
-    }
-
-    /// Encodes state of the current block starting from a given clock offset within that block.
-    pub fn encode_from<E: Encoder>(&self, store: Option<&Store>, encoder: &mut E, offset: u32) {
-        match self {
-            Block::Item(item) => {
-                let mut info = item.info();
-                let origin = if offset > 0 {
-                    Some(ID::new(item.id.client, item.id.clock + offset - 1))
-                } else {
-                    item.origin
-                };
-                if origin.is_some() {
-                    info |= HAS_ORIGIN;
-                }
-                let cant_copy_parent_info = info & (HAS_ORIGIN | HAS_RIGHT_ORIGIN) == 0;
-                encoder.write_info(info);
-                if let Some(origin_id) = origin {
-                    encoder.write_left_id(&origin_id);
-                }
-                if let Some(right_origin_id) = item.right_origin.as_ref() {
-                    encoder.write_right_id(right_origin_id);
-                }
-                if cant_copy_parent_info {
-                    match &item.parent {
-                        TypePtr::Branch(branch) => {
-                            if let Some(block) = branch.item {
-                                encoder.write_parent_info(false);
-                                encoder.write_left_id(block.id());
-                            } else if let Some(store) = store {
-                                let name = store.get_type_key(*branch).unwrap();
-                                encoder.write_parent_info(true);
-                                encoder.write_string(name);
-                            }
-                        }
-                        TypePtr::Named(name) => {
-                            encoder.write_parent_info(true);
-                            encoder.write_string(name);
-                        }
-                        TypePtr::ID(id) => {
-                            encoder.write_parent_info(false);
-                            encoder.write_left_id(id);
-                        }
-                        TypePtr::Unknown => {
-                            panic!("Couldn't get item's parent")
-                        }
-                    }
-
-                    if let Some(parent_sub) = item.parent_sub.as_ref() {
-                        encoder.write_string(parent_sub.as_ref());
-                    }
-                }
-                item.content.encode_from(encoder, offset);
-            }
-            Block::GC(gc) => {
-                encoder.write_info(BLOCK_GC_REF_NUMBER);
-                encoder.write_len(gc.len - offset);
-            }
         }
     }
 
@@ -1080,11 +1117,17 @@ impl Item {
     /// repair function is called before applying the block rather than on decode.
     pub(crate) fn repair(&mut self, store: &mut Store) {
         if let Some(origin) = self.origin.as_ref() {
-            self.left = store.blocks.get_item_clean_end(origin);
+            self.left = store
+                .blocks
+                .get_item_clean_end(origin)
+                .map(|slice| store.materialize(slice));
         }
 
         if let Some(origin) = self.right_origin.as_ref() {
-            self.right = store.blocks.get_item_clean_start(origin);
+            self.right = store
+                .blocks
+                .get_item_clean_start(origin)
+                .map(|slice| store.materialize(slice));
         }
 
         // We have all missing ids, now find the items
@@ -1191,15 +1234,6 @@ impl SplittableString {
         self.content.chars().count()
     }
 
-    pub fn split_at(&self, offset: usize, kind: OffsetKind) -> (&str, &str) {
-        let off = match kind {
-            OffsetKind::Bytes => offset,
-            OffsetKind::Utf16 => self.map_utf16_offset(offset as u32) as usize,
-            OffsetKind::Utf32 => self.map_unicode_offset(offset as u32) as usize,
-        };
-        self.content.split_at(off)
-    }
-
     /// Maps given offset onto block offset. This means, that given an `offset` provided
     /// in given `encoding` we want the output as a UTF-16 compatible offset (required
     /// by Yjs for compatibility reasons).
@@ -1230,32 +1264,6 @@ impl SplittableString {
 
     pub fn push_str(&mut self, str: &str) {
         self.content.push_str(str);
-    }
-
-    fn map_utf16_offset(&self, offset: u32) -> u32 {
-        let mut off = 0;
-        let mut i = 0;
-        for c in self.content.chars() {
-            if i >= offset {
-                break;
-            }
-            off += c.len_utf8() as u32;
-            i += c.len_utf16() as u32;
-        }
-        off
-    }
-
-    fn map_unicode_offset(&self, offset: u32) -> u32 {
-        let mut off = 0;
-        let mut i = 0;
-        for c in self.content.chars() {
-            if i >= offset {
-                break;
-            }
-            off += c.len_utf8();
-            i += 1;
-        }
-        off as u32
     }
 }
 
@@ -1299,6 +1307,41 @@ impl Deref for SplittableString {
     fn deref(&self) -> &Self::Target {
         &self.content
     }
+}
+
+pub(crate) fn split_str(str: &str, offset: usize, kind: OffsetKind) -> (&str, &str) {
+    fn map_utf16_offset(str: &str, offset: u32) -> u32 {
+        let mut off = 0;
+        let mut i = 0;
+        for c in str.chars() {
+            if i >= offset {
+                break;
+            }
+            off += c.len_utf8() as u32;
+            i += c.len_utf16() as u32;
+        }
+        off
+    }
+
+    fn map_unicode_offset(str: &str, offset: u32) -> u32 {
+        let mut off = 0;
+        let mut i = 0;
+        for c in str.chars() {
+            if i >= offset {
+                break;
+            }
+            off += c.len_utf8();
+            i += 1;
+        }
+        off as u32
+    }
+
+    let off = match kind {
+        OffsetKind::Bytes => offset,
+        OffsetKind::Utf16 => map_utf16_offset(str, offset as u32) as usize,
+        OffsetKind::Utf32 => map_unicode_offset(str, offset as u32) as usize,
+    };
+    str.split_at(off)
 }
 
 /// An enum describing the type of a user content stored as part of one or more
@@ -1390,55 +1433,78 @@ impl ItemContent {
         }
     }
 
-    /// Returns a formatted content of an item. For complex types (represented by [BranchRef] nodes)
-    /// it will return a target type of a branch node (eg. Yrs [Array], [Map] or [XmlElement]). For
-    /// other types it will returns a vector of elements stored within current block. Since block
-    /// may describe a chunk of values within it, it always returns a vector of values.
-    pub fn get_content(&self) -> Vec<Value> {
-        match self {
-            ItemContent::Any(v) => v.iter().map(|a| Value::Any(a.clone())).collect(),
-            ItemContent::Binary(v) => vec![Value::Any(Any::Buffer(v.clone().into_boxed_slice()))],
-            ItemContent::Move(_) => Vec::default(),
-            ItemContent::Deleted(_) => Vec::default(),
-            ItemContent::Doc(_, v) => vec![Value::Any(*v.clone())],
-            ItemContent::JSON(v) => v
-                .iter()
-                .map(|v| Value::Any(Any::String(v.clone().into_boxed_str())))
-                .collect(),
-            ItemContent::Embed(v) => vec![Value::Any(v.as_ref().clone())],
-            ItemContent::Format(_, _) => Vec::default(),
-            ItemContent::String(v) => v
-                .chars()
-                .map(|c| Value::Any(Any::String(c.to_string().into_boxed_str())))
-                .collect(),
-            ItemContent::Type(c) => {
-                let branch_ref = BranchPtr::from(c);
-                vec![branch_ref.into()]
+    /// Reads a contents of current [ItemContent] into a given `buf`, starting from provided
+    /// `offset`. Returns a number of elements read this way (it cannot be longer than `buf`'s len.
+    pub fn read(&self, offset: usize, buf: &mut [Value]) -> usize {
+        if buf.is_empty() {
+            0
+        } else {
+            match self {
+                ItemContent::Any(values) => {
+                    let mut i = offset;
+                    let mut j = 0;
+                    while i < values.len() && j < buf.len() {
+                        let any = &values[i];
+                        buf[j] = Value::Any(any.clone());
+                        i += 1;
+                        j += 1;
+                    }
+                    j
+                }
+                ItemContent::String(v) => {
+                    let chars = v.chars().skip(offset).take(buf.len());
+                    let mut j = 0;
+                    for c in chars {
+                        buf[j] = Value::Any(Any::String(c.to_string().into_boxed_str()));
+                        j += 1;
+                    }
+                    j
+                }
+                ItemContent::JSON(elements) => {
+                    let mut i = offset;
+                    let mut j = 0;
+                    while i < elements.len() && j < buf.len() {
+                        let elem = &elements[i];
+                        buf[j] = Value::Any(Any::String(elem.clone().into_boxed_str()));
+                        i += 1;
+                        j += 1;
+                    }
+                    j
+                }
+                ItemContent::Binary(v) => {
+                    buf[0] = Value::Any(Any::Buffer(v.clone().into_boxed_slice()));
+                    1
+                }
+                ItemContent::Doc(_, v) => {
+                    buf[0] = Value::Any(*v.clone());
+                    1
+                }
+                ItemContent::Type(c) => {
+                    let branch_ref = BranchPtr::from(c);
+                    buf[0] = branch_ref.into();
+                    1
+                }
+                ItemContent::Embed(any) => {
+                    buf[0] = Value::Any(any.as_ref().clone());
+                    1
+                }
+                ItemContent::Move(_) => 0,
+                ItemContent::Deleted(_) => 0,
+                ItemContent::Format(_, _) => 0,
             }
         }
     }
 
-    /// Similar to [get_content], but it only returns the latest result and doesn't materialize
-    /// others for performance reasons.
-    pub fn get_last(&self) -> Option<Value> {
-        match self {
-            ItemContent::Any(v) => v.last().map(|a| Value::Any(a.clone())),
-            ItemContent::Binary(v) => Some(Value::Any(Any::Buffer(v.clone().into_boxed_slice()))),
-            ItemContent::Deleted(_) => None,
-            ItemContent::Move(_) => None,
-            ItemContent::Doc(_, v) => Some(Value::Any(*v.clone())),
-            ItemContent::JSON(v) => v
-                .last()
-                .map(|v| Value::Any(Any::String(v.clone().into_boxed_str()))),
-            ItemContent::Embed(v) => Some(Value::Any(v.as_ref().clone())),
-            ItemContent::Format(_, _) => None,
-            ItemContent::String(v) => Some(Value::Any(Any::String(v.clone().into()))),
-            ItemContent::Type(c) => Some(BranchPtr::from(c).into()),
+    pub fn get_content(&self) -> Vec<Value> {
+        let len = self.len(OffsetKind::Utf32) as usize;
+        let mut values = vec![Value::default(); len];
+        if self.read(0, &mut values) == len {
+            values
+        } else {
+            panic!("Defect: ItemContent::get_content didn't read all values")
         }
     }
 
-    /// Similar to [get_content], but it only returns the latest result and doesn't materialize
-    /// others for performance reasons.
     pub fn get_first(&self) -> Option<Value> {
         match self {
             ItemContent::Any(v) => v.first().map(|a| Value::Any(a.clone())),
@@ -1456,60 +1522,50 @@ impl ItemContent {
         }
     }
 
-    pub fn encode_to<E: Encoder>(&self, encoder: &mut E, offset: u32) {
+    pub fn get_last(&self) -> Option<Value> {
         match self {
-            ItemContent::Deleted(len) => encoder.write_len(*len - offset),
-            ItemContent::Binary(buf) => encoder.write_buf(buf),
-            ItemContent::String(s) => {
-                let (left, _) = s.split_at(offset as usize, OffsetKind::Utf16);
-                encoder.write_string(left)
-            }
-            ItemContent::Embed(s) => encoder.write_json(s.as_ref()),
-            ItemContent::JSON(s) => {
-                encoder.write_len(offset);
-                for i in 0..(offset as usize) {
-                    encoder.write_string(s[i].as_str())
-                }
-            }
-            ItemContent::Format(k, v) => {
-                encoder.write_key(k.as_ref());
-                encoder.write_json(v.as_ref());
-            }
-            ItemContent::Type(inner) => {
-                encoder.write_type_ref(inner.type_ref());
-                let type_ref = inner.type_ref();
-                if type_ref == types::TYPE_REFS_XML_ELEMENT || type_ref == types::TYPE_REFS_XML_HOOK
-                {
-                    encoder.write_key(inner.name.as_ref().unwrap().as_ref())
-                }
-            }
-            ItemContent::Any(any) => {
-                encoder.write_len(offset);
-                for i in 0..(offset as usize) {
-                    encoder.write_any(&any[i]);
-                }
-            }
-            ItemContent::Doc(key, any) => {
-                encoder.write_string(key.as_ref());
-                encoder.write_any(any);
-            }
-            ItemContent::Move(m) => m.encode(encoder),
+            ItemContent::Any(v) => v.last().map(|a| Value::Any(a.clone())),
+            ItemContent::Binary(v) => Some(Value::Any(Any::Buffer(v.clone().into_boxed_slice()))),
+            ItemContent::Deleted(_) => None,
+            ItemContent::Move(_) => None,
+            ItemContent::Doc(_, v) => Some(Value::Any(*v.clone())),
+            ItemContent::JSON(v) => v
+                .last()
+                .map(|v| Value::Any(Any::String(v.clone().into_boxed_str()))),
+            ItemContent::Embed(v) => Some(Value::Any(v.as_ref().clone())),
+            ItemContent::Format(_, _) => None,
+            ItemContent::String(v) => Some(Value::Any(Any::String(v.clone().into()))),
+            ItemContent::Type(c) => Some(BranchPtr::from(c).into()),
         }
     }
 
-    pub fn encode_from<E: Encoder>(&self, encoder: &mut E, offset: u32) {
+    /// Encodes a slice of a current [ItemContent] within an index bounds of (start..=end) - both
+    /// sides inclusive.
+    pub fn encode_slice<E: Encoder>(&self, encoder: &mut E, start: u32, end: u32) {
         match self {
-            ItemContent::Deleted(len) => encoder.write_len(*len - offset),
+            ItemContent::Deleted(_) => encoder.write_len(end - start + 1),
             ItemContent::Binary(buf) => encoder.write_buf(buf),
             ItemContent::String(s) => {
-                let (_, right) = s.split_at(offset as usize, OffsetKind::Utf16);
-                encoder.write_string(right)
+                let slice = if start != 0 {
+                    let (_, right) = split_str(&s, start as usize, OffsetKind::Utf16);
+                    right
+                } else {
+                    &s
+                };
+                let slice = if end != 0 {
+                    let (left, _) =
+                        split_str(&slice, (end - start + 1) as usize, OffsetKind::Utf16);
+                    left
+                } else {
+                    slice
+                };
+                encoder.write_string(slice)
             }
             ItemContent::Embed(s) => encoder.write_json(s.as_ref()),
             ItemContent::JSON(s) => {
-                encoder.write_len(s.len() as u32 - offset);
-                for i in (offset as usize)..s.len() {
-                    encoder.write_string(s[i].as_str())
+                encoder.write_len(end - start + 1);
+                for i in start..=end {
+                    encoder.write_string(s[i as usize].as_str())
                 }
             }
             ItemContent::Format(k, v) => {
@@ -1525,9 +1581,9 @@ impl ItemContent {
                 }
             }
             ItemContent::Any(any) => {
-                encoder.write_len(any.len() as u32 - offset);
-                for i in (offset as usize)..any.len() {
-                    encoder.write_any(&any[i]);
+                encoder.write_len(end - start + 1);
+                for i in start..=end {
+                    encoder.write_any(&any[i as usize]);
                 }
             }
             ItemContent::Doc(key, any) => {
@@ -1638,7 +1694,7 @@ impl ItemContent {
             }
             ItemContent::String(string) => {
                 // compute offset given in unicode code points into byte position
-                let (left, right) = string.split_at(offset, encoding);
+                let (left, right) = split_str(&string, offset, encoding);
                 let left: SplittableString = left.into();
                 let right: SplittableString = right.into();
 
@@ -1970,7 +2026,7 @@ impl std::fmt::Debug for Block {
 
 #[cfg(test)]
 mod test {
-    use crate::block::SplittableString;
+    use crate::block::{split_str, SplittableString};
     use crate::doc::OffsetKind;
     use std::ops::Deref;
 
@@ -2002,15 +2058,15 @@ mod test {
     fn splittable_string_split_str() {
         let s: SplittableString = "Zażółć gęślą jaźń😀ありがとうございます".into();
 
-        let (a, b) = s.split_at(18, OffsetKind::Utf32);
+        let (a, b) = split_str(&s, 18, OffsetKind::Utf32);
         assert_eq!(a, "Zażółć gęślą jaźń😀");
         assert_eq!(b, "ありがとうございます");
 
-        let (a, b) = s.split_at(19, OffsetKind::Utf16);
+        let (a, b) = split_str(&s, 19, OffsetKind::Utf16);
         assert_eq!(a, "Zażółć gęślą jaźń😀");
         assert_eq!(b, "ありがとうございます");
 
-        let (a, b) = s.split_at(30, OffsetKind::Bytes);
+        let (a, b) = split_str(&s, 30, OffsetKind::Bytes);
         assert_eq!(a, "Zażółć gęślą jaźń😀");
         assert_eq!(b, "ありがとうございます");
     }

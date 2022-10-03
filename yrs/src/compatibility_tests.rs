@@ -1,7 +1,7 @@
 use crate::block::{ClientID, Item, ItemContent};
 use crate::id_set::{DeleteSet, IdSet};
 use crate::store::Store;
-use crate::types::{Branch, TypePtr, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT};
+use crate::types::{Branch, ToJson, TypePtr, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT};
 use crate::update::{BlockCarrier, Update};
 use crate::updates::decoder::{Decode, Decoder, DecoderV1};
 use crate::updates::encoder::Encode;
@@ -116,7 +116,8 @@ fn text_insert_delete() {
     });
     {
         let mut txn = doc.transact_mut();
-        txn.apply_update(Update::decode_v1(update).unwrap());
+        let u = Update::decode_v1(update).unwrap();
+        txn.apply_update(u);
     }
     assert_eq!(txt.to_string(), "abhi".to_string());
     assert!(visited.get());
@@ -393,7 +394,7 @@ fn negative_zero_decoding_v2() {
         PrelimArray::<_, Any>::from([]),
     );
     root.insert(&mut txn, "characters", PrelimArray::<_, Any>::from([]));
-    let expected = root.to_json();
+    let expected = root.to_json(&txn);
 
     let buffer = txn.encode_state_as_update_v2(&StateVector::default());
 
@@ -403,7 +404,7 @@ fn negative_zero_decoding_v2() {
     let root = doc2.get_map("root");
     let mut txn = doc2.transact_mut();
     txn.apply_update(u);
-    let actual = root.to_json();
+    let actual = root.to_json(&txn);
 
     assert_eq!(actual, expected);
 }
@@ -446,10 +447,15 @@ fn test_data_set<P: AsRef<std::path::Path>>(path: P) {
         assert_eq!(txt.to_string(), expected, "failed at {} run", test_num);
 
         let expected = decoder.read_any().unwrap();
-        let actual = map.to_json();
+        let actual = map.to_json(&doc.transact());
         assert_eq!(actual, expected, "failed at {} run", test_num);
 
         let expected = decoder.read_any().unwrap();
-        assert_eq!(arr.to_json(), expected, "failed at {} run", test_num);
+        assert_eq!(
+            arr.to_json(&doc.transact()),
+            expected,
+            "failed at {} run",
+            test_num
+        );
     }
 }
