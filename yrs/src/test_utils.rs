@@ -2,7 +2,7 @@ use crate::block::ClientID;
 use crate::transaction::ReadTxn;
 use crate::updates::decoder::{Decode, Decoder, DecoderV1};
 use crate::updates::encoder::{Encode, Encoder, EncoderV1};
-use crate::{Doc, StateVector, Update};
+use crate::{Doc, StateVector, Transact, Update};
 use lib0::decoding::{Cursor, Read};
 use rand::distributions::Alphanumeric;
 use rand::prelude::{SliceRandom, StdRng};

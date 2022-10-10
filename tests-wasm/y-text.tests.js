@@ -10,8 +10,8 @@ export const testInserts = tc => {
     const d1 = new Y.YDoc()
     var x = d1.getText('test')
 
-    d1.transact(txn => x.push(txn, "hello!"))
-    d1.transact(txn => x.insert(txn, 5, " world"))
+    x.push("hello!")
+    x.insert(5, " world")
 
     const expected = "hello world!"
 
@@ -34,11 +34,11 @@ export const testDeletes = tc => {
     const d1 = new Y.YDoc()
     var x = d1.getText('test')
 
-    d1.transact(txn => x.push(txn, "hello world!"))
+    x.push("hello world!")
     t.compare(x.length, 12)
-    d1.transact(txn => x.delete(txn, 5, 6))
+    x.delete(5, 6)
     t.compare(x.length, 6)
-    d1.transact(txn => x.insert(txn, 5, " Yrs"))
+    x.insert(5, " Yrs")
     t.compare(x.length, 10)
 
     const expected = "hello Yrs!"
@@ -72,28 +72,28 @@ export const testObserver = tc => {
     })
 
     // insert initial data to an empty YText
-    d1.transact(txn => x.insert(txn, 0, 'abcd'))
+    x.insert(0, 'abcd')
     t.compare(target.toJson(), x.toJson())
     t.compare(delta, [{ insert: 'abcd' }])
     target = null
     delta = null
 
     // remove 2 chars from the middle
-    d1.transact(txn => x.delete(txn, 1, 2))
+    x.delete(1, 2)
     t.compare(target.toJson(), x.toJson())
     t.compare(delta, [{ retain: 1 }, { delete: 2 }])
     target = null
     delta = null
 
     // insert new item in the middle
-    d1.transact(txn => x.insert(txn, 1, 'e', { bold: true }))
+    x.insert(1, 'e', { bold: true })
     t.compare(target.toJson(), x.toJson())
     t.compare(delta, [{ retain: 1 }, { insert: 'e', attributes: { bold: true } }])
     target = null
     delta = null
 
     // remove formatting
-    d1.transact(txn => x.format(txn, 1, 1, { bold: null }))
+    x.format(1, 1, { bold: null })
     t.compare(target.toJson(), x.toJson())
     t.compare(delta, [{ retain: 1 }, { retain: 1, attributes: { bold: null } }])
     target = null
@@ -101,7 +101,7 @@ export const testObserver = tc => {
 
     // free the observer and make sure that callback is no longer called
     observer.free()
-    d1.transact(txn => x.insert(txn, 1, 'fgh'))
+    x.insert(1, 'fgh')
     t.compare(target, null)
     t.compare(delta, null)
 }
@@ -119,8 +119,8 @@ export const testToDeltaEmbedAttributes = tc => {
     })
 
     d1.transact(txn => {
-        text.insert(txn, 0, 'ab', { bold: true })
-        text.insertEmbed(txn, 1, { image: 'imageSrc.png' }, { width: 100 })
+        text.insert(0, 'ab', { bold: true }, txn)
+        text.insertEmbed(1, { image: 'imageSrc.png' }, { width: 100 }, txn)
     })
     t.compare(delta, [
         { insert: 'a', attributes: { bold: true } },

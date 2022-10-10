@@ -10,7 +10,7 @@ use crate::types::TypePtr;
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::client_hasher::ClientHasher;
-use crate::{OffsetKind, StateVector, ID};
+use crate::{OffsetKind, StateVector, WriteTxn, ID};
 use lib0::error::Error;
 use std::cmp::Ordering;
 use std::collections::hash_map::Entry;
@@ -1021,7 +1021,7 @@ mod test {
     use crate::types::TypePtr;
     use crate::update::{BlockCarrier, Update};
     use crate::updates::decoder::{Decode, DecoderV1};
-    use crate::{Doc, ID};
+    use crate::{Doc, Transact, ID};
     use lib0::decoding::Cursor;
 
     #[test]

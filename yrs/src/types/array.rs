@@ -9,6 +9,7 @@ use crate::types::{
 };
 use crate::{ReadTxn, SubscriptionId, ID};
 use lib0::any::Any;
+use std::borrow::Borrow;
 use std::cell::UnsafeCell;
 use std::collections::HashSet;
 use std::ops::{Deref, DerefMut};
@@ -136,7 +137,7 @@ impl Array {
     ///
     /// Example:
     /// ```
-    /// use yrs::Doc;
+    /// use yrs::{Doc, Transact};
     /// let doc = Doc::new();
     /// let array = doc.get_array("array");
     /// array.insert_range(&mut doc.transact_mut(), 0, [1,2,3,4]);
@@ -170,7 +171,7 @@ impl Array {
 
     /// Returns an iterator, that can be used to lazely traverse over all values stored in a current
     /// array.
-    pub fn iter<'a, T: ReadTxn>(&self, txn: &'a T) -> ArrayIter<'a, T> {
+    pub fn iter<'a, T: ReadTxn + 'a>(&self, txn: &'a T) -> ArrayIter<'a, T> {
         ArrayIter::new(self, txn)
     }
 
@@ -230,12 +231,12 @@ impl AsMut<Branch> for Array {
     }
 }
 
-pub struct ArrayIter<'a, T: ReadTxn> {
+pub struct ArrayIter<'a, T: ReadTxn + 'a> {
     inner: BlockIter,
     txn: &'a T,
 }
 
-impl<'a, T: ReadTxn> ArrayIter<'a, T> {
+impl<'a, T: ReadTxn + 'a> ArrayIter<'a, T> {
     fn new(array: &Array, txn: &'a T) -> Self {
         ArrayIter {
             inner: BlockIter::new(array.0),
@@ -244,7 +245,7 @@ impl<'a, T: ReadTxn> ArrayIter<'a, T> {
     }
 }
 
-impl<'a, T: ReadTxn> Iterator for ArrayIter<'a, T> {
+impl<'a, T: ReadTxn + 'a> Iterator for ArrayIter<'a, T> {
     type Item = Value;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -252,7 +253,8 @@ impl<'a, T: ReadTxn> Iterator for ArrayIter<'a, T> {
             None
         } else {
             let mut buf = [Value::default(); 1];
-            if self.inner.slice(self.txn, &mut buf) != 0 {
+            let txn = self.txn.borrow();
+            if self.inner.slice(txn, &mut buf) != 0 {
                 Some(std::mem::replace(&mut buf[0], Value::default()))
             } else {
                 None
@@ -376,7 +378,7 @@ mod test {
     use crate::test_utils::{exchange_updates, run_scenario, RngExt};
     use crate::types::map::PrelimMap;
     use crate::types::{Change, DeepObservable, Event, Path, PathSegment, ToJson, Value};
-    use crate::{Doc, PrelimArray, StateVector, Update, ID};
+    use crate::{Doc, PrelimArray, StateVector, Transact, Update, ID};
     use lib0::any::Any;
     use rand::prelude::StdRng;
     use rand::Rng;

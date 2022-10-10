@@ -1046,7 +1046,7 @@ mod test {
     use crate::types::text::{Attrs, ChangeKind, Delta, Diff, YChange};
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
-    use crate::{Doc, StateVector, Update, ID};
+    use crate::{Doc, StateVector, Transact, Update, ID};
     use lib0::any::Any;
     use rand::prelude::StdRng;
     use std::cell::RefCell;

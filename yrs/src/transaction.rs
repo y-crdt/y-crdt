@@ -14,7 +14,7 @@ use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
 use updates::encoder::*;
 
-pub trait ReadTxn {
+pub trait ReadTxn: Sized {
     fn store(&self) -> &Store;
 
     /// Returns state vector describing current state of the updates.
@@ -74,7 +74,7 @@ pub trait ReadTxn {
     }
 }
 
-pub trait WriteTxn {
+pub trait WriteTxn: Sized {
     fn store_mut(&mut self) -> &mut Store;
 }
 

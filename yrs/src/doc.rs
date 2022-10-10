@@ -5,7 +5,8 @@ use crate::event::{AfterTransactionEvent, EventHandler, Subscription, UpdateEven
 use crate::store::{Store, StoreRef};
 use crate::transaction::{Transaction, TransactionMut};
 use crate::types::{
-    TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT,
+    Branch, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT, TYPE_REFS_XML_ELEMENT,
+    TYPE_REFS_XML_TEXT,
 };
 use crate::{Array, Map, SubscriptionId, Text, XmlElement, XmlText};
 use rand::Rng;
@@ -167,31 +168,6 @@ impl Doc {
         XmlText::from(c)
     }
 
-    /// Creates a transaction used for all kind of block store operations.
-    /// Transaction cleanups & calling event handles happen when the transaction struct is dropped.
-    pub fn try_transact(&self) -> Result<Transaction, BorrowError> {
-        Ok(Transaction::new(self.store.try_borrow()?))
-    }
-
-    /// Creates a transaction used for all kind of block store operations.
-    /// Transaction cleanups & calling event handles happen when the transaction struct is dropped.
-    pub fn try_transact_mut(&self) -> Result<TransactionMut, BorrowMutError> {
-        Ok(TransactionMut::new(self.store.try_borrow_mut()?))
-    }
-
-    /// Creates a transaction used for all kind of block store operations.
-    /// Transaction cleanups & calling event handles happen when the transaction struct is dropped.
-    pub fn transact(&self) -> Transaction {
-        self.try_transact().expect("cannot read document store contents because another read-write transaction is in progress")
-    }
-
-    /// Creates a transaction used for all kind of block store operations.
-    /// Transaction cleanups & calling event handles happen when the transaction struct is dropped.
-    pub fn transact_mut(&self) -> TransactionMut {
-        self.try_transact_mut()
-            .expect("only one read-write transaction can be active at the same time")
-    }
-
     /// Subscribe callback function for any changes performed within transaction scope. These
     /// changes are encoded using lib0 v1 encoding and can be decoded using [Update::decode_v1] if
     /// necessary or passed to remote peers right away. This callback is triggered on function
@@ -306,6 +282,56 @@ pub enum OffsetKind {
     Utf32,
 }
 
+pub trait Transact {
+    /// Creates a transaction used for all kind of block store operations.
+    /// Transaction cleanups & calling event handles happen when the transaction struct is dropped.
+    fn try_transact(&self) -> Result<Transaction, BorrowError>;
+
+    /// Creates a transaction used for all kind of block store operations.
+    /// Transaction cleanups & calling event handles happen when the transaction struct is dropped.
+    fn try_transact_mut(&self) -> Result<TransactionMut, BorrowMutError>;
+
+    /// Creates a transaction used for all kind of block store operations.
+    /// Transaction cleanups & calling event handles happen when the transaction struct is dropped.
+    fn transact(&self) -> Transaction {
+        self.try_transact().expect("cannot read document store contents because another read-write transaction is in progress")
+    }
+
+    /// Creates a transaction used for all kind of block store operations.
+    /// Transaction cleanups & calling event handles happen when the transaction struct is dropped.
+    fn transact_mut(&self) -> TransactionMut {
+        self.try_transact_mut()
+            .expect("only one read-write transaction can be active at the same time")
+    }
+}
+
+impl Transact for Doc {
+    fn try_transact(&self) -> Result<Transaction, BorrowError> {
+        Ok(Transaction::new(self.store.try_borrow()?))
+    }
+
+    fn try_transact_mut(&self) -> Result<TransactionMut, BorrowMutError> {
+        Ok(TransactionMut::new(self.store.try_borrow_mut()?))
+    }
+}
+
+impl<T> Transact for T
+where
+    T: AsRef<Branch>,
+{
+    fn try_transact(&self) -> Result<Transaction, BorrowError> {
+        let branch = self.as_ref();
+        let store = branch.store.as_ref().unwrap();
+        Ok(Transaction::new(store.try_borrow()?))
+    }
+
+    fn try_transact_mut(&self) -> Result<TransactionMut, BorrowMutError> {
+        let branch = self.as_ref();
+        let store = branch.store.as_ref().unwrap();
+        Ok(TransactionMut::new(store.try_borrow_mut()?))
+    }
+}
+
 #[cfg(test)]
 mod test {
     use crate::block::{Block, ItemContent};
@@ -314,9 +340,8 @@ mod test {
     use crate::update::Update;
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
-    use crate::{DeleteSet, Doc, Options, StateVector, SubscriptionId};
+    use crate::{DeleteSet, Doc, Options, StateVector, SubscriptionId, Transact};
     use lib0::any::Any;
-    use std::borrow::Borrow;
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
 

@@ -5,7 +5,7 @@ use crate::types::{Branch, ToJson, TypePtr, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML
 use crate::update::{BlockCarrier, Update};
 use crate::updates::decoder::{Decode, Decoder, DecoderV1};
 use crate::updates::encoder::Encode;
-use crate::{Doc, PrelimArray, PrelimMap, ReadTxn, StateVector, XmlElement, XmlText, ID};
+use crate::{Doc, PrelimArray, PrelimMap, ReadTxn, StateVector, Transact, XmlElement, XmlText, ID};
 use lib0::any::Any;
 use lib0::decoding::Read;
 use std::cell::Cell;

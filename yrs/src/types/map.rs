@@ -308,7 +308,7 @@ mod test {
     use crate::types::{DeepObservable, EntryChange, Event, Map, Path, PathSegment, Value};
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encoder, EncoderV1};
-    use crate::{Doc, PrelimArray, PrelimMap, StateVector, Update};
+    use crate::{Doc, PrelimArray, PrelimMap, StateVector, Transact, Update};
     use lib0::any::Any;
     use rand::distributions::Alphanumeric;
     use rand::prelude::{SliceRandom, StdRng};

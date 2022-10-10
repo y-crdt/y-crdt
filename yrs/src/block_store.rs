@@ -427,8 +427,8 @@ impl BlockStore {
 
     pub(crate) fn get_item_clean_start(&self, id: &ID) -> Option<BlockSlice> {
         let blocks = self.clients.get(&id.client)?;
-        let mut index = blocks.find_pivot(id.clock)?;
-        let mut ptr = blocks.get(index);
+        let index = blocks.find_pivot(id.clock)?;
+        let ptr = blocks.get(index);
         let offset = id.clock - ptr.id().clock;
         Some(BlockSlice::new(ptr, offset, ptr.len() - 1))
     }
@@ -436,7 +436,7 @@ impl BlockStore {
     pub(crate) fn get_item_clean_end(&self, id: &ID) -> Option<BlockSlice> {
         let blocks = self.clients.get(&id.client)?;
         let index = blocks.find_pivot(id.clock)?;
-        let mut ptr = blocks.get(index);
+        let ptr = blocks.get(index);
         let block_id = ptr.id();
         let offset = id.clock - block_id.clock;
         if offset != ptr.len() - 1 {

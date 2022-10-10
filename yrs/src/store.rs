@@ -18,12 +18,12 @@ use std::rc::Rc;
 /// map of root types, pending updates waiting to be applied once a missing update information
 /// arrives and all subscribed callbacks.
 pub struct Store {
-    pub options: Options,
+    pub(crate) options: Options,
 
     /// Root types (a.k.a. top-level types). These types are defined by users at the document level,
     /// they have their own unique names and represent core shared types that expose operations
     /// which can be called concurrently by remote peers in a conflict-free manner.
-    pub types: HashMap<Rc<str>, Box<Branch>>,
+    pub(crate) types: HashMap<Rc<str>, Box<Branch>>,
 
     /// A block store of a current document. It represent all blocks (inserted or tombstoned
     /// operations) integrated - and therefore visible - into a current document.
@@ -32,12 +32,12 @@ pub struct Store {
     /// A pending update. It contains blocks, which are not yet integrated into `blocks`, usually
     /// because due to issues in update exchange, there were some missing blocks that need to be
     /// integrated first before the data from `pending` can be applied safely.
-    pub pending: Option<PendingUpdate>,
+    pub(crate) pending: Option<PendingUpdate>,
 
     /// A pending delete set. Just like `pending`, it contains deleted ranges of blocks that have
     /// not been yet applied due to missing blocks that prevent `pending` update to be integrated
     /// into `blocks`.
-    pub pending_ds: Option<DeleteSet>,
+    pub(crate) pending_ds: Option<DeleteSet>,
 
     /// Handles subscriptions for the `afterTransactionCleanup` event. Events are called with the
     /// newest updates once they are committed and compacted.
@@ -54,7 +54,7 @@ pub struct Store {
 
 impl Store {
     /// Create a new empty store in context of a given `client_id`.
-    pub fn new(options: Options) -> Self {
+    pub(crate) fn new(options: Options) -> Self {
         Store {
             options,
             types: Default::default(),
@@ -77,14 +77,14 @@ impl Store {
 
     /// Returns a branch reference to a complex type identified by its pointer. Returns `None` if
     /// no such type could be found or was ever defined.
-    pub fn get_type<K: Into<Rc<str>>>(&self, key: K) -> Option<BranchPtr> {
+    pub(crate) fn get_type<K: Into<Rc<str>>>(&self, key: K) -> Option<BranchPtr> {
         let ptr = BranchPtr::from(self.types.get(&key.into())?);
         Some(ptr)
     }
 
     /// Returns a branch reference to a complex type identified by its pointer. Returns `None` if
     /// no such type could be found or was ever defined.
-    pub fn get_or_create_type<K: Into<Rc<str>>>(
+    pub(crate) fn get_or_create_type<K: Into<Rc<str>>>(
         &mut self,
         key: K,
         node_name: Option<Rc<str>>,

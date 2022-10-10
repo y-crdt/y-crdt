@@ -5,7 +5,6 @@ pub mod xml;
 
 use crate::*;
 pub use map::Map;
-use std::cell::{BorrowError, BorrowMutError};
 pub use text::Text;
 
 use crate::block::{Block, BlockPtr, Item, ItemContent, ItemPosition, Prelim};
@@ -253,16 +252,6 @@ impl Branch {
             observers: None,
             deep_observers: None,
         })
-    }
-
-    pub(crate) fn try_transact(&self) -> Result<Transaction, BorrowError> {
-        let store = self.store.as_ref().unwrap();
-        Ok(Transaction::new(store.try_borrow()?))
-    }
-
-    pub(crate) fn try_transact_mut(&self) -> Result<TransactionMut, BorrowMutError> {
-        let store = self.store.as_ref().unwrap();
-        Ok(TransactionMut::new(store.try_borrow_mut()?))
     }
 
     /// Returns an identifier of an underlying complex data type (eg. is it an Array or a Map).
@@ -603,8 +592,8 @@ impl Value {
         match self {
             Value::Any(a) => a.to_string(),
             Value::YText(v) => v.to_string(),
-            Value::YArray(v) => v.to_json(&v.as_ref().try_transact().unwrap()).to_string(),
-            Value::YMap(v) => v.to_json(&v.as_ref().try_transact().unwrap()).to_string(),
+            Value::YArray(v) => v.to_json(&v.transact()).to_string(),
+            Value::YMap(v) => v.to_json(&v.transact()).to_string(),
             Value::YXmlElement(v) => v.to_string(),
             Value::YXmlText(v) => v.to_string(),
         }

@@ -1105,7 +1105,7 @@ mod test {
     use crate::types::{Change, EntryChange, Value};
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encoder, EncoderV1};
-    use crate::{Doc, StateVector, Update};
+    use crate::{Doc, StateVector, Transact, Update};
     use lib0::any::Any;
     use std::cell::RefCell;
     use std::collections::HashMap;
