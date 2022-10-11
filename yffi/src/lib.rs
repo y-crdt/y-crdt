@@ -20,7 +20,7 @@ use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use yrs::{
     AfterTransactionEvent, Array, DeleteSet, Map, OffsetKind, ReadTxn, Snapshot, Store, Text,
-    Transact, Update, WriteTxn, XmlElement, XmlText,
+    Transact, TransactionMut, Update, WriteTxn, XmlElement, XmlText,
 };
 use yrs::{Options, StateVector};
 use yrs::{SubscriptionId, Xml};

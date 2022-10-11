@@ -9,16 +9,16 @@ import * as t from 'lib0/testing'
 export const testInsert = tc => {
     const d1 = new Y.YDoc()
     const root = d1.getXmlElement('test')
-    const s = d1.transact(txn => {
+    d1.transact(txn => {
         let b = root.pushXmlText(txn)
         let a = root.insertXmlElement(0, 'p', txn)
         let aa = a.pushXmlText(txn)
 
-        aa.push(txn, 'hello')
-        b.push(txn, 'world')
-
-        return root.toString()
+        aa.push('hello', null, txn)
+        b.push('world', null, txn)
     })
+
+    const s = root.toString()
 
     t.compareStrings(s, '<UNDEFINED><p>hello</p>world</UNDEFINED>')
 }
@@ -70,8 +70,8 @@ export const testSiblings = tc => {
         let a = root.insertXmlElement(0, 'p', txn)
         let aa = a.pushXmlText(txn)
 
-        aa.push(txn, 'hello')
-        b.push(txn, 'world')
+        aa.push('hello', null, txn)
+        b.push('world', null, txn)
 
         return a
     })
@@ -99,8 +99,8 @@ export const testTreeWalker = tc => {
         let a = root.insertXmlElement(0, 'p', txn)
         let aa = a.pushXmlText(txn)
 
-        aa.push(txn, 'hello')
-        b.push(txn, 'world')
+        aa.push('hello', null, txn)
+        b.push('world', null, txn)
     })
 
     const actual = []

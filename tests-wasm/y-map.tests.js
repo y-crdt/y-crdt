@@ -17,7 +17,7 @@ export const testSet = tc => {
     value = x.get('key')
     t.compare(value, 'value1')
 
-    d1.transact(txn => x.set(txn, 'key', 'value2'))
+    x.set('key', 'value2')
     value = x.get('key')
     t.compare(value, 'value2')
 }

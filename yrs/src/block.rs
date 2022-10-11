@@ -1498,10 +1498,11 @@ impl ItemContent {
     pub fn get_content(&self) -> Vec<Value> {
         let len = self.len(OffsetKind::Utf32) as usize;
         let mut values = vec![Value::default(); len];
-        if self.read(0, &mut values) == len {
+        let read = self.read(0, &mut values);
+        if read == len {
             values
         } else {
-            panic!("Defect: ItemContent::get_content didn't read all values")
+            Vec::default()
         }
     }
 
