@@ -2,7 +2,7 @@ use crate::block::{Block, BlockPtr, Item, ItemContent, Prelim};
 use crate::moving::{Move, RelativePosition};
 use crate::transaction::{ReadTxn, TransactionMut};
 use crate::types::{BranchPtr, TypePtr, Value};
-use crate::{WriteTxn, ID};
+use crate::ID;
 use std::ops::DerefMut;
 
 #[derive(Debug, Clone)]

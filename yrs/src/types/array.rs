@@ -524,7 +524,7 @@ mod test {
         exchange_updates(&[&d1, &d2]);
 
         let a2 = d2.get_array("array");
-        let mut t2 = d2.transact_mut();
+        let t2 = d2.transact();
         let actual: Vec<_> = a2.iter(&t2).collect();
         assert_eq!(
             actual,
@@ -1229,7 +1229,7 @@ mod test {
             let array = doc.get_array("array");
 
             let update_count: u32 = decoder.read_var().unwrap();
-            for j in 0..update_count {
+            for _ in 0..update_count {
                 let data = decoder.read_buf().unwrap();
                 let update = Update::decode_v1(data).unwrap();
                 doc.transact_mut().apply_update(update);

@@ -20,7 +20,7 @@ use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use yrs::{
     AfterTransactionEvent, Array, DeleteSet, Map, OffsetKind, ReadTxn, Snapshot, Store, Text,
-    Transact, TransactionMut, Update, WriteTxn, XmlElement, XmlText,
+    Transact, Update, WriteTxn, XmlElement, XmlText,
 };
 use yrs::{Options, StateVector};
 use yrs::{SubscriptionId, Xml};
@@ -108,7 +108,7 @@ pub type Doc = yrs::Doc;
 pub type Branch = yrs::types::Branch;
 
 /// Iterator structure used by shared array data type.
-pub type ArrayIter = yrs::types::array::ArrayIter<'static, dyn ReadTxn>;
+pub type ArrayIter = yrs::types::array::ArrayIter<'static, AnyTransaction>;
 
 /// Iterator structure used by shared map data type. Map iterators are unordered - there's no
 /// specific order in which map entries will be returned during consecutive iterator calls.
@@ -125,45 +125,69 @@ pub type Attributes = yrs::types::xml::Attributes<'static>;
 /// traverse.
 pub type TreeWalker = yrs::types::xml::TreeWalker<'static>;
 
-/// Transaction is one of the core types in Yrs. All operations that need to touch a document's
-/// contents (a.k.a. block store), need to be executed in scope of a transaction.
+/// Read only transaction is one of the core types in Yrs. All operations that need to touch
+/// a document's contents (a.k.a. block store), need to be executed in scope of a transaction.
+///
+/// Read only transaction don't provide capabilities that enable modifications of underlying
+/// document, however their are more light-weight that `ReadWriteTransaction`s. Additionally it's
+/// safe to create multiple read only transactions at the same time.
+pub type ReadOnlyTransaction = yrs::Transaction<'static>;
+
+/// Read-write transaction is one of the core types in Yrs. All operations that need to touch or
+/// modify a document's contents (a.k.a. block store), need to be executed in scope of a
+/// transaction.
+///
+/// Unlike `ReadOnlyTransaction`, read write transaction enables modifications of underlying
+/// document, however only a single `ReadWriteTransaction` can be opened at the same time.
+pub type ReadWriteTransaction = yrs::TransactionMut<'static>;
+
+/// Type alias for read-capable transactions (both `ReadOnlyTransaction` and `ReadWriteTransaction`)
+pub type ReadTransaction = c_void;
+
 #[repr(C)]
-pub struct Transaction(TransactionInner);
+pub struct AnyTransaction(TransactionInner);
 
 enum TransactionInner {
-    ReadOnly(yrs::Transaction<'static>),
-    ReadWrite(yrs::TransactionMut<'static>),
+    ReadOnly(&'static ReadOnlyTransaction),
+    ReadWrite(&'static mut ReadWriteTransaction),
 }
 
-impl Transaction {
+impl AnyTransaction {
     fn try_mut(&mut self) -> Option<&mut Store> {
         match &mut self.0 {
             TransactionInner::ReadOnly(_) => None,
             TransactionInner::ReadWrite(txn) => Some(txn.store_mut()),
         }
     }
+
+    unsafe fn any(txn: &ReadTransaction) -> Self {
+        let any = txn as &dyn core::any::Any;
+        if let Some(read_only) = any.downcast_ref() {
+            Self::read_only(read_only)
+        } else if let Some(read_write) = any.downcast_ref() {
+            Self::read_write(read_write)
+        } else {
+            panic!("Provided transaction reference is neither read-only nor read-write.")
+        }
+    }
+
+    unsafe fn read_only(txn: &ReadOnlyTransaction) -> Self {
+        let txn = std::mem::transmute(txn);
+        AnyTransaction(TransactionInner::ReadOnly(txn))
+    }
+
+    unsafe fn read_write(txn: &ReadWriteTransaction) -> Self {
+        let txn = std::mem::transmute(txn);
+        AnyTransaction(TransactionInner::ReadWrite(txn))
+    }
 }
 
-impl ReadTxn for Transaction {
+impl ReadTxn for AnyTransaction {
     fn store(&self) -> &Store {
         match &self.0 {
             TransactionInner::ReadOnly(txn) => txn.store(),
             TransactionInner::ReadWrite(txn) => txn.store(),
         }
-    }
-}
-
-impl<'doc> From<yrs::Transaction<'doc>> for Transaction {
-    fn from(txn: yrs::Transaction<'doc>) -> Self {
-        let txn: yrs::Transaction<'static> = unsafe { std::mem::transmute(txn) };
-        Transaction(TransactionInner::ReadOnly(txn))
-    }
-}
-
-impl<'doc> From<yrs::TransactionMut<'doc>> for Transaction {
-    fn from(txn: yrs::TransactionMut<'doc>) -> Self {
-        let mut txn: yrs::TransactionMut<'static> = unsafe { std::mem::transmute(txn) };
-        Transaction(TransactionInner::ReadWrite(txn))
     }
 }
 
@@ -389,30 +413,54 @@ pub unsafe extern "C" fn ydoc_unobserve_after_transaction(doc: *mut Doc, subscri
 /// Starts a new read-only transaction on a given document. All other operations happen in context
 /// of a transaction. Yrs transactions do not follow ACID rules. Once a set of operations is
 /// complete, a transaction can be finished using [ytransaction_commit] function.
+///
+/// Returns `NULL` if `ReadTransaction` couldn't be created, i.e. when another `WriteTransaction`
+/// is already opened.
 #[no_mangle]
-pub unsafe extern "C" fn yread_transaction(doc: *mut Doc) -> *mut Transaction {
+pub unsafe extern "C" fn yread_transaction(doc: *mut Doc) -> *mut ReadOnlyTransaction {
     assert!(!doc.is_null());
 
     let doc = doc.as_mut().unwrap();
-    Box::into_raw(Box::new(doc.transact().into()))
+    if let Ok(txn) = doc.try_transact() {
+        Box::into_raw(Box::new(txn))
+    } else {
+        null_mut()
+    }
 }
 
 /// Starts a new read-write transaction on a given document. All other operations happen in context
 /// of a transaction. Yrs transactions do not follow ACID rules. Once a set of operations is
 /// complete, a transaction can be finished using [ytransaction_commit] function.
 #[no_mangle]
-pub unsafe extern "C" fn ywrite_transaction(doc: *mut Doc) -> *mut Transaction {
+pub unsafe extern "C" fn ywrite_transaction(doc: *mut Doc) -> *mut ReadWriteTransaction {
     assert!(!doc.is_null());
 
     let doc = doc.as_mut().unwrap();
-    Box::into_raw(Box::new(doc.transact_mut().into()))
+    if let Ok(txn) = doc.try_transact_mut() {
+        Box::into_raw(Box::new(txn))
+    } else {
+        null_mut()
+    }
 }
 
-/// Commit and dispose provided transaction. This operation releases allocated resources, triggers
-/// update events and performs a storage compression over all operations executed in scope of
-/// current transaction.
+/// Dispose provided read-only transaction. This operation releases allocated resources,
+/// triggers update events and performs a storage compression over all operations executed in scope
+/// of a current transaction.
+///
+/// In order to dispose read-write transaction, use `ytransaction_commit`.
 #[no_mangle]
-pub unsafe extern "C" fn ytransaction_commit(txn: *mut Transaction) {
+pub unsafe extern "C" fn ytransaction_destroy(txn: *mut ReadOnlyTransaction) {
+    assert!(!txn.is_null());
+    drop(Box::from_raw(txn));
+}
+
+/// Commit and dispose provided read-write transaction. This operation releases allocated resources,
+/// triggers update events and performs a storage compression over all operations executed in scope
+/// of a current transaction.
+///
+/// In order to dispose read-only transaction, use `ytransaction_destroy`.
+#[no_mangle]
+pub unsafe extern "C" fn ytransaction_commit(txn: *mut ReadWriteTransaction) {
     assert!(!txn.is_null());
     drop(Box::from_raw(txn)); // transaction is auto-committed when dropped
 }
@@ -512,12 +560,13 @@ pub unsafe extern "C" fn yxmltext(doc: *mut Doc, name: *const c_char) -> *mut Br
 /// Once no longer needed, a returned binary can be disposed using [ybinary_destroy] function.
 #[no_mangle]
 pub unsafe extern "C" fn ytransaction_state_vector_v1(
-    txn: *const Transaction,
+    txn: *const ReadTransaction,
     len: *mut c_int,
 ) -> *mut c_uchar {
     assert!(!txn.is_null());
 
-    let state_vector = txn.as_ref().unwrap().state_vector();
+    let txn = AnyTransaction::any(txn.as_ref().unwrap());
+    let state_vector = txn.state_vector();
     let binary = state_vector.encode_v1().into_boxed_slice();
 
     *len = binary.len() as c_int;
@@ -540,13 +589,14 @@ pub unsafe extern "C" fn ytransaction_state_vector_v1(
 /// Once no longer needed, a returned binary can be disposed using [ybinary_destroy] function.
 #[no_mangle]
 pub unsafe extern "C" fn ytransaction_state_diff_v1(
-    txn: *const Transaction,
+    txn: *const ReadTransaction,
     sv: *const c_uchar,
     sv_len: c_int,
     len: *mut c_int,
 ) -> *mut c_uchar {
     assert!(!txn.is_null());
 
+    let txn = AnyTransaction::any(txn.as_ref().unwrap());
     let sv = {
         if sv.is_null() {
             StateVector::default()
@@ -561,7 +611,7 @@ pub unsafe extern "C" fn ytransaction_state_diff_v1(
     };
 
     let mut encoder = EncoderV1::new();
-    txn.as_ref().unwrap().encode_diff(&sv, &mut encoder);
+    txn.encode_diff(&sv, &mut encoder);
     let binary = encoder.to_vec().into_boxed_slice();
     *len = binary.len() as c_int;
     Box::into_raw(binary) as *mut c_uchar
@@ -583,13 +633,14 @@ pub unsafe extern "C" fn ytransaction_state_diff_v1(
 /// Once no longer needed, a returned binary can be disposed using [ybinary_destroy] function.
 #[no_mangle]
 pub unsafe extern "C" fn ytransaction_state_diff_v2(
-    txn: *const Transaction,
+    txn: *const ReadTransaction,
     sv: *const c_uchar,
     sv_len: c_int,
     len: *mut c_int,
 ) -> *mut c_uchar {
     assert!(!txn.is_null());
 
+    let txn = AnyTransaction::any(txn.as_ref().unwrap());
     let sv = {
         if sv.is_null() {
             StateVector::default()
@@ -604,7 +655,7 @@ pub unsafe extern "C" fn ytransaction_state_diff_v2(
     };
 
     let mut encoder = EncoderV2::new();
-    txn.as_ref().unwrap().encode_diff(&sv, &mut encoder);
+    txn.encode_diff(&sv, &mut encoder);
     let binary = encoder.to_vec().into_boxed_slice();
     *len = binary.len() as c_int;
     Box::into_raw(binary) as *mut c_uchar
@@ -615,16 +666,12 @@ pub unsafe extern "C" fn ytransaction_state_diff_v2(
 /// (see: `ytransaction_encode_state_from_snapshot`).
 #[no_mangle]
 pub unsafe extern "C" fn ytransaction_snapshot(
-    txn: *const Transaction,
+    txn: *const ReadTransaction,
     len: *mut c_int,
 ) -> *mut c_uchar {
     assert!(!txn.is_null());
-    let binary = txn
-        .as_ref()
-        .unwrap()
-        .snapshot()
-        .encode_v1()
-        .into_boxed_slice();
+    let txn = AnyTransaction::any(txn.as_ref().unwrap());
+    let binary = txn.snapshot().encode_v1().into_boxed_slice();
 
     *len = binary.len() as c_int;
     Box::into_raw(binary) as *mut c_uchar
@@ -640,13 +687,13 @@ pub unsafe extern "C" fn ytransaction_snapshot(
 /// not be a safe operation). If this is not a case, the NULL pointer will be returned.
 #[no_mangle]
 pub unsafe extern "C" fn ytransaction_encode_state_from_snapshot_v1(
-    txn: *const Transaction,
+    txn: *const ReadTransaction,
     snapshot: *const c_uchar,
     snapshot_len: c_int,
     len: *mut c_int,
 ) -> *mut c_uchar {
     assert!(!txn.is_null());
-    let txn = txn.as_ref().unwrap();
+    let txn = AnyTransaction::any(txn.as_ref().unwrap());
     let snapshot = {
         let len = snapshot_len as usize;
         let data = std::slice::from_raw_parts(snapshot as *mut u8, len);
@@ -673,13 +720,13 @@ pub unsafe extern "C" fn ytransaction_encode_state_from_snapshot_v1(
 /// not be a safe operation). If this is not a case, the NULL pointer will be returned.
 #[no_mangle]
 pub unsafe extern "C" fn ytransaction_encode_state_from_snapshot_v2(
-    txn: *const Transaction,
+    txn: *const ReadTransaction,
     snapshot: *const c_uchar,
     snapshot_len: c_int,
     len: *mut c_int,
 ) -> *mut c_uchar {
     assert!(!txn.is_null());
-    let txn = txn.as_ref().unwrap();
+    let txn = AnyTransaction::any(txn.as_ref().unwrap());
     let snapshot = {
         let len = snapshot_len as usize;
         let data = std::slice::from_raw_parts(snapshot as *mut u8, len);
@@ -749,7 +796,7 @@ pub unsafe extern "C" fn yupdate_debug_v2(
 /// - `ERR_CODE_OTHER` (**6**): other error type than the one specified.
 #[no_mangle]
 pub unsafe extern "C" fn ytransaction_apply(
-    txn: *mut Transaction,
+    txn: *mut ReadWriteTransaction,
     diff: *const c_uchar,
     diff_len: c_int,
 ) -> c_int {
@@ -760,7 +807,8 @@ pub unsafe extern "C" fn ytransaction_apply(
     let mut decoder = DecoderV1::from(update);
     match Update::decode(&mut decoder) {
         Ok(update) => {
-            txn.as_mut().unwrap().apply_update(update);
+            let txn = txn.as_mut().unwrap();
+            txn.apply_update(update);
             0
         }
         Err(e) => err_code(e),
@@ -782,7 +830,7 @@ pub unsafe extern "C" fn ytransaction_apply(
 /// - `ERR_CODE_OTHER` (**6**): other error type than the one specified.
 #[no_mangle]
 pub unsafe extern "C" fn ytransaction_apply_v2(
-    txn: *mut Transaction,
+    txn: *mut ReadWriteTransaction,
     diff: *const c_uchar,
     diff_len: c_int,
 ) -> c_int {
@@ -861,7 +909,7 @@ pub unsafe extern "C" fn ytext_string(txt: *const Branch) -> *mut c_char {
 #[no_mangle]
 pub unsafe extern "C" fn ytext_insert(
     txt: *const Branch,
-    txn: *mut Transaction,
+    txn: *mut ReadWriteTransaction,
     index: c_int,
     value: *const c_char,
     attrs: *const YInput,
@@ -890,7 +938,7 @@ pub unsafe extern "C" fn ytext_insert(
 #[no_mangle]
 pub unsafe extern "C" fn ytext_format(
     txt: *const Branch,
-    txn: *mut Transaction,
+    txn: *mut ReadWriteTransaction,
     index: c_int,
     len: c_int,
     attrs: *const YInput,
@@ -923,7 +971,7 @@ pub unsafe extern "C" fn ytext_format(
 #[no_mangle]
 pub unsafe extern "C" fn ytext_insert_embed(
     txt: *const Branch,
-    txn: *mut Transaction,
+    txn: *mut ReadWriteTransaction,
     index: c_int,
     content: *const YInput,
     attrs: *const YInput,
@@ -967,7 +1015,7 @@ fn map_attrs(attrs: Any) -> Option<Attrs> {
 #[no_mangle]
 pub unsafe extern "C" fn ytext_remove_range(
     txt: *const Branch,
-    txn: *mut Transaction,
+    txn: *mut ReadWriteTransaction,
     index: c_int,
     length: c_int,
 ) {
@@ -993,12 +1041,17 @@ pub unsafe extern "C" fn yarray_len(array: *const Branch) -> c_int {
 ///
 /// A value returned should be eventually released using [youtput_destroy] function.
 #[no_mangle]
-pub unsafe extern "C" fn yarray_get(array: *const Branch, index: c_int) -> *mut YOutput {
+pub unsafe extern "C" fn yarray_get(
+    array: *const Branch,
+    txn: *const ReadTransaction,
+    index: c_int,
+) -> *mut YOutput {
     assert!(!array.is_null());
 
     let array = Array::from_raw_branch(array);
+    let txn = AnyTransaction::any(txn.as_ref().unwrap());
 
-    if let Some(val) = array.get(index as u32) {
+    if let Some(val) = array.get(&txn, index as u32) {
         Box::into_raw(Box::new(YOutput::from(val)))
     } else {
         std::ptr::null_mut()
@@ -1018,7 +1071,7 @@ pub unsafe extern "C" fn yarray_get(array: *const Branch, index: c_int) -> *mut 
 #[no_mangle]
 pub unsafe extern "C" fn yarray_insert_range(
     array: *const Branch,
-    txn: *mut Transaction,
+    txn: *mut ReadWriteTransaction,
     index: c_int,
     items: *const YInput,
     items_len: c_int,
@@ -1068,7 +1121,7 @@ pub unsafe extern "C" fn yarray_insert_range(
 #[no_mangle]
 pub unsafe extern "C" fn yarray_remove_range(
     array: *const Branch,
-    txn: *mut Transaction,
+    txn: *mut ReadWriteTransaction,
     index: c_int,
     len: c_int,
 ) {
@@ -1084,7 +1137,7 @@ pub unsafe extern "C" fn yarray_remove_range(
 #[no_mangle]
 pub unsafe extern "C" fn yarray_move(
     array: *const Branch,
-    txn: *mut Transaction,
+    txn: *mut ReadWriteTransaction,
     source: c_int,
     target: c_int,
 ) {
@@ -1103,11 +1156,17 @@ pub unsafe extern "C" fn yarray_move(
 /// Use [yarray_iter_next] function in order to retrieve a consecutive array elements.
 /// Use [yarray_iter_destroy] function in order to close the iterator and release its resources.
 #[no_mangle]
-pub unsafe extern "C" fn yarray_iter(array: *const Branch) -> *mut ArrayIter {
+pub unsafe extern "C" fn yarray_iter(
+    array: *const Branch,
+    txn: *const ReadTransaction,
+) -> *mut ArrayIter {
     assert!(!array.is_null());
+    assert!(!txn.is_null());
+
+    let txn = AnyTransaction::any(txn.as_ref().unwrap());
 
     let array = &Array::from_raw_branch(array) as *const Array;
-    Box::into_raw(Box::new(array.as_ref().unwrap().iter()))
+    Box::into_raw(Box::new(array.as_ref().unwrap().iter(&txn)))
 }
 
 /// Releases all of an `YArray` iterator resources created by calling [yarray_iter].
@@ -1193,7 +1252,7 @@ pub unsafe extern "C" fn ymap_len(map: *const Branch) -> c_int {
 #[no_mangle]
 pub unsafe extern "C" fn ymap_insert(
     map: *const Branch,
-    txn: *mut Transaction,
+    txn: *mut ReadWriteTransaction,
     key: *const c_char,
     value: *const YInput,
 ) {
@@ -1218,7 +1277,7 @@ pub unsafe extern "C" fn ymap_insert(
 #[no_mangle]
 pub unsafe extern "C" fn ymap_remove(
     map: *const Branch,
-    txn: *mut Transaction,
+    txn: *mut ReadWriteTransaction,
     key: *const c_char,
 ) -> c_char {
     assert!(!map.is_null());
@@ -1260,7 +1319,7 @@ pub unsafe extern "C" fn ymap_get(map: *const Branch, key: *const c_char) -> *mu
 
 /// Removes all entries from a current `map`.
 #[no_mangle]
-pub unsafe extern "C" fn ymap_remove_all(map: *const Branch, txn: *mut Transaction) {
+pub unsafe extern "C" fn ymap_remove_all(map: *const Branch, txn: *mut ReadWriteTransaction) {
     assert!(!map.is_null());
     assert!(!txn.is_null());
 
@@ -1306,7 +1365,7 @@ pub unsafe extern "C" fn yxmlelem_string(xml: *const Branch) -> *mut c_char {
 #[no_mangle]
 pub unsafe extern "C" fn yxmlelem_insert_attr(
     xml: *const Branch,
-    txn: *mut Transaction,
+    txn: *mut ReadWriteTransaction,
     attr_name: *const c_char,
     attr_value: *const c_char,
 ) {
@@ -1330,7 +1389,7 @@ pub unsafe extern "C" fn yxmlelem_insert_attr(
 #[no_mangle]
 pub unsafe extern "C" fn yxmlelem_remove_attr(
     xml: *const Branch,
-    txn: *mut Transaction,
+    txn: *mut ReadWriteTransaction,
     attr_name: *const c_char,
 ) {
     assert!(!xml.is_null());
@@ -1609,7 +1668,7 @@ pub unsafe extern "C" fn yxmlelem_tree_walker_next(iterator: *mut TreeWalker) ->
 #[no_mangle]
 pub unsafe extern "C" fn yxmlelem_insert_elem(
     xml: *const Branch,
-    txn: *mut Transaction,
+    txn: *mut ReadWriteTransaction,
     index: c_int,
     name: *const c_char,
 ) -> *mut Branch {
@@ -1632,7 +1691,7 @@ pub unsafe extern "C" fn yxmlelem_insert_elem(
 #[no_mangle]
 pub unsafe extern "C" fn yxmlelem_insert_text(
     xml: *const Branch,
-    txn: *mut Transaction,
+    txn: *mut ReadWriteTransaction,
     index: c_int,
 ) -> *mut Branch {
     assert!(!xml.is_null());
@@ -1649,7 +1708,7 @@ pub unsafe extern "C" fn yxmlelem_insert_text(
 #[no_mangle]
 pub unsafe extern "C" fn yxmlelem_remove_range(
     xml: *const Branch,
-    txn: *mut Transaction,
+    txn: *mut ReadWriteTransaction,
     index: c_int,
     len: c_int,
 ) {
@@ -1720,7 +1779,7 @@ pub unsafe extern "C" fn yxmltext_string(txt: *const Branch) -> *mut c_char {
 #[no_mangle]
 pub unsafe extern "C" fn yxmltext_insert(
     txt: *const Branch,
-    txn: *mut Transaction,
+    txn: *mut ReadWriteTransaction,
     index: c_int,
     str: *const c_char,
     attrs: *const YInput,
@@ -1757,7 +1816,7 @@ pub unsafe extern "C" fn yxmltext_insert(
 #[no_mangle]
 pub unsafe extern "C" fn yxmltext_insert_embed(
     txt: *const Branch,
-    txn: *mut Transaction,
+    txn: *mut ReadWriteTransaction,
     index: c_int,
     content: *const YInput,
     attrs: *const YInput,
@@ -1786,7 +1845,7 @@ pub unsafe extern "C" fn yxmltext_insert_embed(
 #[no_mangle]
 pub unsafe extern "C" fn yxmltext_format(
     txt: *const Branch,
-    txn: *mut Transaction,
+    txn: *mut ReadWriteTransaction,
     index: c_int,
     len: c_int,
     attrs: *const YInput,
@@ -1817,7 +1876,7 @@ pub unsafe extern "C" fn yxmltext_format(
 #[no_mangle]
 pub unsafe extern "C" fn yxmltext_remove_range(
     txt: *const Branch,
-    txn: *mut Transaction,
+    txn: *mut ReadWriteTransaction,
     idx: c_int,
     len: c_int,
 ) {
@@ -1837,7 +1896,7 @@ pub unsafe extern "C" fn yxmltext_remove_range(
 #[no_mangle]
 pub unsafe extern "C" fn yxmltext_insert_attr(
     txt: *const Branch,
-    txn: *mut Transaction,
+    txn: *mut ReadWriteTransaction,
     attr_name: *const c_char,
     attr_value: *const c_char,
 ) {
@@ -1861,7 +1920,7 @@ pub unsafe extern "C" fn yxmltext_insert_attr(
 #[no_mangle]
 pub unsafe extern "C" fn yxmltext_remove_attr(
     txt: *const Branch,
-    txn: *mut Transaction,
+    txn: *mut ReadWriteTransaction,
     attr_name: *const c_char,
 ) {
     assert!(!txt.is_null());
@@ -3159,14 +3218,14 @@ impl Deref for YArrayEvent {
 #[derive(Copy, Clone)]
 pub struct YMapEvent {
     inner: *const c_void,
-    pub txn: *const yrs::TransactionMut<'static>,
+    pub txn: *const ReadWriteTransaction,
 }
 
 impl YMapEvent {
     fn new<'doc>(inner: &MapEvent, txn: &yrs::TransactionMut<'doc>) -> Self {
         let inner = inner as *const MapEvent as *const _;
         let txn: &yrs::TransactionMut<'static> = unsafe { std::mem::transmute(txn) };
-        let txn = txn as *const Transaction;
+        let txn = txn as *const ReadWriteTransaction;
         YMapEvent { inner, txn }
     }
 
@@ -3191,18 +3250,18 @@ impl Deref for YMapEvent {
 #[derive(Copy, Clone)]
 pub struct YXmlEvent {
     inner: *const c_void,
-    pub txn: *const Transaction,
+    pub txn: *const ReadWriteTransaction,
 }
 
 impl YXmlEvent {
     fn new<'doc>(inner: &XmlEvent, txn: &yrs::TransactionMut<'doc>) -> Self {
         let inner = inner as *const XmlEvent as *const _;
-        let txn: &TransactionMut = unsafe { std::mem::transmute(txn) };
-        let txn = txn as *const Transaction;
+        let txn: &ReadWriteTransaction = unsafe { std::mem::transmute(txn) };
+        let txn = txn as *const ReadWriteTransaction;
         YXmlEvent { inner, txn }
     }
 
-    fn txn(&self) -> &TransactionMut {
+    fn txn(&self) -> &ReadWriteTransaction {
         unsafe { self.txn.as_ref().unwrap() }
     }
 }
@@ -3223,18 +3282,18 @@ impl Deref for YXmlEvent {
 #[derive(Copy, Clone)]
 pub struct YXmlTextEvent {
     inner: *const c_void,
-    pub txn: *const Transaction,
+    pub txn: *const ReadWriteTransaction,
 }
 
 impl YXmlTextEvent {
     fn new<'doc>(inner: &XmlTextEvent, txn: &yrs::TransactionMut<'doc>) -> Self {
         let inner = inner as *const XmlTextEvent as *const _;
-        let txn: &TransactionMut = unsafe { std::mem::transmute(txn) };
-        let txn = txn as *const Transaction;
+        let txn: &ReadWriteTransaction = unsafe { std::mem::transmute(txn) };
+        let txn = txn as *const ReadWriteTransaction;
         YXmlTextEvent { inner, txn }
     }
 
-    fn txn(&self) -> &TransactionMut {
+    fn txn(&self) -> &ReadWriteTransaction {
         unsafe { self.txn.as_ref().unwrap() }
     }
 }
