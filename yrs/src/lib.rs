@@ -24,9 +24,11 @@
 mod alt;
 pub mod block;
 mod block_store;
+mod cursor;
 mod doc;
 mod event;
 mod id_set;
+mod relative_position;
 mod store;
 mod transaction;
 pub mod types;
@@ -37,7 +39,6 @@ mod utils;
 #[cfg(test)]
 mod compatibility_tests;
 
-mod cursor;
 //mod block_iter;
 //mod moving;
 #[cfg(test)]
@@ -47,13 +48,16 @@ pub use crate::alt::{
     diff_updates_v1, diff_updates_v2, encode_state_vector_from_update_v1,
     encode_state_vector_from_update_v2, merge_updates_v1, merge_updates_v2,
 };
+
 pub use crate::block::ID;
 pub use crate::block_store::StateVector;
+pub use crate::cursor::ArrayCursor;
 pub use crate::doc::Doc;
 pub use crate::doc::OffsetKind;
 pub use crate::doc::Options;
 pub use crate::event::{AfterTransactionEvent, Subscription, SubscriptionId, UpdateEvent};
 pub use crate::id_set::DeleteSet;
+// pub use crate::relative_position;
 pub use crate::transaction::Transaction;
 pub use crate::types::array::Array;
 pub use crate::types::array::PrelimArray;

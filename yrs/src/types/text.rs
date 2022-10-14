@@ -1,5 +1,6 @@
 use crate::block::{Block, BlockPtr, Item, ItemContent, ItemPosition, Prelim};
 use crate::block_store::Snapshot;
+use crate::cursor::{ArrayCursor, Cursor};
 use crate::event::Subscription;
 use crate::transaction::Transaction;
 use crate::types::{Attrs, Branch, BranchPtr, Delta, Observers, Path, Value, TYPE_REFS_TEXT};
@@ -45,6 +46,13 @@ impl Text {
     /// Returns a number of characters visible in a current text data structure.
     pub fn len(&self) -> u32 {
         self.0.content_len
+    }
+
+    /// Returns a cursor, which is set up at a given `index` position.
+    pub fn seek(&self, index: u32) -> ArrayCursor {
+        let mut cursor = ArrayCursor::new(self.0);
+        cursor.forward(index as usize);
+        cursor
     }
 
     pub(crate) fn inner(&self) -> BranchPtr {
@@ -128,7 +136,7 @@ impl Text {
                 }
             }
         }
-        
+
         Some(pos)
     }
 
@@ -1969,5 +1977,43 @@ mod test {
         ];
 
         assert!(txt.diff(&mut txn).eq(&expect))
+    }
+
+    #[test]
+    fn absolute_position_test() {
+        use crate::cursor::Cursor;
+        let doc = Doc::new();
+
+        let mut txn = doc.transact();
+        let text = txn.get_text("text_name");
+
+        text.insert(&mut txn, 0, "hello world");
+        println!("text string: {:?}", text.to_string());
+        println!("text: {:?}", text);
+
+        let mut cursor = text.seek(9);
+
+        println!("CURSOR1: {:?}", cursor);
+
+        let offset1 = cursor.get_absolute_offset();
+        println!("the text offset1: {:?}", offset1);
+
+        assert_eq!(offset1, 9);
+
+        txn.commit();
+
+        // TXN Y
+        let mut txn_y = doc.transact();
+        let text_y = txn_y.get_text("text_name");
+
+        text_y.insert(&mut txn_y, 5, " my");
+        println!("text_y {:?}", text_y.to_string());
+
+        let offset_y = cursor.get_absolute_offset();
+        println!("the text offset_y: {:?}", offset_y);
+
+        assert_eq!(offset_y, 12);
+
+        txn_y.commit();
     }
 }

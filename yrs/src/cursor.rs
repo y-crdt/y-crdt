@@ -52,6 +52,8 @@ pub trait Cursor {
 
     /// Moves the `range` of elements into a current cursor position.
     fn move_range(&mut self, txn: &mut Transaction, range: CursorRange);
+
+    fn get_absolute_offset(&mut self) -> usize;
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -1225,6 +1227,38 @@ impl Cursor for ArrayCursor {
             }
         }
         offset - remaining
+    }
+
+    fn get_absolute_offset(&mut self) -> usize {
+        // counting steps to the beginning
+        let mut offset: usize = 0;
+
+        // println!("MANGO cursor: {:?}", self);
+
+        let mut running_current = self.current();
+
+        offset += self.current_block_offset;
+
+        // check for displacement in the current block
+        if let Some(Block::Item(item)) = running_current.clone().as_deref() {
+            // println!("MANGO, initial item: {:?}", item);
+        }
+
+        while let Some(Block::Item(prev_item)) = running_current.clone().as_deref() {
+            let left = prev_item.left;
+
+            // println!("MANGO left: {:?}", left);
+
+            if let Some(Block::Item(item)) = left.clone().as_deref() {
+                if !item.is_deleted() && item.is_countable() {
+                    let item_len = item.len() as usize;
+                    offset += item_len;
+                }
+            }
+
+            running_current = left;
+        }
+        offset
     }
 
     fn range(&mut self, len: usize, start_assoc: Assoc, end_assoc: Assoc) -> CursorRange {
