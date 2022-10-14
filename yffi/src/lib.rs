@@ -20,7 +20,7 @@ use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use yrs::{
     AfterTransactionEvent, Array, DeleteSet, Map, OffsetKind, ReadTxn, Snapshot, Store, Text,
-    Transact, Update, WriteTxn, XmlElement, XmlText,
+    Transact, Update, XmlElement, XmlText,
 };
 use yrs::{Options, StateVector};
 use yrs::{SubscriptionId, Xml};
@@ -108,7 +108,7 @@ pub type Doc = yrs::Doc;
 pub type Branch = yrs::types::Branch;
 
 /// Iterator structure used by shared array data type.
-pub type ArrayIter = yrs::types::array::ArrayIter<'static, AnyTransaction>;
+pub type ArrayIter = yrs::types::array::ArrayIter<'static, ReadTransaction>;
 
 /// Iterator structure used by shared map data type. Map iterators are unordered - there's no
 /// specific order in which map entries will be returned during consecutive iterator calls.
@@ -142,29 +142,37 @@ pub type ReadOnlyTransaction = yrs::Transaction<'static>;
 pub type ReadWriteTransaction = yrs::TransactionMut<'static>;
 
 /// Type alias for read-capable transactions (both `ReadOnlyTransaction` and `ReadWriteTransaction`)
-pub type ReadTransaction = c_void;
+#[repr(transparent)]
+pub struct ReadTransaction(c_void);
+
+impl ReadTxn for ReadTransaction {
+    fn store(&self) -> &Store {
+        let any = &self.0 as &dyn core::any::Any;
+        if let Some(ro) = any.downcast_ref::<ReadOnlyTransaction>() {
+            ro.store()
+        } else if let Some(rw) = any.downcast_ref::<ReadWriteTransaction>() {
+            rw.store()
+        } else {
+            panic!("Provided transaction reference is neither read-only nor read-write.")
+        }
+    }
+}
 
 #[repr(C)]
-pub struct AnyTransaction(TransactionInner);
+pub struct TransactionRef(TransactionInner);
 
 enum TransactionInner {
     ReadOnly(&'static ReadOnlyTransaction),
     ReadWrite(&'static mut ReadWriteTransaction),
 }
 
-impl AnyTransaction {
-    fn try_mut(&mut self) -> Option<&mut Store> {
-        match &mut self.0 {
-            TransactionInner::ReadOnly(_) => None,
-            TransactionInner::ReadWrite(txn) => Some(txn.store_mut()),
-        }
-    }
-
-    unsafe fn any(txn: &ReadTransaction) -> Self {
-        let any = txn as &dyn core::any::Any;
+impl TransactionRef {
+    unsafe fn any_ref(txn: *const ReadTransaction) -> Self {
+        let txn = (txn as *mut ReadTransaction).as_mut().unwrap();
+        let any = &mut txn.0 as &mut dyn core::any::Any;
         if let Some(read_only) = any.downcast_ref() {
             Self::read_only(read_only)
-        } else if let Some(read_write) = any.downcast_ref() {
+        } else if let Some(read_write) = any.downcast_mut() {
             Self::read_write(read_write)
         } else {
             panic!("Provided transaction reference is neither read-only nor read-write.")
@@ -173,16 +181,16 @@ impl AnyTransaction {
 
     unsafe fn read_only(txn: &ReadOnlyTransaction) -> Self {
         let txn = std::mem::transmute(txn);
-        AnyTransaction(TransactionInner::ReadOnly(txn))
+        TransactionRef(TransactionInner::ReadOnly(txn))
     }
 
-    unsafe fn read_write(txn: &ReadWriteTransaction) -> Self {
+    unsafe fn read_write(txn: &mut ReadWriteTransaction) -> Self {
         let txn = std::mem::transmute(txn);
-        AnyTransaction(TransactionInner::ReadWrite(txn))
+        TransactionRef(TransactionInner::ReadWrite(txn))
     }
 }
 
-impl ReadTxn for AnyTransaction {
+impl ReadTxn for TransactionRef {
     fn store(&self) -> &Store {
         match &self.0 {
             TransactionInner::ReadOnly(txn) => txn.store(),
@@ -565,7 +573,7 @@ pub unsafe extern "C" fn ytransaction_state_vector_v1(
 ) -> *mut c_uchar {
     assert!(!txn.is_null());
 
-    let txn = AnyTransaction::any(txn.as_ref().unwrap());
+    let txn = TransactionRef::any_ref(txn);
     let state_vector = txn.state_vector();
     let binary = state_vector.encode_v1().into_boxed_slice();
 
@@ -596,7 +604,7 @@ pub unsafe extern "C" fn ytransaction_state_diff_v1(
 ) -> *mut c_uchar {
     assert!(!txn.is_null());
 
-    let txn = AnyTransaction::any(txn.as_ref().unwrap());
+    let txn = TransactionRef::any_ref(txn);
     let sv = {
         if sv.is_null() {
             StateVector::default()
@@ -640,7 +648,7 @@ pub unsafe extern "C" fn ytransaction_state_diff_v2(
 ) -> *mut c_uchar {
     assert!(!txn.is_null());
 
-    let txn = AnyTransaction::any(txn.as_ref().unwrap());
+    let txn = TransactionRef::any_ref(txn);
     let sv = {
         if sv.is_null() {
             StateVector::default()
@@ -670,7 +678,7 @@ pub unsafe extern "C" fn ytransaction_snapshot(
     len: *mut c_int,
 ) -> *mut c_uchar {
     assert!(!txn.is_null());
-    let txn = AnyTransaction::any(txn.as_ref().unwrap());
+    let txn = TransactionRef::any_ref(txn);
     let binary = txn.snapshot().encode_v1().into_boxed_slice();
 
     *len = binary.len() as c_int;
@@ -693,7 +701,7 @@ pub unsafe extern "C" fn ytransaction_encode_state_from_snapshot_v1(
     len: *mut c_int,
 ) -> *mut c_uchar {
     assert!(!txn.is_null());
-    let txn = AnyTransaction::any(txn.as_ref().unwrap());
+    let txn = TransactionRef::any_ref(txn);
     let snapshot = {
         let len = snapshot_len as usize;
         let data = std::slice::from_raw_parts(snapshot as *mut u8, len);
@@ -726,7 +734,7 @@ pub unsafe extern "C" fn ytransaction_encode_state_from_snapshot_v2(
     len: *mut c_int,
 ) -> *mut c_uchar {
     assert!(!txn.is_null());
-    let txn = AnyTransaction::any(txn.as_ref().unwrap());
+    let txn = TransactionRef::any_ref(txn);
     let snapshot = {
         let len = snapshot_len as usize;
         let data = std::slice::from_raw_parts(snapshot as *mut u8, len);
@@ -1049,7 +1057,7 @@ pub unsafe extern "C" fn yarray_get(
     assert!(!array.is_null());
 
     let array = Array::from_raw_branch(array);
-    let txn = AnyTransaction::any(txn.as_ref().unwrap());
+    let txn = TransactionRef::any_ref(txn);
 
     if let Some(val) = array.get(&txn, index as u32) {
         Box::into_raw(Box::new(YOutput::from(val)))
@@ -1158,15 +1166,14 @@ pub unsafe extern "C" fn yarray_move(
 #[no_mangle]
 pub unsafe extern "C" fn yarray_iter(
     array: *const Branch,
-    txn: *const ReadTransaction,
+    txn: *mut ReadTransaction,
 ) -> *mut ArrayIter {
     assert!(!array.is_null());
     assert!(!txn.is_null());
 
-    let txn = AnyTransaction::any(txn.as_ref().unwrap());
-
+    let txn = txn.as_ref().unwrap();
     let array = &Array::from_raw_branch(array) as *const Array;
-    Box::into_raw(Box::new(array.as_ref().unwrap().iter(&txn)))
+    Box::into_raw(Box::new(array.as_ref().unwrap().iter(txn)))
 }
 
 /// Releases all of an `YArray` iterator resources created by calling [yarray_iter].
@@ -4115,7 +4122,7 @@ mod test {
             let doc = ydoc_new();
             let array_name = CString::new("test").unwrap();
             let array = yarray(doc, array_name.as_ptr());
-            let txn = yread_transaction(doc);
+            let txn = ywrite_transaction(doc);
 
             let y_true = yinput_bool(Y_TRUE);
             let y_false = yinput_bool(Y_FALSE);

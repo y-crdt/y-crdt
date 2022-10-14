@@ -22,7 +22,7 @@ use rand::Rng;
 /// A basic workflow sample:
 ///
 /// ```
-/// use yrs::{Doc, ReadTxn, StateVector, Update};
+/// use yrs::{Doc, ReadTxn, StateVector, Transact, Update};
 /// use yrs::updates::decoder::Decode;
 /// use yrs::updates::encoder::Encode;
 ///

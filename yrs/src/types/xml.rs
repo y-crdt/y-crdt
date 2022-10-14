@@ -194,7 +194,7 @@ impl XmlElement {
     ///       again
     ///    </div>
     /// */
-    /// use yrs::{XmlElement, Doc, Xml};
+    /// use yrs::{XmlElement, Doc, Xml, Transact};
     ///
     /// let doc = Doc::new();
     /// let mut html = doc.get_xml_element("div");
