@@ -981,6 +981,7 @@ impl Prelim for PrelimText<'_> {
 
 #[cfg(test)]
 mod test {
+    use crate::cursor::Assoc;
     use crate::doc::{OffsetKind, Options};
     use crate::test_utils::{exchange_updates, run_scenario, RngExt};
     use crate::types::text::{Attrs, Delta, Diff};
@@ -1981,7 +1982,7 @@ mod test {
 
     #[test]
     fn absolute_position_test() {
-        use crate::cursor::Cursor;
+        use crate::cursor::{ArrayCursor, Cursor};
         let doc = Doc::new();
 
         let mut txn = doc.transact();
@@ -1991,11 +1992,13 @@ mod test {
         println!("text string: {:?}", text.to_string());
         println!("text: {:?}", text);
 
-        let mut cursor = text.seek(9);
+        let mut edge1 = text.seek(9).get_edge(Assoc::Left).unwrap();
 
-        println!("CURSOR1: {:?}", cursor);
+        // serialize here
 
-        let offset1 = cursor.get_absolute_offset();
+        println!("CURSOREDGE1: {:?}", edge1);
+
+        let offset1 = edge1.get_absolute_offset(&mut txn);
         println!("the text offset1: {:?}", offset1);
 
         assert_eq!(offset1, 9);
@@ -2009,7 +2012,9 @@ mod test {
         text_y.insert(&mut txn_y, 5, " my");
         println!("text_y {:?}", text_y.to_string());
 
-        let offset_y = cursor.get_absolute_offset();
+        // deserialize here
+
+        let offset_y = edge1.get_absolute_offset(&mut txn);
         println!("the text offset_y: {:?}", offset_y);
 
         assert_eq!(offset_y, 12);

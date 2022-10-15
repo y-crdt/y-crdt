@@ -52,9 +52,13 @@ pub trait Cursor {
 
     /// Moves the `range` of elements into a current cursor position.
     fn move_range(&mut self, txn: &mut Transaction, range: CursorRange);
-
-    fn get_absolute_offset(&mut self) -> usize;
 }
+
+// #[derive(Debug, Serialize, Deserialize)]
+// pub struct SerializedCursor {
+//     id: ID,
+//     assoc: Assoc,
+// }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Move {
@@ -794,6 +798,39 @@ impl CursorRangeEdge {
         encoder.write_var(self.id.clock);
         self.assoc.encode(encoder)
     }
+
+    pub fn get_absolute_offset(&mut self, trx: &mut Transaction) -> usize {
+        let mut offset: usize = 0;
+        let store = trx.store_mut();
+        self.repair(store);
+
+        let mut running_current = self.block();
+        println!("MANGO, first item: {:?}", running_current);
+        // let mut is_first: true;
+
+        // offset += self.current_block_offset;
+
+        // check for displacement in the current Item
+        // if let Block::Item(item) = running_current.clone().as_deref() {
+        // println!("MANGO, initial item: {:?}", item);
+        // }
+
+        while let Some(Block::Item(item)) = running_current.clone().as_deref() {
+            println!("MANGO item: {:?}", item);
+            if !item.is_deleted() && item.is_countable() {
+                let item_len = item.len() as usize;
+                offset += item_len;
+            }
+
+            // let left = item.left;
+            // if let Some(Block::Item(item)) = left.clone().as_deref() {
+
+            // }
+            running_current = item.left;
+        }
+
+        offset
+    }
 }
 
 impl std::fmt::Display for CursorRangeEdge {
@@ -1022,7 +1059,7 @@ impl ArrayCursor {
         read
     }
 
-    fn get_edge(&self, assoc: Assoc) -> Option<CursorRangeEdge> {
+    pub fn get_edge(&self, assoc: Assoc) -> Option<CursorRangeEdge> {
         let id = match assoc {
             Assoc::Right => self.right_id(),
             Assoc::Left => self.left_id(),
@@ -1227,38 +1264,6 @@ impl Cursor for ArrayCursor {
             }
         }
         offset - remaining
-    }
-
-    fn get_absolute_offset(&mut self) -> usize {
-        // counting steps to the beginning
-        let mut offset: usize = 0;
-
-        // println!("MANGO cursor: {:?}", self);
-
-        let mut running_current = self.current();
-
-        offset += self.current_block_offset;
-
-        // check for displacement in the current block
-        if let Some(Block::Item(item)) = running_current.clone().as_deref() {
-            // println!("MANGO, initial item: {:?}", item);
-        }
-
-        while let Some(Block::Item(prev_item)) = running_current.clone().as_deref() {
-            let left = prev_item.left;
-
-            // println!("MANGO left: {:?}", left);
-
-            if let Some(Block::Item(item)) = left.clone().as_deref() {
-                if !item.is_deleted() && item.is_countable() {
-                    let item_len = item.len() as usize;
-                    offset += item_len;
-                }
-            }
-
-            running_current = left;
-        }
-        offset
     }
 
     fn range(&mut self, len: usize, start_assoc: Assoc, end_assoc: Assoc) -> CursorRange {

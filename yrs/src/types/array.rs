@@ -1237,33 +1237,33 @@ mod test {
         }
     }
 
-    #[test]
-    fn absolute_position_test() {
-        use crate::cursor::Cursor;
-        let doc = Doc::new();
-        let mut txn = doc.transact();
+    // #[test]
+    // fn absolute_position_test() {
+    //     use crate::cursor::Cursor;
+    //     let doc = Doc::new();
+    //     let mut txn = doc.transact();
 
-        let array = txn.get_array("array_name");
+    //     let array = txn.get_array("array_name");
 
-        array.insert(&mut txn, 0, 4);
+    //     array.insert(&mut txn, 0, 4);
 
-        println!("array: {:?}", array);
+    //     println!("array: {:?}", array);
 
-        array.insert(&mut txn, 0, 3);
-        array.insert(&mut txn, 0, 2);
-        array.insert(&mut txn, 0, 1);
+    //     array.insert(&mut txn, 0, 3);
+    //     array.insert(&mut txn, 0, 2);
+    //     array.insert(&mut txn, 0, 1);
 
-        let mut cursor = array.seek(2);
-        let offset1 = cursor.get_absolute_offset();
+    //     let mut cursor = array.seek(2);
+    //     let offset1 = cursor.get_absolute_offset();
 
-        println!("The offset: {:?}", offset1);
-        assert_eq!(offset1, 2);
+    //     println!("The offset: {:?}", offset1);
+    //     assert_eq!(offset1, 2);
 
-        array.remove(&mut txn, 0);
+    //     array.remove(&mut txn, 0);
 
-        let offset2 = cursor.get_absolute_offset();
+    //     let offset2 = cursor.get_absolute_offset();
 
-        println!("The offset2: {:?}", offset2);
-        assert_eq!(offset2, 1);
-    }
+    //     println!("The offset2: {:?}", offset2);
+    //     assert_eq!(offset2, 1);
+    // }
 }
