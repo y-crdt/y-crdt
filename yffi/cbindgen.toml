@@ -54,10 +54,29 @@ typedef struct YDoc {} YDoc;
 typedef struct Branch {} Branch;
 
 /**
- * Transaction is one of the core types in Yrs. All operations that need to touch a document's
- * contents (a.k.a. block store), need to be executed in scope of a transaction.
+ * Read only transaction is one of the core types in Yrs. All operations that need to touch
+ * a document's contents (a.k.a. block store), need to be executed in scope of a transaction.
+ *
+ * Read only transaction don't provide capabilities that enable modifications of underlying
+ * document, however their are more light-weight that `ReadWriteTransaction`s. Additionally it's
+ * safe to create multiple read only transactions at the same time.
  */
-typedef struct YTransaction {} YTransaction;
+typedef struct YReadOnlyTransaction {} YReadOnlyTransaction;
+
+/**
+ * Read-write transaction is one of the core types in Yrs. All operations that need to touch or
+ * modify a document's contents (a.k.a. block store), need to be executed in scope of a
+ * transaction.
+ *
+ * Unlike `ReadOnlyTransaction`, read write transaction enables modifications of underlying
+ * document, however only a single `ReadWriteTransaction` can be opened at the same time.
+ */
+typedef struct YReadWriteTransaction {} YReadWriteTransaction;
+
+/**
+ * Type alias for read-capable transactions (both `ReadOnlyTransaction` and `ReadWriteTransaction`)
+ */
+typedef struct YReadTransaction {} YReadTransaction;
 
 /**
  * Iterator structure used by shared array data type.
@@ -93,9 +112,21 @@ trailer = """
 [parse]
 parse_deps = false
 
+[export]
+exclude = [
+    "ArrayIter",
+    "Transaction",
+    "TransactionMut",
+    "ReadTransaction",
+    "ReadOnlyTransaction",
+    "ReadWriteTransaction"
+]
+
 [export.rename]
 "Doc" = "YDoc"
-"Transaction" = "YTransaction"
+"ReadTransaction" = "YReadTransaction"
+"ReadOnlyTransaction" = "YReadOnlyTransaction"
+"ReadWriteTransaction" = "YReadWriteTransaction"
 "Array" = "YArray"
 "Map" = "YMap"
 "Text" = "YText"

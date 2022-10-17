@@ -9,6 +9,7 @@ use std::ptr::{null, null_mut};
 use std::rc::Rc;
 use yrs::block::{ClientID, ItemContent, Prelim};
 use yrs::types::array::ArrayEvent;
+use yrs::types::array::ArrayIter as NativeArrayIter;
 use yrs::types::map::MapEvent;
 use yrs::types::text::TextEvent;
 use yrs::types::xml::{XmlEvent, XmlTextEvent};
@@ -108,7 +109,8 @@ pub type Doc = yrs::Doc;
 pub type Branch = yrs::types::Branch;
 
 /// Iterator structure used by shared array data type.
-pub type ArrayIter = yrs::types::array::ArrayIter<'static, ReadTransaction>;
+#[repr(transparent)]
+pub struct ArrayIter(NativeArrayIter<'static, ReadTransaction>);
 
 /// Iterator structure used by shared map data type. Map iterators are unordered - there's no
 /// specific order in which map entries will be returned during consecutive iterator calls.
@@ -1173,7 +1175,7 @@ pub unsafe extern "C" fn yarray_iter(
 
     let txn = txn.as_ref().unwrap();
     let array = &Array::from_raw_branch(array) as *const Array;
-    Box::into_raw(Box::new(array.as_ref().unwrap().iter(txn)))
+    Box::into_raw(Box::new(ArrayIter(array.as_ref().unwrap().iter(txn))))
 }
 
 /// Releases all of an `YArray` iterator resources created by calling [yarray_iter].
@@ -1193,7 +1195,7 @@ pub unsafe extern "C" fn yarray_iter_next(iterator: *mut ArrayIter) -> *mut YOut
     assert!(!iterator.is_null());
 
     let iter = iterator.as_mut().unwrap();
-    if let Some(v) = iter.next() {
+    if let Some(v) = iter.0.next() {
         let out = YOutput::from(v);
         Box::into_raw(Box::new(out))
     } else {
@@ -3163,7 +3165,7 @@ pub union YEventContent {
 #[derive(Copy, Clone)]
 pub struct YTextEvent {
     inner: *const c_void,
-    pub txn: *const yrs::TransactionMut<'static>,
+    pub txn: *const ReadWriteTransaction,
 }
 
 impl YTextEvent {
@@ -3174,7 +3176,7 @@ impl YTextEvent {
         YTextEvent { inner, txn }
     }
 
-    fn txn(&self) -> &yrs::TransactionMut {
+    fn txn(&self) -> &ReadWriteTransaction {
         unsafe { self.txn.as_ref().unwrap() }
     }
 }
@@ -3194,7 +3196,7 @@ impl Deref for YTextEvent {
 #[derive(Copy, Clone)]
 pub struct YArrayEvent {
     inner: *const c_void,
-    pub txn: *const yrs::TransactionMut<'static>,
+    pub txn: *const ReadWriteTransaction,
 }
 
 impl YArrayEvent {
@@ -3205,7 +3207,7 @@ impl YArrayEvent {
         YArrayEvent { inner, txn }
     }
 
-    fn txn(&self) -> &yrs::TransactionMut {
+    fn txn(&self) -> &ReadWriteTransaction {
         unsafe { self.txn.as_ref().unwrap() }
     }
 }
