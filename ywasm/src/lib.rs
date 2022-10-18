@@ -236,6 +236,7 @@ impl YDoc {
                 let arg = Uint8Array::from(e.update.as_slice());
                 f.call1(&JsValue::UNDEFINED, &arg).unwrap();
             })
+            .unwrap()
             .into()
     }
 
@@ -251,6 +252,7 @@ impl YDoc {
                 let arg = Uint8Array::from(e.update.as_slice());
                 f.call1(&JsValue::UNDEFINED, &arg).unwrap();
             })
+            .unwrap()
             .into()
     }
 
@@ -265,6 +267,7 @@ impl YDoc {
                 let arg: JsValue = YAfterTransactionEvent::new(e).into();
                 f.call1(&JsValue::UNDEFINED, &arg).unwrap();
             })
+            .unwrap()
             .into()
     }
 }

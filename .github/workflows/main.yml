@@ -107,7 +107,7 @@ jobs:
         run: cargo install cbindgen
 
       - name: generate C bindings
-        run: cbindgen --config ./yffi/cbindgen.toml --crate yffi --output ./tests-ffi/include/libyrs.h
+        run: cbindgen --config ./yffi/cbindgen.toml --crate yffi --output ./tests-ffi/include/libyrs.h --lang C
 
       - name: install cmake
         uses: lukka/get-cmake@latest

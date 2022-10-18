@@ -174,13 +174,16 @@ impl Doc {
     /// commit.
     ///
     /// Returns a subscription, which will unsubscribe function when dropped.
-    pub fn observe_update_v1<F>(&mut self, f: F) -> Subscription<UpdateEvent>
+    pub fn observe_update_v1<F>(
+        &mut self,
+        f: F,
+    ) -> Result<Subscription<UpdateEvent>, BorrowMutError>
     where
         F: Fn(&TransactionMut, &UpdateEvent) -> () + 'static,
     {
-        let mut r = self.store.try_borrow_mut().unwrap();
+        let mut r = self.store.try_borrow_mut()?;
         let eh = r.update_v1_events.get_or_insert_with(EventHandler::new);
-        eh.subscribe(f)
+        Ok(eh.subscribe(f))
     }
 
     /// Manually unsubscribes from a callback used in [Doc::observe_update_v1] method.
@@ -198,13 +201,16 @@ impl Doc {
     /// commit.
     ///
     /// Returns a subscription, which will unsubscribe function when dropped.
-    pub fn observe_update_v2<F>(&mut self, f: F) -> Subscription<UpdateEvent>
+    pub fn observe_update_v2<F>(
+        &mut self,
+        f: F,
+    ) -> Result<Subscription<UpdateEvent>, BorrowMutError>
     where
         F: Fn(&TransactionMut, &UpdateEvent) -> () + 'static,
     {
-        let mut r = self.store.try_borrow_mut().unwrap();
+        let mut r = self.store.try_borrow_mut()?;
         let eh = r.update_v2_events.get_or_insert_with(EventHandler::new);
-        eh.subscribe(f)
+        Ok(eh.subscribe(f))
     }
 
     /// Manually unsubscribes from a callback used in [Doc::observe_update_v1] method.
@@ -218,14 +224,19 @@ impl Doc {
 
     /// Subscribe callback function to updates on the `Doc`. The callback will receive state updates and
     /// deletions when a document transaction is committed.
-    pub fn observe_transaction_cleanup<F>(&mut self, f: F) -> Subscription<AfterTransactionEvent>
+    pub fn observe_transaction_cleanup<F>(
+        &mut self,
+        f: F,
+    ) -> Result<Subscription<AfterTransactionEvent>, BorrowMutError>
     where
         F: Fn(&TransactionMut, &AfterTransactionEvent) -> () + 'static,
     {
-        let mut r = self.store.try_borrow_mut().unwrap();
-        r.after_transaction_events
+        let mut r = self.store.try_borrow_mut()?;
+        let subscription = r
+            .after_transaction_events
             .get_or_insert_with(EventHandler::new)
-            .subscribe(f)
+            .subscribe(f);
+        Ok(subscription)
     }
     /// Cancels the transaction cleanup callback associated with the `subscription_id`
     pub fn unobserve_transaction_cleanup(&mut self, subscription_id: SubscriptionId) {
@@ -315,20 +326,30 @@ impl Transact for Doc {
     }
 }
 
+impl Transact for Branch {
+    fn try_transact(&self) -> Result<Transaction, BorrowError> {
+        let store = self.store.as_ref().unwrap();
+        Ok(Transaction::new(store.try_borrow()?))
+    }
+
+    fn try_transact_mut(&self) -> Result<TransactionMut, BorrowMutError> {
+        let store = self.store.as_ref().unwrap();
+        Ok(TransactionMut::new(store.try_borrow_mut()?))
+    }
+}
+
 impl<T> Transact for T
 where
     T: AsRef<Branch>,
 {
     fn try_transact(&self) -> Result<Transaction, BorrowError> {
         let branch = self.as_ref();
-        let store = branch.store.as_ref().unwrap();
-        Ok(Transaction::new(store.try_borrow()?))
+        branch.try_transact()
     }
 
     fn try_transact_mut(&self) -> Result<TransactionMut, BorrowMutError> {
         let branch = self.as_ref();
-        let store = branch.store.as_ref().unwrap();
-        Ok(TransactionMut::new(store.try_borrow_mut()?))
+        branch.try_transact_mut()
     }
 }
 
@@ -627,6 +648,7 @@ mod test {
                 after_ref.set(event.after_state.clone());
                 delete_ref.set(event.delete_set.clone());
             })
+            .unwrap()
             .into();
 
         {
