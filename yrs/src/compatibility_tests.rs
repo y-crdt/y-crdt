@@ -119,7 +119,7 @@ fn text_insert_delete() {
         let u = Update::decode_v1(update).unwrap();
         txn.apply_update(u);
     }
-    assert_eq!(txt.to_string(), "abhi".to_string());
+    assert_eq!(txt.to_string(&txt.transact()), "abhi".to_string());
     assert!(visited.get());
 }
 
@@ -341,12 +341,12 @@ fn utf32_lib0_v2_decoding() {
         ("tagName", "div".to_string()),
         ("lineHeight", "".to_string()),
     ]);
-    let actual_attrs: HashMap<&str, String> = actual.attributes().collect();
+    let actual_attrs: HashMap<&str, String> = actual.attributes(&txn).collect();
     assert_eq!(actual_attrs, expected_attrs);
 
     let txt: XmlText = actual.get(0).unwrap().try_into().unwrap();
 
-    assert_eq!(txt.to_string(), "在の韩国🇰🇷🇨🇳🇯🇵");
+    assert_eq!(txt.to_string(&txn), "在の韩国🇰🇷🇨🇳🇯🇵");
 }
 
 /// Verify if given `payload` can be deserialized into series
@@ -382,7 +382,7 @@ fn negative_zero_decoding_v2() {
     let mut txn = doc.transact_mut();
 
     root.insert(&mut txn, "sequence", PrelimMap::<bool>::new()); //NOTE: This is how I put nested map.
-    let sequence = root.get("sequence").unwrap().to_ymap().unwrap();
+    let sequence = root.get(&txn, "sequence").unwrap().to_ymap().unwrap();
     sequence.insert(&mut txn, "id", "V9Uk9pxUKZIrW6cOkC0Rg".to_string());
     sequence.insert(&mut txn, "cuts", PrelimArray::<_, Any>::from([]));
     sequence.insert(&mut txn, "name", "new sequence".to_string());
@@ -444,7 +444,12 @@ fn test_data_set<P: AsRef<std::path::Path>>(path: P) {
             doc.transact_mut().apply_update(update);
         }
         let expected = decoder.read_string().unwrap();
-        assert_eq!(txt.to_string(), expected, "failed at {} run", test_num);
+        assert_eq!(
+            txt.to_string(&txt.transact()),
+            expected,
+            "failed at {} run",
+            test_num
+        );
 
         let expected = decoder.read_any().unwrap();
         let actual = map.to_json(&doc.transact());

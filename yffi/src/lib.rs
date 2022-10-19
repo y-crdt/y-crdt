@@ -11,7 +11,10 @@ use yrs::block::{ClientID, ItemContent, Prelim};
 use yrs::types::array::ArrayEvent;
 use yrs::types::array::ArrayIter as NativeArrayIter;
 use yrs::types::map::MapEvent;
+use yrs::types::map::MapIter as NativeMapIter;
 use yrs::types::text::TextEvent;
+use yrs::types::xml::Attributes as NativeAttributes;
+use yrs::types::xml::TreeWalker as NativeTreeWalker;
 use yrs::types::xml::{XmlEvent, XmlTextEvent};
 use yrs::types::{
     Attrs, BranchPtr, Change, Delta, EntryChange, Event, PathSegment, Value, TYPE_REFS_ARRAY,
@@ -114,18 +117,21 @@ pub struct ArrayIter(NativeArrayIter<'static, Transaction>);
 
 /// Iterator structure used by shared map data type. Map iterators are unordered - there's no
 /// specific order in which map entries will be returned during consecutive iterator calls.
-pub type MapIter = yrs::types::map::MapIter<'static>;
+#[repr(transparent)]
+pub struct MapIter(NativeMapIter<'static, Transaction>);
 
 /// Iterator structure used by XML nodes (elements and text) to iterate over node's attributes.
 /// Attribute iterators are unordered - there's no specific order in which map entries will be
 /// returned during consecutive iterator calls.
-pub type Attributes = yrs::types::xml::Attributes<'static>;
+#[repr(transparent)]
+pub struct Attributes(NativeAttributes<'static, Transaction>);
 
 /// Iterator used to traverse over the complex nested tree structure of a XML node. XML node
 /// iterator walks only over `YXmlElement` and `YXmlText` nodes. It does so in ordered manner (using
 /// the order in which children are ordered within their parent nodes) and using **depth-first**
 /// traverse.
-pub type TreeWalker = yrs::types::xml::TreeWalker<'static>;
+#[repr(transparent)]
+pub struct TreeWalker(NativeTreeWalker<'static, Transaction>);
 
 /// Transaction is one of the core types in Yrs. All operations that need to touch or
 /// modify a document's contents (a.k.a. block store), need to be executed in scope of a
@@ -913,21 +919,23 @@ fn err_code(e: Error) -> c_int {
 
 /// Returns the length of the `YText` string content in bytes (without the null terminator character)
 #[no_mangle]
-pub unsafe extern "C" fn ytext_len(txt: *const Branch) -> c_int {
+pub unsafe extern "C" fn ytext_len(txt: *const Branch, txn: *const Transaction) -> c_int {
     assert!(!txt.is_null());
+    let txn = txn.as_ref().unwrap();
     let txt = Text::from_raw_branch(txt);
-    txt.len() as c_int
+    txt.len(txn) as c_int
 }
 
 /// Returns a null-terminated UTF-8 encoded string content of a current `YText` shared data type.
 ///
 /// Generated string resources should be released using [ystring_destroy] function.
 #[no_mangle]
-pub unsafe extern "C" fn ytext_string(txt: *const Branch) -> *mut c_char {
+pub unsafe extern "C" fn ytext_string(txt: *const Branch, txn: *const Transaction) -> *mut c_char {
     assert!(!txt.is_null());
 
+    let txn = txn.as_ref().unwrap();
     let txt = Text::from_raw_branch(txt);
-    let str = txt.to_string();
+    let str = txt.to_string(txn);
     CString::new(str).unwrap().into_raw()
 }
 
@@ -1254,11 +1262,12 @@ pub unsafe extern "C" fn yarray_iter_next(iterator: *mut ArrayIter) -> *mut YOut
 /// Use [ymap_iter_next] function in order to retrieve a consecutive (**unordered**) map entries.
 /// Use [ymap_iter_destroy] function in order to close the iterator and release its resources.
 #[no_mangle]
-pub unsafe extern "C" fn ymap_iter(map: *const Branch) -> *mut MapIter {
+pub unsafe extern "C" fn ymap_iter(map: *const Branch, txn: *const Transaction) -> *mut MapIter {
     assert!(!map.is_null());
 
+    let txn = txn.as_ref().unwrap();
     let map = &Map::from_raw_branch(map) as *const Map;
-    Box::into_raw(Box::new(map.as_ref().unwrap().iter()))
+    Box::into_raw(Box::new(MapIter(map.as_ref().unwrap().iter(txn))))
 }
 
 /// Releases all of an `YMap` iterator resources created by calling [ymap_iter].
@@ -1279,7 +1288,7 @@ pub unsafe extern "C" fn ymap_iter_next(iter: *mut MapIter) -> *mut YMapEntry {
     assert!(!iter.is_null());
 
     let iter = iter.as_mut().unwrap();
-    if let Some((key, value)) = iter.next() {
+    if let Some((key, value)) = iter.0.next() {
         Box::into_raw(Box::new(YMapEntry::new(key, value)))
     } else {
         std::ptr::null_mut()
@@ -1288,12 +1297,13 @@ pub unsafe extern "C" fn ymap_iter_next(iter: *mut MapIter) -> *mut YMapEntry {
 
 /// Returns a number of entries stored within a `map`.
 #[no_mangle]
-pub unsafe extern "C" fn ymap_len(map: *const Branch) -> c_int {
+pub unsafe extern "C" fn ymap_len(map: *const Branch, txn: *const Transaction) -> c_int {
     assert!(!map.is_null());
 
+    let txn = txn.as_ref().unwrap();
     let map = Map::from_raw_branch(map);
 
-    map.len() as c_int
+    map.len(txn) as c_int
 }
 
 /// Inserts a new entry (specified as `key`-`value` pair) into a current `map`. If entry under such
@@ -1363,15 +1373,21 @@ pub unsafe extern "C" fn ymap_remove(
 ///
 /// A `key` must be a null-terminated UTF-8 encoded string.
 #[no_mangle]
-pub unsafe extern "C" fn ymap_get(map: *const Branch, key: *const c_char) -> *mut YOutput {
+pub unsafe extern "C" fn ymap_get(
+    map: *const Branch,
+    txn: *const Transaction,
+    key: *const c_char,
+) -> *mut YOutput {
     assert!(!map.is_null());
     assert!(!key.is_null());
+    assert!(!txn.is_null());
 
+    let txn = txn.as_ref().unwrap();
     let key = CStr::from_ptr(key).to_str().unwrap();
 
     let map = Map::from_raw_branch(map);
 
-    if let Some(value) = map.get(key) {
+    if let Some(value) = map.get(txn, key) {
         Box::into_raw(Box::new(YOutput::from(value)))
     } else {
         std::ptr::null_mut()
@@ -1412,12 +1428,16 @@ pub unsafe extern "C" fn yxmlelem_tag(xml: *const Branch) -> *mut c_char {
 /// Returned value is a null-terminated UTF-8 string, which must be released using [ystring_destroy]
 /// function.
 #[no_mangle]
-pub unsafe extern "C" fn yxmlelem_string(xml: *const Branch) -> *mut c_char {
+pub unsafe extern "C" fn yxmlelem_string(
+    xml: *const Branch,
+    txn: *const Transaction,
+) -> *mut c_char {
     assert!(!xml.is_null());
 
+    let txn = txn.as_ref().unwrap();
     let xml = XmlElement::from_raw_branch(xml);
 
-    let str = xml.to_string();
+    let str = xml.to_string(txn);
     CString::new(str).unwrap().into_raw()
 }
 
@@ -1481,15 +1501,18 @@ pub unsafe extern "C" fn yxmlelem_remove_attr(
 #[no_mangle]
 pub unsafe extern "C" fn yxmlelem_get_attr(
     xml: *const Branch,
+    txn: *const Transaction,
     attr_name: *const c_char,
 ) -> *mut c_char {
     assert!(!xml.is_null());
     assert!(!attr_name.is_null());
+    assert!(!txn.is_null());
 
     let xml = XmlElement::from_raw_branch(xml);
 
     let key = CStr::from_ptr(attr_name).to_str().unwrap();
-    if let Some(value) = xml.get_attribute(key) {
+    let txn = txn.as_ref().unwrap();
+    if let Some(value) = xml.get_attribute(txn, key) {
         CString::new(value).unwrap().into_raw()
     } else {
         std::ptr::null_mut()
@@ -1501,11 +1524,16 @@ pub unsafe extern "C" fn yxmlelem_get_attr(
 /// Use [yxmlattr_iter_next] function in order to retrieve a consecutive (**unordered**) attributes.
 /// Use [yxmlattr_iter_destroy] function in order to close the iterator and release its resources.
 #[no_mangle]
-pub unsafe extern "C" fn yxmlelem_attr_iter(xml: *const Branch) -> *mut Attributes {
+pub unsafe extern "C" fn yxmlelem_attr_iter(
+    xml: *const Branch,
+    txn: *const Transaction,
+) -> *mut Attributes {
     assert!(!xml.is_null());
+    assert!(!txn.is_null());
 
     let xml = &XmlElement::from_raw_branch(xml) as *const XmlElement;
-    Box::into_raw(Box::new(xml.as_ref().unwrap().attributes()))
+    let txn = txn.as_ref().unwrap();
+    Box::into_raw(Box::new(Attributes(xml.as_ref().unwrap().attributes(txn))))
 }
 
 /// Returns an iterator over the `YXmlText` attributes.
@@ -1513,11 +1541,16 @@ pub unsafe extern "C" fn yxmlelem_attr_iter(xml: *const Branch) -> *mut Attribut
 /// Use [yxmlattr_iter_next] function in order to retrieve a consecutive (**unordered**) attributes.
 /// Use [yxmlattr_iter_destroy] function in order to close the iterator and release its resources.
 #[no_mangle]
-pub unsafe extern "C" fn yxmltext_attr_iter(xml: *const Branch) -> *mut Attributes {
+pub unsafe extern "C" fn yxmltext_attr_iter(
+    xml: *const Branch,
+    txn: *const Transaction,
+) -> *mut Attributes {
     assert!(!xml.is_null());
+    assert!(!txn.is_null());
 
     let xml = &XmlText::from_raw_branch(xml) as *const XmlText;
-    Box::into_raw(Box::new(xml.as_ref().unwrap().attributes()))
+    let txn = txn.as_ref().unwrap();
+    Box::into_raw(Box::new(Attributes(xml.as_ref().unwrap().attributes(txn))))
 }
 
 /// Releases all of attributes iterator resources created by calling [yxmlelem_attr_iter]
@@ -1540,7 +1573,7 @@ pub unsafe extern "C" fn yxmlattr_iter_next(iterator: *mut Attributes) -> *mut Y
 
     let iter = iterator.as_mut().unwrap();
 
-    if let Some((name, value)) = iter.next() {
+    if let Some((name, value)) = iter.0.next() {
         Box::into_raw(Box::new(YXmlAttr {
             name: CString::new(name).unwrap().into_raw(),
             value: CString::new(value).unwrap().into_raw(),
@@ -1658,12 +1691,14 @@ pub unsafe extern "C" fn yxmlelem_parent(xml: *const Branch) -> *mut Branch {
 /// Returns a number of child nodes (both `YXmlElement` and `YXmlText`) living under a current XML
 /// element. This function doesn't count a recursive nodes, only direct children of a current node.
 #[no_mangle]
-pub unsafe extern "C" fn yxmlelem_child_len(xml: *const Branch) -> c_int {
+pub unsafe extern "C" fn yxmlelem_child_len(xml: *const Branch, txn: *const Transaction) -> c_int {
     assert!(!xml.is_null());
+    assert!(!txn.is_null());
 
+    let txn = txn.as_ref().unwrap();
     let xml = XmlElement::from_raw_branch(xml);
 
-    xml.len() as c_int
+    xml.len(txn) as c_int
 }
 
 /// Returns a first child node of a current `YXmlElement`, or null pointer if current XML node is
@@ -1692,11 +1727,16 @@ pub unsafe extern "C" fn yxmlelem_first_child(xml: *const Branch) -> *mut YOutpu
 /// Use [yxmlelem_tree_walker_next] function in order to iterate over to a next node.
 /// Use [yxmlelem_tree_walker_destroy] function to release resources used by the iterator.
 #[no_mangle]
-pub unsafe extern "C" fn yxmlelem_tree_walker(xml: *const Branch) -> *mut TreeWalker {
+pub unsafe extern "C" fn yxmlelem_tree_walker(
+    xml: *const Branch,
+    txn: *const Transaction,
+) -> *mut TreeWalker {
     assert!(!xml.is_null());
+    assert!(!txn.is_null());
 
+    let txn = txn.as_ref().unwrap();
     let xml = &XmlElement::from_raw_branch(xml) as *const XmlElement;
-    Box::into_raw(Box::new(xml.as_ref().unwrap().successors()))
+    Box::into_raw(Box::new(TreeWalker(xml.as_ref().unwrap().successors(txn))))
 }
 
 /// Releases resources associated with a current XML tree walker iterator.
@@ -1717,7 +1757,7 @@ pub unsafe extern "C" fn yxmlelem_tree_walker_next(iterator: *mut TreeWalker) ->
 
     let iter = iterator.as_mut().unwrap();
 
-    if let Some(next) = iter.next() {
+    if let Some(next) = iter.0.next() {
         match next {
             Xml::Element(v) => Box::into_raw(Box::new(YOutput::from(Value::YXmlElement(v)))),
             Xml::Text(v) => Box::into_raw(Box::new(YOutput::from(Value::YXmlText(v)))),
@@ -1824,24 +1864,31 @@ pub unsafe extern "C" fn yxmlelem_get(xml: *const Branch, index: c_int) -> *cons
 /// Returns the length of the `YXmlText` string content in bytes (without the null terminator
 /// character)
 #[no_mangle]
-pub unsafe extern "C" fn yxmltext_len(txt: *const Branch) -> c_int {
+pub unsafe extern "C" fn yxmltext_len(txt: *const Branch, txn: *const Transaction) -> c_int {
     assert!(!txt.is_null());
+    assert!(!txn.is_null());
 
+    let txn = txn.as_ref().unwrap();
     let txt = XmlText::from_raw_branch(txt);
 
-    txt.len() as c_int
+    txt.len(txn) as c_int
 }
 
 /// Returns a null-terminated UTF-8 encoded string content of a current `YXmlText` shared data type.
 ///
 /// Generated string resources should be released using [ystring_destroy] function.
 #[no_mangle]
-pub unsafe extern "C" fn yxmltext_string(txt: *const Branch) -> *mut c_char {
+pub unsafe extern "C" fn yxmltext_string(
+    txt: *const Branch,
+    txn: *const Transaction,
+) -> *mut c_char {
     assert!(!txt.is_null());
+    assert!(!txn.is_null());
 
+    let txn = txn.as_ref().unwrap();
     let txt = XmlText::from_raw_branch(txt);
 
-    let str = txt.to_string();
+    let str = txt.to_string(txn);
     CString::new(str).unwrap().into_raw()
 }
 
@@ -2039,15 +2086,18 @@ pub unsafe extern "C" fn yxmltext_remove_attr(
 #[no_mangle]
 pub unsafe extern "C" fn yxmltext_get_attr(
     txt: *const Branch,
+    txn: *const Transaction,
     attr_name: *const c_char,
 ) -> *mut c_char {
     assert!(!txt.is_null());
     assert!(!attr_name.is_null());
+    assert!(!txn.is_null());
 
+    let txn = txn.as_ref().unwrap();
     let txt = XmlText::from_raw_branch(txt);
     let name = CStr::from_ptr(attr_name).to_str().unwrap();
 
-    if let Some(value) = txt.get_attribute(name) {
+    if let Some(value) = txt.get_attribute(txn, name) {
         CString::new(value).unwrap().into_raw()
     } else {
         std::ptr::null_mut()

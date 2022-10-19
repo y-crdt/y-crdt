@@ -82,7 +82,7 @@ impl XmlElement {
 
     /// Converts current XML node into a textual representation. This representation if flat, it
     /// doesn't include any indentation.
-    pub fn to_string(&self) -> String {
+    pub fn to_string<T: ReadTxn>(&self, txn: &T) -> String {
         let inner = self.inner();
         let mut s = String::new();
         let tag = inner
@@ -91,14 +91,14 @@ impl XmlElement {
             .map(|s| s.as_ref())
             .unwrap_or(&"UNDEFINED");
         write!(&mut s, "<{}", tag).unwrap();
-        let attributes = Attributes(inner.entries());
+        let attributes = Attributes(inner.entries(txn));
         for (k, v) in attributes {
             write!(&mut s, " \"{}\"=\"{}\"", k, v).unwrap();
         }
         write!(&mut s, ">").unwrap();
-        for i in inner.iter() {
+        for i in inner.iter(txn) {
             for content in i.content.get_content() {
-                write!(&mut s, "{}", content.to_string()).unwrap();
+                write!(&mut s, "{}", content.to_string(txn)).unwrap();
             }
         }
         write!(&mut s, "</{}>", tag).unwrap();
@@ -112,17 +112,19 @@ impl XmlElement {
     }
 
     /// Removes an attribute recognized by an `attr_name` from a current XML element.
-    pub fn remove_attribute<K: AsRef<str>>(&self, txn: &mut TransactionMut, attr_name: &K) {
+    pub fn remove_attribute<K>(&self, txn: &mut TransactionMut, attr_name: &K)
+    where
+        K: AsRef<str>,
+    {
         self.inner().remove(txn, attr_name.as_ref());
     }
 
     /// Inserts an attribute entry into current XML element.
-    pub fn insert_attribute<K: Into<Rc<str>>, V: AsRef<str>>(
-        &self,
-        txn: &mut TransactionMut,
-        attr_name: K,
-        attr_value: V,
-    ) {
+    pub fn insert_attribute<K, V>(&self, txn: &mut TransactionMut, attr_name: K, attr_value: V)
+    where
+        K: Into<Rc<str>>,
+        V: AsRef<str>,
+    {
         let key = attr_name.into();
         let value = crate::block::PrelimString(attr_value.as_ref().into());
         let pos = {
@@ -142,16 +144,16 @@ impl XmlElement {
 
     /// Returns a value of an attribute given its `attr_name`. Returns `None` if no such attribute
     /// can be found inside of a current XML element.
-    pub fn get_attribute(&self, attr_name: &str) -> Option<String> {
+    pub fn get_attribute<T: ReadTxn>(&self, txn: &T, attr_name: &str) -> Option<String> {
         let inner = self.inner();
-        let value = inner.get(attr_name)?;
-        Some(value.to_string())
+        let value = inner.get(txn, attr_name)?;
+        Some(value.to_string(txn))
     }
 
     /// Returns an unordered iterator over all attributes (key-value pairs), that can be found
     /// inside of a current XML element.
-    pub fn attributes(&self) -> Attributes {
-        Attributes(self.0 .0.entries())
+    pub fn attributes<'a, T: ReadTxn>(&'a self, txn: &'a T) -> Attributes<'a, T> {
+        Attributes(self.0 .0.entries(txn))
     }
 
     /// Returns a next sibling of a current XML element, if any exists.
@@ -178,8 +180,8 @@ impl XmlElement {
 
     /// Returns a number of child XML nodes, that can be found inside of a current XML element.
     /// This is a flat count - successor nodes (children of a children) are not counted.
-    pub fn len(&self) -> u32 {
-        self.0.len()
+    pub fn len<T: ReadTxn>(&self, txn: &T) -> u32 {
+        self.0.len(txn)
     }
 
     /// Returns an iterator that can be used to traverse over the successors of a current
@@ -208,10 +210,10 @@ impl XmlElement {
     /// let txt = html.push_text_back(&mut txn);
     /// txt.push(&mut txn, "again");
     ///
-    /// for node in html.successors() {
+    /// for node in html.successors(&txn) {
     ///     match node {
     ///         Xml::Element(elem) => println!("- {}", elem.tag()),
-    ///         Xml::Text(txt) => println!("- {}", txt.to_string())
+    ///         Xml::Text(txt) => println!("- {}", txt.to_string(&txn))
     ///     }
     /// }
     /// /* will print:
@@ -223,8 +225,8 @@ impl XmlElement {
     ///    - again
     /// */
     /// ```
-    pub fn successors(&self) -> TreeWalker {
-        self.0.iter()
+    pub fn successors<'a, T: ReadTxn>(&'a self, txn: &'a T) -> TreeWalker<'a, T> {
+        self.0.iter(txn)
     }
 
     /// Inserts another [XmlElement] with a given tag `name` into a current one at the given `index`
@@ -232,12 +234,10 @@ impl XmlElement {
     /// If `index` is equal to length of current XML element, new element will be inserted as a last
     /// child.
     /// This method will panic if `index` is greater than the length of current XML element.
-    pub fn insert_elem<S: Into<Rc<str>>>(
-        &self,
-        txn: &mut TransactionMut,
-        index: u32,
-        name: S,
-    ) -> XmlElement {
+    pub fn insert_elem<S>(&self, txn: &mut TransactionMut, index: u32, name: S) -> XmlElement
+    where
+        S: Into<Rc<str>>,
+    {
         self.0.insert_elem(txn, index, name)
     }
 
@@ -333,9 +333,9 @@ impl From<BranchPtr> for XmlElement {
 }
 
 /// Iterator over the attributes (key-value pairs represented as a strings) of an [XmlElement].
-pub struct Attributes<'a>(Entries<'a>);
+pub struct Attributes<'a, T>(Entries<'a, T>);
 
-impl<'a> Iterator for Attributes<'a> {
+impl<'a, T: ReadTxn> Iterator for Attributes<'a, T> {
     type Item = (&'a str, String);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -343,7 +343,7 @@ impl<'a> Iterator for Attributes<'a> {
         let value = block
             .content
             .get_last()
-            .map(|v| v.to_string())
+            .map(|v| v.to_string(self.0.txn))
             .unwrap_or(String::default());
 
         Some((key.as_ref(), value))
@@ -385,20 +385,20 @@ impl XmlFragment {
         parent(self.inner())
     }
 
-    pub fn len(&self) -> u32 {
+    pub fn len<T: ReadTxn>(&self, txn: &T) -> u32 {
         self.inner().len()
     }
 
-    pub fn iter(&self) -> TreeWalker {
-        TreeWalker::new(&self.0)
+    pub fn iter<'a, T: ReadTxn>(&'a self, txn: &'a T) -> TreeWalker<'a, T> {
+        TreeWalker::new(&self.0, txn)
     }
 
-    pub fn to_string(&self) -> String {
+    pub fn to_string<T: ReadTxn>(&self, txn: &T) -> String {
         let mut s = String::new();
         let inner = self.inner();
-        for i in inner.iter() {
+        for i in inner.iter(txn) {
             for content in i.content.get_content() {
-                write!(&mut s, "{}", content.to_string()).unwrap();
+                write!(&mut s, "{}", content.to_string(txn)).unwrap();
             }
         }
         s
@@ -436,25 +436,23 @@ impl XmlFragment {
         }
     }
 
-    pub fn push_elem_back<S: Into<Rc<str>>>(
-        &self,
-        txn: &mut TransactionMut,
-        name: S,
-    ) -> XmlElement {
-        let len = self.len();
+    pub fn push_elem_back<S>(&self, txn: &mut TransactionMut, name: S) -> XmlElement
+    where
+        S: Into<Rc<str>>,
+    {
+        let len = self.len(txn);
         self.insert_elem(txn, len, name)
     }
 
-    pub fn push_elem_front<S: Into<Rc<str>>>(
-        &self,
-        txn: &mut TransactionMut,
-        name: S,
-    ) -> XmlElement {
+    pub fn push_elem_front<S>(&self, txn: &mut TransactionMut, name: S) -> XmlElement
+    where
+        S: Into<Rc<str>>,
+    {
         self.insert_elem(txn, 0, name)
     }
 
     pub fn push_text_back(&self, txn: &mut TransactionMut) -> XmlText {
-        let len = self.len();
+        let len = self.len(txn);
         self.insert_text(txn, len)
     }
 
@@ -504,14 +502,15 @@ impl AsMut<Branch> for XmlFragment {
 }
 
 /// An iterator over [XmlElement] successors, working in a recursive depth-first manner.
-pub struct TreeWalker<'a> {
+pub struct TreeWalker<'a, T> {
     current: Option<&'a Item>,
     root: TypePtr,
     first_call: bool,
+    txn: &'a T,
 }
 
-impl<'a> TreeWalker<'a> {
-    fn new(root: &'a BranchPtr) -> Self {
+impl<'a, T: ReadTxn> TreeWalker<'a, T> {
+    fn new(root: &'a BranchPtr, txn: &'a T) -> Self {
         let current = if let Some(Block::Item(item)) = root.start.as_deref() {
             Some(item)
         } else {
@@ -522,11 +521,12 @@ impl<'a> TreeWalker<'a> {
             current,
             root: TypePtr::Branch(*root),
             first_call: true,
+            txn,
         }
     }
 }
 
-impl<'a> Iterator for TreeWalker<'a> {
+impl<'a, T: ReadTxn> Iterator for TreeWalker<'a, T> {
     type Item = Xml;
 
     /// Tree walker used depth-first search to move over the xml tree.
@@ -592,20 +592,20 @@ impl XmlHook {
         XmlHook(map)
     }
 
-    pub fn len(&self) -> u32 {
-        self.0.len()
+    pub fn len<T: ReadTxn>(&self, txn: &T) -> u32 {
+        self.0.len(txn)
     }
 
-    pub fn keys(&self) -> crate::types::map::Keys {
-        self.0.keys()
+    pub fn keys<'a, T: ReadTxn>(&'a self, txn: &'a T) -> crate::types::map::Keys<'a, T> {
+        self.0.keys(txn)
     }
 
-    pub fn values(&self) -> crate::types::map::Values {
-        self.0.values()
+    pub fn values<'a, T: ReadTxn>(&'a self, txn: &'a T) -> crate::types::map::Values<'a, T> {
+        self.0.values(txn)
     }
 
-    pub fn iter(&self) -> crate::types::map::MapIter {
-        self.0.iter()
+    pub fn iter<'a, T: ReadTxn>(&'a self, txn: &'a T) -> crate::types::map::MapIter<'a, T> {
+        self.0.iter(txn)
     }
 
     pub fn insert<V: Prelim>(
@@ -621,12 +621,12 @@ impl XmlHook {
         self.0.remove(txn, key)
     }
 
-    pub fn get(&self, key: &str) -> Option<Value> {
-        self.0.get(key)
+    pub fn get<T: ReadTxn>(&self, txn: &T, key: &str) -> Option<Value> {
+        self.0.get(txn, key)
     }
 
-    pub fn contains(&self, key: &String) -> bool {
-        self.0.contains(key)
+    pub fn contains<T: ReadTxn>(&self, txn: &T, key: &String) -> bool {
+        self.0.contains(txn, key)
     }
 
     pub fn clear(&self, txn: &mut TransactionMut) {
@@ -678,20 +678,19 @@ impl XmlText {
     }
 
     /// Returns a string representation of a current XML text.
-    pub fn to_string(&self) -> String {
-        self.0.to_string()
+    pub fn to_string<T: ReadTxn>(&self, txn: &T) -> String {
+        self.0.to_string(txn)
     }
 
     pub fn remove_attribute(&self, txn: &mut TransactionMut, attr_name: &str) {
         self.inner().remove(txn, attr_name);
     }
 
-    pub fn insert_attribute<K: Into<Rc<str>>, V: AsRef<str>>(
-        &self,
-        txn: &mut TransactionMut,
-        attr_name: K,
-        attr_value: V,
-    ) {
+    pub fn insert_attribute<K, V>(&self, txn: &mut TransactionMut, attr_name: K, attr_value: V)
+    where
+        K: Into<Rc<str>>,
+        V: AsRef<str>,
+    {
         let key = attr_name.into();
         let value = crate::block::PrelimString(attr_value.as_ref().into());
         let pos = {
@@ -709,14 +708,14 @@ impl XmlText {
         txn.create_item(&pos, value, Some(key));
     }
 
-    pub fn get_attribute(&self, attr_name: &str) -> Option<String> {
+    pub fn get_attribute<T: ReadTxn>(&self, txn: &T, attr_name: &str) -> Option<String> {
         let inner = self.inner();
-        let value = inner.get(attr_name)?;
-        Some(value.to_string())
+        let value = inner.get(txn, attr_name)?;
+        Some(value.to_string(txn))
     }
 
-    pub fn attributes(&self) -> Attributes {
-        Attributes(self.as_ref().entries())
+    pub fn attributes<'a, T: ReadTxn>(&'a self, txn: &'a T) -> Attributes<'a, T> {
+        Attributes(self.as_ref().entries(txn))
     }
 
     /// Returns next XML sibling of this XML text, which can be either a [XmlElement], [XmlText] or
@@ -737,8 +736,8 @@ impl XmlText {
     }
 
     /// Returns a number of characters contained under this XML text structure.
-    pub fn len(&self) -> u32 {
-        self.0.len()
+    pub fn len<T: ReadTxn>(&self, txn: &T) -> u32 {
+        self.0.len(txn)
     }
 
     /// Inserts a `chunk` of text at a given `index`.
@@ -812,7 +811,7 @@ impl XmlText {
 
     /// Appends a new string `content` at the end of this XML text structure.
     pub fn push(&self, txn: &mut TransactionMut, content: &str) {
-        let len = self.len();
+        let len = self.len(txn);
         self.insert(txn, len, content);
     }
 
@@ -1117,14 +1116,14 @@ mod test {
         let xml1 = d1.get_xml_element("xml");
         let mut t1 = d1.transact_mut();
         xml1.insert_attribute(&mut t1, "height", 10.to_string());
-        assert_eq!(xml1.get_attribute("height"), Some("10".to_string()));
+        assert_eq!(xml1.get_attribute(&t1, "height"), Some("10".to_string()));
 
         let d2 = Doc::with_client_id(1);
         let xml2 = d2.get_xml_element("xml");
         let mut t2 = d2.transact_mut();
         let u = t1.encode_state_as_update_v1(&StateVector::default());
         t2.apply_update(Update::decode_v1(u.as_slice()).unwrap());
-        assert_eq!(xml2.get_attribute("height"), Some("10".to_string()));
+        assert_eq!(xml2.get_attribute(&t2, "height"), Some("10".to_string()));
     }
 
     #[test]
@@ -1145,7 +1144,7 @@ mod test {
         let p2 = root.push_elem_back(&mut txn, "p");
         root.push_elem_back(&mut txn, "img");
 
-        let all_paragraphs = root.successors().filter_map(|n| match n {
+        let all_paragraphs = root.successors(&txn).filter_map(|n| match n {
             Xml::Element(e) if e.tag() == "p" => Some(e),
             _ => None,
         });
@@ -1167,8 +1166,8 @@ mod test {
         let mut txn = doc.transact_mut();
         txt.insert_attribute(&mut txn, "test", 42.to_string());
 
-        assert_eq!(txt.get_attribute("test"), Some("42".to_string()));
-        let actual: Vec<_> = txt.attributes().collect();
+        assert_eq!(txt.get_attribute(&txn, "test"), Some("42".to_string()));
+        let actual: Vec<_> = txt.attributes(&txn).collect();
         assert_eq!(actual, vec![("test", "42".to_string())]);
     }
 
@@ -1214,7 +1213,7 @@ mod test {
         r1.push_elem_back(&mut t1, "p");
 
         let expected = "<UNDEFINED>hello<p></p></UNDEFINED>";
-        assert_eq!(r1.to_string(), expected);
+        assert_eq!(r1.to_string(&t1), expected);
 
         let u1 = t1.encode_state_as_update_v1(&StateVector::default());
 
@@ -1223,7 +1222,7 @@ mod test {
         let mut t2 = d2.transact_mut();
 
         t2.apply_update(Update::decode_v1(u1.as_slice()).unwrap());
-        assert_eq!(r2.to_string(), expected);
+        assert_eq!(r2.to_string(&t2), expected);
     }
 
     #[test]

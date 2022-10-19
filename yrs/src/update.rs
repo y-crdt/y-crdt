@@ -1099,9 +1099,9 @@ mod test {
         let mut t3 = d3.transact_mut();
         t3.apply_update(u12);
 
-        let str1 = txt1.to_string();
-        let str2 = txt2.to_string();
-        let str3 = txt3.to_string();
+        let str1 = txt1.to_string(&t1);
+        let str2 = txt2.to_string(&t2);
+        let str3 = txt3.to_string(&t3);
 
         assert_eq!(str1, str2);
         assert_eq!(str2, str3);

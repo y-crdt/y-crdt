@@ -26,7 +26,7 @@ pub struct Map(BranchPtr);
 
 impl Map {
     /// Returns a number of entries stored within current map.
-    pub fn len(&self) -> u32 {
+    pub fn len<T: ReadTxn>(&self, txn: &T) -> u32 {
         let mut len = 0;
         let inner = self.0;
         for ptr in inner.map.values() {
@@ -40,37 +40,36 @@ impl Map {
         len
     }
 
-    fn entries(&self) -> Entries {
-        Entries::new(&self.0.map)
+    fn entries<'a, T: ReadTxn + 'a>(&'a self, txn: &'a T) -> Entries<'a, T> {
+        Entries::new(&self.0.map, txn)
     }
 
     /// Returns an iterator that enables to traverse over all keys of entries stored within
     /// current map. These keys are not ordered.
-    pub fn keys(&self) -> Keys {
-        Keys(self.entries())
+    pub fn keys<'a, T: ReadTxn + 'a>(&'a self, txn: &'a T) -> Keys<'a, T> {
+        Keys(self.entries(txn))
     }
 
     /// Returns an iterator that enables to traverse over all values stored within current map.
-    pub fn values(&self) -> Values {
-        Values(self.entries())
+    pub fn values<'a, T: ReadTxn + 'a>(&'a self, txn: &'a T) -> Values<'a, T> {
+        Values(self.entries(txn))
     }
 
     /// Returns an iterator that enables to traverse over all entries - tuple of key-value pairs -
     /// stored within current map.
-    pub fn iter(&self) -> MapIter {
-        MapIter(self.entries())
+    pub fn iter<'a, T: ReadTxn + 'a>(&'a self, txn: &'a T) -> MapIter<'a, T> {
+        MapIter(self.entries(txn))
     }
 
     /// Inserts a new `value` under given `key` into current map. Returns a value stored previously
     /// under the same key (if any existed).
-    pub fn insert<K: Into<Rc<str>>, V: Prelim>(
-        &self,
-        txn: &mut TransactionMut,
-        key: K,
-        value: V,
-    ) -> Option<Value> {
+    pub fn insert<K, V>(&self, txn: &mut TransactionMut, key: K, value: V) -> Option<Value>
+    where
+        K: Into<Rc<str>>,
+        V: Prelim,
+    {
         let key = key.into();
-        let previous = self.get(&key);
+        let previous = self.get(txn, &key);
         let pos = {
             let inner = self.0;
             let left = inner.map.get(&key);
@@ -95,12 +94,12 @@ impl Map {
 
     /// Returns a value stored under a given `key` within current map, or `None` if no entry
     /// with such `key` existed.
-    pub fn get(&self, key: &str) -> Option<Value> {
-        self.0.get(key)
+    pub fn get<T: ReadTxn>(&self, txn: &T, key: &str) -> Option<Value> {
+        self.0.get(txn, key)
     }
 
     /// Checks if an entry with given `key` can be found within current map.
-    pub fn contains(&self, key: &str) -> bool {
+    pub fn contains<T: ReadTxn>(&self, txn: &T, key: &str) -> bool {
         if let Some(ptr) = self.0.map.get(key) {
             if let Block::Item(item) = ptr.deref() {
                 return !item.is_deleted();
@@ -170,9 +169,10 @@ impl AsMut<Branch> for Map {
     }
 }
 
-pub struct MapIter<'a>(Entries<'a>);
+#[derive(Debug)]
+pub struct MapIter<'a, T>(Entries<'a, T>);
 
-impl<'a> Iterator for MapIter<'a> {
+impl<'a, T: ReadTxn> Iterator for MapIter<'a, T> {
     type Item = (&'a str, Value);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -186,9 +186,10 @@ impl<'a> Iterator for MapIter<'a> {
 }
 
 /// An unordered iterator over the keys of a [Map].
-pub struct Keys<'a>(Entries<'a>);
+#[derive(Debug)]
+pub struct Keys<'a, T>(Entries<'a, T>);
 
-impl<'a> Iterator for Keys<'a> {
+impl<'a, T: ReadTxn> Iterator for Keys<'a, T> {
     type Item = &'a str;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -198,9 +199,10 @@ impl<'a> Iterator for Keys<'a> {
 }
 
 /// Iterator over the values of a [Map].
-pub struct Values<'a>(Entries<'a>);
+#[derive(Debug)]
+pub struct Values<'a, T>(Entries<'a, T>);
 
-impl<'a> Iterator for Values<'a> {
+impl<'a, T: ReadTxn> Iterator for Values<'a, T> {
     type Item = Vec<Value>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -348,14 +350,17 @@ mod test {
         //m1m.insert(&mut t1, "y-text".to_owned(), m1a);
 
         //TODO: YArray within YMap
-        fn compare_all(m: &Map) {
-            assert_eq!(m.len(), 5);
-            assert_eq!(m.get(&"number".to_owned()), Some(Value::from(1f64)));
-            assert_eq!(m.get(&"boolean0".to_owned()), Some(Value::from(false)));
-            assert_eq!(m.get(&"boolean1".to_owned()), Some(Value::from(true)));
-            assert_eq!(m.get(&"string".to_owned()), Some(Value::from("hello Y")));
+        fn compare_all<T: ReadTxn>(m: &Map, txn: &T) {
+            assert_eq!(m.len(txn), 5);
+            assert_eq!(m.get(txn, &"number".to_owned()), Some(Value::from(1f64)));
+            assert_eq!(m.get(txn, &"boolean0".to_owned()), Some(Value::from(false)));
+            assert_eq!(m.get(txn, &"boolean1".to_owned()), Some(Value::from(true)));
             assert_eq!(
-                m.get(&"object".to_owned()),
+                m.get(txn, &"string".to_owned()),
+                Some(Value::from("hello Y"))
+            );
+            assert_eq!(
+                m.get(txn, &"object".to_owned()),
                 Some(Value::from({
                     let mut m = HashMap::new();
                     let mut n = HashMap::new();
@@ -366,12 +371,12 @@ mod test {
             );
         }
 
-        compare_all(&m1);
+        compare_all(&m1, &t1);
 
         let update = t1.encode_state_as_update_v1(&StateVector::default());
         t2.apply_update(Update::decode_v1(update.as_slice()).unwrap());
 
-        compare_all(&m2);
+        compare_all(&m2, &t2);
     }
 
     #[test]
@@ -391,8 +396,11 @@ mod test {
 
         t2.apply_update(Update::decode_v1(update.as_slice()).unwrap());
 
-        assert_eq!(m2.get(&"stuff".to_owned()), Some(Value::from("stuffy")));
-        assert_eq!(m2.get(&"null".to_owned()), Some(Value::Any(Any::Null)));
+        assert_eq!(
+            m2.get(&t2, &"stuff".to_owned()),
+            Some(Value::from("stuffy"))
+        );
+        assert_eq!(m2.get(&t2, &"null".to_owned()), Some(Value::Any(Any::Null)));
     }
 
     #[test]
@@ -414,8 +422,8 @@ mod test {
         t1.apply_update(Update::decode_v1(u2.as_slice()).unwrap());
         t2.apply_update(Update::decode_v1(u1.as_slice()).unwrap());
 
-        assert_eq!(m1.get(&"stuff".to_owned()), Some(Value::from("c1")));
-        assert_eq!(m2.get(&"stuff".to_owned()), Some(Value::from("c1")));
+        assert_eq!(m1.get(&t1, &"stuff".to_owned()), Some(Value::from("c1")));
+        assert_eq!(m2.get(&t2, &"stuff".to_owned()), Some(Value::from("c1")));
     }
 
     #[test]
@@ -429,19 +437,19 @@ mod test {
 
         m1.insert(&mut t1, key1.clone(), "c0");
         m1.insert(&mut t1, key2.clone(), "c1");
-        assert_eq!(m1.len(), 2);
+        assert_eq!(m1.len(&t1), 2);
 
         // remove 'stuff'
         assert_eq!(m1.remove(&mut t1, &key1), Some(Value::from("c0")));
-        assert_eq!(m1.len(), 1);
+        assert_eq!(m1.len(&t1), 1);
 
         // remove 'stuff' again - nothing should happen
         assert_eq!(m1.remove(&mut t1, &key1), None);
-        assert_eq!(m1.len(), 1);
+        assert_eq!(m1.len(&t1), 1);
 
         // remove 'other-stuff'
         assert_eq!(m1.remove(&mut t1, &key2), Some(Value::from("c1")));
-        assert_eq!(m1.len(), 0);
+        assert_eq!(m1.len(&t1), 0);
     }
 
     #[test]
@@ -454,9 +462,9 @@ mod test {
         m1.insert(&mut t1, "key2".to_owned(), "c1");
         m1.clear(&mut t1);
 
-        assert_eq!(m1.len(), 0);
-        assert_eq!(m1.get(&"key1".to_owned()), None);
-        assert_eq!(m1.get(&"key2".to_owned()), None);
+        assert_eq!(m1.len(&t1), 0);
+        assert_eq!(m1.get(&t1, &"key1".to_owned()), None);
+        assert_eq!(m1.get(&t1, &"key2".to_owned()), None);
 
         let d2 = Doc::with_client_id(2);
         let m2 = d2.get_map("map");
@@ -465,9 +473,9 @@ mod test {
         let u1 = t1.encode_state_as_update_v1(&StateVector::default());
         t2.apply_update(Update::decode_v1(u1.as_slice()).unwrap());
 
-        assert_eq!(m2.len(), 0);
-        assert_eq!(m2.get(&"key1".to_owned()), None);
-        assert_eq!(m2.get(&"key2".to_owned()), None);
+        assert_eq!(m2.len(&t2), 0);
+        assert_eq!(m2.get(&t2, &"key1".to_owned()), None);
+        assert_eq!(m2.get(&t2, &"key2".to_owned()), None);
     }
 
     #[test]
@@ -516,19 +524,19 @@ mod test {
             let map = doc.get_map("map");
 
             assert_eq!(
-                map.get(&"key1".to_owned()),
+                map.get(&map.transact(), &"key1".to_owned()),
                 None,
                 "'key1' entry for peer {} should be removed",
                 doc.client_id
             );
             assert_eq!(
-                map.get(&"key2".to_owned()),
+                map.get(&map.transact(), &"key2".to_owned()),
                 None,
                 "'key2' entry for peer {} should be removed",
                 doc.client_id
             );
             assert_eq!(
-                map.len(),
+                map.len(&map.transact()),
                 0,
                 "all entries for peer {} should be removed",
                 doc.client_id
@@ -563,7 +571,7 @@ mod test {
             let map = doc.get_map("map");
 
             assert_eq!(
-                map.get(&"stuff".to_owned()),
+                map.get(&map.transact(), &"stuff".to_owned()),
                 Some(Value::from("c3")),
                 "peer {} - map entry resolved to unexpected value",
                 doc.client_id
@@ -619,7 +627,7 @@ mod test {
             let map = doc.get_map("map");
 
             assert_eq!(
-                map.get(&"key1".to_owned()),
+                map.get(&map.transact(), &"key1".to_owned()),
                 None,
                 "entry 'key1' on peer {} should be removed",
                 doc.client_id
@@ -822,17 +830,25 @@ mod test {
         });
 
         map.insert(&mut doc.transact_mut(), "map", PrelimMap::<String>::new());
-        let nested = map.get("map").unwrap().to_ymap().unwrap();
+        let nested = map.get(&map.transact(), "map").unwrap().to_ymap().unwrap();
         nested.insert(
             &mut doc.transact_mut(),
             "array",
             PrelimArray::from(Vec::<String>::default()),
         );
-        let nested2 = nested.get("array").unwrap().to_yarray().unwrap();
+        let nested2 = nested
+            .get(&nested.transact(), "array")
+            .unwrap()
+            .to_yarray()
+            .unwrap();
         nested2.insert(&mut doc.transact_mut(), 0, "content");
 
         nested.insert(&mut doc.transact_mut(), "text", PrelimText("text"));
-        let nested_text = nested.get("text").unwrap().to_ytext().unwrap();
+        let nested_text = nested
+            .get(&nested.transact(), "text")
+            .unwrap()
+            .to_ytext()
+            .unwrap();
         nested_text.push(&mut doc.transact_mut(), "!");
 
         assert_eq!(*calls.borrow().deref(), 5);

@@ -278,19 +278,19 @@ impl Branch {
 
     /// Get iterator over (String, Block) entries of a map component of a current root type.
     /// Deleted blocks are skipped by this iterator.
-    pub(crate) fn entries(&self) -> Entries {
-        Entries::new(&self.map)
+    pub(crate) fn entries<'a, T: ReadTxn + 'a>(&'a self, txn: &'a T) -> Entries<'a, T> {
+        Entries::new(&self.map, txn)
     }
 
     /// Get iterator over Block entries of an array component of a current root type.
     /// Deleted blocks are skipped by this iterator.
-    pub(crate) fn iter(&self) -> Iter {
-        Iter::new(self.start.as_ref())
+    pub(crate) fn iter<'a, T: ReadTxn + 'a>(&'a self, txn: &'a T) -> Iter<'a, T> {
+        Iter::new(self.start.as_ref(), txn)
     }
 
     /// Returns a materialized value of non-deleted entry under a given `key` of a map component
     /// of a current root type.
-    pub(crate) fn get(&self, key: &str) -> Option<Value> {
+    pub(crate) fn get<T: ReadTxn>(&self, txn: &T, key: &str) -> Option<Value> {
         let block = self.map.get(key)?;
         match block.deref() {
             Block::Item(item) if !item.is_deleted() => item.content.get_last(),
@@ -588,14 +588,14 @@ impl Default for Value {
 
 impl Value {
     /// Converts current value into stringified representation.
-    pub fn to_string(self) -> String {
+    pub fn to_string<T: ReadTxn>(self, txn: &T) -> String {
         match self {
             Value::Any(a) => a.to_string(),
-            Value::YText(v) => v.to_string(),
-            Value::YArray(v) => v.to_json(&v.transact()).to_string(),
-            Value::YMap(v) => v.to_json(&v.transact()).to_string(),
-            Value::YXmlElement(v) => v.to_string(),
-            Value::YXmlText(v) => v.to_string(),
+            Value::YText(v) => v.to_string(txn),
+            Value::YArray(v) => v.to_json(txn).to_string(),
+            Value::YMap(v) => v.to_json(txn).to_string(),
+            Value::YXmlElement(v) => v.to_string(txn),
+            Value::YXmlText(v) => v.to_string(txn),
         }
     }
 
@@ -662,11 +662,11 @@ impl ToJson for Value {
     fn to_json<T: ReadTxn>(&self, txn: &T) -> Any {
         match self {
             Value::Any(a) => a.clone(),
-            Value::YText(v) => Any::String(v.to_string().into_boxed_str()),
+            Value::YText(v) => Any::String(v.to_string(txn).into_boxed_str()),
             Value::YArray(v) => v.to_json(txn),
             Value::YMap(v) => v.to_json(txn),
-            Value::YXmlElement(v) => Any::String(v.to_string().into_boxed_str()),
-            Value::YXmlText(v) => Any::String(v.to_string().into_boxed_str()),
+            Value::YXmlElement(v) => Any::String(v.to_string(txn).into_boxed_str()),
+            Value::YXmlText(v) => Any::String(v.to_string(txn).into_boxed_str()),
         }
     }
 }
@@ -757,19 +757,22 @@ impl std::fmt::Display for Branch {
     }
 }
 
-pub(crate) struct Entries<'a> {
+#[derive(Debug)]
+pub(crate) struct Entries<'a, T> {
     iter: std::collections::hash_map::Iter<'a, Rc<str>, BlockPtr>,
+    txn: &'a T,
 }
 
-impl<'a> Entries<'a> {
-    pub(crate) fn new(source: &'a HashMap<Rc<str>, BlockPtr>) -> Self {
+impl<'a, T: ReadTxn> Entries<'a, T> {
+    pub(crate) fn new(source: &'a HashMap<Rc<str>, BlockPtr>, txn: &'a T) -> Self {
         Entries {
             iter: source.iter(),
+            txn,
         }
     }
 }
 
-impl<'a> Iterator for Entries<'a> {
+impl<'a, T: ReadTxn> Iterator for Entries<'a, T> {
     type Item = (&'a str, &'a Item);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -792,17 +795,18 @@ impl<'a> Iterator for Entries<'a> {
     }
 }
 
-pub(crate) struct Iter<'a> {
+pub(crate) struct Iter<'a, T> {
     ptr: Option<&'a BlockPtr>,
+    txn: &'a T,
 }
 
-impl<'a> Iter<'a> {
-    fn new(ptr: Option<&'a BlockPtr>) -> Self {
-        Iter { ptr }
+impl<'a, T: ReadTxn> Iter<'a, T> {
+    fn new(ptr: Option<&'a BlockPtr>, txn: &'a T) -> Self {
+        Iter { ptr, txn }
     }
 }
 
-impl<'a> Iterator for Iter<'a> {
+impl<'a, T: ReadTxn> Iterator for Iter<'a, T> {
     type Item = &'a Item;
 
     fn next(&mut self) -> Option<Self::Item> {

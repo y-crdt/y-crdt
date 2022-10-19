@@ -38,7 +38,7 @@ pub struct Array(BranchPtr);
 
 impl Array {
     /// Returns a number of elements stored in current array.
-    pub fn len(&self) -> u32 {
+    pub fn len<T: ReadTxn>(&self, txn: &T) -> u32 {
         self.0.len()
     }
 
@@ -71,7 +71,7 @@ impl Array {
 
     /// Inserts given `value` at the end of the current array.
     pub fn push_back<V: Prelim>(&self, txn: &mut TransactionMut, value: V) {
-        let len = self.len();
+        let len = self.len(txn);
         self.insert(txn, len, value)
     }
 
@@ -465,31 +465,31 @@ mod test {
             a.remove_range(&mut txn, 0, 1); // len: 3
             a.insert(&mut txn, 0, 0); // len: 4
 
-            assert_eq!(a.len(), 4);
+            assert_eq!(a.len(&txn), 4);
         }
         {
             let mut txn = d.transact_mut();
             a.remove_range(&mut txn, 1, 1); // len: 3
-            assert_eq!(a.len(), 3);
+            assert_eq!(a.len(&txn), 3);
 
             a.insert(&mut txn, 1, 1); // len: 4
-            assert_eq!(a.len(), 4);
+            assert_eq!(a.len(&txn), 4);
 
             a.remove_range(&mut txn, 2, 1); // len: 3
-            assert_eq!(a.len(), 3);
+            assert_eq!(a.len(&txn), 3);
 
             a.insert(&mut txn, 2, 2); // len: 4
-            assert_eq!(a.len(), 4);
+            assert_eq!(a.len(&txn), 4);
         }
 
         let mut txn = d.transact_mut();
-        assert_eq!(a.len(), 4);
+        assert_eq!(a.len(&txn), 4);
 
         a.remove_range(&mut txn, 1, 1);
-        assert_eq!(a.len(), 3);
+        assert_eq!(a.len(&txn), 3);
 
         a.insert(&mut txn, 1, 1);
-        assert_eq!(a.len(), 4);
+        assert_eq!(a.len(&txn), 4);
     }
 
     #[test]
@@ -905,10 +905,10 @@ mod test {
         fn move_one(doc: &mut Doc, rng: &mut StdRng) {
             let yarray = doc.get_array("array");
             let mut txn = doc.transact_mut();
-            if yarray.len() != 0 {
-                let pos = rng.between(0, yarray.len() - 1);
+            if yarray.len(&txn) != 0 {
+                let pos = rng.between(0, yarray.len(&txn) - 1);
                 let len = 1;
-                let new_pos_adjusted = rng.between(0, yarray.len() - 1);
+                let new_pos_adjusted = rng.between(0, yarray.len(&txn) - 1);
                 let new_pos = new_pos_adjusted + if new_pos_adjusted > pos { len } else { 0 };
                 if let Any::Array(expected) = yarray.to_json(&txn) {
                     let mut expected = Vec::from(expected);
@@ -938,7 +938,7 @@ mod test {
                 .into_iter()
                 .map(|_| Any::BigInt(unique_number))
                 .collect();
-            let mut pos = rng.between(0, yarray.len()) as usize;
+            let mut pos = rng.between(0, yarray.len(&txn)) as usize;
             if let Any::Array(expected) = yarray.to_json(&txn) {
                 let mut expected = Vec::from(expected);
                 yarray.insert_range(&mut txn, pos as u32, content.clone());
@@ -957,7 +957,7 @@ mod test {
         fn insert_type_array(doc: &mut Doc, rng: &mut StdRng) {
             let yarray = doc.get_array("array");
             let mut txn = doc.transact_mut();
-            let pos = rng.between(0, yarray.len());
+            let pos = rng.between(0, yarray.len(&txn));
             yarray.insert(&mut txn, pos, PrelimArray::from([1, 2, 3, 4]));
             if let Value::YArray(array2) = yarray.get(&txn, pos).unwrap() {
                 let expected: Box<[Any]> = (1..=4).map(|i| Any::Number(i as f64)).collect();
@@ -970,7 +970,7 @@ mod test {
         fn insert_type_map(doc: &mut Doc, rng: &mut StdRng) {
             let yarray = doc.get_array("array");
             let mut txn = doc.transact_mut();
-            let pos = rng.between(0, yarray.len());
+            let pos = rng.between(0, yarray.len(&txn));
             yarray.insert(&mut txn, pos, PrelimMap::<i32>::from(HashMap::default()));
             if let Value::YMap(map) = yarray.get(&txn, pos).unwrap() {
                 map.insert(&mut txn, "someprop".to_string(), 42);
@@ -984,14 +984,14 @@ mod test {
         fn delete(doc: &mut Doc, rng: &mut StdRng) {
             let yarray = doc.get_array("array");
             let mut txn = doc.transact_mut();
-            let len = yarray.len();
+            let len = yarray.len(&txn);
             if len > 0 {
                 let pos = rng.between(0, len - 1);
                 let del_len = rng.between(1, 2.min(len - pos));
                 if rng.gen_bool(0.5) {
                     if let Value::YArray(array2) = yarray.get(&txn, pos).unwrap() {
-                        let pos = rng.between(0, array2.len() - 1);
-                        let del_len = rng.between(0, 2.min(array2.len() - pos));
+                        let pos = rng.between(0, array2.len(&txn) - 1);
+                        let del_len = rng.between(0, 2.min(array2.len(&txn) - pos));
                         array2.remove_range(&mut txn, pos, del_len);
                     }
                 } else {
@@ -1211,7 +1211,7 @@ mod test {
         exchange_updates(&[&d1, &d2]);
         exchange_updates(&[&d1, &d2]); // move cycles may not be detected within a single update exchange
 
-        assert_eq!(a1.len(), 4);
+        assert_eq!(a1.len(&a1.transact()), 4);
         assert_eq!(a1.to_json(&d1.transact()), a2.to_json(&d2.transact()));
     }
 }

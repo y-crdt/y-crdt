@@ -422,7 +422,7 @@ pub fn apply_update_v2(doc: &mut YDoc, diff: Uint8Array) -> Result<(), JsValue> 
 
 #[wasm_bindgen]
 extern "C" {
-    #[wasm_bindgen(typescript_type = "YTransaction | null")]
+    #[wasm_bindgen(typescript_type = "YTransaction | undefined")]
     pub type ImplicitTransaction;
 }
 
@@ -1558,27 +1558,45 @@ impl YText {
     /// Returns length of an underlying string stored in this `YText` instance,
     /// understood as a number of UTF-8 encoded bytes.
     #[wasm_bindgen(method, getter)]
-    pub fn length(&self) -> u32 {
+    pub fn length(&self, txn: &ImplicitTransaction) -> u32 {
         match &*self.0.borrow() {
-            SharedType::Integrated(v) => v.len(),
+            SharedType::Integrated(v) => {
+                if let Some(txn) = get_txn(txn) {
+                    v.len(txn)
+                } else {
+                    v.len(&v.transact())
+                }
+            }
             SharedType::Prelim(v) => v.len() as u32,
         }
     }
 
     /// Returns an underlying shared string stored in this data type.
     #[wasm_bindgen(js_name = toString)]
-    pub fn to_string(&self) -> String {
+    pub fn to_string(&self, txn: &ImplicitTransaction) -> String {
         match &*self.0.borrow() {
-            SharedType::Integrated(v) => v.to_string(),
+            SharedType::Integrated(v) => {
+                if let Some(txn) = get_txn(txn) {
+                    v.to_string(txn)
+                } else {
+                    v.to_string(&v.transact())
+                }
+            }
             SharedType::Prelim(v) => v.clone(),
         }
     }
 
     /// Returns an underlying shared string stored in this data type.
     #[wasm_bindgen(js_name = toJson)]
-    pub fn to_json(&self) -> JsValue {
+    pub fn to_json(&self, txn: &ImplicitTransaction) -> JsValue {
         match &*self.0.borrow() {
-            SharedType::Integrated(v) => JsValue::from(&v.to_string()),
+            SharedType::Integrated(v) => {
+                if let Some(txn) = get_txn(txn) {
+                    JsValue::from(&v.to_string(txn))
+                } else {
+                    JsValue::from(&v.to_string(&v.transact()))
+                }
+            }
             SharedType::Prelim(v) => JsValue::from(v),
         }
     }
@@ -1705,14 +1723,15 @@ impl YText {
             SharedType::Integrated(v) => {
                 if let Some(txn) = get_txn_mut(txn) {
                     if let Some(attrs) = Self::parse_attrs(attributes) {
-                        v.insert_with_attributes(txn, v.len(), chunk, attrs)
+                        v.insert_with_attributes(txn, v.len(txn), chunk, attrs)
                     } else {
                         v.push(txn, chunk)
                     }
                 } else {
                     let mut txn = v.transact_mut();
                     if let Some(attrs) = Self::parse_attrs(attributes) {
-                        v.insert_with_attributes(&mut txn, v.len(), chunk, attrs)
+                        let index = v.len(&txn);
+                        v.insert_with_attributes(&mut txn, index, chunk, attrs)
                     } else {
                         v.push(&mut txn, chunk)
                     }
@@ -1991,9 +2010,15 @@ impl YArray {
 
     /// Returns a number of elements stored within this instance of `YArray`.
     #[wasm_bindgen(method, getter)]
-    pub fn length(&self) -> u32 {
+    pub fn length(&self, txn: &ImplicitTransaction) -> u32 {
         match &*self.0.borrow() {
-            SharedType::Integrated(v) => v.len(),
+            SharedType::Integrated(v) => {
+                if let Some(txn) = get_txn(txn) {
+                    v.len(txn)
+                } else {
+                    v.len(&v.transact())
+                }
+            }
             SharedType::Prelim(v) => v.len() as u32,
         }
     }
@@ -2045,7 +2070,7 @@ impl YArray {
     /// Appends a range of `items` at the end of this `YArray` instance.
     #[wasm_bindgen(js_name = push)]
     pub fn push(&self, items: Vec<JsValue>, txn: &ImplicitTransaction) {
-        let index = self.length();
+        let index = self.length(txn);
         self.insert(index, items, txn);
     }
 
@@ -2341,9 +2366,15 @@ impl YMap {
 
     /// Returns a number of entries stored within this instance of `YMap`.
     #[wasm_bindgen(method)]
-    pub fn length(&self) -> u32 {
+    pub fn length(&self, txn: &ImplicitTransaction) -> u32 {
         match &*self.0.borrow() {
-            SharedType::Integrated(v) => v.len(),
+            SharedType::Integrated(v) => {
+                if let Some(txn) = get_txn(txn) {
+                    v.len(txn)
+                } else {
+                    v.len(&v.transact())
+                }
+            }
             SharedType::Prelim(v) => v.len() as u32,
         }
     }
@@ -2410,10 +2441,16 @@ impl YMap {
     /// Returns value of an entry stored under given `key` within this instance of `YMap`,
     /// or `undefined` if no such entry existed.
     #[wasm_bindgen(js_name = get)]
-    pub fn get(&self, key: &str) -> JsValue {
+    pub fn get(&self, key: &str, txn: &ImplicitTransaction) -> JsValue {
         match &*self.0.borrow() {
             SharedType::Integrated(v) => {
-                if let Some(value) = v.get(key) {
+                let value = if let Some(txn) = get_txn(txn) {
+                    v.get(txn, key)
+                } else {
+                    v.get(&v.transact(), key)
+                };
+
+                if let Some(value) = value {
                     value_into_js(value)
                 } else {
                     JsValue::undefined()
@@ -2453,11 +2490,13 @@ impl YMap {
     /// }
     /// ```
     #[wasm_bindgen(js_name = entries)]
-    pub fn entries(&self) -> JsValue {
+    pub fn entries(&self, txn: &YTransaction) -> JsValue {
         to_iter(match &*self.0.borrow() {
             SharedType::Integrated(v) => unsafe {
                 let this: *const Map = v;
-                let static_iter: ManuallyDrop<MapIter<'static>> = ManuallyDrop::new((*this).iter());
+                let txn: &'static YTransaction = std::mem::transmute(txn);
+                let static_iter: ManuallyDrop<MapIter<'static, YTransaction>> =
+                    ManuallyDrop::new((*this).iter(txn));
                 YMapIterator(static_iter).into()
             },
             SharedType::Prelim(v) => unsafe {
@@ -2510,7 +2549,7 @@ impl YMap {
 }
 
 #[wasm_bindgen]
-pub struct YMapIterator(ManuallyDrop<MapIter<'static>>);
+pub struct YMapIterator(ManuallyDrop<MapIter<'static, YTransaction>>);
 
 impl Drop for YMapIterator {
     fn drop(&mut self) {
@@ -2592,8 +2631,13 @@ impl YXmlElement {
 
     /// Returns a number of child XML nodes stored within this `YXMlElement` instance.
     #[wasm_bindgen(js_name = length)]
-    pub fn length(&self) -> u32 {
-        self.0.len()
+    pub fn length(&self, txn: &ImplicitTransaction) -> u32 {
+        if let Some(txn) = get_txn(txn) {
+            self.0.len(txn)
+        } else {
+            let txn = self.0.transact();
+            self.0.len(&txn)
+        }
     }
 
     /// Inserts a new instance of `YXmlElement` as a child of this XML node and returns it.
@@ -2704,8 +2748,12 @@ impl YXmlElement {
 
     /// Returns a string representation of this XML node.
     #[wasm_bindgen(js_name = toString)]
-    pub fn to_string(&self) -> String {
-        self.0.to_string()
+    pub fn to_string(&self, txn: &ImplicitTransaction) -> String {
+        if let Some(txn) = get_txn(txn) {
+            self.0.to_string(txn)
+        } else {
+            self.0.to_string(&self.0.transact())
+        }
     }
 
     /// Sets a `name` and `value` as new attribute for this XML node. If an attribute with the same
@@ -2723,8 +2771,13 @@ impl YXmlElement {
     /// Returns a value of an attribute given its `name`. If no attribute with such name existed,
     /// `null` will be returned.
     #[wasm_bindgen(js_name = getAttribute)]
-    pub fn get_attribute(&self, name: &str) -> Option<String> {
-        self.0.get_attribute(name)
+    pub fn get_attribute(&self, name: &str, txn: &ImplicitTransaction) -> Option<String> {
+        if let Some(txn) = get_txn(txn) {
+            self.0.get_attribute(txn, name)
+        } else {
+            let txn = self.0.transact();
+            self.0.get_attribute(&txn, name)
+        }
     }
 
     /// Removes an attribute from this XML node, given its `name`.
@@ -2741,11 +2794,12 @@ impl YXmlElement {
     /// Returns an iterator that enables to traverse over all attributes of this XML node in
     /// unspecified order.
     #[wasm_bindgen(js_name = attributes)]
-    pub fn attributes(&self) -> JsValue {
+    pub fn attributes(&self, txn: &YTransaction) -> JsValue {
         to_iter(unsafe {
             let this: *const XmlElement = &self.0;
-            let static_iter: ManuallyDrop<Attributes<'static>> =
-                ManuallyDrop::new((*this).attributes());
+            let txn: &'static YTransaction = std::mem::transmute(txn);
+            let static_iter: ManuallyDrop<Attributes<'static, YTransaction>> =
+                ManuallyDrop::new((*this).attributes(txn));
             YXmlAttributes(static_iter).into()
         })
     }
@@ -2753,11 +2807,12 @@ impl YXmlElement {
     /// Returns an iterator that enables a deep traversal of this XML node - starting from first
     /// child over this XML node successors using depth-first strategy.
     #[wasm_bindgen(js_name = treeWalker)]
-    pub fn tree_walker(&self) -> JsValue {
+    pub fn tree_walker(&self, txn: &YTransaction) -> JsValue {
         to_iter(unsafe {
             let this: *const XmlElement = &self.0;
-            let static_iter: ManuallyDrop<TreeWalker<'static>> =
-                ManuallyDrop::new((*this).successors());
+            let txn: &'static YTransaction = std::mem::transmute(txn);
+            let static_iter: ManuallyDrop<TreeWalker<'static, YTransaction>> =
+                ManuallyDrop::new((*this).successors(txn));
             YXmlTreeWalker(static_iter).into()
         })
     }
@@ -2792,7 +2847,7 @@ impl YXmlElement {
 }
 
 #[wasm_bindgen]
-pub struct YXmlAttributes(ManuallyDrop<Attributes<'static>>);
+pub struct YXmlAttributes(ManuallyDrop<Attributes<'static, YTransaction>>);
 
 impl Drop for YXmlAttributes {
     fn drop(&mut self) {
@@ -2823,7 +2878,7 @@ impl YXmlAttributes {
 }
 
 #[wasm_bindgen]
-pub struct YXmlTreeWalker(ManuallyDrop<TreeWalker<'static>>);
+pub struct YXmlTreeWalker(ManuallyDrop<TreeWalker<'static, YTransaction>>);
 
 impl Drop for YXmlTreeWalker {
     fn drop(&mut self) {
@@ -2868,8 +2923,13 @@ impl YXmlText {
     /// Returns length of an underlying string stored in this `YXmlText` instance,
     /// understood as a number of UTF-8 encoded bytes.
     #[wasm_bindgen(method, getter)]
-    pub fn length(&self) -> u32 {
-        self.0.len()
+    pub fn length(&self, txn: &ImplicitTransaction) -> u32 {
+        if let Some(txn) = get_txn(txn) {
+            self.0.len(txn)
+        } else {
+            let txn = self.0.transact();
+            self.0.len(&txn)
+        }
     }
 
     /// Inserts a given `chunk` of text into this `YXmlText` instance, starting at a given `index`.
@@ -2950,7 +3010,12 @@ impl YXmlText {
     /// with a formatting blocks.
     #[wasm_bindgen(js_name = push)]
     pub fn push(&self, chunk: &str, attrs: JsValue, txn: &ImplicitTransaction) {
-        let index = self.0.len();
+        let index = if let Some(txn) = get_txn(txn) {
+            self.0.len(txn)
+        } else {
+            let txn = self.0.transact();
+            self.0.len(&txn)
+        };
         self.insert(index as i32, chunk, attrs, txn)
     }
 
@@ -3002,8 +3067,13 @@ impl YXmlText {
 
     /// Returns an underlying string stored in this `YXmlText` instance.
     #[wasm_bindgen(js_name = toString)]
-    pub fn to_string(&self) -> String {
-        self.0.to_string()
+    pub fn to_string(&self, txn: &ImplicitTransaction) -> String {
+        if let Some(txn) = get_txn(txn) {
+            self.0.to_string(txn)
+        } else {
+            let txn = self.0.transact();
+            self.0.to_string(&txn)
+        }
     }
 
     /// Sets a `name` and `value` as new attribute for this XML node. If an attribute with the same
@@ -3021,8 +3091,13 @@ impl YXmlText {
     /// Returns a value of an attribute given its `name`. If no attribute with such name existed,
     /// `null` will be returned.
     #[wasm_bindgen(js_name = getAttribute)]
-    pub fn get_attribute(&self, name: &str) -> Option<String> {
-        self.0.get_attribute(name)
+    pub fn get_attribute(&self, name: &str, txn: &ImplicitTransaction) -> Option<String> {
+        if let Some(txn) = get_txn(txn) {
+            self.0.get_attribute(txn, name)
+        } else {
+            let txn = self.0.transact();
+            self.0.get_attribute(&txn, name)
+        }
     }
 
     /// Removes an attribute from this XML node, given its `name`.
@@ -3039,10 +3114,11 @@ impl YXmlText {
     /// Returns an iterator that enables to traverse over all attributes of this XML node in
     /// unspecified order.
     #[wasm_bindgen(js_name = attributes)]
-    pub fn attributes(&self) -> YXmlAttributes {
+    pub fn attributes(&self, txn: &YTransaction) -> YXmlAttributes {
         let this: *const XmlText = &self.0;
-        let static_iter: ManuallyDrop<Attributes<'static>> =
-            unsafe { ManuallyDrop::new((*this).attributes()) };
+        let txn: &'static YTransaction = unsafe { std::mem::transmute(txn) };
+        let static_iter: ManuallyDrop<Attributes<'static, YTransaction>> =
+            unsafe { ManuallyDrop::new((*this).attributes(txn)) };
         YXmlAttributes(static_iter)
     }
 
@@ -3119,7 +3195,7 @@ impl Prelim for JsValueWrapper {
                         if let SharedType::Prelim(items) =
                             v.0.replace(SharedType::Integrated(array.clone()))
                         {
-                            let len = array.len();
+                            let len = array.len(txn);
                             insert_at(&array, txn, len, items);
                         }
                     }
