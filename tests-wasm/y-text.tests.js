@@ -35,11 +35,11 @@ export const testDeletes = tc => {
     var x = d1.getText('test')
 
     x.push("hello world!")
-    t.compare(x.length, 12)
+    t.compare(x.length(), 12)
     x.delete(5, 6)
-    t.compare(x.length, 6)
+    t.compare(x.length(), 6)
     x.insert(5, " Yrs")
-    t.compare(x.length, 10)
+    t.compare(x.length(), 10)
 
     const expected = "hello Yrs!"
 

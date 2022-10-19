@@ -86,11 +86,13 @@ export const testIterator = tc => {
         'b': 2,
         'c': 3
     }
-    for (let [key, value] of x.entries()) {
-        let v = expected[key]
-        t.compare(value, v)
-        delete expected[key]
-    }
+    d1.transact(txn => {
+        for (let [key, value] of x.entries(txn)) {
+            let v = expected[key]
+            t.compare(value, v)
+            delete expected[key]
+        }
+    })
 }
 
 /**

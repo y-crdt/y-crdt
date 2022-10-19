@@ -1557,7 +1557,7 @@ impl YText {
 
     /// Returns length of an underlying string stored in this `YText` instance,
     /// understood as a number of UTF-8 encoded bytes.
-    #[wasm_bindgen(method, getter)]
+    #[wasm_bindgen(method)]
     pub fn length(&self, txn: &ImplicitTransaction) -> u32 {
         match &*self.0.borrow() {
             SharedType::Integrated(v) => {
@@ -2009,7 +2009,7 @@ impl YArray {
     }
 
     /// Returns a number of elements stored within this instance of `YArray`.
-    #[wasm_bindgen(method, getter)]
+    #[wasm_bindgen(method)]
     pub fn length(&self, txn: &ImplicitTransaction) -> u32 {
         match &*self.0.borrow() {
             SharedType::Integrated(v) => {
@@ -2922,7 +2922,7 @@ pub struct YXmlText(XmlText);
 impl YXmlText {
     /// Returns length of an underlying string stored in this `YXmlText` instance,
     /// understood as a number of UTF-8 encoded bytes.
-    #[wasm_bindgen(method, getter)]
+    #[wasm_bindgen(method)]
     pub fn length(&self, txn: &ImplicitTransaction) -> u32 {
         if let Some(txn) = get_txn(txn) {
             self.0.len(txn)

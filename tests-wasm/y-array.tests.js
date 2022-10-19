@@ -115,7 +115,7 @@ export const testIterator = tc => {
     const x = d1.getArray('test')
 
     x.insert(0, [1, 2, 3])
-    t.compare(x.length, 3)
+    t.compare(x.length(), 3)
 
     let i = 1;
     let txn = d1.readTransaction()

@@ -34,7 +34,7 @@ export const testAttributes = tc => {
         root.setAttribute('key2', 'value2', txn)
 
         let obj = {}
-        for (let [key,value] of root.attributes()) {
+        for (let [key,value] of root.attributes(txn)) {
             obj[key] = value
         }
         return obj
@@ -48,8 +48,8 @@ export const testAttributes = tc => {
     actual = d1.transact(txn => {
         root.removeAttribute('key1', txn)
         return {
-            key1: root.getAttribute('key1'),
-            key2: root.getAttribute('key2')
+            key1: root.getAttribute('key1', txn),
+            key2: root.getAttribute('key2', txn)
         }
     })
 
@@ -104,9 +104,11 @@ export const testTreeWalker = tc => {
     })
 
     const actual = []
-    for (let child of root.treeWalker()) {
-        actual.push(child.toString())
-    }
+    d1.transact(txn => {
+        for (let child of root.treeWalker(txn)) {
+            actual.push(child.toString(txn))
+        }
+    })
 
     const expected = [
         '<p>hello</p>',
