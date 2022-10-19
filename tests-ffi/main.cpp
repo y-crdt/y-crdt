@@ -55,8 +55,8 @@ TEST_CASE("Update exchange basic") {
     ybinary_destroy(u2, u2_len);
 
     // make sure both peers produce the same output
-    char* str1 = ytext_string(txt1);
-    char* str2 = ytext_string(txt2);
+    char* str1 = ytext_string(txt1, t1);
+    char* str2 = ytext_string(txt2, t2);
 
     REQUIRE(!strcmp(str1, str2));
 
@@ -79,9 +79,9 @@ TEST_CASE("YText basic") {
     ytext_insert(txt, txn, 5, " world", NULL);
     ytext_remove_range(txt, txn, 0, 6);
 
-    REQUIRE_EQ(ytext_len(txt), 5);
+    REQUIRE_EQ(ytext_len(txt, txn), 5);
 
-    char* str = ytext_string(txt);
+    char* str = ytext_string(txt, txn);
     REQUIRE(!strcmp(str, "world"));
 
     ystring_destroy(str);
@@ -165,10 +165,10 @@ TEST_CASE("YMap basic") {
     ymap_insert(map, txn, "b", &b);
     free(array);
 
-    REQUIRE_EQ(ymap_len(map), 2);
+    REQUIRE_EQ(ymap_len(map, txn), 2);
 
     // iterate over entries
-    YMapIter* i = ymap_iter(map);
+    YMapIter* i = ymap_iter(map, txn);
     YMapEntry* curr;
 
     YMapEntry** acc = (YMapEntry**)malloc(2 * sizeof(YMapEntry*));
@@ -216,7 +216,7 @@ TEST_CASE("YMap basic") {
     REQUIRE_EQ(removed, 0);
 
     // get 'b' and read its contents
-    YOutput* out = ymap_get(map, "b");
+    YOutput* out = ymap_get(map, txn, "b");
     YOutput* output = youtput_read_json_array(out);
     REQUIRE_EQ(out->len, 2);
     REQUIRE_EQ(*youtput_read_long(&output[0]), 11);
@@ -225,7 +225,7 @@ TEST_CASE("YMap basic") {
 
     // clear map
     ymap_remove_all(map, txn);
-    REQUIRE_EQ(ymap_len(map), 0);
+    REQUIRE_EQ(ymap_len(map, txn), 0);
 
     ytransaction_commit(txn);
     ydoc_destroy(doc);
@@ -240,7 +240,7 @@ TEST_CASE("YXmlElement basic") {
     yxmlelem_insert_attr(xml, txn, "key1", "value1");
     yxmlelem_insert_attr(xml, txn, "key2", "value2");
 
-    YXmlAttrIter* i = yxmlelem_attr_iter(xml);
+    YXmlAttrIter* i = yxmlelem_attr_iter(xml, txn);
     YXmlAttr* attr;
 
     YXmlAttr** attrs = (YXmlAttr**)malloc(2 * sizeof(YXmlAttr*));
@@ -277,7 +277,7 @@ TEST_CASE("YXmlElement basic") {
     Branch* inner_txt = yxmlelem_insert_text(inner, txn, 0);
     yxmltext_insert(inner_txt, txn, 0, "hello", NULL);
 
-    REQUIRE_EQ(yxmlelem_child_len(xml), 1);
+    REQUIRE_EQ(yxmlelem_child_len(xml, txn), 1);
 
     Branch* txt = yxmlelem_insert_text(xml, txn, 1);
     yxmltext_insert(txt, txn, 0, "world", NULL);
@@ -304,7 +304,7 @@ TEST_CASE("YXmlElement basic") {
     YOutput* curr = yxmlelem_first_child(xml);
     Branch* first = youtput_read_yxmlelem(curr);
     REQUIRE(yxmlelem_prev_sibling(first) == NULL);
-    char* str = yxmlelem_string(first);
+    char* str = yxmlelem_string(first, txn);
     REQUIRE(!strcmp(str, "<p>hello</p>"));
     ystring_destroy(str);
 
@@ -312,7 +312,7 @@ TEST_CASE("YXmlElement basic") {
     youtput_destroy(curr);
     Branch* second = youtput_read_yxmltext(next);
     REQUIRE(yxmltext_next_sibling(second) == NULL);
-    str = yxmltext_string(second);
+    str = yxmltext_string(second, txn);
     REQUIRE(!(strcmp(str, "world")));
     ystring_destroy(str);
 
@@ -320,26 +320,26 @@ TEST_CASE("YXmlElement basic") {
     // - p
     // - hello
     // - world
-    YXmlTreeWalker* w = yxmlelem_tree_walker(xml);
+    YXmlTreeWalker* w = yxmlelem_tree_walker(xml, txn);
     Branch* e;
 
     curr = yxmlelem_tree_walker_next(w);
     e = youtput_read_yxmlelem(curr);
-    str = yxmlelem_string(e);
+    str = yxmlelem_string(e, txn);
     REQUIRE(!strcmp(str, "<p>hello</p>"));
     ystring_destroy(str);
     youtput_destroy(curr);
 
     curr = yxmlelem_tree_walker_next(w);
     Branch* t = youtput_read_yxmltext(curr);
-    str = yxmltext_string(t);
+    str = yxmltext_string(t, txn);
     REQUIRE(!strcmp(str, "hello"));
     ystring_destroy(str);
     youtput_destroy(curr);
 
     curr = yxmlelem_tree_walker_next(w);
     t = youtput_read_yxmltext(curr);
-    str = yxmltext_string(t);
+    str = yxmltext_string(t, txn);
     REQUIRE(!strcmp(str, "world"));
     ystring_destroy(str);
     youtput_destroy(curr);
@@ -1072,7 +1072,7 @@ TEST_CASE("YMap deep observe") {
 
     /* map.get('map').set(txn, 'array', new Y.YArray()) */
     txn = ydoc_write_transaction(doc);
-    YOutput* output = ymap_get(map, "map");
+    YOutput* output = ymap_get(map, txn, "map");
     Branch* nested = youtput_read_ymap(output);
     input = yinput_yarray(NULL, 0);
     ymap_insert(nested, txn, "array", &input);
@@ -1088,9 +1088,9 @@ TEST_CASE("YMap deep observe") {
 
     /* map.get('map').get('array').insert(txn, 0, ['content']) */
     txn = ydoc_write_transaction(doc);
-    output = ymap_get(map, "map");
+    output = ymap_get(map, txn, "map");
     nested = youtput_read_ymap(output);
-    output = ymap_get(nested, "array");
+    output = ymap_get(nested, txn, "array");
     nested = youtput_read_yarray(output);
     input = yinput_string("content");
     yarray_insert_range(nested, txn, 0, &input, 1);
@@ -1370,7 +1370,7 @@ TEST_CASE("YDoc snapshots") {
 
     ytransaction_apply(txn, update, update_len);
 
-    char* str = ytext_string(txt);
+    char* str = ytext_string(txt, txn);
     REQUIRE(!strcmp(str, "hello"));
 
     ystring_destroy(str);

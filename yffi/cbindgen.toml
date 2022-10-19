@@ -93,6 +93,9 @@ parse_deps = false
 [export]
 exclude = [
     "ArrayIter",
+    "MapIter",
+    "Attributes",
+    "TreeWalker"
 ]
 
 [export.rename]
