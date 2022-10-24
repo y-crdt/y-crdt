@@ -160,10 +160,11 @@ mod test {
     use crate::observer::Observer;
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::Arc;
+    use std::thread::spawn;
 
     #[test]
     fn subscription() {
-        let eh: Observer<u32> = Observer::new();
+        let o: Observer<u32> = Observer::new();
         let s1_state = Arc::new(AtomicU32::new(0));
         let s2_state = Arc::new(AtomicU32::new(0));
 
@@ -171,21 +172,45 @@ mod test {
             let a = s1_state.clone();
             let b = s2_state.clone();
 
-            let _s1 = eh.subscribe(move |value| a.store(*value, Ordering::Release));
-            let _s2 = eh.subscribe(move |value| b.store(*value * 2, Ordering::Release));
+            let _s1 = o.subscribe(move |value| a.store(*value, Ordering::Release));
+            let _s2 = o.subscribe(move |value| b.store(*value * 2, Ordering::Release));
 
-            eh.publish(&1);
+            o.publish(&1);
             assert_eq!(s1_state.load(Ordering::Acquire), 1);
             assert_eq!(s2_state.load(Ordering::Acquire), 2);
 
-            eh.publish(&2);
+            o.publish(&2);
             assert_eq!(s1_state.load(Ordering::Acquire), 2);
             assert_eq!(s2_state.load(Ordering::Acquire), 4);
         }
 
         // subscriptions were dropped, we don't expect updates to be propagated
-        eh.publish(&3);
+        o.publish(&3);
         assert_eq!(s1_state.load(Ordering::Acquire), 2);
         assert_eq!(s2_state.load(Ordering::Acquire), 4);
+    }
+
+    #[test]
+    fn multi_threading() {
+        let o: Observer<u32> = Observer::new();
+
+        let s1_state = Arc::new(AtomicU32::new(0));
+        let a = s1_state.clone();
+        let sub1 = o.subscribe(move |value| a.store(*value, Ordering::Release));
+
+        let s2_state = Arc::new(AtomicU32::new(0));
+        let b = s2_state.clone();
+        let sub2 = o.subscribe(move |value| b.store(*value, Ordering::Release));
+
+        let handle = spawn(move || {
+            o.publish(&1);
+            drop(sub1);
+            drop(sub2);
+        });
+
+        handle.join().unwrap();
+
+        assert_eq!(s1_state.load(Ordering::Acquire), 1);
+        assert_eq!(s2_state.load(Ordering::Acquire), 1);
     }
 }
