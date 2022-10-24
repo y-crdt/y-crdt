@@ -37,7 +37,7 @@ mod utils;
 #[cfg(test)]
 mod compatibility_tests;
 
-mod atomic;
+pub mod atomic;
 mod block_iter;
 mod moving;
 pub mod observer;

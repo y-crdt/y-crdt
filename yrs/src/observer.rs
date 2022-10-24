@@ -1,5 +1,5 @@
 use crate::atomic::AtomicRef;
-use std::fmt::{write, Debug, Formatter};
+use std::fmt::{Debug, Formatter};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
@@ -8,14 +8,14 @@ pub type SubscriptionId = u32;
 #[derive(Debug, Default)]
 pub struct Observer<T> {
     seq_nr: AtomicU32,
-    state: AtomicRef<Inner<T>>,
+    state: Arc<AtomicRef<Inner<T>>>,
 }
 
 impl<T> Observer<T> {
     pub fn new() -> Self {
         Observer {
             seq_nr: AtomicU32::new(0),
-            state: AtomicRef::new(Inner::default()),
+            state: Arc::new(AtomicRef::new(Inner::default())),
         }
     }
 
@@ -44,11 +44,11 @@ impl<T> Observer<T> {
 #[derive(Debug, Clone)]
 pub struct Subscription<T> {
     subscription_id: SubscriptionId,
-    observer: AtomicRef<Inner<T>>,
+    observer: Arc<AtomicRef<Inner<T>>>,
 }
 
 impl<T> Subscription<T> {
-    fn new(subscription_id: SubscriptionId, observer: AtomicRef<Inner<T>>) -> Self {
+    fn new(subscription_id: SubscriptionId, observer: Arc<AtomicRef<Inner<T>>>) -> Self {
         Subscription {
             subscription_id,
             observer,
@@ -143,14 +143,12 @@ impl<T> Default for Inner<T> {
 #[cfg(test)]
 mod test {
     use crate::observer::Observer;
-    use crate::Doc;
-    use std::cell::Cell;
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::Arc;
 
     #[test]
     fn subscription() {
-        let mut eh: Observer<u32> = Observer::new();
+        let eh: Observer<u32> = Observer::new();
         let s1_state = Arc::new(AtomicU32::new(0));
         let s2_state = Arc::new(AtomicU32::new(0));
 

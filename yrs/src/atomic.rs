@@ -11,6 +11,8 @@ use std::sync::Arc;
 ///
 /// Example:
 /// ```rust
+/// use yrs::atomic::AtomicRef;
+///
 /// let atom = AtomicRef::new(vec!["John"]);
 /// atom.update(|users| {
 ///     let mut users_copy = users.clone();
@@ -43,7 +45,9 @@ impl<T> AtomicRef<T> {
     pub fn get(&self) -> Arc<T> {
         let ptr = self.0.load(Ordering::SeqCst);
         let arc = unsafe { Arc::from_raw(ptr) };
-        arc.clone()
+        let result = arc.clone();
+        std::mem::forget(arc);
+        result
     }
 
     /// Updates stored value in place using provided function `f`, which takes read-only refrence
@@ -86,17 +90,6 @@ impl<T> AtomicRef<T> {
     }
 }
 
-impl<T> Clone for AtomicRef<T> {
-    fn clone(&self) -> Self {
-        let ptr = unsafe {
-            let ptr = self.0.load(Ordering::Acquire);
-            Arc::increment_strong_count(ptr);
-            ptr
-        };
-        AtomicRef(AtomicPtr::new(ptr))
-    }
-}
-
 impl<T> Drop for AtomicRef<T> {
     fn drop(&mut self) {
         unsafe {
@@ -122,9 +115,6 @@ impl<T: Default> Default for AtomicRef<T> {
 #[cfg(test)]
 mod test {
     use crate::atomic::AtomicRef;
-    use std::ops::Deref;
-    use std::sync::atomic::{AtomicPtr, Ordering};
-    use std::sync::Arc;
 
     #[test]
     fn init_get() {
