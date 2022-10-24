@@ -422,7 +422,7 @@ pub fn apply_update_v2(doc: &mut YDoc, diff: Uint8Array) -> Result<(), JsValue> 
 
 #[wasm_bindgen]
 extern "C" {
-    #[wasm_bindgen(typescript_type = "YTransaction | undefined")]
+    #[wasm_bindgen(typescript_type = "YTransaction | null = null")]
     pub type ImplicitTransaction;
 }
 
