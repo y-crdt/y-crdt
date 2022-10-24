@@ -25,18 +25,27 @@ impl<T> Observer<T> {
     {
         let subscription_id = self.seq_nr.fetch_add(1, Ordering::SeqCst);
         let handle = Handle::new(subscription_id, f);
-        self.state.update(move |subs| subs.insert(handle.clone()));
+        self.state.update(move |subs| {
+            let mut subs = subs.cloned().unwrap_or_else(Inner::default);
+            subs.insert(handle.clone());
+            subs
+        });
         Subscription::new(subscription_id, self.state.clone())
     }
 
     pub fn unsubscribe(&self, subscription_id: SubscriptionId) {
-        self.state.update(move |s| s.remove(subscription_id));
+        self.state.update(move |s| {
+            let mut s = s.cloned().unwrap_or_else(Inner::default);
+            s.remove(subscription_id);
+            s
+        });
     }
 
     pub fn publish(&self, args: &T) {
-        let state = self.state.get();
-        for sub in state.handles.iter() {
-            (sub.callback)(args)
+        if let Some(state) = self.state.get() {
+            for sub in state.handles.iter() {
+                (sub.callback)(args)
+            }
         }
     }
 }
@@ -66,8 +75,11 @@ impl<T> Into<SubscriptionId> for Subscription<T> {
 
 impl<T> Drop for Subscription<T> {
     fn drop(&mut self) {
-        self.observer
-            .update(|state| state.remove(self.subscription_id))
+        self.observer.update(|s| {
+            let mut s = s.unwrap().clone();
+            s.remove(self.subscription_id);
+            s
+        })
     }
 }
 
@@ -103,19 +115,17 @@ impl<T> Debug for Handle<T> {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct Inner<T> {
     handles: Vec<Handle<T>>,
 }
 
 impl<T> Inner<T> {
-    fn insert(&self, handle: Handle<T>) -> Self {
-        let mut handles = self.handles.to_vec();
-        handles.push(handle);
-        Inner { handles }
+    fn insert(&mut self, handle: Handle<T>) {
+        self.handles.push(handle);
     }
 
-    fn remove(&self, subscription_id: SubscriptionId) -> Self {
+    fn remove(&mut self, subscription_id: SubscriptionId) {
         let mut i = 0;
         while i < self.handles.len() {
             if self.handles[i].subscription_id == subscription_id {
@@ -124,11 +134,9 @@ impl<T> Inner<T> {
             i += 1;
         }
 
-        let mut handles = self.handles.to_vec();
         if i != self.handles.len() {
-            handles.remove(i);
+            self.handles.remove(i);
         }
-        Inner { handles }
     }
 }
 
@@ -137,6 +145,13 @@ impl<T> Default for Inner<T> {
         Inner {
             handles: Vec::default(),
         }
+    }
+}
+
+impl<T> Clone for Inner<T> {
+    fn clone(&self) -> Self {
+        let handles = self.handles.clone();
+        Inner { handles }
     }
 }
 

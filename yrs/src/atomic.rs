@@ -1,5 +1,5 @@
 use std::fmt::Formatter;
-use std::ops::Deref;
+use std::ptr::null_mut;
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::Arc;
 
@@ -15,7 +15,7 @@ use std::sync::Arc;
 ///
 /// let atom = AtomicRef::new(vec!["John"]);
 /// atom.update(|users| {
-///     let mut users_copy = users.clone();
+///     let mut users_copy = users.cloned().unwrap_or_else(Vec::default);
 ///     users_copy.push("Susan");
 ///     users_copy
 /// });
@@ -42,12 +42,16 @@ impl<T> AtomicRef<T> {
     /// Returns a reference to current state hold by the [AtomicRef]. Keep in mind that after
     /// acquiring it, it may not present the current view of the state, but instead be changed by
     /// the concurrent [AtomicRef::update] call.
-    pub fn get(&self) -> Arc<T> {
+    pub fn get(&self) -> Option<Arc<T>> {
         let ptr = self.0.load(Ordering::SeqCst);
-        let arc = unsafe { Arc::from_raw(ptr) };
-        let result = arc.clone();
-        std::mem::forget(arc);
-        result
+        if ptr.is_null() {
+            None
+        } else {
+            let arc = unsafe { Arc::from_raw(ptr) };
+            let result = arc.clone();
+            std::mem::forget(arc);
+            Some(result)
+        }
     }
 
     /// Updates stored value in place using provided function `f`, which takes read-only refrence
@@ -58,14 +62,14 @@ impl<T> AtomicRef<T> {
     /// function should be idempotent and preferably quick to execute.
     pub fn update<F>(&self, f: F)
     where
-        F: Fn(&T) -> T,
+        F: Fn(Option<&T>) -> T,
     {
         loop {
             let old_ptr = unsafe { self.0.load(Ordering::SeqCst) };
-            let mut old_value = unsafe { old_ptr.as_ref() }.unwrap();
+            let mut old_value = unsafe { old_ptr.as_ref() };
 
             // modify copied value
-            let new_value = f(&old_value);
+            let new_value = f(old_value);
 
             let new_ptr = Arc::into_raw(Arc::new(new_value)) as *mut _;
 
@@ -94,7 +98,9 @@ impl<T> Drop for AtomicRef<T> {
     fn drop(&mut self) {
         unsafe {
             let ptr = self.0.load(Ordering::Acquire);
-            Arc::decrement_strong_count(ptr);
+            if !ptr.is_null() {
+                Arc::decrement_strong_count(ptr);
+            }
         }
     }
 }
@@ -102,13 +108,13 @@ impl<T> Drop for AtomicRef<T> {
 impl<T: std::fmt::Debug> std::fmt::Debug for AtomicRef<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let value = self.get();
-        write!(f, "AtomicRef({:?})", value.deref())
+        write!(f, "AtomicRef({:?})", value.as_deref())
     }
 }
 
-impl<T: Default> Default for AtomicRef<T> {
+impl<T> Default for AtomicRef<T> {
     fn default() -> Self {
-        AtomicRef::new(T::default())
+        AtomicRef(AtomicPtr::new(null_mut()))
     }
 }
 
@@ -120,24 +126,24 @@ mod test {
     fn init_get() {
         let atom = AtomicRef::new(1);
         let value = atom.get();
-        assert_eq!(*value, 1);
+        assert_eq!(value.as_deref().cloned(), Some(1));
     }
 
     #[test]
     fn update() {
         let atom = AtomicRef::new(vec!["John"]);
-        let old_users = atom.get();
+        let old_users = atom.get().unwrap();
         let actual: &[&str] = &old_users;
         assert_eq!(actual, &["John"]);
 
         atom.update(|users| {
-            let mut users_copy = users.clone();
+            let mut users_copy = users.cloned().unwrap_or_else(Vec::default);
             users_copy.push("Susan");
             users_copy
         });
 
         // after update new Arc ptr data returns updated content
-        let new_users = atom.get();
+        let new_users = atom.get().unwrap();
         let actual: &[&str] = &new_users;
         assert_eq!(actual, &["John", "Susan"]);
 
