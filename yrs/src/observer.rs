@@ -7,12 +7,12 @@ use std::sync::Arc;
 pub type SubscriptionId = u32;
 
 #[derive(Debug, Default)]
-pub struct Observer<T> {
+pub struct Observer<F: Clone> {
     seq_nr: AtomicU32,
-    state: Arc<AtomicRef<Inner<T>>>,
+    state: Arc<AtomicRef<Inner<F>>>,
 }
 
-impl<T> Observer<T> {
+impl<F: Clone> Observer<F> {
     pub fn new() -> Self {
         Observer {
             seq_nr: AtomicU32::new(0),
@@ -20,10 +20,7 @@ impl<T> Observer<T> {
         }
     }
 
-    pub fn subscribe<F>(&self, f: F) -> Subscription<T>
-    where
-        F: Fn(T) -> () + 'static,
-    {
+    pub fn subscribe(&self, f: F) -> Subscription<F> {
         let subscription_id = self.seq_nr.fetch_add(1, Ordering::SeqCst);
         let handle = Handle::new(subscription_id, f);
         self.state.update(move |subs| {
@@ -42,34 +39,26 @@ impl<T> Observer<T> {
         });
     }
 
-    pub fn callbacks(&self) -> Callbacks<T> {
+    pub fn callbacks(&self) -> Callbacks<F> {
         Callbacks::new(self)
     }
 }
 
-impl<T: Clone> Observer<T> {
-    pub fn publish(&self, args: T) {
-        for fun in self.callbacks() {
-            fun(args.clone())
-        }
-    }
-}
-
 #[derive(Debug)]
-pub struct Callbacks<T> {
-    inner: Option<Arc<Inner<T>>>,
+pub struct Callbacks<F: Clone> {
+    inner: Option<Arc<Inner<F>>>,
     index: usize,
 }
 
-impl<T> Callbacks<T> {
-    fn new(o: &Observer<T>) -> Self {
+impl<F: Clone> Callbacks<F> {
+    fn new(o: &Observer<F>) -> Self {
         let inner = o.state.get();
         Callbacks { inner, index: 0 }
     }
 }
 
-impl<T> Iterator for Callbacks<T> {
-    type Item = Arc<dyn Fn(T) -> ()>;
+impl<F: Clone> Iterator for Callbacks<F> {
+    type Item = F;
 
     fn next(&mut self) -> Option<Self::Item> {
         let inner = self.inner.as_ref()?;
@@ -84,13 +73,13 @@ impl<T> Iterator for Callbacks<T> {
 }
 
 #[derive(Debug, Clone)]
-pub struct Subscription<T> {
+pub struct Subscription<F: Clone> {
     subscription_id: SubscriptionId,
-    observer: Arc<AtomicRef<Inner<T>>>,
+    observer: Arc<AtomicRef<Inner<F>>>,
 }
 
-impl<T> Subscription<T> {
-    fn new(subscription_id: SubscriptionId, observer: Arc<AtomicRef<Inner<T>>>) -> Self {
+impl<F: Clone> Subscription<F> {
+    fn new(subscription_id: SubscriptionId, observer: Arc<AtomicRef<Inner<F>>>) -> Self {
         Subscription {
             subscription_id,
             observer,
@@ -98,7 +87,7 @@ impl<T> Subscription<T> {
     }
 }
 
-impl<T> Into<SubscriptionId> for Subscription<T> {
+impl<F: Clone> Into<SubscriptionId> for Subscription<F> {
     fn into(self) -> SubscriptionId {
         let subscription_id = self.subscription_id;
         std::mem::forget(self);
@@ -106,7 +95,7 @@ impl<T> Into<SubscriptionId> for Subscription<T> {
     }
 }
 
-impl<T> Drop for Subscription<T> {
+impl<F: Clone> Drop for Subscription<F> {
     fn drop(&mut self) {
         self.observer.update(|s| {
             let mut s = s.unwrap().clone();
@@ -116,24 +105,21 @@ impl<T> Drop for Subscription<T> {
     }
 }
 
-struct Handle<T> {
+struct Handle<F: Clone> {
     subscription_id: SubscriptionId,
-    callback: Arc<dyn Fn(T) -> ()>,
+    callback: F,
 }
 
-impl<T> Handle<T> {
-    fn new<F>(subscription_id: SubscriptionId, f: F) -> Self
-    where
-        F: Fn(T) -> () + 'static,
-    {
+impl<F: Clone> Handle<F> {
+    fn new(subscription_id: SubscriptionId, f: F) -> Self {
         Handle {
             subscription_id,
-            callback: Arc::new(f),
+            callback: f,
         }
     }
 }
 
-impl<T> Clone for Handle<T> {
+impl<F: Clone> Clone for Handle<F> {
     fn clone(&self) -> Self {
         Handle {
             subscription_id: self.subscription_id,
@@ -142,19 +128,19 @@ impl<T> Clone for Handle<T> {
     }
 }
 
-impl<T> Debug for Handle<T> {
+impl<F: Clone> Debug for Handle<F> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "Handle(#{})", self.subscription_id)
     }
 }
 
 #[derive(Debug)]
-struct Inner<T> {
-    handles: Vec<Handle<T>>,
+struct Inner<F: Clone> {
+    handles: Vec<Handle<F>>,
 }
 
-impl<T> Inner<T> {
-    fn insert(&mut self, handle: Handle<T>) {
+impl<F: Clone> Inner<F> {
+    fn insert(&mut self, handle: Handle<F>) {
         self.handles.push(handle);
     }
 
@@ -173,7 +159,7 @@ impl<T> Inner<T> {
     }
 }
 
-impl<T> Default for Inner<T> {
+impl<F: Clone> Default for Inner<F> {
     fn default() -> Self {
         Inner {
             handles: Vec::default(),
@@ -181,7 +167,7 @@ impl<T> Default for Inner<T> {
     }
 }
 
-impl<T> Clone for Inner<T> {
+impl<F: Clone> Clone for Inner<F> {
     fn clone(&self) -> Self {
         let handles = self.handles.clone();
         Inner { handles }
@@ -199,7 +185,7 @@ mod test {
 
     #[test]
     fn subscription() {
-        let o: Observer<u32> = Observer::new();
+        let o: Observer<Arc<dyn Fn(u32) -> ()>> = Observer::new();
         let s1_state = Arc::new(AtomicU32::new(0));
         let s2_state = Arc::new(AtomicU32::new(0));
 
@@ -207,38 +193,46 @@ mod test {
             let a = s1_state.clone();
             let b = s2_state.clone();
 
-            let _s1 = o.subscribe(move |value| a.store(value, Ordering::Release));
-            let _s2 = o.subscribe(move |value| b.store(value * 2, Ordering::Release));
+            let _s1 = o.subscribe(Arc::new(move |value| a.store(value, Ordering::Release)));
+            let _s2 = o.subscribe(Arc::new(move |value| b.store(value * 2, Ordering::Release)));
 
-            o.publish(1);
+            for fun in o.callbacks() {
+                fun(1)
+            }
             assert_eq!(s1_state.load(Ordering::Acquire), 1);
             assert_eq!(s2_state.load(Ordering::Acquire), 2);
 
-            o.publish(2);
+            for fun in o.callbacks() {
+                fun(2)
+            }
             assert_eq!(s1_state.load(Ordering::Acquire), 2);
             assert_eq!(s2_state.load(Ordering::Acquire), 4);
         }
 
         // subscriptions were dropped, we don't expect updates to be propagated
-        o.publish(3);
+        for fun in o.callbacks() {
+            fun(3)
+        }
         assert_eq!(s1_state.load(Ordering::Acquire), 2);
         assert_eq!(s2_state.load(Ordering::Acquire), 4);
     }
 
     #[test]
     fn multi_threading() {
-        let o: Observer<u32> = Observer::new();
+        let o: Observer<Arc<dyn Fn(u32) -> ()>> = Observer::new();
 
         let s1_state = Arc::new(AtomicU32::new(0));
         let a = s1_state.clone();
-        let sub1 = o.subscribe(move |value| a.store(value, Ordering::Release));
+        let sub1 = o.subscribe(Arc::new(move |value| a.store(value, Ordering::Release)));
 
         let s2_state = Arc::new(AtomicU32::new(0));
         let b = s2_state.clone();
-        let sub2 = o.subscribe(move |value| b.store(value, Ordering::Release));
+        let sub2 = o.subscribe(Arc::new(move |value| b.store(value, Ordering::Release)));
 
         let handle = spawn(move || {
-            o.publish(1);
+            for fun in o.callbacks() {
+                fun(1)
+            }
             drop(sub1);
             drop(sub2);
         });
@@ -252,19 +246,21 @@ mod test {
     #[test]
     fn multi_param() {
         struct Wrapper {
-            observer: Observer<(&u32, &u32)>,
+            observer: Observer<Arc<dyn Fn(&u32, &u32) -> ()>>,
         }
         let o = Wrapper {
             observer: Observer::new(),
         };
         let state = Rc::new(Cell::new(0));
         let s = state.clone();
-        let sub = o.observer.subscribe(move |(a, b)| {
+        let sub = o.observer.subscribe(Arc::new(move |a, b| {
             let cell = s.as_ref();
             cell.set(*a + *b);
-        });
+        }));
 
-        o.observer.publish((&1, &2));
+        for fun in o.observer.callbacks() {
+            fun(&1, &2)
+        }
         assert_eq!(state.get(), 3);
     }
 }
