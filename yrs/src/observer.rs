@@ -1,5 +1,6 @@
 use crate::atomic::AtomicRef;
 use std::fmt::{Debug, Formatter};
+use std::ops::Deref;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
@@ -21,7 +22,7 @@ impl<T> Observer<T> {
 
     pub fn subscribe<F>(&self, f: F) -> Subscription<T>
     where
-        F: Fn(&T) -> () + 'static,
+        F: Fn(T) -> () + 'static,
     {
         let subscription_id = self.seq_nr.fetch_add(1, Ordering::SeqCst);
         let handle = Handle::new(subscription_id, f);
@@ -41,11 +42,43 @@ impl<T> Observer<T> {
         });
     }
 
-    pub fn publish(&self, args: &T) {
-        if let Some(state) = self.state.get() {
-            for sub in state.handles.iter() {
-                (sub.callback)(args)
-            }
+    pub fn callbacks(&self) -> Callbacks<T> {
+        Callbacks::new(self)
+    }
+}
+
+impl<T: Clone> Observer<T> {
+    pub fn publish(&self, args: T) {
+        for fun in self.callbacks() {
+            fun(args.clone())
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct Callbacks<T> {
+    inner: Option<Arc<Inner<T>>>,
+    index: usize,
+}
+
+impl<T> Callbacks<T> {
+    fn new(o: &Observer<T>) -> Self {
+        let inner = o.state.get();
+        Callbacks { inner, index: 0 }
+    }
+}
+
+impl<T> Iterator for Callbacks<T> {
+    type Item = Arc<dyn Fn(T) -> ()>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let inner = self.inner.as_ref()?;
+        if self.index >= inner.handles.len() {
+            None
+        } else {
+            let result = &inner.handles[self.index];
+            self.index += 1;
+            Some(result.callback.clone())
         }
     }
 }
@@ -85,13 +118,13 @@ impl<T> Drop for Subscription<T> {
 
 struct Handle<T> {
     subscription_id: SubscriptionId,
-    callback: Arc<dyn Fn(&T) -> ()>,
+    callback: Arc<dyn Fn(T) -> ()>,
 }
 
 impl<T> Handle<T> {
     fn new<F>(subscription_id: SubscriptionId, f: F) -> Self
     where
-        F: Fn(&T) -> () + 'static,
+        F: Fn(T) -> () + 'static,
     {
         Handle {
             subscription_id,
@@ -158,6 +191,8 @@ impl<T> Clone for Inner<T> {
 #[cfg(test)]
 mod test {
     use crate::observer::Observer;
+    use std::cell::Cell;
+    use std::rc::Rc;
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::Arc;
     use std::thread::spawn;
@@ -172,20 +207,20 @@ mod test {
             let a = s1_state.clone();
             let b = s2_state.clone();
 
-            let _s1 = o.subscribe(move |value| a.store(*value, Ordering::Release));
-            let _s2 = o.subscribe(move |value| b.store(*value * 2, Ordering::Release));
+            let _s1 = o.subscribe(move |value| a.store(value, Ordering::Release));
+            let _s2 = o.subscribe(move |value| b.store(value * 2, Ordering::Release));
 
-            o.publish(&1);
+            o.publish(1);
             assert_eq!(s1_state.load(Ordering::Acquire), 1);
             assert_eq!(s2_state.load(Ordering::Acquire), 2);
 
-            o.publish(&2);
+            o.publish(2);
             assert_eq!(s1_state.load(Ordering::Acquire), 2);
             assert_eq!(s2_state.load(Ordering::Acquire), 4);
         }
 
         // subscriptions were dropped, we don't expect updates to be propagated
-        o.publish(&3);
+        o.publish(3);
         assert_eq!(s1_state.load(Ordering::Acquire), 2);
         assert_eq!(s2_state.load(Ordering::Acquire), 4);
     }
@@ -196,14 +231,14 @@ mod test {
 
         let s1_state = Arc::new(AtomicU32::new(0));
         let a = s1_state.clone();
-        let sub1 = o.subscribe(move |value| a.store(*value, Ordering::Release));
+        let sub1 = o.subscribe(move |value| a.store(value, Ordering::Release));
 
         let s2_state = Arc::new(AtomicU32::new(0));
         let b = s2_state.clone();
-        let sub2 = o.subscribe(move |value| b.store(*value, Ordering::Release));
+        let sub2 = o.subscribe(move |value| b.store(value, Ordering::Release));
 
         let handle = spawn(move || {
-            o.publish(&1);
+            o.publish(1);
             drop(sub1);
             drop(sub2);
         });
@@ -212,5 +247,24 @@ mod test {
 
         assert_eq!(s1_state.load(Ordering::Acquire), 1);
         assert_eq!(s2_state.load(Ordering::Acquire), 1);
+    }
+
+    #[test]
+    fn multi_param() {
+        struct Wrapper {
+            observer: Observer<(&u32, &u32)>,
+        }
+        let o = Wrapper {
+            observer: Observer::new(),
+        };
+        let state = Rc::new(Cell::new(0));
+        let s = state.clone();
+        let sub = o.observer.subscribe(move |(a, b)| {
+            let cell = s.as_ref();
+            cell.set(*a + *b);
+        });
+
+        o.observer.publish((&1, &2));
+        assert_eq!(state.get(), 3);
     }
 }
