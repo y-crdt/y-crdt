@@ -1,5 +1,4 @@
 use crate::block::{Block, ItemContent, ItemPosition, Prelim};
-use crate::event::Subscription;
 use crate::transaction::TransactionMut;
 use crate::types::{
     event_keys, Branch, BranchPtr, Entries, EntryChange, Observers, Path, ToJson, Value,
@@ -11,6 +10,7 @@ use std::cell::UnsafeCell;
 use std::collections::{HashMap, HashSet};
 use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
+use std::sync::Arc;
 
 /// Collection used to store key-value entries in an unordered manner. Keys are always represented
 /// as UTF-8 strings. Values can be any value type supported by Yrs: JSON-like primitives as well as
@@ -122,12 +122,12 @@ impl Map {
     /// All map changes can be tracked by using [Event::keys] method.
     ///
     /// Returns an [Observer] which, when dropped, will unsubscribe current callback.
-    pub fn observe<F>(&mut self, f: F) -> Subscription<MapEvent>
+    pub fn observe<F>(&mut self, f: F) -> MapSubscription
     where
         F: Fn(&TransactionMut, &MapEvent) -> () + 'static,
     {
         if let Observers::Map(eh) = self.0.observers.get_or_insert_with(Observers::map) {
-            eh.subscribe(f)
+            eh.subscribe(Arc::new(f))
         } else {
             panic!("Observed collection is of different type") //TODO: this should be Result::Err
         }
@@ -140,6 +140,8 @@ impl Map {
         }
     }
 }
+
+pub type MapSubscription = crate::Subscription<Arc<dyn Fn(&TransactionMut, &MapEvent) -> ()>>;
 
 impl ToJson for Map {
     fn to_json<T: ReadTxn>(&self, txn: &T) -> Any {

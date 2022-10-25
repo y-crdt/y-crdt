@@ -8,7 +8,6 @@ pub use map::Map;
 pub use text::Text;
 
 use crate::block::{Block, BlockPtr, Item, ItemContent, ItemPosition, Prelim};
-use crate::event::EventHandler;
 use crate::store::StoreRef;
 use crate::transaction::TransactionMut;
 use crate::types::array::{Array, ArrayEvent};
@@ -21,6 +20,7 @@ use std::fmt::Formatter;
 use std::ops::{Deref, DerefMut};
 use std::ptr::NonNull;
 use std::rc::Rc;
+use std::sync::Arc;
 
 pub type TypeRefs = u8;
 
@@ -76,8 +76,10 @@ impl BranchPtr {
     }
 
     pub(crate) fn trigger_deep(&self, txn: &TransactionMut, e: &Events) {
-        if let Some(observers) = self.deep_observers.as_ref() {
-            observers.publish(txn, e);
+        if let Some(o) = self.deep_observers.as_ref() {
+            for fun in o.callbacks() {
+                fun(txn, e);
+            }
         }
     }
 }
@@ -216,7 +218,7 @@ pub struct Branch {
 
     pub(crate) observers: Option<Observers>,
 
-    pub(crate) deep_observers: Option<EventHandler<Events>>,
+    pub(crate) deep_observers: Option<Observer<Arc<dyn Fn(&TransactionMut, &Events)>>>,
 }
 
 impl std::fmt::Debug for Branch {
@@ -516,14 +518,12 @@ impl Branch {
         path
     }
 
-    pub fn observe_deep<F>(&mut self, f: F) -> Subscription<Events>
+    pub fn observe_deep<F>(&mut self, f: F) -> DeepEventsSubscription
     where
         F: Fn(&TransactionMut, &Events) -> () + 'static,
     {
-        let eh = self
-            .deep_observers
-            .get_or_insert_with(EventHandler::default);
-        eh.subscribe(f)
+        let eh = self.deep_observers.get_or_insert_with(Observer::default);
+        eh.subscribe(Arc::new(f))
     }
 
     pub fn unobserve_deep(&mut self, subscription_id: SubscriptionId) {
@@ -532,6 +532,8 @@ impl Branch {
         }
     }
 }
+
+pub type DeepEventsSubscription = crate::Subscription<Arc<dyn Fn(&TransactionMut, &Events) -> ()>>;
 
 /// Trait implemented by all Y-types, allowing for observing events which are emitted by
 /// nested types.
@@ -542,7 +544,7 @@ pub trait DeepObservable {
     ///
     /// This method returns a subscription, which will automatically unsubscribe current callback
     /// when dropped.
-    fn observe_deep<F>(&mut self, f: F) -> Subscription<Events>
+    fn observe_deep<F>(&mut self, f: F) -> DeepEventsSubscription
     where
         F: Fn(&TransactionMut, &Events) -> () + 'static;
 
@@ -555,7 +557,7 @@ impl<T> DeepObservable for T
 where
     T: AsMut<Branch>,
 {
-    fn observe_deep<F>(&mut self, f: F) -> Subscription<Events>
+    fn observe_deep<F>(&mut self, f: F) -> DeepEventsSubscription
     where
         F: Fn(&TransactionMut, &Events) -> () + 'static,
     {
@@ -862,6 +864,8 @@ impl std::fmt::Display for TypePtr {
     }
 }
 
+type EventHandler<T> = Observer<Arc<dyn Fn(&TransactionMut, &T) -> ()>>;
+
 pub(crate) enum Observers {
     Text(EventHandler<crate::types::text::TextEvent>),
     Array(EventHandler<crate::types::array::ArrayEvent>),
@@ -872,19 +876,19 @@ pub(crate) enum Observers {
 
 impl Observers {
     pub fn text() -> Self {
-        Observers::Text(EventHandler::default())
+        Observers::Text(Observer::default())
     }
     pub fn array() -> Self {
-        Observers::Array(EventHandler::default())
+        Observers::Array(Observer::default())
     }
     pub fn map() -> Self {
-        Observers::Map(EventHandler::default())
+        Observers::Map(Observer::default())
     }
     pub fn xml() -> Self {
-        Observers::Xml(EventHandler::default())
+        Observers::Xml(Observer::default())
     }
     pub fn xml_text() -> Self {
-        Observers::XmlText(EventHandler::default())
+        Observers::XmlText(Observer::default())
     }
 
     pub fn publish(
@@ -896,27 +900,37 @@ impl Observers {
         match self {
             Observers::Text(eh) => {
                 let e = TextEvent::new(branch_ref);
-                eh.publish(txn, &e);
+                for fun in eh.callbacks() {
+                    fun(txn, &e);
+                }
                 Event::Text(e)
             }
             Observers::Array(eh) => {
                 let e = ArrayEvent::new(branch_ref);
-                eh.publish(txn, &e);
+                for fun in eh.callbacks() {
+                    fun(txn, &e);
+                }
                 Event::Array(e)
             }
             Observers::Map(eh) => {
                 let e = MapEvent::new(branch_ref, keys);
-                eh.publish(txn, &e);
+                for fun in eh.callbacks() {
+                    fun(txn, &e);
+                }
                 Event::Map(e)
             }
             Observers::Xml(eh) => {
                 let e = XmlEvent::new(branch_ref, keys);
-                eh.publish(txn, &e);
+                for fun in eh.callbacks() {
+                    fun(txn, &e);
+                }
                 Event::XmlElement(e)
             }
             Observers::XmlText(eh) => {
                 let e = XmlTextEvent::new(branch_ref, keys);
-                eh.publish(txn, &e);
+                for fun in eh.callbacks() {
+                    fun(txn, &e);
+                }
                 Event::XmlText(e)
             }
         }

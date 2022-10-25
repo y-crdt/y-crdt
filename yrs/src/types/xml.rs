@@ -1,6 +1,5 @@
 use crate::block::{Block, Item, ItemContent, ItemPosition, Prelim};
 use crate::block_store::Snapshot;
-use crate::event::Subscription;
 use crate::transaction::TransactionMut;
 use crate::types::text::{Diff, TextEvent, YChange};
 use crate::types::{
@@ -16,6 +15,7 @@ use std::convert::TryInto;
 use std::fmt::Write;
 use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
+use std::sync::Arc;
 
 /// An return type from XML elements retrieval methods. It's an enum of all supported values, that
 /// can be nested inside of [XmlElement]. These are other [XmlElement]s or [XmlText] values.
@@ -301,7 +301,7 @@ impl XmlElement {
     /// Attribute changes can be tracked by using [Event::keys] method.
     ///
     /// Returns an [Observer] which, when dropped, will unsubscribe current callback.
-    pub fn observe<F>(&mut self, f: F) -> Subscription<XmlEvent>
+    pub fn observe<F>(&mut self, f: F) -> XmlSubscription
     where
         F: Fn(&TransactionMut, &XmlEvent) -> () + 'static,
     {
@@ -313,6 +313,8 @@ impl XmlElement {
         self.0.unobserve(subscription_id);
     }
 }
+
+pub type XmlSubscription = crate::Subscription<Arc<dyn Fn(&TransactionMut, &XmlEvent) -> ()>>;
 
 impl AsRef<Branch> for XmlElement {
     fn as_ref(&self) -> &Branch {
@@ -471,12 +473,12 @@ impl XmlFragment {
         }
     }
 
-    pub fn observe<F>(&mut self, f: F) -> Subscription<XmlEvent>
+    pub fn observe<F>(&mut self, f: F) -> XmlSubscription
     where
         F: Fn(&TransactionMut, &XmlEvent) -> () + 'static,
     {
         if let Observers::Xml(eh) = self.0.observers.get_or_insert_with(Observers::xml) {
-            eh.subscribe(f)
+            eh.subscribe(Arc::new(f))
         } else {
             panic!("Observed collection is of different type") //TODO: this should be Result::Err
         }
@@ -852,7 +854,7 @@ impl XmlText {
     /// XML text attribute changes can be tracked using [Event::keys] method.
     ///
     /// Returns an [Observer] which, when dropped, will unsubscribe current callback.
-    pub fn observe<F>(&mut self, f: F) -> Subscription<XmlTextEvent>
+    pub fn observe<F>(&mut self, f: F) -> XmlTextSubscription
     where
         F: Fn(&TransactionMut, &XmlTextEvent) -> () + 'static,
     {
@@ -861,7 +863,7 @@ impl XmlText {
             .observers
             .get_or_insert_with(Observers::xml_text)
         {
-            eh.subscribe(f)
+            eh.subscribe(Arc::new(f))
         } else {
             panic!("Observed collection is of different type") //TODO: this should be Result::Err
         }
@@ -874,6 +876,9 @@ impl XmlText {
         }
     }
 }
+
+pub type XmlTextSubscription =
+    crate::Subscription<Arc<dyn Fn(&TransactionMut, &XmlTextEvent) -> ()>>;
 
 impl AsRef<Branch> for XmlText {
     fn as_ref(&self) -> &Branch {

@@ -583,14 +583,18 @@ impl<'doc> TransactionMut<'doc> {
                 after_state: self.after_state.clone(),
                 delete_set: self.delete_set.clone(),
             };
-            eh.publish(&self, &event);
+            for fun in eh.callbacks() {
+                fun(&self, &event);
+            }
         }
         // 9. emit 'update'
         if let Some(eh) = store.update_v1_events.as_ref() {
             if !self.delete_set.is_empty() || self.after_state != self.before_state {
                 // produce update only if anything changed
                 let update = UpdateEvent::new(self.encode_update_v1());
-                eh.publish(&self, &update);
+                for fun in eh.callbacks() {
+                    fun(&self, &update);
+                }
             }
         }
         // 10. emit 'updateV2'
@@ -598,7 +602,9 @@ impl<'doc> TransactionMut<'doc> {
             if !self.delete_set.is_empty() || self.after_state != self.before_state {
                 // produce update only if anything changed
                 let update = UpdateEvent::new(self.encode_update_v2());
-                eh.publish(&self, &update);
+                for fun in eh.callbacks() {
+                    fun(&self, &update);
+                }
             }
         }
         // 11. add and remove subdocs

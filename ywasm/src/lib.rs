@@ -11,21 +11,23 @@ use wasm_bindgen::__rt::{Ref, RefMut};
 use wasm_bindgen::prelude::{wasm_bindgen, Closure};
 use wasm_bindgen::JsValue;
 use yrs::block::{ClientID, ItemContent, Prelim};
-use yrs::types::array::{ArrayEvent, ArrayIter};
-use yrs::types::map::{MapEvent, MapIter};
-use yrs::types::text::{ChangeKind, Diff, TextEvent, YChange};
-use yrs::types::xml::{Attributes, TreeWalker, XmlEvent, XmlTextEvent};
+use yrs::types::array::{ArrayEvent, ArrayIter, ArraySubscription};
+use yrs::types::map::{MapEvent, MapIter, MapSubscription};
+use yrs::types::text::{ChangeKind, Diff, TextEvent, TextSubscription, YChange};
+use yrs::types::xml::{
+    Attributes, TreeWalker, XmlEvent, XmlSubscription, XmlTextEvent, XmlTextSubscription,
+};
 use yrs::types::{
-    Attrs, Branch, BranchPtr, Change, DeepObservable, Delta, EntryChange, Event, Events, Path,
-    PathSegment, ToJson, TypeRefs, Value, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
-    TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT,
+    Attrs, Branch, BranchPtr, Change, DeepEventsSubscription, DeepObservable, Delta, EntryChange,
+    Event, Events, Path, PathSegment, ToJson, TypeRefs, Value, TYPE_REFS_ARRAY, TYPE_REFS_MAP,
+    TYPE_REFS_TEXT, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT,
 };
 use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use yrs::{
-    AfterTransactionEvent, Array, DeleteSet, Doc, Map, OffsetKind, Options, ReadTxn, Snapshot,
-    StateVector, Store, Subscription, Text, Transact, Transaction, TransactionMut, Update,
-    UpdateEvent, Xml, XmlElement, XmlText,
+    AfterTransactionEvent, AfterTransactionSubscription, Array, DeleteSet, Doc, Map, OffsetKind,
+    Options, ReadTxn, Snapshot, StateVector, Store, Subscription, Text, Transact, Transaction,
+    TransactionMut, Update, UpdateEvent, UpdateSubscription, Xml, XmlElement, XmlText,
 };
 
 // When the `wee_alloc` feature is enabled, use `wee_alloc` as the global
@@ -1418,73 +1420,73 @@ impl YAfterTransactionEvent {
 }
 
 #[wasm_bindgen]
-pub struct YAfterTransactionObserver(Subscription<AfterTransactionEvent>);
+pub struct YAfterTransactionObserver(AfterTransactionSubscription);
 
-impl From<Subscription<AfterTransactionEvent>> for YAfterTransactionObserver {
-    fn from(o: Subscription<AfterTransactionEvent>) -> Self {
+impl From<AfterTransactionSubscription> for YAfterTransactionObserver {
+    fn from(o: AfterTransactionSubscription) -> Self {
         YAfterTransactionObserver(o)
     }
 }
 
 #[wasm_bindgen]
-pub struct YUpdateObserver(Subscription<UpdateEvent>);
+pub struct YUpdateObserver(UpdateSubscription);
 
-impl From<Subscription<UpdateEvent>> for YUpdateObserver {
-    fn from(o: Subscription<UpdateEvent>) -> Self {
+impl From<UpdateSubscription> for YUpdateObserver {
+    fn from(o: UpdateSubscription) -> Self {
         YUpdateObserver(o)
     }
 }
 
 #[wasm_bindgen]
-pub struct YArrayObserver(Subscription<ArrayEvent>);
+pub struct YArrayObserver(ArraySubscription);
 
-impl From<Subscription<ArrayEvent>> for YArrayObserver {
-    fn from(o: Subscription<ArrayEvent>) -> Self {
+impl From<ArraySubscription> for YArrayObserver {
+    fn from(o: ArraySubscription) -> Self {
         YArrayObserver(o)
     }
 }
 
 #[wasm_bindgen]
-pub struct YTextObserver(Subscription<TextEvent>);
+pub struct YTextObserver(TextSubscription);
 
-impl From<Subscription<TextEvent>> for YTextObserver {
-    fn from(o: Subscription<TextEvent>) -> Self {
+impl From<TextSubscription> for YTextObserver {
+    fn from(o: TextSubscription) -> Self {
         YTextObserver(o)
     }
 }
 
 #[wasm_bindgen]
-pub struct YMapObserver(Subscription<MapEvent>);
+pub struct YMapObserver(MapSubscription);
 
-impl From<Subscription<MapEvent>> for YMapObserver {
-    fn from(o: Subscription<MapEvent>) -> Self {
+impl From<MapSubscription> for YMapObserver {
+    fn from(o: MapSubscription) -> Self {
         YMapObserver(o)
     }
 }
 
 #[wasm_bindgen]
-pub struct YXmlObserver(Subscription<XmlEvent>);
+pub struct YXmlObserver(XmlSubscription);
 
-impl From<Subscription<XmlEvent>> for YXmlObserver {
-    fn from(o: Subscription<XmlEvent>) -> Self {
+impl From<XmlSubscription> for YXmlObserver {
+    fn from(o: XmlSubscription) -> Self {
         YXmlObserver(o)
     }
 }
 
 #[wasm_bindgen]
-pub struct YXmlTextObserver(Subscription<XmlTextEvent>);
+pub struct YXmlTextObserver(XmlTextSubscription);
 
-impl From<Subscription<XmlTextEvent>> for YXmlTextObserver {
-    fn from(o: Subscription<XmlTextEvent>) -> Self {
+impl From<XmlTextSubscription> for YXmlTextObserver {
+    fn from(o: XmlTextSubscription) -> Self {
         YXmlTextObserver(o)
     }
 }
 
 #[wasm_bindgen]
-pub struct YEventObserver(Subscription<Events>);
+pub struct YEventObserver(DeepEventsSubscription);
 
-impl From<Subscription<Events>> for YEventObserver {
-    fn from(o: Subscription<Events>) -> Self {
+impl From<DeepEventsSubscription> for YEventObserver {
+    fn from(o: DeepEventsSubscription) -> Self {
         YEventObserver(o)
     }
 }

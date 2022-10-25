@@ -1,18 +1,19 @@
 use crate::block::{BlockPtr, BlockSlice, ClientID, ItemContent};
 use crate::block_store::{BlockStore, StateVector};
 use crate::doc::Options;
-use crate::event::{AfterTransactionEvent, EventHandler};
+use crate::event::AfterTransactionEvent;
 use crate::id_set::DeleteSet;
 use crate::types::{Branch, BranchPtr, Path, PathSegment, TypeRefs};
 use crate::update::PendingUpdate;
 use crate::updates::encoder::{Encode, Encoder};
-use crate::{OffsetKind, Snapshot, UpdateEvent};
+use crate::{Observer, OffsetKind, Snapshot, TransactionMut, UpdateEvent};
 use lib0::error::Error;
 use std::cell::{BorrowError, BorrowMutError, Ref, RefCell, RefMut};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::ops::Deref;
 use std::rc::Rc;
+use std::sync::Arc;
 
 /// Store is a core element of a document. It contains all of the information, like block store
 /// map of root types, pending updates waiting to be applied once a missing update information
@@ -41,15 +42,16 @@ pub struct Store {
 
     /// Handles subscriptions for the `afterTransactionCleanup` event. Events are called with the
     /// newest updates once they are committed and compacted.
-    pub(crate) after_transaction_events: Option<EventHandler<AfterTransactionEvent>>,
+    pub(crate) after_transaction_events:
+        Option<Observer<Arc<dyn Fn(&TransactionMut, &AfterTransactionEvent) -> ()>>>,
 
     /// A subscription handler. It contains all callbacks with registered by user functions that
     /// are supposed to be called, once a new update arrives.
-    pub(crate) update_v1_events: Option<EventHandler<UpdateEvent>>,
+    pub(crate) update_v1_events: Option<Observer<Arc<dyn Fn(&TransactionMut, &UpdateEvent) -> ()>>>,
 
     /// A subscription handler. It contains all callbacks with registered by user functions that
     /// are supposed to be called, once a new update arrives.
-    pub(crate) update_v2_events: Option<EventHandler<UpdateEvent>>,
+    pub(crate) update_v2_events: Option<Observer<Arc<dyn Fn(&TransactionMut, &UpdateEvent) -> ()>>>,
 }
 
 impl Store {

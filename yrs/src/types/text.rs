@@ -1,6 +1,5 @@
 use crate::block::{Block, BlockPtr, Item, ItemContent, ItemPosition, Prelim};
 use crate::block_store::Snapshot;
-use crate::event::Subscription;
 use crate::transaction::TransactionMut;
 use crate::types::{Attrs, Branch, BranchPtr, Delta, Observers, Path, Value, TYPE_REFS_TEXT};
 use crate::*;
@@ -8,6 +7,7 @@ use lib0::any::Any;
 use std::cell::UnsafeCell;
 use std::collections::HashMap;
 use std::ops::{Deref, DerefMut};
+use std::sync::Arc;
 
 /// A shared data type used for collaborative text editing. It enables multiple users to add and
 /// remove chunks of text in efficient manner. This type is internally represented as a mutable
@@ -561,12 +561,12 @@ impl Text {
     /// contains collection of individual characters rather than strings.
     ///
     /// Returns an [Observer] which, when dropped, will unsubscribe current callback.
-    pub fn observe<F>(&mut self, f: F) -> Subscription<TextEvent>
+    pub fn observe<F>(&mut self, f: F) -> TextSubscription
     where
         F: Fn(&TransactionMut, &TextEvent) -> () + 'static,
     {
         if let Observers::Text(eh) = self.0.observers.get_or_insert_with(Observers::text) {
-            eh.subscribe(f)
+            eh.subscribe(Arc::new(f))
         } else {
             panic!("Observed collection is of different type") //TODO: this should be Result::Err
         }
@@ -722,6 +722,8 @@ impl Text {
         asm.finish()
     }
 }
+
+pub type TextSubscription = crate::Subscription<Arc<dyn Fn(&TransactionMut, &TextEvent) -> ()>>;
 
 impl From<BranchPtr> for Text {
     fn from(inner: BranchPtr) -> Self {

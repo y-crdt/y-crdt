@@ -1,12 +1,11 @@
 use crate::atomic::AtomicRef;
 use std::fmt::{Debug, Formatter};
-use std::ops::Deref;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
 pub type SubscriptionId = u32;
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Observer<F: Clone> {
     seq_nr: AtomicU32,
     state: Arc<AtomicRef<Inner<F>>>,
@@ -41,6 +40,15 @@ impl<F: Clone> Observer<F> {
 
     pub fn callbacks(&self) -> Callbacks<F> {
         Callbacks::new(self)
+    }
+}
+
+impl<F: Clone> Default for Observer<F> {
+    fn default() -> Self {
+        Observer {
+            seq_nr: AtomicU32::new(0),
+            state: Arc::new(AtomicRef::default()),
+        }
     }
 }
 

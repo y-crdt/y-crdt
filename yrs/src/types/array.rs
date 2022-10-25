@@ -1,6 +1,5 @@
 use crate::block::{ItemContent, Prelim};
 use crate::block_iter::BlockIter;
-use crate::event::Subscription;
 use crate::moving::RelativePosition;
 use crate::transaction::TransactionMut;
 use crate::types::{
@@ -13,6 +12,7 @@ use std::borrow::Borrow;
 use std::cell::UnsafeCell;
 use std::collections::HashSet;
 use std::ops::{Deref, DerefMut};
+use std::sync::Arc;
 
 /// A collection used to store data in an indexed sequence structure. This type is internally
 /// implemented as a double linked list, which may squash values inserted directly one after another
@@ -182,12 +182,12 @@ impl Array {
     /// All array changes can be tracked by using [Event::delta] method.
     ///
     /// Returns an [Observer] which, when dropped, will unsubscribe current callback.
-    pub fn observe<F>(&mut self, f: F) -> Subscription<ArrayEvent>
+    pub fn observe<F>(&mut self, f: F) -> ArraySubscription
     where
         F: Fn(&TransactionMut, &ArrayEvent) -> () + 'static,
     {
         if let Observers::Array(eh) = self.0.observers.get_or_insert_with(Observers::array) {
-            eh.subscribe(f)
+            eh.subscribe(Arc::new(f))
         } else {
             panic!("Observed collection is of different type") //TODO: this should be Result::Err
         }
@@ -200,6 +200,8 @@ impl Array {
         }
     }
 }
+
+pub type ArraySubscription = crate::Subscription<Arc<dyn Fn(&TransactionMut, &ArrayEvent) -> ()>>;
 
 impl ToJson for Array {
     fn to_json<T: ReadTxn>(&self, txn: &T) -> Any {

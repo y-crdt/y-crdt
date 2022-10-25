@@ -1,14 +1,15 @@
 use crate::block::ClientID;
 use std::cell::{BorrowError, BorrowMutError};
+use std::sync::Arc;
 
-use crate::event::{AfterTransactionEvent, EventHandler, Subscription, UpdateEvent};
+use crate::event::{AfterTransactionEvent, UpdateEvent};
 use crate::store::{Store, StoreRef};
 use crate::transaction::{Transaction, TransactionMut};
 use crate::types::{
     Branch, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT, TYPE_REFS_XML_ELEMENT,
     TYPE_REFS_XML_TEXT,
 };
-use crate::{Array, Map, SubscriptionId, Text, XmlElement, XmlText};
+use crate::{Array, Map, Observer, SubscriptionId, Text, XmlElement, XmlText};
 use rand::Rng;
 
 /// A Yrs document type. Documents are most important units of collaborative resources management.
@@ -174,16 +175,13 @@ impl Doc {
     /// commit.
     ///
     /// Returns a subscription, which will unsubscribe function when dropped.
-    pub fn observe_update_v1<F>(
-        &mut self,
-        f: F,
-    ) -> Result<Subscription<UpdateEvent>, BorrowMutError>
+    pub fn observe_update_v1<F>(&mut self, f: F) -> Result<UpdateSubscription, BorrowMutError>
     where
         F: Fn(&TransactionMut, &UpdateEvent) -> () + 'static,
     {
         let mut r = self.store.try_borrow_mut()?;
-        let eh = r.update_v1_events.get_or_insert_with(EventHandler::new);
-        Ok(eh.subscribe(f))
+        let eh = r.update_v1_events.get_or_insert_with(Observer::new);
+        Ok(eh.subscribe(Arc::new(f)))
     }
 
     /// Manually unsubscribes from a callback used in [Doc::observe_update_v1] method.
@@ -201,16 +199,13 @@ impl Doc {
     /// commit.
     ///
     /// Returns a subscription, which will unsubscribe function when dropped.
-    pub fn observe_update_v2<F>(
-        &mut self,
-        f: F,
-    ) -> Result<Subscription<UpdateEvent>, BorrowMutError>
+    pub fn observe_update_v2<F>(&mut self, f: F) -> Result<UpdateSubscription, BorrowMutError>
     where
         F: Fn(&TransactionMut, &UpdateEvent) -> () + 'static,
     {
         let mut r = self.store.try_borrow_mut()?;
-        let eh = r.update_v2_events.get_or_insert_with(EventHandler::new);
-        Ok(eh.subscribe(f))
+        let eh = r.update_v2_events.get_or_insert_with(Observer::new);
+        Ok(eh.subscribe(Arc::new(f)))
     }
 
     /// Manually unsubscribes from a callback used in [Doc::observe_update_v1] method.
@@ -227,15 +222,15 @@ impl Doc {
     pub fn observe_transaction_cleanup<F>(
         &mut self,
         f: F,
-    ) -> Result<Subscription<AfterTransactionEvent>, BorrowMutError>
+    ) -> Result<AfterTransactionSubscription, BorrowMutError>
     where
         F: Fn(&TransactionMut, &AfterTransactionEvent) -> () + 'static,
     {
         let mut r = self.store.try_borrow_mut()?;
         let subscription = r
             .after_transaction_events
-            .get_or_insert_with(EventHandler::new)
-            .subscribe(f);
+            .get_or_insert_with(Observer::new)
+            .subscribe(Arc::new(f));
         Ok(subscription)
     }
     /// Cancels the transaction cleanup callback associated with the `subscription_id`
@@ -246,6 +241,11 @@ impl Doc {
         }
     }
 }
+
+pub type UpdateSubscription = crate::Subscription<Arc<dyn Fn(&TransactionMut, &UpdateEvent) -> ()>>;
+
+pub type AfterTransactionSubscription =
+    crate::Subscription<Arc<dyn Fn(&TransactionMut, &AfterTransactionEvent) -> ()>>;
 
 impl Default for Doc {
     fn default() -> Self {
