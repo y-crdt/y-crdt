@@ -35,7 +35,7 @@ impl<T> AtomicRef<T> {
     /// on a heap.
     pub fn new(value: T) -> Self {
         let arc = Arc::new(value);
-        let ptr = unsafe { Arc::into_raw(arc) as *mut _ };
+        let ptr = Arc::into_raw(arc) as *mut _;
         AtomicRef(AtomicPtr::new(ptr))
     }
 
@@ -65,8 +65,8 @@ impl<T> AtomicRef<T> {
         F: Fn(Option<&T>) -> T,
     {
         loop {
-            let old_ptr = unsafe { self.0.load(Ordering::SeqCst) };
-            let mut old_value = unsafe { old_ptr.as_ref() };
+            let old_ptr = self.0.load(Ordering::SeqCst);
+            let old_value = unsafe { old_ptr.as_ref() };
 
             // modify copied value
             let new_value = f(old_value);

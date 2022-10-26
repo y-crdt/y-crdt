@@ -1,5 +1,3 @@
-#![feature(extern_types)]
-
 use js_sys::Uint8Array;
 use lib0::any::Any;
 use std::cell::RefCell;
@@ -26,8 +24,8 @@ use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use yrs::{
     AfterTransactionEvent, AfterTransactionSubscription, Array, DeleteSet, Doc, Map, OffsetKind,
-    Options, ReadTxn, Snapshot, StateVector, Store, Subscription, Text, Transact, Transaction,
-    TransactionMut, Update, UpdateEvent, UpdateSubscription, Xml, XmlElement, XmlText,
+    Options, ReadTxn, Snapshot, StateVector, Store, Text, Transact, Transaction, TransactionMut,
+    Update, UpdateSubscription, Xml, XmlElement, XmlText,
 };
 
 // When the `wee_alloc` feature is enabled, use `wee_alloc` as the global
