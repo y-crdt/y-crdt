@@ -24,6 +24,9 @@ use std::sync::Arc;
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Map(BranchPtr);
 
+unsafe impl Send for Map {}
+unsafe impl Sync for Map {}
+
 impl Map {
     /// Returns a number of entries stored within current map.
     pub fn len<T: ReadTxn>(&self, txn: &T) -> u32 {
@@ -309,7 +312,7 @@ mod test {
     use crate::test_utils::{exchange_updates, run_scenario};
     use crate::transaction::ReadTxn;
     use crate::types::text::PrelimText;
-    use crate::types::{DeepObservable, EntryChange, Event, Map, Path, PathSegment, Value};
+    use crate::types::{DeepObservable, EntryChange, Event, Map, Path, PathSegment, ToJson, Value};
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encoder, EncoderV1};
     use crate::{Doc, PrelimArray, PrelimMap, StateVector, Transact, Update};
@@ -321,6 +324,7 @@ mod test {
     use std::collections::HashMap;
     use std::ops::{Deref, DerefMut};
     use std::rc::Rc;
+    use std::time::Duration;
 
     #[test]
     fn map_basic() {
@@ -871,5 +875,48 @@ mod test {
                 ])],
             ]
         );
+    }
+
+    #[test]
+    fn multi_threading() {
+        use rand::thread_rng;
+        use std::sync::{Arc, RwLock};
+        use std::thread::{sleep, spawn};
+
+        let doc = Doc::with_client_id(1);
+        let m1 = Arc::new(RwLock::new(doc.get_map("test")));
+
+        let m2 = m1.clone();
+        let h2 = spawn(move || {
+            for i in 0..10 {
+                let millis = thread_rng().gen_range(1, 20);
+                sleep(Duration::from_millis(millis));
+
+                let map = m2.write().unwrap();
+                let mut txn = map.transact_mut();
+                map.insert(&mut txn, "key", 1);
+            }
+        });
+
+        let m3 = m1.clone();
+        let h3 = spawn(move || {
+            for i in 0..10 {
+                let millis = thread_rng().gen_range(1, 20);
+                sleep(Duration::from_millis(millis));
+
+                let map = m3.write().unwrap();
+                let mut txn = map.transact_mut();
+                map.insert(&mut txn, "key", 2);
+            }
+        });
+
+        h3.join().unwrap();
+        h2.join().unwrap();
+
+        let map = m1.read().unwrap();
+        let txn = map.transact();
+        let value = map.get(&txn, "key").unwrap().to_json(&txn);
+
+        assert!(value == 1.into() || value == 2.into())
     }
 }

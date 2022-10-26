@@ -75,6 +75,9 @@ impl From<BranchPtr> for Xml {
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct XmlElement(XmlFragment);
 
+unsafe impl Send for XmlElement {}
+unsafe impl Sync for XmlElement {}
+
 impl XmlElement {
     fn inner(&self) -> BranchPtr {
         self.0.inner()
@@ -362,6 +365,9 @@ impl Into<XmlElement> for XmlFragment {
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct XmlFragment(BranchPtr);
 
+unsafe impl Send for XmlFragment {}
+unsafe impl Sync for XmlFragment {}
+
 impl XmlFragment {
     pub fn new(inner: BranchPtr) -> Self {
         XmlFragment(inner)
@@ -589,6 +595,9 @@ impl<'a, T: ReadTxn> Iterator for TreeWalker<'a, T> {
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct XmlHook(Map);
 
+unsafe impl Send for XmlHook {}
+unsafe impl Sync for XmlHook {}
+
 impl XmlHook {
     pub fn new(map: Map) -> Self {
         XmlHook(map)
@@ -673,6 +682,9 @@ impl Into<XmlHook> for Map {
 #[repr(transparent)]
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct XmlText(Text);
+
+unsafe impl Send for XmlText {}
+unsafe impl Sync for XmlText {}
 
 impl XmlText {
     fn inner(&self) -> BranchPtr {

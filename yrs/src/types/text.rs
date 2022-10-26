@@ -26,6 +26,9 @@ use std::sync::Arc;
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Text(BranchPtr);
 
+unsafe impl Send for Text {}
+unsafe impl Sync for Text {}
+
 impl Text {
     /// Converts context of this text data structure into a single string value.
     pub fn to_string<T: ReadTxn>(&self, txn: &T) -> String {
@@ -1051,9 +1054,12 @@ mod test {
     use crate::{Doc, StateVector, Transact, Update, ID};
     use lib0::any::Any;
     use rand::prelude::StdRng;
+    use rand::Rng;
     use std::cell::RefCell;
     use std::collections::HashMap;
     use std::rc::Rc;
+    use std::sync::RwLock;
+    use std::time::Duration;
 
     #[test]
     fn insert_empty_string() {
@@ -2047,5 +2053,46 @@ mod test {
                 )
             ]
         )
+    }
+
+    #[test]
+    fn multi_threading() {
+        use rand::thread_rng;
+        use std::sync::{Arc, RwLock};
+        use std::thread::{sleep, spawn};
+
+        let doc = Doc::with_client_id(1);
+        let t1 = Arc::new(RwLock::new(doc.get_text("test")));
+
+        let t2 = t1.clone();
+        let h2 = spawn(move || {
+            for i in 0..10 {
+                let millis = thread_rng().gen_range(1, 20);
+                sleep(Duration::from_millis(millis));
+
+                let txt = t2.write().unwrap();
+                let mut txn = txt.transact_mut();
+                txt.push(&mut txn, "a");
+            }
+        });
+
+        let t3 = t1.clone();
+        let h3 = spawn(move || {
+            for i in 0..10 {
+                let millis = thread_rng().gen_range(1, 20);
+                sleep(Duration::from_millis(millis));
+
+                let txt = t3.write().unwrap();
+                let mut txn = txt.transact_mut();
+                txt.push(&mut txn, "b");
+            }
+        });
+
+        h3.join().unwrap();
+        h2.join().unwrap();
+
+        let txt = t1.read().unwrap();
+        let len = txt.len(&txt.transact());
+        assert_eq!(len, 20);
     }
 }
