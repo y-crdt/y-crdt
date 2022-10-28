@@ -171,13 +171,17 @@ impl BlockPtr {
                 let store = txn.store_mut();
                 let encoding = store.options.offset_kind;
                 if offset > 0 {
-                    // offset is used only for locally integrated items
+                    // offset could be > 0 only in context of Update::integrate,
+                    // is such case offset kind in use always means Yjs-compatible offset (utf-16)
                     this.id.clock += offset;
                     this.left = store
                         .blocks
                         .get_item_clean_end(&ID::new(this.id.client, this.id.clock - 1));
                     this.origin = this.left.as_deref().map(|b: &Block| b.last_id());
-                    this.content = this.content.splice(offset as usize, encoding).unwrap();
+                    this.content = this
+                        .content
+                        .splice(offset as usize, OffsetKind::Utf16)
+                        .unwrap();
                     this.len -= offset;
                 }
 
