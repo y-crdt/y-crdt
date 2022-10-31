@@ -5,17 +5,17 @@ set(CMAKE_CXX_STANDARD 14)
 message(STATUS "current project dir: " ${PROJECT_SOURCE_DIR})
 add_executable(yrs-ffi-tests main.cpp)
 
-if(WIN32)
-add_custom_target(yrs-deps
-    # DEBUG
-    COMMAND ${CMAKE_COMMAND} -E copy "${PROJECT_SOURCE_DIR}/../target/debug/yrs.lib" "${PROJECT_SOURCE_DIR}/lib"
-    )
-else()
+#if(WIN32)
+#add_custom_target(yrs-deps
+#    # DEBUG
+#    COMMAND ${CMAKE_COMMAND} -E copy "${PROJECT_SOURCE_DIR}/../target/debug/yrs.lib" "${PROJECT_SOURCE_DIR}/lib"
+#    )
+#else()
     add_custom_target(yrs-deps
         # DEBUG
         COMMAND ${CMAKE_COMMAND} -E copy "${PROJECT_SOURCE_DIR}/../target/debug/libyrs.a" "${PROJECT_SOURCE_DIR}/lib"
     )
-endif()
+#endif()
 
 include_directories(${PROJECT_SOURCE_DIR}/lib)
 include_directories(${PROJECT_SOURCE_DIR}/include)
@@ -31,8 +31,8 @@ find_library (
 
 link_libraries(ws2_32 wsock32 userenv)
 
-if(WIN32)
+#if(WIN32)
     target_link_libraries(yrs-ffi-tests LINK_PUBLIC ${YRS_LIB} wsock32 ws2_32 userenv bcrypt)
-else()
-    target_link_libraries(yrs-ffi-tests LINK_PUBLIC ${YRS_LIB} pthread dl)
-endif()
+#else()
+#    target_link_libraries(yrs-ffi-tests LINK_PUBLIC ${YRS_LIB} pthread dl)
+#endif()

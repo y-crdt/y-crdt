@@ -303,15 +303,15 @@ TEST_CASE("YXmlElement basic") {
     // check children traversal
     YOutput* curr = yxmlelem_first_child(xml);
     Branch* first = youtput_read_yxmlelem(curr);
-    REQUIRE(yxmlelem_prev_sibling(first) == NULL);
+    REQUIRE(yxml_prev_sibling(first, txn) == NULL);
     char* str = yxmlelem_string(first, txn);
     REQUIRE(!strcmp(str, "<p>hello</p>"));
     ystring_destroy(str);
 
-    YOutput* next = yxmlelem_next_sibling(first);
+    YOutput* next = yxml_next_sibling(first, txn);
     youtput_destroy(curr);
     Branch* second = youtput_read_yxmltext(next);
-    REQUIRE(yxmltext_next_sibling(second) == NULL);
+    REQUIRE(yxml_next_sibling(second, txn) == NULL);
     str = yxmltext_string(second, txn);
     REQUIRE(!(strcmp(str, "world")));
     ystring_destroy(str);

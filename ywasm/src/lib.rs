@@ -5,16 +5,15 @@ use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::mem::ManuallyDrop;
 use std::ops::Deref;
+use std::sync::Arc;
 use wasm_bindgen::__rt::{Ref, RefMut};
 use wasm_bindgen::prelude::{wasm_bindgen, Closure};
 use wasm_bindgen::JsValue;
 use yrs::block::{ClientID, ItemContent, Prelim};
-use yrs::types::array::{ArrayEvent, ArrayIter, ArraySubscription};
-use yrs::types::map::{MapEvent, MapIter, MapSubscription};
-use yrs::types::text::{ChangeKind, Diff, TextEvent, TextSubscription, YChange};
-use yrs::types::xml::{
-    Attributes, TreeWalker, XmlEvent, XmlSubscription, XmlTextEvent, XmlTextSubscription,
-};
+use yrs::types::array::{ArrayEvent, ArrayIter};
+use yrs::types::map::{MapEvent, MapIter};
+use yrs::types::text::{ChangeKind, Diff, TextEvent, YChange};
+use yrs::types::xml::{Attributes, TreeWalker, XmlEvent, XmlTextEvent};
 use yrs::types::{
     Attrs, Branch, BranchPtr, Change, DeepEventsSubscription, DeepObservable, Delta, EntryChange,
     Event, Events, Path, PathSegment, ToJson, TypeRefs, Value, TYPE_REFS_ARRAY, TYPE_REFS_MAP,
@@ -23,9 +22,11 @@ use yrs::types::{
 use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use yrs::{
-    AfterTransactionEvent, AfterTransactionSubscription, Array, DeleteSet, Doc, Map, OffsetKind,
-    Options, ReadTxn, Snapshot, StateVector, Store, Text, Transact, Transaction, TransactionMut,
-    Update, UpdateSubscription, Xml, XmlElement, XmlText,
+    AfterTransactionEvent, AfterTransactionSubscription, Array, ArrayRef, DeleteSet, Doc, Map,
+    MapRef, Observable, OffsetKind, Options, ReadTxn, Snapshot, StateVector, Store, Subscription,
+    Text, TextRef, Transact, Transaction, TransactionMut, Update, UpdateSubscription, Xml,
+    XmlElementPrelim, XmlElementRef, XmlFragment, XmlFragmentRef, XmlNode, XmlTextPrelim,
+    XmlTextRef,
 };
 
 // When the `wee_alloc` feature is enabled, use `wee_alloc` as the global
@@ -1436,49 +1437,19 @@ impl From<UpdateSubscription> for YUpdateObserver {
 }
 
 #[wasm_bindgen]
-pub struct YArrayObserver(ArraySubscription);
-
-impl From<ArraySubscription> for YArrayObserver {
-    fn from(o: ArraySubscription) -> Self {
-        YArrayObserver(o)
-    }
-}
+pub struct YArrayObserver(Subscription<Arc<dyn Fn(&TransactionMut, &ArrayEvent) -> ()>>);
 
 #[wasm_bindgen]
-pub struct YTextObserver(TextSubscription);
-
-impl From<TextSubscription> for YTextObserver {
-    fn from(o: TextSubscription) -> Self {
-        YTextObserver(o)
-    }
-}
+pub struct YTextObserver(Subscription<Arc<dyn Fn(&TransactionMut, &TextEvent) -> ()>>);
 
 #[wasm_bindgen]
-pub struct YMapObserver(MapSubscription);
-
-impl From<MapSubscription> for YMapObserver {
-    fn from(o: MapSubscription) -> Self {
-        YMapObserver(o)
-    }
-}
+pub struct YMapObserver(Subscription<Arc<dyn Fn(&TransactionMut, &MapEvent) -> ()>>);
 
 #[wasm_bindgen]
-pub struct YXmlObserver(XmlSubscription);
-
-impl From<XmlSubscription> for YXmlObserver {
-    fn from(o: XmlSubscription) -> Self {
-        YXmlObserver(o)
-    }
-}
+pub struct YXmlObserver(Subscription<Arc<dyn Fn(&TransactionMut, &XmlEvent) -> ()>>);
 
 #[wasm_bindgen]
-pub struct YXmlTextObserver(XmlTextSubscription);
-
-impl From<XmlTextSubscription> for YXmlTextObserver {
-    fn from(o: XmlTextSubscription) -> Self {
-        YXmlTextObserver(o)
-    }
-}
+pub struct YXmlTextObserver(Subscription<Arc<dyn Fn(&TransactionMut, &XmlTextEvent) -> ()>>);
 
 #[wasm_bindgen]
 pub struct YEventObserver(DeepEventsSubscription);
@@ -1520,10 +1491,10 @@ impl<T, P> SharedType<T, P> {
 /// after merging all updates together). In case of Yrs conflict resolution is solved by using
 /// unique document id to determine correct and consistent ordering.
 #[wasm_bindgen]
-pub struct YText(RefCell<SharedType<Text, String>>);
+pub struct YText(RefCell<SharedType<TextRef, String>>);
 
-impl From<Text> for YText {
-    fn from(v: Text) -> Self {
+impl From<TextRef> for YText {
+    fn from(v: TextRef) -> Self {
         YText(SharedType::new(v))
     }
 }
@@ -1824,13 +1795,14 @@ impl YText {
     #[wasm_bindgen(js_name = observe)]
     pub fn observe(&mut self, f: js_sys::Function) -> YTextObserver {
         match &mut *self.0.borrow_mut() {
-            SharedType::Integrated(v) => v
-                .observe(move |txn, e| {
+            SharedType::Integrated(v) => {
+                let sub = v.observe(move |txn, e| {
                     let e = YTextEvent::new(e, txn);
                     let arg: JsValue = e.into();
                     f.call1(&JsValue::UNDEFINED, &arg).unwrap();
-                })
-                .into(),
+                });
+                YTextObserver(sub)
+            }
             SharedType::Prelim(_) => {
                 panic!("YText.observe is not supported on preliminary type.")
             }
@@ -1844,12 +1816,13 @@ impl YText {
     #[wasm_bindgen(js_name = observeDeep)]
     pub fn observe_deep(&mut self, f: js_sys::Function) -> YEventObserver {
         match &mut *self.0.borrow_mut() {
-            SharedType::Integrated(v) => v
-                .observe_deep(move |txn, e| {
+            SharedType::Integrated(v) => {
+                let sub = v.observe_deep(move |txn, e| {
                     let arg = events_into_js(txn, e);
                     f.call1(&JsValue::UNDEFINED, &arg).unwrap();
-                })
-                .into(),
+                });
+                YEventObserver(sub)
+            }
             SharedType::Prelim(_) => {
                 panic!("YText.observeDeep is not supported on preliminary type.")
             }
@@ -1963,10 +1936,10 @@ pub fn encode_state_from_snapshot_v2(doc: &YDoc, snapshot: &YSnapshot) -> Result
 /// after merging all updates together). In case of Yrs conflict resolution is solved by using
 /// unique document id to determine correct and consistent ordering.
 #[wasm_bindgen]
-pub struct YArray(RefCell<SharedType<Array, Vec<JsValue>>>);
+pub struct YArray(RefCell<SharedType<ArrayRef, Vec<JsValue>>>);
 
-impl From<Array> for YArray {
-    fn from(v: Array) -> Self {
+impl From<ArrayRef> for YArray {
+    fn from(v: ArrayRef) -> Self {
         YArray(SharedType::new(v))
     }
 }
@@ -2168,7 +2141,7 @@ impl YArray {
     pub fn values(&self, txn: &YTransaction) -> JsValue {
         to_iter(match &*self.0.borrow() {
             SharedType::Integrated(v) => unsafe {
-                let this: *const Array = v;
+                let this: *const ArrayRef = v;
                 let txn: &'static YTransaction = std::mem::transmute(txn);
                 let static_iter: ManuallyDrop<ArrayIter<'static, YTransaction>> =
                     ManuallyDrop::new((*this).iter(&txn));
@@ -2189,13 +2162,14 @@ impl YArray {
     #[wasm_bindgen(js_name = observe)]
     pub fn observe(&mut self, f: js_sys::Function) -> YArrayObserver {
         match &mut *self.0.borrow_mut() {
-            SharedType::Integrated(v) => v
-                .observe(move |txn, e| {
+            SharedType::Integrated(v) => {
+                let sub = v.observe(move |txn, e| {
                     let e = YArrayEvent::new(e, txn);
                     let arg: JsValue = e.into();
                     f.call1(&JsValue::UNDEFINED, &arg).unwrap();
-                })
-                .into(),
+                });
+                YArrayObserver(sub)
+            }
             SharedType::Prelim(_) => {
                 panic!("YArray.observe is not supported on preliminary type.")
             }
@@ -2316,10 +2290,10 @@ impl PrelimArrayIterator {
 /// by different peers are resolved into a single value using document id seniority to establish
 /// order.
 #[wasm_bindgen]
-pub struct YMap(RefCell<SharedType<Map, HashMap<String, JsValue>>>);
+pub struct YMap(RefCell<SharedType<MapRef, HashMap<String, JsValue>>>);
 
-impl From<Map> for YMap {
-    fn from(v: Map) -> Self {
+impl From<MapRef> for YMap {
+    fn from(v: MapRef) -> Self {
         YMap(SharedType::new(v))
     }
 }
@@ -2493,7 +2467,7 @@ impl YMap {
     pub fn entries(&self, txn: &YTransaction) -> JsValue {
         to_iter(match &*self.0.borrow() {
             SharedType::Integrated(v) => unsafe {
-                let this: *const Map = v;
+                let this: *const MapRef = v;
                 let txn: &'static YTransaction = std::mem::transmute(txn);
                 let static_iter: ManuallyDrop<MapIter<'static, YTransaction>> =
                     ManuallyDrop::new((*this).iter(txn));
@@ -2515,13 +2489,14 @@ impl YMap {
     #[wasm_bindgen(js_name = observe)]
     pub fn observe(&mut self, f: js_sys::Function) -> YMapObserver {
         match &mut *self.0.borrow_mut() {
-            SharedType::Integrated(v) => v
-                .observe(move |txn, e| {
+            SharedType::Integrated(v) => {
+                let sub = v.observe(move |txn, e| {
                     let e = YMapEvent::new(e, txn);
                     let arg: JsValue = e.into();
                     f.call1(&JsValue::UNDEFINED, &arg).unwrap();
-                })
-                .into(),
+                });
+                YMapObserver(sub)
+            }
             SharedType::Prelim(_) => {
                 panic!("YMap.observe is not supported on preliminary type.")
             }
@@ -2619,7 +2594,7 @@ impl PrelimMapIterator {
 ///   using interleave-resistant algorithm, where order of concurrent inserts at the same index
 ///   is established using peer's document id seniority.
 #[wasm_bindgen]
-pub struct YXmlElement(XmlElement);
+pub struct YXmlElement(XmlElementRef);
 
 #[wasm_bindgen]
 impl YXmlElement {
@@ -2649,10 +2624,13 @@ impl YXmlElement {
         txn: &ImplicitTransaction,
     ) -> YXmlElement {
         if let Some(txn) = get_txn_mut(txn) {
-            YXmlElement(self.0.insert_elem(txn, index, name))
+            YXmlElement(self.0.insert(txn, index, XmlElementPrelim::empty(name)))
         } else {
             let mut txn = self.0.transact_mut();
-            YXmlElement(self.0.insert_elem(&mut txn, index, name))
+            YXmlElement(
+                self.0
+                    .insert(&mut txn, index, XmlElementPrelim::empty(name)),
+            )
         }
     }
 
@@ -2660,10 +2638,10 @@ impl YXmlElement {
     #[wasm_bindgen(js_name = insertXmlText)]
     pub fn insert_xml_text(&self, index: u32, txn: &ImplicitTransaction) -> YXmlText {
         if let Some(txn) = get_txn_mut(txn) {
-            YXmlText(self.0.insert_text(txn, index))
+            YXmlText(self.0.insert(txn, index, XmlTextPrelim("")))
         } else {
             let mut txn = self.0.transact_mut();
-            YXmlText(self.0.insert_text(&mut txn, index))
+            YXmlText(self.0.insert(&mut txn, index, XmlTextPrelim("")))
         }
     }
 
@@ -2683,10 +2661,10 @@ impl YXmlElement {
     #[wasm_bindgen(js_name = pushXmlElement)]
     pub fn push_xml_element(&self, name: &str, txn: &ImplicitTransaction) -> YXmlElement {
         if let Some(txn) = get_txn_mut(txn) {
-            YXmlElement(self.0.push_elem_back(txn, name))
+            YXmlElement(self.0.push_back(txn, XmlElementPrelim::empty(name)))
         } else {
             let mut txn = self.0.transact_mut();
-            YXmlElement(self.0.push_elem_back(&mut txn, name))
+            YXmlElement(self.0.push_back(&mut txn, XmlElementPrelim::empty(name)))
         }
     }
 
@@ -2694,10 +2672,10 @@ impl YXmlElement {
     #[wasm_bindgen(js_name = pushXmlText)]
     pub fn push_xml_text(&self, txn: &ImplicitTransaction) -> YXmlText {
         if let Some(txn) = get_txn_mut(txn) {
-            YXmlText(self.0.push_text_back(txn))
+            YXmlText(self.0.push_back(txn, XmlTextPrelim("")))
         } else {
             let mut txn = self.0.transact_mut();
-            YXmlText(self.0.push_text_back(&mut txn))
+            YXmlText(self.0.push_back(&mut txn, XmlTextPrelim("")))
         }
     }
 
@@ -2716,11 +2694,20 @@ impl YXmlElement {
     /// It can be either `YXmlElement`, `YXmlText` or `undefined` if current node is a last child of
     /// parent XML node.
     #[wasm_bindgen(js_name = nextSibling)]
-    pub fn next_sibling(&self) -> JsValue {
-        if let Some(xml) = self.0.next_sibling() {
-            xml_into_js(xml)
+    pub fn next_sibling(&self, txn: &ImplicitTransaction) -> JsValue {
+        if let Some(txn) = get_txn_mut(txn) {
+            let mut siblings = self.0.siblings(txn);
+            siblings
+                .next()
+                .map(xml_into_js)
+                .unwrap_or(JsValue::UNDEFINED)
         } else {
-            JsValue::undefined()
+            let txn = self.0.transact_mut();
+            let mut siblings = self.0.siblings(&txn);
+            siblings
+                .next()
+                .map(xml_into_js)
+                .unwrap_or(JsValue::UNDEFINED)
         }
     }
 
@@ -2728,11 +2715,20 @@ impl YXmlElement {
     /// It can be either `YXmlElement`, `YXmlText` or `undefined` if current node is a first child
     /// of parent XML node.
     #[wasm_bindgen(js_name = prevSibling)]
-    pub fn prev_sibling(&self) -> JsValue {
-        if let Some(xml) = self.0.prev_sibling() {
-            xml_into_js(xml)
+    pub fn prev_sibling(&self, txn: &ImplicitTransaction) -> JsValue {
+        if let Some(txn) = get_txn_mut(txn) {
+            let mut siblings = self.0.siblings(txn);
+            siblings
+                .next_back()
+                .map(xml_into_js)
+                .unwrap_or(JsValue::UNDEFINED)
         } else {
-            JsValue::undefined()
+            let txn = self.0.transact_mut();
+            let mut siblings = self.0.siblings(&txn);
+            siblings
+                .next_back()
+                .map(xml_into_js)
+                .unwrap_or(JsValue::UNDEFINED)
         }
     }
 
@@ -2740,7 +2736,7 @@ impl YXmlElement {
     #[wasm_bindgen(js_name = parent)]
     pub fn parent(&self) -> JsValue {
         if let Some(xml) = self.0.parent() {
-            xml_into_js(Xml::Element(xml))
+            xml_into_js(XmlNode::Element(xml))
         } else {
             JsValue::undefined()
         }
@@ -2796,7 +2792,7 @@ impl YXmlElement {
     #[wasm_bindgen(js_name = attributes)]
     pub fn attributes(&self, txn: &YTransaction) -> JsValue {
         to_iter(unsafe {
-            let this: *const XmlElement = &self.0;
+            let this: *const XmlElementRef = &self.0;
             let txn: &'static YTransaction = std::mem::transmute(txn);
             let static_iter: ManuallyDrop<Attributes<'static, YTransaction>> =
                 ManuallyDrop::new((*this).attributes(txn));
@@ -2809,7 +2805,7 @@ impl YXmlElement {
     #[wasm_bindgen(js_name = treeWalker)]
     pub fn tree_walker(&self, txn: &YTransaction) -> JsValue {
         to_iter(unsafe {
-            let this: *const XmlElement = &self.0;
+            let this: *const XmlElementRef = &self.0;
             let txn: &'static YTransaction = std::mem::transmute(txn);
             let static_iter: ManuallyDrop<TreeWalker<'static, YTransaction>> =
                 ManuallyDrop::new((*this).successors(txn));
@@ -2822,13 +2818,12 @@ impl YXmlElement {
     /// Returns an `YObserver` which, when free'd, will unsubscribe current callback.
     #[wasm_bindgen(js_name = observe)]
     pub fn observe(&mut self, f: js_sys::Function) -> YXmlObserver {
-        self.0
-            .observe(move |txn, e| {
-                let e = YXmlEvent::new(e, txn);
-                let arg: JsValue = e.into();
-                f.call1(&JsValue::UNDEFINED, &arg).unwrap();
-            })
-            .into()
+        let sub = self.0.observe(move |txn, e| {
+            let e = YXmlEvent::new(e, txn);
+            let arg: JsValue = e.into();
+            f.call1(&JsValue::UNDEFINED, &arg).unwrap();
+        });
+        YXmlObserver(sub)
     }
 
     /// Subscribes to all operations happening over this Y shared type, as well as events in
@@ -2837,12 +2832,156 @@ impl YXmlElement {
     /// Returns an `YEventObserver` which, when free'd, will unsubscribe current callback.
     #[wasm_bindgen(js_name = observeDeep)]
     pub fn observe_deep(&mut self, f: js_sys::Function) -> YEventObserver {
-        self.0
-            .observe_deep(move |txn, e| {
-                let arg = events_into_js(txn, e);
-                f.call1(&JsValue::UNDEFINED, &arg).unwrap();
-            })
-            .into()
+        let sub = self.0.observe_deep(move |txn, e| {
+            let arg = events_into_js(txn, e);
+            f.call1(&JsValue::UNDEFINED, &arg).unwrap();
+        });
+        YEventObserver(sub)
+    }
+}
+
+/// Represents a list of `YXmlElement` and `YXmlText` types.
+/// A `YXmlFragment` is similar to a `YXmlElement`, but it does not have a
+/// nodeName and it does not have attributes. Though it can be bound to a DOM
+/// element - in this case the attributes and the nodeName are not shared
+#[wasm_bindgen]
+pub struct YXmlFragment(XmlFragmentRef);
+
+#[wasm_bindgen]
+impl YXmlFragment {
+    /// Returns a number of child XML nodes stored within this `YXMlElement` instance.
+    #[wasm_bindgen(js_name = length)]
+    pub fn length(&self, txn: &ImplicitTransaction) -> u32 {
+        if let Some(txn) = get_txn(txn) {
+            self.0.len(txn)
+        } else {
+            let txn = self.0.transact();
+            self.0.len(&txn)
+        }
+    }
+
+    /// Inserts a new instance of `YXmlElement` as a child of this XML node and returns it.
+    #[wasm_bindgen(js_name = insertXmlElement)]
+    pub fn insert_xml_element(
+        &self,
+        index: u32,
+        name: &str,
+        txn: &ImplicitTransaction,
+    ) -> YXmlElement {
+        if let Some(txn) = get_txn_mut(txn) {
+            YXmlElement(self.0.insert(txn, index, XmlElementPrelim::empty(name)))
+        } else {
+            let mut txn = self.0.transact_mut();
+            YXmlElement(
+                self.0
+                    .insert(&mut txn, index, XmlElementPrelim::empty(name)),
+            )
+        }
+    }
+
+    /// Inserts a new instance of `YXmlText` as a child of this XML node and returns it.
+    #[wasm_bindgen(js_name = insertXmlText)]
+    pub fn insert_xml_text(&self, index: u32, txn: &ImplicitTransaction) -> YXmlText {
+        if let Some(txn) = get_txn_mut(txn) {
+            YXmlText(self.0.insert(txn, index, XmlTextPrelim("")))
+        } else {
+            let mut txn = self.0.transact_mut();
+            YXmlText(self.0.insert(&mut txn, index, XmlTextPrelim("")))
+        }
+    }
+
+    /// Removes a range of children XML nodes from this `YXmlElement` instance,
+    /// starting at given `index`.
+    #[wasm_bindgen(js_name = delete)]
+    pub fn delete(&self, index: u32, length: u32, txn: &ImplicitTransaction) {
+        if let Some(txn) = get_txn_mut(txn) {
+            self.0.remove_range(txn, index, length)
+        } else {
+            let mut txn = self.0.transact_mut();
+            self.0.remove_range(&mut txn, index, length)
+        }
+    }
+
+    /// Appends a new instance of `YXmlElement` as the last child of this XML node and returns it.
+    #[wasm_bindgen(js_name = pushXmlElement)]
+    pub fn push_xml_element(&self, name: &str, txn: &ImplicitTransaction) -> YXmlElement {
+        if let Some(txn) = get_txn_mut(txn) {
+            YXmlElement(self.0.push_back(txn, XmlElementPrelim::empty(name)))
+        } else {
+            let mut txn = self.0.transact_mut();
+            YXmlElement(self.0.push_back(&mut txn, XmlElementPrelim::empty(name)))
+        }
+    }
+
+    /// Appends a new instance of `YXmlText` as the last child of this XML node and returns it.
+    #[wasm_bindgen(js_name = pushXmlText)]
+    pub fn push_xml_text(&self, txn: &ImplicitTransaction) -> YXmlText {
+        if let Some(txn) = get_txn_mut(txn) {
+            YXmlText(self.0.push_back(txn, XmlTextPrelim("")))
+        } else {
+            let mut txn = self.0.transact_mut();
+            YXmlText(self.0.push_back(&mut txn, XmlTextPrelim("")))
+        }
+    }
+
+    /// Returns a first child of this XML node.
+    /// It can be either `YXmlElement`, `YXmlText` or `undefined` if current node has not children.
+    #[wasm_bindgen(js_name = firstChild)]
+    pub fn first_child(&self) -> JsValue {
+        if let Some(xml) = self.0.first_child() {
+            xml_into_js(xml)
+        } else {
+            JsValue::undefined()
+        }
+    }
+
+    /// Returns a string representation of this XML node.
+    #[wasm_bindgen(js_name = toString)]
+    pub fn to_string(&self, txn: &ImplicitTransaction) -> String {
+        if let Some(txn) = get_txn(txn) {
+            self.0.to_string(txn)
+        } else {
+            self.0.to_string(&self.0.transact())
+        }
+    }
+
+    /// Returns an iterator that enables a deep traversal of this XML node - starting from first
+    /// child over this XML node successors using depth-first strategy.
+    #[wasm_bindgen(js_name = treeWalker)]
+    pub fn tree_walker(&self, txn: &YTransaction) -> JsValue {
+        to_iter(unsafe {
+            let this: *const XmlFragmentRef = &self.0;
+            let txn: &'static YTransaction = std::mem::transmute(txn);
+            let static_iter: ManuallyDrop<TreeWalker<'static, YTransaction>> =
+                ManuallyDrop::new((*this).successors(txn));
+            YXmlTreeWalker(static_iter).into()
+        })
+    }
+
+    /// Subscribes to all operations happening over this instance of `YXmlElement`. All changes are
+    /// batched and eventually triggered during transaction commit phase.
+    /// Returns an `YObserver` which, when free'd, will unsubscribe current callback.
+    #[wasm_bindgen(js_name = observe)]
+    pub fn observe(&mut self, f: js_sys::Function) -> YXmlObserver {
+        let sub = self.0.observe(move |txn, e| {
+            let e = YXmlEvent::new(e, txn);
+            let arg: JsValue = e.into();
+            f.call1(&JsValue::UNDEFINED, &arg).unwrap();
+        });
+        YXmlObserver(sub)
+    }
+
+    /// Subscribes to all operations happening over this Y shared type, as well as events in
+    /// shared types stored within this one. All changes are batched and eventually triggered
+    /// during transaction commit phase.
+    /// Returns an `YEventObserver` which, when free'd, will unsubscribe current callback.
+    #[wasm_bindgen(js_name = observeDeep)]
+    pub fn observe_deep(&mut self, f: js_sys::Function) -> YEventObserver {
+        let sub = self.0.observe_deep(move |txn, e| {
+            let arg = events_into_js(txn, e);
+            f.call1(&JsValue::UNDEFINED, &arg).unwrap();
+        });
+        YEventObserver(sub)
     }
 }
 
@@ -2916,7 +3055,7 @@ impl YXmlTreeWalker {
 /// after merging all updates together). In case of Yrs conflict resolution is solved by using
 /// unique document id to determine correct and consistent ordering.
 #[wasm_bindgen]
-pub struct YXmlText(XmlText);
+pub struct YXmlText(XmlTextRef);
 
 #[wasm_bindgen]
 impl YXmlText {
@@ -3035,11 +3174,20 @@ impl YXmlText {
     /// It can be either `YXmlElement`, `YXmlText` or `undefined` if current node is a last child of
     /// parent XML node.
     #[wasm_bindgen(js_name = nextSibling)]
-    pub fn next_sibling(&self) -> JsValue {
-        if let Some(xml) = self.0.next_sibling() {
-            xml_into_js(xml)
+    pub fn next_sibling(&self, txn: &ImplicitTransaction) -> JsValue {
+        if let Some(txn) = get_txn_mut(txn) {
+            let mut siblings = self.0.siblings(txn);
+            siblings
+                .next()
+                .map(xml_into_js)
+                .unwrap_or(JsValue::UNDEFINED)
         } else {
-            JsValue::undefined()
+            let txn = self.0.transact_mut();
+            let mut siblings = self.0.siblings(&txn);
+            siblings
+                .next()
+                .map(xml_into_js)
+                .unwrap_or(JsValue::UNDEFINED)
         }
     }
 
@@ -3047,11 +3195,20 @@ impl YXmlText {
     /// It can be either `YXmlElement`, `YXmlText` or `undefined` if current node is a first child
     /// of parent XML node.
     #[wasm_bindgen(js_name = prevSibling)]
-    pub fn prev_sibling(&self) -> JsValue {
-        if let Some(xml) = self.0.prev_sibling() {
-            xml_into_js(xml)
+    pub fn prev_sibling(&self, txn: &ImplicitTransaction) -> JsValue {
+        if let Some(txn) = get_txn_mut(txn) {
+            let mut siblings = self.0.siblings(txn);
+            siblings
+                .next_back()
+                .map(xml_into_js)
+                .unwrap_or(JsValue::UNDEFINED)
         } else {
-            JsValue::undefined()
+            let txn = self.0.transact_mut();
+            let mut siblings = self.0.siblings(&txn);
+            siblings
+                .next_back()
+                .map(xml_into_js)
+                .unwrap_or(JsValue::UNDEFINED)
         }
     }
 
@@ -3059,7 +3216,7 @@ impl YXmlText {
     #[wasm_bindgen(js_name = parent)]
     pub fn parent(&self) -> JsValue {
         if let Some(xml) = self.0.parent() {
-            xml_into_js(Xml::Element(xml))
+            xml_into_js(XmlNode::Element(xml))
         } else {
             JsValue::undefined()
         }
@@ -3104,10 +3261,10 @@ impl YXmlText {
     #[wasm_bindgen(js_name = removeAttribute)]
     pub fn remove_attribute(&self, name: &str, txn: &ImplicitTransaction) {
         if let Some(txn) = get_txn_mut(txn) {
-            self.0.remove_attribute(txn, name);
+            self.0.remove_attribute(txn, &name);
         } else {
             let mut txn = self.0.transact_mut();
-            self.0.remove_attribute(&mut txn, name);
+            self.0.remove_attribute(&mut txn, &name);
         }
     }
 
@@ -3115,7 +3272,7 @@ impl YXmlText {
     /// unspecified order.
     #[wasm_bindgen(js_name = attributes)]
     pub fn attributes(&self, txn: &YTransaction) -> YXmlAttributes {
-        let this: *const XmlText = &self.0;
+        let this: *const XmlTextRef = &self.0;
         let txn: &'static YTransaction = unsafe { std::mem::transmute(txn) };
         let static_iter: ManuallyDrop<Attributes<'static, YTransaction>> =
             unsafe { ManuallyDrop::new((*this).attributes(txn)) };
@@ -3127,13 +3284,12 @@ impl YXmlText {
     /// Returns an `YObserver` which, when free'd, will unsubscribe current callback.
     #[wasm_bindgen(js_name = observe)]
     pub fn observe(&mut self, f: js_sys::Function) -> YXmlTextObserver {
-        self.0
-            .observe(move |txn, e| {
-                let e = YXmlTextEvent::new(e, txn);
-                let arg: JsValue = e.into();
-                f.call1(&JsValue::UNDEFINED, &arg).unwrap();
-            })
-            .into()
+        let sub = self.0.observe(move |txn, e| {
+            let e = YXmlTextEvent::new(e, txn);
+            let arg: JsValue = e.into();
+            f.call1(&JsValue::UNDEFINED, &arg).unwrap();
+        });
+        YXmlTextObserver(sub)
     }
 
     /// Subscribes to all operations happening over this Y shared type, as well as events in
@@ -3142,12 +3298,11 @@ impl YXmlText {
     /// Returns an `YEventObserver` which, when free'd, will unsubscribe current callback.
     #[wasm_bindgen(js_name = observeDeep)]
     pub fn observe_deep(&mut self, f: js_sys::Function) -> YEventObserver {
-        self.0
-            .observe_deep(move |txn, e| {
-                let arg = events_into_js(txn, e);
-                f.call1(&JsValue::UNDEFINED, &arg).unwrap();
-            })
-            .into()
+        let sub = self.0.observe_deep(move |txn, e| {
+            let arg = events_into_js(txn, e);
+            f.call1(&JsValue::UNDEFINED, &arg).unwrap();
+        });
+        YEventObserver(sub)
     }
 }
 
@@ -3183,7 +3338,7 @@ impl Prelim for JsValueWrapper {
             if shared.is_prelim() {
                 match shared {
                     Shared::Text(v) => {
-                        let text = Text::from(inner_ref);
+                        let text = TextRef::from(inner_ref);
                         if let SharedType::Prelim(v) =
                             v.0.replace(SharedType::Integrated(text.clone()))
                         {
@@ -3191,7 +3346,7 @@ impl Prelim for JsValueWrapper {
                         }
                     }
                     Shared::Array(v) => {
-                        let array = Array::from(inner_ref);
+                        let array = ArrayRef::from(inner_ref);
                         if let SharedType::Prelim(items) =
                             v.0.replace(SharedType::Integrated(array.clone()))
                         {
@@ -3200,7 +3355,7 @@ impl Prelim for JsValueWrapper {
                         }
                     }
                     Shared::Map(v) => {
-                        let map = Map::from(inner_ref);
+                        let map = MapRef::from(inner_ref);
                         if let SharedType::Prelim(entries) =
                             v.0.replace(SharedType::Integrated(map.clone()))
                         {
@@ -3216,7 +3371,7 @@ impl Prelim for JsValueWrapper {
     }
 }
 
-fn insert_at(dst: &Array, txn: &mut TransactionMut, index: u32, src: Vec<JsValue>) {
+fn insert_at(dst: &ArrayRef, txn: &mut TransactionMut, index: u32, src: Vec<JsValue>) {
     let mut j = index;
     let mut i = 0;
     while i < src.len() {
@@ -3325,13 +3480,15 @@ fn value_into_js(v: Value) -> JsValue {
         Value::YMap(v) => YMap::from(v).into(),
         Value::YXmlElement(v) => YXmlElement(v).into(),
         Value::YXmlText(v) => YXmlText(v).into(),
+        Value::YXmlFragment(v) => YXmlFragment(v).into(),
     }
 }
 
-fn xml_into_js(v: Xml) -> JsValue {
+fn xml_into_js(v: XmlNode) -> JsValue {
     match v {
-        Xml::Element(v) => YXmlElement(v).into(),
-        Xml::Text(v) => YXmlText(v).into(),
+        XmlNode::Element(v) => YXmlElement(v).into(),
+        XmlNode::Text(v) => YXmlText(v).into(),
+        XmlNode::Fragment(v) => YXmlFragment(v).into(),
     }
 }
 

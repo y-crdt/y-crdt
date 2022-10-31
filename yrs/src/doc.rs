@@ -9,7 +9,7 @@ use crate::types::{
     Branch, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT, TYPE_REFS_XML_ELEMENT,
     TYPE_REFS_XML_TEXT,
 };
-use crate::{Array, Map, Observer, SubscriptionId, Text, XmlElement, XmlText};
+use crate::{ArrayRef, MapRef, Observer, SubscriptionId, TextRef, XmlElementRef, XmlTextRef};
 use rand::Rng;
 
 /// A Yrs document type. Documents are most important units of collaborative resources management.
@@ -23,7 +23,7 @@ use rand::Rng;
 /// A basic workflow sample:
 ///
 /// ```
-/// use yrs::{Doc, ReadTxn, StateVector, Transact, Update};
+/// use yrs::{Doc, ReadTxn, StateVector, Text, Transact, Update};
 /// use yrs::updates::decoder::Decode;
 /// use yrs::updates::encoder::Encode;
 ///
@@ -81,13 +81,13 @@ impl Doc {
     /// If a structure under defined `name` already existed, but its type was different it will be
     /// reinterpreted as a text (in such case a sequence component of complex data type will be
     /// interpreted as a list of text chunks).
-    pub fn get_text(&self, name: &str) -> Text {
+    pub fn get_text(&self, name: &str) -> TextRef {
         let mut r = self.store.try_borrow_mut().expect(
             "tried to get a root level type while another transaction on the document is open",
         );
         let mut c = r.get_or_create_type(name, None, TYPE_REFS_TEXT);
         c.store = Some(self.store.clone());
-        Text::from(c)
+        TextRef::from(c)
     }
 
     /// Returns a [Map] data structure stored under a given `name`. Maps are used to store key-value
@@ -101,13 +101,13 @@ impl Doc {
     /// If a structure under defined `name` already existed, but its type was different it will be
     /// reinterpreted as a map (in such case a map component of complex data type will be
     /// interpreted as native map).
-    pub fn get_map(&self, name: &str) -> Map {
+    pub fn get_map(&self, name: &str) -> MapRef {
         let mut r = self.store.try_borrow_mut().expect(
             "tried to get a root level type while another transaction on the document is open",
         );
         let mut c = r.get_or_create_type(name, None, TYPE_REFS_MAP);
         c.store = Some(self.store.clone());
-        Map::from(c)
+        MapRef::from(c)
     }
 
     /// Returns an [Array] data structure stored under a given `name`. Array structures are used for
@@ -120,13 +120,13 @@ impl Doc {
     /// If a structure under defined `name` already existed, but its type was different it will be
     /// reinterpreted as an array (in such case a sequence component of complex data type will be
     /// interpreted as a list of inserted values).
-    pub fn get_array(&self, name: &str) -> Array {
+    pub fn get_array(&self, name: &str) -> ArrayRef {
         let mut r = self.store.try_borrow_mut().expect(
             "tried to get a root level type while another transaction on the document is open",
         );
         let mut c = r.get_or_create_type(name, None, TYPE_REFS_ARRAY);
         c.store = Some(self.store.clone());
-        Array::from(c)
+        ArrayRef::from(c)
     }
 
     /// Returns a [XmlElement] data structure stored under a given `name`. XML elements represent
@@ -141,13 +141,13 @@ impl Doc {
     /// reinterpreted as a XML element (in such case a map component of complex data type will be
     /// interpreted as map of its attributes, while a sequence component - as a list of its child
     /// XML nodes).
-    pub fn get_xml_element(&self, name: &str) -> XmlElement {
+    pub fn get_xml_element(&self, name: &str) -> XmlElementRef {
         let mut r = self.store.try_borrow_mut().expect(
             "tried to get a root level type while another transaction on the document is open",
         );
         let mut c = r.get_or_create_type(name, Some("UNDEFINED".into()), TYPE_REFS_XML_ELEMENT);
         c.store = Some(self.store.clone());
-        XmlElement::from(c)
+        XmlElementRef::from(c)
     }
 
     /// Returns a [XmlText] data structure stored under a given `name`. Text structures are used for
@@ -160,13 +160,13 @@ impl Doc {
     /// If a structure under defined `name` already existed, but its type was different it will be
     /// reinterpreted as a text (in such case a sequence component of complex data type will be
     /// interpreted as a list of text chunks).
-    pub fn get_xml_text(&self, name: &str) -> XmlText {
+    pub fn get_xml_text(&self, name: &str) -> XmlTextRef {
         let mut r = self.store.try_borrow_mut().expect(
             "tried to get a root level type while another transaction on the document is open",
         );
         let mut c = r.get_or_create_type(name, None, TYPE_REFS_XML_TEXT);
         c.store = Some(self.store.clone());
-        XmlText::from(c)
+        XmlTextRef::from(c)
     }
 
     /// Subscribe callback function for any changes performed within transaction scope. These
@@ -361,7 +361,7 @@ mod test {
     use crate::update::Update;
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
-    use crate::{DeleteSet, Doc, Options, StateVector, SubscriptionId, Transact};
+    use crate::{DeleteSet, Doc, Options, StateVector, SubscriptionId, Text, Transact};
     use lib0::any::Any;
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;

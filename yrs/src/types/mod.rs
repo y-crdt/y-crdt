@@ -4,16 +4,16 @@ pub mod text;
 pub mod xml;
 
 use crate::*;
-pub use map::Map;
-pub use text::Text;
+pub use map::MapRef;
+pub use text::TextRef;
 
 use crate::block::{Block, BlockPtr, Item, ItemContent, ItemPosition, Prelim};
 use crate::store::StoreRef;
 use crate::transaction::TransactionMut;
-use crate::types::array::{Array, ArrayEvent};
+use crate::types::array::{ArrayEvent, ArrayRef};
 use crate::types::map::MapEvent;
 use crate::types::text::TextEvent;
-use crate::types::xml::{XmlElement, XmlEvent, XmlText, XmlTextEvent};
+use crate::types::xml::{XmlElementRef, XmlEvent, XmlTextEvent, XmlTextRef};
 use lib0::any::Any;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Formatter;
@@ -48,6 +48,40 @@ pub const TYPE_REFS_XML_TEXT: TypeRefs = 6;
 /// Placeholder type ref identifier for non-specialized AbstractType. Used only for root-level types
 /// which have been integrated from remote peers before they were defined locally.
 pub const TYPE_REFS_UNDEFINED: TypeRefs = 15;
+
+pub trait Observable: AsMut<Branch> {
+    type Event;
+
+    fn try_observer(&self) -> Option<&EventHandler<Self::Event>>;
+    fn try_observer_mut(&mut self) -> Option<&mut EventHandler<Self::Event>>;
+
+    /// Subscribes a given callback to be triggered whenever current y-type is changed.
+    /// A callback is triggered whenever a transaction gets committed. This function does not
+    /// trigger if changes have been observed by nested shared collections.
+    ///
+    /// All array-like event changes can be tracked by using [Event::delta] method.
+    /// All map-like event changes can be tracked by using [Event::keys] method.
+    /// All text-like event changes can be tracked by using [TextEvent::delta] method.
+    ///
+    /// Returns a [Subscription] which, when dropped, will unsubscribe current callback.
+    fn observe<F>(&mut self, f: F) -> Subscription<Arc<dyn Fn(&TransactionMut, &Self::Event) -> ()>>
+    where
+        F: Fn(&TransactionMut, &Self::Event) -> () + 'static,
+    {
+        if let Some(eh) = self.try_observer_mut() {
+            eh.subscribe(Arc::new(f))
+        } else {
+            panic!("Observed collection is of different type") //TODO: this should be Result::Err
+        }
+    }
+
+    /// Unsubscribes a previously subscribed event callback identified by given `subscription_id`.
+    fn unobserve(&self, subscription_id: SubscriptionId) {
+        if let Some(eh) = self.try_observer() {
+            eh.unsubscribe(subscription_id);
+        }
+    }
+}
 
 /// A wrapper around [Branch] cell, supplied with a bunch of convenience methods to operate on both
 /// map-like and array-like contents of a [Branch].
@@ -133,12 +167,12 @@ impl Into<Value> for BranchPtr {
     /// types [Value::Any] will never be returned from this method.
     fn into(self) -> Value {
         match self.type_ref() {
-            TYPE_REFS_ARRAY => Value::YArray(Array::from(self)),
-            TYPE_REFS_MAP => Value::YMap(Map::from(self)),
-            TYPE_REFS_TEXT => Value::YText(Text::from(self)),
-            TYPE_REFS_XML_ELEMENT => Value::YXmlElement(XmlElement::from(self)),
-            TYPE_REFS_XML_FRAGMENT => Value::YXmlElement(XmlElement::from(self)),
-            TYPE_REFS_XML_TEXT => Value::YXmlText(XmlText::from(self)),
+            TYPE_REFS_ARRAY => Value::YArray(ArrayRef::from(self)),
+            TYPE_REFS_MAP => Value::YMap(MapRef::from(self)),
+            TYPE_REFS_TEXT => Value::YText(TextRef::from(self)),
+            TYPE_REFS_XML_ELEMENT => Value::YXmlElement(XmlElementRef::from(self)),
+            TYPE_REFS_XML_FRAGMENT => Value::YXmlElement(XmlElementRef::from(self)),
+            TYPE_REFS_XML_TEXT => Value::YXmlText(XmlTextRef::from(self)),
             //TYPE_REFS_XML_HOOK => Value::YXmlElement(XmlElement::from(self)),
             other => panic!("Cannot convert to value - unsupported type ref: {}", other),
         }
@@ -575,11 +609,12 @@ where
 pub enum Value {
     /// Primitive value.
     Any(Any),
-    YText(Text),
-    YArray(Array),
-    YMap(Map),
-    YXmlElement(XmlElement),
-    YXmlText(XmlText),
+    YText(TextRef),
+    YArray(ArrayRef),
+    YMap(MapRef),
+    YXmlElement(XmlElementRef),
+    YXmlFragment(XmlFragmentRef),
+    YXmlText(XmlTextRef),
 }
 
 impl Default for Value {
@@ -597,11 +632,12 @@ impl Value {
             Value::YArray(v) => v.to_json(txn).to_string(),
             Value::YMap(v) => v.to_json(txn).to_string(),
             Value::YXmlElement(v) => v.to_string(txn),
+            Value::YXmlFragment(v) => v.to_string(txn),
             Value::YXmlText(v) => v.to_string(txn),
         }
     }
 
-    pub fn to_ytext(self) -> Option<Text> {
+    pub fn to_ytext(self) -> Option<TextRef> {
         if let Value::YText(text) = self {
             Some(text)
         } else {
@@ -609,7 +645,7 @@ impl Value {
         }
     }
 
-    pub fn to_yarray(self) -> Option<Array> {
+    pub fn to_yarray(self) -> Option<ArrayRef> {
         if let Value::YArray(array) = self {
             Some(array)
         } else {
@@ -617,7 +653,7 @@ impl Value {
         }
     }
 
-    pub fn to_ymap(self) -> Option<Map> {
+    pub fn to_ymap(self) -> Option<MapRef> {
         if let Value::YMap(map) = self {
             Some(map)
         } else {
@@ -625,7 +661,7 @@ impl Value {
         }
     }
 
-    pub fn to_yxml_elem(self) -> Option<XmlElement> {
+    pub fn to_yxml_elem(self) -> Option<XmlElementRef> {
         if let Value::YXmlElement(xml) = self {
             Some(xml)
         } else {
@@ -633,7 +669,7 @@ impl Value {
         }
     }
 
-    pub fn to_yxml_text(self) -> Option<XmlText> {
+    pub fn to_yxml_text(self) -> Option<XmlTextRef> {
         if let Value::YXmlText(xml) = self {
             Some(xml)
         } else {
@@ -669,6 +705,7 @@ impl ToJson for Value {
             Value::YMap(v) => v.to_json(txn),
             Value::YXmlElement(v) => Any::String(v.to_string(txn).into_boxed_str()),
             Value::YXmlText(v) => Any::String(v.to_string(txn).into_boxed_str()),
+            Value::YXmlFragment(v) => Any::String(v.to_string(txn).into_boxed_str()),
         }
     }
 }

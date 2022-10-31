@@ -157,6 +157,11 @@ typedef struct YXmlTreeWalker {} YXmlTreeWalker;
 #define Y_XML_TEXT 5
 
 /**
+ * Flag used by `YInput` and `YOutput` to tag content, which is an `YXmlFragment` shared type.
+ */
+#define Y_XML_FRAG 6
+
+/**
  * Flag used to mark a truthy boolean numbers.
  */
 #define Y_TRUE 1
@@ -1395,7 +1400,7 @@ void yxmlattr_iter_destroy(YXmlAttrIter *iterator);
 struct YXmlAttr *yxmlattr_iter_next(YXmlAttrIter *iterator);
 
 /**
- * Returns a next sibling of a current `YXmlElement`, which can be either another `YXmlElement`
+ * Returns a next sibling of a current XML node, which can be either another `YXmlElement`
  * or a `YXmlText`. Together with [yxmlelem_first_child] it may be used to iterate over the direct
  * children of an XML node (in order to iterate over the nested XML structure use
  * [yxmlelem_tree_walker]).
@@ -1403,36 +1408,16 @@ struct YXmlAttr *yxmlattr_iter_next(YXmlAttrIter *iterator);
  * If current `YXmlElement` is the last child, this function returns a null pointer.
  * A returned value should be eventually released using [youtput_destroy] function.
  */
-struct YOutput *yxmlelem_next_sibling(const Branch *xml);
+struct YOutput *yxml_next_sibling(const Branch *xml, const YTransaction *txn);
 
 /**
- * Returns a previous sibling of a current `YXmlElement`, which can be either another `YXmlElement`
+ * Returns a previous sibling of a current XML node, which can be either another `YXmlElement`
  * or a `YXmlText`.
  *
  * If current `YXmlElement` is the first child, this function returns a null pointer.
  * A returned value should be eventually released using [youtput_destroy] function.
  */
-struct YOutput *yxmlelem_prev_sibling(const Branch *xml);
-
-/**
- * Returns a next sibling of a current `YXmlText`, which can be either another `YXmlText` or
- * an `YXmlElement`. Together with [yxmlelem_first_child] it may be used to iterate over the direct
- * children of an XML node (in order to iterate over the nested XML structure use
- * [yxmlelem_tree_walker]).
- *
- * If current `YXmlText` is the last child, this function returns a null pointer.
- * A returned value should be eventually released using [youtput_destroy] function.
- */
-struct YOutput *yxmltext_next_sibling(const Branch *xml);
-
-/**
- * Returns a previous sibling of a current `YXmlText`, which can be either another `YXmlText` or
- * an `YXmlElement`.
- *
- * If current `YXmlText` is the first child, this function returns a null pointer.
- * A returned value should be eventually released using [youtput_destroy] function.
- */
-struct YOutput *yxmltext_prev_sibling(const Branch *xml);
+struct YOutput *yxml_prev_sibling(const Branch *xml, const YTransaction *txn);
 
 /**
  * Returns a parent `YXmlElement` of a current node, or null pointer when current `YXmlElement` is
@@ -1513,7 +1498,7 @@ void yxmlelem_remove_range(const Branch *xml, YTransaction *txn, int index, int 
  *
  * Returned value should be eventually released using [youtput_destroy].
  */
-const struct YOutput *yxmlelem_get(const Branch *xml, int index);
+const struct YOutput *yxmlelem_get(const Branch *xml, const YTransaction *txn, int index);
 
 /**
  * Returns the length of the `YXmlText` string content in bytes (without the null terminator
