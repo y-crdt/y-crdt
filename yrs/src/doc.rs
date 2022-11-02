@@ -1019,7 +1019,7 @@ mod test {
         ];
 
         let doc = Doc::new();
-        let mut txn = doc.transact();
+        let mut txn = doc.transact_mut();
         for diff in diffs {
             let u = Update::decode_v1(diff.as_slice()).unwrap();
             txn.apply_update(u);

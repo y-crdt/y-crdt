@@ -888,7 +888,7 @@ mod test {
 
         let m2 = m1.clone();
         let h2 = spawn(move || {
-            for i in 0..10 {
+            for _ in 0..10 {
                 let millis = thread_rng().gen_range(1, 20);
                 sleep(Duration::from_millis(millis));
 
@@ -900,7 +900,7 @@ mod test {
 
         let m3 = m1.clone();
         let h3 = spawn(move || {
-            for i in 0..10 {
+            for _ in 0..10 {
                 let millis = thread_rng().gen_range(1, 20);
                 sleep(Duration::from_millis(millis));
 

@@ -799,12 +799,12 @@ impl<'a, T: ReadTxn> Iterator for Entries<'a, T> {
 
 pub(crate) struct Iter<'a, T> {
     ptr: Option<&'a BlockPtr>,
-    txn: &'a T,
+    _txn: &'a T,
 }
 
 impl<'a, T: ReadTxn> Iter<'a, T> {
     fn new(ptr: Option<&'a BlockPtr>, txn: &'a T) -> Self {
-        Iter { ptr, txn }
+        Iter { ptr, _txn: txn }
     }
 }
 

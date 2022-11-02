@@ -261,7 +261,7 @@ mod test {
         };
         let state = Rc::new(Cell::new(0));
         let s = state.clone();
-        let sub = o.observer.subscribe(Arc::new(move |a, b| {
+        let _sub = o.observer.subscribe(Arc::new(move |a, b| {
             let cell = s.as_ref();
             cell.set(*a + *b);
         }));

@@ -1058,7 +1058,6 @@ mod test {
     use std::cell::RefCell;
     use std::collections::HashMap;
     use std::rc::Rc;
-    use std::sync::RwLock;
     use std::time::Duration;
 
     #[test]
@@ -2066,7 +2065,7 @@ mod test {
 
         let t2 = t1.clone();
         let h2 = spawn(move || {
-            for i in 0..10 {
+            for _ in 0..10 {
                 let millis = thread_rng().gen_range(1, 20);
                 sleep(Duration::from_millis(millis));
 
@@ -2078,7 +2077,7 @@ mod test {
 
         let t3 = t1.clone();
         let h3 = spawn(move || {
-            for i in 0..10 {
+            for _ in 0..10 {
                 let millis = thread_rng().gen_range(1, 20);
                 sleep(Duration::from_millis(millis));
 

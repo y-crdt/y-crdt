@@ -514,7 +514,7 @@ pub struct TreeWalker<'a, T> {
     current: Option<&'a Item>,
     root: TypePtr,
     first_call: bool,
-    txn: &'a T,
+    _txn: &'a T,
 }
 
 impl<'a, T: ReadTxn> TreeWalker<'a, T> {
@@ -529,7 +529,7 @@ impl<'a, T: ReadTxn> TreeWalker<'a, T> {
             current,
             root: TypePtr::Branch(*root),
             first_call: true,
-            txn,
+            _txn: txn,
         }
     }
 }
