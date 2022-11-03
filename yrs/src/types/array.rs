@@ -11,6 +11,7 @@ use lib0::any::Any;
 use std::borrow::Borrow;
 use std::cell::UnsafeCell;
 use std::collections::HashSet;
+use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
@@ -174,8 +175,8 @@ impl Array {
 
     /// Returns an iterator, that can be used to lazely traverse over all values stored in a current
     /// array.
-    pub fn iter<'a, T: ReadTxn + 'a>(&self, txn: &'a T) -> ArrayIter<'a, T> {
-        ArrayIter::new(self, txn)
+    pub fn iter<'a, T: ReadTxn + 'a>(&self, txn: &'a T) -> ArrayIter<&'a T, T> {
+        ArrayIter::from_ref(self, txn)
     }
 
     /// Subscribes a given callback to be triggered whenever current array is changed.
@@ -236,21 +237,47 @@ impl AsMut<Branch> for Array {
     }
 }
 
-pub struct ArrayIter<'a, T: ReadTxn + 'a> {
+pub struct ArrayIter<B, T>
+where
+    B: Borrow<T>,
+    T: ReadTxn,
+{
     inner: BlockIter,
-    txn: &'a T,
+    txn: B,
+    _marker: PhantomData<T>,
 }
 
-impl<'a, T: ReadTxn + 'a> ArrayIter<'a, T> {
-    fn new(array: &Array, txn: &'a T) -> Self {
+impl<T> ArrayIter<T, T>
+where
+    T: Borrow<T> + ReadTxn,
+{
+    pub fn from(array: &Array, txn: T) -> Self {
         ArrayIter {
             inner: BlockIter::new(array.0),
             txn,
+            _marker: PhantomData::default(),
         }
     }
 }
 
-impl<'a, T: ReadTxn + 'a> Iterator for ArrayIter<'a, T> {
+impl<'a, T> ArrayIter<&'a T, T>
+where
+    T: Borrow<T> + ReadTxn,
+{
+    pub fn from_ref(array: &Array, txn: &'a T) -> Self {
+        ArrayIter {
+            inner: BlockIter::new(array.0),
+            txn,
+            _marker: PhantomData::default(),
+        }
+    }
+}
+
+impl<B, T> Iterator for ArrayIter<B, T>
+where
+    B: Borrow<T>,
+    T: ReadTxn,
+{
     type Item = Value;
 
     fn next(&mut self) -> Option<Self::Item> {

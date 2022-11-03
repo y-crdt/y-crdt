@@ -9,10 +9,12 @@ use crate::types::{
 };
 use crate::{ReadTxn, SubscriptionId, ID};
 use lib0::any::Any;
+use std::borrow::Borrow;
 use std::cell::UnsafeCell;
 use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
 use std::fmt::Write;
+use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -155,7 +157,7 @@ impl XmlElement {
 
     /// Returns an unordered iterator over all attributes (key-value pairs), that can be found
     /// inside of a current XML element.
-    pub fn attributes<'a, T: ReadTxn>(&'a self, txn: &'a T) -> Attributes<'a, T> {
+    pub fn attributes<'a, T: ReadTxn>(&'a self, txn: &'a T) -> Attributes<'a, &'a T, T> {
         Attributes(self.0 .0.entries(txn))
     }
 
@@ -228,7 +230,7 @@ impl XmlElement {
     ///    - again
     /// */
     /// ```
-    pub fn successors<'a, T: ReadTxn>(&'a self, txn: &'a T) -> TreeWalker<'a, T> {
+    pub fn successors<'a, T: ReadTxn>(&'a self, txn: &'a T) -> TreeWalker<'a, &'a T, T> {
         self.0.iter(txn)
     }
 
@@ -338,17 +340,33 @@ impl From<BranchPtr> for XmlElement {
 }
 
 /// Iterator over the attributes (key-value pairs represented as a strings) of an [XmlElement].
-pub struct Attributes<'a, T>(Entries<'a, T>);
+pub struct Attributes<'a, B, T>(Entries<'a, B, T>);
 
-impl<'a, T: ReadTxn> Iterator for Attributes<'a, T> {
+impl<'a, B, T> Attributes<'a, B, T>
+where
+    B: Borrow<T>,
+    T: ReadTxn,
+{
+    pub fn new(branch: &'a Branch, txn: B) -> Self {
+        let entries = Entries::new(&branch.map, txn);
+        Attributes(entries)
+    }
+}
+
+impl<'a, B, T> Iterator for Attributes<'a, B, T>
+where
+    B: Borrow<T>,
+    T: ReadTxn,
+{
     type Item = (&'a str, String);
 
     fn next(&mut self) -> Option<Self::Item> {
         let (key, block) = self.0.next()?;
+        let txn = self.0.txn.borrow();
         let value = block
             .content
             .get_last()
-            .map(|v| v.to_string(self.0.txn))
+            .map(|v| v.to_string(txn))
             .unwrap_or(String::default());
 
         Some((key.as_ref(), value))
@@ -397,7 +415,7 @@ impl XmlFragment {
         self.inner().len()
     }
 
-    pub fn iter<'a, T: ReadTxn>(&'a self, txn: &'a T) -> TreeWalker<'a, T> {
+    pub fn iter<'a, T: ReadTxn>(&'a self, txn: &'a T) -> TreeWalker<'a, &'a T, T> {
         TreeWalker::new(&self.0, txn)
     }
 
@@ -510,15 +528,20 @@ impl AsMut<Branch> for XmlFragment {
 }
 
 /// An iterator over [XmlElement] successors, working in a recursive depth-first manner.
-pub struct TreeWalker<'a, T> {
+pub struct TreeWalker<'a, B, T> {
     current: Option<&'a Item>,
     root: TypePtr,
     first_call: bool,
-    _txn: &'a T,
+    _txn: B,
+    _marker: PhantomData<T>,
 }
 
-impl<'a, T: ReadTxn> TreeWalker<'a, T> {
-    fn new(root: &'a BranchPtr, txn: &'a T) -> Self {
+impl<'a, B, T: ReadTxn> TreeWalker<'a, B, T>
+where
+    B: Borrow<T>,
+    T: ReadTxn,
+{
+    pub fn new(root: &'a Branch, txn: B) -> Self {
         let current = if let Some(Block::Item(item)) = root.start.as_deref() {
             Some(item)
         } else {
@@ -527,14 +550,19 @@ impl<'a, T: ReadTxn> TreeWalker<'a, T> {
 
         TreeWalker {
             current,
-            root: TypePtr::Branch(*root),
+            root: TypePtr::Branch(BranchPtr::from(root)),
             first_call: true,
             _txn: txn,
+            _marker: PhantomData::default(),
         }
     }
 }
 
-impl<'a, T: ReadTxn> Iterator for TreeWalker<'a, T> {
+impl<'a, B, T: ReadTxn> Iterator for TreeWalker<'a, B, T>
+where
+    B: Borrow<T>,
+    T: ReadTxn,
+{
     type Item = Xml;
 
     /// Tree walker used depth-first search to move over the xml tree.
@@ -607,15 +635,15 @@ impl XmlHook {
         self.0.len(txn)
     }
 
-    pub fn keys<'a, T: ReadTxn>(&'a self, txn: &'a T) -> crate::types::map::Keys<'a, T> {
+    pub fn keys<'a, T: ReadTxn>(&'a self, txn: &'a T) -> crate::types::map::Keys<'a, &'a T, T> {
         self.0.keys(txn)
     }
 
-    pub fn values<'a, T: ReadTxn>(&'a self, txn: &'a T) -> crate::types::map::Values<'a, T> {
+    pub fn values<'a, T: ReadTxn>(&'a self, txn: &'a T) -> crate::types::map::Values<'a, &'a T, T> {
         self.0.values(txn)
     }
 
-    pub fn iter<'a, T: ReadTxn>(&'a self, txn: &'a T) -> crate::types::map::MapIter<'a, T> {
+    pub fn iter<'a, T: ReadTxn>(&'a self, txn: &'a T) -> crate::types::map::MapIter<'a, &'a T, T> {
         self.0.iter(txn)
     }
 
@@ -728,7 +756,7 @@ impl XmlText {
         Some(value.to_string(txn))
     }
 
-    pub fn attributes<'a, T: ReadTxn>(&'a self, txn: &'a T) -> Attributes<'a, T> {
+    pub fn attributes<'a, T: ReadTxn>(&'a self, txn: &'a T) -> Attributes<'a, &'a T, T> {
         Attributes(self.as_ref().entries(txn))
     }
 

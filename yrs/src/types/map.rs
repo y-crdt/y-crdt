@@ -6,6 +6,7 @@ use crate::types::{
 };
 use crate::*;
 use lib0::any::Any;
+use std::borrow::Borrow;
 use std::cell::UnsafeCell;
 use std::collections::{HashMap, HashSet};
 use std::ops::{Deref, DerefMut};
@@ -43,25 +44,21 @@ impl Map {
         len
     }
 
-    fn entries<'a, T: ReadTxn + 'a>(&'a self, txn: &'a T) -> Entries<'a, T> {
-        Entries::new(&self.0.map, txn)
-    }
-
     /// Returns an iterator that enables to traverse over all keys of entries stored within
     /// current map. These keys are not ordered.
-    pub fn keys<'a, T: ReadTxn + 'a>(&'a self, txn: &'a T) -> Keys<'a, T> {
-        Keys(self.entries(txn))
+    pub fn keys<'a, T: ReadTxn + 'a>(&'a self, txn: &'a T) -> Keys<'a, &'a T, T> {
+        Keys::new(&self.0, txn)
     }
 
     /// Returns an iterator that enables to traverse over all values stored within current map.
-    pub fn values<'a, T: ReadTxn + 'a>(&'a self, txn: &'a T) -> Values<'a, T> {
-        Values(self.entries(txn))
+    pub fn values<'a, T: ReadTxn + 'a>(&'a self, txn: &'a T) -> Values<'a, &'a T, T> {
+        Values::new(&self.0, txn)
     }
 
     /// Returns an iterator that enables to traverse over all entries - tuple of key-value pairs -
     /// stored within current map.
-    pub fn iter<'a, T: ReadTxn + 'a>(&'a self, txn: &'a T) -> MapIter<'a, T> {
-        MapIter(self.entries(txn))
+    pub fn iter<'a, T: ReadTxn + 'a>(&'a self, txn: &'a T) -> MapIter<'a, &'a T, T> {
+        MapIter::new(&self.0, txn)
     }
 
     /// Inserts a new `value` under given `key` into current map. Returns a value stored previously
@@ -175,9 +172,24 @@ impl AsMut<Branch> for Map {
 }
 
 #[derive(Debug)]
-pub struct MapIter<'a, T>(Entries<'a, T>);
+pub struct MapIter<'a, B, T>(Entries<'a, B, T>);
 
-impl<'a, T: ReadTxn> Iterator for MapIter<'a, T> {
+impl<'a, B, T> MapIter<'a, B, T>
+where
+    B: Borrow<T>,
+    T: ReadTxn,
+{
+    pub fn new(branch: &'a Branch, txn: B) -> Self {
+        let entries = Entries::new(&branch.map, txn);
+        MapIter(entries)
+    }
+}
+
+impl<'a, B, T> Iterator for MapIter<'a, B, T>
+where
+    B: Borrow<T>,
+    T: ReadTxn,
+{
     type Item = (&'a str, Value);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -192,9 +204,24 @@ impl<'a, T: ReadTxn> Iterator for MapIter<'a, T> {
 
 /// An unordered iterator over the keys of a [Map].
 #[derive(Debug)]
-pub struct Keys<'a, T>(Entries<'a, T>);
+pub struct Keys<'a, B, T>(Entries<'a, B, T>);
 
-impl<'a, T: ReadTxn> Iterator for Keys<'a, T> {
+impl<'a, B, T> Keys<'a, B, T>
+where
+    B: Borrow<T>,
+    T: ReadTxn,
+{
+    pub fn new(branch: &'a Branch, txn: B) -> Self {
+        let entries = Entries::new(&branch.map, txn);
+        Keys(entries)
+    }
+}
+
+impl<'a, B, T> Iterator for Keys<'a, B, T>
+where
+    B: Borrow<T>,
+    T: ReadTxn,
+{
     type Item = &'a str;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -205,9 +232,24 @@ impl<'a, T: ReadTxn> Iterator for Keys<'a, T> {
 
 /// Iterator over the values of a [Map].
 #[derive(Debug)]
-pub struct Values<'a, T>(Entries<'a, T>);
+pub struct Values<'a, B, T>(Entries<'a, B, T>);
 
-impl<'a, T: ReadTxn> Iterator for Values<'a, T> {
+impl<'a, B, T> Values<'a, B, T>
+where
+    B: Borrow<T>,
+    T: ReadTxn,
+{
+    pub fn new(branch: &'a Branch, txn: B) -> Self {
+        let entries = Entries::new(&branch.map, txn);
+        Values(entries)
+    }
+}
+
+impl<'a, B, T> Iterator for Values<'a, B, T>
+where
+    B: Borrow<T>,
+    T: ReadTxn,
+{
     type Item = Vec<Value>;
 
     fn next(&mut self) -> Option<Self::Item> {

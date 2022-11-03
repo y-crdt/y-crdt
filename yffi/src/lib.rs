@@ -113,25 +113,25 @@ pub type Branch = yrs::types::Branch;
 
 /// Iterator structure used by shared array data type.
 #[repr(transparent)]
-pub struct ArrayIter(NativeArrayIter<'static, Transaction>);
+pub struct ArrayIter(NativeArrayIter<&'static Transaction, Transaction>);
 
 /// Iterator structure used by shared map data type. Map iterators are unordered - there's no
 /// specific order in which map entries will be returned during consecutive iterator calls.
 #[repr(transparent)]
-pub struct MapIter(NativeMapIter<'static, Transaction>);
+pub struct MapIter(NativeMapIter<'static, &'static Transaction, Transaction>);
 
 /// Iterator structure used by XML nodes (elements and text) to iterate over node's attributes.
 /// Attribute iterators are unordered - there's no specific order in which map entries will be
 /// returned during consecutive iterator calls.
 #[repr(transparent)]
-pub struct Attributes(NativeAttributes<'static, Transaction>);
+pub struct Attributes(NativeAttributes<'static, &'static Transaction, Transaction>);
 
 /// Iterator used to traverse over the complex nested tree structure of a XML node. XML node
 /// iterator walks only over `YXmlElement` and `YXmlText` nodes. It does so in ordered manner (using
 /// the order in which children are ordered within their parent nodes) and using **depth-first**
 /// traverse.
 #[repr(transparent)]
-pub struct TreeWalker(NativeTreeWalker<'static, Transaction>);
+pub struct TreeWalker(NativeTreeWalker<'static, &'static Transaction, Transaction>);
 
 /// Transaction is one of the core types in Yrs. All operations that need to touch or
 /// modify a document's contents (a.k.a. block store), need to be executed in scope of a

@@ -3,6 +3,7 @@ use lib0::any::Any;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::convert::TryFrom;
+use std::marker::PhantomData;
 use std::mem::ManuallyDrop;
 use std::ops::Deref;
 use wasm_bindgen::__rt::{Ref, RefMut};
@@ -475,6 +476,44 @@ fn unwrap_txn_ptr(value: &ImplicitTransaction) -> Result<Option<u32>, JsValue> {
             Ok(Some(ptr.as_f64().ok_or(JsValue::NULL)? as u32))
         } else {
             Err(JsValue::from_str("Passed argument was not YTransaction"))
+        }
+    }
+}
+
+enum TransactionRef {
+    Borrowed(Ref<'static, YTransaction>),
+    Owned(Transaction<'static>),
+}
+
+impl TransactionRef {
+    fn new<T>(txn: &ImplicitTransaction, t: &T) -> Self
+    where
+        T: Transact,
+    {
+        if let Some(txn) = Self::get_txn_ref(txn) {
+            let txn: Ref<'static, YTransaction> = unsafe { std::mem::transmute(txn) };
+            TransactionRef::Borrowed(txn)
+        } else {
+            let txn = t.transact();
+            let txn: Transaction<'static> = unsafe { std::mem::transmute(txn) };
+            TransactionRef::Owned(txn)
+        }
+    }
+
+    fn get_txn_ref<'a>(txn: &'a ImplicitTransaction) -> Option<Ref<'a, YTransaction>> {
+        use wasm_bindgen::convert::RefFromWasmAbi;
+
+        let ptr = unwrap_txn_ptr(txn).unwrap()?;
+        let txn: Ref<'a, YTransaction> = unsafe { YTransaction::ref_from_abi(ptr) };
+        Some(txn)
+    }
+}
+
+impl ReadTxn for TransactionRef {
+    fn store(&self) -> &Store {
+        match self {
+            TransactionRef::Borrowed(txn) => txn.store(),
+            TransactionRef::Owned(txn) => txn.store(),
         }
     }
 }
@@ -2165,22 +2204,22 @@ impl YArray {
     /// }
     /// ```
     #[wasm_bindgen(js_name = values)]
-    pub fn values(&self, txn: &YTransaction) -> JsValue {
-        to_iter(match &*self.0.borrow() {
-            SharedType::Integrated(v) => unsafe {
-                let this: *const Array = v;
-                let txn: &'static YTransaction = std::mem::transmute(txn);
-                let static_iter: ManuallyDrop<ArrayIter<'static, YTransaction>> =
-                    ManuallyDrop::new((*this).iter(&txn));
-                YArrayIterator(static_iter).into()
-            },
-            SharedType::Prelim(v) => unsafe {
+    pub fn values(&self, txn: &ImplicitTransaction) -> JsValue {
+        match &*self.0.borrow() {
+            SharedType::Integrated(v) => {
+                let txn = TransactionRef::new(txn, v);
+                let inner = ArrayIter::from(v, txn);
+                let iter = YArrayIterator(IterJs::new(inner));
+                to_iter(iter.into())
+            }
+            SharedType::Prelim(v) => {
                 let this: *const Vec<JsValue> = v;
                 let static_iter: ManuallyDrop<std::slice::Iter<'static, JsValue>> =
-                    ManuallyDrop::new((*this).iter());
-                PrelimArrayIterator(static_iter).into()
-            },
-        })
+                    unsafe { ManuallyDrop::new((*this).iter()) };
+                let iter = PrelimArrayIterator(static_iter);
+                to_iter(iter.into())
+            }
+        }
     }
 
     /// Subscribes to all operations happening over this instance of `YArray`. All changes are
@@ -2230,6 +2269,34 @@ fn to_iter(iterator: JsValue) -> JsValue {
     iter.into()
 }
 
+struct IterJs<I, T>(Option<I>, PhantomData<T>)
+where
+    I: Iterator<Item = T>;
+
+impl<I, T> IterJs<I, T>
+where
+    I: Iterator<Item = T>,
+    T: IntoJsValue,
+{
+    fn new(iter: I) -> Self {
+        IterJs(Some(iter), PhantomData::default())
+    }
+
+    fn next(&mut self) -> IteratorNext {
+        if let Some(iter) = self.0.as_mut() {
+            if let Some(value) = iter.next() {
+                return IteratorNext::new(value.into_js());
+            }
+        }
+        IteratorNext::finished()
+    }
+
+    fn close(&mut self) -> IteratorNext {
+        self.0.take(); // drop cell, we drop the transaction hold here
+        IteratorNext::finished()
+    }
+}
+
 #[wasm_bindgen]
 pub struct IteratorNext {
     value: JsValue,
@@ -2260,29 +2327,52 @@ impl IteratorNext {
     }
 }
 
-impl From<Option<Value>> for IteratorNext {
-    fn from(v: Option<Value>) -> Self {
-        match v {
-            None => IteratorNext::finished(),
-            Some(v) => IteratorNext::new(value_into_js(v)),
-        }
+trait IntoJsValue {
+    fn into_js(self) -> JsValue;
+}
+
+impl IntoJsValue for Value {
+    fn into_js(self) -> JsValue {
+        value_into_js(self)
+    }
+}
+
+impl IntoJsValue for Xml {
+    fn into_js(self) -> JsValue {
+        xml_into_js(self)
+    }
+}
+impl<'a> IntoJsValue for (&'a str, Value) {
+    fn into_js(self) -> JsValue {
+        let tuple = js_sys::Array::new_with_length(2);
+        tuple.set(0, JsValue::from(self.0));
+        tuple.set(1, value_into_js(self.1));
+        tuple.into()
+    }
+}
+
+impl<'a> IntoJsValue for (&'a str, String) {
+    fn into_js(self) -> JsValue {
+        let tuple = js_sys::Array::new_with_length(2);
+        tuple.set(0, JsValue::from_str(self.0));
+        tuple.set(1, JsValue::from(&self.1));
+        tuple.into()
     }
 }
 
 #[wasm_bindgen]
-pub struct YArrayIterator(ManuallyDrop<ArrayIter<'static, YTransaction>>);
-
-impl Drop for YArrayIterator {
-    fn drop(&mut self) {
-        unsafe { ManuallyDrop::drop(&mut self.0) }
-    }
-}
+pub struct YArrayIterator(IterJs<ArrayIter<TransactionRef, TransactionRef>, Value>);
 
 #[wasm_bindgen]
 impl YArrayIterator {
     #[wasm_bindgen]
     pub fn next(&mut self) -> IteratorNext {
-        self.0.next().into()
+        self.0.next()
+    }
+
+    #[wasm_bindgen(js_name=return)]
+    pub fn close(&mut self) -> IteratorNext {
+        self.0.close()
     }
 }
 
@@ -2490,23 +2580,23 @@ impl YMap {
     /// }
     /// ```
     #[wasm_bindgen(js_name = entries)]
-    pub fn entries(&self, txn: &YTransaction) -> JsValue {
-        to_iter(match &*self.0.borrow() {
-            SharedType::Integrated(v) => unsafe {
-                let this: *const Map = v;
-                let txn: &'static YTransaction = std::mem::transmute(txn);
-                let static_iter: ManuallyDrop<MapIter<'static, YTransaction>> =
-                    ManuallyDrop::new((*this).iter(txn));
-                YMapIterator(static_iter).into()
-            },
+    pub fn entries(&self, txn: &ImplicitTransaction) -> JsValue {
+        match &*self.0.borrow() {
+            SharedType::Integrated(v) => {
+                let txn = TransactionRef::new(txn, v);
+                let branch: &'static Branch = unsafe { std::mem::transmute(v.as_ref()) };
+                let inner = MapIter::new(branch, txn);
+                let iter = YMapIterator(IterJs::new(inner));
+                to_iter(iter.into())
+            }
             SharedType::Prelim(v) => unsafe {
                 let this: *const HashMap<String, JsValue> = v;
                 let static_iter: ManuallyDrop<
                     std::collections::hash_map::Iter<'static, String, JsValue>,
                 > = ManuallyDrop::new((*this).iter());
-                PrelimMapIterator(static_iter).into()
+                to_iter(PrelimMapIterator(static_iter).into())
             },
-        })
+        }
     }
 
     /// Subscribes to all operations happening over this instance of `YMap`. All changes are
@@ -2549,33 +2639,19 @@ impl YMap {
 }
 
 #[wasm_bindgen]
-pub struct YMapIterator(ManuallyDrop<MapIter<'static, YTransaction>>);
-
-impl Drop for YMapIterator {
-    fn drop(&mut self) {
-        unsafe { ManuallyDrop::drop(&mut self.0) }
-    }
-}
-
-impl<'a> From<Option<(&'a str, Value)>> for IteratorNext {
-    fn from(entry: Option<(&'a str, Value)>) -> Self {
-        match entry {
-            None => IteratorNext::finished(),
-            Some((k, v)) => {
-                let tuple = js_sys::Array::new_with_length(2);
-                tuple.set(0, JsValue::from(k));
-                tuple.set(1, value_into_js(v));
-                IteratorNext::new(tuple.into())
-            }
-        }
-    }
-}
+pub struct YMapIterator(
+    IterJs<MapIter<'static, TransactionRef, TransactionRef>, (&'static str, Value)>,
+);
 
 #[wasm_bindgen]
 impl YMapIterator {
     #[wasm_bindgen]
     pub fn next(&mut self) -> IteratorNext {
-        self.0.next().into()
+        self.0.next()
+    }
+    #[wasm_bindgen(js_name=return)]
+    pub fn close(&mut self) -> IteratorNext {
+        self.0.close()
     }
 }
 
@@ -2794,27 +2870,23 @@ impl YXmlElement {
     /// Returns an iterator that enables to traverse over all attributes of this XML node in
     /// unspecified order.
     #[wasm_bindgen(js_name = attributes)]
-    pub fn attributes(&self, txn: &YTransaction) -> JsValue {
-        to_iter(unsafe {
-            let this: *const XmlElement = &self.0;
-            let txn: &'static YTransaction = std::mem::transmute(txn);
-            let static_iter: ManuallyDrop<Attributes<'static, YTransaction>> =
-                ManuallyDrop::new((*this).attributes(txn));
-            YXmlAttributes(static_iter).into()
-        })
+    pub fn attributes(&self, txn: &ImplicitTransaction) -> JsValue {
+        let txn = TransactionRef::new(txn, &self.0);
+        let branch: &'static Branch = unsafe { std::mem::transmute(self.0.as_ref()) };
+        let attrs = Attributes::new(branch, txn);
+        let iter = YXmlAttributes(IterJs::new(attrs));
+        to_iter(iter.into())
     }
 
     /// Returns an iterator that enables a deep traversal of this XML node - starting from first
     /// child over this XML node successors using depth-first strategy.
     #[wasm_bindgen(js_name = treeWalker)]
-    pub fn tree_walker(&self, txn: &YTransaction) -> JsValue {
-        to_iter(unsafe {
-            let this: *const XmlElement = &self.0;
-            let txn: &'static YTransaction = std::mem::transmute(txn);
-            let static_iter: ManuallyDrop<TreeWalker<'static, YTransaction>> =
-                ManuallyDrop::new((*this).successors(txn));
-            YXmlTreeWalker(static_iter).into()
-        })
+    pub fn tree_walker(&self, txn: &ImplicitTransaction) -> JsValue {
+        let txn = TransactionRef::new(txn, &self.0);
+        let branch: &'static Branch = unsafe { std::mem::transmute(self.0.as_ref()) };
+        let tree_walker = TreeWalker::new(branch, txn);
+        let iter = YXmlTreeWalker(IterJs::new(tree_walker));
+        to_iter(iter.into())
     }
 
     /// Subscribes to all operations happening over this instance of `YXmlElement`. All changes are
@@ -2847,55 +2919,34 @@ impl YXmlElement {
 }
 
 #[wasm_bindgen]
-pub struct YXmlAttributes(ManuallyDrop<Attributes<'static, YTransaction>>);
-
-impl Drop for YXmlAttributes {
-    fn drop(&mut self) {
-        unsafe { ManuallyDrop::drop(&mut self.0) }
-    }
-}
-
-impl<'a> From<Option<(&'a str, String)>> for IteratorNext {
-    fn from(o: Option<(&'a str, String)>) -> Self {
-        match o {
-            None => IteratorNext::finished(),
-            Some((name, value)) => {
-                let tuple = js_sys::Array::new_with_length(2);
-                tuple.set(0, JsValue::from_str(name));
-                tuple.set(1, JsValue::from(&value));
-                IteratorNext::new(tuple.into())
-            }
-        }
-    }
-}
+pub struct YXmlAttributes(
+    IterJs<Attributes<'static, TransactionRef, TransactionRef>, (&'static str, String)>,
+);
 
 #[wasm_bindgen]
 impl YXmlAttributes {
     #[wasm_bindgen]
     pub fn next(&mut self) -> IteratorNext {
-        self.0.next().into()
+        self.0.next()
+    }
+    #[wasm_bindgen(js_name=return)]
+    pub fn close(&mut self) -> IteratorNext {
+        self.0.close()
     }
 }
 
 #[wasm_bindgen]
-pub struct YXmlTreeWalker(ManuallyDrop<TreeWalker<'static, YTransaction>>);
-
-impl Drop for YXmlTreeWalker {
-    fn drop(&mut self) {
-        unsafe { ManuallyDrop::drop(&mut self.0) }
-    }
-}
+pub struct YXmlTreeWalker(IterJs<TreeWalker<'static, TransactionRef, TransactionRef>, Xml>);
 
 #[wasm_bindgen]
 impl YXmlTreeWalker {
     #[wasm_bindgen]
     pub fn next(&mut self) -> IteratorNext {
-        if let Some(xml) = self.0.next() {
-            let js_val = xml_into_js(xml);
-            IteratorNext::new(js_val)
-        } else {
-            IteratorNext::finished()
-        }
+        self.0.next()
+    }
+    #[wasm_bindgen(js_name=return)]
+    pub fn close(&mut self) -> IteratorNext {
+        self.0.close()
     }
 }
 
@@ -3114,12 +3165,12 @@ impl YXmlText {
     /// Returns an iterator that enables to traverse over all attributes of this XML node in
     /// unspecified order.
     #[wasm_bindgen(js_name = attributes)]
-    pub fn attributes(&self, txn: &YTransaction) -> YXmlAttributes {
-        let this: *const XmlText = &self.0;
-        let txn: &'static YTransaction = unsafe { std::mem::transmute(txn) };
-        let static_iter: ManuallyDrop<Attributes<'static, YTransaction>> =
-            unsafe { ManuallyDrop::new((*this).attributes(txn)) };
-        YXmlAttributes(static_iter)
+    pub fn attributes(&self, txn: &ImplicitTransaction) -> JsValue {
+        let txn = TransactionRef::new(txn, &self.0);
+        let branch: &'static Branch = unsafe { std::mem::transmute(self.0.as_ref()) };
+        let attrs = Attributes::new(branch, txn);
+        let iter = YXmlAttributes(IterJs::new(attrs));
+        to_iter(iter.into())
     }
 
     /// Subscribes to all operations happening over this instance of `YXmlText`. All changes are
