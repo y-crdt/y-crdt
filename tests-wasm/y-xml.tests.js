@@ -34,8 +34,10 @@ export const testAttributes = tc => {
         root.setAttribute('key2', 'value2', txn)
 
         let obj = {}
-        for (let [key,value] of root.attributes(txn)) {
-            obj[key] = value
+        let attrs = root.attributes(txn);
+        for (let key in attrs) {
+            // we test iterator here
+            obj[key] = attrs[key]
         }
         return obj
     })
