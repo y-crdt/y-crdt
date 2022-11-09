@@ -1,12 +1,15 @@
 use crate::block::ClientID;
+use std::borrow::Borrow;
 
 use crate::event::{AfterTransactionEvent, EventHandler, Subscription, UpdateEvent};
 use crate::store::{Store, StoreRef};
 use crate::transaction::Transaction;
+use crate::types::{Branch, BranchPtr, Value};
 use crate::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use crate::{DeleteSet, StateVector, SubscriptionId};
 use rand::Rng;
 use std::ops::Deref;
+use std::rc::Rc;
 
 /// A Yrs document type. Documents are most important units of collaborative resources management.
 /// All shared collections live within a scope of their corresponding documents. All updates are
@@ -161,11 +164,30 @@ impl Doc {
         self.encode_state_as_update(sv, &mut encoder);
         encoder.to_vec()
     }
+
+    /// Returns an iterator over top level (root) shared types available in current [Doc].
+    pub fn root_refs(&self) -> RootRefs {
+        let store = self.store.borrow();
+        RootRefs(store.types.iter())
+    }
 }
 
 impl Default for Doc {
     fn default() -> Self {
         Doc::new()
+    }
+}
+
+pub struct RootRefs<'doc>(std::collections::hash_map::Iter<'doc, Rc<str>, Box<Branch>>);
+
+impl<'doc> Iterator for RootRefs<'doc> {
+    type Item = (&'doc str, Value);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let (key, branch) = self.0.next()?;
+        let key = key.as_ref();
+        let ptr = BranchPtr::from(branch);
+        Some((key, ptr.into()))
     }
 }
 
@@ -212,10 +234,11 @@ pub enum OffsetKind {
 #[cfg(test)]
 mod test {
     use crate::block::{Block, ItemContent};
+    use crate::test_utils::exchange_updates;
     use crate::update::Update;
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
-    use crate::{DeleteSet, Doc, Options, StateVector, SubscriptionId};
+    use crate::{DeleteSet, Doc, Options, PrelimArray, StateVector, SubscriptionId};
     use lib0::any::Any;
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
@@ -861,5 +884,72 @@ mod test {
             let u = Update::decode_v1(diff.as_slice()).unwrap();
             txn.apply_update(u);
         }
+    }
+
+    #[test]
+    fn root_refs() {
+        let doc = Doc::new();
+        {
+            let mut txn = doc.transact();
+            let txt = txn.get_text("text");
+            let array = txn.get_array("array");
+            let map = txn.get_map("map");
+            let xml_elem = txn.get_xml_element("xml_elem");
+            let xml_text = txn.get_xml_text("xml_text");
+        }
+
+        for (key, value) in doc.root_refs() {
+            match key {
+                "text" => assert!(value.to_ytext().is_some()),
+                "array" => assert!(value.to_yarray().is_some()),
+                "map" => assert!(value.to_ymap().is_some()),
+                "xml_elem" => assert!(value.to_yxml_elem().is_some()),
+                "xml_text" => assert!(value.to_yxml_text().is_some()),
+                other => panic!("unrecognized root type: '{}'", other),
+            }
+        }
+    }
+
+    #[test]
+    fn integrate_block_with_parent_gc() {
+        let d1 = Doc::with_client_id(1);
+        let d2 = Doc::with_client_id(2);
+        let d3 = Doc::with_client_id(3);
+
+        {
+            let mut txn = d1.transact();
+            let root = txn.get_array("array");
+            root.push_back(&mut txn, PrelimArray::from(["A"]));
+        }
+
+        exchange_updates(&[&d1, &d2, &d3]);
+
+        {
+            let mut t2 = d2.transact();
+            let root = t2.get_array("array");
+            root.remove(&mut t2, 0);
+            d1.transact()
+                .apply_update(Update::decode_v1(&t2.encode_update_v1()).unwrap());
+        }
+
+        {
+            let mut t3 = d3.transact();
+            let root = t3.get_array("array");
+            let a3 = root.get(0).unwrap().to_yarray().unwrap();
+            a3.push_back(&mut t3, "B");
+            // D1 got update which already removed a3, but this must not cause panic
+            d1.transact()
+                .apply_update(Update::decode_v1(&t3.encode_update_v1()).unwrap());
+        }
+
+        exchange_updates(&[&d1, &d2, &d3]);
+
+        let r1 = d1.transact().get_array("array");
+        let r2 = d2.transact().get_array("array");
+        let r3 = d3.transact().get_array("array");
+
+        assert_eq!(r1.to_json(), r2.to_json());
+        assert_eq!(r2.to_json(), r3.to_json());
+        assert_eq!(r3.to_json(), r1.to_json());
     }
 }
