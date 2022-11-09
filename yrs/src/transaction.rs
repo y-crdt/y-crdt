@@ -355,8 +355,11 @@ impl Transaction {
 
                 item.mark_as_deleted();
                 self.delete_set.insert(item.id.clone(), item.len());
-                let parent = *item.parent.as_branch().unwrap();
-                self.add_changed_type(parent, item.parent_sub.clone());
+                if let Some(parent) = item.parent.as_branch() {
+                    self.add_changed_type(*parent, item.parent_sub.clone());
+                } else {
+                    // parent has been GC'ed
+                }
 
                 match &item.content {
                     ItemContent::Doc(_, _) => {

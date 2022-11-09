@@ -13,7 +13,7 @@ use crate::store::StoreRef;
 use crate::types::array::{Array, ArrayEvent};
 use crate::types::map::MapEvent;
 use crate::types::text::TextEvent;
-use crate::types::xml::{XmlElement, XmlEvent, XmlText, XmlTextEvent};
+use crate::types::xml::{XmlElement, XmlEvent, XmlFragment, XmlText, XmlTextEvent};
 use lib0::any::Any;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Formatter;
