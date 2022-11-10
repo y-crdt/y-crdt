@@ -53,11 +53,8 @@ typedef struct YDoc {} YDoc;
  */
 typedef struct Branch {} Branch;
 
-/**
- * Transaction is one of the core types in Yrs. All operations that need to touch a document's
- * contents (a.k.a. block store), need to be executed in scope of a transaction.
- */
-typedef struct YTransaction {} YTransaction;
+typedef struct Transaction {} Transaction;
+typedef struct TransactionMut {} TransactionMut;
 
 /**
  * Iterator structure used by shared array data type.
@@ -92,6 +89,14 @@ trailer = """
 
 [parse]
 parse_deps = false
+
+[export]
+exclude = [
+    "ArrayIter",
+    "MapIter",
+    "Attributes",
+    "TreeWalker"
+]
 
 [export.rename]
 "Doc" = "YDoc"

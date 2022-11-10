@@ -1,5 +1,5 @@
 use crate::update::Update;
-use crate::updates::decoder::{Decode, DecoderV1, DecoderV2};
+use crate::updates::decoder::{Decode, DecoderV2};
 use crate::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use crate::StateVector;
 use lib0::decoding::Cursor;
@@ -38,13 +38,12 @@ pub fn encode_state_vector_from_update_v2(update: &[u8]) -> Result<Vec<u8>, Erro
 // Encode the missing differences to another document update.
 pub fn diff_updates_v1(update: &[u8], state_vector: &[u8]) -> Result<Vec<u8>, Error> {
     let sv = StateVector::decode_v1(state_vector)?;
-    let cursor = Cursor::new(update);
-    let mut decoder = DecoderV1::new(cursor);
-    let update = Update::decode(&mut decoder)?;
+    let update = Update::decode_v1(update)?;
     let mut encoder = EncoderV1::new();
     update.encode_diff(&sv, &mut encoder);
     // for delete set, don't decode/encode it - just copy the remaining part from the decoder
-    Ok(encoder.to_vec())
+    let result = encoder.to_vec();
+    Ok(result)
 }
 
 // Encode the missing differences to another document update.

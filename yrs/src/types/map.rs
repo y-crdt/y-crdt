@@ -1,14 +1,17 @@
 use crate::block::{Block, ItemContent, ItemPosition, Prelim};
-use crate::event::Subscription;
+use crate::transaction::TransactionMut;
 use crate::types::{
-    event_keys, Branch, BranchPtr, Entries, EntryChange, Observers, Path, Value, TYPE_REFS_MAP,
+    event_keys, Branch, BranchPtr, Entries, EntryChange, Observers, Path, ToJson, Value,
+    TYPE_REFS_MAP,
 };
 use crate::*;
 use lib0::any::Any;
+use std::borrow::Borrow;
 use std::cell::UnsafeCell;
 use std::collections::{HashMap, HashSet};
 use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
+use std::sync::Arc;
 
 /// Collection used to store key-value entries in an unordered manner. Keys are always represented
 /// as UTF-8 strings. Values can be any value type supported by Yrs: JSON-like primitives as well as
@@ -22,28 +25,12 @@ use std::rc::Rc;
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Map(BranchPtr);
 
-impl Map {
-    /// Converts all entries of a current map into JSON-like object representation.
-    pub fn to_json(&self) -> Any {
-        let inner = self.0;
-        let mut res = HashMap::new();
-        for (key, ptr) in inner.map.iter() {
-            if let Block::Item(item) = ptr.deref() {
-                if !item.is_deleted() {
-                    let any = if let Some(value) = item.content.get_last() {
-                        value.to_json()
-                    } else {
-                        Any::Null
-                    };
-                    res.insert(key.to_string(), any);
-                }
-            }
-        }
-        Any::Map(Box::new(res))
-    }
+unsafe impl Send for Map {}
+unsafe impl Sync for Map {}
 
+impl Map {
     /// Returns a number of entries stored within current map.
-    pub fn len(&self) -> u32 {
+    pub fn len<T: ReadTxn>(&self, txn: &T) -> u32 {
         let mut len = 0;
         let inner = self.0;
         for ptr in inner.map.values() {
@@ -57,37 +44,32 @@ impl Map {
         len
     }
 
-    fn entries(&self) -> Entries {
-        Entries::new(&self.0.map)
-    }
-
     /// Returns an iterator that enables to traverse over all keys of entries stored within
     /// current map. These keys are not ordered.
-    pub fn keys(&self) -> Keys {
-        Keys(self.entries())
+    pub fn keys<'a, T: ReadTxn + 'a>(&'a self, txn: &'a T) -> Keys<'a, &'a T, T> {
+        Keys::new(&self.0, txn)
     }
 
     /// Returns an iterator that enables to traverse over all values stored within current map.
-    pub fn values(&self) -> Values {
-        Values(self.entries())
+    pub fn values<'a, T: ReadTxn + 'a>(&'a self, txn: &'a T) -> Values<'a, &'a T, T> {
+        Values::new(&self.0, txn)
     }
 
     /// Returns an iterator that enables to traverse over all entries - tuple of key-value pairs -
     /// stored within current map.
-    pub fn iter(&self) -> MapIter {
-        MapIter(self.entries())
+    pub fn iter<'a, T: ReadTxn + 'a>(&'a self, txn: &'a T) -> MapIter<'a, &'a T, T> {
+        MapIter::new(&self.0, txn)
     }
 
     /// Inserts a new `value` under given `key` into current map. Returns a value stored previously
     /// under the same key (if any existed).
-    pub fn insert<K: Into<Rc<str>>, V: Prelim>(
-        &self,
-        txn: &mut Transaction,
-        key: K,
-        value: V,
-    ) -> Option<Value> {
+    pub fn insert<K, V>(&self, txn: &mut TransactionMut, key: K, value: V) -> Option<Value>
+    where
+        K: Into<Rc<str>>,
+        V: Prelim,
+    {
         let key = key.into();
-        let previous = self.get(&key);
+        let previous = self.get(txn, &key);
         let pos = {
             let inner = self.0;
             let left = inner.map.get(&key);
@@ -106,18 +88,18 @@ impl Map {
 
     /// Removes a stored within current map under a given `key`. Returns that value or `None` if
     /// no entry with a given `key` was present in current map.
-    pub fn remove(&self, txn: &mut Transaction, key: &str) -> Option<Value> {
+    pub fn remove(&self, txn: &mut TransactionMut, key: &str) -> Option<Value> {
         self.0.remove(txn, key)
     }
 
     /// Returns a value stored under a given `key` within current map, or `None` if no entry
     /// with such `key` existed.
-    pub fn get(&self, key: &str) -> Option<Value> {
-        self.0.get(key)
+    pub fn get<T: ReadTxn>(&self, txn: &T, key: &str) -> Option<Value> {
+        self.0.get(txn, key)
     }
 
     /// Checks if an entry with given `key` can be found within current map.
-    pub fn contains(&self, key: &str) -> bool {
+    pub fn contains<T: ReadTxn>(&self, txn: &T, key: &str) -> bool {
         if let Some(ptr) = self.0.map.get(key) {
             if let Block::Item(item) = ptr.deref() {
                 return !item.is_deleted();
@@ -127,7 +109,7 @@ impl Map {
     }
 
     /// Clears the contents of current map, effectively removing all of its entries.
-    pub fn clear(&self, txn: &mut Transaction) {
+    pub fn clear(&self, txn: &mut TransactionMut) {
         for (_, ptr) in self.0.map.iter() {
             txn.delete(ptr.clone());
         }
@@ -140,12 +122,12 @@ impl Map {
     /// All map changes can be tracked by using [Event::keys] method.
     ///
     /// Returns an [Observer] which, when dropped, will unsubscribe current callback.
-    pub fn observe<F>(&mut self, f: F) -> Subscription<MapEvent>
+    pub fn observe<F>(&mut self, f: F) -> MapSubscription
     where
-        F: Fn(&Transaction, &MapEvent) -> () + 'static,
+        F: Fn(&TransactionMut, &MapEvent) -> () + 'static,
     {
         if let Observers::Map(eh) = self.0.observers.get_or_insert_with(Observers::map) {
-            eh.subscribe(f)
+            eh.subscribe(Arc::new(f))
         } else {
             panic!("Observed collection is of different type") //TODO: this should be Result::Err
         }
@@ -156,6 +138,24 @@ impl Map {
         if let Some(Observers::Map(eh)) = self.0.observers.as_mut() {
             eh.unsubscribe(subscription_id);
         }
+    }
+}
+
+pub type MapSubscription = crate::Subscription<Arc<dyn Fn(&TransactionMut, &MapEvent) -> ()>>;
+
+impl ToJson for Map {
+    fn to_json<T: ReadTxn>(&self, txn: &T) -> Any {
+        let inner = self.0;
+        let mut res = HashMap::new();
+        for (key, ptr) in inner.map.iter() {
+            if let Block::Item(item) = ptr.deref() {
+                if !item.is_deleted() {
+                    let last = item.content.get_last().unwrap_or(Value::Any(Any::Null));
+                    res.insert(key.to_string(), last.to_json(txn));
+                }
+            }
+        }
+        Any::Map(Box::new(res))
     }
 }
 
@@ -171,9 +171,25 @@ impl AsMut<Branch> for Map {
     }
 }
 
-pub struct MapIter<'a>(Entries<'a>);
+#[derive(Debug)]
+pub struct MapIter<'a, B, T>(Entries<'a, B, T>);
 
-impl<'a> Iterator for MapIter<'a> {
+impl<'a, B, T> MapIter<'a, B, T>
+where
+    B: Borrow<T>,
+    T: ReadTxn,
+{
+    pub fn new(branch: &'a Branch, txn: B) -> Self {
+        let entries = Entries::new(&branch.map, txn);
+        MapIter(entries)
+    }
+}
+
+impl<'a, B, T> Iterator for MapIter<'a, B, T>
+where
+    B: Borrow<T>,
+    T: ReadTxn,
+{
     type Item = (&'a str, Value);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -187,9 +203,25 @@ impl<'a> Iterator for MapIter<'a> {
 }
 
 /// An unordered iterator over the keys of a [Map].
-pub struct Keys<'a>(Entries<'a>);
+#[derive(Debug)]
+pub struct Keys<'a, B, T>(Entries<'a, B, T>);
 
-impl<'a> Iterator for Keys<'a> {
+impl<'a, B, T> Keys<'a, B, T>
+where
+    B: Borrow<T>,
+    T: ReadTxn,
+{
+    pub fn new(branch: &'a Branch, txn: B) -> Self {
+        let entries = Entries::new(&branch.map, txn);
+        Keys(entries)
+    }
+}
+
+impl<'a, B, T> Iterator for Keys<'a, B, T>
+where
+    B: Borrow<T>,
+    T: ReadTxn,
+{
     type Item = &'a str;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -199,14 +231,36 @@ impl<'a> Iterator for Keys<'a> {
 }
 
 /// Iterator over the values of a [Map].
-pub struct Values<'a>(Entries<'a>);
+#[derive(Debug)]
+pub struct Values<'a, B, T>(Entries<'a, B, T>);
 
-impl<'a> Iterator for Values<'a> {
+impl<'a, B, T> Values<'a, B, T>
+where
+    B: Borrow<T>,
+    T: ReadTxn,
+{
+    pub fn new(branch: &'a Branch, txn: B) -> Self {
+        let entries = Entries::new(&branch.map, txn);
+        Values(entries)
+    }
+}
+
+impl<'a, B, T> Iterator for Values<'a, B, T>
+where
+    B: Borrow<T>,
+    T: ReadTxn,
+{
     type Item = Vec<Value>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let (_, item) = self.0.next()?;
-        Some(item.content.get_content())
+        let len = item.len() as usize;
+        let mut values = vec![Value::default(); len];
+        if item.content.read(0, &mut values) == len {
+            Some(values)
+        } else {
+            panic!("Defect: iterator didn't read all elements")
+        }
     }
 }
 
@@ -233,12 +287,12 @@ impl<T> From<HashMap<String, T>> for PrelimMap<T> {
 }
 
 impl<T: Prelim> Prelim for PrelimMap<T> {
-    fn into_content(self, _txn: &mut Transaction) -> (ItemContent, Option<Self>) {
+    fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
         let inner = Branch::new(TYPE_REFS_MAP, None);
         (ItemContent::Type(inner), Some(self))
     }
 
-    fn integrate(self, txn: &mut Transaction, inner_ref: BranchPtr) {
+    fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
         let map = Map::from(inner_ref);
         for (key, value) in self.0 {
             map.insert(txn, key, value);
@@ -275,7 +329,7 @@ impl MapEvent {
 
     /// Returns a summary of key-value changes made over corresponding [Map] collection within
     /// bounds of current transaction.
-    pub fn keys(&self, txn: &Transaction) -> &HashMap<Rc<str>, EntryChange> {
+    pub fn keys(&self, txn: &TransactionMut) -> &HashMap<Rc<str>, EntryChange> {
         let keys = unsafe { self.keys.get().as_mut().unwrap() };
 
         match keys {
@@ -298,11 +352,12 @@ impl MapEvent {
 #[cfg(test)]
 mod test {
     use crate::test_utils::{exchange_updates, run_scenario};
+    use crate::transaction::ReadTxn;
     use crate::types::text::PrelimText;
-    use crate::types::{DeepObservable, EntryChange, Event, Map, Path, PathSegment, Value};
+    use crate::types::{DeepObservable, EntryChange, Event, Map, Path, PathSegment, ToJson, Value};
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encoder, EncoderV1};
-    use crate::{Doc, PrelimArray, PrelimMap, StateVector, Update};
+    use crate::{Doc, PrelimArray, PrelimMap, StateVector, Transact, Update};
     use lib0::any::Any;
     use rand::distributions::Alphanumeric;
     use rand::prelude::{SliceRandom, StdRng};
@@ -311,16 +366,17 @@ mod test {
     use std::collections::HashMap;
     use std::ops::{Deref, DerefMut};
     use std::rc::Rc;
+    use std::time::Duration;
 
     #[test]
     fn map_basic() {
         let d1 = Doc::with_client_id(1);
-        let mut t1 = d1.transact();
-        let m1 = t1.get_map("map");
+        let m1 = d1.get_map("map");
+        let mut t1 = d1.transact_mut();
 
         let d2 = Doc::with_client_id(2);
-        let mut t2 = d2.transact();
-        let m2 = t2.get_map("map");
+        let m2 = d2.get_map("map");
+        let mut t2 = d2.transact_mut();
 
         m1.insert(&mut t1, "number".to_owned(), 1);
         m1.insert(&mut t1, "string".to_owned(), "hello Y");
@@ -342,14 +398,17 @@ mod test {
         //m1m.insert(&mut t1, "y-text".to_owned(), m1a);
 
         //TODO: YArray within YMap
-        fn compare_all(m: &Map) {
-            assert_eq!(m.len(), 5);
-            assert_eq!(m.get(&"number".to_owned()), Some(Value::from(1f64)));
-            assert_eq!(m.get(&"boolean0".to_owned()), Some(Value::from(false)));
-            assert_eq!(m.get(&"boolean1".to_owned()), Some(Value::from(true)));
-            assert_eq!(m.get(&"string".to_owned()), Some(Value::from("hello Y")));
+        fn compare_all<T: ReadTxn>(m: &Map, txn: &T) {
+            assert_eq!(m.len(txn), 5);
+            assert_eq!(m.get(txn, &"number".to_owned()), Some(Value::from(1f64)));
+            assert_eq!(m.get(txn, &"boolean0".to_owned()), Some(Value::from(false)));
+            assert_eq!(m.get(txn, &"boolean1".to_owned()), Some(Value::from(true)));
             assert_eq!(
-                m.get(&"object".to_owned()),
+                m.get(txn, &"string".to_owned()),
+                Some(Value::from("hello Y"))
+            );
+            assert_eq!(
+                m.get(txn, &"object".to_owned()),
                 Some(Value::from({
                     let mut m = HashMap::new();
                     let mut n = HashMap::new();
@@ -360,108 +419,111 @@ mod test {
             );
         }
 
-        compare_all(&m1);
+        compare_all(&m1, &t1);
 
-        let update = d1.encode_state_as_update_v1(&StateVector::default());
+        let update = t1.encode_state_as_update_v1(&StateVector::default());
         t2.apply_update(Update::decode_v1(update.as_slice()).unwrap());
 
-        compare_all(&m2);
+        compare_all(&m2, &t2);
     }
 
     #[test]
     fn map_get_set() {
         let d1 = Doc::with_client_id(1);
-        let mut t1 = d1.transact();
-        let m1 = t1.get_map("map");
+        let m1 = d1.get_map("map");
+        let mut t1 = d1.transact_mut();
 
         m1.insert(&mut t1, "stuff".to_owned(), "stuffy");
         m1.insert(&mut t1, "null".to_owned(), None as Option<String>);
 
-        let update = d1.encode_state_as_update_v1(&StateVector::default());
+        let update = t1.encode_state_as_update_v1(&StateVector::default());
 
         let d2 = Doc::with_client_id(2);
-        let mut t2 = d2.transact();
+        let m2 = d2.get_map("map");
+        let mut t2 = d2.transact_mut();
 
         t2.apply_update(Update::decode_v1(update.as_slice()).unwrap());
 
-        let m2 = t2.get_map("map");
-        assert_eq!(m2.get(&"stuff".to_owned()), Some(Value::from("stuffy")));
-        assert_eq!(m2.get(&"null".to_owned()), Some(Value::Any(Any::Null)));
+        assert_eq!(
+            m2.get(&t2, &"stuff".to_owned()),
+            Some(Value::from("stuffy"))
+        );
+        assert_eq!(m2.get(&t2, &"null".to_owned()), Some(Value::Any(Any::Null)));
     }
 
     #[test]
     fn map_get_set_sync_with_conflicts() {
         let d1 = Doc::with_client_id(1);
-        let mut t1 = d1.transact();
-        let m1 = t1.get_map("map");
+        let m1 = d1.get_map("map");
+        let mut t1 = d1.transact_mut();
 
         let d2 = Doc::with_client_id(2);
-        let mut t2 = d2.transact();
-        let m2 = t2.get_map("map");
+        let m2 = d2.get_map("map");
+        let mut t2 = d2.transact_mut();
 
         m1.insert(&mut t1, "stuff".to_owned(), "c0");
         m2.insert(&mut t2, "stuff".to_owned(), "c1");
 
-        let u1 = d1.encode_state_as_update_v1(&StateVector::default());
-        let u2 = d2.encode_state_as_update_v1(&StateVector::default());
+        let u1 = t1.encode_state_as_update_v1(&StateVector::default());
+        let u2 = t2.encode_state_as_update_v1(&StateVector::default());
 
         t1.apply_update(Update::decode_v1(u2.as_slice()).unwrap());
         t2.apply_update(Update::decode_v1(u1.as_slice()).unwrap());
 
-        assert_eq!(m1.get(&"stuff".to_owned()), Some(Value::from("c1")));
-        assert_eq!(m2.get(&"stuff".to_owned()), Some(Value::from("c1")));
+        assert_eq!(m1.get(&t1, &"stuff".to_owned()), Some(Value::from("c1")));
+        assert_eq!(m2.get(&t2, &"stuff".to_owned()), Some(Value::from("c1")));
     }
 
     #[test]
     fn map_len_remove() {
         let d1 = Doc::with_client_id(1);
-        let mut t1 = d1.transact();
-        let m1 = t1.get_map("map");
+        let m1 = d1.get_map("map");
+        let mut t1 = d1.transact_mut();
 
         let key1 = "stuff".to_owned();
         let key2 = "other-stuff".to_owned();
 
         m1.insert(&mut t1, key1.clone(), "c0");
         m1.insert(&mut t1, key2.clone(), "c1");
-        assert_eq!(m1.len(), 2);
+        assert_eq!(m1.len(&t1), 2);
 
         // remove 'stuff'
         assert_eq!(m1.remove(&mut t1, &key1), Some(Value::from("c0")));
-        assert_eq!(m1.len(), 1);
+        assert_eq!(m1.len(&t1), 1);
 
         // remove 'stuff' again - nothing should happen
         assert_eq!(m1.remove(&mut t1, &key1), None);
-        assert_eq!(m1.len(), 1);
+        assert_eq!(m1.len(&t1), 1);
 
         // remove 'other-stuff'
         assert_eq!(m1.remove(&mut t1, &key2), Some(Value::from("c1")));
-        assert_eq!(m1.len(), 0);
+        assert_eq!(m1.len(&t1), 0);
     }
 
     #[test]
     fn map_clear() {
         let d1 = Doc::with_client_id(1);
-        let mut t1 = d1.transact();
-        let m1 = t1.get_map("map");
+        let m1 = d1.get_map("map");
+        let mut t1 = d1.transact_mut();
 
         m1.insert(&mut t1, "key1".to_owned(), "c0");
         m1.insert(&mut t1, "key2".to_owned(), "c1");
         m1.clear(&mut t1);
 
-        assert_eq!(m1.len(), 0);
-        assert_eq!(m1.get(&"key1".to_owned()), None);
-        assert_eq!(m1.get(&"key2".to_owned()), None);
+        assert_eq!(m1.len(&t1), 0);
+        assert_eq!(m1.get(&t1, &"key1".to_owned()), None);
+        assert_eq!(m1.get(&t1, &"key2".to_owned()), None);
 
         let d2 = Doc::with_client_id(2);
-        let mut t2 = d2.transact();
+        let m2 = d2.get_map("map");
+        let mut t2 = d2.transact_mut();
 
-        let u1 = d1.encode_state_as_update_v1(&StateVector::default());
+        let u1 = t1.encode_state_as_update_v1(&StateVector::default());
         t2.apply_update(Update::decode_v1(u1.as_slice()).unwrap());
 
-        let m2 = t2.get_map("map");
-        assert_eq!(m2.len(), 0);
-        assert_eq!(m2.get(&"key1".to_owned()), None);
-        assert_eq!(m2.get(&"key2".to_owned()), None);
+        assert_eq!(m2.len(&t2), 0);
+        assert_eq!(m2.get(&t2, &"key1".to_owned()), None);
+        assert_eq!(m2.get(&t2, &"key2".to_owned()), None);
     }
 
     #[test]
@@ -472,13 +534,13 @@ mod test {
         let d4 = Doc::with_client_id(4);
 
         {
-            let mut t1 = d1.transact();
-            let mut t2 = d2.transact();
-            let mut t3 = d3.transact();
+            let m1 = d1.get_map("map");
+            let m2 = d2.get_map("map");
+            let m3 = d3.get_map("map");
 
-            let m1 = t1.get_map("map");
-            let m2 = t2.get_map("map");
-            let m3 = t3.get_map("map");
+            let mut t1 = d1.transact_mut();
+            let mut t2 = d2.transact_mut();
+            let mut t3 = d3.transact_mut();
 
             m1.insert(&mut t1, "key1".to_owned(), "c0");
             m2.insert(&mut t2, "key1".to_owned(), "c1");
@@ -489,13 +551,13 @@ mod test {
         exchange_updates(&[&d1, &d2, &d3, &d4]);
 
         {
-            let mut t1 = d1.transact();
-            let mut t2 = d2.transact();
-            let mut t3 = d3.transact();
+            let m1 = d1.get_map("map");
+            let m2 = d2.get_map("map");
+            let m3 = d3.get_map("map");
 
-            let m1 = t1.get_map("map");
-            let m2 = t2.get_map("map");
-            let m3 = t3.get_map("map");
+            let mut t1 = d1.transact_mut();
+            let mut t2 = d2.transact_mut();
+            let mut t3 = d3.transact_mut();
 
             m1.insert(&mut t1, "key2".to_owned(), "c0");
             m2.insert(&mut t2, "key2".to_owned(), "c1");
@@ -507,23 +569,22 @@ mod test {
         exchange_updates(&[&d1, &d2, &d3, &d4]);
 
         for doc in [d1, d2, d3, d4] {
-            let mut txn = doc.transact();
-            let map = txn.get_map("map");
+            let map = doc.get_map("map");
 
             assert_eq!(
-                map.get(&"key1".to_owned()),
+                map.get(&map.transact(), &"key1".to_owned()),
                 None,
                 "'key1' entry for peer {} should be removed",
                 doc.client_id
             );
             assert_eq!(
-                map.get(&"key2".to_owned()),
+                map.get(&map.transact(), &"key2".to_owned()),
                 None,
                 "'key2' entry for peer {} should be removed",
                 doc.client_id
             );
             assert_eq!(
-                map.len(),
+                map.len(&map.transact()),
                 0,
                 "all entries for peer {} should be removed",
                 doc.client_id
@@ -538,13 +599,13 @@ mod test {
         let d3 = Doc::with_client_id(3);
 
         {
-            let mut t1 = d1.transact();
-            let mut t2 = d2.transact();
-            let mut t3 = d3.transact();
+            let m1 = d1.get_map("map");
+            let m2 = d2.get_map("map");
+            let m3 = d3.get_map("map");
 
-            let m1 = t1.get_map("map");
-            let m2 = t2.get_map("map");
-            let m3 = t3.get_map("map");
+            let mut t1 = d1.transact_mut();
+            let mut t2 = d2.transact_mut();
+            let mut t3 = d3.transact_mut();
 
             m1.insert(&mut t1, "stuff".to_owned(), "c0");
             m2.insert(&mut t2, "stuff".to_owned(), "c1");
@@ -555,12 +616,10 @@ mod test {
         exchange_updates(&[&d1, &d2, &d3]);
 
         for doc in [d1, d2, d3] {
-            let mut txn = doc.transact();
-
-            let map = txn.get_map("map");
+            let map = doc.get_map("map");
 
             assert_eq!(
-                map.get(&"stuff".to_owned()),
+                map.get(&map.transact(), &"stuff".to_owned()),
                 Some(Value::from("c3")),
                 "peer {} - map entry resolved to unexpected value",
                 doc.client_id
@@ -576,13 +635,13 @@ mod test {
         let d4 = Doc::with_client_id(4);
 
         {
-            let mut t1 = d1.transact();
-            let mut t2 = d2.transact();
-            let mut t3 = d3.transact();
+            let m1 = d1.get_map("map");
+            let m2 = d2.get_map("map");
+            let m3 = d3.get_map("map");
 
-            let m1 = t1.get_map("map");
-            let m2 = t2.get_map("map");
-            let m3 = t3.get_map("map");
+            let mut t1 = d1.transact_mut();
+            let mut t2 = d2.transact_mut();
+            let mut t3 = d3.transact_mut();
 
             m1.insert(&mut t1, "key1".to_owned(), "c0");
             m2.insert(&mut t2, "key1".to_owned(), "c1");
@@ -593,15 +652,15 @@ mod test {
         exchange_updates(&[&d1, &d2, &d3, &d4]);
 
         {
-            let mut t1 = d1.transact();
-            let mut t2 = d2.transact();
-            let mut t3 = d3.transact();
-            let mut t4 = d4.transact();
+            let m1 = d1.get_map("map");
+            let m2 = d2.get_map("map");
+            let m3 = d3.get_map("map");
+            let m4 = d4.get_map("map");
 
-            let m1 = t1.get_map("map");
-            let m2 = t2.get_map("map");
-            let m3 = t3.get_map("map");
-            let m4 = t4.get_map("map");
+            let mut t1 = d1.transact_mut();
+            let mut t2 = d2.transact_mut();
+            let mut t3 = d3.transact_mut();
+            let mut t4 = d4.transact_mut();
 
             m1.insert(&mut t1, "key1".to_owned(), "deleteme");
             m2.insert(&mut t2, "key1".to_owned(), "c1");
@@ -613,11 +672,10 @@ mod test {
         exchange_updates(&[&d1, &d2, &d3, &d4]);
 
         for doc in [d1, d2, d3, d4] {
-            let mut txn = doc.transact();
-            let map = txn.get_map("map");
+            let map = doc.get_map("map");
 
             assert_eq!(
-                map.get(&"key1".to_owned()),
+                map.get(&map.transact(), &"key1".to_owned()),
                 None,
                 "entry 'key1' on peer {} should be removed",
                 doc.client_id
@@ -628,10 +686,7 @@ mod test {
     #[test]
     fn insert_and_remove_events() {
         let d1 = Doc::with_client_id(1);
-        let mut m1 = {
-            let mut txn = d1.transact();
-            txn.get_map("map")
-        };
+        let mut m1 = d1.get_map("map");
 
         let entries = Rc::new(RefCell::new(None));
         let entries_c = entries.clone();
@@ -642,7 +697,7 @@ mod test {
 
         // insert new entry
         {
-            let mut txn = d1.transact();
+            let mut txn = d1.transact_mut();
             m1.insert(&mut txn, "a", 1);
             // txn is committed at the end of this scope
         }
@@ -656,7 +711,7 @@ mod test {
 
         // update existing entry once
         {
-            let mut txn = d1.transact();
+            let mut txn = d1.transact_mut();
             m1.insert(&mut txn, "a", 2);
         }
         assert_eq!(
@@ -669,7 +724,7 @@ mod test {
 
         // update existing entry twice
         {
-            let mut txn = d1.transact();
+            let mut txn = d1.transact_mut();
             m1.insert(&mut txn, "a", 3);
             m1.insert(&mut txn, "a", 4);
         }
@@ -683,7 +738,7 @@ mod test {
 
         // remove existing entry
         {
-            let mut txn = d1.transact();
+            let mut txn = d1.transact_mut();
             m1.remove(&mut txn, "a");
         }
         assert_eq!(
@@ -696,7 +751,7 @@ mod test {
 
         // add another entry and update it
         {
-            let mut txn = d1.transact();
+            let mut txn = d1.transact_mut();
             m1.insert(&mut txn, "b", 1);
             m1.insert(&mut txn, "b", 2);
         }
@@ -710,7 +765,7 @@ mod test {
 
         // add and remove an entry
         {
-            let mut txn = d1.transact();
+            let mut txn = d1.transact_mut();
             m1.insert(&mut txn, "c", 1);
             m1.remove(&mut txn, "c");
         }
@@ -718,10 +773,7 @@ mod test {
 
         // copy updates over
         let d2 = Doc::with_client_id(2);
-        let mut m2 = {
-            let mut txn = d2.transact();
-            txn.get_map("map")
-        };
+        let mut m2 = d2.get_map("map");
 
         let entries = Rc::new(RefCell::new(None));
         let entries_c = entries.clone();
@@ -731,8 +783,8 @@ mod test {
         });
 
         {
-            let t1 = d1.transact();
-            let mut t2 = d2.transact();
+            let t1 = d1.transact_mut();
+            let mut t2 = d2.transact_mut();
 
             let sv = t2.state_vector();
             let mut encoder = EncoderV1::new();
@@ -758,16 +810,16 @@ mod test {
 
     fn map_transactions() -> [Box<dyn Fn(&mut Doc, &mut StdRng)>; 3] {
         fn set(doc: &mut Doc, rng: &mut StdRng) {
-            let mut txn = doc.transact();
-            let map = txn.get_map("map");
+            let map = doc.get_map("map");
+            let mut txn = doc.transact_mut();
             let key = ["one", "two"].choose(rng).unwrap();
             let value: String = random_string(rng);
             map.insert(&mut txn, key.to_string(), value);
         }
 
         fn set_type(doc: &mut Doc, rng: &mut StdRng) {
-            let mut txn = doc.transact();
-            let map = txn.get_map("map");
+            let map = doc.get_map("map");
+            let mut txn = doc.transact_mut();
             let key = ["one", "two", "three"].choose(rng).unwrap();
             if rng.gen_bool(0.33) {
                 map.insert(
@@ -791,8 +843,8 @@ mod test {
         }
 
         fn delete(doc: &mut Doc, rng: &mut StdRng) {
-            let mut txn = doc.transact();
-            let map = txn.get_map("map");
+            let map = doc.get_map("map");
+            let mut txn = doc.transact_mut();
             let key = ["one", "two"].choose(rng).unwrap();
             map.remove(&mut txn, key);
         }
@@ -811,7 +863,7 @@ mod test {
     #[test]
     fn observe_deep() {
         let doc = Doc::with_client_id(1);
-        let mut map = doc.transact().get_map("map");
+        let mut map = doc.get_map("map");
 
         let paths = Rc::new(RefCell::new(vec![]));
         let calls = Rc::new(RefCell::new(0));
@@ -825,19 +877,27 @@ mod test {
             *count += 1;
         });
 
-        map.insert(&mut doc.transact(), "map", PrelimMap::<String>::new());
-        let nested = map.get("map").unwrap().to_ymap().unwrap();
+        map.insert(&mut doc.transact_mut(), "map", PrelimMap::<String>::new());
+        let nested = map.get(&map.transact(), "map").unwrap().to_ymap().unwrap();
         nested.insert(
-            &mut doc.transact(),
+            &mut doc.transact_mut(),
             "array",
             PrelimArray::from(Vec::<String>::default()),
         );
-        let nested2 = nested.get("array").unwrap().to_yarray().unwrap();
-        nested2.insert(&mut doc.transact(), 0, "content");
+        let nested2 = nested
+            .get(&nested.transact(), "array")
+            .unwrap()
+            .to_yarray()
+            .unwrap();
+        nested2.insert(&mut doc.transact_mut(), 0, "content");
 
-        nested.insert(&mut doc.transact(), "text", PrelimText("text"));
-        let nested_text = nested.get("text").unwrap().to_ytext().unwrap();
-        nested_text.push(&mut doc.transact(), "!");
+        nested.insert(&mut doc.transact_mut(), "text", PrelimText("text"));
+        let nested_text = nested
+            .get(&nested.transact(), "text")
+            .unwrap()
+            .to_ytext()
+            .unwrap();
+        nested_text.push(&mut doc.transact_mut(), "!");
 
         assert_eq!(*calls.borrow().deref(), 5);
         let actual = paths.borrow();
@@ -857,5 +917,48 @@ mod test {
                 ])],
             ]
         );
+    }
+
+    #[test]
+    fn multi_threading() {
+        use rand::thread_rng;
+        use std::sync::{Arc, RwLock};
+        use std::thread::{sleep, spawn};
+
+        let doc = Doc::with_client_id(1);
+        let m1 = Arc::new(RwLock::new(doc.get_map("test")));
+
+        let m2 = m1.clone();
+        let h2 = spawn(move || {
+            for _ in 0..10 {
+                let millis = thread_rng().gen_range(1, 20);
+                sleep(Duration::from_millis(millis));
+
+                let map = m2.write().unwrap();
+                let mut txn = map.transact_mut();
+                map.insert(&mut txn, "key", 1);
+            }
+        });
+
+        let m3 = m1.clone();
+        let h3 = spawn(move || {
+            for _ in 0..10 {
+                let millis = thread_rng().gen_range(1, 20);
+                sleep(Duration::from_millis(millis));
+
+                let map = m3.write().unwrap();
+                let mut txn = map.transact_mut();
+                map.insert(&mut txn, "key", 2);
+            }
+        });
+
+        h3.join().unwrap();
+        h2.join().unwrap();
+
+        let map = m1.read().unwrap();
+        let txn = map.transact();
+        let value = map.get(&txn, "key").unwrap().to_json(&txn);
+
+        assert!(value == 1.into() || value == 2.into())
     }
 }

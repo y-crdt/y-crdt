@@ -49,11 +49,8 @@ typedef struct YDoc {} YDoc;
  */
 typedef struct Branch {} Branch;
 
-/**
- * Transaction is one of the core types in Yrs. All operations that need to touch a document's
- * contents (a.k.a. block store), need to be executed in scope of a transaction.
- */
-typedef struct YTransaction {} YTransaction;
+typedef struct Transaction {} Transaction;
+typedef struct TransactionMut {} TransactionMut;
 
 /**
  * Iterator structure used by shared array data type.
@@ -262,6 +259,8 @@ typedef struct YXmlTreeWalker {} YXmlTreeWalker;
  * entry has been overridden with a new value within a map component of shared collection.
  */
 #define Y_EVENT_KEY_CHANGE_UPDATE 6
+
+typedef struct TransactionInner TransactionInner;
 
 /**
  * A Yrs document type. Documents are most important units of collaborative resources management.
@@ -482,10 +481,11 @@ typedef struct YAfterTransactionEvent {
 } YAfterTransactionEvent;
 
 /**
- * Transaction is one of the core types in Yrs. All operations that need to touch a document's
- * contents (a.k.a. block store), need to be executed in scope of a transaction.
+ * Transaction is one of the core types in Yrs. All operations that need to touch or
+ * modify a document's contents (a.k.a. block store), need to be executed in scope of a
+ * transaction.
  */
-typedef YTransaction YTransaction;
+typedef struct TransactionInner YTransaction;
 
 typedef struct YMapInputData {
   char **keys;
@@ -545,39 +545,13 @@ typedef struct YInput {
 } YInput;
 
 /**
- * Iterator structure used by shared array data type.
- */
-typedef YArrayIter YArrayIter;
-
-/**
- * Iterator structure used by shared map data type. Map iterators are unordered - there's no
- * specific order in which map entries will be returned during consecutive iterator calls.
- */
-typedef YMapIter YMapIter;
-
-/**
- * Iterator structure used by XML nodes (elements and text) to iterate over node's attributes.
- * Attribute iterators are unordered - there's no specific order in which map entries will be
- * returned during consecutive iterator calls.
- */
-typedef YXmlAttrIter YXmlAttrIter;
-
-/**
- * Iterator used to traverse over the complex nested tree structure of a XML node. XML node
- * iterator walks only over `YXmlElement` and `YXmlText` nodes. It does so in ordered manner (using
- * the order in which children are ordered within their parent nodes) and using **depth-first**
- * traverse.
- */
-typedef YXmlTreeWalker YXmlTreeWalker;
-
-/**
  * Event pushed into callbacks registered with `ytext_observe` function. It contains delta of all
  * text changes made within a scope of corresponding transaction (see: `ytext_event_delta`) as
  * well as navigation data used to identify a `YText` instance which triggered this event.
  */
 typedef struct YTextEvent {
   const void *inner;
-  const YTransaction *txn;
+  const TransactionMut *txn;
 } YTextEvent;
 
 /**
@@ -587,7 +561,7 @@ typedef struct YTextEvent {
  */
 typedef struct YMapEvent {
   const void *inner;
-  const YTransaction *txn;
+  const TransactionMut *txn;
 } YMapEvent;
 
 /**
@@ -597,7 +571,7 @@ typedef struct YMapEvent {
  */
 typedef struct YArrayEvent {
   const void *inner;
-  const YTransaction *txn;
+  const TransactionMut *txn;
 } YArrayEvent;
 
 /**
@@ -608,7 +582,7 @@ typedef struct YArrayEvent {
  */
 typedef struct YXmlEvent {
   const void *inner;
-  const YTransaction *txn;
+  const TransactionMut *txn;
 } YXmlEvent;
 
 /**
@@ -619,7 +593,7 @@ typedef struct YXmlEvent {
  */
 typedef struct YXmlTextEvent {
   const void *inner;
-  const YTransaction *txn;
+  const TransactionMut *txn;
 } YXmlTextEvent;
 
 typedef union YEventContent {
@@ -898,18 +872,57 @@ unsigned int ydoc_observe_after_transaction(YDoc *doc,
 void ydoc_unobserve_after_transaction(YDoc *doc, unsigned int subscription_id);
 
 /**
- * Starts a new read-write transaction on a given document. All other operations happen in context
+ * Starts a new read-only transaction on a given document. All other operations happen in context
  * of a transaction. Yrs transactions do not follow ACID rules. Once a set of operations is
- * complete, a transaction can be finished using [ytransaction_commit] function.
+ * complete, a transaction can be finished using `ytransaction_commit` function.
+ *
+ * Returns `NULL` if read-only transaction couldn't be created, i.e. when another read-write
+ * transaction is already opened.
  */
-YTransaction *ytransaction_new(YDoc *doc);
+YTransaction *ydoc_read_transaction(YDoc *doc);
 
 /**
- * Commit and dispose provided transaction. This operation releases allocated resources, triggers
- * update events and performs a storage compression over all operations executed in scope of
- * current transaction.
+ * Starts a new read-write transaction on a given document. All other operations happen in context
+ * of a transaction. Yrs transactions do not follow ACID rules. Once a set of operations is
+ * complete, a transaction can be finished using `ytransaction_commit` function.
+ *
+ * Returns `NULL` if read-write transaction couldn't be created, i.e. when another transaction is
+ * already opened.
+ */
+YTransaction *ydoc_write_transaction(YDoc *doc);
+
+/**
+ * Starts a new read-write transaction on a given branches document. All other operations happen in
+ * context of a transaction. Yrs transactions do not follow ACID rules. Once a set of operations is
+ * complete, a transaction can be finished using `ytransaction_commit` function.
+ *
+ * Returns `NULL` if read-write transaction couldn't be created, i.e. when another transaction is
+ * already opened.
+ */
+YTransaction *ybranch_write_transaction(Branch *branch);
+
+/**
+ * Starts a new read-only transaction on a given branches document. All other operations happen in
+ * context of a transaction. Yrs transactions do not follow ACID rules. Once a set of operations is
+ * complete, a transaction can be finished using `ytransaction_commit` function.
+ *
+ * Returns `NULL` if read-only transaction couldn't be created, i.e. when another read-write
+ * transaction is already opened.
+ */
+YTransaction *ybranch_read_transaction(Branch *branch);
+
+/**
+ * Commit and dispose provided read-write transaction. This operation releases allocated resources,
+ * triggers update events and performs a storage compression over all operations executed in scope
+ * of a current transaction.
  */
 void ytransaction_commit(YTransaction *txn);
+
+/**
+ * Returns `1` if current transaction is of read-write type.
+ * Returns `0` if transaction is read-only.
+ */
+uint8_t ytransaction_writeable(YTransaction *txn);
 
 /**
  * Gets or creates a new shared `YText` data type instance as a root-level type of a given document.
@@ -920,7 +933,7 @@ void ytransaction_commit(YTransaction *txn);
  * not remove `YText` instance from the document itself (once created it'll last for the entire
  * lifecycle of a document).
  */
-Branch *ytext(YTransaction *txn, const char *name);
+Branch *ytext(YDoc *doc, const char *name);
 
 /**
  * Gets or creates a new shared `YArray` data type instance as a root-level type of a given document.
@@ -931,7 +944,7 @@ Branch *ytext(YTransaction *txn, const char *name);
  * not remove `YArray` instance from the document itself (once created it'll last for the entire
  * lifecycle of a document).
  */
-Branch *yarray(YTransaction *txn,
+Branch *yarray(YDoc *doc,
                const char *name);
 
 /**
@@ -943,7 +956,7 @@ Branch *yarray(YTransaction *txn,
  * not remove `YMap` instance from the document itself (once created it'll last for the entire
  * lifecycle of a document).
  */
-Branch *ymap(YTransaction *txn, const char *name);
+Branch *ymap(YDoc *doc, const char *name);
 
 /**
  * Gets or creates a new shared `YXmlElement` data type instance as a root-level type of a given
@@ -954,7 +967,7 @@ Branch *ymap(YTransaction *txn, const char *name);
  * will not remove `YXmlElement` instance from the document itself (once created it'll last for
  * the entire lifecycle of a document).
  */
-Branch *yxmlelem(YTransaction *txn, const char *name);
+Branch *yxmlelem(YDoc *doc, const char *name);
 
 /**
  * Gets or creates a new shared `YXmlText` data type instance as a root-level type of a given
@@ -965,7 +978,7 @@ Branch *yxmlelem(YTransaction *txn, const char *name);
  * will not remove `YXmlText` instance from the document itself (once created it'll last for
  * the entire lifecycle of a document).
  */
-Branch *yxmltext(YTransaction *txn, const char *name);
+Branch *yxmltext(YDoc *doc, const char *name);
 
 /**
  * Returns a state vector of a current transaction's document, serialized using lib0 version 1
@@ -1114,14 +1127,14 @@ int ytransaction_apply_v2(YTransaction *txn,
 /**
  * Returns the length of the `YText` string content in bytes (without the null terminator character)
  */
-int ytext_len(const Branch *txt);
+int ytext_len(const Branch *txt, const YTransaction *txn);
 
 /**
  * Returns a null-terminated UTF-8 encoded string content of a current `YText` shared data type.
  *
  * Generated string resources should be released using [ystring_destroy] function.
  */
-char *ytext_string(const Branch *txt);
+char *ytext_string(const Branch *txt, const YTransaction *txn);
 
 /**
  * Inserts a null-terminated UTF-8 encoded string a given `index`. `index` value must be between
@@ -1192,7 +1205,7 @@ int yarray_len(const Branch *array);
  *
  * A value returned should be eventually released using [youtput_destroy] function.
  */
-struct YOutput *yarray_get(const Branch *array, int index);
+struct YOutput *yarray_get(const Branch *array, const YTransaction *txn, int index);
 
 /**
  * Inserts a range of `items` into current `YArray`, starting at given `index`. An `items_len`
@@ -1228,7 +1241,7 @@ void yarray_move(const Branch *array, YTransaction *txn, int source, int target)
  * Use [yarray_iter_next] function in order to retrieve a consecutive array elements.
  * Use [yarray_iter_destroy] function in order to close the iterator and release its resources.
  */
-YArrayIter *yarray_iter(const Branch *array);
+YArrayIter *yarray_iter(const Branch *array, YTransaction *txn);
 
 /**
  * Releases all of an `YArray` iterator resources created by calling [yarray_iter].
@@ -1249,7 +1262,7 @@ struct YOutput *yarray_iter_next(YArrayIter *iterator);
  * Use [ymap_iter_next] function in order to retrieve a consecutive (**unordered**) map entries.
  * Use [ymap_iter_destroy] function in order to close the iterator and release its resources.
  */
-YMapIter *ymap_iter(const Branch *map);
+YMapIter *ymap_iter(const Branch *map, const YTransaction *txn);
 
 /**
  * Releases all of an `YMap` iterator resources created by calling [ymap_iter].
@@ -1268,7 +1281,7 @@ struct YMapEntry *ymap_iter_next(YMapIter *iter);
 /**
  * Returns a number of entries stored within a `map`.
  */
-int ymap_len(const Branch *map);
+int ymap_len(const Branch *map, const YTransaction *txn);
 
 /**
  * Inserts a new entry (specified as `key`-`value` pair) into a current `map`. If entry under such
@@ -1297,7 +1310,7 @@ char ymap_remove(const Branch *map, YTransaction *txn, const char *key);
  *
  * A `key` must be a null-terminated UTF-8 encoded string.
  */
-struct YOutput *ymap_get(const Branch *map, const char *key);
+struct YOutput *ymap_get(const Branch *map, const YTransaction *txn, const char *key);
 
 /**
  * Removes all entries from a current `map`.
@@ -1320,7 +1333,7 @@ char *yxmlelem_tag(const Branch *xml);
  * Returned value is a null-terminated UTF-8 string, which must be released using [ystring_destroy]
  * function.
  */
-char *yxmlelem_string(const Branch *xml);
+char *yxmlelem_string(const Branch *xml, const YTransaction *txn);
 
 /**
  * Inserts an XML attribute described using `attr_name` and `attr_value`. If another attribute with
@@ -1348,7 +1361,7 @@ void yxmlelem_remove_attr(const Branch *xml, YTransaction *txn, const char *attr
  *
  * An `attr_name` must be a null-terminated UTF-8 encoded string.
  */
-char *yxmlelem_get_attr(const Branch *xml, const char *attr_name);
+char *yxmlelem_get_attr(const Branch *xml, const YTransaction *txn, const char *attr_name);
 
 /**
  * Returns an iterator over the `YXmlElement` attributes.
@@ -1356,7 +1369,7 @@ char *yxmlelem_get_attr(const Branch *xml, const char *attr_name);
  * Use [yxmlattr_iter_next] function in order to retrieve a consecutive (**unordered**) attributes.
  * Use [yxmlattr_iter_destroy] function in order to close the iterator and release its resources.
  */
-YXmlAttrIter *yxmlelem_attr_iter(const Branch *xml);
+YXmlAttrIter *yxmlelem_attr_iter(const Branch *xml, const YTransaction *txn);
 
 /**
  * Returns an iterator over the `YXmlText` attributes.
@@ -1364,7 +1377,7 @@ YXmlAttrIter *yxmlelem_attr_iter(const Branch *xml);
  * Use [yxmlattr_iter_next] function in order to retrieve a consecutive (**unordered**) attributes.
  * Use [yxmlattr_iter_destroy] function in order to close the iterator and release its resources.
  */
-YXmlAttrIter *yxmltext_attr_iter(const Branch *xml);
+YXmlAttrIter *yxmltext_attr_iter(const Branch *xml, const YTransaction *txn);
 
 /**
  * Releases all of attributes iterator resources created by calling [yxmlelem_attr_iter]
@@ -1433,7 +1446,7 @@ Branch *yxmlelem_parent(const Branch *xml);
  * Returns a number of child nodes (both `YXmlElement` and `YXmlText`) living under a current XML
  * element. This function doesn't count a recursive nodes, only direct children of a current node.
  */
-int yxmlelem_child_len(const Branch *xml);
+int yxmlelem_child_len(const Branch *xml, const YTransaction *txn);
 
 /**
  * Returns a first child node of a current `YXmlElement`, or null pointer if current XML node is
@@ -1450,7 +1463,7 @@ struct YOutput *yxmlelem_first_child(const Branch *xml);
  * Use [yxmlelem_tree_walker_next] function in order to iterate over to a next node.
  * Use [yxmlelem_tree_walker_destroy] function to release resources used by the iterator.
  */
-YXmlTreeWalker *yxmlelem_tree_walker(const Branch *xml);
+YXmlTreeWalker *yxmlelem_tree_walker(const Branch *xml, const YTransaction *txn);
 
 /**
  * Releases resources associated with a current XML tree walker iterator.
@@ -1506,14 +1519,14 @@ const struct YOutput *yxmlelem_get(const Branch *xml, int index);
  * Returns the length of the `YXmlText` string content in bytes (without the null terminator
  * character)
  */
-int yxmltext_len(const Branch *txt);
+int yxmltext_len(const Branch *txt, const YTransaction *txn);
 
 /**
  * Returns a null-terminated UTF-8 encoded string content of a current `YXmlText` shared data type.
  *
  * Generated string resources should be released using [ystring_destroy] function.
  */
-char *yxmltext_string(const Branch *txt);
+char *yxmltext_string(const Branch *txt, const YTransaction *txn);
 
 /**
  * Inserts a null-terminated UTF-8 encoded string a a given `index`. `index` value must be between
@@ -1599,7 +1612,7 @@ void yxmltext_remove_attr(const Branch *txt, YTransaction *txn, const char *attr
  *
  * An `attr_name` must be a null-terminated UTF-8 encoded string.
  */
-char *yxmltext_get_attr(const Branch *txt, const char *attr_name);
+char *yxmltext_get_attr(const Branch *txt, const YTransaction *txn, const char *attr_name);
 
 /**
  * Releases all resources related to a corresponding `YOutput` cell.

@@ -9,7 +9,7 @@ import * as t from 'lib0/testing'
 export const testOnUpdate = tc => {
     const d1 = new Y.YDoc(1)
     const text1 = d1.getText('text')
-    d1.transact(txn => text1.insert(txn, 0, 'hello'))
+    text1.insert(0, 'hello')
     let expected = Y.encodeStateAsUpdate(d1)
 
     const d2 = new Y.YDoc(2)
@@ -25,7 +25,7 @@ export const testOnUpdate = tc => {
     sub.free()
     actual = null
 
-    d1.transact(txn => text1.insert(txn, 5, 'world'))
+    text1.insert(5, 'world')
     expected = Y.encodeStateAsUpdate(d1)
     Y.applyUpdate(d2, expected)
 
@@ -39,7 +39,7 @@ export const testOnUpdate = tc => {
 export const testOnUpdateV2 = tc => {
     const d1 = new Y.YDoc(1)
     const text1 = d1.getText('text')
-    d1.transact(txn => text1.insert(txn, 0, 'hello'))
+    text1.insert(0, 'hello')
     let expected = Y.encodeStateAsUpdateV2(d1)
 
     const d2 = new Y.YDoc(2)
@@ -55,7 +55,7 @@ export const testOnUpdateV2 = tc => {
     sub.free()
     actual = null
 
-    d1.transact(txn => text1.insert(txn, 5, 'world'))
+    text1.insert(5, 'world')
     expected = Y.encodeStateAsUpdateV2(d1)
     Y.applyUpdateV2(d2, expected)
 
@@ -72,7 +72,7 @@ export const testOnAfterTransaction = tc => {
     let event;
     const sub = doc.onAfterTransaction(e => event = e);
 
-    doc.transact(txn => text.insert(txn, 0, 'hello world'))
+    text.insert(0, 'hello world')
 
     t.compare(event.beforeState, new Map());
     let state = new Map()
@@ -81,7 +81,7 @@ export const testOnAfterTransaction = tc => {
     t.compare(event.deleteSet, new Map());
 
     event = null
-    doc.transact(txn => text.delete(txn, 2, 7))
+    text.delete( 2, 7)
 
     t.compare(event.beforeState, state);
     t.compare(event.afterState, state);
@@ -91,7 +91,7 @@ export const testOnAfterTransaction = tc => {
 
     sub.free()
     event = null
-    doc.transact(txn => text.insert(txn, 4, ' the door'))
+    text.insert(4, ' the door')
 
     t.compare(event, null)
 }
@@ -102,12 +102,12 @@ export const testOnAfterTransaction = tc => {
 export const testSnapshots = tc => {
     const doc = new Y.YDoc(1)
     const text = doc.getText('text')
-    doc.transact(txn => text.insert(txn, 0, 'hello'))
+    text.insert(0, 'hello')
     const prev = Y.snapshot(doc)
-    doc.transact(txn => text.insert(txn, 5, ' world'))
+    text.insert(5, ' world')
     const next = Y.snapshot(doc)
 
-    const delta = doc.transact(txn => text.toDelta(txn, next, prev))
+    const delta = text.toDelta(next, prev)
     t.compare(delta, [
         { insert: 'hello' },
         { insert: ' world', attributes: { ychange: { type: 'added' } } }
@@ -120,9 +120,9 @@ export const testSnapshots = tc => {
 export const testSnapshotState = tc => {
     const d1 = new Y.YDoc(1, false)
     const txt1 = d1.getText('text')
-    d1.transact(txn => txt1.insert(txn, 0, 'hello'))
+    txt1.insert(0, 'hello')
     const prev = Y.snapshot(d1)
-    d1.transact(txn => txt1.insert(txn, 5, ' world'))
+    txt1.insert(5, ' world')
     const state = Y.encodeStateFromSnapshotV1(d1, prev)
 
     const d2 = new Y.YDoc(2)

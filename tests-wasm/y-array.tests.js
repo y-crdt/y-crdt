@@ -11,8 +11,8 @@ export const testInserts = tc => {
     t.compare(d1.id, 1)
     var x = d1.getArray('test');
 
-    d1.transact(txn => x.insert(txn, 0, [1, 2.5, 'hello', ['world'], true]))
-    d1.transact(txn => x.push(txn, [{key:'value'}]))
+    x.insert(0, [1, 2.5, 'hello', ['world'], true])
+    x.push( [{key:'value'}])
 
     const expected = [1, 2.5, 'hello', ['world'], true, {key:'value'}]
 
@@ -36,9 +36,9 @@ export const testInsertsNested = tc => {
     var x = d1.getArray('test');
 
     const nested = new Y.YArray();
-    d1.transact(txn => nested.push(txn, ['world']))
-    d1.transact(txn => x.insert(txn, 0, [1, 2, nested, 3, 4]))
-    d1.transact(txn => nested.insert(txn, 0, ['hello']))
+    nested.push(['world'])
+    x.insert(0, [1, 2, nested, 3, 4])
+    nested.insert(0, ['hello'])
 
     const expected = [1, 2, ['hello', 'world'], 3, 4]
 
@@ -62,8 +62,8 @@ export const testDelete = tc => {
     t.compare(d1.id, 1)
     var x = d1.getArray('test')
 
-    d1.transact(txn => x.insert(txn, 0, [1, 2, ['hello', 'world'], true]))
-    d1.transact(txn => x.delete(txn, 1, 2))
+    x.insert(0, [1, 2, ['hello', 'world'], true])
+    x.delete(1, 2)
 
     const expected = [1, true]
 
@@ -86,8 +86,8 @@ export const testGet = tc => {
     const d1 = new Y.YDoc()
     const x = d1.getArray('test')
 
-    d1.transact(txn => x.insert(txn, 0, [1, 2, true]))
-    d1.transact(txn => x.insert(txn, 1, ['hello', 'world']));
+    x.insert(0, [1, 2, true])
+    x.insert(1, ['hello', 'world'])
 
     const zeroed = x.get(0)
     const first = x.get(1)
@@ -102,7 +102,7 @@ export const testGet = tc => {
     t.compare(fourth, true)
 
     t.fails(() => {
-        // should fail because it's outside of the bounds
+        // should fail because it's outside the bounds
         x.get(5)
     })
 }
@@ -114,14 +114,16 @@ export const testIterator = tc => {
     const d1 = new Y.YDoc()
     const x = d1.getArray('test')
 
-    d1.transact(txn => x.insert(txn, 0, [1, 2, 3]))
-    t.compare(x.length, 3)
+    x.insert(0, [1, 2, 3])
+    t.compare(x.length(), 3)
 
     let i = 1;
-    for (let v of x.values()) {
+    let txn = d1.readTransaction()
+    for (let v of x.values(txn)) {
         t.compare(v, i)
         i++
     }
+    txn.free()
 }
 
 /**
@@ -141,21 +143,21 @@ export const testObserver = tc => {
     })
 
     // insert initial data to an empty YArray
-    d1.transact(txn => x.insert(txn, 0, [1,2,3,4]))
+    x.insert(0, [1,2,3,4])
     t.compare(target.toJson(), x.toJson())
     t.compare(delta, [{insert: [1,2,3,4]}])
     target = null
     delta = null
 
     // remove 2 items from the middle
-    d1.transact(txn => x.delete(txn, 1, 2))
+    x.delete(1, 2)
     t.compare(target.toJson(), x.toJson())
     t.compare(delta, [{retain:1}, {delete: 2}])
     target = null
     delta = null
 
     // insert new item in the middle
-    d1.transact(txn => x.insert(txn, 1, [5]))
+    x.insert(1, [5])
     t.compare(target.toJson(), x.toJson())
     t.compare(delta, [{retain:1}, {insert: [5]}])
     target = null
@@ -163,7 +165,7 @@ export const testObserver = tc => {
 
     // free the observer and make sure that callback is no longer called
     observer.free()
-    d1.transact(txn => x.insert(txn, 1, [6]))
+    x.insert(1, [6])
     t.compare(target, null)
     t.compare(delta, null)
 }
@@ -182,10 +184,10 @@ export const testObserveDeepEventOrder = tc => {
     let subscription = arr.observeDeep(events => {
         paths = events.map(e => e.path())
     })
-    d1.transact(txn => arr.insert(txn, 0, [new Y.YMap()]))
+    arr.insert(0, [new Y.YMap()])
     d1.transact(txn => {
-        arr.get(0).set(txn, 'a', 'a')
-        arr.insert(txn, 0, [0])
+        arr.get(0, txn).set('a', 'a', txn)
+        arr.insert(0, [0], txn)
     })
     t.compare(paths, [ [], [ 1 ] ])
     subscription.free()
@@ -202,9 +204,9 @@ export const testMove = tc => {
     arr.observe(event => {
         e = event
     })
-    d1.transact(txn => arr.insert(txn, 0, [1, 2, 3]))
-    d1.transact(txn => arr.move(txn, 1, 0))
+    arr.insert(0, [1, 2, 3])
+    arr.move(1, 0)
     t.compare(arr.toJson(), [2, 1, 3])
-    d1.transact(txn => arr.move(txn, 0, 2))
+    arr.move(0, 2)
     t.compare(arr.toJson(), [1, 2, 3])
 }

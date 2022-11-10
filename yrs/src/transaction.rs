@@ -1,16 +1,12 @@
 use crate::*;
+use std::cell::{Ref, RefMut};
 
 use crate::block::{Block, BlockPtr, Item, ItemContent, Prelim, ID};
 use crate::block_store::{Snapshot, StateVector};
 use crate::event::AfterTransactionEvent;
 use crate::id_set::DeleteSet;
-use crate::store::{Store, StoreRef};
-use crate::types::array::Array;
-use crate::types::xml::{XmlElement, XmlText};
-use crate::types::{
-    BranchPtr, Event, Events, Map, Text, TypePtr, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
-    TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT,
-};
+use crate::store::Store;
+use crate::types::{Branch, BranchPtr, Event, Events, TypePtr, Value};
 use crate::update::Update;
 use lib0::error::Error;
 use std::collections::{HashMap, HashSet};
@@ -18,11 +14,96 @@ use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
 use updates::encoder::*;
 
-/// Transaction is one of the core types in Yrs. All operations that need to touch a document's
-/// contents (a.k.a. block store), need to be executed in scope of a transaction.
-pub struct Transaction {
-    /// Store containing the state of the document.
-    pub(crate) store: StoreRef,
+pub trait ReadTxn: Sized {
+    fn store(&self) -> &Store;
+
+    /// Returns state vector describing current state of the updates.
+    fn state_vector(&self) -> StateVector {
+        self.store().blocks.get_state_vector()
+    }
+
+    /// Returns a snapshot which describes a current state of updates and removals made within
+    /// the corresponding document.
+    fn snapshot(&self) -> Snapshot {
+        let store = self.store();
+        let blocks = &store.blocks;
+        let sv = blocks.get_state_vector();
+        let ds = DeleteSet::from(blocks);
+        Snapshot::new(sv, ds)
+    }
+
+    /// Encodes all changes from current transaction block store up to a given `snapshot`.
+    /// This enables to encode state of a document at some specific point in the past.
+    fn encode_state_from_snapshot<E: Encoder>(
+        &self,
+        snapshot: &Snapshot,
+        encoder: &mut E,
+    ) -> Result<(), Error> {
+        self.store().encode_state_from_snapshot(snapshot, encoder)
+    }
+
+    /// Encodes the difference between remove peer state given its `state_vector` and the state
+    /// of a current local peer
+    fn encode_diff<E: Encoder>(&self, state_vector: &StateVector, encoder: &mut E) {
+        self.store().encode_diff(state_vector, encoder)
+    }
+
+    fn encode_diff_v1(&self, state_vector: &StateVector) -> Vec<u8> {
+        let mut encoder = EncoderV1::new();
+        self.encode_diff(state_vector, &mut encoder);
+        encoder.to_vec()
+    }
+
+    fn encode_state_as_update<E: Encoder>(&self, sv: &StateVector, encoder: &mut E) {
+        let store = self.store();
+        store.write_blocks_from(sv, encoder);
+        let ds = DeleteSet::from(&store.blocks);
+        ds.encode(encoder);
+    }
+
+    fn encode_state_as_update_v1(&self, sv: &StateVector) -> Vec<u8> {
+        let mut encoder = EncoderV1::new();
+        self.encode_state_as_update(sv, &mut encoder);
+        encoder.to_vec()
+    }
+
+    fn encode_state_as_update_v2(&self, sv: &StateVector) -> Vec<u8> {
+        let mut encoder = EncoderV2::new();
+        self.encode_state_as_update(sv, &mut encoder);
+        encoder.to_vec()
+    }
+
+    /// Returns an iterator over top level (root) shared types available in current [Doc].
+    fn root_refs(&self) -> RootRefs {
+        let store = self.store();
+        RootRefs(store.types.iter())
+    }
+}
+
+pub trait WriteTxn: Sized {
+    fn store_mut(&mut self) -> &mut Store;
+}
+
+#[derive(Debug)]
+pub struct Transaction<'doc> {
+    store: Ref<'doc, Store>,
+}
+
+impl<'doc> Transaction<'doc> {
+    pub(crate) fn new(store: Ref<'doc, Store>) -> Self {
+        Transaction { store }
+    }
+}
+
+impl<'doc> ReadTxn for Transaction<'doc> {
+    #[inline]
+    fn store(&self) -> &Store {
+        self.store.deref()
+    }
+}
+
+pub struct TransactionMut<'doc> {
+    pub(crate) store: RefMut<'doc, Store>,
     /// State vector of a current transaction at the moment of its creation.
     pub before_state: StateVector,
     /// Current state vector of a transaction, which includes all performed updates.
@@ -40,10 +121,30 @@ pub struct Transaction {
     committed: bool,
 }
 
-impl Transaction {
-    pub(crate) fn new(store: StoreRef) -> Transaction {
+impl<'doc> ReadTxn for TransactionMut<'doc> {
+    #[inline]
+    fn store(&self) -> &Store {
+        self.store.deref()
+    }
+}
+
+impl<'doc> WriteTxn for TransactionMut<'doc> {
+    #[inline]
+    fn store_mut(&mut self) -> &mut Store {
+        self.store.deref_mut()
+    }
+}
+
+impl<'doc> Drop for TransactionMut<'doc> {
+    fn drop(&mut self) {
+        self.commit()
+    }
+}
+
+impl<'doc> TransactionMut<'doc> {
+    pub(crate) fn new(store: RefMut<'doc, Store>) -> Self {
         let begin_timestamp = store.blocks.get_state_vector();
-        Transaction {
+        TransactionMut {
             store,
             before_state: begin_timestamp,
             merge_blocks: Vec::new(),
@@ -63,138 +164,6 @@ impl Transaction {
     #[inline]
     pub(crate) fn store_mut(&mut self) -> &mut Store {
         &mut self.store
-    }
-
-    /// Returns state vector describing current state of the updates.
-    pub fn state_vector(&self) -> StateVector {
-        self.store().blocks.get_state_vector()
-    }
-
-    /// Returns a snapshot which describes a current state of updates and removals made within
-    /// the corresponding document.
-    pub fn snapshot(&self) -> Snapshot {
-        let store = self.store();
-        let blocks = &store.blocks;
-        let sv = blocks.get_state_vector();
-        let ds = DeleteSet::from(blocks);
-        Snapshot::new(sv, ds)
-    }
-
-    /// Encodes all changes from current transaction block store up to a given `snapshot`.
-    /// This enables to encode state of a document at some specific point in the past.
-    pub fn encode_state_from_snapshot<E: Encoder>(
-        &self,
-        snapshot: &Snapshot,
-        encoder: &mut E,
-    ) -> Result<(), Error> {
-        self.store().encode_state_from_snapshot(snapshot, encoder)
-    }
-
-    /// Encodes the difference between remove peer state given its `state_vector` and the state
-    /// of a current local peer
-    pub fn encode_diff<E: Encoder>(&self, state_vector: &StateVector, encoder: &mut E) {
-        self.store().encode_diff(state_vector, encoder)
-    }
-
-    pub fn encode_diff_v1(&self, state_vector: &StateVector) -> Vec<u8> {
-        let mut encoder = EncoderV1::new();
-        self.encode_diff(state_vector, &mut encoder);
-        encoder.to_vec()
-    }
-
-    /// Returns a [Text] data structure stored under a given `name`. Text structures are used for
-    /// collaborative text editing: they expose operations to append and remove chunks of text,
-    /// which are free to execute concurrently by multiple peers over remote boundaries.
-    ///
-    /// If not structure under defined `name` existed before, it will be created and returned
-    /// instead.
-    ///
-    /// If a structure under defined `name` already existed, but its type was different it will be
-    /// reinterpreted as a text (in such case a sequence component of complex data type will be
-    /// interpreted as a list of text chunks).
-    pub fn get_text(&mut self, name: &str) -> Text {
-        let mut c = self
-            .store_mut()
-            .get_or_create_type(name, None, TYPE_REFS_TEXT);
-        c.store = Some(self.store.clone());
-        Text::from(c)
-    }
-
-    /// Returns a [Map] data structure stored under a given `name`. Maps are used to store key-value
-    /// pairs associated together. These values can be primitive data (similar but not limited to
-    /// a JavaScript Object Notation) as well as other shared types (Yrs maps, arrays, text
-    /// structures etc.), enabling to construct a complex recursive tree structures.
-    ///
-    /// If not structure under defined `name` existed before, it will be created and returned
-    /// instead.
-    ///
-    /// If a structure under defined `name` already existed, but its type was different it will be
-    /// reinterpreted as a map (in such case a map component of complex data type will be
-    /// interpreted as native map).
-    pub fn get_map(&mut self, name: &str) -> Map {
-        let mut c = self
-            .store_mut()
-            .get_or_create_type(name, None, TYPE_REFS_MAP);
-        c.store = Some(self.store.clone());
-        Map::from(c)
-    }
-
-    /// Returns an [Array] data structure stored under a given `name`. Array structures are used for
-    /// storing a sequences of elements in ordered manner, positioning given element accordingly
-    /// to its index.
-    ///
-    /// If not structure under defined `name` existed before, it will be created and returned
-    /// instead.
-    ///
-    /// If a structure under defined `name` already existed, but its type was different it will be
-    /// reinterpreted as an array (in such case a sequence component of complex data type will be
-    /// interpreted as a list of inserted values).
-    pub fn get_array(&mut self, name: &str) -> Array {
-        let mut c = self
-            .store_mut()
-            .get_or_create_type(name, None, TYPE_REFS_ARRAY);
-        c.store = Some(self.store.clone());
-        Array::from(c)
-    }
-
-    /// Returns a [XmlElement] data structure stored under a given `name`. XML elements represent
-    /// nodes of XML document. They can contain attributes (key-value pairs, both of string type)
-    /// as well as other nested XML elements or text values, which are stored in their insertion
-    /// order.
-    ///
-    /// If not structure under defined `name` existed before, it will be created and returned
-    /// instead.
-    ///
-    /// If a structure under defined `name` already existed, but its type was different it will be
-    /// reinterpreted as a XML element (in such case a map component of complex data type will be
-    /// interpreted as map of its attributes, while a sequence component - as a list of its child
-    /// XML nodes).
-    pub fn get_xml_element(&mut self, name: &str) -> XmlElement {
-        let mut c = self.store_mut().get_or_create_type(
-            name,
-            Some("UNDEFINED".into()),
-            TYPE_REFS_XML_ELEMENT,
-        );
-        c.store = Some(self.store.clone());
-        XmlElement::from(c)
-    }
-
-    /// Returns a [XmlText] data structure stored under a given `name`. Text structures are used for
-    /// collaborative text editing: they expose operations to append and remove chunks of text,
-    /// which are free to execute concurrently by multiple peers over remote boundaries.
-    ///
-    /// If not structure under defined `name` existed before, it will be created and returned
-    /// instead.
-    ///
-    /// If a structure under defined `name` already existed, but its type was different it will be
-    /// reinterpreted as a text (in such case a sequence component of complex data type will be
-    /// interpreted as a list of text chunks).
-    pub fn get_xml_text(&mut self, name: &str) -> XmlText {
-        let mut c = self
-            .store_mut()
-            .get_or_create_type(name, None, TYPE_REFS_XML_TEXT);
-        c.store = Some(self.store.clone());
-        XmlText::from(c)
     }
 
     /// Encodes changes made within the scope of the current transaction using lib0 v1 encoding.
@@ -623,14 +592,18 @@ impl Transaction {
                 after_state: self.after_state.clone(),
                 delete_set: self.delete_set.clone(),
             };
-            eh.publish(&self, &event);
+            for fun in eh.callbacks() {
+                fun(&self, &event);
+            }
         }
         // 9. emit 'update'
         if let Some(eh) = store.update_v1_events.as_ref() {
             if !self.delete_set.is_empty() || self.after_state != self.before_state {
                 // produce update only if anything changed
                 let update = UpdateEvent::new(self.encode_update_v1());
-                eh.publish(&self, &update);
+                for fun in eh.callbacks() {
+                    fun(&self, &update);
+                }
             }
         }
         // 10. emit 'updateV2'
@@ -638,7 +611,9 @@ impl Transaction {
             if !self.delete_set.is_empty() || self.after_state != self.before_state {
                 // produce update only if anything changed
                 let update = UpdateEvent::new(self.encode_update_v2());
-                eh.publish(&self, &update);
+                for fun in eh.callbacks() {
+                    fun(&self, &update);
+                }
             }
         }
         // 11. add and remove subdocs
@@ -763,8 +738,15 @@ impl Transaction {
     }
 }
 
-impl Drop for Transaction {
-    fn drop(&mut self) {
-        self.commit()
+pub struct RootRefs<'doc>(std::collections::hash_map::Iter<'doc, Rc<str>, Box<Branch>>);
+
+impl<'doc> Iterator for RootRefs<'doc> {
+    type Item = (&'doc str, Value);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let (key, branch) = self.0.next()?;
+        let key = key.as_ref();
+        let ptr = BranchPtr::from(branch);
+        Some((key, ptr.into()))
     }
 }

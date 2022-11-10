@@ -37,8 +37,10 @@ mod utils;
 #[cfg(test)]
 mod compatibility_tests;
 
+pub mod atomic;
 mod block_iter;
 mod moving;
+pub mod observer;
 #[cfg(test)]
 mod test_utils;
 
@@ -52,9 +54,17 @@ pub use crate::block_store::StateVector;
 pub use crate::doc::Doc;
 pub use crate::doc::OffsetKind;
 pub use crate::doc::Options;
-pub use crate::event::{AfterTransactionEvent, Subscription, SubscriptionId, UpdateEvent};
+pub use crate::doc::Transact;
+pub use crate::doc::{AfterTransactionSubscription, UpdateSubscription};
+pub use crate::event::{AfterTransactionEvent, UpdateEvent};
 pub use crate::id_set::DeleteSet;
+pub use crate::observer::{Observer, Subscription, SubscriptionId};
+pub use crate::store::Store;
+pub use crate::transaction::ReadTxn;
+pub use crate::transaction::RootRefs;
 pub use crate::transaction::Transaction;
+pub use crate::transaction::TransactionMut;
+pub use crate::transaction::WriteTxn;
 pub use crate::types::array::Array;
 pub use crate::types::array::PrelimArray;
 pub use crate::types::map::Map;

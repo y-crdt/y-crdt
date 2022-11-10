@@ -5,21 +5,24 @@ pub mod xml;
 
 use crate::*;
 pub use map::Map;
+use std::borrow::Borrow;
 pub use text::Text;
 
 use crate::block::{Block, BlockPtr, Item, ItemContent, ItemPosition, Prelim};
-use crate::event::EventHandler;
 use crate::store::StoreRef;
+use crate::transaction::TransactionMut;
 use crate::types::array::{Array, ArrayEvent};
 use crate::types::map::MapEvent;
 use crate::types::text::TextEvent;
-use crate::types::xml::{XmlElement, XmlEvent, XmlFragment, XmlText, XmlTextEvent};
+use crate::types::xml::{XmlElement, XmlEvent, XmlText, XmlTextEvent};
 use lib0::any::Any;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Formatter;
+use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 use std::ptr::NonNull;
 use std::rc::Rc;
+use std::sync::Arc;
 
 pub type TypeRefs = u8;
 
@@ -57,7 +60,7 @@ pub struct BranchPtr(NonNull<Branch>);
 impl BranchPtr {
     pub(crate) fn trigger(
         &self,
-        txn: &Transaction,
+        txn: &TransactionMut,
         subs: HashSet<Option<Rc<str>>>,
     ) -> Option<Event> {
         if let Some(observers) = self.observers.as_ref() {
@@ -74,9 +77,11 @@ impl BranchPtr {
         }
     }
 
-    pub(crate) fn trigger_deep(&self, txn: &Transaction, e: &Events) {
-        if let Some(observers) = self.deep_observers.as_ref() {
-            observers.publish(txn, e);
+    pub(crate) fn trigger_deep(&self, txn: &TransactionMut, e: &Events) {
+        if let Some(o) = self.deep_observers.as_ref() {
+            for fun in o.callbacks() {
+                fun(txn, e);
+            }
         }
     }
 }
@@ -215,7 +220,7 @@ pub struct Branch {
 
     pub(crate) observers: Option<Observers>,
 
-    pub(crate) deep_observers: Option<EventHandler<Events>>,
+    pub(crate) deep_observers: Option<Observer<Arc<dyn Fn(&TransactionMut, &Events)>>>,
 }
 
 impl std::fmt::Debug for Branch {
@@ -253,11 +258,6 @@ impl Branch {
         })
     }
 
-    pub(crate) fn try_transact(&self) -> Option<Transaction> {
-        let store = self.store.clone()?;
-        Some(Transaction::new(store))
-    }
-
     /// Returns an identifier of an underlying complex data type (eg. is it an Array or a Map).
     pub fn type_ref(&self) -> TypeRefs {
         self.type_ref & 0b1111
@@ -282,19 +282,19 @@ impl Branch {
 
     /// Get iterator over (String, Block) entries of a map component of a current root type.
     /// Deleted blocks are skipped by this iterator.
-    pub(crate) fn entries(&self) -> Entries {
-        Entries::new(&self.map)
+    pub(crate) fn entries<'a, T: ReadTxn + 'a>(&'a self, txn: &'a T) -> Entries<'a, &'a T, T> {
+        Entries::from_ref(&self.map, txn)
     }
 
     /// Get iterator over Block entries of an array component of a current root type.
     /// Deleted blocks are skipped by this iterator.
-    pub(crate) fn iter(&self) -> Iter {
-        Iter::new(self.start.as_ref())
+    pub(crate) fn iter<'a, T: ReadTxn + 'a>(&'a self, txn: &'a T) -> Iter<'a, T> {
+        Iter::new(self.start.as_ref(), txn)
     }
 
     /// Returns a materialized value of non-deleted entry under a given `key` of a map component
     /// of a current root type.
-    pub(crate) fn get(&self, key: &str) -> Option<Value> {
+    pub(crate) fn get<T: ReadTxn>(&self, txn: &T, key: &str) -> Option<Value> {
         let block = self.map.get(key)?;
         match block.deref() {
             Block::Item(item) if !item.is_deleted() => item.content.get_last(),
@@ -326,7 +326,7 @@ impl Branch {
 
     /// Removes an entry under given `key` of a map component of a current root type, returning
     /// a materialized representation of value stored underneath if entry existed prior deletion.
-    pub(crate) fn remove(&self, txn: &mut Transaction, key: &str) -> Option<Value> {
+    pub(crate) fn remove(&self, txn: &mut TransactionMut, key: &str) -> Option<Value> {
         let ptr = *self.map.get(key)?;
         let prev = match ptr.deref() {
             Block::Item(item) if !item.is_deleted() => item.content.get_last(),
@@ -362,7 +362,7 @@ impl Branch {
     /// If `index` is outside of the range of an array component of current branch node, both tuple
     /// values will be `None`.
     fn index_to_ptr(
-        txn: &mut Transaction,
+        txn: &mut TransactionMut,
         mut ptr: Option<BlockPtr>,
         mut index: u32,
     ) -> (Option<BlockPtr>, Option<BlockPtr>) {
@@ -401,7 +401,7 @@ impl Branch {
     }
     /// Removes up to a `len` of countable elements from current branch sequence, starting at the
     /// given `index`. Returns number of removed elements.
-    pub(crate) fn remove_at(&self, txn: &mut Transaction, index: u32, len: u32) -> u32 {
+    pub(crate) fn remove_at(&self, txn: &mut TransactionMut, index: u32, len: u32) -> u32 {
         let mut remaining = len;
         let start = { self.start };
         let (_, mut ptr) = if index == 0 {
@@ -455,7 +455,7 @@ impl Branch {
     /// `index`. Returns an item reference created as a result of this operation.
     pub(crate) fn insert_at<V: Prelim>(
         &self,
-        txn: &mut Transaction,
+        txn: &mut TransactionMut,
         index: u32,
         value: V,
     ) -> BlockPtr {
@@ -520,14 +520,12 @@ impl Branch {
         path
     }
 
-    pub fn observe_deep<F>(&mut self, f: F) -> Subscription<Events>
+    pub fn observe_deep<F>(&mut self, f: F) -> DeepEventsSubscription
     where
-        F: Fn(&Transaction, &Events) -> () + 'static,
+        F: Fn(&TransactionMut, &Events) -> () + 'static,
     {
-        let eh = self
-            .deep_observers
-            .get_or_insert_with(EventHandler::default);
-        eh.subscribe(f)
+        let eh = self.deep_observers.get_or_insert_with(Observer::default);
+        eh.subscribe(Arc::new(f))
     }
 
     pub fn unobserve_deep(&mut self, subscription_id: SubscriptionId) {
@@ -536,6 +534,8 @@ impl Branch {
         }
     }
 }
+
+pub type DeepEventsSubscription = crate::Subscription<Arc<dyn Fn(&TransactionMut, &Events) -> ()>>;
 
 /// Trait implemented by all Y-types, allowing for observing events which are emitted by
 /// nested types.
@@ -546,9 +546,9 @@ pub trait DeepObservable {
     ///
     /// This method returns a subscription, which will automatically unsubscribe current callback
     /// when dropped.
-    fn observe_deep<F>(&mut self, f: F) -> Subscription<Events>
+    fn observe_deep<F>(&mut self, f: F) -> DeepEventsSubscription
     where
-        F: Fn(&Transaction, &Events) -> () + 'static;
+        F: Fn(&TransactionMut, &Events) -> () + 'static;
 
     /// Unobserves callback identified by `subscription_id` (which can be obtained by consuming
     /// [Subscription] using `into` cast).
@@ -559,9 +559,9 @@ impl<T> DeepObservable for T
 where
     T: AsMut<Branch>,
 {
-    fn observe_deep<F>(&mut self, f: F) -> Subscription<Events>
+    fn observe_deep<F>(&mut self, f: F) -> DeepEventsSubscription
     where
-        F: Fn(&Transaction, &Events) -> () + 'static,
+        F: Fn(&TransactionMut, &Events) -> () + 'static,
     {
         self.as_mut().observe_deep(f)
     }
@@ -591,34 +591,15 @@ impl Default for Value {
 }
 
 impl Value {
-    /// Converts current value into [Any] object equivalent that resembles enhanced JSON payload.
-    /// Rules are:
-    ///
-    /// - Primitive types ([Value::Any]) are passed right away, as no transformation is needed.
-    /// - [Value::YArray] is converted into JSON-like array.
-    /// - [Value::YMap] is converted into JSON-like object map.
-    /// - [Value::YText], [Value::YXmlText] and [Value::YXmlElement] are converted into strings
-    ///   (XML types are stringified XML representation).
-    pub fn to_json(self) -> Any {
-        match self {
-            Value::Any(a) => a,
-            Value::YText(v) => Any::String(v.to_string().into_boxed_str()),
-            Value::YArray(v) => v.to_json(),
-            Value::YMap(v) => v.to_json(),
-            Value::YXmlElement(v) => Any::String(v.to_string().into_boxed_str()),
-            Value::YXmlText(v) => Any::String(v.to_string().into_boxed_str()),
-        }
-    }
-
     /// Converts current value into stringified representation.
-    pub fn to_string(self) -> String {
+    pub fn to_string<T: ReadTxn>(self, txn: &T) -> String {
         match self {
             Value::Any(a) => a.to_string(),
-            Value::YText(v) => v.to_string(),
-            Value::YArray(v) => v.to_json().to_string(),
-            Value::YMap(v) => v.to_json().to_string(),
-            Value::YXmlElement(v) => v.to_string(),
-            Value::YXmlText(v) => v.to_string(),
+            Value::YText(v) => v.to_string(txn),
+            Value::YArray(v) => v.to_json(txn).to_string(),
+            Value::YMap(v) => v.to_json(txn).to_string(),
+            Value::YXmlElement(v) => v.to_string(txn),
+            Value::YXmlText(v) => v.to_string(txn),
         }
     }
 
@@ -670,6 +651,27 @@ where
     fn from(v: T) -> Self {
         let any: Any = v.into();
         Value::Any(any)
+    }
+}
+
+impl ToJson for Value {
+    /// Converts current value into [Any] object equivalent that resembles enhanced JSON payload.
+    /// Rules are:
+    ///
+    /// - Primitive types ([Value::Any]) are passed right away, as no transformation is needed.
+    /// - [Value::YArray] is converted into JSON-like array.
+    /// - [Value::YMap] is converted into JSON-like object map.
+    /// - [Value::YText], [Value::YXmlText] and [Value::YXmlElement] are converted into strings
+    ///   (XML types are stringified XML representation).
+    fn to_json<T: ReadTxn>(&self, txn: &T) -> Any {
+        match self {
+            Value::Any(a) => a.clone(),
+            Value::YText(v) => Any::String(v.to_string(txn).into_boxed_str()),
+            Value::YArray(v) => v.to_json(txn),
+            Value::YMap(v) => v.to_json(txn),
+            Value::YXmlElement(v) => Any::String(v.to_string(txn).into_boxed_str()),
+            Value::YXmlText(v) => Any::String(v.to_string(txn).into_boxed_str()),
+        }
     }
 }
 
@@ -759,19 +761,50 @@ impl std::fmt::Display for Branch {
     }
 }
 
-pub(crate) struct Entries<'a> {
+#[derive(Debug)]
+pub(crate) struct Entries<'a, B, T> {
     iter: std::collections::hash_map::Iter<'a, Rc<str>, BlockPtr>,
+    txn: B,
+    _marker: PhantomData<T>,
 }
 
-impl<'a> Entries<'a> {
-    pub(crate) fn new(source: &'a HashMap<Rc<str>, BlockPtr>) -> Self {
+impl<'a, B, T: ReadTxn> Entries<'a, B, T>
+where
+    B: Borrow<T>,
+    T: ReadTxn,
+{
+    pub fn new(source: &'a HashMap<Rc<str>, BlockPtr>, txn: B) -> Self {
         Entries {
             iter: source.iter(),
+            txn,
+            _marker: PhantomData::default(),
         }
     }
 }
 
-impl<'a> Iterator for Entries<'a> {
+impl<'a, T: ReadTxn> Entries<'a, T, T>
+where
+    T: Borrow<T> + ReadTxn,
+{
+    pub fn from(source: &'a HashMap<Rc<str>, BlockPtr>, txn: T) -> Self {
+        Entries::new(source, txn)
+    }
+}
+
+impl<'a, T: ReadTxn> Entries<'a, &'a T, T>
+where
+    T: Borrow<T> + ReadTxn,
+{
+    pub fn from_ref(source: &'a HashMap<Rc<str>, BlockPtr>, txn: &'a T) -> Self {
+        Entries::new(source, txn)
+    }
+}
+
+impl<'a, B, T> Iterator for Entries<'a, B, T>
+where
+    B: Borrow<T>,
+    T: ReadTxn,
+{
     type Item = (&'a str, &'a Item);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -794,17 +827,18 @@ impl<'a> Iterator for Entries<'a> {
     }
 }
 
-pub(crate) struct Iter<'a> {
+pub(crate) struct Iter<'a, T> {
     ptr: Option<&'a BlockPtr>,
+    _txn: &'a T,
 }
 
-impl<'a> Iter<'a> {
-    fn new(ptr: Option<&'a BlockPtr>) -> Self {
-        Iter { ptr }
+impl<'a, T: ReadTxn> Iter<'a, T> {
+    fn new(ptr: Option<&'a BlockPtr>, txn: &'a T) -> Self {
+        Iter { ptr, _txn: txn }
     }
 }
 
-impl<'a> Iterator for Iter<'a> {
+impl<'a, T: ReadTxn> Iterator for Iter<'a, T> {
     type Item = &'a Item;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -860,6 +894,8 @@ impl std::fmt::Display for TypePtr {
     }
 }
 
+type EventHandler<T> = Observer<Arc<dyn Fn(&TransactionMut, &T) -> ()>>;
+
 pub(crate) enum Observers {
     Text(EventHandler<crate::types::text::TextEvent>),
     Array(EventHandler<crate::types::array::ArrayEvent>),
@@ -870,51 +906,61 @@ pub(crate) enum Observers {
 
 impl Observers {
     pub fn text() -> Self {
-        Observers::Text(EventHandler::default())
+        Observers::Text(Observer::default())
     }
     pub fn array() -> Self {
-        Observers::Array(EventHandler::default())
+        Observers::Array(Observer::default())
     }
     pub fn map() -> Self {
-        Observers::Map(EventHandler::default())
+        Observers::Map(Observer::default())
     }
     pub fn xml() -> Self {
-        Observers::Xml(EventHandler::default())
+        Observers::Xml(Observer::default())
     }
     pub fn xml_text() -> Self {
-        Observers::XmlText(EventHandler::default())
+        Observers::XmlText(Observer::default())
     }
 
     pub fn publish(
         &self,
         branch_ref: BranchPtr,
-        txn: &Transaction,
+        txn: &TransactionMut,
         keys: HashSet<Option<Rc<str>>>,
     ) -> Event {
         match self {
             Observers::Text(eh) => {
                 let e = TextEvent::new(branch_ref);
-                eh.publish(txn, &e);
+                for fun in eh.callbacks() {
+                    fun(txn, &e);
+                }
                 Event::Text(e)
             }
             Observers::Array(eh) => {
                 let e = ArrayEvent::new(branch_ref);
-                eh.publish(txn, &e);
+                for fun in eh.callbacks() {
+                    fun(txn, &e);
+                }
                 Event::Array(e)
             }
             Observers::Map(eh) => {
                 let e = MapEvent::new(branch_ref, keys);
-                eh.publish(txn, &e);
+                for fun in eh.callbacks() {
+                    fun(txn, &e);
+                }
                 Event::Map(e)
             }
             Observers::Xml(eh) => {
                 let e = XmlEvent::new(branch_ref, keys);
-                eh.publish(txn, &e);
+                for fun in eh.callbacks() {
+                    fun(txn, &e);
+                }
                 Event::XmlElement(e)
             }
             Observers::XmlText(eh) => {
                 let e = XmlTextEvent::new(branch_ref, keys);
-                eh.publish(txn, &e);
+                for fun in eh.callbacks() {
+                    fun(txn, &e);
+                }
                 Event::XmlText(e)
             }
         }
@@ -1005,7 +1051,7 @@ pub enum Delta {
 pub type Attrs = HashMap<Rc<str>, Any>;
 
 pub(crate) fn event_keys(
-    txn: &Transaction,
+    txn: &TransactionMut,
     target: BranchPtr,
     keys_changed: &HashSet<Option<Rc<str>>>,
 ) -> HashMap<Rc<str>, EntryChange> {
@@ -1057,16 +1103,16 @@ pub(crate) fn event_keys(
     keys
 }
 
-pub(crate) fn event_change_set(txn: &Transaction, start: Option<BlockPtr>) -> ChangeSet<Change> {
+pub(crate) fn event_change_set(txn: &TransactionMut, start: Option<BlockPtr>) -> ChangeSet<Change> {
     let mut added = HashSet::new();
     let mut deleted = HashSet::new();
     let mut delta = Vec::new();
 
     let mut moved_stack = Vec::new();
-    let mut curr_move = None;
+    let mut curr_move: Option<BlockPtr> = None;
     let mut curr_move_is_new = false;
     let mut curr_move_is_deleted = false;
-    let mut curr_move_end = None;
+    let mut curr_move_end: Option<BlockPtr> = None;
     let mut last_op = None;
 
     #[derive(Default)]
@@ -1077,7 +1123,7 @@ pub(crate) fn event_change_set(txn: &Transaction, start: Option<BlockPtr>) -> Ch
         is_deleted: bool,
     }
 
-    fn is_moved_by_new(ptr: Option<BlockPtr>, txn: &Transaction) -> bool {
+    fn is_moved_by_new(ptr: Option<BlockPtr>, txn: &TransactionMut) -> bool {
         let mut moved = ptr;
         while let Some(Block::Item(item)) = moved.as_deref() {
             if txn.has_added(&item.id) {
@@ -1114,7 +1160,7 @@ pub(crate) fn event_change_set(txn: &Transaction, start: Option<BlockPtr>) -> Ch
                             let txn = unsafe {
                                 //TODO: remove this - find a way to work with get_moved_coords
                                 // without need for &mut Transaction
-                                (txn as *const Transaction as *mut Transaction)
+                                (txn as *const TransactionMut as *mut TransactionMut)
                                     .as_mut()
                                     .unwrap()
                             };
@@ -1303,4 +1349,9 @@ impl Event {
             Event::XmlText(e) => Value::YXmlText(e.target().clone()),
         }
     }
+}
+
+pub trait ToJson {
+    /// Converts all contents of a current type into a JSON-like representation.
+    fn to_json<T: ReadTxn>(&self, txn: &T) -> Any;
 }

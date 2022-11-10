@@ -1,29 +1,30 @@
-use crate::block::{ClientID, ItemContent};
+use crate::block::{BlockPtr, BlockSlice, ClientID, ItemContent};
 use crate::block_store::{BlockStore, StateVector};
 use crate::doc::Options;
-use crate::event::{AfterTransactionEvent, EventHandler};
+use crate::event::AfterTransactionEvent;
 use crate::id_set::DeleteSet;
 use crate::types::{Branch, BranchPtr, Path, PathSegment, TypeRefs};
 use crate::update::PendingUpdate;
 use crate::updates::encoder::{Encode, Encoder};
-use crate::{Snapshot, UpdateEvent};
+use crate::{Observer, OffsetKind, Snapshot, TransactionMut, UpdateEvent};
 use lib0::error::Error;
-use std::cell::UnsafeCell;
+use std::cell::{BorrowError, BorrowMutError, Ref, RefCell, RefMut};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
-use std::ops::{Deref, DerefMut};
+use std::ops::Deref;
 use std::rc::Rc;
+use std::sync::Arc;
 
 /// Store is a core element of a document. It contains all of the information, like block store
 /// map of root types, pending updates waiting to be applied once a missing update information
 /// arrives and all subscribed callbacks.
-pub(crate) struct Store {
-    pub options: Options,
+pub struct Store {
+    pub(crate) options: Options,
 
     /// Root types (a.k.a. top-level types). These types are defined by users at the document level,
     /// they have their own unique names and represent core shared types that expose operations
     /// which can be called concurrently by remote peers in a conflict-free manner.
-    pub types: HashMap<Rc<str>, Box<Branch>>,
+    pub(crate) types: HashMap<Rc<str>, Box<Branch>>,
 
     /// A block store of a current document. It represent all blocks (inserted or tombstoned
     /// operations) integrated - and therefore visible - into a current document.
@@ -32,29 +33,30 @@ pub(crate) struct Store {
     /// A pending update. It contains blocks, which are not yet integrated into `blocks`, usually
     /// because due to issues in update exchange, there were some missing blocks that need to be
     /// integrated first before the data from `pending` can be applied safely.
-    pub pending: Option<PendingUpdate>,
+    pub(crate) pending: Option<PendingUpdate>,
 
     /// A pending delete set. Just like `pending`, it contains deleted ranges of blocks that have
     /// not been yet applied due to missing blocks that prevent `pending` update to be integrated
     /// into `blocks`.
-    pub pending_ds: Option<DeleteSet>,
+    pub(crate) pending_ds: Option<DeleteSet>,
 
     /// Handles subscriptions for the `afterTransactionCleanup` event. Events are called with the
     /// newest updates once they are committed and compacted.
-    pub(crate) after_transaction_events: Option<EventHandler<AfterTransactionEvent>>,
+    pub(crate) after_transaction_events:
+        Option<Observer<Arc<dyn Fn(&TransactionMut, &AfterTransactionEvent) -> ()>>>,
 
     /// A subscription handler. It contains all callbacks with registered by user functions that
     /// are supposed to be called, once a new update arrives.
-    pub(crate) update_v1_events: Option<EventHandler<UpdateEvent>>,
+    pub(crate) update_v1_events: Option<Observer<Arc<dyn Fn(&TransactionMut, &UpdateEvent) -> ()>>>,
 
     /// A subscription handler. It contains all callbacks with registered by user functions that
     /// are supposed to be called, once a new update arrives.
-    pub(crate) update_v2_events: Option<EventHandler<UpdateEvent>>,
+    pub(crate) update_v2_events: Option<Observer<Arc<dyn Fn(&TransactionMut, &UpdateEvent) -> ()>>>,
 }
 
 impl Store {
     /// Create a new empty store in context of a given `client_id`.
-    pub fn new(options: Options) -> Self {
+    pub(crate) fn new(options: Options) -> Self {
         Store {
             options,
             types: Default::default(),
@@ -77,14 +79,14 @@ impl Store {
 
     /// Returns a branch reference to a complex type identified by its pointer. Returns `None` if
     /// no such type could be found or was ever defined.
-    pub fn get_type<K: Into<Rc<str>>>(&self, key: K) -> Option<BranchPtr> {
+    pub(crate) fn get_type<K: Into<Rc<str>>>(&self, key: K) -> Option<BranchPtr> {
         let ptr = BranchPtr::from(self.types.get(&key.into())?);
         Some(ptr)
     }
 
     /// Returns a branch reference to a complex type identified by its pointer. Returns `None` if
     /// no such type could be found or was ever defined.
-    pub fn get_or_create_type<K: Into<Rc<str>>>(
+    pub(crate) fn get_or_create_type<K: Into<Rc<str>>>(
         &mut self,
         key: K,
         node_name: Option<Rc<str>>,
@@ -160,8 +162,9 @@ impl Store {
             }
             let last_block = blocks.get(last_idx);
             // write first struct with an offset
-            let offset = clock - last_block.id().clock;
-            last_block.encode_to(Some(self), encoder, offset);
+            let offset = clock - last_block.id().clock - 1;
+            let slice = BlockSlice::new(last_block, 0, offset);
+            slice.encode(encoder, Some(self));
         }
     }
 
@@ -203,7 +206,8 @@ impl Store {
             let first_block = blocks.get(start);
             // write first struct with an offset
             let offset = clock - first_block.id().clock;
-            first_block.encode_from(Some(self), encoder, offset);
+            let slice = BlockSlice::new(first_block, offset, first_block.len() - 1);
+            slice.encode(encoder, Some(self));
             for i in (start + 1)..blocks.len() {
                 blocks.get(i).encode(Some(self), encoder);
             }
@@ -254,6 +258,46 @@ impl Store {
             None
         }
     }
+
+    /// Consumes current block slice view, materializing it into actual memory layout,
+    /// splitting underlying block along [BlockSlice::start]/[BlockSlice::end] offsets.
+    ///
+    /// Returns a block created this way, that represents the boundaries that current [BlockSlice]
+    /// was representing.
+    pub(crate) fn materialize(&mut self, mut slice: BlockSlice) -> BlockPtr {
+        let id = slice.id().clone();
+        let blocks = self.blocks.get_mut(&id.client).unwrap();
+        let mut index = None;
+        let mut ptr = if slice.adjacent_left() {
+            slice.as_ptr()
+        } else {
+            let mut i = blocks.find_pivot(id.clock).unwrap();
+            if let Some(new) = slice.as_ptr().splice(slice.start(), OffsetKind::Utf16) {
+                blocks.insert(i + 1, new);
+                i += 1;
+                //todo: txn merge blocks insert?
+                index = Some(i);
+            }
+            let ptr = blocks.get(i);
+            slice = BlockSlice::new(ptr, 0, slice.end() - slice.start());
+            ptr
+        };
+
+        if !slice.adjacent_right() {
+            // split block on the right side
+            let i = if let Some(i) = index {
+                i
+            } else {
+                let last_id = slice.last_id();
+                blocks.find_pivot(last_id.clock).unwrap()
+            };
+            let new = ptr.splice(slice.len(), OffsetKind::Utf16).unwrap();
+            blocks.insert(i + 1, new);
+            //todo: txn merge blocks insert?
+        }
+
+        ptr
+    }
 }
 
 impl Encode for Store {
@@ -298,26 +342,20 @@ impl std::fmt::Display for Store {
 
 #[repr(transparent)]
 #[derive(Debug, Clone)]
-pub(crate) struct StoreRef(Rc<UnsafeCell<Store>>);
+pub(crate) struct StoreRef(Rc<RefCell<Store>>);
 
-impl Deref for StoreRef {
-    type Target = Store;
-
-    #[inline]
-    fn deref(&self) -> &Self::Target {
-        unsafe { (self.0.get() as *const Self::Target).as_ref().unwrap() }
+impl StoreRef {
+    pub fn try_borrow(&self) -> Result<Ref<Store>, BorrowError> {
+        self.0.try_borrow()
     }
-}
 
-impl DerefMut for StoreRef {
-    #[inline]
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        unsafe { self.0.get().as_mut().unwrap() }
+    pub fn try_borrow_mut(&self) -> Result<RefMut<Store>, BorrowMutError> {
+        self.0.try_borrow_mut()
     }
 }
 
 impl From<Store> for StoreRef {
     fn from(store: Store) -> Self {
-        StoreRef(Rc::new(UnsafeCell::new(store)))
+        StoreRef(Rc::new(RefCell::new(store)))
     }
 }

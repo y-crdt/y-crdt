@@ -6,7 +6,7 @@ use rand::{Rng, RngCore, SeedableRng};
 use std::cell::Cell;
 use std::collections::HashMap;
 use yrs::updates::decoder::Decode;
-use yrs::{Array, Doc, Map, Text, Transaction, Update};
+use yrs::{Doc, Map, Text, Transact, TransactionMut, Update};
 
 const N: usize = 6000;
 const SQRT_N: usize = 77 * 20;
@@ -51,7 +51,7 @@ fn b1_3<R: RngCore>(rng: &mut R, size: usize) -> Vec<TextOp> {
     (0..size as u32)
         .into_iter()
         .zip(sample)
-        .map(|(i, str)| TextOp::Insert(0, str))
+        .map(|(_, str)| TextOp::Insert(0, str))
         .collect()
 }
 
@@ -95,10 +95,10 @@ fn b1_6<R: RngCore>(rng: &mut R, size: usize) -> Vec<TextOp> {
 }
 
 fn b1_7<R: RngCore>(rng: &mut R, size: usize) -> Vec<TextOp> {
-    let mut total_len = Cell::new(0u32);
+    let total_len = Cell::new(0u32);
     (0..size as u32)
         .into_iter()
-        .map(|i| {
+        .map(|_| {
             let total = total_len.get();
             let idx = if total == 0 {
                 0
@@ -136,7 +136,7 @@ fn b1_9<R: RngCore>(rng: &mut R, size: usize) -> Vec<ArrayOp> {
 
 fn b1_10<R: RngCore>(rng: &mut R, size: usize) -> Vec<ArrayOp> {
     (0..size)
-        .map(|i| ArrayOp::Insert(0, vec![rng.gen()]))
+        .map(|_| ArrayOp::Insert(0, vec![rng.gen()]))
         .collect()
 }
 
@@ -156,8 +156,7 @@ where
 {
     let input = {
         let doc = Doc::new();
-        let mut txn = doc.transact();
-        let txt = txn.get_text("text");
+        let txt = doc.get_text("text");
         let mut rng = StdRng::seed_from_u64(SEED);
         let ops = gen(&mut rng, N);
         (doc, txt, ops)
@@ -169,7 +168,7 @@ where
         |b, (doc, text, ops)| {
             b.iter(|| {
                 for op in ops.iter() {
-                    let mut txn = doc.transact();
+                    let mut txn = doc.transact_mut();
                     match op {
                         TextOp::Insert(idx, txt) => text.insert(&mut txn, *idx, txt),
                         TextOp::Delete(idx, len) => text.remove_range(&mut txn, *idx, *len),
@@ -186,8 +185,7 @@ where
 {
     let input = {
         let doc = Doc::new();
-        let mut txn = doc.transact();
-        let array = txn.get_array("text");
+        let array = doc.get_array("text");
         let mut rng = StdRng::seed_from_u64(SEED);
         let ops = gen(&mut rng, N);
         (doc, array, ops)
@@ -199,7 +197,7 @@ where
         |b, (doc, array, ops)| {
             b.iter(|| {
                 for op in ops.iter() {
-                    let mut txn = doc.transact();
+                    let mut txn = doc.transact_mut();
                     match op {
                         ArrayOp::Insert(idx, values) => {
                             array.insert_range(&mut txn, *idx, values.clone())
@@ -218,19 +216,17 @@ where
 {
     let input = {
         let d1 = Doc::new();
-        let mut txn = d1.transact();
-        let t1 = txn.get_text("text");
+        let t1 = d1.get_text("text");
 
         let d2 = Doc::new();
-        let mut txn = d2.transact();
-        let t2 = txn.get_text("text");
+        let t2 = d2.get_text("text");
 
         let mut rng = StdRng::seed_from_u64(SEED);
         let ops = gen(&mut rng, N);
         (d1, t1, d2, t2, ops)
     };
 
-    fn apply(txn: &mut Transaction, txt: &Text, op: &TextOp) {
+    fn apply(txn: &mut TransactionMut, txt: &Text, op: &TextOp) {
         match op {
             TextOp::Insert(idx, content) => txt.insert(txn, *idx, content),
             TextOp::Delete(idx, len) => txt.remove_range(txn, *idx, *len),
@@ -243,11 +239,11 @@ where
         |b, (d1, t1, d2, t2, ops)| {
             b.iter(|| {
                 for (o1, o2) in ops {
-                    let mut txn1 = d1.transact();
+                    let mut txn1 = d1.transact_mut();
                     apply(&mut txn1, t1, o1);
                     let u1 = txn1.encode_update_v1();
 
-                    let mut txn2 = d2.transact();
+                    let mut txn2 = d2.transact_mut();
                     apply(&mut txn2, t2, o2);
                     let u2 = txn2.encode_update_v1();
 
@@ -286,11 +282,11 @@ fn b2_2<R: RngCore>(rng: &mut R, size: usize) -> Vec<(TextOp, TextOp)> {
 }
 
 fn b2_3<R: RngCore>(rng: &mut R, size: usize) -> Vec<(TextOp, TextOp)> {
-    let mut total_len1 = Cell::new(0u32);
-    let mut total_len2 = Cell::new(0u32);
+    let total_len1 = Cell::new(0u32);
+    let total_len2 = Cell::new(0u32);
     (0..size as u32)
         .into_iter()
-        .map(|i| {
+        .map(|_| {
             let t1 = total_len1.get();
             let i1 = rng.gen_range(0, t1.max(1));
             let s1 = gen_string(rng, 3, 9);
@@ -338,16 +334,19 @@ fn b2_4<R: RngCore>(rng: &mut R, size: usize) -> Vec<(TextOp, TextOp)> {
 
 fn n_concurrent_map_benchmark<F>(c: &mut Criterion, name: &str, f: F)
 where
-    F: Fn(&Map, &mut Transaction, usize),
+    F: Fn(&Map, &mut TransactionMut, usize),
 {
     let input: Vec<_> = (0..SQRT_N)
         .into_iter()
         .map(|i| {
             let doc = Doc::new();
-            let mut txn = doc.transact();
-            let map = txn.get_map("map");
-            f(&map, &mut txn, i);
-            (doc, txn.encode_update_v1())
+            let map = doc.get_map("map");
+            let update = {
+                let mut txn = doc.transact_mut();
+                f(&map, &mut txn, i);
+                txn.encode_update_v1()
+            };
+            (doc, update)
         })
         .collect();
 
@@ -355,7 +354,7 @@ where
         b.iter(|| {
             let mut iter = input.into_iter();
             let (doc, _) = iter.next().unwrap();
-            let mut txn = doc.transact();
+            let mut txn = doc.transact_mut();
             while let Some((_, update)) = iter.next() {
                 txn.apply_update(Update::decode_v1(update.as_slice()).unwrap());
             }
@@ -363,11 +362,11 @@ where
     });
 }
 
-fn b3_1(map: &Map, txn: &mut Transaction, i: usize) {
+fn b3_1(map: &Map, txn: &mut TransactionMut, i: usize) {
     map.insert(txn, "v", i as u32);
 }
 
-fn b3_2(map: &Map, txn: &mut Transaction, i: usize) {
+fn b3_2(map: &Map, txn: &mut TransactionMut, i: usize) {
     let mut o = HashMap::with_capacity(2);
     o.insert("name".to_string(), i.to_string());
     o.insert("address".to_string(), "here".to_string());
@@ -375,7 +374,7 @@ fn b3_2(map: &Map, txn: &mut Transaction, i: usize) {
     map.insert(txn, "v", o);
 }
 
-fn b3_3(map: &Map, txn: &mut Transaction, i: usize) {
+fn b3_3(map: &Map, txn: &mut TransactionMut, i: usize) {
     let mut str = String::with_capacity(i * SQRT_N);
     for _ in 0..SQRT_N {
         str.push_str(i.to_string().as_str());
@@ -388,10 +387,13 @@ fn b3_4(c: &mut Criterion, name: &str) {
         .into_iter()
         .map(|i| {
             let doc = Doc::new();
-            let mut txn = doc.transact();
-            let array = txn.get_array("array");
-            array.insert(&mut txn, 0, i.to_string());
-            (doc, txn.encode_update_v1())
+            let array = doc.get_array("array");
+            let update = {
+                let mut txn = doc.transact_mut();
+                array.insert(&mut txn, 0, i.to_string());
+                txn.encode_update_v1()
+            };
+            (doc, update)
         })
         .collect();
 
@@ -399,7 +401,7 @@ fn b3_4(c: &mut Criterion, name: &str) {
         b.iter(|| {
             let mut iter = input.into_iter();
             let (doc, _) = iter.next().unwrap();
-            let mut txn = doc.transact();
+            let mut txn = doc.transact_mut();
             while let Some((_, update)) = iter.next() {
                 txn.apply_update(Update::decode_v1(update.as_slice()).unwrap());
             }
@@ -409,10 +411,7 @@ fn b3_4(c: &mut Criterion, name: &str) {
 
 fn b4_1(c: &mut Criterion, name: &str) {
     let doc = Doc::new();
-    let txt = {
-        let mut txn = doc.transact();
-        txn.get_text("text")
-    };
+    let txt = doc.get_text("text");
     let input = read_input("./yrs/benches/input/b4-editing-trace.bin");
 
     c.bench_with_input(
@@ -421,7 +420,7 @@ fn b4_1(c: &mut Criterion, name: &str) {
         |b, (doc, txt, input)| {
             b.iter(|| {
                 for i in input {
-                    let mut txn = doc.transact();
+                    let mut txn = doc.transact_mut();
                     match i {
                         TextOp::Insert(idx, chunk) => txt.insert(&mut txn, *idx, chunk),
                         TextOp::Delete(idx, len) => txt.remove_range(&mut txn, *idx, *len),
@@ -434,10 +433,7 @@ fn b4_1(c: &mut Criterion, name: &str) {
 
 fn b4_2(c: &mut Criterion, name: &str) {
     let doc = Doc::new();
-    let txt = {
-        let mut txn = doc.transact();
-        txn.get_text("text")
-    };
+    let txt = doc.get_text("text");
     let mut buf = Vec::with_capacity(400 * 1024);
     let mut f = std::fs::File::open("./yrs/benches/input/b4-update.bin").unwrap();
     std::io::Read::read_to_end(&mut f, &mut buf).unwrap();
@@ -445,9 +441,9 @@ fn b4_2(c: &mut Criterion, name: &str) {
     c.bench_with_input(
         BenchmarkId::new(name, buf.len()),
         &(doc, txt, buf),
-        |b, (doc, txt, buf)| {
+        |b, (doc, _txt, buf)| {
             b.iter(|| {
-                let mut txn = doc.transact();
+                let mut txn = doc.transact_mut();
                 txn.apply_update(Update::decode_v1(buf.as_slice()).unwrap());
             });
         },
