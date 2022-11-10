@@ -6,7 +6,7 @@ use crate::block_store::{Snapshot, StateVector};
 use crate::event::AfterTransactionEvent;
 use crate::id_set::DeleteSet;
 use crate::store::Store;
-use crate::types::{BranchPtr, Event, Events, TypePtr};
+use crate::types::{Branch, BranchPtr, Event, Events, TypePtr, Value};
 use crate::update::Update;
 use lib0::error::Error;
 use std::collections::{HashMap, HashSet};
@@ -71,6 +71,12 @@ pub trait ReadTxn: Sized {
         let mut encoder = EncoderV2::new();
         self.encode_state_as_update(sv, &mut encoder);
         encoder.to_vec()
+    }
+
+    /// Returns an iterator over top level (root) shared types available in current [Doc].
+    fn root_refs(&self) -> RootRefs {
+        let store = self.store();
+        RootRefs(store.types.iter())
     }
 }
 
@@ -318,8 +324,11 @@ impl<'doc> TransactionMut<'doc> {
 
                 item.mark_as_deleted();
                 self.delete_set.insert(item.id.clone(), item.len());
-                let parent = *item.parent.as_branch().unwrap();
-                self.add_changed_type(parent, item.parent_sub.clone());
+                if let Some(parent) = item.parent.as_branch() {
+                    self.add_changed_type(*parent, item.parent_sub.clone());
+                } else {
+                    // parent has been GC'ed
+                }
 
                 match &item.content {
                     ItemContent::Doc(_, _) => {
@@ -726,5 +735,18 @@ impl<'doc> TransactionMut<'doc> {
         }
 
         self.merge_blocks.append(&mut merge_blocks);
+    }
+}
+
+pub struct RootRefs<'doc>(std::collections::hash_map::Iter<'doc, Rc<str>, Box<Branch>>);
+
+impl<'doc> Iterator for RootRefs<'doc> {
+    type Item = (&'doc str, Value);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let (key, branch) = self.0.next()?;
+        let key = key.as_ref();
+        let ptr = BranchPtr::from(branch);
+        Some((key, ptr.into()))
     }
 }

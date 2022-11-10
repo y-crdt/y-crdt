@@ -6,6 +6,9 @@ pub mod xml;
 use crate::*;
 pub use map::MapRef;
 pub use text::TextRef;
+pub use map::Map;
+use std::borrow::Borrow;
+pub use text::Text;
 
 use crate::block::{Block, BlockPtr, Item, ItemContent, ItemPosition, Prelim};
 use crate::store::StoreRef;
@@ -17,6 +20,7 @@ use crate::types::xml::{XmlElementRef, XmlEvent, XmlTextEvent, XmlTextRef};
 use lib0::any::Any;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Formatter;
+use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 use std::ptr::NonNull;
 use std::rc::Rc;
@@ -314,8 +318,8 @@ impl Branch {
 
     /// Get iterator over (String, Block) entries of a map component of a current root type.
     /// Deleted blocks are skipped by this iterator.
-    pub(crate) fn entries<'a, T: ReadTxn + 'a>(&'a self, txn: &'a T) -> Entries<'a, T> {
-        Entries::new(&self.map, txn)
+    pub(crate) fn entries<'a, T: ReadTxn + 'a>(&'a self, txn: &'a T) -> Entries<'a, &'a T, T> {
+        Entries::from_ref(&self.map, txn)
     }
 
     /// Get iterator over Block entries of an array component of a current root type.
@@ -797,21 +801,49 @@ impl std::fmt::Display for Branch {
 }
 
 #[derive(Debug)]
-pub(crate) struct Entries<'a, T> {
+pub(crate) struct Entries<'a, B, T> {
     iter: std::collections::hash_map::Iter<'a, Rc<str>, BlockPtr>,
-    txn: &'a T,
+    txn: B,
+    _marker: PhantomData<T>,
 }
 
-impl<'a, T: ReadTxn> Entries<'a, T> {
-    pub(crate) fn new(source: &'a HashMap<Rc<str>, BlockPtr>, txn: &'a T) -> Self {
+impl<'a, B, T: ReadTxn> Entries<'a, B, T>
+where
+    B: Borrow<T>,
+    T: ReadTxn,
+{
+    pub fn new(source: &'a HashMap<Rc<str>, BlockPtr>, txn: B) -> Self {
         Entries {
             iter: source.iter(),
             txn,
+            _marker: PhantomData::default(),
         }
     }
 }
 
-impl<'a, T: ReadTxn> Iterator for Entries<'a, T> {
+impl<'a, T: ReadTxn> Entries<'a, T, T>
+where
+    T: Borrow<T> + ReadTxn,
+{
+    pub fn from(source: &'a HashMap<Rc<str>, BlockPtr>, txn: T) -> Self {
+        Entries::new(source, txn)
+    }
+}
+
+impl<'a, T: ReadTxn> Entries<'a, &'a T, T>
+where
+    T: Borrow<T> + ReadTxn,
+{
+    pub fn from_ref(source: &'a HashMap<Rc<str>, BlockPtr>, txn: &'a T) -> Self {
+        Entries::new(source, txn)
+    }
+}
+
+impl<'a, B, T> Iterator for Entries<'a, B, T>
+where
+    B: Borrow<T>,
+    T: ReadTxn,
+{
     type Item = (&'a str, &'a Item);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -836,12 +868,12 @@ impl<'a, T: ReadTxn> Iterator for Entries<'a, T> {
 
 pub(crate) struct Iter<'a, T> {
     ptr: Option<&'a BlockPtr>,
-    txn: &'a T,
+    _txn: &'a T,
 }
 
 impl<'a, T: ReadTxn> Iter<'a, T> {
     fn new(ptr: Option<&'a BlockPtr>, txn: &'a T) -> Self {
-        Iter { ptr, txn }
+        Iter { ptr, _txn: txn }
     }
 }
 

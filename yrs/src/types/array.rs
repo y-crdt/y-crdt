@@ -11,7 +11,9 @@ use lib0::any::Any;
 use std::borrow::Borrow;
 use std::cell::UnsafeCell;
 use std::collections::HashSet;
+use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
+use std::sync::Arc;
 
 /// A collection used to store data in an indexed sequence structure. This type is internally
 /// implemented as a double linked list, which may squash values inserted directly one after another
@@ -227,27 +229,54 @@ pub trait Array: AsRef<Branch> {
 
     /// Returns an iterator, that can be used to lazely traverse over all values stored in a current
     /// array.
-    fn iter<'a, T: ReadTxn + 'a>(&self, txn: &'a T) -> ArrayIter<'a, T> {
-        let ptr = BranchPtr::from(self.as_ref());
-        ArrayIter::new(ptr, txn)
+    fn iter<'a, T: ReadTxn + 'a>(&self, txn: &'a T) -> ArrayIter<&'a T, T> {
+        ArrayIter::from_ref(self.as_ref(), txn)
     }
 }
 
-pub struct ArrayIter<'a, T: ReadTxn + 'a> {
+pub type ArraySubscription = crate::Subscription<Arc<dyn Fn(&TransactionMut, &ArrayEvent) -> ()>>;
+
+pub struct ArrayIter<B, T>
+where
+    B: Borrow<T>,
+    T: ReadTxn,
+{
     inner: BlockIter,
-    txn: &'a T,
+    txn: B,
+    _marker: PhantomData<T>,
 }
 
-impl<'a, T: ReadTxn + 'a> ArrayIter<'a, T> {
-    fn new(ptr: BranchPtr, txn: &'a T) -> Self {
+impl<T> ArrayIter<T, T>
+where
+    T: Borrow<T> + ReadTxn,
+{
+    pub fn from(array: &ArrayRef, txn: T) -> Self {
         ArrayIter {
-            inner: BlockIter::new(ptr),
+            inner: BlockIter::new(array.0),
             txn,
+            _marker: PhantomData::default(),
         }
     }
 }
 
-impl<'a, T: ReadTxn + 'a> Iterator for ArrayIter<'a, T> {
+impl<'a, T> ArrayIter<&'a T, T>
+where
+    T: Borrow<T> + ReadTxn,
+{
+    pub fn from_ref(array: &Branch, txn: &'a T) -> Self {
+        ArrayIter {
+            inner: BlockIter::new(BranchPtr::from(array)),
+            txn,
+            _marker: PhantomData::default(),
+        }
+    }
+}
+
+impl<B, T> Iterator for ArrayIter<B, T>
+where
+    B: Borrow<T>,
+    T: ReadTxn,
+{
     type Item = Value;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -1229,7 +1258,7 @@ mod test {
 
         let a2 = a1.clone();
         let h2 = spawn(move || {
-            for i in 0..10 {
+            for _ in 0..10 {
                 let millis = thread_rng().gen_range(1, 20);
                 sleep(Duration::from_millis(millis));
 
@@ -1241,7 +1270,7 @@ mod test {
 
         let a3 = a1.clone();
         let h3 = spawn(move || {
-            for i in 0..10 {
+            for _ in 0..10 {
                 let millis = thread_rng().gen_range(1, 20);
                 sleep(Duration::from_millis(millis));
 

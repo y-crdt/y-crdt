@@ -613,7 +613,7 @@ impl Update {
                                 } else {
                                     // if (currWrite.struct.id.clock + currWrite.struct.length >= curr.id.clock) {
                                     let diff =
-                                        curr_write_last as i32 - curr_block.id().clock as i32;
+                                        curr_write_last as i32 - curr_block.id().clock as i32 - 1;
 
                                     if diff > 0 {
                                         if let BlockCarrier::Skip(skip) = &mut curr_write_block {
