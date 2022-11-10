@@ -61,6 +61,7 @@ pub use crate::id_set::DeleteSet;
 pub use crate::observer::{Observer, Subscription, SubscriptionId};
 pub use crate::store::Store;
 pub use crate::transaction::ReadTxn;
+pub use crate::transaction::RootRefs;
 pub use crate::transaction::Transaction;
 pub use crate::transaction::TransactionMut;
 pub use crate::transaction::WriteTxn;
