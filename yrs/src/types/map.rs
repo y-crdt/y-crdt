@@ -26,9 +26,6 @@ pub struct MapRef(BranchPtr);
 
 impl Map for MapRef {}
 
-unsafe impl Send for MapRef {}
-unsafe impl Sync for MapRef {}
-
 impl Observable for MapRef {
     type Event = MapEvent;
 
@@ -921,32 +918,33 @@ mod test {
     #[test]
     fn multi_threading() {
         use rand::thread_rng;
-        use std::sync::{Arc, RwLock};
+        use std::sync::{Arc, Mutex};
         use std::thread::{sleep, spawn};
 
-        let doc = Doc::with_client_id(1);
-        let m1 = Arc::new(RwLock::new(doc.get_map("test")));
+        let doc = Arc::new(Mutex::new(Doc::with_client_id(1)));
 
-        let m2 = m1.clone();
+        let d2 = doc.clone();
         let h2 = spawn(move || {
             for _ in 0..10 {
                 let millis = thread_rng().gen_range(1, 20);
                 sleep(Duration::from_millis(millis));
 
-                let map = m2.write().unwrap();
-                let mut txn = map.transact_mut();
+                let doc = d2.lock().unwrap();
+                let map = doc.get_map("test");
+                let mut txn = doc.transact_mut();
                 map.insert(&mut txn, "key", 1);
             }
         });
 
-        let m3 = m1.clone();
+        let d3 = doc.clone();
         let h3 = spawn(move || {
             for _ in 0..10 {
                 let millis = thread_rng().gen_range(1, 20);
                 sleep(Duration::from_millis(millis));
 
-                let map = m3.write().unwrap();
-                let mut txn = map.transact_mut();
+                let doc = d3.lock().unwrap();
+                let map = doc.get_map("test");
+                let mut txn = doc.transact_mut();
                 map.insert(&mut txn, "key", 2);
             }
         });
@@ -954,8 +952,9 @@ mod test {
         h3.join().unwrap();
         h2.join().unwrap();
 
-        let map = m1.read().unwrap();
-        let txn = map.transact();
+        let doc = doc.lock().unwrap();
+        let map = doc.get_map("test");
+        let txn = doc.transact();
         let value = map.get(&txn, "key").unwrap().to_json(&txn);
 
         assert!(value == 1.into() || value == 2.into())

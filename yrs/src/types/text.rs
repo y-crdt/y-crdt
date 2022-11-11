@@ -29,9 +29,6 @@ pub struct TextRef(BranchPtr);
 
 impl Text for TextRef {}
 
-unsafe impl Send for TextRef {}
-unsafe impl Sync for TextRef {}
-
 impl Observable for TextRef {
     type Event = TextEvent;
 
@@ -1047,6 +1044,7 @@ mod test {
     use std::cell::RefCell;
     use std::collections::HashMap;
     use std::rc::Rc;
+    use std::sync::Mutex;
     use std::time::Duration;
 
     #[test]
@@ -2046,31 +2044,32 @@ mod test {
     #[test]
     fn multi_threading() {
         use rand::thread_rng;
-        use std::sync::{Arc, RwLock};
+        use std::sync::{Arc, Mutex};
         use std::thread::{sleep, spawn};
 
-        let doc = Doc::with_client_id(1);
-        let t1 = Arc::new(RwLock::new(doc.get_text("test")));
+        let doc = Arc::new(Mutex::new(Doc::with_client_id(1)));
 
-        let t2 = t1.clone();
+        let d2 = doc.clone();
         let h2 = spawn(move || {
             for _ in 0..10 {
                 let millis = thread_rng().gen_range(1, 20);
                 sleep(Duration::from_millis(millis));
 
-                let txt = t2.write().unwrap();
-                let mut txn = txt.transact_mut();
+                let doc = d2.lock().unwrap();
+                let txt = doc.get_text("test");
+                let mut txn = doc.transact_mut();
                 txt.push(&mut txn, "a");
             }
         });
 
-        let t3 = t1.clone();
+        let d3 = doc.clone();
         let h3 = spawn(move || {
             for _ in 0..10 {
                 let millis = thread_rng().gen_range(1, 20);
                 sleep(Duration::from_millis(millis));
 
-                let txt = t3.write().unwrap();
+                let doc = d3.lock().unwrap();
+                let txt = doc.get_text("test");
                 let mut txn = txt.transact_mut();
                 txt.push(&mut txn, "b");
             }
@@ -2079,8 +2078,9 @@ mod test {
         h3.join().unwrap();
         h2.join().unwrap();
 
-        let txt = t1.read().unwrap();
-        let len = txt.len(&txt.transact());
+        let doc = doc.lock().unwrap();
+        let txt = doc.get_text("test");
+        let len = txt.len(&doc.transact());
         assert_eq!(len, 20);
     }
 }

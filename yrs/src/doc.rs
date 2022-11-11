@@ -8,8 +8,9 @@ use crate::types::{
 };
 use crate::{ArrayRef, MapRef, Observer, SubscriptionId, TextRef, XmlElementRef, XmlTextRef};
 use rand::Rng;
-use std::cell::{BorrowError, BorrowMutError};
+use std::cell::{BorrowError, BorrowMutError, Ref, RefMut};
 use std::sync::Arc;
+use thiserror::Error;
 
 /// A Yrs document type. Documents are most important units of collaborative resources management.
 /// All shared collections live within a scope of their corresponding documents. All updates are
@@ -85,7 +86,7 @@ impl Doc {
             "tried to get a root level type while another transaction on the document is open",
         );
         let mut c = r.get_or_create_type(name, None, TYPE_REFS_TEXT);
-        c.store = Some(self.store.clone());
+        c.store = Some(self.store.weak_ref());
         TextRef::from(c)
     }
 
@@ -105,7 +106,7 @@ impl Doc {
             "tried to get a root level type while another transaction on the document is open",
         );
         let mut c = r.get_or_create_type(name, None, TYPE_REFS_MAP);
-        c.store = Some(self.store.clone());
+        c.store = Some(self.store.weak_ref());
         MapRef::from(c)
     }
 
@@ -124,7 +125,7 @@ impl Doc {
             "tried to get a root level type while another transaction on the document is open",
         );
         let mut c = r.get_or_create_type(name, None, TYPE_REFS_ARRAY);
-        c.store = Some(self.store.clone());
+        c.store = Some(self.store.weak_ref());
         ArrayRef::from(c)
     }
 
@@ -145,7 +146,7 @@ impl Doc {
             "tried to get a root level type while another transaction on the document is open",
         );
         let mut c = r.get_or_create_type(name, Some("UNDEFINED".into()), TYPE_REFS_XML_ELEMENT);
-        c.store = Some(self.store.clone());
+        c.store = Some(self.store.weak_ref());
         XmlElementRef::from(c)
     }
 
@@ -164,7 +165,7 @@ impl Doc {
             "tried to get a root level type while another transaction on the document is open",
         );
         let mut c = r.get_or_create_type(name, None, TYPE_REFS_XML_TEXT);
-        c.store = Some(self.store.clone());
+        c.store = Some(self.store.weak_ref());
         XmlTextRef::from(c)
     }
 
@@ -295,58 +296,79 @@ pub enum OffsetKind {
 pub trait Transact {
     /// Creates a transaction used for all kind of block store operations.
     /// Transaction cleanups & calling event handles happen when the transaction struct is dropped.
-    fn try_transact(&self) -> Result<Transaction, BorrowError>;
+    fn try_transact(&self) -> Result<Transaction, TransactionAcqError>;
 
     /// Creates a transaction used for all kind of block store operations.
     /// Transaction cleanups & calling event handles happen when the transaction struct is dropped.
-    fn try_transact_mut(&self) -> Result<TransactionMut, BorrowMutError>;
+    fn try_transact_mut(&self) -> Result<TransactionMut, TransactionAcqError>;
 
     /// Creates a transaction used for all kind of block store operations.
     /// Transaction cleanups & calling event handles happen when the transaction struct is dropped.
     fn transact(&self) -> Transaction {
-        self.try_transact().expect("cannot read document store contents because another read-write transaction is in progress")
+        self.try_transact().unwrap()
     }
 
     /// Creates a transaction used for all kind of block store operations.
     /// Transaction cleanups & calling event handles happen when the transaction struct is dropped.
     fn transact_mut(&self) -> TransactionMut {
-        self.try_transact_mut()
-            .expect("only one read-write transaction can be active at the same time")
+        self.try_transact_mut().unwrap()
     }
 }
 
 impl Transact for Doc {
-    fn try_transact(&self) -> Result<Transaction, BorrowError> {
+    fn try_transact(&self) -> Result<Transaction, TransactionAcqError> {
         Ok(Transaction::new(self.store.try_borrow()?))
     }
 
-    fn try_transact_mut(&self) -> Result<TransactionMut, BorrowMutError> {
+    fn try_transact_mut(&self) -> Result<TransactionMut, TransactionAcqError> {
         Ok(TransactionMut::new(self.store.try_borrow_mut()?))
     }
 }
 
 impl Transact for Branch {
-    fn try_transact(&self) -> Result<Transaction, BorrowError> {
+    fn try_transact<'a>(&'a self) -> Result<Transaction<'a>, TransactionAcqError> {
         let store = self.store.as_ref().unwrap();
-        Ok(Transaction::new(store.try_borrow()?))
+        if let Some(store) = store.upgrade() {
+            let store_ref = store.try_borrow()?;
+            let store_ref: Ref<'a, Store> = unsafe { std::mem::transmute(store_ref) };
+            Ok(Transaction::new(store_ref))
+        } else {
+            Err(TransactionAcqError::DocumentDropped)
+        }
     }
 
-    fn try_transact_mut(&self) -> Result<TransactionMut, BorrowMutError> {
+    fn try_transact_mut<'a>(&'a self) -> Result<TransactionMut<'a>, TransactionAcqError> {
         let store = self.store.as_ref().unwrap();
-        Ok(TransactionMut::new(store.try_borrow_mut()?))
+        if let Some(store) = store.upgrade() {
+            let store_ref = store.try_borrow_mut()?;
+            let store_ref: RefMut<'a, Store> = unsafe { std::mem::transmute(store_ref) };
+            Ok(TransactionMut::new(store_ref))
+        } else {
+            Err(TransactionAcqError::DocumentDropped)
+        }
     }
+}
+
+#[derive(Error, Debug)]
+pub enum TransactionAcqError {
+    #[error("Failed to acquire read-only transaction. Drop read-write transaction and retry.")]
+    SharedAcqFailed(#[from] BorrowError),
+    #[error("Failed to acquire read-write transaction. Drop other transactions and retry.")]
+    ExclusiveAcqFailed(#[from] BorrowMutError),
+    #[error("All references to a parent document containing this structure has been dropped.")]
+    DocumentDropped,
 }
 
 impl<T> Transact for T
 where
     T: AsRef<Branch>,
 {
-    fn try_transact(&self) -> Result<Transaction, BorrowError> {
+    fn try_transact(&self) -> Result<Transaction, TransactionAcqError> {
         let branch = self.as_ref();
         branch.try_transact()
     }
 
-    fn try_transact_mut(&self) -> Result<TransactionMut, BorrowMutError> {
+    fn try_transact_mut(&self) -> Result<TransactionMut, TransactionAcqError> {
         let branch = self.as_ref();
         branch.try_transact_mut()
     }

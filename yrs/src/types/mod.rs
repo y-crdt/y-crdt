@@ -4,14 +4,14 @@ pub mod text;
 pub mod xml;
 
 use crate::*;
-pub use map::MapRef;
-pub use text::TextRef;
 pub use map::Map;
+pub use map::MapRef;
 use std::borrow::Borrow;
+use std::cell::RefCell;
 pub use text::Text;
+pub use text::TextRef;
 
 use crate::block::{Block, BlockPtr, Item, ItemContent, ItemPosition, Prelim};
-use crate::store::StoreRef;
 use crate::transaction::TransactionMut;
 use crate::types::array::{ArrayEvent, ArrayRef};
 use crate::types::map::MapEvent;
@@ -23,7 +23,7 @@ use std::fmt::Formatter;
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 use std::ptr::NonNull;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use std::sync::Arc;
 
 pub type TypeRefs = u8;
@@ -240,7 +240,7 @@ pub struct Branch {
     /// another complex type.
     pub(crate) item: Option<BlockPtr>,
 
-    pub(crate) store: Option<StoreRef>,
+    pub(crate) store: Option<Weak<RefCell<Store>>>,
 
     /// A tag name identifier, used only by [XmlElement].
     pub name: Option<Rc<str>>,

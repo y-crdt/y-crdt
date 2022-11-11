@@ -39,9 +39,6 @@ pub struct ArrayRef(BranchPtr);
 
 impl Array for ArrayRef {}
 
-unsafe impl Send for ArrayRef {}
-unsafe impl Sync for ArrayRef {}
-
 impl ToJson for ArrayRef {
     fn to_json<T: ReadTxn>(&self, txn: &T) -> Any {
         let mut walker = BlockIter::new(self.0);
@@ -1250,32 +1247,33 @@ mod test {
     #[test]
     fn multi_threading() {
         use rand::thread_rng;
-        use std::sync::{Arc, RwLock};
+        use std::sync::{Arc, Mutex};
         use std::thread::{sleep, spawn};
 
-        let doc = Doc::with_client_id(1);
-        let a1 = Arc::new(RwLock::new(doc.get_array("test")));
+        let doc = Arc::new(Mutex::new(Doc::with_client_id(1)));
 
-        let a2 = a1.clone();
+        let d2 = doc.clone();
         let h2 = spawn(move || {
             for _ in 0..10 {
                 let millis = thread_rng().gen_range(1, 20);
                 sleep(Duration::from_millis(millis));
 
-                let array = a2.write().unwrap();
-                let mut txn = array.transact_mut();
+                let doc = d2.lock().unwrap();
+                let array = doc.get_array("test");
+                let mut txn = doc.transact_mut();
                 array.push_back(&mut txn, "a");
             }
         });
 
-        let a3 = a1.clone();
+        let d3 = doc.clone();
         let h3 = spawn(move || {
             for _ in 0..10 {
                 let millis = thread_rng().gen_range(1, 20);
                 sleep(Duration::from_millis(millis));
 
-                let array = a3.write().unwrap();
-                let mut txn = array.transact_mut();
+                let doc = d3.lock().unwrap();
+                let array = doc.get_array("test");
+                let mut txn = doc.transact_mut();
                 array.push_back(&mut txn, "b");
             }
         });
@@ -1283,8 +1281,9 @@ mod test {
         h3.join().unwrap();
         h2.join().unwrap();
 
-        let array = a1.read().unwrap();
-        let len = array.len(&array.transact());
+        let doc = doc.lock().unwrap();
+        let array = doc.get_array("test");
+        let len = array.len(&doc.transact());
         assert_eq!(len, 20);
     }
 }

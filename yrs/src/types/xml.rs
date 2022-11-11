@@ -101,9 +101,6 @@ pub struct XmlElementRef(BranchPtr);
 impl Xml for XmlElementRef {}
 impl XmlFragment for XmlElementRef {}
 
-unsafe impl Send for XmlElementRef {}
-unsafe impl Sync for XmlElementRef {}
-
 impl XmlElementRef {
     /// A tag name of a current top-level XML node, eg. node `<p></p>` has "p" as it's tag name.
     pub fn tag(&self) -> &str {
@@ -248,9 +245,6 @@ pub struct XmlTextRef(BranchPtr);
 impl Xml for XmlTextRef {}
 impl Text for XmlTextRef {}
 
-unsafe impl Send for XmlTextRef {}
-unsafe impl Sync for XmlTextRef {}
-
 impl Observable for XmlTextRef {
     type Event = XmlTextEvent;
 
@@ -318,9 +312,6 @@ impl Prelim for XmlTextPrelim<'_> {
 pub struct XmlFragmentRef(BranchPtr);
 
 impl XmlFragment for XmlFragmentRef {}
-
-unsafe impl Send for XmlFragmentRef {}
-unsafe impl Sync for XmlFragmentRef {}
 
 impl XmlFragmentRef {
     /// Converts current XML node into a textual representation. This representation if flat, it
@@ -429,9 +420,6 @@ where
 pub struct XmlHookRef(BranchPtr);
 
 impl Map for XmlHookRef {}
-
-unsafe impl Send for XmlHookRef {}
-unsafe impl Sync for XmlHookRef {}
 
 impl ToJson for XmlHookRef {
     fn to_json<T: ReadTxn>(&self, txn: &T) -> Any {
