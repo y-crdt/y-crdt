@@ -972,18 +972,7 @@ Branch *ymap(YDoc *doc, const char *name);
  * will not remove `YXmlElement` instance from the document itself (once created it'll last for
  * the entire lifecycle of a document).
  */
-Branch *yxmlelem(YDoc *doc, const char *name);
-
-/**
- * Gets or creates a new shared `YXmlText` data type instance as a root-level type of a given
- * document. This structure can later be accessed using its `name`, which must be a null-terminated
- * UTF-8 compatible string.
- *
- * Use [yxmltext_destroy] in order to release pointer returned that way - keep in mind that this
- * will not remove `YXmlText` instance from the document itself (once created it'll last for
- * the entire lifecycle of a document).
- */
-Branch *yxmltext(YDoc *doc, const char *name);
+Branch *yxmlfragment(YDoc *doc, const char *name);
 
 /**
  * Returns a state vector of a current transaction's document, serialized using lib0 version 1

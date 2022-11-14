@@ -3,10 +3,9 @@ use crate::event::{AfterTransactionEvent, UpdateEvent};
 use crate::store::{Store, StoreRef};
 use crate::transaction::{Transaction, TransactionMut};
 use crate::types::{
-    Branch, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT, TYPE_REFS_XML_ELEMENT,
-    TYPE_REFS_XML_TEXT,
+    Branch, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT, TYPE_REFS_XML_FRAGMENT,
 };
-use crate::{ArrayRef, MapRef, Observer, SubscriptionId, TextRef, XmlElementRef, XmlTextRef};
+use crate::{ArrayRef, MapRef, Observer, SubscriptionId, TextRef, XmlFragmentRef};
 use rand::Rng;
 use std::cell::{BorrowError, BorrowMutError, Ref, RefMut};
 use std::sync::Arc;
@@ -71,7 +70,7 @@ impl Doc {
         }
     }
 
-    /// Returns a [Text] data structure stored under a given `name`. Text structures are used for
+    /// Returns a [TextRef] data structure stored under a given `name`. Text structures are used for
     /// collaborative text editing: they expose operations to append and remove chunks of text,
     /// which are free to execute concurrently by multiple peers over remote boundaries.
     ///
@@ -90,7 +89,7 @@ impl Doc {
         TextRef::from(c)
     }
 
-    /// Returns a [Map] data structure stored under a given `name`. Maps are used to store key-value
+    /// Returns a [MapRef] data structure stored under a given `name`. Maps are used to store key-value
     /// pairs associated together. These values can be primitive data (similar but not limited to
     /// a JavaScript Object Notation) as well as other shared types (Yrs maps, arrays, text
     /// structures etc.), enabling to construct a complex recursive tree structures.
@@ -110,7 +109,7 @@ impl Doc {
         MapRef::from(c)
     }
 
-    /// Returns an [Array] data structure stored under a given `name`. Array structures are used for
+    /// Returns an [ArrayRef] data structure stored under a given `name`. Array structures are used for
     /// storing a sequences of elements in ordered manner, positioning given element accordingly
     /// to its index.
     ///
@@ -129,7 +128,7 @@ impl Doc {
         ArrayRef::from(c)
     }
 
-    /// Returns a [XmlElement] data structure stored under a given `name`. XML elements represent
+    /// Returns a [XmlFragmentRef] data structure stored under a given `name`. XML elements represent
     /// nodes of XML document. They can contain attributes (key-value pairs, both of string type)
     /// as well as other nested XML elements or text values, which are stored in their insertion
     /// order.
@@ -141,32 +140,13 @@ impl Doc {
     /// reinterpreted as a XML element (in such case a map component of complex data type will be
     /// interpreted as map of its attributes, while a sequence component - as a list of its child
     /// XML nodes).
-    pub fn get_xml_element(&self, name: &str) -> XmlElementRef {
+    pub fn get_xml_fragment(&self, name: &str) -> XmlFragmentRef {
         let mut r = self.store.try_borrow_mut().expect(
             "tried to get a root level type while another transaction on the document is open",
         );
-        let mut c = r.get_or_create_type(name, Some("UNDEFINED".into()), TYPE_REFS_XML_ELEMENT);
+        let mut c = r.get_or_create_type(name, None, TYPE_REFS_XML_FRAGMENT);
         c.store = Some(self.store.weak_ref());
-        XmlElementRef::from(c)
-    }
-
-    /// Returns a [XmlText] data structure stored under a given `name`. Text structures are used for
-    /// collaborative text editing: they expose operations to append and remove chunks of text,
-    /// which are free to execute concurrently by multiple peers over remote boundaries.
-    ///
-    /// If not structure under defined `name` existed before, it will be created and returned
-    /// instead.
-    ///
-    /// If a structure under defined `name` already existed, but its type was different it will be
-    /// reinterpreted as a text (in such case a sequence component of complex data type will be
-    /// interpreted as a list of text chunks).
-    pub fn get_xml_text(&self, name: &str) -> XmlTextRef {
-        let mut r = self.store.try_borrow_mut().expect(
-            "tried to get a root level type while another transaction on the document is open",
-        );
-        let mut c = r.get_or_create_type(name, None, TYPE_REFS_XML_TEXT);
-        c.store = Some(self.store.weak_ref());
-        XmlTextRef::from(c)
+        XmlFragmentRef::from(c)
     }
 
     /// Subscribe callback function for any changes performed within transaction scope. These
@@ -1057,8 +1037,7 @@ mod test {
             let _txt = doc.get_text("text");
             let _array = doc.get_array("array");
             let _map = doc.get_map("map");
-            let _xml_elem = doc.get_xml_element("xml_elem");
-            let _xml_text = doc.get_xml_text("xml_text");
+            let _xml_elem = doc.get_xml_fragment("xml_elem");
         }
 
         let txn = doc.transact();

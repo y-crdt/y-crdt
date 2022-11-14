@@ -208,21 +208,9 @@ impl YDoc {
     ///
     /// If there was an instance with this name, but it was of different type, it will be projected
     /// onto `YXmlElement` instance.
-    #[wasm_bindgen(js_name = getXmlElement)]
-    pub fn get_xml_element(&mut self, name: &str) -> YXmlElement {
-        YXmlElement(self.0.get_xml_element(name))
-    }
-
-    /// Returns a `YXmlText` shared data type, that's accessible for subsequent accesses using given
-    /// `name`.
-    ///
-    /// If there was no instance with this name before, it will be created and then returned.
-    ///
-    /// If there was an instance with this name, but it was of different type, it will be projected
-    /// onto `YXmlText` instance.
-    #[wasm_bindgen(js_name = getXmlText)]
-    pub fn get_xml_text(&mut self, name: &str) -> YXmlText {
-        YXmlText(self.0.get_xml_text(name))
+    #[wasm_bindgen(js_name = getXmlFragment)]
+    pub fn get_xml_fragment(&mut self, name: &str) -> YXmlFragment {
+        YXmlFragment(self.0.get_xml_fragment(name))
     }
 
     /// Subscribes given function to be called any time, a remote update is being applied to this
@@ -1069,7 +1057,8 @@ impl YXmlEvent {
         if let Some(target) = self.target.as_ref() {
             target.clone()
         } else {
-            let target: JsValue = YXmlElement(self.inner().target().clone()).into();
+            let node = self.inner().target().clone();
+            let target: JsValue = xml_into_js(node);
             self.target = Some(target.clone());
             target
         }
@@ -2678,7 +2667,7 @@ impl YXmlElement {
     #[wasm_bindgen(js_name = parent)]
     pub fn parent(&self) -> JsValue {
         if let Some(xml) = self.0.parent() {
-            xml_into_js(XmlNode::Element(xml))
+            xml_into_js(xml)
         } else {
             JsValue::undefined()
         }
@@ -3108,7 +3097,7 @@ impl YXmlText {
     #[wasm_bindgen(js_name = parent)]
     pub fn parent(&self) -> JsValue {
         if let Some(xml) = self.0.parent() {
-            xml_into_js(XmlNode::Element(xml))
+            xml_into_js(xml)
         } else {
             JsValue::undefined()
         }
@@ -3394,8 +3383,8 @@ fn events_into_js(txn: &TransactionMut, e: &Events) -> JsValue {
             Event::Text(e) => YTextEvent::new(e, txn).into(),
             Event::Array(e) => YArrayEvent::new(e, txn).into(),
             Event::Map(e) => YMapEvent::new(e, txn).into(),
-            Event::XmlElement(e) => YXmlEvent::new(e, txn).into(),
             Event::XmlText(e) => YXmlTextEvent::new(e, txn).into(),
+            Event::XmlFragment(e) => YXmlEvent::new(e, txn).into(),
         };
         js
     });

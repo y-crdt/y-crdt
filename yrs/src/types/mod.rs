@@ -19,6 +19,7 @@ use crate::types::text::TextEvent;
 use crate::types::xml::{XmlElementRef, XmlEvent, XmlTextEvent, XmlTextRef};
 use lib0::any::Any;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::convert::TryInto;
 use std::fmt::Formatter;
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
@@ -102,12 +103,15 @@ impl BranchPtr {
         if let Some(observers) = self.observers.as_ref() {
             Some(observers.publish(*self, txn, subs))
         } else {
-            match self.type_ref() {
+            let type_ref = self.type_ref();
+            match type_ref {
                 TYPE_REFS_TEXT => Some(Event::Text(TextEvent::new(*self))),
                 TYPE_REFS_MAP => Some(Event::Map(MapEvent::new(*self, subs))),
                 TYPE_REFS_ARRAY => Some(Event::Array(ArrayEvent::new(*self))),
                 TYPE_REFS_XML_TEXT => Some(Event::XmlText(XmlTextEvent::new(*self, subs))),
-                TYPE_REFS_XML_ELEMENT => Some(Event::XmlElement(XmlEvent::new(*self, subs))),
+                TYPE_REFS_XML_ELEMENT | TYPE_REFS_XML_FRAGMENT => {
+                    Some(Event::XmlFragment(XmlEvent::new(*self, subs)))
+                }
                 _ => None,
             }
         }
@@ -673,11 +677,31 @@ impl Value {
         }
     }
 
+    pub fn to_yxml_fragment(self) -> Option<XmlFragmentRef> {
+        if let Value::YXmlFragment(xml) = self {
+            Some(xml)
+        } else {
+            None
+        }
+    }
+
     pub fn to_yxml_text(self) -> Option<XmlTextRef> {
         if let Value::YXmlText(xml) = self {
             Some(xml)
         } else {
             None
+        }
+    }
+}
+
+impl TryInto<TextRef> for Value {
+    type Error = Self;
+
+    fn try_into(self) -> Result<TextRef, Self::Error> {
+        if let Value::YText(value) = self {
+            Ok(value)
+        } else {
+            Err(self)
         }
     }
 }
@@ -741,6 +765,13 @@ impl std::fmt::Display for Branch {
                 } else {
                     write!(f, "YText")
                 }
+            }
+            TYPE_REFS_XML_FRAGMENT => {
+                write!(f, "YXmlFragment")?;
+                if let Some(start) = self.start.as_ref() {
+                    write!(f, "(start: {})", start)?;
+                }
+                Ok(())
             }
             TYPE_REFS_XML_ELEMENT => {
                 write!(f, "YXmlElement")?;
@@ -939,7 +970,7 @@ pub(crate) enum Observers {
     Text(EventHandler<crate::types::text::TextEvent>),
     Array(EventHandler<crate::types::array::ArrayEvent>),
     Map(EventHandler<crate::types::map::MapEvent>),
-    Xml(EventHandler<crate::types::xml::XmlEvent>),
+    XmlFragment(EventHandler<crate::types::xml::XmlEvent>),
     XmlText(EventHandler<crate::types::xml::XmlTextEvent>),
 }
 
@@ -953,8 +984,8 @@ impl Observers {
     pub fn map() -> Self {
         Observers::Map(Observer::default())
     }
-    pub fn xml() -> Self {
-        Observers::Xml(Observer::default())
+    pub fn xml_fragment() -> Self {
+        Observers::XmlFragment(Observer::default())
     }
     pub fn xml_text() -> Self {
         Observers::XmlText(Observer::default())
@@ -988,12 +1019,12 @@ impl Observers {
                 }
                 Event::Map(e)
             }
-            Observers::Xml(eh) => {
+            Observers::XmlFragment(eh) => {
                 let e = XmlEvent::new(branch_ref, keys);
                 for fun in eh.callbacks() {
                     fun(txn, &e);
                 }
-                Event::XmlElement(e)
+                Event::XmlFragment(e)
             }
             Observers::XmlText(eh) => {
                 let e = XmlTextEvent::new(branch_ref, keys);
@@ -1351,7 +1382,7 @@ pub enum Event {
     Text(TextEvent),
     Array(ArrayEvent),
     Map(MapEvent),
-    XmlElement(XmlEvent),
+    XmlFragment(XmlEvent),
     XmlText(XmlTextEvent),
 }
 
@@ -1361,8 +1392,8 @@ impl Event {
             Event::Text(e) => e.current_target = target,
             Event::Array(e) => e.current_target = target,
             Event::Map(e) => e.current_target = target,
-            Event::XmlElement(e) => e.current_target = target,
             Event::XmlText(e) => e.current_target = target,
+            Event::XmlFragment(e) => e.current_target = target,
         }
     }
 
@@ -1373,8 +1404,8 @@ impl Event {
             Event::Text(e) => e.path(),
             Event::Array(e) => e.path(),
             Event::Map(e) => e.path(),
-            Event::XmlElement(e) => e.path(),
             Event::XmlText(e) => e.path(),
+            Event::XmlFragment(e) => e.path(),
         }
     }
 
@@ -1384,8 +1415,12 @@ impl Event {
             Event::Text(e) => Value::YText(e.target().clone()),
             Event::Array(e) => Value::YArray(e.target().clone()),
             Event::Map(e) => Value::YMap(e.target().clone()),
-            Event::XmlElement(e) => Value::YXmlElement(e.target().clone()),
             Event::XmlText(e) => Value::YXmlText(e.target().clone()),
+            Event::XmlFragment(e) => match e.target() {
+                XmlNode::Element(n) => Value::YXmlElement(n.clone()),
+                XmlNode::Fragment(n) => Value::YXmlFragment(n.clone()),
+                XmlNode::Text(n) => Value::YXmlText(n.clone()),
+            },
         }
     }
 }

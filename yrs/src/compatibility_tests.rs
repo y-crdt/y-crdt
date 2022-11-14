@@ -333,7 +333,7 @@ fn utf32_lib0_v2_decoding() {
         0, 19, 8, 1, 5, 1, 1, 1, 1, 9, 2, 4, 4, 4, 4, 4,
     ];
     let doc = Doc::new();
-    let xml = doc.get_xml_element("prosemirror");
+    let xml = doc.get_xml_fragment("prosemirror");
     let mut txn = doc.transact_mut();
     let update = Update::decode_v2(data).unwrap();
     txn.apply_update(update);
