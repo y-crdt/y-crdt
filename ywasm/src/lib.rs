@@ -201,6 +201,18 @@ impl YDoc {
         self.0.get_map(name).into()
     }
 
+    /// Returns a `YXmlFragment` shared data type, that's accessible for subsequent accesses using
+    /// given `name`.
+    ///
+    /// If there was no instance with this name before, it will be created and then returned.
+    ///
+    /// If there was an instance with this name, but it was of different type, it will be projected
+    /// onto `YXmlFragment` instance.
+    #[wasm_bindgen(js_name = getXmlFragment)]
+    pub fn get_xml_fragment(&mut self, name: &str) -> YXmlFragment {
+        YXmlFragment(self.0.get_xml_fragment(name))
+    }
+
     /// Returns a `YXmlElement` shared data type, that's accessible for subsequent accesses using
     /// given `name`.
     ///
@@ -208,9 +220,9 @@ impl YDoc {
     ///
     /// If there was an instance with this name, but it was of different type, it will be projected
     /// onto `YXmlElement` instance.
-    #[wasm_bindgen(js_name = getXmlFragment)]
-    pub fn get_xml_fragment(&mut self, name: &str) -> YXmlFragment {
-        YXmlFragment(self.0.get_xml_fragment(name))
+    #[wasm_bindgen(js_name = getXmlElement)]
+    pub fn get_xml_element(&mut self, name: &str) -> YXmlElement {
+        YXmlElement(self.0.get_xml_element(name))
     }
 
     /// Subscribes given function to be called any time, a remote update is being applied to this

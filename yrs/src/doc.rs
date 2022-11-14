@@ -3,9 +3,10 @@ use crate::event::{AfterTransactionEvent, UpdateEvent};
 use crate::store::{Store, StoreRef};
 use crate::transaction::{Transaction, TransactionMut};
 use crate::types::{
-    Branch, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT, TYPE_REFS_XML_FRAGMENT,
+    Branch, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT, TYPE_REFS_XML_ELEMENT,
+    TYPE_REFS_XML_FRAGMENT,
 };
-use crate::{ArrayRef, MapRef, Observer, SubscriptionId, TextRef, XmlFragmentRef};
+use crate::{ArrayRef, MapRef, Observer, SubscriptionId, TextRef, XmlElementRef, XmlFragmentRef};
 use rand::Rng;
 use std::cell::{BorrowError, BorrowMutError, Ref, RefMut};
 use std::sync::Arc;
@@ -147,6 +148,27 @@ impl Doc {
         let mut c = r.get_or_create_type(name, None, TYPE_REFS_XML_FRAGMENT);
         c.store = Some(self.store.weak_ref());
         XmlFragmentRef::from(c)
+    }
+
+    /// Returns a [XmlElementRef] data structure stored under a given `name`. XML elements represent
+    /// nodes of XML document. They can contain attributes (key-value pairs, both of string type)
+    /// as well as other nested XML elements or text values, which are stored in their insertion
+    /// order.
+    ///
+    /// If not structure under defined `name` existed before, it will be created and returned
+    /// instead.
+    ///
+    /// If a structure under defined `name` already existed, but its type was different it will be
+    /// reinterpreted as a XML element (in such case a map component of complex data type will be
+    /// interpreted as map of its attributes, while a sequence component - as a list of its child
+    /// XML nodes).
+    pub fn get_xml_element(&self, name: &str) -> XmlElementRef {
+        let mut r = self.store.try_borrow_mut().expect(
+            "tried to get a root level type while another transaction on the document is open",
+        );
+        let mut c = r.get_or_create_type(name, Some(name.into()), TYPE_REFS_XML_ELEMENT);
+        c.store = Some(self.store.weak_ref());
+        XmlElementRef::from(c)
     }
 
     /// Subscribe callback function for any changes performed within transaction scope. These

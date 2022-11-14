@@ -555,10 +555,21 @@ pub unsafe extern "C" fn ymap(doc: *mut Doc, name: *const c_char) -> *mut Branch
 /// Gets or creates a new shared `YXmlElement` data type instance as a root-level type of a given
 /// document. This structure can later be accessed using its `name`, which must be a null-terminated
 /// UTF-8 compatible string.
-///
-/// Use [yxmlelem_destroy] in order to release pointer returned that way - keep in mind that this
-/// will not remove `YXmlElement` instance from the document itself (once created it'll last for
-/// the entire lifecycle of a document).
+#[no_mangle]
+pub unsafe extern "C" fn yxmlelement(doc: *mut Doc, name: *const c_char) -> *mut Branch {
+    assert!(!doc.is_null());
+    assert!(!name.is_null());
+
+    let name = CStr::from_ptr(name).to_str().unwrap();
+    doc.as_mut()
+        .unwrap()
+        .get_xml_element(name)
+        .into_raw_branch()
+}
+
+/// Gets or creates a new shared `YXmlElement` data type instance as a root-level type of a given
+/// document. This structure can later be accessed using its `name`, which must be a null-terminated
+/// UTF-8 compatible string.
 #[no_mangle]
 pub unsafe extern "C" fn yxmlfragment(doc: *mut Doc, name: *const c_char) -> *mut Branch {
     assert!(!doc.is_null());

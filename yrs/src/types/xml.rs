@@ -1138,8 +1138,7 @@ mod test {
     #[test]
     fn event_observers() {
         let d1 = Doc::with_client_id(1);
-        let f = d1.get_xml_fragment("test");
-        let mut xml = f.push_back(&mut d1.transact_mut(), XmlElementPrelim::empty("xml"));
+        let mut xml = d1.get_xml_element("test");
 
         let attributes = Rc::new(RefCell::new(None));
         let nodes = Rc::new(RefCell::new(None));
@@ -1229,13 +1228,13 @@ mod test {
 
         // copy updates over
         let d2 = Doc::with_client_id(2);
-        let mut f2 = d2.get_xml_fragment("test");
+        let mut xml2 = d2.get_xml_element("test");
 
         let attributes = Rc::new(RefCell::new(None));
         let nodes = Rc::new(RefCell::new(None));
         let attributes_c = attributes.clone();
         let nodes_c = nodes.clone();
-        let _sub = f2.observe(move |txn, e| {
+        let _sub = xml2.observe(move |txn, e| {
             *attributes_c.borrow_mut() = Some(e.keys(txn).clone());
             *nodes_c.borrow_mut() = Some(e.delta(txn).to_vec());
         });
@@ -1250,7 +1249,17 @@ mod test {
         }
         assert_eq!(
             nodes.borrow_mut().take(),
-            Some(vec![Change::Added(vec![Value::YXmlElement(xml)])])
+            Some(vec![Change::Added(vec![
+                Value::YXmlText(nested_txt),
+                Value::YXmlElement(nested_xml2)
+            ])])
+        );
+        assert_eq!(
+            attributes.borrow_mut().take(),
+            Some(HashMap::from([(
+                "key1".into(),
+                EntryChange::Inserted(Any::String("value11".into()).into())
+            )]))
         );
     }
 }

@@ -967,10 +967,13 @@ Branch *ymap(YDoc *doc, const char *name);
  * Gets or creates a new shared `YXmlElement` data type instance as a root-level type of a given
  * document. This structure can later be accessed using its `name`, which must be a null-terminated
  * UTF-8 compatible string.
- *
- * Use [yxmlelem_destroy] in order to release pointer returned that way - keep in mind that this
- * will not remove `YXmlElement` instance from the document itself (once created it'll last for
- * the entire lifecycle of a document).
+ */
+Branch *yxmlelement(YDoc *doc, const char *name);
+
+/**
+ * Gets or creates a new shared `YXmlElement` data type instance as a root-level type of a given
+ * document. This structure can later be accessed using its `name`, which must be a null-terminated
+ * UTF-8 compatible string.
  */
 Branch *yxmlfragment(YDoc *doc, const char *name);
 
