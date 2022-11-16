@@ -1,13 +1,13 @@
 use crate::block::{Block, BlockPtr, Item, ItemContent, ItemPosition, Prelim};
 use crate::block_iter::BlockIter;
 use crate::transaction::TransactionMut;
-use crate::types::text::TextEvent;
+use crate::types::text::{TextEvent, YChange};
 use crate::types::{
     event_change_set, event_keys, Branch, BranchPtr, Change, ChangeSet, Delta, Entries,
-    EntryChange, EventHandler, MapRef, Observers, Path, ToJson, TypePtr, TYPE_REFS_XML_ELEMENT,
-    TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_TEXT,
+    EntryChange, EventHandler, MapRef, Observers, Path, ToJson, TypePtr, Value,
+    TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_TEXT,
 };
-use crate::{Map, Observable, ReadTxn, Text, ID};
+use crate::{Map, Observable, ReadTxn, Text, TransactString, ID};
 use lib0::any::Any;
 use std::borrow::Borrow;
 use std::cell::UnsafeCell;
@@ -133,10 +133,12 @@ impl XmlElementRef {
         let inner = &self.0;
         inner.name.as_ref().unwrap()
     }
+}
 
+impl TransactString for XmlElementRef {
     /// Converts current XML node into a textual representation. This representation if flat, it
     /// doesn't include any indentation.
-    pub fn to_string<T: ReadTxn>(&self, txn: &T) -> String {
+    fn to_string<T: ReadTxn>(&self, txn: &T) -> String {
         let inner = self.0;
         let mut s = String::new();
         let tag = inner
@@ -293,6 +295,44 @@ impl Observable for XmlTextRef {
     }
 }
 
+impl TransactString for XmlTextRef {
+    fn to_string<T: ReadTxn>(&self, txn: &T) -> String {
+        let mut buf = String::new();
+        for d in self.diff(txn, YChange::identity) {
+            let mut attrs = Vec::new();
+            if let Some(attributes) = d.attributes.as_ref() {
+                for (key, value) in attributes.iter() {
+                    attrs.push((key, value));
+                }
+                attrs.sort_by(|x, y| x.0.cmp(y.0))
+            }
+
+            // write attributes as xml opening tags
+            for (node, at) in attrs.iter() {
+                write!(buf, "<{}", node).unwrap();
+                if let Any::Map(at) = at {
+                    for (k, v) in at.iter() {
+                        write!(buf, " {}=\"{}\"", k, v).unwrap();
+                    }
+                }
+                buf.push('>');
+            }
+
+            // write string content of delta
+            if let Value::Any(any) = d.insert {
+                write!(buf, "{}", any).unwrap();
+            }
+
+            // write attributes as xml closing tags
+            attrs.reverse();
+            for (key, value) in attrs {
+                write!(buf, "</{}>", key).unwrap();
+            }
+        }
+        buf
+    }
+}
+
 impl AsRef<Branch> for XmlTextRef {
     fn as_ref(&self) -> &Branch {
         &self.0
@@ -342,9 +382,18 @@ pub struct XmlFragmentRef(BranchPtr);
 impl XmlFragment for XmlFragmentRef {}
 
 impl XmlFragmentRef {
+    pub fn parent(&self) -> Option<XmlNode> {
+        let block = self.as_ref().item?;
+        let item = block.as_item()?;
+        let parent = item.parent.as_branch()?;
+        XmlNode::try_from(*parent).ok()
+    }
+}
+
+impl TransactString for XmlFragmentRef {
     /// Converts current XML node into a textual representation. This representation if flat, it
     /// doesn't include any indentation.
-    pub fn to_string<T: ReadTxn>(&self, txn: &T) -> String {
+    fn to_string<T: ReadTxn>(&self, txn: &T) -> String {
         let inner = self.0;
         let mut s = String::new();
         for i in inner.iter(txn) {
@@ -353,13 +402,6 @@ impl XmlFragmentRef {
             }
         }
         s
-    }
-
-    pub fn parent(&self) -> Option<XmlNode> {
-        let block = self.as_ref().item?;
-        let item = block.as_item()?;
-        let parent = item.parent.as_branch()?;
-        XmlNode::try_from(*parent).ok()
     }
 }
 
@@ -629,7 +671,7 @@ pub trait XmlFragment: AsRef<Branch> {
     ///       again
     ///    </div>
     /// */
-    /// use yrs::{Doc, Text, Xml, XmlNode, Transact, XmlFragment, XmlElementPrelim, XmlTextPrelim};
+    /// use yrs::{Doc, Text, Xml, XmlNode, Transact, XmlFragment, XmlElementPrelim, XmlTextPrelim, TransactString};
     ///
     /// let doc = Doc::new();
     /// let mut html = doc.get_xml_fragment("div");
@@ -982,10 +1024,13 @@ impl XmlEvent {
 mod test {
     use crate::transaction::ReadTxn;
     use crate::types::xml::{Xml, XmlFragment, XmlNode};
-    use crate::types::{Change, EntryChange, Value};
+    use crate::types::{Attrs, Change, EntryChange, Value};
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encoder, EncoderV1};
-    use crate::{Doc, Observable, StateVector, Transact, Update, XmlElementPrelim, XmlTextPrelim};
+    use crate::{
+        Doc, Observable, StateVector, Text, Transact, TransactString, Update, XmlElementPrelim,
+        XmlTextPrelim,
+    };
     use lib0::any::Any;
     use std::cell::RefCell;
     use std::collections::HashMap;
@@ -1261,5 +1306,29 @@ mod test {
                 EntryChange::Inserted(Any::String("value11".into()).into())
             )]))
         );
+    }
+
+    #[test]
+    fn xml_text_to_string() {
+        let doc = Doc::new();
+        let f = doc.get_xml_fragment("test");
+        let mut txn = doc.transact_mut();
+        let text = f.push_back(&mut txn, XmlTextPrelim("hello world"));
+        text.format(
+            &mut txn,
+            6,
+            5,
+            Attrs::from([(
+                "a".into(),
+                HashMap::from([("href".into(), "http://domain.org")]).into(),
+            )]),
+        );
+        drop(txn);
+
+        let str = f.to_string(&doc.transact());
+        assert_eq!(
+            str.as_str(),
+            "hello <a href=\"http://domain.org\">world</a>"
+        )
     }
 }

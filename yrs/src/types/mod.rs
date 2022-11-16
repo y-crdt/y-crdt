@@ -88,6 +88,10 @@ pub trait Observable: AsMut<Branch> {
     }
 }
 
+pub trait TransactString {
+    fn to_string<T: ReadTxn>(&self, txn: &T) -> String;
+}
+
 /// A wrapper around [Branch] cell, supplied with a bunch of convenience methods to operate on both
 /// map-like and array-like contents of a [Branch].
 #[repr(transparent)]

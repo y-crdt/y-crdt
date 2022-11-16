@@ -84,4 +84,5 @@ pub use crate::types::xml::XmlNode;
 pub use crate::types::xml::XmlTextPrelim;
 pub use crate::types::xml::XmlTextRef;
 pub use crate::types::Observable;
+pub use crate::types::TransactString;
 pub use crate::update::Update;

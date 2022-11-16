@@ -387,6 +387,7 @@ mod test {
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
     use crate::{
         Array, ArrayPrelim, DeleteSet, Doc, Options, StateVector, SubscriptionId, Text, Transact,
+        TransactString,
     };
     use lib0::any::Any;
     use std::cell::{Cell, RefCell};

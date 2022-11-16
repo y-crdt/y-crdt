@@ -24,9 +24,9 @@ use yrs::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use yrs::{
     AfterTransactionEvent, AfterTransactionSubscription, Array, ArrayRef, DeleteSet, Doc, Map,
     MapRef, Observable, OffsetKind, Options, ReadTxn, Snapshot, StateVector, Store, Subscription,
-    Text, TextRef, Transact, Transaction, TransactionMut, Update, UpdateSubscription, Xml,
-    XmlElementPrelim, XmlElementRef, XmlFragment, XmlFragmentRef, XmlNode, XmlTextPrelim,
-    XmlTextRef,
+    Text, TextRef, Transact, TransactString, Transaction, TransactionMut, Update,
+    UpdateSubscription, Xml, XmlElementPrelim, XmlElementRef, XmlFragment, XmlFragmentRef, XmlNode,
+    XmlTextPrelim, XmlTextRef,
 };
 
 // When the `wee_alloc` feature is enabled, use `wee_alloc` as the global

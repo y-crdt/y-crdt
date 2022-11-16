@@ -24,11 +24,10 @@ use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use yrs::{
     AfterTransactionEvent, Array, ArrayRef, DeleteSet, Map, MapRef, Observable, OffsetKind,
-    ReadTxn, Snapshot, Store, Text, TextRef, Transact, Update, XmlElementPrelim, XmlElementRef,
-    XmlFragmentRef, XmlTextPrelim, XmlTextRef,
+    Options, ReadTxn, Snapshot, StateVector, Store, SubscriptionId, Text, TextRef, Transact,
+    TransactString, Update, Xml, XmlElementPrelim, XmlElementRef, XmlFragmentRef, XmlTextPrelim,
+    XmlTextRef,
 };
-use yrs::{Options, StateVector};
-use yrs::{SubscriptionId, Xml};
 
 /// Flag used by `YInput` and `YOutput` to tag boolean values.
 pub const Y_JSON_BOOL: i8 = -8;

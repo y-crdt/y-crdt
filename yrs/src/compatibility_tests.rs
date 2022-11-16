@@ -7,8 +7,8 @@ use crate::update::{BlockCarrier, Update};
 use crate::updates::decoder::{Decode, Decoder, DecoderV1};
 use crate::updates::encoder::Encode;
 use crate::{
-    ArrayPrelim, Doc, Map, MapPrelim, ReadTxn, StateVector, Text, Transact, Xml, XmlElementRef,
-    XmlTextRef, ID,
+    ArrayPrelim, Doc, Map, MapPrelim, ReadTxn, StateVector, Transact, TransactString, Xml,
+    XmlElementRef, XmlTextRef, ID,
 };
 use lib0::any::Any;
 use lib0::decoding::Read;

@@ -1,4 +1,4 @@
-use crate::block::{Block, BlockPtr, Item, ItemContent, ItemPosition, Prelim};
+use crate::block::{Block, BlockPtr, BlockSlice, Item, ItemContent, ItemPosition, Prelim};
 use crate::block_store::Snapshot;
 use crate::transaction::TransactionMut;
 use crate::types::{
@@ -49,14 +49,14 @@ impl Observable for TextRef {
     }
 }
 
-pub trait Text: AsRef<Branch> {
+impl TransactString for TextRef {
     /// Converts context of this text data structure into a single string value.
     fn to_string<T: ReadTxn>(&self, txn: &T) -> String {
         let mut start = self.as_ref().start;
         let mut s = String::new();
         while let Some(Block::Item(item)) = start.as_deref() {
             if !item.is_deleted() {
-                if let block::ItemContent::String(item_string) = &item.content {
+                if let ItemContent::String(item_string) = &item.content {
                     s.push_str(item_string);
                 }
             }
@@ -64,7 +64,9 @@ pub trait Text: AsRef<Branch> {
         }
         s
     }
+}
 
+pub trait Text: AsRef<Branch> {
     /// Returns a number of characters visible in a current text data structure.
     fn len<T: ReadTxn>(&self, txn: &T) -> u32 {
         self.as_ref().content_len
@@ -209,134 +211,36 @@ pub trait Text: AsRef<Branch> {
         }
     }
 
-    fn diff<T, F>(&self, txn: &mut TransactionMut, compute_ychange: F) -> Vec<Diff<T>>
+    fn diff<T, D, F>(&self, txn: &T, compute_ychange: F) -> Vec<Diff<D>>
     where
-        F: Fn(YChange) -> T,
+        T: ReadTxn,
+        F: Fn(YChange) -> D,
     {
-        self.diff_range(txn, None, None, compute_ychange)
+        let mut asm = DiffAssembler::new(compute_ychange);
+        asm.process(self.as_ref().start, None, None);
+        asm.finish()
     }
 
     /// Returns the Delta representation of this YText type.
-    fn diff_range<T, F>(
+    fn diff_range<D, F>(
         &self,
         txn: &mut TransactionMut,
         hi: Option<&Snapshot>,
         lo: Option<&Snapshot>,
         compute_ychange: F,
-    ) -> Vec<Diff<T>>
+    ) -> Vec<Diff<D>>
     where
-        F: Fn(YChange) -> T,
+        F: Fn(YChange) -> D,
     {
-        struct DiffAssembler<T, F>
-        where
-            F: Fn(YChange) -> T,
-        {
-            ops: Vec<Diff<T>>,
-            buf: String,
-            curr_attrs: Attrs,
-            curr_ychange: Option<YChange>,
-            compute_ychange: F,
-        }
-
-        impl<T, F> DiffAssembler<T, F>
-        where
-            F: Fn(YChange) -> T,
-        {
-            fn new(compute_ychange: F) -> Self {
-                DiffAssembler {
-                    ops: Vec::new(),
-                    buf: String::new(),
-                    curr_attrs: HashMap::new(),
-                    curr_ychange: None,
-                    compute_ychange,
-                }
-            }
-            fn pack_str(&mut self) {
-                if !self.buf.is_empty() {
-                    let attrs = self.attrs_boxed();
-                    let mut buf = std::mem::replace(&mut self.buf, String::new());
-                    buf.shrink_to_fit();
-                    let change = if let Some(ychange) = self.curr_ychange.take() {
-                        Some((self.compute_ychange)(ychange))
-                    } else {
-                        None
-                    };
-                    let op = Diff::with_change(Value::Any(buf.into()), attrs, change);
-                    self.ops.push(op);
-                }
-            }
-
-            fn finish(self) -> Vec<Diff<T>> {
-                self.ops
-            }
-
-            fn attrs_boxed(&mut self) -> Option<Box<Attrs>> {
-                if self.curr_attrs.is_empty() {
-                    None
-                } else {
-                    Some(Box::new(self.curr_attrs.clone()))
-                }
-            }
-        }
-
-        fn seen(snapshot: Option<&Snapshot>, item: &Item) -> bool {
-            if let Some(s) = snapshot {
-                s.is_visible(&item.id)
-            } else {
-                !item.is_deleted()
-            }
-        }
-
         if let Some(snapshot) = hi {
             txn.split_by_snapshot(snapshot);
         }
-
         if let Some(snapshot) = lo {
             txn.split_by_snapshot(snapshot);
         }
 
         let mut asm = DiffAssembler::new(compute_ychange);
-        let mut n = self.as_ref().start;
-        while let Some(Block::Item(item)) = n.as_deref() {
-            if seen(hi, item) || (lo.is_some() && seen(lo, item)) {
-                match &item.content {
-                    ItemContent::String(s) => {
-                        if let Some(snapshot) = hi {
-                            if !snapshot.is_visible(&item.id) {
-                                asm.pack_str();
-                                asm.curr_ychange = Some(YChange::new(ChangeKind::Removed, item.id));
-                            } else if let Some(snapshot) = lo {
-                                if !snapshot.is_visible(&item.id) {
-                                    asm.pack_str();
-                                    asm.curr_ychange =
-                                        Some(YChange::new(ChangeKind::Added, item.id));
-                                } else if asm.curr_ychange.is_some() {
-                                    asm.pack_str();
-                                }
-                            }
-                        }
-                        asm.buf.push_str(s.as_str());
-                    }
-                    ItemContent::Type(_) | ItemContent::Embed(_) => {
-                        asm.pack_str();
-                        if let Some(value) = item.content.get_last() {
-                            let attrs = asm.attrs_boxed();
-                            asm.ops.push(Diff::new(value, attrs));
-                        }
-                    }
-                    ItemContent::Format(key, value) => {
-                        if seen(hi, item) {
-                            asm.pack_str();
-                            update_current_attributes(&mut asm.curr_attrs, key, value.as_ref());
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            n = item.right;
-        }
-
-        asm.pack_str();
+        asm.process(self.as_ref().start, hi, lo);
         asm.finish()
     }
 }
@@ -356,6 +260,110 @@ impl AsRef<Branch> for TextRef {
 impl AsMut<Branch> for TextRef {
     fn as_mut(&mut self) -> &mut Branch {
         self.0.deref_mut()
+    }
+}
+
+struct DiffAssembler<D, F>
+where
+    F: Fn(YChange) -> D,
+{
+    ops: Vec<Diff<D>>,
+    buf: String,
+    curr_attrs: Attrs,
+    curr_ychange: Option<YChange>,
+    compute_ychange: F,
+}
+
+impl<T, F> DiffAssembler<T, F>
+where
+    F: Fn(YChange) -> T,
+{
+    fn new(compute_ychange: F) -> Self {
+        DiffAssembler {
+            ops: Vec::new(),
+            buf: String::new(),
+            curr_attrs: HashMap::new(),
+            curr_ychange: None,
+            compute_ychange,
+        }
+    }
+    fn pack_str(&mut self) {
+        if !self.buf.is_empty() {
+            let attrs = self.attrs_boxed();
+            let mut buf = std::mem::replace(&mut self.buf, String::new());
+            buf.shrink_to_fit();
+            let change = if let Some(ychange) = self.curr_ychange.take() {
+                Some((self.compute_ychange)(ychange))
+            } else {
+                None
+            };
+            let op = Diff::with_change(Value::Any(buf.into()), attrs, change);
+            self.ops.push(op);
+        }
+    }
+
+    fn finish(self) -> Vec<Diff<T>> {
+        self.ops
+    }
+
+    fn attrs_boxed(&mut self) -> Option<Box<Attrs>> {
+        if self.curr_attrs.is_empty() {
+            None
+        } else {
+            Some(Box::new(self.curr_attrs.clone()))
+        }
+    }
+
+    fn process(&mut self, mut n: Option<BlockPtr>, hi: Option<&Snapshot>, lo: Option<&Snapshot>) {
+        fn seen(snapshot: Option<&Snapshot>, item: &Item) -> bool {
+            if let Some(s) = snapshot {
+                s.is_visible(&item.id)
+            } else {
+                !item.is_deleted()
+            }
+        }
+
+        while let Some(Block::Item(item)) = n.as_deref() {
+            if seen(hi, item) || (lo.is_some() && seen(lo, item)) {
+                match &item.content {
+                    ItemContent::String(s) => {
+                        if let Some(snapshot) = hi {
+                            if !snapshot.is_visible(&item.id) {
+                                self.pack_str();
+                                self.curr_ychange =
+                                    Some(YChange::new(ChangeKind::Removed, item.id));
+                            } else if let Some(snapshot) = lo {
+                                if !snapshot.is_visible(&item.id) {
+                                    self.pack_str();
+                                    self.curr_ychange =
+                                        Some(YChange::new(ChangeKind::Added, item.id));
+                                } else if self.curr_ychange.is_some() {
+                                    self.pack_str();
+                                }
+                            }
+                        }
+                        self.buf.push_str(s.as_str());
+                    }
+                    ItemContent::Type(_) | ItemContent::Embed(_) => {
+                        self.pack_str();
+                        if let Some(value) = item.content.get_last() {
+                            let attrs = self.attrs_boxed();
+                            self.ops.push(Diff::new(value, attrs));
+                        }
+                    }
+                    ItemContent::Format(key, value) => {
+                        if seen(hi, item) {
+                            self.pack_str();
+                            update_current_attributes(&mut self.curr_attrs, key, value.as_ref());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            n = item.right;
+        }
+
+        self.pack_str();
     }
 }
 
@@ -1037,7 +1045,7 @@ mod test {
     use crate::types::text::{Attrs, ChangeKind, Delta, Diff, YChange};
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
-    use crate::{Doc, Observable, StateVector, Text, Transact, Update, ID};
+    use crate::{Doc, Observable, StateVector, Text, Transact, TransactString, Update, ID};
     use lib0::any::Any;
     use rand::prelude::StdRng;
     use rand::Rng;
