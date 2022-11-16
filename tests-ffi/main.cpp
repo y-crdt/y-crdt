@@ -233,7 +233,7 @@ TEST_CASE("YMap basic") {
 
 TEST_CASE("YXmlElement basic") {
     YDoc* doc = ydoc_new_with_id(1);
-    Branch* xml = yxmlelem(doc, "test");
+    Branch* xml = yxmlelement(doc, "test");
     YTransaction* txn = ydoc_write_transaction(doc);
 
     // XML attributes API
@@ -840,7 +840,7 @@ void yxml_test_clean(YXmlEventTest* t) {
 
 TEST_CASE("YXmlElement observe") {
     YDoc* doc = ydoc_new_with_id(1);
-    Branch* xml = yxmlelem(doc, "test");
+    Branch* xml = yxmlelement(doc, "test");
     YTransaction* txn = ydoc_write_transaction(doc);
 
     YXmlEventTest* t = yxml_event_test_new();
