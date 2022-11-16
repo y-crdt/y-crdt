@@ -7,7 +7,7 @@ use crate::update::{BlockCarrier, Update};
 use crate::updates::decoder::{Decode, Decoder, DecoderV1};
 use crate::updates::encoder::Encode;
 use crate::{
-    ArrayPrelim, Doc, Map, MapPrelim, ReadTxn, StateVector, Transact, TransactString, Xml,
+    ArrayPrelim, Doc, GetString, Map, MapPrelim, ReadTxn, StateVector, Transact, Xml,
     XmlElementRef, XmlTextRef, ID,
 };
 use lib0::any::Any;
@@ -123,7 +123,7 @@ fn text_insert_delete() {
         let u = Update::decode_v1(update).unwrap();
         txn.apply_update(u);
     }
-    assert_eq!(txt.to_string(&txt.transact()), "abhi".to_string());
+    assert_eq!(txt.get_string(&txt.transact()), "abhi".to_string());
     assert!(visited.get());
 }
 
@@ -350,7 +350,7 @@ fn utf32_lib0_v2_decoding() {
 
     let txt: XmlTextRef = actual.get(&txn, 0).unwrap().try_into().unwrap();
 
-    assert_eq!(txt.to_string(&txn), "在の韩国🇰🇷🇨🇳🇯🇵");
+    assert_eq!(txt.get_string(&txn), "在の韩国🇰🇷🇨🇳🇯🇵");
 }
 
 /// Verify if given `payload` can be deserialized into series
@@ -449,7 +449,7 @@ fn test_data_set<P: AsRef<std::path::Path>>(path: P) {
         }
         let expected = decoder.read_string().unwrap();
         assert_eq!(
-            txt.to_string(&txt.transact()),
+            txt.get_string(&txt.transact()),
             expected,
             "failed at {} run",
             test_num

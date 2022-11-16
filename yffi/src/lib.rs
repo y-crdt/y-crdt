@@ -23,9 +23,9 @@ use yrs::types::{
 use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use yrs::{
-    AfterTransactionEvent, Array, ArrayRef, DeleteSet, Map, MapRef, Observable, OffsetKind,
-    Options, ReadTxn, Snapshot, StateVector, Store, SubscriptionId, Text, TextRef, Transact,
-    TransactString, Update, Xml, XmlElementPrelim, XmlElementRef, XmlFragmentRef, XmlTextPrelim,
+    AfterTransactionEvent, Array, ArrayRef, DeleteSet, GetString, Map, MapRef, Observable,
+    OffsetKind, Options, ReadTxn, Snapshot, StateVector, Store, SubscriptionId, Text, TextRef,
+    Transact, Update, Xml, XmlElementPrelim, XmlElementRef, XmlFragmentRef, XmlTextPrelim,
     XmlTextRef,
 };
 
@@ -933,7 +933,7 @@ pub unsafe extern "C" fn ytext_string(txt: *const Branch, txn: *const Transactio
 
     let txn = txn.as_ref().unwrap();
     let txt = TextRef::from_raw_branch(txt);
-    let str = txt.to_string(txn);
+    let str = txt.get_string(txn);
     CString::new(str).unwrap().into_raw()
 }
 
@@ -1435,7 +1435,7 @@ pub unsafe extern "C" fn yxmlelem_string(
     let txn = txn.as_ref().unwrap();
     let xml = XmlElementRef::from_raw_branch(xml);
 
-    let str = xml.to_string(txn);
+    let str = xml.get_string(txn);
     CString::new(str).unwrap().into_raw()
 }
 
@@ -1868,7 +1868,7 @@ pub unsafe extern "C" fn yxmltext_string(
     let txn = txn.as_ref().unwrap();
     let txt = XmlTextRef::from_raw_branch(txt);
 
-    let str = txt.to_string(txn);
+    let str = txt.get_string(txn);
     CString::new(str).unwrap().into_raw()
 }
 

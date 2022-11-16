@@ -22,11 +22,11 @@ use yrs::types::{
 use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use yrs::{
-    AfterTransactionEvent, AfterTransactionSubscription, Array, ArrayRef, DeleteSet, Doc, Map,
-    MapRef, Observable, OffsetKind, Options, ReadTxn, Snapshot, StateVector, Store, Subscription,
-    Text, TextRef, Transact, TransactString, Transaction, TransactionMut, Update,
-    UpdateSubscription, Xml, XmlElementPrelim, XmlElementRef, XmlFragment, XmlFragmentRef, XmlNode,
-    XmlTextPrelim, XmlTextRef,
+    AfterTransactionEvent, AfterTransactionSubscription, Array, ArrayRef, DeleteSet, Doc,
+    GetString, Map, MapRef, Observable, OffsetKind, Options, ReadTxn, Snapshot, StateVector, Store,
+    Subscription, Text, TextRef, Transact, Transaction, TransactionMut, Update, UpdateSubscription,
+    Xml, XmlElementPrelim, XmlElementRef, XmlFragment, XmlFragmentRef, XmlNode, XmlTextPrelim,
+    XmlTextRef,
 };
 
 // When the `wee_alloc` feature is enabled, use `wee_alloc` as the global
@@ -1549,9 +1549,9 @@ impl YText {
         match &*self.0.borrow() {
             SharedType::Integrated(v) => {
                 if let Some(txn) = get_txn(txn) {
-                    v.to_string(txn)
+                    v.get_string(txn)
                 } else {
-                    v.to_string(&v.transact())
+                    v.get_string(&v.transact())
                 }
             }
             SharedType::Prelim(v) => v.clone(),
@@ -1564,9 +1564,9 @@ impl YText {
         match &*self.0.borrow() {
             SharedType::Integrated(v) => {
                 if let Some(txn) = get_txn(txn) {
-                    JsValue::from(&v.to_string(txn))
+                    JsValue::from(&v.get_string(txn))
                 } else {
-                    JsValue::from(&v.to_string(&v.transact()))
+                    JsValue::from(&v.get_string(&v.transact()))
                 }
             }
             SharedType::Prelim(v) => JsValue::from(v),
@@ -2689,9 +2689,9 @@ impl YXmlElement {
     #[wasm_bindgen(js_name = toString)]
     pub fn to_string(&self, txn: &ImplicitTransaction) -> String {
         if let Some(txn) = get_txn(txn) {
-            self.0.to_string(txn)
+            self.0.get_string(txn)
         } else {
-            self.0.to_string(&self.0.transact())
+            self.0.get_string(&self.0.transact())
         }
     }
 
@@ -2884,9 +2884,9 @@ impl YXmlFragment {
     #[wasm_bindgen(js_name = toString)]
     pub fn to_string(&self, txn: &ImplicitTransaction) -> String {
         if let Some(txn) = get_txn(txn) {
-            self.0.to_string(txn)
+            self.0.get_string(txn)
         } else {
-            self.0.to_string(&self.0.transact())
+            self.0.get_string(&self.0.transact())
         }
     }
 
@@ -3119,10 +3119,10 @@ impl YXmlText {
     #[wasm_bindgen(js_name = toString)]
     pub fn to_string(&self, txn: &ImplicitTransaction) -> String {
         if let Some(txn) = get_txn(txn) {
-            self.0.to_string(txn)
+            self.0.get_string(txn)
         } else {
             let txn = self.0.transact();
-            self.0.to_string(&txn)
+            self.0.get_string(&txn)
         }
     }
 

@@ -49,9 +49,9 @@ impl Observable for TextRef {
     }
 }
 
-impl TransactString for TextRef {
+impl GetString for TextRef {
     /// Converts context of this text data structure into a single string value.
-    fn to_string<T: ReadTxn>(&self, txn: &T) -> String {
+    fn get_string<T: ReadTxn>(&self, txn: &T) -> String {
         let mut start = self.as_ref().start;
         let mut s = String::new();
         while let Some(Block::Item(item)) = start.as_deref() {
@@ -1045,7 +1045,7 @@ mod test {
     use crate::types::text::{Attrs, ChangeKind, Delta, Diff, YChange};
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
-    use crate::{Doc, Observable, StateVector, Text, Transact, TransactString, Update, ID};
+    use crate::{Doc, GetString, Observable, StateVector, Text, Transact, Update, ID};
     use lib0::any::Any;
     use rand::prelude::StdRng;
     use rand::Rng;
@@ -1060,14 +1060,14 @@ mod test {
         let txt = doc.get_text("test");
         let mut txn = doc.transact_mut();
 
-        assert_eq!(txt.to_string(&txn).as_str(), "");
+        assert_eq!(txt.get_string(&txn).as_str(), "");
 
         txt.push(&mut txn, "");
-        assert_eq!(txt.to_string(&txn).as_str(), "");
+        assert_eq!(txt.get_string(&txn).as_str(), "");
 
         txt.push(&mut txn, "abc");
         txt.push(&mut txn, "");
-        assert_eq!(txt.to_string(&txn).as_str(), "abc");
+        assert_eq!(txt.get_string(&txn).as_str(), "abc");
     }
 
     #[test]
@@ -1080,7 +1080,7 @@ mod test {
         txt.insert(&mut txn, 1, "b");
         txt.insert(&mut txn, 2, "c");
 
-        assert_eq!(txt.to_string(&txn).as_str(), "abc");
+        assert_eq!(txt.get_string(&txn).as_str(), "abc");
     }
 
     #[test]
@@ -1093,7 +1093,7 @@ mod test {
         txt.insert(&mut txn, 5, " ");
         txt.insert(&mut txn, 6, "world");
 
-        assert_eq!(txt.to_string(&txn).as_str(), "hello world");
+        assert_eq!(txt.get_string(&txn).as_str(), "hello world");
     }
 
     #[test]
@@ -1106,7 +1106,7 @@ mod test {
         txt.insert(&mut txn, 0, "b");
         txt.insert(&mut txn, 0, "c");
 
-        assert_eq!(txt.to_string(&txn).as_str(), "cba");
+        assert_eq!(txt.get_string(&txn).as_str(), "cba");
     }
 
     #[test]
@@ -1119,7 +1119,7 @@ mod test {
         txt.insert(&mut txn, 0, " ");
         txt.insert(&mut txn, 0, "world");
 
-        assert_eq!(txt.to_string(&txn).as_str(), "world hello");
+        assert_eq!(txt.get_string(&txn).as_str(), "world hello");
     }
 
     #[test]
@@ -1133,7 +1133,7 @@ mod test {
         txt.insert(&mut txn, 6, "world");
         txt.insert(&mut txn, 6, "beautiful ");
 
-        assert_eq!(txt.to_string(&txn).as_str(), "hello beautiful world");
+        assert_eq!(txt.get_string(&txn).as_str(), "hello beautiful world");
     }
 
     #[test]
@@ -1145,7 +1145,7 @@ mod test {
         txt.insert(&mut txn, 0, "it was expected");
         txt.insert(&mut txn, 6, " not");
 
-        assert_eq!(txt.to_string(&txn).as_str(), "it was not expected");
+        assert_eq!(txt.get_string(&txn).as_str(), "it was not expected");
     }
 
     #[test]
@@ -1171,8 +1171,8 @@ mod test {
         t1.apply_update(Update::decode_v1(u2.as_slice()).unwrap());
         t2.apply_update(Update::decode_v1(u1.as_slice()).unwrap());
 
-        let a = txt1.to_string(&t1);
-        let b = txt2.to_string(&t2);
+        let a = txt1.get_string(&t1);
+        let b = txt2.get_string(&t2);
 
         assert_eq!(a, b);
         assert_eq!(a.as_str(), "hello world");
@@ -1185,7 +1185,7 @@ mod test {
         let mut t1 = d1.transact_mut();
 
         txt1.insert(&mut t1, 0, "I expect that");
-        assert_eq!(txt1.to_string(&t1).as_str(), "I expect that");
+        assert_eq!(txt1.get_string(&t1).as_str(), "I expect that");
 
         let d2 = Doc::with_client_id(2);
         let txt2 = d2.get_text("test");
@@ -1195,14 +1195,14 @@ mod test {
         let u1 = t1.encode_diff_v1(&StateVector::decode_v1(&d2_sv).unwrap());
         t2.apply_update(Update::decode_v1(u1.as_slice()).unwrap());
 
-        assert_eq!(txt2.to_string(&t2).as_str(), "I expect that");
+        assert_eq!(txt2.get_string(&t2).as_str(), "I expect that");
 
         txt2.insert(&mut t2, 1, " have");
         txt2.insert(&mut t2, 13, "ed");
-        assert_eq!(txt2.to_string(&t2).as_str(), "I have expected that");
+        assert_eq!(txt2.get_string(&t2).as_str(), "I have expected that");
 
         txt1.insert(&mut t1, 1, " didn't");
-        assert_eq!(txt1.to_string(&t1).as_str(), "I didn't expect that");
+        assert_eq!(txt1.get_string(&t1).as_str(), "I didn't expect that");
 
         let d2_sv = t2.state_vector().encode_v1();
         let d1_sv = t1.state_vector().encode_v1();
@@ -1211,8 +1211,8 @@ mod test {
         t1.apply_update(Update::decode_v1(u2.as_slice()).unwrap());
         t2.apply_update(Update::decode_v1(u1.as_slice()).unwrap());
 
-        let a = txt1.to_string(&t1);
-        let b = txt2.to_string(&t2);
+        let a = txt1.get_string(&t1);
+        let b = txt2.get_string(&t2);
 
         assert_eq!(a, b);
         assert_eq!(a.as_str(), "I didn't have expected that");
@@ -1225,7 +1225,7 @@ mod test {
         let mut t1 = d1.transact_mut();
 
         txt1.insert(&mut t1, 0, "aaa");
-        assert_eq!(txt1.to_string(&t1).as_str(), "aaa");
+        assert_eq!(txt1.get_string(&t1).as_str(), "aaa");
 
         let d2 = Doc::with_client_id(2);
         let txt2 = d2.get_text("test");
@@ -1235,14 +1235,14 @@ mod test {
         let u1 = t1.encode_diff_v1(&StateVector::decode_v1(&d2_sv.as_slice()).unwrap());
         t2.apply_update(Update::decode_v1(u1.as_slice()).unwrap());
 
-        assert_eq!(txt2.to_string(&t2).as_str(), "aaa");
+        assert_eq!(txt2.get_string(&t2).as_str(), "aaa");
 
         txt2.insert(&mut t2, 3, "bbb");
         txt2.insert(&mut t2, 6, "bbb");
-        assert_eq!(txt2.to_string(&t2).as_str(), "aaabbbbbb");
+        assert_eq!(txt2.get_string(&t2).as_str(), "aaabbbbbb");
 
         txt1.insert(&mut t1, 3, "aaa");
-        assert_eq!(txt1.to_string(&t1).as_str(), "aaaaaa");
+        assert_eq!(txt1.get_string(&t1).as_str(), "aaaaaa");
 
         let d2_sv = t2.state_vector().encode_v1();
         let d1_sv = t1.state_vector().encode_v1();
@@ -1252,8 +1252,8 @@ mod test {
         t1.apply_update(Update::decode_v1(u2.as_slice()).unwrap());
         t2.apply_update(Update::decode_v1(u1.as_slice()).unwrap());
 
-        let a = txt1.to_string(&t1);
-        let b = txt2.to_string(&t2);
+        let a = txt1.get_string(&t1);
+        let b = txt2.get_string(&t2);
 
         assert_eq!(a.as_str(), "aaaaaabbbbbb");
         assert_eq!(a, b);
@@ -1270,7 +1270,7 @@ mod test {
         txt.remove_range(&mut txn, 0, 3);
 
         assert_eq!(txt.len(&txn), 3);
-        assert_eq!(txt.to_string(&txn).as_str(), "bbb");
+        assert_eq!(txt.get_string(&txn).as_str(), "bbb");
     }
 
     #[test]
@@ -1283,7 +1283,7 @@ mod test {
         txt.insert(&mut txn, 0, "aaa");
         txt.remove_range(&mut txn, 3, 3);
 
-        assert_eq!(txt.to_string(&txn).as_str(), "aaa");
+        assert_eq!(txt.get_string(&txn).as_str(), "aaa");
     }
 
     #[test]
@@ -1297,13 +1297,13 @@ mod test {
         txt.insert(&mut txn, 2, "c");
 
         txt.remove_range(&mut txn, 1, 1);
-        assert_eq!(txt.to_string(&txn).as_str(), "ac");
+        assert_eq!(txt.get_string(&txn).as_str(), "ac");
 
         txt.remove_range(&mut txn, 1, 1);
-        assert_eq!(txt.to_string(&txn).as_str(), "a");
+        assert_eq!(txt.get_string(&txn).as_str(), "a");
 
         txt.remove_range(&mut txn, 0, 1);
-        assert_eq!(txt.to_string(&txn).as_str(), "");
+        assert_eq!(txt.get_string(&txn).as_str(), "");
     }
 
     #[test]
@@ -1315,7 +1315,7 @@ mod test {
         txt.insert(&mut txn, 0, "abc");
         txt.remove_range(&mut txn, 1, 1);
 
-        assert_eq!(txt.to_string(&txn).as_str(), "ac");
+        assert_eq!(txt.get_string(&txn).as_str(), "ac");
     }
 
     #[test]
@@ -1329,7 +1329,7 @@ mod test {
         txt.insert(&mut txn, 15, " world");
 
         txt.remove_range(&mut txn, 5, 11);
-        assert_eq!(txt.to_string(&txn).as_str(), "helloworld");
+        assert_eq!(txt.get_string(&txn).as_str(), "helloworld");
     }
 
     #[test]
@@ -1342,7 +1342,7 @@ mod test {
         txt.remove_range(&mut txn, 0, 5);
         txt.insert(&mut txn, 1, "world");
 
-        assert_eq!(txt.to_string(&txn).as_str(), " world");
+        assert_eq!(txt.get_string(&txn).as_str(), " world");
     }
 
     #[test]
@@ -1352,7 +1352,7 @@ mod test {
         let mut t1 = d1.transact_mut();
 
         txt1.insert(&mut t1, 0, "hello world");
-        assert_eq!(txt1.to_string(&t1).as_str(), "hello world");
+        assert_eq!(txt1.get_string(&t1).as_str(), "hello world");
 
         let u1 = t1.encode_state_as_update_v1(&StateVector::default());
 
@@ -1360,17 +1360,17 @@ mod test {
         let txt2 = d2.get_text("test");
         let mut t2 = d2.transact_mut();
         t2.apply_update(Update::decode_v1(u1.as_slice()).unwrap());
-        assert_eq!(txt2.to_string(&t2).as_str(), "hello world");
+        assert_eq!(txt2.get_string(&t2).as_str(), "hello world");
 
         txt1.insert(&mut t1, 5, " beautiful");
         txt1.insert(&mut t1, 21, "!");
         txt1.remove_range(&mut t1, 0, 5);
-        assert_eq!(txt1.to_string(&t1).as_str(), " beautiful world!");
+        assert_eq!(txt1.get_string(&t1).as_str(), " beautiful world!");
 
         txt2.remove_range(&mut t2, 5, 5);
         txt2.remove_range(&mut t2, 0, 1);
         txt2.insert(&mut t2, 0, "H");
-        assert_eq!(txt2.to_string(&t2).as_str(), "Hellod");
+        assert_eq!(txt2.get_string(&t2).as_str(), "Hellod");
 
         let sv1 = t1.state_vector().encode_v1();
         let sv2 = t2.state_vector().encode_v1();
@@ -1380,8 +1380,8 @@ mod test {
         t1.apply_update(Update::decode_v1(u2.as_slice()).unwrap());
         t2.apply_update(Update::decode_v1(u1.as_slice()).unwrap());
 
-        let a = txt1.to_string(&t1);
-        let b = txt2.to_string(&t2);
+        let a = txt1.get_string(&t1);
+        let b = txt2.get_string(&t2);
 
         assert_eq!(a, b);
         assert_eq!(a, "H beautifuld!".to_owned());
@@ -1464,7 +1464,7 @@ mod test {
         txt.insert(&mut doc.transact_mut(), 0, r#"“”"#); // these chars are 3B long each
         txt.insert(&mut doc.transact_mut(), 1, r#"test"#);
 
-        assert_eq!(txt.to_string(&txt.transact()), r#"“test”"#);
+        assert_eq!(txt.get_string(&txt.transact()), r#"“test”"#);
     }
 
     #[test]
@@ -1487,7 +1487,7 @@ mod test {
             let mut txn = d1.transact_mut();
 
             txt1.insert(&mut txn, 0, "Zażółć gęślą jaźń");
-            assert_eq!(txt1.to_string(&txn), "Zażółć gęślą jaźń");
+            assert_eq!(txt1.get_string(&txn), "Zażółć gęślą jaźń");
             assert_eq!(txt1.len(&txn), 17);
         }
 
@@ -1495,7 +1495,7 @@ mod test {
 
         {
             let txn = txt2.transact();
-            assert_eq!(txt2.to_string(&txn), "Zażółć gęślą jaźń");
+            assert_eq!(txt2.get_string(&txn), "Zażółć gęślą jaźń");
             assert_eq!(txt2.len(&txn), 26);
         }
 
@@ -1504,7 +1504,7 @@ mod test {
             txt1.remove_range(&mut txn, 9, 3);
             txt1.insert(&mut txn, 9, "si");
 
-            assert_eq!(txt1.to_string(&txn), "Zażółć gęsi jaźń");
+            assert_eq!(txt1.get_string(&txn), "Zażółć gęsi jaźń");
             assert_eq!(txt1.len(&txn), 16);
         }
 
@@ -1512,7 +1512,7 @@ mod test {
 
         {
             let txn = txt2.transact();
-            assert_eq!(txt2.to_string(&txn), "Zażółć gęsi jaźń");
+            assert_eq!(txt2.get_string(&txn), "Zażółć gęsi jaźń");
             assert_eq!(txt2.len(&txn), 23);
         }
     }
@@ -1583,7 +1583,7 @@ mod test {
                 Some(Box::new(a.clone())),
             )]);
 
-            assert_eq!(txt1.to_string(&txt1.transact()), "abc".to_string());
+            assert_eq!(txt1.get_string(&txt1.transact()), "abc".to_string());
             assert_eq!(
                 txt1.diff(&mut txt1.transact_mut(), YChange::identity),
                 vec![Diff::new("abc".into(), Some(Box::new(a.clone())))]
@@ -1594,7 +1594,7 @@ mod test {
             txn.apply_update(Update::decode_v1(update.as_slice()).unwrap());
             drop(txn);
 
-            assert_eq!(txt2.to_string(&txt2.transact()), "abc".to_string());
+            assert_eq!(txt2.get_string(&txt2.transact()), "abc".to_string());
             assert_eq!(delta2.take(), expected);
         }
 
@@ -1607,7 +1607,7 @@ mod test {
 
             let expected = Some(vec![Delta::Deleted(1)]);
 
-            assert_eq!(txt1.to_string(&txt1.transact()), "bc".to_string());
+            assert_eq!(txt1.get_string(&txt1.transact()), "bc".to_string());
             assert_eq!(
                 txt1.diff(&mut txt1.transact_mut(), YChange::identity),
                 vec![Diff::new("bc".into(), Some(Box::new(a.clone())))]
@@ -1618,7 +1618,7 @@ mod test {
             txn.apply_update(Update::decode_v1(update.as_slice()).unwrap());
             drop(txn);
 
-            assert_eq!(txt2.to_string(&txt2.transact()), "bc".to_string());
+            assert_eq!(txt2.get_string(&txt2.transact()), "bc".to_string());
             assert_eq!(delta2.take(), expected);
         }
 
@@ -1631,7 +1631,7 @@ mod test {
 
             let expected = Some(vec![Delta::Retain(1, None), Delta::Deleted(1)]);
 
-            assert_eq!(txt1.to_string(&txt1.transact()), "b".to_string());
+            assert_eq!(txt1.get_string(&txt1.transact()), "b".to_string());
             assert_eq!(
                 txt1.diff(&mut txt1.transact_mut(), YChange::identity),
                 vec![Diff::new("b".into(), Some(Box::new(a.clone())))]
@@ -1642,7 +1642,7 @@ mod test {
             txn.apply_update(Update::decode_v1(update.as_slice()).unwrap());
             drop(txn);
 
-            assert_eq!(txt2.to_string(&txt2.transact()), "b".to_string());
+            assert_eq!(txt2.get_string(&txt2.transact()), "b".to_string());
             assert_eq!(delta2.take(), expected);
         }
 
@@ -1655,7 +1655,7 @@ mod test {
 
             let expected = Some(vec![Delta::Inserted("z".into(), Some(Box::new(a.clone())))]);
 
-            assert_eq!(txt1.to_string(&txt1.transact()), "zb".to_string());
+            assert_eq!(txt1.get_string(&txt1.transact()), "zb".to_string());
             assert_eq!(
                 txt1.diff(&mut txt1.transact_mut(), YChange::identity),
                 vec![Diff::new("zb".into(), Some(Box::new(a.clone())))]
@@ -1666,7 +1666,7 @@ mod test {
             txn.apply_update(Update::decode_v1(update.as_slice()).unwrap());
             drop(txn);
 
-            assert_eq!(txt2.to_string(&txt2.transact()), "zb".to_string());
+            assert_eq!(txt2.get_string(&txt2.transact()), "zb".to_string());
             assert_eq!(delta2.take(), expected);
         }
 
@@ -1679,7 +1679,7 @@ mod test {
 
             let expected = Some(vec![Delta::Inserted("y".into(), None)]);
 
-            assert_eq!(txt1.to_string(&txt1.transact()), "yzb".to_string());
+            assert_eq!(txt1.get_string(&txt1.transact()), "yzb".to_string());
             assert_eq!(
                 txt1.diff(&mut txt1.transact_mut(), YChange::identity),
                 vec![
@@ -1693,7 +1693,7 @@ mod test {
             txn.apply_update(Update::decode_v1(update.as_slice()).unwrap());
             drop(txn);
 
-            assert_eq!(txt2.to_string(&txt2.transact()), "yzb".to_string());
+            assert_eq!(txt2.get_string(&txt2.transact()), "yzb".to_string());
             assert_eq!(delta2.take(), expected);
         }
 
@@ -1710,7 +1710,7 @@ mod test {
                 Delta::Retain(1, Some(Box::new(b))),
             ]);
 
-            assert_eq!(txt1.to_string(&txt1.transact()), "yzb".to_string());
+            assert_eq!(txt1.get_string(&txt1.transact()), "yzb".to_string());
             assert_eq!(
                 txt1.diff(&mut txt1.transact_mut(), YChange::identity),
                 vec![
@@ -1724,7 +1724,7 @@ mod test {
             txn.apply_update(Update::decode_v1(update.as_slice()).unwrap());
             drop(txn);
 
-            assert_eq!(txt2.to_string(&txt2.transact()), "yzb".to_string());
+            assert_eq!(txt2.get_string(&txt2.transact()), "yzb".to_string());
             assert_eq!(delta2.take(), expected);
         }
     }
@@ -1847,7 +1847,7 @@ mod test {
 
         {
             let text = doc.get_text("content");
-            assert_eq!(text.to_string(&text.transact()), "");
+            assert_eq!(text.get_string(&text.transact()), "");
         }
     }
 
@@ -1880,11 +1880,11 @@ mod test {
         exchange_updates(&[&d1, &d2]);
 
         txt.remove_range(&mut d1.transact_mut(), 0, "😭".len() as u32);
-        assert_eq!(txt.to_string(&txt.transact()).as_str(), "😊");
+        assert_eq!(txt.get_string(&txt.transact()).as_str(), "😊");
 
         exchange_updates(&[&d1, &d2]);
         let txt = d2.get_text("test");
-        assert_eq!(txt.to_string(&txt.transact()).as_str(), "😊");
+        assert_eq!(txt.get_string(&txt.transact()).as_str(), "😊");
     }
 
     #[test]
@@ -1898,11 +1898,11 @@ mod test {
         exchange_updates(&[&d1, &d2]);
 
         txt.remove_range(&mut d1.transact_mut(), 0, "⏰".len() as u32);
-        assert_eq!(txt.to_string(&txt.transact()).as_str(), "⏳");
+        assert_eq!(txt.get_string(&txt.transact()).as_str(), "⏳");
 
         exchange_updates(&[&d1, &d2]);
         let txt = d2.get_text("test");
-        assert_eq!(txt.to_string(&txt.transact()).as_str(), "⏳");
+        assert_eq!(txt.get_string(&txt.transact()).as_str(), "⏳");
     }
     #[test]
     fn delete_4_byte_character_from_middle() {
@@ -1915,7 +1915,7 @@ mod test {
         // txt.format(&mut txn, 0, "😊".len() as u32, HashMap::new());
         txt.remove_range(&mut txn, "😊".len() as u32, "😭".len() as u32);
 
-        assert_eq!(txt.to_string(&txn).as_str(), "😊");
+        assert_eq!(txt.get_string(&txn).as_str(), "😊");
     }
 
     #[test]
@@ -1929,7 +1929,7 @@ mod test {
         // txt.format(&mut txn, 0, "⏰".len() as u32, HashMap::new());
         txt.remove_range(&mut txn, "⏰".len() as u32, "⏳".len() as u32);
 
-        assert_eq!(txt.to_string(&txn).as_str(), "⏰");
+        assert_eq!(txt.get_string(&txn).as_str(), "⏰");
     }
 
     #[test]
@@ -1948,7 +1948,7 @@ mod test {
         );
         txt.remove_range(&mut txn, "👯🙇‍♀️🙇‍♀️".len() as u32, "⏰".len() as u32); // will delete ⏰ and 👩‍❤️‍💋‍👨
 
-        assert_eq!(txt.to_string(&txn).as_str(), "👯🙇‍♀️🙇‍♀️👩‍❤️‍💋‍👨");
+        assert_eq!(txt.get_string(&txn).as_str(), "👯🙇‍♀️🙇‍♀️👩‍❤️‍💋‍👨");
     }
 
     #[test]
@@ -1969,7 +1969,7 @@ mod test {
         // will delete ⏰ and 👩‍❤️‍💋‍👨
         txt.remove_range(&mut txn, "👯🙇‍♀️🙇‍♀️".len() as u32, "⏰".len() as u32); // will delete ⏰ and 👩‍❤️‍💋‍👨
 
-        assert_eq!(&txt.to_string(&txn), "👯🙇‍♀️🙇‍♀️👩‍❤️‍💋‍👨");
+        assert_eq!(&txt.get_string(&txn), "👯🙇‍♀️🙇‍♀️👩‍❤️‍💋‍👨");
     }
 
     #[test]
@@ -1998,7 +1998,7 @@ mod test {
             "👯❤️❤️🙇‍♀️🙇‍♀️⏰⏰👩‍❤️‍💋‍👩".len() as u32,
             "👩‍❤️‍💋‍👨".len() as u32,
         );
-        assert_eq!(txt.to_string(&txn).as_str(), "👯❤️❤️🙇‍♀️🙇‍♀️⏰⏰👩‍❤️‍💋‍👨");
+        assert_eq!(txt.get_string(&txn).as_str(), "👯❤️❤️🙇‍♀️🙇‍♀️⏰⏰👩‍❤️‍💋‍👨");
     }
 
     #[test]

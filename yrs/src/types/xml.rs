@@ -7,7 +7,7 @@ use crate::types::{
     EntryChange, EventHandler, MapRef, Observers, Path, ToJson, TypePtr, Value,
     TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_TEXT,
 };
-use crate::{Map, Observable, ReadTxn, Text, TransactString, ID};
+use crate::{GetString, Map, Observable, ReadTxn, Text, ID};
 use lib0::any::Any;
 use std::borrow::Borrow;
 use std::cell::UnsafeCell;
@@ -135,10 +135,10 @@ impl XmlElementRef {
     }
 }
 
-impl TransactString for XmlElementRef {
+impl GetString for XmlElementRef {
     /// Converts current XML node into a textual representation. This representation if flat, it
     /// doesn't include any indentation.
-    fn to_string<T: ReadTxn>(&self, txn: &T) -> String {
+    fn get_string<T: ReadTxn>(&self, txn: &T) -> String {
         let inner = self.0;
         let mut s = String::new();
         let tag = inner
@@ -295,8 +295,8 @@ impl Observable for XmlTextRef {
     }
 }
 
-impl TransactString for XmlTextRef {
-    fn to_string<T: ReadTxn>(&self, txn: &T) -> String {
+impl GetString for XmlTextRef {
+    fn get_string<T: ReadTxn>(&self, txn: &T) -> String {
         let mut buf = String::new();
         for d in self.diff(txn, YChange::identity) {
             let mut attrs = Vec::new();
@@ -390,10 +390,10 @@ impl XmlFragmentRef {
     }
 }
 
-impl TransactString for XmlFragmentRef {
+impl GetString for XmlFragmentRef {
     /// Converts current XML node into a textual representation. This representation if flat, it
     /// doesn't include any indentation.
-    fn to_string<T: ReadTxn>(&self, txn: &T) -> String {
+    fn get_string<T: ReadTxn>(&self, txn: &T) -> String {
         let inner = self.0;
         let mut s = String::new();
         for i in inner.iter(txn) {
@@ -671,7 +671,7 @@ pub trait XmlFragment: AsRef<Branch> {
     ///       again
     ///    </div>
     /// */
-    /// use yrs::{Doc, Text, Xml, XmlNode, Transact, XmlFragment, XmlElementPrelim, XmlTextPrelim, TransactString};
+    /// use yrs::{Doc, Text, Xml, XmlNode, Transact, XmlFragment, XmlElementPrelim, XmlTextPrelim, GetString};
     ///
     /// let doc = Doc::new();
     /// let mut html = doc.get_xml_fragment("div");
@@ -685,7 +685,7 @@ pub trait XmlFragment: AsRef<Branch> {
     /// for node in html.successors(&txn) {
     ///     match node {
     ///         XmlNode::Element(elem) => println!("- {}", elem.tag()),
-    ///         XmlNode::Text(txt) => println!("- {}", txt.to_string(&txn)),
+    ///         XmlNode::Text(txt) => println!("- {}", txt.get_string(&txn)),
     ///         _ => {}
     ///     }
     /// }
@@ -1028,7 +1028,7 @@ mod test {
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encoder, EncoderV1};
     use crate::{
-        Doc, Observable, StateVector, Text, Transact, TransactString, Update, XmlElementPrelim,
+        Doc, GetString, Observable, StateVector, Text, Transact, Update, XmlElementPrelim,
         XmlTextPrelim,
     };
     use lib0::any::Any;
@@ -1140,7 +1140,7 @@ mod test {
         r1.push_back(&mut t1, XmlElementPrelim::empty("p"));
 
         let expected = "hello<p></p>";
-        assert_eq!(r1.to_string(&t1), expected);
+        assert_eq!(r1.get_string(&t1), expected);
 
         let u1 = t1.encode_state_as_update_v1(&StateVector::default());
 
@@ -1149,7 +1149,7 @@ mod test {
         let mut t2 = d2.transact_mut();
 
         t2.apply_update(Update::decode_v1(u1.as_slice()).unwrap());
-        assert_eq!(r2.to_string(&t2), expected);
+        assert_eq!(r2.get_string(&t2), expected);
     }
 
     #[test]
@@ -1325,7 +1325,7 @@ mod test {
         );
         drop(txn);
 
-        let str = f.to_string(&doc.transact());
+        let str = f.get_string(&doc.transact());
         assert_eq!(
             str.as_str(),
             "hello <a href=\"http://domain.org\">world</a>"

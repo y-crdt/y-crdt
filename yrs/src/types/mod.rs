@@ -88,8 +88,10 @@ pub trait Observable: AsMut<Branch> {
     }
 }
 
-pub trait TransactString {
-    fn to_string<T: ReadTxn>(&self, txn: &T) -> String;
+/// Trait implemented by shared types to display their contents in string format.
+pub trait GetString {
+    /// Displays the content of a current collection in string format.
+    fn get_string<T: ReadTxn>(&self, txn: &T) -> String;
 }
 
 /// A wrapper around [Branch] cell, supplied with a bunch of convenience methods to operate on both
@@ -640,12 +642,12 @@ impl Value {
     pub fn to_string<T: ReadTxn>(self, txn: &T) -> String {
         match self {
             Value::Any(a) => a.to_string(),
-            Value::YText(v) => v.to_string(txn),
+            Value::YText(v) => v.get_string(txn),
             Value::YArray(v) => v.to_json(txn).to_string(),
             Value::YMap(v) => v.to_json(txn).to_string(),
-            Value::YXmlElement(v) => v.to_string(txn),
-            Value::YXmlFragment(v) => v.to_string(txn),
-            Value::YXmlText(v) => v.to_string(txn),
+            Value::YXmlElement(v) => v.get_string(txn),
+            Value::YXmlFragment(v) => v.get_string(txn),
+            Value::YXmlText(v) => v.get_string(txn),
         }
     }
 
@@ -732,12 +734,12 @@ impl ToJson for Value {
     fn to_json<T: ReadTxn>(&self, txn: &T) -> Any {
         match self {
             Value::Any(a) => a.clone(),
-            Value::YText(v) => Any::String(v.to_string(txn).into_boxed_str()),
+            Value::YText(v) => Any::String(v.get_string(txn).into_boxed_str()),
             Value::YArray(v) => v.to_json(txn),
             Value::YMap(v) => v.to_json(txn),
-            Value::YXmlElement(v) => Any::String(v.to_string(txn).into_boxed_str()),
-            Value::YXmlText(v) => Any::String(v.to_string(txn).into_boxed_str()),
-            Value::YXmlFragment(v) => Any::String(v.to_string(txn).into_boxed_str()),
+            Value::YXmlElement(v) => Any::String(v.get_string(txn).into_boxed_str()),
+            Value::YXmlText(v) => Any::String(v.get_string(txn).into_boxed_str()),
+            Value::YXmlFragment(v) => Any::String(v.get_string(txn).into_boxed_str()),
         }
     }
 }

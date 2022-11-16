@@ -1021,7 +1021,7 @@ mod test {
     use crate::types::TypePtr;
     use crate::update::{BlockCarrier, Update};
     use crate::updates::decoder::{Decode, DecoderV1};
-    use crate::{Doc, Text, Transact, TransactString, ID};
+    use crate::{Doc, GetString, Text, Transact, ID};
     use lib0::decoding::Cursor;
 
     #[test]
@@ -1099,9 +1099,9 @@ mod test {
         let mut t3 = d3.transact_mut();
         t3.apply_update(u12);
 
-        let str1 = txt1.to_string(&t1);
-        let str2 = txt2.to_string(&t2);
-        let str3 = txt3.to_string(&t3);
+        let str1 = txt1.get_string(&t1);
+        let str2 = txt2.get_string(&t2);
+        let str3 = txt3.get_string(&t3);
 
         assert_eq!(str1, str2);
         assert_eq!(str2, str3);
