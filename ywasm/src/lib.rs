@@ -98,7 +98,7 @@ impl YDoc {
     /// Gets globally unique identifier of this `YDoc` instance.
     #[wasm_bindgen(method, getter)]
     pub fn id(&self) -> f64 {
-        self.0.client_id as f64
+        self.0.client_id() as f64
     }
 
     /// Returns a new transaction for this document. Ywasm shared data types execute their

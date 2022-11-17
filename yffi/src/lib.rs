@@ -242,6 +242,14 @@ pub struct YOptions {
     /// to other peers.
     pub id: c_ulong,
 
+    /// A NULL-able globally unique Uuid v4 compatible null-terminated string identifier
+    /// of this document. If passed as NULL, a random Uuid will be generated instead.
+    pub guid: *const c_char,
+
+    /// A NULL-able, UTF-8 encoded, null-terminated string of a collection that this document
+    /// belongs to. It's used only by providers.
+    pub collection_id: *const c_char,
+
     /// Encoding used by text editing operations on this document. It's used to compute
     /// `YText`/`YXmlText` insertion offsets and text lengths. Either:
     ///
@@ -253,6 +261,13 @@ pub struct YOptions {
     /// Boolean flag used to determine if deleted blocks should be garbage collected or not
     /// during the transaction commits. Setting this value to 0 means GC will be performed.
     pub skip_gc: c_int,
+
+    /// Boolean flag used to determine if subdocument should be loaded automatically.
+    /// If this is a subdocument, remote peers will load the document as well automatically.
+    pub auto_load: c_int,
+
+    /// Boolean flag used to determine whether the document should be synced by the provider now.
+    pub should_load: c_int,
 }
 
 impl Into<Options> for YOptions {
@@ -263,9 +278,27 @@ impl Into<Options> for YOptions {
             Y_OFFSET_UTF32 => OffsetKind::Utf32,
             _ => panic!("Unrecognized YOptions.encoding type"),
         };
+        let guid = if self.guid.is_null() {
+            uuid::Uuid::new_v4()
+        } else {
+            let c_str = unsafe { CStr::from_ptr(self.guid) };
+            let str = c_str.to_str().unwrap();
+            uuid::Uuid::parse_str(str).unwrap()
+        };
+        let collection_id = if self.collection_id.is_null() {
+            None
+        } else {
+            let c_str = unsafe { CStr::from_ptr(self.collection_id) };
+            let str = c_str.to_str().unwrap().to_string();
+            Some(str)
+        };
         Options {
             client_id: self.id as ClientID,
+            guid,
+            collection_id,
             skip_gc: if self.skip_gc == 0 { false } else { true },
+            auto_load: if self.auto_load == 0 { false } else { true },
+            should_load: if self.should_load == 0 { false } else { true },
             offset_kind: encoding,
         }
     }
@@ -335,7 +368,7 @@ pub extern "C" fn ydoc_new_with_options(options: YOptions) -> *mut Doc {
 #[no_mangle]
 pub unsafe extern "C" fn ydoc_id(doc: *mut Doc) -> c_ulong {
     let doc = doc.as_ref().unwrap();
-    doc.client_id as c_ulong
+    doc.client_id() as c_ulong
 }
 
 #[no_mangle]

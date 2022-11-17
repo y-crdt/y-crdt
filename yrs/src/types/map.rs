@@ -571,19 +571,19 @@ mod test {
                 map.get(&map.transact(), &"key1".to_owned()),
                 None,
                 "'key1' entry for peer {} should be removed",
-                doc.client_id
+                doc.client_id()
             );
             assert_eq!(
                 map.get(&map.transact(), &"key2".to_owned()),
                 None,
                 "'key2' entry for peer {} should be removed",
-                doc.client_id
+                doc.client_id()
             );
             assert_eq!(
                 map.len(&map.transact()),
                 0,
                 "all entries for peer {} should be removed",
-                doc.client_id
+                doc.client_id()
             );
         }
     }
@@ -618,7 +618,7 @@ mod test {
                 map.get(&map.transact(), &"stuff".to_owned()),
                 Some(Value::from("c3")),
                 "peer {} - map entry resolved to unexpected value",
-                doc.client_id
+                doc.client_id()
             );
         }
     }
@@ -674,7 +674,7 @@ mod test {
                 map.get(&map.transact(), &"key1".to_owned()),
                 None,
                 "entry 'key1' on peer {} should be removed",
-                doc.client_id
+                doc.client_id()
             );
         }
     }

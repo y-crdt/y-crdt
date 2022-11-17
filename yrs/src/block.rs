@@ -1,7 +1,7 @@
 use crate::doc::OffsetKind;
 use crate::moving::Move;
 use crate::store::Store;
-use crate::transaction::TransactionMut;
+use crate::transaction::{Subdocs, TransactionMut};
 use crate::types::text::update_current_attributes;
 use crate::types::{
     Attrs, Branch, BranchPtr, TypePtr, Value, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
@@ -391,14 +391,15 @@ impl BlockPtr {
                             this.mark_as_deleted();
                         }
                         ItemContent::Move(m) => m.integrate_block(txn, self_ptr),
-                        ItemContent::Doc(_, _) => {
-                            //// this needs to be reflected in doc.destroy as well
-                            //this.doc._item = item
-                            //transaction.subdocsAdded.add(this.doc)
-                            //if (this.doc.shouldLoad) {
-                            //    transaction.subdocsLoaded.add(this.doc)
-                            //}
-                            todo!()
+                        ItemContent::Doc(doc) => {
+                            doc.parent = self_ptr;
+                            let subdocs =
+                                txn.subdocs.get_or_insert_with(|| Box::new(Subdocs::new()));
+                            let guid = doc.options().guid.clone();
+                            subdocs.added.insert(guid, doc.clone());
+                            if doc.options().should_load {
+                                subdocs.loaded.insert(guid, doc.clone());
+                            }
                         }
                         ItemContent::Format(_, _) => {
                             // @todo searchmarker are currently unsupported for rich text documents
@@ -1391,7 +1392,7 @@ pub enum ItemContent {
     /// Deleted elements also don't contribute to an overall length of containing collection type.
     Deleted(u32),
 
-    Doc(Box<str>, Box<Any>),
+    Doc(DocRef),
     JSON(Vec<String>), // String is JSON
     Embed(Box<Any>),
 
@@ -1416,7 +1417,7 @@ impl ItemContent {
             ItemContent::Any(_) => BLOCK_ITEM_ANY_REF_NUMBER,
             ItemContent::Binary(_) => BLOCK_ITEM_BINARY_REF_NUMBER,
             ItemContent::Deleted(_) => BLOCK_ITEM_DELETED_REF_NUMBER,
-            ItemContent::Doc(_, _) => BLOCK_ITEM_DOC_REF_NUMBER,
+            ItemContent::Doc(_) => BLOCK_ITEM_DOC_REF_NUMBER,
             ItemContent::JSON(_) => BLOCK_ITEM_JSON_REF_NUMBER,
             ItemContent::Embed(_) => BLOCK_ITEM_EMBED_REF_NUMBER,
             ItemContent::Format(_, _) => BLOCK_ITEM_FORMAT_REF_NUMBER,
@@ -1434,7 +1435,7 @@ impl ItemContent {
         match self {
             ItemContent::Any(_) => true,
             ItemContent::Binary(_) => true,
-            ItemContent::Doc(_, _) => true,
+            ItemContent::Doc(_) => true,
             ItemContent::JSON(_) => true,
             ItemContent::Embed(_) => true,
             ItemContent::String(_) => true,
@@ -1508,8 +1509,8 @@ impl ItemContent {
                     buf[0] = Value::Any(Any::Buffer(v.clone().into_boxed_slice()));
                     1
                 }
-                ItemContent::Doc(_, v) => {
-                    buf[0] = Value::Any(*v.clone());
+                ItemContent::Doc(doc) => {
+                    buf[0] = Value::Doc(doc.clone());
                     1
                 }
                 ItemContent::Type(c) => {
@@ -1545,7 +1546,7 @@ impl ItemContent {
             ItemContent::Binary(v) => Some(Value::Any(Any::Buffer(v.clone().into_boxed_slice()))),
             ItemContent::Deleted(_) => None,
             ItemContent::Move(_) => None,
-            ItemContent::Doc(_, v) => Some(Value::Any(*v.clone())),
+            ItemContent::Doc(v) => Some(Value::Doc(v.clone())),
             ItemContent::JSON(v) => v
                 .first()
                 .map(|v| Value::Any(Any::String(v.clone().into_boxed_str()))),
@@ -1562,7 +1563,7 @@ impl ItemContent {
             ItemContent::Binary(v) => Some(Value::Any(Any::Buffer(v.clone().into_boxed_slice()))),
             ItemContent::Deleted(_) => None,
             ItemContent::Move(_) => None,
-            ItemContent::Doc(_, v) => Some(Value::Any(*v.clone())),
+            ItemContent::Doc(v) => Some(Value::Doc(v.clone())),
             ItemContent::JSON(v) => v
                 .last()
                 .map(|v| Value::Any(Any::String(v.clone().into_boxed_str()))),
@@ -1620,10 +1621,7 @@ impl ItemContent {
                     encoder.write_any(&any[i as usize]);
                 }
             }
-            ItemContent::Doc(key, any) => {
-                encoder.write_string(key.as_ref());
-                encoder.write_any(any);
-            }
+            ItemContent::Doc(doc) => doc.options().encode(encoder),
             ItemContent::Move(m) => m.encode(encoder),
         }
     }
@@ -1658,10 +1656,7 @@ impl ItemContent {
                     encoder.write_any(a);
                 }
             }
-            ItemContent::Doc(key, any) => {
-                encoder.write_string(key.as_ref());
-                encoder.write_any(any);
-            }
+            ItemContent::Doc(doc) => doc.options().encode(encoder),
             ItemContent::Move(m) => m.encode(encoder),
         }
     }
@@ -1709,10 +1704,10 @@ impl ItemContent {
                 let m = Move::decode(decoder)?;
                 Ok(ItemContent::Move(Box::new(m)))
             }
-            BLOCK_ITEM_DOC_REF_NUMBER => Ok(ItemContent::Doc(
-                decoder.read_string()?.into(),
-                Box::new(decoder.read_any()?),
-            )),
+            BLOCK_ITEM_DOC_REF_NUMBER => {
+                let options = Options::decode(decoder)?;
+                Ok(ItemContent::Doc(DocRef::from(options)))
+            }
             _ => Err(Error::UnexpectedValue),
         }
     }
@@ -1809,32 +1804,6 @@ impl ItemContent {
                         break;
                     }
                 }
-            }
-            ItemContent::Doc(_, _) => {
-                /*
-                if (doc._item) {
-                  console.error('This document was already integrated as a sub-document. You should create a second instance instead with the same guid.')
-                }
-                /**
-                 * @type {Doc}
-                 */
-                this.doc = doc
-                /**
-                 * @type {any}
-                 */
-                const opts = {}
-                this.opts = opts
-                if (!doc.gc) {
-                  opts.gc = false
-                }
-                if (doc.autoLoad) {
-                  opts.autoLoad = true
-                }
-                if (doc.meta !== null) {
-                  opts.meta = doc.meta
-                }
-                 */
-                todo!()
             }
             _ => {}
         }

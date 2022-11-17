@@ -1,12 +1,12 @@
 use crate::block::{BlockPtr, BlockSlice, ClientID, ItemContent};
 use crate::block_store::{BlockStore, StateVector};
 use crate::doc::Options;
-use crate::event::AfterTransactionEvent;
+use crate::event::{AfterTransactionEvent, SubdocsEvent};
 use crate::id_set::DeleteSet;
 use crate::types::{Branch, BranchPtr, Path, PathSegment, TypeRefs};
 use crate::update::PendingUpdate;
 use crate::updates::encoder::{Encode, Encoder};
-use crate::{Observer, OffsetKind, Snapshot, TransactionMut, UpdateEvent};
+use crate::{DocRef, Observer, OffsetKind, Snapshot, TransactionMut, UpdateEvent};
 use lib0::error::Error;
 use std::cell::{BorrowError, BorrowMutError, Ref, RefCell, RefMut};
 use std::collections::hash_map::Entry;
@@ -52,6 +52,11 @@ pub struct Store {
     /// A subscription handler. It contains all callbacks with registered by user functions that
     /// are supposed to be called, once a new update arrives.
     pub(crate) update_v2_events: Option<Observer<Arc<dyn Fn(&TransactionMut, &UpdateEvent) -> ()>>>,
+
+    /// Handles subscriptions for subdocs events.
+    pub(crate) subdocs_events: Option<Observer<Arc<dyn Fn(&TransactionMut, &SubdocsEvent) -> ()>>>,
+
+    pub(crate) subdocs: HashMap<uuid::Uuid, DocRef>,
 }
 
 impl Store {
@@ -59,13 +64,15 @@ impl Store {
     pub(crate) fn new(options: Options) -> Self {
         Store {
             options,
-            types: Default::default(),
+            types: HashMap::default(),
             blocks: BlockStore::new(),
+            subdocs: HashMap::default(),
             pending: None,
             pending_ds: None,
             update_v1_events: None,
             update_v2_events: None,
             after_transaction_events: None,
+            subdocs_events: None,
         }
     }
 
@@ -298,6 +305,17 @@ impl Store {
 
         ptr
     }
+
+    /// Returns a collection of sub documents linked within the structures of this document store.
+    pub fn subdocs(&self) -> SubdocsIter {
+        SubdocsIter(self.subdocs.values())
+    }
+
+    /// Returns a collection of globally unique identifiers of sub documents linked within
+    /// the structures of this document store.
+    pub fn subdoc_guids(&self) -> SubdocGuids {
+        SubdocGuids(self.subdocs.keys())
+    }
 }
 
 impl Encode for Store {
@@ -356,10 +374,37 @@ impl StoreRef {
     pub fn weak_ref(&self) -> Weak<RefCell<Store>> {
         Rc::downgrade(&self.0)
     }
+
+    pub fn options(&self) -> &Options {
+        let store = unsafe { self.0.as_ptr().as_ref().unwrap() };
+        &store.options
+    }
 }
 
 impl From<Store> for StoreRef {
     fn from(store: Store) -> Self {
         StoreRef(Rc::new(RefCell::new(store)))
+    }
+}
+
+#[repr(transparent)]
+pub struct SubdocsIter<'doc>(std::collections::hash_map::Values<'doc, uuid::Uuid, DocRef>);
+
+impl<'doc> Iterator for SubdocsIter<'doc> {
+    type Item = &'doc DocRef;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.0.next()
+    }
+}
+
+#[repr(transparent)]
+pub struct SubdocGuids<'doc>(std::collections::hash_map::Keys<'doc, uuid::Uuid, DocRef>);
+
+impl<'doc> Iterator for SubdocGuids<'doc> {
+    type Item = &'doc uuid::Uuid;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.0.next()
     }
 }

@@ -1,14 +1,20 @@
 use crate::block::ClientID;
-use crate::event::{AfterTransactionEvent, UpdateEvent};
+use crate::event::{AfterTransactionEvent, SubdocsEvent, UpdateEvent};
 use crate::store::{Store, StoreRef};
 use crate::transaction::{Transaction, TransactionMut};
 use crate::types::{
     Branch, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT, TYPE_REFS_XML_ELEMENT,
     TYPE_REFS_XML_FRAGMENT,
 };
+use crate::updates::decoder::{Decode, Decoder};
+use crate::updates::encoder::{Encode, Encoder};
 use crate::{ArrayRef, MapRef, Observer, SubscriptionId, TextRef, XmlElementRef, XmlFragmentRef};
+use lib0::any::Any;
+use lib0::error::Error;
 use rand::Rng;
-use std::cell::{BorrowError, BorrowMutError, Ref, RefMut};
+use std::cell::{BorrowError, BorrowMutError, Ref, RefCell, RefMut};
+use std::collections::HashMap;
+use std::rc::Weak;
 use std::sync::Arc;
 use thiserror::Error;
 
@@ -45,8 +51,6 @@ use thiserror::Error;
 /// remote_txn.apply_update(Update::decode_v1(update.as_slice()).unwrap());
 /// ```
 pub struct Doc {
-    /// A unique client identifier, that's also a unique identifier of current document replica.
-    pub client_id: ClientID,
     store: StoreRef,
 }
 
@@ -66,9 +70,16 @@ impl Doc {
 
     pub fn with_options(options: Options) -> Self {
         Doc {
-            client_id: options.client_id,
             store: Store::new(options).into(),
         }
+    }
+    /// A unique client identifier, that's also a unique identifier of current document replica.
+    pub fn client_id(&self) -> ClientID {
+        self.options().client_id
+    }
+
+    pub fn options(&self) -> &Options {
+        self.store.options()
     }
 
     /// Returns a [TextRef] data structure stored under a given `name`. Text structures are used for
@@ -235,12 +246,40 @@ impl Doc {
             .subscribe(Arc::new(f));
         Ok(subscription)
     }
+
     /// Cancels the transaction cleanup callback associated with the `subscription_id`
     pub fn unobserve_transaction_cleanup(&mut self, subscription_id: SubscriptionId) {
         let mut r = self.store.try_borrow_mut().unwrap();
         if let Some(handler) = r.after_transaction_events.as_mut() {
             (*handler).unsubscribe(subscription_id);
         }
+    }
+
+    /// Subscribe callback function, that will be called whenever a subdocuments inserted in this
+    /// [Doc] will request a load.
+    pub fn observe_subdocs<F>(&mut self, f: F) -> Result<SubdocsSubscription, BorrowMutError>
+    where
+        F: Fn(&TransactionMut, &SubdocsEvent) -> () + 'static,
+    {
+        let mut r = self.store.try_borrow_mut()?;
+        let subscription = r
+            .subdocs_events
+            .get_or_insert_with(Observer::new)
+            .subscribe(Arc::new(f));
+        Ok(subscription)
+    }
+
+    /// Cancels the subscription created previously using [Doc::observe_subdocs].
+    pub fn unobserve_subdocs(&mut self, subscription_id: SubscriptionId) {
+        let mut r = self.store.try_borrow_mut().unwrap();
+        if let Some(handler) = r.subdocs_events.as_mut() {
+            (*handler).unsubscribe(subscription_id);
+        }
+    }
+
+    /// Returns a weak reference to this document.
+    pub fn as_ref(&self) -> DocRef {
+        DocRef::new(self.store.weak_ref())
     }
 }
 
@@ -249,6 +288,9 @@ pub type UpdateSubscription = crate::Subscription<Arc<dyn Fn(&TransactionMut, &U
 pub type AfterTransactionSubscription =
     crate::Subscription<Arc<dyn Fn(&TransactionMut, &AfterTransactionEvent) -> ()>>;
 
+pub type SubdocsSubscription =
+    crate::Subscription<Arc<dyn Fn(&TransactionMut, &SubdocsEvent) -> ()>>;
+
 impl Default for Doc {
     fn default() -> Self {
         Doc::new()
@@ -256,23 +298,55 @@ impl Default for Doc {
 }
 
 /// Configuration options of [Doc] instance.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Options {
     /// Globally unique 53-bit long client identifier.
     pub client_id: ClientID,
+    /// A globally unique identifier for this document.
+    pub guid: uuid::Uuid,
+    /// Associate this document with a collection. This only plays a role if your provider has
+    /// a concept of collection.
+    pub collection_id: Option<String>,
     /// How to we count offsets and lengths used in text operations.
     pub offset_kind: OffsetKind,
     /// Determines if transactions commits should try to perform GC-ing of deleted items.
     pub skip_gc: bool,
+    /// If a subdocument, automatically load document. If this is a subdocument, remote peers will
+    /// load the document as well automatically.
+    pub auto_load: bool,
+    /// Whether the document should be synced by the provider now.
+    /// This is toggled to true when you call ydoc.load()
+    pub should_load: bool,
 }
 
 impl Options {
     pub fn with_client_id(client_id: ClientID) -> Self {
         Options {
             client_id,
+            guid: uuid::Uuid::new_v4(),
+            collection_id: None,
             offset_kind: OffsetKind::Bytes,
             skip_gc: false,
+            auto_load: false,
+            should_load: true,
         }
+    }
+
+    fn as_any(&self) -> Any {
+        let mut m = HashMap::new();
+        m.insert("gc".to_owned(), (!self.skip_gc).into());
+        if let Some(collection_id) = self.collection_id.as_ref() {
+            m.insert("collectionId".to_owned(), collection_id.clone().into());
+        }
+        let encoding = match self.offset_kind {
+            OffsetKind::Bytes => 1,
+            OffsetKind::Utf16 => 0, // 0 for compatibility with Yjs, which doesn't have this option
+            OffsetKind::Utf32 => 2,
+        };
+        m.insert("encoding".to_owned(), Any::BigInt(encoding));
+        m.insert("autoLoad".to_owned(), self.auto_load.into());
+        m.insert("shouldLoad".to_owned(), self.should_load.into());
+        Any::Map(Box::new(m))
     }
 }
 
@@ -280,6 +354,45 @@ impl Default for Options {
     fn default() -> Self {
         let client_id: u32 = rand::thread_rng().gen();
         Self::with_client_id(client_id as ClientID)
+    }
+}
+
+impl Encode for Options {
+    fn encode<E: Encoder>(&self, encoder: &mut E) {
+        let guid = self.guid.to_string();
+        encoder.write_string(&guid);
+        encoder.write_any(&self.as_any())
+    }
+}
+
+impl Decode for Options {
+    fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, Error> {
+        let mut options = Options::default();
+        let guid = decoder.read_string()?;
+        if let Ok(guid) = uuid::Uuid::parse_str(guid) {
+            options.guid = guid;
+        } else {
+            return Err(Error::Other(format!("Failed to parse UUID v4: '{}'", guid)));
+        }
+
+        if let Any::Map(opts) = decoder.read_any()? {
+            for (k, v) in opts.iter() {
+                match (k.as_str(), v) {
+                    ("gc", Any::Bool(gc)) => options.skip_gc = !*gc,
+                    ("autoLoad", Any::Bool(auto_load)) => options.auto_load = *auto_load,
+                    ("shouldLoad", Any::Bool(should_load)) => options.should_load = *should_load,
+                    ("collectionId", Any::String(cid)) => {
+                        options.collection_id = Some(cid.to_string())
+                    }
+                    ("encoding", Any::BigInt(1)) => options.offset_kind = OffsetKind::Bytes,
+                    ("encoding", Any::BigInt(2)) => options.offset_kind = OffsetKind::Utf32,
+                    ("encoding", _) => options.offset_kind = OffsetKind::Utf16,
+                    _ => { /* do nothing */ }
+                }
+            }
+        }
+
+        Ok(options)
     }
 }
 
@@ -373,6 +486,44 @@ where
     fn try_transact_mut(&self) -> Result<TransactionMut, TransactionAcqError> {
         let branch = self.as_ref();
         branch.try_transact_mut()
+    }
+}
+
+/// A weak reference to a [Doc] living elsewhere. In case when a document store containing this
+/// link is loaded from binary payload, the linked subdocuments is not loaded explicitly.
+#[derive(Debug, Clone)]
+pub enum DocRef {}
+
+impl DocRef {
+    fn new(store_ref: Weak<RefCell<Store>>) -> Self {
+        todo!()
+    }
+
+    pub fn options(&self) -> &Options {
+        todo!()
+    }
+
+    pub fn load<D>(&mut self, decoder: &mut D) -> Doc
+    where
+        D: Decoder,
+    {
+        todo!()
+    }
+
+    pub fn destroy(&mut self) {
+        todo!()
+    }
+}
+
+impl PartialEq for DocRef {
+    fn eq(&self, other: &Self) -> bool {
+        todo!()
+    }
+}
+
+impl From<Options> for DocRef {
+    fn from(options: Options) -> Self {
+        todo!()
     }
 }
 

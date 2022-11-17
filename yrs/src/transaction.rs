@@ -1,9 +1,10 @@
 use crate::*;
 use std::cell::{Ref, RefMut};
+use uuid::Uuid;
 
 use crate::block::{Block, BlockPtr, Item, ItemContent, Prelim, ID};
 use crate::block_store::{Snapshot, StateVector};
-use crate::event::AfterTransactionEvent;
+use crate::event::{AfterTransactionEvent, SubdocsEvent};
 use crate::id_set::DeleteSet;
 use crate::store::Store;
 use crate::types::{Branch, BranchPtr, Event, Events, TypePtr, Value};
@@ -105,19 +106,20 @@ impl<'doc> ReadTxn for Transaction<'doc> {
 pub struct TransactionMut<'doc> {
     pub(crate) store: RefMut<'doc, Store>,
     /// State vector of a current transaction at the moment of its creation.
-    pub before_state: StateVector,
+    pub(crate) before_state: StateVector,
     /// Current state vector of a transaction, which includes all performed updates.
-    pub after_state: StateVector,
+    pub(crate) after_state: StateVector,
     /// ID's of the blocks to be merged.
     pub(crate) merge_blocks: Vec<ID>,
     /// Describes the set of deleted items by ids.
-    pub delete_set: DeleteSet,
+    pub(crate) delete_set: DeleteSet,
     /// We store the reference that last moved an item. This is needed to compute the delta
     /// when multiple ContentMove move the same item.
     pub(crate) prev_moved: HashMap<BlockPtr, BlockPtr>,
     /// All types that were directly modified (property added or child inserted/deleted).
     /// New types are not included in this Set.
     changed: HashMap<TypePtr, HashSet<Option<Rc<str>>>>,
+    pub(crate) subdocs: Option<Box<Subdocs>>,
     committed: bool,
 }
 
@@ -152,8 +154,24 @@ impl<'doc> TransactionMut<'doc> {
             after_state: StateVector::default(),
             changed: HashMap::new(),
             prev_moved: HashMap::default(),
+            subdocs: None,
             committed: false,
         }
+    }
+
+    /// Corresponding document's state vector at the moment when current transaction was created.
+    pub fn before_state(&self) -> &StateVector {
+        &self.before_state
+    }
+
+    /// Current document state vector which includes changes made by this transaction.
+    pub fn after_state(&self) -> &StateVector {
+        &self.before_state
+    }
+
+    /// Data about deletions performed in the scope of current transaction.
+    pub fn delete_set(&self) -> &DeleteSet {
+        &self.delete_set
     }
 
     #[inline]
@@ -331,13 +349,12 @@ impl<'doc> TransactionMut<'doc> {
                 }
 
                 match &item.content {
-                    ItemContent::Doc(_, _) => {
-                        //if (transaction.subdocsAdded.has(this.doc)) {
-                        //    transaction.subdocsAdded.delete(this.doc)
-                        //} else {
-                        //    transaction.subdocsRemoved.add(this.doc)
-                        //}
-                        todo!()
+                    ItemContent::Doc(doc) => {
+                        let subdocs = self.subdocs.get_or_insert_with(|| Box::new(Subdocs::new()));
+                        let id = &doc.options().guid;
+                        if subdocs.added.remove(id).is_none() {
+                            subdocs.removed.insert(id.clone(), doc.clone());
+                        }
                     }
                     ItemContent::Type(inner) => {
                         let mut ptr = inner.start;
@@ -585,7 +602,7 @@ impl<'doc> TransactionMut<'doc> {
         }
 
         // 8. emit 'afterTransactionCleanup'
-        let store = self.store();
+        let store = self.store.deref_mut();
         if let Some(eh) = store.after_transaction_events.as_ref() {
             let event = AfterTransactionEvent {
                 before_state: self.before_state.clone(),
@@ -617,7 +634,34 @@ impl<'doc> TransactionMut<'doc> {
             }
         }
         // 11. add and remove subdocs
-        // 12. emit 'subdocs'
+        if let Some(mut subdocs) = self.subdocs.take() {
+            let client_id = store.options.client_id;
+            for (guid, subdoc) in subdocs.added.iter_mut() {
+                subdocs.client_id = client_id;
+                let collection_id = subdoc.options.collection_id.as_mut();
+                if collection_id.is_none() {
+                    *collection_id = store.options.collection_id.clone();
+                }
+                store.subdocs.insert(guid.clone(), subdoc.clone());
+            }
+            for guid in subdocs.removed.keys() {
+                store.subdocs.remove(guid);
+            }
+
+            let mut removed = if let Some(subdocs_events) = store.subdocs_events.as_ref() {
+                let e = SubdocsEvent::new(subdocs);
+                for cb in subdocs_events.callbacks() {
+                    cb(self, &e);
+                }
+                e.removed
+            } else {
+                subdocs.removed
+            };
+
+            for (_, subdoc) in removed.iter_mut() {
+                subdoc.destroy();
+            }
+        }
     }
 
     fn try_gc(&self) {
@@ -748,5 +792,21 @@ impl<'doc> Iterator for RootRefs<'doc> {
         let key = key.as_ref();
         let ptr = BranchPtr::from(branch);
         Some((key, ptr.into()))
+    }
+}
+
+pub(crate) struct Subdocs {
+    pub(crate) added: HashMap<Uuid, DocRef>,
+    pub(crate) removed: HashMap<Uuid, DocRef>,
+    pub(crate) loaded: HashMap<Uuid, DocRef>,
+}
+
+impl Subdocs {
+    pub(crate) fn new() -> Self {
+        Subdocs {
+            added: HashMap::new(),
+            removed: HashMap::new(),
+            loaded: HashMap::new(),
+        }
     }
 }

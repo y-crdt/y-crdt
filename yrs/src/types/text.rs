@@ -1,4 +1,4 @@
-use crate::block::{Block, BlockPtr, BlockSlice, Item, ItemContent, ItemPosition, Prelim};
+use crate::block::{Block, BlockPtr, Item, ItemContent, ItemPosition, Prelim};
 use crate::block_store::Snapshot;
 use crate::transaction::TransactionMut;
 use crate::types::{

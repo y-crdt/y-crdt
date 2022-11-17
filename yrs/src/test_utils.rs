@@ -368,7 +368,7 @@ impl TestConnector {
             other => panic!(
                 "Unknown message type: {} to {}",
                 other,
-                peer.doc().client_id
+                peer.doc().client_id()
             ),
         }
         msg_type
@@ -465,7 +465,7 @@ impl TestPeer {
     }
 
     pub fn client_id(&self) -> ClientID {
-        self.doc.client_id
+        self.doc.client_id()
     }
 
     pub fn doc(&self) -> &Doc {

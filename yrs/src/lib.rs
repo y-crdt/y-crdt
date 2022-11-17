@@ -52,6 +52,7 @@ pub use crate::block::ID;
 pub use crate::block_store::Snapshot;
 pub use crate::block_store::StateVector;
 pub use crate::doc::Doc;
+pub use crate::doc::DocRef;
 pub use crate::doc::OffsetKind;
 pub use crate::doc::Options;
 pub use crate::doc::Transact;

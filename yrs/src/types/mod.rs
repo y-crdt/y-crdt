@@ -629,6 +629,7 @@ pub enum Value {
     YXmlElement(XmlElementRef),
     YXmlFragment(XmlFragmentRef),
     YXmlText(XmlTextRef),
+    Doc(DocRef),
 }
 
 impl Default for Value {
