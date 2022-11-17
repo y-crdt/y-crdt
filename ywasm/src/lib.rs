@@ -225,6 +225,18 @@ impl YDoc {
         YXmlElement(self.0.get_xml_element(name))
     }
 
+    /// Returns a `YXmlText` shared data type, that's accessible for subsequent accesses using given
+    /// `name`.
+    ///
+    /// If there was no instance with this name before, it will be created and then returned.
+    ///
+    /// If there was an instance with this name, but it was of different type, it will be projected
+    /// onto `YXmlText` instance.
+    #[wasm_bindgen(js_name = getXmlText)]
+    pub fn get_xml_text(&mut self, name: &str) -> YXmlText {
+        YXmlText(self.0.get_xml_text(name))
+    }
+
     /// Subscribes given function to be called any time, a remote update is being applied to this
     /// document. Function takes an `Uint8Array` as a parameter which contains a lib0 v1 encoded
     /// update.

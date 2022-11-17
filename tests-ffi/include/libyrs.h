@@ -968,7 +968,7 @@ Branch *ymap(YDoc *doc, const char *name);
  * document. This structure can later be accessed using its `name`, which must be a null-terminated
  * UTF-8 compatible string.
  */
-Branch *yxmlelement(YDoc *doc, const char *name);
+Branch *yxmlelem(YDoc *doc, const char *name);
 
 /**
  * Gets or creates a new shared `YXmlElement` data type instance as a root-level type of a given
@@ -976,6 +976,13 @@ Branch *yxmlelement(YDoc *doc, const char *name);
  * UTF-8 compatible string.
  */
 Branch *yxmlfragment(YDoc *doc, const char *name);
+
+/**
+ * Gets or creates a new shared `YXmlText` data type instance as a root-level type of a given
+ * document. This structure can later be accessed using its `name`, which must be a null-terminated
+ * UTF-8 compatible string.
+ */
+Branch *yxmltext(YDoc *doc, const char *name);
 
 /**
  * Returns a state vector of a current transaction's document, serialized using lib0 version 1

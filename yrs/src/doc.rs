@@ -4,9 +4,11 @@ use crate::store::{Store, StoreRef};
 use crate::transaction::{Transaction, TransactionMut};
 use crate::types::{
     Branch, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT, TYPE_REFS_XML_ELEMENT,
-    TYPE_REFS_XML_FRAGMENT,
+    TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_TEXT,
 };
-use crate::{ArrayRef, MapRef, Observer, SubscriptionId, TextRef, XmlElementRef, XmlFragmentRef};
+use crate::{
+    ArrayRef, MapRef, Observer, SubscriptionId, TextRef, XmlElementRef, XmlFragmentRef, XmlTextRef,
+};
 use rand::Rng;
 use std::cell::{BorrowError, BorrowMutError, Ref, RefMut};
 use std::sync::Arc;
@@ -169,6 +171,25 @@ impl Doc {
         let mut c = r.get_or_create_type(name, Some(name.into()), TYPE_REFS_XML_ELEMENT);
         c.store = Some(self.store.weak_ref());
         XmlElementRef::from(c)
+    }
+
+    /// Returns a [XmlTextRef] data structure stored under a given `name`. Text structures are used
+    /// for collaborative text editing: they expose operations to append and remove chunks of text,
+    /// which are free to execute concurrently by multiple peers over remote boundaries.
+    ///
+    /// If not structure under defined `name` existed before, it will be created and returned
+    /// instead.
+    ///
+    /// If a structure under defined `name` already existed, but its type was different it will be
+    /// reinterpreted as a text (in such case a sequence component of complex data type will be
+    /// interpreted as a list of text chunks).
+    pub fn get_xml_text(&self, name: &str) -> XmlTextRef {
+        let mut r = self.store.try_borrow_mut().expect(
+            "tried to get a root level type while another transaction on the document is open",
+        );
+        let mut c = r.get_or_create_type(name, None, TYPE_REFS_XML_TEXT);
+        c.store = Some(self.store.weak_ref());
+        XmlTextRef::from(c)
     }
 
     /// Subscribe callback function for any changes performed within transaction scope. These

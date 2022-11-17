@@ -555,7 +555,7 @@ pub unsafe extern "C" fn ymap(doc: *mut Doc, name: *const c_char) -> *mut Branch
 /// document. This structure can later be accessed using its `name`, which must be a null-terminated
 /// UTF-8 compatible string.
 #[no_mangle]
-pub unsafe extern "C" fn yxmlelement(doc: *mut Doc, name: *const c_char) -> *mut Branch {
+pub unsafe extern "C" fn yxmlelem(doc: *mut Doc, name: *const c_char) -> *mut Branch {
     assert!(!doc.is_null());
     assert!(!name.is_null());
 
@@ -579,6 +579,18 @@ pub unsafe extern "C" fn yxmlfragment(doc: *mut Doc, name: *const c_char) -> *mu
         .unwrap()
         .get_xml_fragment(name)
         .into_raw_branch()
+}
+
+/// Gets or creates a new shared `YXmlText` data type instance as a root-level type of a given
+/// document. This structure can later be accessed using its `name`, which must be a null-terminated
+/// UTF-8 compatible string.
+#[no_mangle]
+pub unsafe extern "C" fn yxmltext(doc: *mut Doc, name: *const c_char) -> *mut Branch {
+    assert!(!doc.is_null());
+    assert!(!name.is_null());
+
+    let name = CStr::from_ptr(name).to_str().unwrap();
+    doc.as_mut().unwrap().get_xml_text(name).into_raw_branch()
 }
 
 /// Returns a state vector of a current transaction's document, serialized using lib0 version 1
