@@ -918,10 +918,10 @@ mod test {
     #[test]
     fn multi_threading() {
         use rand::thread_rng;
-        use std::sync::{Arc, Mutex};
+        use std::sync::{Arc, RwLock};
         use std::thread::{sleep, spawn};
 
-        let doc = Arc::new(Mutex::new(Doc::with_client_id(1)));
+        let doc = Arc::new(RwLock::new(Doc::with_client_id(1)));
 
         let d2 = doc.clone();
         let h2 = spawn(move || {
@@ -929,7 +929,7 @@ mod test {
                 let millis = thread_rng().gen_range(1, 20);
                 sleep(Duration::from_millis(millis));
 
-                let doc = d2.lock().unwrap();
+                let doc = d2.write().unwrap();
                 let map = doc.get_map("test");
                 let mut txn = doc.transact_mut();
                 map.insert(&mut txn, "key", 1);
@@ -942,7 +942,7 @@ mod test {
                 let millis = thread_rng().gen_range(1, 20);
                 sleep(Duration::from_millis(millis));
 
-                let doc = d3.lock().unwrap();
+                let doc = d3.write().unwrap();
                 let map = doc.get_map("test");
                 let mut txn = doc.transact_mut();
                 map.insert(&mut txn, "key", 2);
@@ -952,7 +952,7 @@ mod test {
         h3.join().unwrap();
         h2.join().unwrap();
 
-        let doc = doc.lock().unwrap();
+        let doc = doc.read().unwrap();
         let map = doc.get_map("test");
         let txn = doc.transact();
         let value = map.get(&txn, "key").unwrap().to_json(&txn);

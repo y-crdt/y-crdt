@@ -1,4 +1,4 @@
-use crate::block::{Block, BlockPtr, BlockSlice, Item, ItemContent, ItemPosition, Prelim};
+use crate::block::{Block, BlockPtr, Item, ItemContent, ItemPosition, Prelim};
 use crate::block_store::Snapshot;
 use crate::transaction::TransactionMut;
 use crate::types::{
@@ -2051,10 +2051,10 @@ mod test {
     #[test]
     fn multi_threading() {
         use rand::thread_rng;
-        use std::sync::{Arc, Mutex};
+        use std::sync::{Arc, RwLock};
         use std::thread::{sleep, spawn};
 
-        let doc = Arc::new(Mutex::new(Doc::with_client_id(1)));
+        let doc = Arc::new(RwLock::new(Doc::with_client_id(1)));
 
         let d2 = doc.clone();
         let h2 = spawn(move || {
@@ -2062,7 +2062,7 @@ mod test {
                 let millis = thread_rng().gen_range(1, 20);
                 sleep(Duration::from_millis(millis));
 
-                let doc = d2.lock().unwrap();
+                let doc = d2.write().unwrap();
                 let txt = doc.get_text("test");
                 let mut txn = doc.transact_mut();
                 txt.push(&mut txn, "a");
@@ -2075,7 +2075,7 @@ mod test {
                 let millis = thread_rng().gen_range(1, 20);
                 sleep(Duration::from_millis(millis));
 
-                let doc = d3.lock().unwrap();
+                let doc = d3.write().unwrap();
                 let txt = doc.get_text("test");
                 let mut txn = txt.transact_mut();
                 txt.push(&mut txn, "b");
@@ -2085,7 +2085,7 @@ mod test {
         h3.join().unwrap();
         h2.join().unwrap();
 
-        let doc = doc.lock().unwrap();
+        let doc = doc.read().unwrap();
         let txt = doc.get_text("test");
         let len = txt.len(&doc.transact());
         assert_eq!(len, 20);
