@@ -1068,11 +1068,11 @@ mod test {
     #[test]
     fn update_merge() {
         let d1 = Doc::with_client_id(1);
-        let txt1 = d1.get_text("test");
+        let txt1 = d1.get_or_insert_text("test");
         let mut t1 = d1.transact_mut();
 
         let d2 = Doc::with_client_id(2);
-        let txt2 = d2.get_text("test");
+        let txt2 = d2.get_or_insert_text("test");
         let mut t2 = d2.transact_mut();
 
         txt1.insert(&mut t1, 0, "aaa");
@@ -1095,7 +1095,7 @@ mod test {
         let u12 = Update::merge_updates(vec![u1, u2]);
 
         let d3 = Doc::with_client_id(3);
-        let txt3 = d3.get_text("test");
+        let txt3 = d3.get_or_insert_text("test");
         let mut t3 = d3.transact_mut();
         t3.apply_update(u12);
 

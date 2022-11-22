@@ -193,7 +193,7 @@ pub trait Array: AsRef<Branch> {
     /// ```
     /// use yrs::{Doc, Transact, Array};
     /// let doc = Doc::new();
-    /// let array = doc.get_array("array");
+    /// let array = doc.get_or_insert_array("array");
     /// array.insert_range(&mut doc.transact_mut(), 0, [1,2,3,4]);
     /// // move elements 2 and 3 after the 4
     /// array.move_range_to(&mut doc.transact_mut(), 1, true, 2, false, 4);
@@ -418,7 +418,7 @@ mod test {
     #[test]
     fn push_back() {
         let doc = Doc::with_client_id(1);
-        let a = doc.get_array("array");
+        let a = doc.get_or_insert_array("array");
         let mut txn = doc.transact_mut();
 
         a.push_back(&mut txn, "a");
@@ -432,7 +432,7 @@ mod test {
     #[test]
     fn push_front() {
         let doc = Doc::with_client_id(1);
-        let a = doc.get_array("array");
+        let a = doc.get_or_insert_array("array");
         let mut txn = doc.transact_mut();
 
         a.push_front(&mut txn, "c");
@@ -446,7 +446,7 @@ mod test {
     #[test]
     fn insert() {
         let doc = Doc::with_client_id(1);
-        let a = doc.get_array("array");
+        let a = doc.get_or_insert_array("array");
         let mut txn = doc.transact_mut();
 
         a.insert(&mut txn, 0, "a");
@@ -462,14 +462,14 @@ mod test {
         let d1 = Doc::with_client_id(1);
         let d2 = Doc::with_client_id(2);
 
-        let a1 = d1.get_array("array");
+        let a1 = d1.get_or_insert_array("array");
 
         a1.insert(&mut d1.transact_mut(), 0, "Hi");
         let update = d1
             .transact()
             .encode_state_as_update_v1(&StateVector::default());
 
-        let a2 = d2.get_array("array");
+        let a2 = d2.get_or_insert_array("array");
         let mut t2 = d2.transact_mut();
         t2.apply_update(Update::decode_v1(update.as_slice()).unwrap());
         let actual: Vec<_> = a2.iter(&t2).collect();
@@ -480,7 +480,7 @@ mod test {
     #[test]
     fn len() {
         let d = Doc::with_client_id(1);
-        let a = d.get_array("array");
+        let a = d.get_or_insert_array("array");
 
         {
             let mut txn = d.transact_mut();
@@ -523,7 +523,7 @@ mod test {
     #[test]
     fn remove_insert() {
         let d1 = Doc::with_client_id(1);
-        let a1 = d1.get_array("array");
+        let a1 = d1.get_or_insert_array("array");
 
         let mut t1 = d1.transact_mut();
         a1.insert(&mut t1, 0, "A");
@@ -534,7 +534,7 @@ mod test {
     fn insert_3_elements_try_re_get() {
         let d1 = Doc::with_client_id(1);
         let d2 = Doc::with_client_id(2);
-        let a1 = d1.get_array("array");
+        let a1 = d1.get_or_insert_array("array");
         {
             let mut t1 = d1.transact_mut();
 
@@ -550,7 +550,7 @@ mod test {
 
         exchange_updates(&[&d1, &d2]);
 
-        let a2 = d2.get_array("array");
+        let a2 = d2.get_or_insert_array("array");
         let t2 = d2.transact();
         let actual: Vec<_> = a2.iter(&t2).collect();
         assert_eq!(
@@ -562,7 +562,7 @@ mod test {
     #[test]
     fn concurrent_insert_with_3_conflicts() {
         let d1 = Doc::with_client_id(1);
-        let a = d1.get_array("array");
+        let a = d1.get_or_insert_array("array");
         {
             let mut txn = d1.transact_mut();
             a.insert(&mut txn, 0, 0);
@@ -591,7 +591,7 @@ mod test {
     }
 
     fn to_array(d: &Doc) -> Vec<Value> {
-        let a = d.get_array("array");
+        let a = d.get_or_insert_array("array");
         a.iter(&d.transact()).collect()
     }
 
@@ -599,7 +599,7 @@ mod test {
     fn concurrent_insert_remove_with_3_conflicts() {
         let d1 = Doc::with_client_id(1);
         {
-            let a = d1.get_array("array");
+            let a = d1.get_or_insert_array("array");
             let mut txn = d1.transact_mut();
             a.insert_range(&mut txn, 0, ["x", "y", "z"]);
         }
@@ -610,9 +610,9 @@ mod test {
 
         {
             // start state: [x,y,z]
-            let a1 = d1.get_array("array");
-            let a2 = d2.get_array("array");
-            let a3 = d3.get_array("array");
+            let a1 = d1.get_or_insert_array("array");
+            let a2 = d2.get_or_insert_array("array");
+            let a3 = d3.get_or_insert_array("array");
             let mut t1 = d1.transact_mut();
             let mut t2 = d2.transact_mut();
             let mut t3 = d3.transact_mut();
@@ -638,7 +638,7 @@ mod test {
     fn insertions_in_late_sync() {
         let d1 = Doc::with_client_id(1);
         {
-            let a = d1.get_array("array");
+            let a = d1.get_or_insert_array("array");
             let mut txn = d1.transact_mut();
             a.push_back(&mut txn, "x");
             a.push_back(&mut txn, "y");
@@ -649,9 +649,9 @@ mod test {
         exchange_updates(&[&d1, &d2, &d3]);
 
         {
-            let a1 = d1.get_array("array");
-            let a2 = d2.get_array("array");
-            let a3 = d3.get_array("array");
+            let a1 = d1.get_or_insert_array("array");
+            let a2 = d2.get_or_insert_array("array");
+            let a3 = d3.get_or_insert_array("array");
             let mut t1 = d1.transact_mut();
             let mut t2 = d2.transact_mut();
             let mut t3 = d3.transact_mut();
@@ -675,7 +675,7 @@ mod test {
     fn removals_in_late_sync() {
         let d1 = Doc::with_client_id(1);
         {
-            let a = d1.get_array("array");
+            let a = d1.get_or_insert_array("array");
             let mut txn = d1.transact_mut();
             a.push_back(&mut txn, "x");
             a.push_back(&mut txn, "y");
@@ -685,8 +685,8 @@ mod test {
         exchange_updates(&[&d1, &d2]);
 
         {
-            let a1 = d1.get_array("array");
-            let a2 = d2.get_array("array");
+            let a1 = d1.get_or_insert_array("array");
+            let a2 = d2.get_or_insert_array("array");
             let mut t1 = d1.transact_mut();
             let mut t2 = d2.transact_mut();
 
@@ -706,7 +706,7 @@ mod test {
     fn insert_then_merge_delete_on_sync() {
         let d1 = Doc::with_client_id(1);
         {
-            let a = d1.get_array("array");
+            let a = d1.get_or_insert_array("array");
             let mut txn = d1.transact_mut();
             a.push_back(&mut txn, "x");
             a.push_back(&mut txn, "y");
@@ -717,7 +717,7 @@ mod test {
         exchange_updates(&[&d1, &d2]);
 
         {
-            let a2 = d2.get_array("array");
+            let a2 = d2.get_or_insert_array("array");
             let mut t2 = d2.transact_mut();
 
             a2.remove_range(&mut t2, 0, 3);
@@ -734,7 +734,7 @@ mod test {
     #[test]
     fn iter_array_containing_types() {
         let d = Doc::with_client_id(1);
-        let a = d.get_array("arr");
+        let a = d.get_or_insert_array("arr");
         let mut txn = d.transact_mut();
         for i in 0..10 {
             let mut m = HashMap::new();
@@ -757,7 +757,7 @@ mod test {
     #[test]
     fn insert_and_remove_events() {
         let d = Doc::with_client_id(1);
-        let mut array = d.get_array("array");
+        let mut array = d.get_or_insert_array("array");
         let happened = Rc::new(Cell::new(false));
         let happened_clone = happened.clone();
         let _sub = array.observe(move |_, _| {
@@ -798,7 +798,7 @@ mod test {
     #[test]
     fn insert_and_remove_event_changes() {
         let d1 = Doc::with_client_id(1);
-        let mut array = d1.get_array("array");
+        let mut array = d1.get_or_insert_array("array");
         let added = Rc::new(RefCell::new(None));
         let removed = Rc::new(RefCell::new(None));
         let delta = Rc::new(RefCell::new(None));
@@ -858,7 +858,7 @@ mod test {
         );
 
         let d2 = Doc::with_client_id(2);
-        let mut array2 = d2.get_array("array");
+        let mut array2 = d2.get_or_insert_array("array");
         let (added_c, removed_c, delta_c) = (added.clone(), removed.clone(), delta.clone());
         let _sub = array2.observe(move |txn, e| {
             *added_c.borrow_mut() = Some(e.inserts(txn).clone());
@@ -894,8 +894,8 @@ mod test {
     fn target_on_local_and_remote() {
         let d1 = Doc::with_client_id(1);
         let d2 = Doc::with_client_id(2);
-        let mut a1 = d1.get_array("array");
-        let mut a2 = d2.get_array("array");
+        let mut a1 = d1.get_or_insert_array("array");
+        let mut a2 = d2.get_or_insert_array("array");
 
         let c1 = Rc::new(RefCell::new(None));
         let c1c = c1.clone();
@@ -932,7 +932,7 @@ mod test {
 
     fn array_transactions() -> [Box<dyn Fn(&mut Doc, &mut StdRng)>; 5] {
         fn move_one(doc: &mut Doc, rng: &mut StdRng) {
-            let yarray = doc.get_array("array");
+            let yarray = doc.get_or_insert_array("array");
             let mut txn = doc.transact_mut();
             if yarray.len(&txn) != 0 {
                 let pos = rng.between(0, yarray.len(&txn) - 1);
@@ -959,7 +959,7 @@ mod test {
             }
         }
         fn insert(doc: &mut Doc, rng: &mut StdRng) {
-            let yarray = doc.get_array("array");
+            let yarray = doc.get_or_insert_array("array");
             let mut txn = doc.transact_mut();
             let unique_number = get_unique_number();
             let len = rng.between(1, 4);
@@ -984,7 +984,7 @@ mod test {
         }
 
         fn insert_type_array(doc: &mut Doc, rng: &mut StdRng) {
-            let yarray = doc.get_array("array");
+            let yarray = doc.get_or_insert_array("array");
             let mut txn = doc.transact_mut();
             let pos = rng.between(0, yarray.len(&txn));
             yarray.insert(&mut txn, pos, ArrayPrelim::from([1, 2, 3, 4]));
@@ -997,7 +997,7 @@ mod test {
         }
 
         fn insert_type_map(doc: &mut Doc, rng: &mut StdRng) {
-            let yarray = doc.get_array("array");
+            let yarray = doc.get_or_insert_array("array");
             let mut txn = doc.transact_mut();
             let pos = rng.between(0, yarray.len(&txn));
             yarray.insert(&mut txn, pos, MapPrelim::<i32>::from(HashMap::default()));
@@ -1011,7 +1011,7 @@ mod test {
         }
 
         fn delete(doc: &mut Doc, rng: &mut StdRng) {
-            let yarray = doc.get_array("array");
+            let yarray = doc.get_or_insert_array("array");
             let mut txn = doc.transact_mut();
             let len = yarray.len(&txn);
             if len > 0 {
@@ -1065,7 +1065,7 @@ mod test {
     #[test]
     fn get_at_removed_index() {
         let d1 = Doc::with_client_id(1);
-        let a1 = d1.get_array("array");
+        let a1 = d1.get_or_insert_array("array");
         let mut t1 = d1.transact_mut();
 
         a1.insert_range(&mut t1, 0, ["A"]);
@@ -1078,7 +1078,7 @@ mod test {
     #[test]
     fn observe_deep_event_order() {
         let doc = Doc::with_client_id(1);
-        let mut array = doc.get_array("array");
+        let mut array = doc.get_or_insert_array("array");
 
         let paths = Rc::new(RefCell::new(Vec::new()));
         let paths_copy = paths.clone();
@@ -1108,10 +1108,10 @@ mod test {
     #[test]
     fn move_1() {
         let d1 = Doc::with_client_id(1);
-        let mut a1 = d1.get_array("array");
+        let mut a1 = d1.get_or_insert_array("array");
 
         let d2 = Doc::with_client_id(2);
-        let mut a2 = d2.get_array("array");
+        let mut a2 = d2.get_or_insert_array("array");
 
         let e1: Rc<RefCell<Vec<Change>>> = Rc::new(RefCell::new(Vec::default()));
         let inner = e1.clone();
@@ -1160,10 +1160,10 @@ mod test {
     #[test]
     fn move_2() {
         let d1 = Doc::with_client_id(1);
-        let mut a1 = d1.get_array("array");
+        let mut a1 = d1.get_or_insert_array("array");
 
         let d2 = Doc::with_client_id(2);
-        let mut a2 = d2.get_array("array");
+        let mut a2 = d2.get_or_insert_array("array");
 
         let e1: Rc<RefCell<Vec<Change>>> = Rc::new(RefCell::new(Vec::default()));
         let inner = e1.clone();
@@ -1223,10 +1223,10 @@ mod test {
     #[test]
     fn move_cycles() {
         let d1 = Doc::with_client_id(1);
-        let a1 = d1.get_array("array");
+        let a1 = d1.get_or_insert_array("array");
 
         let d2 = Doc::with_client_id(2);
-        let a2 = d2.get_array("array");
+        let a2 = d2.get_or_insert_array("array");
 
         a1.insert_range(&mut d1.transact_mut(), 0, [1, 2, 3, 4]);
         exchange_updates(&[&d1, &d2]);
@@ -1259,7 +1259,7 @@ mod test {
                 sleep(Duration::from_millis(millis));
 
                 let doc = d2.write().unwrap();
-                let array = doc.get_array("test");
+                let array = doc.get_or_insert_array("test");
                 let mut txn = doc.transact_mut();
                 array.push_back(&mut txn, "a");
             }
@@ -1272,7 +1272,7 @@ mod test {
                 sleep(Duration::from_millis(millis));
 
                 let doc = d3.write().unwrap();
-                let array = doc.get_array("test");
+                let array = doc.get_or_insert_array("test");
                 let mut txn = doc.transact_mut();
                 array.push_back(&mut txn, "b");
             }
@@ -1282,7 +1282,7 @@ mod test {
         h2.join().unwrap();
 
         let doc = doc.read().unwrap();
-        let array = doc.get_array("test");
+        let array = doc.get_or_insert_array("test");
         let len = array.len(&doc.transact());
         assert_eq!(len, 20);
     }

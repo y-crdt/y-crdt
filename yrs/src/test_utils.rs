@@ -98,8 +98,8 @@ impl TestConnector {
         let mut tc = Self::with_rng(rng);
         for client_id in 0..peer_num {
             let peer = tc.create_peer(client_id as ClientID);
-            peer.doc.get_text("text");
-            peer.doc.get_map("map");
+            peer.doc.get_or_insert_text("text");
+            peer.doc.get_or_insert_map("map");
         }
         tc.sync_all();
         tc

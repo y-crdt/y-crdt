@@ -30,7 +30,7 @@ use thiserror::Error;
 /// use yrs::updates::encoder::Encode;
 ///
 /// let doc = Doc::new();
-/// let root = doc.get_text("root-type-name");
+/// let root = doc.get_or_insert_text("root-type-name");
 /// let mut txn = doc.transact_mut(); // all Yrs operations happen in scope of a transaction
 /// root.push(&mut txn, "hello world"); // append text to our collaborative document
 ///
@@ -78,13 +78,13 @@ impl Doc {
     /// collaborative text editing: they expose operations to append and remove chunks of text,
     /// which are free to execute concurrently by multiple peers over remote boundaries.
     ///
-    /// If not structure under defined `name` existed before, it will be created and returned
+    /// If no structure under defined `name` existed before, it will be created and returned
     /// instead.
     ///
     /// If a structure under defined `name` already existed, but its type was different it will be
     /// reinterpreted as a text (in such case a sequence component of complex data type will be
     /// interpreted as a list of text chunks).
-    pub fn get_text(&self, name: &str) -> TextRef {
+    pub fn get_or_insert_text(&self, name: &str) -> TextRef {
         let mut r = self.store.try_borrow_mut().expect(
             "tried to get a root level type while another transaction on the document is open",
         );
@@ -98,13 +98,13 @@ impl Doc {
     /// a JavaScript Object Notation) as well as other shared types (Yrs maps, arrays, text
     /// structures etc.), enabling to construct a complex recursive tree structures.
     ///
-    /// If not structure under defined `name` existed before, it will be created and returned
+    /// If no structure under defined `name` existed before, it will be created and returned
     /// instead.
     ///
     /// If a structure under defined `name` already existed, but its type was different it will be
     /// reinterpreted as a map (in such case a map component of complex data type will be
     /// interpreted as native map).
-    pub fn get_map(&self, name: &str) -> MapRef {
+    pub fn get_or_insert_map(&self, name: &str) -> MapRef {
         let mut r = self.store.try_borrow_mut().expect(
             "tried to get a root level type while another transaction on the document is open",
         );
@@ -117,13 +117,13 @@ impl Doc {
     /// storing a sequences of elements in ordered manner, positioning given element accordingly
     /// to its index.
     ///
-    /// If not structure under defined `name` existed before, it will be created and returned
+    /// If no structure under defined `name` existed before, it will be created and returned
     /// instead.
     ///
     /// If a structure under defined `name` already existed, but its type was different it will be
     /// reinterpreted as an array (in such case a sequence component of complex data type will be
     /// interpreted as a list of inserted values).
-    pub fn get_array(&self, name: &str) -> ArrayRef {
+    pub fn get_or_insert_array(&self, name: &str) -> ArrayRef {
         let mut r = self.store.try_borrow_mut().expect(
             "tried to get a root level type while another transaction on the document is open",
         );
@@ -137,14 +137,14 @@ impl Doc {
     /// as well as other nested XML elements or text values, which are stored in their insertion
     /// order.
     ///
-    /// If not structure under defined `name` existed before, it will be created and returned
+    /// If no structure under defined `name` existed before, it will be created and returned
     /// instead.
     ///
     /// If a structure under defined `name` already existed, but its type was different it will be
     /// reinterpreted as a XML element (in such case a map component of complex data type will be
     /// interpreted as map of its attributes, while a sequence component - as a list of its child
     /// XML nodes).
-    pub fn get_xml_fragment(&self, name: &str) -> XmlFragmentRef {
+    pub fn get_or_insert_xml_fragment(&self, name: &str) -> XmlFragmentRef {
         let mut r = self.store.try_borrow_mut().expect(
             "tried to get a root level type while another transaction on the document is open",
         );
@@ -158,14 +158,14 @@ impl Doc {
     /// as well as other nested XML elements or text values, which are stored in their insertion
     /// order.
     ///
-    /// If not structure under defined `name` existed before, it will be created and returned
+    /// If no structure under defined `name` existed before, it will be created and returned
     /// instead.
     ///
     /// If a structure under defined `name` already existed, but its type was different it will be
     /// reinterpreted as a XML element (in such case a map component of complex data type will be
     /// interpreted as map of its attributes, while a sequence component - as a list of its child
     /// XML nodes).
-    pub fn get_xml_element(&self, name: &str) -> XmlElementRef {
+    pub fn get_or_insert_xml_element(&self, name: &str) -> XmlElementRef {
         let mut r = self.store.try_borrow_mut().expect(
             "tried to get a root level type while another transaction on the document is open",
         );
@@ -178,13 +178,13 @@ impl Doc {
     /// for collaborative text editing: they expose operations to append and remove chunks of text,
     /// which are free to execute concurrently by multiple peers over remote boundaries.
     ///
-    /// If not structure under defined `name` existed before, it will be created and returned
+    /// If no structure under defined `name` existed before, it will be created and returned
     /// instead.
     ///
     /// If a structure under defined `name` already existed, but its type was different it will be
     /// reinterpreted as a text (in such case a sequence component of complex data type will be
     /// interpreted as a list of text chunks).
-    pub fn get_xml_text(&self, name: &str) -> XmlTextRef {
+    pub fn get_or_insert_xml_text(&self, name: &str) -> XmlTextRef {
         let mut r = self.store.try_borrow_mut().expect(
             "tried to get a root level type while another transaction on the document is open",
         );
@@ -446,7 +446,7 @@ mod test {
             198, 5, 0, 1, 49, 68, 227, 214, 245, 198, 5, 1, 1, 50, 0,
         ];
         let doc = Doc::new();
-        let txt = doc.get_text("type");
+        let txt = doc.get_or_insert_text("type");
         let mut txn = doc.transact_mut();
         txn.apply_update(Update::decode_v1(update).unwrap());
 
@@ -473,7 +473,7 @@ mod test {
             48, 49, 50, 4, 65, 1, 1, 1, 0, 0, 1, 3, 0, 0,
         ];
         let doc = Doc::new();
-        let txt = doc.get_text("type");
+        let txt = doc.get_or_insert_text("type");
         let mut txn = doc.transact_mut();
         txn.apply_update(Update::decode_v2(update).unwrap());
 
@@ -484,7 +484,7 @@ mod test {
     #[test]
     fn encode_basic() {
         let doc = Doc::with_client_id(1490905955);
-        let txt = doc.get_text("type");
+        let txt = doc.get_or_insert_text("type");
         let mut t = doc.transact_mut();
         txt.insert(&mut t, 0, "0");
         txt.insert(&mut t, 0, "1");
@@ -502,7 +502,7 @@ mod test {
     fn integrate() {
         // create new document at A and add some initial text to it
         let d1 = Doc::new();
-        let txt = d1.get_text("test");
+        let txt = d1.get_or_insert_text("test");
         let mut t1 = d1.transact_mut();
         // Question: why YText.insert uses positions of blocks instead of actual cursor positions
         // in text as seen by user?
@@ -514,7 +514,7 @@ mod test {
 
         // create document at B
         let d2 = Doc::new();
-        let txt = d2.get_text("test");
+        let txt = d2.get_or_insert_text("test");
         let mut t2 = d2.transact_mut();
         let sv = t2.state_vector().encode_v1();
 
@@ -549,7 +549,7 @@ mod test {
                 c.set(c.get() + block.len());
             }
         });
-        let txt = doc.get_text("test");
+        let txt = doc.get_or_insert_text("test");
         let mut txn = doc.transact_mut();
         {
             txt.insert(&mut txn, 0, "abc");
@@ -575,7 +575,7 @@ mod test {
     #[test]
     fn pending_update_integration() {
         let doc = Doc::new();
-        let txt = doc.get_text("source");
+        let txt = doc.get_or_insert_text("source");
 
         let updates = [
             vec![
@@ -628,7 +628,7 @@ mod test {
     #[test]
     fn ypy_issue_32() {
         let d1 = Doc::with_client_id(1971027812);
-        let source_1 = d1.get_text("source");
+        let source_1 = d1.get_or_insert_text("source");
         source_1.push(&mut d1.transact_mut(), "a");
 
         let updates = [
@@ -660,7 +660,7 @@ mod test {
         assert_eq!("a", source_1.get_string(&source_1.transact()));
 
         let d2 = Doc::new();
-        let source_2 = d2.get_text("source");
+        let source_2 = d2.get_or_insert_text("source");
         let state_2 = d2.transact().state_vector().encode_v1();
         let update = d1
             .transact()
@@ -679,7 +679,7 @@ mod test {
         assert_eq!("ab", source_1.get_string(&source_1.transact()));
 
         let d3 = Doc::new();
-        let source_3 = d3.get_text("source");
+        let source_3 = d3.get_or_insert_text("source");
         let state_3 = d3.transact().state_vector().encode_v1();
         let state_3 = StateVector::decode_v1(&state_3).unwrap();
         let update = d1.transact().encode_state_as_update_v1(&state_3);
@@ -693,7 +693,7 @@ mod test {
     fn observe_transaction_cleanup() {
         // Setup
         let mut doc = Doc::new();
-        let text = doc.get_text("test");
+        let text = doc.get_or_insert_text("test");
         let before_state = Rc::new(Cell::new(StateVector::default()));
         let after_state = Rc::new(Cell::new(StateVector::default()));
         let delete_set = Rc::new(Cell::new(DeleteSet::default()));
@@ -737,14 +737,14 @@ mod test {
     #[test]
     fn partially_duplicated_update() {
         let d1 = Doc::with_client_id(1);
-        let txt1 = d1.get_text("text");
+        let txt1 = d1.get_or_insert_text("text");
         txt1.insert(&mut d1.transact_mut(), 0, "hello");
         let u = d1
             .transact()
             .encode_state_as_update_v1(&StateVector::default());
 
         let d2 = Doc::with_client_id(2);
-        let txt2 = d2.get_text("text");
+        let txt2 = d2.get_or_insert_text("text");
         d2.transact_mut()
             .apply_update(Update::decode_v1(&u).unwrap());
 
@@ -766,7 +766,7 @@ mod test {
         const INPUT: &'static str = "hello";
 
         let mut d1 = Doc::with_client_id(1);
-        let txt1 = d1.get_text("text");
+        let txt1 = d1.get_or_insert_text("text");
         let acc = Rc::new(RefCell::new(String::new()));
 
         let a = acc.clone();
@@ -839,7 +839,7 @@ mod test {
         let update = Update::decode_v2(bin).unwrap();
         doc.transact_mut().apply_update(update);
 
-        let root = doc.get_map("root");
+        let root = doc.get_or_insert_map("root");
         let actual = root.to_json(&doc.transact());
         let expected = Any::from_json(
             r#"{
@@ -865,7 +865,7 @@ mod test {
         options.skip_gc = true;
 
         let d1 = Doc::with_options(options);
-        let txt1 = d1.get_text("text");
+        let txt1 = d1.get_or_insert_text("text");
         txt1.insert(&mut d1.transact_mut(), 0, "hello");
         let snapshot = d1.transact_mut().snapshot();
         txt1.insert(&mut d1.transact_mut(), 5, " world");
@@ -877,7 +877,7 @@ mod test {
         let update = encoder.to_vec();
 
         let d2 = Doc::with_client_id(2);
-        let txt2 = d2.get_text("text");
+        let txt2 = d2.get_or_insert_text("text");
         d2.transact_mut()
             .apply_update(Update::decode_v1(&update).unwrap());
 
@@ -1091,10 +1091,10 @@ mod test {
     fn root_refs() {
         let doc = Doc::new();
         {
-            let _txt = doc.get_text("text");
-            let _array = doc.get_array("array");
-            let _map = doc.get_map("map");
-            let _xml_elem = doc.get_xml_fragment("xml_elem");
+            let _txt = doc.get_or_insert_text("text");
+            let _array = doc.get_or_insert_array("array");
+            let _map = doc.get_or_insert_map("map");
+            let _xml_elem = doc.get_or_insert_xml_fragment("xml_elem");
         }
 
         let txn = doc.transact();
@@ -1117,7 +1117,7 @@ mod test {
         let d3 = Doc::with_client_id(3);
 
         {
-            let root = d1.get_array("array");
+            let root = d1.get_or_insert_array("array");
             let mut txn = d1.transact_mut();
             root.push_back(&mut txn, ArrayPrelim::from(["A"]));
         }
@@ -1125,7 +1125,7 @@ mod test {
         exchange_updates(&[&d1, &d2, &d3]);
 
         {
-            let root = d2.get_array("array");
+            let root = d2.get_or_insert_array("array");
             let mut t2 = d2.transact_mut();
             root.remove(&mut t2, 0);
             d1.transact_mut()
@@ -1133,7 +1133,7 @@ mod test {
         }
 
         {
-            let root = d3.get_array("array");
+            let root = d3.get_or_insert_array("array");
             let mut t3 = d3.transact_mut();
             let a3 = root.get(&t3, 0).unwrap().to_yarray().unwrap();
             a3.push_back(&mut t3, "B");
@@ -1144,9 +1144,9 @@ mod test {
 
         exchange_updates(&[&d1, &d2, &d3]);
 
-        let r1 = d1.get_array("array").to_json(&d1.transact());
-        let r2 = d2.get_array("array").to_json(&d2.transact());
-        let r3 = d3.get_array("array").to_json(&d3.transact());
+        let r1 = d1.get_or_insert_array("array").to_json(&d1.transact());
+        let r2 = d2.get_or_insert_array("array").to_json(&d2.transact());
+        let r3 = d3.get_or_insert_array("array").to_json(&d3.transact());
 
         assert_eq!(r1, r2);
         assert_eq!(r2, r3);
