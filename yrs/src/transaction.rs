@@ -6,7 +6,7 @@ use crate::block::{Block, BlockPtr, Item, ItemContent, Prelim, ID};
 use crate::block_store::{Snapshot, StateVector};
 use crate::event::{AfterTransactionEvent, SubdocsEvent};
 use crate::id_set::DeleteSet;
-use crate::store::Store;
+use crate::store::{Store, SubdocGuids, SubdocsIter};
 use crate::types::{Branch, BranchPtr, Event, Events, TypePtr, Value};
 use crate::update::Update;
 use lib0::error::Error;
@@ -79,10 +79,24 @@ pub trait ReadTxn: Sized {
         let store = self.store();
         RootRefs(store.types.iter())
     }
+
+    /// Returns a collection of globally unique identifiers of sub documents linked within
+    /// the structures of this document store.
+    fn subdoc_guids(&self) -> SubdocGuids {
+        let store = self.store();
+        store.subdoc_guids()
+    }
+
+    /// Returns a collection of sub documents linked within the structures of this document store.
+    fn subdocs(&self) -> SubdocsIter {
+        let store = self.store();
+        store.subdocs()
+    }
 }
 
 pub trait WriteTxn: Sized {
     fn store_mut(&mut self) -> &mut Store;
+    fn subdocs_mut(&mut self) -> &mut Subdocs;
 }
 
 #[derive(Debug)]
@@ -134,6 +148,10 @@ impl<'doc> WriteTxn for TransactionMut<'doc> {
     #[inline]
     fn store_mut(&mut self) -> &mut Store {
         self.store.deref_mut()
+    }
+
+    fn subdocs_mut(&mut self) -> &mut Subdocs {
+        self.subdocs.get_or_insert_with(|| Box::new(Subdocs::new()))
     }
 }
 
@@ -602,8 +620,7 @@ impl<'doc> TransactionMut<'doc> {
         }
 
         // 8. emit 'afterTransactionCleanup'
-        let store = self.store.deref_mut();
-        if let Some(eh) = store.after_transaction_events.as_ref() {
+        if let Some(eh) = self.store.after_transaction_events.as_ref() {
             let event = AfterTransactionEvent {
                 before_state: self.before_state.clone(),
                 after_state: self.after_state.clone(),
@@ -614,7 +631,7 @@ impl<'doc> TransactionMut<'doc> {
             }
         }
         // 9. emit 'update'
-        if let Some(eh) = store.update_v1_events.as_ref() {
+        if let Some(eh) = self.store.update_v1_events.as_ref() {
             if !self.delete_set.is_empty() || self.after_state != self.before_state {
                 // produce update only if anything changed
                 let update = UpdateEvent::new(self.encode_update_v1());
@@ -624,7 +641,7 @@ impl<'doc> TransactionMut<'doc> {
             }
         }
         // 10. emit 'updateV2'
-        if let Some(eh) = store.update_v2_events.as_ref() {
+        if let Some(eh) = self.store.update_v2_events.as_ref() {
             if !self.delete_set.is_empty() || self.after_state != self.before_state {
                 // produce update only if anything changed
                 let update = UpdateEvent::new(self.encode_update_v2());
@@ -634,13 +651,14 @@ impl<'doc> TransactionMut<'doc> {
             }
         }
         // 11. add and remove subdocs
+        let store = self.store.deref_mut();
         if let Some(mut subdocs) = self.subdocs.take() {
             let client_id = store.options.client_id;
             for (guid, subdoc) in subdocs.added.iter_mut() {
-                subdocs.client_id = client_id;
-                let collection_id = subdoc.options.collection_id.as_mut();
-                if collection_id.is_none() {
-                    *collection_id = store.options.collection_id.clone();
+                let options = &mut subdoc.options_mut();
+                options.client_id = client_id;
+                if options.collection_id.is_none() {
+                    options.collection_id = store.options.collection_id.clone();
                 }
                 store.subdocs.insert(guid.clone(), subdoc.clone());
             }
@@ -659,7 +677,7 @@ impl<'doc> TransactionMut<'doc> {
             };
 
             for (_, subdoc) in removed.iter_mut() {
-                subdoc.destroy();
+                subdoc.destroy(self);
             }
         }
     }
@@ -795,7 +813,7 @@ impl<'doc> Iterator for RootRefs<'doc> {
     }
 }
 
-pub(crate) struct Subdocs {
+pub struct Subdocs {
     pub(crate) added: HashMap<Uuid, DocRef>,
     pub(crate) removed: HashMap<Uuid, DocRef>,
     pub(crate) loaded: HashMap<Uuid, DocRef>,

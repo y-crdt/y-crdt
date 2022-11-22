@@ -3377,6 +3377,7 @@ fn value_into_js(v: Value) -> JsValue {
         Value::YXmlElement(v) => YXmlElement(v).into(),
         Value::YXmlText(v) => YXmlText(v).into(),
         Value::YXmlFragment(v) => YXmlFragment(v).into(),
+        Value::YDoc(doc) => todo!(),
     }
 }
 

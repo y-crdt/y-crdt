@@ -23,7 +23,7 @@ use yrs::types::{
 use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use yrs::{
-    AfterTransactionEvent, Array, ArrayRef, DeleteSet, GetString, Map, MapRef, Observable,
+    AfterTransactionEvent, Array, ArrayRef, DeleteSet, DocRef, GetString, Map, MapRef, Observable,
     OffsetKind, Options, ReadTxn, Snapshot, StateVector, Store, SubscriptionId, Text, TextRef,
     Transact, Update, Xml, XmlElementPrelim, XmlElementRef, XmlFragmentRef, XmlTextPrelim,
     XmlTextRef,
@@ -75,6 +75,9 @@ pub const Y_XML_TEXT: i8 = 5;
 
 /// Flag used by `YInput` and `YOutput` to tag content, which is an `YXmlFragment` shared type.
 pub const Y_XML_FRAG: i8 = 6;
+
+/// Flag used by `YInput` and `YOutput` to tag content, which is an `YDoc` shared type.
+pub const Y_DOC: i8 = 7;
 
 /// Flag used to mark a truthy boolean numbers.
 pub const Y_TRUE: c_char = 1;
@@ -2438,6 +2441,7 @@ impl From<Value> for YOutput {
             Value::YXmlElement(v) => Self::from(v),
             Value::YXmlFragment(v) => Self::from(v),
             Value::YXmlText(v) => Self::from(v),
+            Value::YDoc(v) => Self::from(v),
         }
     }
 }
@@ -2595,6 +2599,18 @@ impl From<XmlFragmentRef> for YOutput {
     }
 }
 
+impl From<DocRef> for YOutput {
+    fn from(v: DocRef) -> Self {
+        YOutput {
+            tag: Y_DOC,
+            len: 1,
+            value: YOutputContent {
+                y_doc: v.as_ref() as *const Doc as *mut Doc,
+            },
+        }
+    }
+}
+
 #[repr(C)]
 union YOutputContent {
     flag: c_char,
@@ -2605,6 +2621,7 @@ union YOutputContent {
     array: *mut YOutput,
     map: *mut YMapEntry,
     y_type: *mut Branch,
+    y_doc: *mut Doc,
 }
 
 /// Releases all resources related to a corresponding `YOutput` cell.

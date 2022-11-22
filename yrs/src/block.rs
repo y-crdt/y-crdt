@@ -392,7 +392,7 @@ impl BlockPtr {
                         }
                         ItemContent::Move(m) => m.integrate_block(txn, self_ptr),
                         ItemContent::Doc(doc) => {
-                            doc.parent = self_ptr;
+                            doc.item = Some(self_ptr);
                             let subdocs =
                                 txn.subdocs.get_or_insert_with(|| Box::new(Subdocs::new()));
                             let guid = doc.options().guid.clone();
@@ -1510,7 +1510,7 @@ impl ItemContent {
                     1
                 }
                 ItemContent::Doc(doc) => {
-                    buf[0] = Value::Doc(doc.clone());
+                    buf[0] = Value::YDoc(doc.clone());
                     1
                 }
                 ItemContent::Type(c) => {
@@ -1546,7 +1546,7 @@ impl ItemContent {
             ItemContent::Binary(v) => Some(Value::Any(Any::Buffer(v.clone().into_boxed_slice()))),
             ItemContent::Deleted(_) => None,
             ItemContent::Move(_) => None,
-            ItemContent::Doc(v) => Some(Value::Doc(v.clone())),
+            ItemContent::Doc(v) => Some(Value::YDoc(v.clone())),
             ItemContent::JSON(v) => v
                 .first()
                 .map(|v| Value::Any(Any::String(v.clone().into_boxed_str()))),
@@ -1563,7 +1563,7 @@ impl ItemContent {
             ItemContent::Binary(v) => Some(Value::Any(Any::Buffer(v.clone().into_boxed_slice()))),
             ItemContent::Deleted(_) => None,
             ItemContent::Move(_) => None,
-            ItemContent::Doc(v) => Some(Value::Doc(v.clone())),
+            ItemContent::Doc(v) => Some(Value::YDoc(v.clone())),
             ItemContent::JSON(v) => v
                 .last()
                 .map(|v| Value::Any(Any::String(v.clone().into_boxed_str()))),

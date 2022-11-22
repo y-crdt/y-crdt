@@ -360,7 +360,7 @@ impl std::fmt::Display for Store {
 
 #[repr(transparent)]
 #[derive(Debug, Clone)]
-pub(crate) struct StoreRef(Rc<RefCell<Store>>);
+pub(crate) struct StoreRef(pub(crate) Rc<RefCell<Store>>);
 
 impl StoreRef {
     pub fn try_borrow(&self) -> Result<Ref<Store>, BorrowError> {
@@ -378,6 +378,11 @@ impl StoreRef {
     pub fn options(&self) -> &Options {
         let store = unsafe { self.0.as_ptr().as_ref().unwrap() };
         &store.options
+    }
+
+    pub(crate) fn options_mut(&mut self) -> &mut Options {
+        let store = unsafe { self.0.as_ptr().as_mut().unwrap() };
+        &mut store.options
     }
 }
 
