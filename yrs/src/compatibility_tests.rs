@@ -7,8 +7,8 @@ use crate::update::{BlockCarrier, Update};
 use crate::updates::decoder::{Decode, Decoder, DecoderV1};
 use crate::updates::encoder::Encode;
 use crate::{
-    ArrayPrelim, Doc, Map, MapPrelim, ReadTxn, StateVector, Text, Transact, Xml, XmlElementRef,
-    XmlTextRef, ID,
+    ArrayPrelim, Doc, GetString, Map, MapPrelim, ReadTxn, StateVector, Transact, Xml,
+    XmlElementRef, XmlTextRef, ID,
 };
 use lib0::any::Any;
 use lib0::decoding::Read;
@@ -123,7 +123,7 @@ fn text_insert_delete() {
         let u = Update::decode_v1(update).unwrap();
         txn.apply_update(u);
     }
-    assert_eq!(txt.to_string(&txt.transact()), "abhi".to_string());
+    assert_eq!(txt.get_string(&txt.transact()), "abhi".to_string());
     assert!(visited.get());
 }
 
@@ -333,7 +333,7 @@ fn utf32_lib0_v2_decoding() {
         0, 19, 8, 1, 5, 1, 1, 1, 1, 9, 2, 4, 4, 4, 4, 4,
     ];
     let doc = Doc::new();
-    let xml = doc.get_xml_element("prosemirror");
+    let xml = doc.get_xml_fragment("prosemirror");
     let mut txn = doc.transact_mut();
     let update = Update::decode_v2(data).unwrap();
     txn.apply_update(update);
@@ -350,7 +350,7 @@ fn utf32_lib0_v2_decoding() {
 
     let txt: XmlTextRef = actual.get(&txn, 0).unwrap().try_into().unwrap();
 
-    assert_eq!(txt.to_string(&txn), "在の韩国🇰🇷🇨🇳🇯🇵");
+    assert_eq!(txt.get_string(&txn), "在の韩国🇰🇷🇨🇳🇯🇵");
 }
 
 /// Verify if given `payload` can be deserialized into series
@@ -449,7 +449,7 @@ fn test_data_set<P: AsRef<std::path::Path>>(path: P) {
         }
         let expected = decoder.read_string().unwrap();
         assert_eq!(
-            txt.to_string(&txt.transact()),
+            txt.get_string(&txt.transact()),
             expected,
             "failed at {} run",
             test_num

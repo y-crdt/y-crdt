@@ -8,7 +8,7 @@ import * as t from 'lib0/testing'
  */
 export const testInsert = tc => {
     const d1 = new Y.YDoc()
-    const root = d1.getXmlElement('test')
+    const root = d1.getXmlFragment('test')
     d1.transact(txn => {
         let b = root.pushXmlText(txn)
         let a = root.insertXmlElement(0, 'p', txn)
@@ -20,7 +20,7 @@ export const testInsert = tc => {
 
     const s = root.toString()
 
-    t.compareStrings(s, '<UNDEFINED><p>hello</p>world</UNDEFINED>')
+    t.compareStrings(s, '<p>hello</p>world')
 }
 
 /**
@@ -28,19 +28,20 @@ export const testInsert = tc => {
  */
 export const testAttributes = tc => {
     const d1 = new Y.YDoc()
-    const root = d1.getXmlElement('test')
-    var actual = d1.transact(txn => {
-        root.setAttribute('key1', 'value1', txn)
-        root.setAttribute('key2', 'value2', txn)
+    const root = d1.getXmlFragment('test')
+    const xml = root.insertXmlElement(0, 'div')
+    let actual = d1.transact(txn => {
+        xml.setAttribute('key1', 'value1', txn)
+        xml.setAttribute('key2', 'value2', txn)
 
         let obj = {}
-        let attrs = root.attributes(txn);
+        let attrs = xml.attributes(txn);
         for (let key in attrs) {
             // we test iterator here
             obj[key] = attrs[key]
         }
         return obj
-    })
+    });
 
     t.compareObjects(actual, {
         key1: 'value1',
@@ -48,10 +49,10 @@ export const testAttributes = tc => {
     })
 
     actual = d1.transact(txn => {
-        root.removeAttribute('key1', txn)
+        xml.removeAttribute('key1', txn)
         return {
-            key1: root.getAttribute('key1', txn),
-            key2: root.getAttribute('key2', txn)
+            key1: xml.getAttribute('key1', txn),
+            key2: xml.getAttribute('key2', txn)
         }
     })
 
@@ -66,7 +67,7 @@ export const testAttributes = tc => {
  */
 export const testSiblings = tc => {
     const d1 = new Y.YDoc()
-    const root = d1.getXmlElement('test')
+    const root = d1.getXmlFragment('test')
     const first = d1.transact(txn => {
         let b = root.pushXmlText(txn)
         let a = root.insertXmlElement(0, 'p', txn)
@@ -95,7 +96,7 @@ export const testSiblings = tc => {
  */
 export const testTreeWalker = tc => {
     const d1 = new Y.YDoc()
-    const root = d1.getXmlElement('test')
+    const root = d1.getXmlFragment('test')
     d1.transact(txn => {
         let b = root.pushXmlText(txn)
         let a = root.insertXmlElement(0, 'p', txn)
@@ -125,10 +126,8 @@ export const testTreeWalker = tc => {
  */
 export const testXmlTextObserver = tc => {
     const d1 = new Y.YDoc()
-    /**
-     * @param {Y.YXmlText} tc
-     */
-    const x = d1.getXmlText('test')
+    const f = d1.getXmlFragment('test');
+    const x = f.insertXmlText(0)
     let target = null
     let attributes = null
     let delta = null
@@ -207,10 +206,8 @@ export const testXmlTextObserver = tc => {
  */
 export const testXmlElementObserver = tc => {
     const d1 = new Y.YDoc()
-    /**
-     * @param {Y.YXmlElement} tc
-     */
-    const x = d1.getXmlElement('test')
+    const f = d1.getXmlFragment('test');
+    const x = f.insertXmlElement(0,'div')
     let target = null
     let attributes = null
     let nodes = null

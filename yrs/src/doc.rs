@@ -4,9 +4,11 @@ use crate::store::{Store, StoreRef};
 use crate::transaction::{Transaction, TransactionMut};
 use crate::types::{
     Branch, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT, TYPE_REFS_XML_ELEMENT,
-    TYPE_REFS_XML_TEXT,
+    TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_TEXT,
 };
-use crate::{ArrayRef, MapRef, Observer, SubscriptionId, TextRef, XmlElementRef, XmlTextRef};
+use crate::{
+    ArrayRef, MapRef, Observer, SubscriptionId, TextRef, XmlElementRef, XmlFragmentRef, XmlTextRef,
+};
 use rand::Rng;
 use std::cell::{BorrowError, BorrowMutError, Ref, RefMut};
 use std::sync::Arc;
@@ -71,7 +73,7 @@ impl Doc {
         }
     }
 
-    /// Returns a [Text] data structure stored under a given `name`. Text structures are used for
+    /// Returns a [TextRef] data structure stored under a given `name`. Text structures are used for
     /// collaborative text editing: they expose operations to append and remove chunks of text,
     /// which are free to execute concurrently by multiple peers over remote boundaries.
     ///
@@ -90,7 +92,7 @@ impl Doc {
         TextRef::from(c)
     }
 
-    /// Returns a [Map] data structure stored under a given `name`. Maps are used to store key-value
+    /// Returns a [MapRef] data structure stored under a given `name`. Maps are used to store key-value
     /// pairs associated together. These values can be primitive data (similar but not limited to
     /// a JavaScript Object Notation) as well as other shared types (Yrs maps, arrays, text
     /// structures etc.), enabling to construct a complex recursive tree structures.
@@ -110,7 +112,7 @@ impl Doc {
         MapRef::from(c)
     }
 
-    /// Returns an [Array] data structure stored under a given `name`. Array structures are used for
+    /// Returns an [ArrayRef] data structure stored under a given `name`. Array structures are used for
     /// storing a sequences of elements in ordered manner, positioning given element accordingly
     /// to its index.
     ///
@@ -129,7 +131,28 @@ impl Doc {
         ArrayRef::from(c)
     }
 
-    /// Returns a [XmlElement] data structure stored under a given `name`. XML elements represent
+    /// Returns a [XmlFragmentRef] data structure stored under a given `name`. XML elements represent
+    /// nodes of XML document. They can contain attributes (key-value pairs, both of string type)
+    /// as well as other nested XML elements or text values, which are stored in their insertion
+    /// order.
+    ///
+    /// If not structure under defined `name` existed before, it will be created and returned
+    /// instead.
+    ///
+    /// If a structure under defined `name` already existed, but its type was different it will be
+    /// reinterpreted as a XML element (in such case a map component of complex data type will be
+    /// interpreted as map of its attributes, while a sequence component - as a list of its child
+    /// XML nodes).
+    pub fn get_xml_fragment(&self, name: &str) -> XmlFragmentRef {
+        let mut r = self.store.try_borrow_mut().expect(
+            "tried to get a root level type while another transaction on the document is open",
+        );
+        let mut c = r.get_or_create_type(name, None, TYPE_REFS_XML_FRAGMENT);
+        c.store = Some(self.store.weak_ref());
+        XmlFragmentRef::from(c)
+    }
+
+    /// Returns a [XmlElementRef] data structure stored under a given `name`. XML elements represent
     /// nodes of XML document. They can contain attributes (key-value pairs, both of string type)
     /// as well as other nested XML elements or text values, which are stored in their insertion
     /// order.
@@ -145,13 +168,13 @@ impl Doc {
         let mut r = self.store.try_borrow_mut().expect(
             "tried to get a root level type while another transaction on the document is open",
         );
-        let mut c = r.get_or_create_type(name, Some("UNDEFINED".into()), TYPE_REFS_XML_ELEMENT);
+        let mut c = r.get_or_create_type(name, Some(name.into()), TYPE_REFS_XML_ELEMENT);
         c.store = Some(self.store.weak_ref());
         XmlElementRef::from(c)
     }
 
-    /// Returns a [XmlText] data structure stored under a given `name`. Text structures are used for
-    /// collaborative text editing: they expose operations to append and remove chunks of text,
+    /// Returns a [XmlTextRef] data structure stored under a given `name`. Text structures are used
+    /// for collaborative text editing: they expose operations to append and remove chunks of text,
     /// which are free to execute concurrently by multiple peers over remote boundaries.
     ///
     /// If not structure under defined `name` existed before, it will be created and returned
@@ -384,7 +407,8 @@ mod test {
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
     use crate::{
-        Array, ArrayPrelim, DeleteSet, Doc, Options, StateVector, SubscriptionId, Text, Transact,
+        Array, ArrayPrelim, DeleteSet, Doc, GetString, Options, StateVector, SubscriptionId, Text,
+        Transact,
     };
     use lib0::any::Any;
     use std::cell::{Cell, RefCell};
@@ -413,7 +437,7 @@ mod test {
         let mut txn = doc.transact_mut();
         txn.apply_update(Update::decode_v1(update).unwrap());
 
-        let actual = txt.to_string(&txn);
+        let actual = txt.get_string(&txn);
         assert_eq!(actual, "210".to_owned());
     }
 
@@ -440,7 +464,7 @@ mod test {
         let mut txn = doc.transact_mut();
         txn.apply_update(Update::decode_v2(update).unwrap());
 
-        let actual = txt.to_string(&txn);
+        let actual = txt.get_string(&txn);
         assert_eq!(actual, "210".to_owned());
     }
 
@@ -473,7 +497,7 @@ mod test {
         txt.insert(&mut t1, 5, " ");
         txt.insert(&mut t1, 6, "world");
 
-        assert_eq!(txt.to_string(&t1), "hello world".to_string());
+        assert_eq!(txt.get_string(&t1), "hello world".to_string());
 
         // create document at B
         let d2 = Doc::new();
@@ -497,7 +521,7 @@ mod test {
         assert!(pending.1.is_none());
 
         // check if B sees the same thing that A does
-        assert_eq!(txt.to_string(&t1), "hello world".to_string());
+        assert_eq!(txt.get_string(&t1), "hello world".to_string());
     }
 
     #[test]
@@ -585,7 +609,7 @@ mod test {
             let u = Update::decode_v1(u.as_slice()).unwrap();
             txn.apply_update(u);
         }
-        assert_eq!(txt.to_string(&txt.transact()), "abcd".to_string());
+        assert_eq!(txt.get_string(&txt.transact()), "abcd".to_string());
     }
 
     #[test]
@@ -620,7 +644,7 @@ mod test {
             d1.transact_mut().apply_update(u);
         }
 
-        assert_eq!("a", source_1.to_string(&source_1.transact()));
+        assert_eq!("a", source_1.get_string(&source_1.transact()));
 
         let d2 = Doc::new();
         let source_2 = d2.get_text("source");
@@ -631,7 +655,7 @@ mod test {
         let update = Update::decode_v1(&update).unwrap();
         d2.transact_mut().apply_update(update);
 
-        assert_eq!("a", source_2.to_string(&source_2.transact()));
+        assert_eq!("a", source_2.get_string(&source_2.transact()));
 
         let update = Update::decode_v1(&[
             1, 2, 201, 210, 153, 56, 5, 132, 228, 254, 237, 171, 7, 0, 1, 98, 168, 201, 210, 153,
@@ -639,7 +663,7 @@ mod test {
         ])
         .unwrap();
         d1.transact_mut().apply_update(update);
-        assert_eq!("ab", source_1.to_string(&source_1.transact()));
+        assert_eq!("ab", source_1.get_string(&source_1.transact()));
 
         let d3 = Doc::new();
         let source_3 = d3.get_text("source");
@@ -649,7 +673,7 @@ mod test {
         let update = Update::decode_v1(&update).unwrap();
         d3.transact_mut().apply_update(update);
 
-        assert_eq!("ab", source_3.to_string(&source_3.transact()));
+        assert_eq!("ab", source_3.get_string(&source_3.transact()));
     }
 
     #[test]
@@ -719,8 +743,8 @@ mod test {
             .apply_update(Update::decode_v1(&u).unwrap());
 
         assert_eq!(
-            txt1.to_string(&txt1.transact()),
-            txt2.to_string(&txt2.transact())
+            txt1.get_string(&txt1.transact()),
+            txt2.get_string(&txt2.transact())
         );
     }
 
@@ -844,7 +868,7 @@ mod test {
         d2.transact_mut()
             .apply_update(Update::decode_v1(&update).unwrap());
 
-        assert_eq!(txt2.to_string(&txt2.transact()), "hello".to_string());
+        assert_eq!(txt2.get_string(&txt2.transact()), "hello".to_string());
     }
 
     #[test]
@@ -1057,8 +1081,7 @@ mod test {
             let _txt = doc.get_text("text");
             let _array = doc.get_array("array");
             let _map = doc.get_map("map");
-            let _xml_elem = doc.get_xml_element("xml_elem");
-            let _xml_text = doc.get_xml_text("xml_text");
+            let _xml_elem = doc.get_xml_fragment("xml_elem");
         }
 
         let txn = doc.transact();

@@ -83,5 +83,6 @@ pub use crate::types::xml::XmlFragmentRef;
 pub use crate::types::xml::XmlNode;
 pub use crate::types::xml::XmlTextPrelim;
 pub use crate::types::xml::XmlTextRef;
+pub use crate::types::GetString;
 pub use crate::types::Observable;
 pub use crate::update::Update;

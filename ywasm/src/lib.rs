@@ -22,10 +22,10 @@ use yrs::types::{
 use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use yrs::{
-    AfterTransactionEvent, AfterTransactionSubscription, Array, ArrayRef, DeleteSet, Doc, Map,
-    MapRef, Observable, OffsetKind, Options, ReadTxn, Snapshot, StateVector, Store, Subscription,
-    Text, TextRef, Transact, Transaction, TransactionMut, Update, UpdateSubscription, Xml,
-    XmlElementPrelim, XmlElementRef, XmlFragment, XmlFragmentRef, XmlNode, XmlTextPrelim,
+    AfterTransactionEvent, AfterTransactionSubscription, Array, ArrayRef, DeleteSet, Doc,
+    GetString, Map, MapRef, Observable, OffsetKind, Options, ReadTxn, Snapshot, StateVector, Store,
+    Subscription, Text, TextRef, Transact, Transaction, TransactionMut, Update, UpdateSubscription,
+    Xml, XmlElementPrelim, XmlElementRef, XmlFragment, XmlFragmentRef, XmlNode, XmlTextPrelim,
     XmlTextRef,
 };
 
@@ -199,6 +199,18 @@ impl YDoc {
     #[wasm_bindgen(js_name = getMap)]
     pub fn get_map(&mut self, name: &str) -> YMap {
         self.0.get_map(name).into()
+    }
+
+    /// Returns a `YXmlFragment` shared data type, that's accessible for subsequent accesses using
+    /// given `name`.
+    ///
+    /// If there was no instance with this name before, it will be created and then returned.
+    ///
+    /// If there was an instance with this name, but it was of different type, it will be projected
+    /// onto `YXmlFragment` instance.
+    #[wasm_bindgen(js_name = getXmlFragment)]
+    pub fn get_xml_fragment(&mut self, name: &str) -> YXmlFragment {
+        YXmlFragment(self.0.get_xml_fragment(name))
     }
 
     /// Returns a `YXmlElement` shared data type, that's accessible for subsequent accesses using
@@ -1069,7 +1081,8 @@ impl YXmlEvent {
         if let Some(target) = self.target.as_ref() {
             target.clone()
         } else {
-            let target: JsValue = YXmlElement(self.inner().target().clone()).into();
+            let node = self.inner().target().clone();
+            let target: JsValue = xml_into_js(node);
             self.target = Some(target.clone());
             target
         }
@@ -1548,9 +1561,9 @@ impl YText {
         match &*self.0.borrow() {
             SharedType::Integrated(v) => {
                 if let Some(txn) = get_txn(txn) {
-                    v.to_string(txn)
+                    v.get_string(txn)
                 } else {
-                    v.to_string(&v.transact())
+                    v.get_string(&v.transact())
                 }
             }
             SharedType::Prelim(v) => v.clone(),
@@ -1563,9 +1576,9 @@ impl YText {
         match &*self.0.borrow() {
             SharedType::Integrated(v) => {
                 if let Some(txn) = get_txn(txn) {
-                    JsValue::from(&v.to_string(txn))
+                    JsValue::from(&v.get_string(txn))
                 } else {
-                    JsValue::from(&v.to_string(&v.transact()))
+                    JsValue::from(&v.get_string(&v.transact()))
                 }
             }
             SharedType::Prelim(v) => JsValue::from(v),
@@ -2678,7 +2691,7 @@ impl YXmlElement {
     #[wasm_bindgen(js_name = parent)]
     pub fn parent(&self) -> JsValue {
         if let Some(xml) = self.0.parent() {
-            xml_into_js(XmlNode::Element(xml))
+            xml_into_js(xml)
         } else {
             JsValue::undefined()
         }
@@ -2688,9 +2701,9 @@ impl YXmlElement {
     #[wasm_bindgen(js_name = toString)]
     pub fn to_string(&self, txn: &ImplicitTransaction) -> String {
         if let Some(txn) = get_txn(txn) {
-            self.0.to_string(txn)
+            self.0.get_string(txn)
         } else {
-            self.0.to_string(&self.0.transact())
+            self.0.get_string(&self.0.transact())
         }
     }
 
@@ -2883,9 +2896,9 @@ impl YXmlFragment {
     #[wasm_bindgen(js_name = toString)]
     pub fn to_string(&self, txn: &ImplicitTransaction) -> String {
         if let Some(txn) = get_txn(txn) {
-            self.0.to_string(txn)
+            self.0.get_string(txn)
         } else {
-            self.0.to_string(&self.0.transact())
+            self.0.get_string(&self.0.transact())
         }
     }
 
@@ -3108,7 +3121,7 @@ impl YXmlText {
     #[wasm_bindgen(js_name = parent)]
     pub fn parent(&self) -> JsValue {
         if let Some(xml) = self.0.parent() {
-            xml_into_js(XmlNode::Element(xml))
+            xml_into_js(xml)
         } else {
             JsValue::undefined()
         }
@@ -3118,10 +3131,10 @@ impl YXmlText {
     #[wasm_bindgen(js_name = toString)]
     pub fn to_string(&self, txn: &ImplicitTransaction) -> String {
         if let Some(txn) = get_txn(txn) {
-            self.0.to_string(txn)
+            self.0.get_string(txn)
         } else {
             let txn = self.0.transact();
-            self.0.to_string(&txn)
+            self.0.get_string(&txn)
         }
     }
 
@@ -3394,8 +3407,8 @@ fn events_into_js(txn: &TransactionMut, e: &Events) -> JsValue {
             Event::Text(e) => YTextEvent::new(e, txn).into(),
             Event::Array(e) => YArrayEvent::new(e, txn).into(),
             Event::Map(e) => YMapEvent::new(e, txn).into(),
-            Event::XmlElement(e) => YXmlEvent::new(e, txn).into(),
             Event::XmlText(e) => YXmlTextEvent::new(e, txn).into(),
+            Event::XmlFragment(e) => YXmlEvent::new(e, txn).into(),
         };
         js
     });

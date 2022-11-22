@@ -1,4 +1,4 @@
-use crate::block::{Block, BlockPtr, BlockSlice, ClientID, ID};
+use crate::block::{Block, BlockPtr, BlockSlice, ClientID, Item, ID};
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::client_hasher::ClientHasher;
@@ -425,6 +425,10 @@ impl BlockStore {
         clients.try_get(pivot)
     }
 
+    /// Returns a block slice that represents a range of data within a particular block containing
+    /// provided [ID], starting from that [ID] until the end of the block.
+    ///
+    /// Example: *for a block `A:1..=5` and id `A:3`, the returned slice will represent `A:3..=5`*.
     pub(crate) fn get_item_clean_start(&self, id: &ID) -> Option<BlockSlice> {
         let blocks = self.clients.get(&id.client)?;
         let index = blocks.find_pivot(id.clock)?;
@@ -433,6 +437,10 @@ impl BlockStore {
         Some(BlockSlice::new(ptr, offset, ptr.len() - 1))
     }
 
+    /// Returns a block slice that represents a range of data within a particular block containing
+    /// provided [ID], starting from the beginning of the block until the that [ID] (inclusive).
+    ///
+    /// Example: *for a block `A:1..=5` and id `A:3`, the returned slice will represent `A:1..=3`*.
     pub(crate) fn get_item_clean_end(&self, id: &ID) -> Option<BlockSlice> {
         let blocks = self.clients.get(&id.client)?;
         let index = blocks.find_pivot(id.clock)?;

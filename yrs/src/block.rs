@@ -671,6 +671,33 @@ impl BlockSlice {
             }
         }
     }
+
+    pub fn right(&self) -> Option<BlockSlice> {
+        let last_clock = self.ptr.len() - 1;
+        if self.end == last_clock {
+            if let Block::Item(item) = self.ptr.deref() {
+                let right_ptr = item.right?;
+                Some(BlockSlice::from(right_ptr))
+            } else {
+                None
+            }
+        } else {
+            Some(BlockSlice::new(self.ptr, self.end + 1, last_clock))
+        }
+    }
+
+    pub fn left(&self) -> Option<BlockSlice> {
+        if self.start == 0 {
+            if let Block::Item(item) = self.ptr.deref() {
+                let left_ptr = item.left?;
+                Some(BlockSlice::from(left_ptr))
+            } else {
+                None
+            }
+        } else {
+            Some(BlockSlice::new(self.ptr, 0, self.start - 1))
+        }
+    }
 }
 
 impl From<BlockPtr> for BlockSlice {

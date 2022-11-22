@@ -1,13 +1,13 @@
 use crate::block::{Block, BlockPtr, Item, ItemContent, ItemPosition, Prelim};
 use crate::block_iter::BlockIter;
 use crate::transaction::TransactionMut;
-use crate::types::text::TextEvent;
+use crate::types::text::{TextEvent, YChange};
 use crate::types::{
     event_change_set, event_keys, Branch, BranchPtr, Change, ChangeSet, Delta, Entries,
-    EntryChange, EventHandler, MapRef, Observers, Path, ToJson, TypePtr, TYPE_REFS_XML_ELEMENT,
-    TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_TEXT,
+    EntryChange, EventHandler, MapRef, Observers, Path, ToJson, TypePtr, Value,
+    TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_TEXT,
 };
-use crate::{Map, Observable, ReadTxn, Text, ID};
+use crate::{GetString, Map, Observable, ReadTxn, Text, ID};
 use lib0::any::Any;
 use std::borrow::Borrow;
 use std::cell::UnsafeCell;
@@ -32,6 +32,26 @@ pub enum XmlNode {
     Element(XmlElementRef),
     Fragment(XmlFragmentRef),
     Text(XmlTextRef),
+}
+
+impl XmlNode {
+    pub fn as_ptr(&self) -> BranchPtr {
+        match self {
+            XmlNode::Element(n) => n.0,
+            XmlNode::Fragment(n) => n.0,
+            XmlNode::Text(n) => n.0,
+        }
+    }
+}
+
+impl AsRef<Branch> for XmlNode {
+    fn as_ref(&self) -> &Branch {
+        match self {
+            XmlNode::Element(n) => n.as_ref(),
+            XmlNode::Fragment(n) => n.as_ref(),
+            XmlNode::Text(n) => n.as_ref(),
+        }
+    }
 }
 
 impl TryInto<XmlElementRef> for XmlNode {
@@ -101,16 +121,24 @@ pub struct XmlElementRef(BranchPtr);
 impl Xml for XmlElementRef {}
 impl XmlFragment for XmlElementRef {}
 
+impl Into<XmlFragmentRef> for XmlElementRef {
+    fn into(self) -> XmlFragmentRef {
+        XmlFragmentRef(self.0)
+    }
+}
+
 impl XmlElementRef {
     /// A tag name of a current top-level XML node, eg. node `<p></p>` has "p" as it's tag name.
     pub fn tag(&self) -> &str {
         let inner = &self.0;
         inner.name.as_ref().unwrap()
     }
+}
 
+impl GetString for XmlElementRef {
     /// Converts current XML node into a textual representation. This representation if flat, it
     /// doesn't include any indentation.
-    pub fn to_string<T: ReadTxn>(&self, txn: &T) -> String {
+    fn get_string<T: ReadTxn>(&self, txn: &T) -> String {
         let inner = self.0;
         let mut s = String::new();
         let tag = inner
@@ -138,7 +166,7 @@ impl Observable for XmlElementRef {
     type Event = XmlEvent;
 
     fn try_observer(&self) -> Option<&EventHandler<Self::Event>> {
-        if let Some(Observers::Xml(eh)) = self.0.observers.as_ref() {
+        if let Some(Observers::XmlFragment(eh)) = self.0.observers.as_ref() {
             Some(eh)
         } else {
             None
@@ -146,7 +174,9 @@ impl Observable for XmlElementRef {
     }
 
     fn try_observer_mut(&mut self) -> Option<&mut EventHandler<Self::Event>> {
-        if let Observers::Xml(eh) = self.0.observers.get_or_insert_with(Observers::xml) {
+        if let Observers::XmlFragment(eh) =
+            self.0.observers.get_or_insert_with(Observers::xml_fragment)
+        {
             Some(eh)
         } else {
             None
@@ -265,6 +295,44 @@ impl Observable for XmlTextRef {
     }
 }
 
+impl GetString for XmlTextRef {
+    fn get_string<T: ReadTxn>(&self, txn: &T) -> String {
+        let mut buf = String::new();
+        for d in self.diff(txn, YChange::identity) {
+            let mut attrs = Vec::new();
+            if let Some(attributes) = d.attributes.as_ref() {
+                for (key, value) in attributes.iter() {
+                    attrs.push((key, value));
+                }
+                attrs.sort_by(|x, y| x.0.cmp(y.0))
+            }
+
+            // write attributes as xml opening tags
+            for (node, at) in attrs.iter() {
+                write!(buf, "<{}", node).unwrap();
+                if let Any::Map(at) = at {
+                    for (k, v) in at.iter() {
+                        write!(buf, " {}=\"{}\"", k, v).unwrap();
+                    }
+                }
+                buf.push('>');
+            }
+
+            // write string content of delta
+            if let Value::Any(any) = d.insert {
+                write!(buf, "{}", any).unwrap();
+            }
+
+            // write attributes as xml closing tags
+            attrs.reverse();
+            for (key, value) in attrs {
+                write!(buf, "</{}>", key).unwrap();
+            }
+        }
+        buf
+    }
+}
+
 impl AsRef<Branch> for XmlTextRef {
     fn as_ref(&self) -> &Branch {
         &self.0
@@ -314,16 +382,20 @@ pub struct XmlFragmentRef(BranchPtr);
 impl XmlFragment for XmlFragmentRef {}
 
 impl XmlFragmentRef {
+    pub fn parent(&self) -> Option<XmlNode> {
+        let block = self.as_ref().item?;
+        let item = block.as_item()?;
+        let parent = item.parent.as_branch()?;
+        XmlNode::try_from(*parent).ok()
+    }
+}
+
+impl GetString for XmlFragmentRef {
     /// Converts current XML node into a textual representation. This representation if flat, it
     /// doesn't include any indentation.
-    pub fn to_string<T: ReadTxn>(&self, txn: &T) -> String {
+    fn get_string<T: ReadTxn>(&self, txn: &T) -> String {
         let inner = self.0;
         let mut s = String::new();
-        let attributes = Attributes(inner.entries(txn));
-        for (k, v) in attributes {
-            write!(&mut s, " \"{}\"=\"{}\"", k, v).unwrap();
-        }
-        write!(&mut s, ">").unwrap();
         for i in inner.iter(txn) {
             for content in i.content.get_content() {
                 write!(&mut s, "{}", content.to_string(txn)).unwrap();
@@ -337,7 +409,7 @@ impl Observable for XmlFragmentRef {
     type Event = XmlEvent;
 
     fn try_observer(&self) -> Option<&EventHandler<Self::Event>> {
-        if let Some(Observers::Xml(eh)) = self.0.observers.as_ref() {
+        if let Some(Observers::XmlFragment(eh)) = self.0.observers.as_ref() {
             Some(eh)
         } else {
             None
@@ -345,7 +417,9 @@ impl Observable for XmlFragmentRef {
     }
 
     fn try_observer_mut(&mut self) -> Option<&mut EventHandler<Self::Event>> {
-        if let Observers::Xml(eh) = self.0.observers.get_or_insert_with(Observers::xml) {
+        if let Observers::XmlFragment(eh) =
+            self.0.observers.get_or_insert_with(Observers::xml_fragment)
+        {
             Some(eh)
         } else {
             None
@@ -453,11 +527,11 @@ impl Into<MapRef> for XmlHookRef {
 }
 
 pub trait Xml: AsRef<Branch> {
-    fn parent(&self) -> Option<XmlElementRef> {
+    fn parent(&self) -> Option<XmlNode> {
         let block = self.as_ref().item?;
         let item = block.as_item()?;
         let parent = item.parent.as_branch()?;
-        Some(XmlElementRef::from(*parent))
+        XmlNode::try_from(*parent).ok()
     }
 
     /// Removes an attribute recognized by an `attr_name` from a current XML element.
@@ -597,10 +671,10 @@ pub trait XmlFragment: AsRef<Branch> {
     ///       again
     ///    </div>
     /// */
-    /// use yrs::{Doc, Text, Xml, XmlNode, Transact, XmlFragment, XmlElementPrelim, XmlTextPrelim};
+    /// use yrs::{Doc, Text, Xml, XmlNode, Transact, XmlFragment, XmlElementPrelim, XmlTextPrelim, GetString};
     ///
     /// let doc = Doc::new();
-    /// let mut html = doc.get_xml_element("div");
+    /// let mut html = doc.get_xml_fragment("div");
     /// let mut txn = doc.transact_mut();
     /// let p = html.push_back(&mut txn, XmlElementPrelim::empty("p"));
     /// let txt = p.push_back(&mut txn, XmlTextPrelim("Hello "));
@@ -611,7 +685,7 @@ pub trait XmlFragment: AsRef<Branch> {
     /// for node in html.successors(&txn) {
     ///     match node {
     ///         XmlNode::Element(elem) => println!("- {}", elem.tag()),
-    ///         XmlNode::Text(txt) => println!("- {}", txt.to_string(&txn)),
+    ///         XmlNode::Text(txt) => println!("- {}", txt.get_string(&txn)),
     ///         _ => {}
     ///     }
     /// }
@@ -868,7 +942,7 @@ impl<'a, T> DoubleEndedIterator for Siblings<'a, T> {
 /// Event generated by [XmlElement::observe] method. Emitted during transaction commit phase.
 pub struct XmlEvent {
     pub(crate) current_target: BranchPtr,
-    target: XmlElementRef,
+    target: XmlNode,
     change_set: UnsafeCell<Option<Box<ChangeSet<Change>>>>,
     keys: UnsafeCell<Result<HashMap<Rc<str>, EntryChange>, HashSet<Option<Rc<str>>>>>,
     children_changed: bool,
@@ -879,7 +953,7 @@ impl XmlEvent {
         let current_target = branch_ref.clone();
         let children_changed = key_changes.iter().any(Option::is_none);
         XmlEvent {
-            target: XmlElementRef::from(branch_ref),
+            target: XmlNode::try_from(branch_ref).unwrap(),
             current_target,
             change_set: UnsafeCell::new(None),
             keys: UnsafeCell::new(Err(key_changes)),
@@ -893,13 +967,13 @@ impl XmlEvent {
     }
 
     /// Returns a [XmlElement] instance which emitted this event.
-    pub fn target(&self) -> &XmlElementRef {
+    pub fn target(&self) -> &XmlNode {
         &self.target
     }
 
     /// Returns a path from root type down to [XmlElement] instance which emitted this event.
     pub fn path(&self) -> Path {
-        Branch::path(self.current_target, self.target.0)
+        Branch::path(self.current_target, self.target.as_ptr())
     }
 
     /// Returns a summary of XML child nodes changed within corresponding [XmlElement] collection
@@ -928,7 +1002,7 @@ impl XmlEvent {
         match keys {
             Ok(keys) => keys,
             Err(subs) => {
-                let subs = event_keys(txn, self.target.0, subs);
+                let subs = event_keys(txn, self.target.as_ptr(), subs);
                 *keys = Ok(subs);
                 if let Ok(keys) = keys {
                     keys
@@ -941,7 +1015,8 @@ impl XmlEvent {
 
     fn changes(&self, txn: &TransactionMut) -> &ChangeSet<Change> {
         let change_set = unsafe { self.change_set.get().as_mut().unwrap() };
-        change_set.get_or_insert_with(|| Box::new(event_change_set(txn, self.target.0.start)))
+        change_set
+            .get_or_insert_with(|| Box::new(event_change_set(txn, self.target.as_ptr().start)))
     }
 }
 
@@ -949,10 +1024,13 @@ impl XmlEvent {
 mod test {
     use crate::transaction::ReadTxn;
     use crate::types::xml::{Xml, XmlFragment, XmlNode};
-    use crate::types::{Change, EntryChange, Value};
+    use crate::types::{Attrs, Change, EntryChange, Value};
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encoder, EncoderV1};
-    use crate::{Doc, Observable, StateVector, Transact, Update, XmlElementPrelim, XmlTextPrelim};
+    use crate::{
+        Doc, GetString, Observable, StateVector, Text, Transact, Update, XmlElementPrelim,
+        XmlTextPrelim,
+    };
     use lib0::any::Any;
     use std::cell::RefCell;
     use std::collections::HashMap;
@@ -961,14 +1039,16 @@ mod test {
     #[test]
     fn insert_attribute() {
         let d1 = Doc::with_client_id(1);
-        let xml1 = d1.get_xml_element("xml");
+        let f = d1.get_xml_fragment("xml");
         let mut t1 = d1.transact_mut();
+        let xml1 = f.push_back(&mut t1, XmlElementPrelim::empty("div"));
         xml1.insert_attribute(&mut t1, "height", 10.to_string());
         assert_eq!(xml1.get_attribute(&t1, "height"), Some("10".to_string()));
 
         let d2 = Doc::with_client_id(1);
-        let xml2 = d2.get_xml_element("xml");
+        let f = d2.get_xml_fragment("xml");
         let mut t2 = d2.transact_mut();
+        let xml2 = f.push_back(&mut t2, XmlElementPrelim::empty("div"));
         let u = t1.encode_state_as_update_v1(&StateVector::default());
         t2.apply_update(Update::decode_v1(u.as_slice()).unwrap());
         assert_eq!(xml2.get_attribute(&t2, "height"), Some("10".to_string()));
@@ -977,7 +1057,7 @@ mod test {
     #[test]
     fn tree_walker() {
         let doc = Doc::with_client_id(1);
-        let root = doc.get_xml_element("xml");
+        let root = doc.get_xml_fragment("xml");
         let mut txn = doc.transact_mut();
         /*
             <UNDEFINED>
@@ -1010,8 +1090,9 @@ mod test {
     #[test]
     fn text_attributes() {
         let doc = Doc::with_client_id(1);
-        let txt = doc.get_xml_text("txt");
+        let f = doc.get_xml_fragment("test");
         let mut txn = doc.transact_mut();
+        let txt = f.push_back(&mut txn, XmlTextPrelim(""));
         txt.insert_attribute(&mut txn, "test", 42.to_string());
 
         assert_eq!(txt.get_attribute(&txn, "test"), Some("42".to_string()));
@@ -1022,7 +1103,7 @@ mod test {
     #[test]
     fn siblings() {
         let doc = Doc::with_client_id(1);
-        let root = doc.get_xml_element("root");
+        let root = doc.get_xml_fragment("root");
         let mut txn = doc.transact_mut();
         let first = root.push_back(&mut txn, XmlTextPrelim("hello"));
         let second = root.push_back(&mut txn, XmlElementPrelim::empty("p"));
@@ -1039,10 +1120,10 @@ mod test {
         );
         assert_eq!(
             first.parent().as_ref(),
-            Some(&root),
+            Some(&XmlNode::Fragment(root.clone())),
             "first.parent should point to root"
         );
-        assert_eq!(root.parent().as_ref(), None, "root parent should not exist");
+        assert!(root.parent().is_none(), "root parent should not exist");
         assert_eq!(
             root.first_child().as_ref(),
             Some(&XmlNode::Text(first)),
@@ -1053,28 +1134,28 @@ mod test {
     #[test]
     fn serialization() {
         let d1 = Doc::with_client_id(1);
-        let r1 = d1.get_xml_element("root");
+        let r1 = d1.get_xml_fragment("root");
         let mut t1 = d1.transact_mut();
         let first = r1.push_back(&mut t1, XmlTextPrelim("hello"));
         r1.push_back(&mut t1, XmlElementPrelim::empty("p"));
 
-        let expected = "<UNDEFINED>hello<p></p></UNDEFINED>";
-        assert_eq!(r1.to_string(&t1), expected);
+        let expected = "hello<p></p>";
+        assert_eq!(r1.get_string(&t1), expected);
 
         let u1 = t1.encode_state_as_update_v1(&StateVector::default());
 
         let d2 = Doc::with_client_id(2);
-        let r2 = d2.get_xml_element("root");
+        let r2 = d2.get_xml_fragment("root");
         let mut t2 = d2.transact_mut();
 
         t2.apply_update(Update::decode_v1(u1.as_slice()).unwrap());
-        assert_eq!(r2.to_string(&t2), expected);
+        assert_eq!(r2.get_string(&t2), expected);
     }
 
     #[test]
     fn serialization_compatibility() {
         let d1 = Doc::with_client_id(1);
-        let r1 = d1.get_xml_element("root");
+        let r1 = d1.get_xml_fragment("root");
         let mut t1 = d1.transact_mut();
         let first = r1.push_back(&mut t1, XmlTextPrelim("hello"));
         r1.push_back(&mut t1, XmlElementPrelim::empty("p"));
@@ -1102,7 +1183,7 @@ mod test {
     #[test]
     fn event_observers() {
         let d1 = Doc::with_client_id(1);
-        let mut xml = d1.get_xml_element("xml");
+        let mut xml = d1.get_xml_element("test");
 
         let attributes = Rc::new(RefCell::new(None));
         let nodes = Rc::new(RefCell::new(None));
@@ -1192,7 +1273,7 @@ mod test {
 
         // copy updates over
         let d2 = Doc::with_client_id(2);
-        let mut xml2 = d2.get_xml_element("xml");
+        let mut xml2 = d2.get_xml_element("test");
 
         let attributes = Rc::new(RefCell::new(None));
         let nodes = Rc::new(RefCell::new(None));
@@ -1206,7 +1287,6 @@ mod test {
         {
             let t1 = d1.transact_mut();
             let mut t2 = d2.transact_mut();
-
             let sv = t2.state_vector();
             let mut encoder = EncoderV1::new();
             t1.encode_diff(&sv, &mut encoder);
@@ -1226,5 +1306,29 @@ mod test {
                 EntryChange::Inserted(Any::String("value11".into()).into())
             )]))
         );
+    }
+
+    #[test]
+    fn xml_text_to_string() {
+        let doc = Doc::new();
+        let f = doc.get_xml_fragment("test");
+        let mut txn = doc.transact_mut();
+        let text = f.push_back(&mut txn, XmlTextPrelim("hello world"));
+        text.format(
+            &mut txn,
+            6,
+            5,
+            Attrs::from([(
+                "a".into(),
+                HashMap::from([("href".into(), "http://domain.org")]).into(),
+            )]),
+        );
+        drop(txn);
+
+        let str = f.get_string(&doc.transact());
+        assert_eq!(
+            str.as_str(),
+            "hello <a href=\"http://domain.org\">world</a>"
+        )
     }
 }

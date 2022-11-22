@@ -23,12 +23,11 @@ use yrs::types::{
 use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use yrs::{
-    AfterTransactionEvent, Array, ArrayRef, DeleteSet, Map, MapRef, Observable, OffsetKind,
-    ReadTxn, Snapshot, Store, Text, TextRef, Transact, Update, XmlElementPrelim, XmlElementRef,
-    XmlFragmentRef, XmlTextPrelim, XmlTextRef,
+    AfterTransactionEvent, Array, ArrayRef, DeleteSet, GetString, Map, MapRef, Observable,
+    OffsetKind, Options, ReadTxn, Snapshot, StateVector, Store, SubscriptionId, Text, TextRef,
+    Transact, Update, Xml, XmlElementPrelim, XmlElementRef, XmlFragmentRef, XmlTextPrelim,
+    XmlTextRef,
 };
-use yrs::{Options, StateVector};
-use yrs::{SubscriptionId, Xml};
 
 /// Flag used by `YInput` and `YOutput` to tag boolean values.
 pub const Y_JSON_BOOL: i8 = -8;
@@ -555,10 +554,6 @@ pub unsafe extern "C" fn ymap(doc: *mut Doc, name: *const c_char) -> *mut Branch
 /// Gets or creates a new shared `YXmlElement` data type instance as a root-level type of a given
 /// document. This structure can later be accessed using its `name`, which must be a null-terminated
 /// UTF-8 compatible string.
-///
-/// Use [yxmlelem_destroy] in order to release pointer returned that way - keep in mind that this
-/// will not remove `YXmlElement` instance from the document itself (once created it'll last for
-/// the entire lifecycle of a document).
 #[no_mangle]
 pub unsafe extern "C" fn yxmlelem(doc: *mut Doc, name: *const c_char) -> *mut Branch {
     assert!(!doc.is_null());
@@ -571,13 +566,24 @@ pub unsafe extern "C" fn yxmlelem(doc: *mut Doc, name: *const c_char) -> *mut Br
         .into_raw_branch()
 }
 
+/// Gets or creates a new shared `YXmlElement` data type instance as a root-level type of a given
+/// document. This structure can later be accessed using its `name`, which must be a null-terminated
+/// UTF-8 compatible string.
+#[no_mangle]
+pub unsafe extern "C" fn yxmlfragment(doc: *mut Doc, name: *const c_char) -> *mut Branch {
+    assert!(!doc.is_null());
+    assert!(!name.is_null());
+
+    let name = CStr::from_ptr(name).to_str().unwrap();
+    doc.as_mut()
+        .unwrap()
+        .get_xml_fragment(name)
+        .into_raw_branch()
+}
+
 /// Gets or creates a new shared `YXmlText` data type instance as a root-level type of a given
 /// document. This structure can later be accessed using its `name`, which must be a null-terminated
 /// UTF-8 compatible string.
-///
-/// Use [yxmltext_destroy] in order to release pointer returned that way - keep in mind that this
-/// will not remove `YXmlText` instance from the document itself (once created it'll last for
-/// the entire lifecycle of a document).
 #[no_mangle]
 pub unsafe extern "C" fn yxmltext(doc: *mut Doc, name: *const c_char) -> *mut Branch {
     assert!(!doc.is_null());
@@ -939,7 +945,7 @@ pub unsafe extern "C" fn ytext_string(txt: *const Branch, txn: *const Transactio
 
     let txn = txn.as_ref().unwrap();
     let txt = TextRef::from_raw_branch(txt);
-    let str = txt.to_string(txn);
+    let str = txt.get_string(txn);
     CString::new(str).unwrap().into_raw()
 }
 
@@ -1441,7 +1447,7 @@ pub unsafe extern "C" fn yxmlelem_string(
     let txn = txn.as_ref().unwrap();
     let xml = XmlElementRef::from_raw_branch(xml);
 
-    let str = xml.to_string(txn);
+    let str = xml.get_string(txn);
     CString::new(str).unwrap().into_raw()
 }
 
@@ -1656,7 +1662,8 @@ pub unsafe extern "C" fn yxmlelem_parent(xml: *const Branch) -> *mut Branch {
     let xml = XmlElementRef::from_raw_branch(xml);
 
     if let Some(parent) = xml.parent() {
-        parent.into_raw_branch()
+        let branch = parent.as_ptr();
+        branch.deref() as *const Branch as *mut Branch
     } else {
         std::ptr::null_mut()
     }
@@ -1873,7 +1880,7 @@ pub unsafe extern "C" fn yxmltext_string(
     let txn = txn.as_ref().unwrap();
     let txt = XmlTextRef::from_raw_branch(txt);
 
-    let str = txt.to_string(txn);
+    let str = txt.get_string(txn);
     CString::new(str).unwrap().into_raw()
 }
 
@@ -3269,8 +3276,12 @@ impl YEvent {
                     map: YMapEvent::new(e, txn),
                 },
             },
-            Event::XmlElement(e) => YEvent {
-                tag: Y_XML_ELEM,
+            Event::XmlFragment(e) => YEvent {
+                tag: if let XmlNode::Fragment(_) = e.target() {
+                    Y_XML_FRAG
+                } else {
+                    Y_XML_ELEM
+                },
                 content: YEventContent {
                     xml_elem: YXmlEvent::new(e, txn),
                 },
