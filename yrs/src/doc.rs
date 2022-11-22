@@ -9,8 +9,8 @@ use crate::types::{
 use crate::{
     ArrayRef, MapRef, Observer, SubscriptionId, TextRef, XmlElementRef, XmlFragmentRef, XmlTextRef,
 };
+use atomic_refcell::{AtomicRef, AtomicRefMut, BorrowError, BorrowMutError};
 use rand::Rng;
-use std::cell::{BorrowError, BorrowMutError, Ref, RefMut};
 use std::sync::Arc;
 use thiserror::Error;
 
@@ -53,6 +53,7 @@ pub struct Doc {
 }
 
 unsafe impl Send for Doc {}
+unsafe impl Sync for Doc {}
 
 impl Doc {
     /// Creates a new document with a randomized client identifier.
@@ -353,7 +354,7 @@ impl Transact for Branch {
         let store = self.store.as_ref().unwrap();
         if let Some(store) = store.upgrade() {
             let store_ref = store.try_borrow()?;
-            let store_ref: Ref<'a, Store> = unsafe { std::mem::transmute(store_ref) };
+            let store_ref: AtomicRef<'a, Store> = unsafe { std::mem::transmute(store_ref) };
             Ok(Transaction::new(store_ref))
         } else {
             Err(TransactionAcqError::DocumentDropped)
@@ -364,7 +365,7 @@ impl Transact for Branch {
         let store = self.store.as_ref().unwrap();
         if let Some(store) = store.upgrade() {
             let store_ref = store.try_borrow_mut()?;
-            let store_ref: RefMut<'a, Store> = unsafe { std::mem::transmute(store_ref) };
+            let store_ref: AtomicRefMut<'a, Store> = unsafe { std::mem::transmute(store_ref) };
             Ok(TransactionMut::new(store_ref))
         } else {
             Err(TransactionAcqError::DocumentDropped)
@@ -375,11 +376,23 @@ impl Transact for Branch {
 #[derive(Error, Debug)]
 pub enum TransactionAcqError {
     #[error("Failed to acquire read-only transaction. Drop read-write transaction and retry.")]
-    SharedAcqFailed(#[from] BorrowError),
+    SharedAcqFailed(BorrowError),
     #[error("Failed to acquire read-write transaction. Drop other transactions and retry.")]
-    ExclusiveAcqFailed(#[from] BorrowMutError),
+    ExclusiveAcqFailed(BorrowMutError),
     #[error("All references to a parent document containing this structure has been dropped.")]
     DocumentDropped,
+}
+
+impl From<BorrowError> for TransactionAcqError {
+    fn from(e: BorrowError) -> Self {
+        TransactionAcqError::SharedAcqFailed(e)
+    }
+}
+
+impl From<BorrowMutError> for TransactionAcqError {
+    fn from(e: BorrowMutError) -> Self {
+        TransactionAcqError::ExclusiveAcqFailed(e)
+    }
 }
 
 impl<T> Transact for T

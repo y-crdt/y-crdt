@@ -7,13 +7,13 @@ use crate::types::{Branch, BranchPtr, Path, PathSegment, TypeRefs};
 use crate::update::PendingUpdate;
 use crate::updates::encoder::{Encode, Encoder};
 use crate::{Observer, OffsetKind, Snapshot, TransactionMut, UpdateEvent};
+use atomic_refcell::{AtomicRef, AtomicRefCell, AtomicRefMut, BorrowError, BorrowMutError};
 use lib0::error::Error;
-use std::cell::{BorrowError, BorrowMutError, Ref, RefCell, RefMut};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::ops::Deref;
-use std::rc::{Rc, Weak};
-use std::sync::Arc;
+use std::rc::Rc;
+use std::sync::{Arc, Weak};
 
 /// Store is a core element of a document. It contains all of the information, like block store
 /// map of root types, pending updates waiting to be applied once a missing update information
@@ -342,24 +342,24 @@ impl std::fmt::Display for Store {
 
 #[repr(transparent)]
 #[derive(Debug, Clone)]
-pub(crate) struct StoreRef(Rc<RefCell<Store>>);
+pub(crate) struct StoreRef(Arc<AtomicRefCell<Store>>);
 
 impl StoreRef {
-    pub fn try_borrow(&self) -> Result<Ref<Store>, BorrowError> {
+    pub fn try_borrow(&self) -> Result<AtomicRef<Store>, BorrowError> {
         self.0.try_borrow()
     }
 
-    pub fn try_borrow_mut(&self) -> Result<RefMut<Store>, BorrowMutError> {
+    pub fn try_borrow_mut(&self) -> Result<AtomicRefMut<Store>, BorrowMutError> {
         self.0.try_borrow_mut()
     }
 
-    pub fn weak_ref(&self) -> Weak<RefCell<Store>> {
-        Rc::downgrade(&self.0)
+    pub fn weak_ref(&self) -> Weak<AtomicRefCell<Store>> {
+        Arc::downgrade(&self.0)
     }
 }
 
 impl From<Store> for StoreRef {
     fn from(store: Store) -> Self {
-        StoreRef(Rc::new(RefCell::new(store)))
+        StoreRef(Arc::new(AtomicRefCell::new(store)))
     }
 }

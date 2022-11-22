@@ -1,4 +1,4 @@
-use crate::block::{Block, BlockPtr, BlockSlice, ClientID, Item, ID};
+use crate::block::{Block, BlockPtr, BlockSlice, ClientID, ID};
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::client_hasher::ClientHasher;

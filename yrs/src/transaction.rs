@@ -1,5 +1,4 @@
 use crate::*;
-use std::cell::{Ref, RefMut};
 
 use crate::block::{Block, BlockPtr, Item, ItemContent, Prelim, ID};
 use crate::block_store::{Snapshot, StateVector};
@@ -8,6 +7,7 @@ use crate::id_set::DeleteSet;
 use crate::store::Store;
 use crate::types::{Branch, BranchPtr, Event, Events, TypePtr, Value};
 use crate::update::Update;
+use atomic_refcell::{AtomicRef, AtomicRefMut};
 use lib0::error::Error;
 use std::collections::{HashMap, HashSet};
 use std::ops::{Deref, DerefMut};
@@ -86,11 +86,11 @@ pub trait WriteTxn: Sized {
 
 #[derive(Debug)]
 pub struct Transaction<'doc> {
-    store: Ref<'doc, Store>,
+    store: AtomicRef<'doc, Store>,
 }
 
 impl<'doc> Transaction<'doc> {
-    pub(crate) fn new(store: Ref<'doc, Store>) -> Self {
+    pub(crate) fn new(store: AtomicRef<'doc, Store>) -> Self {
         Transaction { store }
     }
 }
@@ -103,7 +103,7 @@ impl<'doc> ReadTxn for Transaction<'doc> {
 }
 
 pub struct TransactionMut<'doc> {
-    pub(crate) store: RefMut<'doc, Store>,
+    pub(crate) store: AtomicRefMut<'doc, Store>,
     /// State vector of a current transaction at the moment of its creation.
     pub before_state: StateVector,
     /// Current state vector of a transaction, which includes all performed updates.
@@ -142,7 +142,7 @@ impl<'doc> Drop for TransactionMut<'doc> {
 }
 
 impl<'doc> TransactionMut<'doc> {
-    pub(crate) fn new(store: RefMut<'doc, Store>) -> Self {
+    pub(crate) fn new(store: AtomicRefMut<'doc, Store>) -> Self {
         let begin_timestamp = store.blocks.get_state_vector();
         TransactionMut {
             store,
