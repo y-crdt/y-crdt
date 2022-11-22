@@ -2,6 +2,7 @@ use crate::doc::OffsetKind;
 use crate::moving::Move;
 use crate::store::Store;
 use crate::transaction::TransactionMut;
+use crate::types::text::update_current_attributes;
 use crate::types::{
     Attrs, Branch, BranchPtr, TypePtr, Value, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
     TYPE_REFS_UNDEFINED, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_HOOK,
@@ -850,7 +851,7 @@ impl ItemPosition {
                         let attrs = self
                             .current_attrs
                             .get_or_insert_with(|| Box::new(Attrs::new()));
-                        Text::update_current_attributes(attrs.as_mut(), key, value.as_ref());
+                        update_current_attributes(attrs.as_mut(), key, value.as_ref());
                     }
                     _ => {}
                 }

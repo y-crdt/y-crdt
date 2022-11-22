@@ -6,10 +6,11 @@ use crate::types::{
     Branch, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT, TYPE_REFS_XML_ELEMENT,
     TYPE_REFS_XML_TEXT,
 };
-use crate::{Array, Map, Observer, SubscriptionId, Text, XmlElement, XmlText};
+use crate::{ArrayRef, MapRef, Observer, SubscriptionId, TextRef, XmlElementRef, XmlTextRef};
 use rand::Rng;
-use std::cell::{BorrowError, BorrowMutError};
+use std::cell::{BorrowError, BorrowMutError, Ref, RefMut};
 use std::sync::Arc;
+use thiserror::Error;
 
 /// A Yrs document type. Documents are most important units of collaborative resources management.
 /// All shared collections live within a scope of their corresponding documents. All updates are
@@ -22,7 +23,7 @@ use std::sync::Arc;
 /// A basic workflow sample:
 ///
 /// ```
-/// use yrs::{Doc, ReadTxn, StateVector, Transact, Update};
+/// use yrs::{Doc, ReadTxn, StateVector, Text, Transact, Update};
 /// use yrs::updates::decoder::Decode;
 /// use yrs::updates::encoder::Encode;
 ///
@@ -80,13 +81,13 @@ impl Doc {
     /// If a structure under defined `name` already existed, but its type was different it will be
     /// reinterpreted as a text (in such case a sequence component of complex data type will be
     /// interpreted as a list of text chunks).
-    pub fn get_text(&self, name: &str) -> Text {
+    pub fn get_text(&self, name: &str) -> TextRef {
         let mut r = self.store.try_borrow_mut().expect(
             "tried to get a root level type while another transaction on the document is open",
         );
         let mut c = r.get_or_create_type(name, None, TYPE_REFS_TEXT);
-        c.store = Some(self.store.clone());
-        Text::from(c)
+        c.store = Some(self.store.weak_ref());
+        TextRef::from(c)
     }
 
     /// Returns a [Map] data structure stored under a given `name`. Maps are used to store key-value
@@ -100,13 +101,13 @@ impl Doc {
     /// If a structure under defined `name` already existed, but its type was different it will be
     /// reinterpreted as a map (in such case a map component of complex data type will be
     /// interpreted as native map).
-    pub fn get_map(&self, name: &str) -> Map {
+    pub fn get_map(&self, name: &str) -> MapRef {
         let mut r = self.store.try_borrow_mut().expect(
             "tried to get a root level type while another transaction on the document is open",
         );
         let mut c = r.get_or_create_type(name, None, TYPE_REFS_MAP);
-        c.store = Some(self.store.clone());
-        Map::from(c)
+        c.store = Some(self.store.weak_ref());
+        MapRef::from(c)
     }
 
     /// Returns an [Array] data structure stored under a given `name`. Array structures are used for
@@ -119,13 +120,13 @@ impl Doc {
     /// If a structure under defined `name` already existed, but its type was different it will be
     /// reinterpreted as an array (in such case a sequence component of complex data type will be
     /// interpreted as a list of inserted values).
-    pub fn get_array(&self, name: &str) -> Array {
+    pub fn get_array(&self, name: &str) -> ArrayRef {
         let mut r = self.store.try_borrow_mut().expect(
             "tried to get a root level type while another transaction on the document is open",
         );
         let mut c = r.get_or_create_type(name, None, TYPE_REFS_ARRAY);
-        c.store = Some(self.store.clone());
-        Array::from(c)
+        c.store = Some(self.store.weak_ref());
+        ArrayRef::from(c)
     }
 
     /// Returns a [XmlElement] data structure stored under a given `name`. XML elements represent
@@ -140,13 +141,13 @@ impl Doc {
     /// reinterpreted as a XML element (in such case a map component of complex data type will be
     /// interpreted as map of its attributes, while a sequence component - as a list of its child
     /// XML nodes).
-    pub fn get_xml_element(&self, name: &str) -> XmlElement {
+    pub fn get_xml_element(&self, name: &str) -> XmlElementRef {
         let mut r = self.store.try_borrow_mut().expect(
             "tried to get a root level type while another transaction on the document is open",
         );
         let mut c = r.get_or_create_type(name, Some("UNDEFINED".into()), TYPE_REFS_XML_ELEMENT);
-        c.store = Some(self.store.clone());
-        XmlElement::from(c)
+        c.store = Some(self.store.weak_ref());
+        XmlElementRef::from(c)
     }
 
     /// Returns a [XmlText] data structure stored under a given `name`. Text structures are used for
@@ -159,13 +160,13 @@ impl Doc {
     /// If a structure under defined `name` already existed, but its type was different it will be
     /// reinterpreted as a text (in such case a sequence component of complex data type will be
     /// interpreted as a list of text chunks).
-    pub fn get_xml_text(&self, name: &str) -> XmlText {
+    pub fn get_xml_text(&self, name: &str) -> XmlTextRef {
         let mut r = self.store.try_borrow_mut().expect(
             "tried to get a root level type while another transaction on the document is open",
         );
         let mut c = r.get_or_create_type(name, None, TYPE_REFS_XML_TEXT);
-        c.store = Some(self.store.clone());
-        XmlText::from(c)
+        c.store = Some(self.store.weak_ref());
+        XmlTextRef::from(c)
     }
 
     /// Subscribe callback function for any changes performed within transaction scope. These
@@ -295,58 +296,79 @@ pub enum OffsetKind {
 pub trait Transact {
     /// Creates a transaction used for all kind of block store operations.
     /// Transaction cleanups & calling event handles happen when the transaction struct is dropped.
-    fn try_transact(&self) -> Result<Transaction, BorrowError>;
+    fn try_transact(&self) -> Result<Transaction, TransactionAcqError>;
 
     /// Creates a transaction used for all kind of block store operations.
     /// Transaction cleanups & calling event handles happen when the transaction struct is dropped.
-    fn try_transact_mut(&self) -> Result<TransactionMut, BorrowMutError>;
+    fn try_transact_mut(&self) -> Result<TransactionMut, TransactionAcqError>;
 
     /// Creates a transaction used for all kind of block store operations.
     /// Transaction cleanups & calling event handles happen when the transaction struct is dropped.
     fn transact(&self) -> Transaction {
-        self.try_transact().expect("cannot read document store contents because another read-write transaction is in progress")
+        self.try_transact().unwrap()
     }
 
     /// Creates a transaction used for all kind of block store operations.
     /// Transaction cleanups & calling event handles happen when the transaction struct is dropped.
     fn transact_mut(&self) -> TransactionMut {
-        self.try_transact_mut()
-            .expect("only one read-write transaction can be active at the same time")
+        self.try_transact_mut().unwrap()
     }
 }
 
 impl Transact for Doc {
-    fn try_transact(&self) -> Result<Transaction, BorrowError> {
+    fn try_transact(&self) -> Result<Transaction, TransactionAcqError> {
         Ok(Transaction::new(self.store.try_borrow()?))
     }
 
-    fn try_transact_mut(&self) -> Result<TransactionMut, BorrowMutError> {
+    fn try_transact_mut(&self) -> Result<TransactionMut, TransactionAcqError> {
         Ok(TransactionMut::new(self.store.try_borrow_mut()?))
     }
 }
 
 impl Transact for Branch {
-    fn try_transact(&self) -> Result<Transaction, BorrowError> {
+    fn try_transact<'a>(&'a self) -> Result<Transaction<'a>, TransactionAcqError> {
         let store = self.store.as_ref().unwrap();
-        Ok(Transaction::new(store.try_borrow()?))
+        if let Some(store) = store.upgrade() {
+            let store_ref = store.try_borrow()?;
+            let store_ref: Ref<'a, Store> = unsafe { std::mem::transmute(store_ref) };
+            Ok(Transaction::new(store_ref))
+        } else {
+            Err(TransactionAcqError::DocumentDropped)
+        }
     }
 
-    fn try_transact_mut(&self) -> Result<TransactionMut, BorrowMutError> {
+    fn try_transact_mut<'a>(&'a self) -> Result<TransactionMut<'a>, TransactionAcqError> {
         let store = self.store.as_ref().unwrap();
-        Ok(TransactionMut::new(store.try_borrow_mut()?))
+        if let Some(store) = store.upgrade() {
+            let store_ref = store.try_borrow_mut()?;
+            let store_ref: RefMut<'a, Store> = unsafe { std::mem::transmute(store_ref) };
+            Ok(TransactionMut::new(store_ref))
+        } else {
+            Err(TransactionAcqError::DocumentDropped)
+        }
     }
+}
+
+#[derive(Error, Debug)]
+pub enum TransactionAcqError {
+    #[error("Failed to acquire read-only transaction. Drop read-write transaction and retry.")]
+    SharedAcqFailed(#[from] BorrowError),
+    #[error("Failed to acquire read-write transaction. Drop other transactions and retry.")]
+    ExclusiveAcqFailed(#[from] BorrowMutError),
+    #[error("All references to a parent document containing this structure has been dropped.")]
+    DocumentDropped,
 }
 
 impl<T> Transact for T
 where
     T: AsRef<Branch>,
 {
-    fn try_transact(&self) -> Result<Transaction, BorrowError> {
+    fn try_transact(&self) -> Result<Transaction, TransactionAcqError> {
         let branch = self.as_ref();
         branch.try_transact()
     }
 
-    fn try_transact_mut(&self) -> Result<TransactionMut, BorrowMutError> {
+    fn try_transact_mut(&self) -> Result<TransactionMut, TransactionAcqError> {
         let branch = self.as_ref();
         branch.try_transact_mut()
     }
@@ -361,7 +383,9 @@ mod test {
     use crate::update::Update;
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
-    use crate::{DeleteSet, Doc, Options, PrelimArray, StateVector, SubscriptionId, Transact};
+    use crate::{
+        Array, ArrayPrelim, DeleteSet, Doc, Options, StateVector, SubscriptionId, Text, Transact,
+    };
     use lib0::any::Any;
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
@@ -1059,7 +1083,7 @@ mod test {
         {
             let root = d1.get_array("array");
             let mut txn = d1.transact_mut();
-            root.push_back(&mut txn, PrelimArray::from(["A"]));
+            root.push_back(&mut txn, ArrayPrelim::from(["A"]));
         }
 
         exchange_updates(&[&d1, &d2, &d3]);

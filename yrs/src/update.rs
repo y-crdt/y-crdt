@@ -1021,7 +1021,7 @@ mod test {
     use crate::types::TypePtr;
     use crate::update::{BlockCarrier, Update};
     use crate::updates::decoder::{Decode, DecoderV1};
-    use crate::{Doc, Transact, ID};
+    use crate::{Doc, Text, Transact, ID};
     use lib0::decoding::Cursor;
 
     #[test]

@@ -1,13 +1,14 @@
 use crate::block::{Block, BlockPtr, Item, ItemContent, ItemPosition, Prelim};
 use crate::block_store::Snapshot;
 use crate::transaction::TransactionMut;
-use crate::types::{Attrs, Branch, BranchPtr, Delta, Observers, Path, Value, TYPE_REFS_TEXT};
+use crate::types::{
+    Attrs, Branch, BranchPtr, Delta, EventHandler, Observers, Path, Value, TYPE_REFS_TEXT,
+};
 use crate::*;
 use lib0::any::Any;
 use std::cell::UnsafeCell;
 use std::collections::HashMap;
 use std::ops::{Deref, DerefMut};
-use std::sync::Arc;
 
 /// A shared data type used for collaborative text editing. It enables multiple users to add and
 /// remove chunks of text in efficient manner. This type is internally represented as a mutable
@@ -24,15 +25,34 @@ use std::sync::Arc;
 /// unique document id to determine correct and consistent ordering.
 #[repr(transparent)]
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub struct Text(BranchPtr);
+pub struct TextRef(BranchPtr);
 
-unsafe impl Send for Text {}
-unsafe impl Sync for Text {}
+impl Text for TextRef {}
 
-impl Text {
+impl Observable for TextRef {
+    type Event = TextEvent;
+
+    fn try_observer(&self) -> Option<&EventHandler<Self::Event>> {
+        if let Some(Observers::Text(eh)) = self.0.observers.as_ref() {
+            Some(eh)
+        } else {
+            None
+        }
+    }
+
+    fn try_observer_mut(&mut self) -> Option<&mut EventHandler<Self::Event>> {
+        if let Observers::Text(eh) = self.0.observers.get_or_insert_with(Observers::text) {
+            Some(eh)
+        } else {
+            None
+        }
+    }
+}
+
+pub trait Text: AsRef<Branch> {
     /// Converts context of this text data structure into a single string value.
-    pub fn to_string<T: ReadTxn>(&self, txn: &T) -> String {
-        let mut start = self.0.start;
+    fn to_string<T: ReadTxn>(&self, txn: &T) -> String {
+        let mut start = self.as_ref().start;
         let mut s = String::new();
         while let Some(Block::Item(item)) = start.as_deref() {
             if !item.is_deleted() {
@@ -46,97 +66,8 @@ impl Text {
     }
 
     /// Returns a number of characters visible in a current text data structure.
-    pub fn len<T: ReadTxn>(&self, txn: &T) -> u32 {
-        self.0.content_len
-    }
-
-    pub(crate) fn inner(&self) -> BranchPtr {
-        self.0
-    }
-
-    pub(crate) fn find_position(
-        &self,
-        txn: &mut TransactionMut,
-        index: u32,
-    ) -> Option<ItemPosition> {
-        let mut pos = {
-            let inner = self.as_ref();
-            ItemPosition {
-                parent: self.0.into(),
-                left: None,
-                right: inner.start,
-                index: 0,
-                current_attrs: None,
-            }
-        };
-
-        let mut format_ptrs = HashMap::new();
-        let store = txn.store_mut();
-        let encoding = store.options.offset_kind;
-        let mut remaining = index;
-        while let Some(mut right_ptr) = pos.right {
-            if remaining == 0 {
-                break;
-            }
-
-            if let Block::Item(right) = right_ptr.deref_mut() {
-                if !right.is_deleted() {
-                    match &right.content {
-                        ItemContent::Format(key, value) => {
-                            if let Any::Null = value.as_ref() {
-                                format_ptrs.remove(key);
-                            } else {
-                                format_ptrs.insert(key.clone(), pos.right.clone());
-                            }
-                        }
-                        _ => {
-                            let mut block_len = right.len();
-                            let content_len = right.content_len(encoding);
-                            if remaining < content_len {
-                                // split right item
-                                let offset = if let ItemContent::String(str) = &right.content {
-                                    str.block_offset(remaining, encoding)
-                                } else {
-                                    remaining
-                                };
-                                store
-                                    .blocks
-                                    .split_block(right_ptr, offset, OffsetKind::Utf16)
-                                    .unwrap();
-                                block_len -= offset;
-                                remaining = 0;
-                            } else {
-                                remaining -= content_len;
-                            }
-                            pos.index += block_len;
-                        }
-                    }
-                }
-                pos.left = pos.right.take();
-                pos.right = if let Some(Block::Item(item)) = pos.left.as_deref() {
-                    item.right
-                } else {
-                    None
-                };
-            } else {
-                return None;
-            }
-        }
-
-        for (_, block_ptr) in format_ptrs {
-            if let Some(mut ptr) = block_ptr {
-                if let Block::Item(item) = ptr.deref_mut() {
-                    if let ItemContent::Format(key, value) = &item.content {
-                        let attrs = pos
-                            .current_attrs
-                            .get_or_insert_with(|| Box::new(Attrs::new()));
-                        Text::update_current_attributes(attrs, key, value.as_ref());
-                    }
-                }
-            }
-        }
-
-        Some(pos)
+    fn len<T: ReadTxn>(&self, txn: &T) -> u32 {
+        self.as_ref().content_len
     }
 
     /// Inserts a `chunk` of text at a given `index`.
@@ -145,11 +76,12 @@ impl Text {
     /// the end of it.
     ///
     /// This method will panic if provided `index` is greater than the length of a current text.
-    pub fn insert(&self, txn: &mut TransactionMut, index: u32, chunk: &str) {
+    fn insert(&self, txn: &mut TransactionMut, index: u32, chunk: &str) {
         if chunk.is_empty() {
             return;
         }
-        if let Some(mut pos) = self.find_position(txn, index) {
+        let this = BranchPtr::from(self.as_ref());
+        if let Some(mut pos) = find_position(this, txn, index) {
             let value = crate::block::PrelimString(chunk.into());
             while let Some(right) = pos.right.as_ref() {
                 if right.is_deleted() {
@@ -173,25 +105,26 @@ impl Text {
     /// formatting blocks.
     ///
     /// This method will panic if provided `index` is greater than the length of a current text.
-    pub fn insert_with_attributes(
+    fn insert_with_attributes(
         &self,
         txn: &mut TransactionMut,
         index: u32,
         chunk: &str,
         mut attributes: Attrs,
     ) {
-        if let Some(mut pos) = self.find_position(txn, index) {
+        let this = BranchPtr::from(self.as_ref());
+        if let Some(mut pos) = find_position(this, txn, index) {
             pos.unset_missing(&mut attributes);
-            Text::minimize_attr_changes(&mut pos, &attributes);
-            let negated_attrs = self.insert_attributes(txn, &mut pos, attributes);
+            minimize_attr_changes(&mut pos, &attributes);
+            let negated_attrs = insert_attributes(this, txn, &mut pos, attributes);
 
-            let value = crate::block::PrelimString(chunk.into());
+            let value = block::PrelimString(chunk.into());
             let item = txn.create_item(&pos, value, None);
 
             pos.right = Some(item);
             pos.forward();
 
-            self.insert_negated_attributes(txn, &mut pos, negated_attrs);
+            insert_negated_attributes(this, txn, &mut pos, negated_attrs);
         } else {
             panic!("The type or the position doesn't exist!");
         }
@@ -204,8 +137,9 @@ impl Text {
     /// the end of it.
     ///
     /// This method will panic if provided `index` is greater than the length of a current text.
-    pub fn insert_embed(&self, txn: &mut TransactionMut, index: u32, content: Any) {
-        if let Some(pos) = self.find_position(txn, index) {
+    fn insert_embed(&self, txn: &mut TransactionMut, index: u32, content: Any) {
+        let this = BranchPtr::from(self.as_ref());
+        if let Some(pos) = find_position(this, txn, index) {
             let value = crate::block::PrelimEmbed(content);
             txn.create_item(&pos, value, None);
         } else {
@@ -221,17 +155,18 @@ impl Text {
     /// a formatting blocks.
     ///
     /// This method will panic if provided `index` is greater than the length of a current text.
-    pub fn insert_embed_with_attributes(
+    fn insert_embed_with_attributes(
         &self,
         txn: &mut TransactionMut,
         index: u32,
         embed: Any,
         mut attributes: Attrs,
     ) {
-        if let Some(mut pos) = self.find_position(txn, index) {
+        let this = BranchPtr::from(self.as_ref());
+        if let Some(mut pos) = find_position(this, txn, index) {
             pos.unset_missing(&mut attributes);
-            Text::minimize_attr_changes(&mut pos, &attributes);
-            let negated_attrs = self.insert_attributes(txn, &mut pos, attributes);
+            minimize_attr_changes(&mut pos, &attributes);
+            let negated_attrs = insert_attributes(this, txn, &mut pos, attributes);
 
             let value = crate::block::PrelimEmbed(embed);
             let item = txn.create_item(&pos, value, None);
@@ -239,14 +174,14 @@ impl Text {
             pos.right = Some(item);
             pos.forward();
 
-            self.insert_negated_attributes(txn, &mut pos, negated_attrs);
+            insert_negated_attributes(this, txn, &mut pos, negated_attrs);
         } else {
             panic!("The type or the position doesn't exist!");
         }
     }
 
     /// Appends a given `chunk` of text at the end of a current text structure.
-    pub fn push(&self, txn: &mut TransactionMut, chunk: &str) {
+    fn push(&self, txn: &mut TransactionMut, chunk: &str) {
         let idx = self.len(txn);
         self.insert(txn, idx, chunk)
     }
@@ -254,343 +189,27 @@ impl Text {
     /// Removes up to a `len` characters from a current text structure, starting at given `index`.
     /// This method panics in case when not all expected characters were removed (due to
     /// insufficient number of characters to remove) or `index` is outside of the bounds of text.
-    pub fn remove_range(&self, txn: &mut TransactionMut, index: u32, len: u32) {
-        if let Some(pos) = self.find_position(txn, index) {
-            Self::remove(txn, pos, len)
+    fn remove_range(&self, txn: &mut TransactionMut, index: u32, len: u32) {
+        let this = BranchPtr::from(self.as_ref());
+        if let Some(pos) = find_position(this, txn, index) {
+            remove(txn, pos, len)
         } else {
             panic!("The type or the position doesn't exist!");
         }
     }
 
-    fn remove(txn: &mut TransactionMut, mut pos: ItemPosition, len: u32) {
-        let encoding = txn.store().options.offset_kind;
-        let mut remaining = len;
-        let start = pos.right.clone();
-        let start_attrs = pos.current_attrs.clone();
-        while let Some(Block::Item(item)) = pos.right.as_deref() {
-            if remaining == 0 {
-                break;
-            }
-
-            if !item.is_deleted() {
-                match &item.content {
-                    ItemContent::Embed(_) | ItemContent::String(_) | ItemContent::Type(_) => {
-                        let content_len = item.content_len(encoding);
-                        let ptr = pos.right.unwrap();
-                        if remaining < content_len {
-                            // split block
-                            let offset = if let ItemContent::String(s) = &item.content {
-                                s.block_offset(remaining, encoding)
-                            } else {
-                                len
-                            };
-                            remaining = 0;
-                            txn.store_mut()
-                                .blocks
-                                .split_block(ptr, offset, OffsetKind::Utf16);
-                        } else {
-                            remaining -= content_len;
-                        };
-                        txn.delete(ptr);
-                    }
-                    _ => {}
-                }
-            }
-
-            pos.forward();
-        }
-
-        if remaining > 0 {
-            panic!("Couldn't remove {} elements from an array. Only {} of them were successfully removed.", len, len - remaining);
-        }
-
-        if let (Some(start), Some(start_attrs), Some(end_attrs)) =
-            (start, start_attrs, pos.current_attrs.as_mut())
-        {
-            Self::clean_format_gap(
-                txn,
-                Some(start),
-                pos.right,
-                start_attrs.as_ref(),
-                end_attrs.as_mut(),
-            );
-        }
-    }
-
-    fn clean_format_gap(
-        txn: &mut TransactionMut,
-        mut start: Option<BlockPtr>,
-        mut end: Option<BlockPtr>,
-        start_attrs: &Attrs,
-        end_attrs: &mut Attrs,
-    ) -> u32 {
-        while let Some(Block::Item(item)) = end.as_deref() {
-            match &item.content {
-                ItemContent::String(_) | ItemContent::Embed(_) => break,
-                ItemContent::Format(key, value) if !item.is_deleted() => {
-                    Self::update_current_attributes(end_attrs, key.as_ref(), value);
-                }
-                _ => {}
-            }
-            end = item.right.clone();
-        }
-
-        let mut cleanups = 0;
-        while start != end {
-            if let Some(Block::Item(item)) = start.as_deref() {
-                let right = item.right.clone();
-                if !item.is_deleted() {
-                    if let ItemContent::Format(key, value) = &item.content {
-                        let e = end_attrs.get(key).unwrap_or(&Any::Null);
-                        let s = start_attrs.get(key).unwrap_or(&Any::Null);
-                        if e != value.as_ref() || s == value.as_ref() {
-                            txn.delete(start.unwrap());
-                            cleanups += 1;
-                        }
-                    }
-                }
-                start = right;
-            } else {
-                break;
-            }
-        }
-        cleanups
-    }
-
     /// Wraps an existing piece of text within a range described by `index`-`len` parameters with
     /// formatting blocks containing provided `attributes` metadata.
-    pub fn format(&self, txn: &mut TransactionMut, index: u32, len: u32, attributes: Attrs) {
-        if let Some(pos) = self.find_position(txn, index) {
-            self.insert_format(txn, pos, len, attributes)
+    fn format(&self, txn: &mut TransactionMut, index: u32, len: u32, attributes: Attrs) {
+        let this = BranchPtr::from(self.as_ref());
+        if let Some(pos) = find_position(this, txn, index) {
+            insert_format(this, txn, pos, len, attributes)
         } else {
             panic!("Index {} is outside of the range.", index);
         }
     }
 
-    fn insert_format(
-        &self,
-        txn: &mut TransactionMut,
-        mut pos: ItemPosition,
-        mut len: u32,
-        attrs: Attrs,
-    ) {
-        Self::minimize_attr_changes(&mut pos, &attrs);
-        let mut negated_attrs = self.insert_attributes(txn, &mut pos, attrs.clone()); //TODO: remove `attrs.clone()`
-        let encoding = txn.store().options.offset_kind;
-        while let Some(right) = pos.right {
-            if len <= 0 {
-                break;
-            }
-
-            if let Block::Item(item) = right.deref() {
-                if !item.is_deleted() {
-                    match &item.content {
-                        ItemContent::Format(key, value) => {
-                            if let Some(v) = attrs.get(key) {
-                                if v == value.as_ref() {
-                                    negated_attrs.remove(key);
-                                } else {
-                                    negated_attrs.insert(key.clone(), *value.clone());
-                                }
-                                txn.delete(right);
-                            }
-                        }
-                        ItemContent::String(s) => {
-                            let content_len = item.content_len(encoding);
-                            if len < content_len {
-                                // split block
-                                let offset = s.block_offset(len, encoding);
-                                let new_right = txn.store_mut().blocks.split_block(
-                                    right,
-                                    offset,
-                                    OffsetKind::Utf16,
-                                );
-                                pos.left = Some(right);
-                                pos.right = new_right;
-                                break;
-                            }
-                            len -= content_len;
-                        }
-                        _ => {
-                            let content_len = item.len();
-                            if len < content_len {
-                                let new_right = txn.store_mut().blocks.split_block(
-                                    right,
-                                    len,
-                                    OffsetKind::Utf16,
-                                );
-                                pos.left = Some(right);
-                                pos.right = new_right;
-                                break;
-                            }
-                            len -= content_len;
-                        }
-                    }
-                }
-            }
-
-            if !pos.forward() {
-                break;
-            }
-        }
-
-        self.insert_negated_attributes(txn, &mut pos, negated_attrs);
-    }
-
-    fn minimize_attr_changes(pos: &mut ItemPosition, attrs: &Attrs) {
-        // go right while attrs[right.key] === right.value (or right is deleted)
-        while let Some(Block::Item(i)) = pos.right.as_deref() {
-            if !i.is_deleted() {
-                if let ItemContent::Format(k, v) = &i.content {
-                    if let Some(v2) = attrs.get(k) {
-                        if (v.as_ref()).eq(v2) {
-                            pos.forward();
-                            continue;
-                        }
-                    }
-                }
-
-                break;
-            } else {
-                pos.forward();
-            }
-        }
-    }
-
-    fn insert_attributes(
-        &self,
-        txn: &mut TransactionMut,
-        pos: &mut ItemPosition,
-        attrs: Attrs,
-    ) -> Attrs {
-        let mut negated_attrs = HashMap::with_capacity(attrs.len());
-        let mut store = txn.store_mut();
-        for (k, v) in attrs {
-            let current_value = pos
-                .current_attrs
-                .as_ref()
-                .and_then(|a| a.get(&k))
-                .unwrap_or(&Any::Null);
-            if &v != current_value {
-                // save negated attribute (set null if currentVal undefined)
-                negated_attrs.insert(k.clone(), current_value.clone());
-
-                let client_id = store.options.client_id;
-                let parent = { self.0.into() };
-                let mut item = Item::new(
-                    ID::new(client_id, store.blocks.get_state(&client_id)),
-                    pos.left.clone(),
-                    pos.left.map(|ptr| ptr.last_id()),
-                    pos.right.clone(),
-                    pos.right.map(|ptr| ptr.id().clone()),
-                    parent,
-                    None,
-                    ItemContent::Format(k, v.into()),
-                );
-                let mut item_ptr = BlockPtr::from(&mut item);
-                pos.right = Some(item_ptr);
-                item_ptr.integrate(txn, 0);
-                let local_block_list = txn
-                    .store_mut()
-                    .blocks
-                    .get_client_blocks_mut(item.id().client);
-                local_block_list.push(item);
-
-                pos.forward();
-                store = txn.store_mut();
-            }
-        }
-        negated_attrs
-    }
-
-    fn insert_negated_attributes(
-        &self,
-        txn: &mut TransactionMut,
-        pos: &mut ItemPosition,
-        mut attrs: Attrs,
-    ) {
-        while let Some(Block::Item(item)) = pos.right.as_deref() {
-            if !item.is_deleted() {
-                if let ItemContent::Format(key, value) = &item.content {
-                    if let Some(curr_val) = attrs.get(key) {
-                        if curr_val == value.as_ref() {
-                            attrs.remove(key);
-                            pos.forward();
-                            continue;
-                        }
-                    }
-                }
-
-                break;
-            } else {
-                pos.forward();
-            }
-        }
-
-        let mut store = txn.store_mut();
-        for (k, v) in attrs {
-            let client_id = store.options.client_id;
-            let parent = { self.0.into() };
-            let mut item = Item::new(
-                ID::new(client_id, store.blocks.get_state(&client_id)),
-                pos.left.clone(),
-                pos.left.map(|ptr| ptr.last_id()),
-                pos.right.clone(),
-                pos.right.map(|ptr| ptr.id().clone()),
-                parent,
-                None,
-                ItemContent::Format(k, v.into()),
-            );
-            let mut item_ptr = BlockPtr::from(&mut item);
-            pos.right = Some(item_ptr);
-            item_ptr.integrate(txn, 0);
-
-            let local_block_list = txn
-                .store_mut()
-                .blocks
-                .get_client_blocks_mut(item.id().client);
-            local_block_list.push(item);
-
-            pos.forward();
-            store = txn.store_mut();
-        }
-    }
-
-    /// Subscribes a given callback to be triggered whenever current text is changed.
-    /// A callback is triggered whenever a transaction gets committed. This function does not
-    /// trigger if changes have been observed by nested shared collections.
-    ///
-    /// All text changes can be tracked by using [TextEvent::delta] method: keep in mind that delta
-    /// contains collection of individual characters rather than strings.
-    ///
-    /// Returns an [Observer] which, when dropped, will unsubscribe current callback.
-    pub fn observe<F>(&mut self, f: F) -> TextSubscription
-    where
-        F: Fn(&TransactionMut, &TextEvent) -> () + 'static,
-    {
-        if let Observers::Text(eh) = self.0.observers.get_or_insert_with(Observers::text) {
-            eh.subscribe(Arc::new(f))
-        } else {
-            panic!("Observed collection is of different type") //TODO: this should be Result::Err
-        }
-    }
-
-    /// Unsubscribes a previously subscribed event callback identified by given `subscription_id`.
-    pub fn unobserve(&mut self, subscription_id: SubscriptionId) {
-        if let Some(Observers::Text(eh)) = self.0.observers.as_mut() {
-            eh.unsubscribe(subscription_id);
-        }
-    }
-
-    pub(crate) fn update_current_attributes(attrs: &mut Attrs, key: &str, value: &Any) {
-        if let Any::Null = value {
-            attrs.remove(key);
-        } else {
-            attrs.insert(key.into(), value.clone());
-        }
-    }
-
-    pub fn diff<T, F>(&self, txn: &mut TransactionMut, compute_ychange: F) -> Vec<Diff<T>>
+    fn diff<T, F>(&self, txn: &mut TransactionMut, compute_ychange: F) -> Vec<Diff<T>>
     where
         F: Fn(YChange) -> T,
     {
@@ -598,7 +217,7 @@ impl Text {
     }
 
     /// Returns the Delta representation of this YText type.
-    pub fn diff_range<T, F>(
+    fn diff_range<T, F>(
         &self,
         txn: &mut TransactionMut,
         hi: Option<&Snapshot>,
@@ -677,7 +296,7 @@ impl Text {
         }
 
         let mut asm = DiffAssembler::new(compute_ychange);
-        let mut n = self.0.start;
+        let mut n = self.as_ref().start;
         while let Some(Block::Item(item)) = n.as_deref() {
             if seen(hi, item) || (lo.is_some() && seen(lo, item)) {
                 match &item.content {
@@ -708,11 +327,7 @@ impl Text {
                     ItemContent::Format(key, value) => {
                         if seen(hi, item) {
                             asm.pack_str();
-                            Self::update_current_attributes(
-                                &mut asm.curr_attrs,
-                                key,
-                                value.as_ref(),
-                            );
+                            update_current_attributes(&mut asm.curr_attrs, key, value.as_ref());
                         }
                     }
                     _ => {}
@@ -726,24 +341,397 @@ impl Text {
     }
 }
 
-pub type TextSubscription = crate::Subscription<Arc<dyn Fn(&TransactionMut, &TextEvent) -> ()>>;
-
-impl From<BranchPtr> for Text {
+impl From<BranchPtr> for TextRef {
     fn from(inner: BranchPtr) -> Self {
-        Text(inner)
+        TextRef(inner)
     }
 }
 
-impl AsRef<Branch> for Text {
+impl AsRef<Branch> for TextRef {
     fn as_ref(&self) -> &Branch {
         self.0.deref()
     }
 }
 
-impl AsMut<Branch> for Text {
+impl AsMut<Branch> for TextRef {
     fn as_mut(&mut self) -> &mut Branch {
         self.0.deref_mut()
     }
+}
+
+pub(crate) fn update_current_attributes(attrs: &mut Attrs, key: &str, value: &Any) {
+    if let Any::Null = value {
+        attrs.remove(key);
+    } else {
+        attrs.insert(key.into(), value.clone());
+    }
+}
+
+fn find_position(this: BranchPtr, txn: &mut TransactionMut, index: u32) -> Option<ItemPosition> {
+    let mut pos = {
+        ItemPosition {
+            parent: this.into(),
+            left: None,
+            right: this.start,
+            index: 0,
+            current_attrs: None,
+        }
+    };
+
+    let mut format_ptrs = HashMap::new();
+    let store = txn.store_mut();
+    let encoding = store.options.offset_kind;
+    let mut remaining = index;
+    while let Some(mut right_ptr) = pos.right {
+        if remaining == 0 {
+            break;
+        }
+
+        if let Block::Item(right) = right_ptr.deref_mut() {
+            if !right.is_deleted() {
+                match &right.content {
+                    ItemContent::Format(key, value) => {
+                        if let Any::Null = value.as_ref() {
+                            format_ptrs.remove(key);
+                        } else {
+                            format_ptrs.insert(key.clone(), pos.right.clone());
+                        }
+                    }
+                    _ => {
+                        let mut block_len = right.len();
+                        let content_len = right.content_len(encoding);
+                        if remaining < content_len {
+                            // split right item
+                            let offset = if let ItemContent::String(str) = &right.content {
+                                str.block_offset(remaining, encoding)
+                            } else {
+                                remaining
+                            };
+                            store
+                                .blocks
+                                .split_block(right_ptr, offset, OffsetKind::Utf16)
+                                .unwrap();
+                            block_len -= offset;
+                            remaining = 0;
+                        } else {
+                            remaining -= content_len;
+                        }
+                        pos.index += block_len;
+                    }
+                }
+            }
+            pos.left = pos.right.take();
+            pos.right = if let Some(Block::Item(item)) = pos.left.as_deref() {
+                item.right
+            } else {
+                None
+            };
+        } else {
+            return None;
+        }
+    }
+
+    for (_, block_ptr) in format_ptrs {
+        if let Some(mut ptr) = block_ptr {
+            if let Block::Item(item) = ptr.deref_mut() {
+                if let ItemContent::Format(key, value) = &item.content {
+                    let attrs = pos
+                        .current_attrs
+                        .get_or_insert_with(|| Box::new(Attrs::new()));
+                    update_current_attributes(attrs, key, value.as_ref());
+                }
+            }
+        }
+    }
+
+    Some(pos)
+}
+
+fn remove(txn: &mut TransactionMut, mut pos: ItemPosition, len: u32) {
+    let encoding = txn.store().options.offset_kind;
+    let mut remaining = len;
+    let start = pos.right.clone();
+    let start_attrs = pos.current_attrs.clone();
+    while let Some(Block::Item(item)) = pos.right.as_deref() {
+        if remaining == 0 {
+            break;
+        }
+
+        if !item.is_deleted() {
+            match &item.content {
+                ItemContent::Embed(_) | ItemContent::String(_) | ItemContent::Type(_) => {
+                    let content_len = item.content_len(encoding);
+                    let ptr = pos.right.unwrap();
+                    if remaining < content_len {
+                        // split block
+                        let offset = if let ItemContent::String(s) = &item.content {
+                            s.block_offset(remaining, encoding)
+                        } else {
+                            len
+                        };
+                        remaining = 0;
+                        txn.store_mut()
+                            .blocks
+                            .split_block(ptr, offset, OffsetKind::Utf16);
+                    } else {
+                        remaining -= content_len;
+                    };
+                    txn.delete(ptr);
+                }
+                _ => {}
+            }
+        }
+
+        pos.forward();
+    }
+
+    if remaining > 0 {
+        panic!(
+            "Couldn't remove {} elements from an array. Only {} of them were successfully removed.",
+            len,
+            len - remaining
+        );
+    }
+
+    if let (Some(start), Some(start_attrs), Some(end_attrs)) =
+        (start, start_attrs, pos.current_attrs.as_mut())
+    {
+        clean_format_gap(
+            txn,
+            Some(start),
+            pos.right,
+            start_attrs.as_ref(),
+            end_attrs.as_mut(),
+        );
+    }
+}
+
+fn insert_format(
+    this: BranchPtr,
+    txn: &mut TransactionMut,
+    mut pos: ItemPosition,
+    mut len: u32,
+    attrs: Attrs,
+) {
+    minimize_attr_changes(&mut pos, &attrs);
+    let mut negated_attrs = insert_attributes(this, txn, &mut pos, attrs.clone()); //TODO: remove `attrs.clone()`
+    let encoding = txn.store().options.offset_kind;
+    while let Some(right) = pos.right {
+        if len <= 0 {
+            break;
+        }
+
+        if let Block::Item(item) = right.deref() {
+            if !item.is_deleted() {
+                match &item.content {
+                    ItemContent::Format(key, value) => {
+                        if let Some(v) = attrs.get(key) {
+                            if v == value.as_ref() {
+                                negated_attrs.remove(key);
+                            } else {
+                                negated_attrs.insert(key.clone(), *value.clone());
+                            }
+                            txn.delete(right);
+                        }
+                    }
+                    ItemContent::String(s) => {
+                        let content_len = item.content_len(encoding);
+                        if len < content_len {
+                            // split block
+                            let offset = s.block_offset(len, encoding);
+                            let new_right = txn.store_mut().blocks.split_block(
+                                right,
+                                offset,
+                                OffsetKind::Utf16,
+                            );
+                            pos.left = Some(right);
+                            pos.right = new_right;
+                            break;
+                        }
+                        len -= content_len;
+                    }
+                    _ => {
+                        let content_len = item.len();
+                        if len < content_len {
+                            let new_right =
+                                txn.store_mut()
+                                    .blocks
+                                    .split_block(right, len, OffsetKind::Utf16);
+                            pos.left = Some(right);
+                            pos.right = new_right;
+                            break;
+                        }
+                        len -= content_len;
+                    }
+                }
+            }
+        }
+
+        if !pos.forward() {
+            break;
+        }
+    }
+
+    insert_negated_attributes(this, txn, &mut pos, negated_attrs);
+}
+
+fn minimize_attr_changes(pos: &mut ItemPosition, attrs: &Attrs) {
+    // go right while attrs[right.key] === right.value (or right is deleted)
+    while let Some(Block::Item(i)) = pos.right.as_deref() {
+        if !i.is_deleted() {
+            if let ItemContent::Format(k, v) = &i.content {
+                if let Some(v2) = attrs.get(k) {
+                    if (v.as_ref()).eq(v2) {
+                        pos.forward();
+                        continue;
+                    }
+                }
+            }
+
+            break;
+        } else {
+            pos.forward();
+        }
+    }
+}
+
+fn insert_attributes(
+    this: BranchPtr,
+    txn: &mut TransactionMut,
+    pos: &mut ItemPosition,
+    attrs: Attrs,
+) -> Attrs {
+    let mut negated_attrs = HashMap::with_capacity(attrs.len());
+    let mut store = txn.store_mut();
+    for (k, v) in attrs {
+        let current_value = pos
+            .current_attrs
+            .as_ref()
+            .and_then(|a| a.get(&k))
+            .unwrap_or(&Any::Null);
+        if &v != current_value {
+            // save negated attribute (set null if currentVal undefined)
+            negated_attrs.insert(k.clone(), current_value.clone());
+
+            let client_id = store.options.client_id;
+            let parent = this.into();
+            let mut item = Item::new(
+                ID::new(client_id, store.blocks.get_state(&client_id)),
+                pos.left.clone(),
+                pos.left.map(|ptr| ptr.last_id()),
+                pos.right.clone(),
+                pos.right.map(|ptr| ptr.id().clone()),
+                parent,
+                None,
+                ItemContent::Format(k, v.into()),
+            );
+            let mut item_ptr = BlockPtr::from(&mut item);
+            pos.right = Some(item_ptr);
+            item_ptr.integrate(txn, 0);
+            let local_block_list = txn
+                .store_mut()
+                .blocks
+                .get_client_blocks_mut(item.id().client);
+            local_block_list.push(item);
+
+            pos.forward();
+            store = txn.store_mut();
+        }
+    }
+    negated_attrs
+}
+
+fn insert_negated_attributes(
+    this: BranchPtr,
+    txn: &mut TransactionMut,
+    pos: &mut ItemPosition,
+    mut attrs: Attrs,
+) {
+    while let Some(Block::Item(item)) = pos.right.as_deref() {
+        if !item.is_deleted() {
+            if let ItemContent::Format(key, value) = &item.content {
+                if let Some(curr_val) = attrs.get(key) {
+                    if curr_val == value.as_ref() {
+                        attrs.remove(key);
+                        pos.forward();
+                        continue;
+                    }
+                }
+            }
+
+            break;
+        } else {
+            pos.forward();
+        }
+    }
+
+    let mut store = txn.store_mut();
+    for (k, v) in attrs {
+        let client_id = store.options.client_id;
+        let parent = this.into();
+        let mut item = Item::new(
+            ID::new(client_id, store.blocks.get_state(&client_id)),
+            pos.left.clone(),
+            pos.left.map(|ptr| ptr.last_id()),
+            pos.right.clone(),
+            pos.right.map(|ptr| ptr.id().clone()),
+            parent,
+            None,
+            ItemContent::Format(k, v.into()),
+        );
+        let mut item_ptr = BlockPtr::from(&mut item);
+        pos.right = Some(item_ptr);
+        item_ptr.integrate(txn, 0);
+
+        let local_block_list = txn
+            .store_mut()
+            .blocks
+            .get_client_blocks_mut(item.id().client);
+        local_block_list.push(item);
+
+        pos.forward();
+        store = txn.store_mut();
+    }
+}
+
+fn clean_format_gap(
+    txn: &mut TransactionMut,
+    mut start: Option<BlockPtr>,
+    mut end: Option<BlockPtr>,
+    start_attrs: &Attrs,
+    end_attrs: &mut Attrs,
+) -> u32 {
+    while let Some(Block::Item(item)) = end.as_deref() {
+        match &item.content {
+            ItemContent::String(_) | ItemContent::Embed(_) => break,
+            ItemContent::Format(key, value) if !item.is_deleted() => {
+                update_current_attributes(end_attrs, key.as_ref(), value);
+            }
+            _ => {}
+        }
+        end = item.right.clone();
+    }
+
+    let mut cleanups = 0;
+    while start != end {
+        if let Some(Block::Item(item)) = start.as_deref() {
+            let right = item.right.clone();
+            if !item.is_deleted() {
+                if let ItemContent::Format(key, value) = &item.content {
+                    let e = end_attrs.get(key).unwrap_or(&Any::Null);
+                    let s = start_attrs.get(key).unwrap_or(&Any::Null);
+                    if e != value.as_ref() || s == value.as_ref() {
+                        txn.delete(start.unwrap());
+                        cleanups += 1;
+                    }
+                }
+            }
+            start = right;
+        } else {
+            break;
+        }
+    }
+    cleanups
 }
 
 #[derive(Debug, PartialEq)]
@@ -792,14 +780,14 @@ pub enum ChangeKind {
 /// Event generated by [Text::observe] method. Emitted during transaction commit phase.
 pub struct TextEvent {
     pub(crate) current_target: BranchPtr,
-    target: Text,
+    target: TextRef,
     delta: UnsafeCell<Option<Vec<Delta>>>,
 }
 
 impl TextEvent {
     pub(crate) fn new(branch_ref: BranchPtr) -> Self {
         let current_target = branch_ref.clone();
-        let target = Text::from(branch_ref);
+        let target = TextRef::from(branch_ref);
         TextEvent {
             target,
             current_target,
@@ -808,7 +796,7 @@ impl TextEvent {
     }
 
     /// Returns a [Text] instance which emitted this event.
-    pub fn target(&self) -> &Text {
+    pub fn target(&self) -> &TextRef {
         &self.target
     }
 
@@ -1008,11 +996,7 @@ impl TextEvent {
                         if asm.action == Some(Action::Insert) {
                             asm.add_op();
                         }
-                        Text::update_current_attributes(
-                            &mut asm.current_attrs,
-                            key,
-                            value.as_ref(),
-                        );
+                        update_current_attributes(&mut asm.current_attrs, key, value.as_ref());
                     }
                 }
                 _ => {}
@@ -1029,17 +1013,19 @@ impl TextEvent {
 /// A preliminary text. It's can be used to initialize a Text, when it's about to be nested
 /// into another Yrs data collection, such as [Map] or [Array].
 #[derive(Debug)]
-pub struct PrelimText<'a>(pub &'a str);
+pub struct TextPrelim<'a>(pub &'a str);
 
-impl Prelim for PrelimText<'_> {
+impl Prelim for TextPrelim<'_> {
     fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
         let inner = Branch::new(TYPE_REFS_TEXT, None);
         (ItemContent::Type(inner), Some(self))
     }
 
     fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
-        let text = Text::from(inner_ref);
-        text.push(txn, self.0);
+        if !self.0.is_empty() {
+            let text = TextRef::from(inner_ref);
+            text.push(txn, self.0);
+        }
     }
 }
 
@@ -1051,13 +1037,14 @@ mod test {
     use crate::types::text::{Attrs, ChangeKind, Delta, Diff, YChange};
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
-    use crate::{Doc, StateVector, Transact, Update, ID};
+    use crate::{Doc, Observable, StateVector, Text, Transact, Update, ID};
     use lib0::any::Any;
     use rand::prelude::StdRng;
     use rand::Rng;
     use std::cell::RefCell;
     use std::collections::HashMap;
     use std::rc::Rc;
+    use std::sync::Mutex;
     use std::time::Duration;
 
     #[test]
@@ -2057,31 +2044,32 @@ mod test {
     #[test]
     fn multi_threading() {
         use rand::thread_rng;
-        use std::sync::{Arc, RwLock};
+        use std::sync::{Arc, Mutex};
         use std::thread::{sleep, spawn};
 
-        let doc = Doc::with_client_id(1);
-        let t1 = Arc::new(RwLock::new(doc.get_text("test")));
+        let doc = Arc::new(Mutex::new(Doc::with_client_id(1)));
 
-        let t2 = t1.clone();
+        let d2 = doc.clone();
         let h2 = spawn(move || {
             for _ in 0..10 {
                 let millis = thread_rng().gen_range(1, 20);
                 sleep(Duration::from_millis(millis));
 
-                let txt = t2.write().unwrap();
-                let mut txn = txt.transact_mut();
+                let doc = d2.lock().unwrap();
+                let txt = doc.get_text("test");
+                let mut txn = doc.transact_mut();
                 txt.push(&mut txn, "a");
             }
         });
 
-        let t3 = t1.clone();
+        let d3 = doc.clone();
         let h3 = spawn(move || {
             for _ in 0..10 {
                 let millis = thread_rng().gen_range(1, 20);
                 sleep(Duration::from_millis(millis));
 
-                let txt = t3.write().unwrap();
+                let doc = d3.lock().unwrap();
+                let txt = doc.get_text("test");
                 let mut txn = txt.transact_mut();
                 txt.push(&mut txn, "b");
             }
@@ -2090,8 +2078,9 @@ mod test {
         h3.join().unwrap();
         h2.join().unwrap();
 
-        let txt = t1.read().unwrap();
-        let len = txt.len(&txt.transact());
+        let doc = doc.lock().unwrap();
+        let txt = doc.get_text("test");
+        let len = txt.len(&doc.transact());
         assert_eq!(len, 20);
     }
 }

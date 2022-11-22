@@ -12,7 +12,7 @@ use std::cell::{BorrowError, BorrowMutError, Ref, RefCell, RefMut};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::ops::Deref;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use std::sync::Arc;
 
 /// Store is a core element of a document. It contains all of the information, like block store
@@ -351,6 +351,10 @@ impl StoreRef {
 
     pub fn try_borrow_mut(&self) -> Result<RefMut<Store>, BorrowMutError> {
         self.0.try_borrow_mut()
+    }
+
+    pub fn weak_ref(&self) -> Weak<RefCell<Store>> {
+        Rc::downgrade(&self.0)
     }
 }
 

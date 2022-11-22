@@ -1023,6 +1023,7 @@ dependencies = [
  "lib0",
  "rand 0.7.3",
  "smallstr",
+ "thiserror",
 ]
 
 [[package]]

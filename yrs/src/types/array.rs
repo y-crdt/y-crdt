@@ -3,10 +3,10 @@ use crate::block_iter::BlockIter;
 use crate::moving::RelativePosition;
 use crate::transaction::TransactionMut;
 use crate::types::{
-    event_change_set, Branch, BranchPtr, Change, ChangeSet, Observers, Path, ToJson, Value,
-    TYPE_REFS_ARRAY,
+    event_change_set, Branch, BranchPtr, Change, ChangeSet, EventHandler, Observers, Path, ToJson,
+    Value, TYPE_REFS_ARRAY,
 };
-use crate::{ReadTxn, SubscriptionId, ID};
+use crate::{Observable, ReadTxn, ID};
 use lib0::any::Any;
 use std::borrow::Borrow;
 use std::cell::UnsafeCell;
@@ -35,179 +35,11 @@ use std::sync::Arc;
 /// unique document id to determine correct and consistent ordering.
 #[repr(transparent)]
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub struct Array(BranchPtr);
+pub struct ArrayRef(BranchPtr);
 
-unsafe impl Send for Array {}
-unsafe impl Sync for Array {}
+impl Array for ArrayRef {}
 
-impl Array {
-    /// Returns a number of elements stored in current array.
-    pub fn len<T: ReadTxn>(&self, txn: &T) -> u32 {
-        self.0.len()
-    }
-
-    /// Inserts a `value` at the given `index`. Inserting at index `0` is equivalent to prepending
-    /// current array with given `value`, while inserting at array length is equivalent to appending
-    /// that value at the end of it.
-    ///
-    /// Using `index` value that's higher than current array length results in panic.
-    pub fn insert<V: Prelim>(&self, txn: &mut TransactionMut, index: u32, value: V) {
-        let mut walker = BlockIter::new(self.0);
-        if walker.try_forward(txn, index) {
-            walker.insert_contents(txn, value)
-        } else {
-            panic!("Index {} is outside of the range of an array", index);
-        }
-    }
-
-    /// Inserts multiple `values` at the given `index`. Inserting at index `0` is equivalent to
-    /// prepending current array with given `values`, while inserting at array length is equivalent
-    /// to appending that value at the end of it.
-    ///
-    /// Using `index` value that's higher than current array length results in panic.
-    pub fn insert_range<T, V>(&self, txn: &mut TransactionMut, index: u32, values: T)
-    where
-        T: IntoIterator<Item = V>,
-        V: Into<Any>,
-    {
-        self.insert(txn, index, PrelimRange(values))
-    }
-
-    /// Inserts given `value` at the end of the current array.
-    pub fn push_back<V: Prelim>(&self, txn: &mut TransactionMut, value: V) {
-        let len = self.len(txn);
-        self.insert(txn, len, value)
-    }
-
-    /// Inserts given `value` at the beginning of the current array.
-    pub fn push_front<V: Prelim>(&self, txn: &mut TransactionMut, content: V) {
-        self.insert(txn, 0, content)
-    }
-
-    /// Removes a single element at provided `index`.
-    pub fn remove(&self, txn: &mut TransactionMut, index: u32) {
-        self.remove_range(txn, index, 1)
-    }
-
-    /// Removes a range of elements from current array, starting at given `index` up until
-    /// a particular number described by `len` has been deleted. This method panics in case when
-    /// not all expected elements were removed (due to insufficient number of elements in an array)
-    /// or `index` is outside of the bounds of an array.
-    pub fn remove_range(&self, txn: &mut TransactionMut, index: u32, len: u32) {
-        let mut walker = BlockIter::new(self.0);
-        if walker.try_forward(txn, index) {
-            walker.delete(txn, len)
-        } else {
-            panic!("Index {} is outside of the range of an array", index);
-        }
-    }
-
-    /// Retrieves a value stored at a given `index`. Returns `None` when provided index was out
-    /// of the range of a current array.
-    pub fn get<T: ReadTxn>(&self, txn: &T, index: u32) -> Option<Value> {
-        let mut walker = BlockIter::new(self.0);
-        if walker.try_forward(txn, index) {
-            walker.read_value(txn)
-        } else {
-            None
-        }
-    }
-
-    /// Moves element found at `source` index into `target` index position.
-    pub fn move_to(&self, txn: &mut TransactionMut, source: u32, target: u32) {
-        if source == target || source + 1 == target {
-            // It doesn't make sense to move a range into the same range (it's basically a no-op).
-            return;
-        }
-        let left = RelativePosition::from_type_index(txn, self.0, source, true)
-            .expect("unbounded relative positions are not supported yet");
-        let mut right = left.clone();
-        right.assoc = false;
-        let mut walker = BlockIter::new(self.0);
-        if walker.try_forward(txn, target) {
-            walker.insert_move(txn, left, right);
-        } else {
-            panic!("Index {} is outside of the range of an array", target);
-        }
-    }
-
-    /// Moves all elements found within `start`..`end` indexes range (both side inclusive) into
-    /// new position pointed by `target` index. All elements inserted concurrently by other peers
-    /// inside of moved range will be moved as well after synchronization (although it make take
-    /// more than one sync roundtrip to achieve convergence).
-    ///
-    /// `assoc_start`/`assoc_end` flags are used to mark if ranges should include elements that
-    /// might have been inserted concurrently at the edges of the range definition.
-    ///
-    /// Example:
-    /// ```
-    /// use yrs::{Doc, Transact};
-    /// let doc = Doc::new();
-    /// let array = doc.get_array("array");
-    /// array.insert_range(&mut doc.transact_mut(), 0, [1,2,3,4]);
-    /// // move elements 2 and 3 after the 4
-    /// array.move_range_to(&mut doc.transact_mut(), 1, true, 2, false, 4);
-    /// ```
-    pub fn move_range_to(
-        &self,
-        txn: &mut TransactionMut,
-        start: u32,
-        assoc_start: bool,
-        end: u32,
-        assoc_end: bool,
-        target: u32,
-    ) {
-        if start <= target && target <= end {
-            // It doesn't make sense to move a range into the same range (it's basically a no-op).
-            return;
-        }
-        let left = RelativePosition::from_type_index(txn, self.0, start, assoc_start)
-            .expect("unbounded relative positions are not supported yet");
-        let right = RelativePosition::from_type_index(txn, self.0, end + 1, assoc_end)
-            .expect("unbounded relative positions are not supported yet");
-        let mut walker = BlockIter::new(self.0);
-        if walker.try_forward(txn, target) {
-            walker.insert_move(txn, left, right);
-        } else {
-            panic!("Index {} is outside of the range of an array", target);
-        }
-    }
-
-    /// Returns an iterator, that can be used to lazely traverse over all values stored in a current
-    /// array.
-    pub fn iter<'a, T: ReadTxn + 'a>(&self, txn: &'a T) -> ArrayIter<&'a T, T> {
-        ArrayIter::from_ref(self, txn)
-    }
-
-    /// Subscribes a given callback to be triggered whenever current array is changed.
-    /// A callback is triggered whenever a transaction gets committed. This function does not
-    /// trigger if changes have been observed by nested shared collections.
-    ///
-    /// All array changes can be tracked by using [Event::delta] method.
-    ///
-    /// Returns an [Observer] which, when dropped, will unsubscribe current callback.
-    pub fn observe<F>(&mut self, f: F) -> ArraySubscription
-    where
-        F: Fn(&TransactionMut, &ArrayEvent) -> () + 'static,
-    {
-        if let Observers::Array(eh) = self.0.observers.get_or_insert_with(Observers::array) {
-            eh.subscribe(Arc::new(f))
-        } else {
-            panic!("Observed collection is of different type") //TODO: this should be Result::Err
-        }
-    }
-
-    /// Unsubscribes a previously subscribed event callback identified by given `subscription_id`.
-    pub fn unobserve(&mut self, subscription_id: SubscriptionId) {
-        if let Some(Observers::Array(eh)) = self.0.observers.as_mut() {
-            eh.unsubscribe(subscription_id);
-        }
-    }
-}
-
-pub type ArraySubscription = crate::Subscription<Arc<dyn Fn(&TransactionMut, &ArrayEvent) -> ()>>;
-
-impl ToJson for Array {
+impl ToJson for ArrayRef {
     fn to_json<T: ReadTxn>(&self, txn: &T) -> Any {
         let mut walker = BlockIter::new(self.0);
         let len = self.0.len();
@@ -225,17 +57,181 @@ impl ToJson for Array {
     }
 }
 
-impl AsRef<Branch> for Array {
+impl AsRef<Branch> for ArrayRef {
     fn as_ref(&self) -> &Branch {
         self.0.deref()
     }
 }
 
-impl AsMut<Branch> for Array {
+impl AsMut<Branch> for ArrayRef {
     fn as_mut(&mut self) -> &mut Branch {
         self.0.deref_mut()
     }
 }
+
+impl Observable for ArrayRef {
+    type Event = ArrayEvent;
+
+    fn try_observer(&self) -> Option<&EventHandler<Self::Event>> {
+        if let Some(Observers::Array(eh)) = self.0.observers.as_ref() {
+            Some(eh)
+        } else {
+            None
+        }
+    }
+
+    fn try_observer_mut(&mut self) -> Option<&mut EventHandler<Self::Event>> {
+        if let Observers::Array(eh) = self.0.observers.get_or_insert_with(Observers::array) {
+            Some(eh)
+        } else {
+            None
+        }
+    }
+}
+
+pub trait Array: AsRef<Branch> {
+    /// Returns a number of elements stored in current array.
+    fn len<T: ReadTxn>(&self, txn: &T) -> u32 {
+        self.as_ref().len()
+    }
+
+    /// Inserts a `value` at the given `index`. Inserting at index `0` is equivalent to prepending
+    /// current array with given `value`, while inserting at array length is equivalent to appending
+    /// that value at the end of it.
+    ///
+    /// Using `index` value that's higher than current array length results in panic.
+    fn insert<V: Prelim>(&self, txn: &mut TransactionMut, index: u32, value: V) {
+        let mut walker = BlockIter::new(BranchPtr::from(self.as_ref()));
+        if walker.try_forward(txn, index) {
+            walker.insert_contents(txn, value)
+        } else {
+            panic!("Index {} is outside of the range of an array", index);
+        }
+    }
+
+    /// Inserts multiple `values` at the given `index`. Inserting at index `0` is equivalent to
+    /// prepending current array with given `values`, while inserting at array length is equivalent
+    /// to appending that value at the end of it.
+    ///
+    /// Using `index` value that's higher than current array length results in panic.
+    fn insert_range<T, V>(&self, txn: &mut TransactionMut, index: u32, values: T)
+    where
+        T: IntoIterator<Item = V>,
+        V: Into<Any>,
+    {
+        self.insert(txn, index, RangePrelim(values))
+    }
+
+    /// Inserts given `value` at the end of the current array.
+    fn push_back<V: Prelim>(&self, txn: &mut TransactionMut, value: V) {
+        let len = self.len(txn);
+        self.insert(txn, len, value)
+    }
+
+    /// Inserts given `value` at the beginning of the current array.
+    fn push_front<V: Prelim>(&self, txn: &mut TransactionMut, content: V) {
+        self.insert(txn, 0, content)
+    }
+
+    /// Removes a single element at provided `index`.
+    fn remove(&self, txn: &mut TransactionMut, index: u32) {
+        self.remove_range(txn, index, 1)
+    }
+
+    /// Removes a range of elements from current array, starting at given `index` up until
+    /// a particular number described by `len` has been deleted. This method panics in case when
+    /// not all expected elements were removed (due to insufficient number of elements in an array)
+    /// or `index` is outside of the bounds of an array.
+    fn remove_range(&self, txn: &mut TransactionMut, index: u32, len: u32) {
+        let mut walker = BlockIter::new(BranchPtr::from(self.as_ref()));
+        if walker.try_forward(txn, index) {
+            walker.delete(txn, len)
+        } else {
+            panic!("Index {} is outside of the range of an array", index);
+        }
+    }
+
+    /// Retrieves a value stored at a given `index`. Returns `None` when provided index was out
+    /// of the range of a current array.
+    fn get<T: ReadTxn>(&self, txn: &T, index: u32) -> Option<Value> {
+        let mut walker = BlockIter::new(BranchPtr::from(self.as_ref()));
+        if walker.try_forward(txn, index) {
+            walker.read_value(txn)
+        } else {
+            None
+        }
+    }
+
+    /// Moves element found at `source` index into `target` index position.
+    fn move_to(&self, txn: &mut TransactionMut, source: u32, target: u32) {
+        if source == target || source + 1 == target {
+            // It doesn't make sense to move a range into the same range (it's basically a no-op).
+            return;
+        }
+        let this = BranchPtr::from(self.as_ref());
+        let left = RelativePosition::from_type_index(txn, this, source, true)
+            .expect("unbounded relative positions are not supported yet");
+        let mut right = left.clone();
+        right.assoc = false;
+        let mut walker = BlockIter::new(this);
+        if walker.try_forward(txn, target) {
+            walker.insert_move(txn, left, right);
+        } else {
+            panic!("Index {} is outside of the range of an array", target);
+        }
+    }
+
+    /// Moves all elements found within `start`..`end` indexes range (both side inclusive) into
+    /// new position pointed by `target` index. All elements inserted concurrently by other peers
+    /// inside of moved range will be moved as well after synchronization (although it make take
+    /// more than one sync roundtrip to achieve convergence).
+    ///
+    /// `assoc_start`/`assoc_end` flags are used to mark if ranges should include elements that
+    /// might have been inserted concurrently at the edges of the range definition.
+    ///
+    /// Example:
+    /// ```
+    /// use yrs::{Doc, Transact, Array};
+    /// let doc = Doc::new();
+    /// let array = doc.get_array("array");
+    /// array.insert_range(&mut doc.transact_mut(), 0, [1,2,3,4]);
+    /// // move elements 2 and 3 after the 4
+    /// array.move_range_to(&mut doc.transact_mut(), 1, true, 2, false, 4);
+    /// ```
+    fn move_range_to(
+        &self,
+        txn: &mut TransactionMut,
+        start: u32,
+        assoc_start: bool,
+        end: u32,
+        assoc_end: bool,
+        target: u32,
+    ) {
+        if start <= target && target <= end {
+            // It doesn't make sense to move a range into the same range (it's basically a no-op).
+            return;
+        }
+        let this = BranchPtr::from(self.as_ref());
+        let left = RelativePosition::from_type_index(txn, this, start, assoc_start)
+            .expect("unbounded relative positions are not supported yet");
+        let right = RelativePosition::from_type_index(txn, this, end + 1, assoc_end)
+            .expect("unbounded relative positions are not supported yet");
+        let mut walker = BlockIter::new(this);
+        if walker.try_forward(txn, target) {
+            walker.insert_move(txn, left, right);
+        } else {
+            panic!("Index {} is outside of the range of an array", target);
+        }
+    }
+
+    /// Returns an iterator, that can be used to lazely traverse over all values stored in a current
+    /// array.
+    fn iter<'a, T: ReadTxn + 'a>(&self, txn: &'a T) -> ArrayIter<&'a T, T> {
+        ArrayIter::from_ref(self.as_ref(), txn)
+    }
+}
+
+pub type ArraySubscription = crate::Subscription<Arc<dyn Fn(&TransactionMut, &ArrayEvent) -> ()>>;
 
 pub struct ArrayIter<B, T>
 where
@@ -251,7 +247,7 @@ impl<T> ArrayIter<T, T>
 where
     T: Borrow<T> + ReadTxn,
 {
-    pub fn from(array: &Array, txn: T) -> Self {
+    pub fn from(array: &ArrayRef, txn: T) -> Self {
         ArrayIter {
             inner: BlockIter::new(array.0),
             txn,
@@ -264,9 +260,9 @@ impl<'a, T> ArrayIter<&'a T, T>
 where
     T: Borrow<T> + ReadTxn,
 {
-    pub fn from_ref(array: &Array, txn: &'a T) -> Self {
+    pub fn from_ref(array: &Branch, txn: &'a T) -> Self {
         ArrayIter {
-            inner: BlockIter::new(array.0),
+            inner: BlockIter::new(BranchPtr::from(array)),
             txn,
             _marker: PhantomData::default(),
         }
@@ -295,35 +291,53 @@ where
     }
 }
 
-impl From<BranchPtr> for Array {
+impl From<BranchPtr> for ArrayRef {
     fn from(inner: BranchPtr) -> Self {
-        Array(inner)
+        ArrayRef(inner)
     }
 }
 
 /// A preliminary array. It's can be used to initialize an YArray, when it's about to be nested
 /// into another Yrs data collection, such as [Map] or another YArray.
-pub struct PrelimArray<T, V>(T)
+pub struct ArrayPrelim<T, V>(T)
 where
     T: IntoIterator<Item = V>;
 
-impl<T, V> From<T> for PrelimArray<T, V>
+impl<T, V> From<T> for ArrayPrelim<T, V>
 where
     T: IntoIterator<Item = V>,
 {
     fn from(iter: T) -> Self {
-        PrelimArray(iter)
+        ArrayPrelim(iter)
+    }
+}
+
+impl<T, V> Prelim for ArrayPrelim<T, V>
+where
+    V: Prelim,
+    T: IntoIterator<Item = V>,
+{
+    fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
+        let inner = Branch::new(TYPE_REFS_ARRAY, None);
+        (ItemContent::Type(inner), Some(self))
+    }
+
+    fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
+        let array = ArrayRef::from(inner_ref);
+        for value in self.0 {
+            array.push_back(txn, value);
+        }
     }
 }
 
 /// Prelim range defines a way to insert multiple elements effectively at once one after another
 /// in an efficient way, provided that these elements correspond to a primitive JSON-like types.
-struct PrelimRange<T, V>(T)
+struct RangePrelim<T, V>(T)
 where
     T: IntoIterator<Item = V>,
     V: Into<Any>;
 
-impl<T, V> Prelim for PrelimRange<T, V>
+impl<T, V> Prelim for RangePrelim<T, V>
 where
     T: IntoIterator<Item = V>,
     V: Into<Any>,
@@ -336,28 +350,10 @@ where
     fn integrate(self, _txn: &mut TransactionMut, _inner_ref: BranchPtr) {}
 }
 
-impl<T, V> Prelim for PrelimArray<T, V>
-where
-    V: Prelim,
-    T: IntoIterator<Item = V>,
-{
-    fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
-        let inner = Branch::new(TYPE_REFS_ARRAY, None);
-        (ItemContent::Type(inner), Some(self))
-    }
-
-    fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
-        let array = Array::from(inner_ref);
-        for value in self.0 {
-            array.push_back(txn, value);
-        }
-    }
-}
-
 /// Event generated by [Array::observe] method. Emitted during transaction commit phase.
 pub struct ArrayEvent {
     pub(crate) current_target: BranchPtr,
-    target: Array,
+    target: ArrayRef,
     change_set: UnsafeCell<Option<Box<ChangeSet<Change>>>>,
 }
 
@@ -365,14 +361,14 @@ impl ArrayEvent {
     pub(crate) fn new(branch_ref: BranchPtr) -> Self {
         let current_target = branch_ref.clone();
         ArrayEvent {
-            target: Array::from(branch_ref),
+            target: ArrayRef::from(branch_ref),
             current_target,
             change_set: UnsafeCell::new(None),
         }
     }
 
     /// Returns an [Array] instance which emitted this event.
-    pub fn target(&self) -> &Array {
+    pub fn target(&self) -> &ArrayRef {
         &self.target
     }
 
@@ -408,9 +404,9 @@ impl ArrayEvent {
 #[cfg(test)]
 mod test {
     use crate::test_utils::{exchange_updates, run_scenario, RngExt};
-    use crate::types::map::PrelimMap;
+    use crate::types::map::MapPrelim;
     use crate::types::{Change, DeepObservable, Event, Path, PathSegment, ToJson, Value};
-    use crate::{Doc, PrelimArray, StateVector, Transact, Update, ID};
+    use crate::{Array, ArrayPrelim, Doc, Map, Observable, StateVector, Transact, Update, ID};
     use lib0::any::Any;
     use rand::prelude::StdRng;
     use rand::Rng;
@@ -743,7 +739,7 @@ mod test {
         for i in 0..10 {
             let mut m = HashMap::new();
             m.insert("value".to_owned(), i);
-            a.push_back(&mut txn, PrelimMap::from(m));
+            a.push_back(&mut txn, MapPrelim::from(m));
         }
 
         for (i, value) in a.iter(&txn).enumerate() {
@@ -991,7 +987,7 @@ mod test {
             let yarray = doc.get_array("array");
             let mut txn = doc.transact_mut();
             let pos = rng.between(0, yarray.len(&txn));
-            yarray.insert(&mut txn, pos, PrelimArray::from([1, 2, 3, 4]));
+            yarray.insert(&mut txn, pos, ArrayPrelim::from([1, 2, 3, 4]));
             if let Value::YArray(array2) = yarray.get(&txn, pos).unwrap() {
                 let expected: Box<[Any]> = (1..=4).map(|i| Any::Number(i as f64)).collect();
                 assert_eq!(array2.to_json(&txn), Any::Array(expected));
@@ -1004,7 +1000,7 @@ mod test {
             let yarray = doc.get_array("array");
             let mut txn = doc.transact_mut();
             let pos = rng.between(0, yarray.len(&txn));
-            yarray.insert(&mut txn, pos, PrelimMap::<i32>::from(HashMap::default()));
+            yarray.insert(&mut txn, pos, MapPrelim::<i32>::from(HashMap::default()));
             if let Value::YMap(map) = yarray.get(&txn, pos).unwrap() {
                 map.insert(&mut txn, "someprop".to_string(), 42);
                 map.insert(&mut txn, "someprop".to_string(), 43);
@@ -1092,7 +1088,7 @@ mod test {
             paths_copy.borrow_mut().push(path);
         });
 
-        array.insert(&mut doc.transact_mut(), 0, PrelimMap::<String>::new());
+        array.insert(&mut doc.transact_mut(), 0, MapPrelim::<String>::new());
 
         {
             let mut txn = doc.transact_mut();
@@ -1251,32 +1247,33 @@ mod test {
     #[test]
     fn multi_threading() {
         use rand::thread_rng;
-        use std::sync::{Arc, RwLock};
+        use std::sync::{Arc, Mutex};
         use std::thread::{sleep, spawn};
 
-        let doc = Doc::with_client_id(1);
-        let a1 = Arc::new(RwLock::new(doc.get_array("test")));
+        let doc = Arc::new(Mutex::new(Doc::with_client_id(1)));
 
-        let a2 = a1.clone();
+        let d2 = doc.clone();
         let h2 = spawn(move || {
             for _ in 0..10 {
                 let millis = thread_rng().gen_range(1, 20);
                 sleep(Duration::from_millis(millis));
 
-                let array = a2.write().unwrap();
-                let mut txn = array.transact_mut();
+                let doc = d2.lock().unwrap();
+                let array = doc.get_array("test");
+                let mut txn = doc.transact_mut();
                 array.push_back(&mut txn, "a");
             }
         });
 
-        let a3 = a1.clone();
+        let d3 = doc.clone();
         let h3 = spawn(move || {
             for _ in 0..10 {
                 let millis = thread_rng().gen_range(1, 20);
                 sleep(Duration::from_millis(millis));
 
-                let array = a3.write().unwrap();
-                let mut txn = array.transact_mut();
+                let doc = d3.lock().unwrap();
+                let array = doc.get_array("test");
+                let mut txn = doc.transact_mut();
                 array.push_back(&mut txn, "b");
             }
         });
@@ -1284,8 +1281,9 @@ mod test {
         h3.join().unwrap();
         h2.join().unwrap();
 
-        let array = a1.read().unwrap();
-        let len = array.len(&array.transact());
+        let doc = doc.lock().unwrap();
+        let array = doc.get_array("test");
+        let len = array.len(&doc.transact());
         assert_eq!(len, 20);
     }
 }
