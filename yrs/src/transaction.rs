@@ -78,6 +78,101 @@ pub trait ReadTxn: Sized {
         let store = self.store();
         RootRefs(store.types.iter())
     }
+
+    /// Returns a [TextRef] data structure stored under a given `name`. Text structures are used for
+    /// collaborative text editing: they expose operations to append and remove chunks of text,
+    /// which are free to execute concurrently by multiple peers over remote boundaries.
+    ///
+    /// If not structure under defined `name` existed before, [None] will be returned.
+    ///
+    /// If a structure under defined `name` already existed, but its type was different it will be
+    /// reinterpreted as a text (in such case a sequence component of complex data type will be
+    /// interpreted as a list of text chunks).
+    fn get_text(&self, name: &str) -> Option<TextRef> {
+        let store = self.store();
+        let branch = store.get_type(name)?;
+        Some(TextRef::from(branch))
+    }
+
+    /// Returns an [ArrayRef] data structure stored under a given `name`. Array structures are used for
+    /// storing a sequences of elements in ordered manner, positioning given element accordingly
+    /// to its index.
+    ///
+    /// If not structure under defined `name` existed before, [None] will be returned.
+    ///
+    /// If a structure under defined `name` already existed, but its type was different it will be
+    /// reinterpreted as an array (in such case a sequence component of complex data type will be
+    /// interpreted as a list of inserted values).
+    fn get_array(&self, name: &str) -> Option<ArrayRef> {
+        let store = self.store();
+        let branch = store.get_type(name)?;
+        Some(ArrayRef::from(branch))
+    }
+
+    /// Returns a [MapRef] data structure stored under a given `name`. Maps are used to store key-value
+    /// pairs associated together. These values can be primitive data (similar but not limited to
+    /// a JavaScript Object Notation) as well as other shared types (Yrs maps, arrays, text
+    /// structures etc.), enabling to construct a complex recursive tree structures.
+    ///
+    /// If not structure under defined `name` existed before, [None] will be returned.
+    ///
+    /// If a structure under defined `name` already existed, but its type was different it will be
+    /// reinterpreted as a map (in such case a map component of complex data type will be
+    /// interpreted as native map).
+    fn get_map(&self, name: &str) -> Option<MapRef> {
+        let store = self.store();
+        let branch = store.get_type(name)?;
+        Some(MapRef::from(branch))
+    }
+
+    /// Returns a [XmlFragmentRef] data structure stored under a given `name`. XML elements represent
+    /// nodes of XML document. They can contain attributes (key-value pairs, both of string type)
+    /// as well as other nested XML elements or text values, which are stored in their insertion
+    /// order.
+    ///
+    /// If not structure under defined `name` existed before, [None] will be returned.
+    ///
+    /// If a structure under defined `name` already existed, but its type was different it will be
+    /// reinterpreted as a XML element (in such case a map component of complex data type will be
+    /// interpreted as map of its attributes, while a sequence component - as a list of its child
+    /// XML nodes).
+    fn get_xml_fragment(&self, name: &str) -> Option<XmlFragmentRef> {
+        let store = self.store();
+        let branch = store.get_type(name)?;
+        Some(XmlFragmentRef::from(branch))
+    }
+
+    /// Returns a [XmlElementRef] data structure stored under a given `name`. XML elements represent
+    /// nodes of XML document. They can contain attributes (key-value pairs, both of string type)
+    /// as well as other nested XML elements or text values, which are stored in their insertion
+    /// order.
+    ///
+    /// If not structure under defined `name` existed before, [None] will be returned.
+    ///
+    /// If a structure under defined `name` already existed, but its type was different it will be
+    /// reinterpreted as a XML element (in such case a map component of complex data type will be
+    /// interpreted as map of its attributes, while a sequence component - as a list of its child
+    /// XML nodes).
+    fn get_xml_element(&self, name: &str) -> Option<XmlElementRef> {
+        let store = self.store();
+        let branch = store.get_type(name)?;
+        Some(XmlElementRef::from(branch))
+    }
+
+    /// Returns a [XmlTextRef] data structure stored under a given `name`. Text structures are used
+    /// for collaborative text editing: they expose operations to append and remove chunks of text,
+    /// which are free to execute concurrently by multiple peers over remote boundaries.
+    ///
+    /// If not structure under defined `name` existed before, [None] will be returned.
+    ///
+    /// If a structure under defined `name` already existed, but its type was different it will be
+    /// reinterpreted as a text (in such case a sequence component of complex data type will be
+    /// interpreted as a list of text chunks).
+    fn get_xml_text(&self, name: &str) -> Option<XmlTextRef> {
+        let store = self.store();
+        let branch = store.get_type(name)?;
+        Some(XmlTextRef::from(branch))
+    }
 }
 
 pub trait WriteTxn: Sized {

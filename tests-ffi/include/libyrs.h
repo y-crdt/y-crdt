@@ -930,13 +930,17 @@ void ytransaction_commit(YTransaction *txn);
 uint8_t ytransaction_writeable(YTransaction *txn);
 
 /**
+ * Gets a reference to shared data type instance at the document root-level,
+ * identified by its `name`, which must be a null-terminated UTF-8 compatible string.
+ *
+ * Returns `NULL` if no such structure was defined in the document before.
+ */
+Branch *ytype_get(YTransaction *txn, const char *name);
+
+/**
  * Gets or creates a new shared `YText` data type instance as a root-level type of a given document.
  * This structure can later be accessed using its `name`, which must be a null-terminated UTF-8
  * compatible string.
- *
- * Use [ytext_destroy] in order to release pointer returned that way - keep in mind that this will
- * not remove `YText` instance from the document itself (once created it'll last for the entire
- * lifecycle of a document).
  */
 Branch *ytext(YDoc *doc, const char *name);
 

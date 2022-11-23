@@ -156,7 +156,7 @@ where
 {
     let input = {
         let doc = Doc::new();
-        let txt = doc.get_text("text");
+        let txt = doc.get_or_insert_text("text");
         let mut rng = StdRng::seed_from_u64(SEED);
         let ops = gen(&mut rng, N);
         (doc, txt, ops)
@@ -185,7 +185,7 @@ where
 {
     let input = {
         let doc = Doc::new();
-        let array = doc.get_array("text");
+        let array = doc.get_or_insert_array("text");
         let mut rng = StdRng::seed_from_u64(SEED);
         let ops = gen(&mut rng, N);
         (doc, array, ops)
@@ -216,10 +216,10 @@ where
 {
     let input = {
         let d1 = Doc::new();
-        let t1 = d1.get_text("text");
+        let t1 = d1.get_or_insert_text("text");
 
         let d2 = Doc::new();
-        let t2 = d2.get_text("text");
+        let t2 = d2.get_or_insert_text("text");
 
         let mut rng = StdRng::seed_from_u64(SEED);
         let ops = gen(&mut rng, N);
@@ -340,7 +340,7 @@ where
         .into_iter()
         .map(|i| {
             let doc = Doc::new();
-            let map = doc.get_map("map");
+            let map = doc.get_or_insert_map("map");
             let update = {
                 let mut txn = doc.transact_mut();
                 f(&map, &mut txn, i);
@@ -387,7 +387,7 @@ fn b3_4(c: &mut Criterion, name: &str) {
         .into_iter()
         .map(|i| {
             let doc = Doc::new();
-            let array = doc.get_array("array");
+            let array = doc.get_or_insert_array("array");
             let update = {
                 let mut txn = doc.transact_mut();
                 array.insert(&mut txn, 0, i.to_string());
@@ -411,7 +411,7 @@ fn b3_4(c: &mut Criterion, name: &str) {
 
 fn b4_1(c: &mut Criterion, name: &str) {
     let doc = Doc::new();
-    let txt = doc.get_text("text");
+    let txt = doc.get_or_insert_text("text");
     let input = read_input("./yrs/benches/input/b4-editing-trace.bin");
 
     c.bench_with_input(
@@ -433,7 +433,7 @@ fn b4_1(c: &mut Criterion, name: &str) {
 
 fn b4_2(c: &mut Criterion, name: &str) {
     let doc = Doc::new();
-    let txt = doc.get_text("text");
+    let txt = doc.get_or_insert_text("text");
     let mut buf = Vec::with_capacity(400 * 1024);
     let mut f = std::fs::File::open("./yrs/benches/input/b4-update.bin").unwrap();
     std::io::Read::read_to_end(&mut f, &mut buf).unwrap();

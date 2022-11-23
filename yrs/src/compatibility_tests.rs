@@ -107,7 +107,7 @@ fn text_insert_delete() {
     let setter = visited.clone();
 
     let mut doc = Doc::new();
-    let txt = doc.get_text("type");
+    let txt = doc.get_or_insert_text("type");
     let _sub = doc.observe_update_v1(move |_, e| {
         let u = Update::decode_v1(&e.update).unwrap();
         for (actual, expected) in u.blocks.blocks().zip(expected_blocks.as_slice()) {
@@ -333,7 +333,7 @@ fn utf32_lib0_v2_decoding() {
         0, 19, 8, 1, 5, 1, 1, 1, 1, 9, 2, 4, 4, 4, 4, 4,
     ];
     let doc = Doc::new();
-    let xml = doc.get_xml_fragment("prosemirror");
+    let xml = doc.get_or_insert_xml_fragment("prosemirror");
     let mut txn = doc.transact_mut();
     let update = Update::decode_v2(data).unwrap();
     txn.apply_update(update);
@@ -382,7 +382,7 @@ fn roundtrip_v2(payload: &[u8], expected: &Vec<BlockCarrier>) {
 #[test]
 fn negative_zero_decoding_v2() {
     let doc = Doc::new();
-    let root = doc.get_map("root");
+    let root = doc.get_or_insert_map("root");
     let mut txn = doc.transact_mut();
 
     root.insert(&mut txn, "sequence", MapPrelim::<bool>::new()); //NOTE: This is how I put nested map.
@@ -405,7 +405,7 @@ fn negative_zero_decoding_v2() {
     let u = Update::decode_v2(&buffer).unwrap();
 
     let doc2 = Doc::new();
-    let root = doc2.get_map("root");
+    let root = doc2.get_or_insert_map("root");
     let mut txn = doc2.transact_mut();
     txn.apply_update(u);
     let actual = root.to_json(&txn);
@@ -440,9 +440,9 @@ fn test_data_set<P: AsRef<std::path::Path>>(path: P) {
     for test_num in 0..test_count {
         let updates_len: u32 = decoder.read_var().unwrap();
         let doc = Doc::new();
-        let txt = doc.get_text("text");
-        let map = doc.get_map("map");
-        let arr = doc.get_array("array");
+        let txt = doc.get_or_insert_text("text");
+        let map = doc.get_or_insert_map("map");
+        let arr = doc.get_or_insert_array("array");
         for _ in 0..updates_len {
             let update = Update::decode_v1(decoder.read_buf().unwrap()).unwrap();
             doc.transact_mut().apply_update(update);

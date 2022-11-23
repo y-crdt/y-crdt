@@ -674,7 +674,7 @@ pub trait XmlFragment: AsRef<Branch> {
     /// use yrs::{Doc, Text, Xml, XmlNode, Transact, XmlFragment, XmlElementPrelim, XmlTextPrelim, GetString};
     ///
     /// let doc = Doc::new();
-    /// let mut html = doc.get_xml_fragment("div");
+    /// let mut html = doc.get_or_insert_xml_fragment("div");
     /// let mut txn = doc.transact_mut();
     /// let p = html.push_back(&mut txn, XmlElementPrelim::empty("p"));
     /// let txt = p.push_back(&mut txn, XmlTextPrelim("Hello "));
@@ -1039,14 +1039,14 @@ mod test {
     #[test]
     fn insert_attribute() {
         let d1 = Doc::with_client_id(1);
-        let f = d1.get_xml_fragment("xml");
+        let f = d1.get_or_insert_xml_fragment("xml");
         let mut t1 = d1.transact_mut();
         let xml1 = f.push_back(&mut t1, XmlElementPrelim::empty("div"));
         xml1.insert_attribute(&mut t1, "height", 10.to_string());
         assert_eq!(xml1.get_attribute(&t1, "height"), Some("10".to_string()));
 
         let d2 = Doc::with_client_id(1);
-        let f = d2.get_xml_fragment("xml");
+        let f = d2.get_or_insert_xml_fragment("xml");
         let mut t2 = d2.transact_mut();
         let xml2 = f.push_back(&mut t2, XmlElementPrelim::empty("div"));
         let u = t1.encode_state_as_update_v1(&StateVector::default());
@@ -1057,7 +1057,7 @@ mod test {
     #[test]
     fn tree_walker() {
         let doc = Doc::with_client_id(1);
-        let root = doc.get_xml_fragment("xml");
+        let root = doc.get_or_insert_xml_fragment("xml");
         let mut txn = doc.transact_mut();
         /*
             <UNDEFINED>
@@ -1090,7 +1090,7 @@ mod test {
     #[test]
     fn text_attributes() {
         let doc = Doc::with_client_id(1);
-        let f = doc.get_xml_fragment("test");
+        let f = doc.get_or_insert_xml_fragment("test");
         let mut txn = doc.transact_mut();
         let txt = f.push_back(&mut txn, XmlTextPrelim(""));
         txt.insert_attribute(&mut txn, "test", 42.to_string());
@@ -1103,7 +1103,7 @@ mod test {
     #[test]
     fn siblings() {
         let doc = Doc::with_client_id(1);
-        let root = doc.get_xml_fragment("root");
+        let root = doc.get_or_insert_xml_fragment("root");
         let mut txn = doc.transact_mut();
         let first = root.push_back(&mut txn, XmlTextPrelim("hello"));
         let second = root.push_back(&mut txn, XmlElementPrelim::empty("p"));
@@ -1134,7 +1134,7 @@ mod test {
     #[test]
     fn serialization() {
         let d1 = Doc::with_client_id(1);
-        let r1 = d1.get_xml_fragment("root");
+        let r1 = d1.get_or_insert_xml_fragment("root");
         let mut t1 = d1.transact_mut();
         let first = r1.push_back(&mut t1, XmlTextPrelim("hello"));
         r1.push_back(&mut t1, XmlElementPrelim::empty("p"));
@@ -1145,7 +1145,7 @@ mod test {
         let u1 = t1.encode_state_as_update_v1(&StateVector::default());
 
         let d2 = Doc::with_client_id(2);
-        let r2 = d2.get_xml_fragment("root");
+        let r2 = d2.get_or_insert_xml_fragment("root");
         let mut t2 = d2.transact_mut();
 
         t2.apply_update(Update::decode_v1(u1.as_slice()).unwrap());
@@ -1155,7 +1155,7 @@ mod test {
     #[test]
     fn serialization_compatibility() {
         let d1 = Doc::with_client_id(1);
-        let r1 = d1.get_xml_fragment("root");
+        let r1 = d1.get_or_insert_xml_fragment("root");
         let mut t1 = d1.transact_mut();
         let first = r1.push_back(&mut t1, XmlTextPrelim("hello"));
         r1.push_back(&mut t1, XmlElementPrelim::empty("p"));
@@ -1183,7 +1183,7 @@ mod test {
     #[test]
     fn event_observers() {
         let d1 = Doc::with_client_id(1);
-        let mut xml = d1.get_xml_element("test");
+        let mut xml = d1.get_or_insert_xml_element("test");
 
         let attributes = Rc::new(RefCell::new(None));
         let nodes = Rc::new(RefCell::new(None));
@@ -1273,7 +1273,7 @@ mod test {
 
         // copy updates over
         let d2 = Doc::with_client_id(2);
-        let mut xml2 = d2.get_xml_element("test");
+        let mut xml2 = d2.get_or_insert_xml_element("test");
 
         let attributes = Rc::new(RefCell::new(None));
         let nodes = Rc::new(RefCell::new(None));
@@ -1311,7 +1311,7 @@ mod test {
     #[test]
     fn xml_text_to_string() {
         let doc = Doc::new();
-        let f = doc.get_xml_fragment("test");
+        let f = doc.get_or_insert_xml_fragment("test");
         let mut txn = doc.transact_mut();
         let text = f.push_back(&mut txn, XmlTextPrelim("hello world"));
         text.format(
