@@ -174,7 +174,7 @@ impl YDoc {
     /// onto `YText` instance.
     #[wasm_bindgen(js_name = getText)]
     pub fn get_text(&mut self, name: &str) -> YText {
-        self.0.get_text(name).into()
+        self.0.get_or_insert_text(name).into()
     }
 
     /// Returns a `YArray` shared data type, that's accessible for subsequent accesses using given
@@ -186,7 +186,7 @@ impl YDoc {
     /// onto `YArray` instance.
     #[wasm_bindgen(js_name = getArray)]
     pub fn get_array(&mut self, name: &str) -> YArray {
-        self.0.get_array(name).into()
+        self.0.get_or_insert_array(name).into()
     }
 
     /// Returns a `YMap` shared data type, that's accessible for subsequent accesses using given
@@ -198,7 +198,7 @@ impl YDoc {
     /// onto `YMap` instance.
     #[wasm_bindgen(js_name = getMap)]
     pub fn get_map(&mut self, name: &str) -> YMap {
-        self.0.get_map(name).into()
+        self.0.get_or_insert_map(name).into()
     }
 
     /// Returns a `YXmlFragment` shared data type, that's accessible for subsequent accesses using
@@ -210,7 +210,7 @@ impl YDoc {
     /// onto `YXmlFragment` instance.
     #[wasm_bindgen(js_name = getXmlFragment)]
     pub fn get_xml_fragment(&mut self, name: &str) -> YXmlFragment {
-        YXmlFragment(self.0.get_xml_fragment(name))
+        YXmlFragment(self.0.get_or_insert_xml_fragment(name))
     }
 
     /// Returns a `YXmlElement` shared data type, that's accessible for subsequent accesses using
@@ -222,7 +222,19 @@ impl YDoc {
     /// onto `YXmlElement` instance.
     #[wasm_bindgen(js_name = getXmlElement)]
     pub fn get_xml_element(&mut self, name: &str) -> YXmlElement {
-        YXmlElement(self.0.get_xml_element(name))
+        YXmlElement(self.0.get_or_insert_xml_element(name))
+    }
+
+    /// Returns a `YXmlText` shared data type, that's accessible for subsequent accesses using given
+    /// `name`.
+    ///
+    /// If there was no instance with this name before, it will be created and then returned.
+    ///
+    /// If there was an instance with this name, but it was of different type, it will be projected
+    /// onto `YXmlText` instance.
+    #[wasm_bindgen(js_name = getXmlText)]
+    pub fn get_xml_text(&mut self, name: &str) -> YXmlText {
+        YXmlText(self.0.get_or_insert_xml_text(name))
     }
 
     /// Subscribes given function to be called any time, a remote update is being applied to this

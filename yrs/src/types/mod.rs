@@ -7,7 +7,6 @@ use crate::*;
 pub use map::Map;
 pub use map::MapRef;
 use std::borrow::Borrow;
-use std::cell::RefCell;
 pub use text::Text;
 pub use text::TextRef;
 
@@ -17,6 +16,7 @@ use crate::types::array::{ArrayEvent, ArrayRef};
 use crate::types::map::MapEvent;
 use crate::types::text::TextEvent;
 use crate::types::xml::{XmlElementRef, XmlEvent, XmlTextEvent, XmlTextRef};
+use atomic_refcell::AtomicRefCell;
 use lib0::any::Any;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::convert::TryInto;
@@ -24,8 +24,8 @@ use std::fmt::Formatter;
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 use std::ptr::NonNull;
-use std::rc::{Rc, Weak};
-use std::sync::Arc;
+use std::rc::Rc;
+use std::sync::{Arc, Weak};
 
 pub type TypeRefs = u8;
 
@@ -250,7 +250,7 @@ pub struct Branch {
     /// another complex type.
     pub(crate) item: Option<BlockPtr>,
 
-    pub(crate) store: Option<Weak<RefCell<Store>>>,
+    pub(crate) store: Option<Weak<AtomicRefCell<Store>>>,
 
     /// A tag name identifier, used only by [XmlElement].
     pub name: Option<Rc<str>>,

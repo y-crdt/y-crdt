@@ -930,13 +930,17 @@ void ytransaction_commit(YTransaction *txn);
 uint8_t ytransaction_writeable(YTransaction *txn);
 
 /**
+ * Gets a reference to shared data type instance at the document root-level,
+ * identified by its `name`, which must be a null-terminated UTF-8 compatible string.
+ *
+ * Returns `NULL` if no such structure was defined in the document before.
+ */
+Branch *ytype_get(YTransaction *txn, const char *name);
+
+/**
  * Gets or creates a new shared `YText` data type instance as a root-level type of a given document.
  * This structure can later be accessed using its `name`, which must be a null-terminated UTF-8
  * compatible string.
- *
- * Use [ytext_destroy] in order to release pointer returned that way - keep in mind that this will
- * not remove `YText` instance from the document itself (once created it'll last for the entire
- * lifecycle of a document).
  */
 Branch *ytext(YDoc *doc, const char *name);
 
@@ -968,7 +972,7 @@ Branch *ymap(YDoc *doc, const char *name);
  * document. This structure can later be accessed using its `name`, which must be a null-terminated
  * UTF-8 compatible string.
  */
-Branch *yxmlelement(YDoc *doc, const char *name);
+Branch *yxmlelem(YDoc *doc, const char *name);
 
 /**
  * Gets or creates a new shared `YXmlElement` data type instance as a root-level type of a given
@@ -976,6 +980,13 @@ Branch *yxmlelement(YDoc *doc, const char *name);
  * UTF-8 compatible string.
  */
 Branch *yxmlfragment(YDoc *doc, const char *name);
+
+/**
+ * Gets or creates a new shared `YXmlText` data type instance as a root-level type of a given
+ * document. This structure can later be accessed using its `name`, which must be a null-terminated
+ * UTF-8 compatible string.
+ */
+Branch *yxmltext(YDoc *doc, const char *name);
 
 /**
  * Returns a state vector of a current transaction's document, serialized using lib0 version 1

@@ -3,6 +3,12 @@
 version = 3
 
 [[package]]
+name = "atomic_refcell"
+version = "0.1.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "73b5e5f48b927f04e952dedc932f31995a65a0bf65ec971c74436e51bf6e970d"
+
+[[package]]
 name = "atty"
 version = "0.2.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -291,7 +297,7 @@ checksum = "e2abad23fbc42b3700f2f279844dc832adb2b2eb069b2df918f455c4e18cc646"
 
 [[package]]
 name = "lib0"
-version = "0.12.2"
+version = "0.13.0"
 dependencies = [
  "criterion",
  "proptest",
@@ -1018,7 +1024,7 @@ checksum = "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f"
 
 [[package]]
 name = "yffi"
-version = "0.12.2"
+version = "0.13.0"
 dependencies = [
  "lib0",
  "uuid",
@@ -1027,8 +1033,9 @@ dependencies = [
 
 [[package]]
 name = "yrs"
-version = "0.12.2"
+version = "0.13.0"
 dependencies = [
+ "atomic_refcell",
  "criterion",
  "lib0",
  "rand 0.7.3",
@@ -1039,7 +1046,7 @@ dependencies = [
 
 [[package]]
 name = "ywasm"
-version = "0.12.2"
+version = "0.13.0"
 dependencies = [
  "console_error_panic_hook",
  "js-sys",

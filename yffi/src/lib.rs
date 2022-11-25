@@ -538,20 +538,35 @@ pub unsafe extern "C" fn ytransaction_writeable(txn: *mut Transaction) -> u8 {
     }
 }
 
+/// Gets a reference to shared data type instance at the document root-level,
+/// identified by its `name`, which must be a null-terminated UTF-8 compatible string.
+///
+/// Returns `NULL` if no such structure was defined in the document before.
+#[no_mangle]
+pub unsafe extern "C" fn ytype_get(txn: *mut Transaction, name: *const c_char) -> *mut Branch {
+    assert!(!txn.is_null());
+    assert!(!name.is_null());
+
+    let name = CStr::from_ptr(name).to_str().unwrap();
+    //NOTE: we're retrieving this as a text, but ultimatelly it doesn't matter as we don't define
+    // nor redefine the underlying branch type
+    if let Some(txt) = txn.as_mut().unwrap().get_text(name) {
+        txt.into_raw_branch()
+    } else {
+        null_mut()
+    }
+}
+
 /// Gets or creates a new shared `YText` data type instance as a root-level type of a given document.
 /// This structure can later be accessed using its `name`, which must be a null-terminated UTF-8
 /// compatible string.
-///
-/// Use [ytext_destroy] in order to release pointer returned that way - keep in mind that this will
-/// not remove `YText` instance from the document itself (once created it'll last for the entire
-/// lifecycle of a document).
 #[no_mangle]
 pub unsafe extern "C" fn ytext(doc: *mut Doc, name: *const c_char) -> *mut Branch {
     assert!(!doc.is_null());
     assert!(!name.is_null());
 
     let name = CStr::from_ptr(name).to_str().unwrap();
-    let txt = doc.as_mut().unwrap().get_text(name);
+    let txt = doc.as_mut().unwrap().get_or_insert_text(name);
     txt.into_raw_branch()
 }
 
@@ -568,7 +583,10 @@ pub unsafe extern "C" fn yarray(doc: *mut Doc, name: *const c_char) -> *mut Bran
     assert!(!name.is_null());
 
     let name = CStr::from_ptr(name).to_str().unwrap();
-    doc.as_mut().unwrap().get_array(name).into_raw_branch()
+    doc.as_mut()
+        .unwrap()
+        .get_or_insert_array(name)
+        .into_raw_branch()
 }
 
 /// Gets or creates a new shared `YMap` data type instance as a root-level type of a given document.
@@ -584,21 +602,24 @@ pub unsafe extern "C" fn ymap(doc: *mut Doc, name: *const c_char) -> *mut Branch
     assert!(!name.is_null());
 
     let name = CStr::from_ptr(name).to_str().unwrap();
-    doc.as_mut().unwrap().get_map(name).into_raw_branch()
+    doc.as_mut()
+        .unwrap()
+        .get_or_insert_map(name)
+        .into_raw_branch()
 }
 
 /// Gets or creates a new shared `YXmlElement` data type instance as a root-level type of a given
 /// document. This structure can later be accessed using its `name`, which must be a null-terminated
 /// UTF-8 compatible string.
 #[no_mangle]
-pub unsafe extern "C" fn yxmlelement(doc: *mut Doc, name: *const c_char) -> *mut Branch {
+pub unsafe extern "C" fn yxmlelem(doc: *mut Doc, name: *const c_char) -> *mut Branch {
     assert!(!doc.is_null());
     assert!(!name.is_null());
 
     let name = CStr::from_ptr(name).to_str().unwrap();
     doc.as_mut()
         .unwrap()
-        .get_xml_element(name)
+        .get_or_insert_xml_element(name)
         .into_raw_branch()
 }
 
@@ -613,7 +634,22 @@ pub unsafe extern "C" fn yxmlfragment(doc: *mut Doc, name: *const c_char) -> *mu
     let name = CStr::from_ptr(name).to_str().unwrap();
     doc.as_mut()
         .unwrap()
-        .get_xml_fragment(name)
+        .get_or_insert_xml_fragment(name)
+        .into_raw_branch()
+}
+
+/// Gets or creates a new shared `YXmlText` data type instance as a root-level type of a given
+/// document. This structure can later be accessed using its `name`, which must be a null-terminated
+/// UTF-8 compatible string.
+#[no_mangle]
+pub unsafe extern "C" fn yxmltext(doc: *mut Doc, name: *const c_char) -> *mut Branch {
+    assert!(!doc.is_null());
+    assert!(!name.is_null());
+
+    let name = CStr::from_ptr(name).to_str().unwrap();
+    doc.as_mut()
+        .unwrap()
+        .get_or_insert_xml_text(name)
         .into_raw_branch()
 }
 

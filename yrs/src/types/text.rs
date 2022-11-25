@@ -1057,7 +1057,7 @@ mod test {
     #[test]
     fn insert_empty_string() {
         let doc = Doc::new();
-        let txt = doc.get_text("test");
+        let txt = doc.get_or_insert_text("test");
         let mut txn = doc.transact_mut();
 
         assert_eq!(txt.get_string(&txn).as_str(), "");
@@ -1073,7 +1073,7 @@ mod test {
     #[test]
     fn append_single_character_blocks() {
         let doc = Doc::new();
-        let txt = doc.get_text("test");
+        let txt = doc.get_or_insert_text("test");
         let mut txn = doc.transact_mut();
 
         txt.insert(&mut txn, 0, "a");
@@ -1086,7 +1086,7 @@ mod test {
     #[test]
     fn append_mutli_character_blocks() {
         let doc = Doc::new();
-        let txt = doc.get_text("test");
+        let txt = doc.get_or_insert_text("test");
         let mut txn = doc.transact_mut();
 
         txt.insert(&mut txn, 0, "hello");
@@ -1099,7 +1099,7 @@ mod test {
     #[test]
     fn prepend_single_character_blocks() {
         let doc = Doc::new();
-        let txt = doc.get_text("test");
+        let txt = doc.get_or_insert_text("test");
         let mut txn = doc.transact_mut();
 
         txt.insert(&mut txn, 0, "a");
@@ -1112,7 +1112,7 @@ mod test {
     #[test]
     fn prepend_mutli_character_blocks() {
         let doc = Doc::new();
-        let txt = doc.get_text("test");
+        let txt = doc.get_or_insert_text("test");
         let mut txn = doc.transact_mut();
 
         txt.insert(&mut txn, 0, "hello");
@@ -1125,7 +1125,7 @@ mod test {
     #[test]
     fn insert_after_block() {
         let doc = Doc::new();
-        let txt = doc.get_text("test");
+        let txt = doc.get_or_insert_text("test");
         let mut txn = doc.transact_mut();
 
         txt.insert(&mut txn, 0, "hello");
@@ -1139,7 +1139,7 @@ mod test {
     #[test]
     fn insert_inside_of_block() {
         let doc = Doc::new();
-        let txt = doc.get_text("test");
+        let txt = doc.get_or_insert_text("test");
         let mut txn = doc.transact_mut();
 
         txt.insert(&mut txn, 0, "it was expected");
@@ -1151,13 +1151,13 @@ mod test {
     #[test]
     fn insert_concurrent_root() {
         let d1 = Doc::with_client_id(1);
-        let txt1 = d1.get_text("test");
+        let txt1 = d1.get_or_insert_text("test");
         let mut t1 = d1.transact_mut();
 
         txt1.insert(&mut t1, 0, "hello ");
 
         let d2 = Doc::with_client_id(2);
-        let txt2 = d2.get_text("test");
+        let txt2 = d2.get_or_insert_text("test");
         let mut t2 = d2.transact_mut();
 
         txt2.insert(&mut t2, 0, "world");
@@ -1181,14 +1181,14 @@ mod test {
     #[test]
     fn insert_concurrent_in_the_middle() {
         let d1 = Doc::with_client_id(1);
-        let txt1 = d1.get_text("test");
+        let txt1 = d1.get_or_insert_text("test");
         let mut t1 = d1.transact_mut();
 
         txt1.insert(&mut t1, 0, "I expect that");
         assert_eq!(txt1.get_string(&t1).as_str(), "I expect that");
 
         let d2 = Doc::with_client_id(2);
-        let txt2 = d2.get_text("test");
+        let txt2 = d2.get_or_insert_text("test");
         let mut t2 = d2.transact_mut();
 
         let d2_sv = t2.state_vector().encode_v1();
@@ -1221,14 +1221,14 @@ mod test {
     #[test]
     fn append_concurrent() {
         let d1 = Doc::with_client_id(1);
-        let txt1 = d1.get_text("test");
+        let txt1 = d1.get_or_insert_text("test");
         let mut t1 = d1.transact_mut();
 
         txt1.insert(&mut t1, 0, "aaa");
         assert_eq!(txt1.get_string(&t1).as_str(), "aaa");
 
         let d2 = Doc::with_client_id(2);
-        let txt2 = d2.get_text("test");
+        let txt2 = d2.get_or_insert_text("test");
         let mut t2 = d2.transact_mut();
 
         let d2_sv = t2.state_vector().encode_v1();
@@ -1262,7 +1262,7 @@ mod test {
     #[test]
     fn delete_single_block_start() {
         let doc = Doc::new();
-        let txt = doc.get_text("test");
+        let txt = doc.get_or_insert_text("test");
         let mut txn = doc.transact_mut();
 
         txt.insert(&mut txn, 0, "bbb");
@@ -1276,7 +1276,7 @@ mod test {
     #[test]
     fn delete_single_block_end() {
         let doc = Doc::new();
-        let txt = doc.get_text("test");
+        let txt = doc.get_or_insert_text("test");
         let mut txn = doc.transact_mut();
 
         txt.insert(&mut txn, 0, "bbb");
@@ -1289,7 +1289,7 @@ mod test {
     #[test]
     fn delete_multiple_whole_blocks() {
         let doc = Doc::new();
-        let txt = doc.get_text("test");
+        let txt = doc.get_or_insert_text("test");
         let mut txn = doc.transact_mut();
 
         txt.insert(&mut txn, 0, "a");
@@ -1309,7 +1309,7 @@ mod test {
     #[test]
     fn delete_slice_of_block() {
         let doc = Doc::new();
-        let txt = doc.get_text("test");
+        let txt = doc.get_or_insert_text("test");
         let mut txn = doc.transact_mut();
 
         txt.insert(&mut txn, 0, "abc");
@@ -1321,7 +1321,7 @@ mod test {
     #[test]
     fn delete_multiple_blocks_with_slicing() {
         let doc = Doc::new();
-        let txt = doc.get_text("test");
+        let txt = doc.get_or_insert_text("test");
         let mut txn = doc.transact_mut();
 
         txt.insert(&mut txn, 0, "hello ");
@@ -1335,7 +1335,7 @@ mod test {
     #[test]
     fn insert_after_delete() {
         let doc = Doc::new();
-        let txt = doc.get_text("test");
+        let txt = doc.get_or_insert_text("test");
         let mut txn = doc.transact_mut();
 
         txt.insert(&mut txn, 0, "hello ");
@@ -1348,7 +1348,7 @@ mod test {
     #[test]
     fn concurrent_insert_delete() {
         let d1 = Doc::with_client_id(1);
-        let txt1 = d1.get_text("test");
+        let txt1 = d1.get_or_insert_text("test");
         let mut t1 = d1.transact_mut();
 
         txt1.insert(&mut t1, 0, "hello world");
@@ -1357,7 +1357,7 @@ mod test {
         let u1 = t1.encode_state_as_update_v1(&StateVector::default());
 
         let d2 = Doc::with_client_id(2);
-        let txt2 = d2.get_text("test");
+        let txt2 = d2.get_or_insert_text("test");
         let mut t2 = d2.transact_mut();
         t2.apply_update(Update::decode_v1(u1.as_slice()).unwrap());
         assert_eq!(txt2.get_string(&t2).as_str(), "hello world");
@@ -1390,7 +1390,7 @@ mod test {
     #[test]
     fn insert_and_remove_event_changes() {
         let d1 = Doc::with_client_id(1);
-        let mut txt = d1.get_text("text");
+        let mut txt = d1.get_or_insert_text("text");
         let delta = Rc::new(RefCell::new(None));
         let delta_c = delta.clone();
         let _sub = txt.observe(move |txn, e| {
@@ -1432,7 +1432,7 @@ mod test {
 
         // replicate data to another peer
         let d2 = Doc::with_client_id(2);
-        let mut txt = d2.get_text("text");
+        let mut txt = d2.get_or_insert_text("text");
         let delta_c = delta.clone();
         let _sub = txt.observe(move |txn, e| {
             *delta_c.borrow_mut() = Some(e.delta(txn).to_vec());
@@ -1459,7 +1459,7 @@ mod test {
         let mut options = Options::with_client_id(1);
         options.offset_kind = OffsetKind::Utf32;
         let doc = Doc::with_options(options);
-        let txt = doc.get_text("content");
+        let txt = doc.get_or_insert_text("content");
 
         txt.insert(&mut doc.transact_mut(), 0, r#"“”"#); // these chars are 3B long each
         txt.insert(&mut doc.transact_mut(), 1, r#"test"#);
@@ -1474,14 +1474,14 @@ mod test {
             options.offset_kind = OffsetKind::Utf32;
             Doc::with_options(options)
         };
-        let txt1 = d1.get_text("test");
+        let txt1 = d1.get_or_insert_text("test");
 
         let d2 = {
             let mut options = Options::with_client_id(2);
             options.offset_kind = OffsetKind::Bytes;
             Doc::with_options(options)
         };
-        let txt2 = d2.get_text("test");
+        let txt2 = d2.get_or_insert_text("test");
 
         {
             let mut txn = d1.transact_mut();
@@ -1519,7 +1519,7 @@ mod test {
 
     fn text_transactions() -> [Box<dyn Fn(&mut Doc, &mut StdRng)>; 2] {
         fn insert_text(doc: &mut Doc, rng: &mut StdRng) {
-            let ytext = doc.get_text("text");
+            let ytext = doc.get_or_insert_text("text");
             let mut txn = doc.transact_mut();
             let pos = rng.between(0, ytext.len(&txn));
             let word = rng.random_string();
@@ -1527,7 +1527,7 @@ mod test {
         }
 
         fn delete_text(doc: &mut Doc, rng: &mut StdRng) {
-            let ytext = doc.get_text("text");
+            let ytext = doc.get_or_insert_text("text");
             let mut txn = doc.transact_mut();
             let len = ytext.len(&txn);
             if len > 0 {
@@ -1552,7 +1552,7 @@ mod test {
     #[test]
     fn basic_format() {
         let d1 = Doc::with_client_id(1);
-        let mut txt1 = d1.get_text("text");
+        let mut txt1 = d1.get_or_insert_text("text");
 
         let delta1 = Rc::new(RefCell::new(None));
         let delta_clone = delta1.clone();
@@ -1561,7 +1561,7 @@ mod test {
         });
 
         let d2 = Doc::with_client_id(2);
-        let mut txt2 = d2.get_text("text");
+        let mut txt2 = d2.get_or_insert_text("text");
 
         let delta2 = Rc::new(RefCell::new(None));
         let delta_clone = delta2.clone();
@@ -1732,7 +1732,7 @@ mod test {
     #[test]
     fn embed_with_attributes() {
         let d1 = Doc::with_client_id(1);
-        let mut txt1 = d1.get_text("text");
+        let mut txt1 = d1.get_or_insert_text("text");
 
         let delta1 = Rc::new(RefCell::new(None));
         let delta_clone = delta1.clone();
@@ -1777,7 +1777,7 @@ mod test {
     #[test]
     fn issue_101() {
         let d1 = Doc::with_client_id(1);
-        let mut txt1 = d1.get_text("text");
+        let mut txt1 = d1.get_or_insert_text("text");
         let delta = Rc::new(RefCell::new(None));
         let delta_copy = delta.clone();
 
@@ -1815,21 +1815,21 @@ mod test {
         let text2 = r#"test"#;
 
         {
-            let text = doc.get_text("content");
+            let text = doc.get_or_insert_text("content");
             let mut txn = doc.transact_mut();
             text.insert(&mut txn, 0, text1);
             txn.commit();
         }
 
         {
-            let text = doc.get_text("content");
+            let text = doc.get_or_insert_text("content");
             let mut txn = doc.transact_mut();
             text.insert(&mut txn, 100, text2);
             txn.commit();
         }
 
         {
-            let mut text = doc.get_text("content");
+            let mut text = doc.get_or_insert_text("content");
             let mut txn = doc.transact_mut();
 
             let c1 = text1.chars().count();
@@ -1846,7 +1846,7 @@ mod test {
         }
 
         {
-            let text = doc.get_text("content");
+            let text = doc.get_or_insert_text("content");
             assert_eq!(text.get_string(&text.transact()), "");
         }
     }
@@ -1854,7 +1854,7 @@ mod test {
     #[test]
     fn text_diff_adjacent() {
         let doc = Doc::with_client_id(1);
-        let txt = doc.get_text("text");
+        let txt = doc.get_or_insert_text("text");
         let mut txn = doc.transact_mut();
         let attrs1 = Attrs::from([("a".into(), "a".into())]);
         txt.insert_with_attributes(&mut txn, 0, "abc", attrs1.clone());
@@ -1872,7 +1872,7 @@ mod test {
     #[test]
     fn text_remove_4_byte_range() {
         let d1 = Doc::new();
-        let txt = d1.get_text("test");
+        let txt = d1.get_or_insert_text("test");
 
         txt.insert(&mut d1.transact_mut(), 0, "😭😊");
 
@@ -1883,14 +1883,14 @@ mod test {
         assert_eq!(txt.get_string(&txt.transact()).as_str(), "😊");
 
         exchange_updates(&[&d1, &d2]);
-        let txt = d2.get_text("test");
+        let txt = d2.get_or_insert_text("test");
         assert_eq!(txt.get_string(&txt.transact()).as_str(), "😊");
     }
 
     #[test]
     fn text_remove_3_byte_range() {
         let d1 = Doc::new();
-        let txt = d1.get_text("test");
+        let txt = d1.get_or_insert_text("test");
 
         txt.insert(&mut d1.transact_mut(), 0, "⏰⏳");
 
@@ -1901,13 +1901,13 @@ mod test {
         assert_eq!(txt.get_string(&txt.transact()).as_str(), "⏳");
 
         exchange_updates(&[&d1, &d2]);
-        let txt = d2.get_text("test");
+        let txt = d2.get_or_insert_text("test");
         assert_eq!(txt.get_string(&txt.transact()).as_str(), "⏳");
     }
     #[test]
     fn delete_4_byte_character_from_middle() {
         let doc = Doc::new();
-        let txt = doc.get_text("test");
+        let txt = doc.get_or_insert_text("test");
         let mut txn = doc.transact_mut();
 
         txt.insert(&mut txn, 0, "😊😭");
@@ -1921,7 +1921,7 @@ mod test {
     #[test]
     fn delete_3_byte_character_from_middle_1() {
         let doc = Doc::new();
-        let txt = doc.get_text("test");
+        let txt = doc.get_or_insert_text("test");
         let mut txn = doc.transact_mut();
 
         txt.insert(&mut txn, 0, "⏰⏳");
@@ -1935,7 +1935,7 @@ mod test {
     #[test]
     fn delete_3_byte_character_from_middle_2() {
         let doc = Doc::new();
-        let txt = doc.get_text("test");
+        let txt = doc.get_or_insert_text("test");
         let mut txn = doc.transact_mut();
 
         txt.insert(&mut txn, 0, "👯🙇‍♀️🙇‍♀️⏰👩‍❤️‍💋‍👨");
@@ -1954,7 +1954,7 @@ mod test {
     #[test]
     fn delete_3_byte_character_from_middle_after_insert_and_format() {
         let doc = Doc::new();
-        let txt = doc.get_text("test");
+        let txt = doc.get_or_insert_text("test");
         let mut txn = doc.transact_mut();
 
         txt.insert(&mut txn, 0, "🙇‍♀️🙇‍♀️⏰👩‍❤️‍💋‍👨");
@@ -1975,7 +1975,7 @@ mod test {
     #[test]
     fn delete_multi_byte_character_from_middle_after_insert_and_format() {
         let doc = Doc::with_client_id(1);
-        let txt = doc.get_text("test");
+        let txt = doc.get_or_insert_text("test");
         let mut txn = doc.transact_mut();
 
         txt.insert(&mut txn, 0, "❤️❤️🙇‍♀️🙇‍♀️⏰👩‍❤️‍💋‍👨👩‍❤️‍💋‍👨");
@@ -2004,7 +2004,7 @@ mod test {
     #[test]
     fn insert_string_with_no_attribute() {
         let doc = Doc::new();
-        let txt = doc.get_text("test");
+        let txt = doc.get_or_insert_text("test");
         let mut txn = doc.transact_mut();
 
         let attrs = Attrs::from([("a".into(), "a".into())]);
@@ -2023,7 +2023,7 @@ mod test {
     #[test]
     fn snapshots() {
         let doc = Doc::with_client_id(1);
-        let text = doc.get_text("text");
+        let text = doc.get_or_insert_text("text");
         text.insert(&mut doc.transact_mut(), 0, "hello");
         let prev = doc.transact_mut().snapshot();
         text.insert(&mut doc.transact_mut(), 5, " world");
@@ -2051,10 +2051,10 @@ mod test {
     #[test]
     fn multi_threading() {
         use rand::thread_rng;
-        use std::sync::{Arc, Mutex};
+        use std::sync::{Arc, RwLock};
         use std::thread::{sleep, spawn};
 
-        let doc = Arc::new(Mutex::new(Doc::with_client_id(1)));
+        let doc = Arc::new(RwLock::new(Doc::with_client_id(1)));
 
         let d2 = doc.clone();
         let h2 = spawn(move || {
@@ -2062,8 +2062,8 @@ mod test {
                 let millis = thread_rng().gen_range(1, 20);
                 sleep(Duration::from_millis(millis));
 
-                let doc = d2.lock().unwrap();
-                let txt = doc.get_text("test");
+                let doc = d2.write().unwrap();
+                let txt = doc.get_or_insert_text("test");
                 let mut txn = doc.transact_mut();
                 txt.push(&mut txn, "a");
             }
@@ -2075,8 +2075,8 @@ mod test {
                 let millis = thread_rng().gen_range(1, 20);
                 sleep(Duration::from_millis(millis));
 
-                let doc = d3.lock().unwrap();
-                let txt = doc.get_text("test");
+                let doc = d3.write().unwrap();
+                let txt = doc.get_or_insert_text("test");
                 let mut txn = txt.transact_mut();
                 txt.push(&mut txn, "b");
             }
@@ -2085,8 +2085,8 @@ mod test {
         h3.join().unwrap();
         h2.join().unwrap();
 
-        let doc = doc.lock().unwrap();
-        let txt = doc.get_text("test");
+        let doc = doc.read().unwrap();
+        let txt = doc.get_or_insert_text("test");
         let len = txt.len(&doc.transact());
         assert_eq!(len, 20);
     }

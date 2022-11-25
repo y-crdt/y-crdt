@@ -233,7 +233,7 @@ TEST_CASE("YMap basic") {
 
 TEST_CASE("YXmlElement basic") {
     YDoc* doc = ydoc_new_with_id(1);
-    Branch* xml = yxmlelement(doc, "test");
+    Branch* xml = yxmlelem(doc, "test");
     YTransaction* txn = ydoc_write_transaction(doc);
 
     // XML attributes API
@@ -288,13 +288,13 @@ TEST_CASE("YXmlElement basic") {
     ystring_destroy(tag);
 
     tag = yxmlelem_tag(xml);
-    REQUIRE(!strcmp(tag, "UNDEFINED"));
+    REQUIRE(!strcmp(tag, "test"));
     ystring_destroy(tag);
 
     // check parents
     Branch* parent = yxmlelem_parent(inner);
     tag = yxmlelem_tag(parent);
-    REQUIRE(!strcmp(tag, "UNDEFINED"));
+    REQUIRE(!strcmp(tag, "test"));
     ystring_destroy(tag);
 
     parent = yxmlelem_parent(xml);
@@ -840,7 +840,7 @@ void yxml_test_clean(YXmlEventTest* t) {
 
 TEST_CASE("YXmlElement observe") {
     YDoc* doc = ydoc_new_with_id(1);
-    Branch* xml = yxmlelement(doc, "test");
+    Branch* xml = yxmlelem(doc, "test");
     YTransaction* txn = ydoc_write_transaction(doc);
 
     YXmlEventTest* t = yxml_event_test_new();
