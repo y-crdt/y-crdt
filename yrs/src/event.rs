@@ -1,5 +1,5 @@
 use crate::transaction::Subdocs;
-use crate::{DeleteSet, DocRef, StateVector};
+use crate::{DeleteSet, DocRef, StateVector, TransactionMut};
 use std::collections::HashMap;
 use uuid::Uuid;
 
@@ -12,8 +12,15 @@ pub struct UpdateEvent {
 }
 
 impl UpdateEvent {
-    pub(crate) fn new(update: Vec<u8>) -> Self {
-        UpdateEvent { update }
+    pub(crate) fn new_v1(txn: &TransactionMut) -> Self {
+        UpdateEvent {
+            update: txn.encode_update_v1(),
+        }
+    }
+    pub(crate) fn new_v2(txn: &TransactionMut) -> Self {
+        UpdateEvent {
+            update: txn.encode_update_v2(),
+        }
     }
 }
 
@@ -23,6 +30,16 @@ pub struct AfterTransactionEvent {
     pub before_state: StateVector,
     pub after_state: StateVector,
     pub delete_set: DeleteSet,
+}
+
+impl AfterTransactionEvent {
+    pub fn new(txn: &TransactionMut) -> Self {
+        AfterTransactionEvent {
+            before_state: txn.before_state.clone(),
+            after_state: txn.after_state.clone(),
+            delete_set: txn.delete_set.clone(),
+        }
+    }
 }
 
 /// Event used to communicate load requests from the underlying subdocuments.

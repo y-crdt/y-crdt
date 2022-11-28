@@ -119,11 +119,14 @@ impl TestConnector {
         } else {
             let rc = self.0.clone();
             let inner = unsafe { self.0.as_ptr().as_mut().unwrap() };
-            let mut instance = TestPeer::new(client_id);
-            instance.doc.observe_update_v1(move |_, e| {
-                let mut inner = rc.borrow_mut();
-                Self::broadcast(&mut inner, client_id, &e.update);
-            });
+            let instance = TestPeer::new(client_id);
+            let _sub = instance
+                .doc
+                .observe_update_v1(move |_, e| {
+                    let mut inner = rc.borrow_mut();
+                    Self::broadcast(&mut inner, client_id, &e.update);
+                })
+                .unwrap();
             let idx = inner.peers.len();
             inner.peers.push(instance);
             inner.all.insert(client_id, idx);

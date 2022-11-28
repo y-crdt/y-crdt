@@ -165,7 +165,7 @@ impl Update {
     /// pending update object is returned which contains blocks that couldn't be integrated, most
     /// likely because there were missing blocks that are used as a dependencies of other blocks
     /// contained in this update.
-    pub fn integrate(
+    pub(crate) fn integrate(
         mut self,
         txn: &mut TransactionMut,
     ) -> (Option<PendingUpdate>, Option<Update>) {

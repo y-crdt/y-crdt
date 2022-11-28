@@ -1,7 +1,7 @@
 use crate::doc::OffsetKind;
 use crate::moving::Move;
 use crate::store::Store;
-use crate::transaction::{Subdocs, TransactionMut};
+use crate::transaction::TransactionMut;
 use crate::types::text::update_current_attributes;
 use crate::types::{
     Attrs, Branch, BranchPtr, TypePtr, Value, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
@@ -10,6 +10,7 @@ use crate::types::{
 };
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
+use crate::utils::OptionExt;
 use crate::*;
 use lib0::any::Any;
 use lib0::error::Error;
@@ -393,8 +394,7 @@ impl BlockPtr {
                         ItemContent::Move(m) => m.integrate_block(txn, self_ptr),
                         ItemContent::Doc(doc) => {
                             doc.item = Some(self_ptr);
-                            let subdocs =
-                                txn.subdocs.get_or_insert_with(|| Box::new(Subdocs::new()));
+                            let subdocs = txn.subdocs.get_or_init();
                             let guid = doc.options().guid.clone();
                             subdocs.added.insert(guid, doc.clone());
                             if doc.options().should_load {
@@ -876,10 +876,8 @@ impl ItemPosition {
                         self.index += right.len();
                     }
                     ItemContent::Format(key, value) => {
-                        let attrs = self
-                            .current_attrs
-                            .get_or_insert_with(|| Box::new(Attrs::new()));
-                        update_current_attributes(attrs.as_mut(), key, value.as_ref());
+                        let attrs = self.current_attrs.get_or_init();
+                        update_current_attributes(attrs, key, value.as_ref());
                     }
                     _ => {}
                 }

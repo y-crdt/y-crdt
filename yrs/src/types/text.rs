@@ -4,6 +4,7 @@ use crate::transaction::TransactionMut;
 use crate::types::{
     Attrs, Branch, BranchPtr, Delta, EventHandler, Observers, Path, Value, TYPE_REFS_TEXT,
 };
+use crate::utils::OptionExt;
 use crate::*;
 use lib0::any::Any;
 use std::cell::UnsafeCell;
@@ -443,9 +444,7 @@ fn find_position(this: BranchPtr, txn: &mut TransactionMut, index: u32) -> Optio
         if let Some(mut ptr) = block_ptr {
             if let Block::Item(item) = ptr.deref_mut() {
                 if let ItemContent::Format(key, value) = &item.content {
-                    let attrs = pos
-                        .current_attrs
-                        .get_or_insert_with(|| Box::new(Attrs::new()));
+                    let attrs = pos.current_attrs.get_or_init();
                     update_current_attributes(attrs, key, value.as_ref());
                 }
             }

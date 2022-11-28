@@ -1,10 +1,11 @@
 use crate::block::{Block, BlockPtr, Item, ItemContent, Prelim, ID};
 use crate::block_store::{Snapshot, StateVector};
-use crate::event::{AfterTransactionEvent, SubdocsEvent};
+use crate::event::SubdocsEvent;
 use crate::id_set::DeleteSet;
 use crate::store::{Store, SubdocGuids, SubdocsIter};
 use crate::types::{Branch, BranchPtr, Event, Events, TypePtr, Value};
 use crate::update::Update;
+use crate::utils::OptionExt;
 use crate::*;
 use atomic_refcell::{AtomicRef, AtomicRefMut};
 use lib0::error::Error;
@@ -245,7 +246,7 @@ impl<'doc> WriteTxn for TransactionMut<'doc> {
     }
 
     fn subdocs_mut(&mut self) -> &mut Subdocs {
-        self.subdocs.get_or_insert_with(|| Box::new(Subdocs::new()))
+        self.subdocs.get_or_init()
     }
 }
 
@@ -462,7 +463,7 @@ impl<'doc> TransactionMut<'doc> {
 
                 match &item.content {
                     ItemContent::Doc(doc) => {
-                        let subdocs = self.subdocs.get_or_insert_with(|| Box::new(Subdocs::new()));
+                        let subdocs = self.subdocs.get_or_init();
                         let id = &doc.options().guid;
                         if subdocs.added.remove(id).is_none() {
                             subdocs.removed.insert(id.clone(), doc.clone());
@@ -713,37 +714,15 @@ impl<'doc> TransactionMut<'doc> {
             }
         }
 
-        // 8. emit 'afterTransactionCleanup'
-        if let Some(eh) = self.store.after_transaction_events.as_ref() {
-            let event = AfterTransactionEvent {
-                before_state: self.before_state.clone(),
-                after_state: self.after_state.clone(),
-                delete_set: self.delete_set.clone(),
-            };
-            for fun in eh.callbacks() {
-                fun(&self, &event);
-            }
+        if let Some(events) = self.store.events.as_ref() {
+            // 8. emit 'afterTransactionCleanup'
+            events.emit_transaction_cleanup(self);
+            // 9. emit 'update'
+            events.emit_update_v1(self);
+            // 10. emit 'updateV2'
+            events.emit_update_v2(self);
         }
-        // 9. emit 'update'
-        if let Some(eh) = self.store.update_v1_events.as_ref() {
-            if !self.delete_set.is_empty() || self.after_state != self.before_state {
-                // produce update only if anything changed
-                let update = UpdateEvent::new(self.encode_update_v1());
-                for fun in eh.callbacks() {
-                    fun(&self, &update);
-                }
-            }
-        }
-        // 10. emit 'updateV2'
-        if let Some(eh) = self.store.update_v2_events.as_ref() {
-            if !self.delete_set.is_empty() || self.after_state != self.before_state {
-                // produce update only if anything changed
-                let update = UpdateEvent::new(self.encode_update_v2());
-                for fun in eh.callbacks() {
-                    fun(&self, &update);
-                }
-            }
-        }
+
         // 11. add and remove subdocs
         let store = self.store.deref_mut();
         if let Some(mut subdocs) = self.subdocs.take() {
@@ -760,12 +739,16 @@ impl<'doc> TransactionMut<'doc> {
                 store.subdocs.remove(guid);
             }
 
-            let mut removed = if let Some(subdocs_events) = store.subdocs_events.as_ref() {
-                let e = SubdocsEvent::new(subdocs);
-                for cb in subdocs_events.callbacks() {
-                    cb(self, &e);
+            let mut removed = if let Some(events) = store.events.as_ref() {
+                if let Some(handler) = events.subdocs_events.as_ref() {
+                    let e = SubdocsEvent::new(subdocs);
+                    for cb in handler.callbacks() {
+                        cb(self, &e);
+                    }
+                    e.removed
+                } else {
+                    subdocs.removed
                 }
-                e.removed
             } else {
                 subdocs.removed
             };
@@ -907,18 +890,9 @@ impl<'doc> Iterator for RootRefs<'doc> {
     }
 }
 
+#[derive(Default)]
 pub struct Subdocs {
     pub(crate) added: HashMap<Uuid, DocRef>,
     pub(crate) removed: HashMap<Uuid, DocRef>,
     pub(crate) loaded: HashMap<Uuid, DocRef>,
-}
-
-impl Subdocs {
-    pub(crate) fn new() -> Self {
-        Subdocs {
-            added: HashMap::new(),
-            removed: HashMap::new(),
-            loaded: HashMap::new(),
-        }
-    }
 }
