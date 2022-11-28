@@ -14,7 +14,7 @@ description = "Bindings for the Yrs native C foreign function interface"
 [dependencies]
 lib0 = { path = "../lib0", version = "0.13.0" }
 yrs = { path = "../yrs", version = "0.13.0" }
-uuid = { version = "1.2", features = ["v4"] }
+rand = "0.7.0"
 
 [lib]
 crate-type = ["staticlib"]

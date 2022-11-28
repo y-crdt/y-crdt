@@ -10,8 +10,8 @@ use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::OptionExt;
 use crate::{
-    ArrayRef, MapRef, ReadTxn, SubscriptionId, TextRef, WriteTxn, XmlElementRef, XmlFragmentRef,
-    XmlTextRef,
+    uuid_v4, ArrayRef, MapRef, ReadTxn, SubscriptionId, TextRef, Uuid, WriteTxn, XmlElementRef,
+    XmlFragmentRef, XmlTextRef,
 };
 use atomic_refcell::{AtomicRef, AtomicRefMut, BorrowError, BorrowMutError};
 use lib0::any::Any;
@@ -350,7 +350,7 @@ pub struct Options {
     /// Globally unique 53-bit long client identifier.
     pub client_id: ClientID,
     /// A globally unique identifier for this document.
-    pub guid: uuid::Uuid,
+    pub guid: Uuid,
     /// Associate this document with a collection. This only plays a role if your provider has
     /// a concept of collection.
     pub collection_id: Option<String>,
@@ -370,7 +370,19 @@ impl Options {
     pub fn with_client_id(client_id: ClientID) -> Self {
         Options {
             client_id,
-            guid: uuid::Uuid::new_v4(),
+            guid: uuid_v4(&mut rand::thread_rng()),
+            collection_id: None,
+            offset_kind: OffsetKind::Bytes,
+            skip_gc: false,
+            auto_load: false,
+            should_load: true,
+        }
+    }
+
+    pub fn with_guid_and_client_id(guid: Uuid, client_id: ClientID) -> Self {
+        Options {
+            client_id,
+            guid,
             collection_id: None,
             offset_kind: OffsetKind::Bytes,
             skip_gc: false,
@@ -399,8 +411,10 @@ impl Options {
 
 impl Default for Options {
     fn default() -> Self {
-        let client_id: u32 = rand::thread_rng().gen();
-        Self::with_client_id(client_id as ClientID)
+        let mut rng = rand::thread_rng();
+        let client_id: u32 = rng.gen();
+        let uuid = uuid_v4(&mut rng);
+        Self::with_guid_and_client_id(uuid, client_id as ClientID)
     }
 }
 
@@ -417,11 +431,7 @@ impl Decode for Options {
         let mut options = Options::default();
         options.should_load = false; // for decoding shouldLoad is false by default
         let guid = decoder.read_string()?;
-        if let Ok(guid) = uuid::Uuid::parse_str(guid) {
-            options.guid = guid;
-        } else {
-            return Err(Error::Other(format!("Failed to parse UUID v4: '{}'", guid)));
-        }
+        options.guid = guid.into();
 
         if let Any::Map(opts) = decoder.read_any()? {
             for (k, v) in opts.iter() {
@@ -588,7 +598,7 @@ impl DocRef {
     where
         T: WriteTxn,
     {
-        if let Some(item) = self.item.as_ref().and_then(|ptr| ptr.as_item()) {
+        if let Some(_) = self.item.as_ref().and_then(|ptr| ptr.as_item()) {
             let options = self.doc.options();
             if !options.should_load {
                 parent_txn
@@ -620,7 +630,10 @@ impl DocRef {
                     let guid = options.guid.clone();
                     let new_ref = DocRef::new(ptr_copy, Doc::with_options(options));
                     if !is_deleted {
-                        parent_txn.subdocs_mut().added.insert(guid, new_ref.clone());
+                        parent_txn
+                            .subdocs_mut()
+                            .added
+                            .insert(guid.clone(), new_ref.clone());
                     }
                     parent_txn
                         .subdocs_mut()
@@ -692,12 +705,11 @@ mod test {
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
     use crate::{
         Array, ArrayPrelim, DeleteSet, Doc, DocRef, GetString, Map, Options, StateVector,
-        SubscriptionId, Text, Transact,
+        SubscriptionId, Text, Transact, Uuid,
     };
     use lib0::any::Any;
     use std::cell::{Cell, RefCell, RefMut};
     use std::rc::Rc;
-    use uuid::Uuid;
 
     #[test]
     fn apply_update_basic_v1() {
@@ -1427,8 +1439,6 @@ mod test {
 
     #[test]
     fn subdoc() {
-        use uuid::uuid;
-
         let doc = Doc::with_client_id(1);
         let event = Rc::new(Cell::new(None));
         let event_c = event.clone();
@@ -1439,7 +1449,7 @@ mod test {
             event_c.set(Some((added, removed, loaded)));
         });
         let subdocs = doc.get_or_insert_map("mysubdocs");
-        let uuid_a = uuid!("67e55044-10b1-426f-9247-bb680e5fe0c8");
+        let uuid_a: Uuid = "67e55044-10b1-426f-9247-bb680e5fe0c8".into();
         let doc_a = Doc::with_options({
             let mut o = Options::default();
             o.guid = uuid_a.clone();
@@ -1503,7 +1513,7 @@ mod test {
         let actual = event.take();
         assert_eq!(actual, Some((vec![], vec![], vec![uuid_a.clone()])));
 
-        let uuid_c = uuid!("fd2eeeeb-c321-4a05-96e2-14b753685020");
+        let uuid_c: Uuid = "fd2eeeeb-c321-4a05-96e2-14b753685020".into();
         let doc_c = Doc::with_options({
             let mut o = Options::default();
             o.guid = uuid_c.clone();
@@ -1522,7 +1532,7 @@ mod test {
         );
 
         let guids: Vec<_> = doc.transact().subdoc_guids().cloned().collect();
-        assert_eq!(vec![uuid_a.clone(), uuid_c.clone()], guids);
+        assert_eq!(vec![uuid_a, uuid_c], guids);
     }
 
     #[test]
@@ -1538,8 +1548,7 @@ mod test {
             let added = e.added.keys().cloned().collect();
             let removed = e.removed.keys().cloned().collect();
             let loaded = e.loaded.keys().cloned().collect();
-            let mut e: RefMut<Option<(Vec<Uuid>, Vec<Uuid>, Vec<Uuid>)>> =
-                event_c.try_borrow_mut().unwrap();
+            let mut e: RefMut<_> = event_c.try_borrow_mut().unwrap();
             *e = Some((added, removed, loaded));
         });
         let mut doc_ref = {
@@ -1560,7 +1569,7 @@ mod test {
         // destroy and check whether lastEvent adds it again to added (it shouldn't)
         doc_ref.destroy(&mut doc.transact_mut());
         let doc_ref_2 = array.get(&doc.transact(), 0).unwrap().to_ydoc().unwrap();
-        let uuid_2 = doc_ref_2.options().guid;
+        let uuid_2 = doc_ref_2.options().guid.clone();
         assert!(!DocRef::ptr_eq(&doc_ref, &doc_ref_2));
 
         let last_event = event.take();
@@ -1622,8 +1631,7 @@ mod test {
             let added = e.added.keys().cloned().collect();
             let removed = e.removed.keys().cloned().collect();
             let loaded = e.loaded.keys().cloned().collect();
-            let mut e: RefMut<Option<(Vec<Uuid>, Vec<Uuid>, Vec<Uuid>)>> =
-                event_c.try_borrow_mut().unwrap();
+            let mut e: RefMut<_> = event_c.try_borrow_mut().unwrap();
             *e = Some((added, removed, loaded));
         });
 
@@ -1666,8 +1674,7 @@ mod test {
             let added = e.added.keys().cloned().collect();
             let removed = e.removed.keys().cloned().collect();
             let loaded = e.loaded.keys().cloned().collect();
-            let mut e: RefMut<Option<(Vec<Uuid>, Vec<Uuid>, Vec<Uuid>)>> =
-                event_c.try_borrow_mut().unwrap();
+            let mut e: RefMut<_> = event_c.try_borrow_mut().unwrap();
             *e = Some((added, removed, loaded));
         });
         let u = Update::decode_v1(

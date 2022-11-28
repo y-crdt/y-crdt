@@ -396,7 +396,7 @@ impl BlockPtr {
                             doc.item = Some(self_ptr);
                             let subdocs = txn.subdocs.get_or_init();
                             let guid = doc.options().guid.clone();
-                            subdocs.added.insert(guid, doc.clone());
+                            subdocs.added.insert(guid.clone(), doc.clone());
                             if doc.options().should_load {
                                 subdocs.loaded.insert(guid, doc.clone());
                             }

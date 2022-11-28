@@ -839,15 +839,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ccb82d61f80a663efe1f787a51b16b5a51e3314d6ac365b08639f52387b33f3"
 
 [[package]]
-name = "uuid"
-version = "1.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "422ee0de9031b5b948b97a8fc04e3aa35230001a722ddd27943e0be31564ce4c"
-dependencies = [
- "getrandom 0.2.3",
-]
-
-[[package]]
 name = "wait-timeout"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1027,7 +1018,7 @@ name = "yffi"
 version = "0.13.0"
 dependencies = [
  "lib0",
- "uuid",
+ "rand 0.7.3",
  "yrs",
 ]
 
@@ -1041,7 +1032,6 @@ dependencies = [
  "rand 0.7.3",
  "smallstr",
  "thiserror",
- "uuid",
 ]
 
 [[package]]

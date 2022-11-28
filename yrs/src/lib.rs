@@ -87,3 +87,31 @@ pub use crate::types::xml::XmlTextRef;
 pub use crate::types::GetString;
 pub use crate::types::Observable;
 pub use crate::update::Update;
+use rand::RngCore;
+
+pub type Uuid = std::sync::Arc<str>;
+
+pub fn uuid_v4<R: RngCore>(rng: &mut R) -> Uuid {
+    let mut b = [0u8; 16];
+    rng.fill_bytes(&mut b);
+    let uuid = format!(
+        "{:x}{:x}{:x}{:x}-{:x}{:x}-{:x}{:x}-{:x}{:x}-{:x}{:x}{:x}{:x}{:x}{:x}",
+        b[0],
+        b[1],
+        b[2],
+        b[3],
+        b[4],
+        b[5],
+        b[6],
+        b[7],
+        b[8],
+        b[9],
+        b[10],
+        b[11],
+        b[12],
+        b[13],
+        b[14],
+        b[15]
+    );
+    uuid.into()
+}

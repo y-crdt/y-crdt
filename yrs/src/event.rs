@@ -1,7 +1,6 @@
 use crate::transaction::Subdocs;
-use crate::{DeleteSet, DocRef, StateVector, TransactionMut};
+use crate::{DeleteSet, DocRef, StateVector, TransactionMut, Uuid};
 use std::collections::HashMap;
-use uuid::Uuid;
 
 /// An update event passed to a callback registered in the event handler. Contains data about the
 /// state of an update.

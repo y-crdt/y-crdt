@@ -8,7 +8,7 @@ use crate::update::PendingUpdate;
 use crate::updates::encoder::{Encode, Encoder};
 use crate::{
     AfterTransactionSubscription, DocRef, Observer, OffsetKind, Snapshot, SubscriptionId,
-    TransactionMut, UpdateEvent, UpdateSubscription,
+    TransactionMut, UpdateEvent, UpdateSubscription, Uuid,
 };
 use atomic_refcell::{AtomicRef, AtomicRefCell, AtomicRefMut, BorrowError, BorrowMutError};
 use lib0::error::Error;
@@ -43,7 +43,7 @@ pub struct Store {
     /// into `blocks`.
     pub(crate) pending_ds: Option<DeleteSet>,
 
-    pub(crate) subdocs: HashMap<uuid::Uuid, DocRef>,
+    pub(crate) subdocs: HashMap<Uuid, DocRef>,
 
     pub(crate) events: Option<Box<StoreEvents>>,
 }
@@ -379,7 +379,7 @@ impl From<Store> for StoreRef {
 }
 
 #[repr(transparent)]
-pub struct SubdocsIter<'doc>(std::collections::hash_map::Values<'doc, uuid::Uuid, DocRef>);
+pub struct SubdocsIter<'doc>(std::collections::hash_map::Values<'doc, Uuid, DocRef>);
 
 impl<'doc> Iterator for SubdocsIter<'doc> {
     type Item = &'doc DocRef;
@@ -390,10 +390,10 @@ impl<'doc> Iterator for SubdocsIter<'doc> {
 }
 
 #[repr(transparent)]
-pub struct SubdocGuids<'doc>(std::collections::hash_map::Keys<'doc, uuid::Uuid, DocRef>);
+pub struct SubdocGuids<'doc>(std::collections::hash_map::Keys<'doc, Uuid, DocRef>);
 
 impl<'doc> Iterator for SubdocGuids<'doc> {
-    type Item = &'doc uuid::Uuid;
+    type Item = &'doc Uuid;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.0.next()

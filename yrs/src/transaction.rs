@@ -13,7 +13,6 @@ use std::collections::{HashMap, HashSet};
 use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
 use updates::encoder::*;
-use uuid::Uuid;
 
 pub trait ReadTxn: Sized {
     fn store(&self) -> &Store;

@@ -23,9 +23,9 @@ use yrs::types::{
 use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use yrs::{
-    AfterTransactionEvent, Array, ArrayRef, DeleteSet, DocRef, GetString, Map, MapRef, Observable,
-    OffsetKind, Options, ReadTxn, Snapshot, StateVector, Store, SubscriptionId, Text, TextRef,
-    Transact, Update, Xml, XmlElementPrelim, XmlElementRef, XmlFragmentRef, XmlTextPrelim,
+    uuid_v4, AfterTransactionEvent, Array, ArrayRef, DeleteSet, DocRef, GetString, Map, MapRef,
+    Observable, OffsetKind, Options, ReadTxn, Snapshot, StateVector, Store, SubscriptionId, Text,
+    TextRef, Transact, Update, Xml, XmlElementPrelim, XmlElementRef, XmlFragmentRef, XmlTextPrelim,
     XmlTextRef,
 };
 
@@ -282,11 +282,11 @@ impl Into<Options> for YOptions {
             _ => panic!("Unrecognized YOptions.encoding type"),
         };
         let guid = if self.guid.is_null() {
-            uuid::Uuid::new_v4()
+            uuid_v4(&mut rand::thread_rng())
         } else {
             let c_str = unsafe { CStr::from_ptr(self.guid) };
             let str = c_str.to_str().unwrap();
-            uuid::Uuid::parse_str(str).unwrap()
+            str.into()
         };
         let collection_id = if self.collection_id.is_null() {
             None
