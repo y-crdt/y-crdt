@@ -38,6 +38,8 @@
  */
 typedef struct YDoc {} YDoc;
 
+typedef struct YDocRef {} YDocRef;
+
 /**
  * A common shared data type. All Yrs instances can be refered to using this data type (use
  * `ytype_kind` function if a specific type needs to be determined). Branch pointers are passed
@@ -160,6 +162,11 @@ typedef struct YXmlTreeWalker {} YXmlTreeWalker;
  * Flag used by `YInput` and `YOutput` to tag content, which is an `YXmlFragment` shared type.
  */
 #define Y_XML_FRAG 6
+
+/**
+ * Flag used by `YInput` and `YOutput` to tag content, which is an `YDoc` shared type.
+ */
+#define Y_DOC 7
 
 /**
  * Flag used to mark a truthy boolean numbers.
@@ -298,6 +305,7 @@ typedef union YOutputContent {
   struct YOutput *array;
   struct YMapEntry *map;
   Branch *y_type;
+  YDoc *y_doc;
 } YOutputContent;
 
 /**
@@ -382,6 +390,16 @@ typedef struct YOptions {
    */
   unsigned long id;
   /**
+   * A NULL-able globally unique Uuid v4 compatible null-terminated string identifier
+   * of this document. If passed as NULL, a random Uuid will be generated instead.
+   */
+  const char *guid;
+  /**
+   * A NULL-able, UTF-8 encoded, null-terminated string of a collection that this document
+   * belongs to. It's used only by providers.
+   */
+  const char *collection_id;
+  /**
    * Encoding used by text editing operations on this document. It's used to compute
    * `YText`/`YXmlText` insertion offsets and text lengths. Either:
    *
@@ -395,6 +413,15 @@ typedef struct YOptions {
    * during the transaction commits. Setting this value to 0 means GC will be performed.
    */
   int skip_gc;
+  /**
+   * Boolean flag used to determine if subdocument should be loaded automatically.
+   * If this is a subdocument, remote peers will load the document as well automatically.
+   */
+  int auto_load;
+  /**
+   * Boolean flag used to determine whether the document should be synced by the provider now.
+   */
+  int should_load;
 } YOptions;
 
 /**
@@ -484,6 +511,20 @@ typedef struct YAfterTransactionEvent {
    */
   struct YDeleteSet delete_set;
 } YAfterTransactionEvent;
+
+/**
+ * A sub-document reference.
+ */
+typedef YDocRef YDocRef;
+
+typedef struct YSubdocsEvent {
+  int added_len;
+  int removed_len;
+  int loaded_len;
+  const YDocRef *const *added;
+  const YDocRef *const *removed;
+  const YDocRef *const *loaded;
+} YSubdocsEvent;
 
 /**
  * Transaction is one of the core types in Yrs. All operations that need to touch or
@@ -858,6 +899,29 @@ YDoc *ydoc_new_with_options(struct YOptions options);
  */
 unsigned long ydoc_id(YDoc *doc);
 
+/**
+ * Returns a unique document identifier of this [Doc] instance.
+ */
+char *ydoc_guid(YDoc *doc);
+
+/**
+ * Returns a collection identifier of this [Doc] instance.
+ * If none was defined, a `NULL` will be returned.
+ */
+char *ydoc_collection_id(YDoc *doc);
+
+/**
+ * Returns status of should_load flag of this [Doc] instance, informing parent [Doc] if this
+ * document instance requested a data load.
+ */
+uint8_t ydoc_should_load(YDoc *doc);
+
+/**
+ * Returns status of auto_load flag of this [Doc] instance. Auto loaded sub-documents automatically
+ * send a load request to their parent documents.
+ */
+uint8_t ydoc_auto_load(YDoc *doc);
+
 unsigned int ydoc_observe_updates_v1(YDoc *doc,
                                      void *state,
                                      void (*cb)(void*, int, const unsigned char*));
@@ -875,6 +939,30 @@ unsigned int ydoc_observe_after_transaction(YDoc *doc,
                                             void (*cb)(void*, struct YAfterTransactionEvent*));
 
 void ydoc_unobserve_after_transaction(YDoc *doc, unsigned int subscription_id);
+
+unsigned int ydoc_observe_subdocs(YDoc *doc, void *state, void (*cb)(void*, struct YSubdocsEvent*));
+
+void ydoc_unobserve_subdocs(YDoc *doc, unsigned int subscription_id);
+
+unsigned int ydoc_observe_clear(YDoc *doc, void *state, void (*cb)(void*, YDocRef*));
+
+void ydoc_unobserve_clear(YDoc *doc, unsigned int subscription_id);
+
+/**
+ * Manually send a load request to a parent document of this subdoc.
+ */
+void ydoc_load(YDocRef *doc, YTransaction *parent_txn);
+
+/**
+ * Destroys current document, sending a 'destroy' event and clearing up all the event callbacks
+ * registered.
+ */
+void ydoc_clear(YDocRef *doc, YTransaction *parent_txn);
+
+/**
+ * Returns a document stored within this subdoc reference.
+ */
+YDoc *ysubdoc(YDocRef *doc);
 
 /**
  * Starts a new read-only transaction on a given document. All other operations happen in context
@@ -915,6 +1003,11 @@ YTransaction *ybranch_write_transaction(Branch *branch);
  * transaction is already opened.
  */
 YTransaction *ybranch_read_transaction(Branch *branch);
+
+/**
+ * Returns a list of subdocs existing within current document.
+ */
+YDocRef **ytransaction_subdocs(YTransaction *txn, int *len);
 
 /**
  * Commit and dispose provided read-write transaction. This operation releases allocated resources,

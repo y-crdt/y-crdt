@@ -1584,7 +1584,7 @@ mod test {
 
             assert_eq!(txt1.get_string(&txt1.transact()), "abc".to_string());
             assert_eq!(
-                txt1.diff(&mut txt1.transact_mut(), YChange::identity),
+                txt1.diff(&txt1.transact(), YChange::identity),
                 vec![Diff::new("abc".into(), Some(Box::new(a.clone())))]
             );
             assert_eq!(delta1.take(), expected);
@@ -1608,7 +1608,7 @@ mod test {
 
             assert_eq!(txt1.get_string(&txt1.transact()), "bc".to_string());
             assert_eq!(
-                txt1.diff(&mut txt1.transact_mut(), YChange::identity),
+                txt1.diff(&txt1.transact(), YChange::identity),
                 vec![Diff::new("bc".into(), Some(Box::new(a.clone())))]
             );
             assert_eq!(delta1.take(), expected);
@@ -1632,7 +1632,7 @@ mod test {
 
             assert_eq!(txt1.get_string(&txt1.transact()), "b".to_string());
             assert_eq!(
-                txt1.diff(&mut txt1.transact_mut(), YChange::identity),
+                txt1.diff(&txt1.transact(), YChange::identity),
                 vec![Diff::new("b".into(), Some(Box::new(a.clone())))]
             );
             assert_eq!(delta1.take(), expected);

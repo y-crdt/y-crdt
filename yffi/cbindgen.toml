@@ -42,6 +42,8 @@ header = """
  */
 typedef struct YDoc {} YDoc;
 
+typedef struct YDocRef {} YDocRef;
+
 /**
  * A common shared data type. All Yrs instances can be refered to using this data type (use
  * `ytype_kind` function if a specific type needs to be determined). Branch pointers are passed
@@ -100,6 +102,7 @@ exclude = [
 
 [export.rename]
 "Doc" = "YDoc"
+"DocRef" = "YDocRef"
 "Transaction" = "YTransaction"
 "Array" = "YArray"
 "Map" = "YMap"

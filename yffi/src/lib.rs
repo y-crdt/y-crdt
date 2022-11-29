@@ -23,10 +23,10 @@ use yrs::types::{
 use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use yrs::{
-    uuid_v4, AfterTransactionEvent, Array, ArrayRef, DeleteSet, DocRef, GetString, Map, MapRef,
-    Observable, OffsetKind, Options, ReadTxn, Snapshot, StateVector, Store, SubscriptionId, Text,
-    TextRef, Transact, Update, Xml, XmlElementPrelim, XmlElementRef, XmlFragmentRef, XmlTextPrelim,
-    XmlTextRef,
+    uuid_v4, AfterTransactionEvent, Array, ArrayRef, DeleteSet, GetString, Map, MapRef, Observable,
+    OffsetKind, Options, ReadTxn, Snapshot, StateVector, Store, SubdocsEvent, SubscriptionId, Text,
+    TextRef, Transact, Update, Uuid, Xml, XmlElementPrelim, XmlElementRef, XmlFragmentRef,
+    XmlTextPrelim, XmlTextRef,
 };
 
 /// Flag used by `YInput` and `YOutput` to tag boolean values.
@@ -107,6 +107,9 @@ pub const Y_OFFSET_UTF32: c_int = 2;
 /// Document manages so called root types, which are top-level shared types definitions (as opposed
 /// to recursively nested types).
 pub type Doc = yrs::Doc;
+
+/// A sub-document reference.
+pub type DocRef = yrs::DocRef;
 
 /// A common shared data type. All Yrs instances can be refered to using this data type (use
 /// `ytype_kind` function if a specific type needs to be determined). Branch pointers are passed
@@ -374,13 +377,49 @@ pub unsafe extern "C" fn ydoc_id(doc: *mut Doc) -> c_ulong {
     doc.client_id() as c_ulong
 }
 
+/// Returns a unique document identifier of this [Doc] instance.
+#[no_mangle]
+pub unsafe extern "C" fn ydoc_guid(doc: *mut Doc) -> *mut c_char {
+    let doc = doc.as_ref().unwrap();
+    let uid = doc.options().guid.as_ref();
+    CString::new(uid).unwrap().into_raw()
+}
+
+/// Returns a collection identifier of this [Doc] instance.
+/// If none was defined, a `NULL` will be returned.
+#[no_mangle]
+pub unsafe extern "C" fn ydoc_collection_id(doc: *mut Doc) -> *mut c_char {
+    let doc = doc.as_ref().unwrap();
+    if let Some(cid) = doc.options().collection_id.as_ref() {
+        CString::new(cid.as_str()).unwrap().into_raw()
+    } else {
+        null_mut()
+    }
+}
+
+/// Returns status of should_load flag of this [Doc] instance, informing parent [Doc] if this
+/// document instance requested a data load.
+#[no_mangle]
+pub unsafe extern "C" fn ydoc_should_load(doc: *mut Doc) -> u8 {
+    let doc = doc.as_ref().unwrap();
+    doc.options().should_load as u8
+}
+
+/// Returns status of auto_load flag of this [Doc] instance. Auto loaded sub-documents automatically
+/// send a load request to their parent documents.
+#[no_mangle]
+pub unsafe extern "C" fn ydoc_auto_load(doc: *mut Doc) -> u8 {
+    let doc = doc.as_ref().unwrap();
+    doc.options().auto_load as u8
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn ydoc_observe_updates_v1(
     doc: *mut Doc,
     state: *mut c_void,
     cb: extern "C" fn(*mut c_void, c_int, *const c_uchar),
 ) -> c_uint {
-    let doc = doc.as_mut().unwrap();
+    let doc = doc.as_ref().unwrap();
     let observer = doc
         .observe_update_v1(move |_, e| {
             let bytes = &e.update;
@@ -398,7 +437,7 @@ pub unsafe extern "C" fn ydoc_observe_updates_v2(
     state: *mut c_void,
     cb: extern "C" fn(*mut c_void, c_int, *const c_uchar),
 ) -> c_uint {
-    let doc = doc.as_mut().unwrap();
+    let doc = doc.as_ref().unwrap();
     let observer = doc
         .observe_update_v2(move |_, e| {
             let bytes = &e.update;
@@ -412,13 +451,13 @@ pub unsafe extern "C" fn ydoc_observe_updates_v2(
 
 #[no_mangle]
 pub unsafe extern "C" fn ydoc_unobserve_updates_v1(doc: *mut Doc, subscription_id: c_uint) {
-    let doc = doc.as_mut().unwrap();
+    let doc = doc.as_ref().unwrap();
     doc.unobserve_update_v1(subscription_id as SubscriptionId);
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn ydoc_unobserve_updates_v2(doc: *mut Doc, subscription_id: c_uint) {
-    let doc = doc.as_mut().unwrap();
+    let doc = doc.as_ref().unwrap();
     doc.unobserve_update_v2(subscription_id as SubscriptionId);
 }
 
@@ -428,7 +467,7 @@ pub unsafe extern "C" fn ydoc_observe_after_transaction(
     state: *mut c_void,
     cb: extern "C" fn(*mut c_void, *mut YAfterTransactionEvent),
 ) -> c_uint {
-    let doc = doc.as_mut().unwrap();
+    let doc = doc.as_ref().unwrap();
     let observer = doc
         .observe_transaction_cleanup(move |_, e| {
             let mut event = YAfterTransactionEvent::new(e);
@@ -441,8 +480,83 @@ pub unsafe extern "C" fn ydoc_observe_after_transaction(
 
 #[no_mangle]
 pub unsafe extern "C" fn ydoc_unobserve_after_transaction(doc: *mut Doc, subscription_id: c_uint) {
-    let doc = doc.as_mut().unwrap();
+    let doc = doc.as_ref().unwrap();
     doc.unobserve_transaction_cleanup(subscription_id as SubscriptionId);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn ydoc_observe_subdocs(
+    doc: *mut Doc,
+    state: *mut c_void,
+    cb: extern "C" fn(*mut c_void, *mut YSubdocsEvent),
+) -> c_uint {
+    let doc = doc.as_mut().unwrap();
+    let observer = doc
+        .observe_subdocs(move |_, e| {
+            let mut event = YSubdocsEvent::new(e);
+            cb(state, (&mut event) as *mut _);
+        })
+        .unwrap();
+    let subscription_id: u32 = observer.into();
+    subscription_id as c_uint
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn ydoc_unobserve_subdocs(doc: *mut Doc, subscription_id: c_uint) {
+    let doc = doc.as_ref().unwrap();
+    doc.unobserve_subdocs(subscription_id as SubscriptionId);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn ydoc_observe_clear(
+    doc: *mut Doc,
+    state: *mut c_void,
+    cb: extern "C" fn(*mut c_void, *mut DocRef),
+) -> c_uint {
+    let doc = doc.as_mut().unwrap();
+    let observer = doc
+        .observe_destroy(move |_, e| cb(state, e as *const DocRef as *mut _))
+        .unwrap();
+    let subscription_id: u32 = observer.into();
+    subscription_id as c_uint
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn ydoc_unobserve_clear(doc: *mut Doc, subscription_id: c_uint) {
+    let doc = doc.as_ref().unwrap();
+    doc.unobserve_destroy(subscription_id as SubscriptionId);
+}
+
+/// Manually send a load request to a parent document of this subdoc.
+#[no_mangle]
+pub unsafe extern "C" fn ydoc_load(doc: *mut DocRef, parent_txn: *mut Transaction) {
+    let doc = doc.as_ref().unwrap();
+    let txn = parent_txn.as_mut().unwrap();
+    if let Some(txn) = txn.as_mut() {
+        doc.load(txn)
+    } else {
+        panic!("ydoc_load: passed read-only parent transaction, where read-write one was expected")
+    }
+}
+
+/// Destroys current document, sending a 'destroy' event and clearing up all the event callbacks
+/// registered.
+#[no_mangle]
+pub unsafe extern "C" fn ydoc_clear(doc: *mut DocRef, parent_txn: *mut Transaction) {
+    let doc = doc.as_mut().unwrap();
+    let txn = parent_txn.as_mut().unwrap();
+    if let Some(txn) = txn.as_mut() {
+        doc.destroy(txn)
+    } else {
+        panic!("ydoc_clear: passed read-only parent transaction, where read-write one was expected")
+    }
+}
+
+/// Returns a document stored within this subdoc reference.
+#[no_mangle]
+pub unsafe extern "C" fn ysubdoc(doc: *mut DocRef) -> *mut Doc {
+    let doc = doc.as_ref().unwrap();
+    doc.deref() as *const Doc as *mut Doc
 }
 
 /// Starts a new read-only transaction on a given document. All other operations happen in context
@@ -515,6 +629,22 @@ pub unsafe extern "C" fn ybranch_read_transaction(branch: *mut Branch) -> *mut T
     } else {
         null_mut()
     }
+}
+
+/// Returns a list of subdocs existing within current document.
+#[no_mangle]
+pub unsafe extern "C" fn ytransaction_subdocs(
+    txn: *mut Transaction,
+    len: *mut c_int,
+) -> *mut *mut DocRef {
+    let txn = txn.as_ref().unwrap();
+    let subdocs: Vec<_> = txn
+        .subdocs()
+        .map(|doc| doc as *const DocRef as *mut DocRef)
+        .collect();
+    let out = subdocs.into_boxed_slice();
+    *len = out.len() as c_int;
+    Box::into_raw(out) as *mut _
 }
 
 /// Commit and dispose provided read-write transaction. This operation releases allocated resources,
@@ -3189,6 +3319,61 @@ impl YAfterTransactionEvent {
             after_state: YStateVector::new(&e.after_state),
             delete_set: YDeleteSet::new(&e.delete_set),
         }
+    }
+}
+
+#[repr(C)]
+pub struct YSubdocsEvent {
+    added_len: c_int,
+    removed_len: c_int,
+    loaded_len: c_int,
+    added: *const *const DocRef,
+    removed: *const *const DocRef,
+    loaded: *const *const DocRef,
+}
+
+impl YSubdocsEvent {
+    unsafe fn new(e: &SubdocsEvent) -> Self {
+        fn into_ptr(v: &HashMap<Uuid, DocRef>) -> *const *const DocRef {
+            let array: Vec<_> = v.values().map(|doc| doc as *const DocRef).collect();
+            let boxed = array.into_boxed_slice();
+            boxed.as_ptr()
+        }
+
+        YSubdocsEvent {
+            added_len: e.added.len() as c_int,
+            removed_len: e.removed.len() as c_int,
+            loaded_len: e.loaded.len() as c_int,
+            added: into_ptr(&e.added),
+            removed: into_ptr(&e.removed),
+            loaded: into_ptr(&e.loaded),
+        }
+    }
+}
+
+impl Drop for YSubdocsEvent {
+    fn drop(&mut self) {
+        drop(unsafe {
+            Vec::from_raw_parts(
+                self.added as *mut DocRef,
+                self.added_len as usize,
+                self.added_len as usize,
+            )
+        });
+        drop(unsafe {
+            Vec::from_raw_parts(
+                self.removed as *mut DocRef,
+                self.removed_len as usize,
+                self.removed_len as usize,
+            )
+        });
+        drop(unsafe {
+            Vec::from_raw_parts(
+                self.loaded as *mut DocRef,
+                self.loaded_len as usize,
+                self.loaded_len as usize,
+            )
+        });
     }
 }
 
