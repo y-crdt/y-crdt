@@ -2641,7 +2641,7 @@ impl From<DocRef> for YOutput {
             tag: Y_DOC,
             len: 1,
             value: YOutputContent {
-                y_doc: v.as_ref() as *const Doc as *mut Doc,
+                y_doc: v.deref() as *const Doc as *mut Doc,
             },
         }
     }

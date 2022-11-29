@@ -7,7 +7,7 @@ import * as t from 'lib0/testing'
  * @param {t.TestCase} tc
  */
 export const testInserts = tc => {
-    const d1 = new Y.YDoc(1)
+    const d1 = new Y.YDoc({clientID:1})
     t.compare(d1.id, 1)
     var x = d1.getArray('test');
 
@@ -19,7 +19,7 @@ export const testInserts = tc => {
     var value = x.toJson()
     t.compare(value, expected)
 
-    const d2 = new Y.YDoc(2)
+    const d2 = new Y.YDoc({clientID:2})
     x = d2.getArray('test');
 
     exchangeUpdates([d1, d2])
@@ -58,7 +58,7 @@ export const testInsertsNested = tc => {
  * @param {t.TestCase} tc
  */
 export const testDelete = tc => {
-    const d1 = new Y.YDoc(1)
+    const d1 = new Y.YDoc({clientID:1})
     t.compare(d1.id, 1)
     var x = d1.getArray('test')
 
@@ -70,7 +70,7 @@ export const testDelete = tc => {
     var value = x.toJson()
     t.compare(value, expected)
 
-    const d2 = new Y.YDoc(2)
+    const d2 = new Y.YDoc({clientID:2})
     x = d2.getArray('test')
 
     exchangeUpdates([d1, d2])

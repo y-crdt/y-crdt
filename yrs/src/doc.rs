@@ -3,7 +3,7 @@ use crate::event::{AfterTransactionEvent, SubdocsEvent, UpdateEvent};
 use crate::store::{Store, StoreRef};
 use crate::transaction::{Transaction, TransactionMut};
 use crate::types::{
-    Branch, BranchPtr, ToJson, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
+    Branch, BranchPtr, ToJson, TypePtr, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
     TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_TEXT,
 };
 use crate::updates::decoder::{Decode, Decoder};
@@ -18,7 +18,7 @@ use lib0::any::Any;
 use lib0::error::Error;
 use rand::Rng;
 use std::collections::HashMap;
-use std::ops::DerefMut;
+use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use thiserror::Error;
 
@@ -590,6 +590,15 @@ impl DocRef {
         self.doc.store.options()
     }
 
+    pub fn parent_ptr(&self) -> Option<BranchPtr> {
+        if let Some(Block::Item(item)) = self.item.as_deref() {
+            if let TypePtr::Branch(parent) = item.parent {
+                return Some(parent);
+            }
+        }
+        None
+    }
+
     pub(crate) fn options_mut(&mut self) -> &mut Options {
         self.doc.store.options_mut()
     }
@@ -688,9 +697,17 @@ impl std::fmt::Display for DocRef {
     }
 }
 
-impl AsRef<Doc> for DocRef {
-    fn as_ref(&self) -> &Doc {
+impl Deref for DocRef {
+    type Target = Doc;
+
+    fn deref(&self) -> &Self::Target {
         &self.doc
+    }
+}
+
+impl DerefMut for DocRef {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.doc
     }
 }
 
