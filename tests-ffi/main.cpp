@@ -1377,3 +1377,197 @@ TEST_CASE("YDoc snapshots") {
     ytransaction_commit(txn);
     ydoc_destroy(doc);
 }
+
+typedef struct {
+    char total[20]; // for tests it's more than enough to have 20 char string
+} SubdocsTest;
+
+void concat_guids(char* dst, int len, YDocRef** refs) {
+    for (int i = 0; i < len; i++) {
+        YDocRef *d = refs[i];
+        char* guid = ydoc_guid(ydoc_unwrap(d));
+        strcat(dst, guid);
+        free(guid);
+    }
+}
+
+void observe_subdocs(void* state, YSubdocsEvent* e) {
+    SubdocsTest* t = (SubdocsTest*)state;
+    strcpy(t->total, "|");
+    concat_guids(t->total, e->added_len, e->added);
+    strcat(t->total, "|");
+    concat_guids(t->total, e->removed_len, e->removed);
+    strcat(t->total, "|");
+    concat_guids(t->total, e->loaded_len, e->loaded);
+    strcat(t->total, "|");
+}
+
+TEST_CASE("YDoc observe subdocs") {
+    YDoc *doc1 = ydoc_new_with_id(1);
+    SubdocsTest t;
+    memset(t.total, '\0', 20);
+    unsigned int subscription_id = ydoc_observe_subdocs(doc1, &t, observe_subdocs);
+    Branch* subdocs = ymap(doc1, "mysubdocs");
+
+    YOptions options;
+    options.guid = "a";
+    options.id = 1;
+    options.should_load = Y_TRUE;
+    YDoc* docA = ydoc_new_with_options(options);
+
+    YTransaction* txn = ydoc_write_transaction(doc1);
+    YInput input = yinput_ydoc(docA);
+    ymap_insert(subdocs, txn, "a", &input);
+    YOutput* output = ymap_get(subdocs, txn, "a");
+    YDocRef* subdoc = youtput_read_ydoc(output);
+    ydoc_load(subdoc,txn);
+    youtput_destroy(output);
+    ytransaction_commit(txn);
+
+    REQUIRE(!strcmp(t.total, "|a||a|"));
+    memset(t.total, '\0', 20);
+
+    txn = ydoc_write_transaction(doc1);
+    output = ymap_get(subdocs, txn, "a");
+    subdoc = youtput_read_ydoc(output);
+    ydoc_load(subdoc,txn);
+    youtput_destroy(output);
+    ytransaction_commit(txn);
+
+    REQUIRE(!strcmp(t.total, ""));
+    memset(t.total, '\0', 20);
+
+    txn = ydoc_write_transaction(doc1);
+    output = ymap_get(subdocs, txn, "a");
+    subdoc = youtput_read_ydoc(output);
+    ydoc_clear(subdoc,txn);
+    youtput_destroy(output);
+    ytransaction_commit(txn);
+
+    REQUIRE(!strcmp(t.total, "|a|a||"));
+    memset(t.total, '\0', 20);
+
+    txn = ydoc_write_transaction(doc1);
+    output = ymap_get(subdocs, txn, "a");
+    subdoc = youtput_read_ydoc(output);
+    ydoc_load(subdoc,txn);
+    youtput_destroy(output);
+    ytransaction_commit(txn);
+
+    REQUIRE(!strcmp(t.total, "|||a|"));
+    memset(t.total, '\0', 20);
+
+    YOptions optionsB;
+    options.guid = "a";
+    options.id = 2;
+    options.should_load = Y_FALSE;
+    YDoc* docB = ydoc_new_with_options(optionsB);
+
+    txn = ydoc_write_transaction(doc1);
+    input = yinput_ydoc(docB);
+    ymap_insert(subdocs, txn, "b", &input);
+    ytransaction_commit(txn);
+
+    REQUIRE(!strcmp(t.total, "|a|||"));
+    memset(t.total, '\0', 20);
+
+    txn = ydoc_write_transaction(doc1);
+    output = ymap_get(subdocs, txn, "b");
+    subdoc = youtput_read_ydoc(output);
+    ydoc_load(subdoc,txn);
+    youtput_destroy(output);
+    ytransaction_commit(txn);
+
+    REQUIRE(!strcmp(t.total, "|||a|"));
+    memset(t.total, '\0', 20);
+
+    YOptions optionsC;
+    options.guid = "c";
+    options.id = 3;
+    options.should_load = Y_TRUE;
+    YDoc* docC = ydoc_new_with_options(optionsC);
+
+    txn = ydoc_write_transaction(doc1);
+    input = yinput_ydoc(docC);
+    ymap_insert(subdocs, txn, "c", &input);
+    output = ymap_get(subdocs, txn, "c");
+    subdoc = youtput_read_ydoc(output);
+    ydoc_load(subdoc,txn);
+    youtput_destroy(output);
+    ytransaction_commit(txn);
+
+    REQUIRE(!strcmp(t.total, "|c||c|"));
+    memset(t.total, '\0', 20);
+
+
+    txn = ydoc_read_transaction(doc1);
+    int subdoc_count = 0;
+    YDocRef** subdoc_refs = ytransaction_subdocs(txn, &subdoc_count);
+    concat_guids(t.total, subdoc_count, subdoc_refs);
+    ytransaction_commit(txn);
+
+    REQUIRE(!strcmp(t.total, "ac"));
+    memset(t.total, '\0', 20);
+
+    txn = ydoc_read_transaction(doc1);
+    int snapshot_len = 0;
+    unsigned char* snapshot = ytransaction_snapshot(txn, &snapshot_len);
+    int update_len = 0;
+    unsigned char* update = ytransaction_encode_state_from_snapshot_v1(txn, snapshot, snapshot_len, &update_len);
+    ybinary_destroy(snapshot, snapshot_len);
+    ytransaction_commit(txn);
+    ydoc_unobserve_subdocs(doc1, subscription_id);
+
+    YDoc *doc2 = ydoc_new_with_id(2);
+    subscription_id = ydoc_observe_subdocs(doc2, &t, observe_subdocs);
+
+    txn = ydoc_write_transaction(doc2);
+    ytransaction_apply(txn,update, update_len);
+    ytransaction_commit(txn);
+
+    REQUIRE(!strcmp(t.total, "|aac|||"));
+    memset(t.total, '\0', 20);
+
+    subdocs = ymap(doc2, "mysubdocs");
+
+    txn = ydoc_write_transaction(doc2);
+    output = ymap_get(subdocs, txn, "a");
+    subdoc = youtput_read_ydoc(output);
+    ydoc_load(subdoc,txn);
+    youtput_destroy(output);
+    ytransaction_commit(txn);
+
+    REQUIRE(!strcmp(t.total, "|||a|"));
+    memset(t.total, '\0', 20);
+
+    txn = ydoc_read_transaction(doc2);
+    subdoc_count = 0;
+    subdoc_refs = ytransaction_subdocs(txn, &subdoc_count);
+    concat_guids(t.total, subdoc_count, subdoc_refs);
+    ytransaction_commit(txn);
+
+    REQUIRE(!strcmp(t.total, "ac"));
+    memset(t.total, '\0', 20);
+
+    txn = ydoc_write_transaction(doc2);
+    ymap_remove(subdocs, txn, "a");
+    ytransaction_commit(txn);
+
+    REQUIRE(!strcmp(t.total, "||a||"));
+    memset(t.total, '\0', 20);
+
+    txn = ydoc_read_transaction(doc2);
+    subdoc_count = 0;
+    subdoc_refs = ytransaction_subdocs(txn, &subdoc_count);
+    concat_guids(t.total, subdoc_count, subdoc_refs);
+    ytransaction_commit(txn);
+
+    REQUIRE(!strcmp(t.total, "ac"));
+    memset(t.total, '\0', 20);
+
+    ydoc_destroy(doc1);
+    ydoc_destroy(doc2);
+    ydoc_destroy(docA);
+    ydoc_destroy(docB);
+    ydoc_destroy(docC);
+}

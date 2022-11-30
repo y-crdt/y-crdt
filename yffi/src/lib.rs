@@ -555,7 +555,7 @@ pub unsafe extern "C" fn ydoc_clear(doc: *mut DocRef, parent_txn: *mut Transacti
 
 /// Returns a document stored within this subdoc reference.
 #[no_mangle]
-pub unsafe extern "C" fn ysubdoc(doc: *mut DocRef) -> *mut Doc {
+pub unsafe extern "C" fn ydoc_unwrap(doc: *mut DocRef) -> *mut Doc {
     let doc = doc.as_ref().unwrap();
     doc.deref() as *const Doc as *mut Doc
 }
@@ -2308,6 +2308,7 @@ pub struct YInput {
     /// - [Y_JSON_UNDEF] for JSON-like undefined values.
     /// - [Y_ARRAY] for cells which contents should be used to initialize a `YArray` shared type.
     /// - [Y_MAP] for cells which contents should be used to initialize a `YMap` shared type.
+    /// - [Y_DOC] for cells which contents should be used to nest a `YDoc` sub-document.
     pub tag: i8,
 
     /// Length of the contents stored by current `YInput` cell.
@@ -2372,6 +2373,8 @@ impl YInput {
                     std::slice::from_raw_parts(self.value.buf as *mut u8, self.len as usize);
                 let buf = Box::from(slice);
                 Any::Buffer(buf)
+            } else if tag == Y_DOC {
+                Any::Undefined
             } else {
                 panic!("Unrecognized YVal value tag.")
             }
@@ -2388,6 +2391,7 @@ union YInputContent {
     buf: *mut c_uchar,
     values: *mut YInput,
     map: ManuallyDrop<YMapInputData>,
+    doc: *mut Doc,
 }
 
 #[repr(C)]
@@ -2406,6 +2410,9 @@ impl Prelim for YInput {
             if self.tag <= 0 {
                 let value = self.into();
                 (ItemContent::Any(vec![value]), None)
+            } else if self.tag == Y_DOC {
+                let doc = self.value.doc.as_ref().unwrap();
+                (ItemContent::Doc(DocRef::from(doc.clone())), None)
             } else {
                 let type_ref = if self.tag == Y_MAP {
                     TYPE_REFS_MAP
@@ -2415,6 +2422,8 @@ impl Prelim for YInput {
                     TYPE_REFS_XML_ELEMENT
                 } else if self.tag == Y_XML_TEXT {
                     TYPE_REFS_XML_TEXT
+                } else if self.tag == Y_XML_FRAG {
+                    TYPE_REFS_XML_FRAGMENT
                 } else {
                     panic!("Unrecognized YVal value tag.")
                 };
@@ -2492,6 +2501,7 @@ pub struct YOutput {
     /// - [Y_MAP] for pointers to `YMap` data types.
     /// - [Y_XML_ELEM] for pointers to `YXmlElement` data types.
     /// - [Y_XML_TEXT] for pointers to `YXmlText` data types.
+    /// - [Y_DOC] for pointers to nested `YDocRef` data types.
     pub tag: i8,
 
     /// Length of the contents stored by a current `YOutput` cell.
@@ -2593,6 +2603,8 @@ impl Drop for YOutput {
                     self.len as usize,
                     self.len as usize,
                 ));
+            } else if tag == Y_DOC {
+                drop(std::ptr::read(self.value.y_doc))
             }
         }
     }
@@ -2772,7 +2784,7 @@ impl From<DocRef> for YOutput {
             tag: Y_DOC,
             len: 1,
             value: YOutputContent {
-                y_doc: v.deref() as *const Doc as *mut Doc,
+                y_doc: &v as *const DocRef as *mut DocRef,
             },
         }
     }
@@ -2788,7 +2800,7 @@ union YOutputContent {
     array: *mut YOutput,
     map: *mut YMapEntry,
     y_type: *mut Branch,
-    y_doc: *mut Doc,
+    y_doc: *mut DocRef,
 }
 
 /// Releases all resources related to a corresponding `YOutput` cell.
@@ -2989,6 +3001,31 @@ pub unsafe extern "C" fn yinput_yxmltext(str: *mut c_char) -> YInput {
         tag: Y_XML_TEXT,
         len: 1,
         value: YInputContent { str },
+    }
+}
+
+/// Function constructor used to create a nested `YDoc` `YInput` cell.
+///
+/// This function doesn't allocate any heap resources and doesn't release any on its own, therefore
+/// its up to a caller to free resources once a structure is no longer needed.
+#[no_mangle]
+pub unsafe extern "C" fn yinput_ydoc(doc: *mut Doc) -> YInput {
+    YInput {
+        tag: Y_DOC,
+        len: 1,
+        value: YInputContent { doc },
+    }
+}
+
+/// Attempts to read the value for a given `YOutput` pointer as a `YDocRef` reference to a nested
+/// document.
+#[no_mangle]
+pub unsafe extern "C" fn youtput_read_ydoc(val: *const YOutput) -> *mut DocRef {
+    let v = val.as_ref().unwrap();
+    if v.tag == Y_DOC {
+        v.value.y_doc
+    } else {
+        std::ptr::null_mut()
     }
 }
 
@@ -3328,17 +3365,17 @@ pub struct YSubdocsEvent {
     added_len: c_int,
     removed_len: c_int,
     loaded_len: c_int,
-    added: *const *const DocRef,
-    removed: *const *const DocRef,
-    loaded: *const *const DocRef,
+    added: *mut *mut DocRef,
+    removed: *mut *mut DocRef,
+    loaded: *mut *mut DocRef,
 }
 
 impl YSubdocsEvent {
     unsafe fn new(e: &SubdocsEvent) -> Self {
-        fn into_ptr(v: SubdocsEventIter) -> *const *const DocRef {
-            let array: Vec<_> = v.map(|doc| doc as *const DocRef).collect();
-            let boxed = array.into_boxed_slice();
-            boxed.as_ptr()
+        fn into_ptr(v: SubdocsEventIter) -> *mut *mut DocRef {
+            let array: Vec<_> = v.map(|doc| doc as *const DocRef as *mut DocRef).collect();
+            let mut boxed = array.into_boxed_slice();
+            boxed.as_mut_ptr()
         }
 
         let added = e.added();

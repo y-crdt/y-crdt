@@ -296,6 +296,11 @@ typedef YDoc YDoc;
  */
 typedef Branch Branch;
 
+/**
+ * A sub-document reference.
+ */
+typedef YDocRef YDocRef;
+
 typedef union YOutputContent {
   char flag;
   float num;
@@ -305,7 +310,7 @@ typedef union YOutputContent {
   struct YOutput *array;
   struct YMapEntry *map;
   Branch *y_type;
-  YDoc *y_doc;
+  YDocRef *y_doc;
 } YOutputContent;
 
 /**
@@ -333,6 +338,7 @@ typedef struct YOutput {
    * - [Y_MAP] for pointers to `YMap` data types.
    * - [Y_XML_ELEM] for pointers to `YXmlElement` data types.
    * - [Y_XML_TEXT] for pointers to `YXmlText` data types.
+   * - [Y_DOC] for pointers to nested `YDocRef` data types.
    */
   int8_t tag;
   /**
@@ -512,18 +518,13 @@ typedef struct YAfterTransactionEvent {
   struct YDeleteSet delete_set;
 } YAfterTransactionEvent;
 
-/**
- * A sub-document reference.
- */
-typedef YDocRef YDocRef;
-
 typedef struct YSubdocsEvent {
   int added_len;
   int removed_len;
   int loaded_len;
-  const YDocRef *const *added;
-  const YDocRef *const *removed;
-  const YDocRef *const *loaded;
+  YDocRef **added;
+  YDocRef **removed;
+  YDocRef **loaded;
 } YSubdocsEvent;
 
 /**
@@ -546,6 +547,7 @@ typedef union YInputContent {
   unsigned char *buf;
   struct YInput *values;
   struct YMapInputData map;
+  YDoc *doc;
 } YInputContent;
 
 /**
@@ -571,6 +573,7 @@ typedef struct YInput {
    * - [Y_JSON_UNDEF] for JSON-like undefined values.
    * - [Y_ARRAY] for cells which contents should be used to initialize a `YArray` shared type.
    * - [Y_MAP] for cells which contents should be used to initialize a `YMap` shared type.
+   * - [Y_DOC] for cells which contents should be used to nest a `YDoc` sub-document.
    */
   int8_t tag;
   /**
@@ -962,7 +965,7 @@ void ydoc_clear(YDocRef *doc, YTransaction *parent_txn);
 /**
  * Returns a document stored within this subdoc reference.
  */
-YDoc *ysubdoc(YDocRef *doc);
+YDoc *ydoc_unwrap(YDocRef *doc);
 
 /**
  * Starts a new read-only transaction on a given document. All other operations happen in context
@@ -1806,6 +1809,20 @@ struct YInput yinput_yxmlelem(char *name);
  * its up to a caller to free resources once a structure is no longer needed.
  */
 struct YInput yinput_yxmltext(char *str);
+
+/**
+ * Function constructor used to create a nested `YDoc` `YInput` cell.
+ *
+ * This function doesn't allocate any heap resources and doesn't release any on its own, therefore
+ * its up to a caller to free resources once a structure is no longer needed.
+ */
+struct YInput yinput_ydoc(YDoc *doc);
+
+/**
+ * Attempts to read the value for a given `YOutput` pointer as a `YDocRef` reference to a nested
+ * document.
+ */
+YDocRef *youtput_read_ydoc(const struct YOutput *val);
 
 /**
  * Attempts to read the value for a given `YOutput` pointer as a boolean flag, which can be either
