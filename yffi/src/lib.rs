@@ -18,15 +18,16 @@ use yrs::types::xml::{TreeWalker as NativeTreeWalker, XmlFragment};
 use yrs::types::xml::{XmlEvent, XmlTextEvent};
 use yrs::types::{
     Attrs, BranchPtr, Change, Delta, EntryChange, Event, PathSegment, Value, TYPE_REFS_ARRAY,
-    TYPE_REFS_MAP, TYPE_REFS_TEXT, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT,
+    TYPE_REFS_DOC, TYPE_REFS_MAP, TYPE_REFS_TEXT, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT,
+    TYPE_REFS_XML_TEXT,
 };
 use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use yrs::{
     uuid_v4, AfterTransactionEvent, Array, ArrayRef, DeleteSet, GetString, Map, MapRef, Observable,
-    OffsetKind, Options, ReadTxn, Snapshot, StateVector, Store, SubdocsEvent, SubscriptionId, Text,
-    TextRef, Transact, Update, Uuid, Xml, XmlElementPrelim, XmlElementRef, XmlFragmentRef,
-    XmlTextPrelim, XmlTextRef,
+    OffsetKind, Options, ReadTxn, Snapshot, StateVector, Store, SubdocsEvent, SubdocsEventIter,
+    SubscriptionId, Text, TextRef, Transact, Update, Xml, XmlElementPrelim, XmlElementRef,
+    XmlFragmentRef, XmlTextPrelim, XmlTextRef,
 };
 
 /// Flag used by `YInput` and `YOutput` to tag boolean values.
@@ -3334,19 +3335,23 @@ pub struct YSubdocsEvent {
 
 impl YSubdocsEvent {
     unsafe fn new(e: &SubdocsEvent) -> Self {
-        fn into_ptr(v: &HashMap<Uuid, DocRef>) -> *const *const DocRef {
-            let array: Vec<_> = v.values().map(|doc| doc as *const DocRef).collect();
+        fn into_ptr(v: SubdocsEventIter) -> *const *const DocRef {
+            let array: Vec<_> = v.map(|doc| doc as *const DocRef).collect();
             let boxed = array.into_boxed_slice();
             boxed.as_ptr()
         }
 
+        let added = e.added();
+        let removed = e.removed();
+        let loaded = e.loaded();
+
         YSubdocsEvent {
-            added_len: e.added.len() as c_int,
-            removed_len: e.removed.len() as c_int,
-            loaded_len: e.loaded.len() as c_int,
-            added: into_ptr(&e.added),
-            removed: into_ptr(&e.removed),
-            loaded: into_ptr(&e.loaded),
+            added_len: added.len() as c_int,
+            removed_len: removed.len() as c_int,
+            loaded_len: loaded.len() as c_int,
+            added: into_ptr(added),
+            removed: into_ptr(removed),
+            loaded: into_ptr(loaded),
         }
     }
 }
@@ -4108,6 +4113,8 @@ pub unsafe extern "C" fn ytype_kind(branch: *const Branch) -> c_char {
             TYPE_REFS_TEXT => Y_TEXT,
             TYPE_REFS_XML_ELEMENT => Y_XML_ELEM,
             TYPE_REFS_XML_TEXT => Y_XML_TEXT,
+            TYPE_REFS_XML_FRAGMENT => Y_XML_FRAG,
+            TYPE_REFS_DOC => Y_DOC,
             other => panic!("Unknown kind: {}", other),
         }
     } else {

@@ -1,5 +1,6 @@
+use crate::doc::DocAddr;
 use crate::transaction::Subdocs;
-use crate::{DeleteSet, DocRef, StateVector, TransactionMut, Uuid};
+use crate::{DeleteSet, DocRef, StateVector, TransactionMut};
 use std::collections::HashMap;
 
 /// An update event passed to a callback registered in the event handler. Contains data about the
@@ -44,9 +45,9 @@ impl AfterTransactionEvent {
 /// Event used to communicate load requests from the underlying subdocuments.
 #[derive(Debug, Clone)]
 pub struct SubdocsEvent {
-    pub added: HashMap<Uuid, DocRef>,
-    pub removed: HashMap<Uuid, DocRef>,
-    pub loaded: HashMap<Uuid, DocRef>,
+    pub(crate) added: HashMap<DocAddr, DocRef>,
+    pub(crate) removed: HashMap<DocAddr, DocRef>,
+    pub(crate) loaded: HashMap<DocAddr, DocRef>,
 }
 
 impl SubdocsEvent {
@@ -57,4 +58,29 @@ impl SubdocsEvent {
             loaded: inner.loaded,
         }
     }
+
+    pub fn added(&self) -> SubdocsEventIter {
+        SubdocsEventIter(self.added.values())
+    }
+
+    pub fn removed(&self) -> SubdocsEventIter {
+        SubdocsEventIter(self.removed.values())
+    }
+
+    pub fn loaded(&self) -> SubdocsEventIter {
+        SubdocsEventIter(self.loaded.values())
+    }
 }
+
+#[repr(transparent)]
+pub struct SubdocsEventIter<'a>(std::collections::hash_map::Values<'a, DocAddr, DocRef>);
+
+impl<'a> Iterator for SubdocsEventIter<'a> {
+    type Item = &'a DocRef;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.0.next()
+    }
+}
+
+impl<'a> ExactSizeIterator for SubdocsEventIter<'a> {}

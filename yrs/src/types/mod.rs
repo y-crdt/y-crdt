@@ -29,26 +29,29 @@ use std::sync::{Arc, Weak};
 
 pub type TypeRefs = u8;
 
-/// Type ref identifier for an [Array] type.
+/// Type ref identifier for an [ArrayRef] type.
 pub const TYPE_REFS_ARRAY: TypeRefs = 0;
 
-/// Type ref identifier for a [Map] type.
+/// Type ref identifier for a [MapRef] type.
 pub const TYPE_REFS_MAP: TypeRefs = 1;
 
-/// Type ref identifier for a [Text] type.
+/// Type ref identifier for a [TextRef] type.
 pub const TYPE_REFS_TEXT: TypeRefs = 2;
 
-/// Type ref identifier for a [XmlElement] type.
+/// Type ref identifier for a [XmlElementRef] type.
 pub const TYPE_REFS_XML_ELEMENT: TypeRefs = 3;
 
-/// Type ref identifier for a [XmlFragment] type. Used for compatibility.
+/// Type ref identifier for a [XmlFragmentRef] type. Used for compatibility.
 pub const TYPE_REFS_XML_FRAGMENT: TypeRefs = 4;
 
-/// Type ref identifier for a [XmlHook] type. Used for compatibility.
+/// Type ref identifier for a [XmlHookRef] type. Used for compatibility.
 pub const TYPE_REFS_XML_HOOK: TypeRefs = 5;
 
-/// Type ref identifier for a [XmlText] type.
+/// Type ref identifier for a [XmlTextRef] type.
 pub const TYPE_REFS_XML_TEXT: TypeRefs = 6;
+
+/// Type ref identifier for a [DocRef] type.
+pub const TYPE_REFS_DOC: TypeRefs = 9;
 
 /// Placeholder type ref identifier for non-specialized AbstractType. Used only for root-level types
 /// which have been integrated from remote peers before they were defined locally.
@@ -185,7 +188,7 @@ impl Into<Value> for BranchPtr {
             TYPE_REFS_MAP => Value::YMap(MapRef::from(self)),
             TYPE_REFS_TEXT => Value::YText(TextRef::from(self)),
             TYPE_REFS_XML_ELEMENT => Value::YXmlElement(XmlElementRef::from(self)),
-            TYPE_REFS_XML_FRAGMENT => Value::YXmlElement(XmlElementRef::from(self)),
+            TYPE_REFS_XML_FRAGMENT => Value::YXmlFragment(XmlFragmentRef::from(self)),
             TYPE_REFS_XML_TEXT => Value::YXmlText(XmlTextRef::from(self)),
             //TYPE_REFS_XML_HOOK => Value::YXmlElement(XmlElement::from(self)),
             other => panic!("Cannot convert to value - unsupported type ref: {}", other),
@@ -825,6 +828,9 @@ impl std::fmt::Display for Branch {
                 } else {
                     write!(f, "YXmlText")
                 }
+            }
+            TYPE_REFS_DOC => {
+                write!(f, "Subdoc")
             }
             _ => {
                 write!(f, "UnknownRef")?;

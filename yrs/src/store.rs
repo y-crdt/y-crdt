@@ -1,6 +1,6 @@
 use crate::block::{BlockPtr, BlockSlice, ClientID, ItemContent};
 use crate::block_store::{BlockStore, StateVector};
-use crate::doc::{DestroySubscription, Options, SubdocsSubscription};
+use crate::doc::{DestroySubscription, DocAddr, Options, SubdocsSubscription};
 use crate::event::{AfterTransactionEvent, SubdocsEvent};
 use crate::id_set::DeleteSet;
 use crate::types::{Branch, BranchPtr, Path, PathSegment, TypeRefs};
@@ -43,7 +43,7 @@ pub struct Store {
     /// into `blocks`.
     pub(crate) pending_ds: Option<DeleteSet>,
 
-    pub(crate) subdocs: HashMap<Uuid, DocRef>,
+    pub(crate) subdocs: HashMap<DocAddr, DocRef>,
 
     pub(crate) events: Option<Box<StoreEvents>>,
 }
@@ -300,7 +300,7 @@ impl Store {
     /// Returns a collection of globally unique identifiers of sub documents linked within
     /// the structures of this document store.
     pub fn subdoc_guids(&self) -> SubdocGuids {
-        SubdocGuids(self.subdocs.keys())
+        SubdocGuids(self.subdocs.values())
     }
 }
 
@@ -379,7 +379,7 @@ impl From<Store> for StoreRef {
 }
 
 #[repr(transparent)]
-pub struct SubdocsIter<'doc>(std::collections::hash_map::Values<'doc, Uuid, DocRef>);
+pub struct SubdocsIter<'doc>(std::collections::hash_map::Values<'doc, DocAddr, DocRef>);
 
 impl<'doc> Iterator for SubdocsIter<'doc> {
     type Item = &'doc DocRef;
@@ -390,13 +390,14 @@ impl<'doc> Iterator for SubdocsIter<'doc> {
 }
 
 #[repr(transparent)]
-pub struct SubdocGuids<'doc>(std::collections::hash_map::Keys<'doc, Uuid, DocRef>);
+pub struct SubdocGuids<'doc>(std::collections::hash_map::Values<'doc, DocAddr, DocRef>);
 
 impl<'doc> Iterator for SubdocGuids<'doc> {
     type Item = &'doc Uuid;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.0.next()
+        let d = self.0.next()?;
+        Some(&d.options().guid)
     }
 }
 

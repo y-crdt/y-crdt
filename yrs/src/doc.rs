@@ -79,9 +79,17 @@ impl Doc {
             store: Store::new(options).into(),
         }
     }
-    /// A unique client identifier, that's also a unique identifier of current document replica.
+
+    /// A unique client identifier, that's also a unique identifier of current document replica
+    /// and it's subdocuments.
     pub fn client_id(&self) -> ClientID {
         self.options().client_id
+    }
+
+    /// A globally unique identifier, that's also a unique identifier of current document replica,
+    /// and unlike [Doc::client_id] it's not shared with its subdocuments.
+    pub fn guid(&self) -> &Uuid {
+        &self.options().guid
     }
 
     pub fn options(&self) -> &Options {
@@ -315,6 +323,23 @@ impl Doc {
     /// Returns a weak reference to this document.
     pub fn as_ref(&self) -> DocRef {
         DocRef::from(self.clone())
+    }
+
+    pub fn destroy(&mut self) {
+        let mut txn = self.transact_mut();
+        let subdocs: Vec<_> = txn.store.subdocs.values().cloned().collect();
+        for mut subdoc in subdocs {
+            subdoc.destroy(&mut txn);
+        }
+        // super.destroy(): cleanup the events
+        if let Some(events) = txn.store.events.take() {
+            if let Some(handler) = events.destroy_events.as_ref() {
+                let doc_ref = DocRef::from(self.clone());
+                for cb in handler.callbacks() {
+                    cb(&txn, &doc_ref)
+                }
+            }
+        }
     }
 }
 
@@ -582,10 +607,6 @@ impl DocRef {
         }
     }
 
-    fn from(doc: Doc) -> Self {
-        DocRef { item: None, doc }
-    }
-
     pub fn options(&self) -> &Options {
         self.doc.store.options()
     }
@@ -613,7 +634,7 @@ impl DocRef {
                 parent_txn
                     .subdocs_mut()
                     .loaded
-                    .insert(options.guid.clone(), self.clone());
+                    .insert(self.addr(), self.clone());
             }
         }
         let mut store = self.doc.store.try_borrow_mut().unwrap();
@@ -636,18 +657,17 @@ impl DocRef {
                 if let ItemContent::Doc(content) = &mut item.content {
                     let mut options = content.options().clone();
                     options.should_load = false;
-                    let guid = options.guid.clone();
                     let new_ref = DocRef::new(ptr_copy, Doc::with_options(options));
                     if !is_deleted {
                         parent_txn
                             .subdocs_mut()
                             .added
-                            .insert(guid.clone(), new_ref.clone());
+                            .insert(new_ref.addr(), new_ref.clone());
                     }
                     parent_txn
                         .subdocs_mut()
                         .removed
-                        .insert(guid, new_ref.clone());
+                        .insert(new_ref.addr(), new_ref.clone());
 
                     *content = new_ref;
                 }
@@ -666,6 +686,10 @@ impl DocRef {
     pub(crate) fn ptr_eq(a: &DocRef, b: &DocRef) -> bool {
         Arc::ptr_eq(&a.doc.store.0, &b.doc.store.0)
     }
+
+    pub(crate) fn addr(&self) -> DocAddr {
+        DocAddr::new(&self)
+    }
 }
 
 impl PartialEq for DocRef {
@@ -678,6 +702,12 @@ impl From<Options> for DocRef {
     fn from(mut options: Options) -> Self {
         options.should_load = options.should_load || options.auto_load;
         DocRef::from(Doc::with_options(options))
+    }
+}
+
+impl From<Doc> for DocRef {
+    fn from(doc: Doc) -> Self {
+        DocRef { item: None, doc }
     }
 }
 
@@ -711,6 +741,20 @@ impl DerefMut for DocRef {
     }
 }
 
+/// For a Yjs compatibility reasons we expect subdocuments to be compared based on their reference
+/// equality. This concept however doesn't really exists in Rust. Therefore we use a store reference
+/// instead and specialize it for this single scenario.
+#[repr(transparent)]
+#[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
+pub(crate) struct DocAddr(usize);
+
+impl DocAddr {
+    pub fn new(doc: &Doc) -> Self {
+        let ptr = Arc::as_ptr(&doc.store.0);
+        DocAddr(ptr as usize)
+    }
+}
+
 #[cfg(test)]
 mod test {
     use crate::block::{Block, ItemContent};
@@ -726,6 +770,7 @@ mod test {
     };
     use lib0::any::Any;
     use std::cell::{Cell, RefCell, RefMut};
+    use std::collections::BTreeSet;
     use std::rc::Rc;
 
     #[test]
@@ -1404,7 +1449,7 @@ mod test {
                 "text" => assert!(value.to_ytext().is_some()),
                 "array" => assert!(value.to_yarray().is_some()),
                 "map" => assert!(value.to_ymap().is_some()),
-                "xml_elem" => assert!(value.to_yxml_elem().is_some()),
+                "xml_elem" => assert!(value.to_yxml_fragment().is_some()),
                 "xml_text" => assert!(value.to_yxml_text().is_some()),
                 other => panic!("unrecognized root type: '{}'", other),
             }
@@ -1460,13 +1505,13 @@ mod test {
         let event = Rc::new(Cell::new(None));
         let event_c = event.clone();
         let _sub = doc.observe_subdocs(move |txn, e| {
-            let added = e.added.keys().cloned().collect();
-            let removed = e.removed.keys().cloned().collect();
-            let loaded = e.loaded.keys().cloned().collect();
+            let added = e.added().map(|d| d.guid().clone()).collect();
+            let removed = e.removed().map(|d| d.guid().clone()).collect();
+            let loaded = e.loaded().map(|d| d.guid().clone()).collect();
             event_c.set(Some((added, removed, loaded)));
         });
         let subdocs = doc.get_or_insert_map("mysubdocs");
-        let uuid_a: Uuid = "67e55044-10b1-426f-9247-bb680e5fe0c8".into();
+        let uuid_a: Uuid = "A".into();
         let doc_a = Doc::with_options({
             let mut o = Options::default();
             o.guid = uuid_a.clone();
@@ -1530,7 +1575,7 @@ mod test {
         let actual = event.take();
         assert_eq!(actual, Some((vec![], vec![], vec![uuid_a.clone()])));
 
-        let uuid_c: Uuid = "fd2eeeeb-c321-4a05-96e2-14b753685020".into();
+        let uuid_c: Uuid = "C".into();
         let doc_c = Doc::with_options({
             let mut o = Options::default();
             o.guid = uuid_c.clone();
@@ -1548,8 +1593,57 @@ mod test {
             Some((vec![uuid_c.clone()], vec![], vec![uuid_c.clone()]))
         );
 
-        let guids: Vec<_> = doc.transact().subdoc_guids().cloned().collect();
-        assert_eq!(vec![uuid_a, uuid_c], guids);
+        let guids: BTreeSet<_> = doc.transact().subdoc_guids().cloned().collect();
+        assert_eq!(guids, BTreeSet::from([uuid_a.clone(), uuid_c.clone()]));
+
+        let data = doc
+            .transact()
+            .encode_state_as_update_v1(&StateVector::default());
+
+        let doc2 = Doc::new();
+        let event = Rc::new(Cell::new(None));
+        let event_c = event.clone();
+        let _sub = doc2.observe_subdocs(move |txn, e| {
+            let added: Vec<_> = e.added().map(|d| d.guid().clone()).collect();
+            let removed: Vec<_> = e.removed().map(|d| d.guid().clone()).collect();
+            let loaded: Vec<_> = e.loaded().map(|d| d.guid().clone()).collect();
+            event_c.set(Some((added, removed, loaded)));
+        });
+        let update = Update::decode_v1(&data).unwrap();
+        doc2.transact_mut().apply_update(update);
+        let mut actual = event.take().unwrap();
+        actual.0.sort();
+        assert_eq!(
+            actual,
+            (
+                vec![uuid_a.clone(), uuid_a.clone(), uuid_c.clone()],
+                vec![],
+                vec![]
+            )
+        );
+
+        let subdocs = doc2.transact().get_map("mysubdocs").unwrap();
+        {
+            let mut txn = doc2.transact_mut();
+            let doc_ref = subdocs.get(&mut txn, "a").unwrap().to_ydoc().unwrap();
+            doc_ref.load(&mut txn);
+        }
+        let actual = event.take();
+        assert_eq!(actual, Some((vec![], vec![], vec![uuid_a.clone()])));
+
+        let guids: BTreeSet<_> = doc2.transact().subdoc_guids().cloned().collect();
+        assert_eq!(guids, BTreeSet::from([uuid_a.clone(), uuid_c.clone()]));
+        {
+            let mut txn = doc2.transact_mut();
+            subdocs.remove(&mut txn, "a");
+        }
+
+        let actual = event.take();
+        assert_eq!(actual, Some((vec![], vec![uuid_a.clone()], vec![])));
+
+        let mut guids: Vec<_> = doc2.transact().subdoc_guids().cloned().collect();
+        guids.sort();
+        assert_eq!(guids, vec![uuid_a.clone(), uuid_c.clone()]);
     }
 
     #[test]
@@ -1562,9 +1656,9 @@ mod test {
         let event = Rc::new(RefCell::new(None));
         let event_c = event.clone();
         let _sub = doc.observe_subdocs(move |txn, e| {
-            let added = e.added.keys().cloned().collect();
-            let removed = e.removed.keys().cloned().collect();
-            let loaded = e.loaded.keys().cloned().collect();
+            let added = e.added().map(|d| d.guid().clone()).collect();
+            let removed = e.removed().map(|d| d.guid().clone()).collect();
+            let loaded = e.loaded().map(|d| d.guid().clone()).collect();
             let mut e: RefMut<_> = event_c.try_borrow_mut().unwrap();
             *e = Some((added, removed, loaded));
         });
@@ -1604,9 +1698,9 @@ mod test {
         let doc2 = Doc::with_client_id(2);
         let event_c = event.clone();
         let _sub = doc2.observe_subdocs(move |txn, e| {
-            let added = e.added.keys().cloned().collect();
-            let removed = e.removed.keys().cloned().collect();
-            let loaded = e.loaded.keys().cloned().collect();
+            let added = e.added().map(|d| d.guid().clone()).collect();
+            let removed = e.removed().map(|d| d.guid().clone()).collect();
+            let loaded = e.loaded().map(|d| d.guid().clone()).collect();
             let mut e: RefMut<_> = event_c.try_borrow_mut().unwrap();
             *e = Some((added, removed, loaded));
         });
@@ -1645,9 +1739,9 @@ mod test {
         let event = Rc::new(RefCell::new(None));
         let event_c = event.clone();
         let _sub = doc.observe_subdocs(move |txn, e| {
-            let added = e.added.keys().cloned().collect();
-            let removed = e.removed.keys().cloned().collect();
-            let loaded = e.loaded.keys().cloned().collect();
+            let added = e.added().map(|d| d.guid().clone()).collect();
+            let removed = e.removed().map(|d| d.guid().clone()).collect();
+            let loaded = e.loaded().map(|d| d.guid().clone()).collect();
             let mut e: RefMut<_> = event_c.try_borrow_mut().unwrap();
             *e = Some((added, removed, loaded));
         });
@@ -1688,9 +1782,9 @@ mod test {
         let doc2 = Doc::with_client_id(2);
         let event_c = event.clone();
         let _sub = doc2.observe_subdocs(move |txn, e| {
-            let added = e.added.keys().cloned().collect();
-            let removed = e.removed.keys().cloned().collect();
-            let loaded = e.loaded.keys().cloned().collect();
+            let added = e.added().map(|d| d.guid().clone()).collect();
+            let removed = e.removed().map(|d| d.guid().clone()).collect();
+            let loaded = e.loaded().map(|d| d.guid().clone()).collect();
             let mut e: RefMut<_> = event_c.try_borrow_mut().unwrap();
             *e = Some((added, removed, loaded));
         });

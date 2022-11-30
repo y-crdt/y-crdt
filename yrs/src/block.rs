@@ -1,12 +1,12 @@
-use crate::doc::OffsetKind;
+use crate::doc::{DocAddr, OffsetKind};
 use crate::moving::Move;
 use crate::store::Store;
 use crate::transaction::TransactionMut;
 use crate::types::text::update_current_attributes;
 use crate::types::{
-    Attrs, Branch, BranchPtr, TypePtr, Value, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
-    TYPE_REFS_UNDEFINED, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_HOOK,
-    TYPE_REFS_XML_TEXT,
+    Attrs, Branch, BranchPtr, TypePtr, Value, TYPE_REFS_ARRAY, TYPE_REFS_DOC, TYPE_REFS_MAP,
+    TYPE_REFS_TEXT, TYPE_REFS_UNDEFINED, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT,
+    TYPE_REFS_XML_HOOK, TYPE_REFS_XML_TEXT,
 };
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
@@ -395,10 +395,9 @@ impl BlockPtr {
                         ItemContent::Doc(doc) => {
                             doc.item = Some(self_ptr);
                             let subdocs = txn.subdocs.get_or_init();
-                            let guid = doc.options().guid.clone();
-                            subdocs.added.insert(guid.clone(), doc.clone());
+                            subdocs.added.insert(DocAddr::new(doc), doc.clone());
                             if doc.options().should_load {
-                                subdocs.loaded.insert(guid, doc.clone());
+                                subdocs.loaded.insert(doc.addr(), doc.clone());
                             }
                         }
                         ItemContent::Format(_, _) => {
@@ -1919,6 +1918,7 @@ impl std::fmt::Display for ItemContent {
                 TYPE_REFS_XML_FRAGMENT => write!(f, "<xml fragment>"),
                 TYPE_REFS_XML_HOOK => write!(f, "<xml hook>"),
                 TYPE_REFS_XML_TEXT => write!(f, "<xml text>"),
+                TYPE_REFS_DOC => write!(f, "<sub-doc>"),
                 _ => write!(f, "<undefined type ref>"),
             },
             ItemContent::Move(m) => std::fmt::Display::fmt(m.as_ref(), f),

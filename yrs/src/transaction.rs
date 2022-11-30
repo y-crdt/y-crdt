@@ -1,5 +1,6 @@
 use crate::block::{Block, BlockPtr, Item, ItemContent, Prelim, ID};
 use crate::block_store::{Snapshot, StateVector};
+use crate::doc::DocAddr;
 use crate::event::SubdocsEvent;
 use crate::id_set::DeleteSet;
 use crate::store::{Store, SubdocGuids, SubdocsIter};
@@ -463,9 +464,9 @@ impl<'doc> TransactionMut<'doc> {
                 match &item.content {
                     ItemContent::Doc(doc) => {
                         let subdocs = self.subdocs.get_or_init();
-                        let id = &doc.options().guid;
-                        if subdocs.added.remove(id).is_none() {
-                            subdocs.removed.insert(id.clone(), doc.clone());
+                        let addr = doc.addr();
+                        if subdocs.added.remove(&addr).is_none() {
+                            subdocs.removed.insert(addr, doc.clone());
                         }
                     }
                     ItemContent::Type(inner) => {
@@ -891,7 +892,7 @@ impl<'doc> Iterator for RootRefs<'doc> {
 
 #[derive(Default)]
 pub struct Subdocs {
-    pub(crate) added: HashMap<Uuid, DocRef>,
-    pub(crate) removed: HashMap<Uuid, DocRef>,
-    pub(crate) loaded: HashMap<Uuid, DocRef>,
+    pub(crate) added: HashMap<DocAddr, DocRef>,
+    pub(crate) removed: HashMap<DocAddr, DocRef>,
+    pub(crate) loaded: HashMap<DocAddr, DocRef>,
 }

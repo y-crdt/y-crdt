@@ -1,4 +1,3 @@
-use js_sys::Math::random;
 use js_sys::Uint8Array;
 use lib0::any::Any;
 use std::cell::RefCell;
@@ -17,17 +16,18 @@ use yrs::types::text::{ChangeKind, Diff, TextEvent, YChange};
 use yrs::types::xml::{XmlEvent, XmlTextEvent};
 use yrs::types::{
     Attrs, Branch, BranchPtr, Change, DeepEventsSubscription, DeepObservable, Delta, EntryChange,
-    Event, Events, Path, PathSegment, ToJson, TypeRefs, Value, TYPE_REFS_ARRAY, TYPE_REFS_MAP,
-    TYPE_REFS_TEXT, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT,
+    Event, Events, Path, PathSegment, ToJson, TypeRefs, Value, TYPE_REFS_ARRAY, TYPE_REFS_DOC,
+    TYPE_REFS_MAP, TYPE_REFS_TEXT, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT,
+    TYPE_REFS_XML_TEXT,
 };
 use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use yrs::{
-    uuid_v4, AfterTransactionEvent, AfterTransactionSubscription, Array, ArrayRef, DeleteSet,
+    AfterTransactionEvent, AfterTransactionSubscription, Array, ArrayRef, DeleteSet,
     DestroySubscription, Doc, DocRef, GetString, Map, MapRef, Observable, OffsetKind, Options,
-    ReadTxn, Snapshot, StateVector, Store, SubdocsEvent, SubdocsSubscription, Subscription, Text,
-    TextRef, Transact, Transaction, TransactionMut, Update, UpdateSubscription, Uuid, Xml,
-    XmlElementPrelim, XmlElementRef, XmlFragment, XmlFragmentRef, XmlNode, XmlTextPrelim,
+    ReadTxn, Snapshot, StateVector, Store, SubdocsEvent, SubdocsEventIter, SubdocsSubscription,
+    Subscription, Text, TextRef, Transact, Transaction, TransactionMut, Update, UpdateSubscription,
+    Xml, XmlElementPrelim, XmlElementRef, XmlFragment, XmlFragmentRef, XmlNode, XmlTextPrelim,
     XmlTextRef,
 };
 
@@ -76,40 +76,27 @@ pub fn set_panic_hook() {
 /// }
 /// ```
 #[wasm_bindgen]
-pub struct YDoc(DocInner);
-
-enum DocInner {
-    Doc(Doc),
-    Subdoc(DocRef),
-}
+pub struct YDoc(RefCell<SharedType<DocRef, Doc>>);
 
 impl AsRef<Doc> for YDoc {
     fn as_ref(&self) -> &Doc {
-        match &self.0 {
-            DocInner::Doc(d) => d,
-            DocInner::Subdoc(d) => d.deref(),
-        }
-    }
-}
-
-impl AsMut<Doc> for YDoc {
-    fn as_mut(&mut self) -> &mut Doc {
-        match &mut self.0 {
-            DocInner::Doc(d) => d,
-            DocInner::Subdoc(d) => d.deref_mut(),
+        let d = unsafe { self.0.as_ptr().as_ref().unwrap() };
+        match d {
+            SharedType::Prelim(doc) => doc,
+            SharedType::Integrated(doc_ref) => doc_ref.deref(),
         }
     }
 }
 
 impl From<Doc> for YDoc {
     fn from(doc: Doc) -> Self {
-        YDoc(DocInner::Doc(doc))
+        YDoc(RefCell::new(SharedType::Prelim(doc)))
     }
 }
 
 impl From<DocRef> for YDoc {
     fn from(doc: DocRef) -> Self {
-        YDoc(DocInner::Subdoc(doc))
+        YDoc(RefCell::new(SharedType::Integrated(doc)))
     }
 }
 
@@ -362,7 +349,7 @@ impl YDoc {
     /// (if it is a subdocument).
     #[wasm_bindgen(js_name = load)]
     pub fn load(&self, txn: &ImplicitTransaction) {
-        if let DocInner::Subdoc(d) = &self.0 {
+        if let SharedType::Integrated(d) = &*self.0.borrow() {
             if let Some(txn) = get_txn_mut(txn) {
                 d.load(txn)
             } else {
@@ -377,9 +364,9 @@ impl YDoc {
     /// Emit `onDestroy` event and unregister all event handlers.
     #[wasm_bindgen(js_name = destroy)]
     pub fn destroy(&mut self, txn: &ImplicitTransaction) {
-        match &mut self.0 {
-            DocInner::Doc(_) => panic!("called Doc::destroy on non-subdocument"),
-            DocInner::Subdoc(doc) => {
+        match &mut *self.0.borrow_mut() {
+            SharedType::Prelim(doc) => doc.destroy(),
+            SharedType::Integrated(doc) => {
                 if let Some(txn) = get_txn_mut(txn) {
                     doc.destroy(txn)
                 } else {
@@ -415,19 +402,19 @@ impl YDoc {
     /// Returns a list of unique identifiers of the sub-documents existings within the scope of
     /// this document.
     #[wasm_bindgen(js_name = getSubdocGuids)]
-    pub fn subdoc_guids(&self, txn: &ImplicitTransaction) -> js_sys::Array {
+    pub fn subdoc_guids(&self, txn: &ImplicitTransaction) -> js_sys::Set {
         let doc = self.as_ref();
-        let buf = js_sys::Array::new();
+        let buf = js_sys::Set::new(&js_sys::Array::new());
         if let Some(txn) = get_txn(txn) {
             for uid in txn.subdoc_guids() {
                 let str = uid.to_string();
-                buf.push(&str.into());
+                buf.add(&str.into());
             }
         } else {
             let txn = doc.transact();
             for uid in txn.subdoc_guids() {
                 let str = uid.to_string();
-                buf.push(&str.into());
+                buf.add(&str.into());
             }
         }
         buf
@@ -1601,9 +1588,9 @@ pub struct YSubdocsEvent {
 #[wasm_bindgen]
 impl YSubdocsEvent {
     fn new(e: &SubdocsEvent) -> Self {
-        fn to_array(map: &HashMap<Uuid, DocRef>) -> JsValue {
+        fn to_array(iter: SubdocsEventIter) -> JsValue {
             let mut buf = js_sys::Array::new();
-            let values = map.values().map(|d| {
+            let values = iter.map(|d| {
                 let doc = YDoc::from(d.clone());
                 let js: JsValue = doc.into();
                 js
@@ -1612,9 +1599,9 @@ impl YSubdocsEvent {
             buf.into()
         }
 
-        let added = to_array(&e.added);
-        let removed = to_array(&e.removed);
-        let loaded = to_array(&e.loaded);
+        let added = to_array(e.added());
+        let removed = to_array(e.removed());
+        let loaded = to_array(e.loaded());
         YSubdocsEvent {
             added,
             removed,
@@ -3490,6 +3477,15 @@ impl Prelim for JsValueWrapper {
             if shared.is_prelim() {
                 let branch = Branch::new(shared.type_ref(), None);
                 ItemContent::Type(branch)
+            } else if let Shared::Doc(doc) = shared {
+                let mut mut_doc = doc.0.borrow_mut();
+                if let SharedType::Prelim(d) = mut_doc.deref() {
+                    let doc_ref = DocRef::from(d.clone());
+                    *mut_doc = SharedType::Integrated(doc_ref.clone());
+                    ItemContent::Doc(doc_ref)
+                } else {
+                    panic!("Cannot integrate document, that has been already integrated elsewhere")
+                }
             } else {
                 panic!("Cannot integrate this type")
             }
@@ -3688,6 +3684,8 @@ enum Shared<'a> {
     Map(Ref<'a, YMap>),
     XmlElement(Ref<'a, YXmlElement>),
     XmlText(Ref<'a, YXmlText>),
+    XmlFragment(Ref<'a, YXmlFragment>),
+    Doc(Ref<'a, YDoc>),
 }
 
 fn as_ref<'a, T>(js: u32) -> Ref<'a, T> {
@@ -3705,6 +3703,7 @@ impl<'a> TryFrom<&'a JsValue> for Shared<'a> {
         let ctor_name = Object::get_prototype_of(js).constructor().name();
         let ptr = Reflect::get(js, &JsValue::from_str("ptr"))?;
         let ptr_u32: u32 = ptr.as_f64().ok_or(JsValue::NULL)? as u32;
+
         if ctor_name == "YText" {
             Ok(Shared::Text(as_ref(ptr_u32)))
         } else if ctor_name == "YArray" {
@@ -3715,8 +3714,12 @@ impl<'a> TryFrom<&'a JsValue> for Shared<'a> {
             Ok(Shared::XmlElement(as_ref(ptr_u32)))
         } else if ctor_name == "YXmlText" {
             Ok(Shared::XmlText(as_ref(ptr_u32)))
+        } else if ctor_name == "YXmlFragment" {
+            Ok(Shared::XmlFragment(as_ref(ptr_u32)))
+        } else if ctor_name == "YDoc" {
+            Ok(Shared::Doc(as_ref(ptr_u32)))
         } else {
-            Err(JsValue::NULL)
+            Err(ctor_name.into())
         }
     }
 }
@@ -3727,7 +3730,10 @@ impl<'a> Shared<'a> {
             Shared::Text(v) => v.prelim(),
             Shared::Array(v) => v.prelim(),
             Shared::Map(v) => v.prelim(),
-            Shared::XmlElement(_) | Shared::XmlText(_) => false,
+            Shared::Doc(_)
+            | Shared::XmlElement(_)
+            | Shared::XmlText(_)
+            | Shared::XmlFragment(_) => false,
         }
     }
 
@@ -3738,6 +3744,8 @@ impl<'a> Shared<'a> {
             Shared::Map(_) => TYPE_REFS_MAP,
             Shared::XmlElement(_) => TYPE_REFS_XML_ELEMENT,
             Shared::XmlText(_) => TYPE_REFS_XML_TEXT,
+            Shared::XmlFragment(_) => TYPE_REFS_XML_FRAGMENT,
+            Shared::Doc(_) => TYPE_REFS_DOC,
         }
     }
 }

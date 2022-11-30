@@ -59,7 +59,7 @@ pub use crate::doc::Transact;
 pub use crate::doc::{
     AfterTransactionSubscription, DestroySubscription, SubdocsSubscription, UpdateSubscription,
 };
-pub use crate::event::{AfterTransactionEvent, SubdocsEvent, UpdateEvent};
+pub use crate::event::{AfterTransactionEvent, SubdocsEvent, SubdocsEventIter, UpdateEvent};
 pub use crate::id_set::DeleteSet;
 pub use crate::observer::{Observer, Subscription, SubscriptionId};
 pub use crate::store::Store;

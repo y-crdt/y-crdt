@@ -178,7 +178,7 @@ export const testSubdoc = tc => {
         t.compare(Array.from(doc.getSubdocGuids()), ['a', 'c'])
     }
 
-    const doc2 = new Y.Doc()
+    const doc2 = new Y.YDoc()
     {
         t.compare(Array.from(doc2.getSubdocs()), [])
         /**
@@ -197,99 +197,10 @@ export const testSubdoc = tc => {
         doc2.getMap('mysubdocs').get('a').load()
         t.compare(event, [[], [], ['a']])
 
-        t.compare(Array.from(doc2.getSubdocGuids()), ['a', 'c'])
+        t.compare(Array.from(doc2.getSubdocGuids()).sort(), ['a', 'c'])
 
         doc2.getMap('mysubdocs').delete('a')
         t.compare(event, [[], ['a'], []])
-        t.compare(Array.from(doc2.getSubdocGuids()), ['a', 'c'])
+        t.compare(Array.from(doc2.getSubdocGuids()).sort(), ['a', 'c'])
     }
-}
-
-/**
- * @param {t.TestCase} tc
- */
-export const testSubdocLoadEdgeCases = tc => {
-    const ydoc = new Y.YDoc()
-    const yarray = ydoc.getArray('test')
-    const subdoc1 = new Y.YDoc()
-    /**
-     * @type {any}
-     */
-    let lastEvent = null
-    ydoc.onSubdocs(event => {
-        lastEvent = event
-    })
-    yarray.insert(0, [subdoc1])
-    t.assert(subdoc1.shouldLoad)
-    t.assert(subdoc1.autoLoad === false)
-    t.assert(lastEvent !== null && lastEvent.loaded.has(subdoc1))
-    t.assert(lastEvent !== null && lastEvent.added.has(subdoc1))
-    // destroy and check whether lastEvent adds it again to added (it shouldn't)
-    subdoc1.destroy()
-    const subdoc2 = yarray.get(0)
-    t.assert(subdoc1 !== subdoc2)
-    t.assert(lastEvent !== null && lastEvent.added.has(subdoc2))
-    t.assert(lastEvent !== null && !lastEvent.loaded.has(subdoc2))
-    // load
-    subdoc2.load()
-    t.assert(lastEvent !== null && !lastEvent.added.has(subdoc2))
-    t.assert(lastEvent !== null && lastEvent.loaded.has(subdoc2))
-    // apply from remote
-    const ydoc2 = new Y.YDoc()
-    ydoc2.onSubdocs(event => {
-        lastEvent = event
-    })
-    Y.applyUpdate(ydoc2, Y.encodeStateAsUpdate(ydoc))
-    const subdoc3 = ydoc2.getArray('test').get(0)
-    t.assert(subdoc3.shouldLoad === false)
-    t.assert(subdoc3.autoLoad === false)
-    t.assert(lastEvent !== null && lastEvent.added.has(subdoc3))
-    t.assert(lastEvent !== null && !lastEvent.loaded.has(subdoc3))
-    // load
-    subdoc3.load()
-    t.assert(subdoc3.shouldLoad)
-    t.assert(lastEvent !== null && !lastEvent.added.has(subdoc3))
-    t.assert(lastEvent !== null && lastEvent.loaded.has(subdoc3))
-}
-
-/**
- * @param {t.TestCase} tc
- */
-export const testSubdocLoadEdgeCasesAutoload = tc => {
-    const ydoc = new Y.YDoc()
-    const yarray = ydoc.getArray('test')
-    const subdoc1 = new Y.YDoc({ autoLoad: true })
-    /**
-     * @type {any}
-     */
-    let lastEvent = null
-    ydoc.onSubdocs(event => {
-        lastEvent = event
-    })
-    yarray.insert(0, [subdoc1])
-    t.assert(subdoc1.shouldLoad)
-    t.assert(subdoc1.autoLoad)
-    t.assert(lastEvent !== null && lastEvent.loaded.has(subdoc1))
-    t.assert(lastEvent !== null && lastEvent.added.has(subdoc1))
-    // destroy and check whether lastEvent adds it again to added (it shouldn't)
-    subdoc1.destroy()
-    const subdoc2 = yarray.get(0)
-    t.assert(subdoc1 !== subdoc2)
-    t.assert(lastEvent !== null && lastEvent.added.has(subdoc2))
-    t.assert(lastEvent !== null && !lastEvent.loaded.has(subdoc2))
-    // load
-    subdoc2.load()
-    t.assert(lastEvent !== null && !lastEvent.added.has(subdoc2))
-    t.assert(lastEvent !== null && lastEvent.loaded.has(subdoc2))
-    // apply from remote
-    const ydoc2 = new Y.YDoc()
-    ydoc2.onSubdocs(event => {
-        lastEvent = event
-    })
-    Y.applyUpdate(ydoc2, Y.encodeStateAsUpdate(ydoc))
-    const subdoc3 = ydoc2.getArray('test').get(0)
-    t.assert(subdoc1.shouldLoad)
-    t.assert(subdoc1.autoLoad)
-    t.assert(lastEvent !== null && lastEvent.added.has(subdoc3))
-    t.assert(lastEvent !== null && lastEvent.loaded.has(subdoc3))
 }
