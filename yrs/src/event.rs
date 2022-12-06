@@ -1,6 +1,6 @@
 use crate::doc::DocAddr;
 use crate::transaction::Subdocs;
-use crate::{DeleteSet, DocRef, StateVector, TransactionMut};
+use crate::{DeleteSet, Doc, StateVector, TransactionMut};
 use std::collections::HashMap;
 
 /// An update event passed to a callback registered in the event handler. Contains data about the
@@ -45,9 +45,9 @@ impl AfterTransactionEvent {
 /// Event used to communicate load requests from the underlying subdocuments.
 #[derive(Debug, Clone)]
 pub struct SubdocsEvent {
-    pub(crate) added: HashMap<DocAddr, DocRef>,
-    pub(crate) removed: HashMap<DocAddr, DocRef>,
-    pub(crate) loaded: HashMap<DocAddr, DocRef>,
+    pub(crate) added: HashMap<DocAddr, Doc>,
+    pub(crate) removed: HashMap<DocAddr, Doc>,
+    pub(crate) loaded: HashMap<DocAddr, Doc>,
 }
 
 impl SubdocsEvent {
@@ -73,14 +73,18 @@ impl SubdocsEvent {
 }
 
 #[repr(transparent)]
-pub struct SubdocsEventIter<'a>(std::collections::hash_map::Values<'a, DocAddr, DocRef>);
+pub struct SubdocsEventIter<'a>(std::collections::hash_map::Values<'a, DocAddr, Doc>);
 
 impl<'a> Iterator for SubdocsEventIter<'a> {
-    type Item = &'a DocRef;
+    type Item = &'a Doc;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.0.next()
     }
 }
 
-impl<'a> ExactSizeIterator for SubdocsEventIter<'a> {}
+impl<'a> ExactSizeIterator for SubdocsEventIter<'a> {
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+}

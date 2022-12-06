@@ -3,7 +3,7 @@ use crate::event::{AfterTransactionEvent, SubdocsEvent, UpdateEvent};
 use crate::store::{Store, StoreRef};
 use crate::transaction::{Transaction, TransactionMut};
 use crate::types::{
-    Branch, BranchPtr, ToJson, TypePtr, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
+    Branch, BranchPtr, ToJson, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
     TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_TEXT,
 };
 use crate::updates::decoder::{Decode, Decoder};
@@ -18,7 +18,8 @@ use lib0::any::Any;
 use lib0::error::Error;
 use rand::Rng;
 use std::collections::HashMap;
-use std::ops::{Deref, DerefMut};
+use std::fmt::Formatter;
+use std::ops::DerefMut;
 use std::sync::Arc;
 use thiserror::Error;
 
@@ -80,6 +81,14 @@ impl Doc {
         }
     }
 
+    pub(crate) fn subdoc(ptr: BlockPtr, options: Options) -> Self {
+        let mut store = Store::new(options);
+        store.parent = Some(ptr);
+        Doc {
+            store: store.into(),
+        }
+    }
+
     /// A unique client identifier, that's also a unique identifier of current document replica
     /// and it's subdocuments.
     pub fn client_id(&self) -> ClientID {
@@ -92,6 +101,7 @@ impl Doc {
         &self.options().guid
     }
 
+    /// Returns config options of this [Doc] instance.
     pub fn options(&self) -> &Options {
         self.store.options()
     }
@@ -305,7 +315,7 @@ impl Doc {
     /// Subscribe callback function, that will be called whenever a [DocRef::destroy] has been called.
     pub fn observe_destroy<F>(&self, f: F) -> Result<DestroySubscription, BorrowMutError>
     where
-        F: Fn(&TransactionMut, &DocRef) -> () + 'static,
+        F: Fn(&TransactionMut, &Doc) -> () + 'static,
     {
         let mut r = self.store.try_borrow_mut()?;
         let events = r.events.get_or_init();
@@ -320,26 +330,93 @@ impl Doc {
         }
     }
 
-    /// Returns a weak reference to this document.
-    pub fn as_ref(&self) -> DocRef {
-        DocRef::from(self.clone())
+    /// Sends a load request to a parent document. Works only if current document is a sub-document
+    /// of an another document.
+    pub fn load<T>(&self, parent_txn: &mut T)
+    where
+        T: WriteTxn,
+    {
+        let mut txn = self.transact_mut();
+        if txn.store.is_subdoc() {
+            if !txn.store.options.should_load {
+                parent_txn
+                    .subdocs_mut()
+                    .loaded
+                    .insert(self.addr(), self.clone());
+            }
+        }
+        txn.store.options.should_load = true;
     }
 
-    pub fn destroy(&mut self) {
+    /// Starts destroy procedure for a current document, triggering an "destroy" callback and
+    /// invalidating all event callback subscriptions.
+    pub fn destroy<T>(&mut self, parent_txn: &mut T)
+    where
+        T: WriteTxn,
+    {
         let mut txn = self.transact_mut();
-        let subdocs: Vec<_> = txn.store.subdocs.values().cloned().collect();
+        let store = txn.store_mut();
+        let subdocs: Vec<_> = store.subdocs.values().cloned().collect();
         for mut subdoc in subdocs {
             subdoc.destroy(&mut txn);
         }
-        // super.destroy(): cleanup the events
-        if let Some(events) = txn.store.events.take() {
-            if let Some(handler) = events.destroy_events.as_ref() {
-                let doc_ref = DocRef::from(self.clone());
-                for cb in handler.callbacks() {
-                    cb(&txn, &doc_ref)
+        if let Some(mut ptr) = txn.store.parent.take() {
+            let ptr_copy = ptr.clone();
+            if let Block::Item(item) = ptr.deref_mut() {
+                let is_deleted = item.is_deleted();
+                if let ItemContent::Doc(content) = &mut item.content {
+                    let mut options = content.options().clone();
+                    options.should_load = false;
+                    let new_ref = Doc::subdoc(ptr_copy, options);
+                    if !is_deleted {
+                        parent_txn
+                            .subdocs_mut()
+                            .added
+                            .insert(new_ref.addr(), new_ref.clone());
+                    }
+                    parent_txn
+                        .subdocs_mut()
+                        .removed
+                        .insert(new_ref.addr(), new_ref.clone());
+
+                    *content = new_ref;
                 }
             }
         }
+        // super.destroy(): cleanup the events
+        if let Some(events) = txn.store_mut().events.take() {
+            if let Some(handler) = events.destroy_events.as_ref() {
+                for cb in handler.callbacks() {
+                    cb(&txn, self)
+                }
+            }
+        }
+    }
+
+    pub fn parent_branch(&self) -> Option<BranchPtr> {
+        let store = unsafe { self.store.0.as_ptr().as_ref() }.unwrap();
+        store.parent?.as_branch()
+    }
+
+    pub(crate) fn ptr_eq(a: &Doc, b: &Doc) -> bool {
+        Arc::ptr_eq(&a.store.0, &b.store.0)
+    }
+
+    pub(crate) fn addr(&self) -> DocAddr {
+        DocAddr::new(&self)
+    }
+}
+
+impl PartialEq for Doc {
+    fn eq(&self, other: &Self) -> bool {
+        self.options().guid == other.options().guid
+    }
+}
+
+impl std::fmt::Display for Doc {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let options = self.options();
+        write!(f, "Doc(id: {}, guid: {})", options.client_id, options.guid)
     }
 }
 
@@ -351,7 +428,7 @@ pub type AfterTransactionSubscription =
 pub type SubdocsSubscription =
     crate::Subscription<Arc<dyn Fn(&TransactionMut, &SubdocsEvent) -> ()>>;
 
-pub type DestroySubscription = crate::Subscription<Arc<dyn Fn(&TransactionMut, &DocRef) -> ()>>;
+pub type DestroySubscription = crate::Subscription<Arc<dyn Fn(&TransactionMut, &Doc) -> ()>>;
 
 impl Default for Doc {
     fn default() -> Self {
@@ -585,160 +662,13 @@ where
 
 impl Prelim for Doc {
     fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
-        (ItemContent::Doc(DocRef::from(self)), None)
+        if self.parent_branch().is_some() {
+            panic!("Cannot integrate the document, because it's already being used as a sub-document elsewhere");
+        }
+        (ItemContent::Doc(self), None)
     }
 
     fn integrate(self, _txn: &mut TransactionMut, _inner_ref: BranchPtr) {}
-}
-
-/// A weak reference to a [Doc] living elsewhere. In case when a document store containing this
-/// link is loaded from binary payload, the linked subdocuments is not loaded explicitly.
-#[derive(Debug, Clone)]
-pub struct DocRef {
-    pub(crate) item: Option<BlockPtr>,
-    pub(crate) doc: Doc,
-}
-
-impl DocRef {
-    fn new(item: BlockPtr, doc: Doc) -> Self {
-        DocRef {
-            item: Some(item),
-            doc,
-        }
-    }
-
-    pub fn options(&self) -> &Options {
-        self.doc.store.options()
-    }
-
-    pub fn parent_ptr(&self) -> Option<BranchPtr> {
-        if let Some(Block::Item(item)) = self.item.as_deref() {
-            if let TypePtr::Branch(parent) = item.parent {
-                return Some(parent);
-            }
-        }
-        None
-    }
-
-    pub(crate) fn options_mut(&mut self) -> &mut Options {
-        self.doc.store.options_mut()
-    }
-
-    pub fn load<T>(&self, parent_txn: &mut T)
-    where
-        T: WriteTxn,
-    {
-        if let Some(_) = self.item.as_ref().and_then(|ptr| ptr.as_item()) {
-            let options = self.doc.options();
-            if !options.should_load {
-                parent_txn
-                    .subdocs_mut()
-                    .loaded
-                    .insert(self.addr(), self.clone());
-            }
-        }
-        let mut store = self.doc.store.try_borrow_mut().unwrap();
-        store.options.should_load = true;
-    }
-
-    pub fn destroy<T>(&mut self, parent_txn: &mut T)
-    where
-        T: WriteTxn,
-    {
-        let mut txn = self.doc.transact_mut();
-        let subdocs: Vec<_> = txn.store.subdocs.values().cloned().collect();
-        for mut subdoc in subdocs {
-            subdoc.destroy(&mut txn);
-        }
-        if let Some(mut ptr) = self.item.take() {
-            let ptr_copy = ptr.clone();
-            if let Block::Item(item) = ptr.deref_mut() {
-                let is_deleted = item.is_deleted();
-                if let ItemContent::Doc(content) = &mut item.content {
-                    let mut options = content.options().clone();
-                    options.should_load = false;
-                    let new_ref = DocRef::new(ptr_copy, Doc::with_options(options));
-                    if !is_deleted {
-                        parent_txn
-                            .subdocs_mut()
-                            .added
-                            .insert(new_ref.addr(), new_ref.clone());
-                    }
-                    parent_txn
-                        .subdocs_mut()
-                        .removed
-                        .insert(new_ref.addr(), new_ref.clone());
-
-                    *content = new_ref;
-                }
-            }
-        }
-        // super.destroy(): cleanup the events
-        if let Some(events) = txn.store.events.take() {
-            if let Some(handler) = events.destroy_events.as_ref() {
-                for cb in handler.callbacks() {
-                    cb(&txn, self)
-                }
-            }
-        }
-    }
-
-    pub(crate) fn ptr_eq(a: &DocRef, b: &DocRef) -> bool {
-        Arc::ptr_eq(&a.doc.store.0, &b.doc.store.0)
-    }
-
-    pub(crate) fn addr(&self) -> DocAddr {
-        DocAddr::new(&self)
-    }
-}
-
-impl PartialEq for DocRef {
-    fn eq(&self, other: &Self) -> bool {
-        self.options().guid == other.options().guid
-    }
-}
-
-impl From<Options> for DocRef {
-    fn from(mut options: Options) -> Self {
-        options.should_load = options.should_load || options.auto_load;
-        DocRef::from(Doc::with_options(options))
-    }
-}
-
-impl From<Doc> for DocRef {
-    fn from(doc: Doc) -> Self {
-        DocRef { item: None, doc }
-    }
-}
-
-impl std::fmt::Display for DocRef {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let o = self.options();
-        let mut s = f.debug_struct("DocRef");
-
-        s.field("client_id", &o.client_id);
-        s.field("guid", &o.guid);
-
-        if let Some(ptr) = self.item.as_ref() {
-            s.field("parent", ptr.id());
-        }
-
-        s.finish()
-    }
-}
-
-impl Deref for DocRef {
-    type Target = Doc;
-
-    fn deref(&self) -> &Self::Target {
-        &self.doc
-    }
-}
-
-impl DerefMut for DocRef {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.doc
-    }
 }
 
 /// For a Yjs compatibility reasons we expect subdocuments to be compared based on their reference
@@ -765,8 +695,8 @@ mod test {
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
     use crate::{
-        Array, ArrayPrelim, DeleteSet, Doc, DocRef, GetString, Map, Options, StateVector,
-        SubscriptionId, Text, Transact, Uuid,
+        Array, ArrayPrelim, DeleteSet, Doc, GetString, Map, Options, StateVector, SubscriptionId,
+        Text, Transact, Uuid,
     };
     use lib0::any::Any;
     use std::cell::{Cell, RefCell, RefMut};
@@ -1504,7 +1434,7 @@ mod test {
         let doc = Doc::with_client_id(1);
         let event = Rc::new(Cell::new(None));
         let event_c = event.clone();
-        let _sub = doc.observe_subdocs(move |txn, e| {
+        let _sub = doc.observe_subdocs(move |_, e| {
             let added = e.added().map(|d| d.guid().clone()).collect();
             let removed = e.removed().map(|d| d.guid().clone()).collect();
             let loaded = e.loaded().map(|d| d.guid().clone()).collect();
@@ -1603,7 +1533,7 @@ mod test {
         let doc2 = Doc::new();
         let event = Rc::new(Cell::new(None));
         let event_c = event.clone();
-        let _sub = doc2.observe_subdocs(move |txn, e| {
+        let _sub = doc2.observe_subdocs(move |_, e| {
             let added: Vec<_> = e.added().map(|d| d.guid().clone()).collect();
             let removed: Vec<_> = e.removed().map(|d| d.guid().clone()).collect();
             let loaded: Vec<_> = e.loaded().map(|d| d.guid().clone()).collect();
@@ -1655,7 +1585,7 @@ mod test {
 
         let event = Rc::new(RefCell::new(None));
         let event_c = event.clone();
-        let _sub = doc.observe_subdocs(move |txn, e| {
+        let _sub = doc.observe_subdocs(move |_, e| {
             let added = e.added().map(|d| d.guid().clone()).collect();
             let removed = e.removed().map(|d| d.guid().clone()).collect();
             let loaded = e.loaded().map(|d| d.guid().clone()).collect();
@@ -1681,7 +1611,7 @@ mod test {
         doc_ref.destroy(&mut doc.transact_mut());
         let doc_ref_2 = array.get(&doc.transact(), 0).unwrap().to_ydoc().unwrap();
         let uuid_2 = doc_ref_2.options().guid.clone();
-        assert!(!DocRef::ptr_eq(&doc_ref, &doc_ref_2));
+        assert!(!Doc::ptr_eq(&doc_ref, &doc_ref_2));
 
         let last_event = event.take();
         assert_eq!(
@@ -1697,7 +1627,7 @@ mod test {
         // apply from remote
         let doc2 = Doc::with_client_id(2);
         let event_c = event.clone();
-        let _sub = doc2.observe_subdocs(move |txn, e| {
+        let _sub = doc2.observe_subdocs(move |_, e| {
             let added = e.added().map(|d| d.guid().clone()).collect();
             let removed = e.removed().map(|d| d.guid().clone()).collect();
             let loaded = e.loaded().map(|d| d.guid().clone()).collect();
@@ -1738,7 +1668,7 @@ mod test {
 
         let event = Rc::new(RefCell::new(None));
         let event_c = event.clone();
-        let _sub = doc.observe_subdocs(move |txn, e| {
+        let _sub = doc.observe_subdocs(move |_, e| {
             let added = e.added().map(|d| d.guid().clone()).collect();
             let removed = e.removed().map(|d| d.guid().clone()).collect();
             let loaded = e.loaded().map(|d| d.guid().clone()).collect();
@@ -1766,7 +1696,7 @@ mod test {
 
         let subdoc_2 = array.get(&doc.transact(), 0).unwrap().to_ydoc().unwrap();
         let uuid_2 = subdoc_2.options().guid.clone();
-        assert!(!DocRef::ptr_eq(&subdoc_1, &subdoc_2));
+        assert!(!Doc::ptr_eq(&subdoc_1, &subdoc_2));
 
         let last_event = event.take();
         assert_eq!(
@@ -1781,7 +1711,7 @@ mod test {
         // apply from remote
         let doc2 = Doc::with_client_id(2);
         let event_c = event.clone();
-        let _sub = doc2.observe_subdocs(move |txn, e| {
+        let _sub = doc2.observe_subdocs(move |_, e| {
             let added = e.added().map(|d| d.guid().clone()).collect();
             let removed = e.removed().map(|d| d.guid().clone()).collect();
             let loaded = e.loaded().map(|d| d.guid().clone()).collect();

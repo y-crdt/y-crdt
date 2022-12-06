@@ -9,7 +9,7 @@ extern "C" {
 };
 
 YDoc* ydoc_new_with_id(int id) {
-    YOptions o;
+    YOptions o = yoptions();
     o.encoding = Y_OFFSET_UTF16;
     o.id = id;
     o.skip_gc = 0;
@@ -1342,7 +1342,7 @@ TEST_CASE("YDoc observe after transaction") {
 }
 
 TEST_CASE("YDoc snapshots") {
-    YOptions o;
+    YOptions o = yoptions();
     o.encoding = Y_OFFSET_UTF16;
     o.id = 1;
     o.skip_gc = 1;
@@ -1382,12 +1382,25 @@ typedef struct {
     char total[20]; // for tests it's more than enough to have 20 char string
 } SubdocsTest;
 
-void concat_guids(char* dst, int len, YDocRef** refs) {
+void concat_guids(char* dst, int len, YDoc** refs) {
     for (int i = 0; i < len; i++) {
-        YDocRef *d = refs[i];
-        char* guid = ydoc_guid(ydoc_unwrap(d));
+        YDoc *d = refs[i];
+        char* guid = ydoc_guid(d);
         strcat(dst, guid);
         free(guid);
+    }
+}
+
+void sort(char* input) {
+    int len = strlen(input);
+    for (int i = 0; i < len - 1; i++) {
+        for (int j = i + 1; j < len; j++) {
+            if (input[i] > input[j]) {
+                char temp = input[i];
+                input[i] = input[j];
+                input[j] = temp;
+            }
+        }
     }
 }
 
@@ -1409,7 +1422,7 @@ TEST_CASE("YDoc observe subdocs") {
     unsigned int subscription_id = ydoc_observe_subdocs(doc1, &t, observe_subdocs);
     Branch* subdocs = ymap(doc1, "mysubdocs");
 
-    YOptions options;
+    YOptions options = yoptions();
     options.guid = "a";
     options.id = 1;
     options.should_load = Y_TRUE;
@@ -1419,7 +1432,7 @@ TEST_CASE("YDoc observe subdocs") {
     YInput input = yinput_ydoc(docA);
     ymap_insert(subdocs, txn, "a", &input);
     YOutput* output = ymap_get(subdocs, txn, "a");
-    YDocRef* subdoc = youtput_read_ydoc(output);
+    YDoc* subdoc = youtput_read_ydoc(output);
     ydoc_load(subdoc,txn);
     youtput_destroy(output);
     ytransaction_commit(txn);
@@ -1457,10 +1470,10 @@ TEST_CASE("YDoc observe subdocs") {
     REQUIRE(!strcmp(t.total, "|||a|"));
     memset(t.total, '\0', 20);
 
-    YOptions optionsB;
-    options.guid = "a";
-    options.id = 2;
-    options.should_load = Y_FALSE;
+    YOptions optionsB = yoptions();
+    optionsB.guid = "a";
+    optionsB.id = 2;
+    optionsB.should_load = Y_FALSE;
     YDoc* docB = ydoc_new_with_options(optionsB);
 
     txn = ydoc_write_transaction(doc1);
@@ -1481,10 +1494,10 @@ TEST_CASE("YDoc observe subdocs") {
     REQUIRE(!strcmp(t.total, "|||a|"));
     memset(t.total, '\0', 20);
 
-    YOptions optionsC;
-    options.guid = "c";
-    options.id = 3;
-    options.should_load = Y_TRUE;
+    YOptions optionsC = yoptions();
+    optionsC.guid = "c";
+    optionsC.id = 3;
+    optionsC.should_load = Y_TRUE;
     YDoc* docC = ydoc_new_with_options(optionsC);
 
     txn = ydoc_write_transaction(doc1);
@@ -1502,19 +1515,17 @@ TEST_CASE("YDoc observe subdocs") {
 
     txn = ydoc_read_transaction(doc1);
     int subdoc_count = 0;
-    YDocRef** subdoc_refs = ytransaction_subdocs(txn, &subdoc_count);
+    YDoc** subdoc_refs = ytransaction_subdocs(txn, &subdoc_count);
     concat_guids(t.total, subdoc_count, subdoc_refs);
     ytransaction_commit(txn);
 
-    REQUIRE(!strcmp(t.total, "ac"));
+    sort(t.total);
+    REQUIRE(!strcmp(t.total, "aac"));
     memset(t.total, '\0', 20);
 
     txn = ydoc_read_transaction(doc1);
-    int snapshot_len = 0;
-    unsigned char* snapshot = ytransaction_snapshot(txn, &snapshot_len);
     int update_len = 0;
-    unsigned char* update = ytransaction_encode_state_from_snapshot_v1(txn, snapshot, snapshot_len, &update_len);
-    ybinary_destroy(snapshot, snapshot_len);
+    unsigned char* update = ytransaction_state_diff_v1(txn, NULL, 0, &update_len);
     ytransaction_commit(txn);
     ydoc_unobserve_subdocs(doc1, subscription_id);
 
@@ -1525,7 +1536,8 @@ TEST_CASE("YDoc observe subdocs") {
     ytransaction_apply(txn,update, update_len);
     ytransaction_commit(txn);
 
-    REQUIRE(!strcmp(t.total, "|aac|||"));
+    int cmp = !strcmp(t.total, "|aac|||") || !strcmp(t.total, "|aca|||") || !strcmp(t.total, "|caa|||");
+    REQUIRE(cmp);
     memset(t.total, '\0', 20);
 
     subdocs = ymap(doc2, "mysubdocs");
@@ -1546,7 +1558,8 @@ TEST_CASE("YDoc observe subdocs") {
     concat_guids(t.total, subdoc_count, subdoc_refs);
     ytransaction_commit(txn);
 
-    REQUIRE(!strcmp(t.total, "ac"));
+    sort(t.total);
+    REQUIRE(!strcmp(t.total, "aac"));
     memset(t.total, '\0', 20);
 
     txn = ydoc_write_transaction(doc2);

@@ -393,7 +393,10 @@ impl BlockPtr {
                         }
                         ItemContent::Move(m) => m.integrate_block(txn, self_ptr),
                         ItemContent::Doc(doc) => {
-                            doc.item = Some(self_ptr);
+                            {
+                                let mut txn = doc.transact_mut();
+                                txn.store.parent = Some(self_ptr);
+                            }
                             let subdocs = txn.subdocs.get_or_init();
                             subdocs.added.insert(DocAddr::new(doc), doc.clone());
                             if doc.options().should_load {
@@ -1389,7 +1392,7 @@ pub enum ItemContent {
     /// Deleted elements also don't contribute to an overall length of containing collection type.
     Deleted(u32),
 
-    Doc(DocRef),
+    Doc(Doc),
     JSON(Vec<String>), // String is JSON
     Embed(Box<Any>),
 
@@ -1702,8 +1705,9 @@ impl ItemContent {
                 Ok(ItemContent::Move(Box::new(m)))
             }
             BLOCK_ITEM_DOC_REF_NUMBER => {
-                let options = Options::decode(decoder)?;
-                Ok(ItemContent::Doc(DocRef::from(options)))
+                let mut options = Options::decode(decoder)?;
+                options.should_load = options.should_load || options.auto_load;
+                Ok(ItemContent::Doc(Doc::with_options(options)))
             }
             _ => Err(Error::UnexpectedValue),
         }

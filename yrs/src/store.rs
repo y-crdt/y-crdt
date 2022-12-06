@@ -1,13 +1,13 @@
-use crate::block::{BlockPtr, BlockSlice, ClientID, ItemContent};
+use crate::block::{Block, BlockPtr, BlockSlice, ClientID, ItemContent};
 use crate::block_store::{BlockStore, StateVector};
 use crate::doc::{DestroySubscription, DocAddr, Options, SubdocsSubscription};
 use crate::event::{AfterTransactionEvent, SubdocsEvent};
 use crate::id_set::DeleteSet;
-use crate::types::{Branch, BranchPtr, Path, PathSegment, TypeRefs};
+use crate::types::{Branch, BranchPtr, Path, PathSegment, TypePtr, TypeRefs};
 use crate::update::PendingUpdate;
 use crate::updates::encoder::{Encode, Encoder};
 use crate::{
-    AfterTransactionSubscription, DocRef, Observer, OffsetKind, Snapshot, SubscriptionId,
+    AfterTransactionSubscription, Doc, Observer, OffsetKind, Snapshot, SubscriptionId,
     TransactionMut, UpdateEvent, UpdateSubscription, Uuid,
 };
 use atomic_refcell::{AtomicRef, AtomicRefCell, AtomicRefMut, BorrowError, BorrowMutError};
@@ -43,9 +43,13 @@ pub struct Store {
     /// into `blocks`.
     pub(crate) pending_ds: Option<DeleteSet>,
 
-    pub(crate) subdocs: HashMap<DocAddr, DocRef>,
+    pub(crate) subdocs: HashMap<DocAddr, Doc>,
 
     pub(crate) events: Option<Box<StoreEvents>>,
+
+    /// Pointer to a parent block - present only if a current document is a sub-document of another
+    /// document.
+    pub(crate) parent: Option<BlockPtr>,
 }
 
 impl Store {
@@ -59,7 +63,12 @@ impl Store {
             events: None,
             pending: None,
             pending_ds: None,
+            parent: None,
         }
+    }
+
+    pub fn is_subdoc(&self) -> bool {
+        self.parent.is_some()
     }
 
     /// Get the latest clock sequence number observed and integrated into a current store client.
@@ -302,6 +311,17 @@ impl Store {
     pub fn subdoc_guids(&self) -> SubdocGuids {
         SubdocGuids(self.subdocs.values())
     }
+
+    /// If current document is a sub-document, returns a [BranchPtr] to a parent y-collection that
+    /// contains it.
+    pub fn parent_branch(&self) -> Option<BranchPtr> {
+        if let Some(Block::Item(item)) = self.parent.as_deref() {
+            if let TypePtr::Branch(parent) = item.parent {
+                return Some(parent);
+            }
+        }
+        None
+    }
 }
 
 impl Encode for Store {
@@ -379,10 +399,10 @@ impl From<Store> for StoreRef {
 }
 
 #[repr(transparent)]
-pub struct SubdocsIter<'doc>(std::collections::hash_map::Values<'doc, DocAddr, DocRef>);
+pub struct SubdocsIter<'doc>(std::collections::hash_map::Values<'doc, DocAddr, Doc>);
 
 impl<'doc> Iterator for SubdocsIter<'doc> {
-    type Item = &'doc DocRef;
+    type Item = &'doc Doc;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.0.next()
@@ -390,7 +410,7 @@ impl<'doc> Iterator for SubdocsIter<'doc> {
 }
 
 #[repr(transparent)]
-pub struct SubdocGuids<'doc>(std::collections::hash_map::Values<'doc, DocAddr, DocRef>);
+pub struct SubdocGuids<'doc>(std::collections::hash_map::Values<'doc, DocAddr, Doc>);
 
 impl<'doc> Iterator for SubdocGuids<'doc> {
     type Item = &'doc Uuid;
@@ -419,7 +439,7 @@ pub(crate) struct StoreEvents {
     /// Handles subscriptions for subdocs events.
     pub(crate) subdocs_events: Option<Observer<Arc<dyn Fn(&TransactionMut, &SubdocsEvent) -> ()>>>,
 
-    pub(crate) destroy_events: Option<Observer<Arc<dyn Fn(&TransactionMut, &DocRef) -> ()>>>,
+    pub(crate) destroy_events: Option<Observer<Arc<dyn Fn(&TransactionMut, &Doc) -> ()>>>,
 }
 
 impl StoreEvents {
@@ -544,7 +564,7 @@ impl StoreEvents {
     /// Subscribe callback function, that will be called whenever a [DocRef::destroy] has been called.
     pub fn observe_destroy<F>(&mut self, f: F) -> Result<DestroySubscription, BorrowMutError>
     where
-        F: Fn(&TransactionMut, &DocRef) -> () + 'static,
+        F: Fn(&TransactionMut, &Doc) -> () + 'static,
     {
         let subscription = self
             .destroy_events

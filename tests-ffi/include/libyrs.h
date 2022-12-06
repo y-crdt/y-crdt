@@ -38,8 +38,6 @@
  */
 typedef struct YDoc {} YDoc;
 
-typedef struct YDocRef {} YDocRef;
-
 /**
  * A common shared data type. All Yrs instances can be refered to using this data type (use
  * `ytype_kind` function if a specific type needs to be determined). Branch pointers are passed
@@ -275,6 +273,54 @@ typedef struct YXmlTreeWalker {} YXmlTreeWalker;
 typedef struct TransactionInner TransactionInner;
 
 /**
+ * Configuration object used by `YDoc`.
+ */
+typedef struct YOptions {
+  /**
+   * Globally unique 53-bit integer assigned to corresponding document replica as its identifier.
+   *
+   * If two clients share the same `id` and will perform any updates, it will result in
+   * unrecoverable document state corruption. The same thing may happen if the client restored
+   * document state from snapshot, that didn't contain all of that clients updates that were sent
+   * to other peers.
+   */
+  unsigned long id;
+  /**
+   * A NULL-able globally unique Uuid v4 compatible null-terminated string identifier
+   * of this document. If passed as NULL, a random Uuid will be generated instead.
+   */
+  const char *guid;
+  /**
+   * A NULL-able, UTF-8 encoded, null-terminated string of a collection that this document
+   * belongs to. It's used only by providers.
+   */
+  const char *collection_id;
+  /**
+   * Encoding used by text editing operations on this document. It's used to compute
+   * `YText`/`YXmlText` insertion offsets and text lengths. Either:
+   *
+   * - `Y_ENCODING_BYTES`
+   * - `Y_ENCODING_UTF16`
+   * - `Y_ENCODING_UTF32`
+   */
+  int encoding;
+  /**
+   * Boolean flag used to determine if deleted blocks should be garbage collected or not
+   * during the transaction commits. Setting this value to 0 means GC will be performed.
+   */
+  int skip_gc;
+  /**
+   * Boolean flag used to determine if subdocument should be loaded automatically.
+   * If this is a subdocument, remote peers will load the document as well automatically.
+   */
+  int auto_load;
+  /**
+   * Boolean flag used to determine whether the document should be synced by the provider now.
+   */
+  int should_load;
+} YOptions;
+
+/**
  * A Yrs document type. Documents are most important units of collaborative resources management.
  * All shared collections live within a scope of their corresponding documents. All updates are
  * generated on per document basis (rather than individual shared type). All operations on shared
@@ -296,11 +342,6 @@ typedef YDoc YDoc;
  */
 typedef Branch Branch;
 
-/**
- * A sub-document reference.
- */
-typedef YDocRef YDocRef;
-
 typedef union YOutputContent {
   char flag;
   float num;
@@ -310,7 +351,7 @@ typedef union YOutputContent {
   struct YOutput *array;
   struct YMapEntry *map;
   Branch *y_type;
-  YDocRef *y_doc;
+  YDoc *y_doc;
 } YOutputContent;
 
 /**
@@ -381,54 +422,6 @@ typedef struct YXmlAttr {
   const char *name;
   const char *value;
 } YXmlAttr;
-
-/**
- * Configuration object used by `YDoc`.
- */
-typedef struct YOptions {
-  /**
-   * Globally unique 53-bit integer assigned to corresponding document replica as its identifier.
-   *
-   * If two clients share the same `id` and will perform any updates, it will result in
-   * unrecoverable document state corruption. The same thing may happen if the client restored
-   * document state from snapshot, that didn't contain all of that clients updates that were sent
-   * to other peers.
-   */
-  unsigned long id;
-  /**
-   * A NULL-able globally unique Uuid v4 compatible null-terminated string identifier
-   * of this document. If passed as NULL, a random Uuid will be generated instead.
-   */
-  const char *guid;
-  /**
-   * A NULL-able, UTF-8 encoded, null-terminated string of a collection that this document
-   * belongs to. It's used only by providers.
-   */
-  const char *collection_id;
-  /**
-   * Encoding used by text editing operations on this document. It's used to compute
-   * `YText`/`YXmlText` insertion offsets and text lengths. Either:
-   *
-   * - `Y_ENCODING_BYTES`
-   * - `Y_ENCODING_UTF16`
-   * - `Y_ENCODING_UTF32`
-   */
-  int encoding;
-  /**
-   * Boolean flag used to determine if deleted blocks should be garbage collected or not
-   * during the transaction commits. Setting this value to 0 means GC will be performed.
-   */
-  int skip_gc;
-  /**
-   * Boolean flag used to determine if subdocument should be loaded automatically.
-   * If this is a subdocument, remote peers will load the document as well automatically.
-   */
-  int auto_load;
-  /**
-   * Boolean flag used to determine whether the document should be synced by the provider now.
-   */
-  int should_load;
-} YOptions;
 
 /**
  * Struct representing a state of a document. It contains the last seen clocks for blocks submitted
@@ -522,9 +515,9 @@ typedef struct YSubdocsEvent {
   int added_len;
   int removed_len;
   int loaded_len;
-  YDocRef **added;
-  YDocRef **removed;
-  YDocRef **loaded;
+  YDoc **added;
+  YDoc **removed;
+  YDoc **loaded;
 } YSubdocsEvent;
 
 /**
@@ -855,6 +848,11 @@ typedef struct YEventKeyChange {
 } YEventKeyChange;
 
 /**
+ * Returns default ceonfiguration for `YOptions`.
+ */
+struct YOptions yoptions(void);
+
+/**
  * Releases all memory-allocated resources bound to given document.
  */
 void ydoc_destroy(YDoc *value);
@@ -889,6 +887,15 @@ void ybinary_destroy(unsigned char *ptr, int len);
  * Use [ydoc_destroy] in order to release created [Doc] resources.
  */
 YDoc *ydoc_new(void);
+
+/**
+ * Creates a shallow clone of a provided `doc` - it's realized by increasing the ref-count
+ * value of the document. In result both input and output documents point to the same instance.
+ *
+ * Documents created this way can be destroyed via [ydoc_destroy] - keep in mind, that the memory
+ * will still be persisted until all strong references are dropped.
+ */
+YDoc *ydoc_clone(YDoc *doc);
 
 /**
  * Creates a new [Doc] instance with a specified `options`.
@@ -947,25 +954,20 @@ unsigned int ydoc_observe_subdocs(YDoc *doc, void *state, void (*cb)(void*, stru
 
 void ydoc_unobserve_subdocs(YDoc *doc, unsigned int subscription_id);
 
-unsigned int ydoc_observe_clear(YDoc *doc, void *state, void (*cb)(void*, YDocRef*));
+unsigned int ydoc_observe_clear(YDoc *doc, void *state, void (*cb)(void*, YDoc*));
 
 void ydoc_unobserve_clear(YDoc *doc, unsigned int subscription_id);
 
 /**
  * Manually send a load request to a parent document of this subdoc.
  */
-void ydoc_load(YDocRef *doc, YTransaction *parent_txn);
+void ydoc_load(YDoc *doc, YTransaction *parent_txn);
 
 /**
  * Destroys current document, sending a 'destroy' event and clearing up all the event callbacks
  * registered.
  */
-void ydoc_clear(YDocRef *doc, YTransaction *parent_txn);
-
-/**
- * Returns a document stored within this subdoc reference.
- */
-YDoc *ydoc_unwrap(YDocRef *doc);
+void ydoc_clear(YDoc *doc, YTransaction *parent_txn);
 
 /**
  * Starts a new read-only transaction on a given document. All other operations happen in context
@@ -1010,7 +1012,7 @@ YTransaction *ybranch_read_transaction(Branch *branch);
 /**
  * Returns a list of subdocs existing within current document.
  */
-YDocRef **ytransaction_subdocs(YTransaction *txn, int *len);
+YDoc **ytransaction_subdocs(YTransaction *txn, int *len);
 
 /**
  * Commit and dispose provided read-write transaction. This operation releases allocated resources,
@@ -1822,7 +1824,7 @@ struct YInput yinput_ydoc(YDoc *doc);
  * Attempts to read the value for a given `YOutput` pointer as a `YDocRef` reference to a nested
  * document.
  */
-YDocRef *youtput_read_ydoc(const struct YOutput *val);
+YDoc *youtput_read_ydoc(const struct YOutput *val);
 
 /**
  * Attempts to read the value for a given `YOutput` pointer as a boolean flag, which can be either

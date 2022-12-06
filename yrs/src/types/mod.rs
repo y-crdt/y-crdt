@@ -632,7 +632,7 @@ pub enum Value {
     YXmlElement(XmlElementRef),
     YXmlFragment(XmlFragmentRef),
     YXmlText(XmlTextRef),
-    YDoc(DocRef),
+    YDoc(Doc),
 }
 
 impl Default for Value {
@@ -656,7 +656,7 @@ impl Value {
         }
     }
 
-    pub fn to_ydoc(self) -> Option<DocRef> {
+    pub fn to_ydoc(self) -> Option<Doc> {
         if let Value::YDoc(doc) = self {
             Some(doc)
         } else {
@@ -753,7 +753,7 @@ impl ToJson for Value {
             Value::YXmlElement(v) => Any::String(v.get_string(txn).into_boxed_str()),
             Value::YXmlText(v) => Any::String(v.get_string(txn).into_boxed_str()),
             Value::YXmlFragment(v) => Any::String(v.get_string(txn).into_boxed_str()),
-            Value::YDoc(doc) => doc.as_ref().to_json(txn),
+            Value::YDoc(doc) => doc.to_json(txn),
         }
     }
 }

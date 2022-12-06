@@ -728,10 +728,10 @@ impl<'doc> TransactionMut<'doc> {
         if let Some(mut subdocs) = self.subdocs.take() {
             let client_id = store.options.client_id;
             for (guid, subdoc) in subdocs.added.iter_mut() {
-                let options = &mut subdoc.options_mut();
-                options.client_id = client_id;
-                if options.collection_id.is_none() {
-                    options.collection_id = store.options.collection_id.clone();
+                let mut txn = subdoc.transact_mut();
+                txn.store.options.client_id = client_id;
+                if txn.store.options.collection_id.is_none() {
+                    txn.store.options.collection_id = store.options.collection_id.clone();
                 }
                 store.subdocs.insert(guid.clone(), subdoc.clone());
             }
@@ -892,7 +892,7 @@ impl<'doc> Iterator for RootRefs<'doc> {
 
 #[derive(Default)]
 pub struct Subdocs {
-    pub(crate) added: HashMap<DocAddr, DocRef>,
-    pub(crate) removed: HashMap<DocAddr, DocRef>,
-    pub(crate) loaded: HashMap<DocAddr, DocRef>,
+    pub(crate) added: HashMap<DocAddr, Doc>,
+    pub(crate) removed: HashMap<DocAddr, Doc>,
+    pub(crate) loaded: HashMap<DocAddr, Doc>,
 }

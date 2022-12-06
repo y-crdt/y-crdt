@@ -24,8 +24,8 @@ use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use yrs::{
     AfterTransactionEvent, AfterTransactionSubscription, Array, ArrayRef, DeleteSet,
-    DestroySubscription, Doc, DocRef, GetString, Map, MapRef, Observable, OffsetKind, Options,
-    ReadTxn, Snapshot, StateVector, Store, SubdocsEvent, SubdocsEventIter, SubdocsSubscription,
+    DestroySubscription, Doc, GetString, Map, MapRef, Observable, OffsetKind, Options, ReadTxn,
+    Snapshot, StateVector, Store, SubdocsEvent, SubdocsEventIter, SubdocsSubscription,
     Subscription, Text, TextRef, Transact, Transaction, TransactionMut, Update, UpdateSubscription,
     Xml, XmlElementPrelim, XmlElementRef, XmlFragment, XmlFragmentRef, XmlNode, XmlTextPrelim,
     XmlTextRef,
@@ -76,27 +76,17 @@ pub fn set_panic_hook() {
 /// }
 /// ```
 #[wasm_bindgen]
-pub struct YDoc(RefCell<SharedType<DocRef, Doc>>);
+pub struct YDoc(Doc);
 
 impl AsRef<Doc> for YDoc {
     fn as_ref(&self) -> &Doc {
-        let d = unsafe { self.0.as_ptr().as_ref().unwrap() };
-        match d {
-            SharedType::Prelim(doc) => doc,
-            SharedType::Integrated(doc_ref) => doc_ref.deref(),
-        }
+        &self.0
     }
 }
 
 impl From<Doc> for YDoc {
     fn from(doc: Doc) -> Self {
-        YDoc(RefCell::new(SharedType::Prelim(doc)))
-    }
-}
-
-impl From<DocRef> for YDoc {
-    fn from(doc: DocRef) -> Self {
-        YDoc(RefCell::new(SharedType::Integrated(doc)))
+        YDoc(doc)
     }
 }
 
@@ -348,33 +338,26 @@ impl YDoc {
     /// Notify the parent document that you request to load data into this subdocument
     /// (if it is a subdocument).
     #[wasm_bindgen(js_name = load)]
-    pub fn load(&self, txn: &ImplicitTransaction) {
-        if let SharedType::Integrated(d) = &*self.0.borrow() {
-            if let Some(txn) = get_txn_mut(txn) {
-                d.load(txn)
-            } else {
-                if let Some(parent) = d.parent_ptr() {
-                    let mut txn = parent.transact_mut();
-                    d.load(&mut txn);
-                }
+    pub fn load(&self, parent_txn: &ImplicitTransaction) {
+        if let Some(txn) = get_txn_mut(parent_txn) {
+            self.0.load(txn)
+        } else {
+            if let Some(parent) = self.0.parent_branch() {
+                let mut txn = parent.transact_mut();
+                self.0.load(&mut txn);
             }
         }
     }
 
     /// Emit `onDestroy` event and unregister all event handlers.
     #[wasm_bindgen(js_name = destroy)]
-    pub fn destroy(&mut self, txn: &ImplicitTransaction) {
-        match &mut *self.0.borrow_mut() {
-            SharedType::Prelim(doc) => doc.destroy(),
-            SharedType::Integrated(doc) => {
-                if let Some(txn) = get_txn_mut(txn) {
-                    doc.destroy(txn)
-                } else {
-                    if let Some(parent) = doc.parent_ptr() {
-                        let mut txn = parent.transact_mut();
-                        doc.destroy(&mut txn);
-                    }
-                }
+    pub fn destroy(&mut self, parent_txn: &ImplicitTransaction) {
+        if let Some(txn) = get_txn_mut(parent_txn) {
+            self.0.destroy(txn)
+        } else {
+            if let Some(parent) = self.0.parent_branch() {
+                let mut txn = parent.transact_mut();
+                self.0.destroy(&mut txn);
             }
         }
     }
@@ -3478,13 +3461,10 @@ impl Prelim for JsValueWrapper {
                 let branch = Branch::new(shared.type_ref(), None);
                 ItemContent::Type(branch)
             } else if let Shared::Doc(doc) = shared {
-                let mut mut_doc = doc.0.borrow_mut();
-                if let SharedType::Prelim(d) = mut_doc.deref() {
-                    let doc_ref = DocRef::from(d.clone());
-                    *mut_doc = SharedType::Integrated(doc_ref.clone());
-                    ItemContent::Doc(doc_ref)
-                } else {
+                if doc.0.parent_branch().is_some() {
                     panic!("Cannot integrate document, that has been already integrated elsewhere")
+                } else {
+                    ItemContent::Doc(doc.0.clone())
                 }
             } else {
                 panic!("Cannot integrate this type")
