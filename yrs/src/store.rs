@@ -349,6 +349,10 @@ impl std::fmt::Display for Store {
             s.field("pending delete set", pending_ds);
         }
 
+        if let Some(parent) = self.parent.as_ref() {
+            s.field("parent block", parent.id());
+        }
+
         s.finish()
     }
 }

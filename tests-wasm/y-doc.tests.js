@@ -179,6 +179,8 @@ export const testSubdoc = tc => {
     }
 
     const doc2 = new Y.YDoc()
+    // root-level types must be prepared in advance for subdocs to work atm
+    const subdocs2 = doc.getMap('mysubdocs')
     {
         t.compare(Array.from(doc2.getSubdocs()), [])
         /**
@@ -194,7 +196,7 @@ export const testSubdoc = tc => {
         Y.applyUpdate(doc2, Y.encodeStateAsUpdate(doc))
         t.compare(event, [['a', 'a', 'c'], [], []])
 
-        let inner = doc2.getMap('mysubdocs').get('a')
+        let inner = subdocs2.get('a')
         t.assert(inner.parentDoc != null, 'parent doc must be present')
         inner.load()
         t.compare(event, [[], [], ['a']])

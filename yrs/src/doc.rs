@@ -1569,7 +1569,6 @@ mod test {
         {
             let mut txn = doc2.transact_mut();
             let doc_ref = subdocs.get(&mut txn, "a").unwrap().to_ydoc().unwrap();
-            assert_eq!(doc_ref.parent_doc(), Some(doc2.clone()));
             doc_ref.load(&mut txn);
         }
         let actual = event.take();

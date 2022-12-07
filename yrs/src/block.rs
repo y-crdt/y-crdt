@@ -433,7 +433,6 @@ impl BlockPtr {
                     }
                 } else {
                     true
-                    //panic!("Defect: item has no parent")
                 }
             }
         }
@@ -1924,10 +1923,10 @@ impl std::fmt::Display for ItemContent {
                 TYPE_REFS_XML_FRAGMENT => write!(f, "<xml fragment>"),
                 TYPE_REFS_XML_HOOK => write!(f, "<xml hook>"),
                 TYPE_REFS_XML_TEXT => write!(f, "<xml text>"),
-                TYPE_REFS_DOC => write!(f, "<sub-doc>"),
                 _ => write!(f, "<undefined type ref>"),
             },
             ItemContent::Move(m) => std::fmt::Display::fmt(m.as_ref(), f),
+            ItemContent::Doc(_, doc) => std::fmt::Display::fmt(doc, f),
             _ => Ok(()),
         }
     }
