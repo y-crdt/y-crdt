@@ -2,7 +2,6 @@ use lib0::any::Any;
 use lib0::error::Error;
 use std::collections::HashMap;
 use std::ffi::{c_void, CStr, CString};
-use std::fmt::Formatter;
 use std::mem::{forget, ManuallyDrop, MaybeUninit};
 use std::ops::Deref;
 use std::os::raw::{c_char, c_float, c_int, c_long, c_longlong, c_uchar, c_uint, c_ulong};
@@ -2442,7 +2441,7 @@ impl Prelim for YInput {
                 (ItemContent::Any(vec![value]), None)
             } else if self.tag == Y_DOC {
                 let doc = self.value.doc.as_ref().unwrap();
-                (ItemContent::Doc(doc.clone()), None)
+                (ItemContent::Doc(None, doc.clone()), None)
             } else {
                 let type_ref = if self.tag == Y_MAP {
                     TYPE_REFS_MAP

@@ -1,9 +1,9 @@
-use crate::block::{Block, BlockPtr, BlockSlice, ClientID, ItemContent};
+use crate::block::{BlockPtr, BlockSlice, ClientID, ItemContent};
 use crate::block_store::{BlockStore, StateVector};
 use crate::doc::{DestroySubscription, DocAddr, Options, SubdocsSubscription};
 use crate::event::{AfterTransactionEvent, SubdocsEvent};
 use crate::id_set::DeleteSet;
-use crate::types::{Branch, BranchPtr, Path, PathSegment, TypePtr, TypeRefs};
+use crate::types::{Branch, BranchPtr, Path, PathSegment, TypeRefs};
 use crate::update::PendingUpdate;
 use crate::updates::encoder::{Encode, Encoder};
 use crate::{
@@ -311,17 +311,6 @@ impl Store {
     pub fn subdoc_guids(&self) -> SubdocGuids {
         SubdocGuids(self.subdocs.values())
     }
-
-    /// If current document is a sub-document, returns a [BranchPtr] to a parent y-collection that
-    /// contains it.
-    pub fn parent_branch(&self) -> Option<BranchPtr> {
-        if let Some(Block::Item(item)) = self.parent.as_deref() {
-            if let TypePtr::Branch(parent) = item.parent {
-                return Some(parent);
-            }
-        }
-        None
-    }
 }
 
 impl Encode for Store {
@@ -366,6 +355,16 @@ impl std::fmt::Display for Store {
 
 #[repr(transparent)]
 #[derive(Debug, Clone)]
+pub struct WeakStoreRef(pub(crate) Weak<AtomicRefCell<Store>>);
+
+impl PartialEq for WeakStoreRef {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.ptr_eq(&other.0)
+    }
+}
+
+#[repr(transparent)]
+#[derive(Debug, Clone)]
 pub(crate) struct StoreRef(pub(crate) Arc<AtomicRefCell<Store>>);
 
 impl StoreRef {
@@ -377,18 +376,13 @@ impl StoreRef {
         self.0.try_borrow_mut()
     }
 
-    pub fn weak_ref(&self) -> Weak<AtomicRefCell<Store>> {
-        Arc::downgrade(&self.0)
+    pub fn weak_ref(&self) -> WeakStoreRef {
+        WeakStoreRef(Arc::downgrade(&self.0))
     }
 
     pub fn options(&self) -> &Options {
         let store = unsafe { self.0.as_ptr().as_ref().unwrap() };
         &store.options
-    }
-
-    pub(crate) fn options_mut(&mut self) -> &mut Options {
-        let store = unsafe { self.0.as_ptr().as_mut().unwrap() };
-        &mut store.options
     }
 }
 

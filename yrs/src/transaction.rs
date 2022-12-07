@@ -462,7 +462,7 @@ impl<'doc> TransactionMut<'doc> {
                 }
 
                 match &item.content {
-                    ItemContent::Doc(doc) => {
+                    ItemContent::Doc(_, doc) => {
                         let subdocs = self.subdocs.get_or_init();
                         let addr = doc.addr();
                         if subdocs.added.remove(&addr).is_none() {

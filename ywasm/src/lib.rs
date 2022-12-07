@@ -101,6 +101,13 @@ impl YDoc {
         Doc::with_options(options).into()
     }
 
+    /// Returns a parent document of this document or null if current document is not sub-document.
+    #[wasm_bindgen(method, getter, js_name = parentDoc)]
+    pub fn parent_doc(&self) -> Option<YDoc> {
+        let doc = self.0.parent_doc()?;
+        Some(YDoc(doc))
+    }
+
     /// Gets unique peer identifier of this `YDoc` instance.
     #[wasm_bindgen(method, getter)]
     pub fn id(&self) -> f64 {
@@ -342,7 +349,7 @@ impl YDoc {
         if let Some(txn) = get_txn_mut(parent_txn) {
             self.0.load(txn)
         } else {
-            if let Some(parent) = self.0.parent_branch() {
+            if let Some(parent) = self.0.parent_doc() {
                 let mut txn = parent.transact_mut();
                 self.0.load(&mut txn);
             }
@@ -355,7 +362,7 @@ impl YDoc {
         if let Some(txn) = get_txn_mut(parent_txn) {
             self.0.destroy(txn)
         } else {
-            if let Some(parent) = self.0.parent_branch() {
+            if let Some(parent) = self.0.parent_doc() {
                 let mut txn = parent.transact_mut();
                 self.0.destroy(&mut txn);
             }
@@ -3461,10 +3468,10 @@ impl Prelim for JsValueWrapper {
                 let branch = Branch::new(shared.type_ref(), None);
                 ItemContent::Type(branch)
             } else if let Shared::Doc(doc) = shared {
-                if doc.0.parent_branch().is_some() {
+                if doc.0.parent_doc().is_some() {
                     panic!("Cannot integrate document, that has been already integrated elsewhere")
                 } else {
-                    ItemContent::Doc(doc.0.clone())
+                    ItemContent::Doc(None, doc.0.clone())
                 }
             } else {
                 panic!("Cannot integrate this type")

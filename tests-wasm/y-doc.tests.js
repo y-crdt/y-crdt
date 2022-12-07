@@ -144,9 +144,9 @@ export const testSubdoc = tc => {
          */
         let event = /** @type {any} */ (null)
         doc.onSubdocs(subdocs => {
-            let added = Array.from(subdocs.added).map(x => x.guid)
-            let removed = Array.from(subdocs.removed).map(x => x.guid)
-            let loaded = Array.from(subdocs.loaded).map(x => x.guid)
+            let added = Array.from(subdocs.added).map(x => x.guid).sort()
+            let removed = Array.from(subdocs.removed).map(x => x.guid).sort()
+            let loaded = Array.from(subdocs.loaded).map(x => x.guid).sort()
             event = [added, removed, loaded]
         })
         const subdocs = doc.getMap('mysubdocs')
@@ -186,15 +186,17 @@ export const testSubdoc = tc => {
          */
         let event = /** @type {any} */ (null)
         doc2.onSubdocs(subdocs => {
-            let added = Array.from(subdocs.added).map(x => x.guid)
-            let removed = Array.from(subdocs.removed).map(x => x.guid)
-            let loaded = Array.from(subdocs.loaded).map(x => x.guid)
+            let added = Array.from(subdocs.added).map(x => x.guid).sort()
+            let removed = Array.from(subdocs.removed).map(x => x.guid).sort()
+            let loaded = Array.from(subdocs.loaded).map(x => x.guid).sort()
             event = [added, removed, loaded]
         })
         Y.applyUpdate(doc2, Y.encodeStateAsUpdate(doc))
         t.compare(event, [['a', 'a', 'c'], [], []])
 
-        doc2.getMap('mysubdocs').get('a').load()
+        let inner = doc2.getMap('mysubdocs').get('a')
+        t.assert(inner.parentDoc != null, 'parent doc must be present')
+        inner.load()
         t.compare(event, [[], [], ['a']])
 
         t.compare(Array.from(doc2.getSubdocGuids()).sort(), ['a', 'c'])

@@ -1,6 +1,6 @@
 use crate::block::{Block, BlockPtr, ClientID, ItemContent, Prelim};
 use crate::event::{AfterTransactionEvent, SubdocsEvent, UpdateEvent};
-use crate::store::{Store, StoreRef};
+use crate::store::{Store, StoreRef, WeakStoreRef};
 use crate::transaction::{Transaction, TransactionMut};
 use crate::types::{
     Branch, BranchPtr, ToJson, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
@@ -81,9 +81,9 @@ impl Doc {
         }
     }
 
-    pub(crate) fn subdoc(ptr: BlockPtr, options: Options) -> Self {
+    pub(crate) fn subdoc(parent: BlockPtr, options: Options) -> Self {
         let mut store = Store::new(options);
-        store.parent = Some(ptr);
+        store.parent = Some(parent);
         Doc {
             store: store.into(),
         }
@@ -361,13 +361,13 @@ impl Doc {
             subdoc.destroy(&mut txn);
         }
         if let Some(mut ptr) = txn.store.parent.take() {
-            let ptr_copy = ptr.clone();
+            let parent_ref = ptr.clone();
             if let Block::Item(item) = ptr.deref_mut() {
                 let is_deleted = item.is_deleted();
-                if let ItemContent::Doc(content) = &mut item.content {
+                if let ItemContent::Doc(_, content) = &mut item.content {
                     let mut options = content.options().clone();
                     options.should_load = false;
-                    let new_ref = Doc::subdoc(ptr_copy, options);
+                    let new_ref = Doc::subdoc(parent_ref, options);
                     if !is_deleted {
                         parent_txn
                             .subdocs_mut()
@@ -393,9 +393,18 @@ impl Doc {
         }
     }
 
-    pub fn parent_branch(&self) -> Option<BranchPtr> {
+    pub fn parent_doc(&self) -> Option<Doc> {
         let store = unsafe { self.store.0.as_ptr().as_ref() }.unwrap();
-        store.parent?.as_branch()
+        if let Some(Block::Item(item)) = store.parent.as_deref() {
+            if let ItemContent::Doc(Some(parent_ref), _) = &item.content {
+                let store = parent_ref.0.upgrade()?;
+                return Some(Doc {
+                    store: StoreRef(store),
+                });
+            }
+        }
+
+        None
     }
 
     pub(crate) fn ptr_eq(a: &Doc, b: &Doc) -> bool {
@@ -404,6 +413,10 @@ impl Doc {
 
     pub(crate) fn addr(&self) -> DocAddr {
         DocAddr::new(&self)
+    }
+
+    pub fn weak_ref(&self) -> WeakStoreRef {
+        self.store.weak_ref()
     }
 }
 
@@ -602,7 +615,7 @@ impl Transact for Doc {
 impl Transact for Branch {
     fn try_transact<'a>(&'a self) -> Result<Transaction<'a>, TransactionAcqError> {
         let store = self.store.as_ref().unwrap();
-        if let Some(store) = store.upgrade() {
+        if let Some(store) = store.0.upgrade() {
             let store_ref = store.try_borrow()?;
             let store_ref: AtomicRef<'a, Store> = unsafe { std::mem::transmute(store_ref) };
             Ok(Transaction::new(store_ref))
@@ -613,7 +626,7 @@ impl Transact for Branch {
 
     fn try_transact_mut<'a>(&'a self) -> Result<TransactionMut<'a>, TransactionAcqError> {
         let store = self.store.as_ref().unwrap();
-        if let Some(store) = store.upgrade() {
+        if let Some(store) = store.0.upgrade() {
             let store_ref = store.try_borrow_mut()?;
             let store_ref: AtomicRefMut<'a, Store> = unsafe { std::mem::transmute(store_ref) };
             Ok(TransactionMut::new(store_ref))
@@ -662,10 +675,10 @@ where
 
 impl Prelim for Doc {
     fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
-        if self.parent_branch().is_some() {
+        if self.parent_doc().is_some() {
             panic!("Cannot integrate the document, because it's already being used as a sub-document elsewhere");
         }
-        (ItemContent::Doc(self), None)
+        (ItemContent::Doc(None, self), None)
     }
 
     fn integrate(self, _txn: &mut TransactionMut, _inner_ref: BranchPtr) {}
@@ -1556,6 +1569,7 @@ mod test {
         {
             let mut txn = doc2.transact_mut();
             let doc_ref = subdocs.get(&mut txn, "a").unwrap().to_ydoc().unwrap();
+            assert_eq!(doc_ref.parent_doc(), Some(doc2.clone()));
             doc_ref.load(&mut txn);
         }
         let actual = event.take();

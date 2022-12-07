@@ -1,6 +1,6 @@
 use crate::doc::{DocAddr, OffsetKind};
 use crate::moving::Move;
-use crate::store::Store;
+use crate::store::{Store, WeakStoreRef};
 use crate::transaction::TransactionMut;
 use crate::types::text::update_current_attributes;
 use crate::types::{
@@ -392,10 +392,11 @@ impl BlockPtr {
                             this.mark_as_deleted();
                         }
                         ItemContent::Move(m) => m.integrate_block(txn, self_ptr),
-                        ItemContent::Doc(doc) => {
+                        ItemContent::Doc(parent_doc, doc) => {
                             {
                                 let mut txn = doc.transact_mut();
                                 txn.store.parent = Some(self_ptr);
+                                *parent_doc = parent_ref.store.clone();
                             }
                             let subdocs = txn.subdocs.get_or_init();
                             subdocs.added.insert(DocAddr::new(doc), doc.clone());
@@ -1392,7 +1393,8 @@ pub enum ItemContent {
     /// Deleted elements also don't contribute to an overall length of containing collection type.
     Deleted(u32),
 
-    Doc(Doc),
+    /// Subdocument container. Contains weak reference to a parent document.
+    Doc(Option<WeakStoreRef>, Doc),
     JSON(Vec<String>), // String is JSON
     Embed(Box<Any>),
 
@@ -1417,7 +1419,7 @@ impl ItemContent {
             ItemContent::Any(_) => BLOCK_ITEM_ANY_REF_NUMBER,
             ItemContent::Binary(_) => BLOCK_ITEM_BINARY_REF_NUMBER,
             ItemContent::Deleted(_) => BLOCK_ITEM_DELETED_REF_NUMBER,
-            ItemContent::Doc(_) => BLOCK_ITEM_DOC_REF_NUMBER,
+            ItemContent::Doc(_, _) => BLOCK_ITEM_DOC_REF_NUMBER,
             ItemContent::JSON(_) => BLOCK_ITEM_JSON_REF_NUMBER,
             ItemContent::Embed(_) => BLOCK_ITEM_EMBED_REF_NUMBER,
             ItemContent::Format(_, _) => BLOCK_ITEM_FORMAT_REF_NUMBER,
@@ -1435,7 +1437,7 @@ impl ItemContent {
         match self {
             ItemContent::Any(_) => true,
             ItemContent::Binary(_) => true,
-            ItemContent::Doc(_) => true,
+            ItemContent::Doc(_, _) => true,
             ItemContent::JSON(_) => true,
             ItemContent::Embed(_) => true,
             ItemContent::String(_) => true,
@@ -1509,7 +1511,7 @@ impl ItemContent {
                     buf[0] = Value::Any(Any::Buffer(v.clone().into_boxed_slice()));
                     1
                 }
-                ItemContent::Doc(doc) => {
+                ItemContent::Doc(_, doc) => {
                     buf[0] = Value::YDoc(doc.clone());
                     1
                 }
@@ -1546,7 +1548,7 @@ impl ItemContent {
             ItemContent::Binary(v) => Some(Value::Any(Any::Buffer(v.clone().into_boxed_slice()))),
             ItemContent::Deleted(_) => None,
             ItemContent::Move(_) => None,
-            ItemContent::Doc(v) => Some(Value::YDoc(v.clone())),
+            ItemContent::Doc(_, v) => Some(Value::YDoc(v.clone())),
             ItemContent::JSON(v) => v
                 .first()
                 .map(|v| Value::Any(Any::String(v.clone().into_boxed_str()))),
@@ -1563,7 +1565,7 @@ impl ItemContent {
             ItemContent::Binary(v) => Some(Value::Any(Any::Buffer(v.clone().into_boxed_slice()))),
             ItemContent::Deleted(_) => None,
             ItemContent::Move(_) => None,
-            ItemContent::Doc(v) => Some(Value::YDoc(v.clone())),
+            ItemContent::Doc(_, v) => Some(Value::YDoc(v.clone())),
             ItemContent::JSON(v) => v
                 .last()
                 .map(|v| Value::Any(Any::String(v.clone().into_boxed_str()))),
@@ -1621,7 +1623,7 @@ impl ItemContent {
                     encoder.write_any(&any[i as usize]);
                 }
             }
-            ItemContent::Doc(doc) => doc.options().encode(encoder),
+            ItemContent::Doc(_, doc) => doc.options().encode(encoder),
             ItemContent::Move(m) => m.encode(encoder),
         }
     }
@@ -1656,7 +1658,7 @@ impl ItemContent {
                     encoder.write_any(a);
                 }
             }
-            ItemContent::Doc(doc) => doc.options().encode(encoder),
+            ItemContent::Doc(_, doc) => doc.options().encode(encoder),
             ItemContent::Move(m) => m.encode(encoder),
         }
     }
@@ -1707,7 +1709,7 @@ impl ItemContent {
             BLOCK_ITEM_DOC_REF_NUMBER => {
                 let mut options = Options::decode(decoder)?;
                 options.should_load = options.should_load || options.auto_load;
-                Ok(ItemContent::Doc(Doc::with_options(options)))
+                Ok(ItemContent::Doc(None, Doc::with_options(options)))
             }
             _ => Err(Error::UnexpectedValue),
         }
