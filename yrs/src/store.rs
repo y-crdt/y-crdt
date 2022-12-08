@@ -1,12 +1,15 @@
 use crate::block::{BlockPtr, BlockSlice, ClientID, ItemContent};
 use crate::block_store::{BlockStore, StateVector};
-use crate::doc::Options;
-use crate::event::AfterTransactionEvent;
+use crate::doc::{DestroySubscription, DocAddr, Options, SubdocsSubscription};
+use crate::event::{AfterTransactionEvent, SubdocsEvent};
 use crate::id_set::DeleteSet;
 use crate::types::{Branch, BranchPtr, Path, PathSegment, TypeRefs};
 use crate::update::PendingUpdate;
 use crate::updates::encoder::{Encode, Encoder};
-use crate::{Observer, OffsetKind, Snapshot, TransactionMut, UpdateEvent};
+use crate::{
+    AfterTransactionSubscription, Doc, Observer, OffsetKind, Snapshot, SubscriptionId,
+    TransactionMut, UpdateEvent, UpdateSubscription, Uuid,
+};
 use atomic_refcell::{AtomicRef, AtomicRefCell, AtomicRefMut, BorrowError, BorrowMutError};
 use lib0::error::Error;
 use std::collections::hash_map::Entry;
@@ -40,18 +43,13 @@ pub struct Store {
     /// into `blocks`.
     pub(crate) pending_ds: Option<DeleteSet>,
 
-    /// Handles subscriptions for the `afterTransactionCleanup` event. Events are called with the
-    /// newest updates once they are committed and compacted.
-    pub(crate) after_transaction_events:
-        Option<Observer<Arc<dyn Fn(&TransactionMut, &AfterTransactionEvent) -> ()>>>,
+    pub(crate) subdocs: HashMap<DocAddr, Doc>,
 
-    /// A subscription handler. It contains all callbacks with registered by user functions that
-    /// are supposed to be called, once a new update arrives.
-    pub(crate) update_v1_events: Option<Observer<Arc<dyn Fn(&TransactionMut, &UpdateEvent) -> ()>>>,
+    pub(crate) events: Option<Box<StoreEvents>>,
 
-    /// A subscription handler. It contains all callbacks with registered by user functions that
-    /// are supposed to be called, once a new update arrives.
-    pub(crate) update_v2_events: Option<Observer<Arc<dyn Fn(&TransactionMut, &UpdateEvent) -> ()>>>,
+    /// Pointer to a parent block - present only if a current document is a sub-document of another
+    /// document.
+    pub(crate) parent: Option<BlockPtr>,
 }
 
 impl Store {
@@ -59,14 +57,18 @@ impl Store {
     pub(crate) fn new(options: Options) -> Self {
         Store {
             options,
-            types: Default::default(),
+            types: HashMap::default(),
             blocks: BlockStore::new(),
+            subdocs: HashMap::default(),
+            events: None,
             pending: None,
             pending_ds: None,
-            update_v1_events: None,
-            update_v2_events: None,
-            after_transaction_events: None,
+            parent: None,
         }
+    }
+
+    pub fn is_subdoc(&self) -> bool {
+        self.parent.is_some()
     }
 
     /// Get the latest clock sequence number observed and integrated into a current store client.
@@ -298,6 +300,17 @@ impl Store {
 
         ptr
     }
+
+    /// Returns a collection of sub documents linked within the structures of this document store.
+    pub fn subdocs(&self) -> SubdocsIter {
+        SubdocsIter(self.subdocs.values())
+    }
+
+    /// Returns a collection of globally unique identifiers of sub documents linked within
+    /// the structures of this document store.
+    pub fn subdoc_guids(&self) -> SubdocGuids {
+        SubdocGuids(self.subdocs.values())
+    }
 }
 
 impl Encode for Store {
@@ -336,13 +349,27 @@ impl std::fmt::Display for Store {
             s.field("pending delete set", pending_ds);
         }
 
+        if let Some(parent) = self.parent.as_ref() {
+            s.field("parent block", parent.id());
+        }
+
         s.finish()
     }
 }
 
 #[repr(transparent)]
 #[derive(Debug, Clone)]
-pub(crate) struct StoreRef(Arc<AtomicRefCell<Store>>);
+pub struct WeakStoreRef(pub(crate) Weak<AtomicRefCell<Store>>);
+
+impl PartialEq for WeakStoreRef {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.ptr_eq(&other.0)
+    }
+}
+
+#[repr(transparent)]
+#[derive(Debug, Clone)]
+pub(crate) struct StoreRef(pub(crate) Arc<AtomicRefCell<Store>>);
 
 impl StoreRef {
     pub fn try_borrow(&self) -> Result<AtomicRef<Store>, BorrowError> {
@@ -353,13 +380,201 @@ impl StoreRef {
         self.0.try_borrow_mut()
     }
 
-    pub fn weak_ref(&self) -> Weak<AtomicRefCell<Store>> {
-        Arc::downgrade(&self.0)
+    pub fn weak_ref(&self) -> WeakStoreRef {
+        WeakStoreRef(Arc::downgrade(&self.0))
+    }
+
+    pub fn options(&self) -> &Options {
+        let store = unsafe { self.0.as_ptr().as_ref().unwrap() };
+        &store.options
     }
 }
 
 impl From<Store> for StoreRef {
     fn from(store: Store) -> Self {
         StoreRef(Arc::new(AtomicRefCell::new(store)))
+    }
+}
+
+#[repr(transparent)]
+pub struct SubdocsIter<'doc>(std::collections::hash_map::Values<'doc, DocAddr, Doc>);
+
+impl<'doc> Iterator for SubdocsIter<'doc> {
+    type Item = &'doc Doc;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.0.next()
+    }
+}
+
+#[repr(transparent)]
+pub struct SubdocGuids<'doc>(std::collections::hash_map::Values<'doc, DocAddr, Doc>);
+
+impl<'doc> Iterator for SubdocGuids<'doc> {
+    type Item = &'doc Uuid;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let d = self.0.next()?;
+        Some(&d.options().guid)
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct StoreEvents {
+    /// Handles subscriptions for the `afterTransactionCleanup` event. Events are called with the
+    /// newest updates once they are committed and compacted.
+    pub(crate) after_transaction_events:
+        Option<Observer<Arc<dyn Fn(&TransactionMut, &AfterTransactionEvent) -> ()>>>,
+
+    /// A subscription handler. It contains all callbacks with registered by user functions that
+    /// are supposed to be called, once a new update arrives.
+    pub(crate) update_v1_events: Option<Observer<Arc<dyn Fn(&TransactionMut, &UpdateEvent) -> ()>>>,
+
+    /// A subscription handler. It contains all callbacks with registered by user functions that
+    /// are supposed to be called, once a new update arrives.
+    pub(crate) update_v2_events: Option<Observer<Arc<dyn Fn(&TransactionMut, &UpdateEvent) -> ()>>>,
+
+    /// Handles subscriptions for subdocs events.
+    pub(crate) subdocs_events: Option<Observer<Arc<dyn Fn(&TransactionMut, &SubdocsEvent) -> ()>>>,
+
+    pub(crate) destroy_events: Option<Observer<Arc<dyn Fn(&TransactionMut, &Doc) -> ()>>>,
+}
+
+impl StoreEvents {
+    /// Subscribe callback function for any changes performed within transaction scope. These
+    /// changes are encoded using lib0 v1 encoding and can be decoded using [Update::decode_v1] if
+    /// necessary or passed to remote peers right away. This callback is triggered on function
+    /// commit.
+    ///
+    /// Returns a subscription, which will unsubscribe function when dropped.
+    pub fn observe_update_v1<F>(&mut self, f: F) -> Result<UpdateSubscription, BorrowMutError>
+    where
+        F: Fn(&TransactionMut, &UpdateEvent) -> () + 'static,
+    {
+        let eh = self.update_v1_events.get_or_insert_with(Observer::new);
+        Ok(eh.subscribe(Arc::new(f)))
+    }
+
+    /// Manually unsubscribes from a callback used in [Doc::observe_update_v1] method.
+    pub fn unobserve_update_v1(&self, subscription_id: SubscriptionId) {
+        if let Some(handler) = self.update_v1_events.as_ref() {
+            handler.unsubscribe(subscription_id);
+        }
+    }
+
+    pub fn emit_update_v1(&self, txn: &TransactionMut) {
+        if let Some(eh) = self.update_v1_events.as_ref() {
+            if !txn.delete_set.is_empty() || txn.after_state != txn.before_state {
+                // produce update only if anything changed
+                let update = UpdateEvent::new_v1(txn);
+                for fun in eh.callbacks() {
+                    fun(txn, &update);
+                }
+            }
+        }
+    }
+
+    /// Subscribe callback function for any changes performed within transaction scope. These
+    /// changes are encoded using lib0 v1 encoding and can be decoded using [Update::decode_v2] if
+    /// necessary or passed to remote peers right away. This callback is triggered on function
+    /// commit.
+    ///
+    /// Returns a subscription, which will unsubscribe function when dropped.
+    pub fn observe_update_v2<F>(&mut self, f: F) -> Result<UpdateSubscription, BorrowMutError>
+    where
+        F: Fn(&TransactionMut, &UpdateEvent) -> () + 'static,
+    {
+        let eh = self.update_v2_events.get_or_insert_with(Observer::new);
+        Ok(eh.subscribe(Arc::new(f)))
+    }
+
+    /// Manually unsubscribes from a callback used in [Doc::observe_update_v1] method.
+    pub fn unobserve_update_v2(&self, subscription_id: SubscriptionId) {
+        if let Some(handler) = self.update_v2_events.as_ref() {
+            handler.unsubscribe(subscription_id);
+        }
+    }
+
+    pub fn emit_update_v2(&self, txn: &TransactionMut) {
+        if let Some(eh) = self.update_v2_events.as_ref() {
+            if !txn.delete_set.is_empty() || txn.after_state != txn.before_state {
+                // produce update only if anything changed
+                let update = UpdateEvent::new_v2(txn);
+                for fun in eh.callbacks() {
+                    fun(txn, &update);
+                }
+            }
+        }
+    }
+
+    /// Subscribe callback function to updates on the `Doc`. The callback will receive state updates and
+    /// deletions when a document transaction is committed.
+    pub fn observe_transaction_cleanup<F>(
+        &mut self,
+        f: F,
+    ) -> Result<AfterTransactionSubscription, BorrowMutError>
+    where
+        F: Fn(&TransactionMut, &AfterTransactionEvent) -> () + 'static,
+    {
+        let subscription = self
+            .after_transaction_events
+            .get_or_insert_with(Observer::new)
+            .subscribe(Arc::new(f));
+        Ok(subscription)
+    }
+
+    /// Cancels the transaction cleanup callback associated with the `subscription_id`
+    pub fn unobserve_transaction_cleanup(&self, subscription_id: SubscriptionId) {
+        if let Some(handler) = self.after_transaction_events.as_ref() {
+            (*handler).unsubscribe(subscription_id);
+        }
+    }
+
+    pub fn emit_transaction_cleanup(&self, txn: &TransactionMut) {
+        if let Some(eh) = self.after_transaction_events.as_ref() {
+            let event = AfterTransactionEvent::new(txn);
+            for fun in eh.callbacks() {
+                fun(txn, &event);
+            }
+        }
+    }
+
+    /// Subscribe callback function, that will be called whenever a subdocuments inserted in this
+    /// [Doc] will request a load.
+    pub fn observe_subdocs<F>(&mut self, f: F) -> Result<SubdocsSubscription, BorrowMutError>
+    where
+        F: Fn(&TransactionMut, &SubdocsEvent) -> () + 'static,
+    {
+        let subscription = self
+            .subdocs_events
+            .get_or_insert_with(Observer::new)
+            .subscribe(Arc::new(f));
+        Ok(subscription)
+    }
+
+    /// Cancels the subscription created previously using [Doc::observe_subdocs].
+    pub fn unobserve_subdocs(&self, subscription_id: SubscriptionId) {
+        if let Some(handler) = self.subdocs_events.as_ref() {
+            (*handler).unsubscribe(subscription_id);
+        }
+    }
+
+    /// Subscribe callback function, that will be called whenever a [DocRef::destroy] has been called.
+    pub fn observe_destroy<F>(&mut self, f: F) -> Result<DestroySubscription, BorrowMutError>
+    where
+        F: Fn(&TransactionMut, &Doc) -> () + 'static,
+    {
+        let subscription = self
+            .destroy_events
+            .get_or_insert_with(Observer::new)
+            .subscribe(Arc::new(f));
+        Ok(subscription)
+    }
+
+    /// Cancels the subscription created previously using [Doc::observe_destroy].
+    pub fn unobserve_destroy(&self, subscription_id: SubscriptionId) {
+        if let Some(handler) = self.destroy_events.as_ref() {
+            (*handler).unsubscribe(subscription_id);
+        }
     }
 }

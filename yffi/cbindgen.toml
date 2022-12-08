@@ -100,6 +100,7 @@ exclude = [
 
 [export.rename]
 "Doc" = "YDoc"
+"DocRef" = "YDocRef"
 "Transaction" = "YTransaction"
 "Array" = "YArray"
 "Map" = "YMap"

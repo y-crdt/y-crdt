@@ -106,7 +106,7 @@ fn text_insert_delete() {
     let visited = Rc::new(Cell::new(false));
     let setter = visited.clone();
 
-    let mut doc = Doc::new();
+    let doc = Doc::new();
     let txt = doc.get_or_insert_text("type");
     let _sub = doc.observe_update_v1(move |_, e| {
         let u = Update::decode_v1(&e.update).unwrap();

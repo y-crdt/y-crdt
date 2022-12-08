@@ -16,14 +16,16 @@ use yrs::types::text::{ChangeKind, Diff, TextEvent, YChange};
 use yrs::types::xml::{XmlEvent, XmlTextEvent};
 use yrs::types::{
     Attrs, Branch, BranchPtr, Change, DeepEventsSubscription, DeepObservable, Delta, EntryChange,
-    Event, Events, Path, PathSegment, ToJson, TypeRefs, Value, TYPE_REFS_ARRAY, TYPE_REFS_MAP,
-    TYPE_REFS_TEXT, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT,
+    Event, Events, Path, PathSegment, ToJson, TypeRefs, Value, TYPE_REFS_ARRAY, TYPE_REFS_DOC,
+    TYPE_REFS_MAP, TYPE_REFS_TEXT, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT,
+    TYPE_REFS_XML_TEXT,
 };
 use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use yrs::{
-    AfterTransactionEvent, AfterTransactionSubscription, Array, ArrayRef, DeleteSet, Doc,
-    GetString, Map, MapRef, Observable, OffsetKind, Options, ReadTxn, Snapshot, StateVector, Store,
+    AfterTransactionEvent, AfterTransactionSubscription, Array, ArrayRef, DeleteSet,
+    DestroySubscription, Doc, GetString, Map, MapRef, Observable, OffsetKind, Options, ReadTxn,
+    Snapshot, StateVector, Store, SubdocsEvent, SubdocsEventIter, SubdocsSubscription,
     Subscription, Text, TextRef, Transact, Transaction, TransactionMut, Update, UpdateSubscription,
     Xml, XmlElementPrelim, XmlElementRef, XmlFragment, XmlFragmentRef, XmlNode, XmlTextPrelim,
     XmlTextRef,
@@ -76,29 +78,56 @@ pub fn set_panic_hook() {
 #[wasm_bindgen]
 pub struct YDoc(Doc);
 
+impl AsRef<Doc> for YDoc {
+    fn as_ref(&self) -> &Doc {
+        &self.0
+    }
+}
+
+impl From<Doc> for YDoc {
+    fn from(doc: Doc) -> Self {
+        YDoc(doc)
+    }
+}
+
 #[wasm_bindgen]
 impl YDoc {
     /// Creates a new ywasm document. If `id` parameter was passed it will be used as this document
     /// globally unique identifier (it's up to caller to ensure that requirement). Otherwise it will
     /// be assigned a randomly generated number.
     #[wasm_bindgen(constructor)]
-    pub fn new(id: Option<f64>, gc: Option<bool>) -> Self {
-        let mut options = if let Some(id) = id {
-            Options::with_client_id(id as ClientID)
-        } else {
-            Options::default()
-        };
-        let skip_gc = if let Some(gc) = gc { !gc } else { false };
+    pub fn new(options: &JsValue) -> Self {
+        let options = parse_options(options);
+        Doc::with_options(options).into()
+    }
 
-        options.offset_kind = OffsetKind::Utf16;
-        options.skip_gc = skip_gc;
-        YDoc(Doc::with_options(options))
+    /// Returns a parent document of this document or null if current document is not sub-document.
+    #[wasm_bindgen(method, getter, js_name = parentDoc)]
+    pub fn parent_doc(&self) -> Option<YDoc> {
+        let doc = self.0.parent_doc()?;
+        Some(YDoc(doc))
+    }
+
+    /// Gets unique peer identifier of this `YDoc` instance.
+    #[wasm_bindgen(method, getter)]
+    pub fn id(&self) -> f64 {
+        self.as_ref().client_id() as f64
     }
 
     /// Gets globally unique identifier of this `YDoc` instance.
     #[wasm_bindgen(method, getter)]
-    pub fn id(&self) -> f64 {
-        self.0.client_id as f64
+    pub fn guid(&self) -> String {
+        self.as_ref().options().guid.to_string()
+    }
+
+    #[wasm_bindgen(method, getter, js_name = shouldLoad)]
+    pub fn should_load(&self) -> bool {
+        self.as_ref().options().should_load
+    }
+
+    #[wasm_bindgen(method, getter, js_name = autoLoad)]
+    pub fn auto_load(&self) -> bool {
+        self.as_ref().options().auto_load
     }
 
     /// Returns a new transaction for this document. Ywasm shared data types execute their
@@ -130,7 +159,7 @@ impl YDoc {
     /// ```
     #[wasm_bindgen(js_name = readTransaction)]
     pub fn read_transaction(&mut self) -> YTransaction {
-        YTransaction::from(self.0.transact())
+        YTransaction::from(self.as_ref().transact())
     }
 
     /// Returns a new transaction for this document. Ywasm shared data types execute their
@@ -162,7 +191,7 @@ impl YDoc {
     /// ```
     #[wasm_bindgen(js_name = writeTransaction)]
     pub fn write_transaction(&mut self) -> YTransaction {
-        YTransaction::from(self.0.transact_mut())
+        YTransaction::from(self.as_ref().transact_mut())
     }
 
     /// Returns a `YText` shared data type, that's accessible for subsequent accesses using given
@@ -174,7 +203,7 @@ impl YDoc {
     /// onto `YText` instance.
     #[wasm_bindgen(js_name = getText)]
     pub fn get_text(&mut self, name: &str) -> YText {
-        self.0.get_or_insert_text(name).into()
+        self.as_ref().get_or_insert_text(name).into()
     }
 
     /// Returns a `YArray` shared data type, that's accessible for subsequent accesses using given
@@ -186,7 +215,7 @@ impl YDoc {
     /// onto `YArray` instance.
     #[wasm_bindgen(js_name = getArray)]
     pub fn get_array(&mut self, name: &str) -> YArray {
-        self.0.get_or_insert_array(name).into()
+        self.as_ref().get_or_insert_array(name).into()
     }
 
     /// Returns a `YMap` shared data type, that's accessible for subsequent accesses using given
@@ -198,7 +227,7 @@ impl YDoc {
     /// onto `YMap` instance.
     #[wasm_bindgen(js_name = getMap)]
     pub fn get_map(&mut self, name: &str) -> YMap {
-        self.0.get_or_insert_map(name).into()
+        self.as_ref().get_or_insert_map(name).into()
     }
 
     /// Returns a `YXmlFragment` shared data type, that's accessible for subsequent accesses using
@@ -210,7 +239,7 @@ impl YDoc {
     /// onto `YXmlFragment` instance.
     #[wasm_bindgen(js_name = getXmlFragment)]
     pub fn get_xml_fragment(&mut self, name: &str) -> YXmlFragment {
-        YXmlFragment(self.0.get_or_insert_xml_fragment(name))
+        YXmlFragment(self.as_ref().get_or_insert_xml_fragment(name))
     }
 
     /// Returns a `YXmlElement` shared data type, that's accessible for subsequent accesses using
@@ -222,7 +251,7 @@ impl YDoc {
     /// onto `YXmlElement` instance.
     #[wasm_bindgen(js_name = getXmlElement)]
     pub fn get_xml_element(&mut self, name: &str) -> YXmlElement {
-        YXmlElement(self.0.get_or_insert_xml_element(name))
+        YXmlElement(self.as_ref().get_or_insert_xml_element(name))
     }
 
     /// Returns a `YXmlText` shared data type, that's accessible for subsequent accesses using given
@@ -234,7 +263,7 @@ impl YDoc {
     /// onto `YXmlText` instance.
     #[wasm_bindgen(js_name = getXmlText)]
     pub fn get_xml_text(&mut self, name: &str) -> YXmlText {
-        YXmlText(self.0.get_or_insert_xml_text(name))
+        YXmlText(self.as_ref().get_or_insert_xml_text(name))
     }
 
     /// Subscribes given function to be called any time, a remote update is being applied to this
@@ -244,7 +273,7 @@ impl YDoc {
     /// Returns an observer, which can be freed in order to unsubscribe this callback.
     #[wasm_bindgen(js_name = onUpdate)]
     pub fn on_update(&mut self, f: js_sys::Function) -> YUpdateObserver {
-        self.0
+        self.as_ref()
             .observe_update_v1(move |_, e| {
                 let arg = Uint8Array::from(e.update.as_slice());
                 f.call1(&JsValue::UNDEFINED, &arg).unwrap();
@@ -260,7 +289,7 @@ impl YDoc {
     /// Returns an observer, which can be freed in order to unsubscribe this callback.
     #[wasm_bindgen(js_name = onUpdateV2)]
     pub fn on_update_v2(&mut self, f: js_sys::Function) -> YUpdateObserver {
-        self.0
+        self.as_ref()
             .observe_update_v2(move |_, e| {
                 let arg = Uint8Array::from(e.update.as_slice());
                 f.call1(&JsValue::UNDEFINED, &arg).unwrap();
@@ -275,7 +304,7 @@ impl YDoc {
     /// Returns an observer, which can be freed in order to unsubscribe this callback.
     #[wasm_bindgen(js_name = onAfterTransaction)]
     pub fn on_after_transaction(&mut self, f: js_sys::Function) -> YAfterTransactionObserver {
-        self.0
+        self.as_ref()
             .observe_transaction_cleanup(move |_, e| {
                 let arg: JsValue = YAfterTransactionEvent::new(e).into();
                 f.call1(&JsValue::UNDEFINED, &arg).unwrap();
@@ -283,6 +312,154 @@ impl YDoc {
             .unwrap()
             .into()
     }
+
+    /// Subscribes given function to be called, whenever a subdocuments are being added, removed
+    /// or loaded as children of a current document.
+    ///
+    /// Returns an observer, which can be freed in order to unsubscribe this callback.
+    #[wasm_bindgen(js_name = onSubdocs)]
+    pub fn on_subdocs(&mut self, f: js_sys::Function) -> YSubdocsObserver {
+        self.as_ref()
+            .observe_subdocs(move |_, e| {
+                let arg: JsValue = YSubdocsEvent::new(e).into();
+                f.call1(&JsValue::UNDEFINED, &arg).unwrap();
+            })
+            .unwrap()
+            .into()
+    }
+
+    /// Subscribes given function to be called, whenever current document is being destroyed.
+    ///
+    /// Returns an observer, which can be freed in order to unsubscribe this callback.
+    #[wasm_bindgen(js_name = onDestroy)]
+    pub fn on_destroy(&mut self, f: js_sys::Function) -> YDestroyObserver {
+        self.as_ref()
+            .observe_destroy(move |_, e| {
+                let arg: JsValue = YDoc::from(e.clone()).into();
+                f.call1(&JsValue::UNDEFINED, &arg).unwrap();
+            })
+            .unwrap()
+            .into()
+    }
+
+    /// Notify the parent document that you request to load data into this subdocument
+    /// (if it is a subdocument).
+    #[wasm_bindgen(js_name = load)]
+    pub fn load(&self, parent_txn: &ImplicitTransaction) {
+        if let Some(txn) = get_txn_mut(parent_txn) {
+            self.0.load(txn)
+        } else {
+            if let Some(parent) = self.0.parent_doc() {
+                let mut txn = parent.transact_mut();
+                self.0.load(&mut txn);
+            }
+        }
+    }
+
+    /// Emit `onDestroy` event and unregister all event handlers.
+    #[wasm_bindgen(js_name = destroy)]
+    pub fn destroy(&mut self, parent_txn: &ImplicitTransaction) {
+        if let Some(txn) = get_txn_mut(parent_txn) {
+            self.0.destroy(txn)
+        } else {
+            if let Some(parent) = self.0.parent_doc() {
+                let mut txn = parent.transact_mut();
+                self.0.destroy(&mut txn);
+            }
+        }
+    }
+
+    /// Returns a list of sub-documents existings within the scope of this document.
+    #[wasm_bindgen(js_name = getSubdocs)]
+    pub fn subdocs(&self, txn: &ImplicitTransaction) -> js_sys::Array {
+        let doc = self.as_ref();
+        let buf = js_sys::Array::new();
+        if let Some(txn) = get_txn(txn) {
+            for doc in txn.subdocs() {
+                let doc = YDoc::from(doc.clone());
+                buf.push(&doc.into());
+            }
+        } else {
+            let txn = doc.transact();
+            for doc in txn.subdocs() {
+                let doc = YDoc::from(doc.clone());
+                buf.push(&doc.into());
+            }
+        }
+        buf
+    }
+
+    /// Returns a list of unique identifiers of the sub-documents existings within the scope of
+    /// this document.
+    #[wasm_bindgen(js_name = getSubdocGuids)]
+    pub fn subdoc_guids(&self, txn: &ImplicitTransaction) -> js_sys::Set {
+        let doc = self.as_ref();
+        let buf = js_sys::Set::new(&js_sys::Array::new());
+        if let Some(txn) = get_txn(txn) {
+            for uid in txn.subdoc_guids() {
+                let str = uid.to_string();
+                buf.add(&str.into());
+            }
+        } else {
+            let txn = doc.transact();
+            for uid in txn.subdoc_guids() {
+                let str = uid.to_string();
+                buf.add(&str.into());
+            }
+        }
+        buf
+    }
+}
+
+fn parse_options(js: &JsValue) -> Options {
+    let mut options = Options::default();
+    if js.is_object() {
+        options.offset_kind = OffsetKind::Utf16;
+
+        if let Some(client_id) = js_sys::Reflect::get(js, &JsValue::from_str("clientID"))
+            .ok()
+            .and_then(|v| v.as_f64())
+        {
+            options.client_id = client_id as u32 as ClientID;
+        }
+
+        if let Some(guid) = js_sys::Reflect::get(js, &JsValue::from_str("guid"))
+            .ok()
+            .and_then(|v| v.as_string())
+        {
+            options.guid = guid.into();
+        }
+
+        if let Some(collection_id) = js_sys::Reflect::get(js, &JsValue::from_str("collectionid"))
+            .ok()
+            .and_then(|v| v.as_string())
+        {
+            options.collection_id = Some(collection_id);
+        }
+
+        if let Some(gc) = js_sys::Reflect::get(js, &JsValue::from_str("gc"))
+            .ok()
+            .and_then(|v| v.as_bool())
+        {
+            options.skip_gc = !gc;
+        }
+
+        if let Some(auto_load) = js_sys::Reflect::get(js, &JsValue::from_str("autoLoad"))
+            .ok()
+            .and_then(|v| v.as_bool())
+        {
+            options.auto_load = auto_load;
+        }
+
+        if let Some(should_load) = js_sys::Reflect::get(js, &JsValue::from_str("shouldLoad"))
+            .ok()
+            .and_then(|v| v.as_bool())
+        {
+            options.should_load = should_load;
+        }
+    }
+
+    options
 }
 
 /// Encodes a state vector of a given ywasm document into its binary representation using lib0 v1
@@ -1392,6 +1569,71 @@ fn delete_set_into_map(ds: &DeleteSet) -> js_sys::Map {
 }
 
 #[wasm_bindgen]
+pub struct YSubdocsEvent {
+    added: JsValue,
+    removed: JsValue,
+    loaded: JsValue,
+}
+
+#[wasm_bindgen]
+impl YSubdocsEvent {
+    fn new(e: &SubdocsEvent) -> Self {
+        fn to_array(iter: SubdocsEventIter) -> JsValue {
+            let mut buf = js_sys::Array::new();
+            let values = iter.map(|d| {
+                let doc = YDoc::from(d.clone());
+                let js: JsValue = doc.into();
+                js
+            });
+            buf.extend(values);
+            buf.into()
+        }
+
+        let added = to_array(e.added());
+        let removed = to_array(e.removed());
+        let loaded = to_array(e.loaded());
+        YSubdocsEvent {
+            added,
+            removed,
+            loaded,
+        }
+    }
+
+    #[wasm_bindgen(method, getter)]
+    pub fn added(&mut self) -> JsValue {
+        self.added.clone()
+    }
+
+    #[wasm_bindgen(method, getter)]
+    pub fn removed(&mut self) -> JsValue {
+        self.removed.clone()
+    }
+
+    #[wasm_bindgen(method, getter)]
+    pub fn loaded(&mut self) -> JsValue {
+        self.loaded.clone()
+    }
+}
+
+#[wasm_bindgen]
+pub struct YSubdocsObserver(SubdocsSubscription);
+
+impl From<SubdocsSubscription> for YSubdocsObserver {
+    fn from(o: SubdocsSubscription) -> Self {
+        YSubdocsObserver(o)
+    }
+}
+
+#[wasm_bindgen]
+pub struct YDestroyObserver(DestroySubscription);
+
+impl From<DestroySubscription> for YDestroyObserver {
+    fn from(o: DestroySubscription) -> Self {
+        YDestroyObserver(o)
+    }
+}
+
+#[wasm_bindgen]
 pub struct YAfterTransactionEvent {
     before_state: js_sys::Map,
     after_state: js_sys::Map,
@@ -1872,7 +2114,7 @@ impl YSnapshot {
 
 #[wasm_bindgen(js_name = snapshot)]
 pub fn snapshot(doc: &YDoc) -> YSnapshot {
-    YSnapshot(doc.0.transact().snapshot())
+    YSnapshot(doc.as_ref().transact().snapshot())
 }
 
 #[wasm_bindgen(js_name = equalSnapshots)]
@@ -1908,7 +2150,7 @@ pub fn decode_snapshot_v1(snapshot: &[u8]) -> Result<YSnapshot, JsValue> {
 pub fn encode_state_from_snapshot_v1(doc: &YDoc, snapshot: &YSnapshot) -> Result<Vec<u8>, JsValue> {
     let mut encoder = EncoderV1::new();
     match doc
-        .0
+        .as_ref()
         .transact()
         .encode_state_from_snapshot(&snapshot.0, &mut encoder)
     {
@@ -1921,7 +2163,7 @@ pub fn encode_state_from_snapshot_v1(doc: &YDoc, snapshot: &YSnapshot) -> Result
 pub fn encode_state_from_snapshot_v2(doc: &YDoc, snapshot: &YSnapshot) -> Result<Vec<u8>, JsValue> {
     let mut encoder = EncoderV2::new();
     match doc
-        .0
+        .as_ref()
         .transact()
         .encode_state_from_snapshot(&snapshot.0, &mut encoder)
     {
@@ -3225,6 +3467,12 @@ impl Prelim for JsValueWrapper {
             if shared.is_prelim() {
                 let branch = Branch::new(shared.type_ref(), None);
                 ItemContent::Type(branch)
+            } else if let Shared::Doc(doc) = shared {
+                if doc.0.parent_doc().is_some() {
+                    panic!("Cannot integrate document, that has been already integrated elsewhere")
+                } else {
+                    ItemContent::Doc(None, doc.0.clone())
+                }
             } else {
                 panic!("Cannot integrate this type")
             }
@@ -3389,6 +3637,7 @@ fn value_into_js(v: Value) -> JsValue {
         Value::YXmlElement(v) => YXmlElement(v).into(),
         Value::YXmlText(v) => YXmlText(v).into(),
         Value::YXmlFragment(v) => YXmlFragment(v).into(),
+        Value::YDoc(doc) => YDoc::from(doc).into(),
     }
 }
 
@@ -3422,6 +3671,8 @@ enum Shared<'a> {
     Map(Ref<'a, YMap>),
     XmlElement(Ref<'a, YXmlElement>),
     XmlText(Ref<'a, YXmlText>),
+    XmlFragment(Ref<'a, YXmlFragment>),
+    Doc(Ref<'a, YDoc>),
 }
 
 fn as_ref<'a, T>(js: u32) -> Ref<'a, T> {
@@ -3439,6 +3690,7 @@ impl<'a> TryFrom<&'a JsValue> for Shared<'a> {
         let ctor_name = Object::get_prototype_of(js).constructor().name();
         let ptr = Reflect::get(js, &JsValue::from_str("ptr"))?;
         let ptr_u32: u32 = ptr.as_f64().ok_or(JsValue::NULL)? as u32;
+
         if ctor_name == "YText" {
             Ok(Shared::Text(as_ref(ptr_u32)))
         } else if ctor_name == "YArray" {
@@ -3449,8 +3701,12 @@ impl<'a> TryFrom<&'a JsValue> for Shared<'a> {
             Ok(Shared::XmlElement(as_ref(ptr_u32)))
         } else if ctor_name == "YXmlText" {
             Ok(Shared::XmlText(as_ref(ptr_u32)))
+        } else if ctor_name == "YXmlFragment" {
+            Ok(Shared::XmlFragment(as_ref(ptr_u32)))
+        } else if ctor_name == "YDoc" {
+            Ok(Shared::Doc(as_ref(ptr_u32)))
         } else {
-            Err(JsValue::NULL)
+            Err(ctor_name.into())
         }
     }
 }
@@ -3461,7 +3717,10 @@ impl<'a> Shared<'a> {
             Shared::Text(v) => v.prelim(),
             Shared::Array(v) => v.prelim(),
             Shared::Map(v) => v.prelim(),
-            Shared::XmlElement(_) | Shared::XmlText(_) => false,
+            Shared::Doc(_)
+            | Shared::XmlElement(_)
+            | Shared::XmlText(_)
+            | Shared::XmlFragment(_) => false,
         }
     }
 
@@ -3472,6 +3731,8 @@ impl<'a> Shared<'a> {
             Shared::Map(_) => TYPE_REFS_MAP,
             Shared::XmlElement(_) => TYPE_REFS_XML_ELEMENT,
             Shared::XmlText(_) => TYPE_REFS_XML_TEXT,
+            Shared::XmlFragment(_) => TYPE_REFS_XML_FRAGMENT,
+            Shared::Doc(_) => TYPE_REFS_DOC,
         }
     }
 }

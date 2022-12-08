@@ -55,8 +55,10 @@ pub use crate::doc::Doc;
 pub use crate::doc::OffsetKind;
 pub use crate::doc::Options;
 pub use crate::doc::Transact;
-pub use crate::doc::{AfterTransactionSubscription, UpdateSubscription};
-pub use crate::event::{AfterTransactionEvent, UpdateEvent};
+pub use crate::doc::{
+    AfterTransactionSubscription, DestroySubscription, SubdocsSubscription, UpdateSubscription,
+};
+pub use crate::event::{AfterTransactionEvent, SubdocsEvent, SubdocsEventIter, UpdateEvent};
 pub use crate::id_set::DeleteSet;
 pub use crate::observer::{Observer, Subscription, SubscriptionId};
 pub use crate::store::Store;
@@ -86,3 +88,38 @@ pub use crate::types::xml::XmlTextRef;
 pub use crate::types::GetString;
 pub use crate::types::Observable;
 pub use crate::update::Update;
+use rand::RngCore;
+
+pub type Uuid = std::sync::Arc<str>;
+
+/// Generate random v4 UUID.
+/// (See: https://www.rfc-editor.org/rfc/rfc4122#section-4.4)
+pub fn uuid_v4<R: RngCore>(rng: &mut R) -> Uuid {
+    let mut b = [0u8; 16];
+    rng.fill_bytes(&mut b);
+
+    // According to RFC 4122 - Section 4.4, UUID v4 requires setting up following:
+    b[6] = b[6] & 0x0f | 0x40; // time_hi_and_version (bits 4-7 of 7th octet)
+    b[8] = b[8] & 0x3f | 0x80; // clock_seq_hi_and_reserved (bit 6 & 7 of 9th octet)
+
+    let uuid = format!(
+        "{:x}{:x}{:x}{:x}-{:x}{:x}-{:x}{:x}-{:x}{:x}-{:x}{:x}{:x}{:x}{:x}{:x}",
+        b[0],
+        b[1],
+        b[2],
+        b[3],
+        b[4],
+        b[5],
+        b[6],
+        b[7],
+        b[8],
+        b[9],
+        b[10],
+        b[11],
+        b[12],
+        b[13],
+        b[14],
+        b[15]
+    );
+    uuid.into()
+}

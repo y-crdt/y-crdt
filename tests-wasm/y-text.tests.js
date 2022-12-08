@@ -18,7 +18,7 @@ export const testInserts = tc => {
     var value = x.toString()
     t.compareStrings(value, expected)
 
-    const d2 = new Y.YDoc(2)
+    const d2 = new  Y.YDoc({clientID:2})
     x = d2.getText('test')
 
     exchangeUpdates([d1, d2])
@@ -46,7 +46,7 @@ export const testDeletes = tc => {
     var value = x.toString()
     t.compareStrings(value, expected)
 
-    const d2 = new Y.YDoc(2)
+    const d2 = new  Y.YDoc({clientID:2})
     x = d2.getText('test')
 
     exchangeUpdates([d1, d2])

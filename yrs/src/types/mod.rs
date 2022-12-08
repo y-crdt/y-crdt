@@ -7,17 +7,16 @@ use crate::*;
 pub use map::Map;
 pub use map::MapRef;
 use std::borrow::Borrow;
-use std::cell::RefCell;
 pub use text::Text;
 pub use text::TextRef;
 
 use crate::block::{Block, BlockPtr, Item, ItemContent, ItemPosition, Prelim};
+use crate::store::WeakStoreRef;
 use crate::transaction::TransactionMut;
 use crate::types::array::{ArrayEvent, ArrayRef};
 use crate::types::map::MapEvent;
 use crate::types::text::TextEvent;
 use crate::types::xml::{XmlElementRef, XmlEvent, XmlTextEvent, XmlTextRef};
-use atomic_refcell::AtomicRefCell;
 use lib0::any::Any;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::convert::TryInto;
@@ -26,30 +25,33 @@ use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 use std::ptr::NonNull;
 use std::rc::Rc;
-use std::sync::{Arc, Weak};
+use std::sync::Arc;
 
 pub type TypeRefs = u8;
 
-/// Type ref identifier for an [Array] type.
+/// Type ref identifier for an [ArrayRef] type.
 pub const TYPE_REFS_ARRAY: TypeRefs = 0;
 
-/// Type ref identifier for a [Map] type.
+/// Type ref identifier for a [MapRef] type.
 pub const TYPE_REFS_MAP: TypeRefs = 1;
 
-/// Type ref identifier for a [Text] type.
+/// Type ref identifier for a [TextRef] type.
 pub const TYPE_REFS_TEXT: TypeRefs = 2;
 
-/// Type ref identifier for a [XmlElement] type.
+/// Type ref identifier for a [XmlElementRef] type.
 pub const TYPE_REFS_XML_ELEMENT: TypeRefs = 3;
 
-/// Type ref identifier for a [XmlFragment] type. Used for compatibility.
+/// Type ref identifier for a [XmlFragmentRef] type. Used for compatibility.
 pub const TYPE_REFS_XML_FRAGMENT: TypeRefs = 4;
 
-/// Type ref identifier for a [XmlHook] type. Used for compatibility.
+/// Type ref identifier for a [XmlHookRef] type. Used for compatibility.
 pub const TYPE_REFS_XML_HOOK: TypeRefs = 5;
 
-/// Type ref identifier for a [XmlText] type.
+/// Type ref identifier for a [XmlTextRef] type.
 pub const TYPE_REFS_XML_TEXT: TypeRefs = 6;
+
+/// Type ref identifier for a [DocRef] type.
+pub const TYPE_REFS_DOC: TypeRefs = 9;
 
 /// Placeholder type ref identifier for non-specialized AbstractType. Used only for root-level types
 /// which have been integrated from remote peers before they were defined locally.
@@ -186,7 +188,7 @@ impl Into<Value> for BranchPtr {
             TYPE_REFS_MAP => Value::YMap(MapRef::from(self)),
             TYPE_REFS_TEXT => Value::YText(TextRef::from(self)),
             TYPE_REFS_XML_ELEMENT => Value::YXmlElement(XmlElementRef::from(self)),
-            TYPE_REFS_XML_FRAGMENT => Value::YXmlElement(XmlElementRef::from(self)),
+            TYPE_REFS_XML_FRAGMENT => Value::YXmlFragment(XmlFragmentRef::from(self)),
             TYPE_REFS_XML_TEXT => Value::YXmlText(XmlTextRef::from(self)),
             //TYPE_REFS_XML_HOOK => Value::YXmlElement(XmlElement::from(self)),
             other => panic!("Cannot convert to value - unsupported type ref: {}", other),
@@ -251,7 +253,7 @@ pub struct Branch {
     /// another complex type.
     pub(crate) item: Option<BlockPtr>,
 
-    pub(crate) store: Option<Weak<AtomicRefCell<Store>>>,
+    pub(crate) store: Option<WeakStoreRef>,
 
     /// A tag name identifier, used only by [XmlElement].
     pub name: Option<Rc<str>>,
@@ -630,6 +632,7 @@ pub enum Value {
     YXmlElement(XmlElementRef),
     YXmlFragment(XmlFragmentRef),
     YXmlText(XmlTextRef),
+    YDoc(Doc),
 }
 
 impl Default for Value {
@@ -649,12 +652,21 @@ impl Value {
             Value::YXmlElement(v) => v.get_string(txn),
             Value::YXmlFragment(v) => v.get_string(txn),
             Value::YXmlText(v) => v.get_string(txn),
+            Value::YDoc(v) => v.to_string(),
+        }
+    }
+
+    pub fn to_ydoc(self) -> Option<Doc> {
+        if let Value::YDoc(doc) = self {
+            Some(doc)
+        } else {
+            None
         }
     }
 
     pub fn to_ytext(self) -> Option<TextRef> {
-        if let Value::YText(text) = self {
-            Some(text)
+        if let Value::YText(array) = self {
+            Some(array)
         } else {
             None
         }
@@ -741,6 +753,7 @@ impl ToJson for Value {
             Value::YXmlElement(v) => Any::String(v.get_string(txn).into_boxed_str()),
             Value::YXmlText(v) => Any::String(v.get_string(txn).into_boxed_str()),
             Value::YXmlFragment(v) => Any::String(v.get_string(txn).into_boxed_str()),
+            Value::YDoc(doc) => doc.to_json(txn),
         }
     }
 }
@@ -815,6 +828,9 @@ impl std::fmt::Display for Branch {
                 } else {
                     write!(f, "YXmlText")
                 }
+            }
+            TYPE_REFS_DOC => {
+                write!(f, "Subdoc")
             }
             _ => {
                 write!(f, "UnknownRef")?;
