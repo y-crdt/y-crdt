@@ -25,7 +25,7 @@ const doc = new YDoc()
 const text = doc.getText('name')
 
 // append text to our collaborative document
-doc.transact(txn => text.insert(txn, 0, 'hello world'))
+text.insert(txn, 0, 'hello world')
 
 // simulate update with remote peer
 const remoteDoc = new YDoc()
@@ -40,6 +40,6 @@ const update = encodeStateAsUpdate(doc, remoteSV)
 // now apply update to a remote document
 applyUpdate(remoteDoc, update)
 
-const str = remoteDoc.transact(txn => remoteText.toString(txn))
+const str = remoteText.toString(txn)
 console.log(str)
 ```

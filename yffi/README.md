@@ -17,16 +17,16 @@ It's also possible to read it straight from a generated [C header file](https://
 
 int main(void) {
     YDoc* doc = ydoc_new();
-    YTransaction* txn = ytransaction_new(doc);
-    YText* txt = ytext(txn, "name");
+    YText* txt = ytext(doc, "name");
+    YTransaction* txn = ydoc_write_transaction(doc);
     
     // append text to our collaborative document with no attributes
-    ytext_insert(txt, txn, 0, "hello world", null);
+    ytext_insert(txt, txn, 0, "hello world", NULL);
     
     // simulate update with remote peer
     YDoc* remote_doc = ydoc_new();
-    YTransaction* remote_txn = ytransaction_new(remote_doc);
-    YText* remote_txt = ytext(remote_txn, "name");
+    YText* remote_txt = ytext(remote_doc, "name");
+    YTransaction* remote_txn = ydoc_write_transaction(remote_doc);
     
     // in order to exchange data with other documents
     // we first need to create a state vector
@@ -52,7 +52,7 @@ int main(void) {
     ybinary_destroy(update, update_length);
     
     // retrieve string from remote peer YText instance
-    char* str = ytext_string(remote_txt);
+    char* str = ytext_string(remote_txt, remote_txn);
     printf("%s", str);
     
     // release remaining resources
