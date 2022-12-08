@@ -149,7 +149,7 @@ impl GetString for XmlElementRef {
         write!(&mut s, "<{}", tag).unwrap();
         let attributes = Attributes(inner.entries(txn));
         for (k, v) in attributes {
-            write!(&mut s, " \"{}\"=\"{}\"", k, v).unwrap();
+            write!(&mut s, " {}=\"{}\"", k, v).unwrap();
         }
         write!(&mut s, ">").unwrap();
         for i in inner.iter(txn) {
@@ -1309,11 +1309,13 @@ mod test {
     }
 
     #[test]
-    fn xml_text_to_string() {
+    fn xml_to_string() {
         let doc = Doc::new();
         let f = doc.get_or_insert_xml_fragment("test");
         let mut txn = doc.transact_mut();
-        let text = f.push_back(&mut txn, XmlTextPrelim("hello world"));
+        let div = f.push_back(&mut txn, XmlElementPrelim::empty("div"));
+        div.insert_attribute(&mut txn, "class", "t-button");
+        let text = div.push_back(&mut txn, XmlTextPrelim("hello world"));
         text.format(
             &mut txn,
             6,
@@ -1328,7 +1330,7 @@ mod test {
         let str = f.get_string(&doc.transact());
         assert_eq!(
             str.as_str(),
-            "hello <a href=\"http://domain.org\">world</a>"
+            "<div class=\"t-button\">hello <a href=\"http://domain.org\">world</a></div>"
         )
     }
 }
