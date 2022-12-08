@@ -180,7 +180,7 @@ export const testSubdoc = tc => {
 
     const doc2 = new Y.YDoc()
     // root-level types must be prepared in advance for subdocs to work atm
-    const subdocs2 = doc.getMap('mysubdocs')
+    const subdocs2 = doc2.getMap('mysubdocs')
     {
         t.compare(Array.from(doc2.getSubdocs()), [])
         /**
@@ -198,7 +198,9 @@ export const testSubdoc = tc => {
 
         let inner = subdocs2.get('a')
         t.assert(inner.parentDoc != null, 'parent doc must be present')
+        t.compare(inner.shouldLoad, false, 'after decoding shouldLoad is false by default')
         inner.load()
+        t.compare(inner.shouldLoad, true, 'after YDoc.load, shouldLoad is false by default')
         t.compare(event, [[], [], ['a']])
 
         t.compare(Array.from(doc2.getSubdocGuids()).sort(), ['a', 'c'])

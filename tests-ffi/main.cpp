@@ -1575,6 +1575,7 @@ TEST_CASE("YDoc observe subdocs") {
     concat_guids(t.total, subdoc_count, subdoc_refs);
     ytransaction_commit(txn);
 
+    sort(t.total);
     REQUIRE(!strcmp(t.total, "ac"));
     memset(t.total, '\0', 20);
 
