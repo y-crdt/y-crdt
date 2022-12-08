@@ -92,9 +92,16 @@ use rand::RngCore;
 
 pub type Uuid = std::sync::Arc<str>;
 
+/// Generate random v4 UUID.
+/// (See: https://www.rfc-editor.org/rfc/rfc4122#section-4.4)
 pub fn uuid_v4<R: RngCore>(rng: &mut R) -> Uuid {
     let mut b = [0u8; 16];
     rng.fill_bytes(&mut b);
+
+    // According to RFC 4122 - Section 4.4, UUID v4 requires setting up following:
+    b[6] = b[6] & 0x0f | 0x40; // time_hi_and_version (bits 4-7 of 7th octet)
+    b[8] = b[8] & 0x3f | 0x80; // clock_seq_hi_and_reserved (bit 6 & 7 of 9th octet)
+
     let uuid = format!(
         "{:x}{:x}{:x}{:x}-{:x}{:x}-{:x}{:x}-{:x}{:x}-{:x}{:x}{:x}{:x}{:x}{:x}",
         b[0],
