@@ -17,28 +17,39 @@ use yrs::*;
 
 fn main() {    
     let doc = Doc::new();
-    let mut txn = doc.transact(); // all Yrs operations happen in scope of a transaction
-    let text = txn.get_text("name");
+    let text = doc.get_text("name");
+    // every operation in Yrs happens in scope of a transaction
+    let mut txn = doc.transact_mut(); 
     // append text to our collaborative document
-    text.push(&mut txn, "hello world"); 
+    text.push(&mut txn, "Hello from yrs!");
+    // add formatting section to part of the text
+    text.format(&mut txn, 11, 3, HashMap::from([
+      ("link".into(), "https://github.com/y-crdt/y-crdt".into())
+    ]));
     
     // simulate update with remote peer
     let remote_doc = Doc::new();
+    let remote_text = remote_doc.get_text("name");
     let mut remote_txn = remote_doc.transact();
-    let remote_text = remote_txn.get_text("name");
 
     // in order to exchange data with other documents 
     // we first need to create a state vector
-    let state_vector = remote_doc.get_state_vector(&remote_txn);
+    let state_vector = remote_txn.state_vector();
     
-    // now compute a differential update based on remote document's state vector
-    let update = doc.encode_delta_as_update_v1(&txn, &state_vector);
+    // now compute a differential update based on remote document's 
+    // state vector
+    let bytes = txn.encode_diff_v1(&state_vector);
     
-    // both update and state vector are serializable, we can pass them over the wire
-    // now apply update to a remote document
-    remote_doc.apply_update_v1(&mut remote_txn, update.as_slice());
+    // both update and state vector are serializable, we can pass them 
+    // over the wire now apply update to a remote document
+    let update = Update::decode_v1(&bytes).unwrap();
+    remote_txn.apply_update(update);
 
+    // display raw text (no attributes)
     println!("{}", remote_text.to_string(&remote_txn));
+  
+    // create sequence of text chunks with optional format attributes
+    let diff = remote_text.diff(&remote_txn, YChange::identity);
 }
 
 ```
@@ -57,12 +68,12 @@ We're in ongoing process of reaching the feature compatibility with Yjs project.
   - [x] Text
   - [x] Array
   - [x] Map
-  - [x] XML data types (elements and text)
-  - [ ] Subdocuments
+  - [x] XML data types (XmlFragment, XmlElement, XmlText, XmlHook)
+  - [x] Subdocuments
   - [x] Subscription events on particular data type
 - [x] Cross-platform support for unicode code points
+- [ ] Transaction origins
 - [ ] Undo manager
-- [x] Text markers
 
 ## Internal Documentation
 

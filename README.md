@@ -32,6 +32,7 @@ Other projects using *yrs*:
     - [x] recursive insertion of other collaborative elements of any type
     - [x] observe events and deltas
     - [x] deep observe events bubbling up from nested collections
+    - [x] move index positions
   - [x] XmlElement
     - [x] insertion, update and removal of XML attributes
     - [x] insertion, update and removal of XML children nodes
@@ -41,9 +42,11 @@ Other projects using *yrs*:
     - [x] insertion, update and removal of XML attributes
     - [x] text insertion (with variable offsets including configurable UTF-8, UTF-16 and UTF-32 mappings)
     - [x] observe events and deltas
-  - [ ] XmlFragment
-  - [ ] XmlHook (*deprecated*)
-  - [ ] Sub documents
+  - [x] XmlFragment
+  - [x] XmlHook (*deprecated*)
+  - [x] Sub documents
+  - [ ] Transaction origin
+  - [ ] Undo/redo manager
 - Encoding formats:
   - [x] lib0 v1 encoding
   - [x] lib0 v2 encoding
@@ -60,3 +63,5 @@ Other projects using *yrs*:
 ## Sponsors
 
 [![NLNET](https://nlnet.nl/image/logo_nlnet.svg)](https://nlnet.nl/)
+
+[![Ably](https://ably.com/assets/ably_ui/core/images/ably-logo-ad51bb21f40afd34a70df857594d6b7b84f6ceca0518f1d4d94e2b9579486351.png)](https://ably.com/)
