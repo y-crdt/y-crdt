@@ -1,15 +1,16 @@
 use crate::block::{
-    Block, BlockPtr, BlockRange, ClientID, Item, ItemContent, BLOCK_GC_REF_NUMBER,
+    Block, BlockPtr, BlockRange, BlockSlice, ClientID, Item, ItemContent, BLOCK_GC_REF_NUMBER,
     BLOCK_SKIP_REF_NUMBER, HAS_ORIGIN, HAS_PARENT_SUB, HAS_RIGHT_ORIGIN,
 };
 use crate::id_set::DeleteSet;
 #[cfg(test)]
 use crate::store::Store;
+use crate::transaction::TransactionMut;
 use crate::types::TypePtr;
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::client_hasher::ClientHasher;
-use crate::{OffsetKind, StateVector, Transaction, ID};
+use crate::{OffsetKind, StateVector, ID};
 use lib0::error::Error;
 use std::cmp::Ordering;
 use std::collections::hash_map::Entry;
@@ -164,7 +165,10 @@ impl Update {
     /// pending update object is returned which contains blocks that couldn't be integrated, most
     /// likely because there were missing blocks that are used as a dependencies of other blocks
     /// contained in this update.
-    pub fn integrate(mut self, txn: &mut Transaction) -> (Option<PendingUpdate>, Option<Update>) {
+    pub fn integrate(
+        mut self,
+        txn: &mut TransactionMut,
+    ) -> (Option<PendingUpdate>, Option<Update>) {
         let remaining_blocks = if self.blocks.is_empty() {
             None
         } else {
@@ -609,7 +613,7 @@ impl Update {
                                 } else {
                                     // if (currWrite.struct.id.clock + currWrite.struct.length >= curr.id.clock) {
                                     let diff =
-                                        curr_write_last as i32 - curr_block.id().clock as i32;
+                                        curr_write_last as i32 - curr_block.id().clock as i32 - 1;
 
                                     if diff > 0 {
                                         if let BlockCarrier::Skip(skip) = &mut curr_write_block {
@@ -840,7 +844,10 @@ impl BlockCarrier {
     }
     pub fn encode_with_offset<E: Encoder>(&self, encoder: &mut E, offset: u32) {
         match self {
-            BlockCarrier::Block(x) => x.encode_from(None, encoder, offset),
+            BlockCarrier::Block(x) => {
+                let slice = BlockSlice::new(x.into(), offset, x.len() - 1);
+                slice.encode(encoder, None)
+            }
             BlockCarrier::Skip(x) => {
                 encoder.write_info(BLOCK_SKIP_REF_NUMBER);
                 encoder.write_len(x.len - offset);
@@ -848,7 +855,7 @@ impl BlockCarrier {
         }
     }
 
-    pub fn integrate(&mut self, txn: &mut Transaction, offset: u32) -> bool {
+    pub fn integrate(&mut self, txn: &mut TransactionMut, offset: u32) -> bool {
         match self {
             BlockCarrier::Block(x) => BlockPtr::from(x).integrate(txn, offset),
             BlockCarrier::Skip(x) => x.integrate(offset),
@@ -1014,7 +1021,7 @@ mod test {
     use crate::types::TypePtr;
     use crate::update::{BlockCarrier, Update};
     use crate::updates::decoder::{Decode, DecoderV1};
-    use crate::{Doc, ID};
+    use crate::{Doc, GetString, Text, Transact, ID};
     use lib0::decoding::Cursor;
 
     #[test]
@@ -1061,12 +1068,12 @@ mod test {
     #[test]
     fn update_merge() {
         let d1 = Doc::with_client_id(1);
-        let mut t1 = d1.transact();
-        let txt1 = t1.get_text("test");
+        let txt1 = d1.get_or_insert_text("test");
+        let mut t1 = d1.transact_mut();
 
         let d2 = Doc::with_client_id(2);
-        let mut t2 = d2.transact();
-        let txt2 = t2.get_text("test");
+        let txt2 = d2.get_or_insert_text("test");
+        let mut t2 = d2.transact_mut();
 
         txt1.insert(&mut t1, 0, "aaa");
         txt1.insert(&mut t1, 0, "aaa");
@@ -1088,13 +1095,13 @@ mod test {
         let u12 = Update::merge_updates(vec![u1, u2]);
 
         let d3 = Doc::with_client_id(3);
-        let mut t3 = d3.transact();
-        let txt3 = t3.get_text("test");
+        let txt3 = d3.get_or_insert_text("test");
+        let mut t3 = d3.transact_mut();
         t3.apply_update(u12);
 
-        let str1 = txt1.to_string();
-        let str2 = txt2.to_string();
-        let str3 = txt3.to_string();
+        let str1 = txt1.get_string(&t1);
+        let str2 = txt2.get_string(&t2);
+        let str3 = txt3.get_string(&t3);
 
         assert_eq!(str1, str2);
         assert_eq!(str2, str3);

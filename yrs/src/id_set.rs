@@ -129,29 +129,28 @@ impl IdRange {
             if !ranges.is_empty() {
                 ranges.sort_by(|a, b| a.start.cmp(&b.start));
                 let mut new_len = 1;
-               
-                    let len = ranges.len() as isize;
-                    let head = ranges.as_mut_ptr();
-                    let mut current = unsafe { head.as_mut().unwrap() };
-                    let mut i = 1;
-                    while i < len {
-                        let next = unsafe { head.offset(i).as_ref().unwrap() };
-                        if !Self::try_join(current, next) {
-                            // current and next are disjoined eg. [0,5) & [6,9)
 
-                            // move current pointer one index to the left: by using new_len we
-                            // squash ranges possibly already merged to current
-                            current = unsafe { head.offset(new_len).as_mut().unwrap() };
+                let len = ranges.len() as isize;
+                let head = ranges.as_mut_ptr();
+                let mut current = unsafe { head.as_mut().unwrap() };
+                let mut i = 1;
+                while i < len {
+                    let next = unsafe { head.offset(i).as_ref().unwrap() };
+                    if !Self::try_join(current, next) {
+                        // current and next are disjoined eg. [0,5) & [6,9)
 
-                            // make next a new current
-                            current.start = next.start;
-                            current.end = next.end;
-                            new_len += 1;
-                        }
+                        // move current pointer one index to the left: by using new_len we
+                        // squash ranges possibly already merged to current
+                        current = unsafe { head.offset(new_len).as_mut().unwrap() };
 
-                        i += 1;
+                        // make next a new current
+                        current.start = next.start;
+                        current.end = next.end;
+                        new_len += 1;
                     }
-                
+
+                    i += 1;
+                }
 
                 if new_len == 1 {
                     *self = IdRange::Continuous(ranges[0].clone())
@@ -356,6 +355,10 @@ impl IdSet {
         });
         self.squash()
     }
+
+    pub fn get(&self, client_id: &ClientID) -> Option<&IdRange> {
+        self.0.get(client_id)
+    }
 }
 
 impl Encode for IdSet {
@@ -514,6 +517,10 @@ impl DeleteSet {
     /// optimize the space and make future encoding more compact.
     pub fn squash(&mut self) {
         self.0.squash()
+    }
+
+    pub fn range(&self, client_id: &ClientID) -> Option<&IdRange> {
+        self.0.get(client_id)
     }
 
     pub(crate) fn try_squash_with(&mut self, store: &mut Store) {

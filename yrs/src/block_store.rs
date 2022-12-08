@@ -1,4 +1,4 @@
-use crate::block::{Block, BlockPtr, ClientID, ID};
+use crate::block::{Block, BlockPtr, BlockSlice, ClientID, ID};
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::client_hasher::ClientHasher;
@@ -296,7 +296,7 @@ impl ClientBlockList {
 
     /// Inserts a new block at a given `index` position within this block list. This method may
     /// panic if `index` is greater than a length of the list.
-    fn insert(&mut self, index: usize, block: Box<block::Block>) {
+    pub(crate) fn insert(&mut self, index: usize, block: Box<block::Block>) {
         self.list.insert(index, block);
     }
 
@@ -425,29 +425,33 @@ impl BlockStore {
         clients.try_get(pivot)
     }
 
-    pub(crate) fn get_item_clean_start(&mut self, id: &ID) -> Option<BlockPtr> {
-        let blocks = self.clients.get_mut(&id.client)?;
-        let mut index = blocks.find_pivot(id.clock)?;
-        let mut ptr = blocks.get(index);
-        if let Some(new) = ptr.splice(id.clock - ptr.id().clock, OffsetKind::Utf16) {
-            blocks.insert(index + 1, new);
-            index += 1;
-        }
-        Some(blocks.get(index))
+    /// Returns a block slice that represents a range of data within a particular block containing
+    /// provided [ID], starting from that [ID] until the end of the block.
+    ///
+    /// Example: *for a block `A:1..=5` and id `A:3`, the returned slice will represent `A:3..=5`*.
+    pub(crate) fn get_item_clean_start(&self, id: &ID) -> Option<BlockSlice> {
+        let blocks = self.clients.get(&id.client)?;
+        let index = blocks.find_pivot(id.clock)?;
+        let ptr = blocks.get(index);
+        let offset = id.clock - ptr.id().clock;
+        Some(BlockSlice::new(ptr, offset, ptr.len() - 1))
     }
 
-    pub(crate) fn get_item_clean_end(&mut self, id: &ID) -> Option<BlockPtr> {
-        let blocks = self.clients.get_mut(&id.client)?;
+    /// Returns a block slice that represents a range of data within a particular block containing
+    /// provided [ID], starting from the beginning of the block until the that [ID] (inclusive).
+    ///
+    /// Example: *for a block `A:1..=5` and id `A:3`, the returned slice will represent `A:1..=3`*.
+    pub(crate) fn get_item_clean_end(&self, id: &ID) -> Option<BlockSlice> {
+        let blocks = self.clients.get(&id.client)?;
         let index = blocks.find_pivot(id.clock)?;
-        let mut block = blocks.get(index);
-        let block_id = block.id();
-        if id.clock != block_id.clock + block.len() - 1 {
-            let new = block
-                .splice(1 + id.clock - block_id.clock, OffsetKind::Utf16)
-                .unwrap();
-            blocks.insert(index + 1, new);
+        let ptr = blocks.get(index);
+        let block_id = ptr.id();
+        let offset = id.clock - block_id.clock;
+        if offset != ptr.len() - 1 {
+            Some(BlockSlice::new(ptr, 0, offset))
+        } else {
+            Some(BlockSlice::from(ptr))
         }
-        Some(BlockPtr::from(block))
     }
 
     /// Returns the last observed clock sequence number for a given `client`. This is exclusive

@@ -1,11 +1,15 @@
 use crate::block::{ClientID, Item, ItemContent};
 use crate::id_set::{DeleteSet, IdSet};
 use crate::store::Store;
-use crate::types::{Branch, TypePtr, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT};
+use crate::types::xml::XmlFragment;
+use crate::types::{Branch, ToJson, TypePtr, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT};
 use crate::update::{BlockCarrier, Update};
 use crate::updates::decoder::{Decode, Decoder, DecoderV1};
 use crate::updates::encoder::Encode;
-use crate::{Doc, PrelimArray, PrelimMap, StateVector, XmlElement, XmlText, ID};
+use crate::{
+    ArrayPrelim, Doc, GetString, Map, MapPrelim, ReadTxn, StateVector, Transact, Xml,
+    XmlElementRef, XmlTextRef, ID,
+};
 use lib0::any::Any;
 use lib0::decoding::Read;
 use std::cell::Cell;
@@ -21,7 +25,7 @@ fn text_insert_delete() {
         ```js
            const doc = new Y.Doc()
            const ytext = doc.getText('type')
-           doc.transact(function () {
+           doc..transact_mut()(function () {
                ytext.insert(0, 'def')
                ytext.insert(0, 'abc')
                ytext.insert(6, 'ghi')
@@ -103,7 +107,7 @@ fn text_insert_delete() {
     let setter = visited.clone();
 
     let mut doc = Doc::new();
-    let txt = doc.transact().get_text("type");
+    let txt = doc.get_or_insert_text("type");
     let _sub = doc.observe_update_v1(move |_, e| {
         let u = Update::decode_v1(&e.update).unwrap();
         for (actual, expected) in u.blocks.blocks().zip(expected_blocks.as_slice()) {
@@ -115,10 +119,11 @@ fn text_insert_delete() {
         setter.set(true);
     });
     {
-        let mut txn = doc.transact();
-        txn.apply_update(Update::decode_v1(update).unwrap());
+        let mut txn = doc.transact_mut();
+        let u = Update::decode_v1(update).unwrap();
+        txn.apply_update(u);
     }
-    assert_eq!(txt.to_string(), "abhi".to_string());
+    assert_eq!(txt.get_string(&txt.transact()), "abhi".to_string());
     assert!(visited.get());
 }
 
@@ -328,11 +333,11 @@ fn utf32_lib0_v2_decoding() {
         0, 19, 8, 1, 5, 1, 1, 1, 1, 9, 2, 4, 4, 4, 4, 4,
     ];
     let doc = Doc::new();
-    let mut txn = doc.transact();
+    let xml = doc.get_or_insert_xml_fragment("prosemirror");
+    let mut txn = doc.transact_mut();
     let update = Update::decode_v2(data).unwrap();
     txn.apply_update(update);
-    let xml = txn.get_xml_element("prosemirror");
-    let actual: XmlElement = xml.get(0).unwrap().try_into().unwrap();
+    let actual: XmlElementRef = xml.get(&txn, 0).unwrap().try_into().unwrap();
 
     let expected_attrs = HashMap::from([
         ("b_id", "JXbASa-a92j".to_string()),
@@ -340,12 +345,12 @@ fn utf32_lib0_v2_decoding() {
         ("tagName", "div".to_string()),
         ("lineHeight", "".to_string()),
     ]);
-    let actual_attrs: HashMap<&str, String> = actual.attributes().collect();
+    let actual_attrs: HashMap<&str, String> = actual.attributes(&txn).collect();
     assert_eq!(actual_attrs, expected_attrs);
 
-    let txt: XmlText = actual.get(0).unwrap().try_into().unwrap();
+    let txt: XmlTextRef = actual.get(&txn, 0).unwrap().try_into().unwrap();
 
-    assert_eq!(txt.to_string(), "在の韩国🇰🇷🇨🇳🇯🇵");
+    assert_eq!(txt.get_string(&txn), "在の韩国🇰🇷🇨🇳🇯🇵");
 }
 
 /// Verify if given `payload` can be deserialized into series
@@ -377,33 +382,33 @@ fn roundtrip_v2(payload: &[u8], expected: &Vec<BlockCarrier>) {
 #[test]
 fn negative_zero_decoding_v2() {
     let doc = Doc::new();
-    let mut txn = doc.transact();
-    let root = txn.get_map("root");
+    let root = doc.get_or_insert_map("root");
+    let mut txn = doc.transact_mut();
 
-    root.insert(&mut txn, "sequence", PrelimMap::<bool>::new()); //NOTE: This is how I put nested map.
-    let sequence = root.get("sequence").unwrap().to_ymap().unwrap();
+    root.insert(&mut txn, "sequence", MapPrelim::<bool>::new()); //NOTE: This is how I put nested map.
+    let sequence = root.get(&txn, "sequence").unwrap().to_ymap().unwrap();
     sequence.insert(&mut txn, "id", "V9Uk9pxUKZIrW6cOkC0Rg".to_string());
-    sequence.insert(&mut txn, "cuts", PrelimArray::<_, Any>::from([]));
+    sequence.insert(&mut txn, "cuts", ArrayPrelim::<_, Any>::from([]));
     sequence.insert(&mut txn, "name", "new sequence".to_string());
 
     root.insert(&mut txn, "__version__", 1);
     root.insert(
         &mut txn,
         "face_expressions",
-        PrelimArray::<_, Any>::from([]),
+        ArrayPrelim::<_, Any>::from([]),
     );
-    root.insert(&mut txn, "characters", PrelimArray::<_, Any>::from([]));
-    let expected = root.to_json();
+    root.insert(&mut txn, "characters", ArrayPrelim::<_, Any>::from([]));
+    let expected = root.to_json(&txn);
 
-    let buffer = doc.encode_state_as_update_v2(&StateVector::default());
+    let buffer = txn.encode_state_as_update_v2(&StateVector::default());
 
     let u = Update::decode_v2(&buffer).unwrap();
 
     let doc2 = Doc::new();
-    let mut txn = doc.transact();
-    let root = txn.get_map("root");
+    let root = doc2.get_or_insert_map("root");
+    let mut txn = doc2.transact_mut();
     txn.apply_update(u);
-    let actual = root.to_json();
+    let actual = root.to_json(&txn);
 
     assert_eq!(actual, expected);
 }
@@ -435,23 +440,31 @@ fn test_data_set<P: AsRef<std::path::Path>>(path: P) {
     for test_num in 0..test_count {
         let updates_len: u32 = decoder.read_var().unwrap();
         let doc = Doc::new();
-        let mut txn = doc.transact();
-        let txt = txn.get_text("text");
-        let map = txn.get_map("map");
-        let arr = txn.get_array("array");
-        drop(txn);
+        let txt = doc.get_or_insert_text("text");
+        let map = doc.get_or_insert_map("map");
+        let arr = doc.get_or_insert_array("array");
         for _ in 0..updates_len {
             let update = Update::decode_v1(decoder.read_buf().unwrap()).unwrap();
-            doc.transact().apply_update(update);
+            doc.transact_mut().apply_update(update);
         }
         let expected = decoder.read_string().unwrap();
-        assert_eq!(txt.to_string(), expected, "failed at {} run", test_num);
+        assert_eq!(
+            txt.get_string(&txt.transact()),
+            expected,
+            "failed at {} run",
+            test_num
+        );
 
         let expected = decoder.read_any().unwrap();
-        let actual = map.to_json();
+        let actual = map.to_json(&doc.transact());
         assert_eq!(actual, expected, "failed at {} run", test_num);
 
         let expected = decoder.read_any().unwrap();
-        assert_eq!(arr.to_json(), expected, "failed at {} run", test_num);
+        assert_eq!(
+            arr.to_json(&doc.transact()),
+            expected,
+            "failed at {} run",
+            test_num
+        );
     }
 }
