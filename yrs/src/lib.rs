@@ -43,6 +43,7 @@ mod moving;
 pub mod observer;
 #[cfg(test)]
 mod test_utils;
+mod undo;
 
 pub use crate::alt::{
     diff_updates_v1, diff_updates_v2, encode_state_vector_from_update_v1,
@@ -87,6 +88,7 @@ pub use crate::types::xml::XmlTextPrelim;
 pub use crate::types::xml::XmlTextRef;
 pub use crate::types::GetString;
 pub use crate::types::Observable;
+pub use crate::undo::UndoManager;
 pub use crate::update::Update;
 use rand::RngCore;
 

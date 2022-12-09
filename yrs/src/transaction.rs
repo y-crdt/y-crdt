@@ -11,6 +11,7 @@ use crate::*;
 use atomic_refcell::{AtomicRef, AtomicRefMut};
 use lib0::error::Error;
 use std::collections::{HashMap, HashSet};
+use std::hash::Hash;
 use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
 use updates::encoder::*;
@@ -229,6 +230,7 @@ pub struct TransactionMut<'doc> {
     /// New types are not included in this Set.
     changed: HashMap<TypePtr, HashSet<Option<Rc<str>>>>,
     pub(crate) subdocs: Option<Box<Subdocs>>,
+    pub(crate) origin: Option<Box<dyn TransactionOrigin>>,
     committed: bool,
 }
 
@@ -257,10 +259,14 @@ impl<'doc> Drop for TransactionMut<'doc> {
 }
 
 impl<'doc> TransactionMut<'doc> {
-    pub(crate) fn new(store: AtomicRefMut<'doc, Store>) -> Self {
+    pub(crate) fn new(
+        store: AtomicRefMut<'doc, Store>,
+        origin: Option<Box<dyn TransactionOrigin>>,
+    ) -> Self {
         let begin_timestamp = store.blocks.get_state_vector();
         TransactionMut {
             store,
+            origin,
             before_state: begin_timestamp,
             merge_blocks: Vec::new(),
             delete_set: DeleteSet::new(),
@@ -285,6 +291,12 @@ impl<'doc> TransactionMut<'doc> {
     /// Data about deletions performed in the scope of current transaction.
     pub fn delete_set(&self) -> &DeleteSet {
         &self.delete_set
+    }
+
+    /// Returns origin of the transaction (if it was defined).
+    pub fn origin(&self) -> Option<&[u8]> {
+        let origin = self.origin.as_deref()?;
+        Some(origin.as_ref())
     }
 
     #[inline]
@@ -896,3 +908,7 @@ pub struct Subdocs {
     pub(crate) removed: HashMap<DocAddr, Doc>,
     pub(crate) loaded: HashMap<DocAddr, Doc>,
 }
+
+pub trait TransactionOrigin: AsRef<[u8]> {}
+
+impl<T> TransactionOrigin for T where T: AsRef<[u8]> + Hash + Eq {}
