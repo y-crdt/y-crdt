@@ -1,4 +1,4 @@
-use crate::block::{BlockPtr, ClientID, ID};
+use crate::block::{Block, BlockPtr, ClientID, ID};
 use crate::block_store::{BlockStore, ClientBlockList};
 use crate::store::Store;
 use crate::updates::decoder::{Decode, Decoder};
@@ -9,7 +9,7 @@ use lib0::error::Error;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::hash::BuildHasherDefault;
-use std::ops::Range;
+use std::ops::{Deref, Range};
 
 // Note: use native Rust [Range](https://doc.rust-lang.org/std/ops/struct.Range.html)
 // as it's left-inclusive/right-exclusive and defines the exact capabilities we care about here.
@@ -562,14 +562,16 @@ impl Encode for DeleteSet {
         self.0.encode(encoder)
     }
 }
-/*
+
 pub(crate) struct DeletedBlocks<'a, 'doc> {
     txn: &'a mut TransactionMut<'doc>,
-    merge_blocks: Vec<BlockPtr>,
+    merge_blocks: Vec<ID>,
     ds_iter: Iter<'a>,
-    current_block_list: Option<&'a ClientBlockList>,
-    current_range: Option<&'a IdRange>,
+    current_block_list: Option<&'doc ClientBlockList>,
+    current_range: Option<&'a Range<u32>>,
+    current_client_id: Option<ClientID>,
     range_iter: Option<IdRangeIter<'a>>,
+    current_index: Option<usize>,
 }
 
 impl<'a, 'doc> DeletedBlocks<'a, 'doc> {
@@ -579,34 +581,102 @@ impl<'a, 'doc> DeletedBlocks<'a, 'doc> {
             txn,
             ds_iter,
             current_block_list: None,
+            current_client_id: None,
             current_range: None,
             range_iter: None,
+            current_index: None,
             merge_blocks: Vec::new(),
         }
     }
 }
 
-impl<'a, 'doc> Iterator for DeletedBlocks<'a, 'doc> {
+impl<'a, 'doc> Iterator for DeletedBlocks<'a, 'doc>
+where
+    'a: 'doc,
+{
     type Item = BlockPtr;
 
     fn next(&mut self) -> Option<Self::Item> {
         if let Some(r) = self.current_range {
+            let block = if let Some(idx) = self.current_index.as_mut() {
+                if let Some(block) = self.current_block_list.unwrap().try_get(*idx) {
+                    *idx += 1;
+                    block
+                } else {
+                    self.current_range = None;
+                    self.current_index = None;
+                    return self.next();
+                }
+            } else {
+                let list = self.current_block_list.unwrap();
+                if let Some(idx) = list.find_pivot(r.start) {
+                    let mut block = list.get(idx);
+                    let clock = block.id().clock;
+
+                    // check if we don't need to cut first block
+                    if clock < r.start {
+                        if let Some(right_ptr) = self
+                            .txn
+                            .store
+                            .blocks
+                            .split_block_inner(block, r.start - clock)
+                        {
+                            self.merge_blocks.push(*right_ptr.id());
+                            block = right_ptr;
+                        }
+                    }
+                    self.current_index = Some(idx + 1);
+                    block
+                } else {
+                    self.current_range = None;
+                    self.current_index = None;
+                    return self.next();
+                }
+            };
+
+            let clock = block.id().clock;
+            if clock > r.end {
+                // move to the next range
+                self.current_range = None;
+                self.current_index = None;
+                return self.next();
+            } else if clock + block.len() > r.end {
+                // we need to cut the last block
+                if let Some(right_ptr) = self
+                    .txn
+                    .store
+                    .blocks
+                    .split_block_inner(block, clock + block.len() - r.end)
+                {
+                    self.merge_blocks.push(*right_ptr.id());
+                    self.current_range = None;
+                    self.current_index = None;
+                }
+            }
+
+            Some(block)
         } else {
-            let range_iter = if let Some(iter) = self.range_iter.as_deref() {
+            let range_iter = if let Some(iter) = self.range_iter.as_mut() {
                 iter
             } else {
-                todo!()
+                let (client_id, range) = self.ds_iter.next()?;
+                self.current_client_id = Some(client_id.clone());
+                self.current_index = None;
+                self.current_block_list = self.txn.store.blocks.get(client_id);
+                self.range_iter = Some(range.iter());
+                self.range_iter.as_mut().unwrap()
             };
+            self.current_range = range_iter.next();
+            return self.next();
         }
-        todo!()
     }
 }
 
 impl<'a, 'doc> Drop for DeletedBlocks<'a, 'doc> {
     fn drop(&mut self) {
-        self.txn.merge_blocks.extend(self.merge_blocks.into_iter());
+        self.txn.merge_blocks.extend(self.merge_blocks.iter());
     }
-}*/
+}
 
 #[cfg(test)]
 mod test {
