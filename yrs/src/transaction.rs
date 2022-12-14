@@ -10,9 +10,11 @@ use crate::utils::OptionExt;
 use crate::*;
 use atomic_refcell::{AtomicRef, AtomicRefMut};
 use lib0::error::Error;
+use smallvec::SmallVec;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::ops::{Deref, DerefMut};
+use std::pin::Pin;
 use std::rc::Rc;
 use updates::encoder::*;
 
@@ -230,7 +232,7 @@ pub struct TransactionMut<'doc> {
     /// New types are not included in this Set.
     changed: HashMap<TypePtr, HashSet<Option<Rc<str>>>>,
     pub(crate) subdocs: Option<Box<Subdocs>>,
-    pub(crate) origin: Option<Box<dyn TransactionOrigin>>,
+    pub(crate) origin: Option<Origin>,
     committed: bool,
 }
 
@@ -259,10 +261,7 @@ impl<'doc> Drop for TransactionMut<'doc> {
 }
 
 impl<'doc> TransactionMut<'doc> {
-    pub(crate) fn new(
-        store: AtomicRefMut<'doc, Store>,
-        origin: Option<Box<dyn TransactionOrigin>>,
-    ) -> Self {
+    pub(crate) fn new(store: AtomicRefMut<'doc, Store>, origin: Option<Origin>) -> Self {
         let begin_timestamp = store.blocks.get_state_vector();
         TransactionMut {
             store,
@@ -294,9 +293,8 @@ impl<'doc> TransactionMut<'doc> {
     }
 
     /// Returns origin of the transaction (if it was defined).
-    pub fn origin(&self) -> Option<&[u8]> {
-        let origin = self.origin.as_deref()?;
-        Some(origin.as_ref())
+    pub fn origin(&self) -> Option<&Origin> {
+        self.origin.as_ref()
     }
 
     #[inline]
@@ -909,6 +907,48 @@ pub struct Subdocs {
     pub(crate) loaded: HashMap<DocAddr, Doc>,
 }
 
-pub trait TransactionOrigin: AsRef<[u8]> {}
+#[repr(transparent)]
+#[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
+pub struct Origin(SmallVec<[u8; 8]>);
 
-impl<T> TransactionOrigin for T where T: AsRef<[u8]> + Hash + Eq {}
+impl<'a, T> From<Pin<&'a T>> for Origin {
+    fn from(p: Pin<&T>) -> Self {
+        let ptr = Pin::get_ref(p) as *const T as usize;
+        Origin(SmallVec::from_const(ptr.to_be_bytes()))
+    }
+}
+
+impl<'a> From<&'a [u8]> for Origin {
+    fn from(slice: &'a [u8]) -> Self {
+        Origin(SmallVec::from_slice(slice))
+    }
+}
+
+impl<'a> From<&'a str> for Origin {
+    fn from(v: &'a str) -> Self {
+        Origin(SmallVec::from_slice(v.as_ref()))
+    }
+}
+
+macro_rules! impl_origin {
+    ($t:ty) => {
+        impl From<$t> for Origin {
+            fn from(v: $t) -> Origin {
+                Origin(SmallVec::from_slice(&v.to_be_bytes()))
+            }
+        }
+    };
+}
+
+impl_origin!(u8);
+impl_origin!(u16);
+impl_origin!(u32);
+impl_origin!(u64);
+impl_origin!(u128);
+impl_origin!(usize);
+impl_origin!(i8);
+impl_origin!(i16);
+impl_origin!(i32);
+impl_origin!(i64);
+impl_origin!(i128);
+impl_origin!(isize);

@@ -4,9 +4,9 @@ use crate::store::{Store, WeakStoreRef};
 use crate::transaction::TransactionMut;
 use crate::types::text::update_current_attributes;
 use crate::types::{
-    Attrs, Branch, BranchPtr, TypePtr, Value, TYPE_REFS_ARRAY, TYPE_REFS_DOC, TYPE_REFS_MAP,
-    TYPE_REFS_TEXT, TYPE_REFS_UNDEFINED, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT,
-    TYPE_REFS_XML_HOOK, TYPE_REFS_XML_TEXT,
+    Attrs, Branch, BranchPtr, TypePtr, Value, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
+    TYPE_REFS_UNDEFINED, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_HOOK,
+    TYPE_REFS_XML_TEXT,
 };
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
@@ -948,6 +948,16 @@ impl ItemFlags {
     #[inline]
     pub fn is_keep(&self) -> bool {
         self.check(ITEM_FLAG_KEEP)
+    }
+
+    #[inline]
+    pub fn set_keep(&mut self) {
+        self.set(ITEM_FLAG_KEEP)
+    }
+
+    #[inline]
+    pub fn clear_keep(&mut self) {
+        self.clear(ITEM_FLAG_KEEP)
     }
 
     #[inline]

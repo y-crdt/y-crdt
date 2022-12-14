@@ -279,6 +279,15 @@ impl<T> From<HashMap<String, T>> for MapPrelim<T> {
     }
 }
 
+impl<V, const N: usize> From<[(String, V); N]> for MapPrelim<V>
+where
+    V: Prelim,
+{
+    fn from(arr: [(String, V); N]) -> Self {
+        MapPrelim::from(HashMap::from(arr))
+    }
+}
+
 impl<T: Prelim> Prelim for MapPrelim<T> {
     fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
         let inner = Branch::new(TYPE_REFS_MAP, None);

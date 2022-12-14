@@ -1,9 +1,10 @@
-use crate::block::{ClientID, ID};
-use crate::block_store::BlockStore;
+use crate::block::{BlockPtr, ClientID, ID};
+use crate::block_store::{BlockStore, ClientBlockList};
 use crate::store::Store;
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::client_hasher::ClientHasher;
+use crate::TransactionMut;
 use lib0::error::Error;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
@@ -541,6 +542,12 @@ impl DeleteSet {
             }
         }
     }
+    /*
+       pub(crate) fn iter_blocks_mut(&self, txn: &mut TransactionMut) -> DeletedBlocks {
+           DeletedBlocks::new(self, txn)
+       }
+
+    */
 }
 
 impl Decode for DeleteSet {
@@ -555,6 +562,51 @@ impl Encode for DeleteSet {
         self.0.encode(encoder)
     }
 }
+/*
+pub(crate) struct DeletedBlocks<'a, 'doc> {
+    txn: &'a mut TransactionMut<'doc>,
+    merge_blocks: Vec<BlockPtr>,
+    ds_iter: Iter<'a>,
+    current_block_list: Option<&'a ClientBlockList>,
+    current_range: Option<&'a IdRange>,
+    range_iter: Option<IdRangeIter<'a>>,
+}
+
+impl<'a, 'doc> DeletedBlocks<'a, 'doc> {
+    pub(crate) fn new(ds: &'a DeleteSet, txn: &'a mut TransactionMut<'doc>) -> Self {
+        let ds_iter = ds.iter();
+        DeletedBlocks {
+            txn,
+            ds_iter,
+            current_block_list: None,
+            current_range: None,
+            range_iter: None,
+            merge_blocks: Vec::new(),
+        }
+    }
+}
+
+impl<'a, 'doc> Iterator for DeletedBlocks<'a, 'doc> {
+    type Item = BlockPtr;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(r) = self.current_range {
+        } else {
+            let range_iter = if let Some(iter) = self.range_iter.as_deref() {
+                iter
+            } else {
+                todo!()
+            };
+        }
+        todo!()
+    }
+}
+
+impl<'a, 'doc> Drop for DeletedBlocks<'a, 'doc> {
+    fn drop(&mut self) {
+        self.txn.merge_blocks.extend(self.merge_blocks.into_iter());
+    }
+}*/
 
 #[cfg(test)]
 mod test {

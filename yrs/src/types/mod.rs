@@ -582,6 +582,20 @@ impl Branch {
             eh.unsubscribe(subscription_id);
         }
     }
+
+    pub(crate) fn is_parent_of(&self, mut ptr: Option<BlockPtr>) -> bool {
+        while let Some(Block::Item(i)) = ptr.as_deref() {
+            if let Some(parent) = i.parent.as_branch() {
+                if parent.deref() == self {
+                    return true;
+                }
+                ptr = parent.item;
+            } else {
+                break;
+            }
+        }
+        false
+    }
 }
 
 pub type DeepEventsSubscription = crate::Subscription<Arc<dyn Fn(&TransactionMut, &Events) -> ()>>;

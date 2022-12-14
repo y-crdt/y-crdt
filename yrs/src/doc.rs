@@ -1,7 +1,7 @@
 use crate::block::{Block, BlockPtr, ClientID, ItemContent, Prelim};
 use crate::event::{AfterTransactionEvent, SubdocsEvent, UpdateEvent};
 use crate::store::{Store, StoreRef, WeakStoreRef};
-use crate::transaction::{Transaction, TransactionMut, TransactionOrigin};
+use crate::transaction::{Origin, Transaction, TransactionMut};
 use crate::types::{
     Branch, BranchPtr, ToJson, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
     TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_TEXT,
@@ -594,14 +594,14 @@ pub trait Transact {
     /// Transaction cleanups & calling event handles happen when the transaction struct is dropped.
     fn try_transact_mut_with<T>(&self, origin: T) -> Result<TransactionMut, TransactionAcqError>
     where
-        T: TransactionOrigin + 'static;
+        T: Into<Origin>;
 
     /// Creates a transaction used for all kind of block store operations with a specific origin
     /// that enables to distinguish operations performed in this transaction context from others.
     /// Transaction cleanups & calling event handles happen when the transaction struct is dropped.
     fn transact_mut_with<T>(&self, origin: T) -> TransactionMut
     where
-        T: TransactionOrigin + 'static,
+        T: Into<Origin>,
     {
         self.try_transact_mut_with(origin).unwrap()
     }
@@ -630,11 +630,11 @@ impl Transact for Doc {
 
     fn try_transact_mut_with<T>(&self, origin: T) -> Result<TransactionMut, TransactionAcqError>
     where
-        T: TransactionOrigin + 'static,
+        T: Into<Origin>,
     {
         Ok(TransactionMut::new(
             self.store.try_borrow_mut()?,
-            Some(Box::new(origin)),
+            Some(origin.into()),
         ))
     }
 }
@@ -667,13 +667,13 @@ impl Transact for Branch {
         origin: T,
     ) -> Result<TransactionMut<'a>, TransactionAcqError>
     where
-        T: TransactionOrigin + 'static,
+        T: Into<Origin>,
     {
         let store = self.store.as_ref().unwrap();
         if let Some(store) = store.0.upgrade() {
             let store_ref = store.try_borrow_mut()?;
             let store_ref: AtomicRefMut<'a, Store> = unsafe { std::mem::transmute(store_ref) };
-            Ok(TransactionMut::new(store_ref, Some(Box::new(origin))))
+            Ok(TransactionMut::new(store_ref, Some(origin.into())))
         } else {
             Err(TransactionAcqError::DocumentDropped)
         }
@@ -718,7 +718,7 @@ where
 
     fn try_transact_mut_with<O>(&self, origin: O) -> Result<TransactionMut, TransactionAcqError>
     where
-        O: TransactionOrigin + 'static,
+        O: Into<Origin>,
     {
         let branch = self.as_ref();
         branch.try_transact_mut_with(origin)

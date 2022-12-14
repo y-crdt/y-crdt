@@ -1,16 +1,24 @@
-use crate::transaction::TransactionOrigin;
+use crate::block::Block;
+use crate::doc::TransactionAcqError;
+use crate::transaction::Origin;
 use crate::types::{Branch, BranchPtr};
 use crate::{
-    AfterTransactionSubscription, DeleteSet, DestroySubscription, Doc, Observer, Subscription,
-    SubscriptionId, TransactionMut,
+    AfterTransactionEvent, AfterTransactionSubscription, DeleteSet, DestroySubscription, Doc,
+    Observer, ReadTxn, Subscription, SubscriptionId, Transact, TransactionMut, WriteTxn,
 };
 use atomic_refcell::BorrowMutError;
 use std::collections::HashSet;
-use std::rc::Rc;
+use std::mem::MaybeUninit;
+use std::ops::{Deref, DerefMut};
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-pub struct UndoManager {
+#[repr(transparent)]
+pub struct UndoManager(Box<Inner>);
+
+struct Inner {
+    doc: Doc,
     scope: HashSet<BranchPtr>,
     options: Options,
     undo_stack: Vec<StackItem>,
@@ -18,8 +26,8 @@ pub struct UndoManager {
     undoing: bool,
     redoing: bool,
     last_change: usize,
-    on_after_transaction: AfterTransactionSubscription,
-    on_destroy: DestroySubscription,
+    on_after_transaction: Option<AfterTransactionSubscription>,
+    on_destroy: Option<DestroySubscription>,
     observer_added: Observer<Arc<dyn Fn(&TransactionMut, &Event) -> ()>>,
     observer_popped: Observer<Arc<dyn Fn(&TransactionMut, &Event) -> ()>>,
 }
@@ -37,11 +45,8 @@ impl UndoManager {
         T: AsRef<Branch>,
     {
         let scope = BranchPtr::from(scope.as_ref());
-        let on_after_transaction = doc
-            .observe_transaction_cleanup(move |txn, e| todo!())
-            .unwrap();
-        let on_destroy = doc.observe_destroy(move |txn, e| todo!()).unwrap();
-        UndoManager {
+        let mut inner = Box::new(Inner {
+            doc: doc.clone(),
             scope: HashSet::from([scope]),
             options,
             undo_stack: Vec::new(),
@@ -49,151 +54,233 @@ impl UndoManager {
             undoing: false,
             redoing: false,
             last_change: 0,
-            on_after_transaction,
-            on_destroy,
+            on_after_transaction: None,
+            on_destroy: None,
             observer_added: Observer::new(),
             observer_popped: Observer::new(),
+        });
+        let inner_ptr = inner.as_mut() as *mut Inner;
+        inner
+            .options
+            .tracked_origins
+            .insert(Origin::from(unsafe { inner_ptr as usize }));
+        inner.on_destroy = Some(
+            doc.observe_destroy(move |txn, e| Self::handle_destroy(inner_ptr))
+                .unwrap(),
+        );
+        inner.on_after_transaction = Some(
+            doc.observe_transaction_cleanup(move |txn, e| {
+                let inner = unsafe { inner_ptr.as_mut().unwrap() };
+                Self::handle_after_transaction(inner, txn, e);
+            })
+            .unwrap(),
+        );
+
+        UndoManager(inner)
+    }
+
+    fn handle_after_transaction(
+        inner: &mut Inner,
+        txn: &TransactionMut,
+        e: &AfterTransactionEvent,
+    ) {
+        todo!()
+    }
+
+    fn handle_destroy(inner: *mut Inner) {
+        let origin = Origin::from(inner as usize);
+        let inner = unsafe { inner.as_mut().unwrap() };
+        if inner.options.tracked_origins.remove(&origin) {
+            inner.on_destroy.take();
+            inner.on_after_transaction.take();
         }
     }
 
     pub fn observe_item_added<F>(&self, f: F) -> UndoEventSubscription
     where
-        F: Fn(&TransactionMut, &Event) -> (),
+        F: Fn(&TransactionMut, &Event) -> () + 'static,
     {
-        self.observer_added.subscribe(Arc::new(f))
+        self.0.observer_added.subscribe(Arc::new(f))
     }
 
     pub fn unobserve_item_added(&self, subscription_id: SubscriptionId) {
-        self.observer_added.unsubscribe(subscription_id)
+        self.0.observer_added.unsubscribe(subscription_id)
     }
 
     pub fn observe_item_popped<F>(&self, f: F) -> UndoEventSubscription
     where
-        F: Fn(&TransactionMut, &Event) -> (),
+        F: Fn(&TransactionMut, &Event) -> () + 'static,
     {
-        self.observer_popped.subscribe(Arc::new(f))
+        self.0.observer_popped.subscribe(Arc::new(f))
     }
 
     pub fn unobserve_item_popped(&self, subscription_id: SubscriptionId) {
-        self.observer_popped.unsubscribe(subscription_id)
+        self.0.observer_popped.unsubscribe(subscription_id)
     }
 
     pub fn expand_scope<T>(&mut self, scope: &T)
     where
         T: AsRef<Branch>,
     {
-        /*
-        ytypes = array.isArray(ytypes) ? ytypes : [ytypes]
-        ytypes.forEach(ytype => {
-          if (this.scope.every(yt => yt !== ytype)) {
-            this.scope.push(ytype)
-          }
-        })
-             */
-        todo!()
+        let ptr = BranchPtr::from(scope.as_ref());
+        self.0.scope.insert(ptr);
     }
 
-    pub fn include_origin<O>(&mut self, origin: O) {
-        self.options.tracked_origins.insert(Rc::new(origin));
+    pub fn include_origin<O>(&mut self, origin: O)
+    where
+        O: Into<Origin>,
+    {
+        self.0.options.tracked_origins.insert(origin.into());
     }
 
-    pub fn exclude_origin<O>(&mut self, origin: &O) {
-        self.options.tracked_origins.remove(origin);
+    pub fn exclude_origin<O>(&mut self, origin: O)
+    where
+        O: Into<Origin>,
+    {
+        self.0.options.tracked_origins.remove(&origin.into());
     }
 
-    pub fn clear(&mut self) -> Result<(), BorrowMutError> {
-        todo!()
-        /*
+    pub fn clear(&mut self) -> Result<(), TransactionAcqError> {
+        let mut txn = self.0.doc.try_transact_mut()?;
 
-        this.doc.transact(transaction => {
-          /**
-           * @param {StackItem} stackItem
-           */
-          const clearItem = stackItem => {
-            iterateDeletedStructs(transaction, stackItem.deletions, item => {
-              if (item instanceof Item && this.scope.some(type => isParentOf(type, item))) {
-                keepItem(item, false)
-              }
-            })
-          }
-          this.undoStack.forEach(clearItem)
-          this.redoStack.forEach(clearItem)
-        })
-        this.undoStack = []
-        this.redoStack = []
-             */
+        let len = self.0.undo_stack.len();
+        for item in self.0.undo_stack.drain(0..len) {
+            Self::clear_item(&self.0.scope, &mut txn, item);
+        }
+
+        let len = self.0.redo_stack.len();
+        for item in self.0.redo_stack.drain(0..len) {
+            Self::clear_item(&self.0.scope, &mut txn, item);
+        }
+
+        Ok(())
     }
 
+    fn clear_item<T: WriteTxn>(scope: &HashSet<BranchPtr>, txn: &mut T, stack_item: StackItem) {
+        let blocks = &mut txn.store_mut().blocks;
+        let mut merge_blocks = Vec::default();
+        for (client, range) in stack_item.deletions.iter() {
+            if let Some(mut list) = blocks.get(client) {
+                for r in range.iter() {
+                    if let Some(pivot) = list.find_pivot(r.start) {
+                        let mut block = list.get(pivot);
+                        let clock = block.id().clock;
+                        if clock < r.start {
+                            if let Some(mut right_ptr) =
+                                blocks.split_block_inner(block, r.start - clock)
+                            {
+                                merge_blocks.push(*right_ptr.id());
+                                block = right_ptr;
+                            }
+                        }
+
+                        let mut curr = Some(block);
+                        while let Some(mut block) = curr {
+                            let clock = block.id().clock;
+                            if clock + block.len() < r.end {
+                                if let Block::Item(item) = block.clone().deref_mut() {
+                                    //begin: custom part
+                                    for parent in scope.iter() {
+                                        if parent.is_parent_of(Some(block)) {
+                                            item.info.clear_keep();
+                                            break;
+                                        }
+                                    }
+                                    // end: custom part
+
+                                    curr = item.right;
+                                }
+                            } else {
+                                break;
+                            }
+                        }
+
+                        if let Some(mut block) = curr {
+                            let clock = block.id().clock;
+                            if clock + block.len() > r.end {
+                                if let Some(right_ptr) =
+                                    blocks.split_block_inner(block, clock + block.len() - r.end)
+                                {
+                                    merge_blocks.push(*right_ptr.id());
+                                }
+
+                                //begin: custom part
+                                for parent in scope.iter() {
+                                    if parent.is_parent_of(Some(block)) {
+                                        if let Block::Item(item) = block.deref_mut() {
+                                            item.info.clear_keep();
+                                        }
+                                        break;
+                                    }
+                                }
+                                // end: custom part
+                            }
+                        }
+
+                        list = blocks.get(client).unwrap();
+                    }
+                }
+            }
+        }
+    }
+
+    /// [UndoManager] merges undo stack items if they were created withing the time gap smaller than
+    /// [Options::capture_timeout]. You can call this method so that the next stack item won't be
+    /// merged.
+    ///
+    /// Example:
+    /// ```rust
+    /// use yrs::{Doc, GetString, Text, Transact, UndoManager};
+    /// let doc = Doc::new();
+    ///
+    /// // without UndoManager::stop
+    /// let txt = doc.get_or_insert_text("no-stop");
+    /// let mut mgr = UndoManager::new(&doc, &txt);
+    /// txt.insert(&mut doc.transact_mut(), 0, "a");
+    /// txt.insert(&mut doc.transact_mut(), 1, "b");
+    /// mgr.undo().unwrap();
+    /// txt.get_string(&doc.transact()); // => "" (note that 'ab' was removed)
+    ///
+    /// // with UndoManager::stop
+    /// let txt = doc.get_or_insert_text("with-stop");
+    /// let mut mgr = UndoManager::new(&doc, &txt);
+    /// txt.insert(&mut doc.transact_mut(), 0, "a");
+    /// mgr.stop();
+    /// txt.insert(&mut doc.transact_mut(), 1, "b");
+    /// mgr.undo().unwrap();
+    /// txt.get_string(&doc.transact()); // => "a" (note that only 'b' was removed)
+    /// ```
     pub fn stop(&mut self) {
-        /*
-         * UndoManager merges Undo-StackItem if they are created within time-gap
-         * smaller than `options.captureTimeout`. Call `um.stopCapturing()` so that the next
-         * StackItem won't be merged.
-         *
-         *
-         * @example
-         *     // without stopCapturing
-         *     ytext.insert(0, 'a')
-         *     ytext.insert(1, 'b')
-         *     um.undo()
-         *     ytext.toString() // => '' (note that 'ab' was removed)
-         *     // with stopCapturing
-         *     ytext.insert(0, 'a')
-         *     um.stopCapturing()
-         *     ytext.insert(0, 'b')
-         *     um.undo()
-         *     ytext.toString() // => 'a' (note that only 'b' was removed)
-         *
-         */
-        self.last_change = 0;
+        self.0.last_change = 0;
     }
 
     /// Are there any undo steps available?
     pub fn can_undo(&self) -> bool {
-        !self.undo_stack.is_empty()
+        !self.0.undo_stack.is_empty()
     }
 
     /// Undo last change on type.
-    pub fn undo(&mut self) -> Result<bool, BorrowMutError> {
-        self.undoing = true;
-        let res = Self::pop(&mut self.undo_stack)?;
-        self.undoing = false;
-        todo!()
-        /*
-        this.undoing = true
-        let res
-        try {
-          res = popStackItem(this, this.undoStack, 'undo')
-        } finally {
-          this.undoing = false
-        }
-             */
+    pub fn undo(&mut self) -> Result<bool, TransactionAcqError> {
+        self.0.undoing = true;
+        let res = Self::pop(&mut self.0.undo_stack);
+        self.0.undoing = false;
+        res
     }
 
     /// Are there any redo steps available?
     pub fn can_redo(&self) -> bool {
-        !self.redo_stack.is_empty()
+        !self.0.redo_stack.is_empty()
     }
 
     /// Redo last undo operation.
-    pub fn redo(&mut self) -> Result<bool, BorrowMutError> {
-        self.redoing = true;
-        let res = Self::pop(&mut self.redo_stack)?;
-        self.redoing = false;
-        todo!()
-        /*
-            this.redoing = true
-        let res
-        try {
-          res = popStackItem(this, this.redoStack, 'redo')
-        } finally {
-          this.redoing = false
-        }
-        return res
-             */
+    pub fn redo(&mut self) -> Result<bool, TransactionAcqError> {
+        self.0.redoing = true;
+        let res = Self::pop(&mut self.0.redo_stack);
+        self.0.redoing = false;
+        res
     }
 
-    fn pop(stack: &mut Vec<StackItem>) -> Result<(), BorrowMutError> {
+    fn pop(stack: &mut Vec<StackItem>) -> Result<bool, TransactionAcqError> {
         todo!()
     }
 }
@@ -203,7 +290,7 @@ pub type UndoEventSubscription = Subscription<Arc<dyn Fn(&TransactionMut, &Event
 #[derive(Clone)]
 pub struct Options {
     pub capture_timeout: Duration,
-    pub tracked_origins: HashSet<Rc<dyn TransactionOrigin>>,
+    pub tracked_origins: HashSet<Origin>,
 }
 
 impl Default for Options {
@@ -221,11 +308,17 @@ struct StackItem {
     insertions: DeleteSet,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Event {
     item: StackItem,
-    origin: Rc<dyn TransactionOrigin>,
+    origin: Origin,
     kind: EventKind,
+}
+
+impl Event {
+    pub fn has_changed<T: AsRef<Branch>>(&self, target: &T) -> bool {
+        todo!()
+    }
 }
 
 #[repr(u8)]
@@ -240,14 +333,17 @@ mod test {
     use crate::test_utils::exchange_updates;
     use crate::types::text::{Diff, YChange};
     use crate::types::{Attrs, ToJson};
-    use crate::undo::UndoManager;
+    use crate::undo::{Options, UndoManager};
+    use crate::updates::decoder::Decode;
     use crate::{
-        Array, Doc, GetString, Map, MapPrelim, Text, TextPrelim, Transact, XmlElementPrelim,
-        XmlFragment, XmlTextPrelim,
+        Array, Doc, GetString, Map, MapPrelim, ReadTxn, StateVector, Text, Transact, Update, Xml,
+        XmlElementPrelim, XmlElementRef, XmlFragment, XmlTextPrelim,
     };
     use lib0::any::Any;
     use std::cell::Cell;
     use std::collections::HashMap;
+    use std::convert::TryInto;
+    use std::time::Duration;
 
     #[test]
     fn undo_text() {
@@ -357,7 +453,7 @@ mod test {
         assert_eq!(map1.get(&d1.transact(), "a").unwrap(), 1.into());
 
         // testing sub-types and if it can restore a whole type
-        let sub_type = MapPrelim::from(HashMap::from([("x".to_owned(), 42)]));
+        let sub_type = MapPrelim::from([("x".to_owned(), 42)]);
         map1.insert(&mut d1.transact_mut(), "a", MapPrelim::<u32>::new());
         let sub_type = map1.get(&d1.transact(), "a").unwrap().to_ymap().unwrap();
         sub_type.insert(&mut d1.transact_mut(), "x", 42);
@@ -541,30 +637,30 @@ mod test {
         let doc = Doc::with_client_id(1);
         let txt = doc.get_or_insert_text("test");
         let mut mgr = UndoManager::new(&doc, &txt);
-        let mut counter = Cell::new(0);
-        /*
 
-        const { text0 } = init(tc, { users: 3 })
-        const undoManager = new Y.UndoManager(text0)
-        let counter = 0
-        let receivedMetadata = -1
-        undoManager.on('stack-item-added', /** @param {any} event */ event => {
-          t.assert(event.type != null)
-          t.assert(event.changedParentTypes != null && event.changedParentTypes.has(text0))
-          event.stackItem.meta.set('test', counter++)
-        })
-        undoManager.on('stack-item-popped', /** @param {any} event */ event => {
-          t.assert(event.type != null)
-          t.assert(event.changedParentTypes != null && event.changedParentTypes.has(text0))
-          receivedMetadata = event.stackItem.meta.get('test')
-        })
-        text0.insert(0, 'abc')
-        undoManager.undo()
-        t.assert(receivedMetadata === 0)
-        undoManager.redo()
-        t.assert(receivedMetadata === 1)
-               */
-        todo!()
+        let mut counter = Cell::new(0);
+
+        let mut counter_copy = counter.clone();
+        let txt_clone = txt.clone();
+        let _sub1 = mgr.observe_item_added(move |txn, e| {
+            assert!(e.has_changed(&txt_clone));
+            let c = counter_copy.get();
+            counter_copy.set(c + 1);
+        });
+
+        let mut counter_copy = counter.clone();
+        let txt_clone = txt.clone();
+        let _sub2 = mgr.observe_item_popped(move |txn, e| {
+            assert!(e.has_changed(&txt_clone));
+            let c = counter_copy.get();
+            counter_copy.set(c - 10);
+        });
+
+        txt.insert(&mut doc.transact_mut(), 0, "abc");
+        mgr.undo().unwrap();
+        assert_eq!(counter.get(), 1);
+        mgr.redo().unwrap();
+        assert_eq!(counter.get(), -9);
     }
 
     #[test]
@@ -609,14 +705,14 @@ mod test {
 
     #[test]
     fn undo_in_embed() {
-        let doc = Doc::with_client_id(1);
-        let txt = doc.get_or_insert_text("test");
-        let mut mgr = UndoManager::new(&doc, &txt);
+        //let doc = Doc::with_client_id(1);
+        //let txt = doc.get_or_insert_text("test");
+        //let mut mgr = UndoManager::new(&doc, &txt);
 
-        let nested_text = TextPrelim("initial text");
-        mgr.stop();
-        let attrs = Attrs::from([("bold".into(), true.into())]);
-        txt.insert_embed_with_attributes(&mut doc.transact_mut(), 0, nested_text, attrs);
+        //let nested_text = TextPrelim("initial text");
+        //mgr.stop();
+        //let attrs = Attrs::from([("bold".into(), true.into())]);
+        //txt.insert_embed_with_attributes(&mut doc.transact_mut(), 0, nested_text, attrs);
 
         /*
 
@@ -653,313 +749,409 @@ mod test {
 
     #[test]
     fn undo_until_change_performed() {
-        /*
+        let doc1 = Doc::with_client_id(1);
+        let doc2 = Doc::with_client_id(2);
+        let d1 = doc1.clone();
+        let d2 = doc2.clone();
+        let _sub1 = doc1.observe_update_v1(move |txn, e| {
+            d2.transact_mut()
+                .apply_update(Update::decode_v1(&e.update).unwrap());
+        });
+        let _sub2 = doc2.observe_update_v1(move |txn, e| {
+            d1.transact_mut()
+                .apply_update(Update::decode_v1(&e.update).unwrap());
+        });
 
-        const doc = new Y.Doc()
-        const doc2 = new Y.Doc()
-        doc.on('update', update => Y.applyUpdate(doc2, update))
-        doc2.on('update', update => Y.applyUpdate(doc, update))
+        let arr1 = doc1.get_or_insert_array("array");
+        let arr2 = doc2.get_or_insert_array("array");
+        arr1.push_back(
+            &mut doc1.transact_mut(),
+            MapPrelim::from([("hello".to_owned(), "world".to_owned())]),
+        );
+        let map1 = arr1.get(&doc1.transact(), 0).unwrap().to_ymap().unwrap();
+        arr2.push_back(
+            &mut doc2.transact_mut(),
+            MapPrelim::from([("key".to_owned(), "value".to_owned())]),
+        );
+        let map2 = arr1.get(&doc2.transact(), 0).unwrap().to_ymap().unwrap();
 
-        const yArray = doc.getArray('array')
-        const yArray2 = doc2.getArray('array')
-        const yMap = new Y.Map()
-        yMap.set('hello', 'world')
-        yArray.push([yMap])
-        const yMap2 = new Y.Map()
-        yMap2.set('key', 'value')
-        yArray.push([yMap2])
+        let mut mgr1 = UndoManager::new(&doc1, &arr1);
+        mgr1.include_origin(doc1.client_id());
+        let mut mgr2 = UndoManager::new(&doc2, &arr2);
+        mgr2.include_origin(doc2.client_id());
 
-        const undoManager = new Y.UndoManager([yArray], { trackedOrigins: new Set([doc.clientID]) })
-        const undoManager2 = new Y.UndoManager([doc2.get('array')], { trackedOrigins: new Set([doc2.clientID]) })
+        map2.insert(
+            &mut doc2.transact_mut_with(doc1.client_id()),
+            "key",
+            "value modified",
+        );
+        mgr1.stop();
 
-        Y.transact(doc, () => yMap2.set('key', 'value modified'), doc.clientID)
-        undoManager.stopCapturing()
-        Y.transact(doc, () => yMap.set('hello', 'world modified'), doc.clientID)
-        Y.transact(doc2, () => yArray2.delete(0), doc2.clientID)
-        undoManager2.undo()
-        undoManager.undo()
-        t.compareStrings(yMap2.get('key'), 'value')
-               */
-        todo!()
+        map1.insert(
+            &mut doc2.transact_mut_with(doc1.client_id()),
+            "hello",
+            "world modified",
+        );
+        arr1.remove_range(&mut doc1.transact_mut_with(doc2.client_id()), 0, 1);
+        mgr2.undo().unwrap();
+        mgr1.undo().unwrap();
+        assert_eq!(map2.get(&doc2.transact(), "key"), Some("value".into()));
     }
 
     #[test]
     fn nested_undo() {
         // This issue has been reported in https://github.com/yjs/yjs/issues/317
-        /*
+        let doc = Doc::with_options({
+            let mut o = crate::doc::Options::default();
+            o.skip_gc = true;
+            o.client_id = 1;
+            o
+        });
+        let design = doc.get_or_insert_map("map");
+        let mut mgr = UndoManager::with_options(&doc, &design, {
+            let mut o = Options::default();
+            o.capture_timeout = Duration::default();
+            o
+        });
+        {
+            let mut txn = doc.transact_mut();
+            design.insert(&mut txn, "text", MapPrelim::<u32>::new());
+            let a = design.get(&txn, "text").unwrap().to_ymap().unwrap();
+            a.insert(
+                &mut txn,
+                "blocks",
+                MapPrelim::from([("text".to_owned(), "Type something".to_owned())]),
+            );
+        }
 
-        const doc = new Y.Doc({ gc: false })
-        const design = doc.getMap()
-        const undoManager = new Y.UndoManager(design, { captureTimeout: 0 })
+        {
+            let mut txn = doc.transact_mut();
+            design.insert(&mut txn, "blocks", MapPrelim::<u32>::new());
+            let a = design.get(&txn, "text").unwrap().to_ymap().unwrap();
+            a.insert(
+                &mut txn,
+                "blocks",
+                MapPrelim::from([("text".to_owned(), "Something".to_owned())]),
+            );
+        }
 
-        /**
-         * @type {Y.Map<any>}
-         */
-        const text = new Y.Map()
+        {
+            let mut txn = doc.transact_mut();
+            design.insert(&mut txn, "blocks", MapPrelim::<u32>::new());
+            let a = design.get(&txn, "text").unwrap().to_ymap().unwrap();
+            a.insert(
+                &mut txn,
+                "blocks",
+                MapPrelim::from([("text".to_owned(), "Something else".to_owned())]),
+            );
+        }
 
-        const blocks1 = new Y.Array()
-        const blocks1block = new Y.Map()
-
-        doc.transact(() => {
-          blocks1block.set('text', 'Type Something')
-          blocks1.push([blocks1block])
-          text.set('blocks', blocks1block)
-          design.set('text', text)
-        })
-
-        const blocks2 = new Y.Array()
-        const blocks2block = new Y.Map()
-        doc.transact(() => {
-          blocks2block.set('text', 'Something')
-          blocks2.push([blocks2block])
-          text.set('blocks', blocks2block)
-        })
-
-        const blocks3 = new Y.Array()
-        const blocks3block = new Y.Map()
-        doc.transact(() => {
-          blocks3block.set('text', 'Something Else')
-          blocks3.push([blocks3block])
-          text.set('blocks', blocks3block)
-        })
-
-        t.compare(design.toJSON(), { text: { blocks: { text: 'Something Else' } } })
-        undoManager.undo()
-        t.compare(design.toJSON(), { text: { blocks: { text: 'Something' } } })
-        undoManager.undo()
-        t.compare(design.toJSON(), { text: { blocks: { text: 'Type Something' } } })
-        undoManager.undo()
-        t.compare(design.toJSON(), { })
-        undoManager.redo()
-        t.compare(design.toJSON(), { text: { blocks: { text: 'Type Something' } } })
-        undoManager.redo()
-        t.compare(design.toJSON(), { text: { blocks: { text: 'Something' } } })
-        undoManager.redo()
-        t.compare(design.toJSON(), { text: { blocks: { text: 'Something Else' } } })
-               */
-        todo!()
+        assert_eq!(
+            design.to_json(&doc.transact()),
+            Any::from_json(r#"{ "text": { "blocks": { "text": "Something else" } } }"#).unwrap()
+        );
+        mgr.undo().unwrap();
+        assert_eq!(
+            design.to_json(&doc.transact()),
+            Any::from_json(r#"{ "text": { "blocks": { "text": "Something" } } }"#).unwrap()
+        );
+        mgr.undo().unwrap();
+        assert_eq!(
+            design.to_json(&doc.transact()),
+            Any::from_json(r#"{ "text": { "blocks": { "text": "Type something" } } }"#).unwrap()
+        );
+        mgr.undo().unwrap();
+        assert_eq!(
+            design.to_json(&doc.transact()),
+            Any::from_json(r#"{}"#).unwrap()
+        );
+        mgr.redo().unwrap();
+        assert_eq!(
+            design.to_json(&doc.transact()),
+            Any::from_json(r#"{ "text": { "blocks": { "text": "Type something" } } }"#).unwrap()
+        );
+        mgr.redo().unwrap();
+        assert_eq!(
+            design.to_json(&doc.transact()),
+            Any::from_json(r#"{ "text": { "blocks": { "text": "Something" } } }"#).unwrap()
+        );
+        mgr.redo().unwrap();
+        assert_eq!(
+            design.to_json(&doc.transact()),
+            Any::from_json(r#"{ "text": { "blocks": { "text": "Something else" } } }"#).unwrap()
+        );
     }
 
     fn consecutive_redo_bug() {
         // https://github.com/yjs/yjs/issues/355
-        todo!()
-        /*
+        let doc = Doc::with_client_id(1);
+        let root = doc.get_or_insert_map("root");
+        let mut mgr = UndoManager::new(&doc, &root);
 
-        const doc = new Y.Doc()
-        const yRoot = doc.getMap()
-        const undoMgr = new Y.UndoManager(yRoot)
+        root.insert(
+            &mut doc.transact_mut(),
+            "a",
+            MapPrelim::<i32>::from(HashMap::from([
+                ("x".to_owned(), 0.into()),
+                ("y".to_owned(), 0.into()),
+            ])),
+        );
+        let point = root.get(&doc.transact(), "a").unwrap().to_ymap().unwrap();
+        mgr.stop();
 
-        let yPoint = new Y.Map()
-        yPoint.set('x', 0)
-        yPoint.set('y', 0)
-        yRoot.set('a', yPoint)
-        undoMgr.stopCapturing()
+        point.insert(&mut doc.transact_mut(), "x", 100);
+        point.insert(&mut doc.transact_mut(), "y", 100);
+        mgr.stop();
 
-        yPoint.set('x', 100)
-        yPoint.set('y', 100)
-        undoMgr.stopCapturing()
+        point.insert(&mut doc.transact_mut(), "x", 200);
+        point.insert(&mut doc.transact_mut(), "y", 200);
+        mgr.stop();
 
-        yPoint.set('x', 200)
-        yPoint.set('y', 200)
-        undoMgr.stopCapturing()
+        point.insert(&mut doc.transact_mut(), "x", 300);
+        point.insert(&mut doc.transact_mut(), "y", 300);
+        mgr.stop();
 
-        yPoint.set('x', 300)
-        yPoint.set('y', 300)
-        undoMgr.stopCapturing()
+        let actual = point.to_json(&doc.transact());
+        assert_eq!(actual, Any::from_json(r#"{"x":300,"y":300}"#).unwrap());
 
-        t.compare(yPoint.toJSON(), { x: 300, y: 300 })
+        mgr.undo().unwrap(); // x=200, y=200
+        let actual = point.to_json(&doc.transact());
+        assert_eq!(actual, Any::from_json(r#"{"x":200,"y":200}"#).unwrap());
 
-        undoMgr.undo() // x=200, y=200
-        t.compare(yPoint.toJSON(), { x: 200, y: 200 })
-        undoMgr.undo() // x=100, y=100
-        t.compare(yPoint.toJSON(), { x: 100, y: 100 })
-        undoMgr.undo() // x=0, y=0
-        t.compare(yPoint.toJSON(), { x: 0, y: 0 })
-        undoMgr.undo() // nil
-        t.compare(yRoot.get('a'), undefined)
+        mgr.undo().unwrap(); // x=100, y=100
+        let actual = point.to_json(&doc.transact());
+        assert_eq!(actual, Any::from_json(r#"{"x":100,"y":100}"#).unwrap());
 
-        undoMgr.redo() // x=0, y=0
-        yPoint = yRoot.get('a')
+        mgr.undo().unwrap(); // x=0, y=0
+        let actual = point.to_json(&doc.transact());
+        assert_eq!(actual, Any::from_json(r#"{"x":0,"y":0}"#).unwrap());
 
-        t.compare(yPoint.toJSON(), { x: 0, y: 0 })
-        undoMgr.redo() // x=100, y=100
-        t.compare(yPoint.toJSON(), { x: 100, y: 100 })
-        undoMgr.redo() // x=200, y=200
-        t.compare(yPoint.toJSON(), { x: 200, y: 200 })
-        undoMgr.redo() // expected x=300, y=300, actually nil
-        t.compare(yPoint.toJSON(), { x: 300, y: 300 })
-               */
+        mgr.undo().unwrap(); // null
+        assert_eq!(root.get(&doc.transact(), "a"), None);
+
+        mgr.redo().unwrap(); // x=0, y=0
+        let point = root.get(&doc.transact(), "a").unwrap().to_ymap().unwrap();
+
+        assert_eq!(actual, Any::from_json(r#"{"x":0,"y":0}"#).unwrap());
+
+        mgr.redo().unwrap(); // x=100, y=100
+        let actual = point.to_json(&doc.transact());
+        assert_eq!(actual, Any::from_json(r#"{"x":100,"y":100}"#).unwrap());
+
+        mgr.redo().unwrap(); // x=200, y=200
+        let actual = point.to_json(&doc.transact());
+        assert_eq!(actual, Any::from_json(r#"{"x":200,"y":200}"#).unwrap());
+
+        mgr.redo().unwrap(); // x=300, y=300
+        let actual = point.to_json(&doc.transact());
+        assert_eq!(actual, Any::from_json(r#"{"x":300,"y":300}"#).unwrap());
     }
 
     #[test]
     fn undo_xml_bug() {
         // https://github.com/yjs/yjs/issues/304
-        todo!()
-        /*
-        const origin = 'origin'
-        const doc = new Y.Doc()
-        const fragment = doc.getXmlFragment('t')
-        const undoManager = new Y.UndoManager(fragment, {
-          captureTimeout: 0,
-          trackedOrigins: new Set([origin])
-        })
+        const ORIGIN: &str = "origin";
+        let doc = Doc::with_client_id(1);
+        let f = doc.get_or_insert_xml_fragment("t");
+        let mut mgr = UndoManager::with_options(&doc, &f, {
+            let mut o = Options::default();
+            o.capture_timeout = Duration::default();
+            o
+        });
+        mgr.include_origin(ORIGIN.clone());
 
         // create element
-        doc.transact(() => {
-          const e = new Y.XmlElement('test-node')
-          e.setAttribute('a', '100')
-          e.setAttribute('b', '0')
-          fragment.insert(fragment.length, [e])
-        }, origin)
+        {
+            let mut txn = doc.transact_mut_with(ORIGIN.clone());
+            let e = f.insert(&mut txn, 0, XmlElementPrelim::empty("test-node"));
+            e.insert_attribute(&mut txn, "a", "100");
+            e.insert_attribute(&mut txn, "b", "0");
+        }
 
         // change one attribute
-        doc.transact(() => {
-          const e = fragment.get(0)
-          e.setAttribute('a', '200')
-        }, origin)
+        {
+            let mut txn = doc.transact_mut_with(ORIGIN.clone());
+            let e: XmlElementRef = f.get(&txn, 0).unwrap().try_into().unwrap();
+            e.insert_attribute(&mut txn, "a", "200");
+        }
 
         // change both attributes
-        doc.transact(() => {
-          const e = fragment.get(0)
-          e.setAttribute('a', '180')
-          e.setAttribute('b', '50')
-        }, origin)
+        {
+            let mut txn = doc.transact_mut_with(ORIGIN.clone());
+            let e: XmlElementRef = f.get(&txn, 0).unwrap().try_into().unwrap();
+            e.insert_attribute(&mut txn, "a", "180");
+            e.insert_attribute(&mut txn, "b", "50");
+        }
 
-        undoManager.undo()
-        undoManager.undo()
-        undoManager.undo()
+        mgr.undo().unwrap();
+        mgr.undo().unwrap();
+        mgr.undo().unwrap();
 
-        undoManager.redo()
-        undoManager.redo()
-        undoManager.redo()
-        t.compare(fragment.toString(), '<test-node a="180" b="50"></test-node>')
-               */
+        mgr.redo().unwrap();
+        mgr.redo().unwrap();
+        mgr.redo().unwrap();
+
+        let str = f.get_string(&doc.transact());
+        assert_eq!(str, r#"<test-node a="180" b="50"></test-node>"#);
     }
 
     #[test]
     fn undo_block_bug() {
         // https://github.com/yjs/yjs/issues/343
-        todo!()
-        /*
-
-        const doc = new Y.Doc({ gc: false })
-        const design = doc.getMap()
-
-        const undoManager = new Y.UndoManager(design, { captureTimeout: 0 })
-
-        const text = new Y.Map()
-
-        const blocks1 = new Y.Array()
-        const blocks1block = new Y.Map()
-        doc.transact(() => {
-          blocks1block.set('text', '1')
-          blocks1.push([blocks1block])
-
-          text.set('blocks', blocks1block)
-          design.set('text', text)
-        })
-
-        const blocks2 = new Y.Array()
-        const blocks2block = new Y.Map()
-        doc.transact(() => {
-          blocks2block.set('text', '2')
-          blocks2.push([blocks2block])
-          text.set('blocks', blocks2block)
-        })
-
-        const blocks3 = new Y.Array()
-        const blocks3block = new Y.Map()
-        doc.transact(() => {
-          blocks3block.set('text', '3')
-          blocks3.push([blocks3block])
-          text.set('blocks', blocks3block)
-        })
-
-        const blocks4 = new Y.Array()
-        const blocks4block = new Y.Map()
-        doc.transact(() => {
-          blocks4block.set('text', '4')
-          blocks4.push([blocks4block])
-          text.set('blocks', blocks4block)
-        })
-
+        let doc = Doc::with_options({
+            let mut o = crate::doc::Options::default();
+            o.client_id = 1;
+            o.skip_gc = true;
+            o
+        });
+        let design = doc.get_or_insert_map("map");
+        let mut mgr = UndoManager::with_options(&doc, &design, {
+            let mut o = Options::default();
+            o.capture_timeout = Duration::default();
+            o
+        });
+        let text = {
+            let mut txn = doc.transact_mut();
+            design.insert(
+                &mut txn,
+                "text",
+                MapPrelim::from([(
+                    "blocks".into(),
+                    MapPrelim::from([("text".to_owned(), "1".to_owned())]),
+                )]),
+            );
+            design.get(&txn, "text").unwrap().to_ymap().unwrap()
+        };
+        {
+            let mut txn = doc.transact_mut();
+            text.insert(
+                &mut txn,
+                "blocks",
+                MapPrelim::from([("text".to_owned(), "1".to_owned())]),
+            );
+        }
+        {
+            let mut txn = doc.transact_mut();
+            text.insert(
+                &mut txn,
+                "blocks",
+                MapPrelim::from([("text".to_owned(), "3".to_owned())]),
+            );
+        }
+        {
+            let mut txn = doc.transact_mut();
+            text.insert(
+                &mut txn,
+                "blocks",
+                MapPrelim::from([("text".to_owned(), "4".to_owned())]),
+            );
+        }
         // {"text":{"blocks":{"text":"4"}}}
-        undoManager.undo() // {"text":{"blocks":{"3"}}}
-        undoManager.undo() // {"text":{"blocks":{"text":"2"}}}
-        undoManager.undo() // {"text":{"blocks":{"text":"1"}}}
-        undoManager.undo() // {}
-        undoManager.redo() // {"text":{"blocks":{"text":"1"}}}
-        undoManager.redo() // {"text":{"blocks":{"text":"2"}}}
-        undoManager.redo() // {"text":{"blocks":{"text":"3"}}}
-        undoManager.redo() // {"text":{}}
-        t.compare(design.toJSON(), { text: { blocks: { text: '4' } } })
-               */
+        mgr.undo().unwrap(); // {"text":{"blocks":{"3"}}}
+        mgr.undo().unwrap(); // {"text":{"blocks":{"text":"2"}}}
+        mgr.undo().unwrap(); // {"text":{"blocks":{"text":"1"}}}
+        mgr.undo().unwrap(); // {}
+        mgr.redo().unwrap(); // {"text":{"blocks":{"text":"1"}}}
+        mgr.redo().unwrap(); // {"text":{"blocks":{"text":"2"}}}
+        mgr.redo().unwrap(); // {"text":{"blocks":{"text":"3"}}}
+        mgr.redo().unwrap(); // {"text":{}}
+        let actual = design.to_json(&doc.transact());
+        assert_eq!(
+            actual,
+            Any::from_json(r#"{"text":{"blocks":{"text":"4"}}}"#).unwrap()
+        );
     }
 
     #[test]
     fn undo_delete_text_format() {
         // https://github.com/yjs/yjs/issues/392
-        todo!()
-        /*
+        let doc = Doc::with_client_id(1);
+        let txt = doc.get_or_insert_text("test");
+        txt.insert(
+            &mut doc.transact_mut(),
+            0,
+            "Attack ships on fire off the shoulder of Orion.",
+        );
+        let doc2 = Doc::with_client_id(2);
+        let txt2 = doc2.get_or_insert_text("test");
 
-        const doc = new Y.Doc()
-        const text = doc.getText()
-        text.insert(0, 'Attack ships on fire off the shoulder of Orion.')
-        const doc2 = new Y.Doc()
-        const text2 = doc2.getText()
-        Y.applyUpdate(doc2, Y.encodeStateAsUpdate(doc))
-        const undoManager = new Y.UndoManager(text)
+        doc2.transact_mut().apply_update(
+            Update::decode_v1(
+                &doc.transact()
+                    .encode_state_as_update_v1(&StateVector::default()),
+            )
+            .unwrap(),
+        );
+        let mut mgr = UndoManager::new(&doc, &txt);
+        let attrs = Attrs::from([("bold".into(), true.into())]);
+        txt.format(&mut doc.transact_mut(), 13, 7, attrs.clone());
+        mgr.stop();
+        doc2.transact_mut().apply_update(
+            Update::decode_v1(
+                &doc.transact()
+                    .encode_state_as_update_v1(&StateVector::default()),
+            )
+            .unwrap(),
+        );
+        let attrs2 = Attrs::from([("bold".into(), Any::Null)]);
+        txt.format(&mut doc.transact_mut(), 16, 4, attrs.clone());
 
-        text.format(13, 7, { bold: true })
-        undoManager.stopCapturing()
-        Y.applyUpdate(doc2, Y.encodeStateAsUpdate(doc))
+        mgr.stop();
+        doc2.transact_mut().apply_update(
+            Update::decode_v1(
+                &doc.transact()
+                    .encode_state_as_update_v1(&StateVector::default()),
+            )
+            .unwrap(),
+        );
 
-        text.format(16, 4, { bold: null })
-        undoManager.stopCapturing()
-        Y.applyUpdate(doc2, Y.encodeStateAsUpdate(doc))
-
-        undoManager.undo()
-        Y.applyUpdate(doc2, Y.encodeStateAsUpdate(doc))
-
-        const expect = [
-          { insert: 'Attack ships ' },
-          {
-            insert: 'on fire',
-            attributes: { bold: true }
-          },
-          { insert: ' off the shoulder of Orion.' }
-        ]
-        t.compare(text.toDelta(), expect)
-        t.compare(text2.toDelta(), expect)
-               */
+        mgr.undo().unwrap();
+        doc2.transact_mut().apply_update(
+            Update::decode_v1(
+                &doc.transact()
+                    .encode_state_as_update_v1(&StateVector::default()),
+            )
+            .unwrap(),
+        );
+        let expected = vec![
+            Diff::new("Attack ships ".into(), None),
+            Diff::new("on fire".into(), Some(Box::new(attrs))),
+            Diff::new(" off the shoulder of Orion.".into(), None),
+        ];
+        assert_eq!(txt.diff(&doc.transact(), YChange::identity), expected);
+        assert_eq!(txt2.diff(&doc2.transact(), YChange::identity), expected);
     }
 
     #[test]
     fn special_deletion_case() {
         // https://github.com/yjs/yjs/issues/447
-        todo!()
-        /*
-
-        const origin = 'undoable'
-        const doc = new Y.Doc()
-        const fragment = doc.getXmlFragment()
-        const undoManager = new Y.UndoManager(fragment, { trackedOrigins: new Set([origin]) })
-        doc.transact(() => {
-          const e = new Y.XmlElement('test')
-          e.setAttribute('a', '1')
-          e.setAttribute('b', '2')
-          fragment.insert(0, [e])
-        })
-        t.compareStrings(fragment.toString(), '<test a="1" b="2"></test>')
-        doc.transact(() => {
-          // change attribute "b" and delete test-node
-          const e = fragment.get(0)
-          e.setAttribute('b', '3')
-          fragment.delete(0)
-        }, origin)
-        t.compareStrings(fragment.toString(), '')
-        undoManager.undo()
-        t.compareStrings(fragment.toString(), '<test a="1" b="2"></test>')
-               */
+        const ORIGIN: &str = "undoable";
+        let doc = Doc::with_client_id(1);
+        let f = doc.get_or_insert_xml_fragment("test");
+        let mut mgr = UndoManager::new(&doc, &f);
+        mgr.include_origin(ORIGIN.clone());
+        {
+            let mut txn = doc.transact_mut();
+            let e = f.insert(&mut txn, 0, XmlElementPrelim::empty("test"));
+            e.insert_attribute(&mut txn, "a", "1");
+            e.insert_attribute(&mut txn, "b", "2");
+        }
+        assert_eq!(
+            f.get_string(&doc.transact()),
+            r#"<test a="1" b="2"></test>"#
+        );
+        {
+            // change attribute "b" and delete test-node
+            let mut txn = doc.transact_mut_with(ORIGIN);
+            let e: XmlElementRef = f.get(&txn, 0).unwrap().try_into().unwrap();
+            e.insert_attribute(&mut txn, "b", "3");
+            f.remove_range(&mut txn, 0, 1);
+        }
+        assert_eq!(f.get_string(&doc.transact()), "");
+        mgr.undo().unwrap();
+        assert_eq!(
+            f.get_string(&doc.transact()),
+            r#"<test a="1" b="2"></test>"#
+        );
     }
 }
