@@ -1,6 +1,6 @@
 [package]
 name = "lib0"
-version = "0.14.0"
+version = "0.14.1"
 authors = ["Kevin Jahns <kevin.jahns@pm.me>","Bartosz Sypytkowski <b.sypytkowski@gmail.com>"]
 edition = "2018"
 license = "MIT"
