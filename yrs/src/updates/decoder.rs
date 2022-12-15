@@ -349,7 +349,8 @@ impl<'a> Decoder for DecoderV2<'a> {
     }
 
     fn read_json(&mut self) -> Result<Any, Error> {
-        Any::decode(&mut self.cursor)
+        let src = self.read_string()?;
+        Any::from_json(src)
     }
 
     fn read_key(&mut self) -> Result<Rc<str>, Error> {

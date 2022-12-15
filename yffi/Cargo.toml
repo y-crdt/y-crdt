@@ -1,6 +1,6 @@
 [package]
 name = "yffi"
-version = "0.14.0"
+version = "0.14.1"
 authors = ["Kevin Jahns <kevin.jahns@protonmail.com>","Bartosz Sypytkowski <b.sypytkowski@gmail.com>"]
 keywords = ["crdt", "c-ffi", "yrs"]
 edition = "2018"
@@ -12,8 +12,8 @@ description = "Bindings for the Yrs native C foreign function interface"
 [dev-dependencies]
 
 [dependencies]
-lib0 = { path = "../lib0", version = "0.14.0" }
-yrs = { path = "../yrs", version = "0.14.0" }
+lib0 = { path = "../lib0", version = "0.14.1" }
+yrs = { path = "../yrs", version = "0.14.1" }
 rand = "0.7.0"
 
 [lib]

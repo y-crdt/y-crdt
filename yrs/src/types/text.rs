@@ -1740,21 +1740,23 @@ mod test {
             delta_clone.replace(Some(delta));
         });
 
-        {
+        let a1: Attrs = HashMap::from([("bold".into(), true.into())]);
+        let embed: Any = Any::Map(Box::new(HashMap::from([(
+            "image".into(),
+            "imageSrc.png".into(),
+        )])));
+
+        let (update_v1, update_v2) = {
             let mut txn = d1.transact_mut();
-            let a1: Attrs = HashMap::from([("bold".into(), true.into())]);
             txt1.insert_with_attributes(&mut txn, 0, "ab", a1.clone());
 
-            let embed: Any = Any::Map(Box::new(HashMap::from([(
-                "image".into(),
-                "imageSrc.png".into(),
-            )])));
             let a2: Attrs = HashMap::from([("width".into(), Any::BigInt(100))]);
+
             txt1.insert_embed_with_attributes(&mut txn, 1, embed.clone(), a2.clone());
             drop(txn);
 
-            let a1 = Some(Box::new(a1));
-            let a2 = Some(Box::new(a2));
+            let a1 = Some(Box::new(a1.clone()));
+            let a2 = Some(Box::new(a2.clone()));
 
             let expected = Some(vec![
                 Delta::Inserted("a".into(), a1.clone()),
@@ -1765,11 +1767,43 @@ mod test {
 
             let expected = vec![
                 Diff::new("a".into(), a1.clone()),
-                Diff::new(embed.into(), a2),
+                Diff::new(embed.clone().into(), a2),
                 Diff::new("b".into(), a1.clone()),
             ];
             let mut txn = d1.transact_mut();
             assert_eq!(txt1.diff(&mut txn, YChange::identity), expected);
+
+            let update_v1 = txn.encode_state_as_update_v1(&StateVector::default());
+            let update_v2 = txn.encode_state_as_update_v2(&StateVector::default());
+            (update_v1, update_v2)
+        };
+
+        let a1 = Some(Box::new(a1));
+        let a2 = Some(Box::new(HashMap::from([(
+            "width".into(),
+            Any::Number(100.0),
+        )])));
+
+        let expected = vec![
+            Diff::new("a".into(), a1.clone()),
+            Diff::new(embed.into(), a2),
+            Diff::new("b".into(), a1.clone()),
+        ];
+
+        let d2 = Doc::new();
+        let txt2 = d2.get_or_insert_text("text");
+        {
+            let txn = &mut d2.transact_mut();
+            txn.apply_update(Update::decode_v1(&update_v1).unwrap());
+            assert_eq!(txt2.diff(txn, YChange::identity), expected);
+        }
+
+        let d3 = Doc::new();
+        let txt3 = d3.get_or_insert_text("text");
+        {
+            let txn = &mut d3.transact_mut();
+            txn.apply_update(Update::decode_v2(&update_v2).unwrap());
+            assert_eq!(txt3.diff(txn, YChange::identity), expected);
         }
     }
 
