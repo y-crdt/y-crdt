@@ -3,7 +3,7 @@ use crate::store::Store;
 use crate::types::{Branch, BranchPtr, TypePtr, Value};
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
-use crate::{OffsetKind, Transaction, ID};
+use crate::{OffsetKind, Text, Transaction, ID};
 use lib0::any::Any;
 use lib0::error::Error;
 use std::cell::Cell;
@@ -805,31 +805,31 @@ impl CursorRangeEdge {
         self.repair(store);
 
         let mut running_current = self.block();
-        println!("MANGO, first item: {:?}", running_current);
-        // let mut is_first: true;
-
-        // offset += self.current_block_offset;
-
-        // check for displacement in the current Item
-        // if let Block::Item(item) = running_current.clone().as_deref() {
-        // println!("MANGO, initial item: {:?}", item);
-        // }
 
         while let Some(Block::Item(item)) = running_current.clone().as_deref() {
-            println!("MANGO item: {:?}", item);
             if !item.is_deleted() && item.is_countable() {
                 let item_len = item.len() as usize;
                 offset += item_len;
             }
-
-            // let left = item.left;
-            // if let Some(Block::Item(item)) = left.clone().as_deref() {
-
-            // }
             running_current = item.left;
         }
 
         offset
+    }
+
+    pub fn edge_from_id(assoc: Assoc, id: ID, trx: &mut Transaction) -> CursorRangeEdge {
+        let store = trx.store_mut();
+        let ptr = if assoc == Assoc::Right {
+            store.blocks.get_item_clean_start(&id)
+        } else {
+            store.blocks.get_item_clean_end(&id)
+        };
+
+        CursorRangeEdge {
+            assoc,
+            id,
+            ptr: Cell::new(ptr),
+        }
     }
 }
 
@@ -1008,6 +1008,17 @@ impl ArrayCursor {
         cursor
     }
 
+    pub fn new_from_text(text: Text) -> Self {
+        let branch = text.inner();
+        let iter = MoveIter::new(branch.deref());
+        let mut cursor = ArrayCursor {
+            branch,
+            iter,
+            current_block_offset: 0,
+        };
+        cursor
+    }
+
     /// Returns a last visited block pointer.
     #[inline]
     fn current(&self) -> Option<BlockPtr> {
@@ -1064,6 +1075,8 @@ impl ArrayCursor {
             Assoc::Right => self.right_id(),
             Assoc::Left => self.left_id(),
         };
+
+        println!("DOT 4, {:?}", id);
         Some(CursorRangeEdge::new(id?, assoc, None))
     }
 
@@ -1075,16 +1088,20 @@ impl ArrayCursor {
 
     fn left_id(&self) -> Option<ID> {
         if self.current_block_offset != 0 {
+            println!("DOT 1 {}", self.current_block_offset);
             let mut id = *self.current()?.id();
             id.clock += self.current_block_offset as u32 - 1;
             Some(id)
         } else if let Some(Block::Item(item)) = self.current().as_deref() {
-            if let Some(ptr) = item.left {
-                Some(ptr.last_id())
-            } else {
-                None
-            }
+            println!("DOT 2, {:?}", item.left);
+
+            let content = item.content.get_content();
+
+            println!("content: {:?}", content);
+
+            item.left.map(|ptr| ptr.last_id())
         } else {
+            println!("DOT 3");
             None
         }
     }
@@ -1861,9 +1878,13 @@ pub(crate) enum BlockStatus {
 
 #[cfg(test)]
 mod test {
-    use crate::block::ItemContent;
+    use lib0::decoding::Cursor;
+
+    use crate::block::{ClientID, ItemContent};
     use crate::cursor::{Assoc, MoveIter};
-    use crate::{Doc, ID};
+    use crate::updates::decoder::Decode;
+    use crate::updates::encoder::{Encode, EncoderV1};
+    use crate::{CursorRangeEdge, Doc, Text, ID};
 
     #[test]
     fn move_iter_next() {
@@ -1927,4 +1948,47 @@ mod test {
 
         assert_eq!(i.next(), None);
     }
+
+    // #[test]
+    // fn throw_away_test() {
+    //     struct CursorData {
+    //         client_id: u64,
+    //         clock: u32,
+    //         enc_assoc: Vec<u8>,
+    //     }
+
+    //     let doc = Doc::new();
+    //     let mut txn = doc.transact();
+    //     let text = txn.get_text("name");
+    //     let cursor_range_edge = text.seek(0).get_edge(Assoc::Left).unwrap();
+
+    //     // got the edge
+
+    //     let cursor_data = CursorData {
+    //         client_id: cursor_range_edge.id.client,
+    //         clock: cursor_range_edge.id.clock,
+    //         enc_assoc: cursor_range_edge.assoc.encode_v1(),
+    //     };
+
+    //     // serialize and unseralize here
+
+    //     let new_id = ID {
+    //         client: cursor_data.client_id,
+    //         clock: cursor_data.clock,
+    //     };
+
+    //     let mut new_trx = doc.transact();
+
+    //     let mut new_edge = CursorRangeEdge::edge_from_id(
+    //         Assoc::decode_v1(&cursor_data.enc_assoc[..]).unwrap(),
+    //         new_id,
+    //         &mut new_trx,
+    //     );
+
+    //     let mut final_trx = doc.transact();
+
+    //     let offset = new_edge.get_absolute_offset(&mut final_trx);
+
+    //     println!("final offset: {offset}");
+    // }
 }

@@ -55,6 +55,13 @@ impl Text {
         cursor
     }
 
+    // pub fn get_offset(&self, edge: Option<CursorRangeEdge>, txn: &mut Transaction) -> usize {
+    //     match edge {
+    //         Some(mut edge) => edge.get_absolute_offset(txn),
+    //         None => 0,
+    //     }
+    // }
+
     pub(crate) fn inner(&self) -> BranchPtr {
         self.0
     }
@@ -379,7 +386,7 @@ impl Text {
         let mut negated_attrs = self.insert_attributes(txn, &mut pos, attrs.clone()); //TODO: remove `attrs.clone()`
         let encoding = txn.store().options.offset_kind;
         while let Some(right) = pos.right {
-            if len <= 0 {
+            if len == 0 {
                 break;
             }
 
@@ -987,7 +994,7 @@ mod test {
     use crate::types::text::{Attrs, Delta, Diff};
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
-    use crate::{Doc, StateVector, Update};
+    use crate::{CursorRangeEdge, Doc, StateVector, Update, ID};
     use lib0::any::Any;
     use rand::prelude::StdRng;
     use std::cell::RefCell;
@@ -1982,43 +1989,121 @@ mod test {
 
     #[test]
     fn absolute_position_test() {
-        use crate::cursor::{ArrayCursor, Cursor};
         let doc = Doc::new();
 
         let mut txn = doc.transact();
         let text = txn.get_text("text_name");
 
+        struct RelativePosition {
+            enc_assoc: Vec<u8>,
+            client_id: u64,
+            clock: u32,
+        }
+
         text.insert(&mut txn, 0, "hello world");
         println!("text string: {:?}", text.to_string());
         println!("text: {:?}", text);
 
-        let mut edge1 = text.seek(9).get_edge(Assoc::Left).unwrap();
+        let edge1 = text.seek(9).get_edge(Assoc::Left).unwrap();
 
-        // serialize here
+        let enc_assoc = edge1.assoc.encode_v1();
 
-        println!("CURSOREDGE1: {:?}", edge1);
+        // Mocking out the serialization of the data
+        let rel = RelativePosition {
+            enc_assoc,
+            client_id: edge1.id.client,
+            clock: edge1.id.clock,
+        };
 
-        let offset1 = edge1.get_absolute_offset(&mut txn);
+        let new_id = ID {
+            client: rel.client_id,
+            clock: rel.clock,
+        };
+
+        let mut origin_edge = CursorRangeEdge::edge_from_id(
+            Assoc::decode_v1(&rel.enc_assoc[..]).unwrap(),
+            new_id,
+            &mut txn,
+        );
+
+        let offset1 = origin_edge.get_absolute_offset(&mut txn);
+
         println!("the text offset1: {:?}", offset1);
-
         assert_eq!(offset1, 9);
+
+        // EDGE AT END OF STRING
+        let mut end_edge = text.seek(10).get_edge(Assoc::Left).unwrap();
+        let end_offset = end_edge.get_absolute_offset(&mut txn);
+
+        println!("the text end_offset: {:?}", end_offset);
+        assert_eq!(end_offset, 10);
+
+        // EDGE AT START OF STRING
+        let mut start_edge = text.seek(0).get_edge(Assoc::Left).unwrap();
+        let start_offset = start_edge.get_absolute_offset(&mut txn);
+
+        println!("the text start_offset: {:?}", start_offset);
+        assert_eq!(start_offset, 0);
 
         txn.commit();
 
-        // TXN Y
+        // NEW TXN CONTEXT
         let mut txn_y = doc.transact();
         let text_y = txn_y.get_text("text_name");
 
         text_y.insert(&mut txn_y, 5, " my");
         println!("text_y {:?}", text_y.to_string());
 
-        // deserialize here
+        let offset_y = origin_edge.get_absolute_offset(&mut txn);
 
-        let offset_y = edge1.get_absolute_offset(&mut txn);
         println!("the text offset_y: {:?}", offset_y);
 
         assert_eq!(offset_y, 12);
 
         txn_y.commit();
+    }
+
+    #[test]
+    fn get_end_pos() {
+        struct CursorData {
+            client_id: u64,
+            clock: u32,
+            enc_assoc: Vec<u8>,
+        }
+
+        let doc = Doc::new();
+        let mut txn = doc.transact();
+        let text = txn.get_text("");
+
+        text.insert(&mut txn, 0, "foo");
+
+        txn.commit();
+
+        let mut txn = doc.transact();
+        let text = txn.get_text("");
+
+        let mut edge: CursorRangeEdge = text.seek(0).get_edge(Assoc::Right).unwrap();
+
+        let ab = edge.get_absolute_offset(&mut txn);
+
+        assert_eq!(ab, 0);
+
+        let mut edge: CursorRangeEdge = text.seek(1).get_edge(Assoc::Right).unwrap();
+
+        let ab = edge.get_absolute_offset(&mut txn);
+
+        assert_eq!(ab, 1);
+
+        let mut edge: CursorRangeEdge = text.seek(2).get_edge(Assoc::Right).unwrap();
+
+        let ab = edge.get_absolute_offset(&mut txn);
+
+        assert_eq!(ab, 2);
+
+        let mut edge: CursorRangeEdge = text.seek(3).get_edge(Assoc::Right).unwrap();
+
+        let ab = edge.get_absolute_offset(&mut txn);
+
+        assert_eq!(ab, 3);
     }
 }
