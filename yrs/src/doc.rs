@@ -1,5 +1,5 @@
 use crate::block::{Block, BlockPtr, ClientID, ItemContent, Prelim};
-use crate::event::{AfterTransactionEvent, SubdocsEvent, UpdateEvent};
+use crate::event::{SubdocsEvent, TransactionCleanupEvent, UpdateEvent};
 use crate::store::{Store, StoreRef, WeakStoreRef};
 use crate::transaction::{Origin, Transaction, TransactionMut};
 use crate::types::{
@@ -276,9 +276,9 @@ impl Doc {
     pub fn observe_transaction_cleanup<F>(
         &self,
         f: F,
-    ) -> Result<AfterTransactionSubscription, BorrowMutError>
+    ) -> Result<TransactionCleanupSubscription, BorrowMutError>
     where
-        F: Fn(&TransactionMut, &AfterTransactionEvent) -> () + 'static,
+        F: Fn(&TransactionMut, &TransactionCleanupEvent) -> () + 'static,
     {
         let mut r = self.store.try_borrow_mut()?;
         let events = r.events.get_or_init();
@@ -290,6 +290,26 @@ impl Doc {
         let r = self.store.try_borrow().unwrap();
         if let Some(events) = r.events.as_ref() {
             events.unobserve_transaction_cleanup(subscription_id)
+        }
+    }
+
+    pub fn observe_after_transaction<F>(
+        &self,
+        f: F,
+    ) -> Result<AfterTransactionSubscription, BorrowMutError>
+    where
+        F: Fn(&mut TransactionMut) -> () + 'static,
+    {
+        let mut r = self.store.try_borrow_mut()?;
+        let events = r.events.get_or_init();
+        events.observe_after_transaction(f)
+    }
+
+    /// Cancels the transaction cleanup callback associated with the `subscription_id`
+    pub fn unobserve_after_transaction(&self, subscription_id: SubscriptionId) {
+        let r = self.store.try_borrow().unwrap();
+        if let Some(events) = r.events.as_ref() {
+            events.unobserve_after_transaction(subscription_id)
         }
     }
 
@@ -435,8 +455,10 @@ impl std::fmt::Display for Doc {
 
 pub type UpdateSubscription = crate::Subscription<Arc<dyn Fn(&TransactionMut, &UpdateEvent) -> ()>>;
 
-pub type AfterTransactionSubscription =
-    crate::Subscription<Arc<dyn Fn(&TransactionMut, &AfterTransactionEvent) -> ()>>;
+pub type TransactionCleanupSubscription =
+    crate::Subscription<Arc<dyn Fn(&TransactionMut, &TransactionCleanupEvent) -> ()>>;
+
+pub type AfterTransactionSubscription = crate::Subscription<Arc<dyn Fn(&mut TransactionMut) -> ()>>;
 
 pub type SubdocsSubscription =
     crate::Subscription<Arc<dyn Fn(&TransactionMut, &SubdocsEvent) -> ()>>;

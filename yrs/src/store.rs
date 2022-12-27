@@ -1,14 +1,16 @@
 use crate::block::{BlockPtr, BlockSlice, ClientID, ItemContent};
 use crate::block_store::{BlockStore, StateVector};
-use crate::doc::{DestroySubscription, DocAddr, Options, SubdocsSubscription};
-use crate::event::{AfterTransactionEvent, SubdocsEvent};
+use crate::doc::{
+    AfterTransactionSubscription, DestroySubscription, DocAddr, Options, SubdocsSubscription,
+};
+use crate::event::SubdocsEvent;
 use crate::id_set::DeleteSet;
 use crate::types::{Branch, BranchPtr, Path, PathSegment, TypeRefs};
 use crate::update::PendingUpdate;
 use crate::updates::encoder::{Encode, Encoder};
 use crate::{
-    AfterTransactionSubscription, Doc, Observer, OffsetKind, Snapshot, SubscriptionId,
-    TransactionMut, UpdateEvent, UpdateSubscription, Uuid,
+    Doc, Observer, OffsetKind, Snapshot, SubscriptionId, TransactionCleanupEvent,
+    TransactionCleanupSubscription, TransactionMut, UpdateEvent, UpdateSubscription, Uuid,
 };
 use atomic_refcell::{AtomicRef, AtomicRefCell, AtomicRefMut, BorrowError, BorrowMutError};
 use lib0::error::Error;
@@ -421,10 +423,14 @@ impl<'doc> Iterator for SubdocGuids<'doc> {
 
 #[derive(Default)]
 pub(crate) struct StoreEvents {
+    /// Handles subscriptions for the transaction cleanup event. Events are called with the
+    /// newest updates once they are committed and compacted.
+    pub(crate) transaction_cleanup_events:
+        Option<Observer<Arc<dyn Fn(&TransactionMut, &TransactionCleanupEvent) -> ()>>>,
+
     /// Handles subscriptions for the `afterTransactionCleanup` event. Events are called with the
     /// newest updates once they are committed and compacted.
-    pub(crate) after_transaction_events:
-        Option<Observer<Arc<dyn Fn(&TransactionMut, &AfterTransactionEvent) -> ()>>>,
+    pub(crate) after_transaction_events: Option<Observer<Arc<dyn Fn(&mut TransactionMut) -> ()>>>,
 
     /// A subscription handler. It contains all callbacks with registered by user functions that
     /// are supposed to be called, once a new update arrives.
@@ -509,12 +515,12 @@ impl StoreEvents {
 
     /// Subscribe callback function to updates on the `Doc`. The callback will receive state updates and
     /// deletions when a document transaction is committed.
-    pub fn observe_transaction_cleanup<F>(
+    pub fn observe_after_transaction<F>(
         &mut self,
         f: F,
     ) -> Result<AfterTransactionSubscription, BorrowMutError>
     where
-        F: Fn(&TransactionMut, &AfterTransactionEvent) -> () + 'static,
+        F: Fn(&mut TransactionMut) -> () + 'static,
     {
         let subscription = self
             .after_transaction_events
@@ -524,15 +530,46 @@ impl StoreEvents {
     }
 
     /// Cancels the transaction cleanup callback associated with the `subscription_id`
-    pub fn unobserve_transaction_cleanup(&self, subscription_id: SubscriptionId) {
+    pub fn unobserve_after_transaction(&self, subscription_id: SubscriptionId) {
         if let Some(handler) = self.after_transaction_events.as_ref() {
             (*handler).unsubscribe(subscription_id);
         }
     }
 
-    pub fn emit_transaction_cleanup(&self, txn: &TransactionMut) {
+    pub fn emit_after_transaction(&self, txn: &mut TransactionMut) {
         if let Some(eh) = self.after_transaction_events.as_ref() {
-            let event = AfterTransactionEvent::new(txn);
+            for fun in eh.callbacks() {
+                fun(txn);
+            }
+        }
+    }
+
+    /// Subscribe callback function to updates on the `Doc`. The callback will receive state updates and
+    /// deletions when a document transaction is committed.
+    pub fn observe_transaction_cleanup<F>(
+        &mut self,
+        f: F,
+    ) -> Result<TransactionCleanupSubscription, BorrowMutError>
+    where
+        F: Fn(&TransactionMut, &TransactionCleanupEvent) -> () + 'static,
+    {
+        let subscription = self
+            .transaction_cleanup_events
+            .get_or_insert_with(Observer::new)
+            .subscribe(Arc::new(f));
+        Ok(subscription)
+    }
+
+    /// Cancels the transaction cleanup callback associated with the `subscription_id`
+    pub fn unobserve_transaction_cleanup(&self, subscription_id: SubscriptionId) {
+        if let Some(handler) = self.transaction_cleanup_events.as_ref() {
+            (*handler).unsubscribe(subscription_id);
+        }
+    }
+
+    pub fn emit_transaction_cleanup(&self, txn: &TransactionMut) {
+        if let Some(eh) = self.transaction_cleanup_events.as_ref() {
+            let event = TransactionCleanupEvent::new(txn);
             for fun in eh.callbacks() {
                 fun(txn, &event);
             }

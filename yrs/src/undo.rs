@@ -1,18 +1,16 @@
-use crate::block::Block;
-use crate::doc::TransactionAcqError;
+use crate::block::{Block, BlockPtr};
+use crate::doc::{AfterTransactionSubscription, TransactionAcqError};
 use crate::transaction::Origin;
-use crate::types::{Branch, BranchPtr};
+use crate::types::{Branch, BranchPtr, TypePtr};
 use crate::{
-    AfterTransactionEvent, AfterTransactionSubscription, DeleteSet, DestroySubscription, Doc,
-    Observer, ReadTxn, Subscription, SubscriptionId, Transact, TransactionMut, WriteTxn,
+    DeleteSet, DestroySubscription, Doc, Observer, Store, Subscription, SubscriptionId, Transact,
+    TransactionMut, ID,
 };
-use atomic_refcell::BorrowMutError;
-use std::collections::HashSet;
-use std::mem::MaybeUninit;
-use std::ops::{Deref, DerefMut};
-use std::pin::Pin;
+use std::collections::{HashMap, HashSet};
+use std::ops::Deref;
+use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[repr(transparent)]
 pub struct UndoManager(Box<Inner>);
@@ -25,10 +23,11 @@ struct Inner {
     redo_stack: Vec<StackItem>,
     undoing: bool,
     redoing: bool,
-    last_change: usize,
+    last_change: SystemTime,
     on_after_transaction: Option<AfterTransactionSubscription>,
     on_destroy: Option<DestroySubscription>,
     observer_added: Observer<Arc<dyn Fn(&TransactionMut, &Event) -> ()>>,
+    observer_updated: Observer<Arc<dyn Fn(&TransactionMut, &Event) -> ()>>,
     observer_popped: Observer<Arc<dyn Fn(&TransactionMut, &Event) -> ()>>,
 }
 
@@ -53,10 +52,11 @@ impl UndoManager {
             redo_stack: Vec::new(),
             undoing: false,
             redoing: false,
-            last_change: 0,
+            last_change: SystemTime::UNIX_EPOCH,
             on_after_transaction: None,
             on_destroy: None,
             observer_added: Observer::new(),
+            observer_updated: Observer::new(),
             observer_popped: Observer::new(),
         });
         let inner_ptr = inner.as_mut() as *mut Inner;
@@ -69,9 +69,9 @@ impl UndoManager {
                 .unwrap(),
         );
         inner.on_after_transaction = Some(
-            doc.observe_transaction_cleanup(move |txn, e| {
+            doc.observe_after_transaction(move |txn| {
                 let inner = unsafe { inner_ptr.as_mut().unwrap() };
-                Self::handle_after_transaction(inner, txn, e);
+                Self::handle_after_transaction(inner, txn);
             })
             .unwrap(),
         );
@@ -79,12 +79,94 @@ impl UndoManager {
         UndoManager(inner)
     }
 
-    fn handle_after_transaction(
-        inner: &mut Inner,
-        txn: &TransactionMut,
-        e: &AfterTransactionEvent,
-    ) {
-        todo!()
+    fn should_track(inner: &Inner, txn: &TransactionMut) -> bool {
+        if !(inner.options.capture_transaction)(txn)
+            || !inner
+                .scope
+                .iter()
+                .any(|parent| txn.changed.contains_key(&TypePtr::Branch(parent.clone())))
+        {
+            false
+        } else if let Some(origin) = txn.origin() {
+            inner.options.tracked_origins.contains(origin)
+        } else {
+            true
+        }
+    }
+
+    fn handle_after_transaction(inner: &mut Inner, txn: &mut TransactionMut) {
+        if !Self::should_track(inner, txn) {
+            return;
+        }
+        let undoing = inner.undoing;
+        let redoing = inner.redoing;
+        if undoing {
+            inner.last_change = UNIX_EPOCH; // next undo should not be appended to last stack item
+        } else if !inner.redoing {
+            // neither undoing nor redoing: delete redoStack
+            let len = inner.redo_stack.len();
+            for item in inner.redo_stack.drain(0..len) {
+                Self::clear_item(&inner.scope, txn, item);
+            }
+        }
+
+        let mut insertions = DeleteSet::new();
+        for (client, &end_clock) in txn.after_state().iter() {
+            let start_clock = txn.before_state.get(client);
+            let diff = end_clock - start_clock;
+            if diff != 0 {
+                insertions.insert(ID::new(*client, start_clock), diff);
+            }
+        }
+        let now = SystemTime::now();
+        let stack = if undoing {
+            &mut inner.undo_stack
+        } else {
+            &mut inner.redo_stack
+        };
+        let extend = !undoing
+            && !redoing
+            && !stack.is_empty()
+            && inner.last_change > UNIX_EPOCH
+            && now.duration_since(inner.last_change).unwrap() > inner.options.capture_timeout;
+
+        if extend {
+            // append change to last stack op
+            if let Some(last_op) = stack.last_mut() {
+                // always true - we checked if stack is empty above
+                last_op.deletions.merge(txn.delete_set.clone());
+                last_op.insertions.merge(insertions);
+            }
+        } else {
+            // create a new stack op
+            stack.push(StackItem::new(txn.delete_set.clone(), insertions));
+        }
+
+        if !undoing && !redoing {
+            inner.last_change = now;
+        }
+        // make sure that deleted structs are not gc'd
+        for ptr in txn.delete_set.clone().deleted_blocks(txn) {
+            if ptr.is_item() && inner.scope.iter().any(|b| b.is_parent_of(Some(ptr))) {
+                ptr.keep(true);
+            }
+        }
+
+        let last_op = stack.last().unwrap().clone();
+        let event = if undoing {
+            Event::undo(last_op, txn.origin.clone(), txn.changed.clone())
+        } else {
+            Event::redo(last_op, txn.origin.clone(), txn.changed.clone())
+        };
+        if !extend {
+            for cb in inner.observer_added.callbacks() {
+                cb(txn, &event);
+            }
+        } else {
+            for cb in inner.observer_updated.callbacks() {
+                cb(txn, &event);
+            }
+        }
     }
 
     fn handle_destroy(inner: *mut Inner) {
@@ -156,72 +238,17 @@ impl UndoManager {
         Ok(())
     }
 
-    fn clear_item<T: WriteTxn>(scope: &HashSet<BranchPtr>, txn: &mut T, stack_item: StackItem) {
-        let blocks = &mut txn.store_mut().blocks;
-        let mut merge_blocks = Vec::default();
-        for (client, range) in stack_item.deletions.iter() {
-            if let Some(mut list) = blocks.get(client) {
-                for r in range.iter() {
-                    if let Some(pivot) = list.find_pivot(r.start) {
-                        let mut block = list.get(pivot);
-                        let clock = block.id().clock;
-                        if clock < r.start {
-                            if let Some(mut right_ptr) =
-                                blocks.split_block_inner(block, r.start - clock)
-                            {
-                                merge_blocks.push(*right_ptr.id());
-                                block = right_ptr;
-                            }
-                        }
-
-                        let mut curr = Some(block);
-                        while let Some(mut block) = curr {
-                            let clock = block.id().clock;
-                            if clock + block.len() < r.end {
-                                if let Block::Item(item) = block.clone().deref_mut() {
-                                    //begin: custom part
-                                    for parent in scope.iter() {
-                                        if parent.is_parent_of(Some(block)) {
-                                            item.info.clear_keep();
-                                            break;
-                                        }
-                                    }
-                                    // end: custom part
-
-                                    curr = item.right;
-                                }
-                            } else {
-                                break;
-                            }
-                        }
-
-                        if let Some(mut block) = curr {
-                            let clock = block.id().clock;
-                            if clock + block.len() > r.end {
-                                if let Some(right_ptr) =
-                                    blocks.split_block_inner(block, clock + block.len() - r.end)
-                                {
-                                    merge_blocks.push(*right_ptr.id());
-                                }
-
-                                //begin: custom part
-                                for parent in scope.iter() {
-                                    if parent.is_parent_of(Some(block)) {
-                                        if let Block::Item(item) = block.deref_mut() {
-                                            item.info.clear_keep();
-                                        }
-                                        break;
-                                    }
-                                }
-                                // end: custom part
-                            }
-                        }
-
-                        list = blocks.get(client).unwrap();
-                    }
-                }
+    fn clear_item(scope: &HashSet<BranchPtr>, txn: &mut TransactionMut, stack_item: StackItem) {
+        for ptr in stack_item.deletions.deleted_blocks(txn) {
+            if ptr.is_item() && scope.iter().any(|b| b.is_parent_of(Some(ptr))) {
+                ptr.keep(false);
             }
         }
+    }
+
+    pub fn as_origin(&self) -> Origin {
+        let mgr_ptr: *const Inner = &*self.0;
+        Origin::from(mgr_ptr as usize)
     }
 
     /// [UndoManager] merges undo stack items if they were created withing the time gap smaller than
@@ -251,7 +278,7 @@ impl UndoManager {
     /// txt.get_string(&doc.transact()); // => "a" (note that only 'b' was removed)
     /// ```
     pub fn stop(&mut self) {
-        self.0.last_change = 0;
+        self.0.last_change = UNIX_EPOCH;
     }
 
     /// Are there any undo steps available?
@@ -261,10 +288,20 @@ impl UndoManager {
 
     /// Undo last change on type.
     pub fn undo(&mut self) -> Result<bool, TransactionAcqError> {
+        let mut txn = self.0.doc.try_transact_mut_with(self.as_origin())?;
         self.0.undoing = true;
-        let res = Self::pop(&mut self.0.undo_stack);
-        self.0.undoing = false;
-        res
+        let result = Self::pop(&mut self.0.undo_stack, &mut txn, &self.0.scope);
+        if let Some(item) = result {
+            let e = Event::undo(item, Some(self.as_origin()), txn.changed.clone());
+            for cb in self.0.observer_popped.callbacks() {
+                cb(&txn, &e);
+            }
+            self.0.undoing = false;
+            Ok(true)
+        } else {
+            self.0.undoing = false;
+            Ok(false)
+        }
     }
 
     /// Are there any redo steps available?
@@ -274,15 +311,111 @@ impl UndoManager {
 
     /// Redo last undo operation.
     pub fn redo(&mut self) -> Result<bool, TransactionAcqError> {
+        let mut txn = self.0.doc.try_transact_mut_with(self.as_origin())?;
         self.0.redoing = true;
-        let res = Self::pop(&mut self.0.redo_stack);
-        self.0.redoing = false;
-        res
+        let result = Self::pop(&mut self.0.redo_stack, &mut txn, &self.0.scope);
+        if let Some(item) = result {
+            let e = Event::redo(item, Some(self.as_origin()), txn.changed.clone());
+            for cb in self.0.observer_popped.callbacks() {
+                cb(&txn, &e);
+            }
+            self.0.redoing = false;
+            Ok(true)
+        } else {
+            self.0.redoing = false;
+            Ok(false)
+        }
     }
 
-    fn pop(stack: &mut Vec<StackItem>) -> Result<bool, TransactionAcqError> {
-        todo!()
+    fn pop(
+        stack: &mut Vec<StackItem>,
+        txn: &mut TransactionMut,
+        scope: &HashSet<BranchPtr>,
+    ) -> Option<StackItem> {
+        let mut result = None;
+        while let Some(item) = stack.pop() {
+            let mut to_redo = HashSet::<BlockPtr>::new();
+            let mut to_delete = Vec::<BlockPtr>::new();
+            let mut change_performed = false;
+
+            let deleted: Vec<_> = item.insertions.deleted_blocks(txn).collect();
+            for ptr in deleted {
+                let mut ptr = ptr;
+                if let Block::Item(item) = ptr.clone().deref() {
+                    if item.redone.is_some() {
+                        let mut id = *ptr.id();
+                        let (block, diff) = follow_redone(txn.store(), &id);
+                        ptr = if diff > 0 {
+                            id.clock += diff;
+                            let slice = txn.store.blocks.get_item_clean_start(&id).unwrap();
+                            txn.store.materialize(slice)
+                        } else {
+                            block
+                        };
+                    }
+                    if !item.is_deleted() && scope.iter().any(|b| b.is_parent_of(Some(ptr.clone())))
+                    {
+                        to_delete.push(ptr);
+                    }
+                }
+            }
+
+            for ptr in item.deletions.deleted_blocks(txn) {
+                if ptr.is_item()
+                    && scope.iter().any(|b| b.is_parent_of(Some(ptr.clone())))
+                    && item.insertions.is_deleted(ptr.id())
+                // Never redo structs in stackItem.insertions because they were created and deleted in the same capture interval.
+                {
+                    to_redo.insert(ptr);
+                }
+            }
+
+            let redo_copy = to_redo.clone();
+            for ptr in to_redo {
+                let mut ptr = ptr;
+                change_performed |= ptr.redo(txn, &redo_copy, &item.insertions).is_some();
+            }
+
+            // We want to delete in reverse order so that children are deleted before
+            // parents, so we have more information available when items are filtered.
+            for &item in to_delete.iter().rev() {
+                // if self.options.delete_filter(item) {
+                txn.delete(item);
+                change_performed = true;
+            }
+
+            if change_performed {
+                result = Some(item);
+                break;
+            }
+        }
+        result
     }
+}
+
+fn follow_redone(store: &Store, id: &ID) -> (BlockPtr, u32) {
+    let mut next_id = Some(*id);
+    let mut ptr = None;
+    let mut diff = 0;
+    while {
+        if let Some(mut next) = next_id {
+            if diff > 0 {
+                next.clock += diff;
+                next_id = Some(next.clone());
+            }
+            ptr = store.blocks.get_block(&next);
+            if let Some(Block::Item(item)) = ptr.as_deref() {
+                diff = next.clock - item.id.clock;
+                next_id = item.redone;
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    } {}
+    (ptr.unwrap(), diff)
 }
 
 pub type UndoEventSubscription = Subscription<Arc<dyn Fn(&TransactionMut, &Event) -> ()>>;
@@ -291,6 +424,7 @@ pub type UndoEventSubscription = Subscription<Arc<dyn Fn(&TransactionMut, &Event
 pub struct Options {
     pub capture_timeout: Duration,
     pub tracked_origins: HashSet<Origin>,
+    pub capture_transaction: Rc<dyn Fn(&TransactionMut) -> bool>,
 }
 
 impl Default for Options {
@@ -298,26 +432,72 @@ impl Default for Options {
         Options {
             capture_timeout: Duration::from_millis(500),
             tracked_origins: HashSet::new(),
+            capture_transaction: Rc::new(|_txn| true),
         }
     }
 }
 
 #[derive(Debug, Clone)]
-struct StackItem {
+pub struct StackItem {
     deletions: DeleteSet,
     insertions: DeleteSet,
 }
 
+impl StackItem {
+    fn new(deletions: DeleteSet, insertions: DeleteSet) -> StackItem {
+        StackItem {
+            deletions,
+            insertions,
+        }
+    }
+
+    pub fn deletions(&self) -> &DeleteSet {
+        &self.deletions
+    }
+
+    pub fn insertions(&self) -> &DeleteSet {
+        &self.insertions
+    }
+}
+
 #[derive(Clone)]
 pub struct Event {
-    item: StackItem,
-    origin: Origin,
-    kind: EventKind,
+    pub item: StackItem,
+    pub origin: Option<Origin>,
+    pub kind: EventKind,
+    changed: HashMap<TypePtr, HashSet<Option<Rc<str>>>>,
 }
 
 impl Event {
+    fn undo(
+        item: StackItem,
+        origin: Option<Origin>,
+        changed: HashMap<TypePtr, HashSet<Option<Rc<str>>>>,
+    ) -> Self {
+        Event {
+            item,
+            origin,
+            changed,
+            kind: EventKind::Undo,
+        }
+    }
+
+    fn redo(
+        item: StackItem,
+        origin: Option<Origin>,
+        changed: HashMap<TypePtr, HashSet<Option<Rc<str>>>>,
+    ) -> Self {
+        Event {
+            item,
+            origin,
+            changed,
+            kind: EventKind::Redo,
+        }
+    }
+
     pub fn has_changed<T: AsRef<Branch>>(&self, target: &T) -> bool {
-        todo!()
+        let ptr = BranchPtr::from(target.as_ref());
+        self.changed.contains_key(&TypePtr::Branch(ptr))
     }
 }
 

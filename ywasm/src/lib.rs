@@ -23,12 +23,12 @@ use yrs::types::{
 use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use yrs::{
-    AfterTransactionEvent, AfterTransactionSubscription, Array, ArrayRef, DeleteSet,
-    DestroySubscription, Doc, GetString, Map, MapRef, Observable, OffsetKind, Options, ReadTxn,
-    Snapshot, StateVector, Store, SubdocsEvent, SubdocsEventIter, SubdocsSubscription,
-    Subscription, Text, TextRef, Transact, Transaction, TransactionMut, Update, UpdateSubscription,
-    Xml, XmlElementPrelim, XmlElementRef, XmlFragment, XmlFragmentRef, XmlNode, XmlTextPrelim,
-    XmlTextRef,
+    Array, ArrayRef, DeleteSet, DestroySubscription, Doc, GetString, Map, MapRef, Observable,
+    OffsetKind, Options, ReadTxn, Snapshot, StateVector, Store, SubdocsEvent, SubdocsEventIter,
+    SubdocsSubscription, Subscription, Text, TextRef, Transact, Transaction,
+    TransactionCleanupEvent, TransactionCleanupSubscription, TransactionMut, Update,
+    UpdateSubscription, Xml, XmlElementPrelim, XmlElementRef, XmlFragment, XmlFragmentRef, XmlNode,
+    XmlTextPrelim, XmlTextRef,
 };
 
 // When the `wee_alloc` feature is enabled, use `wee_alloc` as the global
@@ -1664,7 +1664,7 @@ impl YAfterTransactionEvent {
         self.delete_set.clone()
     }
 
-    fn new(e: &AfterTransactionEvent) -> Self {
+    fn new(e: &TransactionCleanupEvent) -> Self {
         YAfterTransactionEvent {
             before_state: state_vector_into_map(&e.before_state),
             after_state: state_vector_into_map(&e.after_state),
@@ -1674,10 +1674,10 @@ impl YAfterTransactionEvent {
 }
 
 #[wasm_bindgen]
-pub struct YAfterTransactionObserver(AfterTransactionSubscription);
+pub struct YAfterTransactionObserver(TransactionCleanupSubscription);
 
-impl From<AfterTransactionSubscription> for YAfterTransactionObserver {
-    fn from(o: AfterTransactionSubscription) -> Self {
+impl From<TransactionCleanupSubscription> for YAfterTransactionObserver {
+    fn from(o: TransactionCleanupSubscription) -> Self {
         YAfterTransactionObserver(o)
     }
 }

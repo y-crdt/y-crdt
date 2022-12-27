@@ -24,9 +24,9 @@ use yrs::types::{
 use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use yrs::{
-    uuid_v4, AfterTransactionEvent, Array, ArrayRef, DeleteSet, GetString, Map, MapRef, Observable,
-    OffsetKind, Options, ReadTxn, Snapshot, StateVector, Store, SubdocsEvent, SubdocsEventIter,
-    SubscriptionId, Text, TextRef, Transact, Update, Xml, XmlElementPrelim, XmlElementRef,
+    uuid_v4, Array, ArrayRef, DeleteSet, GetString, Map, MapRef, Observable, OffsetKind, Options,
+    ReadTxn, Snapshot, StateVector, Store, SubdocsEvent, SubdocsEventIter, SubscriptionId, Text,
+    TextRef, Transact, TransactionCleanupEvent, Update, Xml, XmlElementPrelim, XmlElementRef,
     XmlFragmentRef, XmlTextPrelim, XmlTextRef,
 };
 
@@ -3380,7 +3380,7 @@ pub struct YAfterTransactionEvent {
 }
 
 impl YAfterTransactionEvent {
-    unsafe fn new(e: &AfterTransactionEvent) -> Self {
+    unsafe fn new(e: &TransactionCleanupEvent) -> Self {
         YAfterTransactionEvent {
             before_state: YStateVector::new(&e.before_state),
             after_state: YStateVector::new(&e.after_state),

@@ -1,5 +1,5 @@
-use crate::block::{Block, BlockPtr, ClientID, ID};
-use crate::block_store::{BlockStore, ClientBlockList};
+use crate::block::{BlockPtr, ClientID, ID};
+use crate::block_store::BlockStore;
 use crate::store::Store;
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
@@ -9,7 +9,7 @@ use lib0::error::Error;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::hash::BuildHasherDefault;
-use std::ops::{Deref, Range};
+use std::ops::Range;
 
 // Note: use native Rust [Range](https://doc.rust-lang.org/std/ops/struct.Range.html)
 // as it's left-inclusive/right-exclusive and defines the exact capabilities we care about here.
@@ -542,12 +542,13 @@ impl DeleteSet {
             }
         }
     }
-    /*
-       pub(crate) fn iter_blocks_mut(&self, txn: &mut TransactionMut) -> DeletedBlocks {
-           DeletedBlocks::new(self, txn)
-       }
 
-    */
+    pub(crate) fn deleted_blocks<'ds, 'txn, 'doc>(
+        &'ds self,
+        txn: &'txn mut TransactionMut<'doc>,
+    ) -> DeletedBlocks<'ds, 'txn, 'doc> {
+        DeletedBlocks::new(self, txn)
+    }
 }
 
 impl Decode for DeleteSet {
@@ -563,43 +564,43 @@ impl Encode for DeleteSet {
     }
 }
 
-pub(crate) struct DeletedBlocks<'a, 'doc> {
-    txn: &'a mut TransactionMut<'doc>,
-    merge_blocks: Vec<ID>,
-    ds_iter: Iter<'a>,
-    current_block_list: Option<&'doc ClientBlockList>,
-    current_range: Option<&'a Range<u32>>,
+pub(crate) struct DeletedBlocks<'ds, 'txn, 'doc> {
+    txn: &'txn mut TransactionMut<'doc>,
+    ds_iter: Iter<'ds>,
+    current_range: Option<&'ds Range<u32>>,
     current_client_id: Option<ClientID>,
-    range_iter: Option<IdRangeIter<'a>>,
+    range_iter: Option<IdRangeIter<'ds>>,
     current_index: Option<usize>,
 }
 
-impl<'a, 'doc> DeletedBlocks<'a, 'doc> {
-    pub(crate) fn new(ds: &'a DeleteSet, txn: &'a mut TransactionMut<'doc>) -> Self {
+impl<'ds, 'txn, 'doc> DeletedBlocks<'ds, 'txn, 'doc> {
+    pub(crate) fn new(ds: &'ds DeleteSet, txn: &'txn mut TransactionMut<'doc>) -> Self {
         let ds_iter = ds.iter();
         DeletedBlocks {
             txn,
             ds_iter,
-            current_block_list: None,
             current_client_id: None,
             current_range: None,
             range_iter: None,
             current_index: None,
-            merge_blocks: Vec::new(),
         }
     }
 }
 
-impl<'a, 'doc> Iterator for DeletedBlocks<'a, 'doc>
-where
-    'a: 'doc,
-{
+impl<'ds, 'txn, 'doc> Iterator for DeletedBlocks<'ds, 'txn, 'doc> {
     type Item = BlockPtr;
 
     fn next(&mut self) -> Option<Self::Item> {
         if let Some(r) = self.current_range {
             let block = if let Some(idx) = self.current_index.as_mut() {
-                if let Some(block) = self.current_block_list.unwrap().try_get(*idx) {
+                if let Some(block) = self
+                    .txn
+                    .store
+                    .blocks
+                    .get(&self.current_client_id?)
+                    .unwrap()
+                    .try_get(*idx)
+                {
                     *idx += 1;
                     block
                 } else {
@@ -608,7 +609,8 @@ where
                     return self.next();
                 }
             } else {
-                let list = self.current_block_list.unwrap();
+                // first block for a particular client
+                let list = self.txn.store.blocks.get(&self.current_client_id?).unwrap();
                 if let Some(idx) = list.find_pivot(r.start) {
                     let mut block = list.get(idx);
                     let clock = block.id().clock;
@@ -621,7 +623,7 @@ where
                             .blocks
                             .split_block_inner(block, r.start - clock)
                         {
-                            self.merge_blocks.push(*right_ptr.id());
+                            self.txn.merge_blocks.push(*right_ptr.id());
                             block = right_ptr;
                         }
                     }
@@ -634,13 +636,14 @@ where
                 }
             };
 
+            // check if this is the last block for a current client
             let clock = block.id().clock;
             if clock > r.end {
                 // move to the next range
                 self.current_range = None;
                 self.current_index = None;
                 return self.next();
-            } else if clock + block.len() > r.end {
+            } else if clock < r.end && clock + block.len() > r.end {
                 // we need to cut the last block
                 if let Some(right_ptr) = self
                     .txn
@@ -648,13 +651,17 @@ where
                     .blocks
                     .split_block_inner(block, clock + block.len() - r.end)
                 {
-                    self.merge_blocks.push(*right_ptr.id());
+                    self.txn.merge_blocks.push(*right_ptr.id());
                     self.current_range = None;
                     self.current_index = None;
                 }
             }
 
-            Some(block)
+            if block.is_deleted() {
+                Some(block)
+            } else {
+                self.next()
+            }
         } else {
             let range_iter = if let Some(iter) = self.range_iter.as_mut() {
                 iter
@@ -662,28 +669,35 @@ where
                 let (client_id, range) = self.ds_iter.next()?;
                 self.current_client_id = Some(client_id.clone());
                 self.current_index = None;
-                self.current_block_list = self.txn.store.blocks.get(client_id);
                 self.range_iter = Some(range.iter());
                 self.range_iter.as_mut().unwrap()
             };
-            self.current_range = range_iter.next();
+            self.current_range = match range_iter.next() {
+                None => {
+                    let (client_id, range) = self.ds_iter.next()?;
+                    self.current_client_id = Some(client_id.clone());
+                    self.current_index = None;
+                    let mut iter = range.iter();
+                    let range = iter.next();
+                    self.range_iter = Some(iter);
+                    range
+                }
+                other => other,
+            };
             return self.next();
         }
     }
 }
 
-impl<'a, 'doc> Drop for DeletedBlocks<'a, 'doc> {
-    fn drop(&mut self) {
-        self.txn.merge_blocks.extend(self.merge_blocks.iter());
-    }
-}
-
 #[cfg(test)]
 mod test {
+    use crate::block::ItemContent;
     use crate::id_set::{IdRange, IdSet};
+    use crate::test_utils::exchange_updates;
     use crate::updates::decoder::{Decode, DecoderV1};
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
-    use crate::ID;
+    use crate::{Doc, Options, ReadTxn, Text, Transact, ID};
+    use std::collections::HashSet;
     use std::fmt::Debug;
 
     #[test]
@@ -770,5 +784,63 @@ mod test {
         let decoded = T::decode(&mut decoder).unwrap();
 
         assert_eq!(value, &decoded);
+    }
+
+    #[test]
+    fn deleted_blocks_iter() {
+        let mut o = Options::default();
+        o.client_id = 1;
+        o.skip_gc = true;
+        let d1 = Doc::with_options(o.clone());
+        let t1 = d1.get_or_insert_text("test");
+
+        o.client_id = 2;
+        let d2 = Doc::with_options(o);
+        let t2 = d2.get_or_insert_text("test");
+
+        t1.insert(&mut d1.transact_mut(), 0, "aaaaa");
+        t1.insert(&mut d1.transact_mut(), 0, "bbb");
+
+        exchange_updates(&[&d1, &d2]);
+
+        t2.insert(&mut d2.transact_mut(), 4, "cccc");
+
+        exchange_updates(&[&d1, &d2]);
+
+        // t1: 'bbbaccccaaaa'
+        t1.remove_range(&mut d1.transact_mut(), 2, 2); // => 'bbccccaaaa'
+        t1.remove_range(&mut d1.transact_mut(), 3, 1); // => 'bbcccaaaa'
+        t1.remove_range(&mut d1.transact_mut(), 3, 1); // => 'bbccaaaa'
+        t1.remove_range(&mut d1.transact_mut(), 7, 1); // => 'bbccaaa'
+
+        let blocks = {
+            let mut txn = d1.transact_mut();
+            let s = txn.snapshot();
+
+            let mut blocks = HashSet::new();
+
+            let mut i = 0;
+            for b in s.delete_set.deleted_blocks(&mut txn) {
+                let item = b.as_item().unwrap();
+                if let ItemContent::String(str) = &item.content {
+                    let t = (b.is_deleted(), *b.id(), b.len(), str.as_str().to_string());
+                    blocks.insert(t);
+                }
+                i += 1;
+                if i == 5 {
+                    break;
+                }
+            }
+            blocks
+        };
+
+        let expected = HashSet::from([
+            (true, ID::new(1, 0), 1, "a".to_owned()),
+            (true, ID::new(1, 4), 1, "a".to_owned()),
+            (true, ID::new(1, 7), 1, "b".to_owned()),
+            (true, ID::new(2, 1), 2, "cc".to_owned()),
+        ]);
+
+        assert_eq!(blocks, expected);
     }
 }

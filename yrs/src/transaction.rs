@@ -230,7 +230,7 @@ pub struct TransactionMut<'doc> {
     pub(crate) prev_moved: HashMap<BlockPtr, BlockPtr>,
     /// All types that were directly modified (property added or child inserted/deleted).
     /// New types are not included in this Set.
-    changed: HashMap<TypePtr, HashSet<Option<Rc<str>>>>,
+    pub(crate) changed: HashMap<TypePtr, HashSet<Option<Rc<str>>>>,
     pub(crate) subdocs: Option<Box<Subdocs>>,
     pub(crate) origin: Option<Origin>,
     committed: bool,
@@ -689,6 +689,11 @@ impl<'doc> TransactionMut<'doc> {
             }
         }
 
+        if let Some(events) = self.store.events.take() {
+            events.emit_after_transaction(self);
+            self.store.events = Some(events);
+        }
+
         // 4. try GC delete set
         if !self.store.options.skip_gc {
             self.try_gc();
@@ -838,52 +843,10 @@ impl<'doc> TransactionMut<'doc> {
             }
         }
 
-        for (client, range) in snapshot.delete_set.iter() {
-            if let Some(mut list) = blocks.get(client) {
-                for r in range.iter() {
-                    if let Some(pivot) = list.find_pivot(r.start) {
-                        let block = list.get(pivot);
-                        let clock = block.id().clock;
-                        if clock < r.start {
-                            if let Some(ptr) = blocks.split_block_inner(block, r.start - clock) {
-                                if let Block::Item(item) = block.deref() {
-                                    if item.moved.is_some() {
-                                        if let Some(&prev_moved) = self.prev_moved.get(&block) {
-                                            self.prev_moved.insert(ptr, prev_moved);
-                                        }
-                                    }
-                                }
-                                merge_blocks.push(*ptr.id());
-                            }
-                            list = blocks.get(client).unwrap();
-                        }
-                    }
-
-                    if let Some(pivot) = list.find_pivot(r.end) {
-                        let block = list.get(pivot);
-                        let block_id = block.id();
-                        let block_len = block.len();
-                        if block_id.clock + block_len > r.end {
-                            if let Some(ptr) =
-                                blocks.split_block_inner(block, block_id.clock + block_len - r.end)
-                            {
-                                if let Block::Item(item) = block.deref() {
-                                    if item.moved.is_some() {
-                                        if let Some(&prev_moved) = self.prev_moved.get(&block) {
-                                            self.prev_moved.insert(ptr, prev_moved);
-                                        }
-                                    }
-                                }
-                                merge_blocks.push(*ptr.id());
-                            }
-                            list = blocks.get(client).unwrap();
-                        }
-                    }
-                }
-            }
-        }
-
         self.merge_blocks.append(&mut merge_blocks);
+        for _ in snapshot.delete_set.deleted_blocks(self) {
+            // do nothing just split the blocks by delete set
+        }
     }
 }
 
