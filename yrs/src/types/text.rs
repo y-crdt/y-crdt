@@ -79,6 +79,48 @@ pub trait Text: AsRef<Branch> {
     /// the end of it.
     ///
     /// This method will panic if provided `index` is greater than the length of a current text.
+    ///
+    /// # Examples
+    ///
+    /// By default Document uses byte offset:
+    ///
+    /// ```
+    /// use yrs::{Doc, Text, GetString, Transact};
+    ///
+    /// let doc = Doc::new();
+    /// let ytext = doc.get_or_insert_text("text");
+    /// let txn = &mut doc.transact_mut();
+    /// ytext.push(txn, "Hi ★ to you");
+    ///
+    /// // The same as `String::len()`
+    /// assert_eq!(ytext.len(txn), 13);
+    ///
+    /// // To insert you have to count bytes and not chars.
+    /// ytext.insert(txn, 6, "!");
+    /// assert_eq!(ytext.get_string(txn), "Hi ★! to you");
+    /// ```
+    ///
+    /// You can override how Yrs calculates the index with [OffsetKind]:
+    ///
+    /// ```
+    /// use yrs::{Doc, Options, Text, GetString, Transact, OffsetKind};
+    ///
+    /// let doc = Doc::with_options(Options {
+    ///     offset_kind: OffsetKind::Utf32,
+    ///     ..Default::default()
+    /// });
+    /// let ytext = doc.get_or_insert_text("text");
+    /// let txn = &mut doc.transact_mut();
+    /// ytext.push(txn, "Hi ★ to you");
+    ///
+    /// // The same as `String::chars()::count()`
+    /// assert_eq!(ytext.len(txn), 11);
+    ///
+    /// // To insert you have to count chars.
+    /// ytext.insert(txn, 4, "!");
+    /// assert_eq!(ytext.get_string(txn), "Hi ★! to you");
+    /// ```
+    ///
     fn insert(&self, txn: &mut TransactionMut, index: u32, chunk: &str) {
         if chunk.is_empty() {
             return;
