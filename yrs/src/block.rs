@@ -617,7 +617,7 @@ impl BlockPtr {
 
     pub(crate) fn gc(&mut self, parent_gced: bool) {
         if let Block::Item(item) = self.deref_mut() {
-            if item.is_deleted() {
+            if item.is_deleted() && !item.info.is_keep() {
                 item.content.gc();
                 let len = item.len();
                 if parent_gced {
