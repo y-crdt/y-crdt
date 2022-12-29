@@ -116,6 +116,7 @@ impl Doc {
     /// If a structure under defined `name` already existed, but its type was different it will be
     /// reinterpreted as a text (in such case a sequence component of complex data type will be
     /// interpreted as a list of text chunks).
+    #[track_caller]
     pub fn get_or_insert_text(&self, name: &str) -> TextRef {
         let mut r = self.store.try_borrow_mut().expect(
             "tried to get a root level type while another transaction on the document is open",
@@ -136,6 +137,7 @@ impl Doc {
     /// If a structure under defined `name` already existed, but its type was different it will be
     /// reinterpreted as a map (in such case a map component of complex data type will be
     /// interpreted as native map).
+    #[track_caller]
     pub fn get_or_insert_map(&self, name: &str) -> MapRef {
         let mut r = self.store.try_borrow_mut().expect(
             "tried to get a root level type while another transaction on the document is open",
@@ -155,6 +157,7 @@ impl Doc {
     /// If a structure under defined `name` already existed, but its type was different it will be
     /// reinterpreted as an array (in such case a sequence component of complex data type will be
     /// interpreted as a list of inserted values).
+    #[track_caller]
     pub fn get_or_insert_array(&self, name: &str) -> ArrayRef {
         let mut r = self.store.try_borrow_mut().expect(
             "tried to get a root level type while another transaction on the document is open",
@@ -176,6 +179,7 @@ impl Doc {
     /// reinterpreted as a XML element (in such case a map component of complex data type will be
     /// interpreted as map of its attributes, while a sequence component - as a list of its child
     /// XML nodes).
+    #[track_caller]
     pub fn get_or_insert_xml_fragment(&self, name: &str) -> XmlFragmentRef {
         let mut r = self.store.try_borrow_mut().expect(
             "tried to get a root level type while another transaction on the document is open",
@@ -197,6 +201,7 @@ impl Doc {
     /// reinterpreted as a XML element (in such case a map component of complex data type will be
     /// interpreted as map of its attributes, while a sequence component - as a list of its child
     /// XML nodes).
+    #[track_caller]
     pub fn get_or_insert_xml_element(&self, name: &str) -> XmlElementRef {
         let mut r = self.store.try_borrow_mut().expect(
             "tried to get a root level type while another transaction on the document is open",
@@ -216,6 +221,7 @@ impl Doc {
     /// If a structure under defined `name` already existed, but its type was different it will be
     /// reinterpreted as a text (in such case a sequence component of complex data type will be
     /// interpreted as a list of text chunks).
+    #[track_caller]
     pub fn get_or_insert_xml_text(&self, name: &str) -> XmlTextRef {
         let mut r = self.store.try_borrow_mut().expect(
             "tried to get a root level type while another transaction on the document is open",
@@ -332,6 +338,7 @@ impl Doc {
 
     /// Sends a load request to a parent document. Works only if current document is a sub-document
     /// of an another document.
+    #[track_caller]
     pub fn load<T>(&self, parent_txn: &mut T)
     where
         T: WriteTxn,
@@ -350,6 +357,7 @@ impl Doc {
 
     /// Starts destroy procedure for a current document, triggering an "destroy" callback and
     /// invalidating all event callback subscriptions.
+    #[track_caller]
     pub fn destroy<T>(&mut self, parent_txn: &mut T)
     where
         T: WriteTxn,
@@ -591,12 +599,14 @@ pub trait Transact {
 
     /// Creates a transaction used for all kind of block store operations.
     /// Transaction cleanups & calling event handles happen when the transaction struct is dropped.
+    #[track_caller]
     fn transact(&self) -> Transaction {
         self.try_transact().unwrap()
     }
 
     /// Creates a transaction used for all kind of block store operations.
     /// Transaction cleanups & calling event handles happen when the transaction struct is dropped.
+    #[track_caller]
     fn transact_mut(&self) -> TransactionMut {
         self.try_transact_mut().unwrap()
     }
