@@ -638,12 +638,13 @@ impl<'ds, 'txn, 'doc> Iterator for DeletedBlocks<'ds, 'txn, 'doc> {
 
             // check if this is the last block for a current client
             let clock = block.id().clock;
+            let block_len = block.len();
             if clock > r.end {
                 // move to the next range
                 self.current_range = None;
                 self.current_index = None;
                 return self.next();
-            } else if clock < r.end && clock + block.len() > r.end {
+            } else if clock < r.end && clock + block_len > r.end {
                 // we need to cut the last block
                 if let Some(right_ptr) = self
                     .txn
@@ -657,11 +658,12 @@ impl<'ds, 'txn, 'doc> Iterator for DeletedBlocks<'ds, 'txn, 'doc> {
                 }
             }
 
-            if block.is_deleted() {
-                Some(block)
-            } else {
-                self.next()
+            if clock + block_len >= r.end {
+                self.current_range = None;
+                self.current_index = None;
             }
+
+            Some(block)
         } else {
             let range_iter = if let Some(iter) = self.range_iter.as_mut() {
                 iter
@@ -696,7 +698,7 @@ mod test {
     use crate::test_utils::exchange_updates;
     use crate::updates::decoder::{Decode, DecoderV1};
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
-    use crate::{Doc, Options, ReadTxn, Text, Transact, ID};
+    use crate::{DeleteSet, Doc, Options, ReadTxn, Text, Transact, ID};
     use std::collections::HashSet;
     use std::fmt::Debug;
 
@@ -787,7 +789,7 @@ mod test {
     }
 
     #[test]
-    fn deleted_blocks_iter() {
+    fn deleted_blocks() {
         let mut o = Options::default();
         o.client_id = 1;
         o.skip_gc = true;
@@ -842,5 +844,19 @@ mod test {
         ]);
 
         assert_eq!(blocks, expected);
+    }
+
+    #[test]
+    fn deleted_blocks2() {
+        let mut ds = DeleteSet::new();
+        let doc = Doc::with_client_id(1);
+        let txt = doc.get_or_insert_text("test");
+        txt.push(&mut doc.transact_mut(), "testab");
+        ds.insert(ID::new(1, 5), 1);
+        let mut txn = doc.transact_mut();
+        let mut i = ds.deleted_blocks(&mut txn);
+        let ptr = i.next().unwrap();
+        assert_eq!(*ptr.id(), ID::new(1, 5));
+        assert!(i.next().is_none());
     }
 }

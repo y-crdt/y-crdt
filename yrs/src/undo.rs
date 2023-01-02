@@ -120,15 +120,15 @@ impl UndoManager {
         }
         let now = SystemTime::now();
         let stack = if undoing {
-            &mut inner.undo_stack
-        } else {
             &mut inner.redo_stack
+        } else {
+            &mut inner.undo_stack
         };
         let extend = !undoing
             && !redoing
             && !stack.is_empty()
             && inner.last_change > UNIX_EPOCH
-            && now.duration_since(inner.last_change).unwrap() > inner.options.capture_timeout;
+            && now.duration_since(inner.last_change).unwrap() < inner.options.capture_timeout;
 
         if extend {
             // append change to last stack op
@@ -363,7 +363,7 @@ impl UndoManager {
             for ptr in item.deletions.deleted_blocks(txn) {
                 if ptr.is_item()
                     && scope.iter().any(|b| b.is_parent_of(Some(ptr.clone())))
-                    && item.insertions.is_deleted(ptr.id())
+                    && !item.insertions.is_deleted(ptr.id())
                 // Never redo structs in stackItem.insertions because they were created and deleted in the same capture interval.
                 {
                     to_redo.insert(ptr);

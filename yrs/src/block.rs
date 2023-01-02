@@ -198,17 +198,21 @@ impl BlockPtr {
             while let Some(Block::Item(left_item)) = left.clone().as_deref() {
                 let mut left_trace = left;
                 while let Some(Block::Item(trace)) = left_trace.as_deref() {
-                    if parent_block != trace.parent.as_branch().and_then(|p| p.item) {
+                    let p = trace.parent.as_branch().and_then(|p| p.item);
+                    if parent_block != p {
                         left_trace = if let Some(redone) = trace.redone.as_ref() {
                             let slice = txn.store.blocks.get_item_clean_start(redone);
                             slice.map(|s| txn.store.materialize(s))
                         } else {
                             None
                         };
+                    } else {
+                        break;
                     }
                 }
                 if let Some(Block::Item(trace)) = left_trace.as_deref() {
-                    if parent_block == trace.parent.as_branch().and_then(|p| p.item) {
+                    let p = trace.parent.as_branch().and_then(|p| p.item);
+                    if parent_block == p {
                         left = left_trace;
                         break;
                     }
@@ -220,17 +224,21 @@ impl BlockPtr {
                 let mut right_trace = right;
                 // trace redone until parent matches
                 while let Some(Block::Item(trace)) = right_trace.as_deref() {
-                    if parent_block != trace.parent.as_branch().and_then(|p| p.item) {
+                    let p = trace.parent.as_branch().and_then(|p| p.item);
+                    if parent_block != p {
                         right_trace = if let Some(redone) = trace.redone.as_ref() {
                             let slice = txn.store.blocks.get_item_clean_start(redone);
                             slice.map(|s| txn.store.materialize(s))
                         } else {
                             None
                         };
+                    } else {
+                        break;
                     }
                 }
                 if let Some(Block::Item(trace)) = right_trace.as_deref() {
-                    if parent_block == trace.parent.as_branch().and_then(|p| p.item) {
+                    let p = trace.parent.as_branch().and_then(|p| p.item);
+                    if parent_block == p {
                         right = right_trace;
                         break;
                     }

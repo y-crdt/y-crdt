@@ -284,7 +284,7 @@ impl<'doc> TransactionMut<'doc> {
 
     /// Current document state vector which includes changes made by this transaction.
     pub fn after_state(&self) -> &StateVector {
-        &self.before_state
+        &self.after_state
     }
 
     /// Data about deletions performed in the scope of current transaction.
