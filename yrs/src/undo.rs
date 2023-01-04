@@ -7,6 +7,7 @@ use crate::{
     TransactionMut, ID,
 };
 use std::collections::{HashMap, HashSet};
+use std::fmt::Formatter;
 use std::ops::Deref;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -139,7 +140,8 @@ impl UndoManager {
             }
         } else {
             // create a new stack op
-            stack.push(StackItem::new(txn.delete_set.clone(), insertions));
+            let item = StackItem::new(txn.delete_set.clone(), insertions);
+            stack.push(item);
         }
 
         if !undoing && !redoing {
@@ -460,6 +462,19 @@ impl StackItem {
     }
 }
 
+impl std::fmt::Display for StackItem {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "StackItem(")?;
+        if !self.deletions.is_empty() {
+            write!(f, "-{}", self.deletions)?;
+        }
+        if !self.insertions.is_empty() {
+            write!(f, "+{}", self.insertions)?;
+        }
+        write!(f, ")")
+    }
+}
+
 #[derive(Clone)]
 pub struct Event {
     pub item: StackItem,
@@ -554,7 +569,6 @@ mod test {
         txt2.insert(&mut d2.transact_mut(), 0, "xyz");
 
         exchange_updates(&[&d1, &d2]);
-
         mgr.undo().unwrap();
         assert_eq!(txt1.get_string(&d1.transact()), "xyz");
         mgr.redo().unwrap();

@@ -43,7 +43,7 @@ mod moving;
 pub mod observer;
 #[cfg(test)]
 mod test_utils;
-mod undo;
+pub mod undo;
 
 pub use crate::alt::{
     diff_updates_v1, diff_updates_v2, encode_state_vector_from_update_v1,
@@ -63,6 +63,7 @@ pub use crate::event::{SubdocsEvent, SubdocsEventIter, TransactionCleanupEvent, 
 pub use crate::id_set::DeleteSet;
 pub use crate::observer::{Observer, Subscription, SubscriptionId};
 pub use crate::store::Store;
+pub use crate::transaction::Origin;
 pub use crate::transaction::ReadTxn;
 pub use crate::transaction::RootRefs;
 pub use crate::transaction::Transaction;

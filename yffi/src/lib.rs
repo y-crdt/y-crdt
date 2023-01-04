@@ -7,6 +7,7 @@ use std::ops::Deref;
 use std::os::raw::{c_char, c_float, c_int, c_long, c_longlong, c_uchar, c_uint, c_ulong};
 use std::ptr::{null, null_mut};
 use std::rc::Rc;
+use std::time::Duration;
 use yrs::block::{ClientID, ItemContent, Prelim};
 use yrs::types::array::ArrayEvent;
 use yrs::types::array::ArrayIter as NativeArrayIter;
@@ -21,13 +22,14 @@ use yrs::types::{
     TYPE_REFS_DOC, TYPE_REFS_MAP, TYPE_REFS_TEXT, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT,
     TYPE_REFS_XML_TEXT,
 };
+use yrs::undo::EventKind;
 use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use yrs::{
     uuid_v4, Array, ArrayRef, DeleteSet, GetString, Map, MapRef, Observable, OffsetKind, Options,
-    ReadTxn, Snapshot, StateVector, Store, SubdocsEvent, SubdocsEventIter, SubscriptionId, Text,
-    TextRef, Transact, TransactionCleanupEvent, Update, Xml, XmlElementPrelim, XmlElementRef,
-    XmlFragmentRef, XmlTextPrelim, XmlTextRef,
+    Origin, ReadTxn, Snapshot, StateVector, Store, SubdocsEvent, SubdocsEventIter, SubscriptionId,
+    Text, TextRef, Transact, TransactionCleanupEvent, UndoManager, Update, Xml, XmlElementPrelim,
+    XmlElementRef, XmlFragmentRef, XmlTextPrelim, XmlTextRef,
 };
 
 /// Flag used by `YInput` and `YOutput` to tag boolean values.
@@ -4157,6 +4159,196 @@ pub unsafe extern "C" fn yxmltext_event_keys(
 pub unsafe extern "C" fn yevent_keys_destroy(keys: *mut YEventKeyChange, len: c_int) {
     if !keys.is_null() {
         drop(Vec::from_raw_parts(keys, len as usize, len as usize));
+    }
+}
+
+#[repr(C)]
+pub struct YUndoManagerOptions {
+    pub capture_timeout_millis: c_int,
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yundo_manager(
+    doc: *const Doc,
+    ytype: *const Branch,
+    options: *const YUndoManagerOptions,
+) -> *mut UndoManager {
+    let doc = doc.as_ref().unwrap();
+    let branch = ytype.as_ref().unwrap();
+
+    let mut o = yrs::undo::Options::default();
+    if let Some(options) = options.as_ref() {
+        if options.capture_timeout_millis >= 0 {
+            o.capture_timeout = Duration::from_millis(options.capture_timeout_millis as u64);
+        }
+    };
+    let boxed = Box::new(UndoManager::with_options(doc, &BranchPtr::from(branch), o));
+    Box::into_raw(boxed)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yundo_manager_destroy(mgr: *mut UndoManager) {
+    drop(Box::from_raw(mgr));
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yundo_manager_add_origin(
+    mgr: *mut UndoManager,
+    origin_len: c_int,
+    origin: *const c_char,
+) {
+    let mgr = mgr.as_mut().unwrap();
+    let bytes = std::slice::from_raw_parts(origin as *const u8, origin_len as usize);
+    mgr.include_origin(Origin::from(bytes));
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yundo_manager_remove_origin(
+    mgr: *mut UndoManager,
+    origin_len: c_int,
+    origin: *const c_char,
+) {
+    let mgr = mgr.as_mut().unwrap();
+    let bytes = std::slice::from_raw_parts(origin as *const u8, origin_len as usize);
+    mgr.exclude_origin(Origin::from(bytes));
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yundo_manager_add_scope(mgr: *mut UndoManager, ytype: *const Branch) {
+    let mgr = mgr.as_mut().unwrap();
+    let branch = ytype.as_ref().unwrap();
+    mgr.expand_scope(&BranchPtr::from(branch));
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yundo_manager_clear(mgr: *mut UndoManager) -> c_char {
+    let mgr = mgr.as_mut().unwrap();
+    match mgr.clear() {
+        Ok(_) => Y_TRUE,
+        Err(_) => Y_FALSE,
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yundo_manager_undo(mgr: *mut UndoManager) -> c_char {
+    let mgr = mgr.as_mut().unwrap();
+    match mgr.undo() {
+        Ok(_) => Y_TRUE,
+        Err(_) => Y_FALSE,
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yundo_manager_redo(mgr: *mut UndoManager) -> c_char {
+    let mgr = mgr.as_mut().unwrap();
+    match mgr.redo() {
+        Ok(_) => Y_TRUE,
+        Err(_) => Y_FALSE,
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yundo_manager_can_undo(mgr: *mut UndoManager) -> c_char {
+    let mgr = mgr.as_mut().unwrap();
+    if mgr.can_undo() {
+        Y_TRUE
+    } else {
+        Y_FALSE
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yundo_manager_can_redo(mgr: *mut UndoManager) -> c_char {
+    let mgr = mgr.as_mut().unwrap();
+    if mgr.can_redo() {
+        Y_TRUE
+    } else {
+        Y_FALSE
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yundo_manager_observe_added(
+    mgr: *mut UndoManager,
+    state: *mut c_void,
+    cb: extern "C" fn(*mut c_void, *const YUndoEvent),
+) -> c_uint {
+    let mgr = mgr.as_mut().unwrap();
+    let subscription_id: SubscriptionId = mgr
+        .observe_item_added(move |txn, e| {
+            let event = YUndoEvent::new(e);
+            cb(state, &event as *const YUndoEvent);
+        })
+        .into();
+    subscription_id as c_uint
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yundo_manager_unobserve_added(
+    mgr: *mut UndoManager,
+    subscription_id: c_uint,
+) {
+    let mgr = mgr.as_mut().unwrap();
+    mgr.unobserve_item_added(subscription_id as SubscriptionId);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yundo_manager_observe_popped(
+    mgr: *mut UndoManager,
+    state: *mut c_void,
+    cb: extern "C" fn(*mut c_void, *const YUndoEvent),
+) -> c_uint {
+    let mgr = mgr.as_mut().unwrap();
+    let subscription_id: SubscriptionId = mgr
+        .observe_item_popped(move |txn, e| {
+            let event = YUndoEvent::new(e);
+            cb(state, &event as *const YUndoEvent);
+        })
+        .into();
+    subscription_id as c_uint
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yundo_manager_unobserve_popped(
+    mgr: *mut UndoManager,
+    subscription_id: c_uint,
+) {
+    let mgr = mgr.as_mut().unwrap();
+    mgr.unobserve_item_popped(subscription_id as SubscriptionId);
+}
+
+pub const Y_KIND_UNDO: c_char = 0;
+pub const Y_KIND_REDO: c_char = 1;
+
+#[repr(C)]
+pub struct YUndoEvent {
+    pub kind: c_char,
+    pub origin: *const c_char,
+    pub origin_len: c_int,
+    pub insertions: YDeleteSet,
+    pub deletions: YDeleteSet,
+}
+
+impl YUndoEvent {
+    unsafe fn new(e: &yrs::undo::Event) -> Self {
+        let (origin, origin_len) = if let Some(origin) = e.origin.as_ref() {
+            let bytes = origin.as_ref();
+            let origin_len = bytes.len() as c_int;
+            let origin = bytes.as_ptr() as *const c_char;
+            (origin, origin_len)
+        } else {
+            (null(), 0)
+        };
+        YUndoEvent {
+            kind: match e.kind {
+                EventKind::Undo => Y_KIND_UNDO,
+                EventKind::Redo => Y_KIND_REDO,
+            },
+            origin,
+            origin_len,
+            insertions: YDeleteSet::new(e.item.insertions()),
+            deletions: YDeleteSet::new(e.item.deletions()),
+        }
     }
 }
 

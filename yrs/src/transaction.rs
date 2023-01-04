@@ -872,7 +872,13 @@ pub struct Subdocs {
 
 #[repr(transparent)]
 #[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
-pub struct Origin(SmallVec<[u8; 8]>);
+pub struct Origin(SmallVec<[u8; std::mem::size_of::<usize>()]>);
+
+impl AsRef<[u8]> for Origin {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_ref()
+    }
+}
 
 impl<'a, T> From<Pin<&'a T>> for Origin {
     fn from(p: Pin<&T>) -> Self {

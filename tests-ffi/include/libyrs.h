@@ -78,6 +78,8 @@ typedef struct YXmlAttrIter {} YXmlAttrIter;
  */
 typedef struct YXmlTreeWalker {} YXmlTreeWalker;
 
+typedef struct YUndoManager {} YUndoManager;
+
 
 #include <stdarg.h>
 #include <stdbool.h>
@@ -223,6 +225,10 @@ typedef struct YXmlTreeWalker {} YXmlTreeWalker;
  * Error code: other error type than the one specified.
  */
 #define ERR_CODE_OTHER 6
+
+#define Y_KIND_UNDO 0
+
+#define Y_KIND_REDO 1
 
 /**
  * Tag used to identify `YPathSegment` storing a *char parameter.
@@ -846,6 +852,18 @@ typedef struct YEventKeyChange {
    */
   const struct YOutput *new_value;
 } YEventKeyChange;
+
+typedef struct YUndoManagerOptions {
+  int capture_timeout_millis;
+} YUndoManagerOptions;
+
+typedef struct YUndoEvent {
+  char kind;
+  const char *origin;
+  int origin_len;
+  struct YDeleteSet insertions;
+  struct YDeleteSet deletions;
+} YUndoEvent;
 
 /**
  * Returns default ceonfiguration for `YOptions`.
@@ -2196,6 +2214,40 @@ struct YEventKeyChange *yxmltext_event_keys(const struct YXmlTextEvent *e, int *
  * functions.
  */
 void yevent_keys_destroy(struct YEventKeyChange *keys, int len);
+
+YUndoManager *yundo_manager(const YDoc *doc,
+                            const Branch *ytype,
+                            const struct YUndoManagerOptions *options);
+
+void yundo_manager_destroy(YUndoManager *mgr);
+
+void yundo_manager_add_origin(YUndoManager *mgr, int origin_len, const char *origin);
+
+void yundo_manager_remove_origin(YUndoManager *mgr, int origin_len, const char *origin);
+
+void yundo_manager_add_scope(YUndoManager *mgr, const Branch *ytype);
+
+char yundo_manager_clear(YUndoManager *mgr);
+
+char yundo_manager_undo(YUndoManager *mgr);
+
+char yundo_manager_redo(YUndoManager *mgr);
+
+char yundo_manager_can_undo(YUndoManager *mgr);
+
+char yundo_manager_can_redo(YUndoManager *mgr);
+
+unsigned int yundo_manager_observe_added(YUndoManager *mgr,
+                                         void *state,
+                                         void (*cb)(void*, const struct YUndoEvent*));
+
+void yundo_manager_unobserve_added(YUndoManager *mgr, unsigned int subscription_id);
+
+unsigned int yundo_manager_observe_popped(YUndoManager *mgr,
+                                          void *state,
+                                          void (*cb)(void*, const struct YUndoEvent*));
+
+void yundo_manager_unobserve_popped(YUndoManager *mgr, unsigned int subscription_id);
 
 /**
  * Returns a value informing what kind of Yrs shared collection given `branch` represents.

@@ -12,7 +12,7 @@ pub use text::TextRef;
 
 use crate::block::{Block, BlockPtr, Item, ItemContent, ItemPosition, Prelim};
 use crate::store::WeakStoreRef;
-use crate::transaction::TransactionMut;
+use crate::transaction::{Origin, TransactionMut};
 use crate::types::array::{ArrayEvent, ArrayRef};
 use crate::types::map::MapEvent;
 use crate::types::text::TextEvent;
@@ -138,6 +138,20 @@ impl BranchPtr {
 impl Into<TypePtr> for BranchPtr {
     fn into(self) -> TypePtr {
         TypePtr::Branch(self)
+    }
+}
+
+impl Into<Origin> for BranchPtr {
+    fn into(self) -> Origin {
+        let addr = self.0.as_ptr() as usize;
+        let bytes = addr.to_be_bytes();
+        Origin::from(bytes.as_ref())
+    }
+}
+
+impl AsRef<Branch> for BranchPtr {
+    fn as_ref(&self) -> &Branch {
+        self.deref()
     }
 }
 

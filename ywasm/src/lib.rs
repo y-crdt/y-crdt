@@ -1,12 +1,16 @@
-use js_sys::Uint8Array;
+use js_sys::{Object, Reflect, Uint8Array};
 use lib0::any::Any;
+use std::borrow::Borrow;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::mem::ManuallyDrop;
 use std::ops::Deref;
+use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Duration;
 use wasm_bindgen::__rt::{Ref, RefMut};
+use wasm_bindgen::convert::IntoWasmAbi;
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
 use yrs::block::{ClientID, ItemContent, Prelim};
@@ -20,13 +24,14 @@ use yrs::types::{
     TYPE_REFS_MAP, TYPE_REFS_TEXT, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT,
     TYPE_REFS_XML_TEXT,
 };
+use yrs::undo::{EventKind, UndoEventSubscription};
 use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use yrs::{
     Array, ArrayRef, DeleteSet, DestroySubscription, Doc, GetString, Map, MapRef, Observable,
-    OffsetKind, Options, ReadTxn, Snapshot, StateVector, Store, SubdocsEvent, SubdocsEventIter,
-    SubdocsSubscription, Subscription, Text, TextRef, Transact, Transaction,
-    TransactionCleanupEvent, TransactionCleanupSubscription, TransactionMut, Update,
+    OffsetKind, Options, Origin, ReadTxn, Snapshot, StateVector, Store, SubdocsEvent,
+    SubdocsEventIter, SubdocsSubscription, Subscription, Text, TextRef, Transact, Transaction,
+    TransactionCleanupEvent, TransactionCleanupSubscription, TransactionMut, UndoManager, Update,
     UpdateSubscription, Xml, XmlElementPrelim, XmlElementRef, XmlFragment, XmlFragmentRef, XmlNode,
     XmlTextPrelim, XmlTextRef,
 };
@@ -657,7 +662,7 @@ fn unwrap_txn_ptr(value: &ImplicitTransaction) -> Result<Option<u32>, JsValue> {
     if js.is_undefined() || js.is_null() {
         Ok(None)
     } else {
-        use js_sys::{Object, Reflect};
+        use js_sys::Object;
 
         let ctor_name = Object::get_prototype_of(js).constructor().name();
         if ctor_name == "YTransaction" {
@@ -3456,6 +3461,169 @@ impl YXmlText {
     }
 }
 
+#[wasm_bindgen]
+#[repr(transparent)]
+pub struct YUndoManager(UndoManager);
+
+#[wasm_bindgen]
+impl YUndoManager {
+    #[wasm_bindgen(constructor)]
+    pub fn new(doc: &YDoc, scope: JsValue, options: JsValue) -> Self {
+        let doc = &doc.0;
+        let scope = JsValueWrapper(scope);
+        if options.is_object() {
+            let mut o = yrs::undo::Options::default();
+            if let Ok(js) = Reflect::get(&options, &JsValue::from_str("captureTimeout")) {
+                if let Some(millis) = js.as_f64() {
+                    o.capture_timeout = Duration::from_millis(millis as u64);
+                }
+            }
+            if let Ok(js) = Reflect::get(&options, &JsValue::from_str("trackedOrigins")) {
+                if js_sys::Array::is_array(&js) {
+                    let array = js_sys::Array::from(&js);
+                    for js in array.iter() {
+                        let v = JsValueWrapper(js);
+                        o.tracked_origins.insert(v.into());
+                    }
+                }
+            }
+            YUndoManager(UndoManager::with_options(doc, &scope, o))
+        } else {
+            YUndoManager(UndoManager::new(doc, &scope))
+        }
+    }
+
+    #[wasm_bindgen(js_name = addToScope)]
+    pub fn add_to_scope(&mut self, ytypes: js_sys::Array) {
+        for js in ytypes.iter() {
+            let scope = JsValueWrapper(js);
+            self.0.expand_scope(&scope);
+        }
+    }
+
+    #[wasm_bindgen(js_name = addTrackedOrigin)]
+    pub fn add_tracked_origin(&mut self, origin: JsValue) {
+        self.0.include_origin(JsValueWrapper(origin))
+    }
+
+    #[wasm_bindgen(js_name = removeTrackedOrigin)]
+    pub fn remove_tracked_origin(&mut self, origin: JsValue) {
+        self.0.exclude_origin(JsValueWrapper(origin))
+    }
+
+    #[wasm_bindgen(catch, js_name = clear)]
+    pub fn clear(&mut self) -> Result<(), JsValue> {
+        if let Err(err) = self.0.clear() {
+            Err(JsValue::from_str(&err.to_string()))
+        } else {
+            Ok(())
+        }
+    }
+
+    #[wasm_bindgen(js_name = stopCapturing)]
+    pub fn stop_capturing(&mut self) {
+        self.0.stop()
+    }
+
+    #[wasm_bindgen(catch, js_name = undo)]
+    pub fn undo(&mut self) -> Result<(), JsValue> {
+        if let Err(err) = self.0.undo() {
+            Err(JsValue::from_str(&err.to_string()))
+        } else {
+            Ok(())
+        }
+    }
+
+    #[wasm_bindgen(catch, js_name = redo)]
+    pub fn redo(&mut self) -> Result<(), JsValue> {
+        if let Err(err) = self.0.redo() {
+            Err(JsValue::from_str(&err.to_string()))
+        } else {
+            Ok(())
+        }
+    }
+
+    #[wasm_bindgen(js_name = canUndo)]
+    pub fn can_undo(&mut self) -> bool {
+        self.0.can_undo()
+    }
+
+    #[wasm_bindgen(js_name = canRedo)]
+    pub fn can_redo(&mut self) -> bool {
+        self.0.can_redo()
+    }
+
+    #[wasm_bindgen(js_name = onStackItemAdded)]
+    pub fn on_item_added(&mut self, callback: js_sys::Function) -> YUndoObserver {
+        YUndoObserver(self.0.observe_item_added(move |txn, e| {
+            let arg: JsValue = YUndoEvent::new(e).into();
+            callback.call1(&JsValue::UNDEFINED, &arg).unwrap();
+        }))
+    }
+
+    #[wasm_bindgen(js_name = onStackItemPopped)]
+    pub fn on_item_popped(&mut self, callback: js_sys::Function) -> YUndoObserver {
+        YUndoObserver(self.0.observe_item_popped(move |txn, e| {
+            let arg: JsValue = YUndoEvent::new(e).into();
+            callback.call1(&JsValue::UNDEFINED, &arg).unwrap();
+        }))
+    }
+}
+
+#[wasm_bindgen]
+pub struct YUndoEvent {
+    origin: JsValue,
+    kind: JsValue,
+    stack_item: JsValue,
+}
+
+#[wasm_bindgen]
+impl YUndoEvent {
+    #[wasm_bindgen(getter, js_name = origin)]
+    pub fn origin(&self) -> JsValue {
+        self.origin.clone()
+    }
+    #[wasm_bindgen(getter, js_name = kind)]
+    pub fn kind(&self) -> JsValue {
+        self.kind.clone()
+    }
+    #[wasm_bindgen(getter, js_name = stackItem)]
+    pub fn stack_item(&self) -> JsValue {
+        self.stack_item.clone()
+    }
+
+    fn new(e: &yrs::undo::Event) -> Self {
+        let stack_item: JsValue = Object::new().into();
+        Reflect::set(
+            &stack_item,
+            &JsValue::from_str("deletions"),
+            &delete_set_into_map(e.item.deletions()),
+        )
+        .unwrap();
+        Reflect::set(
+            &stack_item,
+            &JsValue::from_str("insertions"),
+            &delete_set_into_map(e.item.insertions()),
+        )
+        .unwrap();
+        YUndoEvent {
+            stack_item,
+            origin: e
+                .origin
+                .as_ref()
+                .map(|origin| Uint8Array::from(origin.as_ref()).into())
+                .unwrap_or(JsValue::NULL),
+            kind: match e.kind {
+                EventKind::Undo => JsValue::from_str("undo"),
+                EventKind::Redo => JsValue::from_str("redo"),
+            },
+        }
+    }
+}
+
+#[wasm_bindgen]
+pub struct YUndoObserver(UndoEventSubscription);
+
 #[repr(transparent)]
 struct JsValueWrapper(JsValue);
 
@@ -3523,6 +3691,65 @@ impl Prelim for JsValueWrapper {
                     _ => panic!("Cannot integrate this type"),
                 }
             }
+        }
+    }
+}
+
+impl Into<Origin> for JsValueWrapper {
+    fn into(self) -> Origin {
+        if let Ok(branch) = self.as_branch_ptr() {
+            BranchPtr::from(branch).into()
+        } else {
+            let ptr = self.0.into_abi();
+            let bytes = ptr.to_be_bytes();
+            Origin::from(bytes.as_ref())
+        }
+    }
+}
+
+impl AsRef<Branch> for JsValueWrapper {
+    fn as_ref(&self) -> &Branch {
+        let ptr = self.as_branch_ptr().unwrap();
+        let branch = ptr.deref();
+        unsafe { std::mem::transmute(branch) }
+    }
+}
+
+impl JsValueWrapper {
+    fn as_branch_ptr<'a>(&'a self) -> Result<BranchPtr, JsValue> {
+        let s = Shared::<'a>::try_from(&self.0)?;
+        match s {
+            Shared::Text(v) => {
+                if let SharedType::Integrated(x) = v.0.borrow().deref() {
+                    Ok(BranchPtr::from(x.as_ref()))
+                } else {
+                    Err(JsValue::from_str(
+                        "Shared type must be integrated first to be used in this context",
+                    ))
+                }
+            }
+            Shared::Array(v) => {
+                if let SharedType::Integrated(x) = v.0.borrow().deref() {
+                    Ok(BranchPtr::from(x.as_ref()))
+                } else {
+                    Err(JsValue::from_str(
+                        "Shared type must be integrated first to be used in this context",
+                    ))
+                }
+            }
+            Shared::Map(v) => {
+                if let SharedType::Integrated(x) = v.0.borrow().deref() {
+                    Ok(BranchPtr::from(x.as_ref()))
+                } else {
+                    Err(JsValue::from_str(
+                        "Shared type must be integrated first to be used in this context",
+                    ))
+                }
+            }
+            Shared::XmlElement(v) => Ok(BranchPtr::from(v.deref().0.as_ref())),
+            Shared::XmlText(v) => Ok(BranchPtr::from(v.deref().0.as_ref())),
+            Shared::XmlFragment(v) => Ok(BranchPtr::from(v.deref().0.as_ref())),
+            Shared::Doc(v) => Err(JsValue::from_str("Doc is not a shared type")),
         }
     }
 }
@@ -3686,7 +3913,7 @@ impl<'a> TryFrom<&'a JsValue> for Shared<'a> {
     type Error = JsValue;
 
     fn try_from(js: &'a JsValue) -> Result<Self, Self::Error> {
-        use js_sys::{Object, Reflect};
+        use js_sys::Object;
         let ctor_name = Object::get_prototype_of(js).constructor().name();
         let ptr = Reflect::get(js, &JsValue::from_str("ptr"))?;
         let ptr_u32: u32 = ptr.as_f64().ok_or(JsValue::NULL)? as u32;
