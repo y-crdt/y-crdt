@@ -80,23 +80,20 @@ impl UndoManager {
         UndoManager(inner)
     }
 
-    fn should_track(inner: &Inner, txn: &TransactionMut) -> bool {
-        if !(inner.options.capture_transaction)(txn)
+    fn should_skip(inner: &Inner, txn: &TransactionMut) -> bool {
+        !(inner.options.capture_transaction)(txn)
             || !inner
                 .scope
                 .iter()
                 .any(|parent| txn.changed.contains_key(&TypePtr::Branch(parent.clone())))
-        {
-            false
-        } else if let Some(origin) = txn.origin() {
-            inner.options.tracked_origins.contains(origin)
-        } else {
-            true
-        }
+            || !txn
+                .origin()
+                .map(|o| inner.options.tracked_origins.contains(o))
+                .unwrap_or(true)
     }
 
     fn handle_after_transaction(inner: &mut Inner, txn: &mut TransactionMut) {
-        if !Self::should_track(inner, txn) {
+        if Self::should_skip(inner, txn) {
             return;
         }
         let undoing = inner.undoing;
