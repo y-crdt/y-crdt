@@ -4230,6 +4230,12 @@ pub unsafe extern "C" fn yundo_manager_clear(mgr: *mut UndoManager) -> c_char {
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn yundo_manager_stop(mgr: *mut UndoManager) {
+    let mgr = mgr.as_mut().unwrap();
+    mgr.stop();
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn yundo_manager_undo(mgr: *mut UndoManager) -> c_char {
     let mgr = mgr.as_mut().unwrap();
     match mgr.undo() {

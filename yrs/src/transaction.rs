@@ -12,6 +12,7 @@ use atomic_refcell::{AtomicRef, AtomicRefMut};
 use lib0::error::Error;
 use smallvec::SmallVec;
 use std::collections::{HashMap, HashSet};
+use std::fmt::Formatter;
 use std::hash::Hash;
 use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
@@ -871,7 +872,7 @@ pub struct Subdocs {
 }
 
 #[repr(transparent)]
-#[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
+#[derive(Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
 pub struct Origin(SmallVec<[u8; std::mem::size_of::<usize>()]>);
 
 impl AsRef<[u8]> for Origin {
@@ -896,6 +897,22 @@ impl<'a> From<&'a [u8]> for Origin {
 impl<'a> From<&'a str> for Origin {
     fn from(v: &'a str) -> Self {
         Origin(SmallVec::from_slice(v.as_ref()))
+    }
+}
+
+impl std::fmt::Debug for Origin {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
+    }
+}
+
+impl std::fmt::Display for Origin {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Origin(")?;
+        for b in self.0.iter() {
+            write!(f, "{:02x?}", b)?;
+        }
+        write!(f, ")")
     }
 }
 

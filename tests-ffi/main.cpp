@@ -17,6 +17,43 @@ YDoc* ydoc_new_with_id(int id) {
     return ydoc_new_with_options(o);
 }
 
+void exchange_updates(int len, ...) {
+    va_list args;
+    va_start(args, len);
+    YDoc** docs = (YDoc**)malloc(sizeof(YDoc*) * len);
+    for (int i=0; i < len; i++) {
+        docs[i] = va_arg(args, YDoc*);
+    }
+    va_end(args);
+
+    for (int i = 0; i < len; i++) {
+        for (int j = 0; j < len; j++) {
+            if (i != j) {
+                YDoc* d1 = docs[i];
+                YDoc* d2 = docs[j];
+
+                YTransaction* t1 = ydoc_read_transaction(d1);
+                int sv1_len = 0;
+                unsigned char* sv1 = ytransaction_state_vector_v1(t1, &sv1_len);
+                ytransaction_commit(t1);
+
+                YTransaction* t2 = ydoc_read_transaction(d1);
+                int u2_len = 0;
+                unsigned char* u2 = ytransaction_state_diff_v1(t2, sv1, sv1_len, &u2_len);
+                ytransaction_commit(t2);
+                ybinary_destroy(sv1, sv1_len);
+
+                t1 = ydoc_write_transaction(d1);
+                ytransaction_apply(t1, u2, u2_len);
+                ytransaction_commit(t1);
+                ybinary_destroy(u2, u2_len);
+            }
+        }
+    }
+
+    free(docs);
+}
+
 TEST_CASE("Update exchange basic") {
     // init
     YDoc* d1 = ydoc_new_with_id(1);
@@ -1584,4 +1621,106 @@ TEST_CASE("YDoc observe subdocs") {
     ydoc_destroy(docA);
     ydoc_destroy(docB);
     ydoc_destroy(docC);
+}
+
+TEST_CASE("YUndoManager undo redo") {
+    YDoc* d1 = ydoc_new_with_id(1);
+    YDoc* d2 = ydoc_new_with_id(1);
+    Branch* txt1 = ytext(d1, "test");
+    Branch* txt2 = ytext(d2, "test");
+    YUndoManager* mgr = yundo_manager(d1, txt1, NULL);
+
+    YTransaction* txn = ydoc_write_transaction(d1);
+    ytext_insert(txt1, txn, 0, "test", NULL);
+    ytransaction_commit(txn);
+    txn = ydoc_write_transaction(d1);
+    ytext_remove_range(txt1, txn, 0, 4);
+    ytransaction_commit(txn);
+    yundo_manager_undo(mgr);
+
+    txn = ydoc_read_transaction(d1);
+    char* actual = ytext_string(txt1, txn);
+    ytransaction_commit(txn);
+    REQUIRE(!strcmp(actual, ""));
+    ystring_destroy(actual);
+
+    // follow redone items
+    txn = ydoc_write_transaction(d1);
+    ytext_insert(txt1, txn, 0, "a", NULL);
+    ytransaction_commit(txn);
+
+    yundo_manager_stop(mgr);
+
+    txn = ydoc_write_transaction(d1);
+    ytext_remove_range(txt1, txn, 0, 1);
+    ytransaction_commit(txn);
+
+    yundo_manager_stop(mgr);
+    yundo_manager_undo(mgr);
+
+    txn = ydoc_read_transaction(d1);
+    actual = ytext_string(txt1, txn);
+    ytransaction_commit(txn);
+    REQUIRE(!strcmp(actual, "a"));
+    ystring_destroy(actual);
+
+    yundo_manager_undo(mgr);
+
+    txn = ydoc_read_transaction(d1);
+    actual = ytext_string(txt1, txn);
+    ytransaction_commit(txn);
+    REQUIRE(!strcmp(actual, ""));
+    ystring_destroy(actual);
+
+    txn = ydoc_write_transaction(d1);
+    ytext_insert(txt1, txn, 0, "abc", NULL);
+    ytransaction_commit(txn);
+
+    txn = ydoc_write_transaction(d2);
+    ytext_insert(txt2, txn, 0, "xyz", NULL);
+    ytransaction_commit(txn);
+
+    exchange_updates(2, d1, d2);
+    yundo_manager_undo(mgr);
+
+    txn = ydoc_read_transaction(d1);
+    actual = ytext_string(txt1, txn);
+    ytransaction_commit(txn);
+    REQUIRE(!strcmp(actual, "xyz"));
+    ystring_destroy(actual);
+
+    yundo_manager_redo(mgr);
+
+    txn = ydoc_read_transaction(d1);
+    actual = ytext_string(txt1, txn);
+    ytransaction_commit(txn);
+    REQUIRE(!strcmp(actual, "abcxyz"));
+    ystring_destroy(actual);
+
+    exchange_updates(2, d1, d2);
+
+    txn = ydoc_write_transaction(d2);
+    ytext_remove_range(txt2, txn, 0, 1);
+    ytransaction_commit(txn);
+
+    exchange_updates(2, d1, d2);
+    yundo_manager_undo(mgr);
+
+    txn = ydoc_read_transaction(d1);
+    actual = ytext_string(txt1, txn);
+    ytransaction_commit(txn);
+    REQUIRE(!strcmp(actual, "xyz"));
+    ystring_destroy(actual);
+
+    yundo_manager_redo(mgr);
+
+    txn = ydoc_read_transaction(d1);
+    actual = ytext_string(txt1, txn);
+    ytransaction_commit(txn);
+    REQUIRE(!strcmp(actual, "bcxyz"));
+    ystring_destroy(actual);
+
+    yundo_manager_destroy(mgr);
+    ydoc_destroy(d1);
+    ydoc_destroy(d2);
 }

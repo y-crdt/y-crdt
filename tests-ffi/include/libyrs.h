@@ -2229,6 +2229,8 @@ void yundo_manager_add_scope(YUndoManager *mgr, const Branch *ytype);
 
 char yundo_manager_clear(YUndoManager *mgr);
 
+void yundo_manager_stop(YUndoManager *mgr);
+
 char yundo_manager_undo(YUndoManager *mgr);
 
 char yundo_manager_redo(YUndoManager *mgr);
