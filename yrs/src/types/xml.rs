@@ -153,8 +153,10 @@ impl GetString for XmlElementRef {
         }
         write!(&mut s, ">").unwrap();
         for i in inner.iter(txn) {
-            for content in i.content.get_content() {
-                write!(&mut s, "{}", content.to_string(txn)).unwrap();
+            if !i.is_deleted() {
+                for content in i.content.get_content() {
+                    write!(&mut s, "{}", content.to_string(txn)).unwrap();
+                }
             }
         }
         write!(&mut s, "</{}>", tag).unwrap();

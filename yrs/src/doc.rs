@@ -298,7 +298,7 @@ impl Doc {
         f: F,
     ) -> Result<AfterTransactionSubscription, BorrowMutError>
     where
-        F: Fn(&mut TransactionMut) -> () + 'static,
+        F: Fn(&mut TransactionMut, &[BranchPtr]) -> () + 'static,
     {
         let mut r = self.store.try_borrow_mut()?;
         let events = r.events.get_or_init();
@@ -458,7 +458,8 @@ pub type UpdateSubscription = crate::Subscription<Arc<dyn Fn(&TransactionMut, &U
 pub type TransactionCleanupSubscription =
     crate::Subscription<Arc<dyn Fn(&TransactionMut, &TransactionCleanupEvent) -> ()>>;
 
-pub type AfterTransactionSubscription = crate::Subscription<Arc<dyn Fn(&mut TransactionMut) -> ()>>;
+pub type AfterTransactionSubscription =
+    crate::Subscription<Arc<dyn Fn(&mut TransactionMut, &[BranchPtr]) -> ()>>;
 
 pub type SubdocsSubscription =
     crate::Subscription<Arc<dyn Fn(&TransactionMut, &SubdocsEvent) -> ()>>;

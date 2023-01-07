@@ -71,9 +71,9 @@ impl UndoManager {
                 .unwrap(),
         );
         inner.on_after_transaction = Some(
-            doc.observe_after_transaction(move |txn| {
+            doc.observe_after_transaction(move |txn, changed_parents| {
                 let inner = unsafe { inner_ptr.as_mut().unwrap() };
-                Self::handle_after_transaction(inner, txn);
+                Self::handle_after_transaction(inner, txn, changed_parents);
             })
             .unwrap(),
         );
@@ -81,20 +81,24 @@ impl UndoManager {
         UndoManager(inner)
     }
 
-    fn should_skip(inner: &Inner, txn: &TransactionMut) -> bool {
+    fn should_skip(inner: &Inner, txn: &TransactionMut, changed_parents: &[BranchPtr]) -> bool {
         !(inner.options.capture_transaction)(txn)
             || !inner
                 .scope
                 .iter()
-                .any(|parent| txn.changed.contains_key(&TypePtr::Branch(parent.clone())))
+                .any(|parent| changed_parents.contains(parent))
             || !txn
                 .origin()
                 .map(|o| inner.options.tracked_origins.contains(o))
                 .unwrap_or(true)
     }
 
-    fn handle_after_transaction(inner: &mut Inner, txn: &mut TransactionMut) {
-        if Self::should_skip(inner, txn) {
+    fn handle_after_transaction(
+        inner: &mut Inner,
+        txn: &mut TransactionMut,
+        changed_parents: &[BranchPtr],
+    ) {
+        if Self::should_skip(inner, txn, changed_parents) {
             return;
         }
         let undoing = inner.undoing.get();
@@ -395,6 +399,31 @@ impl UndoManager {
         }
         result
     }
+
+    fn fmt_with(&self, txn: &mut TransactionMut) -> String {
+        use std::fmt::Write;
+        let mut s = String::new();
+        s.push_str("UndoManager(");
+        write!(&mut s, "\n\tscope: {:?}", &self.0.scope).unwrap();
+        write!(&mut s, "\n\torigins: {:?}", &self.0.options.tracked_origins).unwrap();
+        if !self.0.undo_stack.is_empty() {
+            s.push_str("\n\tundo: [");
+            for stack_item in self.0.undo_stack.iter() {
+                s.push_str("\n\t\t");
+                s.push_str(&stack_item.fmt_with(txn));
+            }
+            s.push_str("\n\t]");
+        }
+        if !self.0.redo_stack.is_empty() {
+            s.push_str("\n\tredo: [");
+            for stack_item in self.0.redo_stack.iter() {
+                s.push_str("\n\t\t");
+                s.push_str(&stack_item.fmt_with(txn));
+            }
+            s.push_str("\n\t]");
+        }
+        s
+    }
 }
 
 impl std::fmt::Debug for UndoManager {
@@ -477,6 +506,20 @@ impl StackItem {
     pub fn insertions(&self) -> &DeleteSet {
         &self.insertions
     }
+
+    fn fmt_with(&self, txn: &mut TransactionMut) -> String {
+        let i: Vec<_> = self
+            .insertions
+            .deleted_blocks(txn)
+            .map(|ptr| ptr.deref().to_string())
+            .collect();
+        let d: Vec<_> = self
+            .deletions
+            .deleted_blocks(txn)
+            .map(|ptr| ptr.deref().to_string())
+            .collect();
+        format!("StackItem({:#?}, {:#?})", i, d)
+    }
 }
 
 impl std::fmt::Display for StackItem {
@@ -556,6 +599,22 @@ mod test {
     use std::collections::HashMap;
     use std::convert::TryInto;
     use std::time::Duration;
+
+    fn print_undo_manager(prefix: &str, mgr: &UndoManager) {
+        println!("{}", prefix);
+        if !mgr.0.undo_stack.is_empty() {
+            println!("undo stack:");
+            for i in mgr.0.undo_stack.iter() {
+                println!("\t{}", i);
+            }
+        }
+        if !mgr.0.redo_stack.is_empty() {
+            println!("redo stack:");
+            for i in mgr.0.redo_stack.iter() {
+                println!("\t{}", i);
+            }
+        }
+    }
 
     #[test]
     fn undo_text() {
@@ -683,8 +742,9 @@ mod test {
         exchange_updates(&[&d1, &d2]);
 
         // if content is overwritten by another user, undo operations should be skipped
-        map2.insert(&mut d1.transact_mut(), "a", 44);
+        map2.insert(&mut d2.transact_mut(), "a", 44);
 
+        exchange_updates(&[&d1, &d2]);
         exchange_updates(&[&d1, &d2]);
 
         mgr.undo().unwrap();
@@ -773,8 +833,7 @@ mod test {
         exchange_updates(&[&d1, &d2]);
 
         let map2 = array2.get(&d2.transact(), 0).unwrap().to_ymap().unwrap();
-        map.insert(&mut d2.transact_mut(), "b", 2);
-
+        map2.insert(&mut d2.transact_mut(), "b", 2);
         exchange_updates(&[&d1, &d2]);
 
         let actual = array1.to_json(&d1.transact());

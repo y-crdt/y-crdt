@@ -640,6 +640,7 @@ impl<'doc> TransactionMut<'doc> {
         self.after_state = self.store.blocks.get_state_vector();
         // 2. emit 'beforeObserverCalls'
         // 3. for each change observed by the transaction call 'afterTransaction'
+        let mut changed_parents_types = Vec::default();
         if !self.changed.is_empty() {
             let mut changed_parents: HashMap<BranchPtr, Vec<usize>> = HashMap::new();
             let mut event_cache = Vec::new();
@@ -651,6 +652,7 @@ impl<'doc> TransactionMut<'doc> {
 
                         let mut current = *branch;
                         loop {
+                            changed_parents_types.push(current);
                             if current.deep_observers.is_some() {
                                 let entries = changed_parents.entry(current).or_default();
                                 entries.push(event_cache.len() - 1);
@@ -691,7 +693,7 @@ impl<'doc> TransactionMut<'doc> {
         }
 
         if let Some(events) = self.store.events.take() {
-            events.emit_after_transaction(self);
+            events.emit_after_transaction(self, &changed_parents_types);
             self.store.events = Some(events);
         }
 
