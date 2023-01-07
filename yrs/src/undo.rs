@@ -6,6 +6,7 @@ use crate::{
     DeleteSet, DestroySubscription, Doc, Observer, Store, Subscription, SubscriptionId, Transact,
     TransactionMut, ID,
 };
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Formatter;
 use std::ops::Deref;
@@ -22,8 +23,8 @@ struct Inner {
     options: Options,
     undo_stack: Vec<StackItem>,
     redo_stack: Vec<StackItem>,
-    undoing: bool,
-    redoing: bool,
+    undoing: Cell<bool>,
+    redoing: Cell<bool>,
     last_change: SystemTime,
     on_after_transaction: Option<AfterTransactionSubscription>,
     on_destroy: Option<DestroySubscription>,
@@ -51,8 +52,8 @@ impl UndoManager {
             options,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
-            undoing: false,
-            redoing: false,
+            undoing: Cell::new(false),
+            redoing: Cell::new(false),
             last_change: SystemTime::UNIX_EPOCH,
             on_after_transaction: None,
             on_destroy: None,
@@ -96,11 +97,11 @@ impl UndoManager {
         if Self::should_skip(inner, txn) {
             return;
         }
-        let undoing = inner.undoing;
-        let redoing = inner.redoing;
+        let undoing = inner.undoing.get();
+        let redoing = inner.redoing.get();
         if undoing {
             inner.last_change = UNIX_EPOCH; // next undo should not be appended to last stack item
-        } else if !inner.redoing {
+        } else if !redoing {
             // neither undoing nor redoing: delete redoStack
             let len = inner.redo_stack.len();
             for item in inner.redo_stack.drain(0..len) {
@@ -288,19 +289,20 @@ impl UndoManager {
     /// Undo last change on type.
     pub fn undo(&mut self) -> Result<bool, TransactionAcqError> {
         let mut txn = self.0.doc.try_transact_mut_with(self.as_origin())?;
-        self.0.undoing = true;
+        self.0.undoing.set(true);
         let result = Self::pop(&mut self.0.undo_stack, &mut txn, &self.0.scope);
-        if let Some(item) = result {
+        let changed = if let Some(item) = result {
             let e = Event::undo(item, Some(self.as_origin()), txn.changed.clone());
             for cb in self.0.observer_popped.callbacks() {
                 cb(&txn, &e);
             }
-            self.0.undoing = false;
-            Ok(true)
+            true
         } else {
-            self.0.undoing = false;
-            Ok(false)
-        }
+            false
+        };
+        drop(txn);
+        self.0.undoing.set(false);
+        Ok(changed)
     }
 
     /// Are there any redo steps available?
@@ -311,19 +313,20 @@ impl UndoManager {
     /// Redo last undo operation.
     pub fn redo(&mut self) -> Result<bool, TransactionAcqError> {
         let mut txn = self.0.doc.try_transact_mut_with(self.as_origin())?;
-        self.0.redoing = true;
+        self.0.redoing.set(true);
         let result = Self::pop(&mut self.0.redo_stack, &mut txn, &self.0.scope);
-        if let Some(item) = result {
+        let changed = if let Some(item) = result {
             let e = Event::redo(item, Some(self.as_origin()), txn.changed.clone());
             for cb in self.0.observer_popped.callbacks() {
                 cb(&txn, &e);
             }
-            self.0.redoing = false;
-            Ok(true)
+            true
         } else {
-            self.0.redoing = false;
-            Ok(false)
-        }
+            false
+        };
+        drop(txn);
+        self.0.redoing.set(false);
+        Ok(changed)
     }
 
     fn pop(
@@ -352,6 +355,8 @@ impl UndoManager {
                             block
                         };
                     }
+                }
+                if let Block::Item(item) = ptr.clone().deref() {
                     if !item.is_deleted() && scope.iter().any(|b| b.is_parent_of(Some(ptr.clone())))
                     {
                         to_delete.push(ptr);
@@ -389,6 +394,21 @@ impl UndoManager {
             }
         }
         result
+    }
+}
+
+impl std::fmt::Debug for UndoManager {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let mut s = f.debug_struct("UndoManager");
+        s.field("scope", &self.0.scope);
+        s.field("tracked_origins", &self.0.options.tracked_origins);
+        if !self.0.undo_stack.is_empty() {
+            s.field("undo", &self.0.undo_stack);
+        }
+        if !self.0.redo_stack.is_empty() {
+            s.field("redo", &self.0.redo_stack);
+        }
+        s.finish()
     }
 }
 
@@ -577,6 +597,7 @@ mod test {
 
         exchange_updates(&[&d1, &d2]);
 
+        mgr.undo().unwrap();
         assert_eq!(txt1.get_string(&d1.transact()), "xyz");
         mgr.redo().unwrap();
         assert_eq!(txt1.get_string(&d1.transact()), "bcxyz");

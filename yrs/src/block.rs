@@ -2058,6 +2058,9 @@ impl std::fmt::Display for Item {
         if let Some(m) = self.moved {
             write!(f, ", moved-to: {}", m)?;
         }
+        if let Some(id) = self.redone.as_ref() {
+            write!(f, ", redone: {}", id)?;
+        }
         if let Some(origin) = self.origin.as_ref() {
             write!(f, ", origin-l: {}", origin)?;
         }
