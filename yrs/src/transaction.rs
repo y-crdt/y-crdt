@@ -232,6 +232,7 @@ pub struct TransactionMut<'doc> {
     /// All types that were directly modified (property added or child inserted/deleted).
     /// New types are not included in this Set.
     pub(crate) changed: HashMap<TypePtr, HashSet<Option<Rc<str>>>>,
+    pub(crate) changed_parent_types: Vec<BranchPtr>,
     pub(crate) subdocs: Option<Box<Subdocs>>,
     pub(crate) origin: Option<Origin>,
     committed: bool,
@@ -268,10 +269,11 @@ impl<'doc> TransactionMut<'doc> {
             store,
             origin,
             before_state: begin_timestamp,
-            merge_blocks: Vec::new(),
+            merge_blocks: Vec::default(),
             delete_set: DeleteSet::new(),
             after_state: StateVector::default(),
-            changed: HashMap::new(),
+            changed: HashMap::default(),
+            changed_parent_types: Vec::default(),
             prev_moved: HashMap::default(),
             subdocs: None,
             committed: false,
@@ -296,6 +298,11 @@ impl<'doc> TransactionMut<'doc> {
     /// Returns origin of the transaction (if it was defined).
     pub fn origin(&self) -> Option<&Origin> {
         self.origin.as_ref()
+    }
+
+    /// Stores the events for the types that observe also child elements.
+    pub fn changed_parent_types(&self) -> &[BranchPtr] {
+        &self.changed_parent_types
     }
 
     #[inline]
@@ -640,7 +647,6 @@ impl<'doc> TransactionMut<'doc> {
         self.after_state = self.store.blocks.get_state_vector();
         // 2. emit 'beforeObserverCalls'
         // 3. for each change observed by the transaction call 'afterTransaction'
-        let mut changed_parents_types = Vec::default();
         if !self.changed.is_empty() {
             let mut changed_parents: HashMap<BranchPtr, Vec<usize>> = HashMap::new();
             let mut event_cache = Vec::new();
@@ -652,7 +658,7 @@ impl<'doc> TransactionMut<'doc> {
 
                         let mut current = *branch;
                         loop {
-                            changed_parents_types.push(current);
+                            self.changed_parent_types.push(current);
                             if current.deep_observers.is_some() {
                                 let entries = changed_parents.entry(current).or_default();
                                 entries.push(event_cache.len() - 1);
@@ -693,7 +699,7 @@ impl<'doc> TransactionMut<'doc> {
         }
 
         if let Some(events) = self.store.events.take() {
-            events.emit_after_transaction(self, &changed_parents_types);
+            events.emit_after_transaction(self);
             self.store.events = Some(events);
         }
 

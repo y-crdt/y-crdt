@@ -1,13 +1,13 @@
 use crate::block::{Block, BlockPtr};
 use crate::doc::{AfterTransactionSubscription, TransactionAcqError};
 use crate::transaction::Origin;
-use crate::types::{Branch, BranchPtr, TypePtr};
+use crate::types::{Branch, BranchPtr};
 use crate::{
     DeleteSet, DestroySubscription, Doc, Observer, Store, Subscription, SubscriptionId, Transact,
     TransactionMut, ID,
 };
 use std::cell::Cell;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fmt::Formatter;
 use std::ops::Deref;
 use std::rc::Rc;
@@ -67,13 +67,13 @@ impl UndoManager {
             .tracked_origins
             .insert(Origin::from(unsafe { inner_ptr as usize }));
         inner.on_destroy = Some(
-            doc.observe_destroy(move |txn, e| Self::handle_destroy(inner_ptr))
+            doc.observe_destroy(move |_, _| Self::handle_destroy(inner_ptr))
                 .unwrap(),
         );
         inner.on_after_transaction = Some(
-            doc.observe_after_transaction(move |txn, changed_parents| {
+            doc.observe_after_transaction(move |txn| {
                 let inner = unsafe { inner_ptr.as_mut().unwrap() };
-                Self::handle_after_transaction(inner, txn, changed_parents);
+                Self::handle_after_transaction(inner, txn);
             })
             .unwrap(),
         );
@@ -81,24 +81,20 @@ impl UndoManager {
         UndoManager(inner)
     }
 
-    fn should_skip(inner: &Inner, txn: &TransactionMut, changed_parents: &[BranchPtr]) -> bool {
+    fn should_skip(inner: &Inner, txn: &TransactionMut) -> bool {
         !(inner.options.capture_transaction)(txn)
             || !inner
                 .scope
                 .iter()
-                .any(|parent| changed_parents.contains(parent))
+                .any(|parent| txn.changed_parent_types.contains(parent))
             || !txn
                 .origin()
                 .map(|o| inner.options.tracked_origins.contains(o))
                 .unwrap_or(true)
     }
 
-    fn handle_after_transaction(
-        inner: &mut Inner,
-        txn: &mut TransactionMut,
-        changed_parents: &[BranchPtr],
-    ) {
-        if Self::should_skip(inner, txn, changed_parents) {
+    fn handle_after_transaction(inner: &mut Inner, txn: &mut TransactionMut) {
+        if Self::should_skip(inner, txn) {
             return;
         }
         let undoing = inner.undoing.get();
@@ -158,9 +154,17 @@ impl UndoManager {
 
         let last_op = stack.last().unwrap().clone();
         let event = if undoing {
-            Event::undo(last_op, txn.origin.clone(), txn.changed.clone())
+            Event::undo(
+                last_op,
+                txn.origin.clone(),
+                txn.changed_parent_types.clone(),
+            )
         } else {
-            Event::redo(last_op, txn.origin.clone(), txn.changed.clone())
+            Event::redo(
+                last_op,
+                txn.origin.clone(),
+                txn.changed_parent_types.clone(),
+            )
         };
         if !extend {
             for cb in inner.observer_added.callbacks() {
@@ -295,8 +299,13 @@ impl UndoManager {
         let mut txn = self.0.doc.try_transact_mut_with(self.as_origin())?;
         self.0.undoing.set(true);
         let result = Self::pop(&mut self.0.undo_stack, &mut txn, &self.0.scope);
+        txn.commit();
         let changed = if let Some(item) = result {
-            let e = Event::undo(item, Some(self.as_origin()), txn.changed.clone());
+            let e = Event::undo(
+                item,
+                Some(self.as_origin()),
+                txn.changed_parent_types.clone(),
+            );
             for cb in self.0.observer_popped.callbacks() {
                 cb(&txn, &e);
             }
@@ -304,7 +313,6 @@ impl UndoManager {
         } else {
             false
         };
-        drop(txn);
         self.0.undoing.set(false);
         Ok(changed)
     }
@@ -319,8 +327,13 @@ impl UndoManager {
         let mut txn = self.0.doc.try_transact_mut_with(self.as_origin())?;
         self.0.redoing.set(true);
         let result = Self::pop(&mut self.0.redo_stack, &mut txn, &self.0.scope);
+        txn.commit();
         let changed = if let Some(item) = result {
-            let e = Event::redo(item, Some(self.as_origin()), txn.changed.clone());
+            let e = Event::redo(
+                item,
+                Some(self.as_origin()),
+                txn.changed_parent_types.clone(),
+            );
             for cb in self.0.observer_popped.callbacks() {
                 cb(&txn, &e);
             }
@@ -328,7 +341,6 @@ impl UndoManager {
         } else {
             false
         };
-        drop(txn);
         self.0.redoing.set(false);
         Ok(changed)
     }
@@ -485,7 +497,7 @@ impl Default for Options {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct StackItem {
     deletions: DeleteSet,
     insertions: DeleteSet,
@@ -535,44 +547,36 @@ impl std::fmt::Display for StackItem {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Event {
     pub item: StackItem,
     pub origin: Option<Origin>,
     pub kind: EventKind,
-    changed: HashMap<TypePtr, HashSet<Option<Rc<str>>>>,
+    pub changed_parent_types: Vec<BranchPtr>,
 }
 
 impl Event {
-    fn undo(
-        item: StackItem,
-        origin: Option<Origin>,
-        changed: HashMap<TypePtr, HashSet<Option<Rc<str>>>>,
-    ) -> Self {
+    fn undo(item: StackItem, origin: Option<Origin>, changed_parent_types: Vec<BranchPtr>) -> Self {
         Event {
             item,
             origin,
-            changed,
+            changed_parent_types,
             kind: EventKind::Undo,
         }
     }
 
-    fn redo(
-        item: StackItem,
-        origin: Option<Origin>,
-        changed: HashMap<TypePtr, HashSet<Option<Rc<str>>>>,
-    ) -> Self {
+    fn redo(item: StackItem, origin: Option<Origin>, changed_parent_types: Vec<BranchPtr>) -> Self {
         Event {
             item,
             origin,
-            changed,
+            changed_parent_types,
             kind: EventKind::Redo,
         }
     }
 
     pub fn has_changed<T: AsRef<Branch>>(&self, target: &T) -> bool {
         let ptr = BranchPtr::from(target.as_ref());
-        self.changed.contains_key(&TypePtr::Branch(ptr))
+        self.changed_parent_types.contains(&ptr)
     }
 }
 
@@ -595,26 +599,29 @@ mod test {
         XmlElementPrelim, XmlElementRef, XmlFragment, XmlTextPrelim,
     };
     use lib0::any::Any;
-    use std::cell::Cell;
+    use std::cell::RefCell;
     use std::collections::HashMap;
     use std::convert::TryInto;
+    use std::rc::Rc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
     use std::time::Duration;
 
-    fn print_undo_manager(prefix: &str, mgr: &UndoManager) {
-        println!("{}", prefix);
-        if !mgr.0.undo_stack.is_empty() {
-            println!("undo stack:");
-            for i in mgr.0.undo_stack.iter() {
-                println!("\t{}", i);
-            }
-        }
-        if !mgr.0.redo_stack.is_empty() {
-            println!("redo stack:");
-            for i in mgr.0.redo_stack.iter() {
-                println!("\t{}", i);
-            }
-        }
-    }
+    //fn print_undo_manager(prefix: &str, mgr: &UndoManager) {
+    //    println!("{}", prefix);
+    //    if !mgr.0.undo_stack.is_empty() {
+    //        println!("undo stack:");
+    //        for i in mgr.0.undo_stack.iter() {
+    //            println!("\t{}", i);
+    //        }
+    //    }
+    //    if !mgr.0.redo_stack.is_empty() {
+    //        println!("redo stack:");
+    //        for i in mgr.0.redo_stack.iter() {
+    //            println!("\t{}", i);
+    //        }
+    //    }
+    //}
 
     #[test]
     fn undo_text() {
@@ -909,29 +916,35 @@ mod test {
         let txt = doc.get_or_insert_text("test");
         let mut mgr = UndoManager::new(&doc, &txt);
 
-        let mut counter = Cell::new(0);
+        let result = Arc::new(AtomicUsize::new(0));
+        let counter = AtomicUsize::new(1);
+        let data = Rc::new(RefCell::new(HashMap::new()));
 
-        let mut counter_copy = counter.clone();
         let txt_clone = txt.clone();
+        let data_clone = data.clone();
         let _sub1 = mgr.observe_item_added(move |txn, e| {
             assert!(e.has_changed(&txt_clone));
-            let c = counter_copy.get();
-            counter_copy.set(c + 1);
+            let c = counter.fetch_add(1, Ordering::SeqCst);
+            let mut data = data_clone.borrow_mut();
+            data.insert(e.item.clone(), c);
         });
 
-        let mut counter_copy = counter.clone();
         let txt_clone = txt.clone();
+        let data_clone = data.clone();
+        let result_clone = result.clone();
         let _sub2 = mgr.observe_item_popped(move |txn, e| {
             assert!(e.has_changed(&txt_clone));
-            let c = counter_copy.get();
-            counter_copy.set(c - 10);
+            let data = data_clone.borrow();
+            if let Some(&v) = data.get(&e.item) {
+                result_clone.store(v, Ordering::Relaxed);
+            }
         });
 
         txt.insert(&mut doc.transact_mut(), 0, "abc");
         mgr.undo().unwrap();
-        assert_eq!(counter.get(), 1);
+        assert_eq!(result.load(Ordering::SeqCst), 1);
         mgr.redo().unwrap();
-        assert_eq!(counter.get(), -9);
+        assert_eq!(result.load(Ordering::SeqCst), 2);
     }
 
     #[test]

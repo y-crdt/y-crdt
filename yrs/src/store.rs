@@ -430,8 +430,7 @@ pub(crate) struct StoreEvents {
 
     /// Handles subscriptions for the `afterTransactionCleanup` event. Events are called with the
     /// newest updates once they are committed and compacted.
-    pub(crate) after_transaction_events:
-        Option<Observer<Arc<dyn Fn(&mut TransactionMut, &[BranchPtr]) -> ()>>>,
+    pub(crate) after_transaction_events: Option<Observer<Arc<dyn Fn(&mut TransactionMut) -> ()>>>,
 
     /// A subscription handler. It contains all callbacks with registered by user functions that
     /// are supposed to be called, once a new update arrives.
@@ -521,7 +520,7 @@ impl StoreEvents {
         f: F,
     ) -> Result<AfterTransactionSubscription, BorrowMutError>
     where
-        F: Fn(&mut TransactionMut, &[BranchPtr]) -> () + 'static,
+        F: Fn(&mut TransactionMut) -> () + 'static,
     {
         let subscription = self
             .after_transaction_events
@@ -537,14 +536,10 @@ impl StoreEvents {
         }
     }
 
-    pub fn emit_after_transaction(
-        &self,
-        txn: &mut TransactionMut,
-        changed_parent_types: &[BranchPtr],
-    ) {
+    pub fn emit_after_transaction(&self, txn: &mut TransactionMut) {
         if let Some(eh) = self.after_transaction_events.as_ref() {
             for cb in eh.callbacks() {
-                cb(txn, changed_parent_types);
+                cb(txn);
             }
         }
     }

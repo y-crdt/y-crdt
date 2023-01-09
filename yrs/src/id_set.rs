@@ -8,7 +8,7 @@ use crate::TransactionMut;
 use lib0::error::Error;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
-use std::hash::BuildHasherDefault;
+use std::hash::{BuildHasherDefault, Hash, Hasher};
 use std::ops::Range;
 
 // Note: use native Rust [Range](https://doc.rust-lang.org/std/ops/struct.Range.html)
@@ -31,7 +31,7 @@ impl Decode for Range<u32> {
 
 /// [IdRange] describes a single space of an [ID] clock values, belonging to the same client.
 /// It can contain from a single continuous space, or multiple ones having "holes" between them.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub enum IdRange {
     /// A single continuous range of clocks.
     Continuous(Range<u32>),
@@ -389,9 +389,18 @@ impl Decode for IdSet {
     }
 }
 
+impl Hash for IdSet {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        for (client, range) in self.0.iter() {
+            client.hash(state);
+            range.hash(state);
+        }
+    }
+}
+
 /// [DeleteSet] contains information about all blocks (described by clock ranges) that have been
 /// subjected to delete process.
-#[derive(Clone, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq, Hash)]
 pub struct DeleteSet(IdSet);
 
 impl From<IdSet> for DeleteSet {
