@@ -399,8 +399,10 @@ impl GetString for XmlFragmentRef {
         let inner = self.0;
         let mut s = String::new();
         for i in inner.iter(txn) {
-            for content in i.content.get_content() {
-                write!(&mut s, "{}", content.to_string(txn)).unwrap();
+            if !i.is_deleted() {
+                for content in i.content.get_content() {
+                    write!(&mut s, "{}", content.to_string(txn)).unwrap();
+                }
             }
         }
         s

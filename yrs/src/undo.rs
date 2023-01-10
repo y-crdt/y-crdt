@@ -90,7 +90,7 @@ impl UndoManager {
             || !txn
                 .origin()
                 .map(|o| inner.options.tracked_origins.contains(o))
-                .unwrap_or(true)
+                .unwrap_or(inner.options.tracked_origins.len() == 1) // tracked origins contain only undo manager itself
     }
 
     fn handle_after_transaction(inner: &mut Inner, txn: &mut TransactionMut) {
@@ -953,13 +953,22 @@ mod test {
         let doc2 = Doc::with_client_id(2);
         let d1 = doc1.clone();
         let d2 = doc2.clone();
+
+        fn process(doc: &Doc, updates: &std::sync::mpsc::Receiver<Update>) {
+            let mut txn = doc.transact_mut();
+            while let Ok(u) = updates.try_recv() {
+                txn.apply_update(u);
+            }
+        }
+
+        let (s2, r2) = std::sync::mpsc::channel();
         let _sub1 = doc1.observe_update_v1(move |txn, e| {
-            d2.transact_mut()
-                .apply_update(Update::decode_v1(&e.update).unwrap());
+            s2.send(Update::decode_v1(&e.update).unwrap()).unwrap();
         });
+
+        let (s1, r1) = std::sync::mpsc::channel();
         let _sub2 = doc2.observe_update_v1(move |txn, e| {
-            d1.transact_mut()
-                .apply_update(Update::decode_v1(&e.update).unwrap());
+            s1.send(Update::decode_v1(&e.update).unwrap()).unwrap();
         });
 
         let arr1 = doc1.get_or_insert_array("array");
@@ -968,12 +977,20 @@ mod test {
             &mut doc1.transact_mut(),
             MapPrelim::from([("hello".to_owned(), "world".to_owned())]),
         );
+
+        process(&doc1, &r1);
+        process(&doc2, &r2);
+
         let map1 = arr1.get(&doc1.transact(), 0).unwrap().to_ymap().unwrap();
-        arr2.push_back(
-            &mut doc2.transact_mut(),
+        arr1.push_back(
+            &mut doc1.transact_mut(),
             MapPrelim::from([("key".to_owned(), "value".to_owned())]),
         );
-        let map2 = arr1.get(&doc2.transact(), 0).unwrap().to_ymap().unwrap();
+
+        process(&doc1, &r1);
+        process(&doc2, &r2);
+
+        let map2 = arr1.get(&doc1.transact(), 0).unwrap().to_ymap().unwrap();
 
         let mut mgr1 = UndoManager::new(&doc1, &arr1);
         mgr1.include_origin(doc1.client_id());
@@ -981,21 +998,37 @@ mod test {
         mgr2.include_origin(doc2.client_id());
 
         map2.insert(
-            &mut doc2.transact_mut_with(doc1.client_id()),
+            &mut doc1.transact_mut_with(doc1.client_id()),
             "key",
             "value modified",
         );
+
+        process(&doc1, &r1);
+        process(&doc2, &r2);
+
         mgr1.stop();
 
         map1.insert(
-            &mut doc2.transact_mut_with(doc1.client_id()),
+            &mut doc1.transact_mut_with(doc1.client_id()),
             "hello",
             "world modified",
         );
-        arr1.remove_range(&mut doc1.transact_mut_with(doc2.client_id()), 0, 1);
+
+        process(&doc1, &r1);
+        process(&doc2, &r2);
+
+        arr2.remove_range(&mut doc2.transact_mut_with(doc2.client_id()), 0, 1);
+
+        process(&doc1, &r1);
+        process(&doc2, &r2);
+
         mgr2.undo().unwrap();
         mgr1.undo().unwrap();
-        assert_eq!(map2.get(&doc2.transact(), "key"), Some("value".into()));
+
+        process(&doc1, &r1);
+        process(&doc2, &r2);
+
+        assert_eq!(map2.get(&doc1.transact(), "key"), Some("value".into()));
     }
 
     #[test]
@@ -1082,6 +1115,7 @@ mod test {
         );
     }
 
+    #[test]
     fn consecutive_redo_bug() {
         // https://github.com/yjs/yjs/issues/355
         let doc = Doc::with_client_id(1);
@@ -1192,7 +1226,10 @@ mod test {
         mgr.redo().unwrap();
 
         let str = f.get_string(&doc.transact());
-        assert_eq!(str, r#"<test-node a="180" b="50"></test-node>"#);
+        assert!(
+            str == r#"<test-node a="180" b="50"></test-node>"#
+                || str == r#"<test-node b="50" a="180"></test-node>"#
+        );
     }
 
     #[test]
@@ -1336,10 +1373,8 @@ mod test {
             e.insert_attribute(&mut txn, "a", "1");
             e.insert_attribute(&mut txn, "b", "2");
         }
-        assert_eq!(
-            f.get_string(&doc.transact()),
-            r#"<test a="1" b="2"></test>"#
-        );
+        let s = f.get_string(&doc.transact());
+        assert!(s == r#"<test a="1" b="2"></test>"# || s == r#"<test b="2" a="1"></test>"#);
         {
             // change attribute "b" and delete test-node
             let mut txn = doc.transact_mut_with(ORIGIN);
@@ -1348,10 +1383,9 @@ mod test {
             f.remove_range(&mut txn, 0, 1);
         }
         assert_eq!(f.get_string(&doc.transact()), "");
+
         mgr.undo().unwrap();
-        assert_eq!(
-            f.get_string(&doc.transact()),
-            r#"<test a="1" b="2"></test>"#
-        );
+        let s = f.get_string(&doc.transact());
+        assert!(s == r#"<test a="1" b="2"></test>"# || s == r#"<test b="2" a="1"></test>"#);
     }
 }
