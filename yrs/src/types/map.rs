@@ -279,12 +279,17 @@ impl<T> From<HashMap<String, T>> for MapPrelim<T> {
     }
 }
 
-impl<V, const N: usize> From<[(String, V); N]> for MapPrelim<V>
+impl<K, V, const N: usize> From<[(K, V); N]> for MapPrelim<V>
 where
+    K: Into<String>,
     V: Prelim,
 {
-    fn from(arr: [(String, V); N]) -> Self {
-        MapPrelim::from(HashMap::from(arr))
+    fn from(arr: [(K, V); N]) -> Self {
+        let mut m = HashMap::with_capacity(N);
+        for (k, v) in arr {
+            m.insert(k.into(), v);
+        }
+        MapPrelim::from(m)
     }
 }
 

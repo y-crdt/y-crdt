@@ -786,6 +786,21 @@ impl ToJson for Value {
     }
 }
 
+impl std::fmt::Display for Value {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Value::Any(v) => std::fmt::Display::fmt(v, f),
+            Value::YText(v) => write!(f, "TextRef"),
+            Value::YArray(v) => write!(f, "ArrayRef"),
+            Value::YMap(v) => write!(f, "MapRef"),
+            Value::YXmlElement(v) => write!(f, "XmlElementRef"),
+            Value::YXmlFragment(v) => write!(f, "XmlFragmentRef"),
+            Value::YXmlText(v) => write!(f, "XmlTextRef()"),
+            Value::YDoc(v) => write!(f, "Doc(guid:{})", v.options().guid),
+        }
+    }
+}
+
 impl std::fmt::Display for Branch {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.type_ref() {

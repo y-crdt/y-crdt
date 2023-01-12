@@ -607,21 +607,21 @@ mod test {
     use std::sync::Arc;
     use std::time::Duration;
 
-    //fn print_undo_manager(prefix: &str, mgr: &UndoManager) {
-    //    println!("{}", prefix);
-    //    if !mgr.0.undo_stack.is_empty() {
-    //        println!("undo stack:");
-    //        for i in mgr.0.undo_stack.iter() {
-    //            println!("\t{}", i);
-    //        }
-    //    }
-    //    if !mgr.0.redo_stack.is_empty() {
-    //        println!("redo stack:");
-    //        for i in mgr.0.redo_stack.iter() {
-    //            println!("\t{}", i);
-    //        }
-    //    }
-    //}
+    fn print_undo_manager(prefix: &str, mgr: &UndoManager) {
+        println!("{}", prefix);
+        if !mgr.0.undo_stack.is_empty() {
+            println!("undo stack:");
+            for i in mgr.0.undo_stack.iter() {
+                println!("\t{}", i);
+            }
+        }
+        if !mgr.0.redo_stack.is_empty() {
+            println!("redo stack:");
+            for i in mgr.0.redo_stack.iter() {
+                println!("\t{}", i);
+            }
+        }
+    }
 
     #[test]
     fn undo_text() {
@@ -949,96 +949,68 @@ mod test {
 
     #[test]
     fn undo_until_change_performed() {
-        let doc1 = Doc::with_client_id(1);
-        let doc2 = Doc::with_client_id(2);
-        let d1 = doc1.clone();
-        let d2 = doc2.clone();
+        let d1 = Doc::with_client_id(1);
+        let arr1 = d1.get_or_insert_array("array");
 
-        fn process(doc: &Doc, updates: &std::sync::mpsc::Receiver<Update>) {
-            let mut txn = doc.transact_mut();
-            while let Ok(u) = updates.try_recv() {
-                txn.apply_update(u);
-            }
-        }
+        let d2 = Doc::with_client_id(2);
+        let arr2 = d2.get_or_insert_array("array");
 
-        let (s2, r2) = std::sync::mpsc::channel();
-        let _sub1 = doc1.observe_update_v1(move |txn, e| {
-            s2.send(Update::decode_v1(&e.update).unwrap()).unwrap();
-        });
-
-        let (s1, r1) = std::sync::mpsc::channel();
-        let _sub2 = doc2.observe_update_v1(move |txn, e| {
-            s1.send(Update::decode_v1(&e.update).unwrap()).unwrap();
-        });
-
-        let arr1 = doc1.get_or_insert_array("array");
-        let arr2 = doc2.get_or_insert_array("array");
         arr1.push_back(
-            &mut doc1.transact_mut(),
+            &mut d1.transact_mut(),
             MapPrelim::from([("hello".to_owned(), "world".to_owned())]),
         );
+        let map1a = arr1.get(&d1.transact(), 0).unwrap().to_ymap().unwrap();
 
-        process(&doc1, &r1);
-        process(&doc2, &r2);
-
-        let map1 = arr1.get(&doc1.transact(), 0).unwrap().to_ymap().unwrap();
         arr1.push_back(
-            &mut doc1.transact_mut(),
+            &mut d1.transact_mut(),
             MapPrelim::from([("key".to_owned(), "value".to_owned())]),
         );
+        let map1b = arr1.get(&d1.transact(), 1).unwrap().to_ymap().unwrap();
 
-        process(&doc1, &r1);
-        process(&doc2, &r2);
+        exchange_updates(&[&d1, &d2]);
 
-        let map2 = arr1.get(&doc1.transact(), 0).unwrap().to_ymap().unwrap();
+        let mut mgr1 = UndoManager::new(&d1, &arr1);
+        mgr1.include_origin(d1.client_id());
 
-        let mut mgr1 = UndoManager::new(&doc1, &arr1);
-        mgr1.include_origin(doc1.client_id());
-        let mut mgr2 = UndoManager::new(&doc2, &arr2);
-        mgr2.include_origin(doc2.client_id());
+        let mut mgr2 = UndoManager::new(&d2, &arr2);
+        mgr2.include_origin(d2.client_id());
 
-        map2.insert(
-            &mut doc1.transact_mut_with(doc1.client_id()),
+        map1b.insert(
+            &mut d1.transact_mut_with(d1.client_id()),
             "key",
             "value modified",
         );
 
-        process(&doc1, &r1);
-        process(&doc2, &r2);
-
+        exchange_updates(&[&d1, &d2]);
         mgr1.stop();
 
-        map1.insert(
-            &mut doc1.transact_mut_with(doc1.client_id()),
+        map1a.insert(
+            &mut d1.transact_mut_with(d1.client_id()),
             "hello",
             "world modified",
         );
 
-        process(&doc1, &r1);
-        process(&doc2, &r2);
+        exchange_updates(&[&d1, &d2]);
 
-        arr2.remove_range(&mut doc2.transact_mut_with(doc2.client_id()), 0, 1);
+        arr2.remove_range(&mut d2.transact_mut_with(d2.client_id()), 0, 1);
 
-        process(&doc1, &r1);
-        process(&doc2, &r2);
-
+        exchange_updates(&[&d1, &d2]);
         mgr2.undo().unwrap();
+
+        exchange_updates(&[&d1, &d2]);
         mgr1.undo().unwrap();
+        exchange_updates(&[&d1, &d2]);
 
-        process(&doc1, &r1);
-        process(&doc2, &r2);
-
-        assert_eq!(map2.get(&doc1.transact(), "key"), Some("value".into()));
+        assert_eq!(map1b.get(&d1.transact(), "key"), Some("value".into()));
     }
 
     #[test]
     fn nested_undo() {
         // This issue has been reported in https://github.com/yjs/yjs/issues/317
-        let doc = Doc::with_options({
-            let mut o = crate::doc::Options::default();
-            o.skip_gc = true;
-            o.client_id = 1;
-            o
+        let doc = Doc::with_options(crate::doc::Options {
+            skip_gc: true,
+            client_id: 1,
+            ..crate::doc::Options::default()
         });
         let design = doc.get_or_insert_map("map");
         let mut mgr = UndoManager::with_options(&doc, &design, {
@@ -1048,34 +1020,32 @@ mod test {
         });
         {
             let mut txn = doc.transact_mut();
-            design.insert(&mut txn, "text", MapPrelim::<u32>::new());
-            let a = design.get(&txn, "text").unwrap().to_ymap().unwrap();
-            a.insert(
+            design.insert(
                 &mut txn,
-                "blocks",
-                MapPrelim::from([("text".to_owned(), "Type something".to_owned())]),
+                "text",
+                MapPrelim::from([(
+                    "blocks",
+                    MapPrelim::from([("text", "Type something".to_owned())]),
+                )]),
             );
+        }
+        let text = design
+            .get(&doc.transact(), "text")
+            .unwrap()
+            .to_ymap()
+            .unwrap();
+
+        {
+            let mut txn = doc.transact_mut();
+            text.insert(&mut txn, "blocks", MapPrelim::from([("text", "Something")]));
         }
 
         {
             let mut txn = doc.transact_mut();
-            design.insert(&mut txn, "blocks", MapPrelim::<u32>::new());
-            let a = design.get(&txn, "text").unwrap().to_ymap().unwrap();
-            a.insert(
+            text.insert(
                 &mut txn,
                 "blocks",
-                MapPrelim::from([("text".to_owned(), "Something".to_owned())]),
-            );
-        }
-
-        {
-            let mut txn = doc.transact_mut();
-            design.insert(&mut txn, "blocks", MapPrelim::<u32>::new());
-            let a = design.get(&txn, "text").unwrap().to_ymap().unwrap();
-            a.insert(
-                &mut txn,
-                "blocks",
-                MapPrelim::from([("text".to_owned(), "Something else".to_owned())]),
+                MapPrelim::from([("text", "Something else")]),
             );
         }
 
@@ -1253,7 +1223,7 @@ mod test {
                 &mut txn,
                 "text",
                 MapPrelim::from([(
-                    "blocks".into(),
+                    "blocks",
                     MapPrelim::from([("text".to_owned(), "1".to_owned())]),
                 )]),
             );
@@ -1302,61 +1272,61 @@ mod test {
     #[test]
     fn undo_delete_text_format() {
         // https://github.com/yjs/yjs/issues/392
-        let doc = Doc::with_client_id(1);
-        let txt = doc.get_or_insert_text("test");
+        fn send(src: &Doc, dst: &Doc) {
+            let update = Update::decode_v1(
+                &src.transact()
+                    .encode_state_as_update_v1(&StateVector::default()),
+            )
+            .unwrap();
+            dst.transact_mut().apply_update(update)
+        }
+
+        let doc1 = Doc::with_client_id(1);
+        let txt = doc1.get_or_insert_text("test");
         txt.insert(
-            &mut doc.transact_mut(),
+            &mut doc1.transact_mut(),
             0,
             "Attack ships on fire off the shoulder of Orion.",
-        );
+        ); // D1: 'Attack ships on fire off the shoulder of Orion.'
         let doc2 = Doc::with_client_id(2);
         let txt2 = doc2.get_or_insert_text("test");
 
-        doc2.transact_mut().apply_update(
-            Update::decode_v1(
-                &doc.transact()
-                    .encode_state_as_update_v1(&StateVector::default()),
-            )
-            .unwrap(),
-        );
-        let mut mgr = UndoManager::new(&doc, &txt);
+        send(&doc1, &doc2); // D2: 'Attack ships on fire off the shoulder of Orion.'
+        let mut mgr = UndoManager::new(&doc1, &txt);
+
         let attrs = Attrs::from([("bold".into(), true.into())]);
-        txt.format(&mut doc.transact_mut(), 13, 7, attrs.clone());
+        txt.format(&mut doc1.transact_mut(), 13, 7, attrs.clone()); // D1: 'Attack ships <b>on fire</b> off the shoulder of Orion.'
+
         mgr.stop();
-        doc2.transact_mut().apply_update(
-            Update::decode_v1(
-                &doc.transact()
-                    .encode_state_as_update_v1(&StateVector::default()),
-            )
-            .unwrap(),
-        );
+
+        send(&doc1, &doc2); // D2: 'Attack ships <b>on fire</b> off the shoulder of Orion.'
+
         let attrs2 = Attrs::from([("bold".into(), Any::Null)]);
-        txt.format(&mut doc.transact_mut(), 16, 4, attrs.clone());
+        txt.format(&mut doc1.transact_mut(), 16, 4, attrs2.clone()); // D1: 'Attack ships <b>on </b>fire off the shoulder of Orion.'
+
+        let expected = vec![
+            Diff::new("Attack ships ".into(), None),
+            Diff::new("on ".into(), Some(Box::new(attrs.clone()))),
+            Diff::new("fire off the shoulder of Orion.".into(), None),
+        ];
+        let actual = txt.diff(&doc1.transact(), YChange::identity);
+        assert_eq!(actual, expected);
 
         mgr.stop();
-        doc2.transact_mut().apply_update(
-            Update::decode_v1(
-                &doc.transact()
-                    .encode_state_as_update_v1(&StateVector::default()),
-            )
-            .unwrap(),
-        );
+        send(&doc1, &doc2); // D2: 'Attack ships <b>on </b>fire off the shoulder of Orion.'
 
-        mgr.undo().unwrap();
-        doc2.transact_mut().apply_update(
-            Update::decode_v1(
-                &doc.transact()
-                    .encode_state_as_update_v1(&StateVector::default()),
-            )
-            .unwrap(),
-        );
+        mgr.undo().unwrap(); // D1: 'Attack ships <b>on fire</b> off the shoulder of Orion.'
+        send(&doc1, &doc2); // D2: 'Attack ships <b>on fire</b> off the shoulder of Orion.'
+
         let expected = vec![
             Diff::new("Attack ships ".into(), None),
             Diff::new("on fire".into(), Some(Box::new(attrs))),
             Diff::new(" off the shoulder of Orion.".into(), None),
         ];
-        assert_eq!(txt.diff(&doc.transact(), YChange::identity), expected);
-        assert_eq!(txt2.diff(&doc2.transact(), YChange::identity), expected);
+        let actual = txt.diff(&doc1.transact(), YChange::identity);
+        assert_eq!(actual, expected);
+        let actual = txt2.diff(&doc2.transact(), YChange::identity);
+        assert_eq!(actual, expected);
     }
 
     #[test]

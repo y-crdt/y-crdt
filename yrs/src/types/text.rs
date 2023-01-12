@@ -9,6 +9,7 @@ use crate::*;
 use lib0::any::Any;
 use std::cell::UnsafeCell;
 use std::collections::HashMap;
+use std::fmt::Formatter;
 use std::ops::{Deref, DerefMut};
 
 /// A shared data type used for collaborative text editing. It enables multiple users to add and
@@ -741,7 +742,7 @@ fn clean_format_gap(
     cleanups
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(PartialEq)]
 pub struct Diff<T> {
     pub insert: Value,
     pub attributes: Option<Box<Attrs>>,
@@ -758,6 +759,30 @@ impl<T> Diff<T> {
             attributes,
             ychange,
         }
+    }
+}
+
+impl<T> std::fmt::Display for Diff<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{{ insert: '{}'", self.insert)?;
+        if let Some(attrs) = self.attributes.as_ref() {
+            write!(f, ", attributes: {{")?;
+            let mut i = attrs.iter();
+            if let Some((k, v)) = i.next() {
+                write!(f, " {}={}", k, v)?;
+            }
+            for (k, v) in i {
+                write!(f, ", {}={}", k, v)?;
+            }
+            write!(f, " }}")?;
+        }
+        write!(f, " }}")
+    }
+}
+
+impl<T> std::fmt::Debug for Diff<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
     }
 }
 
