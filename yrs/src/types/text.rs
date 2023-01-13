@@ -514,6 +514,20 @@ fn remove(txn: &mut TransactionMut, mut pos: ItemPosition, len: u32) {
     }
 }
 
+fn is_valid_target(ptr: BlockPtr) -> bool {
+    if ptr.is_deleted() {
+        true
+    } else if let Block::Item(item) = ptr.deref() {
+        if let ItemContent::Format(_, _) = &item.content {
+            true
+        } else {
+            false
+        }
+    } else {
+        true
+    }
+}
+
 fn insert_format(
     this: BranchPtr,
     txn: &mut TransactionMut,
@@ -524,8 +538,12 @@ fn insert_format(
     minimize_attr_changes(&mut pos, &attrs);
     let mut negated_attrs = insert_attributes(this, txn, &mut pos, attrs.clone()); //TODO: remove `attrs.clone()`
     let encoding = txn.store().options.offset_kind;
+    // iterate until first non-format or null is found
+    // delete all formats with attributes[format.key] != null
+    // also check the attributes after the first non-format as we do not want to insert redundant
+    // negated attributes there
     while let Some(right) = pos.right {
-        if len <= 0 {
+        if !(len > 0 || (!negated_attrs.is_empty() && is_valid_target(right))) {
             break;
         }
 

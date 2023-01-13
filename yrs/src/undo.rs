@@ -607,22 +607,6 @@ mod test {
     use std::sync::Arc;
     use std::time::Duration;
 
-    fn print_undo_manager(prefix: &str, mgr: &UndoManager) {
-        println!("{}", prefix);
-        if !mgr.0.undo_stack.is_empty() {
-            println!("undo stack:");
-            for i in mgr.0.undo_stack.iter() {
-                println!("\t{}", i);
-            }
-        }
-        if !mgr.0.redo_stack.is_empty() {
-            println!("redo stack:");
-            for i in mgr.0.redo_stack.iter() {
-                println!("\t{}", i);
-            }
-        }
-    }
-
     #[test]
     fn undo_text() {
         let d1 = Doc::with_client_id(1);
