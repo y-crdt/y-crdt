@@ -1002,10 +1002,15 @@ YTransaction *ydoc_read_transaction(YDoc *doc);
  * of a transaction. Yrs transactions do not follow ACID rules. Once a set of operations is
  * complete, a transaction can be finished using `ytransaction_commit` function.
  *
+ * `origin_len` and `origin` are optional parameters to specify a byte sequence used to mark
+ * the origin of this transaction (eg. you may decide to give different origins for transaction
+ * applying remote updates). These can be used by event handlers or `UndoManager` to perform
+ * specific actions. If origin should not be set, call `ydoc_write_transaction(doc, 0, NULL)`.
+ *
  * Returns `NULL` if read-write transaction couldn't be created, i.e. when another transaction is
  * already opened.
  */
-YTransaction *ydoc_write_transaction(YDoc *doc);
+YTransaction *ydoc_write_transaction(YDoc *doc, int origin_len, const char *origin);
 
 /**
  * Starts a new read-write transaction on a given branches document. All other operations happen in

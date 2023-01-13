@@ -613,17 +613,35 @@ pub unsafe extern "C" fn ydoc_read_transaction(doc: *mut Doc) -> *mut Transactio
 /// of a transaction. Yrs transactions do not follow ACID rules. Once a set of operations is
 /// complete, a transaction can be finished using `ytransaction_commit` function.
 ///
+/// `origin_len` and `origin` are optional parameters to specify a byte sequence used to mark
+/// the origin of this transaction (eg. you may decide to give different origins for transaction
+/// applying remote updates). These can be used by event handlers or `UndoManager` to perform
+/// specific actions. If origin should not be set, call `ydoc_write_transaction(doc, 0, NULL)`.
+///
 /// Returns `NULL` if read-write transaction couldn't be created, i.e. when another transaction is
 /// already opened.
 #[no_mangle]
-pub unsafe extern "C" fn ydoc_write_transaction(doc: *mut Doc) -> *mut Transaction {
+pub unsafe extern "C" fn ydoc_write_transaction(
+    doc: *mut Doc,
+    origin_len: c_int,
+    origin: *const c_char,
+) -> *mut Transaction {
     assert!(!doc.is_null());
 
     let doc = doc.as_mut().unwrap();
-    if let Ok(txn) = doc.try_transact_mut() {
-        Box::into_raw(Box::new(Transaction::read_write(txn)))
+    if origin_len == 0 {
+        if let Ok(txn) = doc.try_transact_mut() {
+            Box::into_raw(Box::new(Transaction::read_write(txn)))
+        } else {
+            null_mut()
+        }
     } else {
-        null_mut()
+        let origin = std::slice::from_raw_parts(origin as *const u8, origin_len as usize);
+        if let Ok(txn) = doc.try_transact_mut_with(origin) {
+            Box::into_raw(Box::new(Transaction::read_write(txn)))
+        } else {
+            null_mut()
+        }
     }
 }
 
@@ -4179,7 +4197,7 @@ pub unsafe extern "C" fn yundo_manager(
     let mut o = yrs::undo::Options::default();
     if let Some(options) = options.as_ref() {
         if options.capture_timeout_millis >= 0 {
-            o.capture_timeout = Duration::from_millis(options.capture_timeout_millis as u64);
+            o.capture_timeout_millis = options.capture_timeout_millis as u64;
         }
     };
     let boxed = Box::new(UndoManager::with_options(doc, &BranchPtr::from(branch), o));
@@ -4794,7 +4812,7 @@ mod test {
             let doc = ydoc_new();
             let array_name = CString::new("test").unwrap();
             let array = yarray(doc, array_name.as_ptr());
-            let txn = ydoc_write_transaction(doc);
+            let txn = ydoc_write_transaction(doc, 0, null());
 
             let y_true = yinput_bool(Y_TRUE);
             let y_false = yinput_bool(Y_FALSE);

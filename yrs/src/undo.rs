@@ -12,7 +12,7 @@ use std::fmt::Formatter;
 use std::ops::Deref;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[repr(transparent)]
 pub struct UndoManager(Box<Inner>);
@@ -25,7 +25,7 @@ struct Inner {
     redo_stack: Vec<StackItem>,
     undoing: Cell<bool>,
     redoing: Cell<bool>,
-    last_change: SystemTime,
+    last_change: u64,
     on_after_transaction: Option<AfterTransactionSubscription>,
     on_destroy: Option<DestroySubscription>,
     observer_added: Observer<Arc<dyn Fn(&TransactionMut, &Event) -> ()>>,
@@ -54,7 +54,7 @@ impl UndoManager {
             redo_stack: Vec::new(),
             undoing: Cell::new(false),
             redoing: Cell::new(false),
-            last_change: SystemTime::UNIX_EPOCH,
+            last_change: 0,
             on_after_transaction: None,
             on_destroy: None,
             observer_added: Observer::new(),
@@ -100,7 +100,7 @@ impl UndoManager {
         let undoing = inner.undoing.get();
         let redoing = inner.redoing.get();
         if undoing {
-            inner.last_change = UNIX_EPOCH; // next undo should not be appended to last stack item
+            inner.last_change = 0; // next undo should not be appended to last stack item
         } else if !redoing {
             // neither undoing nor redoing: delete redoStack
             let len = inner.redo_stack.len();
@@ -117,7 +117,7 @@ impl UndoManager {
                 insertions.insert(ID::new(*client, start_clock), diff);
             }
         }
-        let now = SystemTime::now();
+        let now = (inner.options.timestamp)();
         let stack = if undoing {
             &mut inner.redo_stack
         } else {
@@ -126,8 +126,8 @@ impl UndoManager {
         let extend = !undoing
             && !redoing
             && !stack.is_empty()
-            && inner.last_change > UNIX_EPOCH
-            && now.duration_since(inner.last_change).unwrap() < inner.options.capture_timeout;
+            && inner.last_change > 0
+            && now - inner.last_change < inner.options.capture_timeout_millis;
 
         if extend {
             // append change to last stack op
@@ -286,7 +286,7 @@ impl UndoManager {
     /// txt.get_string(&doc.transact()); // => "a" (note that only 'b' was removed)
     /// ```
     pub fn stop(&mut self) {
-        self.0.last_change = UNIX_EPOCH;
+        self.0.last_change = 0;
     }
 
     /// Are there any undo steps available?
@@ -482,17 +482,24 @@ pub type UndoEventSubscription = Subscription<Arc<dyn Fn(&TransactionMut, &Event
 
 #[derive(Clone)]
 pub struct Options {
-    pub capture_timeout: Duration,
+    pub capture_timeout_millis: u64,
     pub tracked_origins: HashSet<Origin>,
     pub capture_transaction: Rc<dyn Fn(&TransactionMut) -> bool>,
+    pub timestamp: Rc<dyn Fn() -> u64>,
 }
 
 impl Default for Options {
     fn default() -> Self {
         Options {
-            capture_timeout: Duration::from_millis(500),
+            capture_timeout_millis: 500,
             tracked_origins: HashSet::new(),
             capture_transaction: Rc::new(|_txn| true),
+            timestamp: Rc::new(|| {
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis() as u64
+            }),
         }
     }
 }
@@ -999,7 +1006,7 @@ mod test {
         let design = doc.get_or_insert_map("map");
         let mut mgr = UndoManager::with_options(&doc, &design, {
             let mut o = Options::default();
-            o.capture_timeout = Duration::default();
+            o.capture_timeout_millis = 0;
             o
         });
         {
@@ -1143,7 +1150,7 @@ mod test {
         let f = doc.get_or_insert_xml_fragment("t");
         let mut mgr = UndoManager::with_options(&doc, &f, {
             let mut o = Options::default();
-            o.capture_timeout = Duration::default();
+            o.capture_timeout_millis = 0;
             o
         });
         mgr.include_origin(ORIGIN.clone());
@@ -1198,7 +1205,7 @@ mod test {
         let design = doc.get_or_insert_map("map");
         let mut mgr = UndoManager::with_options(&doc, &design, {
             let mut o = Options::default();
-            o.capture_timeout = Duration::default();
+            o.capture_timeout_millis = 0;
             o
         });
         let text = {

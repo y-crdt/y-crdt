@@ -1,6 +1,5 @@
 use js_sys::{Object, Reflect, Uint8Array};
 use lib0::any::Any;
-use std::borrow::Borrow;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::convert::TryFrom;
@@ -662,8 +661,6 @@ fn unwrap_txn_ptr(value: &ImplicitTransaction) -> Result<Option<u32>, JsValue> {
     if js.is_undefined() || js.is_null() {
         Ok(None)
     } else {
-        use js_sys::Object;
-
         let ctor_name = Object::get_prototype_of(js).constructor().name();
         if ctor_name == "YTransaction" {
             let ptr = Reflect::get(js, &JsValue::from_str("ptr"))?;
@@ -3471,11 +3468,12 @@ impl YUndoManager {
     pub fn new(doc: &YDoc, scope: JsValue, options: JsValue) -> Self {
         let doc = &doc.0;
         let scope = JsValueWrapper(scope);
+        let mut o = yrs::undo::Options::default();
+        o.timestamp = Rc::new(|| js_sys::Date::now() as u64);
         if options.is_object() {
-            let mut o = yrs::undo::Options::default();
             if let Ok(js) = Reflect::get(&options, &JsValue::from_str("captureTimeout")) {
                 if let Some(millis) = js.as_f64() {
-                    o.capture_timeout = Duration::from_millis(millis as u64);
+                    o.capture_timeout_millis = millis as u64;
                 }
             }
             if let Ok(js) = Reflect::get(&options, &JsValue::from_str("trackedOrigins")) {
@@ -3487,10 +3485,8 @@ impl YUndoManager {
                     }
                 }
             }
-            YUndoManager(UndoManager::with_options(doc, &scope, o))
-        } else {
-            YUndoManager(UndoManager::new(doc, &scope))
         }
+        YUndoManager(UndoManager::with_options(doc, &scope, o))
     }
 
     #[wasm_bindgen(js_name = addToScope)]
@@ -3913,7 +3909,6 @@ impl<'a> TryFrom<&'a JsValue> for Shared<'a> {
     type Error = JsValue;
 
     fn try_from(js: &'a JsValue) -> Result<Self, Self::Error> {
-        use js_sys::Object;
         let ctor_name = Object::get_prototype_of(js).constructor().name();
         let ptr = Reflect::get(js, &JsValue::from_str("ptr"))?;
         let ptr_u32: u32 = ptr.as_f64().ok_or(JsValue::NULL)? as u32;
