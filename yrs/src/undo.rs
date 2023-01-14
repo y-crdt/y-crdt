@@ -14,6 +14,18 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Undo manager is a structure used to perform undo/redo operations over the associated shared
+/// type(s).
+///
+/// Undo-/redo-able actions are not equivalent to [TransactionMut] unit of work, but rather
+/// a series of updates batched within specified time intervals (see: [Options::capture_timeout_millis])
+/// and their corresponding origins (see: [Doc::transact_mut_with] and [UndoManager::include_origin]).
+///
+/// Individual action boundaries can be also specified explicitly by calling [UndoManager::stop],
+/// which denotes the end of batch.
+///
+/// In order to revert an operation, call [UndoManager::undo], then [UndoManager::redo] to bring it
+/// back.
 #[repr(transparent)]
 pub struct UndoManager(Box<Inner>);
 
@@ -34,6 +46,9 @@ struct Inner {
 }
 
 impl UndoManager {
+    /// Creates a new instance of the [UndoManager] working in a `scope` of a particular shared
+    /// type and document. While it's possible for undo manager to observe multiple shared types
+    /// (see: [UndoManager::expand_scope]), it can only work with a single document at the same time.
     pub fn new<T>(doc: &Doc, scope: &T) -> Self
     where
         T: AsRef<Branch>,
@@ -41,6 +56,9 @@ impl UndoManager {
         Self::with_options(doc, scope, Options::default())
     }
 
+    /// Creates a new instance of the [UndoManager] working in a `scope` of a particular shared
+    /// type and document. While it's possible for undo manager to observe multiple shared types
+    /// (see: [UndoManager::expand_scope]), it can only work with a single document at the same time.
     pub fn with_options<T>(doc: &Doc, scope: &T, options: Options) -> Self
     where
         T: AsRef<Branch>,
@@ -480,11 +498,24 @@ fn follow_redone(store: &Store, id: &ID) -> (BlockPtr, u32) {
 
 pub type UndoEventSubscription = Subscription<Arc<dyn Fn(&TransactionMut, &Event) -> ()>>;
 
+/// Set of options used to configure [UndoManager].
 #[derive(Clone)]
 pub struct Options {
+    /// Undo-/redo-able updates are grouped together in time-constrained snapshots. This field
+    /// determines the period of time, every snapshot will be automatically made in.
     pub capture_timeout_millis: u64,
+
+    /// List of origins tracked by corresponding [UndoManager].
+    /// If provided, it will track only updates made within transactions of specific origin.
+    /// If not provided, it will track only updates made within transaction with no origin defined.
     pub tracked_origins: HashSet<Origin>,
+
+    /// Custom logic decider, that along with [tracked_origins] can be used to determine if
+    /// transaction changes should be captured or not.
     pub capture_transaction: Rc<dyn Fn(&TransactionMut) -> bool>,
+
+    /// Custom clock function, that can be used to generate timestamps used by
+    /// [Options::capture_timeout_millis].
     pub timestamp: Rc<dyn Fn() -> u64>,
 }
 
