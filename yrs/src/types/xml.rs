@@ -653,10 +653,9 @@ pub trait XmlFragment: AsRef<Branch> {
     fn insert<V>(&self, txn: &mut TransactionMut, index: u32, xml_node: V) -> V::Return
     where
         V: XmlPrelim,
-        <V as Prelim>::Return: TryFrom<BlockPtr>,
     {
         let ptr = self.as_ref().insert_at(txn, index, xml_node);
-        if let Ok(integrated) = <V as Prelim>::Return::try_from(ptr) {
+        if let Ok(integrated) = V::Return::try_from(ptr) {
             integrated
         } else {
             panic!("Defect: inserted XML element returned primitive value block")
@@ -667,7 +666,6 @@ pub trait XmlFragment: AsRef<Branch> {
     fn push_back<V>(&self, txn: &mut TransactionMut, xml_node: V) -> V::Return
     where
         V: XmlPrelim,
-        <V as Prelim>::Return: TryFrom<BlockPtr>,
     {
         let len = self.len(txn);
         self.insert(txn, len, xml_node)
@@ -677,7 +675,6 @@ pub trait XmlFragment: AsRef<Branch> {
     fn push_front<V>(&self, txn: &mut TransactionMut, xml_node: V) -> V::Return
     where
         V: XmlPrelim,
-        <V as Prelim>::Return: TryFrom<BlockPtr>,
     {
         self.insert(txn, 0, xml_node)
     }

@@ -2191,7 +2191,7 @@ impl std::fmt::Display for ItemPosition {
 
 /// A trait used for preliminary types, that can be inserted into nested YArray/YMap structures.
 pub trait Prelim: Sized {
-    type Return;
+    type Return: TryFrom<BlockPtr>;
 
     /// This method is used to create initial content required in order to create a block item.
     /// A supplied `ptr` can be used to identify block that is about to be created to store
@@ -2212,7 +2212,7 @@ impl<T> Prelim for T
 where
     T: Into<Any>,
 {
-    type Return = Any;
+    type Return = Unused;
 
     fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
         let value: Any = self.into();
@@ -2226,13 +2226,25 @@ where
 pub(crate) struct PrelimString(pub SmallString<[u8; 8]>);
 
 impl Prelim for PrelimString {
-    type Return = ();
+    type Return = Unused;
 
     fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
         (ItemContent::String(self.0.into()), None)
     }
 
     fn integrate(self, _txn: &mut TransactionMut, _inner_ref: BranchPtr) {}
+}
+
+#[repr(transparent)]
+pub struct Unused;
+
+impl TryFrom<BlockPtr> for Unused {
+    type Error = BlockPtr;
+
+    #[inline(always)]
+    fn try_from(_: BlockPtr) -> Result<Self, Self::Error> {
+        Ok(Unused)
+    }
 }
 
 #[derive(Debug)]

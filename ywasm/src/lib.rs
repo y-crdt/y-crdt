@@ -11,7 +11,7 @@ use wasm_bindgen::__rt::{Ref, RefMut};
 use wasm_bindgen::convert::IntoWasmAbi;
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
-use yrs::block::{ClientID, ItemContent, Prelim};
+use yrs::block::{ClientID, ItemContent, Prelim, Unused};
 use yrs::types::array::ArrayEvent;
 use yrs::types::map::MapEvent;
 use yrs::types::text::{ChangeKind, Diff, TextEvent, YChange};
@@ -3644,7 +3644,7 @@ pub struct YUndoObserver(UndoEventSubscription);
 struct JsValueWrapper(JsValue);
 
 impl Prelim for JsValueWrapper {
-    type Return = ();
+    type Return = Unused;
 
     fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
         let content = if let Some(any) = js_into_any(&self.0) {

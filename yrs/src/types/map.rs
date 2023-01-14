@@ -9,7 +9,7 @@ use lib0::any::Any;
 use std::borrow::Borrow;
 use std::cell::UnsafeCell;
 use std::collections::{HashMap, HashSet};
-use std::convert::TryFrom;
+use std::convert::{TryFrom, TryInto};
 use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
 
@@ -120,15 +120,13 @@ pub trait Map: AsRef<Branch> {
         MapIter::new(self.as_ref(), txn)
     }
 
-    /// Inserts a new `value` under given `key` into current map. Returns a value stored previously
-    /// under the same key (if any existed).
-    fn insert<K, V>(&self, txn: &mut TransactionMut, key: K, value: V) -> Option<Value>
+    /// Inserts a new `value` under given `key` into current map. Returns an integrated value.
+    fn insert<K, V>(&self, txn: &mut TransactionMut, key: K, value: V) -> V::Return
     where
         K: Into<Rc<str>>,
         V: Prelim,
     {
         let key = key.into();
-        let previous = self.get(txn, &key);
         let pos = {
             let inner = self.as_ref();
             let left = inner.map.get(&key);
@@ -141,8 +139,12 @@ pub trait Map: AsRef<Branch> {
             }
         };
 
-        txn.create_item(&pos, value, Some(key));
-        previous
+        let ptr = txn.create_item(&pos, value, Some(key));
+        if let Ok(integrated) = ptr.try_into() {
+            integrated
+        } else {
+            panic!("Defect: unexpected integrated type")
+        }
     }
 
     /// Removes a stored within current map under a given `key`. Returns that value or `None` if
@@ -902,8 +904,7 @@ mod test {
             *count += 1;
         });
 
-        map.insert(&mut doc.transact_mut(), "map", MapPrelim::<String>::new());
-        let nested = map.get(&map.transact(), "map").unwrap().to_ymap().unwrap();
+        let nested = map.insert(&mut doc.transact_mut(), "map", MapPrelim::<String>::new());
         nested.insert(
             &mut doc.transact_mut(),
             "array",
@@ -916,12 +917,7 @@ mod test {
             .unwrap();
         nested2.insert(&mut doc.transact_mut(), 0, "content");
 
-        nested.insert(&mut doc.transact_mut(), "text", TextPrelim::new("text"));
-        let nested_text = nested
-            .get(&nested.transact(), "text")
-            .unwrap()
-            .to_ytext()
-            .unwrap();
+        let nested_text = nested.insert(&mut doc.transact_mut(), "text", TextPrelim::new("text"));
         nested_text.push(&mut doc.transact_mut(), "!");
 
         assert_eq!(*calls.borrow().deref(), 5);

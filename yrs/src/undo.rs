@@ -785,8 +785,7 @@ mod test {
         assert_eq!(map1.get(&d1.transact(), "a").unwrap(), 1.into());
 
         // testing sub-types and if it can restore a whole type
-        map1.insert(&mut d1.transact_mut(), "a", MapPrelim::<u32>::new());
-        let sub_type = map1.get(&d1.transact(), "a").unwrap().to_ymap().unwrap();
+        let sub_type = map1.insert(&mut d1.transact_mut(), "a", MapPrelim::<u32>::new());
         sub_type.insert(&mut d1.transact_mut(), "x", 42);
         let actual = map1.to_json(&d1.transact());
         let expected = Any::from_json(r#"{ "a": { "x": 42 } }"#).unwrap();
@@ -861,8 +860,7 @@ mod test {
         array1.remove_range(&mut d1.transact_mut(), 0, 5);
 
         // test nested structure
-        array1.insert(&mut d1.transact_mut(), 0, MapPrelim::<u32>::new());
-        let map = array1.get(&d1.transact(), 0).unwrap().to_ymap().unwrap();
+        let map = array1.insert(&mut d1.transact_mut(), 0, MapPrelim::<u32>::new());
         let actual = array1.to_json(&d1.transact());
         let expected = Any::from_json(r#"[{}]"#).unwrap();
         assert_eq!(actual, expected);
@@ -1008,17 +1006,15 @@ mod test {
         let d2 = Doc::with_client_id(2);
         let arr2 = d2.get_or_insert_array("array");
 
-        arr1.push_back(
+        let map1a = arr1.push_back(
             &mut d1.transact_mut(),
             MapPrelim::from([("hello".to_owned(), "world".to_owned())]),
         );
-        let map1a = arr1.get(&d1.transact(), 0).unwrap().to_ymap().unwrap();
 
-        arr1.push_back(
+        let map1b = arr1.push_back(
             &mut d1.transact_mut(),
             MapPrelim::from([("key".to_owned(), "value".to_owned())]),
         );
-        let map1b = arr1.get(&d1.transact(), 1).unwrap().to_ymap().unwrap();
 
         exchange_updates(&[&d1, &d2]);
 
@@ -1279,8 +1275,7 @@ mod test {
                     "blocks",
                     MapPrelim::from([("text".to_owned(), "1".to_owned())]),
                 )]),
-            );
-            design.get(&txn, "text").unwrap().to_ymap().unwrap()
+            )
         };
         {
             let mut txn = doc.transact_mut();
@@ -1413,7 +1408,7 @@ mod test {
     }
 
     #[test]
-    fn undo_in_Embed() {
+    fn undo_in_embed() {
         let d1 = Doc::with_client_id(1);
         let txt1 = d1.get_or_insert_text("test");
         let mut mgr = UndoManager::new(&d1, &txt1);

@@ -7,7 +7,7 @@ use std::ops::Deref;
 use std::os::raw::{c_char, c_float, c_int, c_long, c_longlong, c_uchar, c_uint, c_ulong};
 use std::ptr::{null, null_mut};
 use std::rc::Rc;
-use yrs::block::{ClientID, ItemContent, Prelim};
+use yrs::block::{ClientID, ItemContent, Prelim, Unused};
 use yrs::types::array::ArrayEvent;
 use yrs::types::array::ArrayIter as NativeArrayIter;
 use yrs::types::map::MapEvent;
@@ -2453,7 +2453,7 @@ impl Drop for YInput {
 }
 
 impl Prelim for YInput {
-    type Return = ();
+    type Return = Unused;
 
     fn into_content<'doc>(self, _: &mut yrs::TransactionMut<'doc>) -> (ItemContent, Option<Self>) {
         unsafe {

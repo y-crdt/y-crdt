@@ -206,7 +206,6 @@ pub trait Text: AsRef<Branch> {
     fn insert_embed<V>(&self, txn: &mut TransactionMut, index: u32, content: V) -> V::Return
     where
         V: Prelim + 'static,
-        <V as Prelim>::Return: TryFrom<BlockPtr>,
     {
         let this = BranchPtr::from(self.as_ref());
         if let Some(pos) = find_position(this, txn, index) {
@@ -239,7 +238,6 @@ pub trait Text: AsRef<Branch> {
     ) -> V::Return
     where
         V: Prelim + 'static,
-        <V as Prelim>::Return: TryFrom<BlockPtr>,
     {
         let this = BranchPtr::from(self.as_ref());
         if let Some(mut pos) = find_position(this, txn, index) {

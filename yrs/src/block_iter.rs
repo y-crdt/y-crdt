@@ -443,7 +443,7 @@ impl BlockIter {
         }
     }
 
-    pub fn insert_contents<V: Prelim>(&mut self, txn: &mut TransactionMut, value: V) {
+    pub fn insert_contents<V: Prelim>(&mut self, txn: &mut TransactionMut, value: V) -> BlockPtr {
         self.reduce_moves(txn);
         self.split_rel(txn);
         let id = {
@@ -488,6 +488,8 @@ impl BlockIter {
             self.next_item = left;
             self.reached_end = true;
         }
+
+        block_ptr
     }
 
     pub fn insert_move(

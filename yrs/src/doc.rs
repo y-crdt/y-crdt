@@ -18,8 +18,9 @@ use lib0::any::Any;
 use lib0::error::Error;
 use rand::Rng;
 use std::collections::HashMap;
+use std::convert::TryFrom;
 use std::fmt::Formatter;
-use std::ops::DerefMut;
+use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use thiserror::Error;
 
@@ -450,6 +451,19 @@ impl std::fmt::Display for Doc {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let options = self.options();
         write!(f, "Doc(id: {}, guid: {})", options.client_id, options.guid)
+    }
+}
+
+impl TryFrom<BlockPtr> for Doc {
+    type Error = BlockPtr;
+
+    fn try_from(value: BlockPtr) -> Result<Self, Self::Error> {
+        if let Block::Item(item) = value.deref() {
+            if let ItemContent::Doc(_, doc) = &item.content {
+                return Ok(doc.clone());
+            }
+        }
+        Err(value)
     }
 }
 
@@ -1538,8 +1552,7 @@ mod test {
         });
         {
             let mut txn = doc.transact_mut();
-            subdocs.insert(&mut txn, "a", doc_a);
-            let doc_a_ref = subdocs.get(&txn, "a").unwrap().to_ydoc().unwrap();
+            let doc_a_ref = subdocs.insert(&mut txn, "a", doc_a);
             doc_a_ref.load(&mut txn);
         }
 
@@ -1602,8 +1615,7 @@ mod test {
         });
         {
             let mut txn = doc.transact_mut();
-            subdocs.insert(&mut txn, "c", doc_c);
-            let doc_c_ref = subdocs.get(&txn, "c").unwrap().to_ydoc().unwrap();
+            let doc_c_ref = subdocs.insert(&mut txn, "c", doc_c);
             doc_c_ref.load(&mut txn);
         }
         let actual = event.take();
@@ -1683,8 +1695,7 @@ mod test {
         });
         let mut doc_ref = {
             let mut txn = doc.transact_mut();
-            array.insert(&mut txn, 0, subdoc_1);
-            let doc_ref = array.get(&txn, 0).unwrap().to_ydoc().unwrap();
+            let doc_ref = array.insert(&mut txn, 0, subdoc_1);
             let o = doc_ref.options();
             assert!(o.should_load);
             assert!(!o.auto_load);
@@ -1767,8 +1778,7 @@ mod test {
 
         let mut subdoc_1 = {
             let mut txn = doc.transact_mut();
-            array.insert(&mut txn, 0, subdoc_1);
-            array.get(&txn, 0).unwrap().to_ydoc().unwrap()
+            array.insert(&mut txn, 0, subdoc_1)
         };
         assert!(subdoc_1.options().should_load);
         assert!(subdoc_1.options().auto_load);
