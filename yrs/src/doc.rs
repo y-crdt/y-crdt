@@ -1,7 +1,7 @@
 use crate::block::{Block, BlockPtr, ClientID, ItemContent, Prelim};
-use crate::event::{AfterTransactionEvent, SubdocsEvent, UpdateEvent};
+use crate::event::{SubdocsEvent, TransactionCleanupEvent, UpdateEvent};
 use crate::store::{Store, StoreRef, WeakStoreRef};
-use crate::transaction::{Transaction, TransactionMut};
+use crate::transaction::{Origin, Transaction, TransactionMut};
 use crate::types::{
     Branch, BranchPtr, ToJson, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
     TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_TEXT,
@@ -276,9 +276,9 @@ impl Doc {
     pub fn observe_transaction_cleanup<F>(
         &self,
         f: F,
-    ) -> Result<AfterTransactionSubscription, BorrowMutError>
+    ) -> Result<TransactionCleanupSubscription, BorrowMutError>
     where
-        F: Fn(&TransactionMut, &AfterTransactionEvent) -> () + 'static,
+        F: Fn(&TransactionMut, &TransactionCleanupEvent) -> () + 'static,
     {
         let mut r = self.store.try_borrow_mut()?;
         let events = r.events.get_or_init();
@@ -290,6 +290,26 @@ impl Doc {
         let r = self.store.try_borrow().unwrap();
         if let Some(events) = r.events.as_ref() {
             events.unobserve_transaction_cleanup(subscription_id)
+        }
+    }
+
+    pub fn observe_after_transaction<F>(
+        &self,
+        f: F,
+    ) -> Result<AfterTransactionSubscription, BorrowMutError>
+    where
+        F: Fn(&mut TransactionMut) -> () + 'static,
+    {
+        let mut r = self.store.try_borrow_mut()?;
+        let events = r.events.get_or_init();
+        events.observe_after_transaction(f)
+    }
+
+    /// Cancels the transaction cleanup callback associated with the `subscription_id`
+    pub fn unobserve_after_transaction(&self, subscription_id: SubscriptionId) {
+        let r = self.store.try_borrow().unwrap();
+        if let Some(events) = r.events.as_ref() {
+            events.unobserve_after_transaction(subscription_id)
         }
     }
 
@@ -435,8 +455,10 @@ impl std::fmt::Display for Doc {
 
 pub type UpdateSubscription = crate::Subscription<Arc<dyn Fn(&TransactionMut, &UpdateEvent) -> ()>>;
 
-pub type AfterTransactionSubscription =
-    crate::Subscription<Arc<dyn Fn(&TransactionMut, &AfterTransactionEvent) -> ()>>;
+pub type TransactionCleanupSubscription =
+    crate::Subscription<Arc<dyn Fn(&TransactionMut, &TransactionCleanupEvent) -> ()>>;
+
+pub type AfterTransactionSubscription = crate::Subscription<Arc<dyn Fn(&mut TransactionMut) -> ()>>;
 
 pub type SubdocsSubscription =
     crate::Subscription<Arc<dyn Fn(&TransactionMut, &SubdocsEvent) -> ()>>;
@@ -589,6 +611,23 @@ pub trait Transact {
     /// Transaction cleanups & calling event handles happen when the transaction struct is dropped.
     fn try_transact_mut(&self) -> Result<TransactionMut, TransactionAcqError>;
 
+    /// Creates a transaction used for all kind of block store operations with a specific origin
+    /// that enables to distinguish operations performed in this transaction context from others.
+    /// Transaction cleanups & calling event handles happen when the transaction struct is dropped.
+    fn try_transact_mut_with<T>(&self, origin: T) -> Result<TransactionMut, TransactionAcqError>
+    where
+        T: Into<Origin>;
+
+    /// Creates a transaction used for all kind of block store operations with a specific origin
+    /// that enables to distinguish operations performed in this transaction context from others.
+    /// Transaction cleanups & calling event handles happen when the transaction struct is dropped.
+    fn transact_mut_with<T>(&self, origin: T) -> TransactionMut
+    where
+        T: Into<Origin>,
+    {
+        self.try_transact_mut_with(origin).unwrap()
+    }
+
     /// Creates a transaction used for all kind of block store operations.
     /// Transaction cleanups & calling event handles happen when the transaction struct is dropped.
     fn transact(&self) -> Transaction {
@@ -608,7 +647,17 @@ impl Transact for Doc {
     }
 
     fn try_transact_mut(&self) -> Result<TransactionMut, TransactionAcqError> {
-        Ok(TransactionMut::new(self.store.try_borrow_mut()?))
+        Ok(TransactionMut::new(self.store.try_borrow_mut()?, None))
+    }
+
+    fn try_transact_mut_with<T>(&self, origin: T) -> Result<TransactionMut, TransactionAcqError>
+    where
+        T: Into<Origin>,
+    {
+        Ok(TransactionMut::new(
+            self.store.try_borrow_mut()?,
+            Some(origin.into()),
+        ))
     }
 }
 
@@ -629,7 +678,24 @@ impl Transact for Branch {
         if let Some(store) = store.0.upgrade() {
             let store_ref = store.try_borrow_mut()?;
             let store_ref: AtomicRefMut<'a, Store> = unsafe { std::mem::transmute(store_ref) };
-            Ok(TransactionMut::new(store_ref))
+            Ok(TransactionMut::new(store_ref, None))
+        } else {
+            Err(TransactionAcqError::DocumentDropped)
+        }
+    }
+
+    fn try_transact_mut_with<'a, T>(
+        &'a self,
+        origin: T,
+    ) -> Result<TransactionMut<'a>, TransactionAcqError>
+    where
+        T: Into<Origin>,
+    {
+        let store = self.store.as_ref().unwrap();
+        if let Some(store) = store.0.upgrade() {
+            let store_ref = store.try_borrow_mut()?;
+            let store_ref: AtomicRefMut<'a, Store> = unsafe { std::mem::transmute(store_ref) };
+            Ok(TransactionMut::new(store_ref, Some(origin.into())))
         } else {
             Err(TransactionAcqError::DocumentDropped)
         }
@@ -670,6 +736,14 @@ where
     fn try_transact_mut(&self) -> Result<TransactionMut, TransactionAcqError> {
         let branch = self.as_ref();
         branch.try_transact_mut()
+    }
+
+    fn try_transact_mut_with<O>(&self, origin: O) -> Result<TransactionMut, TransactionAcqError>
+    where
+        O: Into<Origin>,
+    {
+        let branch = self.as_ref();
+        branch.try_transact_mut_with(origin)
     }
 }
 

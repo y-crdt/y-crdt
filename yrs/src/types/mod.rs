@@ -12,7 +12,7 @@ pub use text::TextRef;
 
 use crate::block::{Block, BlockPtr, Item, ItemContent, ItemPosition, Prelim};
 use crate::store::WeakStoreRef;
-use crate::transaction::TransactionMut;
+use crate::transaction::{Origin, TransactionMut};
 use crate::types::array::{ArrayEvent, ArrayRef};
 use crate::types::map::MapEvent;
 use crate::types::text::TextEvent;
@@ -138,6 +138,20 @@ impl BranchPtr {
 impl Into<TypePtr> for BranchPtr {
     fn into(self) -> TypePtr {
         TypePtr::Branch(self)
+    }
+}
+
+impl Into<Origin> for BranchPtr {
+    fn into(self) -> Origin {
+        let addr = self.0.as_ptr() as usize;
+        let bytes = addr.to_be_bytes();
+        Origin::from(bytes.as_ref())
+    }
+}
+
+impl AsRef<Branch> for BranchPtr {
+    fn as_ref(&self) -> &Branch {
+        self.deref()
     }
 }
 
@@ -343,7 +357,7 @@ impl Branch {
 
     /// Returns a materialized value of non-deleted entry under a given `key` of a map component
     /// of a current root type.
-    pub(crate) fn get<T: ReadTxn>(&self, txn: &T, key: &str) -> Option<Value> {
+    pub(crate) fn get<T: ReadTxn>(&self, _txn: &T, key: &str) -> Option<Value> {
         let block = self.map.get(key)?;
         match block.deref() {
             Block::Item(item) if !item.is_deleted() => item.content.get_last(),
@@ -582,6 +596,20 @@ impl Branch {
             eh.unsubscribe(subscription_id);
         }
     }
+
+    pub(crate) fn is_parent_of(&self, mut ptr: Option<BlockPtr>) -> bool {
+        while let Some(Block::Item(i)) = ptr.as_deref() {
+            if let Some(parent) = i.parent.as_branch() {
+                if parent.deref() == self {
+                    return true;
+                }
+                ptr = parent.item;
+            } else {
+                break;
+            }
+        }
+        false
+    }
 }
 
 pub type DeepEventsSubscription = crate::Subscription<Arc<dyn Fn(&TransactionMut, &Events) -> ()>>;
@@ -754,6 +782,21 @@ impl ToJson for Value {
             Value::YXmlText(v) => Any::String(v.get_string(txn).into_boxed_str()),
             Value::YXmlFragment(v) => Any::String(v.get_string(txn).into_boxed_str()),
             Value::YDoc(doc) => doc.to_json(txn),
+        }
+    }
+}
+
+impl std::fmt::Display for Value {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Value::Any(v) => std::fmt::Display::fmt(v, f),
+            Value::YText(_) => write!(f, "TextRef"),
+            Value::YArray(_) => write!(f, "ArrayRef"),
+            Value::YMap(_) => write!(f, "MapRef"),
+            Value::YXmlElement(_) => write!(f, "XmlElementRef"),
+            Value::YXmlFragment(_) => write!(f, "XmlFragmentRef"),
+            Value::YXmlText(_) => write!(f, "XmlTextRef"),
+            Value::YDoc(v) => write!(f, "Doc(guid:{})", v.options().guid),
         }
     }
 }

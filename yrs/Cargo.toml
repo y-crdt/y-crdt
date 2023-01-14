@@ -15,6 +15,7 @@ thiserror = "1"
 rand = { version = "0.7.0", features = ["wasm-bindgen"] }
 lib0 = { path = "../lib0", version = "0.14.1" }
 smallstr = { version = "0.2", features = ["union"]}
+smallvec = { version = "1.10", features = ["union", "const_generics", "const_new"]}
 atomic_refcell = "0.1"
 
 [dev-dependencies]

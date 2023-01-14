@@ -17,15 +17,53 @@ YDoc* ydoc_new_with_id(int id) {
     return ydoc_new_with_options(o);
 }
 
+void exchange_updates(int len, ...) {
+    va_list args;
+    va_start(args, len);
+    YDoc** docs = (YDoc**)malloc(sizeof(YDoc*) * len);
+    for (int i=0; i < len; i++) {
+        docs[i] = va_arg(args, YDoc*);
+    }
+    va_end(args);
+
+    char* EXCHANGE_UPDATES = "exchange";
+    for (int i = 0; i < len; i++) {
+        for (int j = 0; j < len; j++) {
+            if (i != j) {
+                YDoc* d1 = docs[i];
+                YDoc* d2 = docs[j];
+
+                YTransaction* t1 = ydoc_read_transaction(d1);
+                int sv1_len = 0;
+                unsigned char* sv1 = ytransaction_state_vector_v1(t1, &sv1_len);
+                ytransaction_commit(t1);
+
+                YTransaction* t2 = ydoc_read_transaction(d2);
+                int u2_len = 0;
+                unsigned char* u2 = ytransaction_state_diff_v1(t2, sv1, sv1_len, &u2_len);
+                ytransaction_commit(t2);
+                ybinary_destroy(sv1, sv1_len);
+
+                t1 = ydoc_write_transaction(d1, strlen(EXCHANGE_UPDATES), EXCHANGE_UPDATES);
+                ytransaction_apply(t1, u2, u2_len);
+                ytransaction_commit(t1);
+                ybinary_destroy(u2, u2_len);
+            }
+        }
+    }
+
+    free(docs);
+}
+
 TEST_CASE("Update exchange basic") {
     // init
     YDoc* d1 = ydoc_new_with_id(1);
     Branch* txt1 = ytext(d1, "test");
-    YTransaction* t1 = ydoc_write_transaction(d1);
+    YTransaction* t1 = ydoc_write_transaction(d1, 0, NULL);
 
     YDoc* d2 = ydoc_new_with_id(2);
     Branch* txt2 = ytext(d2, "test");
-    YTransaction* t2 = ydoc_write_transaction(d2);
+    YTransaction* t2 = ydoc_write_transaction(d2, 0, NULL);
 
     // insert data at the same position on both peer texts
     ytext_insert(txt1, t1, 0, "world", NULL);
@@ -73,7 +111,7 @@ TEST_CASE("Update exchange basic") {
 TEST_CASE("YText basic") {
     YDoc* doc = ydoc_new_with_id(1);
     Branch* txt = ytext(doc, "test");
-    YTransaction* txn = ydoc_write_transaction(doc);
+    YTransaction* txn = ydoc_write_transaction(doc, 0, NULL);
 
     ytext_insert(txt, txn, 0, "hello", NULL);
     ytext_insert(txt, txn, 5, " world", NULL);
@@ -92,7 +130,7 @@ TEST_CASE("YText basic") {
 TEST_CASE("YArray basic") {
     YDoc* doc = ydoc_new_with_id(1);
     Branch* arr = yarray(doc, "test");
-    YTransaction* txn = ydoc_write_transaction(doc);
+    YTransaction* txn = ydoc_write_transaction(doc, 0, NULL);
 
     YInput* nested = (YInput*)malloc(2 * sizeof(YInput));
     nested[0] = yinput_float(0.5);
@@ -149,7 +187,7 @@ TEST_CASE("YArray basic") {
 TEST_CASE("YMap basic") {
     YDoc* doc = ydoc_new_with_id(1);
     Branch* map = ymap(doc, "test");
-    YTransaction* txn = ydoc_write_transaction(doc);
+    YTransaction* txn = ydoc_write_transaction(doc, 0, NULL);
 
     // insert 'a' => 'value'
     YInput a = yinput_string("value");
@@ -234,7 +272,7 @@ TEST_CASE("YMap basic") {
 TEST_CASE("YXmlElement basic") {
     YDoc* doc = ydoc_new_with_id(1);
     Branch* xml = yxmlelem(doc, "test");
-    YTransaction* txn = ydoc_write_transaction(doc);
+    YTransaction* txn = ydoc_write_transaction(doc, 0, NULL);
 
     // XML attributes API
     yxmlelem_insert_attr(xml, txn, "key1", "value1");
@@ -383,7 +421,7 @@ void ytext_test_clean(YTextEventTest* t) {
 TEST_CASE("YText observe") {
     YDoc* doc = ydoc_new_with_id(1);
     Branch* txt = ytext(doc, "test");
-    YTransaction* txn = ydoc_write_transaction(doc);
+    YTransaction* txn = ydoc_write_transaction(doc, 0, NULL);
 
     YTextEventTest* t = ytext_event_test_new();
     unsigned int sub = ytext_observe(txt, (void*)t, &ytext_test_observe);
@@ -399,7 +437,7 @@ TEST_CASE("YText observe") {
 
     // remove 2 chars from the middle
     ytext_test_clean(t);
-    txn = ydoc_write_transaction(doc);
+    txn = ydoc_write_transaction(doc, 0, NULL);
     ytext_remove_range(txt, txn, 1, 2);
     ytransaction_commit(txn);
 
@@ -412,7 +450,7 @@ TEST_CASE("YText observe") {
 
     // insert new item in the middle
     ytext_test_clean(t);
-    txn = ydoc_write_transaction(doc);
+    txn = ydoc_write_transaction(doc, 0, NULL);
     ytext_insert(txt, txn, 1, "e", NULL);
     ytransaction_commit(txn);
 
@@ -427,7 +465,7 @@ TEST_CASE("YText observe") {
     ytext_test_clean(t);
     ytext_unobserve(txt, sub);
 
-    txn = ydoc_write_transaction(doc);
+    txn = ydoc_write_transaction(doc, 0, NULL);
     ytext_insert(txt, txn, 1, "fgh", NULL);
     ytransaction_commit(txn);
 
@@ -441,7 +479,7 @@ TEST_CASE("YText observe") {
 TEST_CASE("YText insert embed") {
     YDoc *doc = ydoc_new_with_id(1);
     Branch* txt = ytext(doc, "test");
-    YTransaction *txn = ydoc_write_transaction(doc);
+    YTransaction *txn = ydoc_write_transaction(doc, 0, NULL);
 
     YTextEventTest *t = ytext_event_test_new();
     unsigned int sub = ytext_observe(txt, (void *) t, &ytext_test_observe);
@@ -527,7 +565,7 @@ void yarray_test_clean(YArrayEventTest* t) {
 TEST_CASE("YArray observe") {
     YDoc* doc = ydoc_new_with_id(1);
     Branch* array = yarray(doc, "test");
-    YTransaction* txn = ydoc_write_transaction(doc);
+    YTransaction* txn = ydoc_write_transaction(doc, 0, NULL);
 
     YArrayEventTest* t = yarray_event_test_new();
     unsigned int sub = yarray_observe(array, (void*)t, &yarray_test_observe);
@@ -550,7 +588,7 @@ TEST_CASE("YArray observe") {
 
     // remove 2 items from the middle
     yarray_test_clean(t);
-    txn = ydoc_write_transaction(doc);
+    txn = ydoc_write_transaction(doc, 0, NULL);
     yarray_remove_range(array, txn, 1, 2);
     ytransaction_commit(txn);
 
@@ -567,7 +605,7 @@ TEST_CASE("YArray observe") {
     i = (YInput*)malloc(1 * sizeof(YInput));
     i[0] = yinput_long(5);
 
-    txn = ydoc_write_transaction(doc);
+    txn = ydoc_write_transaction(doc, 0, NULL);
     yarray_insert_range(array, txn, 1, i, 1);
     ytransaction_commit(txn);
     free(i);
@@ -587,7 +625,7 @@ TEST_CASE("YArray observe") {
     i = (YInput*)malloc(1 * sizeof(YInput));
     i[0] = yinput_long(5);
 
-    txn = ydoc_write_transaction(doc);
+    txn = ydoc_write_transaction(doc, 0, NULL);
     yarray_insert_range(array, txn, 1, i, 1);
     ytransaction_commit(txn);
     free(i);
@@ -629,7 +667,7 @@ void ymap_test_clean(YMapEventTest* t) {
 TEST_CASE("YMap observe") {
     YDoc* doc = ydoc_new_with_id(1);
     Branch* map = ymap(doc, "test");
-    YTransaction* txn = ydoc_write_transaction(doc);
+    YTransaction* txn = ydoc_write_transaction(doc, 0, NULL);
 
     YMapEventTest* t = ymap_event_test_new();
     unsigned int sub = ymap_observe(map, (void*)t, &ymap_test_observe);
@@ -667,7 +705,7 @@ TEST_CASE("YMap observe") {
 
     // remove an entry and update another on
     ymap_test_clean(t);
-    txn = ydoc_write_transaction(doc);
+    txn = ydoc_write_transaction(doc, 0, NULL);
     ymap_remove(map, txn, "key1");
     i2 = yinput_string("value2");
     ymap_insert(map, txn, "key2", &i2);
@@ -700,7 +738,7 @@ TEST_CASE("YMap observe") {
     // free the observer and make sure that callback is no longer called
     ymap_test_clean(t);
     ymap_unobserve(map, sub);
-    txn = ydoc_write_transaction(doc);
+    txn = ydoc_write_transaction(doc, 0, NULL);
     ymap_remove(map, txn, "key2");
     ytransaction_commit(txn);
 
@@ -747,7 +785,7 @@ void yxmltext_test_clean(YXmlTextEventTest* t) {
 TEST_CASE("YXmlText observe") {
     YDoc* doc = ydoc_new_with_id(1);
     Branch* txt = yxmltext(doc, "test");
-    YTransaction* txn = ydoc_write_transaction(doc);
+    YTransaction* txn = ydoc_write_transaction(doc, 0, NULL);
 
     YXmlTextEventTest* t = yxmltext_event_test_new();
     unsigned int sub = yxmltext_observe(txt, (void*)t, &yxmltext_test_observe);
@@ -763,7 +801,7 @@ TEST_CASE("YXmlText observe") {
 
     // remove 2 chars from the middle
     yxmltext_test_clean(t);
-    txn = ydoc_write_transaction(doc);
+    txn = ydoc_write_transaction(doc, 0, NULL);
     yxmltext_remove_range(txt, txn, 1, 2);
     ytransaction_commit(txn);
 
@@ -776,7 +814,7 @@ TEST_CASE("YXmlText observe") {
 
     // insert new item in the middle
     yxmltext_test_clean(t);
-    txn = ydoc_write_transaction(doc);
+    txn = ydoc_write_transaction(doc, 0, NULL);
     yxmltext_insert(txt, txn, 1, "e", NULL);
     ytransaction_commit(txn);
 
@@ -791,7 +829,7 @@ TEST_CASE("YXmlText observe") {
     yxmltext_test_clean(t);
     yxmltext_unobserve(txt, sub);
 
-    txn = ydoc_write_transaction(doc);
+    txn = ydoc_write_transaction(doc, 0, NULL);
     yxmltext_insert(txt, txn, 1, "fgh", NULL);
     ytransaction_commit(txn);
 
@@ -841,7 +879,7 @@ void yxml_test_clean(YXmlEventTest* t) {
 TEST_CASE("YXmlElement observe") {
     YDoc* doc = ydoc_new_with_id(1);
     Branch* xml = yxmlelem(doc, "test");
-    YTransaction* txn = ydoc_write_transaction(doc);
+    YTransaction* txn = ydoc_write_transaction(doc, 0, NULL);
 
     YXmlEventTest* t = yxml_event_test_new();
     unsigned int sub = yxmlelem_observe(xml, (void*)t, &yxml_test_observe);
@@ -877,7 +915,7 @@ TEST_CASE("YXmlElement observe") {
 
     // update attributes
     yxml_test_clean(t);
-    txn = ydoc_write_transaction(doc);
+    txn = ydoc_write_transaction(doc, 0, NULL);
     yxmlelem_insert_attr(xml, txn, "attr1", "value11");
     yxmlelem_remove_attr(xml, txn, "attr2");
     ytransaction_commit(txn);
@@ -908,7 +946,7 @@ TEST_CASE("YXmlElement observe") {
 
     // add children
     yxml_test_clean(t);
-    txn = ydoc_write_transaction(doc);
+    txn = ydoc_write_transaction(doc, 0, NULL);
     Branch* div = yxmlelem_insert_elem(xml, txn, 0, "div");
     Branch* p = yxmlelem_insert_elem(xml, txn, 1, "p");
     ytransaction_commit(txn);
@@ -921,7 +959,7 @@ TEST_CASE("YXmlElement observe") {
 
     // remove a child
     yxml_test_clean(t);
-    txn = ydoc_write_transaction(doc);
+    txn = ydoc_write_transaction(doc, 0, NULL);
     yxmlelem_remove_range(xml, txn, 1, 1);
     ytransaction_commit(txn);
 
@@ -934,7 +972,7 @@ TEST_CASE("YXmlElement observe") {
 
     // insert child again
     yxml_test_clean(t);
-    txn = ydoc_write_transaction(doc);
+    txn = ydoc_write_transaction(doc, 0, NULL);
     div = yxmlelem_insert_elem(xml, txn, 1, "div");
     ytransaction_commit(txn);
 
@@ -949,7 +987,7 @@ TEST_CASE("YXmlElement observe") {
     // free the observer and make sure that callback is no longer called
     yxml_test_clean(t);
     yxmlelem_unobserve(xml, sub);
-    txn = ydoc_write_transaction(doc);
+    txn = ydoc_write_transaction(doc, 0, NULL);
     Branch* inner = yxmlelem_insert_elem(xml, txn, 0, "head");
     ytransaction_commit(txn);
 
@@ -1013,18 +1051,18 @@ void ydeepobserve_test(void* state, int event_count, const YEvent* events) {
 TEST_CASE("YArray deep observe") {
     YDoc* doc = ydoc_new_with_id(1);
     Branch* array = yarray(doc, "test");
-    YTransaction* txn = ydoc_write_transaction(doc);
+    YTransaction* txn = ydoc_write_transaction(doc, 0, NULL);
     ytransaction_commit(txn);
 
     YDeepObserveTest* state = new_ydeepobserve_test();
     unsigned int subscription_id = yobserve_deep(array, (void *) state, ydeepobserve_test);
 
-    txn = ydoc_write_transaction(doc);
+    txn = ydoc_write_transaction(doc, 0, NULL);
     YInput input = yinput_ymap(NULL, NULL, 0);
     yarray_insert_range(array, txn, 0, &input, 1);
     ytransaction_commit(txn);
 
-    txn = ydoc_write_transaction(doc);
+    txn = ydoc_write_transaction(doc, 0, NULL);
     YOutput* output = yarray_get(array, txn, 0);
     Branch* map = youtput_read_ymap(output);
     input = yinput_string("value");
@@ -1052,14 +1090,14 @@ TEST_CASE("YArray deep observe") {
 TEST_CASE("YMap deep observe") {
     YDoc* doc = ydoc_new_with_id(1);
     Branch* map = ymap(doc, "test");
-    YTransaction* txn = ydoc_write_transaction(doc);
+    YTransaction* txn = ydoc_write_transaction(doc, 0, NULL);
     ytransaction_commit(txn);
 
     YDeepObserveTest* state = new_ydeepobserve_test();
     unsigned int subscription_id = yobserve_deep(map, (void *) state, ydeepobserve_test);
 
     /* map.set(txn, 'map', new Y.YMap()) */
-    txn = ydoc_write_transaction(doc);
+    txn = ydoc_write_transaction(doc, 0, NULL);
     YInput input = yinput_ymap(NULL, NULL, 0);
     ymap_insert(map, txn, "map", &input);
     ytransaction_commit(txn);
@@ -1071,7 +1109,7 @@ TEST_CASE("YMap deep observe") {
     REQUIRE(path_len == 0);
 
     /* map.get('map').set(txn, 'array', new Y.YArray()) */
-    txn = ydoc_write_transaction(doc);
+    txn = ydoc_write_transaction(doc, 0, NULL);
     YOutput* output = ymap_get(map, txn, "map");
     Branch* nested = youtput_read_ymap(output);
     input = yinput_yarray(NULL, 0);
@@ -1087,7 +1125,7 @@ TEST_CASE("YMap deep observe") {
     REQUIRE(!strcmp(path[0].value.key, "map"));
 
     /* map.get('map').get('array').insert(txn, 0, ['content']) */
-    txn = ydoc_write_transaction(doc);
+    txn = ydoc_write_transaction(doc, 0, NULL);
     output = ymap_get(map, txn, "map");
     nested = youtput_read_ymap(output);
     output = ymap_get(nested, txn, "array");
@@ -1144,7 +1182,7 @@ void observe_updates(void* state, int len, const unsigned char* bytes) {
 TEST_CASE("YDoc observe updates V1") {
     YDoc *doc1 = ydoc_new_with_id(1);
     Branch *txt1 = ytext(doc1, "test");
-    YTransaction *txn = ydoc_write_transaction(doc1);
+    YTransaction *txn = ydoc_write_transaction(doc1, 0, NULL);
     ytext_insert(txt1, txn, 0, "hello", NULL);
     ObserveUpdatesTest* t = (ObserveUpdatesTest*)malloc(sizeof(ObserveUpdatesTest));
     t->incoming_len = 0;
@@ -1155,7 +1193,7 @@ TEST_CASE("YDoc observe updates V1") {
     YDoc *doc2 = ydoc_new_with_id(2);
     Branch *txt2 = ytext(doc2, "test");
     unsigned int subscription_id = ydoc_observe_updates_v1(doc2, t, observe_updates);
-    txn = ydoc_write_transaction(doc2);
+    txn = ydoc_write_transaction(doc2, 0, NULL);
     ytransaction_apply(txn, t->update, t->len);
     ytransaction_commit(txn);
 
@@ -1166,12 +1204,12 @@ TEST_CASE("YDoc observe updates V1") {
     // check unsubscribe
     ydoc_unobserve_updates_v1(doc2, subscription_id);
 
-    txn = ydoc_write_transaction(doc1);
+    txn = ydoc_write_transaction(doc1, 0, NULL);
     ytext_insert(txt1, txn, 5, " world", NULL);
     t->update = ytransaction_state_diff_v1(txn, NULL, 0, &t->len);
     ytransaction_commit(txn);
 
-    txn = ydoc_write_transaction(doc2);
+    txn = ydoc_write_transaction(doc2, 0, NULL);
     ytransaction_apply(txn, t->update, t->len);
     ytransaction_commit(txn);
 
@@ -1186,7 +1224,7 @@ TEST_CASE("YDoc observe updates V1") {
 TEST_CASE("YDoc observe updates V2") {
     YDoc *doc1 = ydoc_new_with_id(1);
     Branch *txt1 = ytext(doc1, "test");
-    YTransaction *txn = ydoc_write_transaction(doc1);
+    YTransaction *txn = ydoc_write_transaction(doc1, 0, NULL);
     ytext_insert(txt1, txn, 0, "hello", NULL);
     ObserveUpdatesTest* t = (ObserveUpdatesTest*)malloc(sizeof(ObserveUpdatesTest));
     t->incoming_len = 0;
@@ -1197,7 +1235,7 @@ TEST_CASE("YDoc observe updates V2") {
     YDoc *doc2 = ydoc_new_with_id(2);
     Branch *txt2 = ytext(doc2, "test");
     unsigned int subscription_id = ydoc_observe_updates_v2(doc2, t, observe_updates);
-    txn = ydoc_write_transaction(doc2);
+    txn = ydoc_write_transaction(doc2, 0, NULL);
     ytransaction_apply_v2(txn, t->update, t->len);
     ytransaction_commit(txn);
 
@@ -1208,12 +1246,12 @@ TEST_CASE("YDoc observe updates V2") {
     // check unsubscribe
     ydoc_unobserve_updates_v2(doc2, subscription_id);
 
-    txn = ydoc_write_transaction(doc1);
+    txn = ydoc_write_transaction(doc1, 0, NULL);
     ytext_insert(txt1, txn, 5, " world", NULL);
     t->update = ytransaction_state_diff_v2(txn, NULL, 0, &t->len);
     ytransaction_commit(txn);
 
-    txn = ydoc_write_transaction(doc2);
+    txn = ydoc_write_transaction(doc2, 0, NULL);
     ytransaction_apply_v2(txn, t->update, t->len);
     ytransaction_commit(txn);
 
@@ -1304,7 +1342,7 @@ TEST_CASE("YDoc observe after transaction") {
     Branch *txt1 = ytext(doc1, "test");
     unsigned int subscription_id = ydoc_observe_after_transaction(doc1, &t, observe_after_transaction);
 
-    YTransaction *txn = ydoc_write_transaction(doc1);
+    YTransaction *txn = ydoc_write_transaction(doc1, 0, NULL);
     ytext_insert(txt1, txn, 0, "hello world", NULL);
     ytransaction_commit(txn);
 
@@ -1324,7 +1362,7 @@ TEST_CASE("YDoc observe after transaction") {
     range.end = 9;
     t.delete_set.ranges[0].seq = &range;
 
-    txn = ydoc_write_transaction(doc1);
+    txn = ydoc_write_transaction(doc1, 0, NULL);
     ytext_remove_range(txt1, txn, 2, 7);
     ytransaction_commit(txn);
 
@@ -1332,7 +1370,7 @@ TEST_CASE("YDoc observe after transaction") {
 
     ydoc_unobserve_after_transaction(doc1, subscription_id);
 
-    txn = ydoc_write_transaction(doc1);
+    txn = ydoc_write_transaction(doc1, 0, NULL);
     ytext_insert(txt1, txn, 4, " the door", NULL);
     ytransaction_commit(txn);
 
@@ -1349,7 +1387,7 @@ TEST_CASE("YDoc snapshots") {
 
     YDoc* doc = ydoc_new_with_options(o);
     Branch* txt = ytext(doc, "test");
-    YTransaction* txn = ydoc_write_transaction(doc);
+    YTransaction* txn = ydoc_write_transaction(doc, 0, NULL);
 
     ytext_insert(txt, txn, 0, "hello", NULL);
 
@@ -1366,7 +1404,7 @@ TEST_CASE("YDoc snapshots") {
 
     doc = ydoc_new_with_id(1);
     txt = ytext(doc, "test");
-    txn = ydoc_write_transaction(doc);
+    txn = ydoc_write_transaction(doc, 0, NULL);
 
     ytransaction_apply(txn, update, update_len);
 
@@ -1428,7 +1466,7 @@ TEST_CASE("YDoc observe subdocs") {
     options.should_load = Y_TRUE;
     YDoc* docA = ydoc_new_with_options(options);
 
-    YTransaction* txn = ydoc_write_transaction(doc1);
+    YTransaction* txn = ydoc_write_transaction(doc1, 0, NULL);
     YInput input = yinput_ydoc(docA);
     ymap_insert(subdocs, txn, "a", &input);
     YOutput* output = ymap_get(subdocs, txn, "a");
@@ -1440,7 +1478,7 @@ TEST_CASE("YDoc observe subdocs") {
     REQUIRE(!strcmp(t.total, "|a||a|"));
     memset(t.total, '\0', 20);
 
-    txn = ydoc_write_transaction(doc1);
+    txn = ydoc_write_transaction(doc1, 0, NULL);
     output = ymap_get(subdocs, txn, "a");
     subdoc = youtput_read_ydoc(output);
     ydoc_load(subdoc,txn);
@@ -1450,7 +1488,7 @@ TEST_CASE("YDoc observe subdocs") {
     REQUIRE(!strcmp(t.total, ""));
     memset(t.total, '\0', 20);
 
-    txn = ydoc_write_transaction(doc1);
+    txn = ydoc_write_transaction(doc1, 0, NULL);
     output = ymap_get(subdocs, txn, "a");
     subdoc = youtput_read_ydoc(output);
     ydoc_clear(subdoc,txn);
@@ -1460,7 +1498,7 @@ TEST_CASE("YDoc observe subdocs") {
     REQUIRE(!strcmp(t.total, "|a|a||"));
     memset(t.total, '\0', 20);
 
-    txn = ydoc_write_transaction(doc1);
+    txn = ydoc_write_transaction(doc1, 0, NULL);
     output = ymap_get(subdocs, txn, "a");
     subdoc = youtput_read_ydoc(output);
     ydoc_load(subdoc,txn);
@@ -1476,7 +1514,7 @@ TEST_CASE("YDoc observe subdocs") {
     optionsB.should_load = Y_FALSE;
     YDoc* docB = ydoc_new_with_options(optionsB);
 
-    txn = ydoc_write_transaction(doc1);
+    txn = ydoc_write_transaction(doc1, 0, NULL);
     input = yinput_ydoc(docB);
     ymap_insert(subdocs, txn, "b", &input);
     ytransaction_commit(txn);
@@ -1484,7 +1522,7 @@ TEST_CASE("YDoc observe subdocs") {
     REQUIRE(!strcmp(t.total, "|a|||"));
     memset(t.total, '\0', 20);
 
-    txn = ydoc_write_transaction(doc1);
+    txn = ydoc_write_transaction(doc1, 0, NULL);
     output = ymap_get(subdocs, txn, "b");
     subdoc = youtput_read_ydoc(output);
     ydoc_load(subdoc,txn);
@@ -1500,7 +1538,7 @@ TEST_CASE("YDoc observe subdocs") {
     optionsC.should_load = Y_TRUE;
     YDoc* docC = ydoc_new_with_options(optionsC);
 
-    txn = ydoc_write_transaction(doc1);
+    txn = ydoc_write_transaction(doc1, 0, NULL);
     input = yinput_ydoc(docC);
     ymap_insert(subdocs, txn, "c", &input);
     output = ymap_get(subdocs, txn, "c");
@@ -1532,7 +1570,7 @@ TEST_CASE("YDoc observe subdocs") {
     YDoc *doc2 = ydoc_new_with_id(2);
     subscription_id = ydoc_observe_subdocs(doc2, &t, observe_subdocs);
 
-    txn = ydoc_write_transaction(doc2);
+    txn = ydoc_write_transaction(doc2, 0, NULL);
     ytransaction_apply(txn,update, update_len);
     ytransaction_commit(txn);
 
@@ -1542,7 +1580,7 @@ TEST_CASE("YDoc observe subdocs") {
 
     subdocs = ymap(doc2, "mysubdocs");
 
-    txn = ydoc_write_transaction(doc2);
+    txn = ydoc_write_transaction(doc2, 0, NULL);
     output = ymap_get(subdocs, txn, "a");
     subdoc = youtput_read_ydoc(output);
     ydoc_load(subdoc,txn);
@@ -1562,7 +1600,7 @@ TEST_CASE("YDoc observe subdocs") {
     REQUIRE(!strcmp(t.total, "aac"));
     memset(t.total, '\0', 20);
 
-    txn = ydoc_write_transaction(doc2);
+    txn = ydoc_write_transaction(doc2, 0, NULL);
     ymap_remove(subdocs, txn, "a");
     ytransaction_commit(txn);
 
@@ -1584,4 +1622,106 @@ TEST_CASE("YDoc observe subdocs") {
     ydoc_destroy(docA);
     ydoc_destroy(docB);
     ydoc_destroy(docC);
+}
+
+TEST_CASE("YUndoManager undo redo") {
+    YDoc* d1 = ydoc_new_with_id(1);
+    YDoc* d2 = ydoc_new_with_id(2);
+    Branch* txt1 = ytext(d1, "test");
+    Branch* txt2 = ytext(d2, "test");
+    YUndoManager* mgr = yundo_manager(d1, txt1, NULL);
+
+    YTransaction* txn = ydoc_write_transaction(d1, 0, NULL);
+    ytext_insert(txt1, txn, 0, "test", NULL);
+    ytransaction_commit(txn);
+    txn = ydoc_write_transaction(d1, 0, NULL);
+    ytext_remove_range(txt1, txn, 0, 4);
+    ytransaction_commit(txn);
+    yundo_manager_undo(mgr);
+
+    txn = ydoc_read_transaction(d1);
+    char* actual = ytext_string(txt1, txn);
+    ytransaction_commit(txn);
+    REQUIRE(!strcmp(actual, ""));
+    ystring_destroy(actual);
+
+    // follow redone items
+    txn = ydoc_write_transaction(d1, 0, NULL);
+    ytext_insert(txt1, txn, 0, "a", NULL);
+    ytransaction_commit(txn);
+
+    yundo_manager_stop(mgr);
+
+    txn = ydoc_write_transaction(d1, 0, NULL);
+    ytext_remove_range(txt1, txn, 0, 1);
+    ytransaction_commit(txn);
+
+    yundo_manager_stop(mgr);
+    yundo_manager_undo(mgr);
+
+    txn = ydoc_read_transaction(d1);
+    actual = ytext_string(txt1, txn);
+    ytransaction_commit(txn);
+    REQUIRE(!strcmp(actual, "a"));
+    ystring_destroy(actual);
+
+    yundo_manager_undo(mgr);
+
+    txn = ydoc_read_transaction(d1);
+    actual = ytext_string(txt1, txn);
+    ytransaction_commit(txn);
+    REQUIRE(!strcmp(actual, ""));
+    ystring_destroy(actual);
+
+    txn = ydoc_write_transaction(d1, 0, NULL);
+    ytext_insert(txt1, txn, 0, "abc", NULL);
+    ytransaction_commit(txn);
+
+    txn = ydoc_write_transaction(d2, 0, NULL);
+    ytext_insert(txt2, txn, 0, "xyz", NULL);
+    ytransaction_commit(txn);
+
+    exchange_updates(2, d1, d2);
+    yundo_manager_undo(mgr);
+
+    txn = ydoc_read_transaction(d1);
+    actual = ytext_string(txt1, txn);
+    ytransaction_commit(txn);
+    REQUIRE(!strcmp(actual, "xyz"));
+    ystring_destroy(actual);
+
+    yundo_manager_redo(mgr);
+
+    txn = ydoc_read_transaction(d1);
+    actual = ytext_string(txt1, txn);
+    ytransaction_commit(txn);
+    REQUIRE(!strcmp(actual, "abcxyz"));
+    ystring_destroy(actual);
+
+    exchange_updates(2, d1, d2);
+
+    txn = ydoc_write_transaction(d2, 0, NULL);
+    ytext_remove_range(txt2, txn, 0, 1);
+    ytransaction_commit(txn);
+
+    exchange_updates(2, d1, d2);
+    yundo_manager_undo(mgr);
+
+    txn = ydoc_read_transaction(d1);
+    actual = ytext_string(txt1, txn);
+    ytransaction_commit(txn);
+    REQUIRE(!strcmp(actual, "xyz"));
+    ystring_destroy(actual);
+
+    yundo_manager_redo(mgr);
+
+    txn = ydoc_read_transaction(d1);
+    actual = ytext_string(txt1, txn);
+    ytransaction_commit(txn);
+    REQUIRE(!strcmp(actual, "bcxyz"));
+    ystring_destroy(actual);
+
+    yundo_manager_destroy(mgr);
+    ydoc_destroy(d1);
+    ydoc_destroy(d2);
 }

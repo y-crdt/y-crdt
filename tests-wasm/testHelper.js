@@ -23,7 +23,7 @@ export const exchangeUpdates = docs => {
                 let stateVector = Y.encodeStateVector(d1)
                 let diff = Y.encodeStateAsUpdate(d2, stateVector)
 
-                Y.applyUpdate(d1, diff)
+                Y.applyUpdate(d1, diff, "exchange")
             }
         }
     }

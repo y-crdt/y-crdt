@@ -78,6 +78,8 @@ typedef struct YXmlAttrIter {} YXmlAttrIter;
  */
 typedef struct YXmlTreeWalker {} YXmlTreeWalker;
 
+typedef struct YUndoManager {} YUndoManager;
+
 
 #include <stdarg.h>
 #include <stdbool.h>
@@ -223,6 +225,10 @@ typedef struct YXmlTreeWalker {} YXmlTreeWalker;
  * Error code: other error type than the one specified.
  */
 #define ERR_CODE_OTHER 6
+
+#define Y_KIND_UNDO 0
+
+#define Y_KIND_REDO 1
 
 /**
  * Tag used to identify `YPathSegment` storing a *char parameter.
@@ -847,6 +853,18 @@ typedef struct YEventKeyChange {
   const struct YOutput *new_value;
 } YEventKeyChange;
 
+typedef struct YUndoManagerOptions {
+  int capture_timeout_millis;
+} YUndoManagerOptions;
+
+typedef struct YUndoEvent {
+  char kind;
+  const char *origin;
+  int origin_len;
+  struct YDeleteSet insertions;
+  struct YDeleteSet deletions;
+} YUndoEvent;
+
 /**
  * Returns default ceonfiguration for `YOptions`.
  */
@@ -984,10 +1002,15 @@ YTransaction *ydoc_read_transaction(YDoc *doc);
  * of a transaction. Yrs transactions do not follow ACID rules. Once a set of operations is
  * complete, a transaction can be finished using `ytransaction_commit` function.
  *
+ * `origin_len` and `origin` are optional parameters to specify a byte sequence used to mark
+ * the origin of this transaction (eg. you may decide to give different origins for transaction
+ * applying remote updates). These can be used by event handlers or `UndoManager` to perform
+ * specific actions. If origin should not be set, call `ydoc_write_transaction(doc, 0, NULL)`.
+ *
  * Returns `NULL` if read-write transaction couldn't be created, i.e. when another transaction is
  * already opened.
  */
-YTransaction *ydoc_write_transaction(YDoc *doc);
+YTransaction *ydoc_write_transaction(YDoc *doc, int origin_len, const char *origin);
 
 /**
  * Starts a new read-write transaction on a given branches document. All other operations happen in
@@ -2196,6 +2219,42 @@ struct YEventKeyChange *yxmltext_event_keys(const struct YXmlTextEvent *e, int *
  * functions.
  */
 void yevent_keys_destroy(struct YEventKeyChange *keys, int len);
+
+YUndoManager *yundo_manager(const YDoc *doc,
+                            const Branch *ytype,
+                            const struct YUndoManagerOptions *options);
+
+void yundo_manager_destroy(YUndoManager *mgr);
+
+void yundo_manager_add_origin(YUndoManager *mgr, int origin_len, const char *origin);
+
+void yundo_manager_remove_origin(YUndoManager *mgr, int origin_len, const char *origin);
+
+void yundo_manager_add_scope(YUndoManager *mgr, const Branch *ytype);
+
+char yundo_manager_clear(YUndoManager *mgr);
+
+void yundo_manager_stop(YUndoManager *mgr);
+
+char yundo_manager_undo(YUndoManager *mgr);
+
+char yundo_manager_redo(YUndoManager *mgr);
+
+char yundo_manager_can_undo(YUndoManager *mgr);
+
+char yundo_manager_can_redo(YUndoManager *mgr);
+
+unsigned int yundo_manager_observe_added(YUndoManager *mgr,
+                                         void *state,
+                                         void (*cb)(void*, const struct YUndoEvent*));
+
+void yundo_manager_unobserve_added(YUndoManager *mgr, unsigned int subscription_id);
+
+unsigned int yundo_manager_observe_popped(YUndoManager *mgr,
+                                          void *state,
+                                          void (*cb)(void*, const struct YUndoEvent*));
+
+void yundo_manager_unobserve_popped(YUndoManager *mgr, unsigned int subscription_id);
 
 /**
  * Returns a value informing what kind of Yrs shared collection given `branch` represents.

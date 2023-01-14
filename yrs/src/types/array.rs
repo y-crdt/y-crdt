@@ -91,7 +91,7 @@ impl Observable for ArrayRef {
 
 pub trait Array: AsRef<Branch> {
     /// Returns a number of elements stored in current array.
-    fn len<T: ReadTxn>(&self, txn: &T) -> u32 {
+    fn len<T: ReadTxn>(&self, _txn: &T) -> u32 {
         self.as_ref().len()
     }
 

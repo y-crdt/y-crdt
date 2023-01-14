@@ -76,7 +76,7 @@ impl AsMut<Branch> for MapRef {
 
 pub trait Map: AsRef<Branch> {
     /// Returns a number of entries stored within current map.
-    fn len<T: ReadTxn>(&self, txn: &T) -> u32 {
+    fn len<T: ReadTxn>(&self, _txn: &T) -> u32 {
         let mut len = 0;
         let inner = self.as_ref();
         for ptr in inner.map.values() {
@@ -147,7 +147,7 @@ pub trait Map: AsRef<Branch> {
     }
 
     /// Checks if an entry with given `key` can be found within current map.
-    fn contains<T: ReadTxn>(&self, txn: &T, key: &str) -> bool {
+    fn contains<T: ReadTxn>(&self, _txn: &T, key: &str) -> bool {
         if let Some(ptr) = self.as_ref().map.get(key) {
             if let Block::Item(item) = ptr.deref() {
                 return !item.is_deleted();
@@ -276,6 +276,20 @@ impl<T> MapPrelim<T> {
 impl<T> From<HashMap<String, T>> for MapPrelim<T> {
     fn from(map: HashMap<String, T>) -> Self {
         MapPrelim(map)
+    }
+}
+
+impl<K, V, const N: usize> From<[(K, V); N]> for MapPrelim<V>
+where
+    K: Into<String>,
+    V: Prelim,
+{
+    fn from(arr: [(K, V); N]) -> Self {
+        let mut m = HashMap::with_capacity(N);
+        for (k, v) in arr {
+            m.insert(k.into(), v);
+        }
+        MapPrelim::from(m)
     }
 }
 

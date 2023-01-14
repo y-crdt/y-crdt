@@ -10,8 +10,12 @@ use crate::utils::OptionExt;
 use crate::*;
 use atomic_refcell::{AtomicRef, AtomicRefMut};
 use lib0::error::Error;
+use smallvec::SmallVec;
 use std::collections::{HashMap, HashSet};
+use std::fmt::Formatter;
+use std::hash::Hash;
 use std::ops::{Deref, DerefMut};
+use std::pin::Pin;
 use std::rc::Rc;
 use updates::encoder::*;
 
@@ -227,8 +231,10 @@ pub struct TransactionMut<'doc> {
     pub(crate) prev_moved: HashMap<BlockPtr, BlockPtr>,
     /// All types that were directly modified (property added or child inserted/deleted).
     /// New types are not included in this Set.
-    changed: HashMap<TypePtr, HashSet<Option<Rc<str>>>>,
+    pub(crate) changed: HashMap<TypePtr, HashSet<Option<Rc<str>>>>,
+    pub(crate) changed_parent_types: Vec<BranchPtr>,
     pub(crate) subdocs: Option<Box<Subdocs>>,
+    pub(crate) origin: Option<Origin>,
     committed: bool,
 }
 
@@ -257,15 +263,17 @@ impl<'doc> Drop for TransactionMut<'doc> {
 }
 
 impl<'doc> TransactionMut<'doc> {
-    pub(crate) fn new(store: AtomicRefMut<'doc, Store>) -> Self {
+    pub(crate) fn new(store: AtomicRefMut<'doc, Store>, origin: Option<Origin>) -> Self {
         let begin_timestamp = store.blocks.get_state_vector();
         TransactionMut {
             store,
+            origin,
             before_state: begin_timestamp,
-            merge_blocks: Vec::new(),
+            merge_blocks: Vec::default(),
             delete_set: DeleteSet::new(),
             after_state: StateVector::default(),
-            changed: HashMap::new(),
+            changed: HashMap::default(),
+            changed_parent_types: Vec::default(),
             prev_moved: HashMap::default(),
             subdocs: None,
             committed: false,
@@ -279,12 +287,22 @@ impl<'doc> TransactionMut<'doc> {
 
     /// Current document state vector which includes changes made by this transaction.
     pub fn after_state(&self) -> &StateVector {
-        &self.before_state
+        &self.after_state
     }
 
     /// Data about deletions performed in the scope of current transaction.
     pub fn delete_set(&self) -> &DeleteSet {
         &self.delete_set
+    }
+
+    /// Returns origin of the transaction (if it was defined).
+    pub fn origin(&self) -> Option<&Origin> {
+        self.origin.as_ref()
+    }
+
+    /// Stores the events for the types that observe also child elements.
+    pub fn changed_parent_types(&self) -> &[BranchPtr] {
+        &self.changed_parent_types
     }
 
     #[inline]
@@ -640,6 +658,7 @@ impl<'doc> TransactionMut<'doc> {
 
                         let mut current = *branch;
                         loop {
+                            self.changed_parent_types.push(current);
                             if current.deep_observers.is_some() {
                                 let entries = changed_parents.entry(current).or_default();
                                 entries.push(event_cache.len() - 1);
@@ -677,6 +696,11 @@ impl<'doc> TransactionMut<'doc> {
                 let events = Events::new(&mut unsorted);
                 branch.trigger_deep(self, &events);
             }
+        }
+
+        if let Some(events) = self.store.events.take() {
+            events.emit_after_transaction(self);
+            self.store.events = Some(events);
         }
 
         // 4. try GC delete set
@@ -828,52 +852,10 @@ impl<'doc> TransactionMut<'doc> {
             }
         }
 
-        for (client, range) in snapshot.delete_set.iter() {
-            if let Some(mut list) = blocks.get(client) {
-                for r in range.iter() {
-                    if let Some(pivot) = list.find_pivot(r.start) {
-                        let block = list.get(pivot);
-                        let clock = block.id().clock;
-                        if clock < r.start {
-                            if let Some(ptr) = blocks.split_block_inner(block, r.start - clock) {
-                                if let Block::Item(item) = block.deref() {
-                                    if item.moved.is_some() {
-                                        if let Some(&prev_moved) = self.prev_moved.get(&block) {
-                                            self.prev_moved.insert(ptr, prev_moved);
-                                        }
-                                    }
-                                }
-                                merge_blocks.push(*ptr.id());
-                            }
-                            list = blocks.get(client).unwrap();
-                        }
-                    }
-
-                    if let Some(pivot) = list.find_pivot(r.end) {
-                        let block = list.get(pivot);
-                        let block_id = block.id();
-                        let block_len = block.len();
-                        if block_id.clock + block_len > r.end {
-                            if let Some(ptr) =
-                                blocks.split_block_inner(block, block_id.clock + block_len - r.end)
-                            {
-                                if let Block::Item(item) = block.deref() {
-                                    if item.moved.is_some() {
-                                        if let Some(&prev_moved) = self.prev_moved.get(&block) {
-                                            self.prev_moved.insert(ptr, prev_moved);
-                                        }
-                                    }
-                                }
-                                merge_blocks.push(*ptr.id());
-                            }
-                            list = blocks.get(client).unwrap();
-                        }
-                    }
-                }
-            }
-        }
-
         self.merge_blocks.append(&mut merge_blocks);
+        for _ in snapshot.delete_set.deleted_blocks(self) {
+            // do nothing just split the blocks by delete set
+        }
     }
 }
 
@@ -896,3 +878,71 @@ pub struct Subdocs {
     pub(crate) removed: HashMap<DocAddr, Doc>,
     pub(crate) loaded: HashMap<DocAddr, Doc>,
 }
+
+#[repr(transparent)]
+#[derive(Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
+pub struct Origin(SmallVec<[u8; std::mem::size_of::<usize>()]>);
+
+impl AsRef<[u8]> for Origin {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_ref()
+    }
+}
+
+impl<'a, T> From<Pin<&'a T>> for Origin {
+    fn from(p: Pin<&T>) -> Self {
+        let ptr = Pin::get_ref(p) as *const T as usize;
+        Origin(SmallVec::from_const(ptr.to_be_bytes()))
+    }
+}
+
+impl<'a> From<&'a [u8]> for Origin {
+    fn from(slice: &'a [u8]) -> Self {
+        Origin(SmallVec::from_slice(slice))
+    }
+}
+
+impl<'a> From<&'a str> for Origin {
+    fn from(v: &'a str) -> Self {
+        Origin(SmallVec::from_slice(v.as_ref()))
+    }
+}
+
+impl std::fmt::Debug for Origin {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
+    }
+}
+
+impl std::fmt::Display for Origin {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Origin(")?;
+        for b in self.0.iter() {
+            write!(f, "{:02x?}", b)?;
+        }
+        write!(f, ")")
+    }
+}
+
+macro_rules! impl_origin {
+    ($t:ty) => {
+        impl From<$t> for Origin {
+            fn from(v: $t) -> Origin {
+                Origin(SmallVec::from_slice(&v.to_be_bytes()))
+            }
+        }
+    };
+}
+
+impl_origin!(u8);
+impl_origin!(u16);
+impl_origin!(u32);
+impl_origin!(u64);
+impl_origin!(u128);
+impl_origin!(usize);
+impl_origin!(i8);
+impl_origin!(i16);
+impl_origin!(i32);
+impl_origin!(i64);
+impl_origin!(i128);
+impl_origin!(isize);

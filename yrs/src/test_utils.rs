@@ -11,14 +11,16 @@ use std::cell::{RefCell, RefMut};
 use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 
+pub const EXCHANGE_UPDATES_ORIGIN: &str = "exchange_updates";
+
 pub fn exchange_updates(docs: &[&Doc]) {
     for i in 0..docs.len() {
         for j in 0..docs.len() {
             if i != j {
                 let a = docs[i];
-                let ta = a.transact_mut();
+                let ta = a.transact();
                 let b = docs[j];
-                let mut tb = b.transact_mut();
+                let mut tb = b.transact_mut_with(EXCHANGE_UPDATES_ORIGIN);
 
                 let sv = tb.state_vector().encode_v1();
                 let update = ta.encode_diff_v1(&StateVector::decode_v1(sv.as_slice()).unwrap());

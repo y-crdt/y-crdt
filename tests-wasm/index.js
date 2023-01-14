@@ -3,6 +3,7 @@ import * as map from './y-map.tests.js'
 import * as text from './y-text.tests.js'
 import * as xml from './y-xml.tests.js'
 import * as doc from './y-doc.tests.js'
+import * as undo from './y-undo.tests.js'
 
 import { runTests } from 'lib0/testing'
 import { isBrowser, isNode } from 'lib0/environment'
@@ -12,7 +13,7 @@ if (isBrowser) {
     log.createVConsole(document.body)
 }
 runTests({
-    array, text, map, xml, doc
+    array, text, map, xml, doc, undo
 }).then(success => {
     /* istanbul ignore next */
     if (isNode) {

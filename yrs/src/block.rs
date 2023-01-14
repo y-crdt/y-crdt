@@ -4,9 +4,9 @@ use crate::store::{Store, WeakStoreRef};
 use crate::transaction::TransactionMut;
 use crate::types::text::update_current_attributes;
 use crate::types::{
-    Attrs, Branch, BranchPtr, TypePtr, Value, TYPE_REFS_ARRAY, TYPE_REFS_DOC, TYPE_REFS_MAP,
-    TYPE_REFS_TEXT, TYPE_REFS_UNDEFINED, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT,
-    TYPE_REFS_XML_HOOK, TYPE_REFS_XML_TEXT,
+    Attrs, Branch, BranchPtr, TypePtr, Value, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
+    TYPE_REFS_UNDEFINED, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_HOOK,
+    TYPE_REFS_XML_TEXT,
 };
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
@@ -102,6 +102,190 @@ impl ID {
 pub(crate) struct BlockPtr(NonNull<Block>);
 
 impl BlockPtr {
+    pub(crate) fn redo(
+        &mut self,
+        txn: &mut TransactionMut,
+        redo_items: &HashSet<BlockPtr>,
+        items_to_delete: &DeleteSet,
+    ) -> Option<BlockPtr> {
+        let self_ptr = self.clone();
+        let item = self.as_item_mut()?;
+        if let Some(redone) = item.redone.as_ref() {
+            let slice = txn.store.blocks.get_item_clean_start(redone)?;
+            return Some(txn.store.materialize(slice));
+        }
+
+        let mut parent_block = item.parent.as_branch().and_then(|b| b.item);
+        // make sure that parent is redone
+        if let Some(mut ptr) = parent_block.clone() {
+            if let Block::Item(parent) = ptr.clone().deref_mut() {
+                if parent.is_deleted() {
+                    // try to undo parent if it will be undone anyway
+                    if parent.redone.is_none()
+                        && (!redo_items.contains(&ptr)
+                            || ptr.redo(txn, redo_items, items_to_delete).is_none())
+                    {
+                        return None;
+                    }
+                    let mut redone = parent.redone;
+                    while let Some(id) = redone.as_ref() {
+                        parent_block = txn
+                            .store
+                            .blocks
+                            .get_item_clean_start(id)
+                            .map(|slice| txn.store.materialize(slice));
+                        redone = parent_block.and_then(|ptr| ptr.as_item().and_then(|i| i.redone));
+                    }
+                }
+            }
+        }
+        let parent_branch =
+            BranchPtr::from(if let Some(Block::Item(item)) = parent_block.as_deref() {
+                if let ItemContent::Type(b) = &item.content {
+                    b.as_ref()
+                } else {
+                    item.parent.as_branch().unwrap()
+                }
+            } else {
+                item.parent.as_branch().unwrap()
+            });
+
+        let mut left = None;
+        let mut right = None;
+        if let Some(sub) = item.parent_sub.as_ref() {
+            if item.right.is_some() {
+                left = Some(self_ptr);
+                // Iterate right while right is in itemsToDelete
+                // If it is intended to delete right while item is redone,
+                // we can expect that item should replace right.
+                while let Some(Block::Item(left_item)) = left.as_deref() {
+                    if let Some(right_ptr) = left_item.right {
+                        if items_to_delete.is_deleted(right_ptr.id()) {
+                            left = Some(right_ptr);
+                            continue;
+                        }
+                    }
+                    break;
+                }
+                // follow redone
+                // trace redone until parent matches
+                while let Some(Block::Item(left_item)) = left.as_deref() {
+                    if let Some(redone) = left_item.redone.as_ref() {
+                        if let Some(slice) = txn.store.blocks.get_item_clean_start(redone) {
+                            let ptr = txn.store.materialize(slice);
+                            left = Some(ptr);
+                            continue;
+                        }
+                    }
+                    break;
+                }
+
+                if let Some(Block::Item(left_item)) = left.as_deref() {
+                    if left_item.right.is_some() {
+                        // It is not possible to redo this item because it conflicts with a
+                        // change from another client
+                        return None;
+                    }
+                }
+            } else {
+                left = parent_branch.map.get(sub).cloned();
+            }
+        } else {
+            // Is an array item. Insert at the old position
+            left = item.left;
+            right = Some(self_ptr);
+            // find next cloned_redo items
+            while let Some(Block::Item(left_item)) = left.clone().as_deref() {
+                let mut left_trace = left;
+                while let Some(Block::Item(trace)) = left_trace.as_deref() {
+                    let p = trace.parent.as_branch().and_then(|p| p.item);
+                    if parent_block != p {
+                        left_trace = if let Some(redone) = trace.redone.as_ref() {
+                            let slice = txn.store.blocks.get_item_clean_start(redone);
+                            slice.map(|s| txn.store.materialize(s))
+                        } else {
+                            None
+                        };
+                    } else {
+                        break;
+                    }
+                }
+                if let Some(Block::Item(trace)) = left_trace.as_deref() {
+                    let p = trace.parent.as_branch().and_then(|p| p.item);
+                    if parent_block == p {
+                        left = left_trace;
+                        break;
+                    }
+                }
+                left = left_item.left.clone();
+            }
+
+            while let Some(Block::Item(right_item)) = right.clone().as_deref() {
+                let mut right_trace = right;
+                // trace redone until parent matches
+                while let Some(Block::Item(trace)) = right_trace.as_deref() {
+                    let p = trace.parent.as_branch().and_then(|p| p.item);
+                    if parent_block != p {
+                        right_trace = if let Some(redone) = trace.redone.as_ref() {
+                            let slice = txn.store.blocks.get_item_clean_start(redone);
+                            slice.map(|s| txn.store.materialize(s))
+                        } else {
+                            None
+                        };
+                    } else {
+                        break;
+                    }
+                }
+                if let Some(Block::Item(trace)) = right_trace.as_deref() {
+                    let p = trace.parent.as_branch().and_then(|p| p.item);
+                    if parent_block == p {
+                        right = right_trace;
+                        break;
+                    }
+                }
+                right = right_item.right.clone();
+            }
+        }
+
+        let next_clock = txn.store.get_local_state();
+        let next_id = ID::new(txn.store.options.client_id, next_clock);
+        let mut redone_item = Item::new(
+            next_id,
+            left,
+            left.map(|p| p.last_id()),
+            right,
+            right.map(|p| *p.id()),
+            TypePtr::Branch(parent_branch),
+            item.parent_sub.clone(),
+            item.content.clone(),
+        );
+        item.redone = Some(*redone_item.id());
+        redone_item.as_item_mut().unwrap().info.set_keep();
+        let mut block_ptr = BlockPtr::from(&mut redone_item);
+
+        block_ptr.integrate(txn, 0);
+
+        let local_block_list = txn.store_mut().blocks.get_client_blocks_mut(next_id.client);
+        local_block_list.push(redone_item);
+        Some(block_ptr)
+    }
+
+    pub(crate) fn keep(&self, keep: bool) {
+        let mut curr = Some(*self);
+        while let Some(Block::Item(item)) = curr.as_deref_mut() {
+            if item.info.is_keep() == keep {
+                break;
+            } else {
+                if keep {
+                    item.info.set_keep();
+                } else {
+                    item.info.clear_keep();
+                }
+                curr = item.parent.as_branch().and_then(|b| b.item);
+            }
+        }
+    }
+
     pub(crate) fn delete_as_cleanup(&self, txn: &mut TransactionMut, is_local: bool) {
         txn.delete(*self);
         if is_local {
@@ -139,6 +323,7 @@ impl BlockPtr {
                         moved: item.moved.clone(),
                         parent_sub: item.parent_sub.clone(),
                         info: item.info.clone(),
+                        redone: item.redone.map(|id| ID::new(id.client, id.clock + offset)),
                     }));
                     let new_ptr = BlockPtr::from(&mut new);
 
@@ -440,7 +625,7 @@ impl BlockPtr {
 
     pub(crate) fn gc(&mut self, parent_gced: bool) {
         if let Block::Item(item) = self.deref_mut() {
-            if item.is_deleted() {
+            if item.is_deleted() && !item.info.is_keep() {
                 item.content.gc();
                 let len = item.len();
                 if parent_gced {
@@ -470,12 +655,16 @@ impl BlockPtr {
                     && v1.right_origin == v2.right_origin
                     && v1.right == Some(other_ptr)
                     && v1.is_deleted() == v2.is_deleted()
+                    && (v1.redone.is_none() && v2.redone.is_none())
                     && v1.moved == v2.moved
                     && v1.content.try_squash(&v2.content)
                 {
                     v1.len = v1.content.len(OffsetKind::Utf16);
                     if let Some(Block::Item(right_right)) = v2.right.as_deref_mut() {
                         right_right.left = Some(self_ptr);
+                    }
+                    if v2.info.is_keep() {
+                        v1.info.set_keep();
                     }
                     v1.right = v2.right;
                     true
@@ -951,6 +1140,16 @@ impl ItemFlags {
     }
 
     #[inline]
+    pub fn set_keep(&mut self) {
+        self.set(ITEM_FLAG_KEEP)
+    }
+
+    #[inline]
+    pub fn clear_keep(&mut self) {
+        self.clear(ITEM_FLAG_KEEP)
+    }
+
+    #[inline]
     pub fn set_countable(&mut self) {
         self.set(ITEM_FLAG_COUNTABLE)
     }
@@ -1018,7 +1217,9 @@ pub(crate) struct Item {
     pub content: ItemContent,
 
     /// Pointer to a parent collection containing current item.
-    pub parent: types::TypePtr,
+    pub parent: TypePtr,
+
+    pub redone: Option<ID>,
 
     /// Used only when current item is used by map-like types. In such case this item works as a
     /// key-value entry of a map, and this field contains a key used by map.
@@ -1115,6 +1316,7 @@ impl Item {
             parent_sub,
             info,
             moved: None,
+            redone: None,
         }));
         let item_ptr = BlockPtr::from(&mut item);
         if let ItemContent::Type(branch) = &mut item.as_item_mut().unwrap().content {
@@ -1812,6 +2014,25 @@ impl ItemContent {
     }
 }
 
+impl Clone for ItemContent {
+    fn clone(&self) -> Self {
+        match self {
+            ItemContent::Any(array) => ItemContent::Any(array.clone()),
+            ItemContent::Binary(bytes) => ItemContent::Binary(bytes.clone()),
+            ItemContent::Deleted(len) => ItemContent::Deleted(*len),
+            ItemContent::Doc(store, doc) => ItemContent::Doc(store.clone(), doc.clone()),
+            ItemContent::JSON(array) => ItemContent::JSON(array.clone()),
+            ItemContent::Embed(json) => ItemContent::Embed(json.clone()),
+            ItemContent::Format(key, value) => ItemContent::Format(key.clone(), value.clone()),
+            ItemContent::String(chunk) => ItemContent::String(chunk.clone()),
+            ItemContent::Type(branch) => {
+                ItemContent::Type(Branch::new(branch.type_ref(), branch.name.clone()))
+            }
+            ItemContent::Move(range) => ItemContent::Move(range.clone()),
+        }
+    }
+}
+
 impl std::fmt::Debug for Item {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Display::fmt(self, f)
@@ -1836,6 +2057,9 @@ impl std::fmt::Display for Item {
         }
         if let Some(m) = self.moved {
             write!(f, ", moved-to: {}", m)?;
+        }
+        if let Some(id) = self.redone.as_ref() {
+            write!(f, ", redone: {}", id)?;
         }
         if let Some(origin) = self.origin.as_ref() {
             write!(f, ", origin-l: {}", origin)?;
