@@ -14,19 +14,28 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[repr(transparent)]
 /// Undo manager is a structure used to perform undo/redo operations over the associated shared
 /// type(s).
 ///
-/// Undo-/redo-able actions are not equivalent to [TransactionMut] unit of work, but rather
-/// a series of updates batched within specified time intervals (see: [Options::capture_timeout_millis])
-/// and their corresponding origins (see: [Doc::transact_mut_with] and [UndoManager::include_origin]).
+/// Undo-/redo-able actions (a.k.a. [StackItem]s) are not equivalent to [TransactionMut]
+/// unit of work, but rather a series of updates batched within specified time intervals
+/// (see: [Options::capture_timeout_millis]) and their corresponding origins
+/// (see: [Doc::transact_mut_with] and [UndoManager::include_origin]).
 ///
-/// Individual action boundaries can be also specified explicitly by calling [UndoManager::stop],
-/// which denotes the end of batch.
+/// Individual stack item boundaries can be also specified explicitly by calling [UndoManager::reset],
+/// which denotes the end of the batch.
 ///
 /// In order to revert an operation, call [UndoManager::undo], then [UndoManager::redo] to bring it
 /// back.
-#[repr(transparent)]
+///
+/// Users can also subscribe to change notifications observed by undo manager:
+/// - [UndoManager::observe_item_added], which is fired every time a new [StackItem] is created.
+/// - [UndoManager::observe_item_updated], which is fired every time when an existing [StackItem]
+///    had been extended due to new document changes arriving before capture timeout for that stack
+///    item finished.
+/// - [UndoManager::observe_item_popped], which is fired whenever [StackItem] is being from undo
+///    manager as a result of calling either [UndoManager::undo] or [UndoManager::redo] method.
 pub struct UndoManager(Box<Inner>);
 
 struct Inner {
@@ -83,7 +92,7 @@ impl UndoManager {
         inner
             .options
             .tracked_origins
-            .insert(Origin::from(unsafe { inner_ptr as usize }));
+            .insert(Origin::from(inner_ptr as usize));
         inner.on_destroy = Some(
             doc.observe_destroy(move |_, _| Self::handle_destroy(inner_ptr))
                 .unwrap(),
@@ -204,6 +213,12 @@ impl UndoManager {
         }
     }
 
+    /// Registers a callback function to be called every time a new [StackItem] is created. This
+    /// usually happens when a new update over an tracked shared type happened after capture timeout
+    /// threshold from the previous stack item occurence has been reached or [UndoManager::reset]
+    /// has been called.
+    ///
+    /// Returns a subscription object which - when dropped - will unregister provided callback.
     pub fn observe_item_added<F>(&self, f: F) -> UndoEventSubscription
     where
         F: Fn(&TransactionMut, &Event) -> () + 'static,
@@ -211,10 +226,32 @@ impl UndoManager {
         self.0.observer_added.subscribe(Arc::new(f))
     }
 
+    /// Unsubscribes a callback previously registered using [UndoManager::observe_item_added].
     pub fn unobserve_item_added(&self, subscription_id: SubscriptionId) {
         self.0.observer_added.unsubscribe(subscription_id)
     }
 
+    /// Registers a callback function to be called every time an existing [StackItem] has been
+    /// extended as a result of updates from tracked types which happened before a capture timeout
+    /// has passed.
+    ///
+    /// Returns a subscription object which - when dropped - will unregister provided callback.
+    pub fn observe_item_updated<F>(&self, f: F) -> UndoEventSubscription
+    where
+        F: Fn(&TransactionMut, &Event) -> () + 'static,
+    {
+        self.0.observer_updated.subscribe(Arc::new(f))
+    }
+
+    /// Unsubscribes a callback previously registered using [UndoManager::observe_item_updated].
+    pub fn unobserve_item_updated(&self, subscription_id: SubscriptionId) {
+        self.0.observer_updated.unsubscribe(subscription_id)
+    }
+
+    /// Registers a callback function to be called every time an existing [StackItem] has been
+    /// removed as a result of [UndoManager::undo] or [UndoManager::redo] method.
+    ///
+    /// Returns a subscription object which - when dropped - will unregister provided callback.
     pub fn observe_item_popped<F>(&self, f: F) -> UndoEventSubscription
     where
         F: Fn(&TransactionMut, &Event) -> () + 'static,
@@ -222,10 +259,12 @@ impl UndoManager {
         self.0.observer_popped.subscribe(Arc::new(f))
     }
 
+    /// Unsubscribes a callback previously registered using [UndoManager::observe_item_popped].
     pub fn unobserve_item_popped(&self, subscription_id: SubscriptionId) {
         self.0.observer_popped.unsubscribe(subscription_id)
     }
 
+    /// Extends a list of shared types tracked by current undo manager by a given `scope`.
     pub fn expand_scope<T>(&mut self, scope: &T)
     where
         T: AsRef<Branch>,
@@ -234,6 +273,9 @@ impl UndoManager {
         self.0.scope.insert(ptr);
     }
 
+    /// Extends a list of origins tracked by current undo manager by given `origin`. Origin markers
+    /// can be assigned to updates executing in a scope of a particular transaction
+    /// (see: [Doc::transact_mut_with]).
     pub fn include_origin<O>(&mut self, origin: O)
     where
         O: Into<Origin>,
@@ -241,6 +283,7 @@ impl UndoManager {
         self.0.options.tracked_origins.insert(origin.into());
     }
 
+    /// Removes an `origin` from the list of origins tracked by a current undo manager.
     pub fn exclude_origin<O>(&mut self, origin: O)
     where
         O: Into<Origin>,
@@ -248,6 +291,7 @@ impl UndoManager {
         self.0.options.tracked_origins.remove(&origin.into());
     }
 
+    /// Clears all [StackItem]s stored within current UndoManager, effectively resetting its state.
     pub fn clear(&mut self) -> Result<(), TransactionAcqError> {
         let mut txn = self.0.doc.try_transact_mut()?;
 
@@ -278,7 +322,7 @@ impl UndoManager {
     }
 
     /// [UndoManager] merges undo stack items if they were created withing the time gap smaller than
-    /// [Options::capture_timeout]. You can call this method so that the next stack item won't be
+    /// [Options::capture_timeout_millis]. You can call this method so that the next stack item won't be
     /// merged.
     ///
     /// Example:
@@ -298,12 +342,12 @@ impl UndoManager {
     /// let txt = doc.get_or_insert_text("with-stop");
     /// let mut mgr = UndoManager::new(&doc, &txt);
     /// txt.insert(&mut doc.transact_mut(), 0, "a");
-    /// mgr.stop();
+    /// mgr.reset();
     /// txt.insert(&mut doc.transact_mut(), 1, "b");
     /// mgr.undo().unwrap();
     /// txt.get_string(&doc.transact()); // => "a" (note that only 'b' was removed)
     /// ```
-    pub fn stop(&mut self) {
+    pub fn reset(&mut self) {
         self.0.last_change = 0;
     }
 
@@ -312,7 +356,15 @@ impl UndoManager {
         !self.0.undo_stack.is_empty()
     }
 
-    /// Undo last change on type.
+    /// Undo last action tracked by current undo manager. Actions (a.k.a. [StackItem]s) are groups
+    /// of updates performed in a given time range - they also can be separated explicitly by
+    /// calling [UndoManager::reset].
+    ///
+    /// This method requires an exclusive access to underlying document store. This means that
+    /// no other transaction on that same document can be active while calling this method.
+    /// Otherwise an error will be returned.
+    ///
+    /// Successful execution returns a boolean value telling if an undo call has performed any changes.
     pub fn undo(&mut self) -> Result<bool, TransactionAcqError> {
         let mut txn = self.0.doc.try_transact_mut_with(self.as_origin())?;
         self.0.undoing.set(true);
@@ -340,7 +392,15 @@ impl UndoManager {
         !self.0.redo_stack.is_empty()
     }
 
-    /// Redo last undo operation.
+    /// Redo'es last action previously undo'ed by current undo manager. Actions
+    /// (a.k.a. [StackItem]s) are groups of updates performed in a given time range - they also can
+    /// be separated explicitly by calling [UndoManager::reset].
+    ///
+    /// This method requires an exclusive access to underlying document store. This means that
+    /// no other transaction on that same document can be active while calling this method.
+    /// Otherwise an error will be returned.
+    ///
+    /// Successful execution returns a boolean value telling if an undo call has performed any changes.
     pub fn redo(&mut self) -> Result<bool, TransactionAcqError> {
         let mut txn = self.0.doc.try_transact_mut_with(self.as_origin())?;
         self.0.redoing.set(true);
@@ -429,31 +489,6 @@ impl UndoManager {
         }
         result
     }
-
-    fn fmt_with(&self, txn: &mut TransactionMut) -> String {
-        use std::fmt::Write;
-        let mut s = String::new();
-        s.push_str("UndoManager(");
-        write!(&mut s, "\n\tscope: {:?}", &self.0.scope).unwrap();
-        write!(&mut s, "\n\torigins: {:?}", &self.0.options.tracked_origins).unwrap();
-        if !self.0.undo_stack.is_empty() {
-            s.push_str("\n\tundo: [");
-            for stack_item in self.0.undo_stack.iter() {
-                s.push_str("\n\t\t");
-                s.push_str(&stack_item.fmt_with(txn));
-            }
-            s.push_str("\n\t]");
-        }
-        if !self.0.redo_stack.is_empty() {
-            s.push_str("\n\tredo: [");
-            for stack_item in self.0.redo_stack.iter() {
-                s.push_str("\n\t\t");
-                s.push_str(&stack_item.fmt_with(txn));
-            }
-            s.push_str("\n\t]");
-        }
-        s
-    }
 }
 
 impl std::fmt::Debug for UndoManager {
@@ -535,6 +570,16 @@ impl Default for Options {
     }
 }
 
+/// A unit of work for the [UndoManager]. It contains a compressed information about all updates and
+/// deletions tracked by a corresponding undo manager. Whenever an [UndoManger::undo] or
+/// [UndoManager::redo] methods are called a last [StackItem] is being used to modify a state of
+/// the document.
+///
+/// Stack items are stored internally by undo manager and created automatically whenever a new
+/// update from tracked shared type and transaction of tracked origin has been committed within
+/// a threshold specified by [Options::capture_timeout_millis] time window since the previous stack
+/// item creation. They can also be created explicitly by calling [UndoManager::reset], which marks
+/// the end of the last stack item batch.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct StackItem {
     deletions: DeleteSet,
@@ -549,26 +594,14 @@ impl StackItem {
         }
     }
 
+    /// A descriptor of all IDs and ranges of the updates deleted within a scope of a current [StackItem].
     pub fn deletions(&self) -> &DeleteSet {
         &self.deletions
     }
 
+    /// A descriptor of all IDs and ranges of the updates created within a scope of a current [StackItem].
     pub fn insertions(&self) -> &DeleteSet {
         &self.insertions
-    }
-
-    fn fmt_with(&self, txn: &mut TransactionMut) -> String {
-        let i: Vec<_> = self
-            .insertions
-            .deleted_blocks(txn)
-            .map(|ptr| ptr.deref().to_string())
-            .collect();
-        let d: Vec<_> = self
-            .deletions
-            .deleted_blocks(txn)
-            .map(|ptr| ptr.deref().to_string())
-            .collect();
-        format!("StackItem({:#?}, {:#?})", i, d)
     }
 }
 
@@ -643,7 +676,6 @@ mod test {
     use std::rc::Rc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
-    use std::time::Duration;
 
     #[test]
     fn undo_text() {
@@ -662,9 +694,9 @@ mod test {
 
         // follow redone items
         txt1.insert(&mut d1.transact_mut(), 0, "a");
-        mgr.stop();
+        mgr.reset();
         txt1.remove_range(&mut d1.transact_mut(), 0, 1);
-        mgr.stop();
+        mgr.reset();
         mgr.undo().unwrap();
         assert_eq!(txt1.get_string(&d1.transact()), "a");
         mgr.undo().unwrap();
@@ -753,7 +785,6 @@ mod test {
         assert_eq!(map1.get(&d1.transact(), "a").unwrap(), 1.into());
 
         // testing sub-types and if it can restore a whole type
-        let sub_type = MapPrelim::from([("x".to_owned(), 42)]);
         map1.insert(&mut d1.transact_mut(), "a", MapPrelim::<u32>::new());
         let sub_type = map1.get(&d1.transact(), "a").unwrap().to_ymap().unwrap();
         sub_type.insert(&mut d1.transact_mut(), "x", 42);
@@ -783,10 +814,10 @@ mod test {
 
         // test setting value multiple times
         map1.insert(&mut d1.transact_mut(), "b", "initial");
-        mgr.stop();
+        mgr.reset();
         map1.insert(&mut d1.transact_mut(), "b", "val1");
         map1.insert(&mut d1.transact_mut(), "b", "val2");
-        mgr.stop();
+        mgr.reset();
         mgr.undo().unwrap();
         assert_eq!(map1.get(&d1.transact(), "b").unwrap(), "initial".into());
     }
@@ -835,7 +866,7 @@ mod test {
         let actual = array1.to_json(&d1.transact());
         let expected = Any::from_json(r#"[{}]"#).unwrap();
         assert_eq!(actual, expected);
-        mgr.stop();
+        mgr.reset();
         map.insert(&mut d1.transact_mut(), "a", 1);
         let actual = array1.to_json(&d1.transact());
         let expected = Any::from_json(r#"[{"a":1}]"#).unwrap();
@@ -902,7 +933,7 @@ mod test {
             "<undefined><p>content</p></undefined>"
         );
         // format textchild and revert that change
-        mgr.stop();
+        mgr.reset();
         text_child.format(
             &mut d1.transact_mut(),
             3,
@@ -944,7 +975,7 @@ mod test {
 
         let txt_clone = txt.clone();
         let data_clone = data.clone();
-        let _sub1 = mgr.observe_item_added(move |txn, e| {
+        let _sub1 = mgr.observe_item_added(move |_, e| {
             assert!(e.has_changed(&txt_clone));
             let c = counter.fetch_add(1, Ordering::SeqCst);
             let mut data = data_clone.borrow_mut();
@@ -954,7 +985,7 @@ mod test {
         let txt_clone = txt.clone();
         let data_clone = data.clone();
         let result_clone = result.clone();
-        let _sub2 = mgr.observe_item_popped(move |txn, e| {
+        let _sub2 = mgr.observe_item_popped(move |_, e| {
             assert!(e.has_changed(&txt_clone));
             let data = data_clone.borrow();
             if let Some(&v) = data.get(&e.item) {
@@ -1004,7 +1035,7 @@ mod test {
         );
 
         exchange_updates(&[&d1, &d2]);
-        mgr1.stop();
+        mgr1.reset();
 
         map1a.insert(
             &mut d1.transact_mut_with(d1.client_id()),
@@ -1123,19 +1154,19 @@ mod test {
             ])),
         );
         let point = root.get(&doc.transact(), "a").unwrap().to_ymap().unwrap();
-        mgr.stop();
+        mgr.reset();
 
         point.insert(&mut doc.transact_mut(), "x", 100);
         point.insert(&mut doc.transact_mut(), "y", 100);
-        mgr.stop();
+        mgr.reset();
 
         point.insert(&mut doc.transact_mut(), "x", 200);
         point.insert(&mut doc.transact_mut(), "y", 200);
-        mgr.stop();
+        mgr.reset();
 
         point.insert(&mut doc.transact_mut(), "x", 300);
         point.insert(&mut doc.transact_mut(), "y", 300);
-        mgr.stop();
+        mgr.reset();
 
         let actual = point.to_json(&doc.transact());
         assert_eq!(actual, Any::from_json(r#"{"x":300,"y":300}"#).unwrap());
@@ -1319,7 +1350,7 @@ mod test {
         let attrs = Attrs::from([("bold".into(), true.into())]);
         txt.format(&mut doc1.transact_mut(), 13, 7, attrs.clone()); // D1: 'Attack ships <b>on fire</b> off the shoulder of Orion.'
 
-        mgr.stop();
+        mgr.reset();
 
         send(&doc1, &doc2); // D2: 'Attack ships <b>on fire</b> off the shoulder of Orion.'
 
@@ -1334,7 +1365,7 @@ mod test {
         let actual = txt.diff(&doc1.transact(), YChange::identity);
         assert_eq!(actual, expected);
 
-        mgr.stop();
+        mgr.reset();
         send(&doc1, &doc2); // D2: 'Attack ships <b>on </b>fire off the shoulder of Orion.'
 
         mgr.undo().unwrap(); // D1: 'Attack ships <b>on fire</b> off the shoulder of Orion.'

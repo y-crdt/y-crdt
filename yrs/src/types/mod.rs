@@ -357,7 +357,7 @@ impl Branch {
 
     /// Returns a materialized value of non-deleted entry under a given `key` of a map component
     /// of a current root type.
-    pub(crate) fn get<T: ReadTxn>(&self, txn: &T, key: &str) -> Option<Value> {
+    pub(crate) fn get<T: ReadTxn>(&self, _txn: &T, key: &str) -> Option<Value> {
         let block = self.map.get(key)?;
         match block.deref() {
             Block::Item(item) if !item.is_deleted() => item.content.get_last(),
@@ -790,12 +790,12 @@ impl std::fmt::Display for Value {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Value::Any(v) => std::fmt::Display::fmt(v, f),
-            Value::YText(v) => write!(f, "TextRef"),
-            Value::YArray(v) => write!(f, "ArrayRef"),
-            Value::YMap(v) => write!(f, "MapRef"),
-            Value::YXmlElement(v) => write!(f, "XmlElementRef"),
-            Value::YXmlFragment(v) => write!(f, "XmlFragmentRef"),
-            Value::YXmlText(v) => write!(f, "XmlTextRef()"),
+            Value::YText(_) => write!(f, "TextRef"),
+            Value::YArray(_) => write!(f, "ArrayRef"),
+            Value::YMap(_) => write!(f, "MapRef"),
+            Value::YXmlElement(_) => write!(f, "XmlElementRef"),
+            Value::YXmlFragment(_) => write!(f, "XmlFragmentRef"),
+            Value::YXmlText(_) => write!(f, "XmlTextRef"),
             Value::YDoc(v) => write!(f, "Doc(guid:{})", v.options().guid),
         }
     }

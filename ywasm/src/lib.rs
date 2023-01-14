@@ -7,7 +7,6 @@ use std::mem::ManuallyDrop;
 use std::ops::Deref;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Duration;
 use wasm_bindgen::__rt::{Ref, RefMut};
 use wasm_bindgen::convert::IntoWasmAbi;
 use wasm_bindgen::prelude::wasm_bindgen;
@@ -3539,7 +3538,7 @@ impl YUndoManager {
 
     #[wasm_bindgen(js_name = stopCapturing)]
     pub fn stop_capturing(&mut self) {
-        self.0.stop()
+        self.0.reset()
     }
 
     #[wasm_bindgen(catch, js_name = undo)]
@@ -3572,7 +3571,7 @@ impl YUndoManager {
 
     #[wasm_bindgen(js_name = onStackItemAdded)]
     pub fn on_item_added(&mut self, callback: js_sys::Function) -> YUndoObserver {
-        YUndoObserver(self.0.observe_item_added(move |txn, e| {
+        YUndoObserver(self.0.observe_item_added(move |_, e| {
             let arg: JsValue = YUndoEvent::new(e).into();
             callback.call1(&JsValue::UNDEFINED, &arg).unwrap();
         }))
@@ -3580,7 +3579,7 @@ impl YUndoManager {
 
     #[wasm_bindgen(js_name = onStackItemPopped)]
     pub fn on_item_popped(&mut self, callback: js_sys::Function) -> YUndoObserver {
-        YUndoObserver(self.0.observe_item_popped(move |txn, e| {
+        YUndoObserver(self.0.observe_item_popped(move |_, e| {
             let arg: JsValue = YUndoEvent::new(e).into();
             callback.call1(&JsValue::UNDEFINED, &arg).unwrap();
         }))
@@ -3766,7 +3765,7 @@ impl JsValueWrapper {
             Shared::XmlElement(v) => Ok(BranchPtr::from(v.deref().0.as_ref())),
             Shared::XmlText(v) => Ok(BranchPtr::from(v.deref().0.as_ref())),
             Shared::XmlFragment(v) => Ok(BranchPtr::from(v.deref().0.as_ref())),
-            Shared::Doc(v) => Err(JsValue::from_str("Doc is not a shared type")),
+            Shared::Doc(_) => Err(JsValue::from_str("Doc is not a shared type")),
         }
     }
 }

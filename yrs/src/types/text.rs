@@ -53,7 +53,7 @@ impl Observable for TextRef {
 
 impl GetString for TextRef {
     /// Converts context of this text data structure into a single string value.
-    fn get_string<T: ReadTxn>(&self, txn: &T) -> String {
+    fn get_string<T: ReadTxn>(&self, _txn: &T) -> String {
         let mut start = self.as_ref().start;
         let mut s = String::new();
         while let Some(Block::Item(item)) = start.as_deref() {
@@ -76,7 +76,7 @@ impl Into<XmlTextRef> for TextRef {
 
 pub trait Text: AsRef<Branch> {
     /// Returns a number of characters visible in a current text data structure.
-    fn len<T: ReadTxn>(&self, txn: &T) -> u32 {
+    fn len<T: ReadTxn>(&self, _txn: &T) -> u32 {
         self.as_ref().content_len
     }
 
@@ -219,7 +219,7 @@ pub trait Text: AsRef<Branch> {
         }
     }
 
-    fn diff<T, D, F>(&self, txn: &T, compute_ychange: F) -> Vec<Diff<D>>
+    fn diff<T, D, F>(&self, _txn: &T, compute_ychange: F) -> Vec<Diff<D>>
     where
         T: ReadTxn,
         F: Fn(YChange) -> D,

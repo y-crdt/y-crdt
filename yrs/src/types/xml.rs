@@ -327,7 +327,7 @@ impl GetString for XmlTextRef {
 
             // write attributes as xml closing tags
             attrs.reverse();
-            for (key, value) in attrs {
+            for (key, _) in attrs {
                 write!(buf, "</{}>", key).unwrap();
             }
         }
@@ -601,7 +601,7 @@ pub trait XmlFragment: AsRef<Branch> {
         }
     }
     /// Returns a number of elements stored in current array.
-    fn len<T: ReadTxn>(&self, txn: &T) -> u32 {
+    fn len<T: ReadTxn>(&self, _txn: &T) -> u32 {
         self.as_ref().len()
     }
 
@@ -652,7 +652,7 @@ pub trait XmlFragment: AsRef<Branch> {
 
     /// Retrieves a value stored at a given `index`. Returns `None` when provided index was out
     /// of the range of a current array.
-    fn get<T: ReadTxn>(&self, txn: &T, index: u32) -> Option<XmlNode> {
+    fn get<T: ReadTxn>(&self, _txn: &T, index: u32) -> Option<XmlNode> {
         let branch = self.as_ref();
         let (content, _) = branch.get_at(index)?;
         if let ItemContent::Type(inner) = content {
@@ -896,12 +896,12 @@ impl XmlTextEvent {
 
 pub struct Siblings<'a, T> {
     current: Option<BlockPtr>,
-    txn: &'a T,
+    _txn: &'a T,
 }
 
 impl<'a, T> Siblings<'a, T> {
     fn new(current: Option<BlockPtr>, txn: &'a T) -> Self {
-        Siblings { current, txn }
+        Siblings { current, _txn: txn }
     }
 }
 
@@ -1140,7 +1140,7 @@ mod test {
         let d1 = Doc::with_client_id(1);
         let r1 = d1.get_or_insert_xml_fragment("root");
         let mut t1 = d1.transact_mut();
-        let first = r1.push_back(&mut t1, XmlTextPrelim("hello"));
+        let _first = r1.push_back(&mut t1, XmlTextPrelim("hello"));
         r1.push_back(&mut t1, XmlElementPrelim::empty("p"));
 
         let expected = "hello<p></p>";
@@ -1161,7 +1161,7 @@ mod test {
         let d1 = Doc::with_client_id(1);
         let r1 = d1.get_or_insert_xml_fragment("root");
         let mut t1 = d1.transact_mut();
-        let first = r1.push_back(&mut t1, XmlTextPrelim("hello"));
+        let _first = r1.push_back(&mut t1, XmlTextPrelim("hello"));
         r1.push_back(&mut t1, XmlElementPrelim::empty("p"));
 
         /* This binary is result of following Yjs code (matching Rust code above):

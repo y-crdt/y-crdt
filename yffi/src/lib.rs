@@ -7,7 +7,6 @@ use std::ops::Deref;
 use std::os::raw::{c_char, c_float, c_int, c_long, c_longlong, c_uchar, c_uint, c_ulong};
 use std::ptr::{null, null_mut};
 use std::rc::Rc;
-use std::time::Duration;
 use yrs::block::{ClientID, ItemContent, Prelim};
 use yrs::types::array::ArrayEvent;
 use yrs::types::array::ArrayIter as NativeArrayIter;
@@ -4250,7 +4249,7 @@ pub unsafe extern "C" fn yundo_manager_clear(mgr: *mut UndoManager) -> c_char {
 #[no_mangle]
 pub unsafe extern "C" fn yundo_manager_stop(mgr: *mut UndoManager) {
     let mgr = mgr.as_mut().unwrap();
-    mgr.stop();
+    mgr.reset();
 }
 
 #[no_mangle]
@@ -4299,7 +4298,7 @@ pub unsafe extern "C" fn yundo_manager_observe_added(
 ) -> c_uint {
     let mgr = mgr.as_mut().unwrap();
     let subscription_id: SubscriptionId = mgr
-        .observe_item_added(move |txn, e| {
+        .observe_item_added(move |_, e| {
             let event = YUndoEvent::new(e);
             cb(state, &event as *const YUndoEvent);
         })
@@ -4324,7 +4323,7 @@ pub unsafe extern "C" fn yundo_manager_observe_popped(
 ) -> c_uint {
     let mgr = mgr.as_mut().unwrap();
     let subscription_id: SubscriptionId = mgr
-        .observe_item_popped(move |txn, e| {
+        .observe_item_popped(move |_, e| {
             let event = YUndoEvent::new(e);
             cb(state, &event as *const YUndoEvent);
         })
