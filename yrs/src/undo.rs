@@ -666,8 +666,8 @@ mod test {
     use crate::undo::{Options, UndoManager};
     use crate::updates::decoder::Decode;
     use crate::{
-        Array, Doc, GetString, Map, MapPrelim, ReadTxn, StateVector, Text, Transact, Update, Xml,
-        XmlElementPrelim, XmlElementRef, XmlFragment, XmlTextPrelim,
+        Array, Doc, GetString, Map, MapPrelim, ReadTxn, StateVector, Text, TextPrelim, Transact,
+        Update, Xml, XmlElementPrelim, XmlElementRef, XmlFragment, XmlTextPrelim,
     };
     use lib0::any::Any;
     use std::cell::RefCell;
@@ -785,8 +785,7 @@ mod test {
         assert_eq!(map1.get(&d1.transact(), "a").unwrap(), 1.into());
 
         // testing sub-types and if it can restore a whole type
-        map1.insert(&mut d1.transact_mut(), "a", MapPrelim::<u32>::new());
-        let sub_type = map1.get(&d1.transact(), "a").unwrap().to_ymap().unwrap();
+        let sub_type = map1.insert(&mut d1.transact_mut(), "a", MapPrelim::<u32>::new());
         sub_type.insert(&mut d1.transact_mut(), "x", 42);
         let actual = map1.to_json(&d1.transact());
         let expected = Any::from_json(r#"{ "a": { "x": 42 } }"#).unwrap();
@@ -861,8 +860,7 @@ mod test {
         array1.remove_range(&mut d1.transact_mut(), 0, 5);
 
         // test nested structure
-        array1.insert(&mut d1.transact_mut(), 0, MapPrelim::<u32>::new());
-        let map = array1.get(&d1.transact(), 0).unwrap().to_ymap().unwrap();
+        let map = array1.insert(&mut d1.transact_mut(), 0, MapPrelim::<u32>::new());
         let actual = array1.to_json(&d1.transact());
         let expected = Any::from_json(r#"[{}]"#).unwrap();
         assert_eq!(actual, expected);
@@ -1008,17 +1006,15 @@ mod test {
         let d2 = Doc::with_client_id(2);
         let arr2 = d2.get_or_insert_array("array");
 
-        arr1.push_back(
+        let map1a = arr1.push_back(
             &mut d1.transact_mut(),
             MapPrelim::from([("hello".to_owned(), "world".to_owned())]),
         );
-        let map1a = arr1.get(&d1.transact(), 0).unwrap().to_ymap().unwrap();
 
-        arr1.push_back(
+        let map1b = arr1.push_back(
             &mut d1.transact_mut(),
             MapPrelim::from([("key".to_owned(), "value".to_owned())]),
         );
-        let map1b = arr1.get(&d1.transact(), 1).unwrap().to_ymap().unwrap();
 
         exchange_updates(&[&d1, &d2]);
 
@@ -1279,8 +1275,7 @@ mod test {
                     "blocks",
                     MapPrelim::from([("text".to_owned(), "1".to_owned())]),
                 )]),
-            );
-            design.get(&txn, "text").unwrap().to_ymap().unwrap()
+            )
         };
         {
             let mut txn = doc.transact_mut();
@@ -1410,5 +1405,51 @@ mod test {
         mgr.undo().unwrap();
         let s = f.get_string(&doc.transact());
         assert!(s == r#"<test a="1" b="2"></test>"# || s == r#"<test b="2" a="1"></test>"#);
+    }
+
+    #[test]
+    fn undo_in_embed() {
+        let d1 = Doc::with_client_id(1);
+        let txt1 = d1.get_or_insert_text("test");
+        let mut mgr = UndoManager::new(&d1, &txt1);
+
+        let d2 = Doc::with_client_id(2);
+        let txt2 = d2.get_or_insert_text("test");
+
+        let attrs = Attrs::from([("bold".into(), true.into())]);
+        let nested = txt1.insert_embed_with_attributes(
+            &mut d1.transact_mut(),
+            0,
+            TextPrelim::new("initial text"),
+            attrs,
+        );
+        assert_eq!(
+            nested.get_string(&d1.transact()),
+            "initial text".to_string()
+        );
+        mgr.reset();
+        {
+            let mut txn = d1.transact_mut();
+            let len = nested.len(&txn);
+            nested.remove_range(&mut txn, 0, len);
+        }
+        nested.insert(&mut d1.transact_mut(), 0, "other text");
+        assert_eq!(nested.get_string(&d1.transact()), "other text".to_string());
+        mgr.undo().unwrap();
+        assert_eq!(
+            nested.get_string(&d1.transact()),
+            "initial text".to_string()
+        );
+
+        exchange_updates(&[&d1, &d2]);
+        let diff = txt2.diff(&d1.transact(), YChange::identity);
+        let nested2 = diff[0].insert.clone().to_ytext().unwrap();
+        assert_eq!(
+            nested2.get_string(&d2.transact()),
+            "initial text".to_string()
+        );
+
+        mgr.undo().unwrap();
+        assert_eq!(nested.len(&d1.transact()), 0);
     }
 }

@@ -1,4 +1,4 @@
-use crate::block::{Block, BlockPtr, ItemContent, Prelim};
+use crate::block::{Block, BlockPtr, ItemContent, Prelim, Unused};
 use crate::block_iter::BlockIter;
 use crate::transaction::TransactionMut;
 use crate::types::BranchPtr;
@@ -317,6 +317,8 @@ impl Decode for Move {
 }
 
 impl Prelim for Move {
+    type Return = Unused;
+
     #[inline]
     fn into_content(self, _: &mut TransactionMut) -> (ItemContent, Option<Self>) {
         (ItemContent::Move(Box::new(self)), None)

@@ -1,4 +1,4 @@
-use crate::block::{ItemContent, Prelim};
+use crate::block::{BlockPtr, ItemContent, Prelim, Unused};
 use crate::block_iter::BlockIter;
 use crate::moving::RelativePosition;
 use crate::transaction::TransactionMut;
@@ -11,6 +11,7 @@ use lib0::any::Any;
 use std::borrow::Borrow;
 use std::cell::UnsafeCell;
 use std::collections::HashSet;
+use std::convert::{TryFrom, TryInto};
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
@@ -89,9 +90,21 @@ impl Observable for ArrayRef {
     }
 }
 
+impl TryFrom<BlockPtr> for ArrayRef {
+    type Error = BlockPtr;
+
+    fn try_from(value: BlockPtr) -> Result<Self, Self::Error> {
+        if let Some(branch) = value.clone().as_branch() {
+            Ok(ArrayRef::from(branch))
+        } else {
+            Err(value)
+        }
+    }
+}
+
 pub trait Array: AsRef<Branch> {
     /// Returns a number of elements stored in current array.
-    fn len<T: ReadTxn>(&self, _txn: &T) -> u32 {
+    fn len<T: ReadTxn>(&self, txn: &T) -> u32 {
         self.as_ref().len()
     }
 
@@ -100,10 +113,20 @@ pub trait Array: AsRef<Branch> {
     /// that value at the end of it.
     ///
     /// Using `index` value that's higher than current array length results in panic.
-    fn insert<V: Prelim>(&self, txn: &mut TransactionMut, index: u32, value: V) {
+    ///
+    /// Returns a reference to an integrated preliminary input.
+    fn insert<V>(&self, txn: &mut TransactionMut, index: u32, value: V) -> V::Return
+    where
+        V: Prelim,
+    {
         let mut walker = BlockIter::new(BranchPtr::from(self.as_ref()));
         if walker.try_forward(txn, index) {
-            walker.insert_contents(txn, value)
+            let ptr = walker.insert_contents(txn, value);
+            if let Ok(integrated) = ptr.try_into() {
+                integrated
+            } else {
+                panic!("Defect: unexpected integrated type")
+            }
         } else {
             panic!("Index {} is outside of the range of an array", index);
         }
@@ -119,17 +142,27 @@ pub trait Array: AsRef<Branch> {
         T: IntoIterator<Item = V>,
         V: Into<Any>,
     {
-        self.insert(txn, index, RangePrelim(values))
+        self.insert(txn, index, RangePrelim(values));
     }
 
     /// Inserts given `value` at the end of the current array.
-    fn push_back<V: Prelim>(&self, txn: &mut TransactionMut, value: V) {
+    ///
+    /// Returns a reference to an integrated preliminary input.
+    fn push_back<V>(&self, txn: &mut TransactionMut, value: V) -> V::Return
+    where
+        V: Prelim,
+    {
         let len = self.len(txn);
         self.insert(txn, len, value)
     }
 
     /// Inserts given `value` at the beginning of the current array.
-    fn push_front<V: Prelim>(&self, txn: &mut TransactionMut, content: V) {
+    ///
+    /// Returns a reference to an integrated preliminary input.
+    fn push_front<V>(&self, txn: &mut TransactionMut, content: V) -> V::Return
+    where
+        V: Prelim,
+    {
         self.insert(txn, 0, content)
     }
 
@@ -317,6 +350,8 @@ where
     V: Prelim,
     T: IntoIterator<Item = V>,
 {
+    type Return = ArrayRef;
+
     fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
         let inner = Branch::new(TYPE_REFS_ARRAY, None);
         (ItemContent::Type(inner), Some(self))
@@ -342,6 +377,8 @@ where
     T: IntoIterator<Item = V>,
     V: Into<Any>,
 {
+    type Return = Unused;
+
     fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
         let vec: Vec<Any> = self.0.into_iter().map(|v| v.into()).collect();
         (ItemContent::Any(vec), None)
@@ -987,27 +1024,19 @@ mod test {
             let yarray = doc.get_or_insert_array("array");
             let mut txn = doc.transact_mut();
             let pos = rng.between(0, yarray.len(&txn));
-            yarray.insert(&mut txn, pos, ArrayPrelim::from([1, 2, 3, 4]));
-            if let Value::YArray(array2) = yarray.get(&txn, pos).unwrap() {
-                let expected: Box<[Any]> = (1..=4).map(|i| Any::Number(i as f64)).collect();
-                assert_eq!(array2.to_json(&txn), Any::Array(expected));
-            } else {
-                panic!("should not happen")
-            }
+            let array2 = yarray.insert(&mut txn, pos, ArrayPrelim::from([1, 2, 3, 4]));
+            let expected: Box<[Any]> = (1..=4).map(|i| Any::Number(i as f64)).collect();
+            assert_eq!(array2.to_json(&txn), Any::Array(expected));
         }
 
         fn insert_type_map(doc: &mut Doc, rng: &mut StdRng) {
             let yarray = doc.get_or_insert_array("array");
             let mut txn = doc.transact_mut();
             let pos = rng.between(0, yarray.len(&txn));
-            yarray.insert(&mut txn, pos, MapPrelim::<i32>::from(HashMap::default()));
-            if let Value::YMap(map) = yarray.get(&txn, pos).unwrap() {
-                map.insert(&mut txn, "someprop".to_string(), 42);
-                map.insert(&mut txn, "someprop".to_string(), 43);
-                map.insert(&mut txn, "someprop".to_string(), 44);
-            } else {
-                panic!("should not happen")
-            }
+            let map = yarray.insert(&mut txn, pos, MapPrelim::<i32>::from(HashMap::default()));
+            map.insert(&mut txn, "someprop".to_string(), 42);
+            map.insert(&mut txn, "someprop".to_string(), 43);
+            map.insert(&mut txn, "someprop".to_string(), 44);
         }
 
         fn delete(doc: &mut Doc, rng: &mut StdRng) {

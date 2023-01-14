@@ -1,4 +1,4 @@
-use crate::block::{Block, ItemContent, ItemPosition, Prelim};
+use crate::block::{Block, BlockPtr, ItemContent, ItemPosition, Prelim};
 use crate::transaction::TransactionMut;
 use crate::types::{
     event_keys, Branch, BranchPtr, Entries, EntryChange, EventHandler, Observers, Path, ToJson,
@@ -9,6 +9,7 @@ use lib0::any::Any;
 use std::borrow::Borrow;
 use std::cell::UnsafeCell;
 use std::collections::{HashMap, HashSet};
+use std::convert::{TryFrom, TryInto};
 use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
 
@@ -74,9 +75,21 @@ impl AsMut<Branch> for MapRef {
     }
 }
 
+impl TryFrom<BlockPtr> for MapRef {
+    type Error = BlockPtr;
+
+    fn try_from(value: BlockPtr) -> Result<Self, Self::Error> {
+        if let Some(branch) = value.clone().as_branch() {
+            Ok(MapRef::from(branch))
+        } else {
+            Err(value)
+        }
+    }
+}
+
 pub trait Map: AsRef<Branch> {
     /// Returns a number of entries stored within current map.
-    fn len<T: ReadTxn>(&self, _txn: &T) -> u32 {
+    fn len<T: ReadTxn>(&self, txn: &T) -> u32 {
         let mut len = 0;
         let inner = self.as_ref();
         for ptr in inner.map.values() {
@@ -107,15 +120,13 @@ pub trait Map: AsRef<Branch> {
         MapIter::new(self.as_ref(), txn)
     }
 
-    /// Inserts a new `value` under given `key` into current map. Returns a value stored previously
-    /// under the same key (if any existed).
-    fn insert<K, V>(&self, txn: &mut TransactionMut, key: K, value: V) -> Option<Value>
+    /// Inserts a new `value` under given `key` into current map. Returns an integrated value.
+    fn insert<K, V>(&self, txn: &mut TransactionMut, key: K, value: V) -> V::Return
     where
         K: Into<Rc<str>>,
         V: Prelim,
     {
         let key = key.into();
-        let previous = self.get(txn, &key);
         let pos = {
             let inner = self.as_ref();
             let left = inner.map.get(&key);
@@ -128,8 +139,12 @@ pub trait Map: AsRef<Branch> {
             }
         };
 
-        txn.create_item(&pos, value, Some(key));
-        previous
+        let ptr = txn.create_item(&pos, value, Some(key));
+        if let Ok(integrated) = ptr.try_into() {
+            integrated
+        } else {
+            panic!("Defect: unexpected integrated type")
+        }
     }
 
     /// Removes a stored within current map under a given `key`. Returns that value or `None` if
@@ -147,7 +162,7 @@ pub trait Map: AsRef<Branch> {
     }
 
     /// Checks if an entry with given `key` can be found within current map.
-    fn contains<T: ReadTxn>(&self, _txn: &T, key: &str) -> bool {
+    fn contains_key<T: ReadTxn>(&self, txn: &T, key: &str) -> bool {
         if let Some(ptr) = self.as_ref().map.get(key) {
             if let Block::Item(item) = ptr.deref() {
                 return !item.is_deleted();
@@ -294,6 +309,8 @@ where
 }
 
 impl<T: Prelim> Prelim for MapPrelim<T> {
+    type Return = MapRef;
+
     fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
         let inner = Branch::new(TYPE_REFS_MAP, None);
         (ItemContent::Type(inner), Some(self))
@@ -838,7 +855,7 @@ mod test {
                     ArrayPrelim::from(vec![1, 2, 3, 4]),
                 );
             } else if rng.gen_bool(0.33) {
-                map.insert(&mut txn, key.to_string(), TextPrelim("deeptext"));
+                map.insert(&mut txn, key.to_string(), TextPrelim::new("deeptext"));
             } else {
                 map.insert(
                     &mut txn,
@@ -887,8 +904,7 @@ mod test {
             *count += 1;
         });
 
-        map.insert(&mut doc.transact_mut(), "map", MapPrelim::<String>::new());
-        let nested = map.get(&map.transact(), "map").unwrap().to_ymap().unwrap();
+        let nested = map.insert(&mut doc.transact_mut(), "map", MapPrelim::<String>::new());
         nested.insert(
             &mut doc.transact_mut(),
             "array",
@@ -901,12 +917,7 @@ mod test {
             .unwrap();
         nested2.insert(&mut doc.transact_mut(), 0, "content");
 
-        nested.insert(&mut doc.transact_mut(), "text", TextPrelim("text"));
-        let nested_text = nested
-            .get(&nested.transact(), "text")
-            .unwrap()
-            .to_ytext()
-            .unwrap();
+        let nested_text = nested.insert(&mut doc.transact_mut(), "text", TextPrelim::new("text"));
         nested_text.push(&mut doc.transact_mut(), "!");
 
         assert_eq!(*calls.borrow().deref(), 5);

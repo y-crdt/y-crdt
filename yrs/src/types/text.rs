@@ -1,4 +1,4 @@
-use crate::block::{Block, BlockPtr, Item, ItemContent, ItemPosition, Prelim};
+use crate::block::{Block, BlockPtr, Item, ItemContent, ItemPosition, Prelim, PrelimEmbed};
 use crate::block_store::Snapshot;
 use crate::transaction::TransactionMut;
 use crate::types::{
@@ -7,8 +7,10 @@ use crate::types::{
 use crate::utils::OptionExt;
 use crate::*;
 use lib0::any::Any;
+use std::borrow::Borrow;
 use std::cell::UnsafeCell;
 use std::collections::HashMap;
+use std::convert::{TryFrom, TryInto};
 use std::fmt::Formatter;
 use std::ops::{Deref, DerefMut};
 
@@ -53,7 +55,7 @@ impl Observable for TextRef {
 
 impl GetString for TextRef {
     /// Converts context of this text data structure into a single string value.
-    fn get_string<T: ReadTxn>(&self, _txn: &T) -> String {
+    fn get_string<T: ReadTxn>(&self, txn: &T) -> String {
         let mut start = self.as_ref().start;
         let mut s = String::new();
         while let Some(Block::Item(item)) = start.as_deref() {
@@ -74,9 +76,21 @@ impl Into<XmlTextRef> for TextRef {
     }
 }
 
+impl TryFrom<BlockPtr> for TextRef {
+    type Error = BlockPtr;
+
+    fn try_from(value: BlockPtr) -> Result<Self, Self::Error> {
+        if let Some(branch) = value.clone().as_branch() {
+            Ok(TextRef::from(branch))
+        } else {
+            Err(value)
+        }
+    }
+}
+
 pub trait Text: AsRef<Branch> {
     /// Returns a number of characters visible in a current text data structure.
-    fn len<T: ReadTxn>(&self, _txn: &T) -> u32 {
+    fn len<T: ReadTxn>(&self, txn: &T) -> u32 {
         self.as_ref().content_len
     }
 
@@ -189,11 +203,19 @@ pub trait Text: AsRef<Branch> {
     /// the end of it.
     ///
     /// This method will panic if provided `index` is greater than the length of a current text.
-    fn insert_embed(&self, txn: &mut TransactionMut, index: u32, content: Any) {
+    fn insert_embed<V>(&self, txn: &mut TransactionMut, index: u32, content: V) -> V::Return
+    where
+        V: Prelim + 'static,
+    {
         let this = BranchPtr::from(self.as_ref());
         if let Some(pos) = find_position(this, txn, index) {
-            let value = crate::block::PrelimEmbed(content);
-            txn.create_item(&pos, value, None);
+            let value = PrelimEmbed::new(content);
+            let ptr = txn.create_item(&pos, value, None);
+            if let Ok(integrated) = ptr.try_into() {
+                integrated
+            } else {
+                panic!("Defect: embedded return type doesn't match.")
+            }
         } else {
             panic!("The type or the position doesn't exist!");
         }
@@ -207,26 +229,34 @@ pub trait Text: AsRef<Branch> {
     /// a formatting blocks.
     ///
     /// This method will panic if provided `index` is greater than the length of a current text.
-    fn insert_embed_with_attributes(
+    fn insert_embed_with_attributes<V>(
         &self,
         txn: &mut TransactionMut,
         index: u32,
-        embed: Any,
+        embed: V,
         mut attributes: Attrs,
-    ) {
+    ) -> V::Return
+    where
+        V: Prelim + 'static,
+    {
         let this = BranchPtr::from(self.as_ref());
         if let Some(mut pos) = find_position(this, txn, index) {
             pos.unset_missing(&mut attributes);
             minimize_attr_changes(&mut pos, &attributes);
             let negated_attrs = insert_attributes(this, txn, &mut pos, attributes);
 
-            let value = crate::block::PrelimEmbed(embed);
+            let value = PrelimEmbed::new(embed);
             let item = txn.create_item(&pos, value, None);
 
-            pos.right = Some(item);
+            pos.right = Some(item.clone());
             pos.forward();
 
             insert_negated_attributes(this, txn, &mut pos, negated_attrs);
+            if let Ok(integrated) = item.try_into() {
+                integrated
+            } else {
+                panic!("Defect: unexpected returned integrated type")
+            }
         } else {
             panic!("The type or the position doesn't exist!");
         }
@@ -261,7 +291,7 @@ pub trait Text: AsRef<Branch> {
         }
     }
 
-    fn diff<T, D, F>(&self, _txn: &T, compute_ychange: F) -> Vec<Diff<D>>
+    fn diff<T, D, F>(&self, txn: &T, compute_ychange: F) -> Vec<Diff<D>>
     where
         T: ReadTxn,
         F: Fn(YChange) -> D,
@@ -1108,21 +1138,30 @@ impl TextEvent {
     }
 }
 
-/// A preliminary text. It's can be used to initialize a Text, when it's about to be nested
+/// A preliminary text. It's can be used to initialize a [TextRef], when it's about to be nested
 /// into another Yrs data collection, such as [Map] or [Array].
 #[derive(Debug)]
-pub struct TextPrelim<'a>(pub &'a str);
+pub struct TextPrelim<T: Borrow<str>>(T);
 
-impl Prelim for TextPrelim<'_> {
+impl<T: Borrow<str>> TextPrelim<T> {
+    pub fn new(value: T) -> Self {
+        TextPrelim(value)
+    }
+}
+
+impl<T: Borrow<str>> Prelim for TextPrelim<T> {
+    type Return = TextRef;
+
     fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
         let inner = Branch::new(TYPE_REFS_TEXT, None);
         (ItemContent::Type(inner), Some(self))
     }
 
     fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
-        if !self.0.is_empty() {
+        let borrowed = self.0.borrow();
+        if !borrowed.is_empty() {
             let text = TextRef::from(inner_ref);
-            text.push(txn, self.0);
+            text.push(txn, borrowed);
         }
     }
 }
