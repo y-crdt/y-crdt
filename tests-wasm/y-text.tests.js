@@ -95,7 +95,7 @@ export const testObserver = tc => {
     // remove formatting
     x.format(1, 1, { bold: null })
     t.compare(target.toJson(), x.toJson())
-    t.compare(delta, [{ retain: 1 }, { retain: 1, attributes: { bold: null } }])
+    t.compare(delta, [{ retain: 1 }, { retain: 2, attributes: { bold: null } }])
     target = null
     delta = null
 

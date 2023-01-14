@@ -179,7 +179,8 @@ export const testUndoXml = tc => {
     const xml0 = d0.getXmlElement("undefined")
     const undoManager = new Y.YUndoManager(d0, xml0)
     const child = xml0.insertXmlElement(0, 'p')
-    const textchild = child.insertXmlText(0, 'content')
+    const textchild = child.insertXmlText(0)
+    textchild.insert(0, 'content')
     t.assert(xml0.toString() === '<undefined><p>content</p></undefined>')
     // format textchild and revert that change
     undoManager.stopCapturing()

@@ -175,7 +175,7 @@ export const testSubdoc = tc => {
         subdocs.set('c', docC)
         t.compare(event, [['c'], [], ['c']])
 
-        t.compare(Array.from(doc.getSubdocGuids()), ['a', 'c'])
+        t.compare(doc.getSubdocGuids(), new Set(['a', 'c']))
     }
 
     const doc2 = new Y.YDoc()
