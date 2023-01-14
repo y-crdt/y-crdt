@@ -16,6 +16,7 @@ use lib0::any::Any;
 use lib0::error::Error;
 use smallstr::SmallString;
 use std::collections::HashSet;
+use std::convert::TryFrom;
 use std::hash::Hash;
 use std::ops::{Deref, DerefMut};
 use std::panic;
@@ -99,7 +100,7 @@ impl ID {
 /// which allows to faster locate block it points to within a block store.
 #[repr(transparent)]
 #[derive(Clone, Copy, Hash)]
-pub(crate) struct BlockPtr(NonNull<Block>);
+pub struct BlockPtr(NonNull<Block>);
 
 impl BlockPtr {
     pub(crate) fn redo(
@@ -351,7 +352,7 @@ impl BlockPtr {
 
     /// Integrates current block into block store.
     /// If it returns true, it means that the block should be deleted after being added to a block store.
-    pub fn integrate(&mut self, txn: &mut TransactionMut, offset: u32) -> bool {
+    pub(crate) fn integrate(&mut self, txn: &mut TransactionMut, offset: u32) -> bool {
         let self_ptr = self.clone();
         match self.deref_mut() {
             Block::GC(this) => this.integrate(offset),
@@ -644,7 +645,7 @@ impl BlockPtr {
     /// blocks are of the same type, their contents are of the same type, they belong to the same
     /// parent data structure, their IDs are sequenced directly one after another and they point to
     /// each other as their left/right neighbors respectively.
-    pub fn try_squash(&mut self, mut other: BlockPtr) -> bool {
+    pub(crate) fn try_squash(&mut self, mut other: BlockPtr) -> bool {
         let self_ptr = self.clone();
         let other_ptr = other.clone();
         match (self.deref_mut(), other.deref_mut()) {
@@ -722,6 +723,25 @@ impl PartialEq for BlockPtr {
     fn eq(&self, other: &Self) -> bool {
         // BlockPtr.pivot may differ, but logically it doesn't affect block equality
         self.id() == other.id()
+    }
+}
+
+impl TryFrom<BlockPtr> for Any {
+    type Error = BlockPtr;
+
+    fn try_from(value: BlockPtr) -> Result<Self, Self::Error> {
+        if let Block::Item(item) = value.deref() {
+            match &item.content {
+                ItemContent::Any(v) => Ok(v[0].clone()),
+                ItemContent::Embed(v) => Ok(*v.clone()),
+                ItemContent::Binary(v) => Ok(v.clone().into()),
+                ItemContent::JSON(v) => Ok(v[0].clone().into()),
+                ItemContent::String(v) => Ok(v.to_string().into()),
+                _ => Err(value),
+            }
+        } else {
+            Err(value)
+        }
     }
 }
 
@@ -900,7 +920,7 @@ impl From<BlockPtr> for BlockSlice {
 
 /// An enum containing all supported block variants.
 #[derive(PartialEq)]
-pub(crate) enum Block {
+pub enum Block {
     /// An active block containing user data.
     Item(Item),
 
@@ -1191,45 +1211,45 @@ impl Into<u8> for ItemFlags {
 /// required for a potential conflict resolution as well as extra fields used for joining blocks
 /// together as a part of indexed sequences or maps.
 #[derive(PartialEq)]
-pub(crate) struct Item {
+pub struct Item {
     /// Unique identifier of current item.
-    pub id: ID,
+    pub(crate) id: ID,
 
-    pub len: u32,
+    pub(crate) len: u32,
 
     /// Pointer to left neighbor of this item. Used in sequenced collections.
     /// If `None` current item is a first one on it's `parent` collection.
-    pub left: Option<BlockPtr>,
+    pub(crate) left: Option<BlockPtr>,
 
     /// Pointer to right neighbor of this item. Used in sequenced collections.
     /// If `None` current item is the last one on it's `parent` collection.
-    pub right: Option<BlockPtr>,
+    pub(crate) right: Option<BlockPtr>,
 
     /// Used for concurrent insert conflict resolution. An ID of a left-side neighbor at the moment
     /// of insertion of current block.
-    pub origin: Option<ID>,
+    pub(crate) origin: Option<ID>,
 
     /// Used for concurrent insert conflict resolution. An ID of a right-side neighbor at the moment
     /// of insertion of current block.
-    pub right_origin: Option<ID>,
+    pub(crate) right_origin: Option<ID>,
 
     /// A user data stored inside of a current item.
-    pub content: ItemContent,
+    pub(crate) content: ItemContent,
 
     /// Pointer to a parent collection containing current item.
-    pub parent: TypePtr,
+    pub(crate) parent: TypePtr,
 
-    pub redone: Option<ID>,
+    pub(crate) redone: Option<ID>,
 
     /// Used only when current item is used by map-like types. In such case this item works as a
     /// key-value entry of a map, and this field contains a key used by map.
-    pub parent_sub: Option<Rc<str>>, //TODO: Rc since it's already used in Branch.map component
+    pub(crate) parent_sub: Option<Rc<str>>, //TODO: Rc since it's already used in Branch.map component
 
     /// This property is reused by the moved prop. In this case this property refers to an Item.
-    pub moved: Option<BlockPtr>,
+    pub(crate) moved: Option<BlockPtr>,
 
     /// Bit flag field which contains information about specifics of this item.
-    pub info: ItemFlags,
+    pub(crate) info: ItemFlags,
 }
 
 #[derive(PartialEq, Eq, Clone)]
@@ -1721,8 +1741,8 @@ impl ItemContent {
                     buf[0] = branch_ref.into();
                     1
                 }
-                ItemContent::Embed(any) => {
-                    buf[0] = Value::Any(any.as_ref().clone());
+                ItemContent::Embed(v) => {
+                    buf[0] = Value::Any(*v.clone());
                     1
                 }
                 ItemContent::Move(_) => 0,
@@ -1753,7 +1773,7 @@ impl ItemContent {
             ItemContent::JSON(v) => v
                 .first()
                 .map(|v| Value::Any(Any::String(v.clone().into_boxed_str()))),
-            ItemContent::Embed(v) => Some(Value::Any(v.as_ref().clone())),
+            ItemContent::Embed(v) => Some(Value::Any(*v.clone())),
             ItemContent::Format(_, _) => None,
             ItemContent::String(v) => Some(Value::Any(Any::String(v.clone().into()))),
             ItemContent::Type(c) => Some(BranchPtr::from(c).into()),
@@ -1770,7 +1790,7 @@ impl ItemContent {
             ItemContent::JSON(v) => v
                 .last()
                 .map(|v| Value::Any(Any::String(v.clone().into_boxed_str()))),
-            ItemContent::Embed(v) => Some(Value::Any(v.as_ref().clone())),
+            ItemContent::Embed(v) => Some(Value::Any(*v.clone())),
             ItemContent::Format(_, _) => None,
             ItemContent::String(v) => Some(Value::Any(Any::String(v.clone().into()))),
             ItemContent::Type(c) => Some(BranchPtr::from(c).into()),
@@ -2171,6 +2191,8 @@ impl std::fmt::Display for ItemPosition {
 
 /// A trait used for preliminary types, that can be inserted into nested YArray/YMap structures.
 pub trait Prelim: Sized {
+    type Return;
+
     /// This method is used to create initial content required in order to create a block item.
     /// A supplied `ptr` can be used to identify block that is about to be created to store
     /// the returned content.
@@ -2190,6 +2212,8 @@ impl<T> Prelim for T
 where
     T: Into<Any>,
 {
+    type Return = Any;
+
     fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
         let value: Any = self.into();
         (ItemContent::Any(vec![value]), None)
@@ -2202,6 +2226,8 @@ where
 pub(crate) struct PrelimString(pub SmallString<[u8; 8]>);
 
 impl Prelim for PrelimString {
+    type Return = ();
+
     fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
         (ItemContent::String(self.0.into()), None)
     }
@@ -2210,14 +2236,34 @@ impl Prelim for PrelimString {
 }
 
 #[derive(Debug)]
-pub(crate) struct PrelimEmbed(pub Any);
+pub(crate) struct PrelimEmbed<V>(V);
 
-impl Prelim for PrelimEmbed {
-    fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
-        (ItemContent::Embed(Box::new(self.0)), None)
+impl<T> PrelimEmbed<T> {
+    pub fn new(value: T) -> Self {
+        PrelimEmbed(value)
+    }
+}
+
+impl<T> Prelim for PrelimEmbed<T>
+where
+    T: Prelim + std::any::Any,
+{
+    type Return = T::Return;
+
+    fn into_content(mut self, txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
+        let of_any = &mut self.0 as &mut dyn std::any::Any;
+        if let Some(any_ref) = of_any.downcast_mut::<Any>() {
+            let any = std::mem::replace(any_ref, Any::Null);
+            (ItemContent::Embed(Box::new(any)), None)
+        } else {
+            let (branch, content) = self.0.into_content(txn);
+            (branch, content.map(PrelimEmbed::new))
+        }
     }
 
-    fn integrate(self, _txn: &mut TransactionMut, _inner_ref: BranchPtr) {}
+    fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
+        self.0.integrate(txn, inner_ref)
+    }
 }
 
 impl std::fmt::Display for ID {

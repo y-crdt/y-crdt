@@ -1,4 +1,4 @@
-use crate::block::{ItemContent, Prelim};
+use crate::block::{BlockPtr, ItemContent, Prelim};
 use crate::block_iter::BlockIter;
 use crate::moving::RelativePosition;
 use crate::transaction::TransactionMut;
@@ -11,6 +11,7 @@ use lib0::any::Any;
 use std::borrow::Borrow;
 use std::cell::UnsafeCell;
 use std::collections::HashSet;
+use std::convert::TryFrom;
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
@@ -89,9 +90,21 @@ impl Observable for ArrayRef {
     }
 }
 
+impl TryFrom<BlockPtr> for ArrayRef {
+    type Error = BlockPtr;
+
+    fn try_from(value: BlockPtr) -> Result<Self, Self::Error> {
+        if let Some(branch) = value.clone().as_branch() {
+            Ok(ArrayRef::from(branch))
+        } else {
+            Err(value)
+        }
+    }
+}
+
 pub trait Array: AsRef<Branch> {
     /// Returns a number of elements stored in current array.
-    fn len<T: ReadTxn>(&self, _txn: &T) -> u32 {
+    fn len<T: ReadTxn>(&self, txn: &T) -> u32 {
         self.as_ref().len()
     }
 
@@ -317,6 +330,8 @@ where
     V: Prelim,
     T: IntoIterator<Item = V>,
 {
+    type Return = ArrayRef;
+
     fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
         let inner = Branch::new(TYPE_REFS_ARRAY, None);
         (ItemContent::Type(inner), Some(self))
@@ -342,6 +357,8 @@ where
     T: IntoIterator<Item = V>,
     V: Into<Any>,
 {
+    type Return = ();
+
     fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
         let vec: Vec<Any> = self.0.into_iter().map(|v| v.into()).collect();
         (ItemContent::Any(vec), None)

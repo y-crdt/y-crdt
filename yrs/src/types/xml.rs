@@ -20,9 +20,7 @@ use std::rc::Rc;
 
 /// Trait shared by preliminary types that can be used as XML nodes: [XmlElementPrelim],
 /// [XmlFragmentPrelim] and [XmlTextPrelim].
-pub trait XmlPrelim: Prelim {
-    type Return: From<BranchPtr>;
-}
+pub trait XmlPrelim: Prelim {}
 
 /// An return type from XML elements retrieval methods. It's an enum of all supported values, that
 /// can be nested inside of [XmlElementRef]. These are other [XmlElementRef]s, [XmlFragmentRef]s
@@ -204,6 +202,18 @@ impl From<BranchPtr> for XmlElementRef {
     }
 }
 
+impl TryFrom<BlockPtr> for XmlElementRef {
+    type Error = BlockPtr;
+
+    fn try_from(value: BlockPtr) -> Result<Self, Self::Error> {
+        if let Some(branch) = value.clone().as_branch() {
+            Ok(Self::from(branch))
+        } else {
+            Err(value)
+        }
+    }
+}
+
 /// A preliminary type that will be materialized into an [XmlElementRef] once it will be integrated
 /// into Yrs document.
 #[derive(Debug, Clone)]
@@ -232,15 +242,18 @@ impl<I, T> XmlPrelim for XmlElementPrelim<I, T>
 where
     I: IntoIterator<Item = T>,
     T: XmlPrelim,
+    <T as Prelim>::Return: TryFrom<BlockPtr>,
 {
-    type Return = XmlElementRef;
 }
 
 impl<I, T> Prelim for XmlElementPrelim<I, T>
 where
     I: IntoIterator<Item = T>,
     T: XmlPrelim,
+    <T as Prelim>::Return: TryFrom<BlockPtr>,
 {
+    type Return = XmlElementRef;
+
     fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
         let inner = Branch::new(TYPE_REFS_XML_ELEMENT, Some(self.0.clone()));
         (ItemContent::Type(inner), Some(self))
@@ -353,16 +366,28 @@ impl From<BranchPtr> for XmlTextRef {
     }
 }
 
+impl TryFrom<BlockPtr> for XmlTextRef {
+    type Error = BlockPtr;
+
+    fn try_from(value: BlockPtr) -> Result<Self, Self::Error> {
+        if let Some(branch) = value.clone().as_branch() {
+            Ok(Self::from(branch))
+        } else {
+            Err(value)
+        }
+    }
+}
+
 /// A preliminary type that will be materialized into an [XmlTextRef] once it will be integrated
 /// into Yrs document.
 #[derive(Debug)]
 pub struct XmlTextPrelim<'a>(pub &'a str);
 
-impl XmlPrelim for XmlTextPrelim<'_> {
-    type Return = XmlTextRef;
-}
+impl XmlPrelim for XmlTextPrelim<'_> {}
 
 impl Prelim for XmlTextPrelim<'_> {
+    type Return = XmlTextRef;
+
     fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
         let inner = Branch::new(TYPE_REFS_XML_TEXT, None);
         (ItemContent::Type(inner), Some(self))
@@ -449,6 +474,18 @@ impl From<BranchPtr> for XmlFragmentRef {
     }
 }
 
+impl TryFrom<BlockPtr> for XmlFragmentRef {
+    type Error = BlockPtr;
+
+    fn try_from(value: BlockPtr) -> Result<Self, Self::Error> {
+        if let Some(branch) = value.clone().as_branch() {
+            Ok(Self::from(branch))
+        } else {
+            Err(value)
+        }
+    }
+}
+
 /// A preliminary type that will be materialized into an [XmlFragmentRef] once it will be integrated
 /// into Yrs document.
 #[derive(Debug, Clone)]
@@ -471,15 +508,18 @@ impl<I, T> XmlPrelim for XmlFragmentPrelim<I, T>
 where
     I: IntoIterator<Item = T>,
     T: XmlPrelim,
+    <T as Prelim>::Return: TryFrom<BlockPtr>,
 {
-    type Return = XmlFragmentRef;
 }
 
 impl<I, T> Prelim for XmlFragmentPrelim<I, T>
 where
     I: IntoIterator<Item = T>,
     T: XmlPrelim,
+    <T as Prelim>::Return: TryFrom<BlockPtr>,
 {
+    type Return = XmlFragmentRef;
+
     fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
         let inner = Branch::new(TYPE_REFS_XML_FRAGMENT, None);
         (ItemContent::Type(inner), Some(self))
@@ -601,7 +641,7 @@ pub trait XmlFragment: AsRef<Branch> {
         }
     }
     /// Returns a number of elements stored in current array.
-    fn len<T: ReadTxn>(&self, _txn: &T) -> u32 {
+    fn len<T: ReadTxn>(&self, txn: &T) -> u32 {
         self.as_ref().len()
     }
 
@@ -610,25 +650,35 @@ pub trait XmlFragment: AsRef<Branch> {
     /// that value at the end of it.
     ///
     /// Using `index` value that's higher than current array length results in panic.
-    fn insert<V: XmlPrelim>(&self, txn: &mut TransactionMut, index: u32, xml_node: V) -> V::Return {
+    fn insert<V>(&self, txn: &mut TransactionMut, index: u32, xml_node: V) -> V::Return
+    where
+        V: XmlPrelim,
+        <V as Prelim>::Return: TryFrom<BlockPtr>,
+    {
         let ptr = self.as_ref().insert_at(txn, index, xml_node);
-        let item = ptr.as_item().unwrap();
-        if let ItemContent::Type(inner) = &item.content {
-            let ptr = BranchPtr::from(inner);
-            V::Return::from(ptr)
+        if let Ok(integrated) = <V as Prelim>::Return::try_from(ptr) {
+            integrated
         } else {
             panic!("Defect: inserted XML element returned primitive value block")
         }
     }
 
     /// Inserts given `value` at the end of the current array.
-    fn push_back<V: XmlPrelim>(&self, txn: &mut TransactionMut, xml_node: V) -> V::Return {
+    fn push_back<V>(&self, txn: &mut TransactionMut, xml_node: V) -> V::Return
+    where
+        V: XmlPrelim,
+        <V as Prelim>::Return: TryFrom<BlockPtr>,
+    {
         let len = self.len(txn);
         self.insert(txn, len, xml_node)
     }
 
     /// Inserts given `value` at the beginning of the current array.
-    fn push_front<V: XmlPrelim>(&self, txn: &mut TransactionMut, xml_node: V) -> V::Return {
+    fn push_front<V>(&self, txn: &mut TransactionMut, xml_node: V) -> V::Return
+    where
+        V: XmlPrelim,
+        <V as Prelim>::Return: TryFrom<BlockPtr>,
+    {
         self.insert(txn, 0, xml_node)
     }
 
@@ -652,7 +702,7 @@ pub trait XmlFragment: AsRef<Branch> {
 
     /// Retrieves a value stored at a given `index`. Returns `None` when provided index was out
     /// of the range of a current array.
-    fn get<T: ReadTxn>(&self, _txn: &T, index: u32) -> Option<XmlNode> {
+    fn get<T: ReadTxn>(&self, txn: &T, index: u32) -> Option<XmlNode> {
         let branch = self.as_ref();
         let (content, _) = branch.get_at(index)?;
         if let ItemContent::Type(inner) = content {

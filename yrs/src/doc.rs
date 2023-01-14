@@ -748,6 +748,8 @@ where
 }
 
 impl Prelim for Doc {
+    type Return = Doc;
+
     fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
         if self.parent_doc().is_some() {
             panic!("Cannot integrate the document, because it's already being used as a sub-document elsewhere");

@@ -1901,17 +1901,17 @@ impl YText {
                 let content = js_into_any(&embed).unwrap();
                 if let Some(txn) = get_txn_mut(txn) {
                     if let Some(attrs) = Self::parse_attrs(attributes) {
-                        v.insert_embed_with_attributes(txn, index, content, attrs)
+                        v.insert_embed_with_attributes(txn, index, content, attrs);
                     } else {
-                        v.insert_embed(txn, index, content)
+                        v.insert_embed(txn, index, content);
                     }
                 } else {
                     let mut txn = v.transact_mut();
 
                     if let Some(attrs) = Self::parse_attrs(attributes) {
-                        v.insert_embed_with_attributes(&mut txn, index, content, attrs)
+                        v.insert_embed_with_attributes(&mut txn, index, content, attrs);
                     } else {
-                        v.insert_embed(&mut txn, index, content)
+                        v.insert_embed(&mut txn, index, content);
                     }
                 }
             }
@@ -3297,17 +3297,17 @@ impl YXmlText {
         if let Some(txn) = get_txn_mut(txn) {
             if let Some(attrs) = YText::parse_attrs(attributes) {
                 self.0
-                    .insert_embed_with_attributes(txn, index, content, attrs)
+                    .insert_embed_with_attributes(txn, index, content, attrs);
             } else {
-                self.0.insert_embed(txn, index, content)
+                self.0.insert_embed(txn, index, content);
             }
         } else {
             let mut txn = self.0.transact_mut();
             if let Some(attrs) = YText::parse_attrs(attributes) {
                 self.0
-                    .insert_embed_with_attributes(&mut txn, index, content, attrs)
+                    .insert_embed_with_attributes(&mut txn, index, content, attrs);
             } else {
-                self.0.insert_embed(&mut txn, index, content)
+                self.0.insert_embed(&mut txn, index, content);
             }
         }
     }
@@ -3644,6 +3644,8 @@ pub struct YUndoObserver(UndoEventSubscription);
 struct JsValueWrapper(JsValue);
 
 impl Prelim for JsValueWrapper {
+    type Return = ();
+
     fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
         let content = if let Some(any) = js_into_any(&self.0) {
             ItemContent::Any(vec![any])

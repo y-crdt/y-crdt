@@ -666,8 +666,8 @@ mod test {
     use crate::undo::{Options, UndoManager};
     use crate::updates::decoder::Decode;
     use crate::{
-        Array, Doc, GetString, Map, MapPrelim, ReadTxn, StateVector, Text, Transact, Update, Xml,
-        XmlElementPrelim, XmlElementRef, XmlFragment, XmlTextPrelim,
+        Array, Doc, GetString, Map, MapPrelim, ReadTxn, StateVector, Text, TextPrelim, Transact,
+        Update, Xml, XmlElementPrelim, XmlElementRef, XmlFragment, XmlTextPrelim,
     };
     use lib0::any::Any;
     use std::cell::RefCell;
@@ -1410,5 +1410,51 @@ mod test {
         mgr.undo().unwrap();
         let s = f.get_string(&doc.transact());
         assert!(s == r#"<test a="1" b="2"></test>"# || s == r#"<test b="2" a="1"></test>"#);
+    }
+
+    #[test]
+    fn undo_in_Embed() {
+        let d1 = Doc::with_client_id(1);
+        let txt1 = d1.get_or_insert_text("test");
+        let mut mgr = UndoManager::new(&d1, &txt1);
+
+        let d2 = Doc::with_client_id(2);
+        let txt2 = d2.get_or_insert_text("test");
+
+        let attrs = Attrs::from([("bold".into(), true.into())]);
+        let nested = txt1.insert_embed_with_attributes(
+            &mut d1.transact_mut(),
+            0,
+            TextPrelim::new("initial text"),
+            attrs,
+        );
+        assert_eq!(
+            nested.get_string(&d1.transact()),
+            "initial text".to_string()
+        );
+        mgr.reset();
+        {
+            let mut txn = d1.transact_mut();
+            let len = nested.len(&txn);
+            nested.remove_range(&mut txn, 0, len);
+        }
+        nested.insert(&mut d1.transact_mut(), 0, "other text");
+        assert_eq!(nested.get_string(&d1.transact()), "other text".to_string());
+        mgr.undo().unwrap();
+        assert_eq!(
+            nested.get_string(&d1.transact()),
+            "initial text".to_string()
+        );
+
+        exchange_updates(&[&d1, &d2]);
+        let diff = txt2.diff(&d1.transact(), YChange::identity);
+        let nested2 = diff[0].insert.clone().to_ytext().unwrap();
+        assert_eq!(
+            nested2.get_string(&d2.transact()),
+            "initial text".to_string()
+        );
+
+        mgr.undo().unwrap();
+        assert_eq!(nested.len(&d1.transact()), 0);
     }
 }

@@ -317,6 +317,8 @@ impl Decode for Move {
 }
 
 impl Prelim for Move {
+    type Return = ();
+
     #[inline]
     fn into_content(self, _: &mut TransactionMut) -> (ItemContent, Option<Self>) {
         (ItemContent::Move(Box::new(self)), None)
