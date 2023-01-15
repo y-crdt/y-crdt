@@ -117,6 +117,10 @@ impl Doc {
     /// If a structure under defined `name` already existed, but its type was different it will be
     /// reinterpreted as a text (in such case a sequence component of complex data type will be
     /// interpreted as a list of text chunks).
+    ///
+    /// **Note**: this method requires an exclusive access to an underlying document store. If there
+    /// is another transaction in process, it will panic. It's advised to define all root shared
+    /// types during the document creation.
     pub fn get_or_insert_text(&self, name: &str) -> TextRef {
         let mut r = self.store.try_borrow_mut().expect(
             "tried to get a root level type while another transaction on the document is open",
@@ -137,6 +141,10 @@ impl Doc {
     /// If a structure under defined `name` already existed, but its type was different it will be
     /// reinterpreted as a map (in such case a map component of complex data type will be
     /// interpreted as native map).
+    ///
+    /// **Note**: this method requires an exclusive access to an underlying document store. If there
+    /// is another transaction in process, it will panic. It's advised to define all root shared
+    /// types during the document creation.
     pub fn get_or_insert_map(&self, name: &str) -> MapRef {
         let mut r = self.store.try_borrow_mut().expect(
             "tried to get a root level type while another transaction on the document is open",
@@ -156,6 +164,10 @@ impl Doc {
     /// If a structure under defined `name` already existed, but its type was different it will be
     /// reinterpreted as an array (in such case a sequence component of complex data type will be
     /// interpreted as a list of inserted values).
+    ///
+    /// **Note**: this method requires an exclusive access to an underlying document store. If there
+    /// is another transaction in process, it will panic. It's advised to define all root shared
+    /// types during the document creation.
     pub fn get_or_insert_array(&self, name: &str) -> ArrayRef {
         let mut r = self.store.try_borrow_mut().expect(
             "tried to get a root level type while another transaction on the document is open",
@@ -177,6 +189,10 @@ impl Doc {
     /// reinterpreted as a XML element (in such case a map component of complex data type will be
     /// interpreted as map of its attributes, while a sequence component - as a list of its child
     /// XML nodes).
+    ///
+    /// **Note**: this method requires an exclusive access to an underlying document store. If there
+    /// is another transaction in process, it will panic. It's advised to define all root shared
+    /// types during the document creation.
     pub fn get_or_insert_xml_fragment(&self, name: &str) -> XmlFragmentRef {
         let mut r = self.store.try_borrow_mut().expect(
             "tried to get a root level type while another transaction on the document is open",
@@ -198,6 +214,10 @@ impl Doc {
     /// reinterpreted as a XML element (in such case a map component of complex data type will be
     /// interpreted as map of its attributes, while a sequence component - as a list of its child
     /// XML nodes).
+    ///
+    /// **Note**: this method requires an exclusive access to an underlying document store. If there
+    /// is another transaction in process, it will panic. It's advised to define all root shared
+    /// types during the document creation.
     pub fn get_or_insert_xml_element(&self, name: &str) -> XmlElementRef {
         let mut r = self.store.try_borrow_mut().expect(
             "tried to get a root level type while another transaction on the document is open",
@@ -217,6 +237,10 @@ impl Doc {
     /// If a structure under defined `name` already existed, but its type was different it will be
     /// reinterpreted as a text (in such case a sequence component of complex data type will be
     /// interpreted as a list of text chunks).
+    ///
+    /// **Note**: this method requires an exclusive access to an underlying document store. If there
+    /// is another transaction in process, it will panic. It's advised to define all root shared
+    /// types during the document creation.
     pub fn get_or_insert_xml_text(&self, name: &str) -> XmlTextRef {
         let mut r = self.store.try_borrow_mut().expect(
             "tried to get a root level type while another transaction on the document is open",
