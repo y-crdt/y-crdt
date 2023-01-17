@@ -274,7 +274,7 @@ impl Doc {
     }
 
     /// Subscribe callback function for any changes performed within transaction scope. These
-    /// changes are encoded using lib0 v1 encoding and can be decoded using [Update::decode_v2] if
+    /// changes are encoded using lib0 v2 encoding and can be decoded using [Update::decode_v2] if
     /// necessary or passed to remote peers right away. This callback is triggered on function
     /// commit.
     ///
@@ -288,7 +288,7 @@ impl Doc {
         events.observe_update_v2(f)
     }
 
-    /// Manually unsubscribes from a callback used in [Doc::observe_update_v1] method.
+    /// Manually unsubscribes from a callback used in [Doc::observe_update_v2] method.
     pub fn unobserve_update_v2(&self, subscription_id: SubscriptionId) {
         let r = self.store.try_borrow().unwrap();
         if let Some(events) = r.events.as_ref() {
