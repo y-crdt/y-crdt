@@ -519,7 +519,7 @@ impl RelativePosition {
         }
     }
 
-    pub(crate) fn from_type_index(
+    pub fn from_type_index(
         txn: &mut TransactionMut,
         branch: BranchPtr,
         mut index: u32,

@@ -1,5 +1,6 @@
 use js_sys::{Object, Reflect, Uint8Array};
 use lib0::any::Any;
+use lib0::error::Error;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::convert::TryFrom;
@@ -26,12 +27,13 @@ use yrs::undo::{EventKind, UndoEventSubscription};
 use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use yrs::{
-    Array, ArrayRef, DeleteSet, DestroySubscription, Doc, GetString, Map, MapRef, Observable,
-    OffsetKind, Options, Origin, ReadTxn, Snapshot, StateVector, Store, SubdocsEvent,
-    SubdocsEventIter, SubdocsSubscription, Subscription, Text, TextRef, Transact, Transaction,
+    AbsolutePosition, Array, ArrayRef, Assoc, DeleteSet, DestroySubscription, Doc, GetString, Map,
+    MapRef, Observable, OffsetKind, Options, Origin, ReadTxn, RelativePosition,
+    RelativePositionContext, Snapshot, StateVector, Store, SubdocsEvent, SubdocsEventIter,
+    SubdocsSubscription, Subscription, Text, TextRef, Transact, Transaction,
     TransactionCleanupEvent, TransactionCleanupSubscription, TransactionMut, UndoManager, Update,
     UpdateSubscription, Xml, XmlElementPrelim, XmlElementRef, XmlFragment, XmlFragmentRef, XmlNode,
-    XmlTextPrelim, XmlTextRef,
+    XmlTextPrelim, XmlTextRef, ID,
 };
 
 // When the `wee_alloc` feature is enabled, use `wee_alloc` as the global
@@ -1752,6 +1754,14 @@ impl<T, P> SharedType<T, P> {
     fn prelim(prelim: P) -> RefCell<Self> {
         RefCell::new(SharedType::Prelim(prelim))
     }
+
+    fn as_integrated(&self) -> Option<&T> {
+        if let SharedType::Integrated(value) = self {
+            Some(value)
+        } else {
+            None
+        }
+    }
 }
 
 /// A shared data type used for collaborative text editing. It enables multiple users to add and
@@ -2034,7 +2044,7 @@ impl YText {
                         ChangeKind::Removed => JsValue::from("removed"),
                     };
                     let result = if let Some(func) = compute_ychange {
-                        let id: JsValue = YID(change.id).into();
+                        let id = change.id.into_js();
                         func.call2(&JsValue::UNDEFINED, &kind, &id).unwrap()
                     } else {
                         let js: JsValue = js_sys::Object::new().into();
@@ -2104,22 +2114,6 @@ impl YText {
                 panic!("YText.observeDeep is not supported on preliminary type.")
             }
         }
-    }
-}
-
-#[wasm_bindgen]
-pub struct YID(yrs::ID);
-
-#[wasm_bindgen]
-impl YID {
-    #[wasm_bindgen(method, getter)]
-    pub fn clock(&self) -> u32 {
-        self.0.clock
-    }
-
-    #[wasm_bindgen(method, getter)]
-    pub fn client(&self) -> u64 {
-        self.0.client
     }
 }
 
@@ -2477,7 +2471,7 @@ impl YArray {
 fn iter_to_array<I, T>(iter: I) -> js_sys::Array
 where
     I: Iterator<Item = T>,
-    T: IntoJsValue,
+    T: IntoJs,
 {
     let array = js_sys::Array::new();
     for value in iter {
@@ -2490,7 +2484,7 @@ where
 fn iter_to_map<'a, I, T>(iter: I) -> js_sys::Object
 where
     I: Iterator<Item = (&'a str, T)>,
-    T: IntoJsValue,
+    T: IntoJs,
 {
     let obj = js_sys::Object::new();
     for (key, value) in iter {
@@ -2501,40 +2495,40 @@ where
     obj
 }
 
-trait IntoJsValue {
+trait IntoJs {
     fn into_js(self) -> JsValue;
 }
 
-impl<'a> IntoJsValue for &'a JsValue {
+impl<'a> IntoJs for &'a JsValue {
     fn into_js(self) -> JsValue {
         self.clone()
     }
 }
 
-impl IntoJsValue for JsValue {
+impl IntoJs for JsValue {
     fn into_js(self) -> JsValue {
         self
     }
 }
 
-impl IntoJsValue for Value {
+impl IntoJs for Value {
     fn into_js(self) -> JsValue {
         value_into_js(self)
     }
 }
 
-impl IntoJsValue for String {
+impl IntoJs for String {
     fn into_js(self) -> JsValue {
         JsValue::from_str(&self)
     }
 }
 
-impl IntoJsValue for XmlNode {
+impl IntoJs for XmlNode {
     fn into_js(self) -> JsValue {
         xml_into_js(self)
     }
 }
-impl<'a> IntoJsValue for (&'a str, Value) {
+impl<'a> IntoJs for (&'a str, Value) {
     fn into_js(self) -> JsValue {
         let tuple = js_sys::Array::new_with_length(2);
         tuple.set(0, JsValue::from(self.0));
@@ -2543,7 +2537,7 @@ impl<'a> IntoJsValue for (&'a str, Value) {
     }
 }
 
-impl<'a> IntoJsValue for (&'a str, String) {
+impl<'a> IntoJs for (&'a str, String) {
     fn into_js(self) -> JsValue {
         let tuple = js_sys::Array::new_with_length(2);
         tuple.set(0, JsValue::from_str(self.0));
@@ -3978,5 +3972,195 @@ impl<'a> Shared<'a> {
             Shared::XmlFragment(_) => TYPE_REFS_XML_FRAGMENT,
             Shared::Doc(_) => TYPE_REFS_DOC,
         }
+    }
+
+    fn branch(&self) -> Option<BranchPtr> {
+        match self {
+            Shared::Text(v) => {
+                let inner = v.0.borrow();
+                let integrated = inner.as_integrated()?;
+                Some(BranchPtr::from(integrated.as_ref()))
+            }
+            Shared::Array(v) => {
+                let inner = v.0.borrow();
+                let integrated = inner.as_integrated()?;
+                Some(BranchPtr::from(integrated.as_ref()))
+            }
+            Shared::Map(v) => {
+                let inner = v.0.borrow();
+                let integrated = inner.as_integrated()?;
+                Some(BranchPtr::from(integrated.as_ref()))
+            }
+            Shared::XmlElement(v) => Some(BranchPtr::from(v.0.as_ref())),
+            Shared::XmlText(v) => Some(BranchPtr::from(v.0.as_ref())),
+            Shared::XmlFragment(v) => Some(BranchPtr::from(v.0.as_ref())),
+            Shared::Doc(_) => None,
+        }
+    }
+}
+
+#[wasm_bindgen(catch, js_name=createRelativePositionFromTypeIndex)]
+pub fn create_relative_position_from_type_index(
+    ytype: &JsValue,
+    index: u32,
+    assoc: i32,
+    txn: &ImplicitTransaction,
+) -> Result<JsValue, JsValue> {
+    use yrs::RelativeIndex;
+    if let Ok(shared) = Shared::try_from(ytype) {
+        if shared.is_prelim() {
+            return Err(JsValue::from_str(
+                "cannot build relative position if shared type was not integrated",
+            ));
+        }
+        let assoc = if assoc >= 0 {
+            Assoc::After
+        } else {
+            Assoc::Before
+        };
+        if let Some(branch) = shared.branch() {
+            let pos = if let Some(txn) = get_txn_mut(txn) {
+                RelativePosition::from_type_index(txn, branch, index, assoc)
+            } else {
+                let mut txn = branch.transact_mut();
+                RelativePosition::from_type_index(&mut txn, branch, index, assoc)
+            };
+            let result = if let Some(pos) = pos {
+                Ok(pos.into_js())
+            } else {
+                Ok(JsValue::NULL)
+            };
+            return result;
+        }
+    }
+    Err(JsValue::from_str("shared type parameter is not indexable"))
+}
+
+#[wasm_bindgen(catch, js_name=createAbsolutePositionFromRelativePosition)]
+pub fn create_absolute_position_from_relative_position(
+    rpos: &JsValue,
+    doc: &YDoc,
+) -> Result<JsValue, JsValue> {
+    if let Some(pos) = relative_position_from_js(rpos) {
+        let txn = doc.0.transact();
+        if let Some(abs) = pos.absolute(&txn) {
+            Ok(abs.into_js())
+        } else {
+            Ok(JsValue::NULL)
+        }
+    } else {
+        Err(JsValue::from_str(
+            "passed parameter is not RelativePosition",
+        ))
+    }
+}
+
+#[wasm_bindgen(catch, js_name=encodeRelativePosition)]
+pub fn encode_relative_position(rpos: &JsValue) -> Result<Uint8Array, JsValue> {
+    if let Some(pos) = relative_position_from_js(rpos) {
+        let bytes = Uint8Array::from(pos.encode_v1().as_slice());
+        Ok(bytes)
+    } else {
+        Err(JsValue::from_str(
+            "passed parameter is not RelativePosition",
+        ))
+    }
+}
+
+#[wasm_bindgen(catch, js_name=decodeRelativePosition)]
+pub fn decode_relative_position(bin: Uint8Array) -> Result<JsValue, JsValue> {
+    let data: Vec<u8> = bin.to_vec();
+    match RelativePosition::decode_v1(&data) {
+        Ok(value) => Ok(value.into_js()),
+        Err(err) => Err(JsValue::from_str(&err.to_string())),
+    }
+}
+
+fn relative_position_from_js(js: &JsValue) -> Option<RelativePosition> {
+    let value = Reflect::get(js, &JsValue::from_str("item")).ok()?;
+    let context = if value.is_undefined() || value.is_null() {
+        let value = Reflect::get(js, &JsValue::from_str("item")).ok()?;
+        let id = id_from_js(&value)?;
+        RelativePositionContext::Relative(id)
+    } else {
+        let value = Reflect::get(js, &JsValue::from_str("tname")).ok()?;
+        if value.is_undefined() || value.is_null() {
+            let value = Reflect::get(js, &JsValue::from_str("type")).ok()?;
+            let id = id_from_js(&value)?;
+            RelativePositionContext::Nested(id)
+        } else {
+            let tname = value.as_string()?;
+            RelativePositionContext::Root(tname.into())
+        }
+    };
+    let assoc = Reflect::get(js, &JsValue::from_str("item")).ok()?;
+    let assoc = if assoc.as_f64()? >= 0.0 {
+        Assoc::After
+    } else {
+        Assoc::Before
+    };
+
+    Some(RelativePosition::new(context, assoc))
+}
+
+fn id_from_js(js: &JsValue) -> Option<ID> {
+    let client = Reflect::get(js, &JsValue::from_str("client"))
+        .ok()?
+        .as_f64()? as ClientID;
+    let clock = Reflect::get(js, &JsValue::from_str("clock"))
+        .ok()?
+        .as_f64()? as u32;
+    Some(ID::new(client, clock))
+}
+
+impl IntoJs for ID {
+    fn into_js(self) -> JsValue {
+        let js: JsValue = js_sys::Object::new().into();
+        Reflect::set(
+            &js,
+            &JsValue::from_str("client"),
+            &JsValue::from(self.client),
+        )
+        .unwrap();
+        Reflect::set(&js, &JsValue::from_str("clock"), &JsValue::from(self.clock)).unwrap();
+        js
+    }
+}
+
+impl IntoJs for RelativePosition {
+    fn into_js(self) -> JsValue {
+        let js: JsValue = js_sys::Object::new().into();
+
+        match self.context() {
+            RelativePositionContext::Relative(id) => {
+                Reflect::set(&js, &JsValue::from_str("item"), &id.into_js()).unwrap();
+            }
+            RelativePositionContext::Nested(id) => {
+                Reflect::set(&js, &JsValue::from_str("type"), &id.into_js()).unwrap();
+            }
+            RelativePositionContext::Root(tname) => {
+                Reflect::set(&js, &JsValue::from_str("tname"), &JsValue::from_str(&tname)).unwrap();
+            }
+        }
+
+        let assoc = match self.assoc {
+            Assoc::After => 0,
+            Assoc::Before => -1,
+        };
+        Reflect::set(&js, &JsValue::from_str("assoc"), &JsValue::from(assoc)).unwrap();
+        js
+    }
+}
+
+impl IntoJs for AbsolutePosition {
+    fn into_js(self) -> JsValue {
+        let js: JsValue = js_sys::Object::new().into();
+        Reflect::set(&js, &JsValue::from_str("index"), &JsValue::from(self.index)).unwrap();
+        let assoc = match self.assoc {
+            Assoc::After => 0,
+            Assoc::Before => -1,
+        };
+        Reflect::set(&js, &JsValue::from_str("assoc"), &JsValue::from(assoc)).unwrap();
+        js
     }
 }
