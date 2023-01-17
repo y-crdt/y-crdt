@@ -2,7 +2,7 @@ use crate::block::{Block, BlockPtr, Item, ItemContent, Prelim};
 use crate::moving::{Move, RelativePosition};
 use crate::transaction::{ReadTxn, TransactionMut};
 use crate::types::{BranchPtr, TypePtr, Value};
-use crate::ID;
+use crate::{Assoc, ID};
 use std::ops::DerefMut;
 
 #[derive(Debug, Clone)]
@@ -280,7 +280,9 @@ impl BlockIter {
 
             let moved_item = stack_item.moved_to.as_item().unwrap();
             if let ItemContent::Move(m) = &moved_item.content {
-                if m.start.assoc && (m.start.within_range(start)) || (m.end.within_range(end)) {
+                if m.start.assoc == Assoc::Before && (m.start.within_range(start))
+                    || (m.end.within_range(end))
+                {
                     let (s, e) = m.get_moved_coords(txn);
                     start = s;
                     end = e;

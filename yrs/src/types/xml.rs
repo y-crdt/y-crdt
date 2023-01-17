@@ -7,7 +7,7 @@ use crate::types::{
     EntryChange, EventHandler, MapRef, Observers, Path, ToJson, TypePtr, Value,
     TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_TEXT,
 };
-use crate::{GetString, Map, Observable, ReadTxn, Text, ID};
+use crate::{GetString, Map, Observable, ReadTxn, RelativeIndex, Text, ID};
 use lib0::any::Any;
 use std::borrow::Borrow;
 use std::cell::UnsafeCell;
@@ -118,6 +118,7 @@ pub struct XmlElementRef(BranchPtr);
 
 impl Xml for XmlElementRef {}
 impl XmlFragment for XmlElementRef {}
+impl RelativeIndex for XmlElementRef {}
 
 impl Into<XmlFragmentRef> for XmlElementRef {
     fn into(self) -> XmlFragmentRef {
@@ -289,6 +290,7 @@ pub struct XmlTextRef(BranchPtr);
 
 impl Xml for XmlTextRef {}
 impl Text for XmlTextRef {}
+impl RelativeIndex for XmlTextRef {}
 
 impl Observable for XmlTextRef {
     type Event = XmlTextEvent;
@@ -407,6 +409,7 @@ impl Prelim for XmlTextPrelim<'_> {
 pub struct XmlFragmentRef(BranchPtr);
 
 impl XmlFragment for XmlFragmentRef {}
+impl RelativeIndex for XmlFragmentRef {}
 
 impl XmlFragmentRef {
     pub fn parent(&self) -> Option<XmlNode> {

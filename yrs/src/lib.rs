@@ -61,6 +61,11 @@ pub use crate::doc::{
 };
 pub use crate::event::{SubdocsEvent, SubdocsEventIter, TransactionCleanupEvent, UpdateEvent};
 pub use crate::id_set::DeleteSet;
+pub use crate::moving::AbsolutePosition;
+pub use crate::moving::Assoc;
+pub use crate::moving::RelativeIndex;
+pub use crate::moving::RelativePosition;
+pub use crate::moving::RelativePositionContext;
 pub use crate::observer::{Observer, Subscription, SubscriptionId};
 pub use crate::store::Store;
 pub use crate::transaction::Origin;
