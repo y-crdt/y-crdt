@@ -1725,3 +1725,42 @@ TEST_CASE("YUndoManager undo redo") {
     ydoc_destroy(d1);
     ydoc_destroy(d2);
 }
+
+TEST_CASE("Relative position") {
+    YDoc* doc = ydoc_new_with_id(1);
+    Branch* txt = ytext(doc, "test");
+    YTransaction* txn = ydoc_write_transaction(doc, 0, NULL);
+
+    ytext_insert(txt, txn, 0, "1", NULL);
+    ytext_insert(txt, txn, 0, "abc", NULL);
+    ytext_insert(txt, txn, 0, "z", NULL);
+    ytext_insert(txt, txn, 0, "y", NULL);
+    ytext_insert(txt, txn, 0, "x", NULL);
+
+    int length = ytext_len(txt, txn);
+    for (int i = 0; i < length; ++i) {
+        for (int assoc = -1; assoc <= 0; ++assoc) {
+
+            YRelativePosition* pos = yrelative_position_from_index(txt, txn, i, assoc);
+            int bin_len = 0;
+            unsigned char* bin = yrelative_position_encode(pos, &bin_len);
+            YRelativePosition* pos2 = yrelative_position_decode(bin, bin_len);
+
+            Branch* actual_branch;
+            int actual_index;
+
+            yrelative_position_read(pos2, txn, &actual_branch, &actual_index);
+
+            REQUIRE_EQ(actual_index, i);
+            REQUIRE_EQ(actual_branch, txt);
+            REQUIRE_EQ(yrelative_position_assoc(pos2), assoc);
+
+            ybinary_destroy(bin, bin_len);
+            yrelative_position_destroy(pos);
+            yrelative_position_destroy(pos2);
+        }
+    }
+
+    ytransaction_commit(txn);
+    ydoc_destroy(doc);
+}
