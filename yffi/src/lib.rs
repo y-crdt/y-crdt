@@ -25,10 +25,11 @@ use yrs::undo::EventKind;
 use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use yrs::{
-    uuid_v4, Array, ArrayRef, DeleteSet, GetString, Map, MapRef, Observable, OffsetKind, Options,
-    Origin, ReadTxn, Snapshot, StateVector, Store, SubdocsEvent, SubdocsEventIter, SubscriptionId,
-    Text, TextRef, Transact, TransactionCleanupEvent, UndoManager, Update, Xml, XmlElementPrelim,
-    XmlElementRef, XmlFragmentRef, XmlTextPrelim, XmlTextRef,
+    uuid_v4, Array, ArrayRef, Assoc, DeleteSet, GetString, Map, MapRef, Observable, OffsetKind,
+    Options, Origin, ReadTxn, RelativePosition, Snapshot, StateVector, Store, SubdocsEvent,
+    SubdocsEventIter, SubscriptionId, Text, TextRef, Transact, TransactionCleanupEvent,
+    UndoManager, Update, Xml, XmlElementPrelim, XmlElementRef, XmlFragmentRef, XmlTextPrelim,
+    XmlTextRef,
 };
 
 /// Flag used by `YInput` and `YOutput` to tag boolean values.
@@ -4800,6 +4801,128 @@ where
         let b = unsafe { branch.as_ref().unwrap() };
         let branch_ref = BranchPtr::from(b);
         T::from(branch_ref)
+    }
+}
+
+/// A relative position is based on the Yjs model and is not affected by document changes.
+/// E.g. If you place a relative position before a certain character, it will always point to this character.
+/// If you place a relative position at the end of a type, it will always point to the end of the type.
+///
+/// A numeric position is often unsuited for user selections, because it does not change when content is inserted
+/// before or after.
+///
+/// ```Insert(0, 'x')('a|bc') = 'xa|bc'``` Where | is the relative position.
+///
+/// Instances of `YRelativePosition` can be freed using `yrelative_position_destroy`.
+#[repr(transparent)]
+pub struct YRelativePosition(RelativePosition);
+
+impl From<RelativePosition> for YRelativePosition {
+    #[inline(always)]
+    fn from(value: RelativePosition) -> Self {
+        YRelativePosition(value)
+    }
+}
+
+/// Releases resources allocated by `YRelativePosition` pointers.
+#[no_mangle]
+pub unsafe extern "C" fn yrelative_position_destroy(pos: *mut YRelativePosition) {
+    drop(Box::from_raw(pos))
+}
+
+/// Returns association of current `YRelativePosition`.
+/// If association is **after** the referenced inserted character, returned number will be >= 0.
+/// If association is **before** the referenced inserted character, returned number will be < 0.
+#[no_mangle]
+pub unsafe extern "C" fn yrelative_position_assoc(pos: *const YRelativePosition) -> c_int {
+    let pos = pos.as_ref().unwrap();
+    match pos.0.assoc {
+        Assoc::After => 0,
+        Assoc::Before => -1,
+    }
+}
+
+/// Retrieves a `YRelativePosition` corresponding to a given human-readable `index` pointing into
+/// the shared y-type `branch`. Unlike standard indexes relative position enables to track
+/// the location inside of a shared y-types, even in the face of concurrent updates.
+///
+/// If association is >= 0, the resulting position will point to location **after** the referenced index.
+/// If association is < 0, the resulting position will point to location **before** the referenced index.
+#[no_mangle]
+pub unsafe extern "C" fn yrelative_position_from_index(
+    branch: *const Branch,
+    txn: *mut Transaction,
+    index: c_int,
+    assoc: c_int,
+) -> *mut YRelativePosition {
+    assert!(!branch.is_null());
+    assert!(!txn.is_null());
+
+    let branch = BranchPtr::from_raw_branch(branch);
+    let txn = txn.as_mut().unwrap();
+    let index = index as u32;
+    let assoc = if assoc >= 0 {
+        Assoc::After
+    } else {
+        Assoc::Before
+    };
+
+    if let Some(txn) = txn.as_mut() {
+        if let Some(pos) = RelativePosition::from_type_index(txn, branch, index, assoc) {
+            Box::into_raw(Box::new(YRelativePosition(pos)))
+        } else {
+            null_mut()
+        }
+    } else {
+        panic!("yrelative_position_from_index requires a read-write transaction");
+    }
+}
+
+/// Serializes `YRelativePosition` into binary representation. `len` parameter is updated with byte
+/// length of the generated binary. Returned binary can be free'd using `ybinary_destroy`.  
+#[no_mangle]
+pub unsafe extern "C" fn yrelative_position_encode(
+    pos: *const YRelativePosition,
+    len: *mut c_int,
+) -> *mut c_uchar {
+    let pos = pos.as_ref().unwrap();
+    let binary = pos.0.encode_v1().into_boxed_slice();
+    *len = binary.len() as c_int;
+    Box::into_raw(binary) as *mut c_uchar
+}
+
+/// Deserializes `YRelativePosition` from the payload previously serialized using `yrelative_position_encode`.
+#[no_mangle]
+pub unsafe extern "C" fn yrelative_position_decode(
+    binary: *const c_uchar,
+    len: c_int,
+) -> *mut YRelativePosition {
+    let slice = std::slice::from_raw_parts(binary as *const u8, len as usize);
+    if let Ok(pos) = RelativePosition::decode_v1(slice) {
+        Box::into_raw(Box::new(YRelativePosition(pos)))
+    } else {
+        null_mut()
+    }
+}
+
+/// Given `YRelativePosition` and transaction reference, if computes a human-readable index in a
+/// context of the referenced shared y-type.
+///
+/// `out_branch` is getting assigned with a corresponding shared y-type reference.
+/// `out_index` will be used to store computed human-readable index.
+#[no_mangle]
+pub unsafe extern "C" fn yrelative_position_read(
+    pos: *const YRelativePosition,
+    txn: *const Transaction,
+    out_branch: *mut *mut Branch,
+    out_index: *mut c_int,
+) {
+    let pos = pos.as_ref().unwrap();
+    let txn = txn.as_ref().unwrap();
+
+    if let Some(abs) = pos.0.absolute(txn) {
+        *out_branch = abs.branch.as_ref() as *const Branch as *mut Branch;
+        *out_index = abs.index as c_int;
     }
 }
 

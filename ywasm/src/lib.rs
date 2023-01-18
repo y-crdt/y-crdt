@@ -3998,6 +3998,12 @@ impl<'a> Shared<'a> {
     }
 }
 
+/// Retrieves a relative position corresponding to a given human-readable `index` pointing into
+/// the shared `ytype`. Unlike standard indexes relative position enables to track
+/// the location inside of a shared y-types, even in the face of concurrent updates.
+///
+/// If association is >= 0, the resulting position will point to location **after** the referenced index.
+/// If association is < 0, the resulting position will point to location **before** the referenced index.
 #[wasm_bindgen(catch, js_name=createRelativePositionFromTypeIndex)]
 pub fn create_relative_position_from_type_index(
     ytype: &JsValue,
@@ -4034,6 +4040,8 @@ pub fn create_relative_position_from_type_index(
     Err(JsValue::from_str("shared type parameter is not indexable"))
 }
 
+/// Converts a relative position (see: `createRelativePositionFromTypeIndex`) into an object
+/// containing human-readable index.
 #[wasm_bindgen(catch, js_name=createAbsolutePositionFromRelativePosition)]
 pub fn create_absolute_position_from_relative_position(
     rpos: &JsValue,
@@ -4048,6 +4056,8 @@ pub fn create_absolute_position_from_relative_position(
     }
 }
 
+/// Serializes relative position created by `createRelativePositionFromTypeIndex` into a binary
+/// payload.
 #[wasm_bindgen(catch, js_name=encodeRelativePosition)]
 pub fn encode_relative_position(rpos: &JsValue) -> Result<Uint8Array, JsValue> {
     if let Ok(pos) = relative_position_from_js(rpos) {
@@ -4060,6 +4070,7 @@ pub fn encode_relative_position(rpos: &JsValue) -> Result<Uint8Array, JsValue> {
     }
 }
 
+/// Deserializes relative position serialized previously by `encodeRelativePosition`.
 #[wasm_bindgen(catch, js_name=decodeRelativePosition)]
 pub fn decode_relative_position(bin: Uint8Array) -> Result<JsValue, JsValue> {
     let data: Vec<u8> = bin.to_vec();

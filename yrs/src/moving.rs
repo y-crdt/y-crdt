@@ -391,8 +391,6 @@ impl std::fmt::Display for Move {
 ///
 /// ```Insert(0, 'x')('a|bc') = 'xa|bc'``` Where | is the relative position.
 ///
-/// One of the properties must be defined.
-///
 /// Example:
 ///
 /// ```rust
