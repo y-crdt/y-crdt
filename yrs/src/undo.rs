@@ -3,7 +3,7 @@ use crate::doc::{AfterTransactionSubscription, TransactionAcqError};
 use crate::transaction::Origin;
 use crate::types::{Branch, BranchPtr};
 use crate::{
-    DeleteSet, DestroySubscription, Doc, Observer, Store, Subscription, SubscriptionId, Transact,
+    DeleteSet, DestroySubscription, Doc, Observer, Subscription, SubscriptionId, Transact,
     TransactionMut, ID,
 };
 use std::cell::Cell;
@@ -440,7 +440,7 @@ impl UndoManager {
                 if let Block::Item(item) = ptr.clone().deref() {
                     if item.redone.is_some() {
                         let mut id = *ptr.id();
-                        let (block, diff) = follow_redone(txn.store(), &id);
+                        let (block, diff) = txn.store().follow_redone(&id);
                         ptr = if diff > 0 {
                             id.clock += diff;
                             let slice = txn.store.blocks.get_item_clean_start(&id).unwrap();
@@ -504,31 +504,6 @@ impl std::fmt::Debug for UndoManager {
         }
         s.finish()
     }
-}
-
-fn follow_redone(store: &Store, id: &ID) -> (BlockPtr, u32) {
-    let mut next_id = Some(*id);
-    let mut ptr = None;
-    let mut diff = 0;
-    while {
-        if let Some(mut next) = next_id {
-            if diff > 0 {
-                next.clock += diff;
-                next_id = Some(next.clone());
-            }
-            ptr = store.blocks.get_block(&next);
-            if let Some(Block::Item(item)) = ptr.as_deref() {
-                diff = next.clock - item.id.clock;
-                next_id = item.redone;
-                true
-            } else {
-                false
-            }
-        } else {
-            false
-        }
-    } {}
-    (ptr.unwrap(), diff)
 }
 
 pub type UndoEventSubscription = Subscription<Arc<dyn Fn(&TransactionMut, &Event) -> ()>>;

@@ -1,4 +1,4 @@
-use crate::block::{BlockPtr, BlockSlice, ClientID, ItemContent};
+use crate::block::{Block, BlockPtr, BlockSlice, ClientID, ItemContent};
 use crate::block_store::{BlockStore, StateVector};
 use crate::doc::{
     AfterTransactionSubscription, DestroySubscription, DocAddr, Options, SubdocsSubscription,
@@ -10,7 +10,7 @@ use crate::update::PendingUpdate;
 use crate::updates::encoder::{Encode, Encoder};
 use crate::{
     Doc, Observer, OffsetKind, Snapshot, SubscriptionId, TransactionCleanupEvent,
-    TransactionCleanupSubscription, TransactionMut, UpdateEvent, UpdateSubscription, Uuid,
+    TransactionCleanupSubscription, TransactionMut, UpdateEvent, UpdateSubscription, Uuid, ID,
 };
 use atomic_refcell::{AtomicRef, AtomicRefCell, AtomicRefMut, BorrowError, BorrowMutError};
 use lib0::error::Error;
@@ -312,6 +312,31 @@ impl Store {
     /// the structures of this document store.
     pub fn subdoc_guids(&self) -> SubdocGuids {
         SubdocGuids(self.subdocs.values())
+    }
+
+    pub(crate) fn follow_redone(&self, id: &ID) -> (BlockPtr, u32) {
+        let mut next_id = Some(*id);
+        let mut ptr = None;
+        let mut diff = 0;
+        while {
+            if let Some(mut next) = next_id {
+                if diff > 0 {
+                    next.clock += diff;
+                    next_id = Some(next.clone());
+                }
+                ptr = self.blocks.get_block(&next);
+                if let Some(Block::Item(item)) = ptr.as_deref() {
+                    diff = next.clock - item.id.clock;
+                    next_id = item.redone;
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        } {}
+        (ptr.unwrap(), diff)
     }
 }
 

@@ -32,6 +32,7 @@ use std::ops::{Deref, DerefMut};
 pub struct TextRef(BranchPtr);
 
 impl Text for TextRef {}
+impl RelativeIndex for TextRef {}
 
 impl Observable for TextRef {
     type Event = TextEvent;

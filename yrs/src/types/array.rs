@@ -6,7 +6,7 @@ use crate::types::{
     event_change_set, Branch, BranchPtr, Change, ChangeSet, EventHandler, Observers, Path, ToJson,
     Value, TYPE_REFS_ARRAY,
 };
-use crate::{Observable, ReadTxn, ID};
+use crate::{Assoc, Observable, ReadTxn, RelativeIndex, ID};
 use lib0::any::Any;
 use std::borrow::Borrow;
 use std::cell::UnsafeCell;
@@ -39,6 +39,7 @@ use std::sync::Arc;
 pub struct ArrayRef(BranchPtr);
 
 impl Array for ArrayRef {}
+impl RelativeIndex for ArrayRef {}
 
 impl ToJson for ArrayRef {
     fn to_json<T: ReadTxn>(&self, txn: &T) -> Any {
@@ -202,10 +203,10 @@ pub trait Array: AsRef<Branch> {
             return;
         }
         let this = BranchPtr::from(self.as_ref());
-        let left = RelativePosition::from_type_index(txn, this, source, true)
+        let left = RelativePosition::from_type_index(txn, this, source, Assoc::After)
             .expect("unbounded relative positions are not supported yet");
         let mut right = left.clone();
-        right.assoc = false;
+        right.assoc = Assoc::Before;
         let mut walker = BlockIter::new(this);
         if walker.try_forward(txn, target) {
             walker.insert_move(txn, left, right);
@@ -224,20 +225,20 @@ pub trait Array: AsRef<Branch> {
     ///
     /// Example:
     /// ```
-    /// use yrs::{Doc, Transact, Array};
+    /// use yrs::{Doc, Transact, Array, Assoc};
     /// let doc = Doc::new();
     /// let array = doc.get_or_insert_array("array");
     /// array.insert_range(&mut doc.transact_mut(), 0, [1,2,3,4]);
     /// // move elements 2 and 3 after the 4
-    /// array.move_range_to(&mut doc.transact_mut(), 1, true, 2, false, 4);
+    /// array.move_range_to(&mut doc.transact_mut(), 1, Assoc::Before, 2, Assoc::After, 4);
     /// ```
     fn move_range_to(
         &self,
         txn: &mut TransactionMut,
         start: u32,
-        assoc_start: bool,
+        assoc_start: Assoc,
         end: u32,
-        assoc_end: bool,
+        assoc_end: Assoc,
         target: u32,
     ) {
         if start <= target && target <= end {
@@ -443,7 +444,9 @@ mod test {
     use crate::test_utils::{exchange_updates, run_scenario, RngExt};
     use crate::types::map::MapPrelim;
     use crate::types::{Change, DeepObservable, Event, Path, PathSegment, ToJson, Value};
-    use crate::{Array, ArrayPrelim, Doc, Map, Observable, StateVector, Transact, Update, ID};
+    use crate::{
+        Array, ArrayPrelim, Assoc, Doc, Map, Observable, StateVector, Transact, Update, ID,
+    };
     use lib0::any::Any;
     use rand::prelude::StdRng;
     use rand::Rng;
@@ -1260,10 +1263,11 @@ mod test {
         a1.insert_range(&mut d1.transact_mut(), 0, [1, 2, 3, 4]);
         exchange_updates(&[&d1, &d2]);
 
-        a1.move_range_to(&mut d1.transact_mut(), 0, true, 1, false, 3);
+        a1.move_range_to(&mut d1.transact_mut(), 0, Assoc::After, 1, Assoc::Before, 3);
+        println!("DOC: {:#?}", d1.transact());
         assert_eq!(a1.to_json(&d1.transact()), vec![3, 1, 2, 4].into());
 
-        a2.move_range_to(&mut d2.transact_mut(), 2, true, 3, false, 1);
+        a2.move_range_to(&mut d2.transact_mut(), 2, Assoc::After, 3, Assoc::Before, 1);
         assert_eq!(a2.to_json(&d2.transact()), vec![1, 3, 4, 2].into());
 
         exchange_updates(&[&d1, &d2]);
