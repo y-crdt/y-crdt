@@ -5,6 +5,8 @@ use crate::types::{BranchPtr, TypePtr, Value};
 use crate::{Assoc, ID};
 use std::ops::DerefMut;
 
+/// Struct used for iterating over the sequence of item's values with respect to a potential
+/// [Move] markers that may change their order.
 #[derive(Debug, Clone)]
 pub(crate) struct BlockIter {
     branch: BranchPtr,

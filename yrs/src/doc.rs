@@ -32,7 +32,7 @@ use thiserror::Error;
 /// Document manages so called root types, which are top-level shared types definitions (as opposed
 /// to recursively nested types).
 ///
-/// A basic workflow sample:
+/// # Example
 ///
 /// ```
 /// use yrs::{Doc, ReadTxn, StateVector, Text, Transact, Update};
@@ -76,6 +76,7 @@ impl Doc {
         Self::with_options(Options::with_client_id(client_id))
     }
 
+    /// Creates a new document with a configured set of [Options].
     pub fn with_options(options: Options) -> Self {
         Doc {
             store: Store::new(options).into(),
@@ -118,7 +119,9 @@ impl Doc {
     /// reinterpreted as a text (in such case a sequence component of complex data type will be
     /// interpreted as a list of text chunks).
     ///
-    /// **Note**: this method requires an exclusive access to an underlying document store. If there
+    /// # Panics
+    ///
+    /// This method requires an exclusive access to an underlying document store. If there
     /// is another transaction in process, it will panic. It's advised to define all root shared
     /// types during the document creation.
     pub fn get_or_insert_text(&self, name: &str) -> TextRef {
@@ -142,7 +145,9 @@ impl Doc {
     /// reinterpreted as a map (in such case a map component of complex data type will be
     /// interpreted as native map).
     ///
-    /// **Note**: this method requires an exclusive access to an underlying document store. If there
+    /// # Panics
+    ///
+    /// This method requires an exclusive access to an underlying document store. If there
     /// is another transaction in process, it will panic. It's advised to define all root shared
     /// types during the document creation.
     pub fn get_or_insert_map(&self, name: &str) -> MapRef {
@@ -165,7 +170,9 @@ impl Doc {
     /// reinterpreted as an array (in such case a sequence component of complex data type will be
     /// interpreted as a list of inserted values).
     ///
-    /// **Note**: this method requires an exclusive access to an underlying document store. If there
+    /// # Panics
+    ///
+    /// This method requires an exclusive access to an underlying document store. If there
     /// is another transaction in process, it will panic. It's advised to define all root shared
     /// types during the document creation.
     pub fn get_or_insert_array(&self, name: &str) -> ArrayRef {
@@ -190,7 +197,9 @@ impl Doc {
     /// interpreted as map of its attributes, while a sequence component - as a list of its child
     /// XML nodes).
     ///
-    /// **Note**: this method requires an exclusive access to an underlying document store. If there
+    /// # Panics
+    ///
+    /// This method requires an exclusive access to an underlying document store. If there
     /// is another transaction in process, it will panic. It's advised to define all root shared
     /// types during the document creation.
     pub fn get_or_insert_xml_fragment(&self, name: &str) -> XmlFragmentRef {
@@ -215,7 +224,9 @@ impl Doc {
     /// interpreted as map of its attributes, while a sequence component - as a list of its child
     /// XML nodes).
     ///
-    /// **Note**: this method requires an exclusive access to an underlying document store. If there
+    /// # Panics
+    ///
+    /// This method requires an exclusive access to an underlying document store. If there
     /// is another transaction in process, it will panic. It's advised to define all root shared
     /// types during the document creation.
     pub fn get_or_insert_xml_element(&self, name: &str) -> XmlElementRef {
@@ -238,7 +249,9 @@ impl Doc {
     /// reinterpreted as a text (in such case a sequence component of complex data type will be
     /// interpreted as a list of text chunks).
     ///
-    /// **Note**: this method requires an exclusive access to an underlying document store. If there
+    /// # Panics
+    ///
+    /// This method requires an exclusive access to an underlying document store. If there
     /// is another transaction in process, it will panic. It's advised to define all root shared
     /// types during the document creation.
     pub fn get_or_insert_xml_text(&self, name: &str) -> XmlTextRef {
@@ -310,7 +323,7 @@ impl Doc {
         events.observe_transaction_cleanup(f)
     }
 
-    /// Cancels the transaction cleanup callback associated with the `subscription_id`
+    /// Manually unsubscribes from a callback used in [Doc::observe_transaction_cleanup] method.
     pub fn unobserve_transaction_cleanup(&self, subscription_id: SubscriptionId) {
         let r = self.store.try_borrow().unwrap();
         if let Some(events) = r.events.as_ref() {
@@ -330,7 +343,7 @@ impl Doc {
         events.observe_after_transaction(f)
     }
 
-    /// Cancels the transaction cleanup callback associated with the `subscription_id`
+    /// Manually unsubscribes from a callback used in [Doc::observe_after_transaction] method.
     pub fn unobserve_after_transaction(&self, subscription_id: SubscriptionId) {
         let r = self.store.try_borrow().unwrap();
         if let Some(events) = r.events.as_ref() {
@@ -349,7 +362,7 @@ impl Doc {
         events.observe_subdocs(f)
     }
 
-    /// Cancels the subscription created previously using [Doc::observe_subdocs].
+    /// Manually unsubscribes from a callback used in [Doc::observe_subdocs] method.
     pub fn unobserve_subdocs(&self, subscription_id: SubscriptionId) {
         let r = self.store.try_borrow().unwrap();
         if let Some(events) = r.events.as_ref() {
@@ -367,7 +380,7 @@ impl Doc {
         events.observe_destroy(f)
     }
 
-    /// Cancels the subscription created previously using [Doc::observe_subdocs].
+    /// Manually unsubscribes from a callback used in [Doc::observe_destroy] method.
     pub fn unobserve_destroy(&self, subscription_id: SubscriptionId) {
         let r = self.store.try_borrow().unwrap();
         if let Some(events) = r.events.as_ref() {
@@ -438,6 +451,8 @@ impl Doc {
         }
     }
 
+    /// If current document has been inserted as a sub-document, returns a reference to a parent
+    /// document, which contains it.
     pub fn parent_doc(&self) -> Option<Doc> {
         let store = unsafe { self.store.0.as_ptr().as_ref() }.unwrap();
         if let Some(Block::Item(item)) = store.parent.as_deref() {
@@ -458,10 +473,6 @@ impl Doc {
 
     pub(crate) fn addr(&self) -> DocAddr {
         DocAddr::new(&self)
-    }
-
-    pub fn weak_ref(&self) -> WeakStoreRef {
-        self.store.weak_ref()
     }
 }
 
@@ -491,16 +502,21 @@ impl TryFrom<BlockPtr> for Doc {
     }
 }
 
+/// Subscription type for callbacks registered via [Doc::observe_update_v1] and [Doc::observe_update_v2].
 pub type UpdateSubscription = crate::Subscription<Arc<dyn Fn(&TransactionMut, &UpdateEvent) -> ()>>;
 
+/// Subscription type for callbacks registered via [Doc::observe_transaction_cleanup].
 pub type TransactionCleanupSubscription =
     crate::Subscription<Arc<dyn Fn(&TransactionMut, &TransactionCleanupEvent) -> ()>>;
 
+/// Subscription type for callbacks registered via [Doc::observe_after_transaction].
 pub type AfterTransactionSubscription = crate::Subscription<Arc<dyn Fn(&mut TransactionMut) -> ()>>;
 
+/// Subscription type for callbacks registered via [Doc::observe_subdocs].
 pub type SubdocsSubscription =
     crate::Subscription<Arc<dyn Fn(&TransactionMut, &SubdocsEvent) -> ()>>;
 
+/// Subscription type for callbacks registered via [Doc::observe_destroy].
 pub type DestroySubscription = crate::Subscription<Arc<dyn Fn(&TransactionMut, &Doc) -> ()>>;
 
 impl Default for Doc {

@@ -69,18 +69,19 @@ pub const HAS_ORIGIN: u8 = 0b10000000;
 /// for blocks which act as map-like types entries.
 pub const HAS_PARENT_SUB: u8 = 0b00100000;
 
-/// Globally unique client identifier.
+/// Globally unique client identifier. No two active peers are allowed to share the same [ClientID].
+/// If that happens, following updates may cause document store to be corrupted and desync in a result.
 pub type ClientID = u64;
 
 /// Block identifier, which allows to uniquely identify any element insertion in a global scope
-/// (across different replicas of the same document). It consists of client ID (which is unique
+/// (across different replicas of the same document). It consists of client ID (which is a unique
 /// document replica identifier) and monotonically incrementing clock value.
 ///
 /// [ID] corresponds to a [Lamport timestamp](https://en.wikipedia.org/wiki/Lamport_timestamp) in
 /// terms of its properties and guarantees.
 #[derive(Debug, Copy, Clone, PartialOrd, Ord, PartialEq, Eq, Hash)]
 pub struct ID {
-    /// Unique identifier of a client, which inserted corresponding item.
+    /// Unique identifier of a client.
     pub client: ClientID,
 
     /// Monotonically incrementing sequence number, which informs about order of inserted item
@@ -96,8 +97,8 @@ impl ID {
     }
 }
 
-/// A logical block pointer. It contains a unique block [ID], but also contains a helper metadata
-/// which allows to faster locate block it points to within a block store.
+/// A raw [Block] pointer. As the underlying block doesn't move it's in-memory location, [BlockPtr]
+/// can be considered a pinned object.
 #[repr(transparent)]
 #[derive(Clone, Copy, Hash)]
 pub struct BlockPtr(NonNull<Block>);
@@ -745,6 +746,12 @@ impl TryFrom<BlockPtr> for Any {
     }
 }
 
+/// Defines a logical slice of an underlying [Block]. Yrs blocks define a series of sequential
+/// updates performed by a single peer, while [BlockSlice]s enable to refer to a sub-range of these
+/// blocks without need to splice them.
+///
+/// If an underlying [Block] needs to be spliced to fit the boundaries defined by a corresponding
+/// [BlockSlice], this can be done with help of transaction (see: [Store::materialize]).
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub(crate) struct BlockSlice {
     ptr: BlockPtr,
@@ -801,22 +808,27 @@ impl BlockSlice {
         self.ptr
     }
 
+    /// Returns an offset within contained [Block] marking the (inclusive) beginning of this slice.
     pub fn start(&self) -> u32 {
         self.start
     }
 
+    /// Returns an offset within contained [Block] marking the (inclusive) end of this slice.
     pub fn end(&self) -> u32 {
         self.end
     }
 
+    /// Checks if an underlying [Block] has been marked as deleted.
     pub fn is_deleted(&self) -> bool {
         self.ptr.is_deleted()
     }
 
+    /// Checks if an underlying [Block] has been marked as countable.
     pub fn is_countable(&self) -> bool {
         self.ptr.is_countable()
     }
 
+    /// Checks if provided `id` exists within the bounds described by current [BlockSlice].
     pub fn contains_id(&self, id: &ID) -> bool {
         let myself = self.ptr.id();
         myself.client == id.client
@@ -884,6 +896,15 @@ impl BlockSlice {
         }
     }
 
+    /// Returns a [BlockSlice] wrapper for a [Block] identified as a right neighbor of this slice.
+    /// This method doesn't have to be equivalent of [Item::right]: if current slices's end range
+    /// is not an equivalent to the end of underlying [Block], a returned slice will contain the
+    /// same block that starts when the current ends.
+    ///
+    /// # Example
+    ///
+    /// If an underlying block is responsible for clock range of [0..10) and current slice is [2..8)
+    /// then right slice returned by this method will be [8..10).
     pub fn right(&self) -> Option<BlockSlice> {
         let last_clock = self.ptr.len() - 1;
         if self.end == last_clock {
@@ -898,6 +919,15 @@ impl BlockSlice {
         }
     }
 
+    /// Returns a [BlockSlice] wrapper for a [Block] identified as a left neighbor of this slice.
+    /// This method doesn't have to be equivalent of [Item::right]: if current slices's start range
+    /// is not an equivalent to the start of underlying [Block], a returned slice will contain the
+    /// range that starts with current underlying block start and end where this slice starts.
+    ///
+    /// # Example
+    ///
+    /// If an underlying block is responsible for clock range of [0..10) and current slice is [2..8)
+    /// then right slice returned by this method will be [0..2).
     pub fn left(&self) -> Option<BlockSlice> {
         if self.start == 0 {
             if let Block::Item(item) = self.ptr.deref() {
@@ -918,7 +948,13 @@ impl From<BlockPtr> for BlockSlice {
     }
 }
 
-/// An enum containing all supported block variants.
+/// Block defines a range of consecutive updates performed by the same peer. While individual
+/// updates are always uniquely defined by their corresponding [ID]s, they may contain a lot of
+/// additional metadata. Block representation here is crucial, since it optimizes memory usage,
+/// available when multiple updates have been performed one after another (eg. *when user is writing
+/// a sentence, individual key strokes are independent updates but they can be compresses into a
+/// single block containing an entire sentence for as long as another piece of data is not being
+/// inserted in the middle it*).
 #[derive(PartialEq)]
 pub enum Block {
     /// An active block containing user data.
@@ -1015,7 +1051,7 @@ impl Block {
         }
     }
 
-    /// Returns a unique identifier of a current block.
+    /// Returns a unique identifier of a first update contained by a current [Block].
     pub fn id(&self) -> &ID {
         match self {
             Block::Item(item) => &item.id,
@@ -1043,6 +1079,7 @@ impl Block {
         }
     }
 
+    /// Checks if current block has been deleted and garbage collected.
     pub fn is_gc(&self) -> bool {
         if let Block::GC(_) = self {
             true
@@ -1051,6 +1088,7 @@ impl Block {
         }
     }
 
+    /// Checks if current block is an [Item] with active data attached to it.
     pub fn is_item(&self) -> bool {
         if let Block::Item(_) = self {
             true
@@ -1059,6 +1097,7 @@ impl Block {
         }
     }
 
+    /// Checks if provided `id` exists within a range defined by the current [Block].
     pub fn contains(&self, id: &ID) -> bool {
         match self {
             Block::Item(v) => v.contains(id),
@@ -1130,6 +1169,12 @@ const ITEM_FLAG_COUNTABLE: u8 = 0b0000_0010;
 /// Bit flag (1st bit) used for an item which should be kept - not used atm.
 const ITEM_FLAG_KEEP: u8 = 0b0000_0001;
 
+/// Collection of flags attached to an [Item] - most of them are serializable and define specific
+/// properties of an associated [Item], like:
+///
+/// - Has item been deleted?
+/// - Is item countable (should its content add to the length/offset calculation of containing collection)?
+/// - Should item be kept untouched eg. because it's being tracked by [UndoManager].
 #[repr(transparent)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct ItemFlags(u8);
@@ -1207,22 +1252,26 @@ impl Into<u8> for ItemFlags {
     }
 }
 
-/// An item is basic unit of work in Yrs. It contains user data reinforced with all metadata
+/// An item is a basic unit of work in Yrs. It contains user data reinforced with all metadata
 /// required for a potential conflict resolution as well as extra fields used for joining blocks
 /// together as a part of indexed sequences or maps.
 #[derive(PartialEq)]
 pub struct Item {
-    /// Unique identifier of current item.
+    /// Unique identifier of the first update described by the current [Item].
     pub(crate) id: ID,
 
+    /// A number of splittable updates within a current [Item].
     pub(crate) len: u32,
 
     /// Pointer to left neighbor of this item. Used in sequenced collections.
-    /// If `None` current item is a first one on it's `parent` collection.
+    /// If `None`, then current item is the first one on its [parent](Item::parent) collection.
     pub(crate) left: Option<BlockPtr>,
 
     /// Pointer to right neighbor of this item. Used in sequenced collections.
-    /// If `None` current item is the last one on it's `parent` collection.
+    /// If `None`, then current item is the last one on its [parent](Item::parent) collection.
+    ///
+    /// For map-like CRDTs if this field is `None`, it means that a current item also contains
+    /// the most recent update for an individual key-value entry.
     pub(crate) right: Option<BlockPtr>,
 
     /// Used for concurrent insert conflict resolution. An ID of a left-side neighbor at the moment
@@ -1239,11 +1288,13 @@ pub struct Item {
     /// Pointer to a parent collection containing current item.
     pub(crate) parent: TypePtr,
 
+    /// Used by [UndoManager] to track another block that reverts the effects of deletion of current
+    /// item.
     pub(crate) redone: Option<ID>,
 
     /// Used only when current item is used by map-like types. In such case this item works as a
     /// key-value entry of a map, and this field contains a key used by map.
-    pub(crate) parent_sub: Option<Rc<str>>, //TODO: Rc since it's already used in Branch.map component
+    pub(crate) parent_sub: Option<Rc<str>>,
 
     /// This property is reused by the moved prop. In this case this property refers to an Item.
     pub(crate) moved: Option<BlockPtr>,
@@ -1252,9 +1303,12 @@ pub struct Item {
     pub(crate) info: ItemFlags,
 }
 
+/// Describes a consecutive range of updates (identified by their [ID]s).
 #[derive(PartialEq, Eq, Clone)]
 pub struct BlockRange {
+    /// [ID] of the first update stored within current [BlockRange] bounds.
     pub id: ID,
+    /// Number of splittable updates stored within this [BlockRange].
     pub len: u32,
 }
 
@@ -1263,18 +1317,33 @@ impl BlockRange {
         BlockRange { id, len }
     }
 
+    /// Returns an [ID] of the last update fitting into the bounds of current [BlockRange]
     pub fn last_id(&self) -> ID {
         ID::new(self.id.client, self.id.clock + self.len)
     }
 
-    pub fn slice(&mut self, offset: u32) -> Self {
+    /// Returns a slice of a current [BlockRange], which starts at a given offset (relative to
+    /// current range).
+    ///
+    /// # Example:
+    ///
+    /// ```rust
+    /// use yrs::block::BlockRange;
+    /// use yrs::ID;
+    /// let a = BlockRange::new(ID::new(1, 2), 8); // range of clocks [2..10)
+    /// let b = a.slice(3); // range of clocks [5..10)
+    ///
+    /// assert_eq!(b.id, ID::new(1, 5));
+    /// assert_eq!(b.last_id(), ID::new(1, 10));
+    /// ```
+    pub fn slice(&self, offset: u32) -> Self {
         let mut next = self.clone();
         next.id.clock += offset;
         next.len -= offset;
         next
     }
 
-    pub fn integrate(&mut self, pivot: u32) -> bool {
+    pub(crate) fn integrate(&mut self, pivot: u32) -> bool {
         if pivot > 0 {
             self.id.clock += pivot;
             self.len -= pivot;
@@ -1284,10 +1353,11 @@ impl BlockRange {
     }
 
     #[inline]
-    pub fn merge(&mut self, other: &Self) {
+    pub(crate) fn merge(&mut self, other: &Self) {
         self.len += other.len;
     }
 
+    /// Checks if provided `id` fits inside of boundaries defined by current [BlockRange].
     pub fn contains(&self, id: &ID) -> bool {
         self.id.client == id.client
             && id.clock >= self.id.clock
@@ -1345,14 +1415,16 @@ impl Item {
         item
     }
 
+    /// Checks if provided `id` fits inside of updates defined within bounds of current [Item].
     pub fn contains(&self, id: &ID) -> bool {
         self.id.client == id.client
             && id.clock >= self.id.clock
             && id.clock < self.id.clock + self.len()
     }
 
-    /// Checks if current item is marked as deleted (tombstoned). Yrs uses soft item deletion
-    /// mechanism.
+    /// Checks if current item is marked as deleted (tombstoned).
+    /// Yrs uses soft item deletion mechanism, which means that deleted values are not physically
+    /// erased from memory, but just marked as deleted.
     pub fn is_deleted(&self) -> bool {
         self.info.is_deleted()
     }
@@ -1600,23 +1672,27 @@ pub(crate) fn split_str(str: &str, offset: usize, kind: OffsetKind) -> (&str, &s
     str.split_at(off)
 }
 
-/// An enum describing the type of a user content stored as part of one or more
+/// An enum describing the type of a user data content stored as part of one or more
 /// (if items were squashed) insert operations.
 #[derive(Debug, PartialEq)]
 pub enum ItemContent {
-    /// Any JSON-like primitive type range.
+    /// Collection of consecutively inserted JSON-like primitive values.
     Any(Vec<Any>),
 
-    /// A binary data eg. images.
+    /// A BLOB data eg. images. Binaries are treated as a single objects (they are not subjects to splits).
     Binary(Vec<u8>),
 
     /// A marker for delete item data, which describes a number of deleted elements.
     /// Deleted elements also don't contribute to an overall length of containing collection type.
     Deleted(u32),
 
-    /// Subdocument container. Contains weak reference to a parent document.
+    /// Sub-document container. Contains weak reference to a parent document and a child document.
     Doc(Option<WeakStoreRef>, Doc),
-    JSON(Vec<String>), // String is JSON
+
+    /// Obsolete: collection of consecutively inserted stringified JSON values.
+    JSON(Vec<String>),
+
+    /// A single embedded JSON-like primitive value.
     Embed(Box<Any>),
 
     /// Formatting attribute entry. Format attributes are not considered countable and don't
@@ -1629,6 +1705,10 @@ pub enum ItemContent {
     /// A reference of a branch node. Branch nodes define a complex collection types, such as
     /// arrays, maps or XML elements.
     Type(Box<Branch>),
+
+    /// Marker for destination location of move operation. Move is used to change position of
+    /// previously inserted element in a sequence with respect to other operations that may happen
+    /// concurrently on other peers.
     Move(Box<Move>),
 }
 
@@ -1752,6 +1832,8 @@ impl ItemContent {
         }
     }
 
+    /// Reads all contents stored in this item and returns them. Use [ItemContent::read] if you need
+    /// to read only slice of elements from the corresponding item.
     pub fn get_content(&self) -> Vec<Value> {
         let len = self.len(OffsetKind::Utf32) as usize;
         let mut values = vec![Value::default(); len];
@@ -1763,6 +1845,7 @@ impl ItemContent {
         }
     }
 
+    /// Returns a first value stored in a corresponding item.
     pub fn get_first(&self) -> Option<Value> {
         match self {
             ItemContent::Any(v) => v.first().map(|a| Value::Any(a.clone())),
@@ -1780,6 +1863,7 @@ impl ItemContent {
         }
     }
 
+    /// Returns a last value stored in a corresponding item.
     pub fn get_last(&self) -> Option<Value> {
         match self {
             ItemContent::Any(v) => v.last().map(|a| Value::Any(a.clone())),
@@ -1981,6 +2065,8 @@ impl ItemContent {
     }
 
     /// Tries to squash two item content structures together.
+    /// Returns `true` if this method had any effect on current [ItemContent] (modified it).
+    /// Otherwise returns `false`.
     pub fn try_squash(&mut self, other: &Self) -> bool {
         //TODO: change `other` to Self (not ref) and return type to Option<Self> (none if merge suceeded)
         match (self, other) {
@@ -2189,8 +2275,10 @@ impl std::fmt::Display for ItemPosition {
     }
 }
 
-/// A trait used for preliminary types, that can be inserted into nested YArray/YMap structures.
+/// A trait used for preliminary types, that can be inserted into shared Yrs collections.
 pub trait Prelim: Sized {
+    /// Type of a value to be returned as a result of inserting this [Prelim] type instance.
+    /// Use [Unused] if none is necessary.
     type Return: TryFrom<BlockPtr>;
 
     /// This method is used to create initial content required in order to create a block item.
@@ -2235,6 +2323,8 @@ impl Prelim for PrelimString {
     fn integrate(self, _txn: &mut TransactionMut, _inner_ref: BranchPtr) {}
 }
 
+/// Empty type marker, which can be used by a [Prelim] trait implementations when no integrated
+/// value should be returned after prelim type has been integrated as a result of insertion.
 #[repr(transparent)]
 pub struct Unused;
 
@@ -2268,6 +2358,8 @@ where
             let any = std::mem::replace(any_ref, Any::Null);
             (ItemContent::Embed(Box::new(any)), None)
         } else {
+            // if prelim value is not a JSON-like primitive eg. it's a `MapPrelim`
+            // use its native implementation instead
             let (branch, content) = self.0.into_content(txn);
             (branch, content.map(PrelimEmbed::new))
         }

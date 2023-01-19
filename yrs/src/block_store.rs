@@ -140,7 +140,9 @@ impl Encode for StateVector {
     }
 }
 
-/// Snapshot describes a state of a document store at a given point in (logical) time.
+/// Snapshot describes a state of a document store at a given point in (logical) time. In practice
+/// it's a combination of [StateVector] (a summary of all observed insert/update operations)
+/// and a [DeleteSet] (a summary of all observed deletions).
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct Snapshot {
     /// Compressed information about all deleted blocks at current snapshot time.
