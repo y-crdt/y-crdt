@@ -9,6 +9,7 @@ use crate::types::{
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::OptionExt;
+use crate::UndoManager;
 use crate::{
     uuid_v4, ArrayRef, MapRef, ReadTxn, SubscriptionId, TextRef, Uuid, WriteTxn, XmlElementRef,
     XmlFragmentRef, XmlTextRef,
@@ -34,7 +35,7 @@ use thiserror::Error;
 ///
 /// # Example
 ///
-/// ```
+/// ```rust
 /// use yrs::{Doc, ReadTxn, StateVector, Text, Transact, Update};
 /// use yrs::updates::decoder::Decode;
 /// use yrs::updates::encoder::Encode;
@@ -538,22 +539,37 @@ impl ToJson for Doc {
 /// Configuration options of [Doc] instance.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Options {
-    /// Globally unique 53-bit long client identifier.
+    /// Globally unique client identifier. This value must be unique across all active collaborating
+    /// peers, otherwise a update collisions will happen, causing document store state to be corrupted.
+    ///
+    /// Default value: randomly generated.
     pub client_id: ClientID,
     /// A globally unique identifier for this document.
+    ///
+    /// Default value: randomly generated UUID v4.
     pub guid: Uuid,
     /// Associate this document with a collection. This only plays a role if your provider has
     /// a concept of collection.
+    ///
+    /// Default value: `None`.
     pub collection_id: Option<String>,
     /// How to we count offsets and lengths used in text operations.
+    ///
+    /// Default value: [OffsetKind::Bytes].
     pub offset_kind: OffsetKind,
     /// Determines if transactions commits should try to perform GC-ing of deleted items.
+    ///
+    /// Default value: `false`.
     pub skip_gc: bool,
     /// If a subdocument, automatically load document. If this is a subdocument, remote peers will
     /// load the document as well automatically.
+    ///
+    /// Default value: `false`.
     pub auto_load: bool,
     /// Whether the document should be synced by the provider now.
-    /// This is toggled to true when you call ydoc.load()
+    /// This is toggled to true when you call ydoc.load().
+    ///
+    /// Default value: `true`.
     pub should_load: bool,
 }
 
@@ -656,25 +672,56 @@ pub enum OffsetKind {
     Utf32,
 }
 
+/// Trait implemented by [Doc] and shared types, used for carrying over the responsibilities of
+/// creating new transactions, used as a unit of work in Yrs.
 pub trait Transact {
-    /// Creates a transaction used for all kind of block store operations.
-    /// Transaction cleanups & calling event handles happen when the transaction struct is dropped.
+    /// Creates and returns a lightweight read-only transaction.
+    ///
+    /// # Errors
+    ///
+    /// While it's possible to have multiple read-only transactions active at the same time,
+    /// this method will return a [TransactionAcqError::SharedAcqFailed] error whenever called
+    /// while a read-write transaction (see: [Self::try_transact_mut]) is active at the same time.
     fn try_transact(&self) -> Result<Transaction, TransactionAcqError>;
 
-    /// Creates a transaction used for all kind of block store operations.
-    /// Transaction cleanups & calling event handles happen when the transaction struct is dropped.
+    /// Creates and returns a read-write capable transaction. This transaction can be used to
+    /// mutate the contents of underlying document store and upon dropping or committing it may
+    /// subscription callbacks.
+    ///
+    /// # Errors
+    ///
+    /// Only one read-write transaction can be active at the same time. If any other transaction -
+    /// be it a read-write or read-only one - is active at the same time, this method will return
+    /// a [TransactionAcqError::ExclusiveAcqFailed] error.
     fn try_transact_mut(&self) -> Result<TransactionMut, TransactionAcqError>;
 
-    /// Creates a transaction used for all kind of block store operations with a specific origin
-    /// that enables to distinguish operations performed in this transaction context from others.
-    /// Transaction cleanups & calling event handles happen when the transaction struct is dropped.
+    /// Creates and returns a read-write capable transaction with an `origin` classifier attached.
+    /// This transaction can be used to mutate the contents of underlying document store and upon
+    /// dropping or committing it may subscription callbacks.
+    ///
+    /// An `origin` may be used to identify context of operations made (example updates performed
+    /// locally vs. incoming from remote replicas) and it's used i.e. by [UndoManager].
+    ///
+    /// # Errors
+    ///
+    /// Only one read-write transaction can be active at the same time. If any other transaction -
+    /// be it a read-write or read-only one - is active at the same time, this method will return
+    /// a [TransactionAcqError::ExclusiveAcqFailed] error.
     fn try_transact_mut_with<T>(&self, origin: T) -> Result<TransactionMut, TransactionAcqError>
     where
         T: Into<Origin>;
 
-    /// Creates a transaction used for all kind of block store operations with a specific origin
-    /// that enables to distinguish operations performed in this transaction context from others.
-    /// Transaction cleanups & calling event handles happen when the transaction struct is dropped.
+    /// Creates and returns a read-write capable transaction with an `origin` classifier attached.
+    /// This transaction can be used to mutate the contents of underlying document store and upon
+    /// dropping or committing it may subscription callbacks.
+    ///
+    /// An `origin` may be used to identify context of operations made (example updates performed
+    /// locally vs. incoming from remote replicas) and it's used i.e. by [UndoManager].
+    ///
+    /// # Errors
+    ///
+    /// Only one read-write transaction can be active at the same time. If any other transaction -
+    /// be it a read-write or read-only one - is active at the same time, this method will panic.
     fn transact_mut_with<T>(&self, origin: T) -> TransactionMut
     where
         T: Into<Origin>,
@@ -682,14 +729,25 @@ pub trait Transact {
         self.try_transact_mut_with(origin).unwrap()
     }
 
-    /// Creates a transaction used for all kind of block store operations.
-    /// Transaction cleanups & calling event handles happen when the transaction struct is dropped.
+    /// Creates and returns a lightweight read-only transaction.
+    ///
+    /// # Panics
+    ///
+    /// While it's possible to have multiple read-only transactions active at the same time,
+    /// this method will panic whenever called while a read-write transaction
+    /// (see: [Self::transact_mut]) is active at the same time.
     fn transact(&self) -> Transaction {
         self.try_transact().unwrap()
     }
 
-    /// Creates a transaction used for all kind of block store operations.
-    /// Transaction cleanups & calling event handles happen when the transaction struct is dropped.
+    /// Creates and returns a read-write capable transaction. This transaction can be used to
+    /// mutate the contents of underlying document store and upon dropping or committing it may
+    /// subscription callbacks.
+    ///
+    /// # Errors
+    ///
+    /// Only one read-write transaction can be active at the same time. If any other transaction -
+    /// be it a read-write or read-only one - is active at the same time, this method will panic.
     fn transact_mut(&self) -> TransactionMut {
         self.try_transact_mut().unwrap()
     }
