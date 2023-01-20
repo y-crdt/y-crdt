@@ -2337,36 +2337,47 @@ impl TryFrom<BlockPtr> for Unused {
     }
 }
 
+/// Prelim container for types passed over to [Text::insert_embed] and [Text::insert_embed_with_attributes] methods.
 #[derive(Debug)]
-pub(crate) struct PrelimEmbed<V>(V);
-
-impl<T> PrelimEmbed<T> {
-    pub fn new(value: T) -> Self {
-        PrelimEmbed(value)
-    }
+pub enum EmbedPrelim<T> {
+    Primitive(Any),
+    Shared(T),
 }
 
-impl<T> Prelim for PrelimEmbed<T>
+impl<T> Prelim for EmbedPrelim<T>
 where
-    T: Prelim + std::any::Any,
+    T: Prelim,
 {
     type Return = T::Return;
 
     fn into_content(mut self, txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
-        let of_any = &mut self.0 as &mut dyn std::any::Any;
-        if let Some(any_ref) = of_any.downcast_mut::<Any>() {
-            let any = std::mem::replace(any_ref, Any::Null);
-            (ItemContent::Embed(Box::new(any)), None)
-        } else {
-            // if prelim value is not a JSON-like primitive eg. it's a `MapPrelim`
-            // use its native implementation instead
-            let (branch, content) = self.0.into_content(txn);
-            (branch, content.map(PrelimEmbed::new))
+        match self {
+            EmbedPrelim::Primitive(any) => (ItemContent::Embed(Box::new(any)), None),
+            EmbedPrelim::Shared(prelim) => {
+                let (branch, content) = prelim.into_content(txn);
+                let carrier = if let Some(carrier) = content {
+                    Some(EmbedPrelim::Shared(carrier))
+                } else {
+                    None
+                };
+                (branch, carrier)
+            }
         }
     }
 
     fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
-        self.0.integrate(txn, inner_ref)
+        if let EmbedPrelim::Shared(carrier) = self {
+            carrier.integrate(txn, inner_ref)
+        }
+    }
+}
+
+impl<T> From<T> for EmbedPrelim<T>
+where
+    T: Into<Any>,
+{
+    fn from(value: T) -> Self {
+        EmbedPrelim::Primitive(value.into())
     }
 }
 

@@ -1,4 +1,4 @@
-use crate::block::{Block, BlockPtr, ItemContent, ItemPosition, Prelim};
+use crate::block::{Block, BlockPtr, EmbedPrelim, ItemContent, ItemPosition, Prelim};
 use crate::transaction::TransactionMut;
 use crate::types::{
     event_keys, Branch, BranchPtr, Entries, EntryChange, EventHandler, Observers, Path, ToJson,
@@ -321,6 +321,13 @@ impl<T: Prelim> Prelim for MapPrelim<T> {
         for (key, value) in self.0 {
             map.insert(txn, key, value);
         }
+    }
+}
+
+impl<T: Prelim> Into<EmbedPrelim<MapPrelim<T>>> for MapPrelim<T> {
+    #[inline]
+    fn into(self) -> EmbedPrelim<MapPrelim<T>> {
+        EmbedPrelim::Shared(self)
     }
 }
 

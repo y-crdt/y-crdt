@@ -1,4 +1,4 @@
-use crate::block::{Block, BlockPtr, Item, ItemContent, ItemPosition, Prelim};
+use crate::block::{Block, BlockPtr, EmbedPrelim, Item, ItemContent, ItemPosition, Prelim};
 use crate::block_iter::BlockIter;
 use crate::transaction::TransactionMut;
 use crate::types::text::{TextEvent, YChange};
@@ -245,7 +245,7 @@ where
     }
 }
 
-impl XmlElementPrelim<Option<XmlTextPrelim<'static>>, XmlTextPrelim<'static>> {
+impl XmlElementPrelim<Option<XmlTextPrelim<String>>, XmlTextPrelim<String>> {
     pub fn empty<S: Into<Rc<str>>>(tag: S) -> Self {
         XmlElementPrelim(tag.into(), None)
     }
@@ -255,7 +255,6 @@ impl<I, T> XmlPrelim for XmlElementPrelim<I, T>
 where
     I: IntoIterator<Item = T>,
     T: XmlPrelim,
-    <T as Prelim>::Return: TryFrom<BlockPtr>,
 {
 }
 
@@ -263,7 +262,6 @@ impl<I, T> Prelim for XmlElementPrelim<I, T>
 where
     I: IntoIterator<Item = T>,
     T: XmlPrelim,
-    <T as Prelim>::Return: TryFrom<BlockPtr>,
 {
     type Return = XmlElementRef;
 
@@ -277,6 +275,17 @@ where
         for value in self.1 {
             xml.push_back(txn, value);
         }
+    }
+}
+
+impl<I, T: Prelim> Into<EmbedPrelim<XmlElementPrelim<I, T>>> for XmlElementPrelim<I, T>
+where
+    I: IntoIterator<Item = T>,
+    T: XmlPrelim,
+{
+    #[inline]
+    fn into(self) -> EmbedPrelim<XmlElementPrelim<I, T>> {
+        EmbedPrelim::Shared(self)
     }
 }
 
@@ -453,11 +462,18 @@ impl TryFrom<BlockPtr> for XmlTextRef {
 /// A preliminary type that will be materialized into an [XmlTextRef] once it will be integrated
 /// into Yrs document.
 #[derive(Debug)]
-pub struct XmlTextPrelim<'a>(pub &'a str);
+pub struct XmlTextPrelim<T: Borrow<str>>(T);
 
-impl XmlPrelim for XmlTextPrelim<'_> {}
+impl<T: Borrow<str>> XmlTextPrelim<T> {
+    #[inline]
+    pub fn new(str: T) -> Self {
+        XmlTextPrelim(str)
+    }
+}
 
-impl Prelim for XmlTextPrelim<'_> {
+impl<T: Borrow<str>> XmlPrelim for XmlTextPrelim<T> {}
+
+impl<T: Borrow<str>> Prelim for XmlTextPrelim<T> {
     type Return = XmlTextRef;
 
     fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
@@ -466,10 +482,18 @@ impl Prelim for XmlTextPrelim<'_> {
     }
 
     fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
-        if !self.0.is_empty() {
+        let s = self.0.borrow();
+        if !s.is_empty() {
             let text = XmlTextRef::from(inner_ref);
-            text.push(txn, self.0);
+            text.push(txn, s);
         }
+    }
+}
+
+impl<T: Borrow<str>> Into<EmbedPrelim<XmlTextPrelim<T>>> for XmlTextPrelim<T> {
+    #[inline]
+    fn into(self) -> EmbedPrelim<XmlTextPrelim<T>> {
+        EmbedPrelim::Shared(self)
     }
 }
 
@@ -603,6 +627,17 @@ where
         for value in self.0 {
             xml.push_back(txn, value);
         }
+    }
+}
+
+impl<I, T: Prelim> Into<EmbedPrelim<XmlFragmentPrelim<I, T>>> for XmlFragmentPrelim<I, T>
+where
+    I: IntoIterator<Item = T>,
+    T: XmlPrelim,
+{
+    #[inline]
+    fn into(self) -> EmbedPrelim<XmlFragmentPrelim<I, T>> {
+        EmbedPrelim::Shared(self)
     }
 }
 
@@ -801,26 +836,27 @@ pub trait XmlFragment: AsRef<Branch> {
     /// let mut html = doc.get_or_insert_xml_fragment("div");
     /// let mut txn = doc.transact_mut();
     /// let p = html.push_back(&mut txn, XmlElementPrelim::empty("p"));
-    /// let txt = p.push_back(&mut txn, XmlTextPrelim("Hello "));
+    /// let txt = p.push_back(&mut txn, XmlTextPrelim::new("Hello "));
     /// let b = p.push_back(&mut txn, XmlElementPrelim::empty("b"));
-    /// let txt = b.push_back(&mut txn, XmlTextPrelim("world"));
-    /// let txt = html.push_back(&mut txn, XmlTextPrelim("again"));
+    /// let txt = b.push_back(&mut txn, XmlTextPrelim::new("world"));
+    /// let txt = html.push_back(&mut txn, XmlTextPrelim::new("again"));
     ///
+    /// let mut result = Vec::new();
     /// for node in html.successors(&txn) {
-    ///     match node {
-    ///         XmlNode::Element(elem) => println!("- {}", elem.tag()),
-    ///         XmlNode::Text(txt) => println!("- {}", txt.get_string(&txn)),
-    ///         _ => {}
-    ///     }
+    ///   let value = match node {
+    ///       XmlNode::Element(elem) => elem.tag().to_string(),
+    ///       XmlNode::Text(txt) => txt.get_string(&txn),
+    ///       _ => panic!("shouldn't be the case here")
+    ///   };
+    ///   result.push(value);
     /// }
-    /// /* will print:
-    ///    - UNDEFINED // (XML root element)
-    ///    - p
-    ///    - Hello
-    ///    - b
-    ///    - world
-    ///    - again
-    /// */
+    /// assert_eq!(result, vec![
+    ///   "p".to_string(),
+    ///   "Hello ".to_string(),
+    ///   "b".to_string(),
+    ///   "world".to_string(),
+    ///   "again".to_string()
+    /// ]);
     /// ```
     fn successors<'a, T: ReadTxn>(&'a self, txn: &'a T) -> TreeWalker<'a, &'a T, T> {
         TreeWalker::new(self.as_ref(), txn)
@@ -1191,8 +1227,8 @@ mod test {
             </UNDEFINED>
         */
         let p1 = root.push_back(&mut txn, XmlElementPrelim::empty("p"));
-        p1.push_back(&mut txn, XmlTextPrelim(""));
-        p1.push_back(&mut txn, XmlTextPrelim(""));
+        p1.push_back(&mut txn, XmlTextPrelim::new(""));
+        p1.push_back(&mut txn, XmlTextPrelim::new(""));
         let p2 = root.push_back(&mut txn, XmlElementPrelim::empty("p"));
         root.push_back(&mut txn, XmlElementPrelim::empty("img"));
 
@@ -1216,7 +1252,7 @@ mod test {
         let doc = Doc::with_client_id(1);
         let f = doc.get_or_insert_xml_fragment("test");
         let mut txn = doc.transact_mut();
-        let txt = f.push_back(&mut txn, XmlTextPrelim(""));
+        let txt = f.push_back(&mut txn, XmlTextPrelim::new(""));
         txt.insert_attribute(&mut txn, "test", 42.to_string());
 
         assert_eq!(txt.get_attribute(&txn, "test"), Some("42".to_string()));
@@ -1229,7 +1265,7 @@ mod test {
         let doc = Doc::with_client_id(1);
         let root = doc.get_or_insert_xml_fragment("root");
         let mut txn = doc.transact_mut();
-        let first = root.push_back(&mut txn, XmlTextPrelim("hello"));
+        let first = root.push_back(&mut txn, XmlTextPrelim::new("hello"));
         let second = root.push_back(&mut txn, XmlElementPrelim::empty("p"));
 
         assert_eq!(
@@ -1260,7 +1296,7 @@ mod test {
         let d1 = Doc::with_client_id(1);
         let r1 = d1.get_or_insert_xml_fragment("root");
         let mut t1 = d1.transact_mut();
-        let _first = r1.push_back(&mut t1, XmlTextPrelim("hello"));
+        let _first = r1.push_back(&mut t1, XmlTextPrelim::new("hello"));
         r1.push_back(&mut t1, XmlElementPrelim::empty("p"));
 
         let expected = "hello<p></p>";
@@ -1281,7 +1317,7 @@ mod test {
         let d1 = Doc::with_client_id(1);
         let r1 = d1.get_or_insert_xml_fragment("root");
         let mut t1 = d1.transact_mut();
-        let _first = r1.push_back(&mut t1, XmlTextPrelim("hello"));
+        let _first = r1.push_back(&mut t1, XmlTextPrelim::new("hello"));
         r1.push_back(&mut t1, XmlElementPrelim::empty("p"));
 
         /* This binary is result of following Yjs code (matching Rust code above):
@@ -1366,7 +1402,7 @@ mod test {
         // add xml elements
         let (nested_txt, nested_xml) = {
             let mut txn = d1.transact_mut();
-            let txt = xml.insert(&mut txn, 0, XmlTextPrelim(""));
+            let txt = xml.insert(&mut txn, 0, XmlTextPrelim::new(""));
             let xml2 = xml.insert(&mut txn, 1, XmlElementPrelim::empty("div"));
             (txt, xml2)
         };
@@ -1439,7 +1475,7 @@ mod test {
         let mut txn = doc.transact_mut();
         let div = f.push_back(&mut txn, XmlElementPrelim::empty("div"));
         div.insert_attribute(&mut txn, "class", "t-button");
-        let text = div.push_back(&mut txn, XmlTextPrelim("hello world"));
+        let text = div.push_back(&mut txn, XmlTextPrelim::new("hello world"));
         text.format(
             &mut txn,
             6,

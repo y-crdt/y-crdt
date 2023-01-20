@@ -899,7 +899,7 @@ mod test {
 
         let mut mgr = UndoManager::new(&d1, &xml1);
         let child = xml1.insert(&mut d1.transact_mut(), 0, XmlElementPrelim::empty("p"));
-        let text_child = child.insert(&mut d1.transact_mut(), 0, XmlTextPrelim("content"));
+        let text_child = child.insert(&mut d1.transact_mut(), 0, XmlTextPrelim::new("content"));
 
         assert_eq!(
             xml1.get_string(&d1.transact()),

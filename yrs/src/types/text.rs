@@ -1,4 +1,4 @@
-use crate::block::{Block, BlockPtr, Item, ItemContent, ItemPosition, Prelim, PrelimEmbed};
+use crate::block::{Block, BlockPtr, EmbedPrelim, Item, ItemContent, ItemPosition, Prelim};
 use crate::block_store::Snapshot;
 use crate::transaction::TransactionMut;
 use crate::types::{
@@ -270,12 +270,11 @@ pub trait Text: AsRef<Branch> {
     /// This method will panic if provided `index` is greater than the length of a current text.
     fn insert_embed<V>(&self, txn: &mut TransactionMut, index: u32, content: V) -> V::Return
     where
-        V: Prelim + 'static,
+        V: Into<EmbedPrelim<V>> + Prelim,
     {
         let this = BranchPtr::from(self.as_ref());
         if let Some(pos) = find_position(this, txn, index) {
-            let value = PrelimEmbed::new(content);
-            let ptr = txn.create_item(&pos, value, None);
+            let ptr = txn.create_item(&pos, content.into(), None);
             if let Ok(integrated) = ptr.try_into() {
                 integrated
             } else {
@@ -302,7 +301,7 @@ pub trait Text: AsRef<Branch> {
         mut attributes: Attrs,
     ) -> V::Return
     where
-        V: Prelim + 'static,
+        V: Into<EmbedPrelim<V>> + Prelim,
     {
         let this = BranchPtr::from(self.as_ref());
         if let Some(mut pos) = find_position(this, txn, index) {
@@ -310,8 +309,7 @@ pub trait Text: AsRef<Branch> {
             minimize_attr_changes(&mut pos, &attributes);
             let negated_attrs = insert_attributes(this, txn, &mut pos, attributes);
 
-            let value = PrelimEmbed::new(embed);
-            let item = txn.create_item(&pos, value, None);
+            let item = txn.create_item(&pos, embed.into(), None);
 
             pos.right = Some(item.clone());
             pos.forward();
@@ -528,7 +526,7 @@ where
                         }
                         self.buf.push_str(s.as_str());
                     }
-                    ItemContent::Type(_) | ItemContent::Embed(_) | ItemContent::Any(_) => {
+                    ItemContent::Type(_) | ItemContent::Embed(_) => {
                         self.pack_str();
                         if let Some(value) = item.content.get_first() {
                             let attrs = self.attrs_boxed();
@@ -1278,6 +1276,13 @@ impl<T: Borrow<str>> Prelim for TextPrelim<T> {
             let text = TextRef::from(inner_ref);
             text.push(txn, borrowed);
         }
+    }
+}
+
+impl<T: Borrow<str>> Into<EmbedPrelim<TextPrelim<T>>> for TextPrelim<T> {
+    #[inline]
+    fn into(self) -> EmbedPrelim<TextPrelim<T>> {
+        EmbedPrelim::Shared(self)
     }
 }
 

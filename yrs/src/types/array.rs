@@ -1,4 +1,4 @@
-use crate::block::{BlockPtr, ItemContent, Prelim, Unused};
+use crate::block::{BlockPtr, EmbedPrelim, ItemContent, Prelim, Unused};
 use crate::block_iter::BlockIter;
 use crate::moving::RelativePosition;
 use crate::transaction::TransactionMut;
@@ -363,6 +363,16 @@ where
         for value in self.0 {
             array.push_back(txn, value);
         }
+    }
+}
+
+impl<T, V> Into<EmbedPrelim<ArrayPrelim<T, V>>> for ArrayPrelim<T, V>
+where
+    T: IntoIterator<Item = V>,
+{
+    #[inline]
+    fn into(self) -> EmbedPrelim<ArrayPrelim<T, V>> {
+        EmbedPrelim::Shared(self)
     }
 }
 
