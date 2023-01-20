@@ -20,7 +20,7 @@ use std::sync::Arc;
 /// implemented as a double linked list, which may squash values inserted directly one after another
 /// into single list node upon transaction commit.
 ///
-/// Reading a root-level type as an YArray means treating its sequence components as a list, where
+/// Reading a root-level type as an [ArrayRef] means treating its sequence components as a list, where
 /// every countable element becomes an individual entity:
 ///
 /// - JSON-like primitives (booleans, numbers, strings, JSON maps, arrays etc.) are counted
@@ -30,7 +30,7 @@ use std::sync::Arc;
 /// - Embedded and binary values: they count as a single element even though they correspond of
 ///   multiple bytes.
 ///
-/// Like all Yrs shared data types, YArray is resistant to the problem of interleaving (situation
+/// Like all Yrs shared data types, [ArrayRef] is resistant to the problem of interleaving (situation
 /// when elements inserted one after another may interleave with other peers concurrent inserts
 /// after merging all updates together). In case of Yrs conflict resolution is solved by using
 /// unique document id to determine correct and consistent ordering.
@@ -1270,7 +1270,6 @@ mod test {
         exchange_updates(&[&d1, &d2]);
 
         a1.move_range_to(&mut d1.transact_mut(), 0, Assoc::After, 1, Assoc::Before, 3);
-        println!("DOC: {:#?}", d1.transact());
         assert_eq!(a1.to_json(&d1.transact()), vec![3, 1, 2, 4].into());
 
         a2.move_range_to(&mut d2.transact_mut(), 2, Assoc::After, 3, Assoc::Before, 1);

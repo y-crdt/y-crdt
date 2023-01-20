@@ -108,26 +108,28 @@
 //! let mut txn = doc.transact_mut();
 //!
 //! let bold = Attrs::from([("b".into(), true.into())]);
-//! xml.insert_with_attributes(&mut txn, 0, "hello", bold);
-//! xml.insert(&mut txn, 5, " world");
-//!
 //! let italic = Attrs::from([("i".into(), true.into())]);
-//! xml.format(&mut txn, 6, 5, italic);
+//!
+//! xml.insert(&mut txn, 0, "hello ");
+//! xml.insert_with_attributes(&mut txn, 6, "world", italic);
+//! xml.format(&mut txn, 0, 5, bold);
+//!
+//! assert_eq!(xml.get_string(&txn), "<b>hello</b> <i>world</i>");
 //!
 //! // remove formatting
 //! let remove_italic = Attrs::from([("i".into(), Any::Null)]);
-//! xml.format(&mut txn, 7, 1, remove_italic);
+//! xml.format(&mut txn, 6, 5, remove_italic);
+//!
+//! assert_eq!(xml.get_string(&txn), "<b>hello</b> world");
 //!
 //! // insert binary payload eg. images
 //! let image = b"deadbeaf".to_vec();
 //! xml.insert_embed(&mut txn, 1, image);
 //!
-//! // insert nested shared type eg. table
+//! // insert nested shared type eg. table as ArrayRef of ArrayRefs
 //! let table = xml.insert_embed(&mut txn, 5, ArrayPrelim::default());
-//! let header = table.insert(&mut txn, 0, ArrayPrelim::from(["book title", "author"]));
-//! let row = table.insert(&mut txn, 1, ArrayPrelim::from(["Moby-Dick", "Herman Melville"]));
-//!
-//! assert_eq!(xml.get_string(&txn), "<b>hello</b> <i>w</i>o<i>rld</i>");
+//! let header = table.insert(&mut txn, 0, ArrayPrelim::from(["Book title", "Author"]));
+//! let row = table.insert(&mut txn, 1, ArrayPrelim::from(["\"Moby-Dick\"", "Herman Melville"]));
 //! ```
 //!
 //! Keep in mind that this kind of special content may not be displayed using standard methods
@@ -212,6 +214,26 @@
 //!
 //! [RelativePosition] structure is serializable and can be persisted or passed over the network as
 //! well, which may help with tracking and displaying the cursor location of other peers.
+//!
+//! # Other shared types
+//!
+//! So far we only discussed rich text oriented capabilities of Yrs. However it's possible to make
+//! use of Yrs to represent any tree-like object:
+//!
+//! - [ArrayRef] can be used to represent any indexable sequence of values. If there are multiple
+//!   peers inserting values at the same position, a [ClientID] will be used to determine a final
+//!   deterministic order once all peers get in sync.
+//! - [MapRef] is a map object (with keys limited to be strings), where values can be of any given
+//!   type. If there are multiple peers updating the same entry concurrently - creating an update
+//!   conflict in the result - Yrs will prioritize update belonging to a peer with higher [ClientID]
+//!   to make conflict resolution algorithm deterministic.
+//! - Yrs also provides support fo XML nodes in form of [XmlElementRef], [XmlTextRef] and [XmlFragmentRef].
+//!
+//! Underneath all of these types are represented by the same abstract [types::Branch] type. Each
+//! branch is always capable of working as both indexed sequence of elements and a map. In practice
+//! specialized shared types are actually a projections over branch type and can be used interchangeably
+//! if needed, i.e.: [XmlElementRef] can be also interpreted as [MapRef], in which case the collection
+//! of that XML node attributes become key-value entries of casted map's.
 //!
 //! # Transaction event lifecycle
 //!

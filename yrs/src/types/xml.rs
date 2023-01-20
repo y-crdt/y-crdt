@@ -7,7 +7,7 @@ use crate::types::{
     EntryChange, EventHandler, MapRef, Observers, Path, ToJson, TypePtr, Value,
     TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_TEXT,
 };
-use crate::{GetString, Map, Observable, ReadTxn, RelativeIndex, Text, ID};
+use crate::{ArrayRef, GetString, Map, Observable, ReadTxn, RelativeIndex, Text, TextRef, ID};
 use lib0::any::Any;
 use std::borrow::Borrow;
 use std::cell::UnsafeCell;
@@ -101,9 +101,9 @@ impl TryFrom<BranchPtr> for XmlNode {
 
 /// XML element data type. It represents an XML node, which can contain key-value attributes
 /// (interpreted as strings) as well as other nested XML elements or rich text (represented by
-/// [XmlText] type).
+/// [XmlTextRef] type).
 ///
-/// In terms of conflict resolution, [XmlElement] uses following rules:
+/// In terms of conflict resolution, [XmlElementRef] uses following rules:
 ///
 /// - Attribute updates use logical last-write-wins principle, meaning the past updates are
 ///   automatically overridden and discarded by newer ones, while concurrent updates made by
@@ -123,6 +123,18 @@ impl RelativeIndex for XmlElementRef {}
 impl Into<XmlFragmentRef> for XmlElementRef {
     fn into(self) -> XmlFragmentRef {
         XmlFragmentRef(self.0)
+    }
+}
+
+impl Into<ArrayRef> for XmlElementRef {
+    fn into(self) -> ArrayRef {
+        ArrayRef::from(self.0)
+    }
+}
+
+impl Into<MapRef> for XmlElementRef {
+    fn into(self) -> MapRef {
+        MapRef::from(self.0)
     }
 }
 
@@ -269,21 +281,73 @@ where
 }
 
 /// A shared data type used for collaborative text editing, that can be used in a context of
-/// [XmlElement] nodee. It enables multiple users to add and remove chunks of text in efficient
+/// [XmlElementRef] node. It enables multiple users to add and remove chunks of text in efficient
 /// manner. This type is internally represented as a mutable double-linked list of text chunks
 /// - an optimization occurs during [Transaction::commit], which allows to squash multiple
 /// consecutively inserted characters together as a single chunk of text even between transaction
 /// boundaries in order to preserve more efficient memory model.
 ///
-/// Just like [XmlElement], [XmlText] can be marked with extra metadata in form of attributes.
+/// Just like [XmlElementRef], [XmlTextRef] can be marked with extra metadata in form of attributes.
 ///
-/// [XmlText] structure internally uses UTF-8 encoding and its length is described in a number of
+/// [XmlTextRef] structure internally uses UTF-8 encoding and its length is described in a number of
 /// bytes rather than individual characters (a single UTF-8 code point can consist of many bytes).
 ///
-/// Like all Yrs shared data types, [XmlText] is resistant to the problem of interleaving (situation
+/// Like all Yrs shared data types, [XmlTextRef] is resistant to the problem of interleaving (situation
 /// when characters inserted one after another may interleave with other peers concurrent inserts
 /// after merging all updates together). In case of Yrs conflict resolution is solved by using
 /// unique document id to determine correct and consistent ordering.
+///
+/// [XmlTextRef] offers a rich text editing capabilities (it's not limited to simple text operations).
+/// Actions like embedding objects, binaries (eg. images) and formatting attributes are all possible
+/// using [XmlTextRef].
+///
+/// Keep in mind that [XmlTextRef::get_string] method returns a raw string, while rendering
+/// formatting attrbitues as XML tags in-text. However it doesn't include embedded elements.
+/// If there's a need to include them, use [XmlTextRef::diff] method instead.
+///
+/// Another note worth reminding is that human-readable numeric indexes are not good for maintaining
+/// cursor positions in rich text documents with real-time collaborative capabilities. In such cases
+/// any concurrent update incoming and applied from the remote peer may change the order of elements
+/// in current [XmlTextRef], invalidating numeric index. For such cases you can take advantage of fact
+/// that [XmlTextRef] implements [RelativeIndex::position_at] method that returns a
+/// [permanent index](RelativePosition) position that sticks to the same place even when concurrent
+/// updates are being made.
+///
+/// # Example
+///
+/// ```rust
+/// use lib0::any::Any;
+/// use yrs::{Array, ArrayPrelim, Doc, GetString, Text, Transact};
+/// use yrs::types::Attrs;
+///
+/// let doc = Doc::new();
+/// let text = doc.get_or_insert_xml_text("article");
+/// let mut txn = doc.transact_mut();
+///
+/// let bold = Attrs::from([("b".into(), true.into())]);
+/// let italic = Attrs::from([("i".into(), true.into())]);
+///
+/// text.insert(&mut txn, 0, "hello ");
+/// text.insert_with_attributes(&mut txn, 6, "world", italic);
+/// text.format(&mut txn, 0, 5, bold);
+///
+/// assert_eq!(text.get_string(&txn), "<b>hello</b> <i>world</i>");
+///
+/// // remove formatting
+/// let remove_italic = Attrs::from([("i".into(), Any::Null)]);
+/// text.format(&mut txn, 6, 5, remove_italic);
+///
+/// assert_eq!(text.get_string(&txn), "<b>hello</b> world");
+///
+/// // insert binary payload eg. images
+/// let image = b"deadbeaf".to_vec();
+/// text.insert_embed(&mut txn, 1, image);
+///
+/// // insert nested shared type eg. table as ArrayRef of ArrayRefs
+/// let table = text.insert_embed(&mut txn, 5, ArrayPrelim::default());
+/// let header = table.insert(&mut txn, 0, ArrayPrelim::from(["Book title", "Author"]));
+/// let row = table.insert(&mut txn, 1, ArrayPrelim::from(["\"Moby-Dick\"", "Herman Melville"]));
+/// ```
 #[repr(transparent)]
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct XmlTextRef(BranchPtr);
@@ -291,6 +355,12 @@ pub struct XmlTextRef(BranchPtr);
 impl Xml for XmlTextRef {}
 impl Text for XmlTextRef {}
 impl RelativeIndex for XmlTextRef {}
+
+impl Into<TextRef> for XmlTextRef {
+    fn into(self) -> TextRef {
+        TextRef::from(self.0)
+    }
+}
 
 impl Observable for XmlTextRef {
     type Event = XmlTextEvent;
@@ -1395,11 +1465,17 @@ mod test {
         let mut txn = doc.transact_mut();
 
         let bold = Attrs::from([("b".into(), true.into())]);
-        xml.insert_with_attributes(&mut txn, 0, "hello", bold);
-        xml.insert(&mut txn, 5, " world");
         let italic = Attrs::from([("i".into(), true.into())]);
-        xml.format(&mut txn, 6, 5, italic);
+
+        xml.insert(&mut txn, 0, "hello ");
+        xml.insert_with_attributes(&mut txn, 6, "world", italic);
+        xml.format(&mut txn, 0, 5, bold);
 
         assert_eq!(xml.get_string(&txn), "<b>hello</b> <i>world</i>");
+
+        let remove_italic = Attrs::from([("i".into(), Any::Null)]);
+        xml.format(&mut txn, 6, 5, remove_italic);
+
+        assert_eq!(xml.get_string(&txn), "<b>hello</b> world");
     }
 }
