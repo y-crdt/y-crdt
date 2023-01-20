@@ -1387,4 +1387,19 @@ mod test {
             "<div class=\"t-button\">hello <a href=\"http://domain.org\">world</a></div>"
         )
     }
+
+    #[test]
+    fn xml_to_string_2() {
+        let doc = Doc::new();
+        let xml = doc.get_or_insert_xml_text("article");
+        let mut txn = doc.transact_mut();
+
+        let bold = Attrs::from([("b".into(), true.into())]);
+        xml.insert_with_attributes(&mut txn, 0, "hello", bold);
+        xml.insert(&mut txn, 5, " world");
+        let italic = Attrs::from([("i".into(), true.into())]);
+        xml.format(&mut txn, 6, 5, italic);
+
+        assert_eq!(xml.get_string(&txn), "<b>hello</b> <i>world</i>");
+    }
 }

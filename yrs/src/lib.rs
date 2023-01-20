@@ -58,16 +58,17 @@
 //! must be executed in a scope of transaction created by the document there were defined in. We
 //! can differentiate two transaction types:
 //!
-//! 1. [Read-only transactions](Transaction), created via [Doc::transact]. They are used only to
-//!    access the contents of an underlying document store but they never alter it. They are useful
-//!    for methods like reading the structure state or for serialization. It's allowed to have
-//!    multiple active read-only transactions as long as no read-write transaction is in progress.
-//! 2. [Read-write transactions](TransactionMut), create via [Doc::transact_mut]. These can be used
-//!    to modify the internal document state. These transactions work as intelligent batches. They
-//!    are automatically committed when dropped, performing tasks like state cleaning, metadata
-//!    compression and triggering event callbacks. Read-write transactions require exclusive access
-//!    to an underlying document store - no other transaction (neither read-write nor read-only one)
-//!    can be active while read-write transaction is to be created.
+//! 1. [Read-only transactions](Transaction), created via [Doc::transact]/[Doc::try_transact].
+//!    They are used only to access the contents of an underlying document store but they never
+//!    alter it. They are useful for methods like reading the structure state or for serialization.
+//!    It's allowed to have multiple active read-only transactions as long as no read-write
+//!    transaction is in progress.
+//! 2. [Read-write transactions](TransactionMut), create via [Doc::transact_mut]/[Doc::try_transact_mut].
+//!    These can be used to modify the internal document state. These transactions work as
+//!    intelligent batches. They are automatically committed when dropped, performing tasks like
+//!    state cleaning, metadata compression and triggering event callbacks. Read-write transactions
+//!    require exclusive access to an underlying document store - no other transaction (neither
+//!    read-write nor read-only one) can be active while read-write transaction is to be created.
 //!
 //! In order to synchronize state between the document replicas living on a different peer processes,
 //! there are two possible cases:
@@ -90,6 +91,128 @@
 //! of both variants: use 1st one on connection initialization between two peers followed by
 //! 2nd approach to deliver subsequent changes.
 //!
+//! # Formatting and embedding
+//!
+//! While the quick start example covered only a simple text insertions, structures such as
+//! [TextRef]/[XmlTextRef] are capable of including more advanced operators, such as adding
+//! [formatting attributes](Text::format), [inserting embedded content](Text::insert_embed)
+//! (eg. image binaries or [ArrayRef]s that we could interpret in example as nested tables).
+//!
+//! ```rust
+//! use lib0::any::Any;
+//! use yrs::{Array, ArrayPrelim, Doc, GetString, Text, Transact};
+//! use yrs::types::Attrs;
+//!
+//! let doc = Doc::new();
+//! let xml = doc.get_or_insert_xml_text("article");
+//! let mut txn = doc.transact_mut();
+//!
+//! let bold = Attrs::from([("b".into(), true.into())]);
+//! xml.insert_with_attributes(&mut txn, 0, "hello", bold);
+//! xml.insert(&mut txn, 5, " world");
+//!
+//! let italic = Attrs::from([("i".into(), true.into())]);
+//! xml.format(&mut txn, 6, 5, italic);
+//!
+//! // remove formatting
+//! let remove_italic = Attrs::from([("i".into(), Any::Null)]);
+//! xml.format(&mut txn, 7, 1, remove_italic);
+//!
+//! // insert binary payload eg. images
+//! let image = b"deadbeaf".to_vec();
+//! xml.insert_embed(&mut txn, 1, image);
+//!
+//! // insert nested shared type eg. table
+//! let table = xml.insert_embed(&mut txn, 5, ArrayPrelim::default());
+//! let header = table.insert(&mut txn, 0, ArrayPrelim::from(["book title", "author"]));
+//! let row = table.insert(&mut txn, 1, ArrayPrelim::from(["Moby-Dick", "Herman Melville"]));
+//!
+//! assert_eq!(xml.get_string(&txn), "<b>hello</b> <i>w</i>o<i>rld</i>");
+//! ```
+//!
+//! Keep in mind that this kind of special content may not be displayed using standard methods
+//! ([TextRef::get_string] returns only inserted text and ignores other content, while
+//! [XmlTextRef::get_string] renders formatting attributes as XML nodes, but still ignores embedded
+//! values). Reason behind this behavior is that as generic collaboration library, Yrs cannot make
+//! opinionated decisions in this regard - whenever an full collection of text chunks, formatting
+//! attributes and embedded items is required, use [Text::diff] instead.
+//!
+//! # Cursor positioning
+//!
+//! Another common problem collaborative text editors is a requirement of keeping track of cursor
+//! position in face of concurrent updates incoming from remote peers. Let's present the problem on
+//! an example:
+//!
+//! ```rust
+//! use yrs::{Doc, GetString, ReadTxn, StateVector, Text, Transact, Update};
+//! use yrs::updates::decoder::Decode;
+//!
+//! let doc1 = Doc::with_client_id(1);
+//! let text1 = doc1.get_or_insert_text("article");
+//! let mut txn1 = doc1.transact_mut();
+//! text1.insert(&mut txn1, 0, "hello");
+//!
+//! let doc2 = Doc::with_client_id(2);
+//! let text2 = doc2.get_or_insert_text("article");
+//! let mut txn2 = doc2.transact_mut();
+//! text2.insert(&mut txn2, 0, "world");
+//!
+//! const INDEX: usize = 1;
+//!
+//! // Doc 2: cursor at index 1 points to character 'o'
+//! let str = text2.get_string(&txn2);
+//! assert_eq!(str.chars().nth(INDEX), Some('o'));
+//!
+//! // synchronize full state of doc1 -> doc2
+//! txn2.apply_update(Update::decode_v1(&txn1.encode_diff_v1(&StateVector::default())).unwrap());
+//!
+//! // Doc 2: cursor at index 1 no longer points to the same character
+//! let str = text2.get_string(&txn2);
+//! assert_ne!(str.chars().nth(INDEX), Some('o'));
+//! ```
+//!
+//! Since [TransactionMut::apply_update] merges updates performed by remote peer, some of these
+//! them may shift the cursor position. However in such case the old index that we used (`1` in the
+//! example above) is no longer valid.
+//!
+//! To address these issues, we can make use of [RelativePosition] struct to save the permanent
+//! location, that will persist between concurrent updates being made:
+//!
+//! ```rust
+//! use yrs::{Assoc, Doc, GetString, ReadTxn, RelativeIndex, StateVector, Text, Transact, Update};
+//! use yrs::updates::decoder::Decode;
+//!
+//! let doc1 = Doc::with_client_id(1);
+//! let text1 = doc1.get_or_insert_text("article");
+//! let mut txn1 = doc1.transact_mut();
+//! text1.insert(&mut txn1, 0, "hello");
+//!
+//! let doc2 = Doc::with_client_id(2);
+//! let text2 = doc2.get_or_insert_text("article");
+//! let mut txn2 = doc2.transact_mut();
+//! text2.insert(&mut txn2, 0, "world");
+//!
+//! const INDEX: usize = 1;
+//!
+//! // Doc 2: cursor at index 1 points to character 'o'
+//! let str = text2.get_string(&txn2);
+//! assert_eq!(str.chars().nth(INDEX), Some('o'));
+//!
+//! // get a permanent index for cursor at index 1
+//! let pos = text2.position_at(&mut txn2, INDEX as u32, Assoc::After).unwrap();
+//!
+//! // synchronize full state of doc1 -> doc2
+//! txn2.apply_update(Update::decode_v1(&txn1.encode_diff_v1(&StateVector::default())).unwrap());
+//!
+//! // restore the index from position saved previously
+//! let idx = pos.absolute(&txn2).unwrap();
+//! let str = text2.get_string(&txn2);
+//! assert_eq!(str.chars().nth(idx.index as usize), Some('o'));
+//! ```
+//!
+//! [RelativePosition] structure is serializable and can be persisted or passed over the network as
+//! well, which may help with tracking and displaying the cursor location of other peers.
+//!
 //! # Transaction event lifecycle
 //!
 //! Yrs provides a variety of lifecycle events, which enable users to react on various situations
@@ -111,7 +234,7 @@
 //!    to encode and propagate incremental changes made by transaction to other peers.
 //! 6. Sub-document change callbacks: [Doc::observe_subdocs].
 //!
-//! # Other reference materials
+//! # External learning materials
 //!
 //! - [A short walkthrough over YATA](https://bartoszsypytkowski.com/yata/) - a conflict resolution
 //!   algorithm used by Yrs/Yjs.

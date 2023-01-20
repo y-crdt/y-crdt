@@ -366,6 +366,12 @@ where
     }
 }
 
+impl Default for ArrayPrelim<[u32; 0], u32> {
+    fn default() -> Self {
+        ArrayPrelim([])
+    }
+}
+
 /// Prelim range defines a way to insert multiple elements effectively at once one after another
 /// in an efficient way, provided that these elements correspond to a primitive JSON-like types.
 struct RangePrelim<T, V>(T)

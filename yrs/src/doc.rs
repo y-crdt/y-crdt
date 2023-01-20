@@ -1,6 +1,6 @@
 use crate::block::{Block, BlockPtr, ClientID, ItemContent, Prelim};
 use crate::event::{SubdocsEvent, TransactionCleanupEvent, UpdateEvent};
-use crate::store::{Store, StoreRef, WeakStoreRef};
+use crate::store::{Store, StoreRef};
 use crate::transaction::{Origin, Transaction, TransactionMut};
 use crate::types::{
     Branch, BranchPtr, ToJson, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,

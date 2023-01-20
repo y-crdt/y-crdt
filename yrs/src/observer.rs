@@ -5,6 +5,26 @@ use std::sync::Arc;
 
 pub type SubscriptionId = u32;
 
+/// Data structure used to handle publish/subscribe callbacks of specific type. Observers perform
+/// subscriber changes in thread-safe manner, using atomic hardware intrinsics.
+///
+/// # Example
+///
+/// ```rust
+/// use std::sync::Arc;
+/// use yrs::Observer;
+///
+/// let observer: Observer<Arc<dyn Fn(u32)->()>> = Observer::new();
+/// let a = observer.subscribe(Arc::new(|arg| println!("A: {}", arg)));
+/// let b = observer.subscribe(Arc::new(|arg| println!("B: {}", arg)));
+///
+/// // get snapshot of all active callbacks
+/// for cb in observer.callbacks() {
+///     cb(1);
+/// }
+///
+/// drop(a); // unsubscribe callback
+/// ```
 #[derive(Debug)]
 pub struct Observer<F: Clone> {
     seq_nr: AtomicU32,
@@ -12,6 +32,7 @@ pub struct Observer<F: Clone> {
 }
 
 impl<F: Clone> Observer<F> {
+    /// Creates a new [Observer] with no active callbacks.
     pub fn new() -> Self {
         Observer {
             seq_nr: AtomicU32::new(0),
@@ -19,6 +40,8 @@ impl<F: Clone> Observer<F> {
         }
     }
 
+    /// Subscribes a callback parameter to a current [Observer].
+    /// Returns a subscription object which - when dropped - will unsubscribe current callback.
     pub fn subscribe(&self, f: F) -> Subscription<F> {
         let subscription_id = self.seq_nr.fetch_add(1, Ordering::SeqCst);
         let handle = Handle::new(subscription_id, f);
@@ -30,6 +53,19 @@ impl<F: Clone> Observer<F> {
         Subscription::new(subscription_id, self.state.clone())
     }
 
+    /// Manually unsubscribes a callback - previously subscribed via [Observer::subscribe] - from
+    /// current observer using a subscription identifier.
+    ///
+    /// Such identifier can be obtained by [Subscription::into] call.
+    ///
+    /// # Safety
+    ///
+    /// [SubscriptionId] is an ordinary number and while it's fairly guaranteed to be unique in
+    /// scope of a current observer (unless int overflow happens), it's not checked if passed
+    /// subscription id was not forged or passed from another observer's subscription.
+    ///
+    /// For this reason, don't use this method unless necessary and prefer unsubscribing by dropping
+    /// [Subscription] handles instead.
     pub fn unsubscribe(&self, subscription_id: SubscriptionId) {
         self.state.update(move |s| {
             let mut s = s.cloned().unwrap_or_else(Inner::default);
@@ -38,6 +74,9 @@ impl<F: Clone> Observer<F> {
         });
     }
 
+    /// Returns a snapshot of callbacks subscribed to this observer at the moment when this method
+    /// has been called. This snapshot can be iterated over to get access to individual callbacks
+    /// and trigger them.
     pub fn callbacks(&self) -> Callbacks<F> {
         Callbacks::new(self)
     }
@@ -80,6 +119,12 @@ impl<F: Clone> Iterator for Callbacks<F> {
     }
 }
 
+/// Subscription handle returned by [Observer::subscribe] methods, which will unsubscribe corresponding
+/// callback when dropped.
+///
+/// If implicit callback unsubscribe on drop is undesired, this structure can be cast [into](Subscription::into)
+/// [SubscriptionId] which is an identifier of the same subscription, which in turn must be used
+/// manually via [Observer::unsubscribe] to perform usubscribe.
 #[derive(Debug, Clone)]
 pub struct Subscription<F: Clone> {
     subscription_id: SubscriptionId,
