@@ -840,11 +840,9 @@ mod test {
         }
 
         for (i, value) in a.iter(&txn).enumerate() {
-            let mut expected = HashMap::new();
-            expected.insert("value".to_owned(), Any::Number(i as f64));
             match value {
                 Value::YMap(_) => {
-                    assert_eq!(value.to_json(&txn), Any::Map(Box::new(expected)))
+                    assert_eq!(value.to_json(&txn), any!({"value": (i as f64) }))
                 }
                 _ => panic!("Value of array at index {} was no YMap", i),
             }
@@ -1018,6 +1016,7 @@ mod test {
     use crate::transaction::ReadTxn;
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encoder, EncoderV1};
+    use lib0::any;
     use std::sync::atomic::{AtomicI64, Ordering};
     use std::time::Duration;
 

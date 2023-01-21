@@ -21,6 +21,41 @@ use std::rc::Rc;
 /// updates are automatically overridden and discarded by newer ones, while concurrent updates made
 /// by different peers are resolved into a single value using document id seniority to establish
 /// order.
+///
+/// # Example
+///
+/// ```rust
+///
+/// use lib0::any;
+/// use yrs::{Doc, Map, MapPrelim, Transact};
+/// use yrs::types::ToJson;
+///
+/// let doc = Doc::new();
+/// let map = doc.get_or_insert_map("map");
+/// let mut txn = doc.transact_mut();
+///
+/// // insert value
+/// map.insert(&mut txn, "key1", "value1");
+///
+/// // insert nested shared type
+/// let nested = map.insert(&mut txn, "key2", MapPrelim::from([("inner", "value2")]));
+/// nested.insert(&mut txn, "inner2", 100);
+///
+/// assert_eq!(map.to_json(&txn), any!({
+///   "key1": "value1",
+///   "key2": {
+///     "inner": "value2",
+///     "inner2": 100
+///   }
+/// }));
+///
+/// // get value
+/// assert_eq!(map.get(&txn, "key1"), Some("value1".into()));
+///
+/// // remove entry
+/// map.remove(&mut txn, "key1");
+/// assert_eq!(map.get(&txn, "key1"), None);
+/// ```
 #[repr(transparent)]
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct MapRef(BranchPtr);
@@ -392,6 +427,7 @@ mod test {
         Array, ArrayPrelim, Doc, Map, MapPrelim, MapRef, Observable, StateVector, Text, Transact,
         Update,
     };
+    use lib0::any;
     use lib0::any::Any;
     use rand::distributions::Alphanumeric;
     use rand::prelude::{SliceRandom, StdRng};
@@ -443,13 +479,11 @@ mod test {
             );
             assert_eq!(
                 m.get(txn, &"object".to_owned()),
-                Some(Value::from({
-                    let mut m = HashMap::new();
-                    let mut n = HashMap::new();
-                    n.insert("key2".to_owned(), Any::String("value".into()));
-                    m.insert("key".to_owned(), Any::Map(Box::new(n)));
-                    m
-                }))
+                Some(Value::from(any!({
+                    "key": {
+                        "key2": "value"
+                    }
+                })))
             );
         }
 

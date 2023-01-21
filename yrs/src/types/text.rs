@@ -1299,6 +1299,7 @@ mod test {
         ArrayPrelim, Doc, GetString, Observable, StateVector, Text, Transact, Update, XmlTextRef,
         ID,
     };
+    use lib0::any;
     use lib0::any::Any;
     use rand::prelude::StdRng;
     use rand::Rng;
@@ -2047,10 +2048,9 @@ mod test {
         });
 
         let a1: Attrs = HashMap::from([("bold".into(), true.into())]);
-        let embed: Any = Any::Map(Box::new(HashMap::from([(
-            "image".into(),
-            "imageSrc.png".into(),
-        )])));
+        let embed = any!({
+            "image": "imageSrc.png"
+        });
 
         let (update_v1, update_v2) = {
             let mut txn = d1.transact_mut();
