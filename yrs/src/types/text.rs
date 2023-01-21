@@ -1,4 +1,4 @@
-use crate::block::{Block, BlockPtr, Item, ItemContent, ItemPosition, Prelim, PrelimEmbed};
+use crate::block::{Block, BlockPtr, EmbedPrelim, Item, ItemContent, ItemPosition, Prelim};
 use crate::block_store::Snapshot;
 use crate::transaction::TransactionMut;
 use crate::types::{
@@ -20,19 +20,87 @@ use std::ops::{Deref, DerefMut};
 /// allows to squash multiple consecutively inserted characters together as a single chunk of text
 /// even between transaction boundaries in order to preserve more efficient memory model.
 ///
-/// [Text] structure internally uses UTF-8 encoding and its length is described in a number of
+/// [TextRef] structure internally uses UTF-8 encoding and its length is described in a number of
 /// bytes rather than individual characters (a single UTF-8 code point can consist of many bytes).
 ///
-/// Like all Yrs shared data types, [Text] is resistant to the problem of interleaving (situation
+/// Like all Yrs shared data types, [TextRef] is resistant to the problem of interleaving (situation
 /// when characters inserted one after another may interleave with other peers concurrent inserts
 /// after merging all updates together). In case of Yrs conflict resolution is solved by using
 /// unique document id to determine correct and consistent ordering.
+///
+/// [TextRef] offers a rich text editing capabilities (it's not limited to simple text operations).
+/// Actions like embedding objects, binaries (eg. images) and formatting attributes are all possible
+/// using [TextRef].
+///
+/// Keep in mind that [TextRef::get_string] method returns a raw string, stripped of formatting
+/// attributes or embedded objects. If there's a need to include them, use [TextRef::diff] method
+/// instead.
+///
+/// Another note worth reminding is that human-readable numeric indexes are not good for maintaining
+/// cursor positions in rich text documents with real-time collaborative capabilities. In such cases
+/// any concurrent update incoming and applied from the remote peer may change the order of elements
+/// in current [TextRef], invalidating numeric index. For such cases you can take advantage of fact
+/// that [TextRef] implements [RelativeIndex::position_at] method that returns a
+/// [permanent index](RelativePosition) position that sticks to the same place even when concurrent
+/// updates are being made.
+///
+/// # Example
+///
+/// ```rust
+/// use lib0::any::Any;
+/// use yrs::{Array, ArrayPrelim, Doc, GetString, Text, Transact};
+/// use yrs::types::Attrs;
+/// use yrs::types::text::{Diff, YChange};
+///
+/// let doc = Doc::new();
+/// let text = doc.get_or_insert_text("article");
+/// let mut txn = doc.transact_mut();
+///
+/// let bold = Attrs::from([("b".into(), true.into())]);
+/// let italic = Attrs::from([("i".into(), true.into())]);
+///
+/// text.insert(&mut txn, 0, "hello ");
+/// text.insert_with_attributes(&mut txn, 6, "world", italic.clone());
+/// text.format(&mut txn, 0, 5, bold.clone());
+///
+/// let chunks = text.diff(&txn, YChange::identity);
+/// assert_eq!(chunks, vec![
+///     Diff::new("hello".into(), Some(Box::new(bold.clone()))),
+///     Diff::new(" ".into(), None),
+///     Diff::new("world".into(), Some(Box::new(italic))),
+/// ]);
+///
+/// // remove formatting
+/// let remove_italic = Attrs::from([("i".into(), Any::Null)]);
+/// text.format(&mut txn, 6, 5, remove_italic);
+///
+/// let chunks = text.diff(&txn, YChange::identity);
+/// assert_eq!(chunks, vec![
+///     Diff::new("hello".into(), Some(Box::new(bold.clone()))),
+///     Diff::new(" world".into(), None),
+/// ]);
+///
+/// // insert binary payload eg. images
+/// let image = b"deadbeaf".to_vec();
+/// text.insert_embed(&mut txn, 1, image);
+///
+/// // insert nested shared type eg. table as ArrayRef of ArrayRefs
+/// let table = text.insert_embed(&mut txn, 5, ArrayPrelim::default());
+/// let header = table.insert(&mut txn, 0, ArrayPrelim::from(["Book title", "Author"]));
+/// let row = table.insert(&mut txn, 1, ArrayPrelim::from(["\"Moby-Dick\"", "Herman Melville"]));
+/// ```
 #[repr(transparent)]
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct TextRef(BranchPtr);
 
 impl Text for TextRef {}
 impl RelativeIndex for TextRef {}
+
+impl Into<XmlTextRef> for TextRef {
+    fn into(self) -> XmlTextRef {
+        XmlTextRef::from(self.0)
+    }
+}
 
 impl Observable for TextRef {
     type Event = TextEvent;
@@ -55,7 +123,9 @@ impl Observable for TextRef {
 }
 
 impl GetString for TextRef {
-    /// Converts context of this text data structure into a single string value.
+    /// Converts context of this text data structure into a single string value. This method doesn't
+    /// render formatting attributes or embedded content. In order to retrieve it, use
+    /// [TextRef::diff] method.
     fn get_string<T: ReadTxn>(&self, txn: &T) -> String {
         let mut start = self.as_ref().start;
         let mut s = String::new();
@@ -68,12 +138,6 @@ impl GetString for TextRef {
             start = item.right.clone();
         }
         s
-    }
-}
-
-impl Into<XmlTextRef> for TextRef {
-    fn into(self) -> XmlTextRef {
-        XmlTextRef::from(self.0)
     }
 }
 
@@ -206,12 +270,11 @@ pub trait Text: AsRef<Branch> {
     /// This method will panic if provided `index` is greater than the length of a current text.
     fn insert_embed<V>(&self, txn: &mut TransactionMut, index: u32, content: V) -> V::Return
     where
-        V: Prelim + 'static,
+        V: Into<EmbedPrelim<V>> + Prelim,
     {
         let this = BranchPtr::from(self.as_ref());
         if let Some(pos) = find_position(this, txn, index) {
-            let value = PrelimEmbed::new(content);
-            let ptr = txn.create_item(&pos, value, None);
+            let ptr = txn.create_item(&pos, content.into(), None);
             if let Ok(integrated) = ptr.try_into() {
                 integrated
             } else {
@@ -238,7 +301,7 @@ pub trait Text: AsRef<Branch> {
         mut attributes: Attrs,
     ) -> V::Return
     where
-        V: Prelim + 'static,
+        V: Into<EmbedPrelim<V>> + Prelim,
     {
         let this = BranchPtr::from(self.as_ref());
         if let Some(mut pos) = find_position(this, txn, index) {
@@ -246,8 +309,7 @@ pub trait Text: AsRef<Branch> {
             minimize_attr_changes(&mut pos, &attributes);
             let negated_attrs = insert_attributes(this, txn, &mut pos, attributes);
 
-            let value = PrelimEmbed::new(embed);
-            let item = txn.create_item(&pos, value, None);
+            let item = txn.create_item(&pos, embed.into(), None);
 
             pos.right = Some(item.clone());
             pos.forward();
@@ -292,6 +354,45 @@ pub trait Text: AsRef<Branch> {
         }
     }
 
+    /// Returns an ordered sequence of formatted chunks, current [Text] corresponds of. These chunks
+    /// may contain inserted pieces of text or more complex elements like embedded binaries of
+    /// shared objects. Chunks are organized by type of inserted value and formatting attributes
+    /// wrapping it around. If formatting attributes are nested into each other, they will be split
+    /// into separate [Diff] chunks.
+    ///
+    /// `compute_ychange` callback is used to attach custom data to produced chunks.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use yrs::{Doc, Text, Transact};
+    /// use yrs::types::Attrs;
+    /// use yrs::types::text::{Diff, YChange};
+    ///
+    /// let doc = Doc::new();
+    /// let text = doc.get_or_insert_text("article");
+    /// let mut txn = doc.transact_mut();
+    ///
+    /// let bold = Attrs::from([("b".into(), true.into())]);
+    /// let italic = Attrs::from([("i".into(), true.into())]);
+    ///
+    /// text.insert_with_attributes(&mut txn, 0, "hello world", italic.clone()); // "<i>hello world</i>"
+    /// text.format(&mut txn, 6, 5, bold.clone()); // "<i>hello <b>world</b></i>"
+    /// let image = vec![0, 0, 0, 0];
+    /// text.insert_embed(&mut txn, 5, image.clone()); // insert binary after "hello"
+    ///
+    /// let italic_and_bold = Attrs::from([
+    ///   ("b".into(), true.into()),
+    ///   ("i".into(), true.into())
+    /// ]);
+    /// let chunks = text.diff(&txn, YChange::identity);
+    /// assert_eq!(chunks, vec![
+    ///     Diff::new("hello".into(), Some(Box::new(italic.clone()))),
+    ///     Diff::new(image.into(), Some(Box::new(italic.clone()))),
+    ///     Diff::new(" ".into(), Some(Box::new(italic))),
+    ///     Diff::new("world".into(), Some(Box::new(italic_and_bold))),
+    /// ]);
+    /// ```
     fn diff<T, D, F>(&self, txn: &T, compute_ychange: F) -> Vec<Diff<D>>
     where
         T: ReadTxn,
@@ -427,7 +528,7 @@ where
                     }
                     ItemContent::Type(_) | ItemContent::Embed(_) => {
                         self.pack_str();
-                        if let Some(value) = item.content.get_last() {
+                        if let Some(value) = item.content.get_first() {
                             let attrs = self.attrs_boxed();
                             self.ops.push(Diff::new(value, attrs));
                         }
@@ -839,10 +940,20 @@ fn clean_format_gap(
     cleanups
 }
 
+/// A representation of an uniformly-formatted chunk of rich context stored by [TextRef] or
+/// [XmlTextRef]. It contains a value (which could be a string, embedded object or another shared
+/// type) with optional formatting attributes wrapping around this chunk. It can also contain some
+/// custom data generated by caller as part of [TextRef::diff] callback.
 #[derive(PartialEq)]
 pub struct Diff<T> {
+    /// Inserted chunk of data. It can be (usually) piece of text, but possibly also embedded value
+    /// or another shared type.
     pub insert: Value,
+
+    /// Optional formatting attributes wrapping inserted chunk of data.
     pub attributes: Option<Box<Attrs>>,
+
+    /// Custom user data attached to this chunk of data.
     pub ychange: Option<T>,
 }
 
@@ -850,6 +961,7 @@ impl<T> Diff<T> {
     pub fn new(insert: Value, attributes: Option<Box<Attrs>>) -> Self {
         Self::with_change(insert, attributes, None)
     }
+
     pub fn with_change(insert: Value, attributes: Option<Box<Attrs>>, ychange: Option<T>) -> Self {
         Diff {
             insert,
@@ -1167,15 +1279,27 @@ impl<T: Borrow<str>> Prelim for TextPrelim<T> {
     }
 }
 
+impl<T: Borrow<str>> Into<EmbedPrelim<TextPrelim<T>>> for TextPrelim<T> {
+    #[inline]
+    fn into(self) -> EmbedPrelim<TextPrelim<T>> {
+        EmbedPrelim::Shared(self)
+    }
+}
+
 #[cfg(test)]
 mod test {
     use crate::doc::{OffsetKind, Options};
     use crate::test_utils::{exchange_updates, run_scenario, RngExt};
     use crate::transaction::ReadTxn;
     use crate::types::text::{Attrs, ChangeKind, Delta, Diff, YChange};
+    use crate::types::Value;
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
-    use crate::{Doc, GetString, Observable, StateVector, Text, Transact, Update, XmlTextRef, ID};
+    use crate::{
+        ArrayPrelim, Doc, GetString, Observable, StateVector, Text, Transact, Update, XmlTextRef,
+        ID,
+    };
+    use lib0::any;
     use lib0::any::Any;
     use rand::prelude::StdRng;
     use rand::Rng;
@@ -1924,10 +2048,9 @@ mod test {
         });
 
         let a1: Attrs = HashMap::from([("bold".into(), true.into())]);
-        let embed: Any = Any::Map(Box::new(HashMap::from([(
-            "image".into(),
-            "imageSrc.png".into(),
-        )])));
+        let embed = any!({
+            "image": "imageSrc.png"
+        });
 
         let (update_v1, update_v2) = {
             let mut txn = d1.transact_mut();
@@ -2260,6 +2383,35 @@ mod test {
                 )
             ]
         )
+    }
+
+    #[test]
+    fn diff_with_embedded_items() {
+        let doc = Doc::new();
+        let text = doc.get_or_insert_text("article");
+        let mut txn = doc.transact_mut();
+
+        let bold = Attrs::from([("b".into(), true.into())]);
+        let italic = Attrs::from([("i".into(), true.into())]);
+
+        text.insert_with_attributes(&mut txn, 0, "hello world", italic.clone()); // "<i>hello world</i>"
+        text.format(&mut txn, 6, 5, bold.clone()); // "<i>hello <b>world</b></i>"
+        let image = vec![0, 0, 0, 0];
+        text.insert_embed(&mut txn, 5, image.clone()); // insert binary after "hello"
+        let array = text.insert_embed(&mut txn, 5, ArrayPrelim::default()); // insert array ref after "hello"
+
+        let italic_and_bold = Attrs::from([("b".into(), true.into()), ("i".into(), true.into())]);
+        let chunks = text.diff(&txn, YChange::identity);
+        assert_eq!(
+            chunks,
+            vec![
+                Diff::new("hello".into(), Some(Box::new(italic.clone()))),
+                Diff::new(Value::YArray(array), Some(Box::new(italic.clone()))),
+                Diff::new(image.into(), Some(Box::new(italic.clone()))),
+                Diff::new(" ".into(), Some(Box::new(italic))),
+                Diff::new("world".into(), Some(Box::new(italic_and_bold))),
+            ]
+        );
     }
 
     #[test]

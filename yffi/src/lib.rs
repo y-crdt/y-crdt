@@ -2039,7 +2039,7 @@ pub unsafe extern "C" fn yxmlelem_insert_text(
     let txn = txn
         .as_mut()
         .expect("provided transaction was not writeable");
-    xml.insert(txn, index as u32, XmlTextPrelim(""))
+    xml.insert(txn, index as u32, XmlTextPrelim::new(""))
         .into_raw_branch()
 }
 

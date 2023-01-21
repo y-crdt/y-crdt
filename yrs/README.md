@@ -17,7 +17,7 @@ use yrs::*;
 
 fn main() {    
     let doc = Doc::new();
-    let text = doc.get_text("name");
+    let text = doc.get_or_insert_text("name");
     // every operation in Yrs happens in scope of a transaction
     let mut txn = doc.transact_mut(); 
     // append text to our collaborative document
@@ -29,7 +29,7 @@ fn main() {
     
     // simulate update with remote peer
     let remote_doc = Doc::new();
-    let remote_text = remote_doc.get_text("name");
+    let remote_text = remote_doc.get_or_insert_text("name");
     let mut remote_txn = remote_doc.transact();
 
     // in order to exchange data with other documents 
@@ -72,8 +72,8 @@ We're in ongoing process of reaching the feature compatibility with Yjs project.
   - [x] Subdocuments
   - [x] Subscription events on particular data type
 - [x] Cross-platform support for unicode code points
-- [ ] Transaction origins
-- [ ] Undo manager
+- [x] Transaction origins
+- [x] Undo manager
 
 ## Internal Documentation
 

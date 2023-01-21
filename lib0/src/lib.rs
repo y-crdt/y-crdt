@@ -8,5 +8,6 @@ pub mod number;
 #[cfg(not(feature = "lib0-serde"))]
 mod json_parser;
 
+mod macros;
 #[cfg(feature = "lib0-serde")]
 pub mod serde;

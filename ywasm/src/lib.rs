@@ -2850,10 +2850,10 @@ impl YXmlElement {
     #[wasm_bindgen(method, js_name = insertXmlText)]
     pub fn insert_xml_text(&self, index: u32, txn: &ImplicitTransaction) -> YXmlText {
         if let Some(txn) = get_txn_mut(txn) {
-            YXmlText(self.0.insert(txn, index, XmlTextPrelim("")))
+            YXmlText(self.0.insert(txn, index, XmlTextPrelim::new("")))
         } else {
             let mut txn = self.0.transact_mut();
-            YXmlText(self.0.insert(&mut txn, index, XmlTextPrelim("")))
+            YXmlText(self.0.insert(&mut txn, index, XmlTextPrelim::new("")))
         }
     }
 
@@ -2884,10 +2884,10 @@ impl YXmlElement {
     #[wasm_bindgen(method, js_name = pushXmlText)]
     pub fn push_xml_text(&self, txn: &ImplicitTransaction) -> YXmlText {
         if let Some(txn) = get_txn_mut(txn) {
-            YXmlText(self.0.push_back(txn, XmlTextPrelim("")))
+            YXmlText(self.0.push_back(txn, XmlTextPrelim::new("")))
         } else {
             let mut txn = self.0.transact_mut();
-            YXmlText(self.0.push_back(&mut txn, XmlTextPrelim("")))
+            YXmlText(self.0.push_back(&mut txn, XmlTextPrelim::new("")))
         }
     }
 
@@ -3097,10 +3097,10 @@ impl YXmlFragment {
     #[wasm_bindgen(method, js_name = insertXmlText)]
     pub fn insert_xml_text(&self, index: u32, txn: &ImplicitTransaction) -> YXmlText {
         if let Some(txn) = get_txn_mut(txn) {
-            YXmlText(self.0.insert(txn, index, XmlTextPrelim("")))
+            YXmlText(self.0.insert(txn, index, XmlTextPrelim::new("")))
         } else {
             let mut txn = self.0.transact_mut();
-            YXmlText(self.0.insert(&mut txn, index, XmlTextPrelim("")))
+            YXmlText(self.0.insert(&mut txn, index, XmlTextPrelim::new("")))
         }
     }
 
@@ -3131,10 +3131,10 @@ impl YXmlFragment {
     #[wasm_bindgen(method, js_name = pushXmlText)]
     pub fn push_xml_text(&self, txn: &ImplicitTransaction) -> YXmlText {
         if let Some(txn) = get_txn_mut(txn) {
-            YXmlText(self.0.push_back(txn, XmlTextPrelim("")))
+            YXmlText(self.0.push_back(txn, XmlTextPrelim::new("")))
         } else {
             let mut txn = self.0.transact_mut();
-            YXmlText(self.0.push_back(&mut txn, XmlTextPrelim("")))
+            YXmlText(self.0.push_back(&mut txn, XmlTextPrelim::new("")))
         }
     }
 

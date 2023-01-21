@@ -45,8 +45,8 @@ Other projects using *yrs*:
   - [x] XmlFragment
   - [x] XmlHook (*deprecated*)
   - [x] Sub documents
-  - [ ] Transaction origin
-  - [ ] Undo/redo manager
+  - [x] Transaction origin
+  - [x] Undo/redo manager
 - Encoding formats:
   - [x] lib0 v1 encoding
   - [x] lib0 v2 encoding

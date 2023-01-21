@@ -263,7 +263,7 @@ impl Store {
         }
     }
 
-    /// Consumes current block slice view, materializing it into actual memory layout,
+    /// Consumes current block slice view, materializing it into actual block representation equivalent,
     /// splitting underlying block along [BlockSlice::start]/[BlockSlice::end] offsets.
     ///
     /// Returns a block created this way, that represents the boundaries that current [BlockSlice]

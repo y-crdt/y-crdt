@@ -644,6 +644,7 @@ mod test {
         Array, Doc, GetString, Map, MapPrelim, ReadTxn, StateVector, Text, TextPrelim, Transact,
         Update, Xml, XmlElementPrelim, XmlElementRef, XmlFragment, XmlTextPrelim,
     };
+    use lib0::any;
     use lib0::any::Any;
     use std::cell::RefCell;
     use std::collections::HashMap;
@@ -899,7 +900,7 @@ mod test {
 
         let mut mgr = UndoManager::new(&d1, &xml1);
         let child = xml1.insert(&mut d1.transact_mut(), 0, XmlElementPrelim::empty("p"));
-        let text_child = child.insert(&mut d1.transact_mut(), 0, XmlTextPrelim("content"));
+        let text_child = child.insert(&mut d1.transact_mut(), 0, XmlTextPrelim::new("content"));
 
         assert_eq!(
             xml1.get_string(&d1.transact()),
@@ -911,7 +912,7 @@ mod test {
             &mut d1.transact_mut(),
             3,
             4,
-            Attrs::from([("bold".into(), Any::Map(Box::new(HashMap::new())))]),
+            Attrs::from([("bold".into(), any!({}))]),
         );
         assert_eq!(
             xml1.get_string(&d1.transact()),

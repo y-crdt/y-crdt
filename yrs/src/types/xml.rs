@@ -1,4 +1,4 @@
-use crate::block::{Block, BlockPtr, Item, ItemContent, ItemPosition, Prelim};
+use crate::block::{Block, BlockPtr, EmbedPrelim, Item, ItemContent, ItemPosition, Prelim};
 use crate::block_iter::BlockIter;
 use crate::transaction::TransactionMut;
 use crate::types::text::{TextEvent, YChange};
@@ -7,7 +7,7 @@ use crate::types::{
     EntryChange, EventHandler, MapRef, Observers, Path, ToJson, TypePtr, Value,
     TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_TEXT,
 };
-use crate::{GetString, Map, Observable, ReadTxn, RelativeIndex, Text, ID};
+use crate::{ArrayRef, GetString, Map, Observable, ReadTxn, RelativeIndex, Text, TextRef, ID};
 use lib0::any::Any;
 use std::borrow::Borrow;
 use std::cell::UnsafeCell;
@@ -101,9 +101,9 @@ impl TryFrom<BranchPtr> for XmlNode {
 
 /// XML element data type. It represents an XML node, which can contain key-value attributes
 /// (interpreted as strings) as well as other nested XML elements or rich text (represented by
-/// [XmlText] type).
+/// [XmlTextRef] type).
 ///
-/// In terms of conflict resolution, [XmlElement] uses following rules:
+/// In terms of conflict resolution, [XmlElementRef] uses following rules:
 ///
 /// - Attribute updates use logical last-write-wins principle, meaning the past updates are
 ///   automatically overridden and discarded by newer ones, while concurrent updates made by
@@ -123,6 +123,18 @@ impl RelativeIndex for XmlElementRef {}
 impl Into<XmlFragmentRef> for XmlElementRef {
     fn into(self) -> XmlFragmentRef {
         XmlFragmentRef(self.0)
+    }
+}
+
+impl Into<ArrayRef> for XmlElementRef {
+    fn into(self) -> ArrayRef {
+        ArrayRef::from(self.0)
+    }
+}
+
+impl Into<MapRef> for XmlElementRef {
+    fn into(self) -> MapRef {
+        MapRef::from(self.0)
     }
 }
 
@@ -233,7 +245,7 @@ where
     }
 }
 
-impl XmlElementPrelim<Option<XmlTextPrelim<'static>>, XmlTextPrelim<'static>> {
+impl XmlElementPrelim<Option<XmlTextPrelim<String>>, XmlTextPrelim<String>> {
     pub fn empty<S: Into<Rc<str>>>(tag: S) -> Self {
         XmlElementPrelim(tag.into(), None)
     }
@@ -243,7 +255,6 @@ impl<I, T> XmlPrelim for XmlElementPrelim<I, T>
 where
     I: IntoIterator<Item = T>,
     T: XmlPrelim,
-    <T as Prelim>::Return: TryFrom<BlockPtr>,
 {
 }
 
@@ -251,7 +262,6 @@ impl<I, T> Prelim for XmlElementPrelim<I, T>
 where
     I: IntoIterator<Item = T>,
     T: XmlPrelim,
-    <T as Prelim>::Return: TryFrom<BlockPtr>,
 {
     type Return = XmlElementRef;
 
@@ -268,22 +278,85 @@ where
     }
 }
 
+impl<I, T: Prelim> Into<EmbedPrelim<XmlElementPrelim<I, T>>> for XmlElementPrelim<I, T>
+where
+    I: IntoIterator<Item = T>,
+    T: XmlPrelim,
+{
+    #[inline]
+    fn into(self) -> EmbedPrelim<XmlElementPrelim<I, T>> {
+        EmbedPrelim::Shared(self)
+    }
+}
+
 /// A shared data type used for collaborative text editing, that can be used in a context of
-/// [XmlElement] nodee. It enables multiple users to add and remove chunks of text in efficient
+/// [XmlElementRef] node. It enables multiple users to add and remove chunks of text in efficient
 /// manner. This type is internally represented as a mutable double-linked list of text chunks
 /// - an optimization occurs during [Transaction::commit], which allows to squash multiple
 /// consecutively inserted characters together as a single chunk of text even between transaction
 /// boundaries in order to preserve more efficient memory model.
 ///
-/// Just like [XmlElement], [XmlText] can be marked with extra metadata in form of attributes.
+/// Just like [XmlElementRef], [XmlTextRef] can be marked with extra metadata in form of attributes.
 ///
-/// [XmlText] structure internally uses UTF-8 encoding and its length is described in a number of
+/// [XmlTextRef] structure internally uses UTF-8 encoding and its length is described in a number of
 /// bytes rather than individual characters (a single UTF-8 code point can consist of many bytes).
 ///
-/// Like all Yrs shared data types, [XmlText] is resistant to the problem of interleaving (situation
+/// Like all Yrs shared data types, [XmlTextRef] is resistant to the problem of interleaving (situation
 /// when characters inserted one after another may interleave with other peers concurrent inserts
 /// after merging all updates together). In case of Yrs conflict resolution is solved by using
 /// unique document id to determine correct and consistent ordering.
+///
+/// [XmlTextRef] offers a rich text editing capabilities (it's not limited to simple text operations).
+/// Actions like embedding objects, binaries (eg. images) and formatting attributes are all possible
+/// using [XmlTextRef].
+///
+/// Keep in mind that [XmlTextRef::get_string] method returns a raw string, while rendering
+/// formatting attrbitues as XML tags in-text. However it doesn't include embedded elements.
+/// If there's a need to include them, use [XmlTextRef::diff] method instead.
+///
+/// Another note worth reminding is that human-readable numeric indexes are not good for maintaining
+/// cursor positions in rich text documents with real-time collaborative capabilities. In such cases
+/// any concurrent update incoming and applied from the remote peer may change the order of elements
+/// in current [XmlTextRef], invalidating numeric index. For such cases you can take advantage of fact
+/// that [XmlTextRef] implements [RelativeIndex::position_at] method that returns a
+/// [permanent index](RelativePosition) position that sticks to the same place even when concurrent
+/// updates are being made.
+///
+/// # Example
+///
+/// ```rust
+/// use lib0::any::Any;
+/// use yrs::{Array, ArrayPrelim, Doc, GetString, Text, Transact};
+/// use yrs::types::Attrs;
+///
+/// let doc = Doc::new();
+/// let text = doc.get_or_insert_xml_text("article");
+/// let mut txn = doc.transact_mut();
+///
+/// let bold = Attrs::from([("b".into(), true.into())]);
+/// let italic = Attrs::from([("i".into(), true.into())]);
+///
+/// text.insert(&mut txn, 0, "hello ");
+/// text.insert_with_attributes(&mut txn, 6, "world", italic);
+/// text.format(&mut txn, 0, 5, bold);
+///
+/// assert_eq!(text.get_string(&txn), "<b>hello</b> <i>world</i>");
+///
+/// // remove formatting
+/// let remove_italic = Attrs::from([("i".into(), Any::Null)]);
+/// text.format(&mut txn, 6, 5, remove_italic);
+///
+/// assert_eq!(text.get_string(&txn), "<b>hello</b> world");
+///
+/// // insert binary payload eg. images
+/// let image = b"deadbeaf".to_vec();
+/// text.insert_embed(&mut txn, 1, image);
+///
+/// // insert nested shared type eg. table as ArrayRef of ArrayRefs
+/// let table = text.insert_embed(&mut txn, 5, ArrayPrelim::default());
+/// let header = table.insert(&mut txn, 0, ArrayPrelim::from(["Book title", "Author"]));
+/// let row = table.insert(&mut txn, 1, ArrayPrelim::from(["\"Moby-Dick\"", "Herman Melville"]));
+/// ```
 #[repr(transparent)]
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct XmlTextRef(BranchPtr);
@@ -291,6 +364,12 @@ pub struct XmlTextRef(BranchPtr);
 impl Xml for XmlTextRef {}
 impl Text for XmlTextRef {}
 impl RelativeIndex for XmlTextRef {}
+
+impl Into<TextRef> for XmlTextRef {
+    fn into(self) -> TextRef {
+        TextRef::from(self.0)
+    }
+}
 
 impl Observable for XmlTextRef {
     type Event = XmlTextEvent;
@@ -383,11 +462,18 @@ impl TryFrom<BlockPtr> for XmlTextRef {
 /// A preliminary type that will be materialized into an [XmlTextRef] once it will be integrated
 /// into Yrs document.
 #[derive(Debug)]
-pub struct XmlTextPrelim<'a>(pub &'a str);
+pub struct XmlTextPrelim<T: Borrow<str>>(T);
 
-impl XmlPrelim for XmlTextPrelim<'_> {}
+impl<T: Borrow<str>> XmlTextPrelim<T> {
+    #[inline]
+    pub fn new(str: T) -> Self {
+        XmlTextPrelim(str)
+    }
+}
 
-impl Prelim for XmlTextPrelim<'_> {
+impl<T: Borrow<str>> XmlPrelim for XmlTextPrelim<T> {}
+
+impl<T: Borrow<str>> Prelim for XmlTextPrelim<T> {
     type Return = XmlTextRef;
 
     fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
@@ -396,10 +482,18 @@ impl Prelim for XmlTextPrelim<'_> {
     }
 
     fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
-        if !self.0.is_empty() {
+        let s = self.0.borrow();
+        if !s.is_empty() {
             let text = XmlTextRef::from(inner_ref);
-            text.push(txn, self.0);
+            text.push(txn, s);
         }
+    }
+}
+
+impl<T: Borrow<str>> Into<EmbedPrelim<XmlTextPrelim<T>>> for XmlTextPrelim<T> {
+    #[inline]
+    fn into(self) -> EmbedPrelim<XmlTextPrelim<T>> {
+        EmbedPrelim::Shared(self)
     }
 }
 
@@ -533,6 +627,17 @@ where
         for value in self.0 {
             xml.push_back(txn, value);
         }
+    }
+}
+
+impl<I, T: Prelim> Into<EmbedPrelim<XmlFragmentPrelim<I, T>>> for XmlFragmentPrelim<I, T>
+where
+    I: IntoIterator<Item = T>,
+    T: XmlPrelim,
+{
+    #[inline]
+    fn into(self) -> EmbedPrelim<XmlFragmentPrelim<I, T>> {
+        EmbedPrelim::Shared(self)
     }
 }
 
@@ -731,26 +836,27 @@ pub trait XmlFragment: AsRef<Branch> {
     /// let mut html = doc.get_or_insert_xml_fragment("div");
     /// let mut txn = doc.transact_mut();
     /// let p = html.push_back(&mut txn, XmlElementPrelim::empty("p"));
-    /// let txt = p.push_back(&mut txn, XmlTextPrelim("Hello "));
+    /// let txt = p.push_back(&mut txn, XmlTextPrelim::new("Hello "));
     /// let b = p.push_back(&mut txn, XmlElementPrelim::empty("b"));
-    /// let txt = b.push_back(&mut txn, XmlTextPrelim("world"));
-    /// let txt = html.push_back(&mut txn, XmlTextPrelim("again"));
+    /// let txt = b.push_back(&mut txn, XmlTextPrelim::new("world"));
+    /// let txt = html.push_back(&mut txn, XmlTextPrelim::new("again"));
     ///
+    /// let mut result = Vec::new();
     /// for node in html.successors(&txn) {
-    ///     match node {
-    ///         XmlNode::Element(elem) => println!("- {}", elem.tag()),
-    ///         XmlNode::Text(txt) => println!("- {}", txt.get_string(&txn)),
-    ///         _ => {}
-    ///     }
+    ///   let value = match node {
+    ///       XmlNode::Element(elem) => elem.tag().to_string(),
+    ///       XmlNode::Text(txt) => txt.get_string(&txn),
+    ///       _ => panic!("shouldn't be the case here")
+    ///   };
+    ///   result.push(value);
     /// }
-    /// /* will print:
-    ///    - UNDEFINED // (XML root element)
-    ///    - p
-    ///    - Hello
-    ///    - b
-    ///    - world
-    ///    - again
-    /// */
+    /// assert_eq!(result, vec![
+    ///   "p".to_string(),
+    ///   "Hello ".to_string(),
+    ///   "b".to_string(),
+    ///   "world".to_string(),
+    ///   "again".to_string()
+    /// ]);
     /// ```
     fn successors<'a, T: ReadTxn>(&'a self, txn: &'a T) -> TreeWalker<'a, &'a T, T> {
         TreeWalker::new(self.as_ref(), txn)
@@ -1121,8 +1227,8 @@ mod test {
             </UNDEFINED>
         */
         let p1 = root.push_back(&mut txn, XmlElementPrelim::empty("p"));
-        p1.push_back(&mut txn, XmlTextPrelim(""));
-        p1.push_back(&mut txn, XmlTextPrelim(""));
+        p1.push_back(&mut txn, XmlTextPrelim::new(""));
+        p1.push_back(&mut txn, XmlTextPrelim::new(""));
         let p2 = root.push_back(&mut txn, XmlElementPrelim::empty("p"));
         root.push_back(&mut txn, XmlElementPrelim::empty("img"));
 
@@ -1146,7 +1252,7 @@ mod test {
         let doc = Doc::with_client_id(1);
         let f = doc.get_or_insert_xml_fragment("test");
         let mut txn = doc.transact_mut();
-        let txt = f.push_back(&mut txn, XmlTextPrelim(""));
+        let txt = f.push_back(&mut txn, XmlTextPrelim::new(""));
         txt.insert_attribute(&mut txn, "test", 42.to_string());
 
         assert_eq!(txt.get_attribute(&txn, "test"), Some("42".to_string()));
@@ -1159,7 +1265,7 @@ mod test {
         let doc = Doc::with_client_id(1);
         let root = doc.get_or_insert_xml_fragment("root");
         let mut txn = doc.transact_mut();
-        let first = root.push_back(&mut txn, XmlTextPrelim("hello"));
+        let first = root.push_back(&mut txn, XmlTextPrelim::new("hello"));
         let second = root.push_back(&mut txn, XmlElementPrelim::empty("p"));
 
         assert_eq!(
@@ -1190,7 +1296,7 @@ mod test {
         let d1 = Doc::with_client_id(1);
         let r1 = d1.get_or_insert_xml_fragment("root");
         let mut t1 = d1.transact_mut();
-        let _first = r1.push_back(&mut t1, XmlTextPrelim("hello"));
+        let _first = r1.push_back(&mut t1, XmlTextPrelim::new("hello"));
         r1.push_back(&mut t1, XmlElementPrelim::empty("p"));
 
         let expected = "hello<p></p>";
@@ -1211,7 +1317,7 @@ mod test {
         let d1 = Doc::with_client_id(1);
         let r1 = d1.get_or_insert_xml_fragment("root");
         let mut t1 = d1.transact_mut();
-        let _first = r1.push_back(&mut t1, XmlTextPrelim("hello"));
+        let _first = r1.push_back(&mut t1, XmlTextPrelim::new("hello"));
         r1.push_back(&mut t1, XmlElementPrelim::empty("p"));
 
         /* This binary is result of following Yjs code (matching Rust code above):
@@ -1296,7 +1402,7 @@ mod test {
         // add xml elements
         let (nested_txt, nested_xml) = {
             let mut txn = d1.transact_mut();
-            let txt = xml.insert(&mut txn, 0, XmlTextPrelim(""));
+            let txt = xml.insert(&mut txn, 0, XmlTextPrelim::new(""));
             let xml2 = xml.insert(&mut txn, 1, XmlElementPrelim::empty("div"));
             (txt, xml2)
         };
@@ -1369,7 +1475,7 @@ mod test {
         let mut txn = doc.transact_mut();
         let div = f.push_back(&mut txn, XmlElementPrelim::empty("div"));
         div.insert_attribute(&mut txn, "class", "t-button");
-        let text = div.push_back(&mut txn, XmlTextPrelim("hello world"));
+        let text = div.push_back(&mut txn, XmlTextPrelim::new("hello world"));
         text.format(
             &mut txn,
             6,
@@ -1386,5 +1492,26 @@ mod test {
             str.as_str(),
             "<div class=\"t-button\">hello <a href=\"http://domain.org\">world</a></div>"
         )
+    }
+
+    #[test]
+    fn xml_to_string_2() {
+        let doc = Doc::new();
+        let xml = doc.get_or_insert_xml_text("article");
+        let mut txn = doc.transact_mut();
+
+        let bold = Attrs::from([("b".into(), true.into())]);
+        let italic = Attrs::from([("i".into(), true.into())]);
+
+        xml.insert(&mut txn, 0, "hello ");
+        xml.insert_with_attributes(&mut txn, 6, "world", italic);
+        xml.format(&mut txn, 0, 5, bold);
+
+        assert_eq!(xml.get_string(&txn), "<b>hello</b> <i>world</i>");
+
+        let remove_italic = Attrs::from([("i".into(), Any::Null)]);
+        xml.format(&mut txn, 6, 5, remove_italic);
+
+        assert_eq!(xml.get_string(&txn), "<b>hello</b> world");
     }
 }

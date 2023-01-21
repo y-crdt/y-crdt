@@ -3,11 +3,10 @@ use crate::transaction::Subdocs;
 use crate::{DeleteSet, Doc, StateVector, TransactionMut};
 use std::collections::HashMap;
 
-/// An update event passed to a callback registered in the event handler. Contains data about the
-/// state of an update.
+/// An update event passed to a callback subscribed with [Doc::observe_update_v1]/[Doc::observe_update_v2].
 pub struct UpdateEvent {
-    /// An update that's about to be applied. Update contains information about all inserted blocks,
-    /// which have been send from a remote peer.
+    /// A binary which contains information about all inserted and deleted changes performed within
+    /// the scope of its [TransactionMut].
     pub update: Vec<u8>,
 }
 
@@ -59,14 +58,20 @@ impl SubdocsEvent {
         }
     }
 
+    /// Returns an iterator over all sub-documents added to a current document within a scope of
+    /// committed transaction.
     pub fn added(&self) -> SubdocsEventIter {
         SubdocsEventIter(self.added.values())
     }
 
+    /// Returns an iterator over all sub-documents removed from a current document within a scope of
+    /// committed transaction.
     pub fn removed(&self) -> SubdocsEventIter {
         SubdocsEventIter(self.removed.values())
     }
 
+    /// Returns an iterator over all sub-documents living in a parent document, that have requested
+    /// to be loaded within a scope of committed transaction.
     pub fn loaded(&self) -> SubdocsEventIter {
         SubdocsEventIter(self.loaded.values())
     }

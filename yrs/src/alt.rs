@@ -1,3 +1,6 @@
+//! `alt` module contains a set of auxiliary functions that can be used for common operations
+//! over document [Update]s directly on their binary representation.
+
 use crate::update::Update;
 use crate::updates::decoder::{Decode, DecoderV2};
 use crate::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
@@ -5,6 +8,11 @@ use crate::StateVector;
 use lib0::decoding::Cursor;
 use lib0::error::Error;
 
+/// Merges a sequence of updates (encoded using lib0 v1 encoding) together, producing another
+/// update (also lib0 v1 encoded) in the result. Returned binary is a combination of all input
+/// `updates`, compressed.
+///
+/// Returns an error whenever any of the input updates couldn't be decoded.
 pub fn merge_updates_v1(updates: &[&[u8]]) -> Result<Vec<u8>, Error> {
     let mut merge = Vec::with_capacity(updates.len());
     for &buf in updates.iter() {
@@ -14,6 +22,11 @@ pub fn merge_updates_v1(updates: &[&[u8]]) -> Result<Vec<u8>, Error> {
     Ok(Update::merge_updates(merge).encode_v1())
 }
 
+/// Merges a sequence of updates (encoded using lib0 v2 encoding) together, producing another
+/// update (also lib0 v2 encoded) in the result. Returned binary is a combination of all input
+/// `updates`, compressed.
+///
+/// Returns an error whenever any of the input updates couldn't be decoded.
 pub fn merge_updates_v2(updates: &[&[u8]]) -> Result<Vec<u8>, Error> {
     let mut merge = Vec::with_capacity(updates.len());
     for &buf in updates.iter() {
@@ -23,19 +36,29 @@ pub fn merge_updates_v2(updates: &[&[u8]]) -> Result<Vec<u8>, Error> {
     Ok(Update::merge_updates(merge).encode_v2())
 }
 
-// Computes the state vector from a document update
+/// Decodes a input `update` (encoded using lib0 v1 encoding) and returns an encoded [StateVector]
+/// of that update.
+///
+/// Returns an error whenever any of the input update couldn't be decoded.
 pub fn encode_state_vector_from_update_v1(update: &[u8]) -> Result<Vec<u8>, Error> {
     let update = Update::decode_v1(update)?;
     Ok(update.state_vector().encode_v1())
 }
 
-// Computes the state vector from a document update
+/// Decodes a input `update` (encoded using lib0 v2 encoding) and returns an encoded [StateVector]
+/// of that update.
+///
+/// Returns an error whenever any of the input update couldn't be decoded.
 pub fn encode_state_vector_from_update_v2(update: &[u8]) -> Result<Vec<u8>, Error> {
     let update = Update::decode_v2(update)?;
     Ok(update.state_vector().encode_v2())
 }
 
-// Encode the missing differences to another document update.
+/// Givens an input `update` (encoded using lib0 v1 encoding) of document **A** and an encoded
+/// `state_vector` of document **B**, returns a lib0 v1 encoded update, that contains all changes
+/// from **A** which have not been observed by **B** (based on its state vector).
+///
+/// Returns an error whenever any of the input arguments couldn't be decoded.
 pub fn diff_updates_v1(update: &[u8], state_vector: &[u8]) -> Result<Vec<u8>, Error> {
     let sv = StateVector::decode_v1(state_vector)?;
     let update = Update::decode_v1(update)?;
@@ -46,7 +69,11 @@ pub fn diff_updates_v1(update: &[u8], state_vector: &[u8]) -> Result<Vec<u8>, Er
     Ok(result)
 }
 
-// Encode the missing differences to another document update.
+/// Givens an input `update` (encoded using lib0 v2 encoding) of document **A** and an encoded
+/// `state_vector` of document **B**, returns a lib0 v2 encoded update, that contains all changes
+/// from **A** which have not been observed by **B** (based on its state vector).
+///
+/// Returns an error whenever any of the input arguments couldn't be decoded.
 pub fn diff_updates_v2(update: &[u8], state_vector: &[u8]) -> Result<Vec<u8>, Error> {
     let sv = StateVector::decode_v2(state_vector)?;
     let cursor = Cursor::new(update);

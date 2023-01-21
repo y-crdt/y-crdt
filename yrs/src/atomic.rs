@@ -1,3 +1,6 @@
+//! `atomic` module is a home for [AtomicRef] cell-like struct, used to perform thread-safe
+//! operations using underlying hardware intristics.
+
 use std::fmt::Formatter;
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicPtr, Ordering};
