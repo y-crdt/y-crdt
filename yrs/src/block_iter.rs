@@ -1,5 +1,5 @@
 use crate::block::{Block, BlockPtr, Item, ItemContent, Prelim};
-use crate::moving::{Move, RelativePosition};
+use crate::moving::{Move, PermaIndex};
 use crate::transaction::{ReadTxn, TransactionMut};
 use crate::types::{BranchPtr, TypePtr, Value};
 use crate::{Assoc, ID};
@@ -496,12 +496,7 @@ impl BlockIter {
         block_ptr
     }
 
-    pub fn insert_move(
-        &mut self,
-        txn: &mut TransactionMut,
-        start: RelativePosition,
-        end: RelativePosition,
-    ) {
+    pub fn insert_move(&mut self, txn: &mut TransactionMut, start: PermaIndex, end: PermaIndex) {
         self.insert_contents(txn, Move::new(start, end, -1));
     }
 

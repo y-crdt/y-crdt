@@ -1,12 +1,12 @@
 use crate::block::{BlockPtr, EmbedPrelim, ItemContent, Prelim, Unused};
 use crate::block_iter::BlockIter;
-use crate::moving::RelativePosition;
+use crate::moving::PermaIndex;
 use crate::transaction::TransactionMut;
 use crate::types::{
     event_change_set, Branch, BranchPtr, Change, ChangeSet, EventHandler, Observers, Path, ToJson,
     Value, TYPE_REFS_ARRAY,
 };
-use crate::{Assoc, Observable, ReadTxn, RelativeIndex, ID};
+use crate::{Assoc, Indexable, Observable, ReadTxn, ID};
 use lib0::any::Any;
 use std::borrow::Borrow;
 use std::cell::UnsafeCell;
@@ -76,7 +76,7 @@ use std::sync::Arc;
 pub struct ArrayRef(BranchPtr);
 
 impl Array for ArrayRef {}
-impl RelativeIndex for ArrayRef {}
+impl Indexable for ArrayRef {}
 
 impl ToJson for ArrayRef {
     fn to_json<T: ReadTxn>(&self, txn: &T) -> Any {
@@ -244,7 +244,7 @@ pub trait Array: AsRef<Branch> {
             return;
         }
         let this = BranchPtr::from(self.as_ref());
-        let left = RelativePosition::from_type_index(txn, this, source, Assoc::After)
+        let left = PermaIndex::at(txn, this, source, Assoc::After)
             .expect("unbounded relative positions are not supported yet");
         let mut right = left.clone();
         right.assoc = Assoc::Before;
@@ -287,9 +287,9 @@ pub trait Array: AsRef<Branch> {
             return;
         }
         let this = BranchPtr::from(self.as_ref());
-        let left = RelativePosition::from_type_index(txn, this, start, assoc_start)
+        let left = PermaIndex::at(txn, this, start, assoc_start)
             .expect("unbounded relative positions are not supported yet");
-        let right = RelativePosition::from_type_index(txn, this, end + 1, assoc_end)
+        let right = PermaIndex::at(txn, this, end + 1, assoc_end)
             .expect("unbounded relative positions are not supported yet");
         let mut walker = BlockIter::new(this);
         if walker.try_forward(txn, target) {

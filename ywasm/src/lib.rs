@@ -26,13 +26,13 @@ use yrs::undo::{EventKind, UndoEventSubscription};
 use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use yrs::{
-    AbsolutePosition, Array, ArrayRef, Assoc, DeleteSet, DestroySubscription, Doc, GetString, Map,
-    MapRef, Observable, OffsetKind, Options, Origin, ReadTxn, RelativePosition,
-    RelativePositionContext, Snapshot, StateVector, Store, SubdocsEvent, SubdocsEventIter,
-    SubdocsSubscription, Subscription, Text, TextRef, Transact, Transaction,
-    TransactionCleanupEvent, TransactionCleanupSubscription, TransactionMut, UndoManager, Update,
-    UpdateSubscription, Xml, XmlElementPrelim, XmlElementRef, XmlFragment, XmlFragmentRef, XmlNode,
-    XmlTextPrelim, XmlTextRef, ID,
+    Array, ArrayRef, Assoc, DeleteSet, DestroySubscription, Doc, GetString, Map, MapRef,
+    Observable, Offset, OffsetKind, Options, Origin, PermaIndex, PermaIndexContext, ReadTxn,
+    Snapshot, StateVector, Store, SubdocsEvent, SubdocsEventIter, SubdocsSubscription,
+    Subscription, Text, TextRef, Transact, Transaction, TransactionCleanupEvent,
+    TransactionCleanupSubscription, TransactionMut, UndoManager, Update, UpdateSubscription, Xml,
+    XmlElementPrelim, XmlElementRef, XmlFragment, XmlFragmentRef, XmlNode, XmlTextPrelim,
+    XmlTextRef, ID,
 };
 
 // When the `wee_alloc` feature is enabled, use `wee_alloc` as the global
@@ -4024,10 +4024,10 @@ pub fn create_relative_position_from_type_index(
         };
         if let Some(branch) = shared.branch() {
             let pos = if let Some(txn) = get_txn_mut(txn) {
-                RelativePosition::from_type_index(txn, branch, index, assoc)
+                PermaIndex::at(txn, branch, index, assoc)
             } else {
                 let mut txn = branch.transact_mut();
-                RelativePosition::from_type_index(&mut txn, branch, index, assoc)
+                PermaIndex::at(&mut txn, branch, index, assoc)
             };
             let result = if let Some(pos) = pos {
                 Ok(pos.into_js())
@@ -4049,7 +4049,7 @@ pub fn create_absolute_position_from_relative_position(
 ) -> Result<JsValue, JsValue> {
     let pos = relative_position_from_js(rpos)?;
     let txn = doc.0.transact();
-    if let Some(abs) = pos.absolute(&txn) {
+    if let Some(abs) = pos.get_offset(&txn) {
         Ok(abs.into_js())
     } else {
         Ok(JsValue::NULL)
@@ -4074,30 +4074,30 @@ pub fn encode_relative_position(rpos: &JsValue) -> Result<Uint8Array, JsValue> {
 #[wasm_bindgen(catch, js_name=decodeRelativePosition)]
 pub fn decode_relative_position(bin: Uint8Array) -> Result<JsValue, JsValue> {
     let data: Vec<u8> = bin.to_vec();
-    match RelativePosition::decode_v1(&data) {
+    match PermaIndex::decode_v1(&data) {
         Ok(value) => Ok(value.into_js()),
         Err(err) => Err(JsValue::from_str(&err.to_string())),
     }
 }
 
-fn relative_position_from_js(js: &JsValue) -> Result<RelativePosition, JsValue> {
+fn relative_position_from_js(js: &JsValue) -> Result<PermaIndex, JsValue> {
     let value = Reflect::get(js, &JsValue::from_str("item"))?;
     let context = if value.is_undefined() || value.is_null() {
         let value = Reflect::get(js, &JsValue::from_str("tname"))?;
         if value.is_undefined() || value.is_null() {
             let value = Reflect::get(js, &JsValue::from_str("type"))?;
             let id = id_from_js(&value)?;
-            RelativePositionContext::Nested(id)
+            PermaIndexContext::Nested(id)
         } else {
             if let Some(tname) = value.as_string() {
-                RelativePositionContext::Root(tname.into())
+                PermaIndexContext::Root(tname.into())
             } else {
                 return Err(value);
             }
         }
     } else {
         let id = id_from_js(&value)?;
-        RelativePositionContext::Relative(id)
+        PermaIndexContext::Relative(id)
     };
     let assoc = Reflect::get(js, &JsValue::from_str("assoc"))?;
     let assoc = if let Some(a) = assoc.as_f64() {
@@ -4110,7 +4110,7 @@ fn relative_position_from_js(js: &JsValue) -> Result<RelativePosition, JsValue> 
         return Err(assoc);
     };
 
-    Ok(RelativePosition::new(context, assoc))
+    Ok(PermaIndex::new(context, assoc))
 }
 
 fn id_from_js(js: &JsValue) -> Result<ID, JsValue> {
@@ -4143,18 +4143,18 @@ impl IntoJs for ID {
     }
 }
 
-impl IntoJs for RelativePosition {
+impl IntoJs for PermaIndex {
     fn into_js(self) -> JsValue {
         let js: JsValue = js_sys::Object::new().into();
 
         match self.context() {
-            RelativePositionContext::Relative(id) => {
+            PermaIndexContext::Relative(id) => {
                 Reflect::set(&js, &JsValue::from_str("item"), &id.into_js()).unwrap();
             }
-            RelativePositionContext::Nested(id) => {
+            PermaIndexContext::Nested(id) => {
                 Reflect::set(&js, &JsValue::from_str("type"), &id.into_js()).unwrap();
             }
-            RelativePositionContext::Root(tname) => {
+            PermaIndexContext::Root(tname) => {
                 Reflect::set(&js, &JsValue::from_str("tname"), &JsValue::from_str(&tname)).unwrap();
             }
         }
@@ -4168,7 +4168,7 @@ impl IntoJs for RelativePosition {
     }
 }
 
-impl IntoJs for AbsolutePosition {
+impl IntoJs for Offset {
     fn into_js(self) -> JsValue {
         let js: JsValue = js_sys::Object::new().into();
         Reflect::set(&js, &JsValue::from_str("index"), &JsValue::from(self.index)).unwrap();

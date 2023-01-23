@@ -26,7 +26,7 @@ use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use yrs::{
     uuid_v4, Array, ArrayRef, Assoc, DeleteSet, GetString, Map, MapRef, Observable, OffsetKind,
-    Options, Origin, ReadTxn, RelativePosition, Snapshot, StateVector, Store, SubdocsEvent,
+    Options, Origin, PermaIndex, ReadTxn, Snapshot, StateVector, Store, SubdocsEvent,
     SubdocsEventIter, SubscriptionId, Text, TextRef, Transact, TransactionCleanupEvent,
     UndoManager, Update, Xml, XmlElementPrelim, XmlElementRef, XmlFragmentRef, XmlTextPrelim,
     XmlTextRef,
@@ -4815,11 +4815,11 @@ where
 ///
 /// Instances of `YRelativePosition` can be freed using `yrelative_position_destroy`.
 #[repr(transparent)]
-pub struct YRelativePosition(RelativePosition);
+pub struct YRelativePosition(PermaIndex);
 
-impl From<RelativePosition> for YRelativePosition {
+impl From<PermaIndex> for YRelativePosition {
     #[inline(always)]
-    fn from(value: RelativePosition) -> Self {
+    fn from(value: PermaIndex) -> Self {
         YRelativePosition(value)
     }
 }
@@ -4868,7 +4868,7 @@ pub unsafe extern "C" fn yrelative_position_from_index(
     };
 
     if let Some(txn) = txn.as_mut() {
-        if let Some(pos) = RelativePosition::from_type_index(txn, branch, index, assoc) {
+        if let Some(pos) = PermaIndex::at(txn, branch, index, assoc) {
             Box::into_raw(Box::new(YRelativePosition(pos)))
         } else {
             null_mut()
@@ -4898,7 +4898,7 @@ pub unsafe extern "C" fn yrelative_position_decode(
     len: c_int,
 ) -> *mut YRelativePosition {
     let slice = std::slice::from_raw_parts(binary as *const u8, len as usize);
-    if let Ok(pos) = RelativePosition::decode_v1(slice) {
+    if let Ok(pos) = PermaIndex::decode_v1(slice) {
         Box::into_raw(Box::new(YRelativePosition(pos)))
     } else {
         null_mut()
@@ -4920,7 +4920,7 @@ pub unsafe extern "C" fn yrelative_position_read(
     let pos = pos.as_ref().unwrap();
     let txn = txn.as_ref().unwrap();
 
-    if let Some(abs) = pos.0.absolute(txn) {
+    if let Some(abs) = pos.0.get_offset(txn) {
         *out_branch = abs.branch.as_ref() as *const Branch as *mut Branch;
         *out_index = abs.index as c_int;
     }

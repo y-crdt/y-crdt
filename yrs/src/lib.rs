@@ -177,11 +177,11 @@
 //! them may shift the cursor position. However in such case the old index that we used (`1` in the
 //! example above) is no longer valid.
 //!
-//! To address these issues, we can make use of [RelativePosition] struct to save the permanent
+//! To address these issues, we can make use of [PermaIndex] struct to save the permanent
 //! location, that will persist between concurrent updates being made:
 //!
 //! ```rust
-//! use yrs::{Assoc, Doc, GetString, ReadTxn, RelativeIndex, StateVector, Text, Transact, Update};
+//! use yrs::{Assoc, Doc, GetString, ReadTxn, Indexable, StateVector, Text, Transact, Update};
 //! use yrs::updates::decoder::Decode;
 //!
 //! let doc1 = Doc::with_client_id(1);
@@ -201,18 +201,18 @@
 //! assert_eq!(str.chars().nth(INDEX), Some('o'));
 //!
 //! // get a permanent index for cursor at index 1
-//! let pos = text2.position_at(&mut txn2, INDEX as u32, Assoc::After).unwrap();
+//! let pos = text2.perma_index(&mut txn2, INDEX as u32, Assoc::After).unwrap();
 //!
 //! // synchronize full state of doc1 -> doc2
 //! txn2.apply_update(Update::decode_v1(&txn1.encode_diff_v1(&StateVector::default())).unwrap());
 //!
 //! // restore the index from position saved previously
-//! let idx = pos.absolute(&txn2).unwrap();
+//! let idx = pos.get_offset(&txn2).unwrap();
 //! let str = text2.get_string(&txn2);
 //! assert_eq!(str.chars().nth(idx.index as usize), Some('o'));
 //! ```
 //!
-//! [RelativePosition] structure is serializable and can be persisted or passed over the network as
+//! [PermaIndex] structure is serializable and can be persisted or passed over the network as
 //! well, which may help with tracking and displaying the cursor location of other peers.
 //!
 //! # Other shared types
@@ -303,11 +303,11 @@ pub use crate::doc::{
 };
 pub use crate::event::{SubdocsEvent, SubdocsEventIter, TransactionCleanupEvent, UpdateEvent};
 pub use crate::id_set::DeleteSet;
-pub use crate::moving::AbsolutePosition;
 pub use crate::moving::Assoc;
-pub use crate::moving::RelativeIndex;
-pub use crate::moving::RelativePosition;
-pub use crate::moving::RelativePositionContext;
+pub use crate::moving::Indexable;
+pub use crate::moving::Offset;
+pub use crate::moving::PermaIndex;
+pub use crate::moving::PermaIndexContext;
 pub use crate::observer::{Observer, Subscription, SubscriptionId};
 pub use crate::store::Store;
 pub use crate::transaction::Origin;
