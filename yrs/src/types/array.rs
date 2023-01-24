@@ -1,12 +1,12 @@
 use crate::block::{BlockPtr, EmbedPrelim, ItemContent, Prelim, Unused};
 use crate::block_iter::BlockIter;
-use crate::moving::RelativePosition;
+use crate::moving::StickyIndex;
 use crate::transaction::TransactionMut;
 use crate::types::{
     event_change_set, Branch, BranchPtr, Change, ChangeSet, EventHandler, Observers, Path, ToJson,
     Value, TYPE_REFS_ARRAY,
 };
-use crate::{Assoc, Observable, ReadTxn, RelativeIndex, ID};
+use crate::{Assoc, IndexedSequence, Observable, ReadTxn, ID};
 use lib0::any::Any;
 use std::borrow::Borrow;
 use std::cell::UnsafeCell;
@@ -76,7 +76,7 @@ use std::sync::Arc;
 pub struct ArrayRef(BranchPtr);
 
 impl Array for ArrayRef {}
-impl RelativeIndex for ArrayRef {}
+impl IndexedSequence for ArrayRef {}
 
 impl ToJson for ArrayRef {
     fn to_json<T: ReadTxn>(&self, txn: &T) -> Any {
@@ -237,22 +237,31 @@ pub trait Array: AsRef<Branch> {
         }
     }
 
-    /// Moves element found at `source` index into `target` index position.
+    /// Moves element found at `source` index into `target` index position. Both indexes refer to a
+    /// current state of the document.
+    ///
+    /// # Panics
+    ///
+    /// This method panics if either `source` or `target` indexes are greater than current array's
+    /// length.
     fn move_to(&self, txn: &mut TransactionMut, source: u32, target: u32) {
         if source == target || source + 1 == target {
             // It doesn't make sense to move a range into the same range (it's basically a no-op).
             return;
         }
         let this = BranchPtr::from(self.as_ref());
-        let left = RelativePosition::from_type_index(txn, this, source, Assoc::After)
-            .expect("unbounded relative positions are not supported yet");
+        let left = StickyIndex::at(txn, this, source, Assoc::After)
+            .expect("`source` index parameter is beyond the range of an y-array");
         let mut right = left.clone();
         right.assoc = Assoc::Before;
         let mut walker = BlockIter::new(this);
         if walker.try_forward(txn, target) {
             walker.insert_move(txn, left, right);
         } else {
-            panic!("Index {} is outside of the range of an array", target);
+            panic!(
+                "`target` index parameter {} is outside of the range of an array",
+                target
+            );
         }
     }
 
@@ -273,6 +282,10 @@ pub trait Array: AsRef<Branch> {
     /// // move elements 2 and 3 after the 4
     /// array.move_range_to(&mut doc.transact_mut(), 1, Assoc::Before, 2, Assoc::After, 4);
     /// ```
+    /// # Panics
+    ///
+    /// This method panics if either `start`, `end` or `target` indexes are greater than current
+    /// array's length.
     fn move_range_to(
         &self,
         txn: &mut TransactionMut,
@@ -287,15 +300,18 @@ pub trait Array: AsRef<Branch> {
             return;
         }
         let this = BranchPtr::from(self.as_ref());
-        let left = RelativePosition::from_type_index(txn, this, start, assoc_start)
-            .expect("unbounded relative positions are not supported yet");
-        let right = RelativePosition::from_type_index(txn, this, end + 1, assoc_end)
-            .expect("unbounded relative positions are not supported yet");
+        let left = StickyIndex::at(txn, this, start, assoc_start)
+            .expect("`start` index parameter is beyond the range of an y-array");
+        let right = StickyIndex::at(txn, this, end + 1, assoc_end)
+            .expect("`end` index parameter is beyond the range of an y-array");
         let mut walker = BlockIter::new(this);
         if walker.try_forward(txn, target) {
             walker.insert_move(txn, left, right);
         } else {
-            panic!("Index {} is outside of the range of an array", target);
+            panic!(
+                "`target` index parameter {} is outside of the range of an array",
+                target
+            );
         }
     }
 
