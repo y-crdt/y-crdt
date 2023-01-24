@@ -7,7 +7,9 @@ use crate::types::{
     EntryChange, EventHandler, MapRef, Observers, Path, ToJson, TypePtr, Value,
     TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_TEXT,
 };
-use crate::{ArrayRef, GetString, IndexedSequence, Map, Observable, ReadTxn, Text, TextRef, ID};
+use crate::{
+    ArrayRef, GetString, IndexedSequence, Map, Observable, ReadTxn, StickyIndex, Text, TextRef, ID,
+};
 use lib0::any::Any;
 use std::borrow::Borrow;
 use std::cell::UnsafeCell;
@@ -319,7 +321,7 @@ where
 /// any concurrent update incoming and applied from the remote peer may change the order of elements
 /// in current [XmlTextRef], invalidating numeric index. For such cases you can take advantage of fact
 /// that [XmlTextRef] implements [IndexedSequence::perma_index] method that returns a
-/// [permanent index](RelativePosition) position that sticks to the same place even when concurrent
+/// [permanent index](StickyIndex) position that sticks to the same place even when concurrent
 /// updates are being made.
 ///
 /// # Example

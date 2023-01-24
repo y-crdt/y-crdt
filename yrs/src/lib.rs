@@ -177,7 +177,7 @@
 //! them may shift the cursor position. However in such case the old index that we used (`1` in the
 //! example above) is no longer valid.
 //!
-//! To address these issues, we can make use of [PermaIndex] struct to save the permanent
+//! To address these issues, we can make use of [StickyIndex] struct to save the permanent
 //! location, that will persist between concurrent updates being made:
 //!
 //! ```rust
@@ -212,7 +212,7 @@
 //! assert_eq!(str.chars().nth(idx.index as usize), Some('o'));
 //! ```
 //!
-//! [PermaIndex] structure is serializable and can be persisted or passed over the network as
+//! [StickyIndex] structure is serializable and can be persisted or passed over the network as
 //! well, which may help with tracking and displaying the cursor location of other peers.
 //!
 //! # Other shared types
@@ -304,10 +304,10 @@ pub use crate::doc::{
 pub use crate::event::{SubdocsEvent, SubdocsEventIter, TransactionCleanupEvent, UpdateEvent};
 pub use crate::id_set::DeleteSet;
 pub use crate::moving::Assoc;
+pub use crate::moving::IndexScope;
 pub use crate::moving::IndexedSequence;
 pub use crate::moving::Offset;
-pub use crate::moving::PermaIndex;
-pub use crate::moving::PermaIndexContext;
+pub use crate::moving::StickyIndex;
 pub use crate::observer::{Observer, Subscription, SubscriptionId};
 pub use crate::store::Store;
 pub use crate::transaction::Origin;

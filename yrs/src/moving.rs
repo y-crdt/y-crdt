@@ -12,8 +12,8 @@ use std::rc::Rc;
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Move {
-    pub start: PermaIndex,
-    pub end: PermaIndex,
+    pub start: StickyIndex,
+    pub end: StickyIndex,
     pub priority: i32,
 
     /// We store which Items+ContentMove we override. Once we delete
@@ -26,7 +26,7 @@ pub struct Move {
 }
 
 impl Move {
-    pub fn new(start: PermaIndex, end: PermaIndex, priority: i32) -> Self {
+    pub fn new(start: StickyIndex, end: StickyIndex, priority: i32) -> Self {
         Move {
             start,
             end,
@@ -36,8 +36,8 @@ impl Move {
     }
 
     pub fn is_collapsed(&self) -> bool {
-        match (&self.start.context, &self.end.context) {
-            (PermaIndexContext::Relative(id1), PermaIndexContext::Relative(id2)) => id1.eq(id2),
+        match (&self.start.scope, &self.end.scope) {
+            (IndexScope::Relative(id1), IndexScope::Relative(id2)) => id1.eq(id2),
             _ => false,
         }
     }
@@ -337,8 +337,8 @@ impl Decode for Move {
         } else {
             ID::new(decoder.read_var()?, decoder.read_var()?)
         };
-        let start = PermaIndex::new(PermaIndexContext::Relative(start_id), start_assoc);
-        let end = PermaIndex::new(PermaIndexContext::Relative(end_id), end_assoc);
+        let start = StickyIndex::new(IndexScope::Relative(start_id), start_assoc);
+        let end = StickyIndex::new(IndexScope::Relative(end_id), end_assoc);
         Ok(Move::new(start, end, priority))
     }
 }
@@ -380,9 +380,9 @@ impl std::fmt::Display for Move {
     }
 }
 
-/// A perma index is based on the Yjs model and is not affected by document changes.
-/// E.g. If you place a relative position before a certain character, it will always point to this character.
-/// If you place a relative position at the end of a type, it will always point to the end of the type.
+/// A sticky index is based on the Yjs model and is not affected by document changes.
+/// E.g. If you place a sticky index before a certain character, it will always point to this character.
+/// If you place a sticky index at the end of a type, it will always point to the end of the type.
 ///
 /// A numeric position is often unsuited for user selections, because it does not change when content is inserted
 /// before or after.
@@ -411,41 +411,41 @@ impl std::fmt::Display for Move {
 /// assert_eq!(a.index, 4);
 /// ```
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct PermaIndex {
-    context: PermaIndexContext,
+pub struct StickyIndex {
+    scope: IndexScope,
     /// If true - associate to the right block. Otherwise associate to the left one.
     pub assoc: Assoc,
 }
 
-impl PermaIndex {
+impl StickyIndex {
     #[inline]
-    pub fn new(context: PermaIndexContext, assoc: Assoc) -> Self {
-        PermaIndex { context, assoc }
+    pub fn new(scope: IndexScope, assoc: Assoc) -> Self {
+        StickyIndex { scope, assoc }
     }
 
     #[inline]
-    pub fn context(&self) -> &PermaIndexContext {
-        &self.context
+    pub fn scope(&self) -> &IndexScope {
+        &self.scope
     }
 
     /// Returns an [ID] of the block position which is used as a reference to keep track the location
-    /// of current [PermaIndex] even in face of changes performed by different peers.
+    /// of current [StickyIndex] even in face of changes performed by different peers.
     ///
-    /// Returns `None` if current [PermaIndex] has been created on an empty shared collection (in
+    /// Returns `None` if current [StickyIndex] has been created on an empty shared collection (in
     /// that case there's no block that we can refer to).
     pub fn id(&self) -> Option<&ID> {
-        if let PermaIndexContext::Relative(id) = &self.context {
+        if let IndexScope::Relative(id) = &self.scope {
             Some(id)
         } else {
             None
         }
     }
 
-    /// Maps current [PermaIndex] onto [Offset] which points to shared collection and a
+    /// Maps current [StickyIndex] onto [Offset] which points to shared collection and a
     /// human-readable index in that collection.
     ///
     /// That index is only valid at the current point in time - if i.e. another update from remote
-    /// peer has been applied, it may have changed relative index position that [PermaIndex] points
+    /// peer has been applied, it may have changed relative index position that [StickyIndex] points
     /// to, so that [Offset]'s index will no longer point to the same place.
     ///
     /// # Examples
@@ -476,8 +476,8 @@ impl PermaIndex {
         let mut branch = None;
         let mut index = 0;
 
-        match &self.context {
-            PermaIndexContext::Relative(right_id) => {
+        match &self.scope {
+            IndexScope::Relative(right_id) => {
                 let store = txn.store();
                 if store.blocks.get_state(&right_id.client) <= right_id.clock {
                     // type does not exist yet
@@ -511,7 +511,7 @@ impl PermaIndex {
                     }
                 }
             }
-            PermaIndexContext::Nested(id) => {
+            IndexScope::Nested(id) => {
                 let store = txn.store();
                 if store.blocks.get_state(&id.client) <= id.clock {
                     // type does not exist yet
@@ -523,7 +523,7 @@ impl PermaIndex {
                     branch = Some(BranchPtr::from(b));
                 } // else - branch remains null
             }
-            PermaIndexContext::Root(name) => {
+            IndexScope::Root(name) => {
                 branch = txn.store().get_type(name.clone());
                 if let Some(ptr) = branch.as_ref() {
                     index = if self.assoc == Assoc::After {
@@ -542,12 +542,12 @@ impl PermaIndex {
         }
     }
 
-    fn get_context<T: ReadTxn>(branch: BranchPtr, txn: &T) -> PermaIndexContext {
+    fn get_context<T: ReadTxn>(branch: BranchPtr, txn: &T) -> IndexScope {
         if let Some(ptr) = branch.item {
-            PermaIndexContext::Nested(*ptr.id())
+            IndexScope::Nested(*ptr.id())
         } else {
             let root = txn.store().get_type_key(branch).unwrap().clone();
-            PermaIndexContext::Root(root)
+            IndexScope::Root(root)
         }
     }
 
@@ -572,7 +572,7 @@ impl PermaIndex {
         if walker.finished() {
             if assoc == Assoc::Before {
                 let context = if let Some(ptr) = walker.next_item() {
-                    PermaIndexContext::Relative(ptr.last_id())
+                    IndexScope::Relative(ptr.last_id())
                 } else {
                     Self::get_context(branch, txn)
                 };
@@ -584,7 +584,7 @@ impl PermaIndex {
             let context = if let Some(ptr) = walker.next_item() {
                 let mut id = ptr.id().clone();
                 id.clock += walker.rel();
-                PermaIndexContext::Relative(id)
+                IndexScope::Relative(id)
             } else {
                 Self::get_context(branch, txn)
             };
@@ -608,22 +608,22 @@ impl PermaIndex {
     }
 }
 
-impl Encode for PermaIndex {
+impl Encode for StickyIndex {
     fn encode<E: Encoder>(&self, encoder: &mut E) {
-        self.context.encode(encoder);
+        self.scope.encode(encoder);
         self.assoc.encode(encoder);
     }
 }
 
-impl Decode for PermaIndex {
+impl Decode for StickyIndex {
     fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, Error> {
-        let context = PermaIndexContext::decode(decoder)?;
+        let context = IndexScope::decode(decoder)?;
         let assoc = Assoc::decode(decoder)?;
         Ok(Self::new(context, assoc))
     }
 }
 
-impl std::fmt::Display for PermaIndex {
+impl std::fmt::Display for StickyIndex {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if self.assoc == Assoc::Before {
             write!(f, "<")?;
@@ -638,19 +638,19 @@ impl std::fmt::Display for PermaIndex {
     }
 }
 
-/// Struct describing context in which [PermaIndex] is placed. For items pointing inside of
-/// the shared typed sequence it's always [PermaIndex::Relative] which refers to a block [ID]
+/// Struct describing context in which [StickyIndex] is placed. For items pointing inside of
+/// the shared typed sequence it's always [StickyIndex::Relative] which refers to a block [ID]
 /// found under corresponding position.
 ///
 /// In case when a containing collection is empty, there's a no block [ID] that can be used as point
 /// of reference. In that case we store either a parent collection root type name or its branch [ID]
 /// instead (if collection is nested into another).
 ///
-/// Using [ID]s guarantees that corresponding [PermaIndex] doesn't shift under incoming
+/// Using [ID]s guarantees that corresponding [StickyIndex] doesn't shift under incoming
 /// concurrent updates.
 #[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
-pub enum PermaIndexContext {
-    /// [PermaIndex] is relative to a given block [ID]. This happens whenever we set [PermaIndex]
+pub enum IndexScope {
+    /// [StickyIndex] is relative to a given block [ID]. This happens whenever we set [StickyIndex]
     /// somewhere inside of the non-empty shared collection.
     Relative(ID),
     /// If a containing collection is a nested y-type, which is empty, this case allows us to
@@ -661,20 +661,20 @@ pub enum PermaIndexContext {
     Root(Rc<str>),
 }
 
-impl Encode for PermaIndexContext {
+impl Encode for IndexScope {
     fn encode<E: Encoder>(&self, encoder: &mut E) {
         match self {
-            PermaIndexContext::Relative(id) => {
+            IndexScope::Relative(id) => {
                 encoder.write_var(0);
                 encoder.write_var(id.client);
                 encoder.write_var(id.clock);
             }
-            PermaIndexContext::Nested(id) => {
+            IndexScope::Nested(id) => {
                 encoder.write_var(2);
                 encoder.write_var(id.client);
                 encoder.write_var(id.clock);
             }
-            PermaIndexContext::Root(type_name) => {
+            IndexScope::Root(type_name) => {
                 encoder.write_var(1);
                 encoder.write_string(&type_name);
             }
@@ -682,40 +682,40 @@ impl Encode for PermaIndexContext {
     }
 }
 
-impl Decode for PermaIndexContext {
+impl Decode for IndexScope {
     fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, Error> {
         let tag: u8 = decoder.read_var()?;
         match tag {
             0 => {
                 let client = decoder.read_var()?;
                 let clock = decoder.read_var()?;
-                Ok(PermaIndexContext::Relative(ID::new(client, clock)))
+                Ok(IndexScope::Relative(ID::new(client, clock)))
             }
             1 => {
                 let type_name = decoder.read_string()?;
-                Ok(PermaIndexContext::Root(type_name.into()))
+                Ok(IndexScope::Root(type_name.into()))
             }
             2 => {
                 let client = decoder.read_var()?;
                 let clock = decoder.read_var()?;
-                Ok(PermaIndexContext::Nested(ID::new(client, clock)))
+                Ok(IndexScope::Nested(ID::new(client, clock)))
             }
             _ => Err(Error::UnexpectedValue),
         }
     }
 }
 
-/// Association type used by [PermaIndex]. In general [PermaIndex] refers to a cursor
-/// space between two elements (eg. "ab.c" where "abc" is our string and `.` is the [PermaIndex]
+/// Association type used by [StickyIndex]. In general [StickyIndex] refers to a cursor
+/// space between two elements (eg. "ab.c" where "abc" is our string and `.` is the [StickyIndex]
 /// placement). However in a situation when another peer is updating a collection concurrently,
 /// a new set of elements may be inserted into that space, expanding it in the result. In such case
-/// [Assoc] tells us if the [PermaIndex] should stick to location before or after referenced index.
+/// [Assoc] tells us if the [StickyIndex] should stick to location before or after referenced index.
 #[repr(i8)]
 #[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
 pub enum Assoc {
-    /// The corresponding [PermaIndex] points to space **after** the referenced [ID].
+    /// The corresponding [StickyIndex] points to space **after** the referenced [ID].
     After = 0,
-    /// The corresponding [PermaIndex] points to space **before** the referenced [ID].
+    /// The corresponding [StickyIndex] points to space **before** the referenced [ID].
     Before = -1,
 }
 
@@ -746,23 +746,23 @@ impl Decode for Assoc {
     }
 }
 
-/// Trait used to retrieve a [PermaIndex] corresponding to a given human-readable index.
-/// Unlike standard indexes [PermaIndex] enables to track the location inside of a shared
+/// Trait used to retrieve a [StickyIndex] corresponding to a given human-readable index.
+/// Unlike standard indexes [StickyIndex] enables to track the location inside of a shared
 /// y-types, even in the face of concurrent updates.
 pub trait IndexedSequence: AsRef<Branch> {
-    /// Returns a [PermaIndex] equivalent to a human-readable `index`.
+    /// Returns a [StickyIndex] equivalent to a human-readable `index`.
     /// Returns `None` if `index` is beyond the length of current sequence.
     fn perma_index(
         &self,
         txn: &mut TransactionMut,
         index: u32,
         assoc: Assoc,
-    ) -> Option<PermaIndex> {
-        PermaIndex::at(txn, BranchPtr::from(self.as_ref()), index, assoc)
+    ) -> Option<StickyIndex> {
+        StickyIndex::at(txn, BranchPtr::from(self.as_ref()), index, assoc)
     }
 }
 
-/// [Offset] is a result of mapping of [PermaIndex] onto document store at a current
+/// [Offset] is a result of mapping of [StickyIndex] onto document store at a current
 /// point in time.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct Offset {
@@ -770,7 +770,7 @@ pub struct Offset {
     pub branch: BranchPtr,
     /// Human readable index corresponding to this [Offset].
     pub index: u32,
-    /// Association type used by [PermaIndex] this structure was created from.
+    /// Association type used by [StickyIndex] this structure was created from.
     pub assoc: Assoc,
 }
 
@@ -789,9 +789,9 @@ mod test {
     use crate::moving::Assoc;
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::Encode;
-    use crate::{Doc, IndexedSequence, PermaIndex, Text, TextRef, Transact};
+    use crate::{Doc, IndexedSequence, StickyIndex, Text, TextRef, Transact};
 
-    fn check_relative_positions(text: &TextRef) {
+    fn check_sticky_indexes(text: &TextRef) {
         // test if all positions are encoded and restored correctly
         let mut txn = text.transact_mut();
         let len = text.len(&txn);
@@ -800,7 +800,7 @@ mod test {
             for assoc in [Assoc::After, Assoc::Before] {
                 let rel_pos = text.perma_index(&mut txn, i, assoc).unwrap();
                 let encoded = rel_pos.encode_v1();
-                let decoded = PermaIndex::decode_v1(&encoded).unwrap();
+                let decoded = StickyIndex::decode_v1(&encoded).unwrap();
                 let abs_pos = decoded
                     .get_offset(&txn)
                     .expect(&format!("offset not found for index {} of {}", i, decoded));
@@ -811,7 +811,7 @@ mod test {
     }
 
     #[test]
-    fn relative_position_case_1() {
+    fn sticky_index_case_1() {
         let doc = Doc::with_client_id(1);
         let txt = doc.get_or_insert_text("test");
 
@@ -824,20 +824,20 @@ mod test {
             txt.insert(&mut txn, 0, "x");
         }
 
-        check_relative_positions(&txt);
+        check_sticky_indexes(&txt);
     }
 
     #[test]
-    fn relative_position_case_2() {
+    fn sticky_index_case_2() {
         let doc = Doc::with_client_id(1);
         let txt = doc.get_or_insert_text("test");
 
         txt.insert(&mut doc.transact_mut(), 0, "abc");
-        check_relative_positions(&txt);
+        check_sticky_indexes(&txt);
     }
 
     #[test]
-    fn relative_position_case_3() {
+    fn sticky_index_case_3() {
         let doc = Doc::with_client_id(1);
         let txt = doc.get_or_insert_text("test");
 
@@ -848,20 +848,20 @@ mod test {
             txt.insert(&mut txn, 0, "xyz");
         }
 
-        check_relative_positions(&txt);
+        check_sticky_indexes(&txt);
     }
 
     #[test]
-    fn relative_position_case_4() {
+    fn sticky_index_case_4() {
         let doc = Doc::with_client_id(1);
         let txt = doc.get_or_insert_text("test");
 
         txt.insert(&mut doc.transact_mut(), 0, "1");
-        check_relative_positions(&txt);
+        check_sticky_indexes(&txt);
     }
 
     #[test]
-    fn relative_position_case_5() {
+    fn sticky_index_case_5() {
         let doc = Doc::with_client_id(1);
         let txt = doc.get_or_insert_text("test");
 
@@ -871,18 +871,18 @@ mod test {
             txt.insert(&mut txn, 0, "1");
         }
 
-        check_relative_positions(&txt);
+        check_sticky_indexes(&txt);
     }
 
     #[test]
-    fn relative_position_case_6() {
+    fn sticky_index_case_6() {
         let doc = Doc::with_client_id(1);
         let txt = doc.get_or_insert_text("test");
-        check_relative_positions(&txt);
+        check_sticky_indexes(&txt);
     }
 
     #[test]
-    fn relative_position_association_difference() {
+    fn sticky_index_association_difference() {
         let doc = Doc::with_client_id(1);
         let txt = doc.get_or_insert_text("test");
 

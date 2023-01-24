@@ -41,7 +41,7 @@ use std::ops::{Deref, DerefMut};
 /// any concurrent update incoming and applied from the remote peer may change the order of elements
 /// in current [TextRef], invalidating numeric index. For such cases you can take advantage of fact
 /// that [TextRef] implements [IndexedSequence::perma_index] method that returns a
-/// [permanent index](PermaIndex) position that sticks to the same place even when concurrent
+/// [permanent index](StickyIndex) position that sticks to the same place even when concurrent
 /// updates are being made.
 ///
 /// # Example

@@ -80,7 +80,7 @@ typedef struct YXmlTreeWalker {} YXmlTreeWalker;
 
 typedef struct YUndoManager {} YUndoManager;
 
-typedef struct RelativePosition {} RelativePosition;
+typedef struct StickyIndex {} StickyIndex;
 
 
 #include <stdarg.h>
@@ -868,18 +868,18 @@ typedef struct YUndoEvent {
 } YUndoEvent;
 
 /**
- * A relative position is based on the Yjs model and is not affected by document changes.
- * E.g. If you place a relative position before a certain character, it will always point to this character.
- * If you place a relative position at the end of a type, it will always point to the end of the type.
+ * A sticky index is based on the Yjs model and is not affected by document changes.
+ * E.g. If you place a sticky index before a certain character, it will always point to this character.
+ * If you place a sticky index at the end of a type, it will always point to the end of the type.
  *
  * A numeric position is often unsuited for user selections, because it does not change when content is inserted
  * before or after.
  *
- * ```Insert(0, 'x')('a.bc') = 'xa|bc'``` Where `.` is the relative position.
+ * ```Insert(0, 'x')('a.bc') = 'xa.bc'``` Where `.` is the sticky index position.
  *
- * Instances of `YRelativePosition` can be freed using `yperma_index_destroy`.
+ * Instances of `YStickyIndex` can be freed using `ysticky_index_destroy`.
  */
-typedef PermaIndex YPermaIndex;
+typedef StickyIndex YStickyIndex;
 
 /**
  * Returns default ceonfiguration for `YOptions`.
@@ -2280,52 +2280,51 @@ void yundo_manager_unobserve_popped(YUndoManager *mgr, unsigned int subscription
 char ytype_kind(const Branch *branch);
 
 /**
- * Releases resources allocated by `YRelativePosition` pointers.
+ * Releases resources allocated by `YStickyIndex` pointers.
  */
-void yperma_index_destroy(YPermaIndex *pos);
+void ysticky_index_destroy(YStickyIndex *pos);
 
 /**
- * Returns association of current `YRelativePosition`.
+ * Returns association of current `YStickyIndex`.
  * If association is **after** the referenced inserted character, returned number will be >= 0.
  * If association is **before** the referenced inserted character, returned number will be < 0.
  */
-int yperma_index_assoc(const YPermaIndex *pos);
+int ysticky_index_assoc(const YStickyIndex *pos);
 
 /**
- * Retrieves a `YRelativePosition` corresponding to a given human-readable `index` pointing into
- * the shared y-type `branch`. Unlike standard indexes relative position enables to track
+ * Retrieves a `YStickyIndex` corresponding to a given human-readable `index` pointing into
+ * the shared y-type `branch`. Unlike standard indexes sticky one enables to track
  * the location inside of a shared y-types, even in the face of concurrent updates.
  *
  * If association is >= 0, the resulting position will point to location **after** the referenced index.
  * If association is < 0, the resulting position will point to location **before** the referenced index.
  */
-YPermaIndex *yperma_index_from_index(const Branch *branch,
-                                     YTransaction *txn,
-                                     int index,
-                                     int assoc);
+YStickyIndex *ysticky_index_from_index(const Branch *branch,
+                                       YTransaction *txn,
+                                       int index,
+                                       int assoc);
 
 /**
- * Serializes `YRelativePosition` into binary representation. `len` parameter is updated with byte
+ * Serializes `YStickyIndex` into binary representation. `len` parameter is updated with byte
  * length of the generated binary. Returned binary can be free'd using `ybinary_destroy`.
  */
-unsigned char *yperma_index_encode(const YPermaIndex *pos, int *len);
+unsigned char *ysticky_index_encode(const YStickyIndex *pos, int *len);
 
 /**
- * Deserializes `YRelativePosition` from the payload previously serialized using `yperma_index_encode`.
+ * Deserializes `YStickyIndex` from the payload previously serialized using `ysticky_index_encode`.
  */
-YPermaIndex *yperma_index_decode(const unsigned char *binary,
-                                 int len);
+YStickyIndex *ysticky_index_decode(const unsigned char *binary, int len);
 
 /**
- * Given `YRelativePosition` and transaction reference, if computes a human-readable index in a
+ * Given `YStickyIndex` and transaction reference, if computes a human-readable index in a
  * context of the referenced shared y-type.
  *
  * `out_branch` is getting assigned with a corresponding shared y-type reference.
  * `out_index` will be used to store computed human-readable index.
  */
-void yperma_index_read(const YPermaIndex *pos,
-                       const YTransaction *txn,
-                       Branch **out_branch,
-                       int *out_index);
+void ysticky_index_read(const YStickyIndex *pos,
+                        const YTransaction *txn,
+                        Branch **out_branch,
+                        int *out_index);
 
 #endif
