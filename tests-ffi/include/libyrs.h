@@ -292,7 +292,7 @@ typedef struct YOptions {
    * document state from snapshot, that didn't contain all of that clients updates that were sent
    * to other peers.
    */
-  unsigned long id;
+  uint64_t id;
   /**
    * A NULL-able globally unique Uuid v4 compatible null-terminated string identifier
    * of this document. If passed as NULL, a random Uuid will be generated instead.
@@ -311,21 +311,21 @@ typedef struct YOptions {
    * - `Y_ENCODING_UTF16`
    * - `Y_ENCODING_UTF32`
    */
-  int encoding;
+  uint8_t encoding;
   /**
    * Boolean flag used to determine if deleted blocks should be garbage collected or not
    * during the transaction commits. Setting this value to 0 means GC will be performed.
    */
-  int skip_gc;
+  uint8_t skip_gc;
   /**
    * Boolean flag used to determine if subdocument should be loaded automatically.
    * If this is a subdocument, remote peers will load the document as well automatically.
    */
-  int auto_load;
+  uint8_t auto_load;
   /**
    * Boolean flag used to determine whether the document should be synced by the provider now.
    */
-  int should_load;
+  uint8_t should_load;
 } YOptions;
 
 /**
@@ -351,11 +351,11 @@ typedef YDoc YDoc;
 typedef Branch Branch;
 
 typedef union YOutputContent {
-  char flag;
-  float num;
-  long long integer;
+  uint8_t flag;
+  double num;
+  int64_t integer;
   char *str;
-  unsigned char *buf;
+  char *buf;
   struct YOutput *array;
   struct YMapEntry *map;
   Branch *y_type;
@@ -399,7 +399,7 @@ typedef struct YOutput {
    *
    * For other types it's always equal to `1`.
    */
-  int len;
+  uint32_t len;
   /**
    * Union struct which contains a content corresponding to a provided `tag` field.
    */
@@ -439,24 +439,24 @@ typedef struct YStateVector {
   /**
    * Number of clients. It describes a length of both `client_ids` and `clocks` arrays.
    */
-  int entries_count;
+  uint32_t entries_count;
   /**
    * Array of unique client identifiers (length is given in `entries_count` field). Each client
    * ID has corresponding clock attached, which can be found in `clocks` field under the same
    * index.
    */
-  long long *client_ids;
+  uint64_t *client_ids;
   /**
    * Array of clocks (length is given in `entries_count` field) known for each client. Each clock
    * has a corresponding client identifier attached, which can be found in `client_ids` field
    * under the same index.
    */
-  int *clocks;
+  uint32_t *clocks;
 } YStateVector;
 
 typedef struct YIdRange {
-  int start;
-  int end;
+  uint32_t start;
+  uint32_t end;
 } YIdRange;
 
 /**
@@ -467,7 +467,7 @@ typedef struct YIdRangeSeq {
   /**
    * Number of ranges stored in this sequence.
    */
-  int len;
+  uint32_t len;
   /**
    * Array (length is stored in `len` field) or ranges. Each range is a pair of [start, end)
    * values, describing continuous collection of items produced by the same client, identified
@@ -485,13 +485,13 @@ typedef struct YDeleteSet {
   /**
    * Number of client identifier entries.
    */
-  int entries_count;
+  uint32_t entries_count;
   /**
    * Array of unique client identifiers (length is given in `entries_count` field). Each client
    * ID has corresponding sequence of ranges attached, which can be found in `ranges` field under
    * the same index.
    */
-  long long *client_ids;
+  uint64_t *client_ids;
   /**
    * Array of range sequences (length is given in `entries_count` field). Each sequence has
    * a corresponding client ID attached, which can be found in `client_ids` field under
@@ -520,9 +520,9 @@ typedef struct YAfterTransactionEvent {
 } YAfterTransactionEvent;
 
 typedef struct YSubdocsEvent {
-  int added_len;
-  int removed_len;
-  int loaded_len;
+  uint32_t added_len;
+  uint32_t removed_len;
+  uint32_t loaded_len;
   YDoc **added;
   YDoc **removed;
   YDoc **loaded;
@@ -541,11 +541,11 @@ typedef struct YMapInputData {
 } YMapInputData;
 
 typedef union YInputContent {
-  char flag;
-  float num;
-  long integer;
+  uint8_t flag;
+  double num;
+  int64_t integer;
   char *str;
-  unsigned char *buf;
+  char *buf;
   struct YInput *values;
   struct YMapInputData map;
   YDoc *doc;
@@ -587,7 +587,7 @@ typedef struct YInput {
    *
    * For other types it's always equal to `1`.
    */
-  int len;
+  uint32_t len;
   /**
    * Union struct which contains a content corresponding to a provided `tag` field.
    */
@@ -674,7 +674,7 @@ typedef struct YEvent {
 
 typedef union YPathSegmentCase {
   const char *key;
-  int index;
+  uint32_t index;
 } YPathSegmentCase;
 
 /**
@@ -755,7 +755,7 @@ typedef struct YDelta {
    * Number of element affected by current type of a change. It can refer to a number of
    * inserted `values`, number of deleted element or a number of retained (unchanged) values.
    */
-  int len;
+  uint32_t len;
   /**
    * Used in case when current change is of `Y_EVENT_CHANGE_ADD` type. Contains a list (of
    * length stored in `len` field) of newly inserted values.
@@ -764,7 +764,7 @@ typedef struct YDelta {
   /**
    * A number of formatting attributes assigned to an edited area represented by this delta.
    */
-  int attributes_len;
+  uint32_t attributes_len;
   /**
    * A nullable pointer to a list of formatting attributes assigned to an edited area represented
    * by this delta.
@@ -806,7 +806,7 @@ typedef struct YEventChange {
    * Number of element affected by current type of a change. It can refer to a number of
    * inserted `values`, number of deleted element or a number of retained (unchanged) values.
    */
-  int len;
+  uint32_t len;
   /**
    * Used in case when current change is of `Y_EVENT_CHANGE_ADD` type. Contains a list (of
    * length stored in `len` field) of newly inserted values.
@@ -856,13 +856,13 @@ typedef struct YEventKeyChange {
 } YEventKeyChange;
 
 typedef struct YUndoManagerOptions {
-  int capture_timeout_millis;
+  uint32_t capture_timeout_millis;
 } YUndoManagerOptions;
 
 typedef struct YUndoEvent {
   char kind;
   const char *origin;
-  int origin_len;
+  uint32_t origin_len;
   struct YDeleteSet insertions;
   struct YDeleteSet deletions;
 } YUndoEvent;
@@ -913,7 +913,7 @@ void ystring_destroy(char *str);
  * therefore a size of memory to be released must be explicitly provided.
  * Yrs binaries don't use libc malloc, so calling `free()` on them will fault.
  */
-void ybinary_destroy(unsigned char *ptr, int len);
+void ybinary_destroy(char *ptr, uint32_t len);
 
 /**
  * Creates a new [Doc] instance with a randomized unique client identifier.
@@ -941,7 +941,7 @@ YDoc *ydoc_new_with_options(struct YOptions options);
 /**
  * Returns a unique client identifier of this [Doc] instance.
  */
-unsigned long ydoc_id(YDoc *doc);
+uint64_t ydoc_id(YDoc *doc);
 
 /**
  * Returns a unique document identifier of this [Doc] instance.
@@ -966,31 +966,27 @@ uint8_t ydoc_should_load(YDoc *doc);
  */
 uint8_t ydoc_auto_load(YDoc *doc);
 
-unsigned int ydoc_observe_updates_v1(YDoc *doc,
-                                     void *state,
-                                     void (*cb)(void*, int, const unsigned char*));
+uint32_t ydoc_observe_updates_v1(YDoc *doc, void *state, void (*cb)(void*, uint32_t, const char*));
 
-unsigned int ydoc_observe_updates_v2(YDoc *doc,
-                                     void *state,
-                                     void (*cb)(void*, int, const unsigned char*));
+uint32_t ydoc_observe_updates_v2(YDoc *doc, void *state, void (*cb)(void*, uint32_t, const char*));
 
-void ydoc_unobserve_updates_v1(YDoc *doc, unsigned int subscription_id);
+void ydoc_unobserve_updates_v1(YDoc *doc, uint32_t subscription_id);
 
-void ydoc_unobserve_updates_v2(YDoc *doc, unsigned int subscription_id);
+void ydoc_unobserve_updates_v2(YDoc *doc, uint32_t subscription_id);
 
-unsigned int ydoc_observe_after_transaction(YDoc *doc,
-                                            void *state,
-                                            void (*cb)(void*, struct YAfterTransactionEvent*));
+uint32_t ydoc_observe_after_transaction(YDoc *doc,
+                                        void *state,
+                                        void (*cb)(void*, struct YAfterTransactionEvent*));
 
-void ydoc_unobserve_after_transaction(YDoc *doc, unsigned int subscription_id);
+void ydoc_unobserve_after_transaction(YDoc *doc, uint32_t subscription_id);
 
-unsigned int ydoc_observe_subdocs(YDoc *doc, void *state, void (*cb)(void*, struct YSubdocsEvent*));
+uint32_t ydoc_observe_subdocs(YDoc *doc, void *state, void (*cb)(void*, struct YSubdocsEvent*));
 
-void ydoc_unobserve_subdocs(YDoc *doc, unsigned int subscription_id);
+void ydoc_unobserve_subdocs(YDoc *doc, uint32_t subscription_id);
 
-unsigned int ydoc_observe_clear(YDoc *doc, void *state, void (*cb)(void*, YDoc*));
+uint32_t ydoc_observe_clear(YDoc *doc, void *state, void (*cb)(void*, YDoc*));
 
-void ydoc_unobserve_clear(YDoc *doc, unsigned int subscription_id);
+void ydoc_unobserve_clear(YDoc *doc, uint32_t subscription_id);
 
 /**
  * Manually send a load request to a parent document of this subdoc.
@@ -1026,7 +1022,7 @@ YTransaction *ydoc_read_transaction(YDoc *doc);
  * Returns `NULL` if read-write transaction couldn't be created, i.e. when another transaction is
  * already opened.
  */
-YTransaction *ydoc_write_transaction(YDoc *doc, int origin_len, const char *origin);
+YTransaction *ydoc_write_transaction(YDoc *doc, uint32_t origin_len, const char *origin);
 
 /**
  * Starts a new read-write transaction on a given branches document. All other operations happen in
@@ -1051,7 +1047,7 @@ YTransaction *ybranch_read_transaction(Branch *branch);
 /**
  * Returns a list of subdocs existing within current document.
  */
-YDoc **ytransaction_subdocs(YTransaction *txn, int *len);
+YDoc **ytransaction_subdocs(YTransaction *txn, uint32_t *len);
 
 /**
  * Commit and dispose provided read-write transaction. This operation releases allocated resources,
@@ -1136,7 +1132,7 @@ Branch *yxmltext(YDoc *doc, const char *name);
  *
  * Once no longer needed, a returned binary can be disposed using [ybinary_destroy] function.
  */
-unsigned char *ytransaction_state_vector_v1(const YTransaction *txn, int *len);
+char *ytransaction_state_vector_v1(const YTransaction *txn, uint32_t *len);
 
 /**
  * Returns a delta difference between current state of a transaction's document and a state vector
@@ -1154,10 +1150,10 @@ unsigned char *ytransaction_state_vector_v1(const YTransaction *txn, int *len);
  *
  * Once no longer needed, a returned binary can be disposed using [ybinary_destroy] function.
  */
-unsigned char *ytransaction_state_diff_v1(const YTransaction *txn,
-                                          const unsigned char *sv,
-                                          int sv_len,
-                                          int *len);
+char *ytransaction_state_diff_v1(const YTransaction *txn,
+                                 const char *sv,
+                                 uint32_t sv_len,
+                                 uint32_t *len);
 
 /**
  * Returns a delta difference between current state of a transaction's document and a state vector
@@ -1175,17 +1171,17 @@ unsigned char *ytransaction_state_diff_v1(const YTransaction *txn,
  *
  * Once no longer needed, a returned binary can be disposed using [ybinary_destroy] function.
  */
-unsigned char *ytransaction_state_diff_v2(const YTransaction *txn,
-                                          const unsigned char *sv,
-                                          int sv_len,
-                                          int *len);
+char *ytransaction_state_diff_v2(const YTransaction *txn,
+                                 const char *sv,
+                                 uint32_t sv_len,
+                                 uint32_t *len);
 
 /**
  * Returns a snapshot descriptor of a current state of the document. This snapshot information
  * can be then used to encode document data at a particular point in time
  * (see: `ytransaction_encode_state_from_snapshot`).
  */
-unsigned char *ytransaction_snapshot(const YTransaction *txn, int *len);
+char *ytransaction_snapshot(const YTransaction *txn, uint32_t *len);
 
 /**
  * Encodes a state of the document at a point in time specified by the provided `snapshot`
@@ -1197,10 +1193,10 @@ unsigned char *ytransaction_snapshot(const YTransaction *txn, int *len);
  * This function requires document with a GC option flag turned off (otherwise "time travel" would
  * not be a safe operation). If this is not a case, the NULL pointer will be returned.
  */
-unsigned char *ytransaction_encode_state_from_snapshot_v1(const YTransaction *txn,
-                                                          const unsigned char *snapshot,
-                                                          int snapshot_len,
-                                                          int *len);
+char *ytransaction_encode_state_from_snapshot_v1(const YTransaction *txn,
+                                                 const char *snapshot,
+                                                 uint32_t snapshot_len,
+                                                 uint32_t *len);
 
 /**
  * Encodes a state of the document at a point in time specified by the provided `snapshot`
@@ -1212,24 +1208,24 @@ unsigned char *ytransaction_encode_state_from_snapshot_v1(const YTransaction *tx
  * This function requires document with a GC option flag turned off (otherwise "time travel" would
  * not be a safe operation). If this is not a case, the NULL pointer will be returned.
  */
-unsigned char *ytransaction_encode_state_from_snapshot_v2(const YTransaction *txn,
-                                                          const unsigned char *snapshot,
-                                                          int snapshot_len,
-                                                          int *len);
+char *ytransaction_encode_state_from_snapshot_v2(const YTransaction *txn,
+                                                 const char *snapshot,
+                                                 uint32_t snapshot_len,
+                                                 uint32_t *len);
 
 /**
  * Returns a null-terminated UTF-8 encoded string representation of an `update` binary payload,
  * encoded using lib0 v1 encoding.
  * Returns null if update couldn't be parsed into a lib0 v1 formatting.
  */
-char *yupdate_debug_v1(const unsigned char *update, int update_len);
+char *yupdate_debug_v1(const char *update, uint32_t update_len);
 
 /**
  * Returns a null-terminated UTF-8 encoded string representation of an `update` binary payload,
  * encoded using lib0 v2 encoding.
  * Returns null if update couldn't be parsed into a lib0 v2 formatting.
  */
-char *yupdate_debug_v2(const unsigned char *update, int update_len);
+char *yupdate_debug_v2(const char *update, uint32_t update_len);
 
 /**
  * Applies an diff update (generated by `ytransaction_state_diff_v1`) to a local transaction's
@@ -1246,9 +1242,9 @@ char *yupdate_debug_v2(const unsigned char *update, int update_len);
  * - `ERR_CODE_INVALID_JSON` (**5**): failure when trying to decode JSON content.
  * - `ERR_CODE_OTHER` (**6**): other error type than the one specified.
  */
-int ytransaction_apply(YTransaction *txn,
-                       const unsigned char *diff,
-                       int diff_len);
+uint8_t ytransaction_apply(YTransaction *txn,
+                           const char *diff,
+                           uint32_t diff_len);
 
 /**
  * Applies an diff update (generated by [ytransaction_state_diff_v2]) to a local transaction's
@@ -1265,14 +1261,14 @@ int ytransaction_apply(YTransaction *txn,
  * - `ERR_CODE_INVALID_JSON` (**5**): failure when trying to decode JSON content.
  * - `ERR_CODE_OTHER` (**6**): other error type than the one specified.
  */
-int ytransaction_apply_v2(YTransaction *txn,
-                          const unsigned char *diff,
-                          int diff_len);
+uint8_t ytransaction_apply_v2(YTransaction *txn,
+                              const char *diff,
+                              uint32_t diff_len);
 
 /**
  * Returns the length of the `YText` string content in bytes (without the null terminator character)
  */
-int ytext_len(const Branch *txt, const YTransaction *txn);
+uint32_t ytext_len(const Branch *txt, const YTransaction *txn);
 
 /**
  * Returns a null-terminated UTF-8 encoded string content of a current `YText` shared data type.
@@ -1295,7 +1291,7 @@ char *ytext_string(const Branch *txt, const YTransaction *txn);
  */
 void ytext_insert(const Branch *txt,
                   YTransaction *txn,
-                  int index,
+                  uint32_t index,
                   const char *value,
                   const struct YInput *attrs);
 
@@ -1305,8 +1301,8 @@ void ytext_insert(const Branch *txt,
  */
 void ytext_format(const Branch *txt,
                   YTransaction *txn,
-                  int index,
-                  int len,
+                  uint32_t index,
+                  uint32_t len,
                   const struct YInput *attrs);
 
 /**
@@ -1323,7 +1319,7 @@ void ytext_format(const Branch *txt,
  */
 void ytext_insert_embed(const Branch *txt,
                         YTransaction *txn,
-                        int index,
+                        uint32_t index,
                         const struct YInput *content,
                         const struct YInput *attrs);
 
@@ -1337,12 +1333,12 @@ void ytext_insert_embed(const Branch *txt,
  * A `length` must be lower or equal number of characters (counted as UTF chars depending on the
  * encoding configured by `YDoc`) from `index` position to the end of of the string.
  */
-void ytext_remove_range(const Branch *txt, YTransaction *txn, int index, int length);
+void ytext_remove_range(const Branch *txt, YTransaction *txn, uint32_t index, uint32_t length);
 
 /**
  * Returns a number of elements stored within current instance of `YArray`.
  */
-int yarray_len(const Branch *array);
+uint32_t yarray_len(const Branch *array);
 
 /**
  * Returns a pointer to a `YOutput` value stored at a given `index` of a current `YArray`.
@@ -1350,7 +1346,7 @@ int yarray_len(const Branch *array);
  *
  * A value returned should be eventually released using [youtput_destroy] function.
  */
-struct YOutput *yarray_get(const Branch *array, const YTransaction *txn, int index);
+struct YOutput *yarray_get(const Branch *array, const YTransaction *txn, uint32_t index);
 
 /**
  * Inserts a range of `items` into current `YArray`, starting at given `index`. An `items_len`
@@ -1366,18 +1362,18 @@ struct YOutput *yarray_get(const Branch *array, const YTransaction *txn, int ind
  */
 void yarray_insert_range(const Branch *array,
                          YTransaction *txn,
-                         int index,
+                         uint32_t index,
                          const struct YInput *items,
-                         int items_len);
+                         uint32_t items_len);
 
 /**
  * Removes a `len` of consecutive range of elements from current `array` instance, starting at
  * a given `index`. Range determined by `index` and `len` must fit into boundaries of an array,
  * otherwise it will panic at runtime.
  */
-void yarray_remove_range(const Branch *array, YTransaction *txn, int index, int len);
+void yarray_remove_range(const Branch *array, YTransaction *txn, uint32_t index, uint32_t len);
 
-void yarray_move(const Branch *array, YTransaction *txn, int source, int target);
+void yarray_move(const Branch *array, YTransaction *txn, uint32_t source, uint32_t target);
 
 /**
  * Returns an iterator, which can be used to traverse over all elements of an `array` (`array`'s
@@ -1426,7 +1422,7 @@ struct YMapEntry *ymap_iter_next(YMapIter *iter);
 /**
  * Returns a number of entries stored within a `map`.
  */
-int ymap_len(const Branch *map, const YTransaction *txn);
+uint32_t ymap_len(const Branch *map, const YTransaction *txn);
 
 /**
  * Inserts a new entry (specified as `key`-`value` pair) into a current `map`. If entry under such
@@ -1446,7 +1442,7 @@ void ymap_insert(const Branch *map, YTransaction *txn, const char *key, const st
  *
  * A `key` must be a null-terminated UTF-8 encoded string.
  */
-char ymap_remove(const Branch *map, YTransaction *txn, const char *key);
+uint8_t ymap_remove(const Branch *map, YTransaction *txn, const char *key);
 
 /**
  * Returns a value stored under the provided `key`, or a null pointer if no entry with such `key`
@@ -1571,7 +1567,7 @@ Branch *yxmlelem_parent(const Branch *xml);
  * Returns a number of child nodes (both `YXmlElement` and `YXmlText`) living under a current XML
  * element. This function doesn't count a recursive nodes, only direct children of a current node.
  */
-int yxmlelem_child_len(const Branch *xml, const YTransaction *txn);
+uint32_t yxmlelem_child_len(const Branch *xml, const YTransaction *txn);
 
 /**
  * Returns a first child node of a current `YXmlElement`, or null pointer if current XML node is
@@ -1613,7 +1609,10 @@ struct YOutput *yxmlelem_tree_walker_next(YXmlTreeWalker *iterator);
  * A `name` must be a null-terminated UTF-8 encoded string, which will be copied into current
  * document. Therefore `name` should be freed by the function caller.
  */
-Branch *yxmlelem_insert_elem(const Branch *xml, YTransaction *txn, int index, const char *name);
+Branch *yxmlelem_insert_elem(const Branch *xml,
+                             YTransaction *txn,
+                             uint32_t index,
+                             const char *name);
 
 /**
  * Inserts an `YXmlText` as a child of a current node at the given `index` and returns its
@@ -1622,14 +1621,14 @@ Branch *yxmlelem_insert_elem(const Branch *xml, YTransaction *txn, int index, co
  * An `index` value must be between 0 and (inclusive) length of a current XML element (use
  * [yxmlelem_child_len] function to determine its length).
  */
-Branch *yxmlelem_insert_text(const Branch *xml, YTransaction *txn, int index);
+Branch *yxmlelem_insert_text(const Branch *xml, YTransaction *txn, uint32_t index);
 
 /**
  * Removes a consecutive range of child elements (of specified length) from the current
  * `YXmlElement`, starting at the given `index`. Specified range must fit into boundaries of current
  * XML node children, otherwise this function will panic at runtime.
  */
-void yxmlelem_remove_range(const Branch *xml, YTransaction *txn, int index, int len);
+void yxmlelem_remove_range(const Branch *xml, YTransaction *txn, uint32_t index, uint32_t len);
 
 /**
  * Returns an XML child node (either a `YXmlElement` or `YXmlText`) stored at a given `index` of
@@ -1638,13 +1637,13 @@ void yxmlelem_remove_range(const Branch *xml, YTransaction *txn, int index, int 
  *
  * Returned value should be eventually released using [youtput_destroy].
  */
-const struct YOutput *yxmlelem_get(const Branch *xml, const YTransaction *txn, int index);
+const struct YOutput *yxmlelem_get(const Branch *xml, const YTransaction *txn, uint32_t index);
 
 /**
  * Returns the length of the `YXmlText` string content in bytes (without the null terminator
  * character)
  */
-int yxmltext_len(const Branch *txt, const YTransaction *txn);
+uint32_t yxmltext_len(const Branch *txt, const YTransaction *txn);
 
 /**
  * Returns a null-terminated UTF-8 encoded string content of a current `YXmlText` shared data type.
@@ -1667,7 +1666,7 @@ char *yxmltext_string(const Branch *txt, const YTransaction *txn);
  */
 void yxmltext_insert(const Branch *txt,
                      YTransaction *txn,
-                     int index,
+                     uint32_t index,
                      const char *str,
                      const struct YInput *attrs);
 
@@ -1685,7 +1684,7 @@ void yxmltext_insert(const Branch *txt,
  */
 void yxmltext_insert_embed(const Branch *txt,
                            YTransaction *txn,
-                           int index,
+                           uint32_t index,
                            const struct YInput *content,
                            const struct YInput *attrs);
 
@@ -1695,8 +1694,8 @@ void yxmltext_insert_embed(const Branch *txt,
  */
 void yxmltext_format(const Branch *txt,
                      YTransaction *txn,
-                     int index,
-                     int len,
+                     uint32_t index,
+                     uint32_t len,
                      const struct YInput *attrs);
 
 /**
@@ -1709,7 +1708,7 @@ void yxmltext_format(const Branch *txt,
  * A `length` must be lower or equal number of characters (counted as UTF chars depending on the
  * encoding configured by `YDoc`) from `index` position to the end of of the string.
  */
-void yxmltext_remove_range(const Branch *txt, YTransaction *txn, int idx, int len);
+void yxmltext_remove_range(const Branch *txt, YTransaction *txn, uint32_t idx, uint32_t len);
 
 /**
  * Inserts an XML attribute described using `attr_name` and `attr_value`. If another attribute with
@@ -1760,19 +1759,19 @@ struct YInput yinput_undefined(void);
  * Function constructor used to create JSON-like boolean `YInput` cell.
  * This function doesn't allocate any heap resources.
  */
-struct YInput yinput_bool(char flag);
+struct YInput yinput_bool(uint8_t flag);
 
 /**
  * Function constructor used to create JSON-like 64-bit floating point number `YInput` cell.
  * This function doesn't allocate any heap resources.
  */
-struct YInput yinput_float(float num);
+struct YInput yinput_float(double num);
 
 /**
  * Function constructor used to create JSON-like 64-bit signed integer `YInput` cell.
  * This function doesn't allocate any heap resources.
  */
-struct YInput yinput_long(long integer);
+struct YInput yinput_long(int64_t integer);
 
 /**
  * Function constructor used to create a string `YInput` cell. Provided parameter must be
@@ -1787,14 +1786,14 @@ struct YInput yinput_string(const char *str);
  * This function doesn't allocate any heap resources and doesn't release any on its own, therefore
  * its up to a caller to free resources once a structure is no longer needed.
  */
-struct YInput yinput_binary(const uint8_t *buf, int len);
+struct YInput yinput_binary(const char *buf, uint32_t len);
 
 /**
  * Function constructor used to create a JSON-like array `YInput` cell of other JSON-like values of
  * a given length. This function doesn't allocate any heap resources and doesn't release any on its
  * own, therefore its up to a caller to free resources once a structure is no longer needed.
  */
-struct YInput yinput_json_array(struct YInput *values, int len);
+struct YInput yinput_json_array(struct YInput *values, uint32_t len);
 
 /**
  * Function constructor used to create a JSON-like map `YInput` cell of other JSON-like key-value
@@ -1804,7 +1803,7 @@ struct YInput yinput_json_array(struct YInput *values, int len);
  * This function doesn't allocate any heap resources and doesn't release any on its own, therefore
  * its up to a caller to free resources once a structure is no longer needed.
  */
-struct YInput yinput_json_map(char **keys, struct YInput *values, int len);
+struct YInput yinput_json_map(char **keys, struct YInput *values, uint32_t len);
 
 /**
  * Function constructor used to create a nested `YArray` `YInput` cell prefilled with other
@@ -1812,7 +1811,7 @@ struct YInput yinput_json_map(char **keys, struct YInput *values, int len);
  * any on its own, therefore its up to a caller to free resources once a structure is no longer
  * needed.
  */
-struct YInput yinput_yarray(struct YInput *values, int len);
+struct YInput yinput_yarray(struct YInput *values, uint32_t len);
 
 /**
  * Function constructor used to create a nested `YMap` `YInput` cell prefilled with other key-value
@@ -1822,7 +1821,7 @@ struct YInput yinput_yarray(struct YInput *values, int len);
  * This function doesn't allocate any heap resources and doesn't release any on its own, therefore
  * its up to a caller to free resources once a structure is no longer needed.
  */
-struct YInput yinput_ymap(char **keys, struct YInput *values, int len);
+struct YInput yinput_ymap(char **keys, struct YInput *values, uint32_t len);
 
 /**
  * Function constructor used to create a nested `YText` `YInput` cell prefilled with a specified
@@ -1870,7 +1869,7 @@ YDoc *youtput_read_ydoc(const struct YOutput *val);
  * `1` for truthy case and `0` otherwise. Returns a null pointer in case when a value stored under
  * current `YOutput` cell is not of a boolean type.
  */
-const char *youtput_read_bool(const struct YOutput *val);
+const uint8_t *youtput_read_bool(const struct YOutput *val);
 
 /**
  * Attempts to read the value for a given `YOutput` pointer as a 64-bit floating point number.
@@ -1878,7 +1877,7 @@ const char *youtput_read_bool(const struct YOutput *val);
  * Returns a null pointer in case when a value stored under current `YOutput` cell
  * is not a floating point number.
  */
-const float *youtput_read_float(const struct YOutput *val);
+const double *youtput_read_float(const struct YOutput *val);
 
 /**
  * Attempts to read the value for a given `YOutput` pointer as a 64-bit signed integer.
@@ -1886,7 +1885,7 @@ const float *youtput_read_float(const struct YOutput *val);
  * Returns a null pointer in case when a value stored under current `YOutput` cell
  * is not a signed integer.
  */
-const long long *youtput_read_long(const struct YOutput *val);
+const int64_t *youtput_read_long(const struct YOutput *val);
 
 /**
  * Attempts to read the value for a given `YOutput` pointer as a null-terminated UTF-8 encoded
@@ -1906,7 +1905,7 @@ char *youtput_read_string(const struct YOutput *val);
  * is not a binary type. Underlying binary is released automatically as part of [youtput_destroy]
  * destructor.
  */
-const unsigned char *youtput_read_binary(const struct YOutput *val);
+const char *youtput_read_binary(const struct YOutput *val);
 
 /**
  * Attempts to read the value for a given `YOutput` pointer as a JSON-like array of `YOutput`
@@ -1979,9 +1978,7 @@ Branch *youtput_read_yxmltext(const struct YOutput *val);
  * Returns a subscription ID which can be then used to unsubscribe this callback by using
  * `ytext_unobserve` function.
  */
-unsigned int ytext_observe(const Branch *txt,
-                           void *state,
-                           void (*cb)(void*, const struct YTextEvent*));
+uint32_t ytext_observe(const Branch *txt, void *state, void (*cb)(void*, const struct YTextEvent*));
 
 /**
  * Subscribes a given callback function `cb` to changes made by this `YMap` instance. Callbacks
@@ -1989,9 +1986,7 @@ unsigned int ytext_observe(const Branch *txt,
  * Returns a subscription ID which can be then used to unsubscribe this callback by using
  * `ymap_unobserve` function.
  */
-unsigned int ymap_observe(const Branch *map,
-                          void *state,
-                          void (*cb)(void*, const struct YMapEvent*));
+uint32_t ymap_observe(const Branch *map, void *state, void (*cb)(void*, const struct YMapEvent*));
 
 /**
  * Subscribes a given callback function `cb` to changes made by this `YArray` instance. Callbacks
@@ -1999,9 +1994,9 @@ unsigned int ymap_observe(const Branch *map,
  * Returns a subscription ID which can be then used to unsubscribe this callback by using
  * `yarray_unobserve` function.
  */
-unsigned int yarray_observe(const Branch *array,
-                            void *state,
-                            void (*cb)(void*, const struct YArrayEvent*));
+uint32_t yarray_observe(const Branch *array,
+                        void *state,
+                        void (*cb)(void*, const struct YArrayEvent*));
 
 /**
  * Subscribes a given callback function `cb` to changes made by this `YXmlElement` instance.
@@ -2009,9 +2004,9 @@ unsigned int yarray_observe(const Branch *array,
  * Returns a subscription ID which can be then used to unsubscribe this callback by using
  * `yxmlelem_unobserve` function.
  */
-unsigned int yxmlelem_observe(const Branch *xml,
-                              void *state,
-                              void (*cb)(void*, const struct YXmlEvent*));
+uint32_t yxmlelem_observe(const Branch *xml,
+                          void *state,
+                          void (*cb)(void*, const struct YXmlEvent*));
 
 /**
  * Subscribes a given callback function `cb` to changes made by this `YXmlText` instance. Callbacks
@@ -2019,9 +2014,9 @@ unsigned int yxmlelem_observe(const Branch *xml,
  * Returns a subscription ID which can be then used to unsubscribe this callback by using
  * `yxmltext_unobserve` function.
  */
-unsigned int yxmltext_observe(const Branch *xml,
-                              void *state,
-                              void (*cb)(void*, const struct YXmlTextEvent*));
+uint32_t yxmltext_observe(const Branch *xml,
+                          void *state,
+                          void (*cb)(void*, const struct YXmlTextEvent*));
 
 /**
  * Subscribes a given callback function `cb` to changes made by this shared type instance as well
@@ -2031,45 +2026,45 @@ unsigned int yxmltext_observe(const Branch *xml,
  * Returns a subscription ID which can be then used to unsubscribe this callback by using
  * `yunobserve_deep` function.
  */
-unsigned int yobserve_deep(Branch *ytype,
-                           void *state,
-                           void (*cb)(void*, int, const struct YEvent*));
+uint32_t yobserve_deep(Branch *ytype,
+                       void *state,
+                       void (*cb)(void*, uint32_t, const struct YEvent*));
 
 /**
  * Releases a callback subscribed via `ytext_observe` function represented by passed
  * observer parameter.
  */
-void ytext_unobserve(const Branch *txt, unsigned int subscription_id);
+void ytext_unobserve(const Branch *txt, uint32_t subscription_id);
 
 /**
  * Releases a callback subscribed via `yarray_observe` function represented by passed
  * observer parameter.
  */
-void yarray_unobserve(const Branch *array, unsigned int subscription_id);
+void yarray_unobserve(const Branch *array, uint32_t subscription_id);
 
 /**
  * Releases a callback subscribed via `ymap_observe` function represented by passed
  * observer parameter.
  */
-void ymap_unobserve(const Branch *map, unsigned int subscription_id);
+void ymap_unobserve(const Branch *map, uint32_t subscription_id);
 
 /**
  * Releases a callback subscribed via `yxmlelem_observe` function represented by passed
  * observer parameter.
  */
-void yxmlelem_unobserve(const Branch *xml, unsigned int subscription_id);
+void yxmlelem_unobserve(const Branch *xml, uint32_t subscription_id);
 
 /**
  * Releases a callback subscribed via `yxmltext_observe` function represented by passed
  * observer parameter.
  */
-void yxmltext_unobserve(const Branch *xml, unsigned int subscription_id);
+void yxmltext_unobserve(const Branch *xml, uint32_t subscription_id);
 
 /**
  * Releases a callback subscribed via `yobserve_deep` function represented by passed
  * observer parameter.
  */
-void yunobserve_deep(Branch *ytype, unsigned int subscription_id);
+void yunobserve_deep(Branch *ytype, uint32_t subscription_id);
 
 /**
  * Returns a pointer to a shared collection, which triggered passed event `e`.
@@ -2104,7 +2099,7 @@ Branch *yxmltext_event_target(const struct YXmlTextEvent *e);
  *
  * Path returned this way should be eventually released using `ypath_destroy`.
  */
-struct YPathSegment *ytext_event_path(const struct YTextEvent *e, int *len);
+struct YPathSegment *ytext_event_path(const struct YTextEvent *e, uint32_t *len);
 
 /**
  * Returns a path from a root type down to a current shared collection (which can be obtained using
@@ -2114,7 +2109,7 @@ struct YPathSegment *ytext_event_path(const struct YTextEvent *e, int *len);
  *
  * Path returned this way should be eventually released using `ypath_destroy`.
  */
-struct YPathSegment *ymap_event_path(const struct YMapEvent *e, int *len);
+struct YPathSegment *ymap_event_path(const struct YMapEvent *e, uint32_t *len);
 
 /**
  * Returns a path from a root type down to a current shared collection (which can be obtained using
@@ -2124,7 +2119,7 @@ struct YPathSegment *ymap_event_path(const struct YMapEvent *e, int *len);
  *
  * Path returned this way should be eventually released using `ypath_destroy`.
  */
-struct YPathSegment *yxmlelem_event_path(const struct YXmlEvent *e, int *len);
+struct YPathSegment *yxmlelem_event_path(const struct YXmlEvent *e, uint32_t *len);
 
 /**
  * Returns a path from a root type down to a current shared collection (which can be obtained using
@@ -2134,7 +2129,7 @@ struct YPathSegment *yxmlelem_event_path(const struct YXmlEvent *e, int *len);
  *
  * Path returned this way should be eventually released using `ypath_destroy`.
  */
-struct YPathSegment *yxmltext_event_path(const struct YXmlTextEvent *e, int *len);
+struct YPathSegment *yxmltext_event_path(const struct YXmlTextEvent *e, uint32_t *len);
 
 /**
  * Returns a path from a root type down to a current shared collection (which can be obtained using
@@ -2144,13 +2139,13 @@ struct YPathSegment *yxmltext_event_path(const struct YXmlTextEvent *e, int *len
  *
  * Path returned this way should be eventually released using `ypath_destroy`.
  */
-struct YPathSegment *yarray_event_path(const struct YArrayEvent *e, int *len);
+struct YPathSegment *yarray_event_path(const struct YArrayEvent *e, uint32_t *len);
 
 /**
  * Releases allocated memory used by objects returned from path accessor functions of shared type
  * events.
  */
-void ypath_destroy(struct YPathSegment *path, int len);
+void ypath_destroy(struct YPathSegment *path, uint32_t len);
 
 /**
  * Returns a sequence of changes produced by sequence component of shared collections (such as
@@ -2160,7 +2155,7 @@ void ypath_destroy(struct YPathSegment *path, int len);
  * Delta returned from this function should eventually be released using `yevent_delta_destroy`
  * function.
  */
-struct YDelta *ytext_event_delta(const struct YTextEvent *e, int *len);
+struct YDelta *ytext_event_delta(const struct YTextEvent *e, uint32_t *len);
 
 /**
  * Returns a sequence of changes produced by sequence component of shared collections (such as
@@ -2170,7 +2165,7 @@ struct YDelta *ytext_event_delta(const struct YTextEvent *e, int *len);
  * Delta returned from this function should eventually be released using `yevent_delta_destroy`
  * function.
  */
-struct YDelta *yxmltext_event_delta(const struct YXmlTextEvent *e, int *len);
+struct YDelta *yxmltext_event_delta(const struct YXmlTextEvent *e, uint32_t *len);
 
 /**
  * Returns a sequence of changes produced by sequence component of shared collections (such as
@@ -2180,7 +2175,7 @@ struct YDelta *yxmltext_event_delta(const struct YXmlTextEvent *e, int *len);
  * Delta returned from this function should eventually be released using `yevent_delta_destroy`
  * function.
  */
-struct YEventChange *yarray_event_delta(const struct YArrayEvent *e, int *len);
+struct YEventChange *yarray_event_delta(const struct YArrayEvent *e, uint32_t *len);
 
 /**
  * Returns a sequence of changes produced by sequence component of shared collections (such as
@@ -2190,17 +2185,17 @@ struct YEventChange *yarray_event_delta(const struct YArrayEvent *e, int *len);
  * Delta returned from this function should eventually be released using `yevent_delta_destroy`
  * function.
  */
-struct YEventChange *yxmlelem_event_delta(const struct YXmlEvent *e, int *len);
+struct YEventChange *yxmlelem_event_delta(const struct YXmlEvent *e, uint32_t *len);
 
 /**
  * Releases memory allocated by the object returned from `yevent_delta` function.
  */
-void ytext_delta_destroy(struct YDelta *delta, int len);
+void ytext_delta_destroy(struct YDelta *delta, uint32_t len);
 
 /**
  * Releases memory allocated by the object returned from `yevent_delta` function.
  */
-void yevent_delta_destroy(struct YEventChange *delta, int len);
+void yevent_delta_destroy(struct YEventChange *delta, uint32_t len);
 
 /**
  * Returns a sequence of changes produced by map component of shared collections (such as
@@ -2210,7 +2205,7 @@ void yevent_delta_destroy(struct YEventChange *delta, int len);
  * Delta returned from this function should eventually be released using `yevent_keys_destroy`
  * function.
  */
-struct YEventKeyChange *ymap_event_keys(const struct YMapEvent *e, int *len);
+struct YEventKeyChange *ymap_event_keys(const struct YMapEvent *e, uint32_t *len);
 
 /**
  * Returns a sequence of changes produced by map component of shared collections.
@@ -2219,7 +2214,7 @@ struct YEventKeyChange *ymap_event_keys(const struct YMapEvent *e, int *len);
  * Delta returned from this function should eventually be released using `yevent_keys_destroy`
  * function.
  */
-struct YEventKeyChange *yxmlelem_event_keys(const struct YXmlEvent *e, int *len);
+struct YEventKeyChange *yxmlelem_event_keys(const struct YXmlEvent *e, uint32_t *len);
 
 /**
  * Returns a sequence of changes produced by map component of shared collections.
@@ -2228,13 +2223,13 @@ struct YEventKeyChange *yxmlelem_event_keys(const struct YXmlEvent *e, int *len)
  * Delta returned from this function should eventually be released using `yevent_keys_destroy`
  * function.
  */
-struct YEventKeyChange *yxmltext_event_keys(const struct YXmlTextEvent *e, int *len);
+struct YEventKeyChange *yxmltext_event_keys(const struct YXmlTextEvent *e, uint32_t *len);
 
 /**
  * Releases memory allocated by the object returned from `yxml_event_keys` and `ymap_event_keys`
  * functions.
  */
-void yevent_keys_destroy(struct YEventKeyChange *keys, int len);
+void yevent_keys_destroy(struct YEventKeyChange *keys, uint32_t len);
 
 YUndoManager *yundo_manager(const YDoc *doc,
                             const Branch *ytype,
@@ -2242,42 +2237,42 @@ YUndoManager *yundo_manager(const YDoc *doc,
 
 void yundo_manager_destroy(YUndoManager *mgr);
 
-void yundo_manager_add_origin(YUndoManager *mgr, int origin_len, const char *origin);
+void yundo_manager_add_origin(YUndoManager *mgr, uint32_t origin_len, const char *origin);
 
-void yundo_manager_remove_origin(YUndoManager *mgr, int origin_len, const char *origin);
+void yundo_manager_remove_origin(YUndoManager *mgr, uint32_t origin_len, const char *origin);
 
 void yundo_manager_add_scope(YUndoManager *mgr, const Branch *ytype);
 
-char yundo_manager_clear(YUndoManager *mgr);
+uint8_t yundo_manager_clear(YUndoManager *mgr);
 
 void yundo_manager_stop(YUndoManager *mgr);
 
-char yundo_manager_undo(YUndoManager *mgr);
+uint8_t yundo_manager_undo(YUndoManager *mgr);
 
-char yundo_manager_redo(YUndoManager *mgr);
+uint8_t yundo_manager_redo(YUndoManager *mgr);
 
-char yundo_manager_can_undo(YUndoManager *mgr);
+uint8_t yundo_manager_can_undo(YUndoManager *mgr);
 
-char yundo_manager_can_redo(YUndoManager *mgr);
+uint8_t yundo_manager_can_redo(YUndoManager *mgr);
 
-unsigned int yundo_manager_observe_added(YUndoManager *mgr,
-                                         void *state,
-                                         void (*cb)(void*, const struct YUndoEvent*));
+uint32_t yundo_manager_observe_added(YUndoManager *mgr,
+                                     void *state,
+                                     void (*cb)(void*, const struct YUndoEvent*));
 
-void yundo_manager_unobserve_added(YUndoManager *mgr, unsigned int subscription_id);
+void yundo_manager_unobserve_added(YUndoManager *mgr, uint32_t subscription_id);
 
-unsigned int yundo_manager_observe_popped(YUndoManager *mgr,
-                                          void *state,
-                                          void (*cb)(void*, const struct YUndoEvent*));
+uint32_t yundo_manager_observe_popped(YUndoManager *mgr,
+                                      void *state,
+                                      void (*cb)(void*, const struct YUndoEvent*));
 
-void yundo_manager_unobserve_popped(YUndoManager *mgr, unsigned int subscription_id);
+void yundo_manager_unobserve_popped(YUndoManager *mgr, uint32_t subscription_id);
 
 /**
  * Returns a value informing what kind of Yrs shared collection given `branch` represents.
  * Returns either 0 when `branch` is null or one of values: `Y_ARRAY`, `Y_TEXT`, `Y_MAP`,
  * `Y_XML_ELEM`, `Y_XML_TEXT`.
  */
-char ytype_kind(const Branch *branch);
+int8_t ytype_kind(const Branch *branch);
 
 /**
  * Releases resources allocated by `YStickyIndex` pointers.
@@ -2289,7 +2284,7 @@ void ysticky_index_destroy(YStickyIndex *pos);
  * If association is **after** the referenced inserted character, returned number will be >= 0.
  * If association is **before** the referenced inserted character, returned number will be < 0.
  */
-int ysticky_index_assoc(const YStickyIndex *pos);
+int8_t ysticky_index_assoc(const YStickyIndex *pos);
 
 /**
  * Retrieves a `YStickyIndex` corresponding to a given human-readable `index` pointing into
@@ -2301,19 +2296,19 @@ int ysticky_index_assoc(const YStickyIndex *pos);
  */
 YStickyIndex *ysticky_index_from_index(const Branch *branch,
                                        YTransaction *txn,
-                                       int index,
-                                       int assoc);
+                                       uint32_t index,
+                                       int8_t assoc);
 
 /**
  * Serializes `YStickyIndex` into binary representation. `len` parameter is updated with byte
  * length of the generated binary. Returned binary can be free'd using `ybinary_destroy`.
  */
-unsigned char *ysticky_index_encode(const YStickyIndex *pos, int *len);
+char *ysticky_index_encode(const YStickyIndex *pos, uint32_t *len);
 
 /**
  * Deserializes `YStickyIndex` from the payload previously serialized using `ysticky_index_encode`.
  */
-YStickyIndex *ysticky_index_decode(const unsigned char *binary, int len);
+YStickyIndex *ysticky_index_decode(const char *binary, uint32_t len);
 
 /**
  * Given `YStickyIndex` and transaction reference, if computes a human-readable index in a
@@ -2325,6 +2320,6 @@ YStickyIndex *ysticky_index_decode(const unsigned char *binary, int len);
 void ysticky_index_read(const YStickyIndex *pos,
                         const YTransaction *txn,
                         Branch **out_branch,
-                        int *out_index);
+                        uint32_t *out_index);
 
 #endif
