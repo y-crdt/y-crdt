@@ -320,7 +320,7 @@ where
 /// cursor positions in rich text documents with real-time collaborative capabilities. In such cases
 /// any concurrent update incoming and applied from the remote peer may change the order of elements
 /// in current [XmlTextRef], invalidating numeric index. For such cases you can take advantage of fact
-/// that [XmlTextRef] implements [IndexedSequence::perma_index] method that returns a
+/// that [XmlTextRef] implements [IndexedSequence::sticky_index] method that returns a
 /// [permanent index](StickyIndex) position that sticks to the same place even when concurrent
 /// updates are being made.
 ///

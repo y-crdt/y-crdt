@@ -400,7 +400,7 @@ impl std::fmt::Display for Move {
 /// txt.insert(&mut txn, 0, "abc"); // => 'abc'
 ///
 /// // create position tracker (marked as . in the comments)
-/// let pos = txt.perma_index(&mut txn, 2, Assoc::After).unwrap(); // => 'ab.c'
+/// let pos = txt.sticky_index(&mut txn, 2, Assoc::After).unwrap(); // => 'ab.c'
 ///
 /// // modify text
 /// txt.insert(&mut txn, 1, "def"); // => 'adefb.c'
@@ -462,7 +462,7 @@ impl StickyIndex {
     /// const INDEX: u32 = 4;
     ///
     /// // set perma index at position before letter 'o' => "hell.o world"
-    /// let pos = text.perma_index(&mut txn, INDEX, Assoc::After).unwrap();
+    /// let pos = text.sticky_index(&mut txn, INDEX, Assoc::After).unwrap();
     /// let off = pos.get_offset(&txn).unwrap();
     /// assert_eq!(off.index, INDEX);
     ///
@@ -752,7 +752,7 @@ impl Decode for Assoc {
 pub trait IndexedSequence: AsRef<Branch> {
     /// Returns a [StickyIndex] equivalent to a human-readable `index`.
     /// Returns `None` if `index` is beyond the length of current sequence.
-    fn perma_index(
+    fn sticky_index(
         &self,
         txn: &mut TransactionMut,
         index: u32,
@@ -798,7 +798,7 @@ mod test {
         for i in 0..len {
             // for all types of associations..
             for assoc in [Assoc::After, Assoc::Before] {
-                let rel_pos = text.perma_index(&mut txn, i, assoc).unwrap();
+                let rel_pos = text.sticky_index(&mut txn, i, assoc).unwrap();
                 let encoded = rel_pos.encode_v1();
                 let decoded = StickyIndex::decode_v1(&encoded).unwrap();
                 let abs_pos = decoded
@@ -890,8 +890,8 @@ mod test {
         txt.insert(&mut txn, 0, "2");
         txt.insert(&mut txn, 0, "1");
 
-        let rpos_right = txt.perma_index(&mut txn, 1, Assoc::After).unwrap();
-        let rpos_left = txt.perma_index(&mut txn, 1, Assoc::Before).unwrap();
+        let rpos_right = txt.sticky_index(&mut txn, 1, Assoc::After).unwrap();
+        let rpos_left = txt.sticky_index(&mut txn, 1, Assoc::Before).unwrap();
 
         txt.insert(&mut txn, 1, "x");
 

@@ -201,7 +201,7 @@
 //! assert_eq!(str.chars().nth(INDEX), Some('o'));
 //!
 //! // get a permanent index for cursor at index 1
-//! let pos = text2.perma_index(&mut txn2, INDEX as u32, Assoc::After).unwrap();
+//! let pos = text2.sticky_index(&mut txn2, INDEX as u32, Assoc::After).unwrap();
 //!
 //! // synchronize full state of doc1 -> doc2
 //! txn2.apply_update(Update::decode_v1(&txn1.encode_diff_v1(&StateVector::default())).unwrap());
