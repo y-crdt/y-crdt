@@ -451,7 +451,7 @@ typedef struct YStateVector {
    * has a corresponding client identifier attached, which can be found in `client_ids` field
    * under the same index.
    */
-  uint64_t *clocks;
+  uint32_t *clocks;
 } YStateVector;
 
 typedef struct YIdRange {
@@ -2272,7 +2272,7 @@ void yundo_manager_unobserve_popped(YUndoManager *mgr, uint32_t subscription_id)
  * Returns either 0 when `branch` is null or one of values: `Y_ARRAY`, `Y_TEXT`, `Y_MAP`,
  * `Y_XML_ELEM`, `Y_XML_TEXT`.
  */
-char ytype_kind(const Branch *branch);
+int8_t ytype_kind(const Branch *branch);
 
 /**
  * Releases resources allocated by `YRelativePosition` pointers.

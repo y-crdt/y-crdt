@@ -1335,7 +1335,7 @@ TEST_CASE("YDoc observe after transaction") {
 
     t.after_state.entries_count = 1;
     t.after_state.client_ids = &CLIENT_ID;
-    uint64_t CLOCK = 11;
+    uint32_t CLOCK = 11;
     t.after_state.clocks = &CLOCK;
 
     YDoc *doc1 = ydoc_new_with_id(CLIENT_ID);
