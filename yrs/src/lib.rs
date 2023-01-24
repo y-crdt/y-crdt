@@ -181,7 +181,7 @@
 //! location, that will persist between concurrent updates being made:
 //!
 //! ```rust
-//! use yrs::{Assoc, Doc, GetString, ReadTxn, Indexable, StateVector, Text, Transact, Update};
+//! use yrs::{Assoc, Doc, GetString, ReadTxn, IndexedSequence, StateVector, Text, Transact, Update};
 //! use yrs::updates::decoder::Decode;
 //!
 //! let doc1 = Doc::with_client_id(1);
@@ -304,7 +304,7 @@ pub use crate::doc::{
 pub use crate::event::{SubdocsEvent, SubdocsEventIter, TransactionCleanupEvent, UpdateEvent};
 pub use crate::id_set::DeleteSet;
 pub use crate::moving::Assoc;
-pub use crate::moving::Indexable;
+pub use crate::moving::IndexedSequence;
 pub use crate::moving::Offset;
 pub use crate::moving::PermaIndex;
 pub use crate::moving::PermaIndexContext;

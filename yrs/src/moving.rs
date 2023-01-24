@@ -392,7 +392,7 @@ impl std::fmt::Display for Move {
 /// Example:
 ///
 /// ```rust
-/// use yrs::{Assoc, Doc, Indexable, Text, Transact};
+/// use yrs::{Assoc, Doc, IndexedSequence, Text, Transact};
 ///
 /// let doc = Doc::new();
 /// let txt = doc.get_or_insert_text("text");
@@ -451,7 +451,7 @@ impl PermaIndex {
     /// # Examples
     ///
     /// ```rust
-    /// use yrs::{Assoc, Doc, Indexable, Text, Transact};
+    /// use yrs::{Assoc, Doc, IndexedSequence, Text, Transact};
     ///
     /// let doc = Doc::new();
     /// let text = doc.get_or_insert_text("text");
@@ -749,7 +749,7 @@ impl Decode for Assoc {
 /// Trait used to retrieve a [PermaIndex] corresponding to a given human-readable index.
 /// Unlike standard indexes [PermaIndex] enables to track the location inside of a shared
 /// y-types, even in the face of concurrent updates.
-pub trait Indexable: AsRef<Branch> {
+pub trait IndexedSequence: AsRef<Branch> {
     /// Returns a [PermaIndex] equivalent to a human-readable `index`.
     /// Returns `None` if `index` is beyond the length of current sequence.
     fn perma_index(
@@ -789,7 +789,7 @@ mod test {
     use crate::moving::Assoc;
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::Encode;
-    use crate::{Doc, Indexable, PermaIndex, Text, TextRef, Transact};
+    use crate::{Doc, IndexedSequence, PermaIndex, Text, TextRef, Transact};
 
     fn check_relative_positions(text: &TextRef) {
         // test if all positions are encoded and restored correctly

@@ -6,7 +6,7 @@ use crate::types::{
     event_change_set, Branch, BranchPtr, Change, ChangeSet, EventHandler, Observers, Path, ToJson,
     Value, TYPE_REFS_ARRAY,
 };
-use crate::{Assoc, Indexable, Observable, ReadTxn, ID};
+use crate::{Assoc, IndexedSequence, Observable, ReadTxn, ID};
 use lib0::any::Any;
 use std::borrow::Borrow;
 use std::cell::UnsafeCell;
@@ -76,7 +76,7 @@ use std::sync::Arc;
 pub struct ArrayRef(BranchPtr);
 
 impl Array for ArrayRef {}
-impl Indexable for ArrayRef {}
+impl IndexedSequence for ArrayRef {}
 
 impl ToJson for ArrayRef {
     fn to_json<T: ReadTxn>(&self, txn: &T) -> Any {
