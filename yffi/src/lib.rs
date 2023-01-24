@@ -4370,7 +4370,7 @@ impl YUndoEvent {
 /// Returns either 0 when `branch` is null or one of values: `Y_ARRAY`, `Y_TEXT`, `Y_MAP`,
 /// `Y_XML_ELEM`, `Y_XML_TEXT`.
 #[no_mangle]
-pub unsafe extern "C" fn ytype_kind(branch: *const Branch) -> c_char {
+pub unsafe extern "C" fn ytype_kind(branch: *const Branch) -> i8 {
     if let Some(branch) = branch.as_ref() {
         match branch.type_ref() {
             TYPE_REFS_ARRAY => Y_ARRAY,
