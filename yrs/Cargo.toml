@@ -3,6 +3,7 @@ name = "yrs"
 version = "0.15.0"
 description = "High performance implementation of the Yjs CRDT"
 license = "MIT"
+license-file = "https://raw.githubusercontent.com/y-crdt/y-crdt/main/LICENSE"
 authors = ["Kevin Jahns <kevin.jahns@pm.me>", "Bartosz Sypytkowski <b.sypytkowski@gmail.com>"]
 keywords = ["crdt", "yrs"]
 edition = "2018"
