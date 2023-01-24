@@ -875,11 +875,11 @@ typedef struct YUndoEvent {
  * A numeric position is often unsuited for user selections, because it does not change when content is inserted
  * before or after.
  *
- * ```Insert(0, 'x')('a|bc') = 'xa|bc'``` Where | is the relative position.
+ * ```Insert(0, 'x')('a.bc') = 'xa|bc'``` Where `.` is the relative position.
  *
- * Instances of `YRelativePosition` can be freed using `yrelative_position_destroy`.
+ * Instances of `YRelativePosition` can be freed using `yperma_index_destroy`.
  */
-typedef RelativePosition YRelativePosition;
+typedef PermaIndex YPermaIndex;
 
 /**
  * Returns default ceonfiguration for `YOptions`.
@@ -2282,14 +2282,14 @@ char ytype_kind(const Branch *branch);
 /**
  * Releases resources allocated by `YRelativePosition` pointers.
  */
-void yrelative_position_destroy(YRelativePosition *pos);
+void yperma_index_destroy(YPermaIndex *pos);
 
 /**
  * Returns association of current `YRelativePosition`.
  * If association is **after** the referenced inserted character, returned number will be >= 0.
  * If association is **before** the referenced inserted character, returned number will be < 0.
  */
-int yrelative_position_assoc(const YRelativePosition *pos);
+int yperma_index_assoc(const YPermaIndex *pos);
 
 /**
  * Retrieves a `YRelativePosition` corresponding to a given human-readable `index` pointing into
@@ -2299,22 +2299,22 @@ int yrelative_position_assoc(const YRelativePosition *pos);
  * If association is >= 0, the resulting position will point to location **after** the referenced index.
  * If association is < 0, the resulting position will point to location **before** the referenced index.
  */
-YRelativePosition *yrelative_position_from_index(const Branch *branch,
-                                                 YTransaction *txn,
-                                                 int index,
-                                                 int assoc);
+YPermaIndex *yperma_index_from_index(const Branch *branch,
+                                     YTransaction *txn,
+                                     int index,
+                                     int assoc);
 
 /**
  * Serializes `YRelativePosition` into binary representation. `len` parameter is updated with byte
  * length of the generated binary. Returned binary can be free'd using `ybinary_destroy`.
  */
-unsigned char *yrelative_position_encode(const YRelativePosition *pos, int *len);
+unsigned char *yperma_index_encode(const YPermaIndex *pos, int *len);
 
 /**
- * Deserializes `YRelativePosition` from the payload previously serialized using `yrelative_position_encode`.
+ * Deserializes `YRelativePosition` from the payload previously serialized using `yperma_index_encode`.
  */
-YRelativePosition *yrelative_position_decode(const unsigned char *binary,
-                                             int len);
+YPermaIndex *yperma_index_decode(const unsigned char *binary,
+                                 int len);
 
 /**
  * Given `YRelativePosition` and transaction reference, if computes a human-readable index in a
@@ -2323,9 +2323,9 @@ YRelativePosition *yrelative_position_decode(const unsigned char *binary,
  * `out_branch` is getting assigned with a corresponding shared y-type reference.
  * `out_index` will be used to store computed human-readable index.
  */
-void yrelative_position_read(const YRelativePosition *pos,
-                             const YTransaction *txn,
-                             Branch **out_branch,
-                             int *out_index);
+void yperma_index_read(const YPermaIndex *pos,
+                       const YTransaction *txn,
+                       Branch **out_branch,
+                       int *out_index);
 
 #endif

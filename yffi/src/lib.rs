@@ -4811,22 +4811,22 @@ where
 /// A numeric position is often unsuited for user selections, because it does not change when content is inserted
 /// before or after.
 ///
-/// ```Insert(0, 'x')('a|bc') = 'xa|bc'``` Where | is the relative position.
+/// ```Insert(0, 'x')('a.bc') = 'xa|bc'``` Where `.` is the relative position.
 ///
-/// Instances of `YRelativePosition` can be freed using `yrelative_position_destroy`.
+/// Instances of `YRelativePosition` can be freed using `yperma_index_destroy`.
 #[repr(transparent)]
-pub struct YRelativePosition(PermaIndex);
+pub struct YPermaIndex(PermaIndex);
 
-impl From<PermaIndex> for YRelativePosition {
+impl From<PermaIndex> for YPermaIndex {
     #[inline(always)]
     fn from(value: PermaIndex) -> Self {
-        YRelativePosition(value)
+        YPermaIndex(value)
     }
 }
 
 /// Releases resources allocated by `YRelativePosition` pointers.
 #[no_mangle]
-pub unsafe extern "C" fn yrelative_position_destroy(pos: *mut YRelativePosition) {
+pub unsafe extern "C" fn yperma_index_destroy(pos: *mut YPermaIndex) {
     drop(Box::from_raw(pos))
 }
 
@@ -4834,7 +4834,7 @@ pub unsafe extern "C" fn yrelative_position_destroy(pos: *mut YRelativePosition)
 /// If association is **after** the referenced inserted character, returned number will be >= 0.
 /// If association is **before** the referenced inserted character, returned number will be < 0.
 #[no_mangle]
-pub unsafe extern "C" fn yrelative_position_assoc(pos: *const YRelativePosition) -> c_int {
+pub unsafe extern "C" fn yperma_index_assoc(pos: *const YPermaIndex) -> c_int {
     let pos = pos.as_ref().unwrap();
     match pos.0.assoc {
         Assoc::After => 0,
@@ -4849,12 +4849,12 @@ pub unsafe extern "C" fn yrelative_position_assoc(pos: *const YRelativePosition)
 /// If association is >= 0, the resulting position will point to location **after** the referenced index.
 /// If association is < 0, the resulting position will point to location **before** the referenced index.
 #[no_mangle]
-pub unsafe extern "C" fn yrelative_position_from_index(
+pub unsafe extern "C" fn yperma_index_from_index(
     branch: *const Branch,
     txn: *mut Transaction,
     index: c_int,
     assoc: c_int,
-) -> *mut YRelativePosition {
+) -> *mut YPermaIndex {
     assert!(!branch.is_null());
     assert!(!txn.is_null());
 
@@ -4869,20 +4869,20 @@ pub unsafe extern "C" fn yrelative_position_from_index(
 
     if let Some(txn) = txn.as_mut() {
         if let Some(pos) = PermaIndex::at(txn, branch, index, assoc) {
-            Box::into_raw(Box::new(YRelativePosition(pos)))
+            Box::into_raw(Box::new(YPermaIndex(pos)))
         } else {
             null_mut()
         }
     } else {
-        panic!("yrelative_position_from_index requires a read-write transaction");
+        panic!("yperma_index_from_index requires a read-write transaction");
     }
 }
 
 /// Serializes `YRelativePosition` into binary representation. `len` parameter is updated with byte
 /// length of the generated binary. Returned binary can be free'd using `ybinary_destroy`.  
 #[no_mangle]
-pub unsafe extern "C" fn yrelative_position_encode(
-    pos: *const YRelativePosition,
+pub unsafe extern "C" fn yperma_index_encode(
+    pos: *const YPermaIndex,
     len: *mut c_int,
 ) -> *mut c_uchar {
     let pos = pos.as_ref().unwrap();
@@ -4891,15 +4891,15 @@ pub unsafe extern "C" fn yrelative_position_encode(
     Box::into_raw(binary) as *mut c_uchar
 }
 
-/// Deserializes `YRelativePosition` from the payload previously serialized using `yrelative_position_encode`.
+/// Deserializes `YRelativePosition` from the payload previously serialized using `yperma_index_encode`.
 #[no_mangle]
-pub unsafe extern "C" fn yrelative_position_decode(
+pub unsafe extern "C" fn yperma_index_decode(
     binary: *const c_uchar,
     len: c_int,
-) -> *mut YRelativePosition {
+) -> *mut YPermaIndex {
     let slice = std::slice::from_raw_parts(binary as *const u8, len as usize);
     if let Ok(pos) = PermaIndex::decode_v1(slice) {
-        Box::into_raw(Box::new(YRelativePosition(pos)))
+        Box::into_raw(Box::new(YPermaIndex(pos)))
     } else {
         null_mut()
     }
@@ -4911,8 +4911,8 @@ pub unsafe extern "C" fn yrelative_position_decode(
 /// `out_branch` is getting assigned with a corresponding shared y-type reference.
 /// `out_index` will be used to store computed human-readable index.
 #[no_mangle]
-pub unsafe extern "C" fn yrelative_position_read(
-    pos: *const YRelativePosition,
+pub unsafe extern "C" fn yperma_index_read(
+    pos: *const YPermaIndex,
     txn: *const Transaction,
     out_branch: *mut *mut Branch,
     out_index: *mut c_int,
