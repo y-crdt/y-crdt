@@ -8,7 +8,7 @@ extern "C" {
     #include "include/libyrs.h"
 };
 
-YDoc* ydoc_new_with_id(int id) {
+YDoc* ydoc_new_with_id(uint64_t id) {
     YOptions o = yoptions();
     o.encoding = Y_OFFSET_UTF16;
     o.id = id;
@@ -34,13 +34,13 @@ void exchange_updates(int len, ...) {
                 YDoc* d2 = docs[j];
 
                 YTransaction* t1 = ydoc_read_transaction(d1);
-                int sv1_len = 0;
-                unsigned char* sv1 = ytransaction_state_vector_v1(t1, &sv1_len);
+                uint32_t sv1_len = 0;
+                char* sv1 = ytransaction_state_vector_v1(t1, &sv1_len);
                 ytransaction_commit(t1);
 
                 YTransaction* t2 = ydoc_read_transaction(d2);
-                int u2_len = 0;
-                unsigned char* u2 = ytransaction_state_diff_v1(t2, sv1, sv1_len, &u2_len);
+                uint32_t u2_len = 0;
+                char* u2 = ytransaction_state_diff_v1(t2, sv1, sv1_len, &u2_len);
                 ytransaction_commit(t2);
                 ybinary_destroy(sv1, sv1_len);
 
@@ -70,17 +70,17 @@ TEST_CASE("Update exchange basic") {
     ytext_insert(txt2, t2, 0, "hello ", NULL);
 
     // exchange updates
-    int sv1_len = 0;
-    unsigned char* sv1 = ytransaction_state_vector_v1(t1, &sv1_len);
+    uint32_t sv1_len = 0;
+    char* sv1 = ytransaction_state_vector_v1(t1, &sv1_len);
 
-    int sv2_len = 0;
-    unsigned char* sv2 = ytransaction_state_vector_v1(t2, &sv2_len);
+    uint32_t sv2_len = 0;
+    char* sv2 = ytransaction_state_vector_v1(t2, &sv2_len);
 
-    int u1_len = 0;
-    unsigned char* u1 = ytransaction_state_diff_v1(t1, sv2, sv2_len, &u1_len);
+    uint32_t u1_len = 0;
+    char* u1 = ytransaction_state_diff_v1(t1, sv2, sv2_len, &u1_len);
 
-    int u2_len = 0;
-    unsigned char* u2 = ytransaction_state_diff_v1(t2, sv1, sv1_len, &u2_len);
+    uint32_t u2_len = 0;
+    char* u2 = ytransaction_state_diff_v1(t2, sv1, sv1_len, &u2_len);
 
     ybinary_destroy(sv1, sv1_len);
     ybinary_destroy(sv2, sv2_len);
@@ -392,7 +392,7 @@ TEST_CASE("YXmlElement basic") {
 }
 
 typedef struct YTextEventTest {
-    int delta_len;
+    uint32_t delta_len;
     YDelta* delta;
     Branch* target;
 } YEventTest;
@@ -424,7 +424,7 @@ TEST_CASE("YText observe") {
     YTransaction* txn = ydoc_write_transaction(doc, 0, NULL);
 
     YTextEventTest* t = ytext_event_test_new();
-    unsigned int sub = ytext_observe(txt, (void*)t, &ytext_test_observe);
+    uint32_t sub = ytext_observe(txt, (void*)t, &ytext_test_observe);
 
     // insert initial data to an empty YText
     ytext_insert(txt, txn, 0, "abcd", NULL);
@@ -482,7 +482,7 @@ TEST_CASE("YText insert embed") {
     YTransaction *txn = ydoc_write_transaction(doc, 0, NULL);
 
     YTextEventTest *t = ytext_event_test_new();
-    unsigned int sub = ytext_observe(txt, (void *) t, &ytext_test_observe);
+    uint32_t sub = ytext_observe(txt, (void *) t, &ytext_test_observe);
 
     char* _bold = (char*)"bold";
     YInput _true = yinput_bool(1);
@@ -536,7 +536,7 @@ TEST_CASE("YText insert embed") {
 }
 
 typedef struct YArrayEventTest {
-    int delta_len;
+    uint32_t delta_len;
     YEventChange* delta;
     Branch* target;
 } YArrayEventTest;
@@ -568,7 +568,7 @@ TEST_CASE("YArray observe") {
     YTransaction* txn = ydoc_write_transaction(doc, 0, NULL);
 
     YArrayEventTest* t = yarray_event_test_new();
-    unsigned int sub = yarray_observe(array, (void*)t, &yarray_test_observe);
+    uint32_t sub = yarray_observe(array, (void*)t, &yarray_test_observe);
 
     // insert initial data to an empty YArray
     YInput* i = (YInput*)malloc(4 * sizeof(YInput));
@@ -638,7 +638,7 @@ TEST_CASE("YArray observe") {
 }
 
 typedef struct YMapEventTest {
-    int keys_len;
+    uint32_t keys_len;
     YEventKeyChange * keys;
     Branch* target;
 } YMapEventTest;
@@ -670,7 +670,7 @@ TEST_CASE("YMap observe") {
     YTransaction* txn = ydoc_write_transaction(doc, 0, NULL);
 
     YMapEventTest* t = ymap_event_test_new();
-    unsigned int sub = ymap_observe(map, (void*)t, &ymap_test_observe);
+    uint32_t sub = ymap_observe(map, (void*)t, &ymap_test_observe);
 
     // insert initial data to an empty YMap
     YInput i1 = yinput_string("value1");
@@ -749,8 +749,8 @@ TEST_CASE("YMap observe") {
 }
 
 typedef struct YXmlTextEventTest {
-    int delta_len;
-    int keys_len;
+    uint32_t delta_len;
+    uint32_t keys_len;
     YDelta* delta;
     Branch* target;
     YEventKeyChange *keys;
@@ -788,7 +788,7 @@ TEST_CASE("YXmlText observe") {
     YTransaction* txn = ydoc_write_transaction(doc, 0, NULL);
 
     YXmlTextEventTest* t = yxmltext_event_test_new();
-    unsigned int sub = yxmltext_observe(txt, (void*)t, &yxmltext_test_observe);
+    uint32_t sub = yxmltext_observe(txt, (void*)t, &yxmltext_test_observe);
 
     // insert initial data to an empty YText
     yxmltext_insert(txt, txn, 0, "abcd", NULL);
@@ -842,9 +842,9 @@ TEST_CASE("YXmlText observe") {
 
 typedef struct YXmlEventTest {
     Branch* target;
-    int keys_len;
+    uint32_t keys_len;
+    uint32_t delta_len;
     YEventKeyChange * keys;
-    int delta_len;
     YEventChange* delta;
 } YXmlEventTest;
 
@@ -882,7 +882,7 @@ TEST_CASE("YXmlElement observe") {
     YTransaction* txn = ydoc_write_transaction(doc, 0, NULL);
 
     YXmlEventTest* t = yxml_event_test_new();
-    unsigned int sub = yxmlelem_observe(xml, (void*)t, &yxml_test_observe);
+    uint32_t sub = yxmlelem_observe(xml, (void*)t, &yxml_test_observe);
 
     // insert initial attributes
     yxmlelem_insert_attr(xml, txn, "attr1", "value1");
@@ -1001,8 +1001,8 @@ TEST_CASE("YXmlElement observe") {
 
 typedef struct YDeepObserveTest {
     YPathSegment* path[4];
-    int path_lens[4];
-    int count;
+    uint32_t path_lens[4];
+    uint32_t count;
 } YDeepObserveTest;
 
 YDeepObserveTest* new_ydeepobserve_test() {
@@ -1020,14 +1020,14 @@ void ydeepobserve_test_clean(YDeepObserveTest* test) {
     test->count = 0;
 }
 
-void ydeepobserve_test(void* state, int event_count, const YEvent* events) {
+void ydeepobserve_test(void* state, uint32_t event_count, const YEvent* events) {
     YDeepObserveTest* test = (YDeepObserveTest*)state;
     // cleanup previous state
     ydeepobserve_test_clean(test);
 
     for (int i = 0; i < event_count; i++) {
         YEvent e = events[i];
-        int path_len = 0;
+        uint32_t path_len = 0;
         switch (e.tag) {
             case Y_ARRAY: {
                 YArrayEvent nested = e.content.array;
@@ -1055,7 +1055,7 @@ TEST_CASE("YArray deep observe") {
     ytransaction_commit(txn);
 
     YDeepObserveTest* state = new_ydeepobserve_test();
-    unsigned int subscription_id = yobserve_deep(array, (void *) state, ydeepobserve_test);
+    uint32_t subscription_id = yobserve_deep(array, (void *) state, ydeepobserve_test);
 
     txn = ydoc_write_transaction(doc, 0, NULL);
     YInput input = yinput_ymap(NULL, NULL, 0);
@@ -1094,7 +1094,7 @@ TEST_CASE("YMap deep observe") {
     ytransaction_commit(txn);
 
     YDeepObserveTest* state = new_ydeepobserve_test();
-    unsigned int subscription_id = yobserve_deep(map, (void *) state, ydeepobserve_test);
+    uint32_t subscription_id = yobserve_deep(map, (void *) state, ydeepobserve_test);
 
     /* map.set(txn, 'map', new Y.YMap()) */
     txn = ydoc_write_transaction(doc, 0, NULL);
@@ -1151,10 +1151,10 @@ TEST_CASE("YMap deep observe") {
 }
 
 typedef struct {
-    int len;
-    unsigned char* update;
-    int incoming_len;
-    unsigned char* incoming_update;
+    uint32_t len;
+    uint32_t incoming_len;
+    char* update;
+    char* incoming_update;
 } ObserveUpdatesTest;
 
 void reset_observe_updates(ObserveUpdatesTest* t) {
@@ -1171,12 +1171,12 @@ void reset_observe_updates(ObserveUpdatesTest* t) {
     }
 }
 
-void observe_updates(void* state, int len, const unsigned char* bytes) {
+void observe_updates(void* state, uint32_t len, const char* bytes) {
     ObserveUpdatesTest* t = (ObserveUpdatesTest*)state;
     t->incoming_len = len;
-    void* buf = malloc(sizeof(unsigned char*) * len);
+    void* buf = malloc(sizeof(char*) * len);
     memcpy(buf, (void*)bytes, (size_t)len);
-    t->incoming_update = (unsigned char*)buf;
+    t->incoming_update = (char*)buf;
 }
 
 TEST_CASE("YDoc observe updates V1") {
@@ -1192,7 +1192,7 @@ TEST_CASE("YDoc observe updates V1") {
 
     YDoc *doc2 = ydoc_new_with_id(2);
     Branch *txt2 = ytext(doc2, "test");
-    unsigned int subscription_id = ydoc_observe_updates_v1(doc2, t, observe_updates);
+    uint32_t subscription_id = ydoc_observe_updates_v1(doc2, t, observe_updates);
     txn = ydoc_write_transaction(doc2, 0, NULL);
     ytransaction_apply(txn, t->update, t->len);
     ytransaction_commit(txn);
@@ -1234,7 +1234,7 @@ TEST_CASE("YDoc observe updates V2") {
 
     YDoc *doc2 = ydoc_new_with_id(2);
     Branch *txt2 = ytext(doc2, "test");
-    unsigned int subscription_id = ydoc_observe_updates_v2(doc2, t, observe_updates);
+    uint32_t subscription_id = ydoc_observe_updates_v2(doc2, t, observe_updates);
     txn = ydoc_write_transaction(doc2, 0, NULL);
     ytransaction_apply_v2(txn, t->update, t->len);
     ytransaction_commit(txn);
@@ -1327,7 +1327,7 @@ void observe_after_transaction(void* state, YAfterTransactionEvent* e) {
 }
 
 TEST_CASE("YDoc observe after transaction") {
-    long long CLIENT_ID = 1;
+    uint64_t CLIENT_ID = 1;
     AfterTransactionTest t;
     t.calls = 0;
     t.delete_set.entries_count = 0;
@@ -1335,12 +1335,12 @@ TEST_CASE("YDoc observe after transaction") {
 
     t.after_state.entries_count = 1;
     t.after_state.client_ids = &CLIENT_ID;
-    int CLOCK = 11;
+    uint64_t CLOCK = 11;
     t.after_state.clocks = &CLOCK;
 
     YDoc *doc1 = ydoc_new_with_id(CLIENT_ID);
     Branch *txt1 = ytext(doc1, "test");
-    unsigned int subscription_id = ydoc_observe_after_transaction(doc1, &t, observe_after_transaction);
+    uint32_t subscription_id = ydoc_observe_after_transaction(doc1, &t, observe_after_transaction);
 
     YTransaction *txn = ydoc_write_transaction(doc1, 0, NULL);
     ytext_insert(txt1, txn, 0, "hello world", NULL);
@@ -1391,13 +1391,13 @@ TEST_CASE("YDoc snapshots") {
 
     ytext_insert(txt, txn, 0, "hello", NULL);
 
-    int snapshot_len = 0;
-    unsigned char* snapshot = ytransaction_snapshot(txn, &snapshot_len);
+    uint32_t snapshot_len = 0;
+    char* snapshot = ytransaction_snapshot(txn, &snapshot_len);
 
     ytext_insert(txt, txn, 5, " world", NULL);
 
-    int update_len = 0;
-    unsigned char* update = ytransaction_encode_state_from_snapshot_v1(txn, snapshot, snapshot_len, &update_len);
+    uint32_t update_len = 0;
+    char* update = ytransaction_encode_state_from_snapshot_v1(txn, snapshot, snapshot_len, &update_len);
 
     ytransaction_commit(txn);
     ydoc_destroy(doc);
@@ -1457,7 +1457,7 @@ TEST_CASE("YDoc observe subdocs") {
     YDoc *doc1 = ydoc_new_with_id(1);
     SubdocsTest t;
     memset(t.total, '\0', 20);
-    unsigned int subscription_id = ydoc_observe_subdocs(doc1, &t, observe_subdocs);
+    uint32_t subscription_id = ydoc_observe_subdocs(doc1, &t, observe_subdocs);
     Branch* subdocs = ymap(doc1, "mysubdocs");
 
     YOptions options = yoptions();
@@ -1552,7 +1552,7 @@ TEST_CASE("YDoc observe subdocs") {
 
 
     txn = ydoc_read_transaction(doc1);
-    int subdoc_count = 0;
+    uint32_t subdoc_count = 0;
     YDoc** subdoc_refs = ytransaction_subdocs(txn, &subdoc_count);
     concat_guids(t.total, subdoc_count, subdoc_refs);
     ytransaction_commit(txn);
@@ -1562,8 +1562,8 @@ TEST_CASE("YDoc observe subdocs") {
     memset(t.total, '\0', 20);
 
     txn = ydoc_read_transaction(doc1);
-    int update_len = 0;
-    unsigned char* update = ytransaction_state_diff_v1(txn, NULL, 0, &update_len);
+    uint32_t update_len = 0;
+    char* update = ytransaction_state_diff_v1(txn, NULL, 0, &update_len);
     ytransaction_commit(txn);
     ydoc_unobserve_subdocs(doc1, subscription_id);
 
@@ -1742,12 +1742,12 @@ TEST_CASE("Relative position") {
         for (int assoc = -1; assoc <= 0; ++assoc) {
 
             YRelativePosition* pos = yrelative_position_from_index(txt, txn, i, assoc);
-            int bin_len = 0;
-            unsigned char* bin = yrelative_position_encode(pos, &bin_len);
+            uint32_t bin_len = 0;
+            char* bin = yrelative_position_encode(pos, &bin_len);
             YRelativePosition* pos2 = yrelative_position_decode(bin, bin_len);
 
             Branch* actual_branch;
-            int actual_index;
+            uint32_t actual_index;
 
             yrelative_position_read(pos2, txn, &actual_branch, &actual_index);
 
