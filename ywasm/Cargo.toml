@@ -5,6 +5,7 @@ authors = ["Kevin Jahns <kevin.jahns@protonmail.com>","Bartosz Sypytkowski <b.sy
 keywords = ["crdt", "wasm", "yrs"]
 edition = "2018"
 license = "MIT"
+license-file = "https://raw.githubusercontent.com/y-crdt/y-crdt/main/LICENSE"
 description = "High performance implementation of the Yjs CRDT"
 homepage = "https://github.com/yjs/y-crdt/"
 repository = "https://github.com/yjs/y-crdt/"

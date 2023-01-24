@@ -5,6 +5,7 @@ authors = ["Kevin Jahns <kevin.jahns@protonmail.com>","Bartosz Sypytkowski <b.sy
 keywords = ["crdt", "c-ffi", "yrs"]
 edition = "2018"
 license = "MIT"
+license-file = "https://raw.githubusercontent.com/y-crdt/y-crdt/main/LICENSE"
 description = "Bindings for the Yrs native C foreign function interface"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
