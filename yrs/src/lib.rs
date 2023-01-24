@@ -1,3 +1,8 @@
+#![doc(
+    html_logo_url = "https://raw.githubusercontent.com/y-crdt/y-crdt/main/logo-yrs.svg",
+    html_favicon_url = "https://raw.githubusercontent.com/y-crdt/y-crdt/main/logo-yrs.svg"
+)]
+
 //! Yrs (read: "wires") is a high performance CRDT implementation based on the idea of **Shared Types**.
 //! It is a compatible port of the [Yjs](https://github.com/yjs/yjs) CRDT.
 //!
@@ -234,6 +239,26 @@
 //! specialized shared types are actually a projections over branch type and can be used interchangeably
 //! if needed, i.e.: [XmlElementRef] can be also interpreted as [MapRef], in which case the collection
 //! of that XML node attributes become key-value entries of casted map's.
+//!
+//! # Preliminary vs Integrated types
+//!
+//! In Yrs core library, every shared type has 2 representations:
+//!
+//! - **Integrated type** (eg. [TextRef], [ArrayRef], [MapRef]) represents a reference that has already
+//!   been attached to its parent [Doc]. As such, its state is tracked as part of that document, it
+//!   can be modified concurrently by multiple peers and any conflicts that occurred due to such
+//!   actions will be automatically resolved accordingly to [YATA conflict resolution algorithm](https://www.researchgate.net/publication/310212186_Near_Real-Time_Peer-to-Peer_Shared_Editing_on_Extensible_Data_Types).
+//! - **Preliminary type** (eg. [TextPrelim], [ArrayPrelim], [MapPrelim]) represents a content that
+//!   we want to eventually turn into an integrated reference, but it has not been integrated yet.
+//!
+//! Whenever we want to nest shared types one into another - using methods such as [Array::insert],
+//! [Map::insert] or [Text::insert_embed] - we always must do so using preliminary types. These
+//! methods will return an integrated representation of the preliminary content we wished to integrate.
+//!
+//! Keep in mind that we cannot integrate references that have been already integrated - neither in
+//! the same document nor in any other one. Yjs/Yrs doesn't allow to have the same object to be linked
+//! in multiple places. Same rule concerns primitive types (they will eventually be serialized and
+//! deserialized as unique independent objects), integrated types or sub-documents.
 //!
 //! # Transaction event lifecycle
 //!

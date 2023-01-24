@@ -1,6 +1,6 @@
 # Y CRDT
 <p align="center">
-  <img src="logo.svg" width="200"/>
+  <img src="logo-yrs.svg" width="200"/>
 </p>
 
 A collection of Rust libraries oriented around implementing [Yjs](https://yjs.dev/) algorithm and protocol with cross-language and cross-platform support in mind. It aims to maintain behavior and binary protocol compatibility with Yjs, therefore projects using Yjs/Yrs should be able to interoperate with each other.
