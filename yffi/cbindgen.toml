@@ -84,7 +84,7 @@ typedef struct YXmlTreeWalker {} YXmlTreeWalker;
 
 typedef struct YUndoManager {} YUndoManager;
 
-typedef struct RelativePosition {} RelativePosition;
+typedef struct StickyIndex {} StickyIndex;
 """
 
 trailer = """

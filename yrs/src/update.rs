@@ -334,13 +334,13 @@ impl Update {
                 }
 
                 if let ItemContent::Move(m) = &item.content {
-                    if let Some(start) = m.start.item() {
+                    if let Some(start) = m.start.id() {
                         if start.clock >= local_sv.get(&start.client) {
                             return Some(start.client);
                         }
                     }
                     if !m.is_collapsed() {
-                        if let Some(end) = m.end.item() {
+                        if let Some(end) = m.end.id() {
                             if end.clock >= local_sv.get(&end.client) {
                                 return Some(end.client);
                             }

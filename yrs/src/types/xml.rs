@@ -7,7 +7,9 @@ use crate::types::{
     EntryChange, EventHandler, MapRef, Observers, Path, ToJson, TypePtr, Value,
     TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_TEXT,
 };
-use crate::{ArrayRef, GetString, Map, Observable, ReadTxn, RelativeIndex, Text, TextRef, ID};
+use crate::{
+    ArrayRef, GetString, IndexedSequence, Map, Observable, ReadTxn, StickyIndex, Text, TextRef, ID,
+};
 use lib0::any::Any;
 use std::borrow::Borrow;
 use std::cell::UnsafeCell;
@@ -118,7 +120,7 @@ pub struct XmlElementRef(BranchPtr);
 
 impl Xml for XmlElementRef {}
 impl XmlFragment for XmlElementRef {}
-impl RelativeIndex for XmlElementRef {}
+impl IndexedSequence for XmlElementRef {}
 
 impl Into<XmlFragmentRef> for XmlElementRef {
     fn into(self) -> XmlFragmentRef {
@@ -318,8 +320,8 @@ where
 /// cursor positions in rich text documents with real-time collaborative capabilities. In such cases
 /// any concurrent update incoming and applied from the remote peer may change the order of elements
 /// in current [XmlTextRef], invalidating numeric index. For such cases you can take advantage of fact
-/// that [XmlTextRef] implements [RelativeIndex::position_at] method that returns a
-/// [permanent index](RelativePosition) position that sticks to the same place even when concurrent
+/// that [XmlTextRef] implements [IndexedSequence::sticky_index] method that returns a
+/// [permanent index](StickyIndex) position that sticks to the same place even when concurrent
 /// updates are being made.
 ///
 /// # Example
@@ -363,7 +365,7 @@ pub struct XmlTextRef(BranchPtr);
 
 impl Xml for XmlTextRef {}
 impl Text for XmlTextRef {}
-impl RelativeIndex for XmlTextRef {}
+impl IndexedSequence for XmlTextRef {}
 
 impl Into<TextRef> for XmlTextRef {
     fn into(self) -> TextRef {
@@ -503,7 +505,7 @@ impl<T: Borrow<str>> Into<EmbedPrelim<XmlTextPrelim<T>>> for XmlTextPrelim<T> {
 pub struct XmlFragmentRef(BranchPtr);
 
 impl XmlFragment for XmlFragmentRef {}
-impl RelativeIndex for XmlFragmentRef {}
+impl IndexedSequence for XmlFragmentRef {}
 
 impl XmlFragmentRef {
     pub fn parent(&self) -> Option<XmlNode> {

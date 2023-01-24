@@ -40,8 +40,8 @@ use std::ops::{Deref, DerefMut};
 /// cursor positions in rich text documents with real-time collaborative capabilities. In such cases
 /// any concurrent update incoming and applied from the remote peer may change the order of elements
 /// in current [TextRef], invalidating numeric index. For such cases you can take advantage of fact
-/// that [TextRef] implements [RelativeIndex::position_at] method that returns a
-/// [permanent index](RelativePosition) position that sticks to the same place even when concurrent
+/// that [TextRef] implements [IndexedSequence::sticky_index] method that returns a
+/// [permanent index](StickyIndex) position that sticks to the same place even when concurrent
 /// updates are being made.
 ///
 /// # Example
@@ -94,7 +94,7 @@ use std::ops::{Deref, DerefMut};
 pub struct TextRef(BranchPtr);
 
 impl Text for TextRef {}
-impl RelativeIndex for TextRef {}
+impl IndexedSequence for TextRef {}
 
 impl Into<XmlTextRef> for TextRef {
     fn into(self) -> XmlTextRef {

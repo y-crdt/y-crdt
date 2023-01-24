@@ -5,15 +5,15 @@ import * as t from 'lib0/testing'
  * @param {Y.YDoc} ydoc
  * @param {Y.YText} ytext
  */
-const checkRelativePositions = (ydoc, ytext) => {
+const checkStickyIndex = (ydoc, ytext) => {
     // test if all positions are encoded and restored correctly
     for (let i = 0; i < ytext.length; i++) {
         // for all types of associations..
         for (let assoc = -1; assoc < 2; assoc++) {
-            const rpos = Y.createRelativePositionFromTypeIndex(ytext, i, assoc)
-            const encodedRpos = Y.encodeRelativePosition(rpos)
-            const decodedRpos = Y.decodeRelativePosition(encodedRpos)
-            const absPos = (Y.createAbsolutePositionFromRelativePosition(decodedRpos, ydoc))
+            const rpos = Y.createStickyIndexFromType(ytext, i, assoc)
+            const encodedRpos = Y.encodeStickyIndex(rpos)
+            const decodedRpos = Y.decodeStickyIndex(encodedRpos)
+            const absPos = (Y.createOffsetFromStickyIndex(decodedRpos, ydoc))
             t.assert(absPos.index === i)
             t.assert(absPos.assoc === assoc)
         }
@@ -23,7 +23,7 @@ const checkRelativePositions = (ydoc, ytext) => {
 /**
  * @param {t.TestCase} tc
  */
-export const testRelativePositionCase1 = tc => {
+export const testStickyIndexCase1 = tc => {
     const ydoc = new Y.YDoc()
     const ytext = ydoc.getText('test')
     ytext.insert(0, '1')
@@ -31,74 +31,74 @@ export const testRelativePositionCase1 = tc => {
     ytext.insert(0, 'z')
     ytext.insert(0, 'y')
     ytext.insert(0, 'x')
-    checkRelativePositions(ydoc, ytext)
+    checkStickyIndex(ydoc, ytext)
 }
 
 /**
  * @param {t.TestCase} tc
  */
-export const testRelativePositionCase2 = tc => {
+export const testStickyIndexCase2 = tc => {
     const ydoc = new Y.YDoc()
     const ytext = ydoc.getText('test')
     ytext.insert(0, 'abc')
-    checkRelativePositions(ydoc, ytext)
+    checkStickyIndex(ydoc, ytext)
 }
 
 /**
  * @param {t.TestCase} tc
  */
-export const testRelativePositionCase3 = tc => {
+export const testStickyIndexCase3 = tc => {
     const ydoc = new Y.YDoc()
     const ytext = ydoc.getText('test')
     ytext.insert(0, 'abc')
     ytext.insert(0, '1')
     ytext.insert(0, 'xyz')
-    checkRelativePositions(ydoc, ytext)
+    checkStickyIndex(ydoc, ytext)
 }
 
 /**
  * @param {t.TestCase} tc
  */
-export const testRelativePositionCase4 = tc => {
+export const testStickyIndexCase4 = tc => {
     const ydoc = new Y.YDoc()
     const ytext = ydoc.getText('test')
     ytext.insert(0, '1')
-    checkRelativePositions(ydoc, ytext)
+    checkStickyIndex(ydoc, ytext)
 }
 
 /**
  * @param {t.TestCase} tc
  */
-export const testRelativePositionCase5 = tc => {
+export const testStickyIndexCase5 = tc => {
     const ydoc = new Y.YDoc()
     const ytext = ydoc.getText('test')
     ytext.insert(0, '2')
     ytext.insert(0, '1')
-    checkRelativePositions(ydoc, ytext)
+    checkStickyIndex(ydoc, ytext)
 }
 
 /**
  * @param {t.TestCase} tc
  */
-export const testRelativePositionCase6 = tc => {
+export const testStickyIndexCase6 = tc => {
     const ydoc = new Y.YDoc()
     const ytext = ydoc.getText('test')
-    checkRelativePositions(ydoc, ytext)
+    checkStickyIndex(ydoc, ytext)
 }
 
 /**
  * @param {t.TestCase} tc
  */
-export const testRelativePositionAssociationDifference = tc => {
+export const testStickyIndexAssociationDifference = tc => {
     const ydoc = new Y.YDoc()
     const ytext = ydoc.getText('test')
     ytext.insert(0, '2')
     ytext.insert(0, '1')
-    const rposRight = Y.createRelativePositionFromTypeIndex(ytext, 1, 0)
-    const rposLeft = Y.createRelativePositionFromTypeIndex(ytext, 1, -1)
+    const rposRight = Y.createStickyIndexFromType(ytext, 1, 0)
+    const rposLeft = Y.createStickyIndexFromType(ytext, 1, -1)
     ytext.insert(1, 'x')
-    const posRight = Y.createAbsolutePositionFromRelativePosition(rposRight, ydoc)
-    const posLeft = Y.createAbsolutePositionFromRelativePosition(rposLeft, ydoc)
+    const posRight = Y.createOffsetFromStickyIndex(rposRight, ydoc)
+    const posLeft = Y.createOffsetFromStickyIndex(rposLeft, ydoc)
     t.assert(posRight != null && posRight.index === 2)
     t.assert(posLeft != null && posLeft.index === 1)
 }

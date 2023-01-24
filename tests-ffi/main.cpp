@@ -1741,23 +1741,23 @@ TEST_CASE("Relative position") {
     for (int i = 0; i < length; ++i) {
         for (int assoc = -1; assoc <= 0; ++assoc) {
 
-            YRelativePosition* pos = yrelative_position_from_index(txt, txn, i, assoc);
+            YStickyIndex* pos = ysticky_index_from_index(txt, txn, i, assoc);
             uint32_t bin_len = 0;
-            char* bin = yrelative_position_encode(pos, &bin_len);
-            YRelativePosition* pos2 = yrelative_position_decode(bin, bin_len);
+            char* bin = ysticky_index_encode(pos, &bin_len);
+            YStickyIndex* pos2 = ysticky_index_decode(bin, bin_len);
 
             Branch* actual_branch;
             uint32_t actual_index;
 
-            yrelative_position_read(pos2, txn, &actual_branch, &actual_index);
+            ysticky_index_read(pos2, txn, &actual_branch, &actual_index);
 
             REQUIRE_EQ(actual_index, i);
             REQUIRE_EQ(actual_branch, txt);
-            REQUIRE_EQ(yrelative_position_assoc(pos2), assoc);
+            REQUIRE_EQ(ysticky_index_assoc(pos2), assoc);
 
             ybinary_destroy(bin, bin_len);
-            yrelative_position_destroy(pos);
-            yrelative_position_destroy(pos2);
+            ysticky_index_destroy(pos);
+            ysticky_index_destroy(pos2);
         }
     }
 
