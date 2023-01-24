@@ -303,7 +303,7 @@ impl<'doc> TransactionMut<'doc> {
         &self.before_state
     }
 
-    /// Current document state vector which includes changes made by this transaction.
+    /// State vector of the transaction after [Transaction::commit] has been called.
     pub fn after_state(&self) -> &StateVector {
         &self.after_state
     }
