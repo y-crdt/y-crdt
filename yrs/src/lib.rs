@@ -394,9 +394,8 @@
 //!
 //! 1. Observers on updated shared types: [TextRef::observe], [ArrayRef::observe], [MapRef::observe],
 //!    [XmlTextRef::observe], [XmlFragmentRef::observe] and [XmlElementRef::observe].
-//! 2. Deep observers (special kind of observers that are bubbled up from nested shared types through
-//!    their parent collections hierarchy): [TextRef::observe_deep], [ArrayRef::observe_deep], [MapRef::observe_deep],
-//!    [XmlTextRef::observe_deep], [XmlFragmentRef::observe_deep] and [XmlElementRef::observe_deep].
+//! 2. [Deep observers](DeepObservable::observe_deep) (special kind of observers that are bubbled up
+//!    from nested shared types through their parent collections hierarchy).
 //! 3. After transaction callbacks: [Doc::observe_after_transaction].
 //! 4. After transaction cleanup callbacks (moment after all changes performed by transaction have
 //!    been compressed an integrated into document store): [Doc::observe_transaction_cleanup].
