@@ -45,14 +45,14 @@
 //! assert_eq!(text.get_string(&doc.transact()), remote_text.get_string(&remote_doc.transact()));
 //! ```
 //!
-//! The [Doc] is a core structure of Yrs. All other structures and operations are performed in
+//! [Doc] is a core structure of Yrs. All other structures and operations are performed in
 //! context of their document. All documents gets randomly generated [Doc::client_id] (which can be
 //! also defined explicitly), which must be unique per active peer. It's crucial, as potential
 //! concurrent changes made by different peers sharing the same [ClientID] will cause a document
 //! state corruption.
 //!
 //! Next line defines [TextRef] - a shared collection specialized in providing collaborative rich text
-//! operations. Here it has been defined by calling [Doc::get_or_insert_text] method.
+//! operations. In snippet above it has been defined by calling [Doc::get_or_insert_text] method.
 //! Shared types defined at the document level are so called root types. Root level types sharing
 //! the same name across different peers are considered to be replicas of the same logical entity,
 //! regardless of their type. It's highly recommended for all collaborating clients to define all
@@ -60,15 +60,15 @@
 //! shared types include: [TextRef], [ArrayRef], [MapRef], [XmlTextRef], [XmlFragmentRef] and [XmlElementRef].
 //!
 //! Next section of code performs an update over the defined text replica. In Yrs all operations
-//! must be executed in a scope of transaction created by the document there were defined in. We
+//! must be executed in a scope of transaction created by the document they were defined in. We
 //! can differentiate two transaction types:
 //!
-//! 1. [Read-only transactions](Transaction), created via [Doc::transact]/[Doc::try_transact].
+//! 1. [Read-only transactions](Transaction), created via [Transact::transact]/[Transact::try_transact].
 //!    They are used only to access the contents of an underlying document store but they never
 //!    alter it. They are useful for methods like reading the structure state or for serialization.
 //!    It's allowed to have multiple active read-only transactions as long as no read-write
 //!    transaction is in progress.
-//! 2. [Read-write transactions](TransactionMut), create via [Doc::transact_mut]/[Doc::try_transact_mut].
+//! 2. [Read-write transactions](TransactionMut), create via [Transact::transact_mut]/[Transact::try_transact_mut].
 //!    These can be used to modify the internal document state. These transactions work as
 //!    intelligent batches. They are automatically committed when dropped, performing tasks like
 //!    state cleaning, metadata compression and triggering event callbacks. Read-write transactions
@@ -89,7 +89,7 @@
 //!    [Doc::observe_update_v2] events, which will be fired whenever an referenced document will
 //!    detect new changes.
 //!
-//! While 2nd option can produce smaller binary payload than the 1st one at times and doesn't require
+//! While the 2nd option can produce smaller binary payload than 1st one at times and doesn't require
 //! request-response cycles, it cannot pass the document state prior the observer callback
 //! registration and expects that all changes will surely be delivered to other peer. A practical
 //! approach (used i.e. by [y-sync protocol](https://crates.io/crates/y-sync)) is usually a combination
@@ -141,14 +141,14 @@
 //! ([TextRef::get_string] returns only inserted text and ignores other content, while
 //! [XmlTextRef::get_string] renders formatting attributes as XML nodes, but still ignores embedded
 //! values). Reason behind this behavior is that as generic collaboration library, Yrs cannot make
-//! opinionated decisions in this regard - whenever an full collection of text chunks, formatting
-//! attributes and embedded items is required, use [Text::diff] instead.
+//! opinionated decisions in this regard - whenever a full collection of text chunks, formatting
+//! attributes or embedded items is required, use [Text::diff] instead.
 //!
 //! # Cursor positioning
 //!
-//! Another common problem collaborative text editors is a requirement of keeping track of cursor
-//! position in face of concurrent updates incoming from remote peers. Let's present the problem on
-//! an example:
+//! Another common problem of collaborative text editors is a requirement of keeping track of cursor
+//! position in the face of concurrent updates incoming from remote peers. Let's present the problem
+//! on following example:
 //!
 //! ```rust
 //! use yrs::{Doc, GetString, ReadTxn, StateVector, Text, Transact, Update};
@@ -220,6 +220,129 @@
 //! [StickyIndex] structure is serializable and can be persisted or passed over the network as
 //! well, which may help with tracking and displaying the cursor location of other peers.
 //!
+//! # Undo/redo
+//!
+//! Among very popular features of many user-facing applications is an ability to revert/reapply
+//! operations performed by user. This becomes even more complicated, once we consider multiple peers
+//! collaborating on the same document, as we may need to skip over the changes synchronized from
+//! remote peers - even thou they could have happened later - in order to only undo our own actions.
+//! [UndoManager] is a Yrs response for these needs, supporting wide variety of options:
+//!
+//! ```rust
+//! use yrs::{Doc, GetString, ReadTxn, Text, Transact, UndoManager, Update};
+//! use yrs::undo::Options;
+//! use yrs::updates::decoder::Decode;
+//!
+//! let local = Doc::with_client_id(123);
+//! let text1 = local.get_or_insert_text("article");
+//! let mut mgr = UndoManager::with_options(&local, &text1, Options::default());
+//! mgr.include_origin(local.client_id()); // only track changes originating from local peer
+//!
+//! let remote = Doc::with_client_id(321);
+//! let text2 = remote.get_or_insert_text("article");
+//!
+//! // perform changes locally
+//! text1.push(&mut local.transact_mut_with(local.client_id()), "hello ");
+//! mgr.reset(); // prevent previous and next operation to be treated by Undo manager as one batch
+//! text1.push(&mut local.transact_mut_with(local.client_id()), "world");
+//! assert_eq!(text1.get_string(&local.transact()), "hello world");
+//!
+//! // perform remote changes - these are not being tracked by mgr
+//! {
+//!     let mut remote_txn = remote.transact_mut_with(remote.client_id());
+//!     text2.push(&mut remote_txn, "everyone");
+//!     assert_eq!(text2.get_string(&remote_txn), "everyone");
+//! }
+//!
+//! // sync changes from remote to local
+//! let update = remote.transact().encode_state_as_update_v1(&local.transact().state_vector());
+//! local.transact_mut().apply_update(Update::decode_v1(&update).unwrap());
+//! assert_eq!(text1.get_string(&local.transact()), "hello worldeveryone"); // remote changes synced
+//!
+//! // undo last performed change on local
+//! mgr.undo().unwrap();
+//! assert_eq!(text1.get_string(&local.transact()), "hello everyone");
+//!
+//! // redo change we undone
+//! mgr.redo().unwrap();
+//! assert_eq!(text1.get_string(&local.transact()), "hello worldeveryone");
+//! ```
+//!
+//! > Keep in mind, that in order to serve its purpose, undo manager may need to implicitly create
+//! transactions over underlying [Doc] - for that reason make sure that no other transaction is
+//! active while calling methods like [UndoManager::undo] or [UndoManager::redo].
+//!
+//! It's important to understand a context, in which [UndoManager] operates:
+//!
+//! - **origins** can be specific classifiers attached to read-write transactions upon creation (see:
+//!   [Transact::transact_mut_with]). Undo manager can [include](UndoManager::include_origin) any
+//!   number of origins to its track scope. By default no origin is specified: in such case undo
+//!   manager will track all changes without looking at transaction origin.
+//! - **scope** refers to shared collection references such as [TextRef], [MapRef] etc. Undo manager
+//!   will only track operations performed on tracked scope refs. By default at least one such
+//!   reference must be specified, but they can be [expanded](UndoManager::expand_scope) to include
+//!   multiple collections at once if necessary.
+//!
+//! Notice, that undo/redo changes are **not** mapped 1-1 on the update batches committed by
+//! transactions. As an example: a frequent case includes establishing a new transaction for every
+//! user key stroke. Meanwhile we may decide to use different granularity of undo/redo actions.
+//! These are grouped together on time-based ranges (configurable in [undo::Options], which is
+//! 500ms by default). You can also set them explicitly by calling [UndoManager::reset] method.
+//!
+//! # Showing past revisions of the document
+//!
+//! Another feature of Yrs is an ability to snapshot and recover versions of the document,
+//! as well as show the differences between them:
+//!
+//! ```rust
+//! use yrs::{Doc, GetString, Options, ReadTxn, Text, Transact, Update};
+//! use yrs::types::Attrs;
+//! use yrs::types::text::{Diff, YChange};
+//! use yrs::updates::decoder::Decode;
+//! use yrs::updates::encoder::{Encoder, EncoderV1};
+//!
+//! let doc = Doc::with_options(Options {
+//!     skip_gc: true,  // in order to support revisions we cannot garbage collect deleted blocks
+//!     ..Options::default()
+//! });
+//! let text = doc.get_or_insert_xml_text("article");
+//! let mut txn = doc.transact_mut();
+//!
+//! const INIT: &str = "hello world";
+//! text.push(&mut txn, INIT);
+//!
+//! // save current state of the document: "hello world"
+//! let rev = txn.snapshot();
+//!
+//! // change document state
+//! let italic = Attrs::from([("i".into(), true.into())]);
+//! text.format(&mut txn, 6, 5, italic.clone());
+//! text.remove_range(&mut txn, 2, 3);
+//! assert_eq!(text.get_string(&txn), "he <i>world</i>");
+//!
+//! // encode past version of the document
+//! let mut encoder = EncoderV1::new();
+//! txn.encode_state_from_snapshot(&rev, &mut encoder).unwrap();
+//! let update = encoder.to_vec();
+//!
+//! // restore the past state
+//! let doc = Doc::new();
+//! let text = doc.get_or_insert_xml_text("article");
+//! let mut txn = doc.transact_mut();
+//! txn.apply_update(Update::decode_v1(&update).unwrap());
+//!
+//! assert_eq!(text.get_string(&txn), INIT);
+//! ```
+//!
+//! Keep in mind that an update created from past snapshot via [TransactionMut::encode_state_from_snapshot]
+//! doesn't contain updates that happened after that snapshot. What does that mean? While you can
+//! continue making new updates on top of that revision, they will be no longer compatible with any
+//! changes made on the original document since the snapshot has been made, therefore [TransactionMut::apply_update]
+//! on updates generated between two document revisions that branched their state is no longer possible.
+//!
+//! For the reason above main use case of this feature is rendering read-only state of the [Doc]
+//! or restoring document from its past state ie. when current state has been irrecoverably corrupted.
+//!
 //! # Other shared types
 //!
 //! So far we only discussed rich text oriented capabilities of Yrs. However it's possible to make
@@ -236,9 +359,9 @@
 //!
 //! Underneath all of these types are represented by the same abstract [types::Branch] type. Each
 //! branch is always capable of working as both indexed sequence of elements and a map. In practice
-//! specialized shared types are actually a projections over branch type and can be used interchangeably
+//! specialized shared types are actually projections over branch type and can be used interchangeably
 //! if needed, i.e.: [XmlElementRef] can be also interpreted as [MapRef], in which case the collection
-//! of that XML node attributes become key-value entries of casted map's.
+//! of that XML node attributes become key-value entries of reinterpreted map's.
 //!
 //! # Preliminary vs Integrated types
 //!
@@ -280,6 +403,19 @@
 //! 5. Update callbacks: [Doc::observe_update_v1] and [Doc::observe_update_v2]. Useful when we want
 //!    to encode and propagate incremental changes made by transaction to other peers.
 //! 6. Sub-document change callbacks: [Doc::observe_subdocs].
+//!
+//! # Update encoding v1 vs. v2
+//!
+//! Yrs ships with so called lib0 encoding, which offers two different variants, both of which are
+//! compatible with [Yjs](https://docs.yjs.dev/) and can be used to bridge between applications
+//! written in different languages using Yrs underneath. They offer a highly compact format,
+//! that aims to produce small binary payload size and high encoding/decoding speed.
+//!
+//! V1 encoding is the default one and should be preferred most of the time. V2 encoding aims to
+//! perform payload size optimizations whenever multiple updates are being encoded and passed
+//! together (eg. when you want to serialize an entire document state), however for small updates
+//! (eg. sending individual user key strokes) V2 may turn out to be less optimal than its V1
+//! equivalent.
 //!
 //! # External learning materials
 //!
@@ -359,6 +495,7 @@ pub use crate::types::xml::XmlFragmentRef;
 pub use crate::types::xml::XmlNode;
 pub use crate::types::xml::XmlTextPrelim;
 pub use crate::types::xml::XmlTextRef;
+pub use crate::types::DeepObservable;
 pub use crate::types::GetString;
 pub use crate::types::Observable;
 pub use crate::undo::UndoManager;
