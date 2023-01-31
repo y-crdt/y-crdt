@@ -897,8 +897,9 @@ mod test {
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
     use crate::{
         Array, ArrayPrelim, DeleteSet, Doc, GetString, Map, Options, StateVector, SubscriptionId,
-        Text, Transact, Uuid,
+        Text, Transact, Uuid, XmlElementPrelim, XmlFragment,
     };
+    use lib0::any;
     use lib0::any::Any;
     use std::cell::{Cell, RefCell, RefMut};
     use std::collections::BTreeSet;
@@ -1932,5 +1933,48 @@ mod test {
             last_event,
             Some((vec![uuid_3.clone()], vec![], vec![uuid_3.clone()]))
         );
+    }
+
+    #[test]
+    fn to_json() {
+        let doc = Doc::new();
+        let text = doc.get_or_insert_text("text");
+        let array = doc.get_or_insert_array("array");
+        let map = doc.get_or_insert_map("map");
+        let xml_text = doc.get_or_insert_xml_text("xml-text");
+        let xml_fragment = doc.get_or_insert_xml_fragment("xml-fragment");
+        let xml_element = doc.get_or_insert_xml_element("xml-element");
+
+        let mut txn = doc.transact_mut();
+
+        text.push(&mut txn, "hello");
+        xml_text.push(&mut txn, "world");
+        xml_fragment.insert(&mut txn, 0, XmlElementPrelim::empty("div"));
+        xml_element.insert(&mut txn, 0, XmlElementPrelim::empty("body"));
+        array.insert_range(&mut txn, 0, [1, 2, 3]);
+        map.insert(&mut txn, "key1", "value1");
+
+        // sub documents cannot use their parent's transaction
+        let sub_doc = Doc::new();
+        let sub_text = sub_doc.get_or_insert_text("sub-text");
+        let sub_doc = map.insert(&mut txn, "sub-doc", sub_doc);
+        let mut sub_txn = sub_doc.transact_mut();
+        sub_text.push(&mut sub_txn, "sample");
+
+        let actual = doc.to_json(&txn);
+        let expected = any!({
+            "text": "hello",
+            "array": [1,2,3],
+            "map": {
+                "key1": "value1",
+                "sub-doc": {
+                    "guid": sub_doc.guid().as_ref()
+                }
+            },
+            "xml-text": "world",
+            "xml-fragment": "<div></div>",
+            "xml-element": "<xml-element><body></body></xml-element>"
+        });
+        assert_eq!(actual, expected);
     }
 }
