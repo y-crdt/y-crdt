@@ -1984,8 +1984,8 @@ impl ItemContent {
             BLOCK_ITEM_STRING_REF_NUMBER => Ok(ItemContent::String(decoder.read_string()?.into())),
             BLOCK_ITEM_EMBED_REF_NUMBER => Ok(ItemContent::Embed(decoder.read_json()?.into())),
             BLOCK_ITEM_FORMAT_REF_NUMBER => Ok(ItemContent::Format(
-                decoder.read_key()?,
-                decoder.read_json()?.into(),
+                decoder.read_string()?.into(),
+                decoder.read_any()?.into(),
             )),
             BLOCK_ITEM_TYPE_REF_NUMBER => {
                 let type_ref = decoder.read_type_ref()?;
