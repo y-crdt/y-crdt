@@ -1516,4 +1516,43 @@ mod test {
 
         assert_eq!(xml.get_string(&txn), "<b>hello</b> world");
     }
+
+    #[test]
+    fn format_attributes_decode_compatibility_v1() {
+        let data = &[
+            1, 6, 1, 0, 6, 1, 4, 116, 101, 115, 116, 1, 105, 4, 116, 114, 117, 101, 132, 1, 0, 6,
+            104, 101, 108, 108, 111, 32, 132, 1, 6, 5, 119, 111, 114, 108, 100, 134, 1, 11, 1, 105,
+            4, 110, 117, 108, 108, 198, 1, 6, 1, 7, 1, 98, 4, 116, 114, 117, 101, 134, 1, 12, 1,
+            98, 4, 110, 117, 108, 108, 0,
+        ];
+        let update = Update::decode_v1(data).unwrap();
+        let doc = Doc::new();
+        let txt = doc.get_or_insert_xml_text("test");
+        let mut txn = doc.transact_mut();
+
+        txn.apply_update(update);
+        assert_eq!(txt.get_string(&txn), "<i>hello </i><b><i>world</i></b>");
+
+        let actual = txn.encode_state_as_update_v1(&StateVector::default());
+        assert_eq!(actual, data);
+    }
+
+    #[test]
+    fn format_attributes_decode_compatibility_v2() {
+        let data = &[
+            0, 3, 0, 3, 1, 2, 65, 5, 5, 0, 12, 10, 74, 12, 1, 14, 9, 6, 0, 132, 1, 134, 0, 198, 0,
+            134, 26, 19, 116, 101, 115, 116, 105, 104, 101, 108, 108, 111, 32, 119, 111, 114, 108,
+            100, 105, 98, 98, 4, 1, 6, 5, 65, 1, 1, 1, 0, 0, 1, 6, 0, 120, 126, 120, 126, 0,
+        ];
+        let update = Update::decode_v2(data).unwrap();
+        let doc = Doc::new();
+        let txt = doc.get_or_insert_xml_text("test");
+        let mut txn = doc.transact_mut();
+
+        txn.apply_update(update);
+        assert_eq!(txt.get_string(&txn), "<i>hello </i><b><i>world</i></b>");
+
+        let actual = txn.encode_state_as_update_v2(&StateVector::default());
+        assert_eq!(actual, data);
+    }
 }

@@ -323,9 +323,7 @@ impl Encoder for EncoderV2 {
     }
 
     fn write_json(&mut self, any: &Any) {
-        let mut buf = String::new();
-        any.to_json(&mut buf);
-        self.write_string(buf.as_str())
+        self.write_any(any)
     }
 
     fn write_key(&mut self, key: &str) {
