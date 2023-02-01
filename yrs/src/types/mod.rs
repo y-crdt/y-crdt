@@ -17,6 +17,7 @@ use crate::types::array::{ArrayEvent, ArrayRef};
 use crate::types::map::MapEvent;
 use crate::types::text::TextEvent;
 use crate::types::xml::{XmlElementRef, XmlEvent, XmlTextEvent, XmlTextRef};
+use lib0::any;
 use lib0::any::Any;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::convert::TryInto;
@@ -781,7 +782,7 @@ impl ToJson for Value {
             Value::YXmlElement(v) => Any::String(v.get_string(txn).into_boxed_str()),
             Value::YXmlText(v) => Any::String(v.get_string(txn).into_boxed_str()),
             Value::YXmlFragment(v) => Any::String(v.get_string(txn).into_boxed_str()),
-            Value::YDoc(doc) => doc.to_json(txn),
+            Value::YDoc(doc) => any!({"guid": doc.guid().as_ref()}),
         }
     }
 }

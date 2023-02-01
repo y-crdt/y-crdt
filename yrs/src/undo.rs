@@ -360,11 +360,13 @@ impl UndoManager {
     /// of updates performed in a given time range - they also can be separated explicitly by
     /// calling [UndoManager::reset].
     ///
+    /// Successful execution returns a boolean value telling if an undo call has performed any changes.
+    ///
+    /// # Errors
+    ///
     /// This method requires an exclusive access to underlying document store. This means that
     /// no other transaction on that same document can be active while calling this method.
     /// Otherwise an error will be returned.
-    ///
-    /// Successful execution returns a boolean value telling if an undo call has performed any changes.
     pub fn undo(&mut self) -> Result<bool, TransactionAcqError> {
         let mut txn = self.0.doc.try_transact_mut_with(self.as_origin())?;
         self.0.undoing.set(true);
@@ -396,11 +398,13 @@ impl UndoManager {
     /// (a.k.a. [StackItem]s) are groups of updates performed in a given time range - they also can
     /// be separated explicitly by calling [UndoManager::reset].
     ///
+    /// Successful execution returns a boolean value telling if an undo call has performed any changes.
+    ///
+    /// # Errors
+    ///
     /// This method requires an exclusive access to underlying document store. This means that
     /// no other transaction on that same document can be active while calling this method.
     /// Otherwise an error will be returned.
-    ///
-    /// Successful execution returns a boolean value telling if an undo call has performed any changes.
     pub fn redo(&mut self) -> Result<bool, TransactionAcqError> {
         let mut txn = self.0.doc.try_transact_mut_with(self.as_origin())?;
         self.0.redoing.set(true);
