@@ -938,21 +938,29 @@ where
 
     /// Tree walker used depth-first search to move over the xml tree.
     fn next(&mut self) -> Option<Self::Item> {
+        fn try_descend(item: &Item) -> Option<&Block> {
+            if let ItemContent::Type(t) = &item.content {
+                let inner = t.as_ref();
+                let type_ref = inner.type_ref();
+                if !item.is_deleted()
+                    && (type_ref == TYPE_REFS_XML_ELEMENT || type_ref == TYPE_REFS_XML_FRAGMENT)
+                {
+                    return inner.start.as_deref();
+                }
+            }
+
+            None
+        }
+
         let mut result = None;
         let mut n = self.current.take();
         if let Some(current) = n {
             if !self.first_call || current.is_deleted() {
                 while {
-                    if let ItemContent::Type(t) = &current.content {
-                        let inner = t.as_ref();
-                        let type_ref = inner.type_ref();
-                        if !current.is_deleted()
-                            && (type_ref == TYPE_REFS_XML_ELEMENT
-                                || type_ref == TYPE_REFS_XML_FRAGMENT)
-                            && inner.start.is_some()
-                        {
-                            // walk down in the tree
-                            n = inner.start.as_ref().and_then(|ptr| ptr.as_item());
+                    if let Some(current) = n {
+                        if let Some(ptr) = try_descend(current) {
+                            // depth-first search - try walk down the tree first
+                            n = ptr.as_item();
                         } else {
                             // walk right or up in the tree
                             while let Some(current) = n {
@@ -1190,12 +1198,13 @@ mod test {
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encoder, EncoderV1};
     use crate::{
-        Doc, GetString, Observable, StateVector, Text, Transact, Update, XmlElementPrelim,
+        Doc, GetString, Observable, Options, StateVector, Text, Transact, Update, XmlElementPrelim,
         XmlTextPrelim,
     };
     use lib0::any::Any;
     use std::cell::RefCell;
     use std::collections::HashMap;
+    use std::io::Cursor;
     use std::rc::Rc;
 
     #[test]
