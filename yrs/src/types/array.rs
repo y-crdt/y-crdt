@@ -1349,6 +1349,228 @@ mod test {
     }
 
     #[test]
+    fn move_range_to() {
+        let doc = Doc::with_client_id(1);
+        let arr = doc.get_or_insert_array("array");
+        // Move 1-2 to 4
+        {
+            let mut txn = doc.transact_mut();
+            let arr_len = arr.len(&txn);
+            arr.remove_range(&mut txn, 0, arr_len);
+            let arr_len = arr.len(&txn);
+            assert_eq!(arr_len, 0);
+            arr.insert_range(&mut txn, arr_len, [0, 1, 2, 3]);
+        }
+        arr.move_range_to(
+            &mut doc.transact_mut(),
+            1,
+            Assoc::After,
+            2,
+            Assoc::Before,
+            4,
+        );
+        assert_eq!(arr.to_json(&doc.transact()), vec![0, 3, 1, 2].into());
+
+        // Move 0-0 to 10
+        {
+            let mut txn = doc.transact_mut();
+            let arr_len = arr.len(&txn);
+            arr.remove_range(&mut txn, 0, arr_len);
+            let arr_len = arr.len(&txn);
+            assert_eq!(arr_len, 0);
+            arr.insert_range(&mut txn, arr_len, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+        }
+        arr.move_range_to(
+            &mut doc.transact_mut(),
+            0,
+            Assoc::After,
+            0,
+            Assoc::Before,
+            10,
+        );
+        assert_eq!(
+            arr.to_json(&doc.transact()),
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0].into()
+        );
+
+        // Move 0-1 to 10
+        {
+            let mut txn = doc.transact_mut();
+            let arr_len = arr.len(&txn);
+            arr.remove_range(&mut txn, 0, arr_len);
+            let arr_len = arr.len(&txn);
+            assert_eq!(arr_len, 0);
+            arr.insert_range(&mut txn, arr_len, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+        }
+        arr.move_range_to(
+            &mut doc.transact_mut(),
+            0,
+            Assoc::After,
+            1,
+            Assoc::Before,
+            10,
+        );
+        assert_eq!(
+            arr.to_json(&doc.transact()),
+            vec![2, 3, 4, 5, 6, 7, 8, 9, 0, 1].into()
+        );
+
+        // Move 3-5 to 7
+        {
+            let mut txn = doc.transact_mut();
+            let arr_len = arr.len(&txn);
+            arr.remove_range(&mut txn, 0, arr_len);
+            let arr_len = arr.len(&txn);
+            assert_eq!(arr_len, 0);
+            arr.insert_range(&mut txn, arr_len, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+        }
+        arr.move_range_to(
+            &mut doc.transact_mut(),
+            3,
+            Assoc::After,
+            5,
+            Assoc::Before,
+            7,
+        );
+        assert_eq!(
+            arr.to_json(&doc.transact()),
+            vec![0, 1, 2, 6, 3, 4, 5, 7, 8, 9].into()
+        );
+
+        // Move 1-0 to 10
+        {
+            let mut txn = doc.transact_mut();
+            let arr_len = arr.len(&txn);
+            arr.remove_range(&mut txn, 0, arr_len);
+            let arr_len = arr.len(&txn);
+            assert_eq!(arr_len, 0);
+            arr.insert_range(&mut txn, arr_len, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+        }
+        arr.move_range_to(
+            &mut doc.transact_mut(),
+            1,
+            Assoc::After,
+            0,
+            Assoc::Before,
+            10,
+        );
+        assert_eq!(
+            arr.to_json(&doc.transact()),
+            vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9].into()
+        );
+
+        // Move 3-5 to 5
+        {
+            let mut txn = doc.transact_mut();
+            let arr_len = arr.len(&txn);
+            arr.remove_range(&mut txn, 0, arr_len);
+            let arr_len = arr.len(&txn);
+            assert_eq!(arr_len, 0);
+            arr.insert_range(&mut txn, arr_len, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+        }
+        arr.move_range_to(
+            &mut doc.transact_mut(),
+            3,
+            Assoc::After,
+            5,
+            Assoc::Before,
+            5,
+        );
+        assert_eq!(
+            arr.to_json(&doc.transact()),
+            vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9].into()
+        );
+
+        // Move 9-9 to 0
+        {
+            let mut txn = doc.transact_mut();
+            let arr_len = arr.len(&txn);
+            arr.remove_range(&mut txn, 0, arr_len);
+            let arr_len = arr.len(&txn);
+            assert_eq!(arr_len, 0);
+            arr.insert_range(&mut txn, arr_len, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+        }
+        arr.move_range_to(
+            &mut doc.transact_mut(),
+            9,
+            Assoc::After,
+            9,
+            Assoc::Before,
+            0,
+        );
+        assert_eq!(
+            arr.to_json(&doc.transact()),
+            vec![9, 0, 1, 2, 3, 4, 5, 6, 7, 8].into()
+        );
+
+        // Move 8-9 to 0
+        {
+            let mut txn = doc.transact_mut();
+            let arr_len = arr.len(&txn);
+            arr.remove_range(&mut txn, 0, arr_len);
+            let arr_len = arr.len(&txn);
+            assert_eq!(arr_len, 0);
+            arr.insert_range(&mut txn, arr_len, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+        }
+        arr.move_range_to(
+            &mut doc.transact_mut(),
+            8,
+            Assoc::After,
+            9,
+            Assoc::Before,
+            0,
+        );
+        assert_eq!(
+            arr.to_json(&doc.transact()),
+            vec![8, 9, 0, 1, 2, 3, 4, 5, 6, 7].into()
+        );
+
+        // Move 4-6 to 3
+        {
+            let mut txn = doc.transact_mut();
+            let arr_len = arr.len(&txn);
+            arr.remove_range(&mut txn, 0, arr_len);
+            let arr_len = arr.len(&txn);
+            assert_eq!(arr_len, 0);
+            arr.insert_range(&mut txn, arr_len, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+        }
+        arr.move_range_to(
+            &mut doc.transact_mut(),
+            4,
+            Assoc::After,
+            6,
+            Assoc::Before,
+            3,
+        );
+        assert_eq!(
+            arr.to_json(&doc.transact()),
+            vec![0, 1, 2, 4, 5, 6, 3, 7, 8, 9].into()
+        );
+
+        // Move 3-5 to 3
+        {
+            let mut txn = doc.transact_mut();
+            let arr_len = arr.len(&txn);
+            arr.remove_range(&mut txn, 0, arr_len);
+            let arr_len = arr.len(&txn);
+            assert_eq!(arr_len, 0);
+            arr.insert_range(&mut txn, arr_len, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+        }
+        arr.move_range_to(
+            &mut doc.transact_mut(),
+            3,
+            Assoc::After,
+            5,
+            Assoc::Before,
+            3,
+        );
+        assert_eq!(
+            arr.to_json(&doc.transact()),
+            vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9].into()
+        );
+    }
+
+    #[test]
     fn multi_threading() {
         use rand::thread_rng;
         use std::sync::{Arc, RwLock};
