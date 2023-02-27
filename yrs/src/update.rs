@@ -1109,11 +1109,42 @@ mod test {
         txt.insert(&mut tr, 0, "aaa");
 
         let binary = tr.encode_update_v1();
-        let u1 = Update::decode(&mut DecoderV1::new(Cursor::new(binary.as_slice()))).unwrap();
-        let u2 = Update::decode(&mut DecoderV1::new(Cursor::new(binary.as_slice()))).unwrap();
-        let u3 = Update::decode(&mut DecoderV1::new(Cursor::new(binary.as_slice()))).unwrap();
+        let u1 = decode_update(&binary);
+        let u2 = decode_update(&binary);
+        let u3 = decode_update(&binary);
 
         let merged_update = Update::merge_updates(vec![u1, u2]);
         assert_eq!(merged_update, u3);
+    }
+
+    #[test]
+    fn test_multiple_clients_in_one_update() {
+        let binary1 = {
+            let doc = Doc::with_client_id(1);
+            let txt = doc.get_or_insert_text("test");
+            let mut tr = doc.transact_mut();
+            txt.insert(&mut tr, 0, "aaa");
+            tr.encode_update_v1()
+        };
+        let binary2 = {
+            let doc = Doc::with_client_id(2);
+            let txt = doc.get_or_insert_text("test");
+            let mut tr = doc.transact_mut();
+            txt.insert(&mut tr, 0, "bbb");
+            tr.encode_update_v1()
+        };
+
+        let u12 = Update::merge_updates(vec![decode_update(&binary1), decode_update(&binary2)]);
+        let u12_copy =
+            Update::merge_updates(vec![decode_update(&binary1), decode_update(&binary2)]);
+
+        assert_eq!(2, u12.blocks.clients.keys().len());
+
+        let merged_update = Update::merge_updates(vec![u12]);
+        assert_eq!(merged_update, u12_copy);
+    }
+
+    fn decode_update(bin: &[u8]) -> Update {
+        Update::decode(&mut DecoderV1::new(Cursor::new(bin))).unwrap()
     }
 }
