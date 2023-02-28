@@ -1250,7 +1250,7 @@ mod test {
         let a = acc.clone();
         let _sub = d1.observe_update_v1(move |_: &TransactionMut, e| {
             let u = Update::decode_v1(&e.update).unwrap();
-            for mut block in u.blocks.into_blocks() {
+            for mut block in u.blocks.into_blocks(false) {
                 match block.as_block_ptr().as_deref() {
                     Some(Block::Item(item)) => {
                         if let ItemContent::String(s) = &item.content {
