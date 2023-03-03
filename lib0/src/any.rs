@@ -5,6 +5,8 @@ use std::cmp::PartialEq;
 use std::collections::HashMap;
 use std::convert::TryInto;
 
+/// Any is an enum with a potentially associated value that is used to represent JSON values 
+/// and supports efficient encoding of those values.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Any {
     Null,
