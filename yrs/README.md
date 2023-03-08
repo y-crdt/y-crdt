@@ -30,7 +30,7 @@ fn main() {
     // simulate update with remote peer
     let remote_doc = Doc::new();
     let remote_text = remote_doc.get_or_insert_text("name");
-    let mut remote_txn = remote_doc.transact();
+    let mut remote_txn = remote_doc.transact_mut();
 
     // in order to exchange data with other documents 
     // we first need to create a state vector
