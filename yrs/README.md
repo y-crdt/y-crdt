@@ -46,7 +46,7 @@ fn main() {
     remote_txn.apply_update(update);
 
     // display raw text (no attributes)
-    println!("{}", remote_text.to_string(&remote_txn));
+    println!("{}", remote_text.get_string(&remote_txn));
   
     // create sequence of text chunks with optional format attributes
     let diff = remote_text.diff(&remote_txn, YChange::identity);
