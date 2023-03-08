@@ -166,11 +166,13 @@ impl IdRange {
         let raw = std::mem::take(self);
         *self = match (raw, other) {
             (IdRange::Continuous(mut a), IdRange::Continuous(b)) => {
-                if a.end >= b.start && a.start <= b.start {
-                    a.end = b.end;
-                    IdRange::Continuous(a)
-                } else {
+                let never_intersect = a.end < b.start || b.end < a.start;
+                if never_intersect {
                     IdRange::Fragmented(vec![a, b])
+                } else {
+                    a.start = a.start.min(b.start);
+                    a.end = a.end.max(b.end);
+                    IdRange::Continuous(a)
                 }
             }
             (IdRange::Fragmented(mut a), IdRange::Continuous(b)) => {
@@ -179,7 +181,7 @@ impl IdRange {
             }
             (IdRange::Continuous(a), IdRange::Fragmented(b)) => {
                 let mut v = b;
-                v.push(a.clone());
+                v.push(a);
                 IdRange::Fragmented(v)
             }
             (IdRange::Fragmented(mut a), IdRange::Fragmented(mut b)) => {
@@ -710,6 +712,29 @@ mod test {
     use crate::{DeleteSet, Doc, Options, ReadTxn, Text, Transact, ID};
     use std::collections::HashSet;
     use std::fmt::Debug;
+
+    #[test]
+    fn id_range_merge_continous() {
+        // `b` entirely within `a`
+        let mut a = IdRange::Continuous(0..5);
+        a.merge(IdRange::Continuous(2..4));
+        assert_eq!(a, IdRange::Continuous(0..5));
+
+        // the tail of `a` crosses the head of `b`
+        let mut a = IdRange::Continuous(0..5);
+        a.merge(IdRange::Continuous(4..9));
+        assert_eq!(a, IdRange::Continuous(0..9));
+
+        // `b` is immediately adjacent to the end of `a`
+        let mut a = IdRange::Continuous(0..5);
+        a.merge(IdRange::Continuous(5..9));
+        assert_eq!(a, IdRange::Continuous(0..9));
+
+        // `a` does not intersect with `b`
+        let mut a = IdRange::Continuous(0..4);
+        a.merge(IdRange::Continuous(6..9));
+        assert_eq!(a, IdRange::Fragmented(vec![0..4, 6..9]));
+    }
 
     #[test]
     fn id_range_compact() {
