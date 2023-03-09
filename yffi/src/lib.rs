@@ -11,7 +11,7 @@ use yrs::types::array::ArrayEvent;
 use yrs::types::array::ArrayIter as NativeArrayIter;
 use yrs::types::map::MapEvent;
 use yrs::types::map::MapIter as NativeMapIter;
-use yrs::types::text::TextEvent;
+use yrs::types::text::{Diff, TextEvent, YChange};
 use yrs::types::xml::{Attributes as NativeAttributes, XmlNode};
 use yrs::types::xml::{TreeWalker as NativeTreeWalker, XmlFragment};
 use yrs::types::xml::{XmlEvent, XmlTextEvent};
@@ -2326,6 +2326,81 @@ pub unsafe extern "C" fn yxmltext_get_attr(
         CString::new(value).unwrap().into_raw()
     } else {
         std::ptr::null_mut()
+    }
+}
+
+/// Returns a collection of chunks representing pieces of `YText` rich text string grouped together
+/// by the same formatting rules and type. `chunks_len` is used to inform about a number of chunks
+/// generated this way.
+///
+/// Returned array needs to be eventually deallocated using `ychunks_destroy`.
+#[no_mangle]
+pub unsafe extern "C" fn ytext_chunks(
+    txt: *const Branch,
+    txn: *const Transaction,
+    chunks_len: *mut u32,
+) -> *mut YChunk {
+    assert!(!txt.is_null());
+    assert!(!txn.is_null());
+
+    let txt = TextRef::from_raw_branch(txt);
+    let txn = txn.as_ref().unwrap();
+
+    let diffs = txt.diff(txn, YChange::identity);
+    let mut chunks: Vec<_> = diffs.into_iter().map(YChunk::from).collect();
+    let out = chunks.into_boxed_slice();
+    *chunks_len = out.len() as u32;
+    Box::into_raw(out) as *mut _
+}
+
+/// Deallocates result of `ytext_chunks` method.
+#[no_mangle]
+pub unsafe extern "C" fn ychunks_destroy(chunks: *mut YChunk, len: u32) {
+    drop(Vec::from_raw_parts(chunks, len as usize, len as usize));
+}
+
+pub const YCHANGE_ADD: i8 = 1;
+pub const YCHANGE_RETAIN: i8 = 0;
+pub const YCHANGE_REMOVE: i8 = -1;
+
+/// A chunk of text contents formatted with the same set of attributes.
+#[repr(C)]
+pub struct YChunk {
+    /// Piece of YText formatted using the same `fmt` rules. It can be a string, embedded object
+    /// or another y-type.
+    pub data: YOutput,
+    /// Number of formatting attributes attached to current chunk of text.
+    pub fmt_len: u32,
+    ///
+    pub fmt: *mut YMapEntry,
+}
+
+impl From<Diff<YChange>> for YChunk {
+    fn from(diff: Diff<YChange>) -> Self {
+        let data = YOutput::from(diff.insert);
+        let mut fmt_len = 0;
+        let mut fmt = if let Some(attrs) = diff.attributes {
+            fmt_len = attrs.len() as u32;
+            let mut fmt = Vec::with_capacity(attrs.len());
+            for (k, v) in attrs.into_iter() {
+                let e = YMapEntry::new(k.as_ref(), Value::Any(v));
+                fmt.push(e);
+            }
+            Box::into_raw(fmt.into_boxed_slice()) as *mut _
+        } else {
+            null_mut()
+        };
+        YChunk { data, fmt_len, fmt }
+    }
+}
+
+impl Drop for YChunk {
+    fn drop(&mut self) {
+        if !self.fmt.is_null() {
+            drop(unsafe {
+                Vec::from_raw_parts(self.fmt, self.fmt_len as usize, self.fmt_len as usize)
+            });
+        }
     }
 }
 
