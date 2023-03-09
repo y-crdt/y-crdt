@@ -535,6 +535,54 @@ TEST_CASE("YText insert embed") {
     ydoc_destroy(doc);
 }
 
+TEST_CASE("YText formatting") {
+    YDoc* doc = ydoc_new_with_id(1);
+    Branch* txt = ytext(doc, "test");
+    YTransaction* txn = ydoc_write_transaction(doc, 0, NULL);
+
+    char* i = "i";
+    char* b = "b";
+    YInput yes = yinput_bool(Y_TRUE);
+    YInput italic = yinput_json_map(&i, &yes, 1);
+    YInput bold = yinput_json_map(&b, &yes, 1);
+
+    ytext_insert(txt, txn, 0, "hello world!", &italic);
+    ytext_format(txt, txn, 6, 5, &bold);
+    ytransaction_commit(txn);
+
+    txn = ydoc_read_transaction(doc);
+    uint32_t chunks_len;
+    YChunk* chunks = ytext_chunks(txt, txn, &chunks_len);
+    ytransaction_commit(txn);
+
+    REQUIRE_EQ(chunks_len, 3);
+    YChunk chunk = chunks[0];
+    REQUIRE(strcmp(youtput_read_string(&chunk.data), "hello ") == 0);
+    REQUIRE_EQ(chunk.fmt_len, 1);
+    REQUIRE(strcmp(chunk.fmt[0].key, i) == 0);
+    REQUIRE_EQ(*youtput_read_bool(&chunk.fmt[0].value), Y_TRUE);
+
+    chunk = chunks[1];
+    REQUIRE(strcmp(youtput_read_string(&chunk.data), "world") == 0);
+    REQUIRE_EQ(chunk.fmt_len, 2);
+    for(int i = 0; i < chunk.fmt_len; i++) {
+        YMapEntry e = chunk.fmt[i];
+        REQUIRE_EQ(*youtput_read_bool(&e.value), Y_TRUE);
+        REQUIRE_EQ(strlen(e.key), 1);
+        REQUIRE((e.key[0] == 'i' || e.key[0] == 'b'));
+    }
+    REQUIRE_EQ(*youtput_read_bool(&chunk.fmt[0].value), Y_TRUE);
+
+    chunk = chunks[2];
+    REQUIRE(strcmp(youtput_read_string(&chunk.data), "!") == 0);
+    REQUIRE_EQ(chunk.fmt_len, 1);
+    REQUIRE(strcmp(chunk.fmt[0].key, i) == 0);
+    REQUIRE_EQ(*youtput_read_bool(&chunk.fmt[0].value), Y_TRUE);
+
+    ychunks_destroy(chunks, chunks_len);
+    ydoc_destroy(doc);
+}
+
 typedef struct YArrayEventTest {
     uint32_t delta_len;
     YEventChange* delta;

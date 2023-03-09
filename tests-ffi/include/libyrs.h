@@ -228,6 +228,12 @@ typedef struct StickyIndex {} StickyIndex;
  */
 #define ERR_CODE_OTHER 6
 
+#define YCHANGE_ADD 1
+
+#define YCHANGE_RETAIN 0
+
+#define YCHANGE_REMOVE -1
+
 #define Y_KIND_UNDO 0
 
 #define Y_KIND_REDO 1
@@ -593,6 +599,25 @@ typedef struct YInput {
    */
   union YInputContent value;
 } YInput;
+
+/**
+ * A chunk of text contents formatted with the same set of attributes.
+ */
+typedef struct YChunk {
+  /**
+   * Piece of YText formatted using the same `fmt` rules. It can be a string, embedded object
+   * or another y-type.
+   */
+  struct YOutput data;
+  /**
+   * Number of formatting attributes attached to current chunk of text.
+   */
+  uint32_t fmt_len;
+  /**
+   *
+   */
+  struct YMapEntry *fmt;
+} YChunk;
 
 /**
  * Event pushed into callbacks registered with `ytext_observe` function. It contains delta of all
@@ -1737,6 +1762,20 @@ void yxmltext_remove_attr(const Branch *txt, YTransaction *txn, const char *attr
  * An `attr_name` must be a null-terminated UTF-8 encoded string.
  */
 char *yxmltext_get_attr(const Branch *txt, const YTransaction *txn, const char *attr_name);
+
+/**
+ * Returns a collection of chunks representing pieces of `YText` rich text string grouped together
+ * by the same formatting rules and type. `chunks_len` is used to inform about a number of chunks
+ * generated this way.
+ *
+ * Returned array needs to be eventually deallocated using `ychunks_destroy`.
+ */
+struct YChunk *ytext_chunks(const Branch *txt, const YTransaction *txn, uint32_t *chunks_len);
+
+/**
+ * Deallocates result of `ytext_chunks` method.
+ */
+void ychunks_destroy(struct YChunk *chunks, uint32_t len);
 
 /**
  * Releases all resources related to a corresponding `YOutput` cell.
