@@ -5,7 +5,7 @@ use std::cmp::PartialEq;
 use std::collections::HashMap;
 use std::convert::TryInto;
 
-/// Any is an enum with a potentially associated value that is used to represent JSON values 
+/// Any is an enum with a potentially associated value that is used to represent JSON values
 /// and supports efficient encoding of those values.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Any {
@@ -65,9 +65,7 @@ impl Any {
             }
             // CASE 116: buffer
             116 => Any::Buffer(Box::from(decoder.read_buf()?.to_owned())),
-            _ => {
-                panic!("Unable to read Any content");
-            }
+            _ => return Err(Error::UnexpectedValue),
         })
     }
 
