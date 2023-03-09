@@ -544,7 +544,7 @@ TEST_CASE("YText formatting") {
     char* b = "b";
     YInput yes = yinput_bool(Y_TRUE);
     YInput italic = yinput_json_map(&i, &yes, 1);
-    YInput bold = yinput_json_map(&i, &yes, 1);
+    YInput bold = yinput_json_map(&b, &yes, 1);
 
     ytext_insert(txt, txn, 0, "hello world!", &italic);
     ytext_format(txt, txn, 6, 5, &bold);
