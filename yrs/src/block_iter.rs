@@ -417,12 +417,14 @@ impl BlockIter {
                     next_item = self.next_item;
                 }
             } else if self.curr_move.is_some() {
-                // reached end but move stack still has some items, we try to pop them out and
-                // move to the right on the first non-null right neighbor of popped move frame ptr
+                // reached end but move stack still has some items,
+                // so we try to pop move frames and move on the
+                // first non-null right neighbor of the popped move block
                 while let Some(Block::Item(mov)) = self.curr_move.as_deref() {
                     next_item = mov.right;
                     self.pop(txn);
                     if next_item.is_some() {
+                        self.reached_end = false;
                         break;
                     }
                 }
