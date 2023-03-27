@@ -1398,28 +1398,20 @@ mod test {
         let doc = Doc::with_client_id(1);
         let array = doc.get_or_insert_array("array");
         let mut txn = array.transact_mut();
-        array.insert(&mut txn, 0, "1");
-        array.insert(&mut txn, 1, "2");
-        array.insert(&mut txn, 2, "3");
-        assert_eq!(array.iter(&txn).count(), 3);
-        drop(txn);
-
-        let txn = array.transact();
-        let str_array = array
-            .iter(&txn)
-            .map(|v| v.to_string(&txn))
-            .collect::<Vec<String>>();
-        assert_eq!(str_array, vec!["1", "2", "3"]);
+        array.insert_range(&mut txn, 0, [1, 2, 3]);
         drop(txn);
 
         let mut txn = array.transact_mut();
         array.move_to(&mut txn, 2, 0);
 
-        let str_array = array
-            .iter(&txn)
-            .map(|v| v.to_string(&txn))
-            .collect::<Vec<String>>();
-
-        assert_eq!(str_array, vec!["3", "1", "2"]);
+        let mut iter = array.iter(&txn);
+        let v = iter.next();
+        assert_eq!(v, Some(3.into()));
+        let v = iter.next();
+        assert_eq!(v, Some(1.into()));
+        let v = iter.next();
+        assert_eq!(v, Some(2.into()));
+        let v = iter.next();
+        assert_eq!(v, None);
     }
 }
