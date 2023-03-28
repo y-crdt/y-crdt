@@ -82,7 +82,9 @@ jobs:
           node-version: '16'
 
       - name: install wasm-pack
-        run: npm install -g wasm-pack
+        uses: jetli/wasm-pack-action@v0.4.0
+        with:
+          version: 'latest'
 
       - name: build wasm
         run: wasm-pack build --target nodejs ./ywasm
