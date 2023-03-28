@@ -44,7 +44,7 @@ impl BlockIter {
 
     #[inline]
     pub fn finished(&self) -> bool {
-        self.reached_end || self.index == self.branch.content_len
+        (self.reached_end && self.curr_move.is_none()) || self.index == self.branch.content_len
     }
 
     #[inline]
@@ -371,49 +371,67 @@ impl BlockIter {
         let mut next_item = self.next_item;
         let encoding = txn.store().options.offset_kind;
         let mut read = 0u32;
-        while len > 0 && !self.reached_end {
-            while let Some(mut ptr) = next_item {
-                if Some(ptr) != self.curr_move_end
-                    && ptr.is_countable()
-                    && !self.reached_end
-                    && len > 0
-                {
-                    if let Block::Item(item) = ptr.deref_mut() {
-                        if !item.is_deleted() && item.moved == self.curr_move {
-                            let r = item
-                                .content
-                                .read(self.rel as usize, &mut buf[read as usize..])
-                                as u32;
-                            read += r;
-                            len -= r;
-                            if self.rel + r == item.content_len(encoding) {
-                                self.rel = 0;
-                            } else {
-                                self.rel += r;
-                                continue; // do not iterate to item.right
+        while len > 0 {
+            if !self.reached_end {
+                while let Some(mut ptr) = next_item {
+                    if Some(ptr) != self.curr_move_end
+                        && ptr.is_countable()
+                        && !self.reached_end
+                        && len > 0
+                    {
+                        if let Block::Item(item) = ptr.deref_mut() {
+                            if !item.is_deleted() && item.moved == self.curr_move {
+                                // we're iterating inside of a block
+                                let r = item
+                                    .content
+                                    .read(self.rel as usize, &mut buf[read as usize..])
+                                    as u32;
+                                read += r;
+                                len -= r;
+                                if self.rel + r == item.content_len(encoding) {
+                                    self.rel = 0;
+                                } else {
+                                    self.rel += r;
+                                    continue; // do not iterate to item.right
+                                }
                             }
-                        }
 
-                        if item.right.is_some() {
-                            next_item = item.right;
-                            self.next_item = next_item;
+                            if item.right.is_some() {
+                                next_item = item.right;
+                            } else {
+                                self.reached_end = true;
+                            }
                         } else {
-                            self.reached_end = true;
+                            break;
                         }
                     } else {
                         break;
                     }
-                } else {
-                    break;
                 }
-            }
-            if (!self.reached_end || self.curr_move.is_some()) && len > 0 {
-                // always set nextItem before any method call
-                self.next_item = next_item;
-                if !self.try_forward(txn, 0) || self.next_item.is_none() {
-                    return read;
+                if (!self.reached_end || self.curr_move.is_some()) && len > 0 {
+                    // always set nextItem before any method call
+                    self.next_item = next_item;
+                    if !self.try_forward(txn, 0) || self.next_item.is_none() {
+                        return read;
+                    }
+                    next_item = self.next_item;
                 }
-                next_item = self.next_item;
+            } else if self.curr_move.is_some() {
+                // reached end but move stack still has some items,
+                // so we try to pop move frames and move on the
+                // first non-null right neighbor of the popped move block
+                while let Some(Block::Item(mov)) = self.curr_move.as_deref() {
+                    next_item = mov.right;
+                    self.pop(txn);
+                    if next_item.is_some() {
+                        self.reached_end = false;
+                        break;
+                    }
+                }
+            } else {
+                // reached end and move stack is empty
+                next_item = None;
+                break;
             }
         }
         self.next_item = next_item;

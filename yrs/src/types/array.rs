@@ -1390,4 +1390,28 @@ mod test {
         let len = array.len(&doc.transact());
         assert_eq!(len, 20);
     }
+
+    #[test]
+    fn move_last_elem_iter() {
+        // https://github.com/y-crdt/y-crdt/issues/186
+
+        let doc = Doc::with_client_id(1);
+        let array = doc.get_or_insert_array("array");
+        let mut txn = array.transact_mut();
+        array.insert_range(&mut txn, 0, [1, 2, 3]);
+        drop(txn);
+
+        let mut txn = array.transact_mut();
+        array.move_to(&mut txn, 2, 0);
+
+        let mut iter = array.iter(&txn);
+        let v = iter.next();
+        assert_eq!(v, Some(3.into()));
+        let v = iter.next();
+        assert_eq!(v, Some(1.into()));
+        let v = iter.next();
+        assert_eq!(v, Some(2.into()));
+        let v = iter.next();
+        assert_eq!(v, None);
+    }
 }
