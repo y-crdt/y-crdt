@@ -184,6 +184,13 @@ pub trait Map: AsRef<Branch> {
 
     /// Removes a stored within current map under a given `key`. Returns that value or `None` if
     /// no entry with a given `key` was present in current map.
+    ///
+    /// ### Removing nested shared types
+    ///
+    /// In case when a nested shared type (eg. [MapRef], [ArrayRef], [TextRef]) is being removed,
+    /// all of its contents will also be deleted recursively. A returned value will contain a
+    /// reference to a current removed shared type (which will be empty due to all of its elements
+    /// being deleted), **not** the content prior the removal.
     fn remove(&self, txn: &mut TransactionMut, key: &str) -> Option<Value> {
         let ptr = BranchPtr::from(self.as_ref());
         ptr.remove(txn, key)
