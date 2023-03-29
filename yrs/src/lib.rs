@@ -35,7 +35,7 @@
 //! // synchronize state with remote replica
 //! let remote_doc = Doc::new();
 //! let remote_text = remote_doc.get_or_insert_text("article");
-//! let remote_timestamp = remote_doc.transact().state_vector().encode_v1();
+//! let remote_timestamp = remote_doc.transact().state_vector().encode_v1().unwrap();
 //!
 //! // get update with contents not observed by remote_doc
 //! let update = doc.transact().encode_diff_v1(&StateVector::decode_v1(&remote_timestamp).unwrap()).unwrap();
@@ -171,7 +171,7 @@
 //! assert_eq!(str.chars().nth(INDEX), Some('o'));
 //!
 //! // synchronize full state of doc1 -> doc2
-//! txn2.apply_update(Update::decode_v1(&txn1.encode_diff_v1(&StateVector::default())).unwrap());
+//! txn2.apply_update(Update::decode_v1(&txn1.encode_diff_v1(&StateVector::default()).unwrap()).unwrap());
 //!
 //! // Doc 2: cursor at index 1 no longer points to the same character
 //! let str = text2.get_string(&txn2);
@@ -209,7 +209,7 @@
 //! let pos = text2.sticky_index(&mut txn2, INDEX as u32, Assoc::After).unwrap();
 //!
 //! // synchronize full state of doc1 -> doc2
-//! txn2.apply_update(Update::decode_v1(&txn1.encode_diff_v1(&StateVector::default())).unwrap());
+//! txn2.apply_update(Update::decode_v1(&txn1.encode_diff_v1(&StateVector::default()).unwrap()).unwrap());
 //!
 //! // restore the index from position saved previously
 //! let idx = pos.get_offset(&txn2).unwrap();
@@ -255,7 +255,7 @@
 //! }
 //!
 //! // sync changes from remote to local
-//! let update = remote.transact().encode_state_as_update_v1(&local.transact().state_vector());
+//! let update = remote.transact().encode_state_as_update_v1(&local.transact().state_vector()).unwrap();
 //! local.transact_mut().apply_update(Update::decode_v1(&update).unwrap());
 //! assert_eq!(text1.get_string(&local.transact()), "hello worldeveryone"); // remote changes synced
 //!

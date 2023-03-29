@@ -48,7 +48,7 @@ use thiserror::Error;
 /// // in order to exchange data with other documents we first need to create a state vector
 /// let remote_doc = Doc::new();
 /// let mut remote_txn = remote_doc.transact_mut();
-/// let state_vector = remote_txn.state_vector().encode_v1();
+/// let state_vector = remote_txn.state_vector().encode_v1().unwrap();
 ///
 /// // now compute a differential update based on remote document's state vector
 /// let update = txn.encode_diff_v1(&StateVector::decode_v1(&state_vector).unwrap()).unwrap();

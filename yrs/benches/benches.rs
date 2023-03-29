@@ -241,11 +241,11 @@ where
                 for (o1, o2) in ops {
                     let mut txn1 = d1.transact_mut();
                     apply(&mut txn1, t1, o1);
-                    let u1 = txn1.encode_update_v1();
+                    let u1 = txn1.encode_update_v1().unwrap();
 
                     let mut txn2 = d2.transact_mut();
                     apply(&mut txn2, t2, o2);
-                    let u2 = txn2.encode_update_v1();
+                    let u2 = txn2.encode_update_v1().unwrap();
 
                     txn1.apply_update(Update::decode_v1(u2.as_slice()).unwrap());
                     txn2.apply_update(Update::decode_v1(u1.as_slice()).unwrap());
@@ -344,7 +344,7 @@ where
             let update = {
                 let mut txn = doc.transact_mut();
                 f(&map, &mut txn, i);
-                txn.encode_update_v1()
+                txn.encode_update_v1().unwrap()
             };
             (doc, update)
         })
@@ -391,7 +391,7 @@ fn b3_4(c: &mut Criterion, name: &str) {
             let update = {
                 let mut txn = doc.transact_mut();
                 array.insert(&mut txn, 0, i.to_string());
-                txn.encode_update_v1()
+                txn.encode_update_v1().unwrap()
             };
             (doc, update)
         })
