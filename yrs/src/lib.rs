@@ -460,6 +460,7 @@ pub use crate::doc::Options;
 pub use crate::doc::Transact;
 pub use crate::doc::{
     DestroySubscription, SubdocsSubscription, TransactionCleanupSubscription, UpdateSubscription,
+    AfterTransactionSubscription,
 };
 pub use crate::event::{SubdocsEvent, SubdocsEventIter, TransactionCleanupEvent, UpdateEvent};
 pub use crate::id_set::DeleteSet;
