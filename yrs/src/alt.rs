@@ -19,7 +19,7 @@ pub fn merge_updates_v1(updates: &[&[u8]]) -> Result<Vec<u8>, Error> {
         let parsed = Update::decode_v1(buf)?;
         merge.push(parsed);
     }
-    Ok(Update::merge_updates(merge).encode_v1())
+    Ok(Update::merge_updates(merge).encode_v1()?)
 }
 
 /// Merges a sequence of updates (encoded using lib0 v2 encoding) together, producing another
@@ -33,7 +33,7 @@ pub fn merge_updates_v2(updates: &[&[u8]]) -> Result<Vec<u8>, Error> {
         let update = Update::decode_v2(buf)?;
         merge.push(update);
     }
-    Ok(Update::merge_updates(merge).encode_v2())
+    Ok(Update::merge_updates(merge).encode_v2()?)
 }
 
 /// Decodes a input `update` (encoded using lib0 v1 encoding) and returns an encoded [StateVector]
@@ -42,7 +42,7 @@ pub fn merge_updates_v2(updates: &[&[u8]]) -> Result<Vec<u8>, Error> {
 /// Returns an error whenever any of the input update couldn't be decoded.
 pub fn encode_state_vector_from_update_v1(update: &[u8]) -> Result<Vec<u8>, Error> {
     let update = Update::decode_v1(update)?;
-    Ok(update.state_vector().encode_v1())
+    Ok(update.state_vector().encode_v1()?)
 }
 
 /// Decodes a input `update` (encoded using lib0 v2 encoding) and returns an encoded [StateVector]
@@ -51,7 +51,7 @@ pub fn encode_state_vector_from_update_v1(update: &[u8]) -> Result<Vec<u8>, Erro
 /// Returns an error whenever any of the input update couldn't be decoded.
 pub fn encode_state_vector_from_update_v2(update: &[u8]) -> Result<Vec<u8>, Error> {
     let update = Update::decode_v2(update)?;
-    Ok(update.state_vector().encode_v2())
+    Ok(update.state_vector().encode_v2()?)
 }
 
 /// Givens an input `update` (encoded using lib0 v1 encoding) of document **A** and an encoded
@@ -63,7 +63,7 @@ pub fn diff_updates_v1(update: &[u8], state_vector: &[u8]) -> Result<Vec<u8>, Er
     let sv = StateVector::decode_v1(state_vector)?;
     let update = Update::decode_v1(update)?;
     let mut encoder = EncoderV1::new();
-    update.encode_diff(&sv, &mut encoder);
+    update.encode_diff(&sv, &mut encoder)?;
     // for delete set, don't decode/encode it - just copy the remaining part from the decoder
     let result = encoder.to_vec();
     Ok(result)
@@ -80,7 +80,7 @@ pub fn diff_updates_v2(update: &[u8], state_vector: &[u8]) -> Result<Vec<u8>, Er
     let mut decoder = DecoderV2::new(cursor)?;
     let update = Update::decode(&mut decoder)?;
     let mut encoder = EncoderV2::new();
-    update.encode_diff(&sv, &mut encoder);
+    update.encode_diff(&sv, &mut encoder)?;
     // for delete set, don't decode/encode it - just copy the remaining part from the decoder
     Ok(encoder.to_vec())
 }

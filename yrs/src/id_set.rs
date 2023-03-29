@@ -15,9 +15,10 @@ use std::ops::Range;
 // as it's left-inclusive/right-exclusive and defines the exact capabilities we care about here.
 
 impl Encode for Range<u32> {
-    fn encode<E: Encoder>(&self, encoder: &mut E) {
+    fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), Error> {
         encoder.write_ds_clock(self.start);
-        encoder.write_ds_len(self.end - self.start)
+        encoder.write_ds_len(self.end - self.start);
+        Ok(())
     }
 }
 
@@ -215,19 +216,20 @@ impl Default for IdRange {
 }
 
 impl Encode for IdRange {
-    fn encode<E: Encoder>(&self, encoder: &mut E) {
+    fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), Error> {
         match self {
             IdRange::Continuous(range) => {
                 encoder.write_var(1u32);
-                range.encode(encoder)
+                range.encode(encoder)?;
             }
             IdRange::Fragmented(ranges) => {
                 encoder.write_var(ranges.len() as u32);
                 for range in ranges.iter() {
-                    range.encode(encoder);
+                    range.encode(encoder)?;
                 }
             }
         }
+        Ok(())
     }
 }
 
@@ -365,13 +367,14 @@ impl IdSet {
 }
 
 impl Encode for IdSet {
-    fn encode<E: Encoder>(&self, encoder: &mut E) {
+    fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), Error> {
         encoder.write_var(self.0.len() as u32);
         for (&client_id, block) in self.0.iter() {
             encoder.reset_ds_cur_val();
             encoder.write_var(client_id);
-            block.encode(encoder);
+            block.encode(encoder)?;
         }
+        Ok(())
     }
 }
 
@@ -570,7 +573,7 @@ impl Decode for DeleteSet {
 
 impl Encode for DeleteSet {
     #[inline]
-    fn encode<E: Encoder>(&self, encoder: &mut E) {
+    fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), Error> {
         self.0.encode(encoder)
     }
 }
@@ -814,7 +817,7 @@ mod test {
         T: Encode + Decode + PartialEq + Debug,
     {
         let mut encoder = EncoderV1::new();
-        value.encode(&mut encoder);
+        value.encode(&mut encoder).unwrap();
         let buf = encoder.to_vec();
         let mut decoder = DecoderV1::from(buf.as_slice());
         let decoded = T::decode(&mut decoder).unwrap();

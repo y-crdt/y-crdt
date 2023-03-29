@@ -286,7 +286,7 @@ impl Move {
 }
 
 impl Encode for Move {
-    fn encode<E: Encoder>(&self, encoder: &mut E) {
+    fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), Error> {
         let is_collapsed = self.is_collapsed();
         let flags = {
             let mut b = 0;
@@ -311,6 +311,8 @@ impl Encode for Move {
             encoder.write_var(id.client);
             encoder.write_var(id.clock);
         }
+
+        Ok(())
     }
 }
 
@@ -609,9 +611,10 @@ impl StickyIndex {
 }
 
 impl Encode for StickyIndex {
-    fn encode<E: Encoder>(&self, encoder: &mut E) {
-        self.scope.encode(encoder);
-        self.assoc.encode(encoder);
+    fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), Error> {
+        self.scope.encode(encoder)?;
+        self.assoc.encode(encoder)?;
+        Ok(())
     }
 }
 
@@ -662,7 +665,7 @@ pub enum IndexScope {
 }
 
 impl Encode for IndexScope {
-    fn encode<E: Encoder>(&self, encoder: &mut E) {
+    fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), Error> {
         match self {
             IndexScope::Relative(id) => {
                 encoder.write_var(0);
@@ -679,6 +682,8 @@ impl Encode for IndexScope {
                 encoder.write_string(&type_name);
             }
         }
+
+        Ok(())
     }
 }
 
@@ -727,11 +732,12 @@ impl Default for Assoc {
 }
 
 impl Encode for Assoc {
-    fn encode<E: Encoder>(&self, encoder: &mut E) {
+    fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), Error> {
         match self {
             Assoc::Before => encoder.write_var(-1),
             Assoc::After => encoder.write_var(0),
         }
+        Ok(())
     }
 }
 
@@ -799,7 +805,7 @@ mod test {
             // for all types of associations..
             for assoc in [Assoc::After, Assoc::Before] {
                 let rel_pos = text.sticky_index(&mut txn, i, assoc).unwrap();
-                let encoded = rel_pos.encode_v1();
+                let encoded = rel_pos.encode_v1().unwrap();
                 let decoded = StickyIndex::decode_v1(&encoded).unwrap();
                 let abs_pos = decoded
                     .get_offset(&txn)

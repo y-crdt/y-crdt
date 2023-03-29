@@ -825,7 +825,9 @@ impl YTransaction {
     #[wasm_bindgen(method, js_name = stateVectorV1)]
     pub fn state_vector_v1(&self) -> Uint8Array {
         let sv = self.state_vector();
-        let payload = sv.encode_v1();
+        let payload = sv
+            .encode_v1()
+            .expect("failed to encode state vector using lib0 v1 encoding");
         Uint8Array::from(&payload[..payload.len()])
     }
 
@@ -869,7 +871,8 @@ impl YTransaction {
         } else {
             StateVector::default()
         };
-        self.encode_diff(&sv, &mut encoder);
+        self.encode_diff(&sv, &mut encoder)
+            .expect("failed to encode diff using lib0 v1 encoding");
         let payload = encoder.to_vec();
         Ok(Uint8Array::from(&payload[..payload.len()]))
     }
@@ -914,7 +917,8 @@ impl YTransaction {
         } else {
             StateVector::default()
         };
-        self.encode_diff(&sv, &mut encoder);
+        self.encode_diff(&sv, &mut encoder)
+            .expect("failed to encode diff using lib0 v2 encoding");
         let payload = encoder.to_vec();
         Ok(Uint8Array::from(&payload[..payload.len()]))
     }
@@ -1003,7 +1007,9 @@ impl YTransaction {
     pub fn encode_update(&mut self) -> Uint8Array {
         let out = match &self.0 {
             InnerTxn::ReadOnly(_) => vec![0u8, 0u8],
-            InnerTxn::ReadWrite(txn) => txn.encode_update_v1(),
+            InnerTxn::ReadWrite(txn) => txn
+                .encode_update_v1()
+                .expect("failed to encode update using lib0 v1 encoding"),
         };
         Uint8Array::from(&out[..out.len()])
     }
@@ -1012,7 +1018,9 @@ impl YTransaction {
     pub fn encode_update_v2(&mut self) -> Uint8Array {
         let out = match &self.0 {
             InnerTxn::ReadOnly(_) => vec![0u8, 0u8],
-            InnerTxn::ReadWrite(txn) => txn.encode_update_v2(),
+            InnerTxn::ReadWrite(txn) => txn
+                .encode_update_v2()
+                .expect("failed to encode update using lib0 v2 encoding"),
         };
         Uint8Array::from(&out[..out.len()])
     }
@@ -2138,12 +2146,18 @@ pub fn equal_snapshots(snap1: &YSnapshot, snap2: &YSnapshot) -> bool {
 
 #[wasm_bindgen(js_name = encodeSnapshotV1)]
 pub fn encode_snapshot_v1(snapshot: &YSnapshot) -> Vec<u8> {
-    snapshot.0.encode_v1()
+    snapshot
+        .0
+        .encode_v1()
+        .expect("failed to serialize snapshot using lib0 v1 encoding")
 }
 
 #[wasm_bindgen(js_name = encodeSnapshotV2)]
 pub fn encode_snapshot_v2(snapshot: &YSnapshot) -> Vec<u8> {
-    snapshot.0.encode_v2()
+    snapshot
+        .0
+        .encode_v2()
+        .expect("failed to serialize snapshot using lib0 v2 encoding")
 }
 
 #[wasm_bindgen(catch, js_name = decodeSnapshotV2)]
@@ -4057,7 +4071,11 @@ pub fn create_offset_from_sticky_index(rpos: &JsValue, doc: &YDoc) -> Result<JsV
 #[wasm_bindgen(catch, js_name=encodeStickyIndex)]
 pub fn encode_sticky_index(rpos: &JsValue) -> Result<Uint8Array, JsValue> {
     if let Ok(pos) = sticky_index_from_js(rpos) {
-        let bytes = Uint8Array::from(pos.encode_v1().as_slice());
+        let bytes = Uint8Array::from(
+            pos.encode_v1()
+                .expect("failed to serialize sticky index")
+                .as_slice(),
+        );
         Ok(bytes)
     } else {
         Err(JsValue::from_str("passed parameter is not StickyIndex"))

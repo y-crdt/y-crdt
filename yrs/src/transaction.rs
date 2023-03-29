@@ -51,33 +51,42 @@ pub trait ReadTxn: Sized {
 
     /// Encodes the difference between remove peer state given its `state_vector` and the state
     /// of a current local peer
-    fn encode_diff<E: Encoder>(&self, state_vector: &StateVector, encoder: &mut E) {
+    fn encode_diff<E: Encoder>(
+        &self,
+        state_vector: &StateVector,
+        encoder: &mut E,
+    ) -> Result<(), Error> {
         self.store().encode_diff(state_vector, encoder)
     }
 
-    fn encode_diff_v1(&self, state_vector: &StateVector) -> Vec<u8> {
+    fn encode_diff_v1(&self, state_vector: &StateVector) -> Result<Vec<u8>, Error> {
         let mut encoder = EncoderV1::new();
-        self.encode_diff(state_vector, &mut encoder);
-        encoder.to_vec()
+        self.encode_diff(state_vector, &mut encoder)?;
+        Ok(encoder.to_vec())
     }
 
-    fn encode_state_as_update<E: Encoder>(&self, sv: &StateVector, encoder: &mut E) {
+    fn encode_state_as_update<E: Encoder>(
+        &self,
+        sv: &StateVector,
+        encoder: &mut E,
+    ) -> Result<(), Error> {
         let store = self.store();
-        store.write_blocks_from(sv, encoder);
+        store.write_blocks_from(sv, encoder)?;
         let ds = DeleteSet::from(&store.blocks);
-        ds.encode(encoder);
+        ds.encode(encoder)?;
+        Ok(())
     }
 
-    fn encode_state_as_update_v1(&self, sv: &StateVector) -> Vec<u8> {
+    fn encode_state_as_update_v1(&self, sv: &StateVector) -> Result<Vec<u8>, Error> {
         let mut encoder = EncoderV1::new();
-        self.encode_state_as_update(sv, &mut encoder);
-        encoder.to_vec()
+        self.encode_state_as_update(sv, &mut encoder)?;
+        Ok(encoder.to_vec())
     }
 
-    fn encode_state_as_update_v2(&self, sv: &StateVector) -> Vec<u8> {
+    fn encode_state_as_update_v2(&self, sv: &StateVector) -> Result<Vec<u8>, Error> {
         let mut encoder = EncoderV2::new();
-        self.encode_state_as_update(sv, &mut encoder);
-        encoder.to_vec()
+        self.encode_state_as_update(sv, &mut encoder)?;
+        Ok(encoder.to_vec())
     }
 
     /// Returns an iterator over top level (root) shared types available in current [Doc].
@@ -343,10 +352,10 @@ impl<'doc> TransactionMut<'doc> {
     ///   end up with the same content.
     /// * Even if an update contains known information, the unknown information
     ///   is extracted and integrated into the document structure.
-    pub fn encode_update_v1(&self) -> Vec<u8> {
+    pub fn encode_update_v1(&self) -> Result<Vec<u8>, Error> {
         let mut encoder = updates::encoder::EncoderV1::new();
-        self.encode_update(&mut encoder);
-        encoder.to_vec()
+        self.encode_update(&mut encoder)?;
+        Ok(encoder.to_vec())
     }
 
     /// Encodes changes made within the scope of the current transaction using lib0 v2 encoding.
@@ -357,10 +366,10 @@ impl<'doc> TransactionMut<'doc> {
     ///   end up with the same content.
     /// * Even if an update contains known information, the unknown information
     ///   is extracted and integrated into the document structure.
-    pub fn encode_update_v2(&self) -> Vec<u8> {
+    pub fn encode_update_v2(&self) -> Result<Vec<u8>, Error> {
         let mut encoder = updates::encoder::EncoderV2::new();
-        self.encode_update(&mut encoder);
-        encoder.to_vec()
+        self.encode_update(&mut encoder)?;
+        Ok(encoder.to_vec())
     }
 
     /// Encodes changes made within the scope of the current transaction.
@@ -371,10 +380,11 @@ impl<'doc> TransactionMut<'doc> {
     ///   end up with the same content.
     /// * Even if an update contains known information, the unknown information
     ///   is extracted and integrated into the document structure.
-    pub fn encode_update<E: Encoder>(&self, encoder: &mut E) {
+    pub fn encode_update<E: Encoder>(&self, encoder: &mut E) -> Result<(), Error> {
         let store = self.store();
-        store.write_blocks_from(&self.before_state, encoder);
-        self.delete_set.encode(encoder);
+        store.write_blocks_from(&self.before_state, encoder)?;
+        self.delete_set.encode(encoder)?;
+        Ok(())
     }
 
     /// Applies given `id_set` onto current transaction to run multi-range deletion.

@@ -453,7 +453,11 @@ impl Update {
         }
     }
 
-    pub(crate) fn encode_diff<E: Encoder>(&self, remote_sv: &StateVector, encoder: &mut E) {
+    pub(crate) fn encode_diff<E: Encoder>(
+        &self,
+        remote_sv: &StateVector,
+        encoder: &mut E,
+    ) -> Result<(), Error> {
         let mut clients = HashMap::new();
         for (client, blocks) in self.blocks.clients.iter() {
             let remote_clock = remote_sv.get(client);
@@ -491,13 +495,14 @@ impl Update {
 
             let mut block = blocks[0];
             encoder.write_var(block.id().clock + offset);
-            block.encode_with_offset(encoder, *offset);
+            block.encode_with_offset(encoder, *offset)?;
             for i in 1..blocks.len() {
                 block = blocks[i];
-                block.encode_with_offset(encoder, 0);
+                block.encode_with_offset(encoder, 0)?;
             }
         }
-        self.delete_set.encode(encoder)
+        self.delete_set.encode(encoder)?;
+        Ok(())
     }
 
     pub fn merge_updates<T>(block_stores: T) -> Update
@@ -672,7 +677,7 @@ impl Update {
 
 impl Encode for Update {
     #[inline]
-    fn encode<E: Encoder>(&self, encoder: &mut E) {
+    fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), Error> {
         self.encode_diff(&StateVector::default(), encoder)
     }
 }
@@ -832,7 +837,11 @@ impl BlockCarrier {
             false
         }
     }
-    pub fn encode_with_offset<E: Encoder>(&self, encoder: &mut E, offset: u32) {
+    pub fn encode_with_offset<E: Encoder>(
+        &self,
+        encoder: &mut E,
+        offset: u32,
+    ) -> Result<(), Error> {
         match self {
             BlockCarrier::Block(x) => {
                 let slice = BlockSlice::new(x.into(), offset, x.len() - 1);
@@ -841,6 +850,7 @@ impl BlockCarrier {
             BlockCarrier::Skip(x) => {
                 encoder.write_info(BLOCK_SKIP_REF_NUMBER);
                 encoder.write_len(x.len - offset);
+                Ok(())
             }
         }
     }
@@ -860,14 +870,15 @@ impl From<Box<Block>> for BlockCarrier {
 }
 
 impl Encode for BlockCarrier {
-    fn encode<E: Encoder>(&self, encoder: &mut E) {
+    fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), Error> {
         match self {
-            BlockCarrier::Block(block) => block.encode(None, encoder),
+            BlockCarrier::Block(block) => block.encode(None, encoder)?,
             BlockCarrier::Skip(skip) => {
                 encoder.write_info(BLOCK_SKIP_REF_NUMBER);
                 encoder.write_len(skip.len)
             }
         }
+        Ok(())
     }
 }
 
@@ -1075,8 +1086,8 @@ mod test {
         txt2.insert(&mut t2, 0, "bbb");
         txt2.insert(&mut t2, 2, "bbb");
 
-        let binary1 = t1.encode_update_v1();
-        let binary2 = t2.encode_update_v1();
+        let binary1 = t1.encode_update_v1().unwrap();
+        let binary2 = t2.encode_update_v1().unwrap();
 
         t1.apply_update(Update::decode_v1(binary2.as_slice()).unwrap());
         t2.apply_update(Update::decode_v1(binary1.as_slice()).unwrap());
@@ -1108,7 +1119,7 @@ mod test {
         let mut tr = doc.transact_mut();
         txt.insert(&mut tr, 0, "aaa");
 
-        let binary = tr.encode_update_v1();
+        let binary = tr.encode_update_v1().unwrap();
         let u1 = decode_update(&binary);
         let u2 = decode_update(&binary);
         let u3 = decode_update(&binary);
@@ -1124,14 +1135,14 @@ mod test {
             let txt = doc.get_or_insert_text("test");
             let mut tr = doc.transact_mut();
             txt.insert(&mut tr, 0, "aaa");
-            tr.encode_update_v1()
+            tr.encode_update_v1().unwrap()
         };
         let binary2 = {
             let doc = Doc::with_client_id(2);
             let txt = doc.get_or_insert_text("test");
             let mut tr = doc.transact_mut();
             txt.insert(&mut tr, 0, "bbb");
-            tr.encode_update_v1()
+            tr.encode_update_v1().unwrap()
         };
 
         let u12 = Update::merge_updates(vec![decode_update(&binary1), decode_update(&binary2)]);

@@ -133,13 +133,17 @@ impl Store {
         if !self.options.skip_gc {
             return Err(Error::Other("Cannot encode past state from the snapshot for a document with GC option flag set on".to_string()));
         }
-        self.write_blocks_to(&snapshot.state_map, encoder);
-        snapshot.delete_set.encode(encoder);
+        self.write_blocks_to(&snapshot.state_map, encoder)?;
+        snapshot.delete_set.encode(encoder)?;
 
         Ok(())
     }
 
-    pub(crate) fn write_blocks_to<E: Encoder>(&self, sv: &StateVector, encoder: &mut E) {
+    pub(crate) fn write_blocks_to<E: Encoder>(
+        &self,
+        sv: &StateVector,
+        encoder: &mut E,
+    ) -> Result<(), Error> {
         let local_sv = self.blocks.get_state_vector();
         let mut diff = Vec::with_capacity(sv.len());
         for (&client_id, &clock) in sv.iter() {
@@ -162,14 +166,15 @@ impl Store {
             encoder.write_var(0);
             for i in 0..last_idx {
                 let block = blocks.get(i);
-                block.encode(Some(self), encoder);
+                block.encode(Some(self), encoder)?;
             }
             let last_block = blocks.get(last_idx);
             // write first struct with an offset
             let offset = clock - last_block.id().clock - 1;
             let slice = BlockSlice::new(last_block, 0, offset);
-            slice.encode(encoder, Some(self));
+            slice.encode(encoder, Some(self))?;
         }
+        return Ok(());
     }
 
     /// Compute a diff to sync with another client.
@@ -180,17 +185,21 @@ impl Store {
     /// The sync protocol in Yrs/js is:
     /// * Send StateVector to the other client.
     /// * The other client comutes a minimal diff to sync by using the StateVector.
-    pub fn encode_diff<E: Encoder>(&self, sv: &StateVector, encoder: &mut E) {
+    pub fn encode_diff<E: Encoder>(&self, sv: &StateVector, encoder: &mut E) -> Result<(), Error> {
         //TODO: this could be actually 2 steps:
         // 1. create Diff of block store and remote state vector (it can have lifetime of bock store)
         // 2. make Diff implement Encode trait and encode it
         // this way we can add some extra utility method on top of Diff (like introspection) without need of decoding it.
-        self.write_blocks_from(sv, encoder);
+        self.write_blocks_from(sv, encoder)?;
         let delete_set = DeleteSet::from(&self.blocks);
-        delete_set.encode(encoder);
+        delete_set.encode(encoder)
     }
 
-    pub(crate) fn write_blocks_from<E: Encoder>(&self, sv: &StateVector, encoder: &mut E) {
+    pub(crate) fn write_blocks_from<E: Encoder>(
+        &self,
+        sv: &StateVector,
+        encoder: &mut E,
+    ) -> Result<(), Error> {
         let local_sv = self.blocks.get_state_vector();
         let mut diff = Self::diff_state_vectors(&local_sv, sv);
 
@@ -211,11 +220,12 @@ impl Store {
             // write first struct with an offset
             let offset = clock - first_block.id().clock;
             let slice = BlockSlice::new(first_block, offset, first_block.len() - 1);
-            slice.encode(encoder, Some(self));
+            slice.encode(encoder, Some(self))?;
             for i in (start + 1)..blocks.len() {
-                blocks.get(i).encode(Some(self), encoder);
+                blocks.get(i).encode(Some(self), encoder)?;
             }
         }
+        Ok(())
     }
 
     fn diff_state_vectors(local_sv: &StateVector, remote_sv: &StateVector) -> Vec<(ClientID, u32)> {
@@ -349,7 +359,7 @@ impl Encode for Store {
     ///   end up with the same content.
     /// * Even if an update contains known information, the unknown information
     ///   is extracted and integrated into the document structure.
-    fn encode<E: Encoder>(&self, encoder: &mut E) {
+    fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), Error> {
         self.encode_diff(&StateVector::default(), encoder)
     }
 }
@@ -497,9 +507,10 @@ impl StoreEvents {
         if let Some(eh) = self.update_v1_events.as_ref() {
             if !txn.delete_set.is_empty() || txn.after_state != txn.before_state {
                 // produce update only if anything changed
-                let update = UpdateEvent::new_v1(txn);
-                for fun in eh.callbacks() {
-                    fun(txn, &update);
+                if let Ok(update) = UpdateEvent::new_v1(txn) {
+                    for fun in eh.callbacks() {
+                        fun(txn, &update);
+                    }
                 }
             }
         }
@@ -530,9 +541,10 @@ impl StoreEvents {
         if let Some(eh) = self.update_v2_events.as_ref() {
             if !txn.delete_set.is_empty() || txn.after_state != txn.before_state {
                 // produce update only if anything changed
-                let update = UpdateEvent::new_v2(txn);
-                for fun in eh.callbacks() {
-                    fun(txn, &update);
+                if let Ok(update) = UpdateEvent::new_v2(txn) {
+                    for fun in eh.callbacks() {
+                        fun(txn, &update);
+                    }
                 }
             }
         }

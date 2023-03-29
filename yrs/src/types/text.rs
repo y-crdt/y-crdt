@@ -1410,11 +1410,15 @@ mod test {
 
         txt2.insert(&mut t2, 0, "world");
 
-        let d1_sv = t1.state_vector().encode_v1();
-        let d2_sv = t2.state_vector().encode_v1();
+        let d1_sv = t1.state_vector().encode_v1().unwrap();
+        let d2_sv = t2.state_vector().encode_v1().unwrap();
 
-        let u1 = t1.encode_diff_v1(&StateVector::decode_v1(&d2_sv).unwrap());
-        let u2 = t2.encode_diff_v1(&StateVector::decode_v1(&d1_sv).unwrap());
+        let u1 = t1
+            .encode_diff_v1(&StateVector::decode_v1(&d2_sv).unwrap())
+            .unwrap();
+        let u2 = t2
+            .encode_diff_v1(&StateVector::decode_v1(&d1_sv).unwrap())
+            .unwrap();
 
         t1.apply_update(Update::decode_v1(u2.as_slice()).unwrap());
         t2.apply_update(Update::decode_v1(u1.as_slice()).unwrap());
@@ -1439,8 +1443,10 @@ mod test {
         let txt2 = d2.get_or_insert_text("test");
         let mut t2 = d2.transact_mut();
 
-        let d2_sv = t2.state_vector().encode_v1();
-        let u1 = t1.encode_diff_v1(&StateVector::decode_v1(&d2_sv).unwrap());
+        let d2_sv = t2.state_vector().encode_v1().unwrap();
+        let u1 = t1
+            .encode_diff_v1(&StateVector::decode_v1(&d2_sv).unwrap())
+            .unwrap();
         t2.apply_update(Update::decode_v1(u1.as_slice()).unwrap());
 
         assert_eq!(txt2.get_string(&t2).as_str(), "I expect that");
@@ -1452,10 +1458,14 @@ mod test {
         txt1.insert(&mut t1, 1, " didn't");
         assert_eq!(txt1.get_string(&t1).as_str(), "I didn't expect that");
 
-        let d2_sv = t2.state_vector().encode_v1();
-        let d1_sv = t1.state_vector().encode_v1();
-        let u1 = t1.encode_diff_v1(&StateVector::decode_v1(&d2_sv.as_slice()).unwrap());
-        let u2 = t2.encode_diff_v1(&StateVector::decode_v1(&d1_sv.as_slice()).unwrap());
+        let d2_sv = t2.state_vector().encode_v1().unwrap();
+        let d1_sv = t1.state_vector().encode_v1().unwrap();
+        let u1 = t1
+            .encode_diff_v1(&StateVector::decode_v1(&d2_sv.as_slice()).unwrap())
+            .unwrap();
+        let u2 = t2
+            .encode_diff_v1(&StateVector::decode_v1(&d1_sv.as_slice()).unwrap())
+            .unwrap();
         t1.apply_update(Update::decode_v1(u2.as_slice()).unwrap());
         t2.apply_update(Update::decode_v1(u1.as_slice()).unwrap());
 
@@ -1479,8 +1489,10 @@ mod test {
         let txt2 = d2.get_or_insert_text("test");
         let mut t2 = d2.transact_mut();
 
-        let d2_sv = t2.state_vector().encode_v1();
-        let u1 = t1.encode_diff_v1(&StateVector::decode_v1(&d2_sv.as_slice()).unwrap());
+        let d2_sv = t2.state_vector().encode_v1().unwrap();
+        let u1 = t1
+            .encode_diff_v1(&StateVector::decode_v1(&d2_sv.as_slice()).unwrap())
+            .unwrap();
         t2.apply_update(Update::decode_v1(u1.as_slice()).unwrap());
 
         assert_eq!(txt2.get_string(&t2).as_str(), "aaa");
@@ -1492,10 +1504,14 @@ mod test {
         txt1.insert(&mut t1, 3, "aaa");
         assert_eq!(txt1.get_string(&t1).as_str(), "aaaaaa");
 
-        let d2_sv = t2.state_vector().encode_v1();
-        let d1_sv = t1.state_vector().encode_v1();
-        let u1 = t1.encode_diff_v1(&StateVector::decode_v1(&d2_sv.as_slice()).unwrap());
-        let u2 = t2.encode_diff_v1(&StateVector::decode_v1(&d1_sv.as_slice()).unwrap());
+        let d2_sv = t2.state_vector().encode_v1().unwrap();
+        let d1_sv = t1.state_vector().encode_v1().unwrap();
+        let u1 = t1
+            .encode_diff_v1(&StateVector::decode_v1(&d2_sv.as_slice()).unwrap())
+            .unwrap();
+        let u2 = t2
+            .encode_diff_v1(&StateVector::decode_v1(&d1_sv.as_slice()).unwrap())
+            .unwrap();
 
         t1.apply_update(Update::decode_v1(u2.as_slice()).unwrap());
         t2.apply_update(Update::decode_v1(u1.as_slice()).unwrap());
@@ -1602,7 +1618,9 @@ mod test {
         txt1.insert(&mut t1, 0, "hello world");
         assert_eq!(txt1.get_string(&t1).as_str(), "hello world");
 
-        let u1 = t1.encode_state_as_update_v1(&StateVector::default());
+        let u1 = t1
+            .encode_state_as_update_v1(&StateVector::default())
+            .unwrap();
 
         let d2 = Doc::with_client_id(2);
         let txt2 = d2.get_or_insert_text("test");
@@ -1620,10 +1638,14 @@ mod test {
         txt2.insert(&mut t2, 0, "H");
         assert_eq!(txt2.get_string(&t2).as_str(), "Hellod");
 
-        let sv1 = t1.state_vector().encode_v1();
-        let sv2 = t2.state_vector().encode_v1();
-        let u1 = t1.encode_diff_v1(&StateVector::decode_v1(&sv2.as_slice()).unwrap());
-        let u2 = t2.encode_diff_v1(&StateVector::decode_v1(&sv1.as_slice()).unwrap());
+        let sv1 = t1.state_vector().encode_v1().unwrap();
+        let sv2 = t2.state_vector().encode_v1().unwrap();
+        let u1 = t1
+            .encode_diff_v1(&StateVector::decode_v1(&sv2.as_slice()).unwrap())
+            .unwrap();
+        let u2 = t2
+            .encode_diff_v1(&StateVector::decode_v1(&sv1.as_slice()).unwrap())
+            .unwrap();
 
         t1.apply_update(Update::decode_v1(u2.as_slice()).unwrap());
         t2.apply_update(Update::decode_v1(u1.as_slice()).unwrap());
@@ -1744,7 +1766,7 @@ mod test {
 
             let sv = t2.state_vector();
             let mut encoder = EncoderV1::new();
-            t1.encode_diff(&sv, &mut encoder);
+            t1.encode_diff(&sv, &mut encoder).unwrap();
             t2.apply_update(Update::decode_v1(encoder.to_vec().as_slice()).unwrap());
         }
 
@@ -1875,7 +1897,7 @@ mod test {
         {
             let mut txn = d1.transact_mut();
             txt1.insert_with_attributes(&mut txn, 0, "abc", a.clone());
-            let update = txn.encode_update_v1();
+            let update = txn.encode_update_v1().unwrap();
             drop(txn);
 
             let expected = Some(vec![Delta::Inserted(
@@ -1902,7 +1924,7 @@ mod test {
         {
             let mut txn = d1.transact_mut();
             txt1.remove_range(&mut txn, 0, 1);
-            let update = txn.encode_update_v1();
+            let update = txn.encode_update_v1().unwrap();
             drop(txn);
 
             let expected = Some(vec![Delta::Deleted(1)]);
@@ -1926,7 +1948,7 @@ mod test {
         {
             let mut txn = d1.transact_mut();
             txt1.remove_range(&mut txn, 1, 1);
-            let update = txn.encode_update_v1();
+            let update = txn.encode_update_v1().unwrap();
             drop(txn);
 
             let expected = Some(vec![Delta::Retain(1, None), Delta::Deleted(1)]);
@@ -1950,7 +1972,7 @@ mod test {
         {
             let mut txn = d1.transact_mut();
             txt1.insert_with_attributes(&mut txn, 0, "z", a.clone());
-            let update = txn.encode_update_v1();
+            let update = txn.encode_update_v1().unwrap();
             drop(txn);
 
             let expected = Some(vec![Delta::Inserted("z".into(), Some(Box::new(a.clone())))]);
@@ -1974,7 +1996,7 @@ mod test {
         {
             let mut txn = d1.transact_mut();
             txt1.insert(&mut txn, 0, "y");
-            let update = txn.encode_update_v1();
+            let update = txn.encode_update_v1().unwrap();
             drop(txn);
 
             let expected = Some(vec![Delta::Inserted("y".into(), None)]);
@@ -2002,7 +2024,7 @@ mod test {
             let mut txn = d1.transact_mut();
             let b: Attrs = HashMap::from([("bold".into(), Any::Null)]);
             txt1.format(&mut txn, 0, 2, b.clone());
-            let update = txn.encode_update_v1();
+            let update = txn.encode_update_v1().unwrap();
             drop(txn);
 
             let expected = Some(vec![
@@ -2073,8 +2095,12 @@ mod test {
             let mut txn = d1.transact_mut();
             assert_eq!(txt1.diff(&mut txn, YChange::identity), expected);
 
-            let update_v1 = txn.encode_state_as_update_v1(&StateVector::default());
-            let update_v2 = txn.encode_state_as_update_v2(&StateVector::default());
+            let update_v1 = txn
+                .encode_state_as_update_v1(&StateVector::default())
+                .unwrap();
+            let update_v2 = txn
+                .encode_state_as_update_v2(&StateVector::default())
+                .unwrap();
             (update_v1, update_v2)
         };
 

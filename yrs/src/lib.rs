@@ -38,7 +38,7 @@
 //! let remote_timestamp = remote_doc.transact().state_vector().encode_v1();
 //!
 //! // get update with contents not observed by remote_doc
-//! let update = doc.transact().encode_diff_v1(&StateVector::decode_v1(&remote_timestamp).unwrap());
+//! let update = doc.transact().encode_diff_v1(&StateVector::decode_v1(&remote_timestamp).unwrap()).unwrap();
 //! // apply update on remote doc
 //! remote_doc.transact_mut().apply_update(Update::decode_v1(&update).unwrap());
 //!
