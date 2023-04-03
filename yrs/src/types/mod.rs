@@ -622,6 +622,10 @@ pub trait DeepObservable {
     /// Callback is accepting transaction which triggered that event and event itself, wrapped
     /// within an [Event] structure.
     ///
+    /// In case when a nested shared type (e.g. [MapRef],[ArrayRef],[TextRef]) is being removed,
+    /// all of its contents will be removed first. So the observed value will be empty. For example,
+    /// The value wrapped in the [EntryChange::Removed] of the [Event::Map] will be empty.
+    ///
     /// This method returns a subscription, which will automatically unsubscribe current callback
     /// when dropped.
     fn observe_deep<F>(&mut self, f: F) -> DeepEventsSubscription
