@@ -1,6 +1,7 @@
 use crate::doc::DocAddr;
 use crate::transaction::Subdocs;
 use crate::{DeleteSet, Doc, StateVector, TransactionMut};
+use lib0::error::Error;
 use std::collections::HashMap;
 
 /// An update event passed to a callback subscribed with [Doc::observe_update_v1]/[Doc::observe_update_v2].
@@ -11,15 +12,15 @@ pub struct UpdateEvent {
 }
 
 impl UpdateEvent {
-    pub(crate) fn new_v1(txn: &TransactionMut) -> Self {
-        UpdateEvent {
-            update: txn.encode_update_v1(),
-        }
+    pub(crate) fn new_v1(txn: &TransactionMut) -> Result<Self, Error> {
+        Ok(UpdateEvent {
+            update: txn.encode_update_v1()?,
+        })
     }
-    pub(crate) fn new_v2(txn: &TransactionMut) -> Self {
-        UpdateEvent {
-            update: txn.encode_update_v2(),
-        }
+    pub(crate) fn new_v2(txn: &TransactionMut) -> Result<Self, Error> {
+        Ok(UpdateEvent {
+            update: txn.encode_update_v2()?,
+        })
     }
 }
 

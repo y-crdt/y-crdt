@@ -1220,7 +1220,9 @@ mod test {
         let f = d2.get_or_insert_xml_fragment("xml");
         let mut t2 = d2.transact_mut();
         let xml2 = f.push_back(&mut t2, XmlElementPrelim::empty("div"));
-        let u = t1.encode_state_as_update_v1(&StateVector::default());
+        let u = t1
+            .encode_state_as_update_v1(&StateVector::default())
+            .unwrap();
         t2.apply_update(Update::decode_v1(u.as_slice()).unwrap());
         assert_eq!(xml2.get_attribute(&t2, "height"), Some("10".to_string()));
     }
@@ -1313,7 +1315,9 @@ mod test {
         let expected = "hello<p></p>";
         assert_eq!(r1.get_string(&t1), expected);
 
-        let u1 = t1.encode_state_as_update_v1(&StateVector::default());
+        let u1 = t1
+            .encode_state_as_update_v1(&StateVector::default())
+            .unwrap();
 
         let d2 = Doc::with_client_id(2);
         let r2 = d2.get_or_insert_xml_fragment("root");
@@ -1347,7 +1351,9 @@ mod test {
             1, 3, 1, 0, 7, 1, 4, 114, 111, 111, 116, 6, 4, 0, 1, 0, 5, 104, 101, 108, 108, 111,
             135, 1, 0, 3, 1, 112, 0,
         ];
-        let u1 = t1.encode_state_as_update_v1(&StateVector::default());
+        let u1 = t1
+            .encode_state_as_update_v1(&StateVector::default())
+            .unwrap();
         assert_eq!(u1.as_slice(), expected);
     }
 
@@ -1460,7 +1466,7 @@ mod test {
             let mut t2 = d2.transact_mut();
             let sv = t2.state_vector();
             let mut encoder = EncoderV1::new();
-            t1.encode_diff(&sv, &mut encoder);
+            t1.encode_diff(&sv, &mut encoder).unwrap();
             t2.apply_update(Update::decode_v1(encoder.to_vec().as_slice()).unwrap());
         }
         assert_eq!(
@@ -1542,7 +1548,9 @@ mod test {
         txn.apply_update(update);
         assert_eq!(txt.get_string(&txn), "<i>hello </i><b><i>world</i></b>");
 
-        let actual = txn.encode_state_as_update_v1(&StateVector::default());
+        let actual = txn
+            .encode_state_as_update_v1(&StateVector::default())
+            .unwrap();
         assert_eq!(actual, data);
     }
 
@@ -1561,7 +1569,9 @@ mod test {
         txn.apply_update(update);
         assert_eq!(txt.get_string(&txn), "<i>hello </i><b><i>world</i></b>");
 
-        let actual = txn.encode_state_as_update_v2(&StateVector::default());
+        let actual = txn
+            .encode_state_as_update_v2(&StateVector::default())
+            .unwrap();
         assert_eq!(actual, data);
     }
 }

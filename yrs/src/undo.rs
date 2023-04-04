@@ -1303,7 +1303,8 @@ mod test {
         fn send(src: &Doc, dst: &Doc) {
             let update = Update::decode_v1(
                 &src.transact()
-                    .encode_state_as_update_v1(&StateVector::default()),
+                    .encode_state_as_update_v1(&StateVector::default())
+                    .unwrap(),
             )
             .unwrap();
             dst.transact_mut().apply_update(update)

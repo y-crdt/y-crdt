@@ -850,7 +850,10 @@ pub unsafe extern "C" fn ytransaction_state_vector_v1(
 
     let txn = txn.as_ref().unwrap();
     let state_vector = txn.state_vector();
-    let binary = state_vector.encode_v1().into_boxed_slice();
+    let binary = state_vector
+        .encode_v1()
+        .expect("failed to encode state vector using lib0 v1 encoding")
+        .into_boxed_slice();
 
     *len = binary.len() as u32;
     Box::into_raw(binary) as *mut c_char
@@ -894,7 +897,8 @@ pub unsafe extern "C" fn ytransaction_state_diff_v1(
     };
 
     let mut encoder = EncoderV1::new();
-    txn.encode_diff(&sv, &mut encoder);
+    txn.encode_diff(&sv, &mut encoder)
+        .expect("failed to encode transaction diff using lib0 v1 encoding");
     let binary = encoder.to_vec().into_boxed_slice();
     *len = binary.len() as u32;
     Box::into_raw(binary) as *mut c_char
@@ -938,7 +942,8 @@ pub unsafe extern "C" fn ytransaction_state_diff_v2(
     };
 
     let mut encoder = EncoderV2::new();
-    txn.encode_diff(&sv, &mut encoder);
+    txn.encode_diff(&sv, &mut encoder)
+        .expect("failed to encode diff using lib0 v2 encoding");
     let binary = encoder.to_vec().into_boxed_slice();
     *len = binary.len() as u32;
     Box::into_raw(binary) as *mut c_char
@@ -954,7 +959,11 @@ pub unsafe extern "C" fn ytransaction_snapshot(
 ) -> *mut c_char {
     assert!(!txn.is_null());
     let txn = txn.as_ref().unwrap();
-    let binary = txn.snapshot().encode_v1().into_boxed_slice();
+    let binary = txn
+        .snapshot()
+        .encode_v1()
+        .expect("failed to encode snapshot using lib0 v1 encoding")
+        .into_boxed_slice();
 
     *len = binary.len() as u32;
     Box::into_raw(binary) as *mut c_char
@@ -4949,7 +4958,13 @@ pub unsafe extern "C" fn ysticky_index_encode(
     len: *mut u32,
 ) -> *mut c_char {
     let pos = pos.as_ref().unwrap();
-    let binary = pos.0.encode_v1().into_boxed_slice();
+    let binary = pos
+        .0
+        .encode_v1()
+        .expect(
+            "YStickyIndex::encode_v1 failed. This is a bug, please report it to the developers.",
+        )
+        .into_boxed_slice();
     *len = binary.len() as u32;
     Box::into_raw(binary) as *mut c_char
 }

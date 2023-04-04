@@ -48,10 +48,10 @@ use thiserror::Error;
 /// // in order to exchange data with other documents we first need to create a state vector
 /// let remote_doc = Doc::new();
 /// let mut remote_txn = remote_doc.transact_mut();
-/// let state_vector = remote_txn.state_vector().encode_v1();
+/// let state_vector = remote_txn.state_vector().encode_v1().unwrap();
 ///
 /// // now compute a differential update based on remote document's state vector
-/// let update = txn.encode_diff_v1(&StateVector::decode_v1(&state_vector).unwrap());
+/// let update = txn.encode_diff_v1(&StateVector::decode_v1(&state_vector).unwrap()).unwrap();
 ///
 /// // both update and state vector are serializable, we can pass the over the wire
 /// // now apply update to a remote document
@@ -626,10 +626,11 @@ impl Default for Options {
 }
 
 impl Encode for Options {
-    fn encode<E: Encoder>(&self, encoder: &mut E) {
+    fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), Error> {
         let guid = self.guid.to_string();
         encoder.write_string(&guid);
-        encoder.write_any(&self.as_any())
+        encoder.write_any(&self.as_any());
+        Ok(())
     }
 }
 
@@ -968,7 +969,9 @@ mod test {
         txt.insert(&mut t, 0, "1");
         txt.insert(&mut t, 0, "2");
 
-        let encoded = t.encode_state_as_update_v1(&StateVector::default());
+        let encoded = t
+            .encode_state_as_update_v1(&StateVector::default())
+            .unwrap();
         let expected = &[
             1, 3, 227, 214, 245, 198, 5, 0, 4, 1, 4, 116, 121, 112, 101, 1, 48, 68, 227, 214, 245,
             198, 5, 0, 1, 49, 68, 227, 214, 245, 198, 5, 1, 1, 50, 0,
@@ -994,14 +997,15 @@ mod test {
         let d2 = Doc::new();
         let txt = d2.get_or_insert_text("test");
         let mut t2 = d2.transact_mut();
-        let sv = t2.state_vector().encode_v1();
+        let sv = t2.state_vector().encode_v1().unwrap();
 
         // create an update A->B based on B's state vector
         let mut encoder = EncoderV1::new();
         t1.encode_diff(
             &StateVector::decode_v1(sv.as_slice()).unwrap(),
             &mut encoder,
-        );
+        )
+        .unwrap();
         let binary = encoder.to_vec();
 
         // decode an update incoming from A and integrate it at B
@@ -1032,8 +1036,10 @@ mod test {
         {
             txt.insert(&mut txn, 0, "abc");
             let mut txn2 = doc2.transact_mut();
-            let sv = txn2.state_vector().encode_v1();
-            let u = txn.encode_diff_v1(&StateVector::decode_v1(sv.as_slice()).unwrap());
+            let sv = txn2.state_vector().encode_v1().unwrap();
+            let u = txn
+                .encode_diff_v1(&StateVector::decode_v1(sv.as_slice()).unwrap())
+                .unwrap();
             txn2.apply_update(Update::decode_v1(u.as_slice()).unwrap());
         }
         assert_eq!(counter.get(), 3); // update has been propagated
@@ -1043,8 +1049,10 @@ mod test {
         {
             txt.insert(&mut txn, 3, "de");
             let mut txn2 = doc2.transact_mut();
-            let sv = txn2.state_vector().encode_v1();
-            let u = txn.encode_diff_v1(&StateVector::decode_v1(sv.as_slice()).unwrap());
+            let sv = txn2.state_vector().encode_v1().unwrap();
+            let u = txn
+                .encode_diff_v1(&StateVector::decode_v1(sv.as_slice()).unwrap())
+                .unwrap();
             txn2.apply_update(Update::decode_v1(u.as_slice()).unwrap());
         }
         assert_eq!(counter.get(), 3); // since subscription has been dropped, update was not propagated
@@ -1139,10 +1147,11 @@ mod test {
 
         let d2 = Doc::new();
         let source_2 = d2.get_or_insert_text("source");
-        let state_2 = d2.transact().state_vector().encode_v1();
+        let state_2 = d2.transact().state_vector().encode_v1().unwrap();
         let update = d1
             .transact()
-            .encode_state_as_update_v1(&StateVector::decode_v1(&state_2).unwrap());
+            .encode_state_as_update_v1(&StateVector::decode_v1(&state_2).unwrap())
+            .unwrap();
         let update = Update::decode_v1(&update).unwrap();
         d2.transact_mut().apply_update(update);
 
@@ -1158,9 +1167,9 @@ mod test {
 
         let d3 = Doc::new();
         let source_3 = d3.get_or_insert_text("source");
-        let state_3 = d3.transact().state_vector().encode_v1();
+        let state_3 = d3.transact().state_vector().encode_v1().unwrap();
         let state_3 = StateVector::decode_v1(&state_3).unwrap();
-        let update = d1.transact().encode_state_as_update_v1(&state_3);
+        let update = d1.transact().encode_state_as_update_v1(&state_3).unwrap();
         let update = Update::decode_v1(&update).unwrap();
         d3.transact_mut().apply_update(update);
 
@@ -1219,7 +1228,8 @@ mod test {
         txt1.insert(&mut d1.transact_mut(), 0, "hello");
         let u = d1
             .transact()
-            .encode_state_as_update_v1(&StateVector::default());
+            .encode_state_as_update_v1(&StateVector::default())
+            .unwrap();
 
         let d2 = Doc::with_client_id(2);
         let txt2 = d2.get_or_insert_text("text");
@@ -1229,7 +1239,8 @@ mod test {
         txt1.insert(&mut d1.transact_mut(), 5, "world");
         let u = d1
             .transact()
-            .encode_state_as_update_v1(&StateVector::default());
+            .encode_state_as_update_v1(&StateVector::default())
+            .unwrap();
         d2.transact_mut()
             .apply_update(Update::decode_v1(&u).unwrap());
 
@@ -1607,7 +1618,7 @@ mod test {
             let mut t2 = d2.transact_mut();
             root.remove(&mut t2, 0);
             d1.transact_mut()
-                .apply_update(Update::decode_v1(&t2.encode_update_v1()).unwrap());
+                .apply_update(Update::decode_v1(&t2.encode_update_v1().unwrap()).unwrap());
         }
 
         {
@@ -1617,7 +1628,7 @@ mod test {
             a3.push_back(&mut t3, "B");
             // D1 got update which already removed a3, but this must not cause panic
             d1.transact_mut()
-                .apply_update(Update::decode_v1(&t3.encode_update_v1()).unwrap());
+                .apply_update(Update::decode_v1(&t3.encode_update_v1().unwrap()).unwrap());
         }
 
         exchange_updates(&[&d1, &d2, &d3]);
@@ -1728,7 +1739,8 @@ mod test {
 
         let data = doc
             .transact()
-            .encode_state_as_update_v1(&StateVector::default());
+            .encode_state_as_update_v1(&StateVector::default())
+            .unwrap();
 
         let doc2 = Doc::new();
         let event = Rc::new(Cell::new(None));
@@ -1835,7 +1847,8 @@ mod test {
         });
         let u = Update::decode_v1(
             &doc.transact()
-                .encode_state_as_update_v1(&StateVector::default()),
+                .encode_state_as_update_v1(&StateVector::default())
+                .unwrap(),
         );
         doc2.transact_mut().apply_update(u.unwrap());
         let doc_ref_3 = {
@@ -1918,7 +1931,8 @@ mod test {
         });
         let u = Update::decode_v1(
             &doc.transact()
-                .encode_state_as_update_v1(&StateVector::default()),
+                .encode_state_as_update_v1(&StateVector::default())
+                .unwrap(),
         );
         doc2.transact_mut().apply_update(u.unwrap());
         let subdoc_3 = {

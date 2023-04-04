@@ -580,7 +580,8 @@ mod test {
         a1.insert(&mut d1.transact_mut(), 0, "Hi");
         let update = d1
             .transact()
-            .encode_state_as_update_v1(&StateVector::default());
+            .encode_state_as_update_v1(&StateVector::default())
+            .unwrap();
 
         let a2 = d2.get_or_insert_array("array");
         let mut t2 = d2.transact_mut();
@@ -983,7 +984,7 @@ mod test {
 
             let sv = t2.state_vector();
             let mut encoder = EncoderV1::new();
-            t1.encode_diff(&sv, &mut encoder);
+            t1.encode_diff(&sv, &mut encoder).unwrap();
             t2.apply_update(Update::decode_v1(encoder.to_vec().as_slice()).unwrap());
         }
 

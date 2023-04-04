@@ -19,7 +19,6 @@ use std::collections::HashSet;
 use std::convert::TryFrom;
 use std::hash::Hash;
 use std::ops::{Deref, DerefMut};
-use std::panic;
 use std::ptr::NonNull;
 use std::rc::Rc;
 
@@ -836,7 +835,7 @@ impl BlockSlice {
             && id.clock <= myself.clock + self.end
     }
 
-    pub fn encode<E: Encoder>(&self, encoder: &mut E, store: Option<&Store>) {
+    pub fn encode<E: Encoder>(&self, encoder: &mut E, store: Option<&Store>) -> Result<(), Error> {
         match self.ptr.deref() {
             Block::Item(item) => {
                 let mut info = item.info();
@@ -879,7 +878,7 @@ impl BlockSlice {
                             encoder.write_left_id(id);
                         }
                         TypePtr::Unknown => {
-                            panic!("Couldn't get item's parent")
+                            return Err(Error::Other("Couldn't get item's parent".into()));
                         }
                     }
 
@@ -887,13 +886,14 @@ impl BlockSlice {
                         encoder.write_string(parent_sub.as_ref());
                     }
                 }
-                item.content.encode_slice(encoder, self.start, self.end);
+                item.content.encode_slice(encoder, self.start, self.end)?;
             }
             Block::GC(_) => {
                 encoder.write_info(BLOCK_GC_REF_NUMBER);
                 encoder.write_len(self.len());
             }
         }
+        Ok(())
     }
 
     /// Returns a [BlockSlice] wrapper for a [Block] identified as a right neighbor of this slice.
@@ -1002,7 +1002,7 @@ impl Block {
         }
     }
 
-    pub fn encode<E: Encoder>(&self, store: Option<&Store>, encoder: &mut E) {
+    pub fn encode<E: Encoder>(&self, store: Option<&Store>, encoder: &mut E) -> Result<(), Error> {
         match self {
             Block::Item(item) => {
                 let info = item.info();
@@ -1035,20 +1035,21 @@ impl Block {
                             encoder.write_left_id(id);
                         }
                         TypePtr::Unknown => {
-                            panic!("Couldn't get item's parent")
+                            return Err(Error::Other("Couldn't get item's parent".into()));
                         }
                     }
                     if let Some(parent_sub) = item.parent_sub.as_ref() {
                         encoder.write_string(parent_sub.as_ref());
                     }
                 }
-                item.content.encode(encoder);
+                item.content.encode(encoder)?;
             }
             Block::GC(gc) => {
                 encoder.write_info(BLOCK_GC_REF_NUMBER);
                 encoder.write_len(gc.len);
             }
         }
+        Ok(())
     }
 
     /// Returns a unique identifier of a first update contained by a current [Block].
@@ -1883,7 +1884,12 @@ impl ItemContent {
 
     /// Encodes a slice of a current [ItemContent] within an index bounds of (start..=end) - both
     /// sides inclusive.
-    pub fn encode_slice<E: Encoder>(&self, encoder: &mut E, start: u32, end: u32) {
+    pub fn encode_slice<E: Encoder>(
+        &self,
+        encoder: &mut E,
+        start: u32,
+        end: u32,
+    ) -> Result<(), Error> {
         match self {
             ItemContent::Deleted(_) => encoder.write_len(end - start + 1),
             ItemContent::Binary(buf) => encoder.write_buf(buf),
@@ -1928,12 +1934,14 @@ impl ItemContent {
                     encoder.write_any(&any[i as usize]);
                 }
             }
-            ItemContent::Doc(_, doc) => doc.options().encode(encoder),
-            ItemContent::Move(m) => m.encode(encoder),
+            ItemContent::Doc(_, doc) => doc.options().encode(encoder)?,
+            ItemContent::Move(m) => m.encode(encoder)?,
         }
+
+        Ok(())
     }
 
-    pub fn encode<E: Encoder>(&self, encoder: &mut E) {
+    pub fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), Error> {
         match self {
             ItemContent::Deleted(len) => encoder.write_len(*len),
             ItemContent::Binary(buf) => encoder.write_buf(buf),
@@ -1963,9 +1971,10 @@ impl ItemContent {
                     encoder.write_any(a);
                 }
             }
-            ItemContent::Doc(_, doc) => doc.options().encode(encoder),
-            ItemContent::Move(m) => m.encode(encoder),
+            ItemContent::Doc(_, doc) => doc.options().encode(encoder)?,
+            ItemContent::Move(m) => m.encode(encoder)?,
         }
+        Ok(())
     }
 
     pub fn decode<D: Decoder>(decoder: &mut D, ref_num: u8) -> Result<Self, Error> {

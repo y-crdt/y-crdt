@@ -496,7 +496,9 @@ mod test {
 
         compare_all(&m1, &t1);
 
-        let update = t1.encode_state_as_update_v1(&StateVector::default());
+        let update = t1
+            .encode_state_as_update_v1(&StateVector::default())
+            .unwrap();
         t2.apply_update(Update::decode_v1(update.as_slice()).unwrap());
 
         compare_all(&m2, &t2);
@@ -511,7 +513,9 @@ mod test {
         m1.insert(&mut t1, "stuff".to_owned(), "stuffy");
         m1.insert(&mut t1, "null".to_owned(), None as Option<String>);
 
-        let update = t1.encode_state_as_update_v1(&StateVector::default());
+        let update = t1
+            .encode_state_as_update_v1(&StateVector::default())
+            .unwrap();
 
         let d2 = Doc::with_client_id(2);
         let m2 = d2.get_or_insert_map("map");
@@ -539,8 +543,12 @@ mod test {
         m1.insert(&mut t1, "stuff".to_owned(), "c0");
         m2.insert(&mut t2, "stuff".to_owned(), "c1");
 
-        let u1 = t1.encode_state_as_update_v1(&StateVector::default());
-        let u2 = t2.encode_state_as_update_v1(&StateVector::default());
+        let u1 = t1
+            .encode_state_as_update_v1(&StateVector::default())
+            .unwrap();
+        let u2 = t2
+            .encode_state_as_update_v1(&StateVector::default())
+            .unwrap();
 
         t1.apply_update(Update::decode_v1(u2.as_slice()).unwrap());
         t2.apply_update(Update::decode_v1(u1.as_slice()).unwrap());
@@ -593,7 +601,9 @@ mod test {
         let m2 = d2.get_or_insert_map("map");
         let mut t2 = d2.transact_mut();
 
-        let u1 = t1.encode_state_as_update_v1(&StateVector::default());
+        let u1 = t1
+            .encode_state_as_update_v1(&StateVector::default())
+            .unwrap();
         t2.apply_update(Update::decode_v1(u1.as_slice()).unwrap());
 
         assert_eq!(m2.len(&t2), 0);
@@ -863,7 +873,7 @@ mod test {
 
             let sv = t2.state_vector();
             let mut encoder = EncoderV1::new();
-            t1.encode_diff(&sv, &mut encoder);
+            t1.encode_diff(&sv, &mut encoder).unwrap();
             t2.apply_update(Update::decode_v1(encoder.to_vec().as_slice()).unwrap());
         }
         assert_eq!(

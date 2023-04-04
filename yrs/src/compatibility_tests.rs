@@ -302,7 +302,7 @@ fn state_vector() {
     let sv = StateVector::decode_v1(payload).unwrap();
     assert_eq!(sv, expected);
 
-    let serialized = sv.encode_v1();
+    let serialized = sv.encode_v1().unwrap();
     assert_eq!(serialized.as_slice(), payload);
 }
 
@@ -363,7 +363,7 @@ fn roundtrip_v1(payload: &[u8], expected: &Vec<BlockCarrier>) {
     assert_eq!(blocks, expected, "failed to decode V1");
 
     let store: Store = u.into();
-    let serialized = store.encode_v1();
+    let serialized = store.encode_v1().unwrap();
     assert_eq!(serialized, payload, "failed to encode V1");
 }
 
@@ -375,7 +375,7 @@ fn roundtrip_v2(payload: &[u8], expected: &Vec<BlockCarrier>) {
     assert_eq!(blocks, expected, "failed to decode V2");
 
     let store: Store = u.into();
-    let serialized = store.encode_v2();
+    let serialized = store.encode_v2().unwrap();
     assert_eq!(serialized, payload, "failed to encode V2");
 }
 
@@ -400,7 +400,9 @@ fn negative_zero_decoding_v2() {
     root.insert(&mut txn, "characters", ArrayPrelim::<_, Any>::from([]));
     let expected = root.to_json(&txn);
 
-    let buffer = txn.encode_state_as_update_v2(&StateVector::default());
+    let buffer = txn
+        .encode_state_as_update_v2(&StateVector::default())
+        .unwrap();
 
     let u = Update::decode_v2(&buffer).unwrap();
 

@@ -131,12 +131,14 @@ impl Decode for StateVector {
 }
 
 impl Encode for StateVector {
-    fn encode<E: Encoder>(&self, encoder: &mut E) {
+    fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), Error> {
         encoder.write_var(self.len());
         for (&client, &clock) in self.iter() {
             encoder.write_var(client);
             encoder.write_var(clock);
         }
+
+        Ok(())
     }
 }
 
@@ -165,8 +167,8 @@ impl Snapshot {
 }
 
 impl Encode for Snapshot {
-    fn encode<E: Encoder>(&self, encoder: &mut E) {
-        self.delete_set.encode(encoder);
+    fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), Error> {
+        self.delete_set.encode(encoder)?;
         self.state_map.encode(encoder)
     }
 }
