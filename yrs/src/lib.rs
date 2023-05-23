@@ -436,19 +436,14 @@ mod update;
 pub mod updates;
 mod utils;
 
-#[cfg(test)]
-mod compatibility_tests;
-
 pub mod atomic;
 mod block_iter;
-#[cfg(test)]
-mod edit_traces;
-#[cfg(test)]
-mod edit_traces_tests;
 mod moving;
 pub mod observer;
 #[cfg(test)]
 mod test_utils;
+#[cfg(test)]
+mod tests;
 pub mod undo;
 
 pub use crate::alt::{

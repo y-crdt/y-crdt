@@ -1,5 +1,6 @@
-use crate::edit_traces::load_testing_data;
+use crate::tests::edit_traces::load_testing_data;
 use crate::{Doc, GetString, OffsetKind, Options, Text, Transact};
+use std::time::Instant;
 
 #[test]
 fn edit_trace_automerge() {
@@ -32,29 +33,32 @@ fn test_editing_trace(fpath: &str) {
         offset_kind: if data.using_byte_positions {
             OffsetKind::Bytes
         } else {
-            OffsetKind::Utf32
+            OffsetKind::Utf16
         },
         ..Options::default()
     });
     let txt = doc.get_or_insert_text("text");
-    println!("using byte indexes: {}", data.using_byte_positions);
-    println!("start content: '{}'", data.start_content);
+    let start = Instant::now();
     for t in data.txns {
         let mut txn = doc.transact_mut();
         for patch in t.patches {
-            let at = patch.0 as u32;
-            let delete_count = patch.1 as u32;
+            let at = patch.0;
+            let delete = patch.1;
             let content = patch.2;
 
-            if delete_count != 0 {
-                println!("{at} delete {delete_count} elements");
-                txt.remove_range(&mut txn, at, delete_count);
-            } else {
-                println!("{at} insert '{content}'");
-                txt.insert(&mut txn, at, &content);
+            //let total = txt.len(&txn);
+            if delete != 0 {
+                //println!("{at}/{total}: delete {delete_count} elements");
+                txt.remove_range(&mut txn, at as u32, delete as u32);
+            }
+            if !content.is_empty() {
+                //let len = content.len();
+                //println!("{at}/{total}: insert {len} elements - \"{content}\"");
+                txt.insert(&mut txn, at as u32, &content);
             }
         }
     }
-
+    let finish = Instant::now();
+    println!("elapsed: {}ms", (finish - start).as_millis());
     assert_eq!(txt.get_string(&doc.transact()), data.end_content);
 }
