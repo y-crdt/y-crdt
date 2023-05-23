@@ -441,6 +441,10 @@ mod compatibility_tests;
 
 pub mod atomic;
 mod block_iter;
+#[cfg(test)]
+mod edit_traces;
+#[cfg(test)]
+mod edit_traces_tests;
 mod moving;
 pub mod observer;
 #[cfg(test)]
@@ -459,8 +463,8 @@ pub use crate::doc::OffsetKind;
 pub use crate::doc::Options;
 pub use crate::doc::Transact;
 pub use crate::doc::{
-    DestroySubscription, SubdocsSubscription, TransactionCleanupSubscription, UpdateSubscription,
-    AfterTransactionSubscription,
+    AfterTransactionSubscription, DestroySubscription, SubdocsSubscription,
+    TransactionCleanupSubscription, UpdateSubscription,
 };
 pub use crate::event::{SubdocsEvent, SubdocsEventIter, TransactionCleanupEvent, UpdateEvent};
 pub use crate::id_set::DeleteSet;

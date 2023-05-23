@@ -20,6 +20,10 @@ atomic_refcell = "0.1"
 
 [dev-dependencies]
 criterion = "0.3"
+flate2 = { version = "1.0.22", features = ["zlib-ng-compat"], default-features = false }
+serde = { version = "1.0.136", features = ["derive"] }
+serde_json = "1.0.79"
+ropey = "1.6.0"
 
 [[bench]]
 name = "benches"
