@@ -181,6 +181,7 @@ impl Decode for Snapshot {
 
 /// A resizable list of blocks inserted by a single client.
 pub(crate) struct ClientBlockList {
+    tails: Vec<u32>,
     list: Vec<Box<block::Block>>,
 }
 
@@ -205,12 +206,16 @@ impl PartialEq for ClientBlockList {
 
 impl ClientBlockList {
     fn new() -> ClientBlockList {
-        ClientBlockList { list: Vec::new() }
+        ClientBlockList {
+            tails: Vec::new(),
+            list: Vec::new(),
+        }
     }
 
     /// Creates a new instance of aclient block list with a predefined capacity.
     pub fn with_capacity(capacity: usize) -> ClientBlockList {
         ClientBlockList {
+            tails: Vec::with_capacity(capacity),
             list: Vec::with_capacity(capacity),
         }
     }
@@ -241,34 +246,60 @@ impl ClientBlockList {
         self.get(0)
     }
 
-    /// Returns last block on the list - since we only initialize [ClientBlockList]
-    /// when we're sure, we're about to add new elements to it, it always should
-    /// stay non-empty.
-    pub(crate) fn last(&self) -> BlockPtr {
-        self.get(self.len() - 1)
+    /// Returns last clock covered by the latest block appended on that list - since we only
+    /// initialize [ClientBlockList] when we're sure we're about to add new elements to it,
+    /// it always should stay non-empty.
+    pub(crate) fn last_id(&self) -> u32 {
+        if let Some(&clock) = self.tails.last() {
+            clock
+        } else {
+            0
+        }
     }
 
     /// Given a block's identifier clock value, return an offset under which this block could be
     /// found using binary search algorithm.
     pub(crate) fn find_pivot(&self, clock: u32) -> Option<usize> {
+        let mut right = self.tails.len() - 1;
+        let mut curr = self.tails[right];
+        if clock > curr {
+            return None;
+        }
+        if right != 0 && clock > self.tails[right - 1] {
+            // most common case for pivot lookup is appending at the end of the client block list,
+            // so we check for that first
+            return Some(right);
+        }
+
         let mut left = 0;
+        while right > left {
+            let mid = right - left / 2;
+            if self.tails[mid] > clock {
+                left = mid;
+            } else {
+                right = mid;
+            }
+        }
+
+        Some(right)
+
+        /*let mut left = 0;
         let mut right = self.list.len() - 1;
         let mut block = self.get(right);
         let mut current_clock = block.id().clock;
         if current_clock == clock {
+            // most common case for pivot lookup is appending at the end of the client block list,
+            // so we check for that first
             Some(right)
         } else {
-            //todo: does it even make sense to pivot the search?
-            // If a good split misses, it might actually increase the time to find the correct item.
-            // Currently, the only advantage is that search with pivoting might find the item on the first try.
             //let clock = clock.min(right as u32);
-            let div = current_clock + block.len() - 1;
+            let div = last_id + block.len() - 1;
             let mut mid = ((clock / div) * right as u32) as usize;
             while left <= right {
                 block = self.get(mid);
-                current_clock = block.id().clock;
-                if current_clock <= clock {
-                    if clock < current_clock + block.len() {
+                last_id = block.id().clock;
+                if last_id <= clock {
+                    if clock < last_id + block.len() {
                         return Some(mid);
                     }
                     left = mid + 1;
@@ -279,7 +310,7 @@ impl ClientBlockList {
             }
 
             None
-        }
+        }*/
     }
 
     /// Attempts to find a Block which contains given clock sequence number within current block
@@ -293,12 +324,14 @@ impl ClientBlockList {
 
     /// Pushes a new block at the end of this block list.
     pub(crate) fn push(&mut self, block: Box<block::Block>) {
+        self.tails.push(block.id().clock + block.len());
         self.list.push(block);
     }
 
     /// Inserts a new block at a given `index` position within this block list. This method may
     /// panic if `index` is greater than a length of the list.
     pub(crate) fn insert(&mut self, index: usize, block: Box<block::Block>) {
+        self.tails.insert(index, block.id().clock + block.len());
         self.list.insert(index, block);
     }
 
@@ -322,6 +355,7 @@ impl ClientBlockList {
         let right = BlockPtr::from(&r[0]);
         if left.is_deleted() == right.is_deleted() && left.same_type(right.deref()) {
             if left.try_squash(right) {
+                self.tails[index - 1] = self.tails.remove(index);
                 let mut right = self.list.remove(index);
                 let right_ptr = BlockPtr::from(&mut right);
                 if let Block::Item(item) = *right {
@@ -384,7 +418,7 @@ impl BlockStore {
 
     pub fn contains(&self, id: &ID) -> bool {
         if let Some(clients) = self.clients.get(&id.client) {
-            id.clock <= clients.last().last_id().clock
+            id.clock <= clients.last_id()
         } else {
             false
         }
@@ -576,5 +610,31 @@ impl<'a> Iterator for Blocks<'a> {
         } else {
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::block_store::ClientBlockList;
+
+    #[test]
+    fn find_pivot() {
+        let c = ClientBlockList {
+            tails: vec![1, 4, 5, 7, 11],
+            list: vec![],
+        };
+        assert_eq!(c.find_pivot(0), Some(0));
+        assert_eq!(c.find_pivot(1), Some(0));
+        assert_eq!(c.find_pivot(2), Some(1));
+        assert_eq!(c.find_pivot(3), Some(1));
+        assert_eq!(c.find_pivot(4), Some(1));
+        assert_eq!(c.find_pivot(5), Some(2));
+        assert_eq!(c.find_pivot(6), Some(3));
+        assert_eq!(c.find_pivot(7), Some(3));
+        assert_eq!(c.find_pivot(8), Some(4));
+        assert_eq!(c.find_pivot(9), Some(4));
+        assert_eq!(c.find_pivot(10), Some(4));
+        assert_eq!(c.find_pivot(11), Some(4));
+        assert_eq!(c.find_pivot(12), None);
     }
 }
