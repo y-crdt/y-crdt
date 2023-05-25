@@ -421,9 +421,8 @@ impl YDoc {
 
 fn parse_options(js: &JsValue) -> Options {
     let mut options = Options::default();
+    options.offset_kind = OffsetKind::Utf16;
     if js.is_object() {
-        options.offset_kind = OffsetKind::Utf16;
-
         if let Some(client_id) = js_sys::Reflect::get(js, &JsValue::from_str("clientID"))
             .ok()
             .and_then(|v| v.as_f64())

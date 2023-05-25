@@ -14,6 +14,7 @@
   "license": "MIT",
   "dependencies": {
     "lib0": "^0.2.42",
-    "ywasm": "file:../ywasm/pkg"
+    "ywasm": "file:../ywasm/pkg",
+    "zlib": "^1.0.5"
   }
 }
