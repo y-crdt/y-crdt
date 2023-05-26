@@ -154,7 +154,7 @@ impl Store {
         encoder.write_var(diff.len());
         for (client, clock) in diff {
             let blocks = self.blocks.get(&client).unwrap();
-            let clock = clock.min(blocks.last_id());
+            let clock = clock.min(blocks.last_clock());
             let last_idx = blocks.find_pivot(clock - 1).unwrap();
             // write # encoded structs
             encoder.write_var(last_idx + 1);
@@ -277,6 +277,7 @@ impl Store {
         } else {
             let mut i = blocks.find_pivot(id.clock).unwrap();
             if let Some(new) = slice.as_ptr().splice(slice.start(), OffsetKind::Utf16) {
+                blocks.fix_offset(i, &slice.as_ptr());
                 blocks.insert(i + 1, new);
                 i += 1;
                 //todo: txn merge blocks insert?
@@ -296,6 +297,7 @@ impl Store {
                 blocks.find_pivot(last_id.clock).unwrap()
             };
             let new = ptr.splice(slice.len(), OffsetKind::Utf16).unwrap();
+            blocks.fix_offset(i, &ptr);
             blocks.insert(i + 1, new);
             //todo: txn merge blocks insert?
         }

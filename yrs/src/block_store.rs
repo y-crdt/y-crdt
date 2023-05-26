@@ -235,8 +235,7 @@ impl ClientBlockList {
     /// describes a clock sequence number that **will be** assigned, when a new block will be
     /// appended to current list.
     pub fn get_state(&self) -> u32 {
-        let item = self.get(self.list.len() - 1);
-        item.id().clock + item.len()
+        self.last_clock() + 1
     }
 
     /// Returns first block on the list - since we only initialize [ClientBlockList]
@@ -249,7 +248,7 @@ impl ClientBlockList {
     /// Returns last clock covered by the latest block appended on that list - since we only
     /// initialize [ClientBlockList] when we're sure we're about to add new elements to it,
     /// it always should stay non-empty.
-    pub(crate) fn last_id(&self) -> u32 {
+    pub(crate) fn last_clock(&self) -> u32 {
         if let Some(&clock) = self.tails.last() {
             clock
         } else {
@@ -261,27 +260,32 @@ impl ClientBlockList {
     /// found using binary search algorithm.
     pub(crate) fn find_pivot(&self, clock: u32) -> Option<usize> {
         let mut right = self.tails.len() - 1;
-        let mut curr = self.tails[right];
-        if clock > curr {
+        let mut div = self.tails[right];
+        if clock > div {
             return None;
         }
-        if right != 0 && clock > self.tails[right - 1] {
+        if right == 0 || clock > self.tails[right - 1] {
             // most common case for pivot lookup is appending at the end of the client block list,
             // so we check for that first
             return Some(right);
         }
 
         let mut left = 0;
-        while right > left {
-            let mid = right - left / 2;
-            if self.tails[mid] > clock {
-                left = mid;
-            } else {
+        let mut mid = ((clock / div) * right as u32) as usize;
+        while right >= left {
+            let current = self.tails[mid];
+            if current >= clock {
+                if mid == 0 || self.tails[mid - 1] < clock {
+                    return Some(mid);
+                }
                 right = mid;
+            } else {
+                left = mid;
             }
+            mid = (left + right) / 2;
         }
 
-        Some(right)
+        None
 
         /*let mut left = 0;
         let mut right = self.list.len() - 1;
@@ -293,13 +297,13 @@ impl ClientBlockList {
             Some(right)
         } else {
             //let clock = clock.min(right as u32);
-            let div = last_id + block.len() - 1;
+            let div = current_clock + block.len() - 1;
             let mut mid = ((clock / div) * right as u32) as usize;
             while left <= right {
                 block = self.get(mid);
-                last_id = block.id().clock;
-                if last_id <= clock {
-                    if clock < last_id + block.len() {
+                current_clock = block.id().clock;
+                if current_clock <= clock {
+                    if clock < current_clock + block.len() {
                         return Some(mid);
                     }
                     left = mid + 1;
@@ -324,15 +328,19 @@ impl ClientBlockList {
 
     /// Pushes a new block at the end of this block list.
     pub(crate) fn push(&mut self, block: Box<block::Block>) {
-        self.tails.push(block.id().clock + block.len());
+        self.tails.push(block.id().clock + block.len() - 1);
         self.list.push(block);
     }
 
     /// Inserts a new block at a given `index` position within this block list. This method may
     /// panic if `index` is greater than a length of the list.
     pub(crate) fn insert(&mut self, index: usize, block: Box<block::Block>) {
-        self.tails.insert(index, block.id().clock + block.len());
+        self.tails.insert(index, block.id().clock + block.len() - 1);
         self.list.insert(index, block);
+    }
+
+    pub(crate) fn fix_offset(&mut self, index: usize, block: &Block) {
+        self.tails[index] = block.id().clock + block.len() - 1;
     }
 
     /// Returns a number of blocks stored within this list.
@@ -418,7 +426,7 @@ impl BlockStore {
 
     pub fn contains(&self, id: &ID) -> bool {
         if let Some(clients) = self.clients.get(&id.client) {
-            id.clock <= clients.last_id()
+            id.clock <= clients.last_clock()
         } else {
             false
         }
@@ -534,6 +542,7 @@ impl BlockStore {
         let index = blocks.find_pivot(id.clock)?;
         let mut right = block.splice(offset, encoding)?;
         let right_ptr = BlockPtr::from(&mut right);
+        blocks.fix_offset(index, &block);
         blocks.insert(index + 1, right);
 
         Some(right_ptr)
