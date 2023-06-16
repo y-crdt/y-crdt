@@ -5,7 +5,7 @@ use std::ffi::{c_char, c_void, CStr, CString};
 use std::mem::{forget, ManuallyDrop, MaybeUninit};
 use std::ops::Deref;
 use std::ptr::{null, null_mut};
-use std::rc::Rc;
+use std::sync::Arc;
 use yrs::block::{ClientID, ItemContent, Prelim, Unused};
 use yrs::types::array::ArrayEvent;
 use yrs::types::array::ArrayIter as NativeArrayIter;
@@ -16,9 +16,9 @@ use yrs::types::xml::{Attributes as NativeAttributes, XmlNode};
 use yrs::types::xml::{TreeWalker as NativeTreeWalker, XmlFragment};
 use yrs::types::xml::{XmlEvent, XmlTextEvent};
 use yrs::types::{
-    Attrs, BranchPtr, Change, Delta, EntryChange, Event, PathSegment, Value, TYPE_REFS_ARRAY,
-    TYPE_REFS_DOC, TYPE_REFS_MAP, TYPE_REFS_TEXT, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT,
-    TYPE_REFS_XML_TEXT,
+    Attrs, BranchPtr, Change, Delta, EntryChange, Event, PathSegment, TypeRef, Value,
+    TYPE_REFS_ARRAY, TYPE_REFS_DOC, TYPE_REFS_MAP, TYPE_REFS_TEXT, TYPE_REFS_XML_ELEMENT,
+    TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_TEXT,
 };
 use yrs::undo::EventKind;
 use yrs::updates::decoder::{Decode, DecoderV1};
@@ -1661,8 +1661,11 @@ pub unsafe extern "C" fn ymap_remove_all(map: *const Branch, txn: *mut Transacti
 pub unsafe extern "C" fn yxmlelem_tag(xml: *const Branch) -> *mut c_char {
     assert!(!xml.is_null());
     let xml = XmlElementRef::from_raw_branch(xml);
-    let tag = xml.tag();
-    CString::new(tag).unwrap().into_raw()
+    if let Some(tag) = xml.try_tag() {
+        CString::new(tag.deref()).unwrap().into_raw()
+    } else {
+        null_mut()
+    }
 }
 
 /// Converts current `YXmlElement` together with its children and attributes into a flat string
@@ -2347,7 +2350,7 @@ pub unsafe extern "C" fn ytext_chunks(
     let txn = txn.as_ref().unwrap();
 
     let diffs = txt.diff(txn, YChange::identity);
-    let mut chunks: Vec<_> = diffs.into_iter().map(YChunk::from).collect();
+    let chunks: Vec<_> = diffs.into_iter().map(YChunk::from).collect();
     let out = chunks.into_boxed_slice();
     *chunks_len = out.len() as u32;
     Box::into_raw(out) as *mut _
@@ -2379,7 +2382,7 @@ impl From<Diff<YChange>> for YChunk {
     fn from(diff: Diff<YChange>) -> Self {
         let data = YOutput::from(diff.insert);
         let mut fmt_len = 0;
-        let mut fmt = if let Some(attrs) = diff.attributes {
+        let fmt = if let Some(attrs) = diff.attributes {
             fmt_len = attrs.len() as u32;
             let mut fmt = Vec::with_capacity(attrs.len());
             for (k, v) in attrs.into_iter() {
@@ -2534,25 +2537,20 @@ impl Prelim for YInput {
                 (ItemContent::Doc(None, doc.clone()), None)
             } else {
                 let type_ref = if self.tag == Y_MAP {
-                    TYPE_REFS_MAP
+                    TypeRef::Map
                 } else if self.tag == Y_ARRAY {
-                    TYPE_REFS_ARRAY
+                    TypeRef::Array
                 } else if self.tag == Y_XML_ELEM {
-                    TYPE_REFS_XML_ELEMENT
+                    let name: Arc<str> = CStr::from_ptr(self.value.str).to_str().unwrap().into();
+                    TypeRef::XmlElement(name)
                 } else if self.tag == Y_XML_TEXT {
-                    TYPE_REFS_XML_TEXT
+                    TypeRef::XmlText
                 } else if self.tag == Y_XML_FRAG {
-                    TYPE_REFS_XML_FRAGMENT
+                    TypeRef::XmlFragment
                 } else {
                     panic!("Unrecognized YVal value tag.")
                 };
-                let name = if type_ref == TYPE_REFS_XML_ELEMENT {
-                    let name: Rc<str> = CStr::from_ptr(self.value.str).to_str().unwrap().into();
-                    Some(name)
-                } else {
-                    None
-                };
-                let inner = Branch::new(type_ref, name);
+                let inner = Branch::new(type_ref);
                 (ItemContent::Type(inner), Some(self))
             }
         }
@@ -4751,7 +4749,7 @@ pub struct YDeltaAttr {
 }
 
 impl YDeltaAttr {
-    fn new(k: &Rc<str>, v: &Any) -> Self {
+    fn new(k: &Arc<str>, v: &Any) -> Self {
         let key = CString::new(k.as_ref()).unwrap().into_raw() as *const _;
         let value = YOutput::from(v.clone());
         YDeltaAttr { key, value }

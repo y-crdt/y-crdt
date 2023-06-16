@@ -435,7 +435,7 @@ fn b4_2(c: &mut Criterion, name: &str) {
     let doc = Doc::new();
     let txt = doc.get_or_insert_text("text");
     let mut buf = Vec::with_capacity(400 * 1024);
-    let mut f = std::fs::File::open("./yrs/benches/input/b4-update.bin").unwrap();
+    let mut f = std::fs::File::open("./assets/bench-input/b4-update.bin").unwrap();
     std::io::Read::read_to_end(&mut f, &mut buf).unwrap();
 
     c.bench_with_input(

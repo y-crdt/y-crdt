@@ -4,7 +4,7 @@ use crate::moving::StickyIndex;
 use crate::transaction::TransactionMut;
 use crate::types::{
     event_change_set, Branch, BranchPtr, Change, ChangeSet, EventHandler, Observers, Path, ToJson,
-    Value, TYPE_REFS_ARRAY,
+    TypeRef, Value,
 };
 use crate::{Assoc, IndexedSequence, Observable, ReadTxn, ID};
 use lib0::any::Any;
@@ -411,7 +411,7 @@ where
     type Return = ArrayRef;
 
     fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
-        let inner = Branch::new(TYPE_REFS_ARRAY, None);
+        let inner = Branch::new(TypeRef::Array);
         (ItemContent::Type(inner), Some(self))
     }
 

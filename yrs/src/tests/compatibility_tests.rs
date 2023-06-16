@@ -2,7 +2,7 @@ use crate::block::{ClientID, Item, ItemContent};
 use crate::id_set::{DeleteSet, IdSet};
 use crate::store::Store;
 use crate::types::xml::XmlFragment;
-use crate::types::{Branch, ToJson, TypePtr, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_TEXT};
+use crate::types::{Branch, ToJson, TypePtr, TypeRef};
 use crate::update::{BlockCarrier, Update};
 use crate::updates::decoder::{Decode, Decoder, DecoderV1};
 use crate::updates::encoder::Encode;
@@ -247,7 +247,7 @@ fn xml_fragment_insert() {
             None,
             TypePtr::Named("fragment-name".into()),
             None,
-            ItemContent::Type(Branch::new(TYPE_REFS_XML_TEXT, None)),
+            ItemContent::Type(Branch::new(TypeRef::XmlText)),
         )
         .into(),
         Item::new(
@@ -258,7 +258,7 @@ fn xml_fragment_insert() {
             None,
             TypePtr::Unknown,
             None,
-            ItemContent::Type(Branch::new(TYPE_REFS_XML_ELEMENT, Some("node-name".into()))),
+            ItemContent::Type(Branch::new(TypeRef::XmlElement("node-name".into()))),
         )
         .into(),
     ];
