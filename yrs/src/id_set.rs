@@ -162,6 +162,29 @@ impl IdRange {
         }
     }
 
+    fn is_squashed(&self) -> bool {
+        match self {
+            IdRange::Continuous(_) => true,
+            IdRange::Fragmented(ranges) => {
+                let mut i = ranges.iter();
+                if let Some(r) = i.next() {
+                    let mut prev_start = r.start;
+                    let mut prev_end = r.end;
+                    while let Some(r) = i.next() {
+                        if r.start < prev_end {
+                            return false;
+                        }
+                        prev_start = r.start;
+                        prev_end = r.end;
+                    }
+                    true
+                } else {
+                    true
+                }
+            }
+        }
+    }
+
     fn merge(&mut self, other: IdRange) {
         let raw = std::mem::take(self);
         *self = match (raw, other) {
@@ -191,6 +214,21 @@ impl IdRange {
         };
     }
 
+    fn encode_raw<E: Encoder>(&self, encoder: &mut E) {
+        match self {
+            IdRange::Continuous(range) => {
+                encoder.write_var(1u32);
+                range.encode(encoder)
+            }
+            IdRange::Fragmented(ranges) => {
+                encoder.write_var(ranges.len() as u32);
+                for range in ranges.iter() {
+                    range.encode(encoder);
+                }
+            }
+        }
+    }
+
     #[inline]
     fn try_join(a: &mut Range<u32>, b: &Range<u32>) -> bool {
         if Self::disjoint(a, b) {
@@ -216,17 +254,12 @@ impl Default for IdRange {
 
 impl Encode for IdRange {
     fn encode<E: Encoder>(&self, encoder: &mut E) {
-        match self {
-            IdRange::Continuous(range) => {
-                encoder.write_var(1u32);
-                range.encode(encoder)
-            }
-            IdRange::Fragmented(ranges) => {
-                encoder.write_var(ranges.len() as u32);
-                for range in ranges.iter() {
-                    range.encode(encoder);
-                }
-            }
+        if self.is_squashed() {
+            self.encode_raw(encoder)
+        } else {
+            let mut clone = self.clone();
+            clone.squash();
+            clone.encode_raw(encoder);
         }
     }
 }

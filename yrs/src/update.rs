@@ -1012,10 +1012,11 @@ impl Iterator for IntoBlocks {
 #[cfg(test)]
 mod test {
     use crate::block::{Item, ItemContent};
-    use crate::types::TypePtr;
+    use crate::types::{ToJson, TypePtr};
     use crate::update::{BlockCarrier, Update};
     use crate::updates::decoder::{Decode, DecoderV1};
-    use crate::{Doc, GetString, Text, Transact, ID};
+    use crate::updates::encoder::Encode;
+    use crate::{Doc, GetString, Options, Text, Transact, XmlFragment, XmlNode, ID};
     use lib0::decoding::Cursor;
 
     #[test]
@@ -1142,6 +1143,74 @@ mod test {
 
         let merged_update = Update::merge_updates(vec![u12]);
         assert_eq!(merged_update, u12_copy);
+    }
+
+    #[test]
+    fn test_v2_encoding_of_fragmented_delete_set() {
+        let before = vec![
+            0, 1, 0, 11, 129, 215, 239, 201, 16, 198, 237, 152, 220, 8, 4, 4, 0, 4, 1, 1, 0, 11,
+            40, 3, 39, 0, 4, 0, 7, 0, 40, 3, 8, 163, 1, 142, 1, 110, 111, 116, 101, 46, 103, 117,
+            105, 100, 110, 111, 116, 101, 71, 117, 105, 100, 110, 111, 116, 101, 46, 111, 119, 110,
+            101, 114, 111, 119, 110, 101, 114, 110, 111, 116, 101, 46, 116, 121, 112, 101, 110,
+            111, 116, 101, 84, 121, 112, 101, 110, 111, 116, 101, 46, 99, 114, 101, 97, 116, 101,
+            84, 105, 109, 101, 99, 114, 101, 97, 116, 101, 84, 105, 109, 101, 110, 111, 116, 101,
+            46, 116, 105, 116, 108, 101, 116, 105, 116, 108, 101, 49, 112, 114, 111, 115, 101, 109,
+            105, 114, 114, 111, 114, 108, 105, 110, 107, 110, 111, 116, 101, 103, 117, 105, 100,
+            115, 108, 111, 116, 71, 117, 105, 100, 116, 121, 112, 101, 108, 105, 110, 107, 84, 121,
+            112, 101, 99, 104, 105, 108, 100, 114, 101, 110, 98, 9, 8, 10, 5, 9, 8, 15, 74, 0, 5,
+            1, 11, 8, 4, 8, 4, 72, 0, 1, 9, 1, 4, 0, 0, 1, 0, 0, 3, 1, 2, 2, 3, 2, 65, 8, 2, 4, 0,
+            119, 22, 97, 99, 70, 120, 85, 89, 68, 76, 82, 104, 101, 114, 107, 74, 97, 66, 101, 99,
+            115, 99, 51, 103, 125, 136, 57, 125, 0, 119, 13, 49, 54, 56, 53, 53, 51, 48, 50, 56,
+            54, 54, 53, 54, 9, 0, 119, 22, 66, 67, 100, 81, 112, 112, 119, 69, 84, 48, 105, 82, 86,
+            66, 81, 45, 56, 69, 87, 50, 87, 103, 119, 22, 106, 114, 69, 109, 73, 77, 112, 86, 84,
+            101, 45, 99, 114, 78, 50, 86, 76, 51, 99, 97, 72, 81, 119, 8, 108, 105, 110, 107, 110,
+            111, 116, 101, 119, 1, 49, 118, 2, 4, 103, 117, 105, 100, 119, 22, 66, 67, 100, 81,
+            112, 112, 119, 69, 84, 48, 105, 82, 86, 66, 81, 45, 56, 69, 87, 50, 87, 103, 8, 115,
+            108, 111, 116, 71, 117, 105, 100, 119, 22, 106, 114, 69, 109, 73, 77, 112, 86, 84, 101,
+            45, 99, 114, 78, 50, 86, 76, 51, 99, 97, 72, 81, 119, 22, 66, 67, 100, 81, 112, 112,
+            119, 69, 84, 48, 105, 82, 86, 66, 81, 45, 56, 69, 87, 50, 87, 103, 0,
+        ];
+        let update = vec![
+            0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 198, 182, 140, 174, 4, 1, 2, 0, 0, 5,
+        ];
+        let doc = Doc::with_options(Options {
+            skip_gc: true,
+            client_id: 1,
+            ..Default::default()
+        });
+        let prosemirror = doc.get_or_insert_xml_fragment("prosemirror");
+        {
+            let mut txn = doc.transact_mut();
+            let u = Update::decode_v2(&before).unwrap();
+            txn.apply_update(u);
+            let linknote = prosemirror.get(&txn, 0);
+            let actual = linknote.and_then(|xml| match xml {
+                XmlNode::Element(elem) => Some(elem.tag().to_owned()),
+                _ => None,
+            });
+            assert_eq!(actual, Some("linknote".to_owned()));
+        }
+        {
+            let mut txn = doc.transact_mut();
+            let u = Update::decode_v2(&update).unwrap();
+            txn.apply_update(u);
+
+            // this should not panic
+            let binary = txn.encode_update_v2();
+            let actual = Update::decode_v2(&binary).unwrap();
+
+            let linknote = prosemirror.get(&txn, 0);
+            assert_eq!(linknote, None);
+        }
+    }
+
+    #[test]
+    fn test_v1_v2() {
+        let bytes = vec![0, 1, 198, 182, 140, 174, 4, 4, 2, 2, 6, 1, 4, 2, 7, 2];
+        let update_v1 = Update::decode_v1(&bytes).unwrap();
+        let bytes_v2 = update_v1.encode_v2();
+        let update_v2 = Update::decode_v1(&bytes).unwrap();
+        assert_eq!(update_v1, update_v2);
     }
 
     fn decode_update(bin: &[u8]) -> Update {
