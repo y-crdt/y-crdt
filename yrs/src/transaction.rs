@@ -16,7 +16,7 @@ use std::fmt::Formatter;
 use std::hash::Hash;
 use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
-use std::rc::Rc;
+use std::sync::Arc;
 use updates::encoder::*;
 
 /// Trait defining read capabilities present in a transaction. Implemented by both lightweight
@@ -249,7 +249,7 @@ pub struct TransactionMut<'doc> {
     pub(crate) prev_moved: HashMap<BlockPtr, BlockPtr>,
     /// All types that were directly modified (property added or child inserted/deleted).
     /// New types are not included in this Set.
-    pub(crate) changed: HashMap<TypePtr, HashSet<Option<Rc<str>>>>,
+    pub(crate) changed: HashMap<TypePtr, HashSet<Option<Arc<str>>>>,
     pub(crate) changed_parent_types: Vec<BranchPtr>,
     pub(crate) subdocs: Option<Box<Subdocs>>,
     pub(crate) origin: Option<Origin>,
@@ -613,7 +613,7 @@ impl<'doc> TransactionMut<'doc> {
         &mut self,
         pos: &block::ItemPosition,
         value: T,
-        parent_sub: Option<Rc<str>>,
+        parent_sub: Option<Arc<str>>,
     ) -> BlockPtr {
         let (left, right, origin, id) = {
             let store = self.store_mut();
@@ -837,7 +837,7 @@ impl<'doc> TransactionMut<'doc> {
         }
     }
 
-    pub(crate) fn add_changed_type(&mut self, parent: BranchPtr, parent_sub: Option<Rc<str>>) {
+    pub(crate) fn add_changed_type(&mut self, parent: BranchPtr, parent_sub: Option<Arc<str>>) {
         let trigger = if let Some(ptr) = parent.item {
             (ptr.id().clock < self.before_state.get(&ptr.id().client)) && !ptr.is_deleted()
         } else {
@@ -890,7 +890,7 @@ impl<'doc> TransactionMut<'doc> {
 }
 
 /// Iterator struct used to traverse over all of the root level types defined in a corresponding [Doc].
-pub struct RootRefs<'doc>(std::collections::hash_map::Iter<'doc, Rc<str>, Box<Branch>>);
+pub struct RootRefs<'doc>(std::collections::hash_map::Iter<'doc, Arc<str>, Box<Branch>>);
 
 impl<'doc> Iterator for RootRefs<'doc> {
     type Item = (&'doc str, Value);

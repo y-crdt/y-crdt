@@ -18,9 +18,7 @@ use yrs::types::text::{ChangeKind, Diff, TextEvent, YChange};
 use yrs::types::xml::{XmlEvent, XmlTextEvent};
 use yrs::types::{
     Attrs, Branch, BranchPtr, Change, DeepEventsSubscription, DeepObservable, Delta, EntryChange,
-    Event, Events, Path, PathSegment, ToJson, TypeRefs, Value, TYPE_REFS_ARRAY, TYPE_REFS_DOC,
-    TYPE_REFS_MAP, TYPE_REFS_TEXT, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT,
-    TYPE_REFS_XML_TEXT,
+    Event, Events, Path, PathSegment, ToJson, TypeRef, Value,
 };
 use yrs::undo::{EventKind, UndoEventSubscription};
 use yrs::updates::decoder::{Decode, DecoderV1};
@@ -2810,8 +2808,12 @@ pub struct YXmlElement(XmlElementRef);
 impl YXmlElement {
     /// Returns a tag name of this XML node.
     #[wasm_bindgen(method, getter)]
-    pub fn name(&self) -> String {
-        self.0.tag().to_string()
+    pub fn name(&self) -> JsValue {
+        if let Some(name) = self.0.try_tag() {
+            JsValue::from_str(name.deref())
+        } else {
+            JsValue::NULL
+        }
     }
 
     /// Returns a number of child XML nodes stored within this `YXMlElement` instance.
@@ -3642,7 +3644,7 @@ impl Prelim for JsValueWrapper {
             ItemContent::Any(vec![any])
         } else if let Ok(shared) = Shared::try_from(&self.0) {
             if shared.is_prelim() {
-                let branch = Branch::new(shared.type_ref(), None);
+                let branch = shared.as_branch();
                 ItemContent::Type(branch)
             } else if let Shared::Doc(doc) = shared {
                 if doc.0.parent_doc().is_some() {
@@ -3959,16 +3961,18 @@ impl<'a> Shared<'a> {
         }
     }
 
-    fn type_ref(&self) -> TypeRefs {
-        match self {
-            Shared::Text(_) => TYPE_REFS_TEXT,
-            Shared::Array(_) => TYPE_REFS_ARRAY,
-            Shared::Map(_) => TYPE_REFS_MAP,
-            Shared::XmlElement(_) => TYPE_REFS_XML_ELEMENT,
-            Shared::XmlText(_) => TYPE_REFS_XML_TEXT,
-            Shared::XmlFragment(_) => TYPE_REFS_XML_FRAGMENT,
-            Shared::Doc(_) => TYPE_REFS_DOC,
-        }
+    fn as_branch(&self) -> Box<Branch> {
+        let type_ref = match self {
+            Shared::Text(_) => TypeRef::Text,
+            Shared::Array(_) => TypeRef::Array,
+            Shared::Map(_) => TypeRef::Map,
+            Shared::XmlElement(elem) => TypeRef::XmlElement(elem.0.tag().clone()),
+            Shared::XmlText(_) => TypeRef::XmlText,
+            Shared::XmlFragment(_) => TypeRef::XmlFragment,
+            Shared::Doc(_) => TypeRef::SubDoc,
+        };
+
+        Branch::new(type_ref)
     }
 
     fn branch(&self) -> Option<BranchPtr> {

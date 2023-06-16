@@ -5,7 +5,7 @@ use crate::doc::{
 };
 use crate::event::SubdocsEvent;
 use crate::id_set::DeleteSet;
-use crate::types::{Branch, BranchPtr, Path, PathSegment, TypeRefs};
+use crate::types::{Branch, BranchPtr, Path, PathSegment, TypeRef};
 use crate::update::PendingUpdate;
 use crate::updates::encoder::{Encode, Encoder};
 use crate::{
@@ -17,7 +17,6 @@ use lib0::error::Error;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::ops::Deref;
-use std::rc::Rc;
 use std::sync::{Arc, Weak};
 
 /// Store is a core element of a document. It contains all of the information, like block store
@@ -29,7 +28,7 @@ pub struct Store {
     /// Root types (a.k.a. top-level types). These types are defined by users at the document level,
     /// they have their own unique names and represent core shared types that expose operations
     /// which can be called concurrently by remote peers in a conflict-free manner.
-    pub(crate) types: HashMap<Rc<str>, Box<Branch>>,
+    pub(crate) types: HashMap<Arc<str>, Box<Branch>>,
 
     /// A block store of a current document. It represent all blocks (inserted or tombstoned
     /// operations) integrated - and therefore visible - into a current document.
@@ -83,18 +82,17 @@ impl Store {
 
     /// Returns a branch reference to a complex type identified by its pointer. Returns `None` if
     /// no such type could be found or was ever defined.
-    pub(crate) fn get_type<K: Into<Rc<str>>>(&self, key: K) -> Option<BranchPtr> {
+    pub(crate) fn get_type<K: Into<Arc<str>>>(&self, key: K) -> Option<BranchPtr> {
         let ptr = BranchPtr::from(self.types.get(&key.into())?);
         Some(ptr)
     }
 
     /// Returns a branch reference to a complex type identified by its pointer. Returns `None` if
     /// no such type could be found or was ever defined.
-    pub(crate) fn get_or_create_type<K: Into<Rc<str>>>(
+    pub(crate) fn get_or_create_type<K: Into<Arc<str>>>(
         &mut self,
         key: K,
-        node_name: Option<Rc<str>>,
-        type_ref: TypeRefs,
+        type_ref: TypeRef,
     ) -> BranchPtr {
         let key = key.into();
         match self.types.entry(key.clone()) {
@@ -104,7 +102,7 @@ impl Store {
                 BranchPtr::from(branch)
             }
             Entry::Vacant(e) => {
-                let mut branch = Branch::new(type_ref, node_name);
+                let mut branch = Branch::new(type_ref);
                 let branch_ref = BranchPtr::from(&mut branch);
                 e.insert(branch);
                 branch_ref
@@ -112,7 +110,7 @@ impl Store {
         }
     }
 
-    pub(crate) fn get_type_key(&self, ptr: BranchPtr) -> Option<&Rc<str>> {
+    pub(crate) fn get_type_key(&self, ptr: BranchPtr) -> Option<&Arc<str>> {
         let branch = ptr.deref() as *const Branch;
         for (k, v) in self.types.iter() {
             let target = v.as_ref() as *const Branch;

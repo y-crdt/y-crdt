@@ -17,46 +17,113 @@ use crate::types::array::{ArrayEvent, ArrayRef};
 use crate::types::map::MapEvent;
 use crate::types::text::TextEvent;
 use crate::types::xml::{XmlElementRef, XmlEvent, XmlTextEvent, XmlTextRef};
+use crate::updates::decoder::{Decode, Decoder};
+use crate::updates::encoder::{Encode, Encoder};
 use lib0::any;
 use lib0::any::Any;
+use lib0::error::Error;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::convert::TryInto;
 use std::fmt::Formatter;
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 use std::ptr::NonNull;
-use std::rc::Rc;
 use std::sync::Arc;
 
-pub type TypeRefs = u8;
-
 /// Type ref identifier for an [ArrayRef] type.
-pub const TYPE_REFS_ARRAY: TypeRefs = 0;
+pub const TYPE_REFS_ARRAY: u8 = 0;
 
 /// Type ref identifier for a [MapRef] type.
-pub const TYPE_REFS_MAP: TypeRefs = 1;
+pub const TYPE_REFS_MAP: u8 = 1;
 
 /// Type ref identifier for a [TextRef] type.
-pub const TYPE_REFS_TEXT: TypeRefs = 2;
+pub const TYPE_REFS_TEXT: u8 = 2;
 
 /// Type ref identifier for a [XmlElementRef] type.
-pub const TYPE_REFS_XML_ELEMENT: TypeRefs = 3;
+pub const TYPE_REFS_XML_ELEMENT: u8 = 3;
 
 /// Type ref identifier for a [XmlFragmentRef] type. Used for compatibility.
-pub const TYPE_REFS_XML_FRAGMENT: TypeRefs = 4;
+pub const TYPE_REFS_XML_FRAGMENT: u8 = 4;
 
 /// Type ref identifier for a [XmlHookRef] type. Used for compatibility.
-pub const TYPE_REFS_XML_HOOK: TypeRefs = 5;
+pub const TYPE_REFS_XML_HOOK: u8 = 5;
 
 /// Type ref identifier for a [XmlTextRef] type.
-pub const TYPE_REFS_XML_TEXT: TypeRefs = 6;
+pub const TYPE_REFS_XML_TEXT: u8 = 6;
 
 /// Type ref identifier for a [DocRef] type.
-pub const TYPE_REFS_DOC: TypeRefs = 9;
+pub const TYPE_REFS_DOC: u8 = 9;
 
 /// Placeholder type ref identifier for non-specialized AbstractType. Used only for root-level types
 /// which have been integrated from remote peers before they were defined locally.
-pub const TYPE_REFS_UNDEFINED: TypeRefs = 15;
+pub const TYPE_REFS_UNDEFINED: u8 = 15;
+
+#[repr(u8)]
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum TypeRef {
+    Array = TYPE_REFS_ARRAY,
+    Map = TYPE_REFS_MAP,
+    Text = TYPE_REFS_TEXT,
+    XmlElement(Arc<str>) = TYPE_REFS_XML_ELEMENT,
+    XmlFragment = TYPE_REFS_XML_FRAGMENT,
+    XmlHook = TYPE_REFS_XML_HOOK,
+    XmlText = TYPE_REFS_XML_TEXT,
+    SubDoc = TYPE_REFS_DOC,
+    Undefined = TYPE_REFS_UNDEFINED,
+}
+
+impl TypeRef {
+    pub fn kind(&self) -> u8 {
+        match self {
+            TypeRef::Array => TYPE_REFS_ARRAY,
+            TypeRef::Map => TYPE_REFS_MAP,
+            TypeRef::Text => TYPE_REFS_TEXT,
+            TypeRef::XmlElement(_) => TYPE_REFS_XML_ELEMENT,
+            TypeRef::XmlFragment => TYPE_REFS_XML_FRAGMENT,
+            TypeRef::XmlHook => TYPE_REFS_XML_HOOK,
+            TypeRef::XmlText => TYPE_REFS_XML_TEXT,
+            TypeRef::SubDoc => TYPE_REFS_DOC,
+            TypeRef::Undefined => TYPE_REFS_UNDEFINED,
+        }
+    }
+}
+
+impl Encode for TypeRef {
+    fn encode<E: Encoder>(&self, encoder: &mut E) {
+        match self {
+            TypeRef::Array => encoder.write_type_ref(TYPE_REFS_ARRAY),
+            TypeRef::Map => encoder.write_type_ref(TYPE_REFS_MAP),
+            TypeRef::Text => encoder.write_type_ref(TYPE_REFS_TEXT),
+            TypeRef::XmlElement(name) => {
+                encoder.write_type_ref(TYPE_REFS_XML_ELEMENT);
+                encoder.write_key(&name);
+            }
+            TypeRef::XmlFragment => encoder.write_type_ref(TYPE_REFS_XML_FRAGMENT),
+            TypeRef::XmlHook => encoder.write_type_ref(TYPE_REFS_XML_HOOK),
+            TypeRef::XmlText => encoder.write_type_ref(TYPE_REFS_XML_TEXT),
+            TypeRef::SubDoc => encoder.write_type_ref(TYPE_REFS_DOC),
+            TypeRef::Undefined => encoder.write_type_ref(TYPE_REFS_UNDEFINED),
+        }
+    }
+}
+
+impl Decode for TypeRef {
+    fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, Error> {
+        let type_ref = decoder.read_type_ref()?;
+        match type_ref {
+            TYPE_REFS_ARRAY => Ok(TypeRef::Array),
+            TYPE_REFS_MAP => Ok(TypeRef::Map),
+            TYPE_REFS_TEXT => Ok(TypeRef::Text),
+            TYPE_REFS_XML_ELEMENT => Ok(TypeRef::XmlElement(decoder.read_key()?)),
+            TYPE_REFS_XML_FRAGMENT => Ok(TypeRef::XmlFragment),
+            TYPE_REFS_XML_HOOK => Ok(TypeRef::XmlHook),
+            TYPE_REFS_XML_TEXT => Ok(TypeRef::XmlText),
+            TYPE_REFS_DOC => Ok(TypeRef::SubDoc),
+            TYPE_REFS_UNDEFINED => Ok(TypeRef::Undefined),
+            _ => Err(Error::UnexpectedValue),
+        }
+    }
+}
 
 pub trait Observable: AsMut<Branch> {
     type Event;
@@ -108,7 +175,7 @@ impl BranchPtr {
     pub(crate) fn trigger(
         &self,
         txn: &TransactionMut,
-        subs: HashSet<Option<Rc<str>>>,
+        subs: HashSet<Option<Arc<str>>>,
     ) -> Option<Event> {
         if let Some(observers) = self.observers.as_ref() {
             Some(observers.publish(*self, txn, subs))
@@ -260,7 +327,7 @@ pub struct Branch {
     /// - [Map]: all of the map elements are based on this field. The value of each entry points
     ///   to the last modified value.
     /// - [XmlElement]: this field stores attributes assigned to a given XML node.
-    pub(crate) map: HashMap<Rc<str>, BlockPtr>,
+    pub(crate) map: HashMap<Arc<str>, BlockPtr>,
 
     /// Unique identifier of a current branch node. It can be contain either a named string - which
     /// means, this branch is a root-level complex data structure - or a block identifier. In latter
@@ -270,9 +337,6 @@ pub struct Branch {
 
     pub(crate) store: Option<WeakStoreRef>,
 
-    /// A tag name identifier, used only by [XmlElement].
-    pub name: Option<Rc<str>>,
-
     /// A length of an indexed sequence component of a current branch node. Map component elements
     /// are computed on demand.
     pub block_len: u32,
@@ -280,7 +344,7 @@ pub struct Branch {
     pub content_len: u32,
 
     /// An identifier of an underlying complex data type (eg. is it an Array or a Map).
-    type_ref: TypeRefs,
+    pub(crate) type_ref: TypeRef,
 
     pub(crate) observers: Option<Observers>,
 
@@ -300,14 +364,13 @@ impl PartialEq for Branch {
         self.item == other.item
             && self.start == other.start
             && self.map == other.map
-            && self.name == other.name
             && self.block_len == other.block_len
             && self.type_ref == other.type_ref
     }
 }
 
 impl Branch {
-    pub fn new(type_ref: TypeRefs, name: Option<Rc<str>>) -> Box<Self> {
+    pub fn new(type_ref: TypeRef) -> Box<Self> {
         Box::new(Self {
             start: None,
             map: HashMap::default(),
@@ -315,7 +378,6 @@ impl Branch {
             content_len: 0,
             item: None,
             store: None,
-            name,
             type_ref,
             observers: None,
             deep_observers: None,
@@ -323,14 +385,13 @@ impl Branch {
     }
 
     /// Returns an identifier of an underlying complex data type (eg. is it an Array or a Map).
-    pub fn type_ref(&self) -> TypeRefs {
-        self.type_ref & 0b1111
+    pub fn type_ref(&self) -> u8 {
+        self.type_ref.kind() & 0b1111
     }
 
-    pub(crate) fn repair_type_ref(&mut self, type_ref: TypeRefs) {
-        if self.type_ref() == TYPE_REFS_UNDEFINED {
-            // cleanup the TYPE_REFS_UNDEFINED bytes and set a new type ref
-            self.type_ref = (type_ref & (!TYPE_REFS_UNDEFINED)) | type_ref;
+    pub(crate) fn repair_type_ref(&mut self, type_ref: TypeRef) {
+        if self.type_ref == TypeRef::Undefined {
+            self.type_ref = type_ref;
         }
     }
 
@@ -904,7 +965,7 @@ impl std::fmt::Display for Branch {
 
 #[derive(Debug)]
 pub(crate) struct Entries<'a, B, T> {
-    iter: std::collections::hash_map::Iter<'a, Rc<str>, BlockPtr>,
+    iter: std::collections::hash_map::Iter<'a, Arc<str>, BlockPtr>,
     txn: B,
     _marker: PhantomData<T>,
 }
@@ -914,7 +975,7 @@ where
     B: Borrow<T>,
     T: ReadTxn,
 {
-    pub fn new(source: &'a HashMap<Rc<str>, BlockPtr>, txn: B) -> Self {
+    pub fn new(source: &'a HashMap<Arc<str>, BlockPtr>, txn: B) -> Self {
         Entries {
             iter: source.iter(),
             txn,
@@ -927,7 +988,7 @@ impl<'a, T: ReadTxn> Entries<'a, T, T>
 where
     T: Borrow<T> + ReadTxn,
 {
-    pub fn from(source: &'a HashMap<Rc<str>, BlockPtr>, txn: T) -> Self {
+    pub fn from(source: &'a HashMap<Arc<str>, BlockPtr>, txn: T) -> Self {
         Entries::new(source, txn)
     }
 }
@@ -936,7 +997,7 @@ impl<'a, T: ReadTxn> Entries<'a, &'a T, T>
 where
     T: Borrow<T> + ReadTxn,
 {
-    pub fn from_ref(source: &'a HashMap<Rc<str>, BlockPtr>, txn: &'a T) -> Self {
+    pub fn from_ref(source: &'a HashMap<Arc<str>, BlockPtr>, txn: &'a T) -> Self {
         Entries::new(source, txn)
     }
 }
@@ -1002,7 +1063,7 @@ pub(crate) enum TypePtr {
     Branch(BranchPtr),
 
     /// Temporary state representing top-level type.
-    Named(Rc<str>),
+    Named(Arc<str>),
 
     /// Temporary state representing nested-level type.
     ID(ID),
@@ -1066,7 +1127,7 @@ impl Observers {
         &self,
         branch_ref: BranchPtr,
         txn: &TransactionMut,
-        keys: HashSet<Option<Rc<str>>>,
+        keys: HashSet<Option<Arc<str>>>,
     ) -> Event {
         match self {
             Observers::Text(eh) => {
@@ -1118,7 +1179,7 @@ pub type Path = VecDeque<PathSegment>;
 #[derive(Debug, Clone, PartialEq)]
 pub enum PathSegment {
     /// Key segments are used to inform how to access child shared collections within a [Map] types.
-    Key(Rc<str>),
+    Key(Arc<str>),
 
     /// Index segments are used to inform how to access child shared collections within an [Array]
     /// or [XmlElement] types.
@@ -1189,13 +1250,13 @@ pub enum Delta {
 }
 
 /// An alias for map of attributes used as formatting parameters by [Text] and [XmlText] types.
-pub type Attrs = HashMap<Rc<str>, Any>;
+pub type Attrs = HashMap<Arc<str>, Any>;
 
 pub(crate) fn event_keys(
     txn: &TransactionMut,
     target: BranchPtr,
-    keys_changed: &HashSet<Option<Rc<str>>>,
-) -> HashMap<Rc<str>, EntryChange> {
+    keys_changed: &HashSet<Option<Arc<str>>>,
+) -> HashMap<Arc<str>, EntryChange> {
     let mut keys = HashMap::new();
     for opt in keys_changed.iter() {
         if let Some(key) = opt {

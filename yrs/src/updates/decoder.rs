@@ -1,10 +1,9 @@
 use crate::block::ClientID;
-use crate::types::TypeRefs;
 use crate::*;
 use lib0::decoding::Read;
 use lib0::error::Error;
 use lib0::{any::Any, decoding::Cursor};
-use std::rc::Rc;
+use std::sync::Arc;
 
 /// A trait that can be implemented by any other type in order to support lib0 decoding capability.
 pub trait Decode: Sized {
@@ -55,7 +54,7 @@ pub trait Decoder: Read {
     fn read_parent_info(&mut self) -> Result<bool, Error>;
 
     /// Read type ref info of a currently decoded [Block] parent.
-    fn read_type_ref(&mut self) -> Result<TypeRefs, Error>;
+    fn read_type_ref(&mut self) -> Result<u8, Error>;
 
     /// Read length parameter.
     fn read_len(&mut self) -> Result<u32, Error>;
@@ -69,7 +68,7 @@ pub trait Decoder: Read {
     fn read_json(&mut self) -> Result<Any, Error>;
 
     /// Read key string.
-    fn read_key(&mut self) -> Result<Rc<str>, Error>;
+    fn read_key(&mut self) -> Result<Arc<str>, Error>;
 
     /// Consume a rest of the decoded buffer data and return it without parsing.
     fn read_to_end(&mut self) -> Result<&[u8], Error>;
@@ -181,8 +180,8 @@ impl<'a> Decoder for DecoderV1<'a> {
     }
 
     #[inline]
-    fn read_key(&mut self) -> Result<Rc<str>, Error> {
-        let str: Rc<str> = self.read_string()?.into();
+    fn read_key(&mut self) -> Result<Arc<str>, Error> {
+        let str: Arc<str> = self.read_string()?.into();
         Ok(str)
     }
 
@@ -195,7 +194,7 @@ impl<'a> Decoder for DecoderV1<'a> {
 /// Version 2 of lib0 decoder.
 pub struct DecoderV2<'a> {
     cursor: Cursor<'a>,
-    keys: Vec<Rc<str>>,
+    keys: Vec<Arc<str>>,
     ds_curr_val: u32,
     key_clock_decoder: IntDiffOptRleDecoder<'a>,
     client_decoder: UIntOptRleDecoder<'a>,
@@ -336,7 +335,7 @@ impl<'a> Decoder for DecoderV2<'a> {
         Ok(self.parent_info_decoder.read_u8()? == 1)
     }
 
-    fn read_type_ref(&mut self) -> Result<TypeRefs, Error> {
+    fn read_type_ref(&mut self) -> Result<u8, Error> {
         Ok(self.type_ref_decoder.read_u64()? as u8)
     }
 
@@ -352,12 +351,12 @@ impl<'a> Decoder for DecoderV2<'a> {
         Any::decode(&mut self.cursor)
     }
 
-    fn read_key(&mut self) -> Result<Rc<str>, Error> {
+    fn read_key(&mut self) -> Result<Arc<str>, Error> {
         let key_clock = self.key_clock_decoder.read_u32()?;
         if let Some(key) = self.keys.get(key_clock as usize) {
             Ok(key.clone())
         } else {
-            let key: Rc<str> = self.string_decoder.read_str()?.into();
+            let key: Arc<str> = self.string_decoder.read_str()?.into();
             self.keys.push(key.clone());
             Ok(key)
         }

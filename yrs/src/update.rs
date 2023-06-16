@@ -16,7 +16,7 @@ use std::cmp::Ordering;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, VecDeque};
 use std::hash::BuildHasherDefault;
-use std::rc::Rc;
+use std::sync::Arc;
 
 #[derive(Debug, Default, PartialEq)]
 pub(crate) struct UpdateBlocks {
@@ -430,7 +430,7 @@ impl Update {
                 } else {
                     TypePtr::Unknown
                 };
-                let parent_sub: Option<Rc<str>> =
+                let parent_sub: Option<Arc<str>> =
                     if cant_copy_parent_info && (info & HAS_PARENT_SUB != 0) {
                         Some(decoder.read_string()?.into())
                     } else {
@@ -1012,7 +1012,7 @@ impl Iterator for IntoBlocks {
 #[cfg(test)]
 mod test {
     use crate::block::{Item, ItemContent};
-    use crate::types::{ToJson, TypePtr};
+    use crate::types::TypePtr;
     use crate::update::{BlockCarrier, Update};
     use crate::updates::decoder::{Decode, DecoderV1};
     use crate::updates::encoder::Encode;
@@ -1185,10 +1185,10 @@ mod test {
             txn.apply_update(u);
             let linknote = prosemirror.get(&txn, 0);
             let actual = linknote.and_then(|xml| match xml {
-                XmlNode::Element(elem) => Some(elem.tag().to_owned()),
+                XmlNode::Element(elem) => Some(elem.tag().clone()),
                 _ => None,
             });
-            assert_eq!(actual, Some("linknote".to_owned()));
+            assert_eq!(actual, Some("linknote".into()));
         }
         {
             let mut txn = doc.transact_mut();
@@ -1197,7 +1197,7 @@ mod test {
 
             // this should not panic
             let binary = txn.encode_update_v2();
-            let actual = Update::decode_v2(&binary).unwrap();
+            let _ = Update::decode_v2(&binary).unwrap();
 
             let linknote = prosemirror.get(&txn, 0);
             assert_eq!(linknote, None);

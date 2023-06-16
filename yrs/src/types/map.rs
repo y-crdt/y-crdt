@@ -2,7 +2,7 @@ use crate::block::{Block, BlockPtr, EmbedPrelim, ItemContent, ItemPosition, Prel
 use crate::transaction::TransactionMut;
 use crate::types::{
     event_keys, Branch, BranchPtr, Entries, EntryChange, EventHandler, Observers, Path, ToJson,
-    Value, TYPE_REFS_MAP,
+    TypeRef, Value,
 };
 use crate::*;
 use lib0::any::Any;
@@ -12,6 +12,7 @@ use std::collections::{HashMap, HashSet};
 use std::convert::{TryFrom, TryInto};
 use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
+use std::sync::Arc;
 
 /// Collection used to store key-value entries in an unordered manner. Keys are always represented
 /// as UTF-8 strings. Values can be any value type supported by Yrs: JSON-like primitives as well as
@@ -158,7 +159,7 @@ pub trait Map: AsRef<Branch> {
     /// Inserts a new `value` under given `key` into current map. Returns an integrated value.
     fn insert<K, V>(&self, txn: &mut TransactionMut, key: K, value: V) -> V::Return
     where
-        K: Into<Rc<str>>,
+        K: Into<Arc<str>>,
         V: Prelim,
     {
         let key = key.into();
@@ -354,7 +355,7 @@ impl<T: Prelim> Prelim for MapPrelim<T> {
     type Return = MapRef;
 
     fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
-        let inner = Branch::new(TYPE_REFS_MAP, None);
+        let inner = Branch::new(TypeRef::Map);
         (ItemContent::Type(inner), Some(self))
     }
 
@@ -377,11 +378,11 @@ impl<T: Prelim> Into<EmbedPrelim<MapPrelim<T>>> for MapPrelim<T> {
 pub struct MapEvent {
     pub(crate) current_target: BranchPtr,
     target: MapRef,
-    keys: UnsafeCell<Result<HashMap<Rc<str>, EntryChange>, HashSet<Option<Rc<str>>>>>,
+    keys: UnsafeCell<Result<HashMap<Arc<str>, EntryChange>, HashSet<Option<Arc<str>>>>>,
 }
 
 impl MapEvent {
-    pub(crate) fn new(branch_ref: BranchPtr, key_changes: HashSet<Option<Rc<str>>>) -> Self {
+    pub(crate) fn new(branch_ref: BranchPtr, key_changes: HashSet<Option<Arc<str>>>) -> Self {
         let current_target = branch_ref.clone();
         MapEvent {
             target: MapRef::from(branch_ref),
@@ -402,7 +403,7 @@ impl MapEvent {
 
     /// Returns a summary of key-value changes made over corresponding [Map] collection within
     /// bounds of current transaction.
-    pub fn keys(&self, txn: &TransactionMut) -> &HashMap<Rc<str>, EntryChange> {
+    pub fn keys(&self, txn: &TransactionMut) -> &HashMap<Arc<str>, EntryChange> {
         let keys = unsafe { self.keys.get().as_mut().unwrap() };
 
         match keys {

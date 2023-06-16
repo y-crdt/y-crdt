@@ -2,10 +2,7 @@ use crate::block::{Block, BlockPtr, ClientID, ItemContent, Prelim};
 use crate::event::{SubdocsEvent, TransactionCleanupEvent, UpdateEvent};
 use crate::store::{Store, StoreRef};
 use crate::transaction::{Origin, Transaction, TransactionMut};
-use crate::types::{
-    Branch, BranchPtr, ToJson, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
-    TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_TEXT,
-};
+use crate::types::{Branch, BranchPtr, ToJson, TypeRef};
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::OptionExt;
@@ -129,7 +126,7 @@ impl Doc {
         let mut r = self.store.try_borrow_mut().expect(
             "tried to get a root level type while another transaction on the document is open",
         );
-        let mut c = r.get_or_create_type(name, None, TYPE_REFS_TEXT);
+        let mut c = r.get_or_create_type(name, TypeRef::Text);
         c.store = Some(self.store.weak_ref());
         TextRef::from(c)
     }
@@ -155,7 +152,7 @@ impl Doc {
         let mut r = self.store.try_borrow_mut().expect(
             "tried to get a root level type while another transaction on the document is open",
         );
-        let mut c = r.get_or_create_type(name, None, TYPE_REFS_MAP);
+        let mut c = r.get_or_create_type(name, TypeRef::Map);
         c.store = Some(self.store.weak_ref());
         MapRef::from(c)
     }
@@ -180,7 +177,7 @@ impl Doc {
         let mut r = self.store.try_borrow_mut().expect(
             "tried to get a root level type while another transaction on the document is open",
         );
-        let mut c = r.get_or_create_type(name, None, TYPE_REFS_ARRAY);
+        let mut c = r.get_or_create_type(name, TypeRef::Array);
         c.store = Some(self.store.weak_ref());
         ArrayRef::from(c)
     }
@@ -207,7 +204,7 @@ impl Doc {
         let mut r = self.store.try_borrow_mut().expect(
             "tried to get a root level type while another transaction on the document is open",
         );
-        let mut c = r.get_or_create_type(name, None, TYPE_REFS_XML_FRAGMENT);
+        let mut c = r.get_or_create_type(name, TypeRef::XmlFragment);
         c.store = Some(self.store.weak_ref());
         XmlFragmentRef::from(c)
     }
@@ -234,7 +231,7 @@ impl Doc {
         let mut r = self.store.try_borrow_mut().expect(
             "tried to get a root level type while another transaction on the document is open",
         );
-        let mut c = r.get_or_create_type(name, Some(name.into()), TYPE_REFS_XML_ELEMENT);
+        let mut c = r.get_or_create_type(name, TypeRef::XmlElement(name.into()));
         c.store = Some(self.store.weak_ref());
         XmlElementRef::from(c)
     }
@@ -259,7 +256,7 @@ impl Doc {
         let mut r = self.store.try_borrow_mut().expect(
             "tried to get a root level type while another transaction on the document is open",
         );
-        let mut c = r.get_or_create_type(name, None, TYPE_REFS_XML_TEXT);
+        let mut c = r.get_or_create_type(name, TypeRef::XmlText);
         c.store = Some(self.store.weak_ref());
         XmlTextRef::from(c)
     }

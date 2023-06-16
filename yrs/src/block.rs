@@ -3,11 +3,7 @@ use crate::moving::Move;
 use crate::store::{Store, WeakStoreRef};
 use crate::transaction::TransactionMut;
 use crate::types::text::update_current_attributes;
-use crate::types::{
-    Attrs, Branch, BranchPtr, TypePtr, Value, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT,
-    TYPE_REFS_UNDEFINED, TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_HOOK,
-    TYPE_REFS_XML_TEXT,
-};
+use crate::types::{Attrs, Branch, BranchPtr, TypePtr, TypeRef, Value};
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::OptionExt;
@@ -21,7 +17,7 @@ use std::hash::Hash;
 use std::ops::{Deref, DerefMut};
 use std::panic;
 use std::ptr::NonNull;
-use std::rc::Rc;
+use std::sync::Arc;
 
 /// Bit flag used to identify [Block::GC].
 pub const BLOCK_GC_REF_NUMBER: u8 = 0;
@@ -379,8 +375,7 @@ impl BlockPtr {
                 let parent = match &this.parent {
                     TypePtr::Branch(branch) => Some(*branch),
                     TypePtr::Named(name) => {
-                        let branch =
-                            store.get_or_create_type(name.clone(), None, TYPE_REFS_UNDEFINED);
+                        let branch = store.get_or_create_type(name.clone(), TypeRef::Undefined);
                         this.parent = TypePtr::Branch(branch);
                         Some(branch)
                     }
@@ -1294,7 +1289,7 @@ pub struct Item {
 
     /// Used only when current item is used by map-like types. In such case this item works as a
     /// key-value entry of a map, and this field contains a key used by map.
-    pub(crate) parent_sub: Option<Rc<str>>,
+    pub(crate) parent_sub: Option<Arc<str>>,
 
     /// This property is reused by the moved prop. In this case this property refers to an Item.
     pub(crate) moved: Option<BlockPtr>,
@@ -1385,7 +1380,7 @@ impl Item {
         right: Option<BlockPtr>,
         right_origin: Option<ID>,
         parent: TypePtr,
-        parent_sub: Option<Rc<str>>,
+        parent_sub: Option<Arc<str>>,
         content: ItemContent,
     ) -> Box<Block> {
         let info = ItemFlags::new(if content.is_countable() {
@@ -1485,7 +1480,7 @@ impl Item {
                 }
             }
             TypePtr::Named(name) => {
-                let branch = store.get_or_create_type(name.clone(), None, TYPE_REFS_UNDEFINED);
+                let branch = store.get_or_create_type(name.clone(), TypeRef::Undefined);
                 self.parent = branch.into();
             }
             TypePtr::ID(id) => {
@@ -1697,7 +1692,7 @@ pub enum ItemContent {
 
     /// Formatting attribute entry. Format attributes are not considered countable and don't
     /// contribute to an overall length of a collection they are applied to.
-    Format(Rc<str>, Box<Any>),
+    Format(Arc<str>, Box<Any>),
 
     /// A chunk of text, usually applied by collaborative text insertion.
     String(SplittableString),
@@ -1915,12 +1910,7 @@ impl ItemContent {
                 encoder.write_json(v.as_ref());
             }
             ItemContent::Type(inner) => {
-                encoder.write_type_ref(inner.type_ref());
-                let type_ref = inner.type_ref();
-                if type_ref == types::TYPE_REFS_XML_ELEMENT || type_ref == types::TYPE_REFS_XML_HOOK
-                {
-                    encoder.write_key(inner.name.as_ref().unwrap().as_ref())
-                }
+                inner.type_ref.encode(encoder);
             }
             ItemContent::Any(any) => {
                 encoder.write_len(end - start + 1);
@@ -1950,12 +1940,7 @@ impl ItemContent {
                 encoder.write_json(v.as_ref());
             }
             ItemContent::Type(inner) => {
-                let type_ref = inner.type_ref();
-                encoder.write_type_ref(type_ref);
-                if type_ref == types::TYPE_REFS_XML_ELEMENT || type_ref == types::TYPE_REFS_XML_HOOK
-                {
-                    encoder.write_key(inner.name.as_ref().unwrap().as_ref())
-                }
+                inner.type_ref.encode(encoder);
             }
             ItemContent::Any(any) => {
                 encoder.write_len(any.len() as u32);
@@ -1988,13 +1973,8 @@ impl ItemContent {
                 decoder.read_json()?.into(),
             )),
             BLOCK_ITEM_TYPE_REF_NUMBER => {
-                let type_ref = decoder.read_type_ref()?;
-                let name = if type_ref == TYPE_REFS_XML_ELEMENT || type_ref == TYPE_REFS_XML_HOOK {
-                    Some(decoder.read_key()?.to_owned())
-                } else {
-                    None
-                };
-                let inner = Branch::new(type_ref, name);
+                let type_ref = TypeRef::decode(decoder)?;
+                let inner = Branch::new(type_ref);
                 Ok(ItemContent::Type(inner))
             }
             BLOCK_ITEM_ANY_REF_NUMBER => {
@@ -2131,9 +2111,7 @@ impl Clone for ItemContent {
             ItemContent::Embed(json) => ItemContent::Embed(json.clone()),
             ItemContent::Format(key, value) => ItemContent::Format(key.clone(), value.clone()),
             ItemContent::String(chunk) => ItemContent::String(chunk.clone()),
-            ItemContent::Type(branch) => {
-                ItemContent::Type(Branch::new(branch.type_ref(), branch.name.clone()))
-            }
+            ItemContent::Type(branch) => ItemContent::Type(Branch::new(branch.type_ref.clone())),
             ItemContent::Move(range) => ItemContent::Move(range.clone()),
         }
     }
@@ -2221,15 +2199,15 @@ impl std::fmt::Display for ItemContent {
             ItemContent::Format(k, v) => write!(f, "<{}={}>", k, v),
             ItemContent::Deleted(s) => write!(f, "deleted({})", s),
             ItemContent::Binary(s) => write!(f, "{:?}", s),
-            ItemContent::Type(inner) => match inner.type_ref() {
-                TYPE_REFS_ARRAY => {
+            ItemContent::Type(inner) => match &inner.type_ref {
+                TypeRef::Array => {
                     if let Some(ptr) = inner.start {
                         write!(f, "<array(head: {})>", ptr)
                     } else {
                         write!(f, "<array>")
                     }
                 }
-                TYPE_REFS_MAP => {
+                TypeRef::Map => {
                     write!(f, "<map({{")?;
                     let mut iter = inner.map.iter();
                     if let Some((k, ptr)) = iter.next() {
@@ -2240,19 +2218,19 @@ impl std::fmt::Display for ItemContent {
                     }
                     write!(f, "}})>")
                 }
-                TYPE_REFS_TEXT => {
+                TypeRef::Text => {
                     if let Some(start) = inner.start {
                         write!(f, "<text(head: {})>", start)
                     } else {
                         write!(f, "<text>")
                     }
                 }
-                TYPE_REFS_XML_ELEMENT => {
-                    write!(f, "<xml element: {}>", inner.name.as_ref().unwrap())
+                TypeRef::XmlElement(name) => {
+                    write!(f, "<xml element: {}>", name)
                 }
-                TYPE_REFS_XML_FRAGMENT => write!(f, "<xml fragment>"),
-                TYPE_REFS_XML_HOOK => write!(f, "<xml hook>"),
-                TYPE_REFS_XML_TEXT => write!(f, "<xml text>"),
+                TypeRef::XmlFragment => write!(f, "<xml fragment>"),
+                TypeRef::XmlHook => write!(f, "<xml hook>"),
+                TypeRef::XmlText => write!(f, "<xml text>"),
                 _ => write!(f, "<undefined type ref>"),
             },
             ItemContent::Move(m) => std::fmt::Display::fmt(m.as_ref(), f),

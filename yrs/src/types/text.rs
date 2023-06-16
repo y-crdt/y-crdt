@@ -2,7 +2,7 @@ use crate::block::{Block, BlockPtr, EmbedPrelim, Item, ItemContent, ItemPosition
 use crate::block_store::Snapshot;
 use crate::transaction::TransactionMut;
 use crate::types::{
-    Attrs, Branch, BranchPtr, Delta, EventHandler, Observers, Path, Value, TYPE_REFS_TEXT,
+    Attrs, Branch, BranchPtr, Delta, EventHandler, Observers, Path, TypeRef, Value,
 };
 use crate::utils::OptionExt;
 use crate::*;
@@ -1260,7 +1260,7 @@ impl<T: Borrow<str>> Prelim for TextPrelim<T> {
     type Return = TextRef;
 
     fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
-        let inner = Branch::new(TYPE_REFS_TEXT, None);
+        let inner = Branch::new(TypeRef::Text);
         (ItemContent::Type(inner), Some(self))
     }
 
