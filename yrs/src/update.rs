@@ -1016,7 +1016,7 @@ mod test {
     use crate::update::{BlockCarrier, Update};
     use crate::updates::decoder::{Decode, DecoderV1};
     use crate::updates::encoder::Encode;
-    use crate::{Doc, GetString, Options, Text, Transact, ID};
+    use crate::{Doc, GetString, Options, Text, Transact, XmlFragment, XmlNode, ID};
     use lib0::decoding::Cursor;
 
     #[test]
@@ -1146,7 +1146,7 @@ mod test {
     }
 
     #[test]
-    fn test_yrs_issue() {
+    fn test_v2_encoding_of_fragmented_delete_set() {
         let before = vec![
             0, 1, 0, 11, 129, 215, 239, 201, 16, 198, 237, 152, 220, 8, 4, 4, 0, 4, 1, 1, 0, 11,
             40, 3, 39, 0, 4, 0, 7, 0, 40, 3, 8, 163, 1, 142, 1, 110, 111, 116, 101, 46, 103, 117,
@@ -1171,24 +1171,36 @@ mod test {
             119, 69, 84, 48, 105, 82, 86, 66, 81, 45, 56, 69, 87, 50, 87, 103, 0,
         ];
         let update = vec![
-            0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 198, 182, 140, 174, 4, 1, 2, 6,
+            0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 198, 182, 140, 174, 4, 1, 2, 0, 0, 5,
         ];
         let doc = Doc::with_options(Options {
             skip_gc: true,
+            client_id: 1,
             ..Default::default()
         });
+        let prosemirror = doc.get_or_insert_xml_fragment("prosemirror");
         {
             let mut txn = doc.transact_mut();
             let u = Update::decode_v2(&before).unwrap();
             txn.apply_update(u);
-            //txn.encode_update_v2(); // [A] first encode_update_v2() call
+            let linknote = prosemirror.get(&txn, 0);
+            let actual = linknote.and_then(|xml| match xml {
+                XmlNode::Element(elem) => Some(elem.tag().to_owned()),
+                _ => None,
+            });
+            assert_eq!(actual, Some("linknote".to_owned()));
         }
         {
             let mut txn = doc.transact_mut();
             let u = Update::decode_v2(&update).unwrap();
             txn.apply_update(u);
-            let actual = txn.encode_update_v2(); // [B] crashes here when A is commented out
-            assert_eq!(update, actual);
+
+            // this should not panic
+            let binary = txn.encode_update_v2();
+            let actual = Update::decode_v2(&binary).unwrap();
+
+            let linknote = prosemirror.get(&txn, 0);
+            assert_eq!(linknote, None);
         }
     }
 
