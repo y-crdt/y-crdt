@@ -4,27 +4,27 @@ use std::time::Instant;
 
 #[test]
 fn edit_trace_automerge() {
-    test_editing_trace("editing-traces/sequential_traces/automerge-paper.json.gz");
+    test_editing_trace("../assets/editing-traces/sequential_traces/automerge-paper.json.gz");
 }
 
 #[test]
 fn edit_trace_friendsforever() {
-    test_editing_trace("editing-traces/sequential_traces/friendsforever_flat.json.gz");
+    test_editing_trace("../assets/editing-traces/sequential_traces/friendsforever_flat.json.gz");
 }
 
 #[test]
 fn edit_trace_sephblog1() {
-    test_editing_trace("editing-traces/sequential_traces/seph-blog1.json.gz");
+    test_editing_trace("../assets/editing-traces/sequential_traces/seph-blog1.json.gz");
 }
 
 #[test]
 fn edit_trace_sveltecomponent() {
-    test_editing_trace("editing-traces/sequential_traces/sveltecomponent.json.gz");
+    test_editing_trace("../assets/editing-traces/sequential_traces/sveltecomponent.json.gz");
 }
 
 #[test]
 fn edit_trace_rustcode() {
-    test_editing_trace("editing-traces/sequential_traces/rustcode.json.gz");
+    test_editing_trace("../assets/editing-traces/sequential_traces/rustcode.json.gz");
 }
 
 fn test_editing_trace(fpath: &str) {
