@@ -43,33 +43,33 @@ const run = (tc, filename) => {
  * @param {t.TestCase} tc
  */
 export const testEditingTraceAutomerge = tc => {
-    run(tc, '../yrs/editing-traces/sequential_traces/automerge-paper.json.gz')
+    run(tc, '../assets/editing-traces/sequential_traces/automerge-paper.json.gz')
 }
 
 /**
  * @param {t.TestCase} tc
  */
 export const testEditingTraceFriendsForever = tc => {
-    run(tc, '../yrs/editing-traces/sequential_traces/friendsforever_flat.json.gz')
+    run(tc, '../assets/editing-traces/sequential_traces/friendsforever_flat.json.gz')
 }
 
 /**
  * @param {t.TestCase} tc
  */
 export const testEditingTraceRustCode = tc => {
-    run(tc, '../yrs/editing-traces/sequential_traces/rustcode.json.gz')
+    run(tc, '../assets/editing-traces/sequential_traces/rustcode.json.gz')
 }
 
 /**
  * @param {t.TestCase} tc
  */
 export const testEditingTraceSephBlog = tc => {
-    run(tc, '../yrs/editing-traces/sequential_traces/seph-blog1.json.gz')
+    run(tc, '../assets/editing-traces/sequential_traces/seph-blog1.json.gz')
 }
 
 /**
  * @param {t.TestCase} tc
  */
 export const testEditingTraceSvelteComponent = tc => {
-    run(tc, '../yrs/editing-traces/sequential_traces/sveltecomponent.json.gz')
+    run(tc, '../assets/editing-traces/sequential_traces/sveltecomponent.json.gz')
 }

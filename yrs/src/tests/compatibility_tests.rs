@@ -415,12 +415,12 @@ fn negative_zero_decoding_v2() {
 
 #[test]
 fn test_small_data_set() {
-    test_data_set("./benches/input/small-test-dataset.bin")
+    test_data_set("../assets/bench-input/small-test-dataset.bin")
 }
 
 #[test]
 fn test_medium_data_set() {
-    test_data_set("./benches/input/medium-test-dataset.bin")
+    test_data_set("../assets/bench-input/medium-test-dataset.bin")
 }
 
 //#[test]
