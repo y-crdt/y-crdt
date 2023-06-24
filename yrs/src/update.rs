@@ -6,7 +6,7 @@ use crate::id_set::DeleteSet;
 #[cfg(test)]
 use crate::store::Store;
 use crate::transaction::TransactionMut;
-use crate::types::TypePtr;
+use crate::types::{TypePtr, TypeRef};
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::client_hasher::ClientHasher;
@@ -333,19 +333,30 @@ impl Update {
                     _ => {}
                 }
 
-                if let ItemContent::Move(m) = &item.content {
-                    if let Some(start) = m.start.id() {
-                        if start.clock >= local_sv.get(&start.client) {
-                            return Some(start.client);
+                match &item.content {
+                    ItemContent::Move(m) => {
+                        if let Some(start) = m.start.id() {
+                            if start.clock >= local_sv.get(&start.client) {
+                                return Some(start.client);
+                            }
                         }
-                    }
-                    if !m.is_collapsed() {
-                        if let Some(end) = m.end.id() {
-                            if end.clock >= local_sv.get(&end.client) {
-                                return Some(end.client);
+                        if !m.is_collapsed() {
+                            if let Some(end) = m.end.id() {
+                                if end.clock >= local_sv.get(&end.client) {
+                                    return Some(end.client);
+                                }
                             }
                         }
                     }
+                    ItemContent::Type(branch) => {
+                        if let TypeRef::WeakLink(source) = &branch.type_ref {
+                            let id = source.id();
+                            if id.clock >= local_sv.get(&id.client) {
+                                return Some(id.client);
+                            }
+                        }
+                    }
+                    _ => { /* do nothing */ }
                 }
             }
         }

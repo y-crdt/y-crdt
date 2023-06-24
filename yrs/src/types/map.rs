@@ -1,5 +1,6 @@
 use crate::block::{Block, BlockPtr, EmbedPrelim, ItemContent, ItemPosition, Prelim};
 use crate::transaction::TransactionMut;
+use crate::types::weak::WeakPrelim;
 use crate::types::{
     event_keys, Branch, BranchPtr, Entries, EntryChange, EventHandler, Observers, Path, ToJson,
     TypeRef, Value,
@@ -201,6 +202,14 @@ pub trait Map: AsRef<Branch> {
     fn get<T: ReadTxn>(&self, txn: &T, key: &str) -> Option<Value> {
         let ptr = BranchPtr::from(self.as_ref());
         ptr.get(txn, key)
+    }
+
+    /// Returns [WeakPrelim] to a given `key`, if it exists in a current map.
+    fn link<T: ReadTxn>(&self, txn: &T, key: &str) -> Option<WeakPrelim> {
+        let ptr = BranchPtr::from(self.as_ref());
+        let block = ptr.map.get(key)?;
+        let link = WeakPrelim::new(block.id().clone());
+        Some(link)
     }
 
     /// Checks if an entry with given `key` can be found within current map.

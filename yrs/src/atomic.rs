@@ -57,6 +57,18 @@ impl<T> AtomicRef<T> {
         }
     }
 
+    /// Atomically replaces currently stored value with a new one, returning the last stored value.
+    pub fn swap(&self, value: T) -> Option<Arc<T>> {
+        let new_ptr = Arc::into_raw(Arc::new(value)) as *mut _;
+        let prev = self.0.swap(new_ptr, Ordering::Release);
+        if prev.is_null() {
+            None
+        } else {
+            let arc = unsafe { Arc::from_raw(prev) };
+            Some(arc)
+        }
+    }
+
     /// Updates stored value in place using provided function `f`, which takes read-only refrence
     /// to the most recently known state and producing new state in the result.
     ///
@@ -107,6 +119,23 @@ impl<T> Drop for AtomicRef<T> {
         }
     }
 }
+
+impl<T> PartialEq for AtomicRef<T>
+where
+    T: PartialEq,
+{
+    fn eq(&self, other: &Self) -> bool {
+        let a = self.0.load(Ordering::Acquire);
+        let b = other.0.load(Ordering::Acquire);
+        if std::ptr::eq(a, b) {
+            true
+        } else {
+            unsafe { a.as_ref() == b.as_ref() }
+        }
+    }
+}
+
+impl<T> Eq for AtomicRef<T> where T: Eq {}
 
 impl<T: std::fmt::Debug> std::fmt::Debug for AtomicRef<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {

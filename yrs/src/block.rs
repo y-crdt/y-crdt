@@ -322,6 +322,7 @@ impl BlockPtr {
                         parent_sub: item.parent_sub.clone(),
                         info: item.info.clone(),
                         redone: item.redone.map(|id| ID::new(id.client, id.clock + offset)),
+                        linked_by: None,
                     }));
                     let new_ptr = BlockPtr::from(&mut new);
 
@@ -653,6 +654,7 @@ impl BlockPtr {
                     && v1.right == Some(other_ptr)
                     && v1.is_deleted() == v2.is_deleted()
                     && (v1.redone.is_none() && v2.redone.is_none())
+                    && (v1.linked_by.is_none() && v2.linked_by.is_none())
                     && v1.moved == v2.moved
                     && v1.content.try_squash(&v2.content)
                 {
@@ -1247,6 +1249,8 @@ impl Into<u8> for ItemFlags {
     }
 }
 
+pub(crate) type LinkedBy = Box<HashSet<BranchPtr>>;
+
 /// An item is a basic unit of work in Yrs. It contains user data reinforced with all metadata
 /// required for a potential conflict resolution as well as extra fields used for joining blocks
 /// together as a part of indexed sequences or maps.
@@ -1291,8 +1295,12 @@ pub struct Item {
     /// key-value entry of a map, and this field contains a key used by map.
     pub(crate) parent_sub: Option<Arc<str>>,
 
-    /// This property is reused by the moved prop. In this case this property refers to an Item.
+    /// This property is used by the moved prop. In this case this property refers to an Item.
     pub(crate) moved: Option<BlockPtr>,
+
+    /// This property is used by the linked items. It allows to notify all [WeakRef]s that
+    /// point to current item.
+    pub(crate) linked_by: Option<LinkedBy>,
 
     /// Bit flag field which contains information about specifics of this item.
     pub(crate) info: ItemFlags,
@@ -1401,6 +1409,7 @@ impl Item {
             parent_sub,
             info,
             moved: None,
+            linked_by: None,
             redone: None,
         }));
         let item_ptr = BlockPtr::from(&mut item);

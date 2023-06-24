@@ -2,6 +2,7 @@ use crate::block::{BlockPtr, EmbedPrelim, ItemContent, Prelim, Unused};
 use crate::block_iter::BlockIter;
 use crate::moving::StickyIndex;
 use crate::transaction::TransactionMut;
+use crate::types::weak::WeakPrelim;
 use crate::types::{
     event_change_set, Branch, BranchPtr, Change, ChangeSet, EventHandler, Observers, Path, ToJson,
     TypeRef, Value,
@@ -232,6 +233,18 @@ pub trait Array: AsRef<Branch> {
         let mut walker = BlockIter::new(BranchPtr::from(self.as_ref()));
         if walker.try_forward(txn, index) {
             walker.read_value(txn)
+        } else {
+            None
+        }
+    }
+
+    /// Returns [WeakPrelim] to a given `index`, if it's in a boundaries of a current array.
+    fn link<T: ReadTxn>(&self, txn: &T, index: u32) -> Option<WeakPrelim> {
+        let mut walker = BlockIter::new(BranchPtr::from(self.as_ref()));
+        if walker.try_forward(txn, index) {
+            let block = walker.next_item()?;
+            let link = WeakPrelim::new(block.id().clone());
+            Some(link)
         } else {
             None
         }

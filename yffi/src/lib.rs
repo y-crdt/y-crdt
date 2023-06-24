@@ -12,6 +12,7 @@ use yrs::types::array::ArrayIter as NativeArrayIter;
 use yrs::types::map::MapEvent;
 use yrs::types::map::MapIter as NativeMapIter;
 use yrs::types::text::{Diff, TextEvent, YChange};
+use yrs::types::weak::{WeakEvent, WeakRef};
 use yrs::types::xml::{Attributes as NativeAttributes, XmlNode};
 use yrs::types::xml::{TreeWalker as NativeTreeWalker, XmlFragment};
 use yrs::types::xml::{XmlEvent, XmlTextEvent};
@@ -80,6 +81,9 @@ pub const Y_XML_FRAG: i8 = 6;
 
 /// Flag used by `YInput` and `YOutput` to tag content, which is an `YDoc` shared type.
 pub const Y_DOC: i8 = 7;
+
+/// Flag used by `YInput` and `YOutput` to tag content, which is an `YWeakLink` shared type.
+pub const Y_WEAK_LINK: i8 = 7;
 
 /// Flag used to mark a truthy boolean numbers.
 pub const Y_TRUE: u8 = 1;
@@ -2738,6 +2742,7 @@ impl From<Value> for YOutput {
             Value::YXmlFragment(v) => Self::from(v),
             Value::YXmlText(v) => Self::from(v),
             Value::YDoc(v) => Self::from(v),
+            Value::YWeakLink(v) => Self::from(v),
         }
     }
 }
@@ -2900,6 +2905,18 @@ impl From<Doc> for YOutput {
             len: 1,
             value: YOutputContent {
                 y_doc: Box::into_raw(Box::new(v.clone())),
+            },
+        }
+    }
+}
+
+impl From<WeakRef> for YOutput {
+    fn from(v: WeakRef) -> Self {
+        YOutput {
+            tag: Y_WEAK_LINK,
+            len: 1,
+            value: YOutputContent {
+                y_type: v.into_raw_branch(),
             },
         }
     }
@@ -3701,6 +3718,12 @@ impl YEvent {
                     xml_text: YXmlTextEvent::new(e, txn),
                 },
             },
+            Event::Weak(e) => YEvent {
+                tag: Y_WEAK_LINK,
+                content: YEventContent {
+                    weak: YWeakLinkEvent::new(e, txn),
+                },
+            },
         }
     }
 }
@@ -3712,6 +3735,7 @@ pub union YEventContent {
     pub array: YArrayEvent,
     pub xml_elem: YXmlEvent,
     pub xml_text: YXmlTextEvent,
+    pub weak: YWeakLinkEvent,
 }
 
 /// Event pushed into callbacks registered with `ytext_observe` function. It contains delta of all
@@ -3868,6 +3892,36 @@ impl Deref for YXmlTextEvent {
 
     fn deref(&self) -> &Self::Target {
         unsafe { (self.inner as *const XmlTextEvent).as_ref().unwrap() }
+    }
+}
+
+/// Event pushed into callbacks registered with `yweak_observe` function. It contains
+/// all an event changes of the underlying transaction.
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct YWeakLinkEvent {
+    inner: *const c_void,
+    txn: *const yrs::TransactionMut<'static>,
+}
+
+impl YWeakLinkEvent {
+    fn new<'doc>(inner: &WeakEvent, txn: &yrs::TransactionMut<'doc>) -> Self {
+        let inner = inner as *const WeakEvent as *const _;
+        let txn: &yrs::TransactionMut<'static> = unsafe { std::mem::transmute(txn) };
+        let txn = txn as *const _;
+        YWeakLinkEvent { inner, txn }
+    }
+
+    fn txn(&self) -> &yrs::TransactionMut<'static> {
+        unsafe { self.txn.as_ref().unwrap() }
+    }
+}
+
+impl Deref for YWeakLinkEvent {
+    type Target = WeakEvent;
+
+    fn deref(&self) -> &Self::Target {
+        unsafe { (self.inner as *const WeakEvent).as_ref().unwrap() }
     }
 }
 
