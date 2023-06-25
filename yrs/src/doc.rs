@@ -1344,14 +1344,12 @@ mod test {
         txt1.insert(&mut d1.transact_mut(), 0, "hello");
         let snapshot = d1.transact_mut().snapshot();
         txt1.insert(&mut d1.transact_mut(), 5, "_world");
-        println!("{:#?}", snapshot);
 
         let mut encoder = EncoderV1::new();
         d1.transact_mut()
             .encode_state_from_snapshot(&snapshot, &mut encoder)
             .unwrap();
         let update = Update::decode_v1(&encoder.to_vec()).unwrap();
-        println!("{:#?}", update);
 
         let d2 = Doc::with_client_id(2);
         let txt2 = d2.get_or_insert_text("text");
