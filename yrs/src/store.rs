@@ -152,7 +152,7 @@ impl Store {
         encoder.write_var(diff.len());
         for (client, clock) in diff {
             let blocks = self.blocks.get(&client).unwrap();
-            let clock = clock.min(blocks.last().last_id().clock);
+            let clock = clock.min(blocks.last().last_id().clock + 1);
             let last_idx = blocks.find_pivot(clock - 1).unwrap();
             // write # encoded structs
             encoder.write_var(last_idx + 1);

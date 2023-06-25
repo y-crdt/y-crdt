@@ -1335,7 +1335,7 @@ mod test {
     }
 
     #[test]
-    fn snapshots_update_generation() {
+    fn snapshots_splitting_text() {
         let mut options = Options::with_client_id(1);
         options.skip_gc = true;
 
@@ -1343,20 +1343,54 @@ mod test {
         let txt1 = d1.get_or_insert_text("text");
         txt1.insert(&mut d1.transact_mut(), 0, "hello");
         let snapshot = d1.transact_mut().snapshot();
-        txt1.insert(&mut d1.transact_mut(), 5, " world");
+        txt1.insert(&mut d1.transact_mut(), 5, "_world");
+        println!("{:#?}", snapshot);
 
         let mut encoder = EncoderV1::new();
         d1.transact_mut()
             .encode_state_from_snapshot(&snapshot, &mut encoder)
             .unwrap();
-        let update = encoder.to_vec();
+        let update = Update::decode_v1(&encoder.to_vec()).unwrap();
+        println!("{:#?}", update);
 
         let d2 = Doc::with_client_id(2);
         let txt2 = d2.get_or_insert_text("text");
-        d2.transact_mut()
-            .apply_update(Update::decode_v1(&update).unwrap());
+        d2.transact_mut().apply_update(update);
 
         assert_eq!(txt2.get_string(&txt2.transact()), "hello".to_string());
+    }
+
+    #[test]
+    fn snapshot_non_splitting_text() {
+        unsafe {
+            let mut options = Options::default();
+            options.skip_gc = true;
+
+            let doc = Doc::with_options(options.clone().into());
+            let txt = doc.get_or_insert_text("name");
+
+            let mut txn = doc.transact_mut();
+            txt.insert(&mut txn, 0, "Lucas");
+            drop(txn);
+
+            let txn = doc.transact();
+            let snapshot = txn.snapshot();
+
+            let mut encoder = EncoderV1::new();
+            txn.encode_state_from_snapshot(&snapshot, &mut encoder)
+                .unwrap();
+            let state_diff = encoder.to_vec();
+
+            let remote_doc = Doc::with_options(options);
+            let remote_txt = remote_doc.get_or_insert_text("name");
+            let mut txn = remote_doc.transact_mut();
+            let update = Update::decode_v1(&state_diff).unwrap();
+            txn.apply_update(update);
+
+            let actual = remote_txt.get_string(&txn);
+
+            assert_eq!(actual, "Lucas");
+        }
     }
 
     #[test]
