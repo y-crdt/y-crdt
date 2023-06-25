@@ -1374,7 +1374,6 @@ mod test {
         let snapshot = txn.snapshot();
 
         let mut encoder = EncoderV1::new();
-        let mut encoder = EncoderV1::new();
         txn.encode_state_from_snapshot(&snapshot, &mut encoder)
             .unwrap();
         let state_diff = encoder.to_vec();
