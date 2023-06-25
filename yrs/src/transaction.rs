@@ -4,7 +4,7 @@ use crate::doc::DocAddr;
 use crate::event::SubdocsEvent;
 use crate::id_set::DeleteSet;
 use crate::store::{Store, SubdocGuids, SubdocsIter};
-use crate::types::{Branch, BranchPtr, Event, Events, TypePtr, Value};
+use crate::types::{Branch, BranchPtr, Event, Events, TypePtr, TypeRef, Value};
 use crate::update::Update;
 use crate::utils::OptionExt;
 use crate::*;
@@ -495,6 +495,11 @@ impl<'doc> TransactionMut<'doc> {
                 self.delete_set.insert(item.id.clone(), item.len());
                 if let Some(parent) = item.parent.as_branch() {
                     self.add_changed_type(*parent, item.parent_sub.clone());
+                    if let Some(linked_by) = item.linked_by.take() {
+                        for link in linked_by.into_iter() {
+                            self.add_changed_type(link, item.parent_sub.clone());
+                        }
+                    }
                 } else {
                     // parent has been GC'ed
                 }
@@ -508,9 +513,24 @@ impl<'doc> TransactionMut<'doc> {
                         }
                     }
                     ItemContent::Type(inner) => {
+                        let branch_ptr = BranchPtr::from(inner);
+                        if let TypeRef::WeakLink(source) = &inner.type_ref {
+                            // when removing weak links, remove references to them
+                            // from type they're pointing to
+                            if let Some(linked) = source.linked_item.take() {
+                                let mut linked = *linked;
+                                if let Block::Item(item) = linked.deref_mut() {
+                                    if !item.is_deleted() {
+                                        if let Some(linked_by) = &mut item.linked_by {
+                                            linked_by.remove(&branch_ptr);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         let mut ptr = inner.start;
-                        self.changed
-                            .remove(&TypePtr::Branch(BranchPtr::from(inner)));
+                        self.changed.remove(&TypePtr::Branch(branch_ptr));
 
                         while let Some(Block::Item(item)) = ptr.as_deref() {
                             if !item.is_deleted() {
@@ -659,6 +679,45 @@ impl<'doc> TransactionMut<'doc> {
         block_ptr
     }
 
+    fn call_type_observers(
+        changed_parent_types: &mut Vec<BranchPtr>,
+        branch: BranchPtr,
+        changed_parents: &mut HashMap<BranchPtr, Vec<usize>>,
+        event_cache: &mut Vec<Event>,
+        visited: &mut HashSet<BranchPtr>,
+    ) {
+        let mut current = branch;
+        loop {
+            changed_parent_types.push(current);
+            if current.deep_observers.is_some() {
+                let entries = changed_parents.entry(current).or_default();
+                entries.push(event_cache.len() - 1);
+            }
+
+            if let Some(Block::Item(item)) = current.item.as_deref() {
+                if let Some(linked_by) = &item.linked_by {
+                    for &link in linked_by.iter() {
+                        if visited.insert(link) {
+                            Self::call_type_observers(
+                                changed_parent_types,
+                                link,
+                                changed_parents,
+                                event_cache,
+                                visited,
+                            )
+                        }
+                    }
+                }
+                if let TypePtr::Branch(parent) = item.parent {
+                    current = parent;
+                    continue;
+                }
+            }
+
+            break;
+        }
+    }
+
     /// Commits current transaction. This step involves cleaning up and optimizing changes performed
     /// during lifetime of a transaction. Such changes include squashing delete sets data,
     /// squashing blocks that have been appended one after another to preserve memory and triggering
@@ -685,24 +744,13 @@ impl<'doc> TransactionMut<'doc> {
                 if let TypePtr::Branch(branch) = ptr {
                     if let Some(e) = branch.trigger(self, subs.clone()) {
                         event_cache.push(e);
-
-                        let mut current = *branch;
-                        loop {
-                            self.changed_parent_types.push(current);
-                            if current.deep_observers.is_some() {
-                                let entries = changed_parents.entry(current).or_default();
-                                entries.push(event_cache.len() - 1);
-                            }
-
-                            if let Some(Block::Item(item)) = current.item.as_deref() {
-                                if let TypePtr::Branch(parent) = item.parent {
-                                    current = parent;
-                                    continue;
-                                }
-                            }
-
-                            break;
-                        }
+                        Self::call_type_observers(
+                            &mut self.changed_parent_types,
+                            *branch,
+                            &mut changed_parents,
+                            &mut event_cache,
+                            &mut HashSet::default(),
+                        );
                     }
                 }
             }

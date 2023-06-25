@@ -69,6 +69,17 @@ impl<T> AtomicRef<T> {
         }
     }
 
+    /// Atomically replaces currently stored value with a null, returning the last stored value.
+    pub fn take(&self) -> Option<Arc<T>> {
+        let prev = self.0.swap(null_mut(), Ordering::Release);
+        if prev.is_null() {
+            None
+        } else {
+            let arc = unsafe { Arc::from_raw(prev) };
+            Some(arc)
+        }
+    }
+
     /// Updates stored value in place using provided function `f`, which takes read-only refrence
     /// to the most recently known state and producing new state in the result.
     ///

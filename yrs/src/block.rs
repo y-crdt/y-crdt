@@ -520,7 +520,11 @@ impl BlockPtr {
                     } else if let Some(parent_sub) = &this.parent_sub {
                         // set as current parent value if right === null and this is parentSub
                         parent_ref.map.insert(parent_sub.clone(), self_ptr);
-                        if let Some(left) = this.left {
+                        if let Some(mut left) = this.left {
+                            // inherit links from block we're overriding
+                            if let Block::Item(left) = left.deref_mut() {
+                                this.linked_by = left.linked_by.take();
+                            }
                             // this is the current attribute value of parent. delete right
                             txn.delete(left);
                         }
@@ -599,6 +603,11 @@ impl BlockPtr {
                         }
                     }
                     txn.add_changed_type(parent_ref, this.parent_sub.clone());
+                    if let Some(linked_by) = &this.linked_by {
+                        for link in linked_by.iter() {
+                            txn.add_changed_type(*link, this.parent_sub.clone());
+                        }
+                    }
                     let parent_deleted = if let TypePtr::Branch(ptr) = &this.parent {
                         if let Some(block) = ptr.item {
                             block.is_deleted()

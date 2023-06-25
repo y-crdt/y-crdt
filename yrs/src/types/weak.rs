@@ -1,7 +1,7 @@
 use crate::atomic::AtomicRef;
 use crate::block::{Block, BlockPtr, BlockSlice, ItemContent, Prelim};
 use crate::types::{Branch, BranchPtr, EventHandler, Observers, TypeRef, Value};
-use crate::{Observable, TransactionMut, ID};
+use crate::{MapRef, Observable, TransactionMut, ID};
 use std::convert::{TryFrom, TryInto};
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
@@ -128,6 +128,10 @@ impl WeakEvent {
             target: WeakRef::from(branch_ref),
             current_target,
         }
+    }
+
+    pub fn target(&self) -> &WeakRef {
+        &self.target
     }
 }
 
@@ -548,7 +552,7 @@ mod test {
         let actual: Vec<_> = events
             .borrow()
             .iter()
-            .flat_map(|v| v.to_weak().unwrap().try_deref_raw())
+            .flat_map(|v| v.clone().to_weak().unwrap().try_deref_raw())
             .collect();
         assert_eq!(actual, vec!["value2".into()])
     }
@@ -593,8 +597,8 @@ mod test {
         };
         m2.insert(&mut doc.transact_mut(), "key", "value2");
         let actual: Vec<_> = events
-            .borrow()
-            .iter()
+            .take()
+            .into_iter()
             .flat_map(|v| v.to_weak().unwrap().try_deref_raw())
             .collect();
         assert_eq!(actual, vec!["value2".into()])
@@ -622,11 +626,11 @@ mod test {
                 for e in e.iter() {
                     match e {
                         Event::Map(e) => {
-                            let value = Value::from(e.target().clone());
+                            let value = Value::YMap(e.target().clone());
                             rs.push((value, Some(e.keys(txn).clone())));
                         }
                         Event::Weak(e) => {
-                            let value = Value::from(e.target().clone());
+                            let value = Value::YWeakLink(e.target().clone());
                             rs.push((value, None));
                         }
                         _ => {}
@@ -636,7 +640,7 @@ mod test {
         };
 
         let mut txn = doc.transact_mut();
-        let nested = array.insert(&mut txn, 0, MapPrelim::new());
+        let nested = array.insert(&mut txn, 0, MapPrelim::<u32>::new());
         let link = array.link(&txn, 0).unwrap();
         let link = map.insert(&mut txn, "link", link);
         drop(txn);
@@ -648,7 +652,7 @@ mod test {
         assert_eq!(
             actual,
             vec![(
-                Value::from(nested.clone()),
+                Value::YMap(nested.clone()),
                 Some(HashMap::from([(
                     Arc::from("key"),
                     EntryChange::Inserted(Any::Undefined.into())
@@ -662,7 +666,7 @@ mod test {
         assert_eq!(
             actual,
             vec![(
-                Value::from(nested.clone()),
+                Value::YMap(nested.clone()),
                 Some(HashMap::from([(
                     Arc::from("key"),
                     EntryChange::Removed(Any::Undefined.into())
@@ -672,7 +676,7 @@ mod test {
 
         // delete linked map
         array.remove(&mut doc.transact_mut(), 0);
-        assert_eq!(actual, vec![(Value::from(link.clone()), None)]);
+        assert_eq!(actual, vec![(Value::YWeakLink(link.clone()), None)]);
     }
 
     #[test]
@@ -694,9 +698,9 @@ mod test {
         let root = doc.get_or_insert_array("array");
         let mut txn = doc.transact_mut();
 
-        let mut m0 = root.insert(&mut txn, 0, MapPrelim::new());
-        let m1 = root.insert(&mut txn, 1, MapPrelim::new());
-        let m2 = root.insert(&mut txn, 2, MapPrelim::new());
+        let mut m0 = root.insert(&mut txn, 0, MapPrelim::<u32>::new());
+        let m1 = root.insert(&mut txn, 1, MapPrelim::<u32>::new());
+        let m2 = root.insert(&mut txn, 2, MapPrelim::<u32>::new());
 
         let l0 = root.link(&txn, 0).unwrap();
         let l1 = root.link(&txn, 1).unwrap();
@@ -775,7 +779,7 @@ mod test {
 
         exchange_updates(&[&d1, &d2, &d3]);
 
-        let l2 = m2.link("key").unwrap();
+        let l2 = m2.link(&d2.transact(), "key").unwrap();
         let l2 = m2.insert(&mut d2.transact_mut(), "link", l2);
         m1.insert(&mut d1.transact_mut(), "key", 2);
         m1.insert(&mut d1.transact_mut(), "key", 3);
@@ -785,13 +789,13 @@ mod test {
         exchange_updates(&[&d3, &d2]);
 
         // make sure that link can find the most recent block
-        let l3 = m3.get("link").unwrap().to_weak().unwrap();
+        let l3 = m3.get(&d3.transact(), "link").unwrap().to_weak().unwrap();
         assert_eq!(l3.try_deref_raw(), Some(3.into()));
 
         exchange_updates(&[&d1, &d2, &d3]);
 
-        let l1 = m1.get("link").unwrap().to_weak().unwrap();
-        let l2 = m2.get("link").unwrap().to_weak().unwrap();
+        let l1 = m1.get(&d1.transact(), "link").unwrap().to_weak().unwrap();
+        let l2 = m2.get(&d2.transact(), "link").unwrap().to_weak().unwrap();
 
         assert_eq!(l1.try_deref_raw(), Some(3.into()));
         assert_eq!(l2.try_deref_raw(), Some(3.into()));

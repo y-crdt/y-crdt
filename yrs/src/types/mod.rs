@@ -300,7 +300,7 @@ impl Eq for BranchPtr {}
 #[cfg(not(test))]
 impl PartialEq for BranchPtr {
     fn eq(&self, other: &Self) -> bool {
-        NonNull::eq(&self.0, &other.0)
+        std::ptr::eq(self.0.as_ptr(), other.0.as_ptr())
     }
 }
 
