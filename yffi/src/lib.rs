@@ -3217,6 +3217,16 @@ pub unsafe extern "C" fn youtput_read_binary(val: *const YOutput) -> *const c_ch
     }
 }
 
+/// Attempts to read the value for a given `YOutput` pointer as a JSON-like `null` value.
+/// 
+/// Returns `true` if the value is `null`, `false` otherwise.
+#[no_mangle]
+pub unsafe extern "C" fn youtput_read_json_null(val: *const YOutput) -> bool {
+    let v = val.as_ref().unwrap();
+
+    v.tag == Y_JSON_NULL
+}
+
 /// Attempts to read the value for a given `YOutput` pointer as a JSON-like array of `YOutput`
 /// values (which length is stored within `len` filed of a cell itself).
 ///
