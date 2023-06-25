@@ -1360,35 +1360,34 @@ mod test {
 
     #[test]
     fn snapshot_non_splitting_text() {
-        unsafe {
-            let mut options = Options::default();
-            options.skip_gc = true;
+        let mut options = Options::default();
+        options.skip_gc = true;
 
-            let doc = Doc::with_options(options.clone().into());
-            let txt = doc.get_or_insert_text("name");
+        let doc = Doc::with_options(options.clone().into());
+        let txt = doc.get_or_insert_text("name");
 
-            let mut txn = doc.transact_mut();
-            txt.insert(&mut txn, 0, "Lucas");
-            drop(txn);
+        let mut txn = doc.transact_mut();
+        txt.insert(&mut txn, 0, "Lucas");
+        drop(txn);
 
-            let txn = doc.transact();
-            let snapshot = txn.snapshot();
+        let txn = doc.transact();
+        let snapshot = txn.snapshot();
 
-            let mut encoder = EncoderV1::new();
-            txn.encode_state_from_snapshot(&snapshot, &mut encoder)
-                .unwrap();
-            let state_diff = encoder.to_vec();
+        let mut encoder = EncoderV1::new();
+        let mut encoder = EncoderV1::new();
+        txn.encode_state_from_snapshot(&snapshot, &mut encoder)
+            .unwrap();
+        let state_diff = encoder.to_vec();
 
-            let remote_doc = Doc::with_options(options);
-            let remote_txt = remote_doc.get_or_insert_text("name");
-            let mut txn = remote_doc.transact_mut();
-            let update = Update::decode_v1(&state_diff).unwrap();
-            txn.apply_update(update);
+        let remote_doc = Doc::with_options(options);
+        let remote_txt = remote_doc.get_or_insert_text("name");
+        let mut txn = remote_doc.transact_mut();
+        let update = Update::decode_v1(&state_diff).unwrap();
+        txn.apply_update(update);
 
-            let actual = remote_txt.get_string(&txn);
+        let actual = remote_txt.get_string(&txn);
 
-            assert_eq!(actual, "Lucas");
-        }
+        assert_eq!(actual, "Lucas");
     }
 
     #[test]
