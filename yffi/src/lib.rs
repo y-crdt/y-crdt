@@ -3227,6 +3227,16 @@ pub unsafe extern "C" fn youtput_read_json_null(val: *const YOutput) -> bool {
     v.tag == Y_JSON_NULL
 }
 
+/// Attempts to read the value for a given `YOutput` pointer as a JSON-like `undefined` value.
+///
+/// Returns `true` if the value is `undefined`, `false` otherwise.
+#[no_mangle]
+pub unsafe extern "C" fn youtput_read_json_undefined(val: *const YOutput) -> bool {
+    let v = val.as_ref().unwrap();
+
+    v.tag == Y_JSON_UNDEF
+}
+
 /// Attempts to read the value for a given `YOutput` pointer as a JSON-like array of `YOutput`
 /// values (which length is stored within `len` filed of a cell itself).
 ///
