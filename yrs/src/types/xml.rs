@@ -5,7 +5,7 @@ use crate::types::text::{TextEvent, YChange};
 use crate::types::{
     event_change_set, event_keys, Branch, BranchPtr, Change, ChangeSet, Delta, Entries,
     EntryChange, EventHandler, MapRef, Observers, Path, ToJson, TypePtr, TypeRef, Value,
-    TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_TEXT,
+    TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT,
 };
 use crate::{
     ArrayRef, GetString, IndexedSequence, Map, Observable, ReadTxn, StickyIndex, Text, TextRef, ID,
@@ -704,10 +704,10 @@ pub trait Xml: AsRef<Branch> {
     fn insert_attribute<K, V>(&self, txn: &mut TransactionMut, attr_name: K, attr_value: V)
     where
         K: Into<Arc<str>>,
-        V: AsRef<str>,
+        V: Into<String>,
     {
         let key = attr_name.into();
-        let value = crate::block::PrelimString(attr_value.as_ref().into());
+        let value = attr_value.into();
         let pos = {
             let branch = self.as_ref();
             let left = branch.map.get(&key);

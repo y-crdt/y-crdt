@@ -11,7 +11,6 @@ use std::cell::UnsafeCell;
 use std::collections::{HashMap, HashSet};
 use std::convert::{TryFrom, TryInto};
 use std::ops::{Deref, DerefMut};
-use std::rc::Rc;
 use std::sync::Arc;
 
 /// Collection used to store key-value entries in an unordered manner. Keys are always represented
