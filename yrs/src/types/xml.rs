@@ -704,10 +704,10 @@ pub trait Xml: AsRef<Branch> {
     fn insert_attribute<K, V>(&self, txn: &mut TransactionMut, attr_name: K, attr_value: V)
     where
         K: Into<Arc<str>>,
-        V: AsRef<str>,
+        V: Into<String>,
     {
         let key = attr_name.into();
-        let value = crate::block::PrelimString(attr_value.as_ref().into());
+        let value = attr_value.into();
         let pos = {
             let branch = self.as_ref();
             let left = branch.map.get(&key);
@@ -1202,9 +1202,10 @@ mod test {
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encoder, EncoderV1};
     use crate::{
-        Doc, GetString, Observable, StateVector, Text, Transact, Update, XmlElementPrelim,
-        XmlTextPrelim,
+        Doc, GetString, Observable, Options, StateVector, Text, Transact, Update, XmlElementPrelim,
+        XmlElementRef, XmlTextPrelim,
     };
+    use base64::Engine;
     use lib0::any::Any;
     use std::cell::RefCell;
     use std::collections::HashMap;
