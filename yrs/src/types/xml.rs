@@ -5,7 +5,7 @@ use crate::types::text::{TextEvent, YChange};
 use crate::types::{
     event_change_set, event_keys, Branch, BranchPtr, Change, ChangeSet, Delta, Entries,
     EntryChange, EventHandler, MapRef, Observers, Path, ToJson, TypePtr, TypeRef, Value,
-    TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_TEXT,
+    TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT,
 };
 use crate::{
     ArrayRef, GetString, IndexedSequence, Map, Observable, ReadTxn, StickyIndex, Text, TextRef, ID,
@@ -1202,10 +1202,9 @@ mod test {
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encoder, EncoderV1};
     use crate::{
-        Doc, GetString, Observable, Options, StateVector, Text, Transact, Update, XmlElementPrelim,
-        XmlElementRef, XmlTextPrelim,
+        Doc, GetString, Observable, StateVector, Text, Transact, Update, XmlElementPrelim,
+        XmlTextPrelim,
     };
-    use base64::Engine;
     use lib0::any::Any;
     use std::cell::RefCell;
     use std::collections::HashMap;
