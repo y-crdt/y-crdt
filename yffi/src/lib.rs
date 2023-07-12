@@ -2562,7 +2562,7 @@ impl Prelim for YInput {
                 let map = MapRef::from(inner_ref);
                 let keys = self.value.map.keys;
                 let values = self.value.map.values;
-                let i = 0;
+                let mut i = 0;
                 while i < self.len as isize {
                     let key = CStr::from_ptr(keys.offset(i).read())
                         .to_str()
@@ -2570,6 +2570,7 @@ impl Prelim for YInput {
                         .to_owned();
                     let value = values.offset(i).read().into();
                     map.insert(txn, key, value);
+                    i += 1;
                 }
             } else if self.tag == Y_ARRAY {
                 let array = ArrayRef::from(inner_ref);
