@@ -2540,6 +2540,8 @@ impl Prelim for YInput {
                     TypeRef::Map
                 } else if self.tag == Y_ARRAY {
                     TypeRef::Array
+                } else if self.tag == Y_TEXT {
+                    TypeRef::Text
                 } else if self.tag == Y_XML_ELEM {
                     let name: Arc<str> = CStr::from_ptr(self.value.str).to_str().unwrap().into();
                     TypeRef::XmlElement(name)
@@ -2730,6 +2732,8 @@ impl Drop for YOutput {
 
 impl From<Value> for YOutput {
     fn from(v: Value) -> Self {
+        // println!("Matching From for YOutput");
+
         match v {
             Value::Any(v) => Self::from(v),
             Value::YText(v) => Self::from(v),
@@ -2745,6 +2749,8 @@ impl From<Value> for YOutput {
 
 impl From<Any> for YOutput {
     fn from(v: Any) -> Self {
+        // println!("Matching Any for YOutput");
+
         unsafe {
             match v {
                 Any::Null => YOutput {
@@ -2774,12 +2780,17 @@ impl From<Any> for YOutput {
                     len: 1,
                     value: YOutputContent { integer: v },
                 },
-                Any::String(v) => YOutput {
-                    tag: Y_JSON_STR,
-                    len: v.len() as u32,
-                    value: YOutputContent {
-                        str: CString::new(v.as_ref()).unwrap().into_raw(),
-                    },
+                Any::String(v) => {
+                    // println!("String length is {0}", v.len());
+                    // println!("String is {0}", CString::new(v.as_ref()).unwrap().to_str().unwrap());
+
+                    YOutput {
+                        tag: Y_JSON_STR,
+                        len: v.len() as u32,
+                        value: YOutputContent {
+                            str: CString::new(v.as_ref()).unwrap().into_raw(),
+                        },
+                    }
                 },
                 Any::Buffer(v) => YOutput {
                     tag: Y_JSON_BUF,
@@ -2988,6 +2999,8 @@ pub unsafe extern "C" fn yinput_long(integer: i64) -> YInput {
 /// a structure is no longer needed.
 #[no_mangle]
 pub unsafe extern "C" fn yinput_string(str: *const c_char) -> YInput {
+    // println!("[1] String is {0}", CString::from_raw(str.cast_mut()).to_str().unwrap());
+
     YInput {
         tag: Y_JSON_STR,
         len: 1,
