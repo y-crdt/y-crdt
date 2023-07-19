@@ -87,9 +87,9 @@ pub trait ReadTxn: Sized {
     }
 
     /// Returns an iterator over top level (root) keys available in current [Doc].
-    fn root_keys(&self) -> RootKeys {
+    fn root_keys(&self) -> std::collections::hash_map::Keys<Arc<str>, Box<Branch>> {
         let store = self.store();
-        RootKeys(store.types.keys())
+        store.types.keys()
     }
 
     /// Returns a collection of globally unique identifiers of sub documents linked within
@@ -908,19 +908,6 @@ impl<'doc> Iterator for RootRefs<'doc> {
         Some((key, ptr.into()))
     }
 }
-
-pub struct RootKeys<'doc>(std::collections::hash_map::Keys<'doc, Arc<str>, Box<Branch>>);
-
-impl<'doc> Iterator for RootKeys<'doc> {
-    type Item = &'doc str;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let key = self.0.next()?;
-        let key = key.as_ref();
-        Some(key)
-    }
-}
-
 
 #[derive(Default)]
 pub struct Subdocs {
