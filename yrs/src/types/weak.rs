@@ -1,7 +1,7 @@
 use crate::atomic::AtomicRef;
 use crate::block::{Block, BlockPtr, BlockSlice, ItemContent, Prelim};
 use crate::types::{Branch, BranchPtr, EventHandler, Observers, TypeRef, Value};
-use crate::{Observable, ReadTxn, TransactionMut, ID};
+use crate::{Observable, OffsetKind, ReadTxn, TransactionMut, ID};
 use std::convert::TryFrom;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
@@ -34,7 +34,7 @@ impl WeakRef {
     /// range.  
     pub fn unquote<'txn, T: ReadTxn>(&self, txn: &'txn T) -> Unquote<'txn, T> {
         if let TypeRef::WeakLink(source) = &self.0.type_ref {
-            Unquote::new(source.blocks(txn))
+            source.unquote(txn)
         } else {
             panic!("Defect: called unquote over a shared type which is not a WeakRef")
         }
@@ -168,7 +168,7 @@ impl LinkSource {
         self.quote_start == self.quote_end
     }
 
-    pub(crate) fn blocks<'txn, T: ReadTxn>(&self, txn: &'txn T) -> AliveBlockRange<'txn, T> {
+    pub(crate) fn unquote<'txn, T: ReadTxn>(&self, txn: &'txn T) -> Unquote<'txn, T> {
         let mut current = self.first_item.get_owned();
         if let Some(ptr) = &mut current {
             if Self::try_right_most(ptr) {
@@ -176,12 +176,7 @@ impl LinkSource {
                 current = Some(*ptr);
             }
         }
-        AliveBlockRange {
-            txn,
-            from: self.quote_start.clone(),
-            to: self.quote_end.clone(),
-            current,
-        }
+        Unquote::new(txn, current, &self.quote_start, self.quote_end.clone())
     }
 
     /// If provided ref is pointing to map type which has been updated, we may want to invalidate
@@ -247,54 +242,36 @@ impl LinkSource {
 }
 
 /// Iterator over non-deleted items, bounded by the given ID range.
-pub(crate) struct AliveBlockRange<'txn, T: ReadTxn> {
+pub struct Unquote<'txn, T: ReadTxn> {
     txn: &'txn T,
-    from: ID,
     to: ID,
     current: Option<BlockPtr>,
-}
-
-impl<'txn, T: ReadTxn> Iterator for AliveBlockRange<'txn, T> {
-    type Item = BlockSlice;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            let ptr = self.current?;
-            let item = ptr.as_item()?;
-            self.current = item.right;
-            if !item.is_deleted() {
-                break;
-            }
-            // if item was deleted, repeat to the next block
-        }
-        let mut slice = BlockSlice::from(self.current?);
-        slice.try_trim(&self.from, &self.to);
-        Some(slice)
-    }
-}
-
-pub struct Unquote<'txn, T: ReadTxn> {
-    blocks: AliveBlockRange<'txn, T>,
-    current: Option<BlockSlice>,
+    encoding: OffsetKind,
     offset: u32,
 }
 
 impl<'txn, T: ReadTxn> Unquote<'txn, T> {
-    fn new(blocks: AliveBlockRange<'txn, T>) -> Self {
-        let mut unquote = Unquote {
-            blocks,
-            current: None,
-            offset: 0,
-        };
-        unquote.advance();
-        unquote
-    }
-
-    /// Move to the next block.
-    fn advance(&mut self) {
-        self.current = self.blocks.next();
-        if let Some(slice) = &self.current {
-            self.offset = slice.start();
+    fn new(txn: &'txn T, current: Option<BlockPtr>, from: &ID, to: ID) -> Self {
+        let mut offset = 0;
+        if let Some(ptr) = current {
+            if !ptr.contains(&from) {
+                return Unquote {
+                    txn,
+                    to,
+                    offset,
+                    encoding: OffsetKind::Utf16,
+                    current: None,
+                };
+            }
+            offset = from.clock - ptr.id().clock;
+        }
+        let encoding = txn.store().options.offset_kind;
+        Unquote {
+            txn,
+            to,
+            offset,
+            encoding,
+            current,
         }
     }
 }
@@ -303,20 +280,26 @@ impl<'txn, T: ReadTxn> Iterator for Unquote<'txn, T> {
     type Item = Value;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let mut slice = self.current.as_ref()?;
-        if self.offset == slice.end() {
-            self.advance();
-            slice = self.current.as_ref()?;
+        // move to a first non-deleted item
+        while let Some(Block::Item(item)) = self.current.as_deref() {
+            if !item.is_deleted() && self.offset < item.content_len(self.encoding) {
+                break;
+            }
+            self.current = item.right;
+            self.offset = 0;
         }
-        let ptr = slice.as_ptr();
-        let item = ptr.as_item()?;
-        let mut result = [Value::default(); 1];
-        if item.content.read(self.offset as usize, &mut result) != 0 {
-            self.offset += 1;
-            Some(std::mem::take(&mut result[0]))
-        } else {
-            None
+        let ptr = self.current?;
+        if let Block::Item(item) = ptr.deref() {
+            let mut result = [Value::default(); 1];
+            if item.content.read(self.offset as usize, &mut result) != 0 {
+                self.offset += 1;
+                if item.id.client == self.to.client && item.id.clock + self.offset > self.to.clock {
+                    self.current = None; // we reached the end of range
+                }
+                return Some(std::mem::take(&mut result[0]));
+            }
         }
+        None
     }
 }
 
