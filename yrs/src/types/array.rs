@@ -1,8 +1,8 @@
-use crate::block::{BlockPtr, EmbedPrelim, ItemContent, Prelim, Unused};
+use crate::block::{Block, BlockPtr, BlockSlice, EmbedPrelim, ItemContent, Prelim, Unused};
 use crate::block_iter::BlockIter;
 use crate::moving::StickyIndex;
 use crate::transaction::TransactionMut;
-use crate::types::weak::WeakPrelim;
+use crate::types::weak::{LinkSource, WeakPrelim};
 use crate::types::{
     event_change_set, Branch, BranchPtr, Change, ChangeSet, EventHandler, Observers, Path, ToJson,
     TypeRef, Value,
@@ -239,14 +239,55 @@ pub trait Array: AsRef<Branch> {
     }
 
     /// Returns [WeakPrelim] to a given `index`, if it's in a boundaries of a current array.
-    fn link<T: ReadTxn>(&self, txn: &T, index: u32) -> Option<WeakPrelim> {
-        let mut walker = BlockIter::new(BranchPtr::from(self.as_ref()));
-        if walker.try_forward(txn, index) {
-            let block = walker.next_item()?;
-            let link = WeakPrelim::new(block.id().clone());
-            Some(link)
-        } else {
-            None
+    fn quote<T: ReadTxn>(&self, txn: &T, mut index: u32, len: u32) -> Option<WeakPrelim> {
+        if len == 0 {
+            return None;
+        }
+        let mut start_id = None;
+        let mut end_id = None;
+        let mut curr = self.as_ref().start;
+        // first get the start of the quoted range...
+        while let Some(ptr) = curr {
+            if let Block::Item(item) = ptr.deref() {
+                if !item.is_deleted() && item.is_countable() {
+                    if index < item.len {
+                        if index > 0 {
+                            start_id = Some(ID::new(item.id.client, item.id.clock + index));
+                        }
+                        break;
+                    }
+                    index -= item.len;
+                }
+                curr = item.right;
+                start_id = Some(item.id.clone());
+            } else {
+                break;
+            }
+        }
+        // ... then get the end of the quoted range
+        let mut remaining = len;
+        while let Some(ptr) = curr {
+            if let Block::Item(item) = ptr.deref() {
+                if !item.is_deleted() && item.is_countable() {
+                    if remaining > item.len {
+                        remaining -= item.len;
+                    } else {
+                        end_id = Some(ID::new(item.id.client, item.id.clock + remaining - 1));
+                        break;
+                    }
+                }
+                curr = item.right;
+                end_id = Some(item.last_id());
+            } else {
+                break;
+            }
+        }
+        match (start_id, end_id) {
+            (Some(start), Some(end)) => {
+                let source = LinkSource::new(start, end);
+                Some(WeakPrelim(Arc::new(source)))
+            }
+            _ => None,
         }
     }
 

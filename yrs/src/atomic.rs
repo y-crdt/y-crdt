@@ -120,6 +120,23 @@ impl<T> AtomicRef<T> {
     }
 }
 
+impl<T: Copy> AtomicRef<T> {
+    /// Returns a current state copy hold by the [AtomicRef]. Keep in mind that after
+    /// acquiring it, it may not present the current view of the state, but instead be changed by
+    /// the concurrent [AtomicRef::update] call.
+    pub fn get_owned(&self) -> Option<T> {
+        let ptr = self.0.load(Ordering::SeqCst);
+        if ptr.is_null() {
+            None
+        } else {
+            let arc = unsafe { Arc::from_raw(ptr) };
+            let result = *arc;
+            std::mem::forget(arc);
+            Some(result)
+        }
+    }
+}
+
 impl<T> Drop for AtomicRef<T> {
     fn drop(&mut self) {
         unsafe {

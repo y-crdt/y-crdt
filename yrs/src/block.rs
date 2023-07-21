@@ -11,6 +11,7 @@ use crate::*;
 use lib0::any::Any;
 use lib0::error::Error;
 use smallstr::SmallString;
+use std::collections::hash_map::Entry;
 use std::collections::HashSet;
 use std::convert::TryFrom;
 use std::hash::Hash;
@@ -322,7 +323,6 @@ impl BlockPtr {
                         parent_sub: item.parent_sub.clone(),
                         info: item.info.clone(),
                         redone: item.redone.map(|id| ID::new(id.client, id.clock + offset)),
-                        linked_by: None,
                     }));
                     let new_ptr = BlockPtr::from(&mut new);
 
@@ -521,9 +521,18 @@ impl BlockPtr {
                         // set as current parent value if right === null and this is parentSub
                         parent_ref.map.insert(parent_sub.clone(), self_ptr);
                         if let Some(mut left) = this.left {
-                            // inherit links from block we're overriding
-                            if let Block::Item(left) = left.deref_mut() {
-                                this.linked_by = left.linked_by.take();
+                            if let Block::Item(item) = left.deref_mut() {
+                                if item.info.is_linked() {
+                                    // inherit links from the block we're overriding
+                                    item.info.clear_linked();
+                                    this.info.set_linked();
+                                    let all_links = &mut txn.store.linked_by;
+                                    if let Some(linked_by) = all_links.remove(&left) {
+                                        all_links.insert(self_ptr, linked_by);
+                                        // since left is being deleted, it will remove
+                                        // its links from store.linkedBy anyway
+                                    }
+                                }
                             }
                             // this is the current attribute value of parent. delete right
                             txn.delete(left);
@@ -531,9 +540,45 @@ impl BlockPtr {
                     }
 
                     // adjust length of parent
-                    if this.parent_sub.is_none() && this.is_countable() && !this.is_deleted() {
-                        parent_ref.block_len += this.len;
-                        parent_ref.content_len += this.content_len(encoding);
+                    if this.parent_sub.is_none() && !this.is_deleted() {
+                        if this.is_countable() {
+                            // adjust length of parent
+                            parent_ref.block_len += this.len;
+                            parent_ref.content_len += this.content_len(encoding);
+                        }
+                        match (this.left, this.right) {
+                            (Some(left), Some(right)) => match (left.deref(), right.deref()) {
+                                (Block::Item(l), Block::Item(r))
+                                    if l.info.is_linked() && r.info.is_linked() =>
+                                {
+                                    // Join current `item` to any quotations shared between its `left` and `right` neighbor.
+                                    this.info.set_linked();
+                                    let all_links = &mut txn.store.linked_by;
+                                    let left_links = all_links.get(&left);
+                                    let right_links = all_links.get(&right);
+                                    match (left_links, right_links) {
+                                        (Some(llinks), Some(rlinks)) => {
+                                            let common: HashSet<_> =
+                                                llinks.intersection(rlinks).cloned().collect();
+                                            match all_links.entry(self_ptr) {
+                                                Entry::Occupied(mut e) => {
+                                                    let links = e.get_mut();
+                                                    for link in common {
+                                                        links.insert(link);
+                                                    }
+                                                }
+                                                Entry::Vacant(e) => {
+                                                    e.insert(common);
+                                                }
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                                _ => {}
+                            },
+                            _ => {}
+                        }
                     }
 
                     // check if this item is in a moved range
@@ -603,9 +648,12 @@ impl BlockPtr {
                         }
                     }
                     txn.add_changed_type(parent_ref, this.parent_sub.clone());
-                    if let Some(linked_by) = &this.linked_by {
-                        for link in linked_by.iter() {
-                            txn.add_changed_type(*link, this.parent_sub.clone());
+                    if this.info.is_linked() {
+                        if let Some(links) = txn.store.linked_by.get(&self_ptr).cloned() {
+                            // notify links about changes
+                            for link in links.iter() {
+                                txn.add_changed_type(*link, this.parent_sub.clone());
+                            }
                         }
                     }
                     let parent_deleted = if let TypePtr::Branch(ptr) = &this.parent {
@@ -663,7 +711,7 @@ impl BlockPtr {
                     && v1.right == Some(other_ptr)
                     && v1.is_deleted() == v2.is_deleted()
                     && (v1.redone.is_none() && v2.redone.is_none())
-                    && (v1.linked_by.is_none() && v2.linked_by.is_none())
+                    && (!v1.info.is_linked() && v2.info.is_linked()) // linked items cannot be merged
                     && v1.moved == v2.moved
                     && v1.content.try_squash(&v2.content)
                 {
@@ -783,6 +831,24 @@ impl BlockSlice {
         let mut id = *self.ptr.id();
         id.clock += self.end;
         id
+    }
+
+    /// Attempts to trim current block slice to provided range of IDs.
+    /// Returns true if current block slice range has been modified as a result of this action.
+    pub fn try_trim(&mut self, from: &ID, to: &ID) -> bool {
+        let id = self.ptr.id();
+        let mut changed = false;
+        let start_clock = id.clock + self.start;
+        let end_clock = id.clock + self.end;
+        if id.client == from.client && from.clock > start_clock && from.clock <= end_clock {
+            self.start = from.clock - start_clock;
+            changed = true;
+        }
+        if id.client == to.client && to.clock >= start_clock && to.clock < end_clock {
+            self.end = end_clock - to.clock;
+            changed = true;
+        }
+        changed
     }
 
     /// Returns true when current [BlockSlice] left boundary is equal to the boundary of the
@@ -1163,17 +1229,20 @@ impl ItemPosition {
     }
 }
 
+/// Bit flag (9st bit) for item that is linked by Weak Link references
+const ITEM_FLAG_LINKED: u16 = 0b0001_0000_0000;
+
 /// Bit flag (4th bit) for a marked item - not used atm.
-const ITEM_FLAG_MARKED: u8 = 0b0000_1000;
+const ITEM_FLAG_MARKED: u16 = 0b0000_1000;
 
 /// Bit flag (3rd bit) for a tombstoned (deleted) item.
-const ITEM_FLAG_DELETED: u8 = 0b0000_0100;
+const ITEM_FLAG_DELETED: u16 = 0b0000_0100;
 
 /// Bit flag (2nd bit) for an item, which contents are considered countable.
-const ITEM_FLAG_COUNTABLE: u8 = 0b0000_0010;
+const ITEM_FLAG_COUNTABLE: u16 = 0b0000_0010;
 
 /// Bit flag (1st bit) used for an item which should be kept - not used atm.
-const ITEM_FLAG_KEEP: u8 = 0b0000_0001;
+const ITEM_FLAG_KEEP: u16 = 0b0000_0001;
 
 /// Collection of flags attached to an [Item] - most of them are serializable and define specific
 /// properties of an associated [Item], like:
@@ -1183,25 +1252,25 @@ const ITEM_FLAG_KEEP: u8 = 0b0000_0001;
 /// - Should item be kept untouched eg. because it's being tracked by [UndoManager].
 #[repr(transparent)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub struct ItemFlags(u8);
+pub struct ItemFlags(u16);
 
 impl ItemFlags {
-    pub fn new(source: u8) -> Self {
+    pub fn new(source: u16) -> Self {
         ItemFlags(source)
     }
 
     #[inline]
-    fn set(&mut self, value: u8) {
+    fn set(&mut self, value: u16) {
         self.0 |= value
     }
 
     #[inline]
-    fn clear(&mut self, value: u8) {
+    fn clear(&mut self, value: u16) {
         self.0 &= !value
     }
 
     #[inline]
-    fn check(&self, value: u8) -> bool {
+    fn check(&self, value: u16) -> bool {
         self.0 & value == value
     }
 
@@ -1249,11 +1318,26 @@ impl ItemFlags {
     pub fn is_marked(&self) -> bool {
         self.check(ITEM_FLAG_MARKED)
     }
+
+    #[inline]
+    pub fn is_linked(&self) -> bool {
+        self.check(ITEM_FLAG_LINKED)
+    }
+
+    #[inline]
+    pub fn set_linked(&mut self) {
+        self.set(ITEM_FLAG_LINKED)
+    }
+
+    #[inline]
+    pub fn clear_linked(&mut self) {
+        self.clear(ITEM_FLAG_LINKED)
+    }
 }
 
-impl Into<u8> for ItemFlags {
+impl Into<u16> for ItemFlags {
     #[inline]
-    fn into(self) -> u8 {
+    fn into(self) -> u16 {
         self.0
     }
 }
@@ -1306,10 +1390,6 @@ pub struct Item {
 
     /// This property is used by the moved prop. In this case this property refers to an Item.
     pub(crate) moved: Option<BlockPtr>,
-
-    /// This property is used by the linked items. It allows to notify all [WeakRef]s that
-    /// point to current item.
-    pub(crate) linked_by: Option<LinkedBy>,
 
     /// Bit flag field which contains information about specifics of this item.
     pub(crate) info: ItemFlags,
@@ -1418,7 +1498,6 @@ impl Item {
             parent_sub,
             info,
             moved: None,
-            linked_by: None,
             redone: None,
         }));
         let item_ptr = BlockPtr::from(&mut item);
@@ -2249,6 +2328,7 @@ impl std::fmt::Display for ItemContent {
                 TypeRef::XmlFragment => write!(f, "<xml fragment>"),
                 TypeRef::XmlHook => write!(f, "<xml hook>"),
                 TypeRef::XmlText => write!(f, "<xml text>"),
+                TypeRef::WeakLink(s) => write!(f, "<weak({}..{})>", s.quote_start, s.quote_end),
                 _ => write!(f, "<undefined type ref>"),
             },
             ItemContent::Move(m) => std::fmt::Display::fmt(m.as_ref(), f),

@@ -208,7 +208,8 @@ pub trait Map: AsRef<Branch> {
     fn link<T: ReadTxn>(&self, txn: &T, key: &str) -> Option<WeakPrelim> {
         let ptr = BranchPtr::from(self.as_ref());
         let block = ptr.map.get(key)?;
-        let link = WeakPrelim::new(block.id().clone());
+        let id = block.id().clone();
+        let link = WeakPrelim::new(id.clone(), id);
         Some(link)
     }
 

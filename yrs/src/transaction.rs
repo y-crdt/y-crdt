@@ -11,6 +11,7 @@ use crate::*;
 use atomic_refcell::{AtomicRef, AtomicRefMut};
 use lib0::error::Error;
 use smallvec::SmallVec;
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Formatter;
 use std::hash::Hash;
@@ -495,11 +496,6 @@ impl<'doc> TransactionMut<'doc> {
                 self.delete_set.insert(item.id.clone(), item.len());
                 if let Some(parent) = item.parent.as_branch() {
                     self.add_changed_type(*parent, item.parent_sub.clone());
-                    if let Some(linked_by) = item.linked_by.take() {
-                        for link in linked_by.into_iter() {
-                            self.add_changed_type(link, item.parent_sub.clone());
-                        }
-                    }
                 } else {
                     // parent has been GC'ed
                 }
@@ -517,16 +513,20 @@ impl<'doc> TransactionMut<'doc> {
                         if let TypeRef::WeakLink(source) = &inner.type_ref {
                             // when removing weak links, remove references to them
                             // from type they're pointing to
-                            if let Some(linked) = source.linked_item.take() {
-                                let mut linked = *linked;
-                                if let Block::Item(item) = linked.deref_mut() {
-                                    if !item.is_deleted() {
-                                        if let Some(linked_by) = &mut item.linked_by {
-                                            linked_by.remove(&branch_ptr);
-                                        }
+                            let mut curr = source.first_item.take().map(|arc| *arc);
+                            while let Some(ptr) = curr {
+                                if let Block::Item(item) = ptr.deref() {
+                                    if item.info.is_linked() {
+                                        self.unlink(ptr, branch_ptr);
                                     }
+                                    let last_id = item.last_id();
+                                    if last_id == source.quote_end {
+                                        break;
+                                    }
+                                    curr = item.right;
                                 }
                             }
+                            source.first_item.take();
                         }
 
                         let mut ptr = inner.start;
@@ -546,6 +546,14 @@ impl<'doc> TransactionMut<'doc> {
                     }
                     ItemContent::Move(m) => m.delete(self, block),
                     _ => { /* nothing to do for other content types */ }
+                }
+                if item.info.is_linked() {
+                    // notify links that current element has been removed
+                    if let Some(linked_by) = self.store.linked_by.remove(&block) {
+                        for link in linked_by {
+                            self.add_changed_type(link, item.parent_sub.clone());
+                        }
+                    }
                 }
                 result = true;
             }
@@ -681,6 +689,7 @@ impl<'doc> TransactionMut<'doc> {
 
     fn call_type_observers(
         changed_parent_types: &mut Vec<BranchPtr>,
+        all_links: &HashMap<BlockPtr, HashSet<BranchPtr>>,
         branch: BranchPtr,
         changed_parents: &mut HashMap<BranchPtr, Vec<usize>>,
         event_cache: &mut Vec<Event>,
@@ -694,23 +703,31 @@ impl<'doc> TransactionMut<'doc> {
                 entries.push(event_cache.len() - 1);
             }
 
-            if let Some(Block::Item(item)) = current.item.as_deref() {
-                if let Some(linked_by) = &item.linked_by {
-                    for &link in linked_by.iter() {
-                        if visited.insert(link) {
-                            Self::call_type_observers(
-                                changed_parent_types,
-                                link,
-                                changed_parents,
-                                event_cache,
-                                visited,
-                            )
+            if let Some(ptr) = current.item {
+                match ptr.deref() {
+                    Block::Item(item) => {
+                        if item.info.is_linked() {
+                            if let Some(linked_by) = all_links.get(&ptr) {
+                                for &link in linked_by.iter() {
+                                    if visited.insert(link) {
+                                        Self::call_type_observers(
+                                            changed_parent_types,
+                                            all_links,
+                                            link,
+                                            changed_parents,
+                                            event_cache,
+                                            visited,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                        if let TypePtr::Branch(parent) = item.parent {
+                            current = parent;
+                            continue;
                         }
                     }
-                }
-                if let TypePtr::Branch(parent) = item.parent {
-                    current = parent;
-                    continue;
+                    _ => {}
                 }
             }
 
@@ -746,6 +763,7 @@ impl<'doc> TransactionMut<'doc> {
                         event_cache.push(e);
                         Self::call_type_observers(
                             &mut self.changed_parent_types,
+                            &self.store.linked_by,
                             *branch,
                             &mut changed_parents,
                             &mut event_cache,
@@ -933,6 +951,34 @@ impl<'doc> TransactionMut<'doc> {
         self.merge_blocks.append(&mut merge_blocks);
         for _ in snapshot.delete_set.deleted_blocks(self) {
             // do nothing just split the blocks by delete set
+        }
+    }
+
+    fn link(&mut self, mut source: BlockPtr, link: BranchPtr) {
+        if let Block::Item(item) = source.deref_mut() {
+            item.info.set_linked();
+            let links = self.store.linked_by.entry(source).or_default();
+            links.insert(link);
+        }
+    }
+
+    pub(crate) fn unlink(&mut self, mut source: BlockPtr, link: BranchPtr) {
+        let all_links = &mut self.store.linked_by;
+        let prune = if let Some(linked_by) = all_links.get_mut(&source) {
+            linked_by.remove(&link) && linked_by.is_empty()
+        } else {
+            false
+        };
+        if prune {
+            all_links.remove(&source);
+            if let Block::Item(item) = source.deref_mut() {
+                item.info.clear_linked();
+                if item.is_countable() {
+                    // since linked property is blocking items from merging,
+                    // it may turn out that source item can be merged now
+                    self.merge_blocks.push(item.id);
+                }
+            }
         }
     }
 }

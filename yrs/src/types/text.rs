@@ -1,6 +1,9 @@
-use crate::block::{Block, BlockPtr, EmbedPrelim, Item, ItemContent, ItemPosition, Prelim};
+use crate::block::{
+    Block, BlockPtr, BlockSlice, EmbedPrelim, Item, ItemContent, ItemPosition, Prelim,
+};
 use crate::block_store::Snapshot;
 use crate::transaction::TransactionMut;
+use crate::types::weak::WeakPrelim;
 use crate::types::{
     Attrs, Branch, BranchPtr, Delta, EventHandler, Observers, Path, TypeRef, Value,
 };
@@ -325,6 +328,30 @@ pub trait Text: AsRef<Branch> {
         }
     }
 
+    /// Returns [WeakPrelim] to quote starting at a given `index`,
+    /// if it's in a boundaries of a current array.
+    fn quote(&self, txn: &mut TransactionMut, index: u32, len: u32) -> Option<WeakPrelim> {
+        let this = BranchPtr::from(self.as_ref());
+        let mut pos = find_position(this, txn, index)?;
+        if let Some(right) = pos.right.as_deref() {
+            let start_item = pos.right;
+            let end_idx = pos.index + len;
+            while pos.index < end_idx {
+                pos.forward();
+            }
+            if let Some(left) = pos.left {
+                let mut end_item = pos.left;
+                if pos.index > end_idx {
+                    let overflow = pos.index - end_idx;
+                    let slice = BlockSlice::new(left, 0, left.len() - overflow - 1);
+                    end_item = Some(txn.store.materialize(slice));
+                }
+            }
+            todo!()
+        }
+        None
+    }
+
     /// Appends a given `chunk` of text at the end of a current text structure.
     fn push(&self, txn: &mut TransactionMut, chunk: &str) {
         let idx = self.len(txn);
@@ -399,7 +426,7 @@ pub trait Text: AsRef<Branch> {
         F: Fn(YChange) -> D,
     {
         let mut asm = DiffAssembler::new(compute_ychange);
-        asm.process(self.as_ref().start, None, None);
+        asm.process(self.as_ref().start, None, None, None, None);
         asm.finish()
     }
 
@@ -422,7 +449,7 @@ pub trait Text: AsRef<Branch> {
         }
 
         let mut asm = DiffAssembler::new(compute_ychange);
-        asm.process(self.as_ref().start, hi, lo);
+        asm.process(self.as_ref().start, hi, lo, None, None);
         asm.finish()
     }
 }
@@ -496,7 +523,14 @@ where
         }
     }
 
-    fn process(&mut self, mut n: Option<BlockPtr>, hi: Option<&Snapshot>, lo: Option<&Snapshot>) {
+    fn process(
+        &mut self,
+        mut n: Option<BlockPtr>,
+        hi: Option<&Snapshot>,
+        lo: Option<&Snapshot>,
+        start: Option<&ID>,
+        end: Option<&ID>,
+    ) {
         fn seen(snapshot: Option<&Snapshot>, item: &Item) -> bool {
             if let Some(s) = snapshot {
                 s.is_visible(&item.id)
@@ -505,7 +539,13 @@ where
             }
         }
 
-        while let Some(Block::Item(item)) = n.as_deref() {
+        let mut scope: i32 = if start.is_none() { 0 } else { -1 };
+        'LOOP: while let Some(Block::Item(item)) = n.as_deref() {
+            if let Some(start) = start {
+                if scope < 0 && item.contains(start) {
+                    scope = (item.id.clock + item.len) as i32 - start.clock as i32 - 1;
+                }
+            }
             if seen(hi, item) || (lo.is_some() && seen(lo, item)) {
                 match &item.content {
                     ItemContent::String(s) => {
@@ -524,7 +564,21 @@ where
                                 }
                             }
                         }
-                        self.buf.push_str(s.as_str());
+                        if scope > 0 {
+                            self.buf.push_str(&s.as_str()[scope as usize..]);
+                            scope = 0;
+                        } else if let Some(end) = end {
+                            if item.contains(end) {
+                                // we reached the end or range
+                                let offset = (item.id.clock + item.len - end.clock - 1) as usize;
+                                let s = s.as_str();
+                                self.buf.push_str(&s[..(s.len() + offset)]);
+                                self.pack_str();
+                                break 'LOOP;
+                            }
+                        } else if scope == 0 {
+                            self.buf.push_str(s.as_str());
+                        }
                     }
                     ItemContent::Type(_) | ItemContent::Embed(_) => {
                         self.pack_str();

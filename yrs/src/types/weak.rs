@@ -1,8 +1,8 @@
 use crate::atomic::AtomicRef;
 use crate::block::{Block, BlockPtr, BlockSlice, ItemContent, Prelim};
 use crate::types::{Branch, BranchPtr, EventHandler, Observers, TypeRef, Value};
-use crate::{MapRef, Observable, TransactionMut, ID};
-use std::convert::{TryFrom, TryInto};
+use crate::{Observable, ReadTxn, TransactionMut, ID};
+use std::convert::TryFrom;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
@@ -11,20 +11,33 @@ use std::sync::Arc;
 pub struct WeakRef(BranchPtr);
 
 impl WeakRef {
-    pub fn try_deref_raw(&self) -> Option<Value> {
-        if let TypeRef::WeakLink(source) = &self.0.type_ref {
-            source.deref_raw()
+    pub fn try_deref_raw<T: ReadTxn>(&self, txn: &T) -> Option<Value> {
+        self.unquote(txn).next()
+    }
+
+    pub fn try_deref<T, V>(&self, txn: &T) -> Result<V, Option<V::Error>>
+    where
+        T: ReadTxn,
+        V: TryFrom<Value>,
+    {
+        if let Some(value) = self.try_deref_raw(txn) {
+            match V::try_from(value) {
+                Ok(value) => Ok(value),
+                Err(value) => Err(Some(value)),
+            }
         } else {
-            None
+            Err(None)
         }
     }
 
-    pub fn try_deref<T>(&self) -> Option<T>
-    where
-        T: TryFrom<Value>,
-    {
-        let value = self.try_deref_raw()?;
-        value.try_into().ok()
+    /// Returns an iterator over [Value]s existing in a scope of the current [WeakRef] quotation
+    /// range.  
+    pub fn unquote<'txn, T: ReadTxn>(&self, txn: &'txn T) -> Unquote<'txn, T> {
+        if let TypeRef::WeakLink(source) = &self.0.type_ref {
+            Unquote::new(source.blocks(txn))
+        } else {
+            panic!("Defect: called unquote over a shared type which is not a WeakRef")
+        }
     }
 }
 
@@ -83,11 +96,11 @@ impl Observable for WeakRef {
 /// A preliminary type for [WeakRef]. Once inserted into document it can be used as a weak reference
 /// link to another value living inside of the document store.
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub struct WeakPrelim(Arc<LinkSource>);
+pub struct WeakPrelim(pub(crate) Arc<LinkSource>);
 
 impl WeakPrelim {
-    pub fn new(id: ID) -> Self {
-        WeakPrelim(Arc::new(LinkSource::new(id)))
+    pub(crate) fn new(start: ID, end: ID) -> Self {
+        WeakPrelim(Arc::new(LinkSource::new(start, end)))
     }
 }
 
@@ -137,36 +150,42 @@ impl WeakEvent {
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct LinkSource {
-    id: ID,
-    pub(crate) linked_item: AtomicRef<BlockPtr>,
+    pub(crate) quote_start: ID,
+    pub(crate) quote_end: ID,
+    pub(crate) first_item: AtomicRef<BlockPtr>,
 }
 
 impl LinkSource {
-    pub fn new(id: ID) -> Self {
+    pub fn new(start: ID, end: ID) -> Self {
         LinkSource {
-            id,
-            linked_item: AtomicRef::default(),
+            quote_start: start,
+            quote_end: end,
+            first_item: AtomicRef::default(),
         }
     }
 
-    pub fn id(&self) -> &ID {
-        &self.id
+    pub fn is_single(&self) -> bool {
+        self.quote_start == self.quote_end
     }
 
-    pub(crate) fn deref_raw(&self) -> Option<Value> {
-        let mut block_ref = *self.linked_item.get()?;
-        if Self::try_right_most(&mut block_ref) {
-            self.linked_item.swap(block_ref); // update to latest block
-        }
-
-        if let Block::Item(item) = block_ref.deref() {
-            if !item.is_deleted() {
-                return item.content.get_first();
+    pub(crate) fn blocks<'txn, T: ReadTxn>(&self, txn: &'txn T) -> AliveBlockRange<'txn, T> {
+        let mut current = self.first_item.get_owned();
+        if let Some(ptr) = &mut current {
+            if Self::try_right_most(ptr) {
+                self.first_item.swap(*ptr);
+                current = Some(*ptr);
             }
         }
-        None
+        AliveBlockRange {
+            txn,
+            from: self.quote_start.clone(),
+            to: self.quote_end.clone(),
+            current,
+        }
     }
 
+    /// If provided ref is pointing to map type which has been updated, we may want to invalidate
+    /// current pointer to point to its right most neighbor.
     fn try_right_most(block_ref: &mut BlockPtr) -> bool {
         match BlockPtr::deref(block_ref) {
             Block::Item(item) if item.parent_sub.is_some() => {
@@ -189,34 +208,114 @@ impl LinkSource {
     }
 
     pub(crate) fn materialize(&self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
-        if self.linked_item.get().is_none() {
-            let source_clock = self.id().clock;
-            if let Some(mut ptr) = txn.store.blocks.get_block(self.id()) {
-                if let Block::Item(item) = ptr.deref() {
-                    if item.parent_sub.is_some() {
-                        // for map types go to the right-most item
-                        while let Some(right) = ptr.as_item().and_then(|i| i.right) {
-                            ptr = right;
-                        }
-                    } else {
-                        // for list types make sure that source block is not concatenation
-                        // of ranges outside of the linked item
-                        if ptr.len() > 1 {
-                            let offset = source_clock - ptr.id().clock;
-                            let slice = BlockSlice::new(ptr, offset, offset);
-                            ptr = txn.store.materialize(slice);
-                        }
-                    }
-                    self.linked_item.swap(ptr);
+        let mut curr = self
+            .first_item
+            .get_owned()
+            .or(txn.store.blocks.get_block(&self.quote_start));
+        if let Some(mut ptr) = curr {
+            let offset = self.quote_start.clock as i32 - ptr.id().clock as i32;
+            if offset > 0 {
+                let slice = BlockSlice::new(ptr, offset as u32, ptr.len());
+                ptr = txn.store.materialize(slice);
+            }
+            self.first_item.swap(ptr);
+            curr = Some(ptr);
+        }
+        while let Some(mut ptr) = curr {
+            let last = if ptr.contains(&self.quote_end) {
+                let offset = self.quote_end.clock - ptr.id().clock;
+                let slice = BlockSlice::new(ptr, 0, offset);
+                ptr = txn.store.materialize(slice);
+                true
+            } else {
+                false
+            };
+            if let Block::Item(item) = ptr.clone().deref_mut() {
+                item.info.set_linked();
+                let linked_by = txn.store.linked_by.entry(ptr).or_default();
+                linked_by.insert(inner_ref);
+                if last {
+                    break;
+                } else {
+                    curr = item.right;
                 }
+            } else {
+                break;
             }
         }
-        if let Some(ptr) = self.linked_item.get().as_deref() {
-            let mut ptr = *ptr;
-            if let Block::Item(item) = ptr.deref_mut() {
-                let linked_by = item.linked_by.get_or_insert_with(Default::default);
-                linked_by.insert(inner_ref.clone());
+    }
+}
+
+/// Iterator over non-deleted items, bounded by the given ID range.
+pub(crate) struct AliveBlockRange<'txn, T: ReadTxn> {
+    txn: &'txn T,
+    from: ID,
+    to: ID,
+    current: Option<BlockPtr>,
+}
+
+impl<'txn, T: ReadTxn> Iterator for AliveBlockRange<'txn, T> {
+    type Item = BlockSlice;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            let ptr = self.current?;
+            let item = ptr.as_item()?;
+            self.current = item.right;
+            if !item.is_deleted() {
+                break;
             }
+            // if item was deleted, repeat to the next block
+        }
+        let mut slice = BlockSlice::from(self.current?);
+        slice.try_trim(&self.from, &self.to);
+        Some(slice)
+    }
+}
+
+pub struct Unquote<'txn, T: ReadTxn> {
+    blocks: AliveBlockRange<'txn, T>,
+    current: Option<BlockSlice>,
+    offset: u32,
+}
+
+impl<'txn, T: ReadTxn> Unquote<'txn, T> {
+    fn new(blocks: AliveBlockRange<'txn, T>) -> Self {
+        let mut unquote = Unquote {
+            blocks,
+            current: None,
+            offset: 0,
+        };
+        unquote.advance();
+        unquote
+    }
+
+    /// Move to the next block.
+    fn advance(&mut self) {
+        self.current = self.blocks.next();
+        if let Some(slice) = &self.current {
+            self.offset = slice.start();
+        }
+    }
+}
+
+impl<'txn, T: ReadTxn> Iterator for Unquote<'txn, T> {
+    type Item = Value;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let mut slice = self.current.as_ref()?;
+        if self.offset == slice.end() {
+            self.advance();
+            slice = self.current.as_ref()?;
+        }
+        let ptr = slice.as_ptr();
+        let item = ptr.as_item()?;
+        let mut result = [Value::default(); 1];
+        if item.content.read(self.offset as usize, &mut result) != 0 {
+            self.offset += 1;
+            Some(std::mem::take(&mut result[0]))
+        } else {
+            None
         }
     }
 }
@@ -244,7 +343,7 @@ mod test {
 
         let link = map.get(&txn, "b").unwrap().to_weak().unwrap();
         let expected = nested.to_json(&txn);
-        let deref = link.try_deref::<MapRef>().unwrap();
+        let deref: MapRef = link.try_deref(&txn).unwrap();
         let actual = deref.to_json(&txn);
 
         assert_eq!(actual, expected);
@@ -258,39 +357,39 @@ mod test {
             let mut txn = d1.transact_mut();
 
             a1.insert_range(&mut txn, 0, [1, 2, 3]);
-            let link = a1.link(&txn, 1).unwrap();
+            let link = a1.quote(&txn, 1, 1).unwrap();
             a1.insert(&mut txn, 3, link);
 
             assert_eq!(a1.get(&txn, 0), Some(1.into()));
             assert_eq!(a1.get(&txn, 1), Some(2.into()));
             assert_eq!(a1.get(&txn, 2), Some(3.into()));
-            assert_eq!(
-                a1.get(&txn, 3)
-                    .unwrap()
-                    .to_weak()
-                    .unwrap()
-                    .try_deref::<Any>(),
-                Some(2.into())
-            );
+            let actual: Any = a1
+                .get(&txn, 3)
+                .unwrap()
+                .to_weak()
+                .unwrap()
+                .try_deref(&txn)
+                .unwrap();
+            assert_eq!(actual, 2.into());
         }
 
         let d2 = Doc::new();
         let a2 = d2.get_or_insert_array("array");
 
         exchange_updates(&[&d1, &d2]);
-        let mut txn = d2.transact_mut();
+        let txn = d2.transact_mut();
 
         assert_eq!(a2.get(&txn, 0), Some(1.into()));
         assert_eq!(a2.get(&txn, 1), Some(2.into()));
         assert_eq!(a2.get(&txn, 2), Some(3.into()));
-        assert_eq!(
-            a2.get(&txn, 3)
-                .unwrap()
-                .to_weak()
-                .unwrap()
-                .try_deref::<Any>(),
-            Some(2.into())
-        );
+        let actual: Any = a2
+            .get(&txn, 3)
+            .unwrap()
+            .to_weak()
+            .unwrap()
+            .try_deref(&txn)
+            .unwrap();
+        assert_eq!(actual, 2.into());
     }
 
     #[test]
@@ -312,16 +411,16 @@ mod test {
         exchange_updates(&[&d1, &d2]);
 
         let link2 = m2.get(&d2.transact(), "b").unwrap().to_weak().unwrap();
-        let l1: MapRef = link1.try_deref().unwrap();
-        let l2: MapRef = link2.try_deref().unwrap();
+        let l1: MapRef = link1.try_deref(&d1.transact()).unwrap();
+        let l2: MapRef = link2.try_deref(&d2.transact()).unwrap();
         assert_eq!(l1.get(&d1.transact(), "a1"), l2.get(&d2.transact(), "a1"));
 
         m2.insert(&mut d2.transact_mut(), "a2", "world");
 
         exchange_updates(&[&d1, &d2]);
 
-        let l1: MapRef = link1.try_deref().unwrap();
-        let l2: MapRef = link2.try_deref().unwrap();
+        let l1: MapRef = link1.try_deref(&d1.transact()).unwrap();
+        let l2: MapRef = link2.try_deref(&d2.transact()).unwrap();
         assert_eq!(l1.get(&d1.transact(), "a2"), l2.get(&d2.transact(), "a2"));
     }
 
@@ -344,8 +443,8 @@ mod test {
         exchange_updates(&[&d1, &d2]);
 
         let link2 = m2.get(&d2.transact(), "b").unwrap().to_weak().unwrap();
-        let l1: MapRef = link1.try_deref().unwrap();
-        let l2: MapRef = link2.try_deref().unwrap();
+        let l1: MapRef = link1.try_deref(&d1.transact()).unwrap();
+        let l2: MapRef = link2.try_deref(&d2.transact()).unwrap();
         assert_eq!(l1.get(&d1.transact(), "a1"), l2.get(&d2.transact(), "a1"));
 
         m2.remove(&mut d2.transact_mut(), "b"); // delete links
@@ -353,8 +452,8 @@ mod test {
         exchange_updates(&[&d1, &d2]);
 
         // since links have been deleted, they no longer refer to any content
-        assert_eq!(link1.try_deref_raw(), None);
-        assert_eq!(link2.try_deref_raw(), None);
+        assert_eq!(link1.try_deref_raw(&d1.transact()), None);
+        assert_eq!(link2.try_deref_raw(&d2.transact()), None);
     }
 
     #[test]
@@ -376,8 +475,8 @@ mod test {
         exchange_updates(&[&d1, &d2]);
 
         let link2 = m2.get(&d2.transact(), "b").unwrap().to_weak().unwrap();
-        let l1: MapRef = link1.try_deref().unwrap();
-        let l2: MapRef = link2.try_deref().unwrap();
+        let l1: MapRef = link1.try_deref(&d1.transact()).unwrap();
+        let l2: MapRef = link2.try_deref(&d2.transact()).unwrap();
         assert_eq!(l1.get(&d1.transact(), "a1"), l2.get(&d2.transact(), "a1"));
 
         m2.remove(&mut d2.transact_mut(), "a"); // delete source of the link
@@ -385,8 +484,8 @@ mod test {
         exchange_updates(&[&d1, &d2]);
 
         // since links have been deleted, they no longer refer to any content
-        assert_eq!(link1.try_deref_raw(), None);
-        assert_eq!(link2.try_deref_raw(), None);
+        assert_eq!(link1.try_deref_raw(&d1.transact()), None);
+        assert_eq!(link2.try_deref_raw(&d2.transact()), None);
     }
 
     #[test]
@@ -414,7 +513,7 @@ mod test {
         exchange_updates(&[&d1, &d2]);
 
         let mut link2 = m2.get(&d2.transact(), "b").unwrap().to_weak().unwrap();
-        assert_eq!(link2.try_deref_raw(), Some("value".into()));
+        assert_eq!(link2.try_deref_raw(&d2.transact()), Some("value".into()));
 
         let target2 = Rc::new(RefCell::new(None));
         let _sub2 = {
@@ -425,10 +524,10 @@ mod test {
         };
 
         m1.insert(&mut d1.transact_mut(), "a", "value2");
-        assert_eq!(link1.try_deref_raw(), Some("value2".into()));
+        assert_eq!(link1.try_deref_raw(&d1.transact()), Some("value2".into()));
 
         exchange_updates(&[&d1, &d2]);
-        assert_eq!(link2.try_deref_raw(), Some("value2".into()));
+        assert_eq!(link2.try_deref_raw(&d2.transact()), Some("value2".into()));
     }
 
     #[test]
@@ -456,7 +555,7 @@ mod test {
         exchange_updates(&[&d1, &d2]);
 
         let mut link2 = m2.get(&d2.transact(), "b").unwrap().to_weak().unwrap();
-        assert_eq!(link2.try_deref_raw(), Some("value".into()));
+        assert_eq!(link2.try_deref_raw(&d2.transact()), Some("value".into()));
 
         let target2 = Rc::new(RefCell::new(None));
         let _sub2 = {
@@ -467,10 +566,10 @@ mod test {
         };
 
         m1.remove(&mut d1.transact_mut(), "a");
-        assert_eq!(link1.try_deref_raw(), Some("value2".into()));
+        assert_eq!(link1.try_deref_raw(&d1.transact()), Some("value2".into()));
 
         exchange_updates(&[&d1, &d2]);
-        assert_eq!(link2.try_deref_raw(), Some("value2".into()));
+        assert_eq!(link2.try_deref_raw(&d2.transact()), Some("value2".into()));
     }
 
     #[test]
@@ -483,7 +582,7 @@ mod test {
         let mut link1 = {
             let mut txn = d1.transact_mut();
             a1.insert_range(&mut txn, 0, ["A", "B", "C"]);
-            let link1 = a1.link(&txn, 1).unwrap();
+            let link1 = a1.quote(&txn, 1, 1).unwrap();
             a1.insert(&mut txn, 0, link1)
         };
 
@@ -498,7 +597,7 @@ mod test {
         exchange_updates(&[&d1, &d2]);
 
         let mut link2 = a2.get(&d2.transact(), 0).unwrap().to_weak().unwrap();
-        assert_eq!(link2.try_deref_raw(), Some("B".into()));
+        assert_eq!(link2.try_deref_raw(&d2.transact()), Some("B".into()));
 
         let target2 = Rc::new(RefCell::new(None));
         let _sub2 = {
@@ -509,10 +608,10 @@ mod test {
         };
 
         a1.remove(&mut d1.transact_mut(), 2);
-        assert_eq!(link1.try_deref_raw(), None);
+        assert_eq!(link1.try_deref_raw(&d1.transact()), None);
 
         exchange_updates(&[&d1, &d2]);
-        assert_eq!(link2.try_deref_raw(), None);
+        assert_eq!(link2.try_deref_raw(&d2.transact()), None);
     }
 
     #[test]
@@ -552,7 +651,7 @@ mod test {
         let actual: Vec<_> = events
             .borrow()
             .iter()
-            .flat_map(|v| v.clone().to_weak().unwrap().try_deref_raw())
+            .flat_map(|v| v.clone().to_weak().unwrap().try_deref_raw(&doc.transact()))
             .collect();
         assert_eq!(actual, vec!["value2".into()])
     }
@@ -599,7 +698,7 @@ mod test {
         let actual: Vec<_> = events
             .take()
             .into_iter()
-            .flat_map(|v| v.to_weak().unwrap().try_deref_raw())
+            .flat_map(|v| v.to_weak().unwrap().try_deref_raw(&doc.transact()))
             .collect();
         assert_eq!(actual, vec!["value2".into()])
     }
@@ -641,7 +740,7 @@ mod test {
 
         let mut txn = doc.transact_mut();
         let nested = array.insert(&mut txn, 0, MapPrelim::<u32>::new());
-        let link = array.link(&txn, 0).unwrap();
+        let link = array.quote(&txn, 0, 1).unwrap();
         let link = map.insert(&mut txn, "link", link);
         drop(txn);
 
@@ -702,9 +801,9 @@ mod test {
         let m1 = root.insert(&mut txn, 1, MapPrelim::<u32>::new());
         let m2 = root.insert(&mut txn, 2, MapPrelim::<u32>::new());
 
-        let l0 = root.link(&txn, 0).unwrap();
-        let l1 = root.link(&txn, 1).unwrap();
-        let l2 = root.link(&txn, 2).unwrap();
+        let l0 = root.quote(&txn, 0, 1).unwrap();
+        let l1 = root.quote(&txn, 1, 1).unwrap();
+        let l2 = root.quote(&txn, 2, 1).unwrap();
 
         // create cyclic reference between links
         let l1 = m0.insert(&mut txn, "k1", l1);
@@ -790,15 +889,15 @@ mod test {
 
         // make sure that link can find the most recent block
         let l3 = m3.get(&d3.transact(), "link").unwrap().to_weak().unwrap();
-        assert_eq!(l3.try_deref_raw(), Some(3.into()));
+        assert_eq!(l3.try_deref_raw(&d3.transact()), Some(3.into()));
 
         exchange_updates(&[&d1, &d2, &d3]);
 
         let l1 = m1.get(&d1.transact(), "link").unwrap().to_weak().unwrap();
         let l2 = m2.get(&d2.transact(), "link").unwrap().to_weak().unwrap();
 
-        assert_eq!(l1.try_deref_raw(), Some(3.into()));
-        assert_eq!(l2.try_deref_raw(), Some(3.into()));
-        assert_eq!(l3.try_deref_raw(), Some(3.into()));
+        assert_eq!(l1.try_deref_raw(&d1.transact()), Some(3.into()));
+        assert_eq!(l2.try_deref_raw(&d2.transact()), Some(3.into()));
+        assert_eq!(l3.try_deref_raw(&d3.transact()), Some(3.into()));
     }
 }

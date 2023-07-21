@@ -18,7 +18,7 @@ use crate::types::array::{ArrayEvent, ArrayRef};
 use crate::types::map::MapEvent;
 use crate::types::text::TextEvent;
 use crate::types::weak::{LinkSource, WeakEvent, WeakRef};
-use crate::types::xml::{XmlElementRef, XmlEvent, XmlTextEvent, XmlTextRef};
+use crate::types::xml::{XmlElementRef, XmlEvent, XmlHookRef, XmlTextEvent, XmlTextRef};
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use lib0::any;
@@ -110,8 +110,17 @@ impl Encode for TypeRef {
             TypeRef::XmlText => encoder.write_type_ref(TYPE_REFS_XML_TEXT),
             TypeRef::WeakLink(data) => {
                 encoder.write_type_ref(TYPE_REFS_WEAK);
-                encoder.write_u8(0); // flags that could be used in the future
-                encoder.write_left_id(data.id());
+                let is_single = data.is_single();
+                let mut info = if is_single { 0u8 } else { 1u8 };
+                info |= 2; // this._quoteStart.assoc >= 0
+                info |= 0; // this._quoteEnd.assoc >= 0
+                encoder.write_u8(info);
+                encoder.write_var(data.quote_start.client);
+                encoder.write_var(data.quote_start.clock);
+                if !is_single {
+                    encoder.write_var(data.quote_end.client);
+                    encoder.write_var(data.quote_end.clock);
+                }
             }
             TypeRef::SubDoc => encoder.write_type_ref(TYPE_REFS_DOC),
             TypeRef::Undefined => encoder.write_type_ref(TYPE_REFS_UNDEFINED),
@@ -132,9 +141,15 @@ impl Decode for TypeRef {
             TYPE_REFS_XML_TEXT => Ok(TypeRef::XmlText),
             TYPE_REFS_DOC => Ok(TypeRef::SubDoc),
             TYPE_REFS_WEAK => {
-                let _flags = decoder.read_u8()?; // atm. unused
-                let id = decoder.read_left_id()?;
-                Ok(TypeRef::WeakLink(Arc::new(LinkSource::new(id))))
+                let flags = decoder.read_u8()?;
+                let is_single = flags & 0u8 == 0;
+                let start = ID::new(decoder.read_var()?, decoder.read_var()?);
+                let end = if is_single {
+                    start.clone()
+                } else {
+                    ID::new(decoder.read_var()?, decoder.read_var()?)
+                };
+                Ok(TypeRef::WeakLink(Arc::new(LinkSource::new(start, end))))
             }
             TYPE_REFS_UNDEFINED => Ok(TypeRef::Undefined),
             _ => Err(Error::UnexpectedValue),
@@ -289,7 +304,8 @@ impl Into<Value> for BranchPtr {
             TYPE_REFS_XML_ELEMENT => Value::YXmlElement(XmlElementRef::from(self)),
             TYPE_REFS_XML_FRAGMENT => Value::YXmlFragment(XmlFragmentRef::from(self)),
             TYPE_REFS_XML_TEXT => Value::YXmlText(XmlTextRef::from(self)),
-            //TYPE_REFS_XML_HOOK => Value::YXmlElement(XmlElement::from(self)),
+            //TYPE_REFS_XML_HOOK => Value::YXmlHook(XmlHookRef::from(self)),
+            TYPE_REFS_WEAK => Value::YWeakLink(WeakRef::from(self)),
             other => panic!("Cannot convert to value - unsupported type ref: {}", other),
         }
     }
@@ -955,13 +971,7 @@ impl std::fmt::Display for Value {
             Value::YXmlFragment(_) => write!(f, "XmlFragmentRef"),
             Value::YXmlText(_) => write!(f, "XmlTextRef"),
             Value::YDoc(v) => write!(f, "Doc(guid:{})", v.options().guid),
-            Value::YWeakLink(v) => {
-                if let Some(deref) = v.try_deref_raw() {
-                    write!(f, "WeakRef({})", deref)
-                } else {
-                    write!(f, "WeakRef(deleted)")
-                }
-            }
+            Value::YWeakLink(_) => write!(f, "WeakRef"),
         }
     }
 }

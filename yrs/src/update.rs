@@ -350,9 +350,13 @@ impl Update {
                     }
                     ItemContent::Type(branch) => {
                         if let TypeRef::WeakLink(source) = &branch.type_ref {
-                            let id = source.id();
-                            if id.clock >= local_sv.get(&id.client) {
-                                return Some(id.client);
+                            let start = &source.quote_start;
+                            let end = &source.quote_end;
+                            if start.clock >= local_sv.get(&start.client) {
+                                return Some(start.client);
+                            }
+                            if start != end && end.clock >= local_sv.get(&end.client) {
+                                return Some(end.client);
                             }
                         }
                     }

@@ -15,7 +15,7 @@ use crate::{
 use atomic_refcell::{AtomicRef, AtomicRefCell, AtomicRefMut, BorrowError, BorrowMutError};
 use lib0::error::Error;
 use std::collections::hash_map::Entry;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::Deref;
 use std::sync::{Arc, Weak};
 
@@ -51,6 +51,9 @@ pub struct Store {
     /// Pointer to a parent block - present only if a current document is a sub-document of another
     /// document.
     pub(crate) parent: Option<BlockPtr>,
+
+    /// Dependencies between items and weak links pointing to these items.
+    pub(crate) linked_by: HashMap<BlockPtr, HashSet<BranchPtr>>,
 }
 
 impl Store {
@@ -61,6 +64,7 @@ impl Store {
             types: HashMap::default(),
             blocks: BlockStore::new(),
             subdocs: HashMap::default(),
+            linked_by: HashMap::default(),
             events: None,
             pending: None,
             pending_ds: None,
