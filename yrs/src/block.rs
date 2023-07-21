@@ -641,7 +641,11 @@ impl BlockPtr {
                             // /** @type {AbstractType<any>} */ (item.parent)._searchMarker = null
                         }
                         ItemContent::Type(branch) => {
-                            branch.store = this.parent.as_branch().and_then(|b| b.store.clone())
+                            branch.store = this.parent.as_branch().and_then(|b| b.store.clone());
+                            let ptr = BranchPtr::from(branch);
+                            if let TypeRef::WeakLink(source) = &ptr.type_ref {
+                                source.materialize(txn, ptr);
+                            }
                         }
                         _ => {
                             // other types don't define integration-specific actions
@@ -711,7 +715,7 @@ impl BlockPtr {
                     && v1.right == Some(other_ptr)
                     && v1.is_deleted() == v2.is_deleted()
                     && (v1.redone.is_none() && v2.redone.is_none())
-                    && (!v1.info.is_linked() && v2.info.is_linked()) // linked items cannot be merged
+                    && (!v1.info.is_linked() && !v2.info.is_linked()) // linked items cannot be merged
                     && v1.moved == v2.moved
                     && v1.content.try_squash(&v2.content)
                 {
@@ -2260,10 +2264,14 @@ impl std::fmt::Display for Item {
             write!(f, ":")?;
         }
         if self.is_deleted() {
-            write!(f, " ~{}~)", &self.content)
+            write!(f, " ~{}~", &self.content)?;
         } else {
-            write!(f, " {})", &self.content)
+            write!(f, " {}", &self.content)?;
         }
+        if self.info.is_linked() {
+            write!(f, "|linked")?;
+        }
+        write!(f, ")")
     }
 }
 

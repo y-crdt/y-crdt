@@ -122,11 +122,7 @@ impl Prelim for WeakPrelim {
         (ItemContent::Type(inner), Some(self))
     }
 
-    fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
-        if let TypeRef::WeakLink(source) = &inner_ref.type_ref {
-            source.materialize(txn, inner_ref)
-        }
-    }
+    fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {}
 }
 
 pub struct WeakEvent {
@@ -210,7 +206,7 @@ impl LinkSource {
         if let Some(mut ptr) = curr {
             let offset = self.quote_start.clock as i32 - ptr.id().clock as i32;
             if offset > 0 {
-                let slice = BlockSlice::new(ptr, offset as u32, ptr.len());
+                let slice = BlockSlice::new(ptr, offset as u32, ptr.len() - 1);
                 ptr = txn.store.materialize(slice);
             }
             self.first_item.swap(ptr);

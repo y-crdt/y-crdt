@@ -259,28 +259,34 @@ pub trait Array: AsRef<Branch> {
                     index -= item.len;
                 }
                 curr = item.right;
-                start_id = Some(item.id.clone());
             } else {
                 break;
             }
         }
         // ... then get the end of the quoted range
-        let mut remaining = len;
+        if start_id.is_none() {
+            start_id = curr.map(|ptr| ptr.id().clone());
+        }
+        end_id = start_id.clone();
+        let mut remaining = len - 1;
         while let Some(ptr) = curr {
             if let Block::Item(item) = ptr.deref() {
                 if !item.is_deleted() && item.is_countable() {
                     if remaining > item.len {
                         remaining -= item.len;
                     } else {
-                        end_id = Some(ID::new(item.id.client, item.id.clock + remaining - 1));
+                        end_id = Some(ID::new(item.id.client, item.id.clock + index + remaining));
                         break;
                     }
                 }
                 curr = item.right;
-                end_id = Some(item.last_id());
+                index = 0;
             } else {
                 break;
             }
+        }
+        if end_id.is_none() {
+            end_id = curr.map(|ptr| ptr.last_id());
         }
         match (start_id, end_id) {
             (Some(start), Some(end)) => {
