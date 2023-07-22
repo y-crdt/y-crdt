@@ -383,7 +383,7 @@ impl<'doc> TransactionMut<'doc> {
     pub(crate) fn apply_delete(&mut self, ds: &DeleteSet) -> Option<DeleteSet> {
         let mut unapplied = DeleteSet::new();
         for (client, ranges) in ds.iter() {
-            if let Some(mut blocks) = self.store_mut().blocks.get_mut(client) {
+            if let Some(mut blocks) = self.store.blocks.get_mut(client) {
                 let state = blocks.get_state();
 
                 for range in ranges.iter() {
@@ -438,6 +438,18 @@ impl<'doc> TransactionMut<'doc> {
                                                                 {
                                                                     self.prev_moved
                                                                         .insert(split, prev_moved);
+                                                                }
+                                                            }
+                                                            if item.info.is_linked() {
+                                                                if let Some(links) = self
+                                                                    .store
+                                                                    .linked_by
+                                                                    .get(&block)
+                                                                    .cloned()
+                                                                {
+                                                                    self.store
+                                                                        .linked_by
+                                                                        .insert(split, links);
                                                                 }
                                                             }
                                                         }

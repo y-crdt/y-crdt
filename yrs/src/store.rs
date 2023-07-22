@@ -393,6 +393,9 @@ impl std::fmt::Display for Store {
         if let Some(parent) = self.parent.as_ref() {
             s.field("parent block", parent.id());
         }
+        if !self.linked_by.is_empty() {
+            s.field("links", &self.linked_by);
+        }
 
         s.finish()
     }

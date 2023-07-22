@@ -978,15 +978,15 @@ impl std::fmt::Display for Value {
 
 impl std::fmt::Display for Branch {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.type_ref() {
-            TYPE_REFS_ARRAY => {
+        match &self.type_ref {
+            TypeRef::Array => {
                 if let Some(ptr) = self.start {
                     write!(f, "YArray(start: {})", ptr)
                 } else {
                     write!(f, "YArray")
                 }
             }
-            TYPE_REFS_MAP => {
+            TypeRef::Map => {
                 write!(f, "YMap(")?;
                 let mut iter = self.map.iter();
                 if let Some((k, v)) = iter.next() {
@@ -997,24 +997,24 @@ impl std::fmt::Display for Branch {
                 }
                 write!(f, ")")
             }
-            TYPE_REFS_TEXT => {
+            TypeRef::Text => {
                 if let Some(ptr) = self.start.as_ref() {
                     write!(f, "YText(start: {})", ptr)
                 } else {
                     write!(f, "YText")
                 }
             }
-            TYPE_REFS_XML_FRAGMENT => {
+            TypeRef::XmlFragment => {
                 write!(f, "YXmlFragment")?;
                 if let Some(start) = self.start.as_ref() {
                     write!(f, "(start: {})", start)?;
                 }
                 Ok(())
             }
-            TYPE_REFS_XML_ELEMENT => {
-                write!(f, "YXmlElement")?;
+            TypeRef::XmlElement(name) => {
+                write!(f, "YXmlElement('{}'", name)?;
                 if let Some(start) = self.start.as_ref() {
-                    write!(f, "(start: {})", start)?;
+                    write!(f, ", start: {})", start)?;
                 }
                 if !self.map.is_empty() {
                     write!(f, " {{")?;
@@ -1029,7 +1029,7 @@ impl std::fmt::Display for Branch {
                 }
                 Ok(())
             }
-            TYPE_REFS_XML_HOOK => {
+            TypeRef::XmlHook => {
                 write!(f, "YXmlHook(")?;
                 let mut iter = self.map.iter();
                 if let Some((k, v)) = iter.next() {
@@ -1040,17 +1040,24 @@ impl std::fmt::Display for Branch {
                 }
                 write!(f, ")")
             }
-            TYPE_REFS_XML_TEXT => {
+            TypeRef::XmlText => {
                 if let Some(ptr) = self.start {
                     write!(f, "YXmlText(start: {})", ptr)
                 } else {
                     write!(f, "YXmlText")
                 }
             }
-            TYPE_REFS_DOC => {
+            TypeRef::SubDoc => {
                 write!(f, "Subdoc")
             }
-            _ => {
+            TypeRef::WeakLink(w) => {
+                if w.is_single() {
+                    write!(f, "WeakRef({})", w.quote_start)
+                } else {
+                    write!(f, "WeakRef({}..{})", w.quote_start, w.quote_end)
+                }
+            }
+            TypeRef::Undefined => {
                 write!(f, "UnknownRef")?;
                 if let Some(start) = self.start.as_ref() {
                     write!(f, "(start: {})", start)?;
