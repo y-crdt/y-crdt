@@ -36,7 +36,7 @@ impl WeakRef {
         if let TypeRef::WeakLink(source) = &self.0.type_ref {
             source.unquote(txn)
         } else {
-            panic!("Defect: called unquote over a shared type which is not a WeakRef")
+            Unquote::empty(txn)
         }
     }
 }
@@ -250,16 +250,9 @@ impl<'txn, T: ReadTxn> Unquote<'txn, T> {
     fn new(txn: &'txn T, current: Option<BlockPtr>, from: &ID, to: ID) -> Self {
         let mut offset = 0;
         if let Some(ptr) = current {
-            if !ptr.contains(&from) {
-                return Unquote {
-                    txn,
-                    to,
-                    offset,
-                    encoding: OffsetKind::Utf16,
-                    current: None,
-                };
+            if ptr.contains(&from) {
+                offset = from.clock - ptr.id().clock;
             }
-            offset = from.clock - ptr.id().clock;
         }
         let encoding = txn.store().options.offset_kind;
         Unquote {
@@ -268,6 +261,16 @@ impl<'txn, T: ReadTxn> Unquote<'txn, T> {
             offset,
             encoding,
             current,
+        }
+    }
+
+    fn empty(txn: &'txn T) -> Self {
+        Unquote {
+            txn,
+            to: ID::new(0, 0), // won't be used anyway
+            current: None,
+            encoding: OffsetKind::Bytes,
+            offset: 0,
         }
     }
 }
@@ -288,10 +291,11 @@ impl<'txn, T: ReadTxn> Iterator for Unquote<'txn, T> {
         if let Block::Item(item) = ptr.deref() {
             let mut result = [Value::default(); 1];
             if item.content.read(self.offset as usize, &mut result) != 0 {
-                self.offset += 1;
-                if item.id.client == self.to.client && item.id.clock + self.offset > self.to.clock {
+                if item.id.client == self.to.client && item.id.clock + self.offset == self.to.clock
+                {
                     self.current = None; // we reached the end of range
                 }
+                self.offset += 1;
                 return Some(std::mem::take(&mut result[0]));
             }
         }
@@ -303,7 +307,9 @@ impl<'txn, T: ReadTxn> Iterator for Unquote<'txn, T> {
 mod test {
     use crate::test_utils::exchange_updates;
     use crate::types::{EntryChange, Event, ToJson, Value};
-    use crate::{Array, DeepObservable, Doc, Map, MapPrelim, MapRef, Observable, Transact};
+    use crate::{
+        Array, DeepObservable, Doc, Map, MapPrelim, MapRef, Observable, ReadTxn, Transact,
+    };
     use lib0::any::Any;
     use std::cell::RefCell;
     use std::collections::HashMap;
@@ -431,6 +437,8 @@ mod test {
         exchange_updates(&[&d1, &d2]);
 
         // since links have been deleted, they no longer refer to any content
+        println!("{:#?}", d1.transact().store());
+        println!("{:#?}", d2.transact().store());
         assert_eq!(link1.try_deref_raw(&d1.transact()), None);
         assert_eq!(link2.try_deref_raw(&d2.transact()), None);
     }
@@ -545,23 +553,25 @@ mod test {
         };
 
         m1.remove(&mut d1.transact_mut(), "a");
-        assert_eq!(link1.try_deref_raw(&d1.transact()), Some("value2".into()));
+        let l1 = (*target1).take().unwrap();
+        assert_eq!(l1.try_deref_raw(&d1.transact()), None);
 
         exchange_updates(&[&d1, &d2]);
-        assert_eq!(link2.try_deref_raw(&d2.transact()), Some("value2".into()));
+        let l2 = (*target2).take().unwrap();
+        assert_eq!(l2.try_deref_raw(&d2.transact()), None);
     }
 
     #[test]
     fn observe_array() {
-        let d1 = Doc::new();
+        let d1 = Doc::with_client_id(1);
         let a1 = d1.get_or_insert_array("array");
-        let d2 = Doc::new();
+        let d2 = Doc::with_client_id(2);
         let a2 = d2.get_or_insert_array("array");
 
         let mut link1 = {
             let mut txn = d1.transact_mut();
             a1.insert_range(&mut txn, 0, ["A", "B", "C"]);
-            let link1 = a1.quote(&txn, 1, 1).unwrap();
+            let link1 = a1.quote(&txn, 1, 2).unwrap();
             a1.insert(&mut txn, 0, link1)
         };
 
@@ -576,7 +586,8 @@ mod test {
         exchange_updates(&[&d1, &d2]);
 
         let mut link2 = a2.get(&d2.transact(), 0).unwrap().to_weak().unwrap();
-        assert_eq!(link2.try_deref_raw(&d2.transact()), Some("B".into()));
+        let actual: Vec<_> = link2.unquote(&d2.transact()).collect();
+        assert_eq!(actual, vec!["B".into(), "C".into()]);
 
         let target2 = Rc::new(RefCell::new(None));
         let _sub2 = {
@@ -587,10 +598,26 @@ mod test {
         };
 
         a1.remove(&mut d1.transact_mut(), 2);
-        assert_eq!(link1.try_deref_raw(&d1.transact()), None);
+        let actual: Vec<_> = link1.unquote(&d1.transact()).collect();
+        assert_eq!(actual, vec!["C".into()]);
 
         exchange_updates(&[&d1, &d2]);
-        assert_eq!(link2.try_deref_raw(&d2.transact()), None);
+        let l2 = (*target2).take().unwrap();
+        let actual: Vec<_> = l2.unquote(&d2.transact()).collect();
+        assert_eq!(actual, vec!["C".into()]);
+
+        a2.remove(&mut d2.transact_mut(), 2);
+        let l2 = (*target2).take().unwrap();
+        let actual: Vec<_> = l2.unquote(&d2.transact()).collect();
+        assert_eq!(actual, vec![]);
+
+        exchange_updates(&[&d1, &d2]);
+        let l1 = (*target1).take().unwrap();
+        let actual: Vec<_> = l1.unquote(&d1.transact()).collect();
+        assert_eq!(actual, vec![]);
+
+        a1.remove(&mut d1.transact_mut(), 1);
+        assert_eq!((*target1).take(), None);
     }
 
     #[test]
@@ -846,11 +873,11 @@ mod test {
 
     #[test]
     fn remote_map_update() {
-        let d1 = Doc::new();
+        let d1 = Doc::with_client_id(1);
         let m1 = d1.get_or_insert_map("map");
-        let d2 = Doc::new();
+        let d2 = Doc::with_client_id(2);
         let m2 = d2.get_or_insert_map("map");
-        let d3 = Doc::new();
+        let d3 = Doc::with_client_id(3);
         let m3 = d3.get_or_insert_map("map");
 
         m1.insert(&mut d1.transact_mut(), "key", 1);

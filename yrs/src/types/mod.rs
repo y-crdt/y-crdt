@@ -142,7 +142,7 @@ impl Decode for TypeRef {
             TYPE_REFS_DOC => Ok(TypeRef::SubDoc),
             TYPE_REFS_WEAK => {
                 let flags = decoder.read_u8()?;
-                let is_single = flags & 0u8 == 0;
+                let is_single = flags & 1u8 == 0;
                 let start = ID::new(decoder.read_var()?, decoder.read_var()?);
                 let end = if is_single {
                     start.clone()

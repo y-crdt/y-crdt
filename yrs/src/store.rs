@@ -273,15 +273,24 @@ impl Store {
     pub(crate) fn materialize(&mut self, mut slice: BlockSlice) -> BlockPtr {
         let id = slice.id().clone();
         let blocks = self.blocks.get_mut(&id.client).unwrap();
+        let mut links = None;
+        if let Block::Item(item) = slice.as_ptr().deref() {
+            if item.info.is_linked() {
+                links = self.linked_by.get(&slice.as_ptr()).cloned();
+            }
+        }
         let mut index = None;
         let mut ptr = if slice.adjacent_left() {
             slice.as_ptr()
         } else {
             let mut i = blocks.find_pivot(id.clock).unwrap();
             if let Some(new) = slice.as_ptr().splice(slice.start(), OffsetKind::Utf16) {
+                if let Some(source) = links.clone() {
+                    let dest = self.linked_by.entry(BlockPtr::from(&new)).or_default();
+                    dest.extend(source);
+                }
                 blocks.insert(i + 1, new);
                 i += 1;
-                //todo: txn merge blocks insert?
                 index = Some(i);
             }
             let ptr = blocks.get(i);
@@ -298,8 +307,11 @@ impl Store {
                 blocks.find_pivot(last_id.clock).unwrap()
             };
             let new = ptr.splice(slice.len(), OffsetKind::Utf16).unwrap();
+            if let Some(source) = links {
+                let dest = self.linked_by.entry(BlockPtr::from(&new)).or_default();
+                dest.extend(source);
+            }
             blocks.insert(i + 1, new);
-            //todo: txn merge blocks insert?
         }
 
         ptr
