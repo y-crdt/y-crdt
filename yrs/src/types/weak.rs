@@ -378,6 +378,89 @@ mod test {
     }
 
     #[test]
+    fn array_quote_multi_elements() {
+        let d1 = Doc::with_client_id(1);
+        let a1 = d1.get_or_insert_array("array");
+        let d2 = Doc::with_client_id(2);
+        let a2 = d2.get_or_insert_array("array");
+
+        let nested = {
+            let mut txn = d1.transact_mut();
+            a1.insert_range(&mut txn, 0, [1, 2]);
+            let nested = a1.push_back(&mut txn, MapPrelim::from([("key", "value")]));
+            a1.push_back(&mut txn, 3);
+            nested
+        };
+        let l1 = {
+            let mut t1 = d1.transact_mut();
+            let prelim = a1.quote(&t1, 1, 3).unwrap();
+            a1.insert(&mut t1, 0, prelim)
+        };
+
+        let t1 = d1.transact();
+        assert_eq!(
+            l1.unquote(&t1).collect::<Vec<Value>>(),
+            vec![2.into(), Value::YMap(nested.clone()), 3.into()]
+        );
+        assert_eq!(a1.get(&t1, 1), Some(1.into()));
+        assert_eq!(a1.get(&t1, 2), Some(2.into()));
+        assert_eq!(a1.get(&t1, 3), Some(Value::YMap(nested.clone())));
+        assert_eq!(a1.get(&t1, 4), Some(3.into()));
+        drop(t1);
+
+        exchange_updates(&[&d1, &d2]);
+
+        let t2 = d2.transact();
+        let l2 = a2.get(&t2, 0).unwrap().to_weak().unwrap();
+        let unquoted: Vec<_> = l2.unquote(&t2).map(|v| v.to_string(&t2)).collect();
+        assert_eq!(
+            unquoted,
+            vec![
+                "2".to_string(),
+                r#"{key: value}"#.to_string(),
+                "3".to_string()
+            ]
+        );
+        assert_eq!(a2.get(&t2, 1), Some(1.into()));
+        assert_eq!(a2.get(&t2, 2), Some(2.into()));
+        assert_eq!(
+            a2.get(&t2, 3).map(|v| v.to_string(&t2)),
+            Some(r#"{key: value}"#.to_string())
+        );
+        assert_eq!(a2.get(&t2, 4), Some(3.into()));
+        drop(t2);
+
+        a2.insert_range(&mut d2.transact_mut(), 3, ["A", "B"]);
+
+        let t2 = d2.transact();
+        let unquoted: Vec<_> = l2.unquote(&t2).map(|v| v.to_string(&t2)).collect();
+        assert_eq!(
+            unquoted,
+            vec![
+                "2".to_string(),
+                "A".to_string(),
+                "B".to_string(),
+                r#"{key: value}"#.to_string(),
+                "3".to_string()
+            ]
+        );
+        drop(t2);
+
+        exchange_updates(&[&d1, &d2]);
+
+        assert_eq!(
+            l1.unquote(&d1.transact()).collect::<Vec<Value>>(),
+            vec![
+                2.into(),
+                "A".into(),
+                "B".into(),
+                Value::YMap(nested.clone()),
+                3.into()
+            ]
+        );
+    }
+
+    #[test]
     fn update() {
         let d1 = Doc::new();
         let m1 = d1.get_or_insert_map("map");
