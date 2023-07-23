@@ -1,7 +1,7 @@
 use crate::atomic::AtomicRef;
-use crate::block::{Block, BlockPtr, BlockSlice, ItemContent, Prelim};
+use crate::block::{Block, BlockPtr, BlockSlice, EmbedPrelim, ItemContent, Prelim};
 use crate::types::{Branch, BranchPtr, EventHandler, Observers, TypeRef, Value};
-use crate::{Observable, OffsetKind, ReadTxn, TransactionMut, ID};
+use crate::{GetString, Observable, OffsetKind, ReadTxn, TransactionMut, ID};
 use std::convert::TryFrom;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
@@ -93,6 +93,12 @@ impl Observable for WeakRef {
     }
 }
 
+impl GetString for WeakRef {
+    fn get_string<T: ReadTxn>(&self, txn: &T) -> String {
+        todo!()
+    }
+}
+
 /// A preliminary type for [WeakRef]. Once inserted into document it can be used as a weak reference
 /// link to another value living inside of the document store.
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -123,6 +129,12 @@ impl Prelim for WeakPrelim {
     }
 
     fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {}
+}
+
+impl Into<EmbedPrelim<WeakPrelim>> for WeakPrelim {
+    fn into(self) -> EmbedPrelim<WeakPrelim> {
+        EmbedPrelim::Shared(self)
+    }
 }
 
 pub struct WeakEvent {
@@ -306,9 +318,11 @@ impl<'txn, T: ReadTxn> Iterator for Unquote<'txn, T> {
 #[cfg(test)]
 mod test {
     use crate::test_utils::exchange_updates;
-    use crate::types::{EntryChange, Event, ToJson, Value};
+    use crate::types::text::{Diff, YChange};
+    use crate::types::weak::WeakPrelim;
+    use crate::types::{Attrs, EntryChange, Event, ToJson, Value};
     use crate::{
-        Array, DeepObservable, Doc, Map, MapPrelim, MapRef, Observable, ReadTxn, Transact,
+        Array, DeepObservable, Doc, GetString, Map, MapPrelim, MapRef, Observable, Text, Transact,
     };
     use lib0::any::Any;
     use std::cell::RefCell;
@@ -461,6 +475,46 @@ mod test {
     }
 
     #[test]
+    fn self_quotation() {
+        let d1 = Doc::with_client_id(1);
+        let a1 = d1.get_or_insert_array("array");
+        let d2 = Doc::with_client_id(2);
+        let a2 = d2.get_or_insert_array("array");
+
+        a1.insert_range(&mut d1.transact_mut(), 0, [1, 2, 3, 4]);
+        let l1 = a1.quote(&d1.transact(), 0, 3).unwrap();
+        // link is inserted into its own range
+        let l1 = a1.insert(&mut d1.transact_mut(), 1, l1);
+        let t1 = d1.transact();
+        let unquote: Vec<_> = l1.unquote(&t1).collect();
+        assert_eq!(
+            unquote,
+            vec![1.into(), Value::YWeakLink(l1.clone()), 2.into(), 3.into()]
+        );
+        assert_eq!(a1.get(&t1, 0), Some(1.into()));
+        assert_eq!(a1.get(&t1, 1), Some(Value::YWeakLink(l1.clone())));
+        assert_eq!(a1.get(&t1, 2), Some(2.into()));
+        assert_eq!(a1.get(&t1, 3), Some(3.into()));
+        assert_eq!(a1.get(&t1, 4), Some(4.into()));
+        drop(t1);
+
+        exchange_updates(&[&d1, &d2]);
+
+        let t2 = d2.transact();
+        let l2 = a2.get(&t2, 1).unwrap().to_weak().unwrap();
+        let unquote: Vec<_> = l2.unquote(&t2).collect();
+        assert_eq!(
+            unquote,
+            vec![1.into(), Value::YWeakLink(l2.clone()), 2.into(), 3.into()]
+        );
+        assert_eq!(a2.get(&t2, 0), Some(1.into()));
+        assert_eq!(a2.get(&t2, 1), Some(Value::YWeakLink(l2.clone())));
+        assert_eq!(a2.get(&t2, 2), Some(2.into()));
+        assert_eq!(a2.get(&t2, 3), Some(3.into()));
+        assert_eq!(a2.get(&t2, 4), Some(4.into()));
+    }
+
+    #[test]
     fn update() {
         let d1 = Doc::new();
         let m1 = d1.get_or_insert_map("map");
@@ -520,8 +574,6 @@ mod test {
         exchange_updates(&[&d1, &d2]);
 
         // since links have been deleted, they no longer refer to any content
-        println!("{:#?}", d1.transact().store());
-        println!("{:#?}", d2.transact().store());
         assert_eq!(link1.try_deref_raw(&d1.transact()), None);
         assert_eq!(link2.try_deref_raw(&d2.transact()), None);
     }
@@ -811,23 +863,19 @@ mod test {
             let events = events.clone();
             map.observe_deep(move |txn, e| {
                 let mut rs = events.borrow_mut();
-                print!("events: ");
                 for e in e.iter() {
                     match e {
                         Event::Map(e) => {
-                            print!(" map");
                             let value = Value::YMap(e.target().clone());
                             rs.push((value, Some(e.keys(txn).clone())));
                         }
                         Event::Weak(e) => {
-                            print!(" weak_ref");
                             let value = Value::YWeakLink(e.target().clone());
                             rs.push((value, None));
                         }
                         _ => {}
                     }
                 }
-                println!("");
             })
         };
 
@@ -867,11 +915,175 @@ mod test {
         );
 
         // delete linked map
-        println!("before: {:#?}", doc.transact().store());
         array.remove(&mut doc.transact_mut(), 0);
-        println!("after: {:#?}", doc.transact().store());
         let actual = events.take();
         assert_eq!(actual, vec![(Value::YWeakLink(link.clone()), None)]);
+    }
+
+    #[test]
+    fn deep_observe_array() {
+        // test observers in a face of linked chains of values
+        /*
+          Structure:
+            - map:
+              - nested: --------+
+                - key: value    |
+            - array (observed): |
+              0: <--------------+
+        */
+        let doc = Doc::with_client_id(1);
+        let map = doc.get_or_insert_map("map");
+        let mut array = doc.get_or_insert_array("array");
+
+        let nested = map.insert(
+            &mut doc.transact_mut(),
+            "nested",
+            MapPrelim::<String>::new(),
+        );
+        let link = map.link(&doc.transact(), "nested").unwrap();
+        let link = array.insert(&mut doc.transact_mut(), 0, link);
+
+        let mut events = Rc::new(RefCell::new(vec![]));
+        let _sub = {
+            let events = events.clone();
+            array.observe_deep(move |txn, e| {
+                let mut events = events.borrow_mut();
+                for e in e.iter() {
+                    match e {
+                        Event::Map(e) => events
+                            .push((Value::YMap(e.target().clone()), Some(e.keys(&txn).clone()))),
+                        Event::Weak(e) => events.push((Value::YWeakLink(e.target().clone()), None)),
+                        _ => {}
+                    }
+                }
+            })
+        };
+        nested.insert(&mut doc.transact_mut(), "key", "value");
+        assert_eq!(
+            events.take(),
+            vec![(
+                Value::YMap(nested.clone()),
+                Some(HashMap::from([(
+                    Arc::from("key"),
+                    EntryChange::Inserted("value".into())
+                )]))
+            )]
+        );
+        // update existing entry
+        nested.insert(&mut doc.transact_mut(), "key", "value2");
+        assert_eq!(
+            events.take(),
+            vec![(
+                Value::YMap(nested.clone()),
+                Some(HashMap::from([(
+                    Arc::from("key"),
+                    EntryChange::Updated("value".into(), "value2".into())
+                )]))
+            )]
+        );
+
+        // delete entry in linked map
+        nested.remove(&mut doc.transact_mut(), "key");
+        assert_eq!(
+            events.take(),
+            vec![(
+                Value::YMap(nested.clone()),
+                Some(HashMap::from([(
+                    Arc::from("key"),
+                    EntryChange::Removed("value2".into())
+                )]))
+            )]
+        );
+
+        // delete linked map
+        map.remove(&mut doc.transact_mut(), "nested");
+        assert_eq!(events.take(), vec![(Value::YWeakLink(link), None)]);
+    }
+
+    #[test]
+    fn deep_observe_new_element_within_quoted_range() {
+        let d1 = Doc::with_client_id(1);
+        let a1 = d1.get_or_insert_array("array");
+        let d2 = Doc::with_client_id(2);
+        let a2 = d2.get_or_insert_array("array");
+
+        let (m1, m3) = {
+            let mut t1 = d1.transact_mut();
+            a1.push_back(&mut t1, 1);
+            let m1 = a1.push_back(&mut t1, MapPrelim::<String>::new());
+            let m3 = a1.push_back(&mut t1, MapPrelim::<String>::new());
+            a1.push_back(&mut t1, 2);
+            (m1, m3)
+        };
+        let mut l1 = {
+            let mut t1 = d1.transact_mut();
+            let link = a1.quote(&t1, 1, 2).unwrap();
+            a1.insert(&mut t1, 0, link)
+        };
+
+        exchange_updates(&[&d1, &d2]);
+
+        let mut e1 = Rc::new(RefCell::new(vec![]));
+        let _s1 = {
+            let events = e1.clone();
+            l1.observe_deep(move |txn, e| {
+                let mut events = events.borrow_mut();
+                events.clear();
+                for e in e.iter() {
+                    match e {
+                        Event::Map(e) => events
+                            .push((Value::YMap(e.target().clone()), Some(e.keys(txn).clone()))),
+                        Event::Weak(e) => events.push((Value::YWeakLink(e.target().clone()), None)),
+                        _ => {}
+                    }
+                }
+            })
+        };
+
+        let mut l2 = a2.get(&d2.transact(), 0).unwrap().to_weak().unwrap();
+        let mut e2 = Rc::new(RefCell::new(vec![]));
+        let _s2 = {
+            let events = e2.clone();
+            l2.observe_deep(move |txn, e| {
+                let mut events = events.borrow_mut();
+                events.clear();
+                for e in e.iter() {
+                    match e {
+                        Event::Map(e) => events
+                            .push((Value::YMap(e.target().clone()), Some(e.keys(txn).clone()))),
+                        Event::Weak(e) => events.push((Value::YWeakLink(e.target().clone()), None)),
+                        _ => {}
+                    }
+                }
+            })
+        };
+
+        let m20 = a1.insert(&mut d1.transact_mut(), 3, MapPrelim::<String>::new());
+        m20.insert(&mut d1.transact_mut(), "key", "value");
+        assert_eq!(
+            e1.take(),
+            vec![(
+                Value::YMap(m20.clone()),
+                Some(HashMap::from([(
+                    Arc::from("key"),
+                    EntryChange::Inserted("value".into())
+                )]))
+            )]
+        );
+
+        exchange_updates(&[&d1, &d2]);
+
+        let m21 = a2.get(&d2.transact(), 3).unwrap().to_ymap().unwrap();
+        assert_eq!(
+            e2.take(),
+            vec![(
+                Value::YMap(m21.clone()),
+                Some(HashMap::from([(
+                    Arc::from("key"),
+                    EntryChange::Inserted("value".into())
+                )]))
+            )]
+        );
     }
 
     #[test]
@@ -995,5 +1207,82 @@ mod test {
         assert_eq!(l1.try_deref_raw(&d1.transact()), Some(3.into()));
         assert_eq!(l2.try_deref_raw(&d2.transact()), Some(3.into()));
         assert_eq!(l3.try_deref_raw(&d3.transact()), Some(3.into()));
+    }
+
+    #[test]
+    fn basic_text() {
+        let d1 = Doc::with_client_id(1);
+        let txt1 = d1.get_or_insert_text("text");
+        let a1 = d1.get_or_insert_array("array");
+        let d2 = Doc::with_client_id(2);
+        let txt2 = d2.get_or_insert_text("text");
+        let a2 = d2.get_or_insert_array("array");
+
+        txt1.insert(&mut d1.transact_mut(), 0, "abcd"); // 'abcd'
+        let l1 = {
+            let mut txn = d1.transact_mut();
+            let q = txt1.quote(&mut txn, 1, 2); // quote: [bc]
+            a1.insert(&mut txn, 0, q.unwrap())
+        };
+        assert_eq!(l1.get_string(&d1.transact()), "bc".to_string());
+
+        txt1.insert(&mut d1.transact_mut(), 2, "ef"); // 'abefcd', quote: [befc]
+        assert_eq!(l1.get_string(&d1.transact()), "befc".to_string());
+
+        txt1.remove_range(&mut d1.transact_mut(), 3, 3); // 'abe', quote: [be]
+        assert_eq!(l1.get_string(&d1.transact()), "be".to_string());
+
+        txt1.insert_embed(&mut d1.transact_mut(), 3, WeakPrelim::from(l1.clone())); // 'abe[be]'
+
+        exchange_updates(&[&d1, &d2]);
+
+        let diff = txt2.diff(&d2.transact(), YChange::identity);
+        let l2 = diff[1].insert.clone().to_weak().unwrap();
+        assert_eq!(l2.get_string(&d2.transact()), "be".to_string());
+    }
+
+    #[test]
+    fn test_quote_formatted_text() {
+        let doc = Doc::with_client_id(1);
+        let txt1 = doc.get_or_insert_xml_text("text1");
+        let txt2 = doc.get_or_insert_xml_text("text2");
+        let array = doc.get_or_insert_array("array");
+        txt1.insert(&mut doc.transact_mut(), 0, "abcde");
+        let b = Attrs::from([("b".into(), true.into())]);
+        let i = Attrs::from([("i".into(), true.into())]);
+        txt1.format(&mut doc.transact_mut(), 0, 1, b.clone()); // '<b>a</b>bcde'
+        txt1.format(&mut doc.transact_mut(), 1, 3, i.clone()); // '<b>a</b><i>bcd</i>e'
+        let l1 = {
+            let mut txn = doc.transact_mut();
+            let l = txt1.quote(&mut txn, 0, 2).unwrap();
+            array.insert(&mut txn, 0, l) // <b>a</b><i>b</i>
+        };
+        let l2 = {
+            let mut txn = doc.transact_mut();
+            let l = txt1.quote(&mut txn, 2, 1).unwrap();
+            array.insert(&mut txn, 0, l) // <i>c</i>
+        };
+        let l3 = {
+            let mut txn = doc.transact_mut();
+            let l = txt1.quote(&mut txn, 3, 2).unwrap();
+            array.insert(&mut txn, 0, l) // <i>d</i>e
+        };
+        assert_eq!(l1.get_string(&doc.transact()), "<b>a</b><i>b</i>");
+        assert_eq!(l2.get_string(&doc.transact()), "<i>c</i>");
+        assert_eq!(l3.get_string(&doc.transact()), "<i>d</i>e");
+
+        txt2.insert_embed(&mut doc.transact_mut(), 0, WeakPrelim::from(l1.clone()));
+        txt2.insert_embed(&mut doc.transact_mut(), 1, WeakPrelim::from(l2.clone()));
+        txt2.insert_embed(&mut doc.transact_mut(), 2, WeakPrelim::from(l3.clone()));
+
+        let diff = txt2.diff(&doc.transact(), YChange::identity);
+        assert_eq!(
+            diff,
+            vec![
+                Diff::new(Value::YWeakLink(l1), None),
+                Diff::new(Value::YWeakLink(l2), None),
+                Diff::new(Value::YWeakLink(l3), None),
+            ]
+        );
     }
 }
