@@ -719,7 +719,7 @@ mod test {
                0: nested:-+
                  - key: value
         */
-        let doc = Doc::new();
+        let doc = Doc::with_client_id(1);
         let mut map = doc.get_or_insert_map("map");
         let array = doc.get_or_insert_array("array");
 
@@ -728,19 +728,23 @@ mod test {
             let events = events.clone();
             map.observe_deep(move |txn, e| {
                 let mut rs = events.borrow_mut();
+                print!("events: ");
                 for e in e.iter() {
                     match e {
                         Event::Map(e) => {
+                            print!(" map");
                             let value = Value::YMap(e.target().clone());
                             rs.push((value, Some(e.keys(txn).clone())));
                         }
                         Event::Weak(e) => {
+                            print!(" weak_ref");
                             let value = Value::YWeakLink(e.target().clone());
                             rs.push((value, None));
                         }
                         _ => {}
                     }
                 }
+                println!("");
             })
         };
 
@@ -760,7 +764,7 @@ mod test {
                 Value::YMap(nested.clone()),
                 Some(HashMap::from([(
                     Arc::from("key"),
-                    EntryChange::Inserted(Any::Undefined.into())
+                    EntryChange::Inserted("value".into())
                 )]))
             )]
         );
@@ -774,13 +778,16 @@ mod test {
                 Value::YMap(nested.clone()),
                 Some(HashMap::from([(
                     Arc::from("key"),
-                    EntryChange::Removed(Any::Undefined.into())
+                    EntryChange::Removed("value".into())
                 )]))
             )]
         );
 
         // delete linked map
+        println!("before: {:#?}", doc.transact().store());
         array.remove(&mut doc.transact_mut(), 0);
+        println!("after: {:#?}", doc.transact().store());
+        let actual = events.take();
         assert_eq!(actual, vec![(Value::YWeakLink(link.clone()), None)]);
     }
 
@@ -839,7 +846,7 @@ mod test {
                 m1.clone(),
                 HashMap::from([(
                     Arc::from("test-key1"),
-                    EntryChange::Inserted(Any::Undefined.into())
+                    EntryChange::Inserted("value1".into())
                 )])
             )]
         );
@@ -852,7 +859,7 @@ mod test {
                 m2.clone(),
                 HashMap::from([(
                     Arc::from("test-key2"),
-                    EntryChange::Inserted(Any::Undefined.into())
+                    EntryChange::Inserted("value2".into())
                 )])
             )]
         );
@@ -865,7 +872,7 @@ mod test {
                 m1.clone(),
                 HashMap::from([(
                     Arc::from("test-key1"),
-                    EntryChange::Removed(Any::Undefined.into())
+                    EntryChange::Removed("value1".into())
                 )])
             )]
         );

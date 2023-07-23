@@ -212,16 +212,16 @@ impl BranchPtr {
         if let Some(observers) = self.observers.as_ref() {
             Some(observers.publish(*self, txn, subs))
         } else {
-            let type_ref = self.type_ref();
-            match type_ref {
-                TYPE_REFS_TEXT => Some(Event::Text(TextEvent::new(*self))),
-                TYPE_REFS_MAP => Some(Event::Map(MapEvent::new(*self, subs))),
-                TYPE_REFS_ARRAY => Some(Event::Array(ArrayEvent::new(*self))),
-                TYPE_REFS_XML_TEXT => Some(Event::XmlText(XmlTextEvent::new(*self, subs))),
-                TYPE_REFS_XML_ELEMENT | TYPE_REFS_XML_FRAGMENT => {
+            match self.type_ref {
+                TypeRef::Array => Some(Event::Array(ArrayEvent::new(*self))),
+                TypeRef::Map => Some(Event::Map(MapEvent::new(*self, subs))),
+                TypeRef::Text => Some(Event::Text(TextEvent::new(*self))),
+                TypeRef::XmlText => Some(Event::XmlText(XmlTextEvent::new(*self, subs))),
+                TypeRef::XmlElement(_) | TypeRef::XmlFragment => {
                     Some(Event::XmlFragment(XmlEvent::new(*self, subs)))
                 }
-                _ => None,
+                TypeRef::WeakLink(_) => Some(Event::Weak(WeakEvent::new(*self))),
+                TypeRef::XmlHook | TypeRef::SubDoc | TypeRef::Undefined => None,
             }
         }
     }
@@ -1654,7 +1654,7 @@ impl Event {
             Event::Map(e) => e.current_target = target,
             Event::XmlText(e) => e.current_target = target,
             Event::XmlFragment(e) => e.current_target = target,
-            Event::Weak(e) => todo!(),
+            Event::Weak(e) => e.current_target = target,
         }
     }
 
@@ -1683,7 +1683,7 @@ impl Event {
                 XmlNode::Fragment(n) => Value::YXmlFragment(n.clone()),
                 XmlNode::Text(n) => Value::YXmlText(n.clone()),
             },
-            Event::Weak(_) => todo!(),
+            Event::Weak(e) => Value::YWeakLink(e.target().clone()),
         }
     }
 }
