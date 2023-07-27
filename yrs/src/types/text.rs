@@ -569,17 +569,23 @@ where
                         if scope > 0 {
                             self.buf.push_str(&s.as_str()[scope as usize..]);
                             scope = 0;
-                        } else if let Some(end) = end {
-                            if item.contains(end) {
-                                // we reached the end or range
-                                let offset = (item.id.clock + item.len - end.clock - 1) as usize;
-                                let s = s.as_str();
-                                self.buf.push_str(&s[..(s.len() + offset)]);
-                                self.pack_str();
-                                break 'LOOP;
+                        } else {
+                            match end {
+                                Some(end) if item.contains(end) => {
+                                    // we reached the end or range
+                                    let offset =
+                                        (item.id.clock + item.len - end.clock - 1) as usize;
+                                    let s = s.as_str();
+                                    self.buf.push_str(&s[..(s.len() + offset)]);
+                                    self.pack_str();
+                                    break 'LOOP;
+                                }
+                                _ => {
+                                    if scope == 0 {
+                                        self.buf.push_str(s.as_str());
+                                    }
+                                }
                             }
-                        } else if scope == 0 {
-                            self.buf.push_str(s.as_str());
                         }
                     }
                     ItemContent::Type(_) | ItemContent::Embed(_) => {

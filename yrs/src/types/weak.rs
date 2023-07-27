@@ -1310,13 +1310,18 @@ mod test {
         txt2.insert_embed(&mut doc.transact_mut(), 1, WeakPrelim::from(l2.clone()));
         txt2.insert_embed(&mut doc.transact_mut(), 2, WeakPrelim::from(l3.clone()));
 
-        let diff = txt2.diff(&doc.transact(), YChange::identity);
+        let txn = doc.transact();
+        let diff: Vec<_> = txt2
+            .diff(&txn, YChange::identity)
+            .into_iter()
+            .map(|d| d.insert.to_weak().unwrap().get_string(&txn))
+            .collect();
         assert_eq!(
             diff,
             vec![
-                Diff::new(Value::YWeakLink(l1), None),
-                Diff::new(Value::YWeakLink(l2), None),
-                Diff::new(Value::YWeakLink(l3), None),
+                "<b>a</b><i>b</i>".to_string(),
+                "<i>c</i>".to_string(),
+                "<i>d</i>e".to_string()
             ]
         );
     }
