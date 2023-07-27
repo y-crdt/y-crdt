@@ -346,8 +346,10 @@ pub trait Text: AsRef<Branch> {
                     let slice = BlockSlice::new(left, 0, left.len() - overflow - 1);
                     end_item = Some(txn.store.materialize(slice));
                 }
+                if let (Some(start), Some(end)) = (start_item, end_item) {
+                    return Some(WeakPrelim::new(start.id().clone(), end.last_id()));
+                }
             }
-            todo!()
         }
         None
     }
@@ -601,6 +603,21 @@ where
 
         self.pack_str();
     }
+}
+
+/// Returns the Delta representation of this YText type.
+pub(crate) fn diff_between<D, F>(
+    ptr: Option<BlockPtr>,
+    start: Option<&ID>,
+    end: Option<&ID>,
+    compute_ychange: F,
+) -> Vec<Diff<D>>
+where
+    F: Fn(YChange) -> D,
+{
+    let mut asm = DiffAssembler::new(compute_ychange);
+    asm.process(ptr, None, None, start, end);
+    asm.finish()
 }
 
 pub(crate) fn update_current_attributes(attrs: &mut Attrs, key: &str, value: &Any) {

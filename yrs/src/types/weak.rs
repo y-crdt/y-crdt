@@ -1,7 +1,7 @@
 use crate::atomic::AtomicRef;
 use crate::block::{Block, BlockPtr, BlockSlice, EmbedPrelim, ItemContent, Prelim};
 use crate::types::{Branch, BranchPtr, EventHandler, Observers, TypeRef, Value};
-use crate::{GetString, Observable, OffsetKind, ReadTxn, TransactionMut, ID};
+use crate::{GetString, Observable, OffsetKind, ReadTxn, TransactionMut, XmlTextRef, ID};
 use std::convert::TryFrom;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
@@ -95,7 +95,41 @@ impl Observable for WeakRef {
 
 impl GetString for WeakRef {
     fn get_string<T: ReadTxn>(&self, txn: &T) -> String {
-        todo!()
+        if let TypeRef::WeakLink(source) = &self.0.type_ref {
+            let mut curr = source.first_item.get_owned();
+            if let Some(Block::Item(item)) = curr.as_deref() {
+                if let Some(branch) = item.parent.as_branch() {
+                    match &branch.type_ref {
+                        TypeRef::Text => {
+                            let mut result = String::new();
+                            while let Some(Block::Item(item)) = curr.as_deref() {
+                                if !item.is_deleted() {
+                                    if let ItemContent::String(s) = &item.content {
+                                        result.push_str(s.as_str());
+                                    }
+                                }
+                                if item.last_id() == source.quote_end {
+                                    break;
+                                }
+                                curr = item.right;
+                            }
+                            return result;
+                        }
+                        TypeRef::XmlText => {
+                            return XmlTextRef::get_string_fragment(
+                                branch.start,
+                                Some(&source.quote_start),
+                                Some(&source.quote_end),
+                            );
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            "".to_string()
+        } else {
+            panic!("Defect: called WeakRef::get_string on non WeakRef shared type")
+        }
     }
 }
 
@@ -1059,6 +1093,7 @@ mod test {
         };
 
         let m20 = a1.insert(&mut d1.transact_mut(), 3, MapPrelim::<String>::new());
+        exchange_updates(&[&d1, &d2]);
         m20.insert(&mut d1.transact_mut(), "key", "value");
         assert_eq!(
             e1.take(),

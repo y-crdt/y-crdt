@@ -1,7 +1,7 @@
 use crate::block::{Block, BlockPtr, EmbedPrelim, Item, ItemContent, ItemPosition, Prelim};
 use crate::block_iter::BlockIter;
 use crate::transaction::TransactionMut;
-use crate::types::text::{TextEvent, YChange};
+use crate::types::text::{diff_between, TextEvent, YChange};
 use crate::types::{
     event_change_set, event_keys, Branch, BranchPtr, Change, ChangeSet, Delta, Entries,
     EntryChange, EventHandler, MapRef, Observers, Path, ToJson, TypePtr, TypeRef, Value,
@@ -367,6 +367,48 @@ where
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct XmlTextRef(BranchPtr);
 
+impl XmlTextRef {
+    pub(crate) fn get_string_fragment(
+        head: Option<BlockPtr>,
+        start: Option<&ID>,
+        end: Option<&ID>,
+    ) -> String {
+        let mut buf = String::new();
+        for d in diff_between(head, start, end, YChange::identity) {
+            let mut attrs = Vec::new();
+            if let Some(attributes) = d.attributes.as_ref() {
+                for (key, value) in attributes.iter() {
+                    attrs.push((key, value));
+                }
+                attrs.sort_by(|x, y| x.0.cmp(y.0))
+            }
+
+            // write attributes as xml opening tags
+            for (node, at) in attrs.iter() {
+                write!(buf, "<{}", node).unwrap();
+                if let Any::Map(at) = at {
+                    for (k, v) in at.iter() {
+                        write!(buf, " {}=\"{}\"", k, v).unwrap();
+                    }
+                }
+                buf.push('>');
+            }
+
+            // write string content of delta
+            if let Value::Any(any) = d.insert {
+                write!(buf, "{}", any).unwrap();
+            }
+
+            // write attributes as xml closing tags
+            attrs.reverse();
+            for (key, _) in attrs {
+                write!(buf, "</{}>", key).unwrap();
+            }
+        }
+        buf
+    }
+}
+
 impl Xml for XmlTextRef {}
 impl Text for XmlTextRef {}
 impl IndexedSequence for XmlTextRef {}
@@ -399,39 +441,7 @@ impl Observable for XmlTextRef {
 
 impl GetString for XmlTextRef {
     fn get_string<T: ReadTxn>(&self, txn: &T) -> String {
-        let mut buf = String::new();
-        for d in self.diff(txn, YChange::identity) {
-            let mut attrs = Vec::new();
-            if let Some(attributes) = d.attributes.as_ref() {
-                for (key, value) in attributes.iter() {
-                    attrs.push((key, value));
-                }
-                attrs.sort_by(|x, y| x.0.cmp(y.0))
-            }
-
-            // write attributes as xml opening tags
-            for (node, at) in attrs.iter() {
-                write!(buf, "<{}", node).unwrap();
-                if let Any::Map(at) = at {
-                    for (k, v) in at.iter() {
-                        write!(buf, " {}=\"{}\"", k, v).unwrap();
-                    }
-                }
-                buf.push('>');
-            }
-
-            // write string content of delta
-            if let Value::Any(any) = d.insert {
-                write!(buf, "{}", any).unwrap();
-            }
-
-            // write attributes as xml closing tags
-            attrs.reverse();
-            for (key, _) in attrs {
-                write!(buf, "</{}>", key).unwrap();
-            }
-        }
-        buf
+        XmlTextRef::get_string_fragment(self.0.start, None, None)
     }
 }
 
