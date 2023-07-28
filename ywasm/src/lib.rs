@@ -1022,17 +1022,20 @@ pub struct YArrayEvent {
     txn: *const TransactionMut<'static>,
     target: Option<JsValue>,
     delta: Option<JsValue>,
+    origin: JsValue,
 }
 
 #[wasm_bindgen]
 impl YArrayEvent {
     fn new<'doc>(event: &ArrayEvent, txn: &TransactionMut<'doc>) -> Self {
+        let origin = from_origin(txn.origin());
         let inner = event as *const ArrayEvent;
         let txn: &TransactionMut<'static> = unsafe { std::mem::transmute(txn) };
         let txn = txn as *const TransactionMut<'static>;
         YArrayEvent {
             inner,
             txn,
+            origin,
             target: None,
             delta: None,
         }
@@ -1044,6 +1047,11 @@ impl YArrayEvent {
 
     fn txn(&self) -> &TransactionMut {
         unsafe { self.txn.as_ref().unwrap() }
+    }
+
+    #[wasm_bindgen(getter, js_name = origin)]
+    pub fn origin(&self) -> JsValue {
+        self.origin.clone()
     }
 
     /// Returns a current shared type instance, that current event changes refer to.
@@ -1097,17 +1105,20 @@ pub struct YMapEvent {
     txn: *const TransactionMut<'static>,
     target: Option<JsValue>,
     keys: Option<JsValue>,
+    origin: JsValue,
 }
 
 #[wasm_bindgen]
 impl YMapEvent {
     fn new<'doc>(event: &MapEvent, txn: &TransactionMut<'doc>) -> Self {
+        let origin = from_origin(txn.origin());
         let inner = event as *const MapEvent;
         let txn: &TransactionMut<'static> = unsafe { std::mem::transmute(txn) };
         let txn = txn as *const TransactionMut<'static>;
         YMapEvent {
             inner,
             txn,
+            origin,
             target: None,
             keys: None,
         }
@@ -1119,6 +1130,11 @@ impl YMapEvent {
 
     fn txn(&self) -> &TransactionMut {
         unsafe { self.txn.as_ref().unwrap() }
+    }
+
+    #[wasm_bindgen(getter, js_name = origin)]
+    pub fn origin(&self) -> JsValue {
+        self.origin.clone()
     }
 
     /// Returns a current shared type instance, that current event changes refer to.
@@ -1170,17 +1186,20 @@ pub struct YTextEvent {
     txn: *const TransactionMut<'static>,
     target: Option<JsValue>,
     delta: Option<JsValue>,
+    origin: JsValue,
 }
 
 #[wasm_bindgen]
 impl YTextEvent {
     fn new<'doc>(event: &TextEvent, txn: &TransactionMut<'doc>) -> Self {
+        let origin = from_origin(txn.origin());
         let inner = event as *const TextEvent;
         let txn: &TransactionMut<'static> = unsafe { std::mem::transmute(txn) };
         let txn = txn as *const TransactionMut<'static>;
         YTextEvent {
             inner,
             txn,
+            origin,
             target: None,
             delta: None,
         }
@@ -1192,6 +1211,11 @@ impl YTextEvent {
 
     fn txn(&self) -> &TransactionMut {
         unsafe { self.txn.as_ref().unwrap() }
+    }
+
+    #[wasm_bindgen(getter, js_name = origin)]
+    pub fn origin(&self) -> JsValue {
+        self.origin.clone()
     }
 
     /// Returns a current shared type instance, that current event changes refer to.
@@ -1246,17 +1270,20 @@ pub struct YXmlEvent {
     target: Option<JsValue>,
     keys: Option<JsValue>,
     delta: Option<JsValue>,
+    origin: JsValue,
 }
 
 #[wasm_bindgen]
 impl YXmlEvent {
     fn new<'doc>(event: &XmlEvent, txn: &TransactionMut<'doc>) -> Self {
+        let origin = from_origin(txn.origin());
         let inner = event as *const XmlEvent;
         let txn: &TransactionMut<'static> = unsafe { std::mem::transmute(txn) };
         let txn = txn as *const TransactionMut<'static>;
         YXmlEvent {
             inner,
             txn,
+            origin,
             target: None,
             delta: None,
             keys: None,
@@ -1269,6 +1296,11 @@ impl YXmlEvent {
 
     fn txn(&self) -> &TransactionMut {
         unsafe { self.txn.as_ref().unwrap() }
+    }
+
+    #[wasm_bindgen(getter, js_name = origin)]
+    pub fn origin(&self) -> JsValue {
+        self.origin.clone()
     }
 
     /// Returns a current shared type instance, that current event changes refer to.
@@ -1346,17 +1378,20 @@ pub struct YXmlTextEvent {
     target: Option<JsValue>,
     delta: Option<JsValue>,
     keys: Option<JsValue>,
+    origin: JsValue,
 }
 
 #[wasm_bindgen]
 impl YXmlTextEvent {
     fn new<'doc>(event: &XmlTextEvent, txn: &TransactionMut<'doc>) -> Self {
+        let origin = from_origin(txn.origin());
         let inner = event as *const XmlTextEvent;
         let txn: &TransactionMut<'static> = unsafe { std::mem::transmute(txn) };
         let txn = txn as *const TransactionMut<'static>;
         YXmlTextEvent {
             inner,
             txn,
+            origin,
             target: None,
             delta: None,
             keys: None,
@@ -1369,6 +1404,11 @@ impl YXmlTextEvent {
 
     fn txn(&self) -> &TransactionMut {
         unsafe { self.txn.as_ref().unwrap() }
+    }
+
+    #[wasm_bindgen(getter, js_name = origin)]
+    pub fn origin(&self) -> JsValue {
+        self.origin.clone()
     }
 
     /// Returns a current shared type instance, that current event changes refer to.
@@ -3617,11 +3657,7 @@ impl YUndoEvent {
         .unwrap();
         YUndoEvent {
             stack_item,
-            origin: e
-                .origin
-                .as_ref()
-                .map(|origin| Uint8Array::from(origin.as_ref()).into())
-                .unwrap_or(JsValue::NULL),
+            origin: from_origin(e.origin.as_ref()),
             kind: match e.kind {
                 EventKind::Undo => JsValue::from_str("undo"),
                 EventKind::Redo => JsValue::from_str("redo"),
@@ -3864,6 +3900,12 @@ fn any_into_js(v: &Any) -> JsValue {
             m.into()
         }
     }
+}
+
+fn from_origin(origin: Option<&Origin>) -> JsValue {
+    origin
+        .map(|origin| Uint8Array::from(origin.as_ref()).into())
+        .unwrap_or(JsValue::NULL)
 }
 
 fn value_into_js(v: Value) -> JsValue {
