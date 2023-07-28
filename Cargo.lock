@@ -392,7 +392,7 @@ checksum = "e2abad23fbc42b3700f2f279844dc832adb2b2eb069b2df918f455c4e18cc646"
 
 [[package]]
 name = "lib0"
-version = "0.16.9"
+version = "0.16.10"
 dependencies = [
  "criterion",
  "proptest",
@@ -1205,7 +1205,7 @@ checksum = "1a515f5799fe4961cb532f983ce2b23082366b898e52ffbce459c86f67c8378a"
 
 [[package]]
 name = "yffi"
-version = "0.16.9"
+version = "0.16.10"
 dependencies = [
  "lib0",
  "rand 0.7.3",
@@ -1214,7 +1214,7 @@ dependencies = [
 
 [[package]]
 name = "yrs"
-version = "0.16.9"
+version = "0.16.10"
 dependencies = [
  "atomic_refcell",
  "criterion",
@@ -1231,7 +1231,7 @@ dependencies = [
 
 [[package]]
 name = "ywasm"
-version = "0.16.9"
+version = "0.16.10"
 dependencies = [
  "console_error_panic_hook",
  "js-sys",
