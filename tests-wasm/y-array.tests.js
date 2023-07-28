@@ -137,15 +137,20 @@ export const testObserver = tc => {
     const x = d1.getArray('test')
     let target = null
     let delta = null
+    let origin = null
     let observer = x.observe(e => {
         target = e.target
         delta = e.delta
+        origin = e.origin
     })
 
     // insert initial data to an empty YArray
-    x.insert(0, [1,2,3,4])
+    d1.transact((txn) => {
+        x.insert(0, [1,2,3,4], txn)
+    }, 'TEST_ORIGIN')
     t.compare(target.toJson(), x.toJson())
     t.compare(delta, [{insert: [1,2,3,4]}])
+    t.compare(origin, 'TEST_ORIGIN')
     target = null
     delta = null
 
@@ -153,6 +158,7 @@ export const testObserver = tc => {
     x.delete(1, 2)
     t.compare(target.toJson(), x.toJson())
     t.compare(delta, [{retain:1}, {delete: 2}])
+    t.compare(origin, undefined)
     target = null
     delta = null
 

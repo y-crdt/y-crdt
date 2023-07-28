@@ -3,8 +3,8 @@ import * as Y from 'ywasm'
 /**
  * @this {YDoc}
  */
-Y.YDoc.prototype.transact = function(callback) {
-  let txn = this.writeTransaction()
+Y.YDoc.prototype.transact = function(callback, origin) {
+  let txn = this.writeTransaction(origin)
   try {
       return callback(txn)
   } finally {

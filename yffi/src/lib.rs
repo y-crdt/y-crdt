@@ -4732,7 +4732,7 @@ impl Drop for YDelta {
                 let len = self.attributes_len as usize;
                 drop(Vec::from_raw_parts(self.attributes, len, len));
             }
-            if !self.attributes.is_null() {
+            if !self.insert.is_null() {
                 drop(Box::from_raw(self.insert));
             }
         }
