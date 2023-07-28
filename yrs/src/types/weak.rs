@@ -14,23 +14,18 @@ use std::sync::Arc;
 pub struct WeakRef<P>(P);
 
 impl<P: SharedRef> SharedRef for WeakRef<P> {}
-impl From<BranchPtr> for WeakRef<BranchPtr> {
-    fn from(value: BranchPtr) -> Self {
-        WeakRef(value)
-    }
-}
 impl<P: SharedRef> From<WeakRef<BranchPtr>> for WeakRef<P> {
     fn from(value: WeakRef<BranchPtr>) -> Self {
         WeakRef(P::from(value.0))
     }
 }
-impl<P: SharedRef> AsRef<Branch> for WeakRef<P> {
+impl<P: AsRef<Branch>> AsRef<Branch> for WeakRef<P> {
     fn as_ref(&self) -> &Branch {
         self.0.as_ref()
     }
 }
 
-impl<P: SharedRef> From<BranchPtr> for WeakRef<P> {
+impl<P: From<BranchPtr>> From<BranchPtr> for WeakRef<P> {
     fn from(inner: BranchPtr) -> Self {
         WeakRef(P::from(inner))
     }
@@ -50,10 +45,7 @@ impl<P: SharedRef> TryFrom<BlockPtr> for WeakRef<P> {
     }
 }
 
-impl<P> AsMut<Branch> for WeakRef<P>
-where
-    P: SharedRef + AsMut<Branch>,
-{
+impl<P: AsMut<Branch>> AsMut<Branch> for WeakRef<P> {
     fn as_mut(&mut self) -> &mut Branch {
         self.0.as_mut()
     }
@@ -61,7 +53,7 @@ where
 
 impl<P> Observable for WeakRef<P>
 where
-    P: SharedRef + AsMut<Branch>,
+    P: AsRef<Branch> + AsMut<Branch>,
 {
     type Event = WeakEvent;
 

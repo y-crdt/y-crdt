@@ -1506,9 +1506,9 @@ impl YWeakLinkEvent {
         if let Some(target) = self.target.as_ref() {
             target.clone()
         } else {
-            let node = self.inner().target().clone();
-            let target: JsValue = xml_into_js(node);
-            self.target = Some(target.clone());
+            let node = self.inner().as_target::<BranchPtr>();
+            let target: JsValue = YWeakLink::from(node).into();
+            self.target = Some(target);
             target
         }
     }
@@ -1518,28 +1518,6 @@ impl YWeakLinkEvent {
     #[wasm_bindgen(method)]
     pub fn path(&self) -> JsValue {
         path_into_js(self.inner().path())
-    }
-
-    /// Returns a list of attribute changes made over corresponding `YXmlText` collection within
-    /// bounds of current transaction. These changes follow a format:
-    ///
-    /// - { action: 'add'|'update'|'delete', oldValue: string|undefined, newValue: string|undefined }
-    #[wasm_bindgen(method, getter)]
-    pub fn keys(&mut self) -> JsValue {
-        if let Some(keys) = &self.keys {
-            keys.clone()
-        } else {
-            let keys = self.inner().keys(self.txn());
-            let result = js_sys::Object::new();
-            for (key, value) in keys.iter() {
-                let key = JsValue::from(key.as_ref());
-                let value = entry_change_into_js(value);
-                js_sys::Reflect::set(&result, &key, &value).unwrap();
-            }
-            let keys: JsValue = result.into();
-            self.keys = Some(keys.clone());
-            keys
-        }
     }
 
     /// Returns a list of XML child node changes made over corresponding `YXmlElement` collection
@@ -3618,20 +3596,24 @@ impl YXmlText {
 }
 
 #[wasm_bindgen]
-pub struct YWeakLink(RefCell<SharedType<WeakRef, WeakPrelim>>);
+pub struct YWeakLink(RefCell<SharedType<WeakRef<BranchPtr>, WeakPrelim<BranchPtr>>>);
 
 #[wasm_bindgen]
 impl YWeakLink {
     /// Returns a number of child XML nodes stored within this `YXMlElement` instance.
     #[wasm_bindgen(catch, js_name = length)]
-    pub fn deref(&self) -> Result<JsValue, JsValue> {
+    pub fn deref(&self, txn: &ImplicitTransaction) -> Result<JsValue, JsValue> {
         match &*self.0.borrow() {
             SharedType::Integrated(v) => {
-                if let Some(value) = v.try_deref_raw() {
-                    Ok(value_into_js(value))
+                let branch: &Branch = v.as_ref();
+                let weak_map_ref: WeakRef<MapRef> = WeakRef::from(BranchPtr::from(branch));
+                let value = if let Some(txn) = get_txn(txn) {
+                    weak_map_ref.try_deref_raw(&*txn)
                 } else {
-                    Ok(JsValue::UNDEFINED)
-                }
+                    let mut txn = branch.transact_mut();
+                    weak_map_ref.try_deref_raw(&txn)
+                };
+                Ok(value.map(value_into_js).unwrap_or(JsValue::UNDEFINED))
             }
             SharedType::Prelim(v) => Err(JsValue::from_str(
                 "cannot dereference WeakLink, which has not be integrated",
@@ -3679,9 +3661,9 @@ impl YWeakLink {
     }
 }
 
-impl From<WeakRef> for YWeakLink {
-    fn from(v: WeakRef) -> Self {
-        YWeakLink(SharedType::new(v))
+impl<P: AsRef<Branch>> From<WeakRef<P>> for YWeakLink {
+    fn from(v: WeakRef<P>) -> Self {
+        YWeakLink(SharedType::new(v.into_inner()))
     }
 }
 

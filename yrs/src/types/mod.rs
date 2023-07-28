@@ -257,6 +257,12 @@ impl AsRef<Branch> for BranchPtr {
     }
 }
 
+impl AsMut<Branch> for BranchPtr {
+    fn as_mut(&mut self) -> &mut Branch {
+        self.deref_mut()
+    }
+}
+
 impl Deref for BranchPtr {
     type Target = Branch;
 
