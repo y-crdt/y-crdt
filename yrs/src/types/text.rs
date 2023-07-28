@@ -5,7 +5,7 @@ use crate::block_store::Snapshot;
 use crate::transaction::TransactionMut;
 use crate::types::weak::WeakPrelim;
 use crate::types::{
-    Attrs, Branch, BranchPtr, Delta, EventHandler, Observers, Path, TypeRef, Value,
+    Attrs, Branch, BranchPtr, Delta, EventHandler, Observers, Path, SharedRef, TypeRef, Value,
 };
 use crate::utils::OptionExt;
 use crate::*;
@@ -96,6 +96,7 @@ use std::ops::{Deref, DerefMut};
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct TextRef(BranchPtr);
 
+impl SharedRef for TextRef {}
 impl Text for TextRef {}
 impl IndexedSequence for TextRef {}
 
@@ -156,7 +157,7 @@ impl TryFrom<BlockPtr> for TextRef {
     }
 }
 
-pub trait Text: AsRef<Branch> {
+pub trait Text: AsRef<Branch> + Sized {
     /// Returns a number of characters visible in a current text data structure.
     fn len<T: ReadTxn>(&self, txn: &T) -> u32 {
         self.as_ref().content_len
@@ -330,7 +331,7 @@ pub trait Text: AsRef<Branch> {
 
     /// Returns [WeakPrelim] to quote starting at a given `index`,
     /// if it's in a boundaries of a current array.
-    fn quote(&self, txn: &mut TransactionMut, index: u32, len: u32) -> Option<WeakPrelim> {
+    fn quote(&self, txn: &mut TransactionMut, index: u32, len: u32) -> Option<WeakPrelim<Self>> {
         let this = BranchPtr::from(self.as_ref());
         let mut pos = find_position(this, txn, index)?;
         if let Some(right) = pos.right.as_deref() {

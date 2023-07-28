@@ -1,11 +1,11 @@
-use crate::block::{Block, BlockPtr, BlockSlice, EmbedPrelim, ItemContent, Prelim, Unused};
+use crate::block::{Block, BlockPtr, EmbedPrelim, ItemContent, Prelim, Unused};
 use crate::block_iter::BlockIter;
 use crate::moving::StickyIndex;
 use crate::transaction::TransactionMut;
 use crate::types::weak::{LinkSource, WeakPrelim};
 use crate::types::{
-    event_change_set, Branch, BranchPtr, Change, ChangeSet, EventHandler, Observers, Path, ToJson,
-    TypeRef, Value,
+    event_change_set, Branch, BranchPtr, Change, ChangeSet, EventHandler, Observers, Path,
+    SharedRef, ToJson, TypeRef, Value,
 };
 use crate::{Assoc, IndexedSequence, Observable, ReadTxn, ID};
 use lib0::any::Any;
@@ -76,6 +76,7 @@ use std::sync::Arc;
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct ArrayRef(BranchPtr);
 
+impl SharedRef for ArrayRef {}
 impl Array for ArrayRef {}
 impl IndexedSequence for ArrayRef {}
 
@@ -141,7 +142,7 @@ impl TryFrom<BlockPtr> for ArrayRef {
     }
 }
 
-pub trait Array: AsRef<Branch> {
+pub trait Array: AsRef<Branch> + Sized {
     /// Returns a number of elements stored in current array.
     fn len<T: ReadTxn>(&self, txn: &T) -> u32 {
         self.as_ref().len()
@@ -239,7 +240,7 @@ pub trait Array: AsRef<Branch> {
     }
 
     /// Returns [WeakPrelim] to a given `index`, if it's in a boundaries of a current array.
-    fn quote<T: ReadTxn>(&self, txn: &T, mut index: u32, len: u32) -> Option<WeakPrelim> {
+    fn quote<T: ReadTxn>(&self, txn: &T, mut index: u32, len: u32) -> Option<WeakPrelim<Self>> {
         if len == 0 {
             return None;
         }
@@ -291,7 +292,7 @@ pub trait Array: AsRef<Branch> {
         match (start_id, end_id) {
             (Some(start), Some(end)) => {
                 let source = LinkSource::new(start, end);
-                Some(WeakPrelim(Arc::new(source)))
+                Some(WeakPrelim::with_source(Arc::new(source)))
             }
             _ => None,
         }

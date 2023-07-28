@@ -1,18 +1,145 @@
 use crate::atomic::AtomicRef;
 use crate::block::{Block, BlockPtr, BlockSlice, EmbedPrelim, ItemContent, Prelim};
-use crate::types::{Branch, BranchPtr, EventHandler, Observers, TypeRef, Value};
-use crate::{GetString, Observable, OffsetKind, ReadTxn, TransactionMut, XmlTextRef, ID};
+use crate::types::{Branch, BranchPtr, EventHandler, Observers, SharedRef, TypeRef, Value};
+use crate::{
+    Array, GetString, Map, Observable, OffsetKind, ReadTxn, TextRef, TransactionMut, XmlTextRef, ID,
+};
 use std::convert::TryFrom;
+use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
 #[repr(transparent)]
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub struct WeakRef(BranchPtr);
+pub struct WeakRef<P>(P);
 
-impl WeakRef {
+impl<P: SharedRef> SharedRef for WeakRef<P> {}
+impl From<BranchPtr> for WeakRef<BranchPtr> {
+    fn from(value: BranchPtr) -> Self {
+        WeakRef(value)
+    }
+}
+impl<P: SharedRef> From<WeakRef<BranchPtr>> for WeakRef<P> {
+    fn from(value: WeakRef<BranchPtr>) -> Self {
+        WeakRef(P::from(value.0))
+    }
+}
+impl<P: SharedRef> AsRef<Branch> for WeakRef<P> {
+    fn as_ref(&self) -> &Branch {
+        self.0.as_ref()
+    }
+}
+
+impl<P: SharedRef> From<BranchPtr> for WeakRef<P> {
+    fn from(inner: BranchPtr) -> Self {
+        WeakRef(P::from(inner))
+    }
+}
+
+impl<P: SharedRef> TryFrom<BlockPtr> for WeakRef<P> {
+    type Error = BlockPtr;
+
+    fn try_from(value: BlockPtr) -> Result<Self, Self::Error> {
+        if let Block::Item(item) = value.deref() {
+            if let ItemContent::Type(branch) = &item.content {
+                let branch = BranchPtr::from(branch.deref());
+                return Ok(Self::from(branch));
+            }
+        }
+        Err(value)
+    }
+}
+
+impl<P> AsMut<Branch> for WeakRef<P>
+where
+    P: SharedRef + AsMut<Branch>,
+{
+    fn as_mut(&mut self) -> &mut Branch {
+        self.0.as_mut()
+    }
+}
+
+impl<P> Observable for WeakRef<P>
+where
+    P: SharedRef + AsMut<Branch>,
+{
+    type Event = WeakEvent;
+
+    fn try_observer(&self) -> Option<&EventHandler<Self::Event>> {
+        let branch = self.0.as_ref();
+        if let Some(Observers::Weak(eh)) = branch.observers.as_ref() {
+            Some(eh)
+        } else {
+            None
+        }
+    }
+
+    fn try_observer_mut(&mut self) -> Option<&mut EventHandler<Self::Event>> {
+        let branch = self.0.as_mut();
+        if let Observers::Weak(eh) = branch.observers.get_or_insert_with(Observers::weak) {
+            Some(eh)
+        } else {
+            None
+        }
+    }
+}
+
+impl GetString for WeakRef<TextRef> {
+    fn get_string<T: ReadTxn>(&self, txn: &T) -> String {
+        let mut result = String::new();
+        let branch = self.0.as_ref();
+        if let TypeRef::WeakLink(source) = &branch.type_ref {
+            let mut curr = source.first_item.get_owned();
+            while let Some(Block::Item(item)) = curr.as_deref() {
+                if !item.is_deleted() {
+                    if let ItemContent::String(s) = &item.content {
+                        result.push_str(s.as_str());
+                    }
+                }
+                if item.last_id() == source.quote_end {
+                    break;
+                }
+                curr = item.right;
+            }
+        }
+        result
+    }
+}
+
+impl GetString for WeakRef<XmlTextRef> {
+    fn get_string<T: ReadTxn>(&self, txn: &T) -> String {
+        let branch = self.0.as_ref();
+        if let TypeRef::WeakLink(source) = &branch.type_ref {
+            let mut curr = source.first_item.get_owned();
+            if let Some(Block::Item(item)) = curr.as_deref() {
+                if let Some(branch) = item.parent.as_branch() {
+                    let start = Some(&source.quote_start);
+                    let end = Some(&source.quote_end);
+                    return XmlTextRef::get_string_fragment(branch.start, start, end);
+                }
+            }
+        }
+        String::new()
+    }
+}
+
+impl<P: AsRef<Branch>> WeakRef<P> {
+    pub fn into_inner(self) -> WeakRef<BranchPtr> {
+        WeakRef(BranchPtr::from(self.0.as_ref()))
+    }
+}
+
+impl<P> WeakRef<P>
+where
+    P: SharedRef + Map,
+{
     pub fn try_deref_raw<T: ReadTxn>(&self, txn: &T) -> Option<Value> {
-        self.unquote(txn).next()
+        let branch = self.0.as_ref();
+        if let TypeRef::WeakLink(source) = &branch.type_ref {
+            source.unquote(txn).next()
+        } else {
+            None
+        }
     }
 
     pub fn try_deref<T, V>(&self, txn: &T) -> Result<V, Option<V::Error>>
@@ -29,11 +156,17 @@ impl WeakRef {
             Err(None)
         }
     }
+}
 
+impl<P> WeakRef<P>
+where
+    P: SharedRef + Array,
+{
     /// Returns an iterator over [Value]s existing in a scope of the current [WeakRef] quotation
     /// range.  
     pub fn unquote<'txn, T: ReadTxn>(&self, txn: &'txn T) -> Unquote<'txn, T> {
-        if let TypeRef::WeakLink(source) = &self.0.type_ref {
+        let branch = self.0.as_ref();
+        if let TypeRef::WeakLink(source) = &branch.type_ref {
             source.unquote(txn)
         } else {
             Unquote::empty(txn)
@@ -41,152 +174,77 @@ impl WeakRef {
     }
 }
 
-impl AsRef<Branch> for WeakRef {
-    fn as_ref(&self) -> &Branch {
-        self.0.deref()
-    }
-}
-
-impl From<BranchPtr> for WeakRef {
-    fn from(inner: BranchPtr) -> Self {
-        WeakRef(inner)
-    }
-}
-
-impl TryFrom<BlockPtr> for WeakRef {
-    type Error = BlockPtr;
-
-    fn try_from(value: BlockPtr) -> Result<Self, Self::Error> {
-        if let Block::Item(item) = value.deref() {
-            if let ItemContent::Type(branch) = &item.content {
-                let branch = BranchPtr::from(branch.deref());
-                return Ok(Self::from(branch));
-            }
-        }
-        Err(value)
-    }
-}
-
-impl AsMut<Branch> for WeakRef {
-    fn as_mut(&mut self) -> &mut Branch {
-        self.0.deref_mut()
-    }
-}
-
-impl Observable for WeakRef {
-    type Event = WeakEvent;
-
-    fn try_observer(&self) -> Option<&EventHandler<Self::Event>> {
-        if let Some(Observers::Weak(eh)) = self.0.observers.as_ref() {
-            Some(eh)
-        } else {
-            None
-        }
-    }
-
-    fn try_observer_mut(&mut self) -> Option<&mut EventHandler<Self::Event>> {
-        if let Observers::Weak(eh) = self.0.observers.get_or_insert_with(Observers::weak) {
-            Some(eh)
-        } else {
-            None
-        }
-    }
-}
-
-impl GetString for WeakRef {
-    fn get_string<T: ReadTxn>(&self, txn: &T) -> String {
-        if let TypeRef::WeakLink(source) = &self.0.type_ref {
-            let mut curr = source.first_item.get_owned();
-            if let Some(Block::Item(item)) = curr.as_deref() {
-                if let Some(branch) = item.parent.as_branch() {
-                    match &branch.type_ref {
-                        TypeRef::Text => {
-                            let mut result = String::new();
-                            while let Some(Block::Item(item)) = curr.as_deref() {
-                                if !item.is_deleted() {
-                                    if let ItemContent::String(s) = &item.content {
-                                        result.push_str(s.as_str());
-                                    }
-                                }
-                                if item.last_id() == source.quote_end {
-                                    break;
-                                }
-                                curr = item.right;
-                            }
-                            return result;
-                        }
-                        TypeRef::XmlText => {
-                            return XmlTextRef::get_string_fragment(
-                                branch.start,
-                                Some(&source.quote_start),
-                                Some(&source.quote_end),
-                            );
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            "".to_string()
-        } else {
-            panic!("Defect: called WeakRef::get_string on non WeakRef shared type")
-        }
-    }
-}
-
 /// A preliminary type for [WeakRef]. Once inserted into document it can be used as a weak reference
 /// link to another value living inside of the document store.
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub struct WeakPrelim(pub(crate) Arc<LinkSource>);
+pub struct WeakPrelim<P> {
+    source: Arc<LinkSource>,
+    _marker: PhantomData<P>,
+}
 
-impl WeakPrelim {
+impl<P> WeakPrelim<P> {
     pub(crate) fn new(start: ID, end: ID) -> Self {
-        WeakPrelim(Arc::new(LinkSource::new(start, end)))
+        let source = Arc::new(LinkSource::new(start, end));
+        WeakPrelim {
+            source,
+            _marker: PhantomData::default(),
+        }
+    }
+    pub(crate) fn with_source(source: Arc<LinkSource>) -> Self {
+        WeakPrelim {
+            source,
+            _marker: PhantomData::default(),
+        }
     }
 }
 
-impl From<WeakRef> for WeakPrelim {
-    fn from(value: WeakRef) -> Self {
-        if let TypeRef::WeakLink(source) = &value.0.type_ref {
-            WeakPrelim(source.clone())
+impl<P: SharedRef> From<WeakRef<P>> for WeakPrelim<P> {
+    fn from(value: WeakRef<P>) -> Self {
+        let branch = value.0.as_ref();
+        if let TypeRef::WeakLink(source) = &branch.type_ref {
+            WeakPrelim {
+                source: source.clone(),
+                _marker: PhantomData::default(),
+            }
         } else {
             panic!("Defect: WeakRef's underlying branch is not matching expected weak ref.")
         }
     }
 }
 
-impl Prelim for WeakPrelim {
-    type Return = WeakRef;
+impl<P: SharedRef> Prelim for WeakPrelim<P> {
+    type Return = WeakRef<P>;
 
     fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
-        let inner = Branch::new(TypeRef::WeakLink(self.0.clone()));
+        let inner = Branch::new(TypeRef::WeakLink(self.source.clone()));
         (ItemContent::Type(inner), Some(self))
     }
 
     fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {}
 }
 
-impl Into<EmbedPrelim<WeakPrelim>> for WeakPrelim {
-    fn into(self) -> EmbedPrelim<WeakPrelim> {
+impl<P: SharedRef> Into<EmbedPrelim<WeakPrelim<P>>> for WeakPrelim<P> {
+    fn into(self) -> EmbedPrelim<WeakPrelim<P>> {
         EmbedPrelim::Shared(self)
     }
 }
 
 pub struct WeakEvent {
     pub(crate) current_target: BranchPtr,
-    target: WeakRef,
+    target: BranchPtr,
 }
 
 impl WeakEvent {
     pub(crate) fn new(branch_ref: BranchPtr) -> Self {
         let current_target = branch_ref.clone();
         WeakEvent {
-            target: WeakRef::from(branch_ref),
+            target: branch_ref,
             current_target,
         }
     }
 
-    pub fn target(&self) -> &WeakRef {
-        &self.target
+    pub fn as_target<T: From<BranchPtr>>(&self) -> WeakRef<T> {
+        WeakRef(T::from(self.target))
     }
 }
 
@@ -356,7 +414,8 @@ mod test {
     use crate::types::weak::WeakPrelim;
     use crate::types::{Attrs, EntryChange, Event, ToJson, Value};
     use crate::{
-        Array, DeepObservable, Doc, GetString, Map, MapPrelim, MapRef, Observable, Text, Transact,
+        Array, ArrayRef, DeepObservable, Doc, GetString, Map, MapPrelim, MapRef, Observable, Text,
+        TextRef, Transact, XmlTextRef,
     };
     use lib0::any::Any;
     use std::cell::RefCell;
@@ -374,7 +433,7 @@ mod test {
         let link = map.link(&txn, "a").unwrap();
         map.insert(&mut txn, "b", link);
 
-        let link = map.get(&txn, "b").unwrap().to_weak().unwrap();
+        let link = map.get(&txn, "b").unwrap().to_weak::<MapRef>().unwrap();
         let expected = nested.to_json(&txn);
         let deref: MapRef = link.try_deref(&txn).unwrap();
         let actual = deref.to_json(&txn);
@@ -396,14 +455,14 @@ mod test {
             assert_eq!(a1.get(&txn, 0), Some(1.into()));
             assert_eq!(a1.get(&txn, 1), Some(2.into()));
             assert_eq!(a1.get(&txn, 2), Some(3.into()));
-            let actual: Any = a1
+            let actual: Vec<_> = a1
                 .get(&txn, 3)
                 .unwrap()
-                .to_weak()
+                .to_weak::<ArrayRef>()
                 .unwrap()
-                .try_deref(&txn)
-                .unwrap();
-            assert_eq!(actual, 2.into());
+                .unquote(&txn)
+                .collect();
+            assert_eq!(actual, vec![2.into()]);
         }
 
         let d2 = Doc::new();
@@ -415,14 +474,14 @@ mod test {
         assert_eq!(a2.get(&txn, 0), Some(1.into()));
         assert_eq!(a2.get(&txn, 1), Some(2.into()));
         assert_eq!(a2.get(&txn, 2), Some(3.into()));
-        let actual: Any = a2
+        let actual: Vec<_> = a2
             .get(&txn, 3)
             .unwrap()
-            .to_weak()
+            .to_weak::<ArrayRef>()
             .unwrap()
-            .try_deref(&txn)
-            .unwrap();
-        assert_eq!(actual, 2.into());
+            .unquote(&txn)
+            .collect();
+        assert_eq!(actual, vec![2.into()]);
     }
 
     #[test]
@@ -459,7 +518,7 @@ mod test {
         exchange_updates(&[&d1, &d2]);
 
         let t2 = d2.transact();
-        let l2 = a2.get(&t2, 0).unwrap().to_weak().unwrap();
+        let l2 = a2.get(&t2, 0).unwrap().to_weak::<ArrayRef>().unwrap();
         let unquoted: Vec<_> = l2.unquote(&t2).map(|v| v.to_string(&t2)).collect();
         assert_eq!(
             unquoted,
@@ -523,10 +582,18 @@ mod test {
         let unquote: Vec<_> = l1.unquote(&t1).collect();
         assert_eq!(
             unquote,
-            vec![1.into(), Value::YWeakLink(l1.clone()), 2.into(), 3.into()]
+            vec![
+                1.into(),
+                Value::YWeakLink(l1.clone().into_inner()),
+                2.into(),
+                3.into()
+            ]
         );
         assert_eq!(a1.get(&t1, 0), Some(1.into()));
-        assert_eq!(a1.get(&t1, 1), Some(Value::YWeakLink(l1.clone())));
+        assert_eq!(
+            a1.get(&t1, 1),
+            Some(Value::YWeakLink(l1.clone().into_inner()))
+        );
         assert_eq!(a1.get(&t1, 2), Some(2.into()));
         assert_eq!(a1.get(&t1, 3), Some(3.into()));
         assert_eq!(a1.get(&t1, 4), Some(4.into()));
@@ -535,14 +602,19 @@ mod test {
         exchange_updates(&[&d1, &d2]);
 
         let t2 = d2.transact();
-        let l2 = a2.get(&t2, 1).unwrap().to_weak().unwrap();
+        let l2 = a2.get(&t2, 1).unwrap().to_weak::<ArrayRef>().unwrap();
         let unquote: Vec<_> = l2.unquote(&t2).collect();
         assert_eq!(
             unquote,
-            vec![1.into(), Value::YWeakLink(l2.clone()), 2.into(), 3.into()]
+            vec![
+                1.into(),
+                Value::YWeakLink(l2.clone().into_inner()),
+                2.into(),
+                3.into()
+            ]
         );
         assert_eq!(a2.get(&t2, 0), Some(1.into()));
-        assert_eq!(a2.get(&t2, 1), Some(Value::YWeakLink(l2.clone())));
+        assert_eq!(a2.get(&t2, 1), Some(Value::YWeakLink(l2.into_inner())));
         assert_eq!(a2.get(&t2, 2), Some(2.into()));
         assert_eq!(a2.get(&t2, 3), Some(3.into()));
         assert_eq!(a2.get(&t2, 4), Some(4.into()));
@@ -566,7 +638,11 @@ mod test {
 
         exchange_updates(&[&d1, &d2]);
 
-        let link2 = m2.get(&d2.transact(), "b").unwrap().to_weak().unwrap();
+        let link2 = m2
+            .get(&d2.transact(), "b")
+            .unwrap()
+            .to_weak::<MapRef>()
+            .unwrap();
         let l1: MapRef = link1.try_deref(&d1.transact()).unwrap();
         let l2: MapRef = link2.try_deref(&d2.transact()).unwrap();
         assert_eq!(l1.get(&d1.transact(), "a1"), l2.get(&d2.transact(), "a1"));
@@ -598,7 +674,11 @@ mod test {
 
         exchange_updates(&[&d1, &d2]);
 
-        let link2 = m2.get(&d2.transact(), "b").unwrap().to_weak().unwrap();
+        let link2 = m2
+            .get(&d2.transact(), "b")
+            .unwrap()
+            .to_weak::<MapRef>()
+            .unwrap();
         let l1: MapRef = link1.try_deref(&d1.transact()).unwrap();
         let l2: MapRef = link2.try_deref(&d2.transact()).unwrap();
         assert_eq!(l1.get(&d1.transact(), "a1"), l2.get(&d2.transact(), "a1"));
@@ -630,7 +710,11 @@ mod test {
 
         exchange_updates(&[&d1, &d2]);
 
-        let link2 = m2.get(&d2.transact(), "b").unwrap().to_weak().unwrap();
+        let link2 = m2
+            .get(&d2.transact(), "b")
+            .unwrap()
+            .to_weak::<MapRef>()
+            .unwrap();
         let l1: MapRef = link1.try_deref(&d1.transact()).unwrap();
         let l2: MapRef = link2.try_deref(&d2.transact()).unwrap();
         assert_eq!(l1.get(&d1.transact(), "a1"), l2.get(&d2.transact(), "a1"));
@@ -668,7 +752,11 @@ mod test {
 
         exchange_updates(&[&d1, &d2]);
 
-        let mut link2 = m2.get(&d2.transact(), "b").unwrap().to_weak().unwrap();
+        let mut link2 = m2
+            .get(&d2.transact(), "b")
+            .unwrap()
+            .to_weak::<MapRef>()
+            .unwrap();
         assert_eq!(link2.try_deref_raw(&d2.transact()), Some("value".into()));
 
         let target2 = Rc::new(RefCell::new(None));
@@ -704,20 +792,24 @@ mod test {
         let _sub1 = {
             let target = target1.clone();
             link1.observe(move |txn, e| {
-                target.replace(Some(e.target.clone()));
+                target.replace(Some(e.as_target::<MapRef>()));
             })
         };
 
         exchange_updates(&[&d1, &d2]);
 
-        let mut link2 = m2.get(&d2.transact(), "b").unwrap().to_weak().unwrap();
+        let mut link2 = m2
+            .get(&d2.transact(), "b")
+            .unwrap()
+            .to_weak::<MapRef>()
+            .unwrap();
         assert_eq!(link2.try_deref_raw(&d2.transact()), Some("value".into()));
 
         let target2 = Rc::new(RefCell::new(None));
         let _sub2 = {
             let target = target2.clone();
             link2.observe(move |txn, e| {
-                target.replace(Some(e.target.clone()));
+                target.replace(Some(e.as_target::<MapRef>()));
             })
         };
 
@@ -748,13 +840,17 @@ mod test {
         let _sub1 = {
             let target = target1.clone();
             link1.observe(move |txn, e| {
-                target.replace(Some(e.target.clone()));
+                target.replace(Some(e.as_target::<ArrayRef>()));
             })
         };
 
         exchange_updates(&[&d1, &d2]);
 
-        let mut link2 = a2.get(&d2.transact(), 0).unwrap().to_weak().unwrap();
+        let mut link2 = a2
+            .get(&d2.transact(), 0)
+            .unwrap()
+            .to_weak::<ArrayRef>()
+            .unwrap();
         let actual: Vec<_> = link2.unquote(&d2.transact()).collect();
         assert_eq!(actual, vec!["B".into(), "C".into()]);
 
@@ -762,7 +858,7 @@ mod test {
         let _sub2 = {
             let target = target2.clone();
             link2.observe(move |txn, e| {
-                target.replace(Some(e.target.clone()));
+                target.replace(Some(e.as_target::<ArrayRef>()));
             })
         };
 
@@ -826,7 +922,12 @@ mod test {
         let actual: Vec<_> = events
             .borrow()
             .iter()
-            .flat_map(|v| v.clone().to_weak().unwrap().try_deref_raw(&doc.transact()))
+            .flat_map(|v| {
+                v.clone()
+                    .to_weak::<MapRef>()
+                    .unwrap()
+                    .try_deref_raw(&doc.transact())
+            })
             .collect();
         assert_eq!(actual, vec!["value2".into()])
     }
@@ -873,7 +974,11 @@ mod test {
         let actual: Vec<_> = events
             .take()
             .into_iter()
-            .flat_map(|v| v.to_weak().unwrap().try_deref_raw(&doc.transact()))
+            .flat_map(|v| {
+                v.to_weak::<MapRef>()
+                    .unwrap()
+                    .try_deref_raw(&doc.transact())
+            })
             .collect();
         assert_eq!(actual, vec!["value2".into()])
     }
@@ -904,7 +1009,7 @@ mod test {
                             rs.push((value, Some(e.keys(txn).clone())));
                         }
                         Event::Weak(e) => {
-                            let value = Value::YWeakLink(e.target().clone());
+                            let value = Value::YWeakLink(e.as_target());
                             rs.push((value, None));
                         }
                         _ => {}
@@ -951,7 +1056,7 @@ mod test {
         // delete linked map
         array.remove(&mut doc.transact_mut(), 0);
         let actual = events.take();
-        assert_eq!(actual, vec![(Value::YWeakLink(link.clone()), None)]);
+        assert_eq!(actual, vec![(Value::YWeakLink(link.into_inner()), None)]);
     }
 
     #[test]
@@ -986,7 +1091,7 @@ mod test {
                     match e {
                         Event::Map(e) => events
                             .push((Value::YMap(e.target().clone()), Some(e.keys(&txn).clone()))),
-                        Event::Weak(e) => events.push((Value::YWeakLink(e.target().clone()), None)),
+                        Event::Weak(e) => events.push((Value::YWeakLink(e.as_target()), None)),
                         _ => {}
                     }
                 }
@@ -1031,7 +1136,10 @@ mod test {
 
         // delete linked map
         map.remove(&mut doc.transact_mut(), "nested");
-        assert_eq!(events.take(), vec![(Value::YWeakLink(link), None)]);
+        assert_eq!(
+            events.take(),
+            vec![(Value::YWeakLink(link.into_inner()), None)]
+        );
     }
 
     #[test]
@@ -1067,14 +1175,18 @@ mod test {
                     match e {
                         Event::Map(e) => events
                             .push((Value::YMap(e.target().clone()), Some(e.keys(txn).clone()))),
-                        Event::Weak(e) => events.push((Value::YWeakLink(e.target().clone()), None)),
+                        Event::Weak(e) => events.push((Value::YWeakLink(e.as_target()), None)),
                         _ => {}
                     }
                 }
             })
         };
 
-        let mut l2 = a2.get(&d2.transact(), 0).unwrap().to_weak().unwrap();
+        let mut l2 = a2
+            .get(&d2.transact(), 0)
+            .unwrap()
+            .to_weak::<ArrayRef>()
+            .unwrap();
         let mut e2 = Rc::new(RefCell::new(vec![]));
         let _s2 = {
             let events = e2.clone();
@@ -1085,7 +1197,7 @@ mod test {
                     match e {
                         Event::Map(e) => events
                             .push((Value::YMap(e.target().clone()), Some(e.keys(txn).clone()))),
-                        Event::Weak(e) => events.push((Value::YWeakLink(e.target().clone()), None)),
+                        Event::Weak(e) => events.push((Value::YWeakLink(e.as_target()), None)),
                         _ => {}
                     }
                 }
@@ -1231,13 +1343,25 @@ mod test {
         exchange_updates(&[&d3, &d2]);
 
         // make sure that link can find the most recent block
-        let l3 = m3.get(&d3.transact(), "link").unwrap().to_weak().unwrap();
+        let l3 = m3
+            .get(&d3.transact(), "link")
+            .unwrap()
+            .to_weak::<MapRef>()
+            .unwrap();
         assert_eq!(l3.try_deref_raw(&d3.transact()), Some(3.into()));
 
         exchange_updates(&[&d1, &d2, &d3]);
 
-        let l1 = m1.get(&d1.transact(), "link").unwrap().to_weak().unwrap();
-        let l2 = m2.get(&d2.transact(), "link").unwrap().to_weak().unwrap();
+        let l1 = m1
+            .get(&d1.transact(), "link")
+            .unwrap()
+            .to_weak::<MapRef>()
+            .unwrap();
+        let l2 = m2
+            .get(&d2.transact(), "link")
+            .unwrap()
+            .to_weak::<MapRef>()
+            .unwrap();
 
         assert_eq!(l1.try_deref_raw(&d1.transact()), Some(3.into()));
         assert_eq!(l2.try_deref_raw(&d2.transact()), Some(3.into()));
@@ -1272,7 +1396,7 @@ mod test {
         exchange_updates(&[&d1, &d2]);
 
         let diff = txt2.diff(&d2.transact(), YChange::identity);
-        let l2 = diff[1].insert.clone().to_weak().unwrap();
+        let l2 = diff[1].insert.clone().to_weak::<TextRef>().unwrap();
         assert_eq!(l2.get_string(&d2.transact()), "be".to_string());
     }
 
@@ -1314,7 +1438,7 @@ mod test {
         let diff: Vec<_> = txt2
             .diff(&txn, YChange::identity)
             .into_iter()
-            .map(|d| d.insert.to_weak().unwrap().get_string(&txn))
+            .map(|d| d.insert.to_weak::<XmlTextRef>().unwrap().get_string(&txn))
             .collect();
         assert_eq!(
             diff,

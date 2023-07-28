@@ -2,8 +2,8 @@ use crate::block::{Block, BlockPtr, EmbedPrelim, ItemContent, ItemPosition, Prel
 use crate::transaction::TransactionMut;
 use crate::types::weak::WeakPrelim;
 use crate::types::{
-    event_keys, Branch, BranchPtr, Entries, EntryChange, EventHandler, Observers, Path, ToJson,
-    TypeRef, Value,
+    event_keys, Branch, BranchPtr, Entries, EntryChange, EventHandler, Observers, Path, SharedRef,
+    ToJson, TypeRef, Value,
 };
 use crate::*;
 use lib0::any::Any;
@@ -61,6 +61,7 @@ use std::sync::Arc;
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct MapRef(BranchPtr);
 
+impl SharedRef for MapRef {}
 impl Map for MapRef {}
 
 impl Observable for MapRef {
@@ -123,7 +124,7 @@ impl TryFrom<BlockPtr> for MapRef {
     }
 }
 
-pub trait Map: AsRef<Branch> {
+pub trait Map: AsRef<Branch> + Sized {
     /// Returns a number of entries stored within current map.
     fn len<T: ReadTxn>(&self, txn: &T) -> u32 {
         let mut len = 0;
@@ -205,7 +206,7 @@ pub trait Map: AsRef<Branch> {
     }
 
     /// Returns [WeakPrelim] to a given `key`, if it exists in a current map.
-    fn link<T: ReadTxn>(&self, txn: &T, key: &str) -> Option<WeakPrelim> {
+    fn link<T: ReadTxn>(&self, txn: &T, key: &str) -> Option<WeakPrelim<Self>> {
         let ptr = BranchPtr::from(self.as_ref());
         let block = ptr.map.get(key)?;
         let id = block.id().clone();

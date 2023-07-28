@@ -4,7 +4,7 @@ use crate::transaction::TransactionMut;
 use crate::types::text::{diff_between, TextEvent, YChange};
 use crate::types::{
     event_change_set, event_keys, Branch, BranchPtr, Change, ChangeSet, Delta, Entries,
-    EntryChange, EventHandler, MapRef, Observers, Path, ToJson, TypePtr, TypeRef, Value,
+    EntryChange, EventHandler, MapRef, Observers, Path, SharedRef, ToJson, TypePtr, TypeRef, Value,
     TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT,
 };
 use crate::{
@@ -117,6 +117,7 @@ impl TryFrom<BranchPtr> for XmlNode {
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct XmlElementRef(BranchPtr);
 
+impl SharedRef for XmlElementRef {}
 impl Xml for XmlElementRef {}
 impl XmlFragment for XmlElementRef {}
 impl IndexedSequence for XmlElementRef {}
@@ -367,6 +368,8 @@ where
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct XmlTextRef(BranchPtr);
 
+impl SharedRef for XmlTextRef {}
+
 impl XmlTextRef {
     pub(crate) fn get_string_fragment(
         head: Option<BlockPtr>,
@@ -518,6 +521,7 @@ impl<T: Borrow<str>> Into<EmbedPrelim<XmlTextPrelim<T>>> for XmlTextPrelim<T> {
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct XmlFragmentRef(BranchPtr);
 
+impl SharedRef for XmlFragmentRef {}
 impl XmlFragment for XmlFragmentRef {}
 impl IndexedSequence for XmlFragmentRef {}
 
@@ -661,6 +665,7 @@ where
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct XmlHookRef(BranchPtr);
 
+impl SharedRef for XmlHookRef {}
 impl Map for XmlHookRef {}
 
 impl ToJson for XmlHookRef {

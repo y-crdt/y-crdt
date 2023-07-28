@@ -197,6 +197,8 @@ pub trait GetString {
     fn get_string<T: ReadTxn>(&self, txn: &T) -> String;
 }
 
+pub trait SharedRef: From<BranchPtr> + AsRef<Branch> {}
+
 /// A wrapper around [Branch] cell, supplied with a bunch of convenience methods to operate on both
 /// map-like and array-like contents of a [Branch].
 #[repr(transparent)]
@@ -279,7 +281,6 @@ impl<'a> From<&'a mut Box<Branch>> for BranchPtr {
 impl<'a> From<&'a Box<Branch>> for BranchPtr {
     fn from(branch: &'a Box<Branch>) -> Self {
         let b: &Branch = &*branch;
-
         let ptr = unsafe { NonNull::new_unchecked(b as *const Branch as *mut Branch) };
         BranchPtr(ptr)
     }
@@ -760,7 +761,7 @@ pub enum Value {
     YXmlFragment(XmlFragmentRef),
     YXmlText(XmlTextRef),
     YDoc(Doc),
-    YWeakLink(WeakRef),
+    YWeakLink(WeakRef<BranchPtr>),
 }
 
 impl Default for Value {
@@ -813,7 +814,7 @@ impl Value {
         self.try_into().ok()
     }
 
-    pub fn to_weak(self) -> Option<WeakRef> {
+    pub fn to_weak<P: SharedRef>(self) -> Option<WeakRef<P>> {
         self.try_into().ok()
     }
 }
@@ -866,12 +867,12 @@ impl TryFrom<Value> for MapRef {
     }
 }
 
-impl TryFrom<Value> for WeakRef {
+impl<P: SharedRef> TryFrom<Value> for WeakRef<P> {
     type Error = Value;
 
     fn try_from(value: Value) -> Result<Self, Self::Error> {
         if let Value::YWeakLink(value) = value {
-            Ok(value)
+            Ok(value.into())
         } else {
             Err(value)
         }
@@ -1683,7 +1684,7 @@ impl Event {
                 XmlNode::Fragment(n) => Value::YXmlFragment(n.clone()),
                 XmlNode::Text(n) => Value::YXmlText(n.clone()),
             },
-            Event::Weak(e) => Value::YWeakLink(e.target().clone()),
+            Event::Weak(e) => Value::YWeakLink(e.as_target().clone()),
         }
     }
 }
