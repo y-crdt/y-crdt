@@ -114,18 +114,21 @@ export const testToDeltaEmbedAttributes = tc => {
     const text = d1.getText('test')
 
     let delta = null
+    let origin = null
     let observer = text.observe(e => {
         delta = e.delta
+        origin = e.origin
     })
 
     d1.transact(txn => {
         text.insert(0, 'ab', { bold: true }, txn)
         text.insertEmbed(1, { image: 'imageSrc.png' }, { width: 100 }, txn)
-    })
+    }, 'TEST_ORIGIN')
     t.compare(delta, [
         { insert: 'a', attributes: { bold: true } },
         { insert: { image: 'imageSrc.png' }, attributes: { width: 100 } },
         { insert: 'b', attributes: { bold: true } }
     ])
+    t.compare(origin, 'TEST_ORIGIN')
     observer.free()
 }

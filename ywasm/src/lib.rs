@@ -2,13 +2,13 @@ use js_sys::{Object, Reflect, Uint8Array};
 use lib0::any::Any;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::convert::TryFrom;
+use std::convert::{TryFrom, TryInto};
 use std::mem::ManuallyDrop;
 use std::ops::Deref;
 use std::rc::Rc;
 use std::sync::Arc;
 use wasm_bindgen::__rt::{Ref, RefMut};
-use wasm_bindgen::convert::IntoWasmAbi;
+use wasm_bindgen::convert::{FromWasmAbi, IntoWasmAbi};
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
 use yrs::block::{ClientID, ItemContent, Prelim, Unused};
@@ -195,8 +195,8 @@ impl YDoc {
         if origin.is_null() || origin.is_undefined() {
             YTransaction::from(self.as_ref().transact_mut())
         } else {
-            let origin: Origin = JsValueWrapper(origin).into();
-            YTransaction::from(self.as_ref().transact_mut_with(origin))
+            let abi = origin.into_abi();
+            YTransaction::from(self.as_ref().transact_mut_with(abi))
         }
     }
 
@@ -352,8 +352,8 @@ impl YDoc {
     /// (if it is a subdocument).
     #[wasm_bindgen(js_name = load)]
     pub fn load(&self, parent_txn: &ImplicitTransaction) {
-        if let Some(txn) = get_txn_mut(parent_txn) {
-            self.0.load(txn)
+        if let Some(mut txn) = get_txn_mut(parent_txn) {
+            self.0.load(txn.as_mut())
         } else {
             if let Some(parent) = self.0.parent_doc() {
                 let mut txn = parent.transact_mut();
@@ -365,8 +365,8 @@ impl YDoc {
     /// Emit `onDestroy` event and unregister all event handlers.
     #[wasm_bindgen(js_name = destroy)]
     pub fn destroy(&mut self, parent_txn: &ImplicitTransaction) {
-        if let Some(txn) = get_txn_mut(parent_txn) {
-            self.0.destroy(txn)
+        if let Some(mut txn) = get_txn_mut(parent_txn) {
+            self.0.destroy(txn.as_mut())
         } else {
             if let Some(parent) = self.0.parent_doc() {
                 let mut txn = parent.transact_mut();
@@ -621,55 +621,40 @@ extern "C" {
     pub type ImplicitTransaction;
 }
 
-fn get_txn_mut<'a>(txn: &'a ImplicitTransaction) -> Option<&'a mut TransactionMut<'static>> {
+const WASM_REF_PTR: &str = "__wbg_ptr";
+
+fn get_txn_mut<'a>(txn: &'a ImplicitTransaction) -> Option<RefMut<'static, YTransaction>> {
     use wasm_bindgen::convert::RefMutFromWasmAbi;
 
-    let ptr = unwrap_txn_ptr(txn).unwrap()?;
-    let mut txn: RefMut<'a, YTransaction> = unsafe { YTransaction::ref_mut_from_abi(ptr) };
-    let txn = txn
-        .try_mut()
-        .expect("Passed read-only transaction, where read-write one was expected");
-
-    /*
-      This should be safe. We never call this function more than once, per wasm_bindgen method,
-      it's never escaping the context of wasm_bindgen method and ywasm is not used in
-      multithreaded code. All we need to check is if YTransaction instance hasn't been already
-      borrowed by another wasm_bindgen which is what `YTransaction::ref_mut_from_abi`
-      above verifies.
-    */
-    Some(unsafe { std::mem::transmute(txn) })
-}
-
-fn get_txn<'a>(txn: &'a ImplicitTransaction) -> Option<&'a YTransaction> {
-    use wasm_bindgen::convert::RefFromWasmAbi;
-
-    let ptr = unwrap_txn_ptr(txn).unwrap()?;
-    let txn: Ref<'a, YTransaction> = unsafe { YTransaction::ref_from_abi(ptr) };
-    let txn: &YTransaction = txn.deref();
-
-    /*
-      This should be safe. We never call this function more than once, per wasm_bindgen method,
-      it's never escaping the context of wasm_bindgen method and ywasm is not used in
-      multithreaded code. All we need to check is if YTransaction instance hasn't been already
-      borrowed by another wasm_bindgen which is what `YTransaction::ref_from_abi`
-      above verifies.
-    */
-    Some(unsafe { std::mem::transmute(txn) })
-}
-
-fn unwrap_txn_ptr(value: &ImplicitTransaction) -> Result<Option<u32>, JsValue> {
-    let js: &JsValue = value.as_ref();
+    let js: &JsValue = txn.as_ref();
     if js.is_undefined() || js.is_null() {
-        Ok(None)
-    } else {
-        let ctor_name = Object::get_prototype_of(js).constructor().name();
-        if ctor_name == "YTransaction" {
-            let ptr = Reflect::get(js, &JsValue::from_str("ptr"))?;
-            Ok(Some(ptr.as_f64().ok_or(JsValue::NULL)? as u32))
-        } else {
-            Err(JsValue::from_str("Passed argument was not YTransaction"))
+        return None;
+    } else if let Ok(js_ptr) = Reflect::get(js, &JsValue::from_str(WASM_REF_PTR)) {
+        if let Some(ptr) = js_ptr.as_f64() {
+            unsafe {
+                let txn = YTransaction::ref_mut_from_abi(ptr as u32);
+                return Some(txn);
+            }
         }
     }
+    panic!("Provided object reference doesn't refer to wasm-bindgen object instance.")
+}
+
+fn get_txn<'a>(txn: &'a ImplicitTransaction) -> Option<Ref<'static, YTransaction>> {
+    use wasm_bindgen::convert::RefFromWasmAbi;
+
+    let js: &JsValue = txn.as_ref();
+    if js.is_undefined() || js.is_null() {
+        return None;
+    } else if let Ok(js_ptr) = Reflect::get(js, &JsValue::from_str(WASM_REF_PTR)) {
+        if let Some(ptr) = js_ptr.as_f64() {
+            unsafe {
+                let txn = YTransaction::ref_from_abi(ptr as u32);
+                return Some(txn);
+            }
+        }
+    }
+    panic!("Provided object reference doesn't refer to wasm-bindgen object instance.")
 }
 
 /// A transaction that serves as a proxy to document block store. Ywasm shared data types execute
@@ -713,6 +698,11 @@ impl YTransaction {
             InnerTxn::ReadOnly(_) => None,
             InnerTxn::ReadWrite(txn) => Some(txn),
         }
+    }
+
+    fn as_mut(&mut self) -> &mut TransactionMut<'static> {
+        self.try_mut()
+            .expect("Read-write transaction required. Provided one is read-only.")
     }
 }
 
@@ -772,8 +762,8 @@ impl YTransaction {
             InnerTxn::ReadOnly(_) => JsValue::NULL,
             InnerTxn::ReadWrite(t) => {
                 if let Some(o) = t.origin() {
-                    let arr = unsafe { js_sys::Uint8Array::view(o.as_ref()) };
-                    arr.into()
+                    let be: [u8; 4] = o.as_ref().try_into().unwrap();
+                    unsafe { JsValue::from_abi(u32::from_be_bytes(be)) }
                 } else {
                     JsValue::NULL
                 }
@@ -1855,7 +1845,7 @@ impl YText {
         match &*self.0.borrow() {
             SharedType::Integrated(v) => {
                 if let Some(txn) = get_txn(txn) {
-                    v.len(txn)
+                    v.len(&*txn)
                 } else {
                     v.len(&v.transact())
                 }
@@ -1870,7 +1860,7 @@ impl YText {
         match &*self.0.borrow() {
             SharedType::Integrated(v) => {
                 if let Some(txn) = get_txn(txn) {
-                    v.get_string(txn)
+                    v.get_string(&*txn)
                 } else {
                     v.get_string(&v.transact())
                 }
@@ -1885,7 +1875,7 @@ impl YText {
         match &*self.0.borrow() {
             SharedType::Integrated(v) => {
                 if let Some(txn) = get_txn(txn) {
-                    JsValue::from(&v.get_string(txn))
+                    JsValue::from(&v.get_string(&*txn))
                 } else {
                     JsValue::from(&v.get_string(&v.transact()))
                 }
@@ -1903,11 +1893,11 @@ impl YText {
     pub fn insert(&self, index: u32, chunk: &str, attributes: JsValue, txn: &ImplicitTransaction) {
         match &mut *self.0.borrow_mut() {
             SharedType::Integrated(v) => {
-                if let Some(txn) = get_txn_mut(txn) {
+                if let Some(mut txn) = get_txn_mut(txn) {
                     if let Some(attrs) = Self::parse_attrs(attributes) {
-                        v.insert_with_attributes(txn, index, chunk, attrs)
+                        v.insert_with_attributes(txn.as_mut(), index, chunk, attrs)
                     } else {
-                        v.insert(txn, index, chunk)
+                        v.insert(txn.as_mut(), index, chunk)
                     }
                 } else {
                     let mut txn = v.transact_mut();
@@ -1944,11 +1934,11 @@ impl YText {
         match &mut *self.0.borrow_mut() {
             SharedType::Integrated(v) => {
                 let content = js_into_any(&embed).unwrap();
-                if let Some(txn) = get_txn_mut(txn) {
+                if let Some(mut txn) = get_txn_mut(txn) {
                     if let Some(attrs) = Self::parse_attrs(attributes) {
-                        v.insert_embed_with_attributes(txn, index, content, attrs);
+                        v.insert_embed_with_attributes(txn.as_mut(), index, content, attrs);
                     } else {
-                        v.insert_embed(txn, index, content);
+                        v.insert_embed(txn.as_mut(), index, content);
                     }
                 } else {
                     let mut txn = v.transact_mut();
@@ -1974,8 +1964,8 @@ impl YText {
         if let Some(attrs) = Self::parse_attrs(attributes) {
             match &mut *self.0.borrow_mut() {
                 SharedType::Integrated(v) => {
-                    if let Some(txn) = get_txn_mut(txn) {
-                        v.format(txn, index, length, attrs);
+                    if let Some(mut txn) = get_txn_mut(txn) {
+                        v.format(txn.as_mut(), index, length, attrs);
                     } else {
                         let mut txn = v.transact_mut();
                         v.format(&mut txn, index, length, attrs);
@@ -2014,11 +2004,12 @@ impl YText {
     pub fn push(&self, chunk: &str, attributes: JsValue, txn: &ImplicitTransaction) {
         match &mut *self.0.borrow_mut() {
             SharedType::Integrated(v) => {
-                if let Some(txn) = get_txn_mut(txn) {
+                if let Some(mut txn) = get_txn_mut(txn) {
                     if let Some(attrs) = Self::parse_attrs(attributes) {
-                        v.insert_with_attributes(txn, v.len(txn), chunk, attrs)
+                        let len = v.len(&*txn);
+                        v.insert_with_attributes(txn.as_mut(), len, chunk, attrs)
                     } else {
-                        v.push(txn, chunk)
+                        v.push(txn.as_mut(), chunk)
                     }
                 } else {
                     let mut txn = v.transact_mut();
@@ -2041,12 +2032,12 @@ impl YText {
 
     /// Deletes a specified range of of characters, starting at a given `index`.
     /// Both `index` and `length` are counted in terms of a number of UTF-8 character bytes.
-    #[wasm_bindgen(js_name = delete)]
+    #[wasm_bindgen(method, js_name = delete)]
     pub fn delete(&mut self, index: u32, length: u32, txn: &ImplicitTransaction) {
         match &mut *self.0.borrow_mut() {
             SharedType::Integrated(v) => {
-                if let Some(txn) = get_txn_mut(txn) {
-                    v.remove_range(txn, index, length);
+                if let Some(mut txn) = get_txn_mut(txn) {
+                    v.remove_range(txn.as_mut(), index, length);
                 } else {
                     let mut txn = v.transact_mut();
                     v.remove_range(&mut txn, index, length);
@@ -2089,8 +2080,8 @@ impl YText {
                     result
                 }
 
-                let delta = if let Some(txn) = get_txn_mut(txn) {
-                    v.diff_range(txn, hi.as_ref(), lo.as_ref(), |change| {
+                let delta = if let Some(mut txn) = get_txn_mut(txn) {
+                    v.diff_range(txn.as_mut(), hi.as_ref(), lo.as_ref(), |change| {
                         changes(change, &compute_ychange)
                     })
                     .into_iter()
@@ -2293,7 +2284,7 @@ impl YArray {
         match &*self.0.borrow() {
             SharedType::Integrated(v) => {
                 if let Some(txn) = get_txn(txn) {
-                    v.len(txn)
+                    v.len(&*txn)
                 } else {
                     v.len(&v.transact())
                 }
@@ -2308,7 +2299,7 @@ impl YArray {
         match &*self.0.borrow() {
             SharedType::Integrated(v) => {
                 if let Some(txn) = get_txn(txn) {
-                    any_into_js(&v.to_json(txn))
+                    any_into_js(&v.to_json(&*txn))
                 } else {
                     let txn = v.transact();
                     any_into_js(&v.to_json(&txn))
@@ -2330,8 +2321,8 @@ impl YArray {
         let mut j = index;
         match &mut *self.0.borrow_mut() {
             SharedType::Integrated(v) => {
-                if let Some(txn) = get_txn_mut(txn) {
-                    insert_at(v, txn, index, items);
+                if let Some(mut txn) = get_txn_mut(txn) {
+                    insert_at(v, txn.as_mut(), index, items);
                 } else {
                     let mut txn = v.transact_mut();
                     insert_at(v, &mut txn, index, items);
@@ -2355,12 +2346,12 @@ impl YArray {
 
     /// Deletes a range of items of given `length` from current `YArray` instance,
     /// starting from given `index`.
-    #[wasm_bindgen(js_name = delete)]
+    #[wasm_bindgen(method, js_name = delete)]
     pub fn delete(&self, index: u32, length: u32, txn: &ImplicitTransaction) {
         match &mut *self.0.borrow_mut() {
             SharedType::Integrated(v) => {
-                if let Some(txn) = get_txn_mut(txn) {
-                    v.remove_range(txn, index, length)
+                if let Some(mut txn) = get_txn_mut(txn) {
+                    v.remove_range(txn.as_mut(), index, length)
                 } else {
                     let mut txn = v.transact_mut();
                     v.remove_range(&mut txn, index, length)
@@ -2377,8 +2368,8 @@ impl YArray {
     pub fn move_content(&self, source: u32, target: u32, txn: &ImplicitTransaction) {
         match &mut *self.0.borrow_mut() {
             SharedType::Integrated(v) => {
-                if let Some(txn) = get_txn_mut(txn) {
-                    v.move_to(txn, source, target)
+                if let Some(mut txn) = get_txn_mut(txn) {
+                    v.move_to(txn.as_mut(), source, target)
                 } else {
                     let mut txn = v.transact_mut();
                     v.move_to(&mut txn, source, target)
@@ -2398,7 +2389,7 @@ impl YArray {
         match &*self.0.borrow() {
             SharedType::Integrated(v) => {
                 if let Some(txn) = get_txn(txn) {
-                    if let Some(value) = v.get(txn, index) {
+                    if let Some(value) = v.get(&*txn, index) {
                         Ok(value_into_js(value))
                     } else {
                         Err(JsValue::from("Index outside the bounds of an YArray"))
@@ -2448,7 +2439,7 @@ impl YArray {
         match &*self.0.borrow() {
             SharedType::Integrated(v) => {
                 if let Some(txn) = get_txn(txn) {
-                    let values = v.iter(txn);
+                    let values = v.iter(&*txn);
                     iter_to_array(values).into()
                 } else {
                     let txn = v.transact();
@@ -2644,7 +2635,7 @@ impl YMap {
         match &*self.0.borrow() {
             SharedType::Integrated(v) => {
                 if let Some(txn) = get_txn(txn) {
-                    v.len(txn)
+                    v.len(&*txn)
                 } else {
                     v.len(&v.transact())
                 }
@@ -2659,7 +2650,7 @@ impl YMap {
         match &*self.0.borrow() {
             SharedType::Integrated(v) => {
                 if let Some(txn) = get_txn(txn) {
-                    any_into_js(&v.to_json(txn))
+                    any_into_js(&v.to_json(&*txn))
                 } else {
                     let txn = v.transact();
                     any_into_js(&v.to_json(&txn))
@@ -2681,8 +2672,8 @@ impl YMap {
     pub fn set(&self, key: &str, value: JsValue, txn: &ImplicitTransaction) {
         match &mut *self.0.borrow_mut() {
             SharedType::Integrated(v) => {
-                if let Some(txn) = get_txn_mut(txn) {
-                    v.insert(txn, key.to_string(), JsValueWrapper(value));
+                if let Some(mut txn) = get_txn_mut(txn) {
+                    v.insert(txn.as_mut(), key.to_string(), JsValueWrapper(value));
                 } else {
                     let mut txn = v.transact_mut();
                     v.insert(&mut txn, key.to_string(), JsValueWrapper(value));
@@ -2695,12 +2686,12 @@ impl YMap {
     }
 
     /// Removes an entry identified by a given `key` from this instance of `YMap`, if such exists.
-    #[wasm_bindgen(js_name = delete)]
+    #[wasm_bindgen(method, js_name = delete)]
     pub fn delete(&mut self, key: &str, txn: &ImplicitTransaction) {
         match &mut *self.0.borrow_mut() {
             SharedType::Integrated(v) => {
-                if let Some(txn) = get_txn_mut(txn) {
-                    v.remove(txn, key);
+                if let Some(mut txn) = get_txn_mut(txn) {
+                    v.remove(txn.as_mut(), key);
                 } else {
                     let mut txn = v.transact_mut();
                     v.remove(&mut txn, key);
@@ -2719,7 +2710,7 @@ impl YMap {
         match &*self.0.borrow() {
             SharedType::Integrated(v) => {
                 let value = if let Some(txn) = get_txn(txn) {
-                    v.get(txn, key)
+                    v.get(&*txn, key)
                 } else {
                     v.get(&v.transact(), key)
                 };
@@ -2768,7 +2759,7 @@ impl YMap {
         match &*self.0.borrow() {
             SharedType::Integrated(v) => {
                 if let Some(txn) = get_txn(txn) {
-                    let entries = v.iter(txn);
+                    let entries = v.iter(&*txn);
                     iter_to_map(entries).into()
                 } else {
                     let txn = v.transact();
@@ -2860,7 +2851,7 @@ impl YXmlElement {
     #[wasm_bindgen(js_name = length)]
     pub fn length(&self, txn: &ImplicitTransaction) -> u32 {
         if let Some(txn) = get_txn(txn) {
-            self.0.len(txn)
+            self.0.len(&*txn)
         } else {
             let txn = self.0.transact();
             self.0.len(&txn)
@@ -2875,8 +2866,11 @@ impl YXmlElement {
         name: &str,
         txn: &ImplicitTransaction,
     ) -> YXmlElement {
-        if let Some(txn) = get_txn_mut(txn) {
-            YXmlElement(self.0.insert(txn, index, XmlElementPrelim::empty(name)))
+        if let Some(mut txn) = get_txn_mut(txn) {
+            YXmlElement(
+                self.0
+                    .insert(txn.as_mut(), index, XmlElementPrelim::empty(name)),
+            )
         } else {
             let mut txn = self.0.transact_mut();
             YXmlElement(
@@ -2889,8 +2883,8 @@ impl YXmlElement {
     /// Inserts a new instance of `YXmlText` as a child of this XML node and returns it.
     #[wasm_bindgen(js_name = insertXmlText)]
     pub fn insert_xml_text(&self, index: u32, txn: &ImplicitTransaction) -> YXmlText {
-        if let Some(txn) = get_txn_mut(txn) {
-            YXmlText(self.0.insert(txn, index, XmlTextPrelim::new("")))
+        if let Some(mut txn) = get_txn_mut(txn) {
+            YXmlText(self.0.insert(txn.as_mut(), index, XmlTextPrelim::new("")))
         } else {
             let mut txn = self.0.transact_mut();
             YXmlText(self.0.insert(&mut txn, index, XmlTextPrelim::new("")))
@@ -2899,10 +2893,10 @@ impl YXmlElement {
 
     /// Removes a range of children XML nodes from this `YXmlElement` instance,
     /// starting at given `index`.
-    #[wasm_bindgen(js_name = delete)]
+    #[wasm_bindgen(method, js_name = delete)]
     pub fn delete(&self, index: u32, length: u32, txn: &ImplicitTransaction) {
-        if let Some(txn) = get_txn_mut(txn) {
-            self.0.remove_range(txn, index, length)
+        if let Some(mut txn) = get_txn_mut(txn) {
+            self.0.remove_range(txn.as_mut(), index, length)
         } else {
             let mut txn = self.0.transact_mut();
             self.0.remove_range(&mut txn, index, length)
@@ -2912,8 +2906,11 @@ impl YXmlElement {
     /// Appends a new instance of `YXmlElement` as the last child of this XML node and returns it.
     #[wasm_bindgen(js_name = pushXmlElement)]
     pub fn push_xml_element(&self, name: &str, txn: &ImplicitTransaction) -> YXmlElement {
-        if let Some(txn) = get_txn_mut(txn) {
-            YXmlElement(self.0.push_back(txn, XmlElementPrelim::empty(name)))
+        if let Some(mut txn) = get_txn_mut(txn) {
+            YXmlElement(
+                self.0
+                    .push_back(txn.as_mut(), XmlElementPrelim::empty(name)),
+            )
         } else {
             let mut txn = self.0.transact_mut();
             YXmlElement(self.0.push_back(&mut txn, XmlElementPrelim::empty(name)))
@@ -2923,8 +2920,8 @@ impl YXmlElement {
     /// Appends a new instance of `YXmlText` as the last child of this XML node and returns it.
     #[wasm_bindgen(js_name = pushXmlText)]
     pub fn push_xml_text(&self, txn: &ImplicitTransaction) -> YXmlText {
-        if let Some(txn) = get_txn_mut(txn) {
-            YXmlText(self.0.push_back(txn, XmlTextPrelim::new("")))
+        if let Some(mut txn) = get_txn_mut(txn) {
+            YXmlText(self.0.push_back(txn.as_mut(), XmlTextPrelim::new("")))
         } else {
             let mut txn = self.0.transact_mut();
             YXmlText(self.0.push_back(&mut txn, XmlTextPrelim::new("")))
@@ -2947,8 +2944,8 @@ impl YXmlElement {
     /// parent XML node.
     #[wasm_bindgen(js_name = nextSibling)]
     pub fn next_sibling(&self, txn: &ImplicitTransaction) -> JsValue {
-        if let Some(txn) = get_txn_mut(txn) {
-            let mut siblings = self.0.siblings(txn);
+        if let Some(txn) = get_txn(txn) {
+            let mut siblings = self.0.siblings(&*txn);
             siblings
                 .next()
                 .map(xml_into_js)
@@ -2968,8 +2965,8 @@ impl YXmlElement {
     /// of parent XML node.
     #[wasm_bindgen(js_name = prevSibling)]
     pub fn prev_sibling(&self, txn: &ImplicitTransaction) -> JsValue {
-        if let Some(txn) = get_txn_mut(txn) {
-            let mut siblings = self.0.siblings(txn);
+        if let Some(txn) = get_txn(txn) {
+            let mut siblings = self.0.siblings(&*txn);
             siblings
                 .next_back()
                 .map(xml_into_js)
@@ -2998,7 +2995,7 @@ impl YXmlElement {
     #[wasm_bindgen(js_name = toString)]
     pub fn to_string(&self, txn: &ImplicitTransaction) -> String {
         if let Some(txn) = get_txn(txn) {
-            self.0.get_string(txn)
+            self.0.get_string(&*txn)
         } else {
             self.0.get_string(&self.0.transact())
         }
@@ -3008,8 +3005,8 @@ impl YXmlElement {
     /// `name` already existed on that node, its value with be overridden with a provided one.
     #[wasm_bindgen(js_name = setAttribute)]
     pub fn set_attribute(&self, name: &str, value: &str, txn: &ImplicitTransaction) {
-        if let Some(txn) = get_txn_mut(txn) {
-            self.0.insert_attribute(txn, name, value)
+        if let Some(mut txn) = get_txn_mut(txn) {
+            self.0.insert_attribute(txn.as_mut(), name, value)
         } else {
             let mut txn = self.0.transact_mut();
             self.0.insert_attribute(&mut txn, name, value)
@@ -3021,7 +3018,7 @@ impl YXmlElement {
     #[wasm_bindgen(js_name = getAttribute)]
     pub fn get_attribute(&self, name: &str, txn: &ImplicitTransaction) -> Option<String> {
         if let Some(txn) = get_txn(txn) {
-            self.0.get_attribute(txn, name)
+            self.0.get_attribute(&*txn, name)
         } else {
             let txn = self.0.transact();
             self.0.get_attribute(&txn, name)
@@ -3031,8 +3028,8 @@ impl YXmlElement {
     /// Removes an attribute from this XML node, given its `name`.
     #[wasm_bindgen(js_name = removeAttribute)]
     pub fn remove_attribute(&self, name: &str, txn: &ImplicitTransaction) {
-        if let Some(txn) = get_txn_mut(txn) {
-            self.0.remove_attribute(txn, &name);
+        if let Some(mut txn) = get_txn_mut(txn) {
+            self.0.remove_attribute(txn.as_mut(), &name);
         } else {
             let mut txn = self.0.transact_mut();
             self.0.remove_attribute(&mut txn, &name);
@@ -3044,7 +3041,7 @@ impl YXmlElement {
     #[wasm_bindgen(js_name = attributes)]
     pub fn attributes(&self, txn: &ImplicitTransaction) -> JsValue {
         if let Some(txn) = get_txn(txn) {
-            let attrs = self.0.attributes(txn);
+            let attrs = self.0.attributes(&*txn);
             iter_to_map(attrs).into()
         } else {
             let txn = self.0.transact();
@@ -3058,7 +3055,7 @@ impl YXmlElement {
     #[wasm_bindgen(js_name = treeWalker)]
     pub fn tree_walker(&self, txn: &ImplicitTransaction) -> JsValue {
         if let Some(txn) = get_txn(txn) {
-            let tree_walker = self.0.successors(txn);
+            let tree_walker = self.0.successors(&*txn);
             iter_to_array(tree_walker).into()
         } else {
             let txn = self.0.transact();
@@ -3107,7 +3104,7 @@ impl YXmlFragment {
     #[wasm_bindgen(js_name = length)]
     pub fn length(&self, txn: &ImplicitTransaction) -> u32 {
         if let Some(txn) = get_txn(txn) {
-            self.0.len(txn)
+            self.0.len(&*txn)
         } else {
             let txn = self.0.transact();
             self.0.len(&txn)
@@ -3122,8 +3119,11 @@ impl YXmlFragment {
         name: &str,
         txn: &ImplicitTransaction,
     ) -> YXmlElement {
-        if let Some(txn) = get_txn_mut(txn) {
-            YXmlElement(self.0.insert(txn, index, XmlElementPrelim::empty(name)))
+        if let Some(mut txn) = get_txn_mut(txn) {
+            YXmlElement(
+                self.0
+                    .insert(txn.as_mut(), index, XmlElementPrelim::empty(name)),
+            )
         } else {
             let mut txn = self.0.transact_mut();
             YXmlElement(
@@ -3136,8 +3136,8 @@ impl YXmlFragment {
     /// Inserts a new instance of `YXmlText` as a child of this XML node and returns it.
     #[wasm_bindgen(js_name = insertXmlText)]
     pub fn insert_xml_text(&self, index: u32, txn: &ImplicitTransaction) -> YXmlText {
-        if let Some(txn) = get_txn_mut(txn) {
-            YXmlText(self.0.insert(txn, index, XmlTextPrelim::new("")))
+        if let Some(mut txn) = get_txn_mut(txn) {
+            YXmlText(self.0.insert(txn.as_mut(), index, XmlTextPrelim::new("")))
         } else {
             let mut txn = self.0.transact_mut();
             YXmlText(self.0.insert(&mut txn, index, XmlTextPrelim::new("")))
@@ -3146,10 +3146,10 @@ impl YXmlFragment {
 
     /// Removes a range of children XML nodes from this `YXmlElement` instance,
     /// starting at given `index`.
-    #[wasm_bindgen(js_name = delete)]
+    #[wasm_bindgen(method, js_name = delete)]
     pub fn delete(&self, index: u32, length: u32, txn: &ImplicitTransaction) {
-        if let Some(txn) = get_txn_mut(txn) {
-            self.0.remove_range(txn, index, length)
+        if let Some(mut txn) = get_txn_mut(txn) {
+            self.0.remove_range(txn.as_mut(), index, length)
         } else {
             let mut txn = self.0.transact_mut();
             self.0.remove_range(&mut txn, index, length)
@@ -3159,8 +3159,11 @@ impl YXmlFragment {
     /// Appends a new instance of `YXmlElement` as the last child of this XML node and returns it.
     #[wasm_bindgen(js_name = pushXmlElement)]
     pub fn push_xml_element(&self, name: &str, txn: &ImplicitTransaction) -> YXmlElement {
-        if let Some(txn) = get_txn_mut(txn) {
-            YXmlElement(self.0.push_back(txn, XmlElementPrelim::empty(name)))
+        if let Some(mut txn) = get_txn_mut(txn) {
+            YXmlElement(
+                self.0
+                    .push_back(txn.as_mut(), XmlElementPrelim::empty(name)),
+            )
         } else {
             let mut txn = self.0.transact_mut();
             YXmlElement(self.0.push_back(&mut txn, XmlElementPrelim::empty(name)))
@@ -3170,8 +3173,8 @@ impl YXmlFragment {
     /// Appends a new instance of `YXmlText` as the last child of this XML node and returns it.
     #[wasm_bindgen(js_name = pushXmlText)]
     pub fn push_xml_text(&self, txn: &ImplicitTransaction) -> YXmlText {
-        if let Some(txn) = get_txn_mut(txn) {
-            YXmlText(self.0.push_back(txn, XmlTextPrelim::new("")))
+        if let Some(mut txn) = get_txn_mut(txn) {
+            YXmlText(self.0.push_back(txn.as_mut(), XmlTextPrelim::new("")))
         } else {
             let mut txn = self.0.transact_mut();
             YXmlText(self.0.push_back(&mut txn, XmlTextPrelim::new("")))
@@ -3193,7 +3196,7 @@ impl YXmlFragment {
     #[wasm_bindgen(js_name = toString)]
     pub fn to_string(&self, txn: &ImplicitTransaction) -> String {
         if let Some(txn) = get_txn(txn) {
-            self.0.get_string(txn)
+            self.0.get_string(&*txn)
         } else {
             self.0.get_string(&self.0.transact())
         }
@@ -3204,7 +3207,7 @@ impl YXmlFragment {
     #[wasm_bindgen(js_name = treeWalker)]
     pub fn tree_walker(&self, txn: &ImplicitTransaction) -> JsValue {
         if let Some(txn) = get_txn(txn) {
-            let tree_walker = self.0.successors(txn);
+            let tree_walker = self.0.successors(&*txn);
             iter_to_array(tree_walker).into()
         } else {
             let txn = self.0.transact();
@@ -3266,7 +3269,7 @@ impl YXmlText {
     #[wasm_bindgen]
     pub fn length(&self, txn: &ImplicitTransaction) -> u32 {
         if let Some(txn) = get_txn(txn) {
-            self.0.len(txn)
+            self.0.len(&*txn)
         } else {
             let txn = self.0.transact();
             self.0.len(&txn)
@@ -3279,12 +3282,12 @@ impl YXmlText {
     /// with a formatting blocks.
     #[wasm_bindgen(js_name = insert)]
     pub fn insert(&self, index: i32, chunk: &str, attrs: JsValue, txn: &ImplicitTransaction) {
-        if let Some(txn) = get_txn_mut(txn) {
+        if let Some(mut txn) = get_txn_mut(txn) {
             if let Some(attrs) = YText::parse_attrs(attrs) {
                 self.0
-                    .insert_with_attributes(txn, index as u32, chunk, attrs)
+                    .insert_with_attributes(txn.as_mut(), index as u32, chunk, attrs)
             } else {
-                self.0.insert(txn, index as u32, chunk)
+                self.0.insert(txn.as_mut(), index as u32, chunk)
             }
         } else {
             let mut txn = self.0.transact_mut();
@@ -3302,8 +3305,8 @@ impl YXmlText {
     #[wasm_bindgen(js_name = format)]
     pub fn format(&self, index: i32, len: i32, attrs: JsValue, txn: &ImplicitTransaction) {
         if let Some(attrs) = YText::parse_attrs(attrs) {
-            if let Some(txn) = get_txn_mut(txn) {
-                self.0.format(txn, index as u32, len as u32, attrs)
+            if let Some(mut txn) = get_txn_mut(txn) {
+                self.0.format(txn.as_mut(), index as u32, len as u32, attrs)
             } else {
                 let mut txn = self.0.transact_mut();
                 self.0.format(&mut txn, index as u32, len as u32, attrs)
@@ -3327,12 +3330,12 @@ impl YXmlText {
         txn: &ImplicitTransaction,
     ) {
         let content = js_into_any(&embed).unwrap();
-        if let Some(txn) = get_txn_mut(txn) {
+        if let Some(mut txn) = get_txn_mut(txn) {
             if let Some(attrs) = YText::parse_attrs(attributes) {
                 self.0
-                    .insert_embed_with_attributes(txn, index, content, attrs);
+                    .insert_embed_with_attributes(txn.as_mut(), index, content, attrs);
             } else {
-                self.0.insert_embed(txn, index, content);
+                self.0.insert_embed(txn.as_mut(), index, content);
             }
         } else {
             let mut txn = self.0.transact_mut();
@@ -3352,7 +3355,7 @@ impl YXmlText {
     #[wasm_bindgen(js_name = push)]
     pub fn push(&self, chunk: &str, attrs: JsValue, txn: &ImplicitTransaction) {
         let index = if let Some(txn) = get_txn(txn) {
-            self.0.len(txn)
+            self.0.len(&*txn)
         } else {
             let txn = self.0.transact();
             self.0.len(&txn)
@@ -3362,10 +3365,10 @@ impl YXmlText {
 
     /// Deletes a specified range of of characters, starting at a given `index`.
     /// Both `index` and `length` are counted in terms of a number of UTF-8 character bytes.
-    #[wasm_bindgen(js_name = delete)]
+    #[wasm_bindgen(method, js_name = delete)]
     pub fn delete(&self, index: u32, length: u32, txn: &ImplicitTransaction) {
-        if let Some(txn) = get_txn_mut(txn) {
-            self.0.remove_range(txn, index, length)
+        if let Some(mut txn) = get_txn_mut(txn) {
+            self.0.remove_range(txn.as_mut(), index, length)
         } else {
             let mut txn = self.0.transact_mut();
             self.0.remove_range(&mut txn, index, length)
@@ -3377,8 +3380,8 @@ impl YXmlText {
     /// parent XML node.
     #[wasm_bindgen(js_name = nextSibling)]
     pub fn next_sibling(&self, txn: &ImplicitTransaction) -> JsValue {
-        if let Some(txn) = get_txn_mut(txn) {
-            let mut siblings = self.0.siblings(txn);
+        if let Some(txn) = get_txn(txn) {
+            let mut siblings = self.0.siblings(&*txn);
             siblings
                 .next()
                 .map(xml_into_js)
@@ -3398,8 +3401,8 @@ impl YXmlText {
     /// of parent XML node.
     #[wasm_bindgen(js_name = prevSibling)]
     pub fn prev_sibling(&self, txn: &ImplicitTransaction) -> JsValue {
-        if let Some(txn) = get_txn_mut(txn) {
-            let mut siblings = self.0.siblings(txn);
+        if let Some(txn) = get_txn(txn) {
+            let mut siblings = self.0.siblings(&*txn);
             siblings
                 .next_back()
                 .map(xml_into_js)
@@ -3428,7 +3431,7 @@ impl YXmlText {
     #[wasm_bindgen(js_name = toString)]
     pub fn to_string(&self, txn: &ImplicitTransaction) -> String {
         if let Some(txn) = get_txn(txn) {
-            self.0.get_string(txn)
+            self.0.get_string(&*txn)
         } else {
             let txn = self.0.transact();
             self.0.get_string(&txn)
@@ -3439,8 +3442,8 @@ impl YXmlText {
     /// `name` already existed on that node, its value with be overridden with a provided one.
     #[wasm_bindgen(js_name = setAttribute)]
     pub fn set_attribute(&self, name: &str, value: &str, txn: &ImplicitTransaction) {
-        if let Some(txn) = get_txn_mut(txn) {
-            self.0.insert_attribute(txn, name, value);
+        if let Some(mut txn) = get_txn_mut(txn) {
+            self.0.insert_attribute(txn.as_mut(), name, value);
         } else {
             let mut txn = self.0.transact_mut();
             self.0.insert_attribute(&mut txn, name, value);
@@ -3452,7 +3455,7 @@ impl YXmlText {
     #[wasm_bindgen(js_name = getAttribute)]
     pub fn get_attribute(&self, name: &str, txn: &ImplicitTransaction) -> Option<String> {
         if let Some(txn) = get_txn(txn) {
-            self.0.get_attribute(txn, name)
+            self.0.get_attribute(&*txn, name)
         } else {
             let txn = self.0.transact();
             self.0.get_attribute(&txn, name)
@@ -3462,8 +3465,8 @@ impl YXmlText {
     /// Removes an attribute from this XML node, given its `name`.
     #[wasm_bindgen(js_name = removeAttribute)]
     pub fn remove_attribute(&self, name: &str, txn: &ImplicitTransaction) {
-        if let Some(txn) = get_txn_mut(txn) {
-            self.0.remove_attribute(txn, &name);
+        if let Some(mut txn) = get_txn_mut(txn) {
+            self.0.remove_attribute(txn.as_mut(), &name);
         } else {
             let mut txn = self.0.transact_mut();
             self.0.remove_attribute(&mut txn, &name);
@@ -3475,7 +3478,7 @@ impl YXmlText {
     #[wasm_bindgen(js_name = attributes)]
     pub fn attributes(&self, txn: &ImplicitTransaction) -> JsValue {
         if let Some(txn) = get_txn(txn) {
-            let attrs = self.0.attributes(txn);
+            let attrs = self.0.attributes(&*txn);
             iter_to_map(attrs).into()
         } else {
             let txn = self.0.transact();
@@ -3903,9 +3906,12 @@ fn any_into_js(v: &Any) -> JsValue {
 }
 
 fn from_origin(origin: Option<&Origin>) -> JsValue {
-    origin
-        .map(|origin| Uint8Array::from(origin.as_ref()).into())
-        .unwrap_or(JsValue::NULL)
+    if let Some(o) = origin {
+        let be: [u8; 4] = o.as_ref().try_into().unwrap();
+        unsafe { JsValue::from_abi(u32::from_be_bytes(be)) }
+    } else {
+        JsValue::UNDEFINED
+    }
 }
 
 fn value_into_js(v: Value) -> JsValue {
@@ -3967,7 +3973,7 @@ impl<'a> TryFrom<&'a JsValue> for Shared<'a> {
 
     fn try_from(js: &'a JsValue) -> Result<Self, Self::Error> {
         let ctor_name = Object::get_prototype_of(js).constructor().name();
-        let ptr = Reflect::get(js, &JsValue::from_str("ptr"))?;
+        let ptr = Reflect::get(js, &JsValue::from_str(WASM_REF_PTR))?;
         let ptr_u32: u32 = ptr.as_f64().ok_or(JsValue::NULL)? as u32;
 
         if ctor_name == "YText" {
@@ -4067,8 +4073,8 @@ pub fn create_sticky_index_from_type(
             Assoc::Before
         };
         if let Some(branch) = shared.branch() {
-            let pos = if let Some(txn) = get_txn_mut(txn) {
-                StickyIndex::at(txn, branch, index, assoc)
+            let pos = if let Some(mut txn) = get_txn_mut(txn) {
+                StickyIndex::at(txn.as_mut(), branch, index, assoc)
             } else {
                 let mut txn = branch.transact_mut();
                 StickyIndex::at(&mut txn, branch, index, assoc)

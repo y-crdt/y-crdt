@@ -107,21 +107,24 @@ export const testObserver = tc => {
     const x = d1.getMap('test')
     let target = null
     let entries = null
+    let origin = null
     let observer = x.observe(e => {
         target = e.target
         entries = e.keys
+        origin = e.origin
     })
 
     // insert initial data to an empty YMap
     d1.transact(txn => {
         x.set('key1', 'value1', txn)
         x.set('key2', 2, txn)
-    })
+    }, 'TEST_ORIGIN')
     t.compare(target.toJson(), x.toJson())
     t.compare(entries, {
         key1: { action: 'add', newValue: 'value1' },
         key2: { action: 'add', newValue: 2 }
     })
+    t.compare(origin, 'TEST_ORIGIN')
     target = null
     entries = null
 
@@ -135,6 +138,7 @@ export const testObserver = tc => {
         key1: { action: 'delete', oldValue: 'value1' },
         key2: { action: 'update', oldValue: 2, newValue: 'value2' }
     })
+    t.compare(origin, undefined)
     target = null
     entries = null
 
