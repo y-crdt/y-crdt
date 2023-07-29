@@ -1471,24 +1471,19 @@ impl YXmlTextEvent {
 #[wasm_bindgen]
 pub struct YWeakLinkEvent {
     inner: *const WeakEvent,
-    txn: *const TransactionMut<'static>,
     target: Option<JsValue>,
-    keys: Option<JsValue>,
-    delta: Option<JsValue>,
+    origin: JsValue,
 }
 
 #[wasm_bindgen]
 impl YWeakLinkEvent {
     fn new<'doc>(event: &WeakEvent, txn: &TransactionMut<'doc>) -> Self {
+        let origin = from_origin(txn.origin());
         let inner = event as *const WeakEvent;
-        let txn: &TransactionMut<'static> = unsafe { std::mem::transmute(txn) };
-        let txn = txn as *const TransactionMut<'static>;
         YWeakLinkEvent {
             inner,
-            txn,
+            origin,
             target: None,
-            delta: None,
-            keys: None,
         }
     }
 
@@ -1496,52 +1491,29 @@ impl YWeakLinkEvent {
         unsafe { self.inner.as_ref().unwrap() }
     }
 
-    fn txn(&self) -> &TransactionMut {
-        unsafe { self.txn.as_ref().unwrap() }
+    #[wasm_bindgen(getter, js_name = origin)]
+    pub fn origin(&self) -> JsValue {
+        self.origin.clone()
     }
 
     /// Returns a current shared type instance, that current event changes refer to.
-    #[wasm_bindgen(method, getter)]
+    #[wasm_bindgen(getter)]
     pub fn target(&mut self) -> JsValue {
         if let Some(target) = self.target.as_ref() {
             target.clone()
         } else {
             let node = self.inner().as_target::<BranchPtr>();
             let target: JsValue = YWeakLink::from(node).into();
-            self.target = Some(target);
+            self.target = Some(target.clone());
             target
         }
     }
 
     /// Returns an array of keys and indexes creating a path from root type down to current instance
     /// of shared type (accessible via `target` getter).
-    #[wasm_bindgen(method)]
+    #[wasm_bindgen]
     pub fn path(&self) -> JsValue {
         path_into_js(self.inner().path())
-    }
-
-    /// Returns a list of XML child node changes made over corresponding `YXmlElement` collection
-    /// within bounds of current transaction. These changes follow a format:
-    ///
-    /// - { insert: (YXmlText|YXmlElement)[] }
-    /// - { delete: number }
-    /// - { retain: number }
-    #[wasm_bindgen(method, getter)]
-    pub fn delta(&mut self) -> JsValue {
-        if let Some(delta) = &self.delta {
-            delta.clone()
-        } else {
-            let delta = self
-                .inner()
-                .delta(self.txn())
-                .into_iter()
-                .map(change_into_js);
-            let mut result = js_sys::Array::new();
-            result.extend(delta);
-            let delta: JsValue = result.into();
-            self.delta = Some(delta.clone());
-            delta
-        }
     }
 }
 
@@ -2130,6 +2102,28 @@ impl YText {
         }
     }
 
+    #[wasm_bindgen(js_name = quote)]
+    pub fn quote(
+        &self,
+        index: u32,
+        length: u32,
+        txn: &ImplicitTransaction,
+    ) -> Result<JsValue, JsValue> {
+        match &*self.0.borrow() {
+            SharedType::Integrated(v) => {
+                let value = if let Some(mut txn) = get_txn_mut(txn) {
+                    v.quote(txn.as_mut(), index, length)
+                } else {
+                    v.quote(&mut v.transact_mut(), index, length)
+                };
+                Ok(value.map(|v| YWeakLink::from(v).into()).unwrap_or_default())
+            }
+            SharedType::Prelim(_) => Err(JsValue::from_str(
+                "YText.quote cannot be used over object not integrated into YDoc",
+            )),
+        }
+    }
+
     /// Returns the Delta representation of this YText type.
     #[wasm_bindgen(js_name = toDelta)]
     pub fn to_delta(
@@ -2494,6 +2488,28 @@ impl YArray {
         }
     }
 
+    #[wasm_bindgen(js_name = quote)]
+    pub fn quote(
+        &self,
+        index: u32,
+        length: u32,
+        txn: &ImplicitTransaction,
+    ) -> Result<JsValue, JsValue> {
+        match &*self.0.borrow() {
+            SharedType::Integrated(v) => {
+                let value = if let Some(txn) = get_txn(txn) {
+                    v.quote(&*txn, index, length)
+                } else {
+                    v.quote(&v.transact(), index, length)
+                };
+                Ok(value.map(|v| YWeakLink::from(v).into()).unwrap_or_default())
+            }
+            SharedType::Prelim(_) => Err(JsValue::from_str(
+                "YArray.quote cannot be used over object not integrated into YDoc",
+            )),
+        }
+    }
+
     /// Returns an iterator that can be used to traverse over the values stored withing this
     /// instance of `YArray`.
     ///
@@ -2791,24 +2807,30 @@ impl YMap {
         match &*self.0.borrow() {
             SharedType::Integrated(v) => {
                 let value = if let Some(txn) = get_txn(txn) {
+                    v.link(&*txn, key)
+                } else {
+                    v.link(&v.transact(), key)
+                };
+                value.map(|v| YWeakLink::from(v).into()).unwrap_or_default()
+            }
+            SharedType::Prelim(v) => v.get(key).cloned().unwrap_or_default(),
+        }
+    }
+
+    #[wasm_bindgen(js_name = link)]
+    pub fn link(&self, key: &str, txn: &ImplicitTransaction) -> Result<JsValue, JsValue> {
+        match &*self.0.borrow() {
+            SharedType::Integrated(v) => {
+                let value = if let Some(txn) = get_txn(txn) {
                     v.get(&*txn, key)
                 } else {
                     v.get(&v.transact(), key)
                 };
-
-                if let Some(value) = value {
-                    value_into_js(value)
-                } else {
-                    JsValue::undefined()
-                }
+                Ok(value.map(value_into_js).unwrap_or_default())
             }
-            SharedType::Prelim(v) => {
-                if let Some(value) = v.get(key) {
-                    value.clone()
-                } else {
-                    JsValue::undefined()
-                }
-            }
+            SharedType::Prelim(_) => Err(JsValue::from_str(
+                "YMap.link cannot be used over object not integrated into YDoc",
+            )),
         }
     }
 
@@ -3397,6 +3419,17 @@ impl YXmlText {
         }
     }
 
+    #[wasm_bindgen(js_name = quote)]
+    pub fn quote(&self, index: u32, length: u32, txn: &ImplicitTransaction) -> JsValue {
+        let value = if let Some(mut txn) = get_txn_mut(txn) {
+            self.0.quote(txn.as_mut(), index, length)
+        } else {
+            let mut txn = self.0.transact_mut();
+            self.0.quote(&mut txn, index, length)
+        };
+        value.map(|v| YWeakLink::from(v).into()).unwrap_or_default()
+    }
+
     /// Inserts a given `embed` object into this `YXmlText` instance, starting at a given `index`.
     ///
     /// Optional object with defined `attributes` will be used to wrap provided `embed`
@@ -3601,7 +3634,7 @@ pub struct YWeakLink(RefCell<SharedType<WeakRef<BranchPtr>, WeakPrelim<BranchPtr
 #[wasm_bindgen]
 impl YWeakLink {
     /// Returns a number of child XML nodes stored within this `YXMlElement` instance.
-    #[wasm_bindgen(catch, js_name = length)]
+    #[wasm_bindgen(js_name = deref)]
     pub fn deref(&self, txn: &ImplicitTransaction) -> Result<JsValue, JsValue> {
         match &*self.0.borrow() {
             SharedType::Integrated(v) => {
@@ -3610,12 +3643,37 @@ impl YWeakLink {
                 let value = if let Some(txn) = get_txn(txn) {
                     weak_map_ref.try_deref_raw(&*txn)
                 } else {
-                    let mut txn = branch.transact_mut();
+                    let txn = branch.transact();
                     weak_map_ref.try_deref_raw(&txn)
                 };
                 Ok(value.map(value_into_js).unwrap_or(JsValue::UNDEFINED))
             }
-            SharedType::Prelim(v) => Err(JsValue::from_str(
+            SharedType::Prelim(_) => Err(JsValue::from_str(
+                "cannot dereference WeakLink, which has not be integrated",
+            )),
+        }
+    }
+
+    #[wasm_bindgen(js_name = unquote)]
+    pub fn unquote(&self, txn: &ImplicitTransaction) -> Result<js_sys::Array, JsValue> {
+        match &*self.0.borrow() {
+            SharedType::Integrated(v) => {
+                let branch: &Branch = v.as_ref();
+                let weak_array_ref: WeakRef<ArrayRef> = WeakRef::from(BranchPtr::from(branch));
+                let array = js_sys::Array::new();
+                if let Some(txn) = get_txn(txn) {
+                    for js in weak_array_ref.unquote(&*txn) {
+                        array.push(&value_into_js(js));
+                    }
+                } else {
+                    let txn = branch.transact();
+                    for js in weak_array_ref.unquote(&txn) {
+                        array.push(&value_into_js(js));
+                    }
+                };
+                Ok(array)
+            }
+            SharedType::Prelim(_) => Err(JsValue::from_str(
                 "cannot dereference WeakLink, which has not be integrated",
             )),
         }
@@ -3664,6 +3722,12 @@ impl YWeakLink {
 impl<P: AsRef<Branch>> From<WeakRef<P>> for YWeakLink {
     fn from(v: WeakRef<P>) -> Self {
         YWeakLink(SharedType::new(v.into_inner()))
+    }
+}
+
+impl<P> From<WeakPrelim<P>> for YWeakLink {
+    fn from(value: WeakPrelim<P>) -> Self {
+        YWeakLink(SharedType::prelim(value.into_inner()))
     }
 }
 

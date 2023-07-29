@@ -1,6 +1,8 @@
 use crate::atomic::AtomicRef;
 use crate::block::{Block, BlockPtr, BlockSlice, EmbedPrelim, ItemContent, Prelim};
-use crate::types::{Branch, BranchPtr, EventHandler, Observers, SharedRef, TypeRef, Value};
+use crate::types::{
+    Branch, BranchPtr, Delta, EventHandler, Observers, Path, SharedRef, TypeRef, Value,
+};
 use crate::{
     Array, GetString, Map, Observable, OffsetKind, ReadTxn, TextRef, TransactionMut, XmlTextRef, ID,
 };
@@ -31,17 +33,14 @@ impl<P: From<BranchPtr>> From<BranchPtr> for WeakRef<P> {
     }
 }
 
-impl<P: SharedRef> TryFrom<BlockPtr> for WeakRef<P> {
-    type Error = BlockPtr;
+impl<P: TryFrom<BlockPtr>> TryFrom<BlockPtr> for WeakRef<P> {
+    type Error = P::Error;
 
     fn try_from(value: BlockPtr) -> Result<Self, Self::Error> {
-        if let Block::Item(item) = value.deref() {
-            if let ItemContent::Type(branch) = &item.content {
-                let branch = BranchPtr::from(branch.deref());
-                return Ok(Self::from(branch));
-            }
+        match P::try_from(value) {
+            Ok(p) => Ok(WeakRef(p)),
+            Err(e) => Err(e),
         }
-        Err(value)
     }
 }
 
@@ -188,9 +187,16 @@ impl<P> WeakPrelim<P> {
             _marker: PhantomData::default(),
         }
     }
+
+    pub fn into_inner(&self) -> WeakPrelim<BranchPtr> {
+        WeakPrelim {
+            source: self.source.clone(),
+            _marker: PhantomData::default(),
+        }
+    }
 }
 
-impl<P: SharedRef> From<WeakRef<P>> for WeakPrelim<P> {
+impl<P: AsRef<Branch>> From<WeakRef<P>> for WeakPrelim<P> {
     fn from(value: WeakRef<P>) -> Self {
         let branch = value.0.as_ref();
         if let TypeRef::WeakLink(source) = &branch.type_ref {
@@ -204,7 +210,7 @@ impl<P: SharedRef> From<WeakRef<P>> for WeakPrelim<P> {
     }
 }
 
-impl<P: SharedRef> Prelim for WeakPrelim<P> {
+impl<P: TryFrom<BlockPtr>> Prelim for WeakPrelim<P> {
     type Return = WeakRef<P>;
 
     fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
@@ -215,7 +221,7 @@ impl<P: SharedRef> Prelim for WeakPrelim<P> {
     fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {}
 }
 
-impl<P: SharedRef> Into<EmbedPrelim<WeakPrelim<P>>> for WeakPrelim<P> {
+impl<P> Into<EmbedPrelim<WeakPrelim<P>>> for WeakPrelim<P> {
     fn into(self) -> EmbedPrelim<WeakPrelim<P>> {
         EmbedPrelim::Shared(self)
     }
@@ -237,6 +243,11 @@ impl WeakEvent {
 
     pub fn as_target<T: From<BranchPtr>>(&self) -> WeakRef<T> {
         WeakRef(T::from(self.target))
+    }
+
+    /// Returns a path from root type down to [Text] instance which emitted this event.
+    pub fn path(&self) -> Path {
+        Branch::path(self.current_target, self.target)
     }
 }
 
