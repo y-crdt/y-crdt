@@ -2374,7 +2374,7 @@ pub struct YChunk {
     pub data: YOutput,
     /// Number of formatting attributes attached to current chunk of text.
     pub fmt_len: u32,
-    ///
+    /// The formatting attributes attached to the current chunk of text.
     pub fmt: *mut YMapEntry,
 }
 
