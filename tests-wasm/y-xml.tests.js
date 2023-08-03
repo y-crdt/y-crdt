@@ -131,23 +131,26 @@ export const testXmlTextObserver = tc => {
     let target = null
     let attributes = null
     let delta = null
+    let origin = null
     let observer = x.observe(e => {
         target = e.target
         attributes = e.keys
         delta = e.delta
+        origin = e.origin
     })
 
     // set initial attributes
     d1.transact(txn => {
         x.setAttribute('attr1', 'value1', txn)
         x.setAttribute('attr2', 'value2', txn)
-    })
+    }, 'TEST_ORIGIN')
     t.compare(target.toString(), x.toString())
     t.compare(delta, [])
     t.compare(attributes, {
         attr1: { action: 'add', newValue: 'value1' },
         attr2: { action: 'add', newValue: 'value2' }
     })
+    t.compare(origin, 'TEST_ORIGIN')
     target = null
     attributes = null
     delta = null
@@ -156,13 +159,14 @@ export const testXmlTextObserver = tc => {
     d1.transact(txn => {
         x.setAttribute('attr1', 'value11', txn)
         x.removeAttribute('attr2', txn)
-    })
+    }, 'TEST_ORIGIN2')
     t.compare(target.toString(), x.toString())
     t.compare(delta, [])
     t.compare(attributes, {
         attr1: { action: 'update', oldValue: 'value1', newValue: 'value11' },
         attr2: { action: 'delete', oldValue: 'value2' }
     })
+    t.compare(origin, 'TEST_ORIGIN2')
     target = null
     attributes = null
     delta = null

@@ -1,4 +1,4 @@
-use criterion::{criterion_group, criterion_main, Criterion, SamplingMode};
+use criterion::{black_box, criterion_group, criterion_main, Criterion, SamplingMode};
 use lib0::decoding::{Cursor, Read};
 use lib0::encoding::Write;
 
