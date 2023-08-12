@@ -1891,6 +1891,7 @@ pub unsafe extern "C" fn yxml_prev_sibling(
 /// a root-level shared data type.
 ///
 /// A returned value should be eventually released using [youtput_destroy] function.
+// TODO [LSViana] Check if the mention of "youtput_destroy" above is correct.
 #[no_mangle]
 pub unsafe extern "C" fn yxmlelem_parent(xml: *const Branch) -> *mut Branch {
     assert!(!xml.is_null());
