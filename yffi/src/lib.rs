@@ -3233,7 +3233,7 @@ pub unsafe extern "C" fn youtput_read_binary(val: *const YOutput) -> *const c_ch
 /// 
 /// Returns `true` if the value is `null`, `false` otherwise.
 #[no_mangle]
-pub unsafe extern "C" fn youtput_read_json_null(val: *const YOutput) -> bool {
+pub unsafe extern "C" fn youtput_is_json_null(val: *const YOutput) -> bool {
     let v = val.as_ref().unwrap();
 
     v.tag == Y_JSON_NULL
@@ -3243,7 +3243,7 @@ pub unsafe extern "C" fn youtput_read_json_null(val: *const YOutput) -> bool {
 ///
 /// Returns `true` if the value is `undefined`, `false` otherwise.
 #[no_mangle]
-pub unsafe extern "C" fn youtput_read_json_undefined(val: *const YOutput) -> bool {
+pub unsafe extern "C" fn youtput_is_json_undefined(val: *const YOutput) -> bool {
     let v = val.as_ref().unwrap();
 
     v.tag == Y_JSON_UNDEF
