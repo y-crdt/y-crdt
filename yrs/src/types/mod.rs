@@ -95,6 +95,23 @@ impl TypeRef {
     }
 }
 
+impl std::fmt::Display for TypeRef {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TypeRef::Array => write!(f, "Array"),
+            TypeRef::Map => write!(f, "Map"),
+            TypeRef::Text => write!(f, "Text"),
+            TypeRef::XmlElement(name) => write!(f, "XmlElement({})", name),
+            TypeRef::XmlFragment => write!(f, "XmlFragment"),
+            TypeRef::XmlHook => write!(f, "XmlHook"),
+            TypeRef::XmlText => write!(f, "XmlText"),
+            TypeRef::SubDoc => write!(f, "Doc"),
+            TypeRef::WeakLink(_) => write!(f, "WeakRef"),
+            TypeRef::Undefined => write!(f, "(undefined)"),
+        }
+    }
+}
+
 impl Encode for TypeRef {
     fn encode<E: Encoder>(&self, encoder: &mut E) {
         match self {
@@ -305,14 +322,14 @@ impl Into<Value> for BranchPtr {
     /// types [Value::Any] will never be returned from this method.
     fn into(self) -> Value {
         match self.type_ref() {
-            TYPE_REFS_ARRAY => Value::YArray(ArrayRef::from(self)),
-            TYPE_REFS_MAP => Value::YMap(MapRef::from(self)),
-            TYPE_REFS_TEXT => Value::YText(TextRef::from(self)),
-            TYPE_REFS_XML_ELEMENT => Value::YXmlElement(XmlElementRef::from(self)),
-            TYPE_REFS_XML_FRAGMENT => Value::YXmlFragment(XmlFragmentRef::from(self)),
-            TYPE_REFS_XML_TEXT => Value::YXmlText(XmlTextRef::from(self)),
+            TypeRef::Array => Value::YArray(ArrayRef::from(self)),
+            TypeRef::Map => Value::YMap(MapRef::from(self)),
+            TypeRef::Text => Value::YText(TextRef::from(self)),
+            TypeRef::XmlElement(_) => Value::YXmlElement(XmlElementRef::from(self)),
+            TypeRef::XmlFragment => Value::YXmlFragment(XmlFragmentRef::from(self)),
+            TypeRef::XmlText => Value::YXmlText(XmlTextRef::from(self)),
             //TYPE_REFS_XML_HOOK => Value::YXmlHook(XmlHookRef::from(self)),
-            TYPE_REFS_WEAK => Value::YWeakLink(WeakRef::from(self)),
+            TypeRef::WeakLink(_) => Value::YWeakLink(WeakRef::from(self)),
             other => panic!("Cannot convert to value - unsupported type ref: {}", other),
         }
     }
@@ -425,8 +442,8 @@ impl Branch {
     }
 
     /// Returns an identifier of an underlying complex data type (eg. is it an Array or a Map).
-    pub fn type_ref(&self) -> u8 {
-        self.type_ref.kind() & 0b1111
+    pub fn type_ref(&self) -> &TypeRef {
+        &self.type_ref
     }
 
     pub(crate) fn repair_type_ref(&mut self, type_ref: TypeRef) {

@@ -11,11 +11,11 @@ use wasm_bindgen::__rt::{Ref, RefMut};
 use wasm_bindgen::convert::{FromWasmAbi, IntoWasmAbi};
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
-use yrs::block::{ClientID, ItemContent, Prelim, Unused};
+use yrs::block::{ClientID, EmbedPrelim, ItemContent, Prelim, Unused};
 use yrs::types::array::ArrayEvent;
 use yrs::types::map::MapEvent;
 use yrs::types::text::{ChangeKind, Diff, TextEvent, YChange};
-use yrs::types::weak::{WeakEvent, WeakPrelim, WeakRef};
+use yrs::types::weak::{LinkSource, WeakEvent, WeakPrelim, WeakRef};
 use yrs::types::xml::{XmlEvent, XmlTextEvent};
 use yrs::types::{
     Attrs, Branch, BranchPtr, Change, DeepEventsSubscription, DeepObservable, Delta, EntryChange,
@@ -1557,6 +1557,22 @@ fn entry_change_into_js(change: &EntryChange) -> JsValue {
     result.into()
 }
 
+fn ychange_to_js(change: YChange, compute_ychange: &Option<js_sys::Function>) -> JsValue {
+    let kind = match change.kind {
+        ChangeKind::Added => JsValue::from("added"),
+        ChangeKind::Removed => JsValue::from("removed"),
+    };
+    let result = if let Some(func) = compute_ychange {
+        let id = change.id.into_js();
+        func.call2(&JsValue::UNDEFINED, &kind, &id).unwrap()
+    } else {
+        let js: JsValue = js_sys::Object::new().into();
+        js_sys::Reflect::set(&js, &JsValue::from("type"), &kind).unwrap();
+        js
+    };
+    result
+}
+
 fn ytext_change_into_js(change: Diff<JsValue>) -> JsValue {
     let delta = Delta::Inserted(change.insert, change.attributes);
     let js = ytext_delta_into_js(&delta);
@@ -1986,7 +2002,7 @@ impl YText {
     ) {
         match &mut *self.0.borrow_mut() {
             SharedType::Integrated(v) => {
-                let content = js_into_any(&embed).unwrap();
+                let content = JsValueWrapper(embed);
                 if let Some(mut txn) = get_txn_mut(txn) {
                     if let Some(attrs) = Self::parse_attrs(attributes) {
                         v.insert_embed_with_attributes(txn.as_mut(), index, content, attrs);
@@ -2139,32 +2155,16 @@ impl YText {
                 let hi = snapshot.map(|s| s.0);
                 let lo = prev_snapshot.map(|s| s.0);
 
-                fn changes(change: YChange, compute_ychange: &Option<js_sys::Function>) -> JsValue {
-                    let kind = match change.kind {
-                        ChangeKind::Added => JsValue::from("added"),
-                        ChangeKind::Removed => JsValue::from("removed"),
-                    };
-                    let result = if let Some(func) = compute_ychange {
-                        let id = change.id.into_js();
-                        func.call2(&JsValue::UNDEFINED, &kind, &id).unwrap()
-                    } else {
-                        let js: JsValue = js_sys::Object::new().into();
-                        js_sys::Reflect::set(&js, &JsValue::from("type"), &kind).unwrap();
-                        js
-                    };
-                    result
-                }
-
                 let delta = if let Some(mut txn) = get_txn_mut(txn) {
                     v.diff_range(txn.as_mut(), hi.as_ref(), lo.as_ref(), |change| {
-                        changes(change, &compute_ychange)
+                        ychange_to_js(change, &compute_ychange)
                     })
                     .into_iter()
                     .map(ytext_change_into_js)
                 } else {
                     let mut txn = v.transact_mut();
                     v.diff_range(&mut txn, hi.as_ref(), lo.as_ref(), |change| {
-                        changes(change, &compute_ychange)
+                        ychange_to_js(change, &compute_ychange)
                     })
                     .into_iter()
                     .map(ytext_change_into_js)
@@ -2422,7 +2422,8 @@ impl YArray {
     /// Deletes a range of items of given `length` from current `YArray` instance,
     /// starting from given `index`.
     #[wasm_bindgen(method, js_name = delete)]
-    pub fn delete(&self, index: u32, length: u32, txn: &ImplicitTransaction) {
+    pub fn delete(&self, index: u32, length: Option<u32>, txn: &ImplicitTransaction) {
+        let length = length.unwrap_or(1);
         match &mut *self.0.borrow_mut() {
             SharedType::Integrated(v) => {
                 if let Some(mut txn) = get_txn_mut(txn) {
@@ -2492,9 +2493,10 @@ impl YArray {
     pub fn quote(
         &self,
         index: u32,
-        length: u32,
+        length: Option<u32>,
         txn: &ImplicitTransaction,
     ) -> Result<JsValue, JsValue> {
+        let length = length.unwrap_or(1);
         match &*self.0.borrow() {
             SharedType::Integrated(v) => {
                 let value = if let Some(txn) = get_txn(txn) {
@@ -2807,13 +2809,13 @@ impl YMap {
         match &*self.0.borrow() {
             SharedType::Integrated(v) => {
                 let value = if let Some(txn) = get_txn(txn) {
-                    v.link(&*txn, key)
+                    v.get(&*txn, key)
                 } else {
-                    v.link(&v.transact(), key)
+                    v.get(&v.transact(), key)
                 };
-                value.map(|v| YWeakLink::from(v).into()).unwrap_or_default()
+                value.map(value_into_js).unwrap_or(JsValue::UNDEFINED)
             }
-            SharedType::Prelim(v) => v.get(key).cloned().unwrap_or_default(),
+            SharedType::Prelim(v) => v.get(key).cloned().unwrap_or(JsValue::UNDEFINED),
         }
     }
 
@@ -2822,11 +2824,11 @@ impl YMap {
         match &*self.0.borrow() {
             SharedType::Integrated(v) => {
                 let value = if let Some(txn) = get_txn(txn) {
-                    v.get(&*txn, key)
+                    v.link(&*txn, key)
                 } else {
-                    v.get(&v.transact(), key)
+                    v.link(&v.transact(), key)
                 };
-                Ok(value.map(value_into_js).unwrap_or_default())
+                Ok(value.map(|v| YWeakLink::from(v).into()).unwrap_or_default())
             }
             SharedType::Prelim(_) => Err(JsValue::from_str(
                 "YMap.link cannot be used over object not integrated into YDoc",
@@ -2997,7 +2999,8 @@ impl YXmlElement {
     /// Removes a range of children XML nodes from this `YXmlElement` instance,
     /// starting at given `index`.
     #[wasm_bindgen(method, js_name = delete)]
-    pub fn delete(&self, index: u32, length: u32, txn: &ImplicitTransaction) {
+    pub fn delete(&self, index: u32, length: Option<u32>, txn: &ImplicitTransaction) {
+        let length = length.unwrap_or(1);
         if let Some(mut txn) = get_txn_mut(txn) {
             self.0.remove_range(txn.as_mut(), index, length)
         } else {
@@ -3250,7 +3253,8 @@ impl YXmlFragment {
     /// Removes a range of children XML nodes from this `YXmlElement` instance,
     /// starting at given `index`.
     #[wasm_bindgen(method, js_name = delete)]
-    pub fn delete(&self, index: u32, length: u32, txn: &ImplicitTransaction) {
+    pub fn delete(&self, index: u32, length: Option<u32>, txn: &ImplicitTransaction) {
+        let length = length.unwrap_or(1);
         if let Some(mut txn) = get_txn_mut(txn) {
             self.0.remove_range(txn.as_mut(), index, length)
         } else {
@@ -3430,6 +3434,40 @@ impl YXmlText {
         value.map(|v| YWeakLink::from(v).into()).unwrap_or_default()
     }
 
+    /// Returns the Delta representation of this YXmlText type.
+    #[wasm_bindgen(js_name = toDelta)]
+    pub fn to_delta(
+        &self,
+        snapshot: Option<YSnapshot>,
+        prev_snapshot: Option<YSnapshot>,
+        compute_ychange: Option<js_sys::Function>,
+        txn: &ImplicitTransaction,
+    ) -> JsValue {
+        let hi = snapshot.map(|s| s.0);
+        let lo = prev_snapshot.map(|s| s.0);
+
+        let delta = if let Some(mut txn) = get_txn_mut(txn) {
+            self.0
+                .diff_range(txn.as_mut(), hi.as_ref(), lo.as_ref(), |change| {
+                    ychange_to_js(change, &compute_ychange)
+                })
+                .into_iter()
+                .map(ytext_change_into_js)
+        } else {
+            let mut txn = self.0.transact_mut();
+            self.0
+                .diff_range(&mut txn, hi.as_ref(), lo.as_ref(), |change| {
+                    ychange_to_js(change, &compute_ychange)
+                })
+                .into_iter()
+                .map(ytext_change_into_js)
+        };
+        let mut result = js_sys::Array::new();
+        result.extend(delta);
+        let delta: JsValue = result.into();
+        delta
+    }
+
     /// Inserts a given `embed` object into this `YXmlText` instance, starting at a given `index`.
     ///
     /// Optional object with defined `attributes` will be used to wrap provided `embed`
@@ -3443,7 +3481,7 @@ impl YXmlText {
         attributes: JsValue,
         txn: &ImplicitTransaction,
     ) {
-        let content = js_into_any(&embed).unwrap();
+        let content = JsValueWrapper(embed);
         if let Some(mut txn) = get_txn_mut(txn) {
             if let Some(attrs) = YText::parse_attrs(attributes) {
                 self.0
@@ -3633,6 +3671,27 @@ pub struct YWeakLink(RefCell<SharedType<WeakRef<BranchPtr>, WeakPrelim<BranchPtr
 
 #[wasm_bindgen]
 impl YWeakLink {
+    fn source(&self) -> Arc<LinkSource> {
+        match &*self.0.borrow() {
+            SharedType::Integrated(v) => v.source().clone(),
+            SharedType::Prelim(v) => v.source().clone(),
+        }
+    }
+
+    /// Returns true if this is a preliminary instance of `YWeakLink`.
+    ///
+    /// Preliminary instances can be nested into other shared data types such as `YArray` and `YMap`.
+    /// Once a preliminary instance has been inserted this way, it becomes integrated into ywasm
+    /// document store and cannot be nested again: attempt to do so will result in an exception.
+    #[wasm_bindgen(getter)]
+    pub fn prelim(&self) -> bool {
+        if let SharedType::Prelim(_) = &*self.0.borrow() {
+            true
+        } else {
+            false
+        }
+    }
+
     /// Returns a number of child XML nodes stored within this `YXMlElement` instance.
     #[wasm_bindgen(js_name = deref)]
     pub fn deref(&self, txn: &ImplicitTransaction) -> Result<JsValue, JsValue> {
@@ -3646,11 +3705,18 @@ impl YWeakLink {
                     let txn = branch.transact();
                     weak_map_ref.try_deref_raw(&txn)
                 };
+
                 Ok(value.map(value_into_js).unwrap_or(JsValue::UNDEFINED))
             }
-            SharedType::Prelim(_) => Err(JsValue::from_str(
-                "cannot dereference WeakLink, which has not be integrated",
-            )),
+            SharedType::Prelim(v) => {
+                let prelim: WeakPrelim<MapRef> = WeakPrelim::from(v.clone());
+                let value = if let Some(txn) = get_txn(txn) {
+                    prelim.try_deref_raw(&*txn)
+                } else {
+                    return Err(JsValue::from_str("WeakLink.deref over non-integrated type requires explicit transaction argument"));
+                };
+                Ok(value.map(value_into_js).unwrap_or(JsValue::UNDEFINED))
+            }
         }
     }
 
@@ -3673,9 +3739,18 @@ impl YWeakLink {
                 };
                 Ok(array)
             }
-            SharedType::Prelim(_) => Err(JsValue::from_str(
-                "cannot dereference WeakLink, which has not be integrated",
-            )),
+            SharedType::Prelim(v) => {
+                let prelim: WeakPrelim<ArrayRef> = WeakPrelim::from(v.clone());
+                let array = js_sys::Array::new();
+                if let Some(txn) = get_txn(txn) {
+                    for js in prelim.unquote(&*txn) {
+                        array.push(&value_into_js(js));
+                    }
+                } else {
+                    return Err(JsValue::from_str("WeakLink.unquote over non-integrated type requires explicit transaction argument"));
+                };
+                Ok(array)
+            }
         }
     }
 
@@ -3714,6 +3789,30 @@ impl YWeakLink {
                 .into(),
             SharedType::Prelim(_) => {
                 panic!("YText.observeDeep is not supported on preliminary type.")
+            }
+        }
+    }
+
+    #[wasm_bindgen(method, js_name = toString)]
+    pub fn to_string(&self, txn: &ImplicitTransaction) -> Result<String, JsValue> {
+        match &mut *self.0.borrow_mut() {
+            SharedType::Integrated(v) => {
+                let branch: &Branch = v.as_ref();
+                let weak_ref: WeakRef<XmlTextRef> = WeakRef::from(BranchPtr::from(branch));
+                if let Some(txn) = get_txn(txn) {
+                    Ok(weak_ref.get_string(&*txn))
+                } else {
+                    let txn = branch.transact();
+                    Ok(weak_ref.get_string(&txn))
+                }
+            }
+            SharedType::Prelim(v) => {
+                let prelim: WeakPrelim<XmlTextRef> = WeakPrelim::from(v.clone());
+                if let Some(txn) = get_txn(txn) {
+                    Ok(prelim.get_string(&*txn))
+                } else {
+                    Err(JsValue::from_str("WeakLink.toString over non-integrated type requires explicit transaction argument"))
+                }
             }
         }
     }
@@ -3908,6 +4007,9 @@ impl Prelim for JsValueWrapper {
                 } else {
                     ItemContent::Doc(None, doc.0.clone())
                 }
+            } else if let Shared::WeakLink(weak) = shared {
+                let branch = Branch::new(TypeRef::WeakLink(weak.source()));
+                ItemContent::Type(branch)
             } else {
                 panic!("Cannot integrate this type")
             }
@@ -3955,6 +4057,10 @@ impl Prelim for JsValueWrapper {
                             }
                         }
                     }
+                    Shared::WeakLink(v) => {
+                        let link = WeakRef::from(inner_ref);
+                        v.0.replace(SharedType::Integrated(link.clone()));
+                    }
                     _ => panic!("Cannot integrate this type"),
                 }
             }
@@ -3970,6 +4076,16 @@ impl Into<Origin> for JsValueWrapper {
             let ptr = self.0.into_abi();
             let bytes = ptr.to_be_bytes();
             Origin::from(bytes.as_ref())
+        }
+    }
+}
+
+impl Into<EmbedPrelim<JsValueWrapper>> for JsValueWrapper {
+    fn into(self) -> EmbedPrelim<JsValueWrapper> {
+        if let Some(any) = js_into_any(&self.0) {
+            EmbedPrelim::Primitive(any)
+        } else {
+            EmbedPrelim::Shared(self)
         }
     }
 }
@@ -4005,6 +4121,15 @@ impl JsValueWrapper {
                 }
             }
             Shared::Map(v) => {
+                if let SharedType::Integrated(x) = v.0.borrow().deref() {
+                    Ok(BranchPtr::from(x.as_ref()))
+                } else {
+                    Err(JsValue::from_str(
+                        "Shared type must be integrated first to be used in this context",
+                    ))
+                }
+            }
+            Shared::WeakLink(v) => {
                 if let SharedType::Integrated(x) = v.0.borrow().deref() {
                     Ok(BranchPtr::from(x.as_ref()))
                 } else {
@@ -4178,6 +4303,7 @@ enum Shared<'a> {
     XmlText(Ref<'a, YXmlText>),
     XmlFragment(Ref<'a, YXmlFragment>),
     Doc(Ref<'a, YDoc>),
+    WeakLink(Ref<'a, YWeakLink>),
 }
 
 fn as_ref<'a, T>(js: u32) -> Ref<'a, T> {
@@ -4209,6 +4335,8 @@ impl<'a> TryFrom<&'a JsValue> for Shared<'a> {
             Ok(Shared::XmlFragment(as_ref(ptr_u32)))
         } else if ctor_name == "YDoc" {
             Ok(Shared::Doc(as_ref(ptr_u32)))
+        } else if ctor_name == "YWeakLink" {
+            Ok(Shared::WeakLink(as_ref(ptr_u32)))
         } else {
             Err(ctor_name.into())
         }
@@ -4221,6 +4349,7 @@ impl<'a> Shared<'a> {
             Shared::Text(v) => v.prelim(),
             Shared::Array(v) => v.prelim(),
             Shared::Map(v) => v.prelim(),
+            Shared::WeakLink(v) => v.prelim(),
             Shared::Doc(_)
             | Shared::XmlElement(_)
             | Shared::XmlText(_)
@@ -4236,6 +4365,7 @@ impl<'a> Shared<'a> {
             Shared::XmlElement(elem) => TypeRef::XmlElement(elem.0.tag().clone()),
             Shared::XmlText(_) => TypeRef::XmlText,
             Shared::XmlFragment(_) => TypeRef::XmlFragment,
+            Shared::WeakLink(v) => TypeRef::WeakLink(v.source()),
             Shared::Doc(_) => TypeRef::SubDoc,
         };
 
@@ -4255,6 +4385,11 @@ impl<'a> Shared<'a> {
                 Some(BranchPtr::from(integrated.as_ref()))
             }
             Shared::Map(v) => {
+                let inner = v.0.borrow();
+                let integrated = inner.as_integrated()?;
+                Some(BranchPtr::from(integrated.as_ref()))
+            }
+            Shared::WeakLink(v) => {
                 let inner = v.0.borrow();
                 let integrated = inner.as_integrated()?;
                 Some(BranchPtr::from(integrated.as_ref()))

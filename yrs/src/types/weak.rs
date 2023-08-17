@@ -26,6 +26,29 @@ impl<P: AsRef<Branch>> AsRef<Branch> for WeakRef<P> {
         self.0.as_ref()
     }
 }
+impl<P: AsRef<Branch>> WeakRef<P> {
+    /// Returns a [LinkSource] corresponding with current [WeakRef].
+    /// Returns `None` if underlying branch reference was not meant to be used as [WeakRef].
+    pub fn try_source(&self) -> Option<&Arc<LinkSource>> {
+        let branch = self.as_ref();
+        if let TypeRef::WeakLink(source) = &branch.type_ref {
+            Some(source)
+        } else {
+            None
+        }
+    }
+
+    /// Returns a [LinkSource] corresponding with current [WeakRef].
+    ///
+    /// # Panics
+    ///
+    /// This method panic if an underlying branch was not meant to be used as [WeakRef]. This can
+    /// happen if a different shared type was forcibly casted to [WeakRef].
+    pub fn source(&self) -> &Arc<LinkSource> {
+        self.try_source()
+            .expect("Defect: called WeakRef-specific method over non-WeakRef shared type")
+    }
+}
 
 impl<P: From<BranchPtr>> From<BranchPtr> for WeakRef<P> {
     fn from(inner: BranchPtr) -> Self {
@@ -77,40 +100,13 @@ where
 
 impl GetString for WeakRef<TextRef> {
     fn get_string<T: ReadTxn>(&self, txn: &T) -> String {
-        let mut result = String::new();
-        let branch = self.0.as_ref();
-        if let TypeRef::WeakLink(source) = &branch.type_ref {
-            let mut curr = source.first_item.get_owned();
-            while let Some(Block::Item(item)) = curr.as_deref() {
-                if !item.is_deleted() {
-                    if let ItemContent::String(s) = &item.content {
-                        result.push_str(s.as_str());
-                    }
-                }
-                if item.last_id() == source.quote_end {
-                    break;
-                }
-                curr = item.right;
-            }
-        }
-        result
+        self.source().to_string(txn)
     }
 }
 
 impl GetString for WeakRef<XmlTextRef> {
     fn get_string<T: ReadTxn>(&self, txn: &T) -> String {
-        let branch = self.0.as_ref();
-        if let TypeRef::WeakLink(source) = &branch.type_ref {
-            let mut curr = source.first_item.get_owned();
-            if let Some(Block::Item(item)) = curr.as_deref() {
-                if let Some(branch) = item.parent.as_branch() {
-                    let start = Some(&source.quote_start);
-                    let end = Some(&source.quote_end);
-                    return XmlTextRef::get_string_fragment(branch.start, start, end);
-                }
-            }
-        }
-        String::new()
+        self.source().to_xml_string(txn)
     }
 }
 
@@ -125,8 +121,7 @@ where
     P: SharedRef + Map,
 {
     pub fn try_deref_raw<T: ReadTxn>(&self, txn: &T) -> Option<Value> {
-        let branch = self.0.as_ref();
-        if let TypeRef::WeakLink(source) = &branch.type_ref {
+        if let Some(source) = self.try_source() {
             source.unquote(txn).next()
         } else {
             None
@@ -156,8 +151,7 @@ where
     /// Returns an iterator over [Value]s existing in a scope of the current [WeakRef] quotation
     /// range.  
     pub fn unquote<'txn, T: ReadTxn>(&self, txn: &'txn T) -> Unquote<'txn, T> {
-        let branch = self.0.as_ref();
-        if let TypeRef::WeakLink(source) = &branch.type_ref {
+        if let Some(source) = self.try_source() {
             source.unquote(txn)
         } else {
             Unquote::empty(txn)
@@ -194,6 +188,57 @@ impl<P> WeakPrelim<P> {
             _marker: PhantomData::default(),
         }
     }
+
+    pub fn source(&self) -> &Arc<LinkSource> {
+        &self.source
+    }
+}
+
+impl<P> WeakPrelim<P>
+where
+    P: SharedRef + Array,
+{
+    /// Returns an iterator over [Value]s existing in a scope of the current [WeakPrelim] quotation
+    /// range.  
+    pub fn unquote<'txn, T: ReadTxn>(&self, txn: &'txn T) -> Unquote<'txn, T> {
+        self.source.unquote(txn)
+    }
+}
+
+impl<P> WeakPrelim<P>
+where
+    P: SharedRef + Map,
+{
+    pub fn try_deref_raw<T: ReadTxn>(&self, txn: &T) -> Option<Value> {
+        self.source.unquote(txn).next()
+    }
+
+    pub fn try_deref<T, V>(&self, txn: &T) -> Result<V, Option<V::Error>>
+    where
+        T: ReadTxn,
+        V: TryFrom<Value>,
+    {
+        if let Some(value) = self.try_deref_raw(txn) {
+            match V::try_from(value) {
+                Ok(value) => Ok(value),
+                Err(value) => Err(Some(value)),
+            }
+        } else {
+            Err(None)
+        }
+    }
+}
+
+impl GetString for WeakPrelim<TextRef> {
+    fn get_string<T: ReadTxn>(&self, txn: &T) -> String {
+        self.source.to_string(txn)
+    }
+}
+
+impl GetString for WeakPrelim<XmlTextRef> {
+    fn get_string<T: ReadTxn>(&self, txn: &T) -> String {
+        self.source.to_xml_string(txn)
+    }
 }
 
 impl<P: AsRef<Branch>> From<WeakRef<P>> for WeakPrelim<P> {
@@ -219,6 +264,15 @@ impl<P: TryFrom<BlockPtr>> Prelim for WeakPrelim<P> {
     }
 
     fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {}
+}
+
+impl<P: SharedRef> From<WeakPrelim<BranchPtr>> for WeakPrelim<P> {
+    fn from(value: WeakPrelim<BranchPtr>) -> Self {
+        WeakPrelim {
+            source: value.source,
+            _marker: Default::default(),
+        }
+    }
 }
 
 impl<P> Into<EmbedPrelim<WeakPrelim<P>>> for WeakPrelim<P> {
@@ -341,6 +395,35 @@ impl LinkSource {
                 break;
             }
         }
+    }
+
+    pub fn to_string<T: ReadTxn>(&self, txn: &T) -> String {
+        let mut result = String::new();
+        let mut curr = self.first_item.get_owned();
+        while let Some(Block::Item(item)) = curr.as_deref() {
+            if !item.is_deleted() {
+                if let ItemContent::String(s) = &item.content {
+                    result.push_str(s.as_str());
+                }
+            }
+            if item.last_id() == self.quote_end {
+                break;
+            }
+            curr = item.right;
+        }
+        result
+    }
+
+    pub fn to_xml_string<T: ReadTxn>(&self, txn: &T) -> String {
+        let mut curr = self.first_item.get_owned();
+        if let Some(Block::Item(item)) = curr.as_deref() {
+            if let Some(branch) = item.parent.as_branch() {
+                let start = Some(&self.quote_start);
+                let end = Some(&self.quote_end);
+                return XmlTextRef::get_string_fragment(branch.start, start, end);
+            }
+        }
+        String::new()
     }
 }
 
@@ -1378,6 +1461,38 @@ mod test {
         let a1 = d1.get_or_insert_array("array");
         let d2 = Doc::with_client_id(2);
         let txt2 = d2.get_or_insert_text("text");
+        let a2 = d2.get_or_insert_array("array");
+
+        txt1.insert(&mut d1.transact_mut(), 0, "abcd"); // 'abcd'
+        let l1 = {
+            let mut txn = d1.transact_mut();
+            let q = txt1.quote(&mut txn, 1, 2); // quote: [bc]
+            a1.insert(&mut txn, 0, q.unwrap())
+        };
+        assert_eq!(l1.get_string(&d1.transact()), "bc".to_string());
+
+        txt1.insert(&mut d1.transact_mut(), 2, "ef"); // 'abefcd', quote: [befc]
+        assert_eq!(l1.get_string(&d1.transact()), "befc".to_string());
+
+        txt1.remove_range(&mut d1.transact_mut(), 3, 3); // 'abe', quote: [be]
+        assert_eq!(l1.get_string(&d1.transact()), "be".to_string());
+
+        txt1.insert_embed(&mut d1.transact_mut(), 3, WeakPrelim::from(l1.clone())); // 'abe[be]'
+
+        exchange_updates(&[&d1, &d2]);
+
+        let diff = txt2.diff(&d2.transact(), YChange::identity);
+        let l2 = diff[1].insert.clone().to_weak::<TextRef>().unwrap();
+        assert_eq!(l2.get_string(&d2.transact()), "be".to_string());
+    }
+
+    #[test]
+    fn basic_xml_text() {
+        let d1 = Doc::with_client_id(1);
+        let txt1 = d1.get_or_insert_xml_text("text");
+        let a1 = d1.get_or_insert_array("array");
+        let d2 = Doc::with_client_id(2);
+        let txt2 = d2.get_or_insert_xml_text("text");
         let a2 = d2.get_or_insert_array("array");
 
         txt1.insert(&mut d1.transact_mut(), 0, "abcd"); // 'abcd'

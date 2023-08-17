@@ -2910,8 +2910,8 @@ impl From<Doc> for YOutput {
     }
 }
 
-impl From<WeakRef> for YOutput {
-    fn from(v: WeakRef) -> Self {
+impl From<WeakRef<BranchPtr>> for YOutput {
+    fn from(v: WeakRef<BranchPtr>) -> Self {
         YOutput {
             tag: Y_WEAK_LINK,
             len: 1,
@@ -4500,13 +4500,13 @@ impl YUndoEvent {
 pub unsafe extern "C" fn ytype_kind(branch: *const Branch) -> i8 {
     if let Some(branch) = branch.as_ref() {
         match branch.type_ref() {
-            TYPE_REFS_ARRAY => Y_ARRAY,
-            TYPE_REFS_MAP => Y_MAP,
-            TYPE_REFS_TEXT => Y_TEXT,
-            TYPE_REFS_XML_ELEMENT => Y_XML_ELEM,
-            TYPE_REFS_XML_TEXT => Y_XML_TEXT,
-            TYPE_REFS_XML_FRAGMENT => Y_XML_FRAG,
-            TYPE_REFS_DOC => Y_DOC,
+            TypeRef::Array => Y_ARRAY,
+            TypeRef::Map => Y_MAP,
+            TypeRef::Text => Y_TEXT,
+            TypeRef::XmlElement(_) => Y_XML_ELEM,
+            TypeRef::XmlText => Y_XML_TEXT,
+            TypeRef::XmlFragment => Y_XML_FRAG,
+            TypeRef::SubDoc => Y_DOC,
             other => panic!("Unknown kind: {}", other),
         }
     } else {

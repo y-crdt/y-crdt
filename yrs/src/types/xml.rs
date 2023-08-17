@@ -960,11 +960,11 @@ where
         fn try_descend(item: &Item) -> Option<&Block> {
             if let ItemContent::Type(t) = &item.content {
                 let inner = t.as_ref();
-                let type_ref = inner.type_ref();
-                if !item.is_deleted()
-                    && (type_ref == TYPE_REFS_XML_ELEMENT || type_ref == TYPE_REFS_XML_FRAGMENT)
-                {
-                    return inner.start.as_deref();
+                match inner.type_ref() {
+                    TypeRef::XmlElement(_) | TypeRef::XmlFragment if !item.is_deleted() => {
+                        return inner.start.as_deref();
+                    }
+                    _ => { /* do nothing */ }
                 }
             }
 
