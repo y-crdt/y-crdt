@@ -258,9 +258,9 @@ pub struct YOptions {
     /// Encoding used by text editing operations on this document. It's used to compute
     /// `YText`/`YXmlText` insertion offsets and text lengths. Either:
     ///
-    /// - `Y_ENCODING_BYTES`
-    /// - `Y_ENCODING_UTF16`
-    /// - `Y_ENCODING_UTF32`
+    /// - `Y_OFFSET_BYTES`
+    /// - `Y_OFFSET_UTF16`
+    /// - `Y_OFFSET_UTF32`
     pub encoding: u8,
 
     /// Boolean flag used to determine if deleted blocks should be garbage collected or not
