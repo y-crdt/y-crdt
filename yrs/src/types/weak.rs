@@ -1,16 +1,70 @@
 use crate::atomic::AtomicRef;
 use crate::block::{Block, BlockPtr, BlockSlice, EmbedPrelim, ItemContent, Prelim};
-use crate::types::{
-    Branch, BranchPtr, Delta, EventHandler, Observers, Path, SharedRef, TypeRef, Value,
-};
+use crate::types::{Branch, BranchPtr, EventHandler, Observers, Path, SharedRef, TypeRef, Value};
 use crate::{
-    Array, GetString, Map, Observable, OffsetKind, ReadTxn, TextRef, TransactionMut, XmlTextRef, ID,
+    Array, GetString, Map, Observable, OffsetKind, ReadTxn, Text, TextRef, TransactionMut,
+    XmlTextRef, ID,
 };
 use std::convert::TryFrom;
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
+/// Weak link reference represents a reference to a single element or consecutive range of elements
+/// stored in another collection in the same document.
+///
+/// The same element may be linked by many [WeakRef]s, however the ownership still belongs to
+/// a collection, where referenced elements were originally inserted in. For this reason removing
+/// [WeakRef] doesn't affect linked elements. [WeakRef] can also be outdated when the linked
+/// reference has been removed.
+///
+/// In order to create a [WeakRef], a preliminary [WeakPrelim] element must be obtained first. This
+/// can be done via either:
+///
+/// - [Map::link] to pick a reference to key-value entry of map. As entry is being updated, so will
+/// be the referenced value.
+/// - [Array::quote] to take a reference to a consecutive range of array's elements. Any elements
+/// inserted in an originally quoted range will later on appear when [WeakRef::unquote] is called.
+/// - [Text::quote] to take a reference to a slice of text. When materialized, quoted slice will
+/// contain any changes that happened within the quoted slice. It will also contain formatting
+/// information about the quotation.
+///
+/// [WeakPrelim] can be used like any preliminary type (ie. inserted into array, map or as embedded
+/// value in text), producing [WeakRef] in a result. [WeakRef] can be also cloned and converted back
+/// into [WeakPrelim], allowing to reference the same element(s) in many different places.
+///
+/// [WeakRef] can also be observed on via [WeakRef::observe]/[WeakRef::observe_deep]. These enable
+/// to react to changes which happen in other parts of the document tree.
+///
+/// # Example
+///
+/// ```rust
+/// use lib0::any;
+/// use yrs::{Array, Doc, Map, Transact};
+///
+/// let doc = Doc::new();
+/// let array = doc.get_or_insert_array("array");
+/// let map = doc.get_or_insert_map("map");
+/// let mut txn = doc.transact_mut();
+///
+/// // insert values
+/// array.insert_range(&mut txn, 0, ["A", "B", "C", "D"]);
+///
+/// // link the reference for value in another collection
+/// let link = array.quote(&txn, 1, 2).unwrap(); // [B, C]
+/// let link = map.insert(&mut txn, "key", link);
+///
+/// // evaluate quoted range
+/// let values: Vec<_> = link.unquote(&txn).map(|v| v.to_string(&txn)).collect();
+/// assert_eq!(values, vec!["B".to_string(), "C".to_string()]);
+///
+/// // update quoted range
+/// array.insert(&mut txn, 2, "E"); // [A, B, E, C, D]
+///
+/// // evaluate quoted range (updated)
+/// let values: Vec<_> = link.unquote(&txn).map(|v| v.to_string(&txn)).collect();
+/// assert_eq!(values, vec!["B".to_string(), "E".to_string(), "C".to_string()]);
+/// ```
 #[repr(transparent)]
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct WeakRef<P>(P);
@@ -43,7 +97,8 @@ impl<P: AsRef<Branch>> WeakRef<P> {
     /// # Panics
     ///
     /// This method panic if an underlying branch was not meant to be used as [WeakRef]. This can
-    /// happen if a different shared type was forcibly casted to [WeakRef].
+    /// happen if a different shared type was forcibly casted to [WeakRef]. To avoid panic, use
+    /// [WeakRef::try_source] instead.
     pub fn source(&self) -> &Arc<LinkSource> {
         self.try_source()
             .expect("Defect: called WeakRef-specific method over non-WeakRef shared type")
@@ -99,12 +154,61 @@ where
 }
 
 impl GetString for WeakRef<TextRef> {
+    /// Returns a plain string representation of an underlying range of a quoted [TextRef].
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use yrs::{Doc, GetString, Map, Text, Transact};
+    ///
+    /// let doc = Doc::new();
+    /// let text = doc.get_or_insert_text("text");
+    /// let map = doc.get_or_insert_map("map");
+    /// let mut txn = doc.transact_mut();
+    ///
+    /// // initialize text
+    /// text.insert(&mut txn, 0, "hello world!");
+    ///
+    /// // link fragment of text
+    /// let link = text.quote(&mut txn, 0, 6).unwrap(); // 'hello '
+    /// let link = map.insert(&mut txn, "key", link);
+    ///
+    /// // check the quoted fragment
+    /// assert_eq!(link.get_string(&txn), "hello ".to_string());
+    /// ```
     fn get_string<T: ReadTxn>(&self, txn: &T) -> String {
         self.source().to_string(txn)
     }
 }
 
 impl GetString for WeakRef<XmlTextRef> {
+    /// Returns a XML-formatted string representation of an underlying range of a quoted [XmlTextRef].
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use yrs::{Doc, GetString, Map, Text, Transact, XmlFragment, XmlTextPrelim};
+    /// use yrs::types::Attrs;
+    ///
+    /// let doc = Doc::new();
+    /// let f = doc.get_or_insert_xml_fragment("xml");
+    /// let map = doc.get_or_insert_map("map");
+    /// let mut txn = doc.transact_mut();
+    /// let text = f.insert(&mut txn, 0, XmlTextPrelim::new("Bold, italic text"));
+    ///
+    /// // add formatting
+    /// let italic = Attrs::from([("i".into(), true.into())]);
+    /// let bold = Attrs::from([("b".into(), true.into())]);
+    /// text.format(&mut txn, 0, 4, bold); // '<b>Bold</b>, italic text'
+    /// text.format(&mut txn, 6, 6, italic); // '<b>Bold</b>, <i>italic</i> text'
+    ///
+    /// // link fragment of text
+    /// let link = text.quote(&mut txn, 1, 10).unwrap(); // '<b>old</b>, <i>itali</i>'
+    /// let link = map.insert(&mut txn, "key", link);
+    ///
+    /// // check the quoted fragment
+    /// assert_eq!(link.get_string(&txn), "<b>old</b>, <i>itali</i>".to_string());
+    /// ```
     fn get_string<T: ReadTxn>(&self, txn: &T) -> String {
         self.source().to_xml_string(txn)
     }
@@ -120,14 +224,11 @@ impl<P> WeakRef<P>
 where
     P: SharedRef + Map,
 {
-    pub fn try_deref_raw<T: ReadTxn>(&self, txn: &T) -> Option<Value> {
-        if let Some(source) = self.try_source() {
-            source.unquote(txn).next()
-        } else {
-            None
-        }
-    }
-
+    /// Tries to dereference a value for linked [Map] entry, performing automatic conversion if
+    /// possible. If conversion was not possible or element didn't exist, an error case will be
+    /// returned.
+    ///
+    /// Use [WeakRef::try_deref_raw] if conversion is not possible or desired at the current moment.
     pub fn try_deref<T, V>(&self, txn: &T) -> Result<V, Option<V::Error>>
     where
         T: ReadTxn,
@@ -140,6 +241,37 @@ where
             }
         } else {
             Err(None)
+        }
+    }
+
+    /// Tries to dereference a value for linked [Map] entry. If element didn't exist, `None` will
+    /// be returned.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use yrs::{Doc, Map, Transact};
+    ///
+    /// let doc = Doc::new();
+    /// let map = doc.get_or_insert_map("map");
+    /// let mut txn = doc.transact_mut();
+    ///
+    /// // insert a value and the link referencing it
+    /// map.insert(&mut txn, "A", "value");
+    /// let link = map.link(&txn, "A").unwrap();
+    /// let link = map.insert(&mut txn, "B", link);
+    ///
+    /// assert_eq!(link.try_deref_raw(&txn), Some("value".into()));
+    ///
+    /// // update entry and check if link has been updated
+    /// map.insert(&mut txn, "A", "other");
+    /// assert_eq!(link.try_deref_raw(&txn), Some("other".into()));
+    /// ```
+    pub fn try_deref_raw<T: ReadTxn>(&self, txn: &T) -> Option<Value> {
+        if let Some(source) = self.try_source() {
+            source.unquote(txn).next()
+        } else {
+            None
         }
     }
 }

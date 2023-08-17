@@ -12,14 +12,12 @@ use yrs::types::array::ArrayIter as NativeArrayIter;
 use yrs::types::map::MapEvent;
 use yrs::types::map::MapIter as NativeMapIter;
 use yrs::types::text::{Diff, TextEvent, YChange};
-use yrs::types::weak::{WeakEvent, WeakRef};
+use yrs::types::weak::{LinkSource, Unquote, WeakEvent, WeakRef};
 use yrs::types::xml::{Attributes as NativeAttributes, XmlNode};
 use yrs::types::xml::{TreeWalker as NativeTreeWalker, XmlFragment};
 use yrs::types::xml::{XmlEvent, XmlTextEvent};
 use yrs::types::{
     Attrs, BranchPtr, Change, Delta, EntryChange, Event, PathSegment, TypeRef, Value,
-    TYPE_REFS_ARRAY, TYPE_REFS_DOC, TYPE_REFS_MAP, TYPE_REFS_TEXT, TYPE_REFS_XML_ELEMENT,
-    TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_TEXT,
 };
 use yrs::undo::EventKind;
 use yrs::updates::decoder::{Decode, DecoderV1};
@@ -126,6 +124,10 @@ pub type Branch = yrs::types::Branch;
 /// Iterator structure used by shared array data type.
 #[repr(transparent)]
 pub struct ArrayIter(NativeArrayIter<&'static Transaction, Transaction>);
+
+/// Iterator structure used by `yweak_iter` function call.
+#[repr(transparent)]
+pub struct WeakIter(Unquote<'static, Transaction>);
 
 /// Iterator structure used by shared map data type. Map iterators are unordered - there's no
 /// specific order in which map entries will be returned during consecutive iterator calls.
@@ -2433,6 +2435,7 @@ pub struct YInput {
     /// - [Y_ARRAY] for cells which contents should be used to initialize a `YArray` shared type.
     /// - [Y_MAP] for cells which contents should be used to initialize a `YMap` shared type.
     /// - [Y_DOC] for cells which contents should be used to nest a `YDoc` sub-document.
+    /// - [Y_WEAK_LINK] for cells which contents should be used to nest a `YWeakLink` sub-document.
     pub tag: i8,
 
     /// Length of the contents stored by current `YInput` cell.
@@ -2516,6 +2519,7 @@ union YInputContent {
     values: *mut YInput,
     map: ManuallyDrop<YMapInputData>,
     doc: *mut Doc,
+    weak: *const YWeak,
 }
 
 #[repr(C)]
@@ -2540,19 +2544,22 @@ impl Prelim for YInput {
                 let doc = self.value.doc.as_ref().unwrap();
                 (ItemContent::Doc(None, doc.clone()), None)
             } else {
-                let type_ref = if self.tag == Y_MAP {
-                    TypeRef::Map
-                } else if self.tag == Y_ARRAY {
-                    TypeRef::Array
-                } else if self.tag == Y_XML_ELEM {
-                    let name: Arc<str> = CStr::from_ptr(self.value.str).to_str().unwrap().into();
-                    TypeRef::XmlElement(name)
-                } else if self.tag == Y_XML_TEXT {
-                    TypeRef::XmlText
-                } else if self.tag == Y_XML_FRAG {
-                    TypeRef::XmlFragment
-                } else {
-                    panic!("Unrecognized YVal value tag.")
+                let type_ref = match self.tag {
+                    Y_MAP => TypeRef::Map,
+                    Y_ARRAY => TypeRef::Array,
+                    Y_TEXT => TypeRef::Text,
+                    Y_XML_TEXT => TypeRef::XmlText,
+                    Y_XML_ELEM => {
+                        let name: Arc<str> =
+                            CStr::from_ptr(self.value.str).to_str().unwrap().into();
+                        TypeRef::XmlElement(name)
+                    }
+                    Y_WEAK_LINK => {
+                        let source = Arc::from_raw(self.value.weak);
+                        TypeRef::WeakLink(source)
+                    }
+                    Y_XML_FRAG => TypeRef::XmlFragment,
+                    other => panic!("unrecognized YInput tag: {}", other),
                 };
                 let inner = Branch::new(type_ref);
                 (ItemContent::Type(inner), Some(self))
@@ -2562,38 +2569,44 @@ impl Prelim for YInput {
 
     fn integrate(self, txn: &mut yrs::TransactionMut, inner_ref: BranchPtr) {
         unsafe {
-            if self.tag == Y_MAP {
-                let map = MapRef::from(inner_ref);
-                let keys = self.value.map.keys;
-                let values = self.value.map.values;
-                let i = 0;
-                while i < self.len as isize {
-                    let key = CStr::from_ptr(keys.offset(i).read())
-                        .to_str()
-                        .unwrap()
-                        .to_owned();
-                    let value = values.offset(i).read().into();
-                    map.insert(txn, key, value);
+            match self.tag {
+                Y_MAP => {
+                    let map = MapRef::from(inner_ref);
+                    let keys = self.value.map.keys;
+                    let values = self.value.map.values;
+                    let i = 0;
+                    while i < self.len as isize {
+                        let key = CStr::from_ptr(keys.offset(i).read())
+                            .to_str()
+                            .unwrap()
+                            .to_owned();
+                        let value = values.offset(i).read().into();
+                        map.insert(txn, key, value);
+                    }
                 }
-            } else if self.tag == Y_ARRAY {
-                let array = ArrayRef::from(inner_ref);
-                let ptr = self.value.values;
-                let len = self.len as isize;
-                let mut i = 0;
-                while i < len {
-                    let value = ptr.offset(i).read();
-                    array.push_back(txn, value);
-                    i += 1;
+                Y_ARRAY => {
+                    let array = ArrayRef::from(inner_ref);
+                    let ptr = self.value.values;
+                    let len = self.len as isize;
+                    let mut i = 0;
+                    while i < len {
+                        let value = ptr.offset(i).read();
+                        array.push_back(txn, value);
+                        i += 1;
+                    }
                 }
-            } else if self.tag == Y_TEXT {
-                let text = TextRef::from(inner_ref);
-                let init = CStr::from_ptr(self.value.str).to_str().unwrap();
-                text.push(txn, init);
-            } else if self.tag == Y_XML_TEXT {
-                let text = XmlTextRef::from(inner_ref);
-                let init = CStr::from_ptr(self.value.str).to_str().unwrap();
-                text.push(txn, init);
-            };
+                Y_TEXT => {
+                    let text = TextRef::from(inner_ref);
+                    let init = CStr::from_ptr(self.value.str).to_str().unwrap();
+                    text.push(txn, init);
+                }
+                Y_XML_TEXT => {
+                    let text = XmlTextRef::from(inner_ref);
+                    let init = CStr::from_ptr(self.value.str).to_str().unwrap();
+                    text.push(txn, init);
+                }
+                _ => { /* do nothing */ }
+            }
         }
     }
 }
@@ -4507,7 +4520,9 @@ pub unsafe extern "C" fn ytype_kind(branch: *const Branch) -> i8 {
             TypeRef::XmlText => Y_XML_TEXT,
             TypeRef::XmlFragment => Y_XML_FRAG,
             TypeRef::SubDoc => Y_DOC,
-            other => panic!("Unknown kind: {}", other),
+            TypeRef::WeakLink(_) => Y_WEAK_LINK,
+            TypeRef::XmlHook => 0,
+            TypeRef::Undefined => 0,
         }
     } else {
         0
@@ -5038,6 +5053,160 @@ pub unsafe extern "C" fn ysticky_index_read(
     if let Some(abs) = pos.0.get_offset(txn) {
         *out_branch = abs.branch.as_ref() as *const Branch as *mut Branch;
         *out_index = abs.index as u32;
+    }
+}
+
+pub type YWeak = LinkSource;
+
+#[no_mangle]
+pub unsafe extern "C" fn yweak_destroy(weak: *const YWeak) {
+    drop(Arc::from_raw(weak));
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yweak_deref(
+    map_link: *const Branch,
+    txn: *const Transaction,
+) -> *const YOutput {
+    assert!(!map_link.is_null());
+    assert!(!txn.is_null());
+
+    let txn = txn.as_ref().unwrap();
+    let weak: WeakRef<MapRef> = WeakRef::from_raw_branch(map_link);
+    if let Some(value) = weak.try_deref_raw(txn) {
+        Box::into_raw(Box::new(YOutput::from(value)))
+    } else {
+        null()
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yweak_iter(
+    array_link: *const Branch,
+    txn: *const Transaction,
+) -> *mut WeakIter {
+    assert!(!array_link.is_null());
+    assert!(!txn.is_null());
+
+    let txn = txn.as_ref().unwrap();
+    let weak: WeakRef<ArrayRef> = WeakRef::from_raw_branch(array_link);
+    let iter: Unquote<'static, Transaction> = std::mem::transmute(weak.unquote(txn));
+
+    Box::into_raw(Box::new(WeakIter(iter)))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yweak_iter_destroy(iter: *mut WeakIter) {
+    drop(Box::from_raw(iter))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yweak_iter_next(iter: *mut WeakIter) -> *mut YOutput {
+    assert!(!iter.is_null());
+    let iter = iter.as_mut().unwrap();
+
+    if let Some(value) = iter.0.next() {
+        Box::into_raw(Box::new(YOutput::from(value)))
+    } else {
+        null_mut()
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yweak_string(
+    text_link: *const Branch,
+    txn: *const Transaction,
+) -> *mut c_char {
+    assert!(!text_link.is_null());
+    assert!(!txn.is_null());
+
+    let txn = txn.as_ref().unwrap();
+    let weak: WeakRef<TextRef> = WeakRef::from_raw_branch(text_link);
+
+    let str = weak.get_string(txn);
+    CString::new(str).unwrap().into_raw()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yweak_xml_string(
+    xml_text_link: *const Branch,
+    txn: *const Transaction,
+) -> *mut c_char {
+    assert!(!xml_text_link.is_null());
+    assert!(!txn.is_null());
+
+    let txn = txn.as_ref().unwrap();
+    let weak: WeakRef<XmlTextRef> = WeakRef::from_raw_branch(xml_text_link);
+
+    let str = weak.get_string(txn);
+    CString::new(str).unwrap().into_raw()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn ylink(
+    map: *const Branch,
+    txn: *const Transaction,
+    key: *const c_char,
+) -> *const YWeak {
+    assert!(!map.is_null());
+    assert!(!txn.is_null());
+
+    let txn = txn.as_ref().unwrap();
+    let map = MapRef::from_raw_branch(map);
+    let key = CStr::from_ptr(key).to_str().unwrap();
+    if let Some(weak) = map.link(txn, key) {
+        let source = weak.source();
+        Arc::into_raw(source.clone())
+    } else {
+        null()
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn ytext_quote(
+    text: *const Branch,
+    txn: *mut Transaction,
+    index: u32,
+    length: u32,
+) -> *const YWeak {
+    assert!(!text.is_null());
+    assert!(!txn.is_null());
+
+    let text = TextRef::from_raw_branch(text);
+    let txn = txn.as_mut().unwrap();
+    let txn = txn
+        .as_mut()
+        .expect("provided transaction was not writeable");
+
+    if let Some(weak) = text.quote(txn, index, length) {
+        let source = weak.source();
+        Arc::into_raw(source.clone())
+    } else {
+        null()
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn yarray_quote(
+    array: *const Branch,
+    txn: *mut Transaction,
+    index: u32,
+    length: u32,
+) -> *const YWeak {
+    assert!(!array.is_null());
+    assert!(!txn.is_null());
+
+    let array = ArrayRef::from_raw_branch(array);
+    let txn = txn.as_mut().unwrap();
+    let txn = txn
+        .as_mut()
+        .expect("provided transaction was not writeable");
+
+    if let Some(weak) = array.quote(txn, index, length) {
+        let source = weak.source();
+        Arc::into_raw(source.clone())
+    } else {
+        null()
     }
 }
 
