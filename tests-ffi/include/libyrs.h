@@ -58,6 +58,11 @@ typedef struct TransactionMut {} TransactionMut;
 typedef struct YArrayIter {} YArrayIter;
 
 /**
+ * Iterator structure used by weak link unquote.
+ */
+typedef struct YWeakIter {} YWeakIter;
+
+/**
  * Iterator structure used by shared map data type. Map iterators are unordered - there's no
  * specific order in which map entries will be returned during consecutive iterator calls.
  */
@@ -81,6 +86,9 @@ typedef struct YXmlTreeWalker {} YXmlTreeWalker;
 typedef struct YUndoManager {} YUndoManager;
 
 typedef struct StickyIndex {} StickyIndex;
+
+typedef struct LinkSource {} LinkSource;
+typedef struct Unquote {} Unquote;
 
 
 #include <stdarg.h>
@@ -169,6 +177,11 @@ typedef struct StickyIndex {} StickyIndex;
  * Flag used by `YInput` and `YOutput` to tag content, which is an `YDoc` shared type.
  */
 #define Y_DOC 7
+
+/**
+ * Flag used by `YInput` and `YOutput` to tag content, which is an `YWeakLink` shared type.
+ */
+#define Y_WEAK_LINK 7
 
 /**
  * Flag used to mark a truthy boolean numbers.
@@ -546,6 +559,8 @@ typedef struct YMapInputData {
   struct YInput *values;
 } YMapInputData;
 
+typedef LinkSource YWeak;
+
 typedef union YInputContent {
   uint8_t flag;
   double num;
@@ -555,6 +570,7 @@ typedef union YInputContent {
   struct YInput *values;
   struct YMapInputData map;
   YDoc *doc;
+  const YWeak *weak;
 } YInputContent;
 
 /**
@@ -581,6 +597,7 @@ typedef struct YInput {
    * - [Y_ARRAY] for cells which contents should be used to initialize a `YArray` shared type.
    * - [Y_MAP] for cells which contents should be used to initialize a `YMap` shared type.
    * - [Y_DOC] for cells which contents should be used to nest a `YDoc` sub-document.
+   * - [Y_WEAK_LINK] for cells which contents should be used to nest a `YWeakLink` sub-document.
    */
   int8_t tag;
   /**
@@ -671,12 +688,22 @@ typedef struct YXmlTextEvent {
   const TransactionMut *txn;
 } YXmlTextEvent;
 
+/**
+ * Event pushed into callbacks registered with `yweak_observe` function. It contains
+ * all an event changes of the underlying transaction.
+ */
+typedef struct YWeakLinkEvent {
+  const void *inner;
+  const TransactionMut *txn;
+} YWeakLinkEvent;
+
 typedef union YEventContent {
   struct YTextEvent text;
   struct YMapEvent map;
   struct YArrayEvent array;
   struct YXmlEvent xml_elem;
   struct YXmlTextEvent xml_text;
+  struct YWeakLinkEvent weak;
 } YEventContent;
 
 typedef struct YEvent {
@@ -2360,5 +2387,25 @@ void ysticky_index_read(const YStickyIndex *pos,
                         const YTransaction *txn,
                         Branch **out_branch,
                         uint32_t *out_index);
+
+void yweak_destroy(const YWeak *weak);
+
+const struct YOutput *yweak_deref(const Branch *map_link, const YTransaction *txn);
+
+YWeakIter *yweak_iter(const Branch *array_link, const YTransaction *txn);
+
+void yweak_iter_destroy(YWeakIter *iter);
+
+struct YOutput *yweak_iter_next(YWeakIter *iter);
+
+char *yweak_string(const Branch *text_link, const YTransaction *txn);
+
+char *yweak_xml_string(const Branch *xml_text_link, const YTransaction *txn);
+
+const YWeak *ylink(const Branch *map, const YTransaction *txn, const char *key);
+
+const YWeak *ytext_quote(const Branch *text, YTransaction *txn, uint32_t index, uint32_t length);
+
+const YWeak *yarray_quote(const Branch *array, YTransaction *txn, uint32_t index, uint32_t length);
 
 #endif

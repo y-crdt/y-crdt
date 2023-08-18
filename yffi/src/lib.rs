@@ -12,7 +12,7 @@ use yrs::types::array::ArrayIter as NativeArrayIter;
 use yrs::types::map::MapEvent;
 use yrs::types::map::MapIter as NativeMapIter;
 use yrs::types::text::{Diff, TextEvent, YChange};
-use yrs::types::weak::{LinkSource, Unquote, WeakEvent, WeakRef};
+use yrs::types::weak::{LinkSource, Unquote as NativeUnquote, WeakEvent, WeakRef};
 use yrs::types::xml::{Attributes as NativeAttributes, XmlNode};
 use yrs::types::xml::{TreeWalker as NativeTreeWalker, XmlFragment};
 use yrs::types::xml::{XmlEvent, XmlTextEvent};
@@ -127,7 +127,7 @@ pub struct ArrayIter(NativeArrayIter<&'static Transaction, Transaction>);
 
 /// Iterator structure used by `yweak_iter` function call.
 #[repr(transparent)]
-pub struct WeakIter(Unquote<'static, Transaction>);
+pub struct WeakIter(NativeUnquote<'static, Transaction>);
 
 /// Iterator structure used by shared map data type. Map iterators are unordered - there's no
 /// specific order in which map entries will be returned during consecutive iterator calls.
@@ -2519,7 +2519,7 @@ union YInputContent {
     values: *mut YInput,
     map: ManuallyDrop<YMapInputData>,
     doc: *mut Doc,
-    weak: *const YWeak,
+    weak: *const Weak,
 }
 
 #[repr(C)]
@@ -5056,10 +5056,10 @@ pub unsafe extern "C" fn ysticky_index_read(
     }
 }
 
-pub type YWeak = LinkSource;
+pub type Weak = LinkSource;
 
 #[no_mangle]
-pub unsafe extern "C" fn yweak_destroy(weak: *const YWeak) {
+pub unsafe extern "C" fn yweak_destroy(weak: *const Weak) {
     drop(Arc::from_raw(weak));
 }
 
@@ -5090,7 +5090,7 @@ pub unsafe extern "C" fn yweak_iter(
 
     let txn = txn.as_ref().unwrap();
     let weak: WeakRef<ArrayRef> = WeakRef::from_raw_branch(array_link);
-    let iter: Unquote<'static, Transaction> = std::mem::transmute(weak.unquote(txn));
+    let iter: NativeUnquote<'static, Transaction> = std::mem::transmute(weak.unquote(txn));
 
     Box::into_raw(Box::new(WeakIter(iter)))
 }
@@ -5147,7 +5147,7 @@ pub unsafe extern "C" fn ylink(
     map: *const Branch,
     txn: *const Transaction,
     key: *const c_char,
-) -> *const YWeak {
+) -> *const Weak {
     assert!(!map.is_null());
     assert!(!txn.is_null());
 
@@ -5168,7 +5168,7 @@ pub unsafe extern "C" fn ytext_quote(
     txn: *mut Transaction,
     index: u32,
     length: u32,
-) -> *const YWeak {
+) -> *const Weak {
     assert!(!text.is_null());
     assert!(!txn.is_null());
 
@@ -5192,7 +5192,7 @@ pub unsafe extern "C" fn yarray_quote(
     txn: *mut Transaction,
     index: u32,
     length: u32,
-) -> *const YWeak {
+) -> *const Weak {
     assert!(!array.is_null());
     assert!(!txn.is_null());
 

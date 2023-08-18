@@ -62,6 +62,11 @@ typedef struct TransactionMut {} TransactionMut;
 typedef struct YArrayIter {} YArrayIter;
 
 /**
+ * Iterator structure used by weak link unquote.
+ */
+typedef struct YWeakIter {} YWeakIter;
+
+/**
  * Iterator structure used by shared map data type. Map iterators are unordered - there's no
  * specific order in which map entries will be returned during consecutive iterator calls.
  */
@@ -85,6 +90,9 @@ typedef struct YXmlTreeWalker {} YXmlTreeWalker;
 typedef struct YUndoManager {} YUndoManager;
 
 typedef struct StickyIndex {} StickyIndex;
+
+typedef struct LinkSource {} LinkSource;
+typedef struct Unquote {} Unquote;
 """
 
 trailer = """
@@ -96,6 +104,8 @@ parse_deps = false
 
 [export]
 exclude = [
+    "LinkSource",
+    "WeakIter",
     "ArrayIter",
     "MapIter",
     "Attributes",
@@ -111,8 +121,10 @@ exclude = [
 "Text" = "YText"
 "XmlElement" = "YXmlElement"
 "XmlText" = "YXmlText"
+"Weak" = "YWeak"
 "MapIter" = "YMapIter"
 "ArrayIter" = "YArrayIter"
+"WeakIter" = "YWeakIter"
 "TreeWalker" = "YXmlTreeWalker"
 "Attributes" = "YXmlAttrIter"
 "Observer" = "YObserver"
