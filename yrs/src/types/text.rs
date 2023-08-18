@@ -542,11 +542,11 @@ where
             }
         }
 
-        let mut scope: i32 = if start.is_none() { 0 } else { -1 };
+        let mut start_offset: i32 = if start.is_none() { 0 } else { -1 };
         'LOOP: while let Some(Block::Item(item)) = n.as_deref() {
             if let Some(start) = start {
-                if scope < 0 && item.contains(start) {
-                    scope = (item.id.clock + item.len) as i32 - start.clock as i32 - 1;
+                if start_offset < 0 && item.contains(start) {
+                    start_offset = start.clock as i32 - item.id.clock as i32;
                 }
             }
             if seen(hi, item) || (lo.is_some() && seen(lo, item)) {
@@ -567,22 +567,22 @@ where
                                 }
                             }
                         }
-                        if scope > 0 {
-                            self.buf.push_str(&s.as_str()[scope as usize..]);
-                            scope = 0;
+                        if start_offset > 0 {
+                            self.buf.push_str(&s.as_str()[start_offset as usize..]);
+                            start_offset = 0;
                         } else {
                             match end {
                                 Some(end) if item.contains(end) => {
                                     // we reached the end or range
-                                    let offset =
+                                    let end_offset =
                                         (item.id.clock + item.len - end.clock - 1) as usize;
                                     let s = s.as_str();
-                                    self.buf.push_str(&s[..(s.len() + offset)]);
+                                    self.buf.push_str(&s[..(s.len() + end_offset)]);
                                     self.pack_str();
                                     break 'LOOP;
                                 }
                                 _ => {
-                                    if scope == 0 {
+                                    if start_offset == 0 {
                                         self.buf.push_str(s.as_str());
                                     }
                                 }
@@ -603,6 +603,10 @@ where
                         }
                     }
                     _ => {}
+                }
+            } else if let Some(end) = end {
+                if item.contains(end) {
+                    break;
                 }
             }
             n = item.right;
