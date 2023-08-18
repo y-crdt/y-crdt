@@ -181,7 +181,7 @@ typedef struct Unquote {} Unquote;
 /**
  * Flag used by `YInput` and `YOutput` to tag content, which is an `YWeakLink` shared type.
  */
-#define Y_WEAK_LINK 7
+#define Y_WEAK_LINK 8
 
 /**
  * Flag used to mark a truthy boolean numbers.
@@ -1925,6 +1925,12 @@ struct YInput yinput_yxmltext(char *str);
 struct YInput yinput_ydoc(YDoc *doc);
 
 /**
+ * Function constructor used to create a string `YInput` cell with weak reference to another
+ * element(s) living inside of the same document.
+ */
+struct YInput yinput_weak(const YWeak *weak);
+
+/**
  * Attempts to read the value for a given `YOutput` pointer as a `YDocRef` reference to a nested
  * document.
  */
@@ -2039,6 +2045,15 @@ Branch *youtput_read_ytext(const struct YOutput *val);
 Branch *youtput_read_yxmltext(const struct YOutput *val);
 
 /**
+ * Attempts to read the value for a given `YOutput` pointer as an `YWeakRef`.
+ *
+ * Returns a null pointer in case when a value stored under current `YOutput` cell
+ * is not an `YWeakRef`. Underlying heap resources are released automatically as part of
+ * [youtput_destroy] destructor.
+ */
+Branch *youtput_read_yweak(const struct YOutput *val);
+
+/**
  * Subscribes a given callback function `cb` to changes made by this `YText` instance. Callbacks
  * are triggered whenever a `ytransaction_commit` is called.
  * Returns a subscription ID which can be then used to unsubscribe this callback by using
@@ -2095,6 +2110,12 @@ uint32_t yxmltext_observe(const Branch *xml,
 uint32_t yobserve_deep(Branch *ytype,
                        void *state,
                        void (*cb)(void*, uint32_t, const struct YEvent*));
+
+/**
+ * Releases a callback subscribed via `yweak_observe` function represented by passed
+ * observer parameter.
+ */
+void yweak_unobserve(const Branch *txt, uint32_t subscription_id);
 
 /**
  * Releases a callback subscribed via `ytext_observe` function represented by passed
@@ -2390,7 +2411,7 @@ void ysticky_index_read(const YStickyIndex *pos,
 
 void yweak_destroy(const YWeak *weak);
 
-const struct YOutput *yweak_deref(const Branch *map_link, const YTransaction *txn);
+struct YOutput *yweak_deref(const Branch *map_link, const YTransaction *txn);
 
 YWeakIter *yweak_iter(const Branch *array_link, const YTransaction *txn);
 
@@ -2402,7 +2423,17 @@ char *yweak_string(const Branch *text_link, const YTransaction *txn);
 
 char *yweak_xml_string(const Branch *xml_text_link, const YTransaction *txn);
 
-const YWeak *ylink(const Branch *map, const YTransaction *txn, const char *key);
+/**
+ * Subscribes a given callback function `cb` to changes made by this `YText` instance. Callbacks
+ * are triggered whenever a `ytransaction_commit` is called.
+ * Returns a subscription ID which can be then used to unsubscribe this callback by using
+ * `yweak_unobserve` function.
+ */
+uint32_t yweak_observe(const Branch *weak,
+                       void *state,
+                       void (*cb)(void*, const struct YWeakLinkEvent*));
+
+const YWeak *ymap_link(const Branch *map, const YTransaction *txn, const char *key);
 
 const YWeak *ytext_quote(const Branch *text, YTransaction *txn, uint32_t index, uint32_t length);
 

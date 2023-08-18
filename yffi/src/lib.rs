@@ -81,7 +81,7 @@ pub const Y_XML_FRAG: i8 = 6;
 pub const Y_DOC: i8 = 7;
 
 /// Flag used by `YInput` and `YOutput` to tag content, which is an `YWeakLink` shared type.
-pub const Y_WEAK_LINK: i8 = 7;
+pub const Y_WEAK_LINK: i8 = 8;
 
 /// Flag used to mark a truthy boolean numbers.
 pub const Y_TRUE: u8 = 1;
@@ -2863,6 +2863,18 @@ impl From<ArrayRef> for YOutput {
     }
 }
 
+impl From<WeakRef<BranchPtr>> for YOutput {
+    fn from(v: WeakRef<BranchPtr>) -> Self {
+        YOutput {
+            tag: Y_WEAK_LINK,
+            len: 1,
+            value: YOutputContent {
+                y_type: v.into_raw_branch(),
+            },
+        }
+    }
+}
+
 impl From<MapRef> for YOutput {
     fn from(v: MapRef) -> Self {
         YOutput {
@@ -2918,18 +2930,6 @@ impl From<Doc> for YOutput {
             len: 1,
             value: YOutputContent {
                 y_doc: Box::into_raw(Box::new(v.clone())),
-            },
-        }
-    }
-}
-
-impl From<WeakRef<BranchPtr>> for YOutput {
-    fn from(v: WeakRef<BranchPtr>) -> Self {
-        YOutput {
-            tag: Y_WEAK_LINK,
-            len: 1,
-            value: YOutputContent {
-                y_type: v.into_raw_branch(),
             },
         }
     }
@@ -3162,6 +3162,17 @@ pub unsafe extern "C" fn yinput_ydoc(doc: *mut Doc) -> YInput {
     }
 }
 
+/// Function constructor used to create a string `YInput` cell with weak reference to another
+/// element(s) living inside of the same document.
+#[no_mangle]
+pub unsafe extern "C" fn yinput_weak(weak: *const Weak) -> YInput {
+    YInput {
+        tag: Y_WEAK_LINK,
+        len: 1,
+        value: YInputContent { weak },
+    }
+}
+
 /// Attempts to read the value for a given `YOutput` pointer as a `YDocRef` reference to a nested
 /// document.
 #[no_mangle]
@@ -3348,6 +3359,21 @@ pub unsafe extern "C" fn youtput_read_ytext(val: *const YOutput) -> *mut Branch 
 pub unsafe extern "C" fn youtput_read_yxmltext(val: *const YOutput) -> *mut Branch {
     let v = val.as_ref().unwrap();
     if v.tag == Y_XML_TEXT {
+        v.value.y_type
+    } else {
+        std::ptr::null_mut()
+    }
+}
+
+/// Attempts to read the value for a given `YOutput` pointer as an `YWeakRef`.
+///
+/// Returns a null pointer in case when a value stored under current `YOutput` cell
+/// is not an `YWeakRef`. Underlying heap resources are released automatically as part of
+/// [youtput_destroy] destructor.
+#[no_mangle]
+pub unsafe extern "C" fn youtput_read_yweak(val: *const YOutput) -> *mut Branch {
+    let v = val.as_ref().unwrap();
+    if v.tag == Y_WEAK_LINK {
         v.value.y_type
     } else {
         std::ptr::null_mut()
@@ -3936,6 +3962,14 @@ impl Deref for YWeakLinkEvent {
     fn deref(&self) -> &Self::Target {
         unsafe { (self.inner as *const WeakEvent).as_ref().unwrap() }
     }
+}
+
+/// Releases a callback subscribed via `yweak_observe` function represented by passed
+/// observer parameter.
+#[no_mangle]
+pub unsafe extern "C" fn yweak_unobserve(txt: *const Branch, subscription_id: u32) {
+    let weak: WeakRef<BranchPtr> = WeakRef::from_raw_branch(txt);
+    weak.unobserve(subscription_id as SubscriptionId);
 }
 
 /// Releases a callback subscribed via `ytext_observe` function represented by passed
@@ -5067,7 +5101,7 @@ pub unsafe extern "C" fn yweak_destroy(weak: *const Weak) {
 pub unsafe extern "C" fn yweak_deref(
     map_link: *const Branch,
     txn: *const Transaction,
-) -> *const YOutput {
+) -> *mut YOutput {
     assert!(!map_link.is_null());
     assert!(!txn.is_null());
 
@@ -5076,7 +5110,7 @@ pub unsafe extern "C" fn yweak_deref(
     if let Some(value) = weak.try_deref_raw(txn) {
         Box::into_raw(Box::new(YOutput::from(value)))
     } else {
-        null()
+        null_mut()
     }
 }
 
@@ -5142,8 +5176,29 @@ pub unsafe extern "C" fn yweak_xml_string(
     CString::new(str).unwrap().into_raw()
 }
 
+/// Subscribes a given callback function `cb` to changes made by this `YText` instance. Callbacks
+/// are triggered whenever a `ytransaction_commit` is called.
+/// Returns a subscription ID which can be then used to unsubscribe this callback by using
+/// `yweak_unobserve` function.
 #[no_mangle]
-pub unsafe extern "C" fn ylink(
+pub unsafe extern "C" fn yweak_observe(
+    weak: *const Branch,
+    state: *mut c_void,
+    cb: extern "C" fn(*mut c_void, *const YWeakLinkEvent),
+) -> u32 {
+    assert!(!weak.is_null());
+
+    let mut txt: WeakRef<BranchPtr> = WeakRef::from_raw_branch(weak);
+    let observer = txt.observe(move |txn, e| {
+        let e = YWeakLinkEvent::new(e, txn);
+        cb(state, &e as *const YWeakLinkEvent);
+    });
+    let subscription_id: u32 = observer.into();
+    subscription_id
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn ymap_link(
     map: *const Branch,
     txn: *const Transaction,
     key: *const c_char,
