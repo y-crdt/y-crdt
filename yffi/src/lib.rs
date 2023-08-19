@@ -1679,6 +1679,7 @@ pub unsafe extern "C" fn yxmlelem_string(
     txn: *const Transaction,
 ) -> *mut c_char {
     assert!(!xml.is_null());
+    assert!(!txn.is_null());
 
     let txn = txn.as_ref().unwrap();
     let xml = XmlElementRef::from_raw_branch(xml);
