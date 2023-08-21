@@ -721,6 +721,7 @@ pub unsafe extern "C" fn ytransaction_writeable(txn: *mut Transaction) -> u8 {
 /// identified by its `name`, which must be a null-terminated UTF-8 compatible string.
 ///
 /// Returns `NULL` if no such structure was defined in the document before.
+// TODO [LSViana] Rename this to `ytransaction_get_ytype()` (or similar) to match the signature.
 #[no_mangle]
 pub unsafe extern "C" fn ytype_get(txn: *mut Transaction, name: *const c_char) -> *mut Branch {
     assert!(!txn.is_null());
