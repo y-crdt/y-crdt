@@ -415,9 +415,9 @@ impl Decode for IdSet {
         let mut i = 0;
         while i < client_len {
             decoder.reset_ds_cur_val();
-            let client: u32 = decoder.read_var()?;
+            let client: ClientID = decoder.read_var()?;
             let range = IdRange::decode(decoder)?;
-            set.0.insert(client as ClientID, range);
+            set.0.insert(client, range);
             i += 1;
         }
         Ok(set)
@@ -737,7 +737,7 @@ impl<'ds, 'txn, 'doc> Iterator for DeletedBlocks<'ds, 'txn, 'doc> {
 
 #[cfg(test)]
 mod test {
-    use crate::block::ItemContent;
+    use crate::block::{ClientID, ItemContent};
     use crate::id_set::{IdRange, IdSet};
     use crate::test_utils::exchange_updates;
     use crate::updates::decoder::{Decode, DecoderV1};
@@ -745,6 +745,8 @@ mod test {
     use crate::{DeleteSet, Doc, Options, ReadTxn, Text, Transact, ID};
     use std::collections::HashSet;
     use std::fmt::Debug;
+
+    const A: ClientID = ClientID::new(1);
 
     #[test]
     fn id_range_merge_continous() {
@@ -835,9 +837,9 @@ mod test {
     #[test]
     fn id_set_encode_decode() {
         let mut set = IdSet::new();
-        set.insert(ID::new(124, 0), 1);
-        set.insert(ID::new(1337, 0), 12);
-        set.insert(ID::new(124, 1), 3);
+        set.insert(ID::new(124.into(), 0), 1);
+        set.insert(ID::new(1337.into(), 0), 12);
+        set.insert(ID::new(124.into(), 1), 3);
 
         roundtrip(&set);
     }
@@ -858,12 +860,12 @@ mod test {
     #[test]
     fn deleted_blocks() {
         let mut o = Options::default();
-        o.client_id = 1;
+        o.client_id = 1.into();
         o.skip_gc = true;
         let d1 = Doc::with_options(o.clone());
         let t1 = d1.get_or_insert_text("test");
 
-        o.client_id = 2;
+        o.client_id = 2.into();
         let d2 = Doc::with_options(o);
         let t2 = d2.get_or_insert_text("test");
 
@@ -904,10 +906,10 @@ mod test {
         };
 
         let expected = HashSet::from([
-            (true, ID::new(1, 0), 1, "a".to_owned()),
-            (true, ID::new(1, 4), 1, "a".to_owned()),
-            (true, ID::new(1, 7), 1, "b".to_owned()),
-            (true, ID::new(2, 1), 2, "cc".to_owned()),
+            (true, ID::new(1.into(), 0), 1, "a".to_owned()),
+            (true, ID::new(1.into(), 4), 1, "a".to_owned()),
+            (true, ID::new(1.into(), 7), 1, "b".to_owned()),
+            (true, ID::new(2.into(), 1), 2, "cc".to_owned()),
         ]);
 
         assert_eq!(blocks, expected);
@@ -916,14 +918,14 @@ mod test {
     #[test]
     fn deleted_blocks2() {
         let mut ds = DeleteSet::new();
-        let doc = Doc::with_client_id(1);
+        let doc = Doc::with_client_id(A);
         let txt = doc.get_or_insert_text("test");
         txt.push(&mut doc.transact_mut(), "testab");
-        ds.insert(ID::new(1, 5), 1);
+        ds.insert(ID::new(1.into(), 5), 1);
         let mut txn = doc.transact_mut();
         let mut i = ds.deleted_blocks(&mut txn);
         let ptr = i.next().unwrap();
-        assert_eq!(*ptr.id(), ID::new(1, 5));
+        assert_eq!(*ptr.id(), ID::new(A, 5));
         assert!(i.next().is_none());
     }
 }

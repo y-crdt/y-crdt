@@ -9,11 +9,16 @@ use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::OptionExt;
 use crate::*;
 use lib0::any::Any;
+use lib0::decoding::Read;
+use lib0::encoding::Write;
 use lib0::error::Error;
+use rand::Rng;
 use smallstr::SmallString;
 use std::collections::HashSet;
 use std::convert::TryFrom;
+use std::fmt::Formatter;
 use std::hash::Hash;
+use std::num::{NonZeroU32, NonZeroU64};
 use std::ops::{Deref, DerefMut};
 use std::panic;
 use std::ptr::NonNull;
@@ -67,7 +72,55 @@ pub const HAS_PARENT_SUB: u8 = 0b00100000;
 
 /// Globally unique client identifier. No two active peers are allowed to share the same [ClientID].
 /// If that happens, following updates may cause document store to be corrupted and desync in a result.
-pub type ClientID = u64;
+#[repr(transparent)]
+#[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
+pub struct ClientID(NonZeroU64);
+
+impl ClientID {
+    #[inline(always)]
+    pub const fn new(value: u64) -> Self {
+        const CLIENT_MARKER: u64 = 1u64 << 63;
+        ClientID(unsafe { NonZeroU64::new_unchecked(value | CLIENT_MARKER) })
+    }
+}
+
+impl From<u64> for ClientID {
+    #[inline(always)]
+    fn from(value: u64) -> Self {
+        ClientID::new(value)
+    }
+}
+
+impl From<ClientID> for u64 {
+    #[inline(always)]
+    fn from(value: ClientID) -> Self {
+        const CLIENT_BITS: u64 = (1u64 << 63) - 1;
+        value.0.get() & CLIENT_BITS
+    }
+}
+
+impl std::fmt::Display for ClientID {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", u64::from(*self))
+    }
+}
+
+impl lib0::number::VarInt for ClientID {
+    fn write<W: Write>(&self, w: &mut W) {
+        u64::from(*self).write(w)
+    }
+
+    fn read<R: Read>(r: &mut R) -> Result<Self, Error> {
+        Ok(Self::from(r.read_var::<u64>()?))
+    }
+}
+
+impl rand::distributions::Distribution<ClientID> for rand::distributions::Standard {
+    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> ClientID {
+        let value: u64 = rng.gen();
+        ClientID::from(value)
+    }
+}
 
 /// Block identifier, which allows to uniquely identify any element insertion in a global scope
 /// (across different replicas of the same document). It consists of client ID (which is a unique
@@ -88,6 +141,7 @@ pub struct ID {
 }
 
 impl ID {
+    #[inline]
     pub fn new(client: ClientID, clock: u32) -> Self {
         ID { client, clock }
     }
@@ -1323,13 +1377,16 @@ impl BlockRange {
     /// # Example:
     ///
     /// ```rust
-    /// use yrs::block::BlockRange;
+    /// use yrs::block::{BlockRange, ClientID};
     /// use yrs::ID;
-    /// let a = BlockRange::new(ID::new(1, 2), 8); // range of clocks [2..10)
+    ///
+    /// const A: ClientID = ClientID::new(1);
+    ///
+    /// let a = BlockRange::new(ID::new(A, 2), 8); // range of clocks [2..10)
     /// let b = a.slice(3); // range of clocks [5..10)
     ///
-    /// assert_eq!(b.id, ID::new(1, 5));
-    /// assert_eq!(b.last_id(), ID::new(1, 10));
+    /// assert_eq!(b.id, ID::new(A, 5));
+    /// assert_eq!(b.last_id(), ID::new(A, 10));
     /// ```
     pub fn slice(&self, offset: u32) -> Self {
         let mut next = self.clone();

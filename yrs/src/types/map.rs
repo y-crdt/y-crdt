@@ -424,6 +424,7 @@ impl MapEvent {
 
 #[cfg(test)]
 mod test {
+    use crate::block::ClientID;
     use crate::test_utils::{exchange_updates, run_scenario};
     use crate::transaction::ReadTxn;
     use crate::types::text::TextPrelim;
@@ -445,13 +446,18 @@ mod test {
     use std::rc::Rc;
     use std::time::Duration;
 
+    const A: ClientID = ClientID::new(1);
+    const B: ClientID = ClientID::new(2);
+    const C: ClientID = ClientID::new(3);
+    const D: ClientID = ClientID::new(4);
+
     #[test]
     fn map_basic() {
-        let d1 = Doc::with_client_id(1);
+        let d1 = Doc::with_client_id(A);
         let m1 = d1.get_or_insert_map("map");
         let mut t1 = d1.transact_mut();
 
-        let d2 = Doc::with_client_id(2);
+        let d2 = Doc::with_client_id(B);
         let m2 = d2.get_or_insert_map("map");
         let mut t2 = d2.transact_mut();
 
@@ -504,7 +510,7 @@ mod test {
 
     #[test]
     fn map_get_set() {
-        let d1 = Doc::with_client_id(1);
+        let d1 = Doc::with_client_id(A);
         let m1 = d1.get_or_insert_map("map");
         let mut t1 = d1.transact_mut();
 
@@ -513,7 +519,7 @@ mod test {
 
         let update = t1.encode_state_as_update_v1(&StateVector::default());
 
-        let d2 = Doc::with_client_id(2);
+        let d2 = Doc::with_client_id(B);
         let m2 = d2.get_or_insert_map("map");
         let mut t2 = d2.transact_mut();
 
@@ -528,11 +534,11 @@ mod test {
 
     #[test]
     fn map_get_set_sync_with_conflicts() {
-        let d1 = Doc::with_client_id(1);
+        let d1 = Doc::with_client_id(A);
         let m1 = d1.get_or_insert_map("map");
         let mut t1 = d1.transact_mut();
 
-        let d2 = Doc::with_client_id(2);
+        let d2 = Doc::with_client_id(B);
         let m2 = d2.get_or_insert_map("map");
         let mut t2 = d2.transact_mut();
 
@@ -551,7 +557,7 @@ mod test {
 
     #[test]
     fn map_len_remove() {
-        let d1 = Doc::with_client_id(1);
+        let d1 = Doc::with_client_id(A);
         let m1 = d1.get_or_insert_map("map");
         let mut t1 = d1.transact_mut();
 
@@ -577,7 +583,7 @@ mod test {
 
     #[test]
     fn map_clear() {
-        let d1 = Doc::with_client_id(1);
+        let d1 = Doc::with_client_id(A);
         let m1 = d1.get_or_insert_map("map");
         let mut t1 = d1.transact_mut();
 
@@ -589,7 +595,7 @@ mod test {
         assert_eq!(m1.get(&t1, &"key1".to_owned()), None);
         assert_eq!(m1.get(&t1, &"key2".to_owned()), None);
 
-        let d2 = Doc::with_client_id(2);
+        let d2 = Doc::with_client_id(B);
         let m2 = d2.get_or_insert_map("map");
         let mut t2 = d2.transact_mut();
 
@@ -603,10 +609,10 @@ mod test {
 
     #[test]
     fn map_clear_sync() {
-        let d1 = Doc::with_client_id(1);
-        let d2 = Doc::with_client_id(2);
-        let d3 = Doc::with_client_id(3);
-        let d4 = Doc::with_client_id(4);
+        let d1 = Doc::with_client_id(A);
+        let d2 = Doc::with_client_id(B);
+        let d3 = Doc::with_client_id(C);
+        let d4 = Doc::with_client_id(D);
 
         {
             let m1 = d1.get_or_insert_map("map");
@@ -669,9 +675,9 @@ mod test {
 
     #[test]
     fn map_get_set_with_3_way_conflicts() {
-        let d1 = Doc::with_client_id(1);
-        let d2 = Doc::with_client_id(2);
-        let d3 = Doc::with_client_id(3);
+        let d1 = Doc::with_client_id(A);
+        let d2 = Doc::with_client_id(B);
+        let d3 = Doc::with_client_id(C);
 
         {
             let m1 = d1.get_or_insert_map("map");
@@ -704,10 +710,10 @@ mod test {
 
     #[test]
     fn map_get_set_remove_with_3_way_conflicts() {
-        let d1 = Doc::with_client_id(1);
-        let d2 = Doc::with_client_id(2);
-        let d3 = Doc::with_client_id(3);
-        let d4 = Doc::with_client_id(4);
+        let d1 = Doc::with_client_id(A);
+        let d2 = Doc::with_client_id(B);
+        let d3 = Doc::with_client_id(C);
+        let d4 = Doc::with_client_id(D);
 
         {
             let m1 = d1.get_or_insert_map("map");
@@ -760,7 +766,7 @@ mod test {
 
     #[test]
     fn insert_and_remove_events() {
-        let d1 = Doc::with_client_id(1);
+        let d1 = Doc::with_client_id(A);
         let mut m1 = d1.get_or_insert_map("map");
 
         let entries = Rc::new(RefCell::new(None));
@@ -847,7 +853,7 @@ mod test {
         assert_eq!(entries.take(), Some(HashMap::new()));
 
         // copy updates over
-        let d2 = Doc::with_client_id(2);
+        let d2 = Doc::with_client_id(B);
         let mut m2 = d2.get_or_insert_map("map");
 
         let entries = Rc::new(RefCell::new(None));
@@ -937,7 +943,7 @@ mod test {
 
     #[test]
     fn observe_deep() {
-        let doc = Doc::with_client_id(1);
+        let doc = Doc::with_client_id(A);
         let mut map = doc.get_or_insert_map("map");
 
         let paths = Rc::new(RefCell::new(vec![]));
@@ -994,7 +1000,7 @@ mod test {
         use std::sync::{Arc, RwLock};
         use std::thread::{sleep, spawn};
 
-        let doc = Arc::new(RwLock::new(Doc::with_client_id(1)));
+        let doc = Arc::new(RwLock::new(Doc::with_client_id(A)));
 
         let d2 = doc.clone();
         let h2 = spawn(move || {

@@ -7,6 +7,7 @@ use lib0::decoding::{Cursor, Read};
 use rand::distributions::Alphanumeric;
 use rand::prelude::{SliceRandom, StdRng};
 use rand::{random, Rng, RngCore, SeedableRng};
+use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::{RefCell, RefMut};
 use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
@@ -34,7 +35,7 @@ const MSG_SYNC_STEP_1: usize = 0;
 const MSG_SYNC_STEP_2: usize = 1;
 const MSG_SYNC_UPDATE: usize = 2;
 
-pub fn run_scenario<F>(mut seed: u64, mods: &[F], users: usize, iterations: usize)
+pub fn run_scenario<F>(mut seed: u64, mods: &[F], users: u64, iterations: usize)
 where
     F: Fn(&mut Doc, &mut StdRng),
 {
@@ -44,7 +45,7 @@ where
     }
 
     let rng = StdRng::seed_from_u64(seed);
-    let tc = TestConnector::with_peer_num(rng, users as u64);
+    let tc = TestConnector::with_peer_num(rng, users);
     for _ in 0..iterations {
         if tc.0.borrow_mut().rng.gen_range(0, 100) <= 2 {
             // 2% chance to disconnect/reconnect a random user
@@ -99,7 +100,7 @@ impl TestConnector {
     pub fn with_peer_num(rng: StdRng, peer_num: u64) -> Self {
         let mut tc = Self::with_rng(rng);
         for client_id in 0..peer_num {
-            let peer = tc.create_peer(client_id as ClientID);
+            let peer = tc.create_peer(ClientID::new(client_id));
             peer.doc.get_or_insert_text("text");
             peer.doc.get_or_insert_map("map");
         }
@@ -510,3 +511,51 @@ pub(crate) trait RngExt: RngCore {
 }
 
 impl<T> RngExt for T where T: RngCore {}
+
+thread_local! {
+    // Pair of (num allocations, total bytes allocated).
+    static ALLOCATED: RefCell<(usize, isize)> = RefCell::new((0, 0));
+}
+// pub static ALLOCATED: AtomicUsize = AtomicUsize::new(0);
+
+pub struct TracingAlloc;
+
+unsafe impl GlobalAlloc for TracingAlloc {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        let ret = System.alloc(layout);
+        if !ret.is_null() {
+            // ALLOCATED.fetch_add(layout.size(), Ordering::AcqRel);
+            ALLOCATED.with(|s| {
+                let mut r = s.borrow_mut();
+                r.0 += 1;
+                r.1 += layout.size() as isize;
+            });
+        }
+        ret
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        // ALLOCATED.fetch_sub(layout.size(), Ordering::AcqRel);
+        ALLOCATED.with(|s| {
+            s.borrow_mut().1 -= layout.size() as isize;
+        });
+        System.dealloc(ptr, layout);
+    }
+
+    // Eh, would be better to implement this but it'd be easy to mess this up.
+    // unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+    // }
+}
+
+/// Reset tracing allocator stats.
+pub fn reset_thread_alloc_stats() {
+    ALLOCATED.with(|s| s.take());
+}
+
+pub fn get_thread_num_allocations() -> usize {
+    ALLOCATED.with(|s| s.borrow().0)
+}
+
+pub fn get_thread_memory_usage() -> isize {
+    ALLOCATED.with(|s| s.borrow().1)
+}

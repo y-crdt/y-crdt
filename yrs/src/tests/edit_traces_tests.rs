@@ -1,6 +1,10 @@
+use crate::test_utils::{get_thread_memory_usage, get_thread_num_allocations, TracingAlloc};
 use crate::tests::edit_traces::load_testing_data;
 use crate::{Doc, GetString, OffsetKind, Options, Text, Transact};
 use std::time::Instant;
+
+#[global_allocator]
+static A: TracingAlloc = TracingAlloc;
 
 #[test]
 fn edit_trace_automerge() {
@@ -59,6 +63,11 @@ fn test_editing_trace(fpath: &str) {
         }
     }
     let finish = Instant::now();
-    println!("elapsed: {}ms", (finish - start).as_millis());
+    let mem_usage = get_thread_memory_usage();
+    println!(
+        "elapsed: {}ms - mem used(bytes): {}",
+        (finish - start).as_millis(),
+        mem_usage
+    );
     assert_eq!(txt.get_string(&doc.transact()), data.end_content);
 }

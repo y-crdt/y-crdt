@@ -906,7 +906,7 @@ impl Into<Store> for Update {
     fn into(self) -> Store {
         use crate::doc::Options;
 
-        let mut store = Store::new(Options::with_client_id(0));
+        let mut store = Store::new(Options::with_client_id(0.into()));
         for (client_id, vec) in self.blocks.clients {
             let blocks = store
                 .blocks
@@ -1011,13 +1011,17 @@ impl Iterator for IntoBlocks {
 
 #[cfg(test)]
 mod test {
-    use crate::block::{Item, ItemContent};
+    use crate::block::{ClientID, Item, ItemContent};
     use crate::types::TypePtr;
     use crate::update::{BlockCarrier, Update};
     use crate::updates::decoder::{Decode, DecoderV1};
     use crate::updates::encoder::Encode;
     use crate::{Doc, GetString, Options, Text, Transact, XmlFragment, XmlNode, ID};
     use lib0::decoding::Cursor;
+
+    const A: ClientID = ClientID::new(1);
+    const B: ClientID = ClientID::new(2);
+    const C: ClientID = ClientID::new(3);
 
     #[test]
     fn update_decode() {
@@ -1041,7 +1045,7 @@ mod test {
         let mut decoder = DecoderV1::from(update);
         let u = Update::decode(&mut decoder).unwrap();
 
-        let id = ID::new(2026372272, 0);
+        let id = ID::new(2026372272.into(), 0);
         let block = u.blocks.clients.get(&id.client).unwrap();
         let mut expected: Vec<BlockCarrier> = Vec::new();
         expected.push(
@@ -1062,11 +1066,11 @@ mod test {
 
     #[test]
     fn update_merge() {
-        let d1 = Doc::with_client_id(1);
+        let d1 = Doc::with_client_id(A);
         let txt1 = d1.get_or_insert_text("test");
         let mut t1 = d1.transact_mut();
 
-        let d2 = Doc::with_client_id(2);
+        let d2 = Doc::with_client_id(B);
         let txt2 = d2.get_or_insert_text("test");
         let mut t2 = d2.transact_mut();
 
@@ -1089,7 +1093,7 @@ mod test {
         // the same output as sequence of updates applied individually
         let u12 = Update::merge_updates(vec![u1, u2]);
 
-        let d3 = Doc::with_client_id(3);
+        let d3 = Doc::with_client_id(C);
         let txt3 = d3.get_or_insert_text("test");
         let mut t3 = d3.transact_mut();
         t3.apply_update(u12);
@@ -1104,7 +1108,7 @@ mod test {
 
     #[test]
     fn test_duplicate_updates() {
-        let doc = Doc::with_client_id(1);
+        let doc = Doc::with_client_id(A);
         let txt = doc.get_or_insert_text("test");
         let mut tr = doc.transact_mut();
         txt.insert(&mut tr, 0, "aaa");
@@ -1121,14 +1125,14 @@ mod test {
     #[test]
     fn test_multiple_clients_in_one_update() {
         let binary1 = {
-            let doc = Doc::with_client_id(1);
+            let doc = Doc::with_client_id(A);
             let txt = doc.get_or_insert_text("test");
             let mut tr = doc.transact_mut();
             txt.insert(&mut tr, 0, "aaa");
             tr.encode_update_v1()
         };
         let binary2 = {
-            let doc = Doc::with_client_id(2);
+            let doc = Doc::with_client_id(B);
             let txt = doc.get_or_insert_text("test");
             let mut tr = doc.transact_mut();
             txt.insert(&mut tr, 0, "bbb");
@@ -1175,7 +1179,7 @@ mod test {
         ];
         let doc = Doc::with_options(Options {
             skip_gc: true,
-            client_id: 1,
+            client_id: A,
             ..Default::default()
         });
         let prosemirror = doc.get_or_insert_xml_fragment("prosemirror");

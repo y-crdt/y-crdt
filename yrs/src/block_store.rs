@@ -123,7 +123,7 @@ impl Decode for StateVector {
         while i < len {
             let client = decoder.read_var()?;
             let clock = decoder.read_var()?;
-            sv.insert(client, clock);
+            sv.insert(ClientID::new(client), clock);
             i += 1;
         }
         Ok(StateVector(sv))
@@ -134,7 +134,7 @@ impl Encode for StateVector {
     fn encode<E: Encoder>(&self, encoder: &mut E) {
         encoder.write_var(self.len());
         for (&client, &clock) in self.iter() {
-            encoder.write_var(client);
+            encoder.write_var(u64::from(client));
             encoder.write_var(clock);
         }
     }

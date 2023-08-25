@@ -786,10 +786,13 @@ impl Offset {
 
 #[cfg(test)]
 mod test {
+    use crate::block::ClientID;
     use crate::moving::Assoc;
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::Encode;
     use crate::{Doc, IndexedSequence, StickyIndex, Text, TextRef, Transact};
+
+    const A: ClientID = ClientID::new(1);
 
     fn check_sticky_indexes(text: &TextRef) {
         // test if all positions are encoded and restored correctly
@@ -812,7 +815,7 @@ mod test {
 
     #[test]
     fn sticky_index_case_1() {
-        let doc = Doc::with_client_id(1);
+        let doc = Doc::with_client_id(A);
         let txt = doc.get_or_insert_text("test");
 
         {
@@ -829,7 +832,7 @@ mod test {
 
     #[test]
     fn sticky_index_case_2() {
-        let doc = Doc::with_client_id(1);
+        let doc = Doc::with_client_id(A);
         let txt = doc.get_or_insert_text("test");
 
         txt.insert(&mut doc.transact_mut(), 0, "abc");
@@ -838,7 +841,7 @@ mod test {
 
     #[test]
     fn sticky_index_case_3() {
-        let doc = Doc::with_client_id(1);
+        let doc = Doc::with_client_id(A);
         let txt = doc.get_or_insert_text("test");
 
         {
@@ -853,7 +856,7 @@ mod test {
 
     #[test]
     fn sticky_index_case_4() {
-        let doc = Doc::with_client_id(1);
+        let doc = Doc::with_client_id(A);
         let txt = doc.get_or_insert_text("test");
 
         txt.insert(&mut doc.transact_mut(), 0, "1");
@@ -862,7 +865,7 @@ mod test {
 
     #[test]
     fn sticky_index_case_5() {
-        let doc = Doc::with_client_id(1);
+        let doc = Doc::with_client_id(A);
         let txt = doc.get_or_insert_text("test");
 
         {
@@ -876,14 +879,14 @@ mod test {
 
     #[test]
     fn sticky_index_case_6() {
-        let doc = Doc::with_client_id(1);
+        let doc = Doc::with_client_id(A);
         let txt = doc.get_or_insert_text("test");
         check_sticky_indexes(&txt);
     }
 
     #[test]
     fn sticky_index_association_difference() {
-        let doc = Doc::with_client_id(1);
+        let doc = Doc::with_client_id(A);
         let txt = doc.get_or_insert_text("test");
 
         let mut txn = doc.transact_mut();

@@ -44,7 +44,7 @@ fn text_insert_delete() {
         97, 98, 193, 152, 234, 173, 126, 4, 152, 234, 173, 126, 0, 1, 129, 152, 234, 173, 126, 2,
         1, 132, 152, 234, 173, 126, 6, 2, 104, 105, 1, 152, 234, 173, 126, 2, 0, 3, 5, 2,
     ];
-    const CLIENT_ID: ClientID = 264992024;
+    const CLIENT_ID: ClientID = ClientID::new(264992024);
     let expected_blocks = vec![
         Item::new(
             ID::new(CLIENT_ID, 0),
@@ -141,7 +141,7 @@ fn map_set() {
            console.log(payload_v2);
         ```
     */
-    const CLIENT_ID: ClientID = 440166001;
+    const CLIENT_ID: ClientID = ClientID::new(440166001);
     let expected = vec![
         Item::new(
             ID::new(CLIENT_ID, 0),
@@ -195,7 +195,7 @@ fn array_insert() {
            console.log(payload_v2);
         ```
     */
-    const CLIENT_ID: ClientID = 2525665872;
+    const CLIENT_ID: ClientID = ClientID::new(2525665872);
     let expected = vec![Item::new(
         ID::new(CLIENT_ID, 0),
         None,
@@ -237,7 +237,7 @@ fn xml_fragment_insert() {
            console.log(payload_v2);
         ```
     */
-    const CLIENT_ID: ClientID = 2459881872;
+    const CLIENT_ID: ClientID = ClientID::new(2459881872);
     let expected = vec![
         Item::new(
             ID::new(CLIENT_ID, 0),
@@ -296,8 +296,8 @@ fn state_vector() {
     */
     let payload = &[2, 178, 219, 218, 44, 3, 190, 212, 225, 6, 2];
     let mut expected = StateVector::default();
-    expected.inc_by(14182974, 2);
-    expected.inc_by(93760946, 3);
+    expected.inc_by(14182974.into(), 2);
+    expected.inc_by(93760946.into(), 3);
 
     let sv = StateVector::decode_v1(payload).unwrap();
     assert_eq!(sv, expected);

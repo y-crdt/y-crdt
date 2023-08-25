@@ -639,6 +639,7 @@ pub enum EventKind {
 
 #[cfg(test)]
 mod test {
+    use crate::block::ClientID;
     use crate::test_utils::exchange_updates;
     use crate::types::text::{Diff, YChange};
     use crate::types::{Attrs, ToJson};
@@ -657,13 +658,16 @@ mod test {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
+    const A: ClientID = ClientID::new(1);
+    const B: ClientID = ClientID::new(2);
+
     #[test]
     fn undo_text() {
-        let d1 = Doc::with_client_id(1);
+        let d1 = Doc::with_client_id(A);
         let txt1 = d1.get_or_insert_text("test");
         let mut mgr = UndoManager::new(&d1, &txt1);
 
-        let d2 = Doc::with_client_id(2);
+        let d2 = Doc::with_client_id(B);
         let txt2 = d2.get_or_insert_text("test");
 
         // items that are added & deleted in the same transaction won't be undo
@@ -733,7 +737,7 @@ mod test {
 
     #[test]
     fn double_undo() {
-        let doc = Doc::with_client_id(1);
+        let doc = Doc::with_client_id(A);
         let txt = doc.get_or_insert_text("test");
         txt.insert(&mut doc.transact_mut(), 0, "1221");
 
@@ -750,10 +754,10 @@ mod test {
 
     #[test]
     fn undo_map() {
-        let d1 = Doc::with_client_id(1);
+        let d1 = Doc::with_client_id(A);
         let map1 = d1.get_or_insert_map("test");
 
-        let d2 = Doc::with_client_id(2);
+        let d2 = Doc::with_client_id(B);
         let map2 = d2.get_or_insert_map("test");
 
         map1.insert(&mut d1.transact_mut(), "a", 0);
@@ -803,10 +807,10 @@ mod test {
 
     #[test]
     fn undo_array() {
-        let d1 = Doc::with_client_id(1);
+        let d1 = Doc::with_client_id(A);
         let array1 = d1.get_or_insert_array("test");
 
-        let d2 = Doc::with_client_id(2);
+        let d2 = Doc::with_client_id(B);
         let array2 = d2.get_or_insert_array("test");
 
         let mut mgr = UndoManager::new(&d1, &array1);
@@ -899,7 +903,7 @@ mod test {
 
     #[test]
     fn undo_xml() {
-        let d1 = Doc::with_client_id(1);
+        let d1 = Doc::with_client_id(A);
         let xml1 = d1.get_or_insert_xml_element("undefined");
 
         let mut mgr = UndoManager::new(&d1, &xml1);
@@ -943,7 +947,7 @@ mod test {
 
     #[test]
     fn undo_events() {
-        let doc = Doc::with_client_id(1);
+        let doc = Doc::with_client_id(A);
         let txt = doc.get_or_insert_text("test");
         let mut mgr = UndoManager::new(&doc, &txt);
 
@@ -980,10 +984,10 @@ mod test {
 
     #[test]
     fn undo_until_change_performed() {
-        let d1 = Doc::with_client_id(1);
+        let d1 = Doc::with_client_id(A);
         let arr1 = d1.get_or_insert_array("array");
 
-        let d2 = Doc::with_client_id(2);
+        let d2 = Doc::with_client_id(B);
         let arr2 = d2.get_or_insert_array("array");
 
         let map1a = arr1.push_back(
@@ -1038,7 +1042,7 @@ mod test {
         // This issue has been reported in https://github.com/yjs/yjs/issues/317
         let doc = Doc::with_options(crate::doc::Options {
             skip_gc: true,
-            client_id: 1,
+            client_id: A,
             ..crate::doc::Options::default()
         });
         let design = doc.get_or_insert_map("map");
@@ -1117,7 +1121,7 @@ mod test {
     #[test]
     fn consecutive_redo_bug() {
         // https://github.com/yjs/yjs/issues/355
-        let doc = Doc::with_client_id(1);
+        let doc = Doc::with_client_id(A);
         let root = doc.get_or_insert_map("root");
         let mut mgr = UndoManager::new(&doc, &root);
 
@@ -1184,7 +1188,7 @@ mod test {
     fn undo_xml_bug() {
         // https://github.com/yjs/yjs/issues/304
         const ORIGIN: &str = "origin";
-        let doc = Doc::with_client_id(1);
+        let doc = Doc::with_client_id(A);
         let f = doc.get_or_insert_xml_fragment("t");
         let mut mgr = UndoManager::with_options(&doc, &f, {
             let mut o = Options::default();
@@ -1236,7 +1240,7 @@ mod test {
         // https://github.com/yjs/yjs/issues/343
         let doc = Doc::with_options({
             let mut o = crate::doc::Options::default();
-            o.client_id = 1;
+            o.client_id = A;
             o.skip_gc = true;
             o
         });
@@ -1309,14 +1313,14 @@ mod test {
             dst.transact_mut().apply_update(update)
         }
 
-        let doc1 = Doc::with_client_id(1);
+        let doc1 = Doc::with_client_id(A);
         let txt = doc1.get_or_insert_text("test");
         txt.insert(
             &mut doc1.transact_mut(),
             0,
             "Attack ships on fire off the shoulder of Orion.",
         ); // D1: 'Attack ships on fire off the shoulder of Orion.'
-        let doc2 = Doc::with_client_id(2);
+        let doc2 = Doc::with_client_id(B);
         let txt2 = doc2.get_or_insert_text("test");
 
         send(&doc1, &doc2); // D2: 'Attack ships on fire off the shoulder of Orion.'
@@ -1361,7 +1365,7 @@ mod test {
     fn special_deletion_case() {
         // https://github.com/yjs/yjs/issues/447
         const ORIGIN: &str = "undoable";
-        let doc = Doc::with_client_id(1);
+        let doc = Doc::with_client_id(A);
         let f = doc.get_or_insert_xml_fragment("test");
         let mut mgr = UndoManager::new(&doc, &f);
         mgr.include_origin(ORIGIN.clone());
@@ -1389,11 +1393,11 @@ mod test {
 
     #[test]
     fn undo_in_embed() {
-        let d1 = Doc::with_client_id(1);
+        let d1 = Doc::with_client_id(A);
         let txt1 = d1.get_or_insert_text("test");
         let mut mgr = UndoManager::new(&d1, &txt1);
 
-        let d2 = Doc::with_client_id(2);
+        let d2 = Doc::with_client_id(B);
         let txt2 = d2.get_or_insert_text("test");
 
         let attrs = Attrs::from([("bold".into(), true.into())]);

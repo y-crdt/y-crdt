@@ -1196,6 +1196,7 @@ impl XmlEvent {
 
 #[cfg(test)]
 mod test {
+    use crate::block::ClientID;
     use crate::transaction::ReadTxn;
     use crate::types::xml::{Xml, XmlFragment, XmlNode};
     use crate::types::{Attrs, Change, EntryChange, Value};
@@ -1210,16 +1211,19 @@ mod test {
     use std::collections::HashMap;
     use std::rc::Rc;
 
+    const A: ClientID = ClientID::new(1);
+    const B: ClientID = ClientID::new(2);
+
     #[test]
     fn insert_attribute() {
-        let d1 = Doc::with_client_id(1);
+        let d1 = Doc::with_client_id(A);
         let f = d1.get_or_insert_xml_fragment("xml");
         let mut t1 = d1.transact_mut();
         let xml1 = f.push_back(&mut t1, XmlElementPrelim::empty("div"));
         xml1.insert_attribute(&mut t1, "height", 10.to_string());
         assert_eq!(xml1.get_attribute(&t1, "height"), Some("10".to_string()));
 
-        let d2 = Doc::with_client_id(1);
+        let d2 = Doc::with_client_id(A);
         let f = d2.get_or_insert_xml_fragment("xml");
         let mut t2 = d2.transact_mut();
         let xml2 = f.push_back(&mut t2, XmlElementPrelim::empty("div"));
@@ -1230,7 +1234,7 @@ mod test {
 
     #[test]
     fn tree_walker() {
-        let doc = Doc::with_client_id(1);
+        let doc = Doc::with_client_id(A);
         let root = doc.get_or_insert_xml_fragment("xml");
         let mut txn = doc.transact_mut();
         /*
@@ -1263,7 +1267,7 @@ mod test {
 
     #[test]
     fn text_attributes() {
-        let doc = Doc::with_client_id(1);
+        let doc = Doc::with_client_id(A);
         let f = doc.get_or_insert_xml_fragment("test");
         let mut txn = doc.transact_mut();
         let txt = f.push_back(&mut txn, XmlTextPrelim::new(""));
@@ -1276,7 +1280,7 @@ mod test {
 
     #[test]
     fn siblings() {
-        let doc = Doc::with_client_id(1);
+        let doc = Doc::with_client_id(A);
         let root = doc.get_or_insert_xml_fragment("root");
         let mut txn = doc.transact_mut();
         let first = root.push_back(&mut txn, XmlTextPrelim::new("hello"));
@@ -1307,7 +1311,7 @@ mod test {
 
     #[test]
     fn serialization() {
-        let d1 = Doc::with_client_id(1);
+        let d1 = Doc::with_client_id(A);
         let r1 = d1.get_or_insert_xml_fragment("root");
         let mut t1 = d1.transact_mut();
         let _first = r1.push_back(&mut t1, XmlTextPrelim::new("hello"));
@@ -1318,7 +1322,7 @@ mod test {
 
         let u1 = t1.encode_state_as_update_v1(&StateVector::default());
 
-        let d2 = Doc::with_client_id(2);
+        let d2 = Doc::with_client_id(B);
         let r2 = d2.get_or_insert_xml_fragment("root");
         let mut t2 = d2.transact_mut();
 
@@ -1328,7 +1332,7 @@ mod test {
 
     #[test]
     fn serialization_compatibility() {
-        let d1 = Doc::with_client_id(1);
+        let d1 = Doc::with_client_id(A);
         let r1 = d1.get_or_insert_xml_fragment("root");
         let mut t1 = d1.transact_mut();
         let _first = r1.push_back(&mut t1, XmlTextPrelim::new("hello"));
@@ -1356,7 +1360,7 @@ mod test {
 
     #[test]
     fn event_observers() {
-        let d1 = Doc::with_client_id(1);
+        let d1 = Doc::with_client_id(A);
         let mut xml = d1.get_or_insert_xml_element("test");
 
         let attributes = Rc::new(RefCell::new(None));
@@ -1446,7 +1450,7 @@ mod test {
         assert_eq!(attributes.borrow_mut().take(), Some(HashMap::new()));
 
         // copy updates over
-        let d2 = Doc::with_client_id(2);
+        let d2 = Doc::with_client_id(B);
         let mut xml2 = d2.get_or_insert_xml_element("test");
 
         let attributes = Rc::new(RefCell::new(None));

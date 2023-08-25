@@ -298,7 +298,7 @@ impl Into<Options> for YOptions {
             Some(str)
         };
         Options {
-            client_id: self.id as ClientID,
+            client_id: ClientID::new(self.id),
             guid,
             collection_id,
             skip_gc: if self.skip_gc == 0 { false } else { true },
@@ -312,7 +312,7 @@ impl Into<Options> for YOptions {
 impl From<Options> for YOptions {
     fn from(o: Options) -> Self {
         YOptions {
-            id: o.client_id,
+            id: o.client_id.into(),
             guid: CString::new(o.guid.as_ref()).unwrap().into_raw(),
             collection_id: if let Some(collection_id) = o.collection_id {
                 CString::new(collection_id).unwrap().into_raw()
@@ -412,7 +412,7 @@ pub extern "C" fn ydoc_new_with_options(options: YOptions) -> *mut Doc {
 #[no_mangle]
 pub unsafe extern "C" fn ydoc_id(doc: *mut Doc) -> u64 {
     let doc = doc.as_ref().unwrap();
-    doc.client_id()
+    doc.client_id().into()
 }
 
 /// Returns a unique document identifier of this [Doc] instance.
@@ -3549,7 +3549,7 @@ impl YStateVector {
         let mut client_ids = Vec::with_capacity(sv.len());
         let mut clocks = Vec::with_capacity(sv.len());
         for (&client, &clock) in sv.iter() {
-            client_ids.push(client as u64);
+            client_ids.push(u64::from(client));
             clocks.push(clock as u32);
         }
 

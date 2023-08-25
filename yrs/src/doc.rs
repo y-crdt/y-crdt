@@ -70,8 +70,8 @@ impl Doc {
 
     /// Creates a new document with a specified `client_id`. It's up to a caller to guarantee that
     /// this identifier is unique across all communicating replicas of that document.
-    pub fn with_client_id(client_id: ClientID) -> Self {
-        Self::with_options(Options::with_client_id(client_id))
+    pub fn with_client_id<C: Into<ClientID>>(client_id: C) -> Self {
+        Self::with_options(Options::with_client_id(client_id.into()))
     }
 
     /// Creates a new document with a configured set of [Options].
@@ -616,9 +616,9 @@ impl Options {
 impl Default for Options {
     fn default() -> Self {
         let mut rng = rand::thread_rng();
-        let client_id: u32 = rng.gen();
+        let client_id = rng.gen();
         let uuid = uuid_v4(&mut rng);
-        Self::with_guid_and_client_id(uuid, client_id as ClientID)
+        Self::with_guid_and_client_id(uuid, client_id)
     }
 }
 
@@ -885,7 +885,7 @@ impl DocAddr {
 
 #[cfg(test)]
 mod test {
-    use crate::block::{Block, ItemContent};
+    use crate::block::{Block, ClientID, ItemContent};
     use crate::test_utils::exchange_updates;
     use crate::transaction::{ReadTxn, TransactionMut};
     use crate::types::ToJson;
@@ -901,6 +901,10 @@ mod test {
     use std::cell::{Cell, RefCell, RefMut};
     use std::collections::BTreeSet;
     use std::rc::Rc;
+
+    const A: ClientID = ClientID::new(1);
+    const B: ClientID = ClientID::new(2);
+    const C: ClientID = ClientID::new(3);
 
     #[test]
     fn apply_update_basic_v1() {
@@ -1211,14 +1215,14 @@ mod test {
 
     #[test]
     fn partially_duplicated_update() {
-        let d1 = Doc::with_client_id(1);
+        let d1 = Doc::with_client_id(A);
         let txt1 = d1.get_or_insert_text("text");
         txt1.insert(&mut d1.transact_mut(), 0, "hello");
         let u = d1
             .transact()
             .encode_state_as_update_v1(&StateVector::default());
 
-        let d2 = Doc::with_client_id(2);
+        let d2 = Doc::with_client_id(B);
         let txt2 = d2.get_or_insert_text("text");
         d2.transact_mut()
             .apply_update(Update::decode_v1(&u).unwrap());
@@ -1240,7 +1244,7 @@ mod test {
     fn incremental_observe_update() {
         const INPUT: &'static str = "hello";
 
-        let d1 = Doc::with_client_id(1);
+        let d1 = Doc::with_client_id(A);
         let txt1 = d1.get_or_insert_text("text");
         let acc = Rc::new(RefCell::new(String::new()));
 
@@ -1278,7 +1282,7 @@ mod test {
         let _sub = d1.observe_update_v1(move |_: &TransactionMut, e| {
             let u = Update::decode_v1(&e.update).unwrap();
             for (&client_id, range) in u.delete_set.iter() {
-                if client_id == 1 {
+                if client_id == 1.into() {
                     let mut aref: RefMut<_> = a.try_borrow_mut().unwrap();
                     for r in range.iter() {
                         aref.push(r.clone());
@@ -1336,7 +1340,7 @@ mod test {
 
     #[test]
     fn snapshots_splitting_text() {
-        let mut options = Options::with_client_id(1);
+        let mut options = Options::with_client_id(1.into());
         options.skip_gc = true;
 
         let d1 = Doc::with_options(options);
@@ -1351,7 +1355,7 @@ mod test {
             .unwrap();
         let update = Update::decode_v1(&encoder.to_vec()).unwrap();
 
-        let d2 = Doc::with_client_id(2);
+        let d2 = Doc::with_client_id(B);
         let txt2 = d2.get_or_insert_text("text");
         d2.transact_mut().apply_update(update);
 
@@ -1617,9 +1621,9 @@ mod test {
 
     #[test]
     fn integrate_block_with_parent_gc() {
-        let d1 = Doc::with_client_id(1);
-        let d2 = Doc::with_client_id(2);
-        let d3 = Doc::with_client_id(3);
+        let d1 = Doc::with_client_id(A);
+        let d2 = Doc::with_client_id(B);
+        let d3 = Doc::with_client_id(C);
 
         {
             let root = d1.get_or_insert_array("array");
@@ -1660,7 +1664,7 @@ mod test {
 
     #[test]
     fn subdoc() {
-        let doc = Doc::with_client_id(1);
+        let doc = Doc::with_client_id(A);
         let event = Rc::new(Cell::new(None));
         let event_c = event.clone();
         let _sub = doc.observe_subdocs(move |_, e| {
@@ -1805,7 +1809,7 @@ mod test {
 
     #[test]
     fn subdoc_load_edge_cases() {
-        let doc = Doc::with_client_id(1);
+        let doc = Doc::with_client_id(A);
         let array = doc.get_or_insert_array("test");
         let subdoc_1 = Doc::new();
         let uuid_1 = subdoc_1.options().guid.clone();
@@ -1851,7 +1855,7 @@ mod test {
         assert_eq!(last_event, Some((vec![], vec![], vec![uuid_2.clone()])));
 
         // apply from remote
-        let doc2 = Doc::with_client_id(2);
+        let doc2 = Doc::with_client_id(B);
         let event_c = event.clone();
         let _sub = doc2.observe_subdocs(move |_, e| {
             let added = e.added().map(|d| d.guid().clone()).collect();
@@ -1884,7 +1888,7 @@ mod test {
 
     #[test]
     fn subdoc_auto_load_edge_cases() {
-        let doc = Doc::with_client_id(1);
+        let doc = Doc::with_client_id(A);
         let array = doc.get_or_insert_array("test");
         let subdoc_1 = Doc::with_options({
             let mut o = Options::default();
@@ -1934,7 +1938,7 @@ mod test {
         assert_eq!(last_event, Some((vec![], vec![], vec![uuid_2.clone()])));
 
         // apply from remote
-        let doc2 = Doc::with_client_id(2);
+        let doc2 = Doc::with_client_id(B);
         let event_c = event.clone();
         let _sub = doc2.observe_subdocs(move |_, e| {
             let added = e.added().map(|d| d.guid().clone()).collect();

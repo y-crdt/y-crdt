@@ -1,4 +1,4 @@
-use crate::block::{Block, BlockPtr, Item, ItemContent, Prelim, ID};
+use crate::block::{Block, BlockPtr, ClientID, Item, ItemContent, Prelim, ID};
 use crate::block_store::{Snapshot, StateVector};
 use crate::doc::DocAddr;
 use crate::event::SubdocsEvent;
@@ -982,3 +982,10 @@ impl_origin!(i32);
 impl_origin!(i64);
 impl_origin!(i128);
 impl_origin!(isize);
+
+impl From<ClientID> for Origin {
+    fn from(client_id: ClientID) -> Self {
+        let v: u64 = client_id.into();
+        Origin(SmallVec::from_slice(&v.to_be_bytes()))
+    }
+}

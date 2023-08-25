@@ -1282,6 +1282,7 @@ impl<T: Borrow<str>> Into<EmbedPrelim<TextPrelim<T>>> for TextPrelim<T> {
 
 #[cfg(test)]
 mod test {
+    use crate::block::ClientID;
     use crate::doc::{OffsetKind, Options};
     use crate::test_utils::{exchange_updates, run_scenario, RngExt};
     use crate::transaction::ReadTxn;
@@ -1301,6 +1302,9 @@ mod test {
     use std::collections::HashMap;
     use std::rc::Rc;
     use std::time::Duration;
+
+    const A: ClientID = ClientID::new(1);
+    const B: ClientID = ClientID::new(2);
 
     #[test]
     fn insert_empty_string() {
@@ -1398,13 +1402,13 @@ mod test {
 
     #[test]
     fn insert_concurrent_root() {
-        let d1 = Doc::with_client_id(1);
+        let d1 = Doc::with_client_id(A);
         let txt1 = d1.get_or_insert_text("test");
         let mut t1 = d1.transact_mut();
 
         txt1.insert(&mut t1, 0, "hello ");
 
-        let d2 = Doc::with_client_id(2);
+        let d2 = Doc::with_client_id(B);
         let txt2 = d2.get_or_insert_text("test");
         let mut t2 = d2.transact_mut();
 
@@ -1428,14 +1432,14 @@ mod test {
 
     #[test]
     fn insert_concurrent_in_the_middle() {
-        let d1 = Doc::with_client_id(1);
+        let d1 = Doc::with_client_id(A);
         let txt1 = d1.get_or_insert_text("test");
         let mut t1 = d1.transact_mut();
 
         txt1.insert(&mut t1, 0, "I expect that");
         assert_eq!(txt1.get_string(&t1).as_str(), "I expect that");
 
-        let d2 = Doc::with_client_id(2);
+        let d2 = Doc::with_client_id(B);
         let txt2 = d2.get_or_insert_text("test");
         let mut t2 = d2.transact_mut();
 
@@ -1468,14 +1472,14 @@ mod test {
 
     #[test]
     fn append_concurrent() {
-        let d1 = Doc::with_client_id(1);
+        let d1 = Doc::with_client_id(A);
         let txt1 = d1.get_or_insert_text("test");
         let mut t1 = d1.transact_mut();
 
         txt1.insert(&mut t1, 0, "aaa");
         assert_eq!(txt1.get_string(&t1).as_str(), "aaa");
 
-        let d2 = Doc::with_client_id(2);
+        let d2 = Doc::with_client_id(B);
         let txt2 = d2.get_or_insert_text("test");
         let mut t2 = d2.transact_mut();
 
@@ -1595,7 +1599,7 @@ mod test {
 
     #[test]
     fn concurrent_insert_delete() {
-        let d1 = Doc::with_client_id(1);
+        let d1 = Doc::with_client_id(A);
         let txt1 = d1.get_or_insert_text("test");
         let mut t1 = d1.transact_mut();
 
@@ -1604,7 +1608,7 @@ mod test {
 
         let u1 = t1.encode_state_as_update_v1(&StateVector::default());
 
-        let d2 = Doc::with_client_id(2);
+        let d2 = Doc::with_client_id(B);
         let txt2 = d2.get_or_insert_text("test");
         let mut t2 = d2.transact_mut();
         t2.apply_update(Update::decode_v1(u1.as_slice()).unwrap());
@@ -1637,7 +1641,7 @@ mod test {
 
     #[test]
     fn observer() {
-        let doc = Doc::with_client_id(1);
+        let doc = Doc::with_client_id(A);
         let mut txt: XmlTextRef = doc.get_or_insert_text("text").into();
         let delta = Rc::new(RefCell::new(None));
         let delta_c = delta.clone();
@@ -1689,7 +1693,7 @@ mod test {
 
     #[test]
     fn insert_and_remove_event_changes() {
-        let d1 = Doc::with_client_id(1);
+        let d1 = Doc::with_client_id(A);
         let mut txt = d1.get_or_insert_text("text");
         let delta = Rc::new(RefCell::new(None));
         let delta_c = delta.clone();
@@ -1731,7 +1735,7 @@ mod test {
         );
 
         // replicate data to another peer
-        let d2 = Doc::with_client_id(2);
+        let d2 = Doc::with_client_id(B);
         let mut txt = d2.get_or_insert_text("text");
         let delta_c = delta.clone();
         let _sub = txt.observe(move |txn, e| {
@@ -1756,7 +1760,7 @@ mod test {
 
     #[test]
     fn utf32_encoding() {
-        let mut options = Options::with_client_id(1);
+        let mut options = Options::with_client_id(A);
         options.offset_kind = OffsetKind::Utf32;
         let doc = Doc::with_options(options);
         let txt = doc.get_or_insert_text("content");
@@ -1770,14 +1774,14 @@ mod test {
     #[test]
     fn unicode_support() {
         let d1 = {
-            let mut options = Options::with_client_id(1);
+            let mut options = Options::with_client_id(A);
             options.offset_kind = OffsetKind::Utf32;
             Doc::with_options(options)
         };
         let txt1 = d1.get_or_insert_text("test");
 
         let d2 = {
-            let mut options = Options::with_client_id(2);
+            let mut options = Options::with_client_id(B);
             options.offset_kind = OffsetKind::Bytes;
             Doc::with_options(options)
         };
@@ -1851,7 +1855,7 @@ mod test {
 
     #[test]
     fn basic_format() {
-        let d1 = Doc::with_client_id(1);
+        let d1 = Doc::with_client_id(A);
         let mut txt1 = d1.get_or_insert_text("text");
 
         let delta1 = Rc::new(RefCell::new(None));
@@ -1860,7 +1864,7 @@ mod test {
             delta_clone.replace(Some(e.delta(txn).to_vec()));
         });
 
-        let d2 = Doc::with_client_id(2);
+        let d2 = Doc::with_client_id(B);
         let mut txt2 = d2.get_or_insert_text("text");
 
         let delta2 = Rc::new(RefCell::new(None));
@@ -2031,7 +2035,7 @@ mod test {
 
     #[test]
     fn embed_with_attributes() {
-        let d1 = Doc::with_client_id(1);
+        let d1 = Doc::with_client_id(A);
         let mut txt1 = d1.get_or_insert_text("text");
 
         let delta1 = Rc::new(RefCell::new(None));
@@ -2110,7 +2114,7 @@ mod test {
 
     #[test]
     fn issue_101() {
-        let d1 = Doc::with_client_id(1);
+        let d1 = Doc::with_client_id(A);
         let mut txt1 = d1.get_or_insert_text("text");
         let delta = Rc::new(RefCell::new(None));
         let delta_copy = delta.clone();
@@ -2185,7 +2189,7 @@ mod test {
 
     #[test]
     fn text_diff_adjacent() {
-        let doc = Doc::with_client_id(1);
+        let doc = Doc::with_client_id(A);
         let txt = doc.get_or_insert_text("text");
         let mut txn = doc.transact_mut();
         let attrs1 = Attrs::from([("a".into(), "a".into())]);
@@ -2306,7 +2310,7 @@ mod test {
 
     #[test]
     fn delete_multi_byte_character_from_middle_after_insert_and_format() {
-        let doc = Doc::with_client_id(1);
+        let doc = Doc::with_client_id(A);
         let txt = doc.get_or_insert_text("test");
         let mut txn = doc.transact_mut();
 
@@ -2354,7 +2358,7 @@ mod test {
 
     #[test]
     fn snapshots() {
-        let doc = Doc::with_client_id(1);
+        let doc = Doc::with_client_id(A);
         let text = doc.get_or_insert_text("text");
         text.insert(&mut doc.transact_mut(), 0, "hello");
         let prev = doc.transact_mut().snapshot();
@@ -2374,7 +2378,7 @@ mod test {
                 Diff::with_change(
                     " world".into(),
                     None,
-                    Some(YChange::new(ChangeKind::Added, ID::new(1, 5)))
+                    Some(YChange::new(ChangeKind::Added, ID::new(A, 5)))
                 )
             ]
         )
@@ -2415,7 +2419,7 @@ mod test {
         use std::sync::{Arc, RwLock};
         use std::thread::{sleep, spawn};
 
-        let doc = Arc::new(RwLock::new(Doc::with_client_id(1)));
+        let doc = Arc::new(RwLock::new(Doc::with_client_id(A)));
 
         let d2 = doc.clone();
         let h2 = spawn(move || {

@@ -528,9 +528,13 @@ mod test {
     use std::ops::Deref;
     use std::rc::Rc;
 
+    const A: ClientID = ClientID::new(1);
+    const B: ClientID = ClientID::new(2);
+    const C: ClientID = ClientID::new(3);
+
     #[test]
     fn push_back() {
-        let doc = Doc::with_client_id(1);
+        let doc = Doc::with_client_id(A);
         let a = doc.get_or_insert_array("array");
         let mut txn = doc.transact_mut();
 
@@ -544,7 +548,7 @@ mod test {
 
     #[test]
     fn push_front() {
-        let doc = Doc::with_client_id(1);
+        let doc = Doc::with_client_id(A);
         let a = doc.get_or_insert_array("array");
         let mut txn = doc.transact_mut();
 
@@ -558,7 +562,7 @@ mod test {
 
     #[test]
     fn insert() {
-        let doc = Doc::with_client_id(1);
+        let doc = Doc::with_client_id(A);
         let a = doc.get_or_insert_array("array");
         let mut txn = doc.transact_mut();
 
@@ -572,8 +576,8 @@ mod test {
 
     #[test]
     fn basic() {
-        let d1 = Doc::with_client_id(1);
-        let d2 = Doc::with_client_id(2);
+        let d1 = Doc::with_client_id(A);
+        let d2 = Doc::with_client_id(B);
 
         let a1 = d1.get_or_insert_array("array");
 
@@ -592,7 +596,7 @@ mod test {
 
     #[test]
     fn len() {
-        let d = Doc::with_client_id(1);
+        let d = Doc::with_client_id(A);
         let a = d.get_or_insert_array("array");
 
         {
@@ -635,7 +639,7 @@ mod test {
 
     #[test]
     fn remove_insert() {
-        let d1 = Doc::with_client_id(1);
+        let d1 = Doc::with_client_id(A);
         let a1 = d1.get_or_insert_array("array");
 
         let mut t1 = d1.transact_mut();
@@ -645,8 +649,8 @@ mod test {
 
     #[test]
     fn insert_3_elements_try_re_get() {
-        let d1 = Doc::with_client_id(1);
-        let d2 = Doc::with_client_id(2);
+        let d1 = Doc::with_client_id(A);
+        let d2 = Doc::with_client_id(B);
         let a1 = d1.get_or_insert_array("array");
         {
             let mut t1 = d1.transact_mut();
@@ -674,20 +678,20 @@ mod test {
 
     #[test]
     fn concurrent_insert_with_3_conflicts() {
-        let d1 = Doc::with_client_id(1);
+        let d1 = Doc::with_client_id(A);
         let a = d1.get_or_insert_array("array");
         {
             let mut txn = d1.transact_mut();
             a.insert(&mut txn, 0, 0);
         }
 
-        let d2 = Doc::with_client_id(2);
+        let d2 = Doc::with_client_id(B);
         {
             let mut txn = d1.transact_mut();
             a.insert(&mut txn, 0, 1);
         }
 
-        let d3 = Doc::with_client_id(3);
+        let d3 = Doc::with_client_id(C);
         {
             let mut txn = d1.transact_mut();
             a.insert(&mut txn, 0, 2);
@@ -710,14 +714,14 @@ mod test {
 
     #[test]
     fn concurrent_insert_remove_with_3_conflicts() {
-        let d1 = Doc::with_client_id(1);
+        let d1 = Doc::with_client_id(A);
         {
             let a = d1.get_or_insert_array("array");
             let mut txn = d1.transact_mut();
             a.insert_range(&mut txn, 0, ["x", "y", "z"]);
         }
-        let d2 = Doc::with_client_id(2);
-        let d3 = Doc::with_client_id(3);
+        let d2 = Doc::with_client_id(B);
+        let d3 = Doc::with_client_id(C);
 
         exchange_updates(&[&d1, &d2, &d3]);
 
@@ -749,15 +753,15 @@ mod test {
 
     #[test]
     fn insertions_in_late_sync() {
-        let d1 = Doc::with_client_id(1);
+        let d1 = Doc::with_client_id(A);
         {
             let a = d1.get_or_insert_array("array");
             let mut txn = d1.transact_mut();
             a.push_back(&mut txn, "x");
             a.push_back(&mut txn, "y");
         }
-        let d2 = Doc::with_client_id(2);
-        let d3 = Doc::with_client_id(3);
+        let d2 = Doc::with_client_id(B);
+        let d3 = Doc::with_client_id(C);
 
         exchange_updates(&[&d1, &d2, &d3]);
 
@@ -786,14 +790,14 @@ mod test {
 
     #[test]
     fn removals_in_late_sync() {
-        let d1 = Doc::with_client_id(1);
+        let d1 = Doc::with_client_id(A);
         {
             let a = d1.get_or_insert_array("array");
             let mut txn = d1.transact_mut();
             a.push_back(&mut txn, "x");
             a.push_back(&mut txn, "y");
         }
-        let d2 = Doc::with_client_id(2);
+        let d2 = Doc::with_client_id(B);
 
         exchange_updates(&[&d1, &d2]);
 
@@ -817,7 +821,7 @@ mod test {
 
     #[test]
     fn insert_then_merge_delete_on_sync() {
-        let d1 = Doc::with_client_id(1);
+        let d1 = Doc::with_client_id(A);
         {
             let a = d1.get_or_insert_array("array");
             let mut txn = d1.transact_mut();
@@ -825,7 +829,7 @@ mod test {
             a.push_back(&mut txn, "y");
             a.push_back(&mut txn, "z");
         }
-        let d2 = Doc::with_client_id(2);
+        let d2 = Doc::with_client_id(B);
 
         exchange_updates(&[&d1, &d2]);
 
@@ -846,7 +850,7 @@ mod test {
 
     #[test]
     fn iter_array_containing_types() {
-        let d = Doc::with_client_id(1);
+        let d = Doc::with_client_id(A);
         let a = d.get_or_insert_array("arr");
         let mut txn = d.transact_mut();
         for i in 0..10 {
@@ -867,7 +871,7 @@ mod test {
 
     #[test]
     fn insert_and_remove_events() {
-        let d = Doc::with_client_id(1);
+        let d = Doc::with_client_id(A);
         let mut array = d.get_or_insert_array("array");
         let happened = Rc::new(Cell::new(false));
         let happened_clone = happened.clone();
@@ -908,7 +912,7 @@ mod test {
 
     #[test]
     fn insert_and_remove_event_changes() {
-        let d1 = Doc::with_client_id(1);
+        let d1 = Doc::with_client_id(A);
         let mut array = d1.get_or_insert_array("array");
         let added = Rc::new(RefCell::new(None));
         let removed = Rc::new(RefCell::new(None));
@@ -929,7 +933,7 @@ mod test {
         }
         assert_eq!(
             added.borrow_mut().take(),
-            Some(HashSet::from([ID::new(1, 0), ID::new(1, 1)]))
+            Some(HashSet::from([ID::new(A, 0), ID::new(A, 1)]))
         );
         assert_eq!(removed.borrow_mut().take(), Some(HashSet::new()));
         assert_eq!(
@@ -947,7 +951,7 @@ mod test {
         assert_eq!(added.borrow_mut().take(), Some(HashSet::new()));
         assert_eq!(
             removed.borrow_mut().take(),
-            Some(HashSet::from([ID::new(1, 0)]))
+            Some(HashSet::from([ID::new(A, 0)]))
         );
         assert_eq!(delta.borrow_mut().take(), Some(vec![Change::Removed(1)]));
 
@@ -957,7 +961,7 @@ mod test {
         }
         assert_eq!(
             added.borrow_mut().take(),
-            Some(HashSet::from([ID::new(1, 2)]))
+            Some(HashSet::from([ID::new(A, 2)]))
         );
         assert_eq!(removed.borrow_mut().take(), Some(HashSet::new()));
         assert_eq!(
@@ -968,7 +972,7 @@ mod test {
             ])
         );
 
-        let d2 = Doc::with_client_id(2);
+        let d2 = Doc::with_client_id(B);
         let mut array2 = d2.get_or_insert_array("array");
         let (added_c, removed_c, delta_c) = (added.clone(), removed.clone(), delta.clone());
         let _sub = array2.observe(move |txn, e| {
@@ -989,7 +993,7 @@ mod test {
 
         assert_eq!(
             added.borrow_mut().take(),
-            Some(HashSet::from([ID::new(1, 1)]))
+            Some(HashSet::from([ID::new(A, 1)]))
         );
         assert_eq!(removed.borrow_mut().take(), Some(HashSet::new()));
         assert_eq!(
@@ -1003,8 +1007,8 @@ mod test {
 
     #[test]
     fn target_on_local_and_remote() {
-        let d1 = Doc::with_client_id(1);
-        let d2 = Doc::with_client_id(2);
+        let d1 = Doc::with_client_id(A);
+        let d2 = Doc::with_client_id(B);
         let mut a1 = d1.get_or_insert_array("array");
         let mut a2 = d2.get_or_insert_array("array");
 
@@ -1029,6 +1033,7 @@ mod test {
         assert_eq!(c2.borrow_mut().take(), Some(a2));
     }
 
+    use crate::block::ClientID;
     use crate::transaction::ReadTxn;
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encoder, EncoderV1};
@@ -1168,7 +1173,7 @@ mod test {
 
     #[test]
     fn get_at_removed_index() {
-        let d1 = Doc::with_client_id(1);
+        let d1 = Doc::with_client_id(A);
         let a1 = d1.get_or_insert_array("array");
         let mut t1 = d1.transact_mut();
 
@@ -1181,7 +1186,7 @@ mod test {
 
     #[test]
     fn observe_deep_event_order() {
-        let doc = Doc::with_client_id(1);
+        let doc = Doc::with_client_id(A);
         let mut array = doc.get_or_insert_array("array");
 
         let paths = Rc::new(RefCell::new(Vec::new()));
@@ -1211,10 +1216,10 @@ mod test {
 
     #[test]
     fn move_1() {
-        let d1 = Doc::with_client_id(1);
+        let d1 = Doc::with_client_id(A);
         let mut a1 = d1.get_or_insert_array("array");
 
-        let d2 = Doc::with_client_id(2);
+        let d2 = Doc::with_client_id(B);
         let mut a2 = d2.get_or_insert_array("array");
 
         let e1: Rc<RefCell<Vec<Change>>> = Rc::new(RefCell::new(Vec::default()));
@@ -1263,10 +1268,10 @@ mod test {
 
     #[test]
     fn move_2() {
-        let d1 = Doc::with_client_id(1);
+        let d1 = Doc::with_client_id(A);
         let mut a1 = d1.get_or_insert_array("array");
 
-        let d2 = Doc::with_client_id(2);
+        let d2 = Doc::with_client_id(B);
         let mut a2 = d2.get_or_insert_array("array");
 
         let e1: Rc<RefCell<Vec<Change>>> = Rc::new(RefCell::new(Vec::default()));
@@ -1326,10 +1331,10 @@ mod test {
 
     #[test]
     fn move_cycles() {
-        let d1 = Doc::with_client_id(1);
+        let d1 = Doc::with_client_id(A);
         let a1 = d1.get_or_insert_array("array");
 
-        let d2 = Doc::with_client_id(2);
+        let d2 = Doc::with_client_id(B);
         let a2 = d2.get_or_insert_array("array");
 
         a1.insert_range(&mut d1.transact_mut(), 0, [1, 2, 3, 4]);
@@ -1351,7 +1356,7 @@ mod test {
     #[test]
     #[ignore] //TODO: investigate (see: https://github.com/y-crdt/y-crdt/pull/266)
     fn move_range_to() {
-        let doc = Doc::with_client_id(1);
+        let doc = Doc::with_client_id(A);
         let arr = doc.get_or_insert_array("array");
         // Move 1-2 to 4
         {
@@ -1577,7 +1582,7 @@ mod test {
         use std::sync::{Arc, RwLock};
         use std::thread::{sleep, spawn};
 
-        let doc = Arc::new(RwLock::new(Doc::with_client_id(1)));
+        let doc = Arc::new(RwLock::new(Doc::with_client_id(A)));
 
         let d2 = doc.clone();
         let h2 = spawn(move || {
@@ -1618,7 +1623,7 @@ mod test {
     fn move_last_elem_iter() {
         // https://github.com/y-crdt/y-crdt/issues/186
 
-        let doc = Doc::with_client_id(1);
+        let doc = Doc::with_client_id(A);
         let array = doc.get_or_insert_array("array");
         let mut txn = array.transact_mut();
         array.insert_range(&mut txn, 0, [1, 2, 3]);

@@ -278,18 +278,18 @@ impl Encoder for EncoderV2 {
     }
 
     fn write_left_id(&mut self, id: &ID) {
-        self.client_encoder.write_u64(id.client as u64);
+        self.client_encoder.write_u64(id.client.into());
         self.left_clock_encoder.write_u32(id.clock)
     }
 
     fn write_right_id(&mut self, id: &ID) {
-        self.client_encoder.write_u64(id.client as u64);
+        self.client_encoder.write_u64(id.client.into());
         self.right_clock_encoder.write_u32(id.clock)
     }
 
     #[inline]
     fn write_client(&mut self, client: ClientID) {
-        self.client_encoder.write_u64(client as u64)
+        self.client_encoder.write_u64(client.into())
     }
 
     #[inline]

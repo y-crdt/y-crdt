@@ -112,7 +112,7 @@ impl YDoc {
     /// Gets unique peer identifier of this `YDoc` instance.
     #[wasm_bindgen(getter)]
     pub fn id(&self) -> f64 {
-        self.as_ref().client_id() as f64
+        u64::from(self.as_ref().client_id()) as f64
     }
 
     /// Gets globally unique identifier of this `YDoc` instance.
@@ -425,7 +425,7 @@ fn parse_options(js: &JsValue) -> Options {
             .ok()
             .and_then(|v| v.as_f64())
         {
-            options.client_id = client_id as u32 as ClientID;
+            options.client_id = (client_id as u64).into();
         }
 
         if let Some(guid) = js_sys::Reflect::get(js, &JsValue::from_str("guid"))
@@ -1591,7 +1591,7 @@ fn change_into_js(change: &Change) -> JsValue {
 fn state_vector_into_map(sv: &StateVector) -> js_sys::Map {
     let m = js_sys::Map::new();
     for (&k, &v) in sv.iter() {
-        let key: JsValue = k.into();
+        let key: JsValue = k.into_js();
         let value: JsValue = v.into();
         m.set(&key, &value);
     }
@@ -1601,7 +1601,7 @@ fn state_vector_into_map(sv: &StateVector) -> js_sys::Map {
 fn delete_set_into_map(ds: &DeleteSet) -> js_sys::Map {
     let m = js_sys::Map::new();
     for (&k, v) in ds.iter() {
-        let key: JsValue = k.into();
+        let key = k.into_js();
         let iter = v.iter().map(|r| {
             let start = r.start;
             let len = r.end - r.start;
@@ -4161,7 +4161,7 @@ fn sticky_index_from_js(js: &JsValue) -> Result<StickyIndex, JsValue> {
 fn id_from_js(js: &JsValue) -> Result<ID, JsValue> {
     let value = Reflect::get(js, &JsValue::from_str("client"))?;
     let client = if let Ok(client) = u64::try_from(value) {
-        client as ClientID
+        ClientID::from(client)
     } else {
         return Err(JsValue::from_str("ID.client was not a number"));
     };
@@ -4177,12 +4177,7 @@ fn id_from_js(js: &JsValue) -> Result<ID, JsValue> {
 impl IntoJs for ID {
     fn into_js(self) -> JsValue {
         let js: JsValue = js_sys::Object::new().into();
-        Reflect::set(
-            &js,
-            &JsValue::from_str("client"),
-            &JsValue::from(self.client),
-        )
-        .unwrap();
+        Reflect::set(&js, &JsValue::from_str("client"), &self.client.into_js()).unwrap();
         Reflect::set(&js, &JsValue::from_str("clock"), &JsValue::from(self.clock)).unwrap();
         js
     }
@@ -4223,5 +4218,12 @@ impl IntoJs for Offset {
         };
         Reflect::set(&js, &JsValue::from_str("assoc"), &JsValue::from(assoc)).unwrap();
         js
+    }
+}
+
+impl IntoJs for ClientID {
+    fn into_js(self) -> JsValue {
+        let v: u64 = self.into();
+        v.into()
     }
 }
