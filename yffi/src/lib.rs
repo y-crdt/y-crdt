@@ -4282,6 +4282,7 @@ pub struct YUndoManagerOptions {
     pub capture_timeout_millis: u32,
 }
 
+// TODO [LSViana] Maybe rename this to `yundo_manager_new_with_options` to match `ydoc_new_with_options`?
 #[no_mangle]
 pub unsafe extern "C" fn yundo_manager(
     doc: *const Doc,
