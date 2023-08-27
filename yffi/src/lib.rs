@@ -4354,6 +4354,9 @@ pub unsafe extern "C" fn yundo_manager_stop(mgr: *mut UndoManager) {
 #[no_mangle]
 pub unsafe extern "C" fn yundo_manager_undo(mgr: *mut UndoManager) -> u8 {
     let mgr = mgr.as_mut().unwrap();
+    
+    // TODO [LSViana] Check whether the value inside Ok() should be used as result.
+    // Currently, if no changes are applied, the result is Ok(false) which still returns true.
     match mgr.undo() {
         Ok(_) => Y_TRUE,
         Err(_) => Y_FALSE,
