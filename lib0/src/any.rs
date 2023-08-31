@@ -140,9 +140,18 @@ impl Any {
                 }
             }
             Any::BigInt(num) => {
-                // TYPE 122: BigInt
-                encoder.write_u8(122);
-                encoder.write_i64(*num)
+                let num = *num;
+                if num <= crate::number::I64_MAX_SAFE_INTEGER
+                    && num >= crate::number::I64_MIN_SAFE_INTEGER
+                {
+                    // TYPE 125: INTEGER
+                    encoder.write_u8(125);
+                    encoder.write_var(num)
+                } else {
+                    // TYPE 122: BigInt
+                    encoder.write_u8(122);
+                    encoder.write_i64(num)
+                }
             }
             Any::Array(arr) => {
                 // TYPE 117: Array
