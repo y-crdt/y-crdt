@@ -912,10 +912,10 @@ impl<'doc> Iterator for RootRefs<'doc> {
 pub struct RootKeys<'doc>(std::collections::hash_map::Keys<'doc, Arc<str>, Box<Branch>>);
 
 impl<'doc> Iterator for RootKeys<'doc> {
-    type Item = &'doc str;
+    type Item = Arc<str>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.0.next().map(|key| key.as_ref())
+        self.0.next().map(|k| k.clone())
     }
 }
 
