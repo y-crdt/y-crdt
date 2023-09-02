@@ -477,7 +477,7 @@ mod test {
         //TODO: YArray within YMap
         fn compare_all<T: ReadTxn>(m: &MapRef, txn: &T) {
             assert_eq!(m.len(txn), 5);
-            assert_eq!(m.get(txn, &"number".to_owned()), Some(Value::from(1f64)));
+            assert_eq!(m.get(txn, &"number".to_owned()), Some(Value::from(1)));
             assert_eq!(m.get(txn, &"boolean0".to_owned()), Some(Value::from(false)));
             assert_eq!(m.get(txn, &"boolean1".to_owned()), Some(Value::from(true)));
             assert_eq!(
@@ -780,7 +780,7 @@ mod test {
             entries.take(),
             Some(HashMap::from([(
                 "a".into(),
-                EntryChange::Inserted(Any::from(1.0).into())
+                EntryChange::Inserted(Any::from(1).into())
             )]))
         );
 
@@ -793,7 +793,7 @@ mod test {
             entries.take(),
             Some(HashMap::from([(
                 "a".into(),
-                EntryChange::Updated(Any::from(1.0).into(), Any::from(2.0).into())
+                EntryChange::Updated(Any::from(1).into(), Any::from(2).into())
             )]))
         );
 
@@ -807,7 +807,7 @@ mod test {
             entries.take(),
             Some(HashMap::from([(
                 "a".into(),
-                EntryChange::Updated(Any::from(2.0).into(), Any::from(4.0).into())
+                EntryChange::Updated(Any::from(2).into(), Any::from(4).into())
             )]))
         );
 
@@ -820,7 +820,7 @@ mod test {
             entries.take(),
             Some(HashMap::from([(
                 "a".into(),
-                EntryChange::Removed(Any::from(4.0).into())
+                EntryChange::Removed(Any::from(4).into())
             )]))
         );
 
@@ -834,7 +834,7 @@ mod test {
             entries.take(),
             Some(HashMap::from([(
                 "b".into(),
-                EntryChange::Inserted(Any::from(2.0).into())
+                EntryChange::Inserted(Any::from(2).into())
             )]))
         );
 
@@ -870,7 +870,7 @@ mod test {
             entries.take(),
             Some(HashMap::from([(
                 "b".into(),
-                EntryChange::Inserted(Any::from(2.0).into())
+                EntryChange::Inserted(Any::from(2).into())
             )]))
         );
     }

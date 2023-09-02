@@ -2050,7 +2050,7 @@ mod test {
             let mut txn = d1.transact_mut();
             txt1.insert_with_attributes(&mut txn, 0, "ab", a1.clone());
 
-            let a2: Attrs = HashMap::from([("width".into(), Any::from(100.0))]);
+            let a2: Attrs = HashMap::from([("width".into(), Any::from(100))]);
 
             txt1.insert_embed_with_attributes(&mut txn, 1, embed.clone(), a2.clone());
             drop(txn);
@@ -2079,10 +2079,7 @@ mod test {
         };
 
         let a1 = Some(Box::new(a1));
-        let a2 = Some(Box::new(HashMap::from([(
-            "width".into(),
-            Any::from(100.0),
-        )])));
+        let a2 = Some(Box::new(HashMap::from([("width".into(), Any::from(100))])));
 
         let expected = vec![
             Diff::new("a".into(), a1.clone()),

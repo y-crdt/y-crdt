@@ -657,7 +657,7 @@ mod test {
             let actual: Vec<_> = a1.iter(&t1).collect();
             assert_eq!(
                 actual,
-                vec![Value::from(1.0), Value::from(true), Value::from(false)]
+                vec![Value::from(1), Value::from(true), Value::from(false)]
             );
         }
 
@@ -668,7 +668,7 @@ mod test {
         let actual: Vec<_> = a2.iter(&t2).collect();
         assert_eq!(
             actual,
-            vec![Value::from(1.0), Value::from(true), Value::from(false)]
+            vec![Value::from(1), Value::from(true), Value::from(false)]
         );
     }
 
@@ -858,7 +858,7 @@ mod test {
         for (i, value) in a.iter(&txn).enumerate() {
             match value {
                 Value::YMap(_) => {
-                    assert_eq!(value.to_json(&txn), any!({"value": (i as f64) }))
+                    assert_eq!(value.to_json(&txn), any!({"value": i as i64 }))
                 }
                 _ => panic!("Value of array at index {} was no YMap", i),
             }
@@ -935,7 +935,7 @@ mod test {
         assert_eq!(
             delta.borrow_mut().take(),
             Some(vec![Change::Added(vec![
-                Any::from(4.0).into(),
+                Any::from(4).into(),
                 Any::String("dtrn".into()).into()
             ])])
         );
@@ -1100,7 +1100,7 @@ mod test {
             let mut txn = doc.transact_mut();
             let pos = rng.between(0, yarray.len(&txn));
             let array2 = yarray.insert(&mut txn, pos, ArrayPrelim::from([1, 2, 3, 4]));
-            let expected: Vec<_> = (1..=4).map(|i| Any::from(i as f64)).collect();
+            let expected: Vec<_> = (1..=4).map(|i| Any::from(i)).collect();
             assert_eq!(array2.to_json(&txn), Any::Array(expected));
         }
 
