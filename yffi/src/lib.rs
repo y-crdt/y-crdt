@@ -1,4 +1,4 @@
-use lib0::any::Any;
+use lib0::any::{Any, Number};
 use lib0::error::Error;
 use std::collections::HashMap;
 use std::ffi::{c_char, c_void, CStr, CString};
@@ -2450,7 +2450,7 @@ impl YInput {
         let tag = self.tag;
         unsafe {
             if tag == Y_JSON_STR {
-                let str: Box<str> = CStr::from_ptr(self.value.str).to_str().unwrap().into();
+                let str: String = CStr::from_ptr(self.value.str).to_str().unwrap().into();
                 Any::String(str)
             } else if tag == Y_JSON_ARR {
                 let ptr = self.value.values;
@@ -2462,7 +2462,7 @@ impl YInput {
                     dst.push(any);
                     i += 1;
                 }
-                Any::Array(dst.into_boxed_slice())
+                Any::Array(dst)
             } else if tag == Y_JSON_MAP {
                 let mut dst = HashMap::with_capacity(self.len as usize);
                 let keys = self.value.map.keys;
@@ -2483,15 +2483,15 @@ impl YInput {
             } else if tag == Y_JSON_UNDEF {
                 Any::Undefined
             } else if tag == Y_JSON_INT {
-                Any::BigInt(self.value.integer as i64)
+                Any::from(self.value.integer)
             } else if tag == Y_JSON_NUM {
-                Any::Number(self.value.num as f64)
+                Any::from(self.value.num)
             } else if tag == Y_JSON_BOOL {
                 Any::Bool(if self.value.flag == 0 { false } else { true })
             } else if tag == Y_JSON_BUF {
                 let slice =
                     std::slice::from_raw_parts(self.value.buf as *mut u8, self.len as usize);
-                let buf = Box::from(slice);
+                let buf = Vec::from(slice);
                 Any::Buffer(buf)
             } else if tag == Y_DOC {
                 Any::Undefined
@@ -2766,25 +2766,24 @@ impl From<Any> for YOutput {
                 Any::Number(v) => YOutput {
                     tag: Y_JSON_NUM,
                     len: 1,
-                    value: YOutputContent { num: v as _ },
-                },
-                Any::BigInt(v) => YOutput {
-                    tag: Y_JSON_INT,
-                    len: 1,
-                    value: YOutputContent { integer: v },
+                    value: match v {
+                        Number::Float(num) => YOutputContent { num },
+                        Number::Int(integer) => YOutputContent { integer },
+                        Number::BigInt(integer) => YOutputContent { integer },
+                    },
                 },
                 Any::String(v) => YOutput {
                     tag: Y_JSON_STR,
                     len: v.len() as u32,
                     value: YOutputContent {
-                        str: CString::new(v.as_ref()).unwrap().into_raw(),
+                        str: CString::new(v).unwrap().into_raw(),
                     },
                 },
                 Any::Buffer(v) => YOutput {
                     tag: Y_JSON_BUF,
                     len: v.len() as u32,
                     value: YOutputContent {
-                        buf: Box::into_raw(v.clone()) as *mut _,
+                        buf: Box::into_raw(v.clone().into_boxed_slice()) as *mut _,
                     },
                 },
                 Any::Array(v) => {

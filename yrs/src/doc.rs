@@ -12,7 +12,7 @@ use crate::{
     XmlFragmentRef, XmlTextRef,
 };
 use atomic_refcell::{AtomicRef, AtomicRefMut, BorrowError, BorrowMutError};
-use lib0::any::Any;
+use lib0::any::{Any, Number};
 use lib0::error::Error;
 use rand::Rng;
 use std::collections::HashMap;
@@ -606,7 +606,7 @@ impl Options {
             OffsetKind::Utf16 => 0, // 0 for compatibility with Yjs, which doesn't have this option
             OffsetKind::Utf32 => 2,
         };
-        m.insert("encoding".to_owned(), Any::BigInt(encoding));
+        m.insert("encoding".to_owned(), Any::from(encoding));
         m.insert("autoLoad".to_owned(), self.auto_load.into());
         m.insert("shouldLoad".to_owned(), self.should_load.into());
         Any::Map(Box::new(m))
@@ -645,8 +645,12 @@ impl Decode for Options {
                     ("collectionId", Any::String(cid)) => {
                         options.collection_id = Some(cid.to_string())
                     }
-                    ("encoding", Any::BigInt(1)) => options.offset_kind = OffsetKind::Bytes,
-                    ("encoding", Any::BigInt(2)) => options.offset_kind = OffsetKind::Utf32,
+                    ("encoding", Any::Number(Number::Int(1))) => {
+                        options.offset_kind = OffsetKind::Bytes
+                    }
+                    ("encoding", Any::Number(Number::Int(2))) => {
+                        options.offset_kind = OffsetKind::Utf32
+                    }
                     ("encoding", _) => options.offset_kind = OffsetKind::Utf16,
                     _ => { /* do nothing */ }
                 }

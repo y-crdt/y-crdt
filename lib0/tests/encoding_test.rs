@@ -8,17 +8,16 @@ pub fn arb_any() -> impl Strategy<Value = Any> {
         Just(Any::Null),
         Just(Any::Undefined),
         any::<bool>().prop_map(Any::Bool),
-        any::<f64>().prop_map(Any::Number),
-        any::<i64>().prop_map(|i| Any::Number(i as f64)),
+        any::<f64>().prop_map(Any::from),
+        any::<i64>().prop_map(Any::from),
         any::<String>().prop_map(|i| Any::String(i.into())),
-        any::<Box<[u8]>>().prop_map(Any::Buffer),
+        any::<Vec<u8>>().prop_map(Any::Buffer),
     ]
     .boxed();
 
     leaf.prop_recursive(8, 256, 10, |inner| {
         prop_oneof![
-            prop::collection::vec(inner.clone(), 0..10)
-                .prop_map(|v| Any::Array(v.into_boxed_slice())),
+            prop::collection::vec(inner.clone(), 0..10).prop_map(|v| Any::Array(v)),
             prop::collection::hash_map(".*", inner, 0..10).prop_map(|v| Any::Map(Box::new(v))),
         ]
     })

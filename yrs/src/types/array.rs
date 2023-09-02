@@ -935,7 +935,7 @@ mod test {
         assert_eq!(
             delta.borrow_mut().take(),
             Some(vec![Change::Added(vec![
-                Any::Number(4.0).into(),
+                Any::from(4.0).into(),
                 Any::String("dtrn".into()).into()
             ])])
         );
@@ -964,7 +964,7 @@ mod test {
             delta.borrow_mut().take(),
             Some(vec![
                 Change::Retain(1),
-                Change::Added(vec![Any::Number(0.5).into()])
+                Change::Added(vec![Any::from(0.5).into()])
             ])
         );
 
@@ -996,7 +996,7 @@ mod test {
             delta.borrow_mut().take(),
             Some(vec![Change::Added(vec![
                 Any::String("dtrn".into()).into(),
-                Any::Number(0.5).into(),
+                Any::from(0.5).into(),
             ])])
         );
     }
@@ -1064,7 +1064,7 @@ mod test {
                     yarray.move_to(&mut txn, pos, new_pos);
 
                     let actual = yarray.to_json(&txn);
-                    assert_eq!(actual, Any::Array(expected.into_boxed_slice()))
+                    assert_eq!(actual, Any::Array(expected))
                 } else {
                     panic!("should not happen")
                 }
@@ -1077,7 +1077,7 @@ mod test {
             let len = rng.between(1, 4);
             let content: Vec<_> = (0..len)
                 .into_iter()
-                .map(|_| Any::BigInt(unique_number))
+                .map(|_| Any::from(unique_number))
                 .collect();
             let mut pos = rng.between(0, yarray.len(&txn)) as usize;
             if let Any::Array(expected) = yarray.to_json(&txn) {
@@ -1089,7 +1089,7 @@ mod test {
                     pos += 1;
                 }
                 let actual = yarray.to_json(&txn);
-                assert_eq!(actual, Any::Array(expected.into_boxed_slice()))
+                assert_eq!(actual, Any::Array(expected))
             } else {
                 panic!("should not happen")
             }
@@ -1100,7 +1100,7 @@ mod test {
             let mut txn = doc.transact_mut();
             let pos = rng.between(0, yarray.len(&txn));
             let array2 = yarray.insert(&mut txn, pos, ArrayPrelim::from([1, 2, 3, 4]));
-            let expected: Box<[Any]> = (1..=4).map(|i| Any::Number(i as f64)).collect();
+            let expected: Vec<_> = (1..=4).map(|i| Any::from(i as f64)).collect();
             assert_eq!(array2.to_json(&txn), Any::Array(expected));
         }
 
@@ -1132,10 +1132,7 @@ mod test {
                         let mut old_content = Vec::from(old_content);
                         yarray.remove_range(&mut txn, pos, del_len);
                         old_content.drain(pos as usize..(pos + del_len) as usize);
-                        assert_eq!(
-                            yarray.to_json(&txn),
-                            Any::Array(old_content.into_boxed_slice())
-                        );
+                        assert_eq!(yarray.to_json(&txn), Any::Array(old_content));
                     } else {
                         panic!("should not happen")
                     }

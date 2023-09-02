@@ -1787,7 +1787,7 @@ impl ItemContent {
                     let chars = v.chars().skip(offset).take(buf.len());
                     let mut j = 0;
                     for c in chars {
-                        buf[j] = Value::Any(Any::String(c.to_string().into_boxed_str()));
+                        buf[j] = Value::Any(Any::String(c.to_string()));
                         j += 1;
                     }
                     j
@@ -1797,14 +1797,14 @@ impl ItemContent {
                     let mut j = 0;
                     while i < elements.len() && j < buf.len() {
                         let elem = &elements[i];
-                        buf[j] = Value::Any(Any::String(elem.clone().into_boxed_str()));
+                        buf[j] = Value::Any(Any::String(elem.clone()));
                         i += 1;
                         j += 1;
                     }
                     j
                 }
                 ItemContent::Binary(v) => {
-                    buf[0] = Value::Any(Any::Buffer(v.clone().into_boxed_slice()));
+                    buf[0] = Value::Any(Any::Buffer(v.clone()));
                     1
                 }
                 ItemContent::Doc(_, doc) => {
@@ -1844,16 +1844,14 @@ impl ItemContent {
     pub fn get_first(&self) -> Option<Value> {
         match self {
             ItemContent::Any(v) => v.first().map(|a| Value::Any(a.clone())),
-            ItemContent::Binary(v) => Some(Value::Any(Any::Buffer(v.clone().into_boxed_slice()))),
+            ItemContent::Binary(v) => Some(Value::Any(Any::Buffer(v.clone()))),
             ItemContent::Deleted(_) => None,
             ItemContent::Move(_) => None,
             ItemContent::Doc(_, v) => Some(Value::YDoc(v.clone())),
-            ItemContent::JSON(v) => v
-                .first()
-                .map(|v| Value::Any(Any::String(v.clone().into_boxed_str()))),
+            ItemContent::JSON(v) => v.first().map(|v| Value::Any(Any::String(v.clone()))),
             ItemContent::Embed(v) => Some(Value::Any(*v.clone())),
             ItemContent::Format(_, _) => None,
-            ItemContent::String(v) => Some(Value::Any(Any::String(v.clone().into()))),
+            ItemContent::String(v) => Some(Value::Any(Any::String(v.clone().to_string()))),
             ItemContent::Type(c) => Some(BranchPtr::from(c).into()),
         }
     }
@@ -1862,16 +1860,14 @@ impl ItemContent {
     pub fn get_last(&self) -> Option<Value> {
         match self {
             ItemContent::Any(v) => v.last().map(|a| Value::Any(a.clone())),
-            ItemContent::Binary(v) => Some(Value::Any(Any::Buffer(v.clone().into_boxed_slice()))),
+            ItemContent::Binary(v) => Some(Value::Any(Any::Buffer(v.clone()))),
             ItemContent::Deleted(_) => None,
             ItemContent::Move(_) => None,
             ItemContent::Doc(_, v) => Some(Value::YDoc(v.clone())),
-            ItemContent::JSON(v) => v
-                .last()
-                .map(|v| Value::Any(Any::String(v.clone().into_boxed_str()))),
+            ItemContent::JSON(v) => v.last().map(|v| Value::Any(Any::String(v.clone()))),
             ItemContent::Embed(v) => Some(Value::Any(*v.clone())),
             ItemContent::Format(_, _) => None,
-            ItemContent::String(v) => Some(Value::Any(Any::String(v.clone().into()))),
+            ItemContent::String(v) => Some(Value::Any(Any::String(v.clone().to_string()))),
             ItemContent::Type(c) => Some(BranchPtr::from(c).into()),
         }
     }
@@ -2328,7 +2324,7 @@ where
 {
     type Return = T::Return;
 
-    fn into_content(mut self, txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
+    fn into_content(self, txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
         match self {
             EmbedPrelim::Primitive(any) => (ItemContent::Embed(Box::new(any)), None),
             EmbedPrelim::Shared(prelim) => {

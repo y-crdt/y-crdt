@@ -3,7 +3,114 @@ use crate::encoding::Write;
 use crate::error::Error;
 use std::cmp::PartialEq;
 use std::collections::HashMap;
-use std::convert::TryInto;
+use std::convert::TryFrom;
+use std::fmt::Formatter;
+
+/// Max value to represent the safe integer in JavaScript.
+pub const MAX_SAFE_INTEGER: i64 = i64::pow(2, 53) - 1;
+
+/// Min value to represent the safe integer in JavaScript.
+pub const MIN_SAFE_INT: i64 = -MAX_SAFE_INTEGER;
+
+/// Composition of all numeric variants.
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub enum Number {
+    /// Floating point number.
+    Float(f64),
+    /// Integer with value within bounds of [MIN_SAFE_INT]..[MAX_SAFE_INTEGER].
+    Int(i64),
+    /// Integer beyond bounds of [MIN_SAFE_INT]..[MAX_SAFE_INTEGER].
+    BigInt(i64),
+}
+
+impl std::fmt::Display for Number {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Number::Float(n) => write!(f, "{}", n),
+            Number::Int(n) => write!(f, "{}", n),
+            Number::BigInt(n) => write!(f, "{}", n),
+        }
+    }
+}
+
+macro_rules! impl_float {
+    ($t:ty) => {
+        impl From<$t> for Number {
+            fn from(v: $t) -> Number {
+                Number::Float(v as f64)
+            }
+        }
+    };
+}
+
+macro_rules! impl_number {
+    ($t:ty) => {
+        impl From<$t> for Number {
+            fn from(v: $t) -> Number {
+                Number::Int(v as i64)
+            }
+        }
+    };
+}
+
+macro_rules! impl_big_number {
+    ($t:ty) => {
+        impl From<$t> for Number {
+            fn from(v: $t) -> Number {
+                let v = v as i64;
+                if v <= MAX_SAFE_INTEGER && v >= MIN_SAFE_INT {
+                    Number::Int(v)
+                } else {
+                    Number::BigInt(v)
+                }
+            }
+        }
+    };
+}
+
+impl_float!(f32);
+impl_float!(f64);
+impl_number!(i16);
+impl_number!(i32);
+impl_number!(u16);
+impl_number!(u32);
+impl_big_number!(isize);
+impl_big_number!(i64);
+
+impl TryFrom<u64> for Number {
+    type Error = u64;
+
+    fn try_from(v: u64) -> Result<Self, Self::Error> {
+        if v <= MAX_SAFE_INTEGER as u64 {
+            Ok(Number::Int(v as i64))
+        } else if v <= i64::MAX as u64 {
+            Ok(Number::BigInt(v as i64))
+        } else {
+            Err(v)
+        }
+    }
+}
+
+impl TryFrom<usize> for Number {
+    type Error = usize;
+
+    #[cfg(target_pointer_width = "32")]
+    fn try_from(v: usize) -> Result<Self, Self::Error> {
+        // for 32-bit architectures we know that usize will always fit,
+        // so there's no need to check for length, but we stick to TryInto
+        // trait to keep API compatibility
+        Ok(Number::Int(v as i64))
+    }
+
+    #[cfg(not(target_pointer_width = "32"))]
+    fn try_from(v: usize) -> Result<Self, Self::Error> {
+        if let Ok(num) = Number::try_from(v as u64) {
+            Ok(num)
+        } else {
+            Err(v)
+        }
+    }
+}
 
 /// Any is an enum with a potentially associated value that is used to represent JSON values
 /// and supports efficient encoding of those values.
@@ -12,11 +119,10 @@ pub enum Any {
     Null,
     Undefined,
     Bool(bool),
-    Number(f64),
-    BigInt(i64),
-    String(Box<str>),
-    Buffer(Box<[u8]>),
-    Array(Box<[Any]>),
+    Number(Number),
+    String(String),
+    Buffer(Vec<u8>),
+    Array(Vec<Any>),
     Map(Box<HashMap<String, Any>>),
 }
 
@@ -28,13 +134,13 @@ impl Any {
             // CASE 126: null
             126 => Any::Null,
             // CASE 125: integer
-            125 => Any::Number(decoder.read_var::<i64>()? as f64),
+            125 => Any::Number(Number::Int(decoder.read_var::<i64>()?)),
             // CASE 124: float32
-            124 => Any::Number(decoder.read_f32()? as f64),
+            124 => Any::Number(Number::Float(decoder.read_f32()? as f64)),
             // CASE 123: float64
-            123 => Any::Number(decoder.read_f64()?),
+            123 => Any::Number(Number::Float(decoder.read_f64()?)),
             // CASE 122: bigint
-            122 => Any::BigInt(decoder.read_i64()?),
+            122 => Any::Number(Number::BigInt(decoder.read_i64()?)),
             // CASE 121: boolean (false)
             121 => Any::Bool(false),
             // CASE 120: boolean (true)
@@ -42,7 +148,7 @@ impl Any {
             // CASE 119: string
             119 => {
                 let str = decoder.read_string()?;
-                Any::String(Box::from(str))
+                Any::String(str.to_string())
             }
             // CASE 118: Map<string,Any>
             118 => {
@@ -61,10 +167,10 @@ impl Any {
                 for _ in 0..len {
                     arr.push(Any::decode(decoder)?);
                 }
-                Any::Array(arr.into_boxed_slice())
+                Any::Array(arr)
             }
             // CASE 116: buffer
-            116 => Any::Buffer(Box::from(decoder.read_buf()?.to_owned())),
+            116 => Any::Buffer(decoder.read_buf()?.to_owned()),
             _ => return Err(Error::UnexpectedValue),
         })
     }
@@ -121,36 +227,28 @@ impl Any {
                 encoder.write_string(&str)
             }
             Any::Number(num) => {
-                let num_truncated = num.trunc();
-                if num_truncated == *num
-                    && num_truncated <= crate::number::F64_MAX_SAFE_INTEGER
-                    && num_truncated >= crate::number::F64_MIN_SAFE_INTEGER
-                {
-                    // TYPE 125: INTEGER
-                    encoder.write_u8(125);
-                    encoder.write_var(num_truncated as i64)
-                } else if ((*num as f32) as f64) == *num {
-                    // TYPE 124: FLOAT32
-                    encoder.write_u8(124);
-                    encoder.write_f32(*num as f32)
-                } else {
-                    // TYPE 123: FLOAT64
-                    encoder.write_u8(123);
-                    encoder.write_f64(*num)
-                }
-            }
-            Any::BigInt(num) => {
-                let num = *num;
-                if num <= crate::number::I64_MAX_SAFE_INTEGER
-                    && num >= crate::number::I64_MIN_SAFE_INTEGER
-                {
-                    // TYPE 125: INTEGER
-                    encoder.write_u8(125);
-                    encoder.write_var(num)
-                } else {
-                    // TYPE 122: BigInt
-                    encoder.write_u8(122);
-                    encoder.write_i64(num)
+                match *num {
+                    Number::Float(num) => {
+                        if ((num as f32) as f64) == num {
+                            // TYPE 124: FLOAT32
+                            encoder.write_u8(124);
+                            encoder.write_f32(num as f32)
+                        } else {
+                            // TYPE 123: FLOAT64
+                            encoder.write_u8(123);
+                            encoder.write_f64(num)
+                        }
+                    }
+                    Number::Int(num) => {
+                        // TYPE 125: INTEGER
+                        encoder.write_u8(125);
+                        encoder.write_var(num)
+                    }
+                    Number::BigInt(num) => {
+                        // TYPE 122: BigInt
+                        encoder.write_u8(122);
+                        encoder.write_i64(num)
+                    }
                 }
             }
             Any::Array(arr) => {
@@ -205,7 +303,6 @@ impl Any {
             Any::Null => buf.push_str("null"),
             Any::Bool(value) => write!(buf, "{}", value).unwrap(),
             Any::Number(value) => write!(buf, "{}", value).unwrap(),
-            Any::BigInt(value) => write!(buf, "{}", value).unwrap(),
             Any::String(value) => quoted(buf, value.as_ref()),
             Any::Array(values) => {
                 buf.push('[');
@@ -274,7 +371,6 @@ impl std::fmt::Display for Any {
             Any::Undefined => f.write_str("undefined"),
             Any::Bool(value) => write!(f, "{}", value),
             Any::Number(value) => write!(f, "{}", value),
-            Any::BigInt(value) => write!(f, "{}", value),
             Any::String(value) => f.write_str(value.as_ref()),
             Any::Array(values) => {
                 write!(f, "[")?;
@@ -310,131 +406,73 @@ impl std::fmt::Display for Any {
     }
 }
 
-impl Into<Any> for bool {
-    fn into(self) -> Any {
-        Any::Bool(self)
+impl From<bool> for Any {
+    fn from(v: bool) -> Any {
+        Any::Bool(v)
     }
 }
 
-impl Into<Any> for f64 {
-    fn into(self) -> Any {
-        Any::Number(self)
+impl From<Vec<u8>> for Any {
+    fn from(v: Vec<u8>) -> Any {
+        Any::Buffer(v)
     }
 }
 
-impl Into<Any> for f32 {
-    fn into(self) -> Any {
-        Any::Number(self as f64)
-    }
-}
-
-impl Into<Any> for u32 {
-    fn into(self) -> Any {
-        Any::Number(self as f64)
-    }
-}
-
-impl Into<Any> for i32 {
-    fn into(self) -> Any {
-        Any::Number(self as f64)
-    }
-}
-
-impl Into<Any> for i64 {
-    fn into(self) -> Any {
-        Any::BigInt(self)
-    }
-}
-
-impl Into<Any> for String {
-    fn into(self) -> Any {
-        Any::String(self.into_boxed_str())
-    }
-}
-
-impl Into<Any> for &str {
-    fn into(self) -> Any {
-        Any::String(self.into())
-    }
-}
-
-impl Into<Any> for Box<[u8]> {
-    fn into(self) -> Any {
-        Any::Buffer(self)
-    }
-}
-
-impl Into<Any> for Vec<u8> {
-    fn into(self) -> Any {
-        Any::Buffer(self.into_boxed_slice())
-    }
-}
-
-impl<T> Into<Any> for Option<T>
+impl<T> From<Vec<T>> for Any
 where
     T: Into<Any>,
 {
-    fn into(self) -> Any {
-        match self {
-            None => Any::Null,
-            Some(value) => value.into(),
-        }
-    }
-}
-
-impl<T> Into<Any> for Vec<T>
-where
-    T: Into<Any>,
-{
-    fn into(self) -> Any {
-        let mut array = Vec::with_capacity(self.len());
-        for value in self {
+    fn from(v: Vec<T>) -> Any {
+        let mut array = Vec::with_capacity(v.len());
+        for value in v {
             array.push(value.into())
         }
-        Any::Array(array.into_boxed_slice())
+        Any::Array(array)
     }
 }
 
-impl<T> Into<Any> for HashMap<String, T>
+impl<T> From<HashMap<String, T>> for Any
 where
     T: Into<Any>,
 {
-    fn into(self) -> Any {
-        let mut map = HashMap::with_capacity(self.len());
-        for (key, value) in self {
+    fn from(v: HashMap<String, T>) -> Any {
+        let mut map = HashMap::with_capacity(v.len());
+        for (key, value) in v {
             map.insert(key, value.into());
         }
         Any::Map(Box::new(map))
     }
 }
 
-impl TryInto<Any> for u64 {
-    type Error = &'static str;
-
-    fn try_into(self) -> Result<Any, Self::Error> {
-        if self < (1 << 53) {
-            Ok(Any::Number(self as f64))
-        } else if self <= (i64::MAX as u64) {
-            Ok(Any::BigInt(self as i64))
-        } else {
-            Err("lib0::Any conversion is possible only for numbers up to 2^63")
-        }
+impl<T> From<T> for Any
+where
+    T: Into<Number>,
+{
+    fn from(value: T) -> Self {
+        Any::Number(value.into())
     }
 }
 
-impl TryInto<Any> for usize {
-    type Error = &'static str;
-
-    #[cfg(target_pointer_width = "32")]
-    fn try_into(self) -> Result<Any, Self::Error> {
-        // for 32-bit architectures we know that usize will always fit,
-        // so there's no need to check for length, but we stick to TryInto
-        // trait to keep API compatibility
-        Ok(Any::Number(self as f64))
+impl From<String> for Any {
+    fn from(v: String) -> Any {
+        Any::String(v.into())
     }
+}
 
-    #[cfg(target_pointer_width = "64")]
-    fn try_into(self) -> Result<Any, Self::Error> {
-        (self as u64).try_into()
+impl From<&str> for Any {
+    fn from(v: &str) -> Any {
+        Any::String(v.to_string())
+    }
+}
+
+impl<T> From<Option<T>> for Any
+where
+    T: Into<Any>,
+{
+    fn from(v: Option<T>) -> Any {
+        match v {
+            None => Any::Null,
+            Some(value) => value.into(),
+        }
     }
 }

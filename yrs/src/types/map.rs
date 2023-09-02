@@ -780,7 +780,7 @@ mod test {
             entries.take(),
             Some(HashMap::from([(
                 "a".into(),
-                EntryChange::Inserted(Any::Number(1.0).into())
+                EntryChange::Inserted(Any::from(1.0).into())
             )]))
         );
 
@@ -793,7 +793,7 @@ mod test {
             entries.take(),
             Some(HashMap::from([(
                 "a".into(),
-                EntryChange::Updated(Any::Number(1.0).into(), Any::Number(2.0).into())
+                EntryChange::Updated(Any::from(1.0).into(), Any::from(2.0).into())
             )]))
         );
 
@@ -807,7 +807,7 @@ mod test {
             entries.take(),
             Some(HashMap::from([(
                 "a".into(),
-                EntryChange::Updated(Any::Number(2.0).into(), Any::Number(4.0).into())
+                EntryChange::Updated(Any::from(2.0).into(), Any::from(4.0).into())
             )]))
         );
 
@@ -820,7 +820,7 @@ mod test {
             entries.take(),
             Some(HashMap::from([(
                 "a".into(),
-                EntryChange::Removed(Any::Number(4.0).into())
+                EntryChange::Removed(Any::from(4.0).into())
             )]))
         );
 
@@ -834,7 +834,7 @@ mod test {
             entries.take(),
             Some(HashMap::from([(
                 "b".into(),
-                EntryChange::Inserted(Any::Number(2.0).into())
+                EntryChange::Inserted(Any::from(2.0).into())
             )]))
         );
 
@@ -870,7 +870,7 @@ mod test {
             entries.take(),
             Some(HashMap::from([(
                 "b".into(),
-                EntryChange::Inserted(Any::Number(2.0).into())
+                EntryChange::Inserted(Any::from(2.0).into())
             )]))
         );
     }

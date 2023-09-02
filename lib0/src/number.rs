@@ -4,12 +4,6 @@ use crate::error::Error;
 use std::convert::TryInto;
 use std::mem::size_of;
 
-pub const I64_MAX_SAFE_INTEGER: i64 = i64::pow(2, 53) - 1;
-pub const I64_MIN_SAFE_INTEGER: i64 = -I64_MAX_SAFE_INTEGER;
-
-pub const F64_MAX_SAFE_INTEGER: f64 = I64_MAX_SAFE_INTEGER as f64;
-pub const F64_MIN_SAFE_INTEGER: f64 = -F64_MAX_SAFE_INTEGER;
-
 pub trait VarInt: Sized + Copy {
     fn write<W: Write>(&self, w: &mut W);
     fn read<R: Read>(r: &mut R) -> Result<Self, Error>;

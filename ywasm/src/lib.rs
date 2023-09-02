@@ -1,5 +1,5 @@
 use js_sys::{Object, Reflect, Uint8Array};
-use lib0::any::Any;
+use lib0::any::{Any, Number};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::convert::{TryFrom, TryInto};
@@ -3835,16 +3835,16 @@ fn insert_at(dst: &ArrayRef, txn: &mut TransactionMut, index: u32, src: Vec<JsVa
 
 fn js_into_any(v: &JsValue) -> Option<Any> {
     if v.is_string() {
-        Some(Any::String(v.as_string()?.into_boxed_str()))
+        Some(Any::String(v.as_string()?))
     } else if v.is_bigint() {
         let i = js_sys::BigInt::from(v.clone()).as_f64()?;
-        Some(Any::BigInt(i as i64))
+        Some(Any::Number(Number::BigInt(i as i64)))
     } else if v.is_null() {
         Some(Any::Null)
     } else if v.is_undefined() {
         Some(Any::Undefined)
     } else if let Some(f) = v.as_f64() {
-        Some(Any::Number(f))
+        Some(Any::Number(Number::Float(f)))
     } else if let Some(b) = v.as_bool() {
         Some(Any::Bool(b))
     } else if js_sys::Array::is_array(v) {
@@ -3853,7 +3853,7 @@ fn js_into_any(v: &JsValue) -> Option<Any> {
         for value in array.iter() {
             result.push(js_into_any(&value)?);
         }
-        Some(Any::Array(result.into_boxed_slice()))
+        Some(Any::Array(result))
     } else if v.is_object() {
         if let Ok(_) = Shared::try_from(v) {
             None
@@ -3879,16 +3879,19 @@ fn any_into_js(v: &Any) -> JsValue {
         Any::Null => JsValue::NULL,
         Any::Undefined => JsValue::UNDEFINED,
         Any::Bool(v) => JsValue::from_bool(*v),
-        Any::Number(v) => JsValue::from(*v),
-        Any::BigInt(v) => JsValue::from(*v),
-        Any::String(v) => JsValue::from(v.as_ref()),
+        Any::Number(v) => match *v {
+            Number::Float(v) => JsValue::from(v),
+            Number::Int(v) => JsValue::from(v),
+            Number::BigInt(v) => JsValue::from(v),
+        },
+        Any::String(v) => JsValue::from_str(v.as_ref()),
         Any::Buffer(v) => {
             let v = Uint8Array::from(v.as_ref());
             v.into()
         }
         Any::Array(v) => {
             let a = js_sys::Array::new();
-            for value in v.as_ref() {
+            for value in v.iter() {
                 a.push(&any_into_js(value));
             }
             a.into()

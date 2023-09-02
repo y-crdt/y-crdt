@@ -1082,7 +1082,7 @@ impl TextEvent {
                         let value = if let Some(str) = self.insert.take() {
                             str
                         } else {
-                            let value = self.insert_string.take().unwrap().into_boxed_str();
+                            let value = self.insert_string.take().unwrap();
                             Any::String(value).into()
                         };
                         let attrs = if self.current_attrs.is_empty() {
@@ -2050,7 +2050,7 @@ mod test {
             let mut txn = d1.transact_mut();
             txt1.insert_with_attributes(&mut txn, 0, "ab", a1.clone());
 
-            let a2: Attrs = HashMap::from([("width".into(), Any::Number(100.0))]);
+            let a2: Attrs = HashMap::from([("width".into(), Any::from(100.0))]);
 
             txt1.insert_embed_with_attributes(&mut txn, 1, embed.clone(), a2.clone());
             drop(txn);
@@ -2081,7 +2081,7 @@ mod test {
         let a1 = Some(Box::new(a1));
         let a2 = Some(Box::new(HashMap::from([(
             "width".into(),
-            Any::Number(100.0),
+            Any::from(100.0),
         )])));
 
         let expected = vec![
