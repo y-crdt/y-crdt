@@ -1083,7 +1083,7 @@ impl TextEvent {
                             str
                         } else {
                             let value = self.insert_string.take().unwrap();
-                            Any::String(value).into()
+                            Any::String(value.into()).into()
                         };
                         let attrs = if self.current_attrs.is_empty() {
                             None

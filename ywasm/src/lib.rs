@@ -3835,7 +3835,7 @@ fn insert_at(dst: &ArrayRef, txn: &mut TransactionMut, index: u32, src: Vec<JsVa
 
 fn js_into_any(v: &JsValue) -> Option<Any> {
     if v.is_string() {
-        Some(Any::String(v.as_string()?))
+        Some(Any::from(v.as_string()?))
     } else if v.is_bigint() {
         let i = js_sys::BigInt::from(v.clone()).as_f64()?;
         Some(Any::Number(Number::BigInt(i as i64)))
@@ -3853,7 +3853,7 @@ fn js_into_any(v: &JsValue) -> Option<Any> {
         for value in array.iter() {
             result.push(js_into_any(&value)?);
         }
-        Some(Any::Array(result))
+        Some(Any::Array(result.into()))
     } else if v.is_object() {
         if let Ok(_) = Shared::try_from(v) {
             None

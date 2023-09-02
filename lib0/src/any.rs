@@ -36,6 +36,7 @@ impl std::fmt::Display for Number {
 macro_rules! impl_float {
     ($t:ty) => {
         impl From<$t> for Number {
+            #[inline]
             fn from(v: $t) -> Number {
                 Number::Float(v as f64)
             }
@@ -46,6 +47,7 @@ macro_rules! impl_float {
 macro_rules! impl_number {
     ($t:ty) => {
         impl From<$t> for Number {
+            #[inline]
             fn from(v: $t) -> Number {
                 Number::Int(v as i64)
             }
@@ -120,9 +122,9 @@ pub enum Any {
     Undefined,
     Bool(bool),
     Number(Number),
-    String(String),
-    Buffer(Vec<u8>),
-    Array(Vec<Any>),
+    String(Box<str>),
+    Buffer(Box<[u8]>),
+    Array(Box<[Any]>),
     Map(Box<HashMap<String, Any>>),
 }
 
@@ -146,10 +148,7 @@ impl Any {
             // CASE 120: boolean (true)
             120 => Any::Bool(true),
             // CASE 119: string
-            119 => {
-                let str = decoder.read_string()?;
-                Any::String(str.to_string())
-            }
+            119 => Any::String(Box::from(decoder.read_string()?)),
             // CASE 118: Map<string,Any>
             118 => {
                 let len: usize = decoder.read_var()?;
@@ -167,10 +166,10 @@ impl Any {
                 for _ in 0..len {
                     arr.push(Any::decode(decoder)?);
                 }
-                Any::Array(arr)
+                Any::Array(arr.into_boxed_slice())
             }
             // CASE 116: buffer
-            116 => Any::Buffer(decoder.read_buf()?.to_owned()),
+            116 => Any::Buffer(Box::from(decoder.read_buf()?)),
             _ => return Err(Error::UnexpectedValue),
         })
     }
@@ -407,6 +406,7 @@ impl std::fmt::Display for Any {
 }
 
 impl From<bool> for Any {
+    #[inline]
     fn from(v: bool) -> Any {
         Any::Bool(v)
     }
@@ -414,7 +414,7 @@ impl From<bool> for Any {
 
 impl From<Vec<u8>> for Any {
     fn from(v: Vec<u8>) -> Any {
-        Any::Buffer(v)
+        Any::Buffer(v.into_boxed_slice())
     }
 }
 
@@ -427,7 +427,7 @@ where
         for value in v {
             array.push(value.into())
         }
-        Any::Array(array)
+        Any::Array(array.into_boxed_slice())
     }
 }
 
@@ -448,20 +448,23 @@ impl<T> From<T> for Any
 where
     T: Into<Number>,
 {
+    #[inline]
     fn from(value: T) -> Self {
         Any::Number(value.into())
     }
 }
 
 impl From<String> for Any {
+    #[inline]
     fn from(v: String) -> Any {
         Any::String(v.into())
     }
 }
 
 impl From<&str> for Any {
+    #[inline]
     fn from(v: &str) -> Any {
-        Any::String(v.to_string())
+        Any::String(Box::from(v))
     }
 }
 
@@ -469,6 +472,7 @@ impl<T> From<Option<T>> for Any
 where
     T: Into<Any>,
 {
+    #[inline]
     fn from(v: Option<T>) -> Any {
         match v {
             None => Any::Null,

@@ -228,7 +228,7 @@ macro_rules! any_internal {
 #[doc(hidden)]
 macro_rules! any_internal_array {
     ($($content:tt)*) => {
-        std::vec::Vec::from([$($content)*])
+        std::boxed::Box::from([$($content)*])
     };
 }
 

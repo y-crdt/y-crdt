@@ -2451,7 +2451,7 @@ impl YInput {
         unsafe {
             if tag == Y_JSON_STR {
                 let str: String = CStr::from_ptr(self.value.str).to_str().unwrap().into();
-                Any::String(str)
+                Any::from(str)
             } else if tag == Y_JSON_ARR {
                 let ptr = self.value.values;
                 let mut dst: Vec<Any> = Vec::with_capacity(self.len as usize);
@@ -2462,7 +2462,7 @@ impl YInput {
                     dst.push(any);
                     i += 1;
                 }
-                Any::Array(dst)
+                Any::Array(dst.into())
             } else if tag == Y_JSON_MAP {
                 let mut dst = HashMap::with_capacity(self.len as usize);
                 let keys = self.value.map.keys;
@@ -2492,7 +2492,7 @@ impl YInput {
                 let slice =
                     std::slice::from_raw_parts(self.value.buf as *mut u8, self.len as usize);
                 let buf = Vec::from(slice);
-                Any::Buffer(buf)
+                Any::Buffer(buf.into())
             } else if tag == Y_DOC {
                 Any::Undefined
             } else {
@@ -2776,14 +2776,14 @@ impl From<Any> for YOutput {
                     tag: Y_JSON_STR,
                     len: v.len() as u32,
                     value: YOutputContent {
-                        str: CString::new(v).unwrap().into_raw(),
+                        str: CString::new(String::from(v)).unwrap().into_raw(),
                     },
                 },
                 Any::Buffer(v) => YOutput {
                     tag: Y_JSON_BUF,
                     len: v.len() as u32,
                     value: YOutputContent {
-                        buf: Box::into_raw(v.clone().into_boxed_slice()) as *mut _,
+                        buf: Box::into_raw(v.clone()) as *mut _,
                     },
                 },
                 Any::Array(v) => {

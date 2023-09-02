@@ -1064,7 +1064,7 @@ mod test {
                     yarray.move_to(&mut txn, pos, new_pos);
 
                     let actual = yarray.to_json(&txn);
-                    assert_eq!(actual, Any::Array(expected))
+                    assert_eq!(actual, Any::Array(expected.into_boxed_slice()))
                 } else {
                     panic!("should not happen")
                 }
@@ -1089,7 +1089,7 @@ mod test {
                     pos += 1;
                 }
                 let actual = yarray.to_json(&txn);
-                assert_eq!(actual, Any::Array(expected))
+                assert_eq!(actual, Any::Array(expected.into_boxed_slice()))
             } else {
                 panic!("should not happen")
             }
@@ -1101,7 +1101,7 @@ mod test {
             let pos = rng.between(0, yarray.len(&txn));
             let array2 = yarray.insert(&mut txn, pos, ArrayPrelim::from([1, 2, 3, 4]));
             let expected: Vec<_> = (1..=4).map(|i| Any::from(i)).collect();
-            assert_eq!(array2.to_json(&txn), Any::Array(expected));
+            assert_eq!(array2.to_json(&txn), Any::Array(expected.into()));
         }
 
         fn insert_type_map(doc: &mut Doc, rng: &mut StdRng) {
@@ -1132,7 +1132,7 @@ mod test {
                         let mut old_content = Vec::from(old_content);
                         yarray.remove_range(&mut txn, pos, del_len);
                         old_content.drain(pos as usize..(pos + del_len) as usize);
-                        assert_eq!(yarray.to_json(&txn), Any::Array(old_content));
+                        assert_eq!(yarray.to_json(&txn), Any::Array(old_content.into()));
                     } else {
                         panic!("should not happen")
                     }

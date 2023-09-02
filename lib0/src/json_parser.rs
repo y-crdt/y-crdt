@@ -155,7 +155,7 @@ impl<I: Iterator<Item = char>> JsonParser<I> {
         let mut m = HashMap::new();
         loop {
             let key = match self.parse_any()? {
-                Any::String(s) => s,
+                Any::String(s) => s.into(),
                 v => return self.err(format!("Key of object must be string but found {:?}", v)),
             };
 
@@ -171,7 +171,7 @@ impl<I: Iterator<Item = char>> JsonParser<I> {
 
             match self.consume()? {
                 ',' => {}
-                '}' => return Ok(Any::Map(Box::new(m))),
+                '}' => return Ok(Any::Map(Box::from(m))),
                 c => {
                     return self.err(format!(
                         "',' or '}}' is expected for object but actually found '{}'",
@@ -189,14 +189,14 @@ impl<I: Iterator<Item = char>> JsonParser<I> {
 
         if self.peek()? == ']' {
             self.consume().unwrap();
-            return Ok(Any::Array(Vec::new()));
+            return Ok(Any::Array(Box::default()));
         }
 
         let mut v = vec![self.parse_any()?];
         loop {
             match self.consume()? {
                 ',' => {}
-                ']' => return Ok(Any::Array(v)),
+                ']' => return Ok(Any::Array(v.into_boxed_slice())),
                 c => {
                     return self.err(format!(
                         "',' or ']' is expected for array but actually found '{}'",
@@ -260,7 +260,7 @@ impl<I: Iterator<Item = char>> JsonParser<I> {
                 },
                 '"' => {
                     self.push_utf16(&mut s, &mut utf16)?;
-                    return Ok(Any::String(s));
+                    return Ok(Any::String(Box::from(s)));
                 }
                 // Note: c.is_control() is not available here because JSON accepts 0x7f (DEL) in
                 // string literals but 0x7f is control character.

@@ -10,14 +10,14 @@ pub fn arb_any() -> impl Strategy<Value = Any> {
         any::<bool>().prop_map(Any::Bool),
         any::<f64>().prop_map(Any::from),
         any::<i64>().prop_map(Any::from),
-        any::<String>().prop_map(|i| Any::String(i.into())),
-        any::<Vec<u8>>().prop_map(Any::Buffer),
+        any::<String>().prop_map(Any::from),
+        any::<Vec<u8>>().prop_map(Any::from),
     ]
     .boxed();
 
     leaf.prop_recursive(8, 256, 10, |inner| {
         prop_oneof![
-            prop::collection::vec(inner.clone(), 0..10).prop_map(|v| Any::Array(v)),
+            prop::collection::vec(inner.clone(), 0..10).prop_map(Any::from),
             prop::collection::hash_map(".*", inner, 0..10).prop_map(|v| Any::Map(Box::new(v))),
         ]
     })
