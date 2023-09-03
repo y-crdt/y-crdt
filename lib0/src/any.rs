@@ -3,7 +3,11 @@ use crate::encoding::Write;
 use crate::error::Error;
 use std::cmp::PartialEq;
 use std::collections::HashMap;
-use std::convert::TryInto;
+use std::convert::{TryFrom, TryInto};
+use std::sync::Arc;
+
+pub const F64_MAX_SAFE_INTEGER: f64 = (i64::pow(2, 53) - 1) as f64;
+pub const F64_MIN_SAFE_INTEGER: f64 = -F64_MAX_SAFE_INTEGER;
 
 /// Any is an enum with a potentially associated value that is used to represent JSON values
 /// and supports efficient encoding of those values.
@@ -14,10 +18,10 @@ pub enum Any {
     Bool(bool),
     Number(f64),
     BigInt(i64),
-    String(Box<str>),
-    Buffer(Box<[u8]>),
-    Array(Box<[Any]>),
-    Map(Box<HashMap<String, Any>>),
+    String(Arc<str>),
+    Buffer(Arc<[u8]>),
+    Array(Arc<[Any]>),
+    Map(Arc<HashMap<String, Any>>),
 }
 
 impl Any {
@@ -42,7 +46,7 @@ impl Any {
             // CASE 119: string
             119 => {
                 let str = decoder.read_string()?;
-                Any::String(Box::from(str))
+                Any::String(Arc::from(str))
             }
             // CASE 118: Map<string,Any>
             118 => {
@@ -52,7 +56,7 @@ impl Any {
                     let key = decoder.read_string()?;
                     map.insert(key.to_owned(), Any::decode(decoder)?);
                 }
-                Any::Map(Box::new(map))
+                Any::Map(Arc::new(map))
             }
             // CASE 117: Array<Any>
             117 => {
@@ -61,10 +65,10 @@ impl Any {
                 for _ in 0..len {
                     arr.push(Any::decode(decoder)?);
                 }
-                Any::Array(arr.into_boxed_slice())
+                Any::Array(Arc::from(arr))
             }
             // CASE 116: buffer
-            116 => Any::Buffer(Box::from(decoder.read_buf()?.to_owned())),
+            116 => Any::Buffer(Arc::from(decoder.read_buf()?)),
             _ => return Err(Error::UnexpectedValue),
         })
     }
@@ -123,8 +127,8 @@ impl Any {
             Any::Number(num) => {
                 let num_truncated = num.trunc();
                 if num_truncated == *num
-                    && num_truncated <= crate::number::F64_MAX_SAFE_INTEGER
-                    && num_truncated >= crate::number::F64_MIN_SAFE_INTEGER
+                    && num_truncated <= F64_MAX_SAFE_INTEGER
+                    && num_truncated >= F64_MIN_SAFE_INTEGER
                 {
                     // TYPE 125: INTEGER
                     encoder.write_u8(125);
@@ -301,131 +305,154 @@ impl std::fmt::Display for Any {
     }
 }
 
-impl Into<Any> for bool {
-    fn into(self) -> Any {
-        Any::Bool(self)
+macro_rules! impl_any_number {
+    ($t:ty) => {
+        impl From<$t> for Any {
+            #[inline]
+            fn from(v: $t) -> Self {
+                Self::Number(v as f64)
+            }
+        }
+    };
+}
+macro_rules! impl_any_big_int {
+    ($t:ty) => {
+        impl From<$t> for Any {
+            fn from(value: $t) -> Self {
+                let v = value as f64;
+                if v <= F64_MAX_SAFE_INTEGER && v >= F64_MIN_SAFE_INTEGER {
+                    Self::Number(v)
+                } else {
+                    Self::BigInt(value as i64)
+                }
+            }
+        }
+    };
+}
+
+impl_any_number!(f32);
+impl_any_number!(f64);
+impl_any_number!(i16);
+impl_any_number!(i32);
+impl_any_number!(u16);
+impl_any_number!(u32);
+impl_any_big_int!(i64);
+impl_any_big_int!(isize);
+
+impl TryFrom<u64> for Any {
+    type Error = u64;
+
+    fn try_from(value: u64) -> Result<Self, Self::Error> {
+        if value > i64::MAX.abs() as u64 {
+            Err(value)
+        } else {
+            let v = value as f64;
+            if v <= F64_MAX_SAFE_INTEGER && v >= F64_MIN_SAFE_INTEGER {
+                Ok(Any::Number(v))
+            } else {
+                Ok(Any::BigInt(v as i64))
+            }
+        }
     }
 }
 
-impl Into<Any> for f64 {
-    fn into(self) -> Any {
-        Any::Number(self)
+impl TryFrom<usize> for Any {
+    type Error = usize;
+
+    #[cfg(target_pointer_width = "32")]
+    fn try_from(value: usize) -> Result<Self, Self::Error> {
+        // for 32-bit architectures we know that usize will always fit,
+        // so there's no need to check for length, but we stick to TryInto
+        // trait to keep API compatibility
+        Ok(Any::Number(value as f64))
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    fn try_from(value: usize) -> Result<Self, Self::Error> {
+        if let Ok(v) = (value as u64).try_into() {
+            Ok(v)
+        } else {
+            Err(value)
+        }
     }
 }
 
-impl Into<Any> for f32 {
-    fn into(self) -> Any {
-        Any::Number(self as f64)
+impl From<bool> for Any {
+    #[inline]
+    fn from(value: bool) -> Self {
+        Any::Bool(value)
     }
 }
 
-impl Into<Any> for u32 {
-    fn into(self) -> Any {
-        Any::Number(self as f64)
+impl From<String> for Any {
+    #[inline]
+    fn from(value: String) -> Self {
+        Any::String(value.into())
     }
 }
 
-impl Into<Any> for i32 {
-    fn into(self) -> Any {
-        Any::Number(self as f64)
+impl From<&str> for Any {
+    #[inline]
+    fn from(value: &str) -> Self {
+        Any::String(value.into())
     }
 }
 
-impl Into<Any> for i64 {
-    fn into(self) -> Any {
-        Any::BigInt(self)
+impl From<Arc<str>> for Any {
+    #[inline]
+    fn from(value: Arc<str>) -> Self {
+        Any::String(value.clone())
     }
 }
 
-impl Into<Any> for String {
-    fn into(self) -> Any {
-        Any::String(self.into_boxed_str())
+impl From<Vec<u8>> for Any {
+    #[inline]
+    fn from(value: Vec<u8>) -> Self {
+        Any::Buffer(Arc::from(value))
     }
 }
 
-impl Into<Any> for &str {
-    fn into(self) -> Any {
-        Any::String(self.into())
+impl From<&[u8]> for Any {
+    #[inline]
+    fn from(value: &[u8]) -> Self {
+        Any::Buffer(Arc::from(value))
     }
 }
 
-impl Into<Any> for Box<[u8]> {
-    fn into(self) -> Any {
-        Any::Buffer(self)
-    }
-}
-
-impl Into<Any> for Vec<u8> {
-    fn into(self) -> Any {
-        Any::Buffer(self.into_boxed_slice())
-    }
-}
-
-impl<T> Into<Any> for Option<T>
+impl<T> From<Option<T>> for Any
 where
     T: Into<Any>,
 {
-    fn into(self) -> Any {
-        match self {
+    fn from(v: Option<T>) -> Any {
+        match v {
             None => Any::Null,
             Some(value) => value.into(),
         }
     }
 }
 
-impl<T> Into<Any> for Vec<T>
+impl<T> From<Vec<T>> for Any
 where
     T: Into<Any>,
 {
-    fn into(self) -> Any {
-        let mut array = Vec::with_capacity(self.len());
-        for value in self {
+    fn from(v: Vec<T>) -> Any {
+        let mut array = Vec::with_capacity(v.len());
+        for value in v {
             array.push(value.into())
         }
-        Any::Array(array.into_boxed_slice())
+        Any::Array(Arc::from(array))
     }
 }
 
-impl<T> Into<Any> for HashMap<String, T>
+impl<T> From<HashMap<String, T>> for Any
 where
     T: Into<Any>,
 {
-    fn into(self) -> Any {
-        let mut map = HashMap::with_capacity(self.len());
-        for (key, value) in self {
+    fn from(v: HashMap<String, T>) -> Any {
+        let mut map = HashMap::with_capacity(v.len());
+        for (key, value) in v {
             map.insert(key, value.into());
         }
-        Any::Map(Box::new(map))
-    }
-}
-
-impl TryInto<Any> for u64 {
-    type Error = &'static str;
-
-    fn try_into(self) -> Result<Any, Self::Error> {
-        if self < (1 << 53) {
-            Ok(Any::Number(self as f64))
-        } else if self <= (i64::MAX as u64) {
-            Ok(Any::BigInt(self as i64))
-        } else {
-            Err("lib0::Any conversion is possible only for numbers up to 2^63")
-        }
-    }
-}
-
-impl TryInto<Any> for usize {
-    type Error = &'static str;
-
-    #[cfg(target_pointer_width = "32")]
-    fn try_into(self) -> Result<Any, Self::Error> {
-        // for 32-bit architectures we know that usize will always fit,
-        // so there's no need to check for length, but we stick to TryInto
-        // trait to keep API compatibility
-        Ok(Any::Number(self as f64))
-    }
-
-    #[cfg(target_pointer_width = "64")]
-    fn try_into(self) -> Result<Any, Self::Error> {
-        (self as u64).try_into()
+        Any::Map(Arc::new(map))
     }
 }

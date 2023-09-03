@@ -841,12 +841,12 @@ impl ToJson for Value {
     fn to_json<T: ReadTxn>(&self, txn: &T) -> Any {
         match self {
             Value::Any(a) => a.clone(),
-            Value::YText(v) => Any::String(v.get_string(txn).into_boxed_str()),
+            Value::YText(v) => Any::from(v.get_string(txn)),
             Value::YArray(v) => v.to_json(txn),
             Value::YMap(v) => v.to_json(txn),
-            Value::YXmlElement(v) => Any::String(v.get_string(txn).into_boxed_str()),
-            Value::YXmlText(v) => Any::String(v.get_string(txn).into_boxed_str()),
-            Value::YXmlFragment(v) => Any::String(v.get_string(txn).into_boxed_str()),
+            Value::YXmlElement(v) => Any::from(v.get_string(txn)),
+            Value::YXmlText(v) => Any::from(v.get_string(txn)),
+            Value::YXmlFragment(v) => Any::from(v.get_string(txn)),
             Value::YDoc(doc) => any!({"guid": doc.guid().as_ref()}),
         }
     }

@@ -527,6 +527,7 @@ mod test {
     use std::collections::{HashMap, HashSet};
     use std::ops::Deref;
     use std::rc::Rc;
+    use std::sync::Arc;
 
     #[test]
     fn push_back() {
@@ -1052,7 +1053,7 @@ mod test {
                 let new_pos_adjusted = rng.between(0, yarray.len(&txn) - 1);
                 let new_pos = new_pos_adjusted + if new_pos_adjusted > pos { len } else { 0 };
                 if let Any::Array(expected) = yarray.to_json(&txn) {
-                    let mut expected = Vec::from(expected);
+                    let mut expected = Vec::from(expected.as_ref());
                     let moved = expected.remove(pos as usize);
                     let insert_pos = if pos < new_pos {
                         new_pos - len
@@ -1064,7 +1065,7 @@ mod test {
                     yarray.move_to(&mut txn, pos, new_pos);
 
                     let actual = yarray.to_json(&txn);
-                    assert_eq!(actual, Any::Array(expected.into_boxed_slice()))
+                    assert_eq!(actual, Any::from(expected))
                 } else {
                     panic!("should not happen")
                 }
@@ -1081,7 +1082,7 @@ mod test {
                 .collect();
             let mut pos = rng.between(0, yarray.len(&txn)) as usize;
             if let Any::Array(expected) = yarray.to_json(&txn) {
-                let mut expected = Vec::from(expected);
+                let mut expected = Vec::from(expected.as_ref());
                 yarray.insert_range(&mut txn, pos as u32, content.clone());
 
                 for any in content {
@@ -1089,7 +1090,7 @@ mod test {
                     pos += 1;
                 }
                 let actual = yarray.to_json(&txn);
-                assert_eq!(actual, Any::Array(expected.into_boxed_slice()))
+                assert_eq!(actual, Any::from(expected))
             } else {
                 panic!("should not happen")
             }
@@ -1100,7 +1101,7 @@ mod test {
             let mut txn = doc.transact_mut();
             let pos = rng.between(0, yarray.len(&txn));
             let array2 = yarray.insert(&mut txn, pos, ArrayPrelim::from([1, 2, 3, 4]));
-            let expected: Box<[Any]> = (1..=4).map(|i| Any::Number(i as f64)).collect();
+            let expected: Arc<[Any]> = (1..=4).map(|i| Any::Number(i as f64)).collect();
             assert_eq!(array2.to_json(&txn), Any::Array(expected));
         }
 
@@ -1129,13 +1130,10 @@ mod test {
                     }
                 } else {
                     if let Any::Array(old_content) = yarray.to_json(&txn) {
-                        let mut old_content = Vec::from(old_content);
+                        let mut old_content = Vec::from(old_content.as_ref());
                         yarray.remove_range(&mut txn, pos, del_len);
                         old_content.drain(pos as usize..(pos + del_len) as usize);
-                        assert_eq!(
-                            yarray.to_json(&txn),
-                            Any::Array(old_content.into_boxed_slice())
-                        );
+                        assert_eq!(yarray.to_json(&txn), Any::from(old_content));
                     } else {
                         panic!("should not happen")
                     }

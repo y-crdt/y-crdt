@@ -1292,7 +1292,10 @@ pub unsafe extern "C" fn ytext_insert_embed(
 
 fn map_attrs(attrs: Any) -> Option<Attrs> {
     if let Any::Map(attrs) = attrs {
-        let attrs = attrs.into_iter().map(|(k, v)| (k.into(), v)).collect();
+        let attrs = attrs
+            .iter()
+            .map(|(k, v)| (k.as_str().into(), v.clone()))
+            .collect();
         Some(attrs)
     } else {
         None
@@ -2450,7 +2453,7 @@ impl YInput {
         let tag = self.tag;
         unsafe {
             if tag == Y_JSON_STR {
-                let str: Box<str> = CStr::from_ptr(self.value.str).to_str().unwrap().into();
+                let str = CStr::from_ptr(self.value.str).to_str().unwrap().into();
                 Any::String(str)
             } else if tag == Y_JSON_ARR {
                 let ptr = self.value.values;
@@ -2462,7 +2465,7 @@ impl YInput {
                     dst.push(any);
                     i += 1;
                 }
-                Any::Array(dst.into_boxed_slice())
+                Any::from(dst)
             } else if tag == Y_JSON_MAP {
                 let mut dst = HashMap::with_capacity(self.len as usize);
                 let keys = self.value.map.keys;
@@ -2477,7 +2480,7 @@ impl YInput {
                     dst.insert(key, value);
                     i += 1;
                 }
-                Any::Map(Box::new(dst))
+                Any::from(dst)
             } else if tag == Y_JSON_NULL {
                 Any::Null
             } else if tag == Y_JSON_UNDEF {
@@ -2491,8 +2494,7 @@ impl YInput {
             } else if tag == Y_JSON_BUF {
                 let slice =
                     std::slice::from_raw_parts(self.value.buf as *mut u8, self.len as usize);
-                let buf = Box::from(slice);
-                Any::Buffer(buf)
+                Any::from(slice)
             } else if tag == Y_DOC {
                 Any::Undefined
             } else {
@@ -2715,11 +2717,10 @@ impl Drop for YOutput {
                     self.len as usize,
                 ));
             } else if tag == Y_JSON_BUF {
-                drop(Vec::from_raw_parts(
-                    self.value.buf,
-                    self.len as usize,
-                    self.len as usize,
-                ));
+                let slice =
+                    std::slice::from_raw_parts(self.value.buf as *mut u8, self.len as usize);
+                let arc: Arc<[u8]> = Arc::from_raw(slice);
+                drop(arc);
             } else if tag == Y_DOC {
                 drop(Box::from_raw(self.value.y_doc))
             }
@@ -2784,14 +2785,19 @@ impl From<Any> for YOutput {
                     tag: Y_JSON_BUF,
                     len: v.len() as u32,
                     value: YOutputContent {
-                        buf: Box::into_raw(v.clone()) as *mut _,
+                        buf: {
+                            let ptr: *const [u8] = Arc::into_raw(v);
+                            let head: *const u8 = &(*ptr)[0];
+                            head as *const _
+                        },
                     },
                 },
-                Any::Array(v) => {
-                    let len = v.len() as u32;
-                    let v = Vec::from(v);
-                    let mut array: Vec<_> = v.into_iter().map(|v| YOutput::from(v)).collect();
-                    array.shrink_to_fit();
+                Any::Array(values) => {
+                    let len = values.len() as u32;
+                    let mut array = Vec::with_capacity(values.len());
+                    for v in values.iter() {
+                        array.push(YOutput::from(v.clone()));
+                    }
                     let ptr = array.as_mut_ptr();
                     forget(array);
                     YOutput {
@@ -2802,10 +2808,9 @@ impl From<Any> for YOutput {
                 }
                 Any::Map(v) => {
                     let len = v.len() as u32;
-                    let v = *v;
                     let mut array: Vec<_> = v
-                        .into_iter()
-                        .map(|(k, v)| YMapEntry::new(k.as_str(), Value::Any(v)))
+                        .iter()
+                        .map(|(k, v)| YMapEntry::new(k.as_str(), Value::Any(v.clone())))
                         .collect();
                     array.shrink_to_fit();
                     let ptr = array.as_mut_ptr();
@@ -2911,7 +2916,7 @@ union YOutputContent {
     num: f64,
     integer: i64,
     str: *mut c_char,
-    buf: *mut c_char,
+    buf: *const c_char,
     array: *mut YOutput,
     map: *mut YMapEntry,
     y_type: *mut Branch,
