@@ -84,7 +84,7 @@ fn bench_serialization(c: &mut Criterion) {
     use lib0::any::Any;
     use std::collections::HashMap;
 
-    let any = Any::Map(Box::new(HashMap::from([
+    let any = Any::from(HashMap::from([
         ("bool".into(), Any::Bool(true)),
         ("int".into(), Any::BigInt(1)),
         ("negativeInt".into(), Any::BigInt(-1)),
@@ -96,7 +96,7 @@ fn bench_serialization(c: &mut Criterion) {
         ("null".into(), Any::Null),
         (
             "map".into(),
-            Any::Map(Box::new(HashMap::from([
+            Any::from(HashMap::from([
                 ("bool".into(), Any::Bool(true)),
                 ("int".into(), Any::BigInt(1)),
                 ("negativeInt".into(), Any::BigInt(-1)),
@@ -106,26 +106,23 @@ fn bench_serialization(c: &mut Criterion) {
                 ("maxNumber".into(), Any::Number(f64::MIN)),
                 ("minNumber".into(), Any::Number(f64::MAX)),
                 ("null".into(), Any::Null),
-            ]))),
+            ])),
         ),
         (
             "key6".into(),
-            Any::Array(
-                vec![
-                    Any::Bool(true),
-                    Any::BigInt(1),
-                    Any::BigInt(-1),
-                    Any::BigInt(i64::MAX),
-                    Any::BigInt(i64::MIN),
-                    Any::Number(-123.2387f64),
-                    Any::Number(f64::MIN),
-                    Any::Number(f64::MAX),
-                    Any::Null,
-                ]
-                .into_boxed_slice(),
-            ),
+            Any::from(vec![
+                Any::Bool(true),
+                Any::BigInt(1),
+                Any::BigInt(-1),
+                Any::BigInt(i64::MAX),
+                Any::BigInt(i64::MIN),
+                Any::Number(-123.2387f64),
+                Any::Number(f64::MIN),
+                Any::Number(f64::MAX),
+                Any::Null,
+            ]),
         ),
-    ])));
+    ]));
 
     let any_json = serde_json::to_string(&any).unwrap();
 

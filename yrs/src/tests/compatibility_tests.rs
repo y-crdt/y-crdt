@@ -7,7 +7,7 @@ use crate::update::{BlockCarrier, Update};
 use crate::updates::decoder::{Decode, Decoder, DecoderV1};
 use crate::updates::encoder::Encode;
 use crate::{
-    ArrayPrelim, Doc, GetString, Map, MapPrelim, ReadTxn, StateVector, Transact, Xml,
+    ArrayPrelim, Doc, GetString, Map, MapPrelim, MapRef, ReadTxn, StateVector, Transact, Xml,
     XmlElementRef, XmlTextRef, ID,
 };
 use lib0::any::Any;
@@ -386,7 +386,11 @@ fn negative_zero_decoding_v2() {
     let mut txn = doc.transact_mut();
 
     root.insert(&mut txn, "sequence", MapPrelim::<bool>::new()); //NOTE: This is how I put nested map.
-    let sequence = root.get(&txn, "sequence").unwrap().to_ymap().unwrap();
+    let sequence = root
+        .get(&txn, "sequence")
+        .unwrap()
+        .cast::<MapRef>()
+        .unwrap();
     sequence.insert(&mut txn, "id", "V9Uk9pxUKZIrW6cOkC0Rg".to_string());
     sequence.insert(&mut txn, "cuts", ArrayPrelim::<_, Any>::from([]));
     sequence.insert(&mut txn, "name", "new sequence".to_string());

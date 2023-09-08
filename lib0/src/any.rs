@@ -25,6 +25,16 @@ pub enum Any {
 }
 
 impl Any {
+    #[inline]
+    pub fn cast<T>(self) -> Result<T, Self>
+    where
+        T: TryFrom<Any, Error = Any>,
+    {
+        // we create dedicated cast, so that we can parametrize it in a fluent fashion
+        // ie. `any.cast::<u32>().unwrap_or_default()`.
+        T::try_from(self)
+    }
+
     pub fn decode<R: Read>(decoder: &mut R) -> Result<Self, Error> {
         Ok(match decoder.read_u8()? {
             // CASE 127: undefined
@@ -305,7 +315,7 @@ impl std::fmt::Display for Any {
     }
 }
 
-macro_rules! impl_any_number {
+macro_rules! impl_from_num {
     ($t:ty) => {
         impl From<$t> for Any {
             #[inline]
@@ -313,9 +323,21 @@ macro_rules! impl_any_number {
                 Self::Number(v as f64)
             }
         }
+
+        impl TryFrom<Any> for $t {
+            type Error = Any;
+
+            fn try_from(v: Any) -> Result<Self, Self::Error> {
+                match v {
+                    Any::Number(num) => Ok(num as Self),
+                    Any::BigInt(num) => Ok(num as Self),
+                    other => Err(other),
+                }
+            }
+        }
     };
 }
-macro_rules! impl_any_big_int {
+macro_rules! impl_from_bigint {
     ($t:ty) => {
         impl From<$t> for Any {
             fn from(value: $t) -> Self {
@@ -327,17 +349,29 @@ macro_rules! impl_any_big_int {
                 }
             }
         }
+
+        impl TryFrom<Any> for $t {
+            type Error = Any;
+
+            fn try_from(v: Any) -> Result<Self, Self::Error> {
+                match v {
+                    Any::Number(num) => Ok(num as Self),
+                    Any::BigInt(num) => Ok(num as Self),
+                    other => Err(other),
+                }
+            }
+        }
     };
 }
 
-impl_any_number!(f32);
-impl_any_number!(f64);
-impl_any_number!(i16);
-impl_any_number!(i32);
-impl_any_number!(u16);
-impl_any_number!(u32);
-impl_any_big_int!(i64);
-impl_any_big_int!(isize);
+impl_from_num!(f32);
+impl_from_num!(f64);
+impl_from_num!(i16);
+impl_from_num!(i32);
+impl_from_num!(u16);
+impl_from_num!(u32);
+impl_from_bigint!(i64);
+impl_from_bigint!(isize);
 
 impl TryFrom<u64> for Any {
     type Error = u64;
@@ -352,6 +386,18 @@ impl TryFrom<u64> for Any {
             } else {
                 Ok(Any::BigInt(v as i64))
             }
+        }
+    }
+}
+
+impl TryFrom<Any> for u64 {
+    type Error = Any;
+
+    fn try_from(v: Any) -> Result<Self, Self::Error> {
+        match v {
+            Any::Number(num) => Ok(num as Self),
+            Any::BigInt(num) => Ok(num as Self),
+            other => Err(other),
         }
     }
 }
@@ -377,6 +423,18 @@ impl TryFrom<usize> for Any {
     }
 }
 
+impl TryFrom<Any> for usize {
+    type Error = Any;
+
+    fn try_from(v: Any) -> Result<Self, Self::Error> {
+        match v {
+            Any::Number(num) => Ok(num as Self),
+            Any::BigInt(num) => Ok(num as Self),
+            other => Err(other),
+        }
+    }
+}
+
 impl From<bool> for Any {
     #[inline]
     fn from(value: bool) -> Self {
@@ -384,10 +442,32 @@ impl From<bool> for Any {
     }
 }
 
+impl TryFrom<Any> for bool {
+    type Error = Any;
+
+    fn try_from(v: Any) -> Result<Self, Self::Error> {
+        match v {
+            Any::Bool(num) => Ok(num),
+            other => Err(other),
+        }
+    }
+}
+
 impl From<String> for Any {
     #[inline]
     fn from(value: String) -> Self {
         Any::String(value.into())
+    }
+}
+
+impl TryFrom<Any> for String {
+    type Error = Any;
+
+    fn try_from(v: Any) -> Result<Self, Self::Error> {
+        match v {
+            Any::String(value) => Ok(String::from(value.as_ref())),
+            other => Err(other),
+        }
     }
 }
 
@@ -405,10 +485,50 @@ impl From<Arc<str>> for Any {
     }
 }
 
+impl TryFrom<Any> for Arc<str> {
+    type Error = Any;
+
+    fn try_from(v: Any) -> Result<Self, Self::Error> {
+        match v {
+            Any::String(value) => Ok(value),
+            other => Err(other),
+        }
+    }
+}
+
 impl From<Vec<u8>> for Any {
     #[inline]
     fn from(value: Vec<u8>) -> Self {
         Any::Buffer(Arc::from(value))
+    }
+}
+
+impl TryFrom<Any> for Vec<u8> {
+    type Error = Any;
+
+    fn try_from(v: Any) -> Result<Self, Self::Error> {
+        match v {
+            Any::Buffer(value) => Ok(Vec::from(value.as_ref())),
+            other => Err(other),
+        }
+    }
+}
+
+impl From<Arc<[u8]>> for Any {
+    #[inline]
+    fn from(value: Arc<[u8]>) -> Self {
+        Any::Buffer(value)
+    }
+}
+
+impl TryFrom<Any> for Arc<[u8]> {
+    type Error = Any;
+
+    fn try_from(v: Any) -> Result<Self, Self::Error> {
+        match v {
+            Any::Buffer(value) => Ok(value),
+            other => Err(other),
+        }
     }
 }
 

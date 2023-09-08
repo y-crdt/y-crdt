@@ -153,6 +153,17 @@ impl TryFrom<BlockPtr> for TextRef {
     }
 }
 
+impl TryFrom<Value> for TextRef {
+    type Error = Value;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::YText(value) => Ok(value),
+            other => Err(other),
+        }
+    }
+}
+
 pub trait Text: AsRef<Branch> {
     /// Returns a number of characters visible in a current text data structure.
     fn len<T: ReadTxn>(&self, txn: &T) -> u32 {
