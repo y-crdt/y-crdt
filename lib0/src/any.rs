@@ -183,89 +183,16 @@ impl Any {
         }
     }
 
-    #[cfg(not(feature = "lib0-serde"))]
-    pub fn to_json(&self, buf: &mut String) {
-        use std::fmt::Write;
-
-        fn quoted(buf: &mut String, s: &str) {
-            buf.reserve(s.len() + 2);
-            buf.push('"');
-            for c in s.chars() {
-                match c {
-                    '\\' => buf.push_str("\\\\"),
-                    '\u{0008}' => buf.push_str("\\b"),
-                    '\u{000c}' => buf.push_str("\\f"),
-                    '\n' => buf.push_str("\\n"),
-                    '\r' => buf.push_str("\\r"),
-                    '\t' => buf.push_str("\\t"),
-                    '"' => buf.push_str("\\\""),
-                    c if c.is_control() => write!(buf, "\\u{:04x}", c as u32).unwrap(),
-                    c => buf.push(c),
-                }
-            }
-            buf.push('"');
-        }
-
-        match self {
-            Any::Null => buf.push_str("null"),
-            Any::Bool(value) => write!(buf, "{}", value).unwrap(),
-            Any::Number(value) => write!(buf, "{}", value).unwrap(),
-            Any::BigInt(value) => write!(buf, "{}", value).unwrap(),
-            Any::String(value) => quoted(buf, value.as_ref()),
-            Any::Array(values) => {
-                buf.push('[');
-                let mut i = values.iter();
-                if let Some(value) = i.next() {
-                    value.to_json(buf);
-                }
-                while let Some(value) = i.next() {
-                    buf.push(',');
-                    value.to_json(buf);
-                }
-                buf.push(']');
-            }
-            Any::Map(entries) => {
-                buf.push('{');
-                let mut i = entries.iter();
-                if let Some((key, value)) = i.next() {
-                    quoted(buf, key.as_str());
-                    buf.push(':');
-                    value.to_json(buf);
-                }
-                while let Some((key, value)) = i.next() {
-                    buf.push(',');
-                    quoted(buf, key.as_str());
-                    buf.push(':');
-                    value.to_json(buf);
-                }
-                buf.push('}');
-            }
-            other => panic!(
-                "Serialization of {} into JSON representation is not supported",
-                other
-            ),
-        }
-    }
-
-    #[cfg(not(feature = "lib0-serde"))]
-    pub fn from_json(src: &str) -> Result<Self, Error> {
-        use crate::json_parser::JsonParser;
-        let mut parser = JsonParser::new(src.chars());
-        Ok(parser.parse()?)
-    }
-
-    #[cfg(feature = "lib0-serde")]
     pub fn from_json(src: &str) -> Result<Self, Error> {
         Ok(serde_json::from_str(src)?)
     }
 
-    #[cfg(feature = "lib0-serde")]
     pub fn to_json(&self, buf: &mut String) {
         use serde::Serialize;
         use serde_json::Serializer;
 
         let buf = unsafe { buf.as_mut_vec() };
-        let mut cursor = std::io::Cursor::new(buf);
+        let cursor = std::io::Cursor::new(buf);
 
         let mut s = Serializer::new(cursor);
         self.serialize(&mut s).unwrap();

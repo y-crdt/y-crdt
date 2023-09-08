@@ -17,11 +17,6 @@ pub enum Error {
     #[error("`{0}`")]
     Other(String),
 
-    #[cfg(not(feature = "lib0-serde"))]
-    #[error("JSON parsing error: {0}")]
-    InvalidJSON(#[from] crate::json_parser::JsonParseError),
-
-    #[cfg(feature = "lib0-serde")]
     #[error("JSON parsing error: {0}")]
     InvalidJSON(#[from] serde_json::Error),
 }
