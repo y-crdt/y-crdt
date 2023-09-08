@@ -122,6 +122,17 @@ impl TryFrom<BlockPtr> for MapRef {
     }
 }
 
+impl TryFrom<Value> for MapRef {
+    type Error = Value;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::YMap(value) => Ok(value),
+            other => Err(other),
+        }
+    }
+}
+
 pub trait Map: AsRef<Branch> {
     /// Returns a number of entries stored within current map.
     fn len<T: ReadTxn>(&self, txn: &T) -> u32 {
@@ -431,8 +442,8 @@ mod test {
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encoder, EncoderV1};
     use crate::{
-        Array, ArrayPrelim, Doc, Map, MapPrelim, MapRef, Observable, StateVector, Text, Transact,
-        Update,
+        Array, ArrayPrelim, ArrayRef, Doc, Map, MapPrelim, MapRef, Observable, StateVector, Text,
+        Transact, Update,
     };
     use lib0::any;
     use lib0::any::Any;
@@ -961,7 +972,7 @@ mod test {
         let nested2 = nested
             .get(&nested.transact(), "array")
             .unwrap()
-            .to_yarray()
+            .cast::<ArrayRef>()
             .unwrap();
         nested2.insert(&mut doc.transact_mut(), 0, "content");
 

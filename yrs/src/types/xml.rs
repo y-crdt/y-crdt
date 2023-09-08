@@ -100,6 +100,19 @@ impl TryFrom<BranchPtr> for XmlNode {
     }
 }
 
+impl TryFrom<Value> for XmlNode {
+    type Error = Value;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::YXmlElement(n) => Ok(XmlNode::Element(n)),
+            Value::YXmlFragment(n) => Ok(XmlNode::Fragment(n)),
+            Value::YXmlText(n) => Ok(XmlNode::Text(n)),
+            other => Err(other),
+        }
+    }
+}
+
 /// XML element data type. It represents an XML node, which can contain key-value attributes
 /// (interpreted as strings) as well as other nested XML elements or rich text (represented by
 /// [XmlTextRef] type).
@@ -229,6 +242,17 @@ impl TryFrom<BlockPtr> for XmlElementRef {
             Ok(Self::from(branch))
         } else {
             Err(value)
+        }
+    }
+}
+
+impl TryFrom<Value> for XmlElementRef {
+    type Error = Value;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::YXmlElement(value) => Ok(value),
+            other => Err(other),
         }
     }
 }
@@ -465,6 +489,17 @@ impl TryFrom<BlockPtr> for XmlTextRef {
     }
 }
 
+impl TryFrom<Value> for XmlTextRef {
+    type Error = Value;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::YXmlText(value) => Ok(value),
+            other => Err(other),
+        }
+    }
+}
+
 /// A preliminary type that will be materialized into an [XmlTextRef] once it will be integrated
 /// into Yrs document.
 #[derive(Debug)]
@@ -585,6 +620,17 @@ impl TryFrom<BlockPtr> for XmlFragmentRef {
             Ok(Self::from(branch))
         } else {
             Err(value)
+        }
+    }
+}
+
+impl TryFrom<Value> for XmlFragmentRef {
+    type Error = Value;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::YXmlFragment(value) => Ok(value),
+            other => Err(other),
         }
     }
 }

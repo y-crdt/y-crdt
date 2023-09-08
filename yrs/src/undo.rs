@@ -645,8 +645,9 @@ mod test {
     use crate::undo::{Options, UndoManager};
     use crate::updates::decoder::Decode;
     use crate::{
-        Array, Doc, GetString, Map, MapPrelim, ReadTxn, StateVector, Text, TextPrelim, Transact,
-        Update, Xml, XmlElementPrelim, XmlElementRef, XmlFragment, XmlTextPrelim,
+        Array, Doc, GetString, Map, MapPrelim, MapRef, ReadTxn, StateVector, Text, TextPrelim,
+        TextRef, Transact, Update, Xml, XmlElementPrelim, XmlElementRef, XmlFragment,
+        XmlTextPrelim,
     };
     use lib0::any;
     use lib0::any::Any;
@@ -870,7 +871,11 @@ mod test {
 
         exchange_updates(&[&d1, &d2]);
 
-        let map2 = array2.get(&d2.transact(), 0).unwrap().to_ymap().unwrap();
+        let map2 = array2
+            .get(&d2.transact(), 0)
+            .unwrap()
+            .cast::<MapRef>()
+            .unwrap();
         map2.insert(&mut d2.transact_mut(), "b", 2);
         exchange_updates(&[&d1, &d2]);
 
@@ -1061,7 +1066,7 @@ mod test {
         let text = design
             .get(&doc.transact(), "text")
             .unwrap()
-            .to_ymap()
+            .cast::<MapRef>()
             .unwrap();
 
         {
@@ -1129,7 +1134,11 @@ mod test {
                 ("y".to_owned(), 0.into()),
             ])),
         );
-        let point = root.get(&doc.transact(), "a").unwrap().to_ymap().unwrap();
+        let point = root
+            .get(&doc.transact(), "a")
+            .unwrap()
+            .cast::<MapRef>()
+            .unwrap();
         mgr.reset();
 
         point.insert(&mut doc.transact_mut(), "x", 100);
@@ -1163,7 +1172,11 @@ mod test {
         assert_eq!(root.get(&doc.transact(), "a"), None);
 
         mgr.redo().unwrap(); // x=0, y=0
-        let point = root.get(&doc.transact(), "a").unwrap().to_ymap().unwrap();
+        let point = root
+            .get(&doc.transact(), "a")
+            .unwrap()
+            .cast::<MapRef>()
+            .unwrap();
 
         assert_eq!(actual, Any::from_json(r#"{"x":0,"y":0}"#).unwrap());
 
@@ -1423,7 +1436,7 @@ mod test {
 
         exchange_updates(&[&d1, &d2]);
         let diff = txt2.diff(&d1.transact(), YChange::identity);
-        let nested2 = diff[0].insert.clone().to_ytext().unwrap();
+        let nested2 = diff[0].insert.clone().cast::<TextRef>().unwrap();
         assert_eq!(
             nested2.get_string(&d2.transact()),
             "initial text".to_string()

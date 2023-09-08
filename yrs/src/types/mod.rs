@@ -23,7 +23,7 @@ use lib0::any;
 use lib0::any::Any;
 use lib0::error::Error;
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::convert::TryInto;
+use std::convert::{TryFrom, TryInto};
 use std::fmt::Formatter;
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
@@ -736,6 +736,14 @@ impl Default for Value {
 }
 
 impl Value {
+    #[inline]
+    pub fn cast<T>(self) -> Result<T, Self>
+    where
+        T: TryFrom<Self, Error = Self>,
+    {
+        T::try_from(self)
+    }
+
     /// Converts current value into stringified representation.
     pub fn to_string<T: ReadTxn>(self, txn: &T) -> String {
         match self {
@@ -749,74 +757,6 @@ impl Value {
             Value::YDoc(v) => v.to_string(),
         }
     }
-
-    pub fn to_ydoc(self) -> Option<Doc> {
-        if let Value::YDoc(doc) = self {
-            Some(doc)
-        } else {
-            None
-        }
-    }
-
-    pub fn to_ytext(self) -> Option<TextRef> {
-        if let Value::YText(array) = self {
-            Some(array)
-        } else {
-            None
-        }
-    }
-
-    pub fn to_yarray(self) -> Option<ArrayRef> {
-        if let Value::YArray(array) = self {
-            Some(array)
-        } else {
-            None
-        }
-    }
-
-    pub fn to_ymap(self) -> Option<MapRef> {
-        if let Value::YMap(map) = self {
-            Some(map)
-        } else {
-            None
-        }
-    }
-
-    pub fn to_yxml_elem(self) -> Option<XmlElementRef> {
-        if let Value::YXmlElement(xml) = self {
-            Some(xml)
-        } else {
-            None
-        }
-    }
-
-    pub fn to_yxml_fragment(self) -> Option<XmlFragmentRef> {
-        if let Value::YXmlFragment(xml) = self {
-            Some(xml)
-        } else {
-            None
-        }
-    }
-
-    pub fn to_yxml_text(self) -> Option<XmlTextRef> {
-        if let Value::YXmlText(xml) = self {
-            Some(xml)
-        } else {
-            None
-        }
-    }
-}
-
-impl TryInto<TextRef> for Value {
-    type Error = Self;
-
-    fn try_into(self) -> Result<TextRef, Self::Error> {
-        if let Value::YText(value) = self {
-            Ok(value)
-        } else {
-            Err(self)
-        }
-    }
 }
 
 impl<T> From<T> for Value
@@ -828,6 +768,37 @@ where
         Value::Any(any)
     }
 }
+
+//FIXME: what we would like to have is an automatic trait implementation of TryFrom<Value> for
+// any type that implements TryFrom<Any,Error=Any>, but this causes compiler error.
+macro_rules! impl_try_from {
+    ($t:ty) => {
+        impl TryFrom<Value> for $t {
+            type Error = Value;
+
+            fn try_from(value: Value) -> Result<Self, Self::Error> {
+                match value {
+                    Value::Any(any) => any.try_into().map_err(Value::Any),
+                    other => Err(other),
+                }
+            }
+        }
+    };
+}
+
+impl_try_from!(bool);
+impl_try_from!(f32);
+impl_try_from!(f64);
+impl_try_from!(i16);
+impl_try_from!(i32);
+impl_try_from!(u16);
+impl_try_from!(u32);
+impl_try_from!(i64);
+impl_try_from!(isize);
+impl_try_from!(String);
+impl_try_from!(Arc<str>);
+impl_try_from!(Vec<u8>);
+impl_try_from!(Arc<[u8]>);
 
 impl ToJson for Value {
     /// Converts current value into [Any] object equivalent that resembles enhanced JSON payload.

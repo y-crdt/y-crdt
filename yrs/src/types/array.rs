@@ -140,6 +140,17 @@ impl TryFrom<BlockPtr> for ArrayRef {
     }
 }
 
+impl TryFrom<Value> for ArrayRef {
+    type Error = Value;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::YArray(value) => Ok(value),
+            other => Err(other),
+        }
+    }
+}
+
 pub trait Array: AsRef<Branch> {
     /// Returns a number of elements stored in current array.
     fn len<T: ReadTxn>(&self, txn: &T) -> u32 {
@@ -518,7 +529,7 @@ mod test {
     use crate::types::map::MapPrelim;
     use crate::types::{Change, DeepObservable, Event, Path, PathSegment, ToJson, Value};
     use crate::{
-        Array, ArrayPrelim, Assoc, Doc, Map, Observable, StateVector, Transact, Update, ID,
+        Array, ArrayPrelim, Assoc, Doc, Map, MapRef, Observable, StateVector, Transact, Update, ID,
     };
     use lib0::any::Any;
     use rand::prelude::StdRng;
@@ -1194,7 +1205,7 @@ mod test {
 
         {
             let mut txn = doc.transact_mut();
-            let map = array.get(&txn, 0).unwrap().to_ymap().unwrap();
+            let map = array.get(&txn, 0).unwrap().cast::<MapRef>().unwrap();
             map.insert(&mut txn, "a", "a");
             array.insert(&mut txn, 0, 0);
         }
