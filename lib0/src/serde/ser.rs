@@ -49,7 +49,7 @@ struct AnySerializer;
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum AnySerializeError {
-    #[error("u64s cannot be represented as Any")]
+    #[error("integers above i64::MAX cannot be represented as Any")]
     UnrepresentableInt,
     #[error("Any only supports Strings as map keys")]
     MapKeyNotString,
