@@ -99,48 +99,45 @@ mod test {
 
     #[test]
     fn test_any_to_json_roundtrip() {
-        let any = Any::Map(Box::new(HashMap::from([
-            ("bool".into(), Any::Bool(true)),
-            ("int".into(), Any::BigInt(1)),
-            ("negativeInt".into(), Any::BigInt(-1)),
-            ("maxInt".into(), Any::BigInt(i64::MAX)),
-            ("minInt".into(), Any::BigInt(i64::MIN)),
-            ("realNumber".into(), Any::Number(-123.2387f64)),
-            ("maxNumber".into(), Any::Number(f64::MIN)),
-            ("minNumber".into(), Any::Number(f64::MAX)),
+        let any = Any::from(HashMap::from([
+            ("bool".into(), Any::from(true)),
+            ("int".into(), Any::from(1)),
+            ("negativeInt".into(), Any::from(-1)),
+            ("maxInt".into(), Any::from(i64::MAX)),
+            ("minInt".into(), Any::from(i64::MIN)),
+            ("realNumber".into(), Any::from(-123.2387f64)),
+            ("maxNumber".into(), Any::from(f64::MIN)),
+            ("minNumber".into(), Any::from(f64::MAX)),
             ("null".into(), Any::Null),
             (
                 "map".into(),
-                Any::Map(Box::new(HashMap::from([
-                    ("bool".into(), Any::Bool(true)),
-                    ("int".into(), Any::BigInt(1)),
-                    ("negativeInt".into(), Any::BigInt(-1)),
-                    ("maxInt".into(), Any::BigInt(i64::MAX)),
-                    ("minInt".into(), Any::BigInt(i64::MIN)),
-                    ("realNumber".into(), Any::Number(-123.2387f64)),
-                    ("maxNumber".into(), Any::Number(f64::MIN)),
-                    ("minNumber".into(), Any::Number(f64::MAX)),
+                Any::from(HashMap::from([
+                    ("bool".into(), Any::from(true)),
+                    ("int".into(), Any::from(1)),
+                    ("negativeInt".into(), Any::from(-1)),
+                    ("maxInt".into(), Any::from(i64::MAX)),
+                    ("minInt".into(), Any::from(i64::MIN)),
+                    ("realNumber".into(), Any::from(-123.2387f64)),
+                    ("maxNumber".into(), Any::from(f64::MIN)),
+                    ("minNumber".into(), Any::from(f64::MAX)),
                     ("null".into(), Any::Null),
-                ]))),
+                ])),
             ),
             (
                 "key6".into(),
-                Any::Array(
-                    vec![
-                        Any::Bool(true),
-                        Any::BigInt(1),
-                        Any::BigInt(-1),
-                        Any::BigInt(i64::MAX),
-                        Any::BigInt(i64::MIN),
-                        Any::Number(-123.2387f64),
-                        Any::Number(f64::MIN),
-                        Any::Number(f64::MAX),
-                        Any::Null,
-                    ]
-                    .into_boxed_slice(),
-                ),
+                Any::from(vec![
+                    Any::from(true),
+                    Any::from(1),
+                    Any::from(-1),
+                    Any::from(i64::MAX),
+                    Any::from(i64::MIN),
+                    Any::from(-123.2387f64),
+                    Any::from(f64::MIN),
+                    Any::from(f64::MAX),
+                    Any::Null,
+                ]),
             ),
-        ])));
+        ]));
 
         assert_eq!(
             any,

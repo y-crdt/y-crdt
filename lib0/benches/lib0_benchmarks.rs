@@ -79,46 +79,45 @@ fn bench_encoding(c: &mut Criterion) {
     });
 }
 
-#[cfg(feature = "serde")]
 fn bench_serialization(c: &mut Criterion) {
     use lib0::any::Any;
     use std::collections::HashMap;
 
     let any = Any::from(HashMap::from([
-        ("bool".into(), Any::Bool(true)),
-        ("int".into(), Any::BigInt(1)),
-        ("negativeInt".into(), Any::BigInt(-1)),
-        ("maxInt".into(), Any::BigInt(i64::MAX)),
-        ("minInt".into(), Any::BigInt(i64::MIN)),
-        ("realNumber".into(), Any::Number(-123.2387f64)),
-        ("maxNumber".into(), Any::Number(f64::MIN)),
-        ("minNumber".into(), Any::Number(f64::MAX)),
+        ("bool".into(), Any::from(true)),
+        ("int".into(), Any::from(1)),
+        ("negativeInt".into(), Any::from(-1)),
+        ("maxInt".into(), Any::from(i64::MAX)),
+        ("minInt".into(), Any::from(i64::MIN)),
+        ("realNumber".into(), Any::from(-123.2387f64)),
+        ("maxNumber".into(), Any::from(f64::MIN)),
+        ("minNumber".into(), Any::from(f64::MAX)),
         ("null".into(), Any::Null),
         (
             "map".into(),
             Any::from(HashMap::from([
-                ("bool".into(), Any::Bool(true)),
-                ("int".into(), Any::BigInt(1)),
-                ("negativeInt".into(), Any::BigInt(-1)),
-                ("maxInt".into(), Any::BigInt(i64::MAX)),
-                ("minInt".into(), Any::BigInt(i64::MIN)),
-                ("realNumber".into(), Any::Number(-123.2387f64)),
-                ("maxNumber".into(), Any::Number(f64::MIN)),
-                ("minNumber".into(), Any::Number(f64::MAX)),
+                ("bool".into(), Any::from(true)),
+                ("int".into(), Any::from(1)),
+                ("negativeInt".into(), Any::from(-1)),
+                ("maxInt".into(), Any::from(i64::MAX)),
+                ("minInt".into(), Any::from(i64::MIN)),
+                ("realNumber".into(), Any::from(-123.2387f64)),
+                ("maxNumber".into(), Any::from(f64::MIN)),
+                ("minNumber".into(), Any::from(f64::MAX)),
                 ("null".into(), Any::Null),
             ])),
         ),
         (
             "key6".into(),
             Any::from(vec![
-                Any::Bool(true),
-                Any::BigInt(1),
-                Any::BigInt(-1),
-                Any::BigInt(i64::MAX),
-                Any::BigInt(i64::MIN),
-                Any::Number(-123.2387f64),
-                Any::Number(f64::MIN),
-                Any::Number(f64::MAX),
+                Any::from(true),
+                Any::from(1),
+                Any::from(-1),
+                Any::from(i64::MAX),
+                Any::from(i64::MIN),
+                Any::from(-123.2387f64),
+                Any::from(f64::MIN),
+                Any::from(f64::MAX),
                 Any::Null,
             ]),
         ),
@@ -174,8 +173,5 @@ fn bench_serialization(c: &mut Criterion) {
     custom_group.finish();
 }
 
-#[cfg(feature = "lib0-serde")]
 criterion_group!(benches, bench_encoding, bench_serialization);
-#[cfg(not(feature = "lib0-serde"))]
-criterion_group!(benches, bench_encoding);
 criterion_main!(benches);
