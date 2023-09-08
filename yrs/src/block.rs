@@ -729,7 +729,7 @@ impl TryFrom<BlockPtr> for Any {
         if let Block::Item(item) = value.deref() {
             match &item.content {
                 ItemContent::Any(v) => Ok(v[0].clone()),
-                ItemContent::Embed(v) => Ok(*v.clone()),
+                ItemContent::Embed(v) => Ok(v.clone()),
                 ItemContent::Binary(v) => Ok(v.clone().into()),
                 ItemContent::JSON(v) => Ok(v[0].clone().into()),
                 ItemContent::String(v) => Ok(v.to_string().into()),
@@ -1688,7 +1688,7 @@ pub enum ItemContent {
     JSON(Vec<String>),
 
     /// A single embedded JSON-like primitive value.
-    Embed(Box<Any>),
+    Embed(Any),
 
     /// Formatting attribute entry. Format attributes are not considered countable and don't
     /// contribute to an overall length of a collection they are applied to.
@@ -1787,7 +1787,7 @@ impl ItemContent {
                     let chars = v.chars().skip(offset).take(buf.len());
                     let mut j = 0;
                     for c in chars {
-                        buf[j] = Value::Any(Any::String(c.to_string().into_boxed_str()));
+                        buf[j] = Value::Any(Any::from(c.to_string()));
                         j += 1;
                     }
                     j
@@ -1796,15 +1796,15 @@ impl ItemContent {
                     let mut i = offset;
                     let mut j = 0;
                     while i < elements.len() && j < buf.len() {
-                        let elem = &elements[i];
-                        buf[j] = Value::Any(Any::String(elem.clone().into_boxed_str()));
+                        let elem = elements[i].as_str();
+                        buf[j] = Value::Any(Any::from(elem));
                         i += 1;
                         j += 1;
                     }
                     j
                 }
                 ItemContent::Binary(v) => {
-                    buf[0] = Value::Any(Any::Buffer(v.clone().into_boxed_slice()));
+                    buf[0] = Value::Any(Any::from(v.deref()));
                     1
                 }
                 ItemContent::Doc(_, doc) => {
@@ -1817,7 +1817,7 @@ impl ItemContent {
                     1
                 }
                 ItemContent::Embed(v) => {
-                    buf[0] = Value::Any(*v.clone());
+                    buf[0] = Value::Any(v.clone());
                     1
                 }
                 ItemContent::Move(_) => 0,
@@ -1844,16 +1844,14 @@ impl ItemContent {
     pub fn get_first(&self) -> Option<Value> {
         match self {
             ItemContent::Any(v) => v.first().map(|a| Value::Any(a.clone())),
-            ItemContent::Binary(v) => Some(Value::Any(Any::Buffer(v.clone().into_boxed_slice()))),
+            ItemContent::Binary(v) => Some(Value::Any(Any::from(v.deref()))),
             ItemContent::Deleted(_) => None,
             ItemContent::Move(_) => None,
             ItemContent::Doc(_, v) => Some(Value::YDoc(v.clone())),
-            ItemContent::JSON(v) => v
-                .first()
-                .map(|v| Value::Any(Any::String(v.clone().into_boxed_str()))),
-            ItemContent::Embed(v) => Some(Value::Any(*v.clone())),
+            ItemContent::JSON(v) => v.first().map(|v| Value::Any(Any::from(v.deref()))),
+            ItemContent::Embed(v) => Some(Value::Any(v.clone())),
             ItemContent::Format(_, _) => None,
-            ItemContent::String(v) => Some(Value::Any(Any::String(v.clone().into()))),
+            ItemContent::String(v) => Some(Value::Any(Any::from(v.clone().as_str()))),
             ItemContent::Type(c) => Some(BranchPtr::from(c).into()),
         }
     }
@@ -1862,16 +1860,14 @@ impl ItemContent {
     pub fn get_last(&self) -> Option<Value> {
         match self {
             ItemContent::Any(v) => v.last().map(|a| Value::Any(a.clone())),
-            ItemContent::Binary(v) => Some(Value::Any(Any::Buffer(v.clone().into_boxed_slice()))),
+            ItemContent::Binary(v) => Some(Value::Any(Any::from(v.deref()))),
             ItemContent::Deleted(_) => None,
             ItemContent::Move(_) => None,
             ItemContent::Doc(_, v) => Some(Value::YDoc(v.clone())),
-            ItemContent::JSON(v) => v
-                .last()
-                .map(|v| Value::Any(Any::String(v.clone().into_boxed_str()))),
-            ItemContent::Embed(v) => Some(Value::Any(*v.clone())),
+            ItemContent::JSON(v) => v.last().map(|v| Value::Any(Any::from(v.as_str()))),
+            ItemContent::Embed(v) => Some(Value::Any(v.clone())),
             ItemContent::Format(_, _) => None,
-            ItemContent::String(v) => Some(Value::Any(Any::String(v.clone().into()))),
+            ItemContent::String(v) => Some(Value::Any(Any::from(v.as_str()))),
             ItemContent::Type(c) => Some(BranchPtr::from(c).into()),
         }
     }
@@ -1898,7 +1894,7 @@ impl ItemContent {
                 };
                 encoder.write_string(slice)
             }
-            ItemContent::Embed(s) => encoder.write_json(s.as_ref()),
+            ItemContent::Embed(s) => encoder.write_json(s),
             ItemContent::JSON(s) => {
                 encoder.write_len(end - start + 1);
                 for i in start..=end {
@@ -1928,7 +1924,7 @@ impl ItemContent {
             ItemContent::Deleted(len) => encoder.write_len(*len),
             ItemContent::Binary(buf) => encoder.write_buf(buf),
             ItemContent::String(s) => encoder.write_string(s.as_str()),
-            ItemContent::Embed(s) => encoder.write_json(s.as_ref()),
+            ItemContent::Embed(s) => encoder.write_json(s),
             ItemContent::JSON(s) => {
                 encoder.write_len(s.len() as u32);
                 for json in s.iter() {
@@ -2328,9 +2324,9 @@ where
 {
     type Return = T::Return;
 
-    fn into_content(mut self, txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
+    fn into_content(self, txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
         match self {
-            EmbedPrelim::Primitive(any) => (ItemContent::Embed(Box::new(any)), None),
+            EmbedPrelim::Primitive(any) => (ItemContent::Embed(any), None),
             EmbedPrelim::Shared(prelim) => {
                 let (branch, content) = prelim.into_content(txn);
                 let carrier = if let Some(carrier) = content {

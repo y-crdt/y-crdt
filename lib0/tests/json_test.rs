@@ -47,38 +47,29 @@ mod test {
 
     #[test]
     fn json_any_array() {
-        let expected = Any::Array(
-            vec![
-                Any::Number(-10.0),
-                Any::String("hello \\world".into()),
-                Any::Null,
-                Any::Bool(true),
-            ]
-            .into_boxed_slice(),
-        );
+        let expected = Any::from(vec![
+            Any::Number(-10.0),
+            Any::String("hello \\world".into()),
+            Any::Null,
+            Any::Bool(true),
+        ]);
         let actual = roundtrip(&expected);
         assert_eq!(actual, expected);
     }
 
     #[test]
     fn json_any_map() {
-        let expected = Any::Map(Box::new(HashMap::from([
+        let expected = Any::from(HashMap::from([
             ("a".to_string(), Any::Number(-10.2)),
             ("b".to_string(), Any::String("hello world".into())),
             ("c".to_string(), Any::Null),
             ("d".to_string(), Any::Bool(true)),
-            (
-                "e".to_string(),
-                Any::Array(vec![Any::String("abc".into())].into_boxed_slice()),
-            ),
+            ("e".to_string(), Any::from(vec![Any::String("abc".into())])),
             (
                 "f".to_string(),
-                Any::Map(Box::new(HashMap::from([(
-                    "fa".to_string(),
-                    Any::Number(1.5),
-                )]))),
+                Any::from(HashMap::from([("fa".to_string(), Any::Number(1.5))])),
             ),
-        ])));
+        ]));
         let actual = roundtrip(&expected);
         assert_eq!(actual, expected);
     }

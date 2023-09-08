@@ -529,7 +529,7 @@ impl ToJson for Doc {
         for (key, value) in txn.root_refs() {
             m.insert(key.to_string(), value.to_json(txn));
         }
-        Any::Map(Box::new(m))
+        Any::from(m)
     }
 }
 
@@ -609,7 +609,7 @@ impl Options {
         m.insert("encoding".to_owned(), Any::BigInt(encoding));
         m.insert("autoLoad".to_owned(), self.auto_load.into());
         m.insert("shouldLoad".to_owned(), self.should_load.into());
-        Any::Map(Box::new(m))
+        Any::from(m)
     }
 }
 

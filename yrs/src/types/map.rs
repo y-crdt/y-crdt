@@ -94,7 +94,7 @@ impl ToJson for MapRef {
                 }
             }
         }
-        Any::Map(Box::new(res))
+        Any::from(res)
     }
 }
 

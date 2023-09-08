@@ -206,14 +206,14 @@ macro_rules! any_internal {
     };
 
     ({}) => {
-        $crate::any::Any::Map(std::boxed::Box::new(std::collections::HashMap::new()))
+        $crate::any::Any::Map(std::sync::Arc::new(std::collections::HashMap::new()))
     };
 
     ({ $($tt:tt)+ }) => {
         $crate::any::Any::Map({
-            let mut object = std::boxed::Box::new(std::collections::HashMap::new());
+            let mut object = std::collections::HashMap::new();
             any_internal!(@object object () ($($tt)+) ($($tt)+));
-            object
+            std::sync::Arc::new(object)
         })
     };
 
@@ -228,7 +228,7 @@ macro_rules! any_internal {
 #[doc(hidden)]
 macro_rules! any_internal_array {
     ($($content:tt)*) => {
-        std::boxed::Box::from([$($content)*])
+        std::sync::Arc::from([$($content)*])
     };
 }
 

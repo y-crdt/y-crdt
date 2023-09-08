@@ -1082,8 +1082,8 @@ impl TextEvent {
                         let value = if let Some(str) = self.insert.take() {
                             str
                         } else {
-                            let value = self.insert_string.take().unwrap().into_boxed_str();
-                            Any::String(value).into()
+                            let value = self.insert_string.take().unwrap();
+                            Any::from(value).into()
                         };
                         let attrs = if self.current_attrs.is_empty() {
                             None

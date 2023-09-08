@@ -25,6 +25,7 @@ use std::char;
 use std::collections::HashMap;
 use std::fmt;
 use std::iter::Peekable;
+use std::sync::Arc;
 
 use crate::any::Any;
 
@@ -149,13 +150,13 @@ impl<I: Iterator<Item = char>> JsonParser<I> {
 
         if self.peek()? == '}' {
             self.consume().unwrap();
-            return Ok(Any::Map(Box::new(HashMap::new())));
+            return Ok(Any::Map(Arc::default()));
         }
 
         let mut m = HashMap::new();
         loop {
             let key = match self.parse_any()? {
-                Any::String(s) => s.into_string(),
+                Any::String(s) => s.to_string(),
                 v => return self.err(format!("Key of object must be string but found {:?}", v)),
             };
 
@@ -171,7 +172,7 @@ impl<I: Iterator<Item = char>> JsonParser<I> {
 
             match self.consume()? {
                 ',' => {}
-                '}' => return Ok(Any::Map(Box::new(m))),
+                '}' => return Ok(Any::Map(Arc::new(m))),
                 c => {
                     return self.err(format!(
                         "',' or '}}' is expected for object but actually found '{}'",
@@ -189,14 +190,14 @@ impl<I: Iterator<Item = char>> JsonParser<I> {
 
         if self.peek()? == ']' {
             self.consume().unwrap();
-            return Ok(Any::Array(Box::new([])));
+            return Ok(Any::Array(Arc::new([])));
         }
 
         let mut v = vec![self.parse_any()?];
         loop {
             match self.consume()? {
                 ',' => {}
-                ']' => return Ok(Any::Array(v.into_boxed_slice())),
+                ']' => return Ok(Any::Array(v.into())),
                 c => {
                     return self.err(format!(
                         "',' or ']' is expected for array but actually found '{}'",
@@ -260,7 +261,7 @@ impl<I: Iterator<Item = char>> JsonParser<I> {
                 },
                 '"' => {
                     self.push_utf16(&mut s, &mut utf16)?;
-                    return Ok(Any::String(s.into_boxed_str()));
+                    return Ok(Any::String(s.into()));
                 }
                 // Note: c.is_control() is not available here because JSON accepts 0x7f (DEL) in
                 // string literals but 0x7f is control character.
