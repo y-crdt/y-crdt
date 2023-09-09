@@ -8,8 +8,6 @@ use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::OptionExt;
 use crate::*;
-use lib0::any::Any;
-use lib0::error::Error;
 use smallstr::SmallString;
 use std::collections::HashSet;
 use std::convert::TryFrom;
@@ -18,6 +16,7 @@ use std::ops::{Deref, DerefMut};
 use std::panic;
 use std::ptr::NonNull;
 use std::sync::Arc;
+use crate::encoding::read::Error;
 
 /// Bit flag used to identify [Block::GC].
 pub const BLOCK_GC_REF_NUMBER: u8 = 0;

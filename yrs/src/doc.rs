@@ -6,14 +6,12 @@ use crate::types::{Branch, BranchPtr, ToJson, TypeRef, Value};
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::OptionExt;
-use crate::UndoManager;
+use crate::{Any};
 use crate::{
     uuid_v4, ArrayRef, MapRef, ReadTxn, SubscriptionId, TextRef, Uuid, WriteTxn, XmlElementRef,
     XmlFragmentRef, XmlTextRef,
 };
 use atomic_refcell::{AtomicRef, AtomicRefMut, BorrowError, BorrowMutError};
-use lib0::any::Any;
-use lib0::error::Error;
 use rand::Rng;
 use std::collections::HashMap;
 use std::convert::TryFrom;
@@ -21,6 +19,7 @@ use std::fmt::Formatter;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use thiserror::Error;
+use crate::encoding::read::Error;
 
 /// A Yrs document type. Documents are most important units of collaborative resources management.
 /// All shared collections live within a scope of their corresponding documents. All updates are
@@ -476,7 +475,7 @@ impl Doc {
         None
     }
 
-    pub(crate) fn ptr_eq(a: &Doc, b: &Doc) -> bool {
+    pub fn ptr_eq(a: &Doc, b: &Doc) -> bool {
         Arc::ptr_eq(&a.store.0, &b.store.0)
     }
 
@@ -708,7 +707,7 @@ pub trait Transact {
     /// dropping or committing it may subscription callbacks.
     ///
     /// An `origin` may be used to identify context of operations made (example updates performed
-    /// locally vs. incoming from remote replicas) and it's used i.e. by [UndoManager].
+    /// locally vs. incoming from remote replicas) and it's used i.e. by [`UndoManager`][crate::undo::UndoManager].
     ///
     /// # Errors
     ///
@@ -724,7 +723,7 @@ pub trait Transact {
     /// dropping or committing it may subscription callbacks.
     ///
     /// An `origin` may be used to identify context of operations made (example updates performed
-    /// locally vs. incoming from remote replicas) and it's used i.e. by [UndoManager].
+    /// locally vs. incoming from remote replicas) and it's used i.e. by [`UndoManager`][crate::undo::UndoManager].
     ///
     /// # Errors
     ///
@@ -903,13 +902,7 @@ mod test {
     use crate::update::Update;
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
-    use crate::{
-        Array, ArrayPrelim, ArrayRef, DeleteSet, Doc, GetString, Map, MapRef, Options, StateVector,
-        SubscriptionId, Text, TextRef, Transact, Uuid, XmlElementPrelim, XmlFragment,
-        XmlFragmentRef, XmlTextRef,
-    };
-    use lib0::any;
-    use lib0::any::Any;
+    use crate::{Any, any, Array, ArrayPrelim, ArrayRef, DeleteSet, Doc, GetString, Map, MapRef, Options, StateVector, SubscriptionId, Text, TextRef, Transact, Uuid, XmlElementPrelim, XmlFragment, XmlFragmentRef, XmlTextRef};
     use std::cell::{Cell, RefCell, RefMut};
     use std::collections::BTreeSet;
     use std::rc::Rc;

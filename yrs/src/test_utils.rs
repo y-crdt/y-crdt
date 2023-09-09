@@ -3,13 +3,13 @@ use crate::transaction::ReadTxn;
 use crate::updates::decoder::{Decode, Decoder, DecoderV1};
 use crate::updates::encoder::{Encode, Encoder, EncoderV1};
 use crate::{Doc, StateVector, Transact, Update};
-use lib0::decoding::{Cursor, Read};
 use rand::distributions::Alphanumeric;
 use rand::prelude::{SliceRandom, StdRng};
 use rand::{random, Rng, RngCore, SeedableRng};
 use std::cell::{RefCell, RefMut};
 use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
+use crate::encoding::read::{Cursor, Read};
 
 pub const EXCHANGE_UPDATES_ORIGIN: &str = "exchange_updates";
 

@@ -30,9 +30,6 @@ jobs:
       - name: build default
         run: cargo build --verbose --release
 
-      #- name: build --feature lib0-serde
-      #  run: cargo build --verbose --features lib0-serde
-
   test-linux:
     runs-on: ubuntu-latest
     needs: build

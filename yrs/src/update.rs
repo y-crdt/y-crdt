@@ -11,12 +11,12 @@ use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::client_hasher::ClientHasher;
 use crate::{OffsetKind, StateVector, ID};
-use lib0::error::Error;
 use std::cmp::Ordering;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, VecDeque};
 use std::hash::BuildHasherDefault;
 use std::sync::Arc;
+use crate::encoding::read::Error;
 
 #[derive(Debug, Default, PartialEq)]
 pub(crate) struct UpdateBlocks {
@@ -1017,7 +1017,7 @@ mod test {
     use crate::updates::decoder::{Decode, DecoderV1};
     use crate::updates::encoder::Encode;
     use crate::{Doc, GetString, Options, Text, Transact, XmlFragment, XmlNode, ID};
-    use lib0::decoding::Cursor;
+    use crate::encoding::read::Cursor;
 
     #[test]
     fn update_decode() {

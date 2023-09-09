@@ -19,9 +19,6 @@ use crate::types::text::TextEvent;
 use crate::types::xml::{XmlElementRef, XmlEvent, XmlTextEvent, XmlTextRef};
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
-use lib0::any;
-use lib0::any::Any;
-use lib0::error::Error;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::convert::{TryFrom, TryInto};
 use std::fmt::Formatter;
@@ -29,6 +26,7 @@ use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 use std::ptr::NonNull;
 use std::sync::Arc;
+use crate::encoding::read::Error;
 
 /// Type ref identifier for an [ArrayRef] type.
 pub const TYPE_REFS_ARRAY: u8 = 0;

@@ -9,7 +9,6 @@ use crate::update::Update;
 use crate::utils::OptionExt;
 use crate::*;
 use atomic_refcell::{AtomicRef, AtomicRefMut};
-use lib0::error::Error;
 use smallvec::SmallVec;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Formatter;
@@ -18,6 +17,7 @@ use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::sync::Arc;
 use updates::encoder::*;
+use crate::error::Error;
 
 /// Trait defining read capabilities present in a transaction. Implemented by both lightweight
 /// [read-only](Transaction) and [read-write](TransactionMut) transactions.

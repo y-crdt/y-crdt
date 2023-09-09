@@ -1,5 +1,4 @@
 use js_sys::{Object, Reflect, Uint8Array};
-use lib0::any::Any;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::convert::{TryFrom, TryInto};
@@ -18,7 +17,7 @@ use yrs::types::text::{ChangeKind, Diff, TextEvent, YChange};
 use yrs::types::xml::{XmlEvent, XmlTextEvent};
 use yrs::types::{
     Attrs, Branch, BranchPtr, Change, DeepEventsSubscription, DeepObservable, Delta, EntryChange,
-    Event, Events, Path, PathSegment, ToJson, TypeRef, Value,
+    Event, Events, Path, PathSegment, ToJson, TypeRef, Value
 };
 use yrs::undo::{EventKind, UndoEventSubscription};
 use yrs::updates::decoder::{Decode, DecoderV1};
@@ -29,7 +28,7 @@ use yrs::{
     StickyIndex, Store, SubdocsEvent, SubdocsEventIter, SubdocsSubscription, Subscription, Text,
     TextRef, Transact, Transaction, TransactionCleanupEvent, TransactionCleanupSubscription,
     TransactionMut, UndoManager, Update, UpdateSubscription, Xml, XmlElementPrelim, XmlElementRef,
-    XmlFragment, XmlFragmentRef, XmlNode, XmlTextPrelim, XmlTextRef, ID,
+    XmlFragment, XmlFragmentRef, XmlNode, XmlTextPrelim, XmlTextRef, ID, Any
 };
 
 // When the `wee_alloc` feature is enabled, use `wee_alloc` as the global

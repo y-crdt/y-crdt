@@ -5,10 +5,10 @@ use crate::types::{Branch, BranchPtr};
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::{ReadTxn, WriteTxn, ID};
-use lib0::error::Error;
 use std::collections::HashSet;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
+use crate::encoding::read::Error;
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Move {

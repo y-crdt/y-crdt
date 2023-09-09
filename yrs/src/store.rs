@@ -13,11 +13,11 @@ use crate::{
     TransactionCleanupSubscription, TransactionMut, UpdateEvent, UpdateSubscription, Uuid, ID,
 };
 use atomic_refcell::{AtomicRef, AtomicRefCell, AtomicRefMut, BorrowError, BorrowMutError};
-use lib0::error::Error;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::ops::Deref;
 use std::sync::{Arc, Weak};
+use crate::error::Error;
 
 /// Store is a core element of a document. It contains all of the information, like block store
 /// map of root types, pending updates waiting to be applied once a missing update information
@@ -129,7 +129,7 @@ impl Store {
         encoder: &mut E,
     ) -> Result<(), Error> {
         if !self.options.skip_gc {
-            return Err(Error::Other("Cannot encode past state from the snapshot for a document with GC option flag set on".to_string()));
+            return Err(Error::Gc);
         }
         self.write_blocks_to(&snapshot.state_map, encoder);
         snapshot.delete_set.encode(encoder);

@@ -1,9 +1,8 @@
 use crate::block::ClientID;
 use crate::*;
-use lib0::any::Any;
-use lib0::encoding::Write;
-use lib0::number::Signed;
 use std::collections::HashMap;
+use crate::encoding::varint::Signed;
+use crate::encoding::write::Write;
 
 /// A trait that can be implemented by any other type in order to support lib0 encoding capability.
 pub trait Encode {

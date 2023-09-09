@@ -20,11 +20,6 @@ jobs:
           toolchain: stable
           override: true
 
-      - name: cargo publish lib0
-        run: cd ./lib0 && cargo publish --token ${CRATES_TOKEN}
-        env:
-          CRATES_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-
       - name: cargo publish yrs
         run: sleep 10 && cd ./yrs && cargo publish --token ${CRATES_TOKEN}
         env:

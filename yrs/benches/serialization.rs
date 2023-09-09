@@ -1,6 +1,7 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion, SamplingMode};
-use lib0::decoding::{Cursor, Read};
-use lib0::encoding::Write;
+use yrs::Any;
+use yrs::encoding::read::{Cursor, Read};
+use yrs::encoding::write::Write;
 
 const BENCHMARK_SIZE: u32 = 100000;
 
@@ -80,7 +81,6 @@ fn bench_encoding(c: &mut Criterion) {
 }
 
 fn bench_serialization(c: &mut Criterion) {
-    use lib0::any::Any;
     use std::collections::HashMap;
 
     let any = Any::from(HashMap::from([
@@ -173,5 +173,5 @@ fn bench_serialization(c: &mut Criterion) {
     custom_group.finish();
 }
 
-criterion_group!(benches, bench_encoding, bench_serialization);
-criterion_main!(benches);
+criterion_group!(serialization, bench_encoding, bench_serialization);
+criterion_main!(serialization);
