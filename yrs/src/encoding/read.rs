@@ -1,5 +1,20 @@
-use crate::error::Error;
-use crate::number::{Signed, SignedVarInt, VarInt};
+use thiserror::Error;
+use crate::encoding::varint::{Signed, SignedVarInt, VarInt};
+
+#[derive(Error, Debug)]
+pub enum Error {
+    #[error("decoded variable integer size was outside of expected bounds of {0} bits")]
+    VarIntSizeExceeded(u8),
+
+    #[error("while trying to read more data (expected: {0} bytes), an unexpected end of buffer was reached")]
+    EndOfBuffer(usize),
+
+    #[error("while reading, an unexpected value was found")]
+    UnexpectedValue,
+
+    #[error("JSON parsing error: {0}")]
+    InvalidJSON(#[from] serde_json::Error),
+}
 
 #[derive(Default)]
 pub struct Cursor<'a> {

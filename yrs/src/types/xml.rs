@@ -7,10 +7,7 @@ use crate::types::{
     EntryChange, EventHandler, MapRef, Observers, Path, ToJson, TypePtr, TypeRef, Value,
     TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT,
 };
-use crate::{
-    ArrayRef, GetString, IndexedSequence, Map, Observable, ReadTxn, StickyIndex, Text, TextRef, ID,
-};
-use lib0::any::Any;
+use crate::{ArrayRef, GetString, IndexedSequence, Map, Observable, ReadTxn, Text, TextRef, ID, Any};
 use std::borrow::Borrow;
 use std::cell::UnsafeCell;
 use std::collections::{HashMap, HashSet};
@@ -349,14 +346,13 @@ where
 /// any concurrent update incoming and applied from the remote peer may change the order of elements
 /// in current [XmlTextRef], invalidating numeric index. For such cases you can take advantage of fact
 /// that [XmlTextRef] implements [IndexedSequence::sticky_index] method that returns a
-/// [permanent index](StickyIndex) position that sticks to the same place even when concurrent
+/// [permanent index](crate::StickyIndex) position that sticks to the same place even when concurrent
 /// updates are being made.
 ///
 /// # Example
 ///
 /// ```rust
-/// use lib0::any::Any;
-/// use yrs::{Array, ArrayPrelim, Doc, GetString, Text, Transact};
+/// use yrs::{Any, Array, ArrayPrelim, Doc, GetString, Text, Transact};
 /// use yrs::types::Attrs;
 ///
 /// let doc = Doc::new();
@@ -1249,9 +1245,8 @@ mod test {
     use crate::updates::encoder::{Encoder, EncoderV1};
     use crate::{
         Doc, GetString, Observable, StateVector, Text, Transact, Update, XmlElementPrelim,
-        XmlTextPrelim,
+        XmlTextPrelim, Any
     };
-    use lib0::any::Any;
     use std::cell::RefCell;
     use std::collections::HashMap;
     use std::rc::Rc;

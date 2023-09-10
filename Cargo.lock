@@ -391,18 +391,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e2abad23fbc42b3700f2f279844dc832adb2b2eb069b2df918f455c4e18cc646"
 
 [[package]]
-name = "lib0"
-version = "0.16.10"
-dependencies = [
- "criterion",
- "proptest",
- "proptest-derive",
- "serde",
- "serde_json",
- "thiserror",
-]
-
-[[package]]
 name = "libc"
 version = "0.2.147"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -855,9 +843,9 @@ dependencies = [
 
 [[package]]
 name = "smallstr"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e922794d168678729ffc7e07182721a14219c65814e66e91b839a272fe5ae4f"
+checksum = "63b1aefdf380735ff8ded0b15f31aab05daf1f70216c01c02a12926badd1df9d"
 dependencies = [
  "smallvec",
 ]
@@ -1207,7 +1195,6 @@ checksum = "1a515f5799fe4961cb532f983ce2b23082366b898e52ffbce459c86f67c8378a"
 name = "yffi"
 version = "0.16.10"
 dependencies = [
- "lib0",
  "rand 0.7.3",
  "yrs",
 ]
@@ -1219,7 +1206,8 @@ dependencies = [
  "atomic_refcell",
  "criterion",
  "flate2",
- "lib0",
+ "proptest",
+ "proptest-derive",
  "rand 0.7.3",
  "ropey",
  "serde",
@@ -1235,7 +1223,6 @@ version = "0.16.10"
 dependencies = [
  "console_error_panic_hook",
  "js-sys",
- "lib0",
  "wasm-bindgen",
  "wasm-bindgen-test",
  "wee_alloc",

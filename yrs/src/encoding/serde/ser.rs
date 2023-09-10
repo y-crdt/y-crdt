@@ -456,7 +456,6 @@ impl SerializeStructVariant for AnyStructVariantSerializer {
 mod test {
     use super::*;
     use crate::any::Any;
-    use crate::serde::to_any;
     use serde::Serialize;
     use serde_json::json;
     use std::collections::HashMap;

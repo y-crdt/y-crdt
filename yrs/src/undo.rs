@@ -644,13 +644,7 @@ mod test {
     use crate::types::{Attrs, ToJson};
     use crate::undo::{Options, UndoManager};
     use crate::updates::decoder::Decode;
-    use crate::{
-        Array, Doc, GetString, Map, MapPrelim, MapRef, ReadTxn, StateVector, Text, TextPrelim,
-        TextRef, Transact, Update, Xml, XmlElementPrelim, XmlElementRef, XmlFragment,
-        XmlTextPrelim,
-    };
-    use lib0::any;
-    use lib0::any::Any;
+    use crate::{Array, Doc, GetString, Map, MapPrelim, MapRef, ReadTxn, StateVector, Text, TextPrelim, TextRef, Transact, Update, Xml, XmlElementPrelim, XmlElementRef, XmlFragment, XmlTextPrelim, Any, any};
     use std::cell::RefCell;
     use std::collections::HashMap;
     use std::convert::TryInto;

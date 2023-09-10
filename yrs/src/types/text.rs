@@ -6,7 +6,6 @@ use crate::types::{
 };
 use crate::utils::OptionExt;
 use crate::*;
-use lib0::any::Any;
 use std::borrow::Borrow;
 use std::cell::UnsafeCell;
 use std::collections::HashMap;
@@ -47,8 +46,7 @@ use std::ops::{Deref, DerefMut};
 /// # Example
 ///
 /// ```rust
-/// use lib0::any::Any;
-/// use yrs::{Array, ArrayPrelim, Doc, GetString, Text, Transact};
+/// use yrs::{Any, Array, ArrayPrelim, Doc, GetString, Text, Transact};
 /// use yrs::types::Attrs;
 /// use yrs::types::text::{Diff, YChange};
 ///
@@ -1300,12 +1298,7 @@ mod test {
     use crate::types::Value;
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
-    use crate::{
-        ArrayPrelim, Doc, GetString, Observable, StateVector, Text, Transact, Update, XmlTextRef,
-        ID,
-    };
-    use lib0::any;
-    use lib0::any::Any;
+    use crate::{ArrayPrelim, Doc, GetString, Observable, StateVector, Text, Transact, Update, XmlTextRef, ID, Any, any};
     use rand::prelude::StdRng;
     use rand::Rng;
     use std::cell::RefCell;

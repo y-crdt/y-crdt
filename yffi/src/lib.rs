@@ -1,5 +1,3 @@
-use lib0::any::Any;
-use lib0::error::Error;
 use std::collections::HashMap;
 use std::ffi::{c_char, c_void, CStr, CString};
 use std::mem::{forget, ManuallyDrop, MaybeUninit};
@@ -28,8 +26,9 @@ use yrs::{
     Options, Origin, ReadTxn, Snapshot, StateVector, StickyIndex, Store, SubdocsEvent,
     SubdocsEventIter, SubscriptionId, Text, TextRef, Transact, TransactionCleanupEvent,
     UndoManager, Update, Xml, XmlElementPrelim, XmlElementRef, XmlFragmentRef, XmlTextPrelim,
-    XmlTextRef,
+    XmlTextRef, Any
 };
+use yrs::encoding::read::Error;
 
 /// Flag used by `YInput` and `YOutput` to tag boolean values.
 pub const Y_JSON_BOOL: i8 = -8;
@@ -1151,11 +1150,9 @@ pub const ERR_CODE_OTHER: u8 = 6;
 
 fn err_code(e: Error) -> u8 {
     match e {
-        Error::IO(_) => ERR_CODE_IO,
         Error::VarIntSizeExceeded(_) => ERR_CODE_VAR_INT,
         Error::EndOfBuffer(_) => ERR_CODE_EOS,
         Error::UnexpectedValue => ERR_CODE_UNEXPECTED_VALUE,
-        Error::Other(_) => ERR_CODE_OTHER,
         Error::InvalidJSON(_) => ERR_CODE_INVALID_JSON,
     }
 }

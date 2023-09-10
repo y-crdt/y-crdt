@@ -104,8 +104,7 @@
 //! (eg. image binaries or [ArrayRef]s that we could interpret in example as nested tables).
 //!
 //! ```rust
-//! use lib0::any::Any;
-//! use yrs::{Array, ArrayPrelim, Doc, GetString, Text, Transact};
+//! use yrs::{Any, Array, ArrayPrelim, Doc, GetString, Text, Transact};
 //! use yrs::types::Attrs;
 //!
 //! let doc = Doc::new();
@@ -436,8 +435,10 @@ mod update;
 pub mod updates;
 mod utils;
 
+pub mod any;
 pub mod atomic;
 mod block_iter;
+pub mod encoding;
 mod moving;
 pub mod observer;
 #[cfg(test)]
@@ -445,11 +446,13 @@ mod test_utils;
 #[cfg(test)]
 mod tests;
 pub mod undo;
+mod error;
 
 pub use crate::alt::{
     diff_updates_v1, diff_updates_v2, encode_state_vector_from_update_v1,
     encode_state_vector_from_update_v2, merge_updates_v1, merge_updates_v2,
 };
+pub use crate::any::Any;
 pub use crate::block::ID;
 pub use crate::block_store::Snapshot;
 pub use crate::block_store::StateVector;
@@ -497,6 +500,7 @@ pub use crate::types::xml::XmlTextRef;
 pub use crate::types::DeepObservable;
 pub use crate::types::GetString;
 pub use crate::types::Observable;
+pub use crate::types::Value;
 pub use crate::undo::UndoManager;
 pub use crate::update::Update;
 use rand::RngCore;

@@ -6,8 +6,7 @@ use crate::types::{
     event_change_set, Branch, BranchPtr, Change, ChangeSet, EventHandler, Observers, Path, ToJson,
     TypeRef, Value,
 };
-use crate::{Assoc, IndexedSequence, Observable, ReadTxn, ID};
-use lib0::any::Any;
+use crate::{Assoc, IndexedSequence, Observable, ReadTxn, ID, Any};
 use std::borrow::Borrow;
 use std::cell::UnsafeCell;
 use std::collections::HashSet;
@@ -38,8 +37,7 @@ use std::sync::Arc;
 /// # Example
 ///
 /// ```rust
-/// use lib0::any;
-/// use yrs::{Array, Doc, Map, MapPrelim, Transact};
+/// use yrs::{Array, Doc, Map, MapPrelim, Transact, Any, any};
 /// use yrs::types::ToJson;
 ///
 /// let doc = Doc::new();
@@ -528,10 +526,7 @@ mod test {
     use crate::test_utils::{exchange_updates, run_scenario, RngExt};
     use crate::types::map::MapPrelim;
     use crate::types::{Change, DeepObservable, Event, Path, PathSegment, ToJson, Value};
-    use crate::{
-        Array, ArrayPrelim, Assoc, Doc, Map, MapRef, Observable, StateVector, Transact, Update, ID,
-    };
-    use lib0::any::Any;
+    use crate::{Array, ArrayPrelim, Assoc, Doc, Map, MapRef, Observable, StateVector, Transact, Update, ID, Any, any};
     use rand::prelude::StdRng;
     use rand::Rng;
     use std::cell::{Cell, RefCell};
@@ -1044,7 +1039,6 @@ mod test {
     use crate::transaction::ReadTxn;
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encoder, EncoderV1};
-    use lib0::any;
     use std::sync::atomic::{AtomicI64, Ordering};
     use std::time::Duration;
 

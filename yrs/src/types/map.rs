@@ -5,7 +5,6 @@ use crate::types::{
     TypeRef, Value,
 };
 use crate::*;
-use lib0::any::Any;
 use std::borrow::Borrow;
 use std::cell::UnsafeCell;
 use std::collections::{HashMap, HashSet};
@@ -25,9 +24,7 @@ use std::sync::Arc;
 /// # Example
 ///
 /// ```rust
-///
-/// use lib0::any;
-/// use yrs::{Doc, Map, MapPrelim, Transact};
+/// use yrs::{any, Doc, Map, MapPrelim, Transact};
 /// use yrs::types::ToJson;
 ///
 /// let doc = Doc::new();
@@ -441,12 +438,7 @@ mod test {
     use crate::types::{DeepObservable, EntryChange, Event, Path, PathSegment, ToJson, Value};
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encoder, EncoderV1};
-    use crate::{
-        Array, ArrayPrelim, ArrayRef, Doc, Map, MapPrelim, MapRef, Observable, StateVector, Text,
-        Transact, Update,
-    };
-    use lib0::any;
-    use lib0::any::Any;
+    use crate::{any, Any, Array, ArrayPrelim, ArrayRef, Doc, Map, MapPrelim, MapRef, Observable, StateVector, Text, Transact, Update};
     use rand::distributions::Alphanumeric;
     use rand::prelude::{SliceRandom, StdRng};
     use rand::Rng;
