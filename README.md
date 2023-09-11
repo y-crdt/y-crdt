@@ -9,8 +9,8 @@ Project organization:
 
 - **lib0** is a serialization library used for efficient (and fairly fast) data exchange.
 - **yrs** (read: *wires*) is a core Rust library, a foundation stone for other projects.
-- **yffi** (read: *wifi*) is a wrapper around *yrs* use to provide a native C foreign function interface. See also: [C header file](https://github.com/y-crdt/y-crdt/blob/main/tests-ffi/include/libyrs.h).
-- **ywasm** is a wrapper around *yrs* that targets Web Assembly and JavaScript API.
+- **yffi** (read: *wifi*) is a wrapper around *yrs* used to provide a native C foreign function interface. See also: [C header file](https://github.com/y-crdt/y-crdt/blob/main/tests-ffi/include/libyrs.h).
+- **ywasm** is a wrapper around *yrs* that targets WebAssembly and JavaScript API.
 
 Other projects using *yrs*:
 
@@ -47,7 +47,7 @@ Other projects using *yrs*:
     - [x] observe events and deltas
   - [x] XmlFragment
   - [x] XmlHook (*deprecated*)
-  - [x] Sub documents
+  - [x] Subdocuments
   - [x] Transaction origin
   - [x] Undo/redo manager
 - Encoding formats:
