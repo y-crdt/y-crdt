@@ -416,6 +416,8 @@ pub unsafe extern "C" fn ydoc_id(doc: *mut Doc) -> u64 {
 }
 
 /// Returns a unique document identifier of this [Doc] instance.
+///
+/// Generated string resources should be released using [ystring_destroy] function.
 #[no_mangle]
 pub unsafe extern "C" fn ydoc_guid(doc: *mut Doc) -> *mut c_char {
     let doc = doc.as_ref().unwrap();
