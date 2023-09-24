@@ -427,6 +427,8 @@ pub unsafe extern "C" fn ydoc_guid(doc: *mut Doc) -> *mut c_char {
 
 /// Returns a collection identifier of this [Doc] instance.
 /// If none was defined, a `NULL` will be returned.
+///
+/// Generated string resources should be released using [ystring_destroy] function.
 #[no_mangle]
 pub unsafe extern "C" fn ydoc_collection_id(doc: *mut Doc) -> *mut c_char {
     let doc = doc.as_ref().unwrap();
