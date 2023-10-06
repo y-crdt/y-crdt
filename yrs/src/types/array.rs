@@ -1,12 +1,13 @@
-use crate::block::{BlockPtr, EmbedPrelim, ItemContent, Prelim, Unused};
+use crate::block::{Block, BlockPtr, EmbedPrelim, ItemContent, Prelim, Unused};
 use crate::block_iter::BlockIter;
 use crate::moving::StickyIndex;
 use crate::transaction::TransactionMut;
+use crate::types::weak::{LinkSource, WeakPrelim};
 use crate::types::{
-    event_change_set, Branch, BranchPtr, Change, ChangeSet, EventHandler, Observers, Path, ToJson,
-    TypeRef, Value,
+    event_change_set, Branch, BranchPtr, Change, ChangeSet, EventHandler, Observers, Path,
+    SharedRef, ToJson, TypeRef, Value,
 };
-use crate::{Assoc, IndexedSequence, Observable, ReadTxn, ID, Any};
+use crate::{Any, Assoc, IndexedSequence, Observable, ReadTxn, ID};
 use std::borrow::Borrow;
 use std::cell::UnsafeCell;
 use std::collections::HashSet;
@@ -73,6 +74,7 @@ use std::sync::Arc;
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct ArrayRef(BranchPtr);
 
+impl SharedRef for ArrayRef {}
 impl Array for ArrayRef {}
 impl IndexedSequence for ArrayRef {}
 
@@ -149,7 +151,7 @@ impl TryFrom<Value> for ArrayRef {
     }
 }
 
-pub trait Array: AsRef<Branch> {
+pub trait Array: AsRef<Branch> + Sized {
     /// Returns a number of elements stored in current array.
     fn len<T: ReadTxn>(&self, txn: &T) -> u32 {
         self.as_ref().len()
@@ -232,6 +234,65 @@ pub trait Array: AsRef<Branch> {
             walker.delete(txn, len)
         } else {
             panic!("Index {} is outside of the range of an array", index);
+        }
+    }
+
+    /// Returns [WeakPrelim] to a given `index`, if it's in a boundaries of a current array.
+    fn quote<T: ReadTxn>(&self, txn: &T, mut index: u32, len: u32) -> Option<WeakPrelim<Self>> {
+        if len == 0 {
+            return None;
+        }
+        let mut start_id = None;
+        let mut end_id = None;
+        let mut curr = self.as_ref().start;
+        // first get the start of the quoted range...
+        while let Some(ptr) = curr {
+            if let Block::Item(item) = ptr.deref() {
+                if !item.is_deleted() && item.is_countable() {
+                    if index < item.len {
+                        if index > 0 {
+                            start_id = Some(ID::new(item.id.client, item.id.clock + index));
+                        }
+                        break;
+                    }
+                    index -= item.len;
+                }
+                curr = item.right;
+            } else {
+                break;
+            }
+        }
+        // ... then get the end of the quoted range
+        if start_id.is_none() {
+            start_id = curr.map(|ptr| ptr.id().clone());
+        }
+        end_id = start_id.clone();
+        let mut remaining = len - 1;
+        while let Some(ptr) = curr {
+            if let Block::Item(item) = ptr.deref() {
+                if !item.is_deleted() && item.is_countable() {
+                    if remaining > item.len {
+                        remaining -= item.len;
+                    } else {
+                        end_id = Some(ID::new(item.id.client, item.id.clock + index + remaining));
+                        break;
+                    }
+                }
+                curr = item.right;
+                index = 0;
+            } else {
+                break;
+            }
+        }
+        if end_id.is_none() {
+            end_id = curr.map(|ptr| ptr.last_id());
+        }
+        match (start_id, end_id) {
+            (Some(start), Some(end)) => {
+                let source = LinkSource::new(start, end);
+                Some(WeakPrelim::with_source(Arc::new(source)))
+            }
+            _ => None,
         }
     }
 
@@ -526,7 +587,10 @@ mod test {
     use crate::test_utils::{exchange_updates, run_scenario, RngExt};
     use crate::types::map::MapPrelim;
     use crate::types::{Change, DeepObservable, Event, Path, PathSegment, ToJson, Value};
-    use crate::{Array, ArrayPrelim, Assoc, Doc, Map, MapRef, Observable, StateVector, Transact, Update, ID, Any, any};
+    use crate::{
+        any, Any, Array, ArrayPrelim, Assoc, Doc, Map, MapRef, Observable, StateVector, Transact,
+        Update, ID,
+    };
     use rand::prelude::StdRng;
     use rand::Rng;
     use std::cell::{Cell, RefCell};

@@ -1812,3 +1812,71 @@ TEST_CASE("Relative position") {
     ytransaction_commit(txn);
     ydoc_destroy(doc);
 }
+
+TEST_CASE("Weak link references") {
+    YDoc *doc = ydoc_new_with_id(1);
+    Branch *txt = ytext(doc, "text");
+    Branch *arr = yarray(doc, "array");
+    Branch *map = ymap(doc, "map");
+    YTransaction *txn = ydoc_write_transaction(doc, 0, NULL);
+
+    // initialize text
+    ytext_insert(txt, txn, 0, "hello world!", NULL);
+
+    // create a text quotation and put it into map
+    YInput value = yinput_weak(ytext_quote(txt, txn, 2, 9));
+    ymap_insert(map, txn, "text-txt_link", &value);
+    Branch *txt_link = youtput_read_yweak(ymap_get(map, txn, "text-txt_link"));
+
+    char* actual = yweak_string(txt_link, txn);
+    REQUIRE(!strcmp(actual, "llo world"));
+    ystring_destroy(actual);
+
+    // add some text within quoted range and check if it was updated
+    ytext_insert(txt, txn, 5, " beautiful", NULL);
+    actual = yweak_string(txt_link, txn);
+    REQUIRE(!strcmp(actual, "llo beautiful world"));
+    ystring_destroy(actual);
+
+    // create transitive txt_link to another element
+    value = yinput_weak(ymap_link(map, txn, "text-txt_link"));
+    ymap_insert(map, txn, "transitive-txt_link", &value);
+    Branch *map_link = youtput_read_yweak(ymap_get(map, txn, "transitive-txt_link"));
+
+    // deref txt_link in "key2" leads to value stored under "key" which was our first txt_link
+    YOutput* out = yweak_deref(map_link, txn);
+    REQUIRE_EQ(youtput_read_yweak(out), txt_link);
+    youtput_destroy(out);
+
+    YInput items[] = {
+        yinput_long(1),
+        yinput_long(2),
+        yinput_long(3),
+        yinput_long(4),
+    };
+    yarray_insert_range(arr, txn, 0, items, 4);
+    value = yinput_weak(yarray_quote(arr, txn, 1, 2));
+    ymap_insert(map, txn, "array-txt_link", &value);
+    Branch *array_link = youtput_read_yweak(ymap_get(map, txn, "array-txt_link"));
+
+    YWeakIter* iter = yweak_iter(array_link, txn);
+
+    // iter to 1st quoted element
+    out = yweak_iter_next(iter);
+    REQUIRE_EQ(*youtput_read_long(out), 2);
+    youtput_destroy(out);
+
+    // iter to 2nd quoted element
+    out = yweak_iter_next(iter);
+    REQUIRE_EQ(*youtput_read_long(out), 3);
+    youtput_destroy(out);
+
+    // try iter to 3rd quoted element - end of quotatio
+    out = yweak_iter_next(iter);
+    REQUIRE(out == NULL);
+
+    yweak_iter_destroy(iter);
+
+    ytransaction_commit(txn);
+    ydoc_destroy(doc);
+}

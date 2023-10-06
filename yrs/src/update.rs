@@ -2,11 +2,12 @@ use crate::block::{
     Block, BlockPtr, BlockRange, BlockSlice, ClientID, Item, ItemContent, BLOCK_GC_REF_NUMBER,
     BLOCK_SKIP_REF_NUMBER, HAS_ORIGIN, HAS_PARENT_SUB, HAS_RIGHT_ORIGIN,
 };
+use crate::encoding::read::Error;
 use crate::id_set::DeleteSet;
 #[cfg(test)]
 use crate::store::Store;
 use crate::transaction::TransactionMut;
-use crate::types::TypePtr;
+use crate::types::{TypePtr, TypeRef};
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::client_hasher::ClientHasher;
@@ -16,7 +17,6 @@ use std::collections::hash_map::Entry;
 use std::collections::{HashMap, VecDeque};
 use std::hash::BuildHasherDefault;
 use std::sync::Arc;
-use crate::encoding::read::Error;
 
 #[derive(Debug, Default, PartialEq)]
 pub(crate) struct UpdateBlocks {
@@ -333,19 +333,34 @@ impl Update {
                     _ => {}
                 }
 
-                if let ItemContent::Move(m) = &item.content {
-                    if let Some(start) = m.start.id() {
-                        if start.clock >= local_sv.get(&start.client) {
-                            return Some(start.client);
+                match &item.content {
+                    ItemContent::Move(m) => {
+                        if let Some(start) = m.start.id() {
+                            if start.clock >= local_sv.get(&start.client) {
+                                return Some(start.client);
+                            }
+                        }
+                        if !m.is_collapsed() {
+                            if let Some(end) = m.end.id() {
+                                if end.clock >= local_sv.get(&end.client) {
+                                    return Some(end.client);
+                                }
+                            }
                         }
                     }
-                    if !m.is_collapsed() {
-                        if let Some(end) = m.end.id() {
-                            if end.clock >= local_sv.get(&end.client) {
+                    ItemContent::Type(branch) => {
+                        if let TypeRef::WeakLink(source) = &branch.type_ref {
+                            let start = &source.quote_start;
+                            let end = &source.quote_end;
+                            if start.clock >= local_sv.get(&start.client) {
+                                return Some(start.client);
+                            }
+                            if start != end && end.clock >= local_sv.get(&end.client) {
                                 return Some(end.client);
                             }
                         }
                     }
+                    _ => { /* do nothing */ }
                 }
             }
         }
@@ -1012,12 +1027,12 @@ impl Iterator for IntoBlocks {
 #[cfg(test)]
 mod test {
     use crate::block::{Item, ItemContent};
+    use crate::encoding::read::Cursor;
     use crate::types::TypePtr;
     use crate::update::{BlockCarrier, Update};
     use crate::updates::decoder::{Decode, DecoderV1};
     use crate::updates::encoder::Encode;
     use crate::{Doc, GetString, Options, Text, Transact, XmlFragment, XmlNode, ID};
-    use crate::encoding::read::Cursor;
 
     #[test]
     fn update_decode() {

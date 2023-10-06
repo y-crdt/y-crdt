@@ -1,6 +1,7 @@
 pub mod array;
 pub mod map;
 pub mod text;
+pub mod weak;
 pub mod xml;
 
 use crate::*;
@@ -11,11 +12,13 @@ pub use text::Text;
 pub use text::TextRef;
 
 use crate::block::{Block, BlockPtr, Item, ItemContent, ItemPosition, Prelim};
+use crate::encoding::read::Error;
 use crate::store::WeakStoreRef;
 use crate::transaction::{Origin, TransactionMut};
 use crate::types::array::{ArrayEvent, ArrayRef};
 use crate::types::map::MapEvent;
 use crate::types::text::TextEvent;
+use crate::types::weak::{LinkSource, WeakEvent, WeakRef};
 use crate::types::xml::{XmlElementRef, XmlEvent, XmlTextEvent, XmlTextRef};
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
@@ -26,7 +29,6 @@ use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 use std::ptr::NonNull;
 use std::sync::Arc;
-use crate::encoding::read::Error;
 
 /// Type ref identifier for an [ArrayRef] type.
 pub const TYPE_REFS_ARRAY: u8 = 0;
@@ -49,6 +51,9 @@ pub const TYPE_REFS_XML_HOOK: u8 = 5;
 /// Type ref identifier for a [XmlTextRef] type.
 pub const TYPE_REFS_XML_TEXT: u8 = 6;
 
+/// Type ref identifier for a [WeakRef] type.
+pub const TYPE_REFS_WEAK: u8 = 7;
+
 /// Type ref identifier for a [DocRef] type.
 pub const TYPE_REFS_DOC: u8 = 9;
 
@@ -67,6 +72,7 @@ pub enum TypeRef {
     XmlHook = TYPE_REFS_XML_HOOK,
     XmlText = TYPE_REFS_XML_TEXT,
     SubDoc = TYPE_REFS_DOC,
+    WeakLink(Arc<LinkSource>) = TYPE_REFS_WEAK,
     Undefined = TYPE_REFS_UNDEFINED,
 }
 
@@ -81,7 +87,25 @@ impl TypeRef {
             TypeRef::XmlHook => TYPE_REFS_XML_HOOK,
             TypeRef::XmlText => TYPE_REFS_XML_TEXT,
             TypeRef::SubDoc => TYPE_REFS_DOC,
+            TypeRef::WeakLink(_) => TYPE_REFS_WEAK,
             TypeRef::Undefined => TYPE_REFS_UNDEFINED,
+        }
+    }
+}
+
+impl std::fmt::Display for TypeRef {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TypeRef::Array => write!(f, "Array"),
+            TypeRef::Map => write!(f, "Map"),
+            TypeRef::Text => write!(f, "Text"),
+            TypeRef::XmlElement(name) => write!(f, "XmlElement({})", name),
+            TypeRef::XmlFragment => write!(f, "XmlFragment"),
+            TypeRef::XmlHook => write!(f, "XmlHook"),
+            TypeRef::XmlText => write!(f, "XmlText"),
+            TypeRef::SubDoc => write!(f, "Doc"),
+            TypeRef::WeakLink(_) => write!(f, "WeakRef"),
+            TypeRef::Undefined => write!(f, "(undefined)"),
         }
     }
 }
@@ -100,6 +124,20 @@ impl Encode for TypeRef {
             TypeRef::XmlHook => encoder.write_type_ref(TYPE_REFS_XML_HOOK),
             TypeRef::XmlText => encoder.write_type_ref(TYPE_REFS_XML_TEXT),
             TypeRef::SubDoc => encoder.write_type_ref(TYPE_REFS_DOC),
+            TypeRef::WeakLink(data) => {
+                encoder.write_type_ref(TYPE_REFS_WEAK);
+                let is_single = data.is_single();
+                let mut info = if is_single { 0u8 } else { 1u8 };
+                info |= 2; // this._quoteStart.assoc >= 0
+                info |= 0; // this._quoteEnd.assoc >= 0
+                encoder.write_u8(info);
+                encoder.write_var(data.quote_start.client);
+                encoder.write_var(data.quote_start.clock);
+                if !is_single {
+                    encoder.write_var(data.quote_end.client);
+                    encoder.write_var(data.quote_end.clock);
+                }
+            }
             TypeRef::Undefined => encoder.write_type_ref(TYPE_REFS_UNDEFINED),
         }
     }
@@ -117,6 +155,17 @@ impl Decode for TypeRef {
             TYPE_REFS_XML_HOOK => Ok(TypeRef::XmlHook),
             TYPE_REFS_XML_TEXT => Ok(TypeRef::XmlText),
             TYPE_REFS_DOC => Ok(TypeRef::SubDoc),
+            TYPE_REFS_WEAK => {
+                let flags = decoder.read_u8()?;
+                let is_single = flags & 1u8 == 0;
+                let start = ID::new(decoder.read_var()?, decoder.read_var()?);
+                let end = if is_single {
+                    start.clone()
+                } else {
+                    ID::new(decoder.read_var()?, decoder.read_var()?)
+                };
+                Ok(TypeRef::WeakLink(Arc::new(LinkSource::new(start, end))))
+            }
             TYPE_REFS_UNDEFINED => Ok(TypeRef::Undefined),
             _ => Err(Error::UnexpectedValue),
         }
@@ -163,6 +212,8 @@ pub trait GetString {
     fn get_string<T: ReadTxn>(&self, txn: &T) -> String;
 }
 
+pub trait SharedRef: From<BranchPtr> + AsRef<Branch> {}
+
 /// A wrapper around [Branch] cell, supplied with a bunch of convenience methods to operate on both
 /// map-like and array-like contents of a [Branch].
 #[repr(transparent)]
@@ -179,15 +230,16 @@ impl BranchPtr {
             Some(observers.publish(*self, txn, subs))
         } else {
             let type_ref = self.type_ref();
-            match type_ref {
-                TYPE_REFS_TEXT => Some(Event::Text(TextEvent::new(*self))),
-                TYPE_REFS_MAP => Some(Event::Map(MapEvent::new(*self, subs))),
-                TYPE_REFS_ARRAY => Some(Event::Array(ArrayEvent::new(*self))),
-                TYPE_REFS_XML_TEXT => Some(Event::XmlText(XmlTextEvent::new(*self, subs))),
-                TYPE_REFS_XML_ELEMENT | TYPE_REFS_XML_FRAGMENT => {
+            match self.type_ref {
+                TypeRef::Array => Some(Event::Array(ArrayEvent::new(*self))),
+                TypeRef::Map => Some(Event::Map(MapEvent::new(*self, subs))),
+                TypeRef::Text => Some(Event::Text(TextEvent::new(*self))),
+                TypeRef::XmlText => Some(Event::XmlText(XmlTextEvent::new(*self, subs))),
+                TypeRef::XmlElement(_) | TypeRef::XmlFragment => {
                     Some(Event::XmlFragment(XmlEvent::new(*self, subs)))
                 }
-                _ => None,
+                TypeRef::WeakLink(_) => Some(Event::Weak(WeakEvent::new(*self))),
+                TypeRef::XmlHook | TypeRef::SubDoc | TypeRef::Undefined => None,
             }
         }
     }
@@ -218,6 +270,12 @@ impl Into<Origin> for BranchPtr {
 impl AsRef<Branch> for BranchPtr {
     fn as_ref(&self) -> &Branch {
         self.deref()
+    }
+}
+
+impl AsMut<Branch> for BranchPtr {
+    fn as_mut(&mut self) -> &mut Branch {
+        self.deref_mut()
     }
 }
 
@@ -264,13 +322,14 @@ impl Into<Value> for BranchPtr {
     /// types [Value::Any] will never be returned from this method.
     fn into(self) -> Value {
         match self.type_ref() {
-            TYPE_REFS_ARRAY => Value::YArray(ArrayRef::from(self)),
-            TYPE_REFS_MAP => Value::YMap(MapRef::from(self)),
-            TYPE_REFS_TEXT => Value::YText(TextRef::from(self)),
-            TYPE_REFS_XML_ELEMENT => Value::YXmlElement(XmlElementRef::from(self)),
-            TYPE_REFS_XML_FRAGMENT => Value::YXmlFragment(XmlFragmentRef::from(self)),
-            TYPE_REFS_XML_TEXT => Value::YXmlText(XmlTextRef::from(self)),
-            //TYPE_REFS_XML_HOOK => Value::YXmlElement(XmlElement::from(self)),
+            TypeRef::Array => Value::YArray(ArrayRef::from(self)),
+            TypeRef::Map => Value::YMap(MapRef::from(self)),
+            TypeRef::Text => Value::YText(TextRef::from(self)),
+            TypeRef::XmlElement(_) => Value::YXmlElement(XmlElementRef::from(self)),
+            TypeRef::XmlFragment => Value::YXmlFragment(XmlFragmentRef::from(self)),
+            TypeRef::XmlText => Value::YXmlText(XmlTextRef::from(self)),
+            //TYPE_REFS_XML_HOOK => Value::YXmlHook(XmlHookRef::from(self)),
+            TypeRef::WeakLink(_) => Value::YWeakLink(WeakRef::from(self)),
             other => panic!("Cannot convert to value - unsupported type ref: {}", other),
         }
     }
@@ -281,7 +340,7 @@ impl Eq for BranchPtr {}
 #[cfg(not(test))]
 impl PartialEq for BranchPtr {
     fn eq(&self, other: &Self) -> bool {
-        NonNull::eq(&self.0, &other.0)
+        std::ptr::eq(self.0.as_ptr(), other.0.as_ptr())
     }
 }
 
@@ -383,8 +442,8 @@ impl Branch {
     }
 
     /// Returns an identifier of an underlying complex data type (eg. is it an Array or a Map).
-    pub fn type_ref(&self) -> u8 {
-        self.type_ref.kind() & 0b1111
+    pub fn type_ref(&self) -> &TypeRef {
+        &self.type_ref
     }
 
     pub(crate) fn repair_type_ref(&mut self, type_ref: TypeRef) {
@@ -725,6 +784,7 @@ pub enum Value {
     YXmlFragment(XmlFragmentRef),
     YXmlText(XmlTextRef),
     YDoc(Doc),
+    YWeakLink(WeakRef<BranchPtr>),
 }
 
 impl Default for Value {
@@ -753,6 +813,7 @@ impl Value {
             Value::YXmlFragment(v) => v.get_string(txn),
             Value::YXmlText(v) => v.get_string(txn),
             Value::YDoc(v) => v.to_string(),
+            Value::YWeakLink(v) => "WeakRef{}".to_string(),
         }
     }
 }
@@ -817,6 +878,7 @@ impl ToJson for Value {
             Value::YXmlText(v) => Any::from(v.get_string(txn)),
             Value::YXmlFragment(v) => Any::from(v.get_string(txn)),
             Value::YDoc(doc) => any!({"guid": doc.guid().as_ref()}),
+            Value::YWeakLink(_) => Any::Undefined,
         }
     }
 }
@@ -831,6 +893,7 @@ impl std::fmt::Display for Value {
             Value::YXmlElement(_) => write!(f, "XmlElementRef"),
             Value::YXmlFragment(_) => write!(f, "XmlFragmentRef"),
             Value::YXmlText(_) => write!(f, "XmlTextRef"),
+            Value::YWeakLink(_) => write!(f, "WeakRef"),
             Value::YDoc(v) => write!(f, "Doc(guid:{})", v.options().guid),
         }
     }
@@ -839,14 +902,14 @@ impl std::fmt::Display for Value {
 impl std::fmt::Display for Branch {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.type_ref() {
-            TYPE_REFS_ARRAY => {
+            TypeRef::Array => {
                 if let Some(ptr) = self.start {
                     write!(f, "YArray(start: {})", ptr)
                 } else {
                     write!(f, "YArray")
                 }
             }
-            TYPE_REFS_MAP => {
+            TypeRef::Map => {
                 write!(f, "YMap(")?;
                 let mut iter = self.map.iter();
                 if let Some((k, v)) = iter.next() {
@@ -857,22 +920,22 @@ impl std::fmt::Display for Branch {
                 }
                 write!(f, ")")
             }
-            TYPE_REFS_TEXT => {
+            TypeRef::Text => {
                 if let Some(ptr) = self.start.as_ref() {
                     write!(f, "YText(start: {})", ptr)
                 } else {
                     write!(f, "YText")
                 }
             }
-            TYPE_REFS_XML_FRAGMENT => {
+            TypeRef::XmlFragment => {
                 write!(f, "YXmlFragment")?;
                 if let Some(start) = self.start.as_ref() {
                     write!(f, "(start: {})", start)?;
                 }
                 Ok(())
             }
-            TYPE_REFS_XML_ELEMENT => {
-                write!(f, "YXmlElement")?;
+            TypeRef::XmlElement(name) => {
+                write!(f, "YXmlElement('{}',", name)?;
                 if let Some(start) = self.start.as_ref() {
                     write!(f, "(start: {})", start)?;
                 }
@@ -889,7 +952,7 @@ impl std::fmt::Display for Branch {
                 }
                 Ok(())
             }
-            TYPE_REFS_XML_HOOK => {
+            TypeRef::XmlHook => {
                 write!(f, "YXmlHook(")?;
                 let mut iter = self.map.iter();
                 if let Some((k, v)) = iter.next() {
@@ -900,17 +963,24 @@ impl std::fmt::Display for Branch {
                 }
                 write!(f, ")")
             }
-            TYPE_REFS_XML_TEXT => {
+            TypeRef::XmlText => {
                 if let Some(ptr) = self.start {
                     write!(f, "YXmlText(start: {})", ptr)
                 } else {
                     write!(f, "YXmlText")
                 }
             }
-            TYPE_REFS_DOC => {
+            TypeRef::SubDoc => {
                 write!(f, "Subdoc")
             }
-            _ => {
+            TypeRef::WeakLink(w) => {
+                if w.is_single() {
+                    write!(f, "WeakRef({})", w.quote_start)
+                } else {
+                    write!(f, "WeakRef({}..{})", w.quote_start, w.quote_end)
+                }
+            }
+            TypeRef::Undefined => {
                 write!(f, "UnknownRef")?;
                 if let Some(start) = self.start.as_ref() {
                     write!(f, "(start: {})", start)?;
@@ -1073,6 +1143,7 @@ pub(crate) enum Observers {
     Map(EventHandler<crate::types::map::MapEvent>),
     XmlFragment(EventHandler<crate::types::xml::XmlEvent>),
     XmlText(EventHandler<crate::types::xml::XmlTextEvent>),
+    Weak(EventHandler<crate::types::weak::WeakEvent>),
 }
 
 impl Observers {
@@ -1090,6 +1161,9 @@ impl Observers {
     }
     pub fn xml_text() -> Self {
         Observers::XmlText(Observer::default())
+    }
+    pub fn weak() -> Self {
+        Observers::Weak(Observer::default())
     }
 
     pub fn publish(
@@ -1133,6 +1207,13 @@ impl Observers {
                     fun(txn, &e);
                 }
                 Event::XmlText(e)
+            }
+            Observers::Weak(eh) => {
+                let e = WeakEvent::new(branch_ref);
+                for fun in eh.callbacks() {
+                    fun(txn, &e);
+                }
+                Event::Weak(e)
             }
         }
     }
@@ -1485,6 +1566,7 @@ pub enum Event {
     Map(MapEvent),
     XmlFragment(XmlEvent),
     XmlText(XmlTextEvent),
+    Weak(WeakEvent),
 }
 
 impl Event {
@@ -1495,6 +1577,7 @@ impl Event {
             Event::Map(e) => e.current_target = target,
             Event::XmlText(e) => e.current_target = target,
             Event::XmlFragment(e) => e.current_target = target,
+            Event::Weak(e) => e.current_target = target,
         }
     }
 
@@ -1507,6 +1590,7 @@ impl Event {
             Event::Map(e) => e.path(),
             Event::XmlText(e) => e.path(),
             Event::XmlFragment(e) => e.path(),
+            Event::Weak(e) => e.path(),
         }
     }
 
@@ -1522,6 +1606,7 @@ impl Event {
                 XmlNode::Fragment(n) => Value::YXmlFragment(n.clone()),
                 XmlNode::Text(n) => Value::YXmlText(n.clone()),
             },
+            Event::Weak(e) => Value::YWeakLink(e.as_target().clone()),
         }
     }
 }

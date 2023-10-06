@@ -1,13 +1,14 @@
 use crate::block::{Block, BlockPtr, EmbedPrelim, Item, ItemContent, ItemPosition, Prelim};
 use crate::block_iter::BlockIter;
 use crate::transaction::TransactionMut;
-use crate::types::text::{TextEvent, YChange};
+use crate::types::text::{diff_between, TextEvent, YChange};
 use crate::types::{
     event_change_set, event_keys, Branch, BranchPtr, Change, ChangeSet, Delta, Entries,
-    EntryChange, EventHandler, MapRef, Observers, Path, ToJson, TypePtr, TypeRef, Value,
-    TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT,
+    EntryChange, EventHandler, MapRef, Observers, Path, SharedRef, ToJson, TypePtr, TypeRef, Value,
 };
-use crate::{ArrayRef, GetString, IndexedSequence, Map, Observable, ReadTxn, Text, TextRef, ID, Any};
+use crate::{
+    Any, ArrayRef, GetString, IndexedSequence, Map, Observable, ReadTxn, Text, TextRef, ID,
+};
 use std::borrow::Borrow;
 use std::cell::UnsafeCell;
 use std::collections::{HashMap, HashSet};
@@ -127,6 +128,7 @@ impl TryFrom<Value> for XmlNode {
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct XmlElementRef(BranchPtr);
 
+impl SharedRef for XmlElementRef {}
 impl Xml for XmlElementRef {}
 impl XmlFragment for XmlElementRef {}
 impl IndexedSequence for XmlElementRef {}
@@ -387,6 +389,49 @@ where
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct XmlTextRef(BranchPtr);
 
+impl XmlTextRef {
+    pub(crate) fn get_string_fragment(
+        head: Option<BlockPtr>,
+        start: Option<&ID>,
+        end: Option<&ID>,
+    ) -> String {
+        let mut buf = String::new();
+        for d in diff_between(head, start, end, YChange::identity) {
+            let mut attrs = Vec::new();
+            if let Some(attributes) = d.attributes.as_ref() {
+                for (key, value) in attributes.iter() {
+                    attrs.push((key, value));
+                }
+                attrs.sort_by(|x, y| x.0.cmp(y.0))
+            }
+
+            // write attributes as xml opening tags
+            for (node, at) in attrs.iter() {
+                write!(buf, "<{}", node).unwrap();
+                if let Any::Map(at) = at {
+                    for (k, v) in at.iter() {
+                        write!(buf, " {}=\"{}\"", k, v).unwrap();
+                    }
+                }
+                buf.push('>');
+            }
+
+            // write string content of delta
+            if let Value::Any(any) = d.insert {
+                write!(buf, "{}", any).unwrap();
+            }
+
+            // write attributes as xml closing tags
+            attrs.reverse();
+            for (key, _) in attrs {
+                write!(buf, "</{}>", key).unwrap();
+            }
+        }
+        buf
+    }
+}
+
+impl SharedRef for XmlTextRef {}
 impl Xml for XmlTextRef {}
 impl Text for XmlTextRef {}
 impl IndexedSequence for XmlTextRef {}
@@ -419,39 +464,7 @@ impl Observable for XmlTextRef {
 
 impl GetString for XmlTextRef {
     fn get_string<T: ReadTxn>(&self, txn: &T) -> String {
-        let mut buf = String::new();
-        for d in self.diff(txn, YChange::identity) {
-            let mut attrs = Vec::new();
-            if let Some(attributes) = d.attributes.as_ref() {
-                for (key, value) in attributes.iter() {
-                    attrs.push((key, value));
-                }
-                attrs.sort_by(|x, y| x.0.cmp(y.0))
-            }
-
-            // write attributes as xml opening tags
-            for (node, at) in attrs.iter() {
-                write!(buf, "<{}", node).unwrap();
-                if let Any::Map(at) = at {
-                    for (k, v) in at.iter() {
-                        write!(buf, " {}=\"{}\"", k, v).unwrap();
-                    }
-                }
-                buf.push('>');
-            }
-
-            // write string content of delta
-            if let Value::Any(any) = d.insert {
-                write!(buf, "{}", any).unwrap();
-            }
-
-            // write attributes as xml closing tags
-            attrs.reverse();
-            for (key, _) in attrs {
-                write!(buf, "</{}>", key).unwrap();
-            }
-        }
-        buf
+        XmlTextRef::get_string_fragment(self.0.start, None, None)
     }
 }
 
@@ -539,6 +552,7 @@ impl<T: Borrow<str>> Into<EmbedPrelim<XmlTextPrelim<T>>> for XmlTextPrelim<T> {
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct XmlFragmentRef(BranchPtr);
 
+impl SharedRef for XmlFragmentRef {}
 impl XmlFragment for XmlFragmentRef {}
 impl IndexedSequence for XmlFragmentRef {}
 
@@ -987,11 +1001,11 @@ where
         fn try_descend(item: &Item) -> Option<&Block> {
             if let ItemContent::Type(t) = &item.content {
                 let inner = t.as_ref();
-                let type_ref = inner.type_ref();
-                if !item.is_deleted()
-                    && (type_ref == TYPE_REFS_XML_ELEMENT || type_ref == TYPE_REFS_XML_FRAGMENT)
-                {
-                    return inner.start.as_deref();
+                match inner.type_ref() {
+                    TypeRef::XmlElement(_) | TypeRef::XmlFragment if !item.is_deleted() => {
+                        return inner.start.as_deref();
+                    }
+                    _ => { /* do nothing */ }
                 }
             }
 
@@ -1244,8 +1258,8 @@ mod test {
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encoder, EncoderV1};
     use crate::{
-        Doc, GetString, Observable, StateVector, Text, Transact, Update, XmlElementPrelim,
-        XmlTextPrelim, Any
+        Any, Doc, GetString, Observable, StateVector, Text, Transact, Update, XmlElementPrelim,
+        XmlTextPrelim,
     };
     use std::cell::RefCell;
     use std::collections::HashMap;
