@@ -642,8 +642,8 @@ mod test {
     use crate::types::weak::{WeakPrelim, WeakRef};
     use crate::types::{Attrs, EntryChange, Event, ToJson, Value};
     use crate::{
-        Any, Array, ArrayRef, DeepObservable, Doc, GetString, Map, MapPrelim, MapRef, Observable,
-        Text, TextRef, Transact, XmlTextRef,
+        Any, Array, ArrayRef, Assoc, DeepObservable, Doc, GetString, Map, MapPrelim, MapRef,
+        Observable, Text, TextRef, Transact, XmlTextRef,
     };
     use std::cell::RefCell;
     use std::collections::HashMap;
@@ -1664,7 +1664,7 @@ mod test {
     }
 
     #[test]
-    fn test_quote_formatted_text() {
+    fn quote_formatted_text() {
         let doc = Doc::with_client_id(1);
         let txt1 = doc.get_or_insert_xml_text("text1");
         let txt2 = doc.get_or_insert_xml_text("text2");
@@ -1716,5 +1716,72 @@ mod test {
                 "<i>d</i>e".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn quote_moved_elements() {
+        let doc = Doc::with_client_id(1);
+        let array = doc.get_or_insert_array("values");
+        let quotes = doc.get_or_insert_array("quotes");
+        let mut txn = doc.transact_mut();
+
+        array.insert_range(&mut txn, 0, [1, 5, 6, 2, 3, 4, 7]);
+        array.move_range_to(&mut txn, 3, Assoc::Before, 5, Assoc::After, 1);
+
+        let values: Vec<_> = array.iter(&txn).map(|v| v.cast::<u32>().unwrap()).collect();
+        assert_eq!(values, vec![1, 2, 3, 4, 5, 6, 7]);
+
+        let mut assert_quote = |index: u32, len: u32, expected: Vec<u32>| {
+            let q = array.quote(&mut txn, index, len).unwrap();
+            let q = quotes.push_back(&mut txn, q);
+            let values: Vec<_> = q.unquote(&txn).map(|v| v.cast::<u32>().unwrap()).collect();
+            assert_eq!(values, expected)
+        };
+
+        assert_quote(0, 1, vec![1]);
+        assert_quote(0, 3, vec![1, 2, 3]);
+        assert_quote(1, 3, vec![2, 3, 4]);
+        assert_quote(2, 1, vec![3]);
+        assert_quote(2, 3, vec![3, 4, 5]);
+        assert_quote(3, 4, vec![3, 4, 5, 6, 7]);
+    }
+
+    #[test]
+    fn move_quoted_elements() {
+        let doc = Doc::with_client_id(1);
+        let array = doc.get_or_insert_array("values");
+        let quotes = doc.get_or_insert_array("quotes");
+        let mut txn = doc.transact_mut();
+
+        array.insert_range(&mut txn, 0, [1, 2, 3, 4, 5, 6, 7]);
+
+        let mut quote = |index: u32, len: u32| {
+            let q = array.quote(&mut txn, index, len).unwrap();
+            quotes.push_back(&mut txn, q)
+        };
+        let q1 = quote(0, 3); // [1,2,3]
+        let q2 = quote(1, 3); // [2,3,4]
+        let q3 = quote(2, 3); // [3,4,5]
+        let q4 = quote(3, 3); // [4,5,6]
+        let q5 = quote(4, 3); // [5,6,7]
+
+        array.move_range_to(&mut txn, 3, Assoc::Before, 5, Assoc::After, 1);
+        let values: Vec<_> = array.iter(&txn).map(|v| v.cast::<u32>().unwrap()).collect();
+        assert_eq!(values, vec![1, 4, 5, 6, 2, 3, 7]);
+
+        let actual: Vec<_> = q1.unquote(&txn).map(|v| v.cast::<u32>().unwrap()).collect();
+        assert_eq!(actual, vec![1, 4, 5, 6, 2, 3]);
+
+        let actual: Vec<_> = q2.unquote(&txn).map(|v| v.cast::<u32>().unwrap()).collect();
+        assert_eq!(actual, vec![2, 3]);
+
+        let actual: Vec<_> = q3.unquote(&txn).map(|v| v.cast::<u32>().unwrap()).collect();
+        assert_eq!(actual, vec![3]);
+
+        let actual: Vec<_> = q4.unquote(&txn).map(|v| v.cast::<u32>().unwrap()).collect();
+        assert_eq!(actual, vec![4, 5, 6]);
+
+        let actual: Vec<_> = q5.unquote(&txn).map(|v| v.cast::<u32>().unwrap()).collect();
+        assert_eq!(actual, vec![5, 6, 2, 3, 7]);
     }
 }
