@@ -440,6 +440,7 @@ pub mod atomic;
 mod block_iter;
 pub mod encoding;
 mod error;
+pub mod iter;
 mod moving;
 pub mod observer;
 #[cfg(test)]

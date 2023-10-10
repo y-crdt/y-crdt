@@ -1,5 +1,6 @@
 use crate::block::{Block, BlockPtr, ItemContent, Prelim, Unused};
 use crate::block_iter::BlockIter;
+use crate::encoding::read::Error;
 use crate::transaction::TransactionMut;
 use crate::types::{Branch, BranchPtr};
 use crate::updates::decoder::{Decode, Decoder};
@@ -8,7 +9,6 @@ use crate::{ReadTxn, WriteTxn, ID};
 use std::collections::HashSet;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
-use crate::encoding::read::Error;
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Move {
@@ -64,14 +64,14 @@ impl Move {
         if assoc == Assoc::After {
             let slice = store.blocks.get_item_clean_start(id)?;
             if slice.adjacent() {
-                Some(slice.as_ptr())
+                Some(slice.ptr)
             } else {
                 Some(store.materialize(slice))
             }
         } else {
             let slice = store.blocks.get_item_clean_end(id)?;
             let ptr = if slice.adjacent() {
-                slice.as_ptr()
+                slice.ptr
             } else {
                 store.materialize(slice)
             };
@@ -104,11 +104,11 @@ impl Move {
         if assoc == Assoc::After {
             let slice = txn.store().blocks.get_item_clean_start(id)?;
             debug_assert!(slice.adjacent()); //TODO: remove once confirmed that slice always fits block range
-            Some(slice.as_ptr())
+            Some(slice.ptr)
         } else {
             let slice = txn.store().blocks.get_item_clean_end(id)?;
             debug_assert!(slice.adjacent()); //TODO: remove once confirmed that slice always fits block range
-            if let Block::Item(item) = slice.as_ptr().deref() {
+            if let Block::Item(item) = slice.ptr.deref() {
                 item.right
             } else {
                 None

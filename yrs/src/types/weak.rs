@@ -1,5 +1,6 @@
 use crate::atomic::AtomicRef;
 use crate::block::{Block, BlockPtr, BlockSlice, EmbedPrelim, ItemContent, Prelim};
+use crate::block_iter::BlockIter;
 use crate::types::{Branch, BranchPtr, EventHandler, Observers, Path, SharedRef, TypeRef, Value};
 use crate::{
     Array, GetString, Map, Observable, OffsetKind, ReadTxn, Text, TextRef, TransactionMut,
@@ -278,11 +279,21 @@ where
     /// assert_eq!(link.try_deref_raw(&txn), Some("other".into()));
     /// ```
     pub fn try_deref_raw<T: ReadTxn>(&self, txn: &T) -> Option<Value> {
-        if let Some(source) = self.try_source() {
-            source.unquote(txn).next()
-        } else {
-            None
+        fn rightmost(mut curr: BlockPtr) -> BlockPtr {
+            while let Some(item) = curr.deref().as_item() {
+                if let Some(right) = item.right {
+                    curr = right;
+                } else {
+                    break;
+                }
+            }
+            curr
         }
+
+        let source = self.try_source()?;
+        let curr = rightmost(source.first_item.get_owned()?);
+        let item = curr.as_item()?;
+        item.content.get_first()
     }
 }
 
@@ -475,7 +486,12 @@ impl LinkSource {
                 current = Some(*ptr);
             }
         }
-        Unquote::new(txn, current, &self.quote_start, self.quote_end.clone())
+        if let Some(Block::Item(item)) = current.as_deref() {
+            let parent = *item.parent.as_branch().unwrap();
+            Unquote::new(txn, parent, self.quote_start, self.quote_end.clone())
+        } else {
+            Unquote::empty(txn)
+        }
     }
 
     /// If provided ref is pointing to map type which has been updated, we may want to invalidate
@@ -572,35 +588,39 @@ impl LinkSource {
 /// Iterator over non-deleted items, bounded by the given ID range.
 pub struct Unquote<'txn, T: ReadTxn> {
     txn: &'txn T,
+    from: ID,
     to: ID,
+    inner: Option<BlockIter>,
     current: Option<BlockPtr>,
     encoding: OffsetKind,
     offset: u32,
+    in_range: bool,
 }
 
 impl<'txn, T: ReadTxn> Unquote<'txn, T> {
-    fn new(txn: &'txn T, current: Option<BlockPtr>, from: &ID, to: ID) -> Self {
-        let mut offset = 0;
-        if let Some(ptr) = current {
-            if ptr.contains(&from) {
-                offset = from.clock - ptr.id().clock;
-            }
-        }
+    fn new(txn: &'txn T, parent: BranchPtr, from: ID, to: ID) -> Self {
+        let inner = BlockIter::new(parent);
         let encoding = txn.store().options.offset_kind;
         Unquote {
             txn,
+            from,
             to,
-            offset,
             encoding,
-            current,
+            inner: Some(inner),
+            offset: 0,
+            in_range: false,
+            current: None,
         }
     }
 
     fn empty(txn: &'txn T) -> Self {
         Unquote {
             txn,
+            from: ID::new(0, 0),
             to: ID::new(0, 0), // won't be used anyway
+            inner: None,
             current: None,
+            in_range: false,
             encoding: OffsetKind::Bytes,
             offset: 0,
         }
@@ -611,24 +631,32 @@ impl<'txn, T: ReadTxn> Iterator for Unquote<'txn, T> {
     type Item = Value;
 
     fn next(&mut self) -> Option<Self::Item> {
-        // move to a first non-deleted item
-        while let Some(Block::Item(item)) = self.current.as_deref() {
-            if !item.is_deleted() && self.offset < item.content_len(self.encoding) {
-                break;
-            }
-            self.current = item.right;
-            self.offset = 0;
-        }
-        let ptr = self.current?;
-        if let Block::Item(item) = ptr.deref() {
-            let mut result = [Value::default(); 1];
-            if item.content.read(self.offset as usize, &mut result) != 0 {
-                if item.id.client == self.to.client && item.id.clock + self.offset == self.to.clock
-                {
-                    self.current = None; // we reached the end of range
+        loop {
+            if let Some(Block::Item(item)) = self.current.as_deref() {
+                if item.contains(&self.to) && self.offset > self.to.clock - item.id.clock {
+                    self.in_range = false;
+                    return None;
                 }
-                self.offset += 1;
-                return Some(std::mem::take(&mut result[0]));
+                if item.contains(&self.from) {
+                    self.offset = self.from.clock - item.id.clock;
+                    self.in_range = true;
+                }
+
+                if self.in_range && !item.is_deleted() {
+                    let mut buf = [Value::default()];
+                    if item.content.read(self.offset as usize, &mut buf) == 1 {
+                        self.offset += 1;
+                        return Some(std::mem::take(&mut buf[0]));
+                    }
+                }
+            }
+
+            let iter = self.inner.as_mut()?;
+            if iter.try_forward(self.txn, 1) {
+                self.current = Some(iter.next_item()?);
+                self.offset = 0;
+            } else {
+                break;
             }
         }
         None
@@ -642,8 +670,8 @@ mod test {
     use crate::types::weak::{WeakPrelim, WeakRef};
     use crate::types::{Attrs, EntryChange, Event, ToJson, Value};
     use crate::{
-        Any, Array, ArrayRef, Assoc, DeepObservable, Doc, GetString, Map, MapPrelim, MapRef,
-        Observable, Text, TextRef, Transact, XmlTextRef,
+        Array, ArrayRef, Assoc, DeepObservable, Doc, GetString, Map, MapPrelim, MapRef, Observable,
+        ReadTxn, Text, TextRef, Transact, XmlTextRef,
     };
     use std::cell::RefCell;
     use std::collections::HashMap;
@@ -686,14 +714,14 @@ mod test {
             assert_eq!(a1.get(&txn, 0), Some(1.into()));
             assert_eq!(a1.get(&txn, 1), Some(2.into()));
             assert_eq!(a1.get(&txn, 2), Some(3.into()));
-            let actual: Vec<_> = a1
+            let mut u = a1
                 .get(&txn, 3)
                 .unwrap()
                 .cast::<WeakRef<ArrayRef>>()
                 .unwrap()
-                .unquote(&txn)
-                .collect();
-            assert_eq!(actual, vec![2.into()]);
+                .unquote(&txn);
+            assert_eq!(u.next(), Some(2.into()));
+            assert_eq!(u.next(), None);
         }
 
         let d2 = Doc::new();
@@ -810,16 +838,13 @@ mod test {
         // link is inserted into its own range
         let l1 = a1.insert(&mut d1.transact_mut(), 1, l1);
         let t1 = d1.transact();
-        let unquote: Vec<_> = l1.unquote(&t1).collect();
-        assert_eq!(
-            unquote,
-            vec![
-                1.into(),
-                Value::YWeakLink(l1.clone().into_inner()),
-                2.into(),
-                3.into()
-            ]
-        );
+        println!("{:#?}", t1.store());
+        let mut u = l1.unquote(&t1);
+        assert_eq!(u.next(), Some(1.into()));
+        assert_eq!(u.next(), Some(Value::YWeakLink(l1.clone().into_inner())));
+        assert_eq!(u.next(), Some(2.into()));
+        assert_eq!(u.next(), Some(3.into()));
+
         assert_eq!(a1.get(&t1, 0), Some(1.into()));
         assert_eq!(
             a1.get(&t1, 1),

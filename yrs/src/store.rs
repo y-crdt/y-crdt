@@ -274,17 +274,17 @@ impl Store {
         let id = slice.id().clone();
         let blocks = self.blocks.get_mut(&id.client).unwrap();
         let mut links = None;
-        if let Block::Item(item) = slice.as_ptr().deref() {
+        if let Block::Item(item) = slice.ptr.deref() {
             if item.info.is_linked() {
-                links = self.linked_by.get(&slice.as_ptr()).cloned();
+                links = self.linked_by.get(&slice.ptr).cloned();
             }
         }
         let mut index = None;
         let mut ptr = if slice.adjacent_left() {
-            slice.as_ptr()
+            slice.ptr
         } else {
             let mut i = blocks.find_pivot(id.clock).unwrap();
-            if let Some(new) = slice.as_ptr().splice(slice.start(), OffsetKind::Utf16) {
+            if let Some(new) = slice.ptr.splice(slice.start, OffsetKind::Utf16) {
                 if let Some(source) = links.clone() {
                     let dest = self.linked_by.entry(BlockPtr::from(&new)).or_default();
                     dest.extend(source);
@@ -295,7 +295,7 @@ impl Store {
                 index = Some(i);
             }
             let ptr = blocks.get(i);
-            slice = BlockSlice::new(ptr, 0, slice.end() - slice.start());
+            slice = BlockSlice::new(ptr, 0, slice.end - slice.start);
             ptr
         };
 

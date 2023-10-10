@@ -811,9 +811,9 @@ impl TryFrom<BlockPtr> for Any {
 /// [BlockSlice], this can be done with help of transaction (see: [Store::materialize]).
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub(crate) struct BlockSlice {
-    ptr: BlockPtr,
-    start: u32,
-    end: u32,
+    pub ptr: BlockPtr,
+    pub start: u32,
+    pub end: u32,
 }
 
 impl BlockSlice {
@@ -876,21 +876,6 @@ impl BlockSlice {
     /// by current [BlockSlice].
     pub fn len(&self) -> u32 {
         self.end - self.start + 1
-    }
-
-    /// Returns an underlying [BlockPtr].
-    pub fn as_ptr(&self) -> BlockPtr {
-        self.ptr
-    }
-
-    /// Returns an offset within contained [Block] marking the (inclusive) beginning of this slice.
-    pub fn start(&self) -> u32 {
-        self.start
-    }
-
-    /// Returns an offset within contained [Block] marking the (inclusive) end of this slice.
-    pub fn end(&self) -> u32 {
-        self.end
     }
 
     /// Checks if an underlying [Block] has been marked as deleted.
