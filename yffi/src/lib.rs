@@ -3002,9 +3002,7 @@ pub unsafe extern "C" fn yinput_long(integer: i64) -> YInput {
 /// and doesn't release any on its own, therefore its up to a caller to free resources once
 /// a structure is no longer needed.
 #[no_mangle]
-pub unsafe extern "C" fn yinput_string(str: *const c_char) -> YInput {
-    // println!("[1] String is {0}", CString::from_raw(str.cast_mut()).to_str().unwrap());
-
+pub unsafe extern "C" fn yinput_string(str: *const c_char) -> YInput {    
     YInput {
         tag: Y_JSON_STR,
         len: 1,
