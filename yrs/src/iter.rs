@@ -6,7 +6,7 @@ use std::ops::Deref;
 pub(crate) trait BlockIterator: Iterator<Item = BlockPtr> + Sized {
     #[inline]
     fn slices(self) -> BlockSlices<Self> {
-        BlockSlices(self)
+        BlockSlices::new(self)
     }
 
     #[inline]
@@ -26,18 +26,14 @@ pub(crate) trait BlockSliceIterator: Iterator<Item = BlockSlice> + Sized {
 
 impl<T> BlockSliceIterator for T where T: Iterator<Item = BlockSlice> + Sized {}
 
-pub trait IntoMoveIter {
-    fn move_iter<T>(self, txn: &T) -> MoveIter<T>
-    where
-        T: ReadTxn;
+pub trait IntoBlockIter {
+    fn to_iter(self) -> BlockIter;
 }
 
-impl IntoMoveIter for Option<BlockPtr> {
-    fn move_iter<T>(self, txn: &T) -> MoveIter<T>
-    where
-        T: ReadTxn,
-    {
-        MoveIter::new(txn, BlockIter(self))
+impl IntoBlockIter for Option<BlockPtr> {
+    #[inline]
+    fn to_iter(self) -> BlockIter {
+        BlockIter(self)
     }
 }
 
@@ -52,6 +48,10 @@ impl BlockIter {
     #[inline]
     fn new(ptr: Option<BlockPtr>) -> Self {
         BlockIter(ptr)
+    }
+
+    pub fn moved<T: ReadTxn>(self, txn: &T) -> MoveIter<T> {
+        MoveIter::new(txn, self)
     }
 }
 
@@ -344,6 +344,10 @@ where
                 let mut curr = self.iter.next();
                 while let Some(ptr) = curr {
                     match &self.start {
+                        None => {
+                            self.state = RangeIterState::InRange;
+                            break;
+                        }
                         Some(start) if ptr.contains(start) => {
                             self.state = RangeIterState::InRange;
                             start_offset = start.clock - ptr.id().clock;
@@ -361,7 +365,7 @@ where
                 self.state = RangeIterState::Closed;
                 end.clock - ptr.id().clock
             }
-            _ => ptr.len(),
+            _ => ptr.len() - 1,
         };
         Some(BlockSlice::new(ptr, start_offset, end_offset))
     }
@@ -380,6 +384,10 @@ where
                 while let Some(ptr) = curr {
                     end_offset = ptr.len();
                     match &self.end {
+                        None => {
+                            self.state = RangeIterState::InRange;
+                            break;
+                        }
                         Some(end) if ptr.contains(end) => {
                             self.state = RangeIterState::InRange;
                             end_offset = end.clock - ptr.id().clock;
@@ -415,7 +423,7 @@ enum RangeIterState {
 
 /// Iterator over particular, non-deleted values of a block sequence.
 #[derive(Debug)]
-pub struct Values<I> {
+pub(crate) struct Values<I> {
     iter: I,
     current: Option<BlockSlice>,
 }
@@ -461,9 +469,9 @@ where
 
 #[cfg(test)]
 mod test {
-    use crate::iter::{BlockIterator, BlockSliceIterator, IntoMoveIter};
+    use crate::iter::{BlockIterator, BlockSliceIterator, IntoBlockIter};
     use crate::test_utils::exchange_updates;
-    use crate::{Array, Assoc, Doc, Transact};
+    use crate::{Array, Assoc, Doc, Transact, ID};
 
     #[test]
     fn move_last_elem_iter() {
@@ -477,7 +485,7 @@ mod test {
         array.move_to(&mut txn, 2, 0);
 
         let start = array.as_ref().start;
-        let mut i = start.move_iter(&txn).slices().values();
+        let mut i = start.to_iter().moved(&txn).slices().values();
         assert_eq!(i.next(), Some(3.into()));
         assert_eq!(i.next(), Some(1.into()));
         assert_eq!(i.next(), Some(2.into()));
@@ -499,7 +507,7 @@ mod test {
         }
         {
             let txn = d1.transact();
-            let mut i = a1.as_ref().start.move_iter(&txn).slices().values();
+            let mut i = a1.as_ref().start.to_iter().moved(&txn).slices().values();
             assert_eq!(i.next(), Some(2.into()));
             assert_eq!(i.next(), Some(1.into()));
             assert_eq!(i.next(), Some(3.into()));
@@ -509,7 +517,7 @@ mod test {
         exchange_updates(&[&d1, &d2]);
         {
             let txn = d2.transact();
-            let mut i = a2.as_ref().start.move_iter(&txn).slices().values();
+            let mut i = a2.as_ref().start.to_iter().moved(&txn).slices().values();
             assert_eq!(i.next(), Some(2.into()));
             assert_eq!(i.next(), Some(1.into()));
             assert_eq!(i.next(), Some(3.into()));
@@ -520,7 +528,7 @@ mod test {
 
         {
             let txn = d1.transact();
-            let mut i = a1.as_ref().start.move_iter(&txn).slices().values();
+            let mut i = a1.as_ref().start.to_iter().moved(&txn).slices().values();
             assert_eq!(i.next(), Some(1.into()));
             assert_eq!(i.next(), Some(2.into()));
             assert_eq!(i.next(), Some(3.into()));
@@ -540,7 +548,7 @@ mod test {
         a1.move_to(&mut d1.transact_mut(), 1, 0);
         {
             let txn = d1.transact();
-            let mut i = a1.as_ref().start.move_iter(&txn).slices().values();
+            let mut i = a1.as_ref().start.to_iter().moved(&txn).slices().values();
             assert_eq!(i.next(), Some(2.into()));
             assert_eq!(i.next(), Some(1.into()));
             assert_eq!(i.next(), None);
@@ -550,7 +558,7 @@ mod test {
 
         {
             let txn = d2.transact();
-            let mut i = a2.as_ref().start.move_iter(&txn).slices().values();
+            let mut i = a2.as_ref().start.to_iter().moved(&txn).slices().values();
             assert_eq!(i.next(), Some(2.into()));
             assert_eq!(i.next(), Some(1.into()));
             assert_eq!(i.next(), None);
@@ -559,7 +567,7 @@ mod test {
         a1.move_to(&mut d1.transact_mut(), 0, 2);
         {
             let txn = d1.transact();
-            let mut i = a1.as_ref().start.move_iter(&txn).slices().values();
+            let mut i = a1.as_ref().start.to_iter().moved(&txn).slices().values();
             assert_eq!(i.next(), Some(1.into()));
             assert_eq!(i.next(), Some(2.into()));
             assert_eq!(i.next(), None);
@@ -580,7 +588,7 @@ mod test {
         a1.move_range_to(&mut d1.transact_mut(), 0, Assoc::After, 1, Assoc::Before, 3);
         {
             let txn = d1.transact();
-            let mut i = a1.as_ref().start.move_iter(&txn).slices().values();
+            let mut i = a1.as_ref().start.to_iter().moved(&txn).slices().values();
             assert_eq!(i.next(), Some(3.into()));
             assert_eq!(i.next(), Some(1.into()));
             assert_eq!(i.next(), Some(2.into()));
@@ -591,7 +599,7 @@ mod test {
         a2.move_range_to(&mut d2.transact_mut(), 2, Assoc::After, 3, Assoc::Before, 1);
         {
             let txn = d2.transact();
-            let mut i = a2.as_ref().start.move_iter(&txn).slices().values();
+            let mut i = a2.as_ref().start.to_iter().moved(&txn).slices().values();
             assert_eq!(i.next(), Some(1.into()));
             assert_eq!(i.next(), Some(3.into()));
             assert_eq!(i.next(), Some(4.into()));
@@ -603,10 +611,132 @@ mod test {
         exchange_updates(&[&d1, &d2]); // move cycles may not be detected within a single update exchange
 
         let t1 = d1.transact();
-        let v1: Vec<_> = a1.as_ref().start.move_iter(&t1).slices().values().collect();
+        let v1: Vec<_> = a1
+            .as_ref()
+            .start
+            .to_iter()
+            .moved(&t1)
+            .slices()
+            .values()
+            .collect();
         let t2 = d2.transact();
-        let v2: Vec<_> = a2.as_ref().start.move_iter(&t2).slices().values().collect();
+        let v2: Vec<_> = a2
+            .as_ref()
+            .start
+            .to_iter()
+            .moved(&t2)
+            .slices()
+            .values()
+            .collect();
 
         assert_eq!(v1, v2);
+    }
+
+    #[test]
+    fn range_bounded() {
+        let doc = Doc::with_client_id(1);
+        let array = doc.get_or_insert_array("array");
+
+        array.insert_range(&mut doc.transact_mut(), 0, [2, 3, 4]);
+        array.insert_range(&mut doc.transact_mut(), 0, [1]);
+        array.insert_range(&mut doc.transact_mut(), 4, [5, 6]);
+
+        let txn = doc.transact();
+        let res: Vec<_> = array
+            .as_ref()
+            .start
+            .to_iter()
+            .moved(&txn)
+            .within_range(Some(ID::new(1, 1)), Some(ID::new(1, 4)))
+            .values()
+            .collect();
+        assert_eq!(res, vec![3.into(), 4.into(), 5.into()])
+    }
+
+    #[test]
+    fn range_unbounded() {
+        let doc = Doc::with_client_id(1);
+        let array = doc.get_or_insert_array("array");
+
+        array.insert_range(&mut doc.transact_mut(), 0, [2, 3, 4]);
+        array.insert_range(&mut doc.transact_mut(), 0, [1]);
+        array.insert_range(&mut doc.transact_mut(), 4, [5, 6]);
+
+        let txn = doc.transact();
+        let res: Vec<_> = array
+            .as_ref()
+            .start
+            .to_iter()
+            .moved(&txn)
+            .within_range(None, None)
+            .values()
+            .collect();
+        assert_eq!(
+            res,
+            vec![1.into(), 2.into(), 3.into(), 4.into(), 5.into(), 6.into()]
+        )
+    }
+
+    #[test]
+    fn range_left_unbounded() {
+        let doc = Doc::with_client_id(1);
+        let array = doc.get_or_insert_array("array");
+
+        array.insert_range(&mut doc.transact_mut(), 0, [2, 3, 4]);
+        array.insert_range(&mut doc.transact_mut(), 0, [1]);
+        array.insert_range(&mut doc.transact_mut(), 4, [5, 6]);
+
+        let txn = doc.transact();
+        let res: Vec<_> = array
+            .as_ref()
+            .start
+            .to_iter()
+            .moved(&txn)
+            .within_range(None, Some(ID::new(1, 2)))
+            .values()
+            .collect();
+        assert_eq!(res, vec![1.into(), 2.into(), 3.into(), 4.into()])
+    }
+
+    #[test]
+    fn range_right_unbounded() {
+        let doc = Doc::with_client_id(1);
+        let array = doc.get_or_insert_array("array");
+
+        array.insert_range(&mut doc.transact_mut(), 0, [2, 3, 4]);
+        array.insert_range(&mut doc.transact_mut(), 0, [1]);
+        array.insert_range(&mut doc.transact_mut(), 4, [5, 6]);
+
+        let txn = doc.transact();
+        let res: Vec<_> = array
+            .as_ref()
+            .start
+            .to_iter()
+            .moved(&txn)
+            .within_range(Some(ID::new(1, 2)), None)
+            .values()
+            .collect();
+        assert_eq!(res, vec![4.into(), 5.into(), 6.into()])
+    }
+
+    #[test]
+    fn range_single_slice() {
+        let doc = Doc::with_client_id(1);
+        let array = doc.get_or_insert_array("array");
+
+        array.insert_range(&mut doc.transact_mut(), 0, [2, 3, 4]);
+        array.insert_range(&mut doc.transact_mut(), 0, [1]);
+        array.insert_range(&mut doc.transact_mut(), 4, [5, 6]);
+
+        let txn = doc.transact();
+        let res: Vec<_> = array
+            .as_ref()
+            .start
+            .to_iter()
+            .moved(&txn)
+            .within_range(Some(ID::new(1, 1)), Some(ID::new(1, 1)))
+            .values()
+            .collect();
+        assert_eq!(res, vec![3.into()])
     }
 }

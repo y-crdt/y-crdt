@@ -542,39 +542,30 @@ impl StickyIndex {
         }
     }
 
-    fn get_context<T: ReadTxn>(branch: BranchPtr, txn: &T) -> IndexScope {
-        if let Some(ptr) = branch.item {
-            IndexScope::Nested(*ptr.id())
-        } else {
-            let root = txn.store().get_type_key(branch).unwrap().clone();
-            IndexScope::Root(root)
-        }
-    }
-
-    pub fn at(
-        txn: &mut TransactionMut,
+    pub fn at<T: ReadTxn>(
+        txn: &T,
         branch: BranchPtr,
         mut index: u32,
         assoc: Assoc,
     ) -> Option<Self> {
         if assoc == Assoc::Before {
             if index == 0 {
-                let context = Self::get_context(branch, txn);
-                return Some(Self::new(context, assoc));
+                let context = IndexScope::from_branch(branch, txn);
+                return Some(StickyIndex::new(context, assoc));
             }
             index -= 1;
         }
 
         let mut walker = BlockIter::new(branch);
         if !walker.try_forward(txn, index) {
-            panic!("Block iter couldn't move forward");
+            return None;
         }
         if walker.finished() {
             if assoc == Assoc::Before {
                 let context = if let Some(ptr) = walker.next_item() {
                     IndexScope::Relative(ptr.last_id())
                 } else {
-                    Self::get_context(branch, txn)
+                    IndexScope::from_branch(branch, txn)
                 };
                 Some(Self::new(context, assoc))
             } else {
@@ -586,7 +577,7 @@ impl StickyIndex {
                 id.clock += walker.rel();
                 IndexScope::Relative(id)
             } else {
-                Self::get_context(branch, txn)
+                IndexScope::from_branch(branch, txn)
             };
             Some(Self::new(context, assoc))
         }
@@ -659,6 +650,17 @@ pub enum IndexScope {
     /// If a containing collection is a root-level y-type, which is empty, this case allows us to
     /// identify that nested type.
     Root(Arc<str>),
+}
+
+impl IndexScope {
+    pub fn from_branch<T: ReadTxn>(branch: BranchPtr, txn: &T) -> Self {
+        if let Some(ptr) = branch.item {
+            IndexScope::Nested(*ptr.id())
+        } else {
+            let root = txn.store().get_type_key(branch).unwrap().clone();
+            IndexScope::Root(root)
+        }
+    }
 }
 
 impl Encode for IndexScope {

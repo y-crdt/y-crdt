@@ -26,11 +26,12 @@ use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use yrs::{
     Any, Array, ArrayRef, Assoc, DeleteSet, DestroySubscription, Doc, GetString, IndexScope, Map,
-    MapRef, Observable, Offset, OffsetKind, Options, Origin, ReadTxn, Snapshot, StateVector,
-    StickyIndex, Store, SubdocsEvent, SubdocsEventIter, SubdocsSubscription, Subscription, Text,
-    TextRef, Transact, Transaction, TransactionCleanupEvent, TransactionCleanupSubscription,
-    TransactionMut, Update, UpdateSubscription, Xml, XmlElementPrelim, XmlElementRef, XmlFragment,
-    XmlFragmentRef, XmlNode, XmlTextPrelim, XmlTextRef, ID,
+    MapRef, Observable, Offset, OffsetKind, Options, Origin, Quotable, ReadTxn, Snapshot,
+    StateVector, StickyIndex, Store, SubdocsEvent, SubdocsEventIter, SubdocsSubscription,
+    Subscription, Text, TextRef, Transact, Transaction, TransactionCleanupEvent,
+    TransactionCleanupSubscription, TransactionMut, UndoManager, Update, UpdateSubscription, Xml,
+    XmlElementPrelim, XmlElementRef, XmlFragment, XmlFragmentRef, XmlNode, XmlTextPrelim,
+    XmlTextRef, ID,
 };
 
 // When the `wee_alloc` feature is enabled, use `wee_alloc` as the global
@@ -2127,10 +2128,17 @@ impl YText {
     ) -> Result<JsValue, JsValue> {
         match &*self.0.borrow() {
             SharedType::Integrated(v) => {
+                let end = index + length;
                 let value = if let Some(mut txn) = get_txn_mut(txn) {
-                    v.quote(txn.as_mut(), index, length)
+                    v.quote(txn.as_mut(), index, Assoc::After, end, Assoc::Before)
                 } else {
-                    v.quote(&mut v.transact_mut(), index, length)
+                    v.quote(
+                        &mut v.transact_mut(),
+                        index,
+                        Assoc::After,
+                        end,
+                        Assoc::Before,
+                    )
                 };
                 Ok(value.map(|v| YWeakLink::from(v).into()).unwrap_or_default())
             }
@@ -2499,10 +2507,11 @@ impl YArray {
         let length = length.unwrap_or(1);
         match &*self.0.borrow() {
             SharedType::Integrated(v) => {
+                let end = index + length;
                 let value = if let Some(txn) = get_txn(txn) {
-                    v.quote(&*txn, index, length)
+                    v.quote(&*txn, index, Assoc::After, end, Assoc::Before)
                 } else {
-                    v.quote(&v.transact(), index, length)
+                    v.quote(&v.transact(), index, Assoc::After, end, Assoc::Before)
                 };
                 Ok(value.map(|v| YWeakLink::from(v).into()).unwrap_or_default())
             }
@@ -3425,11 +3434,14 @@ impl YXmlText {
 
     #[wasm_bindgen(js_name = quote)]
     pub fn quote(&self, index: u32, length: u32, txn: &ImplicitTransaction) -> JsValue {
+        let end = index + length;
         let value = if let Some(mut txn) = get_txn_mut(txn) {
-            self.0.quote(txn.as_mut(), index, length)
+            self.0
+                .quote(txn.as_mut(), index, Assoc::After, end, Assoc::Before)
         } else {
             let mut txn = self.0.transact_mut();
-            self.0.quote(&mut txn, index, length)
+            self.0
+                .quote(&mut txn, index, Assoc::After, end, Assoc::Before)
         };
         value.map(|v| YWeakLink::from(v).into()).unwrap_or_default()
     }

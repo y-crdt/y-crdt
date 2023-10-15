@@ -53,6 +53,11 @@ typedef struct Transaction {} Transaction;
 typedef struct TransactionMut {} TransactionMut;
 
 /**
+ * Iterator structure used by weak link unquote.
+ */
+typedef struct YWeakIter {} YWeakIter;
+
+/**
  * Iterator structure used by shared array data type.
  */
 typedef struct YArrayIter {} YArrayIter;
@@ -79,7 +84,8 @@ typedef struct YXmlAttrIter {} YXmlAttrIter;
 typedef struct YXmlTreeWalker {} YXmlTreeWalker;
 
 typedef struct YUndoManager {} YUndoManager;
-
+typedef struct LinkSource {} LinkSource;
+typedef struct Unquote {} Unquote;
 typedef struct StickyIndex {} StickyIndex;
 
 
@@ -169,6 +175,11 @@ typedef struct StickyIndex {} StickyIndex;
  * Flag used by `YInput` and `YOutput` to tag content, which is an `YDoc` shared type.
  */
 #define Y_DOC 7
+
+/**
+ * Flag used by `YInput` and `YOutput` to tag content, which is an `YWeakLink` shared type.
+ */
+#define Y_WEAK_LINK 8
 
 /**
  * Flag used to mark a truthy boolean numbers.
@@ -546,6 +557,8 @@ typedef struct YMapInputData {
   struct YInput *values;
 } YMapInputData;
 
+typedef LinkSource Weak;
+
 typedef union YInputContent {
   uint8_t flag;
   double num;
@@ -555,6 +568,7 @@ typedef union YInputContent {
   struct YInput *values;
   struct YMapInputData map;
   YDoc *doc;
+  const Weak *weak;
 } YInputContent;
 
 /**
@@ -581,6 +595,7 @@ typedef struct YInput {
    * - [Y_ARRAY] for cells which contents should be used to initialize a `YArray` shared type.
    * - [Y_MAP] for cells which contents should be used to initialize a `YMap` shared type.
    * - [Y_DOC] for cells which contents should be used to nest a `YDoc` sub-document.
+   * - [Y_WEAK_LINK] for cells which contents should be used to nest a `YWeakLink` sub-document.
    */
   int8_t tag;
   /**
@@ -671,12 +686,22 @@ typedef struct YXmlTextEvent {
   const TransactionMut *txn;
 } YXmlTextEvent;
 
+/**
+ * Event pushed into callbacks registered with `yweak_observe` function. It contains
+ * all an event changes of the underlying transaction.
+ */
+typedef struct YWeakLinkEvent {
+  const void *inner;
+  const TransactionMut *txn;
+} YWeakLinkEvent;
+
 typedef union YEventContent {
   struct YTextEvent text;
   struct YMapEvent map;
   struct YArrayEvent array;
   struct YXmlEvent xml_elem;
   struct YXmlTextEvent xml_text;
+  struct YWeakLinkEvent weak;
 } YEventContent;
 
 typedef struct YEvent {
@@ -1936,6 +1961,12 @@ struct YInput yinput_yxmltext(char *str);
 struct YInput yinput_ydoc(YDoc *doc);
 
 /**
+ * Function constructor used to create a string `YInput` cell with weak reference to another
+ * element(s) living inside of the same document.
+ */
+struct YInput yinput_weak(const Weak *weak);
+
+/**
  * Attempts to read the value for a given `YOutput` pointer as a `YDocRef` reference to a nested
  * document.
  */
@@ -2050,6 +2081,15 @@ Branch *youtput_read_ytext(const struct YOutput *val);
 Branch *youtput_read_yxmltext(const struct YOutput *val);
 
 /**
+ * Attempts to read the value for a given `YOutput` pointer as an `YWeakRef`.
+ *
+ * Returns a null pointer in case when a value stored under current `YOutput` cell
+ * is not an `YWeakRef`. Underlying heap resources are released automatically as part of
+ * [youtput_destroy] destructor.
+ */
+Branch *youtput_read_yweak(const struct YOutput *val);
+
+/**
  * Subscribes a given callback function `cb` to changes made by this `YText` instance. Callbacks
  * are triggered whenever a `ytransaction_commit` is called.
  * Returns a subscription ID which can be then used to unsubscribe this callback by using
@@ -2106,6 +2146,12 @@ uint32_t yxmltext_observe(const Branch *xml,
 uint32_t yobserve_deep(Branch *ytype,
                        void *state,
                        void (*cb)(void*, uint32_t, const struct YEvent*));
+
+/**
+ * Releases a callback subscribed via `yweak_observe` function represented by passed
+ * observer parameter.
+ */
+void yweak_unobserve(const Branch *txt, uint32_t subscription_id);
 
 /**
  * Releases a callback subscribed via `ytext_observe` function represented by passed
@@ -2398,5 +2444,45 @@ void ysticky_index_read(const YStickyIndex *pos,
                         const YTransaction *txn,
                         Branch **out_branch,
                         uint32_t *out_index);
+
+void yweak_destroy(const Weak *weak);
+
+struct YOutput *yweak_deref(const Branch *map_link, const YTransaction *txn);
+
+YWeakIter *yweak_iter(const Branch *array_link, const YTransaction *txn);
+
+void yweak_iter_destroy(YWeakIter *iter);
+
+struct YOutput *yweak_iter_next(YWeakIter *iter);
+
+char *yweak_string(const Branch *text_link, const YTransaction *txn);
+
+char *yweak_xml_string(const Branch *xml_text_link, const YTransaction *txn);
+
+/**
+ * Subscribes a given callback function `cb` to changes made by this `YText` instance. Callbacks
+ * are triggered whenever a `ytransaction_commit` is called.
+ * Returns a subscription ID which can be then used to unsubscribe this callback by using
+ * `yweak_unobserve` function.
+ */
+uint32_t yweak_observe(const Branch *weak,
+                       void *state,
+                       void (*cb)(void*, const struct YWeakLinkEvent*));
+
+const Weak *ymap_link(const Branch *map, const YTransaction *txn, const char *key);
+
+const Weak *ytext_quote(const Branch *text,
+                        YTransaction *txn,
+                        uint32_t start_index,
+                        uint32_t end_index,
+                        int32_t start_assoc,
+                        int32_t end_assoc);
+
+const Weak *yarray_quote(const Branch *array,
+                         YTransaction *txn,
+                         uint32_t start,
+                         uint32_t end,
+                         int32_t start_assoc,
+                         int32_t end_assoc);
 
 #endif

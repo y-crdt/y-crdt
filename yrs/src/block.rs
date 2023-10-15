@@ -1330,8 +1330,6 @@ impl Into<u16> for ItemFlags {
     }
 }
 
-pub(crate) type LinkedBy = Box<HashSet<BranchPtr>>;
-
 /// An item is a basic unit of work in Yrs. It contains user data reinforced with all metadata
 /// required for a potential conflict resolution as well as extra fields used for joining blocks
 /// together as a part of indexed sequences or maps.

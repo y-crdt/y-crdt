@@ -489,6 +489,7 @@ pub use crate::types::map::MapRef;
 pub use crate::types::text::Text;
 pub use crate::types::text::TextPrelim;
 pub use crate::types::text::TextRef;
+pub use crate::types::weak::{Quotable, WeakRef};
 pub use crate::types::xml::Xml;
 pub use crate::types::xml::XmlElementPrelim;
 pub use crate::types::xml::XmlElementRef;

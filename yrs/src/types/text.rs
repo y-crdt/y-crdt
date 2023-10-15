@@ -1,9 +1,6 @@
-use crate::block::{
-    Block, BlockPtr, BlockSlice, EmbedPrelim, Item, ItemContent, ItemPosition, Prelim,
-};
+use crate::block::{Block, BlockPtr, EmbedPrelim, Item, ItemContent, ItemPosition, Prelim};
 use crate::block_store::Snapshot;
 use crate::transaction::TransactionMut;
-use crate::types::weak::WeakPrelim;
 use crate::types::{
     Attrs, Branch, BranchPtr, Delta, EventHandler, Observers, Path, SharedRef, TypeRef, Value,
 };
@@ -96,6 +93,7 @@ pub struct TextRef(BranchPtr);
 
 impl SharedRef for TextRef {}
 impl Text for TextRef {}
+impl Quotable for TextRef {}
 impl IndexedSequence for TextRef {}
 
 impl Into<XmlTextRef> for TextRef {
@@ -336,32 +334,6 @@ pub trait Text: AsRef<Branch> + Sized {
         } else {
             panic!("The type or the position doesn't exist!");
         }
-    }
-
-    /// Returns [WeakPrelim] to quote starting at a given `index`,
-    /// if it's in a boundaries of a current array.
-    fn quote(&self, txn: &mut TransactionMut, index: u32, len: u32) -> Option<WeakPrelim<Self>> {
-        let this = BranchPtr::from(self.as_ref());
-        let mut pos = find_position(this, txn, index)?;
-        if let Some(right) = pos.right.as_deref() {
-            let start_item = pos.right;
-            let end_idx = pos.index + len;
-            while pos.index < end_idx {
-                pos.forward();
-            }
-            if let Some(left) = pos.left {
-                let mut end_item = pos.left;
-                if pos.index > end_idx {
-                    let overflow = pos.index - end_idx;
-                    let slice = BlockSlice::new(left, 0, left.len() - overflow - 1);
-                    end_item = Some(txn.store.materialize(slice));
-                }
-                if let (Some(start), Some(end)) = (start_item, end_item) {
-                    return Some(WeakPrelim::new(start.id().clone(), end.last_id()));
-                }
-            }
-        }
-        None
     }
 
     /// Appends a given `chunk` of text at the end of a current text structure.

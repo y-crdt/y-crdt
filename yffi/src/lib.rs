@@ -18,17 +18,16 @@ use yrs::types::xml::{TreeWalker as NativeTreeWalker, XmlFragment};
 use yrs::types::xml::{XmlEvent, XmlTextEvent};
 use yrs::types::{
     Attrs, BranchPtr, Change, Delta, EntryChange, Event, PathSegment, TypeRef, Value,
-    TYPE_REFS_ARRAY, TYPE_REFS_DOC, TYPE_REFS_MAP, TYPE_REFS_TEXT, TYPE_REFS_XML_ELEMENT,
-    TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_TEXT,
 };
 use yrs::undo::EventKind;
 use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use yrs::{
     uuid_v4, Any, Array, ArrayRef, Assoc, DeleteSet, GetString, Map, MapRef, Observable,
-    OffsetKind, Options, Origin, ReadTxn, Snapshot, StateVector, StickyIndex, Store, SubdocsEvent,
-    SubdocsEventIter, SubscriptionId, Text, TextRef, Transact, TransactionCleanupEvent, Update,
-    Xml, XmlElementPrelim, XmlElementRef, XmlFragmentRef, XmlTextPrelim, XmlTextRef,
+    OffsetKind, Options, Origin, Quotable, ReadTxn, Snapshot, StateVector, StickyIndex, Store,
+    SubdocsEvent, SubdocsEventIter, SubscriptionId, Text, TextRef, Transact,
+    TransactionCleanupEvent, UndoManager, Update, Xml, XmlElementPrelim, XmlElementRef,
+    XmlFragmentRef, XmlTextPrelim, XmlTextRef,
 };
 
 /// Flag used by `YInput` and `YOutput` to tag boolean values.
@@ -5265,8 +5264,10 @@ pub unsafe extern "C" fn ymap_link(
 pub unsafe extern "C" fn ytext_quote(
     text: *const Branch,
     txn: *mut Transaction,
-    index: u32,
-    length: u32,
+    start_index: u32,
+    end_index: u32,
+    start_assoc: i32,
+    end_assoc: i32,
 ) -> *const Weak {
     assert!(!text.is_null());
     assert!(!txn.is_null());
@@ -5277,7 +5278,9 @@ pub unsafe extern "C" fn ytext_quote(
         .as_mut()
         .expect("provided transaction was not writeable");
 
-    if let Some(weak) = text.quote(txn, index, length) {
+    let start_assoc = int_to_assoc(start_assoc);
+    let end_assoc = int_to_assoc(end_assoc);
+    if let Some(weak) = text.quote(txn, start_index, start_assoc, end_index, end_assoc) {
         let source = weak.source();
         Arc::into_raw(source.clone())
     } else {
@@ -5289,8 +5292,10 @@ pub unsafe extern "C" fn ytext_quote(
 pub unsafe extern "C" fn yarray_quote(
     array: *const Branch,
     txn: *mut Transaction,
-    index: u32,
-    length: u32,
+    start: u32,
+    end: u32,
+    start_assoc: i32,
+    end_assoc: i32,
 ) -> *const Weak {
     assert!(!array.is_null());
     assert!(!txn.is_null());
@@ -5301,11 +5306,21 @@ pub unsafe extern "C" fn yarray_quote(
         .as_mut()
         .expect("provided transaction was not writeable");
 
-    if let Some(weak) = array.quote(txn, index, length) {
+    let start_assoc = int_to_assoc(start_assoc);
+    let end_assoc = int_to_assoc(end_assoc);
+    if let Some(weak) = array.quote(txn, start, start_assoc, end, end_assoc) {
         let source = weak.source();
         Arc::into_raw(source.clone())
     } else {
         null()
+    }
+}
+
+fn int_to_assoc(i: i32) -> Assoc {
+    if i >= 0 {
+        Assoc::After
+    } else {
+        Assoc::Before
     }
 }
 

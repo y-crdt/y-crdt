@@ -1,8 +1,8 @@
-use crate::block::{Block, BlockPtr, EmbedPrelim, ItemContent, Prelim, Unused};
+use crate::block::{BlockPtr, EmbedPrelim, ItemContent, Prelim, Unused};
 use crate::block_iter::BlockIter;
 use crate::moving::StickyIndex;
 use crate::transaction::TransactionMut;
-use crate::types::weak::{LinkSource, WeakPrelim};
+use crate::types::weak::Quotable;
 use crate::types::{
     event_change_set, Branch, BranchPtr, Change, ChangeSet, EventHandler, Observers, Path,
     SharedRef, ToJson, TypeRef, Value,
@@ -76,6 +76,7 @@ pub struct ArrayRef(BranchPtr);
 
 impl SharedRef for ArrayRef {}
 impl Array for ArrayRef {}
+impl Quotable for ArrayRef {}
 impl IndexedSequence for ArrayRef {}
 
 impl ToJson for ArrayRef {
@@ -237,65 +238,6 @@ pub trait Array: AsRef<Branch> + Sized {
         }
     }
 
-    /// Returns [WeakPrelim] to a given `index`, if it's in a boundaries of a current array.
-    fn quote<T: ReadTxn>(&self, txn: &T, mut index: u32, len: u32) -> Option<WeakPrelim<Self>> {
-        if len == 0 {
-            return None;
-        }
-        let mut start_id = None;
-        let mut end_id = None;
-        let mut curr = self.as_ref().start;
-        // first get the start of the quoted range...
-        while let Some(ptr) = curr {
-            if let Block::Item(item) = ptr.deref() {
-                if !item.is_deleted() && item.is_countable() {
-                    if index < item.len {
-                        if index > 0 {
-                            start_id = Some(ID::new(item.id.client, item.id.clock + index));
-                        }
-                        break;
-                    }
-                    index -= item.len;
-                }
-                curr = item.right;
-            } else {
-                break;
-            }
-        }
-        // ... then get the end of the quoted range
-        if start_id.is_none() {
-            start_id = curr.map(|ptr| ptr.id().clone());
-        }
-        end_id = start_id.clone();
-        let mut remaining = len - 1;
-        while let Some(ptr) = curr {
-            if let Block::Item(item) = ptr.deref() {
-                if !item.is_deleted() && item.is_countable() {
-                    if remaining > item.len {
-                        remaining -= item.len;
-                    } else {
-                        end_id = Some(ID::new(item.id.client, item.id.clock + index + remaining));
-                        break;
-                    }
-                }
-                curr = item.right;
-                index = 0;
-            } else {
-                break;
-            }
-        }
-        if end_id.is_none() {
-            end_id = curr.map(|ptr| ptr.last_id());
-        }
-        match (start_id, end_id) {
-            (Some(start), Some(end)) => {
-                let source = LinkSource::new(start, end);
-                Some(WeakPrelim::with_source(Arc::new(source)))
-            }
-            _ => None,
-        }
-    }
-
     /// Retrieves a value stored at a given `index`. Returns `None` when provided index was out
     /// of the range of a current array.
     fn get<T: ReadTxn>(&self, txn: &T, index: u32) -> Option<Value> {
@@ -350,7 +292,9 @@ pub trait Array: AsRef<Branch> + Sized {
     /// let array = doc.get_or_insert_array("array");
     /// array.insert_range(&mut doc.transact_mut(), 0, [1,2,3,4]);
     /// // move elements 2 and 3 after the 4
-    /// array.move_range_to(&mut doc.transact_mut(), 1, Assoc::Before, 2, Assoc::After, 4);
+    /// array.move_range_to(&mut doc.transact_mut(), 1, Assoc::After, 2, Assoc::Before, 4);
+    /// let values: Vec<_> = array.iter(&doc.transact()).collect();
+    /// assert_eq!(values, vec![1.into(), 4.into(), 2.into(), 3.into()]);
     /// ```
     /// # Panics
     ///
