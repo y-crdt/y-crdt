@@ -99,7 +99,8 @@ exclude = [
     "ArrayIter",
     "MapIter",
     "Attributes",
-    "TreeWalker"
+    "TreeWalker",
+    "YUndoManager"
 ]
 
 [export.rename]

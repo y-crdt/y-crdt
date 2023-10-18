@@ -361,7 +361,7 @@ typedef union YOutputContent {
   double num;
   int64_t integer;
   char *str;
-  char *buf;
+  const char *buf;
   struct YOutput *array;
   struct YMapEntry *map;
   Branch *y_type;
@@ -881,7 +881,7 @@ typedef struct YEventKeyChange {
 } YEventKeyChange;
 
 typedef struct YUndoManagerOptions {
-  uint32_t capture_timeout_millis;
+  int32_t capture_timeout_millis;
 } YUndoManagerOptions;
 
 typedef struct YUndoEvent {
@@ -890,6 +890,7 @@ typedef struct YUndoEvent {
   uint32_t origin_len;
   struct YDeleteSet insertions;
   struct YDeleteSet deletions;
+  void *meta;
 } YUndoEvent;
 
 /**
@@ -1041,7 +1042,7 @@ YTransaction *ydoc_read_transaction(YDoc *doc);
  *
  * `origin_len` and `origin` are optional parameters to specify a byte sequence used to mark
  * the origin of this transaction (eg. you may decide to give different origins for transaction
- * applying remote updates). These can be used by event handlers or `UndoManager` to perform
+ * applying remote updates). These can be used by event handlers or `YUndoManager` to perform
  * specific actions. If origin should not be set, call `ydoc_write_transaction(doc, 0, NULL)`.
  *
  * Returns `NULL` if read-write transaction couldn't be created, i.e. when another transaction is
