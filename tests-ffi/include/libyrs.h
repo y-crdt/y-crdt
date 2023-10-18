@@ -884,12 +884,49 @@ typedef struct YUndoManagerOptions {
   int32_t capture_timeout_millis;
 } YUndoManagerOptions;
 
+/**
+ * Event type related to `UndoManager` observer operations, such as `yundo_manager_observe_popped`
+ * and `yundo_manager_observe_added`. It contains various informations about the context in which
+ * undo/redo operations are executed.
+ */
 typedef struct YUndoEvent {
+  /**
+   * Informs if current event is related to executed undo (`Y_KIND_UNDO`) or redo (`Y_KIND_REDO`)
+   * operation.
+   */
   char kind;
+  /**
+   * Origin assigned to a transaction, in context of which this event is being executed.
+   * Transaction origin is specified via `ydoc_write_transaction(doc, origin_len, origin)`.
+   */
   const char *origin;
+  /**
+   * Length of an `origin` field assigned to a transaction, in context of which this event is
+   * being executed.
+   * Transaction origin is specified via `ydoc_write_transaction(doc, origin_len, origin)`.
+   */
   uint32_t origin_len;
+  /**
+   * Set of identifiers of all insert operations that happened in a scope of a current undo/redo
+   * operation.
+   */
   struct YDeleteSet insertions;
+  /**
+   * Set of identifiers of all remove operations that happened in a scope of a current undo/redo
+   * operation.
+   */
   struct YDeleteSet deletions;
+  /**
+   * Pointer to a custom metadata object that can be passed between
+   * `yundo_manager_observe_popped` and `yundo_manager_observe_added`. It's useful for passing
+   * around custom user data ie. cursor position, that needs to be remembered and restored as
+   * part of undo/redo operations.
+   *
+   * This field always starts with no value (`NULL`) assigned to it and can be set/unset in
+   * corresponding callback calls. In such cases it's up to a programmer to handle allocation
+   * and deallocation of memory that this pointer will point to. Not releasing it properly may
+   * lead to memory leaks.
+   */
   void *meta;
 } YUndoEvent;
 

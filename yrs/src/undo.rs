@@ -566,6 +566,10 @@ impl Default for Options {
 pub struct StackItem<T> {
     deletions: DeleteSet,
     insertions: DeleteSet,
+
+    /// A custom user metadata that can be attached to a particular [StackItem]. It can be used
+    /// to carry over the additional information (such as ie. user cursor position) between
+    /// undo/redo operations.
     pub meta: T,
 }
 
@@ -606,6 +610,8 @@ impl<M> std::fmt::Display for StackItem<M> {
 
 #[derive(Debug)]
 pub struct Event<'a, M> {
+    /// Field representing the updates (both intertions and deletions), that happened over the
+    /// scope current event is related to.
     pub item: &'a mut StackItem<M>,
     origin: Option<Origin>,
     kind: EventKind,
