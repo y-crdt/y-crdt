@@ -5,7 +5,6 @@ use std::convert::{TryFrom, TryInto};
 use std::mem::ManuallyDrop;
 use std::ops::Deref;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use wasm_bindgen::__rt::{Ref, RefMut};
 use wasm_bindgen::convert::{FromWasmAbi, IntoWasmAbi};
@@ -3517,7 +3516,7 @@ impl YXmlText {
 
 #[wasm_bindgen]
 #[repr(transparent)]
-pub struct YUndoManager(UndoManager<AtomicU32>);
+pub struct YUndoManager(UndoManager<JsValue>);
 
 #[wasm_bindgen]
 impl YUndoManager {
@@ -3613,8 +3612,7 @@ impl YUndoManager {
             callback.call1(&JsValue::UNDEFINED, &js).unwrap();
             if let Ok(stack_item) = Reflect::get(&js, &JsValue::from_str("stackItem")) {
                 if let Ok(meta) = Reflect::get(&stack_item, &JsValue::from_str("meta")) {
-                    let abi = meta.into_abi();
-                    e.item.meta.store(abi, Ordering::Release);
+                    e.item.meta = meta;
                 }
             }
         }))
@@ -3627,8 +3625,7 @@ impl YUndoManager {
             callback.call1(&JsValue::UNDEFINED, &js).unwrap();
             if let Ok(stack_item) = Reflect::get(&js, &JsValue::from_str("stackItem")) {
                 if let Ok(meta) = Reflect::get(&stack_item, &JsValue::from_str("meta")) {
-                    let abi = meta.into_abi();
-                    e.item.meta.store(abi, Ordering::Release);
+                    e.item.meta = meta;
                 }
             }
         }))
@@ -3657,29 +3654,25 @@ impl YUndoEvent {
         self.stack_item.clone()
     }
 
-    fn new(e: &yrs::undo::Event<AtomicU32>) -> Self {
+    fn new(e: &yrs::undo::Event<JsValue>) -> Self {
         let stack_item: JsValue = Object::new().into();
         Reflect::set(
             &stack_item,
             &JsValue::from_str("deletions"),
-            &delete_set_into_map(&e.item.deletions),
+            &delete_set_into_map(e.item.deletions()),
         )
         .unwrap();
         Reflect::set(
             &stack_item,
             &JsValue::from_str("insertions"),
-            &delete_set_into_map(&e.item.insertions),
+            &delete_set_into_map(e.item.insertions()),
         )
         .unwrap();
-        let js = match e.item.meta.load(Ordering::Acquire) {
-            0 => JsValue::UNDEFINED,
-            abi => unsafe { JsValue::from_abi(abi) },
-        };
-        Reflect::set(&stack_item, &JsValue::from_str("meta"), &js).unwrap();
+        Reflect::set(&stack_item, &JsValue::from_str("meta"), &e.item.meta).unwrap();
         YUndoEvent {
             stack_item,
-            origin: from_origin(e.origin.as_ref()),
-            kind: match e.kind {
+            origin: from_origin(e.origin()),
+            kind: match e.kind() {
                 EventKind::Undo => JsValue::from_str("undo"),
                 EventKind::Redo => JsValue::from_str("redo"),
             },
@@ -3688,7 +3681,7 @@ impl YUndoEvent {
 }
 
 #[wasm_bindgen]
-pub struct YUndoObserver(UndoEventSubscription<AtomicU32>);
+pub struct YUndoObserver(UndoEventSubscription<JsValue>);
 
 #[repr(transparent)]
 struct JsValueWrapper(JsValue);

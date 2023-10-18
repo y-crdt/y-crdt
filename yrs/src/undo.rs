@@ -49,9 +49,9 @@ struct Inner<M> {
     last_change: u64,
     on_after_transaction: Option<AfterTransactionSubscription>,
     on_destroy: Option<DestroySubscription>,
-    observer_added: Observer<Arc<dyn Fn(&TransactionMut, &Event<M>) -> ()>>,
-    observer_updated: Observer<Arc<dyn Fn(&TransactionMut, &Event<M>) -> ()>>,
-    observer_popped: Observer<Arc<dyn Fn(&TransactionMut, &Event<M>) -> ()>>,
+    observer_added: Observer<Arc<dyn Fn(&TransactionMut, &mut Event<M>) -> ()>>,
+    observer_updated: Observer<Arc<dyn Fn(&TransactionMut, &mut Event<M>) -> ()>>,
+    observer_popped: Observer<Arc<dyn Fn(&TransactionMut, &mut Event<M>) -> ()>>,
 }
 
 impl<M> UndoManager<M>
@@ -182,8 +182,8 @@ where
             }
         }
 
-        let last_op = stack.last().unwrap();
-        let event = if undoing {
+        let last_op = stack.last_mut().unwrap();
+        let mut event = if undoing {
             Event::undo(
                 last_op,
                 txn.origin.clone(),
@@ -198,11 +198,11 @@ where
         };
         if !extend {
             for cb in inner.observer_added.callbacks() {
-                cb(txn, &event);
+                cb(txn, &mut event);
             }
         } else {
             for cb in inner.observer_updated.callbacks() {
-                cb(txn, &event);
+                cb(txn, &mut event);
             }
         }
     }
@@ -224,7 +224,7 @@ where
     /// Returns a subscription object which - when dropped - will unregister provided callback.
     pub fn observe_item_added<F>(&self, f: F) -> UndoEventSubscription<M>
     where
-        F: Fn(&TransactionMut, &Event<M>) -> () + 'static,
+        F: Fn(&TransactionMut, &mut Event<M>) -> () + 'static,
     {
         self.0.observer_added.subscribe(Arc::new(f))
     }
@@ -241,7 +241,7 @@ where
     /// Returns a subscription object which - when dropped - will unregister provided callback.
     pub fn observe_item_updated<F>(&self, f: F) -> UndoEventSubscription<M>
     where
-        F: Fn(&TransactionMut, &Event<M>) -> () + 'static,
+        F: Fn(&TransactionMut, &mut Event<M>) -> () + 'static,
     {
         self.0.observer_updated.subscribe(Arc::new(f))
     }
@@ -257,7 +257,7 @@ where
     /// Returns a subscription object which - when dropped - will unregister provided callback.
     pub fn observe_item_popped<F>(&self, f: F) -> UndoEventSubscription<M>
     where
-        F: Fn(&TransactionMut, &Event<M>) -> () + 'static,
+        F: Fn(&TransactionMut, &mut Event<M>) -> () + 'static,
     {
         self.0.observer_popped.subscribe(Arc::new(f))
     }
@@ -375,14 +375,14 @@ where
         self.0.undoing.set(true);
         let result = Self::pop(&mut self.0.undo_stack, &mut txn, &self.0.scope);
         txn.commit();
-        let changed = if let Some(item) = result {
-            let e = Event::undo(
-                &item,
+        let changed = if let Some(mut item) = result {
+            let mut e = Event::undo(
+                &mut item,
                 Some(self.as_origin()),
                 txn.changed_parent_types.clone(),
             );
             for cb in self.0.observer_popped.callbacks() {
-                cb(&txn, &e);
+                cb(&txn, &mut e);
             }
             true
         } else {
@@ -413,14 +413,14 @@ where
         self.0.redoing.set(true);
         let result = Self::pop(&mut self.0.redo_stack, &mut txn, &self.0.scope);
         txn.commit();
-        let changed = if let Some(item) = result {
-            let e = Event::redo(
-                &item,
+        let changed = if let Some(mut item) = result {
+            let mut e = Event::redo(
+                &mut item,
                 Some(self.as_origin()),
                 txn.changed_parent_types.clone(),
             );
             for cb in self.0.observer_popped.callbacks() {
-                cb(&txn, &e);
+                cb(&txn, &mut e);
             }
             true
         } else {
@@ -513,7 +513,7 @@ impl<M: std::fmt::Debug> std::fmt::Debug for UndoManager<M> {
     }
 }
 
-pub type UndoEventSubscription<T> = Subscription<Arc<dyn Fn(&TransactionMut, &Event<T>) -> ()>>;
+pub type UndoEventSubscription<T> = Subscription<Arc<dyn Fn(&TransactionMut, &mut Event<T>) -> ()>>;
 
 /// Set of options used to configure [UndoManager].
 #[derive(Clone)]
@@ -564,8 +564,8 @@ impl Default for Options {
 /// the end of the last stack item batch.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct StackItem<T> {
-    pub deletions: DeleteSet,
-    pub insertions: DeleteSet,
+    deletions: DeleteSet,
+    insertions: DeleteSet,
     pub meta: T,
 }
 
@@ -576,6 +576,18 @@ impl<M: Default> StackItem<M> {
             insertions,
             meta: M::default(),
         }
+    }
+
+    /// A set of identifiers of element deleted at part of the timeframe current [StackItem] is
+    /// responsible for.
+    pub fn deletions(&self) -> &DeleteSet {
+        &self.deletions
+    }
+
+    /// A set of identifiers of element inserted at part of the timeframe current [StackItem] is
+    /// responsible for.
+    pub fn insertions(&self) -> &DeleteSet {
+        &self.insertions
     }
 }
 
@@ -594,15 +606,15 @@ impl<M> std::fmt::Display for StackItem<M> {
 
 #[derive(Debug)]
 pub struct Event<'a, M> {
-    pub item: &'a StackItem<M>,
-    pub origin: Option<Origin>,
-    pub kind: EventKind,
-    pub changed_parent_types: Vec<BranchPtr>,
+    pub item: &'a mut StackItem<M>,
+    origin: Option<Origin>,
+    kind: EventKind,
+    changed_parent_types: Vec<BranchPtr>,
 }
 
 impl<'a, M> Event<'a, M> {
     fn undo(
-        item: &'a StackItem<M>,
+        item: &'a mut StackItem<M>,
         origin: Option<Origin>,
         changed_parent_types: Vec<BranchPtr>,
     ) -> Self {
@@ -615,7 +627,7 @@ impl<'a, M> Event<'a, M> {
     }
 
     fn redo(
-        item: &'a StackItem<M>,
+        item: &'a mut StackItem<M>,
         origin: Option<Origin>,
         changed_parent_types: Vec<BranchPtr>,
     ) -> Self {
@@ -627,16 +639,36 @@ impl<'a, M> Event<'a, M> {
         }
     }
 
+    /// Checks if given shared collection has changed in the scope of currently notified update.
     pub fn has_changed<T: AsRef<Branch>>(&self, target: &T) -> bool {
         let ptr = BranchPtr::from(target.as_ref());
         self.changed_parent_types.contains(&ptr)
     }
+
+    /// Returns a transaction origin related to this update notification.
+    pub fn origin(&self) -> Option<&Origin> {
+        self.origin.as_ref()
+    }
+
+    /// Returns an enum informing if current update is result of undo or redo operation.
+    pub fn kind(&self) -> EventKind {
+        self.kind
+    }
+
+    /// Returns info about all changed shared collections.
+    pub fn changed_parent_types(&self) -> &[BranchPtr] {
+        &self.changed_parent_types
+    }
 }
 
+/// Enum which informs if correlated [Event] was produced as a result of either undo or redo
+/// operation over [UndoManager].
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, Ord, PartialOrd, Eq, PartialEq)]
 pub enum EventKind {
+    /// Referenced event was result of [UndoManager::undo] operation.
     Undo,
+    /// Referenced event was result of [UndoManager::redo] operation.
     Redo,
 }
 
@@ -652,10 +684,8 @@ mod test {
         TextPrelim, TextRef, Transact, UndoManager, Update, Xml, XmlElementPrelim, XmlElementRef,
         XmlFragment, XmlTextPrelim,
     };
-    use std::cell::RefCell;
     use std::collections::HashMap;
     use std::convert::TryInto;
-    use std::rc::Rc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
@@ -950,7 +980,7 @@ mod test {
     #[test]
     fn undo_events() {
         use crate::undo::UndoManager;
-        type Metadata = Rc<RefCell<HashMap<String, usize>>>;
+        type Metadata = HashMap<String, usize>;
 
         let doc = Doc::with_client_id(1);
         let txt = doc.get_or_insert_text("test");
@@ -963,8 +993,7 @@ mod test {
         let _sub1 = mgr.observe_item_added(move |_, e| {
             assert!(e.has_changed(&txt_clone));
             let c = counter.fetch_add(1, Ordering::SeqCst);
-            let mut data = e.item.meta.borrow_mut();
-            let e = data.entry("test".to_string()).or_default();
+            let e = e.item.meta.entry("test".to_string()).or_default();
             *e = c;
         });
 
@@ -972,8 +1001,7 @@ mod test {
         let result_clone = result.clone();
         let _sub2 = mgr.observe_item_popped(move |_, e| {
             assert!(e.has_changed(&txt_clone));
-            let data = e.item.meta.borrow();
-            if let Some(&v) = data.get("test") {
+            if let Some(&v) = e.item.meta.get("test") {
                 result_clone.store(v, Ordering::Relaxed);
             }
         });

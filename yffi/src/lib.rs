@@ -4437,7 +4437,7 @@ pub struct YUndoEvent {
 
 impl YUndoEvent {
     unsafe fn new(e: &yrs::undo::Event<AtomicPtr<c_void>>) -> Self {
-        let (origin, origin_len) = if let Some(origin) = e.origin.as_ref() {
+        let (origin, origin_len) = if let Some(origin) = e.origin() {
             let bytes = origin.as_ref();
             let origin_len = bytes.len() as u32;
             let origin = bytes.as_ptr() as *const c_char;
@@ -4446,14 +4446,14 @@ impl YUndoEvent {
             (null(), 0)
         };
         YUndoEvent {
-            kind: match e.kind {
+            kind: match e.kind() {
                 EventKind::Undo => Y_KIND_UNDO,
                 EventKind::Redo => Y_KIND_REDO,
             },
             origin,
             origin_len,
-            insertions: YDeleteSet::new(&e.item.insertions),
-            deletions: YDeleteSet::new(&e.item.deletions),
+            insertions: YDeleteSet::new(e.item.insertions()),
+            deletions: YDeleteSet::new(e.item.deletions()),
             meta: e.item.meta.load(Ordering::Acquire),
         }
     }
