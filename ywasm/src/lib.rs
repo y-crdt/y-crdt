@@ -29,7 +29,7 @@ use yrs::{
     MapRef, Observable, Offset, OffsetKind, Options, Origin, Quotable, ReadTxn, Snapshot,
     StateVector, StickyIndex, Store, SubdocsEvent, SubdocsEventIter, SubdocsSubscription,
     Subscription, Text, TextRef, Transact, Transaction, TransactionCleanupEvent,
-    TransactionCleanupSubscription, TransactionMut, UndoManager, Update, UpdateSubscription, Xml,
+    TransactionCleanupSubscription, TransactionMut, Update, UpdateSubscription, Xml,
     XmlElementPrelim, XmlElementRef, XmlFragment, XmlFragmentRef, XmlNode, XmlTextPrelim,
     XmlTextRef, ID,
 };

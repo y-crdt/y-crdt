@@ -1,12 +1,11 @@
 use crate::block::{Block, BlockPtr, BlockSlice, ItemContent};
 use crate::{ReadTxn, Value, ID};
-use std::borrow::Borrow;
 use std::ops::Deref;
 
 pub(crate) trait BlockIterator: Iterator<Item = BlockPtr> + Sized {
     #[inline]
     fn slices(self) -> BlockSlices<Self> {
-        BlockSlices::new(self)
+        BlockSlices(self)
     }
 
     #[inline]
@@ -149,7 +148,7 @@ where
                         }
                         if let ItemContent::Move(m) = &item.content {
                             // we need to move to a new scope and reposition iterator at the start of it
-                            let (start, end) = m.get_moved_coords(self.txn.borrow());
+                            let (start, end) = m.get_moved_coords(self.txn);
                             self.stack.push(MoveScope::new(start, end, curr));
                             self.iter = BlockIter(start);
                         } else {
@@ -196,7 +195,7 @@ where
                         }
                         if let ItemContent::Move(m) = &item.content {
                             // we need to move to a new scope and reposition iterator at the end of it
-                            let (start, end) = m.get_moved_coords(self.txn.borrow());
+                            let (start, end) = m.get_moved_coords(self.txn);
                             self.stack.push(MoveScope::new(start, end, curr));
                             self.iter = BlockIter(end);
                         } else {
@@ -274,16 +273,6 @@ impl MoveScope {
 pub(crate) struct BlockSlices<I>(I)
 where
     I: Iterator<Item = BlockPtr> + Sized;
-
-impl<I> BlockSlices<I>
-where
-    I: Iterator<Item = BlockPtr> + Sized,
-{
-    #[inline]
-    fn new(iter: I) -> Self {
-        BlockSlices(iter)
-    }
-}
 
 impl<I> Iterator for BlockSlices<I>
 where
@@ -495,10 +484,10 @@ mod test {
     #[test]
     fn move_1() {
         let d1 = Doc::with_client_id(1);
-        let mut a1 = d1.get_or_insert_array("array");
+        let a1 = d1.get_or_insert_array("array");
 
         let d2 = Doc::with_client_id(2);
-        let mut a2 = d2.get_or_insert_array("array");
+        let a2 = d2.get_or_insert_array("array");
 
         {
             let mut txn = d1.transact_mut();
@@ -539,10 +528,10 @@ mod test {
     #[test]
     fn move_2() {
         let d1 = Doc::with_client_id(1);
-        let mut a1 = d1.get_or_insert_array("array");
+        let a1 = d1.get_or_insert_array("array");
 
         let d2 = Doc::with_client_id(2);
-        let mut a2 = d2.get_or_insert_array("array");
+        let a2 = d2.get_or_insert_array("array");
 
         a1.insert_range(&mut d1.transact_mut(), 0, [1, 2]);
         a1.move_to(&mut d1.transact_mut(), 1, 0);

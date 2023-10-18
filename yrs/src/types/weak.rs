@@ -428,7 +428,7 @@ impl<P: TryFrom<BlockPtr>> Prelim for WeakPrelim<P> {
         (ItemContent::Type(inner), Some(self))
     }
 
-    fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {}
+    fn integrate(self, _txn: &mut TransactionMut, _inner_ref: BranchPtr) {}
 }
 
 impl<P: SharedRef> From<WeakPrelim<BranchPtr>> for WeakPrelim<P> {
@@ -671,7 +671,7 @@ mod test {
     use crate::Assoc::{After, Before};
     use crate::{
         Array, ArrayRef, DeepObservable, Doc, GetString, Map, MapPrelim, MapRef, Observable,
-        Quotable, ReadTxn, Text, TextRef, Transact, XmlTextRef,
+        Quotable, Text, TextRef, Transact, XmlTextRef,
     };
     use std::cell::RefCell;
     use std::collections::HashMap;
@@ -1000,7 +1000,7 @@ mod test {
         let target1 = Rc::new(RefCell::new(None));
         let _sub1 = {
             let target = target1.clone();
-            link1.observe(move |txn, e| {
+            link1.observe(move |_, e| {
                 target.replace(Some(e.target.clone()));
             })
         };
@@ -1017,7 +1017,7 @@ mod test {
         let target2 = Rc::new(RefCell::new(None));
         let _sub2 = {
             let target = target2.clone();
-            link2.observe(move |txn, e| {
+            link2.observe(move |_, e| {
                 target.replace(Some(e.target.clone()));
             })
         };
@@ -1046,7 +1046,7 @@ mod test {
         let target1 = Rc::new(RefCell::new(None));
         let _sub1 = {
             let target = target1.clone();
-            link1.observe(move |txn, e| {
+            link1.observe(move |_, e| {
                 target.replace(Some(e.as_target::<MapRef>()));
             })
         };
@@ -1063,7 +1063,7 @@ mod test {
         let target2 = Rc::new(RefCell::new(None));
         let _sub2 = {
             let target = target2.clone();
-            link2.observe(move |txn, e| {
+            link2.observe(move |_, e| {
                 target.replace(Some(e.as_target::<MapRef>()));
             })
         };
@@ -1094,7 +1094,7 @@ mod test {
         let target1 = Rc::new(RefCell::new(None));
         let _sub1 = {
             let target = target1.clone();
-            link1.observe(move |txn, e| {
+            link1.observe(move |_, e| {
                 target.replace(Some(e.as_target::<ArrayRef>()));
             })
         };
@@ -1112,7 +1112,7 @@ mod test {
         let target2 = Rc::new(RefCell::new(None));
         let _sub2 = {
             let target = target2.clone();
-            link2.observe(move |txn, e| {
+            link2.observe(move |_, e| {
                 target.replace(Some(e.as_target::<ArrayRef>()));
             })
         };
@@ -1158,7 +1158,7 @@ mod test {
         // test observers in a face of linked chains of values
         m2.insert(&mut txn, "key", "value1");
         let link1 = m2.link(&txn, "key").unwrap();
-        let link1 = m1.insert(&mut txn, "link-key", link1);
+        m1.insert(&mut txn, "link-key", link1);
         let link2 = m1.link(&txn, "link-key").unwrap();
         let mut link2 = m2.insert(&mut txn, "link-link", link2);
         drop(txn);
@@ -1166,7 +1166,7 @@ mod test {
         let events = Rc::new(RefCell::new(vec![]));
         let _sub1 = {
             let events = events.clone();
-            link2.observe_deep(move |txn, evts| {
+            link2.observe_deep(move |_, evts| {
                 let mut er = events.borrow_mut();
                 for e in evts.iter() {
                     er.push(e.target());
@@ -1208,9 +1208,9 @@ mod test {
         // test observers in a face of multi-layer linked chains of values
         m2.insert(&mut txn, "key", "value1");
         let link1 = m2.link(&txn, "key").unwrap();
-        let link1 = m1.insert(&mut txn, "link-key", link1);
+        m1.insert(&mut txn, "link-key", link1);
         let link2 = m1.link(&txn, "link-key").unwrap();
-        let link2 = m2.insert(&mut txn, "link-link", link2);
+        m2.insert(&mut txn, "link-link", link2);
         let link3 = m2.link(&txn, "link-link").unwrap();
         let mut link3 = m3.insert(&mut txn, "link-link-link", link3);
         drop(txn);
@@ -1218,7 +1218,7 @@ mod test {
         let events = Rc::new(RefCell::new(vec![]));
         let _sub1 = {
             let events = events.clone();
-            link3.observe_deep(move |txn, evts| {
+            link3.observe_deep(move |_, evts| {
                 let mut er = events.borrow_mut();
                 for e in evts.iter() {
                     er.push(e.target());
@@ -1337,7 +1337,7 @@ mod test {
         let link = map.link(&doc.transact(), "nested").unwrap();
         let link = array.insert(&mut doc.transact_mut(), 0, link);
 
-        let mut events = Rc::new(RefCell::new(vec![]));
+        let events = Rc::new(RefCell::new(vec![]));
         let _sub = {
             let events = events.clone();
             array.observe_deep(move |txn, e| {
@@ -1404,14 +1404,13 @@ mod test {
         let d2 = Doc::with_client_id(2);
         let a2 = d2.get_or_insert_array("array");
 
-        let (m1, m3) = {
+        {
             let mut t1 = d1.transact_mut();
             a1.push_back(&mut t1, 1);
-            let m1 = a1.push_back(&mut t1, MapPrelim::<String>::new());
-            let m3 = a1.push_back(&mut t1, MapPrelim::<String>::new());
+            a1.push_back(&mut t1, MapPrelim::<String>::new());
+            a1.push_back(&mut t1, MapPrelim::<String>::new());
             a1.push_back(&mut t1, 2);
-            (m1, m3)
-        };
+        }
         let mut l1 = {
             let mut t1 = d1.transact_mut();
             let link = a1.quote(&t1, 1, Before, 2, After).unwrap();
@@ -1420,7 +1419,7 @@ mod test {
 
         exchange_updates(&[&d1, &d2]);
 
-        let mut e1 = Rc::new(RefCell::new(vec![]));
+        let e1 = Rc::new(RefCell::new(vec![]));
         let _s1 = {
             let events = e1.clone();
             l1.observe_deep(move |txn, e| {
@@ -1442,7 +1441,7 @@ mod test {
             .unwrap()
             .cast::<WeakRef<ArrayRef>>()
             .unwrap();
-        let mut e2 = Rc::new(RefCell::new(vec![]));
+        let e2 = Rc::new(RefCell::new(vec![]));
         let _s2 = {
             let events = e2.clone();
             l2.observe_deep(move |txn, e| {
@@ -1516,9 +1515,9 @@ mod test {
         let l2 = root.quote(&txn, 2, After, 3, Before).unwrap();
 
         // create cyclic reference between links
-        let l1 = m0.insert(&mut txn, "k1", l1);
-        let l2 = m1.insert(&mut txn, "k2", l2);
-        let l0 = m2.insert(&mut txn, "k0", l0);
+        m0.insert(&mut txn, "k1", l1);
+        m1.insert(&mut txn, "k2", l2);
+        m2.insert(&mut txn, "k0", l0);
         drop(txn);
 
         let events = Rc::new(RefCell::new(vec![]));
@@ -1589,7 +1588,7 @@ mod test {
         exchange_updates(&[&d1, &d2, &d3]);
 
         let l2 = m2.link(&d2.transact(), "key").unwrap();
-        let l2 = m2.insert(&mut d2.transact_mut(), "link", l2);
+        m2.insert(&mut d2.transact_mut(), "link", l2);
         m1.insert(&mut d1.transact_mut(), "key", 2);
         m1.insert(&mut d1.transact_mut(), "key", 3);
 
@@ -1630,7 +1629,6 @@ mod test {
         let a1 = d1.get_or_insert_array("array");
         let d2 = Doc::with_client_id(2);
         let txt2 = d2.get_or_insert_text("text");
-        let a2 = d2.get_or_insert_array("array");
 
         txt1.insert(&mut d1.transact_mut(), 0, "abcd"); // 'abcd'
         let l1 = {
@@ -1662,7 +1660,6 @@ mod test {
         let a1 = d1.get_or_insert_array("array");
         let d2 = Doc::with_client_id(2);
         let txt2 = d2.get_or_insert_xml_text("text");
-        let a2 = d2.get_or_insert_array("array");
 
         txt1.insert(&mut d1.transact_mut(), 0, "abcd"); // 'abcd'
         let l1 = {

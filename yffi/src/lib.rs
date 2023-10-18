@@ -26,8 +26,8 @@ use yrs::{
     uuid_v4, Any, Array, ArrayRef, Assoc, DeleteSet, GetString, Map, MapRef, Observable,
     OffsetKind, Options, Origin, Quotable, ReadTxn, Snapshot, StateVector, StickyIndex, Store,
     SubdocsEvent, SubdocsEventIter, SubscriptionId, Text, TextRef, Transact,
-    TransactionCleanupEvent, UndoManager, Update, Xml, XmlElementPrelim, XmlElementRef,
-    XmlFragmentRef, XmlTextPrelim, XmlTextRef,
+    TransactionCleanupEvent, Update, Xml, XmlElementPrelim, XmlElementRef, XmlFragmentRef,
+    XmlTextPrelim, XmlTextRef,
 };
 
 /// Flag used by `YInput` and `YOutput` to tag boolean values.
@@ -3951,10 +3951,6 @@ impl YWeakLinkEvent {
         let txn: &yrs::TransactionMut<'static> = unsafe { std::mem::transmute(txn) };
         let txn = txn as *const _;
         YWeakLinkEvent { inner, txn }
-    }
-
-    fn txn(&self) -> &yrs::TransactionMut<'static> {
-        unsafe { self.txn.as_ref().unwrap() }
     }
 }
 
