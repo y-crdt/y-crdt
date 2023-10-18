@@ -17,18 +17,19 @@ use yrs::types::text::{ChangeKind, Diff, TextEvent, YChange};
 use yrs::types::xml::{XmlEvent, XmlTextEvent};
 use yrs::types::{
     Attrs, Branch, BranchPtr, Change, DeepEventsSubscription, DeepObservable, Delta, EntryChange,
-    Event, Events, Path, PathSegment, ToJson, TypeRef, Value
+    Event, Events, Path, PathSegment, ToJson, TypeRef, Value,
 };
+use yrs::undo::UndoManager;
 use yrs::undo::{EventKind, UndoEventSubscription};
 use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use yrs::{
-    Array, ArrayRef, Assoc, DeleteSet, DestroySubscription, Doc, GetString, IndexScope, Map,
+    Any, Array, ArrayRef, Assoc, DeleteSet, DestroySubscription, Doc, GetString, IndexScope, Map,
     MapRef, Observable, Offset, OffsetKind, Options, Origin, ReadTxn, Snapshot, StateVector,
     StickyIndex, Store, SubdocsEvent, SubdocsEventIter, SubdocsSubscription, Subscription, Text,
     TextRef, Transact, Transaction, TransactionCleanupEvent, TransactionCleanupSubscription,
-    TransactionMut, UndoManager, Update, UpdateSubscription, Xml, XmlElementPrelim, XmlElementRef,
-    XmlFragment, XmlFragmentRef, XmlNode, XmlTextPrelim, XmlTextRef, ID, Any
+    TransactionMut, Update, UpdateSubscription, Xml, XmlElementPrelim, XmlElementRef, XmlFragment,
+    XmlFragmentRef, XmlNode, XmlTextPrelim, XmlTextRef, ID,
 };
 
 // When the `wee_alloc` feature is enabled, use `wee_alloc` as the global
@@ -3515,7 +3516,7 @@ impl YXmlText {
 
 #[wasm_bindgen]
 #[repr(transparent)]
-pub struct YUndoManager(UndoManager);
+pub struct YUndoManager(UndoManager<JsValue>);
 
 #[wasm_bindgen]
 impl YUndoManager {
@@ -3607,16 +3608,26 @@ impl YUndoManager {
     #[wasm_bindgen(js_name = onStackItemAdded)]
     pub fn on_item_added(&mut self, callback: js_sys::Function) -> YUndoObserver {
         YUndoObserver(self.0.observe_item_added(move |_, e| {
-            let arg: JsValue = YUndoEvent::new(e).into();
-            callback.call1(&JsValue::UNDEFINED, &arg).unwrap();
+            let js: JsValue = YUndoEvent::new(e).into();
+            callback.call1(&JsValue::UNDEFINED, &js).unwrap();
+            if let Ok(stack_item) = Reflect::get(&js, &JsValue::from_str("stackItem")) {
+                if let Ok(meta) = Reflect::get(&stack_item, &JsValue::from_str("meta")) {
+                    e.item.meta = meta;
+                }
+            }
         }))
     }
 
     #[wasm_bindgen(js_name = onStackItemPopped)]
     pub fn on_item_popped(&mut self, callback: js_sys::Function) -> YUndoObserver {
         YUndoObserver(self.0.observe_item_popped(move |_, e| {
-            let arg: JsValue = YUndoEvent::new(e).into();
-            callback.call1(&JsValue::UNDEFINED, &arg).unwrap();
+            let js: JsValue = YUndoEvent::new(e).into();
+            callback.call1(&JsValue::UNDEFINED, &js).unwrap();
+            if let Ok(stack_item) = Reflect::get(&js, &JsValue::from_str("stackItem")) {
+                if let Ok(meta) = Reflect::get(&stack_item, &JsValue::from_str("meta")) {
+                    e.item.meta = meta;
+                }
+            }
         }))
     }
 }
@@ -3643,7 +3654,7 @@ impl YUndoEvent {
         self.stack_item.clone()
     }
 
-    fn new(e: &yrs::undo::Event) -> Self {
+    fn new(e: &yrs::undo::Event<JsValue>) -> Self {
         let stack_item: JsValue = Object::new().into();
         Reflect::set(
             &stack_item,
@@ -3657,10 +3668,11 @@ impl YUndoEvent {
             &delete_set_into_map(e.item.insertions()),
         )
         .unwrap();
+        Reflect::set(&stack_item, &JsValue::from_str("meta"), &e.item.meta).unwrap();
         YUndoEvent {
             stack_item,
-            origin: from_origin(e.origin.as_ref()),
-            kind: match e.kind {
+            origin: from_origin(e.origin()),
+            kind: match e.kind() {
                 EventKind::Undo => JsValue::from_str("undo"),
                 EventKind::Redo => JsValue::from_str("redo"),
             },
@@ -3669,7 +3681,7 @@ impl YUndoEvent {
 }
 
 #[wasm_bindgen]
-pub struct YUndoObserver(UndoEventSubscription);
+pub struct YUndoObserver(UndoEventSubscription<JsValue>);
 
 #[repr(transparent)]
 struct JsValueWrapper(JsValue);

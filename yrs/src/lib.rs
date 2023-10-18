@@ -439,6 +439,7 @@ pub mod any;
 pub mod atomic;
 mod block_iter;
 pub mod encoding;
+mod error;
 mod moving;
 pub mod observer;
 #[cfg(test)]
@@ -446,7 +447,6 @@ mod test_utils;
 #[cfg(test)]
 mod tests;
 pub mod undo;
-mod error;
 
 pub use crate::alt::{
     diff_updates_v1, diff_updates_v2, encode_state_vector_from_update_v1,
@@ -501,10 +501,10 @@ pub use crate::types::DeepObservable;
 pub use crate::types::GetString;
 pub use crate::types::Observable;
 pub use crate::types::Value;
-pub use crate::undo::UndoManager;
 pub use crate::update::Update;
 use rand::RngCore;
 
+pub type UndoManager = crate::undo::UndoManager<()>;
 pub type Uuid = std::sync::Arc<str>;
 
 /// Generate random v4 UUID.

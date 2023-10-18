@@ -195,3 +195,26 @@ export const testUndoXml = tc => {
     undoManager.undo()
     t.assert(xml0.toString() === '<undefined><p>con<bold>tent</bold></p></undefined>')
 }
+
+/**
+ * @param {t.TestCase} tc
+ */
+export const testUndoEvents = tc => {
+    const d0 = new Y.YDoc({clientID:1})
+    const text0 = d0.getText("text")
+    const undoManager = new Y.YUndoManager(d0, text0)
+    let counter = 0
+    let receivedMetadata = -1
+    undoManager.onStackItemAdded( event => {
+        event.stackItem.meta = event.stackItem.meta || new Map()
+        event.stackItem.meta.set('test', counter++)
+    })
+    undoManager.onStackItemPopped(event => {
+        receivedMetadata = event.stackItem.meta.get('test')
+    })
+    text0.insert(0, 'abc')
+    undoManager.undo()
+    t.assert(receivedMetadata === 0)
+    undoManager.redo()
+    t.assert(receivedMetadata === 1)
+}

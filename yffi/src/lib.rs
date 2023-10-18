@@ -3,8 +3,10 @@ use std::ffi::{c_char, c_void, CStr, CString};
 use std::mem::{forget, ManuallyDrop, MaybeUninit};
 use std::ops::Deref;
 use std::ptr::{null, null_mut};
+use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::Arc;
 use yrs::block::{ClientID, ItemContent, Prelim, Unused};
+use yrs::encoding::read::Error;
 use yrs::types::array::ArrayEvent;
 use yrs::types::array::ArrayIter as NativeArrayIter;
 use yrs::types::map::MapEvent;
@@ -22,13 +24,11 @@ use yrs::undo::EventKind;
 use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use yrs::{
-    uuid_v4, Array, ArrayRef, Assoc, DeleteSet, GetString, Map, MapRef, Observable, OffsetKind,
-    Options, Origin, ReadTxn, Snapshot, StateVector, StickyIndex, Store, SubdocsEvent,
-    SubdocsEventIter, SubscriptionId, Text, TextRef, Transact, TransactionCleanupEvent,
-    UndoManager, Update, Xml, XmlElementPrelim, XmlElementRef, XmlFragmentRef, XmlTextPrelim,
-    XmlTextRef, Any
+    uuid_v4, Any, Array, ArrayRef, Assoc, DeleteSet, GetString, Map, MapRef, Observable,
+    OffsetKind, Options, Origin, ReadTxn, Snapshot, StateVector, StickyIndex, Store, SubdocsEvent,
+    SubdocsEventIter, SubscriptionId, Text, TextRef, Transact, TransactionCleanupEvent, Update,
+    Xml, XmlElementPrelim, XmlElementRef, XmlFragmentRef, XmlTextPrelim, XmlTextRef,
 };
-use yrs::encoding::read::Error;
 
 /// Flag used by `YInput` and `YOutput` to tag boolean values.
 pub const Y_JSON_BOOL: i8 = -8;
@@ -613,7 +613,7 @@ pub unsafe extern "C" fn ydoc_read_transaction(doc: *mut Doc) -> *mut Transactio
 ///
 /// `origin_len` and `origin` are optional parameters to specify a byte sequence used to mark
 /// the origin of this transaction (eg. you may decide to give different origins for transaction
-/// applying remote updates). These can be used by event handlers or `UndoManager` to perform
+/// applying remote updates). These can be used by event handlers or `YUndoManager` to perform
 /// specific actions. If origin should not be set, call `ydoc_write_transaction(doc, 0, NULL)`.
 ///
 /// Returns `NULL` if read-write transaction couldn't be created, i.e. when another transaction is
@@ -4245,9 +4245,11 @@ pub unsafe extern "C" fn yevent_keys_destroy(keys: *mut YEventKeyChange, len: u3
     }
 }
 
+pub type YUndoManager = yrs::undo::UndoManager<AtomicPtr<c_void>>;
+
 #[repr(C)]
 pub struct YUndoManagerOptions {
-    pub capture_timeout_millis: u32,
+    pub capture_timeout_millis: i32,
 }
 
 #[no_mangle]
@@ -4255,7 +4257,7 @@ pub unsafe extern "C" fn yundo_manager(
     doc: *const Doc,
     ytype: *const Branch,
     options: *const YUndoManagerOptions,
-) -> *mut UndoManager {
+) -> *mut YUndoManager {
     let doc = doc.as_ref().unwrap();
     let branch = ytype.as_ref().unwrap();
 
@@ -4265,18 +4267,22 @@ pub unsafe extern "C" fn yundo_manager(
             o.capture_timeout_millis = options.capture_timeout_millis as u64;
         }
     };
-    let boxed = Box::new(UndoManager::with_options(doc, &BranchPtr::from(branch), o));
+    let boxed = Box::new(yrs::undo::UndoManager::with_options(
+        doc,
+        &BranchPtr::from(branch),
+        o,
+    ));
     Box::into_raw(boxed)
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yundo_manager_destroy(mgr: *mut UndoManager) {
+pub unsafe extern "C" fn yundo_manager_destroy(mgr: *mut YUndoManager) {
     drop(Box::from_raw(mgr));
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn yundo_manager_add_origin(
-    mgr: *mut UndoManager,
+    mgr: *mut YUndoManager,
     origin_len: u32,
     origin: *const c_char,
 ) {
@@ -4287,7 +4293,7 @@ pub unsafe extern "C" fn yundo_manager_add_origin(
 
 #[no_mangle]
 pub unsafe extern "C" fn yundo_manager_remove_origin(
-    mgr: *mut UndoManager,
+    mgr: *mut YUndoManager,
     origin_len: u32,
     origin: *const c_char,
 ) {
@@ -4297,14 +4303,14 @@ pub unsafe extern "C" fn yundo_manager_remove_origin(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yundo_manager_add_scope(mgr: *mut UndoManager, ytype: *const Branch) {
+pub unsafe extern "C" fn yundo_manager_add_scope(mgr: *mut YUndoManager, ytype: *const Branch) {
     let mgr = mgr.as_mut().unwrap();
     let branch = ytype.as_ref().unwrap();
     mgr.expand_scope(&BranchPtr::from(branch));
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yundo_manager_clear(mgr: *mut UndoManager) -> u8 {
+pub unsafe extern "C" fn yundo_manager_clear(mgr: *mut YUndoManager) -> u8 {
     let mgr = mgr.as_mut().unwrap();
     match mgr.clear() {
         Ok(_) => Y_TRUE,
@@ -4313,31 +4319,33 @@ pub unsafe extern "C" fn yundo_manager_clear(mgr: *mut UndoManager) -> u8 {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yundo_manager_stop(mgr: *mut UndoManager) {
+pub unsafe extern "C" fn yundo_manager_stop(mgr: *mut YUndoManager) {
     let mgr = mgr.as_mut().unwrap();
     mgr.reset();
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yundo_manager_undo(mgr: *mut UndoManager) -> u8 {
+pub unsafe extern "C" fn yundo_manager_undo(mgr: *mut YUndoManager) -> u8 {
     let mgr = mgr.as_mut().unwrap();
     match mgr.undo() {
-        Ok(_) => Y_TRUE,
+        Ok(true) => Y_TRUE,
+        Ok(false) => Y_FALSE,
         Err(_) => Y_FALSE,
     }
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yundo_manager_redo(mgr: *mut UndoManager) -> u8 {
+pub unsafe extern "C" fn yundo_manager_redo(mgr: *mut YUndoManager) -> u8 {
     let mgr = mgr.as_mut().unwrap();
     match mgr.redo() {
-        Ok(_) => Y_TRUE,
+        Ok(true) => Y_TRUE,
+        Ok(false) => Y_FALSE,
         Err(_) => Y_FALSE,
     }
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yundo_manager_can_undo(mgr: *mut UndoManager) -> u8 {
+pub unsafe extern "C" fn yundo_manager_can_undo(mgr: *mut YUndoManager) -> u8 {
     let mgr = mgr.as_mut().unwrap();
     if mgr.can_undo() {
         Y_TRUE
@@ -4347,7 +4355,7 @@ pub unsafe extern "C" fn yundo_manager_can_undo(mgr: *mut UndoManager) -> u8 {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yundo_manager_can_redo(mgr: *mut UndoManager) -> u8 {
+pub unsafe extern "C" fn yundo_manager_can_redo(mgr: *mut YUndoManager) -> u8 {
     let mgr = mgr.as_mut().unwrap();
     if mgr.can_redo() {
         Y_TRUE
@@ -4358,15 +4366,19 @@ pub unsafe extern "C" fn yundo_manager_can_redo(mgr: *mut UndoManager) -> u8 {
 
 #[no_mangle]
 pub unsafe extern "C" fn yundo_manager_observe_added(
-    mgr: *mut UndoManager,
+    mgr: *mut YUndoManager,
     state: *mut c_void,
     cb: extern "C" fn(*mut c_void, *const YUndoEvent),
 ) -> u32 {
     let mgr = mgr.as_mut().unwrap();
     let subscription_id: SubscriptionId = mgr
         .observe_item_added(move |_, e| {
-            let event = YUndoEvent::new(e);
-            cb(state, &event as *const YUndoEvent);
+            let meta_ptr = {
+                let event = YUndoEvent::new(e);
+                cb(state, &event as *const YUndoEvent);
+                event.meta
+            };
+            e.item.meta.store(meta_ptr, Ordering::Release);
         })
         .into();
     subscription_id
@@ -4374,7 +4386,7 @@ pub unsafe extern "C" fn yundo_manager_observe_added(
 
 #[no_mangle]
 pub unsafe extern "C" fn yundo_manager_unobserve_added(
-    mgr: *mut UndoManager,
+    mgr: *mut YUndoManager,
     subscription_id: u32,
 ) {
     let mgr = mgr.as_mut().unwrap();
@@ -4383,15 +4395,19 @@ pub unsafe extern "C" fn yundo_manager_unobserve_added(
 
 #[no_mangle]
 pub unsafe extern "C" fn yundo_manager_observe_popped(
-    mgr: *mut UndoManager,
+    mgr: *mut YUndoManager,
     state: *mut c_void,
     cb: extern "C" fn(*mut c_void, *const YUndoEvent),
 ) -> u32 {
     let mgr = mgr.as_mut().unwrap();
     let subscription_id: SubscriptionId = mgr
         .observe_item_popped(move |_, e| {
-            let event = YUndoEvent::new(e);
-            cb(state, &event as *const YUndoEvent);
+            let meta_ptr = {
+                let event = YUndoEvent::new(e);
+                cb(state, &event as *const YUndoEvent);
+                event.meta
+            };
+            e.item.meta.store(meta_ptr, Ordering::Release);
         })
         .into();
     subscription_id
@@ -4399,7 +4415,7 @@ pub unsafe extern "C" fn yundo_manager_observe_popped(
 
 #[no_mangle]
 pub unsafe extern "C" fn yundo_manager_unobserve_popped(
-    mgr: *mut UndoManager,
+    mgr: *mut YUndoManager,
     subscription_id: u32,
 ) {
     let mgr = mgr.as_mut().unwrap();
@@ -4409,18 +4425,42 @@ pub unsafe extern "C" fn yundo_manager_unobserve_popped(
 pub const Y_KIND_UNDO: c_char = 0;
 pub const Y_KIND_REDO: c_char = 1;
 
+/// Event type related to `UndoManager` observer operations, such as `yundo_manager_observe_popped`
+/// and `yundo_manager_observe_added`. It contains various informations about the context in which
+/// undo/redo operations are executed.
 #[repr(C)]
 pub struct YUndoEvent {
+    /// Informs if current event is related to executed undo (`Y_KIND_UNDO`) or redo (`Y_KIND_REDO`)
+    /// operation.
     pub kind: c_char,
+    /// Origin assigned to a transaction, in context of which this event is being executed.
+    /// Transaction origin is specified via `ydoc_write_transaction(doc, origin_len, origin)`.
     pub origin: *const c_char,
+    /// Length of an `origin` field assigned to a transaction, in context of which this event is
+    /// being executed.
+    /// Transaction origin is specified via `ydoc_write_transaction(doc, origin_len, origin)`.
     pub origin_len: u32,
+    /// Set of identifiers of all insert operations that happened in a scope of a current undo/redo
+    /// operation.
     pub insertions: YDeleteSet,
+    /// Set of identifiers of all remove operations that happened in a scope of a current undo/redo
+    /// operation.
     pub deletions: YDeleteSet,
+    /// Pointer to a custom metadata object that can be passed between
+    /// `yundo_manager_observe_popped` and `yundo_manager_observe_added`. It's useful for passing
+    /// around custom user data ie. cursor position, that needs to be remembered and restored as
+    /// part of undo/redo operations.
+    ///
+    /// This field always starts with no value (`NULL`) assigned to it and can be set/unset in
+    /// corresponding callback calls. In such cases it's up to a programmer to handle allocation
+    /// and deallocation of memory that this pointer will point to. Not releasing it properly may
+    /// lead to memory leaks.
+    pub meta: *mut c_void,
 }
 
 impl YUndoEvent {
-    unsafe fn new(e: &yrs::undo::Event) -> Self {
-        let (origin, origin_len) = if let Some(origin) = e.origin.as_ref() {
+    unsafe fn new(e: &yrs::undo::Event<AtomicPtr<c_void>>) -> Self {
+        let (origin, origin_len) = if let Some(origin) = e.origin() {
             let bytes = origin.as_ref();
             let origin_len = bytes.len() as u32;
             let origin = bytes.as_ptr() as *const c_char;
@@ -4429,7 +4469,7 @@ impl YUndoEvent {
             (null(), 0)
         };
         YUndoEvent {
-            kind: match e.kind {
+            kind: match e.kind() {
                 EventKind::Undo => Y_KIND_UNDO,
                 EventKind::Redo => Y_KIND_REDO,
             },
@@ -4437,6 +4477,7 @@ impl YUndoEvent {
             origin_len,
             insertions: YDeleteSet::new(e.item.insertions()),
             deletions: YDeleteSet::new(e.item.deletions()),
+            meta: e.item.meta.load(Ordering::Acquire),
         }
     }
 }
