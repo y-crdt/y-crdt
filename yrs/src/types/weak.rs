@@ -1,15 +1,20 @@
 use crate::atomic::AtomicRef;
-use crate::block::{Block, BlockPtr, BlockSlice, EmbedPrelim, ItemContent, Prelim};
-use crate::iter::{BlockIterator, BlockSliceIterator, IntoBlockIter, MoveIter, RangeIter, Values};
+use crate::block::{Block, BlockPtr, EmbedPrelim, ItemContent, Prelim};
+use crate::iter::{
+    AsIter, BlockIterator, BlockSliceIterator, IntoBlockIter, MoveIter, RangeIter, TxnIterator,
+    Values,
+};
 use crate::types::{Branch, BranchPtr, EventHandler, Observers, Path, SharedRef, TypeRef, Value};
 use crate::{
     Array, Assoc, GetString, Map, Observable, ReadTxn, StickyIndex, TextRef, TransactionMut,
     XmlTextRef, ID,
 };
+use std::collections::Bound;
 use std::convert::TryFrom;
 use std::marker::PhantomData;
-use std::ops::{Deref, DerefMut};
+use std::ops::{Deref, DerefMut, RangeBounds};
 use std::sync::Arc;
+use thiserror::Error;
 
 /// Weak link reference represents a reference to a single element or consecutive range of elements
 /// stored in another collection in the same document.
@@ -106,14 +111,14 @@ impl<P: AsRef<Branch>> WeakRef<P> {
 
     /// Returns a block [ID] to a beginning of a quoted range.
     /// For quotes linking to a single elements this is equal to [WeakRef::end_id].
-    pub fn start_id(&self) -> &ID {
-        &self.source().quote_start
+    pub fn start_id(&self) -> Option<&ID> {
+        self.source().quote_start.id()
     }
 
     /// Returns a block [ID] to an ending of a quoted range.
     /// For quotes linking to a single elements this is equal to [WeakRef::start_id].
-    pub fn end_id(&self) -> &ID {
-        &self.source().quote_end
+    pub fn end_id(&self) -> Option<&ID> {
+        self.source().quote_end.id()
     }
 }
 
@@ -291,20 +296,9 @@ where
     /// assert_eq!(link.try_deref_raw(&txn), Some("other".into()));
     /// ```
     pub fn try_deref_raw<T: ReadTxn>(&self, txn: &T) -> Option<Value> {
-        fn rightmost(mut curr: BlockPtr) -> BlockPtr {
-            while let Some(item) = curr.deref().as_item() {
-                if let Some(right) = item.right {
-                    curr = right;
-                } else {
-                    break;
-                }
-            }
-            curr
-        }
-
         let source = self.try_source()?;
-        let curr = rightmost(source.first_item.get_owned()?);
-        let item = curr.as_item()?;
+        let last = source.first_item.get_owned().to_iter().last()?;
+        let item = last.as_item()?;
         item.content.get_first()
     }
 }
@@ -315,11 +309,11 @@ where
 {
     /// Returns an iterator over [Value]s existing in a scope of the current [WeakRef] quotation
     /// range.  
-    pub fn unquote<'txn, T: ReadTxn>(&self, txn: &'txn T) -> Unquote<'txn, T> {
+    pub fn unquote<'a, T: ReadTxn>(&self, txn: &'a T) -> Unquote<'a, T> {
         if let Some(source) = self.try_source() {
             source.unquote(txn)
         } else {
-            Unquote::empty(txn)
+            Unquote::empty()
         }
     }
 }
@@ -333,7 +327,7 @@ pub struct WeakPrelim<P> {
 }
 
 impl<P> WeakPrelim<P> {
-    pub(crate) fn new(start: ID, end: ID) -> Self {
+    pub(crate) fn new(start: StickyIndex, end: StickyIndex) -> Self {
         let source = Arc::new(LinkSource::new(start, end));
         WeakPrelim {
             source,
@@ -365,7 +359,7 @@ where
 {
     /// Returns an iterator over [Value]s existing in a scope of the current [WeakPrelim] quotation
     /// range.  
-    pub fn unquote<'txn, T: ReadTxn>(&self, txn: &'txn T) -> Unquote<'txn, T> {
+    pub fn unquote<'a, T: ReadTxn>(&self, txn: &'a T) -> Unquote<'a, T> {
         self.source.unquote(txn)
     }
 }
@@ -472,13 +466,13 @@ impl WeakEvent {
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct LinkSource {
-    pub(crate) quote_start: ID,
-    pub(crate) quote_end: ID,
+    pub(crate) quote_start: StickyIndex,
+    pub(crate) quote_end: StickyIndex,
     pub(crate) first_item: AtomicRef<BlockPtr>,
 }
 
 impl LinkSource {
-    pub fn new(start: ID, end: ID) -> Self {
+    pub fn new(start: StickyIndex, end: StickyIndex) -> Self {
         LinkSource {
             quote_start: start,
             quote_end: end,
@@ -487,10 +481,25 @@ impl LinkSource {
     }
 
     pub fn is_single(&self) -> bool {
-        self.quote_start == self.quote_end
+        match (self.quote_start.id(), self.quote_end.id()) {
+            (Some(x), Some(y)) => x == y,
+            _ => false,
+        }
     }
 
-    pub(crate) fn unquote<'txn, T: ReadTxn>(&self, txn: &'txn T) -> Unquote<'txn, T> {
+    /// Remove reference to current weak link from all items it quotes.
+    pub(crate) fn unlink_all(&self, txn: &mut TransactionMut, branch_ptr: BranchPtr) {
+        let mut i = self.first_item.take().map(|arc| *arc).to_iter().moved();
+        while let Some(ptr) = i.next(txn) {
+            if let Block::Item(item) = ptr.deref() {
+                if item.info.is_linked() {
+                    txn.unlink(ptr, branch_ptr);
+                }
+            }
+        }
+    }
+
+    pub(crate) fn unquote<'a, T: ReadTxn>(&self, txn: &'a T) -> Unquote<'a, T> {
         let mut current = self.first_item.get_owned();
         if let Some(ptr) = &mut current {
             if Self::try_right_most(ptr) {
@@ -500,9 +509,14 @@ impl LinkSource {
         }
         if let Some(Block::Item(item)) = current.as_deref() {
             let parent = *item.parent.as_branch().unwrap();
-            Unquote::new(txn, parent, self.quote_start, self.quote_end.clone())
+            Unquote::new(
+                txn,
+                parent,
+                self.quote_start.clone(),
+                self.quote_end.clone(),
+            )
         } else {
-            Unquote::empty(txn)
+            Unquote::empty()
         }
     }
 
@@ -512,14 +526,7 @@ impl LinkSource {
         match BlockPtr::deref(block_ref) {
             Block::Item(item) if item.parent_sub.is_some() => {
                 // for map types go to the most recent one
-                if let Some(mut curr_block) = item.right {
-                    while let Block::Item(item) = curr_block.deref() {
-                        if let Some(right) = item.right {
-                            curr_block = right;
-                        } else {
-                            break;
-                        }
-                    }
+                if let Some(curr_block) = item.right.to_iter().last() {
                     *block_ref = curr_block;
                     return true;
                 }
@@ -533,36 +540,40 @@ impl LinkSource {
         let mut curr = self
             .first_item
             .get_owned()
-            .or(txn.store.blocks.get_block(&self.quote_start));
-        if let Some(mut ptr) = curr {
-            let offset = self.quote_start.clock as i32 - ptr.id().clock as i32;
-            if offset > 0 {
-                let slice = BlockSlice::new(ptr, offset as u32, ptr.len() - 1);
-                ptr = txn.store.materialize(slice);
-            }
-            self.first_item.swap(ptr);
-            curr = Some(ptr);
-        }
-        while let Some(mut ptr) = curr {
-            let last = if ptr.contains(&self.quote_end) {
-                let offset = self.quote_end.clock - ptr.id().clock;
-                let slice = BlockSlice::new(ptr, 0, offset);
-                ptr = txn.store.materialize(slice);
-                true
-            } else {
-                false
-            };
-            if let Block::Item(item) = ptr.clone().deref_mut() {
-                item.info.set_linked();
-                let linked_by = txn.store.linked_by.entry(ptr).or_default();
-                linked_by.insert(inner_ref);
-                if last {
-                    break;
-                } else {
-                    curr = item.right;
+            .or(txn.store.blocks.get_block(&self.quote_start.id().unwrap()));
+        match curr.as_deref() {
+            Some(Block::Item(item)) if item.parent_sub.is_some() => {
+                // for maps, advance to most recent item
+                if let Some(mut last) = curr.to_iter().last() {
+                    self.first_item.swap(last);
+                    if let Block::Item(item) = last.deref_mut() {
+                        item.info.set_linked();
+                        let linked_by = txn.store.linked_by.entry(last).or_default();
+                        linked_by.insert(inner_ref);
+                    }
                 }
-            } else {
-                break;
+            }
+            _ => {
+                let mut first = true;
+                let from = self.quote_start.clone();
+                let to = self.quote_end.clone();
+                let mut i = curr.to_iter().moved().within_range(from, to);
+                while let Some(slice) = i.next(txn) {
+                    let mut ptr = if !slice.adjacent() {
+                        txn.store.materialize(slice)
+                    } else {
+                        slice.ptr
+                    };
+                    if first {
+                        self.first_item.swap(ptr);
+                        first = false;
+                    }
+                    if let Block::Item(item) = ptr.deref_mut() {
+                        item.info.set_linked();
+                        let linked_by = txn.store.linked_by.entry(ptr).or_default();
+                        linked_by.insert(inner_ref);
+                    }
+                }
             }
         }
     }
@@ -570,13 +581,27 @@ impl LinkSource {
     pub fn to_string<T: ReadTxn>(&self, txn: &T) -> String {
         let mut result = String::new();
         let mut curr = self.first_item.get_owned();
+        if self.quote_start.assoc == Assoc::After {
+            // if assoc >= we exclude start from range
+            curr = if let Some(Block::Item(i)) = curr.as_deref() {
+                i.right
+            } else {
+                return String::new();
+            }
+        }
+        let end = self.quote_end.id().unwrap();
         while let Some(Block::Item(item)) = curr.as_deref() {
+            if self.quote_end.assoc == Assoc::Before && &item.id == end {
+                // right side is open (last item excluded)
+                break;
+            }
             if !item.is_deleted() {
                 if let ItemContent::String(s) = &item.content {
                     result.push_str(s.as_str());
                 }
             }
-            if item.last_id() == self.quote_end {
+            if self.quote_end.assoc == Assoc::After && &item.last_id() == end {
+                // right side is closed (last item included)
                 break;
             }
             curr = item.right;
@@ -588,8 +613,8 @@ impl LinkSource {
         let curr = self.first_item.get_owned();
         if let Some(Block::Item(item)) = curr.as_deref() {
             if let Some(branch) = item.parent.as_branch() {
-                let start = Some(&self.quote_start);
-                let end = Some(&self.quote_end);
+                let start = self.quote_start.id();
+                let end = self.quote_end.id();
                 return XmlTextRef::get_string_fragment(branch.start, start, end);
             }
         }
@@ -598,25 +623,25 @@ impl LinkSource {
 }
 
 /// Iterator over non-deleted items, bounded by the given ID range.
-pub struct Unquote<'txn, T: ReadTxn>(Option<Values<RangeIter<MoveIter<'txn, T>>>>);
+pub struct Unquote<'a, T>(Option<AsIter<'a, T, Values<RangeIter<MoveIter>>>>);
 
-impl<'txn, T: ReadTxn> Unquote<'txn, T> {
-    fn new(txn: &'txn T, parent: BranchPtr, from: ID, to: ID) -> Self {
+impl<'a, T: ReadTxn> Unquote<'a, T> {
+    fn new(txn: &'a T, parent: BranchPtr, from: StickyIndex, to: StickyIndex) -> Self {
         let iter = parent
             .start
             .to_iter()
-            .moved(txn)
-            .within_range(Some(from), Some(to))
+            .moved()
+            .within_range(from, to)
             .values();
-        Unquote(Some(iter))
+        Unquote(Some(AsIter::new(iter, txn)))
     }
 
-    fn empty(txn: &'txn T) -> Self {
+    fn empty() -> Self {
         Unquote(None)
     }
 }
 
-impl<'txn, T: ReadTxn> Iterator for Unquote<'txn, T> {
+impl<'a, T: ReadTxn> Iterator for Unquote<'a, T> {
     type Item = Value;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -628,38 +653,122 @@ impl<'txn, T: ReadTxn> Iterator for Unquote<'txn, T> {
 /// Trait which defines a capability to quote a range of elements from implementing collection
 /// and referencing them later in other collections.
 pub trait Quotable: AsRef<Branch> + Sized {
-    /// Returns [WeakPrelim] to a given range of elements, if it's in a boundaries of a current quotable collection.
+    /// Returns [WeakPrelim] to a given range of elements, if it's in a boundaries of a current
+    /// quotable collection.
     ///
-    /// Example:
+    /// Quoted ranges inclusivity define behavior of quote in face of concurrent inserts that might
+    /// have happen, example:
+    /// - Inclusive range (eg. `1..=2`) means, that any concurrent inserts that happen between
+    ///   indexes 2 and 3 will **not** be part of the quoted range.
+    /// - Exclusive range (eg. `1..3`) theoretically being similar to an upper one, will behave
+    ///   differently as for concurrent inserts on 2nd and 3rd index boundary, these inserts will be
+    ///   counted as a part of quoted range.
+    ///
+    /// # Errors
+    ///
+    /// This method may return an error if passed range param is invalid ie. when it spans beyond
+    /// the boundaries of a current collection or it's unbounded on any end (which is currently
+    /// not supported).
+    ///
+    /// # Example
     /// ```
     /// use yrs::{Doc, Transact, Array, Assoc, Quotable};
     /// let doc = Doc::new();
     /// let array = doc.get_or_insert_array("array");
     /// array.insert_range(&mut doc.transact_mut(), 0, [1,2,3,4]);
     /// // quote elements 2 and 3
-    /// let prelim = array.quote(&doc.transact(), 1, Assoc::After, 3, Assoc::Before).unwrap();
+    /// let prelim = array.quote(&doc.transact(), 1..3).unwrap();
     /// let quote = array.insert(&mut doc.transact_mut(), 0, prelim);
     /// // retrieve quoted values
     /// let quoted: Vec<_> = quote.unquote(&doc.transact()).collect();
     /// assert_eq!(quoted, vec![2.into(), 3.into()]);
     /// ```
-    fn quote<T: ReadTxn>(
-        &self,
-        txn: &T,
-        start: u32,
-        assoc_start: Assoc,
-        end: u32,
-        assoc_end: Assoc,
-    ) -> Option<WeakPrelim<Self>> {
-        assert!(start <= end, "quotation start cannot be greater than end");
+    fn quote<T, R>(&self, txn: &T, range: R) -> Result<WeakPrelim<Self>, QuoteError>
+    where
+        T: ReadTxn,
+        R: RangeBounds<u32>,
+    {
         let this = BranchPtr::from(self.as_ref());
-        let index = StickyIndex::at(txn, this, start, assoc_start)?;
-        let start_id = index.id()?.clone();
-        let index = StickyIndex::at(txn, this, end, assoc_end)?;
-        let end_id = index.id()?.clone();
-        let source = LinkSource::new(start_id, end_id);
-        Some(WeakPrelim::with_source(Arc::new(source)))
+        let (start, assoc_start) = match range.start_bound() {
+            Bound::Included(&i) => (i, Assoc::Before),
+            Bound::Excluded(&i) => (i, Assoc::After),
+            Bound::Unbounded => return Err(QuoteError::UnboundedRange),
+        };
+        let (end, assoc_end) = match range.end_bound() {
+            Bound::Included(&i) => (i, Assoc::After),
+            Bound::Excluded(&i) => (i, Assoc::Before),
+            Bound::Unbounded => return Err(QuoteError::UnboundedRange),
+        };
+        let mut remaining = start;
+        let encoding = txn.store().options.offset_kind;
+        let mut i = this.start.to_iter().moved();
+        // figure out the first ID
+        let mut curr = i.next(txn);
+        while let Some(Block::Item(item)) = curr.as_deref() {
+            if remaining == 0 {
+                break;
+            }
+            if !item.is_deleted() && item.is_countable() {
+                let len = item.content_len(encoding);
+                if remaining < len {
+                    break;
+                }
+                remaining -= len;
+            }
+            curr = i.next(txn);
+        }
+        let start_id = if let Some(Block::Item(item)) = curr.as_deref() {
+            let mut id = item.id.clone();
+            id.clock += if let ItemContent::String(s) = &item.content {
+                s.block_offset(remaining, encoding)
+            } else {
+                remaining
+            };
+            id
+        } else {
+            return Err(QuoteError::OutOfBounds);
+        };
+        // figure out the last ID
+        remaining = end - start + remaining;
+        while let Some(Block::Item(item)) = curr.as_deref() {
+            if !item.is_deleted() && item.is_countable() {
+                let len = item.content_len(encoding);
+                if remaining < len {
+                    break;
+                }
+                remaining -= len;
+            }
+            curr = i.next(txn);
+        }
+        let end_id = if let Some(Block::Item(item)) = curr.as_deref() {
+            let mut id = item.id.clone();
+            id.clock += if let ItemContent::String(s) = &item.content {
+                s.block_offset(remaining, encoding)
+            } else {
+                remaining
+            };
+            id
+        } else {
+            return Err(QuoteError::OutOfBounds);
+        };
+
+        let start = StickyIndex::from_id(start_id, assoc_start);
+        let end = StickyIndex::from_id(end_id, assoc_end);
+        let source = LinkSource::new(start, end);
+        Ok(WeakPrelim::with_source(Arc::new(source)))
     }
+}
+
+/// Error that may appear in result of [Quotable::quote] method call.
+#[derive(Debug, Error)]
+pub enum QuoteError {
+    /// Range param passed to [Quotable::quote] was beyond the scope of the quotable collection.
+    #[error("Quoted range spans beyond the bounds of current collection")]
+    OutOfBounds,
+    /// Range param passed to [Quotable::quote] contains an unbounded end, which is not supported
+    /// at the moment.
+    #[error("Quotations don't support unbounded ranges")]
+    UnboundedRange,
 }
 
 #[cfg(test)]
@@ -674,7 +783,8 @@ mod test {
         Quotable, Text, TextRef, Transact, XmlTextRef,
     };
     use std::cell::RefCell;
-    use std::collections::HashMap;
+    use std::collections::{Bound, HashMap};
+    use std::ops::RangeBounds;
     use std::rc::Rc;
     use std::sync::Arc;
 
@@ -693,6 +803,7 @@ mod test {
             .unwrap()
             .cast::<WeakRef<MapRef>>()
             .unwrap();
+
         let expected = nested.to_json(&txn);
         let deref: MapRef = link.try_deref(&txn).unwrap();
         let actual = deref.to_json(&txn);
@@ -708,7 +819,7 @@ mod test {
             let mut txn = d1.transact_mut();
 
             a1.insert_range(&mut txn, 0, [1, 2, 3]);
-            let link = a1.quote(&txn, 1, After, 2, Before).unwrap();
+            let link = a1.quote(&txn, 1..2).unwrap();
             a1.insert(&mut txn, 3, link);
 
             assert_eq!(a1.get(&txn, 0), Some(1.into()));
@@ -759,7 +870,7 @@ mod test {
         };
         let l1 = {
             let mut t1 = d1.transact_mut();
-            let prelim = a1.quote(&t1, 1, After, 4, Before).unwrap();
+            let prelim = a1.quote(&t1, 1..=3).unwrap();
             a1.insert(&mut t1, 0, prelim)
         };
 
@@ -834,7 +945,7 @@ mod test {
         let a2 = d2.get_or_insert_array("array");
 
         a1.insert_range(&mut d1.transact_mut(), 0, [1, 2, 3, 4]);
-        let l1 = a1.quote(&d1.transact(), 0, After, 3, Before).unwrap();
+        let l1 = a1.quote(&d1.transact(), 0..3).unwrap();
         // link is inserted into its own range
         let l1 = a1.insert(&mut d1.transact_mut(), 1, l1);
         let t1 = d1.transact();
@@ -1087,7 +1198,7 @@ mod test {
         let mut link1 = {
             let mut txn = d1.transact_mut();
             a1.insert_range(&mut txn, 0, ["A", "B", "C"]);
-            let link1 = a1.quote(&txn, 1, After, 2, After).unwrap();
+            let link1 = a1.quote(&txn, 1..=2).unwrap();
             a1.insert(&mut txn, 0, link1)
         };
 
@@ -1275,7 +1386,7 @@ mod test {
 
         let mut txn = doc.transact_mut();
         let nested = array.insert(&mut txn, 0, MapPrelim::<u32>::new());
-        let link = array.quote(&txn, 0, After, 1, Before).unwrap();
+        let link = array.quote(&txn, 0..=0).unwrap();
         let link = map.insert(&mut txn, "link", link);
         drop(txn);
 
@@ -1413,7 +1524,7 @@ mod test {
         }
         let mut l1 = {
             let mut t1 = d1.transact_mut();
-            let link = a1.quote(&t1, 1, Before, 2, After).unwrap();
+            let link = a1.quote(&t1, 1..=2).unwrap();
             a1.insert(&mut t1, 0, link)
         };
 
@@ -1510,9 +1621,9 @@ mod test {
         let m1 = root.insert(&mut txn, 1, MapPrelim::<u32>::new());
         let m2 = root.insert(&mut txn, 2, MapPrelim::<u32>::new());
 
-        let l0 = root.quote(&txn, 0, After, 1, Before).unwrap();
-        let l1 = root.quote(&txn, 1, After, 2, Before).unwrap();
-        let l2 = root.quote(&txn, 2, After, 3, Before).unwrap();
+        let l0 = root.quote(&txn, 0..=0).unwrap();
+        let l1 = root.quote(&txn, 1..=1).unwrap();
+        let l2 = root.quote(&txn, 2..=2).unwrap();
 
         // create cyclic reference between links
         m0.insert(&mut txn, "k1", l1);
@@ -1633,7 +1744,7 @@ mod test {
         txt1.insert(&mut d1.transact_mut(), 0, "abcd"); // 'abcd'
         let l1 = {
             let mut txn = d1.transact_mut();
-            let q = txt1.quote(&mut txn, 1, After, 3, Before); // quote: [bc]
+            let q = txt1.quote(&mut txn, 1..=2); // quote: [bc]
             a1.insert(&mut txn, 0, q.unwrap())
         };
         assert_eq!(l1.get_string(&d1.transact()), "bc".to_string());
@@ -1664,7 +1775,7 @@ mod test {
         txt1.insert(&mut d1.transact_mut(), 0, "abcd"); // 'abcd'
         let l1 = {
             let mut txn = d1.transact_mut();
-            let q = txt1.quote(&mut txn, 1, After, 3, Before); // quote: [bc]
+            let q = txt1.quote(&mut txn, 1..=2); // quote: [bc]
             a1.insert(&mut txn, 0, q.unwrap())
         };
         assert_eq!(l1.get_string(&d1.transact()), "bc".to_string());
@@ -1697,17 +1808,17 @@ mod test {
         txt1.format(&mut doc.transact_mut(), 1, 3, i.clone()); // '<b>a</b><i>bcd</i>e'
         let l1 = {
             let mut txn = doc.transact_mut();
-            let l = txt1.quote(&mut txn, 0, After, 2, Before).unwrap();
+            let l = txt1.quote(&mut txn, 0..=1).unwrap();
             array.insert(&mut txn, 0, l) // <b>a</b><i>b</i>
         };
         let l2 = {
             let mut txn = doc.transact_mut();
-            let l = txt1.quote(&mut txn, 2, After, 3, Before).unwrap();
+            let l = txt1.quote(&mut txn, 2..=2).unwrap();
             array.insert(&mut txn, 0, l) // <i>c</i>
         };
         let l3 = {
             let mut txn = doc.transact_mut();
-            let l = txt1.quote(&mut txn, 3, After, 5, Before).unwrap();
+            let l = txt1.quote(&mut txn, 3..=4).unwrap();
             array.insert(&mut txn, 0, l) // <i>d</i>e
         };
         assert_eq!(l1.get_string(&doc.transact()), "<b>a</b><i>b</i>");
@@ -1756,7 +1867,7 @@ mod test {
 
         let mut assert_quote = |start: u32, len: u32, expected: Vec<u32>| {
             let end = start + len;
-            let q = array.quote(&mut txn, start, After, end, Before).unwrap();
+            let q = array.quote(&mut txn, start..end).unwrap();
             let q = quotes.push_back(&mut txn, q);
             let values: Vec<_> = q.unquote(&txn).map(|v| v.cast::<u32>().unwrap()).collect();
             assert_eq!(values, expected)
@@ -1785,7 +1896,7 @@ mod test {
 
         let mut assert_quote = |start: u32, len: u32, expected: Vec<u32>| {
             let end = start + len;
-            let q = array.quote(&mut txn, start, After, end, Before).unwrap();
+            let q = array.quote(&mut txn, start..end).unwrap();
             let q = quotes.push_back(&mut txn, q);
             let values: Vec<_> = q.unquote(&txn).map(|v| v.cast::<u32>().unwrap()).collect();
             assert_eq!(values, expected)
@@ -1811,7 +1922,7 @@ mod test {
 
         let mut quote = |start: u32, len: u32| {
             let end = start + len;
-            let q = array.quote(&mut txn, start, After, end, Before).unwrap();
+            let q = array.quote(&mut txn, start..end).unwrap();
             quotes.push_back(&mut txn, q)
         };
         let q1 = quote(0, 3); // [1,2,3]
@@ -1838,5 +1949,100 @@ mod test {
 
         let actual: Vec<_> = q5.unquote(&txn).map(|v| v.cast::<u32>().unwrap()).collect();
         assert_eq!(actual, vec![5, 6, 2, 3, 7]);
+    }
+
+    #[test]
+    fn start_boundary_inserts() {
+        let d1 = Doc::with_client_id(1);
+        let arr1 = d1.get_or_insert_array("array");
+        let txt1 = d1.get_or_insert_text("text");
+        {
+            let mut txn = d1.transact_mut();
+            txt1.insert(&mut txn, 0, "abcdef");
+        }
+
+        let d2 = Doc::with_client_id(2);
+        let arr2 = d2.get_or_insert_array("array");
+        let txt2 = d2.get_or_insert_text("text");
+
+        exchange_updates(&[&d1, &d2]);
+
+        txt2.insert(&mut d2.transact_mut(), 1, "xyz");
+
+        let link_excl = {
+            struct RangeLeftExclusive(u32, u32);
+            impl RangeBounds<u32> for RangeLeftExclusive {
+                fn start_bound(&self) -> Bound<&u32> {
+                    Bound::Excluded(&self.0)
+                }
+
+                fn end_bound(&self) -> Bound<&u32> {
+                    Bound::Excluded(&self.1)
+                }
+            }
+
+            let mut txn = d1.transact_mut();
+            let q = txt1.quote(&txn, RangeLeftExclusive(0, 6)).unwrap();
+            arr1.insert(&mut txn, 0, q)
+        };
+        let link_incl = {
+            let mut txn = d1.transact_mut();
+            let q = txt1.quote(&txn, 1..6).unwrap();
+            arr1.insert(&mut txn, 0, q)
+        };
+
+        let str = link_excl.get_string(&d1.transact());
+        assert_eq!(&str, "bcde");
+        let str = link_incl.get_string(&d1.transact());
+        assert_eq!(&str, "bcde");
+
+        exchange_updates(&[&d1, &d2]);
+
+        let str = link_excl.get_string(&d1.transact());
+        assert_eq!(&str, "xyzbcde");
+        let str = link_incl.get_string(&d1.transact());
+        assert_eq!(&str, "bcde");
+    }
+
+    #[test]
+    fn end_boundary_inserts() {
+        let d1 = Doc::with_client_id(1);
+        let arr1 = d1.get_or_insert_array("array");
+        let txt1 = d1.get_or_insert_text("text");
+        {
+            let mut txn = d1.transact_mut();
+            txt1.insert(&mut txn, 0, "abcdef");
+        }
+
+        let d2 = Doc::with_client_id(2);
+        let arr2 = d2.get_or_insert_array("array");
+        let txt2 = d2.get_or_insert_text("text");
+
+        exchange_updates(&[&d1, &d2]);
+
+        txt2.insert(&mut d2.transact_mut(), 5, "xyz");
+
+        let link_excl = {
+            let mut txn = d1.transact_mut();
+            let q = txt1.quote(&txn, 1..6).unwrap();
+            arr1.insert(&mut txn, 0, q)
+        };
+        let link_incl = {
+            let mut txn = d1.transact_mut();
+            let q = txt1.quote(&txn, 1..=5).unwrap();
+            arr1.insert(&mut txn, 0, q)
+        };
+
+        let str = link_excl.get_string(&d1.transact());
+        assert_eq!(&str, "bcde");
+        let str = link_incl.get_string(&d1.transact());
+        assert_eq!(&str, "bcde");
+
+        exchange_updates(&[&d1, &d2]);
+
+        let str = link_excl.get_string(&d1.transact());
+        assert_eq!(&str, "bcdexyz");
+        let str = link_incl.get_string(&d1.transact());
+        assert_eq!(&str, "bcde");
     }
 }

@@ -1,29 +1,29 @@
 use crate::block::{Block, BlockPtr, BlockSlice, ItemContent};
-use crate::{ReadTxn, Value, ID};
+use crate::{Assoc, ReadTxn, StickyIndex, Value};
 use std::ops::Deref;
 
-pub(crate) trait BlockIterator: Iterator<Item = BlockPtr> + Sized {
+pub(crate) trait BlockIterator: TxnIterator<Item = BlockPtr> + Sized {
     #[inline]
     fn slices(self) -> BlockSlices<Self> {
         BlockSlices(self)
     }
 
     #[inline]
-    fn within_range(self, from: Option<ID>, to: Option<ID>) -> RangeIter<Self> {
+    fn within_range(self, from: StickyIndex, to: StickyIndex) -> RangeIter<Self> {
         RangeIter::new(self, from, to)
     }
 }
 
-impl<T> BlockIterator for T where T: Iterator<Item = BlockPtr> + Sized {}
+impl<T> BlockIterator for T where T: TxnIterator<Item = BlockPtr> + Sized {}
 
-pub(crate) trait BlockSliceIterator: Iterator<Item = BlockSlice> + Sized {
+pub(crate) trait BlockSliceIterator: TxnIterator<Item = BlockSlice> + Sized {
     #[inline]
     fn values(self) -> Values<Self> {
         Values::new(self)
     }
 }
 
-impl<T> BlockSliceIterator for T where T: Iterator<Item = BlockSlice> + Sized {}
+impl<T> BlockSliceIterator for T where T: TxnIterator<Item = BlockSlice> + Sized {}
 
 pub trait IntoBlockIter {
     fn to_iter(self) -> BlockIter;
@@ -49,8 +49,8 @@ impl BlockIter {
         BlockIter(ptr)
     }
 
-    pub fn moved<T: ReadTxn>(self, txn: &T) -> MoveIter<T> {
-        MoveIter::new(txn, self)
+    pub fn moved(self) -> MoveIter {
+        MoveIter::new(self)
     }
 }
 
@@ -85,23 +85,29 @@ impl IntoIterator for BlockPtr {
     }
 }
 
+/// Iterator equivalent that can be supplied with transaction when iteration step may need it.
+pub trait TxnIterator {
+    type Item;
+    fn next<T: ReadTxn>(&mut self, txn: &T) -> Option<Self::Item>;
+}
+
+/// DoubleEndedIterator equivalent that can be supplied with transaction when iteration step may need it.
+pub trait TxnDoubleEndedIterator: TxnIterator {
+    fn next_back<T: ReadTxn>(&mut self, txn: &T) -> Option<Self::Item>;
+}
+
 /// Block iterator which acknowledges context of move operation and iterates
 /// over blocks as they appear after move. It skips over the presence of move destination blocks.
 #[derive(Debug)]
-pub struct MoveIter<'a, T> {
+pub struct MoveIter {
     iter: BlockIter,
-    txn: &'a T,
     stack: MoveStack,
 }
 
-impl<'a, T> MoveIter<'a, T>
-where
-    T: ReadTxn,
-{
-    pub(crate) fn new(txn: &'a T, iter: BlockIter) -> Self {
+impl MoveIter {
+    pub(crate) fn new(iter: BlockIter) -> Self {
         MoveIter {
             iter,
-            txn,
             stack: MoveStack::default(),
         }
     }
@@ -120,13 +126,10 @@ where
     }
 }
 
-impl<'a, T> Iterator for MoveIter<'a, T>
-where
-    T: ReadTxn,
-{
+impl TxnIterator for MoveIter {
     type Item = BlockPtr;
 
-    fn next(&mut self) -> Option<Self::Item> {
+    fn next<T: ReadTxn>(&mut self, txn: &T) -> Option<Self::Item> {
         while {
             if let Some(curr) = self.iter.next() {
                 let ptr = curr.clone();
@@ -148,7 +151,7 @@ where
                         }
                         if let ItemContent::Move(m) = &item.content {
                             // we need to move to a new scope and reposition iterator at the start of it
-                            let (start, end) = m.get_moved_coords(self.txn);
+                            let (start, end) = m.get_moved_coords(txn);
                             self.stack.push(MoveScope::new(start, end, curr));
                             self.iter = BlockIter(start);
                         } else {
@@ -170,11 +173,8 @@ where
     }
 }
 
-impl<'a, T> DoubleEndedIterator for MoveIter<'a, T>
-where
-    T: ReadTxn,
-{
-    fn next_back(&mut self) -> Option<Self::Item> {
+impl TxnDoubleEndedIterator for MoveIter {
+    fn next_back<T: ReadTxn>(&mut self, txn: &T) -> Option<Self::Item> {
         while {
             if let Some(curr) = self.iter.next_back() {
                 let ptr = curr.clone();
@@ -195,7 +195,7 @@ where
                         }
                         if let ItemContent::Move(m) = &item.content {
                             // we need to move to a new scope and reposition iterator at the end of it
-                            let (start, end) = m.get_moved_coords(self.txn);
+                            let (start, end) = m.get_moved_coords(txn);
                             self.stack.push(MoveScope::new(start, end, curr));
                             self.iter = BlockIter(end);
                         } else {
@@ -272,26 +272,26 @@ impl MoveScope {
 #[derive(Debug)]
 pub(crate) struct BlockSlices<I>(I)
 where
-    I: Iterator<Item = BlockPtr> + Sized;
+    I: TxnIterator<Item = BlockPtr> + Sized;
 
-impl<I> Iterator for BlockSlices<I>
+impl<I> TxnIterator for BlockSlices<I>
 where
-    I: Iterator<Item = BlockPtr> + Sized,
+    I: TxnIterator<Item = BlockPtr> + Sized,
 {
     type Item = BlockSlice;
 
-    fn next(&mut self) -> Option<Self::Item> {
-        let ptr = self.0.next()?;
+    fn next<T: ReadTxn>(&mut self, txn: &T) -> Option<Self::Item> {
+        let ptr = self.0.next(txn)?;
         Some(ptr.into())
     }
 }
 
-impl<I> DoubleEndedIterator for BlockSlices<I>
+impl<I> TxnDoubleEndedIterator for BlockSlices<I>
 where
-    I: DoubleEndedIterator<Item = BlockPtr>,
+    I: TxnDoubleEndedIterator<Item = BlockPtr>,
 {
-    fn next_back(&mut self) -> Option<Self::Item> {
-        let ptr = self.0.next_back()?;
+    fn next_back<T: ReadTxn>(&mut self, txn: &T) -> Option<Self::Item> {
+        let ptr = self.0.next_back(txn)?;
         Some(ptr.into())
     }
 }
@@ -300,16 +300,16 @@ where
 #[derive(Debug)]
 pub(crate) struct RangeIter<I> {
     iter: I,
-    start: Option<ID>,
-    end: Option<ID>,
+    start: StickyIndex,
+    end: StickyIndex,
     state: RangeIterState,
 }
 
 impl<I> RangeIter<I>
 where
-    I: Iterator<Item = BlockPtr>,
+    I: TxnIterator<Item = BlockPtr>,
 {
-    fn new(iter: I, start: Option<ID>, end: Option<ID>) -> Self {
+    fn new(iter: I, start: StickyIndex, end: StickyIndex) -> Self {
         RangeIter {
             iter,
             start,
@@ -317,42 +317,67 @@ where
             state: RangeIterState::Opened,
         }
     }
+
+    fn begin<T: ReadTxn>(&mut self, txn: &T, start_offset: &mut u32) -> Option<BlockPtr> {
+        let mut offset = 0;
+        let mut curr = self.iter.next(txn);
+        while let Some(ptr) = curr {
+            match self.start.id() {
+                None => {
+                    self.state = RangeIterState::InRange;
+                    break;
+                }
+                Some(start) if ptr.contains(start) => {
+                    self.state = RangeIterState::InRange;
+                    offset = start.clock - ptr.id().clock;
+                    if self.start.assoc == Assoc::After {
+                        // we need to skip first element in a block
+                        offset += 1;
+                        if offset == ptr.len() {
+                            // we're at the last element in a block, move to next block
+                            offset = 0;
+                            curr = self.iter.next(txn);
+                        }
+                    }
+                    break;
+                }
+                _ => curr = self.iter.next(txn),
+            }
+        }
+        *start_offset = offset;
+        curr
+    }
 }
 
-impl<I> Iterator for RangeIter<I>
+impl<I> TxnIterator for RangeIter<I>
 where
-    I: Iterator<Item = BlockPtr>,
+    I: TxnIterator<Item = BlockPtr>,
 {
     type Item = BlockSlice;
 
-    fn next(&mut self) -> Option<Self::Item> {
+    fn next<T: ReadTxn>(&mut self, txn: &T) -> Option<Self::Item> {
         let mut start_offset = 0;
         let ptr = match self.state {
-            RangeIterState::InRange => self.iter.next(),
             RangeIterState::Opened => {
-                let mut curr = self.iter.next();
-                while let Some(ptr) = curr {
-                    match &self.start {
-                        None => {
-                            self.state = RangeIterState::InRange;
-                            break;
-                        }
-                        Some(start) if ptr.contains(start) => {
-                            self.state = RangeIterState::InRange;
-                            start_offset = start.clock - ptr.id().clock;
-                            break;
-                        }
-                        _ => curr = self.iter.next(),
-                    }
-                }
-                curr
+                // we just opened an iterator, we might not yet be in range
+                self.begin(txn, &mut start_offset)
             }
+            RangeIterState::InRange => self.iter.next(txn),
             RangeIterState::Closed => return None,
         }?;
-        let end_offset = match &self.end {
+        let end_offset = match self.end.id() {
             Some(end) if ptr.contains(end) => {
                 self.state = RangeIterState::Closed;
-                end.clock - ptr.id().clock
+                let mut offset = end.clock - ptr.id().clock;
+                if self.end.assoc == Assoc::Before {
+                    // we need to exclude last element
+                    if offset == start_offset {
+                        // last slice is empty - has no elements
+                        return None;
+                    }
+                    offset -= 1;
+                }
+                offset
             }
             _ => ptr.len() - 1,
         };
@@ -360,19 +385,19 @@ where
     }
 }
 
-impl<I> DoubleEndedIterator for RangeIter<I>
+impl<I> TxnDoubleEndedIterator for RangeIter<I>
 where
-    I: DoubleEndedIterator<Item = BlockPtr>,
+    I: TxnDoubleEndedIterator<Item = BlockPtr>,
 {
-    fn next_back(&mut self) -> Option<Self::Item> {
+    fn next_back<T: ReadTxn>(&mut self, txn: &T) -> Option<Self::Item> {
         let mut end_offset = 0;
         let ptr = match self.state {
-            RangeIterState::InRange => self.iter.next_back(),
+            RangeIterState::InRange => self.iter.next_back(txn),
             RangeIterState::Opened => {
-                let mut curr = self.iter.next_back();
+                let mut curr = self.iter.next_back(txn);
                 while let Some(ptr) = curr {
                     end_offset = ptr.len();
-                    match &self.end {
+                    match self.end.id() {
                         None => {
                             self.state = RangeIterState::InRange;
                             break;
@@ -382,14 +407,14 @@ where
                             end_offset = end.clock - ptr.id().clock;
                             break;
                         }
-                        _ => curr = self.iter.next_back(),
+                        _ => curr = self.iter.next_back(txn),
                     }
                 }
                 curr
             }
             RangeIterState::Closed => return None,
         }?;
-        let start_offset = match &self.start {
+        let start_offset = match self.start.id() {
             Some(start) if ptr.contains(start) => {
                 self.state = RangeIterState::Closed;
                 start.clock - ptr.id().clock
@@ -417,10 +442,7 @@ pub(crate) struct Values<I> {
     current: Option<BlockSlice>,
 }
 
-impl<I> Values<I>
-where
-    I: Iterator<Item = BlockSlice>,
-{
+impl<I> Values<I> {
     fn new(iter: I) -> Self {
         Values {
             iter,
@@ -429,13 +451,13 @@ where
     }
 }
 
-impl<I> Iterator for Values<I>
+impl<I> TxnIterator for Values<I>
 where
-    I: Iterator<Item = BlockSlice>,
+    I: TxnIterator<Item = BlockSlice>,
 {
     type Item = Value;
 
-    fn next(&mut self) -> Option<Self::Item> {
+    fn next<T: ReadTxn>(&mut self, txn: &T) -> Option<Self::Item> {
         loop {
             if let Some(slice) = &mut self.current {
                 if slice.start <= slice.end {
@@ -451,16 +473,81 @@ where
                     }
                 }
             }
-            self.current = Some(self.iter.next()?);
+            self.current = Some(self.iter.next(txn)?);
         }
+    }
+}
+
+pub trait TxnCollect {
+    fn collect_into<T, B>(&mut self, txn: &T, buf: &mut B)
+    where
+        T: ReadTxn,
+        B: Extend<Value>;
+
+    fn collect<T, B>(&mut self, txn: &T) -> B
+    where
+        T: ReadTxn,
+        B: Default + Extend<Value>,
+    {
+        let mut buf = B::default();
+        self.collect_into(txn, &mut buf);
+        buf
+    }
+}
+
+impl<I> TxnCollect for I
+where
+    I: TxnIterator<Item = BlockSlice>,
+{
+    fn collect_into<T, B>(&mut self, txn: &T, buf: &mut B)
+    where
+        T: ReadTxn,
+        B: Extend<Value>,
+    {
+        while let Some(slice) = self.next(txn) {
+            if let Block::Item(item) = slice.ptr.deref() {
+                let size = slice.end - slice.start + 1;
+                let mut b = vec![Value::default(); size as usize];
+                let read = item.content.read(slice.start as usize, b.as_mut_slice());
+                buf.extend(b);
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct AsIter<'a, T, I> {
+    txn: &'a T,
+    iter: I,
+}
+
+impl<'a, T, I> AsIter<'a, T, I>
+where
+    T: ReadTxn,
+    I: TxnIterator,
+{
+    pub fn new(iter: I, txn: &'a T) -> Self {
+        AsIter { txn, iter }
+    }
+}
+
+impl<'a, T, I> Iterator for AsIter<'a, T, I>
+where
+    T: ReadTxn,
+    I: TxnIterator,
+{
+    type Item = I::Item;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.iter.next(self.txn)
     }
 }
 
 #[cfg(test)]
 mod test {
-    use crate::iter::{BlockIterator, BlockSliceIterator, IntoBlockIter};
+    use crate::iter::{BlockIterator, BlockSliceIterator, IntoBlockIter, TxnCollect, TxnIterator};
     use crate::test_utils::exchange_updates;
-    use crate::{Array, Assoc, Doc, Transact, ID};
+    use crate::{Array, Assoc, Doc, StickyIndex, Transact, ID};
 
     #[test]
     fn move_last_elem_iter() {
@@ -474,11 +561,11 @@ mod test {
         array.move_to(&mut txn, 2, 0);
 
         let start = array.as_ref().start;
-        let mut i = start.to_iter().moved(&txn).slices().values();
-        assert_eq!(i.next(), Some(3.into()));
-        assert_eq!(i.next(), Some(1.into()));
-        assert_eq!(i.next(), Some(2.into()));
-        assert_eq!(i.next(), None);
+        let mut i = start.to_iter().moved().slices().values();
+        assert_eq!(i.next(&txn), Some(3.into()));
+        assert_eq!(i.next(&txn), Some(1.into()));
+        assert_eq!(i.next(&txn), Some(2.into()));
+        assert_eq!(i.next(&txn), None);
     }
 
     #[test]
@@ -496,32 +583,32 @@ mod test {
         }
         {
             let txn = d1.transact();
-            let mut i = a1.as_ref().start.to_iter().moved(&txn).slices().values();
-            assert_eq!(i.next(), Some(2.into()));
-            assert_eq!(i.next(), Some(1.into()));
-            assert_eq!(i.next(), Some(3.into()));
-            assert_eq!(i.next(), None);
+            let mut i = a1.as_ref().start.to_iter().moved().slices().values();
+            assert_eq!(i.next(&txn), Some(2.into()));
+            assert_eq!(i.next(&txn), Some(1.into()));
+            assert_eq!(i.next(&txn), Some(3.into()));
+            assert_eq!(i.next(&txn), None);
         }
 
         exchange_updates(&[&d1, &d2]);
         {
             let txn = d2.transact();
-            let mut i = a2.as_ref().start.to_iter().moved(&txn).slices().values();
-            assert_eq!(i.next(), Some(2.into()));
-            assert_eq!(i.next(), Some(1.into()));
-            assert_eq!(i.next(), Some(3.into()));
-            assert_eq!(i.next(), None);
+            let mut i = a2.as_ref().start.to_iter().moved().slices().values();
+            assert_eq!(i.next(&txn), Some(2.into()));
+            assert_eq!(i.next(&txn), Some(1.into()));
+            assert_eq!(i.next(&txn), Some(3.into()));
+            assert_eq!(i.next(&txn), None);
         }
 
         a1.move_to(&mut d1.transact_mut(), 0, 2);
 
         {
             let txn = d1.transact();
-            let mut i = a1.as_ref().start.to_iter().moved(&txn).slices().values();
-            assert_eq!(i.next(), Some(1.into()));
-            assert_eq!(i.next(), Some(2.into()));
-            assert_eq!(i.next(), Some(3.into()));
-            assert_eq!(i.next(), None);
+            let mut i = a1.as_ref().start.to_iter().moved().slices().values();
+            assert_eq!(i.next(&txn), Some(1.into()));
+            assert_eq!(i.next(&txn), Some(2.into()));
+            assert_eq!(i.next(&txn), Some(3.into()));
+            assert_eq!(i.next(&txn), None);
         }
     }
 
@@ -537,29 +624,29 @@ mod test {
         a1.move_to(&mut d1.transact_mut(), 1, 0);
         {
             let txn = d1.transact();
-            let mut i = a1.as_ref().start.to_iter().moved(&txn).slices().values();
-            assert_eq!(i.next(), Some(2.into()));
-            assert_eq!(i.next(), Some(1.into()));
-            assert_eq!(i.next(), None);
+            let mut i = a1.as_ref().start.to_iter().moved().slices().values();
+            assert_eq!(i.next(&txn), Some(2.into()));
+            assert_eq!(i.next(&txn), Some(1.into()));
+            assert_eq!(i.next(&txn), None);
         }
 
         exchange_updates(&[&d1, &d2]);
 
         {
             let txn = d2.transact();
-            let mut i = a2.as_ref().start.to_iter().moved(&txn).slices().values();
-            assert_eq!(i.next(), Some(2.into()));
-            assert_eq!(i.next(), Some(1.into()));
-            assert_eq!(i.next(), None);
+            let mut i = a2.as_ref().start.to_iter().moved().slices().values();
+            assert_eq!(i.next(&txn), Some(2.into()));
+            assert_eq!(i.next(&txn), Some(1.into()));
+            assert_eq!(i.next(&txn), None);
         }
 
         a1.move_to(&mut d1.transact_mut(), 0, 2);
         {
             let txn = d1.transact();
-            let mut i = a1.as_ref().start.to_iter().moved(&txn).slices().values();
-            assert_eq!(i.next(), Some(1.into()));
-            assert_eq!(i.next(), Some(2.into()));
-            assert_eq!(i.next(), None);
+            let mut i = a1.as_ref().start.to_iter().moved().slices().values();
+            assert_eq!(i.next(&txn), Some(1.into()));
+            assert_eq!(i.next(&txn), Some(2.into()));
+            assert_eq!(i.next(&txn), None);
         }
     }
 
@@ -577,46 +664,32 @@ mod test {
         a1.move_range_to(&mut d1.transact_mut(), 0, Assoc::After, 1, Assoc::Before, 3);
         {
             let txn = d1.transact();
-            let mut i = a1.as_ref().start.to_iter().moved(&txn).slices().values();
-            assert_eq!(i.next(), Some(3.into()));
-            assert_eq!(i.next(), Some(1.into()));
-            assert_eq!(i.next(), Some(2.into()));
-            assert_eq!(i.next(), Some(4.into()));
-            assert_eq!(i.next(), None);
+            let mut i = a1.as_ref().start.to_iter().moved().slices().values();
+            assert_eq!(i.next(&txn), Some(3.into()));
+            assert_eq!(i.next(&txn), Some(1.into()));
+            assert_eq!(i.next(&txn), Some(2.into()));
+            assert_eq!(i.next(&txn), Some(4.into()));
+            assert_eq!(i.next(&txn), None);
         }
 
         a2.move_range_to(&mut d2.transact_mut(), 2, Assoc::After, 3, Assoc::Before, 1);
         {
             let txn = d2.transact();
-            let mut i = a2.as_ref().start.to_iter().moved(&txn).slices().values();
-            assert_eq!(i.next(), Some(1.into()));
-            assert_eq!(i.next(), Some(3.into()));
-            assert_eq!(i.next(), Some(4.into()));
-            assert_eq!(i.next(), Some(2.into()));
-            assert_eq!(i.next(), None);
+            let mut i = a2.as_ref().start.to_iter().moved().slices().values();
+            assert_eq!(i.next(&txn), Some(1.into()));
+            assert_eq!(i.next(&txn), Some(3.into()));
+            assert_eq!(i.next(&txn), Some(4.into()));
+            assert_eq!(i.next(&txn), Some(2.into()));
+            assert_eq!(i.next(&txn), None);
         }
 
         exchange_updates(&[&d1, &d2]);
         exchange_updates(&[&d1, &d2]); // move cycles may not be detected within a single update exchange
 
         let t1 = d1.transact();
-        let v1: Vec<_> = a1
-            .as_ref()
-            .start
-            .to_iter()
-            .moved(&t1)
-            .slices()
-            .values()
-            .collect();
+        let v1: Vec<_> = a1.as_ref().start.to_iter().moved().slices().collect(&t1);
         let t2 = d2.transact();
-        let v2: Vec<_> = a2
-            .as_ref()
-            .start
-            .to_iter()
-            .moved(&t2)
-            .slices()
-            .values()
-            .collect();
+        let v2: Vec<_> = a2.as_ref().start.to_iter().moved().slices().collect(&t2);
 
         assert_eq!(v1, v2);
     }
@@ -631,15 +704,104 @@ mod test {
         array.insert_range(&mut doc.transact_mut(), 4, [5, 6]);
 
         let txn = doc.transact();
+        let from = StickyIndex::from_id(ID::new(1, 1), Assoc::Before);
+        let to = StickyIndex::from_id(ID::new(1, 4), Assoc::After);
         let res: Vec<_> = array
             .as_ref()
             .start
             .to_iter()
-            .moved(&txn)
-            .within_range(Some(ID::new(1, 1)), Some(ID::new(1, 4)))
-            .values()
-            .collect();
+            .moved()
+            .within_range(from, to)
+            .collect(&txn);
         assert_eq!(res, vec![3.into(), 4.into(), 5.into()])
+    }
+
+    #[test]
+    fn range_left_exclusive() {
+        let doc = Doc::with_client_id(1);
+        let array = doc.get_or_insert_array("array");
+
+        array.insert_range(&mut doc.transact_mut(), 0, [2, 3, 4]);
+        array.insert_range(&mut doc.transact_mut(), 0, [1]);
+        array.insert_range(&mut doc.transact_mut(), 4, [5, 6]);
+
+        let txn = doc.transact();
+        let from = StickyIndex::from_id(ID::new(1, 1), Assoc::After);
+        let to = StickyIndex::from_id(ID::new(1, 4), Assoc::After);
+        let res: Vec<_> = array
+            .as_ref()
+            .start
+            .to_iter()
+            .moved()
+            .within_range(from, to)
+            .collect(&txn);
+        assert_eq!(res, vec![4.into(), 5.into()])
+    }
+
+    #[test]
+    fn range_left_exclusive_2() {
+        let doc = Doc::with_client_id(1);
+        let array = doc.get_or_insert_array("array");
+
+        array.insert_range(&mut doc.transact_mut(), 0, [2, 3, 4]);
+        array.insert_range(&mut doc.transact_mut(), 0, [1]);
+        array.insert_range(&mut doc.transact_mut(), 4, [5, 6]);
+
+        let txn = doc.transact();
+        let from = StickyIndex::from_id(ID::new(1, 2), Assoc::After);
+        let to = StickyIndex::from_id(ID::new(1, 4), Assoc::After);
+        let res: Vec<_> = array
+            .as_ref()
+            .start
+            .to_iter()
+            .moved()
+            .within_range(from, to)
+            .collect(&txn);
+        assert_eq!(res, vec![5.into()])
+    }
+
+    #[test]
+    fn range_right_exclusive() {
+        let doc = Doc::with_client_id(1);
+        let array = doc.get_or_insert_array("array");
+
+        array.insert_range(&mut doc.transact_mut(), 0, [2, 3, 4]);
+        array.insert_range(&mut doc.transact_mut(), 0, [1]);
+        array.insert_range(&mut doc.transact_mut(), 4, [5, 6]);
+
+        let txn = doc.transact();
+        let from = StickyIndex::from_id(ID::new(1, 1), Assoc::Before);
+        let to = StickyIndex::from_id(ID::new(1, 5), Assoc::Before);
+        let res: Vec<_> = array
+            .as_ref()
+            .start
+            .to_iter()
+            .moved()
+            .within_range(from, to)
+            .collect(&txn);
+        assert_eq!(res, vec![3.into(), 4.into(), 5.into()])
+    }
+
+    #[test]
+    fn range_right_exclusive_2() {
+        let doc = Doc::with_client_id(1);
+        let array = doc.get_or_insert_array("array");
+
+        array.insert_range(&mut doc.transact_mut(), 0, [2, 3, 4]);
+        array.insert_range(&mut doc.transact_mut(), 0, [1]);
+        array.insert_range(&mut doc.transact_mut(), 4, [5, 6]);
+
+        let txn = doc.transact();
+        let from = StickyIndex::from_id(ID::new(1, 1), Assoc::Before);
+        let to = StickyIndex::from_id(ID::new(1, 4), Assoc::Before);
+        let res: Vec<_> = array
+            .as_ref()
+            .start
+            .to_iter()
+            .moved()
+            .within_range(from, to)
+            .collect(&txn);
+        assert_eq!(res, vec![3.into(), 4.into()])
     }
 
     #[test]
@@ -652,14 +814,15 @@ mod test {
         array.insert_range(&mut doc.transact_mut(), 4, [5, 6]);
 
         let txn = doc.transact();
+        let from = StickyIndex::from_type(&txn, &array, Assoc::Before);
+        let to = StickyIndex::from_type(&txn, &array, Assoc::After);
         let res: Vec<_> = array
             .as_ref()
             .start
             .to_iter()
-            .moved(&txn)
-            .within_range(None, None)
-            .values()
-            .collect();
+            .moved()
+            .within_range(from, to)
+            .collect(&txn);
         assert_eq!(
             res,
             vec![1.into(), 2.into(), 3.into(), 4.into(), 5.into(), 6.into()]
@@ -676,14 +839,15 @@ mod test {
         array.insert_range(&mut doc.transact_mut(), 4, [5, 6]);
 
         let txn = doc.transact();
+        let from = StickyIndex::from_type(&txn, &array, Assoc::Before);
+        let to = StickyIndex::from_id(ID::new(1, 2), Assoc::After);
         let res: Vec<_> = array
             .as_ref()
             .start
             .to_iter()
-            .moved(&txn)
-            .within_range(None, Some(ID::new(1, 2)))
-            .values()
-            .collect();
+            .moved()
+            .within_range(from, to)
+            .collect(&txn);
         assert_eq!(res, vec![1.into(), 2.into(), 3.into(), 4.into()])
     }
 
@@ -697,14 +861,15 @@ mod test {
         array.insert_range(&mut doc.transact_mut(), 4, [5, 6]);
 
         let txn = doc.transact();
+        let from = StickyIndex::from_id(ID::new(1, 2), Assoc::Before);
+        let to = StickyIndex::from_type(&txn, &array, Assoc::After);
         let res: Vec<_> = array
             .as_ref()
             .start
             .to_iter()
-            .moved(&txn)
-            .within_range(Some(ID::new(1, 2)), None)
-            .values()
-            .collect();
+            .moved()
+            .within_range(from, to)
+            .collect(&txn);
         assert_eq!(res, vec![4.into(), 5.into(), 6.into()])
     }
 
@@ -718,14 +883,15 @@ mod test {
         array.insert_range(&mut doc.transact_mut(), 4, [5, 6]);
 
         let txn = doc.transact();
+        let from = StickyIndex::from_id(ID::new(1, 1), Assoc::Before);
+        let to = StickyIndex::from_id(ID::new(1, 1), Assoc::After);
         let res: Vec<_> = array
             .as_ref()
             .start
             .to_iter()
-            .moved(&txn)
-            .within_range(Some(ID::new(1, 1)), Some(ID::new(1, 1)))
-            .values()
-            .collect();
+            .moved()
+            .within_range(from, to)
+            .collect(&txn);
         assert_eq!(res, vec![3.into()])
     }
 }

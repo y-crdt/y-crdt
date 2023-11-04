@@ -418,9 +418,27 @@ pub struct StickyIndex {
 }
 
 impl StickyIndex {
-    #[inline]
     pub fn new(scope: IndexScope, assoc: Assoc) -> Self {
         StickyIndex { scope, assoc }
+    }
+
+    pub fn from_id(id: ID, assoc: Assoc) -> Self {
+        Self::new(IndexScope::Relative(id), assoc)
+    }
+
+    pub fn from_type<T, B>(txn: &T, branch: &B, assoc: Assoc) -> Self
+    where
+        T: ReadTxn,
+        B: AsRef<Branch>,
+    {
+        let branch = branch.as_ref();
+        if let Some(ptr) = branch.item {
+            let id = ptr.id().clone();
+            Self::new(IndexScope::Nested(id), assoc)
+        } else {
+            let name = txn.store().get_type_key(BranchPtr::from(branch)).unwrap();
+            Self::new(IndexScope::Root(name.clone()), assoc)
+        }
     }
 
     #[inline]

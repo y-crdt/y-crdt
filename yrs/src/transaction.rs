@@ -522,22 +522,7 @@ impl<'doc> TransactionMut<'doc> {
                     ItemContent::Type(inner) => {
                         let branch_ptr = BranchPtr::from(inner);
                         if let TypeRef::WeakLink(source) = &inner.type_ref {
-                            // when removing weak links, remove references to them
-                            // from type they're pointing to
-                            let mut curr = source.first_item.take().map(|arc| *arc);
-                            while let Some(ptr) = curr {
-                                if let Block::Item(item) = ptr.deref() {
-                                    if item.info.is_linked() {
-                                        self.unlink(ptr, branch_ptr);
-                                    }
-                                    let last_id = item.last_id();
-                                    if last_id == source.quote_end {
-                                        break;
-                                    }
-                                    curr = item.right;
-                                }
-                            }
-                            source.first_item.take();
+                            source.unlink_all(self, branch_ptr);
                         }
                         let mut ptr = inner.start;
                         self.changed.remove(&TypePtr::Branch(branch_ptr));

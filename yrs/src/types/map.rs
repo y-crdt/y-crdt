@@ -210,8 +210,9 @@ pub trait Map: AsRef<Branch> + Sized {
     fn link<T: ReadTxn>(&self, txn: &T, key: &str) -> Option<WeakPrelim<Self>> {
         let ptr = BranchPtr::from(self.as_ref());
         let block = ptr.map.get(key)?;
-        let id = block.id().clone();
-        let link = WeakPrelim::new(id.clone(), id);
+        let start = StickyIndex::from_id(block.id().clone(), Assoc::Before);
+        let end = StickyIndex::from_id(block.id().clone(), Assoc::After);
+        let link = WeakPrelim::new(start, end);
         Some(link)
     }
 

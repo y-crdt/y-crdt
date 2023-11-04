@@ -125,17 +125,25 @@ impl Encode for TypeRef {
             TypeRef::XmlText => encoder.write_type_ref(TYPE_REFS_XML_TEXT),
             TypeRef::SubDoc => encoder.write_type_ref(TYPE_REFS_DOC),
             TypeRef::WeakLink(data) => {
-                encoder.write_type_ref(TYPE_REFS_WEAK);
                 let is_single = data.is_single();
+                let start = data.quote_start.id().unwrap();
+                let end = data.quote_end.id().unwrap();
+                encoder.write_type_ref(TYPE_REFS_WEAK);
                 let mut info = if is_single { 0u8 } else { 1u8 };
-                info |= 2; // this._quoteStart.assoc >= 0
-                info |= 0; // this._quoteEnd.assoc >= 0
+                info |= match data.quote_start.assoc {
+                    Assoc::After => 2,
+                    Assoc::Before => 0,
+                };
+                info |= match data.quote_end.assoc {
+                    Assoc::After => 4,
+                    Assoc::Before => 0,
+                };
                 encoder.write_u8(info);
-                encoder.write_var(data.quote_start.client);
-                encoder.write_var(data.quote_start.clock);
+                encoder.write_var(start.client);
+                encoder.write_var(start.clock);
                 if !is_single {
-                    encoder.write_var(data.quote_end.client);
-                    encoder.write_var(data.quote_end.clock);
+                    encoder.write_var(end.client);
+                    encoder.write_var(end.clock);
                 }
             }
             TypeRef::Undefined => encoder.write_type_ref(TYPE_REFS_UNDEFINED),
@@ -158,12 +166,24 @@ impl Decode for TypeRef {
             TYPE_REFS_WEAK => {
                 let flags = decoder.read_u8()?;
                 let is_single = flags & 1u8 == 0;
-                let start = ID::new(decoder.read_var()?, decoder.read_var()?);
-                let end = if is_single {
-                    start.clone()
+                let start_assoc = if flags & 2 == 2 {
+                    Assoc::After
+                } else {
+                    Assoc::Before
+                };
+                let end_assoc = if flags & 4 == 4 {
+                    Assoc::After
+                } else {
+                    Assoc::Before
+                };
+                let start_id = ID::new(decoder.read_var()?, decoder.read_var()?);
+                let end_id = if is_single {
+                    start_id.clone()
                 } else {
                     ID::new(decoder.read_var()?, decoder.read_var()?)
                 };
+                let start = StickyIndex::from_id(start_id, start_assoc);
+                let end = StickyIndex::from_id(end_id, end_assoc);
                 Ok(TypeRef::WeakLink(Arc::new(LinkSource::new(start, end))))
             }
             TYPE_REFS_UNDEFINED => Ok(TypeRef::Undefined),
