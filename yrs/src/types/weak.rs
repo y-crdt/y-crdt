@@ -9,7 +9,8 @@ use crate::{
     Array, Assoc, GetString, Map, Observable, ReadTxn, StickyIndex, TextRef, TransactionMut,
     XmlTextRef, ID,
 };
-use std::collections::Bound;
+use std::collections::hash_map::Entry;
+use std::collections::{Bound, HashSet};
 use std::convert::TryFrom;
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut, RangeBounds};
@@ -537,14 +538,24 @@ impl LinkSource {
     }
 
     pub(crate) fn materialize(&self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
-        let mut curr = self
-            .first_item
-            .get_owned()
-            .or(txn.store.blocks.get_block(&self.quote_start.id().unwrap()));
-        match curr.as_deref() {
-            Some(Block::Item(item)) if item.parent_sub.is_some() => {
+        let curr = if let Some(ptr) = self.first_item.get_owned() {
+            ptr
+        } else {
+            if let Some(ptr) = self
+                .quote_start
+                .id()
+                .and_then(|id| txn.store.blocks.get_block(id))
+            {
+                self.first_item.swap(ptr);
+                ptr
+            } else {
+                panic!("Defect: weak link quoted range beginning cannot be established")
+            }
+        };
+        match curr.deref() {
+            Block::Item(item) if item.parent_sub.is_some() => {
                 // for maps, advance to most recent item
-                if let Some(mut last) = curr.to_iter().last() {
+                if let Some(mut last) = Some(curr).to_iter().last() {
                     self.first_item.swap(last);
                     if let Block::Item(item) = last.deref_mut() {
                         item.info.set_linked();
@@ -557,7 +568,7 @@ impl LinkSource {
                 let mut first = true;
                 let from = self.quote_start.clone();
                 let to = self.quote_end.clone();
-                let mut i = curr.to_iter().moved().within_range(from, to);
+                let mut i = Some(curr).to_iter().moved().within_range(from, to);
                 while let Some(slice) = i.next(txn) {
                     let mut ptr = if !slice.adjacent() {
                         txn.store.materialize(slice)
@@ -581,14 +592,14 @@ impl LinkSource {
     pub fn to_string<T: ReadTxn>(&self, txn: &T) -> String {
         let mut result = String::new();
         let mut curr = self.first_item.get_owned();
-        if self.quote_start.assoc == Assoc::After {
-            // if assoc >= we exclude start from range
-            curr = if let Some(Block::Item(i)) = curr.as_deref() {
-                i.right
-            } else {
-                return String::new();
-            }
-        }
+        //if self.quote_start.assoc == Assoc::After {
+        //    // if assoc >= we exclude start from range
+        //    curr = if let Some(Block::Item(i)) = curr.as_deref() {
+        //        i.right
+        //    } else {
+        //        return String::new();
+        //    }
+        //}
         let end = self.quote_end.id().unwrap();
         while let Some(Block::Item(item)) = curr.as_deref() {
             if self.quote_end.assoc == Assoc::Before && &item.id == end {
@@ -769,6 +780,76 @@ pub enum QuoteError {
     /// at the moment.
     #[error("Quotations don't support unbounded ranges")]
     UnboundedRange,
+}
+
+pub(crate) fn join_linked_range(mut block: BlockPtr, txn: &mut TransactionMut) {
+    let block_copy = block.clone();
+    let item = block.as_item_mut().unwrap();
+    // this item may exists within a quoted range
+    item.info.set_linked();
+    // we checked if left and right exists before this method call
+    let left = item.left.unwrap();
+    let right = item.right.unwrap();
+    let all_links = &mut txn.store.linked_by;
+    let left_links = all_links.get(&left);
+    let right_links = all_links.get(&right);
+    let mut common = HashSet::new();
+    if let Some(llinks) = left_links {
+        for link in llinks.iter() {
+            match right_links {
+                Some(rlinks) if rlinks.contains(link) => {
+                    // new item existing in a quoted range in between two elements
+                    common.insert(*link);
+                }
+                _ => {
+                    if let TypeRef::WeakLink(source) = &link.type_ref {
+                        if source.quote_end.assoc == Assoc::Before {
+                            // We're at the right edge of quoted range - right neighbor is not included
+                            // but the left one is. Since quotation is open on the right side, we need to
+                            // include current item.
+                            common.insert(*link);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if let Some(rlinks) = right_links {
+        for link in rlinks.iter() {
+            match left_links {
+                Some(llinks) if llinks.contains(link) => {
+                    /* already visited by previous if-loop */
+                }
+                _ => {
+                    if let TypeRef::WeakLink(source) = &link.type_ref {
+                        if source.quote_start.assoc == Assoc::After {
+                            let start_id = source.quote_start.id().cloned();
+                            let prev_id = item.left.map(|i| i.last_id());
+                            if start_id == prev_id {
+                                // even though current boundary if left-side exclusive, current item
+                                // has been inserted on the right of it, therefore it's within range
+                                common.insert(*link);
+                                source.first_item.swap(block_copy); // this item is the new most left-wise
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if !common.is_empty() {
+        match all_links.entry(block) {
+            Entry::Occupied(mut e) => {
+                let links = e.get_mut();
+                for link in common {
+                    links.insert(link);
+                }
+            }
+            Entry::Vacant(e) => {
+                e.insert(common);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1866,8 +1947,8 @@ mod test {
         assert_eq!(values, vec![1, 2, 3, 4, 5, 6, 7]);
 
         let mut assert_quote = |start: u32, len: u32, expected: Vec<u32>| {
-            let end = start + len;
-            let q = array.quote(&mut txn, start..end).unwrap();
+            let end = start + len - 1;
+            let q = array.quote(&mut txn, start..=end).unwrap();
             let q = quotes.push_back(&mut txn, q);
             let values: Vec<_> = q.unquote(&txn).map(|v| v.cast::<u32>().unwrap()).collect();
             assert_eq!(values, expected)
@@ -1895,8 +1976,8 @@ mod test {
         assert_eq!(values, vec![1, 2, 3, 4, 5, 6, 7]);
 
         let mut assert_quote = |start: u32, len: u32, expected: Vec<u32>| {
-            let end = start + len;
-            let q = array.quote(&mut txn, start..end).unwrap();
+            let end = start + len - 1;
+            let q = array.quote(&mut txn, start..=end).unwrap();
             let q = quotes.push_back(&mut txn, q);
             let values: Vec<_> = q.unquote(&txn).map(|v| v.cast::<u32>().unwrap()).collect();
             assert_eq!(values, expected)
@@ -1982,15 +2063,14 @@ mod test {
             }
 
             let mut txn = d1.transact_mut();
-            let q = txt1.quote(&txn, RangeLeftExclusive(0, 6)).unwrap();
+            let q = txt1.quote(&txn, RangeLeftExclusive(0, 5)).unwrap();
             arr1.insert(&mut txn, 0, q)
         };
         let link_incl = {
             let mut txn = d1.transact_mut();
-            let q = txt1.quote(&txn, 1..6).unwrap();
+            let q = txt1.quote(&txn, 1..5).unwrap();
             arr1.insert(&mut txn, 0, q)
         };
-
         let str = link_excl.get_string(&d1.transact());
         assert_eq!(&str, "bcde");
         let str = link_incl.get_string(&d1.transact());
@@ -2024,12 +2104,12 @@ mod test {
 
         let link_excl = {
             let mut txn = d1.transact_mut();
-            let q = txt1.quote(&txn, 1..6).unwrap();
+            let q = txt1.quote(&txn, 1..5).unwrap();
             arr1.insert(&mut txn, 0, q)
         };
         let link_incl = {
             let mut txn = d1.transact_mut();
-            let q = txt1.quote(&txn, 1..=5).unwrap();
+            let q = txt1.quote(&txn, 1..=4).unwrap();
             arr1.insert(&mut txn, 0, q)
         };
 

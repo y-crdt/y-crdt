@@ -4,13 +4,13 @@ use crate::moving::Move;
 use crate::store::{Store, WeakStoreRef};
 use crate::transaction::TransactionMut;
 use crate::types::text::update_current_attributes;
+use crate::types::weak::join_linked_range;
 use crate::types::{Attrs, Branch, BranchPtr, TypePtr, TypeRef, Value};
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::OptionExt;
 use crate::*;
 use smallstr::SmallString;
-use std::collections::hash_map::Entry;
 use std::collections::HashSet;
 use std::convert::TryFrom;
 use std::hash::Hash;
@@ -548,31 +548,9 @@ impl BlockPtr {
                         match (this.left, this.right) {
                             (Some(left), Some(right)) => match (left.deref(), right.deref()) {
                                 (Block::Item(l), Block::Item(r))
-                                    if l.info.is_linked() && r.info.is_linked() =>
+                                    if l.info.is_linked() || r.info.is_linked() =>
                                 {
-                                    // Join current `item` to any quotations shared between its `left` and `right` neighbor.
-                                    this.info.set_linked();
-                                    let all_links = &mut txn.store.linked_by;
-                                    let left_links = all_links.get(&left);
-                                    let right_links = all_links.get(&right);
-                                    match (left_links, right_links) {
-                                        (Some(llinks), Some(rlinks)) => {
-                                            let common: HashSet<_> =
-                                                llinks.intersection(rlinks).cloned().collect();
-                                            match all_links.entry(self_ptr) {
-                                                Entry::Occupied(mut e) => {
-                                                    let links = e.get_mut();
-                                                    for link in common {
-                                                        links.insert(link);
-                                                    }
-                                                }
-                                                Entry::Vacant(e) => {
-                                                    e.insert(common);
-                                                }
-                                            }
-                                        }
-                                        _ => {}
-                                    }
+                                    join_linked_range(self_ptr, txn)
                                 }
                                 _ => {}
                             },
