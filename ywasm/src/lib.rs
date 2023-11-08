@@ -1,9 +1,9 @@
 use js_sys::{Object, Reflect, Uint8Array};
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{Bound, HashMap};
 use std::convert::{TryFrom, TryInto};
 use std::mem::ManuallyDrop;
-use std::ops::Deref;
+use std::ops::{Deref, RangeBounds};
 use std::rc::Rc;
 use std::sync::Arc;
 use wasm_bindgen::__rt::{Ref, RefMut};
@@ -2122,23 +2122,19 @@ impl YText {
     #[wasm_bindgen(js_name = quote)]
     pub fn quote(
         &self,
-        index: u32,
-        length: u32,
+        lower: u32,
+        upper: u32,
+        lower_open: Option<bool>,
+        upper_open: Option<bool>,
         txn: &ImplicitTransaction,
     ) -> Result<JsValue, JsValue> {
         match &*self.0.borrow() {
             SharedType::Integrated(v) => {
-                let end = index + length;
+                let range = YRange::new(lower, upper, lower_open, upper_open);
                 let value = if let Some(mut txn) = get_txn_mut(txn) {
-                    v.quote(txn.as_mut(), index, Assoc::After, end, Assoc::Before)
+                    v.quote(txn.as_mut(), range)
                 } else {
-                    v.quote(
-                        &mut v.transact_mut(),
-                        index,
-                        Assoc::After,
-                        end,
-                        Assoc::Before,
-                    )
+                    v.quote(&mut v.transact_mut(), range)
                 };
                 Ok(value.map(|v| YWeakLink::from(v).into()).unwrap_or_default())
             }
@@ -2500,18 +2496,19 @@ impl YArray {
     #[wasm_bindgen(js_name = quote)]
     pub fn quote(
         &self,
-        index: u32,
-        length: Option<u32>,
+        lower: u32,
+        upper: u32,
+        lower_open: Option<bool>,
+        upper_open: Option<bool>,
         txn: &ImplicitTransaction,
     ) -> Result<JsValue, JsValue> {
-        let length = length.unwrap_or(1);
         match &*self.0.borrow() {
             SharedType::Integrated(v) => {
-                let end = index + length;
+                let range = YRange::new(lower, upper, lower_open, upper_open);
                 let value = if let Some(txn) = get_txn(txn) {
-                    v.quote(&*txn, index, Assoc::After, end, Assoc::Before)
+                    v.quote(&*txn, range)
                 } else {
-                    v.quote(&v.transact(), index, Assoc::After, end, Assoc::Before)
+                    v.quote(&v.transact(), range)
                 };
                 Ok(value.map(|v| YWeakLink::from(v).into()).unwrap_or_default())
             }
@@ -3433,15 +3430,20 @@ impl YXmlText {
     }
 
     #[wasm_bindgen(js_name = quote)]
-    pub fn quote(&self, index: u32, length: u32, txn: &ImplicitTransaction) -> JsValue {
-        let end = index + length;
+    pub fn quote(
+        &self,
+        lower: u32,
+        upper: u32,
+        lower_open: Option<bool>,
+        upper_open: Option<bool>,
+        txn: &ImplicitTransaction,
+    ) -> JsValue {
+        let range = YRange::new(lower, upper, lower_open, upper_open);
         let value = if let Some(mut txn) = get_txn_mut(txn) {
-            self.0
-                .quote(txn.as_mut(), index, Assoc::After, end, Assoc::Before)
+            self.0.quote(txn.as_mut(), range)
         } else {
             let mut txn = self.0.transact_mut();
-            self.0
-                .quote(&mut txn, index, Assoc::After, end, Assoc::Before)
+            self.0.quote(&mut txn, range)
         };
         value.map(|v| YWeakLink::from(v).into()).unwrap_or_default()
     }
@@ -3839,6 +3841,42 @@ impl<P: AsRef<Branch>> From<WeakRef<P>> for YWeakLink {
 impl<P> From<WeakPrelim<P>> for YWeakLink {
     fn from(value: WeakPrelim<P>) -> Self {
         YWeakLink(SharedType::prelim(value.into_inner()))
+    }
+}
+
+struct YRange {
+    lower: u32,
+    upper: u32,
+    lower_open: bool,
+    upper_open: bool,
+}
+
+impl YRange {
+    fn new(lower: u32, upper: u32, lower_open: Option<bool>, upper_open: Option<bool>) -> Self {
+        YRange {
+            lower,
+            upper,
+            lower_open: lower_open.unwrap_or(false),
+            upper_open: upper_open.unwrap_or(false),
+        }
+    }
+}
+
+impl RangeBounds<u32> for YRange {
+    fn start_bound(&self) -> Bound<&u32> {
+        if self.lower_open {
+            Bound::Excluded(&self.lower)
+        } else {
+            Bound::Included(&self.lower)
+        }
+    }
+
+    fn end_bound(&self) -> Bound<&u32> {
+        if self.upper_open {
+            Bound::Excluded(&self.upper)
+        } else {
+            Bound::Included(&self.upper)
+        }
     }
 }
 

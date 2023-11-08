@@ -34,20 +34,20 @@ export const testBasicArray = tc => {
     const doc1 = new Y.YDoc({clientID:2})
     const array1 = doc1.getArray('array')
     array0.insert(0, [1,2,3])
-    const link = array0.quote(1)
+    const link = array0.quote(1, 1)
     array0.insert(3, [link])
 
     t.compare(array0.get(0), 1)
     t.compare(array0.get(1), 2)
     t.compare(array0.get(2), 3)
-    t.compare(array0.get(3).deref(), 2)
+    t.compare(array0.get(3).unquote(), [2])
 
     exchangeUpdates([doc0, doc1])
 
     t.compare(array1.get(0), 1)
     t.compare(array1.get(1), 2)
     t.compare(array1.get(2), 3)
-    t.compare(array1.get(3).deref(), 2)
+    t.compare(array1.get(3).unquote(), [2])
 }
 
 /**
@@ -111,7 +111,7 @@ export const testSelfQuotation = tc => {
     const doc1 = new Y.YDoc({clientID:2})
     const array1 = doc1.getArray('array')
     array0.insert(0, [1, 2, 3, 4])
-    const link0 = array0.quote(0, 3)
+    const link0 = array0.quote(0, 3, false, true)
     array0.insert(1, [link0]) // link is inserted into its own range
 
     let u = link0.unquote()
@@ -454,7 +454,7 @@ export const testDeepObserveMap = tc => {
 
     const nested = new Y.YMap()
     array.insert(0, [nested])
-    const link = array.quote(0)
+    const link = array.quote(0, 0)
     map.set('link', link)
 
     // update entry in linked map
@@ -690,9 +690,9 @@ export const testDeepObserveRecursive = tc => {
     root.insert(1, [m1])
     root.insert(2, [m2])
 
-    const l0 = root.quote(0)
-    const l1 = root.quote(1)
-    const l2 = root.quote(2)
+    const l0 = root.quote(0, 0)
+    const l1 = root.quote(1, 1)
+    const l2 = root.quote(2, 2)
 
     // create cyclic reference between links
     m0.set('k1', l1)
@@ -811,13 +811,13 @@ export const testQuoteFormattedText = tc => {
     text.insert(0, 'abcde')
     text.format(0, 1, {b:true})
     text.format(1, 3, {i:true}) // '<b>a</b><i>bcd</i>e'
-    const l1 = text.quote(0, 2)
+    const l1 = text.quote(0, 1)
     array.insert(0, [l1])
     t.compare(l1.toString(), '<b>a</b><i>b</i>')
-    const l2 = text.quote(2, 1) // '<i>c</i>'
+    const l2 = text.quote(2, 2) // '<i>c</i>'
     array.insert(1, [l2])
     t.compare(l2.toString(), '<i>c</i>')
-    const l3 = text.quote(3, 2) // '<i>d</i>e'
+    const l3 = text.quote(3, 4) // '<i>d</i>e'
     array.insert(2, [l3])
     t.compare(l3.toString(), '<i>d</i>e')
 
@@ -831,4 +831,119 @@ export const testQuoteFormattedText = tc => {
         '<i>c</i>',
         '<i>d</i>e',
     ])
+}
+
+
+/**
+ * @param {t.TestCase} tc
+ */
+export const testTextLowerBoundary = tc => {
+    const doc0 = new Y.YDoc({clientID:1})
+    const text0 = doc0.getText('text')
+    const array0 = doc0.getArray('array')
+    const doc1 = new Y.YDoc({clientID:2})
+    const text1 = doc1.getText('text')
+
+    text0.insert(0, 'abcdef')
+
+    exchangeUpdates([doc0, doc1])
+
+    const linkInclusive = text0.quote(1, 4, false, false) // [1..4]
+    const linkExclusive = text0.quote(0, 4, true, false) // (0..4]
+    array0.insert(0, [linkInclusive, linkExclusive])
+    t.compare(linkInclusive.toString(), 'bcde')
+    t.compare(linkExclusive.toString(), 'bcde')
+
+    text1.insert(1, 'xyz')
+
+    exchangeUpdates([doc0, doc1])
+
+    t.compare(linkInclusive.toString(), 'bcde')
+    t.compare(linkExclusive.toString(), 'xyzbcde')
+}
+
+/**
+ * @param {t.TestCase} tc
+ */
+export const testTextUpperBoundary = tc => {
+    const doc0 = new Y.YDoc({clientID:1})
+    const text0 = doc0.getText('text')
+    const array0 = doc0.getArray('array')
+    const doc1 = new Y.YDoc({clientID:2})
+    const text1 = doc1.getText('text')
+
+    text0.insert(0, 'abcdef')
+
+    exchangeUpdates([doc0, doc1])
+
+    const linkInclusive = text0.quote(1, 4, false, false) // [1..4]
+    const linkExclusive = text0.quote(1, 5, false, true) // [1..5)
+    array0.insert(0, [linkInclusive, linkExclusive])
+    t.compare(linkInclusive.toString(), 'bcde')
+    t.compare(linkExclusive.toString(), 'bcde')
+
+    text1.insert(5, 'xyz')
+
+    exchangeUpdates([doc0, doc1])
+
+    t.compare(linkInclusive.toString(), 'bcde')
+    t.compare(linkExclusive.toString(), 'bcdexyz')
+}
+
+/**
+ * @param {t.TestCase} tc
+ */
+export const testArrayLowerBoundary = tc => {
+    const doc0 = new Y.YDoc({clientID:1})
+    const map0 = doc0.getMap('map')
+    const array0 = doc0.getArray('array')
+    const doc1 = new Y.YDoc({clientID:2})
+    const array1 = doc1.getArray('array')
+
+    array0.insert(0, ['a', 'b', 'c', 'd', 'e', 'f'])
+
+    exchangeUpdates([doc0, doc1])
+
+    const linkInclusive = array0.quote(1, 4, false, false) // [1..4]
+    const linkExclusive = array0.quote(0, 4, true, false) // (0..4]
+    map0.set('inclusive', linkInclusive)
+    map0.set('exclusive', linkExclusive)
+    t.compare(linkInclusive.unquote(), ['b', 'c', 'd', 'e'])
+    t.compare(linkExclusive.unquote(), ['b', 'c', 'd', 'e'])
+
+    array1.insert(1, ['x', 'y', 'z'])
+
+    exchangeUpdates([doc0, doc1])
+
+    t.compare(linkInclusive.unquote(), ['b', 'c', 'd', 'e'])
+    t.compare(linkExclusive.unquote(), ['x', 'y', 'z', 'b', 'c', 'd', 'e'])
+}
+
+/**
+ * @param {t.TestCase} tc
+ */
+export const testArrayUpperBoundary = tc => {
+    const doc0 = new Y.YDoc({clientID:1})
+    const map0 = doc0.getMap('map')
+    const array0 = doc0.getArray('array')
+    const doc1 = new Y.YDoc({clientID:2})
+    const array1 = doc1.getArray('array')
+
+    array0.insert(0, ['a', 'b', 'c', 'd', 'e', 'f'])
+
+    exchangeUpdates([doc0, doc1])
+
+    const linkInclusive = array0.quote(1, 4, false, false) // [1..4]
+    const linkExclusive = array0.quote(1, 5, false, true) // [1..5)
+    map0.set('inclusive', linkInclusive)
+    map0.set('exclusive', linkExclusive)
+    t.compare(linkInclusive.unquote(), ['b', 'c', 'd', 'e'])
+    t.compare(linkExclusive.unquote(), ['b', 'c', 'd', 'e'])
+
+    array1.insert(5, ['x', 'y', 'z'])
+
+    exchangeUpdates([doc0, doc1])
+
+    t.compare(linkInclusive.unquote(), ['b', 'c', 'd', 'e'])
+    t.compare(linkExclusive.unquote(), ['b', 'c', 'd', 'e', 'x', 'y', 'z'])
 }

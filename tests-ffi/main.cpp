@@ -1813,9 +1813,6 @@ TEST_CASE("Relative position") {
     ydoc_destroy(doc);
 }
 
-const int BEFORE = -1;
-const int AFTER = 1;
-
 TEST_CASE("Weak link references") {
     YDoc *doc = ydoc_new_with_id(1);
     Branch *txt = ytext(doc, "text");
@@ -1827,7 +1824,7 @@ TEST_CASE("Weak link references") {
     ytext_insert(txt, txn, 0, "hello world!", NULL);
 
     // create a text quotation and put it into map
-    YInput value = yinput_weak(ytext_quote(txt, txn, 2, 11, AFTER, BEFORE));
+    YInput value = yinput_weak(ytext_quote(txt, txn, 2, 11, Y_FALSE, Y_FALSE));
     ymap_insert(map, txn, "text-txt_link", &value);
     Branch *txt_link = youtput_read_yweak(ymap_get(map, txn, "text-txt_link"));
 
@@ -1858,7 +1855,7 @@ TEST_CASE("Weak link references") {
         yinput_long(4),
     };
     yarray_insert_range(arr, txn, 0, items, 4);
-    value = yinput_weak(yarray_quote(arr, txn, 1, 3, AFTER, BEFORE));
+    value = yinput_weak(yarray_quote(arr, txn, 1, 3, Y_FALSE, Y_TRUE));
     ymap_insert(map, txn, "array-txt_link", &value);
     Branch *array_link = youtput_read_yweak(ymap_get(map, txn, "array-txt_link"));
 

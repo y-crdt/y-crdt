@@ -1,7 +1,7 @@
-use std::collections::HashMap;
+use std::collections::{Bound, HashMap};
 use std::ffi::{c_char, c_void, CStr, CString};
 use std::mem::{forget, ManuallyDrop, MaybeUninit};
-use std::ops::Deref;
+use std::ops::{Deref, RangeBounds};
 use std::ptr::{null, null_mut};
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::Arc;
@@ -5262,8 +5262,8 @@ pub unsafe extern "C" fn ytext_quote(
     txn: *mut Transaction,
     start_index: u32,
     end_index: u32,
-    start_assoc: i32,
-    end_assoc: i32,
+    start_exclusive: i8,
+    end_exclusive: i8,
 ) -> *const Weak {
     assert!(!text.is_null());
     assert!(!txn.is_null());
@@ -5274,9 +5274,13 @@ pub unsafe extern "C" fn ytext_quote(
         .as_mut()
         .expect("provided transaction was not writeable");
 
-    let start_assoc = int_to_assoc(start_assoc);
-    let end_assoc = int_to_assoc(end_assoc);
-    if let Some(weak) = text.quote(txn, start_index, start_assoc, end_index, end_assoc) {
+    let range = ExplicitRange {
+        start_index,
+        end_index,
+        start_exclusive,
+        end_exclusive,
+    };
+    if let Ok(weak) = text.quote(txn, range) {
         let source = weak.source();
         Arc::into_raw(source.clone())
     } else {
@@ -5288,10 +5292,10 @@ pub unsafe extern "C" fn ytext_quote(
 pub unsafe extern "C" fn yarray_quote(
     array: *const Branch,
     txn: *mut Transaction,
-    start: u32,
-    end: u32,
-    start_assoc: i32,
-    end_assoc: i32,
+    start_index: u32,
+    end_index: u32,
+    start_exclusive: i8,
+    end_exclusive: i8,
 ) -> *const Weak {
     assert!(!array.is_null());
     assert!(!txn.is_null());
@@ -5302,9 +5306,13 @@ pub unsafe extern "C" fn yarray_quote(
         .as_mut()
         .expect("provided transaction was not writeable");
 
-    let start_assoc = int_to_assoc(start_assoc);
-    let end_assoc = int_to_assoc(end_assoc);
-    if let Some(weak) = array.quote(txn, start, start_assoc, end, end_assoc) {
+    let range = ExplicitRange {
+        start_index,
+        end_index,
+        start_exclusive,
+        end_exclusive,
+    };
+    if let Ok(weak) = array.quote(txn, range) {
         let source = weak.source();
         Arc::into_raw(source.clone())
     } else {
@@ -5312,11 +5320,28 @@ pub unsafe extern "C" fn yarray_quote(
     }
 }
 
-fn int_to_assoc(i: i32) -> Assoc {
-    if i >= 0 {
-        Assoc::After
-    } else {
-        Assoc::Before
+struct ExplicitRange {
+    start_index: u32,
+    end_index: u32,
+    start_exclusive: i8,
+    end_exclusive: i8,
+}
+
+impl RangeBounds<u32> for ExplicitRange {
+    fn start_bound(&self) -> Bound<&u32> {
+        if self.start_exclusive == 0 {
+            Bound::Included(&self.start_index)
+        } else {
+            Bound::Excluded(&self.start_index)
+        }
+    }
+
+    fn end_bound(&self) -> Bound<&u32> {
+        if self.end_exclusive == 0 {
+            Bound::Included(&self.end_index)
+        } else {
+            Bound::Excluded(&self.end_index)
+        }
     }
 }
 

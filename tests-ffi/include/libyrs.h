@@ -2111,9 +2111,8 @@ uint32_t ymap_observe(const Branch *map, void *state, void (*cb)(void*, const st
  * Returns a subscription ID which can be then used to unsubscribe this callback by using
  * `yarray_unobserve` function.
  */
-uint32_t yarray_observe(const Branch *array,
-                        void *state,
-                        void (*cb)(void*, const struct YArrayEvent*));
+uint32_t yarray_observe(const Branch *array, void *state, void (*cb)(void*,
+                                                                     const struct YArrayEvent*));
 
 /**
  * Subscribes a given callback function `cb` to changes made by this `YXmlElement` instance.
@@ -2131,9 +2130,8 @@ uint32_t yxmlelem_observe(const Branch *xml,
  * Returns a subscription ID which can be then used to unsubscribe this callback by using
  * `yxmltext_unobserve` function.
  */
-uint32_t yxmltext_observe(const Branch *xml,
-                          void *state,
-                          void (*cb)(void*, const struct YXmlTextEvent*));
+uint32_t yxmltext_observe(const Branch *xml, void *state, void (*cb)(void*,
+                                                                     const struct YXmlTextEvent*));
 
 /**
  * Subscribes a given callback function `cb` to changes made by this shared type instance as well
@@ -2465,9 +2463,8 @@ char *yweak_xml_string(const Branch *xml_text_link, const YTransaction *txn);
  * Returns a subscription ID which can be then used to unsubscribe this callback by using
  * `yweak_unobserve` function.
  */
-uint32_t yweak_observe(const Branch *weak,
-                       void *state,
-                       void (*cb)(void*, const struct YWeakLinkEvent*));
+uint32_t yweak_observe(const Branch *weak, void *state, void (*cb)(void*,
+                                                                   const struct YWeakLinkEvent*));
 
 const Weak *ymap_link(const Branch *map, const YTransaction *txn, const char *key);
 
@@ -2475,14 +2472,14 @@ const Weak *ytext_quote(const Branch *text,
                         YTransaction *txn,
                         uint32_t start_index,
                         uint32_t end_index,
-                        int32_t start_assoc,
-                        int32_t end_assoc);
+                        int8_t start_exclusive,
+                        int8_t end_exclusive);
 
 const Weak *yarray_quote(const Branch *array,
                          YTransaction *txn,
-                         uint32_t start,
-                         uint32_t end,
-                         int32_t start_assoc,
-                         int32_t end_assoc);
+                         uint32_t start_index,
+                         uint32_t end_index,
+                         int8_t start_exclusive,
+                         int8_t end_exclusive);
 
 #endif
