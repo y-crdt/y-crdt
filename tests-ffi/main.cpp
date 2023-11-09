@@ -1824,7 +1824,7 @@ TEST_CASE("Weak link references") {
     ytext_insert(txt, txn, 0, "hello world!", NULL);
 
     // create a text quotation and put it into map
-    YInput value = yinput_weak(ytext_quote(txt, txn, 2, 11, Y_FALSE, Y_FALSE));
+    YInput value = yinput_weak(ytext_quote(txt, txn, 2, 10, Y_FALSE, Y_FALSE));
     ymap_insert(map, txn, "text-txt_link", &value);
     Branch *txt_link = youtput_read_yweak(ymap_get(map, txn, "text-txt_link"));
 
