@@ -300,7 +300,11 @@ where
         let source = self.try_source()?;
         let last = source.first_item.get_owned().to_iter().last()?;
         let item = last.as_item()?;
-        item.content.get_first()
+        if item.is_deleted() {
+            None
+        } else {
+            item.content.get_first()
+        }
     }
 }
 
@@ -671,9 +675,13 @@ pub trait Quotable: AsRef<Branch> + Sized {
     ///
     /// # Errors
     ///
-    /// This method may return an error if passed range param is invalid ie. when it spans beyond
-    /// the boundaries of a current collection or it's unbounded on any end (which is currently
-    /// not supported).
+    /// This method may return an [QuoteError::OutOfBounds] if passed range params span beyond
+    /// the boundaries of a current collection ie. `0..yarray.len()` will error, as the upper index
+    /// refers to position that's not present in current collection - even though the position
+    /// itself is not included in range it still has to exists as a point of reference.
+    ///
+    /// Currently this method doesn't support unbounded ranges (ie. `..n`, `n..`). Passing such
+    /// range will cause [QuoteError::UnboundedRange] error.
     ///
     /// # Example
     /// ```
@@ -767,11 +775,16 @@ pub trait Quotable: AsRef<Branch> + Sized {
 /// Error that may appear in result of [Quotable::quote] method call.
 #[derive(Debug, Error)]
 pub enum QuoteError {
-    /// Range param passed to [Quotable::quote] was beyond the scope of the quotable collection.
+    /// Range lower or upper indexes passed to [Quotable::quote] were beyond scope of quoted
+    /// collection.
+    ///
+    /// Remember: even though range itself may not include index (ie. `1..n`), that index still
+    /// needs to point to existing value within quoted collection (`n < ytype.len()`) as a point
+    /// of reference.
     #[error("Quoted range spans beyond the bounds of current collection")]
     OutOfBounds,
-    /// Range param passed to [Quotable::quote] contains an unbounded end, which is not supported
-    /// at the moment.
+    /// Range param passed to [Quotable::quote] contains an unbounded end (ie. `..n` or `n..`),
+    /// which is not supported at the moment.
     #[error("Quotations don't support unbounded ranges")]
     UnboundedRange,
 }
