@@ -1,8 +1,10 @@
 use crate::doc::{DocAddr, OffsetKind};
+use crate::encoding::read::Error;
 use crate::moving::Move;
 use crate::store::{Store, WeakStoreRef};
 use crate::transaction::TransactionMut;
 use crate::types::text::update_current_attributes;
+use crate::types::weak::join_linked_range;
 use crate::types::{Attrs, Branch, BranchPtr, TypePtr, TypeRef, Value};
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
@@ -16,7 +18,6 @@ use std::ops::{Deref, DerefMut};
 use std::panic;
 use std::ptr::NonNull;
 use std::sync::Arc;
-use crate::encoding::read::Error;
 
 /// Bit flag used to identify [Block::GC].
 pub const BLOCK_GC_REF_NUMBER: u8 = 0;
@@ -518,16 +519,43 @@ impl BlockPtr {
                     } else if let Some(parent_sub) = &this.parent_sub {
                         // set as current parent value if right === null and this is parentSub
                         parent_ref.map.insert(parent_sub.clone(), self_ptr);
-                        if let Some(left) = this.left {
+                        if let Some(mut left) = this.left {
+                            if let Block::Item(item) = left.deref_mut() {
+                                if item.info.is_linked() {
+                                    // inherit links from the block we're overriding
+                                    item.info.clear_linked();
+                                    this.info.set_linked();
+                                    let all_links = &mut txn.store.linked_by;
+                                    if let Some(linked_by) = all_links.remove(&left) {
+                                        all_links.insert(self_ptr, linked_by);
+                                        // since left is being deleted, it will remove
+                                        // its links from store.linkedBy anyway
+                                    }
+                                }
+                            }
                             // this is the current attribute value of parent. delete right
                             txn.delete(left);
                         }
                     }
 
                     // adjust length of parent
-                    if this.parent_sub.is_none() && this.is_countable() && !this.is_deleted() {
-                        parent_ref.block_len += this.len;
-                        parent_ref.content_len += this.content_len(encoding);
+                    if this.parent_sub.is_none() && !this.is_deleted() {
+                        if this.is_countable() {
+                            // adjust length of parent
+                            parent_ref.block_len += this.len;
+                            parent_ref.content_len += this.content_len(encoding);
+                        }
+                        match (this.left, this.right) {
+                            (Some(left), Some(right)) => match (left.deref(), right.deref()) {
+                                (Block::Item(l), Block::Item(r))
+                                    if l.info.is_linked() || r.info.is_linked() =>
+                                {
+                                    join_linked_range(self_ptr, txn)
+                                }
+                                _ => {}
+                            },
+                            _ => {}
+                        }
                     }
 
                     // check if this item is in a moved range
@@ -590,13 +618,25 @@ impl BlockPtr {
                             // /** @type {AbstractType<any>} */ (item.parent)._searchMarker = null
                         }
                         ItemContent::Type(branch) => {
-                            branch.store = this.parent.as_branch().and_then(|b| b.store.clone())
+                            branch.store = this.parent.as_branch().and_then(|b| b.store.clone());
+                            let ptr = BranchPtr::from(branch);
+                            if let TypeRef::WeakLink(source) = &ptr.type_ref {
+                                source.materialize(txn, ptr);
+                            }
                         }
                         _ => {
                             // other types don't define integration-specific actions
                         }
                     }
                     txn.add_changed_type(parent_ref, this.parent_sub.clone());
+                    if this.info.is_linked() {
+                        if let Some(links) = txn.store.linked_by.get(&self_ptr).cloned() {
+                            // notify links about changes
+                            for link in links.iter() {
+                                txn.add_changed_type(*link, this.parent_sub.clone());
+                            }
+                        }
+                    }
                     let parent_deleted = if let TypePtr::Branch(ptr) = &this.parent {
                         if let Some(block) = ptr.item {
                             block.is_deleted()
@@ -652,6 +692,7 @@ impl BlockPtr {
                     && v1.right == Some(other_ptr)
                     && v1.is_deleted() == v2.is_deleted()
                     && (v1.redone.is_none() && v2.redone.is_none())
+                    && (!v1.info.is_linked() && !v2.info.is_linked()) // linked items cannot be merged
                     && v1.moved == v2.moved
                     && v1.content.try_squash(&v2.content)
                 {
@@ -748,9 +789,9 @@ impl TryFrom<BlockPtr> for Any {
 /// [BlockSlice], this can be done with help of transaction (see: [Store::materialize]).
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub(crate) struct BlockSlice {
-    ptr: BlockPtr,
-    start: u32,
-    end: u32,
+    pub ptr: BlockPtr,
+    pub start: u32,
+    pub end: u32,
 }
 
 impl BlockSlice {
@@ -771,6 +812,24 @@ impl BlockSlice {
         let mut id = *self.ptr.id();
         id.clock += self.end;
         id
+    }
+
+    /// Attempts to trim current block slice to provided range of IDs.
+    /// Returns true if current block slice range has been modified as a result of this action.
+    pub fn try_trim(&mut self, from: &ID, to: &ID) -> bool {
+        let id = self.ptr.id();
+        let mut changed = false;
+        let start_clock = id.clock + self.start;
+        let end_clock = id.clock + self.end;
+        if id.client == from.client && from.clock > start_clock && from.clock <= end_clock {
+            self.start = from.clock - start_clock;
+            changed = true;
+        }
+        if id.client == to.client && to.clock >= start_clock && to.clock < end_clock {
+            self.end = end_clock - to.clock;
+            changed = true;
+        }
+        changed
     }
 
     /// Returns true when current [BlockSlice] left boundary is equal to the boundary of the
@@ -795,21 +854,6 @@ impl BlockSlice {
     /// by current [BlockSlice].
     pub fn len(&self) -> u32 {
         self.end - self.start + 1
-    }
-
-    /// Returns an underlying [BlockPtr].
-    pub fn as_ptr(&self) -> BlockPtr {
-        self.ptr
-    }
-
-    /// Returns an offset within contained [Block] marking the (inclusive) beginning of this slice.
-    pub fn start(&self) -> u32 {
-        self.start
-    }
-
-    /// Returns an offset within contained [Block] marking the (inclusive) end of this slice.
-    pub fn end(&self) -> u32 {
-        self.end
     }
 
     /// Checks if an underlying [Block] has been marked as deleted.
@@ -1151,17 +1195,20 @@ impl ItemPosition {
     }
 }
 
+/// Bit flag (9st bit) for item that is linked by Weak Link references
+const ITEM_FLAG_LINKED: u16 = 0b0001_0000_0000;
+
 /// Bit flag (4th bit) for a marked item - not used atm.
-const ITEM_FLAG_MARKED: u8 = 0b0000_1000;
+const ITEM_FLAG_MARKED: u16 = 0b0000_1000;
 
 /// Bit flag (3rd bit) for a tombstoned (deleted) item.
-const ITEM_FLAG_DELETED: u8 = 0b0000_0100;
+const ITEM_FLAG_DELETED: u16 = 0b0000_0100;
 
 /// Bit flag (2nd bit) for an item, which contents are considered countable.
-const ITEM_FLAG_COUNTABLE: u8 = 0b0000_0010;
+const ITEM_FLAG_COUNTABLE: u16 = 0b0000_0010;
 
 /// Bit flag (1st bit) used for an item which should be kept - not used atm.
-const ITEM_FLAG_KEEP: u8 = 0b0000_0001;
+const ITEM_FLAG_KEEP: u16 = 0b0000_0001;
 
 /// Collection of flags attached to an [Item] - most of them are serializable and define specific
 /// properties of an associated [Item], like:
@@ -1171,25 +1218,25 @@ const ITEM_FLAG_KEEP: u8 = 0b0000_0001;
 /// - Should item be kept untouched eg. because it's being tracked by [UndoManager].
 #[repr(transparent)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub struct ItemFlags(u8);
+pub struct ItemFlags(u16);
 
 impl ItemFlags {
-    pub fn new(source: u8) -> Self {
+    pub fn new(source: u16) -> Self {
         ItemFlags(source)
     }
 
     #[inline]
-    fn set(&mut self, value: u8) {
+    fn set(&mut self, value: u16) {
         self.0 |= value
     }
 
     #[inline]
-    fn clear(&mut self, value: u8) {
+    fn clear(&mut self, value: u16) {
         self.0 &= !value
     }
 
     #[inline]
-    fn check(&self, value: u8) -> bool {
+    fn check(&self, value: u16) -> bool {
         self.0 & value == value
     }
 
@@ -1237,11 +1284,26 @@ impl ItemFlags {
     pub fn is_marked(&self) -> bool {
         self.check(ITEM_FLAG_MARKED)
     }
+
+    #[inline]
+    pub fn is_linked(&self) -> bool {
+        self.check(ITEM_FLAG_LINKED)
+    }
+
+    #[inline]
+    pub fn set_linked(&mut self) {
+        self.set(ITEM_FLAG_LINKED)
+    }
+
+    #[inline]
+    pub fn clear_linked(&mut self) {
+        self.clear(ITEM_FLAG_LINKED)
+    }
 }
 
-impl Into<u8> for ItemFlags {
+impl Into<u16> for ItemFlags {
     #[inline]
-    fn into(self) -> u8 {
+    fn into(self) -> u16 {
         self.0
     }
 }
@@ -2158,10 +2220,14 @@ impl std::fmt::Display for Item {
             write!(f, ":")?;
         }
         if self.is_deleted() {
-            write!(f, " ~{}~)", &self.content)
+            write!(f, " ~{}~", &self.content)?;
         } else {
-            write!(f, " {})", &self.content)
+            write!(f, " {}", &self.content)?;
         }
+        if self.info.is_linked() {
+            write!(f, "|linked")?;
+        }
+        write!(f, ")")
     }
 }
 
@@ -2226,6 +2292,7 @@ impl std::fmt::Display for ItemContent {
                 TypeRef::XmlFragment => write!(f, "<xml fragment>"),
                 TypeRef::XmlHook => write!(f, "<xml hook>"),
                 TypeRef::XmlText => write!(f, "<xml text>"),
+                TypeRef::WeakLink(s) => write!(f, "<weak({}..{})>", s.quote_start, s.quote_end),
                 _ => write!(f, "<undefined type ref>"),
             },
             ItemContent::Move(m) => std::fmt::Display::fmt(m.as_ref(), f),

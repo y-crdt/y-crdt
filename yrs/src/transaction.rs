@@ -1,10 +1,11 @@
 use crate::block::{Block, BlockPtr, Item, ItemContent, Prelim, ID};
 use crate::block_store::{Snapshot, StateVector};
 use crate::doc::DocAddr;
+use crate::error::Error;
 use crate::event::SubdocsEvent;
 use crate::id_set::DeleteSet;
 use crate::store::{Store, SubdocGuids, SubdocsIter};
-use crate::types::{Branch, BranchPtr, Event, Events, TypePtr, Value};
+use crate::types::{Branch, BranchPtr, Event, Events, TypePtr, TypeRef, Value};
 use crate::update::Update;
 use crate::utils::OptionExt;
 use crate::*;
@@ -17,7 +18,6 @@ use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::sync::Arc;
 use updates::encoder::*;
-use crate::error::Error;
 
 /// Trait defining read capabilities present in a transaction. Implemented by both lightweight
 /// [read-only](Transaction) and [read-write](TransactionMut) transactions.
@@ -382,7 +382,7 @@ impl<'doc> TransactionMut<'doc> {
     pub(crate) fn apply_delete(&mut self, ds: &DeleteSet) -> Option<DeleteSet> {
         let mut unapplied = DeleteSet::new();
         for (client, ranges) in ds.iter() {
-            if let Some(mut blocks) = self.store_mut().blocks.get_mut(client) {
+            if let Some(mut blocks) = self.store.blocks.get_mut(client) {
                 let state = blocks.get_state();
 
                 for range in ranges.iter() {
@@ -437,6 +437,18 @@ impl<'doc> TransactionMut<'doc> {
                                                                 {
                                                                     self.prev_moved
                                                                         .insert(split, prev_moved);
+                                                                }
+                                                            }
+                                                            if item.info.is_linked() {
+                                                                if let Some(links) = self
+                                                                    .store
+                                                                    .linked_by
+                                                                    .get(&block)
+                                                                    .cloned()
+                                                                {
+                                                                    self.store
+                                                                        .linked_by
+                                                                        .insert(split, links);
                                                                 }
                                                             }
                                                         }
@@ -508,9 +520,12 @@ impl<'doc> TransactionMut<'doc> {
                         }
                     }
                     ItemContent::Type(inner) => {
+                        let branch_ptr = BranchPtr::from(inner);
+                        if let TypeRef::WeakLink(source) = &inner.type_ref {
+                            source.unlink_all(self, branch_ptr);
+                        }
                         let mut ptr = inner.start;
-                        self.changed
-                            .remove(&TypePtr::Branch(BranchPtr::from(inner)));
+                        self.changed.remove(&TypePtr::Branch(branch_ptr));
 
                         while let Some(Block::Item(item)) = ptr.as_deref() {
                             if !item.is_deleted() {
@@ -526,6 +541,19 @@ impl<'doc> TransactionMut<'doc> {
                     }
                     ItemContent::Move(m) => m.delete(self, block),
                     _ => { /* nothing to do for other content types */ }
+                }
+                if item.info.is_linked() {
+                    // notify links that current element has been removed
+                    if let Some(linked_by) = self.store.linked_by.remove(&block) {
+                        for link in linked_by {
+                            self.add_changed_type(link, item.parent_sub.clone());
+                            if let TypeRef::WeakLink(source) = &link.type_ref {
+                                if source.is_single() {
+                                    source.first_item.take();
+                                }
+                            }
+                        }
+                    }
                 }
                 result = true;
             }
@@ -659,6 +687,54 @@ impl<'doc> TransactionMut<'doc> {
         block_ptr
     }
 
+    fn call_type_observers(
+        changed_parent_types: &mut Vec<BranchPtr>,
+        all_links: &HashMap<BlockPtr, HashSet<BranchPtr>>,
+        branch: BranchPtr,
+        changed_parents: &mut HashMap<BranchPtr, Vec<usize>>,
+        event_cache: &mut Vec<Event>,
+        visited: &mut HashSet<BranchPtr>,
+    ) {
+        let mut current = branch;
+        loop {
+            changed_parent_types.push(current);
+            if current.deep_observers.is_some() {
+                let entries = changed_parents.entry(current).or_default();
+                entries.push(event_cache.len() - 1);
+            }
+
+            if let Some(ptr) = current.item {
+                match ptr.deref() {
+                    Block::Item(item) => {
+                        if item.info.is_linked() {
+                            if let Some(linked_by) = all_links.get(&ptr) {
+                                for &link in linked_by.iter() {
+                                    if visited.insert(link) {
+                                        Self::call_type_observers(
+                                            changed_parent_types,
+                                            all_links,
+                                            link,
+                                            changed_parents,
+                                            event_cache,
+                                            visited,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                        if let TypePtr::Branch(parent) = item.parent {
+                            current = parent;
+                            continue;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            break;
+        }
+    }
+
     /// Commits current transaction. This step involves cleaning up and optimizing changes performed
     /// during lifetime of a transaction. Such changes include squashing delete sets data,
     /// squashing blocks that have been appended one after another to preserve memory and triggering
@@ -685,24 +761,14 @@ impl<'doc> TransactionMut<'doc> {
                 if let TypePtr::Branch(branch) = ptr {
                     if let Some(e) = branch.trigger(self, subs.clone()) {
                         event_cache.push(e);
-
-                        let mut current = *branch;
-                        loop {
-                            self.changed_parent_types.push(current);
-                            if current.deep_observers.is_some() {
-                                let entries = changed_parents.entry(current).or_default();
-                                entries.push(event_cache.len() - 1);
-                            }
-
-                            if let Some(Block::Item(item)) = current.item.as_deref() {
-                                if let TypePtr::Branch(parent) = item.parent {
-                                    current = parent;
-                                    continue;
-                                }
-                            }
-
-                            break;
-                        }
+                        Self::call_type_observers(
+                            &mut self.changed_parent_types,
+                            &self.store.linked_by,
+                            *branch,
+                            &mut changed_parents,
+                            &mut event_cache,
+                            &mut HashSet::default(),
+                        );
                     }
                 }
             }
@@ -885,6 +951,34 @@ impl<'doc> TransactionMut<'doc> {
         self.merge_blocks.append(&mut merge_blocks);
         for _ in snapshot.delete_set.deleted_blocks(self) {
             // do nothing just split the blocks by delete set
+        }
+    }
+
+    fn link(&mut self, mut source: BlockPtr, link: BranchPtr) {
+        if let Block::Item(item) = source.deref_mut() {
+            item.info.set_linked();
+            let links = self.store.linked_by.entry(source).or_default();
+            links.insert(link);
+        }
+    }
+
+    pub(crate) fn unlink(&mut self, mut source: BlockPtr, link: BranchPtr) {
+        let all_links = &mut self.store.linked_by;
+        let prune = if let Some(linked_by) = all_links.get_mut(&source) {
+            linked_by.remove(&link) && linked_by.is_empty()
+        } else {
+            false
+        };
+        if prune {
+            all_links.remove(&source);
+            if let Block::Item(item) = source.deref_mut() {
+                item.info.clear_linked();
+                if item.is_countable() {
+                    // since linked property is blocking items from merging,
+                    // it may turn out that source item can be merged now
+                    self.merge_blocks.push(item.id);
+                }
+            }
         }
     }
 }

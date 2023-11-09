@@ -2,7 +2,7 @@ use crate::block::{Block, BlockPtr, EmbedPrelim, Item, ItemContent, ItemPosition
 use crate::block_store::Snapshot;
 use crate::transaction::TransactionMut;
 use crate::types::{
-    Attrs, Branch, BranchPtr, Delta, EventHandler, Observers, Path, TypeRef, Value,
+    Attrs, Branch, BranchPtr, Delta, EventHandler, Observers, Path, SharedRef, TypeRef, Value,
 };
 use crate::utils::OptionExt;
 use crate::*;
@@ -91,7 +91,9 @@ use std::ops::{Deref, DerefMut};
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct TextRef(BranchPtr);
 
+impl SharedRef for TextRef {}
 impl Text for TextRef {}
+impl Quotable for TextRef {}
 impl IndexedSequence for TextRef {}
 
 impl Into<XmlTextRef> for TextRef {
@@ -162,7 +164,7 @@ impl TryFrom<Value> for TextRef {
     }
 }
 
-pub trait Text: AsRef<Branch> {
+pub trait Text: AsRef<Branch> + Sized {
     /// Returns a number of characters visible in a current text data structure.
     fn len<T: ReadTxn>(&self, txn: &T) -> u32 {
         self.as_ref().content_len
@@ -408,7 +410,7 @@ pub trait Text: AsRef<Branch> {
         F: Fn(YChange) -> D,
     {
         let mut asm = DiffAssembler::new(compute_ychange);
-        asm.process(self.as_ref().start, None, None);
+        asm.process(self.as_ref().start, None, None, None, None);
         asm.finish()
     }
 
@@ -431,7 +433,7 @@ pub trait Text: AsRef<Branch> {
         }
 
         let mut asm = DiffAssembler::new(compute_ychange);
-        asm.process(self.as_ref().start, hi, lo);
+        asm.process(self.as_ref().start, hi, lo, None, None);
         asm.finish()
     }
 }
@@ -504,8 +506,14 @@ where
             Some(Box::new(self.curr_attrs.clone()))
         }
     }
-
-    fn process(&mut self, mut n: Option<BlockPtr>, hi: Option<&Snapshot>, lo: Option<&Snapshot>) {
+    fn process(
+        &mut self,
+        mut n: Option<BlockPtr>,
+        hi: Option<&Snapshot>,
+        lo: Option<&Snapshot>,
+        start: Option<&StickyIndex>,
+        end: Option<&StickyIndex>,
+    ) {
         fn seen(snapshot: Option<&Snapshot>, item: &Item) -> bool {
             if let Some(s) = snapshot {
                 s.is_visible(&item.id)
@@ -513,8 +521,39 @@ where
                 !item.is_deleted()
             }
         }
+        let (start, start_assoc) = if let Some(index) = start {
+            (index.id(), index.assoc)
+        } else {
+            (None, Assoc::Before)
+        };
+        let (end, end_assoc) = if let Some(index) = end {
+            (index.id(), index.assoc)
+        } else {
+            (None, Assoc::After)
+        };
 
-        while let Some(Block::Item(item)) = n.as_deref() {
+        let mut start_offset: i32 = if start.is_none() { 0 } else { -1 };
+        'LOOP: while let Some(Block::Item(item)) = n.as_deref() {
+            if let Some(start) = start {
+                if start_offset < 0 && item.contains(start) {
+                    if start_assoc == Assoc::After {
+                        if start.clock == item.id.clock + item.len() - 1 {
+                            start_offset = 0;
+                            n = item.right;
+                            continue;
+                        } else {
+                            start_offset = start.clock as i32 - item.id.clock as i32 + 1;
+                        }
+                    } else {
+                        start_offset = start.clock as i32 - item.id.clock as i32;
+                    }
+                }
+            }
+            if let Some(end) = end {
+                if end_assoc == Assoc::Before && &item.id == end {
+                    break;
+                }
+            }
             if seen(hi, item) || (lo.is_some() && seen(lo, item)) {
                 match &item.content {
                     ItemContent::String(s) => {
@@ -533,7 +572,32 @@ where
                                 }
                             }
                         }
-                        self.buf.push_str(s.as_str());
+                        if start_offset > 0 {
+                            let slice = &s.as_str()[start_offset as usize..];
+                            self.buf.push_str(slice);
+                            start_offset = 0;
+                        } else {
+                            match end {
+                                Some(end) if item.contains(end) => {
+                                    // we reached the end or range
+                                    let mut end_offset =
+                                        (item.id.clock + item.len - end.clock - 1) as usize;
+                                    if end_assoc == Assoc::Before {
+                                        end_offset -= 1;
+                                    }
+                                    let s = s.as_str();
+                                    let slice = &s[..(s.len() + end_offset)];
+                                    self.buf.push_str(slice);
+                                    self.pack_str();
+                                    break 'LOOP;
+                                }
+                                _ => {
+                                    if start_offset == 0 {
+                                        self.buf.push_str(s.as_str());
+                                    }
+                                }
+                            }
+                        }
                     }
                     ItemContent::Type(_) | ItemContent::Embed(_) => {
                         self.pack_str();
@@ -550,12 +614,30 @@ where
                     }
                     _ => {}
                 }
+            } else if let Some(end) = end {
+                if item.contains(end) {
+                    break;
+                }
             }
             n = item.right;
         }
 
         self.pack_str();
     }
+}
+
+pub(crate) fn diff_between<D, F>(
+    ptr: Option<BlockPtr>,
+    start: Option<&StickyIndex>,
+    end: Option<&StickyIndex>,
+    compute_ychange: F,
+) -> Vec<Diff<D>>
+where
+    F: Fn(YChange) -> D,
+{
+    let mut asm = DiffAssembler::new(compute_ychange);
+    asm.process(ptr, None, None, start, end);
+    asm.finish()
 }
 
 pub(crate) fn update_current_attributes(attrs: &mut Attrs, key: &str, value: &Any) {
@@ -1298,7 +1380,10 @@ mod test {
     use crate::types::Value;
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
-    use crate::{ArrayPrelim, Doc, GetString, Observable, StateVector, Text, Transact, Update, XmlTextRef, ID, Any, any};
+    use crate::{
+        any, Any, ArrayPrelim, Doc, GetString, Observable, StateVector, Text, Transact, Update,
+        XmlTextRef, ID,
+    };
     use rand::prelude::StdRng;
     use rand::Rng;
     use std::cell::RefCell;

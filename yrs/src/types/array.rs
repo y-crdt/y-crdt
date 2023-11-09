@@ -2,11 +2,12 @@ use crate::block::{BlockPtr, EmbedPrelim, ItemContent, Prelim, Unused};
 use crate::block_iter::BlockIter;
 use crate::moving::StickyIndex;
 use crate::transaction::TransactionMut;
+use crate::types::weak::Quotable;
 use crate::types::{
-    event_change_set, Branch, BranchPtr, Change, ChangeSet, EventHandler, Observers, Path, ToJson,
-    TypeRef, Value,
+    event_change_set, Branch, BranchPtr, Change, ChangeSet, EventHandler, Observers, Path,
+    SharedRef, ToJson, TypeRef, Value,
 };
-use crate::{Assoc, IndexedSequence, Observable, ReadTxn, ID, Any};
+use crate::{Any, Assoc, IndexedSequence, Observable, ReadTxn, ID};
 use std::borrow::Borrow;
 use std::cell::UnsafeCell;
 use std::collections::HashSet;
@@ -73,7 +74,9 @@ use std::sync::Arc;
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct ArrayRef(BranchPtr);
 
+impl SharedRef for ArrayRef {}
 impl Array for ArrayRef {}
+impl Quotable for ArrayRef {}
 impl IndexedSequence for ArrayRef {}
 
 impl ToJson for ArrayRef {
@@ -149,7 +152,7 @@ impl TryFrom<Value> for ArrayRef {
     }
 }
 
-pub trait Array: AsRef<Branch> {
+pub trait Array: AsRef<Branch> + Sized {
     /// Returns a number of elements stored in current array.
     fn len<T: ReadTxn>(&self, txn: &T) -> u32 {
         self.as_ref().len()
@@ -289,7 +292,9 @@ pub trait Array: AsRef<Branch> {
     /// let array = doc.get_or_insert_array("array");
     /// array.insert_range(&mut doc.transact_mut(), 0, [1,2,3,4]);
     /// // move elements 2 and 3 after the 4
-    /// array.move_range_to(&mut doc.transact_mut(), 1, Assoc::Before, 2, Assoc::After, 4);
+    /// array.move_range_to(&mut doc.transact_mut(), 1, Assoc::After, 2, Assoc::Before, 4);
+    /// let values: Vec<_> = array.iter(&doc.transact()).collect();
+    /// assert_eq!(values, vec![1.into(), 4.into(), 2.into(), 3.into()]);
     /// ```
     /// # Panics
     ///
@@ -526,7 +531,10 @@ mod test {
     use crate::test_utils::{exchange_updates, run_scenario, RngExt};
     use crate::types::map::MapPrelim;
     use crate::types::{Change, DeepObservable, Event, Path, PathSegment, ToJson, Value};
-    use crate::{Array, ArrayPrelim, Assoc, Doc, Map, MapRef, Observable, StateVector, Transact, Update, ID, Any, any};
+    use crate::{
+        any, Any, Array, ArrayPrelim, Assoc, Doc, Map, MapRef, Observable, StateVector, Transact,
+        Update, ID,
+    };
     use rand::prelude::StdRng;
     use rand::Rng;
     use std::cell::{Cell, RefCell};

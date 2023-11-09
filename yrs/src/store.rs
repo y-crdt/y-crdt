@@ -3,6 +3,7 @@ use crate::block_store::{BlockStore, StateVector};
 use crate::doc::{
     AfterTransactionSubscription, DestroySubscription, DocAddr, Options, SubdocsSubscription,
 };
+use crate::error::Error;
 use crate::event::SubdocsEvent;
 use crate::id_set::DeleteSet;
 use crate::types::{Branch, BranchPtr, Path, PathSegment, TypeRef};
@@ -14,10 +15,9 @@ use crate::{
 };
 use atomic_refcell::{AtomicRef, AtomicRefCell, AtomicRefMut, BorrowError, BorrowMutError};
 use std::collections::hash_map::Entry;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::Deref;
 use std::sync::{Arc, Weak};
-use crate::error::Error;
 
 /// Store is a core element of a document. It contains all of the information, like block store
 /// map of root types, pending updates waiting to be applied once a missing update information
@@ -51,6 +51,9 @@ pub struct Store {
     /// Pointer to a parent block - present only if a current document is a sub-document of another
     /// document.
     pub(crate) parent: Option<BlockPtr>,
+
+    /// Dependencies between items and weak links pointing to these items.
+    pub(crate) linked_by: HashMap<BlockPtr, HashSet<BranchPtr>>,
 }
 
 impl Store {
@@ -61,6 +64,7 @@ impl Store {
             types: HashMap::default(),
             blocks: BlockStore::new(),
             subdocs: HashMap::default(),
+            linked_by: HashMap::default(),
             events: None,
             pending: None,
             pending_ds: None,
@@ -269,19 +273,29 @@ impl Store {
     pub(crate) fn materialize(&mut self, mut slice: BlockSlice) -> BlockPtr {
         let id = slice.id().clone();
         let blocks = self.blocks.get_mut(&id.client).unwrap();
+        let mut links = None;
+        if let Block::Item(item) = slice.ptr.deref() {
+            if item.info.is_linked() {
+                links = self.linked_by.get(&slice.ptr).cloned();
+            }
+        }
         let mut index = None;
         let mut ptr = if slice.adjacent_left() {
-            slice.as_ptr()
+            slice.ptr
         } else {
             let mut i = blocks.find_pivot(id.clock).unwrap();
-            if let Some(new) = slice.as_ptr().splice(slice.start(), OffsetKind::Utf16) {
+            if let Some(new) = slice.ptr.splice(slice.start, OffsetKind::Utf16) {
+                if let Some(source) = links.clone() {
+                    let dest = self.linked_by.entry(BlockPtr::from(&new)).or_default();
+                    dest.extend(source);
+                }
                 blocks.insert(i + 1, new);
                 i += 1;
                 //todo: txn merge blocks insert?
                 index = Some(i);
             }
             let ptr = blocks.get(i);
-            slice = BlockSlice::new(ptr, 0, slice.end() - slice.start());
+            slice = BlockSlice::new(ptr, 0, slice.end - slice.start);
             ptr
         };
 
@@ -294,6 +308,10 @@ impl Store {
                 blocks.find_pivot(last_id.clock).unwrap()
             };
             let new = ptr.splice(slice.len(), OffsetKind::Utf16).unwrap();
+            if let Some(source) = links {
+                let dest = self.linked_by.entry(BlockPtr::from(&new)).or_default();
+                dest.extend(source);
+            }
             blocks.insert(i + 1, new);
             //todo: txn merge blocks insert?
         }
@@ -377,7 +395,9 @@ impl std::fmt::Display for Store {
         if let Some(parent) = self.parent.as_ref() {
             s.field("parent block", parent.id());
         }
-
+        if !self.linked_by.is_empty() {
+            s.field("links", &self.linked_by);
+        }
         s.finish()
     }
 }

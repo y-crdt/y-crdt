@@ -57,6 +57,29 @@ impl<T> AtomicRef<T> {
         }
     }
 
+    /// Atomically replaces currently stored value with a new one, returning the last stored value.
+    pub fn swap(&self, value: T) -> Option<Arc<T>> {
+        let new_ptr = Arc::into_raw(Arc::new(value)) as *mut _;
+        let prev = self.0.swap(new_ptr, Ordering::Release);
+        if prev.is_null() {
+            None
+        } else {
+            let arc = unsafe { Arc::from_raw(prev) };
+            Some(arc)
+        }
+    }
+
+    /// Atomically replaces currently stored value with a null, returning the last stored value.
+    pub fn take(&self) -> Option<Arc<T>> {
+        let prev = self.0.swap(null_mut(), Ordering::Release);
+        if prev.is_null() {
+            None
+        } else {
+            let arc = unsafe { Arc::from_raw(prev) };
+            Some(arc)
+        }
+    }
+
     /// Updates stored value in place using provided function `f`, which takes read-only refrence
     /// to the most recently known state and producing new state in the result.
     ///
@@ -97,6 +120,23 @@ impl<T> AtomicRef<T> {
     }
 }
 
+impl<T: Copy> AtomicRef<T> {
+    /// Returns a current state copy hold by the [AtomicRef]. Keep in mind that after
+    /// acquiring it, it may not present the current view of the state, but instead be changed by
+    /// the concurrent [AtomicRef::update] call.
+    pub fn get_owned(&self) -> Option<T> {
+        let ptr = self.0.load(Ordering::SeqCst);
+        if ptr.is_null() {
+            None
+        } else {
+            let arc = unsafe { Arc::from_raw(ptr) };
+            let result = *arc;
+            std::mem::forget(arc);
+            Some(result)
+        }
+    }
+}
+
 impl<T> Drop for AtomicRef<T> {
     fn drop(&mut self) {
         unsafe {
@@ -107,6 +147,23 @@ impl<T> Drop for AtomicRef<T> {
         }
     }
 }
+
+impl<T> PartialEq for AtomicRef<T>
+where
+    T: PartialEq,
+{
+    fn eq(&self, other: &Self) -> bool {
+        let a = self.0.load(Ordering::Acquire);
+        let b = other.0.load(Ordering::Acquire);
+        if std::ptr::eq(a, b) {
+            true
+        } else {
+            unsafe { a.as_ref() == b.as_ref() }
+        }
+    }
+}
+
+impl<T> Eq for AtomicRef<T> where T: Eq {}
 
 impl<T: std::fmt::Debug> std::fmt::Debug for AtomicRef<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {

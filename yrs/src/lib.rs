@@ -219,6 +219,66 @@
 //! [StickyIndex] structure is serializable and can be persisted or passed over the network as
 //! well, which may help with tracking and displaying the cursor location of other peers.
 //!
+//! # Weak links and quotations
+//!
+//! Yrs document structure can be represented as a tree of elements. That means that usually a node
+//! can have only one parent and cannot be referenced by any other node. This can be changed by
+//! usage of weak links - they offer you a way to reference to values existing in other parts of
+//! the document (also other collections):
+//!
+//! - [Map] elements can be references via [Map::link] method.
+//! - Other collections like text and arrays, can quote entire ranges of values via [Quotable::quote]
+//!   method.
+//!
+//! Both of these methods return a [WeakPrelim] struct can be integrated as an input value in other
+//! collections and convert into [WeakRef] shared type.
+//!
+//! ```rust
+//! use yrs::{Doc, Text, Transact, GetString, Quotable, Map};
+//!
+//! let doc = Doc::new();
+//! let text = doc.get_or_insert_text("text");
+//! let map = doc.get_or_insert_map("map");
+//! let mut txn = doc.transact_mut();
+//! text.insert(&mut txn, 0, "hello!");
+//! let quote = text.quote(&txn, 0..5).unwrap();
+//! let quote = map.insert(&mut txn, "title", quote);
+//!
+//! // retrieve quoted text fragment
+//! assert_eq!(quote.get_string(&txn), "hello".to_string());
+//!
+//! // quotations are actively reacting to changes happening at source within quoted range
+//! text.insert(&mut txn, 5, " world");
+//! // since quoted range 0..5 was right-side exclusive, index 5 itself is not included in range,
+//! // but inserts between position 4 and 5 are
+//! assert_eq!(quote.get_string(&txn), "hello world".to_string());
+//! ```
+//!
+//! Weak refs also expose observer API that allows to subscribe to changes happening in source
+//! collections within quoted range.
+//!
+//! Keep in mind that weak refs don't maintain ownership over quoted elements. If a source
+//! collection removes a quoted element, it will no longer be accessible from weak ref:
+//!
+//! ```rust
+//! use yrs::{Doc, Transact, Quotable, Map};
+//!
+//! let doc = Doc::new();
+//! let map = doc.get_or_insert_map("map");
+//! let mut txn = doc.transact_mut();
+//! map.insert(&mut txn, "origin", "value");
+//! // establish a link 'origin' entry
+//! let link = map.link(&txn, "origin").unwrap();
+//! let link = map.insert(&mut txn, "link", link);
+//! let linked_value: String = link.try_deref(&txn).unwrap();
+//! assert_eq!(linked_value, "value".to_string());
+//!
+//! // remove original value
+//! map.remove(&mut txn, "origin");
+//! let linked_value = link.try_deref_value(&txn);
+//! assert_eq!(linked_value, None); // linked value is no longer accessible
+//! ```
+//!
 //! # Undo/redo
 //!
 //! Among very popular features of many user-facing applications is an ability to revert/reapply
@@ -440,6 +500,7 @@ pub mod atomic;
 mod block_iter;
 pub mod encoding;
 mod error;
+pub mod iter;
 mod moving;
 pub mod observer;
 #[cfg(test)]
@@ -488,6 +549,7 @@ pub use crate::types::map::MapRef;
 pub use crate::types::text::Text;
 pub use crate::types::text::TextPrelim;
 pub use crate::types::text::TextRef;
+pub use crate::types::weak::{Quotable, WeakRef, WeakPrelim};
 pub use crate::types::xml::Xml;
 pub use crate::types::xml::XmlElementPrelim;
 pub use crate::types::xml::XmlElementRef;
