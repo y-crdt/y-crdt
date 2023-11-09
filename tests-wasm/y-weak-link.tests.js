@@ -190,8 +190,8 @@ export const testDeleteWeakLink = tc => {
 
     // since links have been deleted, they no longer refer to any content
     //TODO: fix memory access issues
-    //doc0.transact(txn => t.compare(link0.deref(doc0.readTransaction()), undefined))
-    //doc1.transact(txn => t.compare(link1.deref(doc1.readTransaction()), undefined))
+    //doc0.transact(txn => t.compare(link0.deref(txn), undefined))
+    //doc1.transact(txn => t.compare(link1.deref(txn), undefined))
 }
 
 /**

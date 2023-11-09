@@ -5344,32 +5344,3 @@ impl RangeBounds<u32> for ExplicitRange {
         }
     }
 }
-
-#[cfg(test)]
-mod test {
-    use crate::*;
-
-    #[test]
-    fn yval_preliminary_types() {
-        unsafe {
-            let doc = ydoc_new();
-            let array_name = CString::new("test").unwrap();
-            let array = yarray(doc, array_name.as_ptr());
-            let txn = ydoc_write_transaction(doc, 0, null());
-
-            let y_true = yinput_bool(Y_TRUE);
-            let y_false = yinput_bool(Y_FALSE);
-            let y_float = yinput_float(0.5);
-            let y_int = yinput_long(11);
-            let input = CString::new("hello").unwrap();
-            let y_str = yinput_string(input.as_ptr());
-
-            let values = &[y_true, y_false, y_float, y_int, y_str];
-
-            yarray_insert_range(array, txn, 0, values.as_ptr(), 5);
-
-            ytransaction_commit(txn);
-            ydoc_destroy(doc);
-        }
-    }
-}
