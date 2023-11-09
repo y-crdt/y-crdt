@@ -511,8 +511,8 @@ where
         mut n: Option<BlockPtr>,
         hi: Option<&Snapshot>,
         lo: Option<&Snapshot>,
-        start: Option<&ID>,
-        end: Option<&ID>,
+        start: Option<&StickyIndex>,
+        end: Option<&StickyIndex>,
     ) {
         fn seen(snapshot: Option<&Snapshot>, item: &Item) -> bool {
             if let Some(s) = snapshot {
@@ -521,12 +521,37 @@ where
                 !item.is_deleted()
             }
         }
+        let (start, start_assoc) = if let Some(index) = start {
+            (index.id(), index.assoc)
+        } else {
+            (None, Assoc::Before)
+        };
+        let (end, end_assoc) = if let Some(index) = end {
+            (index.id(), index.assoc)
+        } else {
+            (None, Assoc::After)
+        };
 
         let mut start_offset: i32 = if start.is_none() { 0 } else { -1 };
         'LOOP: while let Some(Block::Item(item)) = n.as_deref() {
             if let Some(start) = start {
                 if start_offset < 0 && item.contains(start) {
-                    start_offset = start.clock as i32 - item.id.clock as i32;
+                    if start_assoc == Assoc::After {
+                        if start.clock == item.id.clock + item.len() - 1 {
+                            start_offset = 0;
+                            n = item.right;
+                            continue;
+                        } else {
+                            start_offset = start.clock as i32 - item.id.clock as i32 + 1;
+                        }
+                    } else {
+                        start_offset = start.clock as i32 - item.id.clock as i32;
+                    }
+                }
+            }
+            if let Some(end) = end {
+                if end_assoc == Assoc::Before && &item.id == end {
+                    break;
                 }
             }
             if seen(hi, item) || (lo.is_some() && seen(lo, item)) {
@@ -548,16 +573,21 @@ where
                             }
                         }
                         if start_offset > 0 {
-                            self.buf.push_str(&s.as_str()[start_offset as usize..]);
+                            let slice = &s.as_str()[start_offset as usize..];
+                            self.buf.push_str(slice);
                             start_offset = 0;
                         } else {
                             match end {
                                 Some(end) if item.contains(end) => {
                                     // we reached the end or range
-                                    let end_offset =
+                                    let mut end_offset =
                                         (item.id.clock + item.len - end.clock - 1) as usize;
+                                    if end_assoc == Assoc::Before {
+                                        end_offset -= 1;
+                                    }
                                     let s = s.as_str();
-                                    self.buf.push_str(&s[..(s.len() + end_offset)]);
+                                    let slice = &s[..(s.len() + end_offset)];
+                                    self.buf.push_str(slice);
                                     self.pack_str();
                                     break 'LOOP;
                                 }
@@ -598,8 +628,8 @@ where
 
 pub(crate) fn diff_between<D, F>(
     ptr: Option<BlockPtr>,
-    start: Option<&ID>,
-    end: Option<&ID>,
+    start: Option<&StickyIndex>,
+    end: Option<&StickyIndex>,
     compute_ychange: F,
 ) -> Vec<Diff<D>>
 where

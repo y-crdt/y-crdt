@@ -57,7 +57,7 @@ use thiserror::Error;
 /// array.insert_range(&mut txn, 0, ["A", "B", "C", "D"]);
 ///
 /// // link the reference for value in another collection
-/// let link = array.quote(&txn, 1, Assoc::After, 3, Assoc::Before).unwrap(); // [B, C]
+/// let link = array.quote(&txn, 1..=2).unwrap(); // [B, C]
 /// let link = map.insert(&mut txn, "key", link);
 ///
 /// // evaluate quoted range
@@ -199,7 +199,7 @@ impl GetString for WeakRef<TextRef> {
     /// text.insert(&mut txn, 0, "hello world!");
     ///
     /// // link fragment of text
-    /// let link = text.quote(&mut txn, 0, Assoc::After, 6, Assoc::Before).unwrap(); // 'hello '
+    /// let link = text.quote(&mut txn, 0..=5).unwrap(); // 'hello '
     /// let link = map.insert(&mut txn, "key", link);
     ///
     /// // check the quoted fragment
@@ -232,7 +232,7 @@ impl GetString for WeakRef<XmlTextRef> {
     /// text.format(&mut txn, 6, 6, italic); // '<b>Bold</b>, <i>italic</i> text'
     ///
     /// // link fragment of text
-    /// let link = text.quote(&mut txn, 1, Assoc::After, 10, Assoc::After).unwrap(); // '<b>old</b>, <i>itali</i>'
+    /// let link = text.quote(&mut txn, 1..=10).unwrap(); // '<b>old</b>, <i>itali</i>'
     /// let link = map.insert(&mut txn, "key", link);
     ///
     /// // check the quoted fragment
@@ -592,14 +592,6 @@ impl LinkSource {
     pub fn to_string<T: ReadTxn>(&self, txn: &T) -> String {
         let mut result = String::new();
         let mut curr = self.first_item.get_owned();
-        //if self.quote_start.assoc == Assoc::After {
-        //    // if assoc >= we exclude start from range
-        //    curr = if let Some(Block::Item(i)) = curr.as_deref() {
-        //        i.right
-        //    } else {
-        //        return String::new();
-        //    }
-        //}
         let end = self.quote_end.id().unwrap();
         while let Some(Block::Item(item)) = curr.as_deref() {
             if self.quote_end.assoc == Assoc::Before && &item.id == end {
@@ -624,9 +616,11 @@ impl LinkSource {
         let curr = self.first_item.get_owned();
         if let Some(Block::Item(item)) = curr.as_deref() {
             if let Some(branch) = item.parent.as_branch() {
-                let start = self.quote_start.id();
-                let end = self.quote_end.id();
-                return XmlTextRef::get_string_fragment(branch.start, start, end);
+                return XmlTextRef::get_string_fragment(
+                    branch.start,
+                    Some(&self.quote_start),
+                    Some(&self.quote_end),
+                );
             }
         }
         String::new()
@@ -861,7 +855,7 @@ mod test {
     use crate::Assoc::{After, Before};
     use crate::{
         Array, ArrayRef, DeepObservable, Doc, GetString, Map, MapPrelim, MapRef, Observable,
-        Quotable, Text, TextRef, Transact, XmlTextRef,
+        Quotable, ReadTxn, Text, TextRef, Transact, XmlTextRef,
     };
     use std::cell::RefCell;
     use std::collections::{Bound, HashMap};
@@ -2032,8 +2026,12 @@ mod test {
         assert_eq!(actual, vec![5, 6, 2, 3, 7]);
     }
 
+    fn to_weak_xml_text(weak: &WeakRef<TextRef>) -> WeakRef<XmlTextRef> {
+        WeakRef::from(weak.clone().into_inner())
+    }
+
     #[test]
-    fn start_boundary_inserts() {
+    fn quoted_text_start_boundary_inserts() {
         let d1 = Doc::with_client_id(1);
         let arr1 = d1.get_or_insert_array("array");
         let txt1 = d1.get_or_insert_text("text");
@@ -2071,21 +2069,35 @@ mod test {
             let q = txt1.quote(&txn, 1..5).unwrap();
             arr1.insert(&mut txn, 0, q)
         };
-        let str = link_excl.get_string(&d1.transact());
-        assert_eq!(&str, "bcde");
-        let str = link_incl.get_string(&d1.transact());
-        assert_eq!(&str, "bcde");
+        {
+            let txn = d1.transact();
+            let str = link_excl.get_string(&txn);
+            assert_eq!(&str, "bcde");
+            let str = to_weak_xml_text(&link_excl).get_string(&txn);
+            assert_eq!(&str, "bcde");
+            let str = link_incl.get_string(&txn);
+            assert_eq!(&str, "bcde");
+            let str = to_weak_xml_text(&link_incl).get_string(&txn);
+            assert_eq!(&str, "bcde");
+        }
 
         exchange_updates(&[&d1, &d2]);
 
-        let str = link_excl.get_string(&d1.transact());
-        assert_eq!(&str, "xyzbcde");
-        let str = link_incl.get_string(&d1.transact());
-        assert_eq!(&str, "bcde");
+        {
+            let txn = d1.transact();
+            let str = link_excl.get_string(&txn);
+            assert_eq!(&str, "xyzbcde");
+            let str = to_weak_xml_text(&link_excl).get_string(&txn);
+            assert_eq!(&str, "xyzbcde");
+            let str = link_incl.get_string(&txn);
+            assert_eq!(&str, "bcde");
+            let str = to_weak_xml_text(&link_incl).get_string(&txn);
+            assert_eq!(&str, "bcde");
+        }
     }
 
     #[test]
-    fn end_boundary_inserts() {
+    fn quoted_text_end_boundary_inserts() {
         let d1 = Doc::with_client_id(1);
         let arr1 = d1.get_or_insert_array("array");
         let txt1 = d1.get_or_insert_text("text");
@@ -2113,16 +2125,30 @@ mod test {
             arr1.insert(&mut txn, 0, q)
         };
 
-        let str = link_excl.get_string(&d1.transact());
-        assert_eq!(&str, "bcde");
-        let str = link_incl.get_string(&d1.transact());
-        assert_eq!(&str, "bcde");
+        {
+            let txn = d1.transact();
+            let str = link_excl.get_string(&txn);
+            assert_eq!(&str, "bcde");
+            let str = to_weak_xml_text(&link_excl).get_string(&txn);
+            assert_eq!(&str, "bcde");
+            let str = link_incl.get_string(&txn);
+            assert_eq!(&str, "bcde");
+            let str = to_weak_xml_text(&link_incl).get_string(&txn);
+            assert_eq!(&str, "bcde");
+        }
 
         exchange_updates(&[&d1, &d2]);
 
-        let str = link_excl.get_string(&d1.transact());
-        assert_eq!(&str, "bcdexyz");
-        let str = link_incl.get_string(&d1.transact());
-        assert_eq!(&str, "bcde");
+        {
+            let txn = d1.transact();
+            let str = link_excl.get_string(&txn);
+            assert_eq!(&str, "bcdexyz");
+            let str = to_weak_xml_text(&link_excl).get_string(&txn);
+            assert_eq!(&str, "bcdexyz");
+            let str = link_incl.get_string(&txn);
+            assert_eq!(&str, "bcde");
+            let str = to_weak_xml_text(&link_incl).get_string(&txn);
+            assert_eq!(&str, "bcde");
+        }
     }
 }

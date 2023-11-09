@@ -7,8 +7,8 @@ use crate::types::{
     EntryChange, EventHandler, MapRef, Observers, Path, SharedRef, ToJson, TypePtr, TypeRef, Value,
 };
 use crate::{
-    Any, ArrayRef, GetString, IndexedSequence, Map, Observable, Quotable, ReadTxn, Text, TextRef,
-    ID,
+    Any, ArrayRef, GetString, IndexedSequence, Map, Observable, Quotable, ReadTxn, StickyIndex,
+    Text, TextRef, ID,
 };
 use std::borrow::Borrow;
 use std::cell::UnsafeCell;
@@ -393,8 +393,8 @@ pub struct XmlTextRef(BranchPtr);
 impl XmlTextRef {
     pub(crate) fn get_string_fragment(
         head: Option<BlockPtr>,
-        start: Option<&ID>,
-        end: Option<&ID>,
+        start: Option<&StickyIndex>,
+        end: Option<&StickyIndex>,
     ) -> String {
         let mut buf = String::new();
         for d in diff_between(head, start, end, YChange::identity) {

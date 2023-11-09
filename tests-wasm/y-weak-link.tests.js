@@ -410,9 +410,19 @@ export const testDeepObserveTransitive2 = tc => {
      * @type {Array<any>}
      */
     let events = []
-    link3.observeDeep((e) => events = e)
+    link3.observeDeep((evts) => {
+        events = []
+        for (let e of evts) {
+            switch (e.constructor) {
+                case Y.YWeakLinkEvent:
+                    events.push(e.target)
+                    break;
+                default: throw new Error('unexpected event type ' + e.constructor)
+            }
+        }
+    })
     map2.set('key', 'value2')
-    const values = events.map((e) => e.target.deref())
+    const values = events.map((e) => e.deref())
     t.compare(values, ['value2'])
 }
 
