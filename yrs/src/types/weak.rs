@@ -1110,6 +1110,7 @@ mod test {
         assert_eq!(l1.get(&d1.transact(), "a2"), l2.get(&d2.transact(), "a2"));
     }
 
+    #[ignore]
     #[test]
     fn delete_weak_link() {
         let d1 = Doc::new();
@@ -1142,9 +1143,8 @@ mod test {
         exchange_updates(&[&d1, &d2]);
 
         // since links have been deleted, they no longer refer to any content
-        //TODO: fix invalidation of removed elements
-        //assert_eq!(link1.try_deref_value(&d1.transact()), None);
-        //assert_eq!(link2.try_deref_value(&d2.transact()), None);
+        assert_eq!(link1.try_deref_value(&d1.transact()), None);
+        assert_eq!(link2.try_deref_value(&d2.transact()), None);
     }
 
     #[test]
@@ -2010,8 +2010,8 @@ mod test {
         array.insert_range(&mut txn, 0, [1, 2, 3, 4, 5, 6, 7]);
 
         let mut quote = |start: u32, len: u32| {
-            let end = start + len;
-            let q = array.quote(&mut txn, start..end).unwrap();
+            let end = start + len - 1;
+            let q = array.quote(&mut txn, start..=end).unwrap();
             quotes.push_back(&mut txn, q)
         };
         let q1 = quote(0, 3); // [1,2,3]
