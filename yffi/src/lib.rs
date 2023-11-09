@@ -5146,7 +5146,7 @@ pub unsafe extern "C" fn yweak_deref(
 
     let txn = txn.as_ref().unwrap();
     let weak: WeakRef<MapRef> = WeakRef::from_raw_branch(map_link);
-    if let Some(value) = weak.try_deref_raw(txn) {
+    if let Some(value) = weak.try_deref_value(txn) {
         Box::into_raw(Box::new(YOutput::from(value)))
     } else {
         null_mut()

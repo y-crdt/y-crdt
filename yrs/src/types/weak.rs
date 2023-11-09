@@ -257,13 +257,13 @@ where
     /// possible. If conversion was not possible or element didn't exist, an error case will be
     /// returned.
     ///
-    /// Use [WeakRef::try_deref_raw] if conversion is not possible or desired at the current moment.
+    /// Use [WeakRef::try_deref_value] if conversion is not possible or desired at the current moment.
     pub fn try_deref<T, V>(&self, txn: &T) -> Result<V, Option<V::Error>>
     where
         T: ReadTxn,
         V: TryFrom<Value>,
     {
-        if let Some(value) = self.try_deref_raw(txn) {
+        if let Some(value) = self.try_deref_value(txn) {
             match V::try_from(value) {
                 Ok(value) => Ok(value),
                 Err(value) => Err(Some(value)),
@@ -290,13 +290,13 @@ where
     /// let link = map.link(&txn, "A").unwrap();
     /// let link = map.insert(&mut txn, "B", link);
     ///
-    /// assert_eq!(link.try_deref_raw(&txn), Some("value".into()));
+    /// assert_eq!(link.try_deref_value(&txn), Some("value".into()));
     ///
     /// // update entry and check if link has been updated
     /// map.insert(&mut txn, "A", "other");
-    /// assert_eq!(link.try_deref_raw(&txn), Some("other".into()));
+    /// assert_eq!(link.try_deref_value(&txn), Some("other".into()));
     /// ```
-    pub fn try_deref_raw<T: ReadTxn>(&self, txn: &T) -> Option<Value> {
+    pub fn try_deref_value<T: ReadTxn>(&self, txn: &T) -> Option<Value> {
         let source = self.try_source()?;
         let last = source.first_item.get_owned().to_iter().last()?;
         let item = last.as_item()?;
@@ -855,7 +855,7 @@ mod test {
     use crate::Assoc::{After, Before};
     use crate::{
         Array, ArrayRef, DeepObservable, Doc, GetString, Map, MapPrelim, MapRef, Observable,
-        Quotable, ReadTxn, Text, TextRef, Transact, XmlTextRef,
+        Quotable, Text, TextRef, Transact, XmlTextRef,
     };
     use std::cell::RefCell;
     use std::collections::{Bound, HashMap};
@@ -1129,8 +1129,8 @@ mod test {
         exchange_updates(&[&d1, &d2]);
 
         // since links have been deleted, they no longer refer to any content
-        assert_eq!(link1.try_deref_raw(&d1.transact()), None);
-        assert_eq!(link2.try_deref_raw(&d2.transact()), None);
+        assert_eq!(link1.try_deref_value(&d1.transact()), None);
+        assert_eq!(link2.try_deref_value(&d2.transact()), None);
     }
 
     #[test]
@@ -1165,8 +1165,8 @@ mod test {
         exchange_updates(&[&d1, &d2]);
 
         // since links have been deleted, they no longer refer to any content
-        assert_eq!(link1.try_deref_raw(&d1.transact()), None);
-        assert_eq!(link2.try_deref_raw(&d2.transact()), None);
+        assert_eq!(link1.try_deref_value(&d1.transact()), None);
+        assert_eq!(link2.try_deref_value(&d2.transact()), None);
     }
 
     #[test]
@@ -1198,7 +1198,7 @@ mod test {
             .unwrap()
             .cast::<WeakRef<MapRef>>()
             .unwrap();
-        assert_eq!(link2.try_deref_raw(&d2.transact()), Some("value".into()));
+        assert_eq!(link2.try_deref_value(&d2.transact()), Some("value".into()));
 
         let target2 = Rc::new(RefCell::new(None));
         let _sub2 = {
@@ -1209,10 +1209,10 @@ mod test {
         };
 
         m1.insert(&mut d1.transact_mut(), "a", "value2");
-        assert_eq!(link1.try_deref_raw(&d1.transact()), Some("value2".into()));
+        assert_eq!(link1.try_deref_value(&d1.transact()), Some("value2".into()));
 
         exchange_updates(&[&d1, &d2]);
-        assert_eq!(link2.try_deref_raw(&d2.transact()), Some("value2".into()));
+        assert_eq!(link2.try_deref_value(&d2.transact()), Some("value2".into()));
     }
 
     #[test]
@@ -1244,7 +1244,7 @@ mod test {
             .unwrap()
             .cast::<WeakRef<MapRef>>()
             .unwrap();
-        assert_eq!(link2.try_deref_raw(&d2.transact()), Some("value".into()));
+        assert_eq!(link2.try_deref_value(&d2.transact()), Some("value".into()));
 
         let target2 = Rc::new(RefCell::new(None));
         let _sub2 = {
@@ -1256,11 +1256,11 @@ mod test {
 
         m1.remove(&mut d1.transact_mut(), "a");
         let l1 = (*target1).take().unwrap();
-        assert_eq!(l1.try_deref_raw(&d1.transact()), None);
+        assert_eq!(l1.try_deref_value(&d1.transact()), None);
 
         exchange_updates(&[&d1, &d2]);
         let l2 = (*target2).take().unwrap();
-        assert_eq!(l2.try_deref_raw(&d2.transact()), None);
+        assert_eq!(l2.try_deref_value(&d2.transact()), None);
     }
 
     #[test]
@@ -1367,7 +1367,7 @@ mod test {
                 v.clone()
                     .cast::<WeakRef<MapRef>>()
                     .unwrap()
-                    .try_deref_raw(&doc.transact())
+                    .try_deref_value(&doc.transact())
             })
             .collect();
         assert_eq!(actual, vec!["value2".into()])
@@ -1418,7 +1418,7 @@ mod test {
             .flat_map(|v| {
                 v.cast::<WeakRef<MapRef>>()
                     .unwrap()
-                    .try_deref_raw(&doc.transact())
+                    .try_deref_value(&doc.transact())
             })
             .collect();
         assert_eq!(actual, vec!["value2".into()])
@@ -1788,7 +1788,7 @@ mod test {
             .unwrap()
             .cast::<WeakRef<MapRef>>()
             .unwrap();
-        assert_eq!(l3.try_deref_raw(&d3.transact()), Some(3.into()));
+        assert_eq!(l3.try_deref_value(&d3.transact()), Some(3.into()));
 
         exchange_updates(&[&d1, &d2, &d3]);
 
@@ -1803,9 +1803,9 @@ mod test {
             .cast::<WeakRef<MapRef>>()
             .unwrap();
 
-        assert_eq!(l1.try_deref_raw(&d1.transact()), Some(3.into()));
-        assert_eq!(l2.try_deref_raw(&d2.transact()), Some(3.into()));
-        assert_eq!(l3.try_deref_raw(&d3.transact()), Some(3.into()));
+        assert_eq!(l1.try_deref_value(&d1.transact()), Some(3.into()));
+        assert_eq!(l2.try_deref_value(&d2.transact()), Some(3.into()));
+        assert_eq!(l3.try_deref_value(&d3.transact()), Some(3.into()));
     }
 
     #[test]

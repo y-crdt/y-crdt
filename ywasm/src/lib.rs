@@ -3714,10 +3714,10 @@ impl YWeakLink {
                 let branch: &Branch = v.as_ref();
                 let weak_map_ref: WeakRef<MapRef> = WeakRef::from(BranchPtr::from(branch));
                 let value = if let Some(txn) = get_txn(txn) {
-                    weak_map_ref.try_deref_raw(&*txn)
+                    weak_map_ref.try_deref_value(&*txn)
                 } else {
                     let txn = branch.transact();
-                    weak_map_ref.try_deref_raw(&txn)
+                    weak_map_ref.try_deref_value(&txn)
                 };
 
                 Ok(value.map(value_into_js).unwrap_or(JsValue::UNDEFINED))
