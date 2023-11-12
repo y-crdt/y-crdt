@@ -9,7 +9,7 @@ use crate::{
 use std::cell::Cell;
 use std::collections::HashSet;
 use std::fmt::Formatter;
-use std::ops::Deref;
+use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -42,8 +42,8 @@ struct Inner<M> {
     doc: Doc,
     scope: HashSet<BranchPtr>,
     options: Options,
-    undo_stack: Vec<StackItem<M>>,
-    redo_stack: Vec<StackItem<M>>,
+    undo_stack: UndoStack<M>,
+    redo_stack: UndoStack<M>,
     undoing: Cell<bool>,
     redoing: Cell<bool>,
     last_change: u64,
@@ -80,8 +80,8 @@ where
             doc: doc.clone(),
             scope: HashSet::from([scope]),
             options,
-            undo_stack: Vec::new(),
-            redo_stack: Vec::new(),
+            undo_stack: UndoStack::default(),
+            redo_stack: UndoStack::default(),
             undoing: Cell::new(false),
             redoing: Cell::new(false),
             last_change: 0,
@@ -431,7 +431,7 @@ where
     }
 
     fn pop(
-        stack: &mut Vec<StackItem<M>>,
+        stack: &mut UndoStack<M>,
         txn: &mut TransactionMut,
         scope: &HashSet<BranchPtr>,
     ) -> Option<StackItem<M>> {
@@ -510,6 +510,35 @@ impl<M: std::fmt::Debug> std::fmt::Debug for UndoManager<M> {
             s.field("redo", &self.0.redo_stack);
         }
         s.finish()
+    }
+}
+
+#[repr(transparent)]
+#[derive(Debug, Clone, Eq, PartialEq, Default)]
+pub(crate) struct UndoStack<M>(Vec<StackItem<M>>);
+
+impl<M> Deref for UndoStack<M> {
+    type Target = Vec<StackItem<M>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<M> DerefMut for UndoStack<M> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl<M> UndoStack<M> {
+    pub fn is_deleted(&self, id: &ID) -> bool {
+        for item in self.0.iter() {
+            if item.deletions.is_deleted(id) {
+                return true;
+            }
+        }
+        false
     }
 }
 
@@ -686,9 +715,9 @@ mod test {
     use crate::undo::Options;
     use crate::updates::decoder::Decode;
     use crate::{
-        any, Any, Array, Doc, GetString, Map, MapPrelim, MapRef, ReadTxn, StateVector, Text,
-        TextPrelim, TextRef, Transact, UndoManager, Update, Xml, XmlElementPrelim, XmlElementRef,
-        XmlFragment, XmlTextPrelim,
+        any, Any, Array, ArrayPrelim, Doc, GetString, Map, MapPrelim, MapRef, ReadTxn, StateVector,
+        Text, TextPrelim, TextRef, Transact, UndoManager, Update, Xml, XmlElementPrelim,
+        XmlElementRef, XmlFragment, XmlTextPrelim,
     };
     use std::collections::HashMap;
     use std::convert::TryInto;
@@ -1480,5 +1509,120 @@ mod test {
 
         mgr.undo().unwrap();
         assert_eq!(nested.len(&d1.transact()), 0);
+    }
+
+    #[test]
+    fn github_issue_345() {
+        // https://github.com/y-crdt/y-crdt/issues/345
+        let doc = Doc::new();
+        let map = doc.get_or_insert_map("r");
+        let mut mgr = UndoManager::with_options(&doc, &map, Options::default());
+        mgr.include_origin(doc.client_id());
+
+        let s1 = map.insert(
+            &mut doc.transact_mut_with(doc.client_id()),
+            "s1",
+            MapPrelim::<i32>::new(),
+        );
+        mgr.reset();
+
+        let mut txn = doc.transact_mut_with(doc.client_id());
+        let a = s1.insert(&mut txn, "a", ArrayPrelim::default());
+        a.insert(&mut txn, 0, "a1");
+        drop(txn);
+        mgr.reset();
+
+        let mut txn = doc.transact_mut_with(doc.client_id());
+        let b = s1.insert(&mut txn, "b", ArrayPrelim::default());
+        b.insert(&mut txn, 0, "b1");
+        drop(txn);
+        mgr.reset();
+
+        b.insert(&mut doc.transact_mut_with(doc.client_id()), 1, "b2");
+        mgr.reset();
+
+        a.insert(&mut doc.transact_mut_with(doc.client_id()), 1, "a3");
+        mgr.reset();
+
+        a.insert(&mut doc.transact_mut_with(doc.client_id()), 2, "a4");
+        mgr.reset();
+
+        a.insert(&mut doc.transact_mut_with(doc.client_id()), 3, "a5");
+        mgr.reset();
+
+        let actual = map.to_json(&doc.transact());
+        assert_eq!(
+            actual,
+            any!({"s1": {"a": ["a1", "a3", "a4", "a5"], "b": ["b1", "b2"]}})
+        );
+
+        mgr.undo().unwrap();
+        mgr.undo().unwrap();
+        mgr.undo().unwrap();
+        mgr.undo().unwrap();
+        let actual = map.to_json(&doc.transact());
+        assert_eq!(actual, any!({"s1": {"a": ["a1"], "b": ["b1"]}}));
+
+        mgr.redo().unwrap();
+        let actual = map.to_json(&doc.transact());
+        assert_eq!(actual, any!({"s1": {"b": ["b1", "b2"], "a": ["a1"]}}));
+
+        mgr.redo().unwrap();
+        let actual = map.to_json(&doc.transact());
+        assert_eq!(actual, any!({"s1": {"a": ["a1", "a3"], "b": ["b1", "b2"]}}));
+
+        mgr.redo().unwrap();
+        let actual = map.to_json(&doc.transact());
+        assert_eq!(
+            actual,
+            any!({"s1": {"a": ["a1", "a3", "a4"], "b": ["b1", "b2"]}})
+        );
+
+        mgr.redo().unwrap();
+        let actual = map.to_json(&doc.transact());
+        assert_eq!(
+            actual,
+            any!({"s1": {"a": ["a1", "a3", "a4", "a5"], "b": ["b1", "b2"]}})
+        );
+    }
+
+    #[test]
+    fn github_issue_345_part_2() {
+        // https://github.com/y-crdt/y-crdt/issues/345
+        let d = Doc::new();
+        let r = d.get_or_insert_map("r");
+
+        let s1 = r.insert(&mut d.transact_mut(), "s1", MapPrelim::<i32>::new());
+
+        let mut mgr = UndoManager::with_options(&d, &r, Options::default());
+        {
+            let mut txn = d.transact_mut();
+            let b1 = s1.insert(&mut txn, "b1", MapPrelim::<i32>::new());
+            b1.insert(&mut txn, "f1", 11);
+        }
+        mgr.reset();
+
+        s1.remove(&mut d.transact_mut(), "b1");
+        mgr.reset();
+
+        {
+            let mut txn = d.transact_mut();
+            let b1 = s1.insert(&mut txn, "b1", MapPrelim::<i32>::new());
+            b1.insert(&mut txn, "f1", 20);
+        }
+        mgr.reset();
+
+        let actual = r.to_json(&d.transact());
+        assert_eq!(actual, any!({"s1": {"b1": {"f1": 20}}}));
+
+        mgr.undo().unwrap();
+        let actual = r.to_json(&d.transact());
+        assert_eq!(actual, any!({"s1": {}}));
+        assert!(mgr.can_undo(), "should be able to undo");
+
+        mgr.undo().unwrap();
+        let actual = r.to_json(&d.transact());
+        assert_eq!(actual, any!({"s1": {"b1": {"f1": 11}}}));
+        assert!(mgr.can_undo(), "should be able to undo to the init state");
     }
 }
