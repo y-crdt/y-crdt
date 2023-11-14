@@ -1,5 +1,6 @@
 use crate::block::{BlockPtr, ClientID, ID};
 use crate::block_store::BlockStore;
+use crate::encoding::read::Error;
 use crate::store::Store;
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
@@ -9,7 +10,6 @@ use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hash, Hasher};
 use std::ops::Range;
-use crate::encoding::read::Error;
 
 // Note: use native Rust [Range](https://doc.rust-lang.org/std/ops/struct.Range.html)
 // as it's left-inclusive/right-exclusive and defines the exact capabilities we care about here.
@@ -694,7 +694,7 @@ impl<'ds, 'txn, 'doc> Iterator for DeletedBlocks<'ds, 'txn, 'doc> {
                     .txn
                     .store
                     .blocks
-                    .split_block_inner(block, clock + block.len() - r.end)
+                    .split_block_inner(block, r.end - clock)
                 {
                     self.txn.merge_blocks.push(*right_ptr.id());
                     self.current_range = None;
