@@ -97,10 +97,6 @@ pub const Y_OFFSET_BYTES: u8 = 0;
 /// UTF-16 chars of encoded string.
 pub const Y_OFFSET_UTF16: u8 = 1;
 
-/// Flag used by `YOptions` to determine, that text operations offsets and length will be counted by
-/// by UTF-32 chars of encoded string.
-pub const Y_OFFSET_UTF32: u8 = 2;
-
 /* pub types below are used by cbindgen for c header generation */
 
 /// A Yrs document type. Documents are most important units of collaborative resources management.
@@ -266,7 +262,6 @@ pub struct YOptions {
     ///
     /// - `Y_ENCODING_BYTES`
     /// - `Y_ENCODING_UTF16`
-    /// - `Y_ENCODING_UTF32`
     pub encoding: u8,
 
     /// Boolean flag used to determine if deleted blocks should be garbage collected or not
@@ -286,7 +281,6 @@ impl Into<Options> for YOptions {
         let encoding = match self.encoding {
             Y_OFFSET_BYTES => OffsetKind::Bytes,
             Y_OFFSET_UTF16 => OffsetKind::Utf16,
-            Y_OFFSET_UTF32 => OffsetKind::Utf32,
             _ => panic!("Unrecognized YOptions.encoding type"),
         };
         let guid = if self.guid.is_null() {
@@ -328,7 +322,6 @@ impl From<Options> for YOptions {
             encoding: match o.offset_kind {
                 OffsetKind::Bytes => Y_OFFSET_BYTES,
                 OffsetKind::Utf16 => Y_OFFSET_UTF16,
-                OffsetKind::Utf32 => Y_OFFSET_UTF32,
             },
             skip_gc: if o.skip_gc { 1 } else { 0 },
             auto_load: if o.auto_load { 1 } else { 0 },

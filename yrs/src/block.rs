@@ -1607,7 +1607,6 @@ impl SplittableString {
             match kind {
                 OffsetKind::Bytes => len,
                 OffsetKind::Utf16 => self.utf16_len(),
-                OffsetKind::Utf32 => self.unicode_len(),
             }
         }
     }
@@ -1620,10 +1619,6 @@ impl SplittableString {
     #[inline(always)]
     pub fn utf16_len(&self) -> usize {
         self.encode_utf16().count()
-    }
-
-    pub fn unicode_len(&self) -> usize {
-        self.content.chars().count()
     }
 
     /// Maps given offset onto block offset. This means, that given an `offset` provided
@@ -1646,11 +1641,6 @@ impl SplittableString {
                 }
                 i
             }
-            OffsetKind::Utf32 => self
-                .content
-                .chars()
-                .take(offset as usize)
-                .fold(0, |sum, c| sum + c.len_utf16() as u32),
         }
     }
 
@@ -1715,23 +1705,9 @@ pub(crate) fn split_str(str: &str, offset: usize, kind: OffsetKind) -> (&str, &s
         off
     }
 
-    fn map_unicode_offset(str: &str, offset: u32) -> u32 {
-        let mut off = 0;
-        let mut i = 0;
-        for c in str.chars() {
-            if i >= offset {
-                break;
-            }
-            off += c.len_utf8();
-            i += 1;
-        }
-        off as u32
-    }
-
     let off = match kind {
         OffsetKind::Bytes => offset,
         OffsetKind::Utf16 => map_utf16_offset(str, offset as u32) as usize,
-        OffsetKind::Utf32 => map_unicode_offset(str, offset as u32) as usize,
     };
     str.split_at(off)
 }
@@ -1899,7 +1875,7 @@ impl ItemContent {
     /// Reads all contents stored in this item and returns them. Use [ItemContent::read] if you need
     /// to read only slice of elements from the corresponding item.
     pub fn get_content(&self) -> Vec<Value> {
-        let len = self.len(OffsetKind::Utf32) as usize;
+        let len = self.len(OffsetKind::Utf16) as usize;
         let mut values = vec![Value::default(); len];
         let read = self.read(0, &mut values);
         if read == len {
@@ -2475,7 +2451,6 @@ mod test {
 
         assert_eq!(s.len(OffsetKind::Bytes), 34, "wrong byte length");
         assert_eq!(s.len(OffsetKind::Utf16), 21, "wrong UTF-16 length");
-        assert_eq!(s.len(OffsetKind::Utf32), 20, "wrong Unicode chars count");
     }
 
     #[test]
@@ -2490,16 +2465,11 @@ mod test {
 
         assert_eq!(s.len(OffsetKind::Bytes), 60, "wrong byte length");
         assert_eq!(s.len(OffsetKind::Utf16), 29, "wrong UTF-16 length");
-        assert_eq!(s.len(OffsetKind::Utf32), 28, "wrong Unicode chars count");
     }
 
     #[test]
     fn splittable_string_split_str() {
         let s: SplittableString = "Zażółć gęślą jaźń😀ありがとうございます".into();
-
-        let (a, b) = split_str(&s, 18, OffsetKind::Utf32);
-        assert_eq!(a, "Zażółć gęślą jaźń😀");
-        assert_eq!(b, "ありがとうございます");
 
         let (a, b) = split_str(&s, 19, OffsetKind::Utf16);
         assert_eq!(a, "Zażółć gęślą jaźń😀");

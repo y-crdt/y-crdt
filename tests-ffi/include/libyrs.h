@@ -204,12 +204,6 @@ typedef struct StickyIndex {} StickyIndex;
 #define Y_OFFSET_UTF16 1
 
 /**
- * Flag used by `YOptions` to determine, that text operations offsets and length will be counted by
- * by UTF-32 chars of encoded string.
- */
-#define Y_OFFSET_UTF32 2
-
-/**
  * Error code: couldn't read data from input stream.
  */
 #define ERR_CODE_IO 1
@@ -326,7 +320,6 @@ typedef struct YOptions {
    *
    * - `Y_ENCODING_BYTES`
    * - `Y_ENCODING_UTF16`
-   * - `Y_ENCODING_UTF32`
    */
   uint8_t encoding;
   /**
