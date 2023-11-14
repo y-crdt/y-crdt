@@ -6,6 +6,7 @@ use crate::transaction::TransactionMut;
 use crate::types::text::update_current_attributes;
 use crate::types::weak::join_linked_range;
 use crate::types::{Attrs, Branch, BranchPtr, TypePtr, TypeRef, Value};
+use crate::undo::UndoStack;
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::OptionExt;
@@ -100,11 +101,13 @@ impl ID {
 pub struct BlockPtr(NonNull<Block>);
 
 impl BlockPtr {
-    pub(crate) fn redo(
+    pub(crate) fn redo<M>(
         &mut self,
         txn: &mut TransactionMut,
         redo_items: &HashSet<BlockPtr>,
         items_to_delete: &DeleteSet,
+        s1: &UndoStack<M>,
+        s2: &UndoStack<M>,
     ) -> Option<BlockPtr> {
         let self_ptr = self.clone();
         let item = self.as_item_mut()?;
@@ -121,7 +124,7 @@ impl BlockPtr {
                     // try to undo parent if it will be undone anyway
                     if parent.redone.is_none()
                         && (!redo_items.contains(&ptr)
-                            || ptr.redo(txn, redo_items, items_to_delete).is_none())
+                            || ptr.redo(txn, redo_items, items_to_delete, s1, s2).is_none())
                     {
                         return None;
                     }
@@ -157,21 +160,26 @@ impl BlockPtr {
                 // If it is intended to delete right while item is redone,
                 // we can expect that item should replace right.
                 while let Some(Block::Item(left_item)) = left.as_deref() {
-                    if let Some(right_ptr) = left_item.right {
-                        if items_to_delete.is_deleted(right_ptr.id()) {
-                            left = Some(right_ptr);
-                            continue;
-                        }
-                    }
-                    break;
-                }
-                // follow redone
-                // trace redone until parent matches
-                while let Some(Block::Item(left_item)) = left.as_deref() {
-                    if let Some(redone) = left_item.redone.as_ref() {
-                        if let Some(slice) = txn.store.blocks.get_item_clean_start(redone) {
-                            let ptr = txn.store.materialize(slice);
+                    if let Some(ptr) = left_item.right {
+                        let id = ptr.id();
+                        if items_to_delete.is_deleted(id) || s1.is_deleted(id) || s2.is_deleted(id)
+                        {
+                            // follow redone
                             left = Some(ptr);
+                            while let Some(Block::Item(item)) = left.as_deref() {
+                                if let Some(id) = item.redone.as_ref() {
+                                    left = match txn.store.blocks.get_item_clean_start(id) {
+                                        None => break,
+                                        Some(slice) => {
+                                            let ptr = txn.store.materialize(slice);
+                                            txn.merge_blocks.push(ptr.id().clone());
+                                            Some(ptr)
+                                        }
+                                    };
+                                } else {
+                                    break;
+                                }
+                            }
                             continue;
                         }
                     }

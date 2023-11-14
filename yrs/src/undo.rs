@@ -373,7 +373,12 @@ where
     pub fn undo(&mut self) -> Result<bool, TransactionAcqError> {
         let mut txn = self.0.doc.try_transact_mut_with(self.as_origin())?;
         self.0.undoing.set(true);
-        let result = Self::pop(&mut self.0.undo_stack, &mut txn, &self.0.scope);
+        let result = Self::pop(
+            &mut self.0.undo_stack,
+            &self.0.redo_stack,
+            &mut txn,
+            &self.0.scope,
+        );
         txn.commit();
         let changed = if let Some(mut item) = result {
             let mut e = Event::undo(
@@ -411,7 +416,12 @@ where
     pub fn redo(&mut self) -> Result<bool, TransactionAcqError> {
         let mut txn = self.0.doc.try_transact_mut_with(self.as_origin())?;
         self.0.redoing.set(true);
-        let result = Self::pop(&mut self.0.redo_stack, &mut txn, &self.0.scope);
+        let result = Self::pop(
+            &mut self.0.redo_stack,
+            &self.0.undo_stack,
+            &mut txn,
+            &self.0.scope,
+        );
         txn.commit();
         let changed = if let Some(mut item) = result {
             let mut e = Event::redo(
@@ -432,6 +442,7 @@ where
 
     fn pop(
         stack: &mut UndoStack<M>,
+        other: &UndoStack<M>,
         txn: &mut TransactionMut,
         scope: &HashSet<BranchPtr>,
     ) -> Option<StackItem<M>> {
@@ -478,7 +489,9 @@ where
             let redo_copy = to_redo.clone();
             for ptr in to_redo {
                 let mut ptr = ptr;
-                change_performed |= ptr.redo(txn, &redo_copy, &item.insertions).is_some();
+                change_performed |= ptr
+                    .redo(txn, &redo_copy, &item.insertions, stack, other)
+                    .is_some();
             }
 
             // We want to delete in reverse order so that children are deleted before
