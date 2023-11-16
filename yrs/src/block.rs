@@ -627,7 +627,12 @@ impl BlockPtr {
                         }
                         ItemContent::Type(branch) => {
                             branch.store = this.parent.as_branch().and_then(|b| b.store.clone());
-                            let ptr = BranchPtr::from(branch);
+                            let ptr = if this.info.is_deleted() {
+                                BranchPtr::from(branch)
+                            } else {
+                                // if current node is alive register is as such
+                                txn.store.register(branch)
+                            };
                             if let TypeRef::WeakLink(source) = &ptr.type_ref {
                                 source.materialize(txn, ptr);
                             }
