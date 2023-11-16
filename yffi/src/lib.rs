@@ -688,8 +688,8 @@ pub unsafe extern "C" fn ybranch_alive(branch: *mut Branch, txn: *const Transact
         Y_FALSE
     } else {
         let txn = txn.as_ref().unwrap();
-        let branch = BranchPtr::from(branch.as_mut().unwrap());
-        if txn.store().is_alive(&branch) {
+        let branch = branch.as_ref().unwrap();
+        if txn.store().is_alive(&BranchPtr::from(branch)) {
             Y_TRUE
         } else {
             Y_FALSE
