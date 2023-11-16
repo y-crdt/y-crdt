@@ -30,6 +30,9 @@ pub struct Store {
     /// which can be called concurrently by remote peers in a conflict-free manner.
     pub(crate) types: HashMap<Arc<str>, Box<Branch>>,
 
+    /// Registry of all alive nodes in the document store.
+    pub(crate) node_registry: HashSet<BranchPtr>,
+
     /// A block store of a current document. It represent all blocks (inserted or tombstoned
     /// operations) integrated - and therefore visible - into a current document.
     pub(crate) blocks: BlockStore,
@@ -62,6 +65,7 @@ impl Store {
         Store {
             options,
             types: HashMap::default(),
+            node_registry: HashSet::default(),
             blocks: BlockStore::new(),
             subdocs: HashMap::default(),
             linked_by: HashMap::default(),
@@ -108,6 +112,7 @@ impl Store {
             Entry::Vacant(e) => {
                 let mut branch = Branch::new(type_ref);
                 let branch_ref = BranchPtr::from(&mut branch);
+                self.node_registry.insert(branch_ref);
                 e.insert(branch);
                 branch_ref
             }
@@ -353,6 +358,21 @@ impl Store {
             }
         } {}
         (ptr.unwrap(), diff)
+    }
+
+    pub fn is_alive(&self, branch_ptr: &BranchPtr) -> bool {
+        self.node_registry.contains(branch_ptr)
+    }
+
+    pub(crate) fn register(&mut self, branch: &mut Box<Branch>) -> BranchPtr {
+        let ptr = BranchPtr::from(branch);
+        self.node_registry.insert(ptr);
+        ptr
+    }
+
+    pub(crate) fn deregister(&mut self, branch: &mut Box<Branch>) {
+        let ptr = BranchPtr::from(branch);
+        self.node_registry.remove(&ptr);
     }
 }
 

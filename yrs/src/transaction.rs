@@ -5,7 +5,7 @@ use crate::error::Error;
 use crate::event::SubdocsEvent;
 use crate::id_set::DeleteSet;
 use crate::store::{Store, SubdocGuids, SubdocsIter};
-use crate::types::{Branch, BranchPtr, Event, Events, TypePtr, TypeRef, Value};
+use crate::types::{Branch, BranchPtr, Event, Events, SharedRef, TypePtr, TypeRef, Value};
 use crate::update::Update;
 use crate::utils::OptionExt;
 use crate::*;
@@ -78,6 +78,15 @@ pub trait ReadTxn: Sized {
         let mut encoder = EncoderV2::new();
         self.encode_state_as_update(sv, &mut encoder);
         encoder.to_vec()
+    }
+
+    /// Check if given node is alive. Returns false if node has been deleted.
+    fn is_alive<B>(&self, node: &B) -> bool
+    where
+        B: SharedRef,
+    {
+        let ptr = BranchPtr::from(node.as_ref());
+        self.store().is_alive(&ptr)
     }
 
     /// Returns an iterator over top level (root) shared types available in current [Doc].
@@ -511,7 +520,7 @@ impl<'doc> TransactionMut<'doc> {
                     // parent has been GC'ed
                 }
 
-                match &item.content {
+                match &mut item.content {
                     ItemContent::Doc(_, doc) => {
                         let subdocs = self.subdocs.get_or_init();
                         let addr = doc.addr();
@@ -520,11 +529,12 @@ impl<'doc> TransactionMut<'doc> {
                         }
                     }
                     ItemContent::Type(inner) => {
+                        self.store.deregister(inner);
                         let branch_ptr = BranchPtr::from(inner);
-                        if let TypeRef::WeakLink(source) = &inner.type_ref {
+                        if let TypeRef::WeakLink(source) = &branch_ptr.type_ref {
                             source.unlink_all(self, branch_ptr);
                         }
-                        let mut ptr = inner.start;
+                        let mut ptr = branch_ptr.start;
                         self.changed.remove(&TypePtr::Branch(branch_ptr));
 
                         while let Some(Block::Item(item)) = ptr.as_deref() {
@@ -535,7 +545,7 @@ impl<'doc> TransactionMut<'doc> {
                             ptr = item.right.clone();
                         }
 
-                        for ptr in inner.map.values() {
+                        for ptr in branch_ptr.map.values() {
                             recurse.push(ptr.clone());
                         }
                     }
@@ -657,8 +667,8 @@ impl<'doc> TransactionMut<'doc> {
 
             (left, right, origin, id)
         };
-        let (content, remainder) = value.into_content(self);
-        let inner_ref = if let ItemContent::Type(inner_ref) = &content {
+        let (mut content, remainder) = value.into_content(self);
+        let inner_ref = if let ItemContent::Type(inner_ref) = &mut content {
             Some(BranchPtr::from(inner_ref))
         } else {
             None

@@ -1908,6 +1908,18 @@ impl YText {
         }
     }
 
+    /// Checks if current YText reference is alive and has not been deleted by its parent collection.
+    /// This method only works on already integrated shared types and will return false is current
+    /// type is preliminary (has not been integrated into document).
+    #[wasm_bindgen(js_name = alive)]
+    pub fn alive(&self, txn: &YTransaction) -> bool {
+        if let SharedType::Integrated(value) = &*self.0.borrow() {
+            txn.is_alive(value)
+        } else {
+            false
+        }
+    }
+
     /// Returns length of an underlying string stored in this `YText` instance,
     /// understood as a number of UTF-8 encoded bytes.
     #[wasm_bindgen(js_name = length)]
@@ -2357,6 +2369,18 @@ impl YArray {
         }
     }
 
+    /// Checks if current YArray reference is alive and has not been deleted by its parent collection.
+    /// This method only works on already integrated shared types and will return false is current
+    /// type is preliminary (has not been integrated into document).
+    #[wasm_bindgen(js_name = alive)]
+    pub fn alive(&self, txn: &YTransaction) -> bool {
+        if let SharedType::Integrated(value) = &*self.0.borrow() {
+            txn.is_alive(value)
+        } else {
+            false
+        }
+    }
+
     /// Returns a number of elements stored within this instance of `YArray`.
     #[wasm_bindgen(js_name = length)]
     pub fn length(&self, txn: &ImplicitTransaction) -> u32 {
@@ -2734,6 +2758,18 @@ impl YMap {
         }
     }
 
+    /// Checks if current YMap reference is alive and has not been deleted by its parent collection.
+    /// This method only works on already integrated shared types and will return false is current
+    /// type is preliminary (has not been integrated into document).
+    #[wasm_bindgen(js_name = alive)]
+    pub fn alive(&self, txn: &YTransaction) -> bool {
+        if let SharedType::Integrated(value) = &*self.0.borrow() {
+            txn.is_alive(value)
+        } else {
+            false
+        }
+    }
+
     /// Returns a number of entries stored within this instance of `YMap`.
     #[wasm_bindgen(js_name = length)]
     pub fn length(&self, txn: &ImplicitTransaction) -> u32 {
@@ -2948,6 +2984,14 @@ pub struct YXmlElement(XmlElementRef);
 
 #[wasm_bindgen]
 impl YXmlElement {
+    /// Checks if current YXmlElement reference is alive and has not been deleted by its parent collection.
+    /// This method only works on already integrated shared types and will return false is current
+    /// type is preliminary (has not been integrated into document).
+    #[wasm_bindgen(js_name = alive)]
+    pub fn alive(&self, txn: &YTransaction) -> bool {
+        txn.is_alive(&self.0)
+    }
+
     /// Returns a tag name of this XML node.
     #[wasm_bindgen(getter)]
     pub fn name(&self) -> JsValue {
@@ -3212,6 +3256,14 @@ pub struct YXmlFragment(XmlFragmentRef);
 
 #[wasm_bindgen]
 impl YXmlFragment {
+    /// Checks if current YXmlFragment reference is alive and has not been deleted by its parent collection.
+    /// This method only works on already integrated shared types and will return false is current
+    /// type is preliminary (has not been integrated into document).
+    #[wasm_bindgen(js_name = alive)]
+    pub fn alive(&self, txn: &YTransaction) -> bool {
+        txn.is_alive(&self.0)
+    }
+
     /// Returns a number of child XML nodes stored within this `YXMlElement` instance.
     #[wasm_bindgen(js_name = length)]
     pub fn length(&self, txn: &ImplicitTransaction) -> u32 {
@@ -3377,6 +3429,14 @@ pub struct YXmlText(XmlTextRef);
 
 #[wasm_bindgen]
 impl YXmlText {
+    /// Checks if current YXmlText reference is alive and has not been deleted by its parent collection.
+    /// This method only works on already integrated shared types and will return false is current
+    /// type is preliminary (has not been integrated into document).
+    #[wasm_bindgen(js_name = alive)]
+    pub fn alive(&self, txn: &YTransaction) -> bool {
+        txn.is_alive(&self.0)
+    }
+
     /// Returns length of an underlying string stored in this `YXmlText` instance,
     /// understood as a number of UTF-8 encoded bytes.
     #[wasm_bindgen]
@@ -3701,6 +3761,19 @@ impl YWeakLink {
     pub fn prelim(&self) -> bool {
         if let SharedType::Prelim(_) = &*self.0.borrow() {
             true
+        } else {
+            false
+        }
+    }
+
+    /// Checks if current YWeakLink reference is alive and has not been deleted by its parent collection.
+    /// This method only works on already integrated shared types and will return false is current
+    /// type is preliminary (has not been integrated into document).
+    #[wasm_bindgen(js_name = alive)]
+    pub fn alive(&self, txn: &YTransaction) -> bool {
+        if let SharedType::Integrated(value) = &*self.0.borrow() {
+            let branch = value.as_ref();
+            txn.store().is_alive(&BranchPtr::from(branch))
         } else {
             false
         }

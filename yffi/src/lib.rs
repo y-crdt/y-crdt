@@ -679,6 +679,24 @@ pub unsafe extern "C" fn ybranch_read_transaction(branch: *mut Branch) -> *mut T
     }
 }
 
+/// Check if current branch is still alive (returns `Y_TRUE`, otherwise `Y_FALSE`).
+/// If it was deleted, this branch pointer is no longer a valid pointer and cannot be used to
+/// execute any functions using it.
+#[no_mangle]
+pub unsafe extern "C" fn ytransaction_alive(txn: *const Transaction, branch: *mut Branch) -> u8 {
+    if branch.is_null() {
+        Y_FALSE
+    } else {
+        let txn = txn.as_ref().unwrap();
+        let branch = branch.as_ref().unwrap();
+        if txn.store().is_alive(&BranchPtr::from(branch)) {
+            Y_TRUE
+        } else {
+            Y_FALSE
+        }
+    }
+}
+
 /// Returns a list of subdocs existing within current document.
 #[no_mangle]
 pub unsafe extern "C" fn ytransaction_subdocs(

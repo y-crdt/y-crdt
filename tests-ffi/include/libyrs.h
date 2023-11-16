@@ -1126,6 +1126,13 @@ YTransaction *ybranch_write_transaction(Branch *branch);
 YTransaction *ybranch_read_transaction(Branch *branch);
 
 /**
+ * Check if current branch is still alive (returns `Y_TRUE`, otherwise `Y_FALSE`).
+ * If it was deleted, this branch pointer is no longer a valid pointer and cannot be used to
+ * execute any functions using it.
+ */
+uint8_t ytransaction_alive(const YTransaction *txn, Branch *branch);
+
+/**
  * Returns a list of subdocs existing within current document.
  */
 YDoc **ytransaction_subdocs(YTransaction *txn, uint32_t *len);
