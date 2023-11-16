@@ -1130,7 +1130,7 @@ YTransaction *ybranch_read_transaction(Branch *branch);
  * If it was deleted, this branch pointer is no longer a valid pointer and cannot be used to
  * execute any functions using it.
  */
-uint8_t ybranch_alive(Branch *branch, const YTransaction *txn);
+uint8_t ytransaction_alive(const YTransaction *txn, Branch *branch);
 
 /**
  * Returns a list of subdocs existing within current document.

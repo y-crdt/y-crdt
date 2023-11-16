@@ -683,7 +683,7 @@ pub unsafe extern "C" fn ybranch_read_transaction(branch: *mut Branch) -> *mut T
 /// If it was deleted, this branch pointer is no longer a valid pointer and cannot be used to
 /// execute any functions using it.
 #[no_mangle]
-pub unsafe extern "C" fn ybranch_alive(branch: *mut Branch, txn: *const Transaction) -> u8 {
+pub unsafe extern "C" fn ytransaction_alive(txn: *const Transaction, branch: *mut Branch) -> u8 {
     if branch.is_null() {
         Y_FALSE
     } else {
