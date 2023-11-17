@@ -93,8 +93,9 @@ pub struct TextRef(BranchPtr);
 
 impl SharedRef for TextRef {}
 impl Text for TextRef {}
-impl Quotable for TextRef {}
 impl IndexedSequence for TextRef {}
+#[cfg(feature = "weak")]
+impl crate::Quotable for TextRef {}
 
 impl Into<XmlTextRef> for TextRef {
     fn into(self) -> XmlTextRef {

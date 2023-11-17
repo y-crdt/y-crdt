@@ -17,7 +17,7 @@ crate-type = ["cdylib", "rlib"]
 default = ["console_error_panic_hook"]
 
 [dependencies]
-yrs = { path = "../yrs", version = "0.16.10" }
+yrs = { path = "../yrs", version = "0.16.10", features = ["weak"] }
 wasm-bindgen = { version = "0.2" }
 
 # The `console_error_panic_hook` crate provides better debugging of panics by

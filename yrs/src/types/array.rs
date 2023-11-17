@@ -2,7 +2,6 @@ use crate::block::{BlockPtr, EmbedPrelim, ItemContent, Prelim, Unused};
 use crate::block_iter::BlockIter;
 use crate::moving::StickyIndex;
 use crate::transaction::TransactionMut;
-use crate::types::weak::Quotable;
 use crate::types::{
     event_change_set, Branch, BranchPtr, Change, ChangeSet, EventHandler, Observers, Path,
     SharedRef, ToJson, TypeRef, Value,
@@ -76,8 +75,10 @@ pub struct ArrayRef(BranchPtr);
 
 impl SharedRef for ArrayRef {}
 impl Array for ArrayRef {}
-impl Quotable for ArrayRef {}
 impl IndexedSequence for ArrayRef {}
+
+#[cfg(feature = "weak")]
+impl crate::Quotable for ArrayRef {}
 
 impl ToJson for ArrayRef {
     fn to_json<T: ReadTxn>(&self, txn: &T) -> Any {

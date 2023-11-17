@@ -38,7 +38,7 @@ jobs:
         uses: actions/checkout@v2
 
       - name: test
-        run: cargo test --release
+        run: cargo test --release --all-features
 
   test-windows:
     runs-on: windows-latest
@@ -48,7 +48,7 @@ jobs:
         uses: actions/checkout@v2
 
       - name: test
-        run: cargo test --release
+        run: cargo test --release --all-features
 
   test-macos:
     runs-on: macos-latest
@@ -58,7 +58,7 @@ jobs:
         uses: actions/checkout@v2
 
       - name: test
-        run: cargo test --release
+        run: cargo test --release --all-features
 
   wasm:
     runs-on: ubuntu-latest
