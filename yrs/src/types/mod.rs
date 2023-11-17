@@ -90,6 +90,7 @@ impl TypeRef {
             TypeRef::XmlHook => TYPE_REFS_XML_HOOK,
             TypeRef::XmlText => TYPE_REFS_XML_TEXT,
             TypeRef::SubDoc => TYPE_REFS_DOC,
+            #[cfg(feature = "weak")]
             TypeRef::WeakLink(_) => TYPE_REFS_WEAK,
             TypeRef::Undefined => TYPE_REFS_UNDEFINED,
         }
@@ -107,6 +108,7 @@ impl std::fmt::Display for TypeRef {
             TypeRef::XmlHook => write!(f, "XmlHook"),
             TypeRef::XmlText => write!(f, "XmlText"),
             TypeRef::SubDoc => write!(f, "Doc"),
+            #[cfg(feature = "weak")]
             TypeRef::WeakLink(_) => write!(f, "WeakRef"),
             TypeRef::Undefined => write!(f, "(undefined)"),
         }
@@ -127,6 +129,7 @@ impl Encode for TypeRef {
             TypeRef::XmlHook => encoder.write_type_ref(TYPE_REFS_XML_HOOK),
             TypeRef::XmlText => encoder.write_type_ref(TYPE_REFS_XML_TEXT),
             TypeRef::SubDoc => encoder.write_type_ref(TYPE_REFS_DOC),
+            #[cfg(feature = "weak")]
             TypeRef::WeakLink(data) => {
                 let is_single = data.is_single();
                 let start = data.quote_start.id().unwrap();
@@ -166,6 +169,7 @@ impl Decode for TypeRef {
             TYPE_REFS_XML_HOOK => Ok(TypeRef::XmlHook),
             TYPE_REFS_XML_TEXT => Ok(TypeRef::XmlText),
             TYPE_REFS_DOC => Ok(TypeRef::SubDoc),
+            #[cfg(feature = "weak")]
             TYPE_REFS_WEAK => {
                 let flags = decoder.read_u8()?;
                 let is_single = flags & 1u8 == 0;
@@ -261,6 +265,7 @@ impl BranchPtr {
                 TypeRef::XmlElement(_) | TypeRef::XmlFragment => {
                     Some(Event::XmlFragment(XmlEvent::new(*self, subs)))
                 }
+                #[cfg(feature = "weak")]
                 TypeRef::WeakLink(_) => Some(Event::Weak(WeakEvent::new(*self))),
                 TypeRef::XmlHook | TypeRef::SubDoc | TypeRef::Undefined => None,
             }
@@ -352,6 +357,7 @@ impl Into<Value> for BranchPtr {
             TypeRef::XmlFragment => Value::YXmlFragment(XmlFragmentRef::from(self)),
             TypeRef::XmlText => Value::YXmlText(XmlTextRef::from(self)),
             //TYPE_REFS_XML_HOOK => Value::YXmlHook(XmlHookRef::from(self)),
+            #[cfg(feature = "weak")]
             TypeRef::WeakLink(_) => Value::YWeakLink(WeakRef::from(self)),
             other => panic!("Cannot convert to value - unsupported type ref: {}", other),
         }
@@ -837,6 +843,7 @@ impl Value {
             Value::YXmlFragment(v) => v.get_string(txn),
             Value::YXmlText(v) => v.get_string(txn),
             Value::YDoc(v) => v.to_string(),
+            #[cfg(feature = "weak")]
             Value::YWeakLink(v) => "WeakRef{}".to_string(),
         }
     }
@@ -902,6 +909,7 @@ impl ToJson for Value {
             Value::YXmlText(v) => Any::from(v.get_string(txn)),
             Value::YXmlFragment(v) => Any::from(v.get_string(txn)),
             Value::YDoc(doc) => any!({"guid": doc.guid().as_ref()}),
+            #[cfg(feature = "weak")]
             Value::YWeakLink(_) => Any::Undefined,
         }
     }
@@ -917,6 +925,7 @@ impl std::fmt::Display for Value {
             Value::YXmlElement(_) => write!(f, "XmlElementRef"),
             Value::YXmlFragment(_) => write!(f, "XmlFragmentRef"),
             Value::YXmlText(_) => write!(f, "XmlTextRef"),
+            #[cfg(feature = "weak")]
             Value::YWeakLink(_) => write!(f, "WeakRef"),
             Value::YDoc(v) => write!(f, "Doc(guid:{})", v.options().guid),
         }
@@ -997,6 +1006,7 @@ impl std::fmt::Display for Branch {
             TypeRef::SubDoc => {
                 write!(f, "Subdoc")
             }
+            #[cfg(feature = "weak")]
             TypeRef::WeakLink(w) => {
                 if w.is_single() {
                     write!(f, "WeakRef({})", w.quote_start)
@@ -1187,6 +1197,7 @@ impl Observers {
     pub fn xml_text() -> Self {
         Observers::XmlText(Observer::default())
     }
+    #[cfg(feature = "weak")]
     pub fn weak() -> Self {
         Observers::Weak(Observer::default())
     }
@@ -1233,6 +1244,7 @@ impl Observers {
                 }
                 Event::XmlText(e)
             }
+            #[cfg(feature = "weak")]
             Observers::Weak(eh) => {
                 let e = WeakEvent::new(branch_ref);
                 for fun in eh.callbacks() {
@@ -1603,6 +1615,7 @@ impl Event {
             Event::Map(e) => e.current_target = target,
             Event::XmlText(e) => e.current_target = target,
             Event::XmlFragment(e) => e.current_target = target,
+            #[cfg(feature = "weak")]
             Event::Weak(e) => e.current_target = target,
         }
     }
@@ -1616,6 +1629,7 @@ impl Event {
             Event::Map(e) => e.path(),
             Event::XmlText(e) => e.path(),
             Event::XmlFragment(e) => e.path(),
+            #[cfg(feature = "weak")]
             Event::Weak(e) => e.path(),
         }
     }
@@ -1632,6 +1646,7 @@ impl Event {
                 XmlNode::Fragment(n) => Value::YXmlFragment(n.clone()),
                 XmlNode::Text(n) => Value::YXmlText(n.clone()),
             },
+            #[cfg(feature = "weak")]
             Event::Weak(e) => Value::YWeakLink(e.as_target().clone()),
         }
     }
