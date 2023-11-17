@@ -531,6 +531,7 @@ impl<'doc> TransactionMut<'doc> {
                     ItemContent::Type(inner) => {
                         self.store.deregister(inner);
                         let branch_ptr = BranchPtr::from(inner);
+                        #[cfg(feature = "weak")]
                         if let TypeRef::WeakLink(source) = &branch_ptr.type_ref {
                             source.unlink_all(self, branch_ptr);
                         }
@@ -557,6 +558,7 @@ impl<'doc> TransactionMut<'doc> {
                     if let Some(linked_by) = self.store.linked_by.remove(&block) {
                         for link in linked_by {
                             self.add_changed_type(link, item.parent_sub.clone());
+                            #[cfg(feature = "weak")]
                             if let TypeRef::WeakLink(source) = &link.type_ref {
                                 if source.is_single() {
                                     source.first_item.take();

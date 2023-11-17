@@ -633,6 +633,7 @@ impl BlockPtr {
                                 // if current node is alive register is as such
                                 txn.store.register(branch)
                             };
+                            #[cfg(feature = "weak")]
                             if let TypeRef::WeakLink(source) = &ptr.type_ref {
                                 source.materialize(txn, ptr);
                             }
@@ -2280,7 +2281,9 @@ impl std::fmt::Display for ItemContent {
                 }
                 TypeRef::XmlFragment => write!(f, "<xml fragment>"),
                 TypeRef::XmlHook => write!(f, "<xml hook>"),
+                #[cfg(feature = "weak")]
                 TypeRef::XmlText => write!(f, "<xml text>"),
+                #[cfg(feature = "weak")]
                 TypeRef::WeakLink(s) => write!(f, "<weak({}..{})>", s.quote_start, s.quote_end),
                 _ => write!(f, "<undefined type ref>"),
             },
