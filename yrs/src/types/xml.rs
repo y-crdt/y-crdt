@@ -7,8 +7,8 @@ use crate::types::{
     EntryChange, EventHandler, MapRef, Observers, Path, SharedRef, ToJson, TypePtr, TypeRef, Value,
 };
 use crate::{
-    Any, ArrayRef, GetString, IndexedSequence, Map, Observable, Quotable, ReadTxn, StickyIndex,
-    Text, TextRef, ID,
+    Any, ArrayRef, GetString, IndexedSequence, Map, Observable, ReadTxn, StickyIndex, Text,
+    TextRef, ID,
 };
 use std::borrow::Borrow;
 use std::cell::UnsafeCell;
@@ -435,8 +435,9 @@ impl XmlTextRef {
 impl SharedRef for XmlTextRef {}
 impl Xml for XmlTextRef {}
 impl Text for XmlTextRef {}
-impl Quotable for XmlTextRef {}
 impl IndexedSequence for XmlTextRef {}
+#[cfg(feature = "weak")]
+impl crate::Quotable for XmlTextRef {}
 
 impl Into<TextRef> for XmlTextRef {
     fn into(self) -> TextRef {

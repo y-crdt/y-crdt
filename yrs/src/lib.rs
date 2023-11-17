@@ -221,6 +221,11 @@
 //!
 //! # Weak links and quotations
 //!
+//! This functionality requires a "weak" feature flag to be turned on:
+//! ```toml
+//! yrs = { version = "0.17", features = ["weak"] }
+//! ```
+//!
 //! Yrs document structure can be represented as a tree of elements. That means that usually a node
 //! can have only one parent and cannot be referenced by any other node. This can be changed by
 //! usage of weak links - they offer you a way to reference to values existing in other parts of
@@ -549,7 +554,8 @@ pub use crate::types::map::MapRef;
 pub use crate::types::text::Text;
 pub use crate::types::text::TextPrelim;
 pub use crate::types::text::TextRef;
-pub use crate::types::weak::{Quotable, WeakRef, WeakPrelim};
+#[cfg(feature = "weak")]
+pub use crate::types::weak::{Quotable, WeakPrelim, WeakRef};
 pub use crate::types::xml::Xml;
 pub use crate::types::xml::XmlElementPrelim;
 pub use crate::types::xml::XmlElementRef;

@@ -10,6 +10,9 @@ homepage = "https://github.com/y-crdt/y-crdt/"
 repository = "https://github.com/y-crdt/y-crdt/"
 readme = "./README.md"
 
+[features]
+weak = []
+
 [dependencies]
 thiserror = "1"
 rand = { version = "0.7.0", features = ["wasm-bindgen"] }

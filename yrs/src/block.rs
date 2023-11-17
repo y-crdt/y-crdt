@@ -4,7 +4,6 @@ use crate::moving::Move;
 use crate::store::{Store, WeakStoreRef};
 use crate::transaction::TransactionMut;
 use crate::types::text::update_current_attributes;
-use crate::types::weak::join_linked_range;
 use crate::types::{Attrs, Branch, BranchPtr, TypePtr, TypeRef, Value};
 use crate::undo::UndoStack;
 use crate::updates::decoder::{Decode, Decoder};
@@ -553,12 +552,13 @@ impl BlockPtr {
                             parent_ref.block_len += this.len;
                             parent_ref.content_len += this.content_len(encoding);
                         }
+                        #[cfg(feature = "weak")]
                         match (this.left, this.right) {
                             (Some(left), Some(right)) => match (left.deref(), right.deref()) {
                                 (Block::Item(l), Block::Item(r))
                                     if l.info.is_linked() || r.info.is_linked() =>
                                 {
-                                    join_linked_range(self_ptr, txn)
+                                    crate::types::weak::join_linked_range(self_ptr, txn)
                                 }
                                 _ => {}
                             },

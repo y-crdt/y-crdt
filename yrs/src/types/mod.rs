@@ -1,6 +1,7 @@
 pub mod array;
 pub mod map;
 pub mod text;
+#[cfg(feature = "weak")]
 pub mod weak;
 pub mod xml;
 
@@ -18,6 +19,7 @@ use crate::transaction::{Origin, TransactionMut};
 use crate::types::array::{ArrayEvent, ArrayRef};
 use crate::types::map::MapEvent;
 use crate::types::text::TextEvent;
+#[cfg(feature = "weak")]
 use crate::types::weak::{LinkSource, WeakEvent, WeakRef};
 use crate::types::xml::{XmlElementRef, XmlEvent, XmlTextEvent, XmlTextRef};
 use crate::updates::decoder::{Decode, Decoder};
@@ -72,6 +74,7 @@ pub enum TypeRef {
     XmlHook = TYPE_REFS_XML_HOOK,
     XmlText = TYPE_REFS_XML_TEXT,
     SubDoc = TYPE_REFS_DOC,
+    #[cfg(feature = "weak")]
     WeakLink(Arc<LinkSource>) = TYPE_REFS_WEAK,
     Undefined = TYPE_REFS_UNDEFINED,
 }
@@ -804,6 +807,7 @@ pub enum Value {
     YXmlFragment(XmlFragmentRef),
     YXmlText(XmlTextRef),
     YDoc(Doc),
+    #[cfg(feature = "weak")]
     YWeakLink(WeakRef<BranchPtr>),
 }
 
@@ -1163,6 +1167,7 @@ pub(crate) enum Observers {
     Map(EventHandler<crate::types::map::MapEvent>),
     XmlFragment(EventHandler<crate::types::xml::XmlEvent>),
     XmlText(EventHandler<crate::types::xml::XmlTextEvent>),
+    #[cfg(feature = "weak")]
     Weak(EventHandler<crate::types::weak::WeakEvent>),
 }
 
@@ -1586,6 +1591,7 @@ pub enum Event {
     Map(MapEvent),
     XmlFragment(XmlEvent),
     XmlText(XmlTextEvent),
+    #[cfg(feature = "weak")]
     Weak(WeakEvent),
 }
 
