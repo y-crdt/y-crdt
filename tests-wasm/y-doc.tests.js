@@ -10,27 +10,34 @@ export const testOnUpdate = tc => {
     const d1 = new Y.YDoc({clientID: 1})
     const text1 = d1.getText('text')
     text1.insert(0, 'hello')
-    let expected = Y.encodeStateAsUpdate(d1)
+    let update = Y.encodeStateAsUpdate(d1)
 
     const d2 = new Y.YDoc(2)
     const text2 = d2.getText('text')
     let actual;
-    const sub = d2.onUpdate(e => actual = e);
-    Y.applyUpdate(d2, expected)
+    let origin;
+    const sub = d2.onUpdate((e, tx) => {
+        actual = e
+        origin = tx.origin
+    });
+    Y.applyUpdate(d2, update, d1.id)
 
+    t.compare(origin, d1.id)
     t.compare(text1.toString(), text2.toString())
-    t.compare(actual, expected)
+    t.compare(actual, update)
 
     // check unsubscribe
     sub.free()
     actual = null
+    origin = null
 
     text1.insert(5, 'world')
-    expected = Y.encodeStateAsUpdate(d1)
-    Y.applyUpdate(d2, expected)
+    update = Y.encodeStateAsUpdate(d1)
+    Y.applyUpdate(d2, update, d1.id)
 
     t.compare(text1.toString(), text2.toString())
-    t.compare(actual, null) // subscription was release, we should get no more updates
+    t.compare(actual, null) // subscription was released, we should get no more updates
+    t.compare(origin, null)
 }
 
 /**

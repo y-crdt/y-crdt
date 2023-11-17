@@ -282,9 +282,10 @@ impl YDoc {
     #[wasm_bindgen(js_name = onUpdate)]
     pub fn on_update(&mut self, f: js_sys::Function) -> YUpdateObserver {
         self.as_ref()
-            .observe_update_v1(move |_, e| {
-                let arg = Uint8Array::from(e.update.as_slice());
-                f.call1(&JsValue::UNDEFINED, &arg).unwrap();
+            .observe_update_v1(move |txn, e| {
+                let update = Uint8Array::from(e.update.as_slice());
+                let txn: JsValue = YTransaction::from(txn).into();
+                f.call2(&JsValue::UNDEFINED, &update, &txn).unwrap();
             })
             .unwrap()
             .into()
@@ -298,9 +299,10 @@ impl YDoc {
     #[wasm_bindgen(js_name = onUpdateV2)]
     pub fn on_update_v2(&mut self, f: js_sys::Function) -> YUpdateObserver {
         self.as_ref()
-            .observe_update_v2(move |_, e| {
-                let arg = Uint8Array::from(e.update.as_slice());
-                f.call1(&JsValue::UNDEFINED, &arg).unwrap();
+            .observe_update_v2(move |txn, e| {
+                let update = Uint8Array::from(e.update.as_slice());
+                let txn: JsValue = YTransaction::from(txn).into();
+                f.call2(&JsValue::UNDEFINED, &update, &txn).unwrap();
             })
             .unwrap()
             .into()
@@ -313,9 +315,10 @@ impl YDoc {
     #[wasm_bindgen(js_name = onAfterTransaction)]
     pub fn on_after_transaction(&mut self, f: js_sys::Function) -> YAfterTransactionObserver {
         self.as_ref()
-            .observe_transaction_cleanup(move |_, e| {
-                let arg: JsValue = YAfterTransactionEvent::new(e).into();
-                f.call1(&JsValue::UNDEFINED, &arg).unwrap();
+            .observe_transaction_cleanup(move |txn, e| {
+                let event: JsValue = YAfterTransactionEvent::new(e).into();
+                let txn: JsValue = YTransaction::from(txn).into();
+                f.call2(&JsValue::UNDEFINED, &event, &txn).unwrap();
             })
             .unwrap()
             .into()
@@ -328,9 +331,10 @@ impl YDoc {
     #[wasm_bindgen(js_name = onSubdocs)]
     pub fn on_subdocs(&mut self, f: js_sys::Function) -> YSubdocsObserver {
         self.as_ref()
-            .observe_subdocs(move |_, e| {
-                let arg: JsValue = YSubdocsEvent::new(e).into();
-                f.call1(&JsValue::UNDEFINED, &arg).unwrap();
+            .observe_subdocs(move |txn, e| {
+                let event: JsValue = YSubdocsEvent::new(e).into();
+                let txn: JsValue = YTransaction::from(txn).into();
+                f.call2(&JsValue::UNDEFINED, &event, &txn).unwrap();
             })
             .unwrap()
             .into()
@@ -342,9 +346,10 @@ impl YDoc {
     #[wasm_bindgen(js_name = onDestroy)]
     pub fn on_destroy(&mut self, f: js_sys::Function) -> YDestroyObserver {
         self.as_ref()
-            .observe_destroy(move |_, e| {
-                let arg: JsValue = YDoc::from(e.clone()).into();
-                f.call1(&JsValue::UNDEFINED, &arg).unwrap();
+            .observe_destroy(move |txn, e| {
+                let event: JsValue = YDoc::from(e.clone()).into();
+                let txn: JsValue = YTransaction::from(txn).into();
+                f.call2(&JsValue::UNDEFINED, &event, &txn).unwrap();
             })
             .unwrap()
             .into()
@@ -689,16 +694,41 @@ fn get_txn<'a>(txn: &'a ImplicitTransaction) -> Option<Ref<'static, YTransaction
 #[wasm_bindgen]
 pub struct YTransaction(InnerTxn);
 
+enum Cell<'a, T> {
+    Owned(T),
+    Borrowed(&'a T),
+}
+
+impl<'a, T> AsRef<T> for Cell<'a, T> {
+    fn as_ref(&self) -> &T {
+        match self {
+            Cell::Owned(v) => v,
+            Cell::Borrowed(v) => *v,
+        }
+    }
+}
+
+impl<'a, T> AsMut<T> for Cell<'a, T> {
+    fn as_mut(&mut self) -> &mut T {
+        match self {
+            Cell::Owned(v) => v,
+            Cell::Borrowed(_) => {
+                panic!("Transactions executed in context of observer callbacks cannot be used to modify document structure")
+            }
+        }
+    }
+}
+
 enum InnerTxn {
-    ReadOnly(ManuallyDrop<Transaction<'static>>),
-    ReadWrite(ManuallyDrop<TransactionMut<'static>>),
+    ReadOnly(ManuallyDrop<Cell<'static, Transaction<'static>>>),
+    ReadWrite(ManuallyDrop<Cell<'static, TransactionMut<'static>>>),
 }
 
 impl YTransaction {
     fn try_mut(&mut self) -> Option<&mut TransactionMut<'static>> {
         match &mut self.0 {
             InnerTxn::ReadOnly(_) => None,
-            InnerTxn::ReadWrite(txn) => Some(txn),
+            InnerTxn::ReadWrite(txn) => Some(txn.as_mut()),
         }
     }
 
@@ -720,8 +750,8 @@ impl Drop for InnerTxn {
 impl ReadTxn for YTransaction {
     fn store(&self) -> &Store {
         match &self.0 {
-            InnerTxn::ReadOnly(txn) => txn.store(),
-            InnerTxn::ReadWrite(txn) => txn.store(),
+            InnerTxn::ReadOnly(txn) => txn.as_ref().store(),
+            InnerTxn::ReadWrite(txn) => txn.as_ref().store(),
         }
     }
 }
@@ -729,14 +759,28 @@ impl ReadTxn for YTransaction {
 impl<'doc> From<Transaction<'doc>> for YTransaction {
     fn from(txn: Transaction<'doc>) -> Self {
         let txn: Transaction<'static> = unsafe { std::mem::transmute(txn) };
-        YTransaction(InnerTxn::ReadOnly(ManuallyDrop::new(txn)))
+        YTransaction(InnerTxn::ReadOnly(ManuallyDrop::new(Cell::Owned(txn))))
     }
 }
 
 impl<'doc> From<TransactionMut<'doc>> for YTransaction {
     fn from(txn: TransactionMut<'doc>) -> Self {
         let txn: TransactionMut<'static> = unsafe { std::mem::transmute(txn) };
-        YTransaction(InnerTxn::ReadWrite(ManuallyDrop::new(txn)))
+        YTransaction(InnerTxn::ReadWrite(ManuallyDrop::new(Cell::Owned(txn))))
+    }
+}
+
+impl<'txn, 'doc> From<&'txn Transaction<'doc>> for YTransaction {
+    fn from(txn: &'txn Transaction<'doc>) -> Self {
+        let txn: &'static Transaction<'static> = unsafe { std::mem::transmute(txn) };
+        YTransaction(InnerTxn::ReadOnly(ManuallyDrop::new(Cell::Borrowed(txn))))
+    }
+}
+
+impl<'txn, 'doc> From<&'txn TransactionMut<'doc>> for YTransaction {
+    fn from(txn: &'txn TransactionMut<'doc>) -> Self {
+        let txn: &'static TransactionMut<'static> = unsafe { std::mem::transmute(txn) };
+        YTransaction(InnerTxn::ReadWrite(ManuallyDrop::new(Cell::Borrowed(txn))))
     }
 }
 
@@ -763,7 +807,7 @@ impl YTransaction {
         match &self.0 {
             InnerTxn::ReadOnly(_) => JsValue::NULL,
             InnerTxn::ReadWrite(t) => {
-                if let Some(o) = t.origin() {
+                if let Some(o) = t.as_ref().origin() {
                     let be: [u8; 4] = o.as_ref().try_into().unwrap();
                     unsafe { JsValue::from_abi(u32::from_be_bytes(be)) }
                 } else {
@@ -780,7 +824,7 @@ impl YTransaction {
     pub fn commit(&mut self) {
         match &mut self.0 {
             InnerTxn::ReadOnly(_) => {}
-            InnerTxn::ReadWrite(txn) => txn.commit(),
+            InnerTxn::ReadWrite(txn) => txn.as_mut().commit(),
         }
     }
 
@@ -992,7 +1036,7 @@ impl YTransaction {
     pub fn encode_update(&mut self) -> Uint8Array {
         let out = match &self.0 {
             InnerTxn::ReadOnly(_) => vec![0u8, 0u8],
-            InnerTxn::ReadWrite(txn) => txn.encode_update_v1(),
+            InnerTxn::ReadWrite(txn) => txn.as_ref().encode_update_v1(),
         };
         Uint8Array::from(&out[..out.len()])
     }
@@ -1001,7 +1045,7 @@ impl YTransaction {
     pub fn encode_update_v2(&mut self) -> Uint8Array {
         let out = match &self.0 {
             InnerTxn::ReadOnly(_) => vec![0u8, 0u8],
-            InnerTxn::ReadWrite(txn) => txn.encode_update_v2(),
+            InnerTxn::ReadWrite(txn) => txn.as_ref().encode_update_v2(),
         };
         Uint8Array::from(&out[..out.len()])
     }
@@ -2203,7 +2247,8 @@ impl YText {
                 let sub = v.observe(move |txn, e| {
                     let e = YTextEvent::new(e, txn);
                     let arg: JsValue = e.into();
-                    f.call1(&JsValue::UNDEFINED, &arg).unwrap();
+                    let txn: JsValue = YTransaction::from(txn).into();
+                    f.call2(&JsValue::UNDEFINED, &arg, &txn).unwrap();
                 });
                 YTextObserver(sub)
             }
@@ -2223,7 +2268,8 @@ impl YText {
             SharedType::Integrated(v) => {
                 let sub = v.observe_deep(move |txn, e| {
                     let arg = events_into_js(txn, e);
-                    f.call1(&JsValue::UNDEFINED, &arg).unwrap();
+                    let txn: JsValue = YTransaction::from(txn).into();
+                    f.call2(&JsValue::UNDEFINED, &arg, &txn).unwrap();
                 });
                 YEventObserver(sub)
             }
@@ -2593,7 +2639,8 @@ impl YArray {
                 let sub = v.observe(move |txn, e| {
                     let e = YArrayEvent::new(e, txn);
                     let arg: JsValue = e.into();
-                    f.call1(&JsValue::UNDEFINED, &arg).unwrap();
+                    let txn: JsValue = YTransaction::from(txn).into();
+                    f.call2(&JsValue::UNDEFINED, &arg, &txn).unwrap();
                 });
                 YArrayObserver(sub)
             }
@@ -2613,7 +2660,8 @@ impl YArray {
             SharedType::Integrated(v) => v
                 .observe_deep(move |txn, e| {
                     let arg = events_into_js(txn, e);
-                    f.call1(&JsValue::UNDEFINED, &arg).unwrap();
+                    let txn: JsValue = YTransaction::from(txn).into();
+                    f.call2(&JsValue::UNDEFINED, &arg, &txn).unwrap();
                 })
                 .into(),
             SharedType::Prelim(_) => {
@@ -2936,7 +2984,8 @@ impl YMap {
                 let sub = v.observe(move |txn, e| {
                     let e = YMapEvent::new(e, txn);
                     let arg: JsValue = e.into();
-                    f.call1(&JsValue::UNDEFINED, &arg).unwrap();
+                    let txn: JsValue = YTransaction::from(txn).into();
+                    f.call2(&JsValue::UNDEFINED, &arg, &txn).unwrap();
                 });
                 YMapObserver(sub)
             }
@@ -2956,7 +3005,8 @@ impl YMap {
             SharedType::Integrated(v) => v
                 .observe_deep(move |txn, e| {
                     let arg = events_into_js(txn, e);
-                    f.call1(&JsValue::UNDEFINED, &arg).unwrap();
+                    let txn: JsValue = YTransaction::from(txn).into();
+                    f.call2(&JsValue::UNDEFINED, &arg, &txn).unwrap();
                 })
                 .into(),
             SharedType::Prelim(_) => {
@@ -3228,7 +3278,8 @@ impl YXmlElement {
         let sub = self.0.observe(move |txn, e| {
             let e = YXmlEvent::new(e, txn);
             let arg: JsValue = e.into();
-            f.call1(&JsValue::UNDEFINED, &arg).unwrap();
+            let txn: JsValue = YTransaction::from(txn).into();
+            f.call2(&JsValue::UNDEFINED, &arg, &txn).unwrap();
         });
         YXmlObserver(sub)
     }
@@ -3241,7 +3292,8 @@ impl YXmlElement {
     pub fn observe_deep(&mut self, f: js_sys::Function) -> YEventObserver {
         let sub = self.0.observe_deep(move |txn, e| {
             let arg = events_into_js(txn, e);
-            f.call1(&JsValue::UNDEFINED, &arg).unwrap();
+            let txn: JsValue = YTransaction::from(txn).into();
+            f.call2(&JsValue::UNDEFINED, &arg, &txn).unwrap();
         });
         YEventObserver(sub)
     }
@@ -3389,7 +3441,8 @@ impl YXmlFragment {
         let sub = self.0.observe(move |txn, e| {
             let e = YXmlEvent::new(e, txn);
             let arg: JsValue = e.into();
-            f.call1(&JsValue::UNDEFINED, &arg).unwrap();
+            let txn: JsValue = YTransaction::from(txn).into();
+            f.call2(&JsValue::UNDEFINED, &arg, &txn).unwrap();
         });
         YXmlObserver(sub)
     }
@@ -3402,7 +3455,8 @@ impl YXmlFragment {
     pub fn observe_deep(&mut self, f: js_sys::Function) -> YEventObserver {
         let sub = self.0.observe_deep(move |txn, e| {
             let arg = events_into_js(txn, e);
-            f.call1(&JsValue::UNDEFINED, &arg).unwrap();
+            let txn: JsValue = YTransaction::from(txn).into();
+            f.call2(&JsValue::UNDEFINED, &arg, &txn).unwrap();
         });
         YEventObserver(sub)
     }
@@ -3721,7 +3775,8 @@ impl YXmlText {
         let sub = self.0.observe(move |txn, e| {
             let e = YXmlTextEvent::new(e, txn);
             let arg: JsValue = e.into();
-            f.call1(&JsValue::UNDEFINED, &arg).unwrap();
+            let txn: JsValue = YTransaction::from(txn).into();
+            f.call2(&JsValue::UNDEFINED, &arg, &txn).unwrap();
         });
         YXmlTextObserver(sub)
     }
@@ -3851,7 +3906,8 @@ impl YWeakLink {
                 let sub = v.observe(move |txn, e| {
                     let e = YWeakLinkEvent::new(e, txn);
                     let arg: JsValue = e.into();
-                    f.call1(&JsValue::UNDEFINED, &arg).unwrap();
+                    let txn: JsValue = YTransaction::from(txn).into();
+                    f.call2(&JsValue::UNDEFINED, &arg, &txn).unwrap();
                 });
                 YWeakLinkObserver(sub)
             }
@@ -3871,7 +3927,8 @@ impl YWeakLink {
             SharedType::Integrated(v) => v
                 .observe_deep(move |txn, e| {
                     let arg = events_into_js(txn, e);
-                    f.call1(&JsValue::UNDEFINED, &arg).unwrap();
+                    let txn: JsValue = YTransaction::from(txn).into();
+                    f.call2(&JsValue::UNDEFINED, &arg, &txn).unwrap();
                 })
                 .into(),
             SharedType::Prelim(_) => {
@@ -4046,10 +4103,11 @@ impl YUndoManager {
 
     #[wasm_bindgen(js_name = onStackItemAdded)]
     pub fn on_item_added(&mut self, callback: js_sys::Function) -> YUndoObserver {
-        YUndoObserver(self.0.observe_item_added(move |_, e| {
-            let js: JsValue = YUndoEvent::new(e).into();
-            callback.call1(&JsValue::UNDEFINED, &js).unwrap();
-            if let Ok(stack_item) = Reflect::get(&js, &JsValue::from_str("stackItem")) {
+        YUndoObserver(self.0.observe_item_added(move |txn, e| {
+            let event: JsValue = YUndoEvent::new(e).into();
+            let txn: JsValue = YTransaction::from(txn).into();
+            callback.call2(&JsValue::UNDEFINED, &event, &txn).unwrap();
+            if let Ok(stack_item) = Reflect::get(&event, &JsValue::from_str("stackItem")) {
                 if let Ok(meta) = Reflect::get(&stack_item, &JsValue::from_str("meta")) {
                     e.item.meta = meta;
                 }
@@ -4059,10 +4117,11 @@ impl YUndoManager {
 
     #[wasm_bindgen(js_name = onStackItemPopped)]
     pub fn on_item_popped(&mut self, callback: js_sys::Function) -> YUndoObserver {
-        YUndoObserver(self.0.observe_item_popped(move |_, e| {
-            let js: JsValue = YUndoEvent::new(e).into();
-            callback.call1(&JsValue::UNDEFINED, &js).unwrap();
-            if let Ok(stack_item) = Reflect::get(&js, &JsValue::from_str("stackItem")) {
+        YUndoObserver(self.0.observe_item_popped(move |txn, e| {
+            let event: JsValue = YUndoEvent::new(e).into();
+            let txn: JsValue = YTransaction::from(txn).into();
+            callback.call2(&JsValue::UNDEFINED, &event, &txn).unwrap();
+            if let Ok(stack_item) = Reflect::get(&event, &JsValue::from_str("stackItem")) {
                 if let Ok(meta) = Reflect::get(&stack_item, &JsValue::from_str("meta")) {
                     e.item.meta = meta;
                 }

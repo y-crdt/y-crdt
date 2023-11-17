@@ -10,36 +10,27 @@ This enables to provide a shared document editing experience on a client devices
 ## Example
 
 ```js
-import {YDoc, encodeStateVector, encodeStateAsUpdate, applyUpdate} from 'ywasm';
+import * as Y from 'ywasm';
 
-YDoc.prototype.transact = callback => {
-    const txn = this.beginTransaction()
-    try {
-        return callback(txn)
-    } finally {
-        txn.free()
-    }
-}
-
-const doc = new YDoc()
+const doc = new Y.YDoc()
 const text = doc.getText('name')
 
 // append text to our collaborative document
-text.insert(txn, 0, 'hello world')
+text.insert(0, 'hello world', { bold: true })
 
 // simulate update with remote peer
-const remoteDoc = new YDoc()
+const remoteDoc = new Y.YDoc()
 const remoteText = remoteDoc.getText('name')
 
-// in order to exchange data with other documents 
+// in order to exchange data with other documents
 // we first need to create a state vector
-const remoteSV = encodeStateVector(remoteDoc)
+const remoteSV = Y.encodeStateVector(remoteDoc)
 // now compute a differential update based on remote document's state vector
-const update = encodeStateAsUpdate(doc, remoteSV)
+const update = Y.encodeStateAsUpdate(doc, remoteSV)
 // both update and state vector are serializable, we can pass them over the wire
 // now apply update to a remote document
-applyUpdate(remoteDoc, update)
+Y.applyUpdate(remoteDoc, update)
 
-const str = remoteText.toString(txn)
+const str = remoteText.toString()
 console.log(str)
 ```
