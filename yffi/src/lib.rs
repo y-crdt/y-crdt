@@ -83,6 +83,10 @@ pub const Y_DOC: i8 = 7;
 /// Flag used by `YInput` and `YOutput` to tag content, which is an `YWeakLink` shared type.
 pub const Y_WEAK_LINK: i8 = 8;
 
+/// Flag used by `YOutput` to tag content, which is an undefined shared type. This usually happens
+/// when it's referencing a root type that has not been initalized localy.
+pub const Y_UNDEFINED: i8 = 9;
+
 /// Flag used to mark a truthy boolean numbers.
 pub const Y_TRUE: u8 = 1;
 
@@ -2765,6 +2769,7 @@ impl From<Value> for YOutput {
             Value::YXmlText(v) => Self::from(v),
             Value::YDoc(v) => Self::from(v),
             Value::YWeakLink(v) => Self::from(v),
+            Value::UndefinedRef(v) => Self::from(v),
         }
     }
 }
@@ -2895,6 +2900,19 @@ impl From<MapRef> for YOutput {
             len: 1,
             value: YOutputContent {
                 y_type: v.into_raw_branch(),
+            },
+        }
+    }
+}
+
+impl From<BranchPtr> for YOutput {
+    fn from(v: BranchPtr) -> Self {
+        let branch_ref = v.as_ref();
+        YOutput {
+            tag: Y_UNDEFINED,
+            len: 1,
+            value: YOutputContent {
+                y_type: branch_ref as *const Branch as *mut Branch,
             },
         }
     }

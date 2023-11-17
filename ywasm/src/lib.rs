@@ -4460,6 +4460,7 @@ fn value_into_js(v: Value) -> JsValue {
         Value::YXmlFragment(v) => YXmlFragment(v).into(),
         Value::YDoc(doc) => YDoc::from(doc).into(),
         Value::YWeakLink(v) => YWeakLink::from(v).into(),
+        Value::UndefinedRef(_) => JsValue::UNDEFINED,
     }
 }
 
