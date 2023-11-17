@@ -1,6 +1,6 @@
 [package]
 name = "yrs"
-version = "0.16.10"
+version = "0.17.0"
 description = "High performance implementation of the Yjs CRDT"
 license = "MIT"
 authors = ["Kevin Jahns <kevin.jahns@pm.me>", "Bartosz Sypytkowski <b.sypytkowski@gmail.com>"]
@@ -16,17 +16,17 @@ weak = []
 [dependencies]
 thiserror = "1"
 rand = { version = "0.7.0", features = ["wasm-bindgen"] }
-smallstr = { version = "~0.3", features = ["union"]}
-smallvec = { version = "~1.11", features = ["union", "const_generics", "const_new"]}
+smallstr = { version = "0.3", features = ["union"]}
+smallvec = { version = "1.11", features = ["union", "const_generics", "const_new"]}
 atomic_refcell = "0.1"
-serde = { version = "~1.0" }
-serde_json = "~1.0"
+serde = { version = "1.0" }
+serde_json = "1.0"
 
 [dev-dependencies]
 criterion = "~0.5"
 flate2 = { version = "1.0.22", features = ["zlib-ng-compat"], default-features = false }
 ropey = "1.6.0"
-proptest = "~1.2"
+proptest = "1.2"
 proptest-derive = "0.3.0"
 
 [[bench]]
