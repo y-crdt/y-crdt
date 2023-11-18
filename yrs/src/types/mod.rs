@@ -359,7 +359,7 @@ impl Into<Value> for BranchPtr {
             //TYPE_REFS_XML_HOOK => Value::YXmlHook(XmlHookRef::from(self)),
             #[cfg(feature = "weak")]
             TypeRef::WeakLink(_) => Value::YWeakLink(WeakRef::from(self)),
-            other => panic!("Cannot convert to value - unsupported type ref: {}", other),
+            other => Value::UndefinedRef(self),
         }
     }
 }
@@ -804,17 +804,29 @@ where
 /// representation of JSON, but also nested complex collaborative structures specific to Yrs.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
-    /// Primitive value.
+    /// Any value that it treated as a single element in it's entirety.
     Any(Any),
+    /// Instance of a [TextRef].
     YText(TextRef),
+    /// Instance of an [ArrayRef].
     YArray(ArrayRef),
+    /// Instance of a [MapRef].
     YMap(MapRef),
+    /// Instance of a [XmlElementRef].
     YXmlElement(XmlElementRef),
+    /// Instance of a [XmlFragmentRef].
     YXmlFragment(XmlFragmentRef),
+    /// Instance of a [XmlTextRef].
     YXmlText(XmlTextRef),
+    /// Subdocument.
     YDoc(Doc),
+    /// Instance of a [WeakRef] or unspecified type (requires manual casting).
     #[cfg(feature = "weak")]
     YWeakLink(WeakRef<BranchPtr>),
+    /// Instance of a shared collection of undefined type. Usually happens when it refers to a root
+    /// type that has not been defined locally. Can also refer to a [WeakRef] if "weak" feature flag
+    /// was not set.
+    UndefinedRef(BranchPtr),
 }
 
 impl Default for Value {
@@ -844,7 +856,11 @@ impl Value {
             Value::YXmlText(v) => v.get_string(txn),
             Value::YDoc(v) => v.to_string(),
             #[cfg(feature = "weak")]
-            Value::YWeakLink(v) => "WeakRef{}".to_string(),
+            Value::YWeakLink(v) => {
+                let text_ref: crate::WeakRef<TextRef> = crate::WeakRef::from(v);
+                text_ref.get_string(txn)
+            }
+            Value::UndefinedRef(_) => "".to_string(),
         }
     }
 }
@@ -911,6 +927,7 @@ impl ToJson for Value {
             Value::YDoc(doc) => any!({"guid": doc.guid().as_ref()}),
             #[cfg(feature = "weak")]
             Value::YWeakLink(_) => Any::Undefined,
+            Value::UndefinedRef(_) => Any::Undefined,
         }
     }
 }
@@ -928,6 +945,7 @@ impl std::fmt::Display for Value {
             #[cfg(feature = "weak")]
             Value::YWeakLink(_) => write!(f, "WeakRef"),
             Value::YDoc(v) => write!(f, "Doc(guid:{})", v.options().guid),
+            Value::UndefinedRef(_) => write!(f, "UndefinedRef"),
         }
     }
 }
