@@ -57,6 +57,11 @@ typedef struct Transaction {} Transaction;
 typedef struct TransactionMut {} TransactionMut;
 
 /**
+ * Iterator structure used by weak link unquote.
+ */
+typedef struct YWeakIter {} YWeakIter;
+
+/**
  * Iterator structure used by shared array data type.
  */
 typedef struct YArrayIter {} YArrayIter;
@@ -83,7 +88,8 @@ typedef struct YXmlAttrIter {} YXmlAttrIter;
 typedef struct YXmlTreeWalker {} YXmlTreeWalker;
 
 typedef struct YUndoManager {} YUndoManager;
-
+typedef struct LinkSource {} LinkSource;
+typedef struct Unquote {} Unquote;
 typedef struct StickyIndex {} StickyIndex;
 """
 
@@ -96,10 +102,13 @@ parse_deps = false
 
 [export]
 exclude = [
+    "LinkSource",
+    "WeakIter",
     "ArrayIter",
     "MapIter",
     "Attributes",
-    "TreeWalker"
+    "TreeWalker",
+    "YUndoManager"
 ]
 
 [export.rename]
@@ -113,6 +122,7 @@ exclude = [
 "XmlText" = "YXmlText"
 "MapIter" = "YMapIter"
 "ArrayIter" = "YArrayIter"
+"WeakIter" = "YWeakIter"
 "TreeWalker" = "YXmlTreeWalker"
 "Attributes" = "YXmlAttrIter"
 "Observer" = "YObserver"

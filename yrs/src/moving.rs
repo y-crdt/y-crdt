@@ -1,11 +1,11 @@
 use crate::block::{Block, BlockPtr, ItemContent, Prelim, Unused};
 use crate::block_iter::BlockIter;
+use crate::encoding::read::Error;
 use crate::transaction::TransactionMut;
 use crate::types::{Branch, BranchPtr};
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::{ReadTxn, WriteTxn, ID};
-use lib0::error::Error;
 use std::collections::HashSet;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
@@ -64,14 +64,14 @@ impl Move {
         if assoc == Assoc::After {
             let slice = store.blocks.get_item_clean_start(id)?;
             if slice.adjacent() {
-                Some(slice.as_ptr())
+                Some(slice.ptr)
             } else {
                 Some(store.materialize(slice))
             }
         } else {
             let slice = store.blocks.get_item_clean_end(id)?;
             let ptr = if slice.adjacent() {
-                slice.as_ptr()
+                slice.ptr
             } else {
                 store.materialize(slice)
             };
@@ -104,11 +104,11 @@ impl Move {
         if assoc == Assoc::After {
             let slice = txn.store().blocks.get_item_clean_start(id)?;
             debug_assert!(slice.adjacent()); //TODO: remove once confirmed that slice always fits block range
-            Some(slice.as_ptr())
+            Some(slice.ptr)
         } else {
             let slice = txn.store().blocks.get_item_clean_end(id)?;
             debug_assert!(slice.adjacent()); //TODO: remove once confirmed that slice always fits block range
-            if let Block::Item(item) = slice.as_ptr().deref() {
+            if let Block::Item(item) = slice.ptr.deref() {
                 item.right
             } else {
                 None
@@ -418,9 +418,27 @@ pub struct StickyIndex {
 }
 
 impl StickyIndex {
-    #[inline]
     pub fn new(scope: IndexScope, assoc: Assoc) -> Self {
         StickyIndex { scope, assoc }
+    }
+
+    pub fn from_id(id: ID, assoc: Assoc) -> Self {
+        Self::new(IndexScope::Relative(id), assoc)
+    }
+
+    pub fn from_type<T, B>(txn: &T, branch: &B, assoc: Assoc) -> Self
+    where
+        T: ReadTxn,
+        B: AsRef<Branch>,
+    {
+        let branch = branch.as_ref();
+        if let Some(ptr) = branch.item {
+            let id = ptr.id().clone();
+            Self::new(IndexScope::Nested(id), assoc)
+        } else {
+            let name = txn.store().get_type_key(BranchPtr::from(branch)).unwrap();
+            Self::new(IndexScope::Root(name.clone()), assoc)
+        }
     }
 
     #[inline]
@@ -542,39 +560,30 @@ impl StickyIndex {
         }
     }
 
-    fn get_context<T: ReadTxn>(branch: BranchPtr, txn: &T) -> IndexScope {
-        if let Some(ptr) = branch.item {
-            IndexScope::Nested(*ptr.id())
-        } else {
-            let root = txn.store().get_type_key(branch).unwrap().clone();
-            IndexScope::Root(root)
-        }
-    }
-
-    pub fn at(
-        txn: &mut TransactionMut,
+    pub fn at<T: ReadTxn>(
+        txn: &T,
         branch: BranchPtr,
         mut index: u32,
         assoc: Assoc,
     ) -> Option<Self> {
         if assoc == Assoc::Before {
             if index == 0 {
-                let context = Self::get_context(branch, txn);
-                return Some(Self::new(context, assoc));
+                let context = IndexScope::from_branch(branch, txn);
+                return Some(StickyIndex::new(context, assoc));
             }
             index -= 1;
         }
 
         let mut walker = BlockIter::new(branch);
         if !walker.try_forward(txn, index) {
-            panic!("Block iter couldn't move forward");
+            return None;
         }
         if walker.finished() {
             if assoc == Assoc::Before {
                 let context = if let Some(ptr) = walker.next_item() {
                     IndexScope::Relative(ptr.last_id())
                 } else {
-                    Self::get_context(branch, txn)
+                    IndexScope::from_branch(branch, txn)
                 };
                 Some(Self::new(context, assoc))
             } else {
@@ -586,7 +595,7 @@ impl StickyIndex {
                 id.clock += walker.rel();
                 IndexScope::Relative(id)
             } else {
-                Self::get_context(branch, txn)
+                IndexScope::from_branch(branch, txn)
             };
             Some(Self::new(context, assoc))
         }
@@ -659,6 +668,17 @@ pub enum IndexScope {
     /// If a containing collection is a root-level y-type, which is empty, this case allows us to
     /// identify that nested type.
     Root(Arc<str>),
+}
+
+impl IndexScope {
+    pub fn from_branch<T: ReadTxn>(branch: BranchPtr, txn: &T) -> Self {
+        if let Some(ptr) = branch.item {
+            IndexScope::Nested(*ptr.id())
+        } else {
+            let root = txn.store().get_type_key(branch).unwrap().clone();
+            IndexScope::Root(root)
+        }
+    }
 }
 
 impl Encode for IndexScope {

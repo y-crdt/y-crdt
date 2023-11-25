@@ -1,11 +1,11 @@
 use crate::block::{BlockPtr, ClientID, ID};
 use crate::block_store::BlockStore;
+use crate::encoding::read::Error;
 use crate::store::Store;
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::client_hasher::ClientHasher;
 use crate::TransactionMut;
-use lib0::error::Error;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hash, Hasher};
@@ -694,7 +694,7 @@ impl<'ds, 'txn, 'doc> Iterator for DeletedBlocks<'ds, 'txn, 'doc> {
                     .txn
                     .store
                     .blocks
-                    .split_block_inner(block, clock + block.len() - r.end)
+                    .split_block_inner(block, r.end - clock)
                 {
                     self.txn.merge_blocks.push(*right_ptr.id());
                     self.current_range = None;

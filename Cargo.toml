@@ -3,6 +3,5 @@
 members = [
   "yrs",
   "ywasm",
-  "lib0",
   "yffi"
 ]

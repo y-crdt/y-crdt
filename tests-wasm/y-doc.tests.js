@@ -10,27 +10,34 @@ export const testOnUpdate = tc => {
     const d1 = new Y.YDoc({clientID: 1})
     const text1 = d1.getText('text')
     text1.insert(0, 'hello')
-    let expected = Y.encodeStateAsUpdate(d1)
+    let update = Y.encodeStateAsUpdate(d1)
 
     const d2 = new Y.YDoc(2)
     const text2 = d2.getText('text')
     let actual;
-    const sub = d2.onUpdate(e => actual = e);
-    Y.applyUpdate(d2, expected)
+    let origin;
+    const sub = d2.onUpdate((e, tx) => {
+        actual = e
+        origin = tx.origin
+    });
+    Y.applyUpdate(d2, update, d1.id)
 
+    t.compare(origin, d1.id)
     t.compare(text1.toString(), text2.toString())
-    t.compare(actual, expected)
+    t.compare(actual, update)
 
     // check unsubscribe
     sub.free()
     actual = null
+    origin = null
 
     text1.insert(5, 'world')
-    expected = Y.encodeStateAsUpdate(d1)
-    Y.applyUpdate(d2, expected)
+    update = Y.encodeStateAsUpdate(d1)
+    Y.applyUpdate(d2, update, d1.id)
 
     t.compare(text1.toString(), text2.toString())
-    t.compare(actual, null) // subscription was release, we should get no more updates
+    t.compare(actual, null) // subscription was released, we should get no more updates
+    t.compare(origin, null)
 }
 
 /**
@@ -209,4 +216,53 @@ export const testSubdoc = tc => {
         t.compare(event, [[], ['a'], []])
         t.compare(Array.from(doc2.getSubdocGuids()).sort(), ['a', 'c'])
     }
+}
+
+/**
+ * @param {t.TestCase} tc
+ */
+export const testLiveness = tc => {
+    const d1 = new Y.YDoc()
+    const r1 = d1.getMap('root')
+    const d2 = new Y.YDoc()
+    const r2 = d2.getMap('root')
+    const a1 = new Y.YMap()
+    r1.set('a', a1)
+    const aa1 = new Y.YMap()
+    a1.set('aa', aa1)
+
+    // all nodes should be alive
+    d1.transact(tx => {
+        t.assert(r1.alive(tx), 'root is always alive')
+        t.assert(a1.alive(tx), '1st level nesting (local)')
+        t.assert(aa1.alive(tx), '2nd level nesting (local)')
+    })
+
+    exchangeUpdates([d1, d2])
+
+    const a2 = r2.get('a')
+    const aa2 = a2.get('aa')
+
+    // all nodes should be alive on remote as well
+    d2.transact(tx => {
+        t.assert(r2.alive(tx), 'root is always alive')
+        t.assert(a2.alive(tx), '1st level nesting (local)')
+        t.assert(aa2.alive(tx), '2nd level nesting (local)')
+    })
+
+    // drop nodes on local
+    r1.delete('a')
+    exchangeUpdates([d1, d2])
+
+    // child nodes should be marked as dead
+    d1.transact(tx => {
+        t.assert(r1.alive(tx), 'root is always alive')
+        t.assert(!a1.alive(tx), 'child is deleted (local)')
+        t.assert(!aa1.alive(tx), 'parent was deleted (local)')
+    })
+    d2.transact(tx => {
+        t.assert(r2.alive(tx), 'root is always alive')
+        t.assert(!a2.alive(tx), 'child is deleted (local)')
+        t.assert(!aa2.alive(tx), 'parent was deleted (local)')
+    })
 }

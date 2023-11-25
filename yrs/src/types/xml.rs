@@ -1,16 +1,15 @@
 use crate::block::{Block, BlockPtr, EmbedPrelim, Item, ItemContent, ItemPosition, Prelim};
 use crate::block_iter::BlockIter;
 use crate::transaction::TransactionMut;
-use crate::types::text::{TextEvent, YChange};
+use crate::types::text::{diff_between, TextEvent, YChange};
 use crate::types::{
     event_change_set, event_keys, Branch, BranchPtr, Change, ChangeSet, Delta, Entries,
-    EntryChange, EventHandler, MapRef, Observers, Path, ToJson, TypePtr, TypeRef, Value,
-    TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT,
+    EntryChange, EventHandler, MapRef, Observers, Path, SharedRef, ToJson, TypePtr, TypeRef, Value,
 };
 use crate::{
-    ArrayRef, GetString, IndexedSequence, Map, Observable, ReadTxn, StickyIndex, Text, TextRef, ID,
+    Any, ArrayRef, GetString, IndexedSequence, Map, Observable, ReadTxn, StickyIndex, Text,
+    TextRef, ID,
 };
-use lib0::any::Any;
 use std::borrow::Borrow;
 use std::cell::UnsafeCell;
 use std::collections::{HashMap, HashSet};
@@ -100,6 +99,19 @@ impl TryFrom<BranchPtr> for XmlNode {
     }
 }
 
+impl TryFrom<Value> for XmlNode {
+    type Error = Value;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::YXmlElement(n) => Ok(XmlNode::Element(n)),
+            Value::YXmlFragment(n) => Ok(XmlNode::Fragment(n)),
+            Value::YXmlText(n) => Ok(XmlNode::Text(n)),
+            other => Err(other),
+        }
+    }
+}
+
 /// XML element data type. It represents an XML node, which can contain key-value attributes
 /// (interpreted as strings) as well as other nested XML elements or rich text (represented by
 /// [XmlTextRef] type).
@@ -117,6 +129,7 @@ impl TryFrom<BranchPtr> for XmlNode {
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct XmlElementRef(BranchPtr);
 
+impl SharedRef for XmlElementRef {}
 impl Xml for XmlElementRef {}
 impl XmlFragment for XmlElementRef {}
 impl IndexedSequence for XmlElementRef {}
@@ -233,6 +246,17 @@ impl TryFrom<BlockPtr> for XmlElementRef {
     }
 }
 
+impl TryFrom<Value> for XmlElementRef {
+    type Error = Value;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::YXmlElement(value) => Ok(value),
+            other => Err(other),
+        }
+    }
+}
+
 /// A preliminary type that will be materialized into an [XmlElementRef] once it will be integrated
 /// into Yrs document.
 #[derive(Debug, Clone)]
@@ -325,14 +349,13 @@ where
 /// any concurrent update incoming and applied from the remote peer may change the order of elements
 /// in current [XmlTextRef], invalidating numeric index. For such cases you can take advantage of fact
 /// that [XmlTextRef] implements [IndexedSequence::sticky_index] method that returns a
-/// [permanent index](StickyIndex) position that sticks to the same place even when concurrent
+/// [permanent index](crate::StickyIndex) position that sticks to the same place even when concurrent
 /// updates are being made.
 ///
 /// # Example
 ///
 /// ```rust
-/// use lib0::any::Any;
-/// use yrs::{Array, ArrayPrelim, Doc, GetString, Text, Transact};
+/// use yrs::{Any, Array, ArrayPrelim, Doc, GetString, Text, Transact};
 /// use yrs::types::Attrs;
 ///
 /// let doc = Doc::new();
@@ -367,40 +390,14 @@ where
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct XmlTextRef(BranchPtr);
 
-impl Xml for XmlTextRef {}
-impl Text for XmlTextRef {}
-impl IndexedSequence for XmlTextRef {}
-
-impl Into<TextRef> for XmlTextRef {
-    fn into(self) -> TextRef {
-        TextRef::from(self.0)
-    }
-}
-
-impl Observable for XmlTextRef {
-    type Event = XmlTextEvent;
-
-    fn try_observer(&self) -> Option<&EventHandler<Self::Event>> {
-        if let Some(Observers::XmlText(eh)) = self.0.observers.as_ref() {
-            Some(eh)
-        } else {
-            None
-        }
-    }
-
-    fn try_observer_mut(&mut self) -> Option<&mut EventHandler<Self::Event>> {
-        if let Observers::XmlText(eh) = self.0.observers.get_or_insert_with(Observers::xml_text) {
-            Some(eh)
-        } else {
-            None
-        }
-    }
-}
-
-impl GetString for XmlTextRef {
-    fn get_string<T: ReadTxn>(&self, txn: &T) -> String {
+impl XmlTextRef {
+    pub(crate) fn get_string_fragment(
+        head: Option<BlockPtr>,
+        start: Option<&StickyIndex>,
+        end: Option<&StickyIndex>,
+    ) -> String {
         let mut buf = String::new();
-        for d in self.diff(txn, YChange::identity) {
+        for d in diff_between(head, start, end, YChange::identity) {
             let mut attrs = Vec::new();
             if let Some(attributes) = d.attributes.as_ref() {
                 for (key, value) in attributes.iter() {
@@ -435,6 +432,45 @@ impl GetString for XmlTextRef {
     }
 }
 
+impl SharedRef for XmlTextRef {}
+impl Xml for XmlTextRef {}
+impl Text for XmlTextRef {}
+impl IndexedSequence for XmlTextRef {}
+#[cfg(feature = "weak")]
+impl crate::Quotable for XmlTextRef {}
+
+impl Into<TextRef> for XmlTextRef {
+    fn into(self) -> TextRef {
+        TextRef::from(self.0)
+    }
+}
+
+impl Observable for XmlTextRef {
+    type Event = XmlTextEvent;
+
+    fn try_observer(&self) -> Option<&EventHandler<Self::Event>> {
+        if let Some(Observers::XmlText(eh)) = self.0.observers.as_ref() {
+            Some(eh)
+        } else {
+            None
+        }
+    }
+
+    fn try_observer_mut(&mut self) -> Option<&mut EventHandler<Self::Event>> {
+        if let Observers::XmlText(eh) = self.0.observers.get_or_insert_with(Observers::xml_text) {
+            Some(eh)
+        } else {
+            None
+        }
+    }
+}
+
+impl GetString for XmlTextRef {
+    fn get_string<T: ReadTxn>(&self, txn: &T) -> String {
+        XmlTextRef::get_string_fragment(self.0.start, None, None)
+    }
+}
+
 impl AsRef<Branch> for XmlTextRef {
     fn as_ref(&self) -> &Branch {
         &self.0
@@ -461,6 +497,17 @@ impl TryFrom<BlockPtr> for XmlTextRef {
             Ok(Self::from(branch))
         } else {
             Err(value)
+        }
+    }
+}
+
+impl TryFrom<Value> for XmlTextRef {
+    type Error = Value;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::YXmlText(value) => Ok(value),
+            other => Err(other),
         }
     }
 }
@@ -508,6 +555,7 @@ impl<T: Borrow<str>> Into<EmbedPrelim<XmlTextPrelim<T>>> for XmlTextPrelim<T> {
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct XmlFragmentRef(BranchPtr);
 
+impl SharedRef for XmlFragmentRef {}
 impl XmlFragment for XmlFragmentRef {}
 impl IndexedSequence for XmlFragmentRef {}
 
@@ -585,6 +633,17 @@ impl TryFrom<BlockPtr> for XmlFragmentRef {
             Ok(Self::from(branch))
         } else {
             Err(value)
+        }
+    }
+}
+
+impl TryFrom<Value> for XmlFragmentRef {
+    type Error = Value;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::YXmlFragment(value) => Ok(value),
+            other => Err(other),
         }
     }
 }
@@ -945,11 +1004,11 @@ where
         fn try_descend(item: &Item) -> Option<&Block> {
             if let ItemContent::Type(t) = &item.content {
                 let inner = t.as_ref();
-                let type_ref = inner.type_ref();
-                if !item.is_deleted()
-                    && (type_ref == TYPE_REFS_XML_ELEMENT || type_ref == TYPE_REFS_XML_FRAGMENT)
-                {
-                    return inner.start.as_deref();
+                match inner.type_ref() {
+                    TypeRef::XmlElement(_) | TypeRef::XmlFragment if !item.is_deleted() => {
+                        return inner.start.as_deref();
+                    }
+                    _ => { /* do nothing */ }
                 }
             }
 
@@ -1202,10 +1261,9 @@ mod test {
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encoder, EncoderV1};
     use crate::{
-        Doc, GetString, Observable, StateVector, Text, Transact, Update, XmlElementPrelim,
+        Any, Doc, GetString, Observable, StateVector, Text, Transact, Update, XmlElementPrelim,
         XmlTextPrelim,
     };
-    use lib0::any::Any;
     use std::cell::RefCell;
     use std::collections::HashMap;
     use std::rc::Rc;

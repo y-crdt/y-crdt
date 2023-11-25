@@ -2,11 +2,10 @@ use crate::block::{Block, BlockPtr, EmbedPrelim, Item, ItemContent, ItemPosition
 use crate::block_store::Snapshot;
 use crate::transaction::TransactionMut;
 use crate::types::{
-    Attrs, Branch, BranchPtr, Delta, EventHandler, Observers, Path, TypeRef, Value,
+    Attrs, Branch, BranchPtr, Delta, EventHandler, Observers, Path, SharedRef, TypeRef, Value,
 };
 use crate::utils::OptionExt;
 use crate::*;
-use lib0::any::Any;
 use std::borrow::Borrow;
 use std::cell::UnsafeCell;
 use std::collections::HashMap;
@@ -47,8 +46,7 @@ use std::ops::{Deref, DerefMut};
 /// # Example
 ///
 /// ```rust
-/// use lib0::any::Any;
-/// use yrs::{Array, ArrayPrelim, Doc, GetString, Text, Transact};
+/// use yrs::{Any, Array, ArrayPrelim, Doc, GetString, Text, Transact};
 /// use yrs::types::Attrs;
 /// use yrs::types::text::{Diff, YChange};
 ///
@@ -93,8 +91,11 @@ use std::ops::{Deref, DerefMut};
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct TextRef(BranchPtr);
 
+impl SharedRef for TextRef {}
 impl Text for TextRef {}
 impl IndexedSequence for TextRef {}
+#[cfg(feature = "weak")]
+impl crate::Quotable for TextRef {}
 
 impl Into<XmlTextRef> for TextRef {
     fn into(self) -> XmlTextRef {
@@ -153,7 +154,18 @@ impl TryFrom<BlockPtr> for TextRef {
     }
 }
 
-pub trait Text: AsRef<Branch> {
+impl TryFrom<Value> for TextRef {
+    type Error = Value;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::YText(value) => Ok(value),
+            other => Err(other),
+        }
+    }
+}
+
+pub trait Text: AsRef<Branch> + Sized {
     /// Returns a number of characters visible in a current text data structure.
     fn len<T: ReadTxn>(&self, txn: &T) -> u32 {
         self.as_ref().content_len
@@ -192,7 +204,7 @@ pub trait Text: AsRef<Branch> {
     /// use yrs::{Doc, Options, Text, GetString, Transact, OffsetKind};
     ///
     /// let doc = Doc::with_options(Options {
-    ///     offset_kind: OffsetKind::Utf32,
+    ///     offset_kind: OffsetKind::Utf16,
     ///     ..Default::default()
     /// });
     /// let ytext = doc.get_or_insert_text("text");
@@ -399,7 +411,7 @@ pub trait Text: AsRef<Branch> {
         F: Fn(YChange) -> D,
     {
         let mut asm = DiffAssembler::new(compute_ychange);
-        asm.process(self.as_ref().start, None, None);
+        asm.process(self.as_ref().start, None, None, None, None);
         asm.finish()
     }
 
@@ -422,7 +434,7 @@ pub trait Text: AsRef<Branch> {
         }
 
         let mut asm = DiffAssembler::new(compute_ychange);
-        asm.process(self.as_ref().start, hi, lo);
+        asm.process(self.as_ref().start, hi, lo, None, None);
         asm.finish()
     }
 }
@@ -495,8 +507,14 @@ where
             Some(Box::new(self.curr_attrs.clone()))
         }
     }
-
-    fn process(&mut self, mut n: Option<BlockPtr>, hi: Option<&Snapshot>, lo: Option<&Snapshot>) {
+    fn process(
+        &mut self,
+        mut n: Option<BlockPtr>,
+        hi: Option<&Snapshot>,
+        lo: Option<&Snapshot>,
+        start: Option<&StickyIndex>,
+        end: Option<&StickyIndex>,
+    ) {
         fn seen(snapshot: Option<&Snapshot>, item: &Item) -> bool {
             if let Some(s) = snapshot {
                 s.is_visible(&item.id)
@@ -504,8 +522,39 @@ where
                 !item.is_deleted()
             }
         }
+        let (start, start_assoc) = if let Some(index) = start {
+            (index.id(), index.assoc)
+        } else {
+            (None, Assoc::Before)
+        };
+        let (end, end_assoc) = if let Some(index) = end {
+            (index.id(), index.assoc)
+        } else {
+            (None, Assoc::After)
+        };
 
-        while let Some(Block::Item(item)) = n.as_deref() {
+        let mut start_offset: i32 = if start.is_none() { 0 } else { -1 };
+        'LOOP: while let Some(Block::Item(item)) = n.as_deref() {
+            if let Some(start) = start {
+                if start_offset < 0 && item.contains(start) {
+                    if start_assoc == Assoc::After {
+                        if start.clock == item.id.clock + item.len() - 1 {
+                            start_offset = 0;
+                            n = item.right;
+                            continue;
+                        } else {
+                            start_offset = start.clock as i32 - item.id.clock as i32 + 1;
+                        }
+                    } else {
+                        start_offset = start.clock as i32 - item.id.clock as i32;
+                    }
+                }
+            }
+            if let Some(end) = end {
+                if end_assoc == Assoc::Before && &item.id == end {
+                    break;
+                }
+            }
             if seen(hi, item) || (lo.is_some() && seen(lo, item)) {
                 match &item.content {
                     ItemContent::String(s) => {
@@ -524,7 +573,32 @@ where
                                 }
                             }
                         }
-                        self.buf.push_str(s.as_str());
+                        if start_offset > 0 {
+                            let slice = &s.as_str()[start_offset as usize..];
+                            self.buf.push_str(slice);
+                            start_offset = 0;
+                        } else {
+                            match end {
+                                Some(end) if item.contains(end) => {
+                                    // we reached the end or range
+                                    let mut end_offset =
+                                        (item.id.clock + item.len - end.clock - 1) as usize;
+                                    if end_assoc == Assoc::Before {
+                                        end_offset -= 1;
+                                    }
+                                    let s = s.as_str();
+                                    let slice = &s[..(s.len() + end_offset)];
+                                    self.buf.push_str(slice);
+                                    self.pack_str();
+                                    break 'LOOP;
+                                }
+                                _ => {
+                                    if start_offset == 0 {
+                                        self.buf.push_str(s.as_str());
+                                    }
+                                }
+                            }
+                        }
                     }
                     ItemContent::Type(_) | ItemContent::Embed(_) => {
                         self.pack_str();
@@ -541,12 +615,30 @@ where
                     }
                     _ => {}
                 }
+            } else if let Some(end) = end {
+                if item.contains(end) {
+                    break;
+                }
             }
             n = item.right;
         }
 
         self.pack_str();
     }
+}
+
+pub(crate) fn diff_between<D, F>(
+    ptr: Option<BlockPtr>,
+    start: Option<&StickyIndex>,
+    end: Option<&StickyIndex>,
+    compute_ychange: F,
+) -> Vec<Diff<D>>
+where
+    F: Fn(YChange) -> D,
+{
+    let mut asm = DiffAssembler::new(compute_ychange);
+    asm.process(ptr, None, None, start, end);
+    asm.finish()
 }
 
 pub(crate) fn update_current_attributes(attrs: &mut Attrs, key: &str, value: &Any) {
@@ -1082,8 +1174,8 @@ impl TextEvent {
                         let value = if let Some(str) = self.insert.take() {
                             str
                         } else {
-                            let value = self.insert_string.take().unwrap().into_boxed_str();
-                            Any::String(value).into()
+                            let value = self.insert_string.take().unwrap();
+                            Any::from(value).into()
                         };
                         let attrs = if self.current_attrs.is_empty() {
                             None
@@ -1290,11 +1382,9 @@ mod test {
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
     use crate::{
-        ArrayPrelim, Doc, GetString, Observable, StateVector, Text, Transact, Update, XmlTextRef,
-        ID,
+        any, Any, ArrayPrelim, Doc, GetString, Observable, StateVector, Text, Transact, Update,
+        XmlTextRef, ID,
     };
-    use lib0::any;
-    use lib0::any::Any;
     use rand::prelude::StdRng;
     use rand::Rng;
     use std::cell::RefCell;
@@ -1754,69 +1844,6 @@ mod test {
         );
     }
 
-    #[test]
-    fn utf32_encoding() {
-        let mut options = Options::with_client_id(1);
-        options.offset_kind = OffsetKind::Utf32;
-        let doc = Doc::with_options(options);
-        let txt = doc.get_or_insert_text("content");
-
-        txt.insert(&mut doc.transact_mut(), 0, r#"“”"#); // these chars are 3B long each
-        txt.insert(&mut doc.transact_mut(), 1, r#"test"#);
-
-        assert_eq!(txt.get_string(&txt.transact()), r#"“test”"#);
-    }
-
-    #[test]
-    fn unicode_support() {
-        let d1 = {
-            let mut options = Options::with_client_id(1);
-            options.offset_kind = OffsetKind::Utf32;
-            Doc::with_options(options)
-        };
-        let txt1 = d1.get_or_insert_text("test");
-
-        let d2 = {
-            let mut options = Options::with_client_id(2);
-            options.offset_kind = OffsetKind::Bytes;
-            Doc::with_options(options)
-        };
-        let txt2 = d2.get_or_insert_text("test");
-
-        {
-            let mut txn = d1.transact_mut();
-
-            txt1.insert(&mut txn, 0, "Zażółć gęślą jaźń");
-            assert_eq!(txt1.get_string(&txn), "Zażółć gęślą jaźń");
-            assert_eq!(txt1.len(&txn), 17);
-        }
-
-        exchange_updates(&[&d1, &d2]);
-
-        {
-            let txn = txt2.transact();
-            assert_eq!(txt2.get_string(&txn), "Zażółć gęślą jaźń");
-            assert_eq!(txt2.len(&txn), 26);
-        }
-
-        {
-            let mut txn = d1.transact_mut();
-            txt1.remove_range(&mut txn, 9, 3);
-            txt1.insert(&mut txn, 9, "si");
-
-            assert_eq!(txt1.get_string(&txn), "Zażółć gęsi jaźń");
-            assert_eq!(txt1.len(&txn), 16);
-        }
-
-        exchange_updates(&[&d1, &d2]);
-
-        {
-            let txn = txt2.transact();
-            assert_eq!(txt2.get_string(&txn), "Zażółć gęsi jaźń");
-            assert_eq!(txt2.len(&txn), 23);
-        }
-    }
-
     fn text_transactions() -> [Box<dyn Fn(&mut Doc, &mut StdRng)>; 2] {
         fn insert_text(doc: &mut Doc, rng: &mut StdRng) {
             let ytext = doc.get_or_insert_text("text");
@@ -2136,7 +2163,7 @@ mod test {
     #[test]
     fn yrs_delete() {
         let doc = Doc::with_options(Options {
-            offset_kind: OffsetKind::Utf32,
+            offset_kind: OffsetKind::Utf16,
             ..Default::default()
         });
 

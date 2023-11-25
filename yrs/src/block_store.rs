@@ -3,12 +3,12 @@ use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::client_hasher::ClientHasher;
 use crate::*;
-use lib0::error::Error;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::hash::BuildHasherDefault;
 use std::ops::Deref;
 use std::vec::Vec;
+use crate::encoding::read::Error;
 
 /// State vector is a compact representation of all known blocks inserted and integrated into
 /// a given document. This descriptor can be serialized and used to determine a difference between
@@ -405,10 +405,6 @@ impl BlockStore {
     /// Returns an iterator over the client and block lists pairs known to a current block store.
     pub fn iter(&self) -> Iter<'_> {
         self.clients.iter()
-    }
-
-    pub(crate) fn blocks(&self) -> Blocks<'_> {
-        Blocks::new(self)
     }
 
     /// Returns a state vector, which is a compact representation of the state of blocks integrated

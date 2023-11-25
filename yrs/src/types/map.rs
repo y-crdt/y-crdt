@@ -1,11 +1,10 @@
 use crate::block::{Block, BlockPtr, EmbedPrelim, ItemContent, ItemPosition, Prelim};
 use crate::transaction::TransactionMut;
 use crate::types::{
-    event_keys, Branch, BranchPtr, Entries, EntryChange, EventHandler, Observers, Path, ToJson,
-    TypeRef, Value,
+    event_keys, Branch, BranchPtr, Entries, EntryChange, EventHandler, Observers, Path, SharedRef,
+    ToJson, TypeRef, Value,
 };
 use crate::*;
-use lib0::any::Any;
 use std::borrow::Borrow;
 use std::cell::UnsafeCell;
 use std::collections::{HashMap, HashSet};
@@ -25,9 +24,7 @@ use std::sync::Arc;
 /// # Example
 ///
 /// ```rust
-///
-/// use lib0::any;
-/// use yrs::{Doc, Map, MapPrelim, Transact};
+/// use yrs::{any, Doc, Map, MapPrelim, Transact};
 /// use yrs::types::ToJson;
 ///
 /// let doc = Doc::new();
@@ -60,6 +57,7 @@ use std::sync::Arc;
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct MapRef(BranchPtr);
 
+impl SharedRef for MapRef {}
 impl Map for MapRef {}
 
 impl Observable for MapRef {
@@ -94,7 +92,7 @@ impl ToJson for MapRef {
                 }
             }
         }
-        Any::Map(Box::new(res))
+        Any::from(res)
     }
 }
 
@@ -122,7 +120,18 @@ impl TryFrom<BlockPtr> for MapRef {
     }
 }
 
-pub trait Map: AsRef<Branch> {
+impl TryFrom<Value> for MapRef {
+    type Error = Value;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::YMap(value) => Ok(value),
+            other => Err(other),
+        }
+    }
+}
+
+pub trait Map: AsRef<Branch> + Sized {
     /// Returns a number of entries stored within current map.
     fn len<T: ReadTxn>(&self, txn: &T) -> u32 {
         let mut len = 0;
@@ -194,6 +203,17 @@ pub trait Map: AsRef<Branch> {
     fn remove(&self, txn: &mut TransactionMut, key: &str) -> Option<Value> {
         let ptr = BranchPtr::from(self.as_ref());
         ptr.remove(txn, key)
+    }
+
+    /// Returns [WeakPrelim] to a given `key`, if it exists in a current map.
+    #[cfg(feature = "weak")]
+    fn link<T: ReadTxn>(&self, txn: &T, key: &str) -> Option<crate::WeakPrelim<Self>> {
+        let ptr = BranchPtr::from(self.as_ref());
+        let block = ptr.map.get(key)?;
+        let start = StickyIndex::from_id(block.id().clone(), Assoc::Before);
+        let end = StickyIndex::from_id(block.id().clone(), Assoc::After);
+        let link = crate::WeakPrelim::new(start, end);
+        Some(link)
     }
 
     /// Returns a value stored under a given `key` within current map, or `None` if no entry
@@ -431,11 +451,9 @@ mod test {
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encoder, EncoderV1};
     use crate::{
-        Array, ArrayPrelim, Doc, Map, MapPrelim, MapRef, Observable, StateVector, Text, Transact,
-        Update,
+        any, Any, Array, ArrayPrelim, ArrayRef, Doc, Map, MapPrelim, MapRef, Observable,
+        StateVector, Text, Transact, Update,
     };
-    use lib0::any;
-    use lib0::any::Any;
     use rand::distributions::Alphanumeric;
     use rand::prelude::{SliceRandom, StdRng};
     use rand::Rng;
@@ -961,7 +979,7 @@ mod test {
         let nested2 = nested
             .get(&nested.transact(), "array")
             .unwrap()
-            .to_yarray()
+            .cast::<ArrayRef>()
             .unwrap();
         nested2.insert(&mut doc.transact_mut(), 0, "content");
 

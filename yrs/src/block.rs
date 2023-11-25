@@ -1,15 +1,15 @@
 use crate::doc::{DocAddr, OffsetKind};
+use crate::encoding::read::Error;
 use crate::moving::Move;
 use crate::store::{Store, WeakStoreRef};
 use crate::transaction::TransactionMut;
 use crate::types::text::update_current_attributes;
 use crate::types::{Attrs, Branch, BranchPtr, TypePtr, TypeRef, Value};
+use crate::undo::UndoStack;
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::OptionExt;
 use crate::*;
-use lib0::any::Any;
-use lib0::error::Error;
 use smallstr::SmallString;
 use std::collections::HashSet;
 use std::convert::TryFrom;
@@ -100,11 +100,13 @@ impl ID {
 pub struct BlockPtr(NonNull<Block>);
 
 impl BlockPtr {
-    pub(crate) fn redo(
+    pub(crate) fn redo<M>(
         &mut self,
         txn: &mut TransactionMut,
         redo_items: &HashSet<BlockPtr>,
         items_to_delete: &DeleteSet,
+        s1: &UndoStack<M>,
+        s2: &UndoStack<M>,
     ) -> Option<BlockPtr> {
         let self_ptr = self.clone();
         let item = self.as_item_mut()?;
@@ -121,7 +123,7 @@ impl BlockPtr {
                     // try to undo parent if it will be undone anyway
                     if parent.redone.is_none()
                         && (!redo_items.contains(&ptr)
-                            || ptr.redo(txn, redo_items, items_to_delete).is_none())
+                            || ptr.redo(txn, redo_items, items_to_delete, s1, s2).is_none())
                     {
                         return None;
                     }
@@ -157,21 +159,26 @@ impl BlockPtr {
                 // If it is intended to delete right while item is redone,
                 // we can expect that item should replace right.
                 while let Some(Block::Item(left_item)) = left.as_deref() {
-                    if let Some(right_ptr) = left_item.right {
-                        if items_to_delete.is_deleted(right_ptr.id()) {
-                            left = Some(right_ptr);
-                            continue;
-                        }
-                    }
-                    break;
-                }
-                // follow redone
-                // trace redone until parent matches
-                while let Some(Block::Item(left_item)) = left.as_deref() {
-                    if let Some(redone) = left_item.redone.as_ref() {
-                        if let Some(slice) = txn.store.blocks.get_item_clean_start(redone) {
-                            let ptr = txn.store.materialize(slice);
+                    if let Some(ptr) = left_item.right {
+                        let id = ptr.id();
+                        if items_to_delete.is_deleted(id) || s1.is_deleted(id) || s2.is_deleted(id)
+                        {
+                            // follow redone
                             left = Some(ptr);
+                            while let Some(Block::Item(item)) = left.as_deref() {
+                                if let Some(id) = item.redone.as_ref() {
+                                    left = match txn.store.blocks.get_item_clean_start(id) {
+                                        None => break,
+                                        Some(slice) => {
+                                            let ptr = txn.store.materialize(slice);
+                                            txn.merge_blocks.push(ptr.id().clone());
+                                            Some(ptr)
+                                        }
+                                    };
+                                } else {
+                                    break;
+                                }
+                            }
                             continue;
                         }
                     }
@@ -519,16 +526,44 @@ impl BlockPtr {
                     } else if let Some(parent_sub) = &this.parent_sub {
                         // set as current parent value if right === null and this is parentSub
                         parent_ref.map.insert(parent_sub.clone(), self_ptr);
-                        if let Some(left) = this.left {
+                        if let Some(mut left) = this.left {
+                            if let Block::Item(item) = left.deref_mut() {
+                                if item.info.is_linked() {
+                                    // inherit links from the block we're overriding
+                                    item.info.clear_linked();
+                                    this.info.set_linked();
+                                    let all_links = &mut txn.store.linked_by;
+                                    if let Some(linked_by) = all_links.remove(&left) {
+                                        all_links.insert(self_ptr, linked_by);
+                                        // since left is being deleted, it will remove
+                                        // its links from store.linkedBy anyway
+                                    }
+                                }
+                            }
                             // this is the current attribute value of parent. delete right
                             txn.delete(left);
                         }
                     }
 
                     // adjust length of parent
-                    if this.parent_sub.is_none() && this.is_countable() && !this.is_deleted() {
-                        parent_ref.block_len += this.len;
-                        parent_ref.content_len += this.content_len(encoding);
+                    if this.parent_sub.is_none() && !this.is_deleted() {
+                        if this.is_countable() {
+                            // adjust length of parent
+                            parent_ref.block_len += this.len;
+                            parent_ref.content_len += this.content_len(encoding);
+                        }
+                        #[cfg(feature = "weak")]
+                        match (this.left, this.right) {
+                            (Some(left), Some(right)) => match (left.deref(), right.deref()) {
+                                (Block::Item(l), Block::Item(r))
+                                    if l.info.is_linked() || r.info.is_linked() =>
+                                {
+                                    crate::types::weak::join_linked_range(self_ptr, txn)
+                                }
+                                _ => {}
+                            },
+                            _ => {}
+                        }
                     }
 
                     // check if this item is in a moved range
@@ -591,13 +626,31 @@ impl BlockPtr {
                             // /** @type {AbstractType<any>} */ (item.parent)._searchMarker = null
                         }
                         ItemContent::Type(branch) => {
-                            branch.store = this.parent.as_branch().and_then(|b| b.store.clone())
+                            branch.store = this.parent.as_branch().and_then(|b| b.store.clone());
+                            let ptr = if this.info.is_deleted() {
+                                BranchPtr::from(branch)
+                            } else {
+                                // if current node is alive register is as such
+                                txn.store.register(branch)
+                            };
+                            #[cfg(feature = "weak")]
+                            if let TypeRef::WeakLink(source) = &ptr.type_ref {
+                                source.materialize(txn, ptr);
+                            }
                         }
                         _ => {
                             // other types don't define integration-specific actions
                         }
                     }
                     txn.add_changed_type(parent_ref, this.parent_sub.clone());
+                    if this.info.is_linked() {
+                        if let Some(links) = txn.store.linked_by.get(&self_ptr).cloned() {
+                            // notify links about changes
+                            for link in links.iter() {
+                                txn.add_changed_type(*link, this.parent_sub.clone());
+                            }
+                        }
+                    }
                     let parent_deleted = if let TypePtr::Branch(ptr) = &this.parent {
                         if let Some(block) = ptr.item {
                             block.is_deleted()
@@ -653,6 +706,7 @@ impl BlockPtr {
                     && v1.right == Some(other_ptr)
                     && v1.is_deleted() == v2.is_deleted()
                     && (v1.redone.is_none() && v2.redone.is_none())
+                    && (!v1.info.is_linked() && !v2.info.is_linked()) // linked items cannot be merged
                     && v1.moved == v2.moved
                     && v1.content.try_squash(&v2.content)
                 {
@@ -729,7 +783,7 @@ impl TryFrom<BlockPtr> for Any {
         if let Block::Item(item) = value.deref() {
             match &item.content {
                 ItemContent::Any(v) => Ok(v[0].clone()),
-                ItemContent::Embed(v) => Ok(*v.clone()),
+                ItemContent::Embed(v) => Ok(v.clone()),
                 ItemContent::Binary(v) => Ok(v.clone().into()),
                 ItemContent::JSON(v) => Ok(v[0].clone().into()),
                 ItemContent::String(v) => Ok(v.to_string().into()),
@@ -749,9 +803,9 @@ impl TryFrom<BlockPtr> for Any {
 /// [BlockSlice], this can be done with help of transaction (see: [Store::materialize]).
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub(crate) struct BlockSlice {
-    ptr: BlockPtr,
-    start: u32,
-    end: u32,
+    pub ptr: BlockPtr,
+    pub start: u32,
+    pub end: u32,
 }
 
 impl BlockSlice {
@@ -772,6 +826,24 @@ impl BlockSlice {
         let mut id = *self.ptr.id();
         id.clock += self.end;
         id
+    }
+
+    /// Attempts to trim current block slice to provided range of IDs.
+    /// Returns true if current block slice range has been modified as a result of this action.
+    pub fn try_trim(&mut self, from: &ID, to: &ID) -> bool {
+        let id = self.ptr.id();
+        let mut changed = false;
+        let start_clock = id.clock + self.start;
+        let end_clock = id.clock + self.end;
+        if id.client == from.client && from.clock > start_clock && from.clock <= end_clock {
+            self.start = from.clock - start_clock;
+            changed = true;
+        }
+        if id.client == to.client && to.clock >= start_clock && to.clock < end_clock {
+            self.end = end_clock - to.clock;
+            changed = true;
+        }
+        changed
     }
 
     /// Returns true when current [BlockSlice] left boundary is equal to the boundary of the
@@ -796,21 +868,6 @@ impl BlockSlice {
     /// by current [BlockSlice].
     pub fn len(&self) -> u32 {
         self.end - self.start + 1
-    }
-
-    /// Returns an underlying [BlockPtr].
-    pub fn as_ptr(&self) -> BlockPtr {
-        self.ptr
-    }
-
-    /// Returns an offset within contained [Block] marking the (inclusive) beginning of this slice.
-    pub fn start(&self) -> u32 {
-        self.start
-    }
-
-    /// Returns an offset within contained [Block] marking the (inclusive) end of this slice.
-    pub fn end(&self) -> u32 {
-        self.end
     }
 
     /// Checks if an underlying [Block] has been marked as deleted.
@@ -1152,17 +1209,20 @@ impl ItemPosition {
     }
 }
 
+/// Bit flag (9st bit) for item that is linked by Weak Link references
+const ITEM_FLAG_LINKED: u16 = 0b0001_0000_0000;
+
 /// Bit flag (4th bit) for a marked item - not used atm.
-const ITEM_FLAG_MARKED: u8 = 0b0000_1000;
+const ITEM_FLAG_MARKED: u16 = 0b0000_1000;
 
 /// Bit flag (3rd bit) for a tombstoned (deleted) item.
-const ITEM_FLAG_DELETED: u8 = 0b0000_0100;
+const ITEM_FLAG_DELETED: u16 = 0b0000_0100;
 
 /// Bit flag (2nd bit) for an item, which contents are considered countable.
-const ITEM_FLAG_COUNTABLE: u8 = 0b0000_0010;
+const ITEM_FLAG_COUNTABLE: u16 = 0b0000_0010;
 
 /// Bit flag (1st bit) used for an item which should be kept - not used atm.
-const ITEM_FLAG_KEEP: u8 = 0b0000_0001;
+const ITEM_FLAG_KEEP: u16 = 0b0000_0001;
 
 /// Collection of flags attached to an [Item] - most of them are serializable and define specific
 /// properties of an associated [Item], like:
@@ -1172,25 +1232,25 @@ const ITEM_FLAG_KEEP: u8 = 0b0000_0001;
 /// - Should item be kept untouched eg. because it's being tracked by [UndoManager].
 #[repr(transparent)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub struct ItemFlags(u8);
+pub struct ItemFlags(u16);
 
 impl ItemFlags {
-    pub fn new(source: u8) -> Self {
+    pub fn new(source: u16) -> Self {
         ItemFlags(source)
     }
 
     #[inline]
-    fn set(&mut self, value: u8) {
+    fn set(&mut self, value: u16) {
         self.0 |= value
     }
 
     #[inline]
-    fn clear(&mut self, value: u8) {
+    fn clear(&mut self, value: u16) {
         self.0 &= !value
     }
 
     #[inline]
-    fn check(&self, value: u8) -> bool {
+    fn check(&self, value: u16) -> bool {
         self.0 & value == value
     }
 
@@ -1238,11 +1298,26 @@ impl ItemFlags {
     pub fn is_marked(&self) -> bool {
         self.check(ITEM_FLAG_MARKED)
     }
+
+    #[inline]
+    pub fn is_linked(&self) -> bool {
+        self.check(ITEM_FLAG_LINKED)
+    }
+
+    #[inline]
+    pub fn set_linked(&mut self) {
+        self.set(ITEM_FLAG_LINKED)
+    }
+
+    #[inline]
+    pub fn clear_linked(&mut self) {
+        self.clear(ITEM_FLAG_LINKED)
+    }
 }
 
-impl Into<u8> for ItemFlags {
+impl Into<u16> for ItemFlags {
     #[inline]
-    fn into(self) -> u8 {
+    fn into(self) -> u16 {
         self.0
     }
 }
@@ -1538,7 +1613,6 @@ impl SplittableString {
             match kind {
                 OffsetKind::Bytes => len,
                 OffsetKind::Utf16 => self.utf16_len(),
-                OffsetKind::Utf32 => self.unicode_len(),
             }
         }
     }
@@ -1551,10 +1625,6 @@ impl SplittableString {
     #[inline(always)]
     pub fn utf16_len(&self) -> usize {
         self.encode_utf16().count()
-    }
-
-    pub fn unicode_len(&self) -> usize {
-        self.content.chars().count()
     }
 
     /// Maps given offset onto block offset. This means, that given an `offset` provided
@@ -1577,11 +1647,6 @@ impl SplittableString {
                 }
                 i
             }
-            OffsetKind::Utf32 => self
-                .content
-                .chars()
-                .take(offset as usize)
-                .fold(0, |sum, c| sum + c.len_utf16() as u32),
         }
     }
 
@@ -1646,23 +1711,9 @@ pub(crate) fn split_str(str: &str, offset: usize, kind: OffsetKind) -> (&str, &s
         off
     }
 
-    fn map_unicode_offset(str: &str, offset: u32) -> u32 {
-        let mut off = 0;
-        let mut i = 0;
-        for c in str.chars() {
-            if i >= offset {
-                break;
-            }
-            off += c.len_utf8();
-            i += 1;
-        }
-        off as u32
-    }
-
     let off = match kind {
         OffsetKind::Bytes => offset,
         OffsetKind::Utf16 => map_utf16_offset(str, offset as u32) as usize,
-        OffsetKind::Utf32 => map_unicode_offset(str, offset as u32) as usize,
     };
     str.split_at(off)
 }
@@ -1688,7 +1739,7 @@ pub enum ItemContent {
     JSON(Vec<String>),
 
     /// A single embedded JSON-like primitive value.
-    Embed(Box<Any>),
+    Embed(Any),
 
     /// Formatting attribute entry. Format attributes are not considered countable and don't
     /// contribute to an overall length of a collection they are applied to.
@@ -1787,7 +1838,7 @@ impl ItemContent {
                     let chars = v.chars().skip(offset).take(buf.len());
                     let mut j = 0;
                     for c in chars {
-                        buf[j] = Value::Any(Any::String(c.to_string().into_boxed_str()));
+                        buf[j] = Value::Any(Any::from(c.to_string()));
                         j += 1;
                     }
                     j
@@ -1796,15 +1847,15 @@ impl ItemContent {
                     let mut i = offset;
                     let mut j = 0;
                     while i < elements.len() && j < buf.len() {
-                        let elem = &elements[i];
-                        buf[j] = Value::Any(Any::String(elem.clone().into_boxed_str()));
+                        let elem = elements[i].as_str();
+                        buf[j] = Value::Any(Any::from(elem));
                         i += 1;
                         j += 1;
                     }
                     j
                 }
                 ItemContent::Binary(v) => {
-                    buf[0] = Value::Any(Any::Buffer(v.clone().into_boxed_slice()));
+                    buf[0] = Value::Any(Any::from(v.deref()));
                     1
                 }
                 ItemContent::Doc(_, doc) => {
@@ -1817,7 +1868,7 @@ impl ItemContent {
                     1
                 }
                 ItemContent::Embed(v) => {
-                    buf[0] = Value::Any(*v.clone());
+                    buf[0] = Value::Any(v.clone());
                     1
                 }
                 ItemContent::Move(_) => 0,
@@ -1830,7 +1881,7 @@ impl ItemContent {
     /// Reads all contents stored in this item and returns them. Use [ItemContent::read] if you need
     /// to read only slice of elements from the corresponding item.
     pub fn get_content(&self) -> Vec<Value> {
-        let len = self.len(OffsetKind::Utf32) as usize;
+        let len = self.len(OffsetKind::Utf16) as usize;
         let mut values = vec![Value::default(); len];
         let read = self.read(0, &mut values);
         if read == len {
@@ -1844,16 +1895,14 @@ impl ItemContent {
     pub fn get_first(&self) -> Option<Value> {
         match self {
             ItemContent::Any(v) => v.first().map(|a| Value::Any(a.clone())),
-            ItemContent::Binary(v) => Some(Value::Any(Any::Buffer(v.clone().into_boxed_slice()))),
+            ItemContent::Binary(v) => Some(Value::Any(Any::from(v.deref()))),
             ItemContent::Deleted(_) => None,
             ItemContent::Move(_) => None,
             ItemContent::Doc(_, v) => Some(Value::YDoc(v.clone())),
-            ItemContent::JSON(v) => v
-                .first()
-                .map(|v| Value::Any(Any::String(v.clone().into_boxed_str()))),
-            ItemContent::Embed(v) => Some(Value::Any(*v.clone())),
+            ItemContent::JSON(v) => v.first().map(|v| Value::Any(Any::from(v.deref()))),
+            ItemContent::Embed(v) => Some(Value::Any(v.clone())),
             ItemContent::Format(_, _) => None,
-            ItemContent::String(v) => Some(Value::Any(Any::String(v.clone().into()))),
+            ItemContent::String(v) => Some(Value::Any(Any::from(v.clone().as_str()))),
             ItemContent::Type(c) => Some(BranchPtr::from(c).into()),
         }
     }
@@ -1862,16 +1911,14 @@ impl ItemContent {
     pub fn get_last(&self) -> Option<Value> {
         match self {
             ItemContent::Any(v) => v.last().map(|a| Value::Any(a.clone())),
-            ItemContent::Binary(v) => Some(Value::Any(Any::Buffer(v.clone().into_boxed_slice()))),
+            ItemContent::Binary(v) => Some(Value::Any(Any::from(v.deref()))),
             ItemContent::Deleted(_) => None,
             ItemContent::Move(_) => None,
             ItemContent::Doc(_, v) => Some(Value::YDoc(v.clone())),
-            ItemContent::JSON(v) => v
-                .last()
-                .map(|v| Value::Any(Any::String(v.clone().into_boxed_str()))),
-            ItemContent::Embed(v) => Some(Value::Any(*v.clone())),
+            ItemContent::JSON(v) => v.last().map(|v| Value::Any(Any::from(v.as_str()))),
+            ItemContent::Embed(v) => Some(Value::Any(v.clone())),
             ItemContent::Format(_, _) => None,
-            ItemContent::String(v) => Some(Value::Any(Any::String(v.clone().into()))),
+            ItemContent::String(v) => Some(Value::Any(Any::from(v.as_str()))),
             ItemContent::Type(c) => Some(BranchPtr::from(c).into()),
         }
     }
@@ -1898,7 +1945,7 @@ impl ItemContent {
                 };
                 encoder.write_string(slice)
             }
-            ItemContent::Embed(s) => encoder.write_json(s.as_ref()),
+            ItemContent::Embed(s) => encoder.write_json(s),
             ItemContent::JSON(s) => {
                 encoder.write_len(end - start + 1);
                 for i in start..=end {
@@ -1928,7 +1975,7 @@ impl ItemContent {
             ItemContent::Deleted(len) => encoder.write_len(*len),
             ItemContent::Binary(buf) => encoder.write_buf(buf),
             ItemContent::String(s) => encoder.write_string(s.as_str()),
-            ItemContent::Embed(s) => encoder.write_json(s.as_ref()),
+            ItemContent::Embed(s) => encoder.write_json(s),
             ItemContent::JSON(s) => {
                 encoder.write_len(s.len() as u32);
                 for json in s.iter() {
@@ -2163,10 +2210,14 @@ impl std::fmt::Display for Item {
             write!(f, ":")?;
         }
         if self.is_deleted() {
-            write!(f, " ~{}~)", &self.content)
+            write!(f, " ~{}~", &self.content)?;
         } else {
-            write!(f, " {})", &self.content)
+            write!(f, " {}", &self.content)?;
         }
+        if self.info.is_linked() {
+            write!(f, "|linked")?;
+        }
+        write!(f, ")")
     }
 }
 
@@ -2231,6 +2282,8 @@ impl std::fmt::Display for ItemContent {
                 TypeRef::XmlFragment => write!(f, "<xml fragment>"),
                 TypeRef::XmlHook => write!(f, "<xml hook>"),
                 TypeRef::XmlText => write!(f, "<xml text>"),
+                #[cfg(feature = "weak")]
+                TypeRef::WeakLink(s) => write!(f, "<weak({}..{})>", s.quote_start, s.quote_end),
                 _ => write!(f, "<undefined type ref>"),
             },
             ItemContent::Move(m) => std::fmt::Display::fmt(m.as_ref(), f),
@@ -2328,9 +2381,9 @@ where
 {
     type Return = T::Return;
 
-    fn into_content(mut self, txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
+    fn into_content(self, txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
         match self {
-            EmbedPrelim::Primitive(any) => (ItemContent::Embed(Box::new(any)), None),
+            EmbedPrelim::Primitive(any) => (ItemContent::Embed(any), None),
             EmbedPrelim::Shared(prelim) => {
                 let (branch, content) = prelim.into_content(txn);
                 let carrier = if let Some(carrier) = content {
@@ -2405,7 +2458,6 @@ mod test {
 
         assert_eq!(s.len(OffsetKind::Bytes), 34, "wrong byte length");
         assert_eq!(s.len(OffsetKind::Utf16), 21, "wrong UTF-16 length");
-        assert_eq!(s.len(OffsetKind::Utf32), 20, "wrong Unicode chars count");
     }
 
     #[test]
@@ -2420,16 +2472,11 @@ mod test {
 
         assert_eq!(s.len(OffsetKind::Bytes), 60, "wrong byte length");
         assert_eq!(s.len(OffsetKind::Utf16), 29, "wrong UTF-16 length");
-        assert_eq!(s.len(OffsetKind::Utf32), 28, "wrong Unicode chars count");
     }
 
     #[test]
     fn splittable_string_split_str() {
         let s: SplittableString = "Zażółć gęślą jaźń😀ありがとうございます".into();
-
-        let (a, b) = split_str(&s, 18, OffsetKind::Utf32);
-        assert_eq!(a, "Zażółć gęślą jaźń😀");
-        assert_eq!(b, "ありがとうございます");
 
         let (a, b) = split_str(&s, 19, OffsetKind::Utf16);
         assert_eq!(a, "Zażółć gęślą jaźń😀");

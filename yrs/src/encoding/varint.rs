@@ -1,11 +1,7 @@
-use crate::decoding::Read;
-use crate::encoding::Write;
-use crate::error::Error;
 use std::convert::TryInto;
 use std::mem::size_of;
-
-pub const F64_MAX_SAFE_INTEGER: f64 = (i64::pow(2, 53) - 1) as f64;
-pub const F64_MIN_SAFE_INTEGER: f64 = -F64_MAX_SAFE_INTEGER;
+use crate::encoding::read::{Error, Read};
+use crate::encoding::write::Write;
 
 pub trait VarInt: Sized + Copy {
     fn write<W: Write>(&self, w: &mut W);

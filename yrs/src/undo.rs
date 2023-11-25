@@ -9,7 +9,7 @@ use crate::{
 use std::cell::Cell;
 use std::collections::HashSet;
 use std::fmt::Formatter;
-use std::ops::Deref;
+use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -36,25 +36,28 @@ use std::time::{SystemTime, UNIX_EPOCH};
 ///    item finished.
 /// - [UndoManager::observe_item_popped], which is fired whenever [StackItem] is being from undo
 ///    manager as a result of calling either [UndoManager::undo] or [UndoManager::redo] method.
-pub struct UndoManager(Box<Inner>);
+pub struct UndoManager<M>(Box<Inner<M>>);
 
-struct Inner {
+struct Inner<M> {
     doc: Doc,
     scope: HashSet<BranchPtr>,
     options: Options,
-    undo_stack: Vec<StackItem>,
-    redo_stack: Vec<StackItem>,
+    undo_stack: UndoStack<M>,
+    redo_stack: UndoStack<M>,
     undoing: Cell<bool>,
     redoing: Cell<bool>,
     last_change: u64,
     on_after_transaction: Option<AfterTransactionSubscription>,
     on_destroy: Option<DestroySubscription>,
-    observer_added: Observer<Arc<dyn Fn(&TransactionMut, &Event) -> ()>>,
-    observer_updated: Observer<Arc<dyn Fn(&TransactionMut, &Event) -> ()>>,
-    observer_popped: Observer<Arc<dyn Fn(&TransactionMut, &Event) -> ()>>,
+    observer_added: Observer<Arc<dyn Fn(&TransactionMut, &mut Event<M>) -> ()>>,
+    observer_updated: Observer<Arc<dyn Fn(&TransactionMut, &mut Event<M>) -> ()>>,
+    observer_popped: Observer<Arc<dyn Fn(&TransactionMut, &mut Event<M>) -> ()>>,
 }
 
-impl UndoManager {
+impl<M> UndoManager<M>
+where
+    M: Default + 'static,
+{
     /// Creates a new instance of the [UndoManager] working in a `scope` of a particular shared
     /// type and document. While it's possible for undo manager to observe multiple shared types
     /// (see: [UndoManager::expand_scope]), it can only work with a single document at the same time.
@@ -77,8 +80,8 @@ impl UndoManager {
             doc: doc.clone(),
             scope: HashSet::from([scope]),
             options,
-            undo_stack: Vec::new(),
-            redo_stack: Vec::new(),
+            undo_stack: UndoStack::default(),
+            redo_stack: UndoStack::default(),
             undoing: Cell::new(false),
             redoing: Cell::new(false),
             last_change: 0,
@@ -88,7 +91,7 @@ impl UndoManager {
             observer_updated: Observer::new(),
             observer_popped: Observer::new(),
         });
-        let inner_ptr = inner.as_mut() as *mut Inner;
+        let inner_ptr = inner.as_mut() as *mut Inner<M>;
         inner
             .options
             .tracked_origins
@@ -108,7 +111,7 @@ impl UndoManager {
         UndoManager(inner)
     }
 
-    fn should_skip(inner: &Inner, txn: &TransactionMut) -> bool {
+    fn should_skip(inner: &Inner<M>, txn: &TransactionMut) -> bool {
         !(inner.options.capture_transaction)(txn)
             || !inner
                 .scope
@@ -120,7 +123,7 @@ impl UndoManager {
                 .unwrap_or(inner.options.tracked_origins.len() == 1) // tracked origins contain only undo manager itself
     }
 
-    fn handle_after_transaction(inner: &mut Inner, txn: &mut TransactionMut) {
+    fn handle_after_transaction(inner: &mut Inner<M>, txn: &mut TransactionMut) {
         if Self::should_skip(inner, txn) {
             return;
         }
@@ -179,8 +182,8 @@ impl UndoManager {
             }
         }
 
-        let last_op = stack.last().unwrap().clone();
-        let event = if undoing {
+        let last_op = stack.last_mut().unwrap();
+        let mut event = if undoing {
             Event::undo(
                 last_op,
                 txn.origin.clone(),
@@ -195,16 +198,16 @@ impl UndoManager {
         };
         if !extend {
             for cb in inner.observer_added.callbacks() {
-                cb(txn, &event);
+                cb(txn, &mut event);
             }
         } else {
             for cb in inner.observer_updated.callbacks() {
-                cb(txn, &event);
+                cb(txn, &mut event);
             }
         }
     }
 
-    fn handle_destroy(inner: *mut Inner) {
+    fn handle_destroy(inner: *mut Inner<M>) {
         let origin = Origin::from(inner as usize);
         let inner = unsafe { inner.as_mut().unwrap() };
         if inner.options.tracked_origins.remove(&origin) {
@@ -219,9 +222,9 @@ impl UndoManager {
     /// has been called.
     ///
     /// Returns a subscription object which - when dropped - will unregister provided callback.
-    pub fn observe_item_added<F>(&self, f: F) -> UndoEventSubscription
+    pub fn observe_item_added<F>(&self, f: F) -> UndoEventSubscription<M>
     where
-        F: Fn(&TransactionMut, &Event) -> () + 'static,
+        F: Fn(&TransactionMut, &mut Event<M>) -> () + 'static,
     {
         self.0.observer_added.subscribe(Arc::new(f))
     }
@@ -236,9 +239,9 @@ impl UndoManager {
     /// has passed.
     ///
     /// Returns a subscription object which - when dropped - will unregister provided callback.
-    pub fn observe_item_updated<F>(&self, f: F) -> UndoEventSubscription
+    pub fn observe_item_updated<F>(&self, f: F) -> UndoEventSubscription<M>
     where
-        F: Fn(&TransactionMut, &Event) -> () + 'static,
+        F: Fn(&TransactionMut, &mut Event<M>) -> () + 'static,
     {
         self.0.observer_updated.subscribe(Arc::new(f))
     }
@@ -252,9 +255,9 @@ impl UndoManager {
     /// removed as a result of [UndoManager::undo] or [UndoManager::redo] method.
     ///
     /// Returns a subscription object which - when dropped - will unregister provided callback.
-    pub fn observe_item_popped<F>(&self, f: F) -> UndoEventSubscription
+    pub fn observe_item_popped<F>(&self, f: F) -> UndoEventSubscription<M>
     where
-        F: Fn(&TransactionMut, &Event) -> () + 'static,
+        F: Fn(&TransactionMut, &mut Event<M>) -> () + 'static,
     {
         self.0.observer_popped.subscribe(Arc::new(f))
     }
@@ -308,7 +311,7 @@ impl UndoManager {
         Ok(())
     }
 
-    fn clear_item(scope: &HashSet<BranchPtr>, txn: &mut TransactionMut, stack_item: StackItem) {
+    fn clear_item(scope: &HashSet<BranchPtr>, txn: &mut TransactionMut, stack_item: StackItem<M>) {
         for ptr in stack_item.deletions.deleted_blocks(txn) {
             if ptr.is_item() && scope.iter().any(|b| b.is_parent_of(Some(ptr))) {
                 ptr.keep(false);
@@ -317,7 +320,7 @@ impl UndoManager {
     }
 
     pub fn as_origin(&self) -> Origin {
-        let mgr_ptr: *const Inner = &*self.0;
+        let mgr_ptr: *const Inner<M> = &*self.0;
         Origin::from(mgr_ptr as usize)
     }
 
@@ -370,16 +373,21 @@ impl UndoManager {
     pub fn undo(&mut self) -> Result<bool, TransactionAcqError> {
         let mut txn = self.0.doc.try_transact_mut_with(self.as_origin())?;
         self.0.undoing.set(true);
-        let result = Self::pop(&mut self.0.undo_stack, &mut txn, &self.0.scope);
+        let result = Self::pop(
+            &mut self.0.undo_stack,
+            &self.0.redo_stack,
+            &mut txn,
+            &self.0.scope,
+        );
         txn.commit();
-        let changed = if let Some(item) = result {
-            let e = Event::undo(
-                item,
+        let changed = if let Some(mut item) = result {
+            let mut e = Event::undo(
+                &mut item,
                 Some(self.as_origin()),
                 txn.changed_parent_types.clone(),
             );
             for cb in self.0.observer_popped.callbacks() {
-                cb(&txn, &e);
+                cb(&txn, &mut e);
             }
             true
         } else {
@@ -408,16 +416,21 @@ impl UndoManager {
     pub fn redo(&mut self) -> Result<bool, TransactionAcqError> {
         let mut txn = self.0.doc.try_transact_mut_with(self.as_origin())?;
         self.0.redoing.set(true);
-        let result = Self::pop(&mut self.0.redo_stack, &mut txn, &self.0.scope);
+        let result = Self::pop(
+            &mut self.0.redo_stack,
+            &self.0.undo_stack,
+            &mut txn,
+            &self.0.scope,
+        );
         txn.commit();
-        let changed = if let Some(item) = result {
-            let e = Event::redo(
-                item,
+        let changed = if let Some(mut item) = result {
+            let mut e = Event::redo(
+                &mut item,
                 Some(self.as_origin()),
                 txn.changed_parent_types.clone(),
             );
             for cb in self.0.observer_popped.callbacks() {
-                cb(&txn, &e);
+                cb(&txn, &mut e);
             }
             true
         } else {
@@ -428,10 +441,11 @@ impl UndoManager {
     }
 
     fn pop(
-        stack: &mut Vec<StackItem>,
+        stack: &mut UndoStack<M>,
+        other: &UndoStack<M>,
         txn: &mut TransactionMut,
         scope: &HashSet<BranchPtr>,
-    ) -> Option<StackItem> {
+    ) -> Option<StackItem<M>> {
         let mut result = None;
         while let Some(item) = stack.pop() {
             let mut to_redo = HashSet::<BlockPtr>::new();
@@ -475,7 +489,9 @@ impl UndoManager {
             let redo_copy = to_redo.clone();
             for ptr in to_redo {
                 let mut ptr = ptr;
-                change_performed |= ptr.redo(txn, &redo_copy, &item.insertions).is_some();
+                change_performed |= ptr
+                    .redo(txn, &redo_copy, &item.insertions, stack, other)
+                    .is_some();
             }
 
             // We want to delete in reverse order so that children are deleted before
@@ -495,7 +511,7 @@ impl UndoManager {
     }
 }
 
-impl std::fmt::Debug for UndoManager {
+impl<M: std::fmt::Debug> std::fmt::Debug for UndoManager<M> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let mut s = f.debug_struct("UndoManager");
         s.field("scope", &self.0.scope);
@@ -510,7 +526,36 @@ impl std::fmt::Debug for UndoManager {
     }
 }
 
-pub type UndoEventSubscription = Subscription<Arc<dyn Fn(&TransactionMut, &Event) -> ()>>;
+#[repr(transparent)]
+#[derive(Debug, Clone, Eq, PartialEq, Default)]
+pub(crate) struct UndoStack<M>(Vec<StackItem<M>>);
+
+impl<M> Deref for UndoStack<M> {
+    type Target = Vec<StackItem<M>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<M> DerefMut for UndoStack<M> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl<M> UndoStack<M> {
+    pub fn is_deleted(&self, id: &ID) -> bool {
+        for item in self.0.iter() {
+            if item.deletions.is_deleted(id) {
+                return true;
+            }
+        }
+        false
+    }
+}
+
+pub type UndoEventSubscription<T> = Subscription<Arc<dyn Fn(&TransactionMut, &mut Event<T>) -> ()>>;
 
 /// Set of options used to configure [UndoManager].
 #[derive(Clone)]
@@ -560,31 +605,39 @@ impl Default for Options {
 /// item creation. They can also be created explicitly by calling [UndoManager::reset], which marks
 /// the end of the last stack item batch.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
-pub struct StackItem {
+pub struct StackItem<T> {
     deletions: DeleteSet,
     insertions: DeleteSet,
+
+    /// A custom user metadata that can be attached to a particular [StackItem]. It can be used
+    /// to carry over the additional information (such as ie. user cursor position) between
+    /// undo/redo operations.
+    pub meta: T,
 }
 
-impl StackItem {
-    fn new(deletions: DeleteSet, insertions: DeleteSet) -> StackItem {
+impl<M: Default> StackItem<M> {
+    fn new(deletions: DeleteSet, insertions: DeleteSet) -> Self {
         StackItem {
             deletions,
             insertions,
+            meta: M::default(),
         }
     }
 
-    /// A descriptor of all IDs and ranges of the updates deleted within a scope of a current [StackItem].
+    /// A set of identifiers of element deleted at part of the timeframe current [StackItem] is
+    /// responsible for.
     pub fn deletions(&self) -> &DeleteSet {
         &self.deletions
     }
 
-    /// A descriptor of all IDs and ranges of the updates created within a scope of a current [StackItem].
+    /// A set of identifiers of element inserted at part of the timeframe current [StackItem] is
+    /// responsible for.
     pub fn insertions(&self) -> &DeleteSet {
         &self.insertions
     }
 }
 
-impl std::fmt::Display for StackItem {
+impl<M> std::fmt::Display for StackItem<M> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "StackItem(")?;
         if !self.deletions.is_empty() {
@@ -597,16 +650,22 @@ impl std::fmt::Display for StackItem {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct Event {
-    pub item: StackItem,
-    pub origin: Option<Origin>,
-    pub kind: EventKind,
-    pub changed_parent_types: Vec<BranchPtr>,
+#[derive(Debug)]
+pub struct Event<'a, M> {
+    /// Field representing the updates (both intertions and deletions), that happened over the
+    /// scope current event is related to.
+    pub item: &'a mut StackItem<M>,
+    origin: Option<Origin>,
+    kind: EventKind,
+    changed_parent_types: Vec<BranchPtr>,
 }
 
-impl Event {
-    fn undo(item: StackItem, origin: Option<Origin>, changed_parent_types: Vec<BranchPtr>) -> Self {
+impl<'a, M> Event<'a, M> {
+    fn undo(
+        item: &'a mut StackItem<M>,
+        origin: Option<Origin>,
+        changed_parent_types: Vec<BranchPtr>,
+    ) -> Self {
         Event {
             item,
             origin,
@@ -615,7 +674,11 @@ impl Event {
         }
     }
 
-    fn redo(item: StackItem, origin: Option<Origin>, changed_parent_types: Vec<BranchPtr>) -> Self {
+    fn redo(
+        item: &'a mut StackItem<M>,
+        origin: Option<Origin>,
+        changed_parent_types: Vec<BranchPtr>,
+    ) -> Self {
         Event {
             item,
             origin,
@@ -624,16 +687,36 @@ impl Event {
         }
     }
 
+    /// Checks if given shared collection has changed in the scope of currently notified update.
     pub fn has_changed<T: AsRef<Branch>>(&self, target: &T) -> bool {
         let ptr = BranchPtr::from(target.as_ref());
         self.changed_parent_types.contains(&ptr)
     }
+
+    /// Returns a transaction origin related to this update notification.
+    pub fn origin(&self) -> Option<&Origin> {
+        self.origin.as_ref()
+    }
+
+    /// Returns an enum informing if current update is result of undo or redo operation.
+    pub fn kind(&self) -> EventKind {
+        self.kind
+    }
+
+    /// Returns info about all changed shared collections.
+    pub fn changed_parent_types(&self) -> &[BranchPtr] {
+        &self.changed_parent_types
+    }
 }
 
+/// Enum which informs if correlated [Event] was produced as a result of either undo or redo
+/// operation over [UndoManager].
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, Ord, PartialOrd, Eq, PartialEq)]
 pub enum EventKind {
+    /// Referenced event was result of [UndoManager::undo] operation.
     Undo,
+    /// Referenced event was result of [UndoManager::redo] operation.
     Redo,
 }
 
@@ -642,18 +725,15 @@ mod test {
     use crate::test_utils::exchange_updates;
     use crate::types::text::{Diff, YChange};
     use crate::types::{Attrs, ToJson};
-    use crate::undo::{Options, UndoManager};
+    use crate::undo::Options;
     use crate::updates::decoder::Decode;
     use crate::{
-        Array, Doc, GetString, Map, MapPrelim, ReadTxn, StateVector, Text, TextPrelim, Transact,
-        Update, Xml, XmlElementPrelim, XmlElementRef, XmlFragment, XmlTextPrelim,
+        any, Any, Array, ArrayPrelim, Doc, GetString, Map, MapPrelim, MapRef, ReadTxn, StateVector,
+        Text, TextPrelim, TextRef, Transact, UndoManager, Update, Xml, XmlElementPrelim,
+        XmlElementRef, XmlFragment, XmlTextPrelim,
     };
-    use lib0::any;
-    use lib0::any::Any;
-    use std::cell::RefCell;
     use std::collections::HashMap;
     use std::convert::TryInto;
-    use std::rc::Rc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
@@ -870,7 +950,11 @@ mod test {
 
         exchange_updates(&[&d1, &d2]);
 
-        let map2 = array2.get(&d2.transact(), 0).unwrap().to_ymap().unwrap();
+        let map2 = array2
+            .get(&d2.transact(), 0)
+            .unwrap()
+            .cast::<MapRef>()
+            .unwrap();
         map2.insert(&mut d2.transact_mut(), "b", 2);
         exchange_updates(&[&d1, &d2]);
 
@@ -943,30 +1027,29 @@ mod test {
 
     #[test]
     fn undo_events() {
+        use crate::undo::UndoManager;
+        type Metadata = HashMap<String, usize>;
+
         let doc = Doc::with_client_id(1);
         let txt = doc.get_or_insert_text("test");
-        let mut mgr = UndoManager::new(&doc, &txt);
+        let mut mgr: UndoManager<Metadata> = UndoManager::new(&doc, &txt);
 
         let result = Arc::new(AtomicUsize::new(0));
         let counter = AtomicUsize::new(1);
-        let data = Rc::new(RefCell::new(HashMap::new()));
 
         let txt_clone = txt.clone();
-        let data_clone = data.clone();
         let _sub1 = mgr.observe_item_added(move |_, e| {
             assert!(e.has_changed(&txt_clone));
             let c = counter.fetch_add(1, Ordering::SeqCst);
-            let mut data = data_clone.borrow_mut();
-            data.insert(e.item.clone(), c);
+            let e = e.item.meta.entry("test".to_string()).or_default();
+            *e = c;
         });
 
         let txt_clone = txt.clone();
-        let data_clone = data.clone();
         let result_clone = result.clone();
         let _sub2 = mgr.observe_item_popped(move |_, e| {
             assert!(e.has_changed(&txt_clone));
-            let data = data_clone.borrow();
-            if let Some(&v) = data.get(&e.item) {
+            if let Some(&v) = e.item.meta.get("test") {
                 result_clone.store(v, Ordering::Relaxed);
             }
         });
@@ -1061,7 +1144,7 @@ mod test {
         let text = design
             .get(&doc.transact(), "text")
             .unwrap()
-            .to_ymap()
+            .cast::<MapRef>()
             .unwrap();
 
         {
@@ -1129,7 +1212,11 @@ mod test {
                 ("y".to_owned(), 0.into()),
             ])),
         );
-        let point = root.get(&doc.transact(), "a").unwrap().to_ymap().unwrap();
+        let point = root
+            .get(&doc.transact(), "a")
+            .unwrap()
+            .cast::<MapRef>()
+            .unwrap();
         mgr.reset();
 
         point.insert(&mut doc.transact_mut(), "x", 100);
@@ -1163,7 +1250,11 @@ mod test {
         assert_eq!(root.get(&doc.transact(), "a"), None);
 
         mgr.redo().unwrap(); // x=0, y=0
-        let point = root.get(&doc.transact(), "a").unwrap().to_ymap().unwrap();
+        let point = root
+            .get(&doc.transact(), "a")
+            .unwrap()
+            .cast::<MapRef>()
+            .unwrap();
 
         assert_eq!(actual, Any::from_json(r#"{"x":0,"y":0}"#).unwrap());
 
@@ -1191,11 +1282,11 @@ mod test {
             o.capture_timeout_millis = 0;
             o
         });
-        mgr.include_origin(ORIGIN.clone());
+        mgr.include_origin(ORIGIN);
 
         // create element
         {
-            let mut txn = doc.transact_mut_with(ORIGIN.clone());
+            let mut txn = doc.transact_mut_with(ORIGIN);
             let e = f.insert(&mut txn, 0, XmlElementPrelim::empty("test-node"));
             e.insert_attribute(&mut txn, "a", "100");
             e.insert_attribute(&mut txn, "b", "0");
@@ -1203,14 +1294,14 @@ mod test {
 
         // change one attribute
         {
-            let mut txn = doc.transact_mut_with(ORIGIN.clone());
+            let mut txn = doc.transact_mut_with(ORIGIN);
             let e: XmlElementRef = f.get(&txn, 0).unwrap().try_into().unwrap();
             e.insert_attribute(&mut txn, "a", "200");
         }
 
         // change both attributes
         {
-            let mut txn = doc.transact_mut_with(ORIGIN.clone());
+            let mut txn = doc.transact_mut_with(ORIGIN);
             let e: XmlElementRef = f.get(&txn, 0).unwrap().try_into().unwrap();
             e.insert_attribute(&mut txn, "a", "180");
             e.insert_attribute(&mut txn, "b", "50");
@@ -1364,7 +1455,7 @@ mod test {
         let doc = Doc::with_client_id(1);
         let f = doc.get_or_insert_xml_fragment("test");
         let mut mgr = UndoManager::new(&doc, &f);
-        mgr.include_origin(ORIGIN.clone());
+        mgr.include_origin(ORIGIN);
         {
             let mut txn = doc.transact_mut();
             let e = f.insert(&mut txn, 0, XmlElementPrelim::empty("test"));
@@ -1423,7 +1514,7 @@ mod test {
 
         exchange_updates(&[&d1, &d2]);
         let diff = txt2.diff(&d1.transact(), YChange::identity);
-        let nested2 = diff[0].insert.clone().to_ytext().unwrap();
+        let nested2 = diff[0].insert.clone().cast::<TextRef>().unwrap();
         assert_eq!(
             nested2.get_string(&d2.transact()),
             "initial text".to_string()
@@ -1431,5 +1522,120 @@ mod test {
 
         mgr.undo().unwrap();
         assert_eq!(nested.len(&d1.transact()), 0);
+    }
+
+    #[test]
+    fn github_issue_345() {
+        // https://github.com/y-crdt/y-crdt/issues/345
+        let doc = Doc::new();
+        let map = doc.get_or_insert_map("r");
+        let mut mgr = UndoManager::with_options(&doc, &map, Options::default());
+        mgr.include_origin(doc.client_id());
+
+        let s1 = map.insert(
+            &mut doc.transact_mut_with(doc.client_id()),
+            "s1",
+            MapPrelim::<i32>::new(),
+        );
+        mgr.reset();
+
+        let mut txn = doc.transact_mut_with(doc.client_id());
+        let a = s1.insert(&mut txn, "a", ArrayPrelim::default());
+        a.insert(&mut txn, 0, "a1");
+        drop(txn);
+        mgr.reset();
+
+        let mut txn = doc.transact_mut_with(doc.client_id());
+        let b = s1.insert(&mut txn, "b", ArrayPrelim::default());
+        b.insert(&mut txn, 0, "b1");
+        drop(txn);
+        mgr.reset();
+
+        b.insert(&mut doc.transact_mut_with(doc.client_id()), 1, "b2");
+        mgr.reset();
+
+        a.insert(&mut doc.transact_mut_with(doc.client_id()), 1, "a3");
+        mgr.reset();
+
+        a.insert(&mut doc.transact_mut_with(doc.client_id()), 2, "a4");
+        mgr.reset();
+
+        a.insert(&mut doc.transact_mut_with(doc.client_id()), 3, "a5");
+        mgr.reset();
+
+        let actual = map.to_json(&doc.transact());
+        assert_eq!(
+            actual,
+            any!({"s1": {"a": ["a1", "a3", "a4", "a5"], "b": ["b1", "b2"]}})
+        );
+
+        mgr.undo().unwrap();
+        mgr.undo().unwrap();
+        mgr.undo().unwrap();
+        mgr.undo().unwrap();
+        let actual = map.to_json(&doc.transact());
+        assert_eq!(actual, any!({"s1": {"a": ["a1"], "b": ["b1"]}}));
+
+        mgr.redo().unwrap();
+        let actual = map.to_json(&doc.transact());
+        assert_eq!(actual, any!({"s1": {"b": ["b1", "b2"], "a": ["a1"]}}));
+
+        mgr.redo().unwrap();
+        let actual = map.to_json(&doc.transact());
+        assert_eq!(actual, any!({"s1": {"a": ["a1", "a3"], "b": ["b1", "b2"]}}));
+
+        mgr.redo().unwrap();
+        let actual = map.to_json(&doc.transact());
+        assert_eq!(
+            actual,
+            any!({"s1": {"a": ["a1", "a3", "a4"], "b": ["b1", "b2"]}})
+        );
+
+        mgr.redo().unwrap();
+        let actual = map.to_json(&doc.transact());
+        assert_eq!(
+            actual,
+            any!({"s1": {"a": ["a1", "a3", "a4", "a5"], "b": ["b1", "b2"]}})
+        );
+    }
+
+    #[test]
+    fn github_issue_345_part_2() {
+        // https://github.com/y-crdt/y-crdt/issues/345
+        let d = Doc::new();
+        let r = d.get_or_insert_map("r");
+
+        let s1 = r.insert(&mut d.transact_mut(), "s1", MapPrelim::<i32>::new());
+
+        let mut mgr = UndoManager::with_options(&d, &r, Options::default());
+        {
+            let mut txn = d.transact_mut();
+            let b1 = s1.insert(&mut txn, "b1", MapPrelim::<i32>::new());
+            b1.insert(&mut txn, "f1", 11);
+        }
+        mgr.reset();
+
+        s1.remove(&mut d.transact_mut(), "b1");
+        mgr.reset();
+
+        {
+            let mut txn = d.transact_mut();
+            let b1 = s1.insert(&mut txn, "b1", MapPrelim::<i32>::new());
+            b1.insert(&mut txn, "f1", 20);
+        }
+        mgr.reset();
+
+        let actual = r.to_json(&d.transact());
+        assert_eq!(actual, any!({"s1": {"b1": {"f1": 20}}}));
+
+        mgr.undo().unwrap();
+        let actual = r.to_json(&d.transact());
+        assert_eq!(actual, any!({"s1": {}}));
+        assert!(mgr.can_undo(), "should be able to undo");
+
+        mgr.undo().unwrap();
+        let actual = r.to_json(&d.transact());
+        assert_eq!(actual, any!({"s1": {"b1": {"f1": 11}}}));
+        assert!(mgr.can_undo(), "should be able to undo to the init state");
     }
 }

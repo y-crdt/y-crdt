@@ -53,6 +53,11 @@ typedef struct Transaction {} Transaction;
 typedef struct TransactionMut {} TransactionMut;
 
 /**
+ * Iterator structure used by weak link unquote.
+ */
+typedef struct YWeakIter {} YWeakIter;
+
+/**
  * Iterator structure used by shared array data type.
  */
 typedef struct YArrayIter {} YArrayIter;
@@ -79,7 +84,8 @@ typedef struct YXmlAttrIter {} YXmlAttrIter;
 typedef struct YXmlTreeWalker {} YXmlTreeWalker;
 
 typedef struct YUndoManager {} YUndoManager;
-
+typedef struct LinkSource {} LinkSource;
+typedef struct Unquote {} Unquote;
 typedef struct StickyIndex {} StickyIndex;
 
 
@@ -171,6 +177,11 @@ typedef struct StickyIndex {} StickyIndex;
 #define Y_DOC 7
 
 /**
+ * Flag used by `YInput` and `YOutput` to tag content, which is an `YWeakLink` shared type.
+ */
+#define Y_WEAK_LINK 8
+
+/**
  * Flag used to mark a truthy boolean numbers.
  */
 #define Y_TRUE 1
@@ -191,12 +202,6 @@ typedef struct StickyIndex {} StickyIndex;
  * UTF-16 chars of encoded string.
  */
 #define Y_OFFSET_UTF16 1
-
-/**
- * Flag used by `YOptions` to determine, that text operations offsets and length will be counted by
- * by UTF-32 chars of encoded string.
- */
-#define Y_OFFSET_UTF32 2
 
 /**
  * Error code: couldn't read data from input stream.
@@ -315,7 +320,6 @@ typedef struct YOptions {
    *
    * - `Y_ENCODING_BYTES`
    * - `Y_ENCODING_UTF16`
-   * - `Y_ENCODING_UTF32`
    */
   uint8_t encoding;
   /**
@@ -361,7 +365,7 @@ typedef union YOutputContent {
   double num;
   int64_t integer;
   char *str;
-  char *buf;
+  const char *buf;
   struct YOutput *array;
   struct YMapEntry *map;
   Branch *y_type;
@@ -546,6 +550,8 @@ typedef struct YMapInputData {
   struct YInput *values;
 } YMapInputData;
 
+typedef LinkSource Weak;
+
 typedef union YInputContent {
   uint8_t flag;
   double num;
@@ -555,6 +561,7 @@ typedef union YInputContent {
   struct YInput *values;
   struct YMapInputData map;
   YDoc *doc;
+  const Weak *weak;
 } YInputContent;
 
 /**
@@ -581,6 +588,7 @@ typedef struct YInput {
    * - [Y_ARRAY] for cells which contents should be used to initialize a `YArray` shared type.
    * - [Y_MAP] for cells which contents should be used to initialize a `YMap` shared type.
    * - [Y_DOC] for cells which contents should be used to nest a `YDoc` sub-document.
+   * - [Y_WEAK_LINK] for cells which contents should be used to nest a `YWeakLink` sub-document.
    */
   int8_t tag;
   /**
@@ -671,12 +679,22 @@ typedef struct YXmlTextEvent {
   const TransactionMut *txn;
 } YXmlTextEvent;
 
+/**
+ * Event pushed into callbacks registered with `yweak_observe` function. It contains
+ * all an event changes of the underlying transaction.
+ */
+typedef struct YWeakLinkEvent {
+  const void *inner;
+  const TransactionMut *txn;
+} YWeakLinkEvent;
+
 typedef union YEventContent {
   struct YTextEvent text;
   struct YMapEvent map;
   struct YArrayEvent array;
   struct YXmlEvent xml_elem;
   struct YXmlTextEvent xml_text;
+  struct YWeakLinkEvent weak;
 } YEventContent;
 
 typedef struct YEvent {
@@ -881,15 +899,53 @@ typedef struct YEventKeyChange {
 } YEventKeyChange;
 
 typedef struct YUndoManagerOptions {
-  uint32_t capture_timeout_millis;
+  int32_t capture_timeout_millis;
 } YUndoManagerOptions;
 
+/**
+ * Event type related to `UndoManager` observer operations, such as `yundo_manager_observe_popped`
+ * and `yundo_manager_observe_added`. It contains various informations about the context in which
+ * undo/redo operations are executed.
+ */
 typedef struct YUndoEvent {
+  /**
+   * Informs if current event is related to executed undo (`Y_KIND_UNDO`) or redo (`Y_KIND_REDO`)
+   * operation.
+   */
   char kind;
+  /**
+   * Origin assigned to a transaction, in context of which this event is being executed.
+   * Transaction origin is specified via `ydoc_write_transaction(doc, origin_len, origin)`.
+   */
   const char *origin;
+  /**
+   * Length of an `origin` field assigned to a transaction, in context of which this event is
+   * being executed.
+   * Transaction origin is specified via `ydoc_write_transaction(doc, origin_len, origin)`.
+   */
   uint32_t origin_len;
+  /**
+   * Set of identifiers of all insert operations that happened in a scope of a current undo/redo
+   * operation.
+   */
   struct YDeleteSet insertions;
+  /**
+   * Set of identifiers of all remove operations that happened in a scope of a current undo/redo
+   * operation.
+   */
   struct YDeleteSet deletions;
+  /**
+   * Pointer to a custom metadata object that can be passed between
+   * `yundo_manager_observe_popped` and `yundo_manager_observe_added`. It's useful for passing
+   * around custom user data ie. cursor position, that needs to be remembered and restored as
+   * part of undo/redo operations.
+   *
+   * This field always starts with no value (`NULL`) assigned to it and can be set/unset in
+   * corresponding callback calls. In such cases it's up to a programmer to handle allocation
+   * and deallocation of memory that this pointer will point to. Not releasing it properly may
+   * lead to memory leaks.
+   */
+  void *meta;
 } YUndoEvent;
 
 /**
@@ -1041,7 +1097,7 @@ YTransaction *ydoc_read_transaction(YDoc *doc);
  *
  * `origin_len` and `origin` are optional parameters to specify a byte sequence used to mark
  * the origin of this transaction (eg. you may decide to give different origins for transaction
- * applying remote updates). These can be used by event handlers or `UndoManager` to perform
+ * applying remote updates). These can be used by event handlers or `YUndoManager` to perform
  * specific actions. If origin should not be set, call `ydoc_write_transaction(doc, 0, NULL)`.
  *
  * Returns `NULL` if read-write transaction couldn't be created, i.e. when another transaction is
@@ -1068,6 +1124,13 @@ YTransaction *ybranch_write_transaction(Branch *branch);
  * transaction is already opened.
  */
 YTransaction *ybranch_read_transaction(Branch *branch);
+
+/**
+ * Check if current branch is still alive (returns `Y_TRUE`, otherwise `Y_FALSE`).
+ * If it was deleted, this branch pointer is no longer a valid pointer and cannot be used to
+ * execute any functions using it.
+ */
+uint8_t ytransaction_alive(const YTransaction *txn, Branch *branch);
 
 /**
  * Returns a list of subdocs existing within current document.
@@ -1898,6 +1961,12 @@ struct YInput yinput_yxmltext(char *str);
 struct YInput yinput_ydoc(YDoc *doc);
 
 /**
+ * Function constructor used to create a string `YInput` cell with weak reference to another
+ * element(s) living inside of the same document.
+ */
+struct YInput yinput_weak(const Weak *weak);
+
+/**
  * Attempts to read the value for a given `YOutput` pointer as a `YDocRef` reference to a nested
  * document.
  */
@@ -2012,6 +2081,15 @@ Branch *youtput_read_ytext(const struct YOutput *val);
 Branch *youtput_read_yxmltext(const struct YOutput *val);
 
 /**
+ * Attempts to read the value for a given `YOutput` pointer as an `YWeakRef`.
+ *
+ * Returns a null pointer in case when a value stored under current `YOutput` cell
+ * is not an `YWeakRef`. Underlying heap resources are released automatically as part of
+ * [youtput_destroy] destructor.
+ */
+Branch *youtput_read_yweak(const struct YOutput *val);
+
+/**
  * Subscribes a given callback function `cb` to changes made by this `YText` instance. Callbacks
  * are triggered whenever a `ytransaction_commit` is called.
  * Returns a subscription ID which can be then used to unsubscribe this callback by using
@@ -2033,9 +2111,8 @@ uint32_t ymap_observe(const Branch *map, void *state, void (*cb)(void*, const st
  * Returns a subscription ID which can be then used to unsubscribe this callback by using
  * `yarray_unobserve` function.
  */
-uint32_t yarray_observe(const Branch *array,
-                        void *state,
-                        void (*cb)(void*, const struct YArrayEvent*));
+uint32_t yarray_observe(const Branch *array, void *state, void (*cb)(void*,
+                                                                     const struct YArrayEvent*));
 
 /**
  * Subscribes a given callback function `cb` to changes made by this `YXmlElement` instance.
@@ -2053,9 +2130,8 @@ uint32_t yxmlelem_observe(const Branch *xml,
  * Returns a subscription ID which can be then used to unsubscribe this callback by using
  * `yxmltext_unobserve` function.
  */
-uint32_t yxmltext_observe(const Branch *xml,
-                          void *state,
-                          void (*cb)(void*, const struct YXmlTextEvent*));
+uint32_t yxmltext_observe(const Branch *xml, void *state, void (*cb)(void*,
+                                                                     const struct YXmlTextEvent*));
 
 /**
  * Subscribes a given callback function `cb` to changes made by this shared type instance as well
@@ -2068,6 +2144,12 @@ uint32_t yxmltext_observe(const Branch *xml,
 uint32_t yobserve_deep(Branch *ytype,
                        void *state,
                        void (*cb)(void*, uint32_t, const struct YEvent*));
+
+/**
+ * Releases a callback subscribed via `yweak_observe` function represented by passed
+ * observer parameter.
+ */
+void yweak_unobserve(const Branch *txt, uint32_t subscription_id);
 
 /**
  * Releases a callback subscribed via `ytext_observe` function represented by passed
@@ -2360,5 +2442,44 @@ void ysticky_index_read(const YStickyIndex *pos,
                         const YTransaction *txn,
                         Branch **out_branch,
                         uint32_t *out_index);
+
+void yweak_destroy(const Weak *weak);
+
+struct YOutput *yweak_deref(const Branch *map_link, const YTransaction *txn);
+
+YWeakIter *yweak_iter(const Branch *array_link, const YTransaction *txn);
+
+void yweak_iter_destroy(YWeakIter *iter);
+
+struct YOutput *yweak_iter_next(YWeakIter *iter);
+
+char *yweak_string(const Branch *text_link, const YTransaction *txn);
+
+char *yweak_xml_string(const Branch *xml_text_link, const YTransaction *txn);
+
+/**
+ * Subscribes a given callback function `cb` to changes made by this `YText` instance. Callbacks
+ * are triggered whenever a `ytransaction_commit` is called.
+ * Returns a subscription ID which can be then used to unsubscribe this callback by using
+ * `yweak_unobserve` function.
+ */
+uint32_t yweak_observe(const Branch *weak, void *state, void (*cb)(void*,
+                                                                   const struct YWeakLinkEvent*));
+
+const Weak *ymap_link(const Branch *map, const YTransaction *txn, const char *key);
+
+const Weak *ytext_quote(const Branch *text,
+                        YTransaction *txn,
+                        uint32_t start_index,
+                        uint32_t end_index,
+                        int8_t start_exclusive,
+                        int8_t end_exclusive);
+
+const Weak *yarray_quote(const Branch *array,
+                         YTransaction *txn,
+                         uint32_t start_index,
+                         uint32_t end_index,
+                         int8_t start_exclusive,
+                         int8_t end_exclusive);
 
 #endif

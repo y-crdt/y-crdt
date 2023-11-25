@@ -1,4 +1,4 @@
-use crate::number::{Signed, SignedVarInt, VarInt};
+use crate::encoding::varint::{Signed, SignedVarInt, VarInt};
 
 impl Write for Vec<u8> {
     fn write_all(&mut self, buf: &[u8]) {

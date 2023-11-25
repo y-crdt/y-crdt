@@ -6,18 +6,14 @@ use crate::types::{Branch, ToJson, TypePtr, TypeRef};
 use crate::update::{BlockCarrier, Update};
 use crate::updates::decoder::{Decode, Decoder, DecoderV1};
 use crate::updates::encoder::Encode;
-use crate::{
-    ArrayPrelim, Doc, GetString, Map, MapPrelim, ReadTxn, StateVector, Transact, Xml,
-    XmlElementRef, XmlTextRef, ID,
-};
-use lib0::any::Any;
-use lib0::decoding::Read;
+use crate::{ArrayPrelim, Doc, GetString, Map, MapPrelim, MapRef, ReadTxn, StateVector, Transact, Xml, XmlElementRef, XmlTextRef, ID, Any};
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::convert::TryInto;
 use std::fs::File;
 use std::io::BufReader;
 use std::rc::Rc;
+use crate::encoding::read::Read;
 
 #[test]
 fn text_insert_delete() {
@@ -151,7 +147,7 @@ fn map_set() {
             None,
             TypePtr::Named("test".into()),
             Some("k1".into()),
-            ItemContent::Any(vec![Any::String("v1".into())]),
+            ItemContent::Any(vec![Any::from("v1")]),
         )
         .into(),
         Item::new(
@@ -162,7 +158,7 @@ fn map_set() {
             None,
             TypePtr::Named("test".into()),
             Some("k2".into()),
-            ItemContent::Any(vec![Any::String("v2".into())]),
+            ItemContent::Any(vec![Any::from("v2")]),
         )
         .into(),
     ];
@@ -386,7 +382,11 @@ fn negative_zero_decoding_v2() {
     let mut txn = doc.transact_mut();
 
     root.insert(&mut txn, "sequence", MapPrelim::<bool>::new()); //NOTE: This is how I put nested map.
-    let sequence = root.get(&txn, "sequence").unwrap().to_ymap().unwrap();
+    let sequence = root
+        .get(&txn, "sequence")
+        .unwrap()
+        .cast::<MapRef>()
+        .unwrap();
     sequence.insert(&mut txn, "id", "V9Uk9pxUKZIrW6cOkC0Rg".to_string());
     sequence.insert(&mut txn, "cuts", ArrayPrelim::<_, Any>::from([]));
     sequence.insert(&mut txn, "name", "new sequence".to_string());
@@ -421,11 +421,6 @@ fn test_small_data_set() {
 #[test]
 fn test_medium_data_set() {
     test_data_set("../assets/bench-input/medium-test-dataset.bin")
-}
-
-//#[test]
-fn test_large_data_set() {
-    test_data_set("./benches/input/large-test-dataset.bin")
 }
 
 fn test_data_set<P: AsRef<std::path::Path>>(path: P) {

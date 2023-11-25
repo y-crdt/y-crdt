@@ -477,8 +477,8 @@ impl BlockIter {
         let parent = TypePtr::Branch(self.branch);
         let right = self.right();
         let left = self.left();
-        let (content, remainder) = value.into_content(txn);
-        let inner_ref = if let ItemContent::Type(inner_ref) = &content {
+        let (mut content, remainder) = value.into_content(txn);
+        let inner_ref = if let ItemContent::Type(inner_ref) = &mut content {
             Some(BranchPtr::from(inner_ref))
         } else {
             None

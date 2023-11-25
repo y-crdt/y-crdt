@@ -49,7 +49,7 @@ struct AnySerializer;
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum AnySerializeError {
-    #[error("u64s cannot be represented as Any")]
+    #[error("integers above i64::MAX cannot be represented as Any")]
     UnrepresentableInt,
     #[error("Any only supports Strings as map keys")]
     MapKeyNotString,
@@ -99,7 +99,7 @@ impl Serializer for AnySerializer {
 
     #[inline]
     fn serialize_i64(self, v: i64) -> Result<Self::Ok, Self::Error> {
-        Ok(Any::BigInt(v))
+        Ok(Any::from(v))
     }
 
     #[inline]
@@ -206,10 +206,10 @@ impl Serializer for AnySerializer {
     where
         T: Serialize,
     {
-        Ok(Any::Map(Box::new(HashMap::from([(
+        Ok(Any::from(HashMap::from([(
             variant.to_string(),
             value.serialize(AnySerializer)?,
-        )]))))
+        )])))
     }
 
     #[inline]
@@ -305,7 +305,7 @@ impl SerializeSeq for AnyArraySerializer {
     }
 
     fn end(self) -> Result<Self::Ok, Self::Error> {
-        Ok(Any::Array(self.array.into_boxed_slice()))
+        Ok(Any::from(self.array))
     }
 }
 
@@ -456,10 +456,10 @@ impl SerializeStructVariant for AnyStructVariantSerializer {
 mod test {
     use super::*;
     use crate::any::Any;
-    use crate::serde::to_any;
     use serde::Serialize;
     use serde_json::json;
     use std::collections::HashMap;
+    use std::sync::Arc;
 
     #[test]
     fn test_serialize_any_to_bool() {
@@ -508,46 +508,43 @@ mod test {
     #[test]
     fn test_serialize_any_to_array() {
         assert_eq!(
-            serde_json::to_string(&Any::Array(
-                vec![Any::Bool(true), Any::BigInt(1)].into_boxed_slice()
-            ))
-            .unwrap(),
-            "[true,1]"
+            serde_json::to_string(&Any::from(vec![Any::from(true), Any::from(1)])).unwrap(),
+            "[true,1.0]"
         );
     }
 
     #[test]
     fn test_serialize_any_to_map() {
         assert_eq!(
-            serde_json::to_value(&Any::Map(Box::new(HashMap::from([
-                ("key1".into(), Any::Bool(true)),
-                ("key2".into(), Any::BigInt(1))
-            ]))))
+            serde_json::to_value(&Any::from(HashMap::from([
+                ("key1".into(), Any::from(true)),
+                ("key2".into(), Any::from(1))
+            ])))
             .unwrap(),
-            json!({"key1":true, "key2":1})
+            json!({"key1":true, "key2":1.0})
         );
     }
 
     #[test]
     fn test_serialize_any_to_complex_map() {
         assert_eq!(
-            serde_json::to_value(&Any::Map(Box::new(HashMap::from([
-                ("key1".into(), Any::Bool(true)),
-                ("key2".into(), Any::BigInt(1)),
+            serde_json::to_value(&Any::from(HashMap::from([
+                ("key1".into(), Any::from(true)),
+                ("key2".into(), Any::from(1)),
                 (
                     "key3".into(),
-                    Any::Map(Box::new(HashMap::from([
-                        ("key4".into(), Any::Bool(true)),
-                        ("key5".into(), Any::BigInt(1))
-                    ])))
+                    Any::from(HashMap::from([
+                        ("key4".into(), Any::from(true)),
+                        ("key5".into(), Any::from(1))
+                    ]))
                 ),
                 (
                     "key6".into(),
-                    Any::Array(vec![Any::Bool(true), Any::BigInt(1)].into_boxed_slice())
+                    Any::from(vec![Any::from(true), Any::from(1)])
                 )
-            ]))))
+            ])))
             .unwrap(),
-            json!({"key1": true, "key2":1, "key3":{"key4":true, "key5":1}, "key6": [true,1]})
+            json!({"key1": true, "key2":1.0, "key3":{"key4":true, "key5":1.0}, "key6": [true,1.0]})
         );
     }
 
@@ -582,27 +579,27 @@ mod test {
             VariantB,
         }
 
-        let any = Any::Map(Box::new(HashMap::from([
-            ("bool".to_string(), Any::Bool(true)),
-            ("int".to_string(), Any::BigInt(1)),
-            ("negative_int".to_string(), Any::BigInt(-1)),
-            ("max_int".to_string(), Any::BigInt(i64::MAX)),
-            ("min_int".to_string(), Any::BigInt(i64::MIN)),
-            ("real_number".to_string(), Any::Number(-123.2387f64)),
-            ("max_number".to_string(), Any::Number(f64::MIN)),
-            ("min_number".to_string(), Any::Number(f64::MAX)),
+        let any = Any::from(HashMap::from([
+            ("bool".to_string(), Any::from(true)),
+            ("int".to_string(), Any::from(1)),
+            ("negative_int".to_string(), Any::from(-1)),
+            ("max_int".to_string(), Any::from(i64::MAX)),
+            ("min_int".to_string(), Any::from(i64::MIN)),
+            ("real_number".to_string(), Any::from(-123.2387f64)),
+            ("max_number".to_string(), Any::from(f64::MIN)),
+            ("min_number".to_string(), Any::from(f64::MAX)),
             ("null".to_string(), Any::Null),
-            ("some".to_string(), Any::Bool(false)),
+            ("some".to_string(), Any::from(false)),
             (
                 "nested".to_string(),
-                Any::Map(Box::new(HashMap::from([
-                    ("int".to_string(), Any::BigInt(100)),
-                    ("other".to_string(), Any::Number(100.0)),
-                ]))),
+                Any::from(HashMap::from([
+                    ("int".to_string(), Any::from(100)),
+                    ("other".to_string(), Any::from(100.0)),
+                ])),
             ),
             ("enum_a".to_string(), "VariantA".into()),
             ("enum_b".to_string(), "VariantB".into()),
-        ])));
+        ]));
 
         assert_eq!(
             any,
@@ -637,19 +634,16 @@ mod test {
 
         let any: Any = HashMap::from([(
             "array".to_string(),
-            Any::Array(
-                vec![
-                    Any::Map(Box::new(HashMap::from([(
-                        "array".to_string(),
-                        Any::Array(vec![].into_boxed_slice()),
-                    )]))),
-                    Any::Map(Box::new(HashMap::from([(
-                        "array".to_string(),
-                        Any::Array(vec![].into_boxed_slice()),
-                    )]))),
-                ]
-                .into_boxed_slice(),
-            ),
+            Any::from(vec![
+                Any::from(HashMap::from([(
+                    "array".to_string(),
+                    Any::Array(Arc::<[Any; 0]>::default()),
+                )])),
+                Any::from(HashMap::from([(
+                    "array".to_string(),
+                    Any::Array(Arc::<[Any; 0]>::default()),
+                )])),
+            ]),
         )])
         .into();
 
@@ -697,27 +691,27 @@ mod test {
 
     #[test]
     fn test_serialize_any_to_any() {
-        let any = Any::Map(Box::new(HashMap::from([
-            ("bool".to_string(), Any::Bool(true)),
-            ("int".to_string(), Any::BigInt(1)),
-            ("negative_int".to_string(), Any::BigInt(-1)),
-            ("max_int".to_string(), Any::BigInt(i64::MAX)),
-            ("min_int".to_string(), Any::BigInt(i64::MIN)),
-            ("real_number".to_string(), Any::Number(-123.2387f64)),
-            ("max_number".to_string(), Any::Number(f64::MIN)),
-            ("min_number".to_string(), Any::Number(f64::MAX)),
+        let any = Any::from(HashMap::from([
+            ("bool".to_string(), Any::from(true)),
+            ("int".to_string(), Any::from(1)),
+            ("negative_int".to_string(), Any::from(-1)),
+            ("max_int".to_string(), Any::from(i64::MAX)),
+            ("min_int".to_string(), Any::from(i64::MIN)),
+            ("real_number".to_string(), Any::from(-123.2387f64)),
+            ("max_number".to_string(), Any::from(f64::MIN)),
+            ("min_number".to_string(), Any::from(f64::MAX)),
             ("null".to_string(), Any::Null),
-            ("some".to_string(), Any::Bool(false)),
+            ("some".to_string(), Any::from(false)),
             (
                 "nested".to_string(),
-                Any::Map(Box::new(HashMap::from([
-                    ("int".to_string(), Any::BigInt(100)),
-                    ("other".to_string(), Any::Number(100.0)),
-                ]))),
+                Any::from(HashMap::from([
+                    ("int".to_string(), Any::from(100)),
+                    ("other".to_string(), Any::from(100.0)),
+                ])),
             ),
             ("enum_a".to_string(), "VariantA".into()),
             ("enum_b".to_string(), "VariantB".into()),
-        ])));
+        ]));
 
         assert_eq!(any, to_any(&any.clone()).unwrap())
     }
