@@ -14,8 +14,10 @@ Project organization:
 
 Other projects using *yrs*:
 
-- [ypy](https://github.com/y-crdt/ypy) - Python bindings.
-- [yrb](https://github.com/y-crdt/yrb) - Ruby bindings.
+- [ypy](https://github.com/y-crdt/ypy) - Python bindings
+- [pycrdt](https://github.com/davidbrochart/pycrdt/) - Python bindings
+- [yrb](https://github.com/y-crdt/yrb) - Ruby bindings
+- [ydotnet](https://github.com/LSViana/ydotnet) - .NET bindings
 
 ## Feature parity with Yjs project
 
