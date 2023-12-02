@@ -2764,8 +2764,6 @@ impl Drop for YOutput {
 
 impl From<Value> for YOutput {
     fn from(v: Value) -> Self {
-        // println!("Matching From for YOutput");
-
         match v {
             Value::Any(v) => Self::from(v),
             Value::YText(v) => Self::from(v),
@@ -2783,8 +2781,6 @@ impl From<Value> for YOutput {
 
 impl From<Any> for YOutput {
     fn from(v: Any) -> Self {
-        // println!("Matching Any for YOutput");
-
         unsafe {
             match v {
                 Any::Null => YOutput {
@@ -2814,17 +2810,12 @@ impl From<Any> for YOutput {
                     len: 1,
                     value: YOutputContent { integer: v },
                 },
-                Any::String(v) => {
-                    // println!("String length is {0}", v.len());
-                    // println!("String is {0}", CString::new(v.as_ref()).unwrap().to_str().unwrap());
-
-                    YOutput {
-                        tag: Y_JSON_STR,
-                        len: v.len() as u32,
-                        value: YOutputContent {
-                            str: CString::new(v.as_ref()).unwrap().into_raw(),
-                        },
-                    }
+                Any::String(v) => YOutput {
+                    tag: Y_JSON_STR,
+                    len: v.len() as u32,
+                    value: YOutputContent {
+                        str: CString::new(v.as_ref()).unwrap().into_raw(),
+                    },
                 },
                 Any::Buffer(v) => YOutput {
                     tag: Y_JSON_BUF,
@@ -3061,7 +3052,7 @@ pub unsafe extern "C" fn yinput_long(integer: i64) -> YInput {
 /// and doesn't release any on its own, therefore its up to a caller to free resources once
 /// a structure is no longer needed.
 #[no_mangle]
-pub unsafe extern "C" fn yinput_string(str: *const c_char) -> YInput {    
+pub unsafe extern "C" fn yinput_string(str: *const c_char) -> YInput {
     YInput {
         tag: Y_JSON_STR,
         len: 1,
@@ -3301,26 +3292,6 @@ pub unsafe extern "C" fn youtput_read_binary(val: *const YOutput) -> *const c_ch
     } else {
         std::ptr::null()
     }
-}
-
-/// Attempts to read the value for a given `YOutput` pointer as a JSON-like `null` value.
-/// 
-/// Returns `true` if the value is `null`, `false` otherwise.
-#[no_mangle]
-pub unsafe extern "C" fn youtput_is_json_null(val: *const YOutput) -> bool {
-    let v = val.as_ref().unwrap();
-
-    v.tag == Y_JSON_NULL
-}
-
-/// Attempts to read the value for a given `YOutput` pointer as a JSON-like `undefined` value.
-///
-/// Returns `true` if the value is `undefined`, `false` otherwise.
-#[no_mangle]
-pub unsafe extern "C" fn youtput_is_json_undefined(val: *const YOutput) -> bool {
-    let v = val.as_ref().unwrap();
-
-    v.tag == Y_JSON_UNDEF
 }
 
 /// Attempts to read the value for a given `YOutput` pointer as a JSON-like array of `YOutput`
@@ -4488,9 +4459,7 @@ pub unsafe extern "C" fn yundo_manager_stop(mgr: *mut YUndoManager) {
 #[no_mangle]
 pub unsafe extern "C" fn yundo_manager_undo(mgr: *mut YUndoManager) -> u8 {
     let mgr = mgr.as_mut().unwrap();
-    
-    // TODO [LSViana] Check whether the value inside Ok() should be used as result.
-    // Currently, if no changes are applied, the result is Ok(false) which still returns true.
+
     match mgr.undo() {
         Ok(true) => Y_TRUE,
         Ok(false) => Y_FALSE,
@@ -5408,74 +5377,6 @@ impl RangeBounds<u32> for ExplicitRange {
             Bound::Included(&self.end_index)
         } else {
             Bound::Excluded(&self.end_index)
-        }
-    }
-
-    #[test]
-    fn observe_subdocs() {
-        unsafe {
-            let doc = ydoc_new();
-            let map = ymap(doc, CString::new("sub-docs").unwrap().as_ptr());
-
-            let sub_doc: *mut Doc;
-
-            extern "C" fn callback(state: *mut c_void, event: *mut YSubdocsEvent) {
-                unsafe {
-                    println!("{:?}", event);
-
-                    let added = (&*event).added;
-                    let added_id = ydoc_id(*added);
-                    let x = 1;
-                }
-            }
-
-            let subscription = ydoc_observe_subdocs(doc, null_mut(), callback);
-
-            let transaction = ydoc_write_transaction(doc, 0, null());
-
-            let sub_doc = ydoc_new();
-            let sub_doc_name = CString::new("sub-doc").unwrap().as_ptr();
-            let sub_doc_input = yinput_ydoc(sub_doc);
-            ymap_insert(map, transaction, sub_doc_name, &sub_doc_input);
-
-            ytransaction_commit(transaction);
-
-            let sub_doc_id = ydoc_id(sub_doc);
-            let x = 1;
-        }
-    }
-
-    #[test]
-    fn encode_state_from_snapshot_v1() {
-        unsafe {
-            let mut options = Options::default();
-            options.skip_gc = true;
-
-            let origin_doc = ydoc_new_with_options(options.clone().into());
-            let origin_text = ytext(origin_doc, CString::new("name").unwrap().as_ptr());
-            let origin_write_transaction = ydoc_write_transaction(origin_doc, 0, null());
-
-            ytext_insert(origin_text, origin_write_transaction, 0, CString::new("Lucas").unwrap().as_ptr(), null());
-
-            ytransaction_commit(origin_write_transaction);
-
-            let origin_read_transaction = ydoc_read_transaction(origin_doc);
-            let mut snapshot_length = 0;
-            let snapshot = ytransaction_snapshot(origin_read_transaction, &mut snapshot_length);
-
-            let mut state_diff_length = 0;
-            let state_diff = ytransaction_encode_state_from_snapshot_v1(origin_read_transaction, snapshot, snapshot_length, &mut state_diff_length);
-
-            let target_doc = ydoc_new_with_options(options.clone().into());
-            let target_text = ytext(target_doc, CString::new("name").unwrap().as_ptr());
-            let target_write_transaction = ydoc_write_transaction(target_doc, 0, null());
-
-            ytransaction_apply(target_write_transaction, state_diff, state_diff_length);
-
-            let target_text_string = CString::from_raw(ytext_string(target_text, target_write_transaction));
-            let target_text_string = target_text_string.to_str().unwrap();
-
-            assert_eq!("Lucas", target_text_string);
         }
     }
 }
