@@ -715,4 +715,11 @@ mod test {
 
         assert_eq!(any, to_any(&any.clone()).unwrap())
     }
+
+    #[test]
+    fn test_serialize_i64_to_any() {
+        let i64_value:i64 = 1;
+        let any = to_any(i64_value).unwrap();
+        assert_eq!(any, Any::BigInt(i64_value));
+    }
 }
