@@ -99,7 +99,7 @@ impl Serializer for AnySerializer {
 
     #[inline]
     fn serialize_i64(self, v: i64) -> Result<Self::Ok, Self::Error> {
-        Ok(Any::from(v))
+        Ok(Any::BigInt(v))
     }
 
     #[inline]
