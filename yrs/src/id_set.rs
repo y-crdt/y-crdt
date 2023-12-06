@@ -1,4 +1,4 @@
-use crate::block::{BlockPtr, ClientID, ID};
+use crate::block::{BlockCell, ClientID, ID};
 use crate::block_store::BlockStore;
 use crate::encoding::read::Error;
 use crate::store::Store;
@@ -453,8 +453,7 @@ impl<'a> From<&'a BlockStore> for DeleteSet {
             let mut deletes = IdRange::with_capacity(blocks.len());
             for block in blocks.iter() {
                 if block.is_deleted() {
-                    let start = block.id().clock;
-                    let end = start + block.len();
+                    let (start, end) = block.clock_range();
                     deletes.push(start..end);
                 }
             }
@@ -570,18 +569,17 @@ impl DeleteSet {
 
     pub(crate) fn try_squash_with(&mut self, store: &mut Store) {
         // try to merge deleted / gc'd items
-        for (client, range) in self.iter() {
-            if let Some(blocks) = store.blocks.get_mut(client) {
-                for r in range.iter().rev() {
-                    // start with merging the item next to the last deleted item
-                    let mut si = (blocks.len() - 1)
-                        .min(1 + blocks.find_pivot(r.end - 1).unwrap_or_default());
-                    let mut block = blocks.get(si);
-                    while si > 0 && block.id().clock >= r.start {
-                        blocks.squash_left(si);
-                        si -= 1;
-                        block = blocks.get(si);
-                    }
+        for (&client, range) in self.iter() {
+            let blocks = store.blocks.get_client_blocks_mut(client);
+            for r in range.iter().rev() {
+                // start with merging the item next to the last deleted item
+                let mut si =
+                    (blocks.len() - 1).min(1 + blocks.find_pivot(r.end - 1).unwrap_or_default());
+                let mut block = &blocks[si];
+                while si > 0 && block.clock_start() >= r.start {
+                    blocks.squash_left(si);
+                    si -= 1;
+                    block = &blocks[si];
                 }
             }
         }
@@ -632,7 +630,7 @@ impl<'ds, 'txn, 'doc> DeletedBlocks<'ds, 'txn, 'doc> {
 }
 
 impl<'ds, 'txn, 'doc> Iterator for DeletedBlocks<'ds, 'txn, 'doc> {
-    type Item = BlockPtr;
+    type Item = &'txn BlockCell;
 
     fn next(&mut self) -> Option<Self::Item> {
         if let Some(r) = self.current_range {
@@ -641,9 +639,9 @@ impl<'ds, 'txn, 'doc> Iterator for DeletedBlocks<'ds, 'txn, 'doc> {
                     .txn
                     .store
                     .blocks
-                    .get(&self.current_client_id?)
+                    .get_client(&self.current_client_id?)
                     .unwrap()
-                    .try_get(*idx)
+                    .get(*idx)
                 {
                     *idx += 1;
                     block
@@ -654,10 +652,15 @@ impl<'ds, 'txn, 'doc> Iterator for DeletedBlocks<'ds, 'txn, 'doc> {
                 }
             } else {
                 // first block for a particular client
-                let list = self.txn.store.blocks.get(&self.current_client_id?).unwrap();
+                let list = self
+                    .txn
+                    .store
+                    .blocks
+                    .get_client(&self.current_client_id?)
+                    .unwrap();
                 if let Some(idx) = list.find_pivot(r.start) {
-                    let mut block = list.get(idx);
-                    let clock = block.id().clock;
+                    let mut block = &list[idx];
+                    let clock = block.clock_start();
 
                     // check if we don't need to cut first block
                     if clock < r.start {
@@ -667,6 +670,7 @@ impl<'ds, 'txn, 'doc> Iterator for DeletedBlocks<'ds, 'txn, 'doc> {
                             .blocks
                             .split_block_inner(block, r.start - clock)
                         {
+                            //TODO: instead of block splitting, return block slice
                             self.txn.merge_blocks.push(*right_ptr.id());
                             block = right_ptr;
                         }
@@ -681,7 +685,7 @@ impl<'ds, 'txn, 'doc> Iterator for DeletedBlocks<'ds, 'txn, 'doc> {
             };
 
             // check if this is the last block for a current client
-            let clock = block.id().clock;
+            let clock = block.clock_start();
             let block_len = block.len();
             if clock > r.end {
                 // move to the next range

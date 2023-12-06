@@ -1,5 +1,4 @@
-use crate::block::{Block, BlockPtr, Item, ItemContent, Prelim, ID};
-use crate::block_store::{Snapshot, StateVector};
+use crate::block::{Item, ItemContent, ItemPtr, Prelim, ID};
 use crate::doc::DocAddr;
 use crate::error::Error;
 use crate::event::SubdocsEvent;
@@ -255,7 +254,7 @@ pub struct TransactionMut<'doc> {
     pub(crate) delete_set: DeleteSet,
     /// We store the reference that last moved an item. This is needed to compute the delta
     /// when multiple ContentMove move the same item.
-    pub(crate) prev_moved: HashMap<BlockPtr, BlockPtr>,
+    pub(crate) prev_moved: HashMap<ItemPtr, ItemPtr>,
     /// All types that were directly modified (property added or child inserted/deleted).
     /// New types are not included in this Set.
     pub(crate) changed: HashMap<TypePtr, HashSet<Option<Arc<str>>>>,
@@ -391,8 +390,8 @@ impl<'doc> TransactionMut<'doc> {
     pub(crate) fn apply_delete(&mut self, ds: &DeleteSet) -> Option<DeleteSet> {
         let mut unapplied = DeleteSet::new();
         for (client, ranges) in ds.iter() {
-            if let Some(mut blocks) = self.store.blocks.get_mut(client) {
-                let state = blocks.get_state();
+            if let Some(mut blocks) = self.store.blocks.get_client_mut(client) {
+                let state = blocks.clock();
 
                 for range in ranges.iter() {
                     let clock = range.start;
@@ -405,17 +404,18 @@ impl<'doc> TransactionMut<'doc> {
                         // We can ignore the case of GC and Delete structs, because we are going to skip them
                         if let Some(mut index) = blocks.find_pivot(clock) {
                             // We can ignore the case of GC and Delete structs, because we are going to skip them
-                            let ptr = blocks.get(index);
-                            if let Block::Item(item) = ptr.clone().deref_mut() {
+                            let ptr = &mut blocks[index];
+                            if let Some(item) = ptr.as_item() {
                                 // split the first item if necessary
                                 if !item.is_deleted() && item.id.clock < clock {
                                     let store = self.store_mut();
                                     if let Some(split) =
-                                        store.blocks.split_block_inner(ptr, clock - item.id.clock)
+                                        store.blocks.split_block_inner(item, clock - item.id.clock)
                                     {
-                                        if let Block::Item(item) = ptr.deref() {
+                                        if let Some(item) = ptr.as_item() {
                                             if item.moved.is_some() {
-                                                if let Some(&prev_moved) = self.prev_moved.get(&ptr)
+                                                if let Some(&prev_moved) =
+                                                    self.prev_moved.get(&item)
                                                 {
                                                     self.prev_moved.insert(split, prev_moved);
                                                 }
@@ -424,25 +424,26 @@ impl<'doc> TransactionMut<'doc> {
                                         index += 1;
                                         self.merge_blocks.push(*split.id());
                                     }
-                                    blocks = self.store_mut().blocks.get_mut(client).unwrap();
+                                    blocks =
+                                        self.store_mut().blocks.get_client_mut(client).unwrap();
                                 }
 
                                 while index < blocks.len() {
-                                    let block = blocks.get(index);
-                                    if let Block::Item(item) = block.clone().deref_mut() {
+                                    let block = &mut blocks[index];
+                                    if let Some(item) = block.as_item() {
                                         if item.id.clock < clock_end {
                                             if !item.is_deleted() {
                                                 if item.id.clock + item.len() > clock_end {
                                                     if let Some(split) =
                                                         self.store.blocks.split_block_inner(
-                                                            block,
+                                                            item,
                                                             clock_end - item.id.clock,
                                                         )
                                                     {
-                                                        if let Block::Item(item) = block.deref() {
+                                                        if let Some(item) = block.as_item() {
                                                             if item.moved.is_some() {
                                                                 if let Some(&prev_moved) =
-                                                                    self.prev_moved.get(&block)
+                                                                    self.prev_moved.get(&item)
                                                                 {
                                                                     self.prev_moved
                                                                         .insert(split, prev_moved);
@@ -452,7 +453,7 @@ impl<'doc> TransactionMut<'doc> {
                                                                 if let Some(links) = self
                                                                     .store
                                                                     .linked_by
-                                                                    .get(&block)
+                                                                    .get(&item)
                                                                     .cloned()
                                                                 {
                                                                     self.store
@@ -465,11 +466,11 @@ impl<'doc> TransactionMut<'doc> {
                                                         index += 1;
                                                     }
                                                 }
-                                                self.delete(block);
+                                                self.delete(item);
                                                 blocks = self
                                                     .store_mut()
                                                     .blocks
-                                                    .get_mut(client)
+                                                    .get_client_mut(client)
                                                     .unwrap();
                                                 // just to make the borrow checker happy
                                             }
@@ -497,78 +498,75 @@ impl<'doc> TransactionMut<'doc> {
 
     /// Delete item under given pointer.
     /// Returns true if block was successfully deleted, false if it was already deleted in the past.
-    pub(crate) fn delete(&mut self, block: BlockPtr) -> bool {
-        let mut ptr = block;
+    pub(crate) fn delete(&mut self, item: ItemPtr) -> bool {
         let mut recurse = Vec::new();
         let mut result = false;
 
         let store = self.store.deref();
-        if let Block::Item(item) = ptr.deref_mut() {
-            if !item.is_deleted() {
-                if item.parent_sub.is_none() && item.is_countable() {
-                    if let TypePtr::Branch(mut parent) = item.parent {
-                        parent.block_len -= item.len();
-                        parent.content_len -= item.content_len(store.options.offset_kind);
-                    }
+        if !item.is_deleted() {
+            if item.parent_sub.is_none() && item.is_countable() {
+                if let TypePtr::Branch(mut parent) = item.parent {
+                    parent.block_len -= item.len();
+                    parent.content_len -= item.content_len(store.options.offset_kind);
                 }
-
-                item.mark_as_deleted();
-                self.delete_set.insert(item.id.clone(), item.len());
-                if let Some(parent) = item.parent.as_branch() {
-                    self.add_changed_type(*parent, item.parent_sub.clone());
-                } else {
-                    // parent has been GC'ed
-                }
-
-                match &mut item.content {
-                    ItemContent::Doc(_, doc) => {
-                        let subdocs = self.subdocs.get_or_init();
-                        let addr = doc.addr();
-                        if subdocs.added.remove(&addr).is_none() {
-                            subdocs.removed.insert(addr, doc.clone());
-                        }
-                    }
-                    ItemContent::Type(inner) => {
-                        self.store.deregister(inner);
-                        let branch_ptr = BranchPtr::from(inner);
-                        #[cfg(feature = "weak")]
-                        if let TypeRef::WeakLink(source) = &branch_ptr.type_ref {
-                            source.unlink_all(self, branch_ptr);
-                        }
-                        let mut ptr = branch_ptr.start;
-                        self.changed.remove(&TypePtr::Branch(branch_ptr));
-
-                        while let Some(Block::Item(item)) = ptr.as_deref() {
-                            if !item.is_deleted() {
-                                recurse.push(ptr.unwrap());
-                            }
-
-                            ptr = item.right.clone();
-                        }
-
-                        for ptr in branch_ptr.map.values() {
-                            recurse.push(ptr.clone());
-                        }
-                    }
-                    ItemContent::Move(m) => m.delete(self, block),
-                    _ => { /* nothing to do for other content types */ }
-                }
-                if item.info.is_linked() {
-                    // notify links that current element has been removed
-                    if let Some(linked_by) = self.store.linked_by.remove(&block) {
-                        for link in linked_by {
-                            self.add_changed_type(link, item.parent_sub.clone());
-                            #[cfg(feature = "weak")]
-                            if let TypeRef::WeakLink(source) = &link.type_ref {
-                                if source.is_single() {
-                                    source.first_item.take();
-                                }
-                            }
-                        }
-                    }
-                }
-                result = true;
             }
+
+            item.mark_as_deleted();
+            self.delete_set.insert(item.id.clone(), item.len());
+            if let Some(parent) = item.parent.as_branch() {
+                self.add_changed_type(*parent, item.parent_sub.clone());
+            } else {
+                // parent has been GC'ed
+            }
+
+            match &mut item.content {
+                ItemContent::Doc(_, doc) => {
+                    let subdocs = self.subdocs.get_or_init();
+                    let addr = doc.addr();
+                    if subdocs.added.remove(&addr).is_none() {
+                        subdocs.removed.insert(addr, doc.clone());
+                    }
+                }
+                ItemContent::Type(inner) => {
+                    self.store.deregister(inner);
+                    let branch_ptr = BranchPtr::from(inner);
+                    #[cfg(feature = "weak")]
+                    if let TypeRef::WeakLink(source) = &branch_ptr.type_ref {
+                        source.unlink_all(self, branch_ptr);
+                    }
+                    let mut ptr = branch_ptr.start;
+                    self.changed.remove(&TypePtr::Branch(branch_ptr));
+
+                    while let Some(item) = ptr.as_deref() {
+                        if !item.is_deleted() {
+                            recurse.push(ptr.unwrap());
+                        }
+
+                        ptr = item.right.clone();
+                    }
+
+                    for ptr in branch_ptr.map.values() {
+                        recurse.push(ptr.clone());
+                    }
+                }
+                ItemContent::Move(m) => m.delete(self, item),
+                _ => { /* nothing to do for other content types */ }
+            }
+            if item.info.is_linked() {
+                // notify links that current element has been removed
+                if let Some(linked_by) = self.store.linked_by.remove(&item) {
+                    for link in linked_by {
+                        self.add_changed_type(link, item.parent_sub.clone());
+                        #[cfg(feature = "weak")]
+                        if let TypeRef::WeakLink(source) = &link.type_ref {
+                            if source.is_single() {
+                                source.first_item.take();
+                            }
+                        }
+                    }
+                }
+            }
+            result = true;
         }
 
         for &ptr in recurse.iter() {
@@ -603,7 +601,7 @@ impl<'doc> TransactionMut<'doc> {
             if let Some(mut pending) = store.pending.take() {
                 // check if we can apply something
                 for (client, &clock) in pending.missing.iter() {
-                    if clock < store.blocks.get_state(client) {
+                    if clock < store.blocks.get_clock(client) {
                         retry = true;
                         break;
                     }
@@ -654,12 +652,12 @@ impl<'doc> TransactionMut<'doc> {
         pos: &block::ItemPosition,
         value: T,
         parent_sub: Option<Arc<str>>,
-    ) -> BlockPtr {
+    ) -> ItemPtr {
         let (left, right, origin, id) = {
             let store = self.store_mut();
             let left = pos.left;
             let right = pos.right;
-            let origin = if let Some(Block::Item(item)) = pos.left.as_deref() {
+            let origin = if let Some(item) = pos.left.as_deref() {
                 Some(item.last_id())
             } else {
                 None
@@ -685,12 +683,11 @@ impl<'doc> TransactionMut<'doc> {
             parent_sub,
             content,
         );
-        let mut block_ptr = BlockPtr::from(&mut block);
+        let mut block_ptr = ItemPtr::from(&mut block);
 
         block_ptr.integrate(self, 0);
 
-        let local_block_list = self.store_mut().blocks.get_client_blocks_mut(id.client);
-        local_block_list.push(block);
+        self.store_mut().blocks.push_block(block);
 
         if let Some(remainder) = remainder {
             remainder.integrate(self, inner_ref.unwrap().into())
@@ -701,7 +698,7 @@ impl<'doc> TransactionMut<'doc> {
 
     fn call_type_observers(
         changed_parent_types: &mut Vec<BranchPtr>,
-        all_links: &HashMap<BlockPtr, HashSet<BranchPtr>>,
+        all_links: &HashMap<ItemPtr, HashSet<BranchPtr>>,
         branch: BranchPtr,
         changed_parents: &mut HashMap<BranchPtr, Vec<usize>>,
         event_cache: &mut Vec<Event>,
@@ -715,31 +712,26 @@ impl<'doc> TransactionMut<'doc> {
                 entries.push(event_cache.len() - 1);
             }
 
-            if let Some(ptr) = current.item {
-                match ptr.deref() {
-                    Block::Item(item) => {
-                        if item.info.is_linked() {
-                            if let Some(linked_by) = all_links.get(&ptr) {
-                                for &link in linked_by.iter() {
-                                    if visited.insert(link) {
-                                        Self::call_type_observers(
-                                            changed_parent_types,
-                                            all_links,
-                                            link,
-                                            changed_parents,
-                                            event_cache,
-                                            visited,
-                                        )
-                                    }
-                                }
+            if let Some(item) = current.item {
+                if item.info.is_linked() {
+                    if let Some(linked_by) = all_links.get(&item) {
+                        for &link in linked_by.iter() {
+                            if visited.insert(link) {
+                                Self::call_type_observers(
+                                    changed_parent_types,
+                                    all_links,
+                                    link,
+                                    changed_parents,
+                                    event_cache,
+                                    visited,
+                                )
                             }
                         }
-                        if let TypePtr::Branch(parent) = item.parent {
-                            current = parent;
-                            continue;
-                        }
                     }
-                    _ => {}
+                }
+                if let TypePtr::Branch(parent) = item.parent {
+                    current = parent;
+                    continue;
                 }
             }
 
@@ -823,7 +815,7 @@ impl<'doc> TransactionMut<'doc> {
         for (client, &clock) in self.after_state.iter() {
             let before_clock = self.before_state.get(client);
             if before_clock != clock {
-                let blocks = self.store.blocks.get_mut(client).unwrap();
+                let blocks = self.store.blocks.get_client_mut(client).unwrap();
                 let first_change = blocks.find_pivot(before_clock).unwrap().max(1);
                 let mut i = blocks.len() - 1;
                 while i >= first_change {
@@ -835,7 +827,7 @@ impl<'doc> TransactionMut<'doc> {
 
         // 7. get merge_structs and try to merge to left
         for id in self.merge_blocks.iter() {
-            if let Some(blocks) = self.store.blocks.get_mut(&id.client) {
+            if let Some(blocks) = self.store.blocks.get_client_mut(&id.client) {
                 if let Some(replaced_pos) = blocks.find_pivot(id.clock) {
                     if replaced_pos + 1 < blocks.len() {
                         blocks.squash_left(replaced_pos + 1);
@@ -891,15 +883,15 @@ impl<'doc> TransactionMut<'doc> {
         }
     }
 
-    fn try_gc(&self) {
-        let store = self.store();
+    fn try_gc(&mut self) {
+        let store = self.store_mut();
         for (client, range) in self.delete_set.iter() {
-            if let Some(blocks) = store.blocks.get(client) {
+            if let Some(blocks) = store.blocks.get_client_mut(client) {
                 for delete_item in range.iter().rev() {
                     let mut start = delete_item.start;
                     if let Some(mut i) = blocks.find_pivot(start) {
                         while i < blocks.len() {
-                            let mut block = blocks.get(i);
+                            let mut block = &mut blocks[i];
                             let len = block.len();
                             start += len;
                             if start > delete_item.end {
@@ -940,21 +932,18 @@ impl<'doc> TransactionMut<'doc> {
     pub(crate) fn split_by_snapshot(&mut self, snapshot: &Snapshot) {
         let mut merge_blocks: Vec<ID> = Vec::new();
         let blocks = &mut self.store.blocks;
-        for (client, &clock) in snapshot.state_map.iter() {
-            if let Some(list) = blocks.get(client) {
-                if let Some(ptr) = list.get_block(clock) {
-                    let ptr_clock = ptr.id().clock;
-                    if ptr_clock < clock {
-                        if let Some(right) = blocks.split_block_inner(ptr, clock - ptr_clock) {
-                            if let Block::Item(item) = ptr.deref() {
-                                if item.moved.is_some() {
-                                    if let Some(&prev_moved) = self.prev_moved.get(&ptr) {
-                                        self.prev_moved.insert(right, prev_moved);
-                                    }
-                                }
+        for (&client, &clock) in snapshot.state_map.iter() {
+            if let Some(ptr) = blocks.get_item(&ID::new(client, clock)) {
+                let ptr_clock = ptr.id.clock;
+                if ptr_clock < clock {
+                    if let Some(right) = blocks.split_block_inner(ptr, clock - ptr_clock) {
+                        if right.moved.is_some() {
+                            if let Some(&prev_moved) = self.prev_moved.get(&ptr) {
+                                self.prev_moved.insert(right, prev_moved);
                             }
-                            merge_blocks.push(*right.id());
                         }
+
+                        merge_blocks.push(*right.id());
                     }
                 }
             }
@@ -966,15 +955,13 @@ impl<'doc> TransactionMut<'doc> {
         }
     }
 
-    fn link(&mut self, mut source: BlockPtr, link: BranchPtr) {
-        if let Block::Item(item) = source.deref_mut() {
-            item.info.set_linked();
-            let links = self.store.linked_by.entry(source).or_default();
-            links.insert(link);
-        }
+    fn link(&mut self, mut source: ItemPtr, link: BranchPtr) {
+        source.info.set_linked();
+        let links = self.store.linked_by.entry(source).or_default();
+        links.insert(link);
     }
 
-    pub(crate) fn unlink(&mut self, mut source: BlockPtr, link: BranchPtr) {
+    pub(crate) fn unlink(&mut self, mut source: ItemPtr, link: BranchPtr) {
         let all_links = &mut self.store.linked_by;
         let prune = if let Some(linked_by) = all_links.get_mut(&source) {
             linked_by.remove(&link) && linked_by.is_empty()
@@ -983,13 +970,11 @@ impl<'doc> TransactionMut<'doc> {
         };
         if prune {
             all_links.remove(&source);
-            if let Block::Item(item) = source.deref_mut() {
-                item.info.clear_linked();
-                if item.is_countable() {
-                    // since linked property is blocking items from merging,
-                    // it may turn out that source item can be merged now
-                    self.merge_blocks.push(item.id);
-                }
+            source.info.clear_linked();
+            if source.is_countable() {
+                // since linked property is blocking items from merging,
+                // it may turn out that source item can be merged now
+                self.merge_blocks.push(source.id);
             }
         }
     }

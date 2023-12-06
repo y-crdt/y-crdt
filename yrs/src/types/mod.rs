@@ -12,7 +12,7 @@ use std::borrow::Borrow;
 pub use text::Text;
 pub use text::TextRef;
 
-use crate::block::{Block, BlockPtr, Item, ItemContent, ItemPosition, Prelim};
+use crate::block::{Item, ItemContent, ItemPosition, ItemPtr, Prelim};
 use crate::encoding::read::Error;
 use crate::store::WeakStoreRef;
 use crate::transaction::{Origin, TransactionMut};
@@ -405,7 +405,7 @@ pub struct Branch {
     ///   node.
     /// - [Text] and [XmlText]: this field point to a first chunk of text appended to collaborative
     ///   text data structure.
-    pub(crate) start: Option<BlockPtr>,
+    pub(crate) start: Option<ItemPtr>,
 
     /// A map component of this branch node, used by some of the specialized complex types
     /// including:
@@ -413,13 +413,13 @@ pub struct Branch {
     /// - [Map]: all of the map elements are based on this field. The value of each entry points
     ///   to the last modified value.
     /// - [XmlElement]: this field stores attributes assigned to a given XML node.
-    pub(crate) map: HashMap<Arc<str>, BlockPtr>,
+    pub(crate) map: HashMap<Arc<str>, ItemPtr>,
 
     /// Unique identifier of a current branch node. It can be contain either a named string - which
     /// means, this branch is a root-level complex data structure - or a block identifier. In latter
     /// case it means, that this branch is a complex type (eg. Map or Array) nested inside of
     /// another complex type.
-    pub(crate) item: Option<BlockPtr>,
+    pub(crate) item: Option<ItemPtr>,
 
     pub(crate) store: Option<WeakStoreRef>,
 
@@ -506,10 +506,11 @@ impl Branch {
     /// Returns a materialized value of non-deleted entry under a given `key` of a map component
     /// of a current root type.
     pub(crate) fn get<T: ReadTxn>(&self, _txn: &T, key: &str) -> Option<Value> {
-        let block = self.map.get(key)?;
-        match block.deref() {
-            Block::Item(item) if !item.is_deleted() => item.content.get_last(),
-            _ => None,
+        let item = self.map.get(key)?;
+        if !item.is_deleted() {
+            item.content.get_last()
+        } else {
+            None
         }
     }
 
@@ -520,7 +521,7 @@ impl Branch {
     /// be returned.
     pub(crate) fn get_at(&self, mut index: u32) -> Option<(&ItemContent, usize)> {
         let mut ptr = self.start.as_ref();
-        while let Some(Block::Item(item)) = ptr.map(BlockPtr::deref) {
+        while let Some(item) = ptr.map(ItemPtr::deref) {
             let len = item.len();
             if !item.is_deleted() && item.is_countable() {
                 if index < len {
@@ -538,19 +539,20 @@ impl Branch {
     /// Removes an entry under given `key` of a map component of a current root type, returning
     /// a materialized representation of value stored underneath if entry existed prior deletion.
     pub(crate) fn remove(&self, txn: &mut TransactionMut, key: &str) -> Option<Value> {
-        let ptr = *self.map.get(key)?;
-        let prev = match ptr.deref() {
-            Block::Item(item) if !item.is_deleted() => item.content.get_last(),
-            _ => None,
+        let item = *self.map.get(key)?;
+        let prev = if !item.is_deleted() {
+            item.content.get_last()
+        } else {
+            None
         };
-        txn.delete(ptr);
+        txn.delete(item);
         prev
     }
 
     /// Returns a first non-deleted item from an array component of a current root type.
     pub(crate) fn first(&self) -> Option<&Item> {
         let mut ptr = self.start.as_ref();
-        while let Some(Block::Item(item)) = ptr.map(BlockPtr::deref) {
+        while let Some(item) = ptr.map(ItemPtr::deref) {
             if item.is_deleted() {
                 ptr = item.right.as_ref();
             } else {
@@ -574,11 +576,11 @@ impl Branch {
     /// values will be `None`.
     fn index_to_ptr(
         txn: &mut TransactionMut,
-        mut ptr: Option<BlockPtr>,
+        mut ptr: Option<ItemPtr>,
         mut index: u32,
-    ) -> (Option<BlockPtr>, Option<BlockPtr>) {
+    ) -> (Option<ItemPtr>, Option<ItemPtr>) {
         let encoding = txn.store.options.offset_kind;
-        while let Some(Block::Item(item)) = ptr.as_deref() {
+        while let Some(item) = ptr {
             let content_len = item.content_len(encoding);
             if !item.is_deleted() && item.is_countable() {
                 if index == content_len {
@@ -591,14 +593,11 @@ impl Branch {
                     } else {
                         index
                     };
-                    let p = ptr.unwrap();
-                    let right = txn.store.blocks.split_block(p, index, encoding);
-                    if let Block::Item(item) = p.deref() {
-                        if let Some(_) = item.moved {
-                            if let Some(src) = right {
-                                if let Some(&prev_dst) = txn.prev_moved.get(&p) {
-                                    txn.prev_moved.insert(src, prev_dst);
-                                }
+                    let right = txn.store.blocks.split_block(item, index, encoding);
+                    if let Some(_) = item.moved {
+                        if let Some(src) = right {
+                            if let Some(&prev_dst) = txn.prev_moved.get(&item) {
+                                txn.prev_moved.insert(src, prev_dst);
                             }
                         }
                     }
@@ -621,38 +620,34 @@ impl Branch {
             Branch::index_to_ptr(txn, start, index)
         };
         while remaining > 0 {
-            if let Some(p) = ptr {
+            if let Some(item) = ptr {
                 let encoding = txn.store().options.offset_kind;
-                if let Block::Item(item) = p.deref() {
-                    if !item.is_deleted() {
-                        let content_len = item.content_len(encoding);
-                        let (l, r) = if remaining < content_len {
-                            let offset = if let ItemContent::String(s) = &item.content {
-                                s.block_offset(remaining, encoding)
-                            } else {
-                                remaining
-                            };
-                            remaining = 0;
-                            let new_right = txn.store.blocks.split_block(p, offset, encoding);
-                            if let Block::Item(item) = p.deref() {
-                                if let Some(_) = item.moved {
-                                    if let Some(src) = new_right {
-                                        if let Some(&prev_dst) = txn.prev_moved.get(&p) {
-                                            txn.prev_moved.insert(src, prev_dst);
-                                        }
-                                    }
+                if !item.is_deleted() {
+                    let content_len = item.content_len(encoding);
+                    let (l, r) = if remaining < content_len {
+                        let offset = if let ItemContent::String(s) = &item.content {
+                            s.block_offset(remaining, encoding)
+                        } else {
+                            remaining
+                        };
+                        remaining = 0;
+                        let new_right = txn.store.blocks.split_block(item, offset, encoding);
+                        if let Some(_) = item.moved {
+                            if let Some(src) = new_right {
+                                if let Some(&prev_dst) = txn.prev_moved.get(&item) {
+                                    txn.prev_moved.insert(src, prev_dst);
                                 }
                             }
-                            (p, new_right)
-                        } else {
-                            remaining -= content_len;
-                            (p, item.right.clone())
-                        };
-                        txn.delete(l);
-                        ptr = r;
+                        }
+                        (item, new_right)
                     } else {
-                        ptr = item.right.clone();
-                    }
+                        remaining -= content_len;
+                        (item, item.right.clone())
+                    };
+                    txn.delete(l);
+                    ptr = r;
+                } else {
+                    ptr = item.right.clone();
                 }
             } else {
                 break;
@@ -669,7 +664,7 @@ impl Branch {
         txn: &mut TransactionMut,
         index: u32,
         value: V,
-    ) -> BlockPtr {
+    ) -> ItemPtr {
         let (start, parent) = {
             if index <= self.len() {
                 (self.start, BranchPtr::from(self))
@@ -697,11 +692,10 @@ impl Branch {
         let parent = from;
         let mut child = to;
         let mut path = VecDeque::default();
-        while let Some(ptr) = &child.item {
+        while let Some(item) = &child.item {
             if parent.item == child.item {
                 break;
             }
-            let item = ptr.as_item().unwrap();
             let item_id = item.id.clone();
             let parent_sub = item.parent_sub.clone();
             child = *item.parent.as_branch().unwrap();
@@ -719,11 +713,7 @@ impl Branch {
                     if !ptr.is_deleted() && ptr.is_countable() {
                         i += ptr.len();
                     }
-                    if let Block::Item(cci) = ptr.deref() {
-                        c = cci.right;
-                    } else {
-                        break;
-                    }
+                    c = ptr.right;
                 }
                 path.push_front(PathSegment::Index(i));
             }
@@ -745,8 +735,8 @@ impl Branch {
         }
     }
 
-    pub(crate) fn is_parent_of(&self, mut ptr: Option<BlockPtr>) -> bool {
-        while let Some(Block::Item(i)) = ptr.as_deref() {
+    pub(crate) fn is_parent_of(&self, mut ptr: Option<ItemPtr>) -> bool {
+        while let Some(i) = ptr.as_deref() {
             if let Some(parent) = i.parent.as_branch() {
                 if parent.deref() == self {
                     return true;
@@ -1056,7 +1046,7 @@ impl std::fmt::Display for Branch {
 
 #[derive(Debug)]
 pub(crate) struct Entries<'a, B, T> {
-    iter: std::collections::hash_map::Iter<'a, Arc<str>, BlockPtr>,
+    iter: std::collections::hash_map::Iter<'a, Arc<str>, ItemPtr>,
     txn: B,
     _marker: PhantomData<T>,
 }
@@ -1066,7 +1056,7 @@ where
     B: Borrow<T>,
     T: ReadTxn,
 {
-    pub fn new(source: &'a HashMap<Arc<str>, BlockPtr>, txn: B) -> Self {
+    pub fn new(source: &'a HashMap<Arc<str>, ItemPtr>, txn: B) -> Self {
         Entries {
             iter: source.iter(),
             txn,
@@ -1079,7 +1069,7 @@ impl<'a, T: ReadTxn> Entries<'a, T, T>
 where
     T: Borrow<T> + ReadTxn,
 {
-    pub fn from(source: &'a HashMap<Arc<str>, BlockPtr>, txn: T) -> Self {
+    pub fn from(source: &'a HashMap<Arc<str>, ItemPtr>, txn: T) -> Self {
         Entries::new(source, txn)
     }
 }
@@ -1088,7 +1078,7 @@ impl<'a, T: ReadTxn> Entries<'a, &'a T, T>
 where
     T: Borrow<T> + ReadTxn,
 {
-    pub fn from_ref(source: &'a HashMap<Arc<str>, BlockPtr>, txn: &'a T) -> Self {
+    pub fn from_ref(source: &'a HashMap<Arc<str>, ItemPtr>, txn: &'a T) -> Self {
         Entries::new(source, txn)
     }
 }
@@ -1101,32 +1091,21 @@ where
     type Item = (&'a str, &'a Item);
 
     fn next(&mut self) -> Option<Self::Item> {
-        let (mut key, ptr) = self.iter.next()?;
-        let mut block = ptr;
-        loop {
-            match block.deref() {
-                Block::Item(item) if !item.is_deleted() => {
-                    break;
-                }
-                _ => {
-                    let (k, ptr) = self.iter.next()?;
-                    key = k;
-                    block = ptr;
-                }
-            }
+        let (mut key, mut ptr) = self.iter.next()?;
+        while ptr.is_deleted() {
+            (key, ptr) = self.iter.next()?;
         }
-        let item = block.as_item().unwrap();
-        Some((key, item))
+        Some((key, ptr))
     }
 }
 
 pub(crate) struct Iter<'a, T> {
-    ptr: Option<&'a BlockPtr>,
+    ptr: Option<&'a ItemPtr>,
     _txn: &'a T,
 }
 
 impl<'a, T: ReadTxn> Iter<'a, T> {
-    fn new(ptr: Option<&'a BlockPtr>, txn: &'a T) -> Self {
+    fn new(ptr: Option<&'a ItemPtr>, txn: &'a T) -> Self {
         Iter { ptr, _txn: txn }
     }
 }
@@ -1135,8 +1114,7 @@ impl<'a, T: ReadTxn> Iterator for Iter<'a, T> {
     type Item = &'a Item;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let ptr = self.ptr.take()?;
-        let item = ptr.as_item()?;
+        let item = self.ptr.take()?;
         self.ptr = item.right.as_ref();
         Some(item)
     }
@@ -1366,10 +1344,10 @@ pub(crate) fn event_keys(
     for opt in keys_changed.iter() {
         if let Some(key) = opt {
             let block = target.map.get(key.as_ref()).cloned();
-            if let Some(Block::Item(item)) = block.as_deref() {
+            if let Some(item) = block.as_deref() {
                 if item.id.clock >= txn.before_state.get(&item.id.client) {
                     let mut prev = item.left;
-                    while let Some(Block::Item(p)) = prev.as_deref() {
+                    while let Some(p) = prev.as_deref() {
                         if !txn.has_added(&p.id) {
                             break;
                         }
@@ -1377,7 +1355,7 @@ pub(crate) fn event_keys(
                     }
 
                     if txn.has_deleted(&item.id) {
-                        if let Some(Block::Item(prev)) = prev.as_deref() {
+                        if let Some(prev) = prev.as_deref() {
                             if txn.has_deleted(&prev.id) {
                                 let old_value = prev.content.get_last().unwrap_or_default();
                                 keys.insert(key.clone(), EntryChange::Removed(old_value));
@@ -1385,7 +1363,7 @@ pub(crate) fn event_keys(
                         }
                     } else {
                         let new_value = item.content.get_last().unwrap();
-                        if let Some(Block::Item(prev)) = prev.as_deref() {
+                        if let Some(prev) = prev.as_deref() {
                             if txn.has_deleted(&prev.id) {
                                 let old_value = prev.content.get_last().unwrap_or_default();
                                 keys.insert(
@@ -1410,29 +1388,29 @@ pub(crate) fn event_keys(
     keys
 }
 
-pub(crate) fn event_change_set(txn: &TransactionMut, start: Option<BlockPtr>) -> ChangeSet<Change> {
+pub(crate) fn event_change_set(txn: &TransactionMut, start: Option<ItemPtr>) -> ChangeSet<Change> {
     let mut added = HashSet::new();
     let mut deleted = HashSet::new();
     let mut delta = Vec::new();
 
     let mut moved_stack = Vec::new();
-    let mut curr_move: Option<BlockPtr> = None;
+    let mut curr_move: Option<ItemPtr> = None;
     let mut curr_move_is_new = false;
     let mut curr_move_is_deleted = false;
-    let mut curr_move_end: Option<BlockPtr> = None;
+    let mut curr_move_end: Option<ItemPtr> = None;
     let mut last_op = None;
 
     #[derive(Default)]
     struct MoveStackItem {
-        end: Option<BlockPtr>,
-        moved: Option<BlockPtr>,
+        end: Option<ItemPtr>,
+        moved: Option<ItemPtr>,
         is_new: bool,
         is_deleted: bool,
     }
 
-    fn is_moved_by_new(ptr: Option<BlockPtr>, txn: &TransactionMut) -> bool {
+    fn is_moved_by_new(ptr: Option<ItemPtr>, txn: &TransactionMut) -> bool {
         let mut moved = ptr;
-        while let Some(Block::Item(item)) = moved.as_deref() {
+        while let Some(item) = moved.as_deref() {
             if txn.has_added(&item.id) {
                 return true;
             } else {
@@ -1454,110 +1432,106 @@ pub(crate) fn event_change_set(txn: &TransactionMut, start: Option<BlockPtr>) ->
             curr_move = item.moved;
             curr_move_end = item.end;
         } else {
-            if let Some(ptr) = current {
-                if let Block::Item(item) = ptr.deref() {
-                    if let ItemContent::Move(m) = &item.content {
-                        if item.moved == curr_move {
-                            moved_stack.push(MoveStackItem {
-                                end: curr_move_end,
-                                moved: curr_move,
-                                is_new: curr_move_is_new,
-                                is_deleted: curr_move_is_deleted,
-                            });
-                            let txn = unsafe {
-                                //TODO: remove this - find a way to work with get_moved_coords
-                                // without need for &mut Transaction
-                                (txn as *const TransactionMut as *mut TransactionMut)
-                                    .as_mut()
-                                    .unwrap()
-                            };
-                            let (start, end) = m.get_moved_coords(txn);
-                            curr_move = current;
-                            curr_move_end = end;
-                            curr_move_is_new = curr_move_is_new || txn.has_added(&item.id);
-                            curr_move_is_deleted = curr_move_is_deleted || item.is_deleted();
-                            current = start;
-                            continue; // do not move to item.right
-                        }
-                    } else if item.moved != curr_move {
-                        if !curr_move_is_new
-                            && item.is_countable()
-                            && (!item.is_deleted() || txn.has_deleted(&item.id))
-                            && !txn.has_added(&item.id)
-                            && (item.moved.is_none()
-                                || curr_move_is_deleted
-                                || is_moved_by_new(item.moved, txn))
-                            && (txn.prev_moved.get(&ptr).cloned() == curr_move)
-                        {
-                            match item.moved {
-                                Some(ptr) if txn.has_added(ptr.id()) => {
-                                    let len = item.content_len(encoding);
-                                    last_op = match last_op.take() {
-                                        Some(Change::Removed(i)) => Some(Change::Removed(i + len)),
-                                        Some(op) => {
-                                            delta.push(op);
-                                            Some(Change::Removed(len))
-                                        }
-                                        None => Some(Change::Removed(len)),
-                                    };
-                                }
-                                _ => {}
+            if let Some(item) = current {
+                if let ItemContent::Move(m) = &item.content {
+                    if item.moved == curr_move {
+                        moved_stack.push(MoveStackItem {
+                            end: curr_move_end,
+                            moved: curr_move,
+                            is_new: curr_move_is_new,
+                            is_deleted: curr_move_is_deleted,
+                        });
+                        let txn = unsafe {
+                            //TODO: remove this - find a way to work with get_moved_coords
+                            // without need for &mut Transaction
+                            (txn as *const TransactionMut as *mut TransactionMut)
+                                .as_mut()
+                                .unwrap()
+                        };
+                        let (start, end) = m.get_moved_coords(txn);
+                        curr_move = current;
+                        curr_move_end = end;
+                        curr_move_is_new = curr_move_is_new || txn.has_added(&item.id);
+                        curr_move_is_deleted = curr_move_is_deleted || item.is_deleted();
+                        current = start;
+                        continue; // do not move to item.right
+                    }
+                } else if item.moved != curr_move {
+                    if !curr_move_is_new
+                        && item.is_countable()
+                        && (!item.is_deleted() || txn.has_deleted(&item.id))
+                        && !txn.has_added(&item.id)
+                        && (item.moved.is_none()
+                            || curr_move_is_deleted
+                            || is_moved_by_new(item.moved, txn))
+                        && (txn.prev_moved.get(&item).cloned() == curr_move)
+                    {
+                        match item.moved {
+                            Some(ptr) if txn.has_added(ptr.id()) => {
+                                let len = item.content_len(encoding);
+                                last_op = match last_op.take() {
+                                    Some(Change::Removed(i)) => Some(Change::Removed(i + len)),
+                                    Some(op) => {
+                                        delta.push(op);
+                                        Some(Change::Removed(len))
+                                    }
+                                    None => Some(Change::Removed(len)),
+                                };
                             }
-                        }
-                    } else if item.is_deleted() {
-                        if !curr_move_is_new
-                            && txn.has_deleted(&item.id)
-                            && !txn.has_added(&item.id)
-                            && !txn.prev_moved.contains_key(&ptr)
-                        {
-                            let removed = match last_op.take() {
-                                None => 0,
-                                Some(Change::Removed(c)) => c,
-                                Some(other) => {
-                                    delta.push(other);
-                                    0
-                                }
-                            };
-                            last_op = Some(Change::Removed(removed + item.len()));
-                            deleted.insert(item.id);
-                        } // else nop
-                    } else {
-                        if curr_move_is_new
-                            || txn.has_added(&item.id)
-                            || txn.prev_moved.contains_key(&ptr)
-                        {
-                            let mut inserts = match last_op.take() {
-                                None => Vec::with_capacity(item.len() as usize),
-                                Some(Change::Added(values)) => values,
-                                Some(other) => {
-                                    delta.push(other);
-                                    Vec::with_capacity(item.len() as usize)
-                                }
-                            };
-                            inserts.append(&mut item.content.get_content());
-                            last_op = Some(Change::Added(inserts));
-                            added.insert(item.id);
-                        } else {
-                            let retain = match last_op.take() {
-                                None => 0,
-                                Some(Change::Retain(c)) => c,
-                                Some(other) => {
-                                    delta.push(other);
-                                    0
-                                }
-                            };
-                            last_op = Some(Change::Retain(retain + item.len()));
+                            _ => {}
                         }
                     }
+                } else if item.is_deleted() {
+                    if !curr_move_is_new
+                        && txn.has_deleted(&item.id)
+                        && !txn.has_added(&item.id)
+                        && !txn.prev_moved.contains_key(&item)
+                    {
+                        let removed = match last_op.take() {
+                            None => 0,
+                            Some(Change::Removed(c)) => c,
+                            Some(other) => {
+                                delta.push(other);
+                                0
+                            }
+                        };
+                        last_op = Some(Change::Removed(removed + item.len()));
+                        deleted.insert(item.id);
+                    } // else nop
                 } else {
-                    break;
+                    if curr_move_is_new
+                        || txn.has_added(&item.id)
+                        || txn.prev_moved.contains_key(&item)
+                    {
+                        let mut inserts = match last_op.take() {
+                            None => Vec::with_capacity(item.len() as usize),
+                            Some(Change::Added(values)) => values,
+                            Some(other) => {
+                                delta.push(other);
+                                Vec::with_capacity(item.len() as usize)
+                            }
+                        };
+                        inserts.append(&mut item.content.get_content());
+                        last_op = Some(Change::Added(inserts));
+                        added.insert(item.id);
+                    } else {
+                        let retain = match last_op.take() {
+                            None => 0,
+                            Some(Change::Retain(c)) => c,
+                            Some(other) => {
+                                delta.push(other);
+                                0
+                            }
+                        };
+                        last_op = Some(Change::Retain(retain + item.len()));
+                    }
                 }
             } else {
                 break;
             }
         }
 
-        current = if let Some(Block::Item(i)) = current.as_deref() {
+        current = if let Some(i) = current.as_deref() {
             i.right
         } else {
             None

@@ -1,6 +1,7 @@
 use crate::doc::{DocAddr, OffsetKind};
 use crate::encoding::read::Error;
 use crate::moving::Move;
+use crate::slice::{BlockSlice, GCSlice, ItemSlice};
 use crate::store::{Store, WeakStoreRef};
 use crate::transaction::TransactionMut;
 use crate::types::text::update_current_attributes;
@@ -19,7 +20,7 @@ use std::panic;
 use std::ptr::NonNull;
 use std::sync::Arc;
 
-/// Bit flag used to identify [Block::GC].
+/// Bit flag used to identify [Item::GC].
 pub const BLOCK_GC_REF_NUMBER: u8 = 0;
 
 /// Bit flag used to identify items with content of type [ItemContent::Deleted].
@@ -49,7 +50,7 @@ pub const BLOCK_ITEM_ANY_REF_NUMBER: u8 = 8;
 /// Bit flag used to identify items with content of type [ItemContent::Doc].
 pub const BLOCK_ITEM_DOC_REF_NUMBER: u8 = 9;
 
-/// Bit flag used to identify [Block::Skip].
+/// Bit flag used to identify [Item::Skip].
 pub const BLOCK_SKIP_REF_NUMBER: u8 = 10;
 
 /// Bit flag used to identify items with content of type [ItemContent::Move].
@@ -93,23 +94,121 @@ impl ID {
     }
 }
 
-/// A raw [Block] pointer. As the underlying block doesn't move it's in-memory location, [BlockPtr]
+#[derive(Debug, PartialEq)]
+pub(crate) enum BlockCell {
+    GC(GC),
+    Block(Box<Item>),
+}
+
+impl BlockCell {
+    pub fn clock_start(&self) -> u32 {
+        match self {
+            BlockCell::GC(gc) => gc.start,
+            BlockCell::Block(item) => item.id.clock,
+        }
+    }
+
+    pub fn clock_end(&self) -> u32 {
+        match self {
+            BlockCell::GC(gc) => gc.end,
+            BlockCell::Block(item) => item.id.clock + item.len - 1,
+        }
+    }
+
+    /// Returns a range of first and the last clock sequence numbers that belong to a current block.
+    pub fn clock_range(&self) -> (u32, u32) {
+        match self {
+            BlockCell::GC(gc) => (gc.start, gc.end),
+            BlockCell::Block(block) => block.clock_range(),
+        }
+    }
+
+    pub fn is_deleted(&self) -> bool {
+        match self {
+            BlockCell::GC(_) => true,
+            BlockCell::Block(item) => item.is_deleted(),
+        }
+    }
+
+    pub fn len(&self) -> u32 {
+        match self {
+            BlockCell::GC(gc) => gc.end - gc.start,
+            BlockCell::Block(block) => block.len(),
+        }
+    }
+
+    pub fn as_slice(&self) -> BlockSlice {
+        match self {
+            BlockCell::GC(gc) => BlockSlice::GC(GCSlice::from(gc.clone())),
+            BlockCell::Block(item) => {
+                let ptr = ItemPtr::from(item);
+                BlockSlice::Item(ItemSlice::from(ptr))
+            }
+        }
+    }
+
+    pub fn as_item(&self) -> Option<ItemPtr> {
+        if let BlockCell::Block(item) = self {
+            Some(ItemPtr::from(item))
+        } else {
+            None
+        }
+    }
+}
+
+impl From<Box<Item>> for BlockCell {
+    fn from(value: Box<Item>) -> Self {
+        BlockCell::Block(value)
+    }
+}
+
+impl From<GC> for BlockCell {
+    fn from(gc: GC) -> Self {
+        BlockCell::GC(gc)
+    }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub(crate) struct GC {
+    pub start: u32,
+    pub end: u32,
+}
+
+impl GC {
+    #[inline]
+    pub fn new(start: u32, end: u32) -> Self {
+        GC { start, end }
+    }
+
+    pub fn len(&self) -> u32 {
+        self.end - self.start + 1
+    }
+}
+
+impl Encode for GC {
+    fn encode<E: Encoder>(&self, encoder: &mut E) {
+        encoder.write_info(BLOCK_GC_REF_NUMBER);
+        encoder.write_len(self.len());
+    }
+}
+
+/// A raw [Item] pointer. As the underlying block doesn't move it's in-memory location, [ItemPtr]
 /// can be considered a pinned object.
 #[repr(transparent)]
 #[derive(Clone, Copy, Hash)]
-pub struct BlockPtr(NonNull<Block>);
+pub struct ItemPtr(NonNull<Item>);
 
-impl BlockPtr {
+impl ItemPtr {
     pub(crate) fn redo<M>(
         &mut self,
         txn: &mut TransactionMut,
-        redo_items: &HashSet<BlockPtr>,
+        redo_items: &HashSet<ItemPtr>,
         items_to_delete: &DeleteSet,
         s1: &UndoStack<M>,
         s2: &UndoStack<M>,
-    ) -> Option<BlockPtr> {
+    ) -> Option<ItemPtr> {
         let self_ptr = self.clone();
-        let item = self.as_item_mut()?;
+        let item = self.deref_mut();
         if let Some(redone) = item.redone.as_ref() {
             let slice = txn.store.blocks.get_item_clean_start(redone)?;
             return Some(txn.store.materialize(slice));
@@ -117,38 +216,37 @@ impl BlockPtr {
 
         let mut parent_block = item.parent.as_branch().and_then(|b| b.item);
         // make sure that parent is redone
-        if let Some(mut ptr) = parent_block.clone() {
-            if let Block::Item(parent) = ptr.clone().deref_mut() {
-                if parent.is_deleted() {
-                    // try to undo parent if it will be undone anyway
-                    if parent.redone.is_none()
-                        && (!redo_items.contains(&ptr)
-                            || ptr.redo(txn, redo_items, items_to_delete, s1, s2).is_none())
-                    {
-                        return None;
-                    }
-                    let mut redone = parent.redone;
-                    while let Some(id) = redone.as_ref() {
-                        parent_block = txn
-                            .store
-                            .blocks
-                            .get_item_clean_start(id)
-                            .map(|slice| txn.store.materialize(slice));
-                        redone = parent_block.and_then(|ptr| ptr.as_item().and_then(|i| i.redone));
-                    }
+        if let Some(mut parent) = parent_block.clone() {
+            if parent.is_deleted() {
+                // try to undo parent if it will be undone anyway
+                if parent.redone.is_none()
+                    && (!redo_items.contains(&parent)
+                        || parent
+                            .redo(txn, redo_items, items_to_delete, s1, s2)
+                            .is_none())
+                {
+                    return None;
+                }
+                let mut redone = parent.redone;
+                while let Some(id) = redone.as_ref() {
+                    parent_block = txn
+                        .store
+                        .blocks
+                        .get_item_clean_start(id)
+                        .map(|slice| txn.store.materialize(slice));
+                    redone = parent_block.and_then(|ptr| ptr.redone);
                 }
             }
         }
-        let parent_branch =
-            BranchPtr::from(if let Some(Block::Item(item)) = parent_block.as_deref() {
-                if let ItemContent::Type(b) = &item.content {
-                    b.as_ref()
-                } else {
-                    item.parent.as_branch().unwrap()
-                }
+        let parent_branch = BranchPtr::from(if let Some(item) = parent_block.as_deref() {
+            if let ItemContent::Type(b) = &item.content {
+                b.as_ref()
             } else {
                 item.parent.as_branch().unwrap()
-            });
+            }
+        } else {
+            item.parent.as_branch().unwrap()
+        });
 
         let mut left = None;
         let mut right = None;
@@ -158,14 +256,14 @@ impl BlockPtr {
                 // Iterate right while right is in itemsToDelete
                 // If it is intended to delete right while item is redone,
                 // we can expect that item should replace right.
-                while let Some(Block::Item(left_item)) = left.as_deref() {
+                while let Some(left_item) = left.as_deref() {
                     if let Some(ptr) = left_item.right {
                         let id = ptr.id();
                         if items_to_delete.is_deleted(id) || s1.is_deleted(id) || s2.is_deleted(id)
                         {
                             // follow redone
                             left = Some(ptr);
-                            while let Some(Block::Item(item)) = left.as_deref() {
+                            while let Some(item) = left.as_deref() {
                                 if let Some(id) = item.redone.as_ref() {
                                     left = match txn.store.blocks.get_item_clean_start(id) {
                                         None => break,
@@ -185,7 +283,7 @@ impl BlockPtr {
                     break;
                 }
 
-                if let Some(Block::Item(left_item)) = left.as_deref() {
+                if let Some(left_item) = left.as_deref() {
                     if left_item.right.is_some() {
                         // It is not possible to redo this item because it conflicts with a
                         // change from another client
@@ -200,9 +298,9 @@ impl BlockPtr {
             left = item.left;
             right = Some(self_ptr);
             // find next cloned_redo items
-            while let Some(Block::Item(left_item)) = left.clone().as_deref() {
+            while let Some(left_item) = left.clone().as_deref() {
                 let mut left_trace = left;
-                while let Some(Block::Item(trace)) = left_trace.as_deref() {
+                while let Some(trace) = left_trace.as_deref() {
                     let p = trace.parent.as_branch().and_then(|p| p.item);
                     if parent_block != p {
                         left_trace = if let Some(redone) = trace.redone.as_ref() {
@@ -215,7 +313,7 @@ impl BlockPtr {
                         break;
                     }
                 }
-                if let Some(Block::Item(trace)) = left_trace.as_deref() {
+                if let Some(trace) = left_trace.as_deref() {
                     let p = trace.parent.as_branch().and_then(|p| p.item);
                     if parent_block == p {
                         left = left_trace;
@@ -225,10 +323,10 @@ impl BlockPtr {
                 left = left_item.left.clone();
             }
 
-            while let Some(Block::Item(right_item)) = right.clone().as_deref() {
+            while let Some(right_item) = right.clone().as_deref() {
                 let mut right_trace = right;
                 // trace redone until parent matches
-                while let Some(Block::Item(trace)) = right_trace.as_deref() {
+                while let Some(trace) = right_trace.as_deref() {
                     let p = trace.parent.as_branch().and_then(|p| p.item);
                     if parent_block != p {
                         right_trace = if let Some(redone) = trace.redone.as_ref() {
@@ -241,7 +339,7 @@ impl BlockPtr {
                         break;
                     }
                 }
-                if let Some(Block::Item(trace)) = right_trace.as_deref() {
+                if let Some(trace) = right_trace.as_deref() {
                     let p = trace.parent.as_branch().and_then(|p| p.item);
                     if parent_block == p {
                         right = right_trace;
@@ -265,19 +363,18 @@ impl BlockPtr {
             item.content.clone(),
         );
         item.redone = Some(*redone_item.id());
-        redone_item.as_item_mut().unwrap().info.set_keep();
-        let mut block_ptr = BlockPtr::from(&mut redone_item);
+        redone_item.info.set_keep();
+        let mut block_ptr = ItemPtr::from(&mut redone_item);
 
         block_ptr.integrate(txn, 0);
 
-        let local_block_list = txn.store_mut().blocks.get_client_blocks_mut(next_id.client);
-        local_block_list.push(redone_item);
+        txn.store_mut().blocks.push_block(redone_item);
         Some(block_ptr)
     }
 
     pub(crate) fn keep(&self, keep: bool) {
         let mut curr = Some(*self);
-        while let Some(Block::Item(item)) = curr.as_deref_mut() {
+        while let Some(item) = curr.as_deref_mut() {
             if item.info.is_keep() == keep {
                 break;
             } else {
@@ -298,59 +395,48 @@ impl BlockPtr {
         }
     }
 
-    pub(crate) fn is_countable(&self) -> bool {
-        match self.deref() {
-            Block::Item(item) => item.is_countable(),
-            Block::GC(_) => false,
-        }
-    }
-
-    pub(crate) fn splice(&mut self, offset: u32, encoding: OffsetKind) -> Option<Box<Block>> {
+    pub(crate) fn splice(&mut self, offset: u32, encoding: OffsetKind) -> Option<Box<Item>> {
         let self_ptr = self.clone();
         if offset == 0 {
             None
         } else {
-            match self.deref_mut() {
-                Block::Item(item) => {
-                    let client = item.id.client;
-                    let clock = item.id.clock;
-                    let content = item.content.splice(offset as usize, encoding).unwrap();
-                    item.len = offset;
-                    let mut new = Box::new(Block::Item(Item {
-                        id: ID::new(client, clock + offset),
-                        len: content.len(OffsetKind::Utf16),
-                        left: Some(self_ptr),
-                        right: item.right.clone(),
-                        origin: Some(ID::new(client, clock + offset - 1)),
-                        right_origin: item.right_origin.clone(),
-                        content,
-                        parent: item.parent.clone(),
-                        moved: item.moved.clone(),
-                        parent_sub: item.parent_sub.clone(),
-                        info: item.info.clone(),
-                        redone: item.redone.map(|id| ID::new(id.client, id.clock + offset)),
-                    }));
-                    let new_ptr = BlockPtr::from(&mut new);
+            let item = self.deref_mut();
+            let client = item.id.client;
+            let clock = item.id.clock;
+            let content = item.content.splice(offset as usize, encoding).unwrap();
+            item.len = offset;
+            let mut new = Box::new(Item {
+                id: ID::new(client, clock + offset),
+                len: content.len(OffsetKind::Utf16),
+                left: Some(self_ptr),
+                right: item.right.clone(),
+                origin: Some(ID::new(client, clock + offset - 1)),
+                right_origin: item.right_origin.clone(),
+                content,
+                parent: item.parent.clone(),
+                moved: item.moved.clone(),
+                parent_sub: item.parent_sub.clone(),
+                info: item.info.clone(),
+                redone: item.redone.map(|id| ID::new(id.client, id.clock + offset)),
+            });
+            let new_ptr = ItemPtr::from(&mut new);
 
-                    if let Some(Block::Item(right)) = item.right.as_deref_mut() {
-                        right.left = Some(new_ptr);
-                    }
-
-                    if let Some(parent_sub) = item.parent_sub.as_ref() {
-                        if item.right.is_none() {
-                            // update parent.map
-                            if let TypePtr::Branch(mut branch) = item.parent {
-                                branch.map.insert(parent_sub.clone(), new_ptr);
-                            }
-                        }
-                    }
-
-                    item.right = Some(new_ptr);
-
-                    Some(new)
-                }
-                Block::GC(gc) => Some(Box::new(Block::GC(gc.slice(offset)))),
+            if let Some(right) = item.right.as_deref_mut() {
+                right.left = Some(new_ptr);
             }
+
+            if let Some(parent_sub) = item.parent_sub.as_ref() {
+                if item.right.is_none() {
+                    // update parent.map
+                    if let TypePtr::Branch(mut branch) = item.parent {
+                        branch.map.insert(parent_sub.clone(), new_ptr);
+                    }
+                }
+            }
+
+            item.right = Some(new_ptr);
+
+            Some(new)
         }
     }
 
@@ -358,334 +444,307 @@ impl BlockPtr {
     /// If it returns true, it means that the block should be deleted after being added to a block store.
     pub(crate) fn integrate(&mut self, txn: &mut TransactionMut, offset: u32) -> bool {
         let self_ptr = self.clone();
-        match self.deref_mut() {
-            Block::GC(this) => this.integrate(offset),
-            Block::Item(this) => {
-                let store = txn.store_mut();
-                let encoding = store.options.offset_kind;
-                if offset > 0 {
-                    // offset could be > 0 only in context of Update::integrate,
-                    // is such case offset kind in use always means Yjs-compatible offset (utf-16)
-                    this.id.clock += offset;
-                    this.left = store
-                        .blocks
-                        .get_item_clean_end(&ID::new(this.id.client, this.id.clock - 1))
-                        .map(|slice| store.materialize(slice));
-                    this.origin = this.left.as_deref().map(|b: &Block| b.last_id());
-                    this.content = this
-                        .content
-                        .splice(offset as usize, OffsetKind::Utf16)
-                        .unwrap();
-                    this.len -= offset;
-                }
+        let this = self.deref_mut();
+        let store = txn.store_mut();
+        let encoding = store.options.offset_kind;
+        if offset > 0 {
+            // offset could be > 0 only in context of Update::integrate,
+            // is such case offset kind in use always means Yjs-compatible offset (utf-16)
+            this.id.clock += offset;
+            this.left = store
+                .blocks
+                .get_item_clean_end(&ID::new(this.id.client, this.id.clock - 1))
+                .map(|slice| store.materialize(slice));
+            this.origin = this.left.as_deref().map(|b: &Item| b.last_id());
+            this.content = this
+                .content
+                .splice(offset as usize, OffsetKind::Utf16)
+                .unwrap();
+            this.len -= offset;
+        }
 
-                let parent = match &this.parent {
-                    TypePtr::Branch(branch) => Some(*branch),
-                    TypePtr::Named(name) => {
-                        let branch = store.get_or_create_type(name.clone(), TypeRef::Undefined);
+        let parent = match &this.parent {
+            TypePtr::Branch(branch) => Some(*branch),
+            TypePtr::Named(name) => {
+                let branch = store.get_or_create_type(name.clone(), TypeRef::Undefined);
+                this.parent = TypePtr::Branch(branch);
+                Some(branch)
+            }
+            TypePtr::ID(id) => {
+                if let Some(item) = store.blocks.get_item(id) {
+                    if let Some(branch) = item.as_branch() {
                         this.parent = TypePtr::Branch(branch);
                         Some(branch)
-                    }
-                    TypePtr::ID(id) => {
-                        if let Some(block) = store.blocks.get_block(id) {
-                            if let Some(branch) = block.as_branch() {
-                                this.parent = TypePtr::Branch(branch);
-                                Some(branch)
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        }
-                    }
-                    _ => None,
-                };
-
-                let left: Option<&Block> = this.left.as_deref();
-                let right: Option<&Block> = this.right.as_deref();
-
-                let right_is_null_or_has_left = match right {
-                    None => true,
-                    Some(Block::Item(i)) => i.left.is_some(),
-                    _ => false,
-                };
-                let left_has_other_right_than_self = match left {
-                    Some(Block::Item(i)) => i.right != this.right,
-                    _ => false,
-                };
-
-                if let Some(mut parent_ref) = parent {
-                    if (left.is_none() && right_is_null_or_has_left)
-                        || left_has_other_right_than_self
-                    {
-                        // set the first conflicting item
-                        let mut o = if let Some(Block::Item(left)) = left {
-                            left.right
-                        } else if let Some(sub) = &this.parent_sub {
-                            let mut o = parent_ref.map.get(sub).cloned();
-                            while let Some(Block::Item(item)) = o.as_deref() {
-                                if item.left.is_some() {
-                                    o = item.left.clone();
-                                    continue;
-                                }
-                                break;
-                            }
-                            o.clone()
-                        } else {
-                            parent_ref.start
-                        };
-
-                        let mut left = this.left.clone();
-                        let mut conflicting_items = HashSet::new();
-                        let mut items_before_origin = HashSet::new();
-
-                        // Let c in conflicting_items, b in items_before_origin
-                        // ***{origin}bbbb{this}{c,b}{c,b}{o}***
-                        // Note that conflicting_items is a subset of items_before_origin
-                        while let Some(ptr) = o {
-                            if Some(ptr) == this.right {
-                                break;
-                            }
-
-                            items_before_origin.insert(ptr);
-                            conflicting_items.insert(ptr);
-                            if let Block::Item(item) = ptr.deref() {
-                                if this.origin == item.origin {
-                                    // case 1
-                                    if item.id.client < this.id.client {
-                                        left = Some(ptr.clone());
-                                        conflicting_items.clear();
-                                    } else if this.right_origin == item.right_origin {
-                                        // `self` and `item` are conflicting and point to the same integration
-                                        // points. The id decides which item comes first. Since `self` is to
-                                        // the left of `item`, we can break here.
-                                        break;
-                                    }
-                                } else {
-                                    if let Some(origin_ptr) = item
-                                        .origin
-                                        .as_ref()
-                                        .and_then(|id| store.blocks.get_block(id))
-                                    {
-                                        if items_before_origin.contains(&origin_ptr) {
-                                            if !conflicting_items.contains(&origin_ptr) {
-                                                left = Some(ptr.clone());
-                                                conflicting_items.clear();
-                                            }
-                                        } else {
-                                            break;
-                                        }
-                                    } else {
-                                        break;
-                                    }
-                                }
-                                o = item.right.clone();
-                            } else {
-                                break;
-                            }
-                        }
-                        this.left = left;
-                    }
-
-                    if this.parent_sub.is_none() {
-                        if let Some(Block::Item(item)) = this.left.as_deref() {
-                            if item.parent_sub.is_some() {
-                                this.parent_sub = item.parent_sub.clone();
-                            } else if let Some(Block::Item(item)) = this.right.as_deref() {
-                                this.parent_sub = item.parent_sub.clone();
-                            }
-                        }
-                    }
-
-                    // reconnect left/right
-                    if let Some(Block::Item(left)) = this.left.as_deref_mut() {
-                        this.right = left.right.replace(self_ptr);
-                    } else {
-                        let r = if let Some(parent_sub) = &this.parent_sub {
-                            // update parent map/start if necessary
-                            let mut r = parent_ref.map.get(parent_sub).cloned();
-                            while let Some(ptr) = r {
-                                if let Block::Item(item) = ptr.deref() {
-                                    if item.left.is_some() {
-                                        r = item.left;
-                                        continue;
-                                    }
-                                }
-                                break;
-                            }
-                            r
-                        } else {
-                            let start = parent_ref.start.replace(self_ptr);
-                            start
-                        };
-                        this.right = r;
-                    }
-
-                    if let Some(Block::Item(right)) = this.right.as_deref_mut() {
-                        right.left = Some(self_ptr);
-                    } else if let Some(parent_sub) = &this.parent_sub {
-                        // set as current parent value if right === null and this is parentSub
-                        parent_ref.map.insert(parent_sub.clone(), self_ptr);
-                        if let Some(mut left) = this.left {
-                            if let Block::Item(item) = left.deref_mut() {
-                                if item.info.is_linked() {
-                                    // inherit links from the block we're overriding
-                                    item.info.clear_linked();
-                                    this.info.set_linked();
-                                    let all_links = &mut txn.store.linked_by;
-                                    if let Some(linked_by) = all_links.remove(&left) {
-                                        all_links.insert(self_ptr, linked_by);
-                                        // since left is being deleted, it will remove
-                                        // its links from store.linkedBy anyway
-                                    }
-                                }
-                            }
-                            // this is the current attribute value of parent. delete right
-                            txn.delete(left);
-                        }
-                    }
-
-                    // adjust length of parent
-                    if this.parent_sub.is_none() && !this.is_deleted() {
-                        if this.is_countable() {
-                            // adjust length of parent
-                            parent_ref.block_len += this.len;
-                            parent_ref.content_len += this.content_len(encoding);
-                        }
-                        #[cfg(feature = "weak")]
-                        match (this.left, this.right) {
-                            (Some(left), Some(right)) => match (left.deref(), right.deref()) {
-                                (Block::Item(l), Block::Item(r))
-                                    if l.info.is_linked() || r.info.is_linked() =>
-                                {
-                                    crate::types::weak::join_linked_range(self_ptr, txn)
-                                }
-                                _ => {}
-                            },
-                            _ => {}
-                        }
-                    }
-
-                    // check if this item is in a moved range
-                    let left_moved = if let Some(Block::Item(i)) = this.left.as_deref() {
-                        i.moved
                     } else {
                         None
-                    };
-                    let right_moved = if let Some(Block::Item(i)) = this.right.as_deref() {
-                        i.moved
-                    } else {
-                        None
-                    };
-                    if left_moved.is_some() || right_moved.is_some() {
-                        if left_moved == right_moved {
-                            this.moved = left_moved;
-                        } else {
-                            #[inline]
-                            fn try_integrate(mut ptr: BlockPtr, txn: &mut TransactionMut) {
-                                let ptr_clone = ptr.clone();
-                                if let Block::Item(i) = ptr.deref_mut() {
-                                    if let ItemContent::Move(m) = &mut i.content {
-                                        if !m.is_collapsed() {
-                                            m.integrate_block(txn, ptr_clone);
-                                        }
-                                    }
-                                }
-                            }
-
-                            if let Some(ptr) = left_moved {
-                                try_integrate(ptr, txn);
-                            }
-
-                            if let Some(ptr) = right_moved {
-                                try_integrate(ptr, txn);
-                            }
-                        }
-                    }
-
-                    match &mut this.content {
-                        ItemContent::Deleted(len) => {
-                            txn.delete_set.insert(this.id, *len);
-                            this.mark_as_deleted();
-                        }
-                        ItemContent::Move(m) => m.integrate_block(txn, self_ptr),
-                        ItemContent::Doc(parent_doc, doc) => {
-                            {
-                                let mut txn = doc.transact_mut();
-                                txn.store.parent = Some(self_ptr);
-                                *parent_doc = parent_ref.store.clone();
-                            }
-                            let subdocs = txn.subdocs.get_or_init();
-                            subdocs.added.insert(DocAddr::new(doc), doc.clone());
-                            if doc.options().should_load {
-                                subdocs.loaded.insert(doc.addr(), doc.clone());
-                            }
-                        }
-                        ItemContent::Format(_, _) => {
-                            // @todo searchmarker are currently unsupported for rich text documents
-                            // /** @type {AbstractType<any>} */ (item.parent)._searchMarker = null
-                        }
-                        ItemContent::Type(branch) => {
-                            branch.store = this.parent.as_branch().and_then(|b| b.store.clone());
-                            let ptr = if this.info.is_deleted() {
-                                BranchPtr::from(branch)
-                            } else {
-                                // if current node is alive register is as such
-                                txn.store.register(branch)
-                            };
-                            #[cfg(feature = "weak")]
-                            if let TypeRef::WeakLink(source) = &ptr.type_ref {
-                                source.materialize(txn, ptr);
-                            }
-                        }
-                        _ => {
-                            // other types don't define integration-specific actions
-                        }
-                    }
-                    txn.add_changed_type(parent_ref, this.parent_sub.clone());
-                    if this.info.is_linked() {
-                        if let Some(links) = txn.store.linked_by.get(&self_ptr).cloned() {
-                            // notify links about changes
-                            for link in links.iter() {
-                                txn.add_changed_type(*link, this.parent_sub.clone());
-                            }
-                        }
-                    }
-                    let parent_deleted = if let TypePtr::Branch(ptr) = &this.parent {
-                        if let Some(block) = ptr.item {
-                            block.is_deleted()
-                        } else {
-                            false
-                        }
-                    } else {
-                        false
-                    };
-                    if parent_deleted || (this.parent_sub.is_some() && this.right.is_some()) {
-                        // delete if parent is deleted or if this is not the current attribute value of parent
-                        true
-                    } else {
-                        false
                     }
                 } else {
-                    true
+                    None
                 }
             }
+            _ => None,
+        };
+
+        let left: Option<&Item> = this.left.as_deref();
+        let right: Option<&Item> = this.right.as_deref();
+
+        let right_is_null_or_has_left = match right {
+            None => true,
+            Some(i) => i.left.is_some(),
+            _ => false,
+        };
+        let left_has_other_right_than_self = match left {
+            Some(i) => i.right != this.right,
+            _ => false,
+        };
+
+        if let Some(mut parent_ref) = parent {
+            if (left.is_none() && right_is_null_or_has_left) || left_has_other_right_than_self {
+                // set the first conflicting item
+                let mut o = if let Some(left) = left {
+                    left.right
+                } else if let Some(sub) = &this.parent_sub {
+                    let mut o = parent_ref.map.get(sub).cloned();
+                    while let Some(item) = o.as_deref() {
+                        if item.left.is_some() {
+                            o = item.left.clone();
+                            continue;
+                        }
+                        break;
+                    }
+                    o.clone()
+                } else {
+                    parent_ref.start
+                };
+
+                let mut left = this.left.clone();
+                let mut conflicting_items = HashSet::new();
+                let mut items_before_origin = HashSet::new();
+
+                // Let c in conflicting_items, b in items_before_origin
+                // ***{origin}bbbb{this}{c,b}{c,b}{o}***
+                // Note that conflicting_items is a subset of items_before_origin
+                while let Some(item) = o {
+                    if this.right.is_some() {
+                        break;
+                    }
+
+                    items_before_origin.insert(item);
+                    conflicting_items.insert(item);
+                    if this.origin == item.origin {
+                        // case 1
+                        if item.id.client < this.id.client {
+                            left = Some(item.clone());
+                            conflicting_items.clear();
+                        } else if this.right_origin == item.right_origin {
+                            // `self` and `item` are conflicting and point to the same integration
+                            // points. The id decides which item comes first. Since `self` is to
+                            // the left of `item`, we can break here.
+                            break;
+                        }
+                    } else {
+                        if let Some(origin_ptr) = item
+                            .origin
+                            .as_ref()
+                            .and_then(|id| store.blocks.get_item(id))
+                        {
+                            if items_before_origin.contains(&origin_ptr) {
+                                if !conflicting_items.contains(&origin_ptr) {
+                                    left = Some(item.clone());
+                                    conflicting_items.clear();
+                                }
+                            } else {
+                                break;
+                            }
+                        } else {
+                            break;
+                        }
+                    }
+                    o = item.right.clone();
+                }
+                this.left = left;
+            }
+
+            if this.parent_sub.is_none() {
+                if let Some(item) = this.left.as_deref() {
+                    if item.parent_sub.is_some() {
+                        this.parent_sub = item.parent_sub.clone();
+                    } else if let Some(item) = this.right.as_deref() {
+                        this.parent_sub = item.parent_sub.clone();
+                    }
+                }
+            }
+
+            // reconnect left/right
+            if let Some(left) = this.left.as_deref_mut() {
+                this.right = left.right.replace(self_ptr);
+            } else {
+                let r = if let Some(parent_sub) = &this.parent_sub {
+                    // update parent map/start if necessary
+                    let mut r = parent_ref.map.get(parent_sub).cloned();
+                    while let Some(item) = r {
+                        if item.left.is_some() {
+                            r = item.left;
+                        } else {
+                            break;
+                        }
+                    }
+                    r
+                } else {
+                    let start = parent_ref.start.replace(self_ptr);
+                    start
+                };
+                this.right = r;
+            }
+
+            if let Some(right) = this.right.as_deref_mut() {
+                right.left = Some(self_ptr);
+            } else if let Some(parent_sub) = &this.parent_sub {
+                // set as current parent value if right === null and this is parentSub
+                parent_ref.map.insert(parent_sub.clone(), self_ptr);
+                if let Some(mut left) = this.left {
+                    #[cfg(feature = "weak")]
+                    {
+                        if left.info.is_linked() {
+                            // inherit links from the block we're overriding
+                            left.info.clear_linked();
+                            this.info.set_linked();
+                            let all_links = &mut txn.store.linked_by;
+                            if let Some(linked_by) = all_links.remove(&left) {
+                                all_links.insert(self_ptr, linked_by);
+                                // since left is being deleted, it will remove
+                                // its links from store.linkedBy anyway
+                            }
+                        }
+                    }
+                    // this is the current attribute value of parent. delete right
+                    txn.delete(left);
+                }
+            }
+
+            // adjust length of parent
+            if this.parent_sub.is_none() && !this.is_deleted() {
+                if this.is_countable() {
+                    // adjust length of parent
+                    parent_ref.block_len += this.len;
+                    parent_ref.content_len += this.content_len(encoding);
+                }
+                #[cfg(feature = "weak")]
+                match (this.left, this.right) {
+                    (Some(l), Some(r)) if l.info.is_linked() || r.info.is_linked() => {
+                        crate::types::weak::join_linked_range(self_ptr, txn)
+                    }
+                    _ => {}
+                }
+            }
+
+            // check if this item is in a moved range
+            let left_moved = this.left.and_then(|i| i.moved);
+            let right_moved = this.right.and_then(|i| i.moved);
+            if left_moved.is_some() || right_moved.is_some() {
+                if left_moved == right_moved {
+                    this.moved = left_moved;
+                } else {
+                    #[inline]
+                    fn try_integrate(mut item: ItemPtr, txn: &mut TransactionMut) {
+                        if let ItemContent::Move(m) = &mut item.content {
+                            if !m.is_collapsed() {
+                                m.integrate_block(txn, item);
+                            }
+                        }
+                    }
+
+                    if let Some(ptr) = left_moved {
+                        try_integrate(ptr, txn);
+                    }
+
+                    if let Some(ptr) = right_moved {
+                        try_integrate(ptr, txn);
+                    }
+                }
+            }
+
+            match &mut this.content {
+                ItemContent::Deleted(len) => {
+                    txn.delete_set.insert(this.id, *len);
+                    this.mark_as_deleted();
+                }
+                ItemContent::Move(m) => m.integrate_block(txn, self_ptr),
+                ItemContent::Doc(parent_doc, doc) => {
+                    {
+                        let mut txn = doc.transact_mut();
+                        txn.store.parent = Some(self_ptr);
+                        *parent_doc = parent_ref.store.clone();
+                    }
+                    let subdocs = txn.subdocs.get_or_init();
+                    subdocs.added.insert(DocAddr::new(doc), doc.clone());
+                    if doc.options().should_load {
+                        subdocs.loaded.insert(doc.addr(), doc.clone());
+                    }
+                }
+                ItemContent::Format(_, _) => {
+                    // @todo searchmarker are currently unsupported for rich text documents
+                    // /** @type {AbstractType<any>} */ (item.parent)._searchMarker = null
+                }
+                ItemContent::Type(branch) => {
+                    branch.store = this.parent.as_branch().and_then(|b| b.store.clone());
+                    let ptr = if this.info.is_deleted() {
+                        BranchPtr::from(branch)
+                    } else {
+                        // if current node is alive register is as such
+                        txn.store.register(branch)
+                    };
+                    #[cfg(feature = "weak")]
+                    if let TypeRef::WeakLink(source) = &ptr.type_ref {
+                        source.materialize(txn, ptr);
+                    }
+                }
+                _ => {
+                    // other types don't define integration-specific actions
+                }
+            }
+            txn.add_changed_type(parent_ref, this.parent_sub.clone());
+            if this.info.is_linked() {
+                if let Some(links) = txn.store.linked_by.get(&self_ptr).cloned() {
+                    // notify links about changes
+                    for link in links.iter() {
+                        txn.add_changed_type(*link, this.parent_sub.clone());
+                    }
+                }
+            }
+            let parent_deleted = if let TypePtr::Branch(ptr) = &this.parent {
+                if let Some(block) = ptr.item {
+                    block.is_deleted()
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+            if parent_deleted || (this.parent_sub.is_some() && this.right.is_some()) {
+                // delete if parent is deleted or if this is not the current attribute value of parent
+                true
+            } else {
+                false
+            }
+        } else {
+            true
         }
     }
 
     pub(crate) fn gc(&mut self, parent_gced: bool) {
-        if let Block::Item(item) = self.deref_mut() {
-            if item.is_deleted() && !item.info.is_keep() {
-                item.content.gc();
-                let len = item.len();
-                if parent_gced {
-                    let gc = Block::GC(BlockRange::new(item.id, len));
-                    let self_mut = unsafe { self.0.as_mut() };
-                    *self_mut = gc;
-                } else {
-                    item.content = ItemContent::Deleted(len);
-                    item.info.clear_countable();
-                }
+        let item = self.deref_mut();
+        if item.is_deleted() && !item.info.is_keep() {
+            item.content.gc();
+            let len = item.len();
+            if parent_gced {
+                todo!("GC current block if parent is GCed")
+                //let gc = Block::GC(BlockRange::new(item.id, len));
+                //let self_mut = unsafe { self.0.as_mut() };
+                //*self_mut = gc;
+            } else {
+                item.content = ItemContent::Deleted(len);
+                item.info.clear_countable();
             }
         }
     }
@@ -694,46 +753,34 @@ impl BlockPtr {
     /// blocks are of the same type, their contents are of the same type, they belong to the same
     /// parent data structure, their IDs are sequenced directly one after another and they point to
     /// each other as their left/right neighbors respectively.
-    pub(crate) fn try_squash(&mut self, mut other: BlockPtr) -> bool {
-        let self_ptr = self.clone();
-        let other_ptr = other.clone();
-        match (self.deref_mut(), other.deref_mut()) {
-            (Block::Item(v1), Block::Item(v2)) => {
-                if v1.id.client == v2.id.client
-                    && v1.id.clock + v1.len() == v2.id.clock
-                    && v2.origin == Some(v1.last_id())
-                    && v1.right_origin == v2.right_origin
-                    && v1.right == Some(other_ptr)
-                    && v1.is_deleted() == v2.is_deleted()
-                    && (v1.redone.is_none() && v2.redone.is_none())
-                    && (!v1.info.is_linked() && !v2.info.is_linked()) // linked items cannot be merged
-                    && v1.moved == v2.moved
-                    && v1.content.try_squash(&v2.content)
-                {
-                    v1.len = v1.content.len(OffsetKind::Utf16);
-                    if let Some(Block::Item(right_right)) = v2.right.as_deref_mut() {
-                        right_right.left = Some(self_ptr);
-                    }
-                    if v2.info.is_keep() {
-                        v1.info.set_keep();
-                    }
-                    v1.right = v2.right;
-                    true
-                } else {
-                    false
-                }
+    pub(crate) fn try_squash(&mut self, mut other: ItemPtr) -> bool {
+        if self.id.client == other.id.client
+                    && self.id.clock + self.len() == other.id.clock
+                    && other.origin == Some(self.last_id())
+                    && self.right_origin == other.right_origin
+                    && self.right == Some(other)
+                    && self.is_deleted() == other.is_deleted()
+                    && (self.redone.is_none() && other.redone.is_none())
+                    && (!self.info.is_linked() && !other.info.is_linked()) // linked items cannot be merged
+                    && self.moved == other.moved
+                    && self.content.try_squash(&other.content)
+        {
+            self.len = self.content.len(OffsetKind::Utf16);
+            if let Some(right_right) = other.right.as_deref_mut() {
+                right_right.left = Some(other);
             }
-            (Block::GC(v1), Block::GC(v2)) => {
-                v1.merge(v2);
-                true
+            if other.info.is_keep() {
+                self.info.set_keep();
             }
-            _ => false,
+            self.right = other.right;
+            true
+        } else {
+            false
         }
     }
 
     pub(crate) fn as_branch(self) -> Option<BranchPtr> {
-        let item = self.as_item()?;
-        if let ItemContent::Type(branch) = &item.content {
+        if let ItemContent::Type(branch) = &self.content {
             Some(BranchPtr::from(branch))
         } else {
             None
@@ -741,420 +788,107 @@ impl BlockPtr {
     }
 }
 
-impl Deref for BlockPtr {
-    type Target = Block;
+impl Deref for ItemPtr {
+    type Target = Item;
 
     fn deref(&self) -> &Self::Target {
         unsafe { self.0.as_ref() }
     }
 }
 
-impl DerefMut for BlockPtr {
+impl DerefMut for ItemPtr {
     fn deref_mut(&mut self) -> &mut Self::Target {
         unsafe { self.0.as_mut() }
     }
 }
 
-impl<'a> From<&'a mut Box<Block>> for BlockPtr {
-    fn from(block: &'a mut Box<Block>) -> Self {
-        BlockPtr(NonNull::from(block.as_mut()))
+impl<'a> From<&'a mut Box<Item>> for ItemPtr {
+    fn from(block: &'a mut Box<Item>) -> Self {
+        ItemPtr(NonNull::from(block.as_mut()))
     }
 }
 
-impl<'a> From<&'a Box<Block>> for BlockPtr {
-    fn from(block: &'a Box<Block>) -> Self {
-        BlockPtr(unsafe { NonNull::new_unchecked(block.as_ref() as *const Block as *mut Block) })
+impl<'a> From<&'a Box<Item>> for ItemPtr {
+    fn from(block: &'a Box<Item>) -> Self {
+        ItemPtr(unsafe { NonNull::new_unchecked(block.as_ref() as *const Item as *mut Item) })
     }
 }
 
-impl Eq for BlockPtr {}
+impl Eq for ItemPtr {}
 
-impl PartialEq for BlockPtr {
+impl PartialEq for ItemPtr {
     fn eq(&self, other: &Self) -> bool {
         // BlockPtr.pivot may differ, but logically it doesn't affect block equality
         self.id() == other.id()
     }
 }
 
-impl TryFrom<BlockPtr> for Any {
-    type Error = BlockPtr;
+impl TryFrom<ItemPtr> for Any {
+    type Error = ItemPtr;
 
-    fn try_from(value: BlockPtr) -> Result<Self, Self::Error> {
-        if let Block::Item(item) = value.deref() {
-            match &item.content {
-                ItemContent::Any(v) => Ok(v[0].clone()),
-                ItemContent::Embed(v) => Ok(v.clone()),
-                ItemContent::Binary(v) => Ok(v.clone().into()),
-                ItemContent::JSON(v) => Ok(v[0].clone().into()),
-                ItemContent::String(v) => Ok(v.to_string().into()),
-                _ => Err(value),
-            }
-        } else {
-            Err(value)
+    fn try_from(item: ItemPtr) -> Result<Self, Self::Error> {
+        match &item.content {
+            ItemContent::Any(v) => Ok(v[0].clone()),
+            ItemContent::Embed(v) => Ok(v.clone()),
+            ItemContent::Binary(v) => Ok(v.clone().into()),
+            ItemContent::JSON(v) => Ok(v[0].clone().into()),
+            ItemContent::String(v) => Ok(v.to_string().into()),
+            _ => Err(item),
         }
     }
 }
 
-/// Defines a logical slice of an underlying [Block]. Yrs blocks define a series of sequential
-/// updates performed by a single peer, while [BlockSlice]s enable to refer to a sub-range of these
-/// blocks without need to splice them.
-///
-/// If an underlying [Block] needs to be spliced to fit the boundaries defined by a corresponding
-/// [BlockSlice], this can be done with help of transaction (see: [Store::materialize]).
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub(crate) struct BlockSlice {
-    pub ptr: BlockPtr,
-    pub start: u32,
-    pub end: u32,
-}
-
-impl BlockSlice {
-    pub fn new(ptr: BlockPtr, start: u32, end: u32) -> Self {
-        debug_assert!(start <= end);
-        BlockSlice { ptr, start, end }
-    }
-
-    /// Returns the first [ID] covered by this slice (inclusive).
-    pub fn id(&self) -> ID {
-        let mut id = *self.ptr.id();
-        id.clock += self.start;
-        id
-    }
-
-    /// Returns the last [ID] covered by this slice (inclusive).
-    pub fn last_id(&self) -> ID {
-        let mut id = *self.ptr.id();
-        id.clock += self.end;
-        id
-    }
-
-    /// Attempts to trim current block slice to provided range of IDs.
-    /// Returns true if current block slice range has been modified as a result of this action.
-    pub fn try_trim(&mut self, from: &ID, to: &ID) -> bool {
-        let id = self.ptr.id();
-        let mut changed = false;
-        let start_clock = id.clock + self.start;
-        let end_clock = id.clock + self.end;
-        if id.client == from.client && from.clock > start_clock && from.clock <= end_clock {
-            self.start = from.clock - start_clock;
-            changed = true;
-        }
-        if id.client == to.client && to.clock >= start_clock && to.clock < end_clock {
-            self.end = end_clock - to.clock;
-            changed = true;
-        }
-        changed
-    }
-
-    /// Returns true when current [BlockSlice] left boundary is equal to the boundary of the
-    /// [BlockPtr] this slice wraps.
-    pub fn adjacent_left(&self) -> bool {
-        self.start == 0
-    }
-
-    /// Returns true when current [BlockSlice] right boundary is equal to the boundary of the
-    /// [BlockPtr] this slice wraps.
-    pub fn adjacent_right(&self) -> bool {
-        self.end == self.ptr.len() - 1
-    }
-
-    /// Returns true when boundaries marked by the current [BlockSlice] match the boundaries
-    /// of the underlying [BlockPtr].
-    pub fn adjacent(&self) -> bool {
-        self.adjacent_left() && self.adjacent_right()
-    }
-
-    /// Returns the number of elements (counted as Yjs ID clock length) of the block range described
-    /// by current [BlockSlice].
-    pub fn len(&self) -> u32 {
-        self.end - self.start + 1
-    }
-
-    /// Checks if an underlying [Block] has been marked as deleted.
-    pub fn is_deleted(&self) -> bool {
-        self.ptr.is_deleted()
-    }
-
-    /// Checks if an underlying [Block] has been marked as countable.
-    pub fn is_countable(&self) -> bool {
-        self.ptr.is_countable()
-    }
-
-    /// Checks if provided `id` exists within the bounds described by current [BlockSlice].
-    pub fn contains_id(&self, id: &ID) -> bool {
-        let myself = self.ptr.id();
-        myself.client == id.client
-            && id.clock >= myself.clock + self.start
-            && id.clock <= myself.clock + self.end
-    }
-
-    pub fn encode<E: Encoder>(&self, encoder: &mut E, store: Option<&Store>) {
-        match self.ptr.deref() {
-            Block::Item(item) => {
-                let mut info = item.info();
-                let origin = if self.adjacent_left() {
-                    item.origin
-                } else {
-                    Some(ID::new(item.id.client, item.id.clock + self.start - 1))
-                };
-                if origin.is_some() {
-                    info |= HAS_ORIGIN;
-                }
-                let cant_copy_parent_info = info & (HAS_ORIGIN | HAS_RIGHT_ORIGIN) == 0;
-                encoder.write_info(info);
-                if let Some(origin_id) = origin {
-                    encoder.write_left_id(&origin_id);
-                }
-                if self.adjacent_right() {
-                    if let Some(right_origin_id) = item.right_origin.as_ref() {
-                        encoder.write_right_id(right_origin_id);
-                    }
-                }
-                if cant_copy_parent_info {
-                    match &item.parent {
-                        TypePtr::Branch(branch) => {
-                            if let Some(block) = branch.item {
-                                encoder.write_parent_info(false);
-                                encoder.write_left_id(block.id());
-                            } else if let Some(store) = store {
-                                let name = store.get_type_key(*branch).unwrap();
-                                encoder.write_parent_info(true);
-                                encoder.write_string(name);
-                            }
-                        }
-                        TypePtr::Named(name) => {
-                            encoder.write_parent_info(true);
-                            encoder.write_string(name);
-                        }
-                        TypePtr::ID(id) => {
-                            encoder.write_parent_info(false);
-                            encoder.write_left_id(id);
-                        }
-                        TypePtr::Unknown => {
-                            panic!("Couldn't get item's parent")
-                        }
-                    }
-
-                    if let Some(parent_sub) = item.parent_sub.as_ref() {
-                        encoder.write_string(parent_sub.as_ref());
-                    }
-                }
-                item.content.encode_slice(encoder, self.start, self.end);
-            }
-            Block::GC(_) => {
-                encoder.write_info(BLOCK_GC_REF_NUMBER);
-                encoder.write_len(self.len());
-            }
-        }
-    }
-
-    /// Returns a [BlockSlice] wrapper for a [Block] identified as a right neighbor of this slice.
-    /// This method doesn't have to be equivalent of [Item::right]: if current slices's end range
-    /// is not an equivalent to the end of underlying [Block], a returned slice will contain the
-    /// same block that starts when the current ends.
-    ///
-    /// # Example
-    ///
-    /// If an underlying block is responsible for clock range of [0..10) and current slice is [2..8)
-    /// then right slice returned by this method will be [8..10).
-    pub fn right(&self) -> Option<BlockSlice> {
-        let last_clock = self.ptr.len() - 1;
-        if self.end == last_clock {
-            if let Block::Item(item) = self.ptr.deref() {
-                let right_ptr = item.right?;
-                Some(BlockSlice::from(right_ptr))
-            } else {
-                None
-            }
-        } else {
-            Some(BlockSlice::new(self.ptr, self.end + 1, last_clock))
-        }
-    }
-
-    /// Returns a [BlockSlice] wrapper for a [Block] identified as a left neighbor of this slice.
-    /// This method doesn't have to be equivalent of [Item::right]: if current slices's start range
-    /// is not an equivalent to the start of underlying [Block], a returned slice will contain the
-    /// range that starts with current underlying block start and end where this slice starts.
-    ///
-    /// # Example
-    ///
-    /// If an underlying block is responsible for clock range of [0..10) and current slice is [2..8)
-    /// then right slice returned by this method will be [0..2).
-    pub fn left(&self) -> Option<BlockSlice> {
-        if self.start == 0 {
-            if let Block::Item(item) = self.ptr.deref() {
-                let left_ptr = item.left?;
-                Some(BlockSlice::from(left_ptr))
-            } else {
-                None
-            }
-        } else {
-            Some(BlockSlice::new(self.ptr, 0, self.start - 1))
-        }
-    }
-}
-
-impl From<BlockPtr> for BlockSlice {
-    fn from(ptr: BlockPtr) -> Self {
-        BlockSlice::new(ptr, 0, ptr.len() - 1)
-    }
-}
-
-/// Block defines a range of consecutive updates performed by the same peer. While individual
-/// updates are always uniquely defined by their corresponding [ID]s, they may contain a lot of
-/// additional metadata. Block representation here is crucial, since it optimizes memory usage,
-/// available when multiple updates have been performed one after another (eg. *when user is writing
-/// a sentence, individual key strokes are independent updates but they can be compresses into a
-/// single block containing an entire sentence for as long as another piece of data is not being
-/// inserted in the middle it*).
-#[derive(PartialEq)]
-pub enum Block {
-    /// An active block containing user data.
-    Item(Item),
-
-    /// Block, which is a subject of garbage collection after an [Item] has been deleted and its
-    /// safe for the transaction to remove it.
-    GC(BlockRange),
-}
-
-impl Block {
-    /// Since [Block] can span over multiple elements, this method returns an unique ID of the last
-    /// element contained within current block.
-    pub fn last_id(&self) -> ID {
-        match self {
-            Block::Item(item) => item.last_id(),
-            Block::GC(gc) => gc.last_id(),
-        }
-    }
-
-    /// Tries to cast this [Block] into an immutable [Item] reference, returning `None` if block was
-    /// in fact not an item.
-    pub fn as_item(&self) -> Option<&Item> {
-        match self {
-            Block::Item(item) => Some(item),
-            _ => None,
-        }
-    }
-
-    /// Tries to cast this [Block] into a mutable [Item] reference, returning `None` if block was in
-    /// fact not an item.
-    pub fn as_item_mut(&mut self) -> Option<&mut Item> {
-        match self {
-            Block::Item(item) => Some(item),
-            _ => None,
-        }
-    }
-
-    /// Checks if current block has been deleted. Yrs uses soft deletion (a.k.a. tombstoning) for
-    /// marking deleted blocks.
-    pub fn is_deleted(&self) -> bool {
-        match self {
-            Block::Item(item) => item.is_deleted(),
-            Block::GC(_) => true,
-        }
+impl Item {
+    pub(crate) fn clock_range(&self) -> (u32, u32) {
+        let start = self.id.clock;
+        let end = start + self.len;
+        (start, end)
     }
 
     pub fn encode<E: Encoder>(&self, store: Option<&Store>, encoder: &mut E) {
-        match self {
-            Block::Item(item) => {
-                let info = item.info();
-                let cant_copy_parent_info = info & (HAS_ORIGIN | HAS_RIGHT_ORIGIN) == 0;
-                encoder.write_info(info);
-                if let Some(origin_id) = item.origin.as_ref() {
-                    encoder.write_left_id(origin_id);
-                }
-                if let Some(right_origin_id) = item.right_origin.as_ref() {
-                    encoder.write_right_id(right_origin_id);
-                }
-                if cant_copy_parent_info {
-                    match &item.parent {
-                        TypePtr::Branch(branch) => {
-                            if let Some(block) = branch.item {
-                                encoder.write_parent_info(false);
-                                encoder.write_left_id(block.id());
-                            } else if let Some(store) = store {
-                                let name = store.get_type_key(*branch).unwrap();
-                                encoder.write_parent_info(true);
-                                encoder.write_string(name);
-                            }
-                        }
-                        TypePtr::Named(name) => {
-                            encoder.write_parent_info(true);
-                            encoder.write_string(name);
-                        }
-                        TypePtr::ID(id) => {
-                            encoder.write_parent_info(false);
-                            encoder.write_left_id(id);
-                        }
-                        TypePtr::Unknown => {
-                            panic!("Couldn't get item's parent")
-                        }
-                    }
-                    if let Some(parent_sub) = item.parent_sub.as_ref() {
-                        encoder.write_string(parent_sub.as_ref());
+        let info = self.info();
+        let cant_copy_parent_info = info & (HAS_ORIGIN | HAS_RIGHT_ORIGIN) == 0;
+        encoder.write_info(info);
+        if let Some(origin_id) = self.origin.as_ref() {
+            encoder.write_left_id(origin_id);
+        }
+        if let Some(right_origin_id) = self.right_origin.as_ref() {
+            encoder.write_right_id(right_origin_id);
+        }
+        if cant_copy_parent_info {
+            match &self.parent {
+                TypePtr::Branch(branch) => {
+                    if let Some(block) = branch.item {
+                        encoder.write_parent_info(false);
+                        encoder.write_left_id(block.id());
+                    } else if let Some(store) = store {
+                        let name = store.get_type_key(*branch).unwrap();
+                        encoder.write_parent_info(true);
+                        encoder.write_string(name);
                     }
                 }
-                item.content.encode(encoder);
+                TypePtr::Named(name) => {
+                    encoder.write_parent_info(true);
+                    encoder.write_string(name);
+                }
+                TypePtr::ID(id) => {
+                    encoder.write_parent_info(false);
+                    encoder.write_left_id(id);
+                }
+                TypePtr::Unknown => {
+                    panic!("Couldn't get item's parent")
+                }
             }
-            Block::GC(gc) => {
-                encoder.write_info(BLOCK_GC_REF_NUMBER);
-                encoder.write_len(gc.len);
+            if let Some(parent_sub) = self.parent_sub.as_ref() {
+                encoder.write_string(parent_sub.as_ref());
             }
         }
+        self.content.encode(encoder);
     }
 
-    /// Returns a unique identifier of a first update contained by a current [Block].
+    /// Returns a unique identifier of a first update contained by a current [Item].
     pub fn id(&self) -> &ID {
-        match self {
-            Block::Item(item) => &item.id,
-            Block::GC(gc) => &gc.id,
-        }
-    }
-
-    /// Returns a length of a block. For most situation it works like [Block::content_len] with a
-    /// difference to a [Text]/[XmlText] contents - in order to achieve compatibility with
-    /// Yjs we need to calculate string length in terms of UTF-16 character encoding.
-    /// However depending on used [Encoding] scheme we may calculate string length/offsets
-    /// differently.
-    pub fn len(&self) -> u32 {
-        match self {
-            Block::Item(item) => item.len(),
-            Block::GC(gc) => gc.len,
-        }
-    }
-
-    /// Checks if two blocks are of the same type.
-    pub fn same_type(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Block::Item(_), Block::Item(_)) | (Block::GC(_), Block::GC(_)) => true,
-            _ => false,
-        }
-    }
-
-    /// Checks if current block has been deleted and garbage collected.
-    pub fn is_gc(&self) -> bool {
-        if let Block::GC(_) = self {
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Checks if current block is an [Item] with active data attached to it.
-    pub fn is_item(&self) -> bool {
-        if let Block::Item(_) = self {
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Checks if provided `id` exists within a range defined by the current [Block].
-    pub fn contains(&self, id: &ID) -> bool {
-        match self {
-            Block::Item(v) => v.contains(id),
-            Block::GC(v) => v.contains(id),
-        }
+        &self.id
     }
 }
 
@@ -1163,15 +897,15 @@ impl Block {
 #[derive(Debug)]
 pub(crate) struct ItemPosition {
     pub parent: types::TypePtr,
-    pub left: Option<BlockPtr>,
-    pub right: Option<BlockPtr>,
+    pub left: Option<ItemPtr>,
+    pub right: Option<ItemPtr>,
     pub index: u32,
     pub current_attrs: Option<Box<Attrs>>,
 }
 
 impl ItemPosition {
     pub fn forward(&mut self) -> bool {
-        if let Some(Block::Item(right)) = self.right.as_deref() {
+        if let Some(right) = self.right.as_deref() {
             if !right.is_deleted() {
                 match &right.content {
                     ItemContent::String(_) | ItemContent::Embed(_) => {
@@ -1322,9 +1056,13 @@ impl Into<u16> for ItemFlags {
     }
 }
 
-/// An item is a basic unit of work in Yrs. It contains user data reinforced with all metadata
-/// required for a potential conflict resolution as well as extra fields used for joining blocks
-/// together as a part of indexed sequences or maps.
+/// Block defines a range of consecutive updates performed by the same peer. While individual
+/// updates are always uniquely defined by their corresponding [ID]s, they may contain a lot of
+/// additional metadata. Block representation here is crucial, since it optimizes memory usage,
+/// available when multiple updates have been performed one after another (eg. *when user is writing
+/// a sentence, individual key strokes are independent updates but they can be compresses into a
+/// single block containing an entire sentence for as long as another piece of data is not being
+/// inserted in the middle it*).
 #[derive(PartialEq)]
 pub struct Item {
     /// Unique identifier of the first update described by the current [Item].
@@ -1335,14 +1073,14 @@ pub struct Item {
 
     /// Pointer to left neighbor of this item. Used in sequenced collections.
     /// If `None`, then current item is the first one on its [parent](Item::parent) collection.
-    pub(crate) left: Option<BlockPtr>,
+    pub(crate) left: Option<ItemPtr>,
 
     /// Pointer to right neighbor of this item. Used in sequenced collections.
     /// If `None`, then current item is the last one on its [parent](Item::parent) collection.
     ///
     /// For map-like CRDTs if this field is `None`, it means that a current item also contains
     /// the most recent update for an individual key-value entry.
-    pub(crate) right: Option<BlockPtr>,
+    pub(crate) right: Option<ItemPtr>,
 
     /// Used for concurrent insert conflict resolution. An ID of a left-side neighbor at the moment
     /// of insertion of current block.
@@ -1367,7 +1105,7 @@ pub struct Item {
     pub(crate) parent_sub: Option<Arc<str>>,
 
     /// This property is reused by the moved prop. In this case this property refers to an Item.
-    pub(crate) moved: Option<BlockPtr>,
+    pub(crate) moved: Option<ItemPtr>,
 
     /// Bit flag field which contains information about specifics of this item.
     pub(crate) info: ItemFlags,
@@ -1450,21 +1188,21 @@ impl std::fmt::Display for BlockRange {
 impl Item {
     pub(crate) fn new(
         id: ID,
-        left: Option<BlockPtr>,
+        left: Option<ItemPtr>,
         origin: Option<ID>,
-        right: Option<BlockPtr>,
+        right: Option<ItemPtr>,
         right_origin: Option<ID>,
         parent: TypePtr,
         parent_sub: Option<Arc<str>>,
         content: ItemContent,
-    ) -> Box<Block> {
+    ) -> Box<Item> {
         let info = ItemFlags::new(if content.is_countable() {
             ITEM_FLAG_COUNTABLE
         } else {
             0
         });
         let len = content.len(OffsetKind::Utf16);
-        let mut item = Box::new(Block::Item(Item {
+        let mut item = Box::new(Item {
             id,
             len,
             left,
@@ -1477,9 +1215,9 @@ impl Item {
             info,
             moved: None,
             redone: None,
-        }));
-        let item_ptr = BlockPtr::from(&mut item);
-        if let ItemContent::Type(branch) = &mut item.as_item_mut().unwrap().content {
+        });
+        let item_ptr = ItemPtr::from(&mut item);
+        if let ItemContent::Type(branch) = &mut item.content {
             branch.item = Some(item_ptr);
         }
         item
@@ -1539,9 +1277,9 @@ impl Item {
 
         match &self.parent {
             TypePtr::Unknown => {
-                if let Some(Block::Item(item)) = self.left.as_deref() {
+                if let Some(item) = self.left.as_deref() {
                     if let TypePtr::Unknown = item.parent {
-                        if let Some(Block::Item(item)) = self.right.as_deref() {
+                        if let Some(item) = self.right.as_deref() {
                             self.parent = item.parent.clone();
                             self.parent_sub = item.parent_sub.clone();
                         }
@@ -1549,7 +1287,7 @@ impl Item {
                         self.parent = item.parent.clone();
                         self.parent_sub = item.parent_sub.clone();
                     }
-                } else if let Some(Block::Item(item)) = self.right.as_deref() {
+                } else if let Some(item) = self.right.as_deref() {
                     self.parent = item.parent.clone();
                     self.parent_sub = item.parent_sub.clone();
                 }
@@ -1559,10 +1297,12 @@ impl Item {
                 self.parent = branch.into();
             }
             TypePtr::ID(id) => {
-                let ptr = store.blocks.get_block(id).unwrap();
-                self.parent = if let Block::Item(item) = ptr.deref() {
+                let ptr = store.blocks.get_item(id);
+                self.parent = if let Some(item) = ptr {
                     match &item.content {
-                        ItemContent::Type(branch) => TypePtr::Branch(BranchPtr::from(branch)),
+                        ItemContent::Type(branch) => {
+                            TypePtr::Branch(BranchPtr::from(branch.as_ref()))
+                        }
                         ItemContent::Deleted(_) => TypePtr::Unknown,
                         _ => panic!("Defect: parent points to a block which is not a shared type"),
                     }
@@ -1574,9 +1314,11 @@ impl Item {
         }
     }
 
-    /// Returns a number of elements stored within this item. These elements don't have to exists
-    /// in reality ie. when item has been deleted, corresponding content no longer exists but `len`
-    /// still refers to a number of elements current block used to represent.
+    /// Returns a length of a block. For most situation it works like [Item::content_len] with a
+    /// difference to a [Text]/[XmlText] contents - in order to achieve compatibility with
+    /// Yjs we need to calculate string length in terms of UTF-16 character encoding.
+    /// However depending on used [Encoding] scheme we may calculate string length/offsets
+    /// differently.
     pub fn len(&self) -> u32 {
         self.len
     }
@@ -1590,7 +1332,7 @@ impl Item {
         ID::new(self.id.client, self.id.clock + self.len() - 1)
     }
 
-    fn info(&self) -> u8 {
+    pub fn info(&self) -> u8 {
         let info = if self.origin.is_some() { HAS_ORIGIN } else { 0 } // is left null
             | if self.right_origin.is_some() { HAS_RIGHT_ORIGIN } else { 0 } // is right null
             | if self.parent_sub.is_some() { HAS_PARENT_SUB } else { 0 }
@@ -2121,24 +1863,17 @@ impl ItemContent {
         match self {
             ItemContent::Type(branch) => {
                 let mut curr = branch.start.take();
-                while let Some(mut ptr) = curr {
-                    if let Block::Item(item) = ptr.deref_mut() {
-                        curr = item.right.clone();
-                        ptr.gc(true);
-                        continue;
-                    }
-                    break;
+                while let Some(mut item) = curr {
+                    curr = item.right.clone();
+                    item.gc(true);
                 }
 
                 for (_, ptr) in branch.map.drain() {
                     curr = Some(ptr);
-                    while let Some(mut ptr) = curr {
-                        if let Block::Item(item) = ptr.deref_mut() {
-                            curr = item.left.clone();
-                            ptr.gc(true);
-                            continue;
-                        }
-                        break;
+                    while let Some(mut item) = curr {
+                        curr = item.left.clone();
+                        item.gc(true);
+                        continue;
                     }
                 }
             }
@@ -2310,7 +2045,7 @@ impl std::fmt::Display for ItemPosition {
 pub trait Prelim: Sized {
     /// Type of a value to be returned as a result of inserting this [Prelim] type instance.
     /// Use [Unused] if none is necessary.
-    type Return: TryFrom<BlockPtr>;
+    type Return: TryFrom<ItemPtr>;
 
     /// This method is used to create initial content required in order to create a block item.
     /// A supplied `ptr` can be used to identify block that is about to be created to store
@@ -2359,11 +2094,11 @@ impl Prelim for PrelimString {
 #[repr(transparent)]
 pub struct Unused;
 
-impl TryFrom<BlockPtr> for Unused {
-    type Error = BlockPtr;
+impl TryFrom<ItemPtr> for Unused {
+    type Error = ItemPtr;
 
     #[inline(always)]
-    fn try_from(_: BlockPtr) -> Result<Self, Self::Error> {
+    fn try_from(_: ItemPtr) -> Result<Self, Self::Error> {
         Ok(Unused)
     }
 }
@@ -2418,31 +2153,16 @@ impl std::fmt::Display for ID {
     }
 }
 
-impl std::fmt::Debug for BlockPtr {
+impl std::fmt::Debug for ItemPtr {
     #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Display::fmt(self, f)
     }
 }
 
-impl std::fmt::Display for BlockPtr {
+impl std::fmt::Display for ItemPtr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "({})", self.id())
-    }
-}
-
-impl std::fmt::Display for Block {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Block::Item(item) => write!(f, "Item{}", item),
-            Block::GC(gc) => write!(f, "GC{}", gc),
-        }
-    }
-}
-
-impl std::fmt::Debug for Block {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(self, f)
     }
 }
 

@@ -508,6 +508,8 @@ mod error;
 pub mod iter;
 mod moving;
 pub mod observer;
+mod slice;
+mod state_vector;
 #[cfg(test)]
 mod test_utils;
 #[cfg(test)]
@@ -520,8 +522,6 @@ pub use crate::alt::{
 };
 pub use crate::any::Any;
 pub use crate::block::ID;
-pub use crate::block_store::Snapshot;
-pub use crate::block_store::StateVector;
 pub use crate::doc::Doc;
 pub use crate::doc::OffsetKind;
 pub use crate::doc::Options;
@@ -538,6 +538,8 @@ pub use crate::moving::IndexedSequence;
 pub use crate::moving::Offset;
 pub use crate::moving::StickyIndex;
 pub use crate::observer::{Observer, Subscription, SubscriptionId};
+pub use crate::state_vector::Snapshot;
+pub use crate::state_vector::StateVector;
 pub use crate::store::Store;
 pub use crate::transaction::Origin;
 pub use crate::transaction::ReadTxn;

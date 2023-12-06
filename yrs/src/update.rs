@@ -1,9 +1,10 @@
 use crate::block::{
-    Block, BlockPtr, BlockRange, BlockSlice, ClientID, Item, ItemContent, BLOCK_GC_REF_NUMBER,
-    BLOCK_SKIP_REF_NUMBER, HAS_ORIGIN, HAS_PARENT_SUB, HAS_RIGHT_ORIGIN,
+    BlockRange, ClientID, Item, ItemContent, ItemPtr, BLOCK_GC_REF_NUMBER, BLOCK_SKIP_REF_NUMBER,
+    HAS_ORIGIN, HAS_PARENT_SUB, HAS_RIGHT_ORIGIN,
 };
 use crate::encoding::read::Error;
 use crate::id_set::DeleteSet;
+use crate::slice::ItemSlice;
 #[cfg(test)]
 use crate::store::Store;
 use crate::transaction::TransactionMut;
@@ -72,8 +73,9 @@ impl std::fmt::Debug for BlockCarrier {
 impl std::fmt::Display for BlockCarrier {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            BlockCarrier::Block(x) => x.fmt(f),
+            BlockCarrier::Item(x) => x.fmt(f),
             BlockCarrier::Skip(x) => write!(f, "Skip{}", x),
+            BlockCarrier::GC(x) => write!(f, "GC{}", x),
         }
     }
 }
@@ -127,18 +129,16 @@ impl Update {
                             if a.try_squash(b) {
                                 n2 = i2.next();
                                 continue;
-                            } else if let BlockCarrier::Block(block) = a {
-                                if block.is_item() {
-                                    // we only can split Block::Item
-                                    let diff = (block.id().clock + block.len()) as isize
-                                        - b.id().clock as isize;
-                                    if diff > 0 {
-                                        // `b`'s clock position is inside of `a` -> we need to split `a`
-                                        if let Some(new) = a.splice(diff as u32) {
-                                            blocks.insert(i1 + 1, new);
-                                        }
-                                        //blocks = self.blocks.clients.get_mut(&client).unwrap();
+                            } else if let BlockCarrier::Item(block) = a {
+                                // we only can split Block::Item
+                                let diff = (block.id().clock + block.len()) as isize
+                                    - b.id().clock as isize;
+                                if diff > 0 {
+                                    // `b`'s clock position is inside of `a` -> we need to split `a`
+                                    if let Some(new) = a.splice(diff as u32) {
+                                        blocks.insert(i1 + 1, new);
                                     }
+                                    //blocks = self.blocks.clients.get_mut(&client).unwrap();
                                 }
                             }
                             i1 += 1;
@@ -215,10 +215,8 @@ impl Update {
                         let offset = offset as u32;
                         let client = id.client;
                         local_sv.set_max(client, id.clock + block.len());
-                        if let BlockCarrier::Block(block) = &mut block {
-                            if let Block::Item(item) = block.as_mut() {
-                                item.repair(store);
-                            }
+                        if let BlockCarrier::Item(item) = &mut block {
+                            item.repair(store);
                         }
                         let should_delete = block.integrate(txn, offset);
                         let delete_ptr = if should_delete {
@@ -227,10 +225,9 @@ impl Update {
                         } else {
                             None
                         };
-                        if let BlockCarrier::Block(block) = block {
+                        if let BlockCarrier::Item(block) = block {
                             store = txn.store_mut();
-                            let blocks = store.blocks.get_client_blocks_mut(client);
-                            blocks.push(block);
+                            store.blocks.push_block(block);
                         }
 
                         if let Some(ptr) = delete_ptr {
@@ -294,81 +291,78 @@ impl Update {
     }
 
     fn missing(block: &BlockCarrier, local_sv: &StateVector) -> Option<ClientID> {
-        if let BlockCarrier::Block(block) = block {
-            if let Block::Item(item) = block.as_ref() {
-                if let Some(origin) = &item.origin {
-                    if origin.client != item.id.client
-                        && origin.clock >= local_sv.get(&origin.client)
-                    {
-                        return Some(origin.client);
-                    }
+        if let BlockCarrier::Item(item) = block {
+            if let Some(origin) = &item.origin {
+                if origin.client != item.id.client && origin.clock >= local_sv.get(&origin.client) {
+                    return Some(origin.client);
                 }
+            }
 
-                if let Some(right_origin) = &item.right_origin {
-                    if right_origin.client != item.id.client
-                        && right_origin.clock >= local_sv.get(&right_origin.client)
-                    {
-                        return Some(right_origin.client);
-                    }
+            if let Some(right_origin) = &item.right_origin {
+                if right_origin.client != item.id.client
+                    && right_origin.clock >= local_sv.get(&right_origin.client)
+                {
+                    return Some(right_origin.client);
                 }
+            }
 
-                match &item.parent {
-                    TypePtr::Branch(parent) => {
-                        if let Some(block) = &parent.item {
-                            let parent_id = block.id();
-                            if parent_id.client != item.id.client
-                                && parent_id.clock >= local_sv.get(&parent_id.client)
-                            {
-                                return Some(parent_id.client);
-                            }
-                        }
-                    }
-                    TypePtr::ID(parent_id) => {
+            match &item.parent {
+                TypePtr::Branch(parent) => {
+                    if let Some(block) = &parent.item {
+                        let parent_id = block.id();
                         if parent_id.client != item.id.client
                             && parent_id.clock >= local_sv.get(&parent_id.client)
                         {
                             return Some(parent_id.client);
                         }
                     }
-                    _ => {}
                 }
+                TypePtr::ID(parent_id) => {
+                    if parent_id.client != item.id.client
+                        && parent_id.clock >= local_sv.get(&parent_id.client)
+                    {
+                        return Some(parent_id.client);
+                    }
+                }
+                _ => {}
+            }
 
-                match &item.content {
-                    ItemContent::Move(m) => {
-                        if let Some(start) = m.start.id() {
+            match &item.content {
+                ItemContent::Move(m) => {
+                    if let Some(start) = m.start.id() {
+                        if start.clock >= local_sv.get(&start.client) {
+                            return Some(start.client);
+                        }
+                    }
+                    if !m.is_collapsed() {
+                        if let Some(end) = m.end.id() {
+                            if end.clock >= local_sv.get(&end.client) {
+                                return Some(end.client);
+                            }
+                        }
+                    }
+                }
+                ItemContent::Type(branch) =>
+                {
+                    #[cfg(feature = "weak")]
+                    if let TypeRef::WeakLink(source) = &branch.type_ref {
+                        let start = source.quote_start.id();
+                        let end = source.quote_end.id();
+                        if let Some(start) = start {
                             if start.clock >= local_sv.get(&start.client) {
                                 return Some(start.client);
                             }
                         }
-                        if !m.is_collapsed() {
-                            if let Some(end) = m.end.id() {
+                        if start != end {
+                            if let Some(end) = &source.quote_end.id() {
                                 if end.clock >= local_sv.get(&end.client) {
                                     return Some(end.client);
                                 }
                             }
                         }
                     }
-                    ItemContent::Type(branch) => {
-                        #[cfg(feature = "weak")]
-                        if let TypeRef::WeakLink(source) = &branch.type_ref {
-                            let start = source.quote_start.id();
-                            let end = source.quote_end.id();
-                            if let Some(start) = start {
-                                if start.clock >= local_sv.get(&start.client) {
-                                    return Some(start.client);
-                                }
-                            }
-                            if start != end {
-                                if let Some(end) = &source.quote_end.id() {
-                                    if end.clock >= local_sv.get(&end.client) {
-                                        return Some(end.client);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    _ => { /* do nothing */ }
                 }
+                _ => { /* do nothing */ }
             }
         }
         None
@@ -429,7 +423,7 @@ impl Update {
             }
             BLOCK_GC_REF_NUMBER => {
                 let len: u32 = decoder.read_len()?;
-                Ok(Box::new(Block::GC(BlockRange { id, len })).into())
+                Ok(BlockCarrier::GC(BlockRange { id, len }))
             }
             info => {
                 let cant_copy_parent_info = info & (HAS_ORIGIN | HAS_RIGHT_ORIGIN) == 0;
@@ -770,16 +764,17 @@ impl<T: Iterator> Memoizable for T {
 
 #[derive(PartialEq)]
 pub(crate) enum BlockCarrier {
-    Block(Box<Block>),
+    Item(Box<Item>),
+    GC(BlockRange),
     Skip(BlockRange),
 }
 
 impl BlockCarrier {
     pub(crate) fn splice(&self, offset: u32) -> Option<Self> {
         match self {
-            BlockCarrier::Block(x) => {
-                let next = BlockPtr::from(x).splice(offset, OffsetKind::Utf16)?;
-                Some(BlockCarrier::Block(next))
+            BlockCarrier::Item(x) => {
+                let next = ItemPtr::from(x).splice(offset, OffsetKind::Utf16)?;
+                Some(BlockCarrier::Item(next))
             }
             BlockCarrier::Skip(x) => {
                 if offset == 0 {
@@ -788,40 +783,51 @@ impl BlockCarrier {
                     Some(BlockCarrier::Skip(x.slice(offset)))
                 }
             }
+            BlockCarrier::GC(x) => {
+                if offset == 0 {
+                    None
+                } else {
+                    Some(BlockCarrier::GC(x.slice(offset)))
+                }
+            }
         }
     }
     pub(crate) fn same_type(&self, other: &BlockCarrier) -> bool {
         match (self, other) {
             (BlockCarrier::Skip(_), BlockCarrier::Skip(_)) => true,
-            (BlockCarrier::Block(a), BlockCarrier::Block(b)) => a.same_type(b),
+            (BlockCarrier::Item(_), BlockCarrier::Item(_)) => true,
+            (BlockCarrier::GC(_), BlockCarrier::GC(_)) => true,
             (_, _) => false,
         }
     }
     pub(crate) fn id(&self) -> &ID {
         match self {
-            BlockCarrier::Block(x) => x.id(),
+            BlockCarrier::Item(x) => x.id(),
             BlockCarrier::Skip(x) => &x.id,
+            BlockCarrier::GC(x) => &x.id,
         }
     }
 
     pub(crate) fn len(&self) -> u32 {
         match self {
-            BlockCarrier::Block(x) => x.len(),
+            BlockCarrier::Item(x) => x.len(),
             BlockCarrier::Skip(x) => x.len,
+            BlockCarrier::GC(x) => x.len,
         }
     }
 
     pub(crate) fn last_id(&self) -> ID {
         match self {
-            BlockCarrier::Block(x) => x.last_id(),
+            BlockCarrier::Item(x) => x.last_id(),
             BlockCarrier::Skip(x) => x.last_id(),
+            BlockCarrier::GC(x) => x.last_id(),
         }
     }
 
     pub(crate) fn try_squash(&mut self, other: &BlockCarrier) -> bool {
         match (self, other) {
-            (BlockCarrier::Block(a), BlockCarrier::Block(b)) => {
-                BlockPtr::from(a).try_squash(BlockPtr::from(b))
+            (BlockCarrier::Item(a), BlockCarrier::Item(b)) => {
+                ItemPtr::from(a).try_squash(ItemPtr::from(b))
             }
             (BlockCarrier::Skip(a), BlockCarrier::Skip(b)) => {
                 a.merge(b);
@@ -831,16 +837,16 @@ impl BlockCarrier {
         }
     }
 
-    pub fn as_block_ptr(&mut self) -> Option<BlockPtr> {
-        if let BlockCarrier::Block(block) = self {
-            Some(BlockPtr::from(block))
+    pub fn as_block_ptr(&mut self) -> Option<ItemPtr> {
+        if let BlockCarrier::Item(block) = self {
+            Some(ItemPtr::from(block))
         } else {
             None
         }
     }
 
-    pub fn into_block(self) -> Option<Box<Block>> {
-        if let BlockCarrier::Block(block) = self {
+    pub fn into_block(self) -> Option<Box<Item>> {
+        if let BlockCarrier::Item(block) = self {
             Some(block)
         } else {
             None
@@ -856,12 +862,16 @@ impl BlockCarrier {
     }
     pub fn encode_with_offset<E: Encoder>(&self, encoder: &mut E, offset: u32) {
         match self {
-            BlockCarrier::Block(x) => {
-                let slice = BlockSlice::new(x.into(), offset, x.len() - 1);
+            BlockCarrier::Item(x) => {
+                let slice = ItemSlice::new(x.into(), offset, x.len() - 1);
                 slice.encode(encoder, None)
             }
             BlockCarrier::Skip(x) => {
                 encoder.write_info(BLOCK_SKIP_REF_NUMBER);
+                encoder.write_len(x.len - offset);
+            }
+            BlockCarrier::GC(x) => {
+                encoder.write_info(BLOCK_GC_REF_NUMBER);
                 encoder.write_len(x.len - offset);
             }
         }
@@ -869,25 +879,30 @@ impl BlockCarrier {
 
     pub fn integrate(&mut self, txn: &mut TransactionMut, offset: u32) -> bool {
         match self {
-            BlockCarrier::Block(x) => BlockPtr::from(x).integrate(txn, offset),
+            BlockCarrier::Item(x) => ItemPtr::from(x).integrate(txn, offset),
             BlockCarrier::Skip(x) => x.integrate(offset),
+            BlockCarrier::GC(x) => x.integrate(offset),
         }
     }
 }
 
-impl From<Box<Block>> for BlockCarrier {
-    fn from(block: Box<Block>) -> Self {
-        BlockCarrier::Block(block)
+impl From<Box<Item>> for BlockCarrier {
+    fn from(block: Box<Item>) -> Self {
+        BlockCarrier::Item(block)
     }
 }
 
 impl Encode for BlockCarrier {
     fn encode<E: Encoder>(&self, encoder: &mut E) {
         match self {
-            BlockCarrier::Block(block) => block.encode(None, encoder),
+            BlockCarrier::Item(block) => block.encode(None, encoder),
             BlockCarrier::Skip(skip) => {
                 encoder.write_info(BLOCK_SKIP_REF_NUMBER);
                 encoder.write_len(skip.len)
+            }
+            BlockCarrier::GC(gc) => {
+                encoder.write_info(BLOCK_GC_REF_NUMBER);
+                encoder.write_len(gc.len)
             }
         }
     }
@@ -934,7 +949,7 @@ impl Into<Store> for Update {
                 .blocks
                 .get_client_blocks_with_capacity_mut(client_id, vec.len());
             for block in vec {
-                if let BlockCarrier::Block(block) = block {
+                if let BlockCarrier::Item(block) = block {
                     blocks.push(block);
                 } else {
                     panic!("Cannot convert Update into block store - Skip block detected");

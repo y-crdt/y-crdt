@@ -1,4 +1,5 @@
 use crate::block::{ClientID, Item, ItemContent};
+use crate::encoding::read::Read;
 use crate::id_set::{DeleteSet, IdSet};
 use crate::store::Store;
 use crate::types::xml::XmlFragment;
@@ -6,14 +7,16 @@ use crate::types::{Branch, ToJson, TypePtr, TypeRef};
 use crate::update::{BlockCarrier, Update};
 use crate::updates::decoder::{Decode, Decoder, DecoderV1};
 use crate::updates::encoder::Encode;
-use crate::{ArrayPrelim, Doc, GetString, Map, MapPrelim, MapRef, ReadTxn, StateVector, Transact, Xml, XmlElementRef, XmlTextRef, ID, Any};
+use crate::{
+    Any, ArrayPrelim, Doc, GetString, Map, MapPrelim, MapRef, ReadTxn, StateVector, Transact, Xml,
+    XmlElementRef, XmlTextRef, ID,
+};
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::convert::TryInto;
 use std::fs::File;
 use std::io::BufReader;
 use std::rc::Rc;
-use crate::encoding::read::Read;
 
 #[test]
 fn text_insert_delete() {
@@ -107,7 +110,7 @@ fn text_insert_delete() {
     let _sub = doc.observe_update_v1(move |_, e| {
         let u = Update::decode_v1(&e.update).unwrap();
         for (actual, expected) in u.blocks.blocks().zip(expected_blocks.as_slice()) {
-            if let BlockCarrier::Block(block) = actual {
+            if let BlockCarrier::Item(block) = actual {
                 assert_eq!(block, expected);
             }
         }

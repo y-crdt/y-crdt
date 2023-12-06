@@ -1,4 +1,4 @@
-use crate::block::{Block, BlockPtr, ItemContent, Prelim, Unused};
+use crate::block::{ItemContent, ItemPtr, Prelim, Unused};
 use crate::block_iter::BlockIter;
 use crate::encoding::read::Error;
 use crate::transaction::TransactionMut;
@@ -7,7 +7,6 @@ use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::{ReadTxn, WriteTxn, ID};
 use std::collections::HashSet;
-use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -22,7 +21,7 @@ pub struct Move {
     /// This representation can be improved if we ever run into memory issues because of too many overrides.
     /// Ideally, we should probably just re-iterate the document and re-integrate all moved items.
     /// This is fast enough and reduces memory footprint significantly.
-    pub(crate) overrides: Option<HashSet<BlockPtr>>,
+    pub(crate) overrides: Option<HashSet<ItemPtr>>,
 }
 
 impl Move {
@@ -45,7 +44,7 @@ impl Move {
     pub(crate) fn get_moved_coords_mut<T: WriteTxn>(
         &self,
         txn: &mut T,
-    ) -> (Option<BlockPtr>, Option<BlockPtr>) {
+    ) -> (Option<ItemPtr>, Option<ItemPtr>) {
         let start = if let Some(start) = self.start.id() {
             Self::get_item_ptr_mut(txn, start, self.start.assoc)
         } else {
@@ -59,7 +58,7 @@ impl Move {
         (start, end)
     }
 
-    fn get_item_ptr_mut<T: WriteTxn>(txn: &mut T, id: &ID, assoc: Assoc) -> Option<BlockPtr> {
+    fn get_item_ptr_mut<T: WriteTxn>(txn: &mut T, id: &ID, assoc: Assoc) -> Option<ItemPtr> {
         let store = txn.store_mut();
         if assoc == Assoc::After {
             let slice = store.blocks.get_item_clean_start(id)?;
@@ -75,18 +74,14 @@ impl Move {
             } else {
                 store.materialize(slice)
             };
-            if let Block::Item(item) = ptr.deref() {
-                item.right
-            } else {
-                None
-            }
+            ptr.right
         }
     }
 
     pub(crate) fn get_moved_coords<T: ReadTxn>(
         &self,
         txn: &T,
-    ) -> (Option<BlockPtr>, Option<BlockPtr>) {
+    ) -> (Option<ItemPtr>, Option<ItemPtr>) {
         let start = if let Some(start) = self.start.id() {
             Self::get_item_ptr(txn, start, self.start.assoc)
         } else {
@@ -100,7 +95,7 @@ impl Move {
         (start, end)
     }
 
-    fn get_item_ptr<T: ReadTxn>(txn: &T, id: &ID, assoc: Assoc) -> Option<BlockPtr> {
+    fn get_item_ptr<T: ReadTxn>(txn: &T, id: &ID, assoc: Assoc) -> Option<ItemPtr> {
         if assoc == Assoc::After {
             let slice = txn.store().blocks.get_item_clean_start(id)?;
             debug_assert!(slice.adjacent()); //TODO: remove once confirmed that slice always fits block range
@@ -108,26 +103,22 @@ impl Move {
         } else {
             let slice = txn.store().blocks.get_item_clean_end(id)?;
             debug_assert!(slice.adjacent()); //TODO: remove once confirmed that slice always fits block range
-            if let Block::Item(item) = slice.ptr.deref() {
-                item.right
-            } else {
-                None
-            }
+            slice.ptr.right
         }
     }
 
     pub(crate) fn find_move_loop<T: ReadTxn>(
         &self,
         txn: &mut T,
-        moved: BlockPtr,
-        tracked_moved_items: &mut HashSet<BlockPtr>,
+        moved: ItemPtr,
+        tracked_moved_items: &mut HashSet<ItemPtr>,
     ) -> bool {
         if tracked_moved_items.contains(&moved) {
             true
         } else {
             tracked_moved_items.insert(moved.clone());
             let (mut start, end) = self.get_moved_coords(txn);
-            while let Some(Block::Item(item)) = start.as_deref() {
+            while let Some(item) = start.as_deref() {
                 if start == end {
                     break;
                 }
@@ -147,21 +138,21 @@ impl Move {
         }
     }
 
-    fn push_override(&mut self, ptr: BlockPtr) {
+    fn push_override(&mut self, ptr: ItemPtr) {
         let e = self.overrides.get_or_insert_with(HashSet::default);
         e.insert(ptr);
     }
 
-    pub(crate) fn integrate_block(&mut self, txn: &mut TransactionMut, item: BlockPtr) {
+    pub(crate) fn integrate_block(&mut self, txn: &mut TransactionMut, item: ItemPtr) {
         let (init, end) = self.get_moved_coords_mut(txn);
         let mut max_priority = 0i32;
         let adapt_priority = self.priority < 0;
         let mut start = init;
         while start != end && start.is_some() {
             let start_ptr = start.unwrap().clone();
-            if let Some(Block::Item(start_item)) = start.as_deref_mut() {
+            if let Some(start_item) = start.as_deref_mut() {
                 let mut prev_move = start_item.moved;
-                let next_prio = if let Some(Block::Item(m)) = prev_move.as_deref() {
+                let next_prio = if let Some(m) = prev_move.as_deref() {
                     if let ItemContent::Move(next) = &m.content {
                         next.priority
                     } else {
@@ -183,13 +174,12 @@ impl Move {
                         && is_lower(prev_move.unwrap().id(), item.id()))
                 {
                     if let Some(moved_ptr) = prev_move.clone() {
-                        if let Block::Item(item) = moved_ptr.deref() {
-                            if let ItemContent::Move(m) = &item.content {
-                                if m.is_collapsed() {
-                                    moved_ptr.delete_as_cleanup(txn, adapt_priority);
-                                }
+                        if let ItemContent::Move(m) = &moved_ptr.content {
+                            if m.is_collapsed() {
+                                moved_ptr.delete_as_cleanup(txn, adapt_priority);
                             }
                         }
+
                         self.push_override(moved_ptr);
                         if Some(start_ptr) != init {
                             // only add this to mergeStructs if this is not the first item
@@ -216,7 +206,7 @@ impl Move {
                             }
                         }
                     }
-                } else if let Some(Block::Item(moved_item)) = prev_move.as_deref_mut() {
+                } else if let Some(moved_item) = prev_move.as_deref_mut() {
                     if let ItemContent::Move(m) = &mut moved_item.content {
                         m.push_override(item);
                     }
@@ -232,47 +222,42 @@ impl Move {
         }
     }
 
-    pub(crate) fn delete(&self, txn: &mut TransactionMut, item: BlockPtr) {
+    pub(crate) fn delete(&self, txn: &mut TransactionMut, item: ItemPtr) {
         let (mut start, end) = self.get_moved_coords(txn);
         while start != end && start.is_some() {
             if let Some(start_ptr) = start {
-                if let Block::Item(i) = start_ptr.clone().deref_mut() {
-                    if i.moved == Some(item) {
-                        if let Some(&prev_moved) = txn.prev_moved.get(&start_ptr) {
-                            if txn.has_added(item.id()) {
-                                if prev_moved == item {
-                                    // Edge case: Item has been moved by this move op and it has been created & deleted in the same transaction (hence no effect that should be emitted by the change computation)
-                                    txn.prev_moved.remove(&start_ptr);
-                                }
+                if start_ptr.moved == Some(item) {
+                    if let Some(&prev_moved) = txn.prev_moved.get(&start_ptr) {
+                        if txn.has_added(item.id()) {
+                            if prev_moved == item {
+                                // Edge case: Item has been moved by this move op and it has been created & deleted in the same transaction (hence no effect that should be emitted by the change computation)
+                                txn.prev_moved.remove(&start_ptr);
                             }
-                        } else {
-                            // Normal case: item has been moved by this move and it has not been created & deleted in the same transaction
-                            txn.prev_moved.insert(start_ptr, item);
                         }
-                        i.moved = None;
+                    } else {
+                        // Normal case: item has been moved by this move and it has not been created & deleted in the same transaction
+                        txn.prev_moved.insert(start_ptr, item);
                     }
-                    start = i.right;
-                    continue;
+                    start_ptr.moved = None;
                 }
+                start = start_ptr.right;
+                continue;
             }
             break;
         }
 
-        fn reintegrate(mut ptr: BlockPtr, txn: &mut TransactionMut) {
-            let ptr_copy = ptr.clone();
-            if let Block::Item(item) = ptr.deref_mut() {
-                let deleted = item.is_deleted();
-                if let ItemContent::Move(content) = &mut item.content {
-                    if deleted {
-                        // potentially we can integrate the items that reIntegrateItem overrides
-                        if let Some(overrides) = &content.overrides {
-                            for &inner in overrides.iter() {
-                                reintegrate(inner, txn);
-                            }
+        fn reintegrate(mut item: ItemPtr, txn: &mut TransactionMut) {
+            let deleted = item.is_deleted();
+            if let ItemContent::Move(content) = &mut item.content {
+                if deleted {
+                    // potentially we can integrate the items that reIntegrateItem overrides
+                    if let Some(overrides) = &content.overrides {
+                        for &inner in overrides.iter() {
+                            reintegrate(inner, txn);
                         }
-                    } else {
-                        content.integrate_block(txn, ptr_copy)
                     }
+                } else {
+                    content.integrate_block(txn, item)
                 }
             }
         }
@@ -497,19 +482,19 @@ impl StickyIndex {
         match &self.scope {
             IndexScope::Relative(right_id) => {
                 let store = txn.store();
-                if store.blocks.get_state(&right_id.client) <= right_id.clock {
+                if store.blocks.get_clock(&right_id.client) <= right_id.clock {
                     // type does not exist yet
                     return None;
                 }
                 let (right, diff) = store.follow_redone(right_id);
-                if let Block::Item(item) = right.deref() {
-                    if let Some(b) = item.parent.as_branch() {
+                if let Some(right) = right {
+                    if let Some(b) = right.parent.as_branch() {
                         branch = Some(b.clone());
                         match b.item {
                             Some(i) if i.is_deleted() => { /* do nothing */ }
                             _ => {
                                 // adjust position based on left association if necessary
-                                index = if item.is_deleted() || !item.is_countable() {
+                                index = if right.is_deleted() || !right.is_countable() {
                                     0
                                 } else if self.assoc == Assoc::After {
                                     diff
@@ -517,8 +502,8 @@ impl StickyIndex {
                                     diff + 1
                                 };
                                 let encoding = store.options.offset_kind;
-                                let mut n = item.left;
-                                while let Some(Block::Item(item)) = n.as_deref() {
+                                let mut n = right.left;
+                                while let Some(item) = n.as_deref() {
                                     if !item.is_deleted() && item.is_countable() {
                                         index += item.content_len(encoding);
                                     }
@@ -531,14 +516,14 @@ impl StickyIndex {
             }
             IndexScope::Nested(id) => {
                 let store = txn.store();
-                if store.blocks.get_state(&id.client) <= id.clock {
+                if store.blocks.get_clock(&id.client) <= id.clock {
                     // type does not exist yet
                     return None;
                 }
                 let (ptr, _) = store.follow_redone(id);
-                let item = ptr.as_item()?; // early return if ptr is GC
+                let item = ptr?; // early return if ptr is GC
                 if let ItemContent::Type(b) = &item.content {
-                    branch = Some(BranchPtr::from(b));
+                    branch = Some(BranchPtr::from(b.as_ref()));
                 } // else - branch remains null
             }
             IndexScope::Root(name) => {
@@ -601,10 +586,10 @@ impl StickyIndex {
         }
     }
 
-    pub(crate) fn within_range(&self, ptr: Option<BlockPtr>) -> bool {
+    pub(crate) fn within_range(&self, ptr: Option<ItemPtr>) -> bool {
         if self.assoc == Assoc::Before {
             return false;
-        } else if let Some(Block::Item(item)) = ptr.as_deref() {
+        } else if let Some(item) = ptr.as_deref() {
             if let Some(ptr) = item.left {
                 if let Some(pos) = self.id() {
                     return ptr.last_id() != *pos;

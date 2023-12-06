@@ -1,4 +1,4 @@
-use crate::block::{Block, BlockPtr, EmbedPrelim, Item, ItemContent, ItemPosition, Prelim};
+use crate::block::{EmbedPrelim, Item, ItemContent, ItemPosition, ItemPtr, Prelim};
 use crate::block_iter::BlockIter;
 use crate::transaction::TransactionMut;
 use crate::types::text::{diff_between, TextEvent, YChange};
@@ -234,10 +234,10 @@ impl From<BranchPtr> for XmlElementRef {
     }
 }
 
-impl TryFrom<BlockPtr> for XmlElementRef {
-    type Error = BlockPtr;
+impl TryFrom<ItemPtr> for XmlElementRef {
+    type Error = ItemPtr;
 
-    fn try_from(value: BlockPtr) -> Result<Self, Self::Error> {
+    fn try_from(value: ItemPtr) -> Result<Self, Self::Error> {
         if let Some(branch) = value.clone().as_branch() {
             Ok(Self::from(branch))
         } else {
@@ -392,7 +392,7 @@ pub struct XmlTextRef(BranchPtr);
 
 impl XmlTextRef {
     pub(crate) fn get_string_fragment(
-        head: Option<BlockPtr>,
+        head: Option<ItemPtr>,
         start: Option<&StickyIndex>,
         end: Option<&StickyIndex>,
     ) -> String {
@@ -489,10 +489,10 @@ impl From<BranchPtr> for XmlTextRef {
     }
 }
 
-impl TryFrom<BlockPtr> for XmlTextRef {
-    type Error = BlockPtr;
+impl TryFrom<ItemPtr> for XmlTextRef {
+    type Error = ItemPtr;
 
-    fn try_from(value: BlockPtr) -> Result<Self, Self::Error> {
+    fn try_from(value: ItemPtr) -> Result<Self, Self::Error> {
         if let Some(branch) = value.clone().as_branch() {
             Ok(Self::from(branch))
         } else {
@@ -561,8 +561,7 @@ impl IndexedSequence for XmlFragmentRef {}
 
 impl XmlFragmentRef {
     pub fn parent(&self) -> Option<XmlNode> {
-        let block = self.as_ref().item?;
-        let item = block.as_item()?;
+        let item = self.as_ref().item?;
         let parent = item.parent.as_branch()?;
         XmlNode::try_from(*parent).ok()
     }
@@ -625,10 +624,10 @@ impl From<BranchPtr> for XmlFragmentRef {
     }
 }
 
-impl TryFrom<BlockPtr> for XmlFragmentRef {
-    type Error = BlockPtr;
+impl TryFrom<ItemPtr> for XmlFragmentRef {
+    type Error = ItemPtr;
 
-    fn try_from(value: BlockPtr) -> Result<Self, Self::Error> {
+    fn try_from(value: ItemPtr) -> Result<Self, Self::Error> {
         if let Some(branch) = value.clone().as_branch() {
             Ok(Self::from(branch))
         } else {
@@ -670,7 +669,7 @@ impl<I, T> XmlPrelim for XmlFragmentPrelim<I, T>
 where
     I: IntoIterator<Item = T>,
     T: XmlPrelim,
-    <T as Prelim>::Return: TryFrom<BlockPtr>,
+    <T as Prelim>::Return: TryFrom<ItemPtr>,
 {
 }
 
@@ -678,7 +677,7 @@ impl<I, T> Prelim for XmlFragmentPrelim<I, T>
 where
     I: IntoIterator<Item = T>,
     T: XmlPrelim,
-    <T as Prelim>::Return: TryFrom<BlockPtr>,
+    <T as Prelim>::Return: TryFrom<ItemPtr>,
 {
     type Return = XmlFragmentRef;
 
@@ -745,8 +744,7 @@ impl Into<MapRef> for XmlHookRef {
 
 pub trait Xml: AsRef<Branch> {
     fn parent(&self) -> Option<XmlNode> {
-        let block = self.as_ref().item?;
-        let item = block.as_item()?;
+        let item = self.as_ref().item?;
         let parent = item.parent.as_branch()?;
         XmlNode::try_from(*parent).ok()
     }
@@ -976,14 +974,8 @@ where
     T: ReadTxn,
 {
     pub fn new(root: &'a Branch, txn: B) -> Self {
-        let current = if let Some(Block::Item(item)) = root.start.as_deref() {
-            Some(item)
-        } else {
-            None
-        };
-
         TreeWalker {
-            current,
+            current: root.start.as_deref(),
             root: TypePtr::Branch(BranchPtr::from(root)),
             first_call: true,
             _txn: txn,
@@ -1001,7 +993,7 @@ where
 
     /// Tree walker used depth-first search to move over the xml tree.
     fn next(&mut self) -> Option<Self::Item> {
-        fn try_descend(item: &Item) -> Option<&Block> {
+        fn try_descend(item: &Item) -> Option<&Item> {
             if let ItemContent::Type(t) = &item.content {
                 let inner = t.as_ref();
                 match inner.type_ref() {
@@ -1023,22 +1015,18 @@ where
                     if let Some(current) = n {
                         if let Some(ptr) = try_descend(current) {
                             // depth-first search - try walk down the tree first
-                            n = ptr.as_item();
+                            n = Some(ptr);
                         } else {
                             // walk right or up in the tree
                             while let Some(current) = n {
                                 if let Some(right) = current.right.as_ref() {
-                                    n = right.as_item();
+                                    n = Some(right);
                                     break;
                                 } else if current.parent == self.root {
                                     n = None;
                                 } else {
                                     let ptr = current.parent.as_branch().unwrap();
-                                    n = if let Some(Block::Item(item)) = ptr.item.as_deref() {
-                                        Some(item)
-                                    } else {
-                                        None
-                                    };
+                                    n = ptr.item.as_deref();
                                 }
                             }
                         }
@@ -1124,12 +1112,12 @@ impl XmlTextEvent {
 }
 
 pub struct Siblings<'a, T> {
-    current: Option<BlockPtr>,
+    current: Option<ItemPtr>,
     _txn: &'a T,
 }
 
 impl<'a, T> Siblings<'a, T> {
-    fn new(current: Option<BlockPtr>, txn: &'a T) -> Self {
+    fn new(current: Option<ItemPtr>, txn: &'a T) -> Self {
         Siblings { current, _txn: txn }
     }
 }
@@ -1138,9 +1126,9 @@ impl<'a, T> Iterator for Siblings<'a, T> {
     type Item = XmlNode;
 
     fn next(&mut self) -> Option<Self::Item> {
-        while let Some(Block::Item(item)) = self.current.as_deref() {
+        while let Some(item) = self.current.as_deref() {
             self.current = item.right;
-            if let Some(Block::Item(right)) = self.current.as_deref() {
+            if let Some(right) = self.current.as_deref() {
                 if !right.is_deleted() {
                     if let ItemContent::Type(inner) = &right.content {
                         let ptr = BranchPtr::from(inner);
@@ -1156,9 +1144,9 @@ impl<'a, T> Iterator for Siblings<'a, T> {
 
 impl<'a, T> DoubleEndedIterator for Siblings<'a, T> {
     fn next_back(&mut self) -> Option<Self::Item> {
-        while let Some(Block::Item(item)) = self.current.as_deref() {
+        while let Some(item) = self.current.as_deref() {
             self.current = item.left;
-            if let Some(Block::Item(left)) = self.current.as_deref() {
+            if let Some(left) = self.current.as_deref() {
                 if !left.is_deleted() {
                     if let ItemContent::Type(inner) = &left.content {
                         let ptr = BranchPtr::from(inner);
