@@ -422,6 +422,43 @@ impl YDoc {
         }
         buf
     }
+
+    /// Returns a list of all root-level replicated collections, together with their types.
+    /// These collections can then be accessed via `getMap`/`getText` etc. methods.
+    ///
+    /// Example:
+    /// ```js
+    /// import * as Y from 'ywasm'
+    ///
+    /// const doc = new Y.YDoc()
+    /// const ymap = doc.getMap('a')
+    /// const yarray = doc.getArray('b')
+    /// const ytext = doc.getText('c')
+    /// const yxml = doc.getXmlFragment('d')
+    ///
+    /// const roots = doc.roots() // [['a',ymap], ['b',yarray], ['c',ytext], ['d',yxml]]
+    /// ```
+    #[wasm_bindgen(js_name=roots)]
+    pub fn roots(&self, txn: &ImplicitTransaction) -> js_sys::Array {
+        let mut res = js_sys::Array::new();
+        if let Some(txn) = get_txn(txn) {
+            for (k, v) in txn.root_refs() {
+                let pair = js_sys::Array::new_with_length(2);
+                pair.set(0, JsValue::from_str(k));
+                pair.set(1, v.into_js());
+                res.push(&pair);
+            }
+        } else {
+            let txn = self.0.transact();
+            for (k, v) in txn.root_refs() {
+                let pair = js_sys::Array::new_with_length(2);
+                pair.set(0, JsValue::from_str(k));
+                pair.set(1, v.into_js());
+                res.push(&pair);
+            }
+        }
+        res
+    }
 }
 
 fn parse_options(js: &JsValue) -> Options {
