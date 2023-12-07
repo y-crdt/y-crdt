@@ -716,8 +716,8 @@ impl Branch {
                     if ptr.id() == &item_id {
                         break;
                     }
-                    if !ptr.is_deleted() {
-                        i += 1;
+                    if !ptr.is_deleted() && ptr.is_countable() {
+                        i += ptr.len();
                     }
                     if let Block::Item(cci) = ptr.deref() {
                         c = cci.right;

@@ -264,8 +264,8 @@ pub struct YOptions {
     /// Encoding used by text editing operations on this document. It's used to compute
     /// `YText`/`YXmlText` insertion offsets and text lengths. Either:
     ///
-    /// - `Y_ENCODING_BYTES`
-    /// - `Y_ENCODING_UTF16`
+    /// - `Y_OFFSET_BYTES`
+    /// - `Y_OFFSET_UTF16`
     pub encoding: u8,
 
     /// Boolean flag used to determine if deleted blocks should be garbage collected or not
@@ -419,6 +419,8 @@ pub unsafe extern "C" fn ydoc_id(doc: *mut Doc) -> u64 {
 }
 
 /// Returns a unique document identifier of this [Doc] instance.
+///
+/// Generated string resources should be released using [ystring_destroy] function.
 #[no_mangle]
 pub unsafe extern "C" fn ydoc_guid(doc: *mut Doc) -> *mut c_char {
     let doc = doc.as_ref().unwrap();
@@ -428,6 +430,8 @@ pub unsafe extern "C" fn ydoc_guid(doc: *mut Doc) -> *mut c_char {
 
 /// Returns a collection identifier of this [Doc] instance.
 /// If none was defined, a `NULL` will be returned.
+///
+/// Generated string resources should be released using [ystring_destroy] function.
 #[no_mangle]
 pub unsafe extern "C" fn ydoc_collection_id(doc: *mut Doc) -> *mut c_char {
     let doc = doc.as_ref().unwrap();
@@ -742,6 +746,7 @@ pub unsafe extern "C" fn ytransaction_writeable(txn: *mut Transaction) -> u8 {
 /// identified by its `name`, which must be a null-terminated UTF-8 compatible string.
 ///
 /// Returns `NULL` if no such structure was defined in the document before.
+// TODO [LSViana] Rename this to `ytransaction_get_ytype()` (or similar) to match the signature.
 #[no_mangle]
 pub unsafe extern "C" fn ytype_get(txn: *mut Transaction, name: *const c_char) -> *mut Branch {
     assert!(!txn.is_null());
@@ -1701,6 +1706,7 @@ pub unsafe extern "C" fn yxmlelem_string(
     txn: *const Transaction,
 ) -> *mut c_char {
     assert!(!xml.is_null());
+    assert!(!txn.is_null());
 
     let txn = txn.as_ref().unwrap();
     let xml = XmlElementRef::from_raw_branch(xml);
@@ -1911,8 +1917,6 @@ pub unsafe extern "C" fn yxml_prev_sibling(
 
 /// Returns a parent `YXmlElement` of a current node, or null pointer when current `YXmlElement` is
 /// a root-level shared data type.
-///
-/// A returned value should be eventually released using [youtput_destroy] function.
 #[no_mangle]
 pub unsafe extern "C" fn yxmlelem_parent(xml: *const Branch) -> *mut Branch {
     assert!(!xml.is_null());
@@ -2396,7 +2400,7 @@ pub struct YChunk {
     pub data: YOutput,
     /// Number of formatting attributes attached to current chunk of text.
     pub fmt_len: u32,
-    ///
+    /// The formatting attributes attached to the current chunk of text.
     pub fmt: *mut YMapEntry,
 }
 
@@ -2589,7 +2593,7 @@ impl Prelim for YInput {
                     let map = MapRef::from(inner_ref);
                     let keys = self.value.map.keys;
                     let values = self.value.map.values;
-                    let i = 0;
+                    let mut i = 0;
                     while i < self.len as isize {
                         let key = CStr::from_ptr(keys.offset(i).read())
                             .to_str()
@@ -2597,6 +2601,7 @@ impl Prelim for YInput {
                             .to_owned();
                         let value = values.offset(i).read().into();
                         map.insert(txn, key, value);
+                        i += 1;
                     }
                 }
                 Y_ARRAY => {
@@ -4378,6 +4383,7 @@ pub struct YUndoManagerOptions {
     pub capture_timeout_millis: i32,
 }
 
+// TODO [LSViana] Maybe rename this to `yundo_manager_new_with_options` to match `ydoc_new_with_options`?
 #[no_mangle]
 pub unsafe extern "C" fn yundo_manager(
     doc: *const Doc,
@@ -4453,6 +4459,7 @@ pub unsafe extern "C" fn yundo_manager_stop(mgr: *mut YUndoManager) {
 #[no_mangle]
 pub unsafe extern "C" fn yundo_manager_undo(mgr: *mut YUndoManager) -> u8 {
     let mgr = mgr.as_mut().unwrap();
+
     match mgr.undo() {
         Ok(true) => Y_TRUE,
         Ok(false) => Y_FALSE,

@@ -16,5 +16,5 @@ yrs = { path = "../yrs", version = "0.17", features = ["weak"] }
 rand = "0.7.0"
 
 [lib]
-crate-type = ["staticlib"]
+crate-type = ["staticlib", "cdylib"]
 name = "yrs"
