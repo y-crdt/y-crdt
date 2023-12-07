@@ -266,3 +266,30 @@ export const testLiveness = tc => {
         t.assert(!aa2.alive(tx), 'parent was deleted (local)')
     })
 }
+
+/**
+ * @param {t.TestCase} tc
+ */
+export const testRoots = tc => {
+    const d1 = new Y.YDoc()
+    const a = d1.getMap('a')
+    const b = d1.getText('b')
+    const c = d1.getArray('c')
+    const d = d1.getXmlFragment('d')
+
+    const roots = d1.roots()
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([k,v]) => [k, v.constructor])
+    t.compare(roots, [
+        ['a', Y.YMap],
+        ['b', Y.YText],
+        ['c', Y.YArray],
+        ['d', Y.YXmlFragment]
+    ])
+
+    a.set('hello', 'world')
+
+    let d2 = new Y.YDoc()
+    exchangeUpdates([d1, d2])
+    t.compare(d2.roots(), [['a', undefined]])
+}
