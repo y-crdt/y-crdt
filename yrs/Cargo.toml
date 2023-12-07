@@ -1,6 +1,6 @@
 [package]
 name = "yrs"
-version = "0.17.1"
+version = "0.17.2"
 description = "High performance implementation of the Yjs CRDT"
 license = "MIT"
 authors = ["Kevin Jahns <kevin.jahns@pm.me>", "Bartosz Sypytkowski <b.sypytkowski@gmail.com>"]
@@ -27,7 +27,7 @@ criterion = "~0.5"
 flate2 = { version = "1.0.22", features = ["zlib-ng-compat"], default-features = false }
 ropey = "1.6.0"
 proptest = "1.2"
-proptest-derive = "0.3.0"
+proptest-derive = "0.4.0"
 
 [[bench]]
 name = "benches"

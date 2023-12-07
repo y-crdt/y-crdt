@@ -182,6 +182,12 @@ typedef struct StickyIndex {} StickyIndex;
 #define Y_WEAK_LINK 8
 
 /**
+ * Flag used by `YOutput` to tag content, which is an undefined shared type. This usually happens
+ * when it's referencing a root type that has not been initalized localy.
+ */
+#define Y_UNDEFINED 9
+
+/**
  * Flag used to mark a truthy boolean numbers.
  */
 #define Y_TRUE 1
@@ -318,8 +324,8 @@ typedef struct YOptions {
    * Encoding used by text editing operations on this document. It's used to compute
    * `YText`/`YXmlText` insertion offsets and text lengths. Either:
    *
-   * - `Y_ENCODING_BYTES`
-   * - `Y_ENCODING_UTF16`
+   * - `Y_OFFSET_BYTES`
+   * - `Y_OFFSET_UTF16`
    */
   uint8_t encoding;
   /**
@@ -622,7 +628,7 @@ typedef struct YChunk {
    */
   uint32_t fmt_len;
   /**
-   *
+   * The formatting attributes attached to the current chunk of text.
    */
   struct YMapEntry *fmt;
 } YChunk;
@@ -1026,12 +1032,16 @@ uint64_t ydoc_id(YDoc *doc);
 
 /**
  * Returns a unique document identifier of this [Doc] instance.
+ *
+ * Generated string resources should be released using [ystring_destroy] function.
  */
 char *ydoc_guid(YDoc *doc);
 
 /**
  * Returns a collection identifier of this [Doc] instance.
  * If none was defined, a `NULL` will be returned.
+ *
+ * Generated string resources should be released using [ystring_destroy] function.
  */
 char *ydoc_collection_id(YDoc *doc);
 
@@ -1646,8 +1656,6 @@ struct YOutput *yxml_prev_sibling(const Branch *xml, const YTransaction *txn);
 /**
  * Returns a parent `YXmlElement` of a current node, or null pointer when current `YXmlElement` is
  * a root-level shared data type.
- *
- * A returned value should be eventually released using [youtput_destroy] function.
  */
 Branch *yxmlelem_parent(const Branch *xml);
 
