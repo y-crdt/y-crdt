@@ -1,6 +1,6 @@
-use crate::block_store::BlockStore;
 use crate::doc::{DocAddr, OffsetKind};
 use crate::encoding::read::Error;
+use crate::gc::GCCollector;
 use crate::moving::Move;
 use crate::slice::{BlockSlice, GCSlice, ItemSlice};
 use crate::store::{Store, WeakStoreRef};
@@ -154,25 +154,6 @@ impl BlockCell {
         } else {
             None
         }
-    }
-
-    pub(crate) fn gc(&mut self, parent_gced: bool) -> Option<ItemContent> {
-        if let BlockCell::Block(item) = self {
-            if item.is_deleted() && !item.info.is_keep() {
-                //item.content.gc();
-                let len = item.len();
-                let content = std::mem::replace(&mut item.content, ItemContent::Deleted(len));
-                if parent_gced {
-                    let (start, end) = item.clock_range();
-                    let gc = BlockCell::GC(GC::new(start, end));
-                    *self = gc;
-                } else {
-                    item.info.clear_countable();
-                }
-                return Some(content);
-            }
-        }
-        None
     }
 }
 
@@ -782,14 +763,6 @@ impl ItemPtr {
         }
     }
 
-    pub(crate) fn gc(&self, parent_gced: bool, block_store: &mut BlockStore) {
-        if let Some(block) = block_store.get_block_mut(&self.id) {
-            if let Some(mut content) = block.gc(parent_gced) {
-                content.gc(block_store);
-            }
-        }
-    }
-
     pub(crate) fn as_branch(self) -> Option<BranchPtr> {
         if let ItemContent::Type(branch) = &self.content {
             Some(BranchPtr::from(branch))
@@ -1350,6 +1323,19 @@ impl Item {
             | (self.content.get_ref_number() & 0b1111);
         info
     }
+
+    pub(crate) fn gc(&mut self, collector: &mut GCCollector, parent_gc: bool) {
+        if self.is_deleted() && !self.info.is_keep() {
+            self.content.gc(collector);
+            let len = self.len();
+            if parent_gc {
+                collector.mark(&self.id);
+            } else {
+                self.content = ItemContent::Deleted(len);
+                self.info.clear_countable();
+            }
+        }
+    }
 }
 
 #[derive(PartialEq, PartialOrd, Eq, Ord, Debug, Clone)]
@@ -1870,20 +1856,20 @@ impl ItemContent {
         }
     }
 
-    pub(crate) fn gc(&mut self, block_store: &mut BlockStore) {
+    pub(crate) fn gc(&mut self, collector: &mut GCCollector) {
         match self {
             ItemContent::Type(branch) => {
                 let mut curr = branch.start.take();
-                while let Some(item) = curr {
+                while let Some(mut item) = curr {
                     curr = item.right.clone();
-                    item.gc(true, block_store);
+                    item.gc(collector, true);
                 }
 
                 for (_, ptr) in branch.map.drain() {
                     curr = Some(ptr);
-                    while let Some(item) = curr {
+                    while let Some(mut item) = curr {
                         curr = item.left.clone();
-                        item.gc(true, block_store);
+                        item.gc(collector, true);
                         continue;
                     }
                 }

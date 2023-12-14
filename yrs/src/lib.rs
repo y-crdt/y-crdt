@@ -505,6 +505,7 @@ pub mod atomic;
 mod block_iter;
 pub mod encoding;
 mod error;
+mod gc;
 pub mod iter;
 mod moving;
 pub mod observer;

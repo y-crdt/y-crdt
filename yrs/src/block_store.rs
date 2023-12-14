@@ -146,7 +146,7 @@ impl IndexMut<usize> for ClientBlockList {
     }
 }
 
-struct ClientBlockListIter<'a>(std::slice::Iter<'a, BlockCell>);
+pub(crate) struct ClientBlockListIter<'a>(std::slice::Iter<'a, BlockCell>);
 
 impl<'a> Iterator for ClientBlockListIter<'a> {
     type Item = &'a BlockCell;

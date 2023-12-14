@@ -1,6 +1,7 @@
 use crate::block::{ItemContent, ItemPtr};
 use crate::slice::ItemSlice;
 use crate::{Assoc, ReadTxn, StickyIndex, Value};
+use smallvec::{smallvec, SmallVec};
 use std::ops::Deref;
 
 pub(crate) trait BlockIterator: TxnIterator<Item = ItemPtr> + Sized {
@@ -90,6 +91,18 @@ impl IntoIterator for ItemPtr {
 pub trait TxnIterator {
     type Item;
     fn next<T: ReadTxn>(&mut self, txn: &T) -> Option<Self::Item>;
+
+    fn collect<T, B>(&mut self, txn: &T) -> B
+    where
+        T: ReadTxn,
+        B: Default + Extend<Self::Item>,
+    {
+        let mut buf = B::default();
+        while let Some(item) = self.next(txn) {
+            buf.extend([item]);
+        }
+        buf
+    }
 }
 
 /// DoubleEndedIterator equivalent that can be supplied with transaction when iteration step may need it.
@@ -472,41 +485,33 @@ where
             self.current = Some(self.iter.next(txn)?);
         }
     }
-}
-
-pub trait TxnCollect {
-    fn collect_into<T, B>(&mut self, txn: &T, buf: &mut B)
-    where
-        T: ReadTxn,
-        B: Extend<Value>;
 
     fn collect<T, B>(&mut self, txn: &T) -> B
     where
         T: ReadTxn,
-        B: Default + Extend<Value>,
+        B: Default + Extend<Self::Item>,
     {
-        let mut buf = B::default();
-        self.collect_into(txn, &mut buf);
-        buf
-    }
-}
-
-impl<I> TxnCollect for I
-where
-    I: TxnIterator<Item = ItemSlice>,
-{
-    fn collect_into<T, B>(&mut self, txn: &T, buf: &mut B)
-    where
-        T: ReadTxn,
-        B: Extend<Value>,
-    {
-        while let Some(slice) = self.next(txn) {
+        fn read_slice<B>(slice: ItemSlice, buf: &mut B)
+        where
+            B: Extend<Value>,
+        {
             let item = slice.ptr.deref();
-            let size = slice.end - slice.start + 1;
-            let mut b = vec![Value::default(); size as usize];
-            let _read = item.content.read(slice.start as usize, b.as_mut_slice());
-            buf.extend(b);
+            if !item.is_deleted() {
+                let size = slice.end - slice.start + 1;
+                let mut b: SmallVec<[Value; 2]> = smallvec![Value::default(); size as usize];
+                let _ = item.content.read(slice.start as usize, b.as_mut_slice());
+                buf.extend(b);
+            }
         }
+
+        let mut buf = B::default();
+        if let Some(slice) = self.current.take() {
+            read_slice(slice, &mut buf);
+        }
+        while let Some(slice) = self.iter.next(txn) {
+            read_slice(slice, &mut buf);
+        }
+        buf
     }
 }
 
@@ -682,9 +687,23 @@ mod test {
         exchange_updates(&[&d1, &d2]); // move cycles may not be detected within a single update exchange
 
         let t1 = d1.transact();
-        let v1: Vec<_> = a1.as_ref().start.to_iter().moved().slices().collect(&t1);
+        let v1: Vec<_> = a1
+            .as_ref()
+            .start
+            .to_iter()
+            .moved()
+            .slices()
+            .values()
+            .collect(&t1);
         let t2 = d2.transact();
-        let v2: Vec<_> = a2.as_ref().start.to_iter().moved().slices().collect(&t2);
+        let v2: Vec<_> = a2
+            .as_ref()
+            .start
+            .to_iter()
+            .moved()
+            .slices()
+            .values()
+            .collect(&t2);
 
         assert_eq!(v1, v2);
     }
@@ -707,6 +726,7 @@ mod test {
             .to_iter()
             .moved()
             .within_range(from, to)
+            .values()
             .collect(&txn);
         assert_eq!(res, vec![3.into(), 4.into(), 5.into()])
     }
@@ -729,6 +749,7 @@ mod test {
             .to_iter()
             .moved()
             .within_range(from, to)
+            .values()
             .collect(&txn);
         assert_eq!(res, vec![4.into(), 5.into()])
     }
@@ -751,6 +772,7 @@ mod test {
             .to_iter()
             .moved()
             .within_range(from, to)
+            .values()
             .collect(&txn);
         assert_eq!(res, vec![5.into()])
     }
@@ -773,6 +795,7 @@ mod test {
             .to_iter()
             .moved()
             .within_range(from, to)
+            .values()
             .collect(&txn);
         assert_eq!(res, vec![3.into(), 4.into(), 5.into()])
     }
@@ -795,6 +818,7 @@ mod test {
             .to_iter()
             .moved()
             .within_range(from, to)
+            .values()
             .collect(&txn);
         assert_eq!(res, vec![3.into(), 4.into()])
     }
@@ -817,6 +841,7 @@ mod test {
             .to_iter()
             .moved()
             .within_range(from, to)
+            .values()
             .collect(&txn);
         assert_eq!(
             res,
@@ -842,6 +867,7 @@ mod test {
             .to_iter()
             .moved()
             .within_range(from, to)
+            .values()
             .collect(&txn);
         assert_eq!(res, vec![1.into(), 2.into(), 3.into(), 4.into()])
     }
@@ -864,6 +890,7 @@ mod test {
             .to_iter()
             .moved()
             .within_range(from, to)
+            .values()
             .collect(&txn);
         assert_eq!(res, vec![4.into(), 5.into(), 6.into()])
     }
@@ -886,6 +913,7 @@ mod test {
             .to_iter()
             .moved()
             .within_range(from, to)
+            .values()
             .collect(&txn);
         assert_eq!(res, vec![3.into()])
     }

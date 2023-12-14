@@ -1,5 +1,6 @@
 use crate::block::ItemPtr;
 use crate::doc::{AfterTransactionSubscription, TransactionAcqError};
+use crate::iter::TxnIterator;
 use crate::transaction::Origin;
 use crate::types::{Branch, BranchPtr};
 use crate::{
@@ -176,7 +177,9 @@ where
             inner.last_change = now;
         }
         // make sure that deleted structs are not gc'd
-        for slice in txn.delete_set.clone().deleted_blocks(txn) {
+        let ds = txn.delete_set.clone();
+        let mut deleted = ds.deleted_blocks();
+        while let Some(slice) = deleted.next(txn) {
             if let Some(item) = slice.as_item() {
                 if inner.scope.iter().any(|b| b.is_parent_of(Some(item))) {
                     item.keep(true);
@@ -314,8 +317,9 @@ where
     }
 
     fn clear_item(scope: &HashSet<BranchPtr>, txn: &mut TransactionMut, stack_item: StackItem<M>) {
-        for ptr in stack_item.deletions.deleted_blocks(txn) {
-            if let Some(item) = ptr.as_item() {
+        let mut deleted = stack_item.deletions.deleted_blocks();
+        while let Some(slice) = deleted.next(txn) {
+            if let Some(item) = slice.as_item() {
                 if scope.iter().any(|b| b.is_parent_of(Some(item))) {
                     item.keep(false);
                 }
@@ -456,7 +460,7 @@ where
             let mut to_delete = Vec::<ItemPtr>::new();
             let mut change_performed = false;
 
-            let deleted: Vec<_> = item.insertions.deleted_blocks(txn).collect();
+            let deleted: Vec<_> = item.insertions.deleted_blocks().collect(txn);
             for ptr in deleted {
                 if let Some(mut item) = ptr.as_item() {
                     if item.redone.is_some() {
@@ -477,8 +481,9 @@ where
                 }
             }
 
-            for ptr in item.deletions.deleted_blocks(txn) {
-                if let Some(ptr) = ptr.as_item() {
+            let mut deleted = item.deletions.deleted_blocks();
+            while let Some(slice) = deleted.next(txn) {
+                if let Some(ptr) = slice.as_item() {
                     if scope.iter().any(|b| b.is_parent_of(Some(ptr)))
                         && !item.insertions.is_deleted(ptr.id())
                     // Never redo structs in stackItem.insertions because they were created and deleted in the same capture interval.

@@ -2,7 +2,10 @@ use crate::block::{Item, ItemContent, ItemPtr, Prelim, ID};
 use crate::doc::DocAddr;
 use crate::error::Error;
 use crate::event::SubdocsEvent;
+use crate::gc::GCCollector;
 use crate::id_set::DeleteSet;
+use crate::iter::TxnIterator;
+use crate::slice::BlockSlice;
 use crate::store::{Store, SubdocGuids, SubdocsIter};
 use crate::types::{Branch, BranchPtr, Event, Events, SharedRef, TypePtr, TypeRef, Value};
 use crate::update::Update;
@@ -413,20 +416,16 @@ impl<'doc> TransactionMut<'doc> {
                                         .blocks
                                         .split_block_inner(item, clock - item.id.clock)
                                     {
-                                        if let Some(item) = ptr.as_item() {
-                                            if item.moved.is_some() {
-                                                if let Some(&prev_moved) =
-                                                    self.prev_moved.get(&item)
-                                                {
-                                                    self.prev_moved.insert(split, prev_moved);
-                                                }
+                                        if item.moved.is_some() {
+                                            if let Some(&prev_moved) = self.prev_moved.get(&item) {
+                                                self.prev_moved.insert(split, prev_moved);
                                             }
                                         }
+
                                         index += 1;
                                         self.merge_blocks.push(*split.id());
                                     }
-                                    blocks =
-                                        self.store_mut().blocks.get_client_mut(client).unwrap();
+                                    blocks = self.store.blocks.get_client_mut(client).unwrap();
                                 }
 
                                 while index < blocks.len() {
@@ -441,35 +440,34 @@ impl<'doc> TransactionMut<'doc> {
                                                             clock_end - item.id.clock,
                                                         )
                                                     {
-                                                        if let Some(item) = block.as_item() {
-                                                            if item.moved.is_some() {
-                                                                if let Some(&prev_moved) =
-                                                                    self.prev_moved.get(&item)
-                                                                {
-                                                                    self.prev_moved
-                                                                        .insert(split, prev_moved);
-                                                                }
-                                                            }
-                                                            if item.info.is_linked() {
-                                                                if let Some(links) = self
-                                                                    .store
-                                                                    .linked_by
-                                                                    .get(&item)
-                                                                    .cloned()
-                                                                {
-                                                                    self.store
-                                                                        .linked_by
-                                                                        .insert(split, links);
-                                                                }
+                                                        if item.moved.is_some() {
+                                                            if let Some(&prev_moved) =
+                                                                self.prev_moved.get(&item)
+                                                            {
+                                                                self.prev_moved
+                                                                    .insert(split, prev_moved);
                                                             }
                                                         }
+                                                        if item.info.is_linked() {
+                                                            if let Some(links) = self
+                                                                .store
+                                                                .linked_by
+                                                                .get(&item)
+                                                                .cloned()
+                                                            {
+                                                                self.store
+                                                                    .linked_by
+                                                                    .insert(split, links);
+                                                            }
+                                                        }
+
                                                         self.merge_blocks.push(*split.id());
                                                         index += 1;
                                                     }
                                                 }
                                                 self.delete(item);
                                                 blocks = self
-                                                    .store_mut()
+                                                    .store
                                                     .blocks
                                                     .get_client_mut(client)
                                                     .unwrap();
@@ -807,7 +805,7 @@ impl<'doc> TransactionMut<'doc> {
 
         // 4. try GC delete set
         if !self.store.options.skip_gc {
-            self.try_gc();
+            GCCollector::collect(self);
         }
 
         // 5. try merge delete set
@@ -885,31 +883,6 @@ impl<'doc> TransactionMut<'doc> {
         }
     }
 
-    fn try_gc(&mut self) {
-        for (client, range) in self.delete_set.iter() {
-            if let Some(blocks) = self.store.blocks.get_client_mut(client) {
-                for delete_item in range.iter().rev() {
-                    let mut start = delete_item.start;
-                    if let Some(mut i) = blocks.find_pivot(start) {
-                        while i < blocks.len() {
-                            let block = &mut blocks[i];
-                            let len = block.len();
-                            start += len;
-                            if start > delete_item.end {
-                                break;
-                            } else {
-                                if let Some(mut content) = block.gc(false) {
-                                    content.gc(&mut self.store.blocks);
-                                }
-                                i += 1;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     pub(crate) fn add_changed_type(&mut self, parent: BranchPtr, parent_sub: Option<Arc<str>>) {
         let trigger = if let Some(ptr) = parent.item {
             (ptr.id().clock < self.before_state.get(&ptr.id().client)) && !ptr.is_deleted()
@@ -953,8 +926,16 @@ impl<'doc> TransactionMut<'doc> {
         }
 
         self.merge_blocks.append(&mut merge_blocks);
-        for _ in snapshot.delete_set.deleted_blocks(self) {
-            // do nothing just split the blocks by delete set
+        let mut deleted = snapshot.delete_set.deleted_blocks();
+        while let Some(slice) = deleted.next(self) {
+            if let BlockSlice::Item(slice) = slice {
+                //TODO: we technically don't need to physically split underlying item in two
+                // if we were to use block slices all the way down.
+
+                // split the blocks by delete set
+                let ptr = self.store.materialize(slice);
+                self.merge_blocks.push(ptr.id);
+            }
         }
     }
 

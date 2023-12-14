@@ -1,12 +1,13 @@
 use crate::block::{ClientID, ID};
 use crate::block_store::BlockStore;
 use crate::encoding::read::Error;
+use crate::iter::TxnIterator;
 use crate::slice::BlockSlice;
 use crate::store::Store;
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::client_hasher::ClientHasher;
-use crate::TransactionMut;
+use crate::ReadTxn;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hash, Hasher};
@@ -586,11 +587,8 @@ impl DeleteSet {
         }
     }
 
-    pub(crate) fn deleted_blocks<'ds, 'txn, 'doc>(
-        &'ds self,
-        txn: &'txn mut TransactionMut<'doc>,
-    ) -> DeletedBlocks<'ds, 'txn, 'doc> {
-        DeletedBlocks::new(self, txn)
+    pub(crate) fn deleted_blocks(&self) -> DeletedBlocks {
+        DeletedBlocks::new(self)
     }
 }
 
@@ -607,8 +605,7 @@ impl Encode for DeleteSet {
     }
 }
 
-pub(crate) struct DeletedBlocks<'ds, 'txn, 'doc> {
-    txn: &'txn mut TransactionMut<'doc>,
+pub(crate) struct DeletedBlocks<'ds> {
     ds_iter: Iter<'ds>,
     current_range: Option<&'ds Range<u32>>,
     current_client_id: Option<ClientID>,
@@ -616,11 +613,10 @@ pub(crate) struct DeletedBlocks<'ds, 'txn, 'doc> {
     current_index: Option<usize>,
 }
 
-impl<'ds, 'txn, 'doc> DeletedBlocks<'ds, 'txn, 'doc> {
-    pub(crate) fn new(ds: &'ds DeleteSet, txn: &'txn mut TransactionMut<'doc>) -> Self {
+impl<'ds> DeletedBlocks<'ds> {
+    pub(crate) fn new(ds: &'ds DeleteSet) -> Self {
         let ds_iter = ds.iter();
         DeletedBlocks {
-            txn,
             ds_iter,
             current_client_id: None,
             current_range: None,
@@ -630,15 +626,14 @@ impl<'ds, 'txn, 'doc> DeletedBlocks<'ds, 'txn, 'doc> {
     }
 }
 
-impl<'ds, 'txn, 'doc> Iterator for DeletedBlocks<'ds, 'txn, 'doc> {
+impl<'ds> TxnIterator for DeletedBlocks<'ds> {
     type Item = BlockSlice;
 
-    fn next(&mut self) -> Option<Self::Item> {
+    fn next<T: ReadTxn>(&mut self, txn: &T) -> Option<Self::Item> {
         if let Some(r) = self.current_range {
             let mut block = if let Some(idx) = self.current_index.as_mut() {
-                if let Some(block) = self
-                    .txn
-                    .store
+                if let Some(block) = txn
+                    .store()
                     .blocks
                     .get_client(&self.current_client_id?)
                     .unwrap()
@@ -649,13 +644,12 @@ impl<'ds, 'txn, 'doc> Iterator for DeletedBlocks<'ds, 'txn, 'doc> {
                 } else {
                     self.current_range = None;
                     self.current_index = None;
-                    return self.next();
+                    return self.next(txn);
                 }
             } else {
                 // first block for a particular client
-                let list = self
-                    .txn
-                    .store
+                let list = txn
+                    .store()
                     .blocks
                     .get_client(&self.current_client_id?)
                     .unwrap();
@@ -672,7 +666,7 @@ impl<'ds, 'txn, 'doc> Iterator for DeletedBlocks<'ds, 'txn, 'doc> {
                 } else {
                     self.current_range = None;
                     self.current_index = None;
-                    return self.next();
+                    return self.next(txn);
                 }
             };
 
@@ -683,7 +677,7 @@ impl<'ds, 'txn, 'doc> Iterator for DeletedBlocks<'ds, 'txn, 'doc> {
                 // move to the next range
                 self.current_range = None;
                 self.current_index = None;
-                return self.next();
+                return self.next(txn);
             } else if clock < r.end && clock + block_len > r.end {
                 // we need to cut the last block
                 block.trim_end(r.end - clock);
@@ -719,7 +713,7 @@ impl<'ds, 'txn, 'doc> Iterator for DeletedBlocks<'ds, 'txn, 'doc> {
                 }
                 other => other,
             };
-            return self.next();
+            return self.next(txn);
         }
     }
 }
