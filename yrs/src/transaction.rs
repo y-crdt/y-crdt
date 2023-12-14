@@ -408,9 +408,10 @@ impl<'doc> TransactionMut<'doc> {
                             if let Some(item) = ptr.as_item() {
                                 // split the first item if necessary
                                 if !item.is_deleted() && item.id.clock < clock {
-                                    let store = self.store_mut();
-                                    if let Some(split) =
-                                        store.blocks.split_block_inner(item, clock - item.id.clock)
+                                    if let Some(split) = self
+                                        .store
+                                        .blocks
+                                        .split_block_inner(item, clock - item.id.clock)
                                     {
                                         if let Some(item) = ptr.as_item() {
                                             if item.moved.is_some() {
@@ -498,10 +499,11 @@ impl<'doc> TransactionMut<'doc> {
 
     /// Delete item under given pointer.
     /// Returns true if block was successfully deleted, false if it was already deleted in the past.
-    pub(crate) fn delete(&mut self, item: ItemPtr) -> bool {
+    pub(crate) fn delete(&mut self, mut item: ItemPtr) -> bool {
         let mut recurse = Vec::new();
         let mut result = false;
 
+        let ptr = item.clone();
         let store = self.store.deref();
         if !item.is_deleted() {
             if item.parent_sub.is_none() && item.is_countable() {
@@ -549,7 +551,7 @@ impl<'doc> TransactionMut<'doc> {
                         recurse.push(ptr.clone());
                     }
                 }
-                ItemContent::Move(m) => m.delete(self, item),
+                ItemContent::Move(m) => m.delete(self, ptr),
                 _ => { /* nothing to do for other content types */ }
             }
             if item.info.is_linked() {
@@ -884,20 +886,21 @@ impl<'doc> TransactionMut<'doc> {
     }
 
     fn try_gc(&mut self) {
-        let store = self.store_mut();
         for (client, range) in self.delete_set.iter() {
-            if let Some(blocks) = store.blocks.get_client_mut(client) {
+            if let Some(blocks) = self.store.blocks.get_client_mut(client) {
                 for delete_item in range.iter().rev() {
                     let mut start = delete_item.start;
                     if let Some(mut i) = blocks.find_pivot(start) {
                         while i < blocks.len() {
-                            let mut block = &mut blocks[i];
+                            let block = &mut blocks[i];
                             let len = block.len();
                             start += len;
                             if start > delete_item.end {
                                 break;
                             } else {
-                                block.gc(false);
+                                if let Some(mut content) = block.gc(false) {
+                                    content.gc(&mut self.store.blocks);
+                                }
                                 i += 1;
                             }
                         }

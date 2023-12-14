@@ -1,3 +1,4 @@
+use crate::block_store::BlockStore;
 use crate::doc::{DocAddr, OffsetKind};
 use crate::encoding::read::Error;
 use crate::moving::Move;
@@ -153,6 +154,25 @@ impl BlockCell {
         } else {
             None
         }
+    }
+
+    pub(crate) fn gc(&mut self, parent_gced: bool) -> Option<ItemContent> {
+        if let BlockCell::Block(item) = self {
+            if item.is_deleted() && !item.info.is_keep() {
+                //item.content.gc();
+                let len = item.len();
+                let content = std::mem::replace(&mut item.content, ItemContent::Deleted(len));
+                if parent_gced {
+                    let (start, end) = item.clock_range();
+                    let gc = BlockCell::GC(GC::new(start, end));
+                    *self = gc;
+                } else {
+                    item.info.clear_countable();
+                }
+                return Some(content);
+            }
+        }
+        None
     }
 }
 
@@ -491,7 +511,6 @@ impl ItemPtr {
         let right_is_null_or_has_left = match right {
             None => true,
             Some(i) => i.left.is_some(),
-            _ => false,
         };
         let left_has_other_right_than_self = match left {
             Some(i) => i.right != this.right,
@@ -647,9 +666,10 @@ impl ItemPtr {
                 } else {
                     #[inline]
                     fn try_integrate(mut item: ItemPtr, txn: &mut TransactionMut) {
+                        let ptr = item.clone();
                         if let ItemContent::Move(m) = &mut item.content {
                             if !m.is_collapsed() {
-                                m.integrate_block(txn, item);
+                                m.integrate_block(txn, ptr);
                             }
                         }
                     }
@@ -732,28 +752,11 @@ impl ItemPtr {
         }
     }
 
-    pub(crate) fn gc(&mut self, parent_gced: bool) {
-        let item = self.deref_mut();
-        if item.is_deleted() && !item.info.is_keep() {
-            item.content.gc();
-            let len = item.len();
-            if parent_gced {
-                todo!("GC current block if parent is GCed")
-                //let gc = Block::GC(BlockRange::new(item.id, len));
-                //let self_mut = unsafe { self.0.as_mut() };
-                //*self_mut = gc;
-            } else {
-                item.content = ItemContent::Deleted(len);
-                item.info.clear_countable();
-            }
-        }
-    }
-
     /// Squashes two blocks together. Returns true if it succeeded. Squashing is possible only if
     /// blocks are of the same type, their contents are of the same type, they belong to the same
     /// parent data structure, their IDs are sequenced directly one after another and they point to
     /// each other as their left/right neighbors respectively.
-    pub(crate) fn try_squash(&mut self, mut other: ItemPtr) -> bool {
+    pub(crate) fn try_squash(&mut self, other: ItemPtr) -> bool {
         if self.id.client == other.id.client
                     && self.id.clock + self.len() == other.id.clock
                     && other.origin == Some(self.last_id())
@@ -766,7 +769,7 @@ impl ItemPtr {
                     && self.content.try_squash(&other.content)
         {
             self.len = self.content.len(OffsetKind::Utf16);
-            if let Some(right_right) = other.right.as_deref_mut() {
+            if let Some(mut right_right) = other.right {
                 right_right.left = Some(other);
             }
             if other.info.is_keep() {
@@ -776,6 +779,14 @@ impl ItemPtr {
             true
         } else {
             false
+        }
+    }
+
+    pub(crate) fn gc(&self, parent_gced: bool, block_store: &mut BlockStore) {
+        if let Some(block) = block_store.get_block_mut(&self.id) {
+            if let Some(mut content) = block.gc(parent_gced) {
+                content.gc(block_store);
+            }
         }
     }
 
@@ -1859,20 +1870,20 @@ impl ItemContent {
         }
     }
 
-    pub(crate) fn gc(&mut self) {
+    pub(crate) fn gc(&mut self, block_store: &mut BlockStore) {
         match self {
             ItemContent::Type(branch) => {
                 let mut curr = branch.start.take();
-                while let Some(mut item) = curr {
+                while let Some(item) = curr {
                     curr = item.right.clone();
-                    item.gc(true);
+                    item.gc(true, block_store);
                 }
 
                 for (_, ptr) in branch.map.drain() {
                     curr = Some(ptr);
-                    while let Some(mut item) = curr {
+                    while let Some(item) = curr {
                         curr = item.left.clone();
-                        item.gc(true);
+                        item.gc(true, block_store);
                         continue;
                     }
                 }

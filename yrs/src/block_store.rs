@@ -1,5 +1,6 @@
 use crate::block::{BlockCell, ClientID, Item, ItemPtr, ID};
 use crate::slice::ItemSlice;
+use crate::types::TypePtr;
 use crate::utils::client_hasher::ClientHasher;
 use crate::*;
 use std::collections::hash_map::Entry;
@@ -73,6 +74,11 @@ impl ClientBlockList {
         Some(&self[idx])
     }
 
+    fn get_block_mut(&mut self, clock: u32) -> Option<&mut BlockCell> {
+        let idx = self.find_pivot(clock)?;
+        Some(&mut self[idx])
+    }
+
     /// Pushes a new block at the end of this block list.
     fn push(&mut self, cell: BlockCell) {
         self.list.push(cell);
@@ -100,7 +106,7 @@ impl ClientBlockList {
     /// and block removal.
     pub(crate) fn squash_left(&mut self, index: usize) {
         let (l, r) = self.list.split_at_mut(index);
-        let mut left = &mut l[index - 1];
+        let left = &mut l[index - 1];
         let right = &mut r[0];
         match (left, right) {
             (BlockCell::GC(left), BlockCell::GC(right)) => {
@@ -112,9 +118,10 @@ impl ClientBlockList {
                 let right = ItemPtr::from(right);
                 if left.try_squash(right) {
                     if let Some(key) = right.parent_sub.as_deref() {
-                        let parent = &right.parent.as_branch().unwrap();
-                        if let Some(e) = parent.map.get_mut(key) {
-                            *e = ItemPtr::from(left);
+                        if let TypePtr::Branch(mut parent) = right.parent {
+                            if let Some(e) = parent.map.get_mut(key) {
+                                *e = ItemPtr::from(left);
+                            }
                         }
                     }
                     self.list.remove(index);
@@ -219,6 +226,11 @@ impl BlockStore {
     pub(crate) fn get_block(&self, id: &ID) -> Option<&BlockCell> {
         let clients = self.clients.get(&id.client)?;
         clients.get_block(id.clock)
+    }
+
+    pub(crate) fn get_block_mut(&mut self, id: &ID) -> Option<&mut BlockCell> {
+        let clients = self.clients.get_mut(&id.client)?;
+        clients.get_block_mut(id.clock)
     }
 
     pub(crate) fn get_item(&self, id: &ID) -> Option<ItemPtr> {

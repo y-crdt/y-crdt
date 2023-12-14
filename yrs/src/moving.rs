@@ -225,7 +225,7 @@ impl Move {
     pub(crate) fn delete(&self, txn: &mut TransactionMut, item: ItemPtr) {
         let (mut start, end) = self.get_moved_coords(txn);
         while start != end && start.is_some() {
-            if let Some(start_ptr) = start {
+            if let Some(mut start_ptr) = start {
                 if start_ptr.moved == Some(item) {
                     if let Some(&prev_moved) = txn.prev_moved.get(&start_ptr) {
                         if txn.has_added(item.id()) {
@@ -248,6 +248,7 @@ impl Move {
 
         fn reintegrate(mut item: ItemPtr, txn: &mut TransactionMut) {
             let deleted = item.is_deleted();
+            let ptr = item.clone();
             if let ItemContent::Move(content) = &mut item.content {
                 if deleted {
                     // potentially we can integrate the items that reIntegrateItem overrides
@@ -257,7 +258,7 @@ impl Move {
                         }
                     }
                 } else {
-                    content.integrate_block(txn, item)
+                    content.integrate_block(txn, ptr)
                 }
             }
         }

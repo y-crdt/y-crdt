@@ -504,7 +504,7 @@ where
             let item = slice.ptr.deref();
             let size = slice.end - slice.start + 1;
             let mut b = vec![Value::default(); size as usize];
-            let read = item.content.read(slice.start as usize, b.as_mut_slice());
+            let _read = item.content.read(slice.start as usize, b.as_mut_slice());
             buf.extend(b);
         }
     }

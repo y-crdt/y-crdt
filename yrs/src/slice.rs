@@ -25,6 +25,14 @@ impl BlockSlice {
         }
     }
 
+    pub(crate) fn as_item(&self) -> Option<ItemPtr> {
+        if let BlockSlice::Item(s) = self {
+            Some(s.ptr)
+        } else {
+            None
+        }
+    }
+
     pub fn len(&self) -> u32 {
         match self {
             BlockSlice::Item(s) => s.len(),
@@ -36,6 +44,22 @@ impl BlockSlice {
         match self {
             BlockSlice::Item(s) => s.is_deleted(),
             BlockSlice::GC(_) => true,
+        }
+    }
+
+    /// Trim a number of countable elements from the beginning of a current slice.
+    pub fn trim_start(&mut self, count: u32) {
+        match self {
+            BlockSlice::Item(s) => s.trim_start(count),
+            BlockSlice::GC(s) => s.trim_start(count),
+        }
+    }
+
+    /// Trim a number of countable elements from the end of a current slice.
+    pub fn trim_end(&mut self, count: u32) {
+        match self {
+            BlockSlice::Item(s) => s.trim_end(count),
+            BlockSlice::GC(s) => s.trim_end(count),
         }
     }
 
@@ -103,6 +127,18 @@ impl ItemSlice {
         let mut id = self.ptr.id;
         id.clock += self.end;
         id
+    }
+
+    /// Trim a number of countable elements from the beginning of a current slice.
+    pub(crate) fn trim_start(&mut self, count: u32) {
+        debug_assert!(count < self.len());
+        self.start += count;
+    }
+
+    /// Trim a number of countable elements from the end of a current slice.
+    pub(crate) fn trim_end(&mut self, count: u32) {
+        debug_assert!(count < self.len());
+        self.end -= count;
     }
 
     /// Attempts to trim current block slice to provided range of IDs.
@@ -271,6 +307,18 @@ impl GCSlice {
 
     pub fn clock_end(&self) -> u32 {
         self.end
+    }
+
+    /// Trim a number of countable elements from the beginning of a current slice.
+    pub(crate) fn trim_start(&mut self, count: u32) {
+        debug_assert!(count < self.len());
+        self.start += count;
+    }
+
+    /// Trim a number of countable elements from the end of a current slice.
+    pub(crate) fn trim_end(&mut self, count: u32) {
+        debug_assert!(count < self.len());
+        self.end -= count;
     }
 
     pub fn len(&self) -> u32 {

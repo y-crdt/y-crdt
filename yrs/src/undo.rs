@@ -176,8 +176,8 @@ where
             inner.last_change = now;
         }
         // make sure that deleted structs are not gc'd
-        for ptr in txn.delete_set.clone().deleted_blocks(txn) {
-            if let Some(item) = ptr.as_item() {
+        for slice in txn.delete_set.clone().deleted_blocks(txn) {
+            if let Some(item) = slice.as_item() {
                 if inner.scope.iter().any(|b| b.is_parent_of(Some(item))) {
                     item.keep(true);
                 }

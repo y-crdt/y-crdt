@@ -1,4 +1,4 @@
-use crate::block::{BlockCell, ClientID, Item, ItemContent, ItemPtr};
+use crate::block::{BlockCell, ClientID, ItemContent, ItemPtr};
 use crate::block_store::BlockStore;
 use crate::doc::{
     AfterTransactionSubscription, DestroySubscription, DocAddr, Options, SubdocsSubscription,
@@ -170,13 +170,14 @@ impl Store {
             encoder.write_client(client);
             encoder.write_var(0);
             for i in 0..last_idx {
-                let block = &blocks[i];
-                block.encode(Some(self), encoder);
+                let block = blocks[i].as_slice();
+                block.encode(encoder, Some(self));
             }
             let last_block = &blocks[last_idx];
             // write first struct with an offset
             let offset = clock - last_block.clock_start() - 1;
-            let slice = ItemSlice::new(last_block, 0, offset);
+            let mut slice = last_block.as_slice();
+            slice.trim_end(offset);
             slice.encode(encoder, Some(self));
         }
     }
@@ -219,10 +220,11 @@ impl Store {
             let first_block = blocks.get(start).unwrap();
             // write first struct with an offset
             let offset = clock - first_block.clock_start();
-            let slice = ItemSlice::new(first_block, offset, first_block.len() - 1);
+            let mut slice = first_block.as_slice();
+            slice.trim_start(offset);
             slice.encode(encoder, Some(self));
             for i in (start + 1)..blocks.len() {
-                blocks[i].encode(Some(self), encoder);
+                blocks[i].as_slice().encode(encoder, Some(self));
             }
         }
     }
@@ -281,11 +283,11 @@ impl Store {
         let id = slice.id().clone();
         let blocks = self.blocks.get_client_mut(&id.client).unwrap();
         let mut links = None;
-        if let Item::Item(item) = slice.ptr.deref() {
-            if item.info.is_linked() {
-                links = self.linked_by.get(&slice.ptr).cloned();
-            }
+        let item = slice.ptr.deref();
+        if item.info.is_linked() {
+            links = self.linked_by.get(&slice.ptr).cloned();
         }
+
         let mut index = None;
         let mut ptr = if slice.adjacent_left() {
             slice.ptr
@@ -301,7 +303,7 @@ impl Store {
                 //todo: txn merge blocks insert?
                 index = Some(i);
             }
-            let ptr = &blocks[i];
+            let ptr = blocks[i].as_item().unwrap();
             slice = ItemSlice::new(ptr, 0, slice.end - slice.start);
             ptr
         };
@@ -319,7 +321,7 @@ impl Store {
                 let dest = self.linked_by.entry(ItemPtr::from(&new)).or_default();
                 dest.extend(source);
             }
-            blocks.insert(i + 1, new);
+            blocks.insert(i + 1, BlockCell::Block(new));
             //todo: txn merge blocks insert?
         }
 

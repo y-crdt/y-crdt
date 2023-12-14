@@ -256,7 +256,6 @@ impl BranchPtr {
         if let Some(observers) = self.observers.as_ref() {
             Some(observers.publish(*self, txn, subs))
         } else {
-            let type_ref = self.type_ref();
             match self.type_ref {
                 TypeRef::Array => Some(Event::Array(ArrayEvent::new(*self))),
                 TypeRef::Map => Some(Event::Map(MapEvent::new(*self, subs))),
@@ -359,7 +358,7 @@ impl Into<Value> for BranchPtr {
             //TYPE_REFS_XML_HOOK => Value::YXmlHook(XmlHookRef::from(self)),
             #[cfg(feature = "weak")]
             TypeRef::WeakLink(_) => Value::YWeakLink(WeakRef::from(self)),
-            other => Value::UndefinedRef(self),
+            _ => Value::UndefinedRef(self),
         }
     }
 }

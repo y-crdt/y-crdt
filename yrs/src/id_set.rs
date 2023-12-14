@@ -1,6 +1,7 @@
-use crate::block::{BlockCell, ClientID, ID};
+use crate::block::{ClientID, ID};
 use crate::block_store::BlockStore;
 use crate::encoding::read::Error;
+use crate::slice::BlockSlice;
 use crate::store::Store;
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
@@ -630,11 +631,11 @@ impl<'ds, 'txn, 'doc> DeletedBlocks<'ds, 'txn, 'doc> {
 }
 
 impl<'ds, 'txn, 'doc> Iterator for DeletedBlocks<'ds, 'txn, 'doc> {
-    type Item = &'txn BlockCell;
+    type Item = BlockSlice;
 
     fn next(&mut self) -> Option<Self::Item> {
         if let Some(r) = self.current_range {
-            let block = if let Some(idx) = self.current_index.as_mut() {
+            let mut block = if let Some(idx) = self.current_index.as_mut() {
                 if let Some(block) = self
                     .txn
                     .store
@@ -644,7 +645,7 @@ impl<'ds, 'txn, 'doc> Iterator for DeletedBlocks<'ds, 'txn, 'doc> {
                     .get(*idx)
                 {
                     *idx += 1;
-                    block
+                    block.as_slice()
                 } else {
                     self.current_range = None;
                     self.current_index = None;
@@ -659,21 +660,12 @@ impl<'ds, 'txn, 'doc> Iterator for DeletedBlocks<'ds, 'txn, 'doc> {
                     .get_client(&self.current_client_id?)
                     .unwrap();
                 if let Some(idx) = list.find_pivot(r.start) {
-                    let mut block = &list[idx];
+                    let mut block = list[idx].as_slice();
                     let clock = block.clock_start();
 
                     // check if we don't need to cut first block
                     if clock < r.start {
-                        if let Some(right_ptr) = self
-                            .txn
-                            .store
-                            .blocks
-                            .split_block_inner(block, r.start - clock)
-                        {
-                            //TODO: instead of block splitting, return block slice
-                            self.txn.merge_blocks.push(*right_ptr.id());
-                            block = right_ptr;
-                        }
+                        block.trim_start(r.start - clock);
                     }
                     self.current_index = Some(idx + 1);
                     block
@@ -694,16 +686,9 @@ impl<'ds, 'txn, 'doc> Iterator for DeletedBlocks<'ds, 'txn, 'doc> {
                 return self.next();
             } else if clock < r.end && clock + block_len > r.end {
                 // we need to cut the last block
-                if let Some(right_ptr) = self
-                    .txn
-                    .store
-                    .blocks
-                    .split_block_inner(block, r.end - clock)
-                {
-                    self.txn.merge_blocks.push(*right_ptr.id());
-                    self.current_range = None;
-                    self.current_index = None;
-                }
+                block.trim_end(r.end - clock);
+                self.current_range = None;
+                self.current_index = None;
             }
 
             if clock + block_len >= r.end {

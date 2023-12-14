@@ -368,7 +368,7 @@ impl BlockIter {
         let mut read = 0u32;
         while len > 0 {
             if !self.reached_end {
-                while let Some(mut item) = next_item {
+                while let Some(item) = next_item {
                     if Some(item) != self.curr_move_end
                         && item.is_countable()
                         && !self.reached_end
