@@ -2005,7 +2005,9 @@ impl ItemContent {
             BLOCK_ITEM_DELETED_REF_NUMBER => Ok(ItemContent::Deleted(decoder.read_len()?)),
             BLOCK_ITEM_JSON_REF_NUMBER => {
                 let mut remaining = decoder.read_len()? as i32;
-                let mut buf = Vec::with_capacity(remaining as usize);
+                let mut buf = Vec::new();
+                buf.try_reserve(remaining as usize)?;
+
                 while remaining >= 0 {
                     buf.push(decoder.read_string()?.to_owned());
                     remaining -= 1;
@@ -2026,7 +2028,9 @@ impl ItemContent {
             }
             BLOCK_ITEM_ANY_REF_NUMBER => {
                 let len = decoder.read_len()? as usize;
-                let mut values = Vec::with_capacity(len);
+                let mut values = Vec::new();
+                values.try_reserve(len)?;
+
                 let mut i = 0;
                 while i < len {
                     values.push(decoder.read_any()?);

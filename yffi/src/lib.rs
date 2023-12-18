@@ -1175,12 +1175,16 @@ pub const ERR_CODE_INVALID_JSON: u8 = 5;
 /// Error code: other error type than the one specified.
 pub const ERR_CODE_OTHER: u8 = 6;
 
+/// Error code: allocated buffer is too small to hold a decoded value.
+pub const ERR_NOT_ENOUGH_BYTES: u8 = 7;
+
 fn err_code(e: Error) -> u8 {
     match e {
         Error::VarIntSizeExceeded(_) => ERR_CODE_VAR_INT,
         Error::EndOfBuffer(_) => ERR_CODE_EOS,
         Error::UnexpectedValue => ERR_CODE_UNEXPECTED_VALUE,
         Error::InvalidJSON(_) => ERR_CODE_INVALID_JSON,
+        Error::NotEnoughBytes(_) => ERR_NOT_ENOUGH_BYTES,
     }
 }
 

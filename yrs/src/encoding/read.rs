@@ -1,5 +1,6 @@
-use thiserror::Error;
 use crate::encoding::varint::{Signed, SignedVarInt, VarInt};
+use std::collections::TryReserveError;
+use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum Error {
@@ -11,6 +12,9 @@ pub enum Error {
 
     #[error("while reading, an unexpected value was found")]
     UnexpectedValue,
+
+    #[error("failed to allocate memory: {0}")]
+    NotEnoughBytes(#[from] TryReserveError),
 
     #[error("JSON parsing error: {0}")]
     InvalidJSON(#[from] serde_json::Error),
