@@ -545,7 +545,7 @@ where
 
 #[cfg(test)]
 mod test {
-    use crate::iter::{BlockIterator, BlockSliceIterator, IntoBlockIter, TxnCollect, TxnIterator};
+    use crate::iter::{BlockIterator, BlockSliceIterator, IntoBlockIter, TxnIterator};
     use crate::test_utils::exchange_updates;
     use crate::{Array, Assoc, Doc, StickyIndex, Transact, ID};
 

@@ -456,7 +456,7 @@ impl<'a> From<&'a BlockStore> for DeleteSet {
             for block in blocks.iter() {
                 if block.is_deleted() {
                     let (start, end) = block.clock_range();
-                    deletes.push(start..end);
+                    deletes.push(start..(end + 1));
                 }
             }
 
@@ -722,6 +722,8 @@ impl<'ds> TxnIterator for DeletedBlocks<'ds> {
 mod test {
     use crate::block::ItemContent;
     use crate::id_set::{IdRange, IdSet};
+    use crate::iter::TxnIterator;
+    use crate::slice::BlockSlice;
     use crate::test_utils::exchange_updates;
     use crate::updates::decoder::{Decode, DecoderV1};
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
@@ -872,10 +874,16 @@ mod test {
             let mut blocks = HashSet::new();
 
             let mut i = 0;
-            for b in s.delete_set.deleted_blocks(&mut txn) {
-                let item = b.as_item().unwrap();
+            let mut deleted = s.delete_set.deleted_blocks();
+            while let Some(BlockSlice::Item(b)) = deleted.next(&txn) {
+                let item = txn.store.materialize(b);
                 if let ItemContent::String(str) = &item.content {
-                    let t = (b.is_deleted(), *b.id(), b.len(), str.as_str().to_string());
+                    let t = (
+                        item.is_deleted(),
+                        item.id,
+                        item.len(),
+                        str.as_str().to_string(),
+                    );
                     blocks.insert(t);
                 }
                 i += 1;
@@ -904,9 +912,12 @@ mod test {
         txt.push(&mut doc.transact_mut(), "testab");
         ds.insert(ID::new(1, 5), 1);
         let mut txn = doc.transact_mut();
-        let mut i = ds.deleted_blocks(&mut txn);
-        let ptr = i.next().unwrap();
-        assert_eq!(*ptr.id(), ID::new(1, 5));
-        assert!(i.next().is_none());
+        let mut i = ds.deleted_blocks();
+        let ptr = i.next(&txn).unwrap();
+        let start = ptr.clock_start();
+        let end = ptr.clock_end();
+        assert_eq!(start, 5);
+        assert_eq!(end, 5);
+        assert!(i.next(&txn).is_none());
     }
 }

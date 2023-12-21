@@ -15,6 +15,7 @@ use crate::*;
 use smallstr::SmallString;
 use std::collections::HashSet;
 use std::convert::TryFrom;
+use std::fmt::Formatter;
 use std::hash::Hash;
 use std::ops::{Deref, DerefMut};
 use std::panic;
@@ -95,10 +96,19 @@ impl ID {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(PartialEq)]
 pub(crate) enum BlockCell {
     GC(GC),
     Block(Box<Item>),
+}
+
+impl std::fmt::Debug for BlockCell {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BlockCell::GC(gc) => write!(f, "gc({}..={})", gc.start, gc.end),
+            BlockCell::Block(item) => item.fmt(f),
+        }
+    }
 }
 
 impl BlockCell {
@@ -825,7 +835,7 @@ impl TryFrom<ItemPtr> for Any {
 impl Item {
     pub(crate) fn clock_range(&self) -> (u32, u32) {
         let start = self.id.clock;
-        let end = start + self.len;
+        let end = start + self.len - 1;
         (start, end)
     }
 
@@ -1249,6 +1259,10 @@ impl Item {
                 .get_item_clean_start(origin)
                 .map(|slice| store.materialize(slice));
         }
+        println!(
+            "block {} repaired l: {:?}, r: {:?}",
+            self.id, self.left, self.right
+        );
 
         // We have all missing ids, now find the items
 

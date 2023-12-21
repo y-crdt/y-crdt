@@ -1249,8 +1249,8 @@ mod test {
         let _sub = d1.observe_update_v1(move |_: &TransactionMut, e| {
             let u = Update::decode_v1(&e.update).unwrap();
             for mut block in u.blocks.into_blocks(false) {
-                match block.as_block_ptr().as_deref() {
-                    Some(Item::Item(item)) => {
+                match block.as_item_ptr().as_deref() {
+                    Some(item) => {
                         if let ItemContent::String(s) = &item.content {
                             // each character is appended in individual transaction 1-by-1,
                             // therefore each update should contain a single string with only

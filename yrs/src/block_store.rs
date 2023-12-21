@@ -28,7 +28,7 @@ impl ClientBlockList {
         if len == 0 {
             0
         } else {
-            self.list[len - 1].clock_range().1
+            self.list[len - 1].clock_range().1 + 1
         }
     }
 
@@ -260,11 +260,7 @@ impl BlockStore {
         let ptr = self.get_item(id)?;
         let block_id = ptr.id();
         let offset = id.clock - block_id.clock;
-        if offset != ptr.len() - 1 {
-            Some(ItemSlice::new(ptr, 0, offset))
-        } else {
-            Some(ItemSlice::from(ptr))
-        }
+        Some(ItemSlice::new(ptr, 0, offset))
     }
 
     /// Returns the last observed clock sequence number for a given `client`. This is exclusive

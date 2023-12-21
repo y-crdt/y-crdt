@@ -220,7 +220,7 @@ impl Update {
                         }
                         let should_delete = block.integrate(txn, offset);
                         let delete_ptr = if should_delete {
-                            let ptr = block.as_block_ptr();
+                            let ptr = block.as_item_ptr();
                             ptr
                         } else {
                             None
@@ -837,7 +837,7 @@ impl BlockCarrier {
         }
     }
 
-    pub fn as_block_ptr(&mut self) -> Option<ItemPtr> {
+    pub fn as_item_ptr(&mut self) -> Option<ItemPtr> {
         if let BlockCarrier::Item(block) = self {
             Some(ItemPtr::from(block))
         } else {
@@ -945,12 +945,9 @@ impl Into<Store> for Update {
 
         let mut store = Store::new(Options::with_client_id(0));
         for (client_id, vec) in self.blocks.clients {
-            let blocks = store
-                .blocks
-                .get_client_blocks_with_capacity_mut(client_id, vec.len());
             for block in vec {
                 if let BlockCarrier::Item(block) = block {
-                    blocks.push(block);
+                    store.blocks.push_block(block);
                 } else {
                     panic!("Cannot convert Update into block store - Skip block detected");
                 }
