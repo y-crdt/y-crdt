@@ -535,7 +535,7 @@ impl ItemPtr {
                 // ***{origin}bbbb{this}{c,b}{c,b}{o}***
                 // Note that conflicting_items is a subset of items_before_origin
                 while let Some(item) = o {
-                    if this.right.is_some() {
+                    if Some(item) == this.right {
                         break;
                     }
 
@@ -1259,10 +1259,6 @@ impl Item {
                 .get_item_clean_start(origin)
                 .map(|slice| store.materialize(slice));
         }
-        println!(
-            "block {} repaired l: {:?}, r: {:?}",
-            self.id, self.left, self.right
-        );
 
         // We have all missing ids, now find the items
 
