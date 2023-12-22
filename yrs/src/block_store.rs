@@ -117,14 +117,16 @@ impl ClientBlockList {
                 let mut left = ItemPtr::from(left);
                 let right = ItemPtr::from(right);
                 if left.try_squash(right) {
+                    self.list.remove(index);
                     if let Some(key) = right.parent_sub.as_deref() {
                         if let TypePtr::Branch(mut parent) = right.parent {
                             if let Some(e) = parent.map.get_mut(key) {
-                                *e = ItemPtr::from(left);
+                                if right == *e {
+                                    *e = ItemPtr::from(left);
+                                }
                             }
                         }
                     }
-                    self.list.remove(index);
                 }
             }
             _ => { /* cannot squash incompatible types */ }
