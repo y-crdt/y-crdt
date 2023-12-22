@@ -175,9 +175,8 @@ impl Store {
             }
             let last_block = &blocks[last_idx];
             // write first struct with an offset
-            let offset = clock - last_block.clock_start() - 1;
             let mut slice = last_block.as_slice();
-            slice.trim_end(offset);
+            slice.trim_end(clock - last_block.clock_start() + 1);
             slice.encode(encoder, Some(self));
         }
     }

@@ -1579,10 +1579,10 @@ mod test {
             any!({"s1": {"a": ["a1", "a3", "a4", "a5"], "b": ["b1", "b2"]}})
         );
 
-        mgr.undo().unwrap();
-        mgr.undo().unwrap();
-        mgr.undo().unwrap();
-        mgr.undo().unwrap();
+        mgr.undo().unwrap(); // {"s1": {"a": ["a1", "a3", "a4"], "b": ["b1", "b2"]}}
+        mgr.undo().unwrap(); // {"s1": {"a": ["a1", "a3"], "b": ["b1", "b2"]}}
+        mgr.undo().unwrap(); // {"s1": {"a": ["a1"], "b": ["b1", "b2"]}}
+        mgr.undo().unwrap(); // {"s1": {"a": ["a1"], "b": ["b1"]}}
         let actual = map.to_json(&doc.transact());
         assert_eq!(actual, any!({"s1": {"a": ["a1"], "b": ["b1"]}}));
 

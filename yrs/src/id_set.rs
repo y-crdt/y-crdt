@@ -680,7 +680,7 @@ impl<'ds> TxnIterator for DeletedBlocks<'ds> {
                 return self.next(txn);
             } else if clock < r.end && clock + block_len > r.end {
                 // we need to cut the last block
-                block.trim_end(r.end - clock);
+                block.trim_end(clock + block_len - r.end);
                 self.current_range = None;
                 self.current_index = None;
             }

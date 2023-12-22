@@ -131,13 +131,13 @@ impl ItemSlice {
 
     /// Trim a number of countable elements from the beginning of a current slice.
     pub(crate) fn trim_start(&mut self, count: u32) {
-        debug_assert!(count < self.len());
+        debug_assert!(count <= self.len());
         self.start += count;
     }
 
     /// Trim a number of countable elements from the end of a current slice.
     pub(crate) fn trim_end(&mut self, count: u32) {
-        debug_assert!(count < self.len());
+        debug_assert!(count <= self.len());
         self.end -= count;
     }
 
@@ -311,13 +311,13 @@ impl GCSlice {
 
     /// Trim a number of countable elements from the beginning of a current slice.
     pub(crate) fn trim_start(&mut self, count: u32) {
-        debug_assert!(count < self.len());
+        debug_assert!(count <= self.len());
         self.start += count;
     }
 
     /// Trim a number of countable elements from the end of a current slice.
     pub(crate) fn trim_end(&mut self, count: u32) {
-        debug_assert!(count < self.len());
+        debug_assert!(count <= self.len());
         self.end -= count;
     }
 
