@@ -1,6 +1,7 @@
 use crate::block::ItemPtr;
 use crate::doc::{AfterTransactionSubscription, TransactionAcqError};
 use crate::iter::TxnIterator;
+use crate::slice::BlockSlice;
 use crate::transaction::Origin;
 use crate::types::{Branch, BranchPtr};
 use crate::{
@@ -461,8 +462,9 @@ where
             let mut change_performed = false;
 
             let deleted: Vec<_> = item.insertions.deleted_blocks().collect(txn);
-            for ptr in deleted {
-                if let Some(mut item) = ptr.as_item() {
+            for slice in deleted {
+                if let BlockSlice::Item(slice) = slice {
+                    let mut item = txn.store.materialize(slice);
                     if item.redone.is_some() {
                         let mut id = *item.id();
                         let (block, diff) = txn.store().follow_redone(&id);
@@ -483,7 +485,8 @@ where
 
             let mut deleted = item.deletions.deleted_blocks();
             while let Some(slice) = deleted.next(txn) {
-                if let Some(ptr) = slice.as_item() {
+                if let BlockSlice::Item(slice) = slice {
+                    let ptr = txn.store.materialize(slice);
                     if scope.iter().any(|b| b.is_parent_of(Some(ptr)))
                         && !item.insertions.is_deleted(ptr.id())
                     // Never redo structs in stackItem.insertions because they were created and deleted in the same capture interval.
