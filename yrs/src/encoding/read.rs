@@ -14,7 +14,7 @@ pub enum Error {
     UnexpectedValue,
 
     #[error("failed to allocate memory: {0}")]
-    NotEnoughBytes(#[from] TryReserveError),
+    NotEnoughMemory(#[from] TryReserveError),
 
     #[error("JSON parsing error: {0}")]
     InvalidJSON(#[from] serde_json::Error),

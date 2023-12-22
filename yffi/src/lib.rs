@@ -1175,8 +1175,8 @@ pub const ERR_CODE_INVALID_JSON: u8 = 5;
 /// Error code: other error type than the one specified.
 pub const ERR_CODE_OTHER: u8 = 6;
 
-/// Error code: allocated buffer is too small to hold a decoded value.
-pub const ERR_NOT_ENOUGH_BYTES: u8 = 7;
+/// Error code: not enough memory to perform an operation.
+pub const ERR_NOT_ENOUGH_MEMORY: u8 = 7;
 
 fn err_code(e: Error) -> u8 {
     match e {
@@ -1184,7 +1184,7 @@ fn err_code(e: Error) -> u8 {
         Error::EndOfBuffer(_) => ERR_CODE_EOS,
         Error::UnexpectedValue => ERR_CODE_UNEXPECTED_VALUE,
         Error::InvalidJSON(_) => ERR_CODE_INVALID_JSON,
-        Error::NotEnoughBytes(_) => ERR_NOT_ENOUGH_BYTES,
+        Error::NotEnoughMemory(_) => ERR_NOT_ENOUGH_MEMORY,
     }
 }
 

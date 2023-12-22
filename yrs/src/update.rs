@@ -933,7 +933,9 @@ impl Into<Store> for Update {
         for (client_id, vec) in self.blocks.clients {
             let blocks = store
                 .blocks
-                .get_client_blocks_with_capacity_mut(client_id, vec.len());
+                .get_client_blocks_with_capacity_mut(client_id, vec.len())
+                .expect("The client block should be created");
+
             for block in vec {
                 if let BlockCarrier::Block(block) = block {
                     blocks.push(block);

@@ -208,11 +208,33 @@ impl ClientBlockList {
         ClientBlockList { list: Vec::new() }
     }
 
-    /// Creates a new instance of aclient block list with a predefined capacity.
-    pub fn with_capacity(capacity: usize) -> ClientBlockList {
-        ClientBlockList {
-            list: Vec::with_capacity(capacity),
-        }
+    /// Creates a new instance of `ClientBlockList` with the specified capacity.
+    ///
+    /// This function initializes an internal vector with a capacity
+    /// indicated by the `capacity` argument. It attempts to reserve this capacity
+    /// upfront. If the reservation is successful, it returns a new `ClientBlockList`
+    /// instance. Otherwise, it returns an error if the reservation fails.
+    ///
+    /// # Arguments
+    ///
+    /// * `capacity` - The desired capacity for the internal vector of `ClientBlockList`.
+    ///
+    /// # Returns
+    ///
+    /// This function returns a `Result` type:
+    /// - `Ok(ClientBlockList)` if the capacity reservation is successful.
+    /// - `Err(Error)` if the capacity reservation fails, encapsulating the reason for the failure.
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if the memory allocation for the specified capacity fails.
+    ///
+    pub fn with_capacity(capacity: usize) -> Result<ClientBlockList, Error> {
+        let mut list = Vec::new();
+        list.try_reserve(capacity)?;
+        Ok(ClientBlockList {
+            list
+        })
     }
 
     pub fn try_get(&self, index: usize) -> Option<BlockPtr> {
@@ -477,10 +499,15 @@ impl BlockStore {
         &mut self,
         client: ClientID,
         capacity: usize,
-    ) -> &mut ClientBlockList {
-        self.clients
-            .entry(client)
-            .or_insert_with(|| ClientBlockList::with_capacity(capacity))
+    ) -> Result<&mut ClientBlockList, Error> {
+        match self.clients.entry(client) {
+            Entry::Occupied(e) => Ok(e.into_mut()),
+            Entry::Vacant(e) => {
+                let list = ClientBlockList::with_capacity(capacity)?;
+                Ok(e.insert(list))
+            }
+        }
+
     }
 
     /// Given block pointer, tries to split it, returning a true, if block was split in result of
