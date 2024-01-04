@@ -225,9 +225,11 @@ impl Update {
                         } else {
                             None
                         };
-                        if let BlockCarrier::Item(block) = block {
-                            store = txn.store_mut();
-                            store.blocks.push_block(block);
+                        store = txn.store_mut();
+                        match block {
+                            BlockCarrier::Item(item) => store.blocks.push_block(item),
+                            BlockCarrier::GC(gc) => store.blocks.push_gc(gc),
+                            BlockCarrier::Skip(_) => { /* do nothing */ }
                         }
 
                         if let Some(ptr) = delete_ptr {

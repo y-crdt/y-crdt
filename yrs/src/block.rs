@@ -196,6 +196,14 @@ impl GC {
     }
 }
 
+impl From<BlockRange> for GC {
+    fn from(value: BlockRange) -> Self {
+        let start = value.id.clock;
+        let end = start + value.len - 1;
+        GC { start, end }
+    }
+}
+
 impl Encode for GC {
     fn encode<E: Encoder>(&self, encoder: &mut E) {
         encoder.write_info(BLOCK_GC_REF_NUMBER);
@@ -761,7 +769,7 @@ impl ItemPtr {
         {
             self.len = self.content.len(OffsetKind::Utf16);
             if let Some(mut right_right) = other.right {
-                right_right.left = Some(other);
+                right_right.left = Some(*self);
             }
             if other.info.is_keep() {
                 self.info.set_keep();

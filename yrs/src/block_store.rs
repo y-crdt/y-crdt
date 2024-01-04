@@ -1,4 +1,4 @@
-use crate::block::{BlockCell, ClientID, Item, ItemPtr, ID};
+use crate::block::{BlockCell, BlockRange, ClientID, Item, ItemPtr, GC, ID};
 use crate::slice::ItemSlice;
 use crate::types::TypePtr;
 use crate::utils::client_hasher::ClientHasher;
@@ -117,7 +117,6 @@ impl ClientBlockList {
                 let mut left = ItemPtr::from(left);
                 let right = ItemPtr::from(right);
                 if left.try_squash(right) {
-                    self.list.remove(index);
                     if let Some(key) = right.parent_sub.as_deref() {
                         if let TypePtr::Branch(mut parent) = right.parent {
                             if let Some(e) = parent.map.get_mut(key) {
@@ -127,6 +126,7 @@ impl ClientBlockList {
                             }
                         }
                     }
+                    self.list.remove(index);
                 }
             }
             _ => { /* cannot squash incompatible types */ }
@@ -193,6 +193,21 @@ impl BlockStore {
             Entry::Vacant(mut e) => {
                 let list = e.insert(ClientBlockList::default());
                 list.push(block.into());
+            }
+        }
+    }
+
+    pub fn push_gc(&mut self, gc: BlockRange) {
+        let id = gc.id;
+        let gc: BlockCell = GC::from(gc).into();
+        match self.clients.entry(id.client) {
+            Entry::Occupied(mut e) => {
+                let list = e.get_mut();
+                list.push(gc);
+            }
+            Entry::Vacant(mut e) => {
+                let list = e.insert(ClientBlockList::default());
+                list.push(gc);
             }
         }
     }
