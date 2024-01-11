@@ -896,8 +896,8 @@ mod test {
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
     use crate::{
         any, Any, Array, ArrayPrelim, ArrayRef, DeleteSet, Doc, GetString, Map, MapPrelim, MapRef,
-        Options, StateVector, SubscriptionId, Text, TextRef, Transact, Uuid, XmlElementPrelim,
-        XmlFragment, XmlFragmentRef, XmlTextRef,
+        OffsetKind, Options, StateVector, SubscriptionId, Text, TextRef, Transact, Uuid,
+        XmlElementPrelim, XmlFragment, XmlFragmentRef, XmlTextRef,
     };
     use std::cell::{Cell, RefCell, RefMut};
     use std::collections::BTreeSet;
@@ -2062,5 +2062,35 @@ mod test {
         assert!(t2.is_alive(&r2), "root is always alive (remote)");
         assert!(!t2.is_alive(&a2), "child was removed (remote)");
         assert!(!t2.is_alive(&aa2), "parent was removed (remote)");
+    }
+
+    #[test]
+    fn apply_snapshot_updates() {
+        let update = {
+            let doc = Doc::with_options(Options {
+                client_id: 1,
+                skip_gc: true,
+                offset_kind: OffsetKind::Utf16,
+                ..Options::default()
+            });
+            let txt = doc.get_or_insert_text("test");
+            let mut txn = doc.transact_mut();
+            txt.insert(&mut txn, 0, "hello");
+
+            let snap = txn.snapshot();
+
+            txt.insert(&mut txn, 5, " world");
+
+            let mut encoder = EncoderV1::new();
+            txn.encode_state_from_snapshot(&snap, &mut encoder).unwrap();
+            encoder.to_vec()
+        };
+
+        let doc = Doc::with_client_id(1);
+        let txt = doc.get_or_insert_text("test");
+        let mut txn = doc.transact_mut();
+        txn.apply_update(Update::decode_v1(&update).unwrap());
+        let str = txt.get_string(&txn);
+        assert_eq!(&str, "hello");
     }
 }

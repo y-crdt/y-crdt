@@ -176,7 +176,7 @@ impl Store {
             let last_block = &blocks[last_idx];
             // write first struct with an offset
             let mut slice = last_block.as_slice();
-            slice.trim_end(clock - last_block.clock_start() + 1);
+            slice.trim_end(slice.clock_end() - (clock - 1));
             slice.encode(encoder, Some(self));
         }
     }
