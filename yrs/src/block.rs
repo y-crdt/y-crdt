@@ -96,10 +96,19 @@ impl ID {
     }
 }
 
-#[derive(PartialEq)]
 pub(crate) enum BlockCell {
     GC(GC),
     Block(Box<Item>),
+}
+
+impl PartialEq for BlockCell {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (BlockCell::GC(a), BlockCell::GC(b)) => a == b,
+            (BlockCell::Block(a), BlockCell::Block(b)) => a.id == b.id,
+            _ => false,
+        }
+    }
 }
 
 impl std::fmt::Debug for BlockCell {
