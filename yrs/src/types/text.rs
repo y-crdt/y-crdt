@@ -1,5 +1,4 @@
-use crate::block::{Block, BlockPtr, EmbedPrelim, Item, ItemContent, ItemPosition, Prelim};
-use crate::block_store::Snapshot;
+use crate::block::{EmbedPrelim, Item, ItemContent, ItemPosition, ItemPtr, Prelim};
 use crate::transaction::TransactionMut;
 use crate::types::{
     Attrs, Branch, BranchPtr, Delta, EventHandler, Observers, Path, SharedRef, TypeRef, Value,
@@ -130,7 +129,7 @@ impl GetString for TextRef {
     fn get_string<T: ReadTxn>(&self, txn: &T) -> String {
         let mut start = self.as_ref().start;
         let mut s = String::new();
-        while let Some(Block::Item(item)) = start.as_deref() {
+        while let Some(item) = start.as_deref() {
             if !item.is_deleted() {
                 if let ItemContent::String(item_string) = &item.content {
                     s.push_str(item_string);
@@ -142,10 +141,10 @@ impl GetString for TextRef {
     }
 }
 
-impl TryFrom<BlockPtr> for TextRef {
-    type Error = BlockPtr;
+impl TryFrom<ItemPtr> for TextRef {
+    type Error = ItemPtr;
 
-    fn try_from(value: BlockPtr) -> Result<Self, Self::Error> {
+    fn try_from(value: ItemPtr) -> Result<Self, Self::Error> {
         if let Some(branch) = value.clone().as_branch() {
             Ok(TextRef::from(branch))
         } else {
@@ -509,7 +508,7 @@ where
     }
     fn process(
         &mut self,
-        mut n: Option<BlockPtr>,
+        mut n: Option<ItemPtr>,
         hi: Option<&Snapshot>,
         lo: Option<&Snapshot>,
         start: Option<&StickyIndex>,
@@ -534,7 +533,7 @@ where
         };
 
         let mut start_offset: i32 = if start.is_none() { 0 } else { -1 };
-        'LOOP: while let Some(Block::Item(item)) = n.as_deref() {
+        'LOOP: while let Some(item) = n.as_deref() {
             if let Some(start) = start {
                 if start_offset < 0 && item.contains(start) {
                     if start_assoc == Assoc::After {
@@ -628,7 +627,7 @@ where
 }
 
 pub(crate) fn diff_between<D, F>(
-    ptr: Option<BlockPtr>,
+    ptr: Option<ItemPtr>,
     start: Option<&StickyIndex>,
     end: Option<&StickyIndex>,
     compute_ychange: F,
@@ -664,62 +663,56 @@ fn find_position(this: BranchPtr, txn: &mut TransactionMut, index: u32) -> Optio
     let store = txn.store_mut();
     let encoding = store.options.offset_kind;
     let mut remaining = index;
-    while let Some(mut right_ptr) = pos.right {
+    while let Some(mut right) = pos.right {
         if remaining == 0 {
             break;
         }
 
-        if let Block::Item(right) = right_ptr.deref_mut() {
-            if !right.is_deleted() {
-                match &right.content {
-                    ItemContent::Format(key, value) => {
-                        if let Any::Null = value.as_ref() {
-                            format_ptrs.remove(key);
-                        } else {
-                            format_ptrs.insert(key.clone(), pos.right.clone());
-                        }
-                    }
-                    _ => {
-                        let mut block_len = right.len();
-                        let content_len = right.content_len(encoding);
-                        if remaining < content_len {
-                            // split right item
-                            let offset = if let ItemContent::String(str) = &right.content {
-                                str.block_offset(remaining, encoding)
-                            } else {
-                                remaining
-                            };
-                            store
-                                .blocks
-                                .split_block(right_ptr, offset, OffsetKind::Utf16)
-                                .unwrap();
-                            block_len -= offset;
-                            remaining = 0;
-                        } else {
-                            remaining -= content_len;
-                        }
-                        pos.index += block_len;
+        if !right.is_deleted() {
+            match &right.content {
+                ItemContent::Format(key, value) => {
+                    if let Any::Null = value.as_ref() {
+                        format_ptrs.remove(key);
+                    } else {
+                        format_ptrs.insert(key.clone(), pos.right.clone());
                     }
                 }
+                _ => {
+                    let mut block_len = right.len();
+                    let content_len = right.content_len(encoding);
+                    if remaining < content_len {
+                        // split right item
+                        let offset = if let ItemContent::String(str) = &right.content {
+                            str.block_offset(remaining, encoding)
+                        } else {
+                            remaining
+                        };
+                        store
+                            .blocks
+                            .split_block(right, offset, OffsetKind::Utf16)
+                            .unwrap();
+                        block_len -= offset;
+                        remaining = 0;
+                    } else {
+                        remaining -= content_len;
+                    }
+                    pos.index += block_len;
+                }
             }
-            pos.left = pos.right.take();
-            pos.right = if let Some(Block::Item(item)) = pos.left.as_deref() {
-                item.right
-            } else {
-                None
-            };
-        } else {
-            return None;
         }
+        pos.left = pos.right.take();
+        pos.right = if let Some(item) = pos.left.as_deref() {
+            item.right
+        } else {
+            None
+        };
     }
 
     for (_, block_ptr) in format_ptrs {
-        if let Some(mut ptr) = block_ptr {
-            if let Block::Item(item) = ptr.deref_mut() {
-                if let ItemContent::Format(key, value) = &item.content {
-                    let attrs = pos.current_attrs.get_or_init();
-                    update_current_attributes(attrs, key, value.as_ref());
-                }
+        if let Some(item) = block_ptr {
+            if let ItemContent::Format(key, value) = &item.content {
+                let attrs = pos.current_attrs.get_or_init();
+                update_current_attributes(attrs, key, value.as_ref());
             }
         }
     }
@@ -732,7 +725,7 @@ fn remove(txn: &mut TransactionMut, mut pos: ItemPosition, len: u32) {
     let mut remaining = len;
     let start = pos.right.clone();
     let start_attrs = pos.current_attrs.clone();
-    while let Some(Block::Item(item)) = pos.right.as_deref() {
+    while let Some(item) = pos.right.as_deref() {
         if remaining == 0 {
             break;
         }
@@ -786,17 +779,13 @@ fn remove(txn: &mut TransactionMut, mut pos: ItemPosition, len: u32) {
     }
 }
 
-fn is_valid_target(ptr: BlockPtr) -> bool {
-    if ptr.is_deleted() {
+fn is_valid_target(item: ItemPtr) -> bool {
+    if item.is_deleted() {
         true
-    } else if let Block::Item(item) = ptr.deref() {
-        if let ItemContent::Format(_, _) = &item.content {
-            true
-        } else {
-            false
-        }
+    } else if let ItemContent::Format(_, _) = &item.content {
+        true
     } else {
-        true
+        false
     }
 }
 
@@ -819,48 +808,45 @@ fn insert_format(
             break;
         }
 
-        if let Block::Item(item) = right.deref() {
-            if !item.is_deleted() {
-                match &item.content {
-                    ItemContent::Format(key, value) => {
-                        if let Some(v) = attrs.get(key) {
-                            if v == value.as_ref() {
-                                negated_attrs.remove(key);
-                            } else {
-                                negated_attrs.insert(key.clone(), *value.clone());
-                            }
-                            txn.delete(right);
+        if !right.is_deleted() {
+            match &right.content {
+                ItemContent::Format(key, value) => {
+                    if let Some(v) = attrs.get(key) {
+                        if v == value.as_ref() {
+                            negated_attrs.remove(key);
+                        } else {
+                            negated_attrs.insert(key.clone(), *value.clone());
                         }
+                        txn.delete(right);
                     }
-                    ItemContent::String(s) => {
-                        let content_len = item.content_len(encoding);
-                        if len < content_len {
-                            // split block
-                            let offset = s.block_offset(len, encoding);
-                            let new_right = txn.store_mut().blocks.split_block(
-                                right,
-                                offset,
-                                OffsetKind::Utf16,
-                            );
-                            pos.left = Some(right);
-                            pos.right = new_right;
-                            break;
-                        }
-                        len -= content_len;
+                }
+                ItemContent::String(s) => {
+                    let content_len = right.content_len(encoding);
+                    if len < content_len {
+                        // split block
+                        let offset = s.block_offset(len, encoding);
+                        let new_right =
+                            txn.store_mut()
+                                .blocks
+                                .split_block(right, offset, OffsetKind::Utf16);
+                        pos.left = Some(right);
+                        pos.right = new_right;
+                        break;
                     }
-                    _ => {
-                        let content_len = item.len();
-                        if len < content_len {
-                            let new_right =
-                                txn.store_mut()
-                                    .blocks
-                                    .split_block(right, len, OffsetKind::Utf16);
-                            pos.left = Some(right);
-                            pos.right = new_right;
-                            break;
-                        }
-                        len -= content_len;
+                    len -= content_len;
+                }
+                _ => {
+                    let content_len = right.len();
+                    if len < content_len {
+                        let new_right =
+                            txn.store_mut()
+                                .blocks
+                                .split_block(right, len, OffsetKind::Utf16);
+                        pos.left = Some(right);
+                        pos.right = new_right;
+                        break;
                     }
+                    len -= content_len;
                 }
             }
         }
@@ -875,7 +861,7 @@ fn insert_format(
 
 fn minimize_attr_changes(pos: &mut ItemPosition, attrs: &Attrs) {
     // go right while attrs[right.key] === right.value (or right is deleted)
-    while let Some(Block::Item(i)) = pos.right.as_deref() {
+    while let Some(i) = pos.right.as_deref() {
         if !i.is_deleted() {
             if let ItemContent::Format(k, v) = &i.content {
                 if let Some(v2) = attrs.get(k) {
@@ -914,7 +900,7 @@ fn insert_attributes(
             let client_id = store.options.client_id;
             let parent = this.into();
             let mut item = Item::new(
-                ID::new(client_id, store.blocks.get_state(&client_id)),
+                ID::new(client_id, store.blocks.get_clock(&client_id)),
                 pos.left.clone(),
                 pos.left.map(|ptr| ptr.last_id()),
                 pos.right.clone(),
@@ -923,14 +909,10 @@ fn insert_attributes(
                 None,
                 ItemContent::Format(k, v.into()),
             );
-            let mut item_ptr = BlockPtr::from(&mut item);
+            let mut item_ptr = ItemPtr::from(&mut item);
             pos.right = Some(item_ptr);
             item_ptr.integrate(txn, 0);
-            let local_block_list = txn
-                .store_mut()
-                .blocks
-                .get_client_blocks_mut(item.id().client);
-            local_block_list.push(item);
+            txn.store_mut().blocks.push_block(item);
 
             pos.forward();
             store = txn.store_mut();
@@ -945,7 +927,7 @@ fn insert_negated_attributes(
     pos: &mut ItemPosition,
     mut attrs: Attrs,
 ) {
-    while let Some(Block::Item(item)) = pos.right.as_deref() {
+    while let Some(item) = pos.right.as_deref() {
         if !item.is_deleted() {
             if let ItemContent::Format(key, value) = &item.content {
                 if let Some(curr_val) = attrs.get(key) {
@@ -968,7 +950,7 @@ fn insert_negated_attributes(
         let client_id = store.options.client_id;
         let parent = this.into();
         let mut item = Item::new(
-            ID::new(client_id, store.blocks.get_state(&client_id)),
+            ID::new(client_id, store.blocks.get_clock(&client_id)),
             pos.left.clone(),
             pos.left.map(|ptr| ptr.last_id()),
             pos.right.clone(),
@@ -977,15 +959,11 @@ fn insert_negated_attributes(
             None,
             ItemContent::Format(k, v.into()),
         );
-        let mut item_ptr = BlockPtr::from(&mut item);
+        let mut item_ptr = ItemPtr::from(&mut item);
         pos.right = Some(item_ptr);
         item_ptr.integrate(txn, 0);
 
-        let local_block_list = txn
-            .store_mut()
-            .blocks
-            .get_client_blocks_mut(item.id().client);
-        local_block_list.push(item);
+        txn.store_mut().blocks.push_block(item);
 
         pos.forward();
         store = txn.store_mut();
@@ -994,12 +972,12 @@ fn insert_negated_attributes(
 
 fn clean_format_gap(
     txn: &mut TransactionMut,
-    mut start: Option<BlockPtr>,
-    mut end: Option<BlockPtr>,
+    mut start: Option<ItemPtr>,
+    mut end: Option<ItemPtr>,
     start_attrs: &Attrs,
     end_attrs: &mut Attrs,
 ) -> u32 {
-    while let Some(Block::Item(item)) = end.as_deref() {
+    while let Some(item) = end.as_deref() {
         match &item.content {
             ItemContent::String(_) | ItemContent::Embed(_) => break,
             ItemContent::Format(key, value) if !item.is_deleted() => {
@@ -1012,7 +990,7 @@ fn clean_format_gap(
 
     let mut cleanups = 0;
     while start != end {
-        if let Some(Block::Item(item)) = start.as_deref() {
+        if let Some(item) = start.as_deref() {
             let right = item.right.clone();
             if !item.is_deleted() {
                 if let ItemContent::Format(key, value) = &item.content {
@@ -1218,7 +1196,7 @@ impl TextEvent {
         let mut asm = DeltaAssembler::default();
         let mut current = target.start;
 
-        while let Some(Block::Item(item)) = current.as_deref() {
+        while let Some(item) = current.as_deref() {
             match &item.content {
                 ItemContent::Type(_) | ItemContent::Embed(_) => {
                     if txn.has_added(&item.id) {
