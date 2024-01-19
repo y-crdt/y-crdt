@@ -699,12 +699,10 @@ impl Decode for Update {
     fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, Error> {
         // read blocks
         let clients_len: u32 = decoder.read_var()?;
-        let mut blocks = UpdateBlocks {
-            clients: HashMap::with_capacity_and_hasher(
-                clients_len as usize,
-                BuildHasherDefault::default(),
-            ),
-        };
+        let mut clients = HashMap::with_hasher(BuildHasherDefault::default());
+        clients.try_reserve(clients_len as usize)?;
+
+        let mut blocks = UpdateBlocks { clients };
         for _ in 0..clients_len {
             let blocks_len = decoder.read_var::<u32>()? as usize;
 
@@ -713,7 +711,10 @@ impl Decode for Update {
             let blocks = blocks
                 .clients
                 .entry(client)
-                .or_insert_with(|| VecDeque::with_capacity(blocks_len));
+                .or_insert_with(|| VecDeque::new());
+            // Attempt to pre-allocate memory for the blocks. If the capacity overflows and
+            // allocation fails, return an error.
+            blocks.try_reserve(blocks_len)?;
 
             for _ in 0..blocks_len {
                 let id = ID::new(client, clock);
