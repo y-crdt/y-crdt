@@ -1,4 +1,4 @@
-use crate::block::{Block, BlockPtr, EmbedPrelim, ItemContent, ItemPosition, Prelim};
+use crate::block::{EmbedPrelim, ItemContent, ItemPosition, ItemPtr, Prelim};
 use crate::transaction::TransactionMut;
 use crate::types::{
     event_keys, Branch, BranchPtr, Entries, EntryChange, EventHandler, Observers, Path, SharedRef,
@@ -84,12 +84,10 @@ impl ToJson for MapRef {
     fn to_json<T: ReadTxn>(&self, txn: &T) -> Any {
         let inner = self.0;
         let mut res = HashMap::new();
-        for (key, ptr) in inner.map.iter() {
-            if let Block::Item(item) = ptr.deref() {
-                if !item.is_deleted() {
-                    let last = item.content.get_last().unwrap_or(Value::Any(Any::Null));
-                    res.insert(key.to_string(), last.to_json(txn));
-                }
+        for (key, item) in inner.map.iter() {
+            if !item.is_deleted() {
+                let last = item.content.get_last().unwrap_or(Value::Any(Any::Null));
+                res.insert(key.to_string(), last.to_json(txn));
             }
         }
         Any::from(res)
@@ -108,10 +106,10 @@ impl AsMut<Branch> for MapRef {
     }
 }
 
-impl TryFrom<BlockPtr> for MapRef {
-    type Error = BlockPtr;
+impl TryFrom<ItemPtr> for MapRef {
+    type Error = ItemPtr;
 
-    fn try_from(value: BlockPtr) -> Result<Self, Self::Error> {
+    fn try_from(value: ItemPtr) -> Result<Self, Self::Error> {
         if let Some(branch) = value.clone().as_branch() {
             Ok(MapRef::from(branch))
         } else {
@@ -136,12 +134,10 @@ pub trait Map: AsRef<Branch> + Sized {
     fn len<T: ReadTxn>(&self, txn: &T) -> u32 {
         let mut len = 0;
         let inner = self.as_ref();
-        for ptr in inner.map.values() {
+        for item in inner.map.values() {
             //TODO: maybe it would be better to just cache len in the map itself?
-            if let Block::Item(item) = ptr.deref() {
-                if !item.is_deleted() {
-                    len += 1;
-                }
+            if !item.is_deleted() {
+                len += 1;
             }
         }
         len
@@ -225,12 +221,11 @@ pub trait Map: AsRef<Branch> + Sized {
 
     /// Checks if an entry with given `key` can be found within current map.
     fn contains_key<T: ReadTxn>(&self, txn: &T, key: &str) -> bool {
-        if let Some(ptr) = self.as_ref().map.get(key) {
-            if let Block::Item(item) = ptr.deref() {
-                return !item.is_deleted();
-            }
+        if let Some(item) = self.as_ref().map.get(key) {
+            !item.is_deleted()
+        } else {
+            false
         }
-        false
     }
 
     /// Clears the contents of current map, effectively removing all of its entries.

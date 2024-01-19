@@ -1,5 +1,5 @@
 use crate::atomic::AtomicRef;
-use crate::block::{Block, BlockPtr, EmbedPrelim, ItemContent, Prelim};
+use crate::block::{EmbedPrelim, ItemContent, ItemPtr, Prelim};
 use crate::iter::{
     AsIter, BlockIterator, BlockSliceIterator, IntoBlockIter, MoveIter, RangeIter, TxnIterator,
     Values,
@@ -13,7 +13,7 @@ use std::collections::hash_map::Entry;
 use std::collections::{Bound, HashSet};
 use std::convert::TryFrom;
 use std::marker::PhantomData;
-use std::ops::{Deref, DerefMut, RangeBounds};
+use std::ops::{DerefMut, RangeBounds};
 use std::sync::Arc;
 use thiserror::Error;
 
@@ -129,10 +129,10 @@ impl<P: From<BranchPtr>> From<BranchPtr> for WeakRef<P> {
     }
 }
 
-impl<P: TryFrom<BlockPtr>> TryFrom<BlockPtr> for WeakRef<P> {
+impl<P: TryFrom<ItemPtr>> TryFrom<ItemPtr> for WeakRef<P> {
     type Error = P::Error;
 
-    fn try_from(value: BlockPtr) -> Result<Self, Self::Error> {
+    fn try_from(value: ItemPtr) -> Result<Self, Self::Error> {
         match P::try_from(value) {
             Ok(p) => Ok(WeakRef(p)),
             Err(e) => Err(e),
@@ -299,11 +299,10 @@ where
     pub fn try_deref_value<T: ReadTxn>(&self, txn: &T) -> Option<Value> {
         let source = self.try_source()?;
         let last = source.first_item.get_owned().to_iter().last()?;
-        let item = last.as_item()?;
-        if item.is_deleted() {
+        if last.is_deleted() {
             None
         } else {
-            item.content.get_first()
+            last.content.get_last()
         }
     }
 }
@@ -419,7 +418,7 @@ impl<P: AsRef<Branch>> From<WeakRef<P>> for WeakPrelim<P> {
     }
 }
 
-impl<P: TryFrom<BlockPtr>> Prelim for WeakPrelim<P> {
+impl<P: TryFrom<ItemPtr>> Prelim for WeakPrelim<P> {
     type Return = WeakRef<P>;
 
     fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
@@ -473,7 +472,7 @@ impl WeakEvent {
 pub struct LinkSource {
     pub(crate) quote_start: StickyIndex,
     pub(crate) quote_end: StickyIndex,
-    pub(crate) first_item: AtomicRef<BlockPtr>,
+    pub(crate) first_item: AtomicRef<ItemPtr>,
 }
 
 impl LinkSource {
@@ -495,11 +494,9 @@ impl LinkSource {
     /// Remove reference to current weak link from all items it quotes.
     pub(crate) fn unlink_all(&self, txn: &mut TransactionMut, branch_ptr: BranchPtr) {
         let mut i = self.first_item.take().map(|arc| *arc).to_iter().moved();
-        while let Some(ptr) = i.next(txn) {
-            if let Block::Item(item) = ptr.deref() {
-                if item.info.is_linked() {
-                    txn.unlink(ptr, branch_ptr);
-                }
+        while let Some(item) = i.next(txn) {
+            if item.info.is_linked() {
+                txn.unlink(item, branch_ptr);
             }
         }
     }
@@ -512,7 +509,7 @@ impl LinkSource {
                 current = Some(*ptr);
             }
         }
-        if let Some(Block::Item(item)) = current.as_deref() {
+        if let Some(item) = current.as_deref() {
             let parent = *item.parent.as_branch().unwrap();
             Unquote::new(
                 txn,
@@ -527,16 +524,13 @@ impl LinkSource {
 
     /// If provided ref is pointing to map type which has been updated, we may want to invalidate
     /// current pointer to point to its right most neighbor.
-    fn try_right_most(block_ref: &mut BlockPtr) -> bool {
-        match BlockPtr::deref(block_ref) {
-            Block::Item(item) if item.parent_sub.is_some() => {
-                // for map types go to the most recent one
-                if let Some(curr_block) = item.right.to_iter().last() {
-                    *block_ref = curr_block;
-                    return true;
-                }
+    fn try_right_most(item: &mut ItemPtr) -> bool {
+        if item.parent_sub.is_some() {
+            // for map types go to the most recent one
+            if let Some(curr_block) = item.right.to_iter().last() {
+                *item = curr_block;
+                return true;
             }
-            _ => {}
         }
         false
     }
@@ -548,47 +542,41 @@ impl LinkSource {
             if let Some(ptr) = self
                 .quote_start
                 .id()
-                .and_then(|id| txn.store.blocks.get_block(id))
+                .and_then(|id| txn.store.blocks.get_item(id))
             {
                 self.first_item.swap(ptr);
                 ptr
             } else {
-                panic!("Defect: weak link quoted range beginning cannot be established")
+                // referenced element has already been GCed
+                return;
             }
         };
-        match curr.deref() {
-            Block::Item(item) if item.parent_sub.is_some() => {
-                // for maps, advance to most recent item
-                if let Some(mut last) = Some(curr).to_iter().last() {
-                    self.first_item.swap(last);
-                    if let Block::Item(item) = last.deref_mut() {
-                        item.info.set_linked();
-                        let linked_by = txn.store.linked_by.entry(last).or_default();
-                        linked_by.insert(inner_ref);
-                    }
-                }
+        if curr.parent_sub.is_some() {
+            // for maps, advance to most recent item
+            if let Some(mut last) = Some(curr).to_iter().last() {
+                self.first_item.swap(last);
+                last.info.set_linked();
+                let linked_by = txn.store.linked_by.entry(last).or_default();
+                linked_by.insert(inner_ref);
             }
-            _ => {
-                let mut first = true;
-                let from = self.quote_start.clone();
-                let to = self.quote_end.clone();
-                let mut i = Some(curr).to_iter().moved().within_range(from, to);
-                while let Some(slice) = i.next(txn) {
-                    let mut ptr = if !slice.adjacent() {
-                        txn.store.materialize(slice)
-                    } else {
-                        slice.ptr
-                    };
-                    if first {
-                        self.first_item.swap(ptr);
-                        first = false;
-                    }
-                    if let Block::Item(item) = ptr.deref_mut() {
-                        item.info.set_linked();
-                        let linked_by = txn.store.linked_by.entry(ptr).or_default();
-                        linked_by.insert(inner_ref);
-                    }
+        } else {
+            let mut first = true;
+            let from = self.quote_start.clone();
+            let to = self.quote_end.clone();
+            let mut i = Some(curr).to_iter().moved().within_range(from, to);
+            while let Some(slice) = i.next(txn) {
+                let mut item = if !slice.adjacent() {
+                    txn.store.materialize(slice)
+                } else {
+                    slice.ptr
+                };
+                if first {
+                    self.first_item.swap(item);
+                    first = false;
                 }
+                item.info.set_linked();
+                let linked_by = txn.store.linked_by.entry(item).or_default();
+                linked_by.insert(inner_ref);
             }
         }
     }
@@ -597,7 +585,7 @@ impl LinkSource {
         let mut result = String::new();
         let mut curr = self.first_item.get_owned();
         let end = self.quote_end.id().unwrap();
-        while let Some(Block::Item(item)) = curr.as_deref() {
+        while let Some(item) = curr.as_deref() {
             if self.quote_end.assoc == Assoc::Before && &item.id == end {
                 // right side is open (last item excluded)
                 break;
@@ -618,7 +606,7 @@ impl LinkSource {
 
     pub fn to_xml_string<T: ReadTxn>(&self, txn: &T) -> String {
         let curr = self.first_item.get_owned();
-        if let Some(Block::Item(item)) = curr.as_deref() {
+        if let Some(item) = curr.as_deref() {
             if let Some(branch) = item.parent.as_branch() {
                 return XmlTextRef::get_string_fragment(
                     branch.start,
@@ -717,7 +705,7 @@ pub trait Quotable: AsRef<Branch> + Sized {
         let mut i = this.start.to_iter().moved();
         // figure out the first ID
         let mut curr = i.next(txn);
-        while let Some(Block::Item(item)) = curr.as_deref() {
+        while let Some(item) = curr.as_deref() {
             if remaining == 0 {
                 break;
             }
@@ -730,7 +718,7 @@ pub trait Quotable: AsRef<Branch> + Sized {
             }
             curr = i.next(txn);
         }
-        let start_id = if let Some(Block::Item(item)) = curr.as_deref() {
+        let start_id = if let Some(item) = curr.as_deref() {
             let mut id = item.id.clone();
             id.clock += if let ItemContent::String(s) = &item.content {
                 s.block_offset(remaining, encoding)
@@ -743,7 +731,7 @@ pub trait Quotable: AsRef<Branch> + Sized {
         };
         // figure out the last ID
         remaining = end - start + remaining;
-        while let Some(Block::Item(item)) = curr.as_deref() {
+        while let Some(item) = curr.as_deref() {
             if !item.is_deleted() && item.is_countable() {
                 let len = item.content_len(encoding);
                 if remaining < len {
@@ -753,7 +741,7 @@ pub trait Quotable: AsRef<Branch> + Sized {
             }
             curr = i.next(txn);
         }
-        let end_id = if let Some(Block::Item(item)) = curr.as_deref() {
+        let end_id = if let Some(item) = curr.as_deref() {
             let mut id = item.id.clone();
             id.clock += if let ItemContent::String(s) = &item.content {
                 s.block_offset(remaining, encoding)
@@ -789,9 +777,9 @@ pub enum QuoteError {
     UnboundedRange,
 }
 
-pub(crate) fn join_linked_range(mut block: BlockPtr, txn: &mut TransactionMut) {
+pub(crate) fn join_linked_range(mut block: ItemPtr, txn: &mut TransactionMut) {
     let block_copy = block.clone();
-    let item = block.as_item_mut().unwrap();
+    let item = block.deref_mut();
     // this item may exists within a quoted range
     item.info.set_linked();
     // we checked if left and right exists before this method call

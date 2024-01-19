@@ -1,5 +1,7 @@
-use crate::block::{Block, BlockPtr};
+use crate::block::ItemPtr;
 use crate::doc::{AfterTransactionSubscription, TransactionAcqError};
+use crate::iter::TxnIterator;
+use crate::slice::BlockSlice;
 use crate::transaction::Origin;
 use crate::types::{Branch, BranchPtr};
 use crate::{
@@ -176,9 +178,13 @@ where
             inner.last_change = now;
         }
         // make sure that deleted structs are not gc'd
-        for ptr in txn.delete_set.clone().deleted_blocks(txn) {
-            if ptr.is_item() && inner.scope.iter().any(|b| b.is_parent_of(Some(ptr))) {
-                ptr.keep(true);
+        let ds = txn.delete_set.clone();
+        let mut deleted = ds.deleted_blocks();
+        while let Some(slice) = deleted.next(txn) {
+            if let Some(item) = slice.as_item() {
+                if inner.scope.iter().any(|b| b.is_parent_of(Some(item))) {
+                    item.keep(true);
+                }
             }
         }
 
@@ -312,9 +318,12 @@ where
     }
 
     fn clear_item(scope: &HashSet<BranchPtr>, txn: &mut TransactionMut, stack_item: StackItem<M>) {
-        for ptr in stack_item.deletions.deleted_blocks(txn) {
-            if ptr.is_item() && scope.iter().any(|b| b.is_parent_of(Some(ptr))) {
-                ptr.keep(false);
+        let mut deleted = stack_item.deletions.deleted_blocks();
+        while let Some(slice) = deleted.next(txn) {
+            if let Some(item) = slice.as_item() {
+                if scope.iter().any(|b| b.is_parent_of(Some(item))) {
+                    item.keep(false);
+                }
             }
         }
     }
@@ -448,41 +457,42 @@ where
     ) -> Option<StackItem<M>> {
         let mut result = None;
         while let Some(item) = stack.pop() {
-            let mut to_redo = HashSet::<BlockPtr>::new();
-            let mut to_delete = Vec::<BlockPtr>::new();
+            let mut to_redo = HashSet::<ItemPtr>::new();
+            let mut to_delete = Vec::<ItemPtr>::new();
             let mut change_performed = false;
 
-            let deleted: Vec<_> = item.insertions.deleted_blocks(txn).collect();
-            for ptr in deleted {
-                let mut ptr = ptr;
-                if let Block::Item(item) = ptr.clone().deref() {
+            let deleted: Vec<_> = item.insertions.deleted_blocks().collect(txn);
+            for slice in deleted {
+                if let BlockSlice::Item(slice) = slice {
+                    let mut item = txn.store.materialize(slice);
                     if item.redone.is_some() {
-                        let mut id = *ptr.id();
+                        let mut id = *item.id();
                         let (block, diff) = txn.store().follow_redone(&id);
-                        ptr = if diff > 0 {
+                        item = if diff > 0 {
                             id.clock += diff;
                             let slice = txn.store.blocks.get_item_clean_start(&id).unwrap();
                             txn.store.materialize(slice)
                         } else {
-                            block
+                            block.unwrap()
                         };
                     }
-                }
-                if let Block::Item(item) = ptr.clone().deref() {
-                    if !item.is_deleted() && scope.iter().any(|b| b.is_parent_of(Some(ptr.clone())))
-                    {
-                        to_delete.push(ptr);
+
+                    if !item.is_deleted() && scope.iter().any(|b| b.is_parent_of(Some(item))) {
+                        to_delete.push(item);
                     }
                 }
             }
 
-            for ptr in item.deletions.deleted_blocks(txn) {
-                if ptr.is_item()
-                    && scope.iter().any(|b| b.is_parent_of(Some(ptr.clone())))
-                    && !item.insertions.is_deleted(ptr.id())
-                // Never redo structs in stackItem.insertions because they were created and deleted in the same capture interval.
-                {
-                    to_redo.insert(ptr);
+            let mut deleted = item.deletions.deleted_blocks();
+            while let Some(slice) = deleted.next(txn) {
+                if let BlockSlice::Item(slice) = slice {
+                    let ptr = txn.store.materialize(slice);
+                    if scope.iter().any(|b| b.is_parent_of(Some(ptr)))
+                        && !item.insertions.is_deleted(ptr.id())
+                    // Never redo structs in stackItem.insertions because they were created and deleted in the same capture interval.
+                    {
+                        to_redo.insert(ptr);
+                    }
                 }
             }
 
@@ -1569,10 +1579,10 @@ mod test {
             any!({"s1": {"a": ["a1", "a3", "a4", "a5"], "b": ["b1", "b2"]}})
         );
 
-        mgr.undo().unwrap();
-        mgr.undo().unwrap();
-        mgr.undo().unwrap();
-        mgr.undo().unwrap();
+        mgr.undo().unwrap(); // {"s1": {"a": ["a1", "a3", "a4"], "b": ["b1", "b2"]}}
+        mgr.undo().unwrap(); // {"s1": {"a": ["a1", "a3"], "b": ["b1", "b2"]}}
+        mgr.undo().unwrap(); // {"s1": {"a": ["a1"], "b": ["b1", "b2"]}}
+        mgr.undo().unwrap(); // {"s1": {"a": ["a1"], "b": ["b1"]}}
         let actual = map.to_json(&doc.transact());
         assert_eq!(actual, any!({"s1": {"a": ["a1"], "b": ["b1"]}}));
 

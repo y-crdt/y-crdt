@@ -1,4 +1,4 @@
-use crate::block::{BlockPtr, EmbedPrelim, ItemContent, Prelim, Unused};
+use crate::block::{EmbedPrelim, ItemContent, ItemPtr, Prelim, Unused};
 use crate::block_iter::BlockIter;
 use crate::moving::StickyIndex;
 use crate::transaction::TransactionMut;
@@ -130,10 +130,10 @@ impl Observable for ArrayRef {
     }
 }
 
-impl TryFrom<BlockPtr> for ArrayRef {
-    type Error = BlockPtr;
+impl TryFrom<ItemPtr> for ArrayRef {
+    type Error = ItemPtr;
 
-    fn try_from(value: BlockPtr) -> Result<Self, Self::Error> {
+    fn try_from(value: ItemPtr) -> Result<Self, Self::Error> {
         if let Some(branch) = value.clone().as_branch() {
             Ok(ArrayRef::from(branch))
         } else {

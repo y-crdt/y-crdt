@@ -1,4 +1,4 @@
-use crate::block::{Block, BlockPtr, ClientID, ItemContent, Prelim};
+use crate::block::{ClientID, ItemContent, ItemPtr, Prelim};
 use crate::encoding::read::Error;
 use crate::event::{SubdocsEvent, TransactionCleanupEvent, UpdateEvent};
 use crate::store::{Store, StoreRef};
@@ -17,7 +17,6 @@ use rand::Rng;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::fmt::Formatter;
-use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use thiserror::Error;
 
@@ -91,7 +90,7 @@ impl Doc {
         }
     }
 
-    pub(crate) fn subdoc(parent: BlockPtr, options: Options) -> Self {
+    pub(crate) fn subdoc(parent: ItemPtr, options: Options) -> Self {
         let mut store = Store::new(options);
         store.parent = Some(parent);
         Doc {
@@ -426,27 +425,25 @@ impl Doc {
         for mut subdoc in subdocs {
             subdoc.destroy(&mut txn);
         }
-        if let Some(mut ptr) = txn.store.parent.take() {
-            let parent_ref = ptr.clone();
-            if let Block::Item(item) = ptr.deref_mut() {
-                let is_deleted = item.is_deleted();
-                if let ItemContent::Doc(_, content) = &mut item.content {
-                    let mut options = content.options().clone();
-                    options.should_load = false;
-                    let new_ref = Doc::subdoc(parent_ref, options);
-                    if !is_deleted {
-                        parent_txn
-                            .subdocs_mut()
-                            .added
-                            .insert(new_ref.addr(), new_ref.clone());
-                    }
+        if let Some(mut item) = txn.store.parent.take() {
+            let parent_ref = item.clone();
+            let is_deleted = item.is_deleted();
+            if let ItemContent::Doc(_, content) = &mut item.content {
+                let mut options = content.options().clone();
+                options.should_load = false;
+                let new_ref = Doc::subdoc(parent_ref, options);
+                if !is_deleted {
                     parent_txn
                         .subdocs_mut()
-                        .removed
+                        .added
                         .insert(new_ref.addr(), new_ref.clone());
-
-                    *content = new_ref;
                 }
+                parent_txn
+                    .subdocs_mut()
+                    .removed
+                    .insert(new_ref.addr(), new_ref.clone());
+
+                *content = new_ref;
             }
         }
         // super.destroy(): cleanup the events
@@ -463,7 +460,7 @@ impl Doc {
     /// document, which contains it.
     pub fn parent_doc(&self) -> Option<Doc> {
         let store = unsafe { self.store.0.as_ptr().as_ref() }.unwrap();
-        if let Some(Block::Item(item)) = store.parent.as_deref() {
+        if let Some(item) = store.parent.as_deref() {
             if let ItemContent::Doc(Some(parent_ref), _) = &item.content {
                 let store = parent_ref.0.upgrade()?;
                 return Some(Doc {
@@ -497,16 +494,15 @@ impl std::fmt::Display for Doc {
     }
 }
 
-impl TryFrom<BlockPtr> for Doc {
-    type Error = BlockPtr;
+impl TryFrom<ItemPtr> for Doc {
+    type Error = ItemPtr;
 
-    fn try_from(value: BlockPtr) -> Result<Self, Self::Error> {
-        if let Block::Item(item) = value.deref() {
-            if let ItemContent::Doc(_, doc) = &item.content {
-                return Ok(doc.clone());
-            }
+    fn try_from(item: ItemPtr) -> Result<Self, Self::Error> {
+        if let ItemContent::Doc(_, doc) = &item.content {
+            Ok(doc.clone())
+        } else {
+            Err(item)
         }
-        Err(value)
     }
 }
 
@@ -891,7 +887,7 @@ impl DocAddr {
 
 #[cfg(test)]
 mod test {
-    use crate::block::{Block, ItemContent};
+    use crate::block::ItemContent;
     use crate::test_utils::exchange_updates;
     use crate::transaction::{ReadTxn, TransactionMut};
     use crate::types::ToJson;
@@ -900,8 +896,8 @@ mod test {
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
     use crate::{
         any, Any, Array, ArrayPrelim, ArrayRef, DeleteSet, Doc, GetString, Map, MapPrelim, MapRef,
-        Options, StateVector, SubscriptionId, Text, TextRef, Transact, Uuid, XmlElementPrelim,
-        XmlFragment, XmlFragmentRef, XmlTextRef,
+        OffsetKind, Options, StateVector, SubscriptionId, Text, TextRef, Transact, Uuid,
+        XmlElementPrelim, XmlFragment, XmlFragmentRef, XmlTextRef,
     };
     use std::cell::{Cell, RefCell, RefMut};
     use std::collections::BTreeSet;
@@ -1253,8 +1249,8 @@ mod test {
         let _sub = d1.observe_update_v1(move |_: &TransactionMut, e| {
             let u = Update::decode_v1(&e.update).unwrap();
             for mut block in u.blocks.into_blocks(false) {
-                match block.as_block_ptr().as_deref() {
-                    Some(Block::Item(item)) => {
+                match block.as_item_ptr().as_deref() {
+                    Some(item) => {
                         if let ItemContent::String(s) = &item.content {
                             // each character is appended in individual transaction 1-by-1,
                             // therefore each update should contain a single string with only
@@ -2066,5 +2062,35 @@ mod test {
         assert!(t2.is_alive(&r2), "root is always alive (remote)");
         assert!(!t2.is_alive(&a2), "child was removed (remote)");
         assert!(!t2.is_alive(&aa2), "parent was removed (remote)");
+    }
+
+    #[test]
+    fn apply_snapshot_updates() {
+        let update = {
+            let doc = Doc::with_options(Options {
+                client_id: 1,
+                skip_gc: true,
+                offset_kind: OffsetKind::Utf16,
+                ..Options::default()
+            });
+            let txt = doc.get_or_insert_text("test");
+            let mut txn = doc.transact_mut();
+            txt.insert(&mut txn, 0, "hello");
+
+            let snap = txn.snapshot();
+
+            txt.insert(&mut txn, 5, " world");
+
+            let mut encoder = EncoderV1::new();
+            txn.encode_state_from_snapshot(&snap, &mut encoder).unwrap();
+            encoder.to_vec()
+        };
+
+        let doc = Doc::with_client_id(1);
+        let txt = doc.get_or_insert_text("test");
+        let mut txn = doc.transact_mut();
+        txn.apply_update(Update::decode_v1(&update).unwrap());
+        let str = txt.get_string(&txn);
+        assert_eq!(&str, "hello");
     }
 }

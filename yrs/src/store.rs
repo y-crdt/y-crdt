@@ -1,14 +1,16 @@
-use crate::block::{Block, BlockPtr, BlockSlice, ClientID, ItemContent};
-use crate::block_store::{BlockStore, StateVector};
+use crate::block::{BlockCell, ClientID, ItemContent, ItemPtr};
+use crate::block_store::BlockStore;
 use crate::doc::{
     AfterTransactionSubscription, DestroySubscription, DocAddr, Options, SubdocsSubscription,
 };
 use crate::error::Error;
 use crate::event::SubdocsEvent;
 use crate::id_set::DeleteSet;
+use crate::slice::ItemSlice;
 use crate::types::{Branch, BranchPtr, Path, PathSegment, TypeRef};
 use crate::update::PendingUpdate;
 use crate::updates::encoder::{Encode, Encoder};
+use crate::StateVector;
 use crate::{
     Doc, Observer, OffsetKind, Snapshot, SubscriptionId, TransactionCleanupEvent,
     TransactionCleanupSubscription, TransactionMut, UpdateEvent, UpdateSubscription, Uuid, ID,
@@ -53,10 +55,10 @@ pub struct Store {
 
     /// Pointer to a parent block - present only if a current document is a sub-document of another
     /// document.
-    pub(crate) parent: Option<BlockPtr>,
+    pub(crate) parent: Option<ItemPtr>,
 
     /// Dependencies between items and weak links pointing to these items.
-    pub(crate) linked_by: HashMap<BlockPtr, HashSet<BranchPtr>>,
+    pub(crate) linked_by: HashMap<ItemPtr, HashSet<BranchPtr>>,
 }
 
 impl Store {
@@ -66,7 +68,7 @@ impl Store {
             options,
             types: HashMap::default(),
             node_registry: HashSet::default(),
-            blocks: BlockStore::new(),
+            blocks: BlockStore::default(),
             subdocs: HashMap::default(),
             linked_by: HashMap::default(),
             events: None,
@@ -85,7 +87,7 @@ impl Store {
     /// block that's about to be inserted. You cannot use that clock value to find any existing
     /// block content.
     pub fn get_local_state(&self) -> u32 {
-        self.blocks.get_state(&self.options.client_id)
+        self.blocks.get_clock(&self.options.client_id)
     }
 
     /// Returns a branch reference to a complex type identified by its pointer. Returns `None` if
@@ -160,21 +162,21 @@ impl Store {
 
         encoder.write_var(diff.len());
         for (client, clock) in diff {
-            let blocks = self.blocks.get(&client).unwrap();
-            let clock = clock.min(blocks.last().last_id().clock + 1);
+            let blocks = self.blocks.get_client(&client).unwrap();
+            let clock = clock.min(blocks.clock() + 1);
             let last_idx = blocks.find_pivot(clock - 1).unwrap();
             // write # encoded structs
             encoder.write_var(last_idx + 1);
             encoder.write_client(client);
             encoder.write_var(0);
             for i in 0..last_idx {
-                let block = blocks.get(i);
-                block.encode(Some(self), encoder);
+                let block = blocks[i].as_slice();
+                block.encode(encoder, Some(self));
             }
-            let last_block = blocks.get(last_idx);
+            let last_block = &blocks[last_idx];
             // write first struct with an offset
-            let offset = clock - last_block.id().clock - 1;
-            let slice = BlockSlice::new(last_block, 0, offset);
+            let mut slice = last_block.as_slice();
+            slice.trim_end(slice.clock_end() - (clock - 1));
             slice.encode(encoder, Some(self));
         }
     }
@@ -207,20 +209,21 @@ impl Store {
 
         encoder.write_var(diff.len());
         for (client, clock) in diff {
-            let blocks = self.blocks.get(&client).unwrap();
-            let clock = clock.max(blocks.first().id().clock); // make sure the first id exists
+            let blocks = self.blocks.get_client(&client).unwrap();
+            let clock = clock.max(blocks.get(0).map(|i| i.clock_start()).unwrap_or_default()); // make sure the first id exists
             let start = blocks.find_pivot(clock).unwrap();
             // write # encoded structs
             encoder.write_var(blocks.len() - start);
             encoder.write_client(client);
             encoder.write_var(clock);
-            let first_block = blocks.get(start);
+            let first_block = blocks.get(start).unwrap();
             // write first struct with an offset
-            let offset = clock - first_block.id().clock;
-            let slice = BlockSlice::new(first_block, offset, first_block.len() - 1);
+            let offset = clock - first_block.clock_start();
+            let mut slice = first_block.as_slice();
+            slice.trim_start(offset);
             slice.encode(encoder, Some(self));
             for i in (start + 1)..blocks.len() {
-                blocks.get(i).encode(Some(self), encoder);
+                blocks[i].as_slice().encode(encoder, Some(self));
             }
         }
     }
@@ -248,9 +251,9 @@ impl Store {
             while let Some(segment) = i.next() {
                 match segment {
                     PathSegment::Key(key) => {
-                        let child = current.map.get(key)?.as_item()?;
+                        let child = current.map.get(key)?;
                         if let ItemContent::Type(child_branch) = &child.content {
-                            current = child_branch.into();
+                            current = BranchPtr::from(child_branch.as_ref());
                         } else {
                             return None;
                         }
@@ -271,19 +274,19 @@ impl Store {
     }
 
     /// Consumes current block slice view, materializing it into actual block representation equivalent,
-    /// splitting underlying block along [BlockSlice::start]/[BlockSlice::end] offsets.
+    /// splitting underlying block along [ItemSlice::start]/[ItemSlice::end] offsets.
     ///
-    /// Returns a block created this way, that represents the boundaries that current [BlockSlice]
+    /// Returns a block created this way, that represents the boundaries that current [ItemSlice]
     /// was representing.
-    pub(crate) fn materialize(&mut self, mut slice: BlockSlice) -> BlockPtr {
+    pub(crate) fn materialize(&mut self, mut slice: ItemSlice) -> ItemPtr {
         let id = slice.id().clone();
-        let blocks = self.blocks.get_mut(&id.client).unwrap();
+        let blocks = self.blocks.get_client_mut(&id.client).unwrap();
         let mut links = None;
-        if let Block::Item(item) = slice.ptr.deref() {
-            if item.info.is_linked() {
-                links = self.linked_by.get(&slice.ptr).cloned();
-            }
+        let item = slice.ptr.deref();
+        if item.info.is_linked() {
+            links = self.linked_by.get(&slice.ptr).cloned();
         }
+
         let mut index = None;
         let mut ptr = if slice.adjacent_left() {
             slice.ptr
@@ -291,16 +294,16 @@ impl Store {
             let mut i = blocks.find_pivot(id.clock).unwrap();
             if let Some(new) = slice.ptr.splice(slice.start, OffsetKind::Utf16) {
                 if let Some(source) = links.clone() {
-                    let dest = self.linked_by.entry(BlockPtr::from(&new)).or_default();
+                    let dest = self.linked_by.entry(ItemPtr::from(&new)).or_default();
                     dest.extend(source);
                 }
-                blocks.insert(i + 1, new);
+                blocks.insert(i + 1, BlockCell::Block(new));
                 i += 1;
                 //todo: txn merge blocks insert?
                 index = Some(i);
             }
-            let ptr = blocks.get(i);
-            slice = BlockSlice::new(ptr, 0, slice.end - slice.start);
+            let ptr = blocks[i].as_item().unwrap();
+            slice = ItemSlice::new(ptr, 0, slice.end - slice.start);
             ptr
         };
 
@@ -314,10 +317,10 @@ impl Store {
             };
             let new = ptr.splice(slice.len(), OffsetKind::Utf16).unwrap();
             if let Some(source) = links {
-                let dest = self.linked_by.entry(BlockPtr::from(&new)).or_default();
+                let dest = self.linked_by.entry(ItemPtr::from(&new)).or_default();
                 dest.extend(source);
             }
-            blocks.insert(i + 1, new);
+            blocks.insert(i + 1, BlockCell::Block(new));
             //todo: txn merge blocks insert?
         }
 
@@ -335,7 +338,7 @@ impl Store {
         SubdocGuids(self.subdocs.values())
     }
 
-    pub(crate) fn follow_redone(&self, id: &ID) -> (BlockPtr, u32) {
+    pub(crate) fn follow_redone(&self, id: &ID) -> (Option<ItemPtr>, u32) {
         let mut next_id = Some(*id);
         let mut ptr = None;
         let mut diff = 0;
@@ -345,8 +348,8 @@ impl Store {
                     next.clock += diff;
                     next_id = Some(next.clone());
                 }
-                ptr = self.blocks.get_block(&next);
-                if let Some(Block::Item(item)) = ptr.as_deref() {
+                ptr = self.blocks.get_item(&next);
+                if let Some(item) = ptr.as_deref() {
                     diff = next.clock - item.id.clock;
                     next_id = item.redone;
                     true
@@ -357,7 +360,7 @@ impl Store {
                 false
             }
         } {}
-        (ptr.unwrap(), diff)
+        (ptr, diff)
     }
 
     pub fn is_alive(&self, branch_ptr: &BranchPtr) -> bool {

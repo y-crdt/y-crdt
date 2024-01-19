@@ -1,8 +1,10 @@
-use crate::block::{Block, BlockPtr, BlockSlice, ItemContent};
+use crate::block::{ItemContent, ItemPtr};
+use crate::slice::ItemSlice;
 use crate::{Assoc, ReadTxn, StickyIndex, Value};
+use smallvec::{smallvec, SmallVec};
 use std::ops::Deref;
 
-pub(crate) trait BlockIterator: TxnIterator<Item = BlockPtr> + Sized {
+pub(crate) trait BlockIterator: TxnIterator<Item = ItemPtr> + Sized {
     #[inline]
     fn slices(self) -> BlockSlices<Self> {
         BlockSlices(self)
@@ -14,38 +16,38 @@ pub(crate) trait BlockIterator: TxnIterator<Item = BlockPtr> + Sized {
     }
 }
 
-impl<T> BlockIterator for T where T: TxnIterator<Item = BlockPtr> + Sized {}
+impl<T> BlockIterator for T where T: TxnIterator<Item = ItemPtr> + Sized {}
 
-pub(crate) trait BlockSliceIterator: TxnIterator<Item = BlockSlice> + Sized {
+pub(crate) trait BlockSliceIterator: TxnIterator<Item = ItemSlice> + Sized {
     #[inline]
     fn values(self) -> Values<Self> {
         Values::new(self)
     }
 }
 
-impl<T> BlockSliceIterator for T where T: TxnIterator<Item = BlockSlice> + Sized {}
+impl<T> BlockSliceIterator for T where T: TxnIterator<Item = ItemSlice> + Sized {}
 
 pub trait IntoBlockIter {
     fn to_iter(self) -> BlockIter;
 }
 
-impl IntoBlockIter for Option<BlockPtr> {
+impl IntoBlockIter for Option<ItemPtr> {
     #[inline]
     fn to_iter(self) -> BlockIter {
         BlockIter(self)
     }
 }
 
-/// Iterator over [BlockPtr] references.
+/// Iterator over [ItemPtr] references.
 /// By default it iterates to the right side.
 /// When reversed it iterates to the left side.
 #[repr(transparent)]
 #[derive(Debug, Clone)]
-pub struct BlockIter(Option<BlockPtr>);
+pub struct BlockIter(Option<ItemPtr>);
 
 impl BlockIter {
     #[inline]
-    fn new(ptr: Option<BlockPtr>) -> Self {
+    fn new(ptr: Option<ItemPtr>) -> Self {
         BlockIter(ptr)
     }
 
@@ -55,11 +57,11 @@ impl BlockIter {
 }
 
 impl Iterator for BlockIter {
-    type Item = BlockPtr;
+    type Item = ItemPtr;
 
     fn next(&mut self) -> Option<Self::Item> {
         let curr = self.0.take();
-        if let Some(Block::Item(item)) = curr.as_deref() {
+        if let Some(item) = curr.as_deref() {
             self.0 = item.right;
         }
         curr
@@ -69,15 +71,15 @@ impl Iterator for BlockIter {
 impl DoubleEndedIterator for BlockIter {
     fn next_back(&mut self) -> Option<Self::Item> {
         let curr = self.0.take();
-        if let Some(Block::Item(item)) = curr.as_deref() {
+        if let Some(item) = curr.as_deref() {
             self.0 = item.left;
         }
         curr
     }
 }
 
-impl IntoIterator for BlockPtr {
-    type Item = BlockPtr;
+impl IntoIterator for ItemPtr {
+    type Item = ItemPtr;
     type IntoIter = BlockIter;
 
     fn into_iter(self) -> Self::IntoIter {
@@ -89,6 +91,18 @@ impl IntoIterator for BlockPtr {
 pub trait TxnIterator {
     type Item;
     fn next<T: ReadTxn>(&mut self, txn: &T) -> Option<Self::Item>;
+
+    fn collect<T, B>(&mut self, txn: &T) -> B
+    where
+        T: ReadTxn,
+        B: Default + Extend<Self::Item>,
+    {
+        let mut buf = B::default();
+        while let Some(item) = self.next(txn) {
+            buf.extend([item]);
+        }
+        buf
+    }
 }
 
 /// DoubleEndedIterator equivalent that can be supplied with transaction when iteration step may need it.
@@ -127,38 +141,36 @@ impl MoveIter {
 }
 
 impl TxnIterator for MoveIter {
-    type Item = BlockPtr;
+    type Item = ItemPtr;
 
     fn next<T: ReadTxn>(&mut self, txn: &T) -> Option<Self::Item> {
         while {
             if let Some(curr) = self.iter.next() {
-                let ptr = curr.clone();
-                if let Block::Item(item) = ptr.deref() {
-                    let scope = self.stack.current_scope();
-                    let ctx = scope.map(|s| s.dest);
-                    if item.moved == ctx {
-                        // current item exists in the right (possibly none) move scope
-                        if let Some(scope) = scope {
-                            if scope.end == Some(curr) {
-                                // we're at the end of the current scope
-                                // while we still need to return current block ptr
-                                // we can already descent in the move stack
-                                self.escape_current_scope();
-                                // we just returned to last active moved block ptr, we need to
-                                // skip over it
-                                self.iter.next();
-                            }
-                        }
-                        if let ItemContent::Move(m) = &item.content {
-                            // we need to move to a new scope and reposition iterator at the start of it
-                            let (start, end) = m.get_moved_coords(txn);
-                            self.stack.push(MoveScope::new(start, end, curr));
-                            self.iter = BlockIter(start);
-                        } else {
-                            return Some(curr);
+                let scope = self.stack.current_scope();
+                let ctx = scope.map(|s| s.dest);
+                if curr.moved == ctx {
+                    // current item exists in the right (possibly none) move scope
+                    if let Some(scope) = scope {
+                        if scope.end == Some(curr) {
+                            // we're at the end of the current scope
+                            // while we still need to return current block ptr
+                            // we can already descent in the move stack
+                            self.escape_current_scope();
+                            // we just returned to last active moved block ptr, we need to
+                            // skip over it
+                            self.iter.next();
                         }
                     }
+                    if let ItemContent::Move(m) = &curr.content {
+                        // we need to move to a new scope and reposition iterator at the start of it
+                        let (start, end) = m.get_moved_coords(txn);
+                        self.stack.push(MoveScope::new(start, end, curr));
+                        self.iter = BlockIter(start);
+                    } else {
+                        return Some(curr);
+                    }
                 }
+
                 true // continue to the next loop iteration
             } else {
                 // if current iterator reached the end of the block sequence,
@@ -177,32 +189,30 @@ impl TxnDoubleEndedIterator for MoveIter {
     fn next_back<T: ReadTxn>(&mut self, txn: &T) -> Option<Self::Item> {
         while {
             if let Some(curr) = self.iter.next_back() {
-                let ptr = curr.clone();
-                if let Block::Item(item) = ptr.deref() {
-                    let scope = self.stack.current_scope();
-                    if item.moved == scope.map(|s| s.dest) {
-                        // current item exists in the right (possibly none) move scope
-                        if let Some(scope) = scope {
-                            if scope.start == Some(curr) {
-                                // we're at the start of the current scope
-                                // while we still need to return current block ptr
-                                // we can already descent in the move stack
-                                self.escape_current_scope();
-                                // we just returned to last active moved block ptr, we need to
-                                // skip over it
-                                self.iter.next_back();
-                            }
-                        }
-                        if let ItemContent::Move(m) = &item.content {
-                            // we need to move to a new scope and reposition iterator at the end of it
-                            let (start, end) = m.get_moved_coords(txn);
-                            self.stack.push(MoveScope::new(start, end, curr));
-                            self.iter = BlockIter(end);
-                        } else {
-                            return Some(curr);
+                let scope = self.stack.current_scope();
+                if curr.moved == scope.map(|s| s.dest) {
+                    // current item exists in the right (possibly none) move scope
+                    if let Some(scope) = scope {
+                        if scope.start == Some(curr) {
+                            // we're at the start of the current scope
+                            // while we still need to return current block ptr
+                            // we can already descent in the move stack
+                            self.escape_current_scope();
+                            // we just returned to last active moved block ptr, we need to
+                            // skip over it
+                            self.iter.next_back();
                         }
                     }
+                    if let ItemContent::Move(m) = &curr.content {
+                        // we need to move to a new scope and reposition iterator at the end of it
+                        let (start, end) = m.get_moved_coords(txn);
+                        self.stack.push(MoveScope::new(start, end, curr));
+                        self.iter = BlockIter(end);
+                    } else {
+                        return Some(curr);
+                    }
                 }
+
                 true // continue to the next loop iteration
             } else {
                 // if current iterator reached the end of the block sequence,
@@ -255,16 +265,16 @@ impl MoveStack {
 #[derive(Debug)]
 struct MoveScope {
     /// First block moved in this scope.
-    start: Option<BlockPtr>,
+    start: Option<ItemPtr>,
     /// Last block moved in this scope.
-    end: Option<BlockPtr>,
+    end: Option<ItemPtr>,
     /// A.k.a. return address for the move range. Block pointer where the (start, end)
     /// range has been moved. It always contains an item with move content.
-    dest: BlockPtr,
+    dest: ItemPtr,
 }
 
 impl MoveScope {
-    fn new(start: Option<BlockPtr>, end: Option<BlockPtr>, dest: BlockPtr) -> Self {
+    fn new(start: Option<ItemPtr>, end: Option<ItemPtr>, dest: ItemPtr) -> Self {
         MoveScope { start, end, dest }
     }
 }
@@ -272,13 +282,13 @@ impl MoveScope {
 #[derive(Debug)]
 pub(crate) struct BlockSlices<I>(I)
 where
-    I: TxnIterator<Item = BlockPtr> + Sized;
+    I: TxnIterator<Item = ItemPtr> + Sized;
 
 impl<I> TxnIterator for BlockSlices<I>
 where
-    I: TxnIterator<Item = BlockPtr> + Sized,
+    I: TxnIterator<Item = ItemPtr> + Sized,
 {
-    type Item = BlockSlice;
+    type Item = ItemSlice;
 
     fn next<T: ReadTxn>(&mut self, txn: &T) -> Option<Self::Item> {
         let ptr = self.0.next(txn)?;
@@ -288,7 +298,7 @@ where
 
 impl<I> TxnDoubleEndedIterator for BlockSlices<I>
 where
-    I: TxnDoubleEndedIterator<Item = BlockPtr>,
+    I: TxnDoubleEndedIterator<Item = ItemPtr>,
 {
     fn next_back<T: ReadTxn>(&mut self, txn: &T) -> Option<Self::Item> {
         let ptr = self.0.next_back(txn)?;
@@ -307,7 +317,7 @@ pub(crate) struct RangeIter<I> {
 
 impl<I> RangeIter<I>
 where
-    I: TxnIterator<Item = BlockPtr>,
+    I: TxnIterator<Item = ItemPtr>,
 {
     fn new(iter: I, start: StickyIndex, end: StickyIndex) -> Self {
         RangeIter {
@@ -318,7 +328,7 @@ where
         }
     }
 
-    fn begin<T: ReadTxn>(&mut self, txn: &T, start_offset: &mut u32) -> Option<BlockPtr> {
+    fn begin<T: ReadTxn>(&mut self, txn: &T, start_offset: &mut u32) -> Option<ItemPtr> {
         let mut offset = 0;
         let mut curr = self.iter.next(txn);
         while let Some(ptr) = curr {
@@ -351,9 +361,9 @@ where
 
 impl<I> TxnIterator for RangeIter<I>
 where
-    I: TxnIterator<Item = BlockPtr>,
+    I: TxnIterator<Item = ItemPtr>,
 {
-    type Item = BlockSlice;
+    type Item = ItemSlice;
 
     fn next<T: ReadTxn>(&mut self, txn: &T) -> Option<Self::Item> {
         let mut start_offset = 0;
@@ -381,13 +391,13 @@ where
             }
             _ => ptr.len() - 1,
         };
-        Some(BlockSlice::new(ptr, start_offset, end_offset))
+        Some(ItemSlice::new(ptr, start_offset, end_offset))
     }
 }
 
 impl<I> TxnDoubleEndedIterator for RangeIter<I>
 where
-    I: TxnDoubleEndedIterator<Item = BlockPtr>,
+    I: TxnDoubleEndedIterator<Item = ItemPtr>,
 {
     fn next_back<T: ReadTxn>(&mut self, txn: &T) -> Option<Self::Item> {
         let mut end_offset = 0;
@@ -421,7 +431,7 @@ where
             }
             _ => 0,
         };
-        Some(BlockSlice::new(ptr, start_offset, end_offset))
+        Some(ItemSlice::new(ptr, start_offset, end_offset))
     }
 }
 
@@ -439,7 +449,7 @@ enum RangeIterState {
 #[derive(Debug)]
 pub(crate) struct Values<I> {
     iter: I,
-    current: Option<BlockSlice>,
+    current: Option<ItemSlice>,
 }
 
 impl<I> Values<I> {
@@ -453,7 +463,7 @@ impl<I> Values<I> {
 
 impl<I> TxnIterator for Values<I>
 where
-    I: TxnIterator<Item = BlockSlice>,
+    I: TxnIterator<Item = ItemSlice>,
 {
     type Item = Value;
 
@@ -461,14 +471,13 @@ where
         loop {
             if let Some(slice) = &mut self.current {
                 if slice.start <= slice.end {
-                    if let Block::Item(item) = slice.ptr.deref() {
-                        if !item.is_deleted() {
-                            let mut buf = [Value::default()];
-                            let read = item.content.read(slice.start as usize, &mut buf);
-                            if read != 0 {
-                                slice.start += read as u32;
-                                return Some(std::mem::take(&mut buf[0]));
-                            }
+                    let item = slice.ptr.deref();
+                    if !item.is_deleted() {
+                        let mut buf = [Value::default()];
+                        let read = item.content.read(slice.start as usize, &mut buf);
+                        if read != 0 {
+                            slice.start += read as u32;
+                            return Some(std::mem::take(&mut buf[0]));
                         }
                     }
                 }
@@ -476,42 +485,33 @@ where
             self.current = Some(self.iter.next(txn)?);
         }
     }
-}
-
-pub trait TxnCollect {
-    fn collect_into<T, B>(&mut self, txn: &T, buf: &mut B)
-    where
-        T: ReadTxn,
-        B: Extend<Value>;
 
     fn collect<T, B>(&mut self, txn: &T) -> B
     where
         T: ReadTxn,
-        B: Default + Extend<Value>,
+        B: Default + Extend<Self::Item>,
     {
-        let mut buf = B::default();
-        self.collect_into(txn, &mut buf);
-        buf
-    }
-}
-
-impl<I> TxnCollect for I
-where
-    I: TxnIterator<Item = BlockSlice>,
-{
-    fn collect_into<T, B>(&mut self, txn: &T, buf: &mut B)
-    where
-        T: ReadTxn,
-        B: Extend<Value>,
-    {
-        while let Some(slice) = self.next(txn) {
-            if let Block::Item(item) = slice.ptr.deref() {
+        fn read_slice<B>(slice: ItemSlice, buf: &mut B)
+        where
+            B: Extend<Value>,
+        {
+            let item = slice.ptr.deref();
+            if !item.is_deleted() {
                 let size = slice.end - slice.start + 1;
-                let mut b = vec![Value::default(); size as usize];
-                let read = item.content.read(slice.start as usize, b.as_mut_slice());
+                let mut b: SmallVec<[Value; 2]> = smallvec![Value::default(); size as usize];
+                let _ = item.content.read(slice.start as usize, b.as_mut_slice());
                 buf.extend(b);
             }
         }
+
+        let mut buf = B::default();
+        if let Some(slice) = self.current.take() {
+            read_slice(slice, &mut buf);
+        }
+        while let Some(slice) = self.iter.next(txn) {
+            read_slice(slice, &mut buf);
+        }
+        buf
     }
 }
 
@@ -545,7 +545,7 @@ where
 
 #[cfg(test)]
 mod test {
-    use crate::iter::{BlockIterator, BlockSliceIterator, IntoBlockIter, TxnCollect, TxnIterator};
+    use crate::iter::{BlockIterator, BlockSliceIterator, IntoBlockIter, TxnIterator};
     use crate::test_utils::exchange_updates;
     use crate::{Array, Assoc, Doc, StickyIndex, Transact, ID};
 
@@ -687,9 +687,23 @@ mod test {
         exchange_updates(&[&d1, &d2]); // move cycles may not be detected within a single update exchange
 
         let t1 = d1.transact();
-        let v1: Vec<_> = a1.as_ref().start.to_iter().moved().slices().collect(&t1);
+        let v1: Vec<_> = a1
+            .as_ref()
+            .start
+            .to_iter()
+            .moved()
+            .slices()
+            .values()
+            .collect(&t1);
         let t2 = d2.transact();
-        let v2: Vec<_> = a2.as_ref().start.to_iter().moved().slices().collect(&t2);
+        let v2: Vec<_> = a2
+            .as_ref()
+            .start
+            .to_iter()
+            .moved()
+            .slices()
+            .values()
+            .collect(&t2);
 
         assert_eq!(v1, v2);
     }
@@ -712,6 +726,7 @@ mod test {
             .to_iter()
             .moved()
             .within_range(from, to)
+            .values()
             .collect(&txn);
         assert_eq!(res, vec![3.into(), 4.into(), 5.into()])
     }
@@ -734,6 +749,7 @@ mod test {
             .to_iter()
             .moved()
             .within_range(from, to)
+            .values()
             .collect(&txn);
         assert_eq!(res, vec![4.into(), 5.into()])
     }
@@ -756,6 +772,7 @@ mod test {
             .to_iter()
             .moved()
             .within_range(from, to)
+            .values()
             .collect(&txn);
         assert_eq!(res, vec![5.into()])
     }
@@ -778,6 +795,7 @@ mod test {
             .to_iter()
             .moved()
             .within_range(from, to)
+            .values()
             .collect(&txn);
         assert_eq!(res, vec![3.into(), 4.into(), 5.into()])
     }
@@ -800,6 +818,7 @@ mod test {
             .to_iter()
             .moved()
             .within_range(from, to)
+            .values()
             .collect(&txn);
         assert_eq!(res, vec![3.into(), 4.into()])
     }
@@ -822,6 +841,7 @@ mod test {
             .to_iter()
             .moved()
             .within_range(from, to)
+            .values()
             .collect(&txn);
         assert_eq!(
             res,
@@ -847,6 +867,7 @@ mod test {
             .to_iter()
             .moved()
             .within_range(from, to)
+            .values()
             .collect(&txn);
         assert_eq!(res, vec![1.into(), 2.into(), 3.into(), 4.into()])
     }
@@ -869,6 +890,7 @@ mod test {
             .to_iter()
             .moved()
             .within_range(from, to)
+            .values()
             .collect(&txn);
         assert_eq!(res, vec![4.into(), 5.into(), 6.into()])
     }
@@ -891,6 +913,7 @@ mod test {
             .to_iter()
             .moved()
             .within_range(from, to)
+            .values()
             .collect(&txn);
         assert_eq!(res, vec![3.into()])
     }
