@@ -7,7 +7,7 @@ use crate::id_set::DeleteSet;
 use crate::iter::TxnIterator;
 use crate::slice::BlockSlice;
 use crate::store::{Store, SubdocGuids, SubdocsIter};
-use crate::types::{Branch, BranchPtr, Event, Events, SharedRef, TypePtr, TypeRef, Value};
+use crate::types::{Branch, BranchPtr, Event, Events, SharedRef, TypePtr, Value};
 use crate::update::Update;
 use crate::utils::OptionExt;
 use crate::*;
@@ -531,7 +531,7 @@ impl<'doc> TransactionMut<'doc> {
                     self.store.deregister(inner);
                     let branch_ptr = BranchPtr::from(inner);
                     #[cfg(feature = "weak")]
-                    if let TypeRef::WeakLink(source) = &branch_ptr.type_ref {
+                    if let crate::types::TypeRef::WeakLink(source) = &branch_ptr.type_ref {
                         source.unlink_all(self, branch_ptr);
                     }
                     let mut ptr = branch_ptr.start;
@@ -558,7 +558,7 @@ impl<'doc> TransactionMut<'doc> {
                     for link in linked_by {
                         self.add_changed_type(link, item.parent_sub.clone());
                         #[cfg(feature = "weak")]
-                        if let TypeRef::WeakLink(source) = &link.type_ref {
+                        if let crate::types::TypeRef::WeakLink(source) = &link.type_ref {
                             if source.is_single() {
                                 source.first_item.take();
                             }

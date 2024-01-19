@@ -1648,4 +1648,84 @@ mod test {
         assert_eq!(actual, any!({"s1": {"b1": {"f1": 11}}}));
         assert!(mgr.can_undo(), "should be able to undo to the init state");
     }
+
+    #[test]
+    fn issue_371() {
+        let doc = Doc::with_client_id(1);
+
+        let r = doc.get_or_insert_map("r");
+        let s1 = r.insert(&mut doc.transact_mut(), "s1", MapPrelim::<i32>::new()); // { s1: {} }
+        let b1_arr = s1.insert(&mut doc.transact_mut(), "b1", ArrayPrelim::default()); // { s1: { b1: [] } }
+        let el1 = b1_arr.insert(&mut doc.transact_mut(), 0, MapPrelim::<i32>::new()); // { s1: { b1: [{}] } }
+        el1.insert(&mut doc.transact_mut(), "f1", 8); // { s1: { b1: [{ f1: 8 }] } }
+        el1.insert(&mut doc.transact_mut(), "f2", true); // { s1: { b1: [{ f1: 8, f2: true }] } }
+
+        let mut mgr = UndoManager::with_options(&doc, &r, Options::default());
+        {
+            let mut txn = doc.transact_mut();
+            let el0 = b1_arr.insert(&mut txn, 0, MapPrelim::<i32>::new()); // { s1: { b1: [{}, { f1: 8, f2: true }] } }
+            el0.insert(&mut txn, "f1", 8); // { s1: { b1: [{ f1: 8 }, { f1: 8, f2: true }] } }
+            el0.insert(&mut txn, "f2", false); // { s1: { b1: [{ f1: 8, f2: false }, { f1: 8, f2: true }] } }
+
+            el1.insert(&mut txn, "f1", 13); // { s1: { b1: [{ f1: 8, f2: false }, { f1: 13, f2: true }] } }
+            el1.remove(&mut txn, "f2"); // { s1: { b1: [{ f1: 8, f2: false }, { f1: 13 }] } }
+        }
+        mgr.reset();
+
+        el1.insert(&mut doc.transact_mut(), "f2", false); // { s1: { b1: [{ f1: 8, f2: false }, { f1: 13, f2: false }] } }
+        mgr.reset();
+
+        el1.insert(&mut doc.transact_mut(), "f2", true); // { s1: { b1: [{ f1: 8, f2: false }, { f1: 13, f2: true }] } }
+        mgr.reset();
+
+        mgr.undo().unwrap(); // { s1: { b1: [{ f1: 8, f2: false }, { f1: 13, f2: false }] } }
+        assert_eq!(
+            r.to_json(&doc.transact()),
+            any!({ "s1": { "b1": [{ "f1": 8, "f2": false }, { "f1": 13, "f2": false }] } })
+        );
+        mgr.undo().unwrap(); // { s1: { b1: [{ f1: 8, f2: false }, { f1: 13 }] } }
+        assert_eq!(
+            r.to_json(&doc.transact()),
+            any!({ "s1": { "b1": [{ "f1": 8, "f2": false }, { "f1": 13 }] } })
+        );
+        mgr.undo().unwrap(); // { s1: { b1: [{ f1: 8, f2: true }] } }
+        assert_eq!(
+            r.to_json(&doc.transact()),
+            any!({ "s1": { "b1": [{ "f1": 8, "f2": true }] } })
+        );
+        assert!(!mgr.undo().unwrap()); // no more changes tracked by undo manager
+    }
+
+    #[test]
+    fn issue_371_2() {
+        let doc = Doc::with_client_id(1);
+        let r = doc.get_or_insert_map("r");
+        let s1 = r.insert(&mut doc.transact_mut(), "s1", MapPrelim::<i32>::new()); // { s1:{} }
+        s1.insert(&mut doc.transact_mut(), "f2", "AAA"); // { s1: { f2: AAA } }
+        s1.insert(&mut doc.transact_mut(), "f1", false); // { s1: { f1: false, f2: AAA } }
+
+        let mut mgr = UndoManager::with_options(&doc, &r, Options::default());
+        s1.remove(&mut doc.transact_mut(), "f2"); // { s1: { f1: false } }
+        mgr.reset();
+
+        s1.insert(&mut doc.transact_mut(), "f2", "C1"); // { s1: { f1: false, f2: C1 } }
+        mgr.reset();
+
+        s1.insert(&mut doc.transact_mut(), "f2", "C2"); // { s1: { f1: false, f2: C2 } }
+        mgr.reset();
+
+        mgr.undo().unwrap(); // { s1: { f1: false, f2: C1 } }
+        assert_eq!(
+            r.to_json(&doc.transact()),
+            any!({ "s1": { "f1": false, "f2": "C1" } })
+        );
+        mgr.undo().unwrap(); // { s1: { f1: false } }
+        assert_eq!(r.to_json(&doc.transact()), any!({ "s1": { "f1": false } }));
+        mgr.undo().unwrap(); // { s1: { f1: false, f2: AAA } }
+        assert_eq!(
+            r.to_json(&doc.transact()),
+            any!({ "s1": { "f1": false, "f2": "AAA" } })
+        );
+        assert!(!mgr.undo().unwrap()); // no more changes tracked by undo manager
+    }
 }
