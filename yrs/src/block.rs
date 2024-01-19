@@ -285,12 +285,15 @@ impl ItemPtr {
                 // If it is intended to delete right while item is redone,
                 // we can expect that item should replace right.
                 while let Some(left_item) = left.as_deref() {
-                    if let Some(ptr) = left_item.right {
-                        let id = ptr.id();
-                        if items_to_delete.is_deleted(id) || s1.is_deleted(id) || s2.is_deleted(id)
+                    if let Some(left_right) = left_item.right {
+                        let id = left_right.id();
+                        if left_right.redone.is_some()
+                            || items_to_delete.is_deleted(id)
+                            || s1.is_deleted(id)
+                            || s2.is_deleted(id)
                         {
                             // follow redone
-                            left = Some(ptr);
+                            left = Some(left_right);
                             while let Some(item) = left.as_deref() {
                                 if let Some(id) = item.redone.as_ref() {
                                     left = match txn.store.blocks.get_item_clean_start(id) {
@@ -392,6 +395,7 @@ impl ItemPtr {
         );
         item.redone = Some(*redone_item.id());
         redone_item.info.set_keep();
+        println!("redoing {} {:?}", self.id, redone_item);
         let mut block_ptr = ItemPtr::from(&mut redone_item);
 
         block_ptr.integrate(txn, 0);
