@@ -1128,7 +1128,7 @@ checksum = "ed94fce61571a4006852b7389a063ab983c02eb1bb37b47f8272ce92d06d9538"
 
 [[package]]
 name = "yffi"
-version = "0.17.2"
+version = "0.17.3"
 dependencies = [
  "rand 0.7.3",
  "yrs",
@@ -1136,7 +1136,7 @@ dependencies = [
 
 [[package]]
 name = "yrs"
-version = "0.17.2"
+version = "0.17.3"
 dependencies = [
  "atomic_refcell",
  "criterion",
@@ -1154,7 +1154,7 @@ dependencies = [
 
 [[package]]
 name = "ywasm"
-version = "0.17.2"
+version = "0.17.3"
 dependencies = [
  "console_error_panic_hook",
  "js-sys",

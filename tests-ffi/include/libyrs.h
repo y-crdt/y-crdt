@@ -239,6 +239,11 @@ typedef struct StickyIndex {} StickyIndex;
  */
 #define ERR_CODE_OTHER 6
 
+/**
+ * Error code: not enough memory to perform an operation.
+ */
+#define ERR_NOT_ENOUGH_MEMORY 7
+
 #define YCHANGE_ADD 1
 
 #define YCHANGE_RETAIN 0
