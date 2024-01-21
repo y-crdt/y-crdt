@@ -1,4 +1,5 @@
 use crate::block::{BlockCell, BlockRange, ClientID, Item, ItemPtr, GC, ID};
+use crate::encoding::read::Error;
 use crate::slice::ItemSlice;
 use crate::types::TypePtr;
 use crate::utils::client_hasher::ClientHasher;
@@ -8,7 +9,6 @@ use std::collections::HashMap;
 use std::hash::BuildHasherDefault;
 use std::ops::{Index, IndexMut};
 use std::vec::Vec;
-use crate::encoding::read::Error;
 
 /// A resizable list of blocks inserted by a single client.
 #[derive(PartialEq, Default)]
@@ -45,9 +45,7 @@ impl ClientBlockList {
     pub fn with_capacity(capacity: usize) -> Result<ClientBlockList, Error> {
         let mut list = Vec::new();
         list.try_reserve(capacity)?;
-        Ok(ClientBlockList {
-            list
-        })
+        Ok(ClientBlockList { list })
     }
 
     pub fn clock(&self) -> u32 {
@@ -217,7 +215,7 @@ impl BlockStore {
                 let list = e.get_mut();
                 list.push(block.into());
             }
-            Entry::Vacant(mut e) => {
+            Entry::Vacant(e) => {
                 let list = e.insert(ClientBlockList::default());
                 list.push(block.into());
             }
@@ -340,7 +338,6 @@ impl BlockStore {
                 Ok(e.insert(list))
             }
         }
-
     }
 
     /// Given block pointer, tries to split it, returning a true, if block was split in result of

@@ -718,7 +718,8 @@ impl ItemPtr {
                     // /** @type {AbstractType<any>} */ (item.parent)._searchMarker = null
                 }
                 ItemContent::Type(branch) => {
-                    branch.store = this.parent.as_branch().and_then(|b| b.store.clone());
+                    let b = Arc::get_mut(branch).unwrap();
+                    b.store = this.parent.as_branch().and_then(|b| b.store.clone());
                     let ptr = if this.info.is_deleted() {
                         BranchPtr::from(branch)
                     } else {
@@ -1232,7 +1233,8 @@ impl Item {
         });
         let item_ptr = ItemPtr::from(&mut item);
         if let ItemContent::Type(branch) = &mut item.content {
-            branch.item = Some(item_ptr);
+            let b = Arc::get_mut(branch).unwrap();
+            b.item = Some(item_ptr);
         }
         item
     }
@@ -1519,7 +1521,7 @@ pub enum ItemContent {
 
     /// A reference of a branch node. Branch nodes define a complex collection types, such as
     /// arrays, maps or XML elements.
-    Type(Box<Branch>),
+    Type(Arc<Branch>),
 
     /// Marker for destination location of move operation. Move is used to change position of
     /// previously inserted element in a sequence with respect to other operations that may happen
@@ -1893,13 +1895,14 @@ impl ItemContent {
     pub(crate) fn gc(&mut self, collector: &mut GCCollector) {
         match self {
             ItemContent::Type(branch) => {
-                let mut curr = branch.start.take();
+                let b = Arc::get_mut(branch).unwrap();
+                let mut curr = b.start.take();
                 while let Some(mut item) = curr {
                     curr = item.right.clone();
                     item.gc(collector, true);
                 }
 
-                for (_, ptr) in branch.map.drain() {
+                for (_, ptr) in b.map.drain() {
                     curr = Some(ptr);
                     while let Some(mut item) = curr {
                         curr = item.left.clone();

@@ -965,7 +965,7 @@ impl<'doc> TransactionMut<'doc> {
 }
 
 /// Iterator struct used to traverse over all of the root level types defined in a corresponding [Doc].
-pub struct RootRefs<'doc>(std::collections::hash_map::Iter<'doc, Arc<str>, Box<Branch>>);
+pub struct RootRefs<'doc>(std::collections::hash_map::Iter<'doc, Arc<str>, Arc<Branch>>);
 
 impl<'doc> Iterator for RootRefs<'doc> {
     type Item = (&'doc str, Value);

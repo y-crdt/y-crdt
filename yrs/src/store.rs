@@ -30,7 +30,7 @@ pub struct Store {
     /// Root types (a.k.a. top-level types). These types are defined by users at the document level,
     /// they have their own unique names and represent core shared types that expose operations
     /// which can be called concurrently by remote peers in a conflict-free manner.
-    pub(crate) types: HashMap<Arc<str>, Box<Branch>>,
+    pub(crate) types: HashMap<Arc<str>, Arc<Branch>>,
 
     /// Registry of all alive nodes in the document store.
     pub(crate) node_registry: HashSet<BranchPtr>,
@@ -107,9 +107,9 @@ impl Store {
         let key = key.into();
         match self.types.entry(key.clone()) {
             Entry::Occupied(mut e) => {
-                let branch = e.get_mut();
+                let branch = Arc::get_mut(e.get_mut()).unwrap();
                 branch.repair_type_ref(type_ref);
-                BranchPtr::from(branch)
+                BranchPtr::from(e.get_mut())
             }
             Entry::Vacant(e) => {
                 let mut branch = Branch::new(type_ref);
@@ -367,13 +367,13 @@ impl Store {
         self.node_registry.contains(branch_ptr)
     }
 
-    pub(crate) fn register(&mut self, branch: &mut Box<Branch>) -> BranchPtr {
+    pub(crate) fn register(&mut self, branch: &mut Arc<Branch>) -> BranchPtr {
         let ptr = BranchPtr::from(branch);
         self.node_registry.insert(ptr);
         ptr
     }
 
-    pub(crate) fn deregister(&mut self, branch: &mut Box<Branch>) {
+    pub(crate) fn deregister(&mut self, branch: &mut Arc<Branch>) {
         let ptr = BranchPtr::from(branch);
         self.node_registry.remove(&ptr);
     }

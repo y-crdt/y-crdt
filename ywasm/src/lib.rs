@@ -4588,7 +4588,7 @@ impl<'a> Shared<'a> {
         }
     }
 
-    fn as_branch(&self) -> Box<Branch> {
+    fn as_branch(&self) -> Arc<Branch> {
         let type_ref = match self {
             Shared::Text(_) => TypeRef::Text,
             Shared::Array(_) => TypeRef::Array,
