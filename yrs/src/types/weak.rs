@@ -171,15 +171,6 @@ where
             None
         }
     }
-
-    fn try_observer_mut(&mut self) -> Option<&mut EventHandler<Self::Event>> {
-        let branch = self.0.as_mut();
-        if let Observers::Weak(eh) = branch.observers.get_or_insert_with(Observers::weak) {
-            Some(eh)
-        } else {
-            None
-        }
-    }
 }
 
 impl GetString for WeakRef<TextRef> {
@@ -1178,7 +1169,7 @@ mod test {
         let d2 = Doc::new();
         let m2 = d2.get_or_insert_map("map");
 
-        let mut link1 = {
+        let link1 = {
             let mut txn = d1.transact_mut();
             m1.insert(&mut txn, "a", "value");
             let link1 = m1.link(&txn, "a").unwrap();
@@ -1195,7 +1186,7 @@ mod test {
 
         exchange_updates(&[&d1, &d2]);
 
-        let mut link2 = m2
+        let link2 = m2
             .get(&d2.transact(), "b")
             .unwrap()
             .cast::<WeakRef<MapRef>>()
@@ -1224,7 +1215,7 @@ mod test {
         let d2 = Doc::new();
         let m2 = d2.get_or_insert_map("map");
 
-        let mut link1 = {
+        let link1 = {
             let mut txn = d1.transact_mut();
             m1.insert(&mut txn, "a", "value");
             let link1 = m1.link(&txn, "a").unwrap();
@@ -1241,7 +1232,7 @@ mod test {
 
         exchange_updates(&[&d1, &d2]);
 
-        let mut link2 = m2
+        let link2 = m2
             .get(&d2.transact(), "b")
             .unwrap()
             .cast::<WeakRef<MapRef>>()
@@ -1272,7 +1263,7 @@ mod test {
         let d2 = Doc::with_client_id(2);
         let a2 = d2.get_or_insert_array("array");
 
-        let mut link1 = {
+        let link1 = {
             let mut txn = d1.transact_mut();
             a1.insert_range(&mut txn, 0, ["A", "B", "C"]);
             let link1 = a1.quote(&txn, 1..=2).unwrap();
@@ -1289,7 +1280,7 @@ mod test {
 
         exchange_updates(&[&d1, &d2]);
 
-        let mut link2 = a2
+        let link2 = a2
             .get(&d2.transact(), 0)
             .unwrap()
             .cast::<WeakRef<ArrayRef>>()
@@ -2043,7 +2034,7 @@ mod test {
         }
 
         let d2 = Doc::with_client_id(2);
-        let arr2 = d2.get_or_insert_array("array");
+        let _arr2 = d2.get_or_insert_array("array");
         let txt2 = d2.get_or_insert_text("text");
 
         exchange_updates(&[&d1, &d2]);
@@ -2109,7 +2100,7 @@ mod test {
         }
 
         let d2 = Doc::with_client_id(2);
-        let arr2 = d2.get_or_insert_array("array");
+        let _arr2 = d2.get_or_insert_array("array");
         let txt2 = d2.get_or_insert_text("text");
 
         exchange_updates(&[&d1, &d2]);

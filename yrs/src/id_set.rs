@@ -911,7 +911,7 @@ mod test {
         let txt = doc.get_or_insert_text("test");
         txt.push(&mut doc.transact_mut(), "testab");
         ds.insert(ID::new(1, 5), 1);
-        let mut txn = doc.transact_mut();
+        let txn = doc.transact_mut();
         let mut i = ds.deleted_blocks();
         let ptr = i.next(&txn).unwrap();
         let start = ptr.clock_start();

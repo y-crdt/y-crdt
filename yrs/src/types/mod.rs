@@ -203,7 +203,6 @@ pub trait Observable: AsMut<Branch> {
     type Event;
 
     fn try_observer(&self) -> Option<&EventHandler<Self::Event>>;
-    fn try_observer_mut(&mut self) -> Option<&mut EventHandler<Self::Event>>;
 
     /// Subscribes a given callback to be triggered whenever current y-type is changed.
     /// A callback is triggered whenever a transaction gets committed. This function does not
@@ -214,11 +213,11 @@ pub trait Observable: AsMut<Branch> {
     /// All text-like event changes can be tracked by using [TextEvent::delta] method.
     ///
     /// Returns a [Subscription] which, when dropped, will unsubscribe current callback.
-    fn observe<F>(&mut self, f: F) -> Subscription<Arc<dyn Fn(&TransactionMut, &Self::Event) -> ()>>
+    fn observe<F>(&self, f: F) -> Subscription<Arc<dyn Fn(&TransactionMut, &Self::Event) -> ()>>
     where
         F: Fn(&TransactionMut, &Self::Event) -> () + 'static,
     {
-        if let Some(eh) = self.try_observer_mut() {
+        if let Some(eh) = self.try_observer() {
             eh.subscribe(Arc::new(f))
         } else {
             panic!("Observed collection is of different type") //TODO: this should be Result::Err

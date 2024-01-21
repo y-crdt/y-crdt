@@ -204,16 +204,6 @@ impl Observable for XmlElementRef {
             None
         }
     }
-
-    fn try_observer_mut(&mut self) -> Option<&mut EventHandler<Self::Event>> {
-        if let Observers::XmlFragment(eh) =
-            self.0.observers.get_or_insert_with(Observers::xml_fragment)
-        {
-            Some(eh)
-        } else {
-            None
-        }
-    }
 }
 
 impl AsRef<Branch> for XmlElementRef {
@@ -455,14 +445,6 @@ impl Observable for XmlTextRef {
             None
         }
     }
-
-    fn try_observer_mut(&mut self) -> Option<&mut EventHandler<Self::Event>> {
-        if let Observers::XmlText(eh) = self.0.observers.get_or_insert_with(Observers::xml_text) {
-            Some(eh)
-        } else {
-            None
-        }
-    }
 }
 
 impl GetString for XmlTextRef {
@@ -589,16 +571,6 @@ impl Observable for XmlFragmentRef {
 
     fn try_observer(&self) -> Option<&EventHandler<Self::Event>> {
         if let Some(Observers::XmlFragment(eh)) = self.0.observers.as_ref() {
-            Some(eh)
-        } else {
-            None
-        }
-    }
-
-    fn try_observer_mut(&mut self) -> Option<&mut EventHandler<Self::Event>> {
-        if let Observers::XmlFragment(eh) =
-            self.0.observers.get_or_insert_with(Observers::xml_fragment)
-        {
             Some(eh)
         } else {
             None
@@ -1403,7 +1375,7 @@ mod test {
     #[test]
     fn event_observers() {
         let d1 = Doc::with_client_id(1);
-        let mut xml = d1.get_or_insert_xml_element("test");
+        let xml = d1.get_or_insert_xml_element("test");
 
         let attributes = Rc::new(RefCell::new(None));
         let nodes = Rc::new(RefCell::new(None));
@@ -1493,7 +1465,7 @@ mod test {
 
         // copy updates over
         let d2 = Doc::with_client_id(2);
-        let mut xml2 = d2.get_or_insert_xml_element("test");
+        let xml2 = d2.get_or_insert_xml_element("test");
 
         let attributes = Rc::new(RefCell::new(None));
         let nodes = Rc::new(RefCell::new(None));

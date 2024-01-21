@@ -112,14 +112,6 @@ impl Observable for TextRef {
             None
         }
     }
-
-    fn try_observer_mut(&mut self) -> Option<&mut EventHandler<Self::Event>> {
-        if let Observers::Text(eh) = self.0.observers.get_or_insert_with(Observers::text) {
-            Some(eh)
-        } else {
-            None
-        }
-    }
 }
 
 impl GetString for TextRef {
@@ -663,7 +655,7 @@ fn find_position(this: BranchPtr, txn: &mut TransactionMut, index: u32) -> Optio
     let store = txn.store_mut();
     let encoding = store.options.offset_kind;
     let mut remaining = index;
-    while let Some(mut right) = pos.right {
+    while let Some(right) = pos.right {
         if remaining == 0 {
             break;
         }
@@ -1706,7 +1698,7 @@ mod test {
     #[test]
     fn observer() {
         let doc = Doc::with_client_id(1);
-        let mut txt: XmlTextRef = doc.get_or_insert_text("text").into();
+        let txt: XmlTextRef = doc.get_or_insert_text("text").into();
         let delta = Rc::new(RefCell::new(None));
         let delta_c = delta.clone();
         let sub = txt.observe(move |txn, e| {
@@ -1758,7 +1750,7 @@ mod test {
     #[test]
     fn insert_and_remove_event_changes() {
         let d1 = Doc::with_client_id(1);
-        let mut txt = d1.get_or_insert_text("text");
+        let txt = d1.get_or_insert_text("text");
         let delta = Rc::new(RefCell::new(None));
         let delta_c = delta.clone();
         let _sub = txt.observe(move |txn, e| {
@@ -1800,7 +1792,7 @@ mod test {
 
         // replicate data to another peer
         let d2 = Doc::with_client_id(2);
-        let mut txt = d2.get_or_insert_text("text");
+        let txt = d2.get_or_insert_text("text");
         let delta_c = delta.clone();
         let _sub = txt.observe(move |txn, e| {
             *delta_c.borrow_mut() = Some(e.delta(txn).to_vec());
@@ -1857,7 +1849,7 @@ mod test {
     #[test]
     fn basic_format() {
         let d1 = Doc::with_client_id(1);
-        let mut txt1 = d1.get_or_insert_text("text");
+        let txt1 = d1.get_or_insert_text("text");
 
         let delta1 = Rc::new(RefCell::new(None));
         let delta_clone = delta1.clone();
@@ -1866,7 +1858,7 @@ mod test {
         });
 
         let d2 = Doc::with_client_id(2);
-        let mut txt2 = d2.get_or_insert_text("text");
+        let txt2 = d2.get_or_insert_text("text");
 
         let delta2 = Rc::new(RefCell::new(None));
         let delta_clone = delta2.clone();
@@ -2037,7 +2029,7 @@ mod test {
     #[test]
     fn embed_with_attributes() {
         let d1 = Doc::with_client_id(1);
-        let mut txt1 = d1.get_or_insert_text("text");
+        let txt1 = d1.get_or_insert_text("text");
 
         let delta1 = Rc::new(RefCell::new(None));
         let delta_clone = delta1.clone();
@@ -2116,7 +2108,7 @@ mod test {
     #[test]
     fn issue_101() {
         let d1 = Doc::with_client_id(1);
-        let mut txt1 = d1.get_or_insert_text("text");
+        let txt1 = d1.get_or_insert_text("text");
         let delta = Rc::new(RefCell::new(None));
         let delta_copy = delta.clone();
 
@@ -2168,7 +2160,7 @@ mod test {
         }
 
         {
-            let mut text = doc.get_or_insert_text("content");
+            let text = doc.get_or_insert_text("content");
             let mut txn = doc.transact_mut();
 
             let c1 = text1.chars().count();

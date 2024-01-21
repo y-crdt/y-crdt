@@ -440,7 +440,7 @@ impl YDoc {
     /// ```
     #[wasm_bindgen(js_name=roots)]
     pub fn roots(&self, txn: &ImplicitTransaction) -> js_sys::Array {
-        let mut res = js_sys::Array::new();
+        let res = js_sys::Array::new();
         if let Some(txn) = get_txn(txn) {
             for (k, v) in txn.root_refs() {
                 let pair = js_sys::Array::new_with_length(2);

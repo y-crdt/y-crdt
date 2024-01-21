@@ -3432,7 +3432,7 @@ pub unsafe extern "C" fn ytext_observe(
 ) -> u32 {
     assert!(!txt.is_null());
 
-    let mut txt = TextRef::from_raw_branch(txt);
+    let txt = TextRef::from_raw_branch(txt);
     let observer = txt.observe(move |txn, e| {
         let e = YTextEvent::new(e, txn);
         cb(state, &e as *const YTextEvent);
@@ -3453,7 +3453,7 @@ pub unsafe extern "C" fn ymap_observe(
 ) -> u32 {
     assert!(!map.is_null());
 
-    let mut map = MapRef::from_raw_branch(map);
+    let map = MapRef::from_raw_branch(map);
     let observer = map.observe(move |txn, e| {
         let e = YMapEvent::new(e, txn);
         cb(state, &e as *const YMapEvent);
@@ -3474,7 +3474,7 @@ pub unsafe extern "C" fn yarray_observe(
 ) -> u32 {
     assert!(!array.is_null());
 
-    let mut array = ArrayRef::from_raw_branch(array);
+    let array = ArrayRef::from_raw_branch(array);
     let observer = array.observe(move |txn, e| {
         let e = YArrayEvent::new(e, txn);
         cb(state, &e as *const YArrayEvent);
@@ -3495,7 +3495,7 @@ pub unsafe extern "C" fn yxmlelem_observe(
 ) -> u32 {
     assert!(!xml.is_null());
 
-    let mut xml = XmlElementRef::from_raw_branch(xml);
+    let xml = XmlElementRef::from_raw_branch(xml);
     let observer = xml.observe(move |txn, e| {
         let e = YXmlEvent::new(e, txn);
         cb(state, &e as *const YXmlEvent);
@@ -3516,7 +3516,7 @@ pub unsafe extern "C" fn yxmltext_observe(
 ) -> u32 {
     assert!(!xml.is_null());
 
-    let mut xml = XmlTextRef::from_raw_branch(xml);
+    let xml = XmlTextRef::from_raw_branch(xml);
     let observer = xml.observe(move |txn, e| {
         let e = YXmlTextEvent::new(e, txn);
         cb(state, &e as *const YXmlTextEvent);
@@ -5267,7 +5267,7 @@ pub unsafe extern "C" fn yweak_observe(
 ) -> u32 {
     assert!(!weak.is_null());
 
-    let mut txt: WeakRef<BranchPtr> = WeakRef::from_raw_branch(weak);
+    let txt: WeakRef<BranchPtr> = WeakRef::from_raw_branch(weak);
     let observer = txt.observe(move |txn, e| {
         let e = YWeakLinkEvent::new(e, txn);
         cb(state, &e as *const YWeakLinkEvent);

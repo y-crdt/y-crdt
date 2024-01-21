@@ -230,7 +230,7 @@ impl BlockStore {
                 let list = e.get_mut();
                 list.push(gc);
             }
-            Entry::Vacant(mut e) => {
+            Entry::Vacant(e) => {
                 let list = e.insert(ClientBlockList::default());
                 list.push(gc);
             }
