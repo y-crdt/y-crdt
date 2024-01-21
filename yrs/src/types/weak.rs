@@ -4,7 +4,7 @@ use crate::iter::{
     AsIter, BlockIterator, BlockSliceIterator, IntoBlockIter, MoveIter, RangeIter, TxnIterator,
     Values,
 };
-use crate::types::{Branch, BranchPtr, EventHandler, Observers, Path, SharedRef, TypeRef, Value};
+use crate::types::{Branch, BranchPtr, Path, SharedRef, TypeRef, Value};
 use crate::{
     Array, Assoc, GetString, Map, Observable, ReadTxn, StickyIndex, TextRef, TransactionMut,
     XmlTextRef, ID,
@@ -162,15 +162,6 @@ where
     P: AsRef<Branch> + AsMut<Branch>,
 {
     type Event = WeakEvent;
-
-    fn try_observer(&self) -> Option<&EventHandler<Self::Event>> {
-        let branch = self.0.as_ref();
-        if let Some(Observers::Weak(eh)) = branch.observers.as_ref() {
-            Some(eh)
-        } else {
-            None
-        }
-    }
 }
 
 impl GetString for WeakRef<TextRef> {

@@ -701,7 +701,7 @@ impl<'doc> TransactionMut<'doc> {
         all_links: &HashMap<ItemPtr, HashSet<BranchPtr>>,
         branch: BranchPtr,
         changed_parents: &mut HashMap<BranchPtr, Vec<usize>>,
-        event_cache: &mut Vec<Event>,
+        event_cache: &Vec<Event>,
         visited: &mut HashSet<BranchPtr>,
     ) {
         let mut current = branch;
@@ -770,7 +770,7 @@ impl<'doc> TransactionMut<'doc> {
                             &self.store.linked_by,
                             *branch,
                             &mut changed_parents,
-                            &mut event_cache,
+                            &event_cache,
                             &mut HashSet::default(),
                         );
                     }

@@ -26,12 +26,11 @@ use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use yrs::{
     Any, Array, ArrayRef, Assoc, DeleteSet, DestroySubscription, Doc, GetString, IndexScope, Map,
-    MapRef, Observable, Offset, OffsetKind, Options, Origin, Quotable, ReadTxn, Snapshot,
-    StateVector, StickyIndex, Store, SubdocsEvent, SubdocsEventIter, SubdocsSubscription,
-    Subscription, Text, TextRef, Transact, Transaction, TransactionCleanupEvent,
-    TransactionCleanupSubscription, TransactionMut, Update, UpdateSubscription, Xml,
-    XmlElementPrelim, XmlElementRef, XmlFragment, XmlFragmentRef, XmlNode, XmlTextPrelim,
-    XmlTextRef, ID,
+    MapRef, Observable, Offset, OffsetKind, Options, Origin, Quotable, ReadTxn, SharedRefObserver,
+    Snapshot, StateVector, StickyIndex, Store, SubdocsEvent, SubdocsEventIter, SubdocsSubscription,
+    Text, TextRef, Transact, Transaction, TransactionCleanupEvent, TransactionCleanupSubscription,
+    TransactionMut, Update, UpdateSubscription, Xml, XmlElementPrelim, XmlElementRef, XmlFragment,
+    XmlFragmentRef, XmlNode, XmlTextPrelim, XmlTextRef, ID,
 };
 
 // When the `wee_alloc` feature is enabled, use `wee_alloc` as the global
@@ -1889,22 +1888,7 @@ impl From<UpdateSubscription> for YUpdateObserver {
 }
 
 #[wasm_bindgen]
-pub struct YArrayObserver(Subscription<Arc<dyn Fn(&TransactionMut, &ArrayEvent) -> ()>>);
-
-#[wasm_bindgen]
-pub struct YTextObserver(Subscription<Arc<dyn Fn(&TransactionMut, &TextEvent) -> ()>>);
-
-#[wasm_bindgen]
-pub struct YMapObserver(Subscription<Arc<dyn Fn(&TransactionMut, &MapEvent) -> ()>>);
-
-#[wasm_bindgen]
-pub struct YXmlObserver(Subscription<Arc<dyn Fn(&TransactionMut, &XmlEvent) -> ()>>);
-
-#[wasm_bindgen]
-pub struct YXmlTextObserver(Subscription<Arc<dyn Fn(&TransactionMut, &XmlTextEvent) -> ()>>);
-
-#[wasm_bindgen]
-pub struct YWeakLinkObserver(Subscription<Arc<dyn Fn(&TransactionMut, &WeakEvent) -> ()>>);
+pub struct YSharedRefObserver(SharedRefObserver);
 
 #[wasm_bindgen]
 pub struct YEventObserver(DeepEventsSubscription);
@@ -2278,7 +2262,7 @@ impl YText {
     /// batched and eventually triggered during transaction commit phase.
     /// Returns an `YTextObserver` which, when free'd, will unsubscribe current callback.
     #[wasm_bindgen(js_name = observe)]
-    pub fn observe(&mut self, f: js_sys::Function) -> YTextObserver {
+    pub fn observe(&mut self, f: js_sys::Function) -> YSharedRefObserver {
         match &mut *self.0.borrow_mut() {
             SharedType::Integrated(v) => {
                 let sub = v.observe(move |txn, e| {
@@ -2287,7 +2271,7 @@ impl YText {
                     let txn: JsValue = YTransaction::from(txn).into();
                     f.call2(&JsValue::UNDEFINED, &arg, &txn).unwrap();
                 });
-                YTextObserver(sub)
+                YSharedRefObserver(sub)
             }
             SharedType::Prelim(_) => {
                 panic!("YText.observe is not supported on preliminary type.")
@@ -2670,7 +2654,7 @@ impl YArray {
     /// batched and eventually triggered during transaction commit phase.
     /// Returns an `YObserver` which, when free'd, will unsubscribe current callback.
     #[wasm_bindgen(js_name = observe)]
-    pub fn observe(&mut self, f: js_sys::Function) -> YArrayObserver {
+    pub fn observe(&mut self, f: js_sys::Function) -> YSharedRefObserver {
         match &mut *self.0.borrow_mut() {
             SharedType::Integrated(v) => {
                 let sub = v.observe(move |txn, e| {
@@ -2679,7 +2663,7 @@ impl YArray {
                     let txn: JsValue = YTransaction::from(txn).into();
                     f.call2(&JsValue::UNDEFINED, &arg, &txn).unwrap();
                 });
-                YArrayObserver(sub)
+                YSharedRefObserver(sub)
             }
             SharedType::Prelim(_) => {
                 panic!("YArray.observe is not supported on preliminary type.")
@@ -3015,7 +2999,7 @@ impl YMap {
     /// batched and eventually triggered during transaction commit phase.
     /// Returns an `YObserver` which, when free'd, will unsubscribe current callback.
     #[wasm_bindgen(js_name = observe)]
-    pub fn observe(&mut self, f: js_sys::Function) -> YMapObserver {
+    pub fn observe(&mut self, f: js_sys::Function) -> YSharedRefObserver {
         match &mut *self.0.borrow_mut() {
             SharedType::Integrated(v) => {
                 let sub = v.observe(move |txn, e| {
@@ -3024,7 +3008,7 @@ impl YMap {
                     let txn: JsValue = YTransaction::from(txn).into();
                     f.call2(&JsValue::UNDEFINED, &arg, &txn).unwrap();
                 });
-                YMapObserver(sub)
+                YSharedRefObserver(sub)
             }
             SharedType::Prelim(_) => {
                 panic!("YMap.observe is not supported on preliminary type.")
@@ -3311,14 +3295,14 @@ impl YXmlElement {
     /// batched and eventually triggered during transaction commit phase.
     /// Returns an `YObserver` which, when free'd, will unsubscribe current callback.
     #[wasm_bindgen(js_name = observe)]
-    pub fn observe(&mut self, f: js_sys::Function) -> YXmlObserver {
+    pub fn observe(&mut self, f: js_sys::Function) -> YSharedRefObserver {
         let sub = self.0.observe(move |txn, e| {
             let e = YXmlEvent::new(e, txn);
             let arg: JsValue = e.into();
             let txn: JsValue = YTransaction::from(txn).into();
             f.call2(&JsValue::UNDEFINED, &arg, &txn).unwrap();
         });
-        YXmlObserver(sub)
+        YSharedRefObserver(sub)
     }
 
     /// Subscribes to all operations happening over this Y shared type, as well as events in
@@ -3474,14 +3458,14 @@ impl YXmlFragment {
     /// batched and eventually triggered during transaction commit phase.
     /// Returns an `YObserver` which, when free'd, will unsubscribe current callback.
     #[wasm_bindgen(js_name = observe)]
-    pub fn observe(&mut self, f: js_sys::Function) -> YXmlObserver {
+    pub fn observe(&mut self, f: js_sys::Function) -> YSharedRefObserver {
         let sub = self.0.observe(move |txn, e| {
             let e = YXmlEvent::new(e, txn);
             let arg: JsValue = e.into();
             let txn: JsValue = YTransaction::from(txn).into();
             f.call2(&JsValue::UNDEFINED, &arg, &txn).unwrap();
         });
-        YXmlObserver(sub)
+        YSharedRefObserver(sub)
     }
 
     /// Subscribes to all operations happening over this Y shared type, as well as events in
@@ -3808,14 +3792,14 @@ impl YXmlText {
     /// batched and eventually triggered during transaction commit phase.
     /// Returns an `YObserver` which, when free'd, will unsubscribe current callback.
     #[wasm_bindgen(js_name = observe)]
-    pub fn observe(&mut self, f: js_sys::Function) -> YXmlTextObserver {
+    pub fn observe(&mut self, f: js_sys::Function) -> YSharedRefObserver {
         let sub = self.0.observe(move |txn, e| {
             let e = YXmlTextEvent::new(e, txn);
             let arg: JsValue = e.into();
             let txn: JsValue = YTransaction::from(txn).into();
             f.call2(&JsValue::UNDEFINED, &arg, &txn).unwrap();
         });
-        YXmlTextObserver(sub)
+        YSharedRefObserver(sub)
     }
 
     /// Subscribes to all operations happening over this Y shared type, as well as events in
@@ -3937,7 +3921,7 @@ impl YWeakLink {
     /// batched and eventually triggered during transaction commit phase.
     /// Returns an `YObserver` which, when free'd, will unsubscribe current callback.
     #[wasm_bindgen(method, js_name = observe)]
-    pub fn observe(&mut self, f: js_sys::Function) -> YWeakLinkObserver {
+    pub fn observe(&mut self, f: js_sys::Function) -> YSharedRefObserver {
         match &mut *self.0.borrow_mut() {
             SharedType::Integrated(v) => {
                 let sub = v.observe(move |txn, e| {
@@ -3946,7 +3930,7 @@ impl YWeakLink {
                     let txn: JsValue = YTransaction::from(txn).into();
                     f.call2(&JsValue::UNDEFINED, &arg, &txn).unwrap();
                 });
-                YWeakLinkObserver(sub)
+                YSharedRefObserver(sub)
             }
             SharedType::Prelim(_) => {
                 panic!("YMap.observe is not supported on preliminary type.")

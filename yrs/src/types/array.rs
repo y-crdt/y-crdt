@@ -3,8 +3,7 @@ use crate::block_iter::BlockIter;
 use crate::moving::StickyIndex;
 use crate::transaction::TransactionMut;
 use crate::types::{
-    event_change_set, Branch, BranchPtr, Change, ChangeSet, EventHandler, Observers, Path,
-    SharedRef, ToJson, TypeRef, Value,
+    event_change_set, Branch, BranchPtr, Change, ChangeSet, Path, SharedRef, ToJson, TypeRef, Value,
 };
 use crate::{Any, Assoc, IndexedSequence, Observable, ReadTxn, ID};
 use std::borrow::Borrow;
@@ -112,14 +111,6 @@ impl AsMut<Branch> for ArrayRef {
 
 impl Observable for ArrayRef {
     type Event = ArrayEvent;
-
-    fn try_observer(&self) -> Option<&EventHandler<Self::Event>> {
-        if let Some(Observers::Array(eh)) = self.0.observers.as_ref() {
-            Some(eh)
-        } else {
-            None
-        }
-    }
 }
 
 impl TryFrom<ItemPtr> for ArrayRef {

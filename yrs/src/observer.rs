@@ -1,4 +1,6 @@
 use crate::atomic::AtomicRef;
+use crate::types::Event;
+use crate::TransactionMut;
 use std::fmt::{Debug, Formatter};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
@@ -118,6 +120,7 @@ impl<F: Clone> Iterator for Callbacks<F> {
         }
     }
 }
+pub type SharedRefObserver = Subscription<Arc<dyn Fn(&TransactionMut, &Event) -> () + 'static>>;
 
 /// Subscription handle returned by [Observer::subscribe] methods, which will unsubscribe corresponding
 /// callback when dropped.

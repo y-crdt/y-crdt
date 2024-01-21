@@ -1,8 +1,7 @@
 use crate::block::{EmbedPrelim, ItemContent, ItemPosition, ItemPtr, Prelim};
 use crate::transaction::TransactionMut;
 use crate::types::{
-    event_keys, Branch, BranchPtr, Entries, EntryChange, EventHandler, Observers, Path, SharedRef,
-    ToJson, TypeRef, Value,
+    event_keys, Branch, BranchPtr, Entries, EntryChange, Path, SharedRef, ToJson, TypeRef, Value,
 };
 use crate::*;
 use std::borrow::Borrow;
@@ -62,14 +61,6 @@ impl Map for MapRef {}
 
 impl Observable for MapRef {
     type Event = MapEvent;
-
-    fn try_observer(&self) -> Option<&EventHandler<Self::Event>> {
-        if let Some(Observers::Map(eh)) = self.0.observers.as_ref() {
-            Some(eh)
-        } else {
-            None
-        }
-    }
 }
 
 impl ToJson for MapRef {
