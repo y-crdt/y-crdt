@@ -395,7 +395,6 @@ impl ItemPtr {
         );
         item.redone = Some(*redone_item.id());
         redone_item.info.set_keep();
-        println!("redoing {} {:?}", self.id, redone_item);
         let mut block_ptr = ItemPtr::from(&mut redone_item);
 
         block_ptr.integrate(txn, 0);
