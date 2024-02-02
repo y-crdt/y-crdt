@@ -492,24 +492,24 @@ pub(crate) struct StoreEvents {
     /// Handles subscriptions for the transaction cleanup event. Events are called with the
     /// newest updates once they are committed and compacted.
     pub(crate) transaction_cleanup_events:
-        Option<Observer<Arc<dyn Fn(&TransactionMut, &TransactionCleanupEvent) -> ()>>>,
+        Observer<Arc<dyn Fn(&TransactionMut, &TransactionCleanupEvent) -> ()>>,
 
     /// Handles subscriptions for the `afterTransactionCleanup` event. Events are called with the
     /// newest updates once they are committed and compacted.
-    pub(crate) after_transaction_events: Option<Observer<Arc<dyn Fn(&mut TransactionMut) -> ()>>>,
+    pub(crate) after_transaction_events: Observer<Arc<dyn Fn(&mut TransactionMut) -> ()>>,
 
     /// A subscription handler. It contains all callbacks with registered by user functions that
     /// are supposed to be called, once a new update arrives.
-    pub(crate) update_v1_events: Option<Observer<Arc<dyn Fn(&TransactionMut, &UpdateEvent) -> ()>>>,
+    pub(crate) update_v1_events: Observer<Arc<dyn Fn(&TransactionMut, &UpdateEvent) -> ()>>,
 
     /// A subscription handler. It contains all callbacks with registered by user functions that
     /// are supposed to be called, once a new update arrives.
-    pub(crate) update_v2_events: Option<Observer<Arc<dyn Fn(&TransactionMut, &UpdateEvent) -> ()>>>,
+    pub(crate) update_v2_events: Observer<Arc<dyn Fn(&TransactionMut, &UpdateEvent) -> ()>>,
 
     /// Handles subscriptions for subdocs events.
-    pub(crate) subdocs_events: Option<Observer<Arc<dyn Fn(&TransactionMut, &SubdocsEvent) -> ()>>>,
+    pub(crate) subdocs_events: Observer<Arc<dyn Fn(&TransactionMut, &SubdocsEvent) -> ()>>,
 
-    pub(crate) destroy_events: Option<Observer<Arc<dyn Fn(&TransactionMut, &Doc) -> ()>>>,
+    pub(crate) destroy_events: Observer<Arc<dyn Fn(&TransactionMut, &Doc) -> ()>>,
 }
 
 impl StoreEvents {
@@ -523,7 +523,7 @@ impl StoreEvents {
     where
         F: Fn(&TransactionMut, &UpdateEvent) -> () + 'static,
     {
-        let eh = self.update_v1_events.get_or_insert_with(Observer::new);
+        let eh = self.update_v1_events.subscribe();
         Ok(eh.subscribe(Arc::new(f)))
     }
 

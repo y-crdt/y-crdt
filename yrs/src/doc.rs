@@ -448,10 +448,8 @@ impl Doc {
         }
         // super.destroy(): cleanup the events
         if let Some(events) = txn.store_mut().events.take() {
-            if let Some(handler) = events.destroy_events.as_ref() {
-                for cb in handler.callbacks() {
-                    cb(&txn, self)
-                }
+            for cb in events.destroy_events.callbacks() {
+                cb(&txn, self)
             }
         }
     }

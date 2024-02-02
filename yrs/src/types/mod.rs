@@ -422,9 +422,9 @@ pub struct Branch {
     /// An identifier of an underlying complex data type (eg. is it an Array or a Map).
     pub(crate) type_ref: TypeRef,
 
-    pub(crate) observers: Option<Observer<Arc<dyn Fn(&TransactionMut, &Event)>>>,
+    pub(crate) observers: Observer<Arc<dyn Fn(&TransactionMut, &Event)>>,
 
-    pub(crate) deep_observers: Option<Observer<Arc<dyn Fn(&TransactionMut, &Events)>>>,
+    pub(crate) deep_observers: Observer<Arc<dyn Fn(&TransactionMut, &Events)>>,
 }
 
 impl std::fmt::Debug for Branch {

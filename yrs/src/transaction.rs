@@ -707,7 +707,7 @@ impl<'doc> TransactionMut<'doc> {
         let mut current = branch;
         loop {
             changed_parent_types.push(current);
-            if current.deep_observers.is_some() {
+            if !current.deep_observers.is_empty() {
                 let entries = changed_parents.entry(current).or_default();
                 entries.push(event_cache.len() - 1);
             }
