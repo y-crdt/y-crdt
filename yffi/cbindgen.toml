@@ -127,3 +127,4 @@ exclude = [
 "Attributes" = "YXmlAttrIter"
 "Observer" = "YObserver"
 "UndoManager" = "YUndoManager"
+"Subscription" = "YSubscription"

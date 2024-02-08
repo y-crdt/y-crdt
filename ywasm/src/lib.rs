@@ -1850,6 +1850,8 @@ impl YAfterTransactionEvent {
     }
 }
 
+/// Subscription handle received after subscribing an event callback.
+/// Calling `yobserver.free()` will cause to registered callback to be unsubscribed.
 #[wasm_bindgen]
 pub struct YObserver(Subscription);
 
