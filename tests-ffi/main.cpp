@@ -1616,7 +1616,7 @@ TEST_CASE("YDoc observe subdocs") {
     yunobserve(sub);
 
     YDoc *doc2 = ydoc_new_with_id(2);
-    subscription_id = ydoc_observe_subdocs(doc2, &t, observe_subdocs);
+    sub = ydoc_observe_subdocs(doc2, &t, observe_subdocs);
 
     txn = ydoc_write_transaction(doc2, 0, NULL);
     ytransaction_apply(txn,update, update_len);

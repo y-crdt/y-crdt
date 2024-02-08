@@ -87,6 +87,7 @@ typedef struct YUndoManager {} YUndoManager;
 typedef struct LinkSource {} LinkSource;
 typedef struct Unquote {} Unquote;
 typedef struct StickyIndex {} StickyIndex;
+typedef struct YSubscription {} YSubscription;
 
 
 #include <stdarg.h>
