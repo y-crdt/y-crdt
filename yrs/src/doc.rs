@@ -7,11 +7,11 @@ use crate::types::{Branch, BranchPtr, ToJson, TypeRef, Value};
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::OptionExt;
-use crate::Any;
 use crate::{
-    uuid_v4, ArrayRef, MapRef, ReadTxn, SubscriptionId, TextRef, Uuid, WriteTxn, XmlElementRef,
-    XmlFragmentRef, XmlTextRef,
+    uuid_v4, ArrayRef, MapRef, ReadTxn, TextRef, Uuid, WriteTxn, XmlElementRef, XmlFragmentRef,
+    XmlTextRef,
 };
+use crate::{Any, Subscription};
 use atomic_refcell::{AtomicRef, AtomicRefMut, BorrowError, BorrowMutError};
 use rand::Rng;
 use std::collections::HashMap;
@@ -276,21 +276,13 @@ impl Doc {
     /// commit.
     ///
     /// Returns a subscription, which will unsubscribe function when dropped.
-    pub fn observe_update_v1<F>(&self, f: F) -> Result<UpdateSubscription, BorrowMutError>
+    pub fn observe_update_v1<F>(&self, f: F) -> Result<Subscription, BorrowMutError>
     where
         F: Fn(&TransactionMut, &UpdateEvent) -> () + 'static,
     {
         let mut r = self.store.try_borrow_mut()?;
         let events = r.events.get_or_init();
-        events.observe_update_v1(f)
-    }
-
-    /// Manually unsubscribes from a callback used in [Doc::observe_update_v1] method.
-    pub fn unobserve_update_v1(&self, subscription_id: SubscriptionId) {
-        let r = self.store.try_borrow().unwrap();
-        if let Some(events) = r.events.as_ref() {
-            events.unobserve_update_v1(subscription_id)
-        }
+        Ok(events.observe_update_v1(f))
     }
 
     /// Subscribe callback function for any changes performed within transaction scope. These
@@ -299,100 +291,54 @@ impl Doc {
     /// commit.
     ///
     /// Returns a subscription, which will unsubscribe function when dropped.
-    pub fn observe_update_v2<F>(&self, f: F) -> Result<UpdateSubscription, BorrowMutError>
+    pub fn observe_update_v2<F>(&self, f: F) -> Result<Subscription, BorrowMutError>
     where
         F: Fn(&TransactionMut, &UpdateEvent) -> () + 'static,
     {
         let mut r = self.store.try_borrow_mut()?;
         let events = r.events.get_or_init();
-        events.observe_update_v2(f)
-    }
-
-    /// Manually unsubscribes from a callback used in [Doc::observe_update_v2] method.
-    pub fn unobserve_update_v2(&self, subscription_id: SubscriptionId) {
-        let r = self.store.try_borrow().unwrap();
-        if let Some(events) = r.events.as_ref() {
-            events.unobserve_update_v2(subscription_id)
-        }
+        Ok(events.observe_update_v2(f))
     }
 
     /// Subscribe callback function to updates on the `Doc`. The callback will receive state updates and
     /// deletions when a document transaction is committed.
-    pub fn observe_transaction_cleanup<F>(
-        &self,
-        f: F,
-    ) -> Result<TransactionCleanupSubscription, BorrowMutError>
+    pub fn observe_transaction_cleanup<F>(&self, f: F) -> Result<Subscription, BorrowMutError>
     where
         F: Fn(&TransactionMut, &TransactionCleanupEvent) -> () + 'static,
     {
         let mut r = self.store.try_borrow_mut()?;
         let events = r.events.get_or_init();
-        events.observe_transaction_cleanup(f)
+        Ok(events.observe_transaction_cleanup(f))
     }
 
-    /// Manually unsubscribes from a callback used in [Doc::observe_transaction_cleanup] method.
-    pub fn unobserve_transaction_cleanup(&self, subscription_id: SubscriptionId) {
-        let r = self.store.try_borrow().unwrap();
-        if let Some(events) = r.events.as_ref() {
-            events.unobserve_transaction_cleanup(subscription_id)
-        }
-    }
-
-    pub fn observe_after_transaction<F>(
-        &self,
-        f: F,
-    ) -> Result<AfterTransactionSubscription, BorrowMutError>
+    pub fn observe_after_transaction<F>(&self, f: F) -> Result<Subscription, BorrowMutError>
     where
         F: Fn(&mut TransactionMut) -> () + 'static,
     {
         let mut r = self.store.try_borrow_mut()?;
         let events = r.events.get_or_init();
-        events.observe_after_transaction(f)
-    }
-
-    /// Manually unsubscribes from a callback used in [Doc::observe_after_transaction] method.
-    pub fn unobserve_after_transaction(&self, subscription_id: SubscriptionId) {
-        let r = self.store.try_borrow().unwrap();
-        if let Some(events) = r.events.as_ref() {
-            events.unobserve_after_transaction(subscription_id)
-        }
+        Ok(events.observe_after_transaction(f))
     }
 
     /// Subscribe callback function, that will be called whenever a subdocuments inserted in this
     /// [Doc] will request a load.
-    pub fn observe_subdocs<F>(&self, f: F) -> Result<SubdocsSubscription, BorrowMutError>
+    pub fn observe_subdocs<F>(&self, f: F) -> Result<Subscription, BorrowMutError>
     where
         F: Fn(&TransactionMut, &SubdocsEvent) -> () + 'static,
     {
         let mut r = self.store.try_borrow_mut()?;
         let events = r.events.get_or_init();
-        events.observe_subdocs(f)
-    }
-
-    /// Manually unsubscribes from a callback used in [Doc::observe_subdocs] method.
-    pub fn unobserve_subdocs(&self, subscription_id: SubscriptionId) {
-        let r = self.store.try_borrow().unwrap();
-        if let Some(events) = r.events.as_ref() {
-            events.unobserve_subdocs(subscription_id)
-        }
+        Ok(events.observe_subdocs(f))
     }
 
     /// Subscribe callback function, that will be called whenever a [DocRef::destroy] has been called.
-    pub fn observe_destroy<F>(&self, f: F) -> Result<DestroySubscription, BorrowMutError>
+    pub fn observe_destroy<F>(&self, f: F) -> Result<Subscription, BorrowMutError>
     where
         F: Fn(&TransactionMut, &Doc) -> () + 'static,
     {
         let mut r = self.store.try_borrow_mut()?;
         let events = r.events.get_or_init();
-        events.observe_destroy(f)
-    }
-
-    /// Manually unsubscribes from a callback used in [Doc::observe_destroy] method.
-    pub fn unobserve_destroy(&self, subscription_id: SubscriptionId) {
-        let r = self.store.try_borrow().unwrap();
-        if let Some(events) = r.events.as_ref() {
-            events.unobserve_destroy(subscription_id)
-        }
+        Ok(events.observe_destroy(f))
     }
 
     /// Sends a load request to a parent document. Works only if current document is a sub-document
@@ -448,8 +394,8 @@ impl Doc {
         }
         // super.destroy(): cleanup the events
         if let Some(events) = txn.store_mut().events.take() {
-            for cb in events.destroy_events.callbacks() {
-                cb(&txn, self)
+            if let Some(mut callbacks) = events.destroy_events.callbacks() {
+                callbacks.trigger(&txn, self);
             }
         }
     }
@@ -503,23 +449,6 @@ impl TryFrom<ItemPtr> for Doc {
         }
     }
 }
-
-/// Subscription type for callbacks registered via [Doc::observe_update_v1] and [Doc::observe_update_v2].
-pub type UpdateSubscription = crate::Subscription<Arc<dyn Fn(&TransactionMut, &UpdateEvent) -> ()>>;
-
-/// Subscription type for callbacks registered via [Doc::observe_transaction_cleanup].
-pub type TransactionCleanupSubscription =
-    crate::Subscription<Arc<dyn Fn(&TransactionMut, &TransactionCleanupEvent) -> ()>>;
-
-/// Subscription type for callbacks registered via [Doc::observe_after_transaction].
-pub type AfterTransactionSubscription = crate::Subscription<Arc<dyn Fn(&mut TransactionMut) -> ()>>;
-
-/// Subscription type for callbacks registered via [Doc::observe_subdocs].
-pub type SubdocsSubscription =
-    crate::Subscription<Arc<dyn Fn(&TransactionMut, &SubdocsEvent) -> ()>>;
-
-/// Subscription type for callbacks registered via [Doc::observe_destroy].
-pub type DestroySubscription = crate::Subscription<Arc<dyn Fn(&TransactionMut, &Doc) -> ()>>;
 
 impl Default for Doc {
     fn default() -> Self {
@@ -894,7 +823,7 @@ mod test {
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
     use crate::{
         any, Any, Array, ArrayPrelim, ArrayRef, DeleteSet, Doc, GetString, Map, MapPrelim, MapRef,
-        OffsetKind, Options, StateVector, SubscriptionId, Text, TextRef, Transact, Uuid,
+        OffsetKind, Options, StateVector, Subscription, Text, TextRef, Transact, Uuid,
         XmlElementPrelim, XmlFragment, XmlFragmentRef, XmlTextRef,
     };
     use std::cell::{Cell, RefCell, RefMut};
@@ -1177,14 +1106,13 @@ mod test {
         let delete_ref = Rc::clone(&delete_set);
         // Subscribe callback
 
-        let sub: SubscriptionId = doc
+        let sub: Subscription = doc
             .observe_transaction_cleanup(move |_: &TransactionMut, event| {
                 before_ref.set(event.before_state.clone());
                 after_ref.set(event.after_state.clone());
                 delete_ref.set(event.delete_set.clone());
             })
-            .unwrap()
-            .into();
+            .unwrap();
 
         {
             let mut txn = doc.transact_mut();
@@ -1201,7 +1129,7 @@ mod test {
         }
 
         // Ensure that the subscription is successfully dropped.
-        doc.unobserve_transaction_cleanup(sub);
+        drop(sub);
         let mut txn = doc.transact_mut();
         text.insert(&mut txn, 0, "should not update");
         txn.commit();

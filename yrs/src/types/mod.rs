@@ -211,7 +211,7 @@ pub trait Observable: AsRef<Branch> {
     /// All text-like event changes can be tracked by using [TextEvent::delta] method.
     ///
     /// Returns a [Subscription] which, when dropped, will unsubscribe current callback.
-    fn observe<F>(&self, f: F) -> SharedRefObserver
+    fn observe<F>(&self, f: F) -> Subscription
     where
         F: Fn(&TransactionMut, &Self::Event) -> () + 'static,
         Event: AsRef<Self::Event>,
@@ -221,14 +221,6 @@ pub trait Observable: AsRef<Branch> {
             let mapped_event = e.as_ref();
             f(txn, mapped_event)
         })
-    }
-
-    /// Unsubscribes a previously subscribed event callback identified by given `subscription_id`.
-    fn unobserve(&self, subscription_id: SubscriptionId) {
-        let branch = self.as_ref();
-        if let Some(eh) = &branch.observers {
-            eh.unsubscribe(subscription_id);
-        }
     }
 }
 
@@ -253,8 +245,8 @@ impl BranchPtr {
         subs: HashSet<Option<Arc<str>>>,
     ) -> Option<Event> {
         let e = self.make_event(subs)?;
-        if let Some(observers) = self.observers.as_ref() {
-            for fun in observers.callbacks() {
+        if let Some(callbacks) = self.observers.callbacks() {
+            for fun in callbacks {
                 fun(txn, &e);
             }
         }
@@ -263,8 +255,8 @@ impl BranchPtr {
     }
 
     pub(crate) fn trigger_deep(&self, txn: &TransactionMut, e: &Events) {
-        if let Some(o) = self.deep_observers.as_ref() {
-            for fun in o.callbacks() {
+        if let Some(callbacks) = self.deep_observers.callbacks() {
+            for fun in callbacks {
                 fun(txn, e);
             }
         }
@@ -422,9 +414,9 @@ pub struct Branch {
     /// An identifier of an underlying complex data type (eg. is it an Array or a Map).
     pub(crate) type_ref: TypeRef,
 
-    pub(crate) observers: Observer<Arc<dyn Fn(&TransactionMut, &Event)>>,
+    pub(crate) observers: Observer<Event>,
 
-    pub(crate) deep_observers: Observer<Arc<dyn Fn(&TransactionMut, &Events)>>,
+    pub(crate) deep_observers: Observer<Events>,
 }
 
 impl std::fmt::Debug for Branch {
@@ -455,8 +447,8 @@ impl Branch {
             item: None,
             store: None,
             type_ref,
-            observers: None,
-            deep_observers: None,
+            observers: Observer::default(),
+            deep_observers: Observer::default(),
         })
     }
 
@@ -711,29 +703,18 @@ impl Branch {
         path
     }
 
-    pub fn observe<F>(
-        &mut self,
-        f: F,
-    ) -> Subscription<Arc<dyn Fn(&TransactionMut, &Event) -> () + 'static>>
+    pub fn observe<F>(&mut self, f: F) -> Subscription
     where
         F: Fn(&TransactionMut, &Event) -> () + 'static,
     {
-        let eh = self.observers.get_or_insert_with(Observer::default);
-        eh.subscribe(Arc::new(f))
+        self.observers.subscribe(f)
     }
 
-    pub fn observe_deep<F>(&mut self, f: F) -> DeepEventsSubscription
+    pub fn observe_deep<F>(&mut self, f: F) -> Subscription
     where
         F: Fn(&TransactionMut, &Events) -> () + 'static,
     {
-        let eh = self.deep_observers.get_or_insert_with(Observer::default);
-        eh.subscribe(Arc::new(f))
-    }
-
-    pub fn unobserve_deep(&mut self, subscription_id: SubscriptionId) {
-        if let Some(eh) = self.deep_observers.as_mut() {
-            eh.unsubscribe(subscription_id);
-        }
+        self.deep_observers.subscribe(f)
     }
 
     pub(crate) fn is_parent_of(&self, mut ptr: Option<ItemPtr>) -> bool {
@@ -769,8 +750,6 @@ impl Branch {
     }
 }
 
-pub type DeepEventsSubscription = crate::Subscription<Arc<dyn Fn(&TransactionMut, &Events) -> ()>>;
-
 /// Trait implemented by all Y-types, allowing for observing events which are emitted by
 /// nested types.
 pub trait DeepObservable {
@@ -784,28 +763,20 @@ pub trait DeepObservable {
     ///
     /// This method returns a subscription, which will automatically unsubscribe current callback
     /// when dropped.
-    fn observe_deep<F>(&mut self, f: F) -> DeepEventsSubscription
+    fn observe_deep<F>(&mut self, f: F) -> Subscription
     where
         F: Fn(&TransactionMut, &Events) -> () + 'static;
-
-    /// Unobserves callback identified by `subscription_id` (which can be obtained by consuming
-    /// [Subscription] using `into` cast).
-    fn unobserve_deep(&mut self, subscription_id: SubscriptionId);
 }
 
 impl<T> DeepObservable for T
 where
     T: AsMut<Branch>,
 {
-    fn observe_deep<F>(&mut self, f: F) -> DeepEventsSubscription
+    fn observe_deep<F>(&mut self, f: F) -> Subscription
     where
         F: Fn(&TransactionMut, &Events) -> () + 'static,
     {
         self.as_mut().observe_deep(f)
-    }
-
-    fn unobserve_deep(&mut self, subscription_id: SubscriptionId) {
-        self.as_mut().unobserve_deep(subscription_id)
     }
 }
 

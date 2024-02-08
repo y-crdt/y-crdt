@@ -707,7 +707,7 @@ impl<'doc> TransactionMut<'doc> {
         let mut current = branch;
         loop {
             changed_parent_types.push(current);
-            if !current.deep_observers.is_empty() {
+            if current.deep_observers.callbacks().is_some() {
                 let entries = changed_parents.entry(current).or_default();
                 entries.push(event_cache.len() - 1);
             }
@@ -863,12 +863,11 @@ impl<'doc> TransactionMut<'doc> {
                 store.subdocs.remove(guid);
             }
 
+            let store = self.store.deref();
             let mut removed = if let Some(events) = store.events.as_ref() {
-                if let Some(handler) = events.subdocs_events.as_ref() {
+                if let Some(mut callbacks) = events.subdocs_events.callbacks() {
                     let e = SubdocsEvent::new(subdocs);
-                    for cb in handler.callbacks() {
-                        cb(self, &e);
-                    }
+                    callbacks.trigger(self, &e);
                     e.removed
                 } else {
                     subdocs.removed

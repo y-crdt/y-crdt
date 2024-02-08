@@ -12,7 +12,6 @@ use std::collections::HashSet;
 use std::convert::{TryFrom, TryInto};
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
-use std::sync::Arc;
 
 /// A collection used to store data in an indexed sequence structure. This type is internally
 /// implemented as a double linked list, which may squash values inserted directly one after another
@@ -319,8 +318,6 @@ pub trait Array: AsRef<Branch> + Sized {
         ArrayIter::from_ref(self.as_ref(), txn)
     }
 }
-
-pub type ArraySubscription = crate::Subscription<Arc<dyn Fn(&TransactionMut, &ArrayEvent) -> ()>>;
 
 pub struct ArrayIter<B, T>
 where
