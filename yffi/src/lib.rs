@@ -25,9 +25,8 @@ use yrs::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use yrs::{
     uuid_v4, Any, Array, ArrayRef, Assoc, DeleteSet, GetString, Map, MapRef, Observable,
     OffsetKind, Options, Origin, Quotable, ReadTxn, Snapshot, StateVector, StickyIndex, Store,
-    SubdocsEvent, SubdocsEventIter, SubscriptionId, Text, TextRef, Transact,
-    TransactionCleanupEvent, Update, Xml, XmlElementPrelim, XmlElementRef, XmlFragmentRef,
-    XmlTextPrelim, XmlTextRef,
+    SubdocsEvent, SubdocsEventIter, Text, TextRef, Transact, TransactionCleanupEvent, Update, Xml,
+    XmlElementPrelim, XmlElementRef, XmlFragmentRef, XmlTextPrelim, XmlTextRef,
 };
 
 /// Flag used by `YInput` and `YOutput` to tag boolean values.

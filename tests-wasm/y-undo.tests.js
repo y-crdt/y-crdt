@@ -206,11 +206,11 @@ export const testUndoEvents = tc => {
     let counter = 0
     let receivedMetadata = -1
     undoManager.onStackItemAdded( event => {
-        event.stackItem.meta = event.stackItem.meta || new Map()
-        event.stackItem.meta.set('test', counter++)
+        event.meta = event.meta || {}
+        event.meta.test = counter++
     })
     undoManager.onStackItemPopped(event => {
-        receivedMetadata = event.stackItem.meta.get('test')
+        receivedMetadata = event.meta.test
     })
     text0.insert(0, 'abc')
     undoManager.undo()

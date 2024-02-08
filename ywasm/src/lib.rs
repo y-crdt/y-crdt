@@ -4091,11 +4091,9 @@ impl YUndoManager {
                 let event: JsValue = YUndoEvent::new(e).into();
                 let txn: JsValue = YTransaction::from(txn).into();
                 callback.call2(&JsValue::UNDEFINED, &event, &txn).unwrap();
-                if let Ok(stack_item) = Reflect::get(&event, &JsValue::from_str("stackItem")) {
-                    if let Ok(meta) = Reflect::get(&stack_item, &JsValue::from_str("meta")) {
-                        *e.meta_mut() = meta;
-                    }
-                }
+                let meta =
+                    Reflect::get(&event, &JsValue::from_str("meta")).unwrap_or(JsValue::UNDEFINED);
+                *e.meta_mut() = meta;
             })
             .into()
     }
@@ -4107,11 +4105,9 @@ impl YUndoManager {
                 let event: JsValue = YUndoEvent::new(e).into();
                 let txn: JsValue = YTransaction::from(txn).into();
                 callback.call2(&JsValue::UNDEFINED, &event, &txn).unwrap();
-                if let Ok(stack_item) = Reflect::get(&event, &JsValue::from_str("stackItem")) {
-                    if let Ok(meta) = Reflect::get(&stack_item, &JsValue::from_str("meta")) {
-                        *e.meta_mut() = meta;
-                    }
-                }
+                let meta =
+                    Reflect::get(&event, &JsValue::from_str("meta")).unwrap_or(JsValue::UNDEFINED);
+                *e.meta_mut() = meta;
             })
             .into()
     }
@@ -4134,9 +4130,15 @@ impl YUndoEvent {
     pub fn kind(&self) -> JsValue {
         self.kind.clone()
     }
+
     #[wasm_bindgen(getter, js_name = meta)]
     pub fn meta(&self) -> JsValue {
         self.meta.clone()
+    }
+
+    #[wasm_bindgen(setter, js_name = meta)]
+    pub fn set_meta(&mut self, value: &JsValue) {
+        self.meta = value.clone();
     }
 
     fn new(e: &yrs::undo::Event<JsValue>) -> Self {
