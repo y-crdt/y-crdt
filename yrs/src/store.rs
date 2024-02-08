@@ -1,8 +1,6 @@
 use crate::block::{BlockCell, ClientID, ItemContent, ItemPtr};
 use crate::block_store::BlockStore;
-use crate::doc::{
-    AfterTransactionSubscription, DestroySubscription, DocAddr, Options, SubdocsSubscription,
-};
+use crate::doc::{DocAddr, Options};
 use crate::error::Error;
 use crate::event::SubdocsEvent;
 use crate::id_set::DeleteSet;
@@ -10,11 +8,11 @@ use crate::slice::ItemSlice;
 use crate::types::{Branch, BranchPtr, Path, PathSegment, TypeRef};
 use crate::update::PendingUpdate;
 use crate::updates::encoder::{Encode, Encoder};
-use crate::StateVector;
 use crate::{
-    Doc, Observer, OffsetKind, Snapshot, SubscriptionId, TransactionCleanupEvent,
-    TransactionCleanupSubscription, TransactionMut, UpdateEvent, UpdateSubscription, Uuid, ID,
+    Doc, Observer, ObserverMut, OffsetKind, Snapshot, TransactionCleanupEvent, TransactionMut,
+    UpdateEvent, Uuid, ID,
 };
+use crate::{StateVector, Subscription};
 use atomic_refcell::{AtomicRef, AtomicRefCell, AtomicRefMut, BorrowError, BorrowMutError};
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
@@ -30,7 +28,7 @@ pub struct Store {
     /// Root types (a.k.a. top-level types). These types are defined by users at the document level,
     /// they have their own unique names and represent core shared types that expose operations
     /// which can be called concurrently by remote peers in a conflict-free manner.
-    pub(crate) types: HashMap<Arc<str>, Box<Branch>>,
+    pub(crate) types: HashMap<Arc<str>, Arc<Branch>>,
 
     /// Registry of all alive nodes in the document store.
     pub(crate) node_registry: HashSet<BranchPtr>,
@@ -107,9 +105,9 @@ impl Store {
         let key = key.into();
         match self.types.entry(key.clone()) {
             Entry::Occupied(mut e) => {
-                let branch = e.get_mut();
+                let branch = Arc::get_mut(e.get_mut()).unwrap();
                 branch.repair_type_ref(type_ref);
-                BranchPtr::from(branch)
+                BranchPtr::from(e.get_mut())
             }
             Entry::Vacant(e) => {
                 let mut branch = Branch::new(type_ref);
@@ -367,13 +365,13 @@ impl Store {
         self.node_registry.contains(branch_ptr)
     }
 
-    pub(crate) fn register(&mut self, branch: &mut Box<Branch>) -> BranchPtr {
+    pub(crate) fn register(&mut self, branch: &mut Arc<Branch>) -> BranchPtr {
         let ptr = BranchPtr::from(branch);
         self.node_registry.insert(ptr);
         ptr
     }
 
-    pub(crate) fn deregister(&mut self, branch: &mut Box<Branch>) {
+    pub(crate) fn deregister(&mut self, branch: &mut Arc<Branch>) {
         let ptr = BranchPtr::from(branch);
         self.node_registry.remove(&ptr);
     }
@@ -491,25 +489,24 @@ impl<'doc> Iterator for SubdocGuids<'doc> {
 pub(crate) struct StoreEvents {
     /// Handles subscriptions for the transaction cleanup event. Events are called with the
     /// newest updates once they are committed and compacted.
-    pub(crate) transaction_cleanup_events:
-        Option<Observer<Arc<dyn Fn(&TransactionMut, &TransactionCleanupEvent) -> ()>>>,
+    pub(crate) transaction_cleanup_events: Observer<TransactionCleanupEvent>,
 
     /// Handles subscriptions for the `afterTransactionCleanup` event. Events are called with the
     /// newest updates once they are committed and compacted.
-    pub(crate) after_transaction_events: Option<Observer<Arc<dyn Fn(&mut TransactionMut) -> ()>>>,
+    pub(crate) after_transaction_events: ObserverMut<()>,
 
     /// A subscription handler. It contains all callbacks with registered by user functions that
     /// are supposed to be called, once a new update arrives.
-    pub(crate) update_v1_events: Option<Observer<Arc<dyn Fn(&TransactionMut, &UpdateEvent) -> ()>>>,
+    pub(crate) update_v1_events: Observer<UpdateEvent>,
 
     /// A subscription handler. It contains all callbacks with registered by user functions that
     /// are supposed to be called, once a new update arrives.
-    pub(crate) update_v2_events: Option<Observer<Arc<dyn Fn(&TransactionMut, &UpdateEvent) -> ()>>>,
+    pub(crate) update_v2_events: Observer<UpdateEvent>,
 
     /// Handles subscriptions for subdocs events.
-    pub(crate) subdocs_events: Option<Observer<Arc<dyn Fn(&TransactionMut, &SubdocsEvent) -> ()>>>,
+    pub(crate) subdocs_events: Observer<SubdocsEvent>,
 
-    pub(crate) destroy_events: Option<Observer<Arc<dyn Fn(&TransactionMut, &Doc) -> ()>>>,
+    pub(crate) destroy_events: Observer<Doc>,
 }
 
 impl StoreEvents {
@@ -519,29 +516,19 @@ impl StoreEvents {
     /// commit.
     ///
     /// Returns a subscription, which will unsubscribe function when dropped.
-    pub fn observe_update_v1<F>(&mut self, f: F) -> Result<UpdateSubscription, BorrowMutError>
+    pub fn observe_update_v1<F>(&self, f: F) -> Subscription
     where
         F: Fn(&TransactionMut, &UpdateEvent) -> () + 'static,
     {
-        let eh = self.update_v1_events.get_or_insert_with(Observer::new);
-        Ok(eh.subscribe(Arc::new(f)))
-    }
-
-    /// Manually unsubscribes from a callback used in [Doc::observe_update_v1] method.
-    pub fn unobserve_update_v1(&self, subscription_id: SubscriptionId) {
-        if let Some(handler) = self.update_v1_events.as_ref() {
-            handler.unsubscribe(subscription_id);
-        }
+        self.update_v1_events.subscribe(f)
     }
 
     pub fn emit_update_v1(&self, txn: &TransactionMut) {
-        if let Some(eh) = self.update_v1_events.as_ref() {
+        if let Some(mut callbacks) = self.update_v1_events.callbacks() {
             if !txn.delete_set.is_empty() || txn.after_state != txn.before_state {
                 // produce update only if anything changed
                 let update = UpdateEvent::new_v1(txn);
-                for fun in eh.callbacks() {
-                    fun(txn, &update);
-                }
+                callbacks.trigger(txn, &update);
             }
         }
     }
@@ -552,132 +539,69 @@ impl StoreEvents {
     /// commit.
     ///
     /// Returns a subscription, which will unsubscribe function when dropped.
-    pub fn observe_update_v2<F>(&mut self, f: F) -> Result<UpdateSubscription, BorrowMutError>
+    pub fn observe_update_v2<F>(&self, f: F) -> Subscription
     where
         F: Fn(&TransactionMut, &UpdateEvent) -> () + 'static,
     {
-        let eh = self.update_v2_events.get_or_insert_with(Observer::new);
-        Ok(eh.subscribe(Arc::new(f)))
-    }
-
-    /// Manually unsubscribes from a callback used in [Doc::observe_update_v1] method.
-    pub fn unobserve_update_v2(&self, subscription_id: SubscriptionId) {
-        if let Some(handler) = self.update_v2_events.as_ref() {
-            handler.unsubscribe(subscription_id);
-        }
+        self.update_v2_events.subscribe(f)
     }
 
     pub fn emit_update_v2(&self, txn: &TransactionMut) {
-        if let Some(eh) = self.update_v2_events.as_ref() {
+        if let Some(mut callbacks) = self.update_v2_events.callbacks() {
             if !txn.delete_set.is_empty() || txn.after_state != txn.before_state {
                 // produce update only if anything changed
                 let update = UpdateEvent::new_v2(txn);
-                for fun in eh.callbacks() {
-                    fun(txn, &update);
-                }
+                callbacks.trigger(txn, &update);
             }
         }
     }
 
     /// Subscribe callback function to updates on the `Doc`. The callback will receive state updates and
     /// deletions when a document transaction is committed.
-    pub fn observe_after_transaction<F>(
-        &mut self,
-        f: F,
-    ) -> Result<AfterTransactionSubscription, BorrowMutError>
+    pub fn observe_after_transaction<F>(&self, f: F) -> Subscription
     where
         F: Fn(&mut TransactionMut) -> () + 'static,
     {
-        let subscription = self
-            .after_transaction_events
-            .get_or_insert_with(Observer::new)
-            .subscribe(Arc::new(f));
-        Ok(subscription)
-    }
-
-    /// Cancels the transaction cleanup callback associated with the `subscription_id`
-    pub fn unobserve_after_transaction(&self, subscription_id: SubscriptionId) {
-        if let Some(handler) = self.after_transaction_events.as_ref() {
-            (*handler).unsubscribe(subscription_id);
-        }
+        self.after_transaction_events
+            .subscribe(move |txn, _| f(txn))
     }
 
     pub fn emit_after_transaction(&self, txn: &mut TransactionMut) {
-        if let Some(eh) = self.after_transaction_events.as_ref() {
-            for cb in eh.callbacks() {
-                cb(txn);
-            }
+        if let Some(mut callbacks) = self.after_transaction_events.callbacks() {
+            callbacks.trigger(txn, &mut ());
         }
     }
 
     /// Subscribe callback function to updates on the `Doc`. The callback will receive state updates and
     /// deletions when a document transaction is committed.
-    pub fn observe_transaction_cleanup<F>(
-        &mut self,
-        f: F,
-    ) -> Result<TransactionCleanupSubscription, BorrowMutError>
+    pub fn observe_transaction_cleanup<F>(&self, f: F) -> Subscription
     where
         F: Fn(&TransactionMut, &TransactionCleanupEvent) -> () + 'static,
     {
-        let subscription = self
-            .transaction_cleanup_events
-            .get_or_insert_with(Observer::new)
-            .subscribe(Arc::new(f));
-        Ok(subscription)
-    }
-
-    /// Cancels the transaction cleanup callback associated with the `subscription_id`
-    pub fn unobserve_transaction_cleanup(&self, subscription_id: SubscriptionId) {
-        if let Some(handler) = self.transaction_cleanup_events.as_ref() {
-            (*handler).unsubscribe(subscription_id);
-        }
+        self.transaction_cleanup_events.subscribe(f)
     }
 
     pub fn emit_transaction_cleanup(&self, txn: &TransactionMut) {
-        if let Some(eh) = self.transaction_cleanup_events.as_ref() {
+        if let Some(mut callbacks) = self.transaction_cleanup_events.callbacks() {
             let event = TransactionCleanupEvent::new(txn);
-            for fun in eh.callbacks() {
-                fun(txn, &event);
-            }
+            callbacks.trigger(txn, &event);
         }
     }
 
     /// Subscribe callback function, that will be called whenever a subdocuments inserted in this
     /// [Doc] will request a load.
-    pub fn observe_subdocs<F>(&mut self, f: F) -> Result<SubdocsSubscription, BorrowMutError>
+    pub fn observe_subdocs<F>(&self, f: F) -> Subscription
     where
         F: Fn(&TransactionMut, &SubdocsEvent) -> () + 'static,
     {
-        let subscription = self
-            .subdocs_events
-            .get_or_insert_with(Observer::new)
-            .subscribe(Arc::new(f));
-        Ok(subscription)
-    }
-
-    /// Cancels the subscription created previously using [Doc::observe_subdocs].
-    pub fn unobserve_subdocs(&self, subscription_id: SubscriptionId) {
-        if let Some(handler) = self.subdocs_events.as_ref() {
-            (*handler).unsubscribe(subscription_id);
-        }
+        self.subdocs_events.subscribe(f)
     }
 
     /// Subscribe callback function, that will be called whenever a [DocRef::destroy] has been called.
-    pub fn observe_destroy<F>(&mut self, f: F) -> Result<DestroySubscription, BorrowMutError>
+    pub fn observe_destroy<F>(&self, f: F) -> Subscription
     where
         F: Fn(&TransactionMut, &Doc) -> () + 'static,
     {
-        let subscription = self
-            .destroy_events
-            .get_or_insert_with(Observer::new)
-            .subscribe(Arc::new(f));
-        Ok(subscription)
-    }
-
-    /// Cancels the subscription created previously using [Doc::observe_destroy].
-    pub fn unobserve_destroy(&self, subscription_id: SubscriptionId) {
-        if let Some(handler) = self.destroy_events.as_ref() {
-            (*handler).unsubscribe(subscription_id);
-        }
+        self.destroy_events.subscribe(f)
     }
 }

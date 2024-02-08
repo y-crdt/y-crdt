@@ -8,7 +8,7 @@ use crate::slice::ItemSlice;
 #[cfg(test)]
 use crate::store::Store;
 use crate::transaction::TransactionMut;
-use crate::types::{TypePtr, TypeRef};
+use crate::types::TypePtr;
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::client_hasher::ClientHasher;
@@ -344,10 +344,9 @@ impl Update {
                         }
                     }
                 }
-                ItemContent::Type(branch) =>
-                {
+                ItemContent::Type(branch) => {
                     #[cfg(feature = "weak")]
-                    if let TypeRef::WeakLink(source) = &branch.type_ref {
+                    if let crate::types::TypeRef::WeakLink(source) = &branch.type_ref {
                         let start = source.quote_start.id();
                         let end = source.quote_end.id();
                         if let Some(start) = start {

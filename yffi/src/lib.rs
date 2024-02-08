@@ -25,9 +25,8 @@ use yrs::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use yrs::{
     uuid_v4, Any, Array, ArrayRef, Assoc, DeleteSet, GetString, Map, MapRef, Observable,
     OffsetKind, Options, Origin, Quotable, ReadTxn, Snapshot, StateVector, StickyIndex, Store,
-    SubdocsEvent, SubdocsEventIter, SubscriptionId, Text, TextRef, Transact,
-    TransactionCleanupEvent, Update, Xml, XmlElementPrelim, XmlElementRef, XmlFragmentRef,
-    XmlTextPrelim, XmlTextRef,
+    SubdocsEvent, SubdocsEventIter, Text, TextRef, Transact, TransactionCleanupEvent, Update, Xml,
+    XmlElementPrelim, XmlElementRef, XmlFragmentRef, XmlTextPrelim, XmlTextRef,
 };
 
 /// Flag used by `YInput` and `YOutput` to tag boolean values.
@@ -120,6 +119,11 @@ pub type Doc = yrs::Doc;
 /// Using write methods of different shared types (eg. `ytext_insert` and `yarray_insert`) over
 /// the same branch may result in undefined behavior.
 pub type Branch = yrs::types::Branch;
+
+/// Subscription to any kind of observable events, like `ymap_observe`, `ydoc_observe_updates_v1` etc.
+/// This subscription can be destroyed by calling `yunobserve` function, which will cause to unsubscribe
+/// correlated callback.
+pub type Subscription = yrs::Subscription;
 
 /// Iterator structure used by shared array data type.
 #[repr(transparent)]
@@ -463,17 +467,16 @@ pub unsafe extern "C" fn ydoc_observe_updates_v1(
     doc: *mut Doc,
     state: *mut c_void,
     cb: extern "C" fn(*mut c_void, u32, *const c_char),
-) -> u32 {
+) -> *mut Subscription {
     let doc = doc.as_ref().unwrap();
-    let observer = doc
+    let subscription = doc
         .observe_update_v1(move |_, e| {
             let bytes = &e.update;
             let len = bytes.len() as u32;
             cb(state, len, bytes.as_ptr() as *const c_char)
         })
         .unwrap();
-    let subscription_id: u32 = observer.into();
-    subscription_id
+    Box::into_raw(Box::new(subscription))
 }
 
 #[no_mangle]
@@ -481,29 +484,16 @@ pub unsafe extern "C" fn ydoc_observe_updates_v2(
     doc: *mut Doc,
     state: *mut c_void,
     cb: extern "C" fn(*mut c_void, u32, *const c_char),
-) -> u32 {
+) -> *mut Subscription {
     let doc = doc.as_ref().unwrap();
-    let observer = doc
+    let subscription = doc
         .observe_update_v2(move |_, e| {
             let bytes = &e.update;
             let len = bytes.len() as u32;
             cb(state, len, bytes.as_ptr() as *const c_char)
         })
         .unwrap();
-    let subscription_id: u32 = observer.into();
-    subscription_id
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn ydoc_unobserve_updates_v1(doc: *mut Doc, subscription_id: u32) {
-    let doc = doc.as_ref().unwrap();
-    doc.unobserve_update_v1(subscription_id as SubscriptionId);
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn ydoc_unobserve_updates_v2(doc: *mut Doc, subscription_id: u32) {
-    let doc = doc.as_ref().unwrap();
-    doc.unobserve_update_v2(subscription_id as SubscriptionId);
+    Box::into_raw(Box::new(subscription))
 }
 
 #[no_mangle]
@@ -511,22 +501,15 @@ pub unsafe extern "C" fn ydoc_observe_after_transaction(
     doc: *mut Doc,
     state: *mut c_void,
     cb: extern "C" fn(*mut c_void, *mut YAfterTransactionEvent),
-) -> u32 {
+) -> *mut Subscription {
     let doc = doc.as_ref().unwrap();
-    let observer = doc
+    let subscription = doc
         .observe_transaction_cleanup(move |_, e| {
             let mut event = YAfterTransactionEvent::new(e);
             cb(state, (&mut event) as *mut _);
         })
         .unwrap();
-    let subscription_id: u32 = observer.into();
-    subscription_id
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn ydoc_unobserve_after_transaction(doc: *mut Doc, subscription_id: u32) {
-    let doc = doc.as_ref().unwrap();
-    doc.unobserve_transaction_cleanup(subscription_id as SubscriptionId);
+    Box::into_raw(Box::new(subscription))
 }
 
 #[no_mangle]
@@ -534,22 +517,15 @@ pub unsafe extern "C" fn ydoc_observe_subdocs(
     doc: *mut Doc,
     state: *mut c_void,
     cb: extern "C" fn(*mut c_void, *mut YSubdocsEvent),
-) -> u32 {
+) -> *mut Subscription {
     let doc = doc.as_mut().unwrap();
-    let observer = doc
+    let subscription = doc
         .observe_subdocs(move |_, e| {
             let mut event = YSubdocsEvent::new(e);
             cb(state, (&mut event) as *mut _);
         })
         .unwrap();
-    let subscription_id: u32 = observer.into();
-    subscription_id
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn ydoc_unobserve_subdocs(doc: *mut Doc, subscription_id: u32) {
-    let doc = doc.as_ref().unwrap();
-    doc.unobserve_subdocs(subscription_id as SubscriptionId);
+    Box::into_raw(Box::new(subscription))
 }
 
 #[no_mangle]
@@ -557,19 +533,12 @@ pub unsafe extern "C" fn ydoc_observe_clear(
     doc: *mut Doc,
     state: *mut c_void,
     cb: extern "C" fn(*mut c_void, *mut Doc),
-) -> u32 {
+) -> *mut Subscription {
     let doc = doc.as_mut().unwrap();
-    let observer = doc
+    let subscription = doc
         .observe_destroy(move |_, e| cb(state, e as *const Doc as *mut _))
         .unwrap();
-    let subscription_id: u32 = observer.into();
-    subscription_id
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn ydoc_unobserve_clear(doc: *mut Doc, subscription_id: u32) {
-    let doc = doc.as_ref().unwrap();
-    doc.unobserve_destroy(subscription_id as SubscriptionId);
+    Box::into_raw(Box::new(subscription))
 }
 
 /// Manually send a load request to a parent document of this subdoc.
@@ -3420,109 +3389,110 @@ pub unsafe extern "C" fn youtput_read_yweak(val: *const YOutput) -> *mut Branch 
     }
 }
 
+/// Unsubscribe callback from the oberver event it was previously subscribed to.
+#[no_mangle]
+pub unsafe extern "C" fn yunobserve(subscription: *mut Subscription) {
+    drop(unsafe { Box::from_raw(subscription) })
+}
+
 /// Subscribes a given callback function `cb` to changes made by this `YText` instance. Callbacks
 /// are triggered whenever a `ytransaction_commit` is called.
 /// Returns a subscription ID which can be then used to unsubscribe this callback by using
-/// `ytext_unobserve` function.
+/// `yunobserve` function.
 #[no_mangle]
 pub unsafe extern "C" fn ytext_observe(
     txt: *const Branch,
     state: *mut c_void,
     cb: extern "C" fn(*mut c_void, *const YTextEvent),
-) -> u32 {
+) -> *mut Subscription {
     assert!(!txt.is_null());
 
-    let mut txt = TextRef::from_raw_branch(txt);
-    let observer = txt.observe(move |txn, e| {
+    let txt = TextRef::from_raw_branch(txt);
+    let subscription = txt.observe(move |txn, e| {
         let e = YTextEvent::new(e, txn);
         cb(state, &e as *const YTextEvent);
     });
-    let subscription_id: u32 = observer.into();
-    subscription_id
+    Box::into_raw(Box::new(subscription))
 }
 
 /// Subscribes a given callback function `cb` to changes made by this `YMap` instance. Callbacks
 /// are triggered whenever a `ytransaction_commit` is called.
 /// Returns a subscription ID which can be then used to unsubscribe this callback by using
-/// `ymap_unobserve` function.
+/// `yunobserve` function.
 #[no_mangle]
 pub unsafe extern "C" fn ymap_observe(
     map: *const Branch,
     state: *mut c_void,
     cb: extern "C" fn(*mut c_void, *const YMapEvent),
-) -> u32 {
+) -> *mut Subscription {
     assert!(!map.is_null());
 
-    let mut map = MapRef::from_raw_branch(map);
-    let observer = map.observe(move |txn, e| {
+    let map = MapRef::from_raw_branch(map);
+    let subscription = map.observe(move |txn, e| {
         let e = YMapEvent::new(e, txn);
         cb(state, &e as *const YMapEvent);
     });
-    let subscription_id: u32 = observer.into();
-    subscription_id
+    Box::into_raw(Box::new(subscription))
 }
 
 /// Subscribes a given callback function `cb` to changes made by this `YArray` instance. Callbacks
 /// are triggered whenever a `ytransaction_commit` is called.
 /// Returns a subscription ID which can be then used to unsubscribe this callback by using
-/// `yarray_unobserve` function.
+/// `yunobserve` function.
 #[no_mangle]
 pub unsafe extern "C" fn yarray_observe(
     array: *const Branch,
     state: *mut c_void,
     cb: extern "C" fn(*mut c_void, *const YArrayEvent),
-) -> u32 {
+) -> *mut Subscription {
     assert!(!array.is_null());
 
-    let mut array = ArrayRef::from_raw_branch(array);
-    let observer = array.observe(move |txn, e| {
+    let array = ArrayRef::from_raw_branch(array);
+    let subscription = array.observe(move |txn, e| {
         let e = YArrayEvent::new(e, txn);
         cb(state, &e as *const YArrayEvent);
     });
-    let subscription_id: u32 = observer.into();
-    subscription_id
+    Box::into_raw(Box::new(subscription))
 }
 
 /// Subscribes a given callback function `cb` to changes made by this `YXmlElement` instance.
 /// Callbacks are triggered whenever a `ytransaction_commit` is called.
 /// Returns a subscription ID which can be then used to unsubscribe this callback by using
-/// `yxmlelem_unobserve` function.
+/// `yunobserve` function.
 #[no_mangle]
 pub unsafe extern "C" fn yxmlelem_observe(
     xml: *const Branch,
     state: *mut c_void,
     cb: extern "C" fn(*mut c_void, *const YXmlEvent),
-) -> u32 {
+) -> *mut Subscription {
     assert!(!xml.is_null());
 
-    let mut xml = XmlElementRef::from_raw_branch(xml);
-    let observer = xml.observe(move |txn, e| {
+    let xml = XmlElementRef::from_raw_branch(xml);
+    let subscription = xml.observe(move |txn, e| {
         let e = YXmlEvent::new(e, txn);
         cb(state, &e as *const YXmlEvent);
     });
-    let subscription_id: u32 = observer.into();
-    subscription_id
+    Box::into_raw(Box::new(subscription))
 }
 
 /// Subscribes a given callback function `cb` to changes made by this `YXmlText` instance. Callbacks
 /// are triggered whenever a `ytransaction_commit` is called.
 /// Returns a subscription ID which can be then used to unsubscribe this callback by using
-/// `yxmltext_unobserve` function.
+/// `yunobserve` function.
 #[no_mangle]
 pub unsafe extern "C" fn yxmltext_observe(
     xml: *const Branch,
     state: *mut c_void,
     cb: extern "C" fn(*mut c_void, *const YXmlTextEvent),
-) -> u32 {
+) -> *mut Subscription {
     assert!(!xml.is_null());
 
-    let mut xml = XmlTextRef::from_raw_branch(xml);
-    let observer = xml.observe(move |txn, e| {
+    let xml = XmlTextRef::from_raw_branch(xml);
+    let subscription = xml.observe(move |txn, e| {
         let e = YXmlTextEvent::new(e, txn);
         cb(state, &e as *const YXmlTextEvent);
     });
-    let subscription_id: u32 = observer.into();
-    subscription_id
+    Box::into_raw(Box::new(subscription))
 }
 
 /// Subscribes a given callback function `cb` to changes made by this shared type instance as well
@@ -3530,23 +3500,22 @@ pub unsafe extern "C" fn yxmltext_observe(
 /// `ytransaction_commit` is called.
 ///
 /// Returns a subscription ID which can be then used to unsubscribe this callback by using
-/// `yunobserve_deep` function.
+/// `yunobserve` function.
 #[no_mangle]
 pub unsafe extern "C" fn yobserve_deep(
     ytype: *mut Branch,
     state: *mut c_void,
     cb: extern "C" fn(*mut c_void, u32, *const YEvent),
-) -> u32 {
+) -> *mut Subscription {
     assert!(!ytype.is_null());
 
     let branch = ytype.as_mut().unwrap();
-    let observer = branch.observe_deep(move |txn, events| {
+    let subscription = branch.observe_deep(move |txn, events| {
         let events: Vec<_> = events.iter().map(|e| YEvent::new(txn, e)).collect();
         let len = events.len() as u32;
         cb(state, len, events.as_ptr());
     });
-    let subscription_id: u32 = observer.into();
-    subscription_id
+    Box::into_raw(Box::new(subscription))
 }
 
 /// Event generated for callbacks subscribed using `ydoc_observe_after_transaction`. It contains
@@ -4000,63 +3969,6 @@ impl Deref for YWeakLinkEvent {
     }
 }
 
-/// Releases a callback subscribed via `yweak_observe` function represented by passed
-/// observer parameter.
-#[no_mangle]
-pub unsafe extern "C" fn yweak_unobserve(txt: *const Branch, subscription_id: u32) {
-    let weak: WeakRef<BranchPtr> = WeakRef::from_raw_branch(txt);
-    weak.unobserve(subscription_id as SubscriptionId);
-}
-
-/// Releases a callback subscribed via `ytext_observe` function represented by passed
-/// observer parameter.
-#[no_mangle]
-pub unsafe extern "C" fn ytext_unobserve(txt: *const Branch, subscription_id: u32) {
-    let txt = TextRef::from_raw_branch(txt);
-    txt.unobserve(subscription_id as SubscriptionId);
-}
-
-/// Releases a callback subscribed via `yarray_observe` function represented by passed
-/// observer parameter.
-#[no_mangle]
-pub unsafe extern "C" fn yarray_unobserve(array: *const Branch, subscription_id: u32) {
-    let txt = ArrayRef::from_raw_branch(array);
-    txt.unobserve(subscription_id as SubscriptionId);
-}
-
-/// Releases a callback subscribed via `ymap_observe` function represented by passed
-/// observer parameter.
-#[no_mangle]
-pub unsafe extern "C" fn ymap_unobserve(map: *const Branch, subscription_id: u32) {
-    let map = MapRef::from_raw_branch(map);
-    map.unobserve(subscription_id as SubscriptionId);
-}
-
-/// Releases a callback subscribed via `yxmlelem_observe` function represented by passed
-/// observer parameter.
-#[no_mangle]
-pub unsafe extern "C" fn yxmlelem_unobserve(xml: *const Branch, subscription_id: u32) {
-    let xml = XmlElementRef::from_raw_branch(xml);
-    xml.unobserve(subscription_id as SubscriptionId);
-}
-
-/// Releases a callback subscribed via `yxmltext_observe` function represented by passed
-/// observer parameter.
-#[no_mangle]
-pub unsafe extern "C" fn yxmltext_unobserve(xml: *const Branch, subscription_id: u32) {
-    let xml = XmlTextRef::from_raw_branch(xml);
-    xml.unobserve(subscription_id as SubscriptionId);
-}
-
-/// Releases a callback subscribed via `yobserve_deep` function represented by passed
-/// observer parameter.
-#[no_mangle]
-pub unsafe extern "C" fn yunobserve_deep(ytype: *mut Branch, subscription_id: u32) {
-    assert!(!ytype.is_null());
-    let branch = ytype.as_mut().unwrap();
-    branch.unobserve_deep(subscription_id as SubscriptionId);
-}
-
 /// Returns a pointer to a shared collection, which triggered passed event `e`.
 #[no_mangle]
 pub unsafe extern "C" fn ytext_event_target(e: *const YTextEvent) -> *mut Branch {
@@ -4506,28 +4418,17 @@ pub unsafe extern "C" fn yundo_manager_observe_added(
     mgr: *mut YUndoManager,
     state: *mut c_void,
     cb: extern "C" fn(*mut c_void, *const YUndoEvent),
-) -> u32 {
+) -> *mut Subscription {
     let mgr = mgr.as_mut().unwrap();
-    let subscription_id: SubscriptionId = mgr
-        .observe_item_added(move |_, e| {
-            let meta_ptr = {
-                let event = YUndoEvent::new(e);
-                cb(state, &event as *const YUndoEvent);
-                event.meta
-            };
-            e.item.meta.store(meta_ptr, Ordering::Release);
-        })
-        .into();
-    subscription_id
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn yundo_manager_unobserve_added(
-    mgr: *mut YUndoManager,
-    subscription_id: u32,
-) {
-    let mgr = mgr.as_mut().unwrap();
-    mgr.unobserve_item_added(subscription_id as SubscriptionId);
+    let subscription = mgr.observe_item_added(move |_, e| {
+        let meta_ptr = {
+            let event = YUndoEvent::new(e);
+            cb(state, &event as *const YUndoEvent);
+            event.meta
+        };
+        e.meta().store(meta_ptr, Ordering::Release);
+    });
+    Box::into_raw(Box::new(subscription))
 }
 
 #[no_mangle]
@@ -4535,28 +4436,19 @@ pub unsafe extern "C" fn yundo_manager_observe_popped(
     mgr: *mut YUndoManager,
     state: *mut c_void,
     cb: extern "C" fn(*mut c_void, *const YUndoEvent),
-) -> u32 {
+) -> *mut Subscription {
     let mgr = mgr.as_mut().unwrap();
-    let subscription_id: SubscriptionId = mgr
+    let subscription = mgr
         .observe_item_popped(move |_, e| {
             let meta_ptr = {
                 let event = YUndoEvent::new(e);
                 cb(state, &event as *const YUndoEvent);
                 event.meta
             };
-            e.item.meta.store(meta_ptr, Ordering::Release);
+            e.meta().store(meta_ptr, Ordering::Release);
         })
         .into();
-    subscription_id
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn yundo_manager_unobserve_popped(
-    mgr: *mut YUndoManager,
-    subscription_id: u32,
-) {
-    let mgr = mgr.as_mut().unwrap();
-    mgr.unobserve_item_popped(subscription_id as SubscriptionId);
+    Box::into_raw(Box::new(subscription))
 }
 
 pub const Y_KIND_UNDO: c_char = 0;
@@ -4577,12 +4469,6 @@ pub struct YUndoEvent {
     /// being executed.
     /// Transaction origin is specified via `ydoc_write_transaction(doc, origin_len, origin)`.
     pub origin_len: u32,
-    /// Set of identifiers of all insert operations that happened in a scope of a current undo/redo
-    /// operation.
-    pub insertions: YDeleteSet,
-    /// Set of identifiers of all remove operations that happened in a scope of a current undo/redo
-    /// operation.
-    pub deletions: YDeleteSet,
     /// Pointer to a custom metadata object that can be passed between
     /// `yundo_manager_observe_popped` and `yundo_manager_observe_added`. It's useful for passing
     /// around custom user data ie. cursor position, that needs to be remembered and restored as
@@ -4612,9 +4498,7 @@ impl YUndoEvent {
             },
             origin,
             origin_len,
-            insertions: YDeleteSet::new(e.item.insertions()),
-            deletions: YDeleteSet::new(e.item.deletions()),
-            meta: e.item.meta.load(Ordering::Acquire),
+            meta: e.meta().load(Ordering::Acquire),
         }
     }
 }
@@ -5258,22 +5142,21 @@ pub unsafe extern "C" fn yweak_xml_string(
 /// Subscribes a given callback function `cb` to changes made by this `YText` instance. Callbacks
 /// are triggered whenever a `ytransaction_commit` is called.
 /// Returns a subscription ID which can be then used to unsubscribe this callback by using
-/// `yweak_unobserve` function.
+/// `yunobserve` function.
 #[no_mangle]
 pub unsafe extern "C" fn yweak_observe(
     weak: *const Branch,
     state: *mut c_void,
     cb: extern "C" fn(*mut c_void, *const YWeakLinkEvent),
-) -> u32 {
+) -> *mut Subscription {
     assert!(!weak.is_null());
 
-    let mut txt: WeakRef<BranchPtr> = WeakRef::from_raw_branch(weak);
-    let observer = txt.observe(move |txn, e| {
+    let txt: WeakRef<BranchPtr> = WeakRef::from_raw_branch(weak);
+    let subscription = txt.observe(move |txn, e| {
         let e = YWeakLinkEvent::new(e, txn);
         cb(state, &e as *const YWeakLinkEvent);
     });
-    let subscription_id: u32 = observer.into();
-    subscription_id
+    Box::into_raw(Box::new(subscription))
 }
 
 #[no_mangle]

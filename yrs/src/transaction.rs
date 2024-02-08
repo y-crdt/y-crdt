@@ -701,13 +701,13 @@ impl<'doc> TransactionMut<'doc> {
         all_links: &HashMap<ItemPtr, HashSet<BranchPtr>>,
         branch: BranchPtr,
         changed_parents: &mut HashMap<BranchPtr, Vec<usize>>,
-        event_cache: &mut Vec<Event>,
+        event_cache: &Vec<Event>,
         visited: &mut HashSet<BranchPtr>,
     ) {
         let mut current = branch;
         loop {
             changed_parent_types.push(current);
-            if current.deep_observers.is_some() {
+            if current.deep_observers.callbacks().is_some() {
                 let entries = changed_parents.entry(current).or_default();
                 entries.push(event_cache.len() - 1);
             }
@@ -770,7 +770,7 @@ impl<'doc> TransactionMut<'doc> {
                             &self.store.linked_by,
                             *branch,
                             &mut changed_parents,
-                            &mut event_cache,
+                            &event_cache,
                             &mut HashSet::default(),
                         );
                     }
@@ -863,12 +863,11 @@ impl<'doc> TransactionMut<'doc> {
                 store.subdocs.remove(guid);
             }
 
+            let store = self.store.deref();
             let mut removed = if let Some(events) = store.events.as_ref() {
-                if let Some(handler) = events.subdocs_events.as_ref() {
+                if let Some(mut callbacks) = events.subdocs_events.callbacks() {
                     let e = SubdocsEvent::new(subdocs);
-                    for cb in handler.callbacks() {
-                        cb(self, &e);
-                    }
+                    callbacks.trigger(self, &e);
                     e.removed
                 } else {
                     subdocs.removed
@@ -965,7 +964,7 @@ impl<'doc> TransactionMut<'doc> {
 }
 
 /// Iterator struct used to traverse over all of the root level types defined in a corresponding [Doc].
-pub struct RootRefs<'doc>(std::collections::hash_map::Iter<'doc, Arc<str>, Box<Branch>>);
+pub struct RootRefs<'doc>(std::collections::hash_map::Iter<'doc, Arc<str>, Arc<Branch>>);
 
 impl<'doc> Iterator for RootRefs<'doc> {
     type Item = (&'doc str, Value);

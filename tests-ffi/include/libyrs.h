@@ -87,6 +87,7 @@ typedef struct YUndoManager {} YUndoManager;
 typedef struct LinkSource {} LinkSource;
 typedef struct Unquote {} Unquote;
 typedef struct StickyIndex {} StickyIndex;
+typedef struct YSubscription {} YSubscription;
 
 
 #include <stdarg.h>
@@ -451,6 +452,13 @@ typedef struct YXmlAttr {
   const char *name;
   const char *value;
 } YXmlAttr;
+
+/**
+ * Subscription to any kind of observable events, like `ymap_observe`, `ydoc_observe_updates_v1` etc.
+ * This subscription can be destroyed by calling `yunobserve` function, which will cause to unsubscribe
+ * correlated callback.
+ */
+typedef YSubscription YSubscription;
 
 /**
  * Struct representing a state of a document. It contains the last seen clocks for blocks submitted
@@ -936,16 +944,6 @@ typedef struct YUndoEvent {
    */
   uint32_t origin_len;
   /**
-   * Set of identifiers of all insert operations that happened in a scope of a current undo/redo
-   * operation.
-   */
-  struct YDeleteSet insertions;
-  /**
-   * Set of identifiers of all remove operations that happened in a scope of a current undo/redo
-   * operation.
-   */
-  struct YDeleteSet deletions;
-  /**
    * Pointer to a custom metadata object that can be passed between
    * `yundo_manager_observe_popped` and `yundo_manager_observe_added`. It's useful for passing
    * around custom user data ie. cursor position, that needs to be remembered and restored as
@@ -1062,27 +1060,23 @@ uint8_t ydoc_should_load(YDoc *doc);
  */
 uint8_t ydoc_auto_load(YDoc *doc);
 
-uint32_t ydoc_observe_updates_v1(YDoc *doc, void *state, void (*cb)(void*, uint32_t, const char*));
+YSubscription *ydoc_observe_updates_v1(YDoc *doc, void *state, void (*cb)(void*,
+                                                                          uint32_t,
+                                                                          const char*));
 
-uint32_t ydoc_observe_updates_v2(YDoc *doc, void *state, void (*cb)(void*, uint32_t, const char*));
+YSubscription *ydoc_observe_updates_v2(YDoc *doc, void *state, void (*cb)(void*,
+                                                                          uint32_t,
+                                                                          const char*));
 
-void ydoc_unobserve_updates_v1(YDoc *doc, uint32_t subscription_id);
+YSubscription *ydoc_observe_after_transaction(YDoc *doc,
+                                              void *state,
+                                              void (*cb)(void*, struct YAfterTransactionEvent*));
 
-void ydoc_unobserve_updates_v2(YDoc *doc, uint32_t subscription_id);
+YSubscription *ydoc_observe_subdocs(YDoc *doc,
+                                    void *state,
+                                    void (*cb)(void*, struct YSubdocsEvent*));
 
-uint32_t ydoc_observe_after_transaction(YDoc *doc,
-                                        void *state,
-                                        void (*cb)(void*, struct YAfterTransactionEvent*));
-
-void ydoc_unobserve_after_transaction(YDoc *doc, uint32_t subscription_id);
-
-uint32_t ydoc_observe_subdocs(YDoc *doc, void *state, void (*cb)(void*, struct YSubdocsEvent*));
-
-void ydoc_unobserve_subdocs(YDoc *doc, uint32_t subscription_id);
-
-uint32_t ydoc_observe_clear(YDoc *doc, void *state, void (*cb)(void*, YDoc*));
-
-void ydoc_unobserve_clear(YDoc *doc, uint32_t subscription_id);
+YSubscription *ydoc_observe_clear(YDoc *doc, void *state, void (*cb)(void*, YDoc*));
 
 /**
  * Manually send a load request to a parent document of this subdoc.
@@ -2103,48 +2097,57 @@ Branch *youtput_read_yxmltext(const struct YOutput *val);
 Branch *youtput_read_yweak(const struct YOutput *val);
 
 /**
+ * Unsubscribe callback from the oberver event it was previously subscribed to.
+ */
+void yunobserve(YSubscription *subscription);
+
+/**
  * Subscribes a given callback function `cb` to changes made by this `YText` instance. Callbacks
  * are triggered whenever a `ytransaction_commit` is called.
  * Returns a subscription ID which can be then used to unsubscribe this callback by using
- * `ytext_unobserve` function.
+ * `yunobserve` function.
  */
-uint32_t ytext_observe(const Branch *txt, void *state, void (*cb)(void*, const struct YTextEvent*));
+YSubscription *ytext_observe(const Branch *txt, void *state, void (*cb)(void*,
+                                                                        const struct YTextEvent*));
 
 /**
  * Subscribes a given callback function `cb` to changes made by this `YMap` instance. Callbacks
  * are triggered whenever a `ytransaction_commit` is called.
  * Returns a subscription ID which can be then used to unsubscribe this callback by using
- * `ymap_unobserve` function.
+ * `yunobserve` function.
  */
-uint32_t ymap_observe(const Branch *map, void *state, void (*cb)(void*, const struct YMapEvent*));
+YSubscription *ymap_observe(const Branch *map, void *state, void (*cb)(void*,
+                                                                       const struct YMapEvent*));
 
 /**
  * Subscribes a given callback function `cb` to changes made by this `YArray` instance. Callbacks
  * are triggered whenever a `ytransaction_commit` is called.
  * Returns a subscription ID which can be then used to unsubscribe this callback by using
- * `yarray_unobserve` function.
+ * `yunobserve` function.
  */
-uint32_t yarray_observe(const Branch *array, void *state, void (*cb)(void*,
-                                                                     const struct YArrayEvent*));
+YSubscription *yarray_observe(const Branch *array,
+                              void *state,
+                              void (*cb)(void*, const struct YArrayEvent*));
 
 /**
  * Subscribes a given callback function `cb` to changes made by this `YXmlElement` instance.
  * Callbacks are triggered whenever a `ytransaction_commit` is called.
  * Returns a subscription ID which can be then used to unsubscribe this callback by using
- * `yxmlelem_unobserve` function.
+ * `yunobserve` function.
  */
-uint32_t yxmlelem_observe(const Branch *xml,
-                          void *state,
-                          void (*cb)(void*, const struct YXmlEvent*));
+YSubscription *yxmlelem_observe(const Branch *xml,
+                                void *state,
+                                void (*cb)(void*, const struct YXmlEvent*));
 
 /**
  * Subscribes a given callback function `cb` to changes made by this `YXmlText` instance. Callbacks
  * are triggered whenever a `ytransaction_commit` is called.
  * Returns a subscription ID which can be then used to unsubscribe this callback by using
- * `yxmltext_unobserve` function.
+ * `yunobserve` function.
  */
-uint32_t yxmltext_observe(const Branch *xml, void *state, void (*cb)(void*,
-                                                                     const struct YXmlTextEvent*));
+YSubscription *yxmltext_observe(const Branch *xml,
+                                void *state,
+                                void (*cb)(void*, const struct YXmlTextEvent*));
 
 /**
  * Subscribes a given callback function `cb` to changes made by this shared type instance as well
@@ -2152,53 +2155,11 @@ uint32_t yxmltext_observe(const Branch *xml, void *state, void (*cb)(void*,
  * `ytransaction_commit` is called.
  *
  * Returns a subscription ID which can be then used to unsubscribe this callback by using
- * `yunobserve_deep` function.
+ * `yunobserve` function.
  */
-uint32_t yobserve_deep(Branch *ytype,
-                       void *state,
-                       void (*cb)(void*, uint32_t, const struct YEvent*));
-
-/**
- * Releases a callback subscribed via `yweak_observe` function represented by passed
- * observer parameter.
- */
-void yweak_unobserve(const Branch *txt, uint32_t subscription_id);
-
-/**
- * Releases a callback subscribed via `ytext_observe` function represented by passed
- * observer parameter.
- */
-void ytext_unobserve(const Branch *txt, uint32_t subscription_id);
-
-/**
- * Releases a callback subscribed via `yarray_observe` function represented by passed
- * observer parameter.
- */
-void yarray_unobserve(const Branch *array, uint32_t subscription_id);
-
-/**
- * Releases a callback subscribed via `ymap_observe` function represented by passed
- * observer parameter.
- */
-void ymap_unobserve(const Branch *map, uint32_t subscription_id);
-
-/**
- * Releases a callback subscribed via `yxmlelem_observe` function represented by passed
- * observer parameter.
- */
-void yxmlelem_unobserve(const Branch *xml, uint32_t subscription_id);
-
-/**
- * Releases a callback subscribed via `yxmltext_observe` function represented by passed
- * observer parameter.
- */
-void yxmltext_unobserve(const Branch *xml, uint32_t subscription_id);
-
-/**
- * Releases a callback subscribed via `yobserve_deep` function represented by passed
- * observer parameter.
- */
-void yunobserve_deep(Branch *ytype, uint32_t subscription_id);
+YSubscription *yobserve_deep(Branch *ytype, void *state, void (*cb)(void*,
+                                                                    uint32_t,
+                                                                    const struct YEvent*));
 
 /**
  * Returns a pointer to a shared collection, which triggered passed event `e`.
@@ -2389,17 +2350,13 @@ uint8_t yundo_manager_can_undo(YUndoManager *mgr);
 
 uint8_t yundo_manager_can_redo(YUndoManager *mgr);
 
-uint32_t yundo_manager_observe_added(YUndoManager *mgr,
-                                     void *state,
-                                     void (*cb)(void*, const struct YUndoEvent*));
+YSubscription *yundo_manager_observe_added(YUndoManager *mgr,
+                                           void *state,
+                                           void (*cb)(void*, const struct YUndoEvent*));
 
-void yundo_manager_unobserve_added(YUndoManager *mgr, uint32_t subscription_id);
-
-uint32_t yundo_manager_observe_popped(YUndoManager *mgr,
-                                      void *state,
-                                      void (*cb)(void*, const struct YUndoEvent*));
-
-void yundo_manager_unobserve_popped(YUndoManager *mgr, uint32_t subscription_id);
+YSubscription *yundo_manager_observe_popped(YUndoManager *mgr,
+                                            void *state,
+                                            void (*cb)(void*, const struct YUndoEvent*));
 
 /**
  * Returns a value informing what kind of Yrs shared collection given `branch` represents.
@@ -2474,10 +2431,11 @@ char *yweak_xml_string(const Branch *xml_text_link, const YTransaction *txn);
  * Subscribes a given callback function `cb` to changes made by this `YText` instance. Callbacks
  * are triggered whenever a `ytransaction_commit` is called.
  * Returns a subscription ID which can be then used to unsubscribe this callback by using
- * `yweak_unobserve` function.
+ * `yunobserve` function.
  */
-uint32_t yweak_observe(const Branch *weak, void *state, void (*cb)(void*,
-                                                                   const struct YWeakLinkEvent*));
+YSubscription *yweak_observe(const Branch *weak,
+                             void *state,
+                             void (*cb)(void*, const struct YWeakLinkEvent*));
 
 const Weak *ymap_link(const Branch *map, const YTransaction *txn, const char *key);
 

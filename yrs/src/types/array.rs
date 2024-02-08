@@ -3,8 +3,7 @@ use crate::block_iter::BlockIter;
 use crate::moving::StickyIndex;
 use crate::transaction::TransactionMut;
 use crate::types::{
-    event_change_set, Branch, BranchPtr, Change, ChangeSet, EventHandler, Observers, Path,
-    SharedRef, ToJson, TypeRef, Value,
+    event_change_set, Branch, BranchPtr, Change, ChangeSet, Path, SharedRef, ToJson, TypeRef, Value,
 };
 use crate::{Any, Assoc, IndexedSequence, Observable, ReadTxn, ID};
 use std::borrow::Borrow;
@@ -13,7 +12,6 @@ use std::collections::HashSet;
 use std::convert::{TryFrom, TryInto};
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
-use std::sync::Arc;
 
 /// A collection used to store data in an indexed sequence structure. This type is internally
 /// implemented as a double linked list, which may squash values inserted directly one after another
@@ -112,22 +110,6 @@ impl AsMut<Branch> for ArrayRef {
 
 impl Observable for ArrayRef {
     type Event = ArrayEvent;
-
-    fn try_observer(&self) -> Option<&EventHandler<Self::Event>> {
-        if let Some(Observers::Array(eh)) = self.0.observers.as_ref() {
-            Some(eh)
-        } else {
-            None
-        }
-    }
-
-    fn try_observer_mut(&mut self) -> Option<&mut EventHandler<Self::Event>> {
-        if let Observers::Array(eh) = self.0.observers.get_or_insert_with(Observers::array) {
-            Some(eh)
-        } else {
-            None
-        }
-    }
 }
 
 impl TryFrom<ItemPtr> for ArrayRef {
@@ -336,8 +318,6 @@ pub trait Array: AsRef<Branch> + Sized {
         ArrayIter::from_ref(self.as_ref(), txn)
     }
 }
-
-pub type ArraySubscription = crate::Subscription<Arc<dyn Fn(&TransactionMut, &ArrayEvent) -> ()>>;
 
 pub struct ArrayIter<B, T>
 where
@@ -884,7 +864,7 @@ mod test {
     #[test]
     fn insert_and_remove_events() {
         let d = Doc::with_client_id(1);
-        let mut array = d.get_or_insert_array("array");
+        let array = d.get_or_insert_array("array");
         let happened = Rc::new(Cell::new(false));
         let happened_clone = happened.clone();
         let _sub = array.observe(move |_, _| {
@@ -925,7 +905,7 @@ mod test {
     #[test]
     fn insert_and_remove_event_changes() {
         let d1 = Doc::with_client_id(1);
-        let mut array = d1.get_or_insert_array("array");
+        let array = d1.get_or_insert_array("array");
         let added = Rc::new(RefCell::new(None));
         let removed = Rc::new(RefCell::new(None));
         let delta = Rc::new(RefCell::new(None));
@@ -985,7 +965,7 @@ mod test {
         );
 
         let d2 = Doc::with_client_id(2);
-        let mut array2 = d2.get_or_insert_array("array");
+        let array2 = d2.get_or_insert_array("array");
         let (added_c, removed_c, delta_c) = (added.clone(), removed.clone(), delta.clone());
         let _sub = array2.observe(move |txn, e| {
             *added_c.borrow_mut() = Some(e.inserts(txn).clone());
@@ -1021,8 +1001,8 @@ mod test {
     fn target_on_local_and_remote() {
         let d1 = Doc::with_client_id(1);
         let d2 = Doc::with_client_id(2);
-        let mut a1 = d1.get_or_insert_array("array");
-        let mut a2 = d2.get_or_insert_array("array");
+        let a1 = d1.get_or_insert_array("array");
+        let a2 = d2.get_or_insert_array("array");
 
         let c1 = Rc::new(RefCell::new(None));
         let c1c = c1.clone();
@@ -1224,10 +1204,10 @@ mod test {
     #[test]
     fn move_1() {
         let d1 = Doc::with_client_id(1);
-        let mut a1 = d1.get_or_insert_array("array");
+        let a1 = d1.get_or_insert_array("array");
 
         let d2 = Doc::with_client_id(2);
-        let mut a2 = d2.get_or_insert_array("array");
+        let a2 = d2.get_or_insert_array("array");
 
         let e1: Rc<RefCell<Vec<Change>>> = Rc::new(RefCell::new(Vec::default()));
         let inner = e1.clone();
@@ -1276,10 +1256,10 @@ mod test {
     #[test]
     fn move_2() {
         let d1 = Doc::with_client_id(1);
-        let mut a1 = d1.get_or_insert_array("array");
+        let a1 = d1.get_or_insert_array("array");
 
         let d2 = Doc::with_client_id(2);
-        let mut a2 = d2.get_or_insert_array("array");
+        let a2 = d2.get_or_insert_array("array");
 
         let e1: Rc<RefCell<Vec<Change>>> = Rc::new(RefCell::new(Vec::default()));
         let inner = e1.clone();

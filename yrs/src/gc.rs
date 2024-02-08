@@ -1,4 +1,4 @@
-use crate::block::{BlockCell, ClientID, ItemContent, GC};
+use crate::block::{BlockCell, ClientID, GC};
 use crate::{TransactionMut, ID};
 use std::collections::HashMap;
 

@@ -1,8 +1,7 @@
 use crate::block::{EmbedPrelim, ItemContent, ItemPosition, ItemPtr, Prelim};
 use crate::transaction::TransactionMut;
 use crate::types::{
-    event_keys, Branch, BranchPtr, Entries, EntryChange, EventHandler, Observers, Path, SharedRef,
-    ToJson, TypeRef, Value,
+    event_keys, Branch, BranchPtr, Entries, EntryChange, Path, SharedRef, ToJson, TypeRef, Value,
 };
 use crate::*;
 use std::borrow::Borrow;
@@ -62,22 +61,6 @@ impl Map for MapRef {}
 
 impl Observable for MapRef {
     type Event = MapEvent;
-
-    fn try_observer(&self) -> Option<&EventHandler<Self::Event>> {
-        if let Some(Observers::Map(eh)) = self.0.observers.as_ref() {
-            Some(eh)
-        } else {
-            None
-        }
-    }
-
-    fn try_observer_mut(&mut self) -> Option<&mut EventHandler<Self::Event>> {
-        if let Observers::Map(eh) = self.0.observers.get_or_insert_with(Observers::map) {
-            Some(eh)
-        } else {
-            None
-        }
-    }
 }
 
 impl ToJson for MapRef {
@@ -774,7 +757,7 @@ mod test {
     #[test]
     fn insert_and_remove_events() {
         let d1 = Doc::with_client_id(1);
-        let mut m1 = d1.get_or_insert_map("map");
+        let m1 = d1.get_or_insert_map("map");
 
         let entries = Rc::new(RefCell::new(None));
         let entries_c = entries.clone();
@@ -861,7 +844,7 @@ mod test {
 
         // copy updates over
         let d2 = Doc::with_client_id(2);
-        let mut m2 = d2.get_or_insert_map("map");
+        let m2 = d2.get_or_insert_map("map");
 
         let entries = Rc::new(RefCell::new(None));
         let entries_c = entries.clone();

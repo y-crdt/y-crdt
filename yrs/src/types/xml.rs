@@ -4,7 +4,7 @@ use crate::transaction::TransactionMut;
 use crate::types::text::{diff_between, TextEvent, YChange};
 use crate::types::{
     event_change_set, event_keys, Branch, BranchPtr, Change, ChangeSet, Delta, Entries,
-    EntryChange, EventHandler, MapRef, Observers, Path, SharedRef, ToJson, TypePtr, TypeRef, Value,
+    EntryChange, MapRef, Path, SharedRef, ToJson, TypePtr, TypeRef, Value,
 };
 use crate::{
     Any, ArrayRef, GetString, IndexedSequence, Map, Observable, ReadTxn, StickyIndex, Text,
@@ -196,24 +196,6 @@ impl GetString for XmlElementRef {
 
 impl Observable for XmlElementRef {
     type Event = XmlEvent;
-
-    fn try_observer(&self) -> Option<&EventHandler<Self::Event>> {
-        if let Some(Observers::XmlFragment(eh)) = self.0.observers.as_ref() {
-            Some(eh)
-        } else {
-            None
-        }
-    }
-
-    fn try_observer_mut(&mut self) -> Option<&mut EventHandler<Self::Event>> {
-        if let Observers::XmlFragment(eh) =
-            self.0.observers.get_or_insert_with(Observers::xml_fragment)
-        {
-            Some(eh)
-        } else {
-            None
-        }
-    }
 }
 
 impl AsRef<Branch> for XmlElementRef {
@@ -447,22 +429,6 @@ impl Into<TextRef> for XmlTextRef {
 
 impl Observable for XmlTextRef {
     type Event = XmlTextEvent;
-
-    fn try_observer(&self) -> Option<&EventHandler<Self::Event>> {
-        if let Some(Observers::XmlText(eh)) = self.0.observers.as_ref() {
-            Some(eh)
-        } else {
-            None
-        }
-    }
-
-    fn try_observer_mut(&mut self) -> Option<&mut EventHandler<Self::Event>> {
-        if let Observers::XmlText(eh) = self.0.observers.get_or_insert_with(Observers::xml_text) {
-            Some(eh)
-        } else {
-            None
-        }
-    }
 }
 
 impl GetString for XmlTextRef {
@@ -586,24 +552,6 @@ impl GetString for XmlFragmentRef {
 
 impl Observable for XmlFragmentRef {
     type Event = XmlEvent;
-
-    fn try_observer(&self) -> Option<&EventHandler<Self::Event>> {
-        if let Some(Observers::XmlFragment(eh)) = self.0.observers.as_ref() {
-            Some(eh)
-        } else {
-            None
-        }
-    }
-
-    fn try_observer_mut(&mut self) -> Option<&mut EventHandler<Self::Event>> {
-        if let Observers::XmlFragment(eh) =
-            self.0.observers.get_or_insert_with(Observers::xml_fragment)
-        {
-            Some(eh)
-        } else {
-            None
-        }
-    }
 }
 
 impl AsRef<Branch> for XmlFragmentRef {
@@ -1403,7 +1351,7 @@ mod test {
     #[test]
     fn event_observers() {
         let d1 = Doc::with_client_id(1);
-        let mut xml = d1.get_or_insert_xml_element("test");
+        let xml = d1.get_or_insert_xml_element("test");
 
         let attributes = Rc::new(RefCell::new(None));
         let nodes = Rc::new(RefCell::new(None));
@@ -1493,7 +1441,7 @@ mod test {
 
         // copy updates over
         let d2 = Doc::with_client_id(2);
-        let mut xml2 = d2.get_or_insert_xml_element("test");
+        let xml2 = d2.get_or_insert_xml_element("test");
 
         let attributes = Rc::new(RefCell::new(None));
         let nodes = Rc::new(RefCell::new(None));

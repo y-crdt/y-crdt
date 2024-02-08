@@ -527,10 +527,6 @@ pub use crate::doc::Doc;
 pub use crate::doc::OffsetKind;
 pub use crate::doc::Options;
 pub use crate::doc::Transact;
-pub use crate::doc::{
-    AfterTransactionSubscription, DestroySubscription, SubdocsSubscription,
-    TransactionCleanupSubscription, UpdateSubscription,
-};
 pub use crate::event::{SubdocsEvent, SubdocsEventIter, TransactionCleanupEvent, UpdateEvent};
 pub use crate::id_set::DeleteSet;
 pub use crate::moving::Assoc;
@@ -538,7 +534,7 @@ pub use crate::moving::IndexScope;
 pub use crate::moving::IndexedSequence;
 pub use crate::moving::Offset;
 pub use crate::moving::StickyIndex;
-pub use crate::observer::{Observer, Subscription, SubscriptionId};
+pub use crate::observer::{Observer, ObserverMut, Subscription};
 pub use crate::state_vector::Snapshot;
 pub use crate::state_vector::StateVector;
 pub use crate::store::Store;

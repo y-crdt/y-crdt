@@ -199,11 +199,8 @@ impl Decode for TypeRef {
     }
 }
 
-pub trait Observable: AsMut<Branch> {
+pub trait Observable: AsRef<Branch> {
     type Event;
-
-    fn try_observer(&self) -> Option<&EventHandler<Self::Event>>;
-    fn try_observer_mut(&mut self) -> Option<&mut EventHandler<Self::Event>>;
 
     /// Subscribes a given callback to be triggered whenever current y-type is changed.
     /// A callback is triggered whenever a transaction gets committed. This function does not
@@ -214,22 +211,16 @@ pub trait Observable: AsMut<Branch> {
     /// All text-like event changes can be tracked by using [TextEvent::delta] method.
     ///
     /// Returns a [Subscription] which, when dropped, will unsubscribe current callback.
-    fn observe<F>(&mut self, f: F) -> Subscription<Arc<dyn Fn(&TransactionMut, &Self::Event) -> ()>>
+    fn observe<F>(&self, f: F) -> Subscription
     where
         F: Fn(&TransactionMut, &Self::Event) -> () + 'static,
+        Event: AsRef<Self::Event>,
     {
-        if let Some(eh) = self.try_observer_mut() {
-            eh.subscribe(Arc::new(f))
-        } else {
-            panic!("Observed collection is of different type") //TODO: this should be Result::Err
-        }
-    }
-
-    /// Unsubscribes a previously subscribed event callback identified by given `subscription_id`.
-    fn unobserve(&self, subscription_id: SubscriptionId) {
-        if let Some(eh) = self.try_observer() {
-            eh.unsubscribe(subscription_id);
-        }
+        let mut branch = BranchPtr::from(self.as_ref());
+        branch.observe(move |txn, e| {
+            let mapped_event = e.as_ref();
+            f(txn, mapped_event)
+        })
     }
 }
 
@@ -253,27 +244,19 @@ impl BranchPtr {
         txn: &TransactionMut,
         subs: HashSet<Option<Arc<str>>>,
     ) -> Option<Event> {
-        if let Some(observers) = self.observers.as_ref() {
-            Some(observers.publish(*self, txn, subs))
-        } else {
-            match self.type_ref {
-                TypeRef::Array => Some(Event::Array(ArrayEvent::new(*self))),
-                TypeRef::Map => Some(Event::Map(MapEvent::new(*self, subs))),
-                TypeRef::Text => Some(Event::Text(TextEvent::new(*self))),
-                TypeRef::XmlText => Some(Event::XmlText(XmlTextEvent::new(*self, subs))),
-                TypeRef::XmlElement(_) | TypeRef::XmlFragment => {
-                    Some(Event::XmlFragment(XmlEvent::new(*self, subs)))
-                }
-                #[cfg(feature = "weak")]
-                TypeRef::WeakLink(_) => Some(Event::Weak(WeakEvent::new(*self))),
-                TypeRef::XmlHook | TypeRef::SubDoc | TypeRef::Undefined => None,
+        let e = self.make_event(subs)?;
+        if let Some(callbacks) = self.observers.callbacks() {
+            for fun in callbacks {
+                fun(txn, &e);
             }
         }
+
+        Some(e)
     }
 
     pub(crate) fn trigger_deep(&self, txn: &TransactionMut, e: &Events) {
-        if let Some(o) = self.deep_observers.as_ref() {
-            for fun in o.callbacks() {
+        if let Some(callbacks) = self.deep_observers.callbacks() {
+            for fun in callbacks {
                 fun(txn, e);
             }
         }
@@ -320,15 +303,15 @@ impl DerefMut for BranchPtr {
     }
 }
 
-impl<'a> From<&'a mut Box<Branch>> for BranchPtr {
-    fn from(branch: &'a mut Box<Branch>) -> Self {
-        let ptr = NonNull::from(branch.as_mut());
+impl<'a> From<&'a mut Arc<Branch>> for BranchPtr {
+    fn from(branch: &'a mut Arc<Branch>) -> Self {
+        let ptr = NonNull::from(branch.as_ref());
         BranchPtr(ptr)
     }
 }
 
-impl<'a> From<&'a Box<Branch>> for BranchPtr {
-    fn from(branch: &'a Box<Branch>) -> Self {
+impl<'a> From<&'a Arc<Branch>> for BranchPtr {
+    fn from(branch: &'a Arc<Branch>) -> Self {
         let b: &Branch = &*branch;
 
         let ptr = unsafe { NonNull::new_unchecked(b as *const Branch as *mut Branch) };
@@ -431,9 +414,9 @@ pub struct Branch {
     /// An identifier of an underlying complex data type (eg. is it an Array or a Map).
     pub(crate) type_ref: TypeRef,
 
-    pub(crate) observers: Option<Observers>,
+    pub(crate) observers: Observer<Event>,
 
-    pub(crate) deep_observers: Option<Observer<Arc<dyn Fn(&TransactionMut, &Events)>>>,
+    pub(crate) deep_observers: Observer<Events>,
 }
 
 impl std::fmt::Debug for Branch {
@@ -455,8 +438,8 @@ impl PartialEq for Branch {
 }
 
 impl Branch {
-    pub fn new(type_ref: TypeRef) -> Box<Self> {
-        Box::new(Self {
+    pub fn new(type_ref: TypeRef) -> Arc<Self> {
+        Arc::new(Self {
             start: None,
             map: HashMap::default(),
             block_len: 0,
@@ -464,8 +447,8 @@ impl Branch {
             item: None,
             store: None,
             type_ref,
-            observers: None,
-            deep_observers: None,
+            observers: Observer::default(),
+            deep_observers: Observer::default(),
         })
     }
 
@@ -720,18 +703,18 @@ impl Branch {
         path
     }
 
-    pub fn observe_deep<F>(&mut self, f: F) -> DeepEventsSubscription
+    pub fn observe<F>(&mut self, f: F) -> Subscription
+    where
+        F: Fn(&TransactionMut, &Event) -> () + 'static,
+    {
+        self.observers.subscribe(f)
+    }
+
+    pub fn observe_deep<F>(&mut self, f: F) -> Subscription
     where
         F: Fn(&TransactionMut, &Events) -> () + 'static,
     {
-        let eh = self.deep_observers.get_or_insert_with(Observer::default);
-        eh.subscribe(Arc::new(f))
-    }
-
-    pub fn unobserve_deep(&mut self, subscription_id: SubscriptionId) {
-        if let Some(eh) = self.deep_observers.as_mut() {
-            eh.unsubscribe(subscription_id);
-        }
+        self.deep_observers.subscribe(f)
     }
 
     pub(crate) fn is_parent_of(&self, mut ptr: Option<ItemPtr>) -> bool {
@@ -747,9 +730,25 @@ impl Branch {
         }
         false
     }
-}
 
-pub type DeepEventsSubscription = crate::Subscription<Arc<dyn Fn(&TransactionMut, &Events) -> ()>>;
+    pub(crate) fn make_event(&self, keys: HashSet<Option<Arc<str>>>) -> Option<Event> {
+        let self_ptr = BranchPtr::from(self);
+        let event = match self.type_ref() {
+            TypeRef::Array => Event::Array(ArrayEvent::new(self_ptr)),
+            TypeRef::Map => Event::Map(MapEvent::new(self_ptr, keys)),
+            TypeRef::Text => Event::Text(TextEvent::new(self_ptr)),
+            TypeRef::XmlElement(_) | TypeRef::XmlFragment => {
+                Event::XmlFragment(XmlEvent::new(self_ptr, keys))
+            }
+            TypeRef::XmlText => Event::XmlText(XmlTextEvent::new(self_ptr, keys)),
+            #[cfg(feature = "weak")]
+            TypeRef::WeakLink(_) => Event::Weak(WeakEvent::new(self_ptr)),
+            _ => return None,
+        };
+
+        Some(event)
+    }
+}
 
 /// Trait implemented by all Y-types, allowing for observing events which are emitted by
 /// nested types.
@@ -764,28 +763,20 @@ pub trait DeepObservable {
     ///
     /// This method returns a subscription, which will automatically unsubscribe current callback
     /// when dropped.
-    fn observe_deep<F>(&mut self, f: F) -> DeepEventsSubscription
+    fn observe_deep<F>(&mut self, f: F) -> Subscription
     where
         F: Fn(&TransactionMut, &Events) -> () + 'static;
-
-    /// Unobserves callback identified by `subscription_id` (which can be obtained by consuming
-    /// [Subscription] using `into` cast).
-    fn unobserve_deep(&mut self, subscription_id: SubscriptionId);
 }
 
 impl<T> DeepObservable for T
 where
     T: AsMut<Branch>,
 {
-    fn observe_deep<F>(&mut self, f: F) -> DeepEventsSubscription
+    fn observe_deep<F>(&mut self, f: F) -> Subscription
     where
         F: Fn(&TransactionMut, &Events) -> () + 'static,
     {
         self.as_mut().observe_deep(f)
-    }
-
-    fn unobserve_deep(&mut self, subscription_id: SubscriptionId) {
-        self.as_mut().unobserve_deep(subscription_id)
     }
 }
 
@@ -1164,93 +1155,6 @@ impl std::fmt::Display for TypePtr {
     }
 }
 
-type EventHandler<T> = Observer<Arc<dyn Fn(&TransactionMut, &T) -> ()>>;
-
-pub(crate) enum Observers {
-    Text(EventHandler<crate::types::text::TextEvent>),
-    Array(EventHandler<crate::types::array::ArrayEvent>),
-    Map(EventHandler<crate::types::map::MapEvent>),
-    XmlFragment(EventHandler<crate::types::xml::XmlEvent>),
-    XmlText(EventHandler<crate::types::xml::XmlTextEvent>),
-    #[cfg(feature = "weak")]
-    Weak(EventHandler<crate::types::weak::WeakEvent>),
-}
-
-impl Observers {
-    pub fn text() -> Self {
-        Observers::Text(Observer::default())
-    }
-    pub fn array() -> Self {
-        Observers::Array(Observer::default())
-    }
-    pub fn map() -> Self {
-        Observers::Map(Observer::default())
-    }
-    pub fn xml_fragment() -> Self {
-        Observers::XmlFragment(Observer::default())
-    }
-    pub fn xml_text() -> Self {
-        Observers::XmlText(Observer::default())
-    }
-    #[cfg(feature = "weak")]
-    pub fn weak() -> Self {
-        Observers::Weak(Observer::default())
-    }
-
-    pub fn publish(
-        &self,
-        branch_ref: BranchPtr,
-        txn: &TransactionMut,
-        keys: HashSet<Option<Arc<str>>>,
-    ) -> Event {
-        match self {
-            Observers::Text(eh) => {
-                let e = TextEvent::new(branch_ref);
-                for fun in eh.callbacks() {
-                    fun(txn, &e);
-                }
-                Event::Text(e)
-            }
-            Observers::Array(eh) => {
-                let e = ArrayEvent::new(branch_ref);
-                for fun in eh.callbacks() {
-                    fun(txn, &e);
-                }
-                Event::Array(e)
-            }
-            Observers::Map(eh) => {
-                let e = MapEvent::new(branch_ref, keys);
-                for fun in eh.callbacks() {
-                    fun(txn, &e);
-                }
-                Event::Map(e)
-            }
-            Observers::XmlFragment(eh) => {
-                let e = XmlEvent::new(branch_ref, keys);
-                for fun in eh.callbacks() {
-                    fun(txn, &e);
-                }
-                Event::XmlFragment(e)
-            }
-            Observers::XmlText(eh) => {
-                let e = XmlTextEvent::new(branch_ref, keys);
-                for fun in eh.callbacks() {
-                    fun(txn, &e);
-                }
-                Event::XmlText(e)
-            }
-            #[cfg(feature = "weak")]
-            Observers::Weak(eh) => {
-                let e = WeakEvent::new(branch_ref);
-                for fun in eh.callbacks() {
-                    fun(txn, &e);
-                }
-                Event::Weak(e)
-            }
-        }
-    }
-}
-
 /// A path describing nesting structure between shared collections containing each other. It's a
 /// collection of segments which refer to either index (in case of [Array] or [XmlElement]) or
 /// string key (in case of [Map]) where successor shared collection can be found within subsequent
@@ -1596,6 +1500,67 @@ pub enum Event {
     XmlText(XmlTextEvent),
     #[cfg(feature = "weak")]
     Weak(WeakEvent),
+}
+
+impl AsRef<TextEvent> for Event {
+    fn as_ref(&self) -> &TextEvent {
+        if let Event::Text(e) = self {
+            e
+        } else {
+            panic!("subscribed callback expected TextRef collection");
+        }
+    }
+}
+
+impl AsRef<ArrayEvent> for Event {
+    fn as_ref(&self) -> &ArrayEvent {
+        if let Event::Array(e) = self {
+            e
+        } else {
+            panic!("subscribed callback expected ArrayRef collection");
+        }
+    }
+}
+
+impl AsRef<MapEvent> for Event {
+    fn as_ref(&self) -> &MapEvent {
+        if let Event::Map(e) = self {
+            e
+        } else {
+            panic!("subscribed callback expected MapRef collection");
+        }
+    }
+}
+
+impl AsRef<XmlTextEvent> for Event {
+    fn as_ref(&self) -> &XmlTextEvent {
+        if let Event::XmlText(e) = self {
+            e
+        } else {
+            panic!("subscribed callback expected XmlTextRef collection");
+        }
+    }
+}
+
+impl AsRef<XmlEvent> for Event {
+    fn as_ref(&self) -> &XmlEvent {
+        if let Event::XmlFragment(e) = self {
+            e
+        } else {
+            panic!("subscribed callback expected Xml node");
+        }
+    }
+}
+
+#[cfg(feature = "weak")]
+impl AsRef<WeakEvent> for Event {
+    fn as_ref(&self) -> &WeakEvent {
+        if let Event::Weak(e) = self {
+            e
+        } else {
+            panic!("subscribed callback expected WeakRef reference");
+        }
+    }
 }
 
 impl Event {
