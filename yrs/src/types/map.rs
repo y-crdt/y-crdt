@@ -1,7 +1,8 @@
 use crate::block::{EmbedPrelim, ItemContent, ItemPosition, ItemPtr, Prelim};
 use crate::transaction::TransactionMut;
 use crate::types::{
-    event_keys, Branch, BranchPtr, Entries, EntryChange, Path, SharedRef, ToJson, TypeRef, Value,
+    event_keys, Branch, BranchPtr, Entries, EntryChange, Path, RootRef, SharedRef, ToJson, TypeRef,
+    Value,
 };
 use crate::*;
 use std::borrow::Borrow;
@@ -56,9 +57,15 @@ use std::sync::Arc;
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct MapRef(BranchPtr);
 
+impl RootRef for MapRef {
+    fn type_ref() -> TypeRef {
+        TypeRef::Map
+    }
+}
 impl SharedRef for MapRef {}
 impl Map for MapRef {}
 
+impl DeepObservable for MapRef {}
 impl Observable for MapRef {
     type Event = MapEvent;
 }
@@ -114,7 +121,7 @@ impl TryFrom<Value> for MapRef {
 
 pub trait Map: AsRef<Branch> + Sized {
     /// Returns a number of entries stored within current map.
-    fn len<T: ReadTxn>(&self, txn: &T) -> u32 {
+    fn len<T: ReadTxn>(&self, _txn: &T) -> u32 {
         let mut len = 0;
         let inner = self.as_ref();
         for item in inner.map.values() {
@@ -186,7 +193,7 @@ pub trait Map: AsRef<Branch> + Sized {
 
     /// Returns [WeakPrelim] to a given `key`, if it exists in a current map.
     #[cfg(feature = "weak")]
-    fn link<T: ReadTxn>(&self, txn: &T, key: &str) -> Option<crate::WeakPrelim<Self>> {
+    fn link<T: ReadTxn>(&self, _txn: &T, key: &str) -> Option<crate::WeakPrelim<Self>> {
         let ptr = BranchPtr::from(self.as_ref());
         let block = ptr.map.get(key)?;
         let start = StickyIndex::from_id(block.id().clone(), Assoc::Before);
@@ -203,7 +210,7 @@ pub trait Map: AsRef<Branch> + Sized {
     }
 
     /// Checks if an entry with given `key` can be found within current map.
-    fn contains_key<T: ReadTxn>(&self, txn: &T, key: &str) -> bool {
+    fn contains_key<T: ReadTxn>(&self, _txn: &T, key: &str) -> bool {
         if let Some(item) = self.as_ref().map.get(key) {
             !item.is_deleted()
         } else {
@@ -934,7 +941,7 @@ mod test {
     #[test]
     fn observe_deep() {
         let doc = Doc::with_client_id(1);
-        let mut map = doc.get_or_insert_map("map");
+        let map = doc.get_or_insert_map("map");
 
         let paths = Rc::new(RefCell::new(vec![]));
         let calls = Rc::new(RefCell::new(0));

@@ -1,9 +1,9 @@
 use crate::block::ItemPtr;
+use crate::branch::{Branch, BranchPtr};
 use crate::doc::TransactionAcqError;
 use crate::iter::TxnIterator;
 use crate::slice::BlockSlice;
 use crate::transaction::Origin;
-use crate::types::{Branch, BranchPtr};
 use crate::{DeleteSet, Doc, ObserverMut, Subscription, Transact, TransactionMut, ID};
 use std::cell::Cell;
 use std::collections::HashSet;

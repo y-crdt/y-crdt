@@ -1,9 +1,10 @@
 use crate::block::{ClientID, ItemContent, ItemPtr, Prelim};
+use crate::branch::{Branch, BranchPtr};
 use crate::encoding::read::Error;
 use crate::event::{SubdocsEvent, TransactionCleanupEvent, UpdateEvent};
 use crate::store::{Store, StoreRef};
 use crate::transaction::{Origin, Transaction, TransactionMut};
-use crate::types::{Branch, BranchPtr, ToJson, TypeRef, Value};
+use crate::types::{ToJson, TypeRef, Value};
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::OptionExt;

@@ -1,6 +1,6 @@
 use crate::block::{EmbedPrelim, Item, ItemContent, ItemPosition, ItemPtr, Prelim};
 use crate::transaction::TransactionMut;
-use crate::types::{Attrs, Branch, BranchPtr, Delta, Path, SharedRef, TypeRef, Value};
+use crate::types::{Attrs, Branch, BranchPtr, Delta, Path, RootRef, SharedRef, TypeRef, Value};
 use crate::utils::OptionExt;
 use crate::*;
 use std::borrow::Borrow;
@@ -88,6 +88,11 @@ use std::ops::{Deref, DerefMut};
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct TextRef(BranchPtr);
 
+impl RootRef for TextRef {
+    fn type_ref() -> TypeRef {
+        TypeRef::Text
+    }
+}
 impl SharedRef for TextRef {}
 impl Text for TextRef {}
 impl IndexedSequence for TextRef {}
@@ -100,6 +105,7 @@ impl Into<XmlTextRef> for TextRef {
     }
 }
 
+impl DeepObservable for TextRef {}
 impl Observable for TextRef {
     type Event = TextEvent;
 }
@@ -108,7 +114,7 @@ impl GetString for TextRef {
     /// Converts context of this text data structure into a single string value. This method doesn't
     /// render formatting attributes or embedded content. In order to retrieve it, use
     /// [TextRef::diff] method.
-    fn get_string<T: ReadTxn>(&self, txn: &T) -> String {
+    fn get_string<T: ReadTxn>(&self, _txn: &T) -> String {
         let mut start = self.as_ref().start;
         let mut s = String::new();
         while let Some(item) = start.as_deref() {
@@ -148,7 +154,7 @@ impl TryFrom<Value> for TextRef {
 
 pub trait Text: AsRef<Branch> + Sized {
     /// Returns a number of characters visible in a current text data structure.
-    fn len<T: ReadTxn>(&self, txn: &T) -> u32 {
+    fn len<T: ReadTxn>(&self, _txn: &T) -> u32 {
         self.as_ref().content_len
     }
 
@@ -386,7 +392,7 @@ pub trait Text: AsRef<Branch> + Sized {
     ///     Diff::new("world".into(), Some(Box::new(italic_and_bold))),
     /// ]);
     /// ```
-    fn diff<T, D, F>(&self, txn: &T, compute_ychange: F) -> Vec<Diff<D>>
+    fn diff<T, D, F>(&self, _txn: &T, compute_ychange: F) -> Vec<Diff<D>>
     where
         T: ReadTxn,
         F: Fn(YChange) -> D,

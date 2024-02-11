@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 /*
    ORIGINAL CODE AUTHORED BY Seph Gentle
    available at: https://github.com/josephg/editing-traces

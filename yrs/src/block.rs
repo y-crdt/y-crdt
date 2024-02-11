@@ -1,3 +1,4 @@
+use crate::branch::{Branch, BranchPtr};
 use crate::doc::{DocAddr, OffsetKind};
 use crate::encoding::read::Error;
 use crate::gc::GCCollector;
@@ -6,7 +7,7 @@ use crate::slice::{BlockSlice, GCSlice, ItemSlice};
 use crate::store::{Store, WeakStoreRef};
 use crate::transaction::TransactionMut;
 use crate::types::text::update_current_attributes;
-use crate::types::{Attrs, Branch, BranchPtr, TypePtr, TypeRef, Value};
+use crate::types::{Attrs, TypePtr, TypeRef, Value};
 use crate::undo::UndoStack;
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};

@@ -4,11 +4,11 @@ use crate::transaction::TransactionMut;
 use crate::types::text::{diff_between, TextEvent, YChange};
 use crate::types::{
     event_change_set, event_keys, Branch, BranchPtr, Change, ChangeSet, Delta, Entries,
-    EntryChange, MapRef, Path, SharedRef, ToJson, TypePtr, TypeRef, Value,
+    EntryChange, MapRef, Path, RootRef, SharedRef, ToJson, TypePtr, TypeRef, Value,
 };
 use crate::{
-    Any, ArrayRef, GetString, IndexedSequence, Map, Observable, ReadTxn, StickyIndex, Text,
-    TextRef, ID,
+    Any, ArrayRef, DeepObservable, GetString, IndexedSequence, Map, Observable, ReadTxn,
+    StickyIndex, Text, TextRef, ID,
 };
 use std::borrow::Borrow;
 use std::cell::UnsafeCell;
@@ -194,6 +194,7 @@ impl GetString for XmlElementRef {
     }
 }
 
+impl DeepObservable for XmlElementRef {}
 impl Observable for XmlElementRef {
     type Event = XmlEvent;
 }
@@ -427,12 +428,13 @@ impl Into<TextRef> for XmlTextRef {
     }
 }
 
+impl DeepObservable for XmlTextRef {}
 impl Observable for XmlTextRef {
     type Event = XmlTextEvent;
 }
 
 impl GetString for XmlTextRef {
-    fn get_string<T: ReadTxn>(&self, txn: &T) -> String {
+    fn get_string<T: ReadTxn>(&self, _txn: &T) -> String {
         XmlTextRef::get_string_fragment(self.0.start, None, None)
     }
 }
@@ -521,6 +523,11 @@ impl<T: Borrow<str>> Into<EmbedPrelim<XmlTextPrelim<T>>> for XmlTextPrelim<T> {
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct XmlFragmentRef(BranchPtr);
 
+impl RootRef for XmlFragmentRef {
+    fn type_ref() -> TypeRef {
+        TypeRef::XmlFragment
+    }
+}
 impl SharedRef for XmlFragmentRef {}
 impl XmlFragment for XmlFragmentRef {}
 impl IndexedSequence for XmlFragmentRef {}
@@ -550,6 +557,7 @@ impl GetString for XmlFragmentRef {
     }
 }
 
+impl DeepObservable for XmlFragmentRef {}
 impl Observable for XmlFragmentRef {
     type Event = XmlEvent;
 }
@@ -760,7 +768,7 @@ pub trait XmlFragment: AsRef<Branch> {
         }
     }
     /// Returns a number of elements stored in current array.
-    fn len<T: ReadTxn>(&self, txn: &T) -> u32 {
+    fn len<T: ReadTxn>(&self, _txn: &T) -> u32 {
         self.as_ref().len()
     }
 
@@ -818,7 +826,7 @@ pub trait XmlFragment: AsRef<Branch> {
 
     /// Retrieves a value stored at a given `index`. Returns `None` when provided index was out
     /// of the range of a current array.
-    fn get<T: ReadTxn>(&self, txn: &T, index: u32) -> Option<XmlNode> {
+    fn get<T: ReadTxn>(&self, _txn: &T, index: u32) -> Option<XmlNode> {
         let branch = self.as_ref();
         let (content, _) = branch.get_at(index)?;
         if let ItemContent::Type(inner) = content {

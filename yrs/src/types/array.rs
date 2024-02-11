@@ -3,9 +3,10 @@ use crate::block_iter::BlockIter;
 use crate::moving::StickyIndex;
 use crate::transaction::TransactionMut;
 use crate::types::{
-    event_change_set, Branch, BranchPtr, Change, ChangeSet, Path, SharedRef, ToJson, TypeRef, Value,
+    event_change_set, Branch, BranchPtr, Change, ChangeSet, Path, RootRef, SharedRef, ToJson,
+    TypeRef, Value,
 };
-use crate::{Any, Assoc, IndexedSequence, Observable, ReadTxn, ID};
+use crate::{Any, Assoc, DeepObservable, IndexedSequence, Observable, ReadTxn, ID};
 use std::borrow::Borrow;
 use std::cell::UnsafeCell;
 use std::collections::HashSet;
@@ -71,6 +72,11 @@ use std::ops::{Deref, DerefMut};
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct ArrayRef(BranchPtr);
 
+impl RootRef for ArrayRef {
+    fn type_ref() -> TypeRef {
+        TypeRef::Array
+    }
+}
 impl SharedRef for ArrayRef {}
 impl Array for ArrayRef {}
 impl IndexedSequence for ArrayRef {}
@@ -108,6 +114,7 @@ impl AsMut<Branch> for ArrayRef {
     }
 }
 
+impl DeepObservable for ArrayRef {}
 impl Observable for ArrayRef {
     type Event = ArrayEvent;
 }
@@ -137,7 +144,7 @@ impl TryFrom<Value> for ArrayRef {
 
 pub trait Array: AsRef<Branch> + Sized {
     /// Returns a number of elements stored in current array.
-    fn len<T: ReadTxn>(&self, txn: &T) -> u32 {
+    fn len<T: ReadTxn>(&self, _txn: &T) -> u32 {
         self.as_ref().len()
     }
 
@@ -1174,7 +1181,7 @@ mod test {
     #[test]
     fn observe_deep_event_order() {
         let doc = Doc::with_client_id(1);
-        let mut array = doc.get_or_insert_array("array");
+        let array = doc.get_or_insert_array("array");
 
         let paths = Rc::new(RefCell::new(Vec::new()));
         let paths_copy = paths.clone();

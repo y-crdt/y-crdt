@@ -17,10 +17,6 @@ pub(crate) struct ClientBlockList {
 }
 
 impl ClientBlockList {
-    fn new() -> ClientBlockList {
-        ClientBlockList { list: Vec::new() }
-    }
-
     /// Creates a new instance of `ClientBlockList` with the specified capacity.
     ///
     /// This function initializes an internal vector with a capacity

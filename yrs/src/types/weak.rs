@@ -6,8 +6,8 @@ use crate::iter::{
 };
 use crate::types::{Branch, BranchPtr, Path, SharedRef, TypeRef, Value};
 use crate::{
-    Array, Assoc, GetString, Map, Observable, ReadTxn, StickyIndex, TextRef, TransactionMut,
-    XmlTextRef, ID,
+    Array, Assoc, DeepObservable, GetString, Map, Observable, ReadTxn, StickyIndex, TextRef,
+    TransactionMut, XmlTextRef, ID,
 };
 use std::collections::hash_map::Entry;
 use std::collections::{Bound, HashSet};
@@ -157,6 +157,7 @@ impl<P: AsMut<Branch>> AsMut<Branch> for WeakRef<P> {
     }
 }
 
+impl<P> DeepObservable for WeakRef<P> where P: AsRef<Branch> {}
 impl<P> Observable for WeakRef<P>
 where
     P: AsRef<Branch> + AsMut<Branch>,
@@ -278,7 +279,7 @@ where
     /// map.insert(&mut txn, "A", "other");
     /// assert_eq!(link.try_deref_value(&txn), Some("other".into()));
     /// ```
-    pub fn try_deref_value<T: ReadTxn>(&self, txn: &T) -> Option<Value> {
+    pub fn try_deref_value<T: ReadTxn>(&self, _txn: &T) -> Option<Value> {
         let source = self.try_source()?;
         let last = source.first_item.get_owned().to_iter().last()?;
         if last.is_deleted() {
@@ -563,7 +564,7 @@ impl LinkSource {
         }
     }
 
-    pub fn to_string<T: ReadTxn>(&self, txn: &T) -> String {
+    pub fn to_string<T: ReadTxn>(&self, _txn: &T) -> String {
         let mut result = String::new();
         let mut curr = self.first_item.get_owned();
         let end = self.quote_end.id().unwrap();
@@ -586,7 +587,7 @@ impl LinkSource {
         result
     }
 
-    pub fn to_xml_string<T: ReadTxn>(&self, txn: &T) -> String {
+    pub fn to_xml_string<T: ReadTxn>(&self, _txn: &T) -> String {
         let curr = self.first_item.get_owned();
         if let Some(item) = curr.as_deref() {
             if let Some(branch) = item.parent.as_branch() {
@@ -1330,7 +1331,7 @@ mod test {
         let link1 = m2.link(&txn, "key").unwrap();
         m1.insert(&mut txn, "link-key", link1);
         let link2 = m1.link(&txn, "link-key").unwrap();
-        let mut link2 = m2.insert(&mut txn, "link-link", link2);
+        let link2 = m2.insert(&mut txn, "link-link", link2);
         drop(txn);
 
         let events = Rc::new(RefCell::new(vec![]));
@@ -1382,7 +1383,7 @@ mod test {
         let link2 = m1.link(&txn, "link-key").unwrap();
         m2.insert(&mut txn, "link-link", link2);
         let link3 = m2.link(&txn, "link-link").unwrap();
-        let mut link3 = m3.insert(&mut txn, "link-link-link", link3);
+        let link3 = m3.insert(&mut txn, "link-link-link", link3);
         drop(txn);
 
         let events = Rc::new(RefCell::new(vec![]));
@@ -1419,7 +1420,7 @@ mod test {
                  - key: value
         */
         let doc = Doc::with_client_id(1);
-        let mut map = doc.get_or_insert_map("map");
+        let map = doc.get_or_insert_map("map");
         let array = doc.get_or_insert_array("array");
 
         let events = Rc::new(RefCell::new(vec![]));
@@ -1497,7 +1498,7 @@ mod test {
         */
         let doc = Doc::with_client_id(1);
         let map = doc.get_or_insert_map("map");
-        let mut array = doc.get_or_insert_array("array");
+        let array = doc.get_or_insert_array("array");
 
         let nested = map.insert(
             &mut doc.transact_mut(),
@@ -1581,7 +1582,7 @@ mod test {
             a1.push_back(&mut t1, MapPrelim::<String>::new());
             a1.push_back(&mut t1, 2);
         }
-        let mut l1 = {
+        let l1 = {
             let mut t1 = d1.transact_mut();
             let link = a1.quote(&t1, 1..=2).unwrap();
             a1.insert(&mut t1, 0, link)
@@ -1606,7 +1607,7 @@ mod test {
             })
         };
 
-        let mut l2 = a2
+        let l2 = a2
             .get(&d2.transact(), 0)
             .unwrap()
             .cast::<WeakRef<ArrayRef>>()
@@ -1676,7 +1677,7 @@ mod test {
         let root = doc.get_or_insert_array("array");
         let mut txn = doc.transact_mut();
 
-        let mut m0 = root.insert(&mut txn, 0, MapPrelim::<u32>::new());
+        let m0 = root.insert(&mut txn, 0, MapPrelim::<u32>::new());
         let m1 = root.insert(&mut txn, 1, MapPrelim::<u32>::new());
         let m2 = root.insert(&mut txn, 2, MapPrelim::<u32>::new());
 

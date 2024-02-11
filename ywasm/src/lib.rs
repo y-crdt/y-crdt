@@ -11,14 +11,15 @@ use wasm_bindgen::convert::{FromWasmAbi, IntoWasmAbi};
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
 use yrs::block::{ClientID, EmbedPrelim, ItemContent, Prelim, Unused};
+use yrs::branch::{Branch, BranchPtr};
 use yrs::types::array::ArrayEvent;
 use yrs::types::map::MapEvent;
 use yrs::types::text::{ChangeKind, Diff, TextEvent, YChange};
 use yrs::types::weak::{LinkSource, WeakEvent, WeakPrelim, WeakRef};
 use yrs::types::xml::{XmlEvent, XmlTextEvent};
 use yrs::types::{
-    Attrs, Branch, BranchPtr, Change, DeepObservable, Delta, EntryChange, Event, Events, Path,
-    PathSegment, ToJson, TypeRef, Value,
+    Attrs, Change, DeepObservable, Delta, EntryChange, Event, Events, Path, PathSegment, ToJson,
+    TypeRef, Value,
 };
 use yrs::undo::EventKind;
 use yrs::undo::UndoManager;

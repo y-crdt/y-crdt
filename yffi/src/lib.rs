@@ -6,6 +6,7 @@ use std::ptr::{null, null_mut};
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::Arc;
 use yrs::block::{ClientID, ItemContent, Prelim, Unused};
+use yrs::branch::BranchPtr;
 use yrs::encoding::read::Error;
 use yrs::types::array::ArrayEvent;
 use yrs::types::array::ArrayIter as NativeArrayIter;
@@ -16,9 +17,7 @@ use yrs::types::weak::{LinkSource, Unquote as NativeUnquote, WeakEvent, WeakRef}
 use yrs::types::xml::{Attributes as NativeAttributes, XmlNode};
 use yrs::types::xml::{TreeWalker as NativeTreeWalker, XmlFragment};
 use yrs::types::xml::{XmlEvent, XmlTextEvent};
-use yrs::types::{
-    Attrs, BranchPtr, Change, Delta, EntryChange, Event, PathSegment, TypeRef, Value,
-};
+use yrs::types::{Attrs, Change, Delta, EntryChange, Event, PathSegment, TypeRef, Value};
 use yrs::undo::EventKind;
 use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
@@ -118,7 +117,7 @@ pub type Doc = yrs::Doc;
 ///
 /// Using write methods of different shared types (eg. `ytext_insert` and `yarray_insert`) over
 /// the same branch may result in undefined behavior.
-pub type Branch = yrs::types::Branch;
+pub type Branch = yrs::branch::Branch;
 
 /// Subscription to any kind of observable events, like `ymap_observe`, `ydoc_observe_updates_v1` etc.
 /// This subscription can be destroyed by calling `yunobserve` function, which will cause to unsubscribe

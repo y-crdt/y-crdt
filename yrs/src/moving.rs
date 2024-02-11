@@ -1,8 +1,8 @@
 use crate::block::{ItemContent, ItemPtr, Prelim, Unused};
 use crate::block_iter::BlockIter;
+use crate::branch::{Branch, BranchPtr};
 use crate::encoding::read::Error;
 use crate::transaction::TransactionMut;
-use crate::types::{Branch, BranchPtr};
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::{ReadTxn, WriteTxn, ID};

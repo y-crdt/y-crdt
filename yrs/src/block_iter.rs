@@ -1,7 +1,8 @@
 use crate::block::{Item, ItemContent, ItemPtr, Prelim};
+use crate::branch::BranchPtr;
 use crate::moving::{Move, StickyIndex};
 use crate::transaction::{ReadTxn, TransactionMut};
-use crate::types::{BranchPtr, TypePtr, Value};
+use crate::types::{TypePtr, Value};
 use crate::{Assoc, ID};
 
 /// Struct used for iterating over the sequence of item's values with respect to a potential

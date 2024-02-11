@@ -503,6 +503,7 @@ mod utils;
 pub mod any;
 pub mod atomic;
 mod block_iter;
+pub mod branch;
 pub mod encoding;
 mod error;
 mod gc;
@@ -523,6 +524,9 @@ pub use crate::alt::{
 };
 pub use crate::any::Any;
 pub use crate::block::ID;
+pub use crate::branch::Nested;
+pub use crate::branch::Node;
+pub use crate::branch::Root;
 pub use crate::doc::Doc;
 pub use crate::doc::OffsetKind;
 pub use crate::doc::Options;

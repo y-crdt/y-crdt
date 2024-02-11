@@ -1,9 +1,10 @@
 use crate::block::{ClientID, Item, ItemContent};
+use crate::branch::Branch;
 use crate::encoding::read::Read;
 use crate::id_set::{DeleteSet, IdSet};
 use crate::store::Store;
 use crate::types::xml::XmlFragment;
-use crate::types::{Branch, ToJson, TypePtr, TypeRef};
+use crate::types::{ToJson, TypePtr, TypeRef};
 use crate::update::{BlockCarrier, Update};
 use crate::updates::decoder::{Decode, Decoder, DecoderV1};
 use crate::updates::encoder::Encode;
