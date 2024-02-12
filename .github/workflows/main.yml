@@ -84,7 +84,7 @@ jobs:
           version: 'latest'
 
       - name: build wasm
-        run: wasm-pack build --target nodejs ./ywasm
+        run: wasm-pack build --release --target nodejs ./ywasm
 
       - name: test web assembly
         run: cd ./tests-wasm && npm i && npm test
