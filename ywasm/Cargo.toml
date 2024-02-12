@@ -37,8 +37,9 @@ js-sys = "0.3"
 [dev-dependencies]
 wasm-bindgen-test = "0.3"
 
-# `wasm-opt` is on by default in for the release profile, but it can be
-# disabled by setting it to `false`
-[package.metadata.wasm-pack.profile.release]
-wasm-opt = false
-
+[profile.release]
+# optimization over all codebase ( better optimization, slower build )
+codegen-units = 1
+opt-level = 3 # use "z" for size optimization, however it doesn't seem to have any effect
+lto = true
+panic = 'abort'
