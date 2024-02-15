@@ -123,7 +123,7 @@ fn text_insert_delete() {
         let u = Update::decode_v1(update).unwrap();
         txn.apply_update(u);
     }
-    assert_eq!(txt.get_string(&txt.transact()), "abhi".to_string());
+    assert_eq!(txt.get_string(&doc.transact()), "abhi".to_string());
     assert!(visited.get());
 }
 
@@ -448,7 +448,7 @@ fn test_data_set<P: AsRef<std::path::Path>>(path: P) {
         }
         let expected = decoder.read_string().unwrap();
         assert_eq!(
-            txt.get_string(&txt.transact()),
+            txt.get_string(&doc.transact()),
             expected,
             "failed at {} run",
             test_num

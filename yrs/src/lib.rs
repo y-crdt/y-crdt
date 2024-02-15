@@ -104,12 +104,13 @@
 //! (eg. image binaries or [ArrayRef]s that we could interpret in example as nested tables).
 //!
 //! ```rust
-//! use yrs::{Any, Array, ArrayPrelim, Doc, GetString, Text, Transact};
+//! use yrs::{Any, Array, ArrayPrelim, Doc, GetString, Text, Transact, WriteTxn, XmlFragment, XmlTextPrelim};
 //! use yrs::types::Attrs;
 //!
 //! let doc = Doc::new();
-//! let xml = doc.get_or_insert_xml_text("article");
 //! let mut txn = doc.transact_mut();
+//! let f = txn.get_or_insert_xml_fragment("article");
+//! let xml = f.insert(&mut txn, 0, XmlTextPrelim::new(""));
 //!
 //! let bold = Attrs::from([("b".into(), true.into())]);
 //! let italic = Attrs::from([("i".into(), true.into())]);
@@ -359,7 +360,7 @@
 //! as well as show the differences between them:
 //!
 //! ```rust
-//! use yrs::{Doc, GetString, Options, ReadTxn, Text, Transact, Update};
+//! use yrs::{Doc, GetString, Options, ReadTxn, Text, Transact, Update, WriteTxn, XmlFragment, XmlTextPrelim};
 //! use yrs::types::Attrs;
 //! use yrs::types::text::{Diff, YChange};
 //! use yrs::updates::decoder::Decode;
@@ -369,8 +370,9 @@
 //!     skip_gc: true,  // in order to support revisions we cannot garbage collect deleted blocks
 //!     ..Options::default()
 //! });
-//! let text = doc.get_or_insert_xml_text("article");
 //! let mut txn = doc.transact_mut();
+//! let f = txn.get_or_insert_xml_fragment("article");
+//! let text = f.insert(&mut txn, 0, XmlTextPrelim::new(""));
 //!
 //! const INIT: &str = "hello world";
 //! text.push(&mut txn, INIT);
@@ -391,8 +393,9 @@
 //!
 //! // restore the past state
 //! let doc = Doc::new();
-//! let text = doc.get_or_insert_xml_text("article");
 //! let mut txn = doc.transact_mut();
+//! let f = txn.get_or_insert_xml_fragment("article");
+//! let text = f.insert(&mut txn, 0, XmlTextPrelim::new(""));
 //! txn.apply_update(Update::decode_v1(&update).unwrap());
 //!
 //! assert_eq!(text.get_string(&txn), INIT);

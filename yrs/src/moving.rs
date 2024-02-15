@@ -797,9 +797,9 @@ mod test {
     use crate::updates::encoder::Encode;
     use crate::{Doc, IndexedSequence, StickyIndex, Text, TextRef, Transact};
 
-    fn check_sticky_indexes(text: &TextRef) {
+    fn check_sticky_indexes(doc: &Doc, text: &TextRef) {
         // test if all positions are encoded and restored correctly
-        let mut txn = text.transact_mut();
+        let mut txn = doc.transact_mut();
         let len = text.len(&txn);
         for i in 0..len {
             // for all types of associations..
@@ -830,7 +830,7 @@ mod test {
             txt.insert(&mut txn, 0, "x");
         }
 
-        check_sticky_indexes(&txt);
+        check_sticky_indexes(&doc, &txt);
     }
 
     #[test]
@@ -839,7 +839,7 @@ mod test {
         let txt = doc.get_or_insert_text("test");
 
         txt.insert(&mut doc.transact_mut(), 0, "abc");
-        check_sticky_indexes(&txt);
+        check_sticky_indexes(&doc, &txt);
     }
 
     #[test]
@@ -854,7 +854,7 @@ mod test {
             txt.insert(&mut txn, 0, "xyz");
         }
 
-        check_sticky_indexes(&txt);
+        check_sticky_indexes(&doc, &txt);
     }
 
     #[test]
@@ -863,7 +863,7 @@ mod test {
         let txt = doc.get_or_insert_text("test");
 
         txt.insert(&mut doc.transact_mut(), 0, "1");
-        check_sticky_indexes(&txt);
+        check_sticky_indexes(&doc, &txt);
     }
 
     #[test]
@@ -877,14 +877,14 @@ mod test {
             txt.insert(&mut txn, 0, "1");
         }
 
-        check_sticky_indexes(&txt);
+        check_sticky_indexes(&doc, &txt);
     }
 
     #[test]
     fn sticky_index_case_6() {
         let doc = Doc::with_client_id(1);
         let txt = doc.get_or_insert_text("test");
-        check_sticky_indexes(&txt);
+        check_sticky_indexes(&doc, &txt);
     }
 
     #[test]

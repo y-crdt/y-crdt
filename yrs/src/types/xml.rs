@@ -41,6 +41,33 @@ impl XmlNode {
             XmlNode::Text(n) => n.0,
         }
     }
+
+    /// If current underlying [XmlNode] is wrapping a [XmlElementRef], it will be returned.
+    /// Otherwise, a `None` will be returned.
+    pub fn into_xml_element(self) -> Option<XmlElementRef> {
+        match self {
+            XmlNode::Element(n) => Some(n),
+            _ => None,
+        }
+    }
+
+    /// If current underlying [XmlNode] is wrapping a [XmlFragmentRef], it will be returned.
+    /// Otherwise, a `None` will be returned.
+    pub fn into_xml_fragment(self) -> Option<XmlFragmentRef> {
+        match self {
+            XmlNode::Fragment(n) => Some(n),
+            _ => None,
+        }
+    }
+
+    /// If current underlying [XmlNode] is wrapping a [XmlTextRef], it will be returned.
+    /// Otherwise, a `None` will be returned.
+    pub fn into_xml_text(self) -> Option<XmlTextRef> {
+        match self {
+            XmlNode::Text(n) => Some(n),
+            _ => None,
+        }
+    }
 }
 
 impl AsRef<Branch> for XmlNode {
@@ -338,12 +365,13 @@ where
 /// # Example
 ///
 /// ```rust
-/// use yrs::{Any, Array, ArrayPrelim, Doc, GetString, Text, Transact};
+/// use yrs::{Any, Array, ArrayPrelim, Doc, GetString, Text, Transact, WriteTxn, XmlFragment, XmlTextPrelim};
 /// use yrs::types::Attrs;
 ///
 /// let doc = Doc::new();
-/// let text = doc.get_or_insert_xml_text("article");
 /// let mut txn = doc.transact_mut();
+/// let f = txn.get_or_insert_xml_fragment("article");
+/// let text = f.insert(&mut txn, 0, XmlTextPrelim::new(""));
 ///
 /// let bold = Attrs::from([("b".into(), true.into())]);
 /// let italic = Attrs::from([("i".into(), true.into())]);
@@ -484,6 +512,12 @@ impl TryFrom<Value> for XmlTextRef {
 /// into Yrs document.
 #[derive(Debug)]
 pub struct XmlTextPrelim<T: Borrow<str>>(T);
+
+impl Default for XmlTextPrelim<String> {
+    fn default() -> Self {
+        XmlTextPrelim::new(String::default())
+    }
+}
 
 impl<T: Borrow<str>> XmlTextPrelim<T> {
     #[inline]
@@ -1199,6 +1233,8 @@ impl XmlEvent {
 
 #[cfg(test)]
 mod test {
+    use crate::branch::BranchPtr;
+    use crate::test_utils::exchange_updates;
     use crate::transaction::ReadTxn;
     use crate::types::xml::{Xml, XmlFragment, XmlNode};
     use crate::types::{Attrs, Change, EntryChange, Value};
@@ -1206,7 +1242,7 @@ mod test {
     use crate::updates::encoder::{Encoder, EncoderV1};
     use crate::{
         Any, Doc, GetString, Observable, StateVector, Text, Transact, Update, XmlElementPrelim,
-        XmlTextPrelim,
+        XmlTextPrelim, XmlTextRef,
     };
     use std::cell::RefCell;
     use std::collections::HashMap;
@@ -1359,7 +1395,17 @@ mod test {
     #[test]
     fn event_observers() {
         let d1 = Doc::with_client_id(1);
-        let xml = d1.get_or_insert_xml_element("test");
+        let f = d1.get_or_insert_xml_fragment("xml");
+        let xml = f.insert(&mut d1.transact_mut(), 0, XmlElementPrelim::empty("test"));
+
+        let d2 = Doc::with_client_id(2);
+        let f = d2.get_or_insert_xml_fragment("xml");
+        exchange_updates(&[&d1, &d2]);
+        let xml2 = f
+            .get(&d2.transact(), 0)
+            .unwrap()
+            .into_xml_element()
+            .unwrap();
 
         let attributes = Rc::new(RefCell::new(None));
         let nodes = Rc::new(RefCell::new(None));
@@ -1448,9 +1494,6 @@ mod test {
         assert_eq!(attributes.borrow_mut().take(), Some(HashMap::new()));
 
         // copy updates over
-        let d2 = Doc::with_client_id(2);
-        let xml2 = d2.get_or_insert_xml_element("test");
-
         let attributes = Rc::new(RefCell::new(None));
         let nodes = Rc::new(RefCell::new(None));
         let attributes_c = attributes.clone();
@@ -1513,7 +1556,8 @@ mod test {
     #[test]
     fn xml_to_string_2() {
         let doc = Doc::new();
-        let xml = doc.get_or_insert_xml_text("article");
+        let f = doc.get_or_insert_xml_fragment("article");
+        let xml = f.insert(&mut doc.transact_mut(), 0, XmlTextPrelim::new(""));
         let mut txn = doc.transact_mut();
 
         let bold = Attrs::from([("b".into(), true.into())]);
@@ -1541,7 +1585,8 @@ mod test {
         ];
         let update = Update::decode_v1(data).unwrap();
         let doc = Doc::new();
-        let txt = doc.get_or_insert_xml_text("test");
+        let txt = doc.get_or_insert_text("test");
+        let txt = XmlTextRef::from(BranchPtr::from(txt.as_ref()));
         let mut txn = doc.transact_mut();
 
         txn.apply_update(update);
@@ -1560,7 +1605,8 @@ mod test {
         ];
         let update = Update::decode_v2(data).unwrap();
         let doc = Doc::new();
-        let txt = doc.get_or_insert_xml_text("test");
+        let txt = doc.get_or_insert_text("test");
+        let txt = XmlTextRef::from(BranchPtr::from(txt.as_ref()));
         let mut txn = doc.transact_mut();
 
         txn.apply_update(update);

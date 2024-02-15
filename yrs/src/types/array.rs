@@ -1343,7 +1343,7 @@ mod test {
         exchange_updates(&[&d1, &d2]);
         exchange_updates(&[&d1, &d2]); // move cycles may not be detected within a single update exchange
 
-        assert_eq!(a1.len(&a1.transact()), 4);
+        assert_eq!(a1.len(&d1.transact()), 4);
         assert_eq!(a1.to_json(&d1.transact()), a2.to_json(&d2.transact()));
     }
 
@@ -1619,11 +1619,11 @@ mod test {
 
         let doc = Doc::with_client_id(1);
         let array = doc.get_or_insert_array("array");
-        let mut txn = array.transact_mut();
+        let mut txn = doc.transact_mut();
         array.insert_range(&mut txn, 0, [1, 2, 3]);
         drop(txn);
 
-        let mut txn = array.transact_mut();
+        let mut txn = doc.transact_mut();
         array.move_to(&mut txn, 2, 0);
 
         let mut iter = array.iter(&txn);

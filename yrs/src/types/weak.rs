@@ -832,6 +832,7 @@ pub(crate) fn join_linked_range(mut block: ItemPtr, txn: &mut TransactionMut) {
 
 #[cfg(test)]
 mod test {
+    use crate::branch::BranchPtr;
     use crate::test_utils::exchange_updates;
     use crate::types::text::YChange;
     use crate::types::weak::{WeakPrelim, WeakRef};
@@ -1827,10 +1828,12 @@ mod test {
     #[test]
     fn basic_xml_text() {
         let d1 = Doc::with_client_id(1);
-        let txt1 = d1.get_or_insert_xml_text("text");
+        let txt1 = d1.get_or_insert_text("text");
+        let txt1 = XmlTextRef::from(BranchPtr::from(txt1.as_ref()));
         let a1 = d1.get_or_insert_array("array");
         let d2 = Doc::with_client_id(2);
-        let txt2 = d2.get_or_insert_xml_text("text");
+        let txt2 = d2.get_or_insert_text("text");
+        let txt2 = XmlTextRef::from(BranchPtr::from(txt2.as_ref()));
 
         txt1.insert(&mut d1.transact_mut(), 0, "abcd"); // 'abcd'
         let l1 = {
@@ -1858,8 +1861,10 @@ mod test {
     #[test]
     fn quote_formatted_text() {
         let doc = Doc::with_client_id(1);
-        let txt1 = doc.get_or_insert_xml_text("text1");
-        let txt2 = doc.get_or_insert_xml_text("text2");
+        let txt1 = doc.get_or_insert_text("text1");
+        let txt1 = XmlTextRef::from(BranchPtr::from(txt1.as_ref()));
+        let txt2 = doc.get_or_insert_text("text2");
+        let txt2 = XmlTextRef::from(BranchPtr::from(txt2.as_ref()));
         let array = doc.get_or_insert_array("array");
         txt1.insert(&mut doc.transact_mut(), 0, "abcde");
         let b = Attrs::from([("b".into(), true.into())]);

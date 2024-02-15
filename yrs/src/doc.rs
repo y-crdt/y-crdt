@@ -1,19 +1,16 @@
 use crate::block::{ClientID, ItemContent, ItemPtr, Prelim};
-use crate::branch::{Branch, BranchPtr};
+use crate::branch::BranchPtr;
 use crate::encoding::read::Error;
 use crate::event::{SubdocsEvent, TransactionCleanupEvent, UpdateEvent};
 use crate::store::{Store, StoreRef};
 use crate::transaction::{Origin, Transaction, TransactionMut};
-use crate::types::{ToJson, TypeRef, Value};
+use crate::types::{RootRef, ToJson, Value};
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::OptionExt;
-use crate::{
-    uuid_v4, ArrayRef, MapRef, ReadTxn, TextRef, Uuid, WriteTxn, XmlElementRef, XmlFragmentRef,
-    XmlTextRef,
-};
+use crate::{uuid_v4, ArrayRef, MapRef, ReadTxn, TextRef, Uuid, WriteTxn, XmlFragmentRef};
 use crate::{Any, Subscription};
-use atomic_refcell::{AtomicRef, AtomicRefMut, BorrowError, BorrowMutError};
+use atomic_refcell::{BorrowError, BorrowMutError};
 use rand::Rng;
 use std::collections::HashMap;
 use std::convert::TryFrom;
@@ -21,12 +18,12 @@ use std::fmt::Formatter;
 use std::sync::Arc;
 use thiserror::Error;
 
-/// A Yrs document type. Documents are most important units of collaborative resources management.
+/// A Yrs document type. Documents are the most important units of collaborative resources management.
 /// All shared collections live within a scope of their corresponding documents. All updates are
-/// generated on per document basis (rather than individual shared type). All operations on shared
+/// generated on per-document basis (rather than individual shared type). All operations on shared
 /// collections happen via [Transaction], which lifetime is also bound to a document.
 ///
-/// Document manages so called root types, which are top-level shared types definitions (as opposed
+/// Document manages so-called root types, which are top-level shared types definitions (as opposed
 /// to recursively nested types).
 ///
 /// # Example
@@ -129,20 +126,15 @@ impl Doc {
     ///
     /// # Panics
     ///
-    /// This method requires an exclusive access to an underlying document store. If there
+    /// This method requires exclusive access to an underlying document store. If there
     /// is another transaction in process, it will panic. It's advised to define all root shared
     /// types during the document creation.
-    pub fn get_or_insert_text(&self, name: &str) -> TextRef {
-        let mut r = self.store.try_borrow_mut().expect(
-            "tried to get a root level type while another transaction on the document is open",
-        );
-        let mut c = r.get_or_create_type(name, TypeRef::Text);
-        c.store = Some(self.store.weak_ref());
-        TextRef::from(c)
+    pub fn get_or_insert_text<N: Into<Arc<str>>>(&self, name: N) -> TextRef {
+        TextRef::root(name).get_or_create(&mut self.transact_mut())
     }
 
     /// Returns a [MapRef] data structure stored under a given `name`. Maps are used to store key-value
-    /// pairs associated together. These values can be primitive data (similar but not limited to
+    /// pairs associated. These values can be primitive data (similar but not limited to
     /// a JavaScript Object Notation) as well as other shared types (Yrs maps, arrays, text
     /// structures etc.), enabling to construct a complex recursive tree structures.
     ///
@@ -155,16 +147,11 @@ impl Doc {
     ///
     /// # Panics
     ///
-    /// This method requires an exclusive access to an underlying document store. If there
+    /// This method requires exclusive access to an underlying document store. If there
     /// is another transaction in process, it will panic. It's advised to define all root shared
     /// types during the document creation.
-    pub fn get_or_insert_map(&self, name: &str) -> MapRef {
-        let mut r = self.store.try_borrow_mut().expect(
-            "tried to get a root level type while another transaction on the document is open",
-        );
-        let mut c = r.get_or_create_type(name, TypeRef::Map);
-        c.store = Some(self.store.weak_ref());
-        MapRef::from(c)
+    pub fn get_or_insert_map<N: Into<Arc<str>>>(&self, name: N) -> MapRef {
+        MapRef::root(name).get_or_create(&mut self.transact_mut())
     }
 
     /// Returns an [ArrayRef] data structure stored under a given `name`. Array structures are used for
@@ -180,21 +167,16 @@ impl Doc {
     ///
     /// # Panics
     ///
-    /// This method requires an exclusive access to an underlying document store. If there
+    /// This method requires exclusive access to an underlying document store. If there
     /// is another transaction in process, it will panic. It's advised to define all root shared
     /// types during the document creation.
-    pub fn get_or_insert_array(&self, name: &str) -> ArrayRef {
-        let mut r = self.store.try_borrow_mut().expect(
-            "tried to get a root level type while another transaction on the document is open",
-        );
-        let mut c = r.get_or_create_type(name, TypeRef::Array);
-        c.store = Some(self.store.weak_ref());
-        ArrayRef::from(c)
+    pub fn get_or_insert_array<N: Into<Arc<str>>>(&self, name: N) -> ArrayRef {
+        ArrayRef::root(name).get_or_create(&mut self.transact_mut())
     }
 
     /// Returns a [XmlFragmentRef] data structure stored under a given `name`. XML elements represent
     /// nodes of XML document. They can contain attributes (key-value pairs, both of string type)
-    /// as well as other nested XML elements or text values, which are stored in their insertion
+    /// and other nested XML elements or text values, which are stored in their insertion
     /// order.
     ///
     /// If no structure under defined `name` existed before, it will be created and returned
@@ -207,68 +189,11 @@ impl Doc {
     ///
     /// # Panics
     ///
-    /// This method requires an exclusive access to an underlying document store. If there
+    /// This method requires exclusive access to an underlying document store. If there
     /// is another transaction in process, it will panic. It's advised to define all root shared
     /// types during the document creation.
-    pub fn get_or_insert_xml_fragment(&self, name: &str) -> XmlFragmentRef {
-        let mut r = self.store.try_borrow_mut().expect(
-            "tried to get a root level type while another transaction on the document is open",
-        );
-        let mut c = r.get_or_create_type(name, TypeRef::XmlFragment);
-        c.store = Some(self.store.weak_ref());
-        XmlFragmentRef::from(c)
-    }
-
-    /// Returns a [XmlElementRef] data structure stored under a given `name`. XML elements represent
-    /// nodes of XML document. They can contain attributes (key-value pairs, both of string type)
-    /// as well as other nested XML elements or text values, which are stored in their insertion
-    /// order.
-    ///
-    /// If no structure under defined `name` existed before, it will be created and returned
-    /// instead.
-    ///
-    /// If a structure under defined `name` already existed, but its type was different it will be
-    /// reinterpreted as a XML element (in such case a map component of complex data type will be
-    /// interpreted as map of its attributes, while a sequence component - as a list of its child
-    /// XML nodes).
-    ///
-    /// # Panics
-    ///
-    /// This method requires an exclusive access to an underlying document store. If there
-    /// is another transaction in process, it will panic. It's advised to define all root shared
-    /// types during the document creation.
-    pub fn get_or_insert_xml_element(&self, name: &str) -> XmlElementRef {
-        let mut r = self.store.try_borrow_mut().expect(
-            "tried to get a root level type while another transaction on the document is open",
-        );
-        let mut c = r.get_or_create_type(name, TypeRef::XmlElement(name.into()));
-        c.store = Some(self.store.weak_ref());
-        XmlElementRef::from(c)
-    }
-
-    /// Returns a [XmlTextRef] data structure stored under a given `name`. Text structures are used
-    /// for collaborative text editing: they expose operations to append and remove chunks of text,
-    /// which are free to execute concurrently by multiple peers over remote boundaries.
-    ///
-    /// If no structure under defined `name` existed before, it will be created and returned
-    /// instead.
-    ///
-    /// If a structure under defined `name` already existed, but its type was different it will be
-    /// reinterpreted as a text (in such case a sequence component of complex data type will be
-    /// interpreted as a list of text chunks).
-    ///
-    /// # Panics
-    ///
-    /// This method requires an exclusive access to an underlying document store. If there
-    /// is another transaction in process, it will panic. It's advised to define all root shared
-    /// types during the document creation.
-    pub fn get_or_insert_xml_text(&self, name: &str) -> XmlTextRef {
-        let mut r = self.store.try_borrow_mut().expect(
-            "tried to get a root level type while another transaction on the document is open",
-        );
-        let mut c = r.get_or_create_type(name, TypeRef::XmlText);
-        c.store = Some(self.store.weak_ref());
-        XmlTextRef::from(c)
+    pub fn get_or_insert_xml_fragment<N: Into<Arc<str>>>(&self, name: N) -> XmlFragmentRef {
+        XmlFragmentRef::root(name).get_or_create(&mut self.transact_mut())
     }
 
     /// Subscribe callback function for any changes performed within transaction scope. These
@@ -406,11 +331,8 @@ impl Doc {
     pub fn parent_doc(&self) -> Option<Doc> {
         let store = unsafe { self.store.0.as_ptr().as_ref() }.unwrap();
         if let Some(item) = store.parent.as_deref() {
-            if let ItemContent::Doc(Some(parent_ref), _) = &item.content {
-                let store = parent_ref.0.upgrade()?;
-                return Some(Doc {
-                    store: StoreRef(store),
-                });
+            if let ItemContent::Doc(parent_doc, _) = &item.content {
+                return parent_doc.clone();
             }
         }
 
@@ -664,19 +586,21 @@ pub trait Transact {
     /// this method will panic whenever called while a read-write transaction
     /// (see: [Self::transact_mut]) is active at the same time.
     fn transact(&self) -> Transaction {
-        self.try_transact().unwrap()
+        self.try_transact()
+            .expect("there's another active read-write transaction at the moment")
     }
 
     /// Creates and returns a read-write capable transaction. This transaction can be used to
     /// mutate the contents of underlying document store and upon dropping or committing it may
     /// subscription callbacks.
     ///
-    /// # Errors
+    /// # Panics
     ///
     /// Only one read-write transaction can be active at the same time. If any other transaction -
     /// be it a read-write or read-only one - is active at the same time, this method will panic.
     fn transact_mut(&self) -> TransactionMut {
-        self.try_transact_mut().unwrap()
+        self.try_transact_mut()
+            .expect("there's another active transaction at the moment")
     }
 }
 
@@ -686,58 +610,20 @@ impl Transact for Doc {
     }
 
     fn try_transact_mut(&self) -> Result<TransactionMut, TransactionAcqError> {
-        Ok(TransactionMut::new(self.store.try_borrow_mut()?, None))
+        let store = self.store.try_borrow_mut()?;
+        Ok(TransactionMut::new(self.clone(), store, None))
     }
 
     fn try_transact_mut_with<T>(&self, origin: T) -> Result<TransactionMut, TransactionAcqError>
     where
         T: Into<Origin>,
     {
+        let store = self.store.try_borrow_mut()?;
         Ok(TransactionMut::new(
-            self.store.try_borrow_mut()?,
+            self.clone(),
+            store,
             Some(origin.into()),
         ))
-    }
-}
-
-impl Transact for Branch {
-    fn try_transact<'a>(&'a self) -> Result<Transaction<'a>, TransactionAcqError> {
-        let store = self.store.as_ref().unwrap();
-        if let Some(store) = store.0.upgrade() {
-            let store_ref = store.try_borrow()?;
-            let store_ref: AtomicRef<'a, Store> = unsafe { std::mem::transmute(store_ref) };
-            Ok(Transaction::new(store_ref))
-        } else {
-            Err(TransactionAcqError::DocumentDropped)
-        }
-    }
-
-    fn try_transact_mut<'a>(&'a self) -> Result<TransactionMut<'a>, TransactionAcqError> {
-        let store = self.store.as_ref().unwrap();
-        if let Some(store) = store.0.upgrade() {
-            let store_ref = store.try_borrow_mut()?;
-            let store_ref: AtomicRefMut<'a, Store> = unsafe { std::mem::transmute(store_ref) };
-            Ok(TransactionMut::new(store_ref, None))
-        } else {
-            Err(TransactionAcqError::DocumentDropped)
-        }
-    }
-
-    fn try_transact_mut_with<'a, T>(
-        &'a self,
-        origin: T,
-    ) -> Result<TransactionMut<'a>, TransactionAcqError>
-    where
-        T: Into<Origin>,
-    {
-        let store = self.store.as_ref().unwrap();
-        if let Some(store) = store.0.upgrade() {
-            let store_ref = store.try_borrow_mut()?;
-            let store_ref: AtomicRefMut<'a, Store> = unsafe { std::mem::transmute(store_ref) };
-            Ok(TransactionMut::new(store_ref, Some(origin.into())))
-        } else {
-            Err(TransactionAcqError::DocumentDropped)
-        }
     }
 }
 
@@ -760,29 +646,6 @@ impl From<BorrowError> for TransactionAcqError {
 impl From<BorrowMutError> for TransactionAcqError {
     fn from(e: BorrowMutError) -> Self {
         TransactionAcqError::ExclusiveAcqFailed(e)
-    }
-}
-
-impl<T> Transact for T
-where
-    T: AsRef<Branch>,
-{
-    fn try_transact(&self) -> Result<Transaction, TransactionAcqError> {
-        let branch = self.as_ref();
-        branch.try_transact()
-    }
-
-    fn try_transact_mut(&self) -> Result<TransactionMut, TransactionAcqError> {
-        let branch = self.as_ref();
-        branch.try_transact_mut()
-    }
-
-    fn try_transact_mut_with<O>(&self, origin: O) -> Result<TransactionMut, TransactionAcqError>
-    where
-        O: Into<Origin>,
-    {
-        let branch = self.as_ref();
-        branch.try_transact_mut_with(origin)
     }
 }
 
@@ -824,8 +687,8 @@ mod test {
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
     use crate::{
         any, Any, Array, ArrayPrelim, ArrayRef, DeleteSet, Doc, GetString, Map, MapPrelim, MapRef,
-        OffsetKind, Options, StateVector, Subscription, Text, TextRef, Transact, Uuid,
-        XmlElementPrelim, XmlFragment, XmlFragmentRef, XmlTextRef,
+        OffsetKind, Options, StateVector, Subscription, Text, TextRef, Transact, Uuid, WriteTxn,
+        XmlElementPrelim, XmlFragment, XmlFragmentRef, XmlTextPrelim, XmlTextRef,
     };
     use std::cell::{Cell, RefCell, RefMut};
     use std::collections::BTreeSet;
@@ -1026,7 +889,7 @@ mod test {
             let u = Update::decode_v1(u.as_slice()).unwrap();
             txn.apply_update(u);
         }
-        assert_eq!(txt.get_string(&txt.transact()), "abcd".to_string());
+        assert_eq!(txt.get_string(&doc.transact()), "abcd".to_string());
     }
 
     #[test]
@@ -1061,7 +924,7 @@ mod test {
             d1.transact_mut().apply_update(u);
         }
 
-        assert_eq!("a", source_1.get_string(&source_1.transact()));
+        assert_eq!("a", source_1.get_string(&d1.transact()));
 
         let d2 = Doc::new();
         let source_2 = d2.get_or_insert_text("source");
@@ -1072,7 +935,7 @@ mod test {
         let update = Update::decode_v1(&update).unwrap();
         d2.transact_mut().apply_update(update);
 
-        assert_eq!("a", source_2.get_string(&source_2.transact()));
+        assert_eq!("a", source_2.get_string(&d2.transact()));
 
         let update = Update::decode_v1(&[
             1, 2, 201, 210, 153, 56, 5, 132, 228, 254, 237, 171, 7, 0, 1, 98, 168, 201, 210, 153,
@@ -1080,7 +943,7 @@ mod test {
         ])
         .unwrap();
         d1.transact_mut().apply_update(update);
-        assert_eq!("ab", source_1.get_string(&source_1.transact()));
+        assert_eq!("ab", source_1.get_string(&d1.transact()));
 
         let d3 = Doc::new();
         let source_3 = d3.get_or_insert_text("source");
@@ -1090,7 +953,7 @@ mod test {
         let update = Update::decode_v1(&update).unwrap();
         d3.transact_mut().apply_update(update);
 
-        assert_eq!("ab", source_3.get_string(&source_3.transact()));
+        assert_eq!("ab", source_3.get_string(&d3.transact()));
     }
 
     #[test]
@@ -1159,8 +1022,8 @@ mod test {
             .apply_update(Update::decode_v1(&u).unwrap());
 
         assert_eq!(
-            txt1.get_string(&txt1.transact()),
-            txt2.get_string(&txt2.transact())
+            txt1.get_string(&d1.transact()),
+            txt2.get_string(&d2.transact())
         );
     }
 
@@ -1283,7 +1146,7 @@ mod test {
         let txt2 = d2.get_or_insert_text("text");
         d2.transact_mut().apply_update(update);
 
-        assert_eq!(txt2.get_string(&txt2.transact()), "hello".to_string());
+        assert_eq!(txt2.get_string(&d2.transact()), "hello".to_string());
     }
 
     #[test]
@@ -1909,14 +1772,13 @@ mod test {
     #[test]
     fn to_json() {
         let doc = Doc::new();
-        let text = doc.get_or_insert_text("text");
-        let array = doc.get_or_insert_array("array");
-        let map = doc.get_or_insert_map("map");
-        let xml_text = doc.get_or_insert_xml_text("xml-text");
-        let xml_fragment = doc.get_or_insert_xml_fragment("xml-fragment");
-        let xml_element = doc.get_or_insert_xml_element("xml-element");
-
         let mut txn = doc.transact_mut();
+        let text = txn.get_or_insert_text("text");
+        let array = txn.get_or_insert_array("array");
+        let map = txn.get_or_insert_map("map");
+        let xml_fragment = txn.get_or_insert_xml_fragment("xml-fragment");
+        let xml_element = xml_fragment.insert(&mut txn, 0, XmlElementPrelim::empty("xml-element"));
+        let xml_text = xml_fragment.insert(&mut txn, 0, XmlTextPrelim::new(""));
 
         text.push(&mut txn, "hello");
         xml_text.push(&mut txn, "world");
@@ -1942,9 +1804,7 @@ mod test {
                     "guid": sub_doc.guid().as_ref()
                 }
             },
-            "xml-text": "world",
-            "xml-fragment": "<div></div>",
-            "xml-element": "<xml-element><body></body></xml-element>"
+            "xml-fragment": "<div></div>world<xml-element><body></body></xml-element>",
         });
         assert_eq!(actual, expected);
     }

@@ -650,19 +650,19 @@ mod test {
             let map = doc.get_or_insert_map("map");
 
             assert_eq!(
-                map.get(&map.transact(), &"key1".to_owned()),
+                map.get(&doc.transact(), &"key1".to_owned()),
                 None,
                 "'key1' entry for peer {} should be removed",
                 doc.client_id()
             );
             assert_eq!(
-                map.get(&map.transact(), &"key2".to_owned()),
+                map.get(&doc.transact(), &"key2".to_owned()),
                 None,
                 "'key2' entry for peer {} should be removed",
                 doc.client_id()
             );
             assert_eq!(
-                map.len(&map.transact()),
+                map.len(&doc.transact()),
                 0,
                 "all entries for peer {} should be removed",
                 doc.client_id()
@@ -697,7 +697,7 @@ mod test {
             let map = doc.get_or_insert_map("map");
 
             assert_eq!(
-                map.get(&map.transact(), &"stuff".to_owned()),
+                map.get(&doc.transact(), &"stuff".to_owned()),
                 Some(Value::from("c3")),
                 "peer {} - map entry resolved to unexpected value",
                 doc.client_id()
@@ -753,7 +753,7 @@ mod test {
             let map = doc.get_or_insert_map("map");
 
             assert_eq!(
-                map.get(&map.transact(), &"key1".to_owned()),
+                map.get(&doc.transact(), &"key1".to_owned()),
                 None,
                 "entry 'key1' on peer {} should be removed",
                 doc.client_id()
@@ -962,7 +962,7 @@ mod test {
             ArrayPrelim::from(Vec::<String>::default()),
         );
         let nested2 = nested
-            .get(&nested.transact(), "array")
+            .get(&doc.transact(), "array")
             .unwrap()
             .cast::<ArrayRef>()
             .unwrap();

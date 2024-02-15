@@ -233,6 +233,11 @@ pub trait GetString {
 /// root level collections.
 pub trait RootRef: SharedRef {
     fn type_ref() -> TypeRef;
+
+    /// Create a logical collaborative collection reference to a root-level type with a given `name`
+    fn root<N: Into<Arc<str>>>(name: N) -> Root<Self> {
+        Root::new(name)
+    }
 }
 
 /// Common trait for shared collaborative collection types in Yrs.

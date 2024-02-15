@@ -553,11 +553,11 @@ mod test {
     fn move_last_elem_iter() {
         let doc = Doc::with_client_id(1);
         let array = doc.get_or_insert_array("array");
-        let mut txn = array.transact_mut();
+        let mut txn = doc.transact_mut();
         array.insert_range(&mut txn, 0, [1, 2, 3]);
         drop(txn);
 
-        let mut txn = array.transact_mut();
+        let mut txn = doc.transact_mut();
         array.move_to(&mut txn, 2, 0);
 
         let start = array.as_ref().start;

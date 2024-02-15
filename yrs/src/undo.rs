@@ -965,7 +965,12 @@ mod test {
     #[test]
     fn undo_xml() {
         let d1 = Doc::with_client_id(1);
-        let xml1 = d1.get_or_insert_xml_element("undefined");
+        let frag = d1.get_or_insert_xml_fragment("xml");
+        let xml1 = frag.insert(
+            &mut d1.transact_mut(),
+            0,
+            XmlElementPrelim::empty("undefined"),
+        );
 
         let mut mgr = UndoManager::new(&d1, &xml1);
         let child = xml1.insert(&mut d1.transact_mut(), 0, XmlElementPrelim::empty("p"));

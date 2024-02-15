@@ -101,12 +101,12 @@ pub const Y_OFFSET_UTF16: u8 = 1;
 
 /* pub types below are used by cbindgen for c header generation */
 
-/// A Yrs document type. Documents are most important units of collaborative resources management.
+/// A Yrs document type. Documents are the most important units of collaborative resources management.
 /// All shared collections live within a scope of their corresponding documents. All updates are
-/// generated on per document basis (rather than individual shared type). All operations on shared
+/// generated on per-document basis (rather than individual shared type). All operations on shared
 /// collections happen via `YTransaction`, which lifetime is also bound to a document.
 ///
-/// Document manages so called root types, which are top-level shared types definitions (as opposed
+/// Document manages so-called root types, which are top-level shared types definitions (as opposed
 /// to recursively nested types).
 pub type Doc = yrs::Doc;
 
@@ -619,42 +619,6 @@ pub unsafe extern "C" fn ydoc_write_transaction(
     }
 }
 
-/// Starts a new read-write transaction on a given branches document. All other operations happen in
-/// context of a transaction. Yrs transactions do not follow ACID rules. Once a set of operations is
-/// complete, a transaction can be finished using `ytransaction_commit` function.
-///
-/// Returns `NULL` if read-write transaction couldn't be created, i.e. when another transaction is
-/// already opened.
-#[no_mangle]
-pub unsafe extern "C" fn ybranch_write_transaction(branch: *mut Branch) -> *mut Transaction {
-    assert!(!branch.is_null());
-
-    let branch = branch.as_mut().unwrap();
-    if let Ok(txn) = branch.try_transact_mut() {
-        Box::into_raw(Box::new(Transaction::read_write(txn)))
-    } else {
-        null_mut()
-    }
-}
-
-/// Starts a new read-only transaction on a given branches document. All other operations happen in
-/// context of a transaction. Yrs transactions do not follow ACID rules. Once a set of operations is
-/// complete, a transaction can be finished using `ytransaction_commit` function.
-///
-/// Returns `NULL` if read-only transaction couldn't be created, i.e. when another read-write
-/// transaction is already opened.
-#[no_mangle]
-pub unsafe extern "C" fn ybranch_read_transaction(branch: *mut Branch) -> *mut Transaction {
-    assert!(!branch.is_null());
-
-    let doc = branch.as_mut().unwrap();
-    if let Ok(txn) = doc.try_transact() {
-        Box::into_raw(Box::new(Transaction::read_only(txn)))
-    } else {
-        null_mut()
-    }
-}
-
 /// Check if current branch is still alive (returns `Y_TRUE`, otherwise `Y_FALSE`).
 /// If it was deleted, this branch pointer is no longer a valid pointer and cannot be used to
 /// execute any functions using it.
@@ -785,21 +749,6 @@ pub unsafe extern "C" fn ymap(doc: *mut Doc, name: *const c_char) -> *mut Branch
 /// document. This structure can later be accessed using its `name`, which must be a null-terminated
 /// UTF-8 compatible string.
 #[no_mangle]
-pub unsafe extern "C" fn yxmlelem(doc: *mut Doc, name: *const c_char) -> *mut Branch {
-    assert!(!doc.is_null());
-    assert!(!name.is_null());
-
-    let name = CStr::from_ptr(name).to_str().unwrap();
-    doc.as_mut()
-        .unwrap()
-        .get_or_insert_xml_element(name)
-        .into_raw_branch()
-}
-
-/// Gets or creates a new shared `YXmlElement` data type instance as a root-level type of a given
-/// document. This structure can later be accessed using its `name`, which must be a null-terminated
-/// UTF-8 compatible string.
-#[no_mangle]
 pub unsafe extern "C" fn yxmlfragment(doc: *mut Doc, name: *const c_char) -> *mut Branch {
     assert!(!doc.is_null());
     assert!(!name.is_null());
@@ -808,21 +757,6 @@ pub unsafe extern "C" fn yxmlfragment(doc: *mut Doc, name: *const c_char) -> *mu
     doc.as_mut()
         .unwrap()
         .get_or_insert_xml_fragment(name)
-        .into_raw_branch()
-}
-
-/// Gets or creates a new shared `YXmlText` data type instance as a root-level type of a given
-/// document. This structure can later be accessed using its `name`, which must be a null-terminated
-/// UTF-8 compatible string.
-#[no_mangle]
-pub unsafe extern "C" fn yxmltext(doc: *mut Doc, name: *const c_char) -> *mut Branch {
-    assert!(!doc.is_null());
-    assert!(!name.is_null());
-
-    let name = CStr::from_ptr(name).to_str().unwrap();
-    doc.as_mut()
-        .unwrap()
-        .get_or_insert_xml_text(name)
         .into_raw_branch()
 }
 

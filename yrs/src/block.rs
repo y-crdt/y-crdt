@@ -4,7 +4,7 @@ use crate::encoding::read::Error;
 use crate::gc::GCCollector;
 use crate::moving::Move;
 use crate::slice::{BlockSlice, GCSlice, ItemSlice};
-use crate::store::{Store, WeakStoreRef};
+use crate::store::Store;
 use crate::transaction::TransactionMut;
 use crate::types::text::update_current_attributes;
 use crate::types::{Attrs, TypePtr, TypeRef, Value};
@@ -706,7 +706,7 @@ impl ItemPtr {
                     {
                         let mut txn = doc.transact_mut();
                         txn.store.parent = Some(self_ptr);
-                        *parent_doc = parent_ref.store.clone();
+                        *parent_doc = Some(txn.doc().clone());
                     }
                     let subdocs = txn.subdocs.get_or_init();
                     subdocs.added.insert(DocAddr::new(doc), doc.clone());
@@ -720,7 +720,6 @@ impl ItemPtr {
                 }
                 ItemContent::Type(branch) => {
                     let b = Arc::get_mut(branch).unwrap();
-                    b.store = this.parent.as_branch().and_then(|b| b.store.clone());
                     let ptr = if this.info.is_deleted() {
                         BranchPtr::from(branch)
                     } else {
@@ -1505,7 +1504,7 @@ pub enum ItemContent {
     Deleted(u32),
 
     /// Sub-document container. Contains weak reference to a parent document and a child document.
-    Doc(Option<WeakStoreRef>, Doc),
+    Doc(Option<Doc>, Doc),
 
     /// Obsolete: collection of consecutively inserted stringified JSON values.
     JSON(Vec<String>),

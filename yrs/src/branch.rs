@@ -1,16 +1,14 @@
 use crate::block::{BlockCell, Item, ItemContent, ItemPosition, ItemPtr, Prelim};
-use crate::store::WeakStoreRef;
 use crate::types::array::ArrayEvent;
 use crate::types::map::MapEvent;
 use crate::types::text::TextEvent;
-use crate::types::weak::WeakEvent;
 use crate::types::xml::{XmlEvent, XmlTextEvent};
 use crate::types::{
     Entries, Event, Events, Path, PathSegment, RootRef, SharedRef, TypePtr, TypeRef,
 };
 use crate::{
     ArrayRef, MapRef, Observer, Origin, ReadTxn, Subscription, TextRef, TransactionMut, Value,
-    WeakRef, WriteTxn, XmlElementRef, XmlFragmentRef, XmlTextRef, ID,
+    WriteTxn, XmlElementRef, XmlFragmentRef, XmlTextRef, ID,
 };
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::marker::PhantomData;
@@ -126,7 +124,7 @@ impl Into<Value> for BranchPtr {
             TypeRef::XmlText => Value::YXmlText(XmlTextRef::from(self)),
             //TYPE_REFS_XML_HOOK => Value::YXmlHook(XmlHookRef::from(self)),
             #[cfg(feature = "weak")]
-            TypeRef::WeakLink(_) => Value::YWeakLink(WeakRef::from(self)),
+            TypeRef::WeakLink(_) => Value::YWeakLink(crate::WeakRef::from(self)),
             _ => Value::UndefinedRef(self),
         }
     }
@@ -189,8 +187,6 @@ pub struct Branch {
     /// another complex type.
     pub(crate) item: Option<ItemPtr>,
 
-    pub(crate) store: Option<WeakStoreRef>,
-
     /// A length of an indexed sequence component of a current branch node. Map component elements
     /// are computed on demand.
     pub block_len: u32,
@@ -231,7 +227,6 @@ impl Branch {
             block_len: 0,
             content_len: 0,
             item: None,
-            store: None,
             type_ref,
             observers: Observer::default(),
             deep_observers: Observer::default(),
@@ -528,7 +523,7 @@ impl Branch {
             }
             TypeRef::XmlText => Event::XmlText(XmlTextEvent::new(self_ptr, keys)),
             #[cfg(feature = "weak")]
-            TypeRef::WeakLink(_) => Event::Weak(WeakEvent::new(self_ptr)),
+            TypeRef::WeakLink(_) => Event::Weak(crate::types::weak::WeakEvent::new(self_ptr)),
             _ => return None,
         };
 
@@ -573,9 +568,8 @@ impl<S: RootRef> Root<S> {
     }
 
     pub fn get_or_create<T: WriteTxn>(&self, txn: &mut T) -> S {
-        let branch = txn
-            .store_mut()
-            .get_or_create_type(self.name.clone(), S::type_ref());
+        let store = txn.store_mut();
+        let branch = store.get_or_create_type(self.name.clone(), S::type_ref());
         S::from(branch)
     }
 }
