@@ -5,7 +5,7 @@ use crate::encoding::read::Error;
 use crate::transaction::TransactionMut;
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
-use crate::{ReadTxn, WriteTxn, ID};
+use crate::{BranchID, ReadTxn, WriteTxn, ID};
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -421,9 +421,10 @@ impl StickyIndex {
         if let Some(ptr) = branch.item {
             let id = ptr.id().clone();
             Self::new(IndexScope::Nested(id), assoc)
-        } else {
-            let name = txn.store().get_type_key(BranchPtr::from(branch)).unwrap();
+        } else if let Some(name) = &branch.name {
             Self::new(IndexScope::Root(name.clone()), assoc)
+        } else {
+            unreachable!()
         }
     }
 
@@ -554,7 +555,7 @@ impl StickyIndex {
     ) -> Option<Self> {
         if assoc == Assoc::Before {
             if index == 0 {
-                let context = IndexScope::from_branch(branch, txn);
+                let context = IndexScope::from_branch(branch);
                 return Some(StickyIndex::new(context, assoc));
             }
             index -= 1;
@@ -569,7 +570,7 @@ impl StickyIndex {
                 let context = if let Some(ptr) = walker.next_item() {
                     IndexScope::Relative(ptr.last_id())
                 } else {
-                    IndexScope::from_branch(branch, txn)
+                    IndexScope::from_branch(branch)
                 };
                 Some(Self::new(context, assoc))
             } else {
@@ -581,7 +582,7 @@ impl StickyIndex {
                 id.clock += walker.rel();
                 IndexScope::Relative(id)
             } else {
-                IndexScope::from_branch(branch, txn)
+                IndexScope::from_branch(branch)
             };
             Some(Self::new(context, assoc))
         }
@@ -657,12 +658,10 @@ pub enum IndexScope {
 }
 
 impl IndexScope {
-    pub fn from_branch<T: ReadTxn>(branch: BranchPtr, txn: &T) -> Self {
-        if let Some(ptr) = branch.item {
-            IndexScope::Nested(*ptr.id())
-        } else {
-            let root = txn.store().get_type_key(branch).unwrap().clone();
-            IndexScope::Root(root)
+    pub fn from_branch(branch: BranchPtr) -> Self {
+        match branch.id() {
+            BranchID::Nested(id) => IndexScope::Nested(id),
+            BranchID::Root(name) => IndexScope::Root(name),
         }
     }
 }

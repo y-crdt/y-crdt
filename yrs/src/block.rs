@@ -860,7 +860,7 @@ impl Item {
         (start, end)
     }
 
-    pub fn encode<E: Encoder>(&self, store: Option<&Store>, encoder: &mut E) {
+    pub fn encode<E: Encoder>(&self, encoder: &mut E) {
         let info = self.info();
         let cant_copy_parent_info = info & (HAS_ORIGIN | HAS_RIGHT_ORIGIN) == 0;
         encoder.write_info(info);
@@ -876,10 +876,11 @@ impl Item {
                     if let Some(block) = branch.item {
                         encoder.write_parent_info(false);
                         encoder.write_left_id(block.id());
-                    } else if let Some(store) = store {
-                        let name = store.get_type_key(*branch).unwrap();
+                    } else if let Some(name) = branch.name.as_deref() {
                         encoder.write_parent_info(true);
                         encoder.write_string(name);
+                    } else {
+                        unreachable!()
                     }
                 }
                 TypePtr::Named(name) => {
@@ -1217,6 +1218,11 @@ impl Item {
             0
         });
         let len = content.len(OffsetKind::Utf16);
+        let root_name = if let TypePtr::Named(root) = &parent {
+            Some(root.clone())
+        } else {
+            None
+        };
         let mut item = Box::new(Item {
             id,
             len,
@@ -1235,6 +1241,9 @@ impl Item {
         if let ItemContent::Type(branch) = &mut item.content {
             let b = Arc::get_mut(branch).unwrap();
             b.item = Some(item_ptr);
+            if b.name.is_none() {
+                b.name = root_name;
+            }
         }
         item
     }

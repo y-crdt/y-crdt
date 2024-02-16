@@ -112,23 +112,13 @@ impl Store {
             }
             Entry::Vacant(e) => {
                 let mut branch = Branch::new(type_ref);
-                let branch_ref = BranchPtr::from(&mut branch);
+                let mut branch_ref = BranchPtr::from(&mut branch);
+                branch_ref.name = Some(key);
                 self.node_registry.insert(branch_ref);
                 e.insert(branch);
                 branch_ref
             }
         }
-    }
-
-    pub(crate) fn get_type_key(&self, ptr: BranchPtr) -> Option<&Arc<str>> {
-        let branch = ptr.deref() as *const Branch;
-        for (k, v) in self.types.iter() {
-            let target = v.as_ref() as *const Branch;
-            if std::ptr::eq(target, branch) {
-                return Some(k);
-            }
-        }
-        None
     }
 
     /// Encodes all changes from current transaction block store up to a given `snapshot`.

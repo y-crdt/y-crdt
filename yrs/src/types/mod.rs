@@ -230,7 +230,15 @@ pub trait GetString {
 }
 
 /// A subset of [SharedRef] used to mark collaborative collections that can be used as a
-/// root level collections.
+/// root level collections. This includes common types like [ArrayRef], [MapRef], [TextRef] and
+/// [XmlFragmentRef].
+///
+/// Some types like [XmlTextRef] and [XmlElementRef] are not bound to be used as root-level types
+/// since they have limited capabilities (i.e. cannot propagate XML node name).
+///
+/// Other types like [WeakRef] are not supposed to be used at root-level since they refer to
+/// elements created prior to them, while root-level types are virtually immortal and technically
+/// exist for the whole lifespan of their document.
 pub trait RootRef: SharedRef {
     fn type_ref() -> TypeRef;
 
@@ -241,7 +249,13 @@ pub trait RootRef: SharedRef {
 }
 
 /// Common trait for shared collaborative collection types in Yrs.
-pub trait SharedRef: From<BranchPtr> + AsRef<Branch> {}
+pub trait SharedRef: From<BranchPtr> + AsRef<Branch> {
+    /// Returns a logical descriptor of a current shared collection.
+    fn desc(&self) -> Desc<Self> {
+        let branch = self.as_ref();
+        Desc::from(branch.id())
+    }
+}
 
 /// Trait implemented by all Y-types, allowing for observing events which are emitted by
 /// nested types.
@@ -296,7 +310,7 @@ pub enum Value {
 
 impl Default for Value {
     fn default() -> Self {
-        Value::Any(Any::Null)
+        Value::Any(Any::Undefined)
     }
 }
 
@@ -326,6 +340,22 @@ impl Value {
                 text_ref.get_string(txn)
             }
             Value::UndefinedRef(_) => "".to_string(),
+        }
+    }
+
+    pub fn try_branch(&self) -> Option<&Branch> {
+        match self {
+            Value::YText(b) => Some(b.as_ref()),
+            Value::YArray(b) => Some(b.as_ref()),
+            Value::YMap(b) => Some(b.as_ref()),
+            Value::YXmlElement(b) => Some(b.as_ref()),
+            Value::YXmlFragment(b) => Some(b.as_ref()),
+            Value::YXmlText(b) => Some(b.as_ref()),
+            #[cfg(feature = "weak")]
+            Value::YWeakLink(b) => Some(b.as_ref()),
+            Value::UndefinedRef(b) => Some(b.as_ref()),
+            Value::YDoc(_) => None,
+            Value::Any(_) => None,
         }
     }
 }

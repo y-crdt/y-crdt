@@ -72,7 +72,7 @@ use thiserror::Error;
 /// assert_eq!(values, vec!["B".to_string(), "E".to_string(), "C".to_string()]);
 /// ```
 #[repr(transparent)]
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct WeakRef<P>(P);
 
 impl<P: SharedRef> SharedRef for WeakRef<P> {}
@@ -151,16 +151,17 @@ impl<P: From<BranchPtr>> TryFrom<Value> for WeakRef<P> {
     }
 }
 
-impl<P: AsMut<Branch>> AsMut<Branch> for WeakRef<P> {
-    fn as_mut(&mut self) -> &mut Branch {
-        self.0.as_mut()
+impl<P: AsRef<Branch>> Eq for WeakRef<P> {}
+impl<P: AsRef<Branch>> PartialEq for WeakRef<P> {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_ref().id() == other.as_ref().id()
     }
 }
 
 impl<P> DeepObservable for WeakRef<P> where P: AsRef<Branch> {}
 impl<P> Observable for WeakRef<P>
 where
-    P: AsRef<Branch> + AsMut<Branch>,
+    P: AsRef<Branch>,
 {
     type Event = WeakEvent;
 }

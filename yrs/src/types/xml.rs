@@ -7,7 +7,7 @@ use crate::types::{
     EntryChange, MapRef, Path, RootRef, SharedRef, ToJson, TypePtr, TypeRef, Value,
 };
 use crate::{
-    Any, ArrayRef, DeepObservable, GetString, IndexedSequence, Map, Observable, ReadTxn,
+    Any, ArrayRef, BranchID, DeepObservable, GetString, IndexedSequence, Map, Observable, ReadTxn,
     StickyIndex, Text, TextRef, ID,
 };
 use std::borrow::Borrow;
@@ -16,7 +16,7 @@ use std::collections::{HashMap, HashSet};
 use std::convert::{TryFrom, TryInto};
 use std::fmt::Write;
 use std::marker::PhantomData;
-use std::ops::{Deref, DerefMut};
+use std::ops::Deref;
 use std::sync::Arc;
 
 /// Trait shared by preliminary types that can be used as XML nodes: [XmlElementPrelim],
@@ -26,7 +26,7 @@ pub trait XmlPrelim: Prelim {}
 /// An return type from XML elements retrieval methods. It's an enum of all supported values, that
 /// can be nested inside of [XmlElementRef]. These are other [XmlElementRef]s, [XmlFragmentRef]s
 /// or [XmlTextRef] values.
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum XmlNode {
     Element(XmlElementRef),
     Fragment(XmlFragmentRef),
@@ -40,6 +40,10 @@ impl XmlNode {
             XmlNode::Fragment(n) => n.0,
             XmlNode::Text(n) => n.0,
         }
+    }
+
+    pub fn id(&self) -> BranchID {
+        self.as_ptr().id()
     }
 
     /// If current underlying [XmlNode] is wrapping a [XmlElementRef], it will be returned.
@@ -153,7 +157,7 @@ impl TryFrom<Value> for XmlNode {
 ///   using interleave-resistant algorithm, where order of concurrent inserts at the same index
 ///   is established using peer's document id seniority.
 #[repr(transparent)]
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct XmlElementRef(BranchPtr);
 
 impl SharedRef for XmlElementRef {}
@@ -232,9 +236,10 @@ impl AsRef<Branch> for XmlElementRef {
     }
 }
 
-impl AsMut<Branch> for XmlElementRef {
-    fn as_mut(&mut self) -> &mut Branch {
-        &mut self.0
+impl Eq for XmlElementRef {}
+impl PartialEq for XmlElementRef {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.id() == other.0.id()
     }
 }
 
@@ -398,7 +403,7 @@ where
 /// let row = table.insert(&mut txn, 1, ArrayPrelim::from(["\"Moby-Dick\"", "Herman Melville"]));
 /// ```
 #[repr(transparent)]
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct XmlTextRef(BranchPtr);
 
 impl XmlTextRef {
@@ -473,9 +478,10 @@ impl AsRef<Branch> for XmlTextRef {
     }
 }
 
-impl AsMut<Branch> for XmlTextRef {
-    fn as_mut(&mut self) -> &mut Branch {
-        &mut self.0
+impl Eq for XmlTextRef {}
+impl PartialEq for XmlTextRef {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.id() == other.0.id()
     }
 }
 
@@ -554,7 +560,7 @@ impl<T: Borrow<str>> Into<EmbedPrelim<XmlTextPrelim<T>>> for XmlTextPrelim<T> {
 
 /// A XML fragment, which works as an untagged collection of XML nodes.
 #[repr(transparent)]
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct XmlFragmentRef(BranchPtr);
 
 impl RootRef for XmlFragmentRef {
@@ -602,9 +608,10 @@ impl AsRef<Branch> for XmlFragmentRef {
     }
 }
 
-impl AsMut<Branch> for XmlFragmentRef {
-    fn as_mut(&mut self) -> &mut Branch {
-        self.0.deref_mut()
+impl Eq for XmlFragmentRef {}
+impl PartialEq for XmlFragmentRef {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.id() == other.0.id()
     }
 }
 
@@ -696,7 +703,7 @@ where
 }
 
 /// (Obsolete) an Yjs-compatible XML node used for nesting Map elements.
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct XmlHookRef(BranchPtr);
 
 impl Map for XmlHookRef {}
@@ -714,9 +721,10 @@ impl AsRef<Branch> for XmlHookRef {
     }
 }
 
-impl AsMut<Branch> for XmlHookRef {
-    fn as_mut(&mut self) -> &mut Branch {
-        self.0.deref_mut()
+impl Eq for XmlHookRef {}
+impl PartialEq for XmlHookRef {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.id() == other.0.id()
     }
 }
 
@@ -1241,8 +1249,8 @@ mod test {
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encoder, EncoderV1};
     use crate::{
-        Any, Doc, GetString, Observable, StateVector, Text, Transact, Update, XmlElementPrelim,
-        XmlTextPrelim, XmlTextRef,
+        Any, Doc, GetString, Observable, SharedRef, StateVector, Text, Transact, Update,
+        XmlElementPrelim, XmlTextPrelim, XmlTextRef,
     };
     use std::cell::RefCell;
     use std::collections::HashMap;
@@ -1295,8 +1303,16 @@ mod test {
             2,
             "query selector should found two paragraphs"
         );
-        assert_eq!(actual[0], p1, "query selector found 1st paragraph");
-        assert_eq!(actual[1], p2, "query selector found 2nd paragraph");
+        assert_eq!(
+            actual[0].desc(),
+            p1.desc(),
+            "query selector found 1st paragraph"
+        );
+        assert_eq!(
+            actual[1].desc(),
+            p2.desc(),
+            "query selector found 2nd paragraph"
+        );
     }
 
     #[test]
@@ -1321,24 +1337,24 @@ mod test {
         let second = root.push_back(&mut txn, XmlElementPrelim::empty("p"));
 
         assert_eq!(
-            first.siblings(&txn).next().as_ref(),
-            Some(&XmlNode::Element(second.clone())),
+            &first.siblings(&txn).next().unwrap().id(),
+            second.desc().id(),
             "first.next_sibling should point to second"
         );
         assert_eq!(
-            second.siblings(&txn).next_back().as_ref(),
-            Some(&XmlNode::Text(first.clone())),
+            &second.siblings(&txn).next_back().unwrap().id(),
+            first.desc().id(),
             "second.prev_sibling should point to first"
         );
         assert_eq!(
-            first.parent().as_ref(),
-            Some(&XmlNode::Fragment(root.clone())),
+            &first.parent().unwrap().id(),
+            root.desc().id(),
             "first.parent should point to root"
         );
         assert!(root.parent().is_none(), "root parent should not exist");
         assert_eq!(
-            root.first_child().as_ref(),
-            Some(&XmlNode::Text(first)),
+            &root.first_child().unwrap().id(),
+            first.desc().id(),
             "root.first_child should point to first"
         );
     }

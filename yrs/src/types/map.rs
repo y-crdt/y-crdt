@@ -9,7 +9,7 @@ use std::borrow::Borrow;
 use std::cell::UnsafeCell;
 use std::collections::{HashMap, HashSet};
 use std::convert::{TryFrom, TryInto};
-use std::ops::{Deref, DerefMut};
+use std::ops::Deref;
 use std::sync::Arc;
 
 /// Collection used to store key-value entries in an unordered manner. Keys are always represented
@@ -54,7 +54,7 @@ use std::sync::Arc;
 /// assert_eq!(map.get(&txn, "key1"), None);
 /// ```
 #[repr(transparent)]
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct MapRef(BranchPtr);
 
 impl RootRef for MapRef {
@@ -90,9 +90,10 @@ impl AsRef<Branch> for MapRef {
     }
 }
 
-impl AsMut<Branch> for MapRef {
-    fn as_mut(&mut self) -> &mut Branch {
-        self.0.deref_mut()
+impl Eq for MapRef {}
+impl PartialEq for MapRef {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.id() == other.0.id()
     }
 }
 

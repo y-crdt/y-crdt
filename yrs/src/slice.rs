@@ -222,8 +222,7 @@ impl ItemSlice {
                     if let Some(block) = branch.item {
                         encoder.write_parent_info(false);
                         encoder.write_left_id(block.id());
-                    } else if let Some(store) = store {
-                        let name = store.get_type_key(*branch).unwrap();
+                    } else if let Some(name) = branch.name.as_deref() {
                         encoder.write_parent_info(true);
                         encoder.write_string(name);
                     }

@@ -12,7 +12,7 @@ use std::cell::UnsafeCell;
 use std::collections::HashSet;
 use std::convert::{TryFrom, TryInto};
 use std::marker::PhantomData;
-use std::ops::{Deref, DerefMut};
+use std::ops::Deref;
 
 /// A collection used to store data in an indexed sequence structure. This type is internally
 /// implemented as a double linked list, which may squash values inserted directly one after another
@@ -69,7 +69,7 @@ use std::ops::{Deref, DerefMut};
 /// ]));
 /// ```
 #[repr(transparent)]
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct ArrayRef(BranchPtr);
 
 impl RootRef for ArrayRef {
@@ -102,15 +102,16 @@ impl ToJson for ArrayRef {
     }
 }
 
-impl AsRef<Branch> for ArrayRef {
-    fn as_ref(&self) -> &Branch {
-        self.0.deref()
+impl Eq for ArrayRef {}
+impl PartialEq for ArrayRef {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.id() == other.0.id()
     }
 }
 
-impl AsMut<Branch> for ArrayRef {
-    fn as_mut(&mut self) -> &mut Branch {
-        self.0.deref_mut()
+impl AsRef<Branch> for ArrayRef {
+    fn as_ref(&self) -> &Branch {
+        self.0.deref()
     }
 }
 
@@ -520,8 +521,8 @@ mod test {
     use crate::types::map::MapPrelim;
     use crate::types::{Change, DeepObservable, Event, Path, PathSegment, ToJson, Value};
     use crate::{
-        any, Any, Array, ArrayPrelim, Assoc, Doc, Map, MapRef, Observable, StateVector, Transact,
-        Update, ID,
+        any, Any, Array, ArrayPrelim, Assoc, Doc, Map, MapRef, Observable, SharedRef, StateVector,
+        Transact, Update, ID,
     };
     use rand::prelude::StdRng;
     use rand::Rng;
@@ -1014,12 +1015,12 @@ mod test {
         let c1 = Rc::new(RefCell::new(None));
         let c1c = c1.clone();
         let _s1 = a1.observe(move |_, e| {
-            *c1c.borrow_mut() = Some(e.target().clone());
+            *c1c.borrow_mut() = Some(e.target().desc());
         });
         let c2 = Rc::new(RefCell::new(None));
         let c2c = c2.clone();
         let _s2 = a2.observe(move |_, e| {
-            *c2c.borrow_mut() = Some(e.target().clone());
+            *c2c.borrow_mut() = Some(e.target().desc());
         });
 
         {
@@ -1028,8 +1029,8 @@ mod test {
         }
         exchange_updates(&[&d1, &d2]);
 
-        assert_eq!(c1.borrow_mut().take(), Some(a1));
-        assert_eq!(c2.borrow_mut().take(), Some(a2));
+        assert_eq!(c1.borrow_mut().take(), Some(a1.desc()));
+        assert_eq!(c2.borrow_mut().take(), Some(a2.desc()));
     }
 
     use crate::transaction::ReadTxn;

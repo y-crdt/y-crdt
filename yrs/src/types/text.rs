@@ -8,7 +8,7 @@ use std::cell::UnsafeCell;
 use std::collections::HashMap;
 use std::convert::{TryFrom, TryInto};
 use std::fmt::Formatter;
-use std::ops::{Deref, DerefMut};
+use std::ops::Deref;
 
 /// A shared data type used for collaborative text editing. It enables multiple users to add and
 /// remove chunks of text in efficient manner. This type is internally represented as a mutable
@@ -85,7 +85,7 @@ use std::ops::{Deref, DerefMut};
 /// let row = table.insert(&mut txn, 1, ArrayPrelim::from(["\"Moby-Dick\"", "Herman Melville"]));
 /// ```
 #[repr(transparent)]
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct TextRef(BranchPtr);
 
 impl RootRef for TextRef {
@@ -438,9 +438,10 @@ impl AsRef<Branch> for TextRef {
     }
 }
 
-impl AsMut<Branch> for TextRef {
-    fn as_mut(&mut self) -> &mut Branch {
-        self.0.deref_mut()
+impl Eq for TextRef {}
+impl PartialEq for TextRef {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.id() == other.0.id()
     }
 }
 
