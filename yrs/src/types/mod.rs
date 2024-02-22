@@ -24,6 +24,7 @@ use crate::types::weak::{LinkSource, WeakEvent, WeakRef};
 use crate::types::xml::{XmlElementRef, XmlEvent, XmlTextEvent, XmlTextRef};
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
+use serde::{Serialize, Serializer};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::convert::{TryFrom, TryInto};
 use std::fmt::Formatter;
@@ -685,6 +686,18 @@ pub enum PathSegment {
     /// Index segments are used to inform how to access child shared collections within an [Array]
     /// or [XmlElement] types.
     Index(u32),
+}
+
+impl Serialize for PathSegment {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            PathSegment::Key(key) => serializer.serialize_str(&*key),
+            PathSegment::Index(i) => serializer.serialize_u32(*i),
+        }
+    }
 }
 
 pub(crate) struct ChangeSet<D> {

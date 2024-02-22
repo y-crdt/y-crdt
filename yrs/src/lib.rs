@@ -493,7 +493,7 @@
 mod alt;
 pub mod block;
 mod block_store;
-mod doc;
+pub mod doc;
 mod event;
 mod id_set;
 mod store;

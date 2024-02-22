@@ -1048,6 +1048,12 @@ impl<'a> From<&'a str> for Origin {
     }
 }
 
+impl From<String> for Origin {
+    fn from(v: String) -> Self {
+        Origin(SmallVec::from(Vec::from(v)))
+    }
+}
+
 impl std::fmt::Debug for Origin {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         std::fmt::Display::fmt(self, f)
