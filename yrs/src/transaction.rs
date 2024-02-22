@@ -64,6 +64,12 @@ pub trait ReadTxn: Sized {
         encoder.to_vec()
     }
 
+    fn encode_diff_v2(&self, state_vector: &StateVector) -> Vec<u8> {
+        let mut encoder = EncoderV2::new();
+        self.encode_diff(state_vector, &mut encoder);
+        encoder.to_vec()
+    }
+
     fn encode_state_as_update<E: Encoder>(&self, sv: &StateVector, encoder: &mut E) {
         let store = self.store();
         store.write_blocks_from(sv, encoder);
@@ -85,8 +91,8 @@ pub trait ReadTxn: Sized {
 
     /// Check if given node is alive. Returns false if node has been deleted.
     fn is_alive<B>(&self, node: &B) -> bool
-    where
-        B: SharedRef,
+        where
+            B: SharedRef,
     {
         let ptr = BranchPtr::from(node.as_ref());
         self.store().is_alive(&ptr)

@@ -1,9 +1,8 @@
-use crate::js::Js;
 use crate::transaction::{ImplicitTransaction, YTransaction};
 use crate::Result;
 use std::ops::Deref;
 use wasm_bindgen::JsValue;
-use yrs::{Desc, Doc, Origin, ReadTxn, SharedRef, Transact, Transaction, TransactionMut};
+use yrs::{Desc, Doc, ReadTxn, SharedRef, Transact, Transaction, TransactionMut};
 
 pub enum SharedCollection<P, S> {
     Prelim(P),
@@ -52,10 +51,10 @@ impl<S: SharedRef + 'static> Integrated<S> {
     }
 
     pub fn readonly<F, T>(&self, txn: ImplicitTransaction, f: F) -> Result<T>
-    where
-        F: FnOnce(&S, &TransactionMut<'_>) -> Result<T>,
+        where
+            F: FnOnce(&S, &TransactionMut<'_>) -> Result<T>,
     {
-        match YTransaction::from_implicit(&txn) {
+        match YTransaction::from_implicit(&txn)? {
             Some(txn) => {
                 let txn: &TransactionMut = &*txn;
                 let shared_ref = self.unpack(txn)?;
@@ -70,10 +69,10 @@ impl<S: SharedRef + 'static> Integrated<S> {
     }
 
     pub fn mutably<F, T>(&self, mut txn: ImplicitTransaction, f: F) -> Result<T>
-    where
-        F: FnOnce(&S, &mut TransactionMut<'_>) -> Result<T>,
+        where
+            F: FnOnce(&S, &mut TransactionMut<'_>) -> Result<T>,
     {
-        match YTransaction::from_implicit_mut(&mut txn) {
+        match YTransaction::from_implicit_mut(&mut txn)? {
             Some(mut txn) => {
                 let txn = txn.as_mut()?;
                 let shared_ref = self.unpack(txn)?;
@@ -90,31 +89,21 @@ impl<S: SharedRef + 'static> Integrated<S> {
     pub fn unpack<T: ReadTxn>(&self, txn: &T) -> Result<S> {
         match self.desc.get(txn) {
             Some(shared_ref) => Ok(shared_ref),
-            None => Err(JsValue::from_str("shared collection has been destroyed")),
+            None => Err(JsValue::from_str(crate::js::errors::REF_DISPOSED)),
         }
     }
 
     pub fn transact(&self) -> Result<Transaction> {
         match self.doc.try_transact() {
             Ok(tx) => Ok(tx),
-            Err(_) => Err(JsValue::from_str(
-                "another read-write transaction is in progress",
-            )),
+            Err(_) => Err(JsValue::from_str(crate::js::errors::ANOTHER_RW_TX)),
         }
     }
 
     pub fn transact_mut(&self) -> Result<TransactionMut> {
         match self.doc.try_transact_mut() {
             Ok(tx) => Ok(tx),
-            Err(_) => Err(JsValue::from_str("another transaction is in progress")),
-        }
-    }
-
-    pub fn transact_mut_with(&self, js: &JsValue) -> Result<TransactionMut> {
-        let origin: Origin = Js::from(js.clone()).into();
-        match self.doc.try_transact_mut_with(origin) {
-            Ok(tx) => Ok(tx),
-            Err(_) => Err(JsValue::from_str("another transaction is in progress")),
+            Err(_) => Err(JsValue::from_str(crate::js::errors::ANOTHER_TX)),
         }
     }
 }

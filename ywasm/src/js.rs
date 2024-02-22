@@ -61,13 +61,13 @@ impl Js {
                 Js(c.into())
             }
             _ => unreachable!(), //Value::YText(c) => {}
-                                 //Value::YMap(c) => {}
-                                 //Value::YXmlElement(c) => {}
-                                 //Value::YXmlFragment(c) => {}
-                                 //Value::YXmlText(c) => {}
-                                 //Value::YDoc(c) => {}
-                                 //Value::YWeakLink(c) => {}
-                                 //Value::UndefinedRef(c) => {}
+            //Value::YMap(c) => {}
+            //Value::YXmlElement(c) => {}
+            //Value::YXmlFragment(c) => {}
+            //Value::YXmlText(c) => {}
+            //Value::YDoc(c) => {}
+            //Value::YWeakLink(c) => {}
+            //Value::UndefinedRef(c) => {}
         }
     }
 
@@ -137,6 +137,7 @@ impl Deref for Js {
 }
 
 impl AsRef<JsValue> for Js {
+    #[inline]
     fn as_ref(&self) -> &JsValue {
         &self.0
     }
@@ -187,11 +188,23 @@ impl Prelim for Js {
     type Return = Unused;
 
     fn into_content(self, txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
-        todo!()
+        match self.as_value().unwrap() {
+            ValueRef::Any(any) => (ItemContent::Any(vec![any]), None),
+            ValueRef::Shared(shared) => {
+                let type_ref = shared.type_ref();
+                let branch = Branch::new(type_ref);
+                (ItemContent::Type(branch), Some(self))
+            }
+            ValueRef::Doc(_) => todo!(),
+        }
     }
 
     fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
-        todo!()
+        match self.as_value().unwrap() {
+            ValueRef::Any(any) => { /* nothing to do */ }
+            ValueRef::Shared(shared) => shared.integrate(txn, inner_ref),
+            ValueRef::Doc(_) => todo!(),
+        }
     }
 }
 
@@ -282,7 +295,8 @@ pub(crate) mod convert {
     use crate::js::Js;
     use wasm_bindgen::JsValue;
     use yrs::types::{Change, Event, Events, Path, PathSegment};
-    use yrs::{Doc, TransactionMut};
+    use yrs::updates::decoder::Decode;
+    use yrs::{Doc, StateVector, TransactionMut};
 
     pub fn change_into_js(change: &Change, doc: &Doc) -> JsValue {
         let result = js_sys::Object::new();
@@ -325,14 +339,40 @@ pub(crate) mod convert {
             let js: JsValue = match e {
                 Event::Array(e) => YArrayEvent::new(e, txn).into(),
                 _ => todo!(), //Event::Text(e) => YTextEvent::new(e, txn).into(),
-                              //Event::Map(e) => YMapEvent::new(e, txn).into(),
-                              //Event::XmlText(e) => YXmlTextEvent::new(e, txn).into(),
-                              //Event::XmlFragment(e) => YXmlEvent::new(e, txn).into(),
-                              //Event::Weak(e) => YWeakLinkEvent::new(e, txn).into(),
+                //Event::Map(e) => YMapEvent::new(e, txn).into(),
+                //Event::XmlText(e) => YXmlTextEvent::new(e, txn).into(),
+                //Event::XmlFragment(e) => YXmlEvent::new(e, txn).into(),
+                //Event::Weak(e) => YWeakLinkEvent::new(e, txn).into(),
             };
             js
         });
         array.extend(mapped);
         array.into()
     }
+
+    pub fn state_vector_from_js(
+        vector: Option<js_sys::Uint8Array>,
+    ) -> crate::Result<Option<StateVector>> {
+        if let Some(vector) = vector {
+            match StateVector::decode_v1(vector.to_vec().as_slice()) {
+                Ok(sv) => Ok(Some(sv)),
+                Err(e) => {
+                    return Err(JsValue::from(e.to_string()));
+                }
+            }
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+pub(crate) mod errors {
+    pub const NON_TRANSACTION: &'static str = "provided argument was not a ywasm transaction";
+    pub const INVALID_TRANSACTION_CTX: &'static str = "cannot modify transaction in this context";
+    pub const REF_DISPOSED: &'static str = "shared collection has been destroyed";
+    pub const ANOTHER_TX: &'static str = "another transaction is in progress";
+    pub const ANOTHER_RW_TX: &'static str = "another read-write transaction is in progress";
+    pub const OUT_OF_BOUNDS: &'static str = "index outside of the bounds of an array";
+    pub const INVALID_PRELIM_OP: &'static str = "preliminary type doesn't support this operation";
+    pub const NON_SUBDOC: &'static str = "current document is not a sub-document";
 }

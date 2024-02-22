@@ -129,7 +129,7 @@ impl YArray {
 
     /// Deletes a range of items of given `length` from current `YArray` instance,
     /// starting from given `index`.
-    #[wasm_bindgen(method, js_name = delete)]
+    #[wasm_bindgen(method, js_name = "delete")]
     pub fn delete(
         &mut self,
         index: u32,
@@ -177,11 +177,11 @@ impl YArray {
         match &self.0 {
             SharedCollection::Prelim(c) => match c.get(index as usize) {
                 Some(item) => Ok(item.clone()),
-                None => Err(JsValue::from_str("index outside of the bounds of an array")),
+                None => Err(JsValue::from_str(crate::js::errors::OUT_OF_BOUNDS)),
             },
             SharedCollection::Integrated(c) => c.readonly(txn, |c, txn| match c.get(txn, index) {
                 Some(item) => Ok(Js::from_value(&item, txn.doc()).into()),
-                None => Err(JsValue::from_str("index outside of the bounds of an array")),
+                None => Err(JsValue::from_str(crate::js::errors::OUT_OF_BOUNDS)),
             }),
         }
     }
@@ -255,7 +255,7 @@ impl YArray {
     pub fn observe(&self, f: js_sys::Function) -> Result<Observer> {
         match &self.0 {
             SharedCollection::Prelim(_) => {
-                Err(JsValue::from_str("cannot observe preliminary type"))
+                Err(JsValue::from_str(crate::js::errors::INVALID_PRELIM_OP))
             }
             SharedCollection::Integrated(c) => {
                 let txn = c.transact()?;
@@ -278,7 +278,7 @@ impl YArray {
     pub fn observe_deep(&self, f: js_sys::Function) -> Result<Observer> {
         match &self.0 {
             SharedCollection::Prelim(_) => {
-                Err(JsValue::from_str("cannot observe preliminary type"))
+                Err(JsValue::from_str(crate::js::errors::INVALID_PRELIM_OP))
             }
             SharedCollection::Integrated(c) => {
                 let txn = c.transact()?;
