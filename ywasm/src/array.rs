@@ -29,6 +29,7 @@ use yrs::{Array, ArrayRef, DeepObservable, Observable, SharedRef, TransactionMut
 /// after merging all updates together). In case of Yrs conflict resolution is solved by using
 /// unique document id to determine correct and consistent ordering.
 #[wasm_bindgen]
+#[repr(transparent)]
 pub struct YArray(pub(crate) SharedCollection<Vec<JsValue>, ArrayRef>);
 
 #[wasm_bindgen]
@@ -45,6 +46,7 @@ impl YArray {
     }
 
     #[wasm_bindgen(getter, js_name = type)]
+    #[inline]
     pub fn get_type(&self) -> u8 {
         TYPE_REFS_ARRAY
     }
@@ -55,6 +57,7 @@ impl YArray {
     /// Once a preliminary instance has been inserted this way, it becomes integrated into ywasm
     /// document store and cannot be nested again: attempt to do so will result in an exception.
     #[wasm_bindgen(getter)]
+    #[inline]
     pub fn prelim(&self) -> bool {
         self.0.is_prelim()
     }
@@ -63,6 +66,7 @@ impl YArray {
     /// This method only works on already integrated shared types and will return false is current
     /// type is preliminary (has not been integrated into document).
     #[wasm_bindgen(js_name = alive)]
+    #[inline]
     pub fn alive(&self, txn: &YTransaction) -> bool {
         self.0.is_alive(txn)
     }

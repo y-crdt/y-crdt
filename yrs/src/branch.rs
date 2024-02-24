@@ -238,6 +238,13 @@ impl Branch {
         })
     }
 
+    pub fn is_deleted(&self) -> bool {
+        match self.item {
+            Some(ptr) => ptr.is_deleted(),
+            None => false,
+        }
+    }
+
     pub fn id(&self) -> BranchID {
         if let Some(ptr) = self.item {
             BranchID::Nested(ptr.id)
@@ -715,6 +722,7 @@ pub struct Hook<S> {
 
 impl<S> Hook<S> {
     /// Unique logical identifier of a shared collection.
+    #[inline]
     pub fn id(&self) -> &BranchID {
         &self.id
     }

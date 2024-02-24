@@ -15,7 +15,7 @@ use yrs::types::{
     TypeRef, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT, TYPE_REFS_WEAK, TYPE_REFS_XML_ELEMENT,
     TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_TEXT,
 };
-use yrs::{Any, ArrayRef, Doc, Origin, TransactionMut, Value};
+use yrs::{Any, ArrayRef, BranchID, Doc, Origin, TransactionMut, Value};
 
 #[repr(transparent)]
 pub struct Js(JsValue);
@@ -187,7 +187,7 @@ impl<'a> From<&'a Origin> for Js {
 impl Prelim for Js {
     type Return = Unused;
 
-    fn into_content(self, txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
+    fn into_content(self, _: &mut TransactionMut) -> (ItemContent, Option<Self>) {
         match self.as_value().unwrap() {
             ValueRef::Any(any) => (ItemContent::Any(vec![any]), None),
             ValueRef::Shared(shared) => {
@@ -201,7 +201,7 @@ impl Prelim for Js {
 
     fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
         match self.as_value().unwrap() {
-            ValueRef::Any(any) => { /* nothing to do */ }
+            ValueRef::Any(_) => { /* nothing to do */ }
             ValueRef::Shared(shared) => shared.integrate(txn, inner_ref),
             ValueRef::Doc(_) => todo!(),
         }
@@ -253,6 +253,12 @@ impl Shared {
         }
     }
 
+    pub fn branch_id(&self) -> Option<&BranchID> {
+        match self {
+            Shared::Array(v) => v.0.branch_id(),
+        }
+    }
+
     fn type_ref(&self) -> TypeRef {
         match self {
             Shared::Array(_) => TypeRef::Array,
@@ -263,7 +269,7 @@ impl Shared {
 impl Prelim for Shared {
     type Return = Unused;
 
-    fn into_content(self, txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
+    fn into_content(self, _: &mut TransactionMut) -> (ItemContent, Option<Self>) {
         let type_ref = self.type_ref();
         let branch = Branch::new(type_ref);
         (ItemContent::Type(branch), Some(self))

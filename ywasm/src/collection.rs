@@ -2,11 +2,11 @@ use crate::transaction::{ImplicitTransaction, YTransaction};
 use crate::Result;
 use std::ops::Deref;
 use wasm_bindgen::JsValue;
-use yrs::{Doc, Hook, ReadTxn, SharedRef, Transact, Transaction, TransactionMut};
+use yrs::{BranchID, Doc, Hook, ReadTxn, SharedRef, Transact, Transaction, TransactionMut};
 
 pub enum SharedCollection<P, S> {
-    Prelim(P),
     Integrated(Integrated<S>),
+    Prelim(P),
 }
 
 impl<P, S: SharedRef + 'static> SharedCollection<P, S> {
@@ -35,6 +35,14 @@ impl<P, S: SharedRef + 'static> SharedCollection<P, S> {
                 let desc = &col.hook;
                 desc.get(txn.deref()).is_some()
             }
+        }
+    }
+
+    #[inline]
+    pub fn branch_id(&self) -> Option<&BranchID> {
+        match self {
+            SharedCollection::Prelim(_) => None,
+            SharedCollection::Integrated(v) => Some(v.hook.id()),
         }
     }
 }

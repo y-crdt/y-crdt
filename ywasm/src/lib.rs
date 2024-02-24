@@ -9,6 +9,7 @@ mod collection;
 mod doc;
 mod js;
 mod transaction;
+mod undo;
 
 type Result<T> = std::result::Result<T, JsValue>;
 

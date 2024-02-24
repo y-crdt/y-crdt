@@ -66,6 +66,11 @@ where
         Self::with_options(doc, scope, Options::default())
     }
 
+    #[inline]
+    pub fn doc(&self) -> &Doc {
+        &self.0.doc
+    }
+
     /// Creates a new instance of the [UndoManager] working in a `scope` of a particular shared
     /// type and document. While it's possible for undo manager to observe multiple shared types
     /// (see: [UndoManager::expand_scope]), it can only work with a single document at the same time.
