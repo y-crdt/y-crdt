@@ -1015,12 +1015,12 @@ mod test {
         let c1 = Rc::new(RefCell::new(None));
         let c1c = c1.clone();
         let _s1 = a1.observe(move |_, e| {
-            *c1c.borrow_mut() = Some(e.target().desc());
+            *c1c.borrow_mut() = Some(e.target().hook());
         });
         let c2 = Rc::new(RefCell::new(None));
         let c2c = c2.clone();
         let _s2 = a2.observe(move |_, e| {
-            *c2c.borrow_mut() = Some(e.target().desc());
+            *c2c.borrow_mut() = Some(e.target().hook());
         });
 
         {
@@ -1029,8 +1029,8 @@ mod test {
         }
         exchange_updates(&[&d1, &d2]);
 
-        assert_eq!(c1.borrow_mut().take(), Some(a1.desc()));
-        assert_eq!(c2.borrow_mut().take(), Some(a2.desc()));
+        assert_eq!(c1.borrow_mut().take(), Some(a1.hook()));
+        assert_eq!(c2.borrow_mut().take(), Some(a2.hook()));
     }
 
     use crate::transaction::ReadTxn;

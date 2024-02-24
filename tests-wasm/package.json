@@ -5,6 +5,7 @@
   "description": "Test suite for Yrs Web Assembly package.",
   "main": "index.js",
   "scripts": {
+    "build": "wasm-pack build --target nodejs ../ywasm",
     "test": "node  --experimental-wasm-modules index.js"
   },
   "contributors": [

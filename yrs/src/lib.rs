@@ -528,7 +528,7 @@ pub use crate::alt::{
 pub use crate::any::Any;
 pub use crate::block::ID;
 pub use crate::branch::BranchID;
-pub use crate::branch::Desc;
+pub use crate::branch::Hook;
 pub use crate::branch::Nested;
 pub use crate::branch::Root;
 pub use crate::doc::Doc;

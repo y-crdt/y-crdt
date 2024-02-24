@@ -7,7 +7,7 @@ use std::iter::FromIterator;
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
 use yrs::types::array::ArrayEvent;
-use yrs::types::ToJson;
+use yrs::types::{ToJson, TYPE_REFS_ARRAY};
 use yrs::{Array, ArrayRef, DeepObservable, Observable, SharedRef, TransactionMut};
 
 /// A collection used to store data in an indexed sequence structure. This type is internally
@@ -42,6 +42,11 @@ impl YArray {
     #[wasm_bindgen(constructor)]
     pub fn new(items: Option<Vec<JsValue>>) -> Self {
         YArray(SharedCollection::prelim(items.unwrap_or_default()))
+    }
+
+    #[wasm_bindgen(getter, js_name = type)]
+    pub fn get_type(&self) -> u8 {
+        TYPE_REFS_ARRAY
     }
 
     /// Returns true if this is a preliminary instance of `YArray`.
@@ -83,7 +88,8 @@ impl YArray {
                 Ok(a.into())
             }
             SharedCollection::Integrated(c) => c.readonly(txn, |c, txn| {
-                JsValue::from_serde(&c.to_json(txn)).map_err(|e| JsValue::from_str(&e.to_string()))
+                let any = c.to_json(txn);
+                JsValue::from_serde(&any).map_err(|e| JsValue::from_str(&e.to_string()))
             }),
         }
     }
@@ -305,17 +311,22 @@ pub(crate) trait ArrayExt: Array + SharedRef {
             let js = Js::from(value);
             match js.as_value()? {
                 ValueRef::Any(any) => primitive.push(any),
-                ValueRef::Shared(shared) if shared.prelim() => {
-                    let len = primitive.len() as u32;
-                    if len > 0 {
-                        self.insert_range(txn, j, std::mem::take(&mut primitive));
-                        j += len;
+                ValueRef::Shared(shared) => {
+                    if shared.prelim() {
+                        let len = primitive.len() as u32;
+                        if len > 0 {
+                            self.insert_range(txn, j, std::mem::take(&mut primitive));
+                            j += len;
+                        }
+                        self.insert(txn, j, shared);
+                        j += 1;
+                    } else {
+                        let err = format!("cannot insert item at index {}: shared collection is not a preliminary type", i);
+                        return Err(JsValue::from(&err));
                     }
-                    self.insert(txn, j, shared);
-                    j += 1;
                 }
                 _ => {
-                    let err = format!("item at position {} cannot be inserted", i);
+                    let err = format!("cannot insert item at index {}", i);
                     return Err(JsValue::from(&err));
                 }
             }
@@ -368,6 +379,16 @@ impl YArrayEvent {
             YArray(SharedCollection::integrated(target.clone(), doc.clone())).into()
         });
         js.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn origin(&mut self) -> JsValue {
+        let origin = self.txn.origin();
+        if let Some(origin) = origin {
+            Js::from(origin).into()
+        } else {
+            JsValue::UNDEFINED
+        }
     }
 
     /// Returns a list of text changes made over corresponding `YArray` collection within

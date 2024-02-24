@@ -1304,13 +1304,13 @@ mod test {
             "query selector should found two paragraphs"
         );
         assert_eq!(
-            actual[0].desc(),
-            p1.desc(),
+            actual[0].hook(),
+            p1.hook(),
             "query selector found 1st paragraph"
         );
         assert_eq!(
-            actual[1].desc(),
-            p2.desc(),
+            actual[1].hook(),
+            p2.hook(),
             "query selector found 2nd paragraph"
         );
     }
@@ -1338,23 +1338,23 @@ mod test {
 
         assert_eq!(
             &first.siblings(&txn).next().unwrap().id(),
-            second.desc().id(),
+            second.hook().id(),
             "first.next_sibling should point to second"
         );
         assert_eq!(
             &second.siblings(&txn).next_back().unwrap().id(),
-            first.desc().id(),
+            first.hook().id(),
             "second.prev_sibling should point to first"
         );
         assert_eq!(
             &first.parent().unwrap().id(),
-            root.desc().id(),
+            root.hook().id(),
             "first.parent should point to root"
         );
         assert!(root.parent().is_none(), "root parent should not exist");
         assert_eq!(
             &root.first_child().unwrap().id(),
-            first.desc().id(),
+            first.hook().id(),
             "root.first_child should point to first"
         );
     }

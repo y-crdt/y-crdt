@@ -7,7 +7,7 @@ use std::convert::TryInto;
 use std::ops::Deref;
 use std::sync::Arc;
 use wasm_bindgen::__rt::RefMut;
-use wasm_bindgen::convert::{FromWasmAbi, IntoWasmAbi, RefMutFromWasmAbi};
+use wasm_bindgen::convert::{FromWasmAbi, IntoWasmAbi};
 use wasm_bindgen::JsValue;
 use yrs::block::{ItemContent, Prelim, Unused};
 use yrs::branch::{Branch, BranchPtr};
@@ -61,13 +61,13 @@ impl Js {
                 Js(c.into())
             }
             _ => unreachable!(), //Value::YText(c) => {}
-            //Value::YMap(c) => {}
-            //Value::YXmlElement(c) => {}
-            //Value::YXmlFragment(c) => {}
-            //Value::YXmlText(c) => {}
-            //Value::YDoc(c) => {}
-            //Value::YWeakLink(c) => {}
-            //Value::UndefinedRef(c) => {}
+                                 //Value::YMap(c) => {}
+                                 //Value::YXmlElement(c) => {}
+                                 //Value::YXmlFragment(c) => {}
+                                 //Value::YXmlText(c) => {}
+                                 //Value::YDoc(c) => {}
+                                 //Value::YWeakLink(c) => {}
+                                 //Value::UndefinedRef(c) => {}
         }
     }
 
@@ -233,9 +233,7 @@ impl Shared {
         let tag = js_sys::Reflect::get(js, &JsValue::from_str("type"))?;
         if let Some(tag) = tag.as_f64() {
             match tag as u8 {
-                TYPE_REFS_ARRAY => Ok(Shared::Array(unsafe {
-                    YArray::ref_mut_from_abi(js.into_abi())
-                })),
+                TYPE_REFS_ARRAY => Ok(Shared::Array(convert::mut_from_js::<YArray>(js)?)),
                 TYPE_REFS_TEXT
                 | TYPE_REFS_MAP
                 | TYPE_REFS_XML_TEXT
@@ -290,13 +288,40 @@ impl Prelim for Shared {
     }
 }
 
+pub(crate) const JS_PTR: &'static str = "__wbg_ptr";
+
 pub(crate) mod convert {
     use crate::array::YArrayEvent;
     use crate::js::Js;
+    use wasm_bindgen::convert::{RefFromWasmAbi, RefMutFromWasmAbi};
     use wasm_bindgen::JsValue;
     use yrs::types::{Change, Event, Events, Path, PathSegment};
     use yrs::updates::decoder::Decode;
     use yrs::{Doc, StateVector, TransactionMut};
+
+    pub fn ref_from_js<T>(js: &JsValue) -> crate::Result<T::Anchor>
+    where
+        T: RefFromWasmAbi<Abi = u32>,
+    {
+        let ptr = js_sys::Reflect::get(&js, &JsValue::from_str(crate::js::JS_PTR))?;
+        let ptr_u32 =
+            ptr.as_f64()
+                .ok_or(JsValue::from_str(crate::js::errors::NOT_WASM_OBJ))? as u32;
+        let target = unsafe { T::ref_from_abi(ptr_u32) };
+        Ok(target)
+    }
+
+    pub fn mut_from_js<T>(js: &JsValue) -> crate::Result<T::Anchor>
+    where
+        T: RefMutFromWasmAbi<Abi = u32>,
+    {
+        let ptr = js_sys::Reflect::get(&js, &JsValue::from_str(crate::js::JS_PTR))?;
+        let ptr_u32 =
+            ptr.as_f64()
+                .ok_or(JsValue::from_str(crate::js::errors::NOT_WASM_OBJ))? as u32;
+        let target = unsafe { T::ref_mut_from_abi(ptr_u32) };
+        Ok(target)
+    }
 
     pub fn change_into_js(change: &Change, doc: &Doc) -> JsValue {
         let result = js_sys::Object::new();
@@ -339,10 +364,10 @@ pub(crate) mod convert {
             let js: JsValue = match e {
                 Event::Array(e) => YArrayEvent::new(e, txn).into(),
                 _ => todo!(), //Event::Text(e) => YTextEvent::new(e, txn).into(),
-                //Event::Map(e) => YMapEvent::new(e, txn).into(),
-                //Event::XmlText(e) => YXmlTextEvent::new(e, txn).into(),
-                //Event::XmlFragment(e) => YXmlEvent::new(e, txn).into(),
-                //Event::Weak(e) => YWeakLinkEvent::new(e, txn).into(),
+                              //Event::Map(e) => YMapEvent::new(e, txn).into(),
+                              //Event::XmlText(e) => YXmlTextEvent::new(e, txn).into(),
+                              //Event::XmlFragment(e) => YXmlEvent::new(e, txn).into(),
+                              //Event::Weak(e) => YWeakLinkEvent::new(e, txn).into(),
             };
             js
         });
@@ -375,4 +400,5 @@ pub(crate) mod errors {
     pub const OUT_OF_BOUNDS: &'static str = "index outside of the bounds of an array";
     pub const INVALID_PRELIM_OP: &'static str = "preliminary type doesn't support this operation";
     pub const NON_SUBDOC: &'static str = "current document is not a sub-document";
+    pub const NOT_WASM_OBJ: &'static str = "provided reference is not a WebAssembly object";
 }

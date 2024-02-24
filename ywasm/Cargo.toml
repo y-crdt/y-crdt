@@ -1,7 +1,7 @@
 [package]
 name = "ywasm"
 version = "0.17.4"
-authors = ["Kevin Jahns <kevin.jahns@protonmail.com>","Bartosz Sypytkowski <b.sypytkowski@gmail.com>"]
+authors = ["Kevin Jahns <kevin.jahns@protonmail.com>", "Bartosz Sypytkowski <b.sypytkowski@gmail.com>"]
 keywords = ["crdt", "wasm", "yrs"]
 edition = "2018"
 license = "MIT"

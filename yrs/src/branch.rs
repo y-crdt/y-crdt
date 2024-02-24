@@ -588,7 +588,7 @@ impl<'a, T: ReadTxn> Iterator for Iter<'a, T> {
 ///
 /// // logical descriptors of both TextRef are the same as they refer to the
 /// // same logical entity
-/// assert_eq!(txt1.desc(), txt2.desc());
+/// assert_eq!(txt1.hook(), txt2.hook());
 /// ```
 #[repr(transparent)]
 #[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
@@ -650,7 +650,7 @@ impl<S> Into<BranchID> for Root<S> {
 /// let text = root.insert(&mut txn, "nested", TextPrelim::new("")); // nested collection
 ///
 /// // convert nested TextRef into logical pointer
-/// let nested: Nested<TextRef> = text.desc().into_nested().unwrap();
+/// let nested: Nested<TextRef> = text.hook().into_nested().unwrap();
 ///
 /// // logical reference can be used to retrieve accessible TextRef when its alive
 /// assert_eq!(nested.get(&txn), Some(text));
@@ -706,60 +706,66 @@ impl<S> Into<BranchID> for Nested<S> {
 
 /// A descriptor used to reference to shared collections by their unique logical identifiers,
 /// which can be either [Root]-level collections or shared collections [Nested] into each other.
-/// It can be resolved from any shared reference using [SharedRef::desc].
-#[derive(Debug, Clone)]
-pub struct Desc<S> {
+/// It can be resolved from any shared reference using [SharedRef::hook].
+#[derive(Clone)]
+pub struct Hook<S> {
     id: BranchID,
     _tag: PhantomData<S>,
 }
 
-impl<S> Desc<S> {
+impl<S> Hook<S> {
     /// Unique logical identifier of a shared collection.
     pub fn id(&self) -> &BranchID {
         &self.id
     }
 }
 
-impl<S> Eq for Desc<S> {}
+impl<S> std::fmt::Debug for Hook<S> {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{:?}", self.id)
+    }
+}
 
-impl<S> PartialEq for Desc<S> {
+impl<S> Eq for Hook<S> {}
+
+impl<S> PartialEq for Hook<S> {
     fn eq(&self, other: &Self) -> bool {
         self.id == other.id
     }
 }
 
-impl<S> Hash for Desc<S> {
+impl<S> Hash for Hook<S> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.id.hash(state)
     }
 }
 
-impl<S: SharedRef> Desc<S> {
-    /// Returns a reference to a shared collection current descriptor points to, if it exists and
+impl<S: SharedRef> Hook<S> {
+    /// Returns a reference to a shared collection current hook points to, if it exists and
     /// (in case of nested collections) has not been deleted.
     ///
     /// # Example
     ///
     /// ```rust
-    /// use yrs::{Desc, Doc, Map, MapRef, Nested, SharedRef, TextPrelim, TextRef, Transact, WriteTxn};
+    /// use yrs::{Hook, Doc, Map, MapRef, Nested, SharedRef, TextPrelim, TextRef, Transact, WriteTxn};
     ///
     /// let doc = Doc::new();
     /// let mut txn = doc.transact_mut();
     /// let root = txn.get_or_insert_map("root"); // root-level collection
     /// let nested = root.insert(&mut txn, "nested", TextPrelim::new("")); // nested collection
     ///
-    /// let root_desc: Desc<MapRef> = root.desc();
-    /// let nested_desc: Desc<TextRef> = nested.desc();
+    /// let root_hook: Hook<MapRef> = root.hook();
+    /// let nested_hook: Hook<TextRef> = nested.hook();
     ///
-    /// // descriptor can be used to retrieve collection reference as long as its alive
-    /// assert_eq!(nested_desc.get(&txn), Some(nested));
+    /// // hook can be used to retrieve collection reference as long as its alive
+    /// assert_eq!(nested_hook.get(&txn), Some(nested));
     ///
     /// // after nested collection is deleted it can no longer be referenced
     /// root.remove(&mut txn, "nested");
-    /// assert_eq!(nested_desc.get(&txn), None, "wtf");
+    /// assert_eq!(nested_hook.get(&txn), None, "wtf");
     ///
     /// // descriptors work also for root types
-    /// assert_eq!(root_desc.get(&txn), Some(root));
+    /// assert_eq!(root_hook.get(&txn), Some(root));
     /// ```
     pub fn get<T: ReadTxn>(&self, txn: &T) -> Option<S> {
         let branch = self.id.get_branch(txn)?;
@@ -769,7 +775,7 @@ impl<S: SharedRef> Desc<S> {
         }
     }
 
-    /// Attempts to convert current [Desc] type into [Nested] one.
+    /// Attempts to convert current [Hook] type into [Nested] one.
     /// Returns `None` if current descriptor doesn't reference a nested shared collection.  
     pub fn into_nested(self) -> Option<Nested<S>> {
         match self.id {
@@ -779,8 +785,8 @@ impl<S: SharedRef> Desc<S> {
     }
 }
 
-impl<S: RootRef> Desc<S> {
-    /// Attempts to convert current [Desc] type into [Root] one.
+impl<S: RootRef> Hook<S> {
+    /// Attempts to convert current [Hook] type into [Root] one.
     /// Returns `None` if current descriptor doesn't reference a root-level shared collection.
     pub fn into_root(self) -> Option<Root<S>> {
         match self.id {
@@ -790,34 +796,34 @@ impl<S: RootRef> Desc<S> {
     }
 }
 
-impl<S> From<Root<S>> for Desc<S> {
+impl<S> From<Root<S>> for Hook<S> {
     fn from(root: Root<S>) -> Self {
-        Desc {
+        Hook {
             id: root.into(),
             _tag: PhantomData::default(),
         }
     }
 }
 
-impl<S> From<Nested<S>> for Desc<S> {
+impl<S> From<Nested<S>> for Hook<S> {
     fn from(nested: Nested<S>) -> Self {
-        Desc {
+        Hook {
             id: nested.into(),
             _tag: PhantomData::default(),
         }
     }
 }
 
-impl<S> From<BranchID> for Desc<S> {
+impl<S> From<BranchID> for Hook<S> {
     fn from(id: BranchID) -> Self {
-        Desc {
+        Hook {
             id,
             _tag: PhantomData::default(),
         }
     }
 }
 
-impl<S> Into<BranchID> for Desc<S> {
+impl<S> Into<BranchID> for Hook<S> {
     fn into(self) -> BranchID {
         self.id
     }

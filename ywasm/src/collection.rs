@@ -2,7 +2,7 @@ use crate::transaction::{ImplicitTransaction, YTransaction};
 use crate::Result;
 use std::ops::Deref;
 use wasm_bindgen::JsValue;
-use yrs::{Desc, Doc, ReadTxn, SharedRef, Transact, Transaction, TransactionMut};
+use yrs::{Doc, Hook, ReadTxn, SharedRef, Transact, Transaction, TransactionMut};
 
 pub enum SharedCollection<P, S> {
     Prelim(P),
@@ -32,7 +32,7 @@ impl<P, S: SharedRef + 'static> SharedCollection<P, S> {
         match self {
             SharedCollection::Prelim(_) => true,
             SharedCollection::Integrated(col) => {
-                let desc = &col.desc;
+                let desc = &col.hook;
                 desc.get(txn.deref()).is_some()
             }
         }
@@ -40,19 +40,19 @@ impl<P, S: SharedRef + 'static> SharedCollection<P, S> {
 }
 
 pub struct Integrated<S> {
-    pub desc: Desc<S>,
+    pub hook: Hook<S>,
     pub doc: Doc,
 }
 
 impl<S: SharedRef + 'static> Integrated<S> {
     pub fn new(shared_ref: S, doc: Doc) -> Self {
-        let desc = shared_ref.desc();
-        Integrated { desc, doc }
+        let desc = shared_ref.hook();
+        Integrated { hook: desc, doc }
     }
 
     pub fn readonly<F, T>(&self, txn: ImplicitTransaction, f: F) -> Result<T>
-        where
-            F: FnOnce(&S, &TransactionMut<'_>) -> Result<T>,
+    where
+        F: FnOnce(&S, &TransactionMut<'_>) -> Result<T>,
     {
         match YTransaction::from_implicit(&txn)? {
             Some(txn) => {
@@ -69,8 +69,8 @@ impl<S: SharedRef + 'static> Integrated<S> {
     }
 
     pub fn mutably<F, T>(&self, mut txn: ImplicitTransaction, f: F) -> Result<T>
-        where
-            F: FnOnce(&S, &mut TransactionMut<'_>) -> Result<T>,
+    where
+        F: FnOnce(&S, &mut TransactionMut<'_>) -> Result<T>,
     {
         match YTransaction::from_implicit_mut(&mut txn)? {
             Some(mut txn) => {
@@ -87,7 +87,7 @@ impl<S: SharedRef + 'static> Integrated<S> {
     }
 
     pub fn unpack<T: ReadTxn>(&self, txn: &T) -> Result<S> {
-        match self.desc.get(txn) {
+        match self.hook.get(txn) {
             Some(shared_ref) => Ok(shared_ref),
             None => Err(JsValue::from_str(crate::js::errors::REF_DISPOSED)),
         }

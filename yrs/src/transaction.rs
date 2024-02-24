@@ -91,8 +91,8 @@ pub trait ReadTxn: Sized {
 
     /// Check if given node is alive. Returns false if node has been deleted.
     fn is_alive<B>(&self, node: &B) -> bool
-        where
-            B: SharedRef,
+    where
+        B: SharedRef,
     {
         let ptr = BranchPtr::from(node.as_ref());
         self.store().is_alive(&ptr)

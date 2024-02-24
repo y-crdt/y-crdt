@@ -252,9 +252,9 @@ pub trait RootRef: SharedRef {
 /// Common trait for shared collaborative collection types in Yrs.
 pub trait SharedRef: From<BranchPtr> + AsRef<Branch> {
     /// Returns a logical descriptor of a current shared collection.
-    fn desc(&self) -> Desc<Self> {
+    fn hook(&self) -> Hook<Self> {
         let branch = self.as_ref();
-        Desc::from(branch.id())
+        Hook::from(branch.id())
     }
 }
 
