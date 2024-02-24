@@ -7,6 +7,11 @@ use crate::Result;
 use serde::Deserialize;
 use std::iter::FromIterator;
 use std::ops::Deref;
+use wasm_bindgen::convert::{
+    FromWasmAbi, IntoWasmAbi, LongRefFromWasmAbi, OptionFromWasmAbi, OptionIntoWasmAbi,
+    RefFromWasmAbi, ReturnWasmAbi,
+};
+use wasm_bindgen::describe::{WasmDescribe, RUST_STRUCT};
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
 use yrs::{Doc, OffsetKind, Options, ReadTxn, Transact};
@@ -35,8 +40,63 @@ use yrs::{Doc, OffsetKind, Options, ReadTxn, Transact};
 ///     txn.free()
 /// }
 /// ```
-#[wasm_bindgen]
+#[repr(transparent)]
 pub struct YDoc(pub(crate) Doc);
+
+#[automatically_derived]
+impl WasmDescribe for YDoc {
+    fn describe() {
+        use wasm_bindgen::describe::{inform, RUST_STRUCT};
+        const NAME: &'static str = "YDoc";
+        inform(RUST_STRUCT);
+        inform(NAME.len() as u32);
+        for c in NAME.chars() {
+            inform(c as u32);
+        }
+    }
+}
+
+#[automatically_derived]
+impl RefFromWasmAbi for YDoc {
+    type Abi = u32;
+    type Anchor = &'static YDoc;
+
+    #[inline]
+    unsafe fn ref_from_abi(js: Self::Abi) -> Self::Anchor {
+        let doc = js as *mut YDoc;
+        doc.as_ref().expect("YDoc is null")
+    }
+}
+
+#[automatically_derived]
+impl LongRefFromWasmAbi for YDoc {
+    type Abi = u32;
+    type Anchor = &'static YDoc;
+
+    #[inline]
+    unsafe fn long_ref_from_abi(js: Self::Abi) -> Self::Anchor {
+        Self::ref_from_abi(js)
+    }
+}
+
+#[automatically_derived]
+impl IntoWasmAbi for YDoc {
+    type Abi = u32;
+
+    #[inline]
+    fn into_abi(self) -> Self::Abi {
+        let addr = self.0.into_raw();
+        addr as u32
+    }
+}
+
+#[automatically_derived]
+impl OptionIntoWasmAbi for YDoc {
+    #[inline]
+    fn none() -> Self::Abi {
+        0
+    }
+}
 
 impl Deref for YDoc {
     type Target = Doc;
@@ -146,7 +206,7 @@ impl YDoc {
     /// If there was an instance with this name, but it was of different type, it will be projected
     /// onto `YText` instance.
     //#[wasm_bindgen(js_name = getText)]
-    //pub fn get_text(&mut self, name: &str) -> YText {
+    //pub fn get_text(&self, name: &str) -> YText {
     //    self.as_ref().get_or_insert_text(name).into()
     //}
 
@@ -171,7 +231,7 @@ impl YDoc {
     /// If there was an instance with this name, but it was of different type, it will be projected
     /// onto `YMap` instance.
     //#[wasm_bindgen(js_name = getMap)]
-    //pub fn get_map(&mut self, name: &str) -> YMap {
+    //pub fn get_map(&self, name: &str) -> YMap {
     //    self.as_ref().get_or_insert_map(name).into()
     //}
 
@@ -183,7 +243,7 @@ impl YDoc {
     /// If there was an instance with this name, but it was of different type, it will be projected
     /// onto `YXmlFragment` instance.
     //#[wasm_bindgen(js_name = getXmlFragment)]
-    //pub fn get_xml_fragment(&mut self, name: &str) -> YXmlFragment {
+    //pub fn get_xml_fragment(&self, name: &str) -> YXmlFragment {
     //    YXmlFragment(self.as_ref().get_or_insert_xml_fragment(name))
     //}
 
@@ -210,7 +270,7 @@ impl YDoc {
     ///
     /// Returns an observer, which can be freed in order to unsubscribe this callback.
     #[wasm_bindgen(js_name = onUpdateV2)]
-    pub fn on_update_v2(&mut self, f: js_sys::Function) -> Result<crate::Observer> {
+    pub fn on_update_v2(&self, f: js_sys::Function) -> Result<crate::Observer> {
         let subscription = self
             .observe_update_v2(move |txn, e| {
                 let update = js_sys::Uint8Array::from(e.update.as_slice());
@@ -226,7 +286,7 @@ impl YDoc {
     ///
     /// Returns an observer, which can be freed in order to unsubscribe this callback.
     #[wasm_bindgen(js_name = onAfterTransaction)]
-    pub fn on_after_transaction(&mut self, f: js_sys::Function) -> Result<crate::Observer> {
+    pub fn on_after_transaction(&self, f: js_sys::Function) -> Result<crate::Observer> {
         let subscription = self
             .observe_after_transaction(move |txn| {
                 let txn = YTransaction::from_ref(txn).into();
@@ -241,7 +301,7 @@ impl YDoc {
     ///
     /// Returns an observer, which can be freed in order to unsubscribe this callback.
     #[wasm_bindgen(js_name = onSubdocs)]
-    pub fn on_subdocs(&mut self, f: js_sys::Function) -> Result<crate::Observer> {
+    pub fn on_subdocs(&self, f: js_sys::Function) -> Result<crate::Observer> {
         let subscription = self
             .observe_subdocs(move |txn, e| {
                 let event: JsValue = YSubdocsEvent::new(e).into();
@@ -256,7 +316,7 @@ impl YDoc {
     ///
     /// Returns an observer, which can be freed in order to unsubscribe this callback.
     #[wasm_bindgen(js_name = onDestroy)]
-    pub fn on_destroy(&mut self, f: js_sys::Function) -> Result<crate::Observer> {
+    pub fn on_destroy(&self, f: js_sys::Function) -> Result<crate::Observer> {
         let subscription = self
             .observe_destroy(move |txn, e| {
                 let event: JsValue = YDoc::from(e.clone()).into();
@@ -290,7 +350,7 @@ impl YDoc {
 
     /// Emit `onDestroy` event and unregister all event handlers.
     #[wasm_bindgen(js_name = destroy)]
-    pub fn destroy(&mut self, parent_txn: &ImplicitTransaction) -> Result<()> {
+    pub fn destroy(&self, parent_txn: &ImplicitTransaction) -> Result<()> {
         match YTransaction::from_implicit_mut(parent_txn)? {
             Some(mut parent_txn) => {
                 self.0.destroy(parent_txn.as_mut()?);
@@ -391,6 +451,12 @@ impl YDoc {
     }
 }
 
+impl From<YDoc> for JsValue {
+    fn from(value: YDoc) -> Self {
+        unsafe { JsValue::from_abi(value.into_abi()) }
+    }
+}
+
 #[wasm_bindgen]
 pub struct YSubdocsEvent {
     added: js_sys::Array,
@@ -421,17 +487,17 @@ impl YSubdocsEvent {
     }
 
     #[wasm_bindgen(getter)]
-    pub fn added(&mut self) -> js_sys::Array {
+    pub fn added(&self) -> js_sys::Array {
         self.added.clone()
     }
 
     #[wasm_bindgen(getter)]
-    pub fn removed(&mut self) -> js_sys::Array {
+    pub fn removed(&self) -> js_sys::Array {
         self.removed.clone()
     }
 
     #[wasm_bindgen(getter)]
-    pub fn loaded(&mut self) -> js_sys::Array {
+    pub fn loaded(&self) -> js_sys::Array {
         self.loaded.clone()
     }
 }

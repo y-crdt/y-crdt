@@ -10,7 +10,7 @@ use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::OptionExt;
 use crate::{uuid_v4, ArrayRef, MapRef, ReadTxn, TextRef, Uuid, WriteTxn, XmlFragmentRef};
 use crate::{Any, Subscription};
-use atomic_refcell::{BorrowError, BorrowMutError};
+use atomic_refcell::{AtomicRefCell, BorrowError, BorrowMutError};
 use rand::Rng;
 use std::collections::HashMap;
 use std::convert::TryFrom;
@@ -73,6 +73,21 @@ impl Doc {
     /// Creates a new document with a randomized client identifier.
     pub fn new() -> Self {
         Self::with_options(Options::default())
+    }
+
+    #[doc(hidden)]
+    pub fn into_raw(self) -> *const Doc {
+        let ptr = Arc::into_raw(self.store.0);
+        ptr as *const Doc
+    }
+
+    #[doc(hidden)]
+    pub unsafe fn from_raw(ptr: *const Doc) -> Doc {
+        let ptr = ptr as *const AtomicRefCell<Store>;
+        let cell = Arc::from_raw(ptr);
+        Doc {
+            store: StoreRef(cell),
+        }
     }
 
     /// Creates a new document with a specified `client_id`. It's up to a caller to guarantee that
@@ -287,7 +302,7 @@ impl Doc {
 
     /// Starts destroy procedure for a current document, triggering an "destroy" callback and
     /// invalidating all event callback subscriptions.
-    pub fn destroy<T>(&mut self, parent_txn: &mut T)
+    pub fn destroy<T>(&self, parent_txn: &mut T)
     where
         T: WriteTxn,
     {

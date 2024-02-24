@@ -55,7 +55,7 @@ impl From<yrs::Subscription> for Observer {
 /// applyUpdate(localDoc, remoteDelta)
 /// ```
 #[wasm_bindgen(js_name = encodeStateVector)]
-pub fn encode_state_vector(doc: &mut Doc) -> Result<js_sys::Uint8Array> {
+pub fn encode_state_vector(doc: &Doc) -> Result<js_sys::Uint8Array> {
     let txn = doc
         .0
         .try_transact()
@@ -107,7 +107,7 @@ pub fn debug_update_v2(update: js_sys::Uint8Array) -> std::result::Result<String
 /// ```
 #[wasm_bindgen(js_name = encodeStateAsUpdate)]
 pub fn encode_state_as_update(
-    doc: &mut Doc,
+    doc: &Doc,
     vector: Option<js_sys::Uint8Array>,
 ) -> Result<js_sys::Uint8Array> {
     let txn = doc
@@ -141,7 +141,7 @@ pub fn encode_state_as_update(
 /// ```
 #[wasm_bindgen(js_name = encodeStateAsUpdateV2)]
 pub fn encode_state_as_update_v2(
-    doc: &mut Doc,
+    doc: &Doc,
     vector: Option<js_sys::Uint8Array>,
 ) -> Result<js_sys::Uint8Array> {
     let txn = doc
@@ -172,7 +172,7 @@ pub fn encode_state_as_update_v2(
 /// applyUpdateV2(localDoc, remoteDelta)
 /// ```
 #[wasm_bindgen(js_name = applyUpdate)]
-pub fn apply_update(doc: &mut Doc, update: js_sys::Uint8Array, origin: JsValue) -> Result<()> {
+pub fn apply_update(doc: &Doc, update: js_sys::Uint8Array, origin: JsValue) -> Result<()> {
     let txn = if origin.is_undefined() {
         doc.0.try_transact_mut_with(js::Js::from(origin))
     } else {
@@ -206,7 +206,7 @@ pub fn apply_update(doc: &mut Doc, update: js_sys::Uint8Array, origin: JsValue) 
 /// ```
 #[wasm_bindgen(js_name = applyUpdateV2)]
 pub fn apply_update_v2(
-    doc: &mut Doc,
+    doc: &Doc,
     update: js_sys::Uint8Array,
     origin: JsValue,
 ) -> std::result::Result<(), JsValue> {
