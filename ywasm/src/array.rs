@@ -1,6 +1,7 @@
 use crate::collection::SharedCollection;
-use crate::js::{Js, ValueRef};
+use crate::js::{Js, ValueRef, YRange};
 use crate::transaction::{ImplicitTransaction, YTransaction};
+use crate::weak::YWeakLink;
 use crate::{Observer, Result};
 use gloo_utils::format::JsValueSerdeExt;
 use std::iter::FromIterator;
@@ -8,7 +9,7 @@ use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
 use yrs::types::array::ArrayEvent;
 use yrs::types::{ToJson, TYPE_REFS_ARRAY};
-use yrs::{Array, ArrayRef, DeepObservable, Observable, SharedRef, TransactionMut};
+use yrs::{Array, ArrayRef, DeepObservable, Observable, Quotable, SharedRef, TransactionMut};
 
 /// A collection used to store data in an indexed sequence structure. This type is internally
 /// implemented as a double linked list, which may squash values inserted directly one after another
@@ -73,7 +74,7 @@ impl YArray {
 
     /// Returns a number of elements stored within this instance of `YArray`.
     #[wasm_bindgen(js_name = length)]
-    pub fn length(&self, txn: ImplicitTransaction) -> Result<u32> {
+    pub fn length(&self, txn: &ImplicitTransaction) -> Result<u32> {
         match &self.0 {
             SharedCollection::Prelim(c) => Ok(c.len() as u32),
             SharedCollection::Integrated(c) => c.readonly(txn, |c, txn| Ok(c.len(txn))),
@@ -82,7 +83,7 @@ impl YArray {
 
     /// Converts an underlying contents of this `YArray` instance into their JSON representation.
     #[wasm_bindgen(js_name = toJson)]
-    pub fn to_json(&self, txn: ImplicitTransaction) -> Result<JsValue> {
+    pub fn to_json(&self, txn: &ImplicitTransaction) -> Result<JsValue> {
         match &self.0 {
             SharedCollection::Prelim(c) => {
                 let a = js_sys::Array::new();
@@ -183,7 +184,7 @@ impl YArray {
 
     /// Returns an element stored under given `index`.
     #[wasm_bindgen(js_name = get)]
-    pub fn get(&self, index: u32, txn: ImplicitTransaction) -> Result<JsValue> {
+    pub fn get(&self, index: u32, txn: &ImplicitTransaction) -> Result<JsValue> {
         match &self.0 {
             SharedCollection::Prelim(c) => match c.get(index as usize) {
                 Some(item) => Ok(item.clone()),
@@ -203,23 +204,20 @@ impl YArray {
         upper: u32,
         lower_open: Option<bool>,
         upper_open: Option<bool>,
-        txn: ImplicitTransaction,
-    ) -> Result<JsValue> {
-        todo!()
-        //match &*self.0.borrow() {
-        //    SharedType::Integrated(v) => {
-        //        let range = YRange::new(lower, upper, lower_open, upper_open);
-        //        let value = if let Some(txn) = get_txn(txn) {
-        //            v.quote(&*txn, range)
-        //        } else {
-        //            v.quote(&v.transact(), range)
-        //        };
-        //        Ok(value.map(|v| YWeakLink::from(v).into()).unwrap_or_default())
-        //    }
-        //    SharedType::Prelim(_) => Err(JsValue::from_str(
-        //        "YArray.quote cannot be used over object not integrated into YDoc",
-        //    )),
-        //}
+        txn: &ImplicitTransaction,
+    ) -> Result<YWeakLink> {
+        match &self.0 {
+            SharedCollection::Prelim(_) => {
+                Err(JsValue::from_str(crate::js::errors::INVALID_PRELIM_OP))
+            }
+            SharedCollection::Integrated(c) => c.readonly(txn, |c, txn| {
+                let range = YRange::new(lower, upper, lower_open, upper_open);
+                let quote = c
+                    .quote(txn, range)
+                    .map_err(|e| JsValue::from_str(&e.to_string()))?;
+                Ok(YWeakLink::from_prelim(quote, txn.doc().clone()))
+            }),
+        }
     }
 
     /// Returns an iterator that can be used to traverse over the values stored withing this
@@ -244,7 +242,7 @@ impl YArray {
     /// }
     /// ```
     #[wasm_bindgen(js_name = values)]
-    pub fn values(&self, txn: ImplicitTransaction) -> Result<JsValue> {
+    pub fn values(&self, txn: &ImplicitTransaction) -> Result<JsValue> {
         match &self.0 {
             SharedCollection::Prelim(c) => Ok(js_sys::Array::from_iter(c).into()),
             SharedCollection::Integrated(c) => c.readonly(txn, |c, txn| {
@@ -269,7 +267,7 @@ impl YArray {
             }
             SharedCollection::Integrated(c) => {
                 let txn = c.transact()?;
-                let array = c.unpack(&txn)?;
+                let array = c.resolve(&txn)?;
                 Ok(Observer(array.observe(move |txn, e| {
                     let e = YArrayEvent::new(e, txn);
                     let txn = YTransaction::from_ref(txn);
@@ -292,7 +290,7 @@ impl YArray {
             }
             SharedCollection::Integrated(c) => {
                 let txn = c.transact()?;
-                let array = c.unpack(&txn)?;
+                let array = c.resolve(&txn)?;
                 Ok(Observer(array.observe_deep(move |txn, e| {
                     let e = crate::js::convert::events_into_js(txn, e);
                     let txn = YTransaction::from_ref(txn);

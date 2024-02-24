@@ -58,19 +58,19 @@ impl<S: SharedRef + 'static> Integrated<S> {
         Integrated { hook: desc, doc }
     }
 
-    pub fn readonly<F, T>(&self, txn: ImplicitTransaction, f: F) -> Result<T>
+    pub fn readonly<F, T>(&self, txn: &ImplicitTransaction, f: F) -> Result<T>
     where
         F: FnOnce(&S, &TransactionMut<'_>) -> Result<T>,
     {
-        match YTransaction::from_implicit(&txn)? {
+        match YTransaction::from_implicit(txn)? {
             Some(txn) => {
                 let txn: &TransactionMut = &*txn;
-                let shared_ref = self.unpack(txn)?;
+                let shared_ref = self.resolve(txn)?;
                 f(&shared_ref, txn)
             }
             None => {
                 let txn = self.transact_mut()?;
-                let shared_ref = self.unpack(&txn)?;
+                let shared_ref = self.resolve(&txn)?;
                 f(&shared_ref, &txn)
             }
         }
@@ -83,18 +83,18 @@ impl<S: SharedRef + 'static> Integrated<S> {
         match YTransaction::from_implicit_mut(&mut txn)? {
             Some(mut txn) => {
                 let txn = txn.as_mut()?;
-                let shared_ref = self.unpack(txn)?;
+                let shared_ref = self.resolve(txn)?;
                 f(&shared_ref, txn)
             }
             None => {
                 let mut txn = self.transact_mut()?;
-                let shared_ref = self.unpack(&mut txn)?;
+                let shared_ref = self.resolve(&mut txn)?;
                 f(&shared_ref, &mut txn)
             }
         }
     }
 
-    pub fn unpack<T: ReadTxn>(&self, txn: &T) -> Result<S> {
+    pub fn resolve<T: ReadTxn>(&self, txn: &T) -> Result<S> {
         match self.hook.get(txn) {
             Some(shared_ref) => Ok(shared_ref),
             None => Err(JsValue::from_str(crate::js::errors::REF_DISPOSED)),

@@ -76,6 +76,7 @@ use thiserror::Error;
 pub struct WeakRef<P>(P);
 
 impl<P: SharedRef> SharedRef for WeakRef<P> {}
+impl SharedRef for WeakRef<BranchPtr> {}
 impl<P: SharedRef> From<WeakRef<BranchPtr>> for WeakRef<P> {
     fn from(value: WeakRef<BranchPtr>) -> Self {
         WeakRef(P::from(value.0))
@@ -398,6 +399,15 @@ impl<P: AsRef<Branch>> From<WeakRef<P>> for WeakPrelim<P> {
             }
         } else {
             panic!("Defect: WeakRef's underlying branch is not matching expected weak ref.")
+        }
+    }
+}
+
+impl<P: AsRef<Branch>> WeakPrelim<P> {
+    pub fn upcast(self) -> WeakPrelim<BranchPtr> {
+        WeakPrelim {
+            source: self.source,
+            _marker: Default::default(),
         }
     }
 }

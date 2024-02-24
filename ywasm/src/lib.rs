@@ -10,15 +10,19 @@ mod doc;
 mod js;
 mod transaction;
 mod undo;
+mod weak;
 
 type Result<T> = std::result::Result<T, JsValue>;
 
 pub use crate::array::YArray as Array;
 pub use crate::array::YArrayEvent as ArrayEvent;
 pub use crate::doc::YDoc as Doc;
-use crate::js::Js;
 pub use crate::transaction::ImplicitTransaction;
 pub use crate::transaction::YTransaction as Transaction;
+pub use crate::undo::YUndoEvent as UndoEvent;
+pub use crate::undo::YUndoManager as UndoManager;
+pub use crate::weak::YWeakLink as WeakLink;
+pub use crate::weak::YWeakLinkEvent as WeakLinkEvent;
 
 #[wasm_bindgen]
 #[repr(transparent)]
@@ -170,7 +174,7 @@ pub fn encode_state_as_update_v2(
 #[wasm_bindgen(js_name = applyUpdate)]
 pub fn apply_update(doc: &mut Doc, update: js_sys::Uint8Array, origin: JsValue) -> Result<()> {
     let txn = if origin.is_undefined() {
-        doc.0.try_transact_mut_with(Js::from(origin))
+        doc.0.try_transact_mut_with(js::Js::from(origin))
     } else {
         doc.0.try_transact_mut()
     };
@@ -207,7 +211,7 @@ pub fn apply_update_v2(
     origin: JsValue,
 ) -> std::result::Result<(), JsValue> {
     let txn = if origin.is_undefined() {
-        doc.0.try_transact_mut_with(Js::from(origin))
+        doc.0.try_transact_mut_with(js::Js::from(origin))
     } else {
         doc.0.try_transact_mut()
     };

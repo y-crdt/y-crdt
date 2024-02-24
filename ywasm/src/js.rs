@@ -2,9 +2,9 @@ use crate::array::{ArrayExt, YArray};
 use crate::collection::{Integrated, SharedCollection};
 use crate::Result;
 use js_sys::Uint8Array;
-use std::collections::HashMap;
+use std::collections::{Bound, HashMap};
 use std::convert::TryInto;
-use std::ops::Deref;
+use std::ops::{Deref, RangeBounds};
 use std::sync::Arc;
 use wasm_bindgen::__rt::RefMut;
 use wasm_bindgen::convert::{FromWasmAbi, IntoWasmAbi};
@@ -290,6 +290,43 @@ impl Prelim for Shared {
                     array.insert_at(txn, 0, raw).unwrap();
                 }
             }
+        }
+    }
+}
+
+pub(crate) struct YRange {
+    lower: u32,
+    upper: u32,
+    lower_open: bool,
+    upper_open: bool,
+}
+
+impl YRange {
+    #[inline]
+    pub fn new(lower: u32, upper: u32, lower_open: Option<bool>, upper_open: Option<bool>) -> Self {
+        YRange {
+            lower,
+            upper,
+            lower_open: lower_open.unwrap_or(false),
+            upper_open: upper_open.unwrap_or(false),
+        }
+    }
+}
+
+impl RangeBounds<u32> for YRange {
+    fn start_bound(&self) -> Bound<&u32> {
+        if self.lower_open {
+            Bound::Excluded(&self.lower)
+        } else {
+            Bound::Included(&self.lower)
+        }
+    }
+
+    fn end_bound(&self) -> Bound<&u32> {
+        if self.upper_open {
+            Bound::Excluded(&self.upper)
+        } else {
+            Bound::Included(&self.upper)
         }
     }
 }
