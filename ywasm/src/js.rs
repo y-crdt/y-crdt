@@ -1,6 +1,8 @@
 use crate::array::{ArrayExt, YArray};
 use crate::collection::{Integrated, SharedCollection};
 use crate::doc::YDoc;
+use crate::map::YMap;
+use crate::text::YText;
 use crate::weak::YWeakLink;
 use crate::Result;
 use js_sys::Uint8Array;
@@ -11,13 +13,16 @@ use std::sync::Arc;
 use wasm_bindgen::__rt::RefMut;
 use wasm_bindgen::convert::{FromWasmAbi, IntoWasmAbi};
 use wasm_bindgen::JsValue;
-use yrs::block::{ItemContent, Prelim, Unused};
+use yrs::block::{EmbedPrelim, ItemContent, Prelim, Unused};
 use yrs::branch::{Branch, BranchPtr};
 use yrs::types::{
     TypeRef, TYPE_REFS_ARRAY, TYPE_REFS_DOC, TYPE_REFS_MAP, TYPE_REFS_TEXT, TYPE_REFS_WEAK,
     TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_TEXT,
 };
-use yrs::{Any, ArrayRef, BranchID, Doc, Origin, TransactionMut, Value, WeakRef};
+use yrs::{
+    Any, ArrayRef, BranchID, Doc, Map, MapRef, Origin, Text, TextRef, TransactionMut, Value,
+    WeakRef,
+};
 
 #[repr(transparent)]
 pub struct Js(JsValue);
@@ -211,6 +216,15 @@ impl Prelim for Js {
     }
 }
 
+impl Into<EmbedPrelim<Js>> for Js {
+    fn into(self) -> EmbedPrelim<Js> {
+        match self.as_value().unwrap() {
+            ValueRef::Any(any) => EmbedPrelim::Primitive(any),
+            ValueRef::Shared(_) => EmbedPrelim::Shared(self),
+        }
+    }
+}
+
 pub enum ValueRef {
     Any(Any),
     Shared(Shared),
@@ -227,6 +241,8 @@ impl ValueRef {
 }
 
 pub enum Shared {
+    Text(RefMut<'static, YText>),
+    Map(RefMut<'static, YMap>),
     Array(RefMut<'static, YArray>),
     Weak(RefMut<'static, YWeakLink>),
     Doc(RefMut<'static, YDoc>),
@@ -237,15 +253,14 @@ impl Shared {
         let tag = js_sys::Reflect::get(js, &JsValue::from_str("type"))?;
         if let Some(tag) = tag.as_f64() {
             match tag as u8 {
+                TYPE_REFS_TEXT => Ok(Shared::Text(convert::mut_from_js::<YText>(js)?)),
+                TYPE_REFS_MAP => Ok(Shared::Map(convert::mut_from_js::<YMap>(js)?)),
                 TYPE_REFS_ARRAY => Ok(Shared::Array(convert::mut_from_js::<YArray>(js)?)),
                 TYPE_REFS_WEAK => Ok(Shared::Weak(convert::mut_from_js::<YWeakLink>(js)?)),
                 TYPE_REFS_DOC => Ok(Shared::Doc(convert::mut_from_js::<YDoc>(js)?)),
-                TYPE_REFS_TEXT
-                | TYPE_REFS_MAP
-                | TYPE_REFS_XML_TEXT
-                | TYPE_REFS_XML_ELEMENT
-                | TYPE_REFS_XML_FRAGMENT
-                | _ => Err(js.clone()),
+                TYPE_REFS_XML_TEXT | TYPE_REFS_XML_ELEMENT | TYPE_REFS_XML_FRAGMENT | _ => {
+                    Err(js.clone())
+                }
             }
         } else {
             Err(js.clone())
@@ -254,6 +269,8 @@ impl Shared {
 
     pub fn prelim(&self) -> bool {
         match self {
+            Shared::Text(v) => v.prelim(),
+            Shared::Map(v) => v.prelim(),
             Shared::Array(v) => v.prelim(),
             Shared::Doc(v) => v.prelim(),
             Shared::Weak(v) => v.prelim(),
@@ -262,6 +279,8 @@ impl Shared {
 
     pub fn branch_id(&self) -> Option<&BranchID> {
         match self {
+            Shared::Text(v) => v.0.branch_id(),
+            Shared::Map(v) => v.0.branch_id(),
             Shared::Array(v) => v.0.branch_id(),
             Shared::Weak(v) => v.0.branch_id(),
             Shared::Doc(_) => panic!("don't use YDoc in this context"),
@@ -270,6 +289,8 @@ impl Shared {
 
     fn type_ref(&self) -> TypeRef {
         match self {
+            Shared::Text(_) => TypeRef::Text,
+            Shared::Map(_) => TypeRef::Map,
             Shared::Array(_) => TypeRef::Array,
             Shared::Doc(_) => TypeRef::SubDoc,
             Shared::Weak(v) => TypeRef::WeakLink(v.source()),
@@ -289,6 +310,32 @@ impl Prelim for Shared {
     fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
         let doc = txn.doc().clone();
         match self {
+            Shared::Text(mut cell) => {
+                let text = TextRef::from(inner_ref);
+                if let YText(SharedCollection::Prelim(raw)) = std::mem::replace(
+                    &mut *cell,
+                    YText(SharedCollection::Integrated(Integrated::new(
+                        text.clone(),
+                        doc,
+                    ))),
+                ) {
+                    text.insert(txn, 0, &raw);
+                }
+            }
+            Shared::Map(mut cell) => {
+                let map = MapRef::from(inner_ref);
+                if let YMap(SharedCollection::Prelim(raw)) = std::mem::replace(
+                    &mut *cell,
+                    YMap(SharedCollection::Integrated(Integrated::new(
+                        map.clone(),
+                        doc,
+                    ))),
+                ) {
+                    for (key, js_val) in raw {
+                        map.insert(txn, key, Js::new(js_val));
+                    }
+                }
+            }
             Shared::Array(mut cell) => {
                 let array = ArrayRef::from(inner_ref);
                 if let YArray(SharedCollection::Prelim(raw)) = std::mem::replace(
@@ -358,9 +405,10 @@ pub(crate) const JS_PTR: &'static str = "__wbg_ptr";
 pub(crate) mod convert {
     use crate::array::YArrayEvent;
     use crate::js::Js;
+    use gloo_utils::format::JsValueSerdeExt;
     use wasm_bindgen::convert::{RefFromWasmAbi, RefMutFromWasmAbi};
     use wasm_bindgen::JsValue;
-    use yrs::types::{Change, EntryChange, Event, Events, Path, PathSegment};
+    use yrs::types::{Change, Delta, EntryChange, Event, Events, Path, PathSegment};
     use yrs::updates::decoder::Decode;
     use yrs::{Doc, StateVector, TransactionMut};
 
@@ -433,6 +481,40 @@ pub(crate) mod convert {
         Ok(result.into())
     }
 
+    pub fn text_delta_into_js(delta: &Delta, doc: &Doc) -> crate::Result<JsValue> {
+        let result = js_sys::Object::new();
+        match delta {
+            Delta::Inserted(value, attrs) => {
+                js_sys::Reflect::set(
+                    &result,
+                    &JsValue::from("insert"),
+                    &Js::from_value(value, doc).into(),
+                )?;
+
+                if let Some(attrs) = attrs {
+                    let attrs = JsValue::from_serde(attrs)
+                        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+                    js_sys::Reflect::set(&result, &JsValue::from("attributes"), &attrs)?;
+                }
+            }
+            Delta::Retain(len, attrs) => {
+                let value = JsValue::from(*len);
+                js_sys::Reflect::set(&result, &JsValue::from("retain"), &value)?;
+
+                if let Some(attrs) = attrs {
+                    let attrs = JsValue::from_serde(&attrs)
+                        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+                    js_sys::Reflect::set(&result, &JsValue::from("attributes"), &attrs)?;
+                }
+            }
+            Delta::Deleted(len) => {
+                let value = JsValue::from(*len);
+                js_sys::Reflect::set(&result, &JsValue::from("delete"), &value)?;
+            }
+        }
+        Ok(result.into())
+    }
+
     pub fn path_into_js(path: Path) -> JsValue {
         let result = js_sys::Array::new();
         for segment in path {
@@ -490,6 +572,8 @@ pub(crate) mod errors {
     pub const OUT_OF_BOUNDS: &'static str = "index outside of the bounds of an array";
     pub const KEY_NOT_FOUND: &'static str = "key was not found in a map";
     pub const INVALID_PRELIM_OP: &'static str = "preliminary type doesn't support this operation";
+    pub const INVALID_ATTRIBUTES: &'static str =
+        "given object cannot be used as formatting attributes";
     pub const NOT_PRELIM: &'static str = "this operation only works on preliminary types";
     pub const NON_SUBDOC: &'static str = "current document is not a sub-document";
     pub const NOT_WASM_OBJ: &'static str = "provided reference is not a WebAssembly object";

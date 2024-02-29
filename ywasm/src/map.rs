@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
 use yrs::types::map::MapEvent;
-use yrs::types::ToJson;
+use yrs::types::{ToJson, TYPE_REFS_MAP};
 use yrs::{DeepObservable, Map, MapRef, Observable, TransactionMut};
 
 /// Collection used to store key-value entries in an unordered manner. Keys are always represented
@@ -46,6 +46,12 @@ impl YMap {
             HashMap::new()
         };
         YMap(SharedCollection::prelim(map))
+    }
+
+    #[wasm_bindgen(getter, js_name = type)]
+    #[inline]
+    pub fn get_type(&self) -> u8 {
+        TYPE_REFS_MAP
     }
 
     /// Returns true if this is a preliminary instance of `YMap`.

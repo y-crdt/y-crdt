@@ -118,7 +118,7 @@ export const testIterator = tc => {
     t.compare(x.length(), 3)
 
     let i = 1;
-    let txn = d1.transaction()
+    let txn = d1.beginTransaction()
     for (let v of x.values(txn)) {
         t.compare(v, i)
         i++

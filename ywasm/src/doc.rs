@@ -2,6 +2,7 @@ use crate::array::YArray;
 use crate::collection::SharedCollection;
 use crate::js::Js;
 use crate::map::YMap;
+use crate::text::YText;
 use crate::transaction::YTransaction;
 use crate::ImplicitTransaction;
 use crate::Result;
@@ -162,10 +163,11 @@ impl YDoc {
     ///
     /// If there was an instance with this name, but it was of different type, it will be projected
     /// onto `YText` instance.
-    //#[wasm_bindgen(js_name = getText)]
-    //pub fn get_text(&self, name: &str) -> YText {
-    //    self.as_ref().get_or_insert_text(name).into()
-    //}
+    #[wasm_bindgen(js_name = getText)]
+    pub fn get_text(&self, name: &str) -> YText {
+        let shared_ref = self.get_or_insert_text(name);
+        YText(SharedCollection::integrated(shared_ref, self.0.clone()))
+    }
 
     /// Returns a `YArray` shared data type, that's accessible for subsequent accesses using given
     /// `name`.

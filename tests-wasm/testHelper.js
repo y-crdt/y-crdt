@@ -4,7 +4,7 @@ import * as Y from 'ywasm'
  * @this {YDoc}
  */
 Y.YDoc.prototype.transact = function (callback, origin) {
-    let txn = this.transaction(origin)
+    let txn = this.beginTransaction(origin)
     try {
         return callback(txn)
     } finally {
