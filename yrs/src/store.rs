@@ -18,7 +18,7 @@ use atomic_refcell::{AtomicRef, AtomicRefCell, AtomicRefMut, BorrowError, Borrow
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::ops::Deref;
-use std::sync::{Arc, Weak};
+use std::sync::Arc;
 
 /// Store is a core element of a document. It contains all of the information, like block store
 /// map of root types, pending updates waiting to be applied once a missing update information
@@ -160,13 +160,13 @@ impl Store {
             encoder.write_var(0);
             for i in 0..last_idx {
                 let block = blocks[i].as_slice();
-                block.encode(encoder, Some(self));
+                block.encode(encoder);
             }
             let last_block = &blocks[last_idx];
             // write first struct with an offset
             let mut slice = last_block.as_slice();
             slice.trim_end(slice.clock_end() - (clock - 1));
-            slice.encode(encoder, Some(self));
+            slice.encode(encoder);
         }
     }
 
@@ -210,9 +210,9 @@ impl Store {
             let offset = clock - first_block.clock_start();
             let mut slice = first_block.as_slice();
             slice.trim_start(offset);
-            slice.encode(encoder, Some(self));
+            slice.encode(encoder);
             for i in (start + 1)..blocks.len() {
-                blocks[i].as_slice().encode(encoder, Some(self));
+                blocks[i].as_slice().encode(encoder);
             }
         }
     }
@@ -416,16 +416,6 @@ impl std::fmt::Display for Store {
 
 #[repr(transparent)]
 #[derive(Debug, Clone)]
-pub struct WeakStoreRef(pub(crate) Weak<AtomicRefCell<Store>>);
-
-impl PartialEq for WeakStoreRef {
-    fn eq(&self, other: &Self) -> bool {
-        self.0.ptr_eq(&other.0)
-    }
-}
-
-#[repr(transparent)]
-#[derive(Debug, Clone)]
 pub(crate) struct StoreRef(pub(crate) Arc<AtomicRefCell<Store>>);
 
 impl StoreRef {
@@ -435,10 +425,6 @@ impl StoreRef {
 
     pub fn try_borrow_mut(&self) -> Result<AtomicRefMut<Store>, BorrowMutError> {
         self.0.try_borrow_mut()
-    }
-
-    pub fn weak_ref(&self) -> WeakStoreRef {
-        WeakStoreRef(Arc::downgrade(&self.0))
     }
 
     pub fn options(&self) -> &Options {

@@ -327,10 +327,6 @@ pub(crate) trait ArrayExt: Array + SharedRef {
                         return Err(JsValue::from(&err));
                     }
                 }
-                _ => {
-                    let err = format!("cannot insert item at index {}", i);
-                    return Err(JsValue::from(&err));
-                }
             }
             i += 1;
         }

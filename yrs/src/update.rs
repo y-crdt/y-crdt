@@ -866,7 +866,7 @@ impl BlockCarrier {
         match self {
             BlockCarrier::Item(x) => {
                 let slice = ItemSlice::new(x.into(), offset, x.len() - 1);
-                slice.encode(encoder, None)
+                slice.encode(encoder)
             }
             BlockCarrier::Skip(x) => {
                 encoder.write_info(BLOCK_SKIP_REF_NUMBER);

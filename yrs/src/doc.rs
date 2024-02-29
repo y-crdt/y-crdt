@@ -8,7 +8,9 @@ use crate::types::{RootRef, ToJson, Value};
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::OptionExt;
-use crate::{uuid_v4, ArrayRef, MapRef, ReadTxn, TextRef, Uuid, WriteTxn, XmlFragmentRef};
+use crate::{
+    uuid_v4, ArrayRef, BranchID, MapRef, ReadTxn, TextRef, Uuid, WriteTxn, XmlFragmentRef,
+};
 use crate::{Any, Subscription};
 use atomic_refcell::{AtomicRefCell, BorrowError, BorrowMutError};
 use rand::Rng;
@@ -50,6 +52,7 @@ use thiserror::Error;
 /// // now apply update to a remote document
 /// remote_txn.apply_update(Update::decode_v1(update.as_slice()).unwrap());
 /// ```
+#[repr(transparent)]
 #[derive(Debug, Clone)]
 pub struct Doc {
     store: StoreRef,
@@ -88,6 +91,12 @@ impl Doc {
         Doc {
             store: StoreRef(cell),
         }
+    }
+
+    #[doc(hidden)]
+    pub fn as_raw(self) -> *const Doc {
+        let ptr = Arc::as_ptr(&self.store.0);
+        ptr as *const Doc
     }
 
     /// Creates a new document with a specified `client_id`. It's up to a caller to guarantee that
@@ -309,7 +318,7 @@ impl Doc {
         let mut txn = self.transact_mut();
         let store = txn.store_mut();
         let subdocs: Vec<_> = store.subdocs.values().cloned().collect();
-        for mut subdoc in subdocs {
+        for subdoc in subdocs {
             subdoc.destroy(&mut txn);
         }
         if let Some(mut item) = txn.store.parent.take() {
@@ -352,6 +361,15 @@ impl Doc {
         }
 
         None
+    }
+
+    pub fn branch_id(&self) -> Option<BranchID> {
+        let store = unsafe { self.store.0.as_ptr().as_ref() }.unwrap();
+        if let Some(item) = store.parent {
+            Some(BranchID::Nested(item.id))
+        } else {
+            None
+        }
     }
 
     pub fn ptr_eq(a: &Doc, b: &Doc) -> bool {

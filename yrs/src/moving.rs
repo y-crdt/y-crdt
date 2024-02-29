@@ -412,7 +412,7 @@ impl StickyIndex {
         Self::new(IndexScope::Relative(id), assoc)
     }
 
-    pub fn from_type<T, B>(txn: &T, branch: &B, assoc: Assoc) -> Self
+    pub fn from_type<T, B>(_txn: &T, branch: &B, assoc: Assoc) -> Self
     where
         T: ReadTxn,
         B: AsRef<Branch>,

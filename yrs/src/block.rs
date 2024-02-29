@@ -719,7 +719,6 @@ impl ItemPtr {
                     // /** @type {AbstractType<any>} */ (item.parent)._searchMarker = null
                 }
                 ItemContent::Type(branch) => {
-                    let b = Arc::get_mut(branch).unwrap();
                     let ptr = if this.info.is_deleted() {
                         BranchPtr::from(branch)
                     } else {

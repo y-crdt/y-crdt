@@ -1,5 +1,6 @@
 use crate::array::{ArrayExt, YArray};
 use crate::collection::{Integrated, SharedCollection};
+use crate::doc::YDoc;
 use crate::Result;
 use js_sys::Uint8Array;
 use std::collections::{Bound, HashMap};
@@ -12,8 +13,8 @@ use wasm_bindgen::JsValue;
 use yrs::block::{ItemContent, Prelim, Unused};
 use yrs::branch::{Branch, BranchPtr};
 use yrs::types::{
-    TypeRef, TYPE_REFS_ARRAY, TYPE_REFS_MAP, TYPE_REFS_TEXT, TYPE_REFS_WEAK, TYPE_REFS_XML_ELEMENT,
-    TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_TEXT,
+    TypeRef, TYPE_REFS_ARRAY, TYPE_REFS_DOC, TYPE_REFS_MAP, TYPE_REFS_TEXT, TYPE_REFS_WEAK,
+    TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_TEXT,
 };
 use yrs::{Any, ArrayRef, BranchID, Doc, Origin, TransactionMut, Value};
 
@@ -191,11 +192,13 @@ impl Prelim for Js {
         match self.as_value().unwrap() {
             ValueRef::Any(any) => (ItemContent::Any(vec![any]), None),
             ValueRef::Shared(shared) => {
+                if !shared.prelim() {
+                    panic!("{}", errors::NOT_PRELIM);
+                }
                 let type_ref = shared.type_ref();
                 let branch = Branch::new(type_ref);
                 (ItemContent::Type(branch), Some(self))
             }
-            ValueRef::Doc(_) => todo!(),
         }
     }
 
@@ -203,7 +206,6 @@ impl Prelim for Js {
         match self.as_value().unwrap() {
             ValueRef::Any(_) => { /* nothing to do */ }
             ValueRef::Shared(shared) => shared.integrate(txn, inner_ref),
-            ValueRef::Doc(_) => todo!(),
         }
     }
 }
@@ -211,7 +213,6 @@ impl Prelim for Js {
 pub enum ValueRef {
     Any(Any),
     Shared(Shared),
-    Doc(Doc),
 }
 
 impl ValueRef {
@@ -226,6 +227,7 @@ impl ValueRef {
 
 pub enum Shared {
     Array(RefMut<'static, YArray>),
+    Doc(RefMut<'static, YDoc>),
 }
 
 impl Shared {
@@ -234,6 +236,7 @@ impl Shared {
         if let Some(tag) = tag.as_f64() {
             match tag as u8 {
                 TYPE_REFS_ARRAY => Ok(Shared::Array(convert::mut_from_js::<YArray>(js)?)),
+                TYPE_REFS_DOC => Ok(Shared::Doc(convert::mut_from_js::<YDoc>(js)?)),
                 TYPE_REFS_TEXT
                 | TYPE_REFS_MAP
                 | TYPE_REFS_XML_TEXT
@@ -250,18 +253,21 @@ impl Shared {
     pub fn prelim(&self) -> bool {
         match self {
             Shared::Array(v) => v.prelim(),
+            Shared::Doc(v) => v.prelim(),
         }
     }
 
-    pub fn branch_id(&self) -> Option<&BranchID> {
+    pub fn branch_id(&self) -> Option<BranchID> {
         match self {
-            Shared::Array(v) => v.0.branch_id(),
+            Shared::Array(v) => v.0.branch_id().cloned(),
+            Shared::Doc(v) => v.0.branch_id(),
         }
     }
 
     fn type_ref(&self) -> TypeRef {
         match self {
             Shared::Array(_) => TypeRef::Array,
+            Shared::Doc(_) => TypeRef::SubDoc,
         }
     }
 }
@@ -290,6 +296,7 @@ impl Prelim for Shared {
                     array.insert_at(txn, 0, raw).unwrap();
                 }
             }
+            Shared::Doc(_) => { /* do nothing */ }
         }
     }
 }
@@ -442,6 +449,7 @@ pub(crate) mod errors {
     pub const ANOTHER_RW_TX: &'static str = "another read-write transaction is in progress";
     pub const OUT_OF_BOUNDS: &'static str = "index outside of the bounds of an array";
     pub const INVALID_PRELIM_OP: &'static str = "preliminary type doesn't support this operation";
+    pub const NOT_PRELIM: &'static str = "this operation only works on preliminary types";
     pub const NON_SUBDOC: &'static str = "current document is not a sub-document";
     pub const NOT_WASM_OBJ: &'static str = "provided reference is not a WebAssembly object";
 }

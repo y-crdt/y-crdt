@@ -7,13 +7,9 @@ use crate::Result;
 use serde::Deserialize;
 use std::iter::FromIterator;
 use std::ops::Deref;
-use wasm_bindgen::convert::{
-    FromWasmAbi, IntoWasmAbi, LongRefFromWasmAbi, OptionFromWasmAbi, OptionIntoWasmAbi,
-    RefFromWasmAbi, ReturnWasmAbi,
-};
-use wasm_bindgen::describe::{WasmDescribe, RUST_STRUCT};
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
+use yrs::types::TYPE_REFS_DOC;
 use yrs::{Doc, OffsetKind, Options, ReadTxn, Transact};
 
 /// A ywasm document type. Documents are most important units of collaborative resources management.
@@ -40,63 +36,9 @@ use yrs::{Doc, OffsetKind, Options, ReadTxn, Transact};
 ///     txn.free()
 /// }
 /// ```
+#[wasm_bindgen]
 #[repr(transparent)]
 pub struct YDoc(pub(crate) Doc);
-
-#[automatically_derived]
-impl WasmDescribe for YDoc {
-    fn describe() {
-        use wasm_bindgen::describe::{inform, RUST_STRUCT};
-        const NAME: &'static str = "YDoc";
-        inform(RUST_STRUCT);
-        inform(NAME.len() as u32);
-        for c in NAME.chars() {
-            inform(c as u32);
-        }
-    }
-}
-
-#[automatically_derived]
-impl RefFromWasmAbi for YDoc {
-    type Abi = u32;
-    type Anchor = &'static YDoc;
-
-    #[inline]
-    unsafe fn ref_from_abi(js: Self::Abi) -> Self::Anchor {
-        let doc = js as *mut YDoc;
-        doc.as_ref().expect("YDoc is null")
-    }
-}
-
-#[automatically_derived]
-impl LongRefFromWasmAbi for YDoc {
-    type Abi = u32;
-    type Anchor = &'static YDoc;
-
-    #[inline]
-    unsafe fn long_ref_from_abi(js: Self::Abi) -> Self::Anchor {
-        Self::ref_from_abi(js)
-    }
-}
-
-#[automatically_derived]
-impl IntoWasmAbi for YDoc {
-    type Abi = u32;
-
-    #[inline]
-    fn into_abi(self) -> Self::Abi {
-        let addr = self.0.into_raw();
-        addr as u32
-    }
-}
-
-#[automatically_derived]
-impl OptionIntoWasmAbi for YDoc {
-    #[inline]
-    fn none() -> Self::Abi {
-        0
-    }
-}
 
 impl Deref for YDoc {
     type Target = Doc;
@@ -131,6 +73,20 @@ impl YDoc {
         }
 
         Ok(Doc::with_options(options).into())
+    }
+
+    #[wasm_bindgen(getter, js_name = type)]
+    #[inline]
+    pub fn get_type(&self) -> u8 {
+        TYPE_REFS_DOC
+    }
+
+    /// Checks if a document is a preliminary type. It returns false, if current document
+    /// is already a sub-document of another document.
+    #[wasm_bindgen(getter)]
+    #[inline]
+    pub fn prelim(&self) -> bool {
+        self.0.parent_doc().is_none()
     }
 
     /// Returns a parent document of this document or null if current document is not sub-document.
@@ -448,12 +404,6 @@ impl YDoc {
                 Ok(js_sys::Array::from_iter(values))
             }
         }
-    }
-}
-
-impl From<YDoc> for JsValue {
-    fn from(value: YDoc) -> Self {
-        unsafe { JsValue::from_abi(value.into_abi()) }
     }
 }
 
