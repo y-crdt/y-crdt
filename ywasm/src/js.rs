@@ -1,6 +1,7 @@
 use crate::array::{ArrayExt, YArray};
 use crate::collection::{Integrated, SharedCollection};
 use crate::doc::YDoc;
+use crate::weak::YWeakLink;
 use crate::Result;
 use js_sys::Uint8Array;
 use std::collections::{Bound, HashMap};
@@ -16,7 +17,7 @@ use yrs::types::{
     TypeRef, TYPE_REFS_ARRAY, TYPE_REFS_DOC, TYPE_REFS_MAP, TYPE_REFS_TEXT, TYPE_REFS_WEAK,
     TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_TEXT,
 };
-use yrs::{Any, ArrayRef, BranchID, Doc, Origin, TransactionMut, Value};
+use yrs::{Any, ArrayRef, BranchID, Doc, Origin, TransactionMut, Value, WeakRef};
 
 #[repr(transparent)]
 pub struct Js(JsValue);
@@ -227,6 +228,7 @@ impl ValueRef {
 
 pub enum Shared {
     Array(RefMut<'static, YArray>),
+    Weak(RefMut<'static, YWeakLink>),
     Doc(RefMut<'static, YDoc>),
 }
 
@@ -236,13 +238,13 @@ impl Shared {
         if let Some(tag) = tag.as_f64() {
             match tag as u8 {
                 TYPE_REFS_ARRAY => Ok(Shared::Array(convert::mut_from_js::<YArray>(js)?)),
+                TYPE_REFS_WEAK => Ok(Shared::Weak(convert::mut_from_js::<YWeakLink>(js)?)),
                 TYPE_REFS_DOC => Ok(Shared::Doc(convert::mut_from_js::<YDoc>(js)?)),
                 TYPE_REFS_TEXT
                 | TYPE_REFS_MAP
                 | TYPE_REFS_XML_TEXT
                 | TYPE_REFS_XML_ELEMENT
                 | TYPE_REFS_XML_FRAGMENT
-                | TYPE_REFS_WEAK
                 | _ => Err(js.clone()),
             }
         } else {
@@ -254,13 +256,15 @@ impl Shared {
         match self {
             Shared::Array(v) => v.prelim(),
             Shared::Doc(v) => v.prelim(),
+            Shared::Weak(v) => v.prelim(),
         }
     }
 
-    pub fn branch_id(&self) -> Option<BranchID> {
+    pub fn branch_id(&self) -> Option<&BranchID> {
         match self {
-            Shared::Array(v) => v.0.branch_id().cloned(),
-            Shared::Doc(v) => v.0.branch_id(),
+            Shared::Array(v) => v.0.branch_id(),
+            Shared::Weak(v) => v.0.branch_id(),
+            Shared::Doc(_) => panic!("don't use YDoc in this context"),
         }
     }
 
@@ -268,6 +272,7 @@ impl Shared {
         match self {
             Shared::Array(_) => TypeRef::Array,
             Shared::Doc(_) => TypeRef::SubDoc,
+            Shared::Weak(v) => TypeRef::WeakLink(v.source()),
         }
     }
 }
@@ -295,6 +300,16 @@ impl Prelim for Shared {
                 ) {
                     array.insert_at(txn, 0, raw).unwrap();
                 }
+            }
+            Shared::Weak(mut cell) => {
+                let weak_link: WeakRef<BranchPtr> = WeakRef::from(inner_ref);
+                let _ = std::mem::replace(
+                    &mut *cell,
+                    YWeakLink(SharedCollection::Integrated(Integrated::new(
+                        weak_link.clone(),
+                        doc,
+                    ))),
+                );
             }
             Shared::Doc(_) => { /* do nothing */ }
         }

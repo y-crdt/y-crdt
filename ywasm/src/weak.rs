@@ -2,29 +2,37 @@ use crate::collection::SharedCollection;
 use crate::js::Js;
 use crate::transaction::YTransaction;
 use crate::{ImplicitTransaction, Observer, Result};
+use std::sync::Arc;
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
 use yrs::branch::BranchPtr;
-use yrs::types::weak::WeakEvent;
+use yrs::types::weak::{LinkSource, WeakEvent};
 use yrs::types::TYPE_REFS_WEAK;
 use yrs::{
     DeepObservable, Doc, GetString, Observable, SharedRef, Transact, TransactionMut, WeakPrelim,
     WeakRef,
 };
 
-struct PrelimWrapper {
+pub(crate) struct PrelimWrapper {
     prelim: WeakPrelim<BranchPtr>,
     doc: Doc,
 }
 
 #[wasm_bindgen]
 #[repr(transparent)]
-pub struct YWeakLink(SharedCollection<PrelimWrapper, WeakRef<BranchPtr>>);
+pub struct YWeakLink(pub(crate) SharedCollection<PrelimWrapper, WeakRef<BranchPtr>>);
 
 impl YWeakLink {
     pub(crate) fn from_prelim<S: SharedRef>(prelim: WeakPrelim<S>, doc: Doc) -> Self {
         let prelim = prelim.upcast();
         YWeakLink(SharedCollection::Prelim(PrelimWrapper { prelim, doc }))
+    }
+
+    pub(crate) fn source(&self) -> Arc<LinkSource> {
+        match &self.0 {
+            SharedCollection::Integrated(_) => panic!("{}", crate::js::errors::NOT_PRELIM),
+            SharedCollection::Prelim(v) => v.prelim.source().clone(),
+        }
     }
 }
 
