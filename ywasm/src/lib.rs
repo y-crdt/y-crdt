@@ -8,6 +8,7 @@ mod array;
 mod collection;
 mod doc;
 mod js;
+mod map;
 mod transaction;
 mod undo;
 mod weak;

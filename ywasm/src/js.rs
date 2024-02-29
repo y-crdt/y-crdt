@@ -360,7 +360,7 @@ pub(crate) mod convert {
     use crate::js::Js;
     use wasm_bindgen::convert::{RefFromWasmAbi, RefMutFromWasmAbi};
     use wasm_bindgen::JsValue;
-    use yrs::types::{Change, Event, Events, Path, PathSegment};
+    use yrs::types::{Change, EntryChange, Event, Events, Path, PathSegment};
     use yrs::updates::decoder::Decode;
     use yrs::{Doc, StateVector, TransactionMut};
 
@@ -406,6 +406,31 @@ pub(crate) mod convert {
             }
         }
         result.into()
+    }
+
+    pub fn entry_change_into_js(change: &EntryChange, doc: &Doc) -> crate::Result<JsValue> {
+        let result = js_sys::Object::new();
+        let action = JsValue::from("action");
+        match change {
+            EntryChange::Inserted(new) => {
+                let new_value = Js::from_value(new, doc).into();
+                js_sys::Reflect::set(&result, &action, &JsValue::from("add"))?;
+                js_sys::Reflect::set(&result, &JsValue::from("newValue"), &new_value)?;
+            }
+            EntryChange::Updated(old, new) => {
+                let old_value = Js::from_value(old, doc).into();
+                let new_value = Js::from_value(new, doc).into();
+                js_sys::Reflect::set(&result, &action, &JsValue::from("update"))?;
+                js_sys::Reflect::set(&result, &JsValue::from("oldValue"), &old_value)?;
+                js_sys::Reflect::set(&result, &JsValue::from("newValue"), &new_value)?;
+            }
+            EntryChange::Removed(old) => {
+                let old_value = Js::from_value(old, doc).into();
+                js_sys::Reflect::set(&result, &action, &JsValue::from("delete"))?;
+                js_sys::Reflect::set(&result, &JsValue::from("oldValue"), &old_value)?;
+            }
+        }
+        Ok(result.into())
     }
 
     pub fn path_into_js(path: Path) -> JsValue {
@@ -463,6 +488,7 @@ pub(crate) mod errors {
     pub const ANOTHER_TX: &'static str = "another transaction is in progress";
     pub const ANOTHER_RW_TX: &'static str = "another read-write transaction is in progress";
     pub const OUT_OF_BOUNDS: &'static str = "index outside of the bounds of an array";
+    pub const KEY_NOT_FOUND: &'static str = "key was not found in a map";
     pub const INVALID_PRELIM_OP: &'static str = "preliminary type doesn't support this operation";
     pub const NOT_PRELIM: &'static str = "this operation only works on preliminary types";
     pub const NON_SUBDOC: &'static str = "current document is not a sub-document";

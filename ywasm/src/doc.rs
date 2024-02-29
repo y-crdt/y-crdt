@@ -1,6 +1,7 @@
 use crate::array::YArray;
 use crate::collection::SharedCollection;
 use crate::js::Js;
+use crate::map::YMap;
 use crate::transaction::YTransaction;
 use crate::ImplicitTransaction;
 use crate::Result;
@@ -145,7 +146,7 @@ impl YDoc {
     /// const text = doc.getText('name')
     /// doc.transact(txn => text.insert(txn, 0, 'hello world'))
     /// ```
-    #[wasm_bindgen(js_name = transaction)]
+    #[wasm_bindgen(js_name = beginTransaction)]
     pub fn transaction(&self, origin: JsValue) -> YTransaction {
         if origin.is_undefined() {
             YTransaction::from(self.transact_mut())
@@ -186,10 +187,11 @@ impl YDoc {
     ///
     /// If there was an instance with this name, but it was of different type, it will be projected
     /// onto `YMap` instance.
-    //#[wasm_bindgen(js_name = getMap)]
-    //pub fn get_map(&self, name: &str) -> YMap {
-    //    self.as_ref().get_or_insert_map(name).into()
-    //}
+    #[wasm_bindgen(js_name = getMap)]
+    pub fn get_map(&self, name: &str) -> YMap {
+        let shared_ref = self.get_or_insert_map(name);
+        YMap(SharedCollection::integrated(shared_ref, self.0.clone()))
+    }
 
     /// Returns a `YXmlFragment` shared data type, that's accessible for subsequent accesses using
     /// given `name`.
