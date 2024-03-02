@@ -120,11 +120,11 @@ impl YText {
                 if attributes.is_undefined() {
                     c.insert(txn, index, chunk);
                     Ok(())
-                } else if let Some(attrs) = Self::parse_attrs(attributes) {
+                } else if let Some(attrs) = Self::parse_fmt(attributes) {
                     c.insert_with_attributes(txn, index, chunk, attrs);
                     Ok(())
                 } else {
-                    Err(JsValue::from_str(crate::js::errors::INVALID_ATTRIBUTES))
+                    Err(JsValue::from_str(crate::js::errors::INVALID_FMT))
                 }
             }),
         }
@@ -151,11 +151,11 @@ impl YText {
                 if attributes.is_undefined() {
                     c.insert_embed(txn, index, Js::new(embed));
                     Ok(())
-                } else if let Some(attrs) = Self::parse_attrs(attributes) {
+                } else if let Some(attrs) = Self::parse_fmt(attributes) {
                     c.insert_embed_with_attributes(txn, index, Js::new(embed), attrs);
                     Ok(())
                 } else {
-                    Err(JsValue::from_str(crate::js::errors::INVALID_ATTRIBUTES))
+                    Err(JsValue::from_str(crate::js::errors::INVALID_FMT))
                 }
             }),
         }
@@ -172,9 +172,9 @@ impl YText {
         attributes: JsValue,
         txn: ImplicitTransaction,
     ) -> crate::Result<()> {
-        let attrs = match Self::parse_attrs(attributes) {
+        let attrs = match Self::parse_fmt(attributes) {
             Some(attrs) => attrs,
-            None => return Err(JsValue::from_str(crate::js::errors::INVALID_ATTRIBUTES)),
+            None => return Err(JsValue::from_str(crate::js::errors::INVALID_FMT)),
         };
         match &self.0 {
             SharedCollection::Prelim(_) => {
@@ -187,7 +187,7 @@ impl YText {
         }
     }
 
-    fn parse_attrs(attrs: JsValue) -> Option<Attrs> {
+    pub(crate) fn parse_fmt(attrs: JsValue) -> Option<Attrs> {
         if attrs.is_object() {
             let mut map = Attrs::new();
             let object = js_sys::Object::from(attrs);
@@ -233,12 +233,12 @@ impl YText {
                 if attributes.is_undefined() {
                     c.push(txn, chunk);
                     Ok(())
-                } else if let Some(attrs) = Self::parse_attrs(attributes) {
+                } else if let Some(attrs) = Self::parse_fmt(attributes) {
                     let len = c.len(txn);
                     c.insert_with_attributes(txn, len, chunk, attrs);
                     Ok(())
                 } else {
-                    Err(JsValue::from_str(crate::js::errors::INVALID_ATTRIBUTES))
+                    Err(JsValue::from_str(crate::js::errors::INVALID_FMT))
                 }
             }),
         }
@@ -381,7 +381,7 @@ pub struct YTextEvent {
 
 #[wasm_bindgen]
 impl YTextEvent {
-    fn new<'doc>(event: &TextEvent, txn: &TransactionMut<'doc>) -> Self {
+    pub(crate) fn new<'doc>(event: &TextEvent, txn: &TransactionMut<'doc>) -> Self {
         let inner: &'static TextEvent = unsafe { std::mem::transmute(event) };
         let txn: &'static TransactionMut<'static> = unsafe { std::mem::transmute(txn) };
         YTextEvent {

@@ -269,7 +269,7 @@ pub struct YMapEvent {
 
 #[wasm_bindgen]
 impl YMapEvent {
-    fn new<'doc>(event: &MapEvent, txn: &TransactionMut<'doc>) -> Self {
+    pub(crate) fn new<'doc>(event: &MapEvent, txn: &TransactionMut<'doc>) -> Self {
         let inner: &'static MapEvent = unsafe { std::mem::transmute(event) };
         let txn: &'static TransactionMut<'static> = unsafe { std::mem::transmute(txn) };
         YMapEvent {

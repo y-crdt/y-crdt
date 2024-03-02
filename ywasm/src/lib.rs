@@ -13,6 +13,9 @@ mod text;
 mod transaction;
 mod undo;
 mod weak;
+mod xml_elem;
+mod xml_frag;
+mod xml_text;
 
 type Result<T> = std::result::Result<T, JsValue>;
 

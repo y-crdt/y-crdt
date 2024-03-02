@@ -224,7 +224,7 @@ pub struct YWeakLinkEvent {
 
 #[wasm_bindgen]
 impl YWeakLinkEvent {
-    fn new<'doc>(event: &WeakEvent, txn: &TransactionMut<'doc>) -> Self {
+    pub(crate) fn new<'doc>(event: &WeakEvent, txn: &TransactionMut<'doc>) -> Self {
         let inner: &'static WeakEvent = unsafe { std::mem::transmute(event) };
         let txn: &'static TransactionMut<'static> = unsafe { std::mem::transmute(txn) };
         let origin = if let Some(origin) = txn.origin() {
