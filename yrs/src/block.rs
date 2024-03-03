@@ -13,6 +13,7 @@ use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::OptionExt;
 use crate::*;
+use serde::{Deserialize, Serialize};
 use smallstr::SmallString;
 use std::collections::HashSet;
 use std::convert::TryFrom;
@@ -79,7 +80,7 @@ pub type ClientID = u64;
 ///
 /// [ID] corresponds to a [Lamport timestamp](https://en.wikipedia.org/wiki/Lamport_timestamp) in
 /// terms of its properties and guarantees.
-#[derive(Debug, Copy, Clone, PartialOrd, Ord, PartialEq, Eq, Hash)]
+#[derive(Debug, Copy, Clone, PartialOrd, Ord, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ID {
     /// Unique identifier of a client.
     pub client: ClientID,

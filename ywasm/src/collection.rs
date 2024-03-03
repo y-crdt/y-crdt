@@ -20,6 +20,19 @@ impl<P, S: SharedRef + 'static> SharedCollection<P, S> {
         SharedCollection::Integrated(Integrated::new(shared_ref, doc))
     }
 
+    pub fn try_integrated(&self) -> Result<(&BranchID, &Doc)> {
+        match self {
+            SharedCollection::Integrated(i) => {
+                let branch_id = i.hook.id();
+                let doc = &i.doc;
+                Ok((branch_id, doc))
+            }
+            SharedCollection::Prelim(_) => {
+                Err(JsValue::from_str(crate::js::errors::INVALID_PRELIM_OP))
+            }
+        }
+    }
+
     #[inline]
     pub fn is_prelim(&self) -> bool {
         match self {

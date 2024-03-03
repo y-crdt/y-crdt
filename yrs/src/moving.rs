@@ -6,7 +6,10 @@ use crate::transaction::TransactionMut;
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::{BranchID, ReadTxn, WriteTxn, ID};
+use serde::de::Visitor;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashSet;
+use std::fmt::Formatter;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -396,10 +399,10 @@ impl std::fmt::Display for Move {
 /// let a = pos.get_offset(&txn).unwrap();
 /// assert_eq!(a.index, 4);
 /// ```
-#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub struct StickyIndex {
     scope: IndexScope,
-    /// If true - associate to the right block. Otherwise associate to the left one.
+    /// If true - associate to the right block. Otherwise, associate to the left one.
     pub assoc: Assoc,
 }
 
@@ -644,10 +647,10 @@ impl std::fmt::Display for StickyIndex {
 ///
 /// Using [ID]s guarantees that corresponding [StickyIndex] doesn't shift under incoming
 /// concurrent updates.
-#[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum IndexScope {
     /// [StickyIndex] is relative to a given block [ID]. This happens whenever we set [StickyIndex]
-    /// somewhere inside of the non-empty shared collection.
+    /// somewhere inside the non-empty shared collection.
     Relative(ID),
     /// If a containing collection is a nested y-type, which is empty, this case allows us to
     /// identify that nested type.
@@ -728,6 +731,48 @@ impl Default for Assoc {
     #[inline]
     fn default() -> Self {
         Assoc::After
+    }
+}
+
+impl Serialize for Assoc {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            Assoc::After => serializer.serialize_i8(0),
+            Assoc::Before => serializer.serialize_i8(-1),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for Assoc {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct AssocVisitor;
+        impl Visitor<'_> for AssocVisitor {
+            type Value = Assoc;
+
+            fn expecting(&self, formatter: &mut Formatter) -> std::fmt::Result {
+                write!(formatter, "Assoc")
+            }
+
+            #[inline]
+            fn visit_i8<E>(self, v: i8) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                if v < 0 {
+                    Ok(Assoc::Before)
+                } else {
+                    Ok(Assoc::After)
+                }
+            }
+        }
+
+        deserializer.deserialize_i8(AssocVisitor)
     }
 }
 

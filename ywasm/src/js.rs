@@ -322,6 +322,19 @@ impl Shared {
         }
     }
 
+    pub fn try_integrated(&self) -> Result<(&BranchID, &Doc)> {
+        match self {
+            Shared::Text(v) => v.0.try_integrated(),
+            Shared::Map(v) => v.0.try_integrated(),
+            Shared::Array(v) => v.0.try_integrated(),
+            Shared::Weak(v) => v.0.try_integrated(),
+            Shared::XmlText(v) => v.0.try_integrated(),
+            Shared::XmlElement(v) => v.0.try_integrated(),
+            Shared::XmlFragment(v) => v.0.try_integrated(),
+            Shared::Doc(_) => Err(JsValue::from_str(crate::js::errors::NOT_WASM_OBJ)),
+        }
+    }
+
     fn type_ref(&self) -> TypeRef {
         match self {
             Shared::Text(_) => TypeRef::Text,
@@ -503,6 +516,7 @@ pub(crate) mod convert {
     use gloo_utils::format::JsValueSerdeExt;
     use wasm_bindgen::convert::RefMutFromWasmAbi;
     use wasm_bindgen::JsValue;
+    use yrs::types::text::{ChangeKind, Diff, YChange};
     use yrs::types::{Change, Delta, EntryChange, Event, Events, Path, PathSegment};
     use yrs::updates::decoder::Decode;
     use yrs::{Doc, StateVector, TransactionMut};
@@ -643,6 +657,43 @@ pub(crate) mod convert {
         } else {
             Ok(None)
         }
+    }
+
+    pub fn ychange_to_js(
+        change: YChange,
+        compute_ychange: &Option<js_sys::Function>,
+    ) -> crate::Result<JsValue> {
+        let kind = match change.kind {
+            ChangeKind::Added => JsValue::from("added"),
+            ChangeKind::Removed => JsValue::from("removed"),
+        };
+        let result = if let Some(func) = compute_ychange {
+            let id =
+                JsValue::from_serde(&change.id).map_err(|e| JsValue::from_str(&e.to_string()))?;
+            func.call2(&JsValue::UNDEFINED, &kind, &id).unwrap()
+        } else {
+            let js: JsValue = js_sys::Object::new().into();
+            js_sys::Reflect::set(&js, &JsValue::from("type"), &kind).unwrap();
+            js
+        };
+        Ok(result)
+    }
+
+    pub fn diff_into_js(diff: Diff<JsValue>, doc: &Doc) -> crate::Result<JsValue> {
+        let delta = Delta::Inserted(diff.insert, diff.attributes);
+        let js = text_delta_into_js(&delta, doc)?;
+        if let Some(ychange) = diff.ychange {
+            let attrs = match js_sys::Reflect::get(&js, &JsValue::from("attributes")) {
+                Ok(attrs) if attrs.is_object() => attrs,
+                _ => {
+                    let attrs: JsValue = js_sys::Object::new().into();
+                    js_sys::Reflect::set(&js, &JsValue::from("attributes"), &attrs).unwrap();
+                    attrs
+                }
+            };
+            js_sys::Reflect::set(&attrs, &JsValue::from("ychange"), &ychange).unwrap();
+        }
+        Ok(js)
     }
 }
 

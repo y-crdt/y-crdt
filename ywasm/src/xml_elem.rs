@@ -119,7 +119,7 @@ impl YXmlElement {
     }
 
     /// Returns a tag name of this XML node.
-    #[wasm_bindgen(getter)]
+    #[wasm_bindgen(js_name = name)]
     pub fn name(&self, txn: &ImplicitTransaction) -> crate::Result<String> {
         match &self.0 {
             SharedCollection::Prelim(c) => Ok(c.name.clone()),
@@ -246,7 +246,7 @@ impl YXmlElement {
     }
 
     /// Returns a parent `YXmlElement` node or `undefined` if current node has no parent assigned.
-    #[wasm_bindgen(getter, js_name = parent)]
+    #[wasm_bindgen(js_name = parent)]
     pub fn parent(&self, txn: &ImplicitTransaction) -> crate::Result<JsValue> {
         match &self.0 {
             SharedCollection::Prelim(_) => {
