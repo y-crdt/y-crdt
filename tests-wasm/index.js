@@ -8,10 +8,12 @@ import * as undo from './y-undo.tests.js'
 import * as stickyIndex from './sticky-index.tests.js'
 import * as editingTraces from './editing-traces.tests.js'
 
-import { runTests } from 'lib0/testing'
-import { isBrowser, isNode } from 'lib0/environment'
+import {runTests} from 'lib0/testing'
+import {isBrowser, isNode} from 'lib0/environment'
 import * as log from 'lib0/logging'
+import {setPanicHook} from 'ywasm'
 
+setPanicHook()
 if (isBrowser) {
     log.createVConsole(document.body)
 }

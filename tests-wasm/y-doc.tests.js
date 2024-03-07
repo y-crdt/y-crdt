@@ -138,7 +138,7 @@ export const testSnapshotState = tc => {
     txt1.insert(5, ' world')
     const state = Y.encodeStateFromSnapshotV1(d1, prev)
 
-    const d2 = new Y.YDoc(2)
+    const d2 = new Y.YDoc({clientID: 2})
     const txt2 = d2.getText('text')
     Y.applyUpdate(d2, state)
 

@@ -53,6 +53,20 @@ impl From<yrs::Subscription> for Observer {
     }
 }
 
+/// When called will call console log errors whenever internal panic is called from within
+/// WebAssembly module.
+#[wasm_bindgen(js_name = setPanicHook)]
+pub fn set_panic_hook() {
+    // When the `console_error_panic_hook` feature is enabled, we can call the
+    // `set_panic_hook` function at least once during initialization, and then
+    // we will get better error messages if our code ever panics.
+    //
+    // For more details see
+    // https://github.com/rustwasm/console_error_panic_hook#readme
+    #[cfg(feature = "console_error_panic_hook")]
+    console_error_panic_hook::set_once();
+}
+
 /// Encodes a state vector of a given ywasm document into its binary representation using lib0 v1
 /// encoding. State vector is a compact representation of updates performed on a given document and
 /// can be used by `encode_state_as_update` on remote peer to generate a delta update payload to
@@ -192,7 +206,7 @@ pub fn encode_state_as_update_v2(
 /// ```
 #[wasm_bindgen(js_name = applyUpdate)]
 pub fn apply_update(doc: &Doc, update: js_sys::Uint8Array, origin: JsValue) -> Result<()> {
-    let txn = if origin.is_undefined() {
+    let txn = if !origin.is_undefined() {
         doc.0.try_transact_mut_with(js::Js::from(origin))
     } else {
         doc.0.try_transact_mut()
@@ -225,7 +239,7 @@ pub fn apply_update(doc: &Doc, update: js_sys::Uint8Array, origin: JsValue) -> R
 /// ```
 #[wasm_bindgen(js_name = applyUpdateV2)]
 pub fn apply_update_v2(doc: &Doc, update: js_sys::Uint8Array, origin: JsValue) -> Result<()> {
-    let txn = if origin.is_undefined() {
+    let txn = if !origin.is_undefined() {
         doc.0.try_transact_mut_with(js::Js::from(origin))
     } else {
         doc.0.try_transact_mut()

@@ -107,7 +107,16 @@ impl Js {
             Value::YWeakLink(c) => {
                 Js(YWeakLink(SharedCollection::integrated(c.clone(), doc.clone())).into())
             }
-            other => panic!("unrecognized value: {:?}", other),
+            Value::YXmlElement(c) => {
+                Js(YXmlElement(SharedCollection::integrated(c.clone(), doc.clone())).into())
+            }
+            Value::YXmlFragment(c) => {
+                Js(YXmlFragment(SharedCollection::integrated(c.clone(), doc.clone())).into())
+            }
+            Value::YXmlText(c) => {
+                Js(YXmlText(SharedCollection::integrated(c.clone(), doc.clone())).into())
+            }
+            Value::UndefinedRef(_) => Js(JsValue::UNDEFINED),
         }
     }
 
@@ -234,7 +243,7 @@ impl Prelim for Js {
             ValueRef::Any(any) => (ItemContent::Any(vec![any]), None),
             ValueRef::Shared(shared) => {
                 if !shared.prelim() {
-                    panic!("{}", errors::NOT_PRELIM);
+                    panic!("{} - {:?}", errors::NOT_PRELIM, shared.type_ref());
                 }
                 let type_ref = shared.type_ref();
                 let branch = Branch::new(type_ref);
