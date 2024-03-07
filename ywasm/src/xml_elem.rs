@@ -52,7 +52,7 @@ pub struct YXmlElement(pub(crate) SharedCollection<PrelimXmElement, XmlElementRe
 impl YXmlElement {
     pub(crate) fn try_parse_attrs(attributes: JsValue) -> Option<HashMap<String, String>> {
         let mut map = HashMap::new();
-        if !attributes.is_undefined() {
+        if !attributes.is_undefined() || attributes.is_null() {
             let object = js_sys::Object::from(attributes);
             let entries = js_sys::Object::entries(&object);
             for tuple in entries.iter() {
@@ -76,12 +76,14 @@ impl YXmlElement {
 #[wasm_bindgen]
 impl YXmlElement {
     #[wasm_bindgen(constructor)]
-    pub fn new(
-        name: String,
-        attributes: JsValue,
-        children: Vec<JsValue>,
-    ) -> crate::Result<YXmlElement> {
+    pub fn new(name: String, attributes: JsValue, children: JsValue) -> crate::Result<YXmlElement> {
         let attributes = Self::parse_attrs(attributes)?;
+        let children = if children.is_undefined() || children.is_null() {
+            Vec::new()
+        } else {
+            let array = js_sys::Array::from(&children);
+            array.to_vec()
+        };
         for child in children.iter() {
             Js::assert_xml_prelim(child)?;
         }

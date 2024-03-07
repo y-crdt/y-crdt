@@ -101,6 +101,30 @@ impl YTransaction {
 
 #[wasm_bindgen]
 impl YTransaction {
+    /// Returns state vector describing the state of the document
+    /// at the moment when the transaction began.
+    #[wasm_bindgen(getter, js_name = beforeState)]
+    pub fn before_state(&self) -> js_sys::Map {
+        let sv = self.deref().before_state();
+        crate::js::convert::state_vector_to_js(&sv)
+    }
+
+    /// Returns state vector describing the current state of
+    /// the document.
+    #[wasm_bindgen(getter, js_name = afterState)]
+    pub fn after_state(&self) -> js_sys::Map {
+        let sv = self.deref().before_state();
+        crate::js::convert::state_vector_to_js(&sv)
+    }
+
+    /// Returns a delete set containing information about
+    /// all blocks removed as part of a current transaction.
+    #[wasm_bindgen(getter, js_name = deleteSet)]
+    pub fn delete_set(&self) -> js_sys::Map {
+        let ds = self.deref().delete_set();
+        crate::js::convert::delete_set_to_js(&ds)
+    }
+
     #[wasm_bindgen(getter, js_name = origin)]
     pub fn origin(&self) -> JsValue {
         if let Some(origin) = self.deref().origin() {

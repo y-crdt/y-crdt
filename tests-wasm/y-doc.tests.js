@@ -1,4 +1,4 @@
-import { exchangeUpdates } from './testHelper.js' // eslint-disable-line
+import {exchangeUpdates} from './testHelper.js' // eslint-disable-line
 
 import * as Y from 'ywasm'
 import * as t from 'lib0/testing'
@@ -12,7 +12,7 @@ export const testOnUpdate = tc => {
     text1.insert(0, 'hello')
     let update = Y.encodeStateAsUpdate(d1)
 
-    const d2 = new Y.YDoc(2)
+    const d2 = new Y.YDoc({clientID: 2})
     const text2 = d2.getText('text')
     let actual;
     let origin;
@@ -77,10 +77,16 @@ export const testOnAfterTransaction = tc => {
     const doc = new Y.YDoc({clientID: 1})
     const text = doc.getText('text')
     let event;
-    const sub = doc.onAfterTransaction(e => event = e);
+    const sub = doc.onAfterTransaction(txn => {
+        let beforeState = txn.beforeState
+        let afterState = txn.afterState
+        let deleteSet = txn.deleteSet
+        event = {beforeState, afterState, deleteSet}
+    });
 
     text.insert(0, 'hello world')
 
+    console.log(event)
     t.compare(event.beforeState, new Map());
     let state = new Map()
     state.set(1n, 11)
@@ -88,12 +94,12 @@ export const testOnAfterTransaction = tc => {
     t.compare(event.deleteSet, new Map());
 
     event = null
-    text.delete( 2, 7)
+    text.delete(2, 7)
 
     t.compare(event.beforeState, state);
     t.compare(event.afterState, state);
     state = new Map()
-    state.set(1n, [[2,7]])
+    state.set(1n, [[2, 7]])
     t.compare(event.deleteSet, state);
 
     sub.free()
@@ -116,8 +122,8 @@ export const testSnapshots = tc => {
 
     const delta = text.toDelta(next, prev)
     t.compare(delta, [
-        { insert: 'hello' },
-        { insert: ' world', attributes: { ychange: { type: 'added' } } }
+        {insert: 'hello'},
+        {insert: ' world', attributes: {ychange: {type: 'added'}}}
     ])
 }
 
@@ -157,7 +163,7 @@ export const testSubdoc = tc => {
             event = [added, removed, loaded]
         })
         const subdocs = doc.getMap('mysubdocs')
-        const docA = new Y.YDoc({ guid: 'a' })
+        const docA = new Y.YDoc({guid: 'a'})
         docA.load()
         subdocs.set('a', docA)
         t.compare(event, [['a'], [], ['a']])
@@ -172,12 +178,12 @@ export const testSubdoc = tc => {
         subdocs.get('a').load()
         t.compare(event, [[], [], ['a']])
 
-        subdocs.set('b', new Y.YDoc({ guid: 'a', shouldLoad: false }))
+        subdocs.set('b', new Y.YDoc({guid: 'a', shouldLoad: false}))
         t.compare(event, [['a'], [], []])
         subdocs.get('b').load()
         t.compare(event, [[], [], ['a']])
 
-        const docC = new Y.YDoc({ guid: 'c' })
+        const docC = new Y.YDoc({guid: 'c'})
         docC.load()
         subdocs.set('c', docC)
         t.compare(event, [['c'], [], ['c']])
@@ -279,7 +285,7 @@ export const testRoots = tc => {
 
     const roots = d1.roots()
         .sort((a, b) => a[0].localeCompare(b[0]))
-        .map(([k,v]) => [k, v.constructor])
+        .map(([k, v]) => [k, v.constructor])
     t.compare(roots, [
         ['a', Y.YMap],
         ['b', Y.YText],

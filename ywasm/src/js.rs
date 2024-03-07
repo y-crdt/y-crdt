@@ -514,12 +514,13 @@ pub(crate) mod convert {
     use crate::xml_frag::YXmlEvent;
     use crate::xml_text::YXmlTextEvent;
     use gloo_utils::format::JsValueSerdeExt;
+    use std::iter::FromIterator;
     use wasm_bindgen::convert::RefMutFromWasmAbi;
     use wasm_bindgen::JsValue;
     use yrs::types::text::{ChangeKind, Diff, YChange};
     use yrs::types::{Change, Delta, EntryChange, Event, Events, Path, PathSegment};
     use yrs::updates::decoder::Decode;
-    use yrs::{Doc, StateVector, TransactionMut};
+    use yrs::{DeleteSet, Doc, StateVector, TransactionMut};
 
     pub fn mut_from_js<T>(js: &JsValue) -> crate::Result<T::Anchor>
     where
@@ -657,6 +658,32 @@ pub(crate) mod convert {
         } else {
             Ok(None)
         }
+    }
+
+    pub fn state_vector_to_js(sv: &StateVector) -> js_sys::Map {
+        let map = js_sys::Map::new();
+        for (&client_id, &clock) in sv.iter() {
+            map.set(
+                &JsValue::from_f64(client_id as f64),
+                &JsValue::from_f64(clock as f64),
+            );
+        }
+        map
+    }
+
+    pub fn delete_set_to_js(ds: &DeleteSet) -> js_sys::Map {
+        let map = js_sys::Map::new();
+        for (&client_id, range) in ds.iter() {
+            let r = js_sys::Array::new();
+            for segment in range.iter() {
+                let start = JsValue::from_f64(segment.start as f64);
+                let end = JsValue::from_f64(segment.end as f64);
+                let segment = js_sys::Array::from_iter([start, end]);
+                r.push(&segment.into());
+            }
+            map.set(&JsValue::from_f64(client_id as f64), &r.into());
+        }
+        map
     }
 
     pub fn ychange_to_js(

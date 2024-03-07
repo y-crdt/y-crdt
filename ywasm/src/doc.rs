@@ -4,6 +4,7 @@ use crate::js::Js;
 use crate::map::YMap;
 use crate::text::YText;
 use crate::transaction::YTransaction;
+use crate::xml_frag::YXmlFragment;
 use crate::ImplicitTransaction;
 use crate::Result;
 use serde::Deserialize;
@@ -202,10 +203,11 @@ impl YDoc {
     ///
     /// If there was an instance with this name, but it was of different type, it will be projected
     /// onto `YXmlFragment` instance.
-    //#[wasm_bindgen(js_name = getXmlFragment)]
-    //pub fn get_xml_fragment(&self, name: &str) -> YXmlFragment {
-    //    YXmlFragment(self.as_ref().get_or_insert_xml_fragment(name))
-    //}
+    #[wasm_bindgen(js_name = getXmlFragment)]
+    pub fn get_xml_fragment(&self, name: &str) -> YXmlFragment {
+        let shared_ref = self.get_or_insert_xml_fragment(name);
+        YXmlFragment(SharedCollection::integrated(shared_ref, self.0.clone()))
+    }
 
     /// Subscribes given function to be called any time, a remote update is being applied to this
     /// document. Function takes an `Uint8Array` as a parameter which contains a lib0 v1 encoded
@@ -248,7 +250,7 @@ impl YDoc {
     #[wasm_bindgen(js_name = onAfterTransaction)]
     pub fn on_after_transaction(&self, f: js_sys::Function) -> Result<crate::Observer> {
         let subscription = self
-            .observe_after_transaction(move |txn| {
+            .observe_transaction_cleanup(move |txn, _| {
                 let txn = YTransaction::from_ref(txn).into();
                 f.call1(&JsValue::UNDEFINED, &txn).unwrap();
             })

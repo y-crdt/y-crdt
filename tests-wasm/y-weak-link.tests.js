@@ -1,4 +1,4 @@
-import { exchangeUpdates } from './testHelper.js' // eslint-disable-line
+import {exchangeUpdates} from './testHelper.js' // eslint-disable-line
 
 import * as Y from 'ywasm'
 import * as t from 'lib0/testing'
@@ -7,7 +7,7 @@ import * as t from 'lib0/testing'
  * @param {t.TestCase} tc
  */
 export const testBasicMap = tc => {
-    const doc = new Y.YDoc({clientID:1})
+    const doc = new Y.YDoc({clientID: 1})
     const map = doc.getMap('map')
 
     const nested = new Y.YMap()
@@ -29,11 +29,11 @@ export const testBasicMap = tc => {
  * @param {t.TestCase} tc
  */
 export const testBasicArray = tc => {
-    const doc0 = new Y.YDoc({clientID:1})
+    const doc0 = new Y.YDoc({clientID: 1})
     const array0 = doc0.getArray('array')
-    const doc1 = new Y.YDoc({clientID:2})
+    const doc1 = new Y.YDoc({clientID: 2})
     const array1 = doc1.getArray('array')
-    array0.insert(0, [1,2,3])
+    array0.insert(0, [1, 2, 3])
     const link = array0.quote(1, 1)
     array0.insert(3, [link])
 
@@ -54,9 +54,9 @@ export const testBasicArray = tc => {
  * @param {t.TestCase} tc
  */
 export const testArrayQuoteMultipleElements = tc => {
-    const doc0 = new Y.YDoc({clientID:1})
+    const doc0 = new Y.YDoc({clientID: 1})
     const array0 = doc0.getArray('array')
-    const doc1 = new Y.YDoc({clientID:2})
+    const doc1 = new Y.YDoc({clientID: 2})
     const array1 = doc1.getArray('array')
     const nested = new Y.YMap({'key': 'value'})
     array0.insert(0, [1, 2, nested, 3])
@@ -65,11 +65,11 @@ export const testArrayQuoteMultipleElements = tc => {
     const link0 = array0.get(0)
     let u = link0.unquote()
     t.compare(u[0], 2)
-    t.compare(u[1].toJson(), {'key':'value'})
+    t.compare(u[1].toJson(), {'key': 'value'})
     t.compare(u[2], 3)
     t.compare(array0.get(1), 1)
     t.compare(array0.get(2), 2)
-    t.compare(array0.get(3).toJson(), {'key':'value'})
+    t.compare(array0.get(3).toJson(), {'key': 'value'})
     t.compare(array0.get(4), 3)
 
     exchangeUpdates([doc0, doc1])
@@ -77,11 +77,11 @@ export const testArrayQuoteMultipleElements = tc => {
     const link1 = array1.get(0)
     u = link1.unquote()
     t.compare(u[0], 2)
-    t.compare(u[1].toJson(), {'key':'value'})
+    t.compare(u[1].toJson(), {'key': 'value'})
     t.compare(u[2], 3)
     t.compare(array1.get(1), 1)
     t.compare(array1.get(2), 2)
-    t.compare(array1.get(3).toJson(), {'key':'value'})
+    t.compare(array1.get(3).toJson(), {'key': 'value'})
     t.compare(array1.get(4), 3)
 
     array1.insert(3, ['A', 'B'])
@@ -89,7 +89,7 @@ export const testArrayQuoteMultipleElements = tc => {
     t.compare(u[0], 2)
     t.compare(u[1], 'A')
     t.compare(u[2], 'B')
-    t.compare(u[3].toJson(), {'key':'value'})
+    t.compare(u[3].toJson(), {'key': 'value'})
     t.compare(u[4], 3)
 
     exchangeUpdates([doc0, doc1])
@@ -98,7 +98,7 @@ export const testArrayQuoteMultipleElements = tc => {
     t.compare(u[0], 2)
     t.compare(u[1], 'A')
     t.compare(u[2], 'B')
-    t.compare(u[3].toJson(), {'key':'value'})
+    t.compare(u[3].toJson(), {'key': 'value'})
     t.compare(u[4], 3)
 }
 
@@ -106,9 +106,9 @@ export const testArrayQuoteMultipleElements = tc => {
  * @param {t.TestCase} tc
  */
 export const testSelfQuotation = tc => {
-    const doc0 = new Y.YDoc({clientID:1})
+    const doc0 = new Y.YDoc({clientID: 1})
     const array0 = doc0.getArray('array')
-    const doc1 = new Y.YDoc({clientID:2})
+    const doc1 = new Y.YDoc({clientID: 2})
     const array1 = doc1.getArray('array')
     array0.insert(0, [1, 2, 3, 4])
     const link0 = array0.quote(0, 3, false, true)
@@ -142,9 +142,9 @@ export const testSelfQuotation = tc => {
  * @param {t.TestCase} tc
  */
 export const testUpdate = tc => {
-    const doc0 = new Y.YDoc({clientID:1})
+    const doc0 = new Y.YDoc({clientID: 1})
     const map0 = doc0.getMap('map')
-    const doc1 = new Y.YDoc({clientID:2})
+    const doc1 = new Y.YDoc({clientID: 2})
     const map1 = doc1.getMap('map')
     map0.set('a', new Y.YMap([['a1', 'hello']]))
     const link0 = /** @type {Y.YWeakLink} */ (map0.link('a'))
@@ -169,9 +169,9 @@ export const testUpdate = tc => {
  * @param {t.TestCase} tc
  */
 export const testDeleteWeakLink = tc => {
-    const doc0 = new Y.YDoc({clientID:1})
+    const doc0 = new Y.YDoc({clientID: 1})
     const map0 = doc0.getMap('map')
-    const doc1 = new Y.YDoc({clientID:2})
+    const doc1 = new Y.YDoc({clientID: 2})
     const map1 = doc1.getMap('map')
     map0.set('a', new Y.YMap([['a1', 'hello']]))
     const link0 = /** @type {Y.YWeakLink} */ (map0.link('a'))
@@ -198,9 +198,9 @@ export const testDeleteWeakLink = tc => {
  * @param {t.TestCase} tc
  */
 export const testDeleteSource = tc => {
-    const doc0 = new Y.YDoc({clientID:1})
+    const doc0 = new Y.YDoc({clientID: 1})
     const map0 = doc0.getMap('map')
-    const doc1 = new Y.YDoc({clientID:2})
+    const doc1 = new Y.YDoc({clientID: 2})
     const map1 = doc1.getMap('map')
     map0.set('a', new Y.YMap([['a1', 'hello']]))
     const link0 = /** @type {Y.YWeakLink} */ (map0.link('a'))
@@ -225,9 +225,9 @@ export const testDeleteSource = tc => {
  * @param {t.TestCase} tc
  */
 export const testObserveMapUpdate = tc => {
-    const doc0 = new Y.YDoc({clientID:1})
+    const doc0 = new Y.YDoc({clientID: 1})
     const map0 = doc0.getMap('map')
-    const doc1 = new Y.YDoc({clientID:2})
+    const doc1 = new Y.YDoc({clientID: 2})
     const map1 = doc1.getMap('map')
     map0.set('a', 'value')
     const link0 = /** @type {Y.YWeakLink} */ (map0.link('a'))
@@ -259,9 +259,9 @@ export const testObserveMapUpdate = tc => {
  * @param {t.TestCase} tc
  */
 export const testObserveMapDelete = tc => {
-    const doc0 = new Y.YDoc({clientID:1})
+    const doc0 = new Y.YDoc({clientID: 1})
     const map0 = doc0.getMap('map')
-    const doc1 = new Y.YDoc({clientID:2})
+    const doc1 = new Y.YDoc({clientID: 2})
     const map1 = doc1.getMap('map')
     map0.set('a', 'value')
     const link0 = /** @type {Y.YWeakLink} */ (map0.link('a'))
@@ -292,11 +292,11 @@ export const testObserveMapDelete = tc => {
  * @param {t.TestCase} tc
  */
 export const testObserveArray = tc => {
-    const doc0 = new Y.YDoc({clientID:1})
+    const doc0 = new Y.YDoc({clientID: 1})
     const array0 = doc0.getArray('array')
-    const doc1 = new Y.YDoc({clientID:2})
+    const doc1 = new Y.YDoc({clientID: 2})
     const array1 = doc1.getArray('array')
-    array0.insert(0, ['A','B','C'])
+    array0.insert(0, ['A', 'B', 'C'])
     const link0 = /** @type {Y.YWeakLink} */ (array0.quote(1, 2))
     array0.insert(0, [link0])
     /**
@@ -308,7 +308,7 @@ export const testObserveArray = tc => {
     exchangeUpdates([doc0, doc1])
 
     let link1 = /** @type {Y.YWeakLink} */ (array1.get(0))
-    t.compare(link1.unquote(), ['B','C'])
+    t.compare(link1.unquote(), ['B', 'C'])
     /**
      * @type {any}
      */
@@ -337,7 +337,7 @@ export const testObserveArray = tc => {
  */
 export const testDeepObserveTransitive = tc => {
     // test observers in a face of linked chains of values
-    const doc = new Y.YDoc({clientID:1})
+    const doc = new Y.YDoc({clientID: 1})
 
     /*
        Structure:
@@ -368,7 +368,8 @@ export const testDeepObserveTransitive = tc => {
                 case Y.YWeakLinkEvent:
                     events.push(e.target)
                     break;
-                default: throw new Error('unexpected event type ' + e.constructor)
+                default:
+                    throw new Error('unexpected event type ' + e.constructor)
             }
         }
     })
@@ -381,7 +382,7 @@ export const testDeepObserveTransitive = tc => {
  */
 export const testDeepObserveTransitive2 = tc => {
     // test observers in a face of multi-layer linked chains of values
-    const doc = new Y.YDoc({clientID:1})
+    const doc = new Y.YDoc({clientID: 1})
 
     /*
        Structure:
@@ -417,7 +418,8 @@ export const testDeepObserveTransitive2 = tc => {
                 case Y.YWeakLinkEvent:
                     events.push(e.target)
                     break;
-                default: throw new Error('unexpected event type ' + e.constructor)
+                default:
+                    throw new Error('unexpected event type ' + e.constructor)
             }
         }
     })
@@ -457,7 +459,8 @@ export const testDeepObserveMap = tc => {
                 case Y.YWeakLinkEvent:
                     events.push({target: e.target})
                     break;
-                default: throw new Error('unexpected event type ' + e.constructor)
+                default:
+                    throw new Error('unexpected event type ' + e.constructor)
             }
         }
     })
@@ -472,14 +475,14 @@ export const testDeepObserveMap = tc => {
     nested.set('key', 'value')
     t.compare(events.length, 1)
     t.compare(events[0].target.toJson(), nested.toJson())
-    t.compare(events[0].keys, {'key': {action:'add', newValue: 'value'}})
+    t.compare(events[0].keys, {'key': {action: 'add', newValue: 'value'}})
 
     // delete entry in linked map
     events = []
     nested.delete('key')
     t.compare(events.length, 1)
     t.compare(events[0].target.toJson(), nested.toJson())
-    t.compare(events[0].keys, {'key': {action:'delete', oldValue: 'value'}})
+    t.compare(events[0].keys, {'key': {action: 'delete', oldValue: 'value'}})
 
     // delete linked map
     events = []
@@ -492,7 +495,7 @@ export const testDeepObserveMap = tc => {
  * @param {t.TestCase} tc
  */
 export const testDeepObserveArray = tc => {
-    const doc = new Y.YDoc({clientID:1})
+    const doc = new Y.YDoc({clientID: 1})
     /*
        Structure:
          - map:
@@ -523,7 +526,8 @@ export const testDeepObserveArray = tc => {
                 case Y.YWeakLinkEvent:
                     events.push({target: e.target})
                     break;
-                default: throw new Error('unexpected event type ' + e.constructor)
+                default:
+                    throw new Error('unexpected event type ' + e.constructor)
             }
         }
     })
@@ -533,18 +537,18 @@ export const testDeepObserveArray = tc => {
     nested.set('key', 'value')
     t.compare(events.length, 1)
     t.compare(events[0].target.toJson(), nested.toJson())
-    t.compare(events[0].keys, {'key': {action:'add', newValue: 'value'}})
+    t.compare(events[0].keys, {'key': {action: 'add', newValue: 'value'}})
 
     nested.set('key', 'value2')
     t.compare(events.length, 1)
     t.compare(events[0].target.toJson(), nested.toJson())
-    t.compare(events[0].keys, {'key': {action:'update', newValue: 'value2', oldValue: 'value'}})
+    t.compare(events[0].keys, {'key': {action: 'update', newValue: 'value2', oldValue: 'value'}})
 
     // delete entry in linked map
     nested.delete('key')
     t.compare(events.length, 1)
     t.compare(events[0].target.toJson(), nested.toJson())
-    t.compare(events[0].keys, {'key': {action:'delete', oldValue: 'value2'}})
+    t.compare(events[0].keys, {'key': {action: 'delete', oldValue: 'value2'}})
 
     // delete linked map
     map.delete('nested')
@@ -556,13 +560,13 @@ export const testDeepObserveArray = tc => {
  * @param {t.TestCase} tc
  */
 export const testDeepObserveNewElementWithinQuotedRange = tc => {
-    const doc0 = new Y.YDoc({clientID:1})
+    const doc0 = new Y.YDoc({clientID: 1})
     const array0 = doc0.getArray('array')
-    const doc1 = new Y.YDoc({clientID:2})
+    const doc1 = new Y.YDoc({clientID: 2})
     const array1 = doc1.getArray('array')
     const m1 = new Y.YMap()
     const m3 = new Y.YMap()
-    array0.insert(0, [1,m1,m3,2])
+    array0.insert(0, [1, m1, m3, 2])
     const link0 = array0.quote(1, 2)
     array0.insert(0, [link0])
 
@@ -582,7 +586,8 @@ export const testDeepObserveNewElementWithinQuotedRange = tc => {
                 case Y.YWeakLinkEvent:
                     e0.push({target: e.target})
                     break;
-                default: throw new Error('unexpected event type ' + e.constructor)
+                default:
+                    throw new Error('unexpected event type ' + e.constructor)
             }
         }
     })
@@ -602,7 +607,8 @@ export const testDeepObserveNewElementWithinQuotedRange = tc => {
                 case Y.YWeakLinkEvent:
                     e1.push({target: e.target})
                     break;
-                default: throw new Error('unexpected event type ' + e.constructor)
+                default:
+                    throw new Error('unexpected event type ' + e.constructor)
             }
         }
     })
@@ -615,21 +621,21 @@ export const testDeepObserveNewElementWithinQuotedRange = tc => {
     m20.set('key', 'value')
     t.compare(e0.length, 1)
     t.compare(e0[0].target.toJson(), m20.toJson())
-    t.compare(e0[0].keys, {'key': {action:'add', newValue: 'value'}})
+    t.compare(e0[0].keys, {'key': {action: 'add', newValue: 'value'}})
 
     exchangeUpdates([doc0, doc1])
 
     const m21 = array1.get(3)
     t.compare(e1.length, 1)
     t.compare(e1[0].target.toJson(), m21.toJson())
-    t.compare(e1[0].keys, {'key': {action:'add', newValue: 'value'}})
+    t.compare(e1[0].keys, {'key': {action: 'add', newValue: 'value'}})
 }
 
 /**
  * @param {t.TestCase} tc
  */
 export const testMapDeepObserve = tc => { //FIXME
-    const doc = new Y.YDoc({clientID:1})
+    const doc = new Y.YDoc({clientID: 1})
     const outer = doc.getMap('outer')
     const inner = new Y.YMap()
     outer.set('inner', inner)
@@ -648,7 +654,8 @@ export const testMapDeepObserve = tc => { //FIXME
                 case Y.YWeakLinkEvent:
                     events.push({target: e.target})
                     break;
-                default: throw new Error('unexpected event type ' + e.constructor)
+                default:
+                    throw new Error('unexpected event type ' + e.constructor)
             }
         }
     })
@@ -657,19 +664,19 @@ export const testMapDeepObserve = tc => { //FIXME
     inner.set('key', 'value1')
     t.compare(events.length, 1)
     t.compare(events[0].target.toJson(), inner.toJson())
-    t.compare(events[0].keys, {'key': {action:'add', newValue: 'value1'}})
+    t.compare(events[0].keys, {'key': {action: 'add', newValue: 'value1'}})
 
     events = []
     inner.set('key', 'value2')
     t.compare(events.length, 1)
     t.compare(events[0].target.toJson(), inner.toJson())
-    t.compare(events[0].keys, {'key': {action:'update', newValue: 'value2', oldValue: 'value1'}})
+    t.compare(events[0].keys, {'key': {action: 'update', newValue: 'value2', oldValue: 'value1'}})
 
     events = []
     inner.delete('key')
     t.compare(events.length, 1)
     t.compare(events[0].target.toJson(), inner.toJson())
-    t.compare(events[0].keys, {'key': {action:'delete', oldValue: 'value2'}})
+    t.compare(events[0].keys, {'key': {action: 'delete', oldValue: 'value2'}})
 }
 
 /**
@@ -677,7 +684,7 @@ export const testMapDeepObserve = tc => { //FIXME
  */
 export const testDeepObserveRecursive = tc => {
     // test observers in a face of cycled chains of values
-    const doc = new Y.YDoc({clientID:1})
+    const doc = new Y.YDoc({clientID: 1})
     /*
        Structure:
         array (observed):
@@ -723,7 +730,8 @@ export const testDeepObserveRecursive = tc => {
                 case Y.YWeakLinkEvent:
                     events.push({target: e.target})
                     break;
-                default: throw new Error('unexpected event type ' + e.constructor)
+                default:
+                    throw new Error('unexpected event type ' + e.constructor)
             }
         }
     })
@@ -731,29 +739,29 @@ export const testDeepObserveRecursive = tc => {
     m1.set('test-key1', 'value1')
     t.compare(events.length, 1)
     t.compare(events[0].target.toJson(), m1.toJson())
-    t.compare(events[0].keys, {'test-key1': {action:'add', newValue: 'value1'}})
+    t.compare(events[0].keys, {'test-key1': {action: 'add', newValue: 'value1'}})
 
     events = []
     m2.set('test-key2', 'value2')
     t.compare(events.length, 1)
     t.compare(events[0].target.toJson(), m2.toJson())
-    t.compare(events[0].keys, {'test-key2': {action:'add', newValue: 'value2'}})
+    t.compare(events[0].keys, {'test-key2': {action: 'add', newValue: 'value2'}})
 
     m1.delete('test-key1')
     t.compare(events.length, 1)
     t.compare(events[0].target.toJson(), m1.toJson())
-    t.compare(events[0].keys, {'test-key1': {action:'delete', oldValue: 'value1'}})
+    t.compare(events[0].keys, {'test-key1': {action: 'delete', oldValue: 'value1'}})
 }
 
 /**
  * @param {t.TestCase} tc
  */
 export const testRemoteMapUpdate = tc => {
-    const doc0 = new Y.YDoc({clientID:1})
+    const doc0 = new Y.YDoc({clientID: 1})
     const map0 = doc0.getMap('map')
-    const doc1 = new Y.YDoc({clientID:2})
+    const doc1 = new Y.YDoc({clientID: 2})
     const map1 = doc1.getMap('map')
-    const doc2 = new Y.YDoc({clientID:3})
+    const doc2 = new Y.YDoc({clientID: 3})
     const map2 = doc2.getMap('map')
 
     map0.set('key', 1)
@@ -785,10 +793,10 @@ export const testRemoteMapUpdate = tc => {
  * @param {t.TestCase} tc
  */
 export const testTextBasic = tc => {
-    const doc0 = new Y.YDoc({clientID:1})
+    const doc0 = new Y.YDoc({clientID: 1})
     const array0 = doc0.getArray('array')
     const text0 = doc0.getText('text')
-    const doc1 = new Y.YDoc({clientID:2})
+    const doc1 = new Y.YDoc({clientID: 2})
     const array1 = doc1.getArray('array')
     const text1 = doc1.getText('text')
 
@@ -805,7 +813,7 @@ export const testTextBasic = tc => {
     exchangeUpdates([doc0, doc1])
 
     const delta = text1.toDelta()
-    const { insert } = delta[1] // YWeakLink
+    const {insert} = delta[1] // YWeakLink
     t.compare(insert.toString(), 'be')
 }
 
@@ -813,14 +821,17 @@ export const testTextBasic = tc => {
  * @param {t.TestCase} tc
  */
 export const testQuoteFormattedText = tc => {
-    const doc = new Y.YDoc({clientID:1})
+    const doc = new Y.YDoc({clientID: 1})
     const array = doc.getArray('array')
-    const text = doc.getXmlText('text1')
-    const text2 = doc.getXmlText('text2')
+    const fragment = doc.getXmlFragment('fragment')
+    const text = new Y.YXmlText('text1')
+    const text2 = new Y.YXmlText('text2')
+    fragment.push(text)
+    fragment.push(text2)
 
     text.insert(0, 'abcde')
-    text.format(0, 1, {b:true})
-    text.format(1, 3, {i:true}) // '<b>a</b><i>bcd</i>e'
+    text.format(0, 1, {b: true})
+    text.format(1, 3, {i: true}) // '<b>a</b><i>bcd</i>e'
     const l1 = text.quote(0, 1)
     array.insert(0, [l1])
     t.compare(l1.toString(), '<b>a</b><i>b</i>')
@@ -848,10 +859,10 @@ export const testQuoteFormattedText = tc => {
  * @param {t.TestCase} tc
  */
 export const testTextLowerBoundary = tc => {
-    const doc0 = new Y.YDoc({clientID:1})
+    const doc0 = new Y.YDoc({clientID: 1})
     const text0 = doc0.getText('text')
     const array0 = doc0.getArray('array')
-    const doc1 = new Y.YDoc({clientID:2})
+    const doc1 = new Y.YDoc({clientID: 2})
     const text1 = doc1.getText('text')
 
     text0.insert(0, 'abcdef')
@@ -876,10 +887,10 @@ export const testTextLowerBoundary = tc => {
  * @param {t.TestCase} tc
  */
 export const testTextUpperBoundary = tc => {
-    const doc0 = new Y.YDoc({clientID:1})
+    const doc0 = new Y.YDoc({clientID: 1})
     const text0 = doc0.getText('text')
     const array0 = doc0.getArray('array')
-    const doc1 = new Y.YDoc({clientID:2})
+    const doc1 = new Y.YDoc({clientID: 2})
     const text1 = doc1.getText('text')
 
     text0.insert(0, 'abcdef')
@@ -904,10 +915,10 @@ export const testTextUpperBoundary = tc => {
  * @param {t.TestCase} tc
  */
 export const testArrayLowerBoundary = tc => {
-    const doc0 = new Y.YDoc({clientID:1})
+    const doc0 = new Y.YDoc({clientID: 1})
     const map0 = doc0.getMap('map')
     const array0 = doc0.getArray('array')
-    const doc1 = new Y.YDoc({clientID:2})
+    const doc1 = new Y.YDoc({clientID: 2})
     const array1 = doc1.getArray('array')
 
     array0.insert(0, ['a', 'b', 'c', 'd', 'e', 'f'])
@@ -933,10 +944,10 @@ export const testArrayLowerBoundary = tc => {
  * @param {t.TestCase} tc
  */
 export const testArrayUpperBoundary = tc => {
-    const doc0 = new Y.YDoc({clientID:1})
+    const doc0 = new Y.YDoc({clientID: 1})
     const map0 = doc0.getMap('map')
     const array0 = doc0.getArray('array')
-    const doc1 = new Y.YDoc({clientID:2})
+    const doc1 = new Y.YDoc({clientID: 2})
     const array1 = doc1.getArray('array')
 
     array0.insert(0, ['a', 'b', 'c', 'd', 'e', 'f'])

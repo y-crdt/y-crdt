@@ -98,7 +98,7 @@ impl YXmlText {
     ) -> crate::Result<()> {
         match &mut self.0 {
             SharedCollection::Prelim(c) => {
-                if attributes.is_undefined() {
+                if attributes.is_undefined() || attributes.is_null() {
                     c.text.insert_str(index as usize, chunk);
                     Ok(())
                 } else {
@@ -106,7 +106,7 @@ impl YXmlText {
                 }
             }
             SharedCollection::Integrated(c) => c.mutably(txn, |c, txn| {
-                if attributes.is_undefined() {
+                if attributes.is_undefined() || attributes.is_null() {
                     c.insert(txn, index, chunk);
                     Ok(())
                 } else if let Some(attrs) = YText::parse_fmt(attributes) {
@@ -218,7 +218,7 @@ impl YXmlText {
                 Err(JsValue::from_str(crate::js::errors::INVALID_PRELIM_OP))
             }
             SharedCollection::Integrated(c) => c.mutably(txn, |c, txn| {
-                if attributes.is_undefined() {
+                if attributes.is_undefined() || attributes.is_null() {
                     c.insert_embed(txn, index, Js::new(embed));
                     Ok(())
                 } else if let Some(attrs) = YText::parse_fmt(attributes) {
@@ -244,7 +244,7 @@ impl YXmlText {
     ) -> crate::Result<()> {
         match &mut self.0 {
             SharedCollection::Prelim(c) => {
-                if attributes.is_undefined() {
+                if attributes.is_undefined() || attributes.is_null() {
                     c.text.push_str(chunk);
                     Ok(())
                 } else {
@@ -252,7 +252,7 @@ impl YXmlText {
                 }
             }
             SharedCollection::Integrated(c) => c.mutably(txn, |c, txn| {
-                if attributes.is_undefined() {
+                if attributes.is_undefined() || attributes.is_null() {
                     c.push(txn, chunk);
                     Ok(())
                 } else if let Some(attrs) = YText::parse_fmt(attributes) {
