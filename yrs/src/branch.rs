@@ -11,6 +11,7 @@ use crate::{
     WriteTxn, XmlElementRef, XmlFragmentRef, XmlTextRef, ID,
 };
 use serde::{Deserialize, Serialize};
+use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Formatter;
 use std::hash::{Hash, Hasher};
@@ -856,19 +857,25 @@ pub enum BranchID {
 }
 
 impl BranchID {
-    pub fn get_branch<T: ReadTxn>(&self, txn: &T) -> Option<BranchPtr> {
-        let store = txn.store();
-        match self {
-            BranchID::Root(name) => store.get_type(name.clone()),
-            BranchID::Nested(id) => {
-                let block = store.blocks.get_block(id)?;
-                if let BlockCell::Block(block) = block {
-                    if let ItemContent::Type(branch) = &block.content {
-                        return Some(BranchPtr::from(&*branch));
-                    }
-                }
-                None
+    #[inline]
+    pub fn get_root<T: ReadTxn, K: Borrow<str>>(txn: &T, name: K) -> Option<BranchPtr> {
+        txn.store().get_type(name)
+    }
+
+    pub fn get_nested<T: ReadTxn>(txn: &T, id: &ID) -> Option<BranchPtr> {
+        let block = txn.store().blocks.get_block(id)?;
+        if let BlockCell::Block(block) = block {
+            if let ItemContent::Type(branch) = &block.content {
+                return Some(BranchPtr::from(&*branch));
             }
+        }
+        None
+    }
+
+    pub fn get_branch<T: ReadTxn>(&self, txn: &T) -> Option<BranchPtr> {
+        match self {
+            BranchID::Root(name) => Self::get_root(txn, name.as_ref()),
+            BranchID::Nested(id) => Self::get_nested(txn, id),
         }
     }
 }

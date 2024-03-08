@@ -22,10 +22,10 @@ use yrs::undo::EventKind;
 use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use yrs::{
-    uuid_v4, Any, Array, ArrayRef, Assoc, DeleteSet, GetString, Map, MapRef, Observable,
+    uuid_v4, Any, Array, ArrayRef, Assoc, BranchID, DeleteSet, GetString, Map, MapRef, Observable,
     OffsetKind, Options, Origin, Quotable, ReadTxn, Snapshot, StateVector, StickyIndex, Store,
     SubdocsEvent, SubdocsEventIter, Text, TextRef, Transact, TransactionCleanupEvent, Update, Xml,
-    XmlElementPrelim, XmlElementRef, XmlFragmentRef, XmlTextPrelim, XmlTextRef,
+    XmlElementPrelim, XmlElementRef, XmlFragmentRef, XmlTextPrelim, XmlTextRef, ID,
 };
 
 /// Flag used by `YInput` and `YOutput` to tag boolean values.
@@ -615,24 +615,6 @@ pub unsafe extern "C" fn ydoc_write_transaction(
             Box::into_raw(Box::new(Transaction::read_write(txn)))
         } else {
             null_mut()
-        }
-    }
-}
-
-/// Check if current branch is still alive (returns `Y_TRUE`, otherwise `Y_FALSE`).
-/// If it was deleted, this branch pointer is no longer a valid pointer and cannot be used to
-/// execute any functions using it.
-#[no_mangle]
-pub unsafe extern "C" fn ytransaction_alive(txn: *const Transaction, branch: *mut Branch) -> u8 {
-    if branch.is_null() {
-        Y_FALSE
-    } else {
-        let txn = txn.as_ref().unwrap();
-        let branch = branch.as_ref().unwrap();
-        if txn.store().is_alive(&BranchPtr::from(branch)) {
-            Y_TRUE
-        } else {
-            Y_FALSE
         }
     }
 }
@@ -5197,6 +5179,97 @@ impl RangeBounds<u32> for ExplicitRange {
             Bound::Included(&self.end_index)
         } else {
             Bound::Excluded(&self.end_index)
+        }
+    }
+}
+
+/// A structure representing logical identifier of a specific shared collection.
+/// Can be obtained by `ybranch_id` executed over alive `Branch`.
+///
+/// Use `ybranch_get` to resolve a `Branch` pointer from this branch ID.
+///
+/// This structure doesn't need to be destroyed. It's internal pointer reference is valid through
+/// a lifetime of a document, which collection this branch ID has been created from.
+#[repr(C)]
+pub struct YBranchId {
+    /// If positive: Client ID of a creator of a nested shared type, this identifier points to.
+    /// If negative: a negated Length of a root-level shared collection name.
+    pub client_or_len: i64,
+    pub variant: YBranchIdVariant,
+}
+
+#[repr(C)]
+pub union YBranchIdVariant {
+    /// Clock number timestamp when the creator of a nested shared type created it.
+    pub clock: u32,
+    /// Pointer to UTF-8 encoded string representing root-level type name. This pointer is valid
+    /// as long as document - in which scope it was created in - was not destroyed. As usually
+    /// root-level type names are statically allocated strings, it can also be supplied manually
+    /// from the outside.
+    pub name: *const u8,
+}
+
+/// Returns a logical identifier for a given shared collection. That collection must be alive at
+/// the moment of function call.
+#[no_mangle]
+pub unsafe extern "C" fn ybranch_id(branch: *const Branch) -> YBranchId {
+    let branch = branch.as_ref().unwrap();
+    match branch.id() {
+        BranchID::Nested(id) => YBranchId {
+            client_or_len: id.client as i64,
+            variant: YBranchIdVariant { clock: id.clock },
+        },
+        BranchID::Root(name) => {
+            let len = -(name.len() as i64);
+            YBranchId {
+                client_or_len: len,
+                variant: YBranchIdVariant {
+                    name: name.as_ptr(),
+                },
+            }
+        }
+    }
+}
+
+/// Given a logical identifier, returns a physical pointer to a shared collection.
+/// Returns null if collection was not found - either because it was not defined or not synchronized
+/// yet.
+/// Returned pointer may still point to deleted collection. In such case a subsequent `ybranch_alive`
+/// function call is required.
+#[no_mangle]
+pub unsafe extern "C" fn ybranch_get(
+    branch_id: *const YBranchId,
+    txn: *mut Transaction,
+) -> *const Branch {
+    let txn = txn.as_ref().unwrap();
+    let branch_id = branch_id.as_ref().unwrap();
+    let client_or_len = branch_id.client_or_len;
+    let ptr = if client_or_len >= 0 {
+        BranchID::get_nested(txn, &ID::new(client_or_len as u64, branch_id.variant.clock))
+    } else {
+        let name = std::slice::from_raw_parts(branch_id.variant.name, (-client_or_len) as usize);
+        BranchID::get_root(txn, std::str::from_utf8_unchecked(name))
+    };
+
+    match ptr {
+        None => null(),
+        Some(branch_ptr) => branch_ptr.into_raw_branch(),
+    }
+}
+
+/// Check if current branch is still alive (returns `Y_TRUE`, otherwise `Y_FALSE`).
+/// If it was deleted, this branch pointer is no longer a valid pointer and cannot be used to
+/// execute any functions using it.
+#[no_mangle]
+pub unsafe extern "C" fn ybranch_alive(branch: *mut Branch) -> u8 {
+    if branch.is_null() {
+        Y_FALSE
+    } else {
+        let branch = BranchPtr::from_raw_branch(branch);
+        if branch.is_deleted() {
+            Y_FALSE
+        } else {
+            Y_TRUE
         }
     }
 }
