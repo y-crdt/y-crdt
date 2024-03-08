@@ -238,14 +238,18 @@ impl XmlPrelim for Js {}
 impl Prelim for Js {
     type Return = Unused;
 
-    fn into_content(self, _: &mut TransactionMut) -> (ItemContent, Option<Self>) {
+    fn into_content(self, txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
         match self.as_value().unwrap() {
             ValueRef::Any(any) => (ItemContent::Any(vec![any]), None),
             ValueRef::Shared(shared) => {
-                if !shared.prelim() {
-                    panic!("{} - {:?}", errors::NOT_PRELIM, shared.type_ref());
+                match &shared {
+                    Shared::Weak(_) => { /* WeakRefs can always be integrated */ }
+                    other if !other.prelim() => {
+                        panic!("{}", crate::js::errors::NOT_PRELIM);
+                    }
+                    _ => { /* good to go */ }
                 }
-                let type_ref = shared.type_ref();
+                let type_ref = shared.type_ref(txn);
                 let branch = Branch::new(type_ref);
                 (ItemContent::Type(branch), Some(self))
             }
@@ -344,7 +348,7 @@ impl Shared {
         }
     }
 
-    fn type_ref(&self) -> TypeRef {
+    fn type_ref(&self, txn: &TransactionMut) -> TypeRef {
         match self {
             Shared::Text(_) => TypeRef::Text,
             Shared::Map(_) => TypeRef::Map,
@@ -352,7 +356,7 @@ impl Shared {
             Shared::XmlText(_) => TypeRef::XmlText,
             Shared::XmlFragment(_) => TypeRef::XmlFragment,
             Shared::Doc(_) => TypeRef::SubDoc,
-            Shared::Weak(v) => TypeRef::WeakLink(v.source()),
+            Shared::Weak(v) => TypeRef::WeakLink(v.source(txn)),
             Shared::XmlElement(v) => {
                 let name = match &v.0 {
                     SharedCollection::Integrated(_) => panic!("{}", crate::js::errors::NOT_PRELIM),
@@ -367,8 +371,8 @@ impl Shared {
 impl Prelim for Shared {
     type Return = Unused;
 
-    fn into_content(self, _: &mut TransactionMut) -> (ItemContent, Option<Self>) {
-        let type_ref = self.type_ref();
+    fn into_content(self, txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
+        let type_ref = self.type_ref(txn);
         let branch = Branch::new(type_ref);
         (ItemContent::Type(branch), Some(self))
     }
@@ -746,6 +750,5 @@ pub(crate) mod errors {
     pub const INVALID_XML_ATTRS: &'static str = "given object cannot be used as XML attributes";
     pub const NOT_XML_TYPE: &'static str = "provided object is not a valid XML shared type";
     pub const NOT_PRELIM: &'static str = "this operation only works on preliminary types";
-    pub const NON_SUBDOC: &'static str = "current document is not a sub-document";
     pub const NOT_WASM_OBJ: &'static str = "provided reference is not a WebAssembly object";
 }

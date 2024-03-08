@@ -49,7 +49,7 @@ export const testOnUpdateV2 = tc => {
     text1.insert(0, 'hello')
     let expected = Y.encodeStateAsUpdateV2(d1)
 
-    const d2 = new Y.YDoc(2)
+    const d2 = new Y.YDoc({clientID: 2})
     const text2 = d2.getText('text')
     let actual;
     const sub = d2.onUpdateV2(e => actual = e);
@@ -157,6 +157,7 @@ export const testSubdoc = tc => {
          */
         let event = /** @type {any} */ (null)
         doc.onSubdocs(subdocs => {
+            console.log('-----subdocs-----')
             let added = Array.from(subdocs.added).map(x => x.guid).sort()
             let removed = Array.from(subdocs.removed).map(x => x.guid).sort()
             let loaded = Array.from(subdocs.loaded).map(x => x.guid).sort()

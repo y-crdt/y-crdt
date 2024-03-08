@@ -824,8 +824,8 @@ export const testQuoteFormattedText = tc => {
     const doc = new Y.YDoc({clientID: 1})
     const array = doc.getArray('array')
     const fragment = doc.getXmlFragment('fragment')
-    const text = new Y.YXmlText('text1')
-    const text2 = new Y.YXmlText('text2')
+    const text = new Y.YXmlText('')
+    const text2 = new Y.YXmlText('')
     fragment.push(text)
     fragment.push(text2)
 

@@ -28,9 +28,15 @@ impl YWeakLink {
         YWeakLink(SharedCollection::Prelim(PrelimWrapper { prelim, doc }))
     }
 
-    pub(crate) fn source(&self) -> Arc<LinkSource> {
+    pub(crate) fn source(&self, txn: &TransactionMut) -> Arc<LinkSource> {
         match &self.0 {
-            SharedCollection::Integrated(_) => panic!("{}", crate::js::errors::NOT_PRELIM),
+            SharedCollection::Integrated(c) => {
+                if let Some(shared_ref) = c.hook.get(txn) {
+                    shared_ref.source().clone()
+                } else {
+                    panic!("{}", crate::js::errors::REF_DISPOSED);
+                }
+            }
             SharedCollection::Prelim(v) => v.prelim.source().clone(),
         }
     }

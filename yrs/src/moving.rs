@@ -760,7 +760,15 @@ impl<'de> Deserialize<'de> for Assoc {
             }
 
             #[inline]
-            fn visit_i8<E>(self, v: i8) -> Result<Self::Value, E>
+            fn visit_u64<E>(self, _: u64) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(Assoc::After)
+            }
+
+            #[inline]
+            fn visit_i64<E>(self, v: i64) -> Result<Self::Value, E>
             where
                 E: serde::de::Error,
             {
@@ -771,8 +779,7 @@ impl<'de> Deserialize<'de> for Assoc {
                 }
             }
         }
-
-        deserializer.deserialize_i8(AssocVisitor)
+        deserializer.deserialize_i64(AssocVisitor)
     }
 }
 

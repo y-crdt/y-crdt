@@ -10,6 +10,7 @@ use crate::{
     ArrayRef, MapRef, Observer, Origin, ReadTxn, Subscription, TextRef, TransactionMut, Value,
     WriteTxn, XmlElementRef, XmlFragmentRef, XmlTextRef, ID,
 };
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Formatter;
 use std::hash::{Hash, Hasher};
@@ -839,7 +840,7 @@ impl<S> Into<BranchID> for Hook<S> {
 
 /// An unique logical identifier of a shared collection. Can be shared across document boundaries
 /// to reference to the same logical entity across different replicas of a document.
-#[derive(Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
+#[derive(Clone, Ord, PartialOrd, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum BranchID {
     Nested(ID),
     Root(Arc<str>),

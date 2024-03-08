@@ -301,7 +301,7 @@ impl YDoc {
                 let parent_doc = if let Some(parent_doc) = self.0.parent_doc() {
                     parent_doc
                 } else {
-                    return Err(JsValue::from_str(crate::js::errors::NON_SUBDOC));
+                    return Ok(());
                 };
                 let mut parent_txn = parent_doc.transact_mut();
                 self.0.load(&mut parent_txn);
@@ -321,7 +321,7 @@ impl YDoc {
                 let parent_doc = if let Some(parent_doc) = self.0.parent_doc() {
                     parent_doc
                 } else {
-                    return Err(JsValue::from_str(crate::js::errors::NON_SUBDOC));
+                    return Ok(());
                 };
                 let mut parent_txn = parent_doc.transact_mut();
                 self.0.destroy(&mut parent_txn);

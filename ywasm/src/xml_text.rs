@@ -4,7 +4,7 @@ use crate::text::YText;
 use crate::transaction::YTransaction;
 use crate::weak::YWeakLink;
 use crate::xml_elem::YXmlElement;
-use crate::{ImplicitTransaction, Observer};
+use crate::{ImplicitTransaction, Observer, YSnapshot};
 use gloo_utils::format::JsValueSerdeExt;
 use std::collections::HashMap;
 use wasm_bindgen::prelude::wasm_bindgen;
@@ -168,37 +168,34 @@ impl YXmlText {
     }
 
     /// Returns the Delta representation of this YXmlText type.
-    //#[wasm_bindgen(js_name = toDelta)]
-    //pub fn to_delta(
-    //    &self,
-    //    snapshot: Option<YSnapshot>,
-    //    prev_snapshot: Option<YSnapshot>,
-    //    compute_ychange: Option<js_sys::Function>,
-    //    txn: &ImplicitTransaction,
-    //) -> JsValue {
-    //    let hi = snapshot.map(|s| s.0);
-    //    let lo = prev_snapshot.map(|s| s.0);
-    //    let delta = if let Some(mut txn) = get_txn_mut(txn) {
-    //        self.0
-    //            .diff_range(txn.as_mut(), hi.as_ref(), lo.as_ref(), |change| {
-    //                ychange_to_js(change, &compute_ychange)
-    //            })
-    //            .into_iter()
-    //            .map(ytext_change_into_js)
-    //    } else {
-    //        let mut txn = self.0.transact_mut();
-    //        self.0
-    //            .diff_range(&mut txn, hi.as_ref(), lo.as_ref(), |change| {
-    //                ychange_to_js(change, &compute_ychange)
-    //            })
-    //            .into_iter()
-    //            .map(ytext_change_into_js)
-    //    };
-    //    let mut result = js_sys::Array::new();
-    //    result.extend(delta);
-    //    let delta: JsValue = result.into();
-    //    delta
-    //}
+    #[wasm_bindgen(js_name = toDelta)]
+    pub fn to_delta(
+        &self,
+        snapshot: Option<YSnapshot>,
+        prev_snapshot: Option<YSnapshot>,
+        compute_ychange: Option<js_sys::Function>,
+        txn: ImplicitTransaction,
+    ) -> crate::Result<js_sys::Array> {
+        match &self.0 {
+            SharedCollection::Prelim(_) => {
+                Err(JsValue::from_str(crate::js::errors::INVALID_PRELIM_OP))
+            }
+            SharedCollection::Integrated(c) => c.mutably(txn, |c, txn| {
+                let doc = txn.doc().clone();
+                let hi = snapshot.map(|s| s.0);
+                let lo = prev_snapshot.map(|s| s.0);
+                let array = js_sys::Array::new();
+                let delta = c.diff_range(txn, hi.as_ref(), lo.as_ref(), |change| {
+                    crate::js::convert::ychange_to_js(change, &compute_ychange).unwrap()
+                });
+                for d in delta {
+                    let d = crate::js::convert::diff_into_js(d, &doc)?;
+                    array.push(&d);
+                }
+                Ok(array)
+            }),
+        }
+    }
 
     /// Inserts a given `embed` object into this `YXmlText` instance, starting at a given `index`.
     ///
