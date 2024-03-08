@@ -395,8 +395,8 @@
 //! let doc = Doc::new();
 //! let mut txn = doc.transact_mut();
 //! let f = txn.get_or_insert_xml_fragment("article");
-//! let text = f.insert(&mut txn, 0, XmlTextPrelim::new(""));
 //! txn.apply_update(Update::decode_v1(&update).unwrap());
+//! let text = f.get(&mut txn, 0).unwrap().into_xml_text().unwrap();
 //!
 //! assert_eq!(text.get_string(&txn), INIT);
 //! ```
