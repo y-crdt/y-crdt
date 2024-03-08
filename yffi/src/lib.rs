@@ -3897,7 +3897,7 @@ pub unsafe extern "C" fn ytext_event_target(e: *const YTextEvent) -> *mut Branch
 pub unsafe extern "C" fn yarray_event_target(e: *const YArrayEvent) -> *mut Branch {
     assert!(!e.is_null());
     let out = (&*e).target().clone();
-    Box::into_raw(Box::new(out)) as *mut _
+    out.into_raw_branch()
 }
 
 /// Returns a pointer to a shared collection, which triggered passed event `e`.
@@ -3905,7 +3905,7 @@ pub unsafe extern "C" fn yarray_event_target(e: *const YArrayEvent) -> *mut Bran
 pub unsafe extern "C" fn ymap_event_target(e: *const YMapEvent) -> *mut Branch {
     assert!(!e.is_null());
     let out = (&*e).target().clone();
-    Box::into_raw(Box::new(out)) as *mut _
+    out.into_raw_branch()
 }
 
 /// Returns a pointer to a shared collection, which triggered passed event `e`.
@@ -3913,7 +3913,11 @@ pub unsafe extern "C" fn ymap_event_target(e: *const YMapEvent) -> *mut Branch {
 pub unsafe extern "C" fn yxmlelem_event_target(e: *const YXmlEvent) -> *mut Branch {
     assert!(!e.is_null());
     let out = (&*e).target().clone();
-    Box::into_raw(Box::new(out)) as *mut _
+    match out {
+        XmlNode::Element(e) => e.into_raw_branch(),
+        XmlNode::Fragment(e) => e.into_raw_branch(),
+        XmlNode::Text(e) => e.into_raw_branch(),
+    }
 }
 
 /// Returns a pointer to a shared collection, which triggered passed event `e`.
@@ -3921,7 +3925,7 @@ pub unsafe extern "C" fn yxmlelem_event_target(e: *const YXmlEvent) -> *mut Bran
 pub unsafe extern "C" fn yxmltext_event_target(e: *const YXmlTextEvent) -> *mut Branch {
     assert!(!e.is_null());
     let out = (&*e).target().clone();
-    Box::into_raw(Box::new(out)) as *mut _
+    out.into_raw_branch()
 }
 
 /// Returns a path from a root type down to a current shared collection (which can be obtained using
