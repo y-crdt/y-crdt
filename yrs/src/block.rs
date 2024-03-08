@@ -704,10 +704,10 @@ impl ItemPtr {
                 }
                 ItemContent::Move(m) => m.integrate_block(txn, self_ptr),
                 ItemContent::Doc(parent_doc, doc) => {
+                    *parent_doc = Some(txn.doc().clone());
                     {
-                        let mut txn = doc.transact_mut();
-                        txn.store.parent = Some(self_ptr);
-                        *parent_doc = Some(txn.doc().clone());
+                        let mut child_txn = doc.transact_mut();
+                        child_txn.store.parent = Some(self_ptr);
                     }
                     let subdocs = txn.subdocs.get_or_init();
                     subdocs.added.insert(DocAddr::new(doc), doc.clone());

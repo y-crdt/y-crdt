@@ -358,21 +358,22 @@ impl YDoc {
     /// Returns a list of unique identifiers of the sub-documents existings within the scope of
     /// this document.
     #[wasm_bindgen(js_name = getSubdocGuids)]
-    pub fn subdoc_guids(&self, txn: &ImplicitTransaction) -> Result<js_sys::Array> {
+    pub fn subdoc_guids(&self, txn: &ImplicitTransaction) -> Result<js_sys::Set> {
         let doc = &self.0;
-        match YTransaction::from_implicit(&txn)? {
+        let guids = match YTransaction::from_implicit(&txn)? {
             Some(txn) => {
                 let values = txn.subdoc_guids().map(|id| JsValue::from_str(id.as_ref()));
-                Ok(js_sys::Array::from_iter(values))
+                js_sys::Array::from_iter(values)
             }
             None => {
                 let txn = doc
                     .try_transact()
                     .map_err(|_| JsValue::from_str(crate::js::errors::ANOTHER_RW_TX))?;
                 let values = txn.subdoc_guids().map(|id| JsValue::from_str(id.as_ref()));
-                Ok(js_sys::Array::from_iter(values))
+                js_sys::Array::from_iter(values)
             }
-        }
+        };
+        Ok(js_sys::Set::new(&guids))
     }
 
     /// Returns a list of all root-level replicated collections, together with their types.

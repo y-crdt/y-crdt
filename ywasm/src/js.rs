@@ -244,6 +244,9 @@ impl Prelim for Js {
             ValueRef::Shared(shared) => {
                 match &shared {
                     Shared::Weak(_) => { /* WeakRefs can always be integrated */ }
+                    Shared::Doc(doc) if doc.prelim() => {
+                        return (ItemContent::Doc(None, doc.0.clone()), None);
+                    }
                     other if !other.prelim() => {
                         panic!("{}", crate::js::errors::NOT_PRELIM);
                     }
