@@ -271,8 +271,9 @@ TEST_CASE("YMap basic") {
 
 TEST_CASE("YXmlElement basic") {
     YDoc* doc = ydoc_new_with_id(1);
-    Branch* xml = yxmlelem(doc, "test");
+    Branch* frag = yxmlfragment(doc, "test");
     YTransaction* txn = ydoc_write_transaction(doc, 0, NULL);
+    Branch* xml = yxmlelem_insert_elem(frag, txn, 0, "div");
 
     // XML attributes API
     yxmlelem_insert_attr(xml, txn, "key1", "value1");
@@ -832,8 +833,9 @@ void yxmltext_test_clean(YXmlTextEventTest* t) {
 
 TEST_CASE("YXmlText observe") {
     YDoc* doc = ydoc_new_with_id(1);
-    Branch* txt = yxmltext(doc, "test");
+    Branch* frag = yxmlfragment(doc, "test");
     YTransaction* txn = ydoc_write_transaction(doc, 0, NULL);
+    Branch* txt = yxmlelem_insert_text(frag, txn, 0);
 
     YXmlTextEventTest* t = yxmltext_event_test_new();
     YSubscription* sub = yxmltext_observe(txt, (void*)t, &yxmltext_test_observe);
@@ -926,8 +928,9 @@ void yxml_test_clean(YXmlEventTest* t) {
 
 TEST_CASE("YXmlElement observe") {
     YDoc* doc = ydoc_new_with_id(1);
-    Branch* xml = yxmlelem(doc, "test");
+    Branch *frag = yxmlfragment(doc, "test");
     YTransaction* txn = ydoc_write_transaction(doc, 0, NULL);
+    Branch* xml = yxmlelem_insert_elem(frag, txn, 0, "div");
 
     YXmlEventTest* t = yxml_event_test_new();
     YSubscription* sub = yxmlelem_observe(xml, (void*)t, &yxml_test_observe);

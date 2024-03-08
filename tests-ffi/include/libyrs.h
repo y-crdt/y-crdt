@@ -351,12 +351,12 @@ typedef struct YOptions {
 } YOptions;
 
 /**
- * A Yrs document type. Documents are most important units of collaborative resources management.
+ * A Yrs document type. Documents are the most important units of collaborative resources management.
  * All shared collections live within a scope of their corresponding documents. All updates are
- * generated on per document basis (rather than individual shared type). All operations on shared
+ * generated on per-document basis (rather than individual shared type). All operations on shared
  * collections happen via `YTransaction`, which lifetime is also bound to a document.
  *
- * Document manages so called root types, which are top-level shared types definitions (as opposed
+ * Document manages so-called root types, which are top-level shared types definitions (as opposed
  * to recursively nested types).
  */
 typedef YDoc YDoc;
@@ -1115,26 +1115,6 @@ YTransaction *ydoc_read_transaction(YDoc *doc);
 YTransaction *ydoc_write_transaction(YDoc *doc, uint32_t origin_len, const char *origin);
 
 /**
- * Starts a new read-write transaction on a given branches document. All other operations happen in
- * context of a transaction. Yrs transactions do not follow ACID rules. Once a set of operations is
- * complete, a transaction can be finished using `ytransaction_commit` function.
- *
- * Returns `NULL` if read-write transaction couldn't be created, i.e. when another transaction is
- * already opened.
- */
-YTransaction *ybranch_write_transaction(Branch *branch);
-
-/**
- * Starts a new read-only transaction on a given branches document. All other operations happen in
- * context of a transaction. Yrs transactions do not follow ACID rules. Once a set of operations is
- * complete, a transaction can be finished using `ytransaction_commit` function.
- *
- * Returns `NULL` if read-only transaction couldn't be created, i.e. when another read-write
- * transaction is already opened.
- */
-YTransaction *ybranch_read_transaction(Branch *branch);
-
-/**
  * Check if current branch is still alive (returns `Y_TRUE`, otherwise `Y_FALSE`).
  * If it was deleted, this branch pointer is no longer a valid pointer and cannot be used to
  * execute any functions using it.
@@ -1202,21 +1182,7 @@ Branch *ymap(YDoc *doc, const char *name);
  * document. This structure can later be accessed using its `name`, which must be a null-terminated
  * UTF-8 compatible string.
  */
-Branch *yxmlelem(YDoc *doc, const char *name);
-
-/**
- * Gets or creates a new shared `YXmlElement` data type instance as a root-level type of a given
- * document. This structure can later be accessed using its `name`, which must be a null-terminated
- * UTF-8 compatible string.
- */
 Branch *yxmlfragment(YDoc *doc, const char *name);
-
-/**
- * Gets or creates a new shared `YXmlText` data type instance as a root-level type of a given
- * document. This structure can later be accessed using its `name`, which must be a null-terminated
- * UTF-8 compatible string.
- */
-Branch *yxmltext(YDoc *doc, const char *name);
 
 /**
  * Returns a state vector of a current transaction's document, serialized using lib0 version 1
