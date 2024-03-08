@@ -450,6 +450,48 @@
 //! in multiple places. Same rule concerns primitive types (they will eventually be serialized and
 //! deserialized as unique independent objects), integrated types or sub-documents.
 //!
+//! # Shared collection hooks
+//!
+//! While type like [TextRef], [MapRef] etc. refer to addresses of objects living in memory,
+//! sometime you'd like to be able to uniquely identify the same collection across its different
+//! replicas living on other peers. This is possible via hooks:
+//!
+//! ```rust
+//! use yrs::{Array, ArrayRef, Doc, Hook, MapPrelim, ReadTxn, RootRef, SharedRef, Transact, Update};
+//! use yrs::types::ToJson;
+//! use yrs::updates::decoder::Decode;
+//!
+//! // create a logical identifier to a root type
+//! let root = ArrayRef::root("root");
+//!
+//! let local = Doc::with_client_id(1);
+//! let local_array = root.get_or_create(&mut local.transact_mut());
+//! assert_eq!(local_array.hook(), Hook::from(root.clone())); // another way to get hook for existing type
+//!
+//! let local_map = local_array.push_back(&mut local.transact_mut(), MapPrelim::from([("key", "old")]));
+//! let nested = local_map.hook(); // logical identifier to a nested shared type
+//!
+//! let remote = Doc::with_client_id(2);
+//! let remote_array = root.get_or_create(&mut local.transact_mut());
+//! // we haven't synchronized yet, so nested element doesn't exist on remote
+//! assert!(nested.get(&remote.transact()).is_none());
+//!
+//! // synchronize the changes
+//! {
+//!     let mut txn = remote.transact_mut();
+//!     let update = local.transact().encode_state_as_update_v1(&txn.state_vector());
+//!     txn.apply_update(Update::decode_v1(&update).unwrap());
+//! }
+//!
+//! // after synchronizing, we can now instantiate instance of the same logical type
+//! let remote_map = nested.get(&remote.transact()).unwrap();
+//! assert_eq!(local_map.hook(), remote_map.hook());
+//! assert_eq!(local_map.to_json(&local.transact()), remote_map.to_json(&remote.transact()));
+//! ```
+//!
+//! Logical references are serializable. They also can help to avoid segfaults in cases when we hold
+//! an unsafe reference to a nested collection that has been already deleted by concurrent operation.
+//!
 //! # Transaction event lifecycle
 //!
 //! Yrs provides a variety of lifecycle events, which enable users to react on various situations

@@ -724,7 +724,7 @@ impl<S> Into<BranchID> for Nested<S> {
 /// A descriptor used to reference to shared collections by their unique logical identifiers,
 /// which can be either [Root]-level collections or shared collections [Nested] into each other.
 /// It can be resolved from any shared reference using [SharedRef::hook].
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Hook<S> {
     id: BranchID,
     _tag: PhantomData<S>,
