@@ -327,13 +327,13 @@ TEST_CASE("YXmlElement basic") {
     ystring_destroy(tag);
 
     tag = yxmlelem_tag(xml);
-    REQUIRE(!strcmp(tag, "test"));
+    REQUIRE(!strcmp(tag, "div"));
     ystring_destroy(tag);
 
     // check parents
     Branch* parent = yxmlelem_parent(inner);
     tag = yxmlelem_tag(parent);
-    REQUIRE(!strcmp(tag, "test"));
+    REQUIRE(!strcmp(tag, "div"));
     ystring_destroy(tag);
 
     parent = yxmlelem_parent(xml);
