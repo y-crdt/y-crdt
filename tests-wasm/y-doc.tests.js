@@ -89,7 +89,7 @@ export const testOnAfterTransaction = tc => {
     console.log(event)
     t.compare(event.beforeState, new Map());
     let state = new Map()
-    state.set(1n, 11)
+    state.set(1, 11)
     t.compare(event.afterState, state);
     t.compare(event.deleteSet, new Map());
 
@@ -99,7 +99,7 @@ export const testOnAfterTransaction = tc => {
     t.compare(event.beforeState, state);
     t.compare(event.afterState, state);
     state = new Map()
-    state.set(1n, [[2, 7]])
+    state.set(1, [[2, 7]])
     t.compare(event.deleteSet, state);
 
     sub.free()

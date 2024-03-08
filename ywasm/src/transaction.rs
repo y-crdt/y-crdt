@@ -113,7 +113,7 @@ impl YTransaction {
     /// the document.
     #[wasm_bindgen(getter, js_name = afterState)]
     pub fn after_state(&self) -> js_sys::Map {
-        let sv = self.deref().before_state();
+        let sv = self.deref().after_state();
         crate::js::convert::state_vector_to_js(&sv)
     }
 

@@ -314,11 +314,11 @@ impl Shared {
             Shared::Text(v) => v.prelim(),
             Shared::Map(v) => v.prelim(),
             Shared::Array(v) => v.prelim(),
-            Shared::Doc(v) => v.prelim(),
             Shared::Weak(v) => v.prelim(),
             Shared::XmlText(v) => v.prelim(),
             Shared::XmlElement(v) => v.prelim(),
             Shared::XmlFragment(v) => v.prelim(),
+            Shared::Doc(v) => v.prelim(),
         }
     }
 
@@ -690,7 +690,7 @@ pub(crate) mod convert {
             let r = js_sys::Array::new();
             for segment in range.iter() {
                 let start = JsValue::from_f64(segment.start as f64);
-                let end = JsValue::from_f64(segment.end as f64);
+                let end = JsValue::from_f64((segment.end - segment.start) as f64);
                 let segment = js_sys::Array::from_iter([start, end]);
                 r.push(&segment.into());
             }
