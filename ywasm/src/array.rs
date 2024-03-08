@@ -52,6 +52,14 @@ impl YArray {
         TYPE_REFS_ARRAY
     }
 
+    /// Gets unique logical identifier of this type, shared across peers collaborating on the same
+    /// document.
+    #[wasm_bindgen(getter, js_name = id)]
+    #[inline]
+    pub fn id(&self) -> crate::Result<JsValue> {
+        self.0.id()
+    }
+
     /// Returns true if this is a preliminary instance of `YArray`.
     ///
     /// Preliminary instances can be nested into other shared data types such as `YArray` and `YMap`.

@@ -86,7 +86,6 @@ export const testOnAfterTransaction = tc => {
 
     text.insert(0, 'hello world')
 
-    console.log(event)
     t.compare(event.beforeState, new Map());
     let state = new Map()
     state.set(1, 11)
@@ -298,4 +297,40 @@ export const testRoots = tc => {
     let d2 = new Y.YDoc()
     exchangeUpdates([d1, d2])
     t.compare(d2.roots(), [['a', undefined]])
+}
+
+/**
+ * @param {t.TestCase} tc
+ */
+export const testIds = tc => {
+    const d1 = new Y.YDoc()
+    const a1 = d1.getArray('a')
+
+    const d2 = new Y.YDoc()
+    d2.getArray('a') // root types need to be pre-initialized
+
+    const m1 = new Y.YMap({'key1': 'value1'})
+    a1.push([m1]) // set nested type on a first doc
+
+    const arrayId = a1.id
+    const mapId = m1.id
+
+    // sync
+    exchangeUpdates([d1, d2])
+
+    // resolve instances using identifiers
+    const m2 = d2.transact(tx => tx.get(mapId))
+
+    t.compare(m2.toJson(), {'key1': 'value1'})
+
+    const a2 = d2.transact(tx => tx.get(arrayId))
+
+    // modify instance on remote end and sync
+    m2.set('key1', 'value2')
+    a2.insert(0, ['abc'])
+
+    exchangeUpdates([d1, d2])
+
+    // check if first doc has correctly updated values
+    t.compare(a1.toJson(), ['abc', {'key1': 'value2'}])
 }

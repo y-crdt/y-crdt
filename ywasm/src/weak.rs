@@ -60,6 +60,14 @@ impl YWeakLink {
         TYPE_REFS_WEAK
     }
 
+    /// Gets unique logical identifier of this type, shared across peers collaborating on the same
+    /// document.
+    #[wasm_bindgen(getter, js_name = id)]
+    #[inline]
+    pub fn id(&self) -> crate::Result<JsValue> {
+        self.0.id()
+    }
+
     /// Checks if current YWeakLink reference is alive and has not been deleted by its parent collection.
     /// This method only works on already integrated shared types and will return false is current
     /// type is preliminary (has not been integrated into document).

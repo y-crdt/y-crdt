@@ -1,14 +1,28 @@
+use crate::array::YArray;
+use crate::collection::SharedCollection;
+use crate::doc::YDoc;
 use crate::js::Js;
+use crate::map::YMap;
+use crate::text::YText;
+use crate::weak::YWeakLink;
+use crate::xml_elem::YXmlElement;
+use crate::xml_frag::YXmlFragment;
+use crate::xml_text::YXmlText;
 use crate::Result;
+use gloo_utils::format::JsValueSerdeExt;
 use js_sys::Uint8Array;
 use std::ops::Deref;
 use wasm_bindgen::__rt::{Ref, RefMut};
 use wasm_bindgen::convert::{IntoWasmAbi, RefFromWasmAbi, RefMutFromWasmAbi};
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
+use yrs::types::TypeRef;
 use yrs::updates::decoder::Decode;
 use yrs::updates::encoder::Encode;
-use yrs::{ReadTxn, TransactionMut, Update};
+use yrs::{
+    ArrayRef, BranchID, MapRef, ReadTxn, TextRef, TransactionMut, Update, WeakRef, XmlElementRef,
+    XmlFragmentRef, XmlTextRef,
+};
 
 #[wasm_bindgen]
 extern "C" {
@@ -89,6 +103,13 @@ impl YTransaction {
         }
     }
 
+    pub fn as_ref(&self) -> &TransactionMut<'static> {
+        match &self.inner {
+            Cell::Owned(v) => v,
+            Cell::Borrowed(v) => v,
+        }
+    }
+
     pub fn as_mut(&mut self) -> Result<&mut TransactionMut<'static>> {
         match &mut self.inner {
             Cell::Owned(v) => Ok(v),
@@ -132,6 +153,47 @@ impl YTransaction {
         } else {
             JsValue::UNDEFINED
         }
+    }
+
+    /// Given a logical identifier of the collection (obtained via `YText.id`, `YArray.id` etc.),
+    /// attempts to return an instance of that collection in the scope of current document.
+    ///
+    /// Returns `undefined` if an instance was not defined locally, haven't been integrated or
+    /// has been deleted.
+    #[wasm_bindgen(js_name = get)]
+    pub fn get(&self, id: JsValue) -> crate::Result<JsValue> {
+        let branch_id: BranchID =
+            JsValue::into_serde(&id).map_err(|e| JsValue::from_str(&e.to_string()))?;
+        let txn = self.as_ref();
+        let doc = txn.doc().clone();
+        Ok(match branch_id.get_branch(txn) {
+            None => JsValue::UNDEFINED,
+            Some(b) if b.is_deleted() => JsValue::UNDEFINED,
+            Some(b) => match b.type_ref() {
+                TypeRef::Array => {
+                    YArray(SharedCollection::integrated(ArrayRef::from(b), doc)).into()
+                }
+                TypeRef::Map => YMap(SharedCollection::integrated(MapRef::from(b), doc)).into(),
+                TypeRef::Text => YText(SharedCollection::integrated(TextRef::from(b), doc)).into(),
+                TypeRef::XmlElement(_) => {
+                    YXmlElement(SharedCollection::integrated(XmlElementRef::from(b), doc)).into()
+                }
+                TypeRef::XmlFragment => {
+                    YXmlFragment(SharedCollection::integrated(XmlFragmentRef::from(b), doc)).into()
+                }
+                TypeRef::XmlText => {
+                    YXmlText(SharedCollection::integrated(XmlTextRef::from(b), doc)).into()
+                }
+                TypeRef::WeakLink(_) => {
+                    YWeakLink(SharedCollection::integrated(WeakRef::from(b), doc)).into()
+                }
+                TypeRef::SubDoc => match b.as_subdoc() {
+                    None => JsValue::UNDEFINED,
+                    Some(doc) => YDoc(doc).into(),
+                },
+                TypeRef::XmlHook | TypeRef::Undefined => JsValue::UNDEFINED,
+            },
+        })
     }
 
     /// Triggers a post-update series of operations without `free`ing the transaction. This includes

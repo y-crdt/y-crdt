@@ -7,7 +7,7 @@ use crate::types::{
     Entries, Event, Events, Path, PathSegment, RootRef, SharedRef, TypePtr, TypeRef,
 };
 use crate::{
-    ArrayRef, MapRef, Observer, Origin, ReadTxn, Subscription, TextRef, TransactionMut, Value,
+    ArrayRef, Doc, MapRef, Observer, Origin, ReadTxn, Subscription, TextRef, TransactionMut, Value,
     WriteTxn, XmlElementRef, XmlFragmentRef, XmlTextRef, ID,
 };
 use serde::{Deserialize, Serialize};
@@ -253,6 +253,15 @@ impl Branch {
             BranchID::Root(name.clone())
         } else {
             unreachable!()
+        }
+    }
+
+    pub fn as_subdoc(&self) -> Option<Doc> {
+        let item = self.item?;
+        if let ItemContent::Doc(_, doc) = &item.content {
+            Some(doc.clone())
+        } else {
+            None
         }
     }
 
