@@ -337,7 +337,7 @@ TEST_CASE("YXmlElement basic") {
     ystring_destroy(tag);
 
     parent = yxmlelem_parent(xml);
-    REQUIRE(parent == NULL);
+    REQUIRE(parent != NULL);
 
     // check children traversal
     YOutput* curr = yxmlelem_first_child(xml);
@@ -836,6 +836,8 @@ TEST_CASE("YXmlText observe") {
     Branch* frag = yxmlfragment(doc, "test");
     YTransaction* txn = ydoc_write_transaction(doc, 0, NULL);
     Branch* txt = yxmlelem_insert_text(frag, txn, 0);
+    ytransaction_commit(txn);
+    txn = ydoc_write_transaction(doc, 0, NULL);
 
     YXmlTextEventTest* t = yxmltext_event_test_new();
     YSubscription* sub = yxmltext_observe(txt, (void*)t, &yxmltext_test_observe);
@@ -844,10 +846,10 @@ TEST_CASE("YXmlText observe") {
     yxmltext_insert(txt, txn, 0, "abcd", NULL);
     ytransaction_commit(txn);
 
-    REQUIRE(t->target != NULL);
     REQUIRE(t->delta_len == 1);
     REQUIRE(t->delta[0].tag == Y_EVENT_CHANGE_ADD);
     REQUIRE(t->delta[0].insert->len == 4);
+    REQUIRE(t->target != NULL);
 
     // remove 2 chars from the middle
     yxmltext_test_clean(t);
@@ -931,6 +933,8 @@ TEST_CASE("YXmlElement observe") {
     Branch *frag = yxmlfragment(doc, "test");
     YTransaction* txn = ydoc_write_transaction(doc, 0, NULL);
     Branch* xml = yxmlelem_insert_elem(frag, txn, 0, "div");
+    ytransaction_commit(txn);
+    txn = ydoc_write_transaction(doc, 0, NULL);
 
     YXmlEventTest* t = yxml_event_test_new();
     YSubscription* sub = yxmlelem_observe(xml, (void*)t, &yxml_test_observe);

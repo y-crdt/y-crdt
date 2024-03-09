@@ -3925,9 +3925,7 @@ pub unsafe extern "C" fn yxmlelem_event_target(e: *const YXmlEvent) -> *mut Bran
 pub unsafe extern "C" fn yxmltext_event_target(e: *const YXmlTextEvent) -> *mut Branch {
     assert!(!e.is_null());
     let out = (&*e).target().clone();
-    println!("ref: {:?}", out);
     let ptr = out.into_raw_branch();
-    println!("raw: {:p}", ptr);
     ptr
 }
 
