@@ -9,11 +9,11 @@ use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::OptionExt;
 use crate::{
-    uuid_v4, ArrayRef, BranchID, MapRef, ReadTxn, TextRef, Uuid, WriteTxn, XmlFragmentRef,
+    uuid_v4, uuid_v4_from, ArrayRef, BranchID, MapRef, ReadTxn, TextRef, Uuid, WriteTxn,
+    XmlFragmentRef,
 };
 use crate::{Any, Subscription};
 use atomic_refcell::{AtomicRefCell, BorrowError, BorrowMutError};
-use rand::Rng;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::fmt::Formatter;
@@ -463,7 +463,7 @@ impl Options {
     pub fn with_client_id(client_id: ClientID) -> Self {
         Options {
             client_id,
-            guid: uuid_v4(&mut rand::thread_rng()),
+            guid: uuid_v4(),
             collection_id: None,
             offset_kind: OffsetKind::Bytes,
             skip_gc: false,
@@ -503,9 +503,9 @@ impl Options {
 
 impl Default for Options {
     fn default() -> Self {
-        let mut rng = rand::thread_rng();
-        let client_id: u32 = rng.gen();
-        let uuid = uuid_v4(&mut rng);
+        let mut rng = fastrand::Rng::new();
+        let client_id: u32 = rng.u32(0..u32::MAX);
+        let uuid = uuid_v4_from(&mut rng);
         Self::with_guid_and_client_id(uuid, client_id as ClientID)
     }
 }
@@ -1522,7 +1522,7 @@ mod test {
 
         {
             let mut txn = doc.transact_mut();
-            let mut doc_a_ref = subdocs.get(&txn, "a").unwrap().cast::<Doc>().unwrap();
+            let doc_a_ref = subdocs.get(&txn, "a").unwrap().cast::<Doc>().unwrap();
             doc_a_ref.destroy(&mut txn);
         }
         let actual = event.take();
@@ -1643,7 +1643,7 @@ mod test {
             let mut e: RefMut<_> = event_c.try_borrow_mut().unwrap();
             *e = Some((added, removed, loaded));
         });
-        let mut doc_ref = {
+        let doc_ref = {
             let mut txn = doc.transact_mut();
             let doc_ref = array.insert(&mut txn, 0, subdoc_1);
             let o = doc_ref.options();
@@ -1734,7 +1734,7 @@ mod test {
             *e = Some((added, removed, loaded));
         });
 
-        let mut subdoc_1 = {
+        let subdoc_1 = {
             let mut txn = doc.transact_mut();
             array.insert(&mut txn, 0, subdoc_1)
         };

@@ -621,16 +621,21 @@ pub use crate::types::RootRef;
 pub use crate::types::SharedRef;
 pub use crate::types::Value;
 pub use crate::update::Update;
-use rand::RngCore;
 
 pub type UndoManager = crate::undo::UndoManager<()>;
 pub type Uuid = std::sync::Arc<str>;
 
 /// Generate random v4 UUID.
 /// (See: https://www.rfc-editor.org/rfc/rfc4122#section-4.4)
-pub fn uuid_v4<R: RngCore>(rng: &mut R) -> Uuid {
+pub fn uuid_v4() -> Uuid {
+    uuid_v4_from(&mut fastrand::Rng::new())
+}
+
+/// Generate random v4 UUID.
+/// (See: https://www.rfc-editor.org/rfc/rfc4122#section-4.4)
+pub fn uuid_v4_from(rng: &mut fastrand::Rng) -> Uuid {
     let mut b = [0u8; 16];
-    rng.fill_bytes(&mut b);
+    rng.fill(&mut b);
 
     // According to RFC 4122 - Section 4.4, UUID v4 requires setting up following:
     b[6] = b[6] & 0x0f | 0x40; // time_hi_and_version (bits 4-7 of 7th octet)

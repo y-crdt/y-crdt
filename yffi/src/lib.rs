@@ -291,7 +291,7 @@ impl Into<Options> for YOptions {
             _ => panic!("Unrecognized YOptions.encoding type"),
         };
         let guid = if self.guid.is_null() {
-            uuid_v4(&mut rand::thread_rng())
+            uuid_v4()
         } else {
             let c_str = unsafe { CStr::from_ptr(self.guid) };
             let str = c_str.to_str().unwrap();

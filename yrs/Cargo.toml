@@ -15,7 +15,7 @@ weak = []
 
 [dependencies]
 thiserror = "1"
-rand = { version = "0.7.0", features = ["wasm-bindgen"] }
+fastrand = { version = "2.0.1", features = ["js"] }
 smallstr = { version = "0.3", features = ["union"] }
 smallvec = { version = "1.11", features = ["union", "const_generics", "const_new"] }
 atomic_refcell = "0.1"

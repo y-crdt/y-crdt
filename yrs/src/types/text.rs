@@ -1351,8 +1351,7 @@ mod test {
     use crate::{
         any, Any, ArrayPrelim, Doc, GetString, Observable, StateVector, Text, Transact, Update, ID,
     };
-    use rand::prelude::StdRng;
-    use rand::Rng;
+    use fastrand::Rng;
     use std::cell::RefCell;
     use std::collections::HashMap;
     use std::rc::Rc;
@@ -1810,8 +1809,8 @@ mod test {
         );
     }
 
-    fn text_transactions() -> [Box<dyn Fn(&mut Doc, &mut StdRng)>; 2] {
-        fn insert_text(doc: &mut Doc, rng: &mut StdRng) {
+    fn text_transactions() -> [Box<dyn Fn(&mut Doc, &mut Rng)>; 2] {
+        fn insert_text(doc: &mut Doc, rng: &mut Rng) {
             let ytext = doc.get_or_insert_text("text");
             let mut txn = doc.transact_mut();
             let pos = rng.between(0, ytext.len(&txn));
@@ -1819,7 +1818,7 @@ mod test {
             ytext.insert(&mut txn, pos, word.as_str());
         }
 
-        fn delete_text(doc: &mut Doc, rng: &mut StdRng) {
+        fn delete_text(doc: &mut Doc, rng: &mut Rng) {
             let ytext = doc.get_or_insert_text("text");
             let mut txn = doc.transact_mut();
             let len = ytext.len(&txn);
@@ -2404,7 +2403,6 @@ mod test {
 
     #[test]
     fn multi_threading() {
-        use rand::thread_rng;
         use std::sync::{Arc, RwLock};
         use std::thread::{sleep, spawn};
 
@@ -2413,7 +2411,7 @@ mod test {
         let d2 = doc.clone();
         let h2 = spawn(move || {
             for _ in 0..10 {
-                let millis = thread_rng().gen_range(1, 20);
+                let millis = fastrand::u64(1..20);
                 sleep(Duration::from_millis(millis));
 
                 let doc = d2.write().unwrap();
@@ -2426,7 +2424,7 @@ mod test {
         let d3 = doc.clone();
         let h3 = spawn(move || {
             for _ in 0..10 {
-                let millis = thread_rng().gen_range(1, 20);
+                let millis = fastrand::u64(1..20);
                 sleep(Duration::from_millis(millis));
 
                 let doc = d3.write().unwrap();

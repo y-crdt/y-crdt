@@ -430,7 +430,7 @@ impl MapEvent {
 
 #[cfg(test)]
 mod test {
-    use crate::test_utils::{exchange_updates, run_scenario};
+    use crate::test_utils::{exchange_updates, run_scenario, RngExt};
     use crate::transaction::ReadTxn;
     use crate::types::text::TextPrelim;
     use crate::types::{DeepObservable, EntryChange, Event, Path, PathSegment, ToJson, Value};
@@ -440,9 +440,7 @@ mod test {
         any, Any, Array, ArrayPrelim, ArrayRef, Doc, Map, MapPrelim, MapRef, Observable,
         StateVector, Text, Transact, Update,
     };
-    use rand::distributions::Alphanumeric;
-    use rand::prelude::{SliceRandom, StdRng};
-    use rand::Rng;
+    use fastrand::Rng;
     use std::cell::RefCell;
     use std::collections::HashMap;
     use std::ops::{Deref, DerefMut};
@@ -879,34 +877,26 @@ mod test {
         );
     }
 
-    fn random_string(rng: &mut StdRng) -> String {
-        let len = rng.gen_range(1, 10);
-        rng.sample_iter(&Alphanumeric)
-            .take(len)
-            .map(char::from)
-            .collect()
-    }
-
-    fn map_transactions() -> [Box<dyn Fn(&mut Doc, &mut StdRng)>; 3] {
-        fn set(doc: &mut Doc, rng: &mut StdRng) {
+    fn map_transactions() -> [Box<dyn Fn(&mut Doc, &mut Rng)>; 3] {
+        fn set(doc: &mut Doc, rng: &mut Rng) {
             let map = doc.get_or_insert_map("map");
             let mut txn = doc.transact_mut();
-            let key = ["one", "two"].choose(rng).unwrap();
-            let value: String = random_string(rng);
+            let key = rng.choice(["one", "two"]).unwrap();
+            let value: String = rng.random_string();
             map.insert(&mut txn, key.to_string(), value);
         }
 
-        fn set_type(doc: &mut Doc, rng: &mut StdRng) {
+        fn set_type(doc: &mut Doc, rng: &mut Rng) {
             let map = doc.get_or_insert_map("map");
             let mut txn = doc.transact_mut();
-            let key = ["one", "two", "three"].choose(rng).unwrap();
-            if rng.gen_bool(0.33) {
+            let key = rng.choice(["one", "two", "three"]).unwrap();
+            if rng.f32() <= 0.33 {
                 map.insert(
                     &mut txn,
                     key.to_string(),
                     ArrayPrelim::from(vec![1, 2, 3, 4]),
                 );
-            } else if rng.gen_bool(0.33) {
+            } else if rng.f32() <= 0.33 {
                 map.insert(&mut txn, key.to_string(), TextPrelim::new("deeptext"));
             } else {
                 map.insert(
@@ -921,10 +911,10 @@ mod test {
             }
         }
 
-        fn delete(doc: &mut Doc, rng: &mut StdRng) {
+        fn delete(doc: &mut Doc, rng: &mut Rng) {
             let map = doc.get_or_insert_map("map");
             let mut txn = doc.transact_mut();
-            let key = ["one", "two"].choose(rng).unwrap();
+            let key = rng.choice(["one", "two"]).unwrap();
             map.remove(&mut txn, key);
         }
         [Box::new(set), Box::new(set_type), Box::new(delete)]
@@ -994,7 +984,6 @@ mod test {
 
     #[test]
     fn multi_threading() {
-        use rand::thread_rng;
         use std::sync::{Arc, RwLock};
         use std::thread::{sleep, spawn};
 
@@ -1003,7 +992,7 @@ mod test {
         let d2 = doc.clone();
         let h2 = spawn(move || {
             for _ in 0..10 {
-                let millis = thread_rng().gen_range(1, 20);
+                let millis = fastrand::u64(1..20);
                 sleep(Duration::from_millis(millis));
 
                 let doc = d2.write().unwrap();
@@ -1016,7 +1005,7 @@ mod test {
         let d3 = doc.clone();
         let h3 = spawn(move || {
             for _ in 0..10 {
-                let millis = thread_rng().gen_range(1, 20);
+                let millis = fastrand::u64(1..20);
                 sleep(Duration::from_millis(millis));
 
                 let doc = d3.write().unwrap();
