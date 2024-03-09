@@ -1,11 +1,12 @@
 use crate::block::{BlockCell, ClientID, ItemContent, ItemPtr};
 use crate::block_store::BlockStore;
+use crate::branch::{Branch, BranchPtr};
 use crate::doc::{DocAddr, Options};
 use crate::error::Error;
 use crate::event::SubdocsEvent;
 use crate::id_set::DeleteSet;
 use crate::slice::ItemSlice;
-use crate::types::{Branch, BranchPtr, Path, PathSegment, TypeRef};
+use crate::types::{Path, PathSegment, TypeRef};
 use crate::update::PendingUpdate;
 use crate::updates::encoder::{Encode, Encoder};
 use crate::{
@@ -14,10 +15,11 @@ use crate::{
 };
 use crate::{StateVector, Subscription};
 use atomic_refcell::{AtomicRef, AtomicRefCell, AtomicRefMut, BorrowError, BorrowMutError};
+use std::borrow::Borrow;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::ops::Deref;
-use std::sync::{Arc, Weak};
+use std::sync::Arc;
 
 /// Store is a core element of a document. It contains all of the information, like block store
 /// map of root types, pending updates waiting to be applied once a missing update information
@@ -90,8 +92,8 @@ impl Store {
 
     /// Returns a branch reference to a complex type identified by its pointer. Returns `None` if
     /// no such type could be found or was ever defined.
-    pub(crate) fn get_type<K: Into<Arc<str>>>(&self, key: K) -> Option<BranchPtr> {
-        let ptr = BranchPtr::from(self.types.get(&key.into())?);
+    pub(crate) fn get_type<K: Borrow<str>>(&self, key: K) -> Option<BranchPtr> {
+        let ptr = BranchPtr::from(self.types.get(key.borrow())?);
         Some(ptr)
     }
 
@@ -111,23 +113,13 @@ impl Store {
             }
             Entry::Vacant(e) => {
                 let mut branch = Branch::new(type_ref);
-                let branch_ref = BranchPtr::from(&mut branch);
+                let mut branch_ref = BranchPtr::from(&mut branch);
+                branch_ref.name = Some(key);
                 self.node_registry.insert(branch_ref);
                 e.insert(branch);
                 branch_ref
             }
         }
-    }
-
-    pub(crate) fn get_type_key(&self, ptr: BranchPtr) -> Option<&Arc<str>> {
-        let branch = ptr.deref() as *const Branch;
-        for (k, v) in self.types.iter() {
-            let target = v.as_ref() as *const Branch;
-            if std::ptr::eq(target, branch) {
-                return Some(k);
-            }
-        }
-        None
     }
 
     /// Encodes all changes from current transaction block store up to a given `snapshot`.
@@ -169,13 +161,13 @@ impl Store {
             encoder.write_var(0);
             for i in 0..last_idx {
                 let block = blocks[i].as_slice();
-                block.encode(encoder, Some(self));
+                block.encode(encoder);
             }
             let last_block = &blocks[last_idx];
             // write first struct with an offset
             let mut slice = last_block.as_slice();
             slice.trim_end(slice.clock_end() - (clock - 1));
-            slice.encode(encoder, Some(self));
+            slice.encode(encoder);
         }
     }
 
@@ -219,9 +211,9 @@ impl Store {
             let offset = clock - first_block.clock_start();
             let mut slice = first_block.as_slice();
             slice.trim_start(offset);
-            slice.encode(encoder, Some(self));
+            slice.encode(encoder);
             for i in (start + 1)..blocks.len() {
-                blocks[i].as_slice().encode(encoder, Some(self));
+                blocks[i].as_slice().encode(encoder);
             }
         }
     }
@@ -425,16 +417,6 @@ impl std::fmt::Display for Store {
 
 #[repr(transparent)]
 #[derive(Debug, Clone)]
-pub struct WeakStoreRef(pub(crate) Weak<AtomicRefCell<Store>>);
-
-impl PartialEq for WeakStoreRef {
-    fn eq(&self, other: &Self) -> bool {
-        self.0.ptr_eq(&other.0)
-    }
-}
-
-#[repr(transparent)]
-#[derive(Debug, Clone)]
 pub(crate) struct StoreRef(pub(crate) Arc<AtomicRefCell<Store>>);
 
 impl StoreRef {
@@ -444,10 +426,6 @@ impl StoreRef {
 
     pub fn try_borrow_mut(&self) -> Result<AtomicRefMut<Store>, BorrowMutError> {
         self.0.try_borrow_mut()
-    }
-
-    pub fn weak_ref(&self) -> WeakStoreRef {
-        WeakStoreRef(Arc::downgrade(&self.0))
     }
 
     pub fn options(&self) -> &Options {

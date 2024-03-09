@@ -6,6 +6,7 @@ use std::ptr::{null, null_mut};
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::Arc;
 use yrs::block::{ClientID, ItemContent, Prelim, Unused};
+use yrs::branch::BranchPtr;
 use yrs::encoding::read::Error;
 use yrs::types::array::ArrayEvent;
 use yrs::types::array::ArrayIter as NativeArrayIter;
@@ -16,17 +17,15 @@ use yrs::types::weak::{LinkSource, Unquote as NativeUnquote, WeakEvent, WeakRef}
 use yrs::types::xml::{Attributes as NativeAttributes, XmlNode};
 use yrs::types::xml::{TreeWalker as NativeTreeWalker, XmlFragment};
 use yrs::types::xml::{XmlEvent, XmlTextEvent};
-use yrs::types::{
-    Attrs, BranchPtr, Change, Delta, EntryChange, Event, PathSegment, TypeRef, Value,
-};
+use yrs::types::{Attrs, Change, Delta, EntryChange, Event, PathSegment, TypeRef, Value};
 use yrs::undo::EventKind;
 use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use yrs::{
-    uuid_v4, Any, Array, ArrayRef, Assoc, DeleteSet, GetString, Map, MapRef, Observable,
+    uuid_v4, Any, Array, ArrayRef, Assoc, BranchID, DeleteSet, GetString, Map, MapRef, Observable,
     OffsetKind, Options, Origin, Quotable, ReadTxn, Snapshot, StateVector, StickyIndex, Store,
     SubdocsEvent, SubdocsEventIter, Text, TextRef, Transact, TransactionCleanupEvent, Update, Xml,
-    XmlElementPrelim, XmlElementRef, XmlFragmentRef, XmlTextPrelim, XmlTextRef,
+    XmlElementPrelim, XmlElementRef, XmlFragmentRef, XmlTextPrelim, XmlTextRef, ID,
 };
 
 /// Flag used by `YInput` and `YOutput` to tag boolean values.
@@ -102,12 +101,12 @@ pub const Y_OFFSET_UTF16: u8 = 1;
 
 /* pub types below are used by cbindgen for c header generation */
 
-/// A Yrs document type. Documents are most important units of collaborative resources management.
+/// A Yrs document type. Documents are the most important units of collaborative resources management.
 /// All shared collections live within a scope of their corresponding documents. All updates are
-/// generated on per document basis (rather than individual shared type). All operations on shared
+/// generated on per-document basis (rather than individual shared type). All operations on shared
 /// collections happen via `YTransaction`, which lifetime is also bound to a document.
 ///
-/// Document manages so called root types, which are top-level shared types definitions (as opposed
+/// Document manages so-called root types, which are top-level shared types definitions (as opposed
 /// to recursively nested types).
 pub type Doc = yrs::Doc;
 
@@ -118,7 +117,7 @@ pub type Doc = yrs::Doc;
 ///
 /// Using write methods of different shared types (eg. `ytext_insert` and `yarray_insert`) over
 /// the same branch may result in undefined behavior.
-pub type Branch = yrs::types::Branch;
+pub type Branch = yrs::branch::Branch;
 
 /// Subscription to any kind of observable events, like `ymap_observe`, `ydoc_observe_updates_v1` etc.
 /// This subscription can be destroyed by calling `yunobserve` function, which will cause to unsubscribe
@@ -620,60 +619,6 @@ pub unsafe extern "C" fn ydoc_write_transaction(
     }
 }
 
-/// Starts a new read-write transaction on a given branches document. All other operations happen in
-/// context of a transaction. Yrs transactions do not follow ACID rules. Once a set of operations is
-/// complete, a transaction can be finished using `ytransaction_commit` function.
-///
-/// Returns `NULL` if read-write transaction couldn't be created, i.e. when another transaction is
-/// already opened.
-#[no_mangle]
-pub unsafe extern "C" fn ybranch_write_transaction(branch: *mut Branch) -> *mut Transaction {
-    assert!(!branch.is_null());
-
-    let branch = branch.as_mut().unwrap();
-    if let Ok(txn) = branch.try_transact_mut() {
-        Box::into_raw(Box::new(Transaction::read_write(txn)))
-    } else {
-        null_mut()
-    }
-}
-
-/// Starts a new read-only transaction on a given branches document. All other operations happen in
-/// context of a transaction. Yrs transactions do not follow ACID rules. Once a set of operations is
-/// complete, a transaction can be finished using `ytransaction_commit` function.
-///
-/// Returns `NULL` if read-only transaction couldn't be created, i.e. when another read-write
-/// transaction is already opened.
-#[no_mangle]
-pub unsafe extern "C" fn ybranch_read_transaction(branch: *mut Branch) -> *mut Transaction {
-    assert!(!branch.is_null());
-
-    let doc = branch.as_mut().unwrap();
-    if let Ok(txn) = doc.try_transact() {
-        Box::into_raw(Box::new(Transaction::read_only(txn)))
-    } else {
-        null_mut()
-    }
-}
-
-/// Check if current branch is still alive (returns `Y_TRUE`, otherwise `Y_FALSE`).
-/// If it was deleted, this branch pointer is no longer a valid pointer and cannot be used to
-/// execute any functions using it.
-#[no_mangle]
-pub unsafe extern "C" fn ytransaction_alive(txn: *const Transaction, branch: *mut Branch) -> u8 {
-    if branch.is_null() {
-        Y_FALSE
-    } else {
-        let txn = txn.as_ref().unwrap();
-        let branch = branch.as_ref().unwrap();
-        if txn.store().is_alive(&BranchPtr::from(branch)) {
-            Y_TRUE
-        } else {
-            Y_FALSE
-        }
-    }
-}
-
 /// Returns a list of subdocs existing within current document.
 #[no_mangle]
 pub unsafe extern "C" fn ytransaction_subdocs(
@@ -786,21 +731,6 @@ pub unsafe extern "C" fn ymap(doc: *mut Doc, name: *const c_char) -> *mut Branch
 /// document. This structure can later be accessed using its `name`, which must be a null-terminated
 /// UTF-8 compatible string.
 #[no_mangle]
-pub unsafe extern "C" fn yxmlelem(doc: *mut Doc, name: *const c_char) -> *mut Branch {
-    assert!(!doc.is_null());
-    assert!(!name.is_null());
-
-    let name = CStr::from_ptr(name).to_str().unwrap();
-    doc.as_mut()
-        .unwrap()
-        .get_or_insert_xml_element(name)
-        .into_raw_branch()
-}
-
-/// Gets or creates a new shared `YXmlElement` data type instance as a root-level type of a given
-/// document. This structure can later be accessed using its `name`, which must be a null-terminated
-/// UTF-8 compatible string.
-#[no_mangle]
 pub unsafe extern "C" fn yxmlfragment(doc: *mut Doc, name: *const c_char) -> *mut Branch {
     assert!(!doc.is_null());
     assert!(!name.is_null());
@@ -809,21 +739,6 @@ pub unsafe extern "C" fn yxmlfragment(doc: *mut Doc, name: *const c_char) -> *mu
     doc.as_mut()
         .unwrap()
         .get_or_insert_xml_fragment(name)
-        .into_raw_branch()
-}
-
-/// Gets or creates a new shared `YXmlText` data type instance as a root-level type of a given
-/// document. This structure can later be accessed using its `name`, which must be a null-terminated
-/// UTF-8 compatible string.
-#[no_mangle]
-pub unsafe extern "C" fn yxmltext(doc: *mut Doc, name: *const c_char) -> *mut Branch {
-    assert!(!doc.is_null());
-    assert!(!name.is_null());
-
-    let name = CStr::from_ptr(name).to_str().unwrap();
-    doc.as_mut()
-        .unwrap()
-        .get_or_insert_xml_text(name)
         .into_raw_branch()
 }
 
@@ -3982,7 +3897,7 @@ pub unsafe extern "C" fn ytext_event_target(e: *const YTextEvent) -> *mut Branch
 pub unsafe extern "C" fn yarray_event_target(e: *const YArrayEvent) -> *mut Branch {
     assert!(!e.is_null());
     let out = (&*e).target().clone();
-    Box::into_raw(Box::new(out)) as *mut _
+    out.into_raw_branch()
 }
 
 /// Returns a pointer to a shared collection, which triggered passed event `e`.
@@ -3990,7 +3905,7 @@ pub unsafe extern "C" fn yarray_event_target(e: *const YArrayEvent) -> *mut Bran
 pub unsafe extern "C" fn ymap_event_target(e: *const YMapEvent) -> *mut Branch {
     assert!(!e.is_null());
     let out = (&*e).target().clone();
-    Box::into_raw(Box::new(out)) as *mut _
+    out.into_raw_branch()
 }
 
 /// Returns a pointer to a shared collection, which triggered passed event `e`.
@@ -3998,7 +3913,11 @@ pub unsafe extern "C" fn ymap_event_target(e: *const YMapEvent) -> *mut Branch {
 pub unsafe extern "C" fn yxmlelem_event_target(e: *const YXmlEvent) -> *mut Branch {
     assert!(!e.is_null());
     let out = (&*e).target().clone();
-    Box::into_raw(Box::new(out)) as *mut _
+    match out {
+        XmlNode::Element(e) => e.into_raw_branch(),
+        XmlNode::Fragment(e) => e.into_raw_branch(),
+        XmlNode::Text(e) => e.into_raw_branch(),
+    }
 }
 
 /// Returns a pointer to a shared collection, which triggered passed event `e`.
@@ -4006,7 +3925,8 @@ pub unsafe extern "C" fn yxmlelem_event_target(e: *const YXmlEvent) -> *mut Bran
 pub unsafe extern "C" fn yxmltext_event_target(e: *const YXmlTextEvent) -> *mut Branch {
     assert!(!e.is_null());
     let out = (&*e).target().clone();
-    Box::into_raw(Box::new(out)) as *mut _
+    let ptr = out.into_raw_branch();
+    ptr
 }
 
 /// Returns a path from a root type down to a current shared collection (which can be obtained using
@@ -5264,6 +5184,97 @@ impl RangeBounds<u32> for ExplicitRange {
             Bound::Included(&self.end_index)
         } else {
             Bound::Excluded(&self.end_index)
+        }
+    }
+}
+
+/// A structure representing logical identifier of a specific shared collection.
+/// Can be obtained by `ybranch_id` executed over alive `Branch`.
+///
+/// Use `ybranch_get` to resolve a `Branch` pointer from this branch ID.
+///
+/// This structure doesn't need to be destroyed. It's internal pointer reference is valid through
+/// a lifetime of a document, which collection this branch ID has been created from.
+#[repr(C)]
+pub struct YBranchId {
+    /// If positive: Client ID of a creator of a nested shared type, this identifier points to.
+    /// If negative: a negated Length of a root-level shared collection name.
+    pub client_or_len: i64,
+    pub variant: YBranchIdVariant,
+}
+
+#[repr(C)]
+pub union YBranchIdVariant {
+    /// Clock number timestamp when the creator of a nested shared type created it.
+    pub clock: u32,
+    /// Pointer to UTF-8 encoded string representing root-level type name. This pointer is valid
+    /// as long as document - in which scope it was created in - was not destroyed. As usually
+    /// root-level type names are statically allocated strings, it can also be supplied manually
+    /// from the outside.
+    pub name: *const u8,
+}
+
+/// Returns a logical identifier for a given shared collection. That collection must be alive at
+/// the moment of function call.
+#[no_mangle]
+pub unsafe extern "C" fn ybranch_id(branch: *const Branch) -> YBranchId {
+    let branch = branch.as_ref().unwrap();
+    match branch.id() {
+        BranchID::Nested(id) => YBranchId {
+            client_or_len: id.client as i64,
+            variant: YBranchIdVariant { clock: id.clock },
+        },
+        BranchID::Root(name) => {
+            let len = -(name.len() as i64);
+            YBranchId {
+                client_or_len: len,
+                variant: YBranchIdVariant {
+                    name: name.as_ptr(),
+                },
+            }
+        }
+    }
+}
+
+/// Given a logical identifier, returns a physical pointer to a shared collection.
+/// Returns null if collection was not found - either because it was not defined or not synchronized
+/// yet.
+/// Returned pointer may still point to deleted collection. In such case a subsequent `ybranch_alive`
+/// function call is required.
+#[no_mangle]
+pub unsafe extern "C" fn ybranch_get(
+    branch_id: *const YBranchId,
+    txn: *mut Transaction,
+) -> *mut Branch {
+    let txn = txn.as_ref().unwrap();
+    let branch_id = branch_id.as_ref().unwrap();
+    let client_or_len = branch_id.client_or_len;
+    let ptr = if client_or_len >= 0 {
+        BranchID::get_nested(txn, &ID::new(client_or_len as u64, branch_id.variant.clock))
+    } else {
+        let name = std::slice::from_raw_parts(branch_id.variant.name, (-client_or_len) as usize);
+        BranchID::get_root(txn, std::str::from_utf8_unchecked(name))
+    };
+
+    match ptr {
+        None => null_mut(),
+        Some(branch_ptr) => branch_ptr.into_raw_branch(),
+    }
+}
+
+/// Check if current branch is still alive (returns `Y_TRUE`, otherwise `Y_FALSE`).
+/// If it was deleted, this branch pointer is no longer a valid pointer and cannot be used to
+/// execute any functions using it.
+#[no_mangle]
+pub unsafe extern "C" fn ybranch_alive(branch: *mut Branch) -> u8 {
+    if branch.is_null() {
+        Y_FALSE
+    } else {
+        let branch = BranchPtr::from_raw_branch(branch);
+        if branch.is_deleted() {
+            Y_FALSE
+        } else {
+            Y_TRUE
         }
     }
 }

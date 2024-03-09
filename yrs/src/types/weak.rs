@@ -6,8 +6,8 @@ use crate::iter::{
 };
 use crate::types::{Branch, BranchPtr, Path, SharedRef, TypeRef, Value};
 use crate::{
-    Array, Assoc, GetString, Map, Observable, ReadTxn, StickyIndex, TextRef, TransactionMut,
-    XmlTextRef, ID,
+    Array, Assoc, DeepObservable, GetString, Map, Observable, ReadTxn, StickyIndex, TextRef,
+    TransactionMut, XmlTextRef, ID,
 };
 use std::collections::hash_map::Entry;
 use std::collections::{Bound, HashSet};
@@ -72,10 +72,11 @@ use thiserror::Error;
 /// assert_eq!(values, vec!["B".to_string(), "E".to_string(), "C".to_string()]);
 /// ```
 #[repr(transparent)]
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct WeakRef<P>(P);
 
 impl<P: SharedRef> SharedRef for WeakRef<P> {}
+impl SharedRef for WeakRef<BranchPtr> {}
 impl<P: SharedRef> From<WeakRef<BranchPtr>> for WeakRef<P> {
     fn from(value: WeakRef<BranchPtr>) -> Self {
         WeakRef(P::from(value.0))
@@ -151,15 +152,17 @@ impl<P: From<BranchPtr>> TryFrom<Value> for WeakRef<P> {
     }
 }
 
-impl<P: AsMut<Branch>> AsMut<Branch> for WeakRef<P> {
-    fn as_mut(&mut self) -> &mut Branch {
-        self.0.as_mut()
+impl<P: AsRef<Branch>> Eq for WeakRef<P> {}
+impl<P: AsRef<Branch>> PartialEq for WeakRef<P> {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_ref().id() == other.as_ref().id()
     }
 }
 
+impl<P> DeepObservable for WeakRef<P> where P: AsRef<Branch> {}
 impl<P> Observable for WeakRef<P>
 where
-    P: AsRef<Branch> + AsMut<Branch>,
+    P: AsRef<Branch>,
 {
     type Event = WeakEvent;
 }
@@ -278,7 +281,7 @@ where
     /// map.insert(&mut txn, "A", "other");
     /// assert_eq!(link.try_deref_value(&txn), Some("other".into()));
     /// ```
-    pub fn try_deref_value<T: ReadTxn>(&self, txn: &T) -> Option<Value> {
+    pub fn try_deref_value<T: ReadTxn>(&self, _txn: &T) -> Option<Value> {
         let source = self.try_source()?;
         let last = source.first_item.get_owned().to_iter().last()?;
         if last.is_deleted() {
@@ -396,6 +399,15 @@ impl<P: AsRef<Branch>> From<WeakRef<P>> for WeakPrelim<P> {
             }
         } else {
             panic!("Defect: WeakRef's underlying branch is not matching expected weak ref.")
+        }
+    }
+}
+
+impl<P: AsRef<Branch>> WeakPrelim<P> {
+    pub fn upcast(self) -> WeakPrelim<BranchPtr> {
+        WeakPrelim {
+            source: self.source,
+            _marker: Default::default(),
         }
     }
 }
@@ -563,7 +575,7 @@ impl LinkSource {
         }
     }
 
-    pub fn to_string<T: ReadTxn>(&self, txn: &T) -> String {
+    pub fn to_string<T: ReadTxn>(&self, _txn: &T) -> String {
         let mut result = String::new();
         let mut curr = self.first_item.get_owned();
         let end = self.quote_end.id().unwrap();
@@ -586,7 +598,7 @@ impl LinkSource {
         result
     }
 
-    pub fn to_xml_string<T: ReadTxn>(&self, txn: &T) -> String {
+    pub fn to_xml_string<T: ReadTxn>(&self, _txn: &T) -> String {
         let curr = self.first_item.get_owned();
         if let Some(item) = curr.as_deref() {
             if let Some(branch) = item.parent.as_branch() {
@@ -831,6 +843,7 @@ pub(crate) fn join_linked_range(mut block: ItemPtr, txn: &mut TransactionMut) {
 
 #[cfg(test)]
 mod test {
+    use crate::branch::BranchPtr;
     use crate::test_utils::exchange_updates;
     use crate::types::text::YChange;
     use crate::types::weak::{WeakPrelim, WeakRef};
@@ -1330,7 +1343,7 @@ mod test {
         let link1 = m2.link(&txn, "key").unwrap();
         m1.insert(&mut txn, "link-key", link1);
         let link2 = m1.link(&txn, "link-key").unwrap();
-        let mut link2 = m2.insert(&mut txn, "link-link", link2);
+        let link2 = m2.insert(&mut txn, "link-link", link2);
         drop(txn);
 
         let events = Rc::new(RefCell::new(vec![]));
@@ -1382,7 +1395,7 @@ mod test {
         let link2 = m1.link(&txn, "link-key").unwrap();
         m2.insert(&mut txn, "link-link", link2);
         let link3 = m2.link(&txn, "link-link").unwrap();
-        let mut link3 = m3.insert(&mut txn, "link-link-link", link3);
+        let link3 = m3.insert(&mut txn, "link-link-link", link3);
         drop(txn);
 
         let events = Rc::new(RefCell::new(vec![]));
@@ -1419,7 +1432,7 @@ mod test {
                  - key: value
         */
         let doc = Doc::with_client_id(1);
-        let mut map = doc.get_or_insert_map("map");
+        let map = doc.get_or_insert_map("map");
         let array = doc.get_or_insert_array("array");
 
         let events = Rc::new(RefCell::new(vec![]));
@@ -1497,7 +1510,7 @@ mod test {
         */
         let doc = Doc::with_client_id(1);
         let map = doc.get_or_insert_map("map");
-        let mut array = doc.get_or_insert_array("array");
+        let array = doc.get_or_insert_array("array");
 
         let nested = map.insert(
             &mut doc.transact_mut(),
@@ -1581,7 +1594,7 @@ mod test {
             a1.push_back(&mut t1, MapPrelim::<String>::new());
             a1.push_back(&mut t1, 2);
         }
-        let mut l1 = {
+        let l1 = {
             let mut t1 = d1.transact_mut();
             let link = a1.quote(&t1, 1..=2).unwrap();
             a1.insert(&mut t1, 0, link)
@@ -1606,7 +1619,7 @@ mod test {
             })
         };
 
-        let mut l2 = a2
+        let l2 = a2
             .get(&d2.transact(), 0)
             .unwrap()
             .cast::<WeakRef<ArrayRef>>()
@@ -1676,7 +1689,7 @@ mod test {
         let root = doc.get_or_insert_array("array");
         let mut txn = doc.transact_mut();
 
-        let mut m0 = root.insert(&mut txn, 0, MapPrelim::<u32>::new());
+        let m0 = root.insert(&mut txn, 0, MapPrelim::<u32>::new());
         let m1 = root.insert(&mut txn, 1, MapPrelim::<u32>::new());
         let m2 = root.insert(&mut txn, 2, MapPrelim::<u32>::new());
 
@@ -1826,10 +1839,12 @@ mod test {
     #[test]
     fn basic_xml_text() {
         let d1 = Doc::with_client_id(1);
-        let txt1 = d1.get_or_insert_xml_text("text");
+        let txt1 = d1.get_or_insert_text("text");
+        let txt1 = XmlTextRef::from(BranchPtr::from(txt1.as_ref()));
         let a1 = d1.get_or_insert_array("array");
         let d2 = Doc::with_client_id(2);
-        let txt2 = d2.get_or_insert_xml_text("text");
+        let txt2 = d2.get_or_insert_text("text");
+        let txt2 = XmlTextRef::from(BranchPtr::from(txt2.as_ref()));
 
         txt1.insert(&mut d1.transact_mut(), 0, "abcd"); // 'abcd'
         let l1 = {
@@ -1857,8 +1872,10 @@ mod test {
     #[test]
     fn quote_formatted_text() {
         let doc = Doc::with_client_id(1);
-        let txt1 = doc.get_or_insert_xml_text("text1");
-        let txt2 = doc.get_or_insert_xml_text("text2");
+        let txt1 = doc.get_or_insert_text("text1");
+        let txt1 = XmlTextRef::from(BranchPtr::from(txt1.as_ref()));
+        let txt2 = doc.get_or_insert_text("text2");
+        let txt2 = XmlTextRef::from(BranchPtr::from(txt2.as_ref()));
         let array = doc.get_or_insert_array("array");
         txt1.insert(&mut doc.transact_mut(), 0, "abcde");
         let b = Attrs::from([("b".into(), true.into())]);

@@ -351,12 +351,12 @@ typedef struct YOptions {
 } YOptions;
 
 /**
- * A Yrs document type. Documents are most important units of collaborative resources management.
+ * A Yrs document type. Documents are the most important units of collaborative resources management.
  * All shared collections live within a scope of their corresponding documents. All updates are
- * generated on per document basis (rather than individual shared type). All operations on shared
+ * generated on per-document basis (rather than individual shared type). All operations on shared
  * collections happen via `YTransaction`, which lifetime is also bound to a document.
  *
- * Document manages so called root types, which are top-level shared types definitions (as opposed
+ * Document manages so-called root types, which are top-level shared types definitions (as opposed
  * to recursively nested types).
  */
 typedef YDoc YDoc;
@@ -971,6 +971,38 @@ typedef struct YUndoEvent {
  */
 typedef StickyIndex YStickyIndex;
 
+typedef union YBranchIdVariant {
+  /**
+   * Clock number timestamp when the creator of a nested shared type created it.
+   */
+  uint32_t clock;
+  /**
+   * Pointer to UTF-8 encoded string representing root-level type name. This pointer is valid
+   * as long as document - in which scope it was created in - was not destroyed. As usually
+   * root-level type names are statically allocated strings, it can also be supplied manually
+   * from the outside.
+   */
+  const uint8_t *name;
+} YBranchIdVariant;
+
+/**
+ * A structure representing logical identifier of a specific shared collection.
+ * Can be obtained by `ybranch_id` executed over alive `Branch`.
+ *
+ * Use `ybranch_get` to resolve a `Branch` pointer from this branch ID.
+ *
+ * This structure doesn't need to be destroyed. It's internal pointer reference is valid through
+ * a lifetime of a document, which collection this branch ID has been created from.
+ */
+typedef struct YBranchId {
+  /**
+   * If positive: Client ID of a creator of a nested shared type, this identifier points to.
+   * If negative: a negated Length of a root-level shared collection name.
+   */
+  int64_t client_or_len;
+  union YBranchIdVariant variant;
+} YBranchId;
+
 /**
  * Returns default ceonfiguration for `YOptions`.
  */
@@ -1115,33 +1147,6 @@ YTransaction *ydoc_read_transaction(YDoc *doc);
 YTransaction *ydoc_write_transaction(YDoc *doc, uint32_t origin_len, const char *origin);
 
 /**
- * Starts a new read-write transaction on a given branches document. All other operations happen in
- * context of a transaction. Yrs transactions do not follow ACID rules. Once a set of operations is
- * complete, a transaction can be finished using `ytransaction_commit` function.
- *
- * Returns `NULL` if read-write transaction couldn't be created, i.e. when another transaction is
- * already opened.
- */
-YTransaction *ybranch_write_transaction(Branch *branch);
-
-/**
- * Starts a new read-only transaction on a given branches document. All other operations happen in
- * context of a transaction. Yrs transactions do not follow ACID rules. Once a set of operations is
- * complete, a transaction can be finished using `ytransaction_commit` function.
- *
- * Returns `NULL` if read-only transaction couldn't be created, i.e. when another read-write
- * transaction is already opened.
- */
-YTransaction *ybranch_read_transaction(Branch *branch);
-
-/**
- * Check if current branch is still alive (returns `Y_TRUE`, otherwise `Y_FALSE`).
- * If it was deleted, this branch pointer is no longer a valid pointer and cannot be used to
- * execute any functions using it.
- */
-uint8_t ytransaction_alive(const YTransaction *txn, Branch *branch);
-
-/**
  * Returns a list of subdocs existing within current document.
  */
 YDoc **ytransaction_subdocs(YTransaction *txn, uint32_t *len);
@@ -1202,21 +1207,7 @@ Branch *ymap(YDoc *doc, const char *name);
  * document. This structure can later be accessed using its `name`, which must be a null-terminated
  * UTF-8 compatible string.
  */
-Branch *yxmlelem(YDoc *doc, const char *name);
-
-/**
- * Gets or creates a new shared `YXmlElement` data type instance as a root-level type of a given
- * document. This structure can later be accessed using its `name`, which must be a null-terminated
- * UTF-8 compatible string.
- */
 Branch *yxmlfragment(YDoc *doc, const char *name);
-
-/**
- * Gets or creates a new shared `YXmlText` data type instance as a root-level type of a given
- * document. This structure can later be accessed using its `name`, which must be a null-terminated
- * UTF-8 compatible string.
- */
-Branch *yxmltext(YDoc *doc, const char *name);
 
 /**
  * Returns a state vector of a current transaction's document, serialized using lib0 version 1
@@ -2452,5 +2443,27 @@ const Weak *yarray_quote(const Branch *array,
                          uint32_t end_index,
                          int8_t start_exclusive,
                          int8_t end_exclusive);
+
+/**
+ * Returns a logical identifier for a given shared collection. That collection must be alive at
+ * the moment of function call.
+ */
+struct YBranchId ybranch_id(const Branch *branch);
+
+/**
+ * Given a logical identifier, returns a physical pointer to a shared collection.
+ * Returns null if collection was not found - either because it was not defined or not synchronized
+ * yet.
+ * Returned pointer may still point to deleted collection. In such case a subsequent `ybranch_alive`
+ * function call is required.
+ */
+Branch *ybranch_get(const struct YBranchId *branch_id, YTransaction *txn);
+
+/**
+ * Check if current branch is still alive (returns `Y_TRUE`, otherwise `Y_FALSE`).
+ * If it was deleted, this branch pointer is no longer a valid pointer and cannot be used to
+ * execute any functions using it.
+ */
+uint8_t ybranch_alive(Branch *branch);
 
 #endif

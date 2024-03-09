@@ -1,4 +1,4 @@
-import { exchangeUpdates } from './testHelper.js' // eslint-disable-line
+import {exchangeUpdates} from './testHelper.js' // eslint-disable-line
 
 import * as Y from 'ywasm'
 import * as t from 'lib0/testing'
@@ -7,19 +7,19 @@ import * as t from 'lib0/testing'
  * @param {t.TestCase} tc
  */
 export const testInserts = tc => {
-    const d1 = new Y.YDoc({clientID:1})
+    const d1 = new Y.YDoc({clientID: 1})
     t.compare(d1.id, 1)
     var x = d1.getArray('test');
 
     x.insert(0, [1, 2.5, 'hello', ['world'], true])
-    x.push( [{key:'value'}])
+    x.push([{key: 'value'}])
 
-    const expected = [1, 2.5, 'hello', ['world'], true, {key:'value'}]
+    const expected = [1, 2.5, 'hello', ['world'], true, {key: 'value'}]
 
     var value = x.toJson()
     t.compare(value, expected)
 
-    const d2 = new Y.YDoc({clientID:2})
+    const d2 = new Y.YDoc({clientID: 2})
     x = d2.getArray('test');
 
     exchangeUpdates([d1, d2])
@@ -58,7 +58,7 @@ export const testInsertsNested = tc => {
  * @param {t.TestCase} tc
  */
 export const testDelete = tc => {
-    const d1 = new Y.YDoc({clientID:1})
+    const d1 = new Y.YDoc({clientID: 1})
     t.compare(d1.id, 1)
     var x = d1.getArray('test')
 
@@ -70,7 +70,7 @@ export const testDelete = tc => {
     var value = x.toJson()
     t.compare(value, expected)
 
-    const d2 = new Y.YDoc({clientID:2})
+    const d2 = new Y.YDoc({clientID: 2})
     x = d2.getArray('test')
 
     exchangeUpdates([d1, d2])
@@ -118,7 +118,7 @@ export const testIterator = tc => {
     t.compare(x.length(), 3)
 
     let i = 1;
-    let txn = d1.readTransaction()
+    let txn = d1.beginTransaction()
     for (let v of x.values(txn)) {
         t.compare(v, i)
         i++
@@ -146,10 +146,10 @@ export const testObserver = tc => {
 
     // insert initial data to an empty YArray
     d1.transact((txn) => {
-        x.insert(0, [1,2,3,4], txn)
+        x.insert(0, [1, 2, 3, 4], txn)
     }, 'TEST_ORIGIN')
     t.compare(target.toJson(), x.toJson())
-    t.compare(delta, [{insert: [1,2,3,4]}])
+    t.compare(delta, [{insert: [1, 2, 3, 4]}])
     t.compare(origin, 'TEST_ORIGIN')
     target = null
     delta = null
@@ -157,7 +157,7 @@ export const testObserver = tc => {
     // remove 2 items from the middle
     x.delete(1, 2)
     t.compare(target.toJson(), x.toJson())
-    t.compare(delta, [{retain:1}, {delete: 2}])
+    t.compare(delta, [{retain: 1}, {delete: 2}])
     t.compare(origin, undefined)
     target = null
     delta = null
@@ -165,7 +165,7 @@ export const testObserver = tc => {
     // insert new item in the middle
     x.insert(1, [5])
     t.compare(target.toJson(), x.toJson())
-    t.compare(delta, [{retain:1}, {insert: [5]}])
+    t.compare(delta, [{retain: 1}, {insert: [5]}])
     target = null
     delta = null
 
@@ -195,7 +195,7 @@ export const testObserveDeepEventOrder = tc => {
         arr.get(0, txn).set('a', 'a', txn)
         arr.insert(0, [0], txn)
     })
-    t.compare(paths, [ [], [ 1 ] ])
+    t.compare(paths, [[], [1]])
     subscription.free()
 }
 

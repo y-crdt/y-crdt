@@ -312,6 +312,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "gloo-utils"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b5555354113b18c547c1d3a98fbf7fb32a9ff4f6fa112ce823a21641a0ba3aa"
+dependencies = [
+ "js-sys",
+ "serde",
+ "serde_json",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
 name = "half"
 version = "2.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1135,7 +1148,9 @@ name = "ywasm"
 version = "0.17.4"
 dependencies = [
  "console_error_panic_hook",
+ "gloo-utils",
  "js-sys",
+ "serde",
  "wasm-bindgen",
  "wasm-bindgen-test",
  "wee_alloc",

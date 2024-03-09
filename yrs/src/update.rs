@@ -866,7 +866,7 @@ impl BlockCarrier {
         match self {
             BlockCarrier::Item(x) => {
                 let slice = ItemSlice::new(x.into(), offset, x.len() - 1);
-                slice.encode(encoder, None)
+                slice.encode(encoder)
             }
             BlockCarrier::Skip(x) => {
                 encoder.write_info(BLOCK_SKIP_REF_NUMBER);
@@ -897,7 +897,7 @@ impl From<Box<Item>> for BlockCarrier {
 impl Encode for BlockCarrier {
     fn encode<E: Encoder>(&self, encoder: &mut E) {
         match self {
-            BlockCarrier::Item(block) => block.encode(None, encoder),
+            BlockCarrier::Item(block) => block.encode(encoder),
             BlockCarrier::Skip(skip) => {
                 encoder.write_info(BLOCK_SKIP_REF_NUMBER);
                 encoder.write_len(skip.len)
@@ -1236,7 +1236,7 @@ mod test {
             let _ = Update::decode_v2(&binary).unwrap();
 
             let linknote = prosemirror.get(&txn, 0);
-            assert_eq!(linknote, None);
+            assert!(linknote.is_none());
         }
     }
 

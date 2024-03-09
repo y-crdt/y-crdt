@@ -1,9 +1,9 @@
-use std::cmp::PartialEq;
-use std::collections::HashMap;
-use std::convert::{TryFrom, TryInto};
-use std::sync::Arc;
 use crate::encoding::read::{Error, Read};
 use crate::encoding::write::Write;
+use std::cmp::PartialEq;
+use std::collections::HashMap;
+use std::convert::TryFrom;
+use std::sync::Arc;
 
 pub const F64_MAX_SAFE_INTEGER: f64 = (i64::pow(2, 53) - 1) as f64;
 pub const F64_MIN_SAFE_INTEGER: f64 = -F64_MAX_SAFE_INTEGER;
@@ -341,6 +341,7 @@ impl TryFrom<usize> for Any {
 
     #[cfg(target_pointer_width = "64")]
     fn try_from(value: usize) -> Result<Self, Self::Error> {
+        use std::convert::TryInto;
         if let Ok(v) = (value as u64).try_into() {
             Ok(v)
         } else {

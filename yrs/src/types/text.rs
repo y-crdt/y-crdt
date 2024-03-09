@@ -1,6 +1,6 @@
 use crate::block::{EmbedPrelim, Item, ItemContent, ItemPosition, ItemPtr, Prelim};
 use crate::transaction::TransactionMut;
-use crate::types::{Attrs, Branch, BranchPtr, Delta, Path, SharedRef, TypeRef, Value};
+use crate::types::{Attrs, Branch, BranchPtr, Delta, Path, RootRef, SharedRef, TypeRef, Value};
 use crate::utils::OptionExt;
 use crate::*;
 use std::borrow::Borrow;
@@ -8,7 +8,7 @@ use std::cell::UnsafeCell;
 use std::collections::HashMap;
 use std::convert::{TryFrom, TryInto};
 use std::fmt::Formatter;
-use std::ops::{Deref, DerefMut};
+use std::ops::Deref;
 
 /// A shared data type used for collaborative text editing. It enables multiple users to add and
 /// remove chunks of text in efficient manner. This type is internally represented as a mutable
@@ -85,9 +85,14 @@ use std::ops::{Deref, DerefMut};
 /// let row = table.insert(&mut txn, 1, ArrayPrelim::from(["\"Moby-Dick\"", "Herman Melville"]));
 /// ```
 #[repr(transparent)]
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct TextRef(BranchPtr);
 
+impl RootRef for TextRef {
+    fn type_ref() -> TypeRef {
+        TypeRef::Text
+    }
+}
 impl SharedRef for TextRef {}
 impl Text for TextRef {}
 impl IndexedSequence for TextRef {}
@@ -100,6 +105,7 @@ impl Into<XmlTextRef> for TextRef {
     }
 }
 
+impl DeepObservable for TextRef {}
 impl Observable for TextRef {
     type Event = TextEvent;
 }
@@ -108,7 +114,7 @@ impl GetString for TextRef {
     /// Converts context of this text data structure into a single string value. This method doesn't
     /// render formatting attributes or embedded content. In order to retrieve it, use
     /// [TextRef::diff] method.
-    fn get_string<T: ReadTxn>(&self, txn: &T) -> String {
+    fn get_string<T: ReadTxn>(&self, _txn: &T) -> String {
         let mut start = self.as_ref().start;
         let mut s = String::new();
         while let Some(item) = start.as_deref() {
@@ -148,7 +154,7 @@ impl TryFrom<Value> for TextRef {
 
 pub trait Text: AsRef<Branch> + Sized {
     /// Returns a number of characters visible in a current text data structure.
-    fn len<T: ReadTxn>(&self, txn: &T) -> u32 {
+    fn len<T: ReadTxn>(&self, _txn: &T) -> u32 {
         self.as_ref().content_len
     }
 
@@ -386,7 +392,7 @@ pub trait Text: AsRef<Branch> + Sized {
     ///     Diff::new("world".into(), Some(Box::new(italic_and_bold))),
     /// ]);
     /// ```
-    fn diff<T, D, F>(&self, txn: &T, compute_ychange: F) -> Vec<Diff<D>>
+    fn diff<T, D, F>(&self, _txn: &T, compute_ychange: F) -> Vec<Diff<D>>
     where
         T: ReadTxn,
         F: Fn(YChange) -> D,
@@ -432,9 +438,10 @@ impl AsRef<Branch> for TextRef {
     }
 }
 
-impl AsMut<Branch> for TextRef {
-    fn as_mut(&mut self) -> &mut Branch {
-        self.0.deref_mut()
+impl Eq for TextRef {}
+impl PartialEq for TextRef {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.id() == other.0.id()
     }
 }
 
@@ -1869,9 +1876,9 @@ mod test {
                 Some(Box::new(a.clone())),
             )]);
 
-            assert_eq!(txt1.get_string(&txt1.transact()), "abc".to_string());
+            assert_eq!(txt1.get_string(&d1.transact()), "abc".to_string());
             assert_eq!(
-                txt1.diff(&txt1.transact(), YChange::identity),
+                txt1.diff(&d1.transact(), YChange::identity),
                 vec![Diff::new("abc".into(), Some(Box::new(a.clone())))]
             );
             assert_eq!(delta1.take(), expected);
@@ -1880,7 +1887,7 @@ mod test {
             txn.apply_update(Update::decode_v1(update.as_slice()).unwrap());
             drop(txn);
 
-            assert_eq!(txt2.get_string(&txt2.transact()), "abc".to_string());
+            assert_eq!(txt2.get_string(&d2.transact()), "abc".to_string());
             assert_eq!(delta2.take(), expected);
         }
 
@@ -1893,9 +1900,9 @@ mod test {
 
             let expected = Some(vec![Delta::Deleted(1)]);
 
-            assert_eq!(txt1.get_string(&txt1.transact()), "bc".to_string());
+            assert_eq!(txt1.get_string(&d1.transact()), "bc".to_string());
             assert_eq!(
-                txt1.diff(&txt1.transact(), YChange::identity),
+                txt1.diff(&d1.transact(), YChange::identity),
                 vec![Diff::new("bc".into(), Some(Box::new(a.clone())))]
             );
             assert_eq!(delta1.take(), expected);
@@ -1904,7 +1911,7 @@ mod test {
             txn.apply_update(Update::decode_v1(update.as_slice()).unwrap());
             drop(txn);
 
-            assert_eq!(txt2.get_string(&txt2.transact()), "bc".to_string());
+            assert_eq!(txt2.get_string(&d2.transact()), "bc".to_string());
             assert_eq!(delta2.take(), expected);
         }
 
@@ -1917,9 +1924,9 @@ mod test {
 
             let expected = Some(vec![Delta::Retain(1, None), Delta::Deleted(1)]);
 
-            assert_eq!(txt1.get_string(&txt1.transact()), "b".to_string());
+            assert_eq!(txt1.get_string(&d1.transact()), "b".to_string());
             assert_eq!(
-                txt1.diff(&txt1.transact(), YChange::identity),
+                txt1.diff(&d1.transact(), YChange::identity),
                 vec![Diff::new("b".into(), Some(Box::new(a.clone())))]
             );
             assert_eq!(delta1.take(), expected);
@@ -1928,7 +1935,7 @@ mod test {
             txn.apply_update(Update::decode_v1(update.as_slice()).unwrap());
             drop(txn);
 
-            assert_eq!(txt2.get_string(&txt2.transact()), "b".to_string());
+            assert_eq!(txt2.get_string(&d2.transact()), "b".to_string());
             assert_eq!(delta2.take(), expected);
         }
 
@@ -1941,9 +1948,9 @@ mod test {
 
             let expected = Some(vec![Delta::Inserted("z".into(), Some(Box::new(a.clone())))]);
 
-            assert_eq!(txt1.get_string(&txt1.transact()), "zb".to_string());
+            assert_eq!(txt1.get_string(&d1.transact()), "zb".to_string());
             assert_eq!(
-                txt1.diff(&mut txt1.transact_mut(), YChange::identity),
+                txt1.diff(&mut d1.transact_mut(), YChange::identity),
                 vec![Diff::new("zb".into(), Some(Box::new(a.clone())))]
             );
             assert_eq!(delta1.take(), expected);
@@ -1952,7 +1959,7 @@ mod test {
             txn.apply_update(Update::decode_v1(update.as_slice()).unwrap());
             drop(txn);
 
-            assert_eq!(txt2.get_string(&txt2.transact()), "zb".to_string());
+            assert_eq!(txt2.get_string(&d2.transact()), "zb".to_string());
             assert_eq!(delta2.take(), expected);
         }
 
@@ -1965,9 +1972,9 @@ mod test {
 
             let expected = Some(vec![Delta::Inserted("y".into(), None)]);
 
-            assert_eq!(txt1.get_string(&txt1.transact()), "yzb".to_string());
+            assert_eq!(txt1.get_string(&d1.transact()), "yzb".to_string());
             assert_eq!(
-                txt1.diff(&mut txt1.transact_mut(), YChange::identity),
+                txt1.diff(&mut d1.transact_mut(), YChange::identity),
                 vec![
                     Diff::new("y".into(), None),
                     Diff::new("zb".into(), Some(Box::new(a.clone())))
@@ -1979,7 +1986,7 @@ mod test {
             txn.apply_update(Update::decode_v1(update.as_slice()).unwrap());
             drop(txn);
 
-            assert_eq!(txt2.get_string(&txt2.transact()), "yzb".to_string());
+            assert_eq!(txt2.get_string(&d2.transact()), "yzb".to_string());
             assert_eq!(delta2.take(), expected);
         }
 
@@ -1996,9 +2003,9 @@ mod test {
                 Delta::Retain(1, Some(Box::new(b))),
             ]);
 
-            assert_eq!(txt1.get_string(&txt1.transact()), "yzb".to_string());
+            assert_eq!(txt1.get_string(&d1.transact()), "yzb".to_string());
             assert_eq!(
-                txt1.diff(&mut txt1.transact_mut(), YChange::identity),
+                txt1.diff(&mut d1.transact_mut(), YChange::identity),
                 vec![
                     Diff::new("yz".into(), None),
                     Diff::new("b".into(), Some(Box::new(a.clone())))
@@ -2010,7 +2017,7 @@ mod test {
             txn.apply_update(Update::decode_v1(update.as_slice()).unwrap());
             drop(txn);
 
-            assert_eq!(txt2.get_string(&txt2.transact()), "yzb".to_string());
+            assert_eq!(txt2.get_string(&d2.transact()), "yzb".to_string());
             assert_eq!(delta2.take(), expected);
         }
     }
@@ -2165,7 +2172,7 @@ mod test {
 
         {
             let text = doc.get_or_insert_text("content");
-            assert_eq!(text.get_string(&text.transact()), "");
+            assert_eq!(text.get_string(&doc.transact()), "");
         }
     }
 
@@ -2198,11 +2205,11 @@ mod test {
         exchange_updates(&[&d1, &d2]);
 
         txt.remove_range(&mut d1.transact_mut(), 0, "😭".len() as u32);
-        assert_eq!(txt.get_string(&txt.transact()).as_str(), "😊");
+        assert_eq!(txt.get_string(&d1.transact()).as_str(), "😊");
 
         exchange_updates(&[&d1, &d2]);
         let txt = d2.get_or_insert_text("test");
-        assert_eq!(txt.get_string(&txt.transact()).as_str(), "😊");
+        assert_eq!(txt.get_string(&d2.transact()).as_str(), "😊");
     }
 
     #[test]
@@ -2216,11 +2223,11 @@ mod test {
         exchange_updates(&[&d1, &d2]);
 
         txt.remove_range(&mut d1.transact_mut(), 0, "⏰".len() as u32);
-        assert_eq!(txt.get_string(&txt.transact()).as_str(), "⏳");
+        assert_eq!(txt.get_string(&d1.transact()).as_str(), "⏳");
 
         exchange_updates(&[&d1, &d2]);
         let txt = d2.get_or_insert_text("test");
-        assert_eq!(txt.get_string(&txt.transact()).as_str(), "⏳");
+        assert_eq!(txt.get_string(&d2.transact()).as_str(), "⏳");
     }
     #[test]
     fn delete_4_byte_character_from_middle() {
@@ -2424,7 +2431,7 @@ mod test {
 
                 let doc = d3.write().unwrap();
                 let txt = doc.get_or_insert_text("test");
-                let mut txn = txt.transact_mut();
+                let mut txn = doc.transact_mut();
                 txt.push(&mut txn, "b");
             }
         });

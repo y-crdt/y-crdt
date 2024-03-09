@@ -1,9 +1,9 @@
 use crate::block::ItemPtr;
+use crate::branch::{Branch, BranchPtr};
 use crate::doc::TransactionAcqError;
 use crate::iter::TxnIterator;
 use crate::slice::BlockSlice;
 use crate::transaction::Origin;
-use crate::types::{Branch, BranchPtr};
 use crate::{DeleteSet, Doc, ObserverMut, Subscription, Transact, TransactionMut, ID};
 use std::cell::Cell;
 use std::collections::HashSet;
@@ -64,6 +64,11 @@ where
         T: AsRef<Branch>,
     {
         Self::with_options(doc, scope, Options::default())
+    }
+
+    #[inline]
+    pub fn doc(&self) -> &Doc {
+        &self.0.doc
     }
 
     /// Creates a new instance of the [UndoManager] working in a `scope` of a particular shared
@@ -965,7 +970,12 @@ mod test {
     #[test]
     fn undo_xml() {
         let d1 = Doc::with_client_id(1);
-        let xml1 = d1.get_or_insert_xml_element("undefined");
+        let frag = d1.get_or_insert_xml_fragment("xml");
+        let xml1 = frag.insert(
+            &mut d1.transact_mut(),
+            0,
+            XmlElementPrelim::empty("undefined"),
+        );
 
         let mut mgr = UndoManager::new(&d1, &xml1);
         let child = xml1.insert(&mut d1.transact_mut(), 0, XmlElementPrelim::empty("p"));

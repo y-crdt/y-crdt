@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use crate::block::ClientID;
 use crate::encoding::read::{Cursor, Read};
 use crate::transaction::ReadTxn;

@@ -1,17 +1,19 @@
+use crate::branch::{Branch, BranchPtr};
 use crate::doc::{DocAddr, OffsetKind};
 use crate::encoding::read::Error;
 use crate::gc::GCCollector;
 use crate::moving::Move;
 use crate::slice::{BlockSlice, GCSlice, ItemSlice};
-use crate::store::{Store, WeakStoreRef};
+use crate::store::Store;
 use crate::transaction::TransactionMut;
 use crate::types::text::update_current_attributes;
-use crate::types::{Attrs, Branch, BranchPtr, TypePtr, TypeRef, Value};
+use crate::types::{Attrs, TypePtr, TypeRef, Value};
 use crate::undo::UndoStack;
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::OptionExt;
 use crate::*;
+use serde::{Deserialize, Serialize};
 use smallstr::SmallString;
 use std::collections::HashSet;
 use std::convert::TryFrom;
@@ -78,7 +80,7 @@ pub type ClientID = u64;
 ///
 /// [ID] corresponds to a [Lamport timestamp](https://en.wikipedia.org/wiki/Lamport_timestamp) in
 /// terms of its properties and guarantees.
-#[derive(Debug, Copy, Clone, PartialOrd, Ord, PartialEq, Eq, Hash)]
+#[derive(Debug, Copy, Clone, PartialOrd, Ord, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ID {
     /// Unique identifier of a client.
     pub client: ClientID,
@@ -702,10 +704,10 @@ impl ItemPtr {
                 }
                 ItemContent::Move(m) => m.integrate_block(txn, self_ptr),
                 ItemContent::Doc(parent_doc, doc) => {
+                    *parent_doc = Some(txn.doc().clone());
                     {
-                        let mut txn = doc.transact_mut();
-                        txn.store.parent = Some(self_ptr);
-                        *parent_doc = parent_ref.store.clone();
+                        let mut child_txn = doc.transact_mut();
+                        child_txn.store.parent = Some(self_ptr);
                     }
                     let subdocs = txn.subdocs.get_or_init();
                     subdocs.added.insert(DocAddr::new(doc), doc.clone());
@@ -718,8 +720,6 @@ impl ItemPtr {
                     // /** @type {AbstractType<any>} */ (item.parent)._searchMarker = null
                 }
                 ItemContent::Type(branch) => {
-                    let b = Arc::get_mut(branch).unwrap();
-                    b.store = this.parent.as_branch().and_then(|b| b.store.clone());
                     let ptr = if this.info.is_deleted() {
                         BranchPtr::from(branch)
                     } else {
@@ -860,7 +860,7 @@ impl Item {
         (start, end)
     }
 
-    pub fn encode<E: Encoder>(&self, store: Option<&Store>, encoder: &mut E) {
+    pub fn encode<E: Encoder>(&self, encoder: &mut E) {
         let info = self.info();
         let cant_copy_parent_info = info & (HAS_ORIGIN | HAS_RIGHT_ORIGIN) == 0;
         encoder.write_info(info);
@@ -876,10 +876,11 @@ impl Item {
                     if let Some(block) = branch.item {
                         encoder.write_parent_info(false);
                         encoder.write_left_id(block.id());
-                    } else if let Some(store) = store {
-                        let name = store.get_type_key(*branch).unwrap();
+                    } else if let Some(name) = branch.name.as_deref() {
                         encoder.write_parent_info(true);
                         encoder.write_string(name);
+                    } else {
+                        unreachable!()
                     }
                 }
                 TypePtr::Named(name) => {
@@ -1217,6 +1218,11 @@ impl Item {
             0
         });
         let len = content.len(OffsetKind::Utf16);
+        let root_name = if let TypePtr::Named(root) = &parent {
+            Some(root.clone())
+        } else {
+            None
+        };
         let mut item = Box::new(Item {
             id,
             len,
@@ -1235,6 +1241,9 @@ impl Item {
         if let ItemContent::Type(branch) = &mut item.content {
             let b = Arc::get_mut(branch).unwrap();
             b.item = Some(item_ptr);
+            if b.name.is_none() {
+                b.name = root_name;
+            }
         }
         item
     }
@@ -1504,7 +1513,7 @@ pub enum ItemContent {
     Deleted(u32),
 
     /// Sub-document container. Contains weak reference to a parent document and a child document.
-    Doc(Option<WeakStoreRef>, Doc),
+    Doc(Option<Doc>, Doc),
 
     /// Obsolete: collection of consecutively inserted stringified JSON values.
     JSON(Vec<String>),

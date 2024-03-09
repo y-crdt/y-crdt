@@ -4,11 +4,11 @@ use crate::transaction::TransactionMut;
 use crate::types::text::{diff_between, TextEvent, YChange};
 use crate::types::{
     event_change_set, event_keys, Branch, BranchPtr, Change, ChangeSet, Delta, Entries,
-    EntryChange, MapRef, Path, SharedRef, ToJson, TypePtr, TypeRef, Value,
+    EntryChange, MapRef, Path, RootRef, SharedRef, ToJson, TypePtr, TypeRef, Value,
 };
 use crate::{
-    Any, ArrayRef, GetString, IndexedSequence, Map, Observable, ReadTxn, StickyIndex, Text,
-    TextRef, ID,
+    Any, ArrayRef, BranchID, DeepObservable, GetString, IndexedSequence, Map, Observable, ReadTxn,
+    StickyIndex, Text, TextRef, ID,
 };
 use std::borrow::Borrow;
 use std::cell::UnsafeCell;
@@ -16,7 +16,7 @@ use std::collections::{HashMap, HashSet};
 use std::convert::{TryFrom, TryInto};
 use std::fmt::Write;
 use std::marker::PhantomData;
-use std::ops::{Deref, DerefMut};
+use std::ops::Deref;
 use std::sync::Arc;
 
 /// Trait shared by preliminary types that can be used as XML nodes: [XmlElementPrelim],
@@ -26,7 +26,7 @@ pub trait XmlPrelim: Prelim {}
 /// An return type from XML elements retrieval methods. It's an enum of all supported values, that
 /// can be nested inside of [XmlElementRef]. These are other [XmlElementRef]s, [XmlFragmentRef]s
 /// or [XmlTextRef] values.
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum XmlNode {
     Element(XmlElementRef),
     Fragment(XmlFragmentRef),
@@ -39,6 +39,37 @@ impl XmlNode {
             XmlNode::Element(n) => n.0,
             XmlNode::Fragment(n) => n.0,
             XmlNode::Text(n) => n.0,
+        }
+    }
+
+    pub fn id(&self) -> BranchID {
+        self.as_ptr().id()
+    }
+
+    /// If current underlying [XmlNode] is wrapping a [XmlElementRef], it will be returned.
+    /// Otherwise, a `None` will be returned.
+    pub fn into_xml_element(self) -> Option<XmlElementRef> {
+        match self {
+            XmlNode::Element(n) => Some(n),
+            _ => None,
+        }
+    }
+
+    /// If current underlying [XmlNode] is wrapping a [XmlFragmentRef], it will be returned.
+    /// Otherwise, a `None` will be returned.
+    pub fn into_xml_fragment(self) -> Option<XmlFragmentRef> {
+        match self {
+            XmlNode::Fragment(n) => Some(n),
+            _ => None,
+        }
+    }
+
+    /// If current underlying [XmlNode] is wrapping a [XmlTextRef], it will be returned.
+    /// Otherwise, a `None` will be returned.
+    pub fn into_xml_text(self) -> Option<XmlTextRef> {
+        match self {
+            XmlNode::Text(n) => Some(n),
+            _ => None,
         }
     }
 }
@@ -126,7 +157,7 @@ impl TryFrom<Value> for XmlNode {
 ///   using interleave-resistant algorithm, where order of concurrent inserts at the same index
 ///   is established using peer's document id seniority.
 #[repr(transparent)]
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct XmlElementRef(BranchPtr);
 
 impl SharedRef for XmlElementRef {}
@@ -194,6 +225,7 @@ impl GetString for XmlElementRef {
     }
 }
 
+impl DeepObservable for XmlElementRef {}
 impl Observable for XmlElementRef {
     type Event = XmlEvent;
 }
@@ -204,9 +236,10 @@ impl AsRef<Branch> for XmlElementRef {
     }
 }
 
-impl AsMut<Branch> for XmlElementRef {
-    fn as_mut(&mut self) -> &mut Branch {
-        &mut self.0
+impl Eq for XmlElementRef {}
+impl PartialEq for XmlElementRef {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.id() == other.0.id()
     }
 }
 
@@ -337,12 +370,13 @@ where
 /// # Example
 ///
 /// ```rust
-/// use yrs::{Any, Array, ArrayPrelim, Doc, GetString, Text, Transact};
+/// use yrs::{Any, Array, ArrayPrelim, Doc, GetString, Text, Transact, WriteTxn, XmlFragment, XmlTextPrelim};
 /// use yrs::types::Attrs;
 ///
 /// let doc = Doc::new();
-/// let text = doc.get_or_insert_xml_text("article");
 /// let mut txn = doc.transact_mut();
+/// let f = txn.get_or_insert_xml_fragment("article");
+/// let text = f.insert(&mut txn, 0, XmlTextPrelim::new(""));
 ///
 /// let bold = Attrs::from([("b".into(), true.into())]);
 /// let italic = Attrs::from([("i".into(), true.into())]);
@@ -369,7 +403,7 @@ where
 /// let row = table.insert(&mut txn, 1, ArrayPrelim::from(["\"Moby-Dick\"", "Herman Melville"]));
 /// ```
 #[repr(transparent)]
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct XmlTextRef(BranchPtr);
 
 impl XmlTextRef {
@@ -427,12 +461,13 @@ impl Into<TextRef> for XmlTextRef {
     }
 }
 
+impl DeepObservable for XmlTextRef {}
 impl Observable for XmlTextRef {
     type Event = XmlTextEvent;
 }
 
 impl GetString for XmlTextRef {
-    fn get_string<T: ReadTxn>(&self, txn: &T) -> String {
+    fn get_string<T: ReadTxn>(&self, _txn: &T) -> String {
         XmlTextRef::get_string_fragment(self.0.start, None, None)
     }
 }
@@ -443,9 +478,10 @@ impl AsRef<Branch> for XmlTextRef {
     }
 }
 
-impl AsMut<Branch> for XmlTextRef {
-    fn as_mut(&mut self) -> &mut Branch {
-        &mut self.0
+impl Eq for XmlTextRef {}
+impl PartialEq for XmlTextRef {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.id() == other.0.id()
     }
 }
 
@@ -483,6 +519,12 @@ impl TryFrom<Value> for XmlTextRef {
 #[derive(Debug)]
 pub struct XmlTextPrelim<T: Borrow<str>>(T);
 
+impl Default for XmlTextPrelim<String> {
+    fn default() -> Self {
+        XmlTextPrelim::new(String::default())
+    }
+}
+
 impl<T: Borrow<str>> XmlTextPrelim<T> {
     #[inline]
     pub fn new(str: T) -> Self {
@@ -518,9 +560,14 @@ impl<T: Borrow<str>> Into<EmbedPrelim<XmlTextPrelim<T>>> for XmlTextPrelim<T> {
 
 /// A XML fragment, which works as an untagged collection of XML nodes.
 #[repr(transparent)]
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct XmlFragmentRef(BranchPtr);
 
+impl RootRef for XmlFragmentRef {
+    fn type_ref() -> TypeRef {
+        TypeRef::XmlFragment
+    }
+}
 impl SharedRef for XmlFragmentRef {}
 impl XmlFragment for XmlFragmentRef {}
 impl IndexedSequence for XmlFragmentRef {}
@@ -550,6 +597,7 @@ impl GetString for XmlFragmentRef {
     }
 }
 
+impl DeepObservable for XmlFragmentRef {}
 impl Observable for XmlFragmentRef {
     type Event = XmlEvent;
 }
@@ -560,9 +608,10 @@ impl AsRef<Branch> for XmlFragmentRef {
     }
 }
 
-impl AsMut<Branch> for XmlFragmentRef {
-    fn as_mut(&mut self) -> &mut Branch {
-        self.0.deref_mut()
+impl Eq for XmlFragmentRef {}
+impl PartialEq for XmlFragmentRef {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.id() == other.0.id()
     }
 }
 
@@ -654,7 +703,7 @@ where
 }
 
 /// (Obsolete) an Yjs-compatible XML node used for nesting Map elements.
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct XmlHookRef(BranchPtr);
 
 impl Map for XmlHookRef {}
@@ -672,9 +721,10 @@ impl AsRef<Branch> for XmlHookRef {
     }
 }
 
-impl AsMut<Branch> for XmlHookRef {
-    fn as_mut(&mut self) -> &mut Branch {
-        self.0.deref_mut()
+impl Eq for XmlHookRef {}
+impl PartialEq for XmlHookRef {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.id() == other.0.id()
     }
 }
 
@@ -760,7 +810,7 @@ pub trait XmlFragment: AsRef<Branch> {
         }
     }
     /// Returns a number of elements stored in current array.
-    fn len<T: ReadTxn>(&self, txn: &T) -> u32 {
+    fn len<T: ReadTxn>(&self, _txn: &T) -> u32 {
         self.as_ref().len()
     }
 
@@ -818,7 +868,7 @@ pub trait XmlFragment: AsRef<Branch> {
 
     /// Retrieves a value stored at a given `index`. Returns `None` when provided index was out
     /// of the range of a current array.
-    fn get<T: ReadTxn>(&self, txn: &T, index: u32) -> Option<XmlNode> {
+    fn get<T: ReadTxn>(&self, _txn: &T, index: u32) -> Option<XmlNode> {
         let branch = self.as_ref();
         let (content, _) = branch.get_at(index)?;
         if let ItemContent::Type(inner) = content {
@@ -1191,14 +1241,16 @@ impl XmlEvent {
 
 #[cfg(test)]
 mod test {
+    use crate::branch::BranchPtr;
+    use crate::test_utils::exchange_updates;
     use crate::transaction::ReadTxn;
     use crate::types::xml::{Xml, XmlFragment, XmlNode};
     use crate::types::{Attrs, Change, EntryChange, Value};
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encoder, EncoderV1};
     use crate::{
-        Any, Doc, GetString, Observable, StateVector, Text, Transact, Update, XmlElementPrelim,
-        XmlTextPrelim,
+        Any, Doc, GetString, Observable, SharedRef, StateVector, Text, Transact, Update,
+        XmlElementPrelim, XmlTextPrelim, XmlTextRef,
     };
     use std::cell::RefCell;
     use std::collections::HashMap;
@@ -1251,8 +1303,16 @@ mod test {
             2,
             "query selector should found two paragraphs"
         );
-        assert_eq!(actual[0], p1, "query selector found 1st paragraph");
-        assert_eq!(actual[1], p2, "query selector found 2nd paragraph");
+        assert_eq!(
+            actual[0].hook(),
+            p1.hook(),
+            "query selector found 1st paragraph"
+        );
+        assert_eq!(
+            actual[1].hook(),
+            p2.hook(),
+            "query selector found 2nd paragraph"
+        );
     }
 
     #[test]
@@ -1277,24 +1337,24 @@ mod test {
         let second = root.push_back(&mut txn, XmlElementPrelim::empty("p"));
 
         assert_eq!(
-            first.siblings(&txn).next().as_ref(),
-            Some(&XmlNode::Element(second.clone())),
+            &first.siblings(&txn).next().unwrap().id(),
+            second.hook().id(),
             "first.next_sibling should point to second"
         );
         assert_eq!(
-            second.siblings(&txn).next_back().as_ref(),
-            Some(&XmlNode::Text(first.clone())),
+            &second.siblings(&txn).next_back().unwrap().id(),
+            first.hook().id(),
             "second.prev_sibling should point to first"
         );
         assert_eq!(
-            first.parent().as_ref(),
-            Some(&XmlNode::Fragment(root.clone())),
+            &first.parent().unwrap().id(),
+            root.hook().id(),
             "first.parent should point to root"
         );
         assert!(root.parent().is_none(), "root parent should not exist");
         assert_eq!(
-            root.first_child().as_ref(),
-            Some(&XmlNode::Text(first)),
+            &root.first_child().unwrap().id(),
+            first.hook().id(),
             "root.first_child should point to first"
         );
     }
@@ -1351,7 +1411,17 @@ mod test {
     #[test]
     fn event_observers() {
         let d1 = Doc::with_client_id(1);
-        let xml = d1.get_or_insert_xml_element("test");
+        let f = d1.get_or_insert_xml_fragment("xml");
+        let xml = f.insert(&mut d1.transact_mut(), 0, XmlElementPrelim::empty("test"));
+
+        let d2 = Doc::with_client_id(2);
+        let f = d2.get_or_insert_xml_fragment("xml");
+        exchange_updates(&[&d1, &d2]);
+        let xml2 = f
+            .get(&d2.transact(), 0)
+            .unwrap()
+            .into_xml_element()
+            .unwrap();
 
         let attributes = Rc::new(RefCell::new(None));
         let nodes = Rc::new(RefCell::new(None));
@@ -1440,9 +1510,6 @@ mod test {
         assert_eq!(attributes.borrow_mut().take(), Some(HashMap::new()));
 
         // copy updates over
-        let d2 = Doc::with_client_id(2);
-        let xml2 = d2.get_or_insert_xml_element("test");
-
         let attributes = Rc::new(RefCell::new(None));
         let nodes = Rc::new(RefCell::new(None));
         let attributes_c = attributes.clone();
@@ -1505,7 +1572,8 @@ mod test {
     #[test]
     fn xml_to_string_2() {
         let doc = Doc::new();
-        let xml = doc.get_or_insert_xml_text("article");
+        let f = doc.get_or_insert_xml_fragment("article");
+        let xml = f.insert(&mut doc.transact_mut(), 0, XmlTextPrelim::new(""));
         let mut txn = doc.transact_mut();
 
         let bold = Attrs::from([("b".into(), true.into())]);
@@ -1533,7 +1601,8 @@ mod test {
         ];
         let update = Update::decode_v1(data).unwrap();
         let doc = Doc::new();
-        let txt = doc.get_or_insert_xml_text("test");
+        let txt = doc.get_or_insert_text("test");
+        let txt = XmlTextRef::from(BranchPtr::from(txt.as_ref()));
         let mut txn = doc.transact_mut();
 
         txn.apply_update(update);
@@ -1552,7 +1621,8 @@ mod test {
         ];
         let update = Update::decode_v2(data).unwrap();
         let doc = Doc::new();
-        let txt = doc.get_or_insert_xml_text("test");
+        let txt = doc.get_or_insert_text("test");
+        let txt = XmlTextRef::from(BranchPtr::from(txt.as_ref()));
         let mut txn = doc.transact_mut();
 
         txn.apply_update(update);

@@ -3,15 +3,16 @@ use crate::block_iter::BlockIter;
 use crate::moving::StickyIndex;
 use crate::transaction::TransactionMut;
 use crate::types::{
-    event_change_set, Branch, BranchPtr, Change, ChangeSet, Path, SharedRef, ToJson, TypeRef, Value,
+    event_change_set, Branch, BranchPtr, Change, ChangeSet, Path, RootRef, SharedRef, ToJson,
+    TypeRef, Value,
 };
-use crate::{Any, Assoc, IndexedSequence, Observable, ReadTxn, ID};
+use crate::{Any, Assoc, DeepObservable, IndexedSequence, Observable, ReadTxn, ID};
 use std::borrow::Borrow;
 use std::cell::UnsafeCell;
 use std::collections::HashSet;
 use std::convert::{TryFrom, TryInto};
 use std::marker::PhantomData;
-use std::ops::{Deref, DerefMut};
+use std::ops::Deref;
 
 /// A collection used to store data in an indexed sequence structure. This type is internally
 /// implemented as a double linked list, which may squash values inserted directly one after another
@@ -68,9 +69,14 @@ use std::ops::{Deref, DerefMut};
 /// ]));
 /// ```
 #[repr(transparent)]
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct ArrayRef(BranchPtr);
 
+impl RootRef for ArrayRef {
+    fn type_ref() -> TypeRef {
+        TypeRef::Array
+    }
+}
 impl SharedRef for ArrayRef {}
 impl Array for ArrayRef {}
 impl IndexedSequence for ArrayRef {}
@@ -96,18 +102,20 @@ impl ToJson for ArrayRef {
     }
 }
 
+impl Eq for ArrayRef {}
+impl PartialEq for ArrayRef {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.id() == other.0.id()
+    }
+}
+
 impl AsRef<Branch> for ArrayRef {
     fn as_ref(&self) -> &Branch {
         self.0.deref()
     }
 }
 
-impl AsMut<Branch> for ArrayRef {
-    fn as_mut(&mut self) -> &mut Branch {
-        self.0.deref_mut()
-    }
-}
-
+impl DeepObservable for ArrayRef {}
 impl Observable for ArrayRef {
     type Event = ArrayEvent;
 }
@@ -137,7 +145,7 @@ impl TryFrom<Value> for ArrayRef {
 
 pub trait Array: AsRef<Branch> + Sized {
     /// Returns a number of elements stored in current array.
-    fn len<T: ReadTxn>(&self, txn: &T) -> u32 {
+    fn len<T: ReadTxn>(&self, _txn: &T) -> u32 {
         self.as_ref().len()
     }
 
@@ -513,8 +521,8 @@ mod test {
     use crate::types::map::MapPrelim;
     use crate::types::{Change, DeepObservable, Event, Path, PathSegment, ToJson, Value};
     use crate::{
-        any, Any, Array, ArrayPrelim, Assoc, Doc, Map, MapRef, Observable, StateVector, Transact,
-        Update, ID,
+        any, Any, Array, ArrayPrelim, Assoc, Doc, Map, MapRef, Observable, SharedRef, StateVector,
+        Transact, Update, ID,
     };
     use rand::prelude::StdRng;
     use rand::Rng;
@@ -1007,12 +1015,12 @@ mod test {
         let c1 = Rc::new(RefCell::new(None));
         let c1c = c1.clone();
         let _s1 = a1.observe(move |_, e| {
-            *c1c.borrow_mut() = Some(e.target().clone());
+            *c1c.borrow_mut() = Some(e.target().hook());
         });
         let c2 = Rc::new(RefCell::new(None));
         let c2c = c2.clone();
         let _s2 = a2.observe(move |_, e| {
-            *c2c.borrow_mut() = Some(e.target().clone());
+            *c2c.borrow_mut() = Some(e.target().hook());
         });
 
         {
@@ -1021,8 +1029,8 @@ mod test {
         }
         exchange_updates(&[&d1, &d2]);
 
-        assert_eq!(c1.borrow_mut().take(), Some(a1));
-        assert_eq!(c2.borrow_mut().take(), Some(a2));
+        assert_eq!(c1.borrow_mut().take(), Some(a1.hook()));
+        assert_eq!(c2.borrow_mut().take(), Some(a2.hook()));
     }
 
     use crate::transaction::ReadTxn;
@@ -1174,7 +1182,7 @@ mod test {
     #[test]
     fn observe_deep_event_order() {
         let doc = Doc::with_client_id(1);
-        let mut array = doc.get_or_insert_array("array");
+        let array = doc.get_or_insert_array("array");
 
         let paths = Rc::new(RefCell::new(Vec::new()));
         let paths_copy = paths.clone();
@@ -1336,7 +1344,7 @@ mod test {
         exchange_updates(&[&d1, &d2]);
         exchange_updates(&[&d1, &d2]); // move cycles may not be detected within a single update exchange
 
-        assert_eq!(a1.len(&a1.transact()), 4);
+        assert_eq!(a1.len(&d1.transact()), 4);
         assert_eq!(a1.to_json(&d1.transact()), a2.to_json(&d2.transact()));
     }
 
@@ -1612,11 +1620,11 @@ mod test {
 
         let doc = Doc::with_client_id(1);
         let array = doc.get_or_insert_array("array");
-        let mut txn = array.transact_mut();
+        let mut txn = doc.transact_mut();
         array.insert_range(&mut txn, 0, [1, 2, 3]);
         drop(txn);
 
-        let mut txn = array.transact_mut();
+        let mut txn = doc.transact_mut();
         array.move_to(&mut txn, 2, 0);
 
         let mut iter = array.iter(&txn);

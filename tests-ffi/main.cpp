@@ -271,8 +271,9 @@ TEST_CASE("YMap basic") {
 
 TEST_CASE("YXmlElement basic") {
     YDoc* doc = ydoc_new_with_id(1);
-    Branch* xml = yxmlelem(doc, "test");
+    Branch* frag = yxmlfragment(doc, "test");
     YTransaction* txn = ydoc_write_transaction(doc, 0, NULL);
+    Branch* xml = yxmlelem_insert_elem(frag, txn, 0, "div");
 
     // XML attributes API
     yxmlelem_insert_attr(xml, txn, "key1", "value1");
@@ -326,17 +327,17 @@ TEST_CASE("YXmlElement basic") {
     ystring_destroy(tag);
 
     tag = yxmlelem_tag(xml);
-    REQUIRE(!strcmp(tag, "test"));
+    REQUIRE(!strcmp(tag, "div"));
     ystring_destroy(tag);
 
     // check parents
     Branch* parent = yxmlelem_parent(inner);
     tag = yxmlelem_tag(parent);
-    REQUIRE(!strcmp(tag, "test"));
+    REQUIRE(!strcmp(tag, "div"));
     ystring_destroy(tag);
 
     parent = yxmlelem_parent(xml);
-    REQUIRE(parent == NULL);
+    REQUIRE(parent != NULL);
 
     // check children traversal
     YOutput* curr = yxmlelem_first_child(xml);
@@ -832,8 +833,11 @@ void yxmltext_test_clean(YXmlTextEventTest* t) {
 
 TEST_CASE("YXmlText observe") {
     YDoc* doc = ydoc_new_with_id(1);
-    Branch* txt = yxmltext(doc, "test");
+    Branch* frag = yxmlfragment(doc, "test");
     YTransaction* txn = ydoc_write_transaction(doc, 0, NULL);
+    Branch* txt = yxmlelem_insert_text(frag, txn, 0);
+    ytransaction_commit(txn);
+    txn = ydoc_write_transaction(doc, 0, NULL);
 
     YXmlTextEventTest* t = yxmltext_event_test_new();
     YSubscription* sub = yxmltext_observe(txt, (void*)t, &yxmltext_test_observe);
@@ -842,10 +846,10 @@ TEST_CASE("YXmlText observe") {
     yxmltext_insert(txt, txn, 0, "abcd", NULL);
     ytransaction_commit(txn);
 
-    REQUIRE(t->target != NULL);
     REQUIRE(t->delta_len == 1);
     REQUIRE(t->delta[0].tag == Y_EVENT_CHANGE_ADD);
     REQUIRE(t->delta[0].insert->len == 4);
+    REQUIRE(t->target != NULL);
 
     // remove 2 chars from the middle
     yxmltext_test_clean(t);
@@ -926,8 +930,11 @@ void yxml_test_clean(YXmlEventTest* t) {
 
 TEST_CASE("YXmlElement observe") {
     YDoc* doc = ydoc_new_with_id(1);
-    Branch* xml = yxmlelem(doc, "test");
+    Branch *frag = yxmlfragment(doc, "test");
     YTransaction* txn = ydoc_write_transaction(doc, 0, NULL);
+    Branch* xml = yxmlelem_insert_elem(frag, txn, 0, "div");
+    ytransaction_commit(txn);
+    txn = ydoc_write_transaction(doc, 0, NULL);
 
     YXmlEventTest* t = yxml_event_test_new();
     YSubscription* sub = yxmlelem_observe(xml, (void*)t, &yxml_test_observe);
@@ -1877,6 +1884,57 @@ TEST_CASE("Weak link references") {
 
     yweak_iter_destroy(iter);
 
+    ytransaction_commit(txn);
+    ydoc_destroy(doc);
+}
+
+TEST_CASE("Logical branch pointers") {
+    YDoc *doc = ydoc_new_with_id(1);
+    Branch *arr = yarray(doc, "array");
+    YTransaction *txn = ydoc_write_transaction(doc, 0, NULL);
+
+    // init doc -> 'array' = [{'key':'value'}]
+    char *key = "key";
+    YInput value = yinput_string("value");
+    YInput in = yinput_ymap(&key, &value, 1);
+    yarray_insert_range(arr, txn, 0, &in, 1);
+    YOutput *out = yarray_get(arr, txn, 0);
+    Branch *map = youtput_read_ymap(out);
+    youtput_destroy(out);
+
+    // get branch identifier
+    YBranchId map_id = ybranch_id(map);
+    YBranchId arr_id = ybranch_id(arr);
+
+    // remote changes
+    YDoc *doc2 = ydoc_new_with_id(2);
+    yarray(doc2, "array"); // roots needs to be pre-initialized
+    YTransaction *txn2 = ydoc_write_transaction(doc2, 0, NULL);
+
+    // synchronize the documents
+    uint32_t sv_len = 0;
+    char *sv = ytransaction_state_vector_v1(txn2, &sv_len);
+
+    uint32_t update_len = 0;
+    char *update = ytransaction_state_diff_v1(txn, sv, sv_len, &update_len);
+
+    ytransaction_apply(txn2, update, update_len);
+
+    ybinary_destroy(sv, sv_len);
+    ybinary_destroy(update, update_len);
+
+    // retrieve branch pointers on remote using logical IDs
+    Branch* arr2 = ybranch_get(&arr_id, txn2);
+    Branch* map2 = ybranch_get(&map_id, txn2);
+
+    REQUIRE_EQ(yarray_len(arr2), 1);
+    out = ymap_get(map2, txn2, key);
+    char* val = youtput_read_string(out);
+    REQUIRE(strcmp(val, "value") == 0);
+    youtput_destroy(out);
+
+    ytransaction_commit(txn2);
+    ydoc_destroy(doc2);
     ytransaction_commit(txn);
     ydoc_destroy(doc);
 }

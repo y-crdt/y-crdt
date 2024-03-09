@@ -1,14 +1,15 @@
 use crate::block::{EmbedPrelim, ItemContent, ItemPosition, ItemPtr, Prelim};
 use crate::transaction::TransactionMut;
 use crate::types::{
-    event_keys, Branch, BranchPtr, Entries, EntryChange, Path, SharedRef, ToJson, TypeRef, Value,
+    event_keys, Branch, BranchPtr, Entries, EntryChange, Path, RootRef, SharedRef, ToJson, TypeRef,
+    Value,
 };
 use crate::*;
 use std::borrow::Borrow;
 use std::cell::UnsafeCell;
 use std::collections::{HashMap, HashSet};
 use std::convert::{TryFrom, TryInto};
-use std::ops::{Deref, DerefMut};
+use std::ops::Deref;
 use std::sync::Arc;
 
 /// Collection used to store key-value entries in an unordered manner. Keys are always represented
@@ -53,12 +54,18 @@ use std::sync::Arc;
 /// assert_eq!(map.get(&txn, "key1"), None);
 /// ```
 #[repr(transparent)]
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct MapRef(BranchPtr);
 
+impl RootRef for MapRef {
+    fn type_ref() -> TypeRef {
+        TypeRef::Map
+    }
+}
 impl SharedRef for MapRef {}
 impl Map for MapRef {}
 
+impl DeepObservable for MapRef {}
 impl Observable for MapRef {
     type Event = MapEvent;
 }
@@ -83,9 +90,10 @@ impl AsRef<Branch> for MapRef {
     }
 }
 
-impl AsMut<Branch> for MapRef {
-    fn as_mut(&mut self) -> &mut Branch {
-        self.0.deref_mut()
+impl Eq for MapRef {}
+impl PartialEq for MapRef {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.id() == other.0.id()
     }
 }
 
@@ -114,7 +122,7 @@ impl TryFrom<Value> for MapRef {
 
 pub trait Map: AsRef<Branch> + Sized {
     /// Returns a number of entries stored within current map.
-    fn len<T: ReadTxn>(&self, txn: &T) -> u32 {
+    fn len<T: ReadTxn>(&self, _txn: &T) -> u32 {
         let mut len = 0;
         let inner = self.as_ref();
         for item in inner.map.values() {
@@ -186,7 +194,7 @@ pub trait Map: AsRef<Branch> + Sized {
 
     /// Returns [WeakPrelim] to a given `key`, if it exists in a current map.
     #[cfg(feature = "weak")]
-    fn link<T: ReadTxn>(&self, txn: &T, key: &str) -> Option<crate::WeakPrelim<Self>> {
+    fn link<T: ReadTxn>(&self, _txn: &T, key: &str) -> Option<crate::WeakPrelim<Self>> {
         let ptr = BranchPtr::from(self.as_ref());
         let block = ptr.map.get(key)?;
         let start = StickyIndex::from_id(block.id().clone(), Assoc::Before);
@@ -203,7 +211,7 @@ pub trait Map: AsRef<Branch> + Sized {
     }
 
     /// Checks if an entry with given `key` can be found within current map.
-    fn contains_key<T: ReadTxn>(&self, txn: &T, key: &str) -> bool {
+    fn contains_key<T: ReadTxn>(&self, _txn: &T, key: &str) -> bool {
         if let Some(item) = self.as_ref().map.get(key) {
             !item.is_deleted()
         } else {
@@ -643,19 +651,19 @@ mod test {
             let map = doc.get_or_insert_map("map");
 
             assert_eq!(
-                map.get(&map.transact(), &"key1".to_owned()),
+                map.get(&doc.transact(), &"key1".to_owned()),
                 None,
                 "'key1' entry for peer {} should be removed",
                 doc.client_id()
             );
             assert_eq!(
-                map.get(&map.transact(), &"key2".to_owned()),
+                map.get(&doc.transact(), &"key2".to_owned()),
                 None,
                 "'key2' entry for peer {} should be removed",
                 doc.client_id()
             );
             assert_eq!(
-                map.len(&map.transact()),
+                map.len(&doc.transact()),
                 0,
                 "all entries for peer {} should be removed",
                 doc.client_id()
@@ -690,7 +698,7 @@ mod test {
             let map = doc.get_or_insert_map("map");
 
             assert_eq!(
-                map.get(&map.transact(), &"stuff".to_owned()),
+                map.get(&doc.transact(), &"stuff".to_owned()),
                 Some(Value::from("c3")),
                 "peer {} - map entry resolved to unexpected value",
                 doc.client_id()
@@ -746,7 +754,7 @@ mod test {
             let map = doc.get_or_insert_map("map");
 
             assert_eq!(
-                map.get(&map.transact(), &"key1".to_owned()),
+                map.get(&doc.transact(), &"key1".to_owned()),
                 None,
                 "entry 'key1' on peer {} should be removed",
                 doc.client_id()
@@ -934,7 +942,7 @@ mod test {
     #[test]
     fn observe_deep() {
         let doc = Doc::with_client_id(1);
-        let mut map = doc.get_or_insert_map("map");
+        let map = doc.get_or_insert_map("map");
 
         let paths = Rc::new(RefCell::new(vec![]));
         let calls = Rc::new(RefCell::new(0));
@@ -955,7 +963,7 @@ mod test {
             ArrayPrelim::from(Vec::<String>::default()),
         );
         let nested2 = nested
-            .get(&nested.transact(), "array")
+            .get(&doc.transact(), "array")
             .unwrap()
             .cast::<ArrayRef>()
             .unwrap();

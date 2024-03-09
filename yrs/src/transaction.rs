@@ -1,4 +1,5 @@
 use crate::block::{Item, ItemContent, ItemPtr, Prelim, ID};
+use crate::branch::{Branch, BranchPtr};
 use crate::doc::DocAddr;
 use crate::error::Error;
 use crate::event::SubdocsEvent;
@@ -7,7 +8,7 @@ use crate::id_set::DeleteSet;
 use crate::iter::TxnIterator;
 use crate::slice::BlockSlice;
 use crate::store::{Store, SubdocGuids, SubdocsIter};
-use crate::types::{Branch, BranchPtr, Event, Events, SharedRef, TypePtr, Value};
+use crate::types::{Event, Events, RootRef, SharedRef, TypePtr, Value};
 use crate::update::Update;
 use crate::utils::OptionExt;
 use crate::*;
@@ -59,6 +60,12 @@ pub trait ReadTxn: Sized {
 
     fn encode_diff_v1(&self, state_vector: &StateVector) -> Vec<u8> {
         let mut encoder = EncoderV1::new();
+        self.encode_diff(state_vector, &mut encoder);
+        encoder.to_vec()
+    }
+
+    fn encode_diff_v2(&self, state_vector: &StateVector) -> Vec<u8> {
+        let mut encoder = EncoderV2::new();
         self.encode_diff(state_vector, &mut encoder);
         encoder.to_vec()
     }
@@ -119,10 +126,9 @@ pub trait ReadTxn: Sized {
     /// If a structure under defined `name` already existed, but its type was different it will be
     /// reinterpreted as a text (in such case a sequence component of complex data type will be
     /// interpreted as a list of text chunks).
-    fn get_text(&self, name: &str) -> Option<TextRef> {
-        let store = self.store();
-        let branch = store.get_type(name)?;
-        Some(TextRef::from(branch))
+    #[inline]
+    fn get_text<N: Into<Arc<str>>>(&self, name: N) -> Option<TextRef> {
+        TextRef::root(name).get(self)
     }
 
     /// Returns an [ArrayRef] data structure stored under a given `name`. Array structures are used for
@@ -134,14 +140,13 @@ pub trait ReadTxn: Sized {
     /// If a structure under defined `name` already existed, but its type was different it will be
     /// reinterpreted as an array (in such case a sequence component of complex data type will be
     /// interpreted as a list of inserted values).
-    fn get_array(&self, name: &str) -> Option<ArrayRef> {
-        let store = self.store();
-        let branch = store.get_type(name)?;
-        Some(ArrayRef::from(branch))
+    #[inline]
+    fn get_array<N: Into<Arc<str>>>(&self, name: N) -> Option<ArrayRef> {
+        ArrayRef::root(name).get(self)
     }
 
     /// Returns a [MapRef] data structure stored under a given `name`. Maps are used to store key-value
-    /// pairs associated together. These values can be primitive data (similar but not limited to
+    /// pairs associated. These values can be primitive data (similar but not limited to
     /// a JavaScript Object Notation) as well as other shared types (Yrs maps, arrays, text
     /// structures etc.), enabling to construct a complex recursive tree structures.
     ///
@@ -150,10 +155,73 @@ pub trait ReadTxn: Sized {
     /// If a structure under defined `name` already existed, but its type was different it will be
     /// reinterpreted as a map (in such case a map component of complex data type will be
     /// interpreted as native map).
-    fn get_map(&self, name: &str) -> Option<MapRef> {
-        let store = self.store();
-        let branch = store.get_type(name)?;
-        Some(MapRef::from(branch))
+    #[inline]
+    fn get_map<N: Into<Arc<str>>>(&self, name: N) -> Option<MapRef> {
+        MapRef::root(name).get(self)
+    }
+
+    /// Returns a [XmlFragmentRef] data structure stored under a given `name`. XML elements represent
+    /// nodes of XML document. They can contain attributes (key-value pairs, both of string type)
+    /// and other nested XML elements or text values, which are stored in their insertion
+    /// order.
+    ///
+    /// If not structure under defined `name` existed before, [None] will be returned.
+    ///
+    /// If a structure under defined `name` already existed, but its type was different it will be
+    /// reinterpreted as a XML element (in such case a map component of complex data type will be
+    /// interpreted as map of its attributes, while a sequence component - as a list of its child
+    /// XML nodes).
+    #[inline]
+    fn get_xml_fragment<N: Into<Arc<str>>>(&self, name: N) -> Option<XmlFragmentRef> {
+        XmlFragmentRef::root(name).get(self)
+    }
+}
+
+pub trait WriteTxn: Sized {
+    fn store_mut(&mut self) -> &mut Store;
+    fn subdocs_mut(&mut self) -> &mut Subdocs;
+
+    /// Returns a [TextRef] data structure stored under a given `name`. Text structures are used for
+    /// collaborative text editing: they expose operations to append and remove chunks of text,
+    /// which are free to execute concurrently by multiple peers over remote boundaries.
+    ///
+    /// If no structure under defined `name` existed before, it will be created and returned
+    /// instead.
+    ///
+    /// If a structure under defined `name` already existed, but its type was different it will be
+    /// reinterpreted as a text (in such case a sequence component of complex data type will be
+    /// interpreted as a list of text chunks).
+    fn get_or_insert_text<N: Into<Arc<str>>>(&mut self, name: N) -> TextRef {
+        TextRef::root(name).get_or_create(self)
+    }
+
+    /// Returns a [MapRef] data structure stored under a given `name`. Maps are used to store key-value
+    /// pairs associated. These values can be primitive data (similar but not limited to
+    /// a JavaScript Object Notation) as well as other shared types (Yrs maps, arrays, text
+    /// structures etc.), enabling to construct a complex recursive tree structures.
+    ///
+    /// If no structure under defined `name` existed before, it will be created and returned
+    /// instead.
+    ///
+    /// If a structure under defined `name` already existed, but its type was different it will be
+    /// reinterpreted as a map (in such case a map component of complex data type will be
+    /// interpreted as native map).
+    fn get_or_insert_map<N: Into<Arc<str>>>(&mut self, name: N) -> MapRef {
+        MapRef::root(name).get_or_create(self)
+    }
+
+    /// Returns an [ArrayRef] data structure stored under a given `name`. Array structures are used for
+    /// storing a sequences of elements in ordered manner, positioning given element accordingly
+    /// to its index.
+    ///
+    /// If no structure under defined `name` existed before, it will be created and returned
+    /// instead.
+    ///
+    /// If a structure under defined `name` already existed, but its type was different it will be
+    /// reinterpreted as an array (in such case a sequence component of complex data type will be
+    /// interpreted as a list of inserted values).
+    fn get_or_insert_array<N: Into<Arc<str>>>(&mut self, name: N) -> ArrayRef {
+        ArrayRef::root(name).get_or_create(self)
     }
 
     /// Returns a [XmlFragmentRef] data structure stored under a given `name`. XML elements represent
@@ -161,54 +229,16 @@ pub trait ReadTxn: Sized {
     /// as well as other nested XML elements or text values, which are stored in their insertion
     /// order.
     ///
-    /// If not structure under defined `name` existed before, [None] will be returned.
+    /// If no structure under defined `name` existed before, it will be created and returned
+    /// instead.
     ///
     /// If a structure under defined `name` already existed, but its type was different it will be
     /// reinterpreted as a XML element (in such case a map component of complex data type will be
     /// interpreted as map of its attributes, while a sequence component - as a list of its child
     /// XML nodes).
-    fn get_xml_fragment(&self, name: &str) -> Option<XmlFragmentRef> {
-        let store = self.store();
-        let branch = store.get_type(name)?;
-        Some(XmlFragmentRef::from(branch))
+    fn get_or_insert_xml_fragment<N: Into<Arc<str>>>(&mut self, name: N) -> XmlFragmentRef {
+        XmlFragmentRef::root(name).get_or_create(self)
     }
-
-    /// Returns a [XmlElementRef] data structure stored under a given `name`. XML elements represent
-    /// nodes of XML document. They can contain attributes (key-value pairs, both of string type)
-    /// as well as other nested XML elements or text values, which are stored in their insertion
-    /// order.
-    ///
-    /// If not structure under defined `name` existed before, [None] will be returned.
-    ///
-    /// If a structure under defined `name` already existed, but its type was different it will be
-    /// reinterpreted as a XML element (in such case a map component of complex data type will be
-    /// interpreted as map of its attributes, while a sequence component - as a list of its child
-    /// XML nodes).
-    fn get_xml_element(&self, name: &str) -> Option<XmlElementRef> {
-        let store = self.store();
-        let branch = store.get_type(name)?;
-        Some(XmlElementRef::from(branch))
-    }
-
-    /// Returns a [XmlTextRef] data structure stored under a given `name`. Text structures are used
-    /// for collaborative text editing: they expose operations to append and remove chunks of text,
-    /// which are free to execute concurrently by multiple peers over remote boundaries.
-    ///
-    /// If not structure under defined `name` existed before, [None] will be returned.
-    ///
-    /// If a structure under defined `name` already existed, but its type was different it will be
-    /// reinterpreted as a text (in such case a sequence component of complex data type will be
-    /// interpreted as a list of text chunks).
-    fn get_xml_text(&self, name: &str) -> Option<XmlTextRef> {
-        let store = self.store();
-        let branch = store.get_type(name)?;
-        Some(XmlTextRef::from(branch))
-    }
-}
-
-pub trait WriteTxn: Sized {
-    fn store_mut(&mut self) -> &mut Store;
-    fn subdocs_mut(&mut self) -> &mut Subdocs;
 }
 
 /// A very lightweight read-only transaction. These transactions are guaranteed to not modify the
@@ -264,6 +294,7 @@ pub struct TransactionMut<'doc> {
     pub(crate) changed_parent_types: Vec<BranchPtr>,
     pub(crate) subdocs: Option<Box<Subdocs>>,
     pub(crate) origin: Option<Origin>,
+    doc: Doc,
     committed: bool,
 }
 
@@ -292,10 +323,11 @@ impl<'doc> Drop for TransactionMut<'doc> {
 }
 
 impl<'doc> TransactionMut<'doc> {
-    pub(crate) fn new(store: AtomicRefMut<'doc, Store>, origin: Option<Origin>) -> Self {
+    pub(crate) fn new(doc: Doc, store: AtomicRefMut<'doc, Store>, origin: Option<Origin>) -> Self {
         let begin_timestamp = store.blocks.get_state_vector();
         TransactionMut {
             store,
+            doc,
             origin,
             before_state: begin_timestamp,
             merge_blocks: Vec::default(),
@@ -307,6 +339,10 @@ impl<'doc> TransactionMut<'doc> {
             subdocs: None,
             committed: false,
         }
+    }
+
+    pub fn doc(&self) -> &Doc {
+        &self.doc
     }
 
     /// Corresponding document's state vector at the moment when current transaction was created.
@@ -1015,6 +1051,12 @@ impl<'a> From<&'a [u8]> for Origin {
 impl<'a> From<&'a str> for Origin {
     fn from(v: &'a str) -> Self {
         Origin(SmallVec::from_slice(v.as_ref()))
+    }
+}
+
+impl From<String> for Origin {
+    fn from(v: String) -> Self {
+        Origin(SmallVec::from(Vec::from(v)))
     }
 }
 

@@ -1,12 +1,15 @@
 use crate::block::{ItemContent, ItemPtr, Prelim, Unused};
 use crate::block_iter::BlockIter;
+use crate::branch::{Branch, BranchPtr};
 use crate::encoding::read::Error;
 use crate::transaction::TransactionMut;
-use crate::types::{Branch, BranchPtr};
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
-use crate::{ReadTxn, WriteTxn, ID};
+use crate::{BranchID, ReadTxn, WriteTxn, ID};
+use serde::de::Visitor;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashSet;
+use std::fmt::Formatter;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -396,10 +399,10 @@ impl std::fmt::Display for Move {
 /// let a = pos.get_offset(&txn).unwrap();
 /// assert_eq!(a.index, 4);
 /// ```
-#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub struct StickyIndex {
     scope: IndexScope,
-    /// If true - associate to the right block. Otherwise associate to the left one.
+    /// If true - associate to the right block. Otherwise, associate to the left one.
     pub assoc: Assoc,
 }
 
@@ -412,7 +415,7 @@ impl StickyIndex {
         Self::new(IndexScope::Relative(id), assoc)
     }
 
-    pub fn from_type<T, B>(txn: &T, branch: &B, assoc: Assoc) -> Self
+    pub fn from_type<T, B>(_txn: &T, branch: &B, assoc: Assoc) -> Self
     where
         T: ReadTxn,
         B: AsRef<Branch>,
@@ -421,9 +424,10 @@ impl StickyIndex {
         if let Some(ptr) = branch.item {
             let id = ptr.id().clone();
             Self::new(IndexScope::Nested(id), assoc)
-        } else {
-            let name = txn.store().get_type_key(BranchPtr::from(branch)).unwrap();
+        } else if let Some(name) = &branch.name {
             Self::new(IndexScope::Root(name.clone()), assoc)
+        } else {
+            unreachable!()
         }
     }
 
@@ -554,7 +558,7 @@ impl StickyIndex {
     ) -> Option<Self> {
         if assoc == Assoc::Before {
             if index == 0 {
-                let context = IndexScope::from_branch(branch, txn);
+                let context = IndexScope::from_branch(branch);
                 return Some(StickyIndex::new(context, assoc));
             }
             index -= 1;
@@ -569,7 +573,7 @@ impl StickyIndex {
                 let context = if let Some(ptr) = walker.next_item() {
                     IndexScope::Relative(ptr.last_id())
                 } else {
-                    IndexScope::from_branch(branch, txn)
+                    IndexScope::from_branch(branch)
                 };
                 Some(Self::new(context, assoc))
             } else {
@@ -581,7 +585,7 @@ impl StickyIndex {
                 id.clock += walker.rel();
                 IndexScope::Relative(id)
             } else {
-                IndexScope::from_branch(branch, txn)
+                IndexScope::from_branch(branch)
             };
             Some(Self::new(context, assoc))
         }
@@ -643,10 +647,10 @@ impl std::fmt::Display for StickyIndex {
 ///
 /// Using [ID]s guarantees that corresponding [StickyIndex] doesn't shift under incoming
 /// concurrent updates.
-#[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum IndexScope {
     /// [StickyIndex] is relative to a given block [ID]. This happens whenever we set [StickyIndex]
-    /// somewhere inside of the non-empty shared collection.
+    /// somewhere inside the non-empty shared collection.
     Relative(ID),
     /// If a containing collection is a nested y-type, which is empty, this case allows us to
     /// identify that nested type.
@@ -657,12 +661,10 @@ pub enum IndexScope {
 }
 
 impl IndexScope {
-    pub fn from_branch<T: ReadTxn>(branch: BranchPtr, txn: &T) -> Self {
-        if let Some(ptr) = branch.item {
-            IndexScope::Nested(*ptr.id())
-        } else {
-            let root = txn.store().get_type_key(branch).unwrap().clone();
-            IndexScope::Root(root)
+    pub fn from_branch(branch: BranchPtr) -> Self {
+        match branch.id() {
+            BranchID::Nested(id) => IndexScope::Nested(id),
+            BranchID::Root(name) => IndexScope::Root(name),
         }
     }
 }
@@ -732,6 +734,55 @@ impl Default for Assoc {
     }
 }
 
+impl Serialize for Assoc {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            Assoc::After => serializer.serialize_i8(0),
+            Assoc::Before => serializer.serialize_i8(-1),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for Assoc {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct AssocVisitor;
+        impl Visitor<'_> for AssocVisitor {
+            type Value = Assoc;
+
+            fn expecting(&self, formatter: &mut Formatter) -> std::fmt::Result {
+                write!(formatter, "Assoc")
+            }
+
+            #[inline]
+            fn visit_u64<E>(self, _: u64) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(Assoc::After)
+            }
+
+            #[inline]
+            fn visit_i64<E>(self, v: i64) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                if v < 0 {
+                    Ok(Assoc::Before)
+                } else {
+                    Ok(Assoc::After)
+                }
+            }
+        }
+        deserializer.deserialize_i64(AssocVisitor)
+    }
+}
+
 impl Encode for Assoc {
     fn encode<E: Encoder>(&self, encoder: &mut E) {
         match self {
@@ -797,9 +848,9 @@ mod test {
     use crate::updates::encoder::Encode;
     use crate::{Doc, IndexedSequence, StickyIndex, Text, TextRef, Transact};
 
-    fn check_sticky_indexes(text: &TextRef) {
+    fn check_sticky_indexes(doc: &Doc, text: &TextRef) {
         // test if all positions are encoded and restored correctly
-        let mut txn = text.transact_mut();
+        let mut txn = doc.transact_mut();
         let len = text.len(&txn);
         for i in 0..len {
             // for all types of associations..
@@ -830,7 +881,7 @@ mod test {
             txt.insert(&mut txn, 0, "x");
         }
 
-        check_sticky_indexes(&txt);
+        check_sticky_indexes(&doc, &txt);
     }
 
     #[test]
@@ -839,7 +890,7 @@ mod test {
         let txt = doc.get_or_insert_text("test");
 
         txt.insert(&mut doc.transact_mut(), 0, "abc");
-        check_sticky_indexes(&txt);
+        check_sticky_indexes(&doc, &txt);
     }
 
     #[test]
@@ -854,7 +905,7 @@ mod test {
             txt.insert(&mut txn, 0, "xyz");
         }
 
-        check_sticky_indexes(&txt);
+        check_sticky_indexes(&doc, &txt);
     }
 
     #[test]
@@ -863,7 +914,7 @@ mod test {
         let txt = doc.get_or_insert_text("test");
 
         txt.insert(&mut doc.transact_mut(), 0, "1");
-        check_sticky_indexes(&txt);
+        check_sticky_indexes(&doc, &txt);
     }
 
     #[test]
@@ -877,14 +928,14 @@ mod test {
             txt.insert(&mut txn, 0, "1");
         }
 
-        check_sticky_indexes(&txt);
+        check_sticky_indexes(&doc, &txt);
     }
 
     #[test]
     fn sticky_index_case_6() {
         let doc = Doc::with_client_id(1);
         let txt = doc.get_or_insert_text("test");
-        check_sticky_indexes(&txt);
+        check_sticky_indexes(&doc, &txt);
     }
 
     #[test]

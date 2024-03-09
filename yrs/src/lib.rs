@@ -104,12 +104,13 @@
 //! (eg. image binaries or [ArrayRef]s that we could interpret in example as nested tables).
 //!
 //! ```rust
-//! use yrs::{Any, Array, ArrayPrelim, Doc, GetString, Text, Transact};
+//! use yrs::{Any, Array, ArrayPrelim, Doc, GetString, Text, Transact, WriteTxn, XmlFragment, XmlTextPrelim};
 //! use yrs::types::Attrs;
 //!
 //! let doc = Doc::new();
-//! let xml = doc.get_or_insert_xml_text("article");
 //! let mut txn = doc.transact_mut();
+//! let f = txn.get_or_insert_xml_fragment("article");
+//! let xml = f.insert(&mut txn, 0, XmlTextPrelim::new(""));
 //!
 //! let bold = Attrs::from([("b".into(), true.into())]);
 //! let italic = Attrs::from([("i".into(), true.into())]);
@@ -359,7 +360,7 @@
 //! as well as show the differences between them:
 //!
 //! ```rust
-//! use yrs::{Doc, GetString, Options, ReadTxn, Text, Transact, Update};
+//! use yrs::{Doc, GetString, Options, ReadTxn, Text, Transact, Update, WriteTxn, XmlFragment, XmlTextPrelim};
 //! use yrs::types::Attrs;
 //! use yrs::types::text::{Diff, YChange};
 //! use yrs::updates::decoder::Decode;
@@ -369,8 +370,9 @@
 //!     skip_gc: true,  // in order to support revisions we cannot garbage collect deleted blocks
 //!     ..Options::default()
 //! });
-//! let text = doc.get_or_insert_xml_text("article");
 //! let mut txn = doc.transact_mut();
+//! let f = txn.get_or_insert_xml_fragment("article");
+//! let text = f.insert(&mut txn, 0, XmlTextPrelim::new(""));
 //!
 //! const INIT: &str = "hello world";
 //! text.push(&mut txn, INIT);
@@ -391,9 +393,10 @@
 //!
 //! // restore the past state
 //! let doc = Doc::new();
-//! let text = doc.get_or_insert_xml_text("article");
 //! let mut txn = doc.transact_mut();
+//! let f = txn.get_or_insert_xml_fragment("article");
 //! txn.apply_update(Update::decode_v1(&update).unwrap());
+//! let text = f.get(&mut txn, 0).unwrap().into_xml_text().unwrap();
 //!
 //! assert_eq!(text.get_string(&txn), INIT);
 //! ```
@@ -447,6 +450,48 @@
 //! in multiple places. Same rule concerns primitive types (they will eventually be serialized and
 //! deserialized as unique independent objects), integrated types or sub-documents.
 //!
+//! # Shared collection hooks
+//!
+//! While type like [TextRef], [MapRef] etc. refer to addresses of objects living in memory,
+//! sometime you'd like to be able to uniquely identify the same collection across its different
+//! replicas living on other peers. This is possible via hooks:
+//!
+//! ```rust
+//! use yrs::{Array, ArrayRef, Doc, Hook, MapPrelim, ReadTxn, RootRef, SharedRef, Transact, Update};
+//! use yrs::types::ToJson;
+//! use yrs::updates::decoder::Decode;
+//!
+//! // create a logical identifier to a root type
+//! let root = ArrayRef::root("root");
+//!
+//! let local = Doc::with_client_id(1);
+//! let local_array = root.get_or_create(&mut local.transact_mut());
+//! assert_eq!(local_array.hook(), Hook::from(root.clone())); // another way to get hook for existing type
+//!
+//! let local_map = local_array.push_back(&mut local.transact_mut(), MapPrelim::from([("key", "old")]));
+//! let nested = local_map.hook(); // logical identifier to a nested shared type
+//!
+//! let remote = Doc::with_client_id(2);
+//! let remote_array = root.get_or_create(&mut local.transact_mut());
+//! // we haven't synchronized yet, so nested element doesn't exist on remote
+//! assert!(nested.get(&remote.transact()).is_none());
+//!
+//! // synchronize the changes
+//! {
+//!     let mut txn = remote.transact_mut();
+//!     let update = local.transact().encode_state_as_update_v1(&txn.state_vector());
+//!     txn.apply_update(Update::decode_v1(&update).unwrap());
+//! }
+//!
+//! // after synchronizing, we can now instantiate instance of the same logical type
+//! let remote_map = nested.get(&remote.transact()).unwrap();
+//! assert_eq!(local_map.hook(), remote_map.hook());
+//! assert_eq!(local_map.to_json(&local.transact()), remote_map.to_json(&remote.transact()));
+//! ```
+//!
+//! Logical references are serializable. They also can help to avoid segfaults in cases when we hold
+//! an unsafe reference to a nested collection that has been already deleted by concurrent operation.
+//!
 //! # Transaction event lifecycle
 //!
 //! Yrs provides a variety of lifecycle events, which enable users to react on various situations
@@ -490,7 +535,7 @@
 mod alt;
 pub mod block;
 mod block_store;
-mod doc;
+pub mod doc;
 mod event;
 mod id_set;
 mod store;
@@ -503,6 +548,7 @@ mod utils;
 pub mod any;
 pub mod atomic;
 mod block_iter;
+pub mod branch;
 pub mod encoding;
 mod error;
 mod gc;
@@ -523,6 +569,10 @@ pub use crate::alt::{
 };
 pub use crate::any::Any;
 pub use crate::block::ID;
+pub use crate::branch::BranchID;
+pub use crate::branch::Hook;
+pub use crate::branch::Nested;
+pub use crate::branch::Root;
 pub use crate::doc::Doc;
 pub use crate::doc::OffsetKind;
 pub use crate::doc::Options;
@@ -567,6 +617,8 @@ pub use crate::types::xml::XmlTextRef;
 pub use crate::types::DeepObservable;
 pub use crate::types::GetString;
 pub use crate::types::Observable;
+pub use crate::types::RootRef;
+pub use crate::types::SharedRef;
 pub use crate::types::Value;
 pub use crate::update::Update;
 use rand::RngCore;

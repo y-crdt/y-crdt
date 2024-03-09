@@ -288,7 +288,7 @@ impl<'a, E> Drop for CallbacksMut<'a, E> {
 /// If implicit callback unsubscribe on drop is undesired, this structure can be cast [into](Subscription::into)
 /// [SubscriptionId] which is an identifier of the same subscription, which in turn must be used
 /// manually via [Observer::unsubscribe] to perform usubscribe.
-#[repr(C)]
+#[repr(transparent)]
 pub struct Subscription {
     callback: Arc<dyn std::any::Any>,
 }

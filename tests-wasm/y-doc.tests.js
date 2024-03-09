@@ -1,4 +1,4 @@
-import { exchangeUpdates } from './testHelper.js' // eslint-disable-line
+import {exchangeUpdates} from './testHelper.js' // eslint-disable-line
 
 import * as Y from 'ywasm'
 import * as t from 'lib0/testing'
@@ -12,7 +12,7 @@ export const testOnUpdate = tc => {
     text1.insert(0, 'hello')
     let update = Y.encodeStateAsUpdate(d1)
 
-    const d2 = new Y.YDoc(2)
+    const d2 = new Y.YDoc({clientID: 2})
     const text2 = d2.getText('text')
     let actual;
     let origin;
@@ -49,7 +49,7 @@ export const testOnUpdateV2 = tc => {
     text1.insert(0, 'hello')
     let expected = Y.encodeStateAsUpdateV2(d1)
 
-    const d2 = new Y.YDoc(2)
+    const d2 = new Y.YDoc({clientID: 2})
     const text2 = d2.getText('text')
     let actual;
     const sub = d2.onUpdateV2(e => actual = e);
@@ -77,23 +77,28 @@ export const testOnAfterTransaction = tc => {
     const doc = new Y.YDoc({clientID: 1})
     const text = doc.getText('text')
     let event;
-    const sub = doc.onAfterTransaction(e => event = e);
+    const sub = doc.onAfterTransaction(txn => {
+        let beforeState = txn.beforeState
+        let afterState = txn.afterState
+        let deleteSet = txn.deleteSet
+        event = {beforeState, afterState, deleteSet}
+    });
 
     text.insert(0, 'hello world')
 
     t.compare(event.beforeState, new Map());
     let state = new Map()
-    state.set(1n, 11)
+    state.set(1, 11)
     t.compare(event.afterState, state);
     t.compare(event.deleteSet, new Map());
 
     event = null
-    text.delete( 2, 7)
+    text.delete(2, 7)
 
     t.compare(event.beforeState, state);
     t.compare(event.afterState, state);
     state = new Map()
-    state.set(1n, [[2,7]])
+    state.set(1, [[2, 7]])
     t.compare(event.deleteSet, state);
 
     sub.free()
@@ -116,8 +121,8 @@ export const testSnapshots = tc => {
 
     const delta = text.toDelta(next, prev)
     t.compare(delta, [
-        { insert: 'hello' },
-        { insert: ' world', attributes: { ychange: { type: 'added' } } }
+        {insert: 'hello'},
+        {insert: ' world', attributes: {ychange: {type: 'added'}}}
     ])
 }
 
@@ -132,7 +137,7 @@ export const testSnapshotState = tc => {
     txt1.insert(5, ' world')
     const state = Y.encodeStateFromSnapshotV1(d1, prev)
 
-    const d2 = new Y.YDoc(2)
+    const d2 = new Y.YDoc({clientID: 2})
     const txt2 = d2.getText('text')
     Y.applyUpdate(d2, state)
 
@@ -157,7 +162,7 @@ export const testSubdoc = tc => {
             event = [added, removed, loaded]
         })
         const subdocs = doc.getMap('mysubdocs')
-        const docA = new Y.YDoc({ guid: 'a' })
+        const docA = new Y.YDoc({guid: 'a'})
         docA.load()
         subdocs.set('a', docA)
         t.compare(event, [['a'], [], ['a']])
@@ -172,12 +177,12 @@ export const testSubdoc = tc => {
         subdocs.get('a').load()
         t.compare(event, [[], [], ['a']])
 
-        subdocs.set('b', new Y.YDoc({ guid: 'a', shouldLoad: false }))
+        subdocs.set('b', new Y.YDoc({guid: 'a', shouldLoad: false}))
         t.compare(event, [['a'], [], []])
         subdocs.get('b').load()
         t.compare(event, [[], [], ['a']])
 
-        const docC = new Y.YDoc({ guid: 'c' })
+        const docC = new Y.YDoc({guid: 'c'})
         docC.load()
         subdocs.set('c', docC)
         t.compare(event, [['c'], [], ['c']])
@@ -279,7 +284,7 @@ export const testRoots = tc => {
 
     const roots = d1.roots()
         .sort((a, b) => a[0].localeCompare(b[0]))
-        .map(([k,v]) => [k, v.constructor])
+        .map(([k, v]) => [k, v.constructor])
     t.compare(roots, [
         ['a', Y.YMap],
         ['b', Y.YText],
@@ -292,4 +297,40 @@ export const testRoots = tc => {
     let d2 = new Y.YDoc()
     exchangeUpdates([d1, d2])
     t.compare(d2.roots(), [['a', undefined]])
+}
+
+/**
+ * @param {t.TestCase} tc
+ */
+export const testIds = tc => {
+    const d1 = new Y.YDoc()
+    const a1 = d1.getArray('a')
+
+    const d2 = new Y.YDoc()
+    d2.getArray('a') // root types need to be pre-initialized
+
+    const m1 = new Y.YMap({'key1': 'value1'})
+    a1.push([m1]) // set nested type on a first doc
+
+    const arrayId = a1.id
+    const mapId = m1.id
+
+    // sync
+    exchangeUpdates([d1, d2])
+
+    // resolve instances using identifiers
+    const m2 = d2.transact(tx => tx.get(mapId))
+
+    t.compare(m2.toJson(), {'key1': 'value1'})
+
+    const a2 = d2.transact(tx => tx.get(arrayId))
+
+    // modify instance on remote end and sync
+    m2.set('key1', 'value2')
+    a2.insert(0, ['abc'])
+
+    exchangeUpdates([d1, d2])
+
+    // check if first doc has correctly updated values
+    t.compare(a1.toJson(), ['abc', {'key1': 'value2'}])
 }

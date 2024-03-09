@@ -16,11 +16,11 @@ weak = []
 [dependencies]
 thiserror = "1"
 rand = { version = "0.7.0", features = ["wasm-bindgen"] }
-smallstr = { version = "0.3", features = ["union"]}
-smallvec = { version = "1.11", features = ["union", "const_generics", "const_new"]}
+smallstr = { version = "0.3", features = ["union"] }
+smallvec = { version = "1.11", features = ["union", "const_generics", "const_new"] }
 atomic_refcell = "0.1"
 arc-swap = "1.6"
-serde = { version = "1.0" }
+serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
 
 [dev-dependencies]

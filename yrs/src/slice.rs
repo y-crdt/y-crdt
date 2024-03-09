@@ -1,7 +1,7 @@
 use crate::block::{ItemPtr, BLOCK_GC_REF_NUMBER, GC, HAS_ORIGIN, HAS_RIGHT_ORIGIN};
 use crate::types::TypePtr;
 use crate::updates::encoder::Encoder;
-use crate::{Store, ID};
+use crate::ID;
 use std::ops::Deref;
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -63,9 +63,9 @@ impl BlockSlice {
         }
     }
 
-    pub fn encode<E: Encoder>(&self, encoder: &mut E, store: Option<&Store>) {
+    pub fn encode<E: Encoder>(&self, encoder: &mut E) {
         match self {
-            BlockSlice::Item(s) => s.encode(encoder, store),
+            BlockSlice::Item(s) => s.encode(encoder),
             BlockSlice::GC(s) => s.encode(encoder),
         }
     }
@@ -195,7 +195,7 @@ impl ItemSlice {
             && id.clock <= myself.clock + self.end
     }
 
-    pub fn encode<E: Encoder>(&self, encoder: &mut E, store: Option<&Store>) {
+    pub fn encode<E: Encoder>(&self, encoder: &mut E) {
         let item = self.ptr.deref();
         let mut info = item.info();
         let origin = if self.adjacent_left() {
@@ -222,8 +222,7 @@ impl ItemSlice {
                     if let Some(block) = branch.item {
                         encoder.write_parent_info(false);
                         encoder.write_left_id(block.id());
-                    } else if let Some(store) = store {
-                        let name = store.get_type_key(*branch).unwrap();
+                    } else if let Some(name) = branch.name.as_deref() {
                         encoder.write_parent_info(true);
                         encoder.write_string(name);
                     }

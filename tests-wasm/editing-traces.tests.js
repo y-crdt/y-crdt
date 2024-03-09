@@ -8,7 +8,7 @@ import * as zlib from 'zlib'
  * @param {String} filename
  */
 const run = (tc, filename) => {
-    const { startContent, endContent, txns } = JSON.parse(
+    const {startContent, endContent, txns} = JSON.parse(
         filename.endsWith('.gz')
             ? zlib.gunzipSync(fs.readFileSync(filename))
             : fs.readFileSync(filename, 'utf-8')
@@ -20,7 +20,7 @@ const run = (tc, filename) => {
     }
     const start = performance.now()
     for (const {patches} of txns) {
-        let txn = doc.writeTransaction()
+        let txn = doc.beginTransaction()
         for (const [pos, del, chunk] of patches) {
             if (del !== 0) {
                 text.delete(pos, del, txn)
@@ -33,7 +33,7 @@ const run = (tc, filename) => {
         txn.free()
     }
     const end = performance.now()
-    console.log('execution time: ', (end-start), 'milliseconds')
+    console.log('execution time: ', (end - start), 'milliseconds')
 
     const content = text.toString()
     t.compareStrings(content, endContent)
