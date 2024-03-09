@@ -2457,7 +2457,7 @@ struct YBranchId ybranch_id(const Branch *branch);
  * Returned pointer may still point to deleted collection. In such case a subsequent `ybranch_alive`
  * function call is required.
  */
-const Branch *ybranch_get(const struct YBranchId *branch_id, YTransaction *txn);
+Branch *ybranch_get(const struct YBranchId *branch_id, YTransaction *txn);
 
 /**
  * Check if current branch is still alive (returns `Y_TRUE`, otherwise `Y_FALSE`).

@@ -5247,7 +5247,7 @@ pub unsafe extern "C" fn ybranch_id(branch: *const Branch) -> YBranchId {
 pub unsafe extern "C" fn ybranch_get(
     branch_id: *const YBranchId,
     txn: *mut Transaction,
-) -> *const Branch {
+) -> *mut Branch {
     let txn = txn.as_ref().unwrap();
     let branch_id = branch_id.as_ref().unwrap();
     let client_or_len = branch_id.client_or_len;
@@ -5259,7 +5259,7 @@ pub unsafe extern "C" fn ybranch_get(
     };
 
     match ptr {
-        None => null(),
+        None => null_mut(),
         Some(branch_ptr) => branch_ptr.into_raw_branch(),
     }
 }
