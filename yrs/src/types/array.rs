@@ -524,8 +524,6 @@ mod test {
         any, Any, Array, ArrayPrelim, Assoc, Doc, Map, MapRef, Observable, SharedRef, StateVector,
         Transact, Update, ID,
     };
-    use rand::prelude::StdRng;
-    use rand::Rng;
     use std::cell::{Cell, RefCell};
     use std::collections::{HashMap, HashSet};
     use std::ops::Deref;
@@ -1036,6 +1034,7 @@ mod test {
     use crate::transaction::ReadTxn;
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encoder, EncoderV1};
+    use fastrand::Rng;
     use std::sync::atomic::{AtomicI64, Ordering};
     use std::time::Duration;
 
@@ -1045,8 +1044,8 @@ mod test {
         UNIQUE_NUMBER.fetch_add(1, Ordering::SeqCst)
     }
 
-    fn array_transactions() -> [Box<dyn Fn(&mut Doc, &mut StdRng)>; 5] {
-        fn move_one(doc: &mut Doc, rng: &mut StdRng) {
+    fn array_transactions() -> [Box<dyn Fn(&mut Doc, &mut Rng)>; 5] {
+        fn move_one(doc: &mut Doc, rng: &mut Rng) {
             let yarray = doc.get_or_insert_array("array");
             let mut txn = doc.transact_mut();
             if yarray.len(&txn) != 0 {
@@ -1073,7 +1072,7 @@ mod test {
                 }
             }
         }
-        fn insert(doc: &mut Doc, rng: &mut StdRng) {
+        fn insert(doc: &mut Doc, rng: &mut Rng) {
             let yarray = doc.get_or_insert_array("array");
             let mut txn = doc.transact_mut();
             let unique_number = get_unique_number();
@@ -1098,7 +1097,7 @@ mod test {
             }
         }
 
-        fn insert_type_array(doc: &mut Doc, rng: &mut StdRng) {
+        fn insert_type_array(doc: &mut Doc, rng: &mut Rng) {
             let yarray = doc.get_or_insert_array("array");
             let mut txn = doc.transact_mut();
             let pos = rng.between(0, yarray.len(&txn));
@@ -1107,7 +1106,7 @@ mod test {
             assert_eq!(array2.to_json(&txn), Any::Array(expected));
         }
 
-        fn insert_type_map(doc: &mut Doc, rng: &mut StdRng) {
+        fn insert_type_map(doc: &mut Doc, rng: &mut Rng) {
             let yarray = doc.get_or_insert_array("array");
             let mut txn = doc.transact_mut();
             let pos = rng.between(0, yarray.len(&txn));
@@ -1117,14 +1116,14 @@ mod test {
             map.insert(&mut txn, "someprop".to_string(), 44);
         }
 
-        fn delete(doc: &mut Doc, rng: &mut StdRng) {
+        fn delete(doc: &mut Doc, rng: &mut Rng) {
             let yarray = doc.get_or_insert_array("array");
             let mut txn = doc.transact_mut();
             let len = yarray.len(&txn);
             if len > 0 {
                 let pos = rng.between(0, len - 1);
                 let del_len = rng.between(1, 2.min(len - pos));
-                if rng.gen_bool(0.5) {
+                if rng.bool() {
                     if let Value::YArray(array2) = yarray.get(&txn, pos).unwrap() {
                         let pos = rng.between(0, array2.len(&txn) - 1);
                         let del_len = rng.between(0, 2.min(array2.len(&txn) - pos));
@@ -1573,7 +1572,6 @@ mod test {
 
     #[test]
     fn multi_threading() {
-        use rand::thread_rng;
         use std::sync::{Arc, RwLock};
         use std::thread::{sleep, spawn};
 
@@ -1582,7 +1580,7 @@ mod test {
         let d2 = doc.clone();
         let h2 = spawn(move || {
             for _ in 0..10 {
-                let millis = thread_rng().gen_range(1, 20);
+                let millis = fastrand::u64(1..20);
                 sleep(Duration::from_millis(millis));
 
                 let doc = d2.write().unwrap();
@@ -1595,7 +1593,7 @@ mod test {
         let d3 = doc.clone();
         let h3 = spawn(move || {
             for _ in 0..10 {
-                let millis = thread_rng().gen_range(1, 20);
+                let millis = fastrand::u64(1..20);
                 sleep(Duration::from_millis(millis));
 
                 let doc = d3.write().unwrap();

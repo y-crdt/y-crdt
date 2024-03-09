@@ -6,9 +6,7 @@ use crate::transaction::ReadTxn;
 use crate::updates::decoder::{Decode, Decoder, DecoderV1};
 use crate::updates::encoder::{Encode, Encoder, EncoderV1};
 use crate::{Doc, StateVector, Transact, Update};
-use rand::distributions::Alphanumeric;
-use rand::prelude::{SliceRandom, StdRng};
-use rand::{random, Rng, RngCore, SeedableRng};
+use fastrand::Rng;
 use std::cell::{RefCell, RefMut};
 use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
@@ -38,36 +36,36 @@ const MSG_SYNC_UPDATE: usize = 2;
 
 pub fn run_scenario<F>(mut seed: u64, mods: &[F], users: usize, iterations: usize)
 where
-    F: Fn(&mut Doc, &mut StdRng),
+    F: Fn(&mut Doc, &mut Rng),
 {
     if seed == 0 {
-        seed = random();
+        seed = fastrand::get_seed();
         println!("run scenario with seed: {}", seed);
     }
 
-    let rng = StdRng::seed_from_u64(seed);
+    let rng = Rng::with_seed(seed);
     let tc = TestConnector::with_peer_num(rng, users as u64);
     for _ in 0..iterations {
-        if tc.0.borrow_mut().rng.gen_range(0, 100) <= 2 {
+        if tc.0.borrow_mut().rng.u32(0..100) <= 2 {
             // 2% chance to disconnect/reconnect a random user
-            if tc.0.borrow_mut().rng.gen_bool(0.5) {
+            if tc.0.borrow_mut().rng.bool() {
                 tc.disconnect_random();
             } else {
                 tc.reconnect_random();
             }
-        } else if tc.0.borrow_mut().rng.gen_range(0, 100) <= 1 {
+        } else if tc.0.borrow_mut().rng.u32(0..100) <= 1 {
             // 1% chance to flush all
             tc.flush_all();
-        } else if tc.0.borrow_mut().rng.gen_range(0, 100) <= 50 {
+        } else if tc.0.borrow_mut().rng.u32(0..100) <= 50 {
             tc.flush_random();
         }
 
         {
             let inner = &mut *tc.0.borrow_mut();
             let rng = &mut inner.rng;
-            let idx = rng.gen_range(0, inner.peers.len());
+            let idx = rng.usize(0..inner.peers.len());
             let peer = &mut inner.peers[idx];
-            let test = mods.choose(rng).unwrap();
+            let test = rng.choice(mods).unwrap();
             test(&mut peer.doc, rng);
         };
     }
@@ -78,7 +76,7 @@ where
 pub struct TestConnector(Rc<RefCell<Inner>>);
 
 struct Inner {
-    rng: StdRng,
+    rng: Rng,
     peers: Vec<TestPeer>,
     /// Maps all Client IDs to indexes in the `docs` vector.
     all: HashMap<ClientID, usize>,
@@ -88,7 +86,7 @@ struct Inner {
 
 impl TestConnector {
     /// Create new [TestConnector] with provided randomizer.
-    pub fn with_rng(rng: StdRng) -> Self {
+    pub fn with_rng(rng: Rng) -> Self {
         TestConnector(Rc::new(RefCell::new(Inner {
             rng,
             peers: Vec::new(),
@@ -98,7 +96,7 @@ impl TestConnector {
     }
 
     /// Create a new [TestConnector] with pre-initialized number of peers.
-    pub fn with_peer_num(rng: StdRng, peer_num: u64) -> Self {
+    pub fn with_peer_num(rng: Rng, peer_num: u64) -> Self {
         let mut tc = Self::with_rng(rng);
         for client_id in 0..peer_num {
             let peer = tc.create_peer(client_id as ClientID);
@@ -110,7 +108,7 @@ impl TestConnector {
     }
 
     /// Returns random number generator attached to current [TestConnector].
-    pub fn rng(&self) -> RefMut<StdRng> {
+    pub fn rng(&self) -> RefMut<Rng> {
         let inner = self.0.borrow_mut();
         RefMut::map(inner, |i| &mut i.rng)
     }
@@ -320,11 +318,11 @@ impl TestConnector {
                 }
             })
             .collect();
-        let (receiver_idx, sender_idx) = pairs.choose(&mut inner.rng)?;
+        let (receiver_idx, sender_idx) = inner.rng.choice(pairs)?;
         unsafe {
             let ptr = inner.peers.as_ptr() as *mut TestPeer;
-            let receiver = ptr.offset(*receiver_idx as isize);
-            let sender = ptr.offset(*sender_idx as isize);
+            let receiver = ptr.offset(receiver_idx as isize);
+            let sender = ptr.offset(sender_idx as isize);
             Some((receiver.as_mut().unwrap(), sender.as_mut().unwrap()))
         }
     }
@@ -335,7 +333,7 @@ impl TestConnector {
             let mut inner = self.0.borrow_mut();
             let keys: Vec<_> = inner.online.keys().cloned().collect();
             let rng = &mut inner.rng;
-            keys.choose(rng).cloned()
+            rng.choice(keys).clone()
         };
         if let Some(id) = id {
             self.disconnect(id);
@@ -354,7 +352,7 @@ impl TestConnector {
             .filter(|&id| !inner.online.contains_key(id))
             .cloned()
             .collect();
-        if let Some(&id) = reconnectable.choose(&mut inner.rng) {
+        if let Some(id) = inner.rng.choice(reconnectable) {
             Self::connect_inner(&mut inner, id);
             true
         } else {
@@ -487,24 +485,28 @@ impl TestPeer {
     }
 }
 
-pub(crate) trait RngExt: RngCore {
+pub(crate) trait RngExt {
+    fn between(&mut self, x: u32, y: u32) -> u32;
+
+    fn random_string(&mut self) -> String;
+}
+
+impl RngExt for Rng {
     fn between(&mut self, x: u32, y: u32) -> u32 {
         let a = x.min(y);
         let b = x.max(y);
         if a == b {
             a
         } else {
-            self.gen_range(a, b)
+            self.u32(a..b)
         }
     }
 
     fn random_string(&mut self) -> String {
-        let len = self.gen_range(1, 10);
-        self.sample_iter(&Alphanumeric)
-            .take(len)
-            .map(char::from)
-            .collect()
+        let mut res = String::new();
+        for _ in 0..self.usize(1..10) {
+            res.push(self.alphanumeric());
+        }
+        res
     }
 }
-
-impl<T> RngExt for T where T: RngCore {}
