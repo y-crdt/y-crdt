@@ -546,14 +546,13 @@
 //! necessary:
 //!
 //! ```rust
-//! use yrs::encoding::read::Error;
-//! use yrs::sync::{Awareness, Message, Protocol};
+//! use yrs::sync::{Awareness, Message, Protocol, Error};
 //!
 //! struct MyProtocol;
 //! impl Protocol for MyProtocol {
 //!     fn missing_handle(&self, awareness: &mut Awareness, tag: u8, data: Vec<u8>) -> Result<Option<Message>, Error> {
 //!         // you can not only override existing message handlers but also define your own
-//!         todo!()
+//!         Ok(Some(Message::Custom(tag, data))) // echo
 //!     }
 //! }
 //! ```
