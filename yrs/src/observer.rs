@@ -26,6 +26,15 @@ impl<E> Observer<E> {
         }
     }
 
+    pub fn has_subscribers(&self) -> bool {
+        let callbacks = self.inner.load();
+        if let Some(callbacks) = &*callbacks {
+            callbacks.is_empty()
+        } else {
+            false
+        }
+    }
+
     /// Cleanup already released subscriptions. Whenever a [Subscription] is dropped, the callback is released. However,
     /// the weak reference to callback may still be kept around until it becomes touched by operations such as
     /// [Observer::subscribe] or [Observer::callbacks].
