@@ -412,7 +412,7 @@
 //!
 //! # Other shared types
 //!
-//! So far we only discussed rich text oriented capabilities of Yrs. However it's possible to make
+//! So far we only discussed rich text oriented capabilities of Yrs. However, it's possible to make
 //! use of Yrs to represent any tree-like object:
 //!
 //! - [ArrayRef] can be used to represent any indexable sequence of values. If there are multiple
@@ -495,7 +495,7 @@
 //! # Transaction event lifecycle
 //!
 //! Yrs provides a variety of lifecycle events, which enable users to react on various situations
-//! and changes performed. Some of these events are used by Yrs own features (eg. [UndoManager]).
+//! and changes performed. Some of these events are used by Yrs own features (e.g. [UndoManager]).
 //! They are always triggered once performed update is committed by dropping or
 //! [committing](TransactionMut::commit) a read-write transaction.
 //!
@@ -521,9 +521,41 @@
 //!
 //! V1 encoding is the default one and should be preferred most of the time. V2 encoding aims to
 //! perform payload size optimizations whenever multiple updates are being encoded and passed
-//! together (eg. when you want to serialize an entire document state), however for small updates
-//! (eg. sending individual user key strokes) V2 may turn out to be less optimal than its V1
+//! together (e.g. when you want to serialize an entire document state), however for small updates
+//! (e.g. sending individual user keystrokes) V2 may turn out to be less optimal than its V1
 //! equivalent.
+//!
+//! # Awareness and y-sync protocol
+//!
+//! Sometimes it's not always feasible to keep all state changes related to a document within a
+//! document update history - especially if they are notifications bound to a single user or session.
+//! For this reason most of the editor bindings using Yjs supplement the document state with
+//! [sync::Awareness] - it's a separate entity that keeps user related data such as username
+//! or cursor position, but without the overhead of keeping metadata necessary for conflict
+//! resolution.
+//!
+//! [sync::Awareness] together with [Doc] updates combined create basis of y-sync [sync::Protocol].
+//! It's used by most of the network providers in Yjs/Yrs ecosystem and enables universal way of
+//! communicating between different systems.
+//!
+//! In its core y-sync protocol can operate as a simple state machine that serves exchanging and
+//! responding to different message types described by the protocol. The [sync::DefaultProtocol]
+//! provides all the message handlers necessary to make basic communication possible.
+//!
+//! y-sync protocol is extensible leaves a space for the users to define their own messages if
+//! necessary:
+//!
+//! ```rust
+//! use yrs::sync::{Awareness, Message, Protocol, Error};
+//!
+//! struct MyProtocol;
+//! impl Protocol for MyProtocol {
+//!     fn missing_handle(&self, awareness: &mut Awareness, tag: u8, data: Vec<u8>) -> Result<Option<Message>, Error> {
+//!         // you can not only override existing message handlers but also define your own
+//!         Ok(Some(Message::Custom(tag, data))) // echo
+//!     }
+//! }
+//! ```
 //!
 //! # External learning materials
 //!
@@ -557,6 +589,7 @@ mod moving;
 pub mod observer;
 mod slice;
 mod state_vector;
+pub mod sync;
 #[cfg(test)]
 mod test_utils;
 #[cfg(test)]
