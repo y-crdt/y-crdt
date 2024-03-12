@@ -1,5 +1,5 @@
 pub mod awareness;
-mod protocol;
+pub mod protocol;
 
 pub use crate::sync::awareness::Awareness;
 pub use crate::sync::awareness::AwarenessUpdate;
