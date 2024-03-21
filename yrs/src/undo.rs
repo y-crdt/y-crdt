@@ -446,15 +446,8 @@ where
                 if let BlockSlice::Item(slice) = slice {
                     let mut item = txn.store.materialize(slice);
                     if item.redone.is_some() {
-                        let mut id = *item.id();
-                        let (block, diff) = txn.store().follow_redone(&id);
-                        item = if diff > 0 {
-                            id.clock += diff;
-                            let slice = txn.store.blocks.get_item_clean_start(&id).unwrap();
-                            txn.store.materialize(slice)
-                        } else {
-                            block.unwrap()
-                        };
+                        let slice = txn.store_mut().follow_redone(item.id())?;
+                        item = txn.store.materialize(slice);
                     }
 
                     if !item.is_deleted() && scope.iter().any(|b| b.is_parent_of(Some(item))) {
@@ -476,11 +469,10 @@ where
                 }
             }
 
-            let redo_copy = to_redo.clone();
-            for ptr in to_redo {
+            for &ptr in to_redo.iter() {
                 let mut ptr = ptr;
                 change_performed |= ptr
-                    .redo(txn, &redo_copy, &item.insertions, stack, other)
+                    .redo(txn, &to_redo, &item.insertions, stack, other)
                     .is_some();
             }
 
@@ -1708,5 +1700,59 @@ mod test {
             any!({ "s1": { "f1": false, "f2": "AAA" } })
         );
         assert!(!mgr.undo().unwrap()); // no more changes tracked by undo manager
+    }
+
+    #[test]
+    fn issue_380() {
+        let d = Doc::with_client_id(1);
+        let r = d.get_or_insert_map("r"); // {r:{}}
+        let s1 = r.insert(&mut d.transact_mut(), "s1", MapPrelim::<i32>::new()); // {r:{s1:{}}
+        let b1_arr = s1.insert(&mut d.transact_mut(), "b1", ArrayPrelim::default()); // {r:{s1:{b1:[]}}
+
+        let b1_el1 = b1_arr.insert(&mut d.transact_mut(), 0, MapPrelim::<i32>::new()); // {r:{s1:{b1:[{}]}}
+        let b2_arr = b1_el1.insert(&mut d.transact_mut(), "b2", ArrayPrelim::default()); // {r:{s1:{b1:[{b2:[]}]}}
+        let b2_arr_nest = b2_arr.insert(&mut d.transact_mut(), 0, ArrayPrelim::default()); // {r:{s1:{b1:[{b2:[[]]}]}}
+        b2_arr_nest.insert(&mut d.transact_mut(), 0, 232291652); // {r:{s1:{b1:[{b2:[[232291652]]}]}}
+        b2_arr_nest.insert(&mut d.transact_mut(), 1, -30); // {r:{s1:{b1:[{b2:[[232291652, -30]]}]}}
+
+        let mut mgr = UndoManager::with_options(&d, &r, Options::default());
+
+        let mut txn = d.transact_mut();
+        b2_arr_nest.remove(&mut txn, 1); // {r:{s1:{b1:[{b2:[[232291652]]}]}}
+        b2_arr_nest.insert(&mut txn, 1, -5); // {r:{s1:{b1:[{b2:[[232291652, -5]]}]}}
+
+        drop(txn);
+        mgr.reset();
+
+        let mut txn = d.transact_mut();
+
+        let b1_el0 = b1_arr.insert(&mut txn, 0, MapPrelim::<i32>::new()); // {r:{s1:{b1:[{},{b2:[[232291652, -5]]}]}}
+        let b2_0_arr = b1_el0.insert(&mut txn, "b2", ArrayPrelim::default()); // {r:{s1:{b1:[{b2:[]},{b2:[[232291652, -5]]}]}}
+        let b2_0_arr_nest = b2_0_arr.insert(&mut txn, 0, ArrayPrelim::default()); // {r:{s1:{b1:[{b2:[[]]},{b2:[[232291652, -5]]}]}}
+        b2_0_arr_nest.insert(&mut txn, 0, 232291652); // {r:{s1:{b1:[{b2:[[232291652]]},{b2:[[232291652, -5]]}]}}
+        b2_0_arr_nest.insert(&mut txn, 1, -6); // {r:{s1:{b1:[{b2:[[232291652, -6]]},{b2:[[232291652, -5]]}]}}
+        b1_arr.remove(&mut txn, 1); // {r:{s1:{b1:[{b2:[[232291652, -6]]}]}}
+
+        let b1_el1 = b1_arr.insert(&mut txn, 1, MapPrelim::<i32>::new()); // {r:{s1:{b1:[{b2:[[232291652, -6]]}, {}]}}
+        b1_el1.insert(&mut txn, "f2", "C1"); // {r:{s1:{b1:[{b2:[[232291652, -6]]}, {f2:C1}]}}
+
+        drop(txn);
+        mgr.reset();
+        assert_eq!(
+            r.to_json(&d.transact()),
+            any!({"s1":{"b1":[{"b2":[[232291652, -6]]}, {"f2":"C1"}]}})
+        );
+
+        mgr.undo().unwrap(); // {r:{s1:{b1:[{b2:[[232291652, -5]]}]}}
+        assert_eq!(
+            r.to_json(&d.transact()),
+            any!({"s1":{"b1":[{"b2":[[232291652, -5]]}]}})
+        );
+
+        mgr.undo().unwrap(); // {r:{s1:{b1:[{b2:[[232291652, -30]]}]}}
+        assert_eq!(
+            r.to_json(&d.transact()),
+            any!({"s1":{"b1":[{"b2":[[232291652, -30]]}]}})
+        );
     }
 }
