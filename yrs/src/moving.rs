@@ -491,9 +491,9 @@ impl StickyIndex {
                     // type does not exist yet
                     return None;
                 }
-                let (right, diff) = store.follow_redone(right_id);
+                let right = store.follow_redone(right_id);
                 if let Some(right) = right {
-                    if let Some(b) = right.parent.as_branch() {
+                    if let Some(b) = right.ptr.parent.as_branch() {
                         branch = Some(b.clone());
                         match b.item {
                             Some(i) if i.is_deleted() => { /* do nothing */ }
@@ -502,12 +502,12 @@ impl StickyIndex {
                                 index = if right.is_deleted() || !right.is_countable() {
                                     0
                                 } else if self.assoc == Assoc::After {
-                                    diff
+                                    right.start
                                 } else {
-                                    diff + 1
+                                    right.start + 1
                                 };
                                 let encoding = store.options.offset_kind;
-                                let mut n = right.left;
+                                let mut n = right.ptr.left;
                                 while let Some(item) = n.as_deref() {
                                     if !item.is_deleted() && item.is_countable() {
                                         index += item.content_len(encoding);
@@ -525,9 +525,9 @@ impl StickyIndex {
                     // type does not exist yet
                     return None;
                 }
-                let (ptr, _) = store.follow_redone(id);
-                let item = ptr?; // early return if ptr is GC
-                if let ItemContent::Type(b) = &item.content {
+                let item = store.follow_redone(id)?; // early return if item is GC'ed
+                if let ItemContent::Type(b) = &item.ptr.content {
+                    // we don't need to materilized ItemContent::Type - they are always 1-length
                     branch = Some(BranchPtr::from(b.as_ref()));
                 } // else - branch remains null
             }

@@ -58,31 +58,26 @@ impl TestData {
             txns: self
                 .txns
                 .iter()
-                .map(|txn| {
-                    TestTxn {
-                        patches: txn
-                            .patches
-                            .iter()
-                            .map(|TestPatch(pos_chars, del_chars, ins)| {
-                                let pos_bytes = r.char_to_byte(*pos_chars);
-                                // if *pos_chars != pos_bytes {
-                                //     println!("Converted position {} to {}", *pos_chars, pos_bytes);
-                                // }
-                                let del_bytes = if *del_chars > 0 {
-                                    let del_end_bytes = r.char_to_byte(pos_chars + *del_chars);
-                                    r.remove(*pos_chars..*pos_chars + *del_chars);
-                                    del_end_bytes - pos_bytes
-                                } else {
-                                    0
-                                };
-                                if !ins.is_empty() {
-                                    r.insert(*pos_chars, ins);
-                                }
+                .map(|txn| TestTxn {
+                    patches: txn
+                        .patches
+                        .iter()
+                        .map(|TestPatch(pos_chars, del_chars, ins)| {
+                            let pos_bytes = r.char_to_byte(*pos_chars);
+                            let del_bytes = if *del_chars > 0 {
+                                let del_end_bytes = r.char_to_byte(pos_chars + *del_chars);
+                                r.remove(*pos_chars..*pos_chars + *del_chars);
+                                del_end_bytes - pos_bytes
+                            } else {
+                                0
+                            };
+                            if !ins.is_empty() {
+                                r.insert(*pos_chars, ins);
+                            }
 
-                                TestPatch(pos_bytes, del_bytes, ins.clone())
-                            })
-                            .collect(),
-                    }
+                            TestPatch(pos_bytes, del_bytes, ins.clone())
+                        })
+                        .collect(),
                 })
                 .collect(),
         }
@@ -116,11 +111,6 @@ pub fn load_testing_data(filename: &str) -> TestData {
         reader.read_to_end(&mut raw_json).unwrap();
     }
 
-    // println!("uncompress time {}", start.elapsed().unwrap().as_millis());
-
-    // let start = SystemTime::now();
     let data: TestData = serde_json::from_reader(raw_json.as_slice()).unwrap();
-    // println!("JSON parse time {}", start.elapsed().unwrap().as_millis());
-
     data
 }

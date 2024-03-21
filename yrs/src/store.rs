@@ -328,29 +328,18 @@ impl Store {
         SubdocGuids(self.subdocs.values())
     }
 
-    pub(crate) fn follow_redone(&self, id: &ID) -> (Option<ItemPtr>, u32) {
+    pub(crate) fn follow_redone(&self, id: &ID) -> Option<ItemSlice> {
         let mut next_id = Some(*id);
-        let mut ptr = None;
-        let mut diff = 0;
-        while {
-            if let Some(mut next) = next_id {
-                if diff > 0 {
-                    next.clock += diff;
-                    next_id = Some(next.clone());
-                }
-                ptr = self.blocks.get_item(&next);
-                if let Some(item) = ptr.as_deref() {
-                    diff = next.clock - item.id.clock;
-                    next_id = item.redone;
-                    true
-                } else {
-                    false
-                }
+        let mut slice = None;
+        while let Some(next) = next_id.as_mut() {
+            slice = self.blocks.get_item_clean_start(next);
+            if let Some(slice) = &slice {
+                next_id = slice.ptr.redone;
             } else {
-                false
+                break;
             }
-        } {}
-        (ptr, diff)
+        }
+        slice
     }
 
     pub fn is_alive(&self, branch_ptr: &BranchPtr) -> bool {

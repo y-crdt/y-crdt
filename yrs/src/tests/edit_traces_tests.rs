@@ -46,14 +46,10 @@ fn test_editing_trace(fpath: &str) {
             let delete = patch.1;
             let content = patch.2;
 
-            //let total = txt.len(&txn);
             if delete != 0 {
-                //println!("{at}/{total}: delete {delete_count} elements");
                 txt.remove_range(&mut txn, at as u32, delete as u32);
             }
             if !content.is_empty() {
-                //let len = content.len();
-                //println!("{at}/{total}: insert {len} elements - \"{content}\"");
                 txt.insert(&mut txn, at as u32, &content);
             }
         }
