@@ -227,7 +227,14 @@ impl Update {
                         };
                         store = txn.store_mut();
                         match block {
-                            BlockCarrier::Item(item) => store.blocks.push_block(item),
+                            BlockCarrier::Item(item) => {
+                                if item.parent != TypePtr::Unknown {
+                                    store.blocks.push_block(item)
+                                } else {
+                                    // parent is not defined. Integrate GC struct instead
+                                    store.blocks.push_gc(BlockRange::new(item.id, item.len))
+                                }
+                            }
                             BlockCarrier::GC(gc) => store.blocks.push_gc(gc),
                             BlockCarrier::Skip(_) => { /* do nothing */ }
                         }
