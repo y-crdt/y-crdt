@@ -515,7 +515,7 @@ impl ItemPtr {
                     None
                 }
             }
-            _ => None,
+            TypePtr::Unknown => return true,
         };
 
         let left: Option<&Item> = this.left.as_deref();
