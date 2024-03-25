@@ -219,7 +219,7 @@ impl Update {
                             item.repair(store);
                         }
                         let should_delete = block.integrate(txn, offset);
-                        let delete_ptr = if should_delete {
+                        let mut delete_ptr = if should_delete {
                             let ptr = block.as_item_ptr();
                             ptr
                         } else {
@@ -232,7 +232,8 @@ impl Update {
                                     store.blocks.push_block(item)
                                 } else {
                                     // parent is not defined. Integrate GC struct instead
-                                    store.blocks.push_gc(BlockRange::new(item.id, item.len))
+                                    store.blocks.push_gc(BlockRange::new(item.id, item.len));
+                                    delete_ptr = None;
                                 }
                             }
                             BlockCarrier::GC(gc) => store.blocks.push_gc(gc),
