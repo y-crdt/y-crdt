@@ -1938,3 +1938,19 @@ TEST_CASE("Logical branch pointers") {
     ytransaction_commit(txn);
     ydoc_destroy(doc);
 }
+
+TEST_CASE("Unicode support") {
+    YDoc* doc = ydoc_new();
+    Branch* txt = ytext(doc, "quill");
+    YTransaction* txn = ydoc_write_transaction(doc, 0, NULL);
+
+    ytext_insert(txt, txn, 0, u8"🇿🇿🇿🇿🇩🇩🇩🇿🇩🇩🇩🇩🇩🇿🇩🇩🇿🇩🇿🇩", NULL);
+    ytext_remove_range(txt, txn, 0, 5);
+
+    char* actual = ytext_string(txt, txn);
+    REQUIRE(!strcmp(actual, u8"🇿🇩🇩🇩🇿🇩🇩🇩🇩🇩🇿🇩🇩🇿🇩🇿🇩"));
+
+    ystring_destroy(actual);
+    ytransaction_commit(txn);
+    ydoc_destroy(doc);
+}
