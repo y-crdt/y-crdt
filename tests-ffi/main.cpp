@@ -1938,3 +1938,44 @@ TEST_CASE("Logical branch pointers") {
     ytransaction_commit(txn);
     ydoc_destroy(doc);
 }
+
+TEST_CASE("Unicode support") {
+    YOptions o = yoptions();
+    o.encoding = Y_OFFSET_UTF16;
+    YDoc* doc = ydoc_new_with_options(o);
+    Branch* txt = ytext(doc, "quill");
+    YTransaction* txn = ydoc_write_transaction(doc, 0, NULL);
+
+    ytext_insert(txt, txn, 0, u8"🇿🇿🇿🇿🇩🇩🇩🇿🇩🇩🇩🇩🇩🇿🇩🇩🇿🇩🇿🇩", NULL);
+    ytext_remove_range(txt, txn, 0, 5);
+
+    char* actual = ytext_string(txt, txn);
+    REQUIRE(!strcmp(actual, u8"🇿🇩🇩🇩🇿🇩🇩🇩🇩🇩🇿🇩🇩🇿🇩🇿🇩"));
+
+    ystring_destroy(actual);
+    ytransaction_commit(txn);
+    ydoc_destroy(doc);
+}
+
+TEST_CASE("Array event observer target") {
+
+    YDoc *doc = ydoc_new();
+    const Branch *array = yarray(doc, "array1");
+
+    YSubscription* subscription = yarray_observe(
+        array,
+        nullptr,
+        [](void *state, const YArrayEvent *event)
+        {
+            const Branch *target = yarray_event_target(event);
+            REQUIRE_EQ(yarray_len(target), 1);
+        });
+
+    YTransaction *txn = ydoc_write_transaction(doc, 0, nullptr);
+    YInput item{ Y_JSON_NUM, 1, { .num = 25.0 } };
+    yarray_insert_range(array, txn, 0, &item, 1);
+
+    ytransaction_commit(txn);
+    yunobserve(subscription);
+    ydoc_destroy(doc);
+}
