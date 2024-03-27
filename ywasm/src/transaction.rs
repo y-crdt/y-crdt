@@ -138,6 +138,32 @@ impl YTransaction {
         crate::js::convert::state_vector_to_js(&sv)
     }
 
+    #[wasm_bindgen(getter, js_name = pendingStructs)]
+    #[inline]
+    pub fn pending_structs(&self) -> Result<JsValue> {
+        let tx = self.deref();
+        if let Some(update) = tx.store().pending_update() {
+            let missing = crate::js::convert::state_vector_to_js(&update.missing);
+            let update = js_sys::Uint8Array::from(update.update.encode_v1().as_slice());
+            let obj: JsValue = js_sys::Object::new().into();
+            js_sys::Reflect::set(&obj, &JsValue::from_str("update"), &update.into())?;
+            js_sys::Reflect::set(&obj, &JsValue::from_str("missing"), &missing.into())?;
+            Ok(obj.into())
+        } else {
+            Ok(JsValue::NULL)
+        }
+    }
+
+    /// Returns a unapplied delete set, that was received in one of the previous remote updates.
+    /// This DeleteSet is waiting for a missing updates to arrive in order to be applied.
+    #[wasm_bindgen(getter, js_name = pendingDeleteSet)]
+    #[inline]
+    pub fn pending_ds(&self) -> Option<js_sys::Map> {
+        let tx = self.deref();
+        let ds = tx.store().pending_ds()?;
+        Some(crate::js::convert::delete_set_to_js(&ds))
+    }
+
     /// Returns a delete set containing information about
     /// all blocks removed as part of a current transaction.
     #[wasm_bindgen(getter, js_name = deleteSet)]

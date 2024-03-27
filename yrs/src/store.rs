@@ -78,6 +78,18 @@ impl Store {
         }
     }
 
+    /// If there are any missing updates, this method will return a pending update which contains
+    /// updates waiting for their predecessors to arrive in order to be integrated.
+    pub fn pending_update(&self) -> Option<&PendingUpdate> {
+        self.pending.as_ref()
+    }
+
+    /// If there are some delete updates waiting for missing updates to arrive in order to be
+    /// applied, this method will return them.
+    pub fn pending_ds(&self) -> Option<&DeleteSet> {
+        self.pending_ds.as_ref()
+    }
+
     pub fn is_subdoc(&self) -> bool {
         self.parent.is_some()
     }

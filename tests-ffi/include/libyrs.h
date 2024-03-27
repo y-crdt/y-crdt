@@ -564,6 +564,27 @@ typedef struct YSubdocsEvent {
  */
 typedef struct TransactionInner YTransaction;
 
+/**
+ * Structure containing unapplied update data.
+ * Created via `ytransaction_pending_update`.
+ * Released via `ypending_update_destroy`.
+ */
+typedef struct YPendingUpdate {
+  /**
+   * A state vector that informs about minimal client clock values that need to be satisfied
+   * in order to successfully apply current update.
+   */
+  struct YStateVector missing;
+  /**
+   * Update data stored in lib0 v1 format.
+   */
+  char *update_v1;
+  /**
+   * Length of `update_v1` payload.
+   */
+  uint32_t update_len;
+} YPendingUpdate;
+
 typedef struct YMapInputData {
   char **keys;
   struct YInput *values;
@@ -1092,13 +1113,13 @@ uint8_t ydoc_should_load(YDoc *doc);
  */
 uint8_t ydoc_auto_load(YDoc *doc);
 
-YSubscription *ydoc_observe_updates_v1(YDoc *doc,
-                                       void *state,
-                                       void (*cb)(void*, uint32_t, const char*));
+YSubscription *ydoc_observe_updates_v1(YDoc *doc, void *state, void (*cb)(void*,
+                                                                          uint32_t,
+                                                                          const char*));
 
-YSubscription *ydoc_observe_updates_v2(YDoc *doc,
-                                       void *state,
-                                       void (*cb)(void*, uint32_t, const char*));
+YSubscription *ydoc_observe_updates_v2(YDoc *doc, void *state, void (*cb)(void*,
+                                                                          uint32_t,
+                                                                          const char*));
 
 YSubscription *ydoc_observe_after_transaction(YDoc *doc,
                                               void *state,
@@ -1300,6 +1321,31 @@ char *ytransaction_encode_state_from_snapshot_v2(const YTransaction *txn,
                                                  const char *snapshot,
                                                  uint32_t snapshot_len,
                                                  uint32_t *len);
+
+/**
+ * Returns an unapplied Delete Set for the current document, waiting for missing updates in order
+ * to be integrated into document store.
+ *
+ * Return `NULL` if there's no missing delete set and all deletions have been applied.
+ * See also: `ytransaction_pending_update`
+ */
+struct YDeleteSet *ytransaction_pending_ds(const YTransaction *txn);
+
+void ydelete_set_destroy(struct YDeleteSet *ds);
+
+/**
+ * Returns a pending update associated with an underlying `YDoc`. Pending update contains update
+ * data waiting for being integrated into main document store. Usually reason for that is that
+ * there were missing updates required for integration. In such cases they need to arrive and be
+ * integrated first.
+ *
+ * Returns `NULL` if there is not update pending. Returned value can be released by calling
+ * `ypending_update_destroy`.
+ * See also: `ytransaction_pending_ds`
+ */
+struct YPendingUpdate *ytransaction_pending_update(const YTransaction *txn);
+
+void ypending_update_destroy(struct YPendingUpdate *update);
 
 /**
  * Returns a null-terminated UTF-8 encoded string representation of an `update` binary payload,
@@ -2098,9 +2144,8 @@ void yunobserve(YSubscription *subscription);
  * Returns a subscription ID which can be then used to unsubscribe this callback by using
  * `yunobserve` function.
  */
-YSubscription *ytext_observe(const Branch *txt,
-                             void *state,
-                             void (*cb)(void*, const struct YTextEvent*));
+YSubscription *ytext_observe(const Branch *txt, void *state, void (*cb)(void*,
+                                                                        const struct YTextEvent*));
 
 /**
  * Subscribes a given callback function `cb` to changes made by this `YMap` instance. Callbacks
@@ -2108,9 +2153,8 @@ YSubscription *ytext_observe(const Branch *txt,
  * Returns a subscription ID which can be then used to unsubscribe this callback by using
  * `yunobserve` function.
  */
-YSubscription *ymap_observe(const Branch *map,
-                            void *state,
-                            void (*cb)(void*, const struct YMapEvent*));
+YSubscription *ymap_observe(const Branch *map, void *state, void (*cb)(void*,
+                                                                       const struct YMapEvent*));
 
 /**
  * Subscribes a given callback function `cb` to changes made by this `YArray` instance. Callbacks
@@ -2150,9 +2194,9 @@ YSubscription *yxmltext_observe(const Branch *xml,
  * Returns a subscription ID which can be then used to unsubscribe this callback by using
  * `yunobserve` function.
  */
-YSubscription *yobserve_deep(Branch *ytype,
-                             void *state,
-                             void (*cb)(void*, uint32_t, const struct YEvent*));
+YSubscription *yobserve_deep(Branch *ytype, void *state, void (*cb)(void*,
+                                                                    uint32_t,
+                                                                    const struct YEvent*));
 
 /**
  * Returns a pointer to a shared collection, which triggered passed event `e`.

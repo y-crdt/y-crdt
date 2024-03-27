@@ -936,6 +936,81 @@ pub unsafe extern "C" fn ytransaction_encode_state_from_snapshot_v2(
     }
 }
 
+/// Returns an unapplied Delete Set for the current document, waiting for missing updates in order
+/// to be integrated into document store.
+///
+/// Return `NULL` if there's no missing delete set and all deletions have been applied.
+/// See also: `ytransaction_pending_update`
+#[no_mangle]
+pub unsafe extern "C" fn ytransaction_pending_ds(txn: *const Transaction) -> *mut YDeleteSet {
+    let txn = txn.as_ref().unwrap();
+    match txn.store().pending_ds() {
+        None => null_mut(),
+        Some(ds) => Box::into_raw(Box::new(YDeleteSet::new(ds))),
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn ydelete_set_destroy(ds: *mut YDeleteSet) {
+    if ds.is_null() {
+        return;
+    }
+    drop(Box::from_raw(ds))
+}
+
+/// Returns a pending update associated with an underlying `YDoc`. Pending update contains update
+/// data waiting for being integrated into main document store. Usually reason for that is that
+/// there were missing updates required for integration. In such cases they need to arrive and be
+/// integrated first.
+///
+/// Returns `NULL` if there is not update pending. Returned value can be released by calling
+/// `ypending_update_destroy`.
+/// See also: `ytransaction_pending_ds`
+#[no_mangle]
+pub unsafe extern "C" fn ytransaction_pending_update(
+    txn: *const Transaction,
+) -> *mut YPendingUpdate {
+    let txn = txn.as_ref().unwrap();
+    match txn.store().pending_update() {
+        None => null_mut(),
+        Some(u) => {
+            let binary = u.update.encode_v1().into_boxed_slice();
+            let update_len = binary.len() as u32;
+            let missing = YStateVector::new(&u.missing);
+            let update = YPendingUpdate {
+                missing,
+                update_len,
+                update_v1: Box::into_raw(binary) as *mut c_char,
+            };
+            Box::into_raw(Box::new(update))
+        }
+    }
+}
+
+/// Structure containing unapplied update data.
+/// Created via `ytransaction_pending_update`.
+/// Released via `ypending_update_destroy`.
+#[repr(C)]
+pub struct YPendingUpdate {
+    /// A state vector that informs about minimal client clock values that need to be satisfied
+    /// in order to successfully apply current update.
+    pub missing: YStateVector,
+    /// Update data stored in lib0 v1 format.
+    pub update_v1: *mut c_char,
+    /// Length of `update_v1` payload.
+    pub update_len: u32,
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn ypending_update_destroy(update: *mut YPendingUpdate) {
+    if update.is_null() {
+        return;
+    }
+    let update = Box::from_raw(update);
+    drop(update.missing);
+    ybinary_destroy(update.update_v1, update.update_len);
+}
+
 /// Returns a null-terminated UTF-8 encoded string representation of an `update` binary payload,
 /// encoded using lib0 v1 encoding.
 /// Returns null if update couldn't be parsed into a lib0 v1 formatting.
