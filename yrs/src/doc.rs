@@ -1948,7 +1948,7 @@ mod test {
             txn.apply_update(u1);
             assert!(txn.store.pending.is_none()); // applied
             txn.apply_update(u3);
-            assert!(txn.store.pending.is_some()); // pending
+            assert!(txn.store.pending.is_some()); // pending update waiting for u2
             txn.apply_update(u2);
             assert!(txn.store.pending.is_none()); // applied after fixing the missing update
         }

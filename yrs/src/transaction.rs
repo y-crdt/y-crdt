@@ -634,7 +634,7 @@ impl<'doc> TransactionMut<'doc> {
         let mut retry = false;
         {
             let store = self.store_mut();
-            if let Some(mut pending) = store.pending.take() {
+            store.pending = if let Some(mut pending) = store.pending.take() {
                 // check if we can apply something
                 for (client, &clock) in pending.missing.iter() {
                     if clock < store.blocks.get_clock(client) {
@@ -649,11 +649,11 @@ impl<'doc> TransactionMut<'doc> {
                         pending.missing.set_min(client, clock);
                     }
                     pending.update = Update::merge_updates(vec![pending.update, remaining.update]);
-                    store.pending = Some(pending);
                 }
+                Some(pending)
             } else {
-                store.pending = remaining;
-            }
+                remaining
+            };
         }
         if let Some(pending) = self.store_mut().pending_ds.take() {
             let ds2 = self.apply_delete(&pending);

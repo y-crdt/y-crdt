@@ -247,6 +247,8 @@ impl Update {
                     }
                 } else {
                     // update from the same client is missing
+                    let id = block.id();
+                    missing_sv.set_min(id.client, id.clock - 1);
                     stack.push(block);
                     // hid a dead wall, add all items from stack to restSS
                     Self::return_stack(stack, &mut self.blocks, &mut remaining);
