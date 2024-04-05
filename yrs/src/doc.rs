@@ -725,6 +725,8 @@ mod test {
     };
     use std::cell::{Cell, RefCell, RefMut};
     use std::collections::BTreeSet;
+    use std::convert::TryInto;
+
     use std::rc::Rc;
 
     #[test]
@@ -1912,5 +1914,46 @@ mod test {
         txn.apply_update(Update::decode_v1(&update).unwrap());
         let str = txt.get_string(&txn);
         assert_eq!(&str, "hello");
+    }
+
+    #[test]
+    fn out_of_order_updates() {
+        let mut updates = Rc::new(RefCell::new(vec![]));
+
+        let d1 = Doc::new();
+        let sub = {
+            let updates = updates.clone();
+            d1.observe_update_v1(move |_, e| {
+                let mut u = updates.borrow_mut();
+                u.push(Update::decode_v1(&e.update).unwrap());
+            })
+            .unwrap()
+        };
+
+        let map = d1.get_or_insert_map("map");
+        map.insert(&mut d1.transact_mut(), "a", 1);
+        map.insert(&mut d1.transact_mut(), "a", 1.1);
+        map.insert(&mut d1.transact_mut(), "b", 2);
+
+        assert_eq!(map.to_json(&d1.transact()), any!({"a": 1.1, "b": 2}));
+
+        let d2 = Doc::new();
+
+        {
+            let mut updates = updates.borrow_mut();
+            let u3 = updates.pop().unwrap();
+            let u2 = updates.pop().unwrap();
+            let u1 = updates.pop().unwrap();
+            let mut txn = d2.transact_mut();
+            txn.apply_update(u1);
+            assert!(txn.store.pending.is_none()); // applied
+            txn.apply_update(u3);
+            assert!(txn.store.pending.is_some()); // pending
+            txn.apply_update(u2);
+            assert!(txn.store.pending.is_none()); // applied after fixing the missing update
+        }
+
+        let map = d2.get_or_insert_map("map");
+        assert_eq!(map.to_json(&d2.transact()), any!({"a": 1.1, "b": 2}));
     }
 }
