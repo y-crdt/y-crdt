@@ -272,7 +272,7 @@ impl std::fmt::Debug for Awareness {
 }
 
 /// A structure that represents an encodable state of an [Awareness] struct.
-#[derive(Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct AwarenessUpdate {
     /// Client updates.
     pub clients: HashMap<ClientID, AwarenessUpdateEntry>,
@@ -306,7 +306,7 @@ impl Decode for AwarenessUpdate {
 
 /// A single client entry of an [AwarenessUpdate]. It consists of logical clock and JSON client
 /// state represented as a string.
-#[derive(Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct AwarenessUpdateEntry {
     /// Timestamp used to recognize which update is the latest one.
     pub clock: u32,

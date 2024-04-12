@@ -31,6 +31,7 @@ use thiserror::Error;
 */
 
 /// A default implementation of y-sync [Protocol].
+#[derive(Debug, Copy, Clone, Default)]
 pub struct DefaultProtocol;
 
 impl Protocol for DefaultProtocol {}
@@ -142,7 +143,7 @@ pub const MSG_QUERY_AWARENESS: u8 = 3;
 pub const PERMISSION_DENIED: u8 = 0;
 pub const PERMISSION_GRANTED: u8 = 1;
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub enum Message {
     Sync(SyncMessage),
     Auth(Option<String>),
@@ -219,7 +220,7 @@ pub const MSG_SYNC_STEP_2: u8 = 1;
 /// Tag id for [SyncMessage::Update].
 pub const MSG_SYNC_UPDATE: u8 = 2;
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SyncMessage {
     SyncStep1(StateVector),
     SyncStep2(Vec<u8>),
