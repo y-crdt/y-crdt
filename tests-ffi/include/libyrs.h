@@ -1319,9 +1319,7 @@ Branch *ytext(YDoc *doc, const char *name);
  * This structure can later be accessed using its `name`, which must be a null-terminated UTF-8
  * compatible string.
  *
- * Use [yarray_destroy] in order to release pointer returned that way - keep in mind that this will
- * not remove `YArray` instance from the document itself (once created it'll last for the entire
- * lifecycle of a document).
+ * Once created, a `YArray` instance will last for the entire lifecycle of a document.
  */
 Branch *yarray(YDoc *doc,
                const char *name);
@@ -1331,9 +1329,7 @@ Branch *yarray(YDoc *doc,
  * This structure can later be accessed using its `name`, which must be a null-terminated UTF-8
  * compatible string.
  *
- * Use [ymap_destroy] in order to release pointer returned that way - keep in mind that this will
- * not remove `YMap` instance from the document itself (once created it'll last for the entire
- * lifecycle of a document).
+ * Once created, a `YMap` instance will last for the entire lifecycle of a document.
  */
 Branch *ymap(YDoc *doc, const char *name);
 

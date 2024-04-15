@@ -803,9 +803,7 @@ pub unsafe extern "C" fn ytext(doc: *mut Doc, name: *const c_char) -> *mut Branc
 /// This structure can later be accessed using its `name`, which must be a null-terminated UTF-8
 /// compatible string.
 ///
-/// Use [yarray_destroy] in order to release pointer returned that way - keep in mind that this will
-/// not remove `YArray` instance from the document itself (once created it'll last for the entire
-/// lifecycle of a document).
+/// Once created, a `YArray` instance will last for the entire lifecycle of a document.
 #[no_mangle]
 pub unsafe extern "C" fn yarray(doc: *mut Doc, name: *const c_char) -> *mut Branch {
     assert!(!doc.is_null());
@@ -822,9 +820,7 @@ pub unsafe extern "C" fn yarray(doc: *mut Doc, name: *const c_char) -> *mut Bran
 /// This structure can later be accessed using its `name`, which must be a null-terminated UTF-8
 /// compatible string.
 ///
-/// Use [ymap_destroy] in order to release pointer returned that way - keep in mind that this will
-/// not remove `YMap` instance from the document itself (once created it'll last for the entire
-/// lifecycle of a document).
+/// Once created, a `YMap` instance will last for the entire lifecycle of a document.
 #[no_mangle]
 pub unsafe extern "C" fn ymap(doc: *mut Doc, name: *const c_char) -> *mut Branch {
     assert!(!doc.is_null());
