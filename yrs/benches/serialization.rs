@@ -1,7 +1,7 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion, SamplingMode};
-use yrs::Any;
 use yrs::encoding::read::{Cursor, Read};
 use yrs::encoding::write::Write;
+use yrs::Any;
 
 const BENCHMARK_SIZE: u32 = 100000;
 

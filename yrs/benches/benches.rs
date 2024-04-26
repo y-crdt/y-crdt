@@ -4,9 +4,9 @@ use rand::prelude::StdRng;
 use rand::{Rng, RngCore, SeedableRng};
 use std::cell::Cell;
 use std::collections::HashMap;
+use yrs::encoding::read::{Cursor, Read};
 use yrs::updates::decoder::Decode;
 use yrs::{Array, Doc, Map, MapRef, Text, TextRef, Transact, TransactionMut, Update};
-use yrs::encoding::read::{Cursor, Read};
 
 const N: usize = 6000;
 const SQRT_N: usize = 77 * 20;

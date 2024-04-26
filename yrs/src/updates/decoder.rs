@@ -1,6 +1,6 @@
 use crate::block::ClientID;
+use crate::encoding::read::{Cursor, Error, Read};
 use crate::*;
-use crate::encoding::read::{Read, Error, Cursor};
 use std::sync::Arc;
 
 /// A trait that can be implemented by any other type in order to support lib0 decoding capability.

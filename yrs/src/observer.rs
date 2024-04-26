@@ -352,12 +352,15 @@ mod test {
     #[test]
     fn subscribers_predicate() {
         let o: Observer<u32> = Observer::new();
-
         assert!(!o.has_subscribers());
 
         let _sub = o.subscribe(move |_txn, _e| {});
-
         assert!(o.has_subscribers());
+
+        drop(_sub);
+        o.clean();
+
+        assert!(!o.has_subscribers());
     }
 
     #[test]
