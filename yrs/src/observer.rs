@@ -29,7 +29,7 @@ impl<E> Observer<E> {
     pub fn has_subscribers(&self) -> bool {
         let callbacks = self.inner.load();
         if let Some(callbacks) = &*callbacks {
-            callbacks.is_empty()
+            !callbacks.is_empty()
         } else {
             false
         }
@@ -347,6 +347,20 @@ mod test {
         }
         assert_eq!(s1_state.load(Ordering::Acquire), 2);
         assert_eq!(s2_state.load(Ordering::Acquire), 4);
+    }
+
+    #[test]
+    fn subscribers_predicate() {
+        let o: Observer<u32> = Observer::new();
+        assert!(!o.has_subscribers());
+
+        let _sub = o.subscribe(move |_txn, _e| {});
+        assert!(o.has_subscribers());
+
+        drop(_sub);
+        o.clean();
+
+        assert!(!o.has_subscribers());
     }
 
     #[test]

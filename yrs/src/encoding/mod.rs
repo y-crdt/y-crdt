@@ -5,10 +5,10 @@ pub mod write;
 
 #[cfg(test)]
 mod test {
-    use proptest::prelude::*;
-    use crate::Any;
     use crate::encoding::read::{Cursor, Read};
     use crate::encoding::write::Write;
+    use crate::Any;
+    use proptest::prelude::*;
 
     pub fn arb_any() -> impl Strategy<Value = Any> {
         let leaf = prop_oneof![
