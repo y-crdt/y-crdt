@@ -1325,7 +1325,10 @@ impl Item {
                             TypePtr::Branch(BranchPtr::from(branch.as_ref()))
                         }
                         ItemContent::Deleted(_) => TypePtr::Unknown,
-                        _ => panic!("Defect: parent points to a block which is not a shared type"),
+                        _ => panic!(
+                            "Defect: parent points to a block which is not a shared type: {:?}",
+                            item
+                        ),
                     }
                 } else {
                     TypePtr::Unknown
