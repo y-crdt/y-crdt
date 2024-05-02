@@ -94,7 +94,8 @@ impl Awareness {
             Entry::Occupied(mut e) => {
                 e.insert(new);
                 if let Some(mut callbacks) = self.on_update.callbacks() {
-                    let e = Event::new(vec![], vec![client_id], vec![]);
+                    let update = self.update_with_clients([client_id]).ok();
+                    let e = Event::new(vec![], vec![client_id], vec![], update);
                     // artificial transaction for the same of Observer signature, it will never be reached
                     callbacks.trigger(unsafe { MaybeUninit::uninit().assume_init_ref() }, &e);
                 }
@@ -102,7 +103,8 @@ impl Awareness {
             Entry::Vacant(e) => {
                 e.insert(new);
                 if let Some(mut callbacks) = self.on_update.callbacks() {
-                    let e = Event::new(vec![client_id], vec![], vec![]);
+                    let update = self.update_with_clients([client_id]).ok();
+                    let e = Event::new(vec![client_id], vec![], vec![], update);
                     // artificial transaction for the same of Observer signature, it will never be reached
                     callbacks.trigger(unsafe { MaybeUninit::uninit().assume_init_ref() }, &e);
                 }
@@ -117,7 +119,8 @@ impl Awareness {
         if let Some(mut callbacks) = self.on_update.callbacks() {
             if prev_state.is_some() {
                 // artificial transaction for the same of Observer signature, it will never be reached
-                let e = Event::new(Vec::default(), Vec::default(), vec![client_id]);
+                let update = self.update_with_clients([client_id]).ok();
+                let e = Event::new(Vec::default(), Vec::default(), vec![client_id], update);
                 callbacks.trigger(unsafe { MaybeUninit::uninit().assume_init_ref() }, &e);
             }
         }
@@ -245,8 +248,14 @@ impl Awareness {
 
         if let Some(mut callbacks) = self.on_update.callbacks() {
             if !added.is_empty() || !updated.is_empty() || !removed.is_empty() {
+                let mut changed = Vec::with_capacity(added.len() + updated.len() + removed.len());
+                changed.extend_from_slice(&*added);
+                changed.extend_from_slice(&*updated);
+                changed.extend_from_slice(&*removed);
+                let update = self.update_with_clients(changed)?;
+
                 // artificial transaction for the same of Observer signature, it will never be reached
-                let e = Event::new(added, updated, removed);
+                let e = Event::new(added, updated, removed, Some(update));
                 callbacks.trigger(unsafe { MaybeUninit::uninit().assume_init_ref() }, &e);
             }
         }
@@ -338,20 +347,32 @@ impl MetaClientState {
 }
 
 /// Event type emitted by an [Awareness] struct.
-#[derive(Debug, Default, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Event {
     added: Vec<ClientID>,
     updated: Vec<ClientID>,
     removed: Vec<ClientID>,
+    update: Option<AwarenessUpdate>,
 }
 
 impl Event {
-    pub fn new(added: Vec<ClientID>, updated: Vec<ClientID>, removed: Vec<ClientID>) -> Self {
+    pub fn new(
+        added: Vec<ClientID>,
+        updated: Vec<ClientID>,
+        removed: Vec<ClientID>,
+        update: Option<AwarenessUpdate>,
+    ) -> Self {
         Event {
             added,
             updated,
             removed,
+            update,
         }
+    }
+
+    /// Returns an awareness update object, which contains only the data of modified clients.
+    pub fn awareness_update(&self) -> Option<&AwarenessUpdate> {
+        self.update.as_ref()
     }
 
     /// Collection of new clients that have been added to an [Awareness] struct, that was not known
@@ -375,9 +396,10 @@ impl Event {
 
 #[cfg(test)]
 mod test {
-    use crate::sync::awareness::Event;
-    use crate::sync::Awareness;
+    use crate::sync::awareness::{AwarenessUpdateEntry, Event};
+    use crate::sync::{Awareness, AwarenessUpdate};
     use crate::Doc;
+    use std::collections::HashMap;
     use std::sync::mpsc::{channel, Receiver};
 
     fn update(
@@ -415,7 +437,23 @@ mod test {
         let e_local = update(&mut o_local, &local, &mut remote)?;
         let e_remote = o_remote.try_recv()?;
         assert_eq!(remote.clients()[&1], "{x:4}");
-        assert_eq!(e_remote, Event::new(vec![], vec![1], vec![]));
+        assert_eq!(
+            e_remote,
+            Event::new(
+                vec![],
+                vec![1],
+                vec![],
+                Some(AwarenessUpdate {
+                    clients: HashMap::from([(
+                        1,
+                        AwarenessUpdateEntry {
+                            clock: 2,
+                            json: "{x:4}".to_string(),
+                        }
+                    )])
+                })
+            )
+        );
         assert_eq!(e_remote, e_local);
 
         local.clean_local_state();
