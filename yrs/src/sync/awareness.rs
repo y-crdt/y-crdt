@@ -183,6 +183,28 @@ impl Awareness {
     /// If current instance has an observer channel (see: [Awareness::with_observer]), applied
     /// changes will also be emitted as events.
     pub fn apply_update(&mut self, update: AwarenessUpdate) -> Result<(), Error> {
+        self.apply_update_internal(update, self.on_update.has_subscribers())?;
+        Ok(())
+    }
+
+    /// Applies an update (incoming from remote channel or generated using [Awareness::update] /
+    /// [Awareness::update_with_clients] methods) and modifies a state of a current instance.
+    /// Returns an [AwarenessUpdateSummary] object informing about the changes that were applied.
+    ///
+    /// If current instance has an observer channel (see: [Awareness::with_observer]), applied
+    /// changes will also be emitted as events.
+    pub fn apply_update_summary(
+        &mut self,
+        update: AwarenessUpdate,
+    ) -> Result<Option<AwarenessUpdateSummary>, Error> {
+        self.apply_update_internal(update, true)
+    }
+
+    fn apply_update_internal(
+        &mut self,
+        update: AwarenessUpdate,
+        generate_summary: bool,
+    ) -> Result<Option<AwarenessUpdateSummary>, Error> {
         let now = Instant::now();
 
         let mut added = Vec::new();
@@ -209,21 +231,21 @@ impl Awareness {
                                 clock += 1;
                             } else {
                                 self.states.remove(&client_id);
-                                if self.on_update.has_subscribers() {
+                                if generate_summary {
                                     removed.push(client_id);
                                 }
                             }
                         } else {
                             match self.states.entry(client_id) {
                                 Entry::Occupied(mut e) => {
-                                    if self.on_update.has_subscribers() {
+                                    if generate_summary {
                                         updated.push(client_id);
                                     }
                                     e.insert(entry.json);
                                 }
                                 Entry::Vacant(e) => {
                                     e.insert(entry.json);
-                                    if self.on_update.has_subscribers() {
+                                    if generate_summary {
                                         updated.push(client_id);
                                     }
                                 }
@@ -238,7 +260,7 @@ impl Awareness {
                 Entry::Vacant(e) => {
                     e.insert(MetaClientState::new(clock, now));
                     self.states.insert(client_id, entry.json);
-                    if self.on_update.has_subscribers() {
+                    if generate_summary {
                         added.push(client_id);
                     }
                     true
@@ -246,21 +268,34 @@ impl Awareness {
             };
         }
 
-        if let Some(mut callbacks) = self.on_update.callbacks() {
-            if !added.is_empty() || !updated.is_empty() || !removed.is_empty() {
+        if !added.is_empty() || !updated.is_empty() || !removed.is_empty() {
+            let summary = if let Some(mut callbacks) = self.on_update.callbacks() {
                 let mut changed = Vec::with_capacity(added.len() + updated.len() + removed.len());
                 changed.extend_from_slice(&*added);
                 changed.extend_from_slice(&*updated);
                 changed.extend_from_slice(&*removed);
                 let update = self.update_with_clients(changed)?;
 
-                // artificial transaction for the same of Observer signature, it will never be reached
                 let e = Event::new(added, updated, removed, Some(update));
+                // artificial transaction for the same of Observer signature, it will never be reached
                 callbacks.trigger(unsafe { MaybeUninit::uninit().assume_init_ref() }, &e);
-            }
-        }
 
-        Ok(())
+                AwarenessUpdateSummary {
+                    added: e.added,
+                    updated: e.updated,
+                    removed: e.removed,
+                }
+            } else {
+                AwarenessUpdateSummary {
+                    added,
+                    updated,
+                    removed,
+                }
+            };
+            Ok(Some(summary))
+        } else {
+            Ok(None)
+        }
     }
 }
 
@@ -277,6 +312,29 @@ impl std::fmt::Debug for Awareness {
             .field("meta", &self.meta)
             .field("doc", &self.doc)
             .finish()
+    }
+}
+
+/// Summary of applying an [AwarenessUpdate] over [Awareness::apply_update_summary] method.
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub struct AwarenessUpdateSummary {
+    /// New clients added as part of the update.
+    pub added: Vec<ClientID>,
+    /// Existing clients that have been changed by the update.
+    pub updated: Vec<ClientID>,
+    /// Existing clients that have been removed by the update.
+    pub removed: Vec<ClientID>,
+}
+
+impl AwarenessUpdateSummary {
+    /// Returns a collection of all clients that have been changed by the [AwarenessUpdate].
+    pub fn all_changes(&self) -> Vec<ClientID> {
+        let mut res =
+            Vec::with_capacity(self.added.len() + self.updated.len() + self.removed.len());
+        res.extend_from_slice(&self.added);
+        res.extend_from_slice(&self.updated);
+        res.extend_from_slice(&self.removed);
+        res
     }
 }
 
@@ -396,25 +454,25 @@ impl Event {
 
 #[cfg(test)]
 mod test {
-    use crate::sync::awareness::{AwarenessUpdateEntry, Event};
+    use crate::sync::awareness::{AwarenessUpdateEntry, AwarenessUpdateSummary, Event};
     use crate::sync::{Awareness, AwarenessUpdate};
     use crate::Doc;
     use std::collections::HashMap;
     use std::sync::mpsc::{channel, Receiver};
 
-    fn update(
-        recv: &mut Receiver<Event>,
-        from: &Awareness,
-        to: &mut Awareness,
-    ) -> Result<Event, Box<dyn std::error::Error>> {
-        let e = recv.try_recv()?;
-        let u = from.update_with_clients([e.added(), e.updated(), e.removed()].concat())?;
-        to.apply_update(u)?;
-        Ok(e)
-    }
-
     #[test]
     fn awareness() -> Result<(), Box<dyn std::error::Error>> {
+        fn update(
+            recv: &mut Receiver<Event>,
+            from: &Awareness,
+            to: &mut Awareness,
+        ) -> Result<Event, Box<dyn std::error::Error>> {
+            let e = recv.try_recv()?;
+            let u = from.update_with_clients([e.added(), e.updated(), e.removed()].concat())?;
+            to.apply_update(u)?;
+            Ok(e)
+        }
+
         let (s1, mut o_local) = channel();
         let mut local = Awareness::new(Doc::with_client_id(1));
         let _sub_local = local.on_update(move |e| {
@@ -462,6 +520,55 @@ mod test {
         assert_eq!(e_remote.removed.len(), 1);
         assert_eq!(local.clients().get(&1), None);
         assert_eq!(e_remote, e_local);
+        Ok(())
+    }
+
+    #[test]
+    fn awareness_summary() -> Result<(), Box<dyn std::error::Error>> {
+        let mut local = Awareness::new(Doc::with_client_id(1));
+        let mut remote = Awareness::new(Doc::with_client_id(2));
+
+        local.set_local_state("{x:3}");
+        let update = local.update_with_clients([local.client_id()])?;
+        let summary = remote.apply_update_summary(update)?;
+        assert_eq!(remote.clients()[&1], "{x:3}");
+        assert_eq!(remote.meta[&1].clock, 1);
+        assert_eq!(
+            summary,
+            Some(AwarenessUpdateSummary {
+                added: vec![1],
+                updated: vec![],
+                removed: vec![]
+            })
+        );
+
+        local.set_local_state("{x:4}");
+        let update = local.update_with_clients([local.client_id()])?;
+        let summary = remote.apply_update_summary(update)?;
+        assert_eq!(remote.clients()[&1], "{x:4}");
+        assert_eq!(
+            summary,
+            Some(AwarenessUpdateSummary {
+                added: vec![],
+                updated: vec![1],
+                removed: vec![]
+            })
+        );
+        assert_eq!(local.states, remote.states);
+
+        local.clean_local_state();
+        let update = local.update_with_clients([local.client_id()])?;
+        let summary = remote.apply_update_summary(update)?;
+        assert_eq!(
+            summary,
+            Some(AwarenessUpdateSummary {
+                added: vec![],
+                updated: vec![],
+                removed: vec![1]
+            })
+        );
+        assert_eq!(local.clients().get(&1), None);
+        assert_eq!(local.states, remote.states);
         Ok(())
     }
 }
