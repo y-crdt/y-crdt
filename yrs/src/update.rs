@@ -1059,11 +1059,16 @@ impl Iterator for IntoBlocks {
 mod test {
     use crate::block::{Item, ItemContent};
     use crate::encoding::read::Cursor;
-    use crate::types::TypePtr;
+    use crate::types::{ToJson, TypePtr};
     use crate::update::{BlockCarrier, Update};
     use crate::updates::decoder::{Decode, DecoderV1};
     use crate::updates::encoder::Encode;
-    use crate::{Doc, GetString, Options, Text, Transact, XmlFragment, XmlNode, ID};
+    use crate::{
+        Doc, GetString, Map, Options, ReadTxn, StateVector, Text, Transact, XmlFragment, XmlNode,
+        ID,
+    };
+    use std::cell::RefCell;
+    use std::rc::Rc;
 
     #[test]
     fn update_decode() {
@@ -1146,6 +1151,50 @@ mod test {
 
         assert_eq!(str1, str2);
         assert_eq!(str2, str3);
+    }
+
+    #[test]
+    fn missing_state_vector() {
+        let d1 = Doc::with_client_id(1);
+        let updates = Rc::new(RefCell::new(Vec::new()));
+        let _sub = {
+            let mut updates = updates.clone();
+            d1.observe_update_v1(move |txn, e| updates.borrow_mut().push(e.update.clone()))
+                .unwrap()
+        };
+        let m1 = d1.get_or_insert_map("test");
+        m1.insert(&mut d1.transact_mut(), "a", "1");
+        m1.insert(&mut d1.transact_mut(), "b", "2");
+        m1.insert(&mut d1.transact_mut(), "c", "3");
+        m1.insert(&mut d1.transact_mut(), "d", "4");
+        m1.insert(&mut d1.transact_mut(), "e", "5");
+
+        let updates = (&*updates).borrow_mut();
+        let (first, second) = updates.split_at(3);
+
+        let d2 = Doc::with_client_id(2);
+        let m2 = d1.get_or_insert_map("test");
+        for update in second.iter() {
+            let u = Update::decode_v1(&*update).unwrap();
+            d2.transact_mut().apply_update(u);
+        }
+        let missing_sv = d2
+            .transact()
+            .store()
+            .pending_update()
+            .unwrap()
+            .missing
+            .clone();
+        assert_eq!(
+            missing_sv,
+            StateVector::new([(1u64, 0u32)].iter().cloned().collect())
+        );
+
+        let missing_update = d1.transact().encode_state_as_update_v1(&missing_sv);
+        d2.transact_mut()
+            .apply_update(Update::decode_v1(&missing_update).unwrap());
+
+        assert_eq!(m1.to_json(&d1.transact()), m2.to_json(&d2.transact()));
     }
 
     #[test]

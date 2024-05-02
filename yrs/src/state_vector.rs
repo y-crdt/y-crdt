@@ -73,7 +73,7 @@ impl StateVector {
                 *value = (*value).min(clock);
             }
             Entry::Vacant(e) => {
-                e.insert(clock);
+                e.insert(0);
             }
         }
     }

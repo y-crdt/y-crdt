@@ -678,7 +678,6 @@ impl<'doc> TransactionMut<'doc> {
                 let mut ds_update = Update::new();
                 ds_update.delete_set = ds;
                 self.apply_update(pending.update);
-                self.apply_update(ds_update)
             }
         }
     }
