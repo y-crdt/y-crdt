@@ -1300,30 +1300,26 @@ impl Item {
         // Here since we decode all blocks first, then apply them, we might not find them in
         // the block store during decoding. Therefore we retroactively reattach it here.
 
-        match &self.parent {
-            TypePtr::Unknown => {
-                if let Some(item) = self.left.as_deref() {
-                    if let TypePtr::Unknown = item.parent {
-                        if let Some(item) = self.right.as_deref() {
-                            self.parent = item.parent.clone();
-                            self.parent_sub = item.parent_sub.clone();
-                        }
-                    } else {
-                        self.parent = item.parent.clone();
-                        self.parent_sub = item.parent_sub.clone();
-                    }
-                } else if let Some(item) = self.right.as_deref() {
-                    self.parent = item.parent.clone();
+        self.parent = match &self.parent {
+            TypePtr::Branch(branch_ptr) => TypePtr::Branch(*branch_ptr),
+            TypePtr::Unknown => match (self.left, self.right) {
+                (Some(item), _) if item.parent != TypePtr::Unknown => {
                     self.parent_sub = item.parent_sub.clone();
+                    item.parent.clone()
                 }
-            }
+                (_, Some(item)) if item.parent != TypePtr::Unknown => {
+                    self.parent_sub = item.parent_sub.clone();
+                    item.parent.clone()
+                }
+                _ => TypePtr::Unknown,
+            },
             TypePtr::Named(name) => {
                 let branch = store.get_or_create_type(name.clone(), TypeRef::Undefined);
-                self.parent = branch.into();
+                TypePtr::Branch(branch)
             }
             TypePtr::ID(id) => {
                 let ptr = store.blocks.get_item(id);
-                self.parent = if let Some(item) = ptr {
+                if let Some(item) = ptr {
                     match &item.content {
                         ItemContent::Type(branch) => {
                             TypePtr::Branch(BranchPtr::from(branch.as_ref()))
@@ -1333,10 +1329,9 @@ impl Item {
                     }
                 } else {
                     TypePtr::Unknown
-                };
+                }
             }
-            _ => {}
-        }
+        };
     }
 
     /// Returns a length of a block. For most situation it works like [Item::content_len] with a
