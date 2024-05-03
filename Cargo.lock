@@ -1067,14 +1067,14 @@ checksum = "bec47e5bfd1bff0eeaf6d8b485cc1074891a197ab4225d504cb7a1ab88b02bf0"
 
 [[package]]
 name = "yffi"
-version = "0.18.5"
+version = "0.18.6"
 dependencies = [
  "yrs",
 ]
 
 [[package]]
 name = "yrs"
-version = "0.18.5"
+version = "0.18.6"
 dependencies = [
  "arc-swap",
  "atomic_refcell",
@@ -1093,7 +1093,7 @@ dependencies = [
 
 [[package]]
 name = "ywasm"
-version = "0.18.5"
+version = "0.18.6"
 dependencies = [
  "console_error_panic_hook",
  "gloo-utils",
