@@ -242,6 +242,9 @@ pub trait Text: AsRef<Branch> + Sized {
         chunk: &str,
         mut attributes: Attrs,
     ) {
+        if chunk.is_empty() {
+            return;
+        }
         let this = BranchPtr::from(self.as_ref());
         if let Some(mut pos) = find_position(this, txn, index) {
             pos.unset_missing(&mut attributes);
@@ -2342,6 +2345,29 @@ mod test {
         ];
 
         assert!(txt.diff(&mut txn, YChange::identity).eq(&expect))
+    }
+
+    #[test]
+    fn insert_empty_string_with_attributes() {
+        let doc = Doc::new();
+        let txt = doc.get_or_insert_text("test");
+        let mut txn = doc.transact_mut();
+
+        let attrs = Attrs::from([("a".into(), "a".into())]);
+        txt.insert(&mut txn, 0, "abc");
+        txt.insert(&mut txn, 1, ""); // nothing changes
+        txt.insert_with_attributes(&mut txn, 1, "", attrs); // nothing changes
+
+        assert_eq!(txt.get_string(&txn).as_str(), "abc");
+
+        let bin = txn.encode_state_as_update_v1(&StateVector::default());
+
+        let doc = Doc::new();
+        let txt = doc.get_or_insert_text("test");
+        let mut txn = doc.transact_mut();
+        txn.apply_update(Update::decode_v1(bin.as_slice()).unwrap());
+
+        assert_eq!(txt.get_string(&txn).as_str(), "abc");
     }
 
     #[test]

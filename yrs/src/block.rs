@@ -1218,6 +1218,7 @@ impl Item {
             0
         });
         let len = content.len(OffsetKind::Utf16);
+        debug_assert!(len > 0, "Defect: block length is zero");
         let root_name = if let TypePtr::Named(root) = &parent {
             Some(root.clone())
         } else {
