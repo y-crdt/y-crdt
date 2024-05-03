@@ -728,8 +728,12 @@ impl Decode for Update {
             for _ in 0..blocks_len {
                 let id = ID::new(client, clock);
                 let block = Self::decode_block(id, decoder)?;
-                clock += block.len();
-                blocks.push_back(block);
+                if block.len() > 0 {
+                    // due to bug in the past it was possible for empty bugs to be generated
+                    // even though they had no effect on the document store
+                    clock += block.len();
+                    blocks.push_back(block);
+                }
             }
         }
         // read delete set
