@@ -1,6 +1,6 @@
 [package]
 name = "ywasm"
-version = "0.18.4"
+version = "0.18.5"
 authors = ["Kevin Jahns <kevin.jahns@protonmail.com>", "Bartosz Sypytkowski <b.sypytkowski@gmail.com>"]
 keywords = ["crdt", "wasm", "yrs"]
 edition = "2018"
@@ -17,10 +17,10 @@ crate-type = ["cdylib", "rlib"]
 default = ["console_error_panic_hook"]
 
 [dependencies]
-yrs = { path = "../yrs", version = "0.18.4", features = ["weak"] }
+yrs = { path = "../yrs", version = "0.18.5", features = ["weak"] }
 wasm-bindgen = { version = "0.2" }
 serde = { version = "1.0", features = ["derive", "rc"] }
-gloo-utils = { version = "0.2.0", features = ["serde"] }
+gloo-utils = { version = "0.2", features = ["serde"] }
 
 # The `console_error_panic_hook` crate provides better debugging of panics by
 # logging them with `console.error`. This is great for development, but requires
