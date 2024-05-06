@@ -52,4 +52,6 @@ Other projects using *yrs*:
 
 [![NLNET](https://nlnet.nl/image/logo_nlnet.svg)](https://nlnet.nl/)
 
-[![Ably](https://ably.com/assets/ably_ui/core/images/ably-logo-ad51bb21f40afd34a70df857594d6b7b84f6ceca0518f1d4d94e2b9579486351.png)](https://ably.com/)
+[![Ably](https://voltaire.ably.com/static/ably-logo-46433d9937b94509fc62ef6dd6d94ff1.png)](https://ably.com/)
+
+<a href="https://www.appflowy.io/"><img src="https://raw.githubusercontent.com/AppFlowy-IO/AppFlowy/main/doc/imgs/appflowy-logo-white.svg" height="75px"/></a>
