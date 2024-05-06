@@ -17,45 +17,30 @@ Other projects using *yrs*:
 - [ypy](https://github.com/y-crdt/ypy) - Python bindings.
 - [yrb](https://github.com/y-crdt/yrb) - Ruby bindings.
 
-## Feature parity with Yjs project
+## Feature parity among projects
 
--  Supported collaborative types:
-  - [x] Text
-    - [x] text insertion (with variable offsets including configurable UTF-8, UTF-16 and UTF-32 mappings)
-    - [x] embedded elements insertion
-    - [x] insertion of formatting attributes
-    - [x] observe events and deltas
-  - [x] Map
-    - [x] insertion, update and removal of primitive JSON-like elements
-    - [x] recursive insertion, update and removal of other collaborative elements of any type
-    - [x] observe events and deltas
-    - [x] deep observe events bubbling up from nested collections
-  - [x] Array
-    - [x] insertion and removal of primitive JSON-like elements
-    - [x] recursive insertion of other collaborative elements of any type
-    - [x] observe events and deltas
-    - [x] deep observe events bubbling up from nested collections
-    - [x] move index positions
-  - [x] XmlElement
-    - [x] insertion, update and removal of XML attributes
-    - [x] insertion, update and removal of XML children nodes
-    - [x] observe events and deltas
-    - [x] deep observe events bubbling up from nested collections
-  - [x] XmlText
-    - [x] insertion, update and removal of XML attributes
-    - [x] text insertion (with variable offsets including configurable UTF-8, UTF-16 and UTF-32 mappings)
-    - [x] observe events and deltas
-  - [x] XmlFragment
-  - [x] XmlHook (*deprecated*)
-  - [x] Subdocuments
-  - [x] Transaction origin
-  - [x] Undo/redo manager
-- Encoding formats:
-  - [x] lib0 v1 encoding
-  - [x] lib0 v2 encoding
-- Transaction events:
-  - [x] on event update
-  - [x] on after transaction
+|                                         |                  yjs <br/>(13.6)                  |               yrs<br/>(0.18)               |                   ywasm<br/>(0.18)                    | yffi<br/>(0.18) |                  y-rb<br/>(0.5)                  |                y-py<br/>(0.6)                | ydotnet<br/>(0.4) | yswift<br/>(0.2) |
+| --------------------------------------- | :-----------------------------------------------: | :----------------------------------------: | :---------------------------------------------------: | :-------------: | :----------------------------------------------: | :------------------------------------------: | :---------------: | :--------------: |
+| YText: insert/delete                    |                     &#x2705;                      |                  &#x2705;                  |                       &#x2705;                        |    &#x2705;     |                     &#x2705;                     |                   &#x2705;                   |     &#x2705;      |     &#x2705;     |
+| YText: formatting attributes and deltas |                     &#x2705;                      |                  &#x2705;                  |                       &#x2705;                        |    &#x2705;     |                     &#x2705;                     |                   &#x2705;                   |     &#x2705;      |     &#x2705;     |
+| YText: embeded elements                 |                     &#x2705;                      |                  &#x2705;                  |                       &#x2705;                        |    &#x2705;     |                     &#x2705;                     |                   &#x2705;                   |     &#x2705;      |     &#x2705;     |
+| YMap: update/delete                     |                     &#x2705;                      |                  &#x2705;                  |                       &#x2705;                        |    &#x2705;     |                     &#x2705;                     |                   &#x2705;                   |     &#x2705;      |     &#x2705;     |
+| YMap: weak links                        | &#x2705; <br/> <small>(weak-links branch)</small> |                  &#x2705;                  |                       &#x2705;                        |    &#x2705;     |                     &#x274C;                     |                   &#x274C;                   |     &#x274C;      |     &#x274C;     |
+| YArray: insert/delete                   |                     &#x2705;                      |                  &#x2705;                  |                       &#x2705;                        |    &#x2705;     |                     &#x2705;                     |                   &#x2705;                   |     &#x2705;      |     &#x2705;     |
+| YArray & YText quotations               | &#x2705; <br/> <small>(weak links branch)</small> |                  &#x2705;                  |                       &#x2705;                        |    &#x2705;     |                     &#x274C;                     |                   &#x274C;                   |     &#x274C;      |     &#x274C;     |
+| YArray: move                            |    &#x2705; <br/> <small>(move branch)</small>    |                  &#x2705;                  |                       &#x2705;                        |    &#x2705;     |                     &#x274C;                     |                   &#x2705;                   |     &#x2705;      |     &#x274C;     |
+| XML Element, Fragment and Text          |                     &#x2705;                      |                  &#x2705;                  |                       &#x2705;                        |    &#x2705;     |                     &#x2705;                     |                   &#x2705;                   |     &#x2705;      |     &#x274C;     |
+| Sub-documents                           |                     &#x2705;                      |                  &#x2705;                  |                       &#x2705;                        |    &#x2705;     |                     &#x274C;                     |                   &#x274C;                   |     &#x2705;      |     &#x274C;     |
+| Shared collections: observers           |                     &#x2705;                      |                  &#x2705;                  | &#x2705; <br/> <small>(incompatible with yjs)</small> |    &#x2705;     |                     &#x2705;                     |                   &#x2705;                   |     &#x2705;      |     &#x2705;     |
+| Shared collections: recursive nesting   |                     &#x2705;                      |                  &#x2705;                  |                       &#x2705;                        |    &#x2705;     |                     &#x274C;                     |                   &#x274C;                   |     &#x274C;      |     &#x274C;     |
+| Document observers                      |                     &#x2705;                      |                  &#x2705;                  | &#x2705; <br/> <small>(incompatible with yjs)</small> |    &#x2705;     |                     &#x2705;                     |                   &#x2705;                   |     &#x2705;      |                  |
+| Transaction: origins                    |                     &#x2705;                      |                  &#x2705;                  |                       &#x2705;                        |    &#x2705;     |                     &#x274C;                     |                   &#x274C;                   |     &#x2705;      |     &#x2705;     |
+| Snapshots                               |                     &#x2705;                      |                  &#x2705;                  |                       &#x2705;                        |    &#x2705;     |                     &#x274C;                     |                   &#x274C;                   |     &#x274C;      |     &#x274C;     |
+| Sticky indexes                          |                     &#x2705;                      |                  &#x2705;                  |                       &#x2705;                        |    &#x2705;     |                     &#x274C;                     |                   &#x274C;                   |     &#x2705;      |     &#x274C;     |
+| Undo Manager                            |                     &#x2705;                      |                  &#x2705;                  |                       &#x2705;                        |    &#x2705;     |                     &#x274C;                     |                   &#x274C;                   |     &#x2705;      |     &#x2705;     |
+| Awareness                               |                     &#x2705;                      |                  &#x2705;                  |                       &#x2705;                        |    &#x274C;     |                     &#x2705;                     |                   &#x274C;                   |     &#x2705;      |     &#x274C;     |
+| Network provider: WebSockets            |    &#x2705; <br/> <small>(y-websocket)</small>    |  &#x2705; <br/> <small>(yrs-warp)</small>  |                       &#x274C;                        |    &#x274C;     | &#x2705; <br/> <small>(y-rb_actioncable)</small> | &#x2705; <br/><small>(ypy-websocket)</small> |     &#x2705;      |     &#x274C;     |
+| Network provider: WebRTC                |     &#x2705; <br/> <small>(y-webrtc)</small>      | &#x2705; <br/> <small>(yrs-webrtc)</small> |                       &#x274C;                        |    &#x274C;     |                     &#x274C;                     |                   &#x274C;                   |     &#x274C;      |     &#x274C;     |
 
 ## Maintainers
 
