@@ -134,7 +134,7 @@ impl Awareness {
 
     /// Returns a serializable update object which is representation of a current Awareness state.
     pub fn update(&self) -> Result<AwarenessUpdate, Error> {
-        self.state().update()
+        self.state().full_update()
     }
 
     /// Returns a serializable update object which is representation of a current Awareness state.
@@ -360,9 +360,9 @@ pub enum Error {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct MetaClientState {
-    clock: u32,
-    last_updated: Instant,
+pub struct MetaClientState {
+    pub clock: u32,
+    pub last_updated: Instant,
 }
 
 impl MetaClientState {
@@ -410,8 +410,27 @@ impl AwarenessState {
         prev_state.is_some()
     }
 
+    /// Get iterator over all awarness clients.
+    pub fn all_clients(&self) -> AwarenessClients {
+        AwarenessClients {
+            inner: self.meta.keys(),
+        }
+    }
+
+    /// Returns a string state representation of a particular client.
+    pub fn get_state(&self, client_id: ClientID) -> Option<&str> {
+        let state = self.states.get(&client_id)?;
+        Some(state.as_str())
+    }
+
+    /// Returns a metadata about particular client.
+    #[inline]
+    pub fn get_meta(&self, client_id: ClientID) -> Option<&MetaClientState> {
+        self.meta.get(&client_id)
+    }
+
     /// Returns a serializable update object which is representation of a current Awareness state.
-    pub fn update(&self) -> Result<AwarenessUpdate, Error> {
+    pub fn full_update(&self) -> Result<AwarenessUpdate, Error> {
         let clients = self.states.keys().cloned();
         self.update_with_clients(clients)
     }
@@ -452,6 +471,20 @@ impl AwarenessState {
                 e.insert(MetaClientState::new(1, Instant::now()));
             }
         }
+    }
+}
+
+#[repr(transparent)]
+pub struct AwarenessClients<'a> {
+    inner: std::collections::hash_map::Keys<'a, ClientID, MetaClientState>,
+}
+
+impl<'a> Iterator for AwarenessClients<'a> {
+    type Item = ClientID;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next().cloned()
     }
 }
 
@@ -583,8 +616,8 @@ mod test {
         assert_eq!(local.clients().get(&1), None);
         assert_eq!(e_remote, e_local);
         assert_eq!(
-            e_remote.awareness_state().update().unwrap(),
-            e_local.awareness_state().update().unwrap()
+            e_remote.awareness_state().full_update().unwrap(),
+            e_local.awareness_state().full_update().unwrap()
         );
         Ok(())
     }
