@@ -26,6 +26,9 @@ use std::sync::Arc;
 #[derive(Clone, Copy, Hash)]
 pub struct BranchPtr(NonNull<Branch>);
 
+unsafe impl Send for BranchPtr {}
+unsafe impl Sync for BranchPtr {}
+
 impl BranchPtr {
     pub(crate) fn trigger(
         &self,
