@@ -184,8 +184,6 @@ impl Awareness {
         update: AwarenessUpdate,
         generate_summary: bool,
     ) -> Result<Option<AwarenessUpdateSummary>, Error> {
-        let now = Instant::now();
-
         let mut added = Vec::new();
         let mut updated = Vec::new();
         let mut removed = Vec::new();
@@ -231,14 +229,14 @@ impl Awareness {
                                 }
                             }
                         }
-                        e.insert(MetaClientState::new(clock, now));
+                        e.insert(MetaClientState::new(clock));
                         true
                     } else {
                         false
                     }
                 }
                 Entry::Vacant(e) => {
-                    e.insert(MetaClientState::new(clock, now));
+                    e.insert(MetaClientState::new(clock));
                     state.states.insert(client_id, entry.json);
                     if generate_summary {
                         added.push(client_id);
@@ -362,15 +360,22 @@ pub enum Error {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MetaClientState {
     pub clock: u32,
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
     pub last_updated: Instant,
 }
 
 impl MetaClientState {
-    fn new(clock: u32, last_updated: Instant) -> Self {
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+    fn new(clock: u32) -> Self {
         MetaClientState {
             clock,
-            last_updated,
+            last_updated: Instant::now(),
         }
+    }
+
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+    fn new(clock: u32) -> Self {
+        MetaClientState { clock }
     }
 }
 
@@ -464,11 +469,15 @@ impl AwarenessState {
         match self.meta.entry(client_id) {
             Entry::Occupied(mut e) => {
                 let clock = e.get().clock + 1;
-                let meta = MetaClientState::new(clock, Instant::now());
+                let meta = if cfg!(all(target_arch = "wasm32", target_os = "unknown")) {
+                    MetaClientState::new(clock)
+                } else {
+                    MetaClientState::new(clock)
+                };
                 e.insert(meta);
             }
             Entry::Vacant(e) => {
-                e.insert(MetaClientState::new(1, Instant::now()));
+                e.insert(MetaClientState::new(1));
             }
         }
     }
