@@ -469,11 +469,7 @@ impl AwarenessState {
         match self.meta.entry(client_id) {
             Entry::Occupied(mut e) => {
                 let clock = e.get().clock + 1;
-                let meta = if cfg!(all(target_arch = "wasm32", target_os = "unknown")) {
-                    MetaClientState::new(clock)
-                } else {
-                    MetaClientState::new(clock)
-                };
+                let meta = MetaClientState::new(clock);
                 e.insert(meta);
             }
             Entry::Vacant(e) => {
