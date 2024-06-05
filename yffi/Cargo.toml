@@ -15,5 +15,5 @@ description = "Bindings for the Yrs native C foreign function interface"
 yrs = { path = "../yrs", version = "0.18.8", features = ["weak"] }
 
 [lib]
-crate-type = ["staticlib", "cdylib"]
+crate-type = ["rlib", "staticlib", "cdylib"]
 name = "yrs"
