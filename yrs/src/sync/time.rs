@@ -21,6 +21,7 @@ where
 #[derive(Debug, Copy, Clone, Default)]
 pub struct SystemClock;
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Clock for SystemClock {
     fn now(&self) -> Timestamp {
         std::time::SystemTime::now()

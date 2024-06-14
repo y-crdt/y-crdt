@@ -282,6 +282,7 @@ impl Awareness {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Default for Awareness {
     fn default() -> Self {
         Awareness::new(Doc::new())

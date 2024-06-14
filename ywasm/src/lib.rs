@@ -9,6 +9,7 @@ use yrs::updates::encoder::{Encode, Encoder};
 use yrs::{Assoc, ReadTxn, StickyIndex, Transact, TransactionMut, Update};
 
 mod array;
+mod awareness;
 mod collection;
 mod doc;
 mod js;
