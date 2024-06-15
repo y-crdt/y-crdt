@@ -2,12 +2,13 @@ use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::fmt::Formatter;
 use std::mem::MaybeUninit;
-use std::time::Instant;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::block::ClientID;
+use crate::sync::{Clock, Timestamp};
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::{Doc, Observer, Subscription};
@@ -39,11 +40,22 @@ impl Awareness {
     /// Creates a new instance of [Awareness] struct, which operates over a given document.
     /// Awareness instance has full ownership of that document. If necessary it can be accessed
     /// using either [Awareness::doc] or [Awareness::doc_mut] methods.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn new(doc: Doc) -> Self {
+        Self::with_clock(doc, crate::sync::time::SystemClock)
+    }
+
+    /// Creates a new instance of [Awareness] struct, which operates over a given document.
+    /// Awareness instance has full ownership of that document. If necessary it can be accessed
+    /// using either [Awareness::doc] or [Awareness::doc_mut] methods.
+    pub fn with_clock<C>(doc: Doc, clock: C) -> Self
+    where
+        C: Clock + 'static,
+    {
         Awareness {
             doc,
             on_update: Observer::new(),
-            state: Some(AwarenessState::new()),
+            state: Some(AwarenessState::new(Arc::new(clock))),
         }
     }
 
@@ -70,11 +82,17 @@ impl Awareness {
         self.doc.client_id()
     }
 
-    /// Returns a state map of all of the clients tracked by current [Awareness] instance. Those
+    /// Returns a state map of all the clients tracked by current [Awareness] instance. Those
     /// states are identified by their corresponding [ClientID]s. The associated state is
     /// represented and replicated to other clients as a JSON string.
     pub fn clients(&self) -> &HashMap<ClientID, String> {
         &self.state.as_ref().unwrap().states
+    }
+
+    /// Returns a state map of all the clients metadata tracked by current [Awareness] instance.
+    /// That metadata is identified by their corresponding [ClientID]s.
+    pub fn meta(&self) -> &HashMap<ClientID, MetaClientState> {
+        &self.state.as_ref().unwrap().meta
     }
 
     /// Returns a JSON string state representation of a current [Awareness] instance.
@@ -184,7 +202,7 @@ impl Awareness {
         update: AwarenessUpdate,
         generate_summary: bool,
     ) -> Result<Option<AwarenessUpdateSummary>, Error> {
-        let now = Instant::now();
+        let now = self.state().clock.now();
 
         let mut added = Vec::new();
         let mut updated = Vec::new();
@@ -270,6 +288,7 @@ impl Awareness {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Default for Awareness {
     fn default() -> Self {
         Awareness::new(Doc::new())
@@ -278,10 +297,15 @@ impl Default for Awareness {
 
 impl std::fmt::Debug for Awareness {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Awareness")
-            .field("state", &self.state)
-            .field("doc", &self.doc)
-            .finish()
+        let mut s = f.debug_struct("Awareness");
+        s.field("doc", &self.doc);
+
+        if let Some(state) = self.state.as_ref() {
+            s.field("meta", &state.meta);
+            s.field("states", &state.states);
+        }
+
+        s.finish()
     }
 }
 
@@ -359,14 +383,14 @@ pub enum Error {
     ClientNotFound(ClientID),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MetaClientState {
     pub clock: u32,
-    pub last_updated: Instant,
+    pub last_updated: Timestamp,
 }
 
 impl MetaClientState {
-    fn new(clock: u32, last_updated: Instant) -> Self {
+    fn new(clock: u32, last_updated: Timestamp) -> Self {
         MetaClientState {
             clock,
             last_updated,
@@ -375,15 +399,17 @@ impl MetaClientState {
 }
 
 /// An [Awareness] client state representation.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct AwarenessState {
+    clock: Arc<dyn Clock>,
     states: HashMap<ClientID, String>,
     meta: HashMap<ClientID, MetaClientState>,
 }
 
 impl AwarenessState {
-    fn new() -> Self {
+    fn new(clock: Arc<dyn Clock>) -> Self {
         AwarenessState {
+            clock,
             states: HashMap::new(),
             meta: HashMap::new(),
         }
@@ -461,14 +487,15 @@ impl AwarenessState {
     }
 
     fn update_meta(&mut self, client_id: ClientID) {
+        let now = self.clock.now();
         match self.meta.entry(client_id) {
             Entry::Occupied(mut e) => {
                 let clock = e.get().clock + 1;
-                let meta = MetaClientState::new(clock, Instant::now());
+                let meta = MetaClientState::new(clock, now);
                 e.insert(meta);
             }
             Entry::Vacant(e) => {
-                e.insert(MetaClientState::new(1, Instant::now()));
+                e.insert(MetaClientState::new(1, now));
             }
         }
     }
@@ -489,7 +516,7 @@ impl<'a> Iterator for AwarenessClients<'a> {
 }
 
 /// Event type emitted by an [Awareness] struct.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone)]
 pub struct Event {
     summary: AwarenessUpdateSummary,
     awareness_state: AwarenessState,
@@ -614,7 +641,7 @@ mod test {
         let e_remote = o_remote.try_recv()?;
         assert_eq!(e_remote.removed().len(), 1);
         assert_eq!(local.clients().get(&1), None);
-        assert_eq!(e_remote, e_local);
+        assert_eq!(e_remote.summary, e_local.summary);
         assert_eq!(
             e_remote.awareness_state().full_update().unwrap(),
             e_local.awareness_state().full_update().unwrap()

@@ -1083,6 +1083,7 @@ dependencies = [
  "flate2",
  "proptest",
  "proptest-derive",
+ "rand",
  "ropey",
  "serde",
  "serde_json",

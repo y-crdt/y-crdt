@@ -711,7 +711,7 @@ impl DocAddr {
 
 #[cfg(test)]
 mod test {
-    use crate::block::ItemContent;
+    use crate::block::{Item, ItemContent};
     use crate::test_utils::exchange_updates;
     use crate::transaction::{ReadTxn, TransactionMut};
     use crate::types::ToJson;
