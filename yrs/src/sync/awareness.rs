@@ -82,11 +82,17 @@ impl Awareness {
         self.doc.client_id()
     }
 
-    /// Returns a state map of all of the clients tracked by current [Awareness] instance. Those
+    /// Returns a state map of all the clients tracked by current [Awareness] instance. Those
     /// states are identified by their corresponding [ClientID]s. The associated state is
     /// represented and replicated to other clients as a JSON string.
     pub fn clients(&self) -> &HashMap<ClientID, String> {
         &self.state.as_ref().unwrap().states
+    }
+
+    /// Returns a state map of all the clients metadata tracked by current [Awareness] instance.
+    /// That metadata is identified by their corresponding [ClientID]s.
+    pub fn meta(&self) -> &HashMap<ClientID, MetaClientState> {
+        &self.state.as_ref().unwrap().meta
     }
 
     /// Returns a JSON string state representation of a current [Awareness] instance.
@@ -377,7 +383,7 @@ pub enum Error {
     ClientNotFound(ClientID),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MetaClientState {
     pub clock: u32,
     pub last_updated: Timestamp,

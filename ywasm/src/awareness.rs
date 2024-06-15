@@ -1,8 +1,9 @@
 use gloo_utils::format::JsValueSerdeExt;
 use js_sys::Uint8Array;
 use serde::Serialize;
+use wasm_bindgen::convert::{FromWasmAbi, IntoWasmAbi};
 use wasm_bindgen::prelude::wasm_bindgen;
-use wasm_bindgen::{JsValue, UnwrapThrowExt};
+use wasm_bindgen::JsValue;
 
 use yrs::sync::awareness::Event;
 use yrs::sync::{Awareness as AwarenessInner, AwarenessUpdate, Timestamp};
@@ -28,6 +29,17 @@ impl Awareness {
     #[wasm_bindgen(getter, js_name = doc)]
     pub fn doc(&self) -> YDoc {
         YDoc(self.inner.doc().clone())
+    }
+
+    #[wasm_bindgen(getter, js_name = meta)]
+    pub fn meta(&self) -> crate::Result<js_sys::Map> {
+        let meta = self.inner.meta();
+        let result = js_sys::Map::new();
+        for (&client_id, info) in meta.iter() {
+            let info = JsValue::from_serde(info).map_err(|e| JsValue::from_str(&e.to_string()))?;
+            result.set(&JsValue::from(client_id), &info);
+        }
+        Ok(result)
     }
 
     #[wasm_bindgen(js_name = destroy)]
@@ -92,8 +104,8 @@ impl Awareness {
 
         let sub = self.inner.on_update(move |e| {
             let event = AwarenessEvent::from(e);
-            let json = JsValue::from_serde(&event).unwrap_throw();
-            callback.call1(&JsValue::NULL, &json).unwrap_throw();
+            let json = JsValue::from_serde(&event).unwrap();
+            callback.call1(&JsValue::NULL, &json).unwrap();
         });
         Observer(sub)
     }
@@ -108,13 +120,13 @@ pub fn remove_states(awareness: &mut Awareness, clients: Vec<u64>) -> crate::Res
 }
 
 #[wasm_bindgen(js_name = encodeAwarenessUpdate)]
-pub fn encode_update(
-    awareness: &Awareness,
-    clients: Option<Vec<u64>>,
-) -> crate::Result<Uint8Array> {
-    let res = match clients {
-        None => awareness.inner.update(),
-        Some(clients) => awareness.inner.update_with_clients(clients),
+pub fn encode_update(awareness: &Awareness, clients: JsValue) -> crate::Result<Uint8Array> {
+    let res = if clients.is_null() || clients.is_undefined() {
+        awareness.inner.update()
+    } else {
+        let client_ids: Vec<u64> =
+            JsValue::into_serde(&clients).map_err(|e| JsValue::from_str(&e.to_string()))?;
+        awareness.inner.update_with_clients(client_ids)
     };
 
     let update = res.map_err(|e| JsValue::from_str(&e.to_string()))?;
@@ -135,7 +147,11 @@ pub fn modify_update(update: Uint8Array, modify: js_sys::Function) -> crate::Res
 }
 
 #[wasm_bindgen(js_name = applyAwarenessUpdate)]
-pub fn apply_update(awareness: &mut Awareness, update: Uint8Array) -> crate::Result<()> {
+pub fn apply_update(
+    awareness: &mut Awareness,
+    update: Uint8Array,
+    _origin: JsValue, //TODO: use origin in Awareness::apply_update
+) -> crate::Result<()> {
     let update = AwarenessUpdate::decode_v1(&update.to_vec())
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
     awareness
