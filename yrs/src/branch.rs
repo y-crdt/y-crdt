@@ -514,6 +514,7 @@ impl Branch {
         path
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn observe<F>(&mut self, f: F) -> Subscription
     where
         F: Fn(&TransactionMut, &Event) + Send + Sync + 'static,
@@ -521,11 +522,49 @@ impl Branch {
         self.observers.subscribe(Box::new(f))
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+
+    pub fn observe_with<F>(&mut self, key: Origin, f: F)
+    where
+        F: Fn(&TransactionMut, &Event) + Send + Sync + 'static,
+    {
+        self.observers.subscribe_with(key, Box::new(f))
+    }
+
+    #[cfg(target_family = "wasm32")]
+
+    pub fn observe_with<F>(&mut self, key: Origin, f: F)
+    where
+        F: Fn(&TransactionMut, &Event) + 'static,
+    {
+        self.observers.subscribe_with(key, Box::new(f))
+    }
+
+    pub fn unobserve(&mut self, key: &Origin) {
+        self.observers.unsubscribe(&key);
+    }
+
     pub fn observe_deep<F>(&self, f: F) -> Subscription
     where
         F: Fn(&TransactionMut, &Events) + Send + Sync + 'static,
     {
         self.deep_observers.subscribe(Box::new(f))
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn observe_deep_with<F>(&self, key: Origin, f: F)
+    where
+        F: Fn(&TransactionMut, &Events) + Send + Sync + 'static,
+    {
+        self.deep_observers.subscribe_with(key, Box::new(f))
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub fn observe_deep_with<F>(&self, key: Origin, f: F)
+    where
+        F: Fn(&TransactionMut, &Events) + 'static,
+    {
+        self.deep_observers.subscribe_with(key, Box::new(f))
     }
 
     pub(crate) fn is_parent_of(&self, mut ptr: Option<ItemPtr>) -> bool {

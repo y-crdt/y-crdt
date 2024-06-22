@@ -9,7 +9,6 @@ use crate::branch::{Branch, BranchPtr};
 use crate::doc::TransactionAcqError;
 use crate::iter::TxnIterator;
 use crate::slice::BlockSlice;
-use crate::sync::time::SystemClock;
 use crate::sync::Clock;
 use crate::transaction::Origin;
 use crate::{DeleteSet, Doc, Observer, Subscription, Transact, TransactionMut, ID};
@@ -64,6 +63,7 @@ where
     /// Creates a new instance of the [UndoManager] working in a `scope` of a particular shared
     /// type and document. While it's possible for undo manager to observe multiple shared types
     /// (see: [UndoManager::expand_scope]), it can only work with a single document at the same time.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn new<T>(doc: &Doc, scope: &T) -> Self
     where
         T: AsRef<Branch>,
@@ -585,7 +585,7 @@ impl Default for Options {
             capture_timeout_millis: 500,
             tracked_origins: HashSet::new(),
             capture_transaction: None,
-            timestamp: Arc::new(SystemClock),
+            timestamp: Arc::new(crate::sync::time::SystemClock),
         }
     }
 }

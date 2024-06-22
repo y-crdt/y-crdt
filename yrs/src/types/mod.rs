@@ -198,6 +198,7 @@ impl Decode for TypeRef {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub trait Observable: AsRef<Branch> {
     type Event;
 
@@ -220,6 +221,67 @@ pub trait Observable: AsRef<Branch> {
             let mapped_event = e.as_ref();
             f(txn, mapped_event)
         })
+    }
+
+    /// Subscribes a given callback to be triggered whenever current y-type is changed.
+    /// A callback is triggered whenever a transaction gets committed. This function does not
+    /// trigger if changes have been observed by nested shared collections.
+    ///
+    /// All array-like event changes can be tracked by using [Event::delta] method.
+    /// All map-like event changes can be tracked by using [Event::keys] method.
+    /// All text-like event changes can be tracked by using [TextEvent::delta] method.
+    ///
+    /// Provided key may be used later to unsubscribe from the event.
+    fn observe_with<K, F>(&self, key: K, f: F)
+    where
+        K: Into<Origin>,
+        F: Fn(&TransactionMut, &Self::Event) + Send + Sync + 'static,
+        Event: AsRef<Self::Event>,
+    {
+        let mut branch = BranchPtr::from(self.as_ref());
+        branch.observe_with(key.into(), move |txn, e| {
+            let mapped_event = e.as_ref();
+            f(txn, mapped_event)
+        })
+    }
+
+    /// Unsubscribes a given callback identified by key, that was previously subscribed using [Self::observe_with].
+    fn unobserve<K: Into<Origin>>(&self, key: K) {
+        let mut branch = BranchPtr::from(self.as_ref());
+        branch.unobserve(&key.into())
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+pub trait Observable: AsRef<Branch> {
+    type Event;
+
+    /// Subscribes a given callback to be triggered whenever current y-type is changed.
+    /// A callback is triggered whenever a transaction gets committed. This function does not
+    /// trigger if changes have been observed by nested shared collections.
+    ///
+    /// All array-like event changes can be tracked by using [Event::delta] method.
+    /// All map-like event changes can be tracked by using [Event::keys] method.
+    /// All text-like event changes can be tracked by using [TextEvent::delta] method.
+    ///
+    /// Provided key may be used later to unsubscribe from the event.
+    fn observe_with<K, F>(&self, key: K, f: F)
+    where
+        K: Into<Origin>,
+        F: Fn(&TransactionMut, &Self::Event) + 'static,
+        Event: AsRef<Self::Event>,
+    {
+        let mut branch = BranchPtr::from(self.as_ref());
+        branch.observe_with(key.into(), move |txn, e| {
+            let mapped_event = e.as_ref();
+            f(txn, mapped_event)
+        })
+    }
+
+    /// Unsubscribes a given callback identified by key, that was previously subscribed using [Self::observe_with].
+    fn unobserve<K: Into<Origin>>(&self, key: K) {
+        let mut branch = BranchPtr::from(self.as_ref());
+        branch.unobserve(&key.into())
     }
 }
 
