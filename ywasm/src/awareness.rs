@@ -6,7 +6,7 @@ use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
 
 use yrs::sync::awareness::Event;
-use yrs::sync::{Awareness as AwarenessInner, AwarenessUpdate, Timestamp};
+use yrs::sync::{Awareness as YAwareness, AwarenessUpdate, Timestamp};
 use yrs::updates::decoder::Decode;
 use yrs::updates::encoder::Encode;
 
@@ -15,14 +15,14 @@ use crate::Observer;
 
 #[wasm_bindgen]
 pub struct Awareness {
-    inner: AwarenessInner,
+    inner: YAwareness<JsValue>,
 }
 
 #[wasm_bindgen]
 impl Awareness {
     #[wasm_bindgen(constructor)]
     pub fn new(doc: YDoc) -> Awareness {
-        let inner = AwarenessInner::with_clock(doc.0.clone(), JsClock);
+        let inner = YAwareness::with_clock(doc.0.clone(), JsClock);
         Awareness { inner }
     }
 
@@ -51,7 +51,7 @@ impl Awareness {
     pub fn local_state(&self) -> crate::Result<JsValue> {
         match self.inner.local_state() {
             None => Ok(JsValue::NULL),
-            Some(str) => js_sys::JSON::parse(str),
+            Some(js) => Ok(js.clone()),
         }
     }
 
@@ -60,7 +60,6 @@ impl Awareness {
         if state.is_null() {
             self.inner.clean_local_state();
         } else {
-            let state = js_sys::JSON::stringify(&state)?;
             self.inner.set_local_state(state);
         }
         Ok(())
@@ -77,8 +76,7 @@ impl Awareness {
     pub fn states(&self) -> crate::Result<js_sys::Map> {
         let result = js_sys::Map::new();
         for (&client_id, state) in self.inner.clients().iter() {
-            let state = js_sys::JSON::parse(&state)?;
-            result.set(&JsValue::from(client_id), &state);
+            result.set(&JsValue::from(client_id), state);
         }
         Ok(result)
     }
@@ -102,7 +100,7 @@ impl Awareness {
             }
         }
 
-        let sub = self.inner.on_update(move |e| {
+        let sub = self.inner.on_update(move |_, e| {
             let event = AwarenessEvent::from(e);
             let json = JsValue::from_serde(&event).unwrap();
             callback.call1(&JsValue::NULL, &json).unwrap();

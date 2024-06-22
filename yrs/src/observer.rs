@@ -12,7 +12,7 @@ pub struct Observer<F> {
 
 impl<F> Observer<F>
 where
-    F: Send + Sync + 'static,
+    F: 'static,
 {
     /// Creates a new [Observer] with no active callbacks.
     pub fn new() -> Self {
@@ -56,43 +56,6 @@ where
         }
     }
 
-    pub fn subscribe(&self, callback: F) -> Subscription {
-        let mut rng = fastrand::Rng::new();
-        let id = rng.usize(0..usize::MAX);
-        self.subscribe_with(Origin::from(id), callback)
-    }
-
-    /// Subscribes a callback parameter to a current [Observer].
-    /// Returns a subscription object which - when dropped - will unsubscribe current callback.
-    /// If the `id` was already present in the observer, current callback will be ignored.
-    pub fn subscribe_with(&self, id: Origin, callback: F) -> Subscription {
-        let inner = self.inner();
-        let mut node = Arc::new(Node::new(id.clone(), callback));
-        let cur = inner.head.load();
-        let head = loop {
-            {
-                // update new node next pointer to point to current head
-                // it's safe to unwrap, since until current node is successfully inserted
-                // there will be no more that a single Arc reference to it
-                let n = Arc::get_mut(&mut node).unwrap();
-                n.next.store(cur.clone());
-            }
-
-            let prev = inner.head.compare_and_swap(&*cur, Some(node.clone()));
-            let swapped = std::ptr::eq(prev.as_raw(), cur.as_raw());
-            if swapped {
-                // we successfully swapped the head, we can exit the loop
-                break node;
-            }
-        };
-        // remove all previous nodes that share the same ID
-        Self::remove(head.clone(), &id);
-        Arc::new(Cancel {
-            id,
-            inner: Arc::downgrade(&inner),
-        })
-    }
-
     fn remove(mut prev: Arc<Node<F>>, id: &Origin) {
         while let Some(next) = prev.next.load_full() {
             if &next.uid == id {
@@ -123,6 +86,49 @@ where
             }
         }
     }
+
+    /// Subscribes a callback parameter to a current [Observer].
+    /// Returns a subscription object which - when dropped - will unsubscribe current callback.
+    /// If the `id` was already present in the observer, current callback will be ignored.
+    pub fn subscribe_with(&self, id: Origin, callback: F) {
+        let inner = self.inner();
+        let mut node = Arc::new(Node::new(id.clone(), callback));
+        let cur = inner.head.load();
+        let head = loop {
+            {
+                // update new node next pointer to point to current head
+                // it's safe to unwrap, since until current node is successfully inserted
+                // there will be no more that a single Arc reference to it
+                let n = Arc::get_mut(&mut node).unwrap();
+                n.next.store(cur.clone());
+            }
+
+            let prev = inner.head.compare_and_swap(&*cur, Some(node.clone()));
+            let swapped = std::ptr::eq(prev.as_raw(), cur.as_raw());
+            if swapped {
+                // we successfully swapped the head, we can exit the loop
+                break node;
+            }
+        };
+        // remove all previous nodes that share the same ID
+        Self::remove(head.clone(), &id);
+    }
+}
+
+impl<F> Observer<F>
+where
+    F: Send + Sync + 'static,
+{
+    pub fn subscribe(&self, callback: F) -> Subscription {
+        let mut rng = fastrand::Rng::new();
+        let id = rng.usize(0..usize::MAX);
+        let origin = Origin::from(id);
+        self.subscribe_with(origin.clone(), callback);
+        Arc::new(Cancel {
+            id: origin,
+            inner: Arc::downgrade(&self.inner()),
+        })
+    }
 }
 
 impl<F> Default for Observer<F>
@@ -140,7 +146,7 @@ struct Inner<F> {
 
 impl<F> Inner<F>
 where
-    F: Send + Sync + 'static,
+    F: 'static,
 {
     fn remove(&self, id: &Origin) {
         while let Some(head) = self.head.load_full() {
@@ -199,7 +205,7 @@ where
 /// If implicit callback unsubscribe on drop is undesired, this structure can be cast [into](Subscription::into)
 /// [SubscriptionId] which is an identifier of the same subscription, which in turn must be used
 /// manually via [Observer::unsubscribe] to perform usubscribe.
-pub type Subscription = Arc<dyn Drop + Send + Sync>;
+pub type Subscription = Arc<dyn Drop + Send + Sync + 'static>;
 
 #[cfg(test)]
 mod test {
