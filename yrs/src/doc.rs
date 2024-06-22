@@ -228,11 +228,11 @@ impl Doc {
     /// Returns a subscription, which will unsubscribe function when dropped.
     pub fn observe_update_v1<F>(&self, f: F) -> Result<Subscription, BorrowMutError>
     where
-        F: Fn(&TransactionMut, &UpdateEvent) -> () + 'static,
+        F: Fn(&TransactionMut, &UpdateEvent) + Send + Sync + 'static,
     {
         let mut r = self.store.try_borrow_mut()?;
         let events = r.events.get_or_init();
-        Ok(events.observe_update_v1(f))
+        Ok(events.observe_update_v1(Box::new(f)))
     }
 
     /// Subscribe callback function for any changes performed within transaction scope. These
@@ -243,52 +243,52 @@ impl Doc {
     /// Returns a subscription, which will unsubscribe function when dropped.
     pub fn observe_update_v2<F>(&self, f: F) -> Result<Subscription, BorrowMutError>
     where
-        F: Fn(&TransactionMut, &UpdateEvent) -> () + 'static,
+        F: Fn(&TransactionMut, &UpdateEvent) + Send + Sync + 'static,
     {
         let mut r = self.store.try_borrow_mut()?;
         let events = r.events.get_or_init();
-        Ok(events.observe_update_v2(f))
+        Ok(events.observe_update_v2(Box::new(f)))
     }
 
     /// Subscribe callback function to updates on the `Doc`. The callback will receive state updates and
     /// deletions when a document transaction is committed.
     pub fn observe_transaction_cleanup<F>(&self, f: F) -> Result<Subscription, BorrowMutError>
     where
-        F: Fn(&TransactionMut, &TransactionCleanupEvent) -> () + 'static,
+        F: Fn(&TransactionMut, &TransactionCleanupEvent) + Send + Sync + 'static,
     {
         let mut r = self.store.try_borrow_mut()?;
         let events = r.events.get_or_init();
-        Ok(events.observe_transaction_cleanup(f))
+        Ok(events.observe_transaction_cleanup(Box::new(f)))
     }
 
     pub fn observe_after_transaction<F>(&self, f: F) -> Result<Subscription, BorrowMutError>
     where
-        F: Fn(&mut TransactionMut) -> () + 'static,
+        F: Fn(&mut TransactionMut) + Send + Sync + 'static,
     {
         let mut r = self.store.try_borrow_mut()?;
         let events = r.events.get_or_init();
-        Ok(events.observe_after_transaction(f))
+        Ok(events.observe_after_transaction(Box::new(f)))
     }
 
     /// Subscribe callback function, that will be called whenever a subdocuments inserted in this
     /// [Doc] will request a load.
     pub fn observe_subdocs<F>(&self, f: F) -> Result<Subscription, BorrowMutError>
     where
-        F: Fn(&TransactionMut, &SubdocsEvent) -> () + 'static,
+        F: Fn(&TransactionMut, &SubdocsEvent) + Send + Sync + 'static,
     {
         let mut r = self.store.try_borrow_mut()?;
         let events = r.events.get_or_init();
-        Ok(events.observe_subdocs(f))
+        Ok(events.observe_subdocs(Box::new(f)))
     }
 
     /// Subscribe callback function, that will be called whenever a [DocRef::destroy] has been called.
     pub fn observe_destroy<F>(&self, f: F) -> Result<Subscription, BorrowMutError>
     where
-        F: Fn(&TransactionMut, &Doc) -> () + 'static,
+        F: Fn(&TransactionMut, &Doc) + Send + Sync + 'static,
     {
         let mut r = self.store.try_borrow_mut()?;
         let events = r.events.get_or_init();
-        Ok(events.observe_destroy(f))
+        Ok(events.observe_destroy(Box::new(f)))
     }
 
     /// Sends a load request to a parent document. Works only if current document is a sub-document
@@ -344,9 +344,7 @@ impl Doc {
         }
         // super.destroy(): cleanup the events
         if let Some(events) = txn.store_mut().events.take() {
-            if let Some(mut callbacks) = events.destroy_events.callbacks() {
-                callbacks.trigger(&txn, self);
-            }
+            events.destroy_events.trigger(|cb| cb(&txn, self));
         }
     }
 
@@ -711,7 +709,7 @@ impl DocAddr {
 
 #[cfg(test)]
 mod test {
-    use crate::block::{Item, ItemContent};
+    use crate::block::ItemContent;
     use crate::test_utils::exchange_updates;
     use crate::transaction::{ReadTxn, TransactionMut};
     use crate::types::ToJson;
@@ -723,10 +721,11 @@ mod test {
         OffsetKind, Options, StateVector, Subscription, Text, TextRef, Transact, Uuid, WriteTxn,
         XmlElementPrelim, XmlFragment, XmlFragmentRef, XmlTextPrelim, XmlTextRef,
     };
-    use std::cell::{Cell, RefCell, RefMut};
     use std::collections::BTreeSet;
 
-    use std::rc::Rc;
+    use arc_swap::ArcSwapOption;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::{Arc, Mutex};
 
     #[test]
     fn apply_update_basic_v1() {
@@ -840,14 +839,14 @@ mod test {
 
     #[test]
     fn on_update() {
-        let counter = Rc::new(Cell::new(0));
+        let counter = Arc::new(AtomicU32::new(0));
         let doc = Doc::new();
         let doc2 = Doc::new();
         let c = counter.clone();
-        let sub = doc2.observe_update_v1(move |_: &TransactionMut, e| {
+        let sub = doc2.observe_update_v1(move |_, e| {
             let u = Update::decode_v1(&e.update).unwrap();
             for block in u.blocks.blocks() {
-                c.set(c.get() + block.len());
+                c.fetch_add(block.len(), Ordering::SeqCst);
             }
         });
         let txt = doc.get_or_insert_text("test");
@@ -859,7 +858,7 @@ mod test {
             let u = txn.encode_diff_v1(&StateVector::decode_v1(sv.as_slice()).unwrap());
             txn2.apply_update(Update::decode_v1(u.as_slice()).unwrap());
         }
-        assert_eq!(counter.get(), 3); // update has been propagated
+        assert_eq!(counter.load(Ordering::SeqCst), 3); // update has been propagated
 
         drop(sub);
 
@@ -870,7 +869,7 @@ mod test {
             let u = txn.encode_diff_v1(&StateVector::decode_v1(sv.as_slice()).unwrap());
             txn2.apply_update(Update::decode_v1(u.as_slice()).unwrap());
         }
-        assert_eq!(counter.get(), 3); // since subscription has been dropped, update was not propagated
+        assert_eq!(counter.load(Ordering::SeqCst), 3); // since subscription has been dropped, update was not propagated
     }
 
     #[test]
@@ -995,20 +994,20 @@ mod test {
         // Setup
         let doc = Doc::new();
         let text = doc.get_or_insert_text("test");
-        let before_state = Rc::new(Cell::new(StateVector::default()));
-        let after_state = Rc::new(Cell::new(StateVector::default()));
-        let delete_set = Rc::new(Cell::new(DeleteSet::default()));
+        let before_state = Arc::new(ArcSwapOption::default());
+        let after_state = Arc::new(ArcSwapOption::default());
+        let delete_set = Arc::new(ArcSwapOption::default());
         // Create interior mutable references for the callback.
-        let before_ref = Rc::clone(&before_state);
-        let after_ref = Rc::clone(&after_state);
-        let delete_ref = Rc::clone(&delete_set);
+        let before_ref = before_state.clone();
+        let after_ref = after_state.clone();
+        let delete_ref = delete_set.clone();
         // Subscribe callback
 
         let sub: Subscription = doc
             .observe_transaction_cleanup(move |_: &TransactionMut, event| {
-                before_ref.set(event.before_state.clone());
-                after_ref.set(event.after_state.clone());
-                delete_ref.set(event.delete_set.clone());
+                before_ref.store(Some(event.before_state.clone().into()));
+                after_ref.store(Some(event.after_state.clone().into()));
+                delete_ref.store(Some(event.delete_set.clone().into()));
             })
             .unwrap();
 
@@ -1021,9 +1020,18 @@ mod test {
             txn.commit();
 
             // Compare values
-            assert_eq!(before_state.take(), txn.before_state);
-            assert_eq!(after_state.take(), txn.after_state);
-            assert_eq!(delete_set.take(), txn.delete_set);
+            assert_eq!(
+                before_state.swap(None),
+                Some(Arc::new(txn.before_state.clone()))
+            );
+            assert_eq!(
+                after_state.swap(None),
+                Some(Arc::new(txn.after_state.clone()))
+            );
+            assert_eq!(
+                delete_set.swap(None),
+                Some(Arc::new(txn.delete_set.clone()))
+            );
         }
 
         // Ensure that the subscription is successfully dropped.
@@ -1031,7 +1039,10 @@ mod test {
         let mut txn = doc.transact_mut();
         text.insert(&mut txn, 0, "should not update");
         txn.commit();
-        assert_ne!(after_state.take(), txn.after_state);
+        assert_ne!(
+            after_state.swap(None),
+            Some(Arc::new(txn.after_state.clone()))
+        );
     }
 
     #[test]
@@ -1067,7 +1078,7 @@ mod test {
 
         let d1 = Doc::with_client_id(1);
         let txt1 = d1.get_or_insert_text("text");
-        let acc = Rc::new(RefCell::new(String::new()));
+        let acc = Arc::new(Mutex::new(String::new()));
 
         let a = acc.clone();
         let _sub = d1.observe_update_v1(move |_: &TransactionMut, e| {
@@ -1079,7 +1090,7 @@ mod test {
                             // each character is appended in individual transaction 1-by-1,
                             // therefore each update should contain a single string with only
                             // one element
-                            let mut aref: RefMut<_> = a.try_borrow_mut().unwrap();
+                            let mut aref = a.lock().unwrap();
                             aref.push_str(s.as_str());
                         } else {
                             panic!("unexpected content type")
@@ -1095,16 +1106,16 @@ mod test {
             txt1.push(&mut d1.transact_mut(), &c.to_string());
         }
 
-        assert_eq!(acc.take(), INPUT);
+        assert_eq!(acc.lock().unwrap().as_str(), INPUT);
 
         // test incremental deletes
-        let acc = Rc::new(RefCell::new(Vec::new()));
+        let acc = Arc::new(Mutex::new(vec![]));
         let a = acc.clone();
         let _sub = d1.observe_update_v1(move |_: &TransactionMut, e| {
             let u = Update::decode_v1(&e.update).unwrap();
             for (&client_id, range) in u.delete_set.iter() {
                 if client_id == 1 {
-                    let mut aref: RefMut<_> = a.try_borrow_mut().unwrap();
+                    let mut aref = a.lock().unwrap();
                     for r in range.iter() {
                         aref.push(r.clone());
                     }
@@ -1117,7 +1128,7 @@ mod test {
         }
 
         let expected = vec![(0..1), (1..2), (2..3), (3..4), (4..5)];
-        assert_eq!(acc.take(), expected);
+        assert_eq!(&*acc.lock().unwrap(), &expected);
     }
 
     #[test]
@@ -1486,13 +1497,13 @@ mod test {
     #[test]
     fn subdoc() {
         let doc = Doc::with_client_id(1);
-        let event = Rc::new(Cell::new(None));
+        let event = Arc::new(ArcSwapOption::default());
         let event_c = event.clone();
         let _sub = doc.observe_subdocs(move |_, e| {
             let added = e.added().map(|d| d.guid().clone()).collect();
             let removed = e.removed().map(|d| d.guid().clone()).collect();
             let loaded = e.loaded().map(|d| d.guid().clone()).collect();
-            event_c.set(Some((added, removed, loaded)));
+            event_c.store(Some(Arc::new((added, removed, loaded))));
         });
         let subdocs = doc.get_or_insert_map("mysubdocs");
         let uuid_a: Uuid = "A".into();
@@ -1507,10 +1518,10 @@ mod test {
             doc_a_ref.load(&mut txn);
         }
 
-        let actual = event.take();
+        let actual = event.swap(None);
         assert_eq!(
             actual,
-            Some((vec![uuid_a.clone()], vec![], vec![uuid_a.clone()]))
+            Some((vec![uuid_a.clone()], vec![], vec![uuid_a.clone()]).into())
         );
 
         {
@@ -1518,7 +1529,7 @@ mod test {
             let doc_a_ref = subdocs.get(&txn, "a").unwrap().cast::<Doc>().unwrap();
             doc_a_ref.load(&mut txn);
         }
-        let actual = event.take();
+        let actual = event.swap(None);
         assert_eq!(actual, None);
 
         {
@@ -1526,10 +1537,14 @@ mod test {
             let doc_a_ref = subdocs.get(&txn, "a").unwrap().cast::<Doc>().unwrap();
             doc_a_ref.destroy(&mut txn);
         }
-        let actual = event.take();
+        let actual = event.swap(None);
         assert_eq!(
             actual,
-            Some((vec![uuid_a.clone()], vec![uuid_a.clone()], vec![]))
+            Some(Arc::new((
+                vec![uuid_a.clone()],
+                vec![uuid_a.clone()],
+                vec![]
+            )))
         );
 
         {
@@ -1537,8 +1552,11 @@ mod test {
             let doc_a_ref = subdocs.get(&txn, "a").unwrap().cast::<Doc>().unwrap();
             doc_a_ref.load(&mut txn);
         }
-        let actual = event.take();
-        assert_eq!(actual, Some((vec![], vec![], vec![uuid_a.clone()])));
+        let actual = event.swap(None);
+        assert_eq!(
+            actual,
+            Some(Arc::new((vec![], vec![], vec![uuid_a.clone()])))
+        );
 
         let doc_b = Doc::with_options({
             let mut o = Options::default();
@@ -1547,16 +1565,22 @@ mod test {
             o
         });
         subdocs.insert(&mut doc.transact_mut(), "b", doc_b);
-        let actual = event.take();
-        assert_eq!(actual, Some((vec![uuid_a.clone()], vec![], vec![])));
+        let actual = event.swap(None);
+        assert_eq!(
+            actual,
+            Some(Arc::new((vec![uuid_a.clone()], vec![], vec![])))
+        );
 
         {
             let mut txn = doc.transact_mut();
             let doc_b_ref = subdocs.get(&txn, "b").unwrap().cast::<Doc>().unwrap();
             doc_b_ref.load(&mut txn);
         }
-        let actual = event.take();
-        assert_eq!(actual, Some((vec![], vec![], vec![uuid_a.clone()])));
+        let actual = event.swap(None);
+        assert_eq!(
+            actual,
+            Some(Arc::new((vec![], vec![], vec![uuid_a.clone()])))
+        );
 
         let uuid_c: Uuid = "C".into();
         let doc_c = Doc::with_options({
@@ -1569,10 +1593,14 @@ mod test {
             let doc_c_ref = subdocs.insert(&mut txn, "c", doc_c);
             doc_c_ref.load(&mut txn);
         }
-        let actual = event.take();
+        let actual = event.swap(None);
         assert_eq!(
             actual,
-            Some((vec![uuid_c.clone()], vec![], vec![uuid_c.clone()]))
+            Some(Arc::new((
+                vec![uuid_c.clone()],
+                vec![],
+                vec![uuid_c.clone()]
+            )))
         );
 
         let guids: BTreeSet<_> = doc.transact().subdoc_guids().cloned().collect();
@@ -1583,25 +1611,25 @@ mod test {
             .encode_state_as_update_v1(&StateVector::default());
 
         let doc2 = Doc::new();
-        let event = Rc::new(Cell::new(None));
+        let event = Arc::new(ArcSwapOption::default());
         let event_c = event.clone();
         let _sub = doc2.observe_subdocs(move |_, e| {
             let added: Vec<_> = e.added().map(|d| d.guid().clone()).collect();
             let removed: Vec<_> = e.removed().map(|d| d.guid().clone()).collect();
             let loaded: Vec<_> = e.loaded().map(|d| d.guid().clone()).collect();
-            event_c.set(Some((added, removed, loaded)));
+            event_c.store(Some(Arc::new((added, removed, loaded))));
         });
         let update = Update::decode_v1(&data).unwrap();
         doc2.transact_mut().apply_update(update);
-        let mut actual = event.take().unwrap();
-        actual.0.sort();
+        let mut actual = event.swap(None).unwrap();
+        Arc::get_mut(&mut actual).unwrap().0.sort();
         assert_eq!(
             actual,
-            (
+            Arc::new((
                 vec![uuid_a.clone(), uuid_a.clone(), uuid_c.clone()],
                 vec![],
                 vec![]
-            )
+            ))
         );
 
         let subdocs = doc2.transact().get_map("mysubdocs").unwrap();
@@ -1610,8 +1638,11 @@ mod test {
             let doc_ref = subdocs.get(&mut txn, "a").unwrap().cast::<Doc>().unwrap();
             doc_ref.load(&mut txn);
         }
-        let actual = event.take();
-        assert_eq!(actual, Some((vec![], vec![], vec![uuid_a.clone()])));
+        let actual = event.swap(None);
+        assert_eq!(
+            actual,
+            Some(Arc::new((vec![], vec![], vec![uuid_a.clone()])))
+        );
 
         let guids: BTreeSet<_> = doc2.transact().subdoc_guids().cloned().collect();
         assert_eq!(guids, BTreeSet::from([uuid_a.clone(), uuid_c.clone()]));
@@ -1620,8 +1651,11 @@ mod test {
             subdocs.remove(&mut txn, "a");
         }
 
-        let actual = event.take();
-        assert_eq!(actual, Some((vec![], vec![uuid_a.clone()], vec![])));
+        let actual = event.swap(None);
+        assert_eq!(
+            actual,
+            Some(Arc::new((vec![], vec![uuid_a.clone()], vec![])))
+        );
 
         let mut guids: Vec<_> = doc2.transact().subdoc_guids().cloned().collect();
         guids.sort();
@@ -1635,14 +1669,14 @@ mod test {
         let subdoc_1 = Doc::new();
         let uuid_1 = subdoc_1.options().guid.clone();
 
-        let event = Rc::new(RefCell::new(None));
+        let event = Arc::new(ArcSwapOption::default());
         let event_c = event.clone();
         let _sub = doc.observe_subdocs(move |_, e| {
             let added = e.added().map(|d| d.guid().clone()).collect();
             let removed = e.removed().map(|d| d.guid().clone()).collect();
             let loaded = e.loaded().map(|d| d.guid().clone()).collect();
-            let mut e: RefMut<_> = event_c.try_borrow_mut().unwrap();
-            *e = Some((added, removed, loaded));
+
+            event_c.store(Some(Arc::new((added, removed, loaded))));
         });
         let doc_ref = {
             let mut txn = doc.transact_mut();
@@ -1652,10 +1686,10 @@ mod test {
             assert!(!o.auto_load);
             doc_ref
         };
-        let last_event = event.take();
+        let last_event = event.swap(None);
         assert_eq!(
             last_event,
-            Some((vec![uuid_1.clone()], vec![], vec![uuid_1.clone()]))
+            Some((vec![uuid_1.clone()], vec![], vec![uuid_1.clone()]).into())
         );
 
         // destroy and check whether lastEvent adds it again to added (it shouldn't)
@@ -1668,16 +1702,19 @@ mod test {
         let uuid_2 = doc_ref_2.options().guid.clone();
         assert!(!Doc::ptr_eq(&doc_ref, &doc_ref_2));
 
-        let last_event = event.take();
+        let last_event = event.swap(None);
         assert_eq!(
             last_event,
-            Some((vec![uuid_2.clone()], vec![uuid_2.clone()], vec![]))
+            Some((vec![uuid_2.clone()], vec![uuid_2.clone()], vec![]).into())
         );
 
         // load
         doc_ref_2.load(&mut doc.transact_mut());
-        let last_event = event.take();
-        assert_eq!(last_event, Some((vec![], vec![], vec![uuid_2.clone()])));
+        let last_event = event.swap(None);
+        assert_eq!(
+            last_event,
+            Some(Arc::new((vec![], vec![], vec![uuid_2.clone()])))
+        );
 
         // apply from remote
         let doc2 = Doc::with_client_id(2);
@@ -1686,8 +1723,8 @@ mod test {
             let added = e.added().map(|d| d.guid().clone()).collect();
             let removed = e.removed().map(|d| d.guid().clone()).collect();
             let loaded = e.loaded().map(|d| d.guid().clone()).collect();
-            let mut e: RefMut<_> = event_c.try_borrow_mut().unwrap();
-            *e = Some((added, removed, loaded));
+
+            event_c.store(Some(Arc::new((added, removed, loaded))));
         });
         let u = Update::decode_v1(
             &doc.transact()
@@ -1705,14 +1742,20 @@ mod test {
         assert!(!doc_ref_3.options().should_load);
         assert!(!doc_ref_3.options().auto_load);
         let uuid_3 = doc_ref_3.options().guid.clone();
-        let last_event = event.take();
-        assert_eq!(last_event, Some((vec![uuid_3.clone()], vec![], vec![])));
+        let last_event = event.swap(None);
+        assert_eq!(
+            last_event,
+            Some(Arc::new((vec![uuid_3.clone()], vec![], vec![])))
+        );
 
         // load
         doc_ref_3.load(&mut doc2.transact_mut());
         assert!(doc_ref_3.options().should_load);
-        let last_event = event.take();
-        assert_eq!(last_event, Some((vec![], vec![], vec![uuid_3.clone()])));
+        let last_event = event.swap(None);
+        assert_eq!(
+            last_event,
+            Some(Arc::new((vec![], vec![], vec![uuid_3.clone()])))
+        );
     }
 
     #[test]
@@ -1725,14 +1768,14 @@ mod test {
             o
         });
 
-        let event = Rc::new(RefCell::new(None));
+        let event = Arc::new(ArcSwapOption::default());
         let event_c = event.clone();
         let _sub = doc.observe_subdocs(move |_, e| {
             let added = e.added().map(|d| d.guid().clone()).collect();
             let removed = e.removed().map(|d| d.guid().clone()).collect();
             let loaded = e.loaded().map(|d| d.guid().clone()).collect();
-            let mut e: RefMut<_> = event_c.try_borrow_mut().unwrap();
-            *e = Some((added, removed, loaded));
+
+            event_c.store(Some(Arc::new((added, removed, loaded))));
         });
 
         let subdoc_1 = {
@@ -1743,10 +1786,14 @@ mod test {
         assert!(subdoc_1.options().auto_load);
 
         let uuid_1 = subdoc_1.options().guid.clone();
-        let last_event = event.take();
+        let last_event = event.swap(None);
         assert_eq!(
             last_event,
-            Some((vec![uuid_1.clone()], vec![], vec![uuid_1.clone()]))
+            Some(Arc::new((
+                vec![uuid_1.clone()],
+                vec![],
+                vec![uuid_1.clone()]
+            )))
         );
 
         // destroy and check whether lastEvent adds it again to added (it shouldn't)
@@ -1760,15 +1807,22 @@ mod test {
         let uuid_2 = subdoc_2.options().guid.clone();
         assert!(!Doc::ptr_eq(&subdoc_1, &subdoc_2));
 
-        let last_event = event.take();
+        let last_event = event.swap(None);
         assert_eq!(
             last_event,
-            Some((vec![uuid_2.clone()], vec![uuid_2.clone()], vec![]))
+            Some(Arc::new((
+                vec![uuid_2.clone()],
+                vec![uuid_2.clone()],
+                vec![]
+            )))
         );
 
         subdoc_2.load(&mut doc.transact_mut());
-        let last_event = event.take();
-        assert_eq!(last_event, Some((vec![], vec![], vec![uuid_2.clone()])));
+        let last_event = event.swap(None);
+        assert_eq!(
+            last_event,
+            Some(Arc::new((vec![], vec![], vec![uuid_2.clone()])))
+        );
 
         // apply from remote
         let doc2 = Doc::with_client_id(2);
@@ -1777,8 +1831,8 @@ mod test {
             let added = e.added().map(|d| d.guid().clone()).collect();
             let removed = e.removed().map(|d| d.guid().clone()).collect();
             let loaded = e.loaded().map(|d| d.guid().clone()).collect();
-            let mut e: RefMut<_> = event_c.try_borrow_mut().unwrap();
-            *e = Some((added, removed, loaded));
+
+            event_c.store(Some(Arc::new((added, removed, loaded))));
         });
         let u = Update::decode_v1(
             &doc.transact()
@@ -1796,10 +1850,14 @@ mod test {
         assert!(subdoc_1.options().should_load);
         assert!(subdoc_1.options().auto_load);
         let uuid_3 = subdoc_3.options().guid.clone();
-        let last_event = event.take();
+        let last_event = event.swap(None);
         assert_eq!(
             last_event,
-            Some((vec![uuid_3.clone()], vec![], vec![uuid_3.clone()]))
+            Some(Arc::new((
+                vec![uuid_3.clone()],
+                vec![],
+                vec![uuid_3.clone()]
+            )))
         );
     }
 
@@ -1917,13 +1975,13 @@ mod test {
 
     #[test]
     fn out_of_order_updates() {
-        let mut updates = Rc::new(RefCell::new(vec![]));
+        let updates = Arc::new(Mutex::new(vec![]));
 
         let d1 = Doc::new();
-        let sub = {
+        let _sub = {
             let updates = updates.clone();
             d1.observe_update_v1(move |_, e| {
-                let mut u = updates.borrow_mut();
+                let mut u = updates.lock().unwrap();
                 u.push(Update::decode_v1(&e.update).unwrap());
             })
             .unwrap()
@@ -1939,7 +1997,7 @@ mod test {
         let d2 = Doc::new();
 
         {
-            let mut updates = updates.borrow_mut();
+            let mut updates = updates.lock().unwrap();
             let u3 = updates.pop().unwrap();
             let u2 = updates.pop().unwrap();
             let u1 = updates.pop().unwrap();

@@ -1,24 +1,19 @@
-use crate::TransactionMut;
-use arc_swap::ArcSwapOption;
-use smallvec::{smallvec, SmallVec};
-use std::fmt::Debug;
 use std::sync::{Arc, Weak};
 
-pub type Callback<E> = Arc<dyn Fn(&TransactionMut, &E) + 'static>;
-type WeakCallback<E> = Weak<dyn Fn(&TransactionMut, &E) + 'static>;
-type WeakCallbacks<E> = SmallVec<[WeakCallback<E>; 1]>;
+use arc_swap::{ArcSwapOption, AsRaw, Guard};
+
+use crate::Origin;
 
 /// Data structure used to handle publish/subscribe callbacks of specific type. Observers perform
 /// subscriber changes in thread-safe manner, using atomic hardware intrinsics.
-#[derive(Debug)]
-pub struct Observer<E> {
-    inner: ArcSwapOption<WeakCallbacks<E>>,
+pub struct Observer<F> {
+    inner: ArcSwapOption<Inner<F>>,
 }
 
-unsafe impl<E: Send> Send for Observer<E> {}
-unsafe impl<E: Sync> Sync for Observer<E> {}
-
-impl<E> Observer<E> {
+impl<F> Observer<F>
+where
+    F: Send + Sync + 'static,
+{
     /// Creates a new [Observer] with no active callbacks.
     pub fn new() -> Self {
         Observer {
@@ -27,9 +22,8 @@ impl<E> Observer<E> {
     }
 
     pub fn has_subscribers(&self) -> bool {
-        let callbacks = self.inner.load();
-        if let Some(callbacks) = &*callbacks {
-            !callbacks.is_empty()
+        if let Some(inner) = &*self.inner.load() {
+            inner.head.load().is_some()
         } else {
             false
         }
@@ -41,252 +35,160 @@ impl<E> Observer<E> {
     ///
     /// This method allows to perform stale callback cleanup without waiting for callbacks to be visited.
     pub fn clean(&self) {
-        self.inner.rcu(|callbacks| match callbacks {
-            None => None,
-            Some(links) => {
-                let mut res = WeakCallbacks::with_capacity(links.len() - 1);
-                for l in links.iter() {
-                    if Weak::strong_count(l) != 0 {
-                        res.push(l.clone());
-                    }
-                }
-                Some(Arc::new(res))
+        self.inner.swap(None);
+    }
+
+    fn inner(&self) -> Arc<Inner<F>> {
+        let cur = self.inner.load_full();
+        match cur {
+            Some(inner) => inner,
+            None => {
+                // inner was not initialized yet, we need to create a new one
+                let inner = Arc::new(Inner {
+                    head: ArcSwapOption::new(None),
+                });
+                let old: Option<Arc<Inner<F>>> = None;
+                let prev = self.inner.compare_and_swap(&old, Some(inner.clone()));
+                // there's a slight possibility that inner was initialized twice, in that case
+                // return first swapped inner
+                Guard::into_inner(prev).unwrap_or(inner)
             }
-        });
+        }
+    }
+
+    pub fn subscribe(&self, callback: F) -> Subscription {
+        let mut rng = fastrand::Rng::new();
+        let id = rng.usize(0..usize::MAX);
+        self.subscribe_with(Origin::from(id), callback)
     }
 
     /// Subscribes a callback parameter to a current [Observer].
     /// Returns a subscription object which - when dropped - will unsubscribe current callback.
-    pub fn subscribe<F>(&self, callback: F) -> Subscription
-    where
-        F: Fn(&TransactionMut, &E) -> () + 'static,
-    {
-        let strong = Arc::new(callback);
-        let subscription: Arc<dyn std::any::Any> = strong.clone();
-        let generic: Callback<E> = strong;
-        let weak = Arc::downgrade(&generic);
-        self.inner.rcu(|callbacks| match callbacks {
-            None => Arc::new(smallvec![weak.clone()]),
-            Some(links) => {
-                let mut res = WeakCallbacks::with_capacity(links.len() + 1);
-                for l in links.iter() {
-                    if Weak::strong_count(l) != 0 {
-                        res.push(l.clone());
-                    }
-                }
-                res.push(weak.clone());
-                Arc::new(res)
+    /// If the `id` was already present in the observer, current callback will be ignored.
+    pub fn subscribe_with(&self, id: Origin, callback: F) -> Subscription {
+        let inner = self.inner();
+        let mut node = Arc::new(Node::new(id.clone(), callback));
+        let cur = inner.head.load();
+        let head = loop {
+            {
+                // update new node next pointer to point to current head
+                // it's safe to unwrap, since until current node is successfully inserted
+                // there will be no more that a single Arc reference to it
+                let n = Arc::get_mut(&mut node).unwrap();
+                n.next.store(cur.clone());
             }
-        });
-        Subscription {
-            callback: subscription,
+
+            let prev = inner.head.compare_and_swap(&*cur, Some(node.clone()));
+            let swapped = std::ptr::eq(prev.as_raw(), cur.as_raw());
+            if swapped {
+                // we successfully swapped the head, we can exit the loop
+                break node;
+            }
+        };
+        // remove all previous nodes that share the same ID
+        Self::remove(head.clone(), &id);
+        Arc::new(Cancel {
+            id,
+            inner: Arc::downgrade(&inner),
+        })
+    }
+
+    fn remove(mut prev: Arc<Node<F>>, id: &Origin) {
+        while let Some(next) = prev.next.load_full() {
+            if &next.uid == id {
+                prev.next.store(next.next.load_full());
+            }
+            prev = next;
+        }
+    }
+
+    pub fn unsubscribe(&self, id: &Origin) {
+        if let Some(inner) = &*self.inner.load() {
+            inner.remove(id);
         }
     }
 
     /// Returns a snapshot of callbacks subscribed to this observer at the moment when this method
     /// has been called. This snapshot can be iterated over to get access to individual callbacks
     /// and trigger them.
-    pub fn callbacks(&self) -> Option<Callbacks<E>> {
-        Callbacks::new(self)
-    }
-}
-
-impl<E> Default for Observer<E> {
-    fn default() -> Self {
-        Observer {
-            inner: ArcSwapOption::from(None),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct Callbacks<'a, E> {
-    observer: &'a Observer<E>,
-    callbacks: Arc<WeakCallbacks<E>>,
-    index: usize,
-    should_cleanup: bool,
-}
-
-unsafe impl<'a, E: Send> Send for Callbacks<'a, E> {}
-unsafe impl<'a, E: Sync> Sync for Callbacks<'a, E> {}
-
-impl<'a, E> Callbacks<'a, E> {
-    fn new(observer: &'a Observer<E>) -> Option<Self> {
-        let callbacks = observer.inner.load_full()?;
-        Some(Callbacks {
-            observer,
-            callbacks,
-            index: 0,
-            should_cleanup: false,
-        })
-    }
-
-    pub fn trigger(&mut self, txn: &TransactionMut, e: &E) {
-        for cb in self {
-            cb(txn, e);
-        }
-    }
-}
-
-impl<'a, E> Iterator for Callbacks<'a, E> {
-    type Item = Callback<E>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let callbacks = &*self.callbacks;
-        while self.index < callbacks.len() {
-            let weak = &callbacks[self.index];
-            self.index += 1;
-            if let Some(strong) = weak.upgrade() {
-                return Some(strong);
-            }
-        }
-        None
-    }
-}
-
-impl<'a, E> Drop for Callbacks<'a, E> {
-    fn drop(&mut self) {
-        if self.should_cleanup {
-            self.observer.clean();
-        }
-    }
-}
-
-pub type CallbackMut<E> = Arc<dyn Fn(&mut TransactionMut, &mut E) + 'static>;
-type WeakCallbackMut<E> = Weak<dyn Fn(&mut TransactionMut, &mut E) + 'static>;
-type WeakCallbacksMut<E> = SmallVec<[WeakCallbackMut<E>; 1]>;
-
-/// Data structure used to handle publish/subscribe callbacks of specific type. Observers perform
-/// subscriber changes in thread-safe manner, using atomic hardware intrinsics.
-#[derive(Debug)]
-pub struct ObserverMut<E> {
-    inner: ArcSwapOption<WeakCallbacksMut<E>>,
-}
-
-unsafe impl<E: Send> Send for ObserverMut<E> {}
-unsafe impl<E: Sync> Sync for ObserverMut<E> {}
-
-impl<E> ObserverMut<E> {
-    /// Creates a new [ObserverMut with no active callbacks.
-    pub fn new() -> Self {
-        ObserverMut {
-            inner: ArcSwapOption::new(None),
-        }
-    }
-
-    /// Cleanup already released subscriptions. Whenever a [Subscription] is dropped, the callback is released. However,
-    /// the weak reference to callback may still be kept around until it becomes touched by operations such as
-    /// [Observer::subscribe] or [Observer::callbacks].
-    ///
-    /// This method allows to perform stale callback cleanup without waiting for callbacks to be visited.
-    pub fn clean(&self) {
-        self.inner.rcu(|callbacks| match callbacks {
-            None => None,
-            Some(links) => {
-                let mut res = WeakCallbacksMut::with_capacity(links.len() - 1);
-                for l in links.iter() {
-                    if Weak::strong_count(l) != 0 {
-                        res.push(l.clone());
-                    }
-                }
-                Some(Arc::new(res))
-            }
-        });
-    }
-
-    /// Subscribes a callback parameter to a current [Observer].
-    /// Returns a subscription object which - when dropped - will unsubscribe current callback.
-    pub fn subscribe<F>(&self, callback: F) -> Subscription
+    pub fn trigger<E>(&self, mut each: E)
     where
-        F: Fn(&mut TransactionMut, &mut E) + 'static,
+        E: FnMut(&F),
     {
-        let strong = Arc::new(callback);
-        let subscription: Arc<dyn std::any::Any> = strong.clone();
-        let generic: CallbackMut<E> = strong;
-        let weak = Arc::downgrade(&generic);
-        self.inner.rcu(|callbacks| match callbacks {
-            None => Arc::new(smallvec![weak.clone()]),
-            Some(links) => {
-                let mut res = WeakCallbacksMut::with_capacity(links.len() + 1);
-                for l in links.iter() {
-                    if Weak::strong_count(l) != 0 {
-                        res.push(l.clone());
-                    }
-                }
-                res.push(weak.clone());
-                Arc::new(res)
+        if let Some(inner) = &*self.inner.load() {
+            let mut next = inner.head.load();
+            while let Some(node) = &*next {
+                each(&node.callback);
+                next = node.next.load();
             }
-        });
-        Subscription {
-            callback: subscription,
         }
-    }
-
-    /// Returns a snapshot of callbacks subscribed to this observer at the moment when this method
-    /// has been called. This snapshot can be iterated over to get access to individual callbacks
-    /// and trigger them.
-    pub fn callbacks(&self) -> Option<CallbacksMut<E>> {
-        CallbacksMut::new(self)
     }
 }
 
-impl<E> Default for ObserverMut<E> {
+impl<F> Default for Observer<F>
+where
+    F: Send + Sync + 'static,
+{
     fn default() -> Self {
-        ObserverMut {
-            inner: ArcSwapOption::from(None),
-        }
+        Observer::new()
     }
 }
 
-#[derive(Debug)]
-pub struct CallbacksMut<'a, E> {
-    observer: &'a ObserverMut<E>,
-    callbacks: Arc<WeakCallbacksMut<E>>,
-    index: usize,
-    should_cleanup: bool,
+struct Inner<F> {
+    head: ArcSwapOption<Node<F>>,
 }
 
-unsafe impl<'a, E: Send> Send for CallbacksMut<'a, E> {}
-unsafe impl<'a, E: Sync> Sync for CallbacksMut<'a, E> {}
-
-impl<'a, E> CallbacksMut<'a, E> {
-    fn new(observer: &'a ObserverMut<E>) -> Option<Self> {
-        let callbacks = observer.inner.load_full()?;
-        Some(CallbacksMut {
-            observer,
-            callbacks,
-            index: 0,
-            should_cleanup: false,
-        })
-    }
-
-    pub fn trigger(&mut self, txn: &mut TransactionMut, e: &mut E) {
-        for cb in self {
-            cb(txn, e);
-        }
-    }
-}
-
-impl<'a, E> Iterator for CallbacksMut<'a, E> {
-    type Item = CallbackMut<E>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let callbacks = &*self.callbacks;
-        while self.index < callbacks.len() {
-            let weak = &callbacks[self.index];
-            self.index += 1;
-            if let Some(strong) = weak.upgrade() {
-                return Some(strong);
+impl<F> Inner<F>
+where
+    F: Send + Sync + 'static,
+{
+    fn remove(&self, id: &Origin) {
+        while let Some(head) = self.head.load_full() {
+            if &head.uid == id {
+                let next = head.next.load_full();
+                let prev = self.head.compare_and_swap(&head, next);
+                if !std::ptr::eq(prev.as_raw(), Arc::as_ptr(&head)) {
+                    continue;
+                }
+            } else {
+                Observer::remove(head.clone(), id);
+                break;
             }
         }
-        None
     }
 }
 
-impl<'a, E> Drop for CallbacksMut<'a, E> {
+struct Node<T> {
+    uid: Origin,
+    callback: T,
+    next: ArcSwapOption<Node<T>>,
+}
+
+impl<F> Node<F> {
+    fn new(uid: Origin, callback: F) -> Self {
+        Node {
+            uid,
+            callback,
+            next: Default::default(),
+        }
+    }
+}
+
+struct Cancel<F>
+where
+    F: Send + Sync + 'static,
+{
+    id: Origin,
+    inner: Weak<Inner<F>>,
+}
+
+impl<F> Drop for Cancel<F>
+where
+    F: Send + Sync + 'static,
+{
     fn drop(&mut self) {
-        if self.should_cleanup {
-            self.observer.clean();
+        if let Some(inner) = self.inner.upgrade() {
+            inner.remove(&self.id);
         }
     }
 }
@@ -297,27 +199,19 @@ impl<'a, E> Drop for CallbacksMut<'a, E> {
 /// If implicit callback unsubscribe on drop is undesired, this structure can be cast [into](Subscription::into)
 /// [SubscriptionId] which is an identifier of the same subscription, which in turn must be used
 /// manually via [Observer::unsubscribe] to perform usubscribe.
-#[repr(transparent)]
-pub struct Subscription {
-    callback: Arc<dyn std::any::Any>,
-}
-
-unsafe impl Send for Subscription {}
-unsafe impl Sync for Subscription {}
+pub type Subscription = Arc<dyn Drop + Send + Sync>;
 
 #[cfg(test)]
 mod test {
-    use crate::observer::Observer;
-    use crate::Transact;
-    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::atomic::{AtomicI32, AtomicU32, Ordering};
     use std::sync::Arc;
     use std::thread::spawn;
 
+    use crate::observer::Observer;
+
     #[test]
     fn subscription() {
-        let doc = crate::Doc::new();
-        let txn = doc.transact_mut();
-        let o: Observer<u32> = Observer::new();
+        let o: Observer<Box<dyn Fn(&u32) + Send + Sync + 'static>> = Observer::new();
         let s1_state = Arc::new(AtomicU32::new(0));
         let s2_state = Arc::new(AtomicU32::new(0));
 
@@ -325,36 +219,35 @@ mod test {
             let a = s1_state.clone();
             let b = s2_state.clone();
 
-            let _s1 = o.subscribe(move |_, &value| a.store(value, Ordering::Release));
-            let _s2 = o.subscribe(move |_, &value| b.store(value * 2, Ordering::Release));
+            let _s1 = o.subscribe(Box::new(move |&value| {
+                a.store(value, Ordering::Release);
+            }));
+            let _s2 = o.subscribe(Box::new(move |&value| {
+                b.store(value * 2, Ordering::Release);
+            }));
 
-            for fun in o.callbacks().unwrap() {
-                fun(&txn, &1)
-            }
+            o.trigger(|fun| fun(&1));
             assert_eq!(s1_state.load(Ordering::Acquire), 1);
             assert_eq!(s2_state.load(Ordering::Acquire), 2);
 
-            for fun in o.callbacks().unwrap() {
-                fun(&txn, &2)
-            }
+            o.trigger(|fun| fun(&2));
             assert_eq!(s1_state.load(Ordering::Acquire), 2);
             assert_eq!(s2_state.load(Ordering::Acquire), 4);
         }
 
         // subscriptions were dropped, we don't expect updates to be propagated
-        for fun in o.callbacks().unwrap() {
-            fun(&txn, &3)
-        }
+
+        o.trigger(|fun| fun(&3));
         assert_eq!(s1_state.load(Ordering::Acquire), 2);
         assert_eq!(s2_state.load(Ordering::Acquire), 4);
     }
 
     #[test]
     fn subscribers_predicate() {
-        let o: Observer<u32> = Observer::new();
+        let o: Observer<Box<dyn Fn(&u32) + Send + Sync + 'static>> = Observer::new();
         assert!(!o.has_subscribers());
 
-        let _sub = o.subscribe(move |_txn, _e| {});
+        let _sub = o.subscribe(Box::new(move |_| {}));
         assert!(o.has_subscribers());
 
         drop(_sub);
@@ -365,22 +258,18 @@ mod test {
 
     #[test]
     fn multi_threading() {
-        let o: Observer<u32> = Observer::new();
+        let o: Observer<Box<dyn Fn(u32) + Send + Sync + 'static>> = Observer::new();
 
         let s1_state = Arc::new(AtomicU32::new(0));
         let a = s1_state.clone();
-        let sub1 = o.subscribe(move |_, &value| a.store(value, Ordering::Release));
+        let sub1 = o.subscribe(Box::new(move |v| a.store(v, Ordering::Release)));
 
         let s2_state = Arc::new(AtomicU32::new(0));
         let b = s2_state.clone();
-        let sub2 = o.subscribe(move |_, &value| b.store(value, Ordering::Release));
+        let sub2 = o.subscribe(Box::new(move |v| b.store(v, Ordering::Release)));
 
         let handle = spawn(move || {
-            let doc = crate::Doc::new();
-            let txn = doc.transact_mut();
-            for fun in o.callbacks().unwrap() {
-                fun(&txn, &1)
-            }
+            o.trigger(|fun| fun(1));
             drop(sub1);
             drop(sub2);
         });
@@ -392,24 +281,78 @@ mod test {
     }
 
     #[test]
-    fn unsubscribe_calls_drop() {
-        let o: Observer<()> = Observer::new();
-        let c = Arc::new(());
-        let subscription = {
-            let inner = c.clone();
-            o.subscribe(move |_, _| {
-                let count = Arc::strong_count(&inner);
-                assert_eq!(count, 2);
-            })
-        };
-        let doc = crate::Doc::new();
-        let txn = doc.transact_mut();
-        for cb in o.callbacks().unwrap() {
-            cb(&txn, &());
-        }
-        drop(subscription);
+    fn subscribe_with_replaced_old_callback() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let o: Observer<Box<dyn Fn(u32) + Send + Sync + 'static>> = Observer::new();
+        let ta = tx.clone();
+        let _a = o.subscribe_with(
+            123.into(),
+            Box::new(move |i| ta.send(format!("a-{i}")).unwrap()),
+        );
+        o.trigger(|fun| fun(1));
+        assert_eq!(rx.try_recv().unwrap(), "a-1");
 
-        let count = Arc::strong_count(&c);
-        assert_eq!(count, 1);
+        // override the callback with the same key
+        let _b = o.subscribe_with(
+            123.into(),
+            Box::new(move |i| tx.send(format!("b-{i}")).unwrap()),
+        );
+        o.trigger(|fun| fun(2));
+        assert_eq!(rx.try_recv().unwrap(), "b-2");
+    }
+
+    struct DropCounter(Arc<AtomicI32>);
+
+    impl DropCounter {
+        fn new(counter: Arc<AtomicI32>) -> Self {
+            counter.fetch_add(1, Ordering::SeqCst);
+            DropCounter(counter)
+        }
+    }
+
+    impl Drop for DropCounter {
+        fn drop(&mut self) {
+            self.0.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn drop_subscription() {
+        let counter = Arc::new(AtomicI32::new(0));
+        let o: Observer<DropCounter> = Observer::new();
+        for _ in 0..100 {
+            assert_eq!(counter.load(Ordering::SeqCst), 0);
+            let _sub = o.subscribe(DropCounter::new(counter.clone()));
+            assert_eq!(counter.load(Ordering::SeqCst), 1);
+            // drop subscription
+        }
+    }
+
+    #[test]
+    fn drop_subscription2() {
+        let counter = Arc::new(AtomicI32::new(0));
+        let o: Observer<DropCounter> = Observer::new();
+        let mut subscriptions = Vec::new();
+        for _ in 0..100 {
+            let sub = o.subscribe(DropCounter::new(counter.clone()));
+            subscriptions.push(sub);
+        }
+        assert_eq!(counter.load(Ordering::SeqCst), 100);
+        drop(subscriptions);
+        assert_eq!(counter.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn clean() {
+        let counter = Arc::new(AtomicI32::new(0));
+        let o: Observer<DropCounter> = Observer::new();
+        let mut subscriptions = Vec::new();
+        for _ in 0..100 {
+            let sub = o.subscribe(DropCounter::new(counter.clone()));
+            subscriptions.push(sub);
+        }
+        assert_eq!(counter.load(Ordering::SeqCst), 100);
+        o.clean();
+        assert_eq!(counter.load(Ordering::SeqCst), 0);
     }
 }

@@ -1,3 +1,10 @@
+use std::collections::HashMap;
+use std::convert::TryInto;
+use std::fs::File;
+use std::io::BufReader;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
 use crate::block::{ClientID, Item, ItemContent};
 use crate::branch::Branch;
 use crate::encoding::read::Read;
@@ -12,12 +19,6 @@ use crate::{
     Any, ArrayPrelim, Doc, GetString, Map, MapPrelim, MapRef, ReadTxn, StateVector, Transact, Xml,
     XmlElementRef, XmlTextRef, ID,
 };
-use std::cell::Cell;
-use std::collections::HashMap;
-use std::convert::TryInto;
-use std::fs::File;
-use std::io::BufReader;
-use std::rc::Rc;
 
 #[test]
 fn text_insert_delete() {
@@ -103,7 +104,7 @@ fn text_insert_delete() {
         ds.insert(ID::new(CLIENT_ID, 5), 2);
         DeleteSet::from(ds)
     };
-    let visited = Rc::new(Cell::new(false));
+    let visited = Arc::new(AtomicBool::new(false));
     let setter = visited.clone();
 
     let doc = Doc::new();
@@ -116,7 +117,7 @@ fn text_insert_delete() {
             }
         }
         assert_eq!(u.delete_set, expected_ds);
-        setter.set(true);
+        setter.store(true, Ordering::Relaxed);
     });
     {
         let mut txn = doc.transact_mut();
@@ -124,7 +125,7 @@ fn text_insert_delete() {
         txn.apply_update(u);
     }
     assert_eq!(txt.get_string(&doc.transact()), "abhi".to_string());
-    assert!(visited.get());
+    assert!(visited.load(Ordering::Relaxed));
 }
 
 #[test]

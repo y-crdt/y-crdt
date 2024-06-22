@@ -2,13 +2,13 @@
 pub type Timestamp = u64;
 
 /// A clock trait used to obtain the current time.
-pub trait Clock {
+pub trait Clock: Send + Sync {
     fn now(&self) -> Timestamp;
 }
 
 impl<F> Clock for F
 where
-    F: Fn() -> Timestamp,
+    F: Fn() -> Timestamp + Send + Sync,
 {
     #[inline]
     fn now(&self) -> Timestamp {

@@ -3,6 +3,8 @@ use crate::sync::{awareness, Awareness, AwarenessUpdate};
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::{ReadTxn, StateVector, Transact, Update};
+use serde::de::DeserializeOwned;
+use serde::Serialize;
 use thiserror::Error;
 
 /*
@@ -43,7 +45,11 @@ pub trait Protocol {
     /// To be called whenever a new connection has been accepted. Returns an encoded list of
     /// messages to be send back to initiator. This binary may contain multiple messages inside,
     /// stored one after another.
-    fn start<E: Encoder>(&self, awareness: &Awareness, encoder: &mut E) -> Result<(), Error> {
+    fn start<E, S>(&self, awareness: &Awareness<S>, encoder: &mut E) -> Result<(), Error>
+    where
+        E: Encoder,
+        S: Serialize + 'static,
+    {
         let (sv, update) = {
             let sv = awareness.doc().transact().state_vector();
             let update = awareness.update()?;
@@ -56,22 +62,28 @@ pub trait Protocol {
 
     /// Y-sync protocol sync-step-1 - given a [StateVector] of a remote side, calculate missing
     /// updates. Returns a sync-step-2 message containing a calculated update.
-    fn handle_sync_step1(
+    fn handle_sync_step1<S>(
         &self,
-        awareness: &Awareness,
+        awareness: &Awareness<S>,
         sv: StateVector,
-    ) -> Result<Option<Message>, Error> {
+    ) -> Result<Option<Message>, Error>
+    where
+        S: 'static,
+    {
         let update = awareness.doc().transact().encode_state_as_update_v1(&sv);
         Ok(Some(Message::Sync(SyncMessage::SyncStep2(update))))
     }
 
     /// Handle reply for a sync-step-1 send from this replica previously. By default just apply
     /// an update to current `awareness` document instance.
-    fn handle_sync_step2(
+    fn handle_sync_step2<S>(
         &self,
-        awareness: &mut Awareness,
+        awareness: &mut Awareness<S>,
         update: Update,
-    ) -> Result<Option<Message>, Error> {
+    ) -> Result<Option<Message>, Error>
+    where
+        S: 'static,
+    {
         let mut txn = awareness.doc().transact_mut();
         txn.apply_update(update);
         Ok(None)
@@ -79,19 +91,22 @@ pub trait Protocol {
 
     /// Handle continuous update send from the client. By default just apply an update to a current
     /// `awareness` document instance.
-    fn handle_update(
+    fn handle_update<S>(
         &self,
-        awareness: &mut Awareness,
+        awareness: &mut Awareness<S>,
         update: Update,
-    ) -> Result<Option<Message>, Error> {
+    ) -> Result<Option<Message>, Error>
+    where
+        S: 'static,
+    {
         self.handle_sync_step2(awareness, update)
     }
 
     /// Handle authorization message. By default if reason for auth denial has been provided,
     /// send back [Error::PermissionDenied].
-    fn handle_auth(
+    fn handle_auth<S>(
         &self,
-        _awareness: &Awareness,
+        _awareness: &Awareness<S>,
         deny_reason: Option<String>,
     ) -> Result<Option<Message>, Error> {
         if let Some(reason) = deny_reason {
@@ -103,27 +118,33 @@ pub trait Protocol {
 
     /// Returns an [AwarenessUpdate] which is a serializable representation of a current `awareness`
     /// instance.
-    fn handle_awareness_query(&self, awareness: &Awareness) -> Result<Option<Message>, Error> {
+    fn handle_awareness_query<S>(&self, awareness: &Awareness<S>) -> Result<Option<Message>, Error>
+    where
+        S: Serialize,
+    {
         let update = awareness.update()?;
         Ok(Some(Message::Awareness(update)))
     }
 
     /// Reply to awareness query or just incoming [AwarenessUpdate], where current `awareness`
     /// instance is being updated with incoming data.
-    fn handle_awareness_update(
+    fn handle_awareness_update<S>(
         &self,
-        awareness: &mut Awareness,
+        awareness: &mut Awareness<S>,
         update: AwarenessUpdate,
-    ) -> Result<Option<Message>, Error> {
+    ) -> Result<Option<Message>, Error>
+    where
+        S: DeserializeOwned + 'static,
+    {
         awareness.apply_update(update)?;
         Ok(None)
     }
 
     /// Y-sync protocol enables to extend its own settings with custom handles. These can be
     /// implemented here. By default it returns an [Error::Unsupported].
-    fn missing_handle(
+    fn missing_handle<S>(
         &self,
-        _awareness: &mut Awareness,
+        _awareness: &mut Awareness<S>,
         tag: u8,
         _data: Vec<u8>,
     ) -> Result<Option<Message>, Error> {
@@ -369,7 +390,7 @@ mod test {
 
     #[test]
     fn protocol_init() {
-        let awareness = Awareness::default();
+        let awareness = Awareness::<serde_json::Value>::default();
         let protocol = crate::sync::DefaultProtocol;
         let mut encoder = EncoderV1::new();
         protocol.start(&awareness, &mut encoder).unwrap();
@@ -394,8 +415,8 @@ mod test {
     fn protocol_sync_steps() {
         let protocol = crate::sync::DefaultProtocol;
 
-        let mut a1 = Awareness::new(Doc::with_client_id(1));
-        let mut a2 = Awareness::new(Doc::with_client_id(2));
+        let mut a1 = Awareness::<serde_json::Value>::new(Doc::with_client_id(1));
+        let mut a2 = Awareness::<serde_json::Value>::new(Doc::with_client_id(2));
 
         let expected = {
             let txt = a1.doc_mut().get_or_insert_text("test");
@@ -431,8 +452,8 @@ mod test {
     fn protocol_sync_step_update() {
         let protocol = crate::sync::DefaultProtocol;
 
-        let mut a1 = Awareness::new(Doc::with_client_id(1));
-        let mut a2 = Awareness::new(Doc::with_client_id(2));
+        let mut a1 = Awareness::<serde_json::Value>::new(Doc::with_client_id(1));
+        let mut a2 = Awareness::<serde_json::Value>::new(Doc::with_client_id(2));
 
         let data = {
             let txt = a1.doc_mut().get_or_insert_text("test");

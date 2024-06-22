@@ -1,7 +1,6 @@
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::fmt::Formatter;
-use std::mem::MaybeUninit;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -15,6 +14,8 @@ use crate::{Doc, Observer, Subscription};
 
 const NULL_STR: &str = "null";
 
+type AwarenessUpdateFn<S> = Box<dyn Fn(&Awareness<S>, &Event) + Send + Sync + 'static>;
+
 /// The Awareness class implements a simple shared state protocol that can be used for non-persistent
 /// data like awareness information (cursor, username, status, ..). Each client can update its own
 /// local state and listen to state changes of remote clients.
@@ -27,16 +28,15 @@ const NULL_STR: &str = "null";
 /// received, and the known clock of that client equals the received clock, it will clean the state.
 ///
 /// Before a client disconnects, it should propagate a `null` state with an updated clock.
-pub struct Awareness {
+pub struct Awareness<S> {
     doc: Doc,
-    state: Option<AwarenessState>,
-    on_update: Observer<Event>,
+    states: HashMap<ClientID, S>,
+    meta: HashMap<ClientID, MetaClientState>,
+    clock: Arc<dyn Clock>,
+    on_update: Observer<AwarenessUpdateFn<S>>,
 }
 
-unsafe impl Send for Awareness {}
-unsafe impl Sync for Awareness {}
-
-impl Awareness {
+impl<S: 'static> Awareness<S> {
     /// Creates a new instance of [Awareness] struct, which operates over a given document.
     /// Awareness instance has full ownership of that document. If necessary it can be accessed
     /// using either [Awareness::doc] or [Awareness::doc_mut] methods.
@@ -54,17 +54,19 @@ impl Awareness {
     {
         Awareness {
             doc,
+            states: HashMap::new(),
+            meta: HashMap::new(),
+            clock: Arc::new(clock),
             on_update: Observer::new(),
-            state: Some(AwarenessState::new(Arc::new(clock))),
         }
     }
 
     /// Returns a channel receiver for an incoming awareness events. This channel can be cloned.
     pub fn on_update<F>(&self, f: F) -> Subscription
     where
-        F: Fn(&Event) -> () + 'static,
+        F: Fn(&Awareness<S>, &Event) + Send + Sync + 'static,
     {
-        self.on_update.subscribe(move |_, e| f(e))
+        self.on_update.subscribe(Box::new(f))
     }
 
     /// Returns a read-only reference to an underlying [Doc].
@@ -85,29 +87,30 @@ impl Awareness {
     /// Returns a state map of all the clients tracked by current [Awareness] instance. Those
     /// states are identified by their corresponding [ClientID]s. The associated state is
     /// represented and replicated to other clients as a JSON string.
-    pub fn clients(&self) -> &HashMap<ClientID, String> {
-        &self.state.as_ref().unwrap().states
+    pub fn clients(&self) -> &HashMap<ClientID, S> {
+        &self.states
     }
 
     /// Returns a state map of all the clients metadata tracked by current [Awareness] instance.
     /// That metadata is identified by their corresponding [ClientID]s.
     pub fn meta(&self) -> &HashMap<ClientID, MetaClientState> {
-        &self.state.as_ref().unwrap().meta
+        &self.meta
     }
 
     /// Returns a JSON string state representation of a current [Awareness] instance.
-    pub fn local_state(&self) -> Option<&str> {
-        Some(self.state().states.get(&self.doc.client_id())?.as_str())
+    pub fn local_state(&self) -> Option<&S> {
+        self.states.get(&self.doc.client_id())
     }
 
     /// Sets a current [Awareness] instance state to a corresponding JSON string. This state will
     /// be replicated to other clients as part of the [AwarenessUpdate] and it will trigger an event
     /// to be emitted if current instance was created using [Awareness::with_observer] method.
     ///
-    pub fn set_local_state<S: Into<String>>(&mut self, json: S) {
+    pub fn set_local_state(&mut self, json: S) {
         let client_id = self.doc.client_id();
-        let is_new = self.state_mut().set_state(client_id, json.into());
-        if let Some(mut callbacks) = self.on_update.callbacks() {
+        self.update_meta(client_id);
+        let is_new = self.states.insert(client_id, json.into()).is_none();
+        if self.on_update.has_subscribers() {
             let mut added = vec![];
             let mut updated = vec![];
             if is_new {
@@ -115,31 +118,32 @@ impl Awareness {
             } else {
                 updated.push(client_id);
             }
-            let state = self.state.take().unwrap();
-            let e = Event::new(added, updated, Vec::default(), state, self.doc.clone());
-            // artificial transaction for the same of Observer signature, it will never be reached
-            callbacks.trigger(unsafe { MaybeUninit::uninit().assume_init_ref() }, &e);
-            self.state = Some(e.awareness_state);
+            let e = Event::new(added, updated, Vec::default());
+            self.on_update.trigger(|fun| fun(self, &e));
+        }
+    }
+
+    fn update_meta(&mut self, client_id: ClientID) {
+        let now = self.clock.now();
+        match self.meta.entry(client_id) {
+            Entry::Occupied(mut e) => {
+                let clock = e.get().clock + 1;
+                let meta = MetaClientState::new(clock, now);
+                e.insert(meta);
+            }
+            Entry::Vacant(e) => {
+                e.insert(MetaClientState::new(1, now));
+            }
         }
     }
 
     /// Clears out a state of a given client, effectively marking it as disconnected.
     pub fn remove_state(&mut self, client_id: ClientID) {
-        let is_removed = self.state_mut().remove_state(client_id);
-        if let Some(mut callbacks) = self.on_update.callbacks() {
-            if is_removed {
-                // artificial transaction for the same of Observer signature, it will never be reached
-                let state = self.state.take().unwrap();
-                let e = Event::new(
-                    Vec::default(),
-                    Vec::default(),
-                    vec![client_id],
-                    state,
-                    self.doc.clone(),
-                );
-                callbacks.trigger(unsafe { MaybeUninit::uninit().assume_init_ref() }, &e);
-                self.state = Some(e.awareness_state);
-            }
+        self.update_meta(client_id);
+        let is_removed = self.states.remove(&client_id).is_some();
+        if is_removed && self.on_update.has_subscribers() {
+            let e = Event::new(Vec::default(), Vec::default(), vec![client_id]);
+            self.on_update.trigger(|fun| fun(self, &e));
         }
     }
 
@@ -149,23 +153,48 @@ impl Awareness {
         let client_id = self.doc.client_id();
         self.remove_state(client_id);
     }
+}
 
+impl<S> Awareness<S>
+where
+    S: Serialize,
+{
     /// Returns a serializable update object which is representation of a current Awareness state.
     pub fn update(&self) -> Result<AwarenessUpdate, Error> {
-        self.state().full_update()
+        let clients = self.states.keys().cloned();
+        self.update_with_clients(clients)
     }
 
     /// Returns a serializable update object which is representation of a current Awareness state.
     /// Unlike [Awareness::update], this method variant allows to prepare update only for a subset
     /// of known clients. These clients must all be known to a current [Awareness] instance,
     /// otherwise a [Error::ClientNotFound] error will be returned.
-    pub fn update_with_clients<I>(&self, clients: I) -> Result<AwarenessUpdate, Error>
-    where
-        I: IntoIterator<Item = ClientID>,
-    {
-        self.state().update_with_clients(clients)
+    pub fn update_with_clients<I: IntoIterator<Item = ClientID>>(
+        &self,
+        clients: I,
+    ) -> Result<AwarenessUpdate, Error> {
+        let mut res = HashMap::new();
+        for client_id in clients {
+            let clock = if let Some(meta) = self.meta.get(&client_id) {
+                meta.clock
+            } else {
+                return Err(Error::ClientNotFound(client_id));
+            };
+            let json = if let Some(json) = self.states.get(&client_id) {
+                serde_json::to_string(json)?
+            } else {
+                String::from(NULL_STR)
+            };
+            res.insert(client_id, AwarenessUpdateEntry { clock, json });
+        }
+        Ok(AwarenessUpdate { clients: res })
     }
+}
 
+impl<S> Awareness<S>
+where
+    S: for<'de> Deserialize<'de> + 'static,
+{
     /// Applies an update (incoming from remote channel or generated using [Awareness::update] /
     /// [Awareness::update_with_clients] methods) and modifies a state of a current instance.
     ///
@@ -189,65 +218,58 @@ impl Awareness {
         self.apply_update_internal(update, true)
     }
 
-    fn state(&self) -> &AwarenessState {
-        self.state.as_ref().unwrap()
-    }
-
-    fn state_mut(&mut self) -> &mut AwarenessState {
-        self.state.as_mut().unwrap()
-    }
-
     fn apply_update_internal(
         &mut self,
         update: AwarenessUpdate,
         generate_summary: bool,
     ) -> Result<Option<AwarenessUpdateSummary>, Error> {
-        let now = self.state().clock.now();
+        let now = self.clock.now();
 
         let mut added = Vec::new();
         let mut updated = Vec::new();
         let mut removed = Vec::new();
 
-        let state = self.state.as_mut().unwrap();
         for (client_id, entry) in update.clients {
             let mut clock = entry.clock;
-            let is_null = entry.json.as_str() == NULL_STR;
-            match state.meta.entry(client_id) {
+            let json: Option<S> = serde_json::from_str(&entry.json)?;
+            match self.meta.entry(client_id) {
                 Entry::Occupied(mut e) => {
                     let prev = e.get();
-                    let is_removed =
-                        prev.clock == clock && is_null && state.states.contains_key(&client_id);
+                    let is_removed = prev.clock == clock
+                        && json.is_none()
+                        && self.states.contains_key(&client_id);
                     let is_new = prev.clock < clock;
                     if is_new || is_removed {
-                        if is_null {
-                            // never let a remote client remove this local state
-                            if client_id == self.doc.client_id()
-                                && state.states.get(&client_id).is_some()
-                            {
-                                // remote client removed the local state. Do not remote state. Broadcast a message indicating
-                                // that this client still exists by increasing the clock
-                                clock += 1;
-                            } else {
-                                state.states.remove(&client_id);
-                                if generate_summary {
-                                    removed.push(client_id);
+                        match json {
+                            None => {
+                                // never let a remote client remove this local state
+                                if client_id == self.doc.client_id()
+                                    && self.states.get(&client_id).is_some()
+                                {
+                                    // remote client removed the local state. Do not remote state. Broadcast a message indicating
+                                    // that this client still exists by increasing the clock
+                                    clock += 1;
+                                } else {
+                                    self.states.remove(&client_id);
+                                    if generate_summary {
+                                        removed.push(client_id);
+                                    }
                                 }
                             }
-                        } else {
-                            match state.states.entry(client_id) {
+                            Some(state) => match self.states.entry(client_id) {
                                 Entry::Occupied(mut e) => {
                                     if generate_summary {
                                         updated.push(client_id);
                                     }
-                                    e.insert(entry.json);
+                                    e.insert(state);
                                 }
                                 Entry::Vacant(e) => {
-                                    e.insert(entry.json);
+                                    e.insert(state);
                                     if generate_summary {
                                         updated.push(client_id);
                                     }
                                 }
-                            }
+                            },
                         }
                         e.insert(MetaClientState::new(clock, now));
                         true
@@ -257,22 +279,24 @@ impl Awareness {
                 }
                 Entry::Vacant(e) => {
                     e.insert(MetaClientState::new(clock, now));
-                    state.states.insert(client_id, entry.json);
-                    if generate_summary {
-                        added.push(client_id);
+                    if let Some(json) = json {
+                        self.states.insert(client_id, json);
+                        if generate_summary {
+                            added.push(client_id);
+                        }
+                        true
+                    } else {
+                        false
                     }
-                    true
                 }
             };
         }
 
         if !added.is_empty() || !updated.is_empty() || !removed.is_empty() {
-            let summary = if let Some(mut callbacks) = self.on_update.callbacks() {
-                let state = self.state.take().unwrap();
-                let e = Event::new(added, updated, removed, state, self.doc.clone());
+            let summary = if self.on_update.has_subscribers() {
+                let e = Event::new(added, updated, removed);
                 // artificial transaction for the same of Observer signature, it will never be reached
-                callbacks.trigger(unsafe { MaybeUninit::uninit().assume_init_ref() }, &e);
-                self.state = Some(e.awareness_state);
+                self.on_update.trigger(|fun| fun(self, &e));
                 e.summary
             } else {
                 AwarenessUpdateSummary {
@@ -289,22 +313,18 @@ impl Awareness {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-impl Default for Awareness {
+impl<S: 'static> Default for Awareness<S> {
     fn default() -> Self {
         Awareness::new(Doc::new())
     }
 }
 
-impl std::fmt::Debug for Awareness {
+impl<S: std::fmt::Debug> std::fmt::Debug for Awareness<S> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let mut s = f.debug_struct("Awareness");
         s.field("doc", &self.doc);
-
-        if let Some(state) = self.state.as_ref() {
-            s.field("meta", &state.meta);
-            s.field("states", &state.states);
-        }
-
+        s.field("meta", &self.meta);
+        s.field("states", &self.states);
         s.finish()
     }
 }
@@ -381,6 +401,8 @@ pub enum Error {
     /// Client ID was not found in [Awareness] metadata.
     #[error("client ID `{0}` not found")]
     ClientNotFound(ClientID),
+    #[error("couldn't serialize awareness state: {0}")]
+    Serde(#[from] serde_json::Error),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -398,165 +420,21 @@ impl MetaClientState {
     }
 }
 
-/// An [Awareness] client state representation.
-#[derive(Clone)]
-pub struct AwarenessState {
-    clock: Arc<dyn Clock>,
-    states: HashMap<ClientID, String>,
-    meta: HashMap<ClientID, MetaClientState>,
-}
-
-impl AwarenessState {
-    fn new(clock: Arc<dyn Clock>) -> Self {
-        AwarenessState {
-            clock,
-            states: HashMap::new(),
-            meta: HashMap::new(),
-        }
-    }
-
-    fn set_state<S: Into<String>>(&mut self, client_id: ClientID, json: S) -> bool {
-        self.update_meta(client_id);
-        let new: String = json.into();
-        match self.states.entry(client_id) {
-            Entry::Occupied(mut e) => {
-                e.insert(new);
-                false
-            }
-            Entry::Vacant(e) => {
-                e.insert(new);
-                true
-            }
-        }
-    }
-
-    fn remove_state(&mut self, client_id: ClientID) -> bool {
-        let prev_state = self.states.remove(&client_id);
-        self.update_meta(client_id);
-        prev_state.is_some()
-    }
-
-    /// Get iterator over all awarness clients.
-    pub fn all_clients(&self) -> AwarenessClients {
-        AwarenessClients {
-            inner: self.meta.keys(),
-        }
-    }
-
-    /// Returns a string state representation of a particular client.
-    pub fn get_state(&self, client_id: ClientID) -> Option<&str> {
-        let state = self.states.get(&client_id)?;
-        Some(state.as_str())
-    }
-
-    /// Returns a metadata about particular client.
-    #[inline]
-    pub fn get_meta(&self, client_id: ClientID) -> Option<&MetaClientState> {
-        self.meta.get(&client_id)
-    }
-
-    /// Returns a serializable update object which is representation of a current Awareness state.
-    pub fn full_update(&self) -> Result<AwarenessUpdate, Error> {
-        let clients = self.states.keys().cloned();
-        self.update_with_clients(clients)
-    }
-
-    /// Returns a serializable update object which is representation of a current Awareness state.
-    /// Unlike [Awareness::update], this method variant allows to prepare update only for a subset
-    /// of known clients. These clients must all be known to a current [Awareness] instance,
-    /// otherwise a [Error::ClientNotFound] error will be returned.
-    pub fn update_with_clients<I: IntoIterator<Item = ClientID>>(
-        &self,
-        clients: I,
-    ) -> Result<AwarenessUpdate, Error> {
-        let mut res = HashMap::new();
-        for client_id in clients {
-            let clock = if let Some(meta) = self.meta.get(&client_id) {
-                meta.clock
-            } else {
-                return Err(Error::ClientNotFound(client_id));
-            };
-            let json = if let Some(json) = self.states.get(&client_id) {
-                json.clone()
-            } else {
-                String::from(NULL_STR)
-            };
-            res.insert(client_id, AwarenessUpdateEntry { clock, json });
-        }
-        Ok(AwarenessUpdate { clients: res })
-    }
-
-    fn update_meta(&mut self, client_id: ClientID) {
-        let now = self.clock.now();
-        match self.meta.entry(client_id) {
-            Entry::Occupied(mut e) => {
-                let clock = e.get().clock + 1;
-                let meta = MetaClientState::new(clock, now);
-                e.insert(meta);
-            }
-            Entry::Vacant(e) => {
-                e.insert(MetaClientState::new(1, now));
-            }
-        }
-    }
-}
-
-#[repr(transparent)]
-pub struct AwarenessClients<'a> {
-    inner: std::collections::hash_map::Keys<'a, ClientID, MetaClientState>,
-}
-
-impl<'a> Iterator for AwarenessClients<'a> {
-    type Item = ClientID;
-
-    #[inline]
-    fn next(&mut self) -> Option<Self::Item> {
-        self.inner.next().cloned()
-    }
-}
-
 /// Event type emitted by an [Awareness] struct.
-#[derive(Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Event {
     summary: AwarenessUpdateSummary,
-    awareness_state: AwarenessState,
-    doc: Doc,
 }
 
 impl Event {
-    pub fn new(
-        added: Vec<ClientID>,
-        updated: Vec<ClientID>,
-        removed: Vec<ClientID>,
-        awareness_state: AwarenessState,
-        doc: Doc,
-    ) -> Self {
+    pub fn new(added: Vec<ClientID>, updated: Vec<ClientID>, removed: Vec<ClientID>) -> Self {
         Event {
             summary: AwarenessUpdateSummary {
                 added,
                 updated,
                 removed,
             },
-            awareness_state,
-            doc,
         }
-    }
-
-    /// Returns an awareness update object, which contains ONLY the data of modified clients.
-    pub fn awareness_update(&self) -> Option<AwarenessUpdate> {
-        self.awareness_state
-            .update_with_clients(self.summary.all_changes())
-            .ok()
-    }
-
-    /// Returns an awareness state object, which contains the full state of all clients.
-    pub fn awareness_state(&self) -> &AwarenessState {
-        &self.awareness_state
-    }
-
-    /// Returns an underlying awareness [Doc] instance.
-    pub fn doc(&self) -> &Doc {
-        &self.doc
     }
 
     /// Collection of new clients that have been added to an [Awareness] struct, that was not known
@@ -585,6 +463,7 @@ impl Event {
 
 #[cfg(test)]
 mod test {
+    use serde_json::json;
     use std::sync::mpsc::{channel, Receiver};
 
     use crate::sync::awareness::{AwarenessUpdateSummary, Event};
@@ -592,40 +471,41 @@ mod test {
     use crate::Doc;
 
     #[test]
-    fn awareness() -> Result<(), Box<dyn std::error::Error>> {
+    fn awareness() {
         fn update(
             recv: &mut Receiver<Event>,
-            from: &Awareness,
-            to: &mut Awareness,
-        ) -> Result<Event, Box<dyn std::error::Error>> {
-            let e = recv.try_recv()?;
-            let u = from.update_with_clients([e.added(), e.updated(), e.removed()].concat())?;
-            to.apply_update(u)?;
-            Ok(e)
+            from: &Awareness<serde_json::Value>,
+            to: &mut Awareness<serde_json::Value>,
+        ) -> Event {
+            let e = recv.try_recv().unwrap();
+            let total = [e.added(), e.updated(), e.removed()].concat();
+            let u = from.update_with_clients(total).unwrap();
+            to.apply_update(u).unwrap();
+            e
         }
 
         let (s1, mut o_local) = channel();
         let mut local = Awareness::new(Doc::with_client_id(1));
-        let _sub_local = local.on_update(move |e| {
+        let _sub_local = local.on_update(move |_, e| {
             s1.send(e.clone()).unwrap();
         });
 
         let (s2, o_remote) = channel();
         let mut remote = Awareness::new(Doc::with_client_id(2));
-        let _sub_remote = local.on_update(move |e| {
+        let _sub_remote = local.on_update(move |_, e| {
             s2.send(e.clone()).unwrap();
         });
 
-        local.set_local_state("{x:3}");
-        let _e_local = update(&mut o_local, &local, &mut remote)?;
-        assert_eq!(remote.clients()[&1], "{x:3}");
-        assert_eq!(remote.state().meta[&1].clock, 1);
-        assert_eq!(o_remote.try_recv()?.added(), &[1]);
+        local.set_local_state(json!({"x":3}));
+        let _e_local = update(&mut o_local, &local, &mut remote);
+        assert_eq!(remote.clients()[&1], json!({"x":3}));
+        assert_eq!(remote.meta[&1].clock, 1);
+        assert_eq!(o_remote.try_recv().unwrap().added(), &[1]);
 
-        local.set_local_state("{x:4}");
-        let e_local = update(&mut o_local, &local, &mut remote)?;
-        let e_remote = o_remote.try_recv()?;
-        assert_eq!(remote.clients()[&1], "{x:4}");
+        local.set_local_state(json!({"x":4}));
+        let e_local = update(&mut o_local, &local, &mut remote);
+        let e_remote = o_remote.try_recv().unwrap();
+        assert_eq!(remote.clients()[&1], json!({"x":4}));
         assert_eq!(
             e_remote.summary,
             AwarenessUpdateSummary {
@@ -637,16 +517,12 @@ mod test {
         assert_eq!(e_remote.summary, e_local.summary);
 
         local.clean_local_state();
-        let e_local = update(&mut o_local, &local, &mut remote)?;
-        let e_remote = o_remote.try_recv()?;
+        let e_local = update(&mut o_local, &local, &mut remote);
+        let e_remote = o_remote.try_recv().unwrap();
         assert_eq!(e_remote.removed().len(), 1);
         assert_eq!(local.clients().get(&1), None);
         assert_eq!(e_remote.summary, e_local.summary);
-        assert_eq!(
-            e_remote.awareness_state().full_update().unwrap(),
-            e_local.awareness_state().full_update().unwrap()
-        );
-        Ok(())
+        assert_eq!(e_remote, e_local);
     }
 
     #[test]
@@ -654,11 +530,11 @@ mod test {
         let mut local = Awareness::new(Doc::with_client_id(1));
         let mut remote = Awareness::new(Doc::with_client_id(2));
 
-        local.set_local_state("{x:3}");
+        local.set_local_state(json!({"x":3}));
         let update = local.update_with_clients([local.client_id()])?;
         let summary = remote.apply_update_summary(update)?;
-        assert_eq!(remote.clients()[&1], "{x:3}");
-        assert_eq!(remote.state().meta[&1].clock, 1);
+        assert_eq!(remote.clients()[&1], json!({"x":3}));
+        assert_eq!(remote.meta[&1].clock, 1);
         assert_eq!(
             summary,
             Some(AwarenessUpdateSummary {
@@ -668,10 +544,10 @@ mod test {
             })
         );
 
-        local.set_local_state("{x:4}");
+        local.set_local_state(json!({"x":4}));
         let update = local.update_with_clients([local.client_id()])?;
         let summary = remote.apply_update_summary(update)?;
-        assert_eq!(remote.clients()[&1], "{x:4}");
+        assert_eq!(remote.clients()[&1], json!({"x":4}));
         assert_eq!(
             summary,
             Some(AwarenessUpdateSummary {
@@ -680,7 +556,7 @@ mod test {
                 removed: vec![]
             })
         );
-        assert_eq!(local.state().states, remote.state().states);
+        assert_eq!(local.states, remote.states);
 
         local.clean_local_state();
         let update = local.update_with_clients([local.client_id()])?;
@@ -694,7 +570,7 @@ mod test {
             })
         );
         assert_eq!(local.clients().get(&1), None);
-        assert_eq!(local.state().states, remote.state().states);
+        assert_eq!(local.states, remote.states);
         Ok(())
     }
 }

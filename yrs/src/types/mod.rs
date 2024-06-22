@@ -29,7 +29,6 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::convert::{TryFrom, TryInto};
 use std::fmt::Formatter;
 use std::marker::PhantomData;
-use std::ptr::NonNull;
 use std::sync::Arc;
 
 /// Type ref identifier for an [ArrayRef] type.
@@ -213,7 +212,7 @@ pub trait Observable: AsRef<Branch> {
     /// Returns a [Subscription] which, when dropped, will unsubscribe current callback.
     fn observe<F>(&self, f: F) -> Subscription
     where
-        F: Fn(&TransactionMut, &Self::Event) -> () + 'static,
+        F: Fn(&TransactionMut, &Self::Event) + Send + Sync + 'static,
         Event: AsRef<Self::Event>,
     {
         let mut branch = BranchPtr::from(self.as_ref());
@@ -273,10 +272,10 @@ pub trait DeepObservable: AsRef<Branch> {
     /// when dropped.
     fn observe_deep<F>(&self, f: F) -> Subscription
     where
-        F: Fn(&TransactionMut, &Events) -> () + 'static,
+        F: Fn(&TransactionMut, &Events) + Send + Sync + 'static,
     {
         let branch = self.as_ref();
-        branch.deep_observers.subscribe(f)
+        branch.deep_observers.subscribe(Box::new(f))
     }
 }
 
@@ -977,20 +976,17 @@ pub(crate) fn event_change_set(txn: &TransactionMut, start: Option<ItemPtr>) -> 
     ChangeSet::new(added, deleted, delta)
 }
 
-pub struct Events(Vec<NonNull<Event>>);
+pub struct Events<'a>(Vec<&'a Event>);
 
-impl Events {
-    pub(crate) fn new(events: &mut Vec<&Event>) -> Self {
+impl<'a> Events<'a> {
+    pub(crate) fn new(events: &Vec<&'a Event>) -> Self {
+        let mut events = events.clone();
         events.sort_by(|&a, &b| {
             let path1 = a.path();
             let path2 = b.path();
             path1.len().cmp(&path2.len())
         });
-        let mut inner = Vec::with_capacity(events.len());
-        for &e in events.iter() {
-            inner.push(unsafe { NonNull::new_unchecked(e as *const Event as *mut Event) });
-        }
-        Events(inner)
+        Events(events)
     }
 
     pub fn iter(&self) -> EventsIter {
@@ -998,14 +994,14 @@ impl Events {
     }
 }
 
-pub struct EventsIter<'a>(std::slice::Iter<'a, NonNull<Event>>);
+pub struct EventsIter<'a>(std::slice::Iter<'a, &'a Event>);
 
 impl<'a> Iterator for EventsIter<'a> {
     type Item = &'a Event;
 
     fn next(&mut self) -> Option<Self::Item> {
         let e = self.0.next()?;
-        Some(unsafe { e.as_ref() })
+        Some(e)
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {

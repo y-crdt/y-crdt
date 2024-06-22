@@ -228,6 +228,9 @@ impl Encode for GC {
 #[derive(Clone, Copy, Hash)]
 pub struct ItemPtr(NonNull<Item>);
 
+unsafe impl Send for ItemPtr {}
+unsafe impl Sync for ItemPtr {}
+
 impl ItemPtr {
     pub(crate) fn redo<M>(
         &mut self,
@@ -283,7 +286,7 @@ impl ItemPtr {
         if let Some(sub) = item.parent_sub.as_ref() {
             if item.right.is_some() {
                 left = Some(self_ptr);
-                // Iterate right while right is in itemsToDelete
+                // Iterate right while is in itemsToDelete
                 // If it is intended to delete right while item is redone,
                 // we can expect that item should replace right.
                 while let Some(left_item) = left.as_deref() {

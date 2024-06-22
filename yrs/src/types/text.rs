@@ -1354,10 +1354,10 @@ mod test {
     use crate::{
         any, Any, ArrayPrelim, Doc, GetString, Observable, StateVector, Text, Transact, Update, ID,
     };
+    use arc_swap::ArcSwapOption;
     use fastrand::Rng;
-    use std::cell::RefCell;
     use std::collections::HashMap;
-    use std::rc::Rc;
+    use std::sync::Arc;
     use std::time::Duration;
 
     #[test]
@@ -1697,63 +1697,61 @@ mod test {
     fn observer() {
         let doc = Doc::with_client_id(1);
         let txt = doc.get_or_insert_text("text");
-        let delta = Rc::new(RefCell::new(None));
+        let delta = Arc::new(ArcSwapOption::default());
         let delta_c = delta.clone();
         let sub = txt.observe(move |txn, e| {
-            *delta_c.borrow_mut() = Some(e.delta(txn).to_vec());
+            delta_c.store(Some(Arc::new(e.delta(txn).to_vec())));
         });
 
         // insert initial data to an empty YText
         txt.insert(&mut doc.transact_mut(), 0, "abcd"); // => 'abcd'
         assert_eq!(
-            delta.borrow_mut().take(),
-            Some(vec![Delta::Inserted("abcd".into(), None)])
+            delta.load_full(),
+            Some(Arc::new(vec![Delta::Inserted("abcd".into(), None)]))
         );
 
         // remove 2 chars from the middle
         txt.remove_range(&mut doc.transact_mut(), 1, 2); // => 'ad'
         assert_eq!(
-            delta.borrow_mut().take(),
-            Some(vec![Delta::Retain(1, None), Delta::Deleted(2)])
+            delta.load_full(),
+            Some(Arc::new(vec![Delta::Retain(1, None), Delta::Deleted(2)]))
         );
 
         // insert new item in the middle
         let attrs = Attrs::from([("bold".into(), true.into())]);
         txt.insert_with_attributes(&mut doc.transact_mut(), 1, "e", attrs.clone()); // => 'a<bold>e</bold>d'
         assert_eq!(
-            delta.borrow_mut().take(),
-            Some(vec![
+            delta.load_full(),
+            Some(Arc::new(vec![
                 Delta::Retain(1, None),
                 Delta::Inserted("e".into(), Some(Box::new(attrs)))
-            ])
+            ]))
         );
 
         // remove formatting
         let attrs = Attrs::from([("bold".into(), Any::Null)]);
         txt.format(&mut doc.transact_mut(), 1, 1, attrs.clone()); // => 'aed'
         assert_eq!(
-            delta.borrow_mut().take(),
-            Some(vec![
+            delta.swap(None),
+            Some(Arc::new(vec![
                 Delta::Retain(1, None),
                 Delta::Retain(2, Some(Box::new(attrs)))
-            ])
+            ]))
         );
 
         // free the observer and make sure that callback is no longer called
         drop(sub);
         txt.insert(&mut doc.transact_mut(), 1, "fgh"); // => 'afghed'
-        assert_eq!(delta.borrow_mut().take(), None);
+        assert_eq!(delta.swap(None), None);
     }
 
     #[test]
     fn insert_and_remove_event_changes() {
         let d1 = Doc::with_client_id(1);
         let txt = d1.get_or_insert_text("text");
-        let delta = Rc::new(RefCell::new(None));
+        let delta = Arc::new(ArcSwapOption::default());
         let delta_c = delta.clone();
-        let _sub = txt.observe(move |txn, e| {
-            *delta_c.borrow_mut() = Some(e.delta(txn).to_vec());
-        });
+        let _sub = txt.observe(move |txn, e| delta_c.store(Some(Arc::new(e.delta(txn).to_vec()))));
 
         // insert initial string
         {
@@ -1761,8 +1759,8 @@ mod test {
             txt.insert(&mut txn, 0, "abcd");
         }
         assert_eq!(
-            delta.borrow_mut().take(),
-            Some(vec![Delta::Inserted("abcd".into(), None)])
+            delta.swap(None),
+            Some(Arc::new(vec![Delta::Inserted("abcd".into(), None)]))
         );
 
         // remove middle
@@ -1771,8 +1769,8 @@ mod test {
             txt.remove_range(&mut txn, 1, 2);
         }
         assert_eq!(
-            delta.borrow_mut().take(),
-            Some(vec![Delta::Retain(1, None), Delta::Deleted(2)])
+            delta.swap(None),
+            Some(Arc::new(vec![Delta::Retain(1, None), Delta::Deleted(2)]))
         );
 
         // insert again
@@ -1781,20 +1779,18 @@ mod test {
             txt.insert(&mut txn, 1, "ef");
         }
         assert_eq!(
-            delta.borrow_mut().take(),
-            Some(vec![
+            delta.swap(None),
+            Some(Arc::new(vec![
                 Delta::Retain(1, None),
                 Delta::Inserted("ef".into(), None)
-            ])
+            ]))
         );
 
         // replicate data to another peer
         let d2 = Doc::with_client_id(2);
         let txt = d2.get_or_insert_text("text");
         let delta_c = delta.clone();
-        let _sub = txt.observe(move |txn, e| {
-            *delta_c.borrow_mut() = Some(e.delta(txn).to_vec());
-        });
+        let _sub = txt.observe(move |txn, e| delta_c.store(Some(Arc::new(e.delta(txn).to_vec()))));
 
         {
             let t1 = d1.transact_mut();
@@ -1807,8 +1803,8 @@ mod test {
         }
 
         assert_eq!(
-            delta.borrow_mut().take(),
-            Some(vec![Delta::Inserted("aefd".into(), None)])
+            delta.swap(None),
+            Some(Arc::new(vec![Delta::Inserted("aefd".into(), None)]))
         );
     }
 
@@ -1849,20 +1845,18 @@ mod test {
         let d1 = Doc::with_client_id(1);
         let txt1 = d1.get_or_insert_text("text");
 
-        let delta1 = Rc::new(RefCell::new(None));
+        let delta1 = Arc::new(ArcSwapOption::default());
         let delta_clone = delta1.clone();
-        let _sub1 = txt1.observe(move |txn, e| {
-            delta_clone.replace(Some(e.delta(txn).to_vec()));
-        });
+        let _sub1 =
+            txt1.observe(move |txn, e| delta_clone.store(Some(Arc::new(e.delta(txn).to_vec()))));
 
         let d2 = Doc::with_client_id(2);
         let txt2 = d2.get_or_insert_text("text");
 
-        let delta2 = Rc::new(RefCell::new(None));
+        let delta2 = Arc::new(ArcSwapOption::default());
         let delta_clone = delta2.clone();
-        let _sub2 = txt2.observe(move |txn, e| {
-            delta_clone.replace(Some(e.delta(txn).to_vec()));
-        });
+        let _sub2 =
+            txt2.observe(move |txn, e| delta_clone.store(Some(Arc::new(e.delta(txn).to_vec()))));
 
         let a: Attrs = HashMap::from([("bold".into(), Any::Bool(true))]);
 
@@ -1873,24 +1867,24 @@ mod test {
             let update = txn.encode_update_v1();
             drop(txn);
 
-            let expected = Some(vec![Delta::Inserted(
+            let expected = Some(Arc::new(vec![Delta::Inserted(
                 "abc".into(),
                 Some(Box::new(a.clone())),
-            )]);
+            )]));
 
             assert_eq!(txt1.get_string(&d1.transact()), "abc".to_string());
             assert_eq!(
                 txt1.diff(&d1.transact(), YChange::identity),
                 vec![Diff::new("abc".into(), Some(Box::new(a.clone())))]
             );
-            assert_eq!(delta1.take(), expected);
+            assert_eq!(delta1.swap(None), expected);
 
             let mut txn = d2.transact_mut();
             txn.apply_update(Update::decode_v1(update.as_slice()).unwrap());
             drop(txn);
 
             assert_eq!(txt2.get_string(&d2.transact()), "abc".to_string());
-            assert_eq!(delta2.take(), expected);
+            assert_eq!(delta2.swap(None), expected);
         }
 
         // step 2
@@ -1900,21 +1894,21 @@ mod test {
             let update = txn.encode_update_v1();
             drop(txn);
 
-            let expected = Some(vec![Delta::Deleted(1)]);
+            let expected = Some(Arc::new(vec![Delta::Deleted(1)]));
 
             assert_eq!(txt1.get_string(&d1.transact()), "bc".to_string());
             assert_eq!(
                 txt1.diff(&d1.transact(), YChange::identity),
                 vec![Diff::new("bc".into(), Some(Box::new(a.clone())))]
             );
-            assert_eq!(delta1.take(), expected);
+            assert_eq!(delta1.swap(None), expected);
 
             let mut txn = d2.transact_mut();
             txn.apply_update(Update::decode_v1(update.as_slice()).unwrap());
             drop(txn);
 
             assert_eq!(txt2.get_string(&d2.transact()), "bc".to_string());
-            assert_eq!(delta2.take(), expected);
+            assert_eq!(delta2.swap(None), expected);
         }
 
         // step 3
@@ -1924,21 +1918,21 @@ mod test {
             let update = txn.encode_update_v1();
             drop(txn);
 
-            let expected = Some(vec![Delta::Retain(1, None), Delta::Deleted(1)]);
+            let expected = Some(Arc::new(vec![Delta::Retain(1, None), Delta::Deleted(1)]));
 
             assert_eq!(txt1.get_string(&d1.transact()), "b".to_string());
             assert_eq!(
                 txt1.diff(&d1.transact(), YChange::identity),
                 vec![Diff::new("b".into(), Some(Box::new(a.clone())))]
             );
-            assert_eq!(delta1.take(), expected);
+            assert_eq!(delta1.swap(None), expected);
 
             let mut txn = d2.transact_mut();
             txn.apply_update(Update::decode_v1(update.as_slice()).unwrap());
             drop(txn);
 
             assert_eq!(txt2.get_string(&d2.transact()), "b".to_string());
-            assert_eq!(delta2.take(), expected);
+            assert_eq!(delta2.swap(None), expected);
         }
 
         // step 4
@@ -1948,21 +1942,24 @@ mod test {
             let update = txn.encode_update_v1();
             drop(txn);
 
-            let expected = Some(vec![Delta::Inserted("z".into(), Some(Box::new(a.clone())))]);
+            let expected = Some(Arc::new(vec![Delta::Inserted(
+                "z".into(),
+                Some(Box::new(a.clone())),
+            )]));
 
             assert_eq!(txt1.get_string(&d1.transact()), "zb".to_string());
             assert_eq!(
                 txt1.diff(&mut d1.transact_mut(), YChange::identity),
                 vec![Diff::new("zb".into(), Some(Box::new(a.clone())))]
             );
-            assert_eq!(delta1.take(), expected);
+            assert_eq!(delta1.swap(None), expected);
 
             let mut txn = d2.transact_mut();
             txn.apply_update(Update::decode_v1(update.as_slice()).unwrap());
             drop(txn);
 
             assert_eq!(txt2.get_string(&d2.transact()), "zb".to_string());
-            assert_eq!(delta2.take(), expected);
+            assert_eq!(delta2.swap(None), expected);
         }
 
         // step 5
@@ -1972,7 +1969,7 @@ mod test {
             let update = txn.encode_update_v1();
             drop(txn);
 
-            let expected = Some(vec![Delta::Inserted("y".into(), None)]);
+            let expected = Some(Arc::new(vec![Delta::Inserted("y".into(), None)]));
 
             assert_eq!(txt1.get_string(&d1.transact()), "yzb".to_string());
             assert_eq!(
@@ -1982,14 +1979,14 @@ mod test {
                     Diff::new("zb".into(), Some(Box::new(a.clone())))
                 ]
             );
-            assert_eq!(delta1.take(), expected);
+            assert_eq!(delta1.swap(None), expected);
 
             let mut txn = d2.transact_mut();
             txn.apply_update(Update::decode_v1(update.as_slice()).unwrap());
             drop(txn);
 
             assert_eq!(txt2.get_string(&d2.transact()), "yzb".to_string());
-            assert_eq!(delta2.take(), expected);
+            assert_eq!(delta2.swap(None), expected);
         }
 
         // step 6
@@ -2000,10 +1997,10 @@ mod test {
             let update = txn.encode_update_v1();
             drop(txn);
 
-            let expected = Some(vec![
+            let expected = Some(Arc::new(vec![
                 Delta::Retain(1, None),
                 Delta::Retain(1, Some(Box::new(b))),
-            ]);
+            ]));
 
             assert_eq!(txt1.get_string(&d1.transact()), "yzb".to_string());
             assert_eq!(
@@ -2013,14 +2010,14 @@ mod test {
                     Diff::new("b".into(), Some(Box::new(a.clone())))
                 ]
             );
-            assert_eq!(delta1.take(), expected);
+            assert_eq!(delta1.swap(None), expected);
 
             let mut txn = d2.transact_mut();
             txn.apply_update(Update::decode_v1(update.as_slice()).unwrap());
             drop(txn);
 
             assert_eq!(txt2.get_string(&d2.transact()), "yzb".to_string());
-            assert_eq!(delta2.take(), expected);
+            assert_eq!(delta2.swap(None), expected);
         }
     }
 
@@ -2029,11 +2026,11 @@ mod test {
         let d1 = Doc::with_client_id(1);
         let txt1 = d1.get_or_insert_text("text");
 
-        let delta1 = Rc::new(RefCell::new(None));
+        let delta1 = Arc::new(ArcSwapOption::default());
         let delta_clone = delta1.clone();
         let _sub1 = txt1.observe(move |txn, e| {
             let delta = e.delta(txn).to_vec();
-            delta_clone.replace(Some(delta));
+            delta_clone.store(Some(Arc::new(delta)));
         });
 
         let a1: Attrs = HashMap::from([("bold".into(), true.into())]);
@@ -2053,12 +2050,12 @@ mod test {
             let a1 = Some(Box::new(a1.clone()));
             let a2 = Some(Box::new(a2.clone()));
 
-            let expected = Some(vec![
+            let expected = Some(Arc::new(vec![
                 Delta::Inserted("a".into(), a1.clone()),
                 Delta::Inserted(embed.clone().into(), a2.clone()),
                 Delta::Inserted("b".into(), a1.clone()),
-            ]);
-            assert_eq!(delta1.take(), expected);
+            ]));
+            assert_eq!(delta1.swap(None), expected);
 
             let expected = vec![
                 Diff::new("a".into(), a1.clone()),
@@ -2107,7 +2104,7 @@ mod test {
     fn issue_101() {
         let d1 = Doc::with_client_id(1);
         let txt1 = d1.get_or_insert_text("text");
-        let delta = Rc::new(RefCell::new(None));
+        let delta = Arc::new(ArcSwapOption::default());
         let delta_copy = delta.clone();
 
         let attrs: Attrs = HashMap::from([("bold".into(), true.into())]);
@@ -2115,17 +2112,16 @@ mod test {
         txt1.insert(&mut d1.transact_mut(), 0, "abcd");
 
         let _sub = txt1.observe(move |txn, e| {
-            let mut d = delta_copy.borrow_mut();
-            *d = Some(e.delta(txn).to_vec());
+            delta_copy.store(Some(e.delta(txn).to_vec().into()));
         });
         txt1.format(&mut d1.transact_mut(), 1, 2, attrs.clone());
 
-        let expected = vec![
+        let expected = Arc::new(vec![
             Delta::Retain(1, None),
             Delta::Retain(2, Some(Box::new(attrs))),
-        ];
-        let actual = delta.borrow();
-        assert_eq!(actual.as_ref(), Some(&expected));
+        ]);
+        let actual = delta.load_full();
+        assert_eq!(actual, Some(expected));
     }
 
     #[test]
