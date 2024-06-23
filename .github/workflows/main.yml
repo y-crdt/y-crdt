@@ -15,9 +15,7 @@ jobs:
     strategy:
       matrix:
         os: [ macos-latest, ubuntu-latest, windows-latest ]
-
     steps:
-
       - name: checkout sources
         uses: actions/checkout@v2
 
@@ -32,12 +30,11 @@ jobs:
 
   test-yrs:
     runs-on: ${{ matrix.os }}
+    needs: build-yrs
     strategy:
       matrix:
         os: [ macos-latest, ubuntu-latest, windows-latest ]
-
     steps:
-
       - name: checkout sources
         uses: actions/checkout@v2
 
@@ -52,7 +49,7 @@ jobs:
 
   wasm:
     runs-on: ubuntu-latest
-    needs: build
+    needs: build-yrs
     steps:
       - name: checkout sources
         uses: actions/checkout@v2
@@ -81,7 +78,7 @@ jobs:
 
   c-ffi:
     runs-on: ubuntu-latest
-    needs: build
+    needs: build-yrs
     steps:
       - name: checkout sources
         uses: actions/checkout@v2
