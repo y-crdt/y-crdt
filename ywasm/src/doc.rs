@@ -10,6 +10,7 @@ use crate::Result;
 use serde::Deserialize;
 use std::iter::FromIterator;
 use std::ops::Deref;
+use wasm_bindgen::convert::IntoWasmAbi;
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
 use yrs::types::TYPE_REFS_DOC;
@@ -209,84 +210,62 @@ impl YDoc {
         YXmlFragment(SharedCollection::integrated(shared_ref, self.0.clone()))
     }
 
-    /// Subscribes given function to be called any time, a remote update is being applied to this
-    /// document. Function takes an `Uint8Array` as a parameter which contains a lib0 v1 encoded
-    /// update.
-    ///
-    /// Returns an observer, which can be freed in order to unsubscribe this callback.
-    #[wasm_bindgen(js_name = onUpdate)]
-    pub fn on_update(&self, f: js_sys::Function) -> Result<crate::Observer> {
-        let subscription = self
-            .observe_update_v1(move |txn, e| {
+    #[wasm_bindgen(js_name = on)]
+    pub fn on(&self, event: &str, f: js_sys::Function) -> Result<()> {
+        let abi = f.clone().into_abi();
+        let result = match event {
+            "update" => self.observe_update_v1_with(abi, move |txn, e| {
                 let update = js_sys::Uint8Array::from(e.update.as_slice());
                 let txn: JsValue = YTransaction::from_ref(txn).into();
                 f.call2(&JsValue::UNDEFINED, &update, &txn).unwrap();
-            })
-            .map_err(|_| JsValue::from_str(crate::js::errors::ANOTHER_TX))?;
-        Ok(subscription.into())
-    }
-
-    /// Subscribes given function to be called any time, a remote update is being applied to this
-    /// document. Function takes an `Uint8Array` as a parameter which contains a lib0 v2 encoded
-    /// update.
-    ///
-    /// Returns an observer, which can be freed in order to unsubscribe this callback.
-    #[wasm_bindgen(js_name = onUpdateV2)]
-    pub fn on_update_v2(&self, f: js_sys::Function) -> Result<crate::Observer> {
-        let subscription = self
-            .observe_update_v2(move |txn, e| {
+            }),
+            "updateV2" => self.observe_update_v2_with(abi, move |txn, e| {
                 let update = js_sys::Uint8Array::from(e.update.as_slice());
                 let txn: JsValue = YTransaction::from_ref(txn).into();
                 f.call2(&JsValue::UNDEFINED, &update, &txn).unwrap();
-            })
-            .map_err(|_| JsValue::from_str(crate::js::errors::ANOTHER_TX))?;
-        Ok(subscription.into())
-    }
-
-    /// Subscribes given function to be called, whenever a transaction created by this document is
-    /// being committed.
-    ///
-    /// Returns an observer, which can be freed in order to unsubscribe this callback.
-    #[wasm_bindgen(js_name = onAfterTransaction)]
-    pub fn on_after_transaction(&self, f: js_sys::Function) -> Result<crate::Observer> {
-        let subscription = self
-            .observe_transaction_cleanup(move |txn, _| {
-                let txn = YTransaction::from_ref(txn).into();
-                f.call1(&JsValue::UNDEFINED, &txn).unwrap();
-            })
-            .map_err(|_| JsValue::from_str(crate::js::errors::ANOTHER_TX))?;
-        Ok(subscription.into())
-    }
-
-    /// Subscribes given function to be called, whenever a subdocuments are being added, removed
-    /// or loaded as children of a current document.
-    ///
-    /// Returns an observer, which can be freed in order to unsubscribe this callback.
-    #[wasm_bindgen(js_name = onSubdocs)]
-    pub fn on_subdocs(&self, f: js_sys::Function) -> Result<crate::Observer> {
-        let subscription = self
-            .observe_subdocs(move |txn, e| {
+            }),
+            "subdocs" => self.observe_subdocs_with(abi, move |txn, e| {
                 let event: JsValue = YSubdocsEvent::new(e).into();
                 let txn: JsValue = YTransaction::from_ref(txn).into();
                 f.call2(&JsValue::UNDEFINED, &event, &txn).unwrap();
-            })
-            .map_err(|_| JsValue::from_str(crate::js::errors::ANOTHER_TX))?;
-        Ok(subscription.into())
-    }
-
-    /// Subscribes given function to be called, whenever current document is being destroyed.
-    ///
-    /// Returns an observer, which can be freed in order to unsubscribe this callback.
-    #[wasm_bindgen(js_name = onDestroy)]
-    pub fn on_destroy(&self, f: js_sys::Function) -> Result<crate::Observer> {
-        let subscription = self
-            .observe_destroy(move |txn, e| {
+            }),
+            "destroy" => self.observe_destroy_with(abi, move |txn, e| {
                 let event: JsValue = YDoc::from(e.clone()).into();
                 let txn: JsValue = YTransaction::from_ref(txn).into();
                 f.call2(&JsValue::UNDEFINED, &event, &txn).unwrap();
-            })
-            .map_err(|_| JsValue::from_str(crate::js::errors::ANOTHER_TX))?;
-        Ok(subscription.into())
+            }),
+            "afterTransaction" => self.observe_after_transaction_with(abi, move |txn| {
+                let txn: JsValue = YTransaction::from_ref(txn).into();
+                f.call1(&JsValue::UNDEFINED, &txn).unwrap();
+            }),
+            "cleanup" => self.observe_transaction_cleanup_with(abi, move |txn, _| {
+                let txn = YTransaction::from_ref(txn).into();
+                f.call1(&JsValue::UNDEFINED, &txn).unwrap();
+            }),
+            other => {
+                return Err(JsValue::from_str(&format!("unknown event: '{}'", other)).into());
+            }
+        };
+        result.map_err(|_| JsValue::from_str(crate::js::errors::ANOTHER_TX))?;
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = off)]
+    pub fn off(&self, event: &str, f: js_sys::Function) -> Result<()> {
+        let abi = f.clone().into_abi();
+        let result = match event {
+            "update" => self.unobserve_update_v1(abi),
+            "updateV2" => self.unobserve_update_v2(abi),
+            "subdocs" => self.unobserve_subdocs(abi),
+            "destroy" => self.unobserve_destroy(abi),
+            "afterTransaction" => self.unobserve_after_transaction(abi),
+            "cleanup" => self.unobserve_transaction_cleanup(abi),
+            other => {
+                return Err(JsValue::from_str(&format!("unknown event: '{}'", other)).into());
+            }
+        };
+        result.map_err(|_| JsValue::from_str(crate::js::errors::ANOTHER_TX))?;
+        Ok(())
     }
 
     /// Notify the parent document that you request to load data into this subdocument

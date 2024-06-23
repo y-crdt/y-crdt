@@ -201,8 +201,15 @@ pub struct Branch {
     pub(crate) deep_observers: Observer<DeepObserveFn>,
 }
 
+#[cfg(not(target_family = "wasm"))]
 type ObserveFn = Box<dyn Fn(&TransactionMut, &Event) + Send + Sync + 'static>;
+#[cfg(not(target_family = "wasm"))]
 type DeepObserveFn = Box<dyn Fn(&TransactionMut, &Events) + Send + Sync + 'static>;
+
+#[cfg(target_family = "wasm")]
+type ObserveFn = Box<dyn Fn(&TransactionMut, &Event) + 'static>;
+#[cfg(target_family = "wasm")]
+type DeepObserveFn = Box<dyn Fn(&TransactionMut, &Events) + 'static>;
 
 impl std::fmt::Debug for Branch {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -514,7 +521,7 @@ impl Branch {
         path
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(target_family = "wasm"))]
     pub fn observe<F>(&mut self, f: F) -> Subscription
     where
         F: Fn(&TransactionMut, &Event) + Send + Sync + 'static,
@@ -522,7 +529,7 @@ impl Branch {
         self.observers.subscribe(Box::new(f))
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(target_family = "wasm"))]
 
     pub fn observe_with<F>(&mut self, key: Origin, f: F)
     where
@@ -531,8 +538,7 @@ impl Branch {
         self.observers.subscribe_with(key, Box::new(f))
     }
 
-    #[cfg(target_family = "wasm32")]
-
+    #[cfg(target_family = "wasm")]
     pub fn observe_with<F>(&mut self, key: Origin, f: F)
     where
         F: Fn(&TransactionMut, &Event) + 'static,
@@ -544,6 +550,7 @@ impl Branch {
         self.observers.unsubscribe(&key);
     }
 
+    #[cfg(not(target_family = "wasm"))]
     pub fn observe_deep<F>(&self, f: F) -> Subscription
     where
         F: Fn(&TransactionMut, &Events) + Send + Sync + 'static,
@@ -551,7 +558,7 @@ impl Branch {
         self.deep_observers.subscribe(Box::new(f))
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(target_family = "wasm"))]
     pub fn observe_deep_with<F>(&self, key: Origin, f: F)
     where
         F: Fn(&TransactionMut, &Events) + Send + Sync + 'static,
@@ -559,7 +566,7 @@ impl Branch {
         self.deep_observers.subscribe_with(key, Box::new(f))
     }
 
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(target_family = "wasm")]
     pub fn observe_deep_with<F>(&self, key: Origin, f: F)
     where
         F: Fn(&TransactionMut, &Events) + 'static,

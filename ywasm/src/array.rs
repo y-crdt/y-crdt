@@ -2,9 +2,10 @@ use crate::collection::SharedCollection;
 use crate::js::{Js, ValueRef, YRange};
 use crate::transaction::{ImplicitTransaction, YTransaction};
 use crate::weak::YWeakLink;
-use crate::{Observer, Result};
+use crate::Result;
 use gloo_utils::format::JsValueSerdeExt;
 use std::iter::FromIterator;
+use wasm_bindgen::convert::IntoWasmAbi;
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
 use yrs::types::array::ArrayEvent;
@@ -268,7 +269,7 @@ impl YArray {
     /// batched and eventually triggered during transaction commit phase.
     /// Returns an `Observer` which, when free'd, will unsubscribe current callback.
     #[wasm_bindgen(js_name = observe)]
-    pub fn observe(&self, f: js_sys::Function) -> Result<Observer> {
+    pub fn observe(&self, f: js_sys::Function) -> Result<()> {
         match &self.0 {
             SharedCollection::Prelim(_) => {
                 Err(JsValue::from_str(crate::js::errors::INVALID_PRELIM_OP))
@@ -276,12 +277,14 @@ impl YArray {
             SharedCollection::Integrated(c) => {
                 let txn = c.transact()?;
                 let array = c.resolve(&txn)?;
-                Ok(Observer(array.observe(move |txn, e| {
+                let abi = f.clone().into_abi();
+                array.observe_with(abi, move |txn, e| {
                     let e = YArrayEvent::new(e, txn);
                     let txn = YTransaction::from_ref(txn);
                     f.call2(&JsValue::UNDEFINED, &e.into(), &txn.into())
                         .unwrap();
-                })))
+                });
+                Ok(())
             }
         }
     }
@@ -291,7 +294,7 @@ impl YArray {
     /// during transaction commit phase.
     /// Returns an `YEventObserver` which, when free'd, will unsubscribe current callback.
     #[wasm_bindgen(js_name = observeDeep)]
-    pub fn observe_deep(&self, f: js_sys::Function) -> Result<Observer> {
+    pub fn observe_deep(&self, f: js_sys::Function) -> Result<()> {
         match &self.0 {
             SharedCollection::Prelim(_) => {
                 Err(JsValue::from_str(crate::js::errors::INVALID_PRELIM_OP))
@@ -299,11 +302,13 @@ impl YArray {
             SharedCollection::Integrated(c) => {
                 let txn = c.transact()?;
                 let array = c.resolve(&txn)?;
-                Ok(Observer(array.observe_deep(move |txn, e| {
+                let abi = f.clone().into_abi();
+                array.observe_deep_with(abi, move |txn, e| {
                     let e = crate::js::convert::events_into_js(txn, e);
                     let txn = YTransaction::from_ref(txn);
                     f.call2(&JsValue::UNDEFINED, &e, &txn.into()).unwrap();
-                })))
+                });
+                Ok(())
             }
         }
     }

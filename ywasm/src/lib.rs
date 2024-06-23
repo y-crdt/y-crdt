@@ -42,17 +42,7 @@ pub use crate::weak::YWeakLinkEvent as WeakLinkEvent;
 
 #[wasm_bindgen]
 #[repr(transparent)]
-pub struct Observer(pub(crate) yrs::Subscription);
-
-#[wasm_bindgen]
-#[repr(transparent)]
 pub struct YSnapshot(yrs::Snapshot);
-
-impl From<yrs::Subscription> for Observer {
-    fn from(s: yrs::Subscription) -> Self {
-        Observer(s)
-    }
-}
 
 /// When called will call console log errors whenever internal panic is called from within
 /// WebAssembly module.

@@ -10,8 +10,8 @@ use crate::types::{Path, PathSegment, TypeRef};
 use crate::update::PendingUpdate;
 use crate::updates::encoder::{Encode, Encoder};
 use crate::{
-    Doc, Observer, OffsetKind, Snapshot, TransactionCleanupEvent, TransactionMut, UpdateEvent,
-    Uuid, ID,
+    Doc, Observer, OffsetKind, Origin, Snapshot, TransactionCleanupEvent, TransactionMut,
+    UpdateEvent, Uuid, ID,
 };
 use crate::{StateVector, Subscription};
 use atomic_refcell::{AtomicRef, AtomicRefCell, AtomicRefMut, BorrowError, BorrowMutError};
@@ -464,51 +464,54 @@ impl<'doc> Iterator for SubdocGuids<'doc> {
     }
 }
 
-type TransactionCleanupFn =
+#[cfg(not(target_family = "wasm"))]
+pub type TransactionCleanupFn =
     Box<dyn Fn(&TransactionMut, &TransactionCleanupEvent) + Send + Sync + 'static>;
-type AfterTransactionFn = Box<dyn Fn(&mut TransactionMut) + Send + Sync + 'static>;
-type UpdateFn = Box<dyn Fn(&TransactionMut, &UpdateEvent) + Send + Sync + 'static>;
-type SubdocsFn = Box<dyn Fn(&TransactionMut, &SubdocsEvent) + Send + Sync + 'static>;
-type DestroyFn = Box<dyn Fn(&TransactionMut, &Doc) + Send + Sync + 'static>;
+#[cfg(not(target_family = "wasm"))]
+pub type AfterTransactionFn = Box<dyn Fn(&mut TransactionMut) + Send + Sync + 'static>;
+#[cfg(not(target_family = "wasm"))]
+pub type UpdateFn = Box<dyn Fn(&TransactionMut, &UpdateEvent) + Send + Sync + 'static>;
+#[cfg(not(target_family = "wasm"))]
+pub type SubdocsFn = Box<dyn Fn(&TransactionMut, &SubdocsEvent) + Send + Sync + 'static>;
+#[cfg(not(target_family = "wasm"))]
+pub type DestroyFn = Box<dyn Fn(&TransactionMut, &Doc) + Send + Sync + 'static>;
+
+#[cfg(target_family = "wasm")]
+pub type TransactionCleanupFn = Box<dyn Fn(&TransactionMut, &TransactionCleanupEvent) + 'static>;
+#[cfg(target_family = "wasm")]
+pub type AfterTransactionFn = Box<dyn Fn(&mut TransactionMut) + 'static>;
+#[cfg(target_family = "wasm")]
+pub type UpdateFn = Box<dyn Fn(&TransactionMut, &UpdateEvent) + 'static>;
+#[cfg(target_family = "wasm")]
+pub type SubdocsFn = Box<dyn Fn(&TransactionMut, &SubdocsEvent) + 'static>;
+#[cfg(target_family = "wasm")]
+pub type DestroyFn = Box<dyn Fn(&TransactionMut, &Doc) + 'static>;
 
 #[derive(Default)]
-pub(crate) struct StoreEvents {
+pub struct StoreEvents {
     /// Handles subscriptions for the transaction cleanup event. Events are called with the
     /// newest updates once they are committed and compacted.
-    pub(crate) transaction_cleanup_events: Observer<TransactionCleanupFn>,
+    pub transaction_cleanup_events: Observer<TransactionCleanupFn>,
 
     /// Handles subscriptions for the `afterTransactionCleanup` event. Events are called with the
     /// newest updates once they are committed and compacted.
-    pub(crate) after_transaction_events: Observer<AfterTransactionFn>,
+    pub after_transaction_events: Observer<AfterTransactionFn>,
 
     /// A subscription handler. It contains all callbacks with registered by user functions that
     /// are supposed to be called, once a new update arrives.
-    pub(crate) update_v1_events: Observer<UpdateFn>,
+    pub update_v1_events: Observer<UpdateFn>,
 
     /// A subscription handler. It contains all callbacks with registered by user functions that
     /// are supposed to be called, once a new update arrives.
-    pub(crate) update_v2_events: Observer<UpdateFn>,
+    pub update_v2_events: Observer<UpdateFn>,
 
     /// Handles subscriptions for subdocs events.
-    pub(crate) subdocs_events: Observer<SubdocsFn>,
+    pub subdocs_events: Observer<SubdocsFn>,
 
-    pub(crate) destroy_events: Observer<DestroyFn>,
+    pub destroy_events: Observer<DestroyFn>,
 }
 
 impl StoreEvents {
-    /// Subscribe callback function for any changes performed within transaction scope. These
-    /// changes are encoded using lib0 v1 encoding and can be decoded using [Update::decode_v1] if
-    /// necessary or passed to remote peers right away. This callback is triggered on function
-    /// commit.
-    ///
-    /// Returns a subscription, which will unsubscribe function when dropped.
-    pub fn observe_update_v1<F>(&self, f: F) -> Subscription
-    where
-        F: Fn(&TransactionMut, &UpdateEvent) + Send + Sync + 'static,
-    {
-        self.update_v1_events.subscribe(Box::new(f))
-    }
-
     pub fn emit_update_v1(&self, txn: &TransactionMut) {
         if self.update_v1_events.has_subscribers() {
             if !txn.delete_set.is_empty() || txn.after_state != txn.before_state {
@@ -518,19 +521,6 @@ impl StoreEvents {
                     .trigger(|callback| callback(txn, &update));
             }
         }
-    }
-
-    /// Subscribe callback function for any changes performed within transaction scope. These
-    /// changes are encoded using lib0 v1 encoding and can be decoded using [Update::decode_v2] if
-    /// necessary or passed to remote peers right away. This callback is triggered on function
-    /// commit.
-    ///
-    /// Returns a subscription, which will unsubscribe function when dropped.
-    pub fn observe_update_v2<F>(&self, f: F) -> Subscription
-    where
-        F: Fn(&TransactionMut, &UpdateEvent) + Send + Sync + 'static,
-    {
-        self.update_v2_events.subscribe(Box::new(f))
     }
 
     pub fn emit_update_v2(&self, txn: &TransactionMut) {
@@ -543,26 +533,8 @@ impl StoreEvents {
         }
     }
 
-    /// Subscribe callback function to updates on the `Doc`. The callback will receive state updates and
-    /// deletions when a document transaction is committed.
-    pub fn observe_after_transaction<F>(&self, f: F) -> Subscription
-    where
-        F: Fn(&mut TransactionMut) + Send + Sync + 'static,
-    {
-        self.after_transaction_events.subscribe(Box::new(f))
-    }
-
     pub fn emit_after_transaction(&self, txn: &mut TransactionMut) {
         self.after_transaction_events.trigger(|fun| fun(txn));
-    }
-
-    /// Subscribe callback function to updates on the `Doc`. The callback will receive state updates and
-    /// deletions when a document transaction is committed.
-    pub fn observe_transaction_cleanup<F>(&self, f: F) -> Subscription
-    where
-        F: Fn(&TransactionMut, &TransactionCleanupEvent) + Send + Sync + 'static,
-    {
-        self.transaction_cleanup_events.subscribe(Box::new(f))
     }
 
     pub fn emit_transaction_cleanup(&self, txn: &TransactionMut) {
@@ -571,22 +543,5 @@ impl StoreEvents {
             self.transaction_cleanup_events
                 .trigger(|fun| fun(txn, &event));
         }
-    }
-
-    /// Subscribe callback function, that will be called whenever a subdocuments inserted in this
-    /// [Doc] will request a load.
-    pub fn observe_subdocs<F>(&self, f: F) -> Subscription
-    where
-        F: Fn(&TransactionMut, &SubdocsEvent) + Send + Sync + 'static,
-    {
-        self.subdocs_events.subscribe(Box::new(f))
-    }
-
-    /// Subscribe callback function, that will be called whenever a [DocRef::destroy] has been called.
-    pub fn observe_destroy<F>(&self, f: F) -> Subscription
-    where
-        F: Fn(&TransactionMut, &Doc) + Send + Sync + 'static,
-    {
-        self.destroy_events.subscribe(Box::new(f))
     }
 }

@@ -226,13 +226,64 @@ impl Doc {
     /// commit.
     ///
     /// Returns a subscription, which will unsubscribe function when dropped.
+    #[cfg(not(target_family = "wasm"))]
     pub fn observe_update_v1<F>(&self, f: F) -> Result<Subscription, BorrowMutError>
     where
         F: Fn(&TransactionMut, &UpdateEvent) + Send + Sync + 'static,
     {
         let mut r = self.store.try_borrow_mut()?;
         let events = r.events.get_or_init();
-        Ok(events.observe_update_v1(Box::new(f)))
+        Ok(events.update_v1_events.subscribe(Box::new(f)))
+    }
+
+    /// Subscribe callback function for any changes performed within transaction scope. These
+    /// changes are encoded using lib0 v1 encoding and can be decoded using [Update::decode_v1] if
+    /// necessary or passed to remote peers right away. This callback is triggered on function
+    /// commit.
+    ///
+    /// Provided `key` will be used to identify a subscription, which will be used to unsubscribe.
+    #[cfg(not(target_family = "wasm"))]
+    pub fn observe_update_v1_with<K, F>(&self, key: K, f: F) -> Result<(), BorrowMutError>
+    where
+        K: Into<Origin>,
+        F: Fn(&TransactionMut, &UpdateEvent) + Send + Sync + 'static,
+    {
+        let mut r = self.store.try_borrow_mut()?;
+        let events = r.events.get_or_init();
+        events
+            .update_v1_events
+            .subscribe_with(key.into(), Box::new(f));
+        Ok(())
+    }
+
+    /// Subscribe callback function for any changes performed within transaction scope. These
+    /// changes are encoded using lib0 v1 encoding and can be decoded using [Update::decode_v1] if
+    /// necessary or passed to remote peers right away. This callback is triggered on function
+    /// commit.
+    ///
+    /// Provided `key` will be used to identify a subscription, which will be used to unsubscribe.
+    #[cfg(target_family = "wasm")]
+    pub fn observe_update_v1_with<K, F>(&self, key: K, f: F) -> Result<(), BorrowMutError>
+    where
+        K: Into<Origin>,
+        F: Fn(&TransactionMut, &UpdateEvent) + 'static,
+    {
+        let mut r = self.store.try_borrow_mut()?;
+        let events = r.events.get_or_init();
+        events
+            .update_v1_events
+            .subscribe_with(key.into(), Box::new(f));
+        Ok(())
+    }
+
+    pub fn unobserve_update_v1<K>(&self, key: K) -> Result<(), BorrowMutError>
+    where
+        K: Into<Origin>,
+    {
+        let mut r = self.store.try_borrow_mut()?;
+        let events = r.events.get_or_init();
+        events.update_v1_events.unsubscribe(&key.into());
+        Ok(())
     }
 
     /// Subscribe callback function for any changes performed within transaction scope. These
@@ -241,54 +292,271 @@ impl Doc {
     /// commit.
     ///
     /// Returns a subscription, which will unsubscribe function when dropped.
+    #[cfg(not(target_family = "wasm"))]
     pub fn observe_update_v2<F>(&self, f: F) -> Result<Subscription, BorrowMutError>
     where
         F: Fn(&TransactionMut, &UpdateEvent) + Send + Sync + 'static,
     {
         let mut r = self.store.try_borrow_mut()?;
         let events = r.events.get_or_init();
-        Ok(events.observe_update_v2(Box::new(f)))
+        Ok(events.update_v2_events.subscribe(Box::new(f)))
+    }
+
+    /// Subscribe callback function for any changes performed within transaction scope. These
+    /// changes are encoded using lib0 v2 encoding and can be decoded using [Update::decode_v2] if
+    /// necessary or passed to remote peers right away. This callback is triggered on function
+    /// commit.
+    ///
+    /// Provided `key` will be used to identify a subscription, which will be used to unsubscribe.
+    #[cfg(not(target_family = "wasm"))]
+    pub fn observe_update_v2_with<K, F>(&self, key: K, f: F) -> Result<(), BorrowMutError>
+    where
+        K: Into<Origin>,
+        F: Fn(&TransactionMut, &UpdateEvent) + Send + Sync + 'static,
+    {
+        let mut r = self.store.try_borrow_mut()?;
+        let events = r.events.get_or_init();
+        events
+            .update_v2_events
+            .subscribe_with(key.into(), Box::new(f));
+        Ok(())
+    }
+
+    /// Subscribe callback function for any changes performed within transaction scope. These
+    /// changes are encoded using lib0 v2 encoding and can be decoded using [Update::decode_v2] if
+    /// necessary or passed to remote peers right away. This callback is triggered on function
+    /// commit.
+    ///
+    /// Provided `key` will be used to identify a subscription, which will be used to unsubscribe.
+    #[cfg(target_family = "wasm")]
+    pub fn observe_update_v2_with<K, F>(&self, key: K, f: F) -> Result<(), BorrowMutError>
+    where
+        K: Into<Origin>,
+        F: Fn(&TransactionMut, &UpdateEvent) + 'static,
+    {
+        let mut r = self.store.try_borrow_mut()?;
+        let events = r.events.get_or_init();
+        events
+            .update_v2_events
+            .subscribe_with(key.into(), Box::new(f));
+        Ok(())
+    }
+
+    pub fn unobserve_update_v2<K>(&self, key: K) -> Result<(), BorrowMutError>
+    where
+        K: Into<Origin>,
+    {
+        let mut r = self.store.try_borrow_mut()?;
+        let events = r.events.get_or_init();
+        events.update_v2_events.unsubscribe(&key.into());
+        Ok(())
     }
 
     /// Subscribe callback function to updates on the `Doc`. The callback will receive state updates and
     /// deletions when a document transaction is committed.
+    #[cfg(not(target_family = "wasm"))]
     pub fn observe_transaction_cleanup<F>(&self, f: F) -> Result<Subscription, BorrowMutError>
     where
         F: Fn(&TransactionMut, &TransactionCleanupEvent) + Send + Sync + 'static,
     {
         let mut r = self.store.try_borrow_mut()?;
         let events = r.events.get_or_init();
-        Ok(events.observe_transaction_cleanup(Box::new(f)))
+        Ok(events.transaction_cleanup_events.subscribe(Box::new(f)))
     }
 
+    /// Subscribe callback function to updates on the `Doc`. The callback will receive state updates and
+    /// deletions when a document transaction is committed.
+    #[cfg(not(target_family = "wasm"))]
+    pub fn observe_transaction_cleanup_with<K, F>(&self, key: K, f: F) -> Result<(), BorrowMutError>
+    where
+        K: Into<Origin>,
+        F: Fn(&TransactionMut, &TransactionCleanupEvent) + Send + Sync + 'static,
+    {
+        let mut r = self.store.try_borrow_mut()?;
+        let events = r.events.get_or_init();
+        events
+            .transaction_cleanup_events
+            .subscribe_with(key.into(), Box::new(f));
+        Ok(())
+    }
+
+    /// Subscribe callback function to updates on the `Doc`. The callback will receive state updates and
+    /// deletions when a document transaction is committed.
+    #[cfg(target_family = "wasm")]
+    pub fn observe_transaction_cleanup_with<K, F>(&self, key: K, f: F) -> Result<(), BorrowMutError>
+    where
+        K: Into<Origin>,
+        F: Fn(&TransactionMut, &TransactionCleanupEvent) + 'static,
+    {
+        let mut r = self.store.try_borrow_mut()?;
+        let events = r.events.get_or_init();
+        events
+            .transaction_cleanup_events
+            .subscribe_with(key.into(), Box::new(f));
+        Ok(())
+    }
+
+    pub fn unobserve_transaction_cleanup<K>(&self, key: K) -> Result<(), BorrowMutError>
+    where
+        K: Into<Origin>,
+    {
+        let mut r = self.store.try_borrow_mut()?;
+        let events = r.events.get_or_init();
+        events.transaction_cleanup_events.unsubscribe(&key.into());
+        Ok(())
+    }
+
+    #[cfg(not(target_family = "wasm"))]
     pub fn observe_after_transaction<F>(&self, f: F) -> Result<Subscription, BorrowMutError>
     where
         F: Fn(&mut TransactionMut) + Send + Sync + 'static,
     {
         let mut r = self.store.try_borrow_mut()?;
         let events = r.events.get_or_init();
-        Ok(events.observe_after_transaction(Box::new(f)))
+        Ok(events.after_transaction_events.subscribe(Box::new(f)))
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    pub fn observe_after_transaction_with<K, F>(&self, key: K, f: F) -> Result<(), BorrowMutError>
+    where
+        K: Into<Origin>,
+        F: Fn(&mut TransactionMut) + Send + Sync + 'static,
+    {
+        let mut r = self.store.try_borrow_mut()?;
+        let events = r.events.get_or_init();
+        events
+            .after_transaction_events
+            .subscribe_with(key.into(), Box::new(f));
+        Ok(())
+    }
+
+    #[cfg(target_family = "wasm")]
+    pub fn observe_after_transaction_with<K, F>(&self, key: K, f: F) -> Result<(), BorrowMutError>
+    where
+        K: Into<Origin>,
+        F: Fn(&mut TransactionMut) + 'static,
+    {
+        let mut r = self.store.try_borrow_mut()?;
+        let events = r.events.get_or_init();
+        events
+            .after_transaction_events
+            .subscribe_with(key.into(), Box::new(f));
+        Ok(())
+    }
+
+    pub fn unobserve_after_transaction<K>(&self, key: K) -> Result<(), BorrowMutError>
+    where
+        K: Into<Origin>,
+    {
+        let mut r = self.store.try_borrow_mut()?;
+        let events = r.events.get_or_init();
+        events.after_transaction_events.unsubscribe(&key.into());
+        Ok(())
     }
 
     /// Subscribe callback function, that will be called whenever a subdocuments inserted in this
     /// [Doc] will request a load.
+    #[cfg(not(target_family = "wasm"))]
     pub fn observe_subdocs<F>(&self, f: F) -> Result<Subscription, BorrowMutError>
     where
         F: Fn(&TransactionMut, &SubdocsEvent) + Send + Sync + 'static,
     {
         let mut r = self.store.try_borrow_mut()?;
         let events = r.events.get_or_init();
-        Ok(events.observe_subdocs(Box::new(f)))
+        Ok(events.subdocs_events.subscribe(Box::new(f)))
+    }
+
+    /// Subscribe callback function, that will be called whenever a subdocuments inserted in this
+    /// [Doc] will request a load.
+    #[cfg(not(target_family = "wasm"))]
+    pub fn observe_subdocs_with<K, F>(&self, key: K, f: F) -> Result<(), BorrowMutError>
+    where
+        K: Into<Origin>,
+        F: Fn(&TransactionMut, &SubdocsEvent) + Send + Sync + 'static,
+    {
+        let mut r = self.store.try_borrow_mut()?;
+        let events = r.events.get_or_init();
+        events
+            .subdocs_events
+            .subscribe_with(key.into(), Box::new(f));
+        Ok(())
+    }
+
+    /// Subscribe callback function, that will be called whenever a subdocuments inserted in this
+    /// [Doc] will request a load.
+    #[cfg(target_family = "wasm")]
+    pub fn observe_subdocs_with<K, F>(&self, key: K, f: F) -> Result<(), BorrowMutError>
+    where
+        K: Into<Origin>,
+        F: Fn(&TransactionMut, &SubdocsEvent) + 'static,
+    {
+        let mut r = self.store.try_borrow_mut()?;
+        let events = r.events.get_or_init();
+        events
+            .subdocs_events
+            .subscribe_with(key.into(), Box::new(f));
+        Ok(())
+    }
+
+    pub fn unobserve_subdocs<K>(&self, key: K) -> Result<(), BorrowMutError>
+    where
+        K: Into<Origin>,
+    {
+        let mut r = self.store.try_borrow_mut()?;
+        let events = r.events.get_or_init();
+        events.subdocs_events.unsubscribe(&key.into());
+        Ok(())
     }
 
     /// Subscribe callback function, that will be called whenever a [DocRef::destroy] has been called.
+    #[cfg(not(target_family = "wasm"))]
     pub fn observe_destroy<F>(&self, f: F) -> Result<Subscription, BorrowMutError>
     where
         F: Fn(&TransactionMut, &Doc) + Send + Sync + 'static,
     {
         let mut r = self.store.try_borrow_mut()?;
         let events = r.events.get_or_init();
-        Ok(events.observe_destroy(Box::new(f)))
+        Ok(events.destroy_events.subscribe(Box::new(f)))
+    }
+
+    /// Subscribe callback function, that will be called whenever a [DocRef::destroy] has been called.
+    #[cfg(not(target_family = "wasm"))]
+    pub fn observe_destroy_with<K, F>(&self, key: K, f: F) -> Result<(), BorrowMutError>
+    where
+        K: Into<Origin>,
+        F: Fn(&TransactionMut, &Doc) + Send + Sync + 'static,
+    {
+        let mut r = self.store.try_borrow_mut()?;
+        let events = r.events.get_or_init();
+        events
+            .destroy_events
+            .subscribe_with(key.into(), Box::new(f));
+        Ok(())
+    }
+
+    pub fn unobserve_destroy<K>(&self, key: K) -> Result<(), BorrowMutError>
+    where
+        K: Into<Origin>,
+    {
+        let mut r = self.store.try_borrow_mut()?;
+        let events = r.events.get_or_init();
+        events.destroy_events.unsubscribe(&key.into());
+        Ok(())
+    }
+
+    /// Subscribe callback function, that will be called whenever a [DocRef::destroy] has been called.
+    #[cfg(target_family = "wasm")]
+    pub fn observe_destroy_with<K, F>(&self, key: K, f: F) -> Result<(), BorrowMutError>
+    where
+        K: Into<Origin>,
+        F: Fn(&TransactionMut, &Doc) + 'static,
+    {
+        let mut r = self.store.try_borrow_mut()?;
+        let events = r.events.get_or_init();
+        events
+            .destroy_events
+            .subscribe_with(key.into(), Box::new(f));
+        Ok(())
     }
 
     /// Sends a load request to a parent document. Works only if current document is a sub-document

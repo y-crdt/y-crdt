@@ -131,9 +131,20 @@ where
     }
 }
 
+#[cfg(not(target_family = "wasm"))]
 impl<F> Default for Observer<F>
 where
     F: Send + Sync + 'static,
+{
+    fn default() -> Self {
+        Observer::new()
+    }
+}
+
+#[cfg(target_family = "wasm")]
+impl<F> Default for Observer<F>
+where
+    F: 'static,
 {
     fn default() -> Self {
         Observer::new()

@@ -1,17 +1,14 @@
 use gloo_utils::format::JsValueSerdeExt;
 use js_sys::Uint8Array;
-use serde::Serialize;
-use wasm_bindgen::convert::{FromWasmAbi, IntoWasmAbi};
+use wasm_bindgen::convert::IntoWasmAbi;
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
 
-use yrs::sync::awareness::Event;
 use yrs::sync::{Awareness as YAwareness, AwarenessUpdate, Timestamp};
 use yrs::updates::decoder::Decode;
 use yrs::updates::encoder::Encode;
 
 use crate::doc::YDoc;
-use crate::Observer;
 
 #[wasm_bindgen]
 pub struct Awareness {
@@ -82,30 +79,18 @@ impl Awareness {
     }
 
     #[wasm_bindgen(js_name = onUpdate)]
-    pub fn on_update(&self, callback: js_sys::Function) -> Observer {
-        #[derive(Serialize)]
-        struct AwarenessEvent {
-            added: Vec<u64>,
-            updated: Vec<u64>,
-            removed: Vec<u64>,
-        }
-
-        impl<'a> From<&'a Event> for AwarenessEvent {
-            fn from(event: &'a Event) -> Self {
-                AwarenessEvent {
-                    added: event.added().iter().copied().collect(),
-                    updated: event.updated().iter().copied().collect(),
-                    removed: event.removed().iter().copied().collect(),
-                }
-            }
-        }
-
-        let sub = self.inner.on_update(move |_, e| {
-            let event = AwarenessEvent::from(e);
-            let json = JsValue::from_serde(&event).unwrap();
+    pub fn on_update(&self, callback: js_sys::Function) {
+        let abi = callback.clone().into_abi();
+        self.inner.on_update_with(abi, move |_, e| {
+            let json = JsValue::from_serde(e.summary()).unwrap();
             callback.call1(&JsValue::NULL, &json).unwrap();
         });
-        Observer(sub)
+    }
+
+    #[wasm_bindgen(js_name = offUpdate)]
+    pub fn off_update(&self, callback: js_sys::Function) {
+        let abi = callback.clone().into_abi();
+        self.inner.unobserve_update(abi);
     }
 }
 
@@ -159,7 +144,7 @@ pub fn apply_update(
     Ok(())
 }
 
-struct JsClock;
+pub struct JsClock;
 
 impl yrs::sync::time::Clock for JsClock {
     fn now(&self) -> Timestamp {

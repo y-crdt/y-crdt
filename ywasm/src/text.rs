@@ -2,7 +2,8 @@ use crate::collection::SharedCollection;
 use crate::js::{Js, ValueRef, YRange};
 use crate::transaction::YTransaction;
 use crate::weak::YWeakLink;
-use crate::{ImplicitTransaction, Observer, YSnapshot};
+use crate::{ImplicitTransaction, YSnapshot};
+use wasm_bindgen::convert::IntoWasmAbi;
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
 use yrs::types::text::TextEvent;
@@ -330,7 +331,7 @@ impl YText {
     /// batched and eventually triggered during transaction commit phase.
     /// Returns an `YTextObserver` which, when free'd, will unsubscribe current callback.
     #[wasm_bindgen(js_name = observe)]
-    pub fn observe(&self, f: js_sys::Function) -> crate::Result<Observer> {
+    pub fn observe(&self, f: js_sys::Function) -> crate::Result<()> {
         match &self.0 {
             SharedCollection::Prelim(_) => {
                 Err(JsValue::from_str(crate::js::errors::INVALID_PRELIM_OP))
@@ -338,14 +339,27 @@ impl YText {
             SharedCollection::Integrated(c) => {
                 let txn = c.transact()?;
                 let array = c.resolve(&txn)?;
-                Ok(Observer(array.observe(move |txn, e| {
+                let abi = f.clone().into_abi();
+                array.observe_with(abi, move |txn, e| {
                     let e = YTextEvent::new(e, txn);
                     let txn = YTransaction::from_ref(txn);
                     f.call2(&JsValue::UNDEFINED, &e.into(), &txn.into())
                         .unwrap();
-                })))
+                });
+                Ok(())
             }
         }
+    }
+
+    /// Unsubscribes a callback previously subscribed with `observe` method.
+    #[wasm_bindgen(js_name = unobserve)]
+    pub fn unobserve(&mut self, callback: js_sys::Function) -> crate::Result<()> {
+        if let SharedCollection::Integrated(c) = &self.0 {
+            let txn = c.transact()?;
+            let shared_ref = c.resolve(&txn)?;
+            shared_ref.unobserve(callback.into_abi());
+        }
+        Ok(())
     }
 
     /// Subscribes to all operations happening over this Y shared type, as well as events in
@@ -353,7 +367,7 @@ impl YText {
     /// during transaction commit phase.
     /// Returns an `YEventObserver` which, when free'd, will unsubscribe current callback.
     #[wasm_bindgen(js_name = observeDeep)]
-    pub fn observe_deep(&self, f: js_sys::Function) -> crate::Result<Observer> {
+    pub fn observe_deep(&self, f: js_sys::Function) -> crate::Result<()> {
         match &self.0 {
             SharedCollection::Prelim(_) => {
                 Err(JsValue::from_str(crate::js::errors::INVALID_PRELIM_OP))
@@ -361,13 +375,26 @@ impl YText {
             SharedCollection::Integrated(c) => {
                 let txn = c.transact()?;
                 let array = c.resolve(&txn)?;
-                Ok(Observer(array.observe_deep(move |txn, e| {
+                let abi = f.clone().into_abi();
+                array.observe_deep_with(abi, move |txn, e| {
                     let e = crate::js::convert::events_into_js(txn, e);
                     let txn = YTransaction::from_ref(txn);
                     f.call2(&JsValue::UNDEFINED, &e, &txn.into()).unwrap();
-                })))
+                });
+                Ok(())
             }
         }
+    }
+
+    /// Unsubscribes a callback previously subscribed with `observeDeep` method.
+    #[wasm_bindgen(js_name = unobserveDeep)]
+    pub fn unobserve_deep(&mut self, callback: js_sys::Function) -> crate::Result<()> {
+        if let SharedCollection::Integrated(c) = &self.0 {
+            let txn = c.transact()?;
+            let shared_ref = c.resolve(&txn)?;
+            shared_ref.unobserve_deep(callback.into_abi());
+        }
+        Ok(())
     }
 }
 

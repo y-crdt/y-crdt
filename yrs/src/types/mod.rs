@@ -198,7 +198,7 @@ impl Decode for TypeRef {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(target_family = "wasm"))]
 pub trait Observable: AsRef<Branch> {
     type Event;
 
@@ -252,7 +252,7 @@ pub trait Observable: AsRef<Branch> {
     }
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(target_family = "wasm")]
 pub trait Observable: AsRef<Branch> {
     type Event;
 
@@ -321,6 +321,7 @@ pub trait SharedRef: From<BranchPtr> + AsRef<Branch> {
 
 /// Trait implemented by all Y-types, allowing for observing events which are emitted by
 /// nested types.
+#[cfg(not(target_family = "wasm"))]
 pub trait DeepObservable: AsRef<Branch> {
     /// Subscribe a callback `f` for all events emitted by this and nested collaborative types.
     /// Callback is accepting transaction which triggered that event and event itself, wrapped
@@ -338,6 +339,67 @@ pub trait DeepObservable: AsRef<Branch> {
     {
         let branch = self.as_ref();
         branch.deep_observers.subscribe(Box::new(f))
+    }
+
+    /// Subscribe a callback `f` for all events emitted by this and nested collaborative types.
+    /// Callback is accepting transaction which triggered that event and event itself, wrapped
+    /// within an [Event] structure.
+    ///
+    /// In case when a nested shared type (e.g. [MapRef],[ArrayRef],[TextRef]) is being removed,
+    /// all of its contents will be removed first. So the observed value will be empty. For example,
+    /// The value wrapped in the [EntryChange::Removed] of the [Event::Map] will be empty.
+    ///
+    /// This method uses a subscription key, which can be later used to cancel this callback via
+    /// [Self::unobserve_deep].
+    fn observe_deep_with<K, F>(&self, key: K, f: F)
+    where
+        K: Into<Origin>,
+        F: Fn(&TransactionMut, &Events) + Send + Sync + 'static,
+    {
+        let branch = self.as_ref();
+        branch
+            .deep_observers
+            .subscribe_with(key.into(), Box::new(f))
+    }
+
+    /// Unsubscribe a callback identified by a given key, that was previously subscribed using
+    /// [Self::observe_deep_with].
+    fn unobserve_deep<K: Into<Origin>>(&self, key: K) {
+        let branch = self.as_ref();
+        branch.deep_observers.unsubscribe(&key.into())
+    }
+}
+
+/// Trait implemented by all Y-types, allowing for observing events which are emitted by
+/// nested types.
+#[cfg(target_family = "wasm")]
+pub trait DeepObservable: AsRef<Branch> {
+    /// Subscribe a callback `f` for all events emitted by this and nested collaborative types.
+    /// Callback is accepting transaction which triggered that event and event itself, wrapped
+    /// within an [Event] structure.
+    ///
+    /// In case when a nested shared type (e.g. [MapRef],[ArrayRef],[TextRef]) is being removed,
+    /// all of its contents will be removed first. So the observed value will be empty. For example,
+    /// The value wrapped in the [EntryChange::Removed] of the [Event::Map] will be empty.
+    ///
+    /// This method uses a subscription key, which can be later used to cancel this callback via
+    /// [Self::unobserve_deep].
+    fn observe_deep_with<K, F>(&self, key: K, f: F)
+    where
+        K: Into<Origin>,
+        F: Fn(&TransactionMut, &Events) + 'static,
+    {
+        let branch = self.as_ref();
+        branch
+            .deep_observers
+            .subscribe_with(key.into(), Box::new(f))
+    }
+
+    /// Unsubscribe a callback identified by a given key, that was previously subscribed using
+    /// [Self::observe_deep_with].
+    fn unobserve_deep<K: Into<Origin>>(&self, key: K) {
+        let branch = self.as_ref();
+        branch.deep_observers.unsubscribe(&key.into())
     }
 }
 

@@ -7,7 +7,7 @@ use crate::gc::GCCollector;
 use crate::id_set::DeleteSet;
 use crate::iter::TxnIterator;
 use crate::slice::BlockSlice;
-use crate::store::{Store, SubdocGuids, SubdocsIter};
+use crate::store::{Store, StoreEvents, SubdocGuids, SubdocsIter};
 use crate::types::{Event, Events, RootRef, SharedRef, TypePtr, Value};
 use crate::update::Update;
 use crate::utils::OptionExt;
@@ -343,6 +343,10 @@ impl<'doc> TransactionMut<'doc> {
 
     pub fn doc(&self) -> &Doc {
         &self.doc
+    }
+
+    pub fn events(&self) -> Option<&StoreEvents> {
+        self.store.events.as_deref()
     }
 
     /// Corresponding document's state vector at the moment when current transaction was created.

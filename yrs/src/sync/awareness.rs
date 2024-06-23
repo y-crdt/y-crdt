@@ -10,11 +10,15 @@ use crate::block::ClientID;
 use crate::sync::{Clock, Timestamp};
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
-use crate::{Doc, Observer, Subscription};
+use crate::{Doc, Observer, Origin, Subscription};
 
 const NULL_STR: &str = "null";
 
+#[cfg(not(target_family = "wasm"))]
 type AwarenessUpdateFn<S> = Box<dyn Fn(&Awareness<S>, &Event) + Send + Sync + 'static>;
+
+#[cfg(target_family = "wasm")]
+type AwarenessUpdateFn<S> = Box<dyn Fn(&Awareness<S>, &Event) + 'static>;
 
 /// The Awareness class implements a simple shared state protocol that can be used for non-persistent
 /// data like awareness information (cursor, username, status, ..). Each client can update its own
@@ -40,7 +44,7 @@ impl<S: 'static> Awareness<S> {
     /// Creates a new instance of [Awareness] struct, which operates over a given document.
     /// Awareness instance has full ownership of that document. If necessary it can be accessed
     /// using either [Awareness::doc] or [Awareness::doc_mut] methods.
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(target_family = "wasm"))]
     pub fn new(doc: Doc) -> Self {
         Self::with_clock(doc, crate::sync::time::SystemClock)
     }
@@ -62,11 +66,40 @@ impl<S: 'static> Awareness<S> {
     }
 
     /// Returns a channel receiver for an incoming awareness events. This channel can be cloned.
+    #[cfg(not(target_family = "wasm"))]
     pub fn on_update<F>(&self, f: F) -> Subscription
     where
         F: Fn(&Awareness<S>, &Event) + Send + Sync + 'static,
     {
         self.on_update.subscribe(Box::new(f))
+    }
+
+    /// Returns a channel receiver for an incoming awareness events. This channel can be cloned.
+    #[cfg(not(target_family = "wasm"))]
+    pub fn on_update_with<K, F>(&self, key: K, f: F)
+    where
+        K: Into<Origin>,
+        F: Fn(&Awareness<S>, &Event) + Send + Sync + 'static,
+    {
+        self.on_update.subscribe_with(key.into(), Box::new(f))
+    }
+
+    /// Returns a channel receiver for an incoming awareness events. This channel can be cloned.
+    #[cfg(target_family = "wasm")]
+    pub fn on_update_with<K, F>(&self, key: K, f: F)
+    where
+        K: Into<Origin>,
+        F: Fn(&Awareness<S>, &Event) + 'static,
+    {
+        self.on_update.subscribe_with(key.into(), Box::new(f))
+    }
+
+    /// Returns a channel receiver for an incoming awareness events. This channel can be cloned.
+    pub fn unobserve_update<K>(&self, key: K)
+    where
+        K: Into<Origin>,
+    {
+        self.on_update.unsubscribe(&key.into())
     }
 
     /// Returns a read-only reference to an underlying [Doc].
@@ -312,7 +345,7 @@ where
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(target_family = "wasm"))]
 impl<S: 'static> Default for Awareness<S> {
     fn default() -> Self {
         Awareness::new(Doc::new())
@@ -435,6 +468,10 @@ impl Event {
                 removed,
             },
         }
+    }
+
+    pub fn summary(&self) -> &AwarenessUpdateSummary {
+        &self.summary
     }
 
     /// Collection of new clients that have been added to an [Awareness] struct, that was not known
