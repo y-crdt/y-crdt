@@ -276,14 +276,13 @@ impl Doc {
         Ok(())
     }
 
-    pub fn unobserve_update_v1<K>(&self, key: K) -> Result<(), BorrowMutError>
+    pub fn unobserve_update_v1<K>(&self, key: K) -> Result<bool, BorrowMutError>
     where
         K: Into<Origin>,
     {
         let mut r = self.store.try_borrow_mut()?;
         let events = r.events.get_or_init();
-        events.update_v1_events.unsubscribe(&key.into());
-        Ok(())
+        Ok(events.update_v1_events.unsubscribe(&key.into()))
     }
 
     /// Subscribe callback function for any changes performed within transaction scope. These
@@ -342,14 +341,13 @@ impl Doc {
         Ok(())
     }
 
-    pub fn unobserve_update_v2<K>(&self, key: K) -> Result<(), BorrowMutError>
+    pub fn unobserve_update_v2<K>(&self, key: K) -> Result<bool, BorrowMutError>
     where
         K: Into<Origin>,
     {
         let mut r = self.store.try_borrow_mut()?;
         let events = r.events.get_or_init();
-        events.update_v2_events.unsubscribe(&key.into());
-        Ok(())
+        Ok(events.update_v2_events.unsubscribe(&key.into()))
     }
 
     /// Subscribe callback function to updates on the `Doc`. The callback will receive state updates and
@@ -396,14 +394,13 @@ impl Doc {
         Ok(())
     }
 
-    pub fn unobserve_transaction_cleanup<K>(&self, key: K) -> Result<(), BorrowMutError>
+    pub fn unobserve_transaction_cleanup<K>(&self, key: K) -> Result<bool, BorrowMutError>
     where
         K: Into<Origin>,
     {
         let mut r = self.store.try_borrow_mut()?;
         let events = r.events.get_or_init();
-        events.transaction_cleanup_events.unsubscribe(&key.into());
-        Ok(())
+        Ok(events.transaction_cleanup_events.unsubscribe(&key.into()))
     }
 
     #[cfg(not(target_family = "wasm"))]
@@ -444,14 +441,13 @@ impl Doc {
         Ok(())
     }
 
-    pub fn unobserve_after_transaction<K>(&self, key: K) -> Result<(), BorrowMutError>
+    pub fn unobserve_after_transaction<K>(&self, key: K) -> Result<bool, BorrowMutError>
     where
         K: Into<Origin>,
     {
         let mut r = self.store.try_borrow_mut()?;
         let events = r.events.get_or_init();
-        events.after_transaction_events.unsubscribe(&key.into());
-        Ok(())
+        Ok(events.after_transaction_events.unsubscribe(&key.into()))
     }
 
     /// Subscribe callback function, that will be called whenever a subdocuments inserted in this
@@ -498,14 +494,13 @@ impl Doc {
         Ok(())
     }
 
-    pub fn unobserve_subdocs<K>(&self, key: K) -> Result<(), BorrowMutError>
+    pub fn unobserve_subdocs<K>(&self, key: K) -> Result<bool, BorrowMutError>
     where
         K: Into<Origin>,
     {
         let mut r = self.store.try_borrow_mut()?;
         let events = r.events.get_or_init();
-        events.subdocs_events.unsubscribe(&key.into());
-        Ok(())
+        Ok(events.subdocs_events.unsubscribe(&key.into()))
     }
 
     /// Subscribe callback function, that will be called whenever a [DocRef::destroy] has been called.
@@ -534,14 +529,13 @@ impl Doc {
         Ok(())
     }
 
-    pub fn unobserve_destroy<K>(&self, key: K) -> Result<(), BorrowMutError>
+    pub fn unobserve_destroy<K>(&self, key: K) -> Result<bool, BorrowMutError>
     where
         K: Into<Origin>,
     {
         let mut r = self.store.try_borrow_mut()?;
         let events = r.events.get_or_init();
-        events.destroy_events.unsubscribe(&key.into());
-        Ok(())
+        Ok(events.destroy_events.unsubscribe(&key.into()))
     }
 
     /// Subscribe callback function, that will be called whenever a [DocRef::destroy] has been called.

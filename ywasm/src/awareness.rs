@@ -94,9 +94,9 @@ impl Awareness {
     }
 
     #[wasm_bindgen(js_name = offUpdate)]
-    pub fn off_update(&self, callback: js_sys::Function) {
+    pub fn off_update(&self, callback: js_sys::Function) -> bool {
         let abi = callback.clone().into_abi();
-        self.inner.unobserve_update(abi);
+        self.inner.unobserve_update(abi)
     }
 }
 

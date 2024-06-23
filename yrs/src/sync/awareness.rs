@@ -95,7 +95,7 @@ impl<S: 'static> Awareness<S> {
     }
 
     /// Returns a channel receiver for an incoming awareness events. This channel can be cloned.
-    pub fn unobserve_update<K>(&self, key: K)
+    pub fn unobserve_update<K>(&self, key: K) -> bool
     where
         K: Into<Origin>,
     {

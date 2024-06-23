@@ -16,10 +16,11 @@ export const testOnUpdate = tc => {
     const text2 = d2.getText('text')
     let actual;
     let origin;
-    const sub = d2.onUpdate((e, tx) => {
+    const callback = (e, tx) => {
         actual = e
         origin = tx.origin
-    });
+    }
+    d2.on('update', callback);
     Y.applyUpdate(d2, update, d1.id)
 
     t.compare(origin, d1.id)
@@ -27,7 +28,7 @@ export const testOnUpdate = tc => {
     t.compare(actual, update)
 
     // check unsubscribe
-    sub.free()
+    x.assert(d2.off('update', callback), 'off "update" failed')
     actual = null
     origin = null
 
@@ -52,14 +53,15 @@ export const testOnUpdateV2 = tc => {
     const d2 = new Y.YDoc({clientID: 2})
     const text2 = d2.getText('text')
     let actual;
-    const sub = d2.onUpdateV2(e => actual = e);
+    const callback = e => actual = e
+    d2.on('updateV2', callback);
     Y.applyUpdateV2(d2, expected)
 
     t.compare(text1.toString(), text2.toString())
     t.compare(actual, expected)
 
     // check unsubscribe
-    sub.free()
+    t.assert(d2.off('updateV2', callback), 'off "updateV2" failed')
     actual = null
 
     text1.insert(5, 'world')
@@ -77,12 +79,13 @@ export const testOnAfterTransaction = tc => {
     const doc = new Y.YDoc({clientID: 1})
     const text = doc.getText('text')
     let event;
-    const sub = doc.onAfterTransaction(txn => {
+    let callback = txn => {
         let beforeState = txn.beforeState
         let afterState = txn.afterState
         let deleteSet = txn.deleteSet
         event = {beforeState, afterState, deleteSet}
-    });
+    }
+    doc.on('afterTransaction', callback);
 
     text.insert(0, 'hello world')
 
@@ -101,7 +104,7 @@ export const testOnAfterTransaction = tc => {
     state.set(1, [[2, 7]])
     t.compare(event.deleteSet, state);
 
-    sub.free()
+    t.assert(doc.off('afterTransaction', callback), 'off "afterTransaction" failed');
     event = null
     text.insert(4, ' the door')
 
@@ -155,12 +158,13 @@ export const testSubdoc = tc => {
          * @type {Array<any>|null}
          */
         let event = /** @type {any} */ (null)
-        doc.onSubdocs(subdocs => {
+        const callback = subdocs => {
             let added = Array.from(subdocs.added).map(x => x.guid).sort()
             let removed = Array.from(subdocs.removed).map(x => x.guid).sort()
             let loaded = Array.from(subdocs.loaded).map(x => x.guid).sort()
             event = [added, removed, loaded]
-        })
+        }
+        doc.on('subdocs', callback)
         const subdocs = doc.getMap('mysubdocs')
         const docA = new Y.YDoc({guid: 'a'})
         docA.load()

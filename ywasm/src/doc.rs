@@ -251,7 +251,7 @@ impl YDoc {
     }
 
     #[wasm_bindgen(js_name = off)]
-    pub fn off(&self, event: &str, f: js_sys::Function) -> Result<()> {
+    pub fn off(&self, event: &str, f: js_sys::Function) -> Result<bool> {
         let abi = f.clone().into_abi();
         let result = match event {
             "update" => self.unobserve_update_v1(abi),
@@ -264,8 +264,7 @@ impl YDoc {
                 return Err(JsValue::from_str(&format!("unknown event: '{}'", other)).into());
             }
         };
-        result.map_err(|_| JsValue::from_str(crate::js::errors::ANOTHER_TX))?;
-        Ok(())
+        result.map_err(|_| JsValue::from_str(crate::js::errors::ANOTHER_TX))
     }
 
     /// Notify the parent document that you request to load data into this subdocument

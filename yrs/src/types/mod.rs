@@ -246,7 +246,7 @@ pub trait Observable: AsRef<Branch> {
     }
 
     /// Unsubscribes a given callback identified by key, that was previously subscribed using [Self::observe_with].
-    fn unobserve<K: Into<Origin>>(&self, key: K) {
+    fn unobserve<K: Into<Origin>>(&self, key: K) -> bool {
         let mut branch = BranchPtr::from(self.as_ref());
         branch.unobserve(&key.into())
     }
@@ -279,7 +279,7 @@ pub trait Observable: AsRef<Branch> {
     }
 
     /// Unsubscribes a given callback identified by key, that was previously subscribed using [Self::observe_with].
-    fn unobserve<K: Into<Origin>>(&self, key: K) {
+    fn unobserve<K: Into<Origin>>(&self, key: K) -> bool {
         let mut branch = BranchPtr::from(self.as_ref());
         branch.unobserve(&key.into())
     }
@@ -364,7 +364,7 @@ pub trait DeepObservable: AsRef<Branch> {
 
     /// Unsubscribe a callback identified by a given key, that was previously subscribed using
     /// [Self::observe_deep_with].
-    fn unobserve_deep<K: Into<Origin>>(&self, key: K) {
+    fn unobserve_deep<K: Into<Origin>>(&self, key: K) -> bool {
         let branch = self.as_ref();
         branch.deep_observers.unsubscribe(&key.into())
     }
@@ -397,7 +397,7 @@ pub trait DeepObservable: AsRef<Branch> {
 
     /// Unsubscribe a callback identified by a given key, that was previously subscribed using
     /// [Self::observe_deep_with].
-    fn unobserve_deep<K: Into<Origin>>(&self, key: K) {
+    fn unobserve_deep<K: Into<Origin>>(&self, key: K) -> bool {
         let branch = self.as_ref();
         branch.deep_observers.unsubscribe(&key.into())
     }

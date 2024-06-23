@@ -457,13 +457,18 @@ impl YXmlText {
 
     /// Unsubscribes a callback previously subscribed with `observe` method.
     #[wasm_bindgen(js_name = unobserve)]
-    pub fn unobserve(&mut self, callback: js_sys::Function) -> crate::Result<()> {
-        if let SharedCollection::Integrated(c) = &self.0 {
-            let txn = c.transact()?;
-            let shared_ref = c.resolve(&txn)?;
-            shared_ref.unobserve(callback.into_abi());
+    pub fn unobserve(&mut self, callback: js_sys::Function) -> crate::Result<bool> {
+        match &self.0 {
+            SharedCollection::Prelim(_) => {
+                Err(JsValue::from_str(crate::js::errors::INVALID_PRELIM_OP))
+            }
+            SharedCollection::Integrated(c) => {
+                let txn = c.transact()?;
+                let shared_ref = c.resolve(&txn)?;
+                let abi = callback.clone().into_abi();
+                Ok(shared_ref.unobserve(abi))
+            }
         }
-        Ok(())
     }
 
     /// Subscribes to all operations happening over this Y shared type, as well as events in
@@ -492,13 +497,18 @@ impl YXmlText {
 
     /// Unsubscribes a callback previously subscribed with `observe` method.
     #[wasm_bindgen(js_name = unobserveDeep)]
-    pub fn unobserve_deep(&mut self, callback: js_sys::Function) -> crate::Result<()> {
-        if let SharedCollection::Integrated(c) = &self.0 {
-            let txn = c.transact()?;
-            let shared_ref = c.resolve(&txn)?;
-            shared_ref.unobserve_deep(callback.into_abi());
+    pub fn unobserve_deep(&mut self, callback: js_sys::Function) -> crate::Result<bool> {
+        match &self.0 {
+            SharedCollection::Prelim(_) => {
+                Err(JsValue::from_str(crate::js::errors::INVALID_PRELIM_OP))
+            }
+            SharedCollection::Integrated(c) => {
+                let txn = c.transact()?;
+                let shared_ref = c.resolve(&txn)?;
+                let abi = callback.clone().into_abi();
+                Ok(shared_ref.unobserve_deep(abi))
+            }
         }
-        Ok(())
     }
 }
 

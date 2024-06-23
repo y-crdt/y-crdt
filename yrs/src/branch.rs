@@ -546,8 +546,8 @@ impl Branch {
         self.observers.subscribe_with(key, Box::new(f))
     }
 
-    pub fn unobserve(&mut self, key: &Origin) {
-        self.observers.unsubscribe(&key);
+    pub fn unobserve(&mut self, key: &Origin) -> bool {
+        self.observers.unsubscribe(&key)
     }
 
     #[cfg(not(target_family = "wasm"))]

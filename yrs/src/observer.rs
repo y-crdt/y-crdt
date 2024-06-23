@@ -56,18 +56,22 @@ where
         }
     }
 
-    fn remove(mut prev: Arc<Node<F>>, id: &Origin) {
+    fn remove(mut prev: Arc<Node<F>>, id: &Origin) -> bool {
         while let Some(next) = prev.next.load_full() {
             if &next.uid == id {
                 prev.next.store(next.next.load_full());
+                return true;
             }
             prev = next;
         }
+        false
     }
 
-    pub fn unsubscribe(&self, id: &Origin) {
+    pub fn unsubscribe(&self, id: &Origin) -> bool {
         if let Some(inner) = &*self.inner.load() {
-            inner.remove(id);
+            inner.remove(id)
+        } else {
+            false
         }
     }
 
@@ -159,7 +163,7 @@ impl<F> Inner<F>
 where
     F: 'static,
 {
-    fn remove(&self, id: &Origin) {
+    fn remove(&self, id: &Origin) -> bool {
         while let Some(head) = self.head.load_full() {
             if &head.uid == id {
                 let next = head.next.load_full();
@@ -168,10 +172,10 @@ where
                     continue;
                 }
             } else {
-                Observer::remove(head.clone(), id);
-                break;
+                return Observer::remove(head.clone(), id);
             }
         }
+        false
     }
 }
 

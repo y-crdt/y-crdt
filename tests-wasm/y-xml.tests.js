@@ -130,12 +130,13 @@ export const testXmlTextObserver = tc => {
     let attributes = null
     let delta = null
     let origin = null
-    let observer = x.observe(e => {
+    let callback = e => {
         target = e.target
         attributes = e.keys
         delta = e.delta
         origin = e.origin
-    })
+    }
+    x.observe(callback)
 
     // set initial attributes
     d1.transact(txn => {
@@ -197,7 +198,7 @@ export const testXmlTextObserver = tc => {
     delta = null
 
     // free the observer and make sure that callback is no longer called
-    observer.free()
+    t.assert(x.unobserve(callback), 'unobserve failed')
     x.insert(1, 'fgh')
     t.compare(target, null)
     t.compare(attributes, null)
@@ -214,11 +215,12 @@ export const testXmlElementObserver = tc => {
     let target = null
     let attributes = null
     let nodes = null
-    let observer = x.observe(e => {
+    let callback = e => {
         target = e.target
         attributes = e.keys
         nodes = e.delta
-    })
+    }
+    x.observe(callback)
 
     // insert initial attributes
     d1.transact(txn => {
@@ -283,7 +285,7 @@ export const testXmlElementObserver = tc => {
     nodes = null
 
     // free the observer and make sure that callback is no longer called
-    observer.free()
+    t.assert(x.unobserve(callback), 'unobserve failed')
     x.insert(0, new Y.YXmlElement('head'))
     t.compare(target, null)
     t.compare(nodes, null)

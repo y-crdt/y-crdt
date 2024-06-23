@@ -289,6 +289,21 @@ impl YArray {
         }
     }
 
+    #[wasm_bindgen(js_name = unobserve)]
+    pub fn unobserve(&self, f: js_sys::Function) -> Result<bool> {
+        match &self.0 {
+            SharedCollection::Prelim(_) => {
+                Err(JsValue::from_str(crate::js::errors::INVALID_PRELIM_OP))
+            }
+            SharedCollection::Integrated(c) => {
+                let txn = c.transact()?;
+                let array = c.resolve(&txn)?;
+                let abi = f.clone().into_abi();
+                Ok(array.unobserve(abi))
+            }
+        }
+    }
+
     /// Subscribes to all operations happening over this Y shared type, as well as events in
     /// shared types stored within this one. All changes are batched and eventually triggered
     /// during transaction commit phase.
@@ -309,6 +324,21 @@ impl YArray {
                     f.call2(&JsValue::UNDEFINED, &e, &txn.into()).unwrap();
                 });
                 Ok(())
+            }
+        }
+    }
+
+    #[wasm_bindgen(js_name = unobserveDeep)]
+    pub fn unobserve_deep(&self, f: js_sys::Function) -> Result<bool> {
+        match &self.0 {
+            SharedCollection::Prelim(_) => {
+                Err(JsValue::from_str(crate::js::errors::INVALID_PRELIM_OP))
+            }
+            SharedCollection::Integrated(c) => {
+                let txn = c.transact()?;
+                let array = c.resolve(&txn)?;
+                let abi = f.clone().into_abi();
+                Ok(array.unobserve_deep(abi))
             }
         }
     }

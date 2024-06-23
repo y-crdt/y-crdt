@@ -295,7 +295,7 @@ where
             .subscribe_with(key.into(), Box::new(f))
     }
 
-    pub fn unobserve_item_added<K>(&self, key: K)
+    pub fn unobserve_item_added<K>(&self, key: K) -> bool
     where
         K: Into<Origin>,
     {
@@ -349,7 +349,7 @@ where
             .subscribe_with(key.into(), Box::new(f))
     }
 
-    pub fn unobserve_item_updated<K>(&self, key: K)
+    pub fn unobserve_item_updated<K>(&self, key: K) -> bool
     where
         K: Into<Origin>,
     {
@@ -400,7 +400,7 @@ where
             .subscribe_with(key.into(), Box::new(f))
     }
 
-    pub fn unobserve_item_popped<K>(&self, key: K)
+    pub fn unobserve_item_popped<K>(&self, key: K) -> bool
     where
         K: Into<Origin>,
     {

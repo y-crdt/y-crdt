@@ -161,15 +161,14 @@ impl YUndoManager {
     }
 
     #[wasm_bindgen(js_name = off)]
-    pub fn off(&mut self, event: &str, callback: js_sys::Function) -> crate::Result<()> {
+    pub fn off(&mut self, event: &str, callback: js_sys::Function) -> crate::Result<bool> {
         let abi = callback.clone().into_abi();
         match event {
-            "stack-item-added" => self.0.unobserve_item_added(abi),
-            "stack-item-popped" => self.0.unobserve_item_popped(abi),
-            "stack-item-updated" => self.0.unobserve_item_updated(abi),
-            unknown => return Err(JsValue::from_str(&format!("Unknown event: {}", unknown))),
+            "stack-item-added" => Ok(self.0.unobserve_item_added(abi)),
+            "stack-item-popped" => Ok(self.0.unobserve_item_popped(abi)),
+            "stack-item-updated" => Ok(self.0.unobserve_item_updated(abi)),
+            unknown => Err(JsValue::from_str(&format!("Unknown event: {}", unknown))),
         }
-        Ok(())
     }
 }
 
