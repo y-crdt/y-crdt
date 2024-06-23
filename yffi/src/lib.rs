@@ -461,18 +461,32 @@ pub unsafe extern "C" fn ydoc_auto_load(doc: *mut Doc) -> u8 {
     doc.options().auto_load as u8
 }
 
+#[repr(transparent)]
+struct CallbackState(*mut c_void);
+
+unsafe impl Send for CallbackState {}
+unsafe impl Sync for CallbackState {}
+
+impl CallbackState {
+    #[inline]
+    fn new(state: *mut c_void) -> Self {
+        CallbackState(state)
+    }
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn ydoc_observe_updates_v1(
     doc: *mut Doc,
     state: *mut c_void,
     cb: extern "C" fn(*mut c_void, u32, *const c_char),
 ) -> *mut Subscription {
+    let state = CallbackState::new(state);
     let doc = doc.as_ref().unwrap();
     let subscription = doc
         .observe_update_v1(move |_, e| {
             let bytes = &e.update;
             let len = bytes.len() as u32;
-            cb(state, len, bytes.as_ptr() as *const c_char)
+            cb(state.0, len, bytes.as_ptr() as *const c_char)
         })
         .unwrap();
     Box::into_raw(Box::new(subscription))
@@ -484,12 +498,13 @@ pub unsafe extern "C" fn ydoc_observe_updates_v2(
     state: *mut c_void,
     cb: extern "C" fn(*mut c_void, u32, *const c_char),
 ) -> *mut Subscription {
+    let state = CallbackState::new(state);
     let doc = doc.as_ref().unwrap();
     let subscription = doc
         .observe_update_v2(move |_, e| {
             let bytes = &e.update;
             let len = bytes.len() as u32;
-            cb(state, len, bytes.as_ptr() as *const c_char)
+            cb(state.0, len, bytes.as_ptr() as *const c_char)
         })
         .unwrap();
     Box::into_raw(Box::new(subscription))
@@ -501,11 +516,12 @@ pub unsafe extern "C" fn ydoc_observe_after_transaction(
     state: *mut c_void,
     cb: extern "C" fn(*mut c_void, *mut YAfterTransactionEvent),
 ) -> *mut Subscription {
+    let state = CallbackState::new(state);
     let doc = doc.as_ref().unwrap();
     let subscription = doc
         .observe_transaction_cleanup(move |_, e| {
             let mut event = YAfterTransactionEvent::new(e);
-            cb(state, (&mut event) as *mut _);
+            cb(state.0, (&mut event) as *mut _);
         })
         .unwrap();
     Box::into_raw(Box::new(subscription))
@@ -517,11 +533,12 @@ pub unsafe extern "C" fn ydoc_observe_subdocs(
     state: *mut c_void,
     cb: extern "C" fn(*mut c_void, *mut YSubdocsEvent),
 ) -> *mut Subscription {
+    let state = CallbackState::new(state);
     let doc = doc.as_mut().unwrap();
     let subscription = doc
         .observe_subdocs(move |_, e| {
             let mut event = YSubdocsEvent::new(e);
-            cb(state, (&mut event) as *mut _);
+            cb(state.0, (&mut event) as *mut _);
         })
         .unwrap();
     Box::into_raw(Box::new(subscription))
@@ -533,9 +550,10 @@ pub unsafe extern "C" fn ydoc_observe_clear(
     state: *mut c_void,
     cb: extern "C" fn(*mut c_void, *mut Doc),
 ) -> *mut Subscription {
+    let state = CallbackState::new(state);
     let doc = doc.as_mut().unwrap();
     let subscription = doc
-        .observe_destroy(move |_, e| cb(state, e as *const Doc as *mut _))
+        .observe_destroy(move |_, e| cb(state.0, e as *const Doc as *mut _))
         .unwrap();
     Box::into_raw(Box::new(subscription))
 }
@@ -3396,11 +3414,12 @@ pub unsafe extern "C" fn ytext_observe(
     cb: extern "C" fn(*mut c_void, *const YTextEvent),
 ) -> *mut Subscription {
     assert!(!txt.is_null());
+    let state = CallbackState::new(state);
 
     let txt = TextRef::from_raw_branch(txt);
     let subscription = txt.observe(move |txn, e| {
         let e = YTextEvent::new(e, txn);
-        cb(state, &e as *const YTextEvent);
+        cb(state.0, &e as *const YTextEvent);
     });
     Box::into_raw(Box::new(subscription))
 }
@@ -3416,11 +3435,12 @@ pub unsafe extern "C" fn ymap_observe(
     cb: extern "C" fn(*mut c_void, *const YMapEvent),
 ) -> *mut Subscription {
     assert!(!map.is_null());
+    let state = CallbackState::new(state);
 
     let map = MapRef::from_raw_branch(map);
     let subscription = map.observe(move |txn, e| {
         let e = YMapEvent::new(e, txn);
-        cb(state, &e as *const YMapEvent);
+        cb(state.0, &e as *const YMapEvent);
     });
     Box::into_raw(Box::new(subscription))
 }
@@ -3436,11 +3456,12 @@ pub unsafe extern "C" fn yarray_observe(
     cb: extern "C" fn(*mut c_void, *const YArrayEvent),
 ) -> *mut Subscription {
     assert!(!array.is_null());
+    let state = CallbackState::new(state);
 
     let array = ArrayRef::from_raw_branch(array);
     let subscription = array.observe(move |txn, e| {
         let e = YArrayEvent::new(e, txn);
-        cb(state, &e as *const YArrayEvent);
+        cb(state.0, &e as *const YArrayEvent);
     });
     Box::into_raw(Box::new(subscription))
 }
@@ -3456,11 +3477,12 @@ pub unsafe extern "C" fn yxmlelem_observe(
     cb: extern "C" fn(*mut c_void, *const YXmlEvent),
 ) -> *mut Subscription {
     assert!(!xml.is_null());
+    let state = CallbackState::new(state);
 
     let xml = XmlElementRef::from_raw_branch(xml);
     let subscription = xml.observe(move |txn, e| {
         let e = YXmlEvent::new(e, txn);
-        cb(state, &e as *const YXmlEvent);
+        cb(state.0, &e as *const YXmlEvent);
     });
     Box::into_raw(Box::new(subscription))
 }
@@ -3477,10 +3499,11 @@ pub unsafe extern "C" fn yxmltext_observe(
 ) -> *mut Subscription {
     assert!(!xml.is_null());
 
+    let state = CallbackState::new(state);
     let xml = XmlTextRef::from_raw_branch(xml);
     let subscription = xml.observe(move |txn, e| {
         let e = YXmlTextEvent::new(e, txn);
-        cb(state, &e as *const YXmlTextEvent);
+        cb(state.0, &e as *const YXmlTextEvent);
     });
     Box::into_raw(Box::new(subscription))
 }
@@ -3499,11 +3522,12 @@ pub unsafe extern "C" fn yobserve_deep(
 ) -> *mut Subscription {
     assert!(!ytype.is_null());
 
+    let state = CallbackState::new(state);
     let branch = ytype.as_mut().unwrap();
     let subscription = branch.observe_deep(move |txn, events| {
         let events: Vec<_> = events.iter().map(|e| YEvent::new(txn, e)).collect();
         let len = events.len() as u32;
-        cb(state, len, events.as_ptr());
+        cb(state.0, len, events.as_ptr());
     });
     Box::into_raw(Box::new(subscription))
 }
@@ -4413,11 +4437,12 @@ pub unsafe extern "C" fn yundo_manager_observe_added(
     state: *mut c_void,
     cb: extern "C" fn(*mut c_void, *const YUndoEvent),
 ) -> *mut Subscription {
+    let state = CallbackState::new(state);
     let mgr = mgr.as_mut().unwrap();
     let subscription = mgr.observe_item_added(move |_, e| {
         let meta_ptr = {
             let event = YUndoEvent::new(e);
-            cb(state, &event as *const YUndoEvent);
+            cb(state.0, &event as *const YUndoEvent);
             event.meta
         };
         e.meta().store(meta_ptr, Ordering::Release);
@@ -4432,11 +4457,12 @@ pub unsafe extern "C" fn yundo_manager_observe_popped(
     cb: extern "C" fn(*mut c_void, *const YUndoEvent),
 ) -> *mut Subscription {
     let mgr = mgr.as_mut().unwrap();
+    let state = CallbackState::new(state);
     let subscription = mgr
         .observe_item_popped(move |_, e| {
             let meta_ptr = {
                 let event = YUndoEvent::new(e);
-                cb(state, &event as *const YUndoEvent);
+                cb(state.0, &event as *const YUndoEvent);
                 event.meta
             };
             e.meta().store(meta_ptr, Ordering::Release);
@@ -5145,10 +5171,11 @@ pub unsafe extern "C" fn yweak_observe(
 ) -> *mut Subscription {
     assert!(!weak.is_null());
 
+    let state = CallbackState::new(state);
     let txt: WeakRef<BranchPtr> = WeakRef::from_raw_branch(weak);
     let subscription = txt.observe(move |txn, e| {
         let e = YWeakLinkEvent::new(e, txn);
-        cb(state, &e as *const YWeakLinkEvent);
+        cb(state.0, &e as *const YWeakLinkEvent);
     });
     Box::into_raw(Box::new(subscription))
 }
