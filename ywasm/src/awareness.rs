@@ -1,5 +1,6 @@
 use gloo_utils::format::JsValueSerdeExt;
 use js_sys::Uint8Array;
+use serde_json::Value;
 use wasm_bindgen::convert::IntoWasmAbi;
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
@@ -12,7 +13,7 @@ use crate::doc::YDoc;
 
 #[wasm_bindgen]
 pub struct Awareness {
-    inner: YAwareness<JsValue>,
+    inner: YAwareness<Value>,
 }
 
 #[wasm_bindgen]
@@ -48,7 +49,7 @@ impl Awareness {
     pub fn local_state(&self) -> crate::Result<JsValue> {
         match self.inner.local_state() {
             None => Ok(JsValue::NULL),
-            Some(js) => Ok(js.clone()),
+            Some(js) => JsValue::from_serde(js).map_err(|e| JsValue::from_str(&e.to_string())),
         }
     }
 
@@ -57,7 +58,11 @@ impl Awareness {
         if state.is_null() {
             self.inner.clean_local_state();
         } else {
-            self.inner.set_local_state(state);
+            self.inner.set_local_state(
+                state
+                    .into_serde()
+                    .map_err(|e| JsValue::from_str(&e.to_string()))?,
+            );
         }
         Ok(())
     }
@@ -73,7 +78,8 @@ impl Awareness {
     pub fn states(&self) -> crate::Result<js_sys::Map> {
         let result = js_sys::Map::new();
         for (&client_id, state) in self.inner.clients().iter() {
-            result.set(&JsValue::from(client_id), state);
+            let json = JsValue::from_serde(state).map_err(|e| JsValue::from_str(&e.to_string()))?;
+            result.set(&JsValue::from(client_id), &json);
         }
         Ok(result)
     }
