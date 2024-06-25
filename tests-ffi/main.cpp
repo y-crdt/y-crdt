@@ -1979,3 +1979,23 @@ TEST_CASE("Array event observer target") {
     yunobserve(subscription);
     ydoc_destroy(doc);
 }
+
+TEST_CASE("YMap multiple nested maps") {
+    YDoc* doc = ydoc_new_with_id(1);
+    Branch* map = ymap(doc, "map");
+    YTransaction* txn = ydoc_write_transaction(doc, 0, NULL);
+
+    char* key = (char*)"text";
+    YInput value = yinput_string("Nested data");
+    YInput innerMap = yinput_ymap(&key, &value, 1);
+
+    char* key2 = (char*)"innerMap";
+    YInput outerMap = yinput_ymap(&key2, &innerMap, 1);
+
+    ymap_insert(map, txn, "outerMap", &outerMap);
+    int length = ymap_len(map, txn);
+    ytransaction_commit(txn);
+    REQUIRE(length == 1);
+
+    ydoc_destroy(doc);
+}
