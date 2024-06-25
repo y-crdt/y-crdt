@@ -9,7 +9,7 @@ use std::convert::TryInto;
 use std::fmt::Display;
 use thiserror::Error;
 
-pub fn to_any<T: Serialize>(value: T) -> Result<Any, AnySerializeError> {
+pub fn to_any<T: Serialize>(value: &T) -> Result<Any, AnySerializeError> {
     value.serialize(AnySerializer)
 }
 
@@ -662,7 +662,7 @@ mod test {
         struct Test(u64);
 
         assert_eq!(
-            to_any(Test(i64::MAX as u64)).unwrap(),
+            to_any(&Test(i64::MAX as u64)).unwrap(),
             Any::BigInt(i64::MAX)
         )
     }
@@ -673,7 +673,7 @@ mod test {
         struct Test(u64);
 
         assert!(matches!(
-            to_any(Test(u64::MAX)).unwrap_err(),
+            to_any(&Test(u64::MAX)).unwrap_err(),
             AnySerializeError::UnrepresentableInt
         ))
     }
@@ -684,7 +684,7 @@ mod test {
         struct Test(HashMap<u32, u32>);
 
         assert!(matches!(
-            to_any(Test(HashMap::from([(100, 1)]))).unwrap_err(),
+            to_any(&Test(HashMap::from([(100, 1)]))).unwrap_err(),
             AnySerializeError::MapKeyNotString
         ))
     }
