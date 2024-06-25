@@ -5,7 +5,7 @@ use std::ops::{Deref, RangeBounds};
 use std::ptr::{null, null_mut};
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::Arc;
-use yrs::block::{ClientID, ItemContent, Prelim, Unused};
+use yrs::block::{ClientID, EmbedPrelim, ItemContent, Prelim, Unused};
 use yrs::branch::BranchPtr;
 use yrs::encoding::read::Error;
 use yrs::types::array::ArrayEvent;
@@ -1265,7 +1265,7 @@ pub unsafe extern "C" fn ytext_insert_embed(
         .expect("provided transaction was not writeable");
     let txt = TextRef::from_raw_branch(txt);
     let index = index as u32;
-    let content: Any = content.read().into();
+    let content = content.read();
     if attrs.is_null() {
         txt.insert_embed(txn, index, content);
     } else {
@@ -2177,7 +2177,7 @@ pub unsafe extern "C" fn yxmltext_insert_embed(
         .expect("provided transaction was not writeable");
     let txt = XmlTextRef::from_raw_branch(txt);
     let index = index as u32;
-    let content: Any = content.read().into();
+    let content = content.read();
     if attrs.is_null() {
         txt.insert_embed(txn, index, content);
     } else {
@@ -2491,6 +2491,16 @@ impl YInput {
     }
 }
 
+impl Into<EmbedPrelim<YInput>> for YInput {
+    fn into(self) -> EmbedPrelim<YInput> {
+        if self.tag <= 0 {
+            EmbedPrelim::Primitive(self.into())
+        } else {
+            EmbedPrelim::Shared(self)
+        }
+    }
+}
+
 #[repr(C)]
 union YInputContent {
     flag: u8,
@@ -2520,8 +2530,7 @@ impl Prelim for YInput {
     fn into_content<'doc>(self, _: &mut yrs::TransactionMut<'doc>) -> (ItemContent, Option<Self>) {
         unsafe {
             if self.tag <= 0 {
-                let value = self.into();
-                (ItemContent::Any(vec![value]), None)
+                (ItemContent::Any(vec![self.into()]), None)
             } else if self.tag == Y_DOC {
                 let doc = self.value.doc.as_ref().unwrap();
                 (ItemContent::Doc(None, doc.clone()), None)
@@ -2562,7 +2571,7 @@ impl Prelim for YInput {
                             .to_str()
                             .unwrap()
                             .to_owned();
-                        let value = values.offset(i).read().into();
+                        let value = values.offset(i).read();
                         map.insert(txn, key, value);
                         i += 1;
                     }
