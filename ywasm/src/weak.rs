@@ -1,9 +1,8 @@
 use crate::collection::SharedCollection;
-use crate::js::Js;
+use crate::js::{Callback, Js};
 use crate::transaction::YTransaction;
 use crate::{ImplicitTransaction, Result};
 use std::sync::Arc;
-use wasm_bindgen::convert::IntoWasmAbi;
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
 use yrs::branch::BranchPtr;
@@ -186,9 +185,8 @@ impl YWeakLink {
 
     /// Subscribes to all operations happening over this instance of `YMap`. All changes are
     /// batched and eventually triggered during transaction commit phase.
-    /// Returns an `YObserver` which, when free'd, will unsubscribe current callback.
     #[wasm_bindgen(js_name = observe)]
-    pub fn observe(&mut self, f: js_sys::Function) -> Result<()> {
+    pub fn observe(&mut self, callback: js_sys::Function) -> Result<()> {
         match &self.0 {
             SharedCollection::Prelim(_) => {
                 Err(JsValue::from_str(crate::js::errors::INVALID_PRELIM_OP))
@@ -196,11 +194,13 @@ impl YWeakLink {
             SharedCollection::Integrated(c) => {
                 let txn = c.transact()?;
                 let weak = c.resolve(&txn)?;
-                let abi = f.clone().into_abi();
+                let abi = callback.subscription_key();
                 weak.observe_with(abi, move |txn, e| {
                     let e = YWeakLinkEvent::new(e, txn).into();
                     let txn = YTransaction::from_ref(txn);
-                    f.call2(&JsValue::UNDEFINED, &e, &txn.into()).unwrap();
+                    callback
+                        .call2(&JsValue::UNDEFINED, &e, &txn.into())
+                        .unwrap();
                 });
                 Ok(())
             }
@@ -217,7 +217,7 @@ impl YWeakLink {
             SharedCollection::Integrated(c) => {
                 let txn = c.transact()?;
                 let shared_ref = c.resolve(&txn)?;
-                let abi = callback.clone().into_abi();
+                let abi = callback.subscription_key();
                 Ok(shared_ref.unobserve(abi))
             }
         }
@@ -226,9 +226,8 @@ impl YWeakLink {
     /// Subscribes to all operations happening over this Y shared type, as well as events in
     /// shared types stored within this one. All changes are batched and eventually triggered
     /// during transaction commit phase.
-    /// Returns an `YEventObserver` which, when free'd, will unsubscribe current callback.
     #[wasm_bindgen(js_name = observeDeep)]
-    pub fn observe_deep(&mut self, f: js_sys::Function) -> Result<()> {
+    pub fn observe_deep(&mut self, callback: js_sys::Function) -> Result<()> {
         match &self.0 {
             SharedCollection::Prelim(_) => {
                 Err(JsValue::from_str(crate::js::errors::INVALID_PRELIM_OP))
@@ -236,11 +235,13 @@ impl YWeakLink {
             SharedCollection::Integrated(c) => {
                 let txn = c.transact()?;
                 let weak = c.resolve(&txn)?;
-                let abi = f.clone().into_abi();
+                let abi = callback.subscription_key();
                 weak.observe_deep_with(abi, move |txn, e| {
                     let e = crate::js::convert::events_into_js(txn, e);
                     let txn = YTransaction::from_ref(txn);
-                    f.call2(&JsValue::UNDEFINED, &e, &txn.into()).unwrap();
+                    callback
+                        .call2(&JsValue::UNDEFINED, &e, &txn.into())
+                        .unwrap();
                 });
                 Ok(())
             }
@@ -257,7 +258,7 @@ impl YWeakLink {
             SharedCollection::Integrated(c) => {
                 let txn = c.transact()?;
                 let shared_ref = c.resolve(&txn)?;
-                let abi = callback.clone().into_abi();
+                let abi = callback.subscription_key();
                 Ok(shared_ref.unobserve_deep(abi))
             }
         }

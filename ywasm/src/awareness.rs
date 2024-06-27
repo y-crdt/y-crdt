@@ -1,7 +1,6 @@
 use gloo_utils::format::JsValueSerdeExt;
 use js_sys::Uint8Array;
 use serde_json::Value;
-use wasm_bindgen::convert::IntoWasmAbi;
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
 
@@ -10,6 +9,7 @@ use yrs::updates::decoder::Decode;
 use yrs::updates::encoder::Encode;
 
 use crate::doc::YDoc;
+use crate::js::Callback;
 
 #[wasm_bindgen]
 pub struct Awareness {
@@ -84,19 +84,26 @@ impl Awareness {
         Ok(result)
     }
 
-    #[wasm_bindgen(js_name = onUpdate)]
-    pub fn on_update(&self, callback: js_sys::Function) {
-        let abi = callback.clone().into_abi();
-        self.inner.on_update_with(abi, move |_, e| {
-            let json = JsValue::from_serde(e.summary()).unwrap();
-            callback.call1(&JsValue::NULL, &json).unwrap();
-        });
+    #[wasm_bindgen(js_name = on)]
+    pub fn on(&self, event: &str, callback: js_sys::Function) -> crate::Result<()> {
+        let abi = callback.subscription_key();
+        match event {
+            "update" => self.inner.on_update_with(abi, move |_, e| {
+                let json = JsValue::from_serde(e.summary()).unwrap();
+                callback.call1(&JsValue::NULL, &json).unwrap();
+            }),
+            unknown => return Err(JsValue::from_str(&format!("Unknown event: {}", unknown))),
+        }
+        Ok(())
     }
 
-    #[wasm_bindgen(js_name = offUpdate)]
-    pub fn off_update(&self, callback: js_sys::Function) -> bool {
-        let abi = callback.clone().into_abi();
-        self.inner.unobserve_update(abi)
+    #[wasm_bindgen(js_name = off)]
+    pub fn off(&self, event: &str, callback: js_sys::Function) -> crate::Result<bool> {
+        let abi = callback.subscription_key();
+        match event {
+            "update" => Ok(self.inner.unobserve_update(abi)),
+            unknown => return Err(JsValue::from_str(&format!("Unknown event: {}", unknown))),
+        }
     }
 }
 

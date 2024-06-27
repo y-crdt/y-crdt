@@ -166,12 +166,20 @@ where
     fn remove(&self, id: &Origin) -> bool {
         while let Some(head) = self.head.load_full() {
             if &head.uid == id {
+                // the element to remove is the head of the list
+                // we need to swap head pointer of self to the next element
                 let next = head.next.load_full();
                 let prev = self.head.compare_and_swap(&head, next);
                 if !std::ptr::eq(prev.as_raw(), Arc::as_ptr(&head)) {
+                    // head changed, retry
                     continue;
+                } else {
+                    return true;
                 }
             } else {
+                // the element to remove is somewhere in the middle of the list
+                // we need to find it and repoint its predecessor's next pointer
+                // to its successor
                 return Observer::remove(head.clone(), id);
             }
         }
@@ -360,6 +368,39 @@ mod test {
         }
         assert_eq!(counter.load(Ordering::SeqCst), 100);
         drop(subscriptions);
+        assert_eq!(counter.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn unsubscribe() {
+        let counter = Arc::new(AtomicI32::new(0));
+        let o: Observer<DropCounter> = Observer::new();
+        for i in 0..100 {
+            assert_eq!(counter.load(Ordering::SeqCst), 0);
+
+            o.subscribe_with(i.into(), DropCounter::new(counter.clone()));
+
+            assert_eq!(counter.load(Ordering::SeqCst), 1);
+
+            let unsubscribed = o.unsubscribe(&i.into());
+            assert!(unsubscribed, "unsubscribe failed for {}", i);
+        }
+    }
+
+    #[test]
+    fn unsubscribe2() {
+        let counter = Arc::new(AtomicI32::new(0));
+        let o: Observer<DropCounter> = Observer::new();
+        for i in 0..100 {
+            o.subscribe_with(i.into(), DropCounter::new(counter.clone()));
+        }
+
+        assert_eq!(counter.load(Ordering::SeqCst), 100);
+
+        for i in 0..100 {
+            let unsubscribed = o.unsubscribe(&i.into());
+            assert!(unsubscribed, "unsubscribe failed for {}", i);
+        }
         assert_eq!(counter.load(Ordering::SeqCst), 0);
     }
 

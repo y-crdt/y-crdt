@@ -1,6 +1,6 @@
 use crate::array::YArray;
 use crate::collection::SharedCollection;
-use crate::js::Js;
+use crate::js::{Callback, Js};
 use crate::map::YMap;
 use crate::text::YText;
 use crate::transaction::YTransaction;
@@ -10,7 +10,6 @@ use crate::Result;
 use serde::Deserialize;
 use std::iter::FromIterator;
 use std::ops::Deref;
-use wasm_bindgen::convert::IntoWasmAbi;
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
 use yrs::types::TYPE_REFS_DOC;
@@ -211,36 +210,36 @@ impl YDoc {
     }
 
     #[wasm_bindgen(js_name = on)]
-    pub fn on(&self, event: &str, f: js_sys::Function) -> Result<()> {
-        let abi = f.clone().into_abi();
+    pub fn on(&self, event: &str, callback: js_sys::Function) -> Result<()> {
+        let abi = callback.subscription_key();
         let result = match event {
             "update" => self.observe_update_v1_with(abi, move |txn, e| {
                 let update = js_sys::Uint8Array::from(e.update.as_slice());
                 let txn: JsValue = YTransaction::from_ref(txn).into();
-                f.call2(&JsValue::UNDEFINED, &update, &txn).unwrap();
+                callback.call2(&JsValue::UNDEFINED, &update, &txn).unwrap();
             }),
             "updateV2" => self.observe_update_v2_with(abi, move |txn, e| {
                 let update = js_sys::Uint8Array::from(e.update.as_slice());
                 let txn: JsValue = YTransaction::from_ref(txn).into();
-                f.call2(&JsValue::UNDEFINED, &update, &txn).unwrap();
+                callback.call2(&JsValue::UNDEFINED, &update, &txn).unwrap();
             }),
             "subdocs" => self.observe_subdocs_with(abi, move |txn, e| {
                 let event: JsValue = YSubdocsEvent::new(e).into();
                 let txn: JsValue = YTransaction::from_ref(txn).into();
-                f.call2(&JsValue::UNDEFINED, &event, &txn).unwrap();
+                callback.call2(&JsValue::UNDEFINED, &event, &txn).unwrap();
             }),
             "destroy" => self.observe_destroy_with(abi, move |txn, e| {
                 let event: JsValue = YDoc::from(e.clone()).into();
                 let txn: JsValue = YTransaction::from_ref(txn).into();
-                f.call2(&JsValue::UNDEFINED, &event, &txn).unwrap();
+                callback.call2(&JsValue::UNDEFINED, &event, &txn).unwrap();
             }),
             "afterTransaction" => self.observe_after_transaction_with(abi, move |txn| {
                 let txn: JsValue = YTransaction::from_ref(txn).into();
-                f.call1(&JsValue::UNDEFINED, &txn).unwrap();
+                callback.call1(&JsValue::UNDEFINED, &txn).unwrap();
             }),
             "cleanup" => self.observe_transaction_cleanup_with(abi, move |txn, _| {
                 let txn = YTransaction::from_ref(txn).into();
-                f.call1(&JsValue::UNDEFINED, &txn).unwrap();
+                callback.call1(&JsValue::UNDEFINED, &txn).unwrap();
             }),
             other => {
                 return Err(JsValue::from_str(&format!("unknown event: '{}'", other)).into());
@@ -251,8 +250,8 @@ impl YDoc {
     }
 
     #[wasm_bindgen(js_name = off)]
-    pub fn off(&self, event: &str, f: js_sys::Function) -> Result<bool> {
-        let abi = f.clone().into_abi();
+    pub fn off(&self, event: &str, callback: js_sys::Function) -> Result<bool> {
+        let abi = callback.subscription_key();
         let result = match event {
             "update" => self.unobserve_update_v1(abi),
             "updateV2" => self.unobserve_update_v2(abi),

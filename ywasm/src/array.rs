@@ -1,11 +1,10 @@
 use crate::collection::SharedCollection;
-use crate::js::{Js, ValueRef, YRange};
+use crate::js::{Callback, Js, ValueRef, YRange};
 use crate::transaction::{ImplicitTransaction, YTransaction};
 use crate::weak::YWeakLink;
 use crate::Result;
 use gloo_utils::format::JsValueSerdeExt;
 use std::iter::FromIterator;
-use wasm_bindgen::convert::IntoWasmAbi;
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
 use yrs::types::array::ArrayEvent;
@@ -267,9 +266,8 @@ impl YArray {
 
     /// Subscribes to all operations happening over this instance of `YArray`. All changes are
     /// batched and eventually triggered during transaction commit phase.
-    /// Returns an `Observer` which, when free'd, will unsubscribe current callback.
     #[wasm_bindgen(js_name = observe)]
-    pub fn observe(&self, f: js_sys::Function) -> Result<()> {
+    pub fn observe(&self, callback: js_sys::Function) -> Result<()> {
         match &self.0 {
             SharedCollection::Prelim(_) => {
                 Err(JsValue::from_str(crate::js::errors::INVALID_PRELIM_OP))
@@ -277,11 +275,12 @@ impl YArray {
             SharedCollection::Integrated(c) => {
                 let txn = c.transact()?;
                 let array = c.resolve(&txn)?;
-                let abi = f.clone().into_abi();
+                let abi = callback.subscription_key();
                 array.observe_with(abi, move |txn, e| {
                     let e = YArrayEvent::new(e, txn);
                     let txn = YTransaction::from_ref(txn);
-                    f.call2(&JsValue::UNDEFINED, &e.into(), &txn.into())
+                    callback
+                        .call2(&JsValue::UNDEFINED, &e.into(), &txn.into())
                         .unwrap();
                 });
                 Ok(())
@@ -290,7 +289,7 @@ impl YArray {
     }
 
     #[wasm_bindgen(js_name = unobserve)]
-    pub fn unobserve(&self, f: js_sys::Function) -> Result<bool> {
+    pub fn unobserve(&self, callback: js_sys::Function) -> Result<bool> {
         match &self.0 {
             SharedCollection::Prelim(_) => {
                 Err(JsValue::from_str(crate::js::errors::INVALID_PRELIM_OP))
@@ -298,7 +297,7 @@ impl YArray {
             SharedCollection::Integrated(c) => {
                 let txn = c.transact()?;
                 let array = c.resolve(&txn)?;
-                let abi = f.clone().into_abi();
+                let abi = callback.subscription_key();
                 Ok(array.unobserve(abi))
             }
         }
@@ -307,9 +306,8 @@ impl YArray {
     /// Subscribes to all operations happening over this Y shared type, as well as events in
     /// shared types stored within this one. All changes are batched and eventually triggered
     /// during transaction commit phase.
-    /// Returns an `YEventObserver` which, when free'd, will unsubscribe current callback.
     #[wasm_bindgen(js_name = observeDeep)]
-    pub fn observe_deep(&self, f: js_sys::Function) -> Result<()> {
+    pub fn observe_deep(&self, callback: js_sys::Function) -> Result<()> {
         match &self.0 {
             SharedCollection::Prelim(_) => {
                 Err(JsValue::from_str(crate::js::errors::INVALID_PRELIM_OP))
@@ -317,11 +315,13 @@ impl YArray {
             SharedCollection::Integrated(c) => {
                 let txn = c.transact()?;
                 let array = c.resolve(&txn)?;
-                let abi = f.clone().into_abi();
+                let abi = callback.subscription_key();
                 array.observe_deep_with(abi, move |txn, e| {
                     let e = crate::js::convert::events_into_js(txn, e);
                     let txn = YTransaction::from_ref(txn);
-                    f.call2(&JsValue::UNDEFINED, &e, &txn.into()).unwrap();
+                    callback
+                        .call2(&JsValue::UNDEFINED, &e, &txn.into())
+                        .unwrap();
                 });
                 Ok(())
             }
@@ -329,7 +329,7 @@ impl YArray {
     }
 
     #[wasm_bindgen(js_name = unobserveDeep)]
-    pub fn unobserve_deep(&self, f: js_sys::Function) -> Result<bool> {
+    pub fn unobserve_deep(&self, callback: js_sys::Function) -> Result<bool> {
         match &self.0 {
             SharedCollection::Prelim(_) => {
                 Err(JsValue::from_str(crate::js::errors::INVALID_PRELIM_OP))
@@ -337,7 +337,7 @@ impl YArray {
             SharedCollection::Integrated(c) => {
                 let txn = c.transact()?;
                 let array = c.resolve(&txn)?;
-                let abi = f.clone().into_abi();
+                let abi = callback.subscription_key();
                 Ok(array.unobserve_deep(abi))
             }
         }

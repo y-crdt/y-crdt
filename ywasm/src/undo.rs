@@ -2,7 +2,6 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use js_sys::Reflect;
-use wasm_bindgen::convert::IntoWasmAbi;
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
 
@@ -11,7 +10,7 @@ use yrs::undo::{EventKind, UndoManager};
 use yrs::{Doc, Transact};
 
 use crate::doc::YDoc;
-use crate::js::{Js, Shared};
+use crate::js::{Callback, Js, Shared};
 use crate::transaction::YTransaction;
 use crate::Result;
 
@@ -129,7 +128,7 @@ impl YUndoManager {
 
     #[wasm_bindgen(js_name = on)]
     pub fn on(&mut self, event: &str, callback: js_sys::Function) -> crate::Result<()> {
-        let abi = callback.clone().into_abi();
+        let abi = callback.subscription_key();
         match event {
             "stack-item-added" => self.0.observe_item_added_with(abi, move |txn, e| {
                 let event: JsValue = YUndoEvent::new(e).into();
@@ -162,7 +161,7 @@ impl YUndoManager {
 
     #[wasm_bindgen(js_name = off)]
     pub fn off(&mut self, event: &str, callback: js_sys::Function) -> crate::Result<bool> {
-        let abi = callback.clone().into_abi();
+        let abi = callback.subscription_key();
         match event {
             "stack-item-added" => Ok(self.0.unobserve_item_added(abi)),
             "stack-item-popped" => Ok(self.0.unobserve_item_popped(abi)),

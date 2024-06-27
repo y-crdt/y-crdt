@@ -28,7 +28,7 @@ export const testOnUpdate = tc => {
     t.compare(actual, update)
 
     // check unsubscribe
-    x.assert(d2.off('update', callback), 'off "update" failed')
+    t.assert(d2.off('update', callback), 'off "update" failed')
     actual = null
     origin = null
 
@@ -203,7 +203,7 @@ export const testSubdoc = tc => {
          * @type {Array<any>|null}
          */
         let event = /** @type {any} */ (null)
-        doc2.onSubdocs(subdocs => {
+        doc2.on('subdocs', subdocs => {
             let added = Array.from(subdocs.added).map(x => x.guid).sort()
             let removed = Array.from(subdocs.removed).map(x => x.guid).sort()
             let loaded = Array.from(subdocs.loaded).map(x => x.guid).sort()

@@ -4,21 +4,21 @@ import * as t from 'lib0/testing'
 /**
  * @param {t.TestCase} tc
  */
-const testAwareness = tc => {
+export const testAwareness = tc => {
     const doc1 = new Y.YDoc({clientID: 0})
     const doc2 = new Y.YDoc({clientID: 1})
     const aw1 = new Y.Awareness(doc1)
     const aw2 = new Y.Awareness(doc2)
-    aw1.onUpdate(/** @param {any} p */({added, updated, removed}) => {
+    aw1.on('update', /** @param {any} p */({added, updated, removed}) => {
         const enc = Y.encodeAwarenessUpdate(aw1, added.concat(updated).concat(removed))
         Y.applyAwarenessUpdate(aw2, enc, 'custom')
     })
     let lastChangeLocal = /** @type {any} */ (null)
-    aw1.onUpdate(change => {
+    aw1.on('update', change => {
         lastChangeLocal = change
     })
     let lastChange = /** @type {any} */ (null)
-    aw2.onUpdate(change => {
+    aw2.on('update', change => {
         lastChange = change
     })
     aw1.setLocalState({x: 3})
