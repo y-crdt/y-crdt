@@ -1,14 +1,16 @@
 cmake_minimum_required(VERSION 3.15.3)
 project(yrs-ffi-tests)
-set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 message(STATUS "current project dir: " ${PROJECT_SOURCE_DIR})
 add_executable(yrs-ffi-tests main.cpp)
 
 if(WIN32)
-add_custom_target(yrs-deps
-    # DEBUG
-    COMMAND ${CMAKE_COMMAND} -E copy "${PROJECT_SOURCE_DIR}/../target/debug/yrs.lib" "${PROJECT_SOURCE_DIR}/lib"
+    target_compile_options(yrs-ffi-tests PRIVATE "$<$<CXX_COMPILER_ID:MSVC>:/utf-8>")
+    add_custom_target(yrs-deps
+        # DEBUG
+        COMMAND ${CMAKE_COMMAND} -E copy "${PROJECT_SOURCE_DIR}/../target/debug/yrs.lib" "${PROJECT_SOURCE_DIR}/lib"
     )
 else()
     add_custom_target(yrs-deps
