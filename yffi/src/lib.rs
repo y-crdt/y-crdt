@@ -1157,7 +1157,7 @@ pub const ERR_NOT_ENOUGH_MEMORY: u8 = 7;
 
 fn err_code(e: Error) -> u8 {
     match e {
-        Error::VarIntSizeExceeded(_) => ERR_CODE_VAR_INT,
+        Error::InvalidVarInt => ERR_CODE_VAR_INT,
         Error::EndOfBuffer(_) => ERR_CODE_EOS,
         Error::UnexpectedValue => ERR_CODE_UNEXPECTED_VALUE,
         Error::InvalidJSON(_) => ERR_CODE_INVALID_JSON,
