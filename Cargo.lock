@@ -1100,6 +1100,7 @@ dependencies = [
  "gloo-utils",
  "js-sys",
  "serde",
+ "serde_json",
  "wasm-bindgen",
  "wasm-bindgen-test",
  "wee_alloc",

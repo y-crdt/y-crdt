@@ -29,7 +29,6 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::convert::{TryFrom, TryInto};
 use std::fmt::Formatter;
 use std::marker::PhantomData;
-use std::ptr::NonNull;
 use std::sync::Arc;
 
 /// Type ref identifier for an [ArrayRef] type.
@@ -199,6 +198,7 @@ impl Decode for TypeRef {
     }
 }
 
+#[cfg(not(target_family = "wasm"))]
 pub trait Observable: AsRef<Branch> {
     type Event;
 
@@ -213,7 +213,7 @@ pub trait Observable: AsRef<Branch> {
     /// Returns a [Subscription] which, when dropped, will unsubscribe current callback.
     fn observe<F>(&self, f: F) -> Subscription
     where
-        F: Fn(&TransactionMut, &Self::Event) -> () + 'static,
+        F: Fn(&TransactionMut, &Self::Event) + Send + Sync + 'static,
         Event: AsRef<Self::Event>,
     {
         let mut branch = BranchPtr::from(self.as_ref());
@@ -221,6 +221,67 @@ pub trait Observable: AsRef<Branch> {
             let mapped_event = e.as_ref();
             f(txn, mapped_event)
         })
+    }
+
+    /// Subscribes a given callback to be triggered whenever current y-type is changed.
+    /// A callback is triggered whenever a transaction gets committed. This function does not
+    /// trigger if changes have been observed by nested shared collections.
+    ///
+    /// All array-like event changes can be tracked by using [Event::delta] method.
+    /// All map-like event changes can be tracked by using [Event::keys] method.
+    /// All text-like event changes can be tracked by using [TextEvent::delta] method.
+    ///
+    /// Provided key may be used later to unsubscribe from the event.
+    fn observe_with<K, F>(&self, key: K, f: F)
+    where
+        K: Into<Origin>,
+        F: Fn(&TransactionMut, &Self::Event) + Send + Sync + 'static,
+        Event: AsRef<Self::Event>,
+    {
+        let mut branch = BranchPtr::from(self.as_ref());
+        branch.observe_with(key.into(), move |txn, e| {
+            let mapped_event = e.as_ref();
+            f(txn, mapped_event)
+        })
+    }
+
+    /// Unsubscribes a given callback identified by key, that was previously subscribed using [Self::observe_with].
+    fn unobserve<K: Into<Origin>>(&self, key: K) -> bool {
+        let mut branch = BranchPtr::from(self.as_ref());
+        branch.unobserve(&key.into())
+    }
+}
+
+#[cfg(target_family = "wasm")]
+pub trait Observable: AsRef<Branch> {
+    type Event;
+
+    /// Subscribes a given callback to be triggered whenever current y-type is changed.
+    /// A callback is triggered whenever a transaction gets committed. This function does not
+    /// trigger if changes have been observed by nested shared collections.
+    ///
+    /// All array-like event changes can be tracked by using [Event::delta] method.
+    /// All map-like event changes can be tracked by using [Event::keys] method.
+    /// All text-like event changes can be tracked by using [TextEvent::delta] method.
+    ///
+    /// Provided key may be used later to unsubscribe from the event.
+    fn observe_with<K, F>(&self, key: K, f: F)
+    where
+        K: Into<Origin>,
+        F: Fn(&TransactionMut, &Self::Event) + 'static,
+        Event: AsRef<Self::Event>,
+    {
+        let mut branch = BranchPtr::from(self.as_ref());
+        branch.observe_with(key.into(), move |txn, e| {
+            let mapped_event = e.as_ref();
+            f(txn, mapped_event)
+        })
+    }
+
+    /// Unsubscribes a given callback identified by key, that was previously subscribed using [Self::observe_with].
+    fn unobserve<K: Into<Origin>>(&self, key: K) -> bool {
+        let mut branch = BranchPtr::from(self.as_ref());
+        branch.unobserve(&key.into())
     }
 }
 
@@ -260,6 +321,7 @@ pub trait SharedRef: From<BranchPtr> + AsRef<Branch> {
 
 /// Trait implemented by all Y-types, allowing for observing events which are emitted by
 /// nested types.
+#[cfg(not(target_family = "wasm"))]
 pub trait DeepObservable: AsRef<Branch> {
     /// Subscribe a callback `f` for all events emitted by this and nested collaborative types.
     /// Callback is accepting transaction which triggered that event and event itself, wrapped
@@ -273,10 +335,71 @@ pub trait DeepObservable: AsRef<Branch> {
     /// when dropped.
     fn observe_deep<F>(&self, f: F) -> Subscription
     where
-        F: Fn(&TransactionMut, &Events) -> () + 'static,
+        F: Fn(&TransactionMut, &Events) + Send + Sync + 'static,
     {
         let branch = self.as_ref();
-        branch.deep_observers.subscribe(f)
+        branch.deep_observers.subscribe(Box::new(f))
+    }
+
+    /// Subscribe a callback `f` for all events emitted by this and nested collaborative types.
+    /// Callback is accepting transaction which triggered that event and event itself, wrapped
+    /// within an [Event] structure.
+    ///
+    /// In case when a nested shared type (e.g. [MapRef],[ArrayRef],[TextRef]) is being removed,
+    /// all of its contents will be removed first. So the observed value will be empty. For example,
+    /// The value wrapped in the [EntryChange::Removed] of the [Event::Map] will be empty.
+    ///
+    /// This method uses a subscription key, which can be later used to cancel this callback via
+    /// [Self::unobserve_deep].
+    fn observe_deep_with<K, F>(&self, key: K, f: F)
+    where
+        K: Into<Origin>,
+        F: Fn(&TransactionMut, &Events) + Send + Sync + 'static,
+    {
+        let branch = self.as_ref();
+        branch
+            .deep_observers
+            .subscribe_with(key.into(), Box::new(f))
+    }
+
+    /// Unsubscribe a callback identified by a given key, that was previously subscribed using
+    /// [Self::observe_deep_with].
+    fn unobserve_deep<K: Into<Origin>>(&self, key: K) -> bool {
+        let branch = self.as_ref();
+        branch.deep_observers.unsubscribe(&key.into())
+    }
+}
+
+/// Trait implemented by all Y-types, allowing for observing events which are emitted by
+/// nested types.
+#[cfg(target_family = "wasm")]
+pub trait DeepObservable: AsRef<Branch> {
+    /// Subscribe a callback `f` for all events emitted by this and nested collaborative types.
+    /// Callback is accepting transaction which triggered that event and event itself, wrapped
+    /// within an [Event] structure.
+    ///
+    /// In case when a nested shared type (e.g. [MapRef],[ArrayRef],[TextRef]) is being removed,
+    /// all of its contents will be removed first. So the observed value will be empty. For example,
+    /// The value wrapped in the [EntryChange::Removed] of the [Event::Map] will be empty.
+    ///
+    /// This method uses a subscription key, which can be later used to cancel this callback via
+    /// [Self::unobserve_deep].
+    fn observe_deep_with<K, F>(&self, key: K, f: F)
+    where
+        K: Into<Origin>,
+        F: Fn(&TransactionMut, &Events) + 'static,
+    {
+        let branch = self.as_ref();
+        branch
+            .deep_observers
+            .subscribe_with(key.into(), Box::new(f))
+    }
+
+    /// Unsubscribe a callback identified by a given key, that was previously subscribed using
+    /// [Self::observe_deep_with].
+    fn unobserve_deep<K: Into<Origin>>(&self, key: K) -> bool {
+        let branch = self.as_ref();
+        branch.deep_observers.unsubscribe(&key.into())
     }
 }
 
@@ -977,20 +1100,17 @@ pub(crate) fn event_change_set(txn: &TransactionMut, start: Option<ItemPtr>) -> 
     ChangeSet::new(added, deleted, delta)
 }
 
-pub struct Events(Vec<NonNull<Event>>);
+pub struct Events<'a>(Vec<&'a Event>);
 
-impl Events {
-    pub(crate) fn new(events: &mut Vec<&Event>) -> Self {
+impl<'a> Events<'a> {
+    pub(crate) fn new(events: &Vec<&'a Event>) -> Self {
+        let mut events = events.clone();
         events.sort_by(|&a, &b| {
             let path1 = a.path();
             let path2 = b.path();
             path1.len().cmp(&path2.len())
         });
-        let mut inner = Vec::with_capacity(events.len());
-        for &e in events.iter() {
-            inner.push(unsafe { NonNull::new_unchecked(e as *const Event as *mut Event) });
-        }
-        Events(inner)
+        Events(events)
     }
 
     pub fn iter(&self) -> EventsIter {
@@ -998,14 +1118,14 @@ impl Events {
     }
 }
 
-pub struct EventsIter<'a>(std::slice::Iter<'a, NonNull<Event>>);
+pub struct EventsIter<'a>(std::slice::Iter<'a, &'a Event>);
 
 impl<'a> Iterator for EventsIter<'a> {
     type Item = &'a Event;
 
     fn next(&mut self) -> Option<Self::Item> {
         let e = self.0.next()?;
-        Some(unsafe { e.as_ref() })
+        Some(e)
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {

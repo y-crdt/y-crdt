@@ -43,7 +43,10 @@ pub trait Protocol {
     /// To be called whenever a new connection has been accepted. Returns an encoded list of
     /// messages to be send back to initiator. This binary may contain multiple messages inside,
     /// stored one after another.
-    fn start<E: Encoder>(&self, awareness: &Awareness, encoder: &mut E) -> Result<(), Error> {
+    fn start<E>(&self, awareness: &Awareness, encoder: &mut E) -> Result<(), Error>
+    where
+        E: Encoder,
+    {
         let (sv, update) = {
             let sv = awareness.doc().transact().state_vector();
             let update = awareness.update()?;
@@ -334,6 +337,7 @@ mod test {
     use crate::updates::decoder::{Decode, DecoderV1};
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
     use crate::{Doc, GetString, ReadTxn, StateVector, Text, Transact, Update};
+    use serde_json::json;
     use std::collections::HashMap;
 
     #[test]
@@ -342,7 +346,15 @@ mod test {
         let txt = doc.get_or_insert_text("text");
         txt.push(&mut doc.transact_mut(), "hello world");
         let mut awareness = Awareness::new(doc);
-        awareness.set_local_state("{\"user\":{\"name\":\"Anonymous 50\",\"color\":\"#30bced\",\"colorLight\":\"#30bced33\"}}");
+        awareness
+            .set_local_state(json!({
+              "user":{
+                "name": "Anonymous 50",
+                "color": "#30bced",
+                "colorLight": "#30bced33"
+              }
+            }))
+            .unwrap();
 
         let messages = [
             crate::sync::Message::Sync(crate::sync::SyncMessage::SyncStep1(
@@ -355,7 +367,11 @@ mod test {
                     .encode_state_as_update_v1(&StateVector::default()),
             )),
             crate::sync::Message::Awareness(awareness.update().unwrap()),
-            crate::sync::Message::Auth(Some("reason".to_string())),
+            crate::sync::Message::Auth(Some(
+                "reason
+            }"
+                .to_string(),
+            )),
             crate::sync::Message::AwarenessQuery,
         ];
 
@@ -458,7 +474,7 @@ mod test {
         let mut a1 = Awareness::new(Doc::with_client_id(1));
         let mut a2 = Awareness::new(Doc::with_client_id(2));
 
-        a1.set_local_state("{x:3}");
+        a1.set_local_state(json!({"x":3})).unwrap();
         let result = protocol.handle_awareness_query(&a1).unwrap();
 
         assert_eq!(
@@ -471,6 +487,6 @@ mod test {
             assert!(result.is_none());
         }
 
-        assert_eq!(a2.clients(), &HashMap::from([(1, "{x:3}".to_owned())]));
+        assert_eq!(a2.clients(), &HashMap::from([(1, "{\"x\":3}".to_owned())]));
     }
 }

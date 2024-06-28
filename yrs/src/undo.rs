@@ -1,18 +1,18 @@
+use std::collections::HashSet;
+use std::fmt::Formatter;
+use std::ops::{Deref, DerefMut};
+use std::sync::atomic::{AtomicPtr, Ordering};
+use std::sync::Arc;
+
 use crate::block::ItemPtr;
 use crate::branch::{Branch, BranchPtr};
 use crate::doc::TransactionAcqError;
 use crate::iter::TxnIterator;
 use crate::slice::BlockSlice;
+use crate::sync::Clock;
 use crate::transaction::Origin;
-use crate::{DeleteSet, Doc, ObserverMut, Subscription, Transact, TransactionMut, ID};
-use std::cell::Cell;
-use std::collections::HashSet;
-use std::fmt::Formatter;
-use std::ops::{Deref, DerefMut};
-use std::rc::Rc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use crate::{DeleteSet, Doc, Observer, Subscription, Transact, TransactionMut, ID};
 
-#[repr(transparent)]
 /// Undo manager is a structure used to perform undo/redo operations over the associated shared
 /// type(s).
 ///
@@ -34,7 +34,25 @@ use std::time::{SystemTime, UNIX_EPOCH};
 ///    item finished.
 /// - [UndoManager::observe_item_popped], which is fired whenever [StackItem] is being from undo
 ///    manager as a result of calling either [UndoManager::undo] or [UndoManager::redo] method.
-pub struct UndoManager<M>(Box<Inner<M>>);
+#[repr(transparent)]
+#[derive(Clone)]
+pub struct UndoManager<M>(Arc<Inner<M>>);
+
+#[cfg(not(target_family = "wasm"))]
+type UndoFn<M> = Box<dyn Fn(&TransactionMut, &mut Event<M>) + Send + Sync + 'static>;
+
+#[cfg(target_family = "wasm")]
+type UndoFn<M> = Box<dyn Fn(&TransactionMut, &mut Event<M>) + 'static>;
+
+#[cfg(not(target_family = "wasm"))]
+pub trait Meta: Default + Send + Sync {}
+#[cfg(not(target_family = "wasm"))]
+impl<M> Meta for M where M: Default + Send + Sync {}
+
+#[cfg(target_family = "wasm")]
+pub trait Meta: Default {}
+#[cfg(target_family = "wasm")]
+impl<M> Meta for M where M: Default {}
 
 struct Inner<M> {
     doc: Doc,
@@ -42,23 +60,22 @@ struct Inner<M> {
     options: Options,
     undo_stack: UndoStack<M>,
     redo_stack: UndoStack<M>,
-    undoing: Cell<bool>,
-    redoing: Cell<bool>,
+    undoing: bool,
+    redoing: bool,
     last_change: u64,
-    on_after_transaction: Option<Subscription>,
-    on_destroy: Option<Subscription>,
-    observer_added: ObserverMut<Event<M>>,
-    observer_updated: ObserverMut<Event<M>>,
-    observer_popped: ObserverMut<Event<M>>,
+    observer_added: Observer<UndoFn<M>>,
+    observer_updated: Observer<UndoFn<M>>,
+    observer_popped: Observer<UndoFn<M>>,
 }
 
 impl<M> UndoManager<M>
 where
-    M: Default + 'static,
+    M: Meta + 'static,
 {
     /// Creates a new instance of the [UndoManager] working in a `scope` of a particular shared
     /// type and document. While it's possible for undo manager to observe multiple shared types
     /// (see: [UndoManager::expand_scope]), it can only work with a single document at the same time.
+    #[cfg(not(target_family = "wasm"))]
     pub fn new<T>(doc: &Doc, scope: &T) -> Self
     where
         T: AsRef<Branch>,
@@ -71,6 +88,11 @@ where
         &self.0.doc
     }
 
+    #[inline]
+    fn inner(&mut self) -> &mut Inner<M> {
+        Arc::get_mut(&mut self.0).unwrap()
+    }
+
     /// Creates a new instance of the [UndoManager] working in a `scope` of a particular shared
     /// type and document. While it's possible for undo manager to observe multiple shared types
     /// (see: [UndoManager::expand_scope]), it can only work with a single document at the same time.
@@ -79,47 +101,52 @@ where
         T: AsRef<Branch>,
     {
         let scope = BranchPtr::from(scope.as_ref());
-        let mut inner = Box::new(Inner {
+        let mut inner = Arc::new(Inner {
             doc: doc.clone(),
             scope: HashSet::from([scope]),
             options,
             undo_stack: UndoStack::default(),
             redo_stack: UndoStack::default(),
-            undoing: Cell::new(false),
-            redoing: Cell::new(false),
+            undoing: false,
+            redoing: false,
             last_change: 0,
-            on_after_transaction: None,
-            on_destroy: None,
-            observer_added: ObserverMut::new(),
-            observer_updated: ObserverMut::new(),
-            observer_popped: ObserverMut::new(),
+            observer_added: Observer::new(),
+            observer_updated: Observer::new(),
+            observer_popped: Observer::new(),
         });
-        let inner_ptr = inner.as_mut() as *mut Inner<M>;
-        inner
-            .options
-            .tracked_origins
-            .insert(Origin::from(inner_ptr as usize));
-        inner.on_destroy = Some(
-            doc.observe_destroy(move |_, _| Self::handle_destroy(inner_ptr))
-                .unwrap(),
-        );
-        inner.on_after_transaction = Some(
-            doc.observe_after_transaction(move |txn| {
-                let inner = unsafe { inner_ptr.as_mut().unwrap() };
-                Self::handle_after_transaction(inner, txn);
-            })
-            .unwrap(),
-        );
+        let origin = Origin::from(Arc::as_ptr(&inner) as usize);
+        let inner_mut = Arc::get_mut(&mut inner).unwrap();
+        inner_mut.options.tracked_origins.insert(origin.clone());
+        let ptr = AtomicPtr::new(inner_mut as *mut Inner<M>);
+
+        doc.observe_destroy_with(origin.clone(), move |txn, _| {
+            let ptr = ptr.load(Ordering::Acquire);
+            let inner = unsafe { ptr.as_mut().unwrap() };
+            Self::handle_destroy(txn, inner)
+        })
+        .unwrap();
+        let ptr = AtomicPtr::new(inner_mut as *mut Inner<M>);
+
+        doc.observe_after_transaction_with(origin, move |txn| {
+            let ptr = ptr.load(Ordering::Acquire);
+            let inner = unsafe { ptr.as_mut().unwrap() };
+            Self::handle_after_transaction(inner, txn);
+        })
+        .unwrap();
 
         UndoManager(inner)
     }
 
     fn should_skip(inner: &Inner<M>, txn: &TransactionMut) -> bool {
-        !(inner.options.capture_transaction)(txn)
-            || !inner
-                .scope
-                .iter()
-                .any(|parent| txn.changed_parent_types.contains(parent))
+        if let Some(capture_transaction) = &inner.options.capture_transaction {
+            if !capture_transaction(txn) {
+                return true;
+            }
+        }
+        !inner
+            .scope
+            .iter()
+            .any(|parent| txn.changed_parent_types.contains(parent))
             || !txn
                 .origin()
                 .map(|o| inner.options.tracked_origins.contains(o))
@@ -130,8 +157,8 @@ where
         if Self::should_skip(inner, txn) {
             return;
         }
-        let undoing = inner.undoing.get();
-        let redoing = inner.redoing.get();
+        let undoing = inner.undoing;
+        let redoing = inner.redoing;
         if undoing {
             inner.last_change = 0; // next undo should not be appended to last stack item
         } else if !redoing {
@@ -150,7 +177,7 @@ where
                 insertions.insert(ID::new(*client, start_clock), diff);
             }
         }
-        let now = (inner.options.timestamp)();
+        let now = inner.options.timestamp.now();
         let stack = if undoing {
             &mut inner.redo_stack
         } else {
@@ -197,23 +224,24 @@ where
             Event::redo(meta, txn.origin.clone(), txn.changed_parent_types.clone())
         };
         if !extend {
-            if let Some(mut callbacks) = inner.observer_added.callbacks() {
-                callbacks.trigger(txn, &mut event);
+            if inner.observer_added.has_subscribers() {
+                inner.observer_added.trigger(|fun| fun(txn, &mut event));
             }
         } else {
-            if let Some(mut callbacks) = inner.observer_updated.callbacks() {
-                callbacks.trigger(txn, &mut event);
+            if inner.observer_updated.has_subscribers() {
+                inner.observer_updated.trigger(|fun| fun(txn, &mut event));
             }
         }
         last_op.meta = event.meta;
     }
 
-    fn handle_destroy(inner: *mut Inner<M>) {
-        let origin = Origin::from(inner as usize);
-        let inner = unsafe { inner.as_mut().unwrap() };
+    fn handle_destroy(txn: &TransactionMut, inner: &mut Inner<M>) {
+        let origin = Origin::from(inner as *mut Inner<M> as usize);
         if inner.options.tracked_origins.remove(&origin) {
-            inner.on_destroy.take();
-            inner.on_after_transaction.take();
+            if let Some(events) = txn.events() {
+                events.destroy_events.unsubscribe(&origin);
+                events.after_transaction_events.unsubscribe(&origin);
+            }
         }
     }
 
@@ -223,11 +251,55 @@ where
     /// has been called.
     ///
     /// Returns a subscription object which - when dropped - will unregister provided callback.
+    #[cfg(not(target_family = "wasm"))]
     pub fn observe_item_added<F>(&self, f: F) -> Subscription
     where
-        F: Fn(&TransactionMut, &mut Event<M>) -> () + 'static,
+        F: Fn(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
     {
-        self.0.observer_added.subscribe(move |txn, e| f(txn, e))
+        self.0.observer_added.subscribe(Box::new(f))
+    }
+
+    /// Registers a callback function to be called every time a new [StackItem] is created. This
+    /// usually happens when a new update over an tracked shared type happened after capture timeout
+    /// threshold from the previous stack item occurence has been reached or [UndoManager::reset]
+    /// has been called.
+    ///
+    /// Provided `key` is used to identify the origin of the callback. It can be used to unregister
+    /// the callback later on.
+    #[cfg(not(target_family = "wasm"))]
+    pub fn observe_item_added_with<K, F>(&self, key: K, f: F)
+    where
+        K: Into<Origin>,
+        F: Fn(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
+    {
+        self.0
+            .observer_added
+            .subscribe_with(key.into(), Box::new(f))
+    }
+
+    /// Registers a callback function to be called every time a new [StackItem] is created. This
+    /// usually happens when a new update over an tracked shared type happened after capture timeout
+    /// threshold from the previous stack item occurence has been reached or [UndoManager::reset]
+    /// has been called.
+    ///
+    /// Provided `key` is used to identify the origin of the callback. It can be used to unregister
+    /// the callback later on.
+    #[cfg(target_family = "wasm")]
+    pub fn observe_item_added_with<K, F>(&self, key: K, f: F)
+    where
+        K: Into<Origin>,
+        F: Fn(&TransactionMut, &mut Event<M>) + 'static,
+    {
+        self.0
+            .observer_added
+            .subscribe_with(key.into(), Box::new(f))
+    }
+
+    pub fn unobserve_item_added<K>(&self, key: K) -> bool
+    where
+        K: Into<Origin>,
+    {
+        self.0.observer_added.unsubscribe(&key.into())
     }
 
     /// Registers a callback function to be called every time an existing [StackItem] has been
@@ -235,22 +307,104 @@ where
     /// has passed.
     ///
     /// Returns a subscription object which - when dropped - will unregister provided callback.
+    #[cfg(not(target_family = "wasm"))]
     pub fn observe_item_updated<F>(&self, f: F) -> Subscription
     where
-        F: Fn(&TransactionMut, &mut Event<M>) -> () + 'static,
+        F: Fn(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
     {
-        self.0.observer_updated.subscribe(move |txn, e| f(txn, e))
+        self.0.observer_updated.subscribe(Box::new(f))
+    }
+
+    /// Registers a callback function to be called every time an existing [StackItem] has been
+    /// extended as a result of updates from tracked types which happened before a capture timeout
+    /// has passed.
+    ///
+    /// Provided `key` is used to identify the origin of the callback. It can be used to unregister
+    /// the callback later on.
+    #[cfg(not(target_family = "wasm"))]
+    pub fn observe_item_updated_with<K, F>(&self, key: K, f: F)
+    where
+        K: Into<Origin>,
+        F: Fn(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
+    {
+        self.0
+            .observer_updated
+            .subscribe_with(key.into(), Box::new(f))
+    }
+
+    /// Registers a callback function to be called every time an existing [StackItem] has been
+    /// extended as a result of updates from tracked types which happened before a capture timeout
+    /// has passed.
+    ///
+    /// Provided `key` is used to identify the origin of the callback. It can be used to unregister
+    /// the callback later on.
+    #[cfg(target_family = "wasm")]
+    pub fn observe_item_updated_with<K, F>(&self, key: K, f: F)
+    where
+        K: Into<Origin>,
+        F: Fn(&TransactionMut, &mut Event<M>) + 'static,
+    {
+        self.0
+            .observer_updated
+            .subscribe_with(key.into(), Box::new(f))
+    }
+
+    pub fn unobserve_item_updated<K>(&self, key: K) -> bool
+    where
+        K: Into<Origin>,
+    {
+        self.0.observer_updated.unsubscribe(&key.into())
     }
 
     /// Registers a callback function to be called every time an existing [StackItem] has been
     /// removed as a result of [UndoManager::undo] or [UndoManager::redo] method.
     ///
     /// Returns a subscription object which - when dropped - will unregister provided callback.
+    #[cfg(not(target_family = "wasm"))]
     pub fn observe_item_popped<F>(&self, f: F) -> Subscription
     where
-        F: Fn(&TransactionMut, &mut Event<M>) -> () + 'static,
+        F: Fn(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
     {
-        self.0.observer_popped.subscribe(move |txn, e| f(txn, e))
+        self.0.observer_popped.subscribe(Box::new(f))
+    }
+
+    /// Registers a callback function to be called every time an existing [StackItem] has been
+    /// removed as a result of [UndoManager::undo] or [UndoManager::redo] method.
+    ///
+    /// Provided `key` is used to identify the origin of the callback. It can be used to unregister
+    /// the callback later on.
+    #[cfg(not(target_family = "wasm"))]
+    pub fn observe_item_popped_with<K, F>(&self, key: K, f: F)
+    where
+        K: Into<Origin>,
+        F: Fn(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
+    {
+        self.0
+            .observer_popped
+            .subscribe_with(key.into(), Box::new(f))
+    }
+
+    /// Registers a callback function to be called every time an existing [StackItem] has been
+    /// removed as a result of [UndoManager::undo] or [UndoManager::redo] method.
+    ///
+    /// Provided `key` is used to identify the origin of the callback. It can be used to unregister
+    /// the callback later on.
+    #[cfg(target_family = "wasm")]
+    pub fn observe_item_popped_with<K, F>(&self, key: K, f: F)
+    where
+        K: Into<Origin>,
+        F: Fn(&TransactionMut, &mut Event<M>) + 'static,
+    {
+        self.0
+            .observer_popped
+            .subscribe_with(key.into(), Box::new(f))
+    }
+
+    pub fn unobserve_item_popped<K>(&self, key: K) -> bool
+    where
+        K: Into<Origin>,
+    {
+        self.0.observer_popped.unsubscribe(&key.into())
     }
 
     /// Extends a list of shared types tracked by current undo manager by a given `scope`.
@@ -259,7 +413,8 @@ where
         T: AsRef<Branch>,
     {
         let ptr = BranchPtr::from(scope.as_ref());
-        self.0.scope.insert(ptr);
+        let inner = self.inner();
+        inner.scope.insert(ptr);
     }
 
     /// Extends a list of origins tracked by current undo manager by given `origin`. Origin markers
@@ -269,7 +424,8 @@ where
     where
         O: Into<Origin>,
     {
-        self.0.options.tracked_origins.insert(origin.into());
+        let inner = self.inner();
+        inner.options.tracked_origins.insert(origin.into());
     }
 
     /// Removes an `origin` from the list of origins tracked by a current undo manager.
@@ -277,21 +433,23 @@ where
     where
         O: Into<Origin>,
     {
-        self.0.options.tracked_origins.remove(&origin.into());
+        let inner = self.inner();
+        inner.options.tracked_origins.remove(&origin.into());
     }
 
     /// Clears all [StackItem]s stored within current UndoManager, effectively resetting its state.
     pub fn clear(&mut self) -> Result<(), TransactionAcqError> {
-        let mut txn = self.0.doc.try_transact_mut()?;
+        let inner = self.inner();
+        let mut txn = inner.doc.try_transact_mut()?;
 
-        let len = self.0.undo_stack.len();
-        for item in self.0.undo_stack.drain(0..len) {
-            Self::clear_item(&self.0.scope, &mut txn, item);
+        let len = inner.undo_stack.len();
+        for item in inner.undo_stack.drain(0..len) {
+            Self::clear_item(&inner.scope, &mut txn, item);
         }
 
-        let len = self.0.redo_stack.len();
-        for item in self.0.redo_stack.drain(0..len) {
-            Self::clear_item(&self.0.scope, &mut txn, item);
+        let len = inner.redo_stack.len();
+        for item in inner.redo_stack.drain(0..len) {
+            Self::clear_item(&inner.scope, &mut txn, item);
         }
 
         Ok(())
@@ -340,7 +498,8 @@ where
     /// txt.get_string(&doc.transact()); // => "a" (note that only 'b' was removed)
     /// ```
     pub fn reset(&mut self) {
-        self.0.last_change = 0;
+        let inner = self.inner();
+        inner.last_change = 0;
     }
 
     /// Are there any undo steps available?
@@ -360,29 +519,27 @@ where
     /// no other transaction on that same document can be active while calling this method.
     /// Otherwise an error will be returned.
     pub fn undo(&mut self) -> Result<bool, TransactionAcqError> {
-        let mut txn = self.0.doc.try_transact_mut_with(self.as_origin())?;
-        self.0.undoing.set(true);
+        let origin = self.as_origin();
+        let inner = self.inner();
+        let mut txn = inner.doc.try_transact_mut_with(origin.clone())?;
+        inner.undoing = true;
         let result = Self::pop(
-            &mut self.0.undo_stack,
-            &self.0.redo_stack,
+            &mut inner.undo_stack,
+            &inner.redo_stack,
             &mut txn,
-            &self.0.scope,
+            &inner.scope,
         );
         txn.commit();
         let changed = if let Some(item) = result {
-            let mut e = Event::undo(
-                item.meta,
-                Some(self.as_origin()),
-                txn.changed_parent_types.clone(),
-            );
-            if let Some(mut callbacks) = self.0.observer_popped.callbacks() {
-                callbacks.trigger(&mut txn, &mut e);
+            let mut e = Event::undo(item.meta, Some(origin), txn.changed_parent_types.clone());
+            if inner.observer_popped.has_subscribers() {
+                inner.observer_popped.trigger(|fun| fun(&txn, &mut e));
             }
             true
         } else {
             false
         };
-        self.0.undoing.set(false);
+        inner.undoing = false;
         Ok(changed)
     }
 
@@ -403,29 +560,27 @@ where
     /// no other transaction on that same document can be active while calling this method.
     /// Otherwise an error will be returned.
     pub fn redo(&mut self) -> Result<bool, TransactionAcqError> {
-        let mut txn = self.0.doc.try_transact_mut_with(self.as_origin())?;
-        self.0.redoing.set(true);
+        let origin = self.as_origin();
+        let inner = self.inner();
+        let mut txn = inner.doc.try_transact_mut_with(origin.clone())?;
+        inner.redoing = true;
         let result = Self::pop(
-            &mut self.0.redo_stack,
-            &self.0.undo_stack,
+            &mut inner.redo_stack,
+            &inner.undo_stack,
             &mut txn,
-            &self.0.scope,
+            &inner.scope,
         );
         txn.commit();
         let changed = if let Some(item) = result {
-            let mut e = Event::redo(
-                item.meta,
-                Some(self.as_origin()),
-                txn.changed_parent_types.clone(),
-            );
-            if let Some(mut callbacks) = self.0.observer_popped.callbacks() {
-                callbacks.trigger(&mut txn, &mut e);
+            let mut e = Event::redo(item.meta, Some(origin), txn.changed_parent_types.clone());
+            if inner.observer_popped.has_subscribers() {
+                inner.observer_popped.trigger(|fun| fun(&txn, &mut e));
             }
             true
         } else {
             false
         };
-        self.0.redoing.set(false);
+        inner.redoing = false;
         Ok(changed)
     }
 
@@ -508,6 +663,15 @@ impl<M: std::fmt::Debug> std::fmt::Debug for UndoManager<M> {
     }
 }
 
+impl<M> Drop for UndoManager<M> {
+    fn drop(&mut self) {
+        let inner = &self.0;
+        let origin = Origin::from(Arc::as_ptr(&inner) as usize);
+        inner.doc.unobserve_destroy(origin.clone()).unwrap();
+        inner.doc.unobserve_after_transaction(origin).unwrap();
+    }
+}
+
 #[repr(transparent)]
 #[derive(Debug, Clone, Eq, PartialEq, Default)]
 pub(crate) struct UndoStack<M>(Vec<StackItem<M>>);
@@ -538,7 +702,6 @@ impl<M> UndoStack<M> {
 }
 
 /// Set of options used to configure [UndoManager].
-#[derive(Clone)]
 pub struct Options {
     /// Undo-/redo-able updates are grouped together in time-constrained snapshots. This field
     /// determines the period of time, every snapshot will be automatically made in.
@@ -551,25 +714,23 @@ pub struct Options {
 
     /// Custom logic decider, that along with [tracked_origins] can be used to determine if
     /// transaction changes should be captured or not.
-    pub capture_transaction: Rc<dyn Fn(&TransactionMut) -> bool>,
+    pub capture_transaction: Option<CaptureTransactionFn>,
 
     /// Custom clock function, that can be used to generate timestamps used by
     /// [Options::capture_timeout_millis].
-    pub timestamp: Rc<dyn Fn() -> u64>,
+    pub timestamp: Arc<dyn Clock>,
 }
 
+pub type CaptureTransactionFn = Arc<dyn Fn(&TransactionMut) -> bool + Send + Sync + 'static>;
+
+#[cfg(not(target_family = "wasm"))]
 impl Default for Options {
     fn default() -> Self {
         Options {
             capture_timeout_millis: 500,
             tracked_origins: HashSet::new(),
-            capture_transaction: Rc::new(|_txn| true),
-            timestamp: Rc::new(|| {
-                SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap()
-                    .as_millis() as u64
-            }),
+            capture_transaction: None,
+            timestamp: Arc::new(crate::sync::time::SystemClock),
         }
     }
 }
@@ -700,6 +861,11 @@ pub enum EventKind {
 
 #[cfg(test)]
 mod test {
+    use std::collections::HashMap;
+    use std::convert::TryInto;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
     use crate::test_utils::exchange_updates;
     use crate::types::text::{Diff, YChange};
     use crate::types::{Attrs, ToJson};
@@ -710,10 +876,6 @@ mod test {
         Text, TextPrelim, TextRef, Transact, UndoManager, Update, Xml, XmlElementPrelim,
         XmlElementRef, XmlFragment, XmlTextPrelim,
     };
-    use std::collections::HashMap;
-    use std::convert::TryInto;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Arc;
 
     #[test]
     fn undo_text() {

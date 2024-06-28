@@ -853,11 +853,12 @@ mod test {
         Array, ArrayRef, DeepObservable, Doc, GetString, Map, MapPrelim, MapRef, Observable,
         Quotable, Text, TextRef, Transact, XmlTextRef,
     };
+    use arc_swap::ArcSwapOption;
     use std::cell::RefCell;
     use std::collections::{Bound, HashMap};
     use std::ops::RangeBounds;
     use std::rc::Rc;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     #[test]
     fn basic_map_link() {
@@ -1180,12 +1181,10 @@ mod test {
             m1.insert(&mut txn, "b", link1)
         };
 
-        let target1 = Rc::new(RefCell::new(None));
+        let target1 = Arc::new(ArcSwapOption::default());
         let _sub1 = {
             let target = target1.clone();
-            link1.observe(move |_, e| {
-                target.replace(Some(e.target.clone()));
-            })
+            link1.observe(move |_, e| target.store(Some(Arc::new(e.target.clone()))))
         };
 
         exchange_updates(&[&d1, &d2]);
@@ -1197,12 +1196,10 @@ mod test {
             .unwrap();
         assert_eq!(link2.try_deref_value(&d2.transact()), Some("value".into()));
 
-        let target2 = Rc::new(RefCell::new(None));
+        let target2 = Arc::new(ArcSwapOption::default());
         let _sub2 = {
             let target = target2.clone();
-            link2.observe(move |_, e| {
-                target.replace(Some(e.target.clone()));
-            })
+            link2.observe(move |_, e| target.store(Some(Arc::new(e.target.clone()))))
         };
 
         m1.insert(&mut d1.transact_mut(), "a", "value2");
@@ -1226,12 +1223,10 @@ mod test {
             m1.insert(&mut txn, "b", link1)
         };
 
-        let target1 = Rc::new(RefCell::new(None));
+        let target1 = Arc::new(ArcSwapOption::default());
         let _sub1 = {
             let target = target1.clone();
-            link1.observe(move |_, e| {
-                target.replace(Some(e.as_target::<MapRef>()));
-            })
+            link1.observe(move |_, e| target.store(Some(Arc::new(e.as_target::<MapRef>()))))
         };
 
         exchange_updates(&[&d1, &d2]);
@@ -1243,20 +1238,18 @@ mod test {
             .unwrap();
         assert_eq!(link2.try_deref_value(&d2.transact()), Some("value".into()));
 
-        let target2 = Rc::new(RefCell::new(None));
+        let target2 = Arc::new(ArcSwapOption::default());
         let _sub2 = {
             let target = target2.clone();
-            link2.observe(move |_, e| {
-                target.replace(Some(e.as_target::<MapRef>()));
-            })
+            link2.observe(move |_, e| target.store(Some(Arc::new(e.as_target::<MapRef>()))))
         };
 
         m1.remove(&mut d1.transact_mut(), "a");
-        let l1 = (*target1).take().unwrap();
+        let l1 = target1.swap(None).unwrap();
         assert_eq!(l1.try_deref_value(&d1.transact()), None);
 
         exchange_updates(&[&d1, &d2]);
-        let l2 = (*target2).take().unwrap();
+        let l2 = target2.swap(None).unwrap();
         assert_eq!(l2.try_deref_value(&d2.transact()), None);
     }
 
@@ -1274,12 +1267,10 @@ mod test {
             a1.insert(&mut txn, 0, link1)
         };
 
-        let target1 = Rc::new(RefCell::new(None));
+        let target1 = Arc::new(ArcSwapOption::default());
         let _sub1 = {
             let target = target1.clone();
-            link1.observe(move |_, e| {
-                target.replace(Some(e.as_target::<ArrayRef>()));
-            })
+            link1.observe(move |_, e| target.store(Some(Arc::new(e.as_target::<ArrayRef>()))))
         };
 
         exchange_updates(&[&d1, &d2]);
@@ -1292,12 +1283,10 @@ mod test {
         let actual: Vec<_> = link2.unquote(&d2.transact()).collect();
         assert_eq!(actual, vec!["B".into(), "C".into()]);
 
-        let target2 = Rc::new(RefCell::new(None));
+        let target2 = Arc::new(ArcSwapOption::default());
         let _sub2 = {
             let target = target2.clone();
-            link2.observe(move |_, e| {
-                target.replace(Some(e.as_target::<ArrayRef>()));
-            })
+            link2.observe(move |_, e| target.store(Some(Arc::new(e.as_target::<ArrayRef>()))))
         };
 
         a1.remove(&mut d1.transact_mut(), 2);
@@ -1305,22 +1294,22 @@ mod test {
         assert_eq!(actual, vec!["C".into()]);
 
         exchange_updates(&[&d1, &d2]);
-        let l2 = (*target2).take().unwrap();
+        let l2 = target2.swap(None).unwrap();
         let actual: Vec<_> = l2.unquote(&d2.transact()).collect();
         assert_eq!(actual, vec!["C".into()]);
 
         a2.remove(&mut d2.transact_mut(), 2);
-        let l2 = (*target2).take().unwrap();
+        let l2 = target2.swap(None).unwrap();
         let actual: Vec<_> = l2.unquote(&d2.transact()).collect();
         assert_eq!(actual, vec![]);
 
         exchange_updates(&[&d1, &d2]);
-        let l1 = (*target1).take().unwrap();
+        let l1 = target1.swap(None).unwrap();
         let actual: Vec<_> = l1.unquote(&d1.transact()).collect();
         assert_eq!(actual, vec![]);
 
         a1.remove(&mut d1.transact_mut(), 1);
-        assert_eq!((*target1).take(), None);
+        assert_eq!(target1.swap(None), None);
     }
 
     #[test]
@@ -1346,11 +1335,11 @@ mod test {
         let link2 = m2.insert(&mut txn, "link-link", link2);
         drop(txn);
 
-        let events = Rc::new(RefCell::new(vec![]));
+        let events = Arc::new(Mutex::new(vec![]));
         let _sub1 = {
             let events = events.clone();
             link2.observe_deep(move |_, evts| {
-                let mut er = events.borrow_mut();
+                let mut er = events.lock().unwrap();
                 for e in evts.iter() {
                     er.push(e.target());
                 }
@@ -1358,7 +1347,8 @@ mod test {
         };
         m2.insert(&mut doc.transact_mut(), "key", "value2");
         let actual: Vec<_> = events
-            .borrow()
+            .lock()
+            .unwrap()
             .iter()
             .flat_map(|v| {
                 v.clone()
@@ -1398,19 +1388,20 @@ mod test {
         let link3 = m3.insert(&mut txn, "link-link-link", link3);
         drop(txn);
 
-        let events = Rc::new(RefCell::new(vec![]));
+        let events = Arc::new(Mutex::new(vec![]));
         let _sub1 = {
             let events = events.clone();
             link3.observe_deep(move |_, evts| {
-                let mut er = events.borrow_mut();
+                let mut er = events.lock().unwrap();
                 for e in evts.iter() {
                     er.push(e.target());
                 }
             })
         };
         m2.insert(&mut doc.transact_mut(), "key", "value2");
-        let actual: Vec<_> = events
-            .take()
+        let mut guard = events.lock().unwrap();
+        let actual = std::mem::take(&mut *guard);
+        let actual: Vec<_> = actual
             .into_iter()
             .flat_map(|v| {
                 v.cast::<WeakRef<MapRef>>()
@@ -1435,11 +1426,11 @@ mod test {
         let map = doc.get_or_insert_map("map");
         let array = doc.get_or_insert_array("array");
 
-        let events = Rc::new(RefCell::new(vec![]));
+        let events = Arc::new(Mutex::new(vec![]));
         let _sub = {
             let events = events.clone();
             map.observe_deep(move |txn, e| {
-                let mut rs = events.borrow_mut();
+                let mut rs = events.lock().unwrap();
                 for e in e.iter() {
                     match e {
                         Event::Map(e) => {
@@ -1463,9 +1454,12 @@ mod test {
         drop(txn);
 
         // update entry in linked map
-        events.borrow_mut().clear();
+        events.lock().unwrap().clear();
         nested.insert(&mut doc.transact_mut(), "key", "value");
-        let actual = events.take();
+        let actual = {
+            let mut guard = events.lock().unwrap();
+            std::mem::take(&mut *guard)
+        };
         assert_eq!(
             actual,
             vec![(
@@ -1479,7 +1473,10 @@ mod test {
 
         // delete entry in linked map
         nested.remove(&mut doc.transact_mut(), "key");
-        let actual = events.take();
+        let actual = {
+            let mut guard = events.lock().unwrap();
+            std::mem::take(&mut *guard)
+        };
         assert_eq!(
             actual,
             vec![(
@@ -1493,7 +1490,10 @@ mod test {
 
         // delete linked map
         array.remove(&mut doc.transact_mut(), 0);
-        let actual = events.take();
+        let actual = {
+            let mut guard = events.lock().unwrap();
+            std::mem::take(&mut *guard)
+        };
         assert_eq!(actual, vec![(Value::YWeakLink(link.into_inner()), None)]);
     }
 
@@ -1520,11 +1520,11 @@ mod test {
         let link = map.link(&doc.transact(), "nested").unwrap();
         let link = array.insert(&mut doc.transact_mut(), 0, link);
 
-        let events = Rc::new(RefCell::new(vec![]));
+        let events = Arc::new(Mutex::new(vec![]));
         let _sub = {
             let events = events.clone();
             array.observe_deep(move |txn, e| {
-                let mut events = events.borrow_mut();
+                let mut events = events.lock().unwrap();
                 for e in e.iter() {
                     match e {
                         Event::Map(e) => events
@@ -1536,8 +1536,12 @@ mod test {
             })
         };
         nested.insert(&mut doc.transact_mut(), "key", "value");
+        let actual = {
+            let mut guard = events.lock().unwrap();
+            std::mem::take(&mut *guard)
+        };
         assert_eq!(
-            events.take(),
+            actual,
             vec![(
                 Value::YMap(nested.clone()),
                 Some(HashMap::from([(
@@ -1548,8 +1552,12 @@ mod test {
         );
         // update existing entry
         nested.insert(&mut doc.transact_mut(), "key", "value2");
+        let actual = {
+            let mut guard = events.lock().unwrap();
+            std::mem::take(&mut *guard)
+        };
         assert_eq!(
-            events.take(),
+            actual,
             vec![(
                 Value::YMap(nested.clone()),
                 Some(HashMap::from([(
@@ -1561,8 +1569,12 @@ mod test {
 
         // delete entry in linked map
         nested.remove(&mut doc.transact_mut(), "key");
+        let actual = {
+            let mut guard = events.lock().unwrap();
+            std::mem::take(&mut *guard)
+        };
         assert_eq!(
-            events.take(),
+            actual,
             vec![(
                 Value::YMap(nested.clone()),
                 Some(HashMap::from([(
@@ -1574,10 +1586,11 @@ mod test {
 
         // delete linked map
         map.remove(&mut doc.transact_mut(), "nested");
-        assert_eq!(
-            events.take(),
-            vec![(Value::YWeakLink(link.into_inner()), None)]
-        );
+        let actual = {
+            let mut guard = events.lock().unwrap();
+            std::mem::take(&mut *guard)
+        };
+        assert_eq!(actual, vec![(Value::YWeakLink(link.into_inner()), None)]);
     }
 
     #[test]
@@ -1602,11 +1615,11 @@ mod test {
 
         exchange_updates(&[&d1, &d2]);
 
-        let e1 = Rc::new(RefCell::new(vec![]));
+        let e1 = Arc::new(Mutex::new(vec![]));
         let _s1 = {
             let events = e1.clone();
             l1.observe_deep(move |txn, e| {
-                let mut events = events.borrow_mut();
+                let mut events = events.lock().unwrap();
                 events.clear();
                 for e in e.iter() {
                     match e {
@@ -1624,11 +1637,11 @@ mod test {
             .unwrap()
             .cast::<WeakRef<ArrayRef>>()
             .unwrap();
-        let e2 = Rc::new(RefCell::new(vec![]));
+        let e2 = Arc::new(Mutex::new(vec![]));
         let _s2 = {
             let events = e2.clone();
             l2.observe_deep(move |txn, e| {
-                let mut events = events.borrow_mut();
+                let mut events = events.lock().unwrap();
                 events.clear();
                 for e in e.iter() {
                     match e {
@@ -1645,8 +1658,8 @@ mod test {
         exchange_updates(&[&d1, &d2]);
         m20.insert(&mut d1.transact_mut(), "key", "value");
         assert_eq!(
-            e1.take(),
-            vec![(
+            &*e1.lock().unwrap(),
+            &vec![(
                 Value::YMap(m20.clone()),
                 Some(HashMap::from([(
                     Arc::from("key"),
@@ -1659,8 +1672,8 @@ mod test {
 
         let m21 = a2.get(&d2.transact(), 3).unwrap().cast::<MapRef>().unwrap();
         assert_eq!(
-            e2.take(),
-            vec![(
+            &*e2.lock().unwrap(),
+            &vec![(
                 Value::YMap(m21.clone()),
                 Some(HashMap::from([(
                     Arc::from("key"),
@@ -1703,11 +1716,11 @@ mod test {
         m2.insert(&mut txn, "k0", l0);
         drop(txn);
 
-        let events = Rc::new(RefCell::new(vec![]));
+        let events = Arc::new(Mutex::new(vec![]));
         let _sub = {
             let events = events.clone();
             m0.observe_deep(move |txn, e| {
-                let mut rs = events.borrow_mut();
+                let mut rs = events.lock().unwrap();
                 for e in e.iter() {
                     if let Event::Map(e) = e {
                         let value = e.target().clone();
@@ -1718,7 +1731,10 @@ mod test {
         };
 
         m1.insert(&mut doc.transact_mut(), "test-key1", "value1");
-        let actual = events.take();
+        let actual = {
+            let mut guard = events.lock().unwrap();
+            std::mem::take(&mut *guard)
+        };
         assert_eq!(
             actual,
             vec![(
@@ -1731,7 +1747,10 @@ mod test {
         );
 
         m2.insert(&mut doc.transact_mut(), "test-key2", "value2");
-        let actual = events.take();
+        let actual = {
+            let mut guard = events.lock().unwrap();
+            std::mem::take(&mut *guard)
+        };
         assert_eq!(
             actual,
             vec![(
@@ -1744,7 +1763,10 @@ mod test {
         );
 
         m1.remove(&mut doc.transact_mut(), "test-key1");
-        let actual = events.take();
+        let actual = {
+            let mut guard = events.lock().unwrap();
+            std::mem::take(&mut *guard)
+        };
         assert_eq!(
             actual,
             vec![(

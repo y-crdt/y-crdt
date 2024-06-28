@@ -1,3 +1,12 @@
+use std::borrow::Borrow;
+use std::cell::UnsafeCell;
+use std::collections::{HashMap, HashSet};
+use std::convert::{TryFrom, TryInto};
+use std::fmt::Write;
+use std::marker::PhantomData;
+use std::ops::Deref;
+use std::sync::Arc;
+
 use crate::block::{EmbedPrelim, Item, ItemContent, ItemPosition, ItemPtr, Prelim};
 use crate::block_iter::BlockIter;
 use crate::transaction::TransactionMut;
@@ -10,14 +19,6 @@ use crate::{
     Any, ArrayRef, BranchID, DeepObservable, GetString, IndexedSequence, Map, Observable, ReadTxn,
     StickyIndex, Text, TextRef, ID,
 };
-use std::borrow::Borrow;
-use std::cell::UnsafeCell;
-use std::collections::{HashMap, HashSet};
-use std::convert::{TryFrom, TryInto};
-use std::fmt::Write;
-use std::marker::PhantomData;
-use std::ops::Deref;
-use std::sync::Arc;
 
 /// Trait shared by preliminary types that can be used as XML nodes: [XmlElementPrelim],
 /// [XmlFragmentPrelim] and [XmlTextPrelim].
@@ -1241,6 +1242,11 @@ impl XmlEvent {
 
 #[cfg(test)]
 mod test {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use arc_swap::ArcSwapOption;
+
     use crate::branch::BranchPtr;
     use crate::test_utils::exchange_updates;
     use crate::transaction::ReadTxn;
@@ -1252,9 +1258,6 @@ mod test {
         Any, Doc, GetString, Observable, SharedRef, StateVector, Text, Transact, Update,
         XmlElementPrelim, XmlTextPrelim, XmlTextRef,
     };
-    use std::cell::RefCell;
-    use std::collections::HashMap;
-    use std::rc::Rc;
 
     #[test]
     fn insert_attribute() {
@@ -1423,13 +1426,13 @@ mod test {
             .into_xml_element()
             .unwrap();
 
-        let attributes = Rc::new(RefCell::new(None));
-        let nodes = Rc::new(RefCell::new(None));
+        let attributes = Arc::new(ArcSwapOption::default());
+        let nodes = Arc::new(ArcSwapOption::default());
         let attributes_c = attributes.clone();
         let nodes_c = nodes.clone();
         let _sub = xml.observe(move |txn, e| {
-            *attributes_c.borrow_mut() = Some(e.keys(txn).clone());
-            *nodes_c.borrow_mut() = Some(e.delta(txn).to_vec());
+            attributes_c.store(Some(Arc::new(e.keys(txn).clone())));
+            nodes_c.store(Some(Arc::new(e.delta(txn).to_vec())));
         });
 
         // insert attribute
@@ -1438,10 +1441,10 @@ mod test {
             xml.insert_attribute(&mut txn, "key1", "value1");
             xml.insert_attribute(&mut txn, "key2", "value2");
         }
-        assert!(nodes.borrow_mut().take().unwrap().is_empty());
+        assert!(nodes.swap(None).unwrap().is_empty());
         assert_eq!(
-            attributes.borrow_mut().take(),
-            Some(HashMap::from([
+            attributes.swap(None),
+            Some(Arc::new(HashMap::from([
                 (
                     "key1".into(),
                     EntryChange::Inserted(Any::String("value1".into()).into())
@@ -1450,7 +1453,7 @@ mod test {
                     "key2".into(),
                     EntryChange::Inserted(Any::String("value2".into()).into())
                 )
-            ]))
+            ])))
         );
 
         // change and remove attribute
@@ -1459,10 +1462,10 @@ mod test {
             xml.insert_attribute(&mut txn, "key1", "value11");
             xml.remove_attribute(&mut txn, &"key2");
         }
-        assert!(nodes.borrow_mut().take().unwrap().is_empty());
+        assert!(nodes.swap(None).unwrap().is_empty());
         assert_eq!(
-            attributes.borrow_mut().take(),
-            Some(HashMap::from([
+            attributes.swap(None),
+            Some(Arc::new(HashMap::from([
                 (
                     "key1".into(),
                     EntryChange::Updated(
@@ -1474,7 +1477,7 @@ mod test {
                     "key2".into(),
                     EntryChange::Removed(Any::String("value2".into()).into())
                 )
-            ]))
+            ])))
         );
 
         // add xml elements
@@ -1485,13 +1488,13 @@ mod test {
             (txt, xml2)
         };
         assert_eq!(
-            nodes.borrow_mut().take(),
-            Some(vec![Change::Added(vec![
+            nodes.swap(None),
+            Some(Arc::new(vec![Change::Added(vec![
                 Value::YXmlText(nested_txt.clone()),
                 Value::YXmlElement(nested_xml.clone())
-            ])])
+            ])]))
         );
-        assert_eq!(attributes.borrow_mut().take(), Some(HashMap::new()));
+        assert_eq!(attributes.swap(None), Some(HashMap::new().into()));
 
         // remove and add
         let nested_xml2 = {
@@ -1500,23 +1503,23 @@ mod test {
             xml.insert(&mut txn, 1, XmlElementPrelim::empty("p"))
         };
         assert_eq!(
-            nodes.borrow_mut().take(),
-            Some(vec![
+            nodes.swap(None),
+            Some(Arc::new(vec![
                 Change::Retain(1),
                 Change::Added(vec![Value::YXmlElement(nested_xml2.clone())]),
                 Change::Removed(1),
-            ])
+            ]))
         );
-        assert_eq!(attributes.borrow_mut().take(), Some(HashMap::new()));
+        assert_eq!(attributes.swap(None), Some(HashMap::new().into()));
 
         // copy updates over
-        let attributes = Rc::new(RefCell::new(None));
-        let nodes = Rc::new(RefCell::new(None));
+        let attributes = Arc::new(ArcSwapOption::default());
+        let nodes = Arc::new(ArcSwapOption::default());
         let attributes_c = attributes.clone();
         let nodes_c = nodes.clone();
         let _sub = xml2.observe(move |txn, e| {
-            *attributes_c.borrow_mut() = Some(e.keys(txn).clone());
-            *nodes_c.borrow_mut() = Some(e.delta(txn).to_vec());
+            attributes_c.store(Some(Arc::new(e.keys(txn).clone())));
+            nodes_c.store(Some(Arc::new(e.delta(txn).to_vec())));
         });
 
         {
@@ -1528,18 +1531,18 @@ mod test {
             t2.apply_update(Update::decode_v1(encoder.to_vec().as_slice()).unwrap());
         }
         assert_eq!(
-            nodes.borrow_mut().take(),
-            Some(vec![Change::Added(vec![
+            nodes.swap(None),
+            Some(Arc::new(vec![Change::Added(vec![
                 Value::YXmlText(nested_txt),
                 Value::YXmlElement(nested_xml2)
-            ])])
+            ])]))
         );
         assert_eq!(
-            attributes.borrow_mut().take(),
-            Some(HashMap::from([(
+            attributes.swap(None),
+            Some(Arc::new(HashMap::from([(
                 "key1".into(),
                 EntryChange::Inserted(Any::String("value11".into()).into())
-            )]))
+            )])))
         );
     }
 

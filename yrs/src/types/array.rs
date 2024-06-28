@@ -524,11 +524,8 @@ mod test {
         any, Any, Array, ArrayPrelim, Assoc, Doc, Map, MapRef, Observable, SharedRef, StateVector,
         Transact, Update, ID,
     };
-    use std::cell::{Cell, RefCell};
     use std::collections::{HashMap, HashSet};
-    use std::ops::Deref;
-    use std::rc::Rc;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     #[test]
     fn push_back() {
@@ -871,10 +868,10 @@ mod test {
     fn insert_and_remove_events() {
         let d = Doc::with_client_id(1);
         let array = d.get_or_insert_array("array");
-        let happened = Rc::new(Cell::new(false));
+        let happened = Arc::new(AtomicBool::new(false));
         let happened_clone = happened.clone();
         let _sub = array.observe(move |_, _| {
-            happened_clone.set(true);
+            happened_clone.store(true, Ordering::Relaxed);
         });
 
         {
@@ -883,7 +880,7 @@ mod test {
             // txn is committed at the end of this scope
         }
         assert!(
-            happened.replace(false),
+            happened.swap(false, Ordering::Relaxed),
             "insert of [0,1,2] should trigger event"
         );
 
@@ -893,7 +890,7 @@ mod test {
             // txn is committed at the end of this scope
         }
         assert!(
-            happened.replace(false),
+            happened.swap(false, Ordering::Relaxed),
             "removal of [0] should trigger event"
         );
 
@@ -903,7 +900,7 @@ mod test {
             // txn is committed at the end of this scope
         }
         assert!(
-            happened.replace(false),
+            happened.swap(false, Ordering::Relaxed),
             "removal of [1,2] should trigger event"
         );
     }
@@ -912,15 +909,15 @@ mod test {
     fn insert_and_remove_event_changes() {
         let d1 = Doc::with_client_id(1);
         let array = d1.get_or_insert_array("array");
-        let added = Rc::new(RefCell::new(None));
-        let removed = Rc::new(RefCell::new(None));
-        let delta = Rc::new(RefCell::new(None));
+        let added = Arc::new(ArcSwapOption::default());
+        let removed = Arc::new(ArcSwapOption::default());
+        let delta = Arc::new(ArcSwapOption::default());
 
         let (added_c, removed_c, delta_c) = (added.clone(), removed.clone(), delta.clone());
         let _sub = array.observe(move |txn, e| {
-            *added_c.borrow_mut() = Some(e.inserts(txn).clone());
-            *removed_c.borrow_mut() = Some(e.removes(txn).clone());
-            *delta_c.borrow_mut() = Some(e.delta(txn).to_vec());
+            added_c.store(Some(Arc::new(e.inserts(txn).clone())));
+            removed_c.store(Some(Arc::new(e.removes(txn).clone())));
+            delta_c.store(Some(Arc::new(e.delta(txn).to_vec())));
         });
 
         {
@@ -930,53 +927,59 @@ mod test {
             // txn is committed at the end of this scope
         }
         assert_eq!(
-            added.borrow_mut().take(),
-            Some(HashSet::from([ID::new(1, 0), ID::new(1, 1)]))
+            added.swap(None),
+            Some(HashSet::from([ID::new(1, 0), ID::new(1, 1)]).into())
         );
-        assert_eq!(removed.borrow_mut().take(), Some(HashSet::new()));
+        assert_eq!(removed.swap(None), Some(HashSet::new().into()));
         assert_eq!(
-            delta.borrow_mut().take(),
-            Some(vec![Change::Added(vec![
-                Any::Number(4.0).into(),
-                Any::String("dtrn".into()).into()
-            ])])
+            delta.swap(None),
+            Some(
+                vec![Change::Added(vec![
+                    Any::Number(4.0).into(),
+                    Any::String("dtrn".into()).into()
+                ])]
+                .into()
+            )
         );
 
         {
             let mut txn = d1.transact_mut();
             array.remove_range(&mut txn, 0, 1);
         }
-        assert_eq!(added.borrow_mut().take(), Some(HashSet::new()));
+        assert_eq!(added.swap(None), Some(HashSet::new().into()));
         assert_eq!(
-            removed.borrow_mut().take(),
-            Some(HashSet::from([ID::new(1, 0)]))
+            removed.swap(None),
+            Some(HashSet::from([ID::new(1, 0)]).into())
         );
-        assert_eq!(delta.borrow_mut().take(), Some(vec![Change::Removed(1)]));
+        assert_eq!(delta.swap(None), Some(vec![Change::Removed(1)].into()));
 
         {
             let mut txn = d1.transact_mut();
             array.insert(&mut txn, 1, 0.5);
         }
         assert_eq!(
-            added.borrow_mut().take(),
-            Some(HashSet::from([ID::new(1, 2)]))
+            added.swap(None),
+            Some(HashSet::from([ID::new(1, 2)]).into())
         );
-        assert_eq!(removed.borrow_mut().take(), Some(HashSet::new()));
+        assert_eq!(removed.swap(None), Some(HashSet::new().into()));
         assert_eq!(
-            delta.borrow_mut().take(),
-            Some(vec![
-                Change::Retain(1),
-                Change::Added(vec![Any::Number(0.5).into()])
-            ])
+            delta.swap(None),
+            Some(
+                vec![
+                    Change::Retain(1),
+                    Change::Added(vec![Any::Number(0.5).into()])
+                ]
+                .into()
+            )
         );
 
         let d2 = Doc::with_client_id(2);
         let array2 = d2.get_or_insert_array("array");
         let (added_c, removed_c, delta_c) = (added.clone(), removed.clone(), delta.clone());
         let _sub = array2.observe(move |txn, e| {
-            *added_c.borrow_mut() = Some(e.inserts(txn).clone());
-            *removed_c.borrow_mut() = Some(e.removes(txn).clone());
-            *delta_c.borrow_mut() = Some(e.delta(txn).to_vec());
+            added_c.store(Some(e.inserts(txn).clone().into()));
+            removed_c.store(Some(e.removes(txn).clone().into()));
+            delta_c.store(Some(e.delta(txn).to_vec().into()));
         });
 
         {
@@ -990,16 +993,19 @@ mod test {
         }
 
         assert_eq!(
-            added.borrow_mut().take(),
-            Some(HashSet::from([ID::new(1, 1)]))
+            added.swap(None),
+            Some(HashSet::from([ID::new(1, 1)]).into())
         );
-        assert_eq!(removed.borrow_mut().take(), Some(HashSet::new()));
+        assert_eq!(removed.swap(None), Some(HashSet::new().into()));
         assert_eq!(
-            delta.borrow_mut().take(),
-            Some(vec![Change::Added(vec![
-                Any::String("dtrn".into()).into(),
-                Any::Number(0.5).into(),
-            ])])
+            delta.swap(None),
+            Some(
+                vec![Change::Added(vec![
+                    Any::String("dtrn".into()).into(),
+                    Any::Number(0.5).into(),
+                ])]
+                .into()
+            )
         );
     }
 
@@ -1010,15 +1016,15 @@ mod test {
         let a1 = d1.get_or_insert_array("array");
         let a2 = d2.get_or_insert_array("array");
 
-        let c1 = Rc::new(RefCell::new(None));
+        let c1 = Arc::new(ArcSwapOption::default());
         let c1c = c1.clone();
         let _s1 = a1.observe(move |_, e| {
-            *c1c.borrow_mut() = Some(e.target().hook());
+            c1c.store(Some(e.target().hook().into()));
         });
-        let c2 = Rc::new(RefCell::new(None));
+        let c2 = Arc::new(ArcSwapOption::default());
         let c2c = c2.clone();
         let _s2 = a2.observe(move |_, e| {
-            *c2c.borrow_mut() = Some(e.target().hook());
+            c2c.store(Some(e.target().hook().into()));
         });
 
         {
@@ -1027,15 +1033,16 @@ mod test {
         }
         exchange_updates(&[&d1, &d2]);
 
-        assert_eq!(c1.borrow_mut().take(), Some(a1.hook()));
-        assert_eq!(c2.borrow_mut().take(), Some(a2.hook()));
+        assert_eq!(c1.swap(None), Some(Arc::new(a1.hook())));
+        assert_eq!(c2.swap(None), Some(Arc::new(a2.hook())));
     }
 
     use crate::transaction::ReadTxn;
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encoder, EncoderV1};
+    use arc_swap::ArcSwapOption;
     use fastrand::Rng;
-    use std::sync::atomic::{AtomicI64, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
     use std::time::Duration;
 
     static UNIQUE_NUMBER: AtomicI64 = AtomicI64::new(0);
@@ -1183,12 +1190,12 @@ mod test {
         let doc = Doc::with_client_id(1);
         let array = doc.get_or_insert_array("array");
 
-        let paths = Rc::new(RefCell::new(Vec::new()));
+        let paths = Arc::new(Mutex::new(vec![]));
         let paths_copy = paths.clone();
 
         let _sub = array.observe_deep(move |_txn, e| {
             let path: Vec<Path> = e.iter().map(Event::path).collect();
-            paths_copy.borrow_mut().push(path);
+            paths_copy.lock().unwrap().push(path);
         });
 
         array.insert(&mut doc.transact_mut(), 0, MapPrelim::<String>::new());
@@ -1204,7 +1211,7 @@ mod test {
             vec![Path::default()],
             vec![Path::default(), Path::from([PathSegment::Index(1)])],
         ];
-        let actual = RefCell::borrow(&paths);
+        let actual = paths.lock().unwrap();
         assert_eq!(actual.as_slice(), expected);
     }
 
@@ -1216,18 +1223,16 @@ mod test {
         let d2 = Doc::with_client_id(2);
         let a2 = d2.get_or_insert_array("array");
 
-        let e1: Rc<RefCell<Vec<Change>>> = Rc::new(RefCell::new(Vec::default()));
+        let e1 = Arc::new(ArcSwapOption::default());
         let inner = e1.clone();
         let _s1 = a1.observe(move |txn, e| {
-            let mut x = inner.as_ref().borrow_mut();
-            *x = e.delta(txn).to_vec();
+            inner.store(Some(Arc::new(e.delta(txn).to_vec())));
         });
 
-        let e2: Rc<RefCell<Vec<Change>>> = Rc::new(RefCell::new(Vec::default()));
+        let e2 = Arc::new(ArcSwapOption::default());
         let inner = e2.clone();
         let _s2 = a2.observe(move |txn, e| {
-            let mut x = inner.borrow_mut();
-            *x = e.delta(txn).to_vec();
+            inner.store(Some(Arc::new(e.delta(txn).to_vec())));
         });
 
         {
@@ -1240,23 +1245,27 @@ mod test {
         exchange_updates(&[&d1, &d2]);
 
         assert_eq!(a2.to_json(&d2.transact()), vec![2, 1, 3].into());
-        let actual = e2.as_ref().borrow();
+        let actual = e2.load_full();
         assert_eq!(
-            actual.deref(),
-            &vec![Change::Added(vec![2.into(), 1.into(), 3.into()])]
+            actual,
+            Some(Arc::new(vec![Change::Added(vec![
+                2.into(),
+                1.into(),
+                3.into()
+            ])]))
         );
 
         a1.move_to(&mut d1.transact_mut(), 0, 2);
 
         assert_eq!(a1.to_json(&d1.transact()), vec![1, 2, 3].into());
-        let actual = e1.as_ref().borrow();
+        let actual = e1.load_full();
         assert_eq!(
-            actual.deref(),
-            &vec![
+            actual,
+            Some(Arc::new(vec![
                 Change::Removed(1),
                 Change::Retain(1),
                 Change::Added(vec![2.into()])
-            ]
+            ]))
         )
     }
 
@@ -1268,32 +1277,30 @@ mod test {
         let d2 = Doc::with_client_id(2);
         let a2 = d2.get_or_insert_array("array");
 
-        let e1: Rc<RefCell<Vec<Change>>> = Rc::new(RefCell::new(Vec::default()));
+        let e1 = Arc::new(ArcSwapOption::default());
         let inner = e1.clone();
         let _s1 = a1.observe(move |txn, e| {
-            let mut x = inner.as_ref().borrow_mut();
-            *x = e.delta(txn).to_vec();
+            inner.store(Some(Arc::new(e.delta(txn).to_vec())));
         });
 
-        let e2: Rc<RefCell<Vec<Change>>> = Rc::new(RefCell::new(Vec::default()));
+        let e2 = Arc::new(ArcSwapOption::default());
         let inner = e2.clone();
         let _s2 = a2.observe(move |txn, e| {
-            let mut x = inner.borrow_mut();
-            *x = e.delta(txn).to_vec();
+            inner.store(Some(Arc::new(e.delta(txn).to_vec())));
         });
 
         a1.insert_range(&mut d1.transact_mut(), 0, [1, 2]);
         a1.move_to(&mut d1.transact_mut(), 1, 0);
         assert_eq!(a1.to_json(&d1.transact()), vec![2, 1].into());
         {
-            let actual = e1.as_ref().borrow();
+            let actual = e1.load_full();
             assert_eq!(
-                actual.deref(),
-                &vec![
+                actual,
+                Some(Arc::new(vec![
                     Change::Added(vec![2.into()]),
                     Change::Retain(1),
                     Change::Removed(1)
-                ]
+                ]))
             );
         }
 
@@ -1301,24 +1308,24 @@ mod test {
 
         assert_eq!(a2.to_json(&d2.transact()), vec![2, 1].into());
         {
-            let actual = e2.as_ref().borrow();
+            let actual = e2.load_full();
             assert_eq!(
-                actual.deref(),
-                &vec![Change::Added(vec![2.into(), 1.into()])]
+                actual,
+                Some(Arc::new(vec![Change::Added(vec![2.into(), 1.into()])]))
             );
         }
 
         a1.move_to(&mut d1.transact_mut(), 0, 2);
         assert_eq!(a1.to_json(&d1.transact()), vec![1, 2].into());
         {
-            let actual = e1.as_ref().borrow();
+            let actual = e1.load_full();
             assert_eq!(
-                actual.deref(),
-                &vec![
+                actual,
+                Some(Arc::new(vec![
                     Change::Removed(1),
                     Change::Retain(1),
                     Change::Added(vec![2.into()])
-                ]
+                ]))
             );
         }
     }

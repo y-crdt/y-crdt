@@ -519,7 +519,28 @@ impl RangeBounds<u32> for YRange {
     }
 }
 
+pub(crate) const JS_ORIGIN: &'static str = "__subscription_key";
 pub(crate) const JS_PTR: &'static str = "__wbg_ptr";
+
+pub trait Callback: AsRef<JsValue> {
+    fn subscription_key(&self) -> u32 {
+        let js: &JsValue = self.as_ref();
+        let origin_field = JsValue::from_str(JS_ORIGIN);
+        let abi = js_sys::Reflect::get(js, &origin_field)
+            .ok()
+            .and_then(|v| v.as_f64());
+        match abi {
+            Some(abi) => abi as u32,
+            None => {
+                let abi = js.into_abi();
+                js_sys::Reflect::set(js, &origin_field, &JsValue::from(abi)).unwrap();
+                abi
+            }
+        }
+    }
+}
+
+impl Callback for js_sys::Function {}
 
 pub(crate) mod convert {
     use crate::array::YArrayEvent;

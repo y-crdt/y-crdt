@@ -1,4 +1,4 @@
-import { exchangeUpdates } from './testHelper.js' // eslint-disable-line
+import {exchangeUpdates} from './testHelper.js' // eslint-disable-line
 
 import * as Y from 'ywasm'
 import * as t from 'lib0/testing'
@@ -28,7 +28,7 @@ export const testSet = tc => {
 export const testSetNested = tc => {
     const d1 = new Y.YDoc()
     const x = d1.getMap('test')
-    const nested = new Y.YMap({ a: 'A' })
+    const nested = new Y.YMap({a: 'A'})
 
     x.set('key', nested)
     nested.set('b', 'B')
@@ -108,11 +108,12 @@ export const testObserver = tc => {
     let target = null
     let entries = null
     let origin = null
-    let observer = x.observe(e => {
+    let callback = e => {
         target = e.target
         entries = e.keys
         origin = e.origin
-    })
+    }
+    x.observe(callback)
 
     // insert initial data to an empty YMap
     d1.transact(txn => {
@@ -121,8 +122,8 @@ export const testObserver = tc => {
     }, 'TEST_ORIGIN')
     t.compare(target.toJson(), x.toJson())
     t.compare(entries, {
-        key1: { action: 'add', newValue: 'value1' },
-        key2: { action: 'add', newValue: 2 }
+        key1: {action: 'add', newValue: 'value1'},
+        key2: {action: 'add', newValue: 2}
     })
     t.compare(origin, 'TEST_ORIGIN')
     target = null
@@ -135,15 +136,15 @@ export const testObserver = tc => {
     })
     t.compare(target.toJson(), x.toJson())
     t.compare(entries, {
-        key1: { action: 'delete', oldValue: 'value1' },
-        key2: { action: 'update', oldValue: 2, newValue: 'value2' }
+        key1: {action: 'delete', oldValue: 'value1'},
+        key2: {action: 'update', oldValue: 2, newValue: 'value2'}
     })
     t.compare(origin, undefined)
     target = null
     entries = null
 
     // free the observer and make sure that callback is no longer called
-    observer.free()
+    t.assert(x.unobserve(callback), 'unobserve failed')
     x.set('key1', [6])
     t.compare(target, null)
     t.compare(entries, null)

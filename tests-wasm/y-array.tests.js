@@ -138,11 +138,12 @@ export const testObserver = tc => {
     let target = null
     let delta = null
     let origin = null
-    let observer = x.observe(e => {
+    let callback = e => {
         target = e.target
         delta = e.delta
         origin = e.origin
-    })
+    }
+    x.observe(callback)
 
     // insert initial data to an empty YArray
     d1.transact((txn) => {
@@ -170,7 +171,7 @@ export const testObserver = tc => {
     delta = null
 
     // free the observer and make sure that callback is no longer called
-    observer.free()
+    t.assert(x.unobserve(callback), 'unobserve failed')
     x.insert(1, [6])
     t.compare(target, null)
     t.compare(delta, null)
@@ -187,7 +188,7 @@ export const testObserveDeepEventOrder = tc => {
      * @type {Array<any>}
      */
     let paths = []
-    let subscription = arr.observeDeep(events => {
+    arr.observeDeep(events => {
         paths = events.map(e => e.path())
     })
     arr.insert(0, [new Y.YMap()])
@@ -196,7 +197,6 @@ export const testObserveDeepEventOrder = tc => {
         arr.insert(0, [0], txn)
     })
     t.compare(paths, [[], [1]])
-    subscription.free()
 }
 
 /**

@@ -36,21 +36,12 @@ impl BranchPtr {
         subs: HashSet<Option<Arc<str>>>,
     ) -> Option<Event> {
         let e = self.make_event(subs)?;
-        if let Some(callbacks) = self.observers.callbacks() {
-            for fun in callbacks {
-                fun(txn, &e);
-            }
-        }
-
+        self.observers.trigger(|fun| fun(txn, &e));
         Some(e)
     }
 
     pub(crate) fn trigger_deep(&self, txn: &TransactionMut, e: &Events) {
-        if let Some(callbacks) = self.deep_observers.callbacks() {
-            for fun in callbacks {
-                fun(txn, e);
-            }
-        }
+        self.deep_observers.trigger(|fun| fun(txn, e));
     }
 }
 
@@ -205,10 +196,20 @@ pub struct Branch {
     /// An identifier of an underlying complex data type (eg. is it an Array or a Map).
     pub(crate) type_ref: TypeRef,
 
-    pub(crate) observers: Observer<Event>,
+    pub(crate) observers: Observer<ObserveFn>,
 
-    pub(crate) deep_observers: Observer<Events>,
+    pub(crate) deep_observers: Observer<DeepObserveFn>,
 }
+
+#[cfg(not(target_family = "wasm"))]
+type ObserveFn = Box<dyn Fn(&TransactionMut, &Event) + Send + Sync + 'static>;
+#[cfg(not(target_family = "wasm"))]
+type DeepObserveFn = Box<dyn Fn(&TransactionMut, &Events) + Send + Sync + 'static>;
+
+#[cfg(target_family = "wasm")]
+type ObserveFn = Box<dyn Fn(&TransactionMut, &Event) + 'static>;
+#[cfg(target_family = "wasm")]
+type DeepObserveFn = Box<dyn Fn(&TransactionMut, &Events) + 'static>;
 
 impl std::fmt::Debug for Branch {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -520,18 +521,57 @@ impl Branch {
         path
     }
 
+    #[cfg(not(target_family = "wasm"))]
     pub fn observe<F>(&mut self, f: F) -> Subscription
     where
-        F: Fn(&TransactionMut, &Event) -> () + 'static,
+        F: Fn(&TransactionMut, &Event) + Send + Sync + 'static,
     {
-        self.observers.subscribe(f)
+        self.observers.subscribe(Box::new(f))
     }
 
+    #[cfg(not(target_family = "wasm"))]
+
+    pub fn observe_with<F>(&mut self, key: Origin, f: F)
+    where
+        F: Fn(&TransactionMut, &Event) + Send + Sync + 'static,
+    {
+        self.observers.subscribe_with(key, Box::new(f))
+    }
+
+    #[cfg(target_family = "wasm")]
+    pub fn observe_with<F>(&mut self, key: Origin, f: F)
+    where
+        F: Fn(&TransactionMut, &Event) + 'static,
+    {
+        self.observers.subscribe_with(key, Box::new(f))
+    }
+
+    pub fn unobserve(&mut self, key: &Origin) -> bool {
+        self.observers.unsubscribe(&key)
+    }
+
+    #[cfg(not(target_family = "wasm"))]
     pub fn observe_deep<F>(&self, f: F) -> Subscription
     where
-        F: Fn(&TransactionMut, &Events) -> () + 'static,
+        F: Fn(&TransactionMut, &Events) + Send + Sync + 'static,
     {
-        self.deep_observers.subscribe(f)
+        self.deep_observers.subscribe(Box::new(f))
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    pub fn observe_deep_with<F>(&self, key: Origin, f: F)
+    where
+        F: Fn(&TransactionMut, &Events) + Send + Sync + 'static,
+    {
+        self.deep_observers.subscribe_with(key, Box::new(f))
+    }
+
+    #[cfg(target_family = "wasm")]
+    pub fn observe_deep_with<F>(&self, key: Origin, f: F)
+    where
+        F: Fn(&TransactionMut, &Events) + 'static,
+    {
+        self.deep_observers.subscribe_with(key, Box::new(f))
     }
 
     pub(crate) fn is_parent_of(&self, mut ptr: Option<ItemPtr>) -> bool {

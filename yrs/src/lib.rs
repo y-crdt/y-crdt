@@ -617,7 +617,7 @@ pub use crate::moving::IndexScope;
 pub use crate::moving::IndexedSequence;
 pub use crate::moving::Offset;
 pub use crate::moving::StickyIndex;
-pub use crate::observer::{Observer, ObserverMut, Subscription};
+pub use crate::observer::{Observer, Subscription};
 pub use crate::state_vector::Snapshot;
 pub use crate::state_vector::StateVector;
 pub use crate::store::Store;

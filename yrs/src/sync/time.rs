@@ -2,13 +2,13 @@
 pub type Timestamp = u64;
 
 /// A clock trait used to obtain the current time.
-pub trait Clock {
+pub trait Clock: Send + Sync {
     fn now(&self) -> Timestamp;
 }
 
 impl<F> Clock for F
 where
-    F: Fn() -> Timestamp,
+    F: Fn() -> Timestamp + Send + Sync,
 {
     #[inline]
     fn now(&self) -> Timestamp {
@@ -17,11 +17,11 @@ where
 }
 
 /// A clock which uses standard (non-monotonic) OS date time.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(target_family = "wasm"))]
 #[derive(Debug, Copy, Clone, Default)]
 pub struct SystemClock;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(target_family = "wasm"))]
 impl Clock for SystemClock {
     fn now(&self) -> Timestamp {
         std::time::SystemTime::now()

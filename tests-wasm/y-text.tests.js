@@ -1,4 +1,4 @@
-import { exchangeUpdates } from './testHelper.js' // eslint-disable-line
+import {exchangeUpdates} from './testHelper.js' // eslint-disable-line
 
 import * as Y from 'ywasm'
 import * as t from 'lib0/testing'
@@ -18,7 +18,7 @@ export const testInserts = tc => {
     var value = x.toString()
     t.compareStrings(value, expected)
 
-    const d2 = new  Y.YDoc({clientID:2})
+    const d2 = new Y.YDoc({clientID: 2})
     x = d2.getText('test')
 
     exchangeUpdates([d1, d2])
@@ -46,7 +46,7 @@ export const testDeletes = tc => {
     var value = x.toString()
     t.compareStrings(value, expected)
 
-    const d2 = new  Y.YDoc({clientID:2})
+    const d2 = new Y.YDoc({clientID: 2})
     x = d2.getText('test')
 
     exchangeUpdates([d1, d2])
@@ -66,41 +66,42 @@ export const testObserver = tc => {
     const x = d1.getText('test')
     let target = null
     let delta = null
-    let observer = x.observe(e => {
+    let callback = e => {
         target = e.target
         delta = e.delta
-    })
+    }
+    x.observe(callback)
 
     // insert initial data to an empty YText
     x.insert(0, 'abcd')
     t.compare(target.toJson(), x.toJson())
-    t.compare(delta, [{ insert: 'abcd' }])
+    t.compare(delta, [{insert: 'abcd'}])
     target = null
     delta = null
 
     // remove 2 chars from the middle
     x.delete(1, 2)
     t.compare(target.toJson(), x.toJson())
-    t.compare(delta, [{ retain: 1 }, { delete: 2 }])
+    t.compare(delta, [{retain: 1}, {delete: 2}])
     target = null
     delta = null
 
     // insert new item in the middle
-    x.insert(1, 'e', { bold: true })
+    x.insert(1, 'e', {bold: true})
     t.compare(target.toJson(), x.toJson())
-    t.compare(delta, [{ retain: 1 }, { insert: 'e', attributes: { bold: true } }])
+    t.compare(delta, [{retain: 1}, {insert: 'e', attributes: {bold: true}}])
     target = null
     delta = null
 
     // remove formatting
-    x.format(1, 1, { bold: null })
+    x.format(1, 1, {bold: null})
     t.compare(target.toJson(), x.toJson())
-    t.compare(delta, [{ retain: 1 }, { retain: 2, attributes: { bold: null } }])
+    t.compare(delta, [{retain: 1}, {retain: 2, attributes: {bold: null}}])
     target = null
     delta = null
 
     // free the observer and make sure that callback is no longer called
-    observer.free()
+    t.assert(x.unobserve(callback), 'unobserve failed')
     x.insert(1, 'fgh')
     t.compare(target, null)
     t.compare(delta, null)
@@ -115,20 +116,19 @@ export const testToDeltaEmbedAttributes = tc => {
 
     let delta = null
     let origin = null
-    let observer = text.observe(e => {
+    text.observe(e => {
         delta = e.delta
         origin = e.origin
     })
 
     d1.transact(txn => {
-        text.insert(0, 'ab', { bold: true }, txn)
-        text.insertEmbed(1, { image: 'imageSrc.png' }, { width: 100 }, txn)
+        text.insert(0, 'ab', {bold: true}, txn)
+        text.insertEmbed(1, {image: 'imageSrc.png'}, {width: 100}, txn)
     }, 'TEST_ORIGIN')
     t.compare(delta, [
-        { insert: 'a', attributes: { bold: true } },
-        { insert: { image: 'imageSrc.png' }, attributes: { width: 100 } },
-        { insert: 'b', attributes: { bold: true } }
+        {insert: 'a', attributes: {bold: true}},
+        {insert: {image: 'imageSrc.png'}, attributes: {width: 100}},
+        {insert: 'b', attributes: {bold: true}}
     ])
     t.compare(origin, 'TEST_ORIGIN')
-    observer.free()
 }

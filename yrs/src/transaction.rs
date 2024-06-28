@@ -7,7 +7,7 @@ use crate::gc::GCCollector;
 use crate::id_set::DeleteSet;
 use crate::iter::TxnIterator;
 use crate::slice::BlockSlice;
-use crate::store::{Store, SubdocGuids, SubdocsIter};
+use crate::store::{Store, StoreEvents, SubdocGuids, SubdocsIter};
 use crate::types::{Event, Events, RootRef, SharedRef, TypePtr, Value};
 use crate::update::Update;
 use crate::utils::OptionExt;
@@ -343,6 +343,10 @@ impl<'doc> TransactionMut<'doc> {
 
     pub fn doc(&self) -> &Doc {
         &self.doc
+    }
+
+    pub fn events(&self) -> Option<&StoreEvents> {
+        self.store.events.as_deref()
     }
 
     /// Corresponding document's state vector at the moment when current transaction was created.
@@ -743,7 +747,7 @@ impl<'doc> TransactionMut<'doc> {
         let mut current = branch;
         loop {
             changed_parent_types.push(current);
-            if current.deep_observers.callbacks().is_some() {
+            if current.deep_observers.has_subscribers() {
                 let entries = changed_parents.entry(current).or_default();
                 entries.push(event_cache.len() - 1);
             }
@@ -901,9 +905,9 @@ impl<'doc> TransactionMut<'doc> {
 
             let store = self.store.deref();
             let mut removed = if let Some(events) = store.events.as_ref() {
-                if let Some(mut callbacks) = events.subdocs_events.callbacks() {
+                if events.subdocs_events.has_subscribers() {
                     let e = SubdocsEvent::new(subdocs);
-                    callbacks.trigger(self, &e);
+                    events.subdocs_events.trigger(|cb| cb(self, &e));
                     e.removed
                 } else {
                     subdocs.removed

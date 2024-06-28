@@ -440,11 +440,11 @@ mod test {
         any, Any, Array, ArrayPrelim, ArrayRef, Doc, Map, MapPrelim, MapRef, Observable,
         StateVector, Text, Transact, Update,
     };
+    use arc_swap::ArcSwapOption;
     use fastrand::Rng;
-    use std::cell::RefCell;
     use std::collections::HashMap;
-    use std::ops::{Deref, DerefMut};
-    use std::rc::Rc;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
     #[test]
@@ -765,11 +765,11 @@ mod test {
         let d1 = Doc::with_client_id(1);
         let m1 = d1.get_or_insert_map("map");
 
-        let entries = Rc::new(RefCell::new(None));
+        let entries = Arc::new(ArcSwapOption::default());
         let entries_c = entries.clone();
         let _sub = m1.observe(move |txn, e| {
             let keys = e.keys(txn);
-            *entries_c.borrow_mut() = Some(keys.clone());
+            entries_c.store(Some(Arc::new(keys.clone())));
         });
 
         // insert new entry
@@ -779,11 +779,11 @@ mod test {
             // txn is committed at the end of this scope
         }
         assert_eq!(
-            entries.take(),
-            Some(HashMap::from([(
+            entries.swap(None),
+            Some(Arc::new(HashMap::from([(
                 "a".into(),
                 EntryChange::Inserted(Any::Number(1.0).into())
-            )]))
+            )])))
         );
 
         // update existing entry once
@@ -792,11 +792,11 @@ mod test {
             m1.insert(&mut txn, "a", 2);
         }
         assert_eq!(
-            entries.take(),
-            Some(HashMap::from([(
+            entries.swap(None),
+            Some(Arc::new(HashMap::from([(
                 "a".into(),
                 EntryChange::Updated(Any::Number(1.0).into(), Any::Number(2.0).into())
-            )]))
+            )])))
         );
 
         // update existing entry twice
@@ -806,11 +806,11 @@ mod test {
             m1.insert(&mut txn, "a", 4);
         }
         assert_eq!(
-            entries.take(),
-            Some(HashMap::from([(
+            entries.swap(None),
+            Some(Arc::new(HashMap::from([(
                 "a".into(),
                 EntryChange::Updated(Any::Number(2.0).into(), Any::Number(4.0).into())
-            )]))
+            )])))
         );
 
         // remove existing entry
@@ -819,11 +819,11 @@ mod test {
             m1.remove(&mut txn, "a");
         }
         assert_eq!(
-            entries.take(),
-            Some(HashMap::from([(
+            entries.swap(None),
+            Some(Arc::new(HashMap::from([(
                 "a".into(),
                 EntryChange::Removed(Any::Number(4.0).into())
-            )]))
+            )])))
         );
 
         // add another entry and update it
@@ -833,11 +833,11 @@ mod test {
             m1.insert(&mut txn, "b", 2);
         }
         assert_eq!(
-            entries.take(),
-            Some(HashMap::from([(
+            entries.swap(None),
+            Some(Arc::new(HashMap::from([(
                 "b".into(),
                 EntryChange::Inserted(Any::Number(2.0).into())
-            )]))
+            )])))
         );
 
         // add and remove an entry
@@ -846,17 +846,17 @@ mod test {
             m1.insert(&mut txn, "c", 1);
             m1.remove(&mut txn, "c");
         }
-        assert_eq!(entries.take(), Some(HashMap::new()));
+        assert_eq!(entries.swap(None), Some(HashMap::new().into()));
 
         // copy updates over
         let d2 = Doc::with_client_id(2);
         let m2 = d2.get_or_insert_map("map");
 
-        let entries = Rc::new(RefCell::new(None));
+        let entries = Arc::new(ArcSwapOption::default());
         let entries_c = entries.clone();
         let _sub = m2.observe(move |txn, e| {
             let keys = e.keys(txn);
-            *entries_c.borrow_mut() = Some(keys.clone());
+            entries_c.store(Some(Arc::new(keys.clone())));
         });
 
         {
@@ -869,11 +869,11 @@ mod test {
             t2.apply_update(Update::decode_v1(encoder.to_vec().as_slice()).unwrap());
         }
         assert_eq!(
-            entries.take(),
-            Some(HashMap::from([(
+            entries.swap(None),
+            Some(Arc::new(HashMap::from([(
                 "b".into(),
                 EntryChange::Inserted(Any::Number(2.0).into())
-            )]))
+            )])))
         );
     }
 
@@ -934,16 +934,14 @@ mod test {
         let doc = Doc::with_client_id(1);
         let map = doc.get_or_insert_map("map");
 
-        let paths = Rc::new(RefCell::new(vec![]));
-        let calls = Rc::new(RefCell::new(0));
+        let paths = Arc::new(Mutex::new(vec![]));
+        let calls = Arc::new(AtomicU32::new(0));
         let paths_copy = paths.clone();
         let calls_copy = calls.clone();
         let _sub = map.observe_deep(move |_txn, e| {
             let path: Vec<Path> = e.iter().map(Event::path).collect();
-            paths_copy.borrow_mut().push(path);
-            let mut count = calls_copy.borrow_mut();
-            let count = count.deref_mut();
-            *count += 1;
+            paths_copy.lock().unwrap().push(path);
+            calls_copy.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         });
 
         let nested = map.insert(&mut doc.transact_mut(), "map", MapPrelim::<String>::new());
@@ -962,8 +960,8 @@ mod test {
         let nested_text = nested.insert(&mut doc.transact_mut(), "text", TextPrelim::new("text"));
         nested_text.push(&mut doc.transact_mut(), "!");
 
-        assert_eq!(*calls.borrow().deref(), 5);
-        let actual = paths.borrow();
+        assert_eq!(calls.load(Ordering::Relaxed), 5);
+        let actual = paths.lock().unwrap();
         assert_eq!(
             actual.as_slice(),
             &[

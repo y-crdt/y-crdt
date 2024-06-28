@@ -206,11 +206,11 @@ export const testUndoEvents = tc => {
     const undoManager = new Y.YUndoManager(d0, text0)
     let counter = 0
     let receivedMetadata = -1
-    undoManager.onStackItemAdded(event => {
+    undoManager.on('stack-item-added', event => {
         event.meta = event.meta || {}
         event.meta.test = counter++
     })
-    undoManager.onStackItemPopped(event => {
+    undoManager.on('stack-item-popped', event => {
         receivedMetadata = event.meta.test
     })
     text0.insert(0, 'abc')

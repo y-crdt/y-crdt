@@ -1,14 +1,18 @@
-use crate::doc::YDoc;
-use crate::js::{Js, Shared};
-use crate::transaction::YTransaction;
-use crate::Result;
+use std::collections::HashSet;
+use std::sync::Arc;
+
 use js_sys::Reflect;
-use std::rc::Rc;
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
+
 use yrs::branch::BranchPtr;
 use yrs::undo::{EventKind, UndoManager};
 use yrs::{Doc, Transact};
+
+use crate::doc::YDoc;
+use crate::js::{Callback, Js, Shared};
+use crate::transaction::YTransaction;
+use crate::Result;
 
 #[wasm_bindgen]
 #[repr(transparent)]
@@ -36,8 +40,12 @@ impl YUndoManager {
     pub fn new(doc: &YDoc, scope: JsValue, options: JsValue) -> Result<YUndoManager> {
         let doc = &doc.0;
         let scope = Self::get_scope(doc, &scope)?;
-        let mut o = yrs::undo::Options::default();
-        o.timestamp = Rc::new(|| js_sys::Date::now() as u64);
+        let mut o = yrs::undo::Options {
+            capture_timeout_millis: 500,
+            tracked_origins: HashSet::new(),
+            capture_transaction: None,
+            timestamp: Arc::new(crate::awareness::JsClock),
+        };
         if options.is_object() {
             if let Ok(js) = Reflect::get(&options, &JsValue::from_str("captureTimeout")) {
                 if let Some(millis) = js.as_f64() {
@@ -118,32 +126,48 @@ impl YUndoManager {
         self.0.can_redo()
     }
 
-    #[wasm_bindgen(js_name = onStackItemAdded)]
-    pub fn on_item_added(&mut self, callback: js_sys::Function) -> crate::Observer {
-        self.0
-            .observe_item_added(move |txn, e| {
+    #[wasm_bindgen(js_name = on)]
+    pub fn on(&mut self, event: &str, callback: js_sys::Function) -> crate::Result<()> {
+        let abi = callback.subscription_key();
+        match event {
+            "stack-item-added" => self.0.observe_item_added_with(abi, move |txn, e| {
                 let event: JsValue = YUndoEvent::new(e).into();
                 let txn: JsValue = YTransaction::from_ref(txn).into();
                 callback.call2(&JsValue::UNDEFINED, &event, &txn).unwrap();
                 let meta =
                     Reflect::get(&event, &JsValue::from_str("meta")).unwrap_or(JsValue::UNDEFINED);
                 *e.meta_mut() = meta;
-            })
-            .into()
+            }),
+            "stack-item-popped" => self.0.observe_item_popped_with(abi, move |txn, e| {
+                let event: JsValue = YUndoEvent::new(e).into();
+                let txn: JsValue = YTransaction::from_ref(txn).into();
+                callback.call2(&JsValue::UNDEFINED, &event, &txn).unwrap();
+                let meta =
+                    Reflect::get(&event, &JsValue::from_str("meta")).unwrap_or(JsValue::UNDEFINED);
+                *e.meta_mut() = meta;
+            }),
+            "stack-item-updated" => self.0.observe_item_updated_with(abi, move |txn, e| {
+                let event: JsValue = YUndoEvent::new(e).into();
+                let txn: JsValue = YTransaction::from_ref(txn).into();
+                callback.call2(&JsValue::UNDEFINED, &event, &txn).unwrap();
+                let meta =
+                    Reflect::get(&event, &JsValue::from_str("meta")).unwrap_or(JsValue::UNDEFINED);
+                *e.meta_mut() = meta;
+            }),
+            unknown => return Err(JsValue::from_str(&format!("Unknown event: {}", unknown))),
+        }
+        Ok(())
     }
 
-    #[wasm_bindgen(js_name = onStackItemPopped)]
-    pub fn on_item_popped(&mut self, callback: js_sys::Function) -> crate::Observer {
-        self.0
-            .observe_item_popped(move |txn, e| {
-                let event: JsValue = YUndoEvent::new(e).into();
-                let txn: JsValue = YTransaction::from_ref(txn).into();
-                callback.call2(&JsValue::UNDEFINED, &event, &txn).unwrap();
-                let meta =
-                    Reflect::get(&event, &JsValue::from_str("meta")).unwrap_or(JsValue::UNDEFINED);
-                *e.meta_mut() = meta;
-            })
-            .into()
+    #[wasm_bindgen(js_name = off)]
+    pub fn off(&mut self, event: &str, callback: js_sys::Function) -> crate::Result<bool> {
+        let abi = callback.subscription_key();
+        match event {
+            "stack-item-added" => Ok(self.0.unobserve_item_added(abi)),
+            "stack-item-popped" => Ok(self.0.unobserve_item_popped(abi)),
+            "stack-item-updated" => Ok(self.0.unobserve_item_updated(abi)),
+            unknown => Err(JsValue::from_str(&format!("Unknown event: {}", unknown))),
+        }
     }
 }
 
