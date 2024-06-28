@@ -550,7 +550,7 @@
 //!
 //! struct MyProtocol;
 //! impl Protocol for MyProtocol {
-//!     fn missing_handle<S>(&self, awareness: &mut Awareness<S>, tag: u8, data: Vec<u8>) -> Result<Option<Message>, Error> {
+//!     fn missing_handle(&self, awareness: &mut Awareness, tag: u8, data: Vec<u8>) -> Result<Option<Message>, Error> {
 //!         // you can not only override existing message handlers but also define your own
 //!         Ok(Some(Message::Custom(tag, data))) // echo
 //!     }
