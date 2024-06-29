@@ -12,7 +12,7 @@ use std::borrow::Borrow;
 pub use text::Text;
 pub use text::TextRef;
 
-use crate::block::{Item, ItemContent, ItemPtr};
+use crate::block::{Item, ItemContent, ItemPtr, Prelim, Unused};
 use crate::branch::{Branch, BranchPtr};
 use crate::encoding::read::Error;
 use crate::transaction::TransactionMut;
@@ -319,6 +319,16 @@ pub trait SharedRef: From<BranchPtr> + AsRef<Branch> {
     }
 }
 
+/// Trait that allows for deep copying data from one shared type to another.
+pub trait CopyFrom: SharedRef {
+    /// Performs a deep copy of a current shared type from a given source.
+    ///
+    /// Deep copy means that rather than just linking nested shared types, a new shared type will
+    /// be inserted with the contents copied from the source. Therefore, chaning deep copy will
+    /// not affect the source.
+    fn copy_from(&self, txn: &mut TransactionMut, source: &Self);
+}
+
 /// Trait implemented by all Y-types, allowing for observing events which are emitted by
 /// nested types.
 #[cfg(not(target_family = "wasm"))]
@@ -565,6 +575,60 @@ impl std::fmt::Display for Value {
             Value::YWeakLink(_) => write!(f, "WeakRef"),
             Value::YDoc(v) => write!(f, "Doc(guid:{})", v.options().guid),
             Value::UndefinedRef(_) => write!(f, "UndefinedRef"),
+        }
+    }
+}
+
+/// A wrapper around [Value] type that enables it to be used as a type to be inserted into
+/// shared collections. If [ValuePrelim] contains a shared type, it will be inserted as a deep
+/// copy of the original type: therefore none of the changes applied to the original type will
+/// affect the deep copy.
+#[repr(transparent)]
+#[derive(Debug, Clone, PartialEq)]
+pub struct ValuePrelim(Value);
+
+impl From<Value> for ValuePrelim {
+    fn from(value: Value) -> Self {
+        ValuePrelim(value)
+    }
+}
+
+impl Prelim for ValuePrelim {
+    type Return = Unused;
+
+    fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
+        match self.0 {
+            Value::Any(any) => (ItemContent::Any(vec![any]), None),
+            value => {
+                let type_ref = match &value {
+                    Value::YText(_) => TypeRef::Text,
+                    Value::YArray(_) => TypeRef::Array,
+                    Value::YMap(_) => TypeRef::Map,
+                    Value::YXmlElement(xml) => TypeRef::XmlElement(xml.tag().clone()),
+                    Value::YXmlFragment(_) => TypeRef::XmlFragment,
+                    Value::YXmlText(_) => TypeRef::XmlText,
+                    Value::YDoc(_) => TypeRef::SubDoc,
+                    #[cfg(feature = "weak")]
+                    Value::YWeakLink(link) => TypeRef::WeakLink(link.source().clone()),
+                    Value::UndefinedRef(_) => TypeRef::Undefined,
+                    _ => unreachable!(),
+                };
+                let branch = Branch::new(type_ref);
+                (ItemContent::Type(branch), Some(ValuePrelim(value)))
+            }
+        }
+    }
+
+    fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
+        use crate::CopyFrom;
+        match self.0 {
+            Value::YText(text) => TextRef::from(inner_ref).copy_from(txn, &text),
+            Value::YArray(array) => ArrayRef::from(inner_ref).copy_from(txn, &array),
+            Value::YMap(map) => MapRef::from(inner_ref).copy_from(txn, &map),
+            Value::YXmlElement(xml) => XmlElementRef::from(inner_ref).copy_from(txn, &xml),
+            Value::YXmlFragment(xml) => XmlFragmentRef::from(inner_ref).copy_from(txn, &xml),
+            Value::YXmlText(text) => XmlTextRef::from(inner_ref).copy_from(txn, &text),
+            _ => {}
         }
     }
 }

@@ -4,9 +4,9 @@ use crate::moving::StickyIndex;
 use crate::transaction::TransactionMut;
 use crate::types::{
     event_change_set, Branch, BranchPtr, Change, ChangeSet, Path, RootRef, SharedRef, ToJson,
-    TypeRef, Value,
+    TypeRef, Value, ValuePrelim,
 };
-use crate::{Any, Assoc, DeepObservable, IndexedSequence, Observable, ReadTxn, ID};
+use crate::{Any, Assoc, CopyFrom, DeepObservable, IndexedSequence, Observable, ReadTxn, ID};
 use std::borrow::Borrow;
 use std::cell::UnsafeCell;
 use std::collections::HashSet;
@@ -139,6 +139,15 @@ impl TryFrom<Value> for ArrayRef {
         match value {
             Value::YArray(value) => Ok(value),
             other => Err(other),
+        }
+    }
+}
+
+impl CopyFrom for ArrayRef {
+    fn copy_from(&self, txn: &mut TransactionMut, source: &Self) {
+        let values: Vec<_> = source.iter(txn).collect();
+        for value in values {
+            self.push_back(txn, ValuePrelim::from(value));
         }
     }
 }

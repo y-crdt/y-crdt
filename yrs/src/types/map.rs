@@ -2,7 +2,7 @@ use crate::block::{EmbedPrelim, ItemContent, ItemPosition, ItemPtr, Prelim};
 use crate::transaction::TransactionMut;
 use crate::types::{
     event_keys, Branch, BranchPtr, Entries, EntryChange, Path, RootRef, SharedRef, ToJson, TypeRef,
-    Value,
+    Value, ValuePrelim,
 };
 use crate::*;
 use std::borrow::Borrow;
@@ -116,6 +116,19 @@ impl TryFrom<Value> for MapRef {
         match value {
             Value::YMap(value) => Ok(value),
             other => Err(other),
+        }
+    }
+}
+
+impl CopyFrom for MapRef {
+    fn copy_from(&self, txn: &mut TransactionMut, source: &Self) {
+        for (key, ptr) in source.0.map.iter() {
+            if ptr.is_deleted() {
+                continue;
+            }
+            if let Some(value) = ptr.content.get_last() {
+                self.insert(txn, key.clone(), ValuePrelim::from(value));
+            }
         }
     }
 }

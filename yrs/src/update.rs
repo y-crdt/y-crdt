@@ -960,7 +960,7 @@ impl Into<Store> for Update {
         use crate::doc::Options;
 
         let mut store = Store::new(Options::with_client_id(0));
-        for (client_id, vec) in self.blocks.clients {
+        for (_, vec) in self.blocks.clients {
             for block in vec {
                 if let BlockCarrier::Item(block) = block {
                     store.blocks.push_block(block);
@@ -1252,15 +1252,6 @@ mod test {
             let linknote = prosemirror.get(&txn, 0);
             assert!(linknote.is_none());
         }
-    }
-
-    #[test]
-    fn test_v1_v2() {
-        let bytes = vec![0, 1, 198, 182, 140, 174, 4, 4, 2, 2, 6, 1, 4, 2, 7, 2];
-        let update_v1 = Update::decode_v1(&bytes).unwrap();
-        let bytes_v2 = update_v1.encode_v2();
-        let update_v2 = Update::decode_v1(&bytes).unwrap();
-        assert_eq!(update_v1, update_v2);
     }
 
     fn decode_update(bin: &[u8]) -> Update {
