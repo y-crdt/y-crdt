@@ -14,7 +14,7 @@ use crate::utils::OptionExt;
 use crate::*;
 use atomic_refcell::{AtomicRef, AtomicRefMut};
 use smallvec::SmallVec;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Formatter;
 use std::hash::Hash;
 use std::ops::{Deref, DerefMut};
@@ -80,13 +80,16 @@ pub trait ReadTxn: Sized {
     fn encode_state_as_update_v1(&self, sv: &StateVector) -> Vec<u8> {
         let mut encoder = EncoderV1::new();
         self.encode_state_as_update(sv, &mut encoder);
-        encoder.to_vec()
+        // check for pending data
+        merge_pending_v1(encoder.to_vec(), self.store())
     }
 
     fn encode_state_as_update_v2(&self, sv: &StateVector) -> Vec<u8> {
         let mut encoder = EncoderV2::new();
         self.encode_state_as_update(sv, &mut encoder);
-        encoder.to_vec()
+
+        // check for pending data
+        merge_pending_v2(encoder.to_vec(), self.store())
     }
 
     /// Check if given node is alive. Returns false if node has been deleted.
@@ -238,6 +241,42 @@ pub trait WriteTxn: Sized {
     /// XML nodes).
     fn get_or_insert_xml_fragment<N: Into<Arc<str>>>(&mut self, name: N) -> XmlFragmentRef {
         XmlFragmentRef::root(name).get_or_create(self)
+    }
+}
+
+fn merge_pending_v1(update: Vec<u8>, store: &Store) -> Vec<u8> {
+    let mut merge = VecDeque::new();
+    if let Some(pending) = store.pending.as_ref() {
+        merge.push_back(pending.update.encode_v1());
+    }
+    if let Some(pending_ds) = store.pending_ds.as_ref() {
+        let mut u = Update::new();
+        u.delete_set = pending_ds.clone();
+        merge.push_back(u.encode_v1());
+    }
+    if merge.is_empty() {
+        update
+    } else {
+        merge.push_front(update);
+        merge_updates_v1(merge).unwrap()
+    }
+}
+
+fn merge_pending_v2(update: Vec<u8>, store: &Store) -> Vec<u8> {
+    let mut merge = VecDeque::new();
+    if let Some(pending) = store.pending.as_ref() {
+        merge.push_back(pending.update.encode_v2());
+    }
+    if let Some(pending_ds) = store.pending_ds.as_ref() {
+        let mut u = Update::new();
+        u.delete_set = pending_ds.clone();
+        merge.push_back(u.encode_v2());
+    }
+    if merge.is_empty() {
+        update
+    } else {
+        merge.push_front(update);
+        merge_updates_v2(merge).unwrap()
     }
 }
 
@@ -978,12 +1017,14 @@ impl<'doc> TransactionMut<'doc> {
         }
     }
 
+    #[cfg(feature = "weak")]
     fn link(&mut self, mut source: ItemPtr, link: BranchPtr) {
         source.info.set_linked();
         let links = self.store.linked_by.entry(source).or_default();
         links.insert(link);
     }
 
+    #[cfg(feature = "weak")]
     pub(crate) fn unlink(&mut self, mut source: ItemPtr, link: BranchPtr) {
         let all_links = &mut self.store.linked_by;
         let prune = if let Some(linked_by) = all_links.get_mut(&source) {

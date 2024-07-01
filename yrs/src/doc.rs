@@ -979,8 +979,8 @@ mod test {
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
     use crate::{
-        any, Any, Array, ArrayPrelim, ArrayRef, DeleteSet, Doc, GetString, Map, MapPrelim, MapRef,
-        OffsetKind, Options, StateVector, Subscription, Text, TextRef, Transact, Uuid, WriteTxn,
+        any, Any, Array, ArrayPrelim, ArrayRef, Doc, GetString, Map, MapPrelim, MapRef, OffsetKind,
+        Options, StateVector, Subscription, Text, TextRef, Transact, Uuid, WriteTxn,
         XmlElementPrelim, XmlFragment, XmlFragmentRef, XmlTextPrelim, XmlTextRef,
     };
     use std::collections::BTreeSet;

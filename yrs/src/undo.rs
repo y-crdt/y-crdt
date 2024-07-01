@@ -1352,10 +1352,7 @@ mod test {
         root.insert(
             &mut doc.transact_mut(),
             "a",
-            MapPrelim::<i32>::from(HashMap::from([
-                ("x".to_owned(), 0.into()),
-                ("y".to_owned(), 0.into()),
-            ])),
+            MapPrelim::from([("x".to_owned(), Any::from(0)), ("y".to_owned(), 0.into())]),
         );
         let point = root
             .get(&doc.transact(), "a")

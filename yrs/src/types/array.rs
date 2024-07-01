@@ -4,15 +4,16 @@ use crate::moving::StickyIndex;
 use crate::transaction::TransactionMut;
 use crate::types::{
     event_change_set, Branch, BranchPtr, Change, ChangeSet, Path, RootRef, SharedRef, ToJson,
-    TypeRef, Value,
+    TypeRef, Value, ValuePrelim,
 };
-use crate::{Any, Assoc, DeepObservable, IndexedSequence, Observable, ReadTxn, ID};
+use crate::{Any, Assoc, CopyFrom, DeepObservable, IndexedSequence, Observable, ReadTxn, ID};
 use std::borrow::Borrow;
 use std::cell::UnsafeCell;
 use std::collections::HashSet;
 use std::convert::{TryFrom, TryInto};
+use std::iter::FromIterator;
 use std::marker::PhantomData;
-use std::ops::Deref;
+use std::ops::{Deref, DerefMut};
 
 /// A collection used to store data in an indexed sequence structure. This type is internally
 /// implemented as a double linked list, which may squash values inserted directly one after another
@@ -139,6 +140,15 @@ impl TryFrom<Value> for ArrayRef {
         match value {
             Value::YArray(value) => Ok(value),
             other => Err(other),
+        }
+    }
+}
+
+impl CopyFrom for ArrayRef {
+    fn copy_from(&self, txn: &mut TransactionMut, source: &Self) {
+        let values: Vec<_> = source.iter(txn).collect();
+        for value in values {
+            self.push_back(txn, ValuePrelim::from(value));
         }
     }
 }
@@ -391,25 +401,45 @@ impl From<BranchPtr> for ArrayRef {
     }
 }
 
-/// A preliminary array. It's can be used to initialize an YArray, when it's about to be nested
-/// into another Yrs data collection, such as [Map] or another YArray.
-pub struct ArrayPrelim<T, V>(T)
-where
-    T: IntoIterator<Item = V>;
+/// A preliminary array. It can be used to initialize an [ArrayRef], when it's about to be nested
+/// into another Yrs data collection, such as [Map] or another [ArrayRef].
+#[repr(transparent)]
+#[derive(Debug, Clone)]
+pub struct ArrayPrelim<T>(Vec<T>);
 
-impl<T, V> From<T> for ArrayPrelim<T, V>
-where
-    T: IntoIterator<Item = V>,
-{
-    fn from(iter: T) -> Self {
-        ArrayPrelim(iter)
+impl<T> Deref for ArrayPrelim<T> {
+    type Target = Vec<T>;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 
-impl<T, V> Prelim for ArrayPrelim<T, V>
+impl<T> DerefMut for ArrayPrelim<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl<T> FromIterator<T> for ArrayPrelim<T> {
+    fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
+        ArrayPrelim(iter.into_iter().collect())
+    }
+}
+
+impl<I, T> From<I> for ArrayPrelim<T>
 where
-    V: Prelim,
-    T: IntoIterator<Item = V>,
+    I: IntoIterator<Item = T>,
+{
+    fn from(iter: I) -> Self {
+        ArrayPrelim(iter.into_iter().collect())
+    }
+}
+
+impl<T> Prelim for ArrayPrelim<T>
+where
+    T: Prelim,
 {
     type Return = ArrayRef;
 
@@ -426,19 +456,19 @@ where
     }
 }
 
-impl<T, V> Into<EmbedPrelim<ArrayPrelim<T, V>>> for ArrayPrelim<T, V>
+impl<T> Into<EmbedPrelim<ArrayPrelim<T>>> for ArrayPrelim<T>
 where
-    T: IntoIterator<Item = V>,
+    T: Prelim,
 {
     #[inline]
-    fn into(self) -> EmbedPrelim<ArrayPrelim<T, V>> {
+    fn into(self) -> EmbedPrelim<ArrayPrelim<T>> {
         EmbedPrelim::Shared(self)
     }
 }
 
-impl Default for ArrayPrelim<[u32; 0], u32> {
+impl Default for ArrayPrelim<Any> {
     fn default() -> Self {
-        ArrayPrelim([])
+        ArrayPrelim(Vec::new())
     }
 }
 
@@ -525,6 +555,7 @@ mod test {
         Transact, Update, ID,
     };
     use std::collections::{HashMap, HashSet};
+    use std::iter::FromIterator;
     use std::sync::{Arc, Mutex};
 
     #[test]
@@ -851,7 +882,7 @@ mod test {
         for i in 0..10 {
             let mut m = HashMap::new();
             m.insert("value".to_owned(), i);
-            a.push_back(&mut txn, MapPrelim::from(m));
+            a.push_back(&mut txn, MapPrelim::from_iter(m));
         }
 
         for (i, value) in a.iter(&txn).enumerate() {
@@ -1117,7 +1148,7 @@ mod test {
             let yarray = doc.get_or_insert_array("array");
             let mut txn = doc.transact_mut();
             let pos = rng.between(0, yarray.len(&txn));
-            let map = yarray.insert(&mut txn, pos, MapPrelim::<i32>::from(HashMap::default()));
+            let map = yarray.insert(&mut txn, pos, MapPrelim::default());
             map.insert(&mut txn, "someprop".to_string(), 42);
             map.insert(&mut txn, "someprop".to_string(), 43);
             map.insert(&mut txn, "someprop".to_string(), 44);

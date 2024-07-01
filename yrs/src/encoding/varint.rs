@@ -1,7 +1,6 @@
 use crate::encoding::read::{Error, Read};
 use crate::encoding::write::Write;
 use std::convert::TryInto;
-use std::mem::size_of;
 
 pub trait VarInt: Sized + Copy {
     fn write<W: Write>(&self, w: &mut W);

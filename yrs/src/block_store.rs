@@ -49,7 +49,10 @@ impl ClientBlockList {
         if len == 0 {
             0
         } else {
-            self.list[len - 1].clock_range().1 + 1
+            match &self.list[len - 1] {
+                BlockCell::GC(gc) => gc.end + 1,
+                BlockCell::Block(block) => block.id.clock + block.len,
+            }
         }
     }
 
@@ -65,6 +68,7 @@ impl ClientBlockList {
         let mut block = &self[right];
         let (mut start, mut end) = block.clock_range();
         if start == clock {
+            // a common case is to just append a block at the end, so check first if we can do that
             Some(right)
         } else {
             let mut mid = ((clock / end) * right as u32) as usize;

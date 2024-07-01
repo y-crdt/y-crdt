@@ -16,8 +16,8 @@ use crate::types::{
     EntryChange, MapRef, Path, RootRef, SharedRef, ToJson, TypePtr, TypeRef, Value,
 };
 use crate::{
-    Any, ArrayRef, BranchID, DeepObservable, GetString, IndexedSequence, Map, Observable, ReadTxn,
-    StickyIndex, Text, TextRef, ID,
+    Any, ArrayRef, BranchID, CopyFrom, DeepObservable, GetString, IndexedSequence, Map, Observable,
+    ReadTxn, StickyIndex, Text, TextRef, ID,
 };
 
 /// Trait shared by preliminary types that can be used as XML nodes: [XmlElementPrelim],
@@ -144,6 +144,54 @@ impl TryFrom<Value> for XmlNode {
     }
 }
 
+impl TryFrom<ItemPtr> for XmlNode {
+    type Error = ItemPtr;
+
+    fn try_from(value: ItemPtr) -> Result<Self, Self::Error> {
+        if let Some(branch) = value.clone().as_branch() {
+            match branch.type_ref {
+                TypeRef::XmlElement(_) => Ok(XmlNode::Element(XmlElementRef::from(branch))),
+                TypeRef::XmlFragment => Ok(XmlNode::Fragment(XmlFragmentRef::from(branch))),
+                TypeRef::XmlText => Ok(XmlNode::Text(XmlTextRef::from(branch))),
+                _ => return Err(value),
+            }
+        } else {
+            Err(value)
+        }
+    }
+}
+
+impl XmlPrelim for XmlNode {}
+impl Prelim for XmlNode {
+    type Return = Self;
+
+    fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
+        let type_ref = match &self {
+            XmlNode::Element(child) => TypeRef::XmlElement(child.tag().clone()),
+            XmlNode::Fragment(_) => TypeRef::XmlFragment,
+            XmlNode::Text(_) => TypeRef::XmlText,
+        };
+        (ItemContent::Type(Branch::new(type_ref)), Some(self))
+    }
+
+    fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
+        match self {
+            XmlNode::Element(child) => {
+                let xml = XmlElementRef::from(inner_ref);
+                xml.copy_from(txn, &child);
+            }
+            XmlNode::Fragment(child) => {
+                let xml = XmlFragmentRef::from(inner_ref);
+                xml.copy_from(txn, &child);
+            }
+            XmlNode::Text(child) => {
+                let xml = XmlTextRef::from(inner_ref);
+                xml.copy_from(txn, &child);
+            }
+        }
+    }
+}
+
 /// XML element data type. It represents an XML node, which can contain key-value attributes
 /// (interpreted as strings) as well as other nested XML elements or rich text (represented by
 /// [XmlTextRef] type).
@@ -181,6 +229,26 @@ impl Into<ArrayRef> for XmlElementRef {
 impl Into<MapRef> for XmlElementRef {
     fn into(self) -> MapRef {
         MapRef::from(self.0)
+    }
+}
+
+impl CopyFrom for XmlElementRef {
+    fn copy_from(&self, txn: &mut TransactionMut, source: &Self) {
+        for (key, ptr) in source.0.map.iter() {
+            if ptr.is_deleted() {
+                continue;
+            }
+            let value = ptr
+                .content
+                .get_last()
+                .map(|v| v.to_string(txn))
+                .unwrap_or(String::default());
+            self.insert_attribute(txn, key.clone(), value);
+        }
+        let children: Vec<_> = source.children(txn).collect();
+        for child in children {
+            self.push_back(txn, child);
+        }
     }
 }
 
@@ -515,6 +583,27 @@ impl TryFrom<Value> for XmlTextRef {
     }
 }
 
+impl CopyFrom for XmlTextRef {
+    fn copy_from(&self, txn: &mut TransactionMut, source: &Self) {
+        for (key, ptr) in source.0.map.iter() {
+            if ptr.is_deleted() {
+                continue;
+            }
+            let value = ptr
+                .content
+                .get_last()
+                .map(|v| v.to_string(txn))
+                .unwrap_or(String::default());
+            self.insert_attribute(txn, key.clone(), value);
+        }
+        let delta = source
+            .diff(txn, YChange::identity)
+            .into_iter()
+            .map(Delta::from);
+        self.apply_delta(txn, delta);
+    }
+}
+
 /// A preliminary type that will be materialized into an [XmlTextRef] once it will be integrated
 /// into Yrs document.
 #[derive(Debug)]
@@ -645,6 +734,15 @@ impl TryFrom<Value> for XmlFragmentRef {
     }
 }
 
+impl CopyFrom for XmlFragmentRef {
+    fn copy_from(&self, txn: &mut TransactionMut, source: &Self) {
+        let children: Vec<_> = source.children(txn).collect();
+        for child in children {
+            self.push_back(txn, child);
+        }
+    }
+}
+
 /// A preliminary type that will be materialized into an [XmlFragmentRef] once it will be integrated
 /// into Yrs document.
 #[derive(Debug, Clone)]
@@ -652,6 +750,12 @@ pub struct XmlFragmentPrelim<I, T>(I)
 where
     I: IntoIterator<Item = T>,
     T: XmlPrelim;
+
+impl Default for XmlFragmentPrelim<[XmlTextPrelim<String>; 0], XmlTextPrelim<String>> {
+    fn default() -> Self {
+        XmlFragmentPrelim::new([])
+    }
+}
 
 impl<I, T> XmlFragmentPrelim<I, T>
 where
@@ -810,6 +914,15 @@ pub trait XmlFragment: AsRef<Branch> {
             _ => None,
         }
     }
+
+    /// Returns an iterator over all children of a current XML fragment.
+    /// It does NOT include nested children of its children - for such cases use [Self::successors]
+    /// iterator.
+    fn children<'a, T: ReadTxn>(&self, txn: &'a T) -> XmlNodes<'a, T> {
+        let iter = BlockIter::new(BranchPtr::from(self.as_ref()));
+        XmlNodes::new(iter, txn)
+    }
+
     /// Returns a number of elements stored in current array.
     fn len<T: ReadTxn>(&self, _txn: &T) -> u32 {
         self.as_ref().len()
@@ -955,6 +1068,26 @@ where
             .map(|v| v.to_string(txn))
             .unwrap_or(String::default());
         Some((key.as_ref(), value))
+    }
+}
+
+pub struct XmlNodes<'a, T> {
+    iter: BlockIter,
+    txn: &'a T,
+}
+
+impl<'a, T: ReadTxn> XmlNodes<'a, T> {
+    fn new(iter: BlockIter, txn: &'a T) -> Self {
+        XmlNodes { iter, txn }
+    }
+}
+
+impl<'a, T: ReadTxn> Iterator for XmlNodes<'a, T> {
+    type Item = XmlNode;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let value = self.iter.read_value(self.txn)?;
+        XmlNode::try_from(value).ok()
     }
 }
 

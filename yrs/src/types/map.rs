@@ -2,14 +2,15 @@ use crate::block::{EmbedPrelim, ItemContent, ItemPosition, ItemPtr, Prelim};
 use crate::transaction::TransactionMut;
 use crate::types::{
     event_keys, Branch, BranchPtr, Entries, EntryChange, Path, RootRef, SharedRef, ToJson, TypeRef,
-    Value,
+    Value, ValuePrelim,
 };
 use crate::*;
 use std::borrow::Borrow;
 use std::cell::UnsafeCell;
 use std::collections::{HashMap, HashSet};
 use std::convert::{TryFrom, TryInto};
-use std::ops::Deref;
+use std::iter::FromIterator;
+use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
 /// Collection used to store key-value entries in an unordered manner. Keys are always represented
@@ -116,6 +117,19 @@ impl TryFrom<Value> for MapRef {
         match value {
             Value::YMap(value) => Ok(value),
             other => Err(other),
+        }
+    }
+}
+
+impl CopyFrom for MapRef {
+    fn copy_from(&self, txn: &mut TransactionMut, source: &Self) {
+        for (key, ptr) in source.0.map.iter() {
+            if ptr.is_deleted() {
+                continue;
+            }
+            if let Some(value) = ptr.content.get_last() {
+                self.insert(txn, key.clone(), ValuePrelim::from(value));
+            }
         }
     }
 }
@@ -326,9 +340,27 @@ impl From<BranchPtr> for MapRef {
     }
 }
 
-/// A preliminary map. It can be used to early initialize the contents of a [Map], when it's about
-/// to be inserted into another Yrs collection, such as [Array] or another [Map].
-pub struct MapPrelim<T>(HashMap<String, T>);
+/// A preliminary map. It can be used to early initialize the contents of a [MapRef], when it's about
+/// to be inserted into another Yrs collection, such as [ArrayRef] or another [MapRef].
+#[repr(transparent)]
+#[derive(Debug, Clone)]
+pub struct MapPrelim<T>(HashMap<Arc<str>, T>);
+
+impl<T> Deref for MapPrelim<T> {
+    type Target = HashMap<Arc<str>, T>;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<T> DerefMut for MapPrelim<T> {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
 
 impl<T> MapPrelim<T> {
     pub fn new() -> Self {
@@ -336,23 +368,31 @@ impl<T> MapPrelim<T> {
     }
 }
 
-impl<T> From<HashMap<String, T>> for MapPrelim<T> {
-    fn from(map: HashMap<String, T>) -> Self {
-        MapPrelim(map)
+impl Default for MapPrelim<Any> {
+    fn default() -> Self {
+        MapPrelim(HashMap::default())
     }
 }
 
-impl<K, V, const N: usize> From<[(K, V); N]> for MapPrelim<V>
+impl<S, T> FromIterator<(S, T)> for MapPrelim<T>
 where
-    K: Into<String>,
-    V: Prelim,
+    S: Into<Arc<str>>,
 {
-    fn from(arr: [(K, V); N]) -> Self {
-        let mut m = HashMap::with_capacity(N);
-        for (k, v) in arr {
-            m.insert(k.into(), v);
+    fn from_iter<I: IntoIterator<Item = (S, T)>>(iter: I) -> Self {
+        MapPrelim(iter.into_iter().map(|(k, v)| (k.into(), v)).collect())
+    }
+}
+
+impl<S, T, const C: usize> From<[(S, T); C]> for MapPrelim<T>
+where
+    S: Into<Arc<str>>,
+{
+    fn from(map: [(S, T); C]) -> Self {
+        let mut m = HashMap::with_capacity(C);
+        for (key, value) in map {
+            m.insert(key.into(), value);
         }
-        MapPrelim::from(m)
+        MapPrelim(m)
     }
 }
 
@@ -902,11 +942,7 @@ mod test {
                 map.insert(
                     &mut txn,
                     key.to_string(),
-                    MapPrelim::from({
-                        let mut map = HashMap::default();
-                        map.insert("deepkey".to_owned(), "deepvalue");
-                        map
-                    }),
+                    MapPrelim::from([("deepkey".to_owned(), "deepvalue")]),
                 );
             }
         }

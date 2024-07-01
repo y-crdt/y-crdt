@@ -1,6 +1,10 @@
-use crate::block::{EmbedPrelim, Item, ItemContent, ItemPosition, ItemPtr, Prelim};
+use crate::block::{
+    EmbedPrelim, Item, ItemContent, ItemPosition, ItemPtr, Prelim, SplittableString, Unused,
+};
 use crate::transaction::TransactionMut;
-use crate::types::{Attrs, Branch, BranchPtr, Delta, Path, RootRef, SharedRef, TypeRef, Value};
+use crate::types::{
+    Attrs, Branch, BranchPtr, Delta, Path, RootRef, SharedRef, TypePtr, TypeRef, Value,
+};
 use crate::utils::OptionExt;
 use crate::*;
 use std::borrow::Borrow;
@@ -152,6 +156,16 @@ impl TryFrom<Value> for TextRef {
     }
 }
 
+impl CopyFrom for TextRef {
+    fn copy_from(&self, txn: &mut TransactionMut, source: &Self) {
+        let delta = source
+            .diff(txn, YChange::identity)
+            .into_iter()
+            .map(Delta::from);
+        self.apply_delta(txn, delta);
+    }
+}
+
 pub trait Text: AsRef<Branch> + Sized {
     /// Returns a number of characters visible in a current text data structure.
     fn len<T: ReadTxn>(&self, _txn: &T) -> u32 {
@@ -227,6 +241,48 @@ pub trait Text: AsRef<Branch> + Sized {
         }
     }
 
+    fn apply_delta<D>(&self, txn: &mut TransactionMut, delta: D)
+    where
+        D: IntoIterator<Item = Delta>,
+    {
+        let branch = BranchPtr::from(self.as_ref());
+        let mut pos = ItemPosition {
+            parent: TypePtr::Branch(branch),
+            left: None,
+            right: branch.start,
+            index: 0,
+            current_attrs: Some(Box::new(Attrs::new())),
+        };
+        for delta in delta {
+            match delta {
+                Delta::Inserted(value, attrs) => {
+                    let attrs: Attrs = match attrs {
+                        None => Attrs::new(),
+                        Some(attrs) => *attrs,
+                    };
+                    insert(
+                        branch,
+                        txn,
+                        &mut pos,
+                        DeltaPrelim {
+                            value,
+                            within_text: true,
+                        },
+                        attrs,
+                    );
+                }
+                Delta::Deleted(len) => remove(txn, &mut pos, len),
+                Delta::Retain(len, attrs) => {
+                    let attrs: Attrs = match attrs {
+                        None => Attrs::new(),
+                        Some(attrs) => *attrs,
+                    };
+                    insert_format(branch, txn, &mut pos, len, attrs);
+                }
+            }
+        }
+    }
+
     /// Inserts a `chunk` of text at a given `index`.
     /// If `index` is `0`, this `chunk` will be inserted at the beginning of a current text.
     /// If `index` is equal to current data structure length, this `chunk` will be appended at
@@ -240,24 +296,15 @@ pub trait Text: AsRef<Branch> + Sized {
         txn: &mut TransactionMut,
         index: u32,
         chunk: &str,
-        mut attributes: Attrs,
+        attributes: Attrs,
     ) {
         if chunk.is_empty() {
             return;
         }
         let this = BranchPtr::from(self.as_ref());
         if let Some(mut pos) = find_position(this, txn, index) {
-            pos.unset_missing(&mut attributes);
-            minimize_attr_changes(&mut pos, &attributes);
-            let negated_attrs = insert_attributes(this, txn, &mut pos, attributes);
-
             let value = block::PrelimString(chunk.into());
-            let item = txn.create_item(&pos, value, None);
-
-            pos.right = Some(item);
-            pos.forward();
-
-            insert_negated_attributes(this, txn, &mut pos, negated_attrs);
+            insert(this, txn, &mut pos, value, attributes);
         } else {
             panic!("The type or the position doesn't exist!");
         }
@@ -300,23 +347,14 @@ pub trait Text: AsRef<Branch> + Sized {
         txn: &mut TransactionMut,
         index: u32,
         embed: V,
-        mut attributes: Attrs,
+        attributes: Attrs,
     ) -> V::Return
     where
         V: Into<EmbedPrelim<V>> + Prelim,
     {
         let this = BranchPtr::from(self.as_ref());
         if let Some(mut pos) = find_position(this, txn, index) {
-            pos.unset_missing(&mut attributes);
-            minimize_attr_changes(&mut pos, &attributes);
-            let negated_attrs = insert_attributes(this, txn, &mut pos, attributes);
-
-            let item = txn.create_item(&pos, embed.into(), None);
-
-            pos.right = Some(item.clone());
-            pos.forward();
-
-            insert_negated_attributes(this, txn, &mut pos, negated_attrs);
+            let item = insert(this, txn, &mut pos, embed.into(), attributes);
             if let Ok(integrated) = item.try_into() {
                 integrated
             } else {
@@ -338,8 +376,8 @@ pub trait Text: AsRef<Branch> + Sized {
     /// insufficient number of characters to remove) or `index` is outside of the bounds of text.
     fn remove_range(&self, txn: &mut TransactionMut, index: u32, len: u32) {
         let this = BranchPtr::from(self.as_ref());
-        if let Some(pos) = find_position(this, txn, index) {
-            remove(txn, pos, len)
+        if let Some(mut pos) = find_position(this, txn, index) {
+            remove(txn, &mut pos, len)
         } else {
             panic!("The type or the position doesn't exist!");
         }
@@ -349,8 +387,8 @@ pub trait Text: AsRef<Branch> + Sized {
     /// formatting blocks containing provided `attributes` metadata.
     fn format(&self, txn: &mut TransactionMut, index: u32, len: u32, attributes: Attrs) {
         let this = BranchPtr::from(self.as_ref());
-        if let Some(pos) = find_position(this, txn, index) {
-            insert_format(this, txn, pos, len, attributes)
+        if let Some(mut pos) = find_position(this, txn, index) {
+            insert_format(this, txn, &mut pos, len, attributes)
         } else {
             panic!("Index {} is outside of the range.", index);
         }
@@ -632,6 +670,26 @@ where
     asm.finish()
 }
 
+fn insert<P: Prelim>(
+    branch: BranchPtr,
+    txn: &mut TransactionMut,
+    pos: &mut ItemPosition,
+    value: P,
+    mut attributes: Attrs,
+) -> ItemPtr {
+    pos.unset_missing(&mut attributes);
+    minimize_attr_changes(pos, &attributes);
+    let negated_attrs = insert_attributes(branch, txn, pos, attributes);
+
+    let item = txn.create_item(&pos, value, None);
+
+    pos.right = Some(item);
+    pos.forward();
+
+    insert_negated_attributes(branch, txn, pos, negated_attrs);
+    item
+}
+
 pub(crate) fn update_current_attributes(attrs: &mut Attrs, key: &str, value: &Any) {
     if let Any::Null = value {
         attrs.remove(key);
@@ -712,7 +770,7 @@ fn find_position(this: BranchPtr, txn: &mut TransactionMut, index: u32) -> Optio
     Some(pos)
 }
 
-fn remove(txn: &mut TransactionMut, mut pos: ItemPosition, len: u32) {
+fn remove(txn: &mut TransactionMut, pos: &mut ItemPosition, len: u32) {
     let encoding = txn.store().options.offset_kind;
     let mut remaining = len;
     let start = pos.right.clone();
@@ -784,12 +842,12 @@ fn is_valid_target(item: ItemPtr) -> bool {
 fn insert_format(
     this: BranchPtr,
     txn: &mut TransactionMut,
-    mut pos: ItemPosition,
+    pos: &mut ItemPosition,
     mut len: u32,
     attrs: Attrs,
 ) {
-    minimize_attr_changes(&mut pos, &attrs);
-    let mut negated_attrs = insert_attributes(this, txn, &mut pos, attrs.clone()); //TODO: remove `attrs.clone()`
+    minimize_attr_changes(pos, &attrs);
+    let mut negated_attrs = insert_attributes(this, txn, pos, attrs.clone()); //TODO: remove `attrs.clone()`
     let encoding = txn.store().options.offset_kind;
     // iterate until first non-format or null is found
     // delete all formats with attributes[format.key] != null
@@ -848,7 +906,7 @@ fn insert_format(
         }
     }
 
-    insert_negated_attributes(this, txn, &mut pos, negated_attrs);
+    insert_negated_attributes(this, txn, pos, negated_attrs);
 }
 
 fn minimize_attr_changes(pos: &mut ItemPosition, attrs: &Attrs) {
@@ -1029,6 +1087,68 @@ impl<T> Diff<T> {
             insert,
             attributes,
             ychange,
+        }
+    }
+}
+
+impl<T> From<Diff<T>> for Delta {
+    #[inline]
+    fn from(value: Diff<T>) -> Self {
+        Delta::Inserted(value.insert, value.attributes)
+    }
+}
+
+struct DeltaPrelim {
+    value: Value,
+    /// Mark is this delta is being applied to text type. In such cases Any::String will be
+    /// converted to ItemContent::String.
+    within_text: bool,
+}
+
+impl Prelim for DeltaPrelim {
+    type Return = Unused;
+
+    fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
+        match self.value {
+            Value::Any(Any::String(text)) if self.within_text => {
+                (ItemContent::String(SplittableString::from(&*text)), None)
+            }
+            Value::Any(any) => (ItemContent::Embed(any), None),
+            value => {
+                let type_ref = match &value {
+                    Value::YText(_) => TypeRef::Text,
+                    Value::YArray(_) => TypeRef::Array,
+                    Value::YMap(_) => TypeRef::Map,
+                    Value::YXmlElement(xml) => TypeRef::XmlElement(xml.tag().clone()),
+                    Value::YXmlFragment(_) => TypeRef::XmlFragment,
+                    Value::YXmlText(_) => TypeRef::XmlText,
+                    Value::YDoc(_) => TypeRef::SubDoc,
+                    #[cfg(feature = "weak")]
+                    Value::YWeakLink(link) => TypeRef::WeakLink(link.source().clone()),
+                    _ => unreachable!(),
+                };
+                let branch = Branch::new(type_ref);
+                (
+                    ItemContent::Type(branch),
+                    Some(DeltaPrelim {
+                        value,
+                        within_text: false,
+                    }),
+                )
+            }
+        }
+    }
+
+    fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
+        use crate::CopyFrom;
+        match self.value {
+            Value::YText(text) => TextRef::from(inner_ref).copy_from(txn, &text),
+            Value::YArray(array) => ArrayRef::from(inner_ref).copy_from(txn, &array),
+            Value::YMap(map) => MapRef::from(inner_ref).copy_from(txn, &map),
+            Value::YXmlElement(xml) => XmlElementRef::from(inner_ref).copy_from(txn, &xml),
+            Value::YXmlFragment(xml) => XmlFragmentRef::from(inner_ref).copy_from(txn, &xml),
+            Value::YXmlText(text) => XmlTextRef::from(inner_ref).copy_from(txn, &text),
+            _ => {}
         }
     }
 }
@@ -1352,11 +1472,13 @@ mod test {
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
     use crate::{
-        any, Any, ArrayPrelim, Doc, GetString, Observable, StateVector, Text, Transact, Update, ID,
+        any, Any, ArrayPrelim, Doc, GetString, Map, MapPrelim, MapRef, Observable, StateVector,
+        Text, Transact, Update, WriteTxn, ID,
     };
     use arc_swap::ArcSwapOption;
     use fastrand::Rng;
     use std::collections::HashMap;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -2463,5 +2585,186 @@ mod test {
         let txt = doc.get_or_insert_text("test");
         let len = txt.len(&doc.transact());
         assert_eq!(len, 20);
+    }
+
+    #[test]
+    fn multiline_format() {
+        let doc = Doc::with_client_id(1);
+        let mut txn = doc.transact_mut();
+        let txt = txn.get_or_insert_text("text");
+        let bold: Option<Box<Attrs>> = Some(Box::new(Attrs::from([("bold".into(), true.into())])));
+        txt.insert(&mut txn, 0, "Test\nMulti-line\nFormatting");
+        txt.apply_delta(
+            &mut txn,
+            [
+                Delta::Retain(4, bold.clone()),
+                Delta::retain(1), // newline character
+                Delta::Retain(10, bold.clone()),
+                Delta::retain(1), // newline character
+                Delta::Retain(10, bold.clone()),
+            ],
+        );
+        let delta = txt.diff(&txn, YChange::identity);
+        assert_eq!(
+            delta,
+            vec![
+                Diff::new("Test".into(), bold.clone()),
+                Diff::new("\n".into(), None),
+                Diff::new("Multi-line".into(), bold.clone()),
+                Diff::new("\n".into(), None),
+                Diff::new("Formatting".into(), bold),
+            ]
+        );
+    }
+
+    #[test]
+    fn delta_with_embeds() {
+        let doc = Doc::with_client_id(1);
+        let mut txn = doc.transact_mut();
+        let txt = txn.get_or_insert_text("text");
+        let linebreak = any!({
+            "linebreak": "s"
+        });
+        txt.apply_delta(&mut txn, [Delta::insert(linebreak.clone())]);
+        let delta = txt.diff(&txn, YChange::identity);
+        assert_eq!(delta, vec![Diff::new(linebreak.into(), None)]);
+    }
+
+    #[ignore]
+    #[test]
+    fn delta_with_shared_ref() {
+        let d1 = Doc::with_client_id(1);
+        let mut txn1 = d1.transact_mut();
+        let txt1 = txn1.get_or_insert_text("text");
+        txt1.apply_delta(
+            &mut txn1,
+            [
+            //    Delta::insert(MapPrelim::from([("key", "val")]))
+            ],
+        );
+        let delta = txt1.diff(&txn1, YChange::identity);
+        let d: MapRef = delta[0].insert.clone().cast().unwrap();
+        assert_eq!(d.get(&txn1, "key").unwrap(), Value::Any("val".into()));
+
+        let triggered = Arc::new(AtomicBool::new(false));
+        let _sub = {
+            let triggered = triggered.clone();
+            txt1.observe(move |txn, e| {
+                let delta = e.delta(txn).to_vec();
+                let d: MapRef = match &delta[0] {
+                    Delta::Inserted(insert, _) => insert.clone().cast().unwrap(),
+                    _ => unreachable!("unexpected delta"),
+                };
+                assert_eq!(d.get(txn, "key").unwrap(), Value::Any("val".into()));
+                triggered.store(true, Ordering::Relaxed);
+            })
+        };
+
+        let d2 = Doc::with_client_id(2);
+        let mut txn2 = d2.transact_mut();
+        let txt2 = txn2.get_or_insert_text("text");
+        txn2.apply_update(Update::decode_v1(&txn1.encode_update_v1()).unwrap());
+        drop(txn1);
+        drop(txn2);
+
+        assert!(triggered.load(Ordering::Relaxed), "fired event");
+
+        let delta = txt2.diff(&d2.transact(), YChange::identity);
+        assert_eq!(delta.len(), 1);
+        let d: MapRef = delta[0].insert.clone().cast().unwrap();
+        assert_eq!(
+            d.get(&d2.transact(), "key").unwrap(),
+            Value::Any("val".into())
+        );
+    }
+
+    #[test]
+    fn delta_snapshots() {
+        let doc = Doc::with_options(Options {
+            client_id: 1,
+            skip_gc: true,
+            ..Default::default()
+        });
+        let mut txn = doc.transact_mut();
+        let txt = txn.get_or_insert_text("text");
+        txt.apply_delta(&mut txn, [Delta::insert("abcd")]);
+        let snapshot1 = txn.snapshot(); // 'abcd'
+        txt.apply_delta(
+            &mut txn,
+            [Delta::retain(1), Delta::insert("x"), Delta::delete(1)],
+        );
+        let snapshot2 = txn.snapshot(); // 'axcd'
+        txt.apply_delta(
+            &mut txn,
+            [
+                Delta::retain(2),   // ax^cd
+                Delta::delete(1),   // ax^d
+                Delta::insert("x"), // axx^d
+                Delta::delete(1),   // axx^
+            ],
+        );
+        let state1 = txt.diff_range(&mut txn, Some(&snapshot1), None, YChange::identity);
+        assert_eq!(state1, vec![Diff::new("abcd".into(), None)]);
+        let state2 = txt.diff_range(&mut txn, Some(&snapshot2), None, YChange::identity);
+        assert_eq!(state2, vec![Diff::new("axcd".into(), None)]);
+        let state2_diff = txt.diff_range(
+            &mut txn,
+            Some(&snapshot2),
+            Some(&snapshot1),
+            YChange::identity,
+        );
+        assert_eq!(
+            state2_diff,
+            vec![
+                Diff {
+                    insert: "a".into(),
+                    attributes: None,
+                    ychange: None
+                },
+                Diff {
+                    insert: "x".into(),
+                    attributes: None,
+                    ychange: Some(YChange {
+                        kind: ChangeKind::Added,
+                        id: ID {
+                            client: 1,
+                            clock: 4
+                        }
+                    })
+                },
+                Diff {
+                    insert: "b".into(),
+                    attributes: None,
+                    ychange: Some(YChange {
+                        kind: ChangeKind::Removed,
+                        id: ID {
+                            client: 1,
+                            clock: 1
+                        }
+                    })
+                },
+                Diff {
+                    insert: "cd".into(),
+                    attributes: None,
+                    ychange: None
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn snapshot_delete_after() {
+        let doc = Doc::with_options(Options {
+            client_id: 1,
+            skip_gc: true,
+            ..Default::default()
+        });
+        let mut txn = doc.transact_mut();
+        let txt = txn.get_or_insert_text("text");
+        txt.apply_delta(&mut txn, [Delta::insert("abcd")]);
+        let snapshot1 = txn.snapshot();
+        txt.apply_delta(&mut txn, [Delta::retain(4), Delta::insert("e")]);
+        let state1 = txt.diff_range(&mut txn, Some(&snapshot1), None, YChange::identity);
+        assert_eq!(state1, vec![Diff::new("abcd".into(), None)]);
     }
 }

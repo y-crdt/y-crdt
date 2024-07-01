@@ -393,16 +393,12 @@ fn negative_zero_decoding_v2() {
         .cast::<MapRef>()
         .unwrap();
     sequence.insert(&mut txn, "id", "V9Uk9pxUKZIrW6cOkC0Rg".to_string());
-    sequence.insert(&mut txn, "cuts", ArrayPrelim::<_, Any>::from([]));
+    sequence.insert(&mut txn, "cuts", ArrayPrelim::default());
     sequence.insert(&mut txn, "name", "new sequence".to_string());
 
     root.insert(&mut txn, "__version__", 1);
-    root.insert(
-        &mut txn,
-        "face_expressions",
-        ArrayPrelim::<_, Any>::from([]),
-    );
-    root.insert(&mut txn, "characters", ArrayPrelim::<_, Any>::from([]));
+    root.insert(&mut txn, "face_expressions", ArrayPrelim::default());
+    root.insert(&mut txn, "characters", ArrayPrelim::default());
     let expected = root.to_json(&txn);
 
     let buffer = txn.encode_state_as_update_v2(&StateVector::default());

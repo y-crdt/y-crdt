@@ -1,18 +1,18 @@
-pub mod array;
-pub mod map;
-pub mod text;
-#[cfg(feature = "weak")]
-pub mod weak;
-pub mod xml;
+use std::borrow::Borrow;
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::convert::{TryFrom, TryInto};
+use std::fmt::Formatter;
+use std::marker::PhantomData;
+use std::sync::Arc;
 
-use crate::*;
+use serde::{Serialize, Serializer};
+
 pub use map::Map;
 pub use map::MapRef;
-use std::borrow::Borrow;
 pub use text::Text;
 pub use text::TextRef;
 
-use crate::block::{Item, ItemContent, ItemPtr};
+use crate::block::{Item, ItemContent, ItemPtr, Prelim, Unused};
 use crate::branch::{Branch, BranchPtr};
 use crate::encoding::read::Error;
 use crate::transaction::TransactionMut;
@@ -24,12 +24,14 @@ use crate::types::weak::{LinkSource, WeakEvent, WeakRef};
 use crate::types::xml::{XmlElementRef, XmlEvent, XmlTextEvent, XmlTextRef};
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
-use serde::{Serialize, Serializer};
-use std::collections::{HashMap, HashSet, VecDeque};
-use std::convert::{TryFrom, TryInto};
-use std::fmt::Formatter;
-use std::marker::PhantomData;
-use std::sync::Arc;
+use crate::*;
+
+pub mod array;
+pub mod map;
+pub mod text;
+#[cfg(feature = "weak")]
+pub mod weak;
+pub mod xml;
 
 /// Type ref identifier for an [ArrayRef] type.
 pub const TYPE_REFS_ARRAY: u8 = 0;
@@ -319,6 +321,16 @@ pub trait SharedRef: From<BranchPtr> + AsRef<Branch> {
     }
 }
 
+/// Trait that allows for deep copying data from one shared type to another.
+pub trait CopyFrom: SharedRef {
+    /// Performs a deep copy of a current shared type from a given source.
+    ///
+    /// Deep copy means that rather than just linking nested shared types, a new shared type will
+    /// be inserted with the contents copied from the source. Therefore, chaning deep copy will
+    /// not affect the source.
+    fn copy_from(&self, txn: &mut TransactionMut, source: &Self);
+}
+
 /// Trait implemented by all Y-types, allowing for observing events which are emitted by
 /// nested types.
 #[cfg(not(target_family = "wasm"))]
@@ -565,6 +577,60 @@ impl std::fmt::Display for Value {
             Value::YWeakLink(_) => write!(f, "WeakRef"),
             Value::YDoc(v) => write!(f, "Doc(guid:{})", v.options().guid),
             Value::UndefinedRef(_) => write!(f, "UndefinedRef"),
+        }
+    }
+}
+
+/// A wrapper around [Value] type that enables it to be used as a type to be inserted into
+/// shared collections. If [ValuePrelim] contains a shared type, it will be inserted as a deep
+/// copy of the original type: therefore none of the changes applied to the original type will
+/// affect the deep copy.
+#[repr(transparent)]
+#[derive(Debug, Clone, PartialEq)]
+pub struct ValuePrelim(Value);
+
+impl From<Value> for ValuePrelim {
+    fn from(value: Value) -> Self {
+        ValuePrelim(value)
+    }
+}
+
+impl Prelim for ValuePrelim {
+    type Return = Unused;
+
+    fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
+        match self.0 {
+            Value::Any(any) => (ItemContent::Any(vec![any]), None),
+            value => {
+                let type_ref = match &value {
+                    Value::YText(_) => TypeRef::Text,
+                    Value::YArray(_) => TypeRef::Array,
+                    Value::YMap(_) => TypeRef::Map,
+                    Value::YXmlElement(xml) => TypeRef::XmlElement(xml.tag().clone()),
+                    Value::YXmlFragment(_) => TypeRef::XmlFragment,
+                    Value::YXmlText(_) => TypeRef::XmlText,
+                    Value::YDoc(_) => TypeRef::SubDoc,
+                    #[cfg(feature = "weak")]
+                    Value::YWeakLink(link) => TypeRef::WeakLink(link.source().clone()),
+                    Value::UndefinedRef(_) => TypeRef::Undefined,
+                    _ => unreachable!(),
+                };
+                let branch = Branch::new(type_ref);
+                (ItemContent::Type(branch), Some(ValuePrelim(value)))
+            }
+        }
+    }
+
+    fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
+        use crate::CopyFrom;
+        match self.0 {
+            Value::YText(text) => TextRef::from(inner_ref).copy_from(txn, &text),
+            Value::YArray(array) => ArrayRef::from(inner_ref).copy_from(txn, &array),
+            Value::YMap(map) => MapRef::from(inner_ref).copy_from(txn, &map),
+            Value::YXmlElement(xml) => XmlElementRef::from(inner_ref).copy_from(txn, &xml),
+            Value::YXmlFragment(xml) => XmlFragmentRef::from(inner_ref).copy_from(txn, &xml),
+            Value::YXmlText(text) => XmlTextRef::from(inner_ref).copy_from(txn, &text),
+            _ => {}
         }
     }
 }
@@ -884,6 +950,24 @@ pub enum Delta {
     /// between [Delta::Inserted] and/or [Delta::Deleted] chunks. Can contain an optional set of
     /// attributes, which have been used to format an existing piece of text.
     Retain(u32, Option<Box<Attrs>>),
+}
+
+impl Delta {
+    pub fn retain(len: u32) -> Self {
+        Delta::Retain(len, None)
+    }
+
+    pub fn insert<T: Into<Value>>(value: T) -> Self {
+        Delta::Inserted(value.into(), None)
+    }
+
+    pub fn insert_with<T: Into<Value>>(value: T, attrs: Attrs) -> Self {
+        Delta::Inserted(value.into(), Some(Box::new(attrs)))
+    }
+
+    pub fn delete(len: u32) -> Self {
+        Delta::Deleted(len)
+    }
 }
 
 /// An alias for map of attributes used as formatting parameters by [Text] and [XmlText] types.

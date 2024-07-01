@@ -9,11 +9,11 @@ use crate::slice::ItemSlice;
 use crate::types::{Path, PathSegment, TypeRef};
 use crate::update::PendingUpdate;
 use crate::updates::encoder::{Encode, Encoder};
+use crate::StateVector;
 use crate::{
-    Doc, Observer, OffsetKind, Origin, Snapshot, TransactionCleanupEvent, TransactionMut,
-    UpdateEvent, Uuid, ID,
+    Doc, Observer, OffsetKind, Snapshot, TransactionCleanupEvent, TransactionMut, UpdateEvent,
+    Uuid, ID,
 };
-use crate::{StateVector, Subscription};
 use atomic_refcell::{AtomicRef, AtomicRefCell, AtomicRefMut, BorrowError, BorrowMutError};
 use std::borrow::Borrow;
 use std::collections::hash_map::Entry;
