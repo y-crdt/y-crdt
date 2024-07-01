@@ -1,14 +1,14 @@
-pub mod array;
-pub mod map;
-pub mod text;
-#[cfg(feature = "weak")]
-pub mod weak;
-pub mod xml;
+use std::borrow::Borrow;
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::convert::{TryFrom, TryInto};
+use std::fmt::Formatter;
+use std::marker::PhantomData;
+use std::sync::Arc;
 
-use crate::*;
+use serde::{Serialize, Serializer};
+
 pub use map::Map;
 pub use map::MapRef;
-use std::borrow::Borrow;
 pub use text::Text;
 pub use text::TextRef;
 
@@ -24,12 +24,14 @@ use crate::types::weak::{LinkSource, WeakEvent, WeakRef};
 use crate::types::xml::{XmlElementRef, XmlEvent, XmlTextEvent, XmlTextRef};
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
-use serde::{Serialize, Serializer};
-use std::collections::{HashMap, HashSet, VecDeque};
-use std::convert::{TryFrom, TryInto};
-use std::fmt::Formatter;
-use std::marker::PhantomData;
-use std::sync::Arc;
+use crate::*;
+
+pub mod array;
+pub mod map;
+pub mod text;
+#[cfg(feature = "weak")]
+pub mod weak;
+pub mod xml;
 
 /// Type ref identifier for an [ArrayRef] type.
 pub const TYPE_REFS_ARRAY: u8 = 0;
@@ -948,6 +950,24 @@ pub enum Delta {
     /// between [Delta::Inserted] and/or [Delta::Deleted] chunks. Can contain an optional set of
     /// attributes, which have been used to format an existing piece of text.
     Retain(u32, Option<Box<Attrs>>),
+}
+
+impl Delta {
+    pub fn retain(len: u32) -> Self {
+        Delta::Retain(len, None)
+    }
+
+    pub fn insert<T: Into<Value>>(value: T) -> Self {
+        Delta::Inserted(value.into(), None)
+    }
+
+    pub fn insert_with<T: Into<Value>>(value: T, attrs: Attrs) -> Self {
+        Delta::Inserted(value.into(), Some(Box::new(attrs)))
+    }
+
+    pub fn delete(len: u32) -> Self {
+        Delta::Deleted(len)
+    }
 }
 
 /// An alias for map of attributes used as formatting parameters by [Text] and [XmlText] types.

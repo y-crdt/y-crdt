@@ -1113,7 +1113,7 @@ impl Prelim for DeltaPrelim {
             Value::Any(Any::String(text)) if self.within_text => {
                 (ItemContent::String(SplittableString::from(&*text)), None)
             }
-            Value::Any(any) => (ItemContent::Any(vec![any]), None),
+            Value::Any(any) => (ItemContent::Embed(any), None),
             value => {
                 let type_ref = match &value {
                     Value::YText(_) => TypeRef::Text,
@@ -1472,11 +1472,13 @@ mod test {
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
     use crate::{
-        any, Any, ArrayPrelim, Doc, GetString, Observable, StateVector, Text, Transact, Update, ID,
+        any, Any, ArrayPrelim, Doc, GetString, Map, MapPrelim, MapRef, Observable, StateVector,
+        Text, Transact, Update, WriteTxn, ID,
     };
     use arc_swap::ArcSwapOption;
     use fastrand::Rng;
     use std::collections::HashMap;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -2583,5 +2585,180 @@ mod test {
         let txt = doc.get_or_insert_text("test");
         let len = txt.len(&doc.transact());
         assert_eq!(len, 20);
+    }
+
+    #[test]
+    fn multiline_format() {
+        let doc = Doc::with_client_id(1);
+        let mut txn = doc.transact_mut();
+        let txt = txn.get_or_insert_text("text");
+        let bold: Option<Box<Attrs>> = Some(Box::new(Attrs::from([("bold".into(), true.into())])));
+        txt.insert(&mut txn, 0, "Test\nMulti-line\nFormatting");
+        txt.apply_delta(
+            &mut txn,
+            [
+                Delta::Retain(4, bold.clone()),
+                Delta::retain(1), // newline character
+                Delta::Retain(10, bold.clone()),
+                Delta::retain(1), // newline character
+                Delta::Retain(10, bold.clone()),
+            ],
+        );
+        let delta = txt.diff(&txn, YChange::identity);
+        assert_eq!(
+            delta,
+            vec![
+                Diff::new("Test".into(), bold.clone()),
+                Diff::new("\n".into(), None),
+                Diff::new("Multi-line".into(), bold.clone()),
+                Diff::new("\n".into(), None),
+                Diff::new("Formatting".into(), bold),
+            ]
+        );
+    }
+
+    #[test]
+    fn delta_with_embeds() {
+        let doc = Doc::with_client_id(1);
+        let mut txn = doc.transact_mut();
+        let txt = txn.get_or_insert_text("text");
+        let linebreak = any!({
+            "linebreak": "s"
+        });
+        txt.apply_delta(&mut txn, [Delta::insert(linebreak.clone())]);
+        let delta = txt.diff(&txn, YChange::identity);
+        assert_eq!(delta, vec![Diff::new(linebreak.into(), None)]);
+    }
+
+    #[test]
+    fn delta_with_shared_ref() {
+        let d1 = Doc::with_client_id(1);
+        let mut txn1 = d1.transact_mut();
+        let txt1 = txn1.get_or_insert_text("text");
+        txt1.apply_delta(
+            &mut txn1,
+            [Delta::insert(MapPrelim::from([("key", "val")]))],
+        );
+        let delta = txt1.diff(&txn1, YChange::identity);
+        let d: MapRef = delta[0].insert.clone().cast().unwrap();
+        assert_eq!(d.get(&txn1, "key").unwrap(), any!("val").into());
+
+        let triggered = Arc::new(AtomicBool::new(false));
+        let _sub = {
+            let triggered = triggered.clone();
+            txt1.observe(move |txn, e| {
+                let delta = e.delta(txn).to_vec();
+                let d: MapRef = match &delta[0] {
+                    Delta::Inserted(insert, _) => insert.clone().cast().unwrap(),
+                    _ => unreachable!("unexpected delta"),
+                };
+                assert_eq!(d.get(txn, "key").unwrap(), any!("val").into());
+                triggered.store(true, Ordering::Relaxed);
+            })
+        };
+
+        let d2 = Doc::with_client_id(2);
+        let mut txn2 = d2.transact_mut();
+        let txt2 = txn2.get_or_insert_text("text");
+        txn2.apply_update(Update::decode_v1(&txn1.encode_update_v1()).unwrap());
+        drop(txn1);
+        drop(txn2);
+
+        assert!(triggered.load(Ordering::Relaxed), "fired event");
+
+        let delta = txt2.diff(&d2.transact(), YChange::identity);
+        assert_eq!(delta.len(), 1);
+        let d: MapRef = delta[0].insert.clone().cast().unwrap();
+        assert_eq!(d.get(&txn1, "key").unwrap(), any!("val").into());
+    }
+
+    #[test]
+    fn delta_snapshots() {
+        let doc = Doc::with_options(Options {
+            client_id: 1,
+            skip_gc: true,
+            ..Default::default()
+        });
+        let mut txn = doc.transact_mut();
+        let txt = txn.get_or_insert_text("text");
+        txt.apply_delta(&mut txn, [Delta::insert("abcd")]);
+        let snapshot1 = txn.snapshot(); // 'abcd'
+        txt.apply_delta(
+            &mut txn,
+            [Delta::retain(1), Delta::insert("x"), Delta::delete(1)],
+        );
+        let snapshot2 = txn.snapshot(); // 'axcd'
+        txt.apply_delta(
+            &mut txn,
+            [
+                Delta::retain(2),   // ax^cd
+                Delta::delete(1),   // ax^d
+                Delta::insert("x"), // axx^d
+                Delta::delete(1),   // axx^
+            ],
+        );
+        let state1 = txt.diff_range(&mut txn, Some(&snapshot1), None, YChange::identity);
+        assert_eq!(state1, vec![Diff::new("abcd".into(), None)]);
+        let state2 = txt.diff_range(&mut txn, Some(&snapshot2), None, YChange::identity);
+        assert_eq!(state2, vec![Diff::new("axcd".into(), None)]);
+        let state2_diff = txt.diff_range(
+            &mut txn,
+            Some(&snapshot2),
+            Some(&snapshot1),
+            YChange::identity,
+        );
+        assert_eq!(
+            state2_diff,
+            vec![
+                Diff {
+                    insert: "a".into(),
+                    attributes: None,
+                    ychange: None
+                },
+                Diff {
+                    insert: "x".into(),
+                    attributes: None,
+                    ychange: Some(YChange {
+                        kind: ChangeKind::Added,
+                        id: ID {
+                            client: 1,
+                            clock: 4
+                        }
+                    })
+                },
+                Diff {
+                    insert: "b".into(),
+                    attributes: None,
+                    ychange: Some(YChange {
+                        kind: ChangeKind::Removed,
+                        id: ID {
+                            client: 1,
+                            clock: 1
+                        }
+                    })
+                },
+                Diff {
+                    insert: "cd".into(),
+                    attributes: None,
+                    ychange: None
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn snapshot_delete_after() {
+        let doc = Doc::with_options(Options {
+            client_id: 1,
+            skip_gc: true,
+            ..Default::default()
+        });
+        let mut txn = doc.transact_mut();
+        let txt = txn.get_or_insert_text("text");
+        txt.apply_delta(&mut txn, [Delta::insert("abcd")]);
+        let snapshot1 = txn.snapshot();
+        txt.apply_delta(&mut txn, [Delta::retain(4), Delta::insert("e")]);
+        let state1 = txt.diff_range(&mut txn, Some(&snapshot1), None, YChange::identity);
+        assert_eq!(state1, vec![Diff::new("abcd".into(), None)]);
     }
 }

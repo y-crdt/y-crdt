@@ -138,6 +138,7 @@ impl BlockCell {
     }
 
     /// Returns a range of first and the last clock sequence numbers that belong to a current block.
+    #[inline]
     pub fn clock_range(&self) -> (u32, u32) {
         match self {
             BlockCell::GC(gc) => (gc.start, gc.end),
@@ -857,6 +858,7 @@ impl TryFrom<ItemPtr> for Any {
 }
 
 impl Item {
+    #[inline]
     pub(crate) fn clock_range(&self) -> (u32, u32) {
         let start = self.id.clock;
         let end = start + self.len - 1;
