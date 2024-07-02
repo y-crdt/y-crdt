@@ -1048,7 +1048,7 @@ impl<'doc> TransactionMut<'doc> {
 pub struct RootRefs<'doc>(std::collections::hash_map::Iter<'doc, Arc<str>, Arc<Branch>>);
 
 impl<'doc> Iterator for RootRefs<'doc> {
-    type Item = (&'doc str, Value);
+    type Item = (&'doc str, Out);
 
     fn next(&mut self) -> Option<Self::Item> {
         let (key, branch) = self.0.next()?;

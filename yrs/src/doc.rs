@@ -9,7 +9,7 @@ use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::OptionExt;
 use crate::{
-    uuid_v4, uuid_v4_from, ArrayRef, BranchID, MapRef, ReadTxn, TextRef, Uuid, Value, WriteTxn,
+    uuid_v4, uuid_v4_from, ArrayRef, BranchID, MapRef, Out, ReadTxn, TextRef, Uuid, WriteTxn,
     XmlFragmentRef,
 };
 use crate::{Any, Subscription};
@@ -61,12 +61,12 @@ pub struct Doc {
 unsafe impl Send for Doc {}
 unsafe impl Sync for Doc {}
 
-impl TryFrom<Value> for Doc {
-    type Error = Value;
+impl TryFrom<Out> for Doc {
+    type Error = Out;
 
-    fn try_from(value: Value) -> Result<Self, Self::Error> {
+    fn try_from(value: Out) -> Result<Self, Self::Error> {
         match value {
-            Value::YDoc(value) => Ok(value),
+            Out::YDoc(value) => Ok(value),
             other => Err(other),
         }
     }

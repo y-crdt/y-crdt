@@ -619,7 +619,7 @@ pub use crate::moving::IndexedSequence;
 pub use crate::moving::Offset;
 pub use crate::moving::StickyIndex;
 pub use crate::observer::{Observer, Subscription};
-pub use crate::out::Value;
+pub use crate::out::Out;
 pub use crate::state_vector::Snapshot;
 pub use crate::state_vector::StateVector;
 pub use crate::store::Store;
@@ -656,6 +656,9 @@ pub use crate::types::Observable;
 pub use crate::types::RootRef;
 pub use crate::types::SharedRef;
 pub use crate::update::Update;
+
+#[deprecated(since = "0.19.0", note = "Use `yrs::Out` instead")]
+pub type Value = Out;
 
 pub type UndoManager = crate::undo::UndoManager<()>;
 pub type Uuid = std::sync::Arc<str>;

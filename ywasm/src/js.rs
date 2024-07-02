@@ -24,8 +24,8 @@ use yrs::types::{
     TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_TEXT,
 };
 use yrs::{
-    Any, ArrayRef, BranchID, Doc, Map, MapRef, Origin, Text, TextRef, TransactionMut, Value,
-    WeakRef, Xml, XmlElementRef, XmlFragment, XmlFragmentRef, XmlNode, XmlTextRef,
+    Any, ArrayRef, BranchID, Doc, Map, MapRef, Origin, Out, Text, TextRef, TransactionMut, WeakRef,
+    Xml, XmlElementRef, XmlFragment, XmlFragmentRef, XmlNode, XmlTextRef,
 };
 
 #[repr(transparent)]
@@ -93,30 +93,28 @@ impl Js {
         })
     }
 
-    pub fn from_value(value: &Value, doc: &Doc) -> Self {
+    pub fn from_value(value: &Out, doc: &Doc) -> Self {
         match value {
-            Value::Any(any) => Self::from_any(any),
-            Value::YText(c) => {
-                Js(YText(SharedCollection::integrated(c.clone(), doc.clone())).into())
-            }
-            Value::YMap(c) => Js(YMap(SharedCollection::integrated(c.clone(), doc.clone())).into()),
-            Value::YArray(c) => {
+            Out::Any(any) => Self::from_any(any),
+            Out::YText(c) => Js(YText(SharedCollection::integrated(c.clone(), doc.clone())).into()),
+            Out::YMap(c) => Js(YMap(SharedCollection::integrated(c.clone(), doc.clone())).into()),
+            Out::YArray(c) => {
                 Js(YArray(SharedCollection::integrated(c.clone(), doc.clone())).into())
             }
-            Value::YDoc(doc) => Js(YDoc(doc.clone()).into()),
-            Value::YWeakLink(c) => {
+            Out::YDoc(doc) => Js(YDoc(doc.clone()).into()),
+            Out::YWeakLink(c) => {
                 Js(YWeakLink(SharedCollection::integrated(c.clone(), doc.clone())).into())
             }
-            Value::YXmlElement(c) => {
+            Out::YXmlElement(c) => {
                 Js(YXmlElement(SharedCollection::integrated(c.clone(), doc.clone())).into())
             }
-            Value::YXmlFragment(c) => {
+            Out::YXmlFragment(c) => {
                 Js(YXmlFragment(SharedCollection::integrated(c.clone(), doc.clone())).into())
             }
-            Value::YXmlText(c) => {
+            Out::YXmlText(c) => {
                 Js(YXmlText(SharedCollection::integrated(c.clone(), doc.clone())).into())
             }
-            Value::UndefinedRef(_) => Js(JsValue::UNDEFINED),
+            Out::UndefinedRef(_) => Js(JsValue::UNDEFINED),
         }
     }
 

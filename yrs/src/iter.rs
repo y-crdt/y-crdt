@@ -1,6 +1,6 @@
 use crate::block::{ItemContent, ItemPtr};
 use crate::slice::ItemSlice;
-use crate::{Assoc, ReadTxn, StickyIndex, Value};
+use crate::{Assoc, Out, ReadTxn, StickyIndex};
 use smallvec::{smallvec, SmallVec};
 use std::ops::Deref;
 
@@ -465,7 +465,7 @@ impl<I> TxnIterator for Values<I>
 where
     I: TxnIterator<Item = ItemSlice>,
 {
-    type Item = Value;
+    type Item = Out;
 
     fn next<T: ReadTxn>(&mut self, txn: &T) -> Option<Self::Item> {
         loop {
@@ -473,7 +473,7 @@ where
                 if slice.start <= slice.end {
                     let item = slice.ptr.deref();
                     if !item.is_deleted() {
-                        let mut buf = [Value::default()];
+                        let mut buf = [Out::default()];
                         let read = item.content.read(slice.start as usize, &mut buf);
                         if read != 0 {
                             slice.start += read as u32;
@@ -493,12 +493,12 @@ where
     {
         fn read_slice<B>(slice: ItemSlice, buf: &mut B)
         where
-            B: Extend<Value>,
+            B: Extend<Out>,
         {
             let item = slice.ptr.deref();
             if !item.is_deleted() {
                 let size = slice.end - slice.start + 1;
-                let mut b: SmallVec<[Value; 2]> = smallvec![Value::default(); size as usize];
+                let mut b: SmallVec<[Out; 2]> = smallvec![Out::default(); size as usize];
                 let _ = item.content.read(slice.start as usize, b.as_mut_slice());
                 buf.extend(b);
             }

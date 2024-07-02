@@ -3,8 +3,8 @@ use crate::block_iter::BlockIter;
 use crate::moving::StickyIndex;
 use crate::transaction::TransactionMut;
 use crate::types::{
-    event_change_set, Branch, BranchPtr, Change, ChangeSet, Path, RootRef, SharedRef, ToJson,
-    TypeRef, Value, ValuePrelim,
+    event_change_set, Branch, BranchPtr, Change, ChangeSet, Out, Path, RootRef, SharedRef, ToJson,
+    TypeRef, ValuePrelim,
 };
 use crate::{Any, Assoc, CopyFrom, DeepObservable, IndexedSequence, Observable, ReadTxn, ID};
 use std::borrow::Borrow;
@@ -89,7 +89,7 @@ impl ToJson for ArrayRef {
     fn to_json<T: ReadTxn>(&self, txn: &T) -> Any {
         let mut walker = BlockIter::new(self.0);
         let len = self.0.len();
-        let mut buf = vec![Value::default(); len as usize];
+        let mut buf = vec![Out::default(); len as usize];
         let read = walker.slice(txn, &mut buf);
         if read == len {
             let res = buf.into_iter().map(|v| v.to_json(txn)).collect();
@@ -133,12 +133,12 @@ impl TryFrom<ItemPtr> for ArrayRef {
     }
 }
 
-impl TryFrom<Value> for ArrayRef {
-    type Error = Value;
+impl TryFrom<Out> for ArrayRef {
+    type Error = Out;
 
-    fn try_from(value: Value) -> Result<Self, Self::Error> {
+    fn try_from(value: Out) -> Result<Self, Self::Error> {
         match value {
-            Value::YArray(value) => Ok(value),
+            Out::YArray(value) => Ok(value),
             other => Err(other),
         }
     }
@@ -241,7 +241,7 @@ pub trait Array: AsRef<Branch> + Sized {
 
     /// Retrieves a value stored at a given `index`. Returns `None` when provided index was out
     /// of the range of a current array.
-    fn get<T: ReadTxn>(&self, txn: &T, index: u32) -> Option<Value> {
+    fn get<T: ReadTxn>(&self, txn: &T, index: u32) -> Option<Out> {
         let mut walker = BlockIter::new(BranchPtr::from(self.as_ref()));
         if walker.try_forward(txn, index) {
             walker.read_value(txn)
@@ -378,16 +378,16 @@ where
     B: Borrow<T>,
     T: ReadTxn,
 {
-    type Item = Value;
+    type Item = Out;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.inner.finished() {
             None
         } else {
-            let mut buf = [Value::default(); 1];
+            let mut buf = [Out::default(); 1];
             let txn = self.txn.borrow();
             if self.inner.slice(txn, &mut buf) != 0 {
-                Some(std::mem::replace(&mut buf[0], Value::default()))
+                Some(std::mem::replace(&mut buf[0], Out::default()))
             } else {
                 None
             }
@@ -549,7 +549,7 @@ impl ArrayEvent {
 mod test {
     use crate::test_utils::{exchange_updates, run_scenario, RngExt};
     use crate::types::map::MapPrelim;
-    use crate::types::{Change, DeepObservable, Event, Path, PathSegment, ToJson, Value};
+    use crate::types::{Change, DeepObservable, Event, Out, Path, PathSegment, ToJson};
     use crate::{
         any, Any, Array, ArrayPrelim, Assoc, Doc, Map, MapRef, Observable, SharedRef, StateVector,
         Transact, Update, ID,
@@ -687,7 +687,7 @@ mod test {
             let actual: Vec<_> = a1.iter(&t1).collect();
             assert_eq!(
                 actual,
-                vec![Value::from(1.0), Value::from(true), Value::from(false)]
+                vec![Out::from(1.0), Out::from(true), Out::from(false)]
             );
         }
 
@@ -698,7 +698,7 @@ mod test {
         let actual: Vec<_> = a2.iter(&t2).collect();
         assert_eq!(
             actual,
-            vec![Value::from(1.0), Value::from(true), Value::from(false)]
+            vec![Out::from(1.0), Out::from(true), Out::from(false)]
         );
     }
 
@@ -733,7 +733,7 @@ mod test {
         assert_eq!(a2, a3, "Peer 2 and peer 3 states are different");
     }
 
-    fn to_array(d: &Doc) -> Vec<Value> {
+    fn to_array(d: &Doc) -> Vec<Out> {
         let a = d.get_or_insert_array("array");
         a.iter(&d.transact()).collect()
     }
@@ -887,7 +887,7 @@ mod test {
 
         for (i, value) in a.iter(&txn).enumerate() {
             match value {
-                Value::YMap(_) => {
+                Out::YMap(_) => {
                     assert_eq!(value.to_json(&txn), any!({"value": (i as f64) }))
                 }
                 _ => panic!("Value of array at index {} was no YMap", i),
@@ -1162,7 +1162,7 @@ mod test {
                 let pos = rng.between(0, len - 1);
                 let del_len = rng.between(1, 2.min(len - pos));
                 if rng.bool() {
-                    if let Value::YArray(array2) = yarray.get(&txn, pos).unwrap() {
+                    if let Out::YArray(array2) = yarray.get(&txn, pos).unwrap() {
                         let pos = rng.between(0, array2.len(&txn) - 1);
                         let del_len = rng.between(0, 2.min(array2.len(&txn) - pos));
                         array2.remove_range(&mut txn, pos, del_len);

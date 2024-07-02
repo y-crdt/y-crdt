@@ -7,7 +7,7 @@ use crate::types::{
     Entries, Event, Events, Path, PathSegment, RootRef, SharedRef, TypePtr, TypeRef,
 };
 use crate::{
-    ArrayRef, Doc, MapRef, Observer, Origin, ReadTxn, Subscription, TextRef, TransactionMut, Value,
+    ArrayRef, Doc, MapRef, Observer, Origin, Out, ReadTxn, Subscription, TextRef, TransactionMut,
     WriteTxn, XmlElementRef, XmlFragmentRef, XmlTextRef, ID,
 };
 use serde::{Deserialize, Serialize};
@@ -108,22 +108,22 @@ impl<'a> From<&'a Branch> for BranchPtr {
     }
 }
 
-impl Into<Value> for BranchPtr {
-    /// Converts current branch data into a [Value]. It uses a type ref information to resolve,
+impl Into<Out> for BranchPtr {
+    /// Converts current branch data into a [Out]. It uses a type ref information to resolve,
     /// which value variant is a correct one for this branch. Since branch represent only complex
-    /// types [Value::Any] will never be returned from this method.
-    fn into(self) -> Value {
+    /// types [Out::Any] will never be returned from this method.
+    fn into(self) -> Out {
         match self.type_ref() {
-            TypeRef::Array => Value::YArray(ArrayRef::from(self)),
-            TypeRef::Map => Value::YMap(MapRef::from(self)),
-            TypeRef::Text => Value::YText(TextRef::from(self)),
-            TypeRef::XmlElement(_) => Value::YXmlElement(XmlElementRef::from(self)),
-            TypeRef::XmlFragment => Value::YXmlFragment(XmlFragmentRef::from(self)),
-            TypeRef::XmlText => Value::YXmlText(XmlTextRef::from(self)),
+            TypeRef::Array => Out::YArray(ArrayRef::from(self)),
+            TypeRef::Map => Out::YMap(MapRef::from(self)),
+            TypeRef::Text => Out::YText(TextRef::from(self)),
+            TypeRef::XmlElement(_) => Out::YXmlElement(XmlElementRef::from(self)),
+            TypeRef::XmlFragment => Out::YXmlFragment(XmlFragmentRef::from(self)),
+            TypeRef::XmlText => Out::YXmlText(XmlTextRef::from(self)),
             //TYPE_REFS_XML_HOOK => Value::YXmlHook(XmlHookRef::from(self)),
             #[cfg(feature = "weak")]
-            TypeRef::WeakLink(_) => Value::YWeakLink(crate::WeakRef::from(self)),
-            _ => Value::UndefinedRef(self),
+            TypeRef::WeakLink(_) => Out::YWeakLink(crate::WeakRef::from(self)),
+            _ => Out::UndefinedRef(self),
         }
     }
 }
@@ -305,7 +305,7 @@ impl Branch {
 
     /// Returns a materialized value of non-deleted entry under a given `key` of a map component
     /// of a current root type.
-    pub(crate) fn get<T: ReadTxn>(&self, _txn: &T, key: &str) -> Option<Value> {
+    pub(crate) fn get<T: ReadTxn>(&self, _txn: &T, key: &str) -> Option<Out> {
         let item = self.map.get(key)?;
         if !item.is_deleted() {
             item.content.get_last()
@@ -338,7 +338,7 @@ impl Branch {
 
     /// Removes an entry under given `key` of a map component of a current root type, returning
     /// a materialized representation of value stored underneath if entry existed prior deletion.
-    pub(crate) fn remove(&self, txn: &mut TransactionMut, key: &str) -> Option<Value> {
+    pub(crate) fn remove(&self, txn: &mut TransactionMut, key: &str) -> Option<Out> {
         let item = *self.map.get(key)?;
         let prev = if !item.is_deleted() {
             item.content.get_last()

@@ -415,16 +415,16 @@ pub trait DeepObservable: AsRef<Branch> {
     }
 }
 
-/// A wrapper around [Value] type that enables it to be used as a type to be inserted into
+/// A wrapper around [Out] type that enables it to be used as a type to be inserted into
 /// shared collections. If [ValuePrelim] contains a shared type, it will be inserted as a deep
 /// copy of the original type: therefore none of the changes applied to the original type will
 /// affect the deep copy.
 #[repr(transparent)]
 #[derive(Debug, Clone, PartialEq)]
-pub struct ValuePrelim(Value);
+pub struct ValuePrelim(Out);
 
-impl From<Value> for ValuePrelim {
-    fn from(value: Value) -> Self {
+impl From<Out> for ValuePrelim {
+    fn from(value: Out) -> Self {
         ValuePrelim(value)
     }
 }
@@ -434,19 +434,19 @@ impl Prelim for ValuePrelim {
 
     fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
         match self.0 {
-            Value::Any(any) => (ItemContent::Any(vec![any]), None),
+            Out::Any(any) => (ItemContent::Any(vec![any]), None),
             value => {
                 let type_ref = match &value {
-                    Value::YText(_) => TypeRef::Text,
-                    Value::YArray(_) => TypeRef::Array,
-                    Value::YMap(_) => TypeRef::Map,
-                    Value::YXmlElement(xml) => TypeRef::XmlElement(xml.tag().clone()),
-                    Value::YXmlFragment(_) => TypeRef::XmlFragment,
-                    Value::YXmlText(_) => TypeRef::XmlText,
-                    Value::YDoc(_) => TypeRef::SubDoc,
+                    Out::YText(_) => TypeRef::Text,
+                    Out::YArray(_) => TypeRef::Array,
+                    Out::YMap(_) => TypeRef::Map,
+                    Out::YXmlElement(xml) => TypeRef::XmlElement(xml.tag().clone()),
+                    Out::YXmlFragment(_) => TypeRef::XmlFragment,
+                    Out::YXmlText(_) => TypeRef::XmlText,
+                    Out::YDoc(_) => TypeRef::SubDoc,
                     #[cfg(feature = "weak")]
-                    Value::YWeakLink(link) => TypeRef::WeakLink(link.source().clone()),
-                    Value::UndefinedRef(_) => TypeRef::Undefined,
+                    Out::YWeakLink(link) => TypeRef::WeakLink(link.source().clone()),
+                    Out::UndefinedRef(_) => TypeRef::Undefined,
                     _ => unreachable!(),
                 };
                 let branch = Branch::new(type_ref);
@@ -458,12 +458,12 @@ impl Prelim for ValuePrelim {
     fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
         use crate::CopyFrom;
         match self.0 {
-            Value::YText(text) => TextRef::from(inner_ref).copy_from(txn, &text),
-            Value::YArray(array) => ArrayRef::from(inner_ref).copy_from(txn, &array),
-            Value::YMap(map) => MapRef::from(inner_ref).copy_from(txn, &map),
-            Value::YXmlElement(xml) => XmlElementRef::from(inner_ref).copy_from(txn, &xml),
-            Value::YXmlFragment(xml) => XmlFragmentRef::from(inner_ref).copy_from(txn, &xml),
-            Value::YXmlText(text) => XmlTextRef::from(inner_ref).copy_from(txn, &text),
+            Out::YText(text) => TextRef::from(inner_ref).copy_from(txn, &text),
+            Out::YArray(array) => ArrayRef::from(inner_ref).copy_from(txn, &array),
+            Out::YMap(map) => MapRef::from(inner_ref).copy_from(txn, &map),
+            Out::YXmlElement(xml) => XmlElementRef::from(inner_ref).copy_from(txn, &xml),
+            Out::YXmlFragment(xml) => XmlFragmentRef::from(inner_ref).copy_from(txn, &xml),
+            Out::YXmlText(text) => XmlTextRef::from(inner_ref).copy_from(txn, &text),
             _ => {}
         }
     }
@@ -745,7 +745,7 @@ pub enum Change {
     /// Determines a change that resulted in adding a consecutive number of new elements:
     /// - For [Array] it's a range of inserted elements.
     /// - For [XmlElement] it's a range of inserted child XML nodes.
-    Added(Vec<Value>),
+    Added(Vec<Out>),
 
     /// Determines a change that resulted in removing a consecutive range of existing elements,
     /// either XML child nodes for [XmlElement] or various elements stored in an [Array].
@@ -760,14 +760,14 @@ pub enum Change {
 #[derive(Debug, Clone, PartialEq)]
 pub enum EntryChange {
     /// Informs about a new value inserted under specified entry.
-    Inserted(Value),
+    Inserted(Out),
 
     /// Informs about a change of old value (1st field) to a new one (2nd field) under
     /// a corresponding entry.
-    Updated(Value, Value),
+    Updated(Out, Out),
 
     /// Informs about a removal of a corresponding entry - contains a removed value.
-    Removed(Value),
+    Removed(Out),
 }
 
 /// A single change done over a text-like types: [Text] or [XmlText].
@@ -775,7 +775,7 @@ pub enum EntryChange {
 pub enum Delta {
     /// Determines a change that resulted in insertion of a piece of text, which optionally could
     /// have been formatted with provided set of attributes.
-    Inserted(Value, Option<Box<Attrs>>),
+    Inserted(Out, Option<Box<Attrs>>),
 
     /// Determines a change that resulted in removing a consecutive range of characters.
     Deleted(u32),
@@ -791,11 +791,11 @@ impl Delta {
         Delta::Retain(len, None)
     }
 
-    pub fn insert<T: Into<Value>>(value: T) -> Self {
+    pub fn insert<T: Into<Out>>(value: T) -> Self {
         Delta::Inserted(value.into(), None)
     }
 
-    pub fn insert_with<T: Into<Value>>(value: T, attrs: Attrs) -> Self {
+    pub fn insert_with<T: Into<Out>>(value: T, attrs: Attrs) -> Self {
         Delta::Inserted(value.into(), Some(Box::new(attrs)))
     }
 
@@ -1157,19 +1157,19 @@ impl Event {
     }
 
     /// Returns a shared data types which triggered current [Event].
-    pub fn target(&self) -> Value {
+    pub fn target(&self) -> Out {
         match self {
-            Event::Text(e) => Value::YText(e.target().clone()),
-            Event::Array(e) => Value::YArray(e.target().clone()),
-            Event::Map(e) => Value::YMap(e.target().clone()),
-            Event::XmlText(e) => Value::YXmlText(e.target().clone()),
+            Event::Text(e) => Out::YText(e.target().clone()),
+            Event::Array(e) => Out::YArray(e.target().clone()),
+            Event::Map(e) => Out::YMap(e.target().clone()),
+            Event::XmlText(e) => Out::YXmlText(e.target().clone()),
             Event::XmlFragment(e) => match e.target() {
-                XmlNode::Element(n) => Value::YXmlElement(n.clone()),
-                XmlNode::Fragment(n) => Value::YXmlFragment(n.clone()),
-                XmlNode::Text(n) => Value::YXmlText(n.clone()),
+                XmlNode::Element(n) => Out::YXmlElement(n.clone()),
+                XmlNode::Fragment(n) => Out::YXmlFragment(n.clone()),
+                XmlNode::Text(n) => Out::YXmlText(n.clone()),
             },
             #[cfg(feature = "weak")]
-            Event::Weak(e) => Value::YWeakLink(e.as_target().clone()),
+            Event::Weak(e) => Out::YWeakLink(e.as_target().clone()),
         }
     }
 }

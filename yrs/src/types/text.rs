@@ -3,7 +3,7 @@ use crate::block::{
 };
 use crate::transaction::TransactionMut;
 use crate::types::{
-    Attrs, Branch, BranchPtr, Delta, Path, RootRef, SharedRef, TypePtr, TypeRef, Value,
+    Attrs, Branch, BranchPtr, Delta, Out, Path, RootRef, SharedRef, TypePtr, TypeRef,
 };
 use crate::utils::OptionExt;
 use crate::*;
@@ -145,12 +145,12 @@ impl TryFrom<ItemPtr> for TextRef {
     }
 }
 
-impl TryFrom<Value> for TextRef {
-    type Error = Value;
+impl TryFrom<Out> for TextRef {
+    type Error = Out;
 
-    fn try_from(value: Value) -> Result<Self, Self::Error> {
+    fn try_from(value: Out) -> Result<Self, Self::Error> {
         match value {
-            Value::YText(value) => Ok(value),
+            Out::YText(value) => Ok(value),
             other => Err(other),
         }
     }
@@ -520,7 +520,7 @@ where
             } else {
                 None
             };
-            let op = Diff::with_change(Value::Any(buf.into()), attrs, change);
+            let op = Diff::with_change(Out::Any(buf.into()), attrs, change);
             self.ops.push(op);
         }
     }
@@ -1068,7 +1068,7 @@ fn clean_format_gap(
 pub struct Diff<T> {
     /// Inserted chunk of data. It can be (usually) piece of text, but possibly also embedded value
     /// or another shared type.
-    pub insert: Value,
+    pub insert: Out,
 
     /// Optional formatting attributes wrapping inserted chunk of data.
     pub attributes: Option<Box<Attrs>>,
@@ -1078,11 +1078,11 @@ pub struct Diff<T> {
 }
 
 impl<T> Diff<T> {
-    pub fn new(insert: Value, attributes: Option<Box<Attrs>>) -> Self {
+    pub fn new(insert: Out, attributes: Option<Box<Attrs>>) -> Self {
         Self::with_change(insert, attributes, None)
     }
 
-    pub fn with_change(insert: Value, attributes: Option<Box<Attrs>>, ychange: Option<T>) -> Self {
+    pub fn with_change(insert: Out, attributes: Option<Box<Attrs>>, ychange: Option<T>) -> Self {
         Diff {
             insert,
             attributes,
@@ -1099,7 +1099,7 @@ impl<T> From<Diff<T>> for Delta {
 }
 
 struct DeltaPrelim {
-    value: Value,
+    value: Out,
     /// Mark is this delta is being applied to text type. In such cases Any::String will be
     /// converted to ItemContent::String.
     within_text: bool,
@@ -1110,21 +1110,21 @@ impl Prelim for DeltaPrelim {
 
     fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
         match self.value {
-            Value::Any(Any::String(text)) if self.within_text => {
+            Out::Any(Any::String(text)) if self.within_text => {
                 (ItemContent::String(SplittableString::from(&*text)), None)
             }
-            Value::Any(any) => (ItemContent::Embed(any), None),
+            Out::Any(any) => (ItemContent::Embed(any), None),
             value => {
                 let type_ref = match &value {
-                    Value::YText(_) => TypeRef::Text,
-                    Value::YArray(_) => TypeRef::Array,
-                    Value::YMap(_) => TypeRef::Map,
-                    Value::YXmlElement(xml) => TypeRef::XmlElement(xml.tag().clone()),
-                    Value::YXmlFragment(_) => TypeRef::XmlFragment,
-                    Value::YXmlText(_) => TypeRef::XmlText,
-                    Value::YDoc(_) => TypeRef::SubDoc,
+                    Out::YText(_) => TypeRef::Text,
+                    Out::YArray(_) => TypeRef::Array,
+                    Out::YMap(_) => TypeRef::Map,
+                    Out::YXmlElement(xml) => TypeRef::XmlElement(xml.tag().clone()),
+                    Out::YXmlFragment(_) => TypeRef::XmlFragment,
+                    Out::YXmlText(_) => TypeRef::XmlText,
+                    Out::YDoc(_) => TypeRef::SubDoc,
                     #[cfg(feature = "weak")]
-                    Value::YWeakLink(link) => TypeRef::WeakLink(link.source().clone()),
+                    Out::YWeakLink(link) => TypeRef::WeakLink(link.source().clone()),
                     _ => unreachable!(),
                 };
                 let branch = Branch::new(type_ref);
@@ -1142,12 +1142,12 @@ impl Prelim for DeltaPrelim {
     fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
         use crate::CopyFrom;
         match self.value {
-            Value::YText(text) => TextRef::from(inner_ref).copy_from(txn, &text),
-            Value::YArray(array) => ArrayRef::from(inner_ref).copy_from(txn, &array),
-            Value::YMap(map) => MapRef::from(inner_ref).copy_from(txn, &map),
-            Value::YXmlElement(xml) => XmlElementRef::from(inner_ref).copy_from(txn, &xml),
-            Value::YXmlFragment(xml) => XmlFragmentRef::from(inner_ref).copy_from(txn, &xml),
-            Value::YXmlText(text) => XmlTextRef::from(inner_ref).copy_from(txn, &text),
+            Out::YText(text) => TextRef::from(inner_ref).copy_from(txn, &text),
+            Out::YArray(array) => ArrayRef::from(inner_ref).copy_from(txn, &array),
+            Out::YMap(map) => MapRef::from(inner_ref).copy_from(txn, &map),
+            Out::YXmlElement(xml) => XmlElementRef::from(inner_ref).copy_from(txn, &xml),
+            Out::YXmlFragment(xml) => XmlFragmentRef::from(inner_ref).copy_from(txn, &xml),
+            Out::YXmlText(text) => XmlTextRef::from(inner_ref).copy_from(txn, &text),
             _ => {}
         }
     }
@@ -1242,7 +1242,7 @@ impl TextEvent {
         #[derive(Debug, Default)]
         struct DeltaAssembler {
             action: Option<Action>,
-            insert: Option<Value>,
+            insert: Option<Out>,
             insert_string: Option<String>,
             retain: u32,
             delete: u32,
@@ -1468,7 +1468,7 @@ mod test {
     use crate::test_utils::{exchange_updates, run_scenario, RngExt};
     use crate::transaction::ReadTxn;
     use crate::types::text::{Attrs, ChangeKind, Delta, Diff, YChange};
-    use crate::types::Value;
+    use crate::types::Out;
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
     use crate::{
@@ -2537,7 +2537,7 @@ mod test {
             chunks,
             vec![
                 Diff::new("hello".into(), Some(Box::new(italic.clone()))),
-                Diff::new(Value::YArray(array), Some(Box::new(italic.clone()))),
+                Diff::new(Out::YArray(array), Some(Box::new(italic.clone()))),
                 Diff::new(image.into(), Some(Box::new(italic.clone()))),
                 Diff::new(" ".into(), Some(Box::new(italic))),
                 Diff::new("world".into(), Some(Box::new(italic_and_bold))),
@@ -2644,7 +2644,7 @@ mod test {
         );
         let delta = txt1.diff(&txn1, YChange::identity);
         let d: MapRef = delta[0].insert.clone().cast().unwrap();
-        assert_eq!(d.get(&txn1, "key").unwrap(), Value::Any("val".into()));
+        assert_eq!(d.get(&txn1, "key").unwrap(), Out::Any("val".into()));
 
         let triggered = Arc::new(AtomicBool::new(false));
         let _sub = {
@@ -2655,7 +2655,7 @@ mod test {
                     Delta::Inserted(insert, _) => insert.clone().cast().unwrap(),
                     _ => unreachable!("unexpected delta"),
                 };
-                assert_eq!(d.get(txn, "key").unwrap(), Value::Any("val".into()));
+                assert_eq!(d.get(txn, "key").unwrap(), Out::Any("val".into()));
                 triggered.store(true, Ordering::Relaxed);
             })
         };
@@ -2674,7 +2674,7 @@ mod test {
         let d: MapRef = delta[0].insert.clone().cast().unwrap();
         assert_eq!(
             d.get(&d2.transact(), "key").unwrap(),
-            Value::Any("val".into())
+            Out::Any("val".into())
         );
     }
 

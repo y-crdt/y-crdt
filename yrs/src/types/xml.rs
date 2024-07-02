@@ -13,7 +13,7 @@ use crate::transaction::TransactionMut;
 use crate::types::text::{diff_between, TextEvent, YChange};
 use crate::types::{
     event_change_set, event_keys, Branch, BranchPtr, Change, ChangeSet, Delta, Entries,
-    EntryChange, MapRef, Path, RootRef, SharedRef, ToJson, TypePtr, TypeRef, Value,
+    EntryChange, MapRef, Out, Path, RootRef, SharedRef, ToJson, TypePtr, TypeRef,
 };
 use crate::{
     Any, ArrayRef, BranchID, CopyFrom, DeepObservable, GetString, IndexedSequence, Map, Observable,
@@ -131,14 +131,14 @@ impl TryFrom<BranchPtr> for XmlNode {
     }
 }
 
-impl TryFrom<Value> for XmlNode {
-    type Error = Value;
+impl TryFrom<Out> for XmlNode {
+    type Error = Out;
 
-    fn try_from(value: Value) -> Result<Self, Self::Error> {
+    fn try_from(value: Out) -> Result<Self, Self::Error> {
         match value {
-            Value::YXmlElement(n) => Ok(XmlNode::Element(n)),
-            Value::YXmlFragment(n) => Ok(XmlNode::Fragment(n)),
-            Value::YXmlText(n) => Ok(XmlNode::Text(n)),
+            Out::YXmlElement(n) => Ok(XmlNode::Element(n)),
+            Out::YXmlFragment(n) => Ok(XmlNode::Fragment(n)),
+            Out::YXmlText(n) => Ok(XmlNode::Text(n)),
             other => Err(other),
         }
     }
@@ -330,12 +330,12 @@ impl TryFrom<ItemPtr> for XmlElementRef {
     }
 }
 
-impl TryFrom<Value> for XmlElementRef {
-    type Error = Value;
+impl TryFrom<Out> for XmlElementRef {
+    type Error = Out;
 
-    fn try_from(value: Value) -> Result<Self, Self::Error> {
+    fn try_from(value: Out) -> Result<Self, Self::Error> {
         match value {
-            Value::YXmlElement(value) => Ok(value),
+            Out::YXmlElement(value) => Ok(value),
             other => Err(other),
         }
     }
@@ -503,7 +503,7 @@ impl XmlTextRef {
             }
 
             // write string content of delta
-            if let Value::Any(any) = d.insert {
+            if let Out::Any(any) = d.insert {
                 write!(buf, "{}", any).unwrap();
             }
 
@@ -572,12 +572,12 @@ impl TryFrom<ItemPtr> for XmlTextRef {
     }
 }
 
-impl TryFrom<Value> for XmlTextRef {
-    type Error = Value;
+impl TryFrom<Out> for XmlTextRef {
+    type Error = Out;
 
-    fn try_from(value: Value) -> Result<Self, Self::Error> {
+    fn try_from(value: Out) -> Result<Self, Self::Error> {
         match value {
-            Value::YXmlText(value) => Ok(value),
+            Out::YXmlText(value) => Ok(value),
             other => Err(other),
         }
     }
@@ -723,12 +723,12 @@ impl TryFrom<ItemPtr> for XmlFragmentRef {
     }
 }
 
-impl TryFrom<Value> for XmlFragmentRef {
-    type Error = Value;
+impl TryFrom<Out> for XmlFragmentRef {
+    type Error = Out;
 
-    fn try_from(value: Value) -> Result<Self, Self::Error> {
+    fn try_from(value: Out) -> Result<Self, Self::Error> {
         match value {
-            Value::YXmlFragment(value) => Ok(value),
+            Out::YXmlFragment(value) => Ok(value),
             other => Err(other),
         }
     }
@@ -1384,7 +1384,7 @@ mod test {
     use crate::test_utils::exchange_updates;
     use crate::transaction::ReadTxn;
     use crate::types::xml::{Xml, XmlFragment, XmlNode};
-    use crate::types::{Attrs, Change, EntryChange, Value};
+    use crate::types::{Attrs, Change, EntryChange, Out};
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encoder, EncoderV1};
     use crate::{
@@ -1623,8 +1623,8 @@ mod test {
         assert_eq!(
             nodes.swap(None),
             Some(Arc::new(vec![Change::Added(vec![
-                Value::YXmlText(nested_txt.clone()),
-                Value::YXmlElement(nested_xml.clone())
+                Out::YXmlText(nested_txt.clone()),
+                Out::YXmlElement(nested_xml.clone())
             ])]))
         );
         assert_eq!(attributes.swap(None), Some(HashMap::new().into()));
@@ -1639,7 +1639,7 @@ mod test {
             nodes.swap(None),
             Some(Arc::new(vec![
                 Change::Retain(1),
-                Change::Added(vec![Value::YXmlElement(nested_xml2.clone())]),
+                Change::Added(vec![Out::YXmlElement(nested_xml2.clone())]),
                 Change::Removed(1),
             ]))
         );
@@ -1666,8 +1666,8 @@ mod test {
         assert_eq!(
             nodes.swap(None),
             Some(Arc::new(vec![Change::Added(vec![
-                Value::YXmlText(nested_txt),
-                Value::YXmlElement(nested_xml2)
+                Out::YXmlText(nested_txt),
+                Out::YXmlElement(nested_xml2)
             ])]))
         );
         assert_eq!(
