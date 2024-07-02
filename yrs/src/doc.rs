@@ -4,12 +4,12 @@ use crate::encoding::read::Error;
 use crate::event::{SubdocsEvent, TransactionCleanupEvent, UpdateEvent};
 use crate::store::{Store, StoreRef};
 use crate::transaction::{Origin, Transaction, TransactionMut};
-use crate::types::{RootRef, ToJson, Value};
+use crate::types::{RootRef, ToJson};
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::OptionExt;
 use crate::{
-    uuid_v4, uuid_v4_from, ArrayRef, BranchID, MapRef, ReadTxn, TextRef, Uuid, WriteTxn,
+    uuid_v4, uuid_v4_from, ArrayRef, BranchID, MapRef, ReadTxn, TextRef, Uuid, Value, WriteTxn,
     XmlFragmentRef,
 };
 use crate::{Any, Subscription};

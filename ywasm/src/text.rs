@@ -326,6 +326,24 @@ impl YText {
         }
     }
 
+    #[wasm_bindgen(js_name = applyDelta)]
+    pub fn apply_delta(&self, delta: js_sys::Array, txn: ImplicitTransaction) -> crate::Result<()> {
+        match &self.0 {
+            SharedCollection::Prelim(_) => {
+                Err(JsValue::from_str(crate::js::errors::INVALID_PRELIM_OP))
+            }
+            SharedCollection::Integrated(c) => c.mutably(txn, |c, txn| {
+                let mut result = Vec::new();
+                for js in delta.iter() {
+                    let d = todo!(); //crate::js::convert::js_into_delta(js)?;
+                    result.push(d);
+                }
+                c.apply_delta(txn, result);
+                Ok(())
+            }),
+        }
+    }
+
     /// Subscribes to all operations happening over this instance of `YText`. All changes are
     /// batched and eventually triggered during transaction commit phase.
     #[wasm_bindgen(js_name = observe)]

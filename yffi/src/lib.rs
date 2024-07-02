@@ -17,15 +17,15 @@ use yrs::types::weak::{LinkSource, Unquote as NativeUnquote, WeakEvent, WeakRef}
 use yrs::types::xml::{Attributes as NativeAttributes, XmlNode};
 use yrs::types::xml::{TreeWalker as NativeTreeWalker, XmlFragment};
 use yrs::types::xml::{XmlEvent, XmlTextEvent};
-use yrs::types::{Attrs, Change, Delta, EntryChange, Event, PathSegment, TypeRef, Value};
+use yrs::types::{Attrs, Change, Delta, EntryChange, Event, PathSegment, TypeRef};
 use yrs::undo::EventKind;
 use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use yrs::{
     uuid_v4, Any, Array, ArrayRef, Assoc, BranchID, DeleteSet, GetString, Map, MapRef, Observable,
     OffsetKind, Options, Origin, Quotable, ReadTxn, Snapshot, StateVector, StickyIndex, Store,
-    SubdocsEvent, SubdocsEventIter, Text, TextRef, Transact, TransactionCleanupEvent, Update, Xml,
-    XmlElementPrelim, XmlElementRef, XmlFragmentRef, XmlTextPrelim, XmlTextRef, ID,
+    SubdocsEvent, SubdocsEventIter, Text, TextRef, Transact, TransactionCleanupEvent, Update,
+    Value, Xml, XmlElementPrelim, XmlElementRef, XmlFragmentRef, XmlTextPrelim, XmlTextRef, ID,
 };
 
 /// Flag used by `YInput` and `YOutput` to tag boolean values.
