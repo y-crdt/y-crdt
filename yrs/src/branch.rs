@@ -579,6 +579,14 @@ impl Branch {
         self.deep_observers.subscribe(Box::new(f))
     }
 
+    #[cfg(not(feature = "sync"))]
+    pub fn observe_deep<F>(&self, f: F) -> Subscription
+    where
+        F: Fn(&TransactionMut, &Events) + 'static,
+    {
+        self.deep_observers.subscribe(Box::new(f))
+    }
+
     #[cfg(feature = "sync")]
     pub fn observe_deep_with<F>(&self, key: Origin, f: F)
     where

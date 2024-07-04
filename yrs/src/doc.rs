@@ -571,6 +571,17 @@ impl Doc {
     }
 
     /// Subscribe callback function, that will be called whenever a [DocRef::destroy] has been called.
+    #[cfg(not(feature = "sync"))]
+    pub fn observe_destroy<F>(&self, f: F) -> Result<Subscription, BorrowMutError>
+    where
+        F: Fn(&TransactionMut, &Doc) + 'static,
+    {
+        let mut r = self.store.try_borrow_mut()?;
+        let events = r.events.get_or_init();
+        Ok(events.destroy_events.subscribe(Box::new(f)))
+    }
+
+    /// Subscribe callback function, that will be called whenever a [DocRef::destroy] has been called.
     #[cfg(feature = "sync")]
     pub fn observe_destroy_with<K, F>(&self, key: K, f: F) -> Result<(), BorrowMutError>
     where
