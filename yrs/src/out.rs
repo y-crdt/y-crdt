@@ -1,7 +1,8 @@
+use crate::block::{ItemContent, ItemPtr};
 use crate::branch::{Branch, BranchPtr};
-use crate::types::ToJson;
+use crate::types::{AsPrelim, ToJson};
 use crate::{
-    any, Any, ArrayRef, Doc, GetString, MapRef, ReadTxn, TextRef, WeakRef, XmlElementRef,
+    any, Any, ArrayRef, Doc, GetString, In, MapPrelim, MapRef, ReadTxn, TextRef, XmlElementRef,
     XmlFragmentRef, XmlTextRef,
 };
 use std::convert::TryFrom;
@@ -12,7 +13,7 @@ use std::sync::Arc;
 /// representation of JSON, but also nested complex collaborative structures specific to Yrs.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Out {
-    /// Any value that it treated as a single element in it's entirety.
+    /// Any value that it treated as a single element in its entirety.
     Any(Any),
     /// Instance of a [TextRef].
     YText(TextRef),
@@ -30,7 +31,7 @@ pub enum Out {
     YDoc(Doc),
     /// Instance of a [WeakRef] or unspecified type (requires manual casting).
     #[cfg(feature = "weak")]
-    YWeakLink(WeakRef<BranchPtr>),
+    YWeakLink(crate::WeakRef<BranchPtr>),
     /// Instance of a shared collection of undefined type. Usually happens when it refers to a root
     /// type that has not been defined locally. Can also refer to a [WeakRef] if "weak" feature flag
     /// was not set.
@@ -86,6 +87,63 @@ impl Out {
             Out::YDoc(_) => None,
             Out::Any(_) => None,
         }
+    }
+}
+
+impl TryFrom<ItemPtr> for Out {
+    type Error = ItemPtr;
+
+    fn try_from(value: ItemPtr) -> Result<Self, Self::Error> {
+        match value.content.get_last() {
+            None => Err(value),
+            Some(v) => Ok(v),
+        }
+    }
+}
+
+impl AsPrelim for Out {
+    type Prelim = In;
+
+    fn as_prelim<T: ReadTxn>(&self, txn: &T) -> Self::Prelim {
+        match self {
+            Out::Any(any) => In::Any(any.clone()),
+            Out::YText(v) => In::Text(v.as_prelim(txn)),
+            Out::YArray(v) => In::Array(v.as_prelim(txn)),
+            Out::YMap(v) => In::Map(v.as_prelim(txn)),
+            Out::YXmlElement(v) => In::XmlElement(v.as_prelim(txn)),
+            Out::YXmlFragment(v) => In::XmlFragment(v.as_prelim(txn)),
+            Out::YXmlText(v) => In::XmlText(v.as_prelim(txn)),
+            Out::YDoc(v) => In::Doc(v.clone()),
+            #[cfg(feature = "weak")]
+            Out::YWeakLink(v) => In::WeakLink(v.as_prelim(txn)),
+            Out::UndefinedRef(v) => infer_type_from_content(*v, txn),
+        }
+    }
+}
+
+fn infer_type_from_content<T: ReadTxn>(branch: BranchPtr, txn: &T) -> In {
+    let has_map = !branch.map.is_empty();
+    let mut ptr = branch.start;
+    let has_list = ptr.is_some();
+    let mut possible_text = false;
+    while let Some(curr) = ptr {
+        if !curr.is_deleted() {
+            possible_text = match &curr.content {
+                ItemContent::Embed(_) | ItemContent::Format(_, _) | ItemContent::String(_) => true,
+                _ => false,
+            };
+            break;
+        }
+        ptr = curr.right;
+    }
+
+    match (has_map, has_list, possible_text) {
+        (true, false, false) => In::Map(MapRef::from(branch).as_prelim(txn)),
+        (false, true, false) => In::Array(ArrayRef::from(branch).as_prelim(txn)),
+        (false, _, true) => In::Text(TextRef::from(branch).as_prelim(txn)),
+        (true, _, true) => In::XmlText(XmlTextRef::from(branch).as_prelim(txn)),
+        (true, true, false) => In::XmlElement(XmlElementRef::from(branch).as_prelim(txn)),
+        _ => In::Map(MapPrelim::default()), // if we have no content, default to map
     }
 }
 

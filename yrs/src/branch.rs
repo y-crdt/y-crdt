@@ -13,6 +13,7 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::convert::TryFrom;
 use std::fmt::Formatter;
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
@@ -42,6 +43,18 @@ impl BranchPtr {
 
     pub(crate) fn trigger_deep(&self, txn: &TransactionMut, e: &Events) {
         self.deep_observers.trigger(|fun| fun(txn, e));
+    }
+}
+
+impl TryFrom<ItemPtr> for BranchPtr {
+    type Error = ItemPtr;
+
+    fn try_from(value: ItemPtr) -> Result<Self, Self::Error> {
+        if let ItemContent::Type(branch) = &value.content {
+            Ok(BranchPtr::from(branch))
+        } else {
+            Err(value)
+        }
     }
 }
 

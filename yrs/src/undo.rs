@@ -985,7 +985,7 @@ mod test {
         assert_eq!(map1.get(&d1.transact(), "a").unwrap(), 1.into());
 
         // testing sub-types and if it can restore a whole type
-        let sub_type = map1.insert(&mut d1.transact_mut(), "a", MapPrelim::<u32>::new());
+        let sub_type = map1.insert(&mut d1.transact_mut(), "a", MapPrelim::default());
         sub_type.insert(&mut d1.transact_mut(), "x", 42);
         let actual = map1.to_json(&d1.transact());
         let expected = Any::from_json(r#"{ "a": { "x": 42 } }"#).unwrap();
@@ -1060,7 +1060,7 @@ mod test {
         array1.remove_range(&mut d1.transact_mut(), 0, 5);
 
         // test nested structure
-        let map = array1.insert(&mut d1.transact_mut(), 0, MapPrelim::<u32>::new());
+        let map = array1.insert(&mut d1.transact_mut(), 0, MapPrelim::default());
         let actual = array1.to_json(&d1.transact());
         let expected = Any::from_json(r#"[{}]"#).unwrap();
         assert_eq!(actual, expected);
@@ -1677,7 +1677,7 @@ mod test {
         let s1 = map.insert(
             &mut doc.transact_mut_with(doc.client_id()),
             "s1",
-            MapPrelim::<i32>::new(),
+            MapPrelim::default(),
         );
         mgr.reset();
 
@@ -1747,12 +1747,12 @@ mod test {
         let d = Doc::new();
         let r = d.get_or_insert_map("r");
 
-        let s1 = r.insert(&mut d.transact_mut(), "s1", MapPrelim::<i32>::new());
+        let s1 = r.insert(&mut d.transact_mut(), "s1", MapPrelim::default());
 
         let mut mgr = UndoManager::with_options(&d, &r, Options::default());
         {
             let mut txn = d.transact_mut();
-            let b1 = s1.insert(&mut txn, "b1", MapPrelim::<i32>::new());
+            let b1 = s1.insert(&mut txn, "b1", MapPrelim::default());
             b1.insert(&mut txn, "f1", 11);
         }
         mgr.reset();
@@ -1762,7 +1762,7 @@ mod test {
 
         {
             let mut txn = d.transact_mut();
-            let b1 = s1.insert(&mut txn, "b1", MapPrelim::<i32>::new());
+            let b1 = s1.insert(&mut txn, "b1", MapPrelim::default());
             b1.insert(&mut txn, "f1", 20);
         }
         mgr.reset();
@@ -1786,16 +1786,16 @@ mod test {
         let doc = Doc::with_client_id(1);
 
         let r = doc.get_or_insert_map("r");
-        let s1 = r.insert(&mut doc.transact_mut(), "s1", MapPrelim::<i32>::new()); // { s1: {} }
+        let s1 = r.insert(&mut doc.transact_mut(), "s1", MapPrelim::default()); // { s1: {} }
         let b1_arr = s1.insert(&mut doc.transact_mut(), "b1", ArrayPrelim::default()); // { s1: { b1: [] } }
-        let el1 = b1_arr.insert(&mut doc.transact_mut(), 0, MapPrelim::<i32>::new()); // { s1: { b1: [{}] } }
+        let el1 = b1_arr.insert(&mut doc.transact_mut(), 0, MapPrelim::default()); // { s1: { b1: [{}] } }
         el1.insert(&mut doc.transact_mut(), "f1", 8); // { s1: { b1: [{ f1: 8 }] } }
         el1.insert(&mut doc.transact_mut(), "f2", true); // { s1: { b1: [{ f1: 8, f2: true }] } }
 
         let mut mgr = UndoManager::with_options(&doc, &r, Options::default());
         {
             let mut txn = doc.transact_mut();
-            let el0 = b1_arr.insert(&mut txn, 0, MapPrelim::<i32>::new()); // { s1: { b1: [{}, { f1: 8, f2: true }] } }
+            let el0 = b1_arr.insert(&mut txn, 0, MapPrelim::default()); // { s1: { b1: [{}, { f1: 8, f2: true }] } }
             el0.insert(&mut txn, "f1", 8); // { s1: { b1: [{ f1: 8 }, { f1: 8, f2: true }] } }
             el0.insert(&mut txn, "f2", false); // { s1: { b1: [{ f1: 8, f2: false }, { f1: 8, f2: true }] } }
 
@@ -1832,7 +1832,7 @@ mod test {
     fn issue_371_2() {
         let doc = Doc::with_client_id(1);
         let r = doc.get_or_insert_map("r");
-        let s1 = r.insert(&mut doc.transact_mut(), "s1", MapPrelim::<i32>::new()); // { s1:{} }
+        let s1 = r.insert(&mut doc.transact_mut(), "s1", MapPrelim::default()); // { s1:{} }
         s1.insert(&mut doc.transact_mut(), "f2", "AAA"); // { s1: { f2: AAA } }
         s1.insert(&mut doc.transact_mut(), "f1", false); // { s1: { f1: false, f2: AAA } }
 
@@ -1865,10 +1865,10 @@ mod test {
     fn issue_380() {
         let d = Doc::with_client_id(1);
         let r = d.get_or_insert_map("r"); // {r:{}}
-        let s1 = r.insert(&mut d.transact_mut(), "s1", MapPrelim::<i32>::new()); // {r:{s1:{}}
+        let s1 = r.insert(&mut d.transact_mut(), "s1", MapPrelim::default()); // {r:{s1:{}}
         let b1_arr = s1.insert(&mut d.transact_mut(), "b1", ArrayPrelim::default()); // {r:{s1:{b1:[]}}
 
-        let b1_el1 = b1_arr.insert(&mut d.transact_mut(), 0, MapPrelim::<i32>::new()); // {r:{s1:{b1:[{}]}}
+        let b1_el1 = b1_arr.insert(&mut d.transact_mut(), 0, MapPrelim::default()); // {r:{s1:{b1:[{}]}}
         let b2_arr = b1_el1.insert(&mut d.transact_mut(), "b2", ArrayPrelim::default()); // {r:{s1:{b1:[{b2:[]}]}}
         let b2_arr_nest = b2_arr.insert(&mut d.transact_mut(), 0, ArrayPrelim::default()); // {r:{s1:{b1:[{b2:[[]]}]}}
         b2_arr_nest.insert(&mut d.transact_mut(), 0, 232291652); // {r:{s1:{b1:[{b2:[[232291652]]}]}}
@@ -1885,14 +1885,14 @@ mod test {
 
         let mut txn = d.transact_mut();
 
-        let b1_el0 = b1_arr.insert(&mut txn, 0, MapPrelim::<i32>::new()); // {r:{s1:{b1:[{},{b2:[[232291652, -5]]}]}}
+        let b1_el0 = b1_arr.insert(&mut txn, 0, MapPrelim::default()); // {r:{s1:{b1:[{},{b2:[[232291652, -5]]}]}}
         let b2_0_arr = b1_el0.insert(&mut txn, "b2", ArrayPrelim::default()); // {r:{s1:{b1:[{b2:[]},{b2:[[232291652, -5]]}]}}
         let b2_0_arr_nest = b2_0_arr.insert(&mut txn, 0, ArrayPrelim::default()); // {r:{s1:{b1:[{b2:[[]]},{b2:[[232291652, -5]]}]}}
         b2_0_arr_nest.insert(&mut txn, 0, 232291652); // {r:{s1:{b1:[{b2:[[232291652]]},{b2:[[232291652, -5]]}]}}
         b2_0_arr_nest.insert(&mut txn, 1, -6); // {r:{s1:{b1:[{b2:[[232291652, -6]]},{b2:[[232291652, -5]]}]}}
         b1_arr.remove(&mut txn, 1); // {r:{s1:{b1:[{b2:[[232291652, -6]]}]}}
 
-        let b1_el1 = b1_arr.insert(&mut txn, 1, MapPrelim::<i32>::new()); // {r:{s1:{b1:[{b2:[[232291652, -6]]}, {}]}}
+        let b1_el1 = b1_arr.insert(&mut txn, 1, MapPrelim::default()); // {r:{s1:{b1:[{b2:[[232291652, -6]]}, {}]}}
         b1_el1.insert(&mut txn, "f2", "C1"); // {r:{s1:{b1:[{b2:[[232291652, -6]]}, {f2:C1}]}}
 
         drop(txn);

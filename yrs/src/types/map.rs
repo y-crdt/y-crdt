@@ -1,8 +1,8 @@
 use crate::block::{EmbedPrelim, ItemContent, ItemPosition, ItemPtr, Prelim};
 use crate::transaction::TransactionMut;
 use crate::types::{
-    event_keys, Branch, BranchPtr, Entries, EntryChange, Out, Path, RootRef, SharedRef, ToJson,
-    TypeRef, ValuePrelim,
+    event_keys, AsPrelim, Branch, BranchPtr, Entries, EntryChange, In, Out, Path, RootRef,
+    SharedRef, ToJson, TypeRef,
 };
 use crate::*;
 use std::borrow::Borrow;
@@ -121,16 +121,19 @@ impl TryFrom<Out> for MapRef {
     }
 }
 
-impl CopyFrom for MapRef {
-    fn copy_from(&self, txn: &mut TransactionMut, source: &Self) {
-        for (key, ptr) in source.0.map.iter() {
-            if ptr.is_deleted() {
-                continue;
-            }
-            if let Some(value) = ptr.content.get_last() {
-                self.insert(txn, key.clone(), ValuePrelim::from(value));
+impl AsPrelim for MapRef {
+    type Prelim = MapPrelim;
+
+    fn as_prelim<T: ReadTxn>(&self, txn: &T) -> Self::Prelim {
+        let mut prelim = HashMap::with_capacity(self.len(txn) as usize);
+        for (key, &ptr) in self.0.map.iter() {
+            if !ptr.is_deleted() {
+                if let Ok(value) = Out::try_from(ptr) {
+                    prelim.insert(key.clone(), value.as_prelim(txn));
+                }
             }
         }
+        MapPrelim(prelim)
     }
 }
 
@@ -343,11 +346,11 @@ impl From<BranchPtr> for MapRef {
 /// A preliminary map. It can be used to early initialize the contents of a [MapRef], when it's about
 /// to be inserted into another Yrs collection, such as [ArrayRef] or another [MapRef].
 #[repr(transparent)]
-#[derive(Debug, Clone)]
-pub struct MapPrelim<T>(HashMap<Arc<str>, T>);
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct MapPrelim(HashMap<Arc<str>, In>);
 
-impl<T> Deref for MapPrelim<T> {
-    type Target = HashMap<Arc<str>, T>;
+impl Deref for MapPrelim {
+    type Target = HashMap<Arc<str>, In>;
 
     #[inline]
     fn deref(&self) -> &Self::Target {
@@ -355,48 +358,49 @@ impl<T> Deref for MapPrelim<T> {
     }
 }
 
-impl<T> DerefMut for MapPrelim<T> {
+impl DerefMut for MapPrelim {
     #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
 }
 
-impl<T> MapPrelim<T> {
-    pub fn new() -> Self {
-        MapPrelim(HashMap::default())
+impl From<MapPrelim> for In {
+    #[inline]
+    fn from(value: MapPrelim) -> Self {
+        In::Map(value)
     }
 }
 
-impl Default for MapPrelim<Any> {
-    fn default() -> Self {
-        MapPrelim(HashMap::default())
-    }
-}
-
-impl<S, T> FromIterator<(S, T)> for MapPrelim<T>
+impl<S, T> FromIterator<(S, T)> for MapPrelim
 where
     S: Into<Arc<str>>,
+    T: Into<In>,
 {
     fn from_iter<I: IntoIterator<Item = (S, T)>>(iter: I) -> Self {
-        MapPrelim(iter.into_iter().map(|(k, v)| (k.into(), v)).collect())
+        MapPrelim(
+            iter.into_iter()
+                .map(|(k, v)| (k.into(), v.into()))
+                .collect(),
+        )
     }
 }
 
-impl<S, T, const C: usize> From<[(S, T); C]> for MapPrelim<T>
+impl<S, T, const C: usize> From<[(S, T); C]> for MapPrelim
 where
     S: Into<Arc<str>>,
+    T: Into<In>,
 {
     fn from(map: [(S, T); C]) -> Self {
         let mut m = HashMap::with_capacity(C);
         for (key, value) in map {
-            m.insert(key.into(), value);
+            m.insert(key.into(), value.into());
         }
         MapPrelim(m)
     }
 }
 
-impl<T: Prelim> Prelim for MapPrelim<T> {
+impl Prelim for MapPrelim {
     type Return = MapRef;
 
     fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
@@ -412,9 +416,9 @@ impl<T: Prelim> Prelim for MapPrelim<T> {
     }
 }
 
-impl<T: Prelim> Into<EmbedPrelim<MapPrelim<T>>> for MapPrelim<T> {
+impl Into<EmbedPrelim<MapPrelim>> for MapPrelim {
     #[inline]
-    fn into(self) -> EmbedPrelim<MapPrelim<T>> {
+    fn into(self) -> EmbedPrelim<MapPrelim> {
         EmbedPrelim::Shared(self)
     }
 }
@@ -974,7 +978,7 @@ mod test {
             calls_copy.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         });
 
-        let nested = map.insert(&mut doc.transact_mut(), "map", MapPrelim::<String>::new());
+        let nested = map.insert(&mut doc.transact_mut(), "map", MapPrelim::default());
         nested.insert(
             &mut doc.transact_mut(),
             "array",

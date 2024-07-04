@@ -1,21 +1,23 @@
-use crate::atomic::AtomicRef;
-use crate::block::{EmbedPrelim, ItemContent, ItemPtr, Prelim};
-use crate::iter::{
-    AsIter, BlockIterator, BlockSliceIterator, IntoBlockIter, MoveIter, RangeIter, TxnIterator,
-    Values,
-};
-use crate::types::{Branch, BranchPtr, Out, Path, SharedRef, TypeRef};
-use crate::{
-    Array, Assoc, DeepObservable, GetString, Map, Observable, ReadTxn, StickyIndex, TextRef,
-    TransactionMut, XmlTextRef, ID,
-};
 use std::collections::hash_map::Entry;
 use std::collections::{Bound, HashSet};
 use std::convert::TryFrom;
 use std::marker::PhantomData;
 use std::ops::{DerefMut, RangeBounds};
 use std::sync::Arc;
+
 use thiserror::Error;
+
+use crate::atomic::AtomicRef;
+use crate::block::{EmbedPrelim, ItemContent, ItemPtr, Prelim};
+use crate::iter::{
+    AsIter, BlockIterator, BlockSliceIterator, IntoBlockIter, MoveIter, RangeIter, TxnIterator,
+    Values,
+};
+use crate::types::{AsPrelim, Branch, BranchPtr, Out, Path, SharedRef, TypeRef};
+use crate::{
+    Array, Assoc, DeepObservable, GetString, In, Map, Observable, ReadTxn, StickyIndex, TextRef,
+    TransactionMut, XmlTextRef, ID,
+};
 
 /// Weak link reference represents a reference to a single element or consecutive range of elements
 /// stored in another collection in the same document.
@@ -307,6 +309,18 @@ where
     }
 }
 
+impl<V> AsPrelim for WeakRef<V>
+where
+    V: AsRef<Branch> + TryFrom<ItemPtr>,
+{
+    type Prelim = WeakPrelim<V>;
+
+    fn as_prelim<T: ReadTxn>(&self, _txn: &T) -> Self::Prelim {
+        let source = self.try_source().unwrap();
+        WeakPrelim::with_source(source.clone())
+    }
+}
+
 /// A preliminary type for [WeakRef]. Once inserted into document it can be used as a weak reference
 /// link to another value living inside of the document store.
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -435,6 +449,13 @@ impl<P: SharedRef> From<WeakPrelim<BranchPtr>> for WeakPrelim<P> {
 impl<P> Into<EmbedPrelim<WeakPrelim<P>>> for WeakPrelim<P> {
     fn into(self) -> EmbedPrelim<WeakPrelim<P>> {
         EmbedPrelim::Shared(self)
+    }
+}
+
+impl<T> From<WeakPrelim<T>> for In {
+    #[inline]
+    fn from(value: WeakPrelim<T>) -> Self {
+        In::WeakLink(value.into_inner())
     }
 }
 
@@ -843,6 +864,12 @@ pub(crate) fn join_linked_range(mut block: ItemPtr, txn: &mut TransactionMut) {
 
 #[cfg(test)]
 mod test {
+    use std::collections::{Bound, HashMap};
+    use std::ops::RangeBounds;
+    use std::sync::{Arc, Mutex};
+
+    use arc_swap::ArcSwapOption;
+
     use crate::branch::BranchPtr;
     use crate::test_utils::exchange_updates;
     use crate::types::text::YChange;
@@ -853,12 +880,6 @@ mod test {
         Array, ArrayRef, DeepObservable, Doc, GetString, Map, MapPrelim, MapRef, Observable,
         Quotable, Text, TextRef, Transact, XmlTextRef,
     };
-    use arc_swap::ArcSwapOption;
-    use std::cell::RefCell;
-    use std::collections::{Bound, HashMap};
-    use std::ops::RangeBounds;
-    use std::rc::Rc;
-    use std::sync::{Arc, Mutex};
 
     #[test]
     fn basic_map_link() {
@@ -1448,7 +1469,7 @@ mod test {
         };
 
         let mut txn = doc.transact_mut();
-        let nested = array.insert(&mut txn, 0, MapPrelim::<u32>::new());
+        let nested = array.insert(&mut txn, 0, MapPrelim::default());
         let link = array.quote(&txn, 0..=0).unwrap();
         let link = map.insert(&mut txn, "link", link);
         drop(txn);
@@ -1512,11 +1533,7 @@ mod test {
         let map = doc.get_or_insert_map("map");
         let array = doc.get_or_insert_array("array");
 
-        let nested = map.insert(
-            &mut doc.transact_mut(),
-            "nested",
-            MapPrelim::<String>::new(),
-        );
+        let nested = map.insert(&mut doc.transact_mut(), "nested", MapPrelim::default());
         let link = map.link(&doc.transact(), "nested").unwrap();
         let link = array.insert(&mut doc.transact_mut(), 0, link);
 
@@ -1604,8 +1621,8 @@ mod test {
         {
             let mut t1 = d1.transact_mut();
             a1.push_back(&mut t1, 1);
-            a1.push_back(&mut t1, MapPrelim::<String>::new());
-            a1.push_back(&mut t1, MapPrelim::<String>::new());
+            a1.push_back(&mut t1, MapPrelim::default());
+            a1.push_back(&mut t1, MapPrelim::default());
             a1.push_back(&mut t1, 2);
         }
         let l1 = {
@@ -1657,7 +1674,7 @@ mod test {
             })
         };
 
-        let m20 = a1.insert(&mut d1.transact_mut(), 3, MapPrelim::<String>::new());
+        let m20 = a1.insert(&mut d1.transact_mut(), 3, MapPrelim::default());
         exchange_updates(&[&d1, &d2]);
         m20.insert(&mut d1.transact_mut(), "key", "value");
         assert_eq!(
@@ -1705,9 +1722,9 @@ mod test {
         let root = doc.get_or_insert_array("array");
         let mut txn = doc.transact_mut();
 
-        let m0 = root.insert(&mut txn, 0, MapPrelim::<u32>::new());
-        let m1 = root.insert(&mut txn, 1, MapPrelim::<u32>::new());
-        let m2 = root.insert(&mut txn, 2, MapPrelim::<u32>::new());
+        let m0 = root.insert(&mut txn, 0, MapPrelim::default());
+        let m1 = root.insert(&mut txn, 1, MapPrelim::default());
+        let m2 = root.insert(&mut txn, 2, MapPrelim::default());
 
         let l0 = root.quote(&txn, 0..=0).unwrap();
         let l1 = root.quote(&txn, 1..=1).unwrap();

@@ -3,10 +3,10 @@ use crate::block_iter::BlockIter;
 use crate::moving::StickyIndex;
 use crate::transaction::TransactionMut;
 use crate::types::{
-    event_change_set, Branch, BranchPtr, Change, ChangeSet, Out, Path, RootRef, SharedRef, ToJson,
-    TypeRef, ValuePrelim,
+    event_change_set, AsPrelim, Branch, BranchPtr, Change, ChangeSet, In, Out, Path, RootRef,
+    SharedRef, ToJson, TypeRef,
 };
-use crate::{Any, Assoc, CopyFrom, DeepObservable, IndexedSequence, Observable, ReadTxn, ID};
+use crate::{Any, Assoc, DeepObservable, IndexedSequence, Observable, ReadTxn, ID};
 use std::borrow::Borrow;
 use std::cell::UnsafeCell;
 use std::collections::HashSet;
@@ -144,12 +144,15 @@ impl TryFrom<Out> for ArrayRef {
     }
 }
 
-impl CopyFrom for ArrayRef {
-    fn copy_from(&self, txn: &mut TransactionMut, source: &Self) {
-        let values: Vec<_> = source.iter(txn).collect();
-        for value in values {
-            self.push_back(txn, ValuePrelim::from(value));
+impl AsPrelim for ArrayRef {
+    type Prelim = ArrayPrelim;
+
+    fn as_prelim<T: ReadTxn>(&self, txn: &T) -> Self::Prelim {
+        let mut prelim = Vec::with_capacity(self.len(txn) as usize);
+        for value in self.iter(txn) {
+            prelim.push(value.as_prelim(txn));
         }
+        ArrayPrelim(prelim)
     }
 }
 
@@ -404,11 +407,11 @@ impl From<BranchPtr> for ArrayRef {
 /// A preliminary array. It can be used to initialize an [ArrayRef], when it's about to be nested
 /// into another Yrs data collection, such as [Map] or another [ArrayRef].
 #[repr(transparent)]
-#[derive(Debug, Clone)]
-pub struct ArrayPrelim<T>(Vec<T>);
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ArrayPrelim(Vec<In>);
 
-impl<T> Deref for ArrayPrelim<T> {
-    type Target = Vec<T>;
+impl Deref for ArrayPrelim {
+    type Target = Vec<In>;
 
     #[inline]
     fn deref(&self) -> &Self::Target {
@@ -416,31 +419,39 @@ impl<T> Deref for ArrayPrelim<T> {
     }
 }
 
-impl<T> DerefMut for ArrayPrelim<T> {
+impl DerefMut for ArrayPrelim {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
 }
 
-impl<T> FromIterator<T> for ArrayPrelim<T> {
-    fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
-        ArrayPrelim(iter.into_iter().collect())
+impl From<ArrayPrelim> for In {
+    #[inline]
+    fn from(value: ArrayPrelim) -> Self {
+        In::Array(value)
     }
 }
 
-impl<I, T> From<I> for ArrayPrelim<T>
+impl<T> FromIterator<T> for ArrayPrelim
+where
+    T: Into<In>,
+{
+    fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
+        ArrayPrelim(iter.into_iter().map(|v| v.into()).collect())
+    }
+}
+
+impl<I, T> From<I> for ArrayPrelim
 where
     I: IntoIterator<Item = T>,
+    T: Into<In>,
 {
     fn from(iter: I) -> Self {
-        ArrayPrelim(iter.into_iter().collect())
+        ArrayPrelim(iter.into_iter().map(|v| v.into()).collect())
     }
 }
 
-impl<T> Prelim for ArrayPrelim<T>
-where
-    T: Prelim,
-{
+impl Prelim for ArrayPrelim {
     type Return = ArrayRef;
 
     fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
@@ -456,19 +467,10 @@ where
     }
 }
 
-impl<T> Into<EmbedPrelim<ArrayPrelim<T>>> for ArrayPrelim<T>
-where
-    T: Prelim,
-{
+impl Into<EmbedPrelim<ArrayPrelim>> for ArrayPrelim {
     #[inline]
-    fn into(self) -> EmbedPrelim<ArrayPrelim<T>> {
+    fn into(self) -> EmbedPrelim<ArrayPrelim> {
         EmbedPrelim::Shared(self)
-    }
-}
-
-impl Default for ArrayPrelim<Any> {
-    fn default() -> Self {
-        ArrayPrelim(Vec::new())
     }
 }
 
@@ -1229,7 +1231,7 @@ mod test {
             paths_copy.lock().unwrap().push(path);
         });
 
-        array.insert(&mut doc.transact_mut(), 0, MapPrelim::<String>::new());
+        array.insert(&mut doc.transact_mut(), 0, MapPrelim::default());
 
         {
             let mut txn = doc.transact_mut();

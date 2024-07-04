@@ -40,6 +40,7 @@ impl BlockSlice {
         }
     }
 
+    #[allow(dead_code)]
     pub fn is_deleted(&self) -> bool {
         match self {
             BlockSlice::Item(s) => s.is_deleted(),

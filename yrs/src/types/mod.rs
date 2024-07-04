@@ -12,7 +12,7 @@ pub use map::MapRef;
 pub use text::Text;
 pub use text::TextRef;
 
-use crate::block::{Item, ItemContent, ItemPtr, Prelim, Unused};
+use crate::block::{Item, ItemContent, ItemPtr, Prelim};
 use crate::branch::{Branch, BranchPtr};
 use crate::encoding::read::Error;
 use crate::transaction::TransactionMut;
@@ -321,14 +321,14 @@ pub trait SharedRef: From<BranchPtr> + AsRef<Branch> {
     }
 }
 
-/// Trait that allows for deep copying data from one shared type to another.
-pub trait CopyFrom: SharedRef {
-    /// Performs a deep copy of a current shared type from a given source.
-    ///
-    /// Deep copy means that rather than just linking nested shared types, a new shared type will
-    /// be inserted with the contents copied from the source. Therefore, chaning deep copy will
-    /// not affect the source.
-    fn copy_from(&self, txn: &mut TransactionMut, source: &Self);
+/// Trait which allows conversion back to a prelim type that can be used to create a new shared
+/// that's a deep copy equivalent of a current type.
+pub trait AsPrelim {
+    type Prelim: Prelim<Return = Self>;
+
+    /// Converts current type contents into a [Prelim] type that can be used to create a new
+    /// type that's a deep copy equivalent of a current type.
+    fn as_prelim<T: ReadTxn>(&self, txn: &T) -> Self::Prelim;
 }
 
 /// Trait implemented by all Y-types, allowing for observing events which are emitted by
@@ -412,60 +412,6 @@ pub trait DeepObservable: AsRef<Branch> {
     fn unobserve_deep<K: Into<Origin>>(&self, key: K) -> bool {
         let branch = self.as_ref();
         branch.deep_observers.unsubscribe(&key.into())
-    }
-}
-
-/// A wrapper around [Out] type that enables it to be used as a type to be inserted into
-/// shared collections. If [ValuePrelim] contains a shared type, it will be inserted as a deep
-/// copy of the original type: therefore none of the changes applied to the original type will
-/// affect the deep copy.
-#[repr(transparent)]
-#[derive(Debug, Clone, PartialEq)]
-pub struct ValuePrelim(Out);
-
-impl From<Out> for ValuePrelim {
-    fn from(value: Out) -> Self {
-        ValuePrelim(value)
-    }
-}
-
-impl Prelim for ValuePrelim {
-    type Return = Unused;
-
-    fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
-        match self.0 {
-            Out::Any(any) => (ItemContent::Any(vec![any]), None),
-            value => {
-                let type_ref = match &value {
-                    Out::YText(_) => TypeRef::Text,
-                    Out::YArray(_) => TypeRef::Array,
-                    Out::YMap(_) => TypeRef::Map,
-                    Out::YXmlElement(xml) => TypeRef::XmlElement(xml.tag().clone()),
-                    Out::YXmlFragment(_) => TypeRef::XmlFragment,
-                    Out::YXmlText(_) => TypeRef::XmlText,
-                    Out::YDoc(_) => TypeRef::SubDoc,
-                    #[cfg(feature = "weak")]
-                    Out::YWeakLink(link) => TypeRef::WeakLink(link.source().clone()),
-                    Out::UndefinedRef(_) => TypeRef::Undefined,
-                    _ => unreachable!(),
-                };
-                let branch = Branch::new(type_ref);
-                (ItemContent::Type(branch), Some(ValuePrelim(value)))
-            }
-        }
-    }
-
-    fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
-        use crate::CopyFrom;
-        match self.0 {
-            Out::YText(text) => TextRef::from(inner_ref).copy_from(txn, &text),
-            Out::YArray(array) => ArrayRef::from(inner_ref).copy_from(txn, &array),
-            Out::YMap(map) => MapRef::from(inner_ref).copy_from(txn, &map),
-            Out::YXmlElement(xml) => XmlElementRef::from(inner_ref).copy_from(txn, &xml),
-            Out::YXmlFragment(xml) => XmlFragmentRef::from(inner_ref).copy_from(txn, &xml),
-            Out::YXmlText(text) => XmlTextRef::from(inner_ref).copy_from(txn, &text),
-            _ => {}
-        }
     }
 }
 
@@ -772,10 +718,10 @@ pub enum EntryChange {
 
 /// A single change done over a text-like types: [Text] or [XmlText].
 #[derive(Debug, Clone, PartialEq)]
-pub enum Delta {
+pub enum Delta<T = Out> {
     /// Determines a change that resulted in insertion of a piece of text, which optionally could
     /// have been formatted with provided set of attributes.
-    Inserted(Out, Option<Box<Attrs>>),
+    Inserted(T, Option<Box<Attrs>>),
 
     /// Determines a change that resulted in removing a consecutive range of characters.
     Deleted(u32),
@@ -786,16 +732,29 @@ pub enum Delta {
     Retain(u32, Option<Box<Attrs>>),
 }
 
-impl Delta {
+impl<T> Delta<T> {
+    pub fn map<U, F>(self, f: F) -> Delta<U>
+    where
+        F: FnOnce(T) -> U,
+    {
+        match self {
+            Delta::Inserted(value, attrs) => Delta::Inserted(f(value), attrs),
+            Delta::Deleted(len) => Delta::Deleted(len),
+            Delta::Retain(len, attrs) => Delta::Retain(len, attrs),
+        }
+    }
+}
+
+impl Delta<In> {
     pub fn retain(len: u32) -> Self {
         Delta::Retain(len, None)
     }
 
-    pub fn insert<T: Into<Out>>(value: T) -> Self {
+    pub fn insert<T: Into<In>>(value: T) -> Self {
         Delta::Inserted(value.into(), None)
     }
 
-    pub fn insert_with<T: Into<Out>>(value: T, attrs: Attrs) -> Self {
+    pub fn insert_with<T: Into<In>>(value: T, attrs: Attrs) -> Self {
         Delta::Inserted(value.into(), Some(Box::new(attrs)))
     }
 
@@ -1164,9 +1123,9 @@ impl Event {
             Event::Map(e) => Out::YMap(e.target().clone()),
             Event::XmlText(e) => Out::YXmlText(e.target().clone()),
             Event::XmlFragment(e) => match e.target() {
-                XmlNode::Element(n) => Out::YXmlElement(n.clone()),
-                XmlNode::Fragment(n) => Out::YXmlFragment(n.clone()),
-                XmlNode::Text(n) => Out::YXmlText(n.clone()),
+                XmlOut::Element(n) => Out::YXmlElement(n.clone()),
+                XmlOut::Fragment(n) => Out::YXmlFragment(n.clone()),
+                XmlOut::Text(n) => Out::YXmlText(n.clone()),
             },
             #[cfg(feature = "weak")]
             Event::Weak(e) => Out::YWeakLink(e.as_target().clone()),

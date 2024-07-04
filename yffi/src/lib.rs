@@ -14,7 +14,7 @@ use yrs::types::map::MapEvent;
 use yrs::types::map::MapIter as NativeMapIter;
 use yrs::types::text::{Diff, TextEvent, YChange};
 use yrs::types::weak::{LinkSource, Unquote as NativeUnquote, WeakEvent, WeakRef};
-use yrs::types::xml::{Attributes as NativeAttributes, XmlNode};
+use yrs::types::xml::{Attributes as NativeAttributes, XmlOut};
 use yrs::types::xml::{TreeWalker as NativeTreeWalker, XmlFragment};
 use yrs::types::xml::{XmlEvent, XmlTextEvent};
 use yrs::types::{Attrs, Change, Delta, EntryChange, Event, PathSegment, TypeRef};
@@ -1859,9 +1859,9 @@ pub unsafe extern "C" fn yxml_next_sibling(
     let mut siblings = xml.siblings(txn);
     if let Some(next) = siblings.next() {
         match next {
-            XmlNode::Element(v) => Box::into_raw(Box::new(YOutput::from(Out::YXmlElement(v)))),
-            XmlNode::Text(v) => Box::into_raw(Box::new(YOutput::from(Out::YXmlText(v)))),
-            XmlNode::Fragment(v) => Box::into_raw(Box::new(YOutput::from(Out::YXmlFragment(v)))),
+            XmlOut::Element(v) => Box::into_raw(Box::new(YOutput::from(Out::YXmlElement(v)))),
+            XmlOut::Text(v) => Box::into_raw(Box::new(YOutput::from(Out::YXmlText(v)))),
+            XmlOut::Fragment(v) => Box::into_raw(Box::new(YOutput::from(Out::YXmlFragment(v)))),
         }
     } else {
         null_mut()
@@ -1887,9 +1887,9 @@ pub unsafe extern "C" fn yxml_prev_sibling(
     let mut siblings = xml.siblings(txn);
     if let Some(next) = siblings.next_back() {
         match next {
-            XmlNode::Element(v) => Box::into_raw(Box::new(YOutput::from(Out::YXmlElement(v)))),
-            XmlNode::Text(v) => Box::into_raw(Box::new(YOutput::from(Out::YXmlText(v)))),
-            XmlNode::Fragment(v) => Box::into_raw(Box::new(YOutput::from(Out::YXmlFragment(v)))),
+            XmlOut::Element(v) => Box::into_raw(Box::new(YOutput::from(Out::YXmlElement(v)))),
+            XmlOut::Text(v) => Box::into_raw(Box::new(YOutput::from(Out::YXmlText(v)))),
+            XmlOut::Fragment(v) => Box::into_raw(Box::new(YOutput::from(Out::YXmlFragment(v)))),
         }
     } else {
         null_mut()
@@ -1937,9 +1937,9 @@ pub unsafe extern "C" fn yxmlelem_first_child(xml: *const Branch) -> *mut YOutpu
 
     if let Some(value) = xml.first_child() {
         match value {
-            XmlNode::Element(v) => Box::into_raw(Box::new(YOutput::from(Out::YXmlElement(v)))),
-            XmlNode::Text(v) => Box::into_raw(Box::new(YOutput::from(Out::YXmlText(v)))),
-            XmlNode::Fragment(v) => Box::into_raw(Box::new(YOutput::from(Out::YXmlFragment(v)))),
+            XmlOut::Element(v) => Box::into_raw(Box::new(YOutput::from(Out::YXmlElement(v)))),
+            XmlOut::Text(v) => Box::into_raw(Box::new(YOutput::from(Out::YXmlText(v)))),
+            XmlOut::Fragment(v) => Box::into_raw(Box::new(YOutput::from(Out::YXmlFragment(v)))),
         }
     } else {
         std::ptr::null_mut()
@@ -1984,9 +1984,9 @@ pub unsafe extern "C" fn yxmlelem_tree_walker_next(iterator: *mut TreeWalker) ->
 
     if let Some(next) = iter.0.next() {
         match next {
-            XmlNode::Element(v) => Box::into_raw(Box::new(YOutput::from(Out::YXmlElement(v)))),
-            XmlNode::Text(v) => Box::into_raw(Box::new(YOutput::from(Out::YXmlText(v)))),
-            XmlNode::Fragment(v) => Box::into_raw(Box::new(YOutput::from(Out::YXmlFragment(v)))),
+            XmlOut::Element(v) => Box::into_raw(Box::new(YOutput::from(Out::YXmlElement(v)))),
+            XmlOut::Text(v) => Box::into_raw(Box::new(YOutput::from(Out::YXmlText(v)))),
+            XmlOut::Fragment(v) => Box::into_raw(Box::new(YOutput::from(Out::YXmlFragment(v)))),
         }
     } else {
         std::ptr::null_mut()
@@ -2087,9 +2087,9 @@ pub unsafe extern "C" fn yxmlelem_get(
 
     if let Some(child) = xml.get(txn, index as u32) {
         match child {
-            XmlNode::Element(v) => Box::into_raw(Box::new(YOutput::from(Out::YXmlElement(v)))),
-            XmlNode::Text(v) => Box::into_raw(Box::new(YOutput::from(Out::YXmlText(v)))),
-            XmlNode::Fragment(v) => Box::into_raw(Box::new(YOutput::from(Out::YXmlFragment(v)))),
+            XmlOut::Element(v) => Box::into_raw(Box::new(YOutput::from(Out::YXmlElement(v)))),
+            XmlOut::Text(v) => Box::into_raw(Box::new(YOutput::from(Out::YXmlText(v)))),
+            XmlOut::Fragment(v) => Box::into_raw(Box::new(YOutput::from(Out::YXmlFragment(v)))),
         }
     } else {
         std::ptr::null()
@@ -3774,7 +3774,7 @@ impl YEvent {
                 },
             },
             Event::XmlFragment(e) => YEvent {
-                tag: if let XmlNode::Fragment(_) = e.target() {
+                tag: if let XmlOut::Fragment(_) = e.target() {
                     Y_XML_FRAG
                 } else {
                     Y_XML_ELEM
@@ -4022,9 +4022,9 @@ pub unsafe extern "C" fn yxmlelem_event_target(e: *const YXmlEvent) -> *mut Bran
     assert!(!e.is_null());
     let out = (&*e).target().clone();
     match out {
-        XmlNode::Element(e) => e.into_raw_branch(),
-        XmlNode::Fragment(e) => e.into_raw_branch(),
-        XmlNode::Text(e) => e.into_raw_branch(),
+        XmlOut::Element(e) => e.into_raw_branch(),
+        XmlOut::Fragment(e) => e.into_raw_branch(),
+        XmlOut::Text(e) => e.into_raw_branch(),
     }
 }
 

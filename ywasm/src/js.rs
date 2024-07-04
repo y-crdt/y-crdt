@@ -18,14 +18,14 @@ use wasm_bindgen::convert::{FromWasmAbi, IntoWasmAbi};
 use wasm_bindgen::JsValue;
 use yrs::block::{EmbedPrelim, ItemContent, Prelim, Unused};
 use yrs::branch::{Branch, BranchPtr};
-use yrs::types::xml::XmlPrelim;
+use yrs::types::xml::{XmlIn, XmlPrelim};
 use yrs::types::{
     TypeRef, TYPE_REFS_ARRAY, TYPE_REFS_DOC, TYPE_REFS_MAP, TYPE_REFS_TEXT, TYPE_REFS_WEAK,
     TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_TEXT,
 };
 use yrs::{
     Any, ArrayRef, BranchID, Doc, Map, MapRef, Origin, Out, Text, TextRef, TransactionMut, WeakRef,
-    Xml, XmlElementRef, XmlFragment, XmlFragmentRef, XmlNode, XmlTextRef,
+    Xml, XmlElementRef, XmlFragment, XmlFragmentRef, XmlOut, XmlTextRef,
 };
 
 #[repr(transparent)]
@@ -85,11 +85,11 @@ impl Js {
         }
     }
 
-    pub fn from_xml(value: XmlNode, doc: Doc) -> Self {
+    pub fn from_xml(value: XmlOut, doc: Doc) -> Self {
         Js(match value {
-            XmlNode::Element(v) => YXmlElement(SharedCollection::integrated(v, doc)).into(),
-            XmlNode::Fragment(v) => YXmlFragment(SharedCollection::integrated(v, doc)).into(),
-            XmlNode::Text(v) => YXmlText(SharedCollection::integrated(v, doc)).into(),
+            XmlOut::Element(v) => YXmlElement(SharedCollection::integrated(v, doc)).into(),
+            XmlOut::Fragment(v) => YXmlFragment(SharedCollection::integrated(v, doc)).into(),
+            XmlOut::Text(v) => YXmlText(SharedCollection::integrated(v, doc)).into(),
         })
     }
 

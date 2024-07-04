@@ -2174,9 +2174,9 @@ mod test {
 
         let mut t1 = d1.transact_mut();
         assert!(t1.is_alive(&r1), "root is always alive");
-        let a1 = r1.insert(&mut t1, "a", MapPrelim::<i32>::new());
+        let a1 = r1.insert(&mut t1, "a", MapPrelim::default());
         assert!(t1.is_alive(&a1), "1st level nesting");
-        let aa1 = a1.insert(&mut t1, "aa", MapPrelim::<i32>::new());
+        let aa1 = a1.insert(&mut t1, "aa", MapPrelim::default());
         assert!(t1.is_alive(&aa1), "2nd level nesting");
         drop(t1);
 
