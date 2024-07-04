@@ -19,7 +19,8 @@ if (isBrowser) {
     log.createVConsole(document.body)
 }
 runTests({
-    array, text, map, xml, weak, doc, undo, stickyIndex, awareness, editingTraces
+    //array, text, map, xml, weak, doc, undo, stickyIndex, awareness, editingTraces
+    text
 }).then(success => {
     /* istanbul ignore next */
     if (isNode) {

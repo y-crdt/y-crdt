@@ -562,8 +562,10 @@ pub(crate) mod convert {
     pub fn js_into_delta(js: JsValue) -> crate::Result<Delta<Js>> {
         let attributes = js_sys::Reflect::get(&js, &JsValue::from("attributes"));
         if let Ok(insert) = js_sys::Reflect::get(&js, &JsValue::from("insert")) {
-            let attrs = Text::parse_fmt(attributes.unwrap_or(JsValue::UNDEFINED)).map(Box::new);
-            return Ok(Delta::Inserted(Js(insert), attrs));
+            if !insert.is_undefined() {
+                let attrs = Text::parse_fmt(attributes.unwrap_or(JsValue::UNDEFINED)).map(Box::new);
+                return Ok(Delta::Inserted(Js(insert), attrs));
+            }
         }
         if let Ok(delete) = js_sys::Reflect::get(&js, &JsValue::from("delete")) {
             if let Some(len) = delete.as_f64() {
