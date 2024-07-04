@@ -4330,11 +4330,9 @@ pub struct YUndoManagerOptions {
 #[no_mangle]
 pub unsafe extern "C" fn yundo_manager(
     doc: *const Doc,
-    ytype: *const Branch,
     options: *const YUndoManagerOptions,
 ) -> *mut YUndoManager {
     let doc = doc.as_ref().unwrap();
-    let branch = ytype.as_ref().unwrap();
 
     let mut o = yrs::undo::Options::default();
     if let Some(options) = options.as_ref() {
@@ -4342,11 +4340,7 @@ pub unsafe extern "C" fn yundo_manager(
             o.capture_timeout_millis = options.capture_timeout_millis as u64;
         }
     };
-    let boxed = Box::new(yrs::undo::UndoManager::with_options(
-        doc,
-        &BranchPtr::from(branch),
-        o,
-    ));
+    let boxed = Box::new(yrs::undo::UndoManager::with_options(doc, o));
     Box::into_raw(boxed)
 }
 

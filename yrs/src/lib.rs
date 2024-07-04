@@ -306,7 +306,7 @@
 //!
 //! let local = Doc::with_client_id(123);
 //! let text1 = local.get_or_insert_text("article");
-//! let mut mgr = UndoManager::with_options(&local, &text1, Options::default());
+//! let mut mgr = UndoManager::with_scope_and_options(&local, &text1, Options::default());
 //! mgr.include_origin(local.client_id()); // only track changes originating from local peer
 //!
 //! let remote = Doc::with_client_id(321);

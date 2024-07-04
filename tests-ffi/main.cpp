@@ -1685,7 +1685,8 @@ TEST_CASE("YUndoManager undo redo") {
     YDoc* d2 = ydoc_new_with_id(2);
     Branch* txt1 = ytext(d1, "test");
     Branch* txt2 = ytext(d2, "test");
-    YUndoManager* mgr = yundo_manager(d1, txt1, NULL);
+    YUndoManager* mgr = yundo_manager(d1, NULL);
+    yundo_manager_add_scope(mgr, txt1);
 
     YTransaction* txn = ydoc_write_transaction(d1, 0, NULL);
     ytext_insert(txt1, txn, 0, "test", NULL);

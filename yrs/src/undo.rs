@@ -80,7 +80,7 @@ where
     where
         T: AsRef<Branch>,
     {
-        Self::with_options(doc, scope, Options::default())
+        Self::with_scope_and_options(doc, scope, Options::default())
     }
 
     #[inline]
@@ -93,17 +93,14 @@ where
         Arc::get_mut(&mut self.0).unwrap()
     }
 
-    /// Creates a new instance of the [UndoManager] working in a `scope` of a particular shared
-    /// type and document. While it's possible for undo manager to observe multiple shared types
-    /// (see: [UndoManager::expand_scope]), it can only work with a single document at the same time.
-    pub fn with_options<T>(doc: &Doc, scope: &T, options: Options) -> Self
-    where
-        T: AsRef<Branch>,
-    {
-        let scope = BranchPtr::from(scope.as_ref());
+    /// Creates a new instance of the [UndoManager] working in a context of a given document, but
+    /// without any pre-initialize scope. While it's possible for undo manager to observe multiple
+    /// shared types (see: [UndoManager::expand_scope]), it can only work with a single document
+    /// at the same time.
+    pub fn with_options(doc: &Doc, options: Options) -> Self {
         let mut inner = Arc::new(Inner {
             doc: doc.clone(),
-            scope: HashSet::from([scope]),
+            scope: HashSet::new(),
             options,
             undo_stack: UndoStack::default(),
             redo_stack: UndoStack::default(),
@@ -135,6 +132,18 @@ where
         .unwrap();
 
         UndoManager(inner)
+    }
+
+    /// Creates a new instance of the [UndoManager] working in a `scope` of a particular shared
+    /// type and document. While it's possible for undo manager to observe multiple shared types
+    /// (see: [UndoManager::expand_scope]), it can only work with a single document at the same time.
+    pub fn with_scope_and_options<T>(doc: &Doc, scope: &T, options: Options) -> Self
+    where
+        T: AsRef<Branch>,
+    {
+        let mut mgr = Self::with_options(doc, options);
+        mgr.expand_scope(scope);
+        mgr
     }
 
     fn should_skip(inner: &Inner<M>, txn: &TransactionMut) -> bool {
@@ -1309,7 +1318,7 @@ mod test {
             ..crate::doc::Options::default()
         });
         let design = doc.get_or_insert_map("map");
-        let mut mgr = UndoManager::with_options(&doc, &design, {
+        let mut mgr = UndoManager::with_scope_and_options(&doc, &design, {
             let mut o = Options::default();
             o.capture_timeout_millis = 0;
             o
@@ -1458,7 +1467,7 @@ mod test {
         const ORIGIN: &str = "origin";
         let doc = Doc::with_client_id(1);
         let f = doc.get_or_insert_xml_fragment("t");
-        let mut mgr = UndoManager::with_options(&doc, &f, {
+        let mut mgr = UndoManager::with_scope_and_options(&doc, &f, {
             let mut o = Options::default();
             o.capture_timeout_millis = 0;
             o
@@ -1513,7 +1522,7 @@ mod test {
             o
         });
         let design = doc.get_or_insert_map("map");
-        let mut mgr = UndoManager::with_options(&doc, &design, {
+        let mut mgr = UndoManager::with_scope_and_options(&doc, &design, {
             let mut o = Options::default();
             o.capture_timeout_millis = 0;
             o
@@ -1710,7 +1719,7 @@ mod test {
         // https://github.com/y-crdt/y-crdt/issues/345
         let doc = Doc::new();
         let map = doc.get_or_insert_map("r");
-        let mut mgr = UndoManager::with_options(&doc, &map, Options::default());
+        let mut mgr = UndoManager::with_scope_and_options(&doc, &map, Options::default());
         mgr.include_origin(doc.client_id());
 
         let s1 = map.insert(
@@ -1788,7 +1797,7 @@ mod test {
 
         let s1 = r.insert(&mut d.transact_mut(), "s1", MapPrelim::default());
 
-        let mut mgr = UndoManager::with_options(&d, &r, Options::default());
+        let mut mgr = UndoManager::with_scope_and_options(&d, &r, Options::default());
         {
             let mut txn = d.transact_mut();
             let b1 = s1.insert(&mut txn, "b1", MapPrelim::default());
@@ -1831,7 +1840,7 @@ mod test {
         el1.insert(&mut doc.transact_mut(), "f1", 8); // { s1: { b1: [{ f1: 8 }] } }
         el1.insert(&mut doc.transact_mut(), "f2", true); // { s1: { b1: [{ f1: 8, f2: true }] } }
 
-        let mut mgr = UndoManager::with_options(&doc, &r, Options::default());
+        let mut mgr = UndoManager::with_scope_and_options(&doc, &r, Options::default());
         {
             let mut txn = doc.transact_mut();
             let el0 = b1_arr.insert(&mut txn, 0, MapPrelim::default()); // { s1: { b1: [{}, { f1: 8, f2: true }] } }
@@ -1875,7 +1884,7 @@ mod test {
         s1.insert(&mut doc.transact_mut(), "f2", "AAA"); // { s1: { f2: AAA } }
         s1.insert(&mut doc.transact_mut(), "f1", false); // { s1: { f1: false, f2: AAA } }
 
-        let mut mgr = UndoManager::with_options(&doc, &r, Options::default());
+        let mut mgr = UndoManager::with_scope_and_options(&doc, &r, Options::default());
         s1.remove(&mut doc.transact_mut(), "f2"); // { s1: { f1: false } }
         mgr.reset();
 
@@ -1913,7 +1922,7 @@ mod test {
         b2_arr_nest.insert(&mut d.transact_mut(), 0, 232291652); // {r:{s1:{b1:[{b2:[[232291652]]}]}}
         b2_arr_nest.insert(&mut d.transact_mut(), 1, -30); // {r:{s1:{b1:[{b2:[[232291652, -30]]}]}}
 
-        let mut mgr = UndoManager::with_options(&d, &r, Options::default());
+        let mut mgr = UndoManager::with_scope_and_options(&d, &r, Options::default());
 
         let mut txn = d.transact_mut();
         b2_arr_nest.remove(&mut txn, 1); // {r:{s1:{b1:[{b2:[[232291652]]}]}}

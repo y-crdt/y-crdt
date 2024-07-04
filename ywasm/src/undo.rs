@@ -62,7 +62,9 @@ impl YUndoManager {
                 }
             }
         }
-        Ok(YUndoManager(UndoManager::with_options(doc, &scope, o)))
+        Ok(YUndoManager(UndoManager::with_scope_and_options(
+            doc, &scope, o,
+        )))
     }
 
     #[wasm_bindgen(js_name = addToScope)]
