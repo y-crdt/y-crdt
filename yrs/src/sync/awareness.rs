@@ -10,14 +10,14 @@ use crate::block::ClientID;
 use crate::sync::{Clock, Timestamp};
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
-use crate::{Doc, Observer, Origin, Subscription};
+use crate::{Doc, Observer, Origin};
 
 const NULL_STR: &str = "null";
 
-#[cfg(not(target_family = "wasm"))]
+#[cfg(feature = "sync")]
 type AwarenessUpdateFn = Box<dyn Fn(&Awareness, &Event, Option<&Origin>) + Send + Sync + 'static>;
 
-#[cfg(target_family = "wasm")]
+#[cfg(not(feature = "sync"))]
 type AwarenessUpdateFn = Box<dyn Fn(&Awareness, &Event, Option<&Origin>) + 'static>;
 
 /// The Awareness class implements a simple shared state protocol that can be used for non-persistent
@@ -68,8 +68,8 @@ impl Awareness {
     }
 
     /// Returns a channel receiver for an incoming awareness events. This channel can be cloned.
-    #[cfg(not(target_family = "wasm"))]
-    pub fn on_update<F>(&self, f: F) -> Subscription
+    #[cfg(feature = "sync")]
+    pub fn on_update<F>(&self, f: F) -> crate::Subscription
     where
         F: Fn(&Awareness, &Event, Option<&Origin>) + Send + Sync + 'static,
     {
@@ -77,7 +77,16 @@ impl Awareness {
     }
 
     /// Returns a channel receiver for an incoming awareness events. This channel can be cloned.
-    #[cfg(not(target_family = "wasm"))]
+    #[cfg(not(feature = "sync"))]
+    pub fn on_update<F>(&self, f: F) -> crate::Subscription
+    where
+        F: Fn(&Awareness, &Event, Option<&Origin>) + 'static,
+    {
+        self.on_update.subscribe(Box::new(f))
+    }
+
+    /// Returns a channel receiver for an incoming awareness events. This channel can be cloned.
+    #[cfg(feature = "sync")]
     pub fn on_update_with<K, F>(&self, key: K, f: F)
     where
         K: Into<Origin>,
@@ -87,7 +96,7 @@ impl Awareness {
     }
 
     /// Returns a channel receiver for an incoming awareness events. This channel can be cloned.
-    #[cfg(target_family = "wasm")]
+    #[cfg(not(feature = "sync"))]
     pub fn on_update_with<K, F>(&self, key: K, f: F)
     where
         K: Into<Origin>,
@@ -105,8 +114,8 @@ impl Awareness {
     }
 
     /// Returns a channel receiver for an incoming awareness events. This channel can be cloned.
-    #[cfg(not(target_family = "wasm"))]
-    pub fn on_change<F>(&self, f: F) -> Subscription
+    #[cfg(feature = "sync")]
+    pub fn on_change<F>(&self, f: F) -> crate::Subscription
     where
         F: Fn(&Awareness, &Event, Option<&Origin>) + Send + Sync + 'static,
     {
@@ -114,7 +123,16 @@ impl Awareness {
     }
 
     /// Returns a channel receiver for an incoming awareness events. This channel can be cloned.
-    #[cfg(not(target_family = "wasm"))]
+    #[cfg(not(feature = "sync"))]
+    pub fn on_change<F>(&self, f: F) -> crate::Subscription
+    where
+        F: Fn(&Awareness, &Event, Option<&Origin>) + 'static,
+    {
+        self.on_change.subscribe(Box::new(f))
+    }
+
+    /// Returns a channel receiver for an incoming awareness events. This channel can be cloned.
+    #[cfg(feature = "sync")]
     pub fn on_change_with<K, F>(&self, key: K, f: F)
     where
         K: Into<Origin>,
@@ -124,7 +142,7 @@ impl Awareness {
     }
 
     /// Returns a channel receiver for an incoming awareness events. This channel can be cloned.
-    #[cfg(target_family = "wasm")]
+    #[cfg(not(feature = "sync"))]
     pub fn on_change_with<K, F>(&self, key: K, f: F)
     where
         K: Into<Origin>,

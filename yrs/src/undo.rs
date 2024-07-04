@@ -38,20 +38,20 @@ use crate::{DeleteSet, Doc, Observer, Transact, TransactionMut, ID};
 #[derive(Clone)]
 pub struct UndoManager<M>(Arc<Inner<M>>);
 
-#[cfg(not(target_family = "wasm"))]
+#[cfg(feature = "sync")]
 type UndoFn<M> = Box<dyn Fn(&TransactionMut, &mut Event<M>) + Send + Sync + 'static>;
 
-#[cfg(target_family = "wasm")]
+#[cfg(not(feature = "sync"))]
 type UndoFn<M> = Box<dyn Fn(&TransactionMut, &mut Event<M>) + 'static>;
 
-#[cfg(not(target_family = "wasm"))]
+#[cfg(feature = "sync")]
 pub trait Meta: Default + Send + Sync {}
-#[cfg(not(target_family = "wasm"))]
+#[cfg(feature = "sync")]
 impl<M> Meta for M where M: Default + Send + Sync {}
 
-#[cfg(target_family = "wasm")]
+#[cfg(not(feature = "sync"))]
 pub trait Meta: Default {}
-#[cfg(target_family = "wasm")]
+#[cfg(not(feature = "sync"))]
 impl<M> Meta for M where M: Default {}
 
 struct Inner<M> {
@@ -251,7 +251,7 @@ where
     /// has been called.
     ///
     /// Returns a subscription object which - when dropped - will unregister provided callback.
-    #[cfg(not(target_family = "wasm"))]
+    #[cfg(feature = "sync")]
     pub fn observe_item_added<F>(&self, f: F) -> crate::Subscription
     where
         F: Fn(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
@@ -264,9 +264,23 @@ where
     /// threshold from the previous stack item occurence has been reached or [UndoManager::reset]
     /// has been called.
     ///
+    /// Returns a subscription object which - when dropped - will unregister provided callback.
+    #[cfg(not(feature = "sync"))]
+    pub fn observe_item_added<F>(&self, f: F) -> crate::Subscription
+    where
+        F: Fn(&TransactionMut, &mut Event<M>) + 'static,
+    {
+        self.0.observer_added.subscribe(Box::new(f))
+    }
+
+    /// Registers a callback function to be called every time a new [StackItem] is created. This
+    /// usually happens when a new update over an tracked shared type happened after capture timeout
+    /// threshold from the previous stack item occurence has been reached or [UndoManager::reset]
+    /// has been called.
+    ///
     /// Provided `key` is used to identify the origin of the callback. It can be used to unregister
     /// the callback later on.
-    #[cfg(not(target_family = "wasm"))]
+    #[cfg(feature = "sync")]
     pub fn observe_item_added_with<K, F>(&self, key: K, f: F)
     where
         K: Into<Origin>,
@@ -284,7 +298,7 @@ where
     ///
     /// Provided `key` is used to identify the origin of the callback. It can be used to unregister
     /// the callback later on.
-    #[cfg(target_family = "wasm")]
+    #[cfg(not(feature = "sync"))]
     pub fn observe_item_added_with<K, F>(&self, key: K, f: F)
     where
         K: Into<Origin>,
@@ -307,7 +321,7 @@ where
     /// has passed.
     ///
     /// Returns a subscription object which - when dropped - will unregister provided callback.
-    #[cfg(not(target_family = "wasm"))]
+    #[cfg(feature = "sync")]
     pub fn observe_item_updated<F>(&self, f: F) -> crate::Subscription
     where
         F: Fn(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
@@ -319,9 +333,22 @@ where
     /// extended as a result of updates from tracked types which happened before a capture timeout
     /// has passed.
     ///
+    /// Returns a subscription object which - when dropped - will unregister provided callback.
+    #[cfg(not(feature = "sync"))]
+    pub fn observe_item_updated<F>(&self, f: F) -> crate::Subscription
+    where
+        F: Fn(&TransactionMut, &mut Event<M>) + 'static,
+    {
+        self.0.observer_updated.subscribe(Box::new(f))
+    }
+
+    /// Registers a callback function to be called every time an existing [StackItem] has been
+    /// extended as a result of updates from tracked types which happened before a capture timeout
+    /// has passed.
+    ///
     /// Provided `key` is used to identify the origin of the callback. It can be used to unregister
     /// the callback later on.
-    #[cfg(not(target_family = "wasm"))]
+    #[cfg(feature = "sync")]
     pub fn observe_item_updated_with<K, F>(&self, key: K, f: F)
     where
         K: Into<Origin>,
@@ -338,7 +365,7 @@ where
     ///
     /// Provided `key` is used to identify the origin of the callback. It can be used to unregister
     /// the callback later on.
-    #[cfg(target_family = "wasm")]
+    #[cfg(not(feature = "sync"))]
     pub fn observe_item_updated_with<K, F>(&self, key: K, f: F)
     where
         K: Into<Origin>,
@@ -360,7 +387,7 @@ where
     /// removed as a result of [UndoManager::undo] or [UndoManager::redo] method.
     ///
     /// Returns a subscription object which - when dropped - will unregister provided callback.
-    #[cfg(not(target_family = "wasm"))]
+    #[cfg(feature = "sync")]
     pub fn observe_item_popped<F>(&self, f: F) -> crate::Subscription
     where
         F: Fn(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
@@ -371,9 +398,21 @@ where
     /// Registers a callback function to be called every time an existing [StackItem] has been
     /// removed as a result of [UndoManager::undo] or [UndoManager::redo] method.
     ///
+    /// Returns a subscription object which - when dropped - will unregister provided callback.
+    #[cfg(not(feature = "sync"))]
+    pub fn observe_item_popped<F>(&self, f: F) -> crate::Subscription
+    where
+        F: Fn(&TransactionMut, &mut Event<M>) + 'static,
+    {
+        self.0.observer_popped.subscribe(Box::new(f))
+    }
+
+    /// Registers a callback function to be called every time an existing [StackItem] has been
+    /// removed as a result of [UndoManager::undo] or [UndoManager::redo] method.
+    ///
     /// Provided `key` is used to identify the origin of the callback. It can be used to unregister
     /// the callback later on.
-    #[cfg(not(target_family = "wasm"))]
+    #[cfg(feature = "sync")]
     pub fn observe_item_popped_with<K, F>(&self, key: K, f: F)
     where
         K: Into<Origin>,
@@ -389,7 +428,7 @@ where
     ///
     /// Provided `key` is used to identify the origin of the callback. It can be used to unregister
     /// the callback later on.
-    #[cfg(target_family = "wasm")]
+    #[cfg(not(feature = "sync"))]
     pub fn observe_item_popped_with<K, F>(&self, key: K, f: F)
     where
         K: Into<Origin>,
