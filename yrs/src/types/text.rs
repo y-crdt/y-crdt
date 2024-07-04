@@ -1,7 +1,8 @@
 use crate::block::{EmbedPrelim, Item, ItemContent, ItemPosition, ItemPtr, Prelim, Unused};
 use crate::transaction::TransactionMut;
 use crate::types::{
-    AsPrelim, Attrs, Branch, BranchPtr, Delta, Out, Path, RootRef, SharedRef, TypePtr, TypeRef,
+    AsPrelim, Attrs, Branch, BranchPtr, DefaultPrelim, Delta, Out, Path, RootRef, SharedRef,
+    TypePtr, TypeRef,
 };
 use crate::utils::OptionExt;
 use crate::*;
@@ -468,6 +469,15 @@ impl AsPrelim for TextRef {
             .map(|diff| Delta::Inserted(diff.insert.as_prelim(txn), diff.attributes))
             .collect();
         DeltaPrelim(delta)
+    }
+}
+
+impl DefaultPrelim for TextRef {
+    type Prelim = TextPrelim;
+
+    #[inline]
+    fn default_prelim() -> Self::Prelim {
+        TextPrelim::default()
     }
 }
 

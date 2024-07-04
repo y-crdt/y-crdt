@@ -3,8 +3,8 @@ use crate::block_iter::BlockIter;
 use crate::moving::StickyIndex;
 use crate::transaction::TransactionMut;
 use crate::types::{
-    event_change_set, AsPrelim, Branch, BranchPtr, Change, ChangeSet, In, Out, Path, RootRef,
-    SharedRef, ToJson, TypeRef,
+    event_change_set, AsPrelim, Branch, BranchPtr, Change, ChangeSet, DefaultPrelim, In, Out, Path,
+    RootRef, SharedRef, ToJson, TypeRef,
 };
 use crate::{Any, Assoc, DeepObservable, IndexedSequence, Observable, ReadTxn, ID};
 use std::borrow::Borrow;
@@ -153,6 +153,15 @@ impl AsPrelim for ArrayRef {
             prelim.push(value.as_prelim(txn));
         }
         ArrayPrelim(prelim)
+    }
+}
+
+impl DefaultPrelim for ArrayRef {
+    type Prelim = ArrayPrelim;
+
+    #[inline]
+    fn default_prelim() -> Self::Prelim {
+        ArrayPrelim::default()
     }
 }
 

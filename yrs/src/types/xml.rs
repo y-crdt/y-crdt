@@ -12,8 +12,8 @@ use crate::block_iter::BlockIter;
 use crate::transaction::TransactionMut;
 use crate::types::text::{diff_between, TextEvent, YChange};
 use crate::types::{
-    event_change_set, event_keys, AsPrelim, Branch, BranchPtr, Change, ChangeSet, Delta, Entries,
-    EntryChange, MapRef, Out, Path, RootRef, SharedRef, ToJson, TypePtr, TypeRef,
+    event_change_set, event_keys, AsPrelim, Branch, BranchPtr, Change, ChangeSet, DefaultPrelim,
+    Delta, Entries, EntryChange, MapRef, Out, Path, RootRef, SharedRef, ToJson, TypePtr, TypeRef,
 };
 use crate::{
     Any, ArrayRef, BranchID, DeepObservable, GetString, In, IndexedSequence, Map, Observable,
@@ -658,6 +658,15 @@ impl AsPrelim for XmlTextRef {
     }
 }
 
+impl DefaultPrelim for XmlTextRef {
+    type Prelim = XmlTextPrelim;
+
+    #[inline]
+    fn default_prelim() -> Self::Prelim {
+        XmlTextPrelim::default()
+    }
+}
+
 /// A preliminary type that will be materialized into an [XmlTextRef] once it will be integrated
 /// into Yrs document.
 #[repr(transparent)]
@@ -865,6 +874,15 @@ impl AsPrelim for XmlFragmentRef {
             })
             .collect();
         XmlFragmentPrelim(children)
+    }
+}
+
+impl DefaultPrelim for XmlFragmentRef {
+    type Prelim = XmlFragmentPrelim;
+
+    #[inline]
+    fn default_prelim() -> Self::Prelim {
+        XmlFragmentPrelim::default()
     }
 }
 

@@ -1,8 +1,8 @@
 use crate::block::{EmbedPrelim, ItemContent, ItemPosition, ItemPtr, Prelim};
 use crate::transaction::TransactionMut;
 use crate::types::{
-    event_keys, AsPrelim, Branch, BranchPtr, Entries, EntryChange, In, Out, Path, RootRef,
-    SharedRef, ToJson, TypeRef,
+    event_keys, AsPrelim, Branch, BranchPtr, DefaultPrelim, Entries, EntryChange, In, Out, Path,
+    RootRef, SharedRef, ToJson, TypeRef,
 };
 use crate::*;
 use std::borrow::Borrow;
@@ -137,6 +137,15 @@ impl AsPrelim for MapRef {
     }
 }
 
+impl DefaultPrelim for MapRef {
+    type Prelim = MapPrelim;
+
+    #[inline]
+    fn default_prelim() -> Self::Prelim {
+        MapPrelim::default()
+    }
+}
+
 pub trait Map: AsRef<Branch> + Sized {
     /// Returns a number of entries stored within current map.
     fn len<T: ReadTxn>(&self, _txn: &T) -> u32 {
@@ -193,6 +202,25 @@ pub trait Map: AsRef<Branch> + Sized {
         } else {
             panic!("Defect: unexpected integrated type")
         }
+    }
+
+    /// Returns an existing instance of a type stored under a given `key` within current map.
+    /// If the given entry was not found, has been deleted or its type is different from expected,
+    /// that entry will be reset to a given type and its reference will be returned.
+    fn get_or_init<K, V>(&self, txn: &mut TransactionMut, key: K) -> V
+    where
+        K: Into<Arc<str>>,
+        V: DefaultPrelim + TryFrom<Out>,
+    {
+        let key = key.into();
+        let branch = self.as_ref();
+        if let Some(value) = branch.get(txn, &key) {
+            if let Ok(value) = value.try_into() {
+                return value;
+            }
+        }
+        let value = V::default_prelim();
+        self.insert(txn, key, value)
     }
 
     /// Removes a stored within current map under a given `key`. Returns that value or `None` if
@@ -481,8 +509,9 @@ mod test {
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encoder, EncoderV1};
     use crate::{
-        any, Any, Array, ArrayPrelim, ArrayRef, Doc, Map, MapPrelim, MapRef, Observable,
-        StateVector, Text, Transact, Update,
+        any, Any, Array, ArrayPrelim, ArrayRef, Doc, GetString, Map, MapPrelim, MapRef, Observable,
+        StateVector, Text, TextRef, Transact, Update, WriteTxn, XmlFragment, XmlFragmentRef,
+        XmlTextPrelim, XmlTextRef,
     };
     use arc_swap::ArcSwapOption;
     use fastrand::Rng;
@@ -1012,6 +1041,38 @@ mod test {
                 ])],
             ]
         );
+    }
+
+    #[test]
+    fn get_or_init() {
+        let doc = Doc::with_client_id(1);
+        let mut txn = doc.transact_mut();
+        let map = txn.get_or_insert_map("map");
+
+        let m: MapRef = map.get_or_init(&mut txn, "nested");
+        m.insert(&mut txn, "key", 1);
+        let m: MapRef = map.get_or_init(&mut txn, "nested");
+        assert_eq!(m.get(&txn, "key"), Some(Out::from(1)));
+
+        let m: ArrayRef = map.get_or_init(&mut txn, "nested");
+        m.insert(&mut txn, 0, 1);
+        let m: ArrayRef = map.get_or_init(&mut txn, "nested");
+        assert_eq!(m.get(&txn, 0), Some(Out::from(1)));
+
+        let m: TextRef = map.get_or_init(&mut txn, "nested");
+        m.insert(&mut txn, 0, "a");
+        let m: TextRef = map.get_or_init(&mut txn, "nested");
+        assert_eq!(m.get_string(&txn), "a".to_string());
+
+        let m: XmlFragmentRef = map.get_or_init(&mut txn, "nested");
+        m.insert(&mut txn, 0, XmlTextPrelim::new("b"));
+        let m: XmlFragmentRef = map.get_or_init(&mut txn, "nested");
+        assert_eq!(m.get_string(&txn), "b".to_string());
+
+        let m: XmlTextRef = map.get_or_init(&mut txn, "nested");
+        m.insert(&mut txn, 0, "c");
+        let m: XmlTextRef = map.get_or_init(&mut txn, "nested");
+        assert_eq!(m.get_string(&txn), "c".to_string());
     }
 
     #[test]

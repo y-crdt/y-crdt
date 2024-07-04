@@ -352,6 +352,16 @@ pub trait AsPrelim {
     fn as_prelim<T: ReadTxn>(&self, txn: &T) -> Self::Prelim;
 }
 
+/// Trait which allows to generate a [Prelim]-compatible type that - when integrated - will be
+/// converted into an instance of a current type.
+pub trait DefaultPrelim {
+    type Prelim: Prelim<Return = Self>;
+
+    /// Returns an instance of [Prelim]-compatible type, which will turn into reference of a current
+    /// type after being integrated into the document store.
+    fn default_prelim() -> Self::Prelim;
+}
+
 /// Trait implemented by all Y-types, allowing for observing events which are emitted by
 /// nested types.
 #[cfg(feature = "sync")]
