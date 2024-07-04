@@ -11,7 +11,7 @@ use crate::iter::TxnIterator;
 use crate::slice::BlockSlice;
 use crate::sync::Clock;
 use crate::transaction::Origin;
-use crate::{DeleteSet, Doc, Observer, Subscription, Transact, TransactionMut, ID};
+use crate::{DeleteSet, Doc, Observer, Transact, TransactionMut, ID};
 
 /// Undo manager is a structure used to perform undo/redo operations over the associated shared
 /// type(s).
@@ -252,7 +252,7 @@ where
     ///
     /// Returns a subscription object which - when dropped - will unregister provided callback.
     #[cfg(not(target_family = "wasm"))]
-    pub fn observe_item_added<F>(&self, f: F) -> Subscription
+    pub fn observe_item_added<F>(&self, f: F) -> crate::Subscription
     where
         F: Fn(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
     {
@@ -308,7 +308,7 @@ where
     ///
     /// Returns a subscription object which - when dropped - will unregister provided callback.
     #[cfg(not(target_family = "wasm"))]
-    pub fn observe_item_updated<F>(&self, f: F) -> Subscription
+    pub fn observe_item_updated<F>(&self, f: F) -> crate::Subscription
     where
         F: Fn(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
     {
@@ -361,7 +361,7 @@ where
     ///
     /// Returns a subscription object which - when dropped - will unregister provided callback.
     #[cfg(not(target_family = "wasm"))]
-    pub fn observe_item_popped<F>(&self, f: F) -> Subscription
+    pub fn observe_item_popped<F>(&self, f: F) -> crate::Subscription
     where
         F: Fn(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
     {

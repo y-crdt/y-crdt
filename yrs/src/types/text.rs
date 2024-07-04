@@ -230,9 +230,10 @@ pub trait Text: AsRef<Branch> + Sized {
         }
     }
 
-    fn apply_delta<D>(&self, txn: &mut TransactionMut, delta: D)
+    fn apply_delta<D, P>(&self, txn: &mut TransactionMut, delta: D)
     where
-        D: IntoIterator<Item = Delta<In>>,
+        D: IntoIterator<Item = Delta<P>>,
+        P: Prelim,
     {
         let branch = BranchPtr::from(self.as_ref());
         let mut pos = ItemPosition {
@@ -479,51 +480,27 @@ impl PartialEq for TextRef {
     }
 }
 
-struct DeltaChunk(In);
+struct DeltaChunk<P>(P);
 
-impl Prelim for DeltaChunk {
+impl<P> Prelim for DeltaChunk<P>
+where
+    P: Prelim,
+{
     type Return = Unused;
 
-    fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
-        match self.0 {
-            In::Any(Any::String(text)) => {
-                (ItemContent::String(SplittableString::from(&*text)), None)
-            }
-            In::Any(any) => (ItemContent::Embed(any), None),
-            other => {
-                let type_ref = match &other {
-                    In::Text(_) => TypeRef::Text,
-                    In::Array(_) => TypeRef::Array,
-                    In::Map(_) => TypeRef::Map,
-                    In::XmlElement(v) => TypeRef::XmlElement(v.tag.clone()),
-                    In::XmlFragment(_) => TypeRef::XmlFragment,
-                    In::XmlText(_) => TypeRef::XmlText,
-                    In::Doc(_) => TypeRef::SubDoc,
-                    #[cfg(feature = "weak")]
-                    In::WeakLink(v) => TypeRef::WeakLink(v.source().clone()),
-                    _ => unreachable!(),
-                };
-                (
-                    ItemContent::Type(Branch::new(type_ref)),
-                    Some(DeltaChunk(other)),
-                )
-            }
+    fn into_content(self, txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
+        let (content, rest) = self.0.into_content(txn);
+        match content {
+            ItemContent::Any(mut any) if any.len() == 1 => match any.pop().unwrap() {
+                Any::String(str) => (ItemContent::String(str.as_ref().into()), None),
+                other => (ItemContent::Embed(other), None),
+            },
+            other => (other, rest.map(DeltaChunk)),
         }
     }
 
     fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
-        match self.0 {
-            In::Text(prelim) => prelim.integrate(txn, inner_ref),
-            In::Array(prelim) => prelim.integrate(txn, inner_ref),
-            In::Map(prelim) => prelim.integrate(txn, inner_ref),
-            In::XmlElement(prelim) => prelim.integrate(txn, inner_ref),
-            In::XmlFragment(prelim) => prelim.integrate(txn, inner_ref),
-            In::XmlText(prelim) => prelim.integrate(txn, inner_ref),
-            In::Doc(prelim) => prelim.integrate(txn, inner_ref),
-            #[cfg(feature = "weak")]
-            In::WeakLink(prelim) => prelim.integrate(txn, inner_ref),
-            _ => { /* do nothing */ }
-        }
+        self.0.integrate(txn, inner_ref)
     }
 }
 

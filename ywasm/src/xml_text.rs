@@ -271,6 +271,24 @@ impl YXmlText {
         }
     }
 
+    #[wasm_bindgen(js_name = applyDelta)]
+    pub fn apply_delta(&self, delta: js_sys::Array, txn: ImplicitTransaction) -> crate::Result<()> {
+        match &self.0 {
+            SharedCollection::Prelim(_) => {
+                Err(JsValue::from_str(crate::js::errors::INVALID_PRELIM_OP))
+            }
+            SharedCollection::Integrated(c) => c.mutably(txn, |c, txn| {
+                let mut result = Vec::new();
+                for js in delta.iter() {
+                    let d = crate::js::convert::js_into_delta(js)?;
+                    result.push(d);
+                }
+                c.apply_delta(txn, result);
+                Ok(())
+            }),
+        }
+    }
+
     /// Deletes a specified range of of characters, starting at a given `index`.
     /// Both `index` and `length` are counted in terms of a number of UTF-8 character bytes.
     #[wasm_bindgen(method, js_name = delete)]

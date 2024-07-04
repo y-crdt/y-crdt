@@ -18,7 +18,7 @@ use wasm_bindgen::convert::{FromWasmAbi, IntoWasmAbi};
 use wasm_bindgen::JsValue;
 use yrs::block::{EmbedPrelim, ItemContent, Prelim, Unused};
 use yrs::branch::{Branch, BranchPtr};
-use yrs::types::xml::{XmlIn, XmlPrelim};
+use yrs::types::xml::XmlPrelim;
 use yrs::types::{
     TypeRef, TYPE_REFS_ARRAY, TYPE_REFS_DOC, TYPE_REFS_MAP, TYPE_REFS_TEXT, TYPE_REFS_WEAK,
     TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_TEXT,
@@ -542,12 +542,14 @@ impl Callback for js_sys::Function {}
 
 pub(crate) mod convert {
     use crate::array::YArrayEvent;
+    use crate::js::errors::INVALID_DELTA;
     use crate::js::Js;
     use crate::map::YMapEvent;
     use crate::text::YTextEvent;
     use crate::weak::YWeakLinkEvent;
     use crate::xml_frag::YXmlEvent;
     use crate::xml_text::YXmlTextEvent;
+    use crate::Text;
     use gloo_utils::format::JsValueSerdeExt;
     use std::iter::FromIterator;
     use wasm_bindgen::convert::RefMutFromWasmAbi;
@@ -556,6 +558,26 @@ pub(crate) mod convert {
     use yrs::types::{Change, Delta, EntryChange, Event, Events, Path, PathSegment};
     use yrs::updates::decoder::Decode;
     use yrs::{DeleteSet, Doc, StateVector, TransactionMut};
+
+    pub fn js_into_delta(js: JsValue) -> crate::Result<Delta<Js>> {
+        let attributes = js_sys::Reflect::get(&js, &JsValue::from("attributes"));
+        if let Ok(insert) = js_sys::Reflect::get(&js, &JsValue::from("insert")) {
+            let attrs = Text::parse_fmt(attributes.unwrap_or(JsValue::UNDEFINED)).map(Box::new);
+            return Ok(Delta::Inserted(Js(insert), attrs));
+        }
+        if let Ok(delete) = js_sys::Reflect::get(&js, &JsValue::from("delete")) {
+            if let Some(len) = delete.as_f64() {
+                return Ok(Delta::Deleted(len as u32));
+            }
+        }
+        if let Ok(retain) = js_sys::Reflect::get(&js, &JsValue::from("retain")) {
+            if let Some(len) = retain.as_f64() {
+                let attrs = Text::parse_fmt(attributes.unwrap_or(JsValue::UNDEFINED)).map(Box::new);
+                return Ok(Delta::Retain(len as u32, attrs));
+            }
+        }
+        Err(JsValue::from_str(INVALID_DELTA))
+    }
 
     pub fn mut_from_js<T>(js: &JsValue) -> crate::Result<T::Anchor>
     where
@@ -773,4 +795,5 @@ pub(crate) mod errors {
     pub const NOT_XML_TYPE: &'static str = "provided object is not a valid XML shared type";
     pub const NOT_PRELIM: &'static str = "this operation only works on preliminary types";
     pub const NOT_WASM_OBJ: &'static str = "provided reference is not a WebAssembly object";
+    pub const INVALID_DELTA: &'static str = "invalid delta format";
 }

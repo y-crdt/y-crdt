@@ -335,7 +335,7 @@ impl YText {
             SharedCollection::Integrated(c) => c.mutably(txn, |c, txn| {
                 let mut result = Vec::new();
                 for js in delta.iter() {
-                    let d = todo!(); //crate::js::convert::js_into_delta(js)?;
+                    let d = crate::js::convert::js_into_delta(js)?;
                     result.push(d);
                 }
                 c.apply_delta(txn, result);
