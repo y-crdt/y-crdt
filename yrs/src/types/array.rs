@@ -3,10 +3,10 @@ use crate::block_iter::BlockIter;
 use crate::moving::StickyIndex;
 use crate::transaction::TransactionMut;
 use crate::types::{
-    event_change_set, Branch, BranchPtr, Change, ChangeSet, Path, RootRef, SharedRef, ToJson,
-    TypeRef, Value, ValuePrelim,
+    event_change_set, AsPrelim, Branch, BranchPtr, Change, ChangeSet, In, Out, Path, RootRef,
+    SharedRef, ToJson, TypeRef,
 };
-use crate::{Any, Assoc, CopyFrom, DeepObservable, IndexedSequence, Observable, ReadTxn, ID};
+use crate::{Any, Assoc, DeepObservable, IndexedSequence, Observable, ReadTxn, ID};
 use std::borrow::Borrow;
 use std::cell::UnsafeCell;
 use std::collections::HashSet;
@@ -89,7 +89,7 @@ impl ToJson for ArrayRef {
     fn to_json<T: ReadTxn>(&self, txn: &T) -> Any {
         let mut walker = BlockIter::new(self.0);
         let len = self.0.len();
-        let mut buf = vec![Value::default(); len as usize];
+        let mut buf = vec![Out::default(); len as usize];
         let read = walker.slice(txn, &mut buf);
         if read == len {
             let res = buf.into_iter().map(|v| v.to_json(txn)).collect();
@@ -133,23 +133,26 @@ impl TryFrom<ItemPtr> for ArrayRef {
     }
 }
 
-impl TryFrom<Value> for ArrayRef {
-    type Error = Value;
+impl TryFrom<Out> for ArrayRef {
+    type Error = Out;
 
-    fn try_from(value: Value) -> Result<Self, Self::Error> {
+    fn try_from(value: Out) -> Result<Self, Self::Error> {
         match value {
-            Value::YArray(value) => Ok(value),
+            Out::YArray(value) => Ok(value),
             other => Err(other),
         }
     }
 }
 
-impl CopyFrom for ArrayRef {
-    fn copy_from(&self, txn: &mut TransactionMut, source: &Self) {
-        let values: Vec<_> = source.iter(txn).collect();
-        for value in values {
-            self.push_back(txn, ValuePrelim::from(value));
+impl AsPrelim for ArrayRef {
+    type Prelim = ArrayPrelim;
+
+    fn as_prelim<T: ReadTxn>(&self, txn: &T) -> Self::Prelim {
+        let mut prelim = Vec::with_capacity(self.len(txn) as usize);
+        for value in self.iter(txn) {
+            prelim.push(value.as_prelim(txn));
         }
+        ArrayPrelim(prelim)
     }
 }
 
@@ -241,7 +244,7 @@ pub trait Array: AsRef<Branch> + Sized {
 
     /// Retrieves a value stored at a given `index`. Returns `None` when provided index was out
     /// of the range of a current array.
-    fn get<T: ReadTxn>(&self, txn: &T, index: u32) -> Option<Value> {
+    fn get<T: ReadTxn>(&self, txn: &T, index: u32) -> Option<Out> {
         let mut walker = BlockIter::new(BranchPtr::from(self.as_ref()));
         if walker.try_forward(txn, index) {
             walker.read_value(txn)
@@ -378,16 +381,16 @@ where
     B: Borrow<T>,
     T: ReadTxn,
 {
-    type Item = Value;
+    type Item = Out;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.inner.finished() {
             None
         } else {
-            let mut buf = [Value::default(); 1];
+            let mut buf = [Out::default(); 1];
             let txn = self.txn.borrow();
             if self.inner.slice(txn, &mut buf) != 0 {
-                Some(std::mem::replace(&mut buf[0], Value::default()))
+                Some(std::mem::replace(&mut buf[0], Out::default()))
             } else {
                 None
             }
@@ -404,11 +407,11 @@ impl From<BranchPtr> for ArrayRef {
 /// A preliminary array. It can be used to initialize an [ArrayRef], when it's about to be nested
 /// into another Yrs data collection, such as [Map] or another [ArrayRef].
 #[repr(transparent)]
-#[derive(Debug, Clone)]
-pub struct ArrayPrelim<T>(Vec<T>);
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ArrayPrelim(Vec<In>);
 
-impl<T> Deref for ArrayPrelim<T> {
-    type Target = Vec<T>;
+impl Deref for ArrayPrelim {
+    type Target = Vec<In>;
 
     #[inline]
     fn deref(&self) -> &Self::Target {
@@ -416,31 +419,39 @@ impl<T> Deref for ArrayPrelim<T> {
     }
 }
 
-impl<T> DerefMut for ArrayPrelim<T> {
+impl DerefMut for ArrayPrelim {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
 }
 
-impl<T> FromIterator<T> for ArrayPrelim<T> {
-    fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
-        ArrayPrelim(iter.into_iter().collect())
+impl From<ArrayPrelim> for In {
+    #[inline]
+    fn from(value: ArrayPrelim) -> Self {
+        In::Array(value)
     }
 }
 
-impl<I, T> From<I> for ArrayPrelim<T>
+impl<T> FromIterator<T> for ArrayPrelim
+where
+    T: Into<In>,
+{
+    fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
+        ArrayPrelim(iter.into_iter().map(|v| v.into()).collect())
+    }
+}
+
+impl<I, T> From<I> for ArrayPrelim
 where
     I: IntoIterator<Item = T>,
+    T: Into<In>,
 {
     fn from(iter: I) -> Self {
-        ArrayPrelim(iter.into_iter().collect())
+        ArrayPrelim(iter.into_iter().map(|v| v.into()).collect())
     }
 }
 
-impl<T> Prelim for ArrayPrelim<T>
-where
-    T: Prelim,
-{
+impl Prelim for ArrayPrelim {
     type Return = ArrayRef;
 
     fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
@@ -456,19 +467,10 @@ where
     }
 }
 
-impl<T> Into<EmbedPrelim<ArrayPrelim<T>>> for ArrayPrelim<T>
-where
-    T: Prelim,
-{
+impl Into<EmbedPrelim<ArrayPrelim>> for ArrayPrelim {
     #[inline]
-    fn into(self) -> EmbedPrelim<ArrayPrelim<T>> {
+    fn into(self) -> EmbedPrelim<ArrayPrelim> {
         EmbedPrelim::Shared(self)
-    }
-}
-
-impl Default for ArrayPrelim<Any> {
-    fn default() -> Self {
-        ArrayPrelim(Vec::new())
     }
 }
 
@@ -549,7 +551,7 @@ impl ArrayEvent {
 mod test {
     use crate::test_utils::{exchange_updates, run_scenario, RngExt};
     use crate::types::map::MapPrelim;
-    use crate::types::{Change, DeepObservable, Event, Path, PathSegment, ToJson, Value};
+    use crate::types::{Change, DeepObservable, Event, Out, Path, PathSegment, ToJson};
     use crate::{
         any, Any, Array, ArrayPrelim, Assoc, Doc, Map, MapRef, Observable, SharedRef, StateVector,
         Transact, Update, ID,
@@ -687,7 +689,7 @@ mod test {
             let actual: Vec<_> = a1.iter(&t1).collect();
             assert_eq!(
                 actual,
-                vec![Value::from(1.0), Value::from(true), Value::from(false)]
+                vec![Out::from(1.0), Out::from(true), Out::from(false)]
             );
         }
 
@@ -698,7 +700,7 @@ mod test {
         let actual: Vec<_> = a2.iter(&t2).collect();
         assert_eq!(
             actual,
-            vec![Value::from(1.0), Value::from(true), Value::from(false)]
+            vec![Out::from(1.0), Out::from(true), Out::from(false)]
         );
     }
 
@@ -733,7 +735,7 @@ mod test {
         assert_eq!(a2, a3, "Peer 2 and peer 3 states are different");
     }
 
-    fn to_array(d: &Doc) -> Vec<Value> {
+    fn to_array(d: &Doc) -> Vec<Out> {
         let a = d.get_or_insert_array("array");
         a.iter(&d.transact()).collect()
     }
@@ -887,7 +889,7 @@ mod test {
 
         for (i, value) in a.iter(&txn).enumerate() {
             match value {
-                Value::YMap(_) => {
+                Out::YMap(_) => {
                     assert_eq!(value.to_json(&txn), any!({"value": (i as f64) }))
                 }
                 _ => panic!("Value of array at index {} was no YMap", i),
@@ -1162,7 +1164,7 @@ mod test {
                 let pos = rng.between(0, len - 1);
                 let del_len = rng.between(1, 2.min(len - pos));
                 if rng.bool() {
-                    if let Value::YArray(array2) = yarray.get(&txn, pos).unwrap() {
+                    if let Out::YArray(array2) = yarray.get(&txn, pos).unwrap() {
                         let pos = rng.between(0, array2.len(&txn) - 1);
                         let del_len = rng.between(0, 2.min(array2.len(&txn) - pos));
                         array2.remove_range(&mut txn, pos, del_len);
@@ -1229,7 +1231,7 @@ mod test {
             paths_copy.lock().unwrap().push(path);
         });
 
-        array.insert(&mut doc.transact_mut(), 0, MapPrelim::<String>::new());
+        array.insert(&mut doc.transact_mut(), 0, MapPrelim::default());
 
         {
             let mut txn = doc.transact_mut();

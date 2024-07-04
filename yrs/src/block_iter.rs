@@ -2,8 +2,8 @@ use crate::block::{Item, ItemContent, ItemPtr, Prelim};
 use crate::branch::BranchPtr;
 use crate::moving::{Move, StickyIndex};
 use crate::transaction::{ReadTxn, TransactionMut};
-use crate::types::{TypePtr, Value};
-use crate::{Assoc, ID};
+use crate::types::TypePtr;
+use crate::{Assoc, Out, ID};
 
 /// Struct used for iterating over the sequence of item's values with respect to a potential
 /// [Move] markers that may change their order.
@@ -358,7 +358,7 @@ impl BlockIter {
         self.next_item = item;
     }
 
-    pub(crate) fn slice<T: ReadTxn>(&mut self, txn: &T, buf: &mut [Value]) -> u32 {
+    pub(crate) fn slice<T: ReadTxn>(&mut self, txn: &T, buf: &mut [Out]) -> u32 {
         let mut len = buf.len() as u32;
         if self.index + len > self.branch.content_len() {
             return 0;
@@ -448,10 +448,10 @@ impl BlockIter {
         }
     }
 
-    pub(crate) fn read_value<T: ReadTxn>(&mut self, txn: &T) -> Option<Value> {
-        let mut buf = [Value::default()];
+    pub(crate) fn read_value<T: ReadTxn>(&mut self, txn: &T) -> Option<Out> {
+        let mut buf = [Out::default()];
         if self.slice(txn, &mut buf) != 0 {
-            Some(std::mem::replace(&mut buf[0], Value::default()))
+            Some(std::mem::replace(&mut buf[0], Out::default()))
         } else {
             None
         }
@@ -529,15 +529,15 @@ impl<'a, 'txn> Values<'a, 'txn> {
 }
 
 impl<'a, 'txn> Iterator for Values<'a, 'txn> {
-    type Item = Value;
+    type Item = Out;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.iter.reached_end || self.iter.index == self.iter.branch.content_len() {
             None
         } else {
-            let mut buf = [Value::default()];
+            let mut buf = [Out::default()];
             if self.iter.slice(self.txn, &mut buf) != 0 {
-                Some(std::mem::replace(&mut buf[0], Value::default()))
+                Some(std::mem::replace(&mut buf[0], Out::default()))
             } else {
                 None
             }

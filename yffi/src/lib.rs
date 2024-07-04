@@ -14,16 +14,16 @@ use yrs::types::map::MapEvent;
 use yrs::types::map::MapIter as NativeMapIter;
 use yrs::types::text::{Diff, TextEvent, YChange};
 use yrs::types::weak::{LinkSource, Unquote as NativeUnquote, WeakEvent, WeakRef};
-use yrs::types::xml::{Attributes as NativeAttributes, XmlNode};
+use yrs::types::xml::{Attributes as NativeAttributes, XmlOut};
 use yrs::types::xml::{TreeWalker as NativeTreeWalker, XmlFragment};
 use yrs::types::xml::{XmlEvent, XmlTextEvent};
-use yrs::types::{Attrs, Change, Delta, EntryChange, Event, PathSegment, TypeRef, Value};
+use yrs::types::{Attrs, Change, Delta, EntryChange, Event, PathSegment, TypeRef};
 use yrs::undo::EventKind;
 use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use yrs::{
     uuid_v4, Any, Array, ArrayRef, Assoc, BranchID, DeleteSet, GetString, Map, MapRef, Observable,
-    OffsetKind, Options, Origin, Quotable, ReadTxn, Snapshot, StateVector, StickyIndex, Store,
+    OffsetKind, Options, Origin, Out, Quotable, ReadTxn, Snapshot, StateVector, StickyIndex, Store,
     SubdocsEvent, SubdocsEventIter, Text, TextRef, Transact, TransactionCleanupEvent, Update, Xml,
     XmlElementPrelim, XmlElementRef, XmlFragmentRef, XmlTextPrelim, XmlTextRef, ID,
 };
@@ -210,7 +210,7 @@ pub struct YMapEntry {
 }
 
 impl YMapEntry {
-    fn new(key: &str, value: Value) -> Self {
+    fn new(key: &str, value: Out) -> Self {
         let value = YOutput::from(value);
         YMapEntry {
             key: CString::new(key).unwrap().into_raw(),
@@ -1859,9 +1859,9 @@ pub unsafe extern "C" fn yxml_next_sibling(
     let mut siblings = xml.siblings(txn);
     if let Some(next) = siblings.next() {
         match next {
-            XmlNode::Element(v) => Box::into_raw(Box::new(YOutput::from(Value::YXmlElement(v)))),
-            XmlNode::Text(v) => Box::into_raw(Box::new(YOutput::from(Value::YXmlText(v)))),
-            XmlNode::Fragment(v) => Box::into_raw(Box::new(YOutput::from(Value::YXmlFragment(v)))),
+            XmlOut::Element(v) => Box::into_raw(Box::new(YOutput::from(Out::YXmlElement(v)))),
+            XmlOut::Text(v) => Box::into_raw(Box::new(YOutput::from(Out::YXmlText(v)))),
+            XmlOut::Fragment(v) => Box::into_raw(Box::new(YOutput::from(Out::YXmlFragment(v)))),
         }
     } else {
         null_mut()
@@ -1887,9 +1887,9 @@ pub unsafe extern "C" fn yxml_prev_sibling(
     let mut siblings = xml.siblings(txn);
     if let Some(next) = siblings.next_back() {
         match next {
-            XmlNode::Element(v) => Box::into_raw(Box::new(YOutput::from(Value::YXmlElement(v)))),
-            XmlNode::Text(v) => Box::into_raw(Box::new(YOutput::from(Value::YXmlText(v)))),
-            XmlNode::Fragment(v) => Box::into_raw(Box::new(YOutput::from(Value::YXmlFragment(v)))),
+            XmlOut::Element(v) => Box::into_raw(Box::new(YOutput::from(Out::YXmlElement(v)))),
+            XmlOut::Text(v) => Box::into_raw(Box::new(YOutput::from(Out::YXmlText(v)))),
+            XmlOut::Fragment(v) => Box::into_raw(Box::new(YOutput::from(Out::YXmlFragment(v)))),
         }
     } else {
         null_mut()
@@ -1937,9 +1937,9 @@ pub unsafe extern "C" fn yxmlelem_first_child(xml: *const Branch) -> *mut YOutpu
 
     if let Some(value) = xml.first_child() {
         match value {
-            XmlNode::Element(v) => Box::into_raw(Box::new(YOutput::from(Value::YXmlElement(v)))),
-            XmlNode::Text(v) => Box::into_raw(Box::new(YOutput::from(Value::YXmlText(v)))),
-            XmlNode::Fragment(v) => Box::into_raw(Box::new(YOutput::from(Value::YXmlFragment(v)))),
+            XmlOut::Element(v) => Box::into_raw(Box::new(YOutput::from(Out::YXmlElement(v)))),
+            XmlOut::Text(v) => Box::into_raw(Box::new(YOutput::from(Out::YXmlText(v)))),
+            XmlOut::Fragment(v) => Box::into_raw(Box::new(YOutput::from(Out::YXmlFragment(v)))),
         }
     } else {
         std::ptr::null_mut()
@@ -1984,9 +1984,9 @@ pub unsafe extern "C" fn yxmlelem_tree_walker_next(iterator: *mut TreeWalker) ->
 
     if let Some(next) = iter.0.next() {
         match next {
-            XmlNode::Element(v) => Box::into_raw(Box::new(YOutput::from(Value::YXmlElement(v)))),
-            XmlNode::Text(v) => Box::into_raw(Box::new(YOutput::from(Value::YXmlText(v)))),
-            XmlNode::Fragment(v) => Box::into_raw(Box::new(YOutput::from(Value::YXmlFragment(v)))),
+            XmlOut::Element(v) => Box::into_raw(Box::new(YOutput::from(Out::YXmlElement(v)))),
+            XmlOut::Text(v) => Box::into_raw(Box::new(YOutput::from(Out::YXmlText(v)))),
+            XmlOut::Fragment(v) => Box::into_raw(Box::new(YOutput::from(Out::YXmlFragment(v)))),
         }
     } else {
         std::ptr::null_mut()
@@ -2087,9 +2087,9 @@ pub unsafe extern "C" fn yxmlelem_get(
 
     if let Some(child) = xml.get(txn, index as u32) {
         match child {
-            XmlNode::Element(v) => Box::into_raw(Box::new(YOutput::from(Value::YXmlElement(v)))),
-            XmlNode::Text(v) => Box::into_raw(Box::new(YOutput::from(Value::YXmlText(v)))),
-            XmlNode::Fragment(v) => Box::into_raw(Box::new(YOutput::from(Value::YXmlFragment(v)))),
+            XmlOut::Element(v) => Box::into_raw(Box::new(YOutput::from(Out::YXmlElement(v)))),
+            XmlOut::Text(v) => Box::into_raw(Box::new(YOutput::from(Out::YXmlText(v)))),
+            XmlOut::Fragment(v) => Box::into_raw(Box::new(YOutput::from(Out::YXmlFragment(v)))),
         }
     } else {
         std::ptr::null()
@@ -2393,7 +2393,7 @@ impl From<Diff<YChange>> for YChunk {
             fmt_len = attrs.len() as u32;
             let mut fmt = Vec::with_capacity(attrs.len());
             for (k, v) in attrs.into_iter() {
-                let e = YMapEntry::new(k.as_ref(), Value::Any(v));
+                let e = YMapEntry::new(k.as_ref(), Out::Any(v));
                 fmt.push(e);
             }
             Box::into_raw(fmt.into_boxed_slice()) as *mut _
@@ -2752,19 +2752,19 @@ impl Drop for YOutput {
     }
 }
 
-impl From<Value> for YOutput {
-    fn from(v: Value) -> Self {
+impl From<Out> for YOutput {
+    fn from(v: Out) -> Self {
         match v {
-            Value::Any(v) => Self::from(v),
-            Value::YText(v) => Self::from(v),
-            Value::YArray(v) => Self::from(v),
-            Value::YMap(v) => Self::from(v),
-            Value::YXmlElement(v) => Self::from(v),
-            Value::YXmlFragment(v) => Self::from(v),
-            Value::YXmlText(v) => Self::from(v),
-            Value::YDoc(v) => Self::from(v),
-            Value::YWeakLink(v) => Self::from(v),
-            Value::UndefinedRef(v) => Self::from(v),
+            Out::Any(v) => Self::from(v),
+            Out::YText(v) => Self::from(v),
+            Out::YArray(v) => Self::from(v),
+            Out::YMap(v) => Self::from(v),
+            Out::YXmlElement(v) => Self::from(v),
+            Out::YXmlFragment(v) => Self::from(v),
+            Out::YXmlText(v) => Self::from(v),
+            Out::YDoc(v) => Self::from(v),
+            Out::YWeakLink(v) => Self::from(v),
+            Out::UndefinedRef(v) => Self::from(v),
         }
     }
 }
@@ -2836,7 +2836,7 @@ impl From<Any> for YOutput {
                     let len = v.len() as u32;
                     let mut array: Vec<_> = v
                         .iter()
-                        .map(|(k, v)| YMapEntry::new(k.as_str(), Value::Any(v.clone())))
+                        .map(|(k, v)| YMapEntry::new(k.as_str(), Out::Any(v.clone())))
                         .collect();
                     array.shrink_to_fit();
                     let ptr = array.as_mut_ptr();
@@ -3774,7 +3774,7 @@ impl YEvent {
                 },
             },
             Event::XmlFragment(e) => YEvent {
-                tag: if let XmlNode::Fragment(_) = e.target() {
+                tag: if let XmlOut::Fragment(_) = e.target() {
                     Y_XML_FRAG
                 } else {
                     Y_XML_ELEM
@@ -4022,9 +4022,9 @@ pub unsafe extern "C" fn yxmlelem_event_target(e: *const YXmlEvent) -> *mut Bran
     assert!(!e.is_null());
     let out = (&*e).target().clone();
     match out {
-        XmlNode::Element(e) => e.into_raw_branch(),
-        XmlNode::Fragment(e) => e.into_raw_branch(),
-        XmlNode::Text(e) => e.into_raw_branch(),
+        XmlOut::Element(e) => e.into_raw_branch(),
+        XmlOut::Fragment(e) => e.into_raw_branch(),
+        XmlOut::Text(e) => e.into_raw_branch(),
     }
 }
 
@@ -4761,7 +4761,7 @@ pub struct YDelta {
 }
 
 impl YDelta {
-    fn insert(value: &Value, attrs: &Option<Box<Attrs>>) -> Self {
+    fn insert(value: &Out, attrs: &Option<Box<Attrs>>) -> Self {
         let insert = Box::into_raw(Box::new(YOutput::from(value.clone())));
         let (attributes_len, attributes) = if let Some(attrs) = attrs {
             let len = attrs.len() as u32;

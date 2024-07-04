@@ -4,7 +4,7 @@ use crate::text::YText;
 use crate::transaction::YTransaction;
 use crate::weak::YWeakLink;
 use crate::xml_elem::YXmlElement;
-use crate::{ImplicitTransaction, YSnapshot};
+use crate::{ImplicitTransaction, Snapshot};
 use gloo_utils::format::JsValueSerdeExt;
 use std::collections::HashMap;
 use wasm_bindgen::prelude::wasm_bindgen;
@@ -179,8 +179,8 @@ impl YXmlText {
     #[wasm_bindgen(js_name = toDelta)]
     pub fn to_delta(
         &self,
-        snapshot: Option<YSnapshot>,
-        prev_snapshot: Option<YSnapshot>,
+        snapshot: JsValue,
+        prev_snapshot: JsValue,
         compute_ychange: Option<js_sys::Function>,
         txn: ImplicitTransaction,
     ) -> crate::Result<js_sys::Array> {
@@ -190,10 +190,14 @@ impl YXmlText {
             }
             SharedCollection::Integrated(c) => c.mutably(txn, |c, txn| {
                 let doc = txn.doc().clone();
-                let hi = snapshot.map(|s| s.0);
-                let lo = prev_snapshot.map(|s| s.0);
+                let hi: Option<Snapshot> = snapshot
+                    .into_serde()
+                    .map_err(|e| JsValue::from_str(&e.to_string()))?;
+                let lo: Option<Snapshot> = prev_snapshot
+                    .into_serde()
+                    .map_err(|e| JsValue::from_str(&e.to_string()))?;
                 let array = js_sys::Array::new();
-                let delta = c.diff_range(txn, hi.as_ref(), lo.as_ref(), |change| {
+                let delta = c.diff_range(txn, hi.as_deref(), lo.as_deref(), |change| {
                     crate::js::convert::ychange_to_js(change, &compute_ychange).unwrap()
                 });
                 for d in delta {
@@ -267,6 +271,24 @@ impl YXmlText {
                 } else {
                     Err(JsValue::from_str(crate::js::errors::INVALID_FMT))
                 }
+            }),
+        }
+    }
+
+    #[wasm_bindgen(js_name = applyDelta)]
+    pub fn apply_delta(&self, delta: js_sys::Array, txn: ImplicitTransaction) -> crate::Result<()> {
+        match &self.0 {
+            SharedCollection::Prelim(_) => {
+                Err(JsValue::from_str(crate::js::errors::INVALID_PRELIM_OP))
+            }
+            SharedCollection::Integrated(c) => c.mutably(txn, |c, txn| {
+                let mut result = Vec::new();
+                for js in delta.iter() {
+                    let d = crate::js::convert::js_into_delta(js)?;
+                    result.push(d);
+                }
+                c.apply_delta(txn, result);
+                Ok(())
             }),
         }
     }

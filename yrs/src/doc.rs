@@ -4,12 +4,12 @@ use crate::encoding::read::Error;
 use crate::event::{SubdocsEvent, TransactionCleanupEvent, UpdateEvent};
 use crate::store::{Store, StoreRef};
 use crate::transaction::{Origin, Transaction, TransactionMut};
-use crate::types::{RootRef, ToJson, Value};
+use crate::types::{RootRef, ToJson};
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::OptionExt;
 use crate::{
-    uuid_v4, uuid_v4_from, ArrayRef, BranchID, MapRef, ReadTxn, TextRef, Uuid, WriteTxn,
+    uuid_v4, uuid_v4_from, ArrayRef, BranchID, MapRef, Out, ReadTxn, TextRef, Uuid, WriteTxn,
     XmlFragmentRef,
 };
 use crate::{Any, Subscription};
@@ -61,12 +61,12 @@ pub struct Doc {
 unsafe impl Send for Doc {}
 unsafe impl Sync for Doc {}
 
-impl TryFrom<Value> for Doc {
-    type Error = Value;
+impl TryFrom<Out> for Doc {
+    type Error = Out;
 
-    fn try_from(value: Value) -> Result<Self, Self::Error> {
+    fn try_from(value: Out) -> Result<Self, Self::Error> {
         match value {
-            Value::YDoc(value) => Ok(value),
+            Out::YDoc(value) => Ok(value),
             other => Err(other),
         }
     }
@@ -2174,9 +2174,9 @@ mod test {
 
         let mut t1 = d1.transact_mut();
         assert!(t1.is_alive(&r1), "root is always alive");
-        let a1 = r1.insert(&mut t1, "a", MapPrelim::<i32>::new());
+        let a1 = r1.insert(&mut t1, "a", MapPrelim::default());
         assert!(t1.is_alive(&a1), "1st level nesting");
-        let aa1 = a1.insert(&mut t1, "aa", MapPrelim::<i32>::new());
+        let aa1 = a1.insert(&mut t1, "aa", MapPrelim::default());
         assert!(t1.is_alive(&aa1), "2nd level nesting");
         drop(t1);
 

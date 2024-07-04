@@ -8,7 +8,7 @@ use crate::id_set::DeleteSet;
 use crate::iter::TxnIterator;
 use crate::slice::BlockSlice;
 use crate::store::{Store, StoreEvents, SubdocGuids, SubdocsIter};
-use crate::types::{Event, Events, RootRef, SharedRef, TypePtr, Value};
+use crate::types::{Event, Events, RootRef, SharedRef, TypePtr};
 use crate::update::Update;
 use crate::utils::OptionExt;
 use crate::*;
@@ -1048,7 +1048,7 @@ impl<'doc> TransactionMut<'doc> {
 pub struct RootRefs<'doc>(std::collections::hash_map::Iter<'doc, Arc<str>, Arc<Branch>>);
 
 impl<'doc> Iterator for RootRefs<'doc> {
-    type Item = (&'doc str, Value);
+    type Item = (&'doc str, Out);
 
     fn next(&mut self) -> Option<Self::Item> {
         let (key, branch) = self.0.next()?;

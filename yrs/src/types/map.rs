@@ -1,8 +1,8 @@
 use crate::block::{EmbedPrelim, ItemContent, ItemPosition, ItemPtr, Prelim};
 use crate::transaction::TransactionMut;
 use crate::types::{
-    event_keys, Branch, BranchPtr, Entries, EntryChange, Path, RootRef, SharedRef, ToJson, TypeRef,
-    Value, ValuePrelim,
+    event_keys, AsPrelim, Branch, BranchPtr, Entries, EntryChange, In, Out, Path, RootRef,
+    SharedRef, ToJson, TypeRef,
 };
 use crate::*;
 use std::borrow::Borrow;
@@ -77,7 +77,7 @@ impl ToJson for MapRef {
         let mut res = HashMap::new();
         for (key, item) in inner.map.iter() {
             if !item.is_deleted() {
-                let last = item.content.get_last().unwrap_or(Value::Any(Any::Null));
+                let last = item.content.get_last().unwrap_or(Out::Any(Any::Null));
                 res.insert(key.to_string(), last.to_json(txn));
             }
         }
@@ -110,27 +110,30 @@ impl TryFrom<ItemPtr> for MapRef {
     }
 }
 
-impl TryFrom<Value> for MapRef {
-    type Error = Value;
+impl TryFrom<Out> for MapRef {
+    type Error = Out;
 
-    fn try_from(value: Value) -> Result<Self, Self::Error> {
+    fn try_from(value: Out) -> Result<Self, Self::Error> {
         match value {
-            Value::YMap(value) => Ok(value),
+            Out::YMap(value) => Ok(value),
             other => Err(other),
         }
     }
 }
 
-impl CopyFrom for MapRef {
-    fn copy_from(&self, txn: &mut TransactionMut, source: &Self) {
-        for (key, ptr) in source.0.map.iter() {
-            if ptr.is_deleted() {
-                continue;
-            }
-            if let Some(value) = ptr.content.get_last() {
-                self.insert(txn, key.clone(), ValuePrelim::from(value));
+impl AsPrelim for MapRef {
+    type Prelim = MapPrelim;
+
+    fn as_prelim<T: ReadTxn>(&self, txn: &T) -> Self::Prelim {
+        let mut prelim = HashMap::with_capacity(self.len(txn) as usize);
+        for (key, &ptr) in self.0.map.iter() {
+            if !ptr.is_deleted() {
+                if let Ok(value) = Out::try_from(ptr) {
+                    prelim.insert(key.clone(), value.as_prelim(txn));
+                }
             }
         }
+        MapPrelim(prelim)
     }
 }
 
@@ -201,7 +204,7 @@ pub trait Map: AsRef<Branch> + Sized {
     /// all of its contents will also be deleted recursively. A returned value will contain a
     /// reference to a current removed shared type (which will be empty due to all of its elements
     /// being deleted), **not** the content prior the removal.
-    fn remove(&self, txn: &mut TransactionMut, key: &str) -> Option<Value> {
+    fn remove(&self, txn: &mut TransactionMut, key: &str) -> Option<Out> {
         let ptr = BranchPtr::from(self.as_ref());
         ptr.remove(txn, key)
     }
@@ -219,7 +222,7 @@ pub trait Map: AsRef<Branch> + Sized {
 
     /// Returns a value stored under a given `key` within current map, or `None` if no entry
     /// with such `key` existed.
-    fn get<T: ReadTxn>(&self, txn: &T, key: &str) -> Option<Value> {
+    fn get<T: ReadTxn>(&self, txn: &T, key: &str) -> Option<Out> {
         let ptr = BranchPtr::from(self.as_ref());
         ptr.get(txn, key)
     }
@@ -260,7 +263,7 @@ where
     B: Borrow<T>,
     T: ReadTxn,
 {
-    type Item = (&'a str, Value);
+    type Item = (&'a str, Out);
 
     fn next(&mut self) -> Option<Self::Item> {
         let (key, item) = self.0.next()?;
@@ -320,12 +323,12 @@ where
     B: Borrow<T>,
     T: ReadTxn,
 {
-    type Item = Vec<Value>;
+    type Item = Vec<Out>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let (_, item) = self.0.next()?;
         let len = item.len() as usize;
-        let mut values = vec![Value::default(); len];
+        let mut values = vec![Out::default(); len];
         if item.content.read(0, &mut values) == len {
             Some(values)
         } else {
@@ -343,11 +346,11 @@ impl From<BranchPtr> for MapRef {
 /// A preliminary map. It can be used to early initialize the contents of a [MapRef], when it's about
 /// to be inserted into another Yrs collection, such as [ArrayRef] or another [MapRef].
 #[repr(transparent)]
-#[derive(Debug, Clone)]
-pub struct MapPrelim<T>(HashMap<Arc<str>, T>);
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct MapPrelim(HashMap<Arc<str>, In>);
 
-impl<T> Deref for MapPrelim<T> {
-    type Target = HashMap<Arc<str>, T>;
+impl Deref for MapPrelim {
+    type Target = HashMap<Arc<str>, In>;
 
     #[inline]
     fn deref(&self) -> &Self::Target {
@@ -355,48 +358,49 @@ impl<T> Deref for MapPrelim<T> {
     }
 }
 
-impl<T> DerefMut for MapPrelim<T> {
+impl DerefMut for MapPrelim {
     #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
 }
 
-impl<T> MapPrelim<T> {
-    pub fn new() -> Self {
-        MapPrelim(HashMap::default())
+impl From<MapPrelim> for In {
+    #[inline]
+    fn from(value: MapPrelim) -> Self {
+        In::Map(value)
     }
 }
 
-impl Default for MapPrelim<Any> {
-    fn default() -> Self {
-        MapPrelim(HashMap::default())
-    }
-}
-
-impl<S, T> FromIterator<(S, T)> for MapPrelim<T>
+impl<S, T> FromIterator<(S, T)> for MapPrelim
 where
     S: Into<Arc<str>>,
+    T: Into<In>,
 {
     fn from_iter<I: IntoIterator<Item = (S, T)>>(iter: I) -> Self {
-        MapPrelim(iter.into_iter().map(|(k, v)| (k.into(), v)).collect())
+        MapPrelim(
+            iter.into_iter()
+                .map(|(k, v)| (k.into(), v.into()))
+                .collect(),
+        )
     }
 }
 
-impl<S, T, const C: usize> From<[(S, T); C]> for MapPrelim<T>
+impl<S, T, const C: usize> From<[(S, T); C]> for MapPrelim
 where
     S: Into<Arc<str>>,
+    T: Into<In>,
 {
     fn from(map: [(S, T); C]) -> Self {
         let mut m = HashMap::with_capacity(C);
         for (key, value) in map {
-            m.insert(key.into(), value);
+            m.insert(key.into(), value.into());
         }
         MapPrelim(m)
     }
 }
 
-impl<T: Prelim> Prelim for MapPrelim<T> {
+impl Prelim for MapPrelim {
     type Return = MapRef;
 
     fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
@@ -412,9 +416,9 @@ impl<T: Prelim> Prelim for MapPrelim<T> {
     }
 }
 
-impl<T: Prelim> Into<EmbedPrelim<MapPrelim<T>>> for MapPrelim<T> {
+impl Into<EmbedPrelim<MapPrelim>> for MapPrelim {
     #[inline]
-    fn into(self) -> EmbedPrelim<MapPrelim<T>> {
+    fn into(self) -> EmbedPrelim<MapPrelim> {
         EmbedPrelim::Shared(self)
     }
 }
@@ -473,7 +477,7 @@ mod test {
     use crate::test_utils::{exchange_updates, run_scenario, RngExt};
     use crate::transaction::ReadTxn;
     use crate::types::text::TextPrelim;
-    use crate::types::{DeepObservable, EntryChange, Event, Path, PathSegment, ToJson, Value};
+    use crate::types::{DeepObservable, EntryChange, Event, Out, Path, PathSegment, ToJson};
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encoder, EncoderV1};
     use crate::{
@@ -519,16 +523,13 @@ mod test {
         //TODO: YArray within YMap
         fn compare_all<T: ReadTxn>(m: &MapRef, txn: &T) {
             assert_eq!(m.len(txn), 5);
-            assert_eq!(m.get(txn, &"number".to_owned()), Some(Value::from(1f64)));
-            assert_eq!(m.get(txn, &"boolean0".to_owned()), Some(Value::from(false)));
-            assert_eq!(m.get(txn, &"boolean1".to_owned()), Some(Value::from(true)));
-            assert_eq!(
-                m.get(txn, &"string".to_owned()),
-                Some(Value::from("hello Y"))
-            );
+            assert_eq!(m.get(txn, &"number".to_owned()), Some(Out::from(1f64)));
+            assert_eq!(m.get(txn, &"boolean0".to_owned()), Some(Out::from(false)));
+            assert_eq!(m.get(txn, &"boolean1".to_owned()), Some(Out::from(true)));
+            assert_eq!(m.get(txn, &"string".to_owned()), Some(Out::from("hello Y")));
             assert_eq!(
                 m.get(txn, &"object".to_owned()),
-                Some(Value::from(any!({
+                Some(Out::from(any!({
                     "key": {
                         "key2": "value"
                     }
@@ -561,11 +562,8 @@ mod test {
 
         t2.apply_update(Update::decode_v1(update.as_slice()).unwrap());
 
-        assert_eq!(
-            m2.get(&t2, &"stuff".to_owned()),
-            Some(Value::from("stuffy"))
-        );
-        assert_eq!(m2.get(&t2, &"null".to_owned()), Some(Value::Any(Any::Null)));
+        assert_eq!(m2.get(&t2, &"stuff".to_owned()), Some(Out::from("stuffy")));
+        assert_eq!(m2.get(&t2, &"null".to_owned()), Some(Out::Any(Any::Null)));
     }
 
     #[test]
@@ -587,8 +585,8 @@ mod test {
         t1.apply_update(Update::decode_v1(u2.as_slice()).unwrap());
         t2.apply_update(Update::decode_v1(u1.as_slice()).unwrap());
 
-        assert_eq!(m1.get(&t1, &"stuff".to_owned()), Some(Value::from("c1")));
-        assert_eq!(m2.get(&t2, &"stuff".to_owned()), Some(Value::from("c1")));
+        assert_eq!(m1.get(&t1, &"stuff".to_owned()), Some(Out::from("c1")));
+        assert_eq!(m2.get(&t2, &"stuff".to_owned()), Some(Out::from("c1")));
     }
 
     #[test]
@@ -605,7 +603,7 @@ mod test {
         assert_eq!(m1.len(&t1), 2);
 
         // remove 'stuff'
-        assert_eq!(m1.remove(&mut t1, &key1), Some(Value::from("c0")));
+        assert_eq!(m1.remove(&mut t1, &key1), Some(Out::from("c0")));
         assert_eq!(m1.len(&t1), 1);
 
         // remove 'stuff' again - nothing should happen
@@ -613,7 +611,7 @@ mod test {
         assert_eq!(m1.len(&t1), 1);
 
         // remove 'other-stuff'
-        assert_eq!(m1.remove(&mut t1, &key2), Some(Value::from("c1")));
+        assert_eq!(m1.remove(&mut t1, &key2), Some(Out::from("c1")));
         assert_eq!(m1.len(&t1), 0);
     }
 
@@ -737,7 +735,7 @@ mod test {
 
             assert_eq!(
                 map.get(&doc.transact(), &"stuff".to_owned()),
-                Some(Value::from("c3")),
+                Some(Out::from("c3")),
                 "peer {} - map entry resolved to unexpected value",
                 doc.client_id()
             );
@@ -980,7 +978,7 @@ mod test {
             calls_copy.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         });
 
-        let nested = map.insert(&mut doc.transact_mut(), "map", MapPrelim::<String>::new());
+        let nested = map.insert(&mut doc.transact_mut(), "map", MapPrelim::default());
         nested.insert(
             &mut doc.transact_mut(),
             "array",

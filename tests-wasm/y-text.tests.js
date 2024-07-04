@@ -132,3 +132,149 @@ export const testToDeltaEmbedAttributes = tc => {
     ])
     t.compare(origin, 'TEST_ORIGIN')
 }
+
+
+/**
+ * @param {t.TestCase} tc
+ */
+export const testMultilineFormat = tc => {
+    const ydoc = new Y.YDoc()
+    const testText = ydoc.getText('test')
+    testText.insert(0, 'Test\nMulti-line\nFormatting')
+    testText.applyDelta([
+        {retain: 4, attributes: {bold: true}},
+        {retain: 1}, // newline character
+        {retain: 10, attributes: {bold: true}},
+        {retain: 1}, // newline character
+        {retain: 10, attributes: {bold: true}}
+    ])
+    let delta = testText.toDelta()
+    t.compare(delta, [
+        {insert: 'Test', attributes: {bold: true}},
+        {insert: '\n'},
+        {insert: 'Multi-line', attributes: {bold: true}},
+        {insert: '\n'},
+        {insert: 'Formatting', attributes: {bold: true}}
+    ])
+}
+
+/**
+ * @param {t.TestCase} tc
+ */
+export const testNotMergeEmptyLinesFormat = tc => {
+    const ydoc = new Y.YDoc()
+    const testText = ydoc.getText('test')
+    testText.applyDelta([
+        {insert: 'Text'},
+        {insert: '\n', attributes: {title: true}},
+        {insert: '\nText'},
+        {insert: '\n', attributes: {title: true}}
+    ])
+    t.compare(testText.toDelta(), [
+        {insert: 'Text'},
+        {insert: '\n', attributes: {title: true}},
+        {insert: '\nText'},
+        {insert: '\n', attributes: {title: true}}
+    ])
+}
+
+/**
+ * @param {t.TestCase} tc
+ */
+export const testGetDeltaWithEmbeds = tc => {
+    const ydoc = new Y.YDoc()
+    const text = ydoc.getText('test')
+    text.applyDelta([{
+        insert: {linebreak: 's'}
+    }])
+    t.compare(text.toDelta(), [{
+        insert: {linebreak: 's'}
+    }])
+}
+
+/**
+ * @param {t.TestCase} tc
+ */
+export const testTypesAsEmbed = tc => {
+    const doc0 = new Y.YDoc({clientID: 1})
+    const text0 = doc0.getText('test')
+    const doc1 = new Y.YDoc({clientID: 2})
+    const text1 = doc1.getText('test')
+    text0.applyDelta([{
+        insert: new Y.YMap({'key': 'val'})
+    }])
+    let delta = text0.toDelta()
+    let json = delta[0].insert.toJson()
+    t.compare(json, {key: 'val'})
+    let firedEvent = false
+    text1.observe((event, txn) => {
+        const d = event.delta
+        t.assert(d.length === 1)
+        t.compare(d.map(x => (x.insert).toJson(txn)), [{key: 'val'}])
+        firedEvent = true
+    })
+    exchangeUpdates([doc0, doc1])
+    delta = text1.toDelta()
+    json = delta[0].insert.toJson()
+    t.assert(delta.length === 1)
+    t.compare(json, {key: 'val'})
+    t.assert(firedEvent, 'fired the event observer containing a Type-Embed')
+}
+
+/**
+ * @param {t.TestCase} tc
+ */
+export const testSnapshot = tc => {
+    const doc0 = new Y.YDoc({clientID: 1, gc: false})
+    const text0 = doc0.getText('test')
+    text0.applyDelta([
+        {insert: 'abcd'}
+    ])
+    const snapshot1 = Y.snapshot(doc0)
+    text0.applyDelta([
+        {retain: 1},
+        {insert: 'x'},
+        {delete: 1}
+    ])
+    const snapshot2 = Y.snapshot(doc0)
+    text0.applyDelta([
+        {retain: 2},
+        {delete: 1},
+        {insert: 'x'},
+        {delete: 1}
+    ])
+    const state1 = text0.toDelta(snapshot1)
+    t.compare(state1, [{insert: 'abcd'}])
+    const state2 = text0.toDelta(snapshot2)
+    t.compare(state2, [{insert: 'axcd'}])
+    const state2Diff = text0.toDelta(snapshot2, snapshot1)
+    // @ts-ignore Remove userid info
+    state2Diff.forEach(v => {
+        if (v.attributes && v.attributes.ychange) {
+            delete v.attributes.ychange.user
+        }
+    })
+    t.compare(state2Diff, [
+        {insert: 'a'},
+        {insert: 'x', attributes: {ychange: {type: 'added'}}},
+        {insert: 'b', attributes: {ychange: {type: 'removed'}}},
+        {insert: 'cd'}])
+}
+
+/**
+ * @param {t.TestCase} tc
+ */
+export const testSnapshotDeleteAfter = tc => {
+    const doc0 = new Y.YDoc({clientID: 1, gc: false})
+    const text0 = doc0.getText('test')
+    text0.applyDelta([
+        {insert: 'abcd'}
+    ])
+    const snapshot1 = Y.snapshot(doc0)
+    text0.applyDelta([
+        {retain: 4},
+        {insert: 'e'}
+    ])
+    const state1 = text0.toDelta(snapshot1)
+    t.compare(state1, [{insert: 'abcd'}])
+}

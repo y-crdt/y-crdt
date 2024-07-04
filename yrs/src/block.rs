@@ -7,7 +7,7 @@ use crate::slice::{BlockSlice, GCSlice, ItemSlice};
 use crate::store::Store;
 use crate::transaction::TransactionMut;
 use crate::types::text::update_current_attributes;
-use crate::types::{Attrs, TypePtr, TypeRef, Value};
+use crate::types::{Attrs, TypePtr, TypeRef};
 use crate::undo::UndoStack;
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
@@ -1598,7 +1598,7 @@ impl ItemContent {
 
     /// Reads a contents of current [ItemContent] into a given `buf`, starting from provided
     /// `offset`. Returns a number of elements read this way (it cannot be longer than `buf`'s len.
-    pub fn read(&self, offset: usize, buf: &mut [Value]) -> usize {
+    pub fn read(&self, offset: usize, buf: &mut [Out]) -> usize {
         if buf.is_empty() {
             0
         } else {
@@ -1608,7 +1608,7 @@ impl ItemContent {
                     let mut j = 0;
                     while i < values.len() && j < buf.len() {
                         let any = &values[i];
-                        buf[j] = Value::Any(any.clone());
+                        buf[j] = Out::Any(any.clone());
                         i += 1;
                         j += 1;
                     }
@@ -1618,7 +1618,7 @@ impl ItemContent {
                     let chars = v.chars().skip(offset).take(buf.len());
                     let mut j = 0;
                     for c in chars {
-                        buf[j] = Value::Any(Any::from(c.to_string()));
+                        buf[j] = Out::Any(Any::from(c.to_string()));
                         j += 1;
                     }
                     j
@@ -1628,18 +1628,18 @@ impl ItemContent {
                     let mut j = 0;
                     while i < elements.len() && j < buf.len() {
                         let elem = elements[i].as_str();
-                        buf[j] = Value::Any(Any::from(elem));
+                        buf[j] = Out::Any(Any::from(elem));
                         i += 1;
                         j += 1;
                     }
                     j
                 }
                 ItemContent::Binary(v) => {
-                    buf[0] = Value::Any(Any::from(v.deref()));
+                    buf[0] = Out::Any(Any::from(v.deref()));
                     1
                 }
                 ItemContent::Doc(_, doc) => {
-                    buf[0] = Value::YDoc(doc.clone());
+                    buf[0] = Out::YDoc(doc.clone());
                     1
                 }
                 ItemContent::Type(c) => {
@@ -1648,7 +1648,7 @@ impl ItemContent {
                     1
                 }
                 ItemContent::Embed(v) => {
-                    buf[0] = Value::Any(v.clone());
+                    buf[0] = Out::Any(v.clone());
                     1
                 }
                 ItemContent::Move(_) => 0,
@@ -1660,9 +1660,9 @@ impl ItemContent {
 
     /// Reads all contents stored in this item and returns them. Use [ItemContent::read] if you need
     /// to read only slice of elements from the corresponding item.
-    pub fn get_content(&self) -> Vec<Value> {
+    pub fn get_content(&self) -> Vec<Out> {
         let len = self.len(OffsetKind::Utf16) as usize;
-        let mut values = vec![Value::default(); len];
+        let mut values = vec![Out::default(); len];
         let read = self.read(0, &mut values);
         if read == len {
             values
@@ -1672,33 +1672,33 @@ impl ItemContent {
     }
 
     /// Returns a first value stored in a corresponding item.
-    pub fn get_first(&self) -> Option<Value> {
+    pub fn get_first(&self) -> Option<Out> {
         match self {
-            ItemContent::Any(v) => v.first().map(|a| Value::Any(a.clone())),
-            ItemContent::Binary(v) => Some(Value::Any(Any::from(v.deref()))),
+            ItemContent::Any(v) => v.first().map(|a| Out::Any(a.clone())),
+            ItemContent::Binary(v) => Some(Out::Any(Any::from(v.deref()))),
             ItemContent::Deleted(_) => None,
             ItemContent::Move(_) => None,
-            ItemContent::Doc(_, v) => Some(Value::YDoc(v.clone())),
-            ItemContent::JSON(v) => v.first().map(|v| Value::Any(Any::from(v.deref()))),
-            ItemContent::Embed(v) => Some(Value::Any(v.clone())),
+            ItemContent::Doc(_, v) => Some(Out::YDoc(v.clone())),
+            ItemContent::JSON(v) => v.first().map(|v| Out::Any(Any::from(v.deref()))),
+            ItemContent::Embed(v) => Some(Out::Any(v.clone())),
             ItemContent::Format(_, _) => None,
-            ItemContent::String(v) => Some(Value::Any(Any::from(v.clone().as_str()))),
+            ItemContent::String(v) => Some(Out::Any(Any::from(v.clone().as_str()))),
             ItemContent::Type(c) => Some(BranchPtr::from(c).into()),
         }
     }
 
     /// Returns a last value stored in a corresponding item.
-    pub fn get_last(&self) -> Option<Value> {
+    pub fn get_last(&self) -> Option<Out> {
         match self {
-            ItemContent::Any(v) => v.last().map(|a| Value::Any(a.clone())),
-            ItemContent::Binary(v) => Some(Value::Any(Any::from(v.deref()))),
+            ItemContent::Any(v) => v.last().map(|a| Out::Any(a.clone())),
+            ItemContent::Binary(v) => Some(Out::Any(Any::from(v.deref()))),
             ItemContent::Deleted(_) => None,
             ItemContent::Move(_) => None,
-            ItemContent::Doc(_, v) => Some(Value::YDoc(v.clone())),
-            ItemContent::JSON(v) => v.last().map(|v| Value::Any(Any::from(v.as_str()))),
-            ItemContent::Embed(v) => Some(Value::Any(v.clone())),
+            ItemContent::Doc(_, v) => Some(Out::YDoc(v.clone())),
+            ItemContent::JSON(v) => v.last().map(|v| Out::Any(Any::from(v.as_str()))),
+            ItemContent::Embed(v) => Some(Out::Any(v.clone())),
             ItemContent::Format(_, _) => None,
-            ItemContent::String(v) => Some(Value::Any(Any::from(v.as_str()))),
+            ItemContent::String(v) => Some(Out::Any(Any::from(v.as_str()))),
             ItemContent::Type(c) => Some(BranchPtr::from(c).into()),
         }
     }

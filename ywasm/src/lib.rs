@@ -1,6 +1,9 @@
+use base64_light::base64_decode;
 use gloo_utils::format::JsValueSerdeExt;
 use js_sys::Uint8Array;
-use serde::Serialize;
+use serde::de::{Error, Visitor};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::fmt::Formatter;
 use std::ops::Deref;
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
@@ -33,16 +36,12 @@ pub use crate::map::YMapEvent as MapEvent;
 pub use crate::text::YText as Text;
 pub use crate::text::YTextEvent as TextEvent;
 pub use crate::transaction::ImplicitTransaction;
-use crate::transaction::YTransaction;
 pub use crate::transaction::YTransaction as Transaction;
+use crate::transaction::YTransaction;
 pub use crate::undo::YUndoEvent as UndoEvent;
 pub use crate::undo::YUndoManager as UndoManager;
 pub use crate::weak::YWeakLink as WeakLink;
 pub use crate::weak::YWeakLinkEvent as WeakLinkEvent;
-
-#[wasm_bindgen]
-#[repr(transparent)]
-pub struct YSnapshot(yrs::Snapshot);
 
 /// When called will call console log errors whenever internal panic is called from within
 /// WebAssembly module.
@@ -243,55 +242,106 @@ pub fn apply_update_v2(doc: &Doc, update: js_sys::Uint8Array, origin: JsValue) -
     }
 }
 
-#[wasm_bindgen]
-impl YSnapshot {
-    #[wasm_bindgen(constructor)]
-    pub fn new() -> Self {
-        YSnapshot(yrs::Snapshot::default())
+struct Snapshot(yrs::Snapshot);
+
+impl Deref for Snapshot {
+    type Target = yrs::Snapshot;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for Snapshot {
+    #[inline]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct SnapshotVisitor;
+        impl<'de> Visitor<'de> for SnapshotVisitor {
+            type Value = Snapshot;
+
+            fn expecting(&self, formatter: &mut Formatter) -> std::fmt::Result {
+                write!(formatter, "a valid snapshot")
+            }
+
+            #[inline]
+            fn visit_str<E>(self, v: &str) -> std::result::Result<Self::Value, E>
+            where
+                E: Error,
+            {
+                let result = base64_light::base64_decode(v);
+                let snap =
+                    yrs::Snapshot::decode_v1(&result).map_err(|e| E::custom(e.to_string()))?;
+                Ok(Snapshot(snap))
+            }
+        }
+
+        deserializer.deserialize_str(SnapshotVisitor)
+    }
+}
+
+impl Serialize for Snapshot {
+    #[inline]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let bytes = self.0.encode_v1();
+        serializer.serialize_str(&base64_light::base64_encode_bytes(&bytes))
     }
 }
 
 #[wasm_bindgen(js_name = snapshot)]
-pub fn snapshot(doc: &Doc) -> YSnapshot {
-    YSnapshot(doc.0.transact().snapshot())
+pub fn snapshot(doc: &Doc) -> crate::Result<JsValue> {
+    let snapshot = doc.0.transact().snapshot();
+    JsValue::from_serde(&Snapshot(snapshot)).map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
 #[wasm_bindgen(js_name = equalSnapshots)]
-pub fn equal_snapshots(snap1: &YSnapshot, snap2: &YSnapshot) -> bool {
-    snap1.0 == snap2.0
+pub fn equal_snapshots(snap1: &JsValue, snap2: &JsValue) -> bool {
+    let s1: Snapshot = snap1.into_serde().unwrap();
+    let s2: Snapshot = snap2.into_serde().unwrap();
+    s1.0 == s2.0
 }
 
 #[wasm_bindgen(js_name = encodeSnapshotV1)]
-pub fn encode_snapshot_v1(snapshot: &YSnapshot) -> Vec<u8> {
-    snapshot.0.encode_v1()
+pub fn encode_snapshot_v1(snapshot: &JsValue) -> Vec<u8> {
+    base64_decode(&snapshot.as_string().unwrap())
 }
 
 #[wasm_bindgen(js_name = encodeSnapshotV2)]
-pub fn encode_snapshot_v2(snapshot: &YSnapshot) -> Vec<u8> {
-    snapshot.0.encode_v2()
+pub fn encode_snapshot_v2(snapshot: &JsValue) -> Vec<u8> {
+    let s: Snapshot = snapshot.into_serde().unwrap();
+    s.0.encode_v2()
 }
 
 #[wasm_bindgen(js_name = decodeSnapshotV2)]
-pub fn decode_snapshot_v2(snapshot: &[u8]) -> Result<YSnapshot> {
+pub fn decode_snapshot_v2(snapshot: &[u8]) -> Result<JsValue> {
     let s = yrs::Snapshot::decode_v2(snapshot)
         .map_err(|_| JsValue::from("failed to deserialize snapshot using lib0 v2 decoding"))?;
-    Ok(YSnapshot(s))
+    JsValue::from_serde(&Snapshot(s)).map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
 #[wasm_bindgen(js_name = decodeSnapshotV1)]
-pub fn decode_snapshot_v1(snapshot: &[u8]) -> Result<YSnapshot> {
-    let s = yrs::Snapshot::decode_v1(snapshot)
-        .map_err(|_| JsValue::from("failed to deserialize snapshot using lib0 v1 decoding"))?;
-    Ok(YSnapshot(s))
+pub fn decode_snapshot_v1(snapshot: &[u8]) -> Result<JsValue> {
+    Ok(JsValue::from_str(&base64_light::base64_encode_bytes(
+        snapshot,
+    )))
 }
 
 #[wasm_bindgen(js_name = encodeStateFromSnapshotV1)]
-pub fn encode_state_from_snapshot_v1(doc: &Doc, snapshot: &YSnapshot) -> Result<Vec<u8>> {
+pub fn encode_state_from_snapshot_v1(doc: &Doc, snapshot: JsValue) -> Result<Vec<u8>> {
+    let snapshot: Snapshot = snapshot
+        .into_serde()
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
     let mut encoder = yrs::updates::encoder::EncoderV1::new();
     match doc
         .0
         .transact()
-        .encode_state_from_snapshot(&snapshot.0, &mut encoder)
+        .encode_state_from_snapshot(&*snapshot, &mut encoder)
     {
         Ok(_) => Ok(encoder.to_vec()),
         Err(e) => Err(JsValue::from(e.to_string())),
@@ -299,12 +349,15 @@ pub fn encode_state_from_snapshot_v1(doc: &Doc, snapshot: &YSnapshot) -> Result<
 }
 
 #[wasm_bindgen(js_name = encodeStateFromSnapshotV2)]
-pub fn encode_state_from_snapshot_v2(doc: &Doc, snapshot: &YSnapshot) -> Result<Vec<u8>> {
+pub fn encode_state_from_snapshot_v2(doc: &Doc, snapshot: JsValue) -> Result<Vec<u8>> {
+    let snapshot: Snapshot = snapshot
+        .into_serde()
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
     let mut encoder = yrs::updates::encoder::EncoderV2::new();
     match doc
         .0
         .transact()
-        .encode_state_from_snapshot(&snapshot.0, &mut encoder)
+        .encode_state_from_snapshot(&*snapshot, &mut encoder)
     {
         Ok(_) => Ok(encoder.to_vec()),
         Err(e) => Err(JsValue::from(e.to_string())),

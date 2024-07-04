@@ -1075,7 +1075,7 @@ mod test {
     use crate::update::{BlockCarrier, Update};
     use crate::updates::decoder::{Decode, DecoderV1};
     use crate::{
-        Doc, GetString, Options, ReadTxn, StateVector, Text, Transact, XmlFragment, XmlNode, ID,
+        Doc, GetString, Options, ReadTxn, StateVector, Text, Transact, XmlFragment, XmlOut, ID,
     };
 
     #[test]
@@ -1244,7 +1244,7 @@ mod test {
             txn.apply_update(u);
             let linknote = prosemirror.get(&txn, 0);
             let actual = linknote.and_then(|xml| match xml {
-                XmlNode::Element(elem) => Some(elem.tag().clone()),
+                XmlOut::Element(elem) => Some(elem.tag().clone()),
                 _ => None,
             });
             assert_eq!(actual, Some("linknote".into()));

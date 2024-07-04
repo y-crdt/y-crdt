@@ -3,16 +3,15 @@ use crate::block::{
 };
 use crate::transaction::TransactionMut;
 use crate::types::{
-    Attrs, Branch, BranchPtr, Delta, Path, RootRef, SharedRef, TypePtr, TypeRef, Value,
+    AsPrelim, Attrs, Branch, BranchPtr, Delta, Out, Path, RootRef, SharedRef, TypePtr, TypeRef,
 };
 use crate::utils::OptionExt;
 use crate::*;
-use std::borrow::Borrow;
 use std::cell::UnsafeCell;
 use std::collections::HashMap;
 use std::convert::{TryFrom, TryInto};
 use std::fmt::Formatter;
-use std::ops::Deref;
+use std::ops::{Deref, DerefMut};
 
 /// A shared data type used for collaborative text editing. It enables multiple users to add and
 /// remove chunks of text in efficient manner. This type is internally represented as a mutable
@@ -145,24 +144,14 @@ impl TryFrom<ItemPtr> for TextRef {
     }
 }
 
-impl TryFrom<Value> for TextRef {
-    type Error = Value;
+impl TryFrom<Out> for TextRef {
+    type Error = Out;
 
-    fn try_from(value: Value) -> Result<Self, Self::Error> {
+    fn try_from(value: Out) -> Result<Self, Self::Error> {
         match value {
-            Value::YText(value) => Ok(value),
+            Out::YText(value) => Ok(value),
             other => Err(other),
         }
-    }
-}
-
-impl CopyFrom for TextRef {
-    fn copy_from(&self, txn: &mut TransactionMut, source: &Self) {
-        let delta = source
-            .diff(txn, YChange::identity)
-            .into_iter()
-            .map(Delta::from);
-        self.apply_delta(txn, delta);
     }
 }
 
@@ -241,9 +230,10 @@ pub trait Text: AsRef<Branch> + Sized {
         }
     }
 
-    fn apply_delta<D>(&self, txn: &mut TransactionMut, delta: D)
+    fn apply_delta<D, P>(&self, txn: &mut TransactionMut, delta: D)
     where
-        D: IntoIterator<Item = Delta>,
+        D: IntoIterator<Item = Delta<P>>,
+        P: Prelim,
     {
         let branch = BranchPtr::from(self.as_ref());
         let mut pos = ItemPosition {
@@ -260,16 +250,7 @@ pub trait Text: AsRef<Branch> + Sized {
                         None => Attrs::new(),
                         Some(attrs) => *attrs,
                     };
-                    insert(
-                        branch,
-                        txn,
-                        &mut pos,
-                        DeltaPrelim {
-                            value,
-                            within_text: true,
-                        },
-                        attrs,
-                    );
+                    insert(branch, txn, &mut pos, DeltaChunk(value), attrs);
                 }
                 Delta::Deleted(len) => remove(txn, &mut pos, len),
                 Delta::Retain(len, attrs) => {
@@ -479,10 +460,47 @@ impl AsRef<Branch> for TextRef {
     }
 }
 
+impl AsPrelim for TextRef {
+    type Prelim = DeltaPrelim;
+
+    fn as_prelim<T: ReadTxn>(&self, txn: &T) -> Self::Prelim {
+        let delta: Vec<Delta<In>> = self
+            .diff(txn, YChange::identity)
+            .into_iter()
+            .map(|diff| Delta::Inserted(diff.insert.as_prelim(txn), diff.attributes))
+            .collect();
+        DeltaPrelim(delta)
+    }
+}
+
 impl Eq for TextRef {}
 impl PartialEq for TextRef {
     fn eq(&self, other: &Self) -> bool {
         self.0.id() == other.0.id()
+    }
+}
+
+struct DeltaChunk<P>(P);
+
+impl<P> Prelim for DeltaChunk<P>
+where
+    P: Prelim,
+{
+    type Return = Unused;
+
+    fn into_content(self, txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
+        let (content, rest) = self.0.into_content(txn);
+        match content {
+            ItemContent::Any(mut any) if any.len() == 1 => match any.pop().unwrap() {
+                Any::String(str) => (ItemContent::String(str.as_ref().into()), None),
+                other => (ItemContent::Embed(other), None),
+            },
+            other => (other, rest.map(DeltaChunk)),
+        }
+    }
+
+    fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
+        self.0.integrate(txn, inner_ref)
     }
 }
 
@@ -520,7 +538,7 @@ where
             } else {
                 None
             };
-            let op = Diff::with_change(Value::Any(buf.into()), attrs, change);
+            let op = Diff::with_change(Out::Any(buf.into()), attrs, change);
             self.ops.push(op);
         }
     }
@@ -1068,7 +1086,7 @@ fn clean_format_gap(
 pub struct Diff<T> {
     /// Inserted chunk of data. It can be (usually) piece of text, but possibly also embedded value
     /// or another shared type.
-    pub insert: Value,
+    pub insert: Out,
 
     /// Optional formatting attributes wrapping inserted chunk of data.
     pub attributes: Option<Box<Attrs>>,
@@ -1078,11 +1096,11 @@ pub struct Diff<T> {
 }
 
 impl<T> Diff<T> {
-    pub fn new(insert: Value, attributes: Option<Box<Attrs>>) -> Self {
+    pub fn new(insert: Out, attributes: Option<Box<Attrs>>) -> Self {
         Self::with_change(insert, attributes, None)
     }
 
-    pub fn with_change(insert: Value, attributes: Option<Box<Attrs>>, ychange: Option<T>) -> Self {
+    pub fn with_change(insert: Out, attributes: Option<Box<Attrs>>, ychange: Option<T>) -> Self {
         Diff {
             insert,
             attributes,
@@ -1098,58 +1116,38 @@ impl<T> From<Diff<T>> for Delta {
     }
 }
 
-struct DeltaPrelim {
-    value: Value,
-    /// Mark is this delta is being applied to text type. In such cases Any::String will be
-    /// converted to ItemContent::String.
-    within_text: bool,
+#[repr(transparent)]
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct DeltaPrelim(Vec<Delta<In>>);
+
+impl Deref for DeltaPrelim {
+    type Target = [Delta<In>];
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
 }
 
 impl Prelim for DeltaPrelim {
-    type Return = Unused;
+    type Return = TextRef;
 
     fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
-        match self.value {
-            Value::Any(Any::String(text)) if self.within_text => {
-                (ItemContent::String(SplittableString::from(&*text)), None)
-            }
-            Value::Any(any) => (ItemContent::Embed(any), None),
-            value => {
-                let type_ref = match &value {
-                    Value::YText(_) => TypeRef::Text,
-                    Value::YArray(_) => TypeRef::Array,
-                    Value::YMap(_) => TypeRef::Map,
-                    Value::YXmlElement(xml) => TypeRef::XmlElement(xml.tag().clone()),
-                    Value::YXmlFragment(_) => TypeRef::XmlFragment,
-                    Value::YXmlText(_) => TypeRef::XmlText,
-                    Value::YDoc(_) => TypeRef::SubDoc,
-                    #[cfg(feature = "weak")]
-                    Value::YWeakLink(link) => TypeRef::WeakLink(link.source().clone()),
-                    _ => unreachable!(),
-                };
-                let branch = Branch::new(type_ref);
-                (
-                    ItemContent::Type(branch),
-                    Some(DeltaPrelim {
-                        value,
-                        within_text: false,
-                    }),
-                )
-            }
-        }
+        (ItemContent::Type(Branch::new(TypeRef::Text)), Some(self))
     }
 
     fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
-        use crate::CopyFrom;
-        match self.value {
-            Value::YText(text) => TextRef::from(inner_ref).copy_from(txn, &text),
-            Value::YArray(array) => ArrayRef::from(inner_ref).copy_from(txn, &array),
-            Value::YMap(map) => MapRef::from(inner_ref).copy_from(txn, &map),
-            Value::YXmlElement(xml) => XmlElementRef::from(inner_ref).copy_from(txn, &xml),
-            Value::YXmlFragment(xml) => XmlFragmentRef::from(inner_ref).copy_from(txn, &xml),
-            Value::YXmlText(text) => XmlTextRef::from(inner_ref).copy_from(txn, &text),
-            _ => {}
-        }
+        let text_ref = TextRef::from(inner_ref);
+        text_ref.apply_delta(txn, self.0);
+    }
+}
+
+impl From<TextPrelim> for DeltaPrelim {
+    fn from(value: TextPrelim) -> Self {
+        DeltaPrelim(vec![Delta::Inserted(
+            In::Any(Any::String(value.0.into())),
+            None,
+        )])
     }
 }
 
@@ -1242,7 +1240,7 @@ impl TextEvent {
         #[derive(Debug, Default)]
         struct DeltaAssembler {
             action: Option<Action>,
-            insert: Option<Value>,
+            insert: Option<Out>,
             insert_string: Option<String>,
             retain: u32,
             delete: u32,
@@ -1429,16 +1427,41 @@ impl TextEvent {
 
 /// A preliminary text. It's can be used to initialize a [TextRef], when it's about to be nested
 /// into another Yrs data collection, such as [Map] or [Array].
-#[derive(Debug)]
-pub struct TextPrelim<T: Borrow<str>>(T);
+#[repr(transparent)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+pub struct TextPrelim(String);
 
-impl<T: Borrow<str>> TextPrelim<T> {
-    pub fn new(value: T) -> Self {
-        TextPrelim(value)
+impl TextPrelim {
+    #[inline]
+    pub fn new<S: Into<String>>(value: S) -> Self {
+        TextPrelim(value.into())
     }
 }
 
-impl<T: Borrow<str>> Prelim for TextPrelim<T> {
+impl Deref for TextPrelim {
+    type Target = String;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for TextPrelim {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl From<TextPrelim> for In {
+    #[inline]
+    fn from(value: TextPrelim) -> Self {
+        In::Text(DeltaPrelim::from(value))
+    }
+}
+
+impl Prelim for TextPrelim {
     type Return = TextRef;
 
     fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
@@ -1447,17 +1470,16 @@ impl<T: Borrow<str>> Prelim for TextPrelim<T> {
     }
 
     fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
-        let borrowed = self.0.borrow();
-        if !borrowed.is_empty() {
+        if !self.0.is_empty() {
             let text = TextRef::from(inner_ref);
-            text.push(txn, borrowed);
+            text.push(txn, &self.0);
         }
     }
 }
 
-impl<T: Borrow<str>> Into<EmbedPrelim<TextPrelim<T>>> for TextPrelim<T> {
+impl Into<EmbedPrelim<TextPrelim>> for TextPrelim {
     #[inline]
-    fn into(self) -> EmbedPrelim<TextPrelim<T>> {
+    fn into(self) -> EmbedPrelim<TextPrelim> {
         EmbedPrelim::Shared(self)
     }
 }
@@ -1468,7 +1490,7 @@ mod test {
     use crate::test_utils::{exchange_updates, run_scenario, RngExt};
     use crate::transaction::ReadTxn;
     use crate::types::text::{Attrs, ChangeKind, Delta, Diff, YChange};
-    use crate::types::Value;
+    use crate::types::Out;
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
     use crate::{
@@ -2537,7 +2559,7 @@ mod test {
             chunks,
             vec![
                 Diff::new("hello".into(), Some(Box::new(italic.clone()))),
-                Diff::new(Value::YArray(array), Some(Box::new(italic.clone()))),
+                Diff::new(Out::YArray(array), Some(Box::new(italic.clone()))),
                 Diff::new(image.into(), Some(Box::new(italic.clone()))),
                 Diff::new(" ".into(), Some(Box::new(italic))),
                 Diff::new("world".into(), Some(Box::new(italic_and_bold))),
@@ -2630,7 +2652,6 @@ mod test {
         assert_eq!(delta, vec![Diff::new(linebreak.into(), None)]);
     }
 
-    #[ignore]
     #[test]
     fn delta_with_shared_ref() {
         let d1 = Doc::with_client_id(1);
@@ -2638,13 +2659,11 @@ mod test {
         let txt1 = txn1.get_or_insert_text("text");
         txt1.apply_delta(
             &mut txn1,
-            [
-            //    Delta::insert(MapPrelim::from([("key", "val")]))
-            ],
+            [Delta::insert(MapPrelim::from([("key", "val")]))],
         );
         let delta = txt1.diff(&txn1, YChange::identity);
         let d: MapRef = delta[0].insert.clone().cast().unwrap();
-        assert_eq!(d.get(&txn1, "key").unwrap(), Value::Any("val".into()));
+        assert_eq!(d.get(&txn1, "key").unwrap(), Out::Any("val".into()));
 
         let triggered = Arc::new(AtomicBool::new(false));
         let _sub = {
@@ -2655,7 +2674,7 @@ mod test {
                     Delta::Inserted(insert, _) => insert.clone().cast().unwrap(),
                     _ => unreachable!("unexpected delta"),
                 };
-                assert_eq!(d.get(txn, "key").unwrap(), Value::Any("val".into()));
+                assert_eq!(d.get(txn, "key").unwrap(), Out::Any("val".into()));
                 triggered.store(true, Ordering::Relaxed);
             })
         };
@@ -2674,7 +2693,7 @@ mod test {
         let d: MapRef = delta[0].insert.clone().cast().unwrap();
         assert_eq!(
             d.get(&d2.transact(), "key").unwrap(),
-            Value::Any("val".into())
+            Out::Any("val".into())
         );
     }
 
