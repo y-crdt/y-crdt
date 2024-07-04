@@ -119,6 +119,7 @@ where
     }
 }
 
+#[cfg(feature = "sync")]
 impl<F> Observer<F>
 where
     F: Send + Sync + 'static,
@@ -135,7 +136,24 @@ where
     }
 }
 
-#[cfg(not(target_family = "wasm"))]
+#[cfg(not(feature = "sync"))]
+impl<F> Observer<F>
+where
+    F: 'static,
+{
+    pub fn subscribe(&self, callback: F) -> Subscription {
+        let mut rng = fastrand::Rng::new();
+        let id = rng.usize(0..usize::MAX);
+        let origin = Origin::from(id);
+        self.subscribe_with(origin.clone(), callback);
+        Arc::new(Cancel {
+            id: origin,
+            inner: Arc::downgrade(&self.inner()),
+        })
+    }
+}
+
+#[cfg(feature = "sync")]
 impl<F> Default for Observer<F>
 where
     F: Send + Sync + 'static,
@@ -145,7 +163,7 @@ where
     }
 }
 
-#[cfg(target_family = "wasm")]
+#[cfg(not(feature = "sync"))]
 impl<F> Default for Observer<F>
 where
     F: 'static,
@@ -203,6 +221,7 @@ impl<F> Node<F> {
     }
 }
 
+#[cfg(feature = "sync")]
 struct Cancel<F>
 where
     F: Send + Sync + 'static,
@@ -211,9 +230,31 @@ where
     inner: Weak<Inner<F>>,
 }
 
+#[cfg(feature = "sync")]
 impl<F> Drop for Cancel<F>
 where
     F: Send + Sync + 'static,
+{
+    fn drop(&mut self) {
+        if let Some(inner) = self.inner.upgrade() {
+            inner.remove(&self.id);
+        }
+    }
+}
+
+#[cfg(not(feature = "sync"))]
+struct Cancel<F>
+where
+    F: 'static,
+{
+    id: Origin,
+    inner: Weak<Inner<F>>,
+}
+
+#[cfg(not(feature = "sync"))]
+impl<F> Drop for crate::observer::Cancel<F>
+where
+    F: 'static,
 {
     fn drop(&mut self) {
         if let Some(inner) = self.inner.upgrade() {
@@ -228,13 +269,22 @@ where
 /// If implicit callback unsubscribe on drop is undesired, this structure can be cast [into](Subscription::into)
 /// [SubscriptionId] which is an identifier of the same subscription, which in turn must be used
 /// manually via [Observer::unsubscribe] to perform usubscribe.
+#[cfg(feature = "sync")]
 pub type Subscription = Arc<dyn Drop + Send + Sync + 'static>;
+
+/// Subscription handle returned by [Observer::subscribe] methods, which will unsubscribe corresponding
+/// callback when dropped.
+///
+/// If implicit callback unsubscribe on drop is undesired, this structure can be cast [into](Subscription::into)
+/// [SubscriptionId] which is an identifier of the same subscription, which in turn must be used
+/// manually via [Observer::unsubscribe] to perform usubscribe.
+#[cfg(not(feature = "sync"))]
+pub type Subscription = Arc<dyn Drop + 'static>;
 
 #[cfg(test)]
 mod test {
     use std::sync::atomic::{AtomicI32, AtomicU32, Ordering};
     use std::sync::Arc;
-    use std::thread::spawn;
 
     use crate::observer::Observer;
 
@@ -286,6 +336,7 @@ mod test {
     }
 
     #[test]
+    #[cfg(feature = "sync")]
     fn multi_threading() {
         let o: Observer<Box<dyn Fn(u32) + Send + Sync + 'static>> = Observer::new();
 
@@ -297,7 +348,7 @@ mod test {
         let b = s2_state.clone();
         let sub2 = o.subscribe(Box::new(move |v| b.store(v, Ordering::Release)));
 
-        let handle = spawn(move || {
+        let handle = std::thread::spawn(move || {
             o.trigger(|fun| fun(1));
             drop(sub1);
             drop(sub2);

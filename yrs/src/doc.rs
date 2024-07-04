@@ -226,7 +226,7 @@ impl Doc {
     /// commit.
     ///
     /// Returns a subscription, which will unsubscribe function when dropped.
-    #[cfg(not(target_family = "wasm"))]
+    #[cfg(feature = "sync")]
     pub fn observe_update_v1<F>(&self, f: F) -> Result<Subscription, BorrowMutError>
     where
         F: Fn(&TransactionMut, &UpdateEvent) + Send + Sync + 'static,
@@ -241,8 +241,24 @@ impl Doc {
     /// necessary or passed to remote peers right away. This callback is triggered on function
     /// commit.
     ///
+    /// Returns a subscription, which will unsubscribe function when dropped.
+    #[cfg(not(feature = "sync"))]
+    pub fn observe_update_v1<F>(&self, f: F) -> Result<Subscription, BorrowMutError>
+    where
+        F: Fn(&TransactionMut, &UpdateEvent) + 'static,
+    {
+        let mut r = self.store.try_borrow_mut()?;
+        let events = r.events.get_or_init();
+        Ok(events.update_v1_events.subscribe(Box::new(f)))
+    }
+
+    /// Subscribe callback function for any changes performed within transaction scope. These
+    /// changes are encoded using lib0 v1 encoding and can be decoded using [Update::decode_v1] if
+    /// necessary or passed to remote peers right away. This callback is triggered on function
+    /// commit.
+    ///
     /// Provided `key` will be used to identify a subscription, which will be used to unsubscribe.
-    #[cfg(not(target_family = "wasm"))]
+    #[cfg(feature = "sync")]
     pub fn observe_update_v1_with<K, F>(&self, key: K, f: F) -> Result<(), BorrowMutError>
     where
         K: Into<Origin>,
@@ -262,7 +278,7 @@ impl Doc {
     /// commit.
     ///
     /// Provided `key` will be used to identify a subscription, which will be used to unsubscribe.
-    #[cfg(target_family = "wasm")]
+    #[cfg(not(feature = "sync"))]
     pub fn observe_update_v1_with<K, F>(&self, key: K, f: F) -> Result<(), BorrowMutError>
     where
         K: Into<Origin>,
@@ -291,7 +307,7 @@ impl Doc {
     /// commit.
     ///
     /// Returns a subscription, which will unsubscribe function when dropped.
-    #[cfg(not(target_family = "wasm"))]
+    #[cfg(feature = "sync")]
     pub fn observe_update_v2<F>(&self, f: F) -> Result<Subscription, BorrowMutError>
     where
         F: Fn(&TransactionMut, &UpdateEvent) + Send + Sync + 'static,
@@ -306,8 +322,24 @@ impl Doc {
     /// necessary or passed to remote peers right away. This callback is triggered on function
     /// commit.
     ///
+    /// Returns a subscription, which will unsubscribe function when dropped.
+    #[cfg(not(feature = "sync"))]
+    pub fn observe_update_v2<F>(&self, f: F) -> Result<Subscription, BorrowMutError>
+    where
+        F: Fn(&TransactionMut, &UpdateEvent) + 'static,
+    {
+        let mut r = self.store.try_borrow_mut()?;
+        let events = r.events.get_or_init();
+        Ok(events.update_v2_events.subscribe(Box::new(f)))
+    }
+
+    /// Subscribe callback function for any changes performed within transaction scope. These
+    /// changes are encoded using lib0 v2 encoding and can be decoded using [Update::decode_v2] if
+    /// necessary or passed to remote peers right away. This callback is triggered on function
+    /// commit.
+    ///
     /// Provided `key` will be used to identify a subscription, which will be used to unsubscribe.
-    #[cfg(not(target_family = "wasm"))]
+    #[cfg(feature = "sync")]
     pub fn observe_update_v2_with<K, F>(&self, key: K, f: F) -> Result<(), BorrowMutError>
     where
         K: Into<Origin>,
@@ -327,7 +359,7 @@ impl Doc {
     /// commit.
     ///
     /// Provided `key` will be used to identify a subscription, which will be used to unsubscribe.
-    #[cfg(target_family = "wasm")]
+    #[cfg(not(feature = "sync"))]
     pub fn observe_update_v2_with<K, F>(&self, key: K, f: F) -> Result<(), BorrowMutError>
     where
         K: Into<Origin>,
@@ -352,7 +384,7 @@ impl Doc {
 
     /// Subscribe callback function to updates on the `Doc`. The callback will receive state updates and
     /// deletions when a document transaction is committed.
-    #[cfg(not(target_family = "wasm"))]
+    #[cfg(feature = "sync")]
     pub fn observe_transaction_cleanup<F>(&self, f: F) -> Result<Subscription, BorrowMutError>
     where
         F: Fn(&TransactionMut, &TransactionCleanupEvent) + Send + Sync + 'static,
@@ -364,7 +396,19 @@ impl Doc {
 
     /// Subscribe callback function to updates on the `Doc`. The callback will receive state updates and
     /// deletions when a document transaction is committed.
-    #[cfg(not(target_family = "wasm"))]
+    #[cfg(not(feature = "sync"))]
+    pub fn observe_transaction_cleanup<F>(&self, f: F) -> Result<Subscription, BorrowMutError>
+    where
+        F: Fn(&TransactionMut, &TransactionCleanupEvent) + 'static,
+    {
+        let mut r = self.store.try_borrow_mut()?;
+        let events = r.events.get_or_init();
+        Ok(events.transaction_cleanup_events.subscribe(Box::new(f)))
+    }
+
+    /// Subscribe callback function to updates on the `Doc`. The callback will receive state updates and
+    /// deletions when a document transaction is committed.
+    #[cfg(feature = "sync")]
     pub fn observe_transaction_cleanup_with<K, F>(&self, key: K, f: F) -> Result<(), BorrowMutError>
     where
         K: Into<Origin>,
@@ -380,7 +424,7 @@ impl Doc {
 
     /// Subscribe callback function to updates on the `Doc`. The callback will receive state updates and
     /// deletions when a document transaction is committed.
-    #[cfg(target_family = "wasm")]
+    #[cfg(not(feature = "sync"))]
     pub fn observe_transaction_cleanup_with<K, F>(&self, key: K, f: F) -> Result<(), BorrowMutError>
     where
         K: Into<Origin>,
@@ -403,7 +447,7 @@ impl Doc {
         Ok(events.transaction_cleanup_events.unsubscribe(&key.into()))
     }
 
-    #[cfg(not(target_family = "wasm"))]
+    #[cfg(feature = "sync")]
     pub fn observe_after_transaction<F>(&self, f: F) -> Result<Subscription, BorrowMutError>
     where
         F: Fn(&mut TransactionMut) + Send + Sync + 'static,
@@ -413,7 +457,7 @@ impl Doc {
         Ok(events.after_transaction_events.subscribe(Box::new(f)))
     }
 
-    #[cfg(not(target_family = "wasm"))]
+    #[cfg(feature = "sync")]
     pub fn observe_after_transaction_with<K, F>(&self, key: K, f: F) -> Result<(), BorrowMutError>
     where
         K: Into<Origin>,
@@ -427,7 +471,7 @@ impl Doc {
         Ok(())
     }
 
-    #[cfg(target_family = "wasm")]
+    #[cfg(not(feature = "sync"))]
     pub fn observe_after_transaction_with<K, F>(&self, key: K, f: F) -> Result<(), BorrowMutError>
     where
         K: Into<Origin>,
@@ -452,7 +496,7 @@ impl Doc {
 
     /// Subscribe callback function, that will be called whenever a subdocuments inserted in this
     /// [Doc] will request a load.
-    #[cfg(not(target_family = "wasm"))]
+    #[cfg(feature = "sync")]
     pub fn observe_subdocs<F>(&self, f: F) -> Result<Subscription, BorrowMutError>
     where
         F: Fn(&TransactionMut, &SubdocsEvent) + Send + Sync + 'static,
@@ -464,7 +508,19 @@ impl Doc {
 
     /// Subscribe callback function, that will be called whenever a subdocuments inserted in this
     /// [Doc] will request a load.
-    #[cfg(not(target_family = "wasm"))]
+    #[cfg(not(feature = "sync"))]
+    pub fn observe_subdocs<F>(&self, f: F) -> Result<Subscription, BorrowMutError>
+    where
+        F: Fn(&TransactionMut, &SubdocsEvent) + 'static,
+    {
+        let mut r = self.store.try_borrow_mut()?;
+        let events = r.events.get_or_init();
+        Ok(events.subdocs_events.subscribe(Box::new(f)))
+    }
+
+    /// Subscribe callback function, that will be called whenever a subdocuments inserted in this
+    /// [Doc] will request a load.
+    #[cfg(feature = "sync")]
     pub fn observe_subdocs_with<K, F>(&self, key: K, f: F) -> Result<(), BorrowMutError>
     where
         K: Into<Origin>,
@@ -480,7 +536,7 @@ impl Doc {
 
     /// Subscribe callback function, that will be called whenever a subdocuments inserted in this
     /// [Doc] will request a load.
-    #[cfg(target_family = "wasm")]
+    #[cfg(not(feature = "sync"))]
     pub fn observe_subdocs_with<K, F>(&self, key: K, f: F) -> Result<(), BorrowMutError>
     where
         K: Into<Origin>,
@@ -504,7 +560,7 @@ impl Doc {
     }
 
     /// Subscribe callback function, that will be called whenever a [DocRef::destroy] has been called.
-    #[cfg(not(target_family = "wasm"))]
+    #[cfg(feature = "sync")]
     pub fn observe_destroy<F>(&self, f: F) -> Result<Subscription, BorrowMutError>
     where
         F: Fn(&TransactionMut, &Doc) + Send + Sync + 'static,
@@ -515,7 +571,18 @@ impl Doc {
     }
 
     /// Subscribe callback function, that will be called whenever a [DocRef::destroy] has been called.
-    #[cfg(not(target_family = "wasm"))]
+    #[cfg(not(feature = "sync"))]
+    pub fn observe_destroy<F>(&self, f: F) -> Result<Subscription, BorrowMutError>
+    where
+        F: Fn(&TransactionMut, &Doc) + 'static,
+    {
+        let mut r = self.store.try_borrow_mut()?;
+        let events = r.events.get_or_init();
+        Ok(events.destroy_events.subscribe(Box::new(f)))
+    }
+
+    /// Subscribe callback function, that will be called whenever a [DocRef::destroy] has been called.
+    #[cfg(feature = "sync")]
     pub fn observe_destroy_with<K, F>(&self, key: K, f: F) -> Result<(), BorrowMutError>
     where
         K: Into<Origin>,
@@ -539,7 +606,7 @@ impl Doc {
     }
 
     /// Subscribe callback function, that will be called whenever a [DocRef::destroy] has been called.
-    #[cfg(target_family = "wasm")]
+    #[cfg(not(feature = "sync"))]
     pub fn observe_destroy_with<K, F>(&self, key: K, f: F) -> Result<(), BorrowMutError>
     where
         K: Into<Origin>,
@@ -923,22 +990,22 @@ impl Transact for Doc {
 #[derive(Error, Debug)]
 pub enum TransactionAcqError {
     #[error("Failed to acquire read-only transaction. Drop read-write transaction and retry.")]
-    SharedAcqFailed(BorrowError),
+    SharedAcqFailed,
     #[error("Failed to acquire read-write transaction. Drop other transactions and retry.")]
-    ExclusiveAcqFailed(BorrowMutError),
+    ExclusiveAcqFailed,
     #[error("All references to a parent document containing this structure has been dropped.")]
     DocumentDropped,
 }
 
 impl From<BorrowError> for TransactionAcqError {
-    fn from(e: BorrowError) -> Self {
-        TransactionAcqError::SharedAcqFailed(e)
+    fn from(_: BorrowError) -> Self {
+        TransactionAcqError::SharedAcqFailed
     }
 }
 
 impl From<BorrowMutError> for TransactionAcqError {
-    fn from(e: BorrowMutError) -> Self {
-        TransactionAcqError::ExclusiveAcqFailed(e)
+    fn from(_: BorrowMutError) -> Self {
+        TransactionAcqError::ExclusiveAcqFailed
     }
 }
 

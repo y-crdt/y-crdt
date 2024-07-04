@@ -464,27 +464,27 @@ impl<'doc> Iterator for SubdocGuids<'doc> {
     }
 }
 
-#[cfg(not(target_family = "wasm"))]
+#[cfg(feature = "sync")]
 pub type TransactionCleanupFn =
     Box<dyn Fn(&TransactionMut, &TransactionCleanupEvent) + Send + Sync + 'static>;
-#[cfg(not(target_family = "wasm"))]
+#[cfg(feature = "sync")]
 pub type AfterTransactionFn = Box<dyn Fn(&mut TransactionMut) + Send + Sync + 'static>;
-#[cfg(not(target_family = "wasm"))]
+#[cfg(feature = "sync")]
 pub type UpdateFn = Box<dyn Fn(&TransactionMut, &UpdateEvent) + Send + Sync + 'static>;
-#[cfg(not(target_family = "wasm"))]
+#[cfg(feature = "sync")]
 pub type SubdocsFn = Box<dyn Fn(&TransactionMut, &SubdocsEvent) + Send + Sync + 'static>;
-#[cfg(not(target_family = "wasm"))]
+#[cfg(feature = "sync")]
 pub type DestroyFn = Box<dyn Fn(&TransactionMut, &Doc) + Send + Sync + 'static>;
 
-#[cfg(target_family = "wasm")]
+#[cfg(not(feature = "sync"))]
 pub type TransactionCleanupFn = Box<dyn Fn(&TransactionMut, &TransactionCleanupEvent) + 'static>;
-#[cfg(target_family = "wasm")]
+#[cfg(not(feature = "sync"))]
 pub type AfterTransactionFn = Box<dyn Fn(&mut TransactionMut) + 'static>;
-#[cfg(target_family = "wasm")]
+#[cfg(not(feature = "sync"))]
 pub type UpdateFn = Box<dyn Fn(&TransactionMut, &UpdateEvent) + 'static>;
-#[cfg(target_family = "wasm")]
+#[cfg(not(feature = "sync"))]
 pub type SubdocsFn = Box<dyn Fn(&TransactionMut, &SubdocsEvent) + 'static>;
-#[cfg(target_family = "wasm")]
+#[cfg(not(feature = "sync"))]
 pub type DestroyFn = Box<dyn Fn(&TransactionMut, &Doc) + 'static>;
 
 #[derive(Default)]

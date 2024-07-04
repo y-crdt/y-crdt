@@ -12,6 +12,7 @@ readme = "./README.md"
 
 [features]
 weak = []
+sync = []
 
 [dependencies]
 thiserror = "1"

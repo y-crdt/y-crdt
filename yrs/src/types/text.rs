@@ -1,6 +1,4 @@
-use crate::block::{
-    EmbedPrelim, Item, ItemContent, ItemPosition, ItemPtr, Prelim, SplittableString, Unused,
-};
+use crate::block::{EmbedPrelim, Item, ItemContent, ItemPosition, ItemPtr, Prelim, Unused};
 use crate::transaction::TransactionMut;
 use crate::types::{
     AsPrelim, Attrs, Branch, BranchPtr, Delta, Out, Path, RootRef, SharedRef, TypePtr, TypeRef,

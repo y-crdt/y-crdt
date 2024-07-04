@@ -10,6 +10,12 @@
 //!
 //! A **Document** is the access point to create shared types, and to listen to update events.
 //!
+//! # Features
+//!
+//! - `weak` this feature enables weak references and quotations (see: [crate::WeakRef]).
+//! - `sync` this feature modifies observers callback constraints to use `Send` and `Sync` traits.
+//!   These are required when using yrs features in multithreaded environments.
+//!
 //! # Quick start
 //!
 //! Let's discuss basic features of Yrs. We'll introduce these concepts starting from
