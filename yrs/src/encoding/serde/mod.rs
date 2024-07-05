@@ -7,8 +7,10 @@ pub use ser::to_any;
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::any;
     use crate::any::Any;
     use serde::{Deserialize, Serialize};
+    use serde_json::json;
     use std::collections::HashMap;
 
     fn roundtrip(any: &Any) -> Any {
@@ -214,5 +216,57 @@ mod test {
             any,
             serde_json::from_str::<Any>(serde_json::to_string(&any).unwrap().as_str()).unwrap()
         );
+    }
+
+    #[test]
+    fn any_is_serde_json_convertible() {
+        let any = any!({
+            "bool": true,
+            "int": 1,
+            "negativeInt": -1,
+            "realNumber": -123.2387f64,
+            "null": Any::Null,
+            "map": {
+                "bool": true,
+                "int": 1,
+                "negativeInt": -1,
+                "realNumber": -123.2387f64,
+                "null": Any::Null
+            },
+            "key6":[
+                true,
+                1,
+                -1,
+                -123.2387f64,
+                Any::Null
+            ]
+        });
+
+        let expected = json!({
+            "bool": true,
+            "int": 1,
+            "negativeInt": -1,
+            "realNumber": -123.2387f64,
+            "null": Any::Null,
+            "map": {
+                "bool": true,
+                "int": 1,
+                "negativeInt": -1,
+                "realNumber": -123.2387f64,
+                "null": Any::Null
+            },
+            "key6":[
+                true,
+                1,
+                -1,
+                -123.2387f64,
+                Any::Null
+            ]
+        });
+
+        let json = serde_json::to_value(&any).unwrap();
+        assert_eq!(json, expected);
+        let any2: Any = serde_json::from_value(json).unwrap();
+        assert_eq!(any, any2);
     }
 }

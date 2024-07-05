@@ -22,7 +22,16 @@ impl Serialize for Any {
             Any::Null => serializer.serialize_none(),
             Any::Undefined => serializer.serialize_none(),
             Any::Bool(value) => serializer.serialize_bool(*value),
-            Any::Number(value) => serializer.serialize_f64(*value),
+            Any::Number(value) => {
+                let value = *value;
+                // since JS doesn't clearly recognise difference between integers and floats,
+                // we check if it's possible to perform lossless conversion to i64
+                if value as i64 as f64 == value {
+                    serializer.serialize_i64(value as i64)
+                } else {
+                    serializer.serialize_f64(value)
+                }
+            }
             Any::BigInt(value) => serializer.serialize_i64(*value),
             Any::String(value) => serializer.serialize_str(value.as_ref()),
             Any::Array(values) => {
@@ -509,7 +518,7 @@ mod test {
     fn test_serialize_any_to_array() {
         assert_eq!(
             serde_json::to_string(&Any::from(vec![Any::from(true), Any::from(1)])).unwrap(),
-            "[true,1.0]"
+            "[true,1]"
         );
     }
 
@@ -521,7 +530,7 @@ mod test {
                 ("key2".into(), Any::from(1))
             ])))
             .unwrap(),
-            json!({"key1":true, "key2":1.0})
+            json!({"key1":true, "key2":1})
         );
     }
 
@@ -544,7 +553,7 @@ mod test {
                 )
             ])))
             .unwrap(),
-            json!({"key1": true, "key2":1.0, "key3":{"key4":true, "key5":1.0}, "key6": [true,1.0]})
+            json!({"key1": true, "key2":1, "key3":{"key4":true, "key5":1}, "key6": [true,1]})
         );
     }
 
