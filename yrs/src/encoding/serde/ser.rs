@@ -22,7 +22,13 @@ impl Serialize for Any {
             Any::Null => serializer.serialize_none(),
             Any::Undefined => serializer.serialize_none(),
             Any::Bool(value) => serializer.serialize_bool(*value),
-            Any::Number(value) => serializer.serialize_f64(*value),
+            Any::Number(value) => {
+                if value.fract() == 0.0 {
+                    serializer.serialize_i64(*value as i64)
+                } else {
+                    serializer.serialize_f64(*value)
+                }
+            }
             Any::BigInt(value) => serializer.serialize_i64(*value),
             Any::String(value) => serializer.serialize_str(value.as_ref()),
             Any::Array(values) => {
