@@ -1,4 +1,5 @@
 use crate::encoding::varint::{Signed, SignedVarInt, VarInt};
+use std::any::type_name;
 use std::collections::TryReserveError;
 use thiserror::Error;
 
@@ -18,6 +19,18 @@ pub enum Error {
 
     #[error("JSON parsing error: {0}")]
     InvalidJSON(#[from] serde_json::Error),
+
+    #[error("couldn't deserialize to target type of {0}")]
+    TypeMismatch(&'static str),
+
+    #[error("{0}")]
+    Custom(String),
+}
+
+impl Error {
+    pub fn type_mismatch<T>() -> Self {
+        Error::TypeMismatch(type_name::<T>())
+    }
 }
 
 #[derive(Default)]

@@ -1,10 +1,13 @@
 use crate::block::{EmbedPrelim, ItemContent, ItemPosition, ItemPtr, Prelim};
+use crate::encoding::read::Error;
+use crate::encoding::serde::from_any;
 use crate::transaction::TransactionMut;
 use crate::types::{
     event_keys, AsPrelim, Branch, BranchPtr, DefaultPrelim, Entries, EntryChange, In, Out, Path,
     RootRef, SharedRef, ToJson, TypeRef,
 };
 use crate::*;
+use serde::de::DeserializeOwned;
 use std::borrow::Borrow;
 use std::cell::UnsafeCell;
 use std::collections::{HashMap, HashSet};
@@ -204,6 +207,51 @@ pub trait Map: AsRef<Branch> + Sized {
         }
     }
 
+    /// Tries to update a value stored under a given `key` within current map, if it's different
+    /// from the current one. Returns `true` if the value was updated, `false` otherwise.
+    ///
+    /// The main difference from [Map::insert] is that this method will not insert a new value if
+    /// it's the same as the current one. It's important distinction when dealing with shared types,
+    /// as inserting an element will force previous value to be tombstoned, causing minimal memory
+    /// overhead.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use yrs::{Doc, Map, Transact, WriteTxn};
+    ///
+    /// let doc = Doc::new();
+    /// let mut txn = doc.transact_mut();
+    /// let map = txn.get_or_insert_map("map");
+    ///
+    /// assert!(map.try_update(&mut txn, "key", 1)); // created a new entry
+    /// assert!(!map.try_update(&mut txn, "key", 1)); // unchanged value doesn't trigger inserts...
+    /// assert!(map.try_update(&mut txn, "key", 2)); // ... but changed one does
+    /// ```
+    fn try_update<K, V>(&self, txn: &mut TransactionMut, key: K, value: V) -> bool
+    where
+        K: Into<Arc<str>>,
+        V: Into<Any>,
+    {
+        let key = key.into();
+        let value = value.into();
+        let branch = self.as_ref();
+        if let Some(item) = branch.map.get(&key) {
+            if !item.is_deleted() {
+                if let ItemContent::Any(content) = &item.content {
+                    if let Some(last) = content.last() {
+                        if last == &value {
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
+
+        self.insert(txn, key, value);
+        true
+    }
+
     /// Returns an existing instance of a type stored under a given `key` within current map.
     /// If the given entry was not found, has been deleted or its type is different from expected,
     /// that entry will be reset to a given type and its reference will be returned.
@@ -253,6 +301,71 @@ pub trait Map: AsRef<Branch> + Sized {
     fn get<T: ReadTxn>(&self, txn: &T, key: &str) -> Option<Out> {
         let ptr = BranchPtr::from(self.as_ref());
         ptr.get(txn, key)
+    }
+
+    /// Returns a value stored under a given `key` within current map, deserializing it into expected
+    /// type if found. If value was not found, the `Any::Null` will be substituted and deserialized
+    /// instead (i.e. into instance of `Option` type, if so desired).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use yrs::{Doc, In, Map, MapPrelim, Transact, WriteTxn};
+    ///
+    /// let doc = Doc::new();
+    /// let mut txn = doc.transact_mut();
+    /// let map = txn.get_or_insert_map("map");
+    ///
+    /// // insert a multi-nested shared refs
+    /// let alice = map.insert(&mut txn, "Alice", MapPrelim::from([
+    ///   ("name", In::from("Alice")),
+    ///   ("age", In::from(30)),
+    ///   ("address", MapPrelim::from([
+    ///     ("city", In::from("London")),
+    ///     ("street", In::from("Baker st.")),
+    ///   ]).into())
+    /// ]));
+    ///
+    /// // define strongly typed Rust types
+    ///
+    /// #[derive(Debug, PartialEq, serde::Deserialize)]
+    /// struct Person {
+    ///   name: String,
+    ///   age: u32,
+    ///   address: Option<Address>,
+    /// }
+    ///
+    /// #[derive(Debug, PartialEq, serde::Deserialize)]
+    /// struct Address {
+    ///   city: String,
+    ///   street: String,
+    /// }
+    ///
+    /// // retrieve and deserialize the value across multiple shared refs
+    /// let alice: Person = map.get_as(&txn, "Alice").unwrap();
+    /// assert_eq!(alice, Person {
+    ///   name: "Alice".to_string(),
+    ///   age: 30,
+    ///   address: Some(Address {
+    ///     city: "London".to_string(),
+    ///     street: "Baker st.".to_string(),
+    ///   })
+    /// });
+    ///
+    /// // try to retrieve value that doesn't exist
+    /// let bob: Option<Person> = map.get_as(&txn, "Bob").unwrap();
+    /// assert_eq!(bob, None);
+    /// ```
+    fn get_as<T, V>(&self, txn: &T, key: &str) -> Result<V, Error>
+    where
+        T: ReadTxn,
+        V: DeserializeOwned,
+    {
+        let ptr = BranchPtr::from(self.as_ref());
+        let out = ptr.get(txn, key).unwrap_or(Out::Any(Any::Null));
+        //TODO: we could probably optimize this step by not serializing to intermediate Any value
+        let any = out.to_json(txn);
+        from_any(&any)
     }
 
     /// Checks if an entry with given `key` can be found within current map.
@@ -1073,6 +1186,32 @@ mod test {
         m.insert(&mut txn, 0, "c");
         let m: XmlTextRef = map.get_or_init(&mut txn, "nested");
         assert_eq!(m.get_string(&txn), "c".to_string());
+    }
+
+    #[test]
+    fn try_update() {
+        let doc = Doc::new();
+        let mut txn = doc.transact_mut();
+        let map = txn.get_or_insert_map("map");
+
+        assert!(map.try_update(&mut txn, "key", 1), "new entry");
+        assert_eq!(map.get(&txn, "key"), Some(Out::from(1)));
+
+        assert!(
+            !map.try_update(&mut txn, "key", 1),
+            "unchanged entry shouldn't trigger update"
+        );
+        assert_eq!(map.get(&txn, "key"), Some(Out::from(1)));
+
+        assert!(map.try_update(&mut txn, "key", 2), "entry should change");
+        assert_eq!(map.get(&txn, "key"), Some(Out::from(2)));
+
+        map.remove(&mut txn, "key");
+        assert!(
+            map.try_update(&mut txn, "key", 2),
+            "removed entry should trigger update"
+        );
+        assert_eq!(map.get(&txn, "key"), Some(Out::from(2)));
     }
 
     #[test]

@@ -241,21 +241,17 @@ impl Xml for XmlElementRef {}
 impl XmlFragment for XmlElementRef {}
 impl IndexedSequence for XmlElementRef {}
 
-impl Into<XmlFragmentRef> for XmlElementRef {
-    fn into(self) -> XmlFragmentRef {
-        XmlFragmentRef(self.0)
+impl AsRef<XmlFragmentRef> for XmlElementRef {
+    #[inline]
+    fn as_ref(&self) -> &XmlFragmentRef {
+        unsafe { std::mem::transmute(self) }
     }
 }
 
-impl Into<ArrayRef> for XmlElementRef {
-    fn into(self) -> ArrayRef {
-        ArrayRef::from(self.0)
-    }
-}
-
-impl Into<MapRef> for XmlElementRef {
-    fn into(self) -> MapRef {
-        MapRef::from(self.0)
+impl AsRef<ArrayRef> for XmlElementRef {
+    #[inline]
+    fn as_ref(&self) -> &ArrayRef {
+        unsafe { std::mem::transmute(self) }
     }
 }
 
@@ -572,9 +568,10 @@ impl IndexedSequence for XmlTextRef {}
 #[cfg(feature = "weak")]
 impl crate::Quotable for XmlTextRef {}
 
-impl Into<TextRef> for XmlTextRef {
-    fn into(self) -> TextRef {
-        TextRef::from(self.0)
+impl AsRef<TextRef> for XmlTextRef {
+    #[inline]
+    fn as_ref(&self) -> &TextRef {
+        unsafe { std::mem::transmute(self) }
     }
 }
 
@@ -791,9 +788,16 @@ impl IndexedSequence for XmlFragmentRef {}
 
 impl XmlFragmentRef {
     pub fn parent(&self) -> Option<XmlOut> {
-        let item = self.as_ref().item?;
+        let item = self.0.item?;
         let parent = item.parent.as_branch()?;
         XmlOut::try_from(*parent).ok()
+    }
+}
+
+impl AsRef<ArrayRef> for XmlFragmentRef {
+    #[inline]
+    fn as_ref(&self) -> &ArrayRef {
+        unsafe { std::mem::transmute(self) }
     }
 }
 
@@ -938,7 +942,7 @@ impl Map for XmlHookRef {}
 
 impl ToJson for XmlHookRef {
     fn to_json<T: ReadTxn>(&self, txn: &T) -> Any {
-        let map: MapRef = self.clone().into();
+        let map: &MapRef = self.as_ref();
         map.to_json(txn)
     }
 }
@@ -962,9 +966,10 @@ impl From<BranchPtr> for XmlHookRef {
     }
 }
 
-impl Into<MapRef> for XmlHookRef {
-    fn into(self) -> MapRef {
-        MapRef::from(self.0)
+impl AsRef<MapRef> for XmlHookRef {
+    #[inline]
+    fn as_ref(&self) -> &MapRef {
+        unsafe { std::mem::transmute(self) }
     }
 }
 
@@ -1861,7 +1866,7 @@ mod test {
         let update = Update::decode_v1(data).unwrap();
         let doc = Doc::new();
         let txt = doc.get_or_insert_text("test");
-        let txt = XmlTextRef::from(BranchPtr::from(txt.as_ref()));
+        let txt: &XmlTextRef = txt.as_ref();
         let mut txn = doc.transact_mut();
 
         txn.apply_update(update);
@@ -1881,7 +1886,7 @@ mod test {
         let update = Update::decode_v2(data).unwrap();
         let doc = Doc::new();
         let txt = doc.get_or_insert_text("test");
-        let txt = XmlTextRef::from(BranchPtr::from(txt.as_ref()));
+        let txt: &XmlTextRef = txt.as_ref();
         let mut txn = doc.transact_mut();
 
         txn.apply_update(update);
