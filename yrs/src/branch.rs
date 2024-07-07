@@ -674,7 +674,7 @@ impl<'a, T: ReadTxn> Iterator for Iter<'a, T> {
 /// let txt2 = root.get_or_create(&mut doc2.transact_mut());
 ///
 /// // instances of TextRef point to different heap objects
-/// assert_ne!(txt1.as_ref() as *const _, txt2.as_ref() as *const _);
+/// assert_ne!(&txt1 as *const _, &txt2 as *const _);
 ///
 /// // logical descriptors of both TextRef are the same as they refer to the
 /// // same logical entity
