@@ -245,6 +245,16 @@ typedef struct YSubscription {} YSubscription;
  */
 #define ERR_NOT_ENOUGH_MEMORY 7
 
+/**
+ * Error code: conversion attempt to specific Rust type was not possible.
+ */
+#define ERR_TYPE_MISMATCH 8
+
+/**
+ * Error code: miscallaneous error comming from serde, not covered by other error codes.
+ */
+#define ERR_CUSTOM 9
+
 #define YCHANGE_ADD 1
 
 #define YCHANGE_RETAIN 0
