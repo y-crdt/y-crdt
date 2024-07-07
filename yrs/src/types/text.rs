@@ -101,9 +101,10 @@ impl IndexedSequence for TextRef {}
 #[cfg(feature = "weak")]
 impl crate::Quotable for TextRef {}
 
-impl Into<XmlTextRef> for TextRef {
-    fn into(self) -> XmlTextRef {
-        XmlTextRef::from(self.0)
+impl AsRef<XmlTextRef> for TextRef {
+    #[inline]
+    fn as_ref(&self) -> &XmlTextRef {
+        unsafe { std::mem::transmute(self) }
     }
 }
 
@@ -117,7 +118,7 @@ impl GetString for TextRef {
     /// render formatting attributes or embedded content. In order to retrieve it, use
     /// [TextRef::diff] method.
     fn get_string<T: ReadTxn>(&self, _txn: &T) -> String {
-        let mut start = self.as_ref().start;
+        let mut start = self.0.start;
         let mut s = String::new();
         while let Some(item) = start.as_deref() {
             if !item.is_deleted() {

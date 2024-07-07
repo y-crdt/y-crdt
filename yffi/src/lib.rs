@@ -1155,6 +1155,12 @@ pub const ERR_CODE_OTHER: u8 = 6;
 /// Error code: not enough memory to perform an operation.
 pub const ERR_NOT_ENOUGH_MEMORY: u8 = 7;
 
+/// Error code: conversion attempt to specific Rust type was not possible.
+pub const ERR_TYPE_MISMATCH: u8 = 8;
+
+/// Error code: miscallaneous error comming from serde, not covered by other error codes.
+pub const ERR_CUSTOM: u8 = 9;
+
 fn err_code(e: Error) -> u8 {
     match e {
         Error::InvalidVarInt => ERR_CODE_VAR_INT,
@@ -1162,6 +1168,8 @@ fn err_code(e: Error) -> u8 {
         Error::UnexpectedValue => ERR_CODE_UNEXPECTED_VALUE,
         Error::InvalidJSON(_) => ERR_CODE_INVALID_JSON,
         Error::NotEnoughMemory(_) => ERR_NOT_ENOUGH_MEMORY,
+        Error::TypeMismatch(_) => ERR_TYPE_MISMATCH,
+        Error::Custom(_) => ERR_CUSTOM,
     }
 }
 
