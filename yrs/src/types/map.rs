@@ -326,7 +326,7 @@ pub trait Map: AsRef<Branch> + Sized {
     ///   ]).into())
     /// ]));
     ///
-    /// // define strongly typed Rust types
+    /// // define Rust types to map from the shared refs
     ///
     /// #[derive(Debug, PartialEq, serde::Deserialize)]
     /// struct Person {
@@ -622,12 +622,13 @@ mod test {
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encoder, EncoderV1};
     use crate::{
-        any, Any, Array, ArrayPrelim, ArrayRef, Doc, GetString, Map, MapPrelim, MapRef, Observable,
-        StateVector, Text, TextRef, Transact, Update, WriteTxn, XmlFragment, XmlFragmentRef,
-        XmlTextPrelim, XmlTextRef,
+        any, Any, Array, ArrayPrelim, ArrayRef, Doc, GetString, In, Map, MapPrelim, MapRef,
+        Observable, StateVector, Text, TextRef, Transact, Update, WriteTxn, XmlFragment,
+        XmlFragmentRef, XmlTextPrelim, XmlTextRef,
     };
     use arc_swap::ArcSwapOption;
     use fastrand::Rng;
+    use serde::Deserialize;
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::{Arc, Mutex};
@@ -1212,6 +1213,83 @@ mod test {
             "removed entry should trigger update"
         );
         assert_eq!(map.get(&txn, "key"), Some(Out::from(2)));
+    }
+
+    #[test]
+    fn get_as() {
+        #[derive(Debug, PartialEq, Deserialize)]
+        struct Order {
+            shipment_address: String,
+            items: HashMap<String, OrderItem>,
+            #[serde(default)]
+            comment: Option<String>,
+        }
+
+        #[derive(Debug, PartialEq, Deserialize)]
+        struct OrderItem {
+            name: String,
+            price: f64,
+            quantity: u32,
+        }
+
+        let doc = Doc::new();
+        let mut txn = doc.transact_mut();
+        let map = txn.get_or_insert_map("map");
+
+        map.insert(
+            &mut txn,
+            "orders",
+            ArrayPrelim::from([In::from(MapPrelim::from([
+                ("shipment_address", In::from("123 Main St")),
+                (
+                    "items",
+                    In::from(MapPrelim::from([
+                        (
+                            "item1",
+                            In::from(MapPrelim::from([
+                                ("name", In::from("item1")),
+                                ("price", In::from(1.99)),
+                                ("quantity", In::from(2)),
+                            ])),
+                        ),
+                        (
+                            "item2",
+                            In::from(MapPrelim::from([
+                                ("name", In::from("item2")),
+                                ("price", In::from(2.99)),
+                                ("quantity", In::from(1)),
+                            ])),
+                        ),
+                    ])),
+                ),
+            ]))]),
+        );
+
+        let expected = Order {
+            comment: None,
+            shipment_address: "123 Main St".to_string(),
+            items: HashMap::from([
+                (
+                    "item1".to_string(),
+                    OrderItem {
+                        name: "item1".to_string(),
+                        price: 1.99,
+                        quantity: 2,
+                    },
+                ),
+                (
+                    "item2".to_string(),
+                    OrderItem {
+                        name: "item2".to_string(),
+                        price: 2.99,
+                        quantity: 1,
+                    },
+                ),
+            ]),
+        };
+
+        let actual: Vec<Order> = map.get_as(&txn, "orders").unwrap();
+        assert_eq!(actual, vec![expected]);
     }
 
     #[test]
