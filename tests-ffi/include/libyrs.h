@@ -1123,13 +1123,13 @@ uint8_t ydoc_should_load(YDoc *doc);
  */
 uint8_t ydoc_auto_load(YDoc *doc);
 
-YSubscription *ydoc_observe_updates_v1(YDoc *doc,
-                                       void *state,
-                                       void (*cb)(void*, uint32_t, const char*));
+YSubscription *ydoc_observe_updates_v1(YDoc *doc, void *state, void (*cb)(void*,
+                                                                          uint32_t,
+                                                                          const char*));
 
-YSubscription *ydoc_observe_updates_v2(YDoc *doc,
-                                       void *state,
-                                       void (*cb)(void*, uint32_t, const char*));
+YSubscription *ydoc_observe_updates_v2(YDoc *doc, void *state, void (*cb)(void*,
+                                                                          uint32_t,
+                                                                          const char*));
 
 YSubscription *ydoc_observe_after_transaction(YDoc *doc,
                                               void *state,
@@ -2154,9 +2154,8 @@ void yunobserve(YSubscription *subscription);
  * Returns a subscription ID which can be then used to unsubscribe this callback by using
  * `yunobserve` function.
  */
-YSubscription *ytext_observe(const Branch *txt,
-                             void *state,
-                             void (*cb)(void*, const struct YTextEvent*));
+YSubscription *ytext_observe(const Branch *txt, void *state, void (*cb)(void*,
+                                                                        const struct YTextEvent*));
 
 /**
  * Subscribes a given callback function `cb` to changes made by this `YMap` instance. Callbacks
@@ -2164,9 +2163,8 @@ YSubscription *ytext_observe(const Branch *txt,
  * Returns a subscription ID which can be then used to unsubscribe this callback by using
  * `yunobserve` function.
  */
-YSubscription *ymap_observe(const Branch *map,
-                            void *state,
-                            void (*cb)(void*, const struct YMapEvent*));
+YSubscription *ymap_observe(const Branch *map, void *state, void (*cb)(void*,
+                                                                       const struct YMapEvent*));
 
 /**
  * Subscribes a given callback function `cb` to changes made by this `YArray` instance. Callbacks
@@ -2206,9 +2204,9 @@ YSubscription *yxmltext_observe(const Branch *xml,
  * Returns a subscription ID which can be then used to unsubscribe this callback by using
  * `yunobserve` function.
  */
-YSubscription *yobserve_deep(Branch *ytype,
-                             void *state,
-                             void (*cb)(void*, uint32_t, const struct YEvent*));
+YSubscription *yobserve_deep(Branch *ytype, void *state, void (*cb)(void*,
+                                                                    uint32_t,
+                                                                    const struct YEvent*));
 
 /**
  * Returns a pointer to a shared collection, which triggered passed event `e`.
