@@ -1,5 +1,7 @@
 use crate::block::{EmbedPrelim, ItemContent, ItemPtr, Prelim, Unused};
 use crate::block_iter::BlockIter;
+use crate::encoding::read::Error;
+use crate::encoding::serde::from_any;
 use crate::moving::StickyIndex;
 use crate::transaction::TransactionMut;
 use crate::types::{
@@ -7,6 +9,7 @@ use crate::types::{
     RootRef, SharedRef, ToJson, TypeRef,
 };
 use crate::{Any, Assoc, DeepObservable, IndexedSequence, Observable, ReadTxn, ID};
+use serde::de::DeserializeOwned;
 use std::borrow::Borrow;
 use std::cell::UnsafeCell;
 use std::collections::HashSet;
@@ -260,6 +263,70 @@ pub trait Array: AsRef<Branch> + Sized {
         } else {
             None
         }
+    }
+
+    /// Returns a value stored under a given `index` within current map, deserializing it into
+    /// expected type if found. If value was not found, the `Any::Null` will be substituted and
+    /// deserialized instead (i.e. into instance of `Option` type, if so desired).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use yrs::{Doc, In, Array, MapPrelim, Transact, WriteTxn};
+    ///
+    /// let doc = Doc::new();
+    /// let mut txn = doc.transact_mut();
+    /// let array = txn.get_or_insert_array("array");
+    ///
+    /// // insert a multi-nested shared refs
+    /// let alice = array.insert(&mut txn, 0, MapPrelim::from([
+    ///   ("name", In::from("Alice")),
+    ///   ("age", In::from(30)),
+    ///   ("address", MapPrelim::from([
+    ///     ("city", In::from("London")),
+    ///     ("street", In::from("Baker st.")),
+    ///   ]).into())
+    /// ]));
+    ///
+    /// // define Rust types to map from the shared refs
+    ///
+    /// #[derive(Debug, PartialEq, serde::Deserialize)]
+    /// struct Person {
+    ///   name: String,
+    ///   age: u32,
+    ///   address: Option<Address>,
+    /// }
+    ///
+    /// #[derive(Debug, PartialEq, serde::Deserialize)]
+    /// struct Address {
+    ///   city: String,
+    ///   street: String,
+    /// }
+    ///
+    /// // retrieve and deserialize the value across multiple shared refs
+    /// let alice: Person = array.get_as(&txn, 0).unwrap();
+    /// assert_eq!(alice, Person {
+    ///   name: "Alice".to_string(),
+    ///   age: 30,
+    ///   address: Some(Address {
+    ///     city: "London".to_string(),
+    ///     street: "Baker st.".to_string(),
+    ///   })
+    /// });
+    ///
+    /// // try to retrieve value that doesn't exist
+    /// let bob: Option<Person> = array.get_as(&txn, 1).unwrap();
+    /// assert_eq!(bob, None);
+    /// ```
+    fn get_as<T, V>(&self, txn: &T, index: u32) -> Result<V, Error>
+    where
+        T: ReadTxn,
+        V: DeserializeOwned,
+    {
+        let out = self.get(txn, index).unwrap_or(Out::Any(Any::Null));
+        //TODO: we could probably optimize this step by not serializing to intermediate Any value
+        let any = out.to_json(txn);
+        from_any(&any)
     }
 
     /// Moves element found at `source` index into `target` index position. Both indexes refer to a
