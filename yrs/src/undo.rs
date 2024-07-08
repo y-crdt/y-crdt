@@ -35,7 +35,6 @@ use crate::{DeleteSet, Doc, Observer, Transact, TransactionMut, ID};
 /// - [UndoManager::observe_item_popped], which is fired whenever [StackItem] is being from undo
 ///    manager as a result of calling either [UndoManager::undo] or [UndoManager::redo] method.
 #[repr(transparent)]
-#[derive(Clone)]
 pub struct UndoManager<M>(Arc<Inner<M>>);
 
 #[cfg(feature = "sync")]
@@ -553,6 +552,18 @@ where
     /// Are there any undo steps available?
     pub fn can_undo(&self) -> bool {
         !self.0.undo_stack.is_empty()
+    }
+
+    /// Returns a list of [StackItem]s stored within current undo manager responsible for performing
+    /// potential undo operations.
+    pub fn undo_stack(&self) -> &[StackItem<M>] {
+        &self.0.undo_stack.0
+    }
+
+    /// Returns a list of [StackItem]s stored within current undo manager responsible for performing
+    /// potential redo operations.
+    pub fn redo_stack(&self) -> &[StackItem<M>] {
+        &self.0.redo_stack.0
     }
 
     /// Undo last action tracked by current undo manager. Actions (a.k.a. [StackItem]s) are groups
