@@ -265,19 +265,11 @@ where
 
 /// Subscription handle returned by [Observer::subscribe] methods, which will unsubscribe corresponding
 /// callback when dropped.
-///
-/// If implicit callback unsubscribe on drop is undesired, this structure can be cast [into](Subscription::into)
-/// [SubscriptionId] which is an identifier of the same subscription, which in turn must be used
-/// manually via [Observer::unsubscribe] to perform usubscribe.
 #[cfg(feature = "sync")]
 pub type Subscription = Arc<dyn Drop + Send + Sync + 'static>;
 
 /// Subscription handle returned by [Observer::subscribe] methods, which will unsubscribe corresponding
 /// callback when dropped.
-///
-/// If implicit callback unsubscribe on drop is undesired, this structure can be cast [into](Subscription::into)
-/// [SubscriptionId] which is an identifier of the same subscription, which in turn must be used
-/// manually via [Observer::unsubscribe] to perform usubscribe.
 #[cfg(not(feature = "sync"))]
 pub type Subscription = Arc<dyn Drop + 'static>;
 
