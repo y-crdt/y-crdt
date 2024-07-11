@@ -4,12 +4,12 @@ use crate::encoding::read::Error;
 use crate::event::{SubdocsEvent, TransactionCleanupEvent, UpdateEvent};
 use crate::store::{Store, StoreRef};
 use crate::transaction::{Origin, Transaction, TransactionMut};
-use crate::types::{RootRef, ToJson, Value};
+use crate::types::{RootRef, ToJson};
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::OptionExt;
 use crate::{
-    uuid_v4, uuid_v4_from, ArrayRef, BranchID, MapRef, ReadTxn, TextRef, Uuid, WriteTxn,
+    uuid_v4, uuid_v4_from, ArrayRef, BranchID, MapRef, Out, ReadTxn, TextRef, Uuid, WriteTxn,
     XmlFragmentRef,
 };
 use crate::{Any, Subscription};
@@ -61,12 +61,12 @@ pub struct Doc {
 unsafe impl Send for Doc {}
 unsafe impl Sync for Doc {}
 
-impl TryFrom<Value> for Doc {
-    type Error = Value;
+impl TryFrom<Out> for Doc {
+    type Error = Out;
 
-    fn try_from(value: Value) -> Result<Self, Self::Error> {
+    fn try_from(value: Out) -> Result<Self, Self::Error> {
         match value {
-            Value::YDoc(value) => Ok(value),
+            Out::YDoc(value) => Ok(value),
             other => Err(other),
         }
     }
@@ -226,13 +226,79 @@ impl Doc {
     /// commit.
     ///
     /// Returns a subscription, which will unsubscribe function when dropped.
+    #[cfg(feature = "sync")]
     pub fn observe_update_v1<F>(&self, f: F) -> Result<Subscription, BorrowMutError>
     where
-        F: Fn(&TransactionMut, &UpdateEvent) -> () + 'static,
+        F: Fn(&TransactionMut, &UpdateEvent) + Send + Sync + 'static,
     {
         let mut r = self.store.try_borrow_mut()?;
         let events = r.events.get_or_init();
-        Ok(events.observe_update_v1(f))
+        Ok(events.update_v1_events.subscribe(Box::new(f)))
+    }
+
+    /// Subscribe callback function for any changes performed within transaction scope. These
+    /// changes are encoded using lib0 v1 encoding and can be decoded using [Update::decode_v1] if
+    /// necessary or passed to remote peers right away. This callback is triggered on function
+    /// commit.
+    ///
+    /// Returns a subscription, which will unsubscribe function when dropped.
+    #[cfg(not(feature = "sync"))]
+    pub fn observe_update_v1<F>(&self, f: F) -> Result<Subscription, BorrowMutError>
+    where
+        F: Fn(&TransactionMut, &UpdateEvent) + 'static,
+    {
+        let mut r = self.store.try_borrow_mut()?;
+        let events = r.events.get_or_init();
+        Ok(events.update_v1_events.subscribe(Box::new(f)))
+    }
+
+    /// Subscribe callback function for any changes performed within transaction scope. These
+    /// changes are encoded using lib0 v1 encoding and can be decoded using [Update::decode_v1] if
+    /// necessary or passed to remote peers right away. This callback is triggered on function
+    /// commit.
+    ///
+    /// Provided `key` will be used to identify a subscription, which will be used to unsubscribe.
+    #[cfg(feature = "sync")]
+    pub fn observe_update_v1_with<K, F>(&self, key: K, f: F) -> Result<(), BorrowMutError>
+    where
+        K: Into<Origin>,
+        F: Fn(&TransactionMut, &UpdateEvent) + Send + Sync + 'static,
+    {
+        let mut r = self.store.try_borrow_mut()?;
+        let events = r.events.get_or_init();
+        events
+            .update_v1_events
+            .subscribe_with(key.into(), Box::new(f));
+        Ok(())
+    }
+
+    /// Subscribe callback function for any changes performed within transaction scope. These
+    /// changes are encoded using lib0 v1 encoding and can be decoded using [Update::decode_v1] if
+    /// necessary or passed to remote peers right away. This callback is triggered on function
+    /// commit.
+    ///
+    /// Provided `key` will be used to identify a subscription, which will be used to unsubscribe.
+    #[cfg(not(feature = "sync"))]
+    pub fn observe_update_v1_with<K, F>(&self, key: K, f: F) -> Result<(), BorrowMutError>
+    where
+        K: Into<Origin>,
+        F: Fn(&TransactionMut, &UpdateEvent) + 'static,
+    {
+        let mut r = self.store.try_borrow_mut()?;
+        let events = r.events.get_or_init();
+        events
+            .update_v1_events
+            .subscribe_with(key.into(), Box::new(f));
+        Ok(())
+    }
+
+    pub fn unobserve_update_v1<K>(&self, key: K) -> Result<bool, BorrowMutError>
+    where
+        K: Into<Origin>,
+    {
+        let mut r = self.store.try_borrow_mut()?;
+        let events = r.events.get_or_init();
+        Ok(events.update_v1_events.unsubscribe(&key.into()))
     }
 
     /// Subscribe callback function for any changes performed within transaction scope. These
@@ -241,54 +307,317 @@ impl Doc {
     /// commit.
     ///
     /// Returns a subscription, which will unsubscribe function when dropped.
+    #[cfg(feature = "sync")]
     pub fn observe_update_v2<F>(&self, f: F) -> Result<Subscription, BorrowMutError>
     where
-        F: Fn(&TransactionMut, &UpdateEvent) -> () + 'static,
+        F: Fn(&TransactionMut, &UpdateEvent) + Send + Sync + 'static,
     {
         let mut r = self.store.try_borrow_mut()?;
         let events = r.events.get_or_init();
-        Ok(events.observe_update_v2(f))
+        Ok(events.update_v2_events.subscribe(Box::new(f)))
+    }
+
+    /// Subscribe callback function for any changes performed within transaction scope. These
+    /// changes are encoded using lib0 v2 encoding and can be decoded using [Update::decode_v2] if
+    /// necessary or passed to remote peers right away. This callback is triggered on function
+    /// commit.
+    ///
+    /// Returns a subscription, which will unsubscribe function when dropped.
+    #[cfg(not(feature = "sync"))]
+    pub fn observe_update_v2<F>(&self, f: F) -> Result<Subscription, BorrowMutError>
+    where
+        F: Fn(&TransactionMut, &UpdateEvent) + 'static,
+    {
+        let mut r = self.store.try_borrow_mut()?;
+        let events = r.events.get_or_init();
+        Ok(events.update_v2_events.subscribe(Box::new(f)))
+    }
+
+    /// Subscribe callback function for any changes performed within transaction scope. These
+    /// changes are encoded using lib0 v2 encoding and can be decoded using [Update::decode_v2] if
+    /// necessary or passed to remote peers right away. This callback is triggered on function
+    /// commit.
+    ///
+    /// Provided `key` will be used to identify a subscription, which will be used to unsubscribe.
+    #[cfg(feature = "sync")]
+    pub fn observe_update_v2_with<K, F>(&self, key: K, f: F) -> Result<(), BorrowMutError>
+    where
+        K: Into<Origin>,
+        F: Fn(&TransactionMut, &UpdateEvent) + Send + Sync + 'static,
+    {
+        let mut r = self.store.try_borrow_mut()?;
+        let events = r.events.get_or_init();
+        events
+            .update_v2_events
+            .subscribe_with(key.into(), Box::new(f));
+        Ok(())
+    }
+
+    /// Subscribe callback function for any changes performed within transaction scope. These
+    /// changes are encoded using lib0 v2 encoding and can be decoded using [Update::decode_v2] if
+    /// necessary or passed to remote peers right away. This callback is triggered on function
+    /// commit.
+    ///
+    /// Provided `key` will be used to identify a subscription, which will be used to unsubscribe.
+    #[cfg(not(feature = "sync"))]
+    pub fn observe_update_v2_with<K, F>(&self, key: K, f: F) -> Result<(), BorrowMutError>
+    where
+        K: Into<Origin>,
+        F: Fn(&TransactionMut, &UpdateEvent) + 'static,
+    {
+        let mut r = self.store.try_borrow_mut()?;
+        let events = r.events.get_or_init();
+        events
+            .update_v2_events
+            .subscribe_with(key.into(), Box::new(f));
+        Ok(())
+    }
+
+    pub fn unobserve_update_v2<K>(&self, key: K) -> Result<bool, BorrowMutError>
+    where
+        K: Into<Origin>,
+    {
+        let mut r = self.store.try_borrow_mut()?;
+        let events = r.events.get_or_init();
+        Ok(events.update_v2_events.unsubscribe(&key.into()))
     }
 
     /// Subscribe callback function to updates on the `Doc`. The callback will receive state updates and
     /// deletions when a document transaction is committed.
+    #[cfg(feature = "sync")]
     pub fn observe_transaction_cleanup<F>(&self, f: F) -> Result<Subscription, BorrowMutError>
     where
-        F: Fn(&TransactionMut, &TransactionCleanupEvent) -> () + 'static,
+        F: Fn(&TransactionMut, &TransactionCleanupEvent) + Send + Sync + 'static,
     {
         let mut r = self.store.try_borrow_mut()?;
         let events = r.events.get_or_init();
-        Ok(events.observe_transaction_cleanup(f))
+        Ok(events.transaction_cleanup_events.subscribe(Box::new(f)))
     }
 
-    pub fn observe_after_transaction<F>(&self, f: F) -> Result<Subscription, BorrowMutError>
+    /// Subscribe callback function to updates on the `Doc`. The callback will receive state updates and
+    /// deletions when a document transaction is committed.
+    #[cfg(not(feature = "sync"))]
+    pub fn observe_transaction_cleanup<F>(&self, f: F) -> Result<Subscription, BorrowMutError>
     where
-        F: Fn(&mut TransactionMut) -> () + 'static,
+        F: Fn(&TransactionMut, &TransactionCleanupEvent) + 'static,
     {
         let mut r = self.store.try_borrow_mut()?;
         let events = r.events.get_or_init();
-        Ok(events.observe_after_transaction(f))
+        Ok(events.transaction_cleanup_events.subscribe(Box::new(f)))
+    }
+
+    /// Subscribe callback function to updates on the `Doc`. The callback will receive state updates and
+    /// deletions when a document transaction is committed.
+    #[cfg(feature = "sync")]
+    pub fn observe_transaction_cleanup_with<K, F>(&self, key: K, f: F) -> Result<(), BorrowMutError>
+    where
+        K: Into<Origin>,
+        F: Fn(&TransactionMut, &TransactionCleanupEvent) + Send + Sync + 'static,
+    {
+        let mut r = self.store.try_borrow_mut()?;
+        let events = r.events.get_or_init();
+        events
+            .transaction_cleanup_events
+            .subscribe_with(key.into(), Box::new(f));
+        Ok(())
+    }
+
+    /// Subscribe callback function to updates on the `Doc`. The callback will receive state updates and
+    /// deletions when a document transaction is committed.
+    #[cfg(not(feature = "sync"))]
+    pub fn observe_transaction_cleanup_with<K, F>(&self, key: K, f: F) -> Result<(), BorrowMutError>
+    where
+        K: Into<Origin>,
+        F: Fn(&TransactionMut, &TransactionCleanupEvent) + 'static,
+    {
+        let mut r = self.store.try_borrow_mut()?;
+        let events = r.events.get_or_init();
+        events
+            .transaction_cleanup_events
+            .subscribe_with(key.into(), Box::new(f));
+        Ok(())
+    }
+
+    pub fn unobserve_transaction_cleanup<K>(&self, key: K) -> Result<bool, BorrowMutError>
+    where
+        K: Into<Origin>,
+    {
+        let mut r = self.store.try_borrow_mut()?;
+        let events = r.events.get_or_init();
+        Ok(events.transaction_cleanup_events.unsubscribe(&key.into()))
+    }
+
+    #[cfg(feature = "sync")]
+    pub fn observe_after_transaction<F>(&self, f: F) -> Result<Subscription, BorrowMutError>
+    where
+        F: Fn(&mut TransactionMut) + Send + Sync + 'static,
+    {
+        let mut r = self.store.try_borrow_mut()?;
+        let events = r.events.get_or_init();
+        Ok(events.after_transaction_events.subscribe(Box::new(f)))
+    }
+
+    #[cfg(feature = "sync")]
+    pub fn observe_after_transaction_with<K, F>(&self, key: K, f: F) -> Result<(), BorrowMutError>
+    where
+        K: Into<Origin>,
+        F: Fn(&mut TransactionMut) + Send + Sync + 'static,
+    {
+        let mut r = self.store.try_borrow_mut()?;
+        let events = r.events.get_or_init();
+        events
+            .after_transaction_events
+            .subscribe_with(key.into(), Box::new(f));
+        Ok(())
+    }
+
+    #[cfg(not(feature = "sync"))]
+    pub fn observe_after_transaction_with<K, F>(&self, key: K, f: F) -> Result<(), BorrowMutError>
+    where
+        K: Into<Origin>,
+        F: Fn(&mut TransactionMut) + 'static,
+    {
+        let mut r = self.store.try_borrow_mut()?;
+        let events = r.events.get_or_init();
+        events
+            .after_transaction_events
+            .subscribe_with(key.into(), Box::new(f));
+        Ok(())
+    }
+
+    pub fn unobserve_after_transaction<K>(&self, key: K) -> Result<bool, BorrowMutError>
+    where
+        K: Into<Origin>,
+    {
+        let mut r = self.store.try_borrow_mut()?;
+        let events = r.events.get_or_init();
+        Ok(events.after_transaction_events.unsubscribe(&key.into()))
     }
 
     /// Subscribe callback function, that will be called whenever a subdocuments inserted in this
     /// [Doc] will request a load.
+    #[cfg(feature = "sync")]
     pub fn observe_subdocs<F>(&self, f: F) -> Result<Subscription, BorrowMutError>
     where
-        F: Fn(&TransactionMut, &SubdocsEvent) -> () + 'static,
+        F: Fn(&TransactionMut, &SubdocsEvent) + Send + Sync + 'static,
     {
         let mut r = self.store.try_borrow_mut()?;
         let events = r.events.get_or_init();
-        Ok(events.observe_subdocs(f))
+        Ok(events.subdocs_events.subscribe(Box::new(f)))
+    }
+
+    /// Subscribe callback function, that will be called whenever a subdocuments inserted in this
+    /// [Doc] will request a load.
+    #[cfg(not(feature = "sync"))]
+    pub fn observe_subdocs<F>(&self, f: F) -> Result<Subscription, BorrowMutError>
+    where
+        F: Fn(&TransactionMut, &SubdocsEvent) + 'static,
+    {
+        let mut r = self.store.try_borrow_mut()?;
+        let events = r.events.get_or_init();
+        Ok(events.subdocs_events.subscribe(Box::new(f)))
+    }
+
+    /// Subscribe callback function, that will be called whenever a subdocuments inserted in this
+    /// [Doc] will request a load.
+    #[cfg(feature = "sync")]
+    pub fn observe_subdocs_with<K, F>(&self, key: K, f: F) -> Result<(), BorrowMutError>
+    where
+        K: Into<Origin>,
+        F: Fn(&TransactionMut, &SubdocsEvent) + Send + Sync + 'static,
+    {
+        let mut r = self.store.try_borrow_mut()?;
+        let events = r.events.get_or_init();
+        events
+            .subdocs_events
+            .subscribe_with(key.into(), Box::new(f));
+        Ok(())
+    }
+
+    /// Subscribe callback function, that will be called whenever a subdocuments inserted in this
+    /// [Doc] will request a load.
+    #[cfg(not(feature = "sync"))]
+    pub fn observe_subdocs_with<K, F>(&self, key: K, f: F) -> Result<(), BorrowMutError>
+    where
+        K: Into<Origin>,
+        F: Fn(&TransactionMut, &SubdocsEvent) + 'static,
+    {
+        let mut r = self.store.try_borrow_mut()?;
+        let events = r.events.get_or_init();
+        events
+            .subdocs_events
+            .subscribe_with(key.into(), Box::new(f));
+        Ok(())
+    }
+
+    pub fn unobserve_subdocs<K>(&self, key: K) -> Result<bool, BorrowMutError>
+    where
+        K: Into<Origin>,
+    {
+        let mut r = self.store.try_borrow_mut()?;
+        let events = r.events.get_or_init();
+        Ok(events.subdocs_events.unsubscribe(&key.into()))
     }
 
     /// Subscribe callback function, that will be called whenever a [DocRef::destroy] has been called.
+    #[cfg(feature = "sync")]
     pub fn observe_destroy<F>(&self, f: F) -> Result<Subscription, BorrowMutError>
     where
-        F: Fn(&TransactionMut, &Doc) -> () + 'static,
+        F: Fn(&TransactionMut, &Doc) + Send + Sync + 'static,
     {
         let mut r = self.store.try_borrow_mut()?;
         let events = r.events.get_or_init();
-        Ok(events.observe_destroy(f))
+        Ok(events.destroy_events.subscribe(Box::new(f)))
+    }
+
+    /// Subscribe callback function, that will be called whenever a [DocRef::destroy] has been called.
+    #[cfg(not(feature = "sync"))]
+    pub fn observe_destroy<F>(&self, f: F) -> Result<Subscription, BorrowMutError>
+    where
+        F: Fn(&TransactionMut, &Doc) + 'static,
+    {
+        let mut r = self.store.try_borrow_mut()?;
+        let events = r.events.get_or_init();
+        Ok(events.destroy_events.subscribe(Box::new(f)))
+    }
+
+    /// Subscribe callback function, that will be called whenever a [DocRef::destroy] has been called.
+    #[cfg(feature = "sync")]
+    pub fn observe_destroy_with<K, F>(&self, key: K, f: F) -> Result<(), BorrowMutError>
+    where
+        K: Into<Origin>,
+        F: Fn(&TransactionMut, &Doc) + Send + Sync + 'static,
+    {
+        let mut r = self.store.try_borrow_mut()?;
+        let events = r.events.get_or_init();
+        events
+            .destroy_events
+            .subscribe_with(key.into(), Box::new(f));
+        Ok(())
+    }
+
+    pub fn unobserve_destroy<K>(&self, key: K) -> Result<bool, BorrowMutError>
+    where
+        K: Into<Origin>,
+    {
+        let mut r = self.store.try_borrow_mut()?;
+        let events = r.events.get_or_init();
+        Ok(events.destroy_events.unsubscribe(&key.into()))
+    }
+
+    /// Subscribe callback function, that will be called whenever a [DocRef::destroy] has been called.
+    #[cfg(not(feature = "sync"))]
+    pub fn observe_destroy_with<K, F>(&self, key: K, f: F) -> Result<(), BorrowMutError>
+    where
+        K: Into<Origin>,
+        F: Fn(&TransactionMut, &Doc) + 'static,
+    {
+        let mut r = self.store.try_borrow_mut()?;
+        let events = r.events.get_or_init();
+        events
+            .destroy_events
+            .subscribe_with(key.into(), Box::new(f));
+        Ok(())
     }
 
     /// Sends a load request to a parent document. Works only if current document is a sub-document
@@ -344,9 +673,7 @@ impl Doc {
         }
         // super.destroy(): cleanup the events
         if let Some(events) = txn.store_mut().events.take() {
-            if let Some(mut callbacks) = events.destroy_events.callbacks() {
-                callbacks.trigger(&txn, self);
-            }
+            events.destroy_events.trigger(|cb| cb(&txn, self));
         }
     }
 
@@ -663,22 +990,22 @@ impl Transact for Doc {
 #[derive(Error, Debug)]
 pub enum TransactionAcqError {
     #[error("Failed to acquire read-only transaction. Drop read-write transaction and retry.")]
-    SharedAcqFailed(BorrowError),
+    SharedAcqFailed,
     #[error("Failed to acquire read-write transaction. Drop other transactions and retry.")]
-    ExclusiveAcqFailed(BorrowMutError),
+    ExclusiveAcqFailed,
     #[error("All references to a parent document containing this structure has been dropped.")]
     DocumentDropped,
 }
 
 impl From<BorrowError> for TransactionAcqError {
-    fn from(e: BorrowError) -> Self {
-        TransactionAcqError::SharedAcqFailed(e)
+    fn from(_: BorrowError) -> Self {
+        TransactionAcqError::SharedAcqFailed
     }
 }
 
 impl From<BorrowMutError> for TransactionAcqError {
-    fn from(e: BorrowMutError) -> Self {
-        TransactionAcqError::ExclusiveAcqFailed(e)
+    fn from(_: BorrowMutError) -> Self {
+        TransactionAcqError::ExclusiveAcqFailed
     }
 }
 
@@ -719,14 +1046,16 @@ mod test {
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
     use crate::{
-        any, Any, Array, ArrayPrelim, ArrayRef, DeleteSet, Doc, GetString, Map, MapPrelim, MapRef,
-        OffsetKind, Options, StateVector, Subscription, Text, TextRef, Transact, Uuid, WriteTxn,
+        any, Any, Array, ArrayPrelim, ArrayRef, Doc, GetString, Map, MapPrelim, MapRef, OffsetKind,
+        Options, StateVector, Subscription, Text, TextRef, Transact, Uuid, WriteTxn,
         XmlElementPrelim, XmlFragment, XmlFragmentRef, XmlTextPrelim, XmlTextRef,
     };
-    use std::cell::{Cell, RefCell, RefMut};
     use std::collections::BTreeSet;
 
-    use std::rc::Rc;
+    use arc_swap::ArcSwapOption;
+    use assert_matches2::assert_matches;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::{Arc, Mutex};
 
     #[test]
     fn apply_update_basic_v1() {
@@ -840,14 +1169,14 @@ mod test {
 
     #[test]
     fn on_update() {
-        let counter = Rc::new(Cell::new(0));
+        let counter = Arc::new(AtomicU32::new(0));
         let doc = Doc::new();
         let doc2 = Doc::new();
         let c = counter.clone();
-        let sub = doc2.observe_update_v1(move |_: &TransactionMut, e| {
+        let sub = doc2.observe_update_v1(move |_, e| {
             let u = Update::decode_v1(&e.update).unwrap();
             for block in u.blocks.blocks() {
-                c.set(c.get() + block.len());
+                c.fetch_add(block.len(), Ordering::SeqCst);
             }
         });
         let txt = doc.get_or_insert_text("test");
@@ -859,7 +1188,7 @@ mod test {
             let u = txn.encode_diff_v1(&StateVector::decode_v1(sv.as_slice()).unwrap());
             txn2.apply_update(Update::decode_v1(u.as_slice()).unwrap());
         }
-        assert_eq!(counter.get(), 3); // update has been propagated
+        assert_eq!(counter.load(Ordering::SeqCst), 3); // update has been propagated
 
         drop(sub);
 
@@ -870,7 +1199,7 @@ mod test {
             let u = txn.encode_diff_v1(&StateVector::decode_v1(sv.as_slice()).unwrap());
             txn2.apply_update(Update::decode_v1(u.as_slice()).unwrap());
         }
-        assert_eq!(counter.get(), 3); // since subscription has been dropped, update was not propagated
+        assert_eq!(counter.load(Ordering::SeqCst), 3); // since subscription has been dropped, update was not propagated
     }
 
     #[test]
@@ -995,20 +1324,20 @@ mod test {
         // Setup
         let doc = Doc::new();
         let text = doc.get_or_insert_text("test");
-        let before_state = Rc::new(Cell::new(StateVector::default()));
-        let after_state = Rc::new(Cell::new(StateVector::default()));
-        let delete_set = Rc::new(Cell::new(DeleteSet::default()));
+        let before_state = Arc::new(ArcSwapOption::default());
+        let after_state = Arc::new(ArcSwapOption::default());
+        let delete_set = Arc::new(ArcSwapOption::default());
         // Create interior mutable references for the callback.
-        let before_ref = Rc::clone(&before_state);
-        let after_ref = Rc::clone(&after_state);
-        let delete_ref = Rc::clone(&delete_set);
+        let before_ref = before_state.clone();
+        let after_ref = after_state.clone();
+        let delete_ref = delete_set.clone();
         // Subscribe callback
 
         let sub: Subscription = doc
             .observe_transaction_cleanup(move |_: &TransactionMut, event| {
-                before_ref.set(event.before_state.clone());
-                after_ref.set(event.after_state.clone());
-                delete_ref.set(event.delete_set.clone());
+                before_ref.store(Some(event.before_state.clone().into()));
+                after_ref.store(Some(event.after_state.clone().into()));
+                delete_ref.store(Some(event.delete_set.clone().into()));
             })
             .unwrap();
 
@@ -1021,9 +1350,18 @@ mod test {
             txn.commit();
 
             // Compare values
-            assert_eq!(before_state.take(), txn.before_state);
-            assert_eq!(after_state.take(), txn.after_state);
-            assert_eq!(delete_set.take(), txn.delete_set);
+            assert_eq!(
+                before_state.swap(None),
+                Some(Arc::new(txn.before_state.clone()))
+            );
+            assert_eq!(
+                after_state.swap(None),
+                Some(Arc::new(txn.after_state.clone()))
+            );
+            assert_eq!(
+                delete_set.swap(None),
+                Some(Arc::new(txn.delete_set.clone()))
+            );
         }
 
         // Ensure that the subscription is successfully dropped.
@@ -1031,7 +1369,10 @@ mod test {
         let mut txn = doc.transact_mut();
         text.insert(&mut txn, 0, "should not update");
         txn.commit();
-        assert_ne!(after_state.take(), txn.after_state);
+        assert_ne!(
+            after_state.swap(None),
+            Some(Arc::new(txn.after_state.clone()))
+        );
     }
 
     #[test]
@@ -1067,7 +1408,7 @@ mod test {
 
         let d1 = Doc::with_client_id(1);
         let txt1 = d1.get_or_insert_text("text");
-        let acc = Rc::new(RefCell::new(String::new()));
+        let acc = Arc::new(Mutex::new(String::new()));
 
         let a = acc.clone();
         let _sub = d1.observe_update_v1(move |_: &TransactionMut, e| {
@@ -1079,7 +1420,7 @@ mod test {
                             // each character is appended in individual transaction 1-by-1,
                             // therefore each update should contain a single string with only
                             // one element
-                            let mut aref: RefMut<_> = a.try_borrow_mut().unwrap();
+                            let mut aref = a.lock().unwrap();
                             aref.push_str(s.as_str());
                         } else {
                             panic!("unexpected content type")
@@ -1095,16 +1436,16 @@ mod test {
             txt1.push(&mut d1.transact_mut(), &c.to_string());
         }
 
-        assert_eq!(acc.take(), INPUT);
+        assert_eq!(acc.lock().unwrap().as_str(), INPUT);
 
         // test incremental deletes
-        let acc = Rc::new(RefCell::new(Vec::new()));
+        let acc = Arc::new(Mutex::new(vec![]));
         let a = acc.clone();
         let _sub = d1.observe_update_v1(move |_: &TransactionMut, e| {
             let u = Update::decode_v1(&e.update).unwrap();
             for (&client_id, range) in u.delete_set.iter() {
                 if client_id == 1 {
-                    let mut aref: RefMut<_> = a.try_borrow_mut().unwrap();
+                    let mut aref = a.lock().unwrap();
                     for r in range.iter() {
                         aref.push(r.clone());
                     }
@@ -1117,7 +1458,7 @@ mod test {
         }
 
         let expected = vec![(0..1), (1..2), (2..3), (3..4), (4..5)];
-        assert_eq!(acc.take(), expected);
+        assert_eq!(&*acc.lock().unwrap(), &expected);
     }
 
     #[test]
@@ -1486,13 +1827,13 @@ mod test {
     #[test]
     fn subdoc() {
         let doc = Doc::with_client_id(1);
-        let event = Rc::new(Cell::new(None));
+        let event = Arc::new(ArcSwapOption::default());
         let event_c = event.clone();
         let _sub = doc.observe_subdocs(move |_, e| {
             let added = e.added().map(|d| d.guid().clone()).collect();
             let removed = e.removed().map(|d| d.guid().clone()).collect();
             let loaded = e.loaded().map(|d| d.guid().clone()).collect();
-            event_c.set(Some((added, removed, loaded)));
+            event_c.store(Some(Arc::new((added, removed, loaded))));
         });
         let subdocs = doc.get_or_insert_map("mysubdocs");
         let uuid_a: Uuid = "A".into();
@@ -1507,10 +1848,10 @@ mod test {
             doc_a_ref.load(&mut txn);
         }
 
-        let actual = event.take();
+        let actual = event.swap(None);
         assert_eq!(
             actual,
-            Some((vec![uuid_a.clone()], vec![], vec![uuid_a.clone()]))
+            Some((vec![uuid_a.clone()], vec![], vec![uuid_a.clone()]).into())
         );
 
         {
@@ -1518,7 +1859,7 @@ mod test {
             let doc_a_ref = subdocs.get(&txn, "a").unwrap().cast::<Doc>().unwrap();
             doc_a_ref.load(&mut txn);
         }
-        let actual = event.take();
+        let actual = event.swap(None);
         assert_eq!(actual, None);
 
         {
@@ -1526,10 +1867,14 @@ mod test {
             let doc_a_ref = subdocs.get(&txn, "a").unwrap().cast::<Doc>().unwrap();
             doc_a_ref.destroy(&mut txn);
         }
-        let actual = event.take();
+        let actual = event.swap(None);
         assert_eq!(
             actual,
-            Some((vec![uuid_a.clone()], vec![uuid_a.clone()], vec![]))
+            Some(Arc::new((
+                vec![uuid_a.clone()],
+                vec![uuid_a.clone()],
+                vec![]
+            )))
         );
 
         {
@@ -1537,8 +1882,11 @@ mod test {
             let doc_a_ref = subdocs.get(&txn, "a").unwrap().cast::<Doc>().unwrap();
             doc_a_ref.load(&mut txn);
         }
-        let actual = event.take();
-        assert_eq!(actual, Some((vec![], vec![], vec![uuid_a.clone()])));
+        let actual = event.swap(None);
+        assert_eq!(
+            actual,
+            Some(Arc::new((vec![], vec![], vec![uuid_a.clone()])))
+        );
 
         let doc_b = Doc::with_options({
             let mut o = Options::default();
@@ -1547,16 +1895,22 @@ mod test {
             o
         });
         subdocs.insert(&mut doc.transact_mut(), "b", doc_b);
-        let actual = event.take();
-        assert_eq!(actual, Some((vec![uuid_a.clone()], vec![], vec![])));
+        let actual = event.swap(None);
+        assert_eq!(
+            actual,
+            Some(Arc::new((vec![uuid_a.clone()], vec![], vec![])))
+        );
 
         {
             let mut txn = doc.transact_mut();
             let doc_b_ref = subdocs.get(&txn, "b").unwrap().cast::<Doc>().unwrap();
             doc_b_ref.load(&mut txn);
         }
-        let actual = event.take();
-        assert_eq!(actual, Some((vec![], vec![], vec![uuid_a.clone()])));
+        let actual = event.swap(None);
+        assert_eq!(
+            actual,
+            Some(Arc::new((vec![], vec![], vec![uuid_a.clone()])))
+        );
 
         let uuid_c: Uuid = "C".into();
         let doc_c = Doc::with_options({
@@ -1569,10 +1923,14 @@ mod test {
             let doc_c_ref = subdocs.insert(&mut txn, "c", doc_c);
             doc_c_ref.load(&mut txn);
         }
-        let actual = event.take();
+        let actual = event.swap(None);
         assert_eq!(
             actual,
-            Some((vec![uuid_c.clone()], vec![], vec![uuid_c.clone()]))
+            Some(Arc::new((
+                vec![uuid_c.clone()],
+                vec![],
+                vec![uuid_c.clone()]
+            )))
         );
 
         let guids: BTreeSet<_> = doc.transact().subdoc_guids().cloned().collect();
@@ -1583,25 +1941,25 @@ mod test {
             .encode_state_as_update_v1(&StateVector::default());
 
         let doc2 = Doc::new();
-        let event = Rc::new(Cell::new(None));
+        let event = Arc::new(ArcSwapOption::default());
         let event_c = event.clone();
         let _sub = doc2.observe_subdocs(move |_, e| {
             let added: Vec<_> = e.added().map(|d| d.guid().clone()).collect();
             let removed: Vec<_> = e.removed().map(|d| d.guid().clone()).collect();
             let loaded: Vec<_> = e.loaded().map(|d| d.guid().clone()).collect();
-            event_c.set(Some((added, removed, loaded)));
+            event_c.store(Some(Arc::new((added, removed, loaded))));
         });
         let update = Update::decode_v1(&data).unwrap();
         doc2.transact_mut().apply_update(update);
-        let mut actual = event.take().unwrap();
-        actual.0.sort();
+        let mut actual = event.swap(None).unwrap();
+        Arc::get_mut(&mut actual).unwrap().0.sort();
         assert_eq!(
             actual,
-            (
+            Arc::new((
                 vec![uuid_a.clone(), uuid_a.clone(), uuid_c.clone()],
                 vec![],
                 vec![]
-            )
+            ))
         );
 
         let subdocs = doc2.transact().get_map("mysubdocs").unwrap();
@@ -1610,8 +1968,11 @@ mod test {
             let doc_ref = subdocs.get(&mut txn, "a").unwrap().cast::<Doc>().unwrap();
             doc_ref.load(&mut txn);
         }
-        let actual = event.take();
-        assert_eq!(actual, Some((vec![], vec![], vec![uuid_a.clone()])));
+        let actual = event.swap(None);
+        assert_eq!(
+            actual,
+            Some(Arc::new((vec![], vec![], vec![uuid_a.clone()])))
+        );
 
         let guids: BTreeSet<_> = doc2.transact().subdoc_guids().cloned().collect();
         assert_eq!(guids, BTreeSet::from([uuid_a.clone(), uuid_c.clone()]));
@@ -1620,8 +1981,11 @@ mod test {
             subdocs.remove(&mut txn, "a");
         }
 
-        let actual = event.take();
-        assert_eq!(actual, Some((vec![], vec![uuid_a.clone()], vec![])));
+        let actual = event.swap(None);
+        assert_eq!(
+            actual,
+            Some(Arc::new((vec![], vec![uuid_a.clone()], vec![])))
+        );
 
         let mut guids: Vec<_> = doc2.transact().subdoc_guids().cloned().collect();
         guids.sort();
@@ -1635,14 +1999,14 @@ mod test {
         let subdoc_1 = Doc::new();
         let uuid_1 = subdoc_1.options().guid.clone();
 
-        let event = Rc::new(RefCell::new(None));
+        let event = Arc::new(ArcSwapOption::default());
         let event_c = event.clone();
         let _sub = doc.observe_subdocs(move |_, e| {
             let added = e.added().map(|d| d.guid().clone()).collect();
             let removed = e.removed().map(|d| d.guid().clone()).collect();
             let loaded = e.loaded().map(|d| d.guid().clone()).collect();
-            let mut e: RefMut<_> = event_c.try_borrow_mut().unwrap();
-            *e = Some((added, removed, loaded));
+
+            event_c.store(Some(Arc::new((added, removed, loaded))));
         });
         let doc_ref = {
             let mut txn = doc.transact_mut();
@@ -1652,10 +2016,10 @@ mod test {
             assert!(!o.auto_load);
             doc_ref
         };
-        let last_event = event.take();
+        let last_event = event.swap(None);
         assert_eq!(
             last_event,
-            Some((vec![uuid_1.clone()], vec![], vec![uuid_1.clone()]))
+            Some((vec![uuid_1.clone()], vec![], vec![uuid_1.clone()]).into())
         );
 
         // destroy and check whether lastEvent adds it again to added (it shouldn't)
@@ -1668,16 +2032,19 @@ mod test {
         let uuid_2 = doc_ref_2.options().guid.clone();
         assert!(!Doc::ptr_eq(&doc_ref, &doc_ref_2));
 
-        let last_event = event.take();
+        let last_event = event.swap(None);
         assert_eq!(
             last_event,
-            Some((vec![uuid_2.clone()], vec![uuid_2.clone()], vec![]))
+            Some((vec![uuid_2.clone()], vec![uuid_2.clone()], vec![]).into())
         );
 
         // load
         doc_ref_2.load(&mut doc.transact_mut());
-        let last_event = event.take();
-        assert_eq!(last_event, Some((vec![], vec![], vec![uuid_2.clone()])));
+        let last_event = event.swap(None);
+        assert_eq!(
+            last_event,
+            Some(Arc::new((vec![], vec![], vec![uuid_2.clone()])))
+        );
 
         // apply from remote
         let doc2 = Doc::with_client_id(2);
@@ -1686,8 +2053,8 @@ mod test {
             let added = e.added().map(|d| d.guid().clone()).collect();
             let removed = e.removed().map(|d| d.guid().clone()).collect();
             let loaded = e.loaded().map(|d| d.guid().clone()).collect();
-            let mut e: RefMut<_> = event_c.try_borrow_mut().unwrap();
-            *e = Some((added, removed, loaded));
+
+            event_c.store(Some(Arc::new((added, removed, loaded))));
         });
         let u = Update::decode_v1(
             &doc.transact()
@@ -1705,14 +2072,20 @@ mod test {
         assert!(!doc_ref_3.options().should_load);
         assert!(!doc_ref_3.options().auto_load);
         let uuid_3 = doc_ref_3.options().guid.clone();
-        let last_event = event.take();
-        assert_eq!(last_event, Some((vec![uuid_3.clone()], vec![], vec![])));
+        let last_event = event.swap(None);
+        assert_eq!(
+            last_event,
+            Some(Arc::new((vec![uuid_3.clone()], vec![], vec![])))
+        );
 
         // load
         doc_ref_3.load(&mut doc2.transact_mut());
         assert!(doc_ref_3.options().should_load);
-        let last_event = event.take();
-        assert_eq!(last_event, Some((vec![], vec![], vec![uuid_3.clone()])));
+        let last_event = event.swap(None);
+        assert_eq!(
+            last_event,
+            Some(Arc::new((vec![], vec![], vec![uuid_3.clone()])))
+        );
     }
 
     #[test]
@@ -1725,14 +2098,14 @@ mod test {
             o
         });
 
-        let event = Rc::new(RefCell::new(None));
+        let event = Arc::new(ArcSwapOption::default());
         let event_c = event.clone();
         let _sub = doc.observe_subdocs(move |_, e| {
             let added = e.added().map(|d| d.guid().clone()).collect();
             let removed = e.removed().map(|d| d.guid().clone()).collect();
             let loaded = e.loaded().map(|d| d.guid().clone()).collect();
-            let mut e: RefMut<_> = event_c.try_borrow_mut().unwrap();
-            *e = Some((added, removed, loaded));
+
+            event_c.store(Some(Arc::new((added, removed, loaded))));
         });
 
         let subdoc_1 = {
@@ -1743,10 +2116,14 @@ mod test {
         assert!(subdoc_1.options().auto_load);
 
         let uuid_1 = subdoc_1.options().guid.clone();
-        let last_event = event.take();
+        let last_event = event.swap(None);
         assert_eq!(
             last_event,
-            Some((vec![uuid_1.clone()], vec![], vec![uuid_1.clone()]))
+            Some(Arc::new((
+                vec![uuid_1.clone()],
+                vec![],
+                vec![uuid_1.clone()]
+            )))
         );
 
         // destroy and check whether lastEvent adds it again to added (it shouldn't)
@@ -1760,15 +2137,22 @@ mod test {
         let uuid_2 = subdoc_2.options().guid.clone();
         assert!(!Doc::ptr_eq(&subdoc_1, &subdoc_2));
 
-        let last_event = event.take();
+        let last_event = event.swap(None);
         assert_eq!(
             last_event,
-            Some((vec![uuid_2.clone()], vec![uuid_2.clone()], vec![]))
+            Some(Arc::new((
+                vec![uuid_2.clone()],
+                vec![uuid_2.clone()],
+                vec![]
+            )))
         );
 
         subdoc_2.load(&mut doc.transact_mut());
-        let last_event = event.take();
-        assert_eq!(last_event, Some((vec![], vec![], vec![uuid_2.clone()])));
+        let last_event = event.swap(None);
+        assert_eq!(
+            last_event,
+            Some(Arc::new((vec![], vec![], vec![uuid_2.clone()])))
+        );
 
         // apply from remote
         let doc2 = Doc::with_client_id(2);
@@ -1777,8 +2161,8 @@ mod test {
             let added = e.added().map(|d| d.guid().clone()).collect();
             let removed = e.removed().map(|d| d.guid().clone()).collect();
             let loaded = e.loaded().map(|d| d.guid().clone()).collect();
-            let mut e: RefMut<_> = event_c.try_borrow_mut().unwrap();
-            *e = Some((added, removed, loaded));
+
+            event_c.store(Some(Arc::new((added, removed, loaded))));
         });
         let u = Update::decode_v1(
             &doc.transact()
@@ -1796,10 +2180,14 @@ mod test {
         assert!(subdoc_1.options().should_load);
         assert!(subdoc_1.options().auto_load);
         let uuid_3 = subdoc_3.options().guid.clone();
-        let last_event = event.take();
+        let last_event = event.swap(None);
         assert_eq!(
             last_event,
-            Some((vec![uuid_3.clone()], vec![], vec![uuid_3.clone()]))
+            Some(Arc::new((
+                vec![uuid_3.clone()],
+                vec![],
+                vec![uuid_3.clone()]
+            )))
         );
     }
 
@@ -1853,9 +2241,9 @@ mod test {
 
         let mut t1 = d1.transact_mut();
         assert!(t1.is_alive(&r1), "root is always alive");
-        let a1 = r1.insert(&mut t1, "a", MapPrelim::<i32>::new());
+        let a1 = r1.insert(&mut t1, "a", MapPrelim::default());
         assert!(t1.is_alive(&a1), "1st level nesting");
-        let aa1 = a1.insert(&mut t1, "aa", MapPrelim::<i32>::new());
+        let aa1 = a1.insert(&mut t1, "aa", MapPrelim::default());
         assert!(t1.is_alive(&aa1), "2nd level nesting");
         drop(t1);
 
@@ -1917,13 +2305,13 @@ mod test {
 
     #[test]
     fn out_of_order_updates() {
-        let mut updates = Rc::new(RefCell::new(vec![]));
+        let updates = Arc::new(Mutex::new(vec![]));
 
         let d1 = Doc::new();
-        let sub = {
+        let _sub = {
             let updates = updates.clone();
             d1.observe_update_v1(move |_, e| {
-                let mut u = updates.borrow_mut();
+                let mut u = updates.lock().unwrap();
                 u.push(Update::decode_v1(&e.update).unwrap());
             })
             .unwrap()
@@ -1939,7 +2327,7 @@ mod test {
         let d2 = Doc::new();
 
         {
-            let mut updates = updates.borrow_mut();
+            let mut updates = updates.lock().unwrap();
             let u3 = updates.pop().unwrap();
             let u2 = updates.pop().unwrap();
             let u1 = updates.pop().unwrap();
@@ -1954,5 +2342,50 @@ mod test {
 
         let map = d2.get_or_insert_map("map");
         assert_eq!(map.to_json(&d2.transact()), any!({"a": 1.1, "b": 2}));
+    }
+
+    #[test]
+    fn encoding_buffer_overflow_errors() {
+        assert_matches!(
+            Update::decode_v1(&vec![
+                0xe4, 0x9c, 0x10, 0x00, 0x05, 0xff, 0xff, 0x05, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+                0x01, 0x00, 0x00, 0x00, 0xed, 0x00, 0x00, 0x00, 0x01, 0x01, 0x00, 0xfe, 0xb8, 0xc2,
+                0xe9, 0xad, 0x87, 0xd9, 0x12, 0x00, 0x00, 0x01, 0x01, 0xff, 0xed, 0xf6,
+            ]),
+            Err(crate::encoding::read::Error::EndOfBuffer(_))
+        );
+
+        assert_matches!(
+            Update::decode_v2(&vec![
+                0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01, 0x02, 0x00, 0x00,
+                0x16, 0x02, 0x00, 0x00, 0x01, 0xfd, 0xff, 0xff, 0xff, 0xff, 0x7f, 0x00, 0x00,
+            ]),
+            Err(crate::encoding::read::Error::EndOfBuffer(_))
+        );
+        assert_matches!(
+            Update::decode_v2(&vec![
+                0xe4, 0x95, 0x00, 0x00, 0x01, 0x18, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x01,
+                0x00, 0x00, 0xed, 0x01, 0xbe, 0x82, 0xe3, 0xc3, 0x1c, 0x01, 0x02, 0xe4, 0x95, 0x00,
+                0x00, 0x01, 0x18, 0x00, 0x00, 0x01, 0x18, 0x00, 0x00, 0x01, 0x00, 0x01, 0xed, 0x00,
+            ]),
+            Err(crate::encoding::read::Error::InvalidVarInt)
+        );
+        assert_matches!(
+            Update::decode_v2(&vec![
+                0x8f, 0x01, 0x80, 0x00, 0x00, 0x00, 0x01, 0xaa, 0x01, 0x00, 0x01, 0x02, 0x00, 0x00,
+                0x16, 0x02, 0x00, 0xe5, 0xc4, 0x43, 0x14, 0xe7, 0xa6, 0x8b, 0x93, 0xae, 0xb5, 0xfd,
+                0x5d, 0xe8, 0x26, 0x9a, 0x8a, 0x59, 0x00, 0x31, 0xd5, 0x0f, 0x12, 0x01, 0x30, 0x00,
+                0x00, 0x00,
+            ]),
+            Err(crate::encoding::read::Error::EndOfBuffer(_))
+        );
+        assert_matches!(
+            Update::decode_v2(&vec![
+                0x00, 0x01, 0x23, 0x00, 0x00, 0x00, 0x01, 0x02, 0x81, 0x00, 0x00, 0x10, 0x00, 0xc7,
+                0xdc, 0x00, 0xc4, 0x7a, 0x80, 0x00, 0x41, 0xab, 0xea, 0xd6, 0x00, 0x01, 0x00, 0x00,
+                0x01, 0x00, 0x00, 0x84, 0x00, 0x00, 0x10, 0xff, 0xc7, 0xdc, 0xff, 0x00, 0x00, 0x00,
+            ]),
+            Err(crate::encoding::read::Error::EndOfBuffer(_))
+        );
     }
 }

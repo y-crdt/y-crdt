@@ -12,10 +12,16 @@ use crate::StateVector;
 /// `updates`, compressed.
 ///
 /// Returns an error whenever any of the input updates couldn't be decoded.
-pub fn merge_updates_v1(updates: &[&[u8]]) -> Result<Vec<u8>, Error> {
-    let mut merge = Vec::with_capacity(updates.len());
-    for &buf in updates.iter() {
-        let parsed = Update::decode_v1(buf)?;
+pub fn merge_updates_v1<I, B>(updates: I) -> Result<Vec<u8>, Error>
+where
+    I: IntoIterator<Item = B>,
+    B: AsRef<[u8]>,
+{
+    let mut i = updates.into_iter();
+    let (lo, hi) = i.size_hint();
+    let mut merge = Vec::with_capacity(hi.unwrap_or(lo));
+    while let Some(buf) = i.next() {
+        let parsed = Update::decode_v1(buf.as_ref())?;
         merge.push(parsed);
     }
     Ok(Update::merge_updates(merge).encode_v1())
@@ -26,10 +32,16 @@ pub fn merge_updates_v1(updates: &[&[u8]]) -> Result<Vec<u8>, Error> {
 /// `updates`, compressed.
 ///
 /// Returns an error whenever any of the input updates couldn't be decoded.
-pub fn merge_updates_v2(updates: &[&[u8]]) -> Result<Vec<u8>, Error> {
-    let mut merge = Vec::with_capacity(updates.len());
-    for &buf in updates.iter() {
-        let update = Update::decode_v2(buf)?;
+pub fn merge_updates_v2<I, B>(updates: I) -> Result<Vec<u8>, Error>
+where
+    I: IntoIterator<Item = B>,
+    B: AsRef<[u8]>,
+{
+    let mut i = updates.into_iter();
+    let (lo, hi) = i.size_hint();
+    let mut merge = Vec::with_capacity(hi.unwrap_or(lo));
+    while let Some(buf) = i.next() {
+        let update = Update::decode_v2(buf.as_ref())?;
         merge.push(update);
     }
     Ok(Update::merge_updates(merge).encode_v2())
@@ -90,13 +102,13 @@ mod test {
 
     #[test]
     fn merge_updates_compatibility_v1() {
-        let a = &[
+        let a = vec![
             1, 1, 220, 240, 237, 172, 15, 0, 4, 1, 4, 116, 101, 115, 116, 3, 97, 98, 99, 0,
         ];
-        let b = &[
+        let b = vec![
             1, 1, 201, 139, 250, 201, 1, 0, 4, 1, 4, 116, 101, 115, 116, 2, 100, 101, 0,
         ];
-        let expected = &[
+        let expected = vec![
             2, 1, 220, 240, 237, 172, 15, 0, 4, 1, 4, 116, 101, 115, 116, 3, 97, 98, 99, 1, 201,
             139, 250, 201, 1, 0, 4, 1, 4, 116, 101, 115, 116, 2, 100, 101, 0,
         ];

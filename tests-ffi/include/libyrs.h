@@ -245,6 +245,16 @@ typedef struct YSubscription {} YSubscription;
  */
 #define ERR_NOT_ENOUGH_MEMORY 7
 
+/**
+ * Error code: conversion attempt to specific Rust type was not possible.
+ */
+#define ERR_TYPE_MISMATCH 8
+
+/**
+ * Error code: miscallaneous error comming from serde, not covered by other error codes.
+ */
+#define ERR_CUSTOM 9
+
 #define YCHANGE_ADD 1
 
 #define YCHANGE_RETAIN 0
@@ -2363,9 +2373,7 @@ struct YEventKeyChange *yxmltext_event_keys(const struct YXmlTextEvent *e, uint3
  */
 void yevent_keys_destroy(struct YEventKeyChange *keys, uint32_t len);
 
-YUndoManager *yundo_manager(const YDoc *doc,
-                            const Branch *ytype,
-                            const struct YUndoManagerOptions *options);
+YUndoManager *yundo_manager(const YDoc *doc, const struct YUndoManagerOptions *options);
 
 void yundo_manager_destroy(YUndoManager *mgr);
 

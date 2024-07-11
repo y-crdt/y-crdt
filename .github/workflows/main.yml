@@ -10,14 +10,12 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
+  build-yrs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [macos-latest, ubuntu-latest]
-
+        os: [ macos-latest, ubuntu-latest, windows-latest ]
     steps:
-
       - name: checkout sources
         uses: actions/checkout@v2
 
@@ -28,41 +26,30 @@ jobs:
           override: true
 
       - name: build default
-        run: cargo build --verbose --release
+        run: cargo build --verbose --release -p yrs -p yffi
 
-  test-linux:
-    runs-on: ubuntu-latest
-    needs: build
+  test-yrs:
+    runs-on: ${{ matrix.os }}
+    needs: build-yrs
+    strategy:
+      matrix:
+        os: [ macos-latest, ubuntu-latest, windows-latest ]
     steps:
       - name: checkout sources
         uses: actions/checkout@v2
 
-      - name: test
-        run: cargo test --release --all-features
+      - name: install Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
 
-  test-windows:
-    runs-on: windows-latest
-    needs: build
-    steps:
-      - name: checkout sources
-        uses: actions/checkout@v2
-
-      - name: test
-        run: cargo test --release --all-features
-
-  test-macos:
-    runs-on: macos-latest
-    needs: build
-    steps:
-      - name: checkout sources
-        uses: actions/checkout@v2
-
-      - name: test
-        run: cargo test --release --all-features
+      - name: build default
+        run: cargo test --release --all-features -p yrs -p yffi
 
   wasm:
     runs-on: ubuntu-latest
-    needs: build
+    needs: build-yrs
     steps:
       - name: checkout sources
         uses: actions/checkout@v2
@@ -91,7 +78,7 @@ jobs:
 
   c-ffi:
     runs-on: ubuntu-latest
-    needs: build
+    needs: build-yrs
     steps:
       - name: checkout sources
         uses: actions/checkout@v2

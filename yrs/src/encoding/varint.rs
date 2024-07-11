@@ -1,7 +1,6 @@
 use crate::encoding::read::{Error, Read};
 use crate::encoding::write::Write;
 use std::convert::TryInto;
-use std::mem::size_of;
 
 pub trait VarInt: Sized + Copy {
     fn write<W: Write>(&self, w: &mut W);
@@ -44,7 +43,7 @@ impl VarInt for u128 {
                 return Ok(num);
             }
             if len > 180 {
-                return Err(Error::VarIntSizeExceeded(180));
+                return Err(Error::InvalidVarInt);
             }
         }
     }
@@ -85,7 +84,7 @@ impl VarInt for u16 {
         if let Ok(value) = value.try_into() {
             Ok(value)
         } else {
-            Err(Error::VarIntSizeExceeded((size_of::<Self>() * 8) as u8))
+            Err(Error::InvalidVarInt)
         }
     }
 }
@@ -101,7 +100,7 @@ impl VarInt for u8 {
         if let Ok(value) = value.try_into() {
             Ok(value)
         } else {
-            Err(Error::VarIntSizeExceeded((size_of::<Self>() * 8) as u8))
+            Err(Error::InvalidVarInt)
         }
     }
 }
@@ -117,7 +116,7 @@ impl VarInt for isize {
         if let Ok(value) = value.try_into() {
             Ok(value)
         } else {
-            Err(Error::VarIntSizeExceeded((size_of::<Self>() * 8) as u8))
+            Err(Error::InvalidVarInt)
         }
     }
 }
@@ -145,7 +144,7 @@ impl VarInt for i32 {
         if let Ok(value) = value.try_into() {
             Ok(value)
         } else {
-            Err(Error::VarIntSizeExceeded((size_of::<Self>() * 8) as u8))
+            Err(Error::InvalidVarInt)
         }
     }
 }
@@ -161,7 +160,7 @@ impl VarInt for i16 {
         if let Ok(value) = value.try_into() {
             Ok(value)
         } else {
-            Err(Error::VarIntSizeExceeded((size_of::<Self>() * 8) as u8))
+            Err(Error::InvalidVarInt)
         }
     }
 }
@@ -177,7 +176,7 @@ impl VarInt for i8 {
         if let Ok(value) = value.try_into() {
             Ok(value)
         } else {
-            Err(Error::VarIntSizeExceeded((size_of::<Self>() * 8) as u8))
+            Err(Error::InvalidVarInt)
         }
     }
 }
@@ -237,7 +236,7 @@ fn read_var_u64<R: Read>(r: &mut R) -> Result<u64, Error> {
             return Ok(num);
         }
         if len > 70 {
-            return Err(Error::VarIntSizeExceeded(70));
+            return Err(Error::InvalidVarInt);
         }
     }
 }
@@ -255,7 +254,7 @@ fn read_var_u32<R: Read>(r: &mut R) -> Result<u32, Error> {
         if len > 70 {
             // a proper setting for 32bit int would be 35 bits, however for Yjs compatibility
             // we allow wrap up up to 64bit ints (with int overflow wrap)
-            return Err(Error::VarIntSizeExceeded(70));
+            return Err(Error::InvalidVarInt);
         }
     }
 }
@@ -276,7 +275,7 @@ fn read_var_i64<R: Read>(reader: &mut R) -> Result<i64, Error> {
             return Ok(if is_negative { -num } else { num });
         }
         if len > 70 {
-            return Err(Error::VarIntSizeExceeded(70));
+            return Err(Error::InvalidVarInt);
         }
     }
 }
@@ -371,7 +370,7 @@ impl SignedVarInt for i64 {
                 return Ok(Signed::new(num, is_negative));
             }
             if len > 70 {
-                return Err(Error::VarIntSizeExceeded(70));
+                return Err(Error::InvalidVarInt);
             }
         }
     }
@@ -387,7 +386,7 @@ impl SignedVarInt for isize {
         let result = i64::read_signed(r)?;
         match result.value.try_into() {
             Ok(i) => Ok(Signed::new(i, result.is_negative)),
-            Err(_) => Err(Error::VarIntSizeExceeded(70)),
+            Err(_) => Err(Error::InvalidVarInt),
         }
     }
 }
@@ -402,7 +401,7 @@ impl SignedVarInt for i32 {
         let result = i64::read_signed(r)?;
         match result.value.try_into() {
             Ok(i) => Ok(Signed::new(i, result.is_negative)),
-            Err(_) => Err(Error::VarIntSizeExceeded(35)),
+            Err(_) => Err(Error::InvalidVarInt),
         }
     }
 }
@@ -417,7 +416,7 @@ impl SignedVarInt for i16 {
         let result = i64::read_signed(r)?;
         match result.value.try_into() {
             Ok(i) => Ok(Signed::new(i, result.is_negative)),
-            Err(_) => Err(Error::VarIntSizeExceeded(21)),
+            Err(_) => Err(Error::InvalidVarInt),
         }
     }
 }
@@ -432,7 +431,7 @@ impl SignedVarInt for i8 {
         let result = i64::read_signed(r)?;
         match result.value.try_into() {
             Ok(i) => Ok(Signed::new(i, result.is_negative)),
-            Err(_) => Err(Error::VarIntSizeExceeded(14)),
+            Err(_) => Err(Error::InvalidVarInt),
         }
     }
 }

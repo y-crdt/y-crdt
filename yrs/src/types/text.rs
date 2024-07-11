@@ -1,14 +1,16 @@
-use crate::block::{EmbedPrelim, Item, ItemContent, ItemPosition, ItemPtr, Prelim};
+use crate::block::{EmbedPrelim, Item, ItemContent, ItemPosition, ItemPtr, Prelim, Unused};
 use crate::transaction::TransactionMut;
-use crate::types::{Attrs, Branch, BranchPtr, Delta, Path, RootRef, SharedRef, TypeRef, Value};
+use crate::types::{
+    AsPrelim, Attrs, Branch, BranchPtr, DefaultPrelim, Delta, Out, Path, RootRef, SharedRef,
+    TypePtr, TypeRef,
+};
 use crate::utils::OptionExt;
 use crate::*;
-use std::borrow::Borrow;
 use std::cell::UnsafeCell;
 use std::collections::HashMap;
 use std::convert::{TryFrom, TryInto};
 use std::fmt::Formatter;
-use std::ops::Deref;
+use std::ops::{Deref, DerefMut};
 
 /// A shared data type used for collaborative text editing. It enables multiple users to add and
 /// remove chunks of text in efficient manner. This type is internally represented as a mutable
@@ -99,9 +101,10 @@ impl IndexedSequence for TextRef {}
 #[cfg(feature = "weak")]
 impl crate::Quotable for TextRef {}
 
-impl Into<XmlTextRef> for TextRef {
-    fn into(self) -> XmlTextRef {
-        XmlTextRef::from(self.0)
+impl AsRef<XmlTextRef> for TextRef {
+    #[inline]
+    fn as_ref(&self) -> &XmlTextRef {
+        unsafe { std::mem::transmute(self) }
     }
 }
 
@@ -115,7 +118,7 @@ impl GetString for TextRef {
     /// render formatting attributes or embedded content. In order to retrieve it, use
     /// [TextRef::diff] method.
     fn get_string<T: ReadTxn>(&self, _txn: &T) -> String {
-        let mut start = self.as_ref().start;
+        let mut start = self.0.start;
         let mut s = String::new();
         while let Some(item) = start.as_deref() {
             if !item.is_deleted() {
@@ -141,12 +144,12 @@ impl TryFrom<ItemPtr> for TextRef {
     }
 }
 
-impl TryFrom<Value> for TextRef {
-    type Error = Value;
+impl TryFrom<Out> for TextRef {
+    type Error = Out;
 
-    fn try_from(value: Value) -> Result<Self, Self::Error> {
+    fn try_from(value: Out) -> Result<Self, Self::Error> {
         match value {
-            Value::YText(value) => Ok(value),
+            Out::YText(value) => Ok(value),
             other => Err(other),
         }
     }
@@ -227,6 +230,40 @@ pub trait Text: AsRef<Branch> + Sized {
         }
     }
 
+    fn apply_delta<D, P>(&self, txn: &mut TransactionMut, delta: D)
+    where
+        D: IntoIterator<Item = Delta<P>>,
+        P: Prelim,
+    {
+        let branch = BranchPtr::from(self.as_ref());
+        let mut pos = ItemPosition {
+            parent: TypePtr::Branch(branch),
+            left: None,
+            right: branch.start,
+            index: 0,
+            current_attrs: Some(Box::new(Attrs::new())),
+        };
+        for delta in delta {
+            match delta {
+                Delta::Inserted(value, attrs) => {
+                    let attrs: Attrs = match attrs {
+                        None => Attrs::new(),
+                        Some(attrs) => *attrs,
+                    };
+                    insert(branch, txn, &mut pos, DeltaChunk(value), attrs);
+                }
+                Delta::Deleted(len) => remove(txn, &mut pos, len),
+                Delta::Retain(len, attrs) => {
+                    let attrs: Attrs = match attrs {
+                        None => Attrs::new(),
+                        Some(attrs) => *attrs,
+                    };
+                    insert_format(branch, txn, &mut pos, len, attrs);
+                }
+            }
+        }
+    }
+
     /// Inserts a `chunk` of text at a given `index`.
     /// If `index` is `0`, this `chunk` will be inserted at the beginning of a current text.
     /// If `index` is equal to current data structure length, this `chunk` will be appended at
@@ -240,24 +277,15 @@ pub trait Text: AsRef<Branch> + Sized {
         txn: &mut TransactionMut,
         index: u32,
         chunk: &str,
-        mut attributes: Attrs,
+        attributes: Attrs,
     ) {
         if chunk.is_empty() {
             return;
         }
         let this = BranchPtr::from(self.as_ref());
         if let Some(mut pos) = find_position(this, txn, index) {
-            pos.unset_missing(&mut attributes);
-            minimize_attr_changes(&mut pos, &attributes);
-            let negated_attrs = insert_attributes(this, txn, &mut pos, attributes);
-
             let value = block::PrelimString(chunk.into());
-            let item = txn.create_item(&pos, value, None);
-
-            pos.right = Some(item);
-            pos.forward();
-
-            insert_negated_attributes(this, txn, &mut pos, negated_attrs);
+            insert(this, txn, &mut pos, value, attributes);
         } else {
             panic!("The type or the position doesn't exist!");
         }
@@ -300,23 +328,14 @@ pub trait Text: AsRef<Branch> + Sized {
         txn: &mut TransactionMut,
         index: u32,
         embed: V,
-        mut attributes: Attrs,
+        attributes: Attrs,
     ) -> V::Return
     where
         V: Into<EmbedPrelim<V>> + Prelim,
     {
         let this = BranchPtr::from(self.as_ref());
         if let Some(mut pos) = find_position(this, txn, index) {
-            pos.unset_missing(&mut attributes);
-            minimize_attr_changes(&mut pos, &attributes);
-            let negated_attrs = insert_attributes(this, txn, &mut pos, attributes);
-
-            let item = txn.create_item(&pos, embed.into(), None);
-
-            pos.right = Some(item.clone());
-            pos.forward();
-
-            insert_negated_attributes(this, txn, &mut pos, negated_attrs);
+            let item = insert(this, txn, &mut pos, embed.into(), attributes);
             if let Ok(integrated) = item.try_into() {
                 integrated
             } else {
@@ -338,8 +357,8 @@ pub trait Text: AsRef<Branch> + Sized {
     /// insufficient number of characters to remove) or `index` is outside of the bounds of text.
     fn remove_range(&self, txn: &mut TransactionMut, index: u32, len: u32) {
         let this = BranchPtr::from(self.as_ref());
-        if let Some(pos) = find_position(this, txn, index) {
-            remove(txn, pos, len)
+        if let Some(mut pos) = find_position(this, txn, index) {
+            remove(txn, &mut pos, len)
         } else {
             panic!("The type or the position doesn't exist!");
         }
@@ -349,8 +368,8 @@ pub trait Text: AsRef<Branch> + Sized {
     /// formatting blocks containing provided `attributes` metadata.
     fn format(&self, txn: &mut TransactionMut, index: u32, len: u32, attributes: Attrs) {
         let this = BranchPtr::from(self.as_ref());
-        if let Some(pos) = find_position(this, txn, index) {
-            insert_format(this, txn, pos, len, attributes)
+        if let Some(mut pos) = find_position(this, txn, index) {
+            insert_format(this, txn, &mut pos, len, attributes)
         } else {
             panic!("Index {} is outside of the range.", index);
         }
@@ -441,10 +460,56 @@ impl AsRef<Branch> for TextRef {
     }
 }
 
+impl AsPrelim for TextRef {
+    type Prelim = DeltaPrelim;
+
+    fn as_prelim<T: ReadTxn>(&self, txn: &T) -> Self::Prelim {
+        let delta: Vec<Delta<In>> = self
+            .diff(txn, YChange::identity)
+            .into_iter()
+            .map(|diff| Delta::Inserted(diff.insert.as_prelim(txn), diff.attributes))
+            .collect();
+        DeltaPrelim(delta)
+    }
+}
+
+impl DefaultPrelim for TextRef {
+    type Prelim = TextPrelim;
+
+    #[inline]
+    fn default_prelim() -> Self::Prelim {
+        TextPrelim::default()
+    }
+}
+
 impl Eq for TextRef {}
 impl PartialEq for TextRef {
     fn eq(&self, other: &Self) -> bool {
         self.0.id() == other.0.id()
+    }
+}
+
+struct DeltaChunk<P>(P);
+
+impl<P> Prelim for DeltaChunk<P>
+where
+    P: Prelim,
+{
+    type Return = Unused;
+
+    fn into_content(self, txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
+        let (content, rest) = self.0.into_content(txn);
+        match content {
+            ItemContent::Any(mut any) if any.len() == 1 => match any.pop().unwrap() {
+                Any::String(str) => (ItemContent::String(str.as_ref().into()), None),
+                other => (ItemContent::Embed(other), None),
+            },
+            other => (other, rest.map(DeltaChunk)),
+        }
+    }
+
+    fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
+        self.0.integrate(txn, inner_ref)
     }
 }
 
@@ -482,7 +547,7 @@ where
             } else {
                 None
             };
-            let op = Diff::with_change(Value::Any(buf.into()), attrs, change);
+            let op = Diff::with_change(Out::Any(buf.into()), attrs, change);
             self.ops.push(op);
         }
     }
@@ -632,6 +697,26 @@ where
     asm.finish()
 }
 
+fn insert<P: Prelim>(
+    branch: BranchPtr,
+    txn: &mut TransactionMut,
+    pos: &mut ItemPosition,
+    value: P,
+    mut attributes: Attrs,
+) -> ItemPtr {
+    pos.unset_missing(&mut attributes);
+    minimize_attr_changes(pos, &attributes);
+    let negated_attrs = insert_attributes(branch, txn, pos, attributes);
+
+    let item = txn.create_item(&pos, value, None);
+
+    pos.right = Some(item);
+    pos.forward();
+
+    insert_negated_attributes(branch, txn, pos, negated_attrs);
+    item
+}
+
 pub(crate) fn update_current_attributes(attrs: &mut Attrs, key: &str, value: &Any) {
     if let Any::Null = value {
         attrs.remove(key);
@@ -712,7 +797,7 @@ fn find_position(this: BranchPtr, txn: &mut TransactionMut, index: u32) -> Optio
     Some(pos)
 }
 
-fn remove(txn: &mut TransactionMut, mut pos: ItemPosition, len: u32) {
+fn remove(txn: &mut TransactionMut, pos: &mut ItemPosition, len: u32) {
     let encoding = txn.store().options.offset_kind;
     let mut remaining = len;
     let start = pos.right.clone();
@@ -784,12 +869,12 @@ fn is_valid_target(item: ItemPtr) -> bool {
 fn insert_format(
     this: BranchPtr,
     txn: &mut TransactionMut,
-    mut pos: ItemPosition,
+    pos: &mut ItemPosition,
     mut len: u32,
     attrs: Attrs,
 ) {
-    minimize_attr_changes(&mut pos, &attrs);
-    let mut negated_attrs = insert_attributes(this, txn, &mut pos, attrs.clone()); //TODO: remove `attrs.clone()`
+    minimize_attr_changes(pos, &attrs);
+    let mut negated_attrs = insert_attributes(this, txn, pos, attrs.clone()); //TODO: remove `attrs.clone()`
     let encoding = txn.store().options.offset_kind;
     // iterate until first non-format or null is found
     // delete all formats with attributes[format.key] != null
@@ -848,7 +933,7 @@ fn insert_format(
         }
     }
 
-    insert_negated_attributes(this, txn, &mut pos, negated_attrs);
+    insert_negated_attributes(this, txn, pos, negated_attrs);
 }
 
 fn minimize_attr_changes(pos: &mut ItemPosition, attrs: &Attrs) {
@@ -1010,7 +1095,7 @@ fn clean_format_gap(
 pub struct Diff<T> {
     /// Inserted chunk of data. It can be (usually) piece of text, but possibly also embedded value
     /// or another shared type.
-    pub insert: Value,
+    pub insert: Out,
 
     /// Optional formatting attributes wrapping inserted chunk of data.
     pub attributes: Option<Box<Attrs>>,
@@ -1020,16 +1105,58 @@ pub struct Diff<T> {
 }
 
 impl<T> Diff<T> {
-    pub fn new(insert: Value, attributes: Option<Box<Attrs>>) -> Self {
+    pub fn new(insert: Out, attributes: Option<Box<Attrs>>) -> Self {
         Self::with_change(insert, attributes, None)
     }
 
-    pub fn with_change(insert: Value, attributes: Option<Box<Attrs>>, ychange: Option<T>) -> Self {
+    pub fn with_change(insert: Out, attributes: Option<Box<Attrs>>, ychange: Option<T>) -> Self {
         Diff {
             insert,
             attributes,
             ychange,
         }
+    }
+}
+
+impl<T> From<Diff<T>> for Delta {
+    #[inline]
+    fn from(value: Diff<T>) -> Self {
+        Delta::Inserted(value.insert, value.attributes)
+    }
+}
+
+#[repr(transparent)]
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct DeltaPrelim(Vec<Delta<In>>);
+
+impl Deref for DeltaPrelim {
+    type Target = [Delta<In>];
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Prelim for DeltaPrelim {
+    type Return = TextRef;
+
+    fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
+        (ItemContent::Type(Branch::new(TypeRef::Text)), Some(self))
+    }
+
+    fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
+        let text_ref = TextRef::from(inner_ref);
+        text_ref.apply_delta(txn, self.0);
+    }
+}
+
+impl From<TextPrelim> for DeltaPrelim {
+    fn from(value: TextPrelim) -> Self {
+        DeltaPrelim(vec![Delta::Inserted(
+            In::Any(Any::String(value.0.into())),
+            None,
+        )])
     }
 }
 
@@ -1122,7 +1249,7 @@ impl TextEvent {
         #[derive(Debug, Default)]
         struct DeltaAssembler {
             action: Option<Action>,
-            insert: Option<Value>,
+            insert: Option<Out>,
             insert_string: Option<String>,
             retain: u32,
             delete: u32,
@@ -1309,16 +1436,41 @@ impl TextEvent {
 
 /// A preliminary text. It's can be used to initialize a [TextRef], when it's about to be nested
 /// into another Yrs data collection, such as [Map] or [Array].
-#[derive(Debug)]
-pub struct TextPrelim<T: Borrow<str>>(T);
+#[repr(transparent)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+pub struct TextPrelim(String);
 
-impl<T: Borrow<str>> TextPrelim<T> {
-    pub fn new(value: T) -> Self {
-        TextPrelim(value)
+impl TextPrelim {
+    #[inline]
+    pub fn new<S: Into<String>>(value: S) -> Self {
+        TextPrelim(value.into())
     }
 }
 
-impl<T: Borrow<str>> Prelim for TextPrelim<T> {
+impl Deref for TextPrelim {
+    type Target = String;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for TextPrelim {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl From<TextPrelim> for In {
+    #[inline]
+    fn from(value: TextPrelim) -> Self {
+        In::Text(DeltaPrelim::from(value))
+    }
+}
+
+impl Prelim for TextPrelim {
     type Return = TextRef;
 
     fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
@@ -1327,17 +1479,16 @@ impl<T: Borrow<str>> Prelim for TextPrelim<T> {
     }
 
     fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
-        let borrowed = self.0.borrow();
-        if !borrowed.is_empty() {
+        if !self.0.is_empty() {
             let text = TextRef::from(inner_ref);
-            text.push(txn, borrowed);
+            text.push(txn, &self.0);
         }
     }
 }
 
-impl<T: Borrow<str>> Into<EmbedPrelim<TextPrelim<T>>> for TextPrelim<T> {
+impl Into<EmbedPrelim<TextPrelim>> for TextPrelim {
     #[inline]
-    fn into(self) -> EmbedPrelim<TextPrelim<T>> {
+    fn into(self) -> EmbedPrelim<TextPrelim> {
         EmbedPrelim::Shared(self)
     }
 }
@@ -1348,16 +1499,18 @@ mod test {
     use crate::test_utils::{exchange_updates, run_scenario, RngExt};
     use crate::transaction::ReadTxn;
     use crate::types::text::{Attrs, ChangeKind, Delta, Diff, YChange};
-    use crate::types::Value;
+    use crate::types::Out;
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
     use crate::{
-        any, Any, ArrayPrelim, Doc, GetString, Observable, StateVector, Text, Transact, Update, ID,
+        any, Any, ArrayPrelim, Doc, GetString, Map, MapPrelim, MapRef, Observable, StateVector,
+        Text, Transact, Update, WriteTxn, ID,
     };
+    use arc_swap::ArcSwapOption;
     use fastrand::Rng;
-    use std::cell::RefCell;
     use std::collections::HashMap;
-    use std::rc::Rc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
     use std::time::Duration;
 
     #[test]
@@ -1697,63 +1850,61 @@ mod test {
     fn observer() {
         let doc = Doc::with_client_id(1);
         let txt = doc.get_or_insert_text("text");
-        let delta = Rc::new(RefCell::new(None));
+        let delta = Arc::new(ArcSwapOption::default());
         let delta_c = delta.clone();
         let sub = txt.observe(move |txn, e| {
-            *delta_c.borrow_mut() = Some(e.delta(txn).to_vec());
+            delta_c.store(Some(Arc::new(e.delta(txn).to_vec())));
         });
 
         // insert initial data to an empty YText
         txt.insert(&mut doc.transact_mut(), 0, "abcd"); // => 'abcd'
         assert_eq!(
-            delta.borrow_mut().take(),
-            Some(vec![Delta::Inserted("abcd".into(), None)])
+            delta.load_full(),
+            Some(Arc::new(vec![Delta::Inserted("abcd".into(), None)]))
         );
 
         // remove 2 chars from the middle
         txt.remove_range(&mut doc.transact_mut(), 1, 2); // => 'ad'
         assert_eq!(
-            delta.borrow_mut().take(),
-            Some(vec![Delta::Retain(1, None), Delta::Deleted(2)])
+            delta.load_full(),
+            Some(Arc::new(vec![Delta::Retain(1, None), Delta::Deleted(2)]))
         );
 
         // insert new item in the middle
         let attrs = Attrs::from([("bold".into(), true.into())]);
         txt.insert_with_attributes(&mut doc.transact_mut(), 1, "e", attrs.clone()); // => 'a<bold>e</bold>d'
         assert_eq!(
-            delta.borrow_mut().take(),
-            Some(vec![
+            delta.load_full(),
+            Some(Arc::new(vec![
                 Delta::Retain(1, None),
                 Delta::Inserted("e".into(), Some(Box::new(attrs)))
-            ])
+            ]))
         );
 
         // remove formatting
         let attrs = Attrs::from([("bold".into(), Any::Null)]);
         txt.format(&mut doc.transact_mut(), 1, 1, attrs.clone()); // => 'aed'
         assert_eq!(
-            delta.borrow_mut().take(),
-            Some(vec![
+            delta.swap(None),
+            Some(Arc::new(vec![
                 Delta::Retain(1, None),
                 Delta::Retain(2, Some(Box::new(attrs)))
-            ])
+            ]))
         );
 
         // free the observer and make sure that callback is no longer called
         drop(sub);
         txt.insert(&mut doc.transact_mut(), 1, "fgh"); // => 'afghed'
-        assert_eq!(delta.borrow_mut().take(), None);
+        assert_eq!(delta.swap(None), None);
     }
 
     #[test]
     fn insert_and_remove_event_changes() {
         let d1 = Doc::with_client_id(1);
         let txt = d1.get_or_insert_text("text");
-        let delta = Rc::new(RefCell::new(None));
+        let delta = Arc::new(ArcSwapOption::default());
         let delta_c = delta.clone();
-        let _sub = txt.observe(move |txn, e| {
-            *delta_c.borrow_mut() = Some(e.delta(txn).to_vec());
-        });
+        let _sub = txt.observe(move |txn, e| delta_c.store(Some(Arc::new(e.delta(txn).to_vec()))));
 
         // insert initial string
         {
@@ -1761,8 +1912,8 @@ mod test {
             txt.insert(&mut txn, 0, "abcd");
         }
         assert_eq!(
-            delta.borrow_mut().take(),
-            Some(vec![Delta::Inserted("abcd".into(), None)])
+            delta.swap(None),
+            Some(Arc::new(vec![Delta::Inserted("abcd".into(), None)]))
         );
 
         // remove middle
@@ -1771,8 +1922,8 @@ mod test {
             txt.remove_range(&mut txn, 1, 2);
         }
         assert_eq!(
-            delta.borrow_mut().take(),
-            Some(vec![Delta::Retain(1, None), Delta::Deleted(2)])
+            delta.swap(None),
+            Some(Arc::new(vec![Delta::Retain(1, None), Delta::Deleted(2)]))
         );
 
         // insert again
@@ -1781,20 +1932,18 @@ mod test {
             txt.insert(&mut txn, 1, "ef");
         }
         assert_eq!(
-            delta.borrow_mut().take(),
-            Some(vec![
+            delta.swap(None),
+            Some(Arc::new(vec![
                 Delta::Retain(1, None),
                 Delta::Inserted("ef".into(), None)
-            ])
+            ]))
         );
 
         // replicate data to another peer
         let d2 = Doc::with_client_id(2);
         let txt = d2.get_or_insert_text("text");
         let delta_c = delta.clone();
-        let _sub = txt.observe(move |txn, e| {
-            *delta_c.borrow_mut() = Some(e.delta(txn).to_vec());
-        });
+        let _sub = txt.observe(move |txn, e| delta_c.store(Some(Arc::new(e.delta(txn).to_vec()))));
 
         {
             let t1 = d1.transact_mut();
@@ -1807,8 +1956,8 @@ mod test {
         }
 
         assert_eq!(
-            delta.borrow_mut().take(),
-            Some(vec![Delta::Inserted("aefd".into(), None)])
+            delta.swap(None),
+            Some(Arc::new(vec![Delta::Inserted("aefd".into(), None)]))
         );
     }
 
@@ -1849,20 +1998,18 @@ mod test {
         let d1 = Doc::with_client_id(1);
         let txt1 = d1.get_or_insert_text("text");
 
-        let delta1 = Rc::new(RefCell::new(None));
+        let delta1 = Arc::new(ArcSwapOption::default());
         let delta_clone = delta1.clone();
-        let _sub1 = txt1.observe(move |txn, e| {
-            delta_clone.replace(Some(e.delta(txn).to_vec()));
-        });
+        let _sub1 =
+            txt1.observe(move |txn, e| delta_clone.store(Some(Arc::new(e.delta(txn).to_vec()))));
 
         let d2 = Doc::with_client_id(2);
         let txt2 = d2.get_or_insert_text("text");
 
-        let delta2 = Rc::new(RefCell::new(None));
+        let delta2 = Arc::new(ArcSwapOption::default());
         let delta_clone = delta2.clone();
-        let _sub2 = txt2.observe(move |txn, e| {
-            delta_clone.replace(Some(e.delta(txn).to_vec()));
-        });
+        let _sub2 =
+            txt2.observe(move |txn, e| delta_clone.store(Some(Arc::new(e.delta(txn).to_vec()))));
 
         let a: Attrs = HashMap::from([("bold".into(), Any::Bool(true))]);
 
@@ -1873,24 +2020,24 @@ mod test {
             let update = txn.encode_update_v1();
             drop(txn);
 
-            let expected = Some(vec![Delta::Inserted(
+            let expected = Some(Arc::new(vec![Delta::Inserted(
                 "abc".into(),
                 Some(Box::new(a.clone())),
-            )]);
+            )]));
 
             assert_eq!(txt1.get_string(&d1.transact()), "abc".to_string());
             assert_eq!(
                 txt1.diff(&d1.transact(), YChange::identity),
                 vec![Diff::new("abc".into(), Some(Box::new(a.clone())))]
             );
-            assert_eq!(delta1.take(), expected);
+            assert_eq!(delta1.swap(None), expected);
 
             let mut txn = d2.transact_mut();
             txn.apply_update(Update::decode_v1(update.as_slice()).unwrap());
             drop(txn);
 
             assert_eq!(txt2.get_string(&d2.transact()), "abc".to_string());
-            assert_eq!(delta2.take(), expected);
+            assert_eq!(delta2.swap(None), expected);
         }
 
         // step 2
@@ -1900,21 +2047,21 @@ mod test {
             let update = txn.encode_update_v1();
             drop(txn);
 
-            let expected = Some(vec![Delta::Deleted(1)]);
+            let expected = Some(Arc::new(vec![Delta::Deleted(1)]));
 
             assert_eq!(txt1.get_string(&d1.transact()), "bc".to_string());
             assert_eq!(
                 txt1.diff(&d1.transact(), YChange::identity),
                 vec![Diff::new("bc".into(), Some(Box::new(a.clone())))]
             );
-            assert_eq!(delta1.take(), expected);
+            assert_eq!(delta1.swap(None), expected);
 
             let mut txn = d2.transact_mut();
             txn.apply_update(Update::decode_v1(update.as_slice()).unwrap());
             drop(txn);
 
             assert_eq!(txt2.get_string(&d2.transact()), "bc".to_string());
-            assert_eq!(delta2.take(), expected);
+            assert_eq!(delta2.swap(None), expected);
         }
 
         // step 3
@@ -1924,21 +2071,21 @@ mod test {
             let update = txn.encode_update_v1();
             drop(txn);
 
-            let expected = Some(vec![Delta::Retain(1, None), Delta::Deleted(1)]);
+            let expected = Some(Arc::new(vec![Delta::Retain(1, None), Delta::Deleted(1)]));
 
             assert_eq!(txt1.get_string(&d1.transact()), "b".to_string());
             assert_eq!(
                 txt1.diff(&d1.transact(), YChange::identity),
                 vec![Diff::new("b".into(), Some(Box::new(a.clone())))]
             );
-            assert_eq!(delta1.take(), expected);
+            assert_eq!(delta1.swap(None), expected);
 
             let mut txn = d2.transact_mut();
             txn.apply_update(Update::decode_v1(update.as_slice()).unwrap());
             drop(txn);
 
             assert_eq!(txt2.get_string(&d2.transact()), "b".to_string());
-            assert_eq!(delta2.take(), expected);
+            assert_eq!(delta2.swap(None), expected);
         }
 
         // step 4
@@ -1948,21 +2095,24 @@ mod test {
             let update = txn.encode_update_v1();
             drop(txn);
 
-            let expected = Some(vec![Delta::Inserted("z".into(), Some(Box::new(a.clone())))]);
+            let expected = Some(Arc::new(vec![Delta::Inserted(
+                "z".into(),
+                Some(Box::new(a.clone())),
+            )]));
 
             assert_eq!(txt1.get_string(&d1.transact()), "zb".to_string());
             assert_eq!(
                 txt1.diff(&mut d1.transact_mut(), YChange::identity),
                 vec![Diff::new("zb".into(), Some(Box::new(a.clone())))]
             );
-            assert_eq!(delta1.take(), expected);
+            assert_eq!(delta1.swap(None), expected);
 
             let mut txn = d2.transact_mut();
             txn.apply_update(Update::decode_v1(update.as_slice()).unwrap());
             drop(txn);
 
             assert_eq!(txt2.get_string(&d2.transact()), "zb".to_string());
-            assert_eq!(delta2.take(), expected);
+            assert_eq!(delta2.swap(None), expected);
         }
 
         // step 5
@@ -1972,7 +2122,7 @@ mod test {
             let update = txn.encode_update_v1();
             drop(txn);
 
-            let expected = Some(vec![Delta::Inserted("y".into(), None)]);
+            let expected = Some(Arc::new(vec![Delta::Inserted("y".into(), None)]));
 
             assert_eq!(txt1.get_string(&d1.transact()), "yzb".to_string());
             assert_eq!(
@@ -1982,14 +2132,14 @@ mod test {
                     Diff::new("zb".into(), Some(Box::new(a.clone())))
                 ]
             );
-            assert_eq!(delta1.take(), expected);
+            assert_eq!(delta1.swap(None), expected);
 
             let mut txn = d2.transact_mut();
             txn.apply_update(Update::decode_v1(update.as_slice()).unwrap());
             drop(txn);
 
             assert_eq!(txt2.get_string(&d2.transact()), "yzb".to_string());
-            assert_eq!(delta2.take(), expected);
+            assert_eq!(delta2.swap(None), expected);
         }
 
         // step 6
@@ -2000,10 +2150,10 @@ mod test {
             let update = txn.encode_update_v1();
             drop(txn);
 
-            let expected = Some(vec![
+            let expected = Some(Arc::new(vec![
                 Delta::Retain(1, None),
                 Delta::Retain(1, Some(Box::new(b))),
-            ]);
+            ]));
 
             assert_eq!(txt1.get_string(&d1.transact()), "yzb".to_string());
             assert_eq!(
@@ -2013,14 +2163,14 @@ mod test {
                     Diff::new("b".into(), Some(Box::new(a.clone())))
                 ]
             );
-            assert_eq!(delta1.take(), expected);
+            assert_eq!(delta1.swap(None), expected);
 
             let mut txn = d2.transact_mut();
             txn.apply_update(Update::decode_v1(update.as_slice()).unwrap());
             drop(txn);
 
             assert_eq!(txt2.get_string(&d2.transact()), "yzb".to_string());
-            assert_eq!(delta2.take(), expected);
+            assert_eq!(delta2.swap(None), expected);
         }
     }
 
@@ -2029,11 +2179,11 @@ mod test {
         let d1 = Doc::with_client_id(1);
         let txt1 = d1.get_or_insert_text("text");
 
-        let delta1 = Rc::new(RefCell::new(None));
+        let delta1 = Arc::new(ArcSwapOption::default());
         let delta_clone = delta1.clone();
         let _sub1 = txt1.observe(move |txn, e| {
             let delta = e.delta(txn).to_vec();
-            delta_clone.replace(Some(delta));
+            delta_clone.store(Some(Arc::new(delta)));
         });
 
         let a1: Attrs = HashMap::from([("bold".into(), true.into())]);
@@ -2053,12 +2203,12 @@ mod test {
             let a1 = Some(Box::new(a1.clone()));
             let a2 = Some(Box::new(a2.clone()));
 
-            let expected = Some(vec![
+            let expected = Some(Arc::new(vec![
                 Delta::Inserted("a".into(), a1.clone()),
                 Delta::Inserted(embed.clone().into(), a2.clone()),
                 Delta::Inserted("b".into(), a1.clone()),
-            ]);
-            assert_eq!(delta1.take(), expected);
+            ]));
+            assert_eq!(delta1.swap(None), expected);
 
             let expected = vec![
                 Diff::new("a".into(), a1.clone()),
@@ -2107,7 +2257,7 @@ mod test {
     fn issue_101() {
         let d1 = Doc::with_client_id(1);
         let txt1 = d1.get_or_insert_text("text");
-        let delta = Rc::new(RefCell::new(None));
+        let delta = Arc::new(ArcSwapOption::default());
         let delta_copy = delta.clone();
 
         let attrs: Attrs = HashMap::from([("bold".into(), true.into())]);
@@ -2115,17 +2265,16 @@ mod test {
         txt1.insert(&mut d1.transact_mut(), 0, "abcd");
 
         let _sub = txt1.observe(move |txn, e| {
-            let mut d = delta_copy.borrow_mut();
-            *d = Some(e.delta(txn).to_vec());
+            delta_copy.store(Some(e.delta(txn).to_vec().into()));
         });
         txt1.format(&mut d1.transact_mut(), 1, 2, attrs.clone());
 
-        let expected = vec![
+        let expected = Arc::new(vec![
             Delta::Retain(1, None),
             Delta::Retain(2, Some(Box::new(attrs))),
-        ];
-        let actual = delta.borrow();
-        assert_eq!(actual.as_ref(), Some(&expected));
+        ]);
+        let actual = delta.load_full();
+        assert_eq!(actual, Some(expected));
     }
 
     #[test]
@@ -2419,7 +2568,7 @@ mod test {
             chunks,
             vec![
                 Diff::new("hello".into(), Some(Box::new(italic.clone()))),
-                Diff::new(Value::YArray(array), Some(Box::new(italic.clone()))),
+                Diff::new(Out::YArray(array), Some(Box::new(italic.clone()))),
                 Diff::new(image.into(), Some(Box::new(italic.clone()))),
                 Diff::new(" ".into(), Some(Box::new(italic))),
                 Diff::new("world".into(), Some(Box::new(italic_and_bold))),
@@ -2467,5 +2616,183 @@ mod test {
         let txt = doc.get_or_insert_text("test");
         let len = txt.len(&doc.transact());
         assert_eq!(len, 20);
+    }
+
+    #[test]
+    fn multiline_format() {
+        let doc = Doc::with_client_id(1);
+        let mut txn = doc.transact_mut();
+        let txt = txn.get_or_insert_text("text");
+        let bold: Option<Box<Attrs>> = Some(Box::new(Attrs::from([("bold".into(), true.into())])));
+        txt.insert(&mut txn, 0, "Test\nMulti-line\nFormatting");
+        txt.apply_delta(
+            &mut txn,
+            [
+                Delta::Retain(4, bold.clone()),
+                Delta::retain(1), // newline character
+                Delta::Retain(10, bold.clone()),
+                Delta::retain(1), // newline character
+                Delta::Retain(10, bold.clone()),
+            ],
+        );
+        let delta = txt.diff(&txn, YChange::identity);
+        assert_eq!(
+            delta,
+            vec![
+                Diff::new("Test".into(), bold.clone()),
+                Diff::new("\n".into(), None),
+                Diff::new("Multi-line".into(), bold.clone()),
+                Diff::new("\n".into(), None),
+                Diff::new("Formatting".into(), bold),
+            ]
+        );
+    }
+
+    #[test]
+    fn delta_with_embeds() {
+        let doc = Doc::with_client_id(1);
+        let mut txn = doc.transact_mut();
+        let txt = txn.get_or_insert_text("text");
+        let linebreak = any!({
+            "linebreak": "s"
+        });
+        txt.apply_delta(&mut txn, [Delta::insert(linebreak.clone())]);
+        let delta = txt.diff(&txn, YChange::identity);
+        assert_eq!(delta, vec![Diff::new(linebreak.into(), None)]);
+    }
+
+    #[test]
+    fn delta_with_shared_ref() {
+        let d1 = Doc::with_client_id(1);
+        let mut txn1 = d1.transact_mut();
+        let txt1 = txn1.get_or_insert_text("text");
+        txt1.apply_delta(
+            &mut txn1,
+            [Delta::insert(MapPrelim::from([("key", "val")]))],
+        );
+        let delta = txt1.diff(&txn1, YChange::identity);
+        let d: MapRef = delta[0].insert.clone().cast().unwrap();
+        assert_eq!(d.get(&txn1, "key").unwrap(), Out::Any("val".into()));
+
+        let triggered = Arc::new(AtomicBool::new(false));
+        let _sub = {
+            let triggered = triggered.clone();
+            txt1.observe(move |txn, e| {
+                let delta = e.delta(txn).to_vec();
+                let d: MapRef = match &delta[0] {
+                    Delta::Inserted(insert, _) => insert.clone().cast().unwrap(),
+                    _ => unreachable!("unexpected delta"),
+                };
+                assert_eq!(d.get(txn, "key").unwrap(), Out::Any("val".into()));
+                triggered.store(true, Ordering::Relaxed);
+            })
+        };
+
+        let d2 = Doc::with_client_id(2);
+        let mut txn2 = d2.transact_mut();
+        let txt2 = txn2.get_or_insert_text("text");
+        txn2.apply_update(Update::decode_v1(&txn1.encode_update_v1()).unwrap());
+        drop(txn1);
+        drop(txn2);
+
+        assert!(triggered.load(Ordering::Relaxed), "fired event");
+
+        let delta = txt2.diff(&d2.transact(), YChange::identity);
+        assert_eq!(delta.len(), 1);
+        let d: MapRef = delta[0].insert.clone().cast().unwrap();
+        assert_eq!(
+            d.get(&d2.transact(), "key").unwrap(),
+            Out::Any("val".into())
+        );
+    }
+
+    #[test]
+    fn delta_snapshots() {
+        let doc = Doc::with_options(Options {
+            client_id: 1,
+            skip_gc: true,
+            ..Default::default()
+        });
+        let mut txn = doc.transact_mut();
+        let txt = txn.get_or_insert_text("text");
+        txt.apply_delta(&mut txn, [Delta::insert("abcd")]);
+        let snapshot1 = txn.snapshot(); // 'abcd'
+        txt.apply_delta(
+            &mut txn,
+            [Delta::retain(1), Delta::insert("x"), Delta::delete(1)],
+        );
+        let snapshot2 = txn.snapshot(); // 'axcd'
+        txt.apply_delta(
+            &mut txn,
+            [
+                Delta::retain(2),   // ax^cd
+                Delta::delete(1),   // ax^d
+                Delta::insert("x"), // axx^d
+                Delta::delete(1),   // axx^
+            ],
+        );
+        let state1 = txt.diff_range(&mut txn, Some(&snapshot1), None, YChange::identity);
+        assert_eq!(state1, vec![Diff::new("abcd".into(), None)]);
+        let state2 = txt.diff_range(&mut txn, Some(&snapshot2), None, YChange::identity);
+        assert_eq!(state2, vec![Diff::new("axcd".into(), None)]);
+        let state2_diff = txt.diff_range(
+            &mut txn,
+            Some(&snapshot2),
+            Some(&snapshot1),
+            YChange::identity,
+        );
+        assert_eq!(
+            state2_diff,
+            vec![
+                Diff {
+                    insert: "a".into(),
+                    attributes: None,
+                    ychange: None
+                },
+                Diff {
+                    insert: "x".into(),
+                    attributes: None,
+                    ychange: Some(YChange {
+                        kind: ChangeKind::Added,
+                        id: ID {
+                            client: 1,
+                            clock: 4
+                        }
+                    })
+                },
+                Diff {
+                    insert: "b".into(),
+                    attributes: None,
+                    ychange: Some(YChange {
+                        kind: ChangeKind::Removed,
+                        id: ID {
+                            client: 1,
+                            clock: 1
+                        }
+                    })
+                },
+                Diff {
+                    insert: "cd".into(),
+                    attributes: None,
+                    ychange: None
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn snapshot_delete_after() {
+        let doc = Doc::with_options(Options {
+            client_id: 1,
+            skip_gc: true,
+            ..Default::default()
+        });
+        let mut txn = doc.transact_mut();
+        let txt = txn.get_or_insert_text("text");
+        txt.apply_delta(&mut txn, [Delta::insert("abcd")]);
+        let snapshot1 = txn.snapshot();
+        txt.apply_delta(&mut txn, [Delta::retain(4), Delta::insert("e")]);
+        let state1 = txt.diff_range(&mut txn, Some(&snapshot1), None, YChange::identity);
+        assert_eq!(state1, vec![Diff::new("abcd".into(), None)]);
     }
 }

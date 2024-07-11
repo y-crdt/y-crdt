@@ -1,15 +1,19 @@
 use crate::block::{EmbedPrelim, ItemContent, ItemPosition, ItemPtr, Prelim};
+use crate::encoding::read::Error;
+use crate::encoding::serde::from_any;
 use crate::transaction::TransactionMut;
 use crate::types::{
-    event_keys, Branch, BranchPtr, Entries, EntryChange, Path, RootRef, SharedRef, ToJson, TypeRef,
-    Value,
+    event_keys, AsPrelim, Branch, BranchPtr, DefaultPrelim, Entries, EntryChange, In, Out, Path,
+    RootRef, SharedRef, ToJson, TypeRef,
 };
 use crate::*;
+use serde::de::DeserializeOwned;
 use std::borrow::Borrow;
 use std::cell::UnsafeCell;
 use std::collections::{HashMap, HashSet};
 use std::convert::{TryFrom, TryInto};
-use std::ops::Deref;
+use std::iter::FromIterator;
+use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
 /// Collection used to store key-value entries in an unordered manner. Keys are always represented
@@ -76,7 +80,7 @@ impl ToJson for MapRef {
         let mut res = HashMap::new();
         for (key, item) in inner.map.iter() {
             if !item.is_deleted() {
-                let last = item.content.get_last().unwrap_or(Value::Any(Any::Null));
+                let last = item.content.get_last().unwrap_or(Out::Any(Any::Null));
                 res.insert(key.to_string(), last.to_json(txn));
             }
         }
@@ -109,14 +113,39 @@ impl TryFrom<ItemPtr> for MapRef {
     }
 }
 
-impl TryFrom<Value> for MapRef {
-    type Error = Value;
+impl TryFrom<Out> for MapRef {
+    type Error = Out;
 
-    fn try_from(value: Value) -> Result<Self, Self::Error> {
+    fn try_from(value: Out) -> Result<Self, Self::Error> {
         match value {
-            Value::YMap(value) => Ok(value),
+            Out::YMap(value) => Ok(value),
             other => Err(other),
         }
+    }
+}
+
+impl AsPrelim for MapRef {
+    type Prelim = MapPrelim;
+
+    fn as_prelim<T: ReadTxn>(&self, txn: &T) -> Self::Prelim {
+        let mut prelim = HashMap::with_capacity(self.len(txn) as usize);
+        for (key, &ptr) in self.0.map.iter() {
+            if !ptr.is_deleted() {
+                if let Ok(value) = Out::try_from(ptr) {
+                    prelim.insert(key.clone(), value.as_prelim(txn));
+                }
+            }
+        }
+        MapPrelim(prelim)
+    }
+}
+
+impl DefaultPrelim for MapRef {
+    type Prelim = MapPrelim;
+
+    #[inline]
+    fn default_prelim() -> Self::Prelim {
+        MapPrelim::default()
     }
 }
 
@@ -178,6 +207,70 @@ pub trait Map: AsRef<Branch> + Sized {
         }
     }
 
+    /// Tries to update a value stored under a given `key` within current map, if it's different
+    /// from the current one. Returns `true` if the value was updated, `false` otherwise.
+    ///
+    /// The main difference from [Map::insert] is that this method will not insert a new value if
+    /// it's the same as the current one. It's important distinction when dealing with shared types,
+    /// as inserting an element will force previous value to be tombstoned, causing minimal memory
+    /// overhead.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use yrs::{Doc, Map, Transact, WriteTxn};
+    ///
+    /// let doc = Doc::new();
+    /// let mut txn = doc.transact_mut();
+    /// let map = txn.get_or_insert_map("map");
+    ///
+    /// assert!(map.try_update(&mut txn, "key", 1)); // created a new entry
+    /// assert!(!map.try_update(&mut txn, "key", 1)); // unchanged value doesn't trigger inserts...
+    /// assert!(map.try_update(&mut txn, "key", 2)); // ... but changed one does
+    /// ```
+    fn try_update<K, V>(&self, txn: &mut TransactionMut, key: K, value: V) -> bool
+    where
+        K: Into<Arc<str>>,
+        V: Into<Any>,
+    {
+        let key = key.into();
+        let value = value.into();
+        let branch = self.as_ref();
+        if let Some(item) = branch.map.get(&key) {
+            if !item.is_deleted() {
+                if let ItemContent::Any(content) = &item.content {
+                    if let Some(last) = content.last() {
+                        if last == &value {
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
+
+        self.insert(txn, key, value);
+        true
+    }
+
+    /// Returns an existing instance of a type stored under a given `key` within current map.
+    /// If the given entry was not found, has been deleted or its type is different from expected,
+    /// that entry will be reset to a given type and its reference will be returned.
+    fn get_or_init<K, V>(&self, txn: &mut TransactionMut, key: K) -> V
+    where
+        K: Into<Arc<str>>,
+        V: DefaultPrelim + TryFrom<Out>,
+    {
+        let key = key.into();
+        let branch = self.as_ref();
+        if let Some(value) = branch.get(txn, &key) {
+            if let Ok(value) = value.try_into() {
+                return value;
+            }
+        }
+        let value = V::default_prelim();
+        self.insert(txn, key, value)
+    }
+
     /// Removes a stored within current map under a given `key`. Returns that value or `None` if
     /// no entry with a given `key` was present in current map.
     ///
@@ -187,7 +280,7 @@ pub trait Map: AsRef<Branch> + Sized {
     /// all of its contents will also be deleted recursively. A returned value will contain a
     /// reference to a current removed shared type (which will be empty due to all of its elements
     /// being deleted), **not** the content prior the removal.
-    fn remove(&self, txn: &mut TransactionMut, key: &str) -> Option<Value> {
+    fn remove(&self, txn: &mut TransactionMut, key: &str) -> Option<Out> {
         let ptr = BranchPtr::from(self.as_ref());
         ptr.remove(txn, key)
     }
@@ -205,9 +298,74 @@ pub trait Map: AsRef<Branch> + Sized {
 
     /// Returns a value stored under a given `key` within current map, or `None` if no entry
     /// with such `key` existed.
-    fn get<T: ReadTxn>(&self, txn: &T, key: &str) -> Option<Value> {
+    fn get<T: ReadTxn>(&self, txn: &T, key: &str) -> Option<Out> {
         let ptr = BranchPtr::from(self.as_ref());
         ptr.get(txn, key)
+    }
+
+    /// Returns a value stored under a given `key` within current map, deserializing it into expected
+    /// type if found. If value was not found, the `Any::Null` will be substituted and deserialized
+    /// instead (i.e. into instance of `Option` type, if so desired).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use yrs::{Doc, In, Map, MapPrelim, Transact, WriteTxn};
+    ///
+    /// let doc = Doc::new();
+    /// let mut txn = doc.transact_mut();
+    /// let map = txn.get_or_insert_map("map");
+    ///
+    /// // insert a multi-nested shared refs
+    /// let alice = map.insert(&mut txn, "Alice", MapPrelim::from([
+    ///   ("name", In::from("Alice")),
+    ///   ("age", In::from(30)),
+    ///   ("address", MapPrelim::from([
+    ///     ("city", In::from("London")),
+    ///     ("street", In::from("Baker st.")),
+    ///   ]).into())
+    /// ]));
+    ///
+    /// // define Rust types to map from the shared refs
+    ///
+    /// #[derive(Debug, PartialEq, serde::Deserialize)]
+    /// struct Person {
+    ///   name: String,
+    ///   age: u32,
+    ///   address: Option<Address>,
+    /// }
+    ///
+    /// #[derive(Debug, PartialEq, serde::Deserialize)]
+    /// struct Address {
+    ///   city: String,
+    ///   street: String,
+    /// }
+    ///
+    /// // retrieve and deserialize the value across multiple shared refs
+    /// let alice: Person = map.get_as(&txn, "Alice").unwrap();
+    /// assert_eq!(alice, Person {
+    ///   name: "Alice".to_string(),
+    ///   age: 30,
+    ///   address: Some(Address {
+    ///     city: "London".to_string(),
+    ///     street: "Baker st.".to_string(),
+    ///   })
+    /// });
+    ///
+    /// // try to retrieve value that doesn't exist
+    /// let bob: Option<Person> = map.get_as(&txn, "Bob").unwrap();
+    /// assert_eq!(bob, None);
+    /// ```
+    fn get_as<T, V>(&self, txn: &T, key: &str) -> Result<V, Error>
+    where
+        T: ReadTxn,
+        V: DeserializeOwned,
+    {
+        let ptr = BranchPtr::from(self.as_ref());
+        let out = ptr.get(txn, key).unwrap_or(Out::Any(Any::Null));
+        //TODO: we could probably optimize this step by not serializing to intermediate Any value
+        let any = out.to_json(txn);
+        from_any(&any)
     }
 
     /// Checks if an entry with given `key` can be found within current map.
@@ -246,7 +404,7 @@ where
     B: Borrow<T>,
     T: ReadTxn,
 {
-    type Item = (&'a str, Value);
+    type Item = (&'a str, Out);
 
     fn next(&mut self) -> Option<Self::Item> {
         let (key, item) = self.0.next()?;
@@ -306,12 +464,12 @@ where
     B: Borrow<T>,
     T: ReadTxn,
 {
-    type Item = Vec<Value>;
+    type Item = Vec<Out>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let (_, item) = self.0.next()?;
         let len = item.len() as usize;
-        let mut values = vec![Value::default(); len];
+        let mut values = vec![Out::default(); len];
         if item.content.read(0, &mut values) == len {
             Some(values)
         } else {
@@ -326,37 +484,64 @@ impl From<BranchPtr> for MapRef {
     }
 }
 
-/// A preliminary map. It can be used to early initialize the contents of a [Map], when it's about
-/// to be inserted into another Yrs collection, such as [Array] or another [Map].
-pub struct MapPrelim<T>(HashMap<String, T>);
+/// A preliminary map. It can be used to early initialize the contents of a [MapRef], when it's about
+/// to be inserted into another Yrs collection, such as [ArrayRef] or another [MapRef].
+#[repr(transparent)]
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct MapPrelim(HashMap<Arc<str>, In>);
 
-impl<T> MapPrelim<T> {
-    pub fn new() -> Self {
-        MapPrelim(HashMap::default())
+impl Deref for MapPrelim {
+    type Target = HashMap<Arc<str>, In>;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 
-impl<T> From<HashMap<String, T>> for MapPrelim<T> {
-    fn from(map: HashMap<String, T>) -> Self {
-        MapPrelim(map)
+impl DerefMut for MapPrelim {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
     }
 }
 
-impl<K, V, const N: usize> From<[(K, V); N]> for MapPrelim<V>
+impl From<MapPrelim> for In {
+    #[inline]
+    fn from(value: MapPrelim) -> Self {
+        In::Map(value)
+    }
+}
+
+impl<S, T> FromIterator<(S, T)> for MapPrelim
 where
-    K: Into<String>,
-    V: Prelim,
+    S: Into<Arc<str>>,
+    T: Into<In>,
 {
-    fn from(arr: [(K, V); N]) -> Self {
-        let mut m = HashMap::with_capacity(N);
-        for (k, v) in arr {
-            m.insert(k.into(), v);
-        }
-        MapPrelim::from(m)
+    fn from_iter<I: IntoIterator<Item = (S, T)>>(iter: I) -> Self {
+        MapPrelim(
+            iter.into_iter()
+                .map(|(k, v)| (k.into(), v.into()))
+                .collect(),
+        )
     }
 }
 
-impl<T: Prelim> Prelim for MapPrelim<T> {
+impl<S, T, const C: usize> From<[(S, T); C]> for MapPrelim
+where
+    S: Into<Arc<str>>,
+    T: Into<In>,
+{
+    fn from(map: [(S, T); C]) -> Self {
+        let mut m = HashMap::with_capacity(C);
+        for (key, value) in map {
+            m.insert(key.into(), value.into());
+        }
+        MapPrelim(m)
+    }
+}
+
+impl Prelim for MapPrelim {
     type Return = MapRef;
 
     fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
@@ -372,9 +557,9 @@ impl<T: Prelim> Prelim for MapPrelim<T> {
     }
 }
 
-impl<T: Prelim> Into<EmbedPrelim<MapPrelim<T>>> for MapPrelim<T> {
+impl Into<EmbedPrelim<MapPrelim>> for MapPrelim {
     #[inline]
-    fn into(self) -> EmbedPrelim<MapPrelim<T>> {
+    fn into(self) -> EmbedPrelim<MapPrelim> {
         EmbedPrelim::Shared(self)
     }
 }
@@ -433,18 +618,20 @@ mod test {
     use crate::test_utils::{exchange_updates, run_scenario, RngExt};
     use crate::transaction::ReadTxn;
     use crate::types::text::TextPrelim;
-    use crate::types::{DeepObservable, EntryChange, Event, Path, PathSegment, ToJson, Value};
+    use crate::types::{DeepObservable, EntryChange, Event, Out, Path, PathSegment, ToJson};
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encoder, EncoderV1};
     use crate::{
-        any, Any, Array, ArrayPrelim, ArrayRef, Doc, Map, MapPrelim, MapRef, Observable,
-        StateVector, Text, Transact, Update,
+        any, Any, Array, ArrayPrelim, ArrayRef, Doc, GetString, In, Map, MapPrelim, MapRef,
+        Observable, StateVector, Text, TextRef, Transact, Update, WriteTxn, XmlFragment,
+        XmlFragmentRef, XmlTextPrelim, XmlTextRef,
     };
+    use arc_swap::ArcSwapOption;
     use fastrand::Rng;
-    use std::cell::RefCell;
+    use serde::Deserialize;
     use std::collections::HashMap;
-    use std::ops::{Deref, DerefMut};
-    use std::rc::Rc;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
     #[test]
@@ -479,16 +666,13 @@ mod test {
         //TODO: YArray within YMap
         fn compare_all<T: ReadTxn>(m: &MapRef, txn: &T) {
             assert_eq!(m.len(txn), 5);
-            assert_eq!(m.get(txn, &"number".to_owned()), Some(Value::from(1f64)));
-            assert_eq!(m.get(txn, &"boolean0".to_owned()), Some(Value::from(false)));
-            assert_eq!(m.get(txn, &"boolean1".to_owned()), Some(Value::from(true)));
-            assert_eq!(
-                m.get(txn, &"string".to_owned()),
-                Some(Value::from("hello Y"))
-            );
+            assert_eq!(m.get(txn, &"number".to_owned()), Some(Out::from(1f64)));
+            assert_eq!(m.get(txn, &"boolean0".to_owned()), Some(Out::from(false)));
+            assert_eq!(m.get(txn, &"boolean1".to_owned()), Some(Out::from(true)));
+            assert_eq!(m.get(txn, &"string".to_owned()), Some(Out::from("hello Y")));
             assert_eq!(
                 m.get(txn, &"object".to_owned()),
-                Some(Value::from(any!({
+                Some(Out::from(any!({
                     "key": {
                         "key2": "value"
                     }
@@ -521,11 +705,8 @@ mod test {
 
         t2.apply_update(Update::decode_v1(update.as_slice()).unwrap());
 
-        assert_eq!(
-            m2.get(&t2, &"stuff".to_owned()),
-            Some(Value::from("stuffy"))
-        );
-        assert_eq!(m2.get(&t2, &"null".to_owned()), Some(Value::Any(Any::Null)));
+        assert_eq!(m2.get(&t2, &"stuff".to_owned()), Some(Out::from("stuffy")));
+        assert_eq!(m2.get(&t2, &"null".to_owned()), Some(Out::Any(Any::Null)));
     }
 
     #[test]
@@ -547,8 +728,8 @@ mod test {
         t1.apply_update(Update::decode_v1(u2.as_slice()).unwrap());
         t2.apply_update(Update::decode_v1(u1.as_slice()).unwrap());
 
-        assert_eq!(m1.get(&t1, &"stuff".to_owned()), Some(Value::from("c1")));
-        assert_eq!(m2.get(&t2, &"stuff".to_owned()), Some(Value::from("c1")));
+        assert_eq!(m1.get(&t1, &"stuff".to_owned()), Some(Out::from("c1")));
+        assert_eq!(m2.get(&t2, &"stuff".to_owned()), Some(Out::from("c1")));
     }
 
     #[test]
@@ -565,7 +746,7 @@ mod test {
         assert_eq!(m1.len(&t1), 2);
 
         // remove 'stuff'
-        assert_eq!(m1.remove(&mut t1, &key1), Some(Value::from("c0")));
+        assert_eq!(m1.remove(&mut t1, &key1), Some(Out::from("c0")));
         assert_eq!(m1.len(&t1), 1);
 
         // remove 'stuff' again - nothing should happen
@@ -573,7 +754,7 @@ mod test {
         assert_eq!(m1.len(&t1), 1);
 
         // remove 'other-stuff'
-        assert_eq!(m1.remove(&mut t1, &key2), Some(Value::from("c1")));
+        assert_eq!(m1.remove(&mut t1, &key2), Some(Out::from("c1")));
         assert_eq!(m1.len(&t1), 0);
     }
 
@@ -697,7 +878,7 @@ mod test {
 
             assert_eq!(
                 map.get(&doc.transact(), &"stuff".to_owned()),
-                Some(Value::from("c3")),
+                Some(Out::from("c3")),
                 "peer {} - map entry resolved to unexpected value",
                 doc.client_id()
             );
@@ -765,11 +946,11 @@ mod test {
         let d1 = Doc::with_client_id(1);
         let m1 = d1.get_or_insert_map("map");
 
-        let entries = Rc::new(RefCell::new(None));
+        let entries = Arc::new(ArcSwapOption::default());
         let entries_c = entries.clone();
         let _sub = m1.observe(move |txn, e| {
             let keys = e.keys(txn);
-            *entries_c.borrow_mut() = Some(keys.clone());
+            entries_c.store(Some(Arc::new(keys.clone())));
         });
 
         // insert new entry
@@ -779,11 +960,11 @@ mod test {
             // txn is committed at the end of this scope
         }
         assert_eq!(
-            entries.take(),
-            Some(HashMap::from([(
+            entries.swap(None),
+            Some(Arc::new(HashMap::from([(
                 "a".into(),
                 EntryChange::Inserted(Any::Number(1.0).into())
-            )]))
+            )])))
         );
 
         // update existing entry once
@@ -792,11 +973,11 @@ mod test {
             m1.insert(&mut txn, "a", 2);
         }
         assert_eq!(
-            entries.take(),
-            Some(HashMap::from([(
+            entries.swap(None),
+            Some(Arc::new(HashMap::from([(
                 "a".into(),
                 EntryChange::Updated(Any::Number(1.0).into(), Any::Number(2.0).into())
-            )]))
+            )])))
         );
 
         // update existing entry twice
@@ -806,11 +987,11 @@ mod test {
             m1.insert(&mut txn, "a", 4);
         }
         assert_eq!(
-            entries.take(),
-            Some(HashMap::from([(
+            entries.swap(None),
+            Some(Arc::new(HashMap::from([(
                 "a".into(),
                 EntryChange::Updated(Any::Number(2.0).into(), Any::Number(4.0).into())
-            )]))
+            )])))
         );
 
         // remove existing entry
@@ -819,11 +1000,11 @@ mod test {
             m1.remove(&mut txn, "a");
         }
         assert_eq!(
-            entries.take(),
-            Some(HashMap::from([(
+            entries.swap(None),
+            Some(Arc::new(HashMap::from([(
                 "a".into(),
                 EntryChange::Removed(Any::Number(4.0).into())
-            )]))
+            )])))
         );
 
         // add another entry and update it
@@ -833,11 +1014,11 @@ mod test {
             m1.insert(&mut txn, "b", 2);
         }
         assert_eq!(
-            entries.take(),
-            Some(HashMap::from([(
+            entries.swap(None),
+            Some(Arc::new(HashMap::from([(
                 "b".into(),
                 EntryChange::Inserted(Any::Number(2.0).into())
-            )]))
+            )])))
         );
 
         // add and remove an entry
@@ -846,17 +1027,17 @@ mod test {
             m1.insert(&mut txn, "c", 1);
             m1.remove(&mut txn, "c");
         }
-        assert_eq!(entries.take(), Some(HashMap::new()));
+        assert_eq!(entries.swap(None), Some(HashMap::new().into()));
 
         // copy updates over
         let d2 = Doc::with_client_id(2);
         let m2 = d2.get_or_insert_map("map");
 
-        let entries = Rc::new(RefCell::new(None));
+        let entries = Arc::new(ArcSwapOption::default());
         let entries_c = entries.clone();
         let _sub = m2.observe(move |txn, e| {
             let keys = e.keys(txn);
-            *entries_c.borrow_mut() = Some(keys.clone());
+            entries_c.store(Some(Arc::new(keys.clone())));
         });
 
         {
@@ -869,11 +1050,11 @@ mod test {
             t2.apply_update(Update::decode_v1(encoder.to_vec().as_slice()).unwrap());
         }
         assert_eq!(
-            entries.take(),
-            Some(HashMap::from([(
+            entries.swap(None),
+            Some(Arc::new(HashMap::from([(
                 "b".into(),
                 EntryChange::Inserted(Any::Number(2.0).into())
-            )]))
+            )])))
         );
     }
 
@@ -902,11 +1083,7 @@ mod test {
                 map.insert(
                     &mut txn,
                     key.to_string(),
-                    MapPrelim::from({
-                        let mut map = HashMap::default();
-                        map.insert("deepkey".to_owned(), "deepvalue");
-                        map
-                    }),
+                    MapPrelim::from([("deepkey".to_owned(), "deepvalue")]),
                 );
             }
         }
@@ -934,19 +1111,17 @@ mod test {
         let doc = Doc::with_client_id(1);
         let map = doc.get_or_insert_map("map");
 
-        let paths = Rc::new(RefCell::new(vec![]));
-        let calls = Rc::new(RefCell::new(0));
+        let paths = Arc::new(Mutex::new(vec![]));
+        let calls = Arc::new(AtomicU32::new(0));
         let paths_copy = paths.clone();
         let calls_copy = calls.clone();
         let _sub = map.observe_deep(move |_txn, e| {
             let path: Vec<Path> = e.iter().map(Event::path).collect();
-            paths_copy.borrow_mut().push(path);
-            let mut count = calls_copy.borrow_mut();
-            let count = count.deref_mut();
-            *count += 1;
+            paths_copy.lock().unwrap().push(path);
+            calls_copy.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         });
 
-        let nested = map.insert(&mut doc.transact_mut(), "map", MapPrelim::<String>::new());
+        let nested = map.insert(&mut doc.transact_mut(), "map", MapPrelim::default());
         nested.insert(
             &mut doc.transact_mut(),
             "array",
@@ -962,8 +1137,8 @@ mod test {
         let nested_text = nested.insert(&mut doc.transact_mut(), "text", TextPrelim::new("text"));
         nested_text.push(&mut doc.transact_mut(), "!");
 
-        assert_eq!(*calls.borrow().deref(), 5);
-        let actual = paths.borrow();
+        assert_eq!(calls.load(Ordering::Relaxed), 5);
+        let actual = paths.lock().unwrap();
         assert_eq!(
             actual.as_slice(),
             &[
@@ -980,6 +1155,141 @@ mod test {
                 ])],
             ]
         );
+    }
+
+    #[test]
+    fn get_or_init() {
+        let doc = Doc::with_client_id(1);
+        let mut txn = doc.transact_mut();
+        let map = txn.get_or_insert_map("map");
+
+        let m: MapRef = map.get_or_init(&mut txn, "nested");
+        m.insert(&mut txn, "key", 1);
+        let m: MapRef = map.get_or_init(&mut txn, "nested");
+        assert_eq!(m.get(&txn, "key"), Some(Out::from(1)));
+
+        let m: ArrayRef = map.get_or_init(&mut txn, "nested");
+        m.insert(&mut txn, 0, 1);
+        let m: ArrayRef = map.get_or_init(&mut txn, "nested");
+        assert_eq!(m.get(&txn, 0), Some(Out::from(1)));
+
+        let m: TextRef = map.get_or_init(&mut txn, "nested");
+        m.insert(&mut txn, 0, "a");
+        let m: TextRef = map.get_or_init(&mut txn, "nested");
+        assert_eq!(m.get_string(&txn), "a".to_string());
+
+        let m: XmlFragmentRef = map.get_or_init(&mut txn, "nested");
+        m.insert(&mut txn, 0, XmlTextPrelim::new("b"));
+        let m: XmlFragmentRef = map.get_or_init(&mut txn, "nested");
+        assert_eq!(m.get_string(&txn), "b".to_string());
+
+        let m: XmlTextRef = map.get_or_init(&mut txn, "nested");
+        m.insert(&mut txn, 0, "c");
+        let m: XmlTextRef = map.get_or_init(&mut txn, "nested");
+        assert_eq!(m.get_string(&txn), "c".to_string());
+    }
+
+    #[test]
+    fn try_update() {
+        let doc = Doc::new();
+        let mut txn = doc.transact_mut();
+        let map = txn.get_or_insert_map("map");
+
+        assert!(map.try_update(&mut txn, "key", 1), "new entry");
+        assert_eq!(map.get(&txn, "key"), Some(Out::from(1)));
+
+        assert!(
+            !map.try_update(&mut txn, "key", 1),
+            "unchanged entry shouldn't trigger update"
+        );
+        assert_eq!(map.get(&txn, "key"), Some(Out::from(1)));
+
+        assert!(map.try_update(&mut txn, "key", 2), "entry should change");
+        assert_eq!(map.get(&txn, "key"), Some(Out::from(2)));
+
+        map.remove(&mut txn, "key");
+        assert!(
+            map.try_update(&mut txn, "key", 2),
+            "removed entry should trigger update"
+        );
+        assert_eq!(map.get(&txn, "key"), Some(Out::from(2)));
+    }
+
+    #[test]
+    fn get_as() {
+        #[derive(Debug, PartialEq, Deserialize)]
+        struct Order {
+            shipment_address: String,
+            items: HashMap<String, OrderItem>,
+            #[serde(default)]
+            comment: Option<String>,
+        }
+
+        #[derive(Debug, PartialEq, Deserialize)]
+        struct OrderItem {
+            name: String,
+            price: f64,
+            quantity: u32,
+        }
+
+        let doc = Doc::new();
+        let mut txn = doc.transact_mut();
+        let map = txn.get_or_insert_map("map");
+
+        map.insert(
+            &mut txn,
+            "orders",
+            ArrayPrelim::from([In::from(MapPrelim::from([
+                ("shipment_address", In::from("123 Main St")),
+                (
+                    "items",
+                    In::from(MapPrelim::from([
+                        (
+                            "item1",
+                            In::from(MapPrelim::from([
+                                ("name", In::from("item1")),
+                                ("price", In::from(1.99)),
+                                ("quantity", In::from(2)),
+                            ])),
+                        ),
+                        (
+                            "item2",
+                            In::from(MapPrelim::from([
+                                ("name", In::from("item2")),
+                                ("price", In::from(2.99)),
+                                ("quantity", In::from(1)),
+                            ])),
+                        ),
+                    ])),
+                ),
+            ]))]),
+        );
+
+        let expected = Order {
+            comment: None,
+            shipment_address: "123 Main St".to_string(),
+            items: HashMap::from([
+                (
+                    "item1".to_string(),
+                    OrderItem {
+                        name: "item1".to_string(),
+                        price: 1.99,
+                        quantity: 2,
+                    },
+                ),
+                (
+                    "item2".to_string(),
+                    OrderItem {
+                        name: "item2".to_string(),
+                        price: 2.99,
+                        quantity: 1,
+                    },
+                ),
+            ]),
+        };
+
+        let actual: Vec<Order> = map.get_as(&txn, "orders").unwrap();
+        assert_eq!(actual, vec![expected]);
     }
 
     #[test]

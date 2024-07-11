@@ -1,8 +1,8 @@
 use crate::collection::SharedCollection;
-use crate::js::{Js, Shared};
+use crate::js::{Callback, Js, Shared};
 use crate::transaction::YTransaction;
 use crate::xml_frag::YXmlEvent;
-use crate::{ImplicitTransaction, Observer};
+use crate::ImplicitTransaction;
 use gloo_utils::format::JsValueSerdeExt;
 use std::collections::HashMap;
 use std::iter::FromIterator;
@@ -377,9 +377,8 @@ impl YXmlElement {
 
     /// Subscribes to all operations happening over this instance of `YXmlElement`. All changes are
     /// batched and eventually triggered during transaction commit phase.
-    /// Returns an `YObserver` which, when free'd, will unsubscribe current callback.
     #[wasm_bindgen(js_name = observe)]
-    pub fn observe(&mut self, f: js_sys::Function) -> crate::Result<Observer> {
+    pub fn observe(&mut self, callback: js_sys::Function) -> crate::Result<()> {
         match &self.0 {
             SharedCollection::Prelim(_) => {
                 Err(JsValue::from_str(crate::js::errors::INVALID_PRELIM_OP))
@@ -387,12 +386,31 @@ impl YXmlElement {
             SharedCollection::Integrated(c) => {
                 let txn = c.transact()?;
                 let array = c.resolve(&txn)?;
-                Ok(Observer(array.observe(move |txn, e| {
+                let abi = callback.subscription_key();
+                array.observe_with(abi, move |txn, e| {
                     let e = YXmlEvent::new(e, txn);
                     let txn = YTransaction::from_ref(txn);
-                    f.call2(&JsValue::UNDEFINED, &e.into(), &txn.into())
+                    callback
+                        .call2(&JsValue::UNDEFINED, &e.into(), &txn.into())
                         .unwrap();
-                })))
+                });
+                Ok(())
+            }
+        }
+    }
+
+    /// Unsubscribes a callback previously subscribed with `observe` method.
+    #[wasm_bindgen(js_name = unobserve)]
+    pub fn unobserve(&mut self, callback: js_sys::Function) -> crate::Result<bool> {
+        match &self.0 {
+            SharedCollection::Prelim(_) => {
+                Err(JsValue::from_str(crate::js::errors::INVALID_PRELIM_OP))
+            }
+            SharedCollection::Integrated(c) => {
+                let txn = c.transact()?;
+                let shared_ref = c.resolve(&txn)?;
+                let abi = callback.subscription_key();
+                Ok(shared_ref.unobserve(abi))
             }
         }
     }
@@ -400,9 +418,8 @@ impl YXmlElement {
     /// Subscribes to all operations happening over this Y shared type, as well as events in
     /// shared types stored within this one. All changes are batched and eventually triggered
     /// during transaction commit phase.
-    /// Returns an `YEventObserver` which, when free'd, will unsubscribe current callback.
     #[wasm_bindgen(js_name = observeDeep)]
-    pub fn observe_deep(&mut self, f: js_sys::Function) -> crate::Result<Observer> {
+    pub fn observe_deep(&mut self, callback: js_sys::Function) -> crate::Result<()> {
         match &self.0 {
             SharedCollection::Prelim(_) => {
                 Err(JsValue::from_str(crate::js::errors::INVALID_PRELIM_OP))
@@ -410,11 +427,31 @@ impl YXmlElement {
             SharedCollection::Integrated(c) => {
                 let txn = c.transact()?;
                 let array = c.resolve(&txn)?;
-                Ok(Observer(array.observe_deep(move |txn, e| {
+                let abi = callback.subscription_key();
+                array.observe_deep_with(abi, move |txn, e| {
                     let e = crate::js::convert::events_into_js(txn, e);
                     let txn = YTransaction::from_ref(txn);
-                    f.call2(&JsValue::UNDEFINED, &e, &txn.into()).unwrap();
-                })))
+                    callback
+                        .call2(&JsValue::UNDEFINED, &e, &txn.into())
+                        .unwrap();
+                });
+                Ok(())
+            }
+        }
+    }
+
+    /// Unsubscribes a callback previously subscribed with `observeDeep` method.
+    #[wasm_bindgen(js_name = unobserveDeep)]
+    pub fn unobserve_deep(&mut self, callback: js_sys::Function) -> crate::Result<bool> {
+        match &self.0 {
+            SharedCollection::Prelim(_) => {
+                Err(JsValue::from_str(crate::js::errors::INVALID_PRELIM_OP))
+            }
+            SharedCollection::Integrated(c) => {
+                let txn = c.transact()?;
+                let shared_ref = c.resolve(&txn)?;
+                let abi = callback.subscription_key();
+                Ok(shared_ref.unobserve_deep(abi))
             }
         }
     }

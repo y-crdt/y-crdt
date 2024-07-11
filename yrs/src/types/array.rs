@@ -1,18 +1,22 @@
 use crate::block::{EmbedPrelim, ItemContent, ItemPtr, Prelim, Unused};
 use crate::block_iter::BlockIter;
+use crate::encoding::read::Error;
+use crate::encoding::serde::from_any;
 use crate::moving::StickyIndex;
 use crate::transaction::TransactionMut;
 use crate::types::{
-    event_change_set, Branch, BranchPtr, Change, ChangeSet, Path, RootRef, SharedRef, ToJson,
-    TypeRef, Value,
+    event_change_set, AsPrelim, Branch, BranchPtr, Change, ChangeSet, DefaultPrelim, In, Out, Path,
+    RootRef, SharedRef, ToJson, TypeRef,
 };
 use crate::{Any, Assoc, DeepObservable, IndexedSequence, Observable, ReadTxn, ID};
+use serde::de::DeserializeOwned;
 use std::borrow::Borrow;
 use std::cell::UnsafeCell;
 use std::collections::HashSet;
 use std::convert::{TryFrom, TryInto};
+use std::iter::FromIterator;
 use std::marker::PhantomData;
-use std::ops::Deref;
+use std::ops::{Deref, DerefMut};
 
 /// A collection used to store data in an indexed sequence structure. This type is internally
 /// implemented as a double linked list, which may squash values inserted directly one after another
@@ -88,7 +92,7 @@ impl ToJson for ArrayRef {
     fn to_json<T: ReadTxn>(&self, txn: &T) -> Any {
         let mut walker = BlockIter::new(self.0);
         let len = self.0.len();
-        let mut buf = vec![Value::default(); len as usize];
+        let mut buf = vec![Out::default(); len as usize];
         let read = walker.slice(txn, &mut buf);
         if read == len {
             let res = buf.into_iter().map(|v| v.to_json(txn)).collect();
@@ -132,14 +136,35 @@ impl TryFrom<ItemPtr> for ArrayRef {
     }
 }
 
-impl TryFrom<Value> for ArrayRef {
-    type Error = Value;
+impl TryFrom<Out> for ArrayRef {
+    type Error = Out;
 
-    fn try_from(value: Value) -> Result<Self, Self::Error> {
+    fn try_from(value: Out) -> Result<Self, Self::Error> {
         match value {
-            Value::YArray(value) => Ok(value),
+            Out::YArray(value) => Ok(value),
             other => Err(other),
         }
+    }
+}
+
+impl AsPrelim for ArrayRef {
+    type Prelim = ArrayPrelim;
+
+    fn as_prelim<T: ReadTxn>(&self, txn: &T) -> Self::Prelim {
+        let mut prelim = Vec::with_capacity(self.len(txn) as usize);
+        for value in self.iter(txn) {
+            prelim.push(value.as_prelim(txn));
+        }
+        ArrayPrelim(prelim)
+    }
+}
+
+impl DefaultPrelim for ArrayRef {
+    type Prelim = ArrayPrelim;
+
+    #[inline]
+    fn default_prelim() -> Self::Prelim {
+        ArrayPrelim::default()
     }
 }
 
@@ -231,13 +256,77 @@ pub trait Array: AsRef<Branch> + Sized {
 
     /// Retrieves a value stored at a given `index`. Returns `None` when provided index was out
     /// of the range of a current array.
-    fn get<T: ReadTxn>(&self, txn: &T, index: u32) -> Option<Value> {
+    fn get<T: ReadTxn>(&self, txn: &T, index: u32) -> Option<Out> {
         let mut walker = BlockIter::new(BranchPtr::from(self.as_ref()));
         if walker.try_forward(txn, index) {
             walker.read_value(txn)
         } else {
             None
         }
+    }
+
+    /// Returns a value stored under a given `index` within current map, deserializing it into
+    /// expected type if found. If value was not found, the `Any::Null` will be substituted and
+    /// deserialized instead (i.e. into instance of `Option` type, if so desired).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use yrs::{Doc, In, Array, MapPrelim, Transact, WriteTxn};
+    ///
+    /// let doc = Doc::new();
+    /// let mut txn = doc.transact_mut();
+    /// let array = txn.get_or_insert_array("array");
+    ///
+    /// // insert a multi-nested shared refs
+    /// let alice = array.insert(&mut txn, 0, MapPrelim::from([
+    ///   ("name", In::from("Alice")),
+    ///   ("age", In::from(30)),
+    ///   ("address", MapPrelim::from([
+    ///     ("city", In::from("London")),
+    ///     ("street", In::from("Baker st.")),
+    ///   ]).into())
+    /// ]));
+    ///
+    /// // define Rust types to map from the shared refs
+    ///
+    /// #[derive(Debug, PartialEq, serde::Deserialize)]
+    /// struct Person {
+    ///   name: String,
+    ///   age: u32,
+    ///   address: Option<Address>,
+    /// }
+    ///
+    /// #[derive(Debug, PartialEq, serde::Deserialize)]
+    /// struct Address {
+    ///   city: String,
+    ///   street: String,
+    /// }
+    ///
+    /// // retrieve and deserialize the value across multiple shared refs
+    /// let alice: Person = array.get_as(&txn, 0).unwrap();
+    /// assert_eq!(alice, Person {
+    ///   name: "Alice".to_string(),
+    ///   age: 30,
+    ///   address: Some(Address {
+    ///     city: "London".to_string(),
+    ///     street: "Baker st.".to_string(),
+    ///   })
+    /// });
+    ///
+    /// // try to retrieve value that doesn't exist
+    /// let bob: Option<Person> = array.get_as(&txn, 1).unwrap();
+    /// assert_eq!(bob, None);
+    /// ```
+    fn get_as<T, V>(&self, txn: &T, index: u32) -> Result<V, Error>
+    where
+        T: ReadTxn,
+        V: DeserializeOwned,
+    {
+        let out = self.get(txn, index).unwrap_or(Out::Any(Any::Null));
+        //TODO: we could probably optimize this step by not serializing to intermediate Any value
+        let any = out.to_json(txn);
+        from_any(&any)
     }
 
     /// Moves element found at `source` index into `target` index position. Both indexes refer to a
@@ -368,16 +457,16 @@ where
     B: Borrow<T>,
     T: ReadTxn,
 {
-    type Item = Value;
+    type Item = Out;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.inner.finished() {
             None
         } else {
-            let mut buf = [Value::default(); 1];
+            let mut buf = [Out::default(); 1];
             let txn = self.txn.borrow();
             if self.inner.slice(txn, &mut buf) != 0 {
-                Some(std::mem::replace(&mut buf[0], Value::default()))
+                Some(std::mem::replace(&mut buf[0], Out::default()))
             } else {
                 None
             }
@@ -391,26 +480,54 @@ impl From<BranchPtr> for ArrayRef {
     }
 }
 
-/// A preliminary array. It's can be used to initialize an YArray, when it's about to be nested
-/// into another Yrs data collection, such as [Map] or another YArray.
-pub struct ArrayPrelim<T, V>(T)
-where
-    T: IntoIterator<Item = V>;
+/// A preliminary array. It can be used to initialize an [ArrayRef], when it's about to be nested
+/// into another Yrs data collection, such as [Map] or another [ArrayRef].
+#[repr(transparent)]
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ArrayPrelim(Vec<In>);
 
-impl<T, V> From<T> for ArrayPrelim<T, V>
-where
-    T: IntoIterator<Item = V>,
-{
-    fn from(iter: T) -> Self {
-        ArrayPrelim(iter)
+impl Deref for ArrayPrelim {
+    type Target = Vec<In>;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 
-impl<T, V> Prelim for ArrayPrelim<T, V>
+impl DerefMut for ArrayPrelim {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl From<ArrayPrelim> for In {
+    #[inline]
+    fn from(value: ArrayPrelim) -> Self {
+        In::Array(value)
+    }
+}
+
+impl<T> FromIterator<T> for ArrayPrelim
 where
-    V: Prelim,
-    T: IntoIterator<Item = V>,
+    T: Into<In>,
 {
+    fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
+        ArrayPrelim(iter.into_iter().map(|v| v.into()).collect())
+    }
+}
+
+impl<I, T> From<I> for ArrayPrelim
+where
+    I: IntoIterator<Item = T>,
+    T: Into<In>,
+{
+    fn from(iter: I) -> Self {
+        ArrayPrelim(iter.into_iter().map(|v| v.into()).collect())
+    }
+}
+
+impl Prelim for ArrayPrelim {
     type Return = ArrayRef;
 
     fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
@@ -426,19 +543,10 @@ where
     }
 }
 
-impl<T, V> Into<EmbedPrelim<ArrayPrelim<T, V>>> for ArrayPrelim<T, V>
-where
-    T: IntoIterator<Item = V>,
-{
+impl Into<EmbedPrelim<ArrayPrelim>> for ArrayPrelim {
     #[inline]
-    fn into(self) -> EmbedPrelim<ArrayPrelim<T, V>> {
+    fn into(self) -> EmbedPrelim<ArrayPrelim> {
         EmbedPrelim::Shared(self)
-    }
-}
-
-impl Default for ArrayPrelim<[u32; 0], u32> {
-    fn default() -> Self {
-        ArrayPrelim([])
     }
 }
 
@@ -519,16 +627,14 @@ impl ArrayEvent {
 mod test {
     use crate::test_utils::{exchange_updates, run_scenario, RngExt};
     use crate::types::map::MapPrelim;
-    use crate::types::{Change, DeepObservable, Event, Path, PathSegment, ToJson, Value};
+    use crate::types::{Change, DeepObservable, Event, Out, Path, PathSegment, ToJson};
     use crate::{
         any, Any, Array, ArrayPrelim, Assoc, Doc, Map, MapRef, Observable, SharedRef, StateVector,
         Transact, Update, ID,
     };
-    use std::cell::{Cell, RefCell};
     use std::collections::{HashMap, HashSet};
-    use std::ops::Deref;
-    use std::rc::Rc;
-    use std::sync::Arc;
+    use std::iter::FromIterator;
+    use std::sync::{Arc, Mutex};
 
     #[test]
     fn push_back() {
@@ -659,7 +765,7 @@ mod test {
             let actual: Vec<_> = a1.iter(&t1).collect();
             assert_eq!(
                 actual,
-                vec![Value::from(1.0), Value::from(true), Value::from(false)]
+                vec![Out::from(1.0), Out::from(true), Out::from(false)]
             );
         }
 
@@ -670,7 +776,7 @@ mod test {
         let actual: Vec<_> = a2.iter(&t2).collect();
         assert_eq!(
             actual,
-            vec![Value::from(1.0), Value::from(true), Value::from(false)]
+            vec![Out::from(1.0), Out::from(true), Out::from(false)]
         );
     }
 
@@ -705,7 +811,7 @@ mod test {
         assert_eq!(a2, a3, "Peer 2 and peer 3 states are different");
     }
 
-    fn to_array(d: &Doc) -> Vec<Value> {
+    fn to_array(d: &Doc) -> Vec<Out> {
         let a = d.get_or_insert_array("array");
         a.iter(&d.transact()).collect()
     }
@@ -854,12 +960,12 @@ mod test {
         for i in 0..10 {
             let mut m = HashMap::new();
             m.insert("value".to_owned(), i);
-            a.push_back(&mut txn, MapPrelim::from(m));
+            a.push_back(&mut txn, MapPrelim::from_iter(m));
         }
 
         for (i, value) in a.iter(&txn).enumerate() {
             match value {
-                Value::YMap(_) => {
+                Out::YMap(_) => {
                     assert_eq!(value.to_json(&txn), any!({"value": (i as f64) }))
                 }
                 _ => panic!("Value of array at index {} was no YMap", i),
@@ -871,10 +977,10 @@ mod test {
     fn insert_and_remove_events() {
         let d = Doc::with_client_id(1);
         let array = d.get_or_insert_array("array");
-        let happened = Rc::new(Cell::new(false));
+        let happened = Arc::new(AtomicBool::new(false));
         let happened_clone = happened.clone();
         let _sub = array.observe(move |_, _| {
-            happened_clone.set(true);
+            happened_clone.store(true, Ordering::Relaxed);
         });
 
         {
@@ -883,7 +989,7 @@ mod test {
             // txn is committed at the end of this scope
         }
         assert!(
-            happened.replace(false),
+            happened.swap(false, Ordering::Relaxed),
             "insert of [0,1,2] should trigger event"
         );
 
@@ -893,7 +999,7 @@ mod test {
             // txn is committed at the end of this scope
         }
         assert!(
-            happened.replace(false),
+            happened.swap(false, Ordering::Relaxed),
             "removal of [0] should trigger event"
         );
 
@@ -903,7 +1009,7 @@ mod test {
             // txn is committed at the end of this scope
         }
         assert!(
-            happened.replace(false),
+            happened.swap(false, Ordering::Relaxed),
             "removal of [1,2] should trigger event"
         );
     }
@@ -912,15 +1018,15 @@ mod test {
     fn insert_and_remove_event_changes() {
         let d1 = Doc::with_client_id(1);
         let array = d1.get_or_insert_array("array");
-        let added = Rc::new(RefCell::new(None));
-        let removed = Rc::new(RefCell::new(None));
-        let delta = Rc::new(RefCell::new(None));
+        let added = Arc::new(ArcSwapOption::default());
+        let removed = Arc::new(ArcSwapOption::default());
+        let delta = Arc::new(ArcSwapOption::default());
 
         let (added_c, removed_c, delta_c) = (added.clone(), removed.clone(), delta.clone());
         let _sub = array.observe(move |txn, e| {
-            *added_c.borrow_mut() = Some(e.inserts(txn).clone());
-            *removed_c.borrow_mut() = Some(e.removes(txn).clone());
-            *delta_c.borrow_mut() = Some(e.delta(txn).to_vec());
+            added_c.store(Some(Arc::new(e.inserts(txn).clone())));
+            removed_c.store(Some(Arc::new(e.removes(txn).clone())));
+            delta_c.store(Some(Arc::new(e.delta(txn).to_vec())));
         });
 
         {
@@ -930,53 +1036,59 @@ mod test {
             // txn is committed at the end of this scope
         }
         assert_eq!(
-            added.borrow_mut().take(),
-            Some(HashSet::from([ID::new(1, 0), ID::new(1, 1)]))
+            added.swap(None),
+            Some(HashSet::from([ID::new(1, 0), ID::new(1, 1)]).into())
         );
-        assert_eq!(removed.borrow_mut().take(), Some(HashSet::new()));
+        assert_eq!(removed.swap(None), Some(HashSet::new().into()));
         assert_eq!(
-            delta.borrow_mut().take(),
-            Some(vec![Change::Added(vec![
-                Any::Number(4.0).into(),
-                Any::String("dtrn".into()).into()
-            ])])
+            delta.swap(None),
+            Some(
+                vec![Change::Added(vec![
+                    Any::Number(4.0).into(),
+                    Any::String("dtrn".into()).into()
+                ])]
+                .into()
+            )
         );
 
         {
             let mut txn = d1.transact_mut();
             array.remove_range(&mut txn, 0, 1);
         }
-        assert_eq!(added.borrow_mut().take(), Some(HashSet::new()));
+        assert_eq!(added.swap(None), Some(HashSet::new().into()));
         assert_eq!(
-            removed.borrow_mut().take(),
-            Some(HashSet::from([ID::new(1, 0)]))
+            removed.swap(None),
+            Some(HashSet::from([ID::new(1, 0)]).into())
         );
-        assert_eq!(delta.borrow_mut().take(), Some(vec![Change::Removed(1)]));
+        assert_eq!(delta.swap(None), Some(vec![Change::Removed(1)].into()));
 
         {
             let mut txn = d1.transact_mut();
             array.insert(&mut txn, 1, 0.5);
         }
         assert_eq!(
-            added.borrow_mut().take(),
-            Some(HashSet::from([ID::new(1, 2)]))
+            added.swap(None),
+            Some(HashSet::from([ID::new(1, 2)]).into())
         );
-        assert_eq!(removed.borrow_mut().take(), Some(HashSet::new()));
+        assert_eq!(removed.swap(None), Some(HashSet::new().into()));
         assert_eq!(
-            delta.borrow_mut().take(),
-            Some(vec![
-                Change::Retain(1),
-                Change::Added(vec![Any::Number(0.5).into()])
-            ])
+            delta.swap(None),
+            Some(
+                vec![
+                    Change::Retain(1),
+                    Change::Added(vec![Any::Number(0.5).into()])
+                ]
+                .into()
+            )
         );
 
         let d2 = Doc::with_client_id(2);
         let array2 = d2.get_or_insert_array("array");
         let (added_c, removed_c, delta_c) = (added.clone(), removed.clone(), delta.clone());
         let _sub = array2.observe(move |txn, e| {
-            *added_c.borrow_mut() = Some(e.inserts(txn).clone());
-            *removed_c.borrow_mut() = Some(e.removes(txn).clone());
-            *delta_c.borrow_mut() = Some(e.delta(txn).to_vec());
+            added_c.store(Some(e.inserts(txn).clone().into()));
+            removed_c.store(Some(e.removes(txn).clone().into()));
+            delta_c.store(Some(e.delta(txn).to_vec().into()));
         });
 
         {
@@ -990,16 +1102,19 @@ mod test {
         }
 
         assert_eq!(
-            added.borrow_mut().take(),
-            Some(HashSet::from([ID::new(1, 1)]))
+            added.swap(None),
+            Some(HashSet::from([ID::new(1, 1)]).into())
         );
-        assert_eq!(removed.borrow_mut().take(), Some(HashSet::new()));
+        assert_eq!(removed.swap(None), Some(HashSet::new().into()));
         assert_eq!(
-            delta.borrow_mut().take(),
-            Some(vec![Change::Added(vec![
-                Any::String("dtrn".into()).into(),
-                Any::Number(0.5).into(),
-            ])])
+            delta.swap(None),
+            Some(
+                vec![Change::Added(vec![
+                    Any::String("dtrn".into()).into(),
+                    Any::Number(0.5).into(),
+                ])]
+                .into()
+            )
         );
     }
 
@@ -1010,15 +1125,15 @@ mod test {
         let a1 = d1.get_or_insert_array("array");
         let a2 = d2.get_or_insert_array("array");
 
-        let c1 = Rc::new(RefCell::new(None));
+        let c1 = Arc::new(ArcSwapOption::default());
         let c1c = c1.clone();
         let _s1 = a1.observe(move |_, e| {
-            *c1c.borrow_mut() = Some(e.target().hook());
+            c1c.store(Some(e.target().hook().into()));
         });
-        let c2 = Rc::new(RefCell::new(None));
+        let c2 = Arc::new(ArcSwapOption::default());
         let c2c = c2.clone();
         let _s2 = a2.observe(move |_, e| {
-            *c2c.borrow_mut() = Some(e.target().hook());
+            c2c.store(Some(e.target().hook().into()));
         });
 
         {
@@ -1027,15 +1142,16 @@ mod test {
         }
         exchange_updates(&[&d1, &d2]);
 
-        assert_eq!(c1.borrow_mut().take(), Some(a1.hook()));
-        assert_eq!(c2.borrow_mut().take(), Some(a2.hook()));
+        assert_eq!(c1.swap(None), Some(Arc::new(a1.hook())));
+        assert_eq!(c2.swap(None), Some(Arc::new(a2.hook())));
     }
 
     use crate::transaction::ReadTxn;
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encoder, EncoderV1};
+    use arc_swap::ArcSwapOption;
     use fastrand::Rng;
-    use std::sync::atomic::{AtomicI64, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
     use std::time::Duration;
 
     static UNIQUE_NUMBER: AtomicI64 = AtomicI64::new(0);
@@ -1110,7 +1226,7 @@ mod test {
             let yarray = doc.get_or_insert_array("array");
             let mut txn = doc.transact_mut();
             let pos = rng.between(0, yarray.len(&txn));
-            let map = yarray.insert(&mut txn, pos, MapPrelim::<i32>::from(HashMap::default()));
+            let map = yarray.insert(&mut txn, pos, MapPrelim::default());
             map.insert(&mut txn, "someprop".to_string(), 42);
             map.insert(&mut txn, "someprop".to_string(), 43);
             map.insert(&mut txn, "someprop".to_string(), 44);
@@ -1124,7 +1240,7 @@ mod test {
                 let pos = rng.between(0, len - 1);
                 let del_len = rng.between(1, 2.min(len - pos));
                 if rng.bool() {
-                    if let Value::YArray(array2) = yarray.get(&txn, pos).unwrap() {
+                    if let Out::YArray(array2) = yarray.get(&txn, pos).unwrap() {
                         let pos = rng.between(0, array2.len(&txn) - 1);
                         let del_len = rng.between(0, 2.min(array2.len(&txn) - pos));
                         array2.remove_range(&mut txn, pos, del_len);
@@ -1183,15 +1299,15 @@ mod test {
         let doc = Doc::with_client_id(1);
         let array = doc.get_or_insert_array("array");
 
-        let paths = Rc::new(RefCell::new(Vec::new()));
+        let paths = Arc::new(Mutex::new(vec![]));
         let paths_copy = paths.clone();
 
         let _sub = array.observe_deep(move |_txn, e| {
             let path: Vec<Path> = e.iter().map(Event::path).collect();
-            paths_copy.borrow_mut().push(path);
+            paths_copy.lock().unwrap().push(path);
         });
 
-        array.insert(&mut doc.transact_mut(), 0, MapPrelim::<String>::new());
+        array.insert(&mut doc.transact_mut(), 0, MapPrelim::default());
 
         {
             let mut txn = doc.transact_mut();
@@ -1204,7 +1320,7 @@ mod test {
             vec![Path::default()],
             vec![Path::default(), Path::from([PathSegment::Index(1)])],
         ];
-        let actual = RefCell::borrow(&paths);
+        let actual = paths.lock().unwrap();
         assert_eq!(actual.as_slice(), expected);
     }
 
@@ -1216,18 +1332,16 @@ mod test {
         let d2 = Doc::with_client_id(2);
         let a2 = d2.get_or_insert_array("array");
 
-        let e1: Rc<RefCell<Vec<Change>>> = Rc::new(RefCell::new(Vec::default()));
+        let e1 = Arc::new(ArcSwapOption::default());
         let inner = e1.clone();
         let _s1 = a1.observe(move |txn, e| {
-            let mut x = inner.as_ref().borrow_mut();
-            *x = e.delta(txn).to_vec();
+            inner.store(Some(Arc::new(e.delta(txn).to_vec())));
         });
 
-        let e2: Rc<RefCell<Vec<Change>>> = Rc::new(RefCell::new(Vec::default()));
+        let e2 = Arc::new(ArcSwapOption::default());
         let inner = e2.clone();
         let _s2 = a2.observe(move |txn, e| {
-            let mut x = inner.borrow_mut();
-            *x = e.delta(txn).to_vec();
+            inner.store(Some(Arc::new(e.delta(txn).to_vec())));
         });
 
         {
@@ -1240,23 +1354,27 @@ mod test {
         exchange_updates(&[&d1, &d2]);
 
         assert_eq!(a2.to_json(&d2.transact()), vec![2, 1, 3].into());
-        let actual = e2.as_ref().borrow();
+        let actual = e2.load_full();
         assert_eq!(
-            actual.deref(),
-            &vec![Change::Added(vec![2.into(), 1.into(), 3.into()])]
+            actual,
+            Some(Arc::new(vec![Change::Added(vec![
+                2.into(),
+                1.into(),
+                3.into()
+            ])]))
         );
 
         a1.move_to(&mut d1.transact_mut(), 0, 2);
 
         assert_eq!(a1.to_json(&d1.transact()), vec![1, 2, 3].into());
-        let actual = e1.as_ref().borrow();
+        let actual = e1.load_full();
         assert_eq!(
-            actual.deref(),
-            &vec![
+            actual,
+            Some(Arc::new(vec![
                 Change::Removed(1),
                 Change::Retain(1),
                 Change::Added(vec![2.into()])
-            ]
+            ]))
         )
     }
 
@@ -1268,32 +1386,30 @@ mod test {
         let d2 = Doc::with_client_id(2);
         let a2 = d2.get_or_insert_array("array");
 
-        let e1: Rc<RefCell<Vec<Change>>> = Rc::new(RefCell::new(Vec::default()));
+        let e1 = Arc::new(ArcSwapOption::default());
         let inner = e1.clone();
         let _s1 = a1.observe(move |txn, e| {
-            let mut x = inner.as_ref().borrow_mut();
-            *x = e.delta(txn).to_vec();
+            inner.store(Some(Arc::new(e.delta(txn).to_vec())));
         });
 
-        let e2: Rc<RefCell<Vec<Change>>> = Rc::new(RefCell::new(Vec::default()));
+        let e2 = Arc::new(ArcSwapOption::default());
         let inner = e2.clone();
         let _s2 = a2.observe(move |txn, e| {
-            let mut x = inner.borrow_mut();
-            *x = e.delta(txn).to_vec();
+            inner.store(Some(Arc::new(e.delta(txn).to_vec())));
         });
 
         a1.insert_range(&mut d1.transact_mut(), 0, [1, 2]);
         a1.move_to(&mut d1.transact_mut(), 1, 0);
         assert_eq!(a1.to_json(&d1.transact()), vec![2, 1].into());
         {
-            let actual = e1.as_ref().borrow();
+            let actual = e1.load_full();
             assert_eq!(
-                actual.deref(),
-                &vec![
+                actual,
+                Some(Arc::new(vec![
                     Change::Added(vec![2.into()]),
                     Change::Retain(1),
                     Change::Removed(1)
-                ]
+                ]))
             );
         }
 
@@ -1301,24 +1417,24 @@ mod test {
 
         assert_eq!(a2.to_json(&d2.transact()), vec![2, 1].into());
         {
-            let actual = e2.as_ref().borrow();
+            let actual = e2.load_full();
             assert_eq!(
-                actual.deref(),
-                &vec![Change::Added(vec![2.into(), 1.into()])]
+                actual,
+                Some(Arc::new(vec![Change::Added(vec![2.into(), 1.into()])]))
             );
         }
 
         a1.move_to(&mut d1.transact_mut(), 0, 2);
         assert_eq!(a1.to_json(&d1.transact()), vec![1, 2].into());
         {
-            let actual = e1.as_ref().borrow();
+            let actual = e1.load_full();
             assert_eq!(
-                actual.deref(),
-                &vec![
+                actual,
+                Some(Arc::new(vec![
                     Change::Removed(1),
                     Change::Retain(1),
                     Change::Added(vec![2.into()])
-                ]
+                ]))
             );
         }
     }

@@ -10,6 +10,12 @@
 //!
 //! A **Document** is the access point to create shared types, and to listen to update events.
 //!
+//! # Features
+//!
+//! - `weak` this feature enables weak references and quotations (see: [crate::WeakRef]).
+//! - `sync` this feature modifies observers callback constraints to use `Send` and `Sync` traits.
+//!   These are required when using yrs features in multithreaded environments.
+//!
 //! # Quick start
 //!
 //! Let's discuss basic features of Yrs. We'll introduce these concepts starting from
@@ -300,7 +306,7 @@
 //!
 //! let local = Doc::with_client_id(123);
 //! let text1 = local.get_or_insert_text("article");
-//! let mut mgr = UndoManager::with_options(&local, &text1, Options::default());
+//! let mut mgr = UndoManager::with_scope_and_options(&local, &text1, Options::default());
 //! mgr.include_origin(local.client_id()); // only track changes originating from local peer
 //!
 //! let remote = Doc::with_client_id(321);
@@ -584,9 +590,11 @@ pub mod branch;
 pub mod encoding;
 mod error;
 mod gc;
+mod input;
 pub mod iter;
 mod moving;
 pub mod observer;
+mod out;
 mod slice;
 mod state_vector;
 pub mod sync;
@@ -612,12 +620,14 @@ pub use crate::doc::Options;
 pub use crate::doc::Transact;
 pub use crate::event::{SubdocsEvent, SubdocsEventIter, TransactionCleanupEvent, UpdateEvent};
 pub use crate::id_set::DeleteSet;
+pub use crate::input::In;
 pub use crate::moving::Assoc;
 pub use crate::moving::IndexScope;
 pub use crate::moving::IndexedSequence;
 pub use crate::moving::Offset;
 pub use crate::moving::StickyIndex;
-pub use crate::observer::{Observer, ObserverMut, Subscription};
+pub use crate::observer::{Observer, Subscription};
+pub use crate::out::Out;
 pub use crate::state_vector::Snapshot;
 pub use crate::state_vector::StateVector;
 pub use crate::store::Store;
@@ -644,7 +654,7 @@ pub use crate::types::xml::XmlElementRef;
 pub use crate::types::xml::XmlFragment;
 pub use crate::types::xml::XmlFragmentPrelim;
 pub use crate::types::xml::XmlFragmentRef;
-pub use crate::types::xml::XmlNode;
+pub use crate::types::xml::XmlOut;
 pub use crate::types::xml::XmlTextPrelim;
 pub use crate::types::xml::XmlTextRef;
 pub use crate::types::DeepObservable;
@@ -652,8 +662,10 @@ pub use crate::types::GetString;
 pub use crate::types::Observable;
 pub use crate::types::RootRef;
 pub use crate::types::SharedRef;
-pub use crate::types::Value;
 pub use crate::update::Update;
+
+#[deprecated(since = "0.19.0", note = "Use `yrs::Out` instead")]
+pub type Value = Out;
 
 pub type UndoManager = crate::undo::UndoManager<()>;
 pub type Uuid = std::sync::Arc<str>;

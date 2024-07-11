@@ -26,7 +26,7 @@ void exchange_updates(int len, ...) {
     }
     va_end(args);
 
-    char* EXCHANGE_UPDATES = "exchange";
+    char EXCHANGE_UPDATES[] = "exchange";
     for (int i = 0; i < len; i++) {
         for (int j = 0; j < len; j++) {
             if (i != j) {
@@ -541,11 +541,13 @@ TEST_CASE("YText formatting") {
     Branch* txt = ytext(doc, "test");
     YTransaction* txn = ydoc_write_transaction(doc, 0, NULL);
 
-    char* i = "i";
-    char* b = "b";
+    char i[] = "i";
+    char* keysi[] = { i };
+    char b[] = "b";
+    char* keysb[] = { b };
     YInput yes = yinput_bool(Y_TRUE);
-    YInput italic = yinput_json_map(&i, &yes, 1);
-    YInput bold = yinput_json_map(&b, &yes, 1);
+    YInput italic = yinput_json_map(keysi, &yes, 1);
+    YInput bold = yinput_json_map(keysb, &yes, 1);
 
     ytext_insert(txt, txn, 0, "hello world!", &italic);
     ytext_format(txt, txn, 6, 5, &bold);
@@ -1219,8 +1221,7 @@ void reset_observe_updates(ObserveUpdatesTest* t) {
         t->incoming_len = 0;
     }
     if (NULL != t->update) {
-        //TODO: since on Windows Rust uses HeapAlloc/HeapFree - the code below should take that into account
-        free(t->update);
+        ybinary_destroy(t->update, t->len);
         t->update = NULL;
         t->len = 0;
     }
@@ -1480,7 +1481,7 @@ void concat_guids(char* dst, int len, YDoc** refs) {
         YDoc *d = refs[i];
         char* guid = ydoc_guid(d);
         strcat(dst, guid);
-        free(guid);
+        ystring_destroy(guid);
     }
 }
 
@@ -1684,7 +1685,8 @@ TEST_CASE("YUndoManager undo redo") {
     YDoc* d2 = ydoc_new_with_id(2);
     Branch* txt1 = ytext(d1, "test");
     Branch* txt2 = ytext(d2, "test");
-    YUndoManager* mgr = yundo_manager(d1, txt1, NULL);
+    YUndoManager* mgr = yundo_manager(d1, NULL);
+    yundo_manager_add_scope(mgr, txt1);
 
     YTransaction* txn = ydoc_write_transaction(d1, 0, NULL);
     ytext_insert(txt1, txn, 0, "test", NULL);
@@ -1894,9 +1896,10 @@ TEST_CASE("Logical branch pointers") {
     YTransaction *txn = ydoc_write_transaction(doc, 0, NULL);
 
     // init doc -> 'array' = [{'key':'value'}]
-    char *key = "key";
+    char key[] = "key";
+    char* keyskeys[] = { key };
     YInput value = yinput_string("value");
-    YInput in = yinput_ymap(&key, &value, 1);
+    YInput in = yinput_ymap(keyskeys, &value, 1);
     yarray_insert_range(arr, txn, 0, &in, 1);
     YOutput *out = yarray_get(arr, txn, 0);
     Branch *map = youtput_read_ymap(out);
@@ -1946,11 +1949,11 @@ TEST_CASE("Unicode support") {
     Branch* txt = ytext(doc, "quill");
     YTransaction* txn = ydoc_write_transaction(doc, 0, NULL);
 
-    ytext_insert(txt, txn, 0, u8"🇿🇿🇿🇿🇩🇩🇩🇿🇩🇩🇩🇩🇩🇿🇩🇩🇿🇩🇿🇩", NULL);
+    ytext_insert(txt, txn, 0, (char*)u8"🇿🇿🇿🇿🇩🇩🇩🇿🇩🇩🇩🇩🇩🇿🇩🇩🇿🇩🇿🇩", NULL);
     ytext_remove_range(txt, txn, 0, 5);
 
     char* actual = ytext_string(txt, txn);
-    REQUIRE(!strcmp(actual, u8"🇿🇩🇩🇩🇿🇩🇩🇩🇩🇩🇿🇩🇩🇿🇩🇿🇩"));
+    REQUIRE(!strcmp(actual, (char*)u8"🇿🇩🇩🇩🇿🇩🇩🇩🇩🇩🇿🇩🇩🇿🇩🇿🇩"));
 
     ystring_destroy(actual);
     ytransaction_commit(txn);
@@ -1977,5 +1980,25 @@ TEST_CASE("Array event observer target") {
 
     ytransaction_commit(txn);
     yunobserve(subscription);
+    ydoc_destroy(doc);
+}
+
+TEST_CASE("YMap multiple nested maps") {
+    YDoc* doc = ydoc_new_with_id(1);
+    Branch* map = ymap(doc, "map");
+    YTransaction* txn = ydoc_write_transaction(doc, 0, NULL);
+
+    char* key = (char*)"text";
+    YInput value = yinput_string("Nested data");
+    YInput innerMap = yinput_ymap(&key, &value, 1);
+
+    char* key2 = (char*)"innerMap";
+    YInput outerMap = yinput_ymap(&key2, &innerMap, 1);
+
+    ymap_insert(map, txn, "outerMap", &outerMap);
+    int length = ymap_len(map, txn);
+    ytransaction_commit(txn);
+    REQUIRE(length == 1);
+
     ydoc_destroy(doc);
 }

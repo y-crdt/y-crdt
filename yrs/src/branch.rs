@@ -7,12 +7,13 @@ use crate::types::{
     Entries, Event, Events, Path, PathSegment, RootRef, SharedRef, TypePtr, TypeRef,
 };
 use crate::{
-    ArrayRef, Doc, MapRef, Observer, Origin, ReadTxn, Subscription, TextRef, TransactionMut, Value,
+    ArrayRef, Doc, MapRef, Observer, Origin, Out, ReadTxn, Subscription, TextRef, TransactionMut,
     WriteTxn, XmlElementRef, XmlFragmentRef, XmlTextRef, ID,
 };
 use serde::{Deserialize, Serialize};
 use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::convert::TryFrom;
 use std::fmt::Formatter;
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
@@ -36,20 +37,23 @@ impl BranchPtr {
         subs: HashSet<Option<Arc<str>>>,
     ) -> Option<Event> {
         let e = self.make_event(subs)?;
-        if let Some(callbacks) = self.observers.callbacks() {
-            for fun in callbacks {
-                fun(txn, &e);
-            }
-        }
-
+        self.observers.trigger(|fun| fun(txn, &e));
         Some(e)
     }
 
     pub(crate) fn trigger_deep(&self, txn: &TransactionMut, e: &Events) {
-        if let Some(callbacks) = self.deep_observers.callbacks() {
-            for fun in callbacks {
-                fun(txn, e);
-            }
+        self.deep_observers.trigger(|fun| fun(txn, e));
+    }
+}
+
+impl TryFrom<ItemPtr> for BranchPtr {
+    type Error = ItemPtr;
+
+    fn try_from(value: ItemPtr) -> Result<Self, Self::Error> {
+        if let ItemContent::Type(branch) = &value.content {
+            Ok(BranchPtr::from(branch))
+        } else {
+            Err(value)
         }
     }
 }
@@ -117,22 +121,22 @@ impl<'a> From<&'a Branch> for BranchPtr {
     }
 }
 
-impl Into<Value> for BranchPtr {
-    /// Converts current branch data into a [Value]. It uses a type ref information to resolve,
+impl Into<Out> for BranchPtr {
+    /// Converts current branch data into a [Out]. It uses a type ref information to resolve,
     /// which value variant is a correct one for this branch. Since branch represent only complex
-    /// types [Value::Any] will never be returned from this method.
-    fn into(self) -> Value {
+    /// types [Out::Any] will never be returned from this method.
+    fn into(self) -> Out {
         match self.type_ref() {
-            TypeRef::Array => Value::YArray(ArrayRef::from(self)),
-            TypeRef::Map => Value::YMap(MapRef::from(self)),
-            TypeRef::Text => Value::YText(TextRef::from(self)),
-            TypeRef::XmlElement(_) => Value::YXmlElement(XmlElementRef::from(self)),
-            TypeRef::XmlFragment => Value::YXmlFragment(XmlFragmentRef::from(self)),
-            TypeRef::XmlText => Value::YXmlText(XmlTextRef::from(self)),
+            TypeRef::Array => Out::YArray(ArrayRef::from(self)),
+            TypeRef::Map => Out::YMap(MapRef::from(self)),
+            TypeRef::Text => Out::YText(TextRef::from(self)),
+            TypeRef::XmlElement(_) => Out::YXmlElement(XmlElementRef::from(self)),
+            TypeRef::XmlFragment => Out::YXmlFragment(XmlFragmentRef::from(self)),
+            TypeRef::XmlText => Out::YXmlText(XmlTextRef::from(self)),
             //TYPE_REFS_XML_HOOK => Value::YXmlHook(XmlHookRef::from(self)),
             #[cfg(feature = "weak")]
-            TypeRef::WeakLink(_) => Value::YWeakLink(crate::WeakRef::from(self)),
-            _ => Value::UndefinedRef(self),
+            TypeRef::WeakLink(_) => Out::YWeakLink(crate::WeakRef::from(self)),
+            _ => Out::UndefinedRef(self),
         }
     }
 }
@@ -205,10 +209,20 @@ pub struct Branch {
     /// An identifier of an underlying complex data type (eg. is it an Array or a Map).
     pub(crate) type_ref: TypeRef,
 
-    pub(crate) observers: Observer<Event>,
+    pub(crate) observers: Observer<ObserveFn>,
 
-    pub(crate) deep_observers: Observer<Events>,
+    pub(crate) deep_observers: Observer<DeepObserveFn>,
 }
+
+#[cfg(feature = "sync")]
+type ObserveFn = Box<dyn Fn(&TransactionMut, &Event) + Send + Sync + 'static>;
+#[cfg(feature = "sync")]
+type DeepObserveFn = Box<dyn Fn(&TransactionMut, &Events) + Send + Sync + 'static>;
+
+#[cfg(not(feature = "sync"))]
+type ObserveFn = Box<dyn Fn(&TransactionMut, &Event) + 'static>;
+#[cfg(not(feature = "sync"))]
+type DeepObserveFn = Box<dyn Fn(&TransactionMut, &Events) + 'static>;
 
 impl std::fmt::Debug for Branch {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -304,7 +318,7 @@ impl Branch {
 
     /// Returns a materialized value of non-deleted entry under a given `key` of a map component
     /// of a current root type.
-    pub(crate) fn get<T: ReadTxn>(&self, _txn: &T, key: &str) -> Option<Value> {
+    pub(crate) fn get<T: ReadTxn>(&self, _txn: &T, key: &str) -> Option<Out> {
         let item = self.map.get(key)?;
         if !item.is_deleted() {
             item.content.get_last()
@@ -337,7 +351,7 @@ impl Branch {
 
     /// Removes an entry under given `key` of a map component of a current root type, returning
     /// a materialized representation of value stored underneath if entry existed prior deletion.
-    pub(crate) fn remove(&self, txn: &mut TransactionMut, key: &str) -> Option<Value> {
+    pub(crate) fn remove(&self, txn: &mut TransactionMut, key: &str) -> Option<Out> {
         let item = *self.map.get(key)?;
         let prev = if !item.is_deleted() {
             item.content.get_last()
@@ -520,18 +534,73 @@ impl Branch {
         path
     }
 
+    #[cfg(feature = "sync")]
     pub fn observe<F>(&mut self, f: F) -> Subscription
     where
-        F: Fn(&TransactionMut, &Event) -> () + 'static,
+        F: Fn(&TransactionMut, &Event) + Send + Sync + 'static,
     {
-        self.observers.subscribe(f)
+        self.observers.subscribe(Box::new(f))
     }
 
+    #[cfg(not(feature = "sync"))]
+    pub fn observe<F>(&mut self, f: F) -> Subscription
+    where
+        F: Fn(&TransactionMut, &Event) + 'static,
+    {
+        self.observers.subscribe(Box::new(f))
+    }
+
+    #[cfg(feature = "sync")]
+
+    pub fn observe_with<F>(&mut self, key: Origin, f: F)
+    where
+        F: Fn(&TransactionMut, &Event) + Send + Sync + 'static,
+    {
+        self.observers.subscribe_with(key, Box::new(f))
+    }
+
+    #[cfg(not(feature = "sync"))]
+    pub fn observe_with<F>(&mut self, key: Origin, f: F)
+    where
+        F: Fn(&TransactionMut, &Event) + 'static,
+    {
+        self.observers.subscribe_with(key, Box::new(f))
+    }
+
+    pub fn unobserve(&mut self, key: &Origin) -> bool {
+        self.observers.unsubscribe(&key)
+    }
+
+    #[cfg(feature = "sync")]
     pub fn observe_deep<F>(&self, f: F) -> Subscription
     where
-        F: Fn(&TransactionMut, &Events) -> () + 'static,
+        F: Fn(&TransactionMut, &Events) + Send + Sync + 'static,
     {
-        self.deep_observers.subscribe(f)
+        self.deep_observers.subscribe(Box::new(f))
+    }
+
+    #[cfg(not(feature = "sync"))]
+    pub fn observe_deep<F>(&self, f: F) -> Subscription
+    where
+        F: Fn(&TransactionMut, &Events) + 'static,
+    {
+        self.deep_observers.subscribe(Box::new(f))
+    }
+
+    #[cfg(feature = "sync")]
+    pub fn observe_deep_with<F>(&self, key: Origin, f: F)
+    where
+        F: Fn(&TransactionMut, &Events) + Send + Sync + 'static,
+    {
+        self.deep_observers.subscribe_with(key, Box::new(f))
+    }
+
+    #[cfg(not(feature = "sync"))]
+    pub fn observe_deep_with<F>(&self, key: Origin, f: F)
+    where
+        F: Fn(&TransactionMut, &Events) + 'static,
+    {
+        self.deep_observers.subscribe_with(key, Box::new(f))
     }
 
     pub(crate) fn is_parent_of(&self, mut ptr: Option<ItemPtr>) -> bool {
@@ -605,7 +674,7 @@ impl<'a, T: ReadTxn> Iterator for Iter<'a, T> {
 /// let txt2 = root.get_or_create(&mut doc2.transact_mut());
 ///
 /// // instances of TextRef point to different heap objects
-/// assert_ne!(txt1.as_ref() as *const _, txt2.as_ref() as *const _);
+/// assert_ne!(&txt1 as *const _, &txt2 as *const _);
 ///
 /// // logical descriptors of both TextRef are the same as they refer to the
 /// // same logical entity

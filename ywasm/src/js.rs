@@ -24,8 +24,8 @@ use yrs::types::{
     TYPE_REFS_XML_ELEMENT, TYPE_REFS_XML_FRAGMENT, TYPE_REFS_XML_TEXT,
 };
 use yrs::{
-    Any, ArrayRef, BranchID, Doc, Map, MapRef, Origin, Text, TextRef, TransactionMut, Value,
-    WeakRef, Xml, XmlElementRef, XmlFragment, XmlFragmentRef, XmlNode, XmlTextRef,
+    Any, ArrayRef, BranchID, Doc, Map, MapRef, Origin, Out, Text, TextRef, TransactionMut, WeakRef,
+    Xml, XmlElementRef, XmlFragment, XmlFragmentRef, XmlOut, XmlTextRef,
 };
 
 #[repr(transparent)]
@@ -85,38 +85,36 @@ impl Js {
         }
     }
 
-    pub fn from_xml(value: XmlNode, doc: Doc) -> Self {
+    pub fn from_xml(value: XmlOut, doc: Doc) -> Self {
         Js(match value {
-            XmlNode::Element(v) => YXmlElement(SharedCollection::integrated(v, doc)).into(),
-            XmlNode::Fragment(v) => YXmlFragment(SharedCollection::integrated(v, doc)).into(),
-            XmlNode::Text(v) => YXmlText(SharedCollection::integrated(v, doc)).into(),
+            XmlOut::Element(v) => YXmlElement(SharedCollection::integrated(v, doc)).into(),
+            XmlOut::Fragment(v) => YXmlFragment(SharedCollection::integrated(v, doc)).into(),
+            XmlOut::Text(v) => YXmlText(SharedCollection::integrated(v, doc)).into(),
         })
     }
 
-    pub fn from_value(value: &Value, doc: &Doc) -> Self {
+    pub fn from_value(value: &Out, doc: &Doc) -> Self {
         match value {
-            Value::Any(any) => Self::from_any(any),
-            Value::YText(c) => {
-                Js(YText(SharedCollection::integrated(c.clone(), doc.clone())).into())
-            }
-            Value::YMap(c) => Js(YMap(SharedCollection::integrated(c.clone(), doc.clone())).into()),
-            Value::YArray(c) => {
+            Out::Any(any) => Self::from_any(any),
+            Out::YText(c) => Js(YText(SharedCollection::integrated(c.clone(), doc.clone())).into()),
+            Out::YMap(c) => Js(YMap(SharedCollection::integrated(c.clone(), doc.clone())).into()),
+            Out::YArray(c) => {
                 Js(YArray(SharedCollection::integrated(c.clone(), doc.clone())).into())
             }
-            Value::YDoc(doc) => Js(YDoc(doc.clone()).into()),
-            Value::YWeakLink(c) => {
+            Out::YDoc(doc) => Js(YDoc(doc.clone()).into()),
+            Out::YWeakLink(c) => {
                 Js(YWeakLink(SharedCollection::integrated(c.clone(), doc.clone())).into())
             }
-            Value::YXmlElement(c) => {
+            Out::YXmlElement(c) => {
                 Js(YXmlElement(SharedCollection::integrated(c.clone(), doc.clone())).into())
             }
-            Value::YXmlFragment(c) => {
+            Out::YXmlFragment(c) => {
                 Js(YXmlFragment(SharedCollection::integrated(c.clone(), doc.clone())).into())
             }
-            Value::YXmlText(c) => {
+            Out::YXmlText(c) => {
                 Js(YXmlText(SharedCollection::integrated(c.clone(), doc.clone())).into())
             }
-            Value::UndefinedRef(_) => Js(JsValue::UNDEFINED),
+            Out::UndefinedRef(_) => Js(JsValue::UNDEFINED),
         }
     }
 
@@ -519,16 +517,39 @@ impl RangeBounds<u32> for YRange {
     }
 }
 
+pub(crate) const JS_ORIGIN: &'static str = "__subscription_key";
 pub(crate) const JS_PTR: &'static str = "__wbg_ptr";
+
+pub trait Callback: AsRef<JsValue> {
+    fn subscription_key(&self) -> u32 {
+        let js: &JsValue = self.as_ref();
+        let origin_field = JsValue::from_str(JS_ORIGIN);
+        let abi = js_sys::Reflect::get(js, &origin_field)
+            .ok()
+            .and_then(|v| v.as_f64());
+        match abi {
+            Some(abi) => abi as u32,
+            None => {
+                let abi = js.into_abi();
+                js_sys::Reflect::set(js, &origin_field, &JsValue::from(abi)).unwrap();
+                abi
+            }
+        }
+    }
+}
+
+impl Callback for js_sys::Function {}
 
 pub(crate) mod convert {
     use crate::array::YArrayEvent;
+    use crate::js::errors::INVALID_DELTA;
     use crate::js::Js;
     use crate::map::YMapEvent;
     use crate::text::YTextEvent;
     use crate::weak::YWeakLinkEvent;
     use crate::xml_frag::YXmlEvent;
     use crate::xml_text::YXmlTextEvent;
+    use crate::Text;
     use gloo_utils::format::JsValueSerdeExt;
     use std::iter::FromIterator;
     use wasm_bindgen::convert::RefMutFromWasmAbi;
@@ -537,6 +558,28 @@ pub(crate) mod convert {
     use yrs::types::{Change, Delta, EntryChange, Event, Events, Path, PathSegment};
     use yrs::updates::decoder::Decode;
     use yrs::{DeleteSet, Doc, StateVector, TransactionMut};
+
+    pub fn js_into_delta(js: JsValue) -> crate::Result<Delta<Js>> {
+        let attributes = js_sys::Reflect::get(&js, &JsValue::from("attributes"));
+        if let Ok(insert) = js_sys::Reflect::get(&js, &JsValue::from("insert")) {
+            if !insert.is_undefined() {
+                let attrs = Text::parse_fmt(attributes.unwrap_or(JsValue::UNDEFINED)).map(Box::new);
+                return Ok(Delta::Inserted(Js(insert), attrs));
+            }
+        }
+        if let Ok(delete) = js_sys::Reflect::get(&js, &JsValue::from("delete")) {
+            if let Some(len) = delete.as_f64() {
+                return Ok(Delta::Deleted(len as u32));
+            }
+        }
+        if let Ok(retain) = js_sys::Reflect::get(&js, &JsValue::from("retain")) {
+            if let Some(len) = retain.as_f64() {
+                let attrs = Text::parse_fmt(attributes.unwrap_or(JsValue::UNDEFINED)).map(Box::new);
+                return Ok(Delta::Retain(len as u32, attrs));
+            }
+        }
+        Err(JsValue::from_str(INVALID_DELTA))
+    }
 
     pub fn mut_from_js<T>(js: &JsValue) -> crate::Result<T::Anchor>
     where
@@ -754,4 +797,5 @@ pub(crate) mod errors {
     pub const NOT_XML_TYPE: &'static str = "provided object is not a valid XML shared type";
     pub const NOT_PRELIM: &'static str = "this operation only works on preliminary types";
     pub const NOT_WASM_OBJ: &'static str = "provided reference is not a WebAssembly object";
+    pub const INVALID_DELTA: &'static str = "invalid delta format";
 }

@@ -1,3 +1,10 @@
+use std::collections::HashMap;
+use std::convert::TryInto;
+use std::fs::File;
+use std::io::BufReader;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
 use crate::block::{ClientID, Item, ItemContent};
 use crate::branch::Branch;
 use crate::encoding::read::Read;
@@ -12,12 +19,6 @@ use crate::{
     Any, ArrayPrelim, Doc, GetString, Map, MapPrelim, MapRef, ReadTxn, StateVector, Transact, Xml,
     XmlElementRef, XmlTextRef, ID,
 };
-use std::cell::Cell;
-use std::collections::HashMap;
-use std::convert::TryInto;
-use std::fs::File;
-use std::io::BufReader;
-use std::rc::Rc;
 
 #[test]
 fn text_insert_delete() {
@@ -103,7 +104,7 @@ fn text_insert_delete() {
         ds.insert(ID::new(CLIENT_ID, 5), 2);
         DeleteSet::from(ds)
     };
-    let visited = Rc::new(Cell::new(false));
+    let visited = Arc::new(AtomicBool::new(false));
     let setter = visited.clone();
 
     let doc = Doc::new();
@@ -116,7 +117,7 @@ fn text_insert_delete() {
             }
         }
         assert_eq!(u.delete_set, expected_ds);
-        setter.set(true);
+        setter.store(true, Ordering::Relaxed);
     });
     {
         let mut txn = doc.transact_mut();
@@ -124,7 +125,7 @@ fn text_insert_delete() {
         txn.apply_update(u);
     }
     assert_eq!(txt.get_string(&doc.transact()), "abhi".to_string());
-    assert!(visited.get());
+    assert!(visited.load(Ordering::Relaxed));
 }
 
 #[test]
@@ -385,23 +386,19 @@ fn negative_zero_decoding_v2() {
     let root = doc.get_or_insert_map("root");
     let mut txn = doc.transact_mut();
 
-    root.insert(&mut txn, "sequence", MapPrelim::<bool>::new()); //NOTE: This is how I put nested map.
+    root.insert(&mut txn, "sequence", MapPrelim::default()); //NOTE: This is how I put nested map.
     let sequence = root
         .get(&txn, "sequence")
         .unwrap()
         .cast::<MapRef>()
         .unwrap();
     sequence.insert(&mut txn, "id", "V9Uk9pxUKZIrW6cOkC0Rg".to_string());
-    sequence.insert(&mut txn, "cuts", ArrayPrelim::<_, Any>::from([]));
+    sequence.insert(&mut txn, "cuts", ArrayPrelim::default());
     sequence.insert(&mut txn, "name", "new sequence".to_string());
 
     root.insert(&mut txn, "__version__", 1);
-    root.insert(
-        &mut txn,
-        "face_expressions",
-        ArrayPrelim::<_, Any>::from([]),
-    );
-    root.insert(&mut txn, "characters", ArrayPrelim::<_, Any>::from([]));
+    root.insert(&mut txn, "face_expressions", ArrayPrelim::default());
+    root.insert(&mut txn, "characters", ArrayPrelim::default());
     let expected = root.to_json(&txn);
 
     let buffer = txn.encode_state_as_update_v2(&StateVector::default());

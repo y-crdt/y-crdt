@@ -36,6 +36,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "69f7f8c3906b62b754cd5326047894316021dcfe5a194c8ea52bdd94934a3457"
 
 [[package]]
+name = "assert_matches2"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "15832d94c458da98cac0ffa6eca52cc19c2a3c6c951058500a5ae8f01f0fdf56"
+
+[[package]]
 name = "atomic_refcell"
 version = "0.1.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -46,6 +52,12 @@ name = "autocfg"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f1fdabc7756949593fe60f30ec81974b613357de856987752631dea1e3394c80"
+
+[[package]]
+name = "base64_light"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8c6aca08f76b8485947a20a1b3096e5a8cd6edbcecc6d2a8932df9b41d36aadf"
 
 [[package]]
 name = "bit-set"
@@ -1067,22 +1079,24 @@ checksum = "bec47e5bfd1bff0eeaf6d8b485cc1074891a197ab4225d504cb7a1ab88b02bf0"
 
 [[package]]
 name = "yffi"
-version = "0.18.8"
+version = "0.19.1"
 dependencies = [
  "yrs",
 ]
 
 [[package]]
 name = "yrs"
-version = "0.18.8"
+version = "0.19.1"
 dependencies = [
  "arc-swap",
+ "assert_matches2",
  "atomic_refcell",
  "criterion",
  "fastrand",
  "flate2",
  "proptest",
  "proptest-derive",
+ "rand",
  "ropey",
  "serde",
  "serde_json",
@@ -1093,12 +1107,14 @@ dependencies = [
 
 [[package]]
 name = "ywasm"
-version = "0.18.8"
+version = "0.19.1"
 dependencies = [
+ "base64_light",
  "console_error_panic_hook",
  "gloo-utils",
  "js-sys",
  "serde",
+ "serde_json",
  "wasm-bindgen",
  "wasm-bindgen-test",
  "wee_alloc",

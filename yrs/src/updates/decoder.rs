@@ -243,7 +243,10 @@ impl<'a> DecoderV2<'a> {
         })
     }
 
-    fn read_usize(buf: &[u8], idx: &mut usize) -> usize {
+    fn read_usize(buf: &[u8], idx: &mut usize) -> Result<usize, Error> {
+        if *idx >= buf.len() {
+            return Err(Error::InvalidVarInt);
+        }
         let mut num: usize = 0;
         let mut len: usize = 0;
         loop {
@@ -252,16 +255,16 @@ impl<'a> DecoderV2<'a> {
             num |= (r as usize & 127) << len;
             len += 7;
             if r < 128 {
-                return num;
+                return Ok(num);
             }
             if len > 128 {
-                panic!("Integer out of range!");
+                return Err(Error::InvalidVarInt);
             }
         }
     }
 
     fn read_buf(buf: &'a [u8], idx: &mut usize) -> Result<&'a [u8], Error> {
-        let len = Self::read_usize(buf, idx);
+        let len = Self::read_usize(buf, idx)?;
         let start = *idx;
         let end = start + len;
         if end <= buf.len() {

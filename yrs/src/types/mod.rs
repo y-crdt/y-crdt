@@ -1,18 +1,18 @@
-pub mod array;
-pub mod map;
-pub mod text;
-#[cfg(feature = "weak")]
-pub mod weak;
-pub mod xml;
+use std::borrow::Borrow;
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::convert::{TryFrom, TryInto};
+use std::fmt::Formatter;
+use std::marker::PhantomData;
+use std::sync::Arc;
 
-use crate::*;
+use serde::{Serialize, Serializer};
+
 pub use map::Map;
 pub use map::MapRef;
-use std::borrow::Borrow;
 pub use text::Text;
 pub use text::TextRef;
 
-use crate::block::{Item, ItemContent, ItemPtr};
+use crate::block::{Item, ItemContent, ItemPtr, Prelim};
 use crate::branch::{Branch, BranchPtr};
 use crate::encoding::read::Error;
 use crate::transaction::TransactionMut;
@@ -24,13 +24,14 @@ use crate::types::weak::{LinkSource, WeakEvent, WeakRef};
 use crate::types::xml::{XmlElementRef, XmlEvent, XmlTextEvent, XmlTextRef};
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
-use serde::{Serialize, Serializer};
-use std::collections::{HashMap, HashSet, VecDeque};
-use std::convert::{TryFrom, TryInto};
-use std::fmt::Formatter;
-use std::marker::PhantomData;
-use std::ptr::NonNull;
-use std::sync::Arc;
+use crate::*;
+
+pub mod array;
+pub mod map;
+pub mod text;
+#[cfg(feature = "weak")]
+pub mod weak;
+pub mod xml;
 
 /// Type ref identifier for an [ArrayRef] type.
 pub const TYPE_REFS_ARRAY: u8 = 0;
@@ -199,6 +200,7 @@ impl Decode for TypeRef {
     }
 }
 
+#[cfg(feature = "sync")]
 pub trait Observable: AsRef<Branch> {
     type Event;
 
@@ -213,7 +215,7 @@ pub trait Observable: AsRef<Branch> {
     /// Returns a [Subscription] which, when dropped, will unsubscribe current callback.
     fn observe<F>(&self, f: F) -> Subscription
     where
-        F: Fn(&TransactionMut, &Self::Event) -> () + 'static,
+        F: Fn(&TransactionMut, &Self::Event) + Send + Sync + 'static,
         Event: AsRef<Self::Event>,
     {
         let mut branch = BranchPtr::from(self.as_ref());
@@ -221,6 +223,88 @@ pub trait Observable: AsRef<Branch> {
             let mapped_event = e.as_ref();
             f(txn, mapped_event)
         })
+    }
+
+    /// Subscribes a given callback to be triggered whenever current y-type is changed.
+    /// A callback is triggered whenever a transaction gets committed. This function does not
+    /// trigger if changes have been observed by nested shared collections.
+    ///
+    /// All array-like event changes can be tracked by using [Event::delta] method.
+    /// All map-like event changes can be tracked by using [Event::keys] method.
+    /// All text-like event changes can be tracked by using [TextEvent::delta] method.
+    ///
+    /// Provided key may be used later to unsubscribe from the event.
+    fn observe_with<K, F>(&self, key: K, f: F)
+    where
+        K: Into<Origin>,
+        F: Fn(&TransactionMut, &Self::Event) + Send + Sync + 'static,
+        Event: AsRef<Self::Event>,
+    {
+        let mut branch = BranchPtr::from(self.as_ref());
+        branch.observe_with(key.into(), move |txn, e| {
+            let mapped_event = e.as_ref();
+            f(txn, mapped_event)
+        })
+    }
+
+    /// Unsubscribes a given callback identified by key, that was previously subscribed using [Self::observe_with].
+    fn unobserve<K: Into<Origin>>(&self, key: K) -> bool {
+        let mut branch = BranchPtr::from(self.as_ref());
+        branch.unobserve(&key.into())
+    }
+}
+
+#[cfg(not(feature = "sync"))]
+pub trait Observable: AsRef<Branch> {
+    type Event;
+
+    /// Subscribes a given callback to be triggered whenever current y-type is changed.
+    /// A callback is triggered whenever a transaction gets committed. This function does not
+    /// trigger if changes have been observed by nested shared collections.
+    ///
+    /// All array-like event changes can be tracked by using [Event::delta] method.
+    /// All map-like event changes can be tracked by using [Event::keys] method.
+    /// All text-like event changes can be tracked by using [TextEvent::delta] method.
+    ///
+    /// Returns a [Subscription] which, when dropped, will unsubscribe current callback.
+    fn observe<F>(&self, f: F) -> Subscription
+    where
+        F: Fn(&TransactionMut, &Self::Event) + 'static,
+        Event: AsRef<Self::Event>,
+    {
+        let mut branch = BranchPtr::from(self.as_ref());
+        branch.observe(move |txn, e| {
+            let mapped_event = e.as_ref();
+            f(txn, mapped_event)
+        })
+    }
+
+    /// Subscribes a given callback to be triggered whenever current y-type is changed.
+    /// A callback is triggered whenever a transaction gets committed. This function does not
+    /// trigger if changes have been observed by nested shared collections.
+    ///
+    /// All array-like event changes can be tracked by using [Event::delta] method.
+    /// All map-like event changes can be tracked by using [Event::keys] method.
+    /// All text-like event changes can be tracked by using [TextEvent::delta] method.
+    ///
+    /// Provided key may be used later to unsubscribe from the event.
+    fn observe_with<K, F>(&self, key: K, f: F)
+    where
+        K: Into<Origin>,
+        F: Fn(&TransactionMut, &Self::Event) + 'static,
+        Event: AsRef<Self::Event>,
+    {
+        let mut branch = BranchPtr::from(self.as_ref());
+        branch.observe_with(key.into(), move |txn, e| {
+            let mapped_event = e.as_ref();
+            f(txn, mapped_event)
+        })
+    }
+
+    /// Unsubscribes a given callback identified by key, that was previously subscribed using [Self::observe_with].
+    fn unobserve<K: Into<Origin>>(&self, key: K) -> bool {
+        let mut branch = BranchPtr::from(self.as_ref());
+        branch.unobserve(&key.into())
     }
 }
 
@@ -258,8 +342,29 @@ pub trait SharedRef: From<BranchPtr> + AsRef<Branch> {
     }
 }
 
+/// Trait which allows conversion back to a prelim type that can be used to create a new shared
+/// that's a deep copy equivalent of a current type.
+pub trait AsPrelim {
+    type Prelim: Prelim<Return = Self>;
+
+    /// Converts current type contents into a [Prelim] type that can be used to create a new
+    /// type that's a deep copy equivalent of a current type.
+    fn as_prelim<T: ReadTxn>(&self, txn: &T) -> Self::Prelim;
+}
+
+/// Trait which allows to generate a [Prelim]-compatible type that - when integrated - will be
+/// converted into an instance of a current type.
+pub trait DefaultPrelim {
+    type Prelim: Prelim<Return = Self>;
+
+    /// Returns an instance of [Prelim]-compatible type, which will turn into reference of a current
+    /// type after being integrated into the document store.
+    fn default_prelim() -> Self::Prelim;
+}
+
 /// Trait implemented by all Y-types, allowing for observing events which are emitted by
 /// nested types.
+#[cfg(feature = "sync")]
 pub trait DeepObservable: AsRef<Branch> {
     /// Subscribe a callback `f` for all events emitted by this and nested collaborative types.
     /// Callback is accepting transaction which triggered that event and event itself, wrapped
@@ -273,176 +378,89 @@ pub trait DeepObservable: AsRef<Branch> {
     /// when dropped.
     fn observe_deep<F>(&self, f: F) -> Subscription
     where
-        F: Fn(&TransactionMut, &Events) -> () + 'static,
+        F: Fn(&TransactionMut, &Events) + Send + Sync + 'static,
     {
         let branch = self.as_ref();
-        branch.deep_observers.subscribe(f)
-    }
-}
-
-/// Value that can be returned by Yrs data types. This includes [Any] which is an extension
-/// representation of JSON, but also nested complex collaborative structures specific to Yrs.
-#[derive(Debug, Clone, PartialEq)]
-pub enum Value {
-    /// Any value that it treated as a single element in it's entirety.
-    Any(Any),
-    /// Instance of a [TextRef].
-    YText(TextRef),
-    /// Instance of an [ArrayRef].
-    YArray(ArrayRef),
-    /// Instance of a [MapRef].
-    YMap(MapRef),
-    /// Instance of a [XmlElementRef].
-    YXmlElement(XmlElementRef),
-    /// Instance of a [XmlFragmentRef].
-    YXmlFragment(XmlFragmentRef),
-    /// Instance of a [XmlTextRef].
-    YXmlText(XmlTextRef),
-    /// Subdocument.
-    YDoc(Doc),
-    /// Instance of a [WeakRef] or unspecified type (requires manual casting).
-    #[cfg(feature = "weak")]
-    YWeakLink(WeakRef<BranchPtr>),
-    /// Instance of a shared collection of undefined type. Usually happens when it refers to a root
-    /// type that has not been defined locally. Can also refer to a [WeakRef] if "weak" feature flag
-    /// was not set.
-    UndefinedRef(BranchPtr),
-}
-
-impl Default for Value {
-    fn default() -> Self {
-        Value::Any(Any::Undefined)
-    }
-}
-
-impl Value {
-    #[inline]
-    pub fn cast<T>(self) -> Result<T, Self>
-    where
-        T: TryFrom<Self, Error = Self>,
-    {
-        T::try_from(self)
+        branch.deep_observers.subscribe(Box::new(f))
     }
 
-    /// Converts current value into stringified representation.
-    pub fn to_string<T: ReadTxn>(self, txn: &T) -> String {
-        match self {
-            Value::Any(a) => a.to_string(),
-            Value::YText(v) => v.get_string(txn),
-            Value::YArray(v) => v.to_json(txn).to_string(),
-            Value::YMap(v) => v.to_json(txn).to_string(),
-            Value::YXmlElement(v) => v.get_string(txn),
-            Value::YXmlFragment(v) => v.get_string(txn),
-            Value::YXmlText(v) => v.get_string(txn),
-            Value::YDoc(v) => v.to_string(),
-            #[cfg(feature = "weak")]
-            Value::YWeakLink(v) => {
-                let text_ref: crate::WeakRef<TextRef> = crate::WeakRef::from(v);
-                text_ref.get_string(txn)
-            }
-            Value::UndefinedRef(_) => "".to_string(),
-        }
-    }
-
-    pub fn try_branch(&self) -> Option<&Branch> {
-        match self {
-            Value::YText(b) => Some(b.as_ref()),
-            Value::YArray(b) => Some(b.as_ref()),
-            Value::YMap(b) => Some(b.as_ref()),
-            Value::YXmlElement(b) => Some(b.as_ref()),
-            Value::YXmlFragment(b) => Some(b.as_ref()),
-            Value::YXmlText(b) => Some(b.as_ref()),
-            #[cfg(feature = "weak")]
-            Value::YWeakLink(b) => Some(b.as_ref()),
-            Value::UndefinedRef(b) => Some(b.as_ref()),
-            Value::YDoc(_) => None,
-            Value::Any(_) => None,
-        }
-    }
-}
-
-impl<T> From<T> for Value
-where
-    T: Into<Any>,
-{
-    fn from(v: T) -> Self {
-        let any: Any = v.into();
-        Value::Any(any)
-    }
-}
-
-//FIXME: what we would like to have is an automatic trait implementation of TryFrom<Value> for
-// any type that implements TryFrom<Any,Error=Any>, but this causes compiler error.
-macro_rules! impl_try_from {
-    ($t:ty) => {
-        impl TryFrom<Value> for $t {
-            type Error = Value;
-
-            fn try_from(value: Value) -> Result<Self, Self::Error> {
-                match value {
-                    Value::Any(any) => any.try_into().map_err(Value::Any),
-                    other => Err(other),
-                }
-            }
-        }
-    };
-}
-
-impl_try_from!(bool);
-impl_try_from!(f32);
-impl_try_from!(f64);
-impl_try_from!(i16);
-impl_try_from!(i32);
-impl_try_from!(u16);
-impl_try_from!(u32);
-impl_try_from!(i64);
-impl_try_from!(isize);
-impl_try_from!(String);
-impl_try_from!(Arc<str>);
-impl_try_from!(Vec<u8>);
-impl_try_from!(Arc<[u8]>);
-
-impl ToJson for Value {
-    /// Converts current value into [Any] object equivalent that resembles enhanced JSON payload.
-    /// Rules are:
+    /// Subscribe a callback `f` for all events emitted by this and nested collaborative types.
+    /// Callback is accepting transaction which triggered that event and event itself, wrapped
+    /// within an [Event] structure.
     ///
-    /// - Primitive types ([Value::Any]) are passed right away, as no transformation is needed.
-    /// - [Value::YArray] is converted into JSON-like array.
-    /// - [Value::YMap] is converted into JSON-like object map.
-    /// - [Value::YText], [Value::YXmlText] and [Value::YXmlElement] are converted into strings
-    ///   (XML types are stringified XML representation).
-    fn to_json<T: ReadTxn>(&self, txn: &T) -> Any {
-        match self {
-            Value::Any(a) => a.clone(),
-            Value::YText(v) => Any::from(v.get_string(txn)),
-            Value::YArray(v) => v.to_json(txn),
-            Value::YMap(v) => v.to_json(txn),
-            Value::YXmlElement(v) => Any::from(v.get_string(txn)),
-            Value::YXmlText(v) => Any::from(v.get_string(txn)),
-            Value::YXmlFragment(v) => Any::from(v.get_string(txn)),
-            Value::YDoc(doc) => any!({"guid": doc.guid().as_ref()}),
-            #[cfg(feature = "weak")]
-            Value::YWeakLink(_) => Any::Undefined,
-            Value::UndefinedRef(_) => Any::Undefined,
-        }
+    /// In case when a nested shared type (e.g. [MapRef],[ArrayRef],[TextRef]) is being removed,
+    /// all of its contents will be removed first. So the observed value will be empty. For example,
+    /// The value wrapped in the [EntryChange::Removed] of the [Event::Map] will be empty.
+    ///
+    /// This method uses a subscription key, which can be later used to cancel this callback via
+    /// [Self::unobserve_deep].
+    fn observe_deep_with<K, F>(&self, key: K, f: F)
+    where
+        K: Into<Origin>,
+        F: Fn(&TransactionMut, &Events) + Send + Sync + 'static,
+    {
+        let branch = self.as_ref();
+        branch
+            .deep_observers
+            .subscribe_with(key.into(), Box::new(f))
+    }
+
+    /// Unsubscribe a callback identified by a given key, that was previously subscribed using
+    /// [Self::observe_deep_with].
+    fn unobserve_deep<K: Into<Origin>>(&self, key: K) -> bool {
+        let branch = self.as_ref();
+        branch.deep_observers.unsubscribe(&key.into())
     }
 }
 
-impl std::fmt::Display for Value {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Value::Any(v) => std::fmt::Display::fmt(v, f),
-            Value::YText(_) => write!(f, "TextRef"),
-            Value::YArray(_) => write!(f, "ArrayRef"),
-            Value::YMap(_) => write!(f, "MapRef"),
-            Value::YXmlElement(_) => write!(f, "XmlElementRef"),
-            Value::YXmlFragment(_) => write!(f, "XmlFragmentRef"),
-            Value::YXmlText(_) => write!(f, "XmlTextRef"),
-            #[cfg(feature = "weak")]
-            Value::YWeakLink(_) => write!(f, "WeakRef"),
-            Value::YDoc(v) => write!(f, "Doc(guid:{})", v.options().guid),
-            Value::UndefinedRef(_) => write!(f, "UndefinedRef"),
-        }
+/// Trait implemented by all Y-types, allowing for observing events which are emitted by
+/// nested types.
+#[cfg(not(feature = "sync"))]
+pub trait DeepObservable: AsRef<Branch> {
+    /// Subscribe a callback `f` for all events emitted by this and nested collaborative types.
+    /// Callback is accepting transaction which triggered that event and event itself, wrapped
+    /// within an [Event] structure.
+    ///
+    /// In case when a nested shared type (e.g. [MapRef],[ArrayRef],[TextRef]) is being removed,
+    /// all of its contents will be removed first. So the observed value will be empty. For example,
+    /// The value wrapped in the [EntryChange::Removed] of the [Event::Map] will be empty.
+    ///
+    /// This method returns a subscription, which will automatically unsubscribe current callback
+    /// when dropped.
+    fn observe_deep<F>(&self, f: F) -> Subscription
+    where
+        F: Fn(&TransactionMut, &Events) + 'static,
+    {
+        let branch = self.as_ref();
+        branch.deep_observers.subscribe(Box::new(f))
+    }
+
+    /// Subscribe a callback `f` for all events emitted by this and nested collaborative types.
+    /// Callback is accepting transaction which triggered that event and event itself, wrapped
+    /// within an [Event] structure.
+    ///
+    /// In case when a nested shared type (e.g. [MapRef],[ArrayRef],[TextRef]) is being removed,
+    /// all of its contents will be removed first. So the observed value will be empty. For example,
+    /// The value wrapped in the [EntryChange::Removed] of the [Event::Map] will be empty.
+    ///
+    /// This method uses a subscription key, which can be later used to cancel this callback via
+    /// [Self::unobserve_deep].
+    fn observe_deep_with<K, F>(&self, key: K, f: F)
+    where
+        K: Into<Origin>,
+        F: Fn(&TransactionMut, &Events) + 'static,
+    {
+        let branch = self.as_ref();
+        branch
+            .deep_observers
+            .subscribe_with(key.into(), Box::new(f))
+    }
+
+    /// Unsubscribe a callback identified by a given key, that was previously subscribed using
+    /// [Self::observe_deep_with].
+    fn unobserve_deep<K: Into<Origin>>(&self, key: K) -> bool {
+        let branch = self.as_ref();
+        branch.deep_observers.unsubscribe(&key.into())
     }
 }
 
@@ -722,7 +740,7 @@ pub enum Change {
     /// Determines a change that resulted in adding a consecutive number of new elements:
     /// - For [Array] it's a range of inserted elements.
     /// - For [XmlElement] it's a range of inserted child XML nodes.
-    Added(Vec<Value>),
+    Added(Vec<Out>),
 
     /// Determines a change that resulted in removing a consecutive range of existing elements,
     /// either XML child nodes for [XmlElement] or various elements stored in an [Array].
@@ -737,22 +755,22 @@ pub enum Change {
 #[derive(Debug, Clone, PartialEq)]
 pub enum EntryChange {
     /// Informs about a new value inserted under specified entry.
-    Inserted(Value),
+    Inserted(Out),
 
     /// Informs about a change of old value (1st field) to a new one (2nd field) under
     /// a corresponding entry.
-    Updated(Value, Value),
+    Updated(Out, Out),
 
     /// Informs about a removal of a corresponding entry - contains a removed value.
-    Removed(Value),
+    Removed(Out),
 }
 
 /// A single change done over a text-like types: [Text] or [XmlText].
 #[derive(Debug, Clone, PartialEq)]
-pub enum Delta {
+pub enum Delta<T = Out> {
     /// Determines a change that resulted in insertion of a piece of text, which optionally could
     /// have been formatted with provided set of attributes.
-    Inserted(Value, Option<Box<Attrs>>),
+    Inserted(T, Option<Box<Attrs>>),
 
     /// Determines a change that resulted in removing a consecutive range of characters.
     Deleted(u32),
@@ -761,6 +779,37 @@ pub enum Delta {
     /// between [Delta::Inserted] and/or [Delta::Deleted] chunks. Can contain an optional set of
     /// attributes, which have been used to format an existing piece of text.
     Retain(u32, Option<Box<Attrs>>),
+}
+
+impl<T> Delta<T> {
+    pub fn map<U, F>(self, f: F) -> Delta<U>
+    where
+        F: FnOnce(T) -> U,
+    {
+        match self {
+            Delta::Inserted(value, attrs) => Delta::Inserted(f(value), attrs),
+            Delta::Deleted(len) => Delta::Deleted(len),
+            Delta::Retain(len, attrs) => Delta::Retain(len, attrs),
+        }
+    }
+}
+
+impl Delta<In> {
+    pub fn retain(len: u32) -> Self {
+        Delta::Retain(len, None)
+    }
+
+    pub fn insert<T: Into<In>>(value: T) -> Self {
+        Delta::Inserted(value.into(), None)
+    }
+
+    pub fn insert_with<T: Into<In>>(value: T, attrs: Attrs) -> Self {
+        Delta::Inserted(value.into(), Some(Box::new(attrs)))
+    }
+
+    pub fn delete(len: u32) -> Self {
+        Delta::Deleted(len)
+    }
 }
 
 /// An alias for map of attributes used as formatting parameters by [Text] and [XmlText] types.
@@ -977,20 +1026,17 @@ pub(crate) fn event_change_set(txn: &TransactionMut, start: Option<ItemPtr>) -> 
     ChangeSet::new(added, deleted, delta)
 }
 
-pub struct Events(Vec<NonNull<Event>>);
+pub struct Events<'a>(Vec<&'a Event>);
 
-impl Events {
-    pub(crate) fn new(events: &mut Vec<&Event>) -> Self {
+impl<'a> Events<'a> {
+    pub(crate) fn new(events: &Vec<&'a Event>) -> Self {
+        let mut events = events.clone();
         events.sort_by(|&a, &b| {
             let path1 = a.path();
             let path2 = b.path();
             path1.len().cmp(&path2.len())
         });
-        let mut inner = Vec::with_capacity(events.len());
-        for &e in events.iter() {
-            inner.push(unsafe { NonNull::new_unchecked(e as *const Event as *mut Event) });
-        }
-        Events(inner)
+        Events(events)
     }
 
     pub fn iter(&self) -> EventsIter {
@@ -998,14 +1044,14 @@ impl Events {
     }
 }
 
-pub struct EventsIter<'a>(std::slice::Iter<'a, NonNull<Event>>);
+pub struct EventsIter<'a>(std::slice::Iter<'a, &'a Event>);
 
 impl<'a> Iterator for EventsIter<'a> {
     type Item = &'a Event;
 
     fn next(&mut self) -> Option<Self::Item> {
         let e = self.0.next()?;
-        Some(unsafe { e.as_ref() })
+        Some(e)
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -1119,19 +1165,19 @@ impl Event {
     }
 
     /// Returns a shared data types which triggered current [Event].
-    pub fn target(&self) -> Value {
+    pub fn target(&self) -> Out {
         match self {
-            Event::Text(e) => Value::YText(e.target().clone()),
-            Event::Array(e) => Value::YArray(e.target().clone()),
-            Event::Map(e) => Value::YMap(e.target().clone()),
-            Event::XmlText(e) => Value::YXmlText(e.target().clone()),
+            Event::Text(e) => Out::YText(e.target().clone()),
+            Event::Array(e) => Out::YArray(e.target().clone()),
+            Event::Map(e) => Out::YMap(e.target().clone()),
+            Event::XmlText(e) => Out::YXmlText(e.target().clone()),
             Event::XmlFragment(e) => match e.target() {
-                XmlNode::Element(n) => Value::YXmlElement(n.clone()),
-                XmlNode::Fragment(n) => Value::YXmlFragment(n.clone()),
-                XmlNode::Text(n) => Value::YXmlText(n.clone()),
+                XmlOut::Element(n) => Out::YXmlElement(n.clone()),
+                XmlOut::Fragment(n) => Out::YXmlFragment(n.clone()),
+                XmlOut::Text(n) => Out::YXmlText(n.clone()),
             },
             #[cfg(feature = "weak")]
-            Event::Weak(e) => Value::YWeakLink(e.as_target().clone()),
+            Event::Weak(e) => Out::YWeakLink(e.as_target().clone()),
         }
     }
 }

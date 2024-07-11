@@ -7,14 +7,14 @@ use crate::gc::GCCollector;
 use crate::id_set::DeleteSet;
 use crate::iter::TxnIterator;
 use crate::slice::BlockSlice;
-use crate::store::{Store, SubdocGuids, SubdocsIter};
-use crate::types::{Event, Events, RootRef, SharedRef, TypePtr, Value};
+use crate::store::{Store, StoreEvents, SubdocGuids, SubdocsIter};
+use crate::types::{Event, Events, RootRef, SharedRef, TypePtr};
 use crate::update::Update;
 use crate::utils::OptionExt;
 use crate::*;
 use atomic_refcell::{AtomicRef, AtomicRefMut};
 use smallvec::SmallVec;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Formatter;
 use std::hash::Hash;
 use std::ops::{Deref, DerefMut};
@@ -80,13 +80,16 @@ pub trait ReadTxn: Sized {
     fn encode_state_as_update_v1(&self, sv: &StateVector) -> Vec<u8> {
         let mut encoder = EncoderV1::new();
         self.encode_state_as_update(sv, &mut encoder);
-        encoder.to_vec()
+        // check for pending data
+        merge_pending_v1(encoder.to_vec(), self.store())
     }
 
     fn encode_state_as_update_v2(&self, sv: &StateVector) -> Vec<u8> {
         let mut encoder = EncoderV2::new();
         self.encode_state_as_update(sv, &mut encoder);
-        encoder.to_vec()
+
+        // check for pending data
+        merge_pending_v2(encoder.to_vec(), self.store())
     }
 
     /// Check if given node is alive. Returns false if node has been deleted.
@@ -241,6 +244,42 @@ pub trait WriteTxn: Sized {
     }
 }
 
+fn merge_pending_v1(update: Vec<u8>, store: &Store) -> Vec<u8> {
+    let mut merge = VecDeque::new();
+    if let Some(pending) = store.pending.as_ref() {
+        merge.push_back(pending.update.encode_v1());
+    }
+    if let Some(pending_ds) = store.pending_ds.as_ref() {
+        let mut u = Update::new();
+        u.delete_set = pending_ds.clone();
+        merge.push_back(u.encode_v1());
+    }
+    if merge.is_empty() {
+        update
+    } else {
+        merge.push_front(update);
+        merge_updates_v1(merge).unwrap()
+    }
+}
+
+fn merge_pending_v2(update: Vec<u8>, store: &Store) -> Vec<u8> {
+    let mut merge = VecDeque::new();
+    if let Some(pending) = store.pending.as_ref() {
+        merge.push_back(pending.update.encode_v2());
+    }
+    if let Some(pending_ds) = store.pending_ds.as_ref() {
+        let mut u = Update::new();
+        u.delete_set = pending_ds.clone();
+        merge.push_back(u.encode_v2());
+    }
+    if merge.is_empty() {
+        update
+    } else {
+        merge.push_front(update);
+        merge_updates_v2(merge).unwrap()
+    }
+}
+
 /// A very lightweight read-only transaction. These transactions are guaranteed to not modify the
 /// contents of an underlying [Doc] and can be used to read it or for serialization purposes.
 /// For this reason it's allowed to have a multiple active read-only transactions, but it's
@@ -343,6 +382,10 @@ impl<'doc> TransactionMut<'doc> {
 
     pub fn doc(&self) -> &Doc {
         &self.doc
+    }
+
+    pub fn events(&self) -> Option<&StoreEvents> {
+        self.store.events.as_deref()
     }
 
     /// Corresponding document's state vector at the moment when current transaction was created.
@@ -743,7 +786,7 @@ impl<'doc> TransactionMut<'doc> {
         let mut current = branch;
         loop {
             changed_parent_types.push(current);
-            if current.deep_observers.callbacks().is_some() {
+            if current.deep_observers.has_subscribers() {
                 let entries = changed_parents.entry(current).or_default();
                 entries.push(event_cache.len() - 1);
             }
@@ -901,9 +944,9 @@ impl<'doc> TransactionMut<'doc> {
 
             let store = self.store.deref();
             let mut removed = if let Some(events) = store.events.as_ref() {
-                if let Some(mut callbacks) = events.subdocs_events.callbacks() {
+                if events.subdocs_events.has_subscribers() {
                     let e = SubdocsEvent::new(subdocs);
-                    callbacks.trigger(self, &e);
+                    events.subdocs_events.trigger(|cb| cb(self, &e));
                     e.removed
                 } else {
                     subdocs.removed
@@ -974,12 +1017,14 @@ impl<'doc> TransactionMut<'doc> {
         }
     }
 
+    #[cfg(feature = "weak")]
     fn link(&mut self, mut source: ItemPtr, link: BranchPtr) {
         source.info.set_linked();
         let links = self.store.linked_by.entry(source).or_default();
         links.insert(link);
     }
 
+    #[cfg(feature = "weak")]
     pub(crate) fn unlink(&mut self, mut source: ItemPtr, link: BranchPtr) {
         let all_links = &mut self.store.linked_by;
         let prune = if let Some(linked_by) = all_links.get_mut(&source) {
@@ -1003,7 +1048,7 @@ impl<'doc> TransactionMut<'doc> {
 pub struct RootRefs<'doc>(std::collections::hash_map::Iter<'doc, Arc<str>, Arc<Branch>>);
 
 impl<'doc> Iterator for RootRefs<'doc> {
-    type Item = (&'doc str, Value);
+    type Item = (&'doc str, Out);
 
     fn next(&mut self) -> Option<Self::Item> {
         let (key, branch) = self.0.next()?;
