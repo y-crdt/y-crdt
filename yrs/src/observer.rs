@@ -265,11 +265,17 @@ where
 
 /// Subscription handle returned by [Observer::subscribe] methods, which will unsubscribe corresponding
 /// callback when dropped.
+///
+/// If you need to send the Subscription handle to another thread, you may wish to enable
+/// the `sync` feature such that Subscription implements `Send+Sync`.
 #[cfg(feature = "sync")]
 pub type Subscription = Arc<dyn Drop + Send + Sync + 'static>;
 
 /// Subscription handle returned by [Observer::subscribe] methods, which will unsubscribe corresponding
 /// callback when dropped.
+///
+/// If you need to send the Subscription handle to another thread, you may wish to enable
+/// the `sync` feature such that Subscription implements `Send+Sync`.
 #[cfg(not(feature = "sync"))]
 pub type Subscription = Arc<dyn Drop + 'static>;
 
