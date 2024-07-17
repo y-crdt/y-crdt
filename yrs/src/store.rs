@@ -225,7 +225,8 @@ impl Store {
             slice.trim_start(offset);
             slice.encode(encoder);
             for i in (start + 1)..blocks.len() {
-                blocks[i].as_slice().encode(encoder);
+                let block = &blocks[i];
+                block.as_slice().encode(encoder);
             }
         }
     }

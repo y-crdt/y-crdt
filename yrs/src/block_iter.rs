@@ -457,7 +457,11 @@ impl BlockIter {
         }
     }
 
-    pub fn insert_contents<V: Prelim>(&mut self, txn: &mut TransactionMut, value: V) -> ItemPtr {
+    pub fn insert_contents<V: Prelim>(
+        &mut self,
+        txn: &mut TransactionMut,
+        value: V,
+    ) -> Option<ItemPtr> {
         self.reduce_moves(txn);
         self.split_rel(txn);
         let id = {
@@ -484,7 +488,7 @@ impl BlockIter {
             parent,
             None,
             content,
-        );
+        )?;
         let mut block_ptr = ItemPtr::from(&mut block);
 
         block_ptr.integrate(txn, 0);
@@ -502,7 +506,7 @@ impl BlockIter {
             self.reached_end = true;
         }
 
-        block_ptr
+        Some(block_ptr)
     }
 
     pub fn insert_move(&mut self, txn: &mut TransactionMut, start: StickyIndex, end: StickyIndex) {
