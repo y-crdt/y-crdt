@@ -56,7 +56,8 @@ fn text_insert_delete() {
             TypePtr::Named("type".into()),
             None,
             ItemContent::Deleted(3),
-        ),
+        )
+        .unwrap(),
         Item::new(
             ID::new(CLIENT_ID, 3),
             None,
@@ -66,7 +67,8 @@ fn text_insert_delete() {
             TypePtr::Unknown,
             None,
             ItemContent::String("ab".into()),
-        ),
+        )
+        .unwrap(),
         Item::new(
             ID::new(CLIENT_ID, 5),
             None,
@@ -76,7 +78,8 @@ fn text_insert_delete() {
             TypePtr::Unknown,
             None,
             ItemContent::Deleted(1),
-        ),
+        )
+        .unwrap(),
         Item::new(
             ID::new(CLIENT_ID, 6),
             None,
@@ -86,7 +89,8 @@ fn text_insert_delete() {
             TypePtr::Unknown,
             None,
             ItemContent::Deleted(1),
-        ),
+        )
+        .unwrap(),
         Item::new(
             ID::new(CLIENT_ID, 7),
             None,
@@ -96,7 +100,8 @@ fn text_insert_delete() {
             TypePtr::Unknown,
             None,
             ItemContent::String("hi".into()),
-        ),
+        )
+        .unwrap(),
     ];
     let expected_ds = {
         let mut ds = IdSet::new();
@@ -154,6 +159,7 @@ fn map_set() {
             Some("k1".into()),
             ItemContent::Any(vec![Any::from("v1")]),
         )
+        .unwrap()
         .into(),
         Item::new(
             ID::new(CLIENT_ID, 1),
@@ -165,6 +171,7 @@ fn map_set() {
             Some("k2".into()),
             ItemContent::Any(vec![Any::from("v2")]),
         )
+        .unwrap()
         .into(),
     ];
 
@@ -207,6 +214,7 @@ fn array_insert() {
         None,
         ItemContent::Any(vec![Any::String("a".into()), Any::String("b".into())]),
     )
+    .unwrap()
     .into()];
 
     let payload = &[
@@ -250,6 +258,7 @@ fn xml_fragment_insert() {
             None,
             ItemContent::Type(Branch::new(TypeRef::XmlText)),
         )
+        .unwrap()
         .into(),
         Item::new(
             ID::new(CLIENT_ID, 1),
@@ -261,6 +270,7 @@ fn xml_fragment_insert() {
             None,
             ItemContent::Type(Branch::new(TypeRef::XmlElement("node-name".into()))),
         )
+        .unwrap()
         .into(),
     ];
 

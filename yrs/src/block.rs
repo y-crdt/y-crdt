@@ -398,7 +398,7 @@ impl ItemPtr {
             TypePtr::Branch(parent_branch),
             item.parent_sub.clone(),
             item.content.clone(),
-        );
+        )?;
         item.redone = Some(*redone_item.id());
         redone_item.info.set_keep();
         let mut block_ptr = ItemPtr::from(&mut redone_item);
@@ -1216,13 +1216,16 @@ impl Item {
         parent: TypePtr,
         parent_sub: Option<Arc<str>>,
         content: ItemContent,
-    ) -> Box<Item> {
+    ) -> Option<Box<Item>> {
         let info = ItemFlags::new(if content.is_countable() {
             ITEM_FLAG_COUNTABLE
         } else {
             0
         });
         let len = content.len(OffsetKind::Utf16);
+        if len == 0 {
+            return None;
+        }
         let root_name = if let TypePtr::Named(root) = &parent {
             Some(root.clone())
         } else {
@@ -1250,7 +1253,7 @@ impl Item {
                 b.name = root_name;
             }
         }
-        item
+        Some(item)
     }
 
     /// Checks if provided `id` fits inside of updates defined within bounds of current [Item].

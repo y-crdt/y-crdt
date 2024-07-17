@@ -477,7 +477,7 @@ impl Branch {
         txn: &mut TransactionMut,
         index: u32,
         value: V,
-    ) -> ItemPtr {
+    ) -> Option<ItemPtr> {
         let (start, parent) = {
             if index <= self.len() {
                 (self.start, BranchPtr::from(self))

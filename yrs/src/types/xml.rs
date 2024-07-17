@@ -1065,7 +1065,7 @@ pub trait XmlFragment: AsRef<Branch> {
     where
         V: XmlPrelim,
     {
-        let ptr = self.as_ref().insert_at(txn, index, xml_node);
+        let ptr = self.as_ref().insert_at(txn, index, xml_node).unwrap(); // XML node is never empty
         if let Ok(integrated) = V::Return::try_from(ptr) {
             integrated
         } else {
@@ -1508,7 +1508,6 @@ mod test {
 
     use arc_swap::ArcSwapOption;
 
-    use crate::branch::BranchPtr;
     use crate::test_utils::exchange_updates;
     use crate::transaction::ReadTxn;
     use crate::types::xml::{Xml, XmlFragment, XmlOut};

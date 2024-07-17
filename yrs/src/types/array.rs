@@ -189,7 +189,9 @@ pub trait Array: AsRef<Branch> + Sized {
     {
         let mut walker = BlockIter::new(BranchPtr::from(self.as_ref()));
         if walker.try_forward(txn, index) {
-            let ptr = walker.insert_contents(txn, value);
+            let ptr = walker
+                .insert_contents(txn, value)
+                .expect("cannot insert empty value");
             if let Ok(integrated) = ptr.try_into() {
                 integrated
             } else {

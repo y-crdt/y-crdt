@@ -430,16 +430,16 @@ impl Update {
         }
     }
 
-    fn decode_block<D: Decoder>(id: ID, decoder: &mut D) -> Result<BlockCarrier, Error> {
+    fn decode_block<D: Decoder>(id: ID, decoder: &mut D) -> Result<Option<BlockCarrier>, Error> {
         let info = decoder.read_info()?;
         match info {
             BLOCK_SKIP_REF_NUMBER => {
                 let len: u32 = decoder.read_var()?;
-                Ok(BlockCarrier::Skip(BlockRange { id, len }))
+                Ok(Some(BlockCarrier::Skip(BlockRange { id, len })))
             }
             BLOCK_GC_REF_NUMBER => {
                 let len: u32 = decoder.read_len()?;
-                Ok(BlockCarrier::GC(BlockRange { id, len }))
+                Ok(Some(BlockCarrier::GC(BlockRange { id, len })))
             }
             info => {
                 let cant_copy_parent_info = info & (HAS_ORIGIN | HAS_RIGHT_ORIGIN) == 0;
@@ -479,8 +479,10 @@ impl Update {
                     parent_sub,
                     content,
                 );
-                let block: BlockCarrier = item.into();
-                Ok(block)
+                match item {
+                    None => Ok(None),
+                    Some(item) => Ok(Some(BlockCarrier::from(item))),
+                }
             }
         }
     }
@@ -732,8 +734,7 @@ impl Decode for Update {
 
             for _ in 0..blocks_len {
                 let id = ID::new(client, clock);
-                let block = Self::decode_block(id, decoder)?;
-                if block.len() > 0 {
+                if let Some(block) = Self::decode_block(id, decoder)? {
                     // due to bug in the past it was possible for empty bugs to be generated
                     // even though they had no effect on the document store
                     clock += block.len();
@@ -1114,6 +1115,7 @@ mod test {
                 Some("keyB".into()),
                 ItemContent::Any(vec!["valueB".into()]),
             )
+            .unwrap()
             .into(),
         );
         assert_eq!(block, &expected);
