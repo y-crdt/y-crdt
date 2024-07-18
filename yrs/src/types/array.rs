@@ -189,7 +189,9 @@ pub trait Array: AsRef<Branch> + Sized {
     {
         let mut walker = BlockIter::new(BranchPtr::from(self.as_ref()));
         if walker.try_forward(txn, index) {
-            let ptr = walker.insert_contents(txn, value);
+            let ptr = walker
+                .insert_contents(txn, value)
+                .expect("cannot insert empty value");
             if let Ok(integrated) = ptr.try_into() {
                 integrated
             } else {
@@ -212,7 +214,10 @@ pub trait Array: AsRef<Branch> + Sized {
         T: IntoIterator<Item = V>,
         V: Into<Any>,
     {
-        self.insert(txn, index, RangePrelim(values));
+        let prelim = RangePrelim::new(values);
+        if !prelim.is_empty() {
+            self.insert(txn, index, prelim);
+        }
     }
 
     /// Inserts given `value` at the end of the current array.
@@ -552,21 +557,29 @@ impl Into<EmbedPrelim<ArrayPrelim>> for ArrayPrelim {
 
 /// Prelim range defines a way to insert multiple elements effectively at once one after another
 /// in an efficient way, provided that these elements correspond to a primitive JSON-like types.
-struct RangePrelim<T, V>(T)
-where
-    T: IntoIterator<Item = V>,
-    V: Into<Any>;
+#[repr(transparent)]
+struct RangePrelim(Vec<Any>);
 
-impl<T, V> Prelim for RangePrelim<T, V>
-where
-    T: IntoIterator<Item = V>,
-    V: Into<Any>,
-{
+impl RangePrelim {
+    fn new<I, T>(iter: I) -> Self
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<Any>,
+    {
+        RangePrelim(iter.into_iter().map(|v| v.into()).collect())
+    }
+
+    #[inline]
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl Prelim for RangePrelim {
     type Return = Unused;
 
     fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
-        let vec: Vec<Any> = self.0.into_iter().map(|v| v.into()).collect();
-        (ItemContent::Any(vec), None)
+        (ItemContent::Any(self.0), None)
     }
 
     fn integrate(self, _txn: &mut TransactionMut, _inner_ref: BranchPtr) {}
@@ -630,7 +643,7 @@ mod test {
     use crate::types::{Change, DeepObservable, Event, Out, Path, PathSegment, ToJson};
     use crate::{
         any, Any, Array, ArrayPrelim, Assoc, Doc, Map, MapRef, Observable, SharedRef, StateVector,
-        Transact, Update, ID,
+        Transact, Update, WriteTxn, ID,
     };
     use std::collections::{HashMap, HashSet};
     use std::iter::FromIterator;
@@ -1750,5 +1763,33 @@ mod test {
         assert_eq!(v, Some(2.into()));
         let v = iter.next();
         assert_eq!(v, None);
+    }
+
+    #[test]
+    fn insert_empty_range() {
+        let doc = Doc::with_client_id(1);
+        let mut txn = doc.transact_mut();
+        let array = txn.get_or_insert_array("array");
+
+        array.insert(&mut txn, 0, 1);
+        array.insert_range::<_, Any>(&mut txn, 1, []);
+        array.push_back(&mut txn, 2);
+
+        assert_eq!(
+            array.iter(&txn).collect::<Vec<_>>(),
+            vec![1.into(), 2.into()]
+        );
+
+        let data = txn.encode_state_as_update_v1(&StateVector::default());
+
+        let doc2 = Doc::with_client_id(2);
+        let mut txn = doc2.transact_mut();
+        let array = txn.get_or_insert_array("array");
+        txn.apply_update(Update::decode_v1(&data).unwrap());
+
+        assert_eq!(
+            array.iter(&txn).collect::<Vec<_>>(),
+            vec![1.into(), 2.into()]
+        );
     }
 }

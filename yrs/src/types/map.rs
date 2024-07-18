@@ -199,7 +199,9 @@ pub trait Map: AsRef<Branch> + Sized {
             }
         };
 
-        let ptr = txn.create_item(&pos, value, Some(key));
+        let ptr = txn
+            .create_item(&pos, value, Some(key))
+            .expect("Cannot insert empty value");
         if let Ok(integrated) = ptr.try_into() {
             integrated
         } else {

@@ -304,7 +304,9 @@ pub trait Text: AsRef<Branch> + Sized {
     {
         let this = BranchPtr::from(self.as_ref());
         if let Some(pos) = find_position(this, txn, index) {
-            let ptr = txn.create_item(&pos, content.into(), None);
+            let ptr = txn
+                .create_item(&pos, content.into(), None)
+                .expect("cannot insert empty value");
             if let Ok(integrated) = ptr.try_into() {
                 integrated
             } else {
@@ -335,7 +337,8 @@ pub trait Text: AsRef<Branch> + Sized {
     {
         let this = BranchPtr::from(self.as_ref());
         if let Some(mut pos) = find_position(this, txn, index) {
-            let item = insert(this, txn, &mut pos, embed.into(), attributes);
+            let item = insert(this, txn, &mut pos, embed.into(), attributes)
+                .expect("cannot insert empty value");
             if let Ok(integrated) = item.try_into() {
                 integrated
             } else {
@@ -703,15 +706,18 @@ fn insert<P: Prelim>(
     pos: &mut ItemPosition,
     value: P,
     mut attributes: Attrs,
-) -> ItemPtr {
+) -> Option<ItemPtr> {
     pos.unset_missing(&mut attributes);
     minimize_attr_changes(pos, &attributes);
     let negated_attrs = insert_attributes(branch, txn, pos, attributes);
 
-    let item = txn.create_item(&pos, value, None);
-
-    pos.right = Some(item);
-    pos.forward();
+    let item = if let Some(item) = txn.create_item(&pos, value, None) {
+        pos.right = Some(item);
+        pos.forward();
+        Some(item)
+    } else {
+        None
+    };
 
     insert_negated_attributes(branch, txn, pos, negated_attrs);
     item
@@ -985,7 +991,8 @@ fn insert_attributes(
                 parent,
                 None,
                 ItemContent::Format(k, v.into()),
-            );
+            )
+            .unwrap();
             let mut item_ptr = ItemPtr::from(&mut item);
             pos.right = Some(item_ptr);
             item_ptr.integrate(txn, 0);
@@ -1035,7 +1042,8 @@ fn insert_negated_attributes(
             parent,
             None,
             ItemContent::Format(k, v.into()),
-        );
+        )
+        .unwrap();
         let mut item_ptr = ItemPtr::from(&mut item);
         pos.right = Some(item_ptr);
         item_ptr.integrate(txn, 0);
@@ -2794,5 +2802,36 @@ mod test {
         txt.apply_delta(&mut txn, [Delta::retain(4), Delta::insert("e")]);
         let state1 = txt.diff_range(&mut txn, Some(&snapshot1), None, YChange::identity);
         assert_eq!(state1, vec![Diff::new("abcd".into(), None)]);
+    }
+
+    #[test]
+    fn empty_delta_chunks() {
+        let doc = Doc::with_client_id(1);
+        let mut txn = doc.transact_mut();
+        let txt = txn.get_or_insert_text("text");
+
+        let delta = vec![
+            Delta::insert("a"),
+            Delta::Inserted(
+                "".into(),
+                Some(Box::new(Attrs::from([(
+                    Arc::from("bold"),
+                    Any::from(true),
+                )]))),
+            ),
+            Delta::insert("b"),
+        ];
+
+        txt.apply_delta(&mut txn, delta);
+        assert_eq!(txt.get_string(&txn), "ab");
+
+        let bin = txn.encode_state_as_update_v1(&StateVector::default());
+
+        let doc2 = Doc::with_client_id(2);
+        let mut txn = doc2.transact_mut();
+        let txt = txn.get_or_insert_text("text");
+
+        txn.apply_update(Update::decode_v1(bin.as_slice()).unwrap());
+        assert_eq!(txt.get_string(&txn), "ab");
     }
 }

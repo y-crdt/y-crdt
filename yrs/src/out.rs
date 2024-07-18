@@ -1,13 +1,10 @@
 use crate::block::{ItemContent, ItemPtr};
 use crate::branch::{Branch, BranchPtr};
-use crate::encoding::read::Error;
 use crate::types::{AsPrelim, ToJson};
 use crate::{
     any, Any, ArrayRef, Doc, GetString, In, MapPrelim, MapRef, ReadTxn, TextRef, XmlElementRef,
     XmlFragmentRef, XmlTextRef,
 };
-use serde::de::Visitor;
-use serde::{Deserialize, Deserializer};
 use std::convert::TryFrom;
 use std::fmt::Formatter;
 use std::sync::Arc;

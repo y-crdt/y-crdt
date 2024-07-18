@@ -731,7 +731,7 @@ impl<'doc> TransactionMut<'doc> {
         pos: &block::ItemPosition,
         value: T,
         parent_sub: Option<Arc<str>>,
-    ) -> ItemPtr {
+    ) -> Option<ItemPtr> {
         let (left, right, origin, id) = {
             let store = self.store_mut();
             let left = pos.left;
@@ -761,7 +761,7 @@ impl<'doc> TransactionMut<'doc> {
             pos.parent.clone(),
             parent_sub,
             content,
-        );
+        )?;
         let mut block_ptr = ItemPtr::from(&mut block);
 
         block_ptr.integrate(self, 0);
@@ -772,7 +772,7 @@ impl<'doc> TransactionMut<'doc> {
             remainder.integrate(self, inner_ref.unwrap().into())
         }
 
-        block_ptr
+        Some(block_ptr)
     }
 
     fn call_type_observers(
