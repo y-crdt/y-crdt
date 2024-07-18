@@ -1081,6 +1081,13 @@ checksum = "bec47e5bfd1bff0eeaf6d8b485cc1074891a197ab4225d504cb7a1ab88b02bf0"
 name = "yffi"
 version = "0.19.2"
 dependencies = [
+ "yffi-impl",
+]
+
+[[package]]
+name = "yffi-impl"
+version = "0.19.2"
+dependencies = [
  "yrs",
 ]
 

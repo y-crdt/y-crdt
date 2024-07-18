@@ -99,7 +99,9 @@ trailer = """
 """
 
 [parse]
-parse_deps = false
+parse_deps = true
+include = ["yffi-impl"]
+extra_bindings = ["yffi-impl"]
 
 [export]
 exclude = [
