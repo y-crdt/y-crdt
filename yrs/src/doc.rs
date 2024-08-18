@@ -8,14 +8,18 @@ use crate::types::{RootRef, ToJson};
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::{
-    uuid_v4, uuid_v4_from, ArrayRef, BranchID, MapRef, Out, ReadTxn, TextRef, Uuid, WriteTxn,
-    XmlFragmentRef,
+    uuid_v4, uuid_v4_from, ArrayRef, BranchID, MapRef, Out, ReadTxn, Store, TextRef, Transact,
+    TransactionAcqError, Uuid, WriteTxn, XmlFragmentRef,
 };
 use crate::{Any, Subscription};
+use async_lock::futures::{Read, Write};
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::fmt::Formatter;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use thiserror::Error;
 
 /// A Yrs document type. Documents are the most important units of collaborative resources management.
@@ -53,7 +57,7 @@ use thiserror::Error;
 #[repr(transparent)]
 #[derive(Debug, Clone)]
 pub struct Doc {
-    store: DocStore,
+    pub(crate) store: DocStore,
 }
 
 unsafe impl Send for Doc {}
@@ -916,127 +920,6 @@ pub enum OffsetKind {
     Bytes,
     /// Compute editable strings length and offset using UTF-16 chars count.
     Utf16,
-}
-
-/// Trait implemented by [Doc] and shared types, used for carrying over the responsibilities of
-/// creating new transactions, used as a unit of work in Yrs.
-pub trait Transact {
-    /// Creates and returns a lightweight read-only transaction.
-    ///
-    /// # Errors
-    ///
-    /// While it's possible to have multiple read-only transactions active at the same time,
-    /// this method will return a [TransactionAcqError::SharedAcqFailed] error whenever called
-    /// while a read-write transaction (see: [Self::try_transact_mut]) is active at the same time.
-    fn try_transact(&self) -> Result<Transaction, TransactionAcqError>;
-
-    /// Creates and returns a read-write capable transaction. This transaction can be used to
-    /// mutate the contents of underlying document store and upon dropping or committing it may
-    /// subscription callbacks.
-    ///
-    /// # Errors
-    ///
-    /// Only one read-write transaction can be active at the same time. If any other transaction -
-    /// be it a read-write or read-only one - is active at the same time, this method will return
-    /// a [TransactionAcqError::ExclusiveAcqFailed] error.
-    fn try_transact_mut(&self) -> Result<TransactionMut, TransactionAcqError>;
-
-    /// Creates and returns a read-write capable transaction with an `origin` classifier attached.
-    /// This transaction can be used to mutate the contents of underlying document store and upon
-    /// dropping or committing it may subscription callbacks.
-    ///
-    /// An `origin` may be used to identify context of operations made (example updates performed
-    /// locally vs. incoming from remote replicas) and it's used i.e. by [`UndoManager`][crate::undo::UndoManager].
-    ///
-    /// # Errors
-    ///
-    /// Only one read-write transaction can be active at the same time. If any other transaction -
-    /// be it a read-write or read-only one - is active at the same time, this method will return
-    /// a [TransactionAcqError::ExclusiveAcqFailed] error.
-    fn try_transact_mut_with<T>(&self, origin: T) -> Result<TransactionMut, TransactionAcqError>
-    where
-        T: Into<Origin>;
-
-    /// Creates and returns a read-write capable transaction with an `origin` classifier attached.
-    /// This transaction can be used to mutate the contents of underlying document store and upon
-    /// dropping or committing it may subscription callbacks.
-    ///
-    /// An `origin` may be used to identify context of operations made (example updates performed
-    /// locally vs. incoming from remote replicas) and it's used i.e. by [`UndoManager`][crate::undo::UndoManager].
-    ///
-    /// # Errors
-    ///
-    /// Only one read-write transaction can be active at the same time. If any other transaction -
-    /// be it a read-write or read-only one - is active at the same time, this method will panic.
-    fn transact_mut_with<T>(&self, origin: T) -> TransactionMut
-    where
-        T: Into<Origin>,
-    {
-        self.try_transact_mut_with(origin).unwrap()
-    }
-
-    /// Creates and returns a lightweight read-only transaction.
-    ///
-    /// # Panics
-    ///
-    /// While it's possible to have multiple read-only transactions active at the same time,
-    /// this method will panic whenever called while a read-write transaction
-    /// (see: [Self::transact_mut]) is active at the same time.
-    fn transact(&self) -> Transaction {
-        self.try_transact().unwrap()
-    }
-
-    /// Creates and returns a read-write capable transaction. This transaction can be used to
-    /// mutate the contents of underlying document store and upon dropping or committing it may
-    /// subscription callbacks.
-    ///
-    /// # Panics
-    ///
-    /// Only one read-write transaction can be active at the same time. If any other transaction -
-    /// be it a read-write or read-only one - is active at the same time, this method will panic.
-    fn transact_mut(&self) -> TransactionMut {
-        self.try_transact_mut().unwrap()
-    }
-}
-
-impl Transact for Doc {
-    fn try_transact(&self) -> Result<Transaction, TransactionAcqError> {
-        match self.store.try_read() {
-            Some(store) => Ok(Transaction::new(store)),
-            None => Err(TransactionAcqError::SharedAcqFailed),
-        }
-    }
-
-    fn try_transact_mut(&self) -> Result<TransactionMut, TransactionAcqError> {
-        match self.store.try_write() {
-            Some(store) => Ok(TransactionMut::new(self.clone(), store, None)),
-            None => Err(TransactionAcqError::ExclusiveAcqFailed),
-        }
-    }
-
-    fn try_transact_mut_with<T>(&self, origin: T) -> Result<TransactionMut, TransactionAcqError>
-    where
-        T: Into<Origin>,
-    {
-        match self.store.try_write() {
-            Some(store) => Ok(TransactionMut::new(
-                self.clone(),
-                store,
-                Some(origin.into()),
-            )),
-            None => Err(TransactionAcqError::ExclusiveAcqFailed),
-        }
-    }
-}
-
-#[derive(Error, Debug)]
-pub enum TransactionAcqError {
-    #[error("Failed to acquire read-only transaction. Drop read-write transaction and retry.")]
-    SharedAcqFailed,
-    #[error("Failed to acquire read-write transaction. Drop other transactions and retry.")]
-    ExclusiveAcqFailed,
-    #[error("All references to a parent document containing this structure has been dropped.")]
-    DocumentDropped,
 }
 
 impl Prelim for Doc {

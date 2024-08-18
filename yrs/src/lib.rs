@@ -602,6 +602,7 @@ pub mod sync;
 mod test_utils;
 #[cfg(test)]
 mod tests;
+mod transact;
 pub mod undo;
 
 pub use crate::alt::{
@@ -617,7 +618,6 @@ pub use crate::branch::Root;
 pub use crate::doc::Doc;
 pub use crate::doc::OffsetKind;
 pub use crate::doc::Options;
-pub use crate::doc::Transact;
 pub use crate::event::{SubdocsEvent, SubdocsEventIter, TransactionCleanupEvent, UpdateEvent};
 pub use crate::id_set::DeleteSet;
 pub use crate::input::In;
@@ -631,6 +631,7 @@ pub use crate::out::Out;
 pub use crate::state_vector::Snapshot;
 pub use crate::state_vector::StateVector;
 pub use crate::store::Store;
+pub use crate::transact::{AsyncTransact, Transact, TransactionAcqError};
 pub use crate::transaction::Origin;
 pub use crate::transaction::ReadTxn;
 pub use crate::transaction::RootRefs;

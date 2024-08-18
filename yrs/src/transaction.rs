@@ -1,4 +1,4 @@
-use crate::block::{Item, ItemContent, ItemPtr, Prelim, ID};
+use crate::block::{Item, ItemContent, ItemPosition, ItemPtr, Prelim, ID};
 use crate::branch::{Branch, BranchPtr};
 use crate::doc::DocAddr;
 use crate::error::Error;
@@ -10,8 +10,12 @@ use crate::slice::BlockSlice;
 use crate::store::{Store, StoreEvents, SubdocGuids, SubdocsIter};
 use crate::types::{Event, Events, RootRef, SharedRef, TypePtr};
 use crate::update::Update;
+use crate::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use crate::utils::OptionExt;
-use crate::*;
+use crate::{
+    merge_updates_v1, merge_updates_v2, ArrayRef, BranchID, Doc, MapRef, Out, Snapshot,
+    StateVector, TextRef, Transact, XmlFragmentRef,
+};
 use async_lock::{RwLockReadGuard, RwLockWriteGuard};
 use smallvec::SmallVec;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -20,7 +24,6 @@ use std::hash::Hash;
 use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::sync::Arc;
-use updates::encoder::*;
 
 /// Trait defining read capabilities present in a transaction. Implemented by both lightweight
 /// [read-only](Transaction) and [read-write](TransactionMut) transactions.
@@ -463,7 +466,7 @@ impl<'doc> TransactionMut<'doc> {
     /// * Even if an update contains known information, the unknown information
     ///   is extracted and integrated into the document structure.
     pub fn encode_update_v1(&self) -> Vec<u8> {
-        let mut encoder = updates::encoder::EncoderV1::new();
+        let mut encoder = EncoderV1::new();
         self.encode_update(&mut encoder);
         encoder.to_vec()
     }
@@ -477,7 +480,7 @@ impl<'doc> TransactionMut<'doc> {
     /// * Even if an update contains known information, the unknown information
     ///   is extracted and integrated into the document structure.
     pub fn encode_update_v2(&self) -> Vec<u8> {
-        let mut encoder = updates::encoder::EncoderV2::new();
+        let mut encoder = EncoderV2::new();
         self.encode_update(&mut encoder);
         encoder.to_vec()
     }
@@ -757,7 +760,7 @@ impl<'doc> TransactionMut<'doc> {
 
     pub(crate) fn create_item<T: Prelim>(
         &mut self,
-        pos: &block::ItemPosition,
+        pos: &ItemPosition,
         value: T,
         parent_sub: Option<Arc<str>>,
     ) -> Option<ItemPtr> {

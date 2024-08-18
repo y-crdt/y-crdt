@@ -12,7 +12,7 @@ use crate::undo::UndoStack;
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::OptionExt;
-use crate::*;
+use crate::{Any, DeleteSet, Doc, Options, Out, Transact};
 use serde::{Deserialize, Serialize};
 use smallstr::SmallString;
 use std::collections::HashSet;
@@ -917,7 +917,7 @@ impl Item {
 /// relation to its neighbors and parent.
 #[derive(Debug)]
 pub(crate) struct ItemPosition {
-    pub parent: types::TypePtr,
+    pub parent: TypePtr,
     pub left: Option<ItemPtr>,
     pub right: Option<ItemPtr>,
     pub index: u32,

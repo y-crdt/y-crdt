@@ -6,12 +6,11 @@ use std::sync::Arc;
 
 use crate::block::ItemPtr;
 use crate::branch::{Branch, BranchPtr};
-use crate::doc::TransactionAcqError;
 use crate::iter::TxnIterator;
 use crate::slice::BlockSlice;
 use crate::sync::Clock;
 use crate::transaction::Origin;
-use crate::{DeleteSet, Doc, Observer, Transact, TransactionMut, ID};
+use crate::{DeleteSet, Doc, Observer, Transact, TransactionAcqError, TransactionMut, ID};
 
 /// Undo manager is a structure used to perform undo/redo operations over the associated shared
 /// type(s).

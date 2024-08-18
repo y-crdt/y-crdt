@@ -15,6 +15,7 @@ use crate::{
     Uuid, ID,
 };
 use arc_swap::{ArcSwap, DefaultStrategy, Guard};
+use async_lock::futures::{Read, Write};
 use async_lock::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::borrow::Borrow;
 use std::collections::hash_map::Entry;
@@ -437,12 +438,28 @@ impl DocStore {
         }))
     }
 
-    pub fn try_read(&self) -> Option<RwLockReadGuard<Store>> {
+    pub(crate) fn try_read(&self) -> Option<RwLockReadGuard<Store>> {
         self.0.store.try_read()
     }
 
-    pub fn try_write(&self) -> Option<RwLockWriteGuard<Store>> {
+    pub(crate) fn read_blocking(&self) -> RwLockReadGuard<Store> {
+        self.0.store.read_blocking()
+    }
+
+    pub(crate) fn read_async(&self) -> Read<Store> {
+        self.0.store.read()
+    }
+
+    pub(crate) fn try_write(&self) -> Option<RwLockWriteGuard<Store>> {
         self.0.store.try_write()
+    }
+
+    pub(crate) fn write_blocking(&self) -> RwLockWriteGuard<Store> {
+        self.0.store.write_blocking()
+    }
+
+    pub(crate) fn write_async(&self) -> Write<Store> {
+        self.0.store.write()
     }
 
     pub(crate) fn options(&self) -> Guard<Arc<Options>, DefaultStrategy> {
