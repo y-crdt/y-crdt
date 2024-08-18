@@ -900,7 +900,7 @@ pub(crate) fn event_change_set(txn: &TransactionMut, start: Option<ItemPtr>) -> 
         false
     }
 
-    let encoding = txn.store().options.offset_kind;
+    let encoding = txn.store().offset_kind;
     let mut current = start;
     loop {
         if current == curr_move_end && curr_move.is_some() {

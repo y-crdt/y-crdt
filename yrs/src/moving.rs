@@ -506,7 +506,7 @@ impl StickyIndex {
                                 } else {
                                     right.start + 1
                                 };
-                                let encoding = store.options.offset_kind;
+                                let encoding = store.offset_kind;
                                 let mut n = right.ptr.left;
                                 while let Some(item) = n.as_deref() {
                                     if !item.is_deleted() && item.is_countable() {

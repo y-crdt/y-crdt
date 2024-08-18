@@ -388,7 +388,7 @@ impl ItemPtr {
         }
 
         let next_clock = txn.store.get_local_state();
-        let next_id = ID::new(txn.store.options.client_id, next_clock);
+        let next_id = ID::new(txn.store.client_id, next_clock);
         let mut redone_item = Item::new(
             next_id,
             left,
@@ -483,7 +483,7 @@ impl ItemPtr {
         let self_ptr = self.clone();
         let this = self.deref_mut();
         let store = txn.store_mut();
-        let encoding = store.options.offset_kind;
+        let encoding = store.offset_kind;
         if offset > 0 {
             // offset could be > 0 only in context of Update::integrate,
             // is such case offset kind in use always means Yjs-compatible offset (utf-16)
@@ -715,7 +715,7 @@ impl ItemPtr {
                     }
                     let subdocs = txn.subdocs.get_or_init();
                     subdocs.added.insert(DocAddr::new(doc), doc.clone());
-                    if doc.options().should_load {
+                    if doc.should_load() {
                         subdocs.loaded.insert(doc.addr(), doc.clone());
                     }
                 }
@@ -774,15 +774,15 @@ impl ItemPtr {
     /// each other as their left/right neighbors respectively.
     pub(crate) fn try_squash(&mut self, other: ItemPtr) -> bool {
         if self.id.client == other.id.client
-                    && self.id.clock + self.len() == other.id.clock
-                    && other.origin == Some(self.last_id())
-                    && self.right_origin == other.right_origin
-                    && self.right == Some(other)
-                    && self.is_deleted() == other.is_deleted()
-                    && (self.redone.is_none() && other.redone.is_none())
-                    && (!self.info.is_linked() && !other.info.is_linked()) // linked items cannot be merged
-                    && self.moved == other.moved
-                    && self.content.try_squash(&other.content)
+            && self.id.clock + self.len() == other.id.clock
+            && other.origin == Some(self.last_id())
+            && self.right_origin == other.right_origin
+            && self.right == Some(other)
+            && self.is_deleted() == other.is_deleted()
+            && (self.redone.is_none() && other.redone.is_none())
+            && (!self.info.is_linked() && !other.info.is_linked()) // linked items cannot be merged
+            && self.moved == other.moved
+            && self.content.try_squash(&other.content)
         {
             self.len = self.content.len(OffsetKind::Utf16);
             if let Some(mut right_right) = other.right {
@@ -1748,7 +1748,7 @@ impl ItemContent {
                     encoder.write_any(&any[i as usize]);
                 }
             }
-            ItemContent::Doc(_, doc) => doc.options().encode(encoder),
+            ItemContent::Doc(_, doc) => doc.store().options().encode(encoder),
             ItemContent::Move(m) => m.encode(encoder),
         }
     }
@@ -1778,7 +1778,7 @@ impl ItemContent {
                     encoder.write_any(a);
                 }
             }
-            ItemContent::Doc(_, doc) => doc.options().encode(encoder),
+            ItemContent::Doc(_, doc) => doc.store().options().encode(encoder),
             ItemContent::Move(m) => m.encode(encoder),
         }
     }

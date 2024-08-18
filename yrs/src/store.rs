@@ -14,6 +14,7 @@ use crate::{
     Doc, Observer, OffsetKind, Snapshot, TransactionCleanupEvent, TransactionMut, UpdateEvent,
     Uuid, ID,
 };
+use arc_swap::{ArcSwap, DefaultStrategy, Guard};
 use async_lock::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::borrow::Borrow;
 use std::collections::hash_map::Entry;
@@ -25,7 +26,9 @@ use std::sync::Arc;
 /// map of root types, pending updates waiting to be applied once a missing update information
 /// arrives and all subscribed callbacks.
 pub struct Store {
-    pub(crate) options: Options,
+    pub(crate) client_id: ClientID,
+    pub(crate) offset_kind: OffsetKind,
+    pub(crate) skip_gc: bool,
 
     /// Root types (a.k.a. top-level types). These types are defined by users at the document level,
     /// they have their own unique names and represent core shared types that expose operations
@@ -65,7 +68,9 @@ impl Store {
     /// Create a new empty store in context of a given `client_id`.
     pub(crate) fn new(options: &Options) -> Self {
         Store {
-            options,
+            client_id: options.client_id,
+            offset_kind: options.offset_kind,
+            skip_gc: options.skip_gc,
             types: HashMap::default(),
             node_registry: HashSet::default(),
             blocks: BlockStore::default(),
@@ -99,7 +104,7 @@ impl Store {
     /// block that's about to be inserted. You cannot use that clock value to find any existing
     /// block content.
     pub fn get_local_state(&self) -> u32 {
-        self.blocks.get_clock(&self.options.client_id)
+        self.blocks.get_clock(&self.client_id)
     }
 
     /// Returns a branch reference to a complex type identified by its pointer. Returns `None` if
@@ -141,7 +146,7 @@ impl Store {
         snapshot: &Snapshot,
         encoder: &mut E,
     ) -> Result<(), Error> {
-        if !self.options.skip_gc {
+        if !self.skip_gc {
             return Err(Error::Gc);
         }
         self.write_blocks_to(&snapshot.state_map, encoder);
@@ -393,7 +398,7 @@ impl std::fmt::Debug for Store {
 
 impl std::fmt::Display for Store {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut s = f.debug_struct(&self.options.client_id.to_string());
+        let mut s = f.debug_struct(&self.client_id.to_string());
         if !self.types.is_empty() {
             s.field("root types", &self.types);
         }
@@ -419,14 +424,14 @@ impl std::fmt::Display for Store {
 
 #[repr(transparent)]
 #[derive(Debug, Clone)]
-pub(crate) struct StoreRef(pub(crate) Arc<StoreInner>);
+pub(crate) struct DocStore(pub(crate) Arc<StoreInner>);
 
-impl StoreRef {
+impl DocStore {
     pub fn new(options: Options, parent: Option<ItemPtr>) -> Self {
-        let options = Arc::new(options);
         let mut store = Store::new(&options);
+        let options = ArcSwap::new(options.into());
         store.parent = parent;
-        StoreRef(Arc::new(StoreInner {
+        DocStore(Arc::new(StoreInner {
             options,
             store: RwLock::new(store),
         }))
@@ -440,14 +445,37 @@ impl StoreRef {
         self.0.store.try_write()
     }
 
-    pub fn options(&self) -> &Options {
-        &self.0.options
+    pub(crate) fn options(&self) -> Guard<Arc<Options>, DefaultStrategy> {
+        self.0.options.load()
+    }
+
+    /// Sets [Doc::should_load] flag, returning previous value.
+    pub(crate) fn set_should_load(&self, should_load: bool) -> bool {
+        self.0
+            .options
+            .rcu(|options| {
+                let mut options = options.deref().clone();
+                options.should_load = should_load;
+                options
+            })
+            .should_load
+    }
+
+    pub(crate) fn set_subdoc_data(&self, client_id: ClientID, collection_id: Option<Arc<str>>) {
+        self.0.options.rcu(|options| {
+            let mut options = options.deref().clone();
+            options.client_id = client_id;
+            if options.collection_id.is_none() {
+                options.collection_id = collection_id.clone();
+            }
+            options
+        });
     }
 }
 
 #[derive(Debug)]
 pub(crate) struct StoreInner {
-    options: Arc<Options>,
+    options: ArcSwap<Options>,
     store: RwLock<Store>,
 }
 
@@ -466,17 +494,17 @@ impl<'doc> Iterator for SubdocsIter<'doc> {
 pub struct SubdocGuids<'doc>(std::collections::hash_map::Values<'doc, DocAddr, Doc>);
 
 impl<'doc> Iterator for SubdocGuids<'doc> {
-    type Item = &'doc Uuid;
+    type Item = Uuid;
 
     fn next(&mut self) -> Option<Self::Item> {
         let d = self.0.next()?;
-        Some(&d.options().guid)
+        Some(d.guid())
     }
 }
 
 #[cfg(feature = "sync")]
 pub type TransactionCleanupFn =
-Box<dyn Fn(&TransactionMut, &TransactionCleanupEvent) + Send + Sync + 'static>;
+    Box<dyn Fn(&TransactionMut, &TransactionCleanupEvent) + Send + Sync + 'static>;
 #[cfg(feature = "sync")]
 pub type AfterTransactionFn = Box<dyn Fn(&mut TransactionMut) + Send + Sync + 'static>;
 #[cfg(feature = "sync")]

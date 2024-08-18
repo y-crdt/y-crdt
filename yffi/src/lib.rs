@@ -301,7 +301,7 @@ impl Into<Options> for YOptions {
             None
         } else {
             let c_str = unsafe { CStr::from_ptr(self.collection_id) };
-            let str = c_str.to_str().unwrap().to_string();
+            let str = Arc::from(c_str.to_str().unwrap());
             Some(str)
         };
         Options {
@@ -322,7 +322,7 @@ impl From<Options> for YOptions {
             id: o.client_id,
             guid: CString::new(o.guid.as_ref()).unwrap().into_raw(),
             collection_id: if let Some(collection_id) = o.collection_id {
-                CString::new(collection_id).unwrap().into_raw()
+                CString::new(collection_id.to_string()).unwrap().into_raw()
             } else {
                 null_mut()
             },
@@ -427,7 +427,7 @@ pub unsafe extern "C" fn ydoc_id(doc: *mut Doc) -> u64 {
 #[no_mangle]
 pub unsafe extern "C" fn ydoc_guid(doc: *mut Doc) -> *mut c_char {
     let doc = doc.as_ref().unwrap();
-    let uid = &doc.options().guid;
+    let uid = doc.guid();
     CString::new(uid.as_ref()).unwrap().into_raw()
 }
 
@@ -438,8 +438,8 @@ pub unsafe extern "C" fn ydoc_guid(doc: *mut Doc) -> *mut c_char {
 #[no_mangle]
 pub unsafe extern "C" fn ydoc_collection_id(doc: *mut Doc) -> *mut c_char {
     let doc = doc.as_ref().unwrap();
-    if let Some(cid) = doc.options().collection_id.as_ref() {
-        CString::new(cid.as_str()).unwrap().into_raw()
+    if let Some(cid) = doc.collection_id() {
+        CString::new(cid.as_ref()).unwrap().into_raw()
     } else {
         null_mut()
     }
@@ -450,7 +450,7 @@ pub unsafe extern "C" fn ydoc_collection_id(doc: *mut Doc) -> *mut c_char {
 #[no_mangle]
 pub unsafe extern "C" fn ydoc_should_load(doc: *mut Doc) -> u8 {
     let doc = doc.as_ref().unwrap();
-    doc.options().should_load as u8
+    doc.should_load() as u8
 }
 
 /// Returns status of auto_load flag of this [Doc] instance. Auto loaded sub-documents automatically
@@ -458,7 +458,7 @@ pub unsafe extern "C" fn ydoc_should_load(doc: *mut Doc) -> u8 {
 #[no_mangle]
 pub unsafe extern "C" fn ydoc_auto_load(doc: *mut Doc) -> u8 {
     let doc = doc.as_ref().unwrap();
-    doc.options().auto_load as u8
+    doc.auto_load() as u8
 }
 
 #[repr(transparent)]
@@ -2720,7 +2720,7 @@ impl std::fmt::Display for YOutput {
             } else if tag == Y_XML_TEXT {
                 write!(f, "YXmlText")
             } else if tag == Y_XML_ELEM {
-                write!(f, "YXmlElement",)
+                write!(f, "YXmlElement", )
             } else if tag == Y_JSON_BUF {
                 write!(f, "YBinary(len: {})", self.len)
             } else {

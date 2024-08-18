@@ -744,7 +744,7 @@ fn find_position(this: BranchPtr, txn: &mut TransactionMut, index: u32) -> Optio
 
     let mut format_ptrs = HashMap::new();
     let store = txn.store_mut();
-    let encoding = store.options.offset_kind;
+    let encoding = store.offset_kind;
     let mut remaining = index;
     while let Some(right) = pos.right {
         if remaining == 0 {
@@ -804,7 +804,7 @@ fn find_position(this: BranchPtr, txn: &mut TransactionMut, index: u32) -> Optio
 }
 
 fn remove(txn: &mut TransactionMut, pos: &mut ItemPosition, len: u32) {
-    let encoding = txn.store().options.offset_kind;
+    let encoding = txn.store().offset_kind;
     let mut remaining = len;
     let start = pos.right.clone();
     let start_attrs = pos.current_attrs.clone();
@@ -881,7 +881,7 @@ fn insert_format(
 ) {
     minimize_attr_changes(pos, &attrs);
     let mut negated_attrs = insert_attributes(this, txn, pos, attrs.clone()); //TODO: remove `attrs.clone()`
-    let encoding = txn.store().options.offset_kind;
+    let encoding = txn.store().offset_kind;
     // iterate until first non-format or null is found
     // delete all formats with attributes[format.key] != null
     // also check the attributes after the first non-format as we do not want to insert redundant
@@ -980,7 +980,7 @@ fn insert_attributes(
             // save negated attribute (set null if currentVal undefined)
             negated_attrs.insert(k.clone(), current_value.clone());
 
-            let client_id = store.options.client_id;
+            let client_id = store.client_id;
             let parent = this.into();
             let mut item = Item::new(
                 ID::new(client_id, store.blocks.get_clock(&client_id)),
@@ -1031,7 +1031,7 @@ fn insert_negated_attributes(
 
     let mut store = txn.store_mut();
     for (k, v) in attrs {
-        let client_id = store.options.client_id;
+        let client_id = store.client_id;
         let parent = this.into();
         let mut item = Item::new(
             ID::new(client_id, store.blocks.get_clock(&client_id)),
@@ -1318,7 +1318,7 @@ impl TextEvent {
             }
         }
 
-        let encoding = txn.store().options.offset_kind;
+        let encoding = txn.store().offset_kind;
         let mut old_attrs = HashMap::new();
         let mut asm = DeltaAssembler::default();
         let mut current = target.start;

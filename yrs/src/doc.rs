@@ -2,12 +2,11 @@ use crate::block::{ClientID, ItemContent, ItemPtr, Prelim};
 use crate::branch::BranchPtr;
 use crate::encoding::read::Error;
 use crate::event::{SubdocsEvent, TransactionCleanupEvent, UpdateEvent};
-use crate::store::{StoreInner, StoreRef};
+use crate::store::{DocStore, StoreInner};
 use crate::transaction::{Origin, Transaction, TransactionMut};
 use crate::types::{RootRef, ToJson};
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
-use crate::utils::OptionExt;
 use crate::{
     uuid_v4, uuid_v4_from, ArrayRef, BranchID, MapRef, Out, ReadTxn, TextRef, Uuid, WriteTxn,
     XmlFragmentRef,
@@ -54,7 +53,7 @@ use thiserror::Error;
 #[repr(transparent)]
 #[derive(Debug, Clone)]
 pub struct Doc {
-    store: StoreRef,
+    store: DocStore,
 }
 
 unsafe impl Send for Doc {}
@@ -88,7 +87,7 @@ impl Doc {
         let ptr = ptr as *const StoreInner;
         let cell = Arc::from_raw(ptr);
         Doc {
-            store: StoreRef(cell),
+            store: DocStore(cell),
         }
     }
 
@@ -107,31 +106,69 @@ impl Doc {
     /// Creates a new document with a configured set of [Options].
     pub fn with_options(options: Options) -> Self {
         Doc {
-            store: StoreRef::new(options, None),
+            store: DocStore::new(options, None),
         }
     }
 
     pub(crate) fn subdoc(parent: ItemPtr, options: Options) -> Self {
         Doc {
-            store: StoreRef::new(options, Some(parent)),
+            store: DocStore::new(options, Some(parent)),
         }
+    }
+
+    pub(crate) fn store(&self) -> &DocStore {
+        &self.store
     }
 
     /// A unique client identifier, that's also a unique identifier of current document replica
     /// and it's subdocuments.
+    ///
+    /// Default: randomly generated.
     pub fn client_id(&self) -> ClientID {
-        self.options().client_id
+        self.store.options().client_id
     }
 
     /// A globally unique identifier, that's also a unique identifier of current document replica,
     /// and unlike [Doc::client_id] it's not shared with its subdocuments.
-    pub fn guid(&self) -> &Uuid {
-        &self.options().guid
+    ///
+    /// Default: randomly generated UUID v4.
+    pub fn guid(&self) -> Uuid {
+        self.store.options().guid.clone()
     }
 
-    /// Returns config options of this [Doc] instance.
-    pub fn options(&self) -> &Options {
-        self.store.options()
+    /// Returns a unique collection identifier, if defined.
+    ///
+    /// Default: `None`.
+    pub fn collection_id(&self) -> Option<Arc<str>> {
+        self.store.options().collection_id.clone()
+    }
+
+    /// Informs if current document is skipping garbage collection on deleted collections
+    /// on transaction commit.
+    ///
+    /// Default: `false`.
+    pub fn skip_gc(&self) -> bool {
+        self.store.options().skip_gc
+    }
+
+    /// If current document is subdocument, it will automatically for a document to load.
+    ///
+    /// Default: `false`.
+    pub fn auto_load(&self) -> bool {
+        self.store.options().auto_load
+    }
+
+    /// Whether the document should be synced by the provider now.
+    /// This is toggled to true when you call [Doc::load]
+    ///
+    /// Default value: `true`.
+    pub fn should_load(&self) -> bool {
+        self.store.options().should_load
+    }
+
+    /// Returns encoding used to count offsets and lengths in text operations.
+    pub fn offset_kind(&self) -> OffsetKind {
+        self.store.options().offset_kind
     }
 
     /// Returns a [TextRef] data structure stored under a given `name`. Text structures are used for
@@ -639,16 +676,16 @@ impl Doc {
     where
         T: WriteTxn,
     {
-        let mut txn = self.transact_mut();
-        if txn.store.is_subdoc() {
-            if !txn.store.options.should_load {
+        let should_load = self.store.set_should_load(true);
+        if !should_load {
+            let txn = self.transact();
+            if txn.store().is_subdoc() {
                 parent_txn
                     .subdocs_mut()
                     .loaded
                     .insert(self.addr(), self.clone());
             }
         }
-        txn.store.options.should_load = true;
     }
 
     /// Starts destroy procedure for a current document, triggering an "destroy" callback and
@@ -667,7 +704,7 @@ impl Doc {
             let parent_ref = item.clone();
             let is_deleted = item.is_deleted();
             if let ItemContent::Doc(_, content) = &mut item.content {
-                let mut options = content.options().clone();
+                let mut options = (**content.store.options()).clone();
                 options.should_load = false;
                 let new_ref = Doc::subdoc(parent_ref, options);
                 if !is_deleted {
@@ -713,14 +750,13 @@ impl Doc {
 
 impl PartialEq for Doc {
     fn eq(&self, other: &Self) -> bool {
-        self.options().guid == other.options().guid
+        self.guid() == other.guid()
     }
 }
 
 impl std::fmt::Display for Doc {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let options = self.options();
-        write!(f, "Doc(id: {}, guid: {})", options.client_id, options.guid)
+        write!(f, "Doc(id: {}, guid: {})", self.client_id(), self.guid())
     }
 }
 
@@ -1927,7 +1963,7 @@ mod test {
             )))
         );
 
-        let guids: BTreeSet<_> = doc.transact().subdoc_guids().cloned().collect();
+        let guids: BTreeSet<_> = doc.transact().subdoc_guids().collect();
         assert_eq!(guids, BTreeSet::from([uuid_a.clone(), uuid_c.clone()]));
 
         let data = doc
@@ -1968,7 +2004,7 @@ mod test {
             Some(Arc::new((vec![], vec![], vec![uuid_a.clone()])))
         );
 
-        let guids: BTreeSet<_> = doc2.transact().subdoc_guids().cloned().collect();
+        let guids: BTreeSet<_> = doc2.transact().subdoc_guids().collect();
         assert_eq!(guids, BTreeSet::from([uuid_a.clone(), uuid_c.clone()]));
         {
             let mut txn = doc2.transact_mut();
@@ -1981,7 +2017,7 @@ mod test {
             Some(Arc::new((vec![], vec![uuid_a.clone()], vec![])))
         );
 
-        let mut guids: Vec<_> = doc2.transact().subdoc_guids().cloned().collect();
+        let mut guids: Vec<_> = doc2.transact().subdoc_guids().collect();
         guids.sort();
         assert_eq!(guids, vec![uuid_a.clone(), uuid_c.clone()]);
     }
@@ -1991,7 +2027,7 @@ mod test {
         let doc = Doc::with_client_id(1);
         let array = doc.get_or_insert_array("test");
         let subdoc_1 = Doc::new();
-        let uuid_1 = subdoc_1.options().guid.clone();
+        let uuid_1 = subdoc_1.guid().clone();
 
         let event = Arc::new(ArcSwapOption::default());
         let event_c = event.clone();
@@ -2005,9 +2041,8 @@ mod test {
         let doc_ref = {
             let mut txn = doc.transact_mut();
             let doc_ref = array.insert(&mut txn, 0, subdoc_1);
-            let o = doc_ref.options();
-            assert!(o.should_load);
-            assert!(!o.auto_load);
+            assert!(doc_ref.should_load());
+            assert!(!doc_ref.auto_load());
             doc_ref
         };
         let last_event = event.swap(None);
@@ -2023,7 +2058,7 @@ mod test {
             .unwrap()
             .cast::<Doc>()
             .unwrap();
-        let uuid_2 = doc_ref_2.options().guid.clone();
+        let uuid_2 = doc_ref_2.guid();
         assert!(!Doc::ptr_eq(&doc_ref, &doc_ref_2));
 
         let last_event = event.swap(None);
@@ -2063,9 +2098,9 @@ mod test {
                 .cast::<Doc>()
                 .unwrap()
         };
-        assert!(!doc_ref_3.options().should_load);
-        assert!(!doc_ref_3.options().auto_load);
-        let uuid_3 = doc_ref_3.options().guid.clone();
+        assert!(!doc_ref_3.should_load());
+        assert!(!doc_ref_3.auto_load());
+        let uuid_3 = doc_ref_3.guid();
         let last_event = event.swap(None);
         assert_eq!(
             last_event,
@@ -2074,7 +2109,7 @@ mod test {
 
         // load
         doc_ref_3.load(&mut doc2.transact_mut());
-        assert!(doc_ref_3.options().should_load);
+        assert!(doc_ref_3.should_load());
         let last_event = event.swap(None);
         assert_eq!(
             last_event,
@@ -2106,10 +2141,10 @@ mod test {
             let mut txn = doc.transact_mut();
             array.insert(&mut txn, 0, subdoc_1)
         };
-        assert!(subdoc_1.options().should_load);
-        assert!(subdoc_1.options().auto_load);
+        assert!(subdoc_1.should_load());
+        assert!(subdoc_1.auto_load());
 
-        let uuid_1 = subdoc_1.options().guid.clone();
+        let uuid_1 = subdoc_1.guid();
         let last_event = event.swap(None);
         assert_eq!(
             last_event,
@@ -2128,7 +2163,7 @@ mod test {
             .unwrap()
             .cast::<Doc>()
             .unwrap();
-        let uuid_2 = subdoc_2.options().guid.clone();
+        let uuid_2 = subdoc_2.guid();
         assert!(!Doc::ptr_eq(&subdoc_1, &subdoc_2));
 
         let last_event = event.swap(None);
@@ -2152,9 +2187,9 @@ mod test {
         let doc2 = Doc::with_client_id(2);
         let event_c = event.clone();
         let _sub = doc2.observe_subdocs(move |_, e| {
-            let added = e.added().map(|d| d.guid().clone()).collect();
-            let removed = e.removed().map(|d| d.guid().clone()).collect();
-            let loaded = e.loaded().map(|d| d.guid().clone()).collect();
+            let added = e.added().map(|d| d.guid()).collect();
+            let removed = e.removed().map(|d| d.guid()).collect();
+            let loaded = e.loaded().map(|d| d.guid()).collect();
 
             event_c.store(Some(Arc::new((added, removed, loaded))));
         });
@@ -2171,9 +2206,9 @@ mod test {
                 .cast::<Doc>()
                 .unwrap()
         };
-        assert!(subdoc_1.options().should_load);
-        assert!(subdoc_1.options().auto_load);
-        let uuid_3 = subdoc_3.options().guid.clone();
+        assert!(subdoc_1.should_load());
+        assert!(subdoc_1.auto_load());
+        let uuid_3 = subdoc_3.guid();
         let last_event = event.swap(None);
         assert_eq!(
             last_event,

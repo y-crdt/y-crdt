@@ -392,7 +392,7 @@ impl Branch {
         mut ptr: Option<ItemPtr>,
         mut index: u32,
     ) -> (Option<ItemPtr>, Option<ItemPtr>) {
-        let encoding = txn.store.options.offset_kind;
+        let encoding = txn.store.offset_kind;
         while let Some(item) = ptr {
             let content_len = item.content_len(encoding);
             if !item.is_deleted() && item.is_countable() {
@@ -434,7 +434,7 @@ impl Branch {
         };
         while remaining > 0 {
             if let Some(item) = ptr {
-                let encoding = txn.store().options.offset_kind;
+                let encoding = txn.store().offset_kind;
                 if !item.is_deleted() {
                     let content_len = item.content_len(encoding);
                     let (l, r) = if remaining < content_len {

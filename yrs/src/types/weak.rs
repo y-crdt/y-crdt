@@ -716,7 +716,7 @@ pub trait Quotable: AsRef<Branch> + Sized {
             Bound::Unbounded => return Err(QuoteError::UnboundedRange),
         };
         let mut remaining = start;
-        let encoding = txn.store().options.offset_kind;
+        let encoding = txn.store().offset_kind;
         let mut i = this.start.to_iter().moved();
         // figure out the first ID
         let mut curr = i.next(txn);

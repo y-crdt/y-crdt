@@ -108,17 +108,17 @@ impl YDoc {
     /// Gets globally unique identifier of this `YDoc` instance.
     #[wasm_bindgen(getter)]
     pub fn guid(&self) -> String {
-        self.options().guid.to_string()
+        self.0.guid().to_string()
     }
 
     #[wasm_bindgen(getter, js_name = shouldLoad)]
     pub fn should_load(&self) -> bool {
-        self.options().should_load
+        self.0.should_load()
     }
 
     #[wasm_bindgen(getter, js_name = autoLoad)]
     pub fn auto_load(&self) -> bool {
-        self.options().auto_load
+        self.0.auto_load()
     }
 
     /// Returns a new transaction for this document. Ywasm shared data types execute their
@@ -466,7 +466,7 @@ impl DocOptions {
             options.guid = value.into();
         }
         if let Some(value) = self.collection_id {
-            options.collection_id = Some(value);
+            options.collection_id = Some(value.into());
         }
         if let Some(value) = self.gc {
             options.skip_gc = !value;

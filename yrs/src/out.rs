@@ -229,7 +229,7 @@ impl std::fmt::Display for Out {
             Out::YXmlText(_) => write!(f, "XmlTextRef"),
             #[cfg(feature = "weak")]
             Out::YWeakLink(_) => write!(f, "WeakRef"),
-            Out::YDoc(v) => write!(f, "Doc(guid:{})", v.options().guid),
+            Out::YDoc(v) => write!(f, "Doc(guid:{})", v.guid()),
             Out::UndefinedRef(_) => write!(f, "UndefinedRef"),
         }
     }

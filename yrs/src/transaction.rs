@@ -615,7 +615,7 @@ impl<'doc> TransactionMut<'doc> {
             if item.parent_sub.is_none() && item.is_countable() {
                 if let TypePtr::Branch(mut parent) = item.parent {
                     parent.block_len -= item.len();
-                    parent.content_len -= item.content_len(store.options.offset_kind);
+                    parent.content_len -= item.content_len(store.offset_kind);
                 }
             }
 
@@ -770,7 +770,7 @@ impl<'doc> TransactionMut<'doc> {
             } else {
                 None
             };
-            let client_id = store.options.client_id;
+            let client_id = store.client_id;
             let id = ID::new(client_id, store.get_local_state());
 
             (left, right, origin, id)
@@ -912,7 +912,7 @@ impl<'doc> TransactionMut<'doc> {
         }
 
         // 4. try GC delete set
-        if !self.store.options.skip_gc {
+        if !self.store.skip_gc {
             GCCollector::collect(self);
         }
 
@@ -958,13 +958,13 @@ impl<'doc> TransactionMut<'doc> {
         // 11. add and remove subdocs
         let store = self.store.deref_mut();
         if let Some(mut subdocs) = self.subdocs.take() {
-            let client_id = store.options.client_id;
+            let client_id = store.client_id;
             for (guid, subdoc) in subdocs.added.iter_mut() {
                 let mut txn = subdoc.transact_mut();
-                txn.store.options.client_id = client_id;
-                if txn.store.options.collection_id.is_none() {
-                    txn.store.options.collection_id = store.options.collection_id.clone();
-                }
+                txn.store.client_id = client_id;
+                txn.doc
+                    .store()
+                    .set_subdoc_data(client_id, self.doc.collection_id());
                 store.subdocs.insert(guid.clone(), subdoc.clone());
             }
             for guid in subdocs.removed.keys() {
