@@ -385,7 +385,7 @@ impl Branch {
     /// If `index` point to the end of a block and no splitting is necessary, tuple will return only
     /// left side (beginning of a block), while right side will be `None`.
     ///
-    /// If `index` is outside of the range of an array component of current branch node, both tuple
+    /// If `index` is outside the range of an array component of current branch node, both tuple
     /// values will be `None`.
     fn index_to_ptr(
         txn: &mut TransactionMut,

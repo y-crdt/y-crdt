@@ -12,7 +12,7 @@ use crate::types::{Event, Events, RootRef, SharedRef, TypePtr};
 use crate::update::Update;
 use crate::utils::OptionExt;
 use crate::*;
-use atomic_refcell::{AtomicRef, AtomicRefMut};
+use async_lock::{RwLockReadGuard, RwLockWriteGuard};
 use smallvec::SmallVec;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Formatter;
@@ -178,6 +178,27 @@ pub trait ReadTxn: Sized {
     fn get_xml_fragment<N: Into<Arc<str>>>(&self, name: N) -> Option<XmlFragmentRef> {
         XmlFragmentRef::root(name).get(self)
     }
+
+    /// If current document has been inserted as a sub-document, returns a reference to a parent
+    /// document, which contains it.
+    fn parent_doc(&self) -> Option<Doc> {
+        if let Some(item) = self.store().parent.as_deref() {
+            if let ItemContent::Doc(parent_doc, _) = &item.content {
+                return parent_doc.clone();
+            }
+        }
+
+        None
+    }
+
+    /// If current document has been inserted as a sub-document, returns its [BranchID].
+    fn branch_id(&self) -> Option<BranchID> {
+        if let Some(item) = self.store().parent {
+            Some(BranchID::Nested(item.id))
+        } else {
+            None
+        }
+    }
 }
 
 pub trait WriteTxn: Sized {
@@ -286,11 +307,11 @@ fn merge_pending_v2(update: Vec<u8>, store: &Store) -> Vec<u8> {
 /// not allowed to have any active [read-write transactions](TransactionMut) at the same time.
 #[derive(Debug)]
 pub struct Transaction<'doc> {
-    store: AtomicRef<'doc, Store>,
+    store: RwLockReadGuard<'doc, Store>,
 }
 
 impl<'doc> Transaction<'doc> {
-    pub(crate) fn new(store: AtomicRef<'doc, Store>) -> Self {
+    pub(crate) fn new(store: RwLockReadGuard<'doc, Store>) -> Self {
         Transaction { store }
     }
 }
@@ -315,7 +336,7 @@ impl<'doc> ReadTxn for Transaction<'doc> {
 /// In Yrs transactions are always auto-committing all of their changes when dropped. Rollbacks are
 /// not supported (if some operations needs to be undone, this can be achieved using [UndoManager])
 pub struct TransactionMut<'doc> {
-    pub(crate) store: AtomicRefMut<'doc, Store>,
+    pub(crate) store: RwLockWriteGuard<'doc, Store>,
     /// State vector of a current transaction at the moment of its creation.
     pub(crate) before_state: StateVector,
     /// Current state vector of a transaction, which includes all performed updates.
@@ -362,7 +383,11 @@ impl<'doc> Drop for TransactionMut<'doc> {
 }
 
 impl<'doc> TransactionMut<'doc> {
-    pub(crate) fn new(doc: Doc, store: AtomicRefMut<'doc, Store>, origin: Option<Origin>) -> Self {
+    pub(crate) fn new(
+        doc: Doc,
+        store: RwLockWriteGuard<'doc, Store>,
+        origin: Option<Origin>,
+    ) -> Self {
         let begin_timestamp = store.blocks.get_state_vector();
         TransactionMut {
             store,
@@ -386,6 +411,10 @@ impl<'doc> TransactionMut<'doc> {
 
     pub fn events(&self) -> Option<&StoreEvents> {
         self.store.events.as_deref()
+    }
+
+    pub fn events_mut(&mut self) -> &mut StoreEvents {
+        self.store.events.get_or_init()
     }
 
     /// Corresponding document's state vector at the moment when current transaction was created.

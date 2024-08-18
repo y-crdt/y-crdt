@@ -2,7 +2,7 @@ use crate::block::{ClientID, ItemContent, ItemPtr, Prelim};
 use crate::branch::BranchPtr;
 use crate::encoding::read::Error;
 use crate::event::{SubdocsEvent, TransactionCleanupEvent, UpdateEvent};
-use crate::store::{Store, StoreRef};
+use crate::store::{StoreInner, StoreRef};
 use crate::transaction::{Origin, Transaction, TransactionMut};
 use crate::types::{RootRef, ToJson};
 use crate::updates::decoder::{Decode, Decoder};
@@ -13,7 +13,6 @@ use crate::{
     XmlFragmentRef,
 };
 use crate::{Any, Subscription};
-use atomic_refcell::{AtomicRefCell, BorrowError, BorrowMutError};
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::fmt::Formatter;
@@ -86,7 +85,7 @@ impl Doc {
 
     #[doc(hidden)]
     pub unsafe fn from_raw(ptr: *const Doc) -> Doc {
-        let ptr = ptr as *const AtomicRefCell<Store>;
+        let ptr = ptr as *const StoreInner;
         let cell = Arc::from_raw(ptr);
         Doc {
             store: StoreRef(cell),
@@ -108,15 +107,13 @@ impl Doc {
     /// Creates a new document with a configured set of [Options].
     pub fn with_options(options: Options) -> Self {
         Doc {
-            store: Store::new(options).into(),
+            store: StoreRef::new(options, None),
         }
     }
 
     pub(crate) fn subdoc(parent: ItemPtr, options: Options) -> Self {
-        let mut store = Store::new(options);
-        store.parent = Some(parent);
         Doc {
-            store: store.into(),
+            store: StoreRef::new(options, Some(parent)),
         }
     }
 
@@ -227,12 +224,12 @@ impl Doc {
     ///
     /// Returns a subscription, which will unsubscribe function when dropped.
     #[cfg(feature = "sync")]
-    pub fn observe_update_v1<F>(&self, f: F) -> Result<Subscription, BorrowMutError>
+    pub fn observe_update_v1<F>(&self, f: F) -> Result<Subscription, TransactionAcqError>
     where
         F: Fn(&TransactionMut, &UpdateEvent) + Send + Sync + 'static,
     {
-        let mut r = self.store.try_borrow_mut()?;
-        let events = r.events.get_or_init();
+        let mut txn = self.try_transact_mut()?;
+        let events = txn.events_mut();
         Ok(events.update_v1_events.subscribe(Box::new(f)))
     }
 
@@ -243,12 +240,12 @@ impl Doc {
     ///
     /// Returns a subscription, which will unsubscribe function when dropped.
     #[cfg(not(feature = "sync"))]
-    pub fn observe_update_v1<F>(&self, f: F) -> Result<Subscription, BorrowMutError>
+    pub fn observe_update_v1<F>(&self, f: F) -> Result<Subscription, TransactionAcqError>
     where
         F: Fn(&TransactionMut, &UpdateEvent) + 'static,
     {
-        let mut r = self.store.try_borrow_mut()?;
-        let events = r.events.get_or_init();
+        let mut txn = self.try_transact_mut()?;
+        let events = txn.events_mut();
         Ok(events.update_v1_events.subscribe(Box::new(f)))
     }
 
@@ -259,13 +256,13 @@ impl Doc {
     ///
     /// Provided `key` will be used to identify a subscription, which will be used to unsubscribe.
     #[cfg(feature = "sync")]
-    pub fn observe_update_v1_with<K, F>(&self, key: K, f: F) -> Result<(), BorrowMutError>
+    pub fn observe_update_v1_with<K, F>(&self, key: K, f: F) -> Result<(), TransactionAcqError>
     where
         K: Into<Origin>,
         F: Fn(&TransactionMut, &UpdateEvent) + Send + Sync + 'static,
     {
-        let mut r = self.store.try_borrow_mut()?;
-        let events = r.events.get_or_init();
+        let mut txn = self.try_transact_mut()?;
+        let events = txn.events_mut();
         events
             .update_v1_events
             .subscribe_with(key.into(), Box::new(f));
@@ -279,25 +276,25 @@ impl Doc {
     ///
     /// Provided `key` will be used to identify a subscription, which will be used to unsubscribe.
     #[cfg(not(feature = "sync"))]
-    pub fn observe_update_v1_with<K, F>(&self, key: K, f: F) -> Result<(), BorrowMutError>
+    pub fn observe_update_v1_with<K, F>(&self, key: K, f: F) -> Result<(), TransactionAcqError>
     where
         K: Into<Origin>,
         F: Fn(&TransactionMut, &UpdateEvent) + 'static,
     {
-        let mut r = self.store.try_borrow_mut()?;
-        let events = r.events.get_or_init();
+        let mut txn = self.try_transact_mut()?;
+        let events = txn.events_mut();
         events
             .update_v1_events
             .subscribe_with(key.into(), Box::new(f));
         Ok(())
     }
 
-    pub fn unobserve_update_v1<K>(&self, key: K) -> Result<bool, BorrowMutError>
+    pub fn unobserve_update_v1<K>(&self, key: K) -> Result<bool, TransactionAcqError>
     where
         K: Into<Origin>,
     {
-        let mut r = self.store.try_borrow_mut()?;
-        let events = r.events.get_or_init();
+        let mut txn = self.try_transact_mut()?;
+        let events = txn.events_mut();
         Ok(events.update_v1_events.unsubscribe(&key.into()))
     }
 
@@ -308,12 +305,12 @@ impl Doc {
     ///
     /// Returns a subscription, which will unsubscribe function when dropped.
     #[cfg(feature = "sync")]
-    pub fn observe_update_v2<F>(&self, f: F) -> Result<Subscription, BorrowMutError>
+    pub fn observe_update_v2<F>(&self, f: F) -> Result<Subscription, TransactionAcqError>
     where
         F: Fn(&TransactionMut, &UpdateEvent) + Send + Sync + 'static,
     {
-        let mut r = self.store.try_borrow_mut()?;
-        let events = r.events.get_or_init();
+        let mut txn = self.try_transact_mut()?;
+        let events = txn.events_mut();
         Ok(events.update_v2_events.subscribe(Box::new(f)))
     }
 
@@ -324,12 +321,12 @@ impl Doc {
     ///
     /// Returns a subscription, which will unsubscribe function when dropped.
     #[cfg(not(feature = "sync"))]
-    pub fn observe_update_v2<F>(&self, f: F) -> Result<Subscription, BorrowMutError>
+    pub fn observe_update_v2<F>(&self, f: F) -> Result<Subscription, TransactionAcqError>
     where
         F: Fn(&TransactionMut, &UpdateEvent) + 'static,
     {
-        let mut r = self.store.try_borrow_mut()?;
-        let events = r.events.get_or_init();
+        let mut txn = self.try_transact_mut()?;
+        let events = txn.events_mut();
         Ok(events.update_v2_events.subscribe(Box::new(f)))
     }
 
@@ -340,13 +337,13 @@ impl Doc {
     ///
     /// Provided `key` will be used to identify a subscription, which will be used to unsubscribe.
     #[cfg(feature = "sync")]
-    pub fn observe_update_v2_with<K, F>(&self, key: K, f: F) -> Result<(), BorrowMutError>
+    pub fn observe_update_v2_with<K, F>(&self, key: K, f: F) -> Result<(), TransactionAcqError>
     where
         K: Into<Origin>,
         F: Fn(&TransactionMut, &UpdateEvent) + Send + Sync + 'static,
     {
-        let mut r = self.store.try_borrow_mut()?;
-        let events = r.events.get_or_init();
+        let mut txn = self.try_transact_mut()?;
+        let events = txn.events_mut();
         events
             .update_v2_events
             .subscribe_with(key.into(), Box::new(f));
@@ -360,62 +357,66 @@ impl Doc {
     ///
     /// Provided `key` will be used to identify a subscription, which will be used to unsubscribe.
     #[cfg(not(feature = "sync"))]
-    pub fn observe_update_v2_with<K, F>(&self, key: K, f: F) -> Result<(), BorrowMutError>
+    pub fn observe_update_v2_with<K, F>(&self, key: K, f: F) -> Result<(), TransactionAcqError>
     where
         K: Into<Origin>,
         F: Fn(&TransactionMut, &UpdateEvent) + 'static,
     {
-        let mut r = self.store.try_borrow_mut()?;
-        let events = r.events.get_or_init();
+        let mut txn = self.try_transact_mut()?;
+        let events = txn.events_mut();
         events
             .update_v2_events
             .subscribe_with(key.into(), Box::new(f));
         Ok(())
     }
 
-    pub fn unobserve_update_v2<K>(&self, key: K) -> Result<bool, BorrowMutError>
+    pub fn unobserve_update_v2<K>(&self, key: K) -> Result<bool, TransactionAcqError>
     where
         K: Into<Origin>,
     {
-        let mut r = self.store.try_borrow_mut()?;
-        let events = r.events.get_or_init();
+        let mut txn = self.try_transact_mut()?;
+        let events = txn.events_mut();
         Ok(events.update_v2_events.unsubscribe(&key.into()))
     }
 
     /// Subscribe callback function to updates on the `Doc`. The callback will receive state updates and
     /// deletions when a document transaction is committed.
     #[cfg(feature = "sync")]
-    pub fn observe_transaction_cleanup<F>(&self, f: F) -> Result<Subscription, BorrowMutError>
+    pub fn observe_transaction_cleanup<F>(&self, f: F) -> Result<Subscription, TransactionAcqError>
     where
         F: Fn(&TransactionMut, &TransactionCleanupEvent) + Send + Sync + 'static,
     {
-        let mut r = self.store.try_borrow_mut()?;
-        let events = r.events.get_or_init();
+        let mut txn = self.try_transact_mut()?;
+        let events = txn.events_mut();
         Ok(events.transaction_cleanup_events.subscribe(Box::new(f)))
     }
 
     /// Subscribe callback function to updates on the `Doc`. The callback will receive state updates and
     /// deletions when a document transaction is committed.
     #[cfg(not(feature = "sync"))]
-    pub fn observe_transaction_cleanup<F>(&self, f: F) -> Result<Subscription, BorrowMutError>
+    pub fn observe_transaction_cleanup<F>(&self, f: F) -> Result<Subscription, TransactionAcqError>
     where
         F: Fn(&TransactionMut, &TransactionCleanupEvent) + 'static,
     {
-        let mut r = self.store.try_borrow_mut()?;
-        let events = r.events.get_or_init();
+        let mut txn = self.try_transact_mut()?;
+        let events = txn.events_mut();
         Ok(events.transaction_cleanup_events.subscribe(Box::new(f)))
     }
 
     /// Subscribe callback function to updates on the `Doc`. The callback will receive state updates and
     /// deletions when a document transaction is committed.
     #[cfg(feature = "sync")]
-    pub fn observe_transaction_cleanup_with<K, F>(&self, key: K, f: F) -> Result<(), BorrowMutError>
+    pub fn observe_transaction_cleanup_with<K, F>(
+        &self,
+        key: K,
+        f: F,
+    ) -> Result<(), TransactionAcqError>
     where
         K: Into<Origin>,
         F: Fn(&TransactionMut, &TransactionCleanupEvent) + Send + Sync + 'static,
     {
-        let mut r = self.store.try_borrow_mut()?;
-        let events = r.events.get_or_init();
+        let mut txn = self.try_transact_mut()?;
+        let events = txn.events_mut();
         events
             .transaction_cleanup_events
             .subscribe_with(key.into(), Box::new(f));
@@ -425,46 +426,54 @@ impl Doc {
     /// Subscribe callback function to updates on the `Doc`. The callback will receive state updates and
     /// deletions when a document transaction is committed.
     #[cfg(not(feature = "sync"))]
-    pub fn observe_transaction_cleanup_with<K, F>(&self, key: K, f: F) -> Result<(), BorrowMutError>
+    pub fn observe_transaction_cleanup_with<K, F>(
+        &self,
+        key: K,
+        f: F,
+    ) -> Result<(), TransactionAcqError>
     where
         K: Into<Origin>,
         F: Fn(&TransactionMut, &TransactionCleanupEvent) + 'static,
     {
-        let mut r = self.store.try_borrow_mut()?;
-        let events = r.events.get_or_init();
+        let mut txn = self.try_transact_mut()?;
+        let events = txn.events_mut();
         events
             .transaction_cleanup_events
             .subscribe_with(key.into(), Box::new(f));
         Ok(())
     }
 
-    pub fn unobserve_transaction_cleanup<K>(&self, key: K) -> Result<bool, BorrowMutError>
+    pub fn unobserve_transaction_cleanup<K>(&self, key: K) -> Result<bool, TransactionAcqError>
     where
         K: Into<Origin>,
     {
-        let mut r = self.store.try_borrow_mut()?;
-        let events = r.events.get_or_init();
+        let mut txn = self.try_transact_mut()?;
+        let events = txn.events_mut();
         Ok(events.transaction_cleanup_events.unsubscribe(&key.into()))
     }
 
     #[cfg(feature = "sync")]
-    pub fn observe_after_transaction<F>(&self, f: F) -> Result<Subscription, BorrowMutError>
+    pub fn observe_after_transaction<F>(&self, f: F) -> Result<Subscription, TransactionAcqError>
     where
         F: Fn(&mut TransactionMut) + Send + Sync + 'static,
     {
-        let mut r = self.store.try_borrow_mut()?;
-        let events = r.events.get_or_init();
+        let mut txn = self.try_transact_mut()?;
+        let events = txn.events_mut();
         Ok(events.after_transaction_events.subscribe(Box::new(f)))
     }
 
     #[cfg(feature = "sync")]
-    pub fn observe_after_transaction_with<K, F>(&self, key: K, f: F) -> Result<(), BorrowMutError>
+    pub fn observe_after_transaction_with<K, F>(
+        &self,
+        key: K,
+        f: F,
+    ) -> Result<(), TransactionAcqError>
     where
         K: Into<Origin>,
         F: Fn(&mut TransactionMut) + Send + Sync + 'static,
     {
-        let mut r = self.store.try_borrow_mut()?;
-        let events = r.events.get_or_init();
+        let mut txn = self.try_transact_mut()?;
+        let events = txn.events_mut();
         events
             .after_transaction_events
             .subscribe_with(key.into(), Box::new(f));
@@ -472,62 +481,66 @@ impl Doc {
     }
 
     #[cfg(not(feature = "sync"))]
-    pub fn observe_after_transaction_with<K, F>(&self, key: K, f: F) -> Result<(), BorrowMutError>
+    pub fn observe_after_transaction_with<K, F>(
+        &self,
+        key: K,
+        f: F,
+    ) -> Result<(), TransactionAcqError>
     where
         K: Into<Origin>,
         F: Fn(&mut TransactionMut) + 'static,
     {
-        let mut r = self.store.try_borrow_mut()?;
-        let events = r.events.get_or_init();
+        let mut txn = self.try_transact_mut()?;
+        let events = txn.events_mut();
         events
             .after_transaction_events
             .subscribe_with(key.into(), Box::new(f));
         Ok(())
     }
 
-    pub fn unobserve_after_transaction<K>(&self, key: K) -> Result<bool, BorrowMutError>
+    pub fn unobserve_after_transaction<K>(&self, key: K) -> Result<bool, TransactionAcqError>
     where
         K: Into<Origin>,
     {
-        let mut r = self.store.try_borrow_mut()?;
-        let events = r.events.get_or_init();
+        let mut txn = self.try_transact_mut()?;
+        let events = txn.events_mut();
         Ok(events.after_transaction_events.unsubscribe(&key.into()))
     }
 
     /// Subscribe callback function, that will be called whenever a subdocuments inserted in this
     /// [Doc] will request a load.
     #[cfg(feature = "sync")]
-    pub fn observe_subdocs<F>(&self, f: F) -> Result<Subscription, BorrowMutError>
+    pub fn observe_subdocs<F>(&self, f: F) -> Result<Subscription, TransactionAcqError>
     where
         F: Fn(&TransactionMut, &SubdocsEvent) + Send + Sync + 'static,
     {
-        let mut r = self.store.try_borrow_mut()?;
-        let events = r.events.get_or_init();
+        let mut txn = self.try_transact_mut()?;
+        let events = txn.events_mut();
         Ok(events.subdocs_events.subscribe(Box::new(f)))
     }
 
     /// Subscribe callback function, that will be called whenever a subdocuments inserted in this
     /// [Doc] will request a load.
     #[cfg(not(feature = "sync"))]
-    pub fn observe_subdocs<F>(&self, f: F) -> Result<Subscription, BorrowMutError>
+    pub fn observe_subdocs<F>(&self, f: F) -> Result<Subscription, TransactionAcqError>
     where
         F: Fn(&TransactionMut, &SubdocsEvent) + 'static,
     {
-        let mut r = self.store.try_borrow_mut()?;
-        let events = r.events.get_or_init();
+        let mut txn = self.try_transact_mut()?;
+        let events = txn.events_mut();
         Ok(events.subdocs_events.subscribe(Box::new(f)))
     }
 
     /// Subscribe callback function, that will be called whenever a subdocuments inserted in this
     /// [Doc] will request a load.
     #[cfg(feature = "sync")]
-    pub fn observe_subdocs_with<K, F>(&self, key: K, f: F) -> Result<(), BorrowMutError>
+    pub fn observe_subdocs_with<K, F>(&self, key: K, f: F) -> Result<(), TransactionAcqError>
     where
         K: Into<Origin>,
         F: Fn(&TransactionMut, &SubdocsEvent) + Send + Sync + 'static,
     {
-        let mut r = self.store.try_borrow_mut()?;
-        let events = r.events.get_or_init();
+        let mut txn = self.try_transact_mut()?;
+        let events = txn.events_mut();
         events
             .subdocs_events
             .subscribe_with(key.into(), Box::new(f));
@@ -537,83 +550,83 @@ impl Doc {
     /// Subscribe callback function, that will be called whenever a subdocuments inserted in this
     /// [Doc] will request a load.
     #[cfg(not(feature = "sync"))]
-    pub fn observe_subdocs_with<K, F>(&self, key: K, f: F) -> Result<(), BorrowMutError>
+    pub fn observe_subdocs_with<K, F>(&self, key: K, f: F) -> Result<(), TransactionAcqError>
     where
         K: Into<Origin>,
         F: Fn(&TransactionMut, &SubdocsEvent) + 'static,
     {
-        let mut r = self.store.try_borrow_mut()?;
-        let events = r.events.get_or_init();
+        let mut txn = self.try_transact_mut()?;
+        let events = txn.events_mut();
         events
             .subdocs_events
             .subscribe_with(key.into(), Box::new(f));
         Ok(())
     }
 
-    pub fn unobserve_subdocs<K>(&self, key: K) -> Result<bool, BorrowMutError>
+    pub fn unobserve_subdocs<K>(&self, key: K) -> Result<bool, TransactionAcqError>
     where
         K: Into<Origin>,
     {
-        let mut r = self.store.try_borrow_mut()?;
-        let events = r.events.get_or_init();
+        let mut txn = self.try_transact_mut()?;
+        let events = txn.events_mut();
         Ok(events.subdocs_events.unsubscribe(&key.into()))
     }
 
     /// Subscribe callback function, that will be called whenever a [DocRef::destroy] has been called.
     #[cfg(feature = "sync")]
-    pub fn observe_destroy<F>(&self, f: F) -> Result<Subscription, BorrowMutError>
+    pub fn observe_destroy<F>(&self, f: F) -> Result<Subscription, TransactionAcqError>
     where
         F: Fn(&TransactionMut, &Doc) + Send + Sync + 'static,
     {
-        let mut r = self.store.try_borrow_mut()?;
-        let events = r.events.get_or_init();
+        let mut txn = self.try_transact_mut()?;
+        let events = txn.events_mut();
         Ok(events.destroy_events.subscribe(Box::new(f)))
     }
 
     /// Subscribe callback function, that will be called whenever a [DocRef::destroy] has been called.
     #[cfg(not(feature = "sync"))]
-    pub fn observe_destroy<F>(&self, f: F) -> Result<Subscription, BorrowMutError>
+    pub fn observe_destroy<F>(&self, f: F) -> Result<Subscription, TransactionAcqError>
     where
         F: Fn(&TransactionMut, &Doc) + 'static,
     {
-        let mut r = self.store.try_borrow_mut()?;
-        let events = r.events.get_or_init();
+        let mut txn = self.try_transact_mut()?;
+        let events = txn.events_mut();
         Ok(events.destroy_events.subscribe(Box::new(f)))
     }
 
     /// Subscribe callback function, that will be called whenever a [DocRef::destroy] has been called.
     #[cfg(feature = "sync")]
-    pub fn observe_destroy_with<K, F>(&self, key: K, f: F) -> Result<(), BorrowMutError>
+    pub fn observe_destroy_with<K, F>(&self, key: K, f: F) -> Result<(), TransactionAcqError>
     where
         K: Into<Origin>,
         F: Fn(&TransactionMut, &Doc) + Send + Sync + 'static,
     {
-        let mut r = self.store.try_borrow_mut()?;
-        let events = r.events.get_or_init();
+        let mut txn = self.try_transact_mut()?;
+        let events = txn.events_mut();
         events
             .destroy_events
             .subscribe_with(key.into(), Box::new(f));
         Ok(())
     }
 
-    pub fn unobserve_destroy<K>(&self, key: K) -> Result<bool, BorrowMutError>
+    pub fn unobserve_destroy<K>(&self, key: K) -> Result<bool, TransactionAcqError>
     where
         K: Into<Origin>,
     {
-        let mut r = self.store.try_borrow_mut()?;
-        let events = r.events.get_or_init();
+        let mut txn = self.try_transact_mut()?;
+        let events = txn.events_mut();
         Ok(events.destroy_events.unsubscribe(&key.into()))
     }
 
     /// Subscribe callback function, that will be called whenever a [DocRef::destroy] has been called.
     #[cfg(not(feature = "sync"))]
-    pub fn observe_destroy_with<K, F>(&self, key: K, f: F) -> Result<(), BorrowMutError>
+    pub fn observe_destroy_with<K, F>(&self, key: K, f: F) -> Result<(), TransactionAcqError>
     where
         K: Into<Origin>,
         F: Fn(&TransactionMut, &Doc) + 'static,
     {
-        let mut r = self.store.try_borrow_mut()?;
-        let events = r.events.get_or_init();
+        let mut txn = self.try_transact_mut()?;
+        let events = txn.events_mut();
         events
             .destroy_events
             .subscribe_with(key.into(), Box::new(f));
@@ -621,7 +634,7 @@ impl Doc {
     }
 
     /// Sends a load request to a parent document. Works only if current document is a sub-document
-    /// of an another document.
+    /// of a document.
     pub fn load<T>(&self, parent_txn: &mut T)
     where
         T: WriteTxn,
@@ -680,23 +693,13 @@ impl Doc {
     /// If current document has been inserted as a sub-document, returns a reference to a parent
     /// document, which contains it.
     pub fn parent_doc(&self) -> Option<Doc> {
-        let store = unsafe { self.store.0.as_ptr().as_ref() }.unwrap();
-        if let Some(item) = store.parent.as_deref() {
-            if let ItemContent::Doc(parent_doc, _) = &item.content {
-                return parent_doc.clone();
-            }
-        }
-
-        None
+        let txn = self.transact();
+        txn.parent_doc()
     }
 
     pub fn branch_id(&self) -> Option<BranchID> {
-        let store = unsafe { self.store.0.as_ptr().as_ref() }.unwrap();
-        if let Some(item) = store.parent {
-            Some(BranchID::Nested(item.id))
-        } else {
-            None
-        }
+        let txn = self.transact();
+        txn.branch_id()
     }
 
     pub fn ptr_eq(a: &Doc, b: &Doc) -> bool {
@@ -765,7 +768,7 @@ pub struct Options {
     /// a concept of collection.
     ///
     /// Default value: `None`.
-    pub collection_id: Option<String>,
+    pub collection_id: Option<Arc<str>>,
     /// How to we count offsets and lengths used in text operations.
     ///
     /// Default value: [OffsetKind::Bytes].
@@ -857,9 +860,7 @@ impl Decode for Options {
                 match (k.as_str(), v) {
                     ("gc", Any::Bool(gc)) => options.skip_gc = !*gc,
                     ("autoLoad", Any::Bool(auto_load)) => options.auto_load = *auto_load,
-                    ("collectionId", Any::String(cid)) => {
-                        options.collection_id = Some(cid.to_string())
-                    }
+                    ("collectionId", Any::String(cid)) => options.collection_id = Some(cid.clone()),
                     ("encoding", Any::BigInt(1)) => options.offset_kind = OffsetKind::Bytes,
                     ("encoding", _) => options.offset_kind = OffsetKind::Utf16,
                     _ => { /* do nothing */ }
@@ -946,8 +947,7 @@ pub trait Transact {
     /// this method will panic whenever called while a read-write transaction
     /// (see: [Self::transact_mut]) is active at the same time.
     fn transact(&self) -> Transaction {
-        self.try_transact()
-            .expect("there's another active read-write transaction at the moment")
+        self.try_transact().unwrap()
     }
 
     /// Creates and returns a read-write capable transaction. This transaction can be used to
@@ -959,31 +959,37 @@ pub trait Transact {
     /// Only one read-write transaction can be active at the same time. If any other transaction -
     /// be it a read-write or read-only one - is active at the same time, this method will panic.
     fn transact_mut(&self) -> TransactionMut {
-        self.try_transact_mut()
-            .expect("there's another active transaction at the moment")
+        self.try_transact_mut().unwrap()
     }
 }
 
 impl Transact for Doc {
     fn try_transact(&self) -> Result<Transaction, TransactionAcqError> {
-        Ok(Transaction::new(self.store.try_borrow()?))
+        match self.store.try_read() {
+            Some(store) => Ok(Transaction::new(store)),
+            None => Err(TransactionAcqError::SharedAcqFailed),
+        }
     }
 
     fn try_transact_mut(&self) -> Result<TransactionMut, TransactionAcqError> {
-        let store = self.store.try_borrow_mut()?;
-        Ok(TransactionMut::new(self.clone(), store, None))
+        match self.store.try_write() {
+            Some(store) => Ok(TransactionMut::new(self.clone(), store, None)),
+            None => Err(TransactionAcqError::ExclusiveAcqFailed),
+        }
     }
 
     fn try_transact_mut_with<T>(&self, origin: T) -> Result<TransactionMut, TransactionAcqError>
     where
         T: Into<Origin>,
     {
-        let store = self.store.try_borrow_mut()?;
-        Ok(TransactionMut::new(
-            self.clone(),
-            store,
-            Some(origin.into()),
-        ))
+        match self.store.try_write() {
+            Some(store) => Ok(TransactionMut::new(
+                self.clone(),
+                store,
+                Some(origin.into()),
+            )),
+            None => Err(TransactionAcqError::ExclusiveAcqFailed),
+        }
     }
 }
 
@@ -997,23 +1003,11 @@ pub enum TransactionAcqError {
     DocumentDropped,
 }
 
-impl From<BorrowError> for TransactionAcqError {
-    fn from(_: BorrowError) -> Self {
-        TransactionAcqError::SharedAcqFailed
-    }
-}
-
-impl From<BorrowMutError> for TransactionAcqError {
-    fn from(_: BorrowMutError) -> Self {
-        TransactionAcqError::ExclusiveAcqFailed
-    }
-}
-
 impl Prelim for Doc {
     type Return = Doc;
 
-    fn into_content(self, _txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
-        if self.parent_doc().is_some() {
+    fn into_content(self, txn: &mut TransactionMut) -> (ItemContent, Option<Self>) {
+        if txn.parent_doc().is_some() {
             panic!("Cannot integrate the document, because it's already being used as a sub-document elsewhere");
         }
         (ItemContent::Doc(None, self), None)

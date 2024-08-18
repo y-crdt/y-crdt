@@ -14,7 +14,7 @@ use crate::{
     Doc, Observer, OffsetKind, Snapshot, TransactionCleanupEvent, TransactionMut, UpdateEvent,
     Uuid, ID,
 };
-use atomic_refcell::{AtomicRef, AtomicRefCell, AtomicRefMut, BorrowError, BorrowMutError};
+use async_lock::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::borrow::Borrow;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
@@ -63,7 +63,7 @@ pub struct Store {
 
 impl Store {
     /// Create a new empty store in context of a given `client_id`.
-    pub(crate) fn new(options: Options) -> Self {
+    pub(crate) fn new(options: &Options) -> Self {
         Store {
             options,
             types: HashMap::default(),
@@ -419,27 +419,36 @@ impl std::fmt::Display for Store {
 
 #[repr(transparent)]
 #[derive(Debug, Clone)]
-pub(crate) struct StoreRef(pub(crate) Arc<AtomicRefCell<Store>>);
+pub(crate) struct StoreRef(pub(crate) Arc<StoreInner>);
 
 impl StoreRef {
-    pub fn try_borrow(&self) -> Result<AtomicRef<Store>, BorrowError> {
-        self.0.try_borrow()
+    pub fn new(options: Options, parent: Option<ItemPtr>) -> Self {
+        let options = Arc::new(options);
+        let mut store = Store::new(&options);
+        store.parent = parent;
+        StoreRef(Arc::new(StoreInner {
+            options,
+            store: RwLock::new(store),
+        }))
     }
 
-    pub fn try_borrow_mut(&self) -> Result<AtomicRefMut<Store>, BorrowMutError> {
-        self.0.try_borrow_mut()
+    pub fn try_read(&self) -> Option<RwLockReadGuard<Store>> {
+        self.0.store.try_read()
+    }
+
+    pub fn try_write(&self) -> Option<RwLockWriteGuard<Store>> {
+        self.0.store.try_write()
     }
 
     pub fn options(&self) -> &Options {
-        let store = unsafe { self.0.as_ptr().as_ref().unwrap() };
-        &store.options
+        &self.0.options
     }
 }
 
-impl From<Store> for StoreRef {
-    fn from(store: Store) -> Self {
-        StoreRef(Arc::new(AtomicRefCell::new(store)))
-    }
+#[derive(Debug)]
+pub(crate) struct StoreInner {
+    options: Arc<Options>,
+    store: RwLock<Store>,
 }
 
 #[repr(transparent)]
@@ -467,7 +476,7 @@ impl<'doc> Iterator for SubdocGuids<'doc> {
 
 #[cfg(feature = "sync")]
 pub type TransactionCleanupFn =
-    Box<dyn Fn(&TransactionMut, &TransactionCleanupEvent) + Send + Sync + 'static>;
+Box<dyn Fn(&TransactionMut, &TransactionCleanupEvent) + Send + Sync + 'static>;
 #[cfg(feature = "sync")]
 pub type AfterTransactionFn = Box<dyn Fn(&mut TransactionMut) + Send + Sync + 'static>;
 #[cfg(feature = "sync")]
