@@ -727,8 +727,8 @@ impl From<XmlTextPrelim> for In {
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct XmlDeltaPrelim {
-    attributes: HashMap<Arc<str>, String>,
-    delta: Vec<Delta<In>>,
+    pub attributes: HashMap<Arc<str>, String>,
+    pub delta: Vec<Delta<In>>,
 }
 
 impl Deref for XmlDeltaPrelim {
