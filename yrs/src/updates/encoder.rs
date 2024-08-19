@@ -15,7 +15,7 @@ pub trait Encode {
         encoder.to_vec()
     }
 
-    /// Helper function for encoding 1st version of lib0 encoding.
+    /// Helper function for encoding 2nd version of lib0 encoding.
     fn encode_v2(&self) -> Vec<u8> {
         let mut encoder = EncoderV2::new();
         self.encode(&mut encoder);
