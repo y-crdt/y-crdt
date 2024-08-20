@@ -7,20 +7,16 @@ use crate::transaction::{Origin, Transaction, TransactionMut};
 use crate::types::{RootRef, ToJson};
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
+use crate::utils::OptionExt;
 use crate::{
-    uuid_v4, uuid_v4_from, ArrayRef, BranchID, MapRef, Out, ReadTxn, Store, TextRef, Transact,
+    uuid_v4, uuid_v4_from, ArrayRef, BranchID, MapRef, Out, ReadTxn, TextRef, Transact,
     TransactionAcqError, Uuid, WriteTxn, XmlFragmentRef,
 };
 use crate::{Any, Subscription};
-use async_lock::futures::{Read, Write};
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::fmt::Formatter;
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{Context, Poll};
-use thiserror::Error;
 
 /// A Yrs document type. Documents are the most important units of collaborative resources management.
 /// All shared collections live within a scope of their corresponding documents. All updates are
@@ -269,8 +265,11 @@ impl Doc {
     where
         F: Fn(&TransactionMut, &UpdateEvent) + Send + Sync + 'static,
     {
-        let mut txn = self.try_transact_mut()?;
-        let events = txn.events_mut();
+        let mut store = self
+            .store
+            .try_write()
+            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
+        let events = store.events.get_or_init();
         Ok(events.update_v1_events.subscribe(Box::new(f)))
     }
 
@@ -285,8 +284,11 @@ impl Doc {
     where
         F: Fn(&TransactionMut, &UpdateEvent) + 'static,
     {
-        let mut txn = self.try_transact_mut()?;
-        let events = txn.events_mut();
+        let mut store = self
+            .store
+            .try_write()
+            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
+        let events = store.events.get_or_init();
         Ok(events.update_v1_events.subscribe(Box::new(f)))
     }
 
@@ -302,8 +304,11 @@ impl Doc {
         K: Into<Origin>,
         F: Fn(&TransactionMut, &UpdateEvent) + Send + Sync + 'static,
     {
-        let mut txn = self.try_transact_mut()?;
-        let events = txn.events_mut();
+        let mut store = self
+            .store
+            .try_write()
+            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
+        let events = store.events.get_or_init();
         events
             .update_v1_events
             .subscribe_with(key.into(), Box::new(f));
@@ -322,8 +327,11 @@ impl Doc {
         K: Into<Origin>,
         F: Fn(&TransactionMut, &UpdateEvent) + 'static,
     {
-        let mut txn = self.try_transact_mut()?;
-        let events = txn.events_mut();
+        let mut store = self
+            .store
+            .try_write()
+            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
+        let events = store.events.get_or_init();
         events
             .update_v1_events
             .subscribe_with(key.into(), Box::new(f));
@@ -334,8 +342,11 @@ impl Doc {
     where
         K: Into<Origin>,
     {
-        let mut txn = self.try_transact_mut()?;
-        let events = txn.events_mut();
+        let mut store = self
+            .store
+            .try_write()
+            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
+        let events = store.events.get_or_init();
         Ok(events.update_v1_events.unsubscribe(&key.into()))
     }
 
@@ -350,8 +361,11 @@ impl Doc {
     where
         F: Fn(&TransactionMut, &UpdateEvent) + Send + Sync + 'static,
     {
-        let mut txn = self.try_transact_mut()?;
-        let events = txn.events_mut();
+        let mut store = self
+            .store
+            .try_write()
+            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
+        let events = store.events.get_or_init();
         Ok(events.update_v2_events.subscribe(Box::new(f)))
     }
 
@@ -366,8 +380,11 @@ impl Doc {
     where
         F: Fn(&TransactionMut, &UpdateEvent) + 'static,
     {
-        let mut txn = self.try_transact_mut()?;
-        let events = txn.events_mut();
+        let mut store = self
+            .store
+            .try_write()
+            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
+        let events = store.events.get_or_init();
         Ok(events.update_v2_events.subscribe(Box::new(f)))
     }
 
@@ -383,8 +400,11 @@ impl Doc {
         K: Into<Origin>,
         F: Fn(&TransactionMut, &UpdateEvent) + Send + Sync + 'static,
     {
-        let mut txn = self.try_transact_mut()?;
-        let events = txn.events_mut();
+        let mut store = self
+            .store
+            .try_write()
+            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
+        let events = store.events.get_or_init();
         events
             .update_v2_events
             .subscribe_with(key.into(), Box::new(f));
@@ -403,8 +423,11 @@ impl Doc {
         K: Into<Origin>,
         F: Fn(&TransactionMut, &UpdateEvent) + 'static,
     {
-        let mut txn = self.try_transact_mut()?;
-        let events = txn.events_mut();
+        let mut store = self
+            .store
+            .try_write()
+            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
+        let events = store.events.get_or_init();
         events
             .update_v2_events
             .subscribe_with(key.into(), Box::new(f));
@@ -415,8 +438,11 @@ impl Doc {
     where
         K: Into<Origin>,
     {
-        let mut txn = self.try_transact_mut()?;
-        let events = txn.events_mut();
+        let mut store = self
+            .store
+            .try_write()
+            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
+        let events = store.events.get_or_init();
         Ok(events.update_v2_events.unsubscribe(&key.into()))
     }
 
@@ -427,8 +453,11 @@ impl Doc {
     where
         F: Fn(&TransactionMut, &TransactionCleanupEvent) + Send + Sync + 'static,
     {
-        let mut txn = self.try_transact_mut()?;
-        let events = txn.events_mut();
+        let mut store = self
+            .store
+            .try_write()
+            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
+        let events = store.events.get_or_init();
         Ok(events.transaction_cleanup_events.subscribe(Box::new(f)))
     }
 
@@ -439,8 +468,11 @@ impl Doc {
     where
         F: Fn(&TransactionMut, &TransactionCleanupEvent) + 'static,
     {
-        let mut txn = self.try_transact_mut()?;
-        let events = txn.events_mut();
+        let mut store = self
+            .store
+            .try_write()
+            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
+        let events = store.events.get_or_init();
         Ok(events.transaction_cleanup_events.subscribe(Box::new(f)))
     }
 
@@ -456,8 +488,11 @@ impl Doc {
         K: Into<Origin>,
         F: Fn(&TransactionMut, &TransactionCleanupEvent) + Send + Sync + 'static,
     {
-        let mut txn = self.try_transact_mut()?;
-        let events = txn.events_mut();
+        let mut store = self
+            .store
+            .try_write()
+            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
+        let events = store.events.get_or_init();
         events
             .transaction_cleanup_events
             .subscribe_with(key.into(), Box::new(f));
@@ -476,8 +511,11 @@ impl Doc {
         K: Into<Origin>,
         F: Fn(&TransactionMut, &TransactionCleanupEvent) + 'static,
     {
-        let mut txn = self.try_transact_mut()?;
-        let events = txn.events_mut();
+        let mut store = self
+            .store
+            .try_write()
+            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
+        let events = store.events.get_or_init();
         events
             .transaction_cleanup_events
             .subscribe_with(key.into(), Box::new(f));
@@ -488,8 +526,11 @@ impl Doc {
     where
         K: Into<Origin>,
     {
-        let mut txn = self.try_transact_mut()?;
-        let events = txn.events_mut();
+        let mut store = self
+            .store
+            .try_write()
+            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
+        let events = store.events.get_or_init();
         Ok(events.transaction_cleanup_events.unsubscribe(&key.into()))
     }
 
@@ -498,8 +539,11 @@ impl Doc {
     where
         F: Fn(&mut TransactionMut) + Send + Sync + 'static,
     {
-        let mut txn = self.try_transact_mut()?;
-        let events = txn.events_mut();
+        let mut store = self
+            .store
+            .try_write()
+            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
+        let events = store.events.get_or_init();
         Ok(events.after_transaction_events.subscribe(Box::new(f)))
     }
 
@@ -513,8 +557,11 @@ impl Doc {
         K: Into<Origin>,
         F: Fn(&mut TransactionMut) + Send + Sync + 'static,
     {
-        let mut txn = self.try_transact_mut()?;
-        let events = txn.events_mut();
+        let mut store = self
+            .store
+            .try_write()
+            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
+        let events = store.events.get_or_init();
         events
             .after_transaction_events
             .subscribe_with(key.into(), Box::new(f));
@@ -531,8 +578,11 @@ impl Doc {
         K: Into<Origin>,
         F: Fn(&mut TransactionMut) + 'static,
     {
-        let mut txn = self.try_transact_mut()?;
-        let events = txn.events_mut();
+        let mut store = self
+            .store
+            .try_write()
+            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
+        let events = store.events.get_or_init();
         events
             .after_transaction_events
             .subscribe_with(key.into(), Box::new(f));
@@ -543,8 +593,11 @@ impl Doc {
     where
         K: Into<Origin>,
     {
-        let mut txn = self.try_transact_mut()?;
-        let events = txn.events_mut();
+        let mut store = self
+            .store
+            .try_write()
+            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
+        let events = store.events.get_or_init();
         Ok(events.after_transaction_events.unsubscribe(&key.into()))
     }
 
@@ -555,8 +608,11 @@ impl Doc {
     where
         F: Fn(&TransactionMut, &SubdocsEvent) + Send + Sync + 'static,
     {
-        let mut txn = self.try_transact_mut()?;
-        let events = txn.events_mut();
+        let mut store = self
+            .store
+            .try_write()
+            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
+        let events = store.events.get_or_init();
         Ok(events.subdocs_events.subscribe(Box::new(f)))
     }
 
@@ -567,8 +623,11 @@ impl Doc {
     where
         F: Fn(&TransactionMut, &SubdocsEvent) + 'static,
     {
-        let mut txn = self.try_transact_mut()?;
-        let events = txn.events_mut();
+        let mut store = self
+            .store
+            .try_write()
+            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
+        let events = store.events.get_or_init();
         Ok(events.subdocs_events.subscribe(Box::new(f)))
     }
 
@@ -580,8 +639,11 @@ impl Doc {
         K: Into<Origin>,
         F: Fn(&TransactionMut, &SubdocsEvent) + Send + Sync + 'static,
     {
-        let mut txn = self.try_transact_mut()?;
-        let events = txn.events_mut();
+        let mut store = self
+            .store
+            .try_write()
+            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
+        let events = store.events.get_or_init();
         events
             .subdocs_events
             .subscribe_with(key.into(), Box::new(f));
@@ -596,8 +658,11 @@ impl Doc {
         K: Into<Origin>,
         F: Fn(&TransactionMut, &SubdocsEvent) + 'static,
     {
-        let mut txn = self.try_transact_mut()?;
-        let events = txn.events_mut();
+        let mut store = self
+            .store
+            .try_write()
+            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
+        let events = store.events.get_or_init();
         events
             .subdocs_events
             .subscribe_with(key.into(), Box::new(f));
@@ -608,8 +673,11 @@ impl Doc {
     where
         K: Into<Origin>,
     {
-        let mut txn = self.try_transact_mut()?;
-        let events = txn.events_mut();
+        let mut store = self
+            .store
+            .try_write()
+            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
+        let events = store.events.get_or_init();
         Ok(events.subdocs_events.unsubscribe(&key.into()))
     }
 
@@ -619,8 +687,11 @@ impl Doc {
     where
         F: Fn(&TransactionMut, &Doc) + Send + Sync + 'static,
     {
-        let mut txn = self.try_transact_mut()?;
-        let events = txn.events_mut();
+        let mut store = self
+            .store
+            .try_write()
+            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
+        let events = store.events.get_or_init();
         Ok(events.destroy_events.subscribe(Box::new(f)))
     }
 
@@ -630,8 +701,11 @@ impl Doc {
     where
         F: Fn(&TransactionMut, &Doc) + 'static,
     {
-        let mut txn = self.try_transact_mut()?;
-        let events = txn.events_mut();
+        let mut store = self
+            .store
+            .try_write()
+            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
+        let events = store.events.get_or_init();
         Ok(events.destroy_events.subscribe(Box::new(f)))
     }
 
@@ -642,8 +716,11 @@ impl Doc {
         K: Into<Origin>,
         F: Fn(&TransactionMut, &Doc) + Send + Sync + 'static,
     {
-        let mut txn = self.try_transact_mut()?;
-        let events = txn.events_mut();
+        let mut store = self
+            .store
+            .try_write()
+            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
+        let events = store.events.get_or_init();
         events
             .destroy_events
             .subscribe_with(key.into(), Box::new(f));
@@ -654,8 +731,11 @@ impl Doc {
     where
         K: Into<Origin>,
     {
-        let mut txn = self.try_transact_mut()?;
-        let events = txn.events_mut();
+        let mut store = self
+            .store
+            .try_write()
+            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
+        let events = store.events.get_or_init();
         Ok(events.destroy_events.unsubscribe(&key.into()))
     }
 
@@ -666,8 +746,11 @@ impl Doc {
         K: Into<Origin>,
         F: Fn(&TransactionMut, &Doc) + 'static,
     {
-        let mut txn = self.try_transact_mut()?;
-        let events = txn.events_mut();
+        let mut store = self
+            .store
+            .try_write()
+            .ok_or(TransactionAcqError::ExclusiveAcqFailed)?;
+        let events = store.events.get_or_init();
         events
             .destroy_events
             .subscribe_with(key.into(), Box::new(f));
@@ -959,14 +1042,14 @@ mod test {
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
     use crate::{
-        any, Any, Array, ArrayPrelim, ArrayRef, Doc, GetString, Map, MapPrelim, MapRef, OffsetKind,
-        Options, StateVector, Subscription, Text, TextRef, Transact, Uuid, WriteTxn,
-        XmlElementPrelim, XmlFragment, XmlFragmentRef, XmlTextPrelim, XmlTextRef,
+        any, Any, Array, ArrayPrelim, ArrayRef, DeleteSet, Doc, GetString, Map, MapPrelim, MapRef,
+        OffsetKind, Options, StateVector, Subscription, Text, TextRef, Transact, Uuid, WriteTxn,
+        XmlElementPrelim, XmlFragment, XmlFragmentRef, XmlTextPrelim, XmlTextRef, ID,
     };
-    use std::collections::BTreeSet;
-
     use arc_swap::ArcSwapOption;
     use assert_matches2::assert_matches;
+    use std::collections::BTreeSet;
+    use std::iter::FromIterator;
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::{Arc, Mutex};
 
@@ -2299,5 +2382,54 @@ mod test {
             ]),
             Err(crate::encoding::read::Error::EndOfBuffer(_))
         );
+    }
+
+    #[test]
+    fn observe_after_transaction() {
+        let d1 = Doc::with_client_id(1);
+        let txt1 = d1.get_or_insert_text("text");
+
+        let e = Arc::new(ArcSwapOption::default());
+        let e_copy = e.clone();
+        d1.observe_after_transaction_with("key", move |txn| {
+            e_copy.swap(Some(Arc::new((
+                txn.before_state.clone(),
+                txn.after_state.clone(),
+                txn.delete_set.clone(),
+            ))));
+        })
+        .unwrap();
+
+        txt1.insert(&mut d1.transact_mut(), 0, "hello world");
+        let actual = e.swap(None);
+        assert_eq!(
+            actual,
+            Some(Arc::new((
+                StateVector::default(),
+                StateVector::from_iter([(1, 11)]),
+                DeleteSet::default()
+            )))
+        );
+
+        txt1.remove_range(&mut d1.transact_mut(), 2, 7);
+        let actual = e.swap(None);
+        assert_eq!(
+            actual,
+            Some(Arc::new((
+                StateVector::from_iter([(1, 11)]),
+                StateVector::from_iter([(1, 11)]),
+                {
+                    let mut ds = DeleteSet::new();
+                    ds.insert(ID::new(1, 2), 7);
+                    ds
+                }
+            )))
+        );
+
+        d1.unobserve_after_transaction("key").unwrap();
+
+        txt1.insert(&mut d1.transact_mut(), 4, " the door");
+        let actual = e.swap(None);
+        assert!(actual.is_none());
     }
 }

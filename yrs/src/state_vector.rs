@@ -7,6 +7,7 @@ use crate::{DeleteSet, ID};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::hash::BuildHasherDefault;
+use std::iter::FromIterator;
 
 /// State vector is a compact representation of all known blocks inserted and integrated into
 /// a given document. This descriptor can be serialized and used to determine a difference between
@@ -101,6 +102,14 @@ impl StateVector {
             let e = self.0.entry(client).or_default();
             *e = (*e).max(clock);
         }
+    }
+}
+
+impl FromIterator<(ClientID, u32)> for StateVector {
+    fn from_iter<T: IntoIterator<Item = (ClientID, u32)>>(iter: T) -> Self {
+        StateVector::new(
+            HashMap::<ClientID, u32, BuildHasherDefault<ClientHasher>>::from_iter(iter),
+        )
     }
 }
 
