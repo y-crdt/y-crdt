@@ -442,8 +442,14 @@ impl DocStore {
         self.0.store.try_read()
     }
 
+    #[cfg(not(target_family = "wasm"))]
     pub(crate) fn read_blocking(&self) -> RwLockReadGuard<Store> {
         self.0.store.read_blocking()
+    }
+
+    #[cfg(target_family = "wasm")]
+    pub(crate) fn read_blocking(&self) -> RwLockReadGuard<Store> {
+        self.0.store.try_read().unwrap()
     }
 
     pub(crate) fn read_async(&self) -> Read<Store> {
@@ -454,8 +460,14 @@ impl DocStore {
         self.0.store.try_write()
     }
 
+    #[cfg(not(target_family = "wasm"))]
     pub(crate) fn write_blocking(&self) -> RwLockWriteGuard<Store> {
         self.0.store.write_blocking()
+    }
+
+    #[cfg(target_family = "wasm")]
+    pub(crate) fn write_blocking(&self) -> RwLockWriteGuard<Store> {
+        self.0.store.try_write().unwrap()
     }
 
     pub(crate) fn write_async(&self) -> Write<Store> {
