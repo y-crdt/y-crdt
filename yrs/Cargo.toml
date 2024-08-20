@@ -19,7 +19,7 @@ thiserror = "1"
 fastrand = { version = "2", features = ["js"] }
 smallstr = { version = "0.3", features = ["union"] }
 smallvec = { version = "1.13", features = ["union", "const_generics", "const_new"] }
-atomic_refcell = "0.1"
+async-lock = "3.4"
 arc-swap = "1.7"
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"

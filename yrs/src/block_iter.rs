@@ -118,7 +118,7 @@ impl BlockIter {
             self.rel = 0;
         }
 
-        let encoding = txn.store().options.offset_kind;
+        let encoding = txn.store().offset_kind;
         while self.can_forward(item, len) {
             if item == self.curr_move_end
                 || (self.reached_end && self.curr_move_end.is_none() && self.curr_move.is_some())
@@ -188,7 +188,7 @@ impl BlockIter {
             panic!("Length exceeded");
         }
         self.index -= len;
-        let encoding = txn.store().options.offset_kind;
+        let encoding = txn.store().offset_kind;
         if self.reached_end {
             if let Some(next_item) = self.next_item.as_deref() {
                 self.rel = if next_item.is_countable() && !next_item.is_deleted() {
@@ -303,7 +303,7 @@ impl BlockIter {
             panic!("Length exceeded");
         }
 
-        let encoding = txn.store().options.offset_kind;
+        let encoding = txn.store().offset_kind;
         let mut i: &Item;
         while len > 0 {
             while let Some(block) = item.as_deref() {
@@ -365,7 +365,7 @@ impl BlockIter {
         }
         self.index += len;
         let mut next_item = self.next_item;
-        let encoding = txn.store().options.offset_kind;
+        let encoding = txn.store().offset_kind;
         let mut read = 0u32;
         while len > 0 {
             if !self.reached_end {
@@ -466,7 +466,7 @@ impl BlockIter {
         self.split_rel(txn);
         let id = {
             let store = txn.store();
-            let client_id = store.options.client_id;
+            let client_id = store.client_id;
             let clock = store.blocks.get_clock(&client_id);
             ID::new(client_id, clock)
         };

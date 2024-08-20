@@ -625,7 +625,7 @@ impl Update {
                 };
                 let cid = curr_block.id();
                 if cid.client != first_client || // check whether there is another decoder that has has updates from `firstClient`
-                                (iterated && cid.clock > curr_write_last)
+                    (iterated && cid.clock > curr_write_last)
                 // the above while loop was used and we are potentially missing updates
                 {
                     continue;
@@ -966,7 +966,7 @@ impl Into<Store> for Update {
     fn into(self) -> Store {
         use crate::doc::Options;
 
-        let mut store = Store::new(Options::with_client_id(0));
+        let mut store = Store::new(&Options::with_client_id(0));
         for (_, vec) in self.blocks.clients {
             for block in vec {
                 if let BlockCarrier::Item(block) = block {

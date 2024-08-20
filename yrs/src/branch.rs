@@ -385,14 +385,14 @@ impl Branch {
     /// If `index` point to the end of a block and no splitting is necessary, tuple will return only
     /// left side (beginning of a block), while right side will be `None`.
     ///
-    /// If `index` is outside of the range of an array component of current branch node, both tuple
+    /// If `index` is outside the range of an array component of current branch node, both tuple
     /// values will be `None`.
     fn index_to_ptr(
         txn: &mut TransactionMut,
         mut ptr: Option<ItemPtr>,
         mut index: u32,
     ) -> (Option<ItemPtr>, Option<ItemPtr>) {
-        let encoding = txn.store.options.offset_kind;
+        let encoding = txn.store.offset_kind;
         while let Some(item) = ptr {
             let content_len = item.content_len(encoding);
             if !item.is_deleted() && item.is_countable() {
@@ -434,7 +434,7 @@ impl Branch {
         };
         while remaining > 0 {
             if let Some(item) = ptr {
-                let encoding = txn.store().options.offset_kind;
+                let encoding = txn.store().offset_kind;
                 if !item.is_deleted() {
                     let content_len = item.content_len(encoding);
                     let (l, r) = if remaining < content_len {

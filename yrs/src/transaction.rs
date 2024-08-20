@@ -1,4 +1,4 @@
-use crate::block::{Item, ItemContent, ItemPtr, Prelim, ID};
+use crate::block::{Item, ItemContent, ItemPosition, ItemPtr, Prelim, ID};
 use crate::branch::{Branch, BranchPtr};
 use crate::doc::DocAddr;
 use crate::error::Error;
@@ -10,9 +10,13 @@ use crate::slice::BlockSlice;
 use crate::store::{Store, StoreEvents, SubdocGuids, SubdocsIter};
 use crate::types::{Event, Events, RootRef, SharedRef, TypePtr};
 use crate::update::Update;
+use crate::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use crate::utils::OptionExt;
-use crate::*;
-use atomic_refcell::{AtomicRef, AtomicRefMut};
+use crate::{
+    merge_updates_v1, merge_updates_v2, ArrayRef, BranchID, Doc, MapRef, Out, Snapshot,
+    StateVector, TextRef, Transact, XmlFragmentRef,
+};
+use async_lock::{RwLockReadGuard, RwLockWriteGuard};
 use smallvec::SmallVec;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Formatter;
@@ -20,7 +24,6 @@ use std::hash::Hash;
 use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::sync::Arc;
-use updates::encoder::*;
 
 /// Trait defining read capabilities present in a transaction. Implemented by both lightweight
 /// [read-only](Transaction) and [read-write](TransactionMut) transactions.
@@ -178,6 +181,27 @@ pub trait ReadTxn: Sized {
     fn get_xml_fragment<N: Into<Arc<str>>>(&self, name: N) -> Option<XmlFragmentRef> {
         XmlFragmentRef::root(name).get(self)
     }
+
+    /// If current document has been inserted as a sub-document, returns a reference to a parent
+    /// document, which contains it.
+    fn parent_doc(&self) -> Option<Doc> {
+        if let Some(item) = self.store().parent.as_deref() {
+            if let ItemContent::Doc(parent_doc, _) = &item.content {
+                return parent_doc.clone();
+            }
+        }
+
+        None
+    }
+
+    /// If current document has been inserted as a sub-document, returns its [BranchID].
+    fn branch_id(&self) -> Option<BranchID> {
+        if let Some(item) = self.store().parent {
+            Some(BranchID::Nested(item.id))
+        } else {
+            None
+        }
+    }
 }
 
 pub trait WriteTxn: Sized {
@@ -286,11 +310,11 @@ fn merge_pending_v2(update: Vec<u8>, store: &Store) -> Vec<u8> {
 /// not allowed to have any active [read-write transactions](TransactionMut) at the same time.
 #[derive(Debug)]
 pub struct Transaction<'doc> {
-    store: AtomicRef<'doc, Store>,
+    store: RwLockReadGuard<'doc, Store>,
 }
 
 impl<'doc> Transaction<'doc> {
-    pub(crate) fn new(store: AtomicRef<'doc, Store>) -> Self {
+    pub(crate) fn new(store: RwLockReadGuard<'doc, Store>) -> Self {
         Transaction { store }
     }
 }
@@ -315,7 +339,7 @@ impl<'doc> ReadTxn for Transaction<'doc> {
 /// In Yrs transactions are always auto-committing all of their changes when dropped. Rollbacks are
 /// not supported (if some operations needs to be undone, this can be achieved using [UndoManager])
 pub struct TransactionMut<'doc> {
-    pub(crate) store: AtomicRefMut<'doc, Store>,
+    pub(crate) store: RwLockWriteGuard<'doc, Store>,
     /// State vector of a current transaction at the moment of its creation.
     pub(crate) before_state: StateVector,
     /// Current state vector of a transaction, which includes all performed updates.
@@ -362,7 +386,11 @@ impl<'doc> Drop for TransactionMut<'doc> {
 }
 
 impl<'doc> TransactionMut<'doc> {
-    pub(crate) fn new(doc: Doc, store: AtomicRefMut<'doc, Store>, origin: Option<Origin>) -> Self {
+    pub(crate) fn new(
+        doc: Doc,
+        store: RwLockWriteGuard<'doc, Store>,
+        origin: Option<Origin>,
+    ) -> Self {
         let begin_timestamp = store.blocks.get_state_vector();
         TransactionMut {
             store,
@@ -386,6 +414,10 @@ impl<'doc> TransactionMut<'doc> {
 
     pub fn events(&self) -> Option<&StoreEvents> {
         self.store.events.as_deref()
+    }
+
+    pub fn events_mut(&mut self) -> &mut StoreEvents {
+        self.store.events.get_or_init()
     }
 
     /// Corresponding document's state vector at the moment when current transaction was created.
@@ -434,7 +466,7 @@ impl<'doc> TransactionMut<'doc> {
     /// * Even if an update contains known information, the unknown information
     ///   is extracted and integrated into the document structure.
     pub fn encode_update_v1(&self) -> Vec<u8> {
-        let mut encoder = updates::encoder::EncoderV1::new();
+        let mut encoder = EncoderV1::new();
         self.encode_update(&mut encoder);
         encoder.to_vec()
     }
@@ -448,7 +480,7 @@ impl<'doc> TransactionMut<'doc> {
     /// * Even if an update contains known information, the unknown information
     ///   is extracted and integrated into the document structure.
     pub fn encode_update_v2(&self) -> Vec<u8> {
-        let mut encoder = updates::encoder::EncoderV2::new();
+        let mut encoder = EncoderV2::new();
         self.encode_update(&mut encoder);
         encoder.to_vec()
     }
@@ -586,7 +618,7 @@ impl<'doc> TransactionMut<'doc> {
             if item.parent_sub.is_none() && item.is_countable() {
                 if let TypePtr::Branch(mut parent) = item.parent {
                     parent.block_len -= item.len();
-                    parent.content_len -= item.content_len(store.options.offset_kind);
+                    parent.content_len -= item.content_len(store.offset_kind);
                 }
             }
 
@@ -728,7 +760,7 @@ impl<'doc> TransactionMut<'doc> {
 
     pub(crate) fn create_item<T: Prelim>(
         &mut self,
-        pos: &block::ItemPosition,
+        pos: &ItemPosition,
         value: T,
         parent_sub: Option<Arc<str>>,
     ) -> Option<ItemPtr> {
@@ -741,7 +773,7 @@ impl<'doc> TransactionMut<'doc> {
             } else {
                 None
             };
-            let client_id = store.options.client_id;
+            let client_id = store.client_id;
             let id = ID::new(client_id, store.get_local_state());
 
             (left, right, origin, id)
@@ -883,7 +915,7 @@ impl<'doc> TransactionMut<'doc> {
         }
 
         // 4. try GC delete set
-        if !self.store.options.skip_gc {
+        if !self.store.skip_gc {
             GCCollector::collect(self);
         }
 
@@ -929,13 +961,13 @@ impl<'doc> TransactionMut<'doc> {
         // 11. add and remove subdocs
         let store = self.store.deref_mut();
         if let Some(mut subdocs) = self.subdocs.take() {
-            let client_id = store.options.client_id;
+            let client_id = store.client_id;
             for (guid, subdoc) in subdocs.added.iter_mut() {
                 let mut txn = subdoc.transact_mut();
-                txn.store.options.client_id = client_id;
-                if txn.store.options.collection_id.is_none() {
-                    txn.store.options.collection_id = store.options.collection_id.clone();
-                }
+                txn.store.client_id = client_id;
+                txn.doc
+                    .store()
+                    .set_subdoc_data(client_id, self.doc.collection_id());
                 store.subdocs.insert(guid.clone(), subdoc.clone());
             }
             for guid in subdocs.removed.keys() {
