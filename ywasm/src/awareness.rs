@@ -1,5 +1,6 @@
 use gloo_utils::format::JsValueSerdeExt;
 use js_sys::Uint8Array;
+use serde::Serialize;
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
 
@@ -43,10 +44,18 @@ impl Awareness {
 
     #[wasm_bindgen(getter, js_name = meta)]
     pub fn meta(&self) -> crate::Result<js_sys::Map> {
-        let meta = self.inner.meta();
+        #[derive(Serialize)]
+        struct ClientStateMeta {
+            clock: u32,
+            last_updated: u64,
+        }
         let result = js_sys::Map::new();
-        for (&client_id, info) in meta.iter() {
-            let info = JsValue::from_serde(info).map_err(|e| JsValue::from_str(&e.to_string()))?;
+        for (client_id, state) in self.inner.iter() {
+            let info = ClientStateMeta {
+                clock: state.clock,
+                last_updated: state.last_updated,
+            };
+            let info = JsValue::from_serde(&info).map_err(|e| JsValue::from_str(&e.to_string()))?;
             result.set(&JsValue::from_f64(client_id as f64), &info);
         }
         Ok(result)
@@ -61,7 +70,7 @@ impl Awareness {
     pub fn local_state(&self) -> crate::Result<JsValue> {
         match self.inner.local_state_raw() {
             None => Ok(JsValue::NULL),
-            Some(js) => js_sys::JSON::parse(js),
+            Some(js) => js_sys::JSON::parse(js.as_ref()),
         }
     }
 
@@ -87,9 +96,11 @@ impl Awareness {
     #[wasm_bindgen(js_name = getStates)]
     pub fn states(&self) -> crate::Result<js_sys::Map> {
         let result = js_sys::Map::new();
-        for (&client_id, json) in self.inner.clients().iter() {
-            let state = js_sys::JSON::parse(json)?;
-            result.set(&JsValue::from_f64(client_id as f64), &state);
+        for (client_id, state) in self.inner.iter() {
+            if let Some(data) = &state.data {
+                let state = js_sys::JSON::parse(data.as_ref())?;
+                result.set(&JsValue::from_f64(client_id as f64), &state);
+            }
         }
         Ok(result)
     }
@@ -161,7 +172,8 @@ pub fn modify_update(update: Uint8Array, modify: js_sys::Function) -> crate::Res
     for (client_id, state) in update.clients.iter_mut() {
         let js = js_sys::JSON::parse(&state.json)?;
         let new_state = modify.call2(&JsValue::NULL, &js, &JsValue::from(*client_id))?;
-        state.json = js_sys::JSON::stringify(&new_state)?.into();
+        let json: String = js_sys::JSON::stringify(&new_state)?.into();
+        state.json = json.into();
     }
     Ok(Uint8Array::from(update.encode_v1().as_slice()))
 }
