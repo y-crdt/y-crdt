@@ -41,7 +41,7 @@ impl Protocol for DefaultProtocol {}
 /// necessary.
 pub trait Protocol {
     /// To be called whenever a new connection has been accepted. Returns an encoded list of
-    /// messages to be send back to initiator. This binary may contain multiple messages inside,
+    /// messages to be sent back to initiator. This binary may contain multiple messages inside,
     /// stored one after another.
     fn start<E>(&self, awareness: &Awareness, encoder: &mut E) -> Result<(), Error>
     where
@@ -72,7 +72,7 @@ pub trait Protocol {
     /// an update to current `awareness` document instance.
     fn handle_sync_step2(
         &self,
-        awareness: &mut Awareness,
+        awareness: &Awareness,
         update: Update,
     ) -> Result<Option<Message>, Error> {
         let mut txn = awareness.doc().transact_mut();
@@ -84,7 +84,7 @@ pub trait Protocol {
     /// `awareness` document instance.
     fn handle_update(
         &self,
-        awareness: &mut Awareness,
+        awareness: &Awareness,
         update: Update,
     ) -> Result<Option<Message>, Error> {
         self.handle_sync_step2(awareness, update)
@@ -115,7 +115,7 @@ pub trait Protocol {
     /// instance is being updated with incoming data.
     fn handle_awareness_update(
         &self,
-        awareness: &mut Awareness,
+        awareness: &Awareness,
         update: AwarenessUpdate,
     ) -> Result<Option<Message>, Error> {
         awareness.apply_update(update)?;
@@ -126,7 +126,7 @@ pub trait Protocol {
     /// implemented here. By default it returns an [Error::Unsupported].
     fn missing_handle(
         &self,
-        _awareness: &mut Awareness,
+        _awareness: &Awareness,
         tag: u8,
         _data: Vec<u8>,
     ) -> Result<Option<Message>, Error> {
@@ -338,7 +338,7 @@ mod test {
         let doc = Doc::new();
         let txt = doc.get_or_insert_text("text");
         txt.push(&mut doc.transact_mut(), "hello world");
-        let mut awareness = Awareness::new(doc);
+        let awareness = Awareness::new(doc);
         awareness
             .set_local_state(json!({
               "user":{
@@ -363,7 +363,7 @@ mod test {
             crate::sync::Message::Auth(Some(
                 "reason
             }"
-                    .to_string(),
+                .to_string(),
             )),
             crate::sync::Message::AwarenessQuery,
         ];
@@ -464,8 +464,8 @@ mod test {
     fn protocol_awareness_sync() {
         let protocol = crate::sync::DefaultProtocol;
 
-        let mut a1 = Awareness::new(Doc::with_client_id(1));
-        let mut a2 = Awareness::new(Doc::with_client_id(2));
+        let a1 = Awareness::new(Doc::with_client_id(1));
+        let a2 = Awareness::new(Doc::with_client_id(2));
 
         a1.set_local_state(json!({"x":3})).unwrap();
         let result = protocol.handle_awareness_query(&a1).unwrap();
@@ -476,10 +476,14 @@ mod test {
         );
 
         if let Some(crate::sync::Message::Awareness(u)) = result {
-            let result = protocol.handle_awareness_update(&mut a2, u).unwrap();
+            let result = protocol.handle_awareness_update(&a2, u).unwrap();
             assert!(result.is_none());
         }
 
-        assert_eq!(a2.clients(), &HashMap::from([(1, "{\"x\":3}".to_owned())]));
+        let a2_clients: HashMap<_, _> = a2
+            .iter()
+            .flat_map(|(id, state)| state.data.map(|data| (id, data)))
+            .collect();
+        assert_eq!(a2_clients, HashMap::from([(1, "{\"x\":3}".into())]));
     }
 }
