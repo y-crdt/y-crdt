@@ -735,8 +735,8 @@ mod test {
 
     #[test]
     fn awareness_summary() -> Result<(), Box<dyn std::error::Error>> {
-        let mut local = Awareness::new(Doc::with_client_id(1));
-        let mut remote = Awareness::new(Doc::with_client_id(2));
+        let local = Awareness::new(Doc::with_client_id(1));
+        let remote = Awareness::new(Doc::with_client_id(2));
 
         local.set_local_state(json!({"x":3})).unwrap();
         let update = local.update_with_clients([local.client_id()])?;
