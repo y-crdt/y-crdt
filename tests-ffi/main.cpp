@@ -1104,7 +1104,7 @@ void ydeepobserve_test(void *state, uint32_t event_count, const YEvent *events) 
                 test->count++;
                 break;
             }
-                // we don't use other Y types in this test
+            // we don't use other Y types in this test
         }
     }
 }
@@ -1801,7 +1801,6 @@ TEST_CASE("Relative position") {
     int length = ytext_len(txt, txn);
     for (int i = 0; i < length; ++i) {
         for (int assoc = -1; assoc <= 0; ++assoc) {
-
             YStickyIndex *pos = ysticky_index_from_index(txt, txn, i, assoc);
             uint32_t bin_len = 0;
             char *bin = ysticky_index_encode(pos, &bin_len);
@@ -1862,10 +1861,10 @@ TEST_CASE("Weak link references") {
     youtput_destroy(out);
 
     YInput items[] = {
-            yinput_long(1),
-            yinput_long(2),
-            yinput_long(3),
-            yinput_long(4),
+        yinput_long(1),
+        yinput_long(2),
+        yinput_long(3),
+        yinput_long(4),
     };
     yarray_insert_range(arr, txn, 0, items, 4);
     value = yinput_weak(yarray_quote(arr, txn, 1, 3, Y_FALSE, Y_TRUE));
@@ -1965,17 +1964,16 @@ TEST_CASE("Unicode support") {
 }
 
 TEST_CASE("Array event observer target") {
-
     YDoc *doc = ydoc_new();
     const Branch *array = yarray(doc, "array1");
 
     YSubscription *subscription = yarray_observe(
-            array,
-            nullptr,
-            [](void *state, const YArrayEvent *event) {
-                const Branch *target = yarray_event_target(event);
-                REQUIRE_EQ(yarray_len(target), 1);
-            });
+        array,
+        nullptr,
+        [](void *state, const YArrayEvent *event) {
+            const Branch *target = yarray_event_target(event);
+            REQUIRE_EQ(yarray_len(target), 1);
+        });
 
     YTransaction *txn = ydoc_write_transaction(doc, 0, nullptr);
     YInput item{Y_JSON_NUM, 1, {.num = 25.0}};
@@ -2003,5 +2001,216 @@ TEST_CASE("YMap multiple nested maps") {
     ytransaction_commit(txn);
     REQUIRE(length == 1);
 
+    ydoc_destroy(doc);
+}
+
+TEST_CASE("YInput types: string") {
+    YDoc *doc = ydoc_new_with_id(1);
+    Branch *map = ymap(doc, "map");
+    YTransaction *txn = ydoc_write_transaction(doc, 0, NULL);
+
+    YInput input = yinput_string("test string");
+    ymap_insert(map, txn, "key", &input);
+    ytransaction_commit(txn);
+
+    txn = ydoc_read_transaction(doc);
+    YOutput *output = ymap_get(map, txn, "key");
+    char *data = youtput_read_string(output);
+
+    REQUIRE_EQ(output->tag, Y_JSON_STR);
+    REQUIRE(strcmp(data, "test string") == 0);
+
+    youtput_destroy(output);
+    ytransaction_commit(txn);
+    ydoc_destroy(doc);
+}
+
+TEST_CASE("YInput types: binary") {
+    YDoc *doc = ydoc_new_with_id(1);
+    Branch *map = ymap(doc, "map");
+    YTransaction *txn = ydoc_write_transaction(doc, 0, NULL);
+
+    char buf[4] = {0x11, 0x22, 0x33, 0x44};
+    YInput input = yinput_binary(buf, 4);
+    ymap_insert(map, txn, "key", &input);
+    ytransaction_commit(txn);
+
+    txn = ydoc_read_transaction(doc);
+    YOutput *output = ymap_get(map, txn, "key");
+    const char *data = youtput_read_binary(output);
+
+    REQUIRE_EQ(output->tag, Y_JSON_BUF);
+    REQUIRE_EQ(output->len, 4);
+    REQUIRE_EQ(data[0], 0x11);
+    REQUIRE_EQ(data[1], 0x22);
+    REQUIRE_EQ(data[2], 0x33);
+    REQUIRE_EQ(data[3], 0x44);
+
+    youtput_destroy(output);
+    ytransaction_commit(txn);
+    ydoc_destroy(doc);
+}
+
+TEST_CASE("YInput types: integer") {
+    YDoc *doc = ydoc_new_with_id(1);
+    Branch *map = ymap(doc, "map");
+    YTransaction *txn = ydoc_write_transaction(doc, 0, NULL);
+
+    YInput input = yinput_long(12);
+    ymap_insert(map, txn, "key-small", &input);
+
+    input = yinput_long(-8000000000);
+    ymap_insert(map, txn, "key-big", &input);
+    ytransaction_commit(txn);
+
+    txn = ydoc_read_transaction(doc);
+
+    YOutput *output = ymap_get(map, txn, "key-small");
+    const int64_t *data = youtput_read_long(output);
+    REQUIRE_EQ(output->tag, Y_JSON_INT);
+    REQUIRE_EQ(*data, 12);
+
+    output = ymap_get(map, txn, "key-big");
+    data = youtput_read_long(output);
+    REQUIRE_EQ(output->tag, Y_JSON_INT);
+    REQUIRE_EQ(*data, -8000000000);
+
+    youtput_destroy(output);
+    ytransaction_commit(txn);
+    ydoc_destroy(doc);
+}
+
+TEST_CASE("YInput types: float") {
+    YDoc *doc = ydoc_new_with_id(1);
+    Branch *map = ymap(doc, "map");
+    YTransaction *txn = ydoc_write_transaction(doc, 0, NULL);
+
+    YInput input = yinput_float(-3.14);
+    ymap_insert(map, txn, "key", &input);
+    ytransaction_commit(txn);
+
+    txn = ydoc_read_transaction(doc);
+    YOutput *output = ymap_get(map, txn, "key");
+    const double *data = youtput_read_float(output);
+
+    REQUIRE_EQ(output->tag, Y_JSON_NUM);
+    REQUIRE_EQ(*data, -3.14);
+
+    youtput_destroy(output);
+    ytransaction_commit(txn);
+    ydoc_destroy(doc);
+}
+
+TEST_CASE("YInput types: boolean") {
+    YDoc *doc = ydoc_new_with_id(1);
+    Branch *map = ymap(doc, "map");
+    YTransaction *txn = ydoc_write_transaction(doc, 0, NULL);
+
+    YInput input = yinput_bool(Y_TRUE);
+    ymap_insert(map, txn, "key-true", &input);
+    input = yinput_bool(Y_FALSE);
+    ymap_insert(map, txn, "key-false", &input);
+    ytransaction_commit(txn);
+
+    txn = ydoc_read_transaction(doc);
+
+    YOutput *output = ymap_get(map, txn, "key-true");
+    const uint8_t *data = youtput_read_bool(output);
+    REQUIRE_EQ(*data, Y_TRUE);
+    youtput_destroy(output);
+
+
+    output = ymap_get(map, txn, "key-false");
+    data = youtput_read_bool(output);
+    REQUIRE_EQ(*data, Y_FALSE);
+    youtput_destroy(output);
+
+    ytransaction_commit(txn);
+    ydoc_destroy(doc);
+}
+
+TEST_CASE("YInput types: null") {
+    YDoc *doc = ydoc_new_with_id(1);
+    Branch *map = ymap(doc, "map");
+    YTransaction *txn = ydoc_write_transaction(doc, 0, NULL);
+
+    YInput input = yinput_null();
+    ymap_insert(map, txn, "key", &input);
+    ytransaction_commit(txn);
+
+    txn = ydoc_read_transaction(doc);
+
+    YOutput *output = ymap_get(map, txn, "key");
+    REQUIRE_EQ(output->tag, Y_JSON_NULL);
+    youtput_destroy(output);
+
+    ytransaction_commit(txn);
+    ydoc_destroy(doc);
+}
+
+TEST_CASE("YInput types: JSON array") {
+    YDoc *doc = ydoc_new_with_id(1);
+    Branch *map = ymap(doc, "map");
+    YTransaction *txn = ydoc_write_transaction(doc, 0, NULL);
+
+    YInput v0 = yinput_bool(Y_TRUE); // index: 0
+    YInput v1 = yinput_string("test_string"); // index: 1
+    YInput v2 = yinput_long(123); // index: 2
+    YInput inputs[3] = {v0, v1, v2};
+    YInput input = yinput_json_array(inputs, 3);
+    ymap_insert(map, txn, "key", &input);
+    ytransaction_commit(txn);
+
+    txn = ydoc_read_transaction(doc);
+
+    YOutput *output = ymap_get(map, txn, "key");
+    YOutput *iter = youtput_read_json_array(output);
+    REQUIRE_EQ(output->len, 3);
+    REQUIRE_EQ(*youtput_read_bool(&iter[0]), Y_TRUE);
+    REQUIRE_EQ(strcmp(youtput_read_string(&iter[1]), "test_string"), 0);
+    REQUIRE_EQ(*youtput_read_long(&iter[2]), 123);
+
+    youtput_destroy(output);
+    ytransaction_commit(txn);
+    ydoc_destroy(doc);
+}
+
+TEST_CASE("YInput types: JSON map") {
+    YDoc *doc = ydoc_new_with_id(1);
+    Branch *map = ymap(doc, "map");
+    YTransaction *txn = ydoc_write_transaction(doc, 0, NULL);
+
+    YInput v0 = yinput_bool(Y_TRUE); // index: 0
+    YInput v1 = yinput_string("test_string"); // index: 1
+    YInput v2 = yinput_long(123); // index: 2
+    char *keys[3] = {"k1", "k2", "k3"};
+    YInput values[3] = {v0, v1, v2};
+    YInput input = yinput_json_map(keys, values, 3);
+    ymap_insert(map, txn, "key", &input);
+    ytransaction_commit(txn);
+
+    txn = ydoc_read_transaction(doc);
+
+    YOutput *output = ymap_get(map, txn, "key");
+    YMapEntry *iter = youtput_read_json_map(output);
+    REQUIRE_EQ(output->len, 3);
+    for (int i = 0; i < 3; i++) {
+        YMapEntry e = iter[i];
+        if (strcmp(e.key, "k1") != 0) {
+            REQUIRE_EQ(e.value.tag, Y_JSON_BOOL);
+            REQUIRE_EQ(*youtput_read_bool(&e.value), Y_TRUE);
+        } else if (strcmp(e.key, "k2") != 0) {
+            REQUIRE_EQ(e.value.tag, Y_JSON_STR);
+            REQUIRE_EQ(strcmp(youtput_read_string(&e.value), "test_string"), 0);
+        } else if (strcmp(e.key, "k3") != 0) {
+            REQUIRE_EQ(e.value.tag, Y_JSON_INT);
+            REQUIRE_EQ(*youtput_read_long(&e.value), 123);
+        } else {
+            FAIL("unrecognized key");
+        }
+    }
+
+    youtput_destroy(output);
+    ytransaction_commit(txn);
     ydoc_destroy(doc);
 }
