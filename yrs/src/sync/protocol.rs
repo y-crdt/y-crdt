@@ -70,29 +70,38 @@ pub trait Protocol {
         let mut reader = MessageReader::new(&mut decoder);
         let mut responses = SmallVec::new();
         while let Some(result) = reader.next() {
-            let msg = result?;
-            let response = match msg {
-                Message::Sync(SyncMessage::SyncStep1(state_vector)) => {
-                    self.handle_sync_step1(awareness, state_vector)
-                }
-                Message::Sync(SyncMessage::SyncStep2(update)) => {
-                    let update = Update::decode_v1(&update)?;
-                    self.handle_sync_step2(awareness, update)
-                }
-                Message::Sync(SyncMessage::Update(update)) => {
-                    let update = Update::decode_v1(&update)?;
-                    self.handle_update(awareness, update)
-                }
-                Message::Auth(deny_reason) => self.handle_auth(awareness, deny_reason),
-                Message::AwarenessQuery => self.handle_awareness_query(awareness),
-                Message::Awareness(update) => self.handle_awareness_update(awareness, update),
-                Message::Custom(tag, data) => self.missing_handle(awareness, tag, data),
-            };
-            if let Some(response) = response? {
+            let message = result?;
+            if let Some(response) = self.handle_message(awareness, message)? {
                 responses.push(response);
             }
         }
         Ok(responses)
+    }
+
+    /// Handles incoming y-sync [Message] within the context of current awareness structure.
+    /// Returns an optional reply message that should be sent back to message sender.
+    fn handle_message(
+        &self,
+        awareness: &Awareness,
+        message: Message,
+    ) -> Result<Option<Message>, Error> {
+        match message {
+            Message::Sync(SyncMessage::SyncStep1(state_vector)) => {
+                self.handle_sync_step1(awareness, state_vector)
+            }
+            Message::Sync(SyncMessage::SyncStep2(update)) => {
+                let update = Update::decode_v1(&update)?;
+                self.handle_sync_step2(awareness, update)
+            }
+            Message::Sync(SyncMessage::Update(update)) => {
+                let update = Update::decode_v1(&update)?;
+                self.handle_update(awareness, update)
+            }
+            Message::Auth(deny_reason) => self.handle_auth(awareness, deny_reason),
+            Message::AwarenessQuery => self.handle_awareness_query(awareness),
+            Message::Awareness(update) => self.handle_awareness_update(awareness, update),
+            Message::Custom(tag, data) => self.missing_handle(awareness, tag, data),
+        }
     }
 
     /// Y-sync protocol sync-step-1 - given a [StateVector] of a remote side, calculate missing
@@ -209,29 +218,38 @@ pub trait AsyncProtocol {
         let mut reader = MessageReader::new(&mut decoder);
         let mut responses = SmallVec::new();
         while let Some(result) = reader.next() {
-            let msg = result?;
-            let response = match msg {
-                Message::Sync(SyncMessage::SyncStep1(state_vector)) => {
-                    self.handle_sync_step1(awareness, state_vector).await
-                }
-                Message::Sync(SyncMessage::SyncStep2(update)) => {
-                    let update = Update::decode_v1(&update)?;
-                    self.handle_sync_step2(awareness, update).await
-                }
-                Message::Sync(SyncMessage::Update(update)) => {
-                    let update = Update::decode_v1(&update)?;
-                    self.handle_update(awareness, update).await
-                }
-                Message::Auth(deny_reason) => self.handle_auth(awareness, deny_reason).await,
-                Message::AwarenessQuery => self.handle_awareness_query(awareness).await,
-                Message::Awareness(update) => self.handle_awareness_update(awareness, update).await,
-                Message::Custom(tag, data) => self.missing_handle(awareness, tag, data).await,
-            };
-            if let Some(response) = response? {
+            let message = result?;
+            if let Some(response) = self.handle_message(awareness, message).await? {
                 responses.push(response);
             }
         }
         Ok(responses)
+    }
+
+    /// Handles incoming y-sync [Message] within the context of current awareness structure.
+    /// Returns an optional reply message that should be sent back to message sender.
+    async fn handle_message(
+        &self,
+        awareness: &Awareness,
+        message: Message,
+    ) -> Result<Option<Message>, Error> {
+        match message {
+            Message::Sync(SyncMessage::SyncStep1(state_vector)) => {
+                self.handle_sync_step1(awareness, state_vector).await
+            }
+            Message::Sync(SyncMessage::SyncStep2(update)) => {
+                let update = Update::decode_v1(&update)?;
+                self.handle_sync_step2(awareness, update).await
+            }
+            Message::Sync(SyncMessage::Update(update)) => {
+                let update = Update::decode_v1(&update)?;
+                self.handle_update(awareness, update).await
+            }
+            Message::Auth(deny_reason) => self.handle_auth(awareness, deny_reason).await,
+            Message::AwarenessQuery => self.handle_awareness_query(awareness).await,
+            Message::Awareness(update) => self.handle_awareness_update(awareness, update).await,
+            Message::Custom(tag, data) => self.missing_handle(awareness, tag, data).await,
+        }
     }
 
     /// Y-sync protocol sync-step-1 - given a [StateVector] of a remote side, calculate missing
