@@ -210,12 +210,9 @@ pub struct YMapEntry {
 }
 
 impl YMapEntry {
-    fn new(key: &str, value: Out) -> Self {
-        let value = YOutput::from(value);
-        YMapEntry {
-            key: CString::new(key).unwrap().into_raw(),
-            value,
-        }
+    fn new(key: &str, value: YOutput) -> Self {
+        let key = CString::new(key).unwrap().into_raw();
+        YMapEntry { key, value }
     }
 }
 
@@ -1548,7 +1545,8 @@ pub unsafe extern "C" fn ymap_iter_next(iter: *mut MapIter) -> *mut YMapEntry {
 
     let iter = iter.as_mut().unwrap();
     if let Some((key, value)) = iter.0.next() {
-        Box::into_raw(Box::new(YMapEntry::new(key, value)))
+        let output = YOutput::from(value);
+        Box::into_raw(Box::new(YMapEntry::new(key, output)))
     } else {
         std::ptr::null_mut()
     }
@@ -1562,7 +1560,7 @@ pub unsafe extern "C" fn ymap_len(map: *const Branch, txn: *const Transaction) -
     let txn = txn.as_ref().unwrap();
     let map = MapRef::from_raw_branch(map);
 
-    map.len(txn) as u32
+    map.len(txn)
 }
 
 /// Inserts a new entry (specified as `key`-`value` pair) into a current `map`. If entry under such
@@ -2401,7 +2399,8 @@ impl From<Diff<YChange>> for YChunk {
             fmt_len = attrs.len() as u32;
             let mut fmt = Vec::with_capacity(attrs.len());
             for (k, v) in attrs.into_iter() {
-                let e = YMapEntry::new(k.as_ref(), Out::Any(v));
+                let output = YOutput::from(&v); //TODO: test if we don't drop memory here
+                let e = YMapEntry::new(k.as_ref(), output);
                 fmt.push(e);
             }
             Box::into_raw(fmt.into_boxed_slice()) as *mut _
@@ -2668,6 +2667,26 @@ pub struct YOutput {
     value: YOutputContent,
 }
 
+impl YOutput {
+    #[inline]
+    unsafe fn null() -> YOutput {
+        YOutput {
+            tag: Y_JSON_NULL,
+            len: 0,
+            value: MaybeUninit::uninit().assume_init(),
+        }
+    }
+
+    #[inline]
+    unsafe fn undefined() -> YOutput {
+        YOutput {
+            tag: Y_JSON_UNDEF,
+            len: 0,
+            value: MaybeUninit::uninit().assume_init(),
+        }
+    }
+}
+
 impl std::fmt::Display for YOutput {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let tag = self.tag;
@@ -2720,7 +2739,7 @@ impl std::fmt::Display for YOutput {
             } else if tag == Y_XML_TEXT {
                 write!(f, "YXmlText")
             } else if tag == Y_XML_ELEM {
-                write!(f, "YXmlElement", )
+                write!(f, "YXmlElement",)
             } else if tag == Y_JSON_BUF {
                 write!(f, "YBinary(len: {})", self.len)
             } else {
@@ -2734,27 +2753,26 @@ impl Drop for YOutput {
     fn drop(&mut self) {
         let tag = self.tag;
         unsafe {
-            if tag == Y_JSON_STR {
-                drop(CString::from_raw(self.value.str));
-            } else if tag == Y_JSON_ARR {
-                drop(Vec::from_raw_parts(
+            match tag {
+                Y_JSON_STR => drop(CString::from_raw(self.value.str)),
+                Y_JSON_ARR => drop(Vec::from_raw_parts(
                     self.value.array,
                     self.len as usize,
                     self.len as usize,
-                ));
-            } else if tag == Y_JSON_MAP {
-                drop(Vec::from_raw_parts(
+                )),
+                Y_JSON_MAP => drop(Vec::from_raw_parts(
                     self.value.map,
                     self.len as usize,
                     self.len as usize,
-                ));
-            } else if tag == Y_JSON_BUF {
-                let slice =
-                    std::slice::from_raw_parts(self.value.buf as *mut u8, self.len as usize);
-                let arc: Arc<[u8]> = Arc::from_raw(slice);
-                drop(arc);
-            } else if tag == Y_DOC {
-                drop(Box::from_raw(self.value.y_doc))
+                )),
+                Y_JSON_BUF => drop(Vec::from_raw_parts(
+                    // while we were using Box<[u8]>, for deallocation this should work
+                    self.value.buf as *mut u8,
+                    self.len as usize,
+                    self.len as usize,
+                )),
+                Y_DOC => drop(Box::from_raw(self.value.y_doc)),
+                _ => { /* ignore */ }
             }
         }
     }
@@ -2777,84 +2795,132 @@ impl From<Out> for YOutput {
     }
 }
 
+impl From<bool> for YOutput {
+    #[inline]
+    fn from(value: bool) -> Self {
+        YOutput {
+            tag: Y_JSON_BOOL,
+            len: 1,
+            value: YOutputContent {
+                flag: if value { Y_TRUE } else { Y_FALSE },
+            },
+        }
+    }
+}
+
+impl From<f64> for YOutput {
+    #[inline]
+    fn from(value: f64) -> Self {
+        YOutput {
+            tag: Y_JSON_NUM,
+            len: 1,
+            value: YOutputContent { num: value },
+        }
+    }
+}
+
+impl From<i64> for YOutput {
+    #[inline]
+    fn from(value: i64) -> Self {
+        YOutput {
+            tag: Y_JSON_INT,
+            len: 1,
+            value: YOutputContent { integer: value },
+        }
+    }
+}
+
+impl<'a> From<&'a str> for YOutput {
+    fn from(value: &'a str) -> Self {
+        YOutput {
+            tag: Y_JSON_STR,
+            len: value.len() as u32,
+            value: YOutputContent {
+                str: CString::new(value).unwrap().into_raw(),
+            },
+        }
+    }
+}
+
+impl<'a> From<&'a [u8]> for YOutput {
+    fn from(value: &'a [u8]) -> Self {
+        let value: Box<[u8]> = value.into();
+        YOutput {
+            tag: Y_JSON_BUF,
+            len: value.len() as u32,
+            value: YOutputContent {
+                buf: Box::into_raw(value) as *const u8 as *mut c_char,
+            },
+        }
+    }
+}
+
+impl<'a> From<&'a [Any]> for YOutput {
+    fn from(values: &'a [Any]) -> Self {
+        let len = values.len() as u32;
+        let mut array = Vec::with_capacity(values.len());
+        for v in values.iter() {
+            array.push(YOutput::from(v));
+        }
+        let ptr = array.as_mut_ptr();
+        forget(array);
+        YOutput {
+            tag: Y_JSON_ARR,
+            len,
+            value: YOutputContent { array: ptr },
+        }
+    }
+}
+
+impl<'a> From<&'a HashMap<String, Any>> for YOutput {
+    fn from(value: &'a HashMap<String, Any>) -> Self {
+        let len = value.len() as u32;
+        let mut array = Vec::with_capacity(len as usize);
+        for (k, v) in value.iter() {
+            let entry = YMapEntry::new(k.as_str(), YOutput::from(v));
+            array.push(entry);
+        }
+        let ptr = array.as_mut_ptr();
+        forget(array);
+        YOutput {
+            tag: Y_JSON_MAP,
+            len,
+            value: YOutputContent { map: ptr },
+        }
+    }
+}
+
+impl<'a> From<&'a Any> for YOutput {
+    fn from(v: &'a Any) -> Self {
+        unsafe {
+            match v {
+                Any::Null => YOutput::null(),
+                Any::Undefined => YOutput::undefined(),
+                Any::Bool(v) => YOutput::from(*v),
+                Any::Number(v) => YOutput::from(*v),
+                Any::BigInt(v) => YOutput::from(*v),
+                Any::String(v) => YOutput::from(v.as_ref()),
+                Any::Buffer(v) => YOutput::from(v.as_ref()),
+                Any::Array(v) => YOutput::from(v.as_ref()),
+                Any::Map(v) => YOutput::from(v.as_ref()),
+            }
+        }
+    }
+}
+
 impl From<Any> for YOutput {
     fn from(v: Any) -> Self {
         unsafe {
             match v {
-                Any::Null => YOutput {
-                    tag: Y_JSON_NULL,
-                    len: 0,
-                    value: MaybeUninit::uninit().assume_init(),
-                },
-                Any::Undefined => YOutput {
-                    tag: Y_JSON_UNDEF,
-                    len: 0,
-                    value: MaybeUninit::uninit().assume_init(),
-                },
-                Any::Bool(v) => YOutput {
-                    tag: Y_JSON_BOOL,
-                    len: 1,
-                    value: YOutputContent {
-                        flag: if v { Y_TRUE } else { Y_FALSE },
-                    },
-                },
-                Any::Number(v) => YOutput {
-                    tag: Y_JSON_NUM,
-                    len: 1,
-                    value: YOutputContent { num: v as _ },
-                },
-                Any::BigInt(v) => YOutput {
-                    tag: Y_JSON_INT,
-                    len: 1,
-                    value: YOutputContent { integer: v },
-                },
-                Any::String(v) => YOutput {
-                    tag: Y_JSON_STR,
-                    len: v.len() as u32,
-                    value: YOutputContent {
-                        str: CString::new(v.as_ref()).unwrap().into_raw(),
-                    },
-                },
-                Any::Buffer(v) => YOutput {
-                    tag: Y_JSON_BUF,
-                    len: v.len() as u32,
-                    value: YOutputContent {
-                        buf: {
-                            let ptr: *const [u8] = Arc::into_raw(v);
-                            let head: *const u8 = &(*ptr)[0];
-                            head as *const _
-                        },
-                    },
-                },
-                Any::Array(values) => {
-                    let len = values.len() as u32;
-                    let mut array = Vec::with_capacity(values.len());
-                    for v in values.iter() {
-                        array.push(YOutput::from(v.clone()));
-                    }
-                    let ptr = array.as_mut_ptr();
-                    forget(array);
-                    YOutput {
-                        tag: Y_JSON_ARR,
-                        len,
-                        value: YOutputContent { array: ptr },
-                    }
-                }
-                Any::Map(v) => {
-                    let len = v.len() as u32;
-                    let mut array: Vec<_> = v
-                        .iter()
-                        .map(|(k, v)| YMapEntry::new(k.as_str(), Out::Any(v.clone())))
-                        .collect();
-                    array.shrink_to_fit();
-                    let ptr = array.as_mut_ptr();
-                    forget(array);
-                    YOutput {
-                        tag: Y_JSON_MAP,
-                        len,
-                        value: YOutputContent { map: ptr },
-                    }
-                }
+                Any::Null => YOutput::null(),
+                Any::Undefined => YOutput::undefined(),
+                Any::Bool(v) => YOutput::from(v),
+                Any::Number(v) => YOutput::from(v),
+                Any::BigInt(v) => YOutput::from(v),
+                Any::String(v) => YOutput::from(v.as_ref()),
+                Any::Buffer(v) => YOutput::from(v.as_ref()),
+                Any::Array(v) => YOutput::from(v.as_ref()),
+                Any::Map(v) => YOutput::from(v.as_ref()),
             }
         }
     }
@@ -4848,7 +4914,7 @@ pub struct YDeltaAttr {
 impl YDeltaAttr {
     fn new(k: &Arc<str>, v: &Any) -> Self {
         let key = CString::new(k.as_ref()).unwrap().into_raw() as *const _;
-        let value = YOutput::from(v.clone());
+        let value = YOutput::from(v);
         YDeltaAttr { key, value }
     }
 }
