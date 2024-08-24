@@ -2195,16 +2195,18 @@ TEST_CASE("YInput types: JSON map") {
     YMapEntry *iter = youtput_read_json_map(output);
     REQUIRE_EQ(output->len, 3);
     for (int i = 0; i < 3; i++) {
-        YMapEntry e = iter[i];
-        if (strcmp(e.key, "k1") != 0) {
-            REQUIRE_EQ(e.value.tag, Y_JSON_BOOL);
-            REQUIRE_EQ(*youtput_read_bool(&e.value), Y_TRUE);
-        } else if (strcmp(e.key, "k2") != 0) {
-            REQUIRE_EQ(e.value.tag, Y_JSON_STR);
-            REQUIRE_EQ(strcmp(youtput_read_string(&e.value), "test_string"), 0);
-        } else if (strcmp(e.key, "k3") != 0) {
-            REQUIRE_EQ(e.value.tag, Y_JSON_INT);
-            REQUIRE_EQ(*youtput_read_long(&e.value), 123);
+        YMapEntry *e = &iter[i];
+        if (strcmp(e->key, "k1") == 0) {
+            REQUIRE_EQ(e->value.tag, Y_JSON_BOOL);
+            REQUIRE_EQ(*youtput_read_bool(&e->value), Y_TRUE);
+        } else if (strcmp(e->key, "k2") == 0) {
+            REQUIRE_EQ(e->value.tag, Y_JSON_STR);
+            char *str = youtput_read_string(&e->value);
+            printf("value: `%s`\n", str);
+            REQUIRE_EQ(strcmp(str, "test_string"), 0);
+        } else if (strcmp(e->key, "k3") == 0) {
+            REQUIRE_EQ(e->value.tag, Y_JSON_INT);
+            REQUIRE_EQ(*youtput_read_long(&e->value), 123);
         } else {
             FAIL("unrecognized key");
         }
