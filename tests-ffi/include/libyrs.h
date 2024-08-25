@@ -457,7 +457,7 @@ typedef struct YMapEntry {
    * A `YOutput` value representing containing variadic content that can be stored withing map's
    * entry.
    */
-  struct YOutput value;
+  const struct YOutput *value;
 } YMapEntry;
 
 /**

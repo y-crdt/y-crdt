@@ -223,13 +223,13 @@ TEST_CASE("YMap basic") {
         switch (curr->key[0]) {
             case 'a': {
                 REQUIRE(!strcmp(curr->key, "a"));
-                REQUIRE(!strcmp(youtput_read_string(&curr->value), "value"));
+                REQUIRE(!strcmp(youtput_read_string(curr->value), "value"));
                 break;
             }
             case 'b': {
                 REQUIRE(!strcmp(curr->key, "b"));
-                REQUIRE_EQ(curr->value.len, 2);
-                YOutput *output = youtput_read_json_array(&curr->value);
+                REQUIRE_EQ(curr->value->len, 2);
+                YOutput *output = youtput_read_json_array(curr->value);
                 YOutput *fst = &output[0];
                 YOutput *snd = &output[1];
                 REQUIRE_EQ(*youtput_read_long(fst), 11);
@@ -520,7 +520,7 @@ TEST_CASE("YText insert embed") {
     YMapEntry *e = youtput_read_json_map(d.insert);
     REQUIRE(d.insert->len == 1);
     REQUIRE(strcmp(e->key, "image") == 0);
-    REQUIRE(strcmp(youtput_read_string(&e->value), "imageSrc.png") == 0);
+    REQUIRE(strcmp(youtput_read_string(e->value), "imageSrc.png") == 0);
 
     d = t->delta[2];
     REQUIRE(d.tag == Y_EVENT_CHANGE_ADD);
@@ -563,24 +563,24 @@ TEST_CASE("YText formatting") {
     REQUIRE(strcmp(youtput_read_string(&chunk.data), "hello ") == 0);
     REQUIRE_EQ(chunk.fmt_len, 1);
     REQUIRE(strcmp(chunk.fmt[0].key, i) == 0);
-    REQUIRE_EQ(*youtput_read_bool(&chunk.fmt[0].value), Y_TRUE);
+    REQUIRE_EQ(*youtput_read_bool(chunk.fmt[0].value), Y_TRUE);
 
     chunk = chunks[1];
     REQUIRE(strcmp(youtput_read_string(&chunk.data), "world") == 0);
     REQUIRE_EQ(chunk.fmt_len, 2);
     for (int i = 0; i < chunk.fmt_len; i++) {
         YMapEntry e = chunk.fmt[i];
-        REQUIRE_EQ(*youtput_read_bool(&e.value), Y_TRUE);
+        REQUIRE_EQ(*youtput_read_bool(e.value), Y_TRUE);
         REQUIRE_EQ(strlen(e.key), 1);
         REQUIRE((e.key[0] == 'i' || e.key[0] == 'b'));
     }
-    REQUIRE_EQ(*youtput_read_bool(&chunk.fmt[0].value), Y_TRUE);
+    REQUIRE_EQ(*youtput_read_bool(chunk.fmt[0].value), Y_TRUE);
 
     chunk = chunks[2];
     REQUIRE(strcmp(youtput_read_string(&chunk.data), "!") == 0);
     REQUIRE_EQ(chunk.fmt_len, 1);
     REQUIRE(strcmp(chunk.fmt[0].key, i) == 0);
-    REQUIRE_EQ(*youtput_read_bool(&chunk.fmt[0].value), Y_TRUE);
+    REQUIRE_EQ(*youtput_read_bool(chunk.fmt[0].value), Y_TRUE);
 
     ychunks_destroy(chunks, chunks_len);
     ydoc_destroy(doc);
@@ -2197,15 +2197,15 @@ TEST_CASE("YInput types: JSON map") {
     for (int i = 0; i < 3; i++) {
         YMapEntry *e = &iter[i];
         if (strcmp(e->key, "k1") == 0) {
-            REQUIRE_EQ(e->value.tag, Y_JSON_BOOL);
-            REQUIRE_EQ(*youtput_read_bool(&e->value), Y_TRUE);
+            REQUIRE_EQ(e->value->tag, Y_JSON_BOOL);
+            REQUIRE_EQ(*youtput_read_bool(e->value), Y_TRUE);
         } else if (strcmp(e->key, "k2") == 0) {
-            REQUIRE_EQ(e->value.tag, Y_JSON_STR);
-            char *str = youtput_read_string(&e->value);
+            REQUIRE_EQ(e->value->tag, Y_JSON_STR);
+            char *str = youtput_read_string(e->value);
             REQUIRE_EQ(strcmp(str, "test_string"), 0);
         } else if (strcmp(e->key, "k3") == 0) {
-            REQUIRE_EQ(e->value.tag, Y_JSON_INT);
-            REQUIRE_EQ(*youtput_read_long(&e->value), 123);
+            REQUIRE_EQ(e->value->tag, Y_JSON_INT);
+            REQUIRE_EQ(*youtput_read_long(e->value), 123);
         } else {
             FAIL("unrecognized key");
         }
@@ -2223,7 +2223,7 @@ TEST_CASE("YMap JSON input") {
 
     // insert JSON type directly
     YInput input = yinput_json(
-        "{\"float\": 3.14, \"int\": -12, \"str\": \"hello world\", \"array\": [1,2,3], \"map\":{\"foo\":\"bar\"}}");
+        "{\"float\": 3.14, \"int\": -36028797018963968, \"str\": \"hello world\", \"array\": [1,2,3], \"map\":{\"foo\":\"bar\"}}");
     ymap_insert(map, txn, "key-json", &input);
     YOutput *output = ymap_get(map, txn, "key-json");
     REQUIRE_EQ(output->tag, Y_JSON_MAP);
@@ -2232,26 +2232,28 @@ TEST_CASE("YMap JSON input") {
     for (int i = 0; i < output->len; i++) {
         YMapEntry *e = &entries[i];
         if (strcmp(e->key, "float") == 0) {
-            REQUIRE_EQ(e->value.tag, Y_JSON_NUM);
-            REQUIRE_EQ(*youtput_read_float(&e->value), 3.14);
+            REQUIRE_EQ(e->value->tag, Y_JSON_NUM);
+            REQUIRE_EQ(*youtput_read_float(e->value), 3.14);
         } else if (strcmp(e->key, "int") == 0) {
-            REQUIRE_EQ(e->value.tag, Y_JSON_INT);
-            REQUIRE_EQ(*youtput_read_long(&e->value), -12);
+            REQUIRE_EQ(e->value->tag, Y_JSON_INT);
+            REQUIRE_EQ(*youtput_read_long(e->value), -36028797018963968);
         } else if (strcmp(e->key, "str") == 0) {
-            REQUIRE_EQ(e->value.tag, Y_JSON_STR);
-            REQUIRE_EQ(strcmp(youtput_read_string(&e->value), "hello world"), 0);
+            REQUIRE_EQ(e->value->tag, Y_JSON_STR);
+            REQUIRE_EQ(strcmp(youtput_read_string(e->value), "hello world"), 0);
         } else if (strcmp(e->key, "array") == 0) {
-            REQUIRE_EQ(e->value.tag, Y_JSON_ARR);
-            YOutput *array = youtput_read_json_array(&e->value);
-            REQUIRE_EQ(array->len, 3);
-            REQUIRE_EQ(*youtput_read_long(&array[0]), 1);
-            REQUIRE_EQ(*youtput_read_long(&array[1]), 2);
-            REQUIRE_EQ(*youtput_read_long(&array[2]), 3);
+            REQUIRE_EQ(e->value->tag, Y_JSON_ARR);
+            REQUIRE_EQ(e->value->len, 3);
+            YOutput *array = youtput_read_json_array(e->value);
+            //NOTE: keep in mind that yrs deserializes numbers to float64 by default. This includes values with
+            //  no fractional numbers up to 53-bit. This is required for Yjs/JavaScript compatibility.
+            REQUIRE_EQ(*youtput_read_float(&array[0]), 1);
+            REQUIRE_EQ(*youtput_read_float(&array[1]), 2);
+            REQUIRE_EQ(*youtput_read_float(&array[2]), 3);
         } else if (strcmp(e->key, "map") == 0) {
-            REQUIRE_EQ(e->value.tag, Y_JSON_MAP);
-            YMapEntry *map = youtput_read_json_map(&e->value);
+            REQUIRE_EQ(e->value->tag, Y_JSON_MAP);
+            YMapEntry *map = youtput_read_json_map(e->value);
             REQUIRE_EQ(strcmp(map->key, "foo"), 0);
-            char *str = youtput_read_string(&map->value);
+            char *str = youtput_read_string(map->value);
             REQUIRE_EQ(strcmp(str, "bar"), 0);
         } else {
             FAIL("unrecognized key");
@@ -2271,29 +2273,38 @@ TEST_CASE("YArray JSON input") {
 
     // insert JSON type directly
     YInput input = yinput_json(
-        "{\"float\": 3.14, \"int\": -12, \"str\": \"hello world\", \"array\": [1,2,3], \"map\":{\"foo\":\"bar\"}}");
+        "{\"float\": 3.14, \"int\": -36028797018963968, \"str\": \"hello world\", \"array\": [1,2,3], \"map\":{\"foo\":\"bar\"}}");
     yarray_insert_range(arr, txn, 0, &input, 1);
     YOutput *output = yarray_get(arr, txn, 0);
     REQUIRE_EQ(output->tag, Y_JSON_MAP);
     REQUIRE_EQ(output->len, 5);
     YMapEntry *entries = youtput_read_json_map(output);
     for (int i = 0; i < output->len; i++) {
-        YMapEntry e = entries[i];
-        if (strcmp(e.key, "float") == 0) {
-            REQUIRE_EQ(*youtput_read_float(&e.value), 3.14);
-        } else if (strcmp(e.key, "int") == 0) {
-            REQUIRE_EQ(*youtput_read_long(&e.value), -12);
-        } else if (strcmp(e.key, "str") == 0) {
-            REQUIRE_EQ(strcmp(youtput_read_string(&e.value), "hello world"), 0);
-        } else if (strcmp(e.key, "array") == 0) {
-            YOutput *array = youtput_read_json_array(&e.value);
-            REQUIRE_EQ(*youtput_read_long(&array[0]), 1);
-            REQUIRE_EQ(*youtput_read_long(&array[1]), 2);
-            REQUIRE_EQ(*youtput_read_long(&array[2]), 3);
-        } else if (strcmp(e.key, "map") == 0) {
-            YMapEntry *map = youtput_read_json_map(&e.value);
+        YMapEntry *e = &entries[i];
+        if (strcmp(e->key, "float") == 0) {
+            REQUIRE_EQ(e->value->tag, Y_JSON_NUM);
+            REQUIRE_EQ(*youtput_read_float(e->value), 3.14);
+        } else if (strcmp(e->key, "int") == 0) {
+            REQUIRE_EQ(e->value->tag, Y_JSON_INT);
+            REQUIRE_EQ(*youtput_read_long(e->value), -36028797018963968);
+        } else if (strcmp(e->key, "str") == 0) {
+            REQUIRE_EQ(e->value->tag, Y_JSON_STR);
+            REQUIRE_EQ(strcmp(youtput_read_string(e->value), "hello world"), 0);
+        } else if (strcmp(e->key, "array") == 0) {
+            REQUIRE_EQ(e->value->tag, Y_JSON_ARR);
+            REQUIRE_EQ(e->value->len, 3);
+            YOutput *array = youtput_read_json_array(e->value);
+            //NOTE: keep in mind that yrs deserializes numbers to float64 by default. This includes values with
+            //  no fractional numbers up to 53-bit. This is required for Yjs/JavaScript compatibility.
+            REQUIRE_EQ(*youtput_read_float(&array[0]), 1);
+            REQUIRE_EQ(*youtput_read_float(&array[1]), 2);
+            REQUIRE_EQ(*youtput_read_float(&array[2]), 3);
+        } else if (strcmp(e->key, "map") == 0) {
+            REQUIRE_EQ(e->value->tag, Y_JSON_MAP);
+            YMapEntry *map = youtput_read_json_map(e->value);
             REQUIRE_EQ(strcmp(map->key, "foo"), 0);
-            REQUIRE_EQ(strcmp(youtput_read_string(&map->value), "bar"), 0);
+            char *str = youtput_read_string(map->value);
+            REQUIRE_EQ(strcmp(str, "bar"), 0);
         } else {
             FAIL("unrecognized key");
         }

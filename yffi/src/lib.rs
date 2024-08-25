@@ -210,12 +210,13 @@ pub struct YMapEntry {
     pub key: *const c_char,
     /// A `YOutput` value representing containing variadic content that can be stored withing map's
     /// entry.
-    pub value: YOutput,
+    pub value: *const YOutput,
 }
 
 impl YMapEntry {
-    fn new(key: &str, value: YOutput) -> Self {
+    fn new(key: &str, value: Box<YOutput>) -> Self {
         let key = CString::new(key).unwrap().into_raw();
+        let value = Box::into_raw(value) as *const YOutput;
         YMapEntry { key, value }
     }
 }
@@ -224,7 +225,7 @@ impl Drop for YMapEntry {
     fn drop(&mut self) {
         unsafe {
             drop(CString::from_raw(self.key as *mut c_char));
-            //self.value.drop();
+            drop(Box::from_raw(self.value as *mut YOutput));
         }
     }
 }
@@ -1583,7 +1584,7 @@ pub unsafe extern "C" fn ymap_iter_next(iter: *mut MapIter) -> *mut YMapEntry {
     let iter = iter.as_mut().unwrap();
     if let Some((key, value)) = iter.0.next() {
         let output = YOutput::from(value);
-        Box::into_raw(Box::new(YMapEntry::new(key, output)))
+        Box::into_raw(Box::new(YMapEntry::new(key, Box::new(output))))
     } else {
         std::ptr::null_mut()
     }
@@ -2472,7 +2473,7 @@ impl From<Diff<YChange>> for YChunk {
             let mut fmt = Vec::with_capacity(attrs.len());
             for (k, v) in attrs.into_iter() {
                 let output = YOutput::from(&v); //TODO: test if we don't drop memory here
-                let e = YMapEntry::new(k.as_ref(), output);
+                let e = YMapEntry::new(k.as_ref(), Box::new(output));
                 fmt.push(e);
             }
             Box::into_raw(fmt.into_boxed_slice()) as *mut _
@@ -2800,12 +2801,9 @@ impl std::fmt::Display for YOutput {
                 write!(f, "{{")?;
                 let slice = std::slice::from_raw_parts(self.value.map, self.len as usize);
                 for e in slice {
-                    write!(
-                        f,
-                        ", '{}' => {}",
-                        CStr::from_ptr(e.key).to_str().unwrap(),
-                        e.value
-                    )?;
+                    let key = CStr::from_ptr(e.key).to_str().unwrap();
+                    let value = e.value.as_ref().unwrap();
+                    write!(f, ", '{}' => {}", key, value)?;
                 }
                 write!(f, "}}")
             } else if tag == Y_TEXT {
@@ -2952,7 +2950,7 @@ impl<'a> From<&'a HashMap<String, Any>> for YOutput {
         let len = value.len() as u32;
         let mut array = Vec::with_capacity(len as usize);
         for (k, v) in value.iter() {
-            let entry = YMapEntry::new(k.as_str(), YOutput::from(v));
+            let entry = YMapEntry::new(k.as_str(), Box::new(YOutput::from(v)));
             array.push(entry);
         }
         let ptr = array.as_mut_ptr();
