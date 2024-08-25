@@ -666,6 +666,52 @@ typedef struct YInput {
 } YInput;
 
 /**
+ * A data type representing a single change to be performed in sequence of changes defined
+ * as parameter to a `ytext_insert_delta` function. A type of change can be detected using
+ * a `tag` field:
+ *
+ * 1. `Y_EVENT_CHANGE_ADD` marks a new characters added to a collection. In this case `insert`
+ * field contains a pointer to a list of newly inserted values, while `len` field informs about
+ * their count. Additionally `attributes_len` nad `attributes` carry information about optional
+ * formatting attributes applied to edited blocks.
+ * 2. `Y_EVENT_CHANGE_DELETE` marks an existing elements removed from the collection. In this case
+ * `len` field informs about number of removed elements.
+ * 3. `Y_EVENT_CHANGE_RETAIN` marks a number of characters that have not been changed, counted from
+ * the previous element. `len` field informs about number of retained elements. Additionally
+ * `attributes_len` nad `attributes` carry information about optional formatting attributes applied
+ * to edited blocks.
+ */
+typedef struct YDeltaIn {
+  /**
+   * Tag field used to identify particular type of change made:
+   *
+   * 1. `Y_EVENT_CHANGE_ADD` marks a new elements added to a collection. In this case `values`
+   * field contains a pointer to a list of newly inserted values, while `len` field informs about
+   * their count.
+   * 2. `Y_EVENT_CHANGE_DELETE` marks an existing elements removed from the collection. In this
+   * case `len` field informs about number of removed elements.
+   * 3. `Y_EVENT_CHANGE_RETAIN` marks a number of elements that have not been changed, counted
+   * from the previous element. `len` field informs about number of retained elements.
+   */
+  uint8_t tag;
+  /**
+   * Number of element affected by current type of change. It can refer to a number of
+   * inserted `values`, number of deleted element or a number of retained (unchanged) values.
+   */
+  uint32_t len;
+  /**
+   * A nullable pointer to a list of formatting attributes assigned to an edited area represented
+   * by this delta.
+   */
+  const struct YInput *attributes;
+  /**
+   * Used in case when current change is of `Y_EVENT_CHANGE_ADD` type. Contains a list (of
+   * length stored in `len` field) of newly inserted values.
+   */
+  const struct YInput *insert;
+} YDeltaIn;
+
+/**
  * A chunk of text contents formatted with the same set of attributes.
  */
 typedef struct YChunk {
@@ -838,7 +884,7 @@ typedef struct YDeltaAttr {
  * change structs separated by retained changes (marking eg. number of elements that can be safely
  * skipped, since they remained unchanged).
  */
-typedef struct YDelta {
+typedef struct YDeltaOut {
   /**
    * Tag field used to identify particular type of change made:
    *
@@ -850,17 +896,12 @@ typedef struct YDelta {
    * 3. `Y_EVENT_CHANGE_RETAIN` marks a number of elements that have not been changed, counted
    * from the previous element. `len` field informs about number of retained elements.
    */
-  char tag;
+  uint8_t tag;
   /**
-   * Number of element affected by current type of a change. It can refer to a number of
+   * Number of element affected by current type of change. It can refer to a number of
    * inserted `values`, number of deleted element or a number of retained (unchanged) values.
    */
   uint32_t len;
-  /**
-   * Used in case when current change is of `Y_EVENT_CHANGE_ADD` type. Contains a list (of
-   * length stored in `len` field) of newly inserted values.
-   */
-  struct YOutput *insert;
   /**
    * A number of formatting attributes assigned to an edited area represented by this delta.
    */
@@ -870,7 +911,12 @@ typedef struct YDelta {
    * by this delta.
    */
   struct YDeltaAttr *attributes;
-} YDelta;
+  /**
+   * Used in case when current change is of `Y_EVENT_CHANGE_ADD` type. Contains a list (of
+   * length stored in `len` field) of newly inserted values.
+   */
+  struct YOutput *insert;
+} YDeltaOut;
 
 /**
  * A data type representing a single change detected over an observed shared collection. A type
@@ -901,7 +947,7 @@ typedef struct YEventChange {
    * 3. `Y_EVENT_CHANGE_RETAIN` marks a number of elements that have not been changed, counted
    * from the previous element. `len` field informs about number of retained elements.
    */
-  char tag;
+  uint8_t tag;
   /**
    * Number of element affected by current type of a change. It can refer to a number of
    * inserted `values`, number of deleted element or a number of retained (unchanged) values.
@@ -1473,6 +1519,49 @@ void ytext_insert_embed(const Branch *txt,
                         uint32_t index,
                         const struct YInput *content,
                         const struct YInput *attrs);
+
+/**
+ * Performs a series of changes over the given `YText` shared ref type, described by the `delta`
+ * parameter:
+ *
+ * - Deltas constructed with `ydelta_input_retain` will move cursor position by the given number
+ *   of elements. If formatting attributes were defined, all elements skipped over this way will be
+ *   wrapped by given formatting attributes.
+ * - Deltas constructed with `ydelta_input_delete` will tell cursor to remove a corresponding
+ *   number of elements.
+ * - Deltas constructed with `ydelta_input_insert` will tell cursor to insert given elements into
+ *   current cursor position. While these elements can be of any type (used for embedding ie.
+ *   shared types or binary payload like images), for the text insertion a `yinput_string`
+ *   is expected. If formatting attributes were specified, inserted elements will be wrapped by
+ *   given formatting attributes.
+ */
+void ytext_insert_delta(const Branch *txt,
+                        YTransaction *txn,
+                        struct YDeltaIn *delta,
+                        uint32_t delta_len);
+
+/**
+ * Creates a parameter for `ytext_insert_delta` function. This parameter will move cursor position
+ * by the `len` of elements. If formatting `attrs` were defined, all elements skipped over this
+ * way will be wrapped by given formatting attributes.
+ */
+struct YDeltaIn ydelta_input_retain(uint32_t len, const struct YInput *attrs);
+
+/**
+ * Creates a parameter for `ytext_insert_delta` function. This parameter will tell cursor to remove
+ * a corresponding number of elements, starting from current cursor position.
+ */
+struct YDeltaIn ydelta_input_delete(uint32_t len);
+
+/**
+ * Creates a parameter for `ytext_insert_delta` function. This parameter will tell cursor to insert
+ * given elements into current cursor position. While these elements can be of any type (used for
+ * embedding ie. shared types or binary payload like images), for the text insertion a `yinput_string`
+ * is expected. If formatting attributes were specified, inserted elements will be wrapped by
+ * given formatting attributes.
+ */
+struct YDeltaIn ydelta_input_insert(const struct YInput *data,
+                                    const struct YInput *attrs);
 
 /**
  * Removes a range of characters, starting a a given `index`. This range must fit within the bounds
@@ -2339,7 +2428,7 @@ void ypath_destroy(struct YPathSegment *path, uint32_t len);
  * Delta returned from this function should eventually be released using `yevent_delta_destroy`
  * function.
  */
-struct YDelta *ytext_event_delta(const struct YTextEvent *e, uint32_t *len);
+struct YDeltaOut *ytext_event_delta(const struct YTextEvent *e, uint32_t *len);
 
 /**
  * Returns a sequence of changes produced by sequence component of shared collections (such as
@@ -2349,7 +2438,7 @@ struct YDelta *ytext_event_delta(const struct YTextEvent *e, uint32_t *len);
  * Delta returned from this function should eventually be released using `yevent_delta_destroy`
  * function.
  */
-struct YDelta *yxmltext_event_delta(const struct YXmlTextEvent *e, uint32_t *len);
+struct YDeltaOut *yxmltext_event_delta(const struct YXmlTextEvent *e, uint32_t *len);
 
 /**
  * Returns a sequence of changes produced by sequence component of shared collections (such as
@@ -2374,7 +2463,7 @@ struct YEventChange *yxmlelem_event_delta(const struct YXmlEvent *e, uint32_t *l
 /**
  * Releases memory allocated by the object returned from `yevent_delta` function.
  */
-void ytext_delta_destroy(struct YDelta *delta, uint32_t len);
+void ytext_delta_destroy(struct YDeltaOut *delta, uint32_t len);
 
 /**
  * Releases memory allocated by the object returned from `yevent_delta` function.
