@@ -17,7 +17,7 @@ use yrs::types::weak::{LinkSource, Unquote as NativeUnquote, WeakEvent, WeakRef}
 use yrs::types::xml::{Attributes as NativeAttributes, XmlOut};
 use yrs::types::xml::{TreeWalker as NativeTreeWalker, XmlFragment};
 use yrs::types::xml::{XmlEvent, XmlTextEvent};
-use yrs::types::{Attrs, Change, Delta, EntryChange, Event, PathSegment, TypeRef};
+use yrs::types::{Attrs, Change, Delta, EntryChange, Event, PathSegment, ToJson, TypeRef};
 use yrs::undo::EventKind;
 use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
@@ -27,6 +27,10 @@ use yrs::{
     SubdocsEvent, SubdocsEventIter, Text, TextRef, Transact, TransactionCleanupEvent, Update, Xml,
     XmlElementPrelim, XmlElementRef, XmlFragmentRef, XmlTextPrelim, XmlTextRef, ID,
 };
+
+/// Flag used by `YInput` to pass JSON string for an object that should be deserialized and
+/// stored internally as fully fledged scalar type.
+pub const Y_JSON: i8 = -9;
 
 /// Flag used by `YInput` and `YOutput` to tag boolean values.
 pub const Y_JSON_BOOL: i8 = -8;
@@ -206,12 +210,13 @@ pub struct YMapEntry {
     pub key: *const c_char,
     /// A `YOutput` value representing containing variadic content that can be stored withing map's
     /// entry.
-    pub value: YOutput,
+    pub value: *const YOutput,
 }
 
 impl YMapEntry {
-    fn new(key: &str, value: YOutput) -> Self {
+    fn new(key: &str, value: Box<YOutput>) -> Self {
         let key = CString::new(key).unwrap().into_raw();
+        let value = Box::into_raw(value) as *const YOutput;
         YMapEntry { key, value }
     }
 }
@@ -220,7 +225,7 @@ impl Drop for YMapEntry {
     fn drop(&mut self) {
         unsafe {
             drop(CString::from_raw(self.key as *mut c_char));
-            //self.value.drop();
+            drop(Box::from_raw(self.value as *mut YOutput));
         }
     }
 }
@@ -1348,7 +1353,7 @@ pub unsafe extern "C" fn yarray_len(array: *const Branch) -> u32 {
 }
 
 /// Returns a pointer to a `YOutput` value stored at a given `index` of a current `YArray`.
-/// If `index` is outside of the bounds of an array, a null pointer will be returned.
+/// If `index` is outside the bounds of an array, a null pointer will be returned.
 ///
 /// A value returned should be eventually released using [youtput_destroy] function.
 #[no_mangle]
@@ -1364,6 +1369,39 @@ pub unsafe extern "C" fn yarray_get(
 
     if let Some(val) = array.get(txn, index as u32) {
         Box::into_raw(Box::new(YOutput::from(val)))
+    } else {
+        std::ptr::null_mut()
+    }
+}
+
+/// Returns a UTF-8 encoded, NULL-terminated JSON string representing a value stored in a current
+/// YArray under a given index.
+///
+/// This method will return `NULL` pointer if value was outside the bound of an array or couldn't be
+/// serialized into JSON string.
+///
+/// This method will also try to serialize complex types that don't have native JSON representation
+/// like YMap, YArray, YText etc. in such cases their contents will be materialized into JSON values.
+///
+/// A string returned should be eventually released using [ystring_destroy] function.
+#[no_mangle]
+pub unsafe extern "C" fn yarray_get_json(
+    array: *const Branch,
+    txn: *const Transaction,
+    index: u32,
+) -> *mut c_char {
+    assert!(!array.is_null());
+
+    let array = ArrayRef::from_raw_branch(array);
+    let txn = txn.as_ref().unwrap();
+
+    if let Some(val) = array.get(txn, index as u32) {
+        let any = val.to_json(txn);
+        let json = match serde_json::to_string(&any) {
+            Ok(json) => json,
+            Err(_) => return std::ptr::null_mut(),
+        };
+        CString::new(json).unwrap().into_raw()
     } else {
         std::ptr::null_mut()
     }
@@ -1546,7 +1584,7 @@ pub unsafe extern "C" fn ymap_iter_next(iter: *mut MapIter) -> *mut YMapEntry {
     let iter = iter.as_mut().unwrap();
     if let Some((key, value)) = iter.0.next() {
         let output = YOutput::from(value);
-        Box::into_raw(Box::new(YMapEntry::new(key, output)))
+        Box::into_raw(Box::new(YMapEntry::new(key, Box::new(output))))
     } else {
         std::ptr::null_mut()
     }
@@ -1645,7 +1683,42 @@ pub unsafe extern "C" fn ymap_get(
     let map = MapRef::from_raw_branch(map);
 
     if let Some(value) = map.get(txn, key) {
-        Box::into_raw(Box::new(YOutput::from(value)))
+        let output = YOutput::from(value);
+        Box::into_raw(Box::new(output))
+    } else {
+        std::ptr::null_mut()
+    }
+}
+
+/// Returns a value stored under the provided `key` as UTF-8 encoded, NULL-terminated JSON string.
+/// Once not needed that string should be deallocated using `ystring_destroy`.
+///
+/// This method will return `NULL` pointer if value was not found or value couldn't be serialized
+/// into JSON string.
+///
+/// This method will also try to serialize complex types that don't have native JSON representation
+/// like YMap, YArray, YText etc. in such cases their contents will be materialized into JSON values.
+#[no_mangle]
+pub unsafe extern "C" fn ymap_get_json(
+    map: *const Branch,
+    txn: *const Transaction,
+    key: *const c_char,
+) -> *mut c_char {
+    assert!(!map.is_null());
+    assert!(!key.is_null());
+    assert!(!txn.is_null());
+
+    let txn = txn.as_ref().unwrap();
+    let key = CStr::from_ptr(key).to_str().unwrap();
+
+    let map = MapRef::from_raw_branch(map);
+
+    if let Some(value) = map.get(txn, key) {
+        let any = value.to_json(txn);
+        match serde_json::to_string(&any) {
+            Ok(json) => CString::new(json).unwrap().into_raw(),
+            Err(_) => std::ptr::null_mut(),
+        }
     } else {
         std::ptr::null_mut()
     }
@@ -2400,7 +2473,7 @@ impl From<Diff<YChange>> for YChunk {
             let mut fmt = Vec::with_capacity(attrs.len());
             for (k, v) in attrs.into_iter() {
                 let output = YOutput::from(&v); //TODO: test if we don't drop memory here
-                let e = YMapEntry::new(k.as_ref(), output);
+                let e = YMapEntry::new(k.as_ref(), Box::new(output));
                 fmt.push(e);
             }
             Box::into_raw(fmt.into_boxed_slice()) as *mut _
@@ -2431,6 +2504,7 @@ impl Drop for YChunk {
 pub struct YInput {
     /// Tag describing, which `value` type is being stored by this input cell. Can be one of:
     ///
+    /// - [Y_JSON] for a UTF-8 encoded, NULL-terminated JSON string.
     /// - [Y_JSON_BOOL] for boolean flags.
     /// - [Y_JSON_NUM] for 64-bit floating point numbers.
     /// - [Y_JSON_INT] for 64-bit signed integers.
@@ -2464,53 +2538,54 @@ impl YInput {
     fn into(self) -> Any {
         let tag = self.tag;
         unsafe {
-            if tag == Y_JSON_STR {
-                let str = CStr::from_ptr(self.value.str).to_str().unwrap().into();
-                Any::String(str)
-            } else if tag == Y_JSON_ARR {
-                let ptr = self.value.values;
-                let mut dst: Vec<Any> = Vec::with_capacity(self.len as usize);
-                let mut i = 0;
-                while i < self.len as isize {
-                    let value = ptr.offset(i).read();
-                    let any = value.into();
-                    dst.push(any);
-                    i += 1;
+            match tag {
+                Y_JSON_STR => {
+                    let str = CStr::from_ptr(self.value.str).to_str().unwrap().into();
+                    Any::String(str)
                 }
-                Any::from(dst)
-            } else if tag == Y_JSON_MAP {
-                let mut dst = HashMap::with_capacity(self.len as usize);
-                let keys = self.value.map.keys;
-                let values = self.value.map.values;
-                let mut i = 0;
-                while i < self.len as isize {
-                    let key = CStr::from_ptr(keys.offset(i).read())
-                        .to_str()
-                        .unwrap()
-                        .to_owned();
-                    let value = values.offset(i).read().into();
-                    dst.insert(key, value);
-                    i += 1;
+                Y_JSON => {
+                    let json_str = CStr::from_ptr(self.value.str).to_str().unwrap();
+                    serde_json::from_str(json_str).unwrap()
                 }
-                Any::from(dst)
-            } else if tag == Y_JSON_NULL {
-                Any::Null
-            } else if tag == Y_JSON_UNDEF {
-                Any::Undefined
-            } else if tag == Y_JSON_INT {
-                Any::BigInt(self.value.integer as i64)
-            } else if tag == Y_JSON_NUM {
-                Any::Number(self.value.num as f64)
-            } else if tag == Y_JSON_BOOL {
-                Any::Bool(if self.value.flag == 0 { false } else { true })
-            } else if tag == Y_JSON_BUF {
-                let slice =
-                    std::slice::from_raw_parts(self.value.buf as *mut u8, self.len as usize);
-                Any::from(slice)
-            } else if tag == Y_DOC {
-                Any::Undefined
-            } else {
-                panic!("Unrecognized YVal value tag.")
+                Y_JSON_NULL => Any::Null,
+                Y_JSON_UNDEF => Any::Undefined,
+                Y_JSON_INT => Any::BigInt(self.value.integer),
+                Y_JSON_NUM => Any::Number(self.value.num),
+                Y_JSON_BOOL => Any::Bool(if self.value.flag == 0 { false } else { true }),
+                Y_JSON_BUF => Any::from(std::slice::from_raw_parts(
+                    self.value.buf as *mut u8,
+                    self.len as usize,
+                )),
+                Y_JSON_ARR => {
+                    let ptr = self.value.values;
+                    let mut dst: Vec<Any> = Vec::with_capacity(self.len as usize);
+                    let mut i = 0;
+                    while i < self.len as isize {
+                        let value = ptr.offset(i).read();
+                        let any = value.into();
+                        dst.push(any);
+                        i += 1;
+                    }
+                    Any::from(dst)
+                }
+                Y_JSON_MAP => {
+                    let mut dst = HashMap::with_capacity(self.len as usize);
+                    let keys = self.value.map.keys;
+                    let values = self.value.map.values;
+                    let mut i = 0;
+                    while i < self.len as isize {
+                        let key = CStr::from_ptr(keys.offset(i).read())
+                            .to_str()
+                            .unwrap()
+                            .to_owned();
+                        let value = values.offset(i).read().into();
+                        dst.insert(key, value);
+                        i += 1;
+                    }
+                    Any::from(dst)
+                }
+                Y_DOC => Any::Undefined,
+                other => panic!("Cannot convert input - unknown tag: {}", other),
             }
         }
     }
@@ -2726,12 +2801,9 @@ impl std::fmt::Display for YOutput {
                 write!(f, "{{")?;
                 let slice = std::slice::from_raw_parts(self.value.map, self.len as usize);
                 for e in slice {
-                    write!(
-                        f,
-                        ", '{}' => {}",
-                        CStr::from_ptr(e.key).to_str().unwrap(),
-                        e.value
-                    )?;
+                    let key = CStr::from_ptr(e.key).to_str().unwrap();
+                    let value = e.value.as_ref().unwrap();
+                    write!(f, ", '{}' => {}", key, value)?;
                 }
                 write!(f, "}}")
             } else if tag == Y_TEXT {
@@ -2860,7 +2932,8 @@ impl<'a> From<&'a [Any]> for YOutput {
         let len = values.len() as u32;
         let mut array = Vec::with_capacity(values.len());
         for v in values.iter() {
-            array.push(YOutput::from(v));
+            let output = YOutput::from(v);
+            array.push(output);
         }
         let ptr = array.as_mut_ptr();
         forget(array);
@@ -2877,7 +2950,7 @@ impl<'a> From<&'a HashMap<String, Any>> for YOutput {
         let len = value.len() as u32;
         let mut array = Vec::with_capacity(len as usize);
         for (k, v) in value.iter() {
-            let entry = YMapEntry::new(k.as_str(), YOutput::from(v));
+            let entry = YMapEntry::new(k.as_str(), Box::new(YOutput::from(v)));
             array.push(entry);
         }
         let ptr = array.as_mut_ptr();
@@ -3119,6 +3192,22 @@ pub unsafe extern "C" fn yinput_long(integer: i64) -> YInput {
 pub unsafe extern "C" fn yinput_string(str: *const c_char) -> YInput {
     YInput {
         tag: Y_JSON_STR,
+        len: 1,
+        value: YInputContent {
+            str: str as *mut c_char,
+        },
+    }
+}
+
+/// Function constructor used to create aa `YInput` cell representing any JSON-like object.
+/// Provided parameter must be a null-terminated UTF-8 encoded JSON string.
+///
+/// This function doesn't allocate any heap resources and doesn't release any on its own, therefore
+/// its up to a caller to free resources once a structure is no longer needed.
+#[no_mangle]
+pub unsafe extern "C" fn yinput_json(str: *const c_char) -> YInput {
+    YInput {
+        tag: Y_JSON,
         len: 1,
         value: YInputContent {
             str: str as *mut c_char,
@@ -5454,5 +5543,41 @@ pub unsafe extern "C" fn ybranch_alive(branch: *mut Branch) -> u8 {
         } else {
             Y_TRUE
         }
+    }
+}
+
+/// Returns a UTF-8 encoded, NULL-terminated JSON string representation of the current branch
+/// contents. Once no longer needed, this string must be explicitly deallocated by user using
+/// `ystring_destroy`.
+///
+/// If branch type couldn't be resolved (which usually happens for root-level types that were not
+/// initialized locally) or doesn't have JSON representation a NULL pointer can be returned.
+#[no_mangle]
+pub unsafe extern "C" fn ybranch_json(branch: *mut Branch, txn: *mut Transaction) -> *mut c_char {
+    if branch.is_null() {
+        std::ptr::null_mut()
+    } else {
+        let txn = txn.as_ref().unwrap();
+        let branch_ref = BranchPtr::from_raw_branch(branch);
+        let any = match branch_ref.type_ref() {
+            TypeRef::Array => ArrayRef::from_raw_branch(branch).to_json(txn),
+            TypeRef::Map => MapRef::from_raw_branch(branch).to_json(txn),
+            TypeRef::Text => TextRef::from_raw_branch(branch).get_string(txn).into(),
+            TypeRef::XmlElement(_) => XmlElementRef::from_raw_branch(branch)
+                .get_string(txn)
+                .into(),
+            TypeRef::XmlFragment => XmlFragmentRef::from_raw_branch(branch)
+                .get_string(txn)
+                .into(),
+            TypeRef::XmlText => XmlTextRef::from_raw_branch(branch).get_string(txn).into(),
+            TypeRef::SubDoc | TypeRef::XmlHook | TypeRef::WeakLink(_) | TypeRef::Undefined => {
+                return std::ptr::null_mut()
+            }
+        };
+        let json = match serde_json::to_string(&any) {
+            Ok(json) => json,
+            Err(_) => return std::ptr::null_mut(),
+        };
+        CString::new(json).unwrap().into_raw()
     }
 }

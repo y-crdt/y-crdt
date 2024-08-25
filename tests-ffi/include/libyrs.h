@@ -96,6 +96,12 @@ typedef struct YSubscription {} YSubscription;
 #include <stdlib.h>
 
 /**
+ * Flag used by `YInput` to pass JSON string for an object that should be deserialized and
+ * stored internally as fully fledged scalar type.
+ */
+#define Y_JSON -9
+
+/**
  * Flag used by `YInput` and `YOutput` to tag boolean values.
  */
 #define Y_JSON_BOOL -8
@@ -451,7 +457,7 @@ typedef struct YMapEntry {
    * A `YOutput` value representing containing variadic content that can be stored withing map's
    * entry.
    */
-  struct YOutput value;
+  const struct YOutput *value;
 } YMapEntry;
 
 /**
@@ -626,6 +632,7 @@ typedef struct YInput {
   /**
    * Tag describing, which `value` type is being stored by this input cell. Can be one of:
    *
+   * - [Y_JSON] for a UTF-8 encoded, NULL-terminated JSON string.
    * - [Y_JSON_BOOL] for boolean flags.
    * - [Y_JSON_NUM] for 64-bit floating point numbers.
    * - [Y_JSON_INT] for 64-bit signed integers.
@@ -1486,11 +1493,25 @@ uint32_t yarray_len(const Branch *array);
 
 /**
  * Returns a pointer to a `YOutput` value stored at a given `index` of a current `YArray`.
- * If `index` is outside of the bounds of an array, a null pointer will be returned.
+ * If `index` is outside the bounds of an array, a null pointer will be returned.
  *
  * A value returned should be eventually released using [youtput_destroy] function.
  */
 struct YOutput *yarray_get(const Branch *array, const YTransaction *txn, uint32_t index);
+
+/**
+ * Returns a UTF-8 encoded, NULL-terminated JSON string representing a value stored in a current
+ * YArray under a given index.
+ *
+ * This method will return `NULL` pointer if value was outside the bound of an array or couldn't be
+ * serialized into JSON string.
+ *
+ * This method will also try to serialize complex types that don't have native JSON representation
+ * like YMap, YArray, YText etc. in such cases their contents will be materialized into JSON values.
+ *
+ * A string returned should be eventually released using [ystring_destroy] function.
+ */
+char *yarray_get_json(const Branch *array, const YTransaction *txn, uint32_t index);
 
 /**
  * Inserts a range of `items` into current `YArray`, starting at given `index`. An `items_len`
@@ -1596,6 +1617,18 @@ uint8_t ymap_remove(const Branch *map, YTransaction *txn, const char *key);
  * A `key` must be a null-terminated UTF-8 encoded string.
  */
 struct YOutput *ymap_get(const Branch *map, const YTransaction *txn, const char *key);
+
+/**
+ * Returns a value stored under the provided `key` as UTF-8 encoded, NULL-terminated JSON string.
+ * Once not needed that string should be deallocated using `ystring_destroy`.
+ *
+ * This method will return `NULL` pointer if value was not found or value couldn't be serialized
+ * into JSON string.
+ *
+ * This method will also try to serialize complex types that don't have native JSON representation
+ * like YMap, YArray, YText etc. in such cases their contents will be materialized into JSON values.
+ */
+char *ymap_get_json(const Branch *map, const YTransaction *txn, const char *key);
 
 /**
  * Removes all entries from a current `map`.
@@ -1936,6 +1969,15 @@ struct YInput yinput_long(int64_t integer);
  * a structure is no longer needed.
  */
 struct YInput yinput_string(const char *str);
+
+/**
+ * Function constructor used to create aa `YInput` cell representing any JSON-like object.
+ * Provided parameter must be a null-terminated UTF-8 encoded JSON string.
+ *
+ * This function doesn't allocate any heap resources and doesn't release any on its own, therefore
+ * its up to a caller to free resources once a structure is no longer needed.
+ */
+struct YInput yinput_json(const char *str);
 
 /**
  * Function constructor used to create a binary `YInput` cell of a specified length.
@@ -2519,5 +2561,15 @@ Branch *ybranch_get(const struct YBranchId *branch_id, YTransaction *txn);
  * execute any functions using it.
  */
 uint8_t ybranch_alive(Branch *branch);
+
+/**
+ * Returns a UTF-8 encoded, NULL-terminated JSON string representation of the current branch
+ * contents. Once no longer needed, this string must be explicitly deallocated by user using
+ * `ystring_destroy`.
+ *
+ * If branch type couldn't be resolved (which usually happens for root-level types that were not
+ * initialized locally) or doesn't have JSON representation a NULL pointer can be returned.
+ */
+char *ybranch_json(Branch *branch, YTransaction *txn);
 
 #endif
