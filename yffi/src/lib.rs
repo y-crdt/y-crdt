@@ -1682,7 +1682,8 @@ pub unsafe extern "C" fn ymap_get(
     let map = MapRef::from_raw_branch(map);
 
     if let Some(value) = map.get(txn, key) {
-        Box::into_raw(Box::new(YOutput::from(value)))
+        let output = YOutput::from(value);
+        Box::into_raw(Box::new(output))
     } else {
         std::ptr::null_mut()
     }
@@ -2933,7 +2934,8 @@ impl<'a> From<&'a [Any]> for YOutput {
         let len = values.len() as u32;
         let mut array = Vec::with_capacity(values.len());
         for v in values.iter() {
-            array.push(YOutput::from(v));
+            let output = YOutput::from(v);
+            array.push(output);
         }
         let ptr = array.as_mut_ptr();
         forget(array);

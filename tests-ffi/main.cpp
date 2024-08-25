@@ -2202,11 +2202,98 @@ TEST_CASE("YInput types: JSON map") {
         } else if (strcmp(e->key, "k2") == 0) {
             REQUIRE_EQ(e->value.tag, Y_JSON_STR);
             char *str = youtput_read_string(&e->value);
-            printf("value: `%s`\n", str);
             REQUIRE_EQ(strcmp(str, "test_string"), 0);
         } else if (strcmp(e->key, "k3") == 0) {
             REQUIRE_EQ(e->value.tag, Y_JSON_INT);
             REQUIRE_EQ(*youtput_read_long(&e->value), 123);
+        } else {
+            FAIL("unrecognized key");
+        }
+    }
+
+    youtput_destroy(output);
+    ytransaction_commit(txn);
+    ydoc_destroy(doc);
+}
+
+TEST_CASE("YMap JSON input") {
+    YDoc *doc = ydoc_new_with_id(1);
+    Branch *map = ymap(doc, "map");
+    YTransaction *txn = ydoc_write_transaction(doc, 0, NULL);
+
+    // insert JSON type directly
+    YInput input = yinput_json(
+        "{\"float\": 3.14, \"int\": -12, \"str\": \"hello world\", \"array\": [1,2,3], \"map\":{\"foo\":\"bar\"}}");
+    ymap_insert(map, txn, "key-json", &input);
+    YOutput *output = ymap_get(map, txn, "key-json");
+    REQUIRE_EQ(output->tag, Y_JSON_MAP);
+    REQUIRE_EQ(output->len, 5);
+    YMapEntry *entries = youtput_read_json_map(output);
+    for (int i = 0; i < output->len; i++) {
+        YMapEntry *e = &entries[i];
+        if (strcmp(e->key, "float") == 0) {
+            REQUIRE_EQ(e->value.tag, Y_JSON_NUM);
+            REQUIRE_EQ(*youtput_read_float(&e->value), 3.14);
+        } else if (strcmp(e->key, "int") == 0) {
+            REQUIRE_EQ(e->value.tag, Y_JSON_INT);
+            REQUIRE_EQ(*youtput_read_long(&e->value), -12);
+        } else if (strcmp(e->key, "str") == 0) {
+            REQUIRE_EQ(e->value.tag, Y_JSON_STR);
+            REQUIRE_EQ(strcmp(youtput_read_string(&e->value), "hello world"), 0);
+        } else if (strcmp(e->key, "array") == 0) {
+            REQUIRE_EQ(e->value.tag, Y_JSON_ARR);
+            YOutput *array = youtput_read_json_array(&e->value);
+            REQUIRE_EQ(array->len, 3);
+            REQUIRE_EQ(*youtput_read_long(&array[0]), 1);
+            REQUIRE_EQ(*youtput_read_long(&array[1]), 2);
+            REQUIRE_EQ(*youtput_read_long(&array[2]), 3);
+        } else if (strcmp(e->key, "map") == 0) {
+            REQUIRE_EQ(e->value.tag, Y_JSON_MAP);
+            YMapEntry *map = youtput_read_json_map(&e->value);
+            REQUIRE_EQ(strcmp(map->key, "foo"), 0);
+            char *str = youtput_read_string(&map->value);
+            REQUIRE_EQ(strcmp(str, "bar"), 0);
+        } else {
+            FAIL("unrecognized key");
+        }
+    }
+
+    youtput_destroy(output);
+    ytransaction_commit(txn);
+    ydoc_destroy(doc);
+}
+
+
+TEST_CASE("YArray JSON input") {
+    YDoc *doc = ydoc_new_with_id(1);
+    Branch *arr = yarray(doc, "array");
+    YTransaction *txn = ydoc_write_transaction(doc, 0, NULL);
+
+    // insert JSON type directly
+    YInput input = yinput_json(
+        "{\"float\": 3.14, \"int\": -12, \"str\": \"hello world\", \"array\": [1,2,3], \"map\":{\"foo\":\"bar\"}}");
+    yarray_insert_range(arr, txn, 0, &input, 1);
+    YOutput *output = yarray_get(arr, txn, 0);
+    REQUIRE_EQ(output->tag, Y_JSON_MAP);
+    REQUIRE_EQ(output->len, 5);
+    YMapEntry *entries = youtput_read_json_map(output);
+    for (int i = 0; i < output->len; i++) {
+        YMapEntry e = entries[i];
+        if (strcmp(e.key, "float") == 0) {
+            REQUIRE_EQ(*youtput_read_float(&e.value), 3.14);
+        } else if (strcmp(e.key, "int") == 0) {
+            REQUIRE_EQ(*youtput_read_long(&e.value), -12);
+        } else if (strcmp(e.key, "str") == 0) {
+            REQUIRE_EQ(strcmp(youtput_read_string(&e.value), "hello world"), 0);
+        } else if (strcmp(e.key, "array") == 0) {
+            YOutput *array = youtput_read_json_array(&e.value);
+            REQUIRE_EQ(*youtput_read_long(&array[0]), 1);
+            REQUIRE_EQ(*youtput_read_long(&array[1]), 2);
+            REQUIRE_EQ(*youtput_read_long(&array[2]), 3);
+        } else if (strcmp(e.key, "map") == 0) {
+            YMapEntry *map = youtput_read_json_map(&e.value);
+            REQUIRE_EQ(strcmp(map->key, "foo"), 0);
+            REQUIRE_EQ(strcmp(youtput_read_string(&map->value), "bar"), 0);
         } else {
             FAIL("unrecognized key");
         }
