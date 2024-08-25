@@ -394,7 +394,7 @@ TEST_CASE("YXmlElement basic") {
 
 typedef struct YTextEventTest {
     uint32_t delta_len;
-    YDelta *delta;
+    YDeltaOut *delta;
     Branch *target;
 } YEventTest;
 
@@ -477,6 +477,42 @@ TEST_CASE("YText observe") {
     ydoc_destroy(doc);
 }
 
+
+TEST_CASE("YText insert delta") {
+    YDoc *doc = ydoc_new_with_id(1);
+    Branch *f = yxmlfragment(doc, "frag");
+    YTransaction *txn = ydoc_write_transaction(doc, 0, NULL);
+    Branch *txt = yxmlelem_insert_text(f, txn, 0);
+
+    // initial text state
+    ytext_insert(txt, txn, 0, "halo world", NULL);
+
+    // construct delta
+    char *bold_str = "bold";
+    YInput bold = yinput_bool(Y_TRUE);
+    const YInput attrs = yinput_json_map(&bold_str, &bold, 1);
+
+    YDeltaIn i0 = ydelta_input_retain(1, NULL);
+    YDeltaIn i1 = ydelta_input_delete(1);
+    const YInput typo_fix = yinput_string("el");
+    YDeltaIn i2 = ydelta_input_insert(&typo_fix, NULL);
+    YDeltaIn i3 = ydelta_input_retain(3, NULL);
+    YDeltaIn i4 = ydelta_input_retain(5, &attrs);
+    YDeltaIn delta[5] = {i0, i1, i2, i3, i4};
+
+    ytext_insert_delta(txt, txn, delta, 5);
+    ytransaction_commit(txn);
+
+    txn = ydoc_read_transaction(doc);
+    char *str = yxmltext_string(txt, txn);
+
+    REQUIRE(strcmp(str, "hello <bold>world</bold>") == 0);
+
+    ystring_destroy(str);
+    ytransaction_commit(txn);
+    ydoc_destroy(doc);
+}
+
 TEST_CASE("YText insert embed") {
     YDoc *doc = ydoc_new_with_id(1);
     Branch *txt = ytext(doc, "test");
@@ -503,7 +539,7 @@ TEST_CASE("YText insert embed") {
 
     REQUIRE(t->delta_len == 3);
 
-    YDelta d = t->delta[0];
+    YDeltaOut d = t->delta[0];
     REQUIRE(d.tag == Y_EVENT_CHANGE_ADD);
     REQUIRE(d.insert->len == 1);
     REQUIRE(strcmp(youtput_read_string(d.insert), "a") == 0);
@@ -804,7 +840,7 @@ TEST_CASE("YMap observe") {
 typedef struct YXmlTextEventTest {
     uint32_t delta_len;
     uint32_t keys_len;
-    YDelta *delta;
+    YDeltaOut *delta;
     Branch *target;
     YEventKeyChange *keys;
 } YXmlTextEventTest;
