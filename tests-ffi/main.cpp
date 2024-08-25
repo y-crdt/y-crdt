@@ -2314,3 +2314,28 @@ TEST_CASE("YArray JSON input") {
     ytransaction_commit(txn);
     ydoc_destroy(doc);
 }
+
+TEST_CASE("JSON output") {
+    YDoc *doc = ydoc_new_with_id(1);
+    Branch *arr = yarray(doc, "array");
+    YTransaction *txn = ydoc_write_transaction(doc, 0, NULL);
+
+    // init doc -> 'array' = [{'key':'value'}]
+    char key[] = "key";
+    char *keyskeys[] = {key};
+    YInput value = yinput_string("value");
+    YInput in0 = yinput_ymap(keyskeys, &value, 1);
+    YInput in1 = yinput_float(3.14);
+    YInput in2 = yinput_long(100);
+    YInput in3 = yinput_string("hello");
+    YInput in4 = yinput_null();
+    YInput in5 = yinput_bool(Y_TRUE);
+    YInput in[6] = {in0, in1, in2, in3, in4, in5};
+    yarray_insert_range(arr, txn, 0, in, 6);
+
+    char *json = ybranch_json(arr, txn);
+    REQUIRE(strcmp(json, "[{\"key\":\"value\"},3.14,100,\"hello\",null,true]") == 0);
+
+    ytransaction_commit(txn);
+    ydoc_destroy(doc);
+}
