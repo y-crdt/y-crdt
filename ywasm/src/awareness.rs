@@ -16,19 +16,6 @@ pub struct Awareness {
     inner: YAwareness,
 }
 
-impl Awareness {
-    fn inner_mut(&self) -> &mut YAwareness {
-        // since awareness is often captured in a closure invoked by the &mut awareness action
-        // we would run into recursive borrow_mut issues if we didn't use unsafe here
-        // we want keep behavior similar to Yjs
-        unsafe {
-            (&self.inner as *const YAwareness as *mut YAwareness)
-                .as_mut()
-                .unwrap()
-        }
-    }
-}
-
 #[wasm_bindgen]
 impl Awareness {
     #[wasm_bindgen(constructor)]
@@ -63,7 +50,7 @@ impl Awareness {
 
     #[wasm_bindgen(js_name = destroy)]
     pub fn destroy(&self) {
-        self.inner_mut().clean_local_state();
+        self.inner.clean_local_state();
     }
 
     #[wasm_bindgen(js_name = getLocalState)]
@@ -76,12 +63,11 @@ impl Awareness {
 
     #[wasm_bindgen(js_name = setLocalState)]
     pub fn set_local_state(&self, state: JsValue) -> crate::Result<()> {
-        let inner = self.inner_mut();
         if state.is_null() {
-            inner.clean_local_state();
+            self.inner.clean_local_state();
         } else {
             let json = js_sys::JSON::stringify(&state)?.as_string().unwrap();
-            inner.set_local_state_raw(json);
+            self.inner.set_local_state_raw(json);
         }
         Ok(())
     }
@@ -143,9 +129,8 @@ impl Awareness {
 
 #[wasm_bindgen(js_name = removeAwarenessStates)]
 pub fn remove_states(awareness: &Awareness, clients: Vec<u64>) -> crate::Result<()> {
-    let inner = awareness.inner_mut();
     for client_id in clients {
-        inner.remove_state(client_id);
+        awareness.inner.remove_state(client_id);
     }
     Ok(())
 }
@@ -187,7 +172,7 @@ pub fn apply_update(
     let update = AwarenessUpdate::decode_v1(&update.to_vec())
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
     awareness
-        .inner_mut()
+        .inner
         .apply_update(update)
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
     Ok(())
