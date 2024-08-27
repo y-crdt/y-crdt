@@ -33,8 +33,10 @@ use crate::{DeleteSet, Doc, Observer, Transact, TransactionAcqError, Transaction
 ///    item finished.
 /// - [UndoManager::observe_item_popped], which is fired whenever [StackItem] is being from undo
 ///    manager as a result of calling either [UndoManager::undo] or [UndoManager::redo] method.
-#[repr(transparent)]
-pub struct UndoManager<M>(Arc<Inner<M>>);
+pub struct UndoManager<M> {
+    state: Arc<Inner<M>>,
+    doc: Doc,
+}
 
 #[cfg(feature = "sync")]
 type UndoFn<M> = Box<dyn Fn(&TransactionMut, &mut Event<M>) + Send + Sync + 'static>;
@@ -53,7 +55,6 @@ pub trait Meta: Default {}
 impl<M> Meta for M where M: Default {}
 
 struct Inner<M> {
-    doc: Doc,
     scope: HashSet<BranchPtr>,
     options: Options,
     undo_stack: UndoStack<M>,
@@ -83,12 +84,7 @@ where
 
     #[inline]
     pub fn doc(&self) -> &Doc {
-        &self.0.doc
-    }
-
-    #[inline]
-    fn inner(&mut self) -> &mut Inner<M> {
-        Arc::get_mut(&mut self.0).unwrap()
+        &self.doc
     }
 
     /// Creates a new instance of the [UndoManager] working in a context of a given document, but
@@ -97,7 +93,6 @@ where
     /// at the same time.
     pub fn with_options(doc: &Doc, options: Options) -> Self {
         let mut inner = Arc::new(Inner {
-            doc: doc.clone(),
             scope: HashSet::new(),
             options,
             undo_stack: UndoStack::default(),
@@ -129,7 +124,10 @@ where
         })
         .unwrap();
 
-        UndoManager(inner)
+        UndoManager {
+            state: inner,
+            doc: doc.clone(),
+        }
     }
 
     /// Creates a new instance of the [UndoManager] working in a `scope` of a particular shared
@@ -263,7 +261,7 @@ where
     where
         F: Fn(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
     {
-        self.0.observer_added.subscribe(Box::new(f))
+        self.state.observer_added.subscribe(Box::new(f))
     }
 
     /// Registers a callback function to be called every time a new [StackItem] is created. This
@@ -277,7 +275,7 @@ where
     where
         F: Fn(&TransactionMut, &mut Event<M>) + 'static,
     {
-        self.0.observer_added.subscribe(Box::new(f))
+        self.state.observer_added.subscribe(Box::new(f))
     }
 
     /// Registers a callback function to be called every time a new [StackItem] is created. This
@@ -293,7 +291,7 @@ where
         K: Into<Origin>,
         F: Fn(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
     {
-        self.0
+        self.state
             .observer_added
             .subscribe_with(key.into(), Box::new(f))
     }
@@ -311,7 +309,7 @@ where
         K: Into<Origin>,
         F: Fn(&TransactionMut, &mut Event<M>) + 'static,
     {
-        self.0
+        self.state
             .observer_added
             .subscribe_with(key.into(), Box::new(f))
     }
@@ -320,7 +318,7 @@ where
     where
         K: Into<Origin>,
     {
-        self.0.observer_added.unsubscribe(&key.into())
+        self.state.observer_added.unsubscribe(&key.into())
     }
 
     /// Registers a callback function to be called every time an existing [StackItem] has been
@@ -333,7 +331,7 @@ where
     where
         F: Fn(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
     {
-        self.0.observer_updated.subscribe(Box::new(f))
+        self.state.observer_updated.subscribe(Box::new(f))
     }
 
     /// Registers a callback function to be called every time an existing [StackItem] has been
@@ -346,7 +344,7 @@ where
     where
         F: Fn(&TransactionMut, &mut Event<M>) + 'static,
     {
-        self.0.observer_updated.subscribe(Box::new(f))
+        self.state.observer_updated.subscribe(Box::new(f))
     }
 
     /// Registers a callback function to be called every time an existing [StackItem] has been
@@ -361,7 +359,7 @@ where
         K: Into<Origin>,
         F: Fn(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
     {
-        self.0
+        self.state
             .observer_updated
             .subscribe_with(key.into(), Box::new(f))
     }
@@ -378,7 +376,7 @@ where
         K: Into<Origin>,
         F: Fn(&TransactionMut, &mut Event<M>) + 'static,
     {
-        self.0
+        self.state
             .observer_updated
             .subscribe_with(key.into(), Box::new(f))
     }
@@ -387,7 +385,7 @@ where
     where
         K: Into<Origin>,
     {
-        self.0.observer_updated.unsubscribe(&key.into())
+        self.state.observer_updated.unsubscribe(&key.into())
     }
 
     /// Registers a callback function to be called every time an existing [StackItem] has been
@@ -399,7 +397,7 @@ where
     where
         F: Fn(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
     {
-        self.0.observer_popped.subscribe(Box::new(f))
+        self.state.observer_popped.subscribe(Box::new(f))
     }
 
     /// Registers a callback function to be called every time an existing [StackItem] has been
@@ -411,7 +409,7 @@ where
     where
         F: Fn(&TransactionMut, &mut Event<M>) + 'static,
     {
-        self.0.observer_popped.subscribe(Box::new(f))
+        self.state.observer_popped.subscribe(Box::new(f))
     }
 
     /// Registers a callback function to be called every time an existing [StackItem] has been
@@ -425,7 +423,7 @@ where
         K: Into<Origin>,
         F: Fn(&TransactionMut, &mut Event<M>) + Send + Sync + 'static,
     {
-        self.0
+        self.state
             .observer_popped
             .subscribe_with(key.into(), Box::new(f))
     }
@@ -441,7 +439,7 @@ where
         K: Into<Origin>,
         F: Fn(&TransactionMut, &mut Event<M>) + 'static,
     {
-        self.0
+        self.state
             .observer_popped
             .subscribe_with(key.into(), Box::new(f))
     }
@@ -450,7 +448,7 @@ where
     where
         K: Into<Origin>,
     {
-        self.0.observer_popped.unsubscribe(&key.into())
+        self.state.observer_popped.unsubscribe(&key.into())
     }
 
     /// Extends a list of shared types tracked by current undo manager by a given `scope`.
@@ -459,7 +457,7 @@ where
         T: AsRef<Branch>,
     {
         let ptr = BranchPtr::from(scope.as_ref());
-        let inner = self.inner();
+        let inner = Arc::get_mut(&mut self.state).unwrap();
         inner.scope.insert(ptr);
     }
 
@@ -470,7 +468,7 @@ where
     where
         O: Into<Origin>,
     {
-        let inner = self.inner();
+        let inner = Arc::get_mut(&mut self.state).unwrap();
         inner.options.tracked_origins.insert(origin.into());
     }
 
@@ -479,26 +477,23 @@ where
     where
         O: Into<Origin>,
     {
-        let inner = self.inner();
+        let inner = Arc::get_mut(&mut self.state).unwrap();
         inner.options.tracked_origins.remove(&origin.into());
     }
 
     /// Clears all [StackItem]s stored within current UndoManager, effectively resetting its state.
-    pub fn clear(&mut self) -> Result<(), TransactionAcqError> {
-        let inner = self.inner();
-        let mut txn = inner.doc.try_transact_mut()?;
+    pub fn clear(&mut self, txn: &mut TransactionMut) {
+        let inner = Arc::get_mut(&mut self.state).unwrap();
 
         let len = inner.undo_stack.len();
         for item in inner.undo_stack.drain(0..len) {
-            Self::clear_item(&inner.scope, &mut txn, item);
+            Self::clear_item(&inner.scope, txn, item);
         }
 
         let len = inner.redo_stack.len();
         for item in inner.redo_stack.drain(0..len) {
-            Self::clear_item(&inner.scope, &mut txn, item);
+            Self::clear_item(&inner.scope, txn, item);
         }
-
-        Ok(())
     }
 
     fn clear_item(scope: &HashSet<BranchPtr>, txn: &mut TransactionMut, stack_item: StackItem<M>) {
@@ -513,7 +508,7 @@ where
     }
 
     pub fn as_origin(&self) -> Origin {
-        let mgr_ptr: *const Inner<M> = &*self.0;
+        let mgr_ptr: *const Inner<M> = &*self.state;
         Origin::from(mgr_ptr as usize)
     }
 
@@ -531,7 +526,7 @@ where
     /// let mut mgr = UndoManager::new(&doc, &txt);
     /// txt.insert(&mut doc.transact_mut(), 0, "a");
     /// txt.insert(&mut doc.transact_mut(), 1, "b");
-    /// mgr.undo().unwrap();
+    /// mgr.undo_blocking();
     /// txt.get_string(&doc.transact()); // => "" (note that 'ab' was removed)
     ///
     /// // with UndoManager::stop
@@ -540,29 +535,29 @@ where
     /// txt.insert(&mut doc.transact_mut(), 0, "a");
     /// mgr.reset();
     /// txt.insert(&mut doc.transact_mut(), 1, "b");
-    /// mgr.undo().unwrap();
+    /// mgr.undo_blocking();
     /// txt.get_string(&doc.transact()); // => "a" (note that only 'b' was removed)
     /// ```
     pub fn reset(&mut self) {
-        let inner = self.inner();
+        let inner = Arc::get_mut(&mut self.state).unwrap();
         inner.last_change = 0;
     }
 
     /// Are there any undo steps available?
     pub fn can_undo(&self) -> bool {
-        !self.0.undo_stack.is_empty()
+        !self.state.undo_stack.is_empty()
     }
 
     /// Returns a list of [StackItem]s stored within current undo manager responsible for performing
     /// potential undo operations.
     pub fn undo_stack(&self) -> &[StackItem<M>] {
-        &self.0.undo_stack.0
+        &self.state.undo_stack.0
     }
 
     /// Returns a list of [StackItem]s stored within current undo manager responsible for performing
     /// potential redo operations.
     pub fn redo_stack(&self) -> &[StackItem<M>] {
-        &self.0.redo_stack.0
+        &self.state.redo_stack.0
     }
 
     /// Undo last action tracked by current undo manager. Actions (a.k.a. [StackItem]s) are groups
@@ -571,15 +566,62 @@ where
     ///
     /// Successful execution returns a boolean value telling if an undo call has performed any changes.
     ///
+    /// # Deadlocks
+    ///
+    /// This method requires exclusive access to underlying document store. This means that
+    /// no other transaction on that same document can be active while calling this method.
+    /// Otherwise, it may cause a deadlock.
+    ///
+    /// See also: [UndoManager::try_undo] and [UndoManager::undo_blocking].
+    pub async fn undo(&mut self) -> bool {
+        let origin = self.as_origin();
+        let inner = Arc::get_mut(&mut self.state).unwrap();
+        let txn = crate::AsyncTransact::transact_mut_with(&self.doc, origin.clone()).await;
+        Self::undo_inner(inner, txn, origin)
+    }
+
+    /// Undo last action tracked by current undo manager. Actions (a.k.a. [StackItem]s) are groups
+    /// of updates performed in a given time range - they also can be separated explicitly by
+    /// calling [UndoManager::reset].
+    ///
+    /// Successful execution returns a boolean value telling if an undo call has performed any changes.
+    ///
+    /// # Deadlocks
+    ///
+    /// This method requires exclusive access to underlying document store. This means that
+    /// no other transaction on that same document can be active while calling this method.
+    /// Otherwise, it may cause a deadlock.
+    ///
+    /// See also: [UndoManager::try_undo] and [UndoManager::undo].
+    pub fn undo_blocking(&mut self) -> bool {
+        let origin = self.as_origin();
+        let inner = Arc::get_mut(&mut self.state).unwrap();
+        let txn = self.doc.transact_mut_with(origin.clone());
+        Self::undo_inner(inner, txn, origin)
+    }
+
+    /// Undo last action tracked by current undo manager. Actions (a.k.a. [StackItem]s) are groups
+    /// of updates performed in a given time range - they also can be separated explicitly by
+    /// calling [UndoManager::reset].
+    ///
+    /// Successful execution returns a boolean value telling if an undo call has performed any changes.
+    ///
+    /// See also: [UndoManager::undo] and [UndoManager::undo_blocking].
+    ///
     /// # Errors
     ///
-    /// This method requires an exclusive access to underlying document store. This means that
+    /// This method requires exclusive access to underlying document store. This means that
     /// no other transaction on that same document can be active while calling this method.
-    /// Otherwise an error will be returned.
-    pub fn undo(&mut self) -> Result<bool, TransactionAcqError> {
+    /// Otherwise, an error will be returned.
+    pub fn try_undo(&mut self) -> Result<bool, TransactionAcqError> {
         let origin = self.as_origin();
-        let inner = self.inner();
-        let mut txn = inner.doc.try_transact_mut_with(origin.clone())?;
+        let inner = Arc::get_mut(&mut self.state).unwrap();
+        let txn = self.doc.try_transact_mut_with(origin.clone())?;
+        let changed = Self::undo_inner(inner, txn, origin);
+        Ok(changed)
+    }
+
+    fn undo_inner(inner: &mut Inner<M>, mut txn: TransactionMut, origin: Origin) -> bool {
         inner.undoing = true;
         let result = Self::pop(
             &mut inner.undo_stack,
@@ -598,12 +640,54 @@ where
             false
         };
         inner.undoing = false;
-        Ok(changed)
+        changed
     }
 
     /// Are there any redo steps available?
     pub fn can_redo(&self) -> bool {
-        !self.0.redo_stack.is_empty()
+        !self.state.redo_stack.is_empty()
+    }
+
+    /// Redo'es last action previously undo'ed by current undo manager. Actions
+    /// (a.k.a. [StackItem]s) are groups of updates performed in a given time range - they also can
+    /// be separated explicitly by calling [UndoManager::reset].
+    ///
+    /// Successful execution returns a boolean value telling if an undo call has performed any changes.
+    ///
+    /// # Deadlocks
+    ///
+    /// This method requires exclusive access to underlying document store. This means that
+    /// no other transaction on that same document can be active while calling this method.
+    /// Otherwise, it may cause a deadlock.
+    ///
+    /// See also: [UndoManager::try_redo] and [UndoManager::redo_blocking].
+    pub async fn redo(&mut self) -> bool {
+        let origin = self.as_origin();
+        let inner = Arc::get_mut(&mut self.state).unwrap();
+        let txn = crate::AsyncTransact::transact_mut_with(&self.doc, origin.clone()).await;
+        let changed = Self::redo_inner(inner, txn, origin);
+        changed
+    }
+
+    /// Redo'es last action previously undo'ed by current undo manager. Actions
+    /// (a.k.a. [StackItem]s) are groups of updates performed in a given time range - they also can
+    /// be separated explicitly by calling [UndoManager::reset].
+    ///
+    /// Successful execution returns a boolean value telling if an undo call has performed any changes.
+    ///
+    /// # Deadlocks
+    ///
+    /// This method requires exclusive access to underlying document store. This means that
+    /// no other transaction on that same document can be active while calling this method.
+    /// Otherwise, it may cause a deadlock.
+    ///
+    /// See also: [UndoManager::try_redo] and [UndoManager::redo_blocking].
+    pub fn redo_blocking(&mut self) -> bool {
+        let origin = self.as_origin();
+        let inner = Arc::get_mut(&mut self.state).unwrap();
+        let txn = self.doc.transact_mut_with(origin.clone());
+        let changed = Self::redo_inner(inner, txn, origin);
+        changed
     }
 
     /// Redo'es last action previously undo'ed by current undo manager. Actions
@@ -614,13 +698,18 @@ where
     ///
     /// # Errors
     ///
-    /// This method requires an exclusive access to underlying document store. This means that
+    /// This method requires exclusive access to underlying document store. This means that
     /// no other transaction on that same document can be active while calling this method.
-    /// Otherwise an error will be returned.
-    pub fn redo(&mut self) -> Result<bool, TransactionAcqError> {
+    /// Otherwise, an error will be returned.
+    pub fn try_redo(&mut self) -> Result<bool, TransactionAcqError> {
         let origin = self.as_origin();
-        let inner = self.inner();
-        let mut txn = inner.doc.try_transact_mut_with(origin.clone())?;
+        let inner = Arc::get_mut(&mut self.state).unwrap();
+        let txn = self.doc.try_transact_mut_with(origin.clone())?;
+        let changed = Self::redo_inner(inner, txn, origin);
+        Ok(changed)
+    }
+
+    fn redo_inner(inner: &mut Inner<M>, mut txn: TransactionMut, origin: Origin) -> bool {
         inner.redoing = true;
         let result = Self::pop(
             &mut inner.redo_stack,
@@ -639,7 +728,7 @@ where
             false
         };
         inner.redoing = false;
-        Ok(changed)
+        changed
     }
 
     fn pop(
@@ -709,13 +798,14 @@ where
 impl<M: std::fmt::Debug> std::fmt::Debug for UndoManager<M> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let mut s = f.debug_struct("UndoManager");
-        s.field("scope", &self.0.scope);
-        s.field("tracked_origins", &self.0.options.tracked_origins);
-        if !self.0.undo_stack.is_empty() {
-            s.field("undo", &self.0.undo_stack);
+        let state = &self.state;
+        s.field("scope", &state.scope);
+        s.field("tracked_origins", &state.options.tracked_origins);
+        if !state.undo_stack.is_empty() {
+            s.field("undo", &state.undo_stack);
         }
-        if !self.0.redo_stack.is_empty() {
-            s.field("redo", &self.0.redo_stack);
+        if !state.redo_stack.is_empty() {
+            s.field("redo", &state.redo_stack);
         }
         s.finish()
     }
@@ -723,10 +813,9 @@ impl<M: std::fmt::Debug> std::fmt::Debug for UndoManager<M> {
 
 impl<M> Drop for UndoManager<M> {
     fn drop(&mut self) {
-        let inner = &self.0;
-        let origin = Origin::from(Arc::as_ptr(&inner) as usize);
-        inner.doc.unobserve_destroy(origin.clone()).unwrap();
-        inner.doc.unobserve_after_transaction(origin).unwrap();
+        let origin = Origin::from(Arc::as_ptr(&self.state) as usize);
+        self.doc.unobserve_destroy(origin.clone()).unwrap();
+        self.doc.unobserve_after_transaction(origin).unwrap();
     }
 }
 
@@ -947,7 +1036,7 @@ mod test {
         // items that are added & deleted in the same transaction won't be undo
         txt1.insert(&mut d1.transact_mut(), 0, "test");
         txt1.remove_range(&mut d1.transact_mut(), 0, 4);
-        mgr.undo().unwrap();
+        mgr.undo_blocking();
         assert_eq!(txt1.get_string(&d1.transact()), "");
 
         // follow redone items
@@ -955,18 +1044,18 @@ mod test {
         mgr.reset();
         txt1.remove_range(&mut d1.transact_mut(), 0, 1);
         mgr.reset();
-        mgr.undo().unwrap();
+        mgr.undo_blocking();
         assert_eq!(txt1.get_string(&d1.transact()), "a");
-        mgr.undo().unwrap();
+        mgr.undo_blocking();
         assert_eq!(txt1.get_string(&d1.transact()), "");
 
         txt1.insert(&mut d1.transact_mut(), 0, "abc");
         txt2.insert(&mut d2.transact_mut(), 0, "xyz");
 
         exchange_updates(&[&d1, &d2]);
-        mgr.undo().unwrap();
+        mgr.undo_blocking();
         assert_eq!(txt1.get_string(&d1.transact()), "xyz");
-        mgr.redo().unwrap();
+        mgr.redo_blocking();
         assert_eq!(txt1.get_string(&d1.transact()), "abcxyz");
 
         exchange_updates(&[&d1, &d2]);
@@ -975,9 +1064,9 @@ mod test {
 
         exchange_updates(&[&d1, &d2]);
 
-        mgr.undo().unwrap();
+        mgr.undo_blocking();
         assert_eq!(txt1.get_string(&d1.transact()), "xyz");
-        mgr.redo().unwrap();
+        mgr.redo_blocking();
         assert_eq!(txt1.get_string(&d1.transact()), "bcxyz");
 
         // test marks
@@ -993,11 +1082,11 @@ mod test {
             ]
         );
 
-        mgr.undo().unwrap();
+        mgr.undo_blocking();
         let diff = txt1.diff(&d1.transact(), YChange::identity);
         assert_eq!(diff, vec![Diff::new("bcxyz".into(), None)]);
 
-        mgr.redo().unwrap();
+        mgr.redo_blocking();
         let diff = txt1.diff(&d1.transact(), YChange::identity);
         assert_eq!(
             diff,
@@ -1019,8 +1108,8 @@ mod test {
         txt.insert(&mut doc.transact_mut(), 2, "3");
         txt.insert(&mut doc.transact_mut(), 3, "3");
 
-        mgr.undo().unwrap();
-        mgr.undo().unwrap();
+        mgr.undo_blocking();
+        mgr.undo_blocking();
 
         txt.insert(&mut doc.transact_mut(), 2, "3");
         assert_eq!(txt.get_string(&doc.transact()), "12321");
@@ -1037,9 +1126,9 @@ mod test {
         map1.insert(&mut d1.transact_mut(), "a", 0);
         let mut mgr = UndoManager::new(&d1, &map1);
         map1.insert(&mut d1.transact_mut(), "a", 1);
-        mgr.undo().unwrap();
+        mgr.undo_blocking();
         assert_eq!(map1.get(&d1.transact(), "a").unwrap(), 0.into());
-        mgr.redo().unwrap();
+        mgr.redo_blocking();
         assert_eq!(map1.get(&d1.transact(), "a").unwrap(), 1.into());
 
         // testing sub-types and if it can restore a whole type
@@ -1049,9 +1138,9 @@ mod test {
         let expected = Any::from_json(r#"{ "a": { "x": 42 } }"#).unwrap();
         assert_eq!(actual, expected);
 
-        mgr.undo().unwrap();
+        mgr.undo_blocking();
         assert_eq!(map1.get(&d1.transact(), "a").unwrap(), 1.into());
-        mgr.redo().unwrap();
+        mgr.redo_blocking();
         let actual = map1.to_json(&d1.transact());
         let expected = Any::from_json(r#"{ "a": { "x": 42 } }"#).unwrap();
         assert_eq!(actual, expected);
@@ -1064,9 +1153,9 @@ mod test {
         exchange_updates(&[&d1, &d2]);
         exchange_updates(&[&d1, &d2]);
 
-        mgr.undo().unwrap();
+        mgr.undo_blocking();
         assert_eq!(map1.get(&d1.transact(), "a").unwrap(), 44.into());
-        mgr.redo().unwrap();
+        mgr.redo_blocking();
         assert_eq!(map1.get(&d1.transact(), "a").unwrap(), 44.into());
 
         // test setting value multiple times
@@ -1075,7 +1164,7 @@ mod test {
         map1.insert(&mut d1.transact_mut(), "b", "val1");
         map1.insert(&mut d1.transact_mut(), "b", "val2");
         mgr.reset();
-        mgr.undo().unwrap();
+        mgr.undo_blocking();
         assert_eq!(map1.get(&d1.transact(), "b").unwrap(), "initial".into());
     }
 
@@ -1097,9 +1186,9 @@ mod test {
             array1.to_json(&d1.transact()),
             vec![1, 2, 3, 4, 5, 6].into()
         );
-        mgr.undo().unwrap();
+        mgr.undo_blocking();
         assert_eq!(array1.to_json(&d1.transact()), vec![4, 5, 6].into());
-        mgr.redo().unwrap();
+        mgr.redo_blocking();
         assert_eq!(
             array1.to_json(&d1.transact()),
             vec![1, 2, 3, 4, 5, 6].into()
@@ -1111,9 +1200,9 @@ mod test {
 
         exchange_updates(&[&d1, &d2]);
 
-        mgr.undo().unwrap();
+        mgr.undo_blocking();
         assert_eq!(array1.to_json(&d1.transact()), vec![4, 5, 6].into());
-        mgr.redo().unwrap();
+        mgr.redo_blocking();
         assert_eq!(array1.to_json(&d1.transact()), vec![2, 3, 4, 5, 6].into());
         array1.remove_range(&mut d1.transact_mut(), 0, 5);
 
@@ -1128,20 +1217,20 @@ mod test {
         let expected = Any::from_json(r#"[{"a":1}]"#).unwrap();
         assert_eq!(actual, expected);
 
-        mgr.undo().unwrap();
+        mgr.undo_blocking();
         let actual = array1.to_json(&d1.transact());
         let expected = Any::from_json(r#"[{}]"#).unwrap();
         assert_eq!(actual, expected);
 
-        mgr.undo().unwrap();
+        mgr.undo_blocking();
         assert_eq!(array1.to_json(&d1.transact()), vec![2, 3, 4, 5, 6].into());
 
-        mgr.redo().unwrap();
+        mgr.redo_blocking();
         let actual = array1.to_json(&d1.transact());
         let expected = Any::from_json(r#"[{}]"#).unwrap();
         assert_eq!(actual, expected);
 
-        mgr.redo().unwrap();
+        mgr.redo_blocking();
         let actual = array1.to_json(&d1.transact());
         let expected = Any::from_json(r#"[{"a":1}]"#).unwrap();
         assert_eq!(actual, expected);
@@ -1160,20 +1249,20 @@ mod test {
         let expected = Any::from_json(r#"[{"a":1,"b":2}]"#).unwrap();
         assert_eq!(actual, expected);
 
-        mgr.undo().unwrap();
+        mgr.undo_blocking();
         let actual = array1.to_json(&d1.transact());
         let expected = Any::from_json(r#"[{"b":2}]"#).unwrap();
         assert_eq!(actual, expected);
 
-        mgr.undo().unwrap();
+        mgr.undo_blocking();
         assert_eq!(array1.to_json(&d1.transact()), vec![2, 3, 4, 5, 6].into());
 
-        mgr.redo().unwrap();
+        mgr.redo_blocking();
         let actual = array1.to_json(&d1.transact());
         let expected = Any::from_json(r#"[{"b":2}]"#).unwrap();
         assert_eq!(actual, expected);
 
-        mgr.redo().unwrap();
+        mgr.redo_blocking();
         let actual = array1.to_json(&d1.transact());
         let expected = Any::from_json(r#"[{"a":1,"b":2}]"#).unwrap();
         assert_eq!(actual, expected);
@@ -1209,19 +1298,19 @@ mod test {
             xml1.get_string(&d1.transact()),
             "<undefined><p>con<bold>tent</bold></p></undefined>"
         );
-        mgr.undo().unwrap();
+        mgr.undo_blocking();
         assert_eq!(
             xml1.get_string(&d1.transact()),
             "<undefined><p>content</p></undefined>"
         );
-        mgr.redo().unwrap();
+        mgr.redo_blocking();
         assert_eq!(
             xml1.get_string(&d1.transact()),
             "<undefined><p>con<bold>tent</bold></p></undefined>"
         );
         xml1.remove_range(&mut d1.transact_mut(), 0, 1);
         assert_eq!(xml1.get_string(&d1.transact()), "<undefined></undefined>");
-        mgr.undo().unwrap();
+        mgr.undo_blocking();
         assert_eq!(
             xml1.get_string(&d1.transact()),
             "<undefined><p>con<bold>tent</bold></p></undefined>"
@@ -1258,9 +1347,9 @@ mod test {
         });
 
         txt.insert(&mut doc.transact_mut(), 0, "abc");
-        mgr.undo().unwrap();
+        mgr.undo_blocking();
         assert_eq!(result.load(Ordering::SeqCst), 1);
-        mgr.redo().unwrap();
+        mgr.redo_blocking();
         assert_eq!(result.load(Ordering::SeqCst), 2);
     }
 
@@ -1310,10 +1399,10 @@ mod test {
         arr2.remove_range(&mut d2.transact_mut_with(d2.client_id()), 0, 1);
 
         exchange_updates(&[&d1, &d2]);
-        mgr2.undo().unwrap();
+        mgr2.undo_blocking();
 
         exchange_updates(&[&d1, &d2]);
-        mgr1.undo().unwrap();
+        mgr1.undo_blocking();
         exchange_updates(&[&d1, &d2]);
 
         assert_eq!(map1b.get(&d1.transact(), "key"), Some("value".into()));
@@ -1368,32 +1457,32 @@ mod test {
             design.to_json(&doc.transact()),
             Any::from_json(r#"{ "text": { "blocks": { "text": "Something else" } } }"#).unwrap()
         );
-        mgr.undo().unwrap();
+        mgr.undo_blocking();
         assert_eq!(
             design.to_json(&doc.transact()),
             Any::from_json(r#"{ "text": { "blocks": { "text": "Something" } } }"#).unwrap()
         );
-        mgr.undo().unwrap();
+        mgr.undo_blocking();
         assert_eq!(
             design.to_json(&doc.transact()),
             Any::from_json(r#"{ "text": { "blocks": { "text": "Type something" } } }"#).unwrap()
         );
-        mgr.undo().unwrap();
+        mgr.undo_blocking();
         assert_eq!(
             design.to_json(&doc.transact()),
             Any::from_json(r#"{}"#).unwrap()
         );
-        mgr.redo().unwrap();
+        mgr.redo_blocking();
         assert_eq!(
             design.to_json(&doc.transact()),
             Any::from_json(r#"{ "text": { "blocks": { "text": "Type something" } } }"#).unwrap()
         );
-        mgr.redo().unwrap();
+        mgr.redo_blocking();
         assert_eq!(
             design.to_json(&doc.transact()),
             Any::from_json(r#"{ "text": { "blocks": { "text": "Something" } } }"#).unwrap()
         );
-        mgr.redo().unwrap();
+        mgr.redo_blocking();
         assert_eq!(
             design.to_json(&doc.transact()),
             Any::from_json(r#"{ "text": { "blocks": { "text": "Something else" } } }"#).unwrap()
@@ -1434,22 +1523,22 @@ mod test {
         let actual = point.to_json(&doc.transact());
         assert_eq!(actual, Any::from_json(r#"{"x":300,"y":300}"#).unwrap());
 
-        mgr.undo().unwrap(); // x=200, y=200
+        mgr.undo_blocking(); // x=200, y=200
         let actual = point.to_json(&doc.transact());
         assert_eq!(actual, Any::from_json(r#"{"x":200,"y":200}"#).unwrap());
 
-        mgr.undo().unwrap(); // x=100, y=100
+        mgr.undo_blocking(); // x=100, y=100
         let actual = point.to_json(&doc.transact());
         assert_eq!(actual, Any::from_json(r#"{"x":100,"y":100}"#).unwrap());
 
-        mgr.undo().unwrap(); // x=0, y=0
+        mgr.undo_blocking(); // x=0, y=0
         let actual = point.to_json(&doc.transact());
         assert_eq!(actual, Any::from_json(r#"{"x":0,"y":0}"#).unwrap());
 
-        mgr.undo().unwrap(); // null
+        mgr.undo_blocking(); // null
         assert_eq!(root.get(&doc.transact(), "a"), None);
 
-        mgr.redo().unwrap(); // x=0, y=0
+        mgr.redo_blocking(); // x=0, y=0
         let point = root
             .get(&doc.transact(), "a")
             .unwrap()
@@ -1458,15 +1547,15 @@ mod test {
 
         assert_eq!(actual, Any::from_json(r#"{"x":0,"y":0}"#).unwrap());
 
-        mgr.redo().unwrap(); // x=100, y=100
+        mgr.redo_blocking(); // x=100, y=100
         let actual = point.to_json(&doc.transact());
         assert_eq!(actual, Any::from_json(r#"{"x":100,"y":100}"#).unwrap());
 
-        mgr.redo().unwrap(); // x=200, y=200
+        mgr.redo_blocking(); // x=200, y=200
         let actual = point.to_json(&doc.transact());
         assert_eq!(actual, Any::from_json(r#"{"x":200,"y":200}"#).unwrap());
 
-        mgr.redo().unwrap(); // x=300, y=300
+        mgr.redo_blocking(); // x=300, y=300
         let actual = point.to_json(&doc.transact());
         assert_eq!(actual, Any::from_json(r#"{"x":300,"y":300}"#).unwrap());
     }
@@ -1507,13 +1596,13 @@ mod test {
             e.insert_attribute(&mut txn, "b", "50");
         }
 
-        mgr.undo().unwrap();
-        mgr.undo().unwrap();
-        mgr.undo().unwrap();
+        mgr.undo_blocking();
+        mgr.undo_blocking();
+        mgr.undo_blocking();
 
-        mgr.redo().unwrap();
-        mgr.redo().unwrap();
-        mgr.redo().unwrap();
+        mgr.redo_blocking();
+        mgr.redo_blocking();
+        mgr.redo_blocking();
 
         let str = f.get_string(&doc.transact());
         assert!(
@@ -1573,14 +1662,14 @@ mod test {
             );
         }
         // {"text":{"blocks":{"text":"4"}}}
-        mgr.undo().unwrap(); // {"text":{"blocks":{"3"}}}
-        mgr.undo().unwrap(); // {"text":{"blocks":{"text":"2"}}}
-        mgr.undo().unwrap(); // {"text":{"blocks":{"text":"1"}}}
-        mgr.undo().unwrap(); // {}
-        mgr.redo().unwrap(); // {"text":{"blocks":{"text":"1"}}}
-        mgr.redo().unwrap(); // {"text":{"blocks":{"text":"2"}}}
-        mgr.redo().unwrap(); // {"text":{"blocks":{"text":"3"}}}
-        mgr.redo().unwrap(); // {"text":{}}
+        mgr.undo_blocking(); // {"text":{"blocks":{"3"}}}
+        mgr.undo_blocking(); // {"text":{"blocks":{"text":"2"}}}
+        mgr.undo_blocking(); // {"text":{"blocks":{"text":"1"}}}
+        mgr.undo_blocking(); // {}
+        mgr.redo_blocking(); // {"text":{"blocks":{"text":"1"}}}
+        mgr.redo_blocking(); // {"text":{"blocks":{"text":"2"}}}
+        mgr.redo_blocking(); // {"text":{"blocks":{"text":"3"}}}
+        mgr.redo_blocking(); // {"text":{}}
         let actual = design.to_json(&doc.transact());
         assert_eq!(
             actual,
@@ -1634,7 +1723,7 @@ mod test {
         mgr.reset();
         send(&doc1, &doc2); // D2: 'Attack ships <b>on </b>fire off the shoulder of Orion.'
 
-        mgr.undo().unwrap(); // D1: 'Attack ships <b>on fire</b> off the shoulder of Orion.'
+        mgr.undo_blocking(); // D1: 'Attack ships <b>on fire</b> off the shoulder of Orion.'
         send(&doc1, &doc2); // D2: 'Attack ships <b>on fire</b> off the shoulder of Orion.'
 
         let expected = vec![
@@ -1673,7 +1762,7 @@ mod test {
         }
         assert_eq!(f.get_string(&doc.transact()), "");
 
-        mgr.undo().unwrap();
+        mgr.undo_blocking();
         let s = f.get_string(&doc.transact());
         assert!(s == r#"<test a="1" b="2"></test>"# || s == r#"<test b="2" a="1"></test>"#);
     }
@@ -1706,7 +1795,7 @@ mod test {
         }
         nested.insert(&mut d1.transact_mut(), 0, "other text");
         assert_eq!(nested.get_string(&d1.transact()), "other text".to_string());
-        mgr.undo().unwrap();
+        mgr.undo_blocking();
         assert_eq!(
             nested.get_string(&d1.transact()),
             "initial text".to_string()
@@ -1720,7 +1809,7 @@ mod test {
             "initial text".to_string()
         );
 
-        mgr.undo().unwrap();
+        mgr.undo_blocking();
         assert_eq!(nested.len(&d1.transact()), 0);
     }
 
@@ -1769,29 +1858,29 @@ mod test {
             any!({"s1": {"a": ["a1", "a3", "a4", "a5"], "b": ["b1", "b2"]}})
         );
 
-        mgr.undo().unwrap(); // {"s1": {"a": ["a1", "a3", "a4"], "b": ["b1", "b2"]}}
-        mgr.undo().unwrap(); // {"s1": {"a": ["a1", "a3"], "b": ["b1", "b2"]}}
-        mgr.undo().unwrap(); // {"s1": {"a": ["a1"], "b": ["b1", "b2"]}}
-        mgr.undo().unwrap(); // {"s1": {"a": ["a1"], "b": ["b1"]}}
+        mgr.undo_blocking(); // {"s1": {"a": ["a1", "a3", "a4"], "b": ["b1", "b2"]}}
+        mgr.undo_blocking(); // {"s1": {"a": ["a1", "a3"], "b": ["b1", "b2"]}}
+        mgr.undo_blocking(); // {"s1": {"a": ["a1"], "b": ["b1", "b2"]}}
+        mgr.undo_blocking(); // {"s1": {"a": ["a1"], "b": ["b1"]}}
         let actual = map.to_json(&doc.transact());
         assert_eq!(actual, any!({"s1": {"a": ["a1"], "b": ["b1"]}}));
 
-        mgr.redo().unwrap();
+        mgr.redo_blocking();
         let actual = map.to_json(&doc.transact());
         assert_eq!(actual, any!({"s1": {"b": ["b1", "b2"], "a": ["a1"]}}));
 
-        mgr.redo().unwrap();
+        mgr.redo_blocking();
         let actual = map.to_json(&doc.transact());
         assert_eq!(actual, any!({"s1": {"a": ["a1", "a3"], "b": ["b1", "b2"]}}));
 
-        mgr.redo().unwrap();
+        mgr.redo_blocking();
         let actual = map.to_json(&doc.transact());
         assert_eq!(
             actual,
             any!({"s1": {"a": ["a1", "a3", "a4"], "b": ["b1", "b2"]}})
         );
 
-        mgr.redo().unwrap();
+        mgr.redo_blocking();
         let actual = map.to_json(&doc.transact());
         assert_eq!(
             actual,
@@ -1828,12 +1917,12 @@ mod test {
         let actual = r.to_json(&d.transact());
         assert_eq!(actual, any!({"s1": {"b1": {"f1": 20}}}));
 
-        mgr.undo().unwrap();
+        mgr.undo_blocking();
         let actual = r.to_json(&d.transact());
         assert_eq!(actual, any!({"s1": {}}));
         assert!(mgr.can_undo(), "should be able to undo");
 
-        mgr.undo().unwrap();
+        mgr.undo_blocking();
         let actual = r.to_json(&d.transact());
         assert_eq!(actual, any!({"s1": {"b1": {"f1": 11}}}));
         assert!(mgr.can_undo(), "should be able to undo to the init state");
@@ -1868,22 +1957,22 @@ mod test {
         el1.insert(&mut doc.transact_mut(), "f2", true); // { s1: { b1: [{ f1: 8, f2: false }, { f1: 13, f2: true }] } }
         mgr.reset();
 
-        mgr.undo().unwrap(); // { s1: { b1: [{ f1: 8, f2: false }, { f1: 13, f2: false }] } }
+        mgr.undo_blocking(); // { s1: { b1: [{ f1: 8, f2: false }, { f1: 13, f2: false }] } }
         assert_eq!(
             r.to_json(&doc.transact()),
             any!({ "s1": { "b1": [{ "f1": 8, "f2": false }, { "f1": 13, "f2": false }] } })
         );
-        mgr.undo().unwrap(); // { s1: { b1: [{ f1: 8, f2: false }, { f1: 13 }] } }
+        mgr.undo_blocking(); // { s1: { b1: [{ f1: 8, f2: false }, { f1: 13 }] } }
         assert_eq!(
             r.to_json(&doc.transact()),
             any!({ "s1": { "b1": [{ "f1": 8, "f2": false }, { "f1": 13 }] } })
         );
-        mgr.undo().unwrap(); // { s1: { b1: [{ f1: 8, f2: true }] } }
+        mgr.undo_blocking(); // { s1: { b1: [{ f1: 8, f2: true }] } }
         assert_eq!(
             r.to_json(&doc.transact()),
             any!({ "s1": { "b1": [{ "f1": 8, "f2": true }] } })
         );
-        assert!(!mgr.undo().unwrap()); // no more changes tracked by undo manager
+        assert!(!mgr.undo_blocking()); // no more changes tracked by undo manager
     }
 
     #[test]
@@ -1904,19 +1993,19 @@ mod test {
         s1.insert(&mut doc.transact_mut(), "f2", "C2"); // { s1: { f1: false, f2: C2 } }
         mgr.reset();
 
-        mgr.undo().unwrap(); // { s1: { f1: false, f2: C1 } }
+        mgr.undo_blocking(); // { s1: { f1: false, f2: C1 } }
         assert_eq!(
             r.to_json(&doc.transact()),
             any!({ "s1": { "f1": false, "f2": "C1" } })
         );
-        mgr.undo().unwrap(); // { s1: { f1: false } }
+        mgr.undo_blocking(); // { s1: { f1: false } }
         assert_eq!(r.to_json(&doc.transact()), any!({ "s1": { "f1": false } }));
-        mgr.undo().unwrap(); // { s1: { f1: false, f2: AAA } }
+        mgr.undo_blocking(); // { s1: { f1: false, f2: AAA } }
         assert_eq!(
             r.to_json(&doc.transact()),
             any!({ "s1": { "f1": false, "f2": "AAA" } })
         );
-        assert!(!mgr.undo().unwrap()); // no more changes tracked by undo manager
+        assert!(!mgr.undo_blocking()); // no more changes tracked by undo manager
     }
 
     #[test]
@@ -1960,13 +2049,13 @@ mod test {
             any!({"s1":{"b1":[{"b2":[[232291652, -6]]}, {"f2":"C1"}]}})
         );
 
-        mgr.undo().unwrap(); // {r:{s1:{b1:[{b2:[[232291652, -5]]}]}}
+        mgr.undo_blocking(); // {r:{s1:{b1:[{b2:[[232291652, -5]]}]}}
         assert_eq!(
             r.to_json(&d.transact()),
             any!({"s1":{"b1":[{"b2":[[232291652, -5]]}]}})
         );
 
-        mgr.undo().unwrap(); // {r:{s1:{b1:[{b2:[[232291652, -30]]}]}}
+        mgr.undo_blocking(); // {r:{s1:{b1:[{b2:[[232291652, -30]]}]}}
         assert_eq!(
             r.to_json(&d.transact()),
             any!({"s1":{"b1":[{"b2":[[232291652, -30]]}]}})
