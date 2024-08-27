@@ -233,3 +233,44 @@ pub enum TransactionAcqError {
     #[error("All references to a parent document containing this structure has been dropped.")]
     DocumentDropped,
 }
+
+#[cfg(test)]
+mod test {
+    use crate::{Doc, GetString, Text, Transact};
+    use rand::random;
+    use std::sync::{Arc, Barrier};
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn multi_thread_transact_mut() {
+        let doc = Doc::new();
+        let txt = doc.get_or_insert_text("text");
+
+        const N: usize = 3;
+        let barrier = Arc::new(Barrier::new(N + 1));
+
+        let start = Instant::now();
+        for i in 0..N {
+            let d = doc.clone();
+            let t = txt.clone();
+            let b = barrier.clone();
+            std::thread::spawn(move || {
+                // let mut txn = d.try_transact_mut().unwrap(); // this will hang forever
+                let mut txn = d.transact_mut();
+                let n = random::<u64>() % 5;
+                std::thread::sleep(Duration::from_millis(n * 100));
+                t.insert(&mut txn, 0, "a");
+                drop(txn);
+                b.wait();
+            });
+        }
+
+        barrier.wait();
+        println!("{} threads executed in {:?}", N, Instant::now() - start);
+
+        let expected: String = (0..N).map(|_| 'a').collect();
+        let txn = doc.transact();
+        let str = txt.get_string(&txn);
+        assert_eq!(str, expected);
+    }
+}
