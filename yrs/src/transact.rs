@@ -250,7 +250,7 @@ mod test {
         let barrier = Arc::new(Barrier::new(N + 1));
 
         let start = Instant::now();
-        for i in 0..N {
+        for _ in 0..N {
             let d = doc.clone();
             let t = txt.clone();
             let b = barrier.clone();

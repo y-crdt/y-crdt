@@ -204,7 +204,9 @@ pub fn apply_update(doc: &Doc, update: js_sys::Uint8Array, origin: JsValue) -> R
     let mut txn = txn.map_err(|_| JsValue::from_str(crate::js::errors::ANOTHER_TX))?;
     let diff: Vec<u8> = update.to_vec();
     match Update::decode_v1(&diff) {
-        Ok(update) => Ok(txn.apply_update(update)),
+        Ok(update) => txn
+            .apply_update(update)
+            .map_err(|e| JsValue::from(e.to_string())),
         Err(e) => Err(JsValue::from(e.to_string())),
     }
 }
@@ -237,7 +239,9 @@ pub fn apply_update_v2(doc: &Doc, update: js_sys::Uint8Array, origin: JsValue) -
     let mut txn = txn.map_err(|_| JsValue::from_str(crate::js::errors::ANOTHER_TX))?;
     let diff: Vec<u8> = update.to_vec();
     match Update::decode_v2(&diff) {
-        Ok(update) => Ok(txn.apply_update(update)),
+        Ok(update) => txn
+            .apply_update(update)
+            .map_err(|e| JsValue::from(e.to_string())),
         Err(e) => Err(JsValue::from(e.to_string())),
     }
 }

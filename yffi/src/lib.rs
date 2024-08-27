@@ -8,6 +8,7 @@ use std::sync::Arc;
 use yrs::block::{ClientID, EmbedPrelim, ItemContent, Prelim, Unused};
 use yrs::branch::BranchPtr;
 use yrs::encoding::read::Error;
+use yrs::error::UpdateError;
 use yrs::types::array::ArrayEvent;
 use yrs::types::array::ArrayIter as NativeArrayIter;
 use yrs::types::map::MapEvent;
@@ -1093,8 +1094,10 @@ pub unsafe extern "C" fn ytransaction_apply(
             let txn = txn
                 .as_mut()
                 .expect("provided transaction was not writeable");
-            txn.apply_update(update);
-            0
+            match txn.apply_update(update) {
+                Ok(_) => 0,
+                Err(e) => update_err_code(e),
+            }
         }
         Err(e) => err_code(e),
     }
@@ -1129,8 +1132,10 @@ pub unsafe extern "C" fn ytransaction_apply_v2(
             let txn = txn
                 .as_mut()
                 .expect("provided transaction was not writeable");
-            txn.apply_update(update);
-            0
+            match txn.apply_update(update) {
+                Ok(_) => 0,
+                Err(e) => update_err_code(e),
+            }
         }
         Err(e) => err_code(e),
     }
@@ -1160,8 +1165,11 @@ pub const ERR_NOT_ENOUGH_MEMORY: u8 = 7;
 /// Error code: conversion attempt to specific Rust type was not possible.
 pub const ERR_TYPE_MISMATCH: u8 = 8;
 
-/// Error code: miscallaneous error comming from serde, not covered by other error codes.
+/// Error code: miscellaneous error coming from serde, not covered by other error codes.
 pub const ERR_CUSTOM: u8 = 9;
+
+/// Error code: update block assigned to parent that is not a valid shared ref of deleted block.
+pub const ERR_INVALID_PARENT: u8 = 9;
 
 fn err_code(e: Error) -> u8 {
     match e {
@@ -1172,6 +1180,11 @@ fn err_code(e: Error) -> u8 {
         Error::NotEnoughMemory(_) => ERR_NOT_ENOUGH_MEMORY,
         Error::TypeMismatch(_) => ERR_TYPE_MISMATCH,
         Error::Custom(_) => ERR_CUSTOM,
+    }
+}
+fn update_err_code(e: UpdateError) -> u8 {
+    match e {
+        UpdateError::InvalidParent(_, _) => ERR_INVALID_PARENT,
     }
 }
 

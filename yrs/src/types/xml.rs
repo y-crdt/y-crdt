@@ -1533,7 +1533,8 @@ mod test {
         let mut t2 = d2.transact_mut();
         let xml2 = f.push_back(&mut t2, XmlElementPrelim::empty("div"));
         let u = t1.encode_state_as_update_v1(&StateVector::default());
-        t2.apply_update(Update::decode_v1(u.as_slice()).unwrap());
+        let u = Update::decode_v1(u.as_slice()).unwrap();
+        t2.apply_update(u).unwrap();
         assert_eq!(xml2.get_attribute(&t2, "height"), Some("10".to_string()));
     }
 
@@ -1639,7 +1640,8 @@ mod test {
         let r2 = d2.get_or_insert_xml_fragment("root");
         let mut t2 = d2.transact_mut();
 
-        t2.apply_update(Update::decode_v1(u1.as_slice()).unwrap());
+        let u1 = Update::decode_v1(u1.as_slice()).unwrap();
+        t2.apply_update(u1).unwrap();
         assert_eq!(r2.get_string(&t2), expected);
     }
 
@@ -1788,7 +1790,8 @@ mod test {
             let sv = t2.state_vector();
             let mut encoder = EncoderV1::new();
             t1.encode_diff(&sv, &mut encoder);
-            t2.apply_update(Update::decode_v1(encoder.to_vec().as_slice()).unwrap());
+            let update = Update::decode_v1(encoder.to_vec().as_slice()).unwrap();
+            t2.apply_update(update).unwrap();
         }
         assert_eq!(
             nodes.swap(None),
@@ -1868,7 +1871,7 @@ mod test {
         let txt: &XmlTextRef = txt.as_ref();
         let mut txn = doc.transact_mut();
 
-        txn.apply_update(update);
+        txn.apply_update(update).unwrap();
         assert_eq!(txt.get_string(&txn), "<i>hello </i><b><i>world</i></b>");
 
         let actual = txn.encode_state_as_update_v1(&StateVector::default());
@@ -1888,7 +1891,7 @@ mod test {
         let txt: &XmlTextRef = txt.as_ref();
         let mut txn = doc.transact_mut();
 
-        txn.apply_update(update);
+        txn.apply_update(update).unwrap();
         assert_eq!(txt.get_string(&txn), "<i>hello </i><b><i>world</i></b>");
 
         let actual = txn.encode_state_as_update_v2(&StateVector::default());

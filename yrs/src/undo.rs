@@ -1597,7 +1597,7 @@ mod test {
                     .encode_state_as_update_v1(&StateVector::default()),
             )
             .unwrap();
-            dst.transact_mut().apply_update(update)
+            dst.transact_mut().apply_update(update).unwrap();
         }
 
         let doc1 = Doc::with_client_id(1);

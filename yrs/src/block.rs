@@ -1,6 +1,7 @@
 use crate::branch::{Branch, BranchPtr};
 use crate::doc::{DocAddr, OffsetKind};
 use crate::encoding::read::Error;
+use crate::error::UpdateError;
 use crate::gc::GCCollector;
 use crate::moving::Move;
 use crate::slice::{BlockSlice, GCSlice, ItemSlice};
@@ -1284,7 +1285,7 @@ impl Item {
     /// blocks to be already present in block store - which may not be the case during block
     /// decoding. We decode entire update first, and apply individual blocks second, hence
     /// repair function is called before applying the block rather than on decode.
-    pub(crate) fn repair(&mut self, store: &mut Store) {
+    pub(crate) fn repair(&mut self, store: &mut Store) -> Result<(), UpdateError> {
         if let Some(origin) = self.origin.as_ref() {
             self.left = store
                 .blocks
@@ -1333,13 +1334,20 @@ impl Item {
                             TypePtr::Branch(BranchPtr::from(branch.as_ref()))
                         }
                         ItemContent::Deleted(_) => TypePtr::Unknown,
-                        _ => panic!("Defect: parent points to a block which is not a shared type"),
+                        other => {
+                            return Err(UpdateError::InvalidParent(
+                                id.clone(),
+                                other.get_ref_number(),
+                            ))
+                        }
                     }
                 } else {
                     TypePtr::Unknown
                 }
             }
         };
+
+        Ok(())
     }
 
     /// Returns a length of a block. For most situation it works like [Item::content_len] with a

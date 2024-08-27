@@ -9,6 +9,7 @@ use crate::block::{
     HAS_ORIGIN, HAS_PARENT_SUB, HAS_RIGHT_ORIGIN,
 };
 use crate::encoding::read::Error;
+use crate::error::UpdateError;
 use crate::id_set::DeleteSet;
 use crate::slice::ItemSlice;
 #[cfg(test)]
@@ -169,7 +170,7 @@ impl Update {
     pub(crate) fn integrate(
         mut self,
         txn: &mut TransactionMut,
-    ) -> (Option<PendingUpdate>, Option<Update>) {
+    ) -> Result<(Option<PendingUpdate>, Option<Update>), UpdateError> {
         let remaining_blocks = if self.blocks.is_empty() {
             None
         } else {
@@ -220,7 +221,7 @@ impl Update {
                             let client = id.client;
                             local_sv.set_max(client, id.clock + block.len());
                             if let BlockCarrier::Item(item) = &mut block {
-                                item.repair(store);
+                                item.repair(store)?;
                             }
                             let should_delete = block.integrate(txn, offset);
                             let mut delete_ptr = if should_delete {
@@ -304,7 +305,8 @@ impl Update {
             update.delete_set = ds;
             update
         });
-        return (remaining_blocks, remaining_ds);
+
+        Ok((remaining_blocks, remaining_ds))
     }
 
     fn missing(block: &BlockCarrier, local_sv: &StateVector) -> Option<ClientID> {
@@ -1140,8 +1142,10 @@ mod test {
         let binary1 = t1.encode_update_v1();
         let binary2 = t2.encode_update_v1();
 
-        t1.apply_update(Update::decode_v1(binary2.as_slice()).unwrap());
-        t2.apply_update(Update::decode_v1(binary1.as_slice()).unwrap());
+        t1.apply_update(Update::decode_v1(binary2.as_slice()).unwrap())
+            .unwrap();
+        t2.apply_update(Update::decode_v1(binary1.as_slice()).unwrap())
+            .unwrap();
 
         let u1 = Update::decode(&mut DecoderV1::new(Cursor::new(binary1.as_slice()))).unwrap();
         let u2 = Update::decode(&mut DecoderV1::new(Cursor::new(binary2.as_slice()))).unwrap();
@@ -1153,7 +1157,7 @@ mod test {
         let d3 = Doc::with_client_id(3);
         let txt3 = d3.get_or_insert_text("test");
         let mut t3 = d3.transact_mut();
-        t3.apply_update(u12);
+        t3.apply_update(u12).unwrap();
 
         let str1 = txt1.get_string(&t1);
         let str2 = txt2.get_string(&t2);
@@ -1243,7 +1247,7 @@ mod test {
         {
             let mut txn = doc.transact_mut();
             let u = Update::decode_v2(&before).unwrap();
-            txn.apply_update(u);
+            txn.apply_update(u).unwrap();
             let linknote = prosemirror.get(&txn, 0);
             let actual = linknote.and_then(|xml| match xml {
                 XmlOut::Element(elem) => Some(elem.tag().clone()),
@@ -1254,7 +1258,7 @@ mod test {
         {
             let mut txn = doc.transact_mut();
             let u = Update::decode_v2(&update).unwrap();
-            txn.apply_update(u);
+            txn.apply_update(u).unwrap();
 
             // this should not panic
             let binary = txn.encode_update_v2();
@@ -1289,43 +1293,52 @@ mod test {
 
         let d1 = Doc::with_client_id(1);
         d1.transact_mut()
-            .apply_update(Update::decode_v1(&updates[0]).unwrap());
+            .apply_update(Update::decode_v1(&updates[0]).unwrap())
+            .unwrap();
         let u1 = d1
             .transact()
             .encode_state_as_update_v1(&StateVector::default());
 
         let d2 = Doc::with_client_id(2);
         d2.transact_mut()
-            .apply_update(Update::decode_v1(&u1).unwrap());
+            .apply_update(Update::decode_v1(&u1).unwrap())
+            .unwrap();
         d2.transact_mut()
-            .apply_update(Update::decode_v1(&updates[1]).unwrap());
+            .apply_update(Update::decode_v1(&updates[1]).unwrap())
+            .unwrap();
         let u2 = d2
             .transact()
             .encode_state_as_update_v1(&StateVector::default());
 
         let d3 = Doc::with_client_id(3);
         d3.transact_mut()
-            .apply_update(Update::decode_v1(&u2).unwrap());
+            .apply_update(Update::decode_v1(&u2).unwrap())
+            .unwrap();
         d3.transact_mut()
-            .apply_update(Update::decode_v1(&updates[3]).unwrap());
+            .apply_update(Update::decode_v1(&updates[3]).unwrap())
+            .unwrap();
         let u3 = d3
             .transact()
             .encode_state_as_update_v1(&StateVector::default());
 
         let d4 = Doc::with_client_id(4);
         d4.transact_mut()
-            .apply_update(Update::decode_v1(&u3).unwrap());
+            .apply_update(Update::decode_v1(&u3).unwrap())
+            .unwrap();
         d4.transact_mut()
-            .apply_update(Update::decode_v1(&updates[2]).unwrap());
+            .apply_update(Update::decode_v1(&updates[2]).unwrap())
+            .unwrap();
         let u4 = d4
             .transact()
             .encode_state_as_update_v1(&StateVector::default());
 
         let d5 = Doc::with_client_id(5);
         d5.transact_mut()
-            .apply_update(Update::decode_v1(&u4).unwrap());
+            .apply_update(Update::decode_v1(&u4).unwrap())
+            .unwrap();
         d5.transact_mut()
-            .apply_update(Update::decode_v1(&updates[4]).unwrap());
+            .apply_update(Update::decode_v1(&updates[4]).unwrap())
+            .unwrap();
 
         let txt5 = d5.get_or_insert_text("textBlock");
         let str = txt5.get_string(&d5.transact());

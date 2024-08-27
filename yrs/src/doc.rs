@@ -1074,7 +1074,8 @@ mod test {
         let doc = Doc::new();
         let txt = doc.get_or_insert_text("type");
         let mut txn = doc.transact_mut();
-        txn.apply_update(Update::decode_v1(update).unwrap());
+        txn.apply_update(Update::decode_v1(update).unwrap())
+            .unwrap();
 
         let actual = txt.get_string(&txn);
         assert_eq!(actual, "210".to_owned());
@@ -1101,7 +1102,8 @@ mod test {
         let doc = Doc::new();
         let txt = doc.get_or_insert_text("type");
         let mut txn = doc.transact_mut();
-        txn.apply_update(Update::decode_v2(update).unwrap());
+        txn.apply_update(Update::decode_v2(update).unwrap())
+            .unwrap();
 
         let actual = txt.get_string(&txn);
         assert_eq!(actual, "210".to_owned());
@@ -1154,7 +1156,7 @@ mod test {
 
         // decode an update incoming from A and integrate it at B
         let update = Update::decode_v1(binary.as_slice()).unwrap();
-        let pending = update.integrate(&mut t2);
+        let pending = update.integrate(&mut t2).unwrap();
 
         assert!(pending.0.is_none());
         assert!(pending.1.is_none());
@@ -1182,7 +1184,8 @@ mod test {
             let mut txn2 = doc2.transact_mut();
             let sv = txn2.state_vector().encode_v1();
             let u = txn.encode_diff_v1(&StateVector::decode_v1(sv.as_slice()).unwrap());
-            txn2.apply_update(Update::decode_v1(u.as_slice()).unwrap());
+            txn2.apply_update(Update::decode_v1(u.as_slice()).unwrap())
+                .unwrap();
         }
         assert_eq!(counter.load(Ordering::SeqCst), 3); // update has been propagated
 
@@ -1193,7 +1196,8 @@ mod test {
             let mut txn2 = doc2.transact_mut();
             let sv = txn2.state_vector().encode_v1();
             let u = txn.encode_diff_v1(&StateVector::decode_v1(sv.as_slice()).unwrap());
-            txn2.apply_update(Update::decode_v1(u.as_slice()).unwrap());
+            txn2.apply_update(Update::decode_v1(u.as_slice()).unwrap())
+                .unwrap();
         }
         assert_eq!(counter.load(Ordering::SeqCst), 3); // since subscription has been dropped, update was not propagated
     }
@@ -1246,7 +1250,7 @@ mod test {
         for u in updates {
             let mut txn = doc.transact_mut();
             let u = Update::decode_v1(u.as_slice()).unwrap();
-            txn.apply_update(u);
+            txn.apply_update(u).unwrap();
         }
         assert_eq!(txt.get_string(&doc.transact()), "abcd".to_string());
     }
@@ -1280,7 +1284,7 @@ mod test {
         ];
         for u in updates {
             let u = Update::decode_v1(&u).unwrap();
-            d1.transact_mut().apply_update(u);
+            d1.transact_mut().apply_update(u).unwrap();
         }
 
         assert_eq!("a", source_1.get_string(&d1.transact()));
@@ -1292,7 +1296,7 @@ mod test {
             .transact()
             .encode_state_as_update_v1(&StateVector::decode_v1(&state_2).unwrap());
         let update = Update::decode_v1(&update).unwrap();
-        d2.transact_mut().apply_update(update);
+        d2.transact_mut().apply_update(update).unwrap();
 
         assert_eq!("a", source_2.get_string(&d2.transact()));
 
@@ -1301,7 +1305,7 @@ mod test {
             56, 4, 1, 120, 0,
         ])
         .unwrap();
-        d1.transact_mut().apply_update(update);
+        d1.transact_mut().apply_update(update).unwrap();
         assert_eq!("ab", source_1.get_string(&d1.transact()));
 
         let d3 = Doc::new();
@@ -1310,7 +1314,7 @@ mod test {
         let state_3 = StateVector::decode_v1(&state_3).unwrap();
         let update = d1.transact().encode_state_as_update_v1(&state_3);
         let update = Update::decode_v1(&update).unwrap();
-        d3.transact_mut().apply_update(update);
+        d3.transact_mut().apply_update(update).unwrap();
 
         assert_eq!("ab", source_3.get_string(&d3.transact()));
     }
@@ -1383,14 +1387,16 @@ mod test {
         let d2 = Doc::with_client_id(2);
         let txt2 = d2.get_or_insert_text("text");
         d2.transact_mut()
-            .apply_update(Update::decode_v1(&u).unwrap());
+            .apply_update(Update::decode_v1(&u).unwrap())
+            .unwrap();
 
         txt1.insert(&mut d1.transact_mut(), 5, "world");
         let u = d1
             .transact()
             .encode_state_as_update_v1(&StateVector::default());
         d2.transact_mut()
-            .apply_update(Update::decode_v1(&u).unwrap());
+            .apply_update(Update::decode_v1(&u).unwrap())
+            .unwrap();
 
         assert_eq!(
             txt1.get_string(&d1.transact()),
@@ -1474,7 +1480,7 @@ mod test {
             141, 223, 163, 226, 10, 1, 0, 1,
         ];
         let update = Update::decode_v2(bin).unwrap();
-        doc.transact_mut().apply_update(update);
+        doc.transact_mut().apply_update(update).unwrap();
 
         let root = doc.get_or_insert_map("root");
         let actual = root.to_json(&doc.transact());
@@ -1515,7 +1521,7 @@ mod test {
 
         let d2 = Doc::with_client_id(2);
         let txt2 = d2.get_or_insert_text("text");
-        d2.transact_mut().apply_update(update);
+        d2.transact_mut().apply_update(update).unwrap();
 
         assert_eq!(txt2.get_string(&d2.transact()), "hello".to_string());
     }
@@ -1544,7 +1550,7 @@ mod test {
         let remote_txt = remote_doc.get_or_insert_text("name");
         let mut txn = remote_doc.transact_mut();
         let update = Update::decode_v1(&state_diff).unwrap();
-        txn.apply_update(update);
+        txn.apply_update(update).unwrap();
 
         let actual = remote_txt.get_string(&txn);
 
@@ -1750,7 +1756,7 @@ mod test {
         let mut txn = doc.transact_mut();
         for diff in diffs {
             let u = Update::decode_v1(diff.as_slice()).unwrap();
-            txn.apply_update(u);
+            txn.apply_update(u).unwrap();
         }
     }
 
@@ -1796,7 +1802,8 @@ mod test {
             let mut t2 = d2.transact_mut();
             root.remove(&mut t2, 0);
             d1.transact_mut()
-                .apply_update(Update::decode_v1(&t2.encode_update_v1()).unwrap());
+                .apply_update(Update::decode_v1(&t2.encode_update_v1()).unwrap())
+                .unwrap();
         }
 
         {
@@ -1806,7 +1813,8 @@ mod test {
             a3.push_back(&mut t3, "B");
             // D1 got update which already removed a3, but this must not cause panic
             d1.transact_mut()
-                .apply_update(Update::decode_v1(&t3.encode_update_v1()).unwrap());
+                .apply_update(Update::decode_v1(&t3.encode_update_v1()).unwrap())
+                .unwrap();
         }
 
         exchange_updates(&[&d1, &d2, &d3]);
@@ -1946,7 +1954,7 @@ mod test {
             event_c.store(Some(Arc::new((added, removed, loaded))));
         });
         let update = Update::decode_v1(&data).unwrap();
-        doc2.transact_mut().apply_update(update);
+        doc2.transact_mut().apply_update(update).unwrap();
         let mut actual = event.swap(None).unwrap();
         Arc::get_mut(&mut actual).unwrap().0.sort();
         assert_eq!(
@@ -2055,7 +2063,7 @@ mod test {
             &doc.transact()
                 .encode_state_as_update_v1(&StateVector::default()),
         );
-        doc2.transact_mut().apply_update(u.unwrap());
+        doc2.transact_mut().apply_update(u.unwrap()).unwrap();
         let doc_ref_3 = {
             let array = doc2.get_or_insert_array("test");
             array
@@ -2163,7 +2171,7 @@ mod test {
             &doc.transact()
                 .encode_state_as_update_v1(&StateVector::default()),
         );
-        doc2.transact_mut().apply_update(u.unwrap());
+        doc2.transact_mut().apply_update(u.unwrap()).unwrap();
         let subdoc_3 = {
             let array = doc2.get_or_insert_array("test");
             array
@@ -2293,7 +2301,8 @@ mod test {
         let doc = Doc::with_client_id(1);
         let txt = doc.get_or_insert_text("test");
         let mut txn = doc.transact_mut();
-        txn.apply_update(Update::decode_v1(&update).unwrap());
+        txn.apply_update(Update::decode_v1(&update).unwrap())
+            .unwrap();
         let str = txt.get_string(&txn);
         assert_eq!(&str, "hello");
     }
@@ -2327,11 +2336,11 @@ mod test {
             let u2 = updates.pop().unwrap();
             let u1 = updates.pop().unwrap();
             let mut txn = d2.transact_mut();
-            txn.apply_update(u1);
+            txn.apply_update(u1).unwrap();
             assert!(txn.store.pending.is_none()); // applied
-            txn.apply_update(u3);
+            txn.apply_update(u3).unwrap();
             assert!(txn.store.pending.is_some()); // pending update waiting for u2
-            txn.apply_update(u2);
+            txn.apply_update(u2).unwrap();
             assert!(txn.store.pending.is_none()); // applied after fixing the missing update
         }
 
