@@ -10,7 +10,7 @@ use crate::iter::TxnIterator;
 use crate::slice::BlockSlice;
 use crate::sync::Clock;
 use crate::transaction::Origin;
-use crate::{DeleteSet, Doc, Observer, Transact, TransactionAcqError, TransactionMut, ID};
+use crate::{DeleteSet, Doc, Observer, ReadTxn, Transact, TransactionAcqError, TransactionMut, ID};
 
 /// Undo manager is a structure used to perform undo/redo operations over the associated shared
 /// type(s).
@@ -482,21 +482,30 @@ where
     }
 
     /// Clears all [StackItem]s stored within current UndoManager, effectively resetting its state.
-    pub fn clear(&mut self, txn: &mut TransactionMut) {
+    ///
+    /// # Deadlocks
+    ///
+    /// In order to perform its function, this method must guarantee that underlying document store
+    /// is not being modified by another running `TransactionMut`. It does so by acquiring
+    /// a read-only transaction itself. If transaction couldn't be acquired (because another
+    /// read-write transaction is in progress), it will hold current thread until, acquisition is
+    /// available.
+    pub fn clear(&mut self) {
+        let txn = self.doc.transact();
         let inner = Arc::get_mut(&mut self.state).unwrap();
 
         let len = inner.undo_stack.len();
         for item in inner.undo_stack.drain(0..len) {
-            Self::clear_item(&inner.scope, txn, item);
+            Self::clear_item(&inner.scope, &txn, item);
         }
 
         let len = inner.redo_stack.len();
         for item in inner.redo_stack.drain(0..len) {
-            Self::clear_item(&inner.scope, txn, item);
+            Self::clear_item(&inner.scope, &txn, item);
         }
     }
 
-    fn clear_item(scope: &HashSet<BranchPtr>, txn: &mut TransactionMut, stack_item: StackItem<M>) {
+    fn clear_item<T: ReadTxn>(scope: &HashSet<BranchPtr>, txn: &T, stack_item: StackItem<M>) {
         let mut deleted = stack_item.deletions.deleted_blocks();
         while let Some(slice) = deleted.next(txn) {
             if let Some(item) = slice.as_item() {

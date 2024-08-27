@@ -2504,35 +2504,111 @@ struct YEventKeyChange *yxmltext_event_keys(const struct YXmlTextEvent *e, uint3
  */
 void yevent_keys_destroy(struct YEventKeyChange *keys, uint32_t len);
 
+/**
+ * Creates a new instance of undo manager bound to a current `doc`. It can be used to track
+ * specific shared refs via `yundo_manager_add_scope` and updates coming from specific origin
+ * - like ability to undo/redo operations originating only at the local peer - by using
+ * `yundo_manager_add_origin`.
+ *
+ * This object can be deallocated via `yundo_manager_destroy`.
+ */
 YUndoManager *yundo_manager(const YDoc *doc, const struct YUndoManagerOptions *options);
 
+/**
+ * Deallocated undo manager instance created via `yundo_manager`.
+ */
 void yundo_manager_destroy(YUndoManager *mgr);
 
+/**
+ * Adds an origin to be tracked by current undo manager. This way only changes made within context
+ * of transactions created with specific origin will be subjects of undo/redo operations. This is
+ * useful when you want to be able to revert changed done by specific user without reverting
+ * changes made by other users that were applied in the meantime.
+ */
 void yundo_manager_add_origin(YUndoManager *mgr, uint32_t origin_len, const char *origin);
 
+/**
+ * Removes an origin previously added to undo manager via `yundo_manager_add_origin`.
+ */
 void yundo_manager_remove_origin(YUndoManager *mgr, uint32_t origin_len, const char *origin);
 
+/**
+ * Add specific shared type to be tracked by this instance of an undo manager.
+ */
 void yundo_manager_add_scope(YUndoManager *mgr, const Branch *ytype);
 
-uint8_t yundo_manager_clear(YUndoManager *mgr);
+/**
+ * Removes all the undo/redo stack changes tracked by current undo manager. This also cleans up
+ * all the items that couldn't be deallocated / garbage collected for the sake of possible
+ * undo/redo operations.
+ *
+ * Keep in mind that this function call requires that underlying document store is not concurrently
+ * modified by other read-write transaction. This is done by acquiring the read-only transaction
+ * itself. If such transaction could be acquired (because of another read-write transaction is in
+ * progress, this function will hold current thread until acquisition is possible.
+ */
+void yundo_manager_clear(YUndoManager *mgr);
 
+/**
+ * Cuts off tracked changes, producing a new stack item on undo stack.
+ *
+ * By default, undo manager gathers undergoing changes together into undo stack items on periodic
+ * basis (defined by `YUndoManagerOptions.capture_timeout_millis`). By calling this function, we're
+ * explicitly creating a new stack item will all the changes registered since last stack item was
+ * created.
+ */
 void yundo_manager_stop(YUndoManager *mgr);
 
+/**
+ * Performs an undo operations, reverting all the changes defined by the last undo stack item.
+ * These changes can be then reapplied again by calling `yundo_manager_redo` function.
+ *
+ * Returns `Y_TRUE` if successfully managed to do an undo operation.
+ * Returns `Y_FALSE` if undo stack was empty or if undo couldn't be performed (because another
+ * transaction is in progress).
+ */
 uint8_t yundo_manager_undo(YUndoManager *mgr);
 
+/**
+ * Performs a redo operations, reapplying changes undone by `yundo_manager_undo` operation.
+ *
+ * Returns `Y_TRUE` if successfully managed to do a redo operation.
+ * Returns `Y_FALSE` if redo stack was empty or if redo couldn't be performed (because another
+ * transaction is in progress).
+ */
 uint8_t yundo_manager_redo(YUndoManager *mgr);
 
-uint8_t yundo_manager_can_undo(YUndoManager *mgr);
+/**
+ * Returns number of elements stored on undo stack.
+ */
+uint32_t yundo_manager_undo_stack_len(YUndoManager *mgr);
 
-uint8_t yundo_manager_can_redo(YUndoManager *mgr);
+/**
+ * Returns number of elements stored on redo stack.
+ */
+uint32_t yundo_manager_redo_stack_len(YUndoManager *mgr);
 
+/**
+ * Subscribes a `callback` function pointer to a given undo manager event. This event will be
+ * triggered every time a new undo/redo stack item is added.
+ *
+ * Returns a subscription pointer that can be used to cancel current callback registration via
+ * `yunobserve`.
+ */
 YSubscription *yundo_manager_observe_added(YUndoManager *mgr,
                                            void *state,
-                                           void (*cb)(void*, const struct YUndoEvent*));
+                                           void (*callback)(void*, const struct YUndoEvent*));
 
+/**
+ * Subscribes a `callback` function pointer to a given undo manager event. This event will be
+ * triggered every time a undo/redo operation was called.
+ *
+ * Returns a subscription pointer that can be used to cancel current callback registration via
+ * `yunobserve`.
+ */
 YSubscription *yundo_manager_observe_popped(YUndoManager *mgr,
                                             void *state,
-                                            void (*cb)(void*, const struct YUndoEvent*));
+                                            void (*callback)(void*, const struct YUndoEvent*));
 
 /**
  * Returns a value informing what kind of Yrs shared collection given `branch` represents.

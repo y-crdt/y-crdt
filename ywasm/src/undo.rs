@@ -87,12 +87,8 @@ impl YUndoManager {
     }
 
     #[wasm_bindgen(js_name = clear)]
-    pub fn clear(&mut self) -> Result<()> {
-        if let Err(_) = self.0.clear() {
-            Err(JsValue::from_str(crate::js::errors::ANOTHER_TX))
-        } else {
-            Ok(())
-        }
+    pub fn clear(&mut self) {
+        self.0.clear();
     }
 
     #[wasm_bindgen(js_name = stopCapturing)]
@@ -102,7 +98,7 @@ impl YUndoManager {
 
     #[wasm_bindgen(js_name = undo)]
     pub fn undo(&mut self) -> Result<()> {
-        if let Err(_) = self.0.undo() {
+        if let Err(_) = self.0.try_undo() {
             Err(JsValue::from_str(crate::js::errors::ANOTHER_TX))
         } else {
             Ok(())
@@ -111,7 +107,7 @@ impl YUndoManager {
 
     #[wasm_bindgen(js_name = redo)]
     pub fn redo(&mut self) -> Result<()> {
-        if let Err(_) = self.0.redo() {
+        if let Err(_) = self.0.try_redo() {
             Err(JsValue::from_str(crate::js::errors::ANOTHER_TX))
         } else {
             Ok(())
