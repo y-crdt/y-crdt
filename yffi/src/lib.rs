@@ -4567,6 +4567,12 @@ pub struct YUndoManagerOptions {
 }
 
 // TODO [LSViana] Maybe rename this to `yundo_manager_new_with_options` to match `ydoc_new_with_options`?
+/// Creates a new instance of undo manager bound to a current `doc`. It can be used to track
+/// specific shared refs via `yundo_manager_add_scope` and updates coming from specific origin
+/// - like ability to undo/redo operations originating only at the local peer - by using
+/// `yundo_manager_add_origin`.
+///
+/// This object can be deallocated via `yundo_manager_destroy`.
 #[no_mangle]
 pub unsafe extern "C" fn yundo_manager(
     doc: *const Doc,
@@ -4584,11 +4590,16 @@ pub unsafe extern "C" fn yundo_manager(
     Box::into_raw(boxed)
 }
 
+/// Deallocated undo manager instance created via `yundo_manager`.
 #[no_mangle]
 pub unsafe extern "C" fn yundo_manager_destroy(mgr: *mut YUndoManager) {
     drop(Box::from_raw(mgr));
 }
 
+/// Adds an origin to be tracked by current undo manager. This way only changes made within context
+/// of transactions created with specific origin will be subjects of undo/redo operations. This is
+/// useful when you want to be able to revert changed done by specific user without reverting
+/// changes made by other users that were applied in the meantime.
 #[no_mangle]
 pub unsafe extern "C" fn yundo_manager_add_origin(
     mgr: *mut YUndoManager,
@@ -4600,6 +4611,7 @@ pub unsafe extern "C" fn yundo_manager_add_origin(
     mgr.include_origin(Origin::from(bytes));
 }
 
+/// Removes an origin previously added to undo manager via `yundo_manager_add_origin`.
 #[no_mangle]
 pub unsafe extern "C" fn yundo_manager_remove_origin(
     mgr: *mut YUndoManager,
@@ -4611,6 +4623,7 @@ pub unsafe extern "C" fn yundo_manager_remove_origin(
     mgr.exclude_origin(Origin::from(bytes));
 }
 
+/// Add specific shared type to be tracked by this instance of an undo manager.
 #[no_mangle]
 pub unsafe extern "C" fn yundo_manager_add_scope(mgr: *mut YUndoManager, ytype: *const Branch) {
     let mgr = mgr.as_mut().unwrap();
@@ -4618,74 +4631,95 @@ pub unsafe extern "C" fn yundo_manager_add_scope(mgr: *mut YUndoManager, ytype: 
     mgr.expand_scope(&BranchPtr::from(branch));
 }
 
+/// Removes all the undo/redo stack changes tracked by current undo manager. This also cleans up
+/// all the items that couldn't be deallocated / garbage collected for the sake of possible
+/// undo/redo operations.
+///
+/// Keep in mind that this function call requires that underlying document store is not concurrently
+/// modified by other read-write transaction. This is done by acquiring the read-only transaction
+/// itself. If such transaction could be acquired (because of another read-write transaction is in
+/// progress, this function will hold current thread until acquisition is possible.
 #[no_mangle]
-pub unsafe extern "C" fn yundo_manager_clear(mgr: *mut YUndoManager) -> u8 {
+pub unsafe extern "C" fn yundo_manager_clear(mgr: *mut YUndoManager) {
     let mgr = mgr.as_mut().unwrap();
-    match mgr.clear() {
-        Ok(_) => Y_TRUE,
-        Err(_) => Y_FALSE,
-    }
+    mgr.clear();
 }
 
+/// Cuts off tracked changes, producing a new stack item on undo stack.
+///
+/// By default, undo manager gathers undergoing changes together into undo stack items on periodic
+/// basis (defined by `YUndoManagerOptions.capture_timeout_millis`). By calling this function, we're
+/// explicitly creating a new stack item will all the changes registered since last stack item was
+/// created.
 #[no_mangle]
 pub unsafe extern "C" fn yundo_manager_stop(mgr: *mut YUndoManager) {
     let mgr = mgr.as_mut().unwrap();
     mgr.reset();
 }
 
+/// Performs an undo operations, reverting all the changes defined by the last undo stack item.
+/// These changes can be then reapplied again by calling `yundo_manager_redo` function.
+///
+/// Returns `Y_TRUE` if successfully managed to do an undo operation.
+/// Returns `Y_FALSE` if undo stack was empty or if undo couldn't be performed (because another
+/// transaction is in progress).
 #[no_mangle]
 pub unsafe extern "C" fn yundo_manager_undo(mgr: *mut YUndoManager) -> u8 {
     let mgr = mgr.as_mut().unwrap();
 
-    match mgr.undo() {
+    match mgr.try_undo() {
         Ok(true) => Y_TRUE,
         Ok(false) => Y_FALSE,
         Err(_) => Y_FALSE,
     }
 }
 
+/// Performs a redo operations, reapplying changes undone by `yundo_manager_undo` operation.
+///
+/// Returns `Y_TRUE` if successfully managed to do a redo operation.
+/// Returns `Y_FALSE` if redo stack was empty or if redo couldn't be performed (because another
+/// transaction is in progress).
 #[no_mangle]
 pub unsafe extern "C" fn yundo_manager_redo(mgr: *mut YUndoManager) -> u8 {
     let mgr = mgr.as_mut().unwrap();
-    match mgr.redo() {
+    match mgr.try_redo() {
         Ok(true) => Y_TRUE,
         Ok(false) => Y_FALSE,
         Err(_) => Y_FALSE,
     }
 }
 
+/// Returns number of elements stored on undo stack.
 #[no_mangle]
-pub unsafe extern "C" fn yundo_manager_can_undo(mgr: *mut YUndoManager) -> u8 {
+pub unsafe extern "C" fn yundo_manager_undo_stack_len(mgr: *mut YUndoManager) -> u32 {
     let mgr = mgr.as_mut().unwrap();
-    if mgr.can_undo() {
-        Y_TRUE
-    } else {
-        Y_FALSE
-    }
+    mgr.undo_stack().len() as u32
 }
 
+/// Returns number of elements stored on redo stack.
 #[no_mangle]
-pub unsafe extern "C" fn yundo_manager_can_redo(mgr: *mut YUndoManager) -> u8 {
+pub unsafe extern "C" fn yundo_manager_redo_stack_len(mgr: *mut YUndoManager) -> u32 {
     let mgr = mgr.as_mut().unwrap();
-    if mgr.can_redo() {
-        Y_TRUE
-    } else {
-        Y_FALSE
-    }
+    mgr.redo_stack().len() as u32
 }
 
+/// Subscribes a `callback` function pointer to a given undo manager event. This event will be
+/// triggered every time a new undo/redo stack item is added.
+///
+/// Returns a subscription pointer that can be used to cancel current callback registration via
+/// `yunobserve`.
 #[no_mangle]
 pub unsafe extern "C" fn yundo_manager_observe_added(
     mgr: *mut YUndoManager,
     state: *mut c_void,
-    cb: extern "C" fn(*mut c_void, *const YUndoEvent),
+    callback: extern "C" fn(*mut c_void, *const YUndoEvent),
 ) -> *mut Subscription {
     let state = CallbackState::new(state);
     let mgr = mgr.as_mut().unwrap();
     let subscription = mgr.observe_item_added(move |_, e| {
         let meta_ptr = {
             let event = YUndoEvent::new(e);
-            cb(state.0, &event as *const YUndoEvent);
+            callback(state.0, &event as *const YUndoEvent);
             event.meta
         };
         e.meta().store(meta_ptr, Ordering::Release);
@@ -4693,11 +4727,16 @@ pub unsafe extern "C" fn yundo_manager_observe_added(
     Box::into_raw(Box::new(subscription))
 }
 
+/// Subscribes a `callback` function pointer to a given undo manager event. This event will be
+/// triggered every time a undo/redo operation was called.
+///
+/// Returns a subscription pointer that can be used to cancel current callback registration via
+/// `yunobserve`.
 #[no_mangle]
 pub unsafe extern "C" fn yundo_manager_observe_popped(
     mgr: *mut YUndoManager,
     state: *mut c_void,
-    cb: extern "C" fn(*mut c_void, *const YUndoEvent),
+    callback: extern "C" fn(*mut c_void, *const YUndoEvent),
 ) -> *mut Subscription {
     let mgr = mgr.as_mut().unwrap();
     let state = CallbackState::new(state);
@@ -4705,7 +4744,7 @@ pub unsafe extern "C" fn yundo_manager_observe_popped(
         .observe_item_popped(move |_, e| {
             let meta_ptr = {
                 let event = YUndoEvent::new(e);
-                cb(state.0, &event as *const YUndoEvent);
+                callback(state.0, &event as *const YUndoEvent);
                 event.meta
             };
             e.meta().store(meta_ptr, Ordering::Release);

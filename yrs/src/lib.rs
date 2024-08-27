@@ -331,11 +331,11 @@
 //! assert_eq!(text1.get_string(&local.transact()), "hello worldeveryone"); // remote changes synced
 //!
 //! // undo last performed change on local
-//! mgr.undo().unwrap();
+//! mgr.undo_blocking();
 //! assert_eq!(text1.get_string(&local.transact()), "hello everyone");
 //!
 //! // redo change we undone
-//! mgr.redo().unwrap();
+//! mgr.redo_blocking();
 //! assert_eq!(text1.get_string(&local.transact()), "hello worldeveryone");
 //! ```
 //!
