@@ -705,7 +705,8 @@ mod test {
 
         let a2 = d2.get_or_insert_array("array");
         let mut t2 = d2.transact_mut();
-        t2.apply_update(Update::decode_v1(update.as_slice()).unwrap());
+        t2.apply_update(Update::decode_v1(update.as_slice()).unwrap())
+            .unwrap();
         let actual: Vec<_> = a2.iter(&t2).collect();
 
         assert_eq!(actual, vec!["Hi".into()]);
@@ -1111,7 +1112,8 @@ mod test {
             let sv = t2.state_vector();
             let mut encoder = EncoderV1::new();
             t1.encode_diff(&sv, &mut encoder);
-            t2.apply_update(Update::decode_v1(encoder.to_vec().as_slice()).unwrap());
+            t2.apply_update(Update::decode_v1(encoder.to_vec().as_slice()).unwrap())
+                .unwrap();
         }
 
         assert_eq!(
@@ -1785,7 +1787,7 @@ mod test {
         let doc2 = Doc::with_client_id(2);
         let mut txn = doc2.transact_mut();
         let array = txn.get_or_insert_array("array");
-        txn.apply_update(Update::decode_v1(&data).unwrap());
+        txn.apply_update(Update::decode_v1(&data).unwrap()).unwrap();
 
         assert_eq!(
             array.iter(&txn).collect::<Vec<_>>(),

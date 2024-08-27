@@ -1,5 +1,6 @@
 use crate::encoding::read;
 use crate::encoding::read::Cursor;
+use crate::error::UpdateError;
 use crate::sync::{awareness, Awareness, AwarenessUpdate};
 use crate::updates::decoder::{Decode, Decoder, DecoderV1};
 use crate::updates::encoder::{Encode, Encoder};
@@ -125,7 +126,7 @@ pub trait Protocol {
     ) -> Result<Option<Message>, Error> {
         use crate::Transact;
         let mut txn = awareness.doc().transact_mut();
-        txn.apply_update(update);
+        txn.apply_update(update)?;
         Ok(None)
     }
 
@@ -274,7 +275,7 @@ pub trait AsyncProtocol {
     ) -> Result<Option<Message>, Error> {
         use crate::AsyncTransact;
         let mut txn = awareness.doc().transact_mut().await;
-        txn.apply_update(update);
+        txn.apply_update(update)?;
         Ok(None)
     }
 
@@ -494,6 +495,9 @@ pub enum Error {
     /// Thrown in case of I/O errors.
     #[error("IO error: {0}")]
     IO(#[from] std::io::Error),
+
+    #[error("failed to apply update: {0}")]
+    Update(#[from] UpdateError),
 
     /// Custom dynamic kind of error, usually related to a warp internal error messages.
     #[error("internal failure: {0}")]

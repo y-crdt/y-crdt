@@ -257,9 +257,14 @@ typedef struct YSubscription {} YSubscription;
 #define ERR_TYPE_MISMATCH 8
 
 /**
- * Error code: miscallaneous error comming from serde, not covered by other error codes.
+ * Error code: miscellaneous error coming from serde, not covered by other error codes.
  */
 #define ERR_CUSTOM 9
+
+/**
+ * Error code: update block assigned to parent that is not a valid shared ref of deleted block.
+ */
+#define ERR_INVALID_PARENT 9
 
 #define YCHANGE_ADD 1
 

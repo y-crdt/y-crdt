@@ -127,7 +127,7 @@ fn text_insert_delete() {
     {
         let mut txn = doc.transact_mut();
         let u = Update::decode_v1(update).unwrap();
-        txn.apply_update(u);
+        txn.apply_update(u).unwrap();
     }
     assert_eq!(txt.get_string(&doc.transact()), "abhi".to_string());
     assert!(visited.load(Ordering::Relaxed));
@@ -347,7 +347,7 @@ fn utf32_lib0_v2_decoding() {
     let xml = doc.get_or_insert_xml_fragment("prosemirror");
     let mut txn = doc.transact_mut();
     let update = Update::decode_v2(data).unwrap();
-    txn.apply_update(update);
+    txn.apply_update(update).unwrap();
     let actual: XmlElementRef = xml.get(&txn, 0).unwrap().try_into().unwrap();
 
     let expected_attrs = HashMap::from([
@@ -418,7 +418,7 @@ fn negative_zero_decoding_v2() {
     let doc2 = Doc::new();
     let root = doc2.get_or_insert_map("root");
     let mut txn = doc2.transact_mut();
-    txn.apply_update(u);
+    txn.apply_update(u).unwrap();
     let actual = root.to_json(&txn);
 
     assert_eq!(actual, expected);
@@ -451,7 +451,7 @@ fn test_data_set<P: AsRef<std::path::Path>>(path: P) {
         let arr = doc.get_or_insert_array("array");
         for _ in 0..updates_len {
             let update = Update::decode_v1(decoder.read_buf().unwrap()).unwrap();
-            doc.transact_mut().apply_update(update);
+            doc.transact_mut().apply_update(update).unwrap();
         }
         let expected = decoder.read_string().unwrap();
         assert_eq!(

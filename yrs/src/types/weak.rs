@@ -870,7 +870,6 @@ mod test {
 
     use arc_swap::ArcSwapOption;
 
-    use crate::branch::BranchPtr;
     use crate::test_utils::exchange_updates;
     use crate::types::text::YChange;
     use crate::types::weak::{WeakPrelim, WeakRef};

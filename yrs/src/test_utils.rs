@@ -25,7 +25,8 @@ pub fn exchange_updates(docs: &[&Doc]) {
 
                 let sv = tb.state_vector().encode_v1();
                 let update = ta.encode_diff_v1(&StateVector::decode_v1(sv.as_slice()).unwrap());
-                tb.apply_update(Update::decode_v1(update.as_slice()).unwrap());
+                let update = Update::decode_v1(update.as_slice()).unwrap();
+                tb.apply_update(update).unwrap();
             }
         }
     }
@@ -376,7 +377,7 @@ impl TestConnector {
         let mut txn = peer.doc.transact_mut();
 
         let update = Update::decode_v1(decoder.read_buf().unwrap()).unwrap();
-        txn.apply_update(update);
+        txn.apply_update(update).unwrap();
     }
 
     fn read_update<D: Decoder>(peer: &mut TestPeerState, decoder: &mut D) {

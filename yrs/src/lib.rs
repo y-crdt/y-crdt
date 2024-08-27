@@ -588,7 +588,7 @@ pub mod atomic;
 mod block_iter;
 pub mod branch;
 pub mod encoding;
-mod error;
+pub mod error;
 mod gc;
 mod input;
 pub mod iter;
