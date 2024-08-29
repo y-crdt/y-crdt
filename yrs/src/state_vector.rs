@@ -4,6 +4,7 @@ use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::client_hasher::ClientHasher;
 use crate::{DeleteSet, ID};
+use std::cmp::Ordering;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::hash::BuildHasherDefault;
@@ -135,6 +136,34 @@ impl Encode for StateVector {
             encoder.write_var(client);
             encoder.write_var(clock);
         }
+    }
+}
+
+impl PartialOrd for StateVector {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        let mut result = Some(Ordering::Equal);
+
+        for (client, clock) in self.iter() {
+            let other_clock = other.get(client);
+            match clock.cmp(&other_clock) {
+                Ordering::Less if result == Some(Ordering::Greater) => return None,
+                Ordering::Greater if result == Some(Ordering::Less) => return None,
+                Ordering::Equal => { /* unchanged */ }
+                other => result = Some(other),
+            }
+        }
+
+        for (other_client, other_clock) in other.iter() {
+            let clock = self.get(other_client);
+            match clock.cmp(&other_clock) {
+                Ordering::Less if result == Some(Ordering::Greater) => return None,
+                Ordering::Greater if result == Some(Ordering::Less) => return None,
+                Ordering::Equal => { /* unchanged */ }
+                other => result = Some(other),
+            }
+        }
+
+        result
     }
 }
 
