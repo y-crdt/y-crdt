@@ -205,3 +205,45 @@ impl Decode for Snapshot {
         Ok(Snapshot::new(sm, ds))
     }
 }
+
+#[cfg(test)]
+mod test {
+    use crate::StateVector;
+    use std::cmp::Ordering;
+    use std::iter::FromIterator;
+
+    #[test]
+    fn ordering() {
+        fn s(a: u32, b: u32, c: u32) -> StateVector {
+            StateVector::from_iter([(1, a), (2, b), (3, c)])
+        }
+
+        assert_eq!(s(1, 2, 3).partial_cmp(&s(1, 2, 3)), Some(Ordering::Equal));
+        assert_eq!(s(1, 2, 2).partial_cmp(&s(1, 2, 3)), Some(Ordering::Less));
+        assert_eq!(s(2, 2, 3).partial_cmp(&s(1, 2, 3)), Some(Ordering::Greater));
+        assert_eq!(s(3, 2, 1).partial_cmp(&s(1, 2, 3)), None);
+    }
+
+    #[test]
+    fn ordering_missing_fields() {
+        let a = StateVector::from_iter([(1, 1), (2, 2)]);
+        let b = StateVector::from_iter([(2, 1), (3, 2)]);
+        assert_eq!(a.partial_cmp(&b), None);
+
+        let a = StateVector::from_iter([(1, 1), (2, 2)]);
+        let b = StateVector::from_iter([(1, 1), (2, 1), (3, 2)]);
+        assert_eq!(a.partial_cmp(&b), None);
+
+        let a = StateVector::from_iter([(1, 1), (2, 2), (3, 3)]);
+        let b = StateVector::from_iter([(2, 2), (3, 3)]);
+        assert_eq!(a.partial_cmp(&b), Some(Ordering::Greater));
+
+        let a = StateVector::from_iter([(2, 2), (3, 2)]);
+        let b = StateVector::from_iter([(1, 1), (2, 2), (3, 2)]);
+        assert_eq!(a.partial_cmp(&b), Some(Ordering::Less));
+
+        let a = StateVector::default();
+        let b = StateVector::default();
+        assert_eq!(a.partial_cmp(&b), Some(Ordering::Equal));
+    }
+}
