@@ -4,6 +4,7 @@ use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::client_hasher::ClientHasher;
 use crate::{DeleteSet, ID};
+use std::cmp::Ordering;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::hash::BuildHasherDefault;
@@ -138,6 +139,34 @@ impl Encode for StateVector {
     }
 }
 
+impl PartialOrd for StateVector {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        let mut result = Some(Ordering::Equal);
+
+        for (client, clock) in self.iter() {
+            let other_clock = other.get(client);
+            match clock.cmp(&other_clock) {
+                Ordering::Less if result == Some(Ordering::Greater) => return None,
+                Ordering::Greater if result == Some(Ordering::Less) => return None,
+                Ordering::Equal => { /* unchanged */ }
+                other => result = Some(other),
+            }
+        }
+
+        for (other_client, other_clock) in other.iter() {
+            let clock = self.get(other_client);
+            match clock.cmp(&other_clock) {
+                Ordering::Less if result == Some(Ordering::Greater) => return None,
+                Ordering::Greater if result == Some(Ordering::Less) => return None,
+                Ordering::Equal => { /* unchanged */ }
+                other => result = Some(other),
+            }
+        }
+
+        result
+    }
+}
+
 /// Snapshot describes a state of a document store at a given point in (logical) time. In practice
 /// it's a combination of [StateVector] (a summary of all observed insert/update operations)
 /// and a [DeleteSet] (a summary of all observed deletions).
@@ -174,5 +203,59 @@ impl Decode for Snapshot {
         let ds = DeleteSet::decode(decoder)?;
         let sm = StateVector::decode(decoder)?;
         Ok(Snapshot::new(sm, ds))
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::{Doc, ReadTxn, StateVector, Text, Transact, WriteTxn};
+    use std::cmp::Ordering;
+    use std::iter::FromIterator;
+
+    #[test]
+    fn ordering() {
+        fn s(a: u32, b: u32, c: u32) -> StateVector {
+            StateVector::from_iter([(1, a), (2, b), (3, c)])
+        }
+
+        assert_eq!(s(1, 2, 3).partial_cmp(&s(1, 2, 3)), Some(Ordering::Equal));
+        assert_eq!(s(1, 2, 2).partial_cmp(&s(1, 2, 3)), Some(Ordering::Less));
+        assert_eq!(s(2, 2, 3).partial_cmp(&s(1, 2, 3)), Some(Ordering::Greater));
+        assert_eq!(s(3, 2, 1).partial_cmp(&s(1, 2, 3)), None);
+    }
+
+    #[test]
+    fn ordering_missing_fields() {
+        let a = StateVector::from_iter([(1, 1), (2, 2)]);
+        let b = StateVector::from_iter([(2, 1), (3, 2)]);
+        assert_eq!(a.partial_cmp(&b), None);
+
+        let a = StateVector::from_iter([(1, 1), (2, 2)]);
+        let b = StateVector::from_iter([(1, 1), (2, 1), (3, 2)]);
+        assert_eq!(a.partial_cmp(&b), None);
+
+        let a = StateVector::from_iter([(1, 1), (2, 2), (3, 3)]);
+        let b = StateVector::from_iter([(2, 2), (3, 3)]);
+        assert_eq!(a.partial_cmp(&b), Some(Ordering::Greater));
+
+        let a = StateVector::from_iter([(2, 2), (3, 2)]);
+        let b = StateVector::from_iter([(1, 1), (2, 2), (3, 2)]);
+        assert_eq!(a.partial_cmp(&b), Some(Ordering::Less));
+
+        let a = StateVector::default();
+        let b = StateVector::default();
+        assert_eq!(a.partial_cmp(&b), Some(Ordering::Equal));
+    }
+
+    #[test]
+    fn ordering_one_of() {
+        let doc = Doc::with_client_id(1);
+        let mut txn = doc.transact_mut();
+        let txt = txn.get_or_insert_text("text");
+        txt.insert(&mut txn, 0, "a");
+
+        let a = txn.state_vector();
+        let b = StateVector::default();
+        assert_eq!(a.partial_cmp(&b), Some(Ordering::Greater));
     }
 }

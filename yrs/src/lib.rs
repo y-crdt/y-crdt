@@ -631,7 +631,9 @@ pub use crate::out::Out;
 pub use crate::state_vector::Snapshot;
 pub use crate::state_vector::StateVector;
 pub use crate::store::Store;
-pub use crate::transact::{AsyncTransact, Transact, TransactionAcqError};
+pub use crate::transact::{
+    AcquireTransaction, AcquireTransactionMut, AsyncTransact, Transact, TransactionAcqError,
+};
 pub use crate::transaction::Origin;
 pub use crate::transaction::ReadTxn;
 pub use crate::transaction::RootRefs;
