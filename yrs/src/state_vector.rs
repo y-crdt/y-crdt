@@ -208,7 +208,7 @@ impl Decode for Snapshot {
 
 #[cfg(test)]
 mod test {
-    use crate::StateVector;
+    use crate::{Doc, ReadTxn, StateVector, Text, Transact, WriteTxn};
     use std::cmp::Ordering;
     use std::iter::FromIterator;
 
@@ -245,5 +245,17 @@ mod test {
         let a = StateVector::default();
         let b = StateVector::default();
         assert_eq!(a.partial_cmp(&b), Some(Ordering::Equal));
+    }
+
+    #[test]
+    fn ordering_one_of() {
+        let doc = Doc::with_client_id(1);
+        let mut txn = doc.transact_mut();
+        let txt = txn.get_or_insert_text("text");
+        txt.insert(&mut txn, 0, "a");
+
+        let a = txn.state_vector();
+        let b = StateVector::default();
+        assert_eq!(a.partial_cmp(&b), Some(Ordering::Greater));
     }
 }
