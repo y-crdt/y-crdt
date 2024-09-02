@@ -1195,7 +1195,7 @@ checksum = "bec47e5bfd1bff0eeaf6d8b485cc1074891a197ab4225d504cb7a1ab88b02bf0"
 
 [[package]]
 name = "yffi"
-version = "0.21.0"
+version = "0.21.1"
 dependencies = [
  "serde_json",
  "yrs",
@@ -1203,7 +1203,7 @@ dependencies = [
 
 [[package]]
 name = "yrs"
-version = "0.21.0"
+version = "0.21.1"
 dependencies = [
  "arc-swap",
  "assert_matches2",
@@ -1226,7 +1226,7 @@ dependencies = [
 
 [[package]]
 name = "ywasm"
-version = "0.21.0"
+version = "0.21.1"
 dependencies = [
  "base64_light",
  "console_error_panic_hook",
