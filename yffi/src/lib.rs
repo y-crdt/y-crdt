@@ -4376,7 +4376,7 @@ pub unsafe extern "C" fn yxmltext_event_target(e: *const YXmlTextEvent) -> *mut 
 
 /// Returns a path from a root type down to a current shared collection (which can be obtained using
 /// `ytext_event_target` function). It can consist of either integer indexes (used by sequence
-/// components) of *char keys (used by map components). `len` output parameter is used to provide
+/// components) or *char keys (used by map components). `len` output parameter is used to provide
 /// information about length of the path.
 ///
 /// Path returned this way should be eventually released using `ypath_destroy`.
@@ -4395,7 +4395,7 @@ pub unsafe extern "C" fn ytext_event_path(
 
 /// Returns a path from a root type down to a current shared collection (which can be obtained using
 /// `ymap_event_target` function). It can consist of either integer indexes (used by sequence
-/// components) of *char keys (used by map components). `len` output parameter is used to provide
+/// components) or *char keys (used by map components). `len` output parameter is used to provide
 /// information about length of the path.
 ///
 /// Path returned this way should be eventually released using `ypath_destroy`.
@@ -4411,7 +4411,7 @@ pub unsafe extern "C" fn ymap_event_path(e: *const YMapEvent, len: *mut u32) -> 
 
 /// Returns a path from a root type down to a current shared collection (which can be obtained using
 /// `yxmlelem_event_path` function). It can consist of either integer indexes (used by sequence
-/// components) of *char keys (used by map components). `len` output parameter is used to provide
+/// components) or *char keys (used by map components). `len` output parameter is used to provide
 /// information about length of the path.
 ///
 /// Path returned this way should be eventually released using `ypath_destroy`.
@@ -4430,7 +4430,7 @@ pub unsafe extern "C" fn yxmlelem_event_path(
 
 /// Returns a path from a root type down to a current shared collection (which can be obtained using
 /// `yxmltext_event_path` function). It can consist of either integer indexes (used by sequence
-/// components) of *char keys (used by map components). `len` output parameter is used to provide
+/// components) or *char keys (used by map components). `len` output parameter is used to provide
 /// information about length of the path.
 ///
 /// Path returned this way should be eventually released using `ypath_destroy`.
@@ -4449,7 +4449,7 @@ pub unsafe extern "C" fn yxmltext_event_path(
 
 /// Returns a path from a root type down to a current shared collection (which can be obtained using
 /// `yarray_event_target` function). It can consist of either integer indexes (used by sequence
-/// components) of *char keys (used by map components). `len` output parameter is used to provide
+/// components) or *char keys (used by map components). `len` output parameter is used to provide
 /// information about length of the path.
 ///
 /// Path returned this way should be eventually released using `ypath_destroy`.
@@ -5089,13 +5089,13 @@ impl Drop for YEventChange {
 ///
 /// 1. `Y_EVENT_CHANGE_ADD` marks a new characters added to a collection. In this case `insert`
 /// field contains a pointer to a list of newly inserted values, while `len` field informs about
-/// their count. Additionally `attributes_len` nad `attributes` carry information about optional
+/// their count. Additionally `attributes_len` and `attributes` carry information about optional
 /// formatting attributes applied to edited blocks.
 /// 2. `Y_EVENT_CHANGE_DELETE` marks an existing elements removed from the collection. In this case
 /// `len` field informs about number of removed elements.
 /// 3. `Y_EVENT_CHANGE_RETAIN` marks a number of characters that have not been changed, counted from
 /// the previous element. `len` field informs about number of retained elements. Additionally
-/// `attributes_len` nad `attributes` carry information about optional formatting attributes applied
+/// `attributes_len` and `attributes` carry information about optional formatting attributes applied
 /// to edited blocks.
 ///
 /// A list of changes returned by `ytext_event_delta`/`yxmltext_event_delta` enables to locate
@@ -5234,13 +5234,13 @@ impl Drop for YDeltaAttr {
 ///
 /// 1. `Y_EVENT_CHANGE_ADD` marks a new characters added to a collection. In this case `insert`
 /// field contains a pointer to a list of newly inserted values, while `len` field informs about
-/// their count. Additionally `attributes_len` nad `attributes` carry information about optional
+/// their count. Additionally `attributes_len` and `attributes` carry information about optional
 /// formatting attributes applied to edited blocks.
 /// 2. `Y_EVENT_CHANGE_DELETE` marks an existing elements removed from the collection. In this case
 /// `len` field informs about number of removed elements.
 /// 3. `Y_EVENT_CHANGE_RETAIN` marks a number of characters that have not been changed, counted from
 /// the previous element. `len` field informs about number of retained elements. Additionally
-/// `attributes_len` nad `attributes` carry information about optional formatting attributes applied
+/// `attributes_len` and `attributes` carry information about optional formatting attributes applied
 /// to edited blocks.
 #[repr(C)]
 pub struct YDeltaIn {
