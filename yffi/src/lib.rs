@@ -477,19 +477,37 @@ impl CallbackState {
     }
 }
 
+fn origin_c_bytes(origin: Option<&Origin>) -> (*const c_char, u32) {
+    if let Some(o) = origin {
+        let bytes = o.as_ref();
+        let origin_len = bytes.len() as u32;
+        let origin = bytes.as_ptr() as *const c_char;
+        (origin, origin_len)
+    } else {
+        (null(), 0)
+    }
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn ydoc_observe_updates_v1(
     doc: *mut Doc,
     state: *mut c_void,
-    cb: extern "C" fn(*mut c_void, u32, *const c_char),
+    cb: extern "C" fn(*mut c_void, u32, *const c_char, u32, *const c_char),
 ) -> *mut Subscription {
     let state = CallbackState::new(state);
     let doc = doc.as_ref().unwrap();
     let subscription = doc
-        .observe_update_v1(move |_, e| {
+        .observe_update_v1(move |txn, e| {
             let bytes = &e.update;
             let len = bytes.len() as u32;
-            cb(state.0, len, bytes.as_ptr() as *const c_char)
+            let (origin, origin_len) = origin_c_bytes(txn.origin());
+            cb(
+                state.0,
+                len,
+                bytes.as_ptr() as *const c_char,
+                origin_len,
+                origin,
+            )
         })
         .unwrap();
     Box::into_raw(Box::new(subscription))
@@ -499,15 +517,22 @@ pub unsafe extern "C" fn ydoc_observe_updates_v1(
 pub unsafe extern "C" fn ydoc_observe_updates_v2(
     doc: *mut Doc,
     state: *mut c_void,
-    cb: extern "C" fn(*mut c_void, u32, *const c_char),
+    cb: extern "C" fn(*mut c_void, u32, *const c_char, u32, *const c_char),
 ) -> *mut Subscription {
     let state = CallbackState::new(state);
     let doc = doc.as_ref().unwrap();
     let subscription = doc
-        .observe_update_v2(move |_, e| {
+        .observe_update_v2(move |txn, e| {
             let bytes = &e.update;
             let len = bytes.len() as u32;
-            cb(state.0, len, bytes.as_ptr() as *const c_char)
+            let (origin, origin_len) = origin_c_bytes(txn.origin());
+            cb(
+                state.0,
+                len,
+                bytes.as_ptr() as *const c_char,
+                origin_len,
+                origin,
+            )
         })
         .unwrap();
     Box::into_raw(Box::new(subscription))
@@ -3673,7 +3698,7 @@ pub unsafe extern "C" fn yunobserve(subscription: *mut Subscription) {
 pub unsafe extern "C" fn ytext_observe(
     txt: *const Branch,
     state: *mut c_void,
-    cb: extern "C" fn(*mut c_void, *const YTextEvent),
+    cb: extern "C" fn(*mut c_void, *const YTextEvent, u32, *const c_char),
 ) -> *mut Subscription {
     assert!(!txt.is_null());
     let state = CallbackState::new(state);
@@ -3681,7 +3706,8 @@ pub unsafe extern "C" fn ytext_observe(
     let txt = TextRef::from_raw_branch(txt);
     let subscription = txt.observe(move |txn, e| {
         let e = YTextEvent::new(e, txn);
-        cb(state.0, &e as *const YTextEvent);
+        let (origin, origin_len) = origin_c_bytes(txn.origin());
+        cb(state.0, &e as *const YTextEvent, origin_len, origin);
     });
     Box::into_raw(Box::new(subscription))
 }
@@ -3694,7 +3720,7 @@ pub unsafe extern "C" fn ytext_observe(
 pub unsafe extern "C" fn ymap_observe(
     map: *const Branch,
     state: *mut c_void,
-    cb: extern "C" fn(*mut c_void, *const YMapEvent),
+    cb: extern "C" fn(*mut c_void, *const YMapEvent, u32, *const c_char),
 ) -> *mut Subscription {
     assert!(!map.is_null());
     let state = CallbackState::new(state);
@@ -3702,7 +3728,8 @@ pub unsafe extern "C" fn ymap_observe(
     let map = MapRef::from_raw_branch(map);
     let subscription = map.observe(move |txn, e| {
         let e = YMapEvent::new(e, txn);
-        cb(state.0, &e as *const YMapEvent);
+        let (origin, origin_len) = origin_c_bytes(txn.origin());
+        cb(state.0, &e as *const YMapEvent, origin_len, origin);
     });
     Box::into_raw(Box::new(subscription))
 }
@@ -3715,7 +3742,7 @@ pub unsafe extern "C" fn ymap_observe(
 pub unsafe extern "C" fn yarray_observe(
     array: *const Branch,
     state: *mut c_void,
-    cb: extern "C" fn(*mut c_void, *const YArrayEvent),
+    cb: extern "C" fn(*mut c_void, *const YArrayEvent, u32, *const c_char),
 ) -> *mut Subscription {
     assert!(!array.is_null());
     let state = CallbackState::new(state);
@@ -3723,7 +3750,8 @@ pub unsafe extern "C" fn yarray_observe(
     let array = ArrayRef::from_raw_branch(array);
     let subscription = array.observe(move |txn, e| {
         let e = YArrayEvent::new(e, txn);
-        cb(state.0, &e as *const YArrayEvent);
+        let (origin, origin_len) = origin_c_bytes(txn.origin());
+        cb(state.0, &e as *const YArrayEvent, origin_len, origin);
     });
     Box::into_raw(Box::new(subscription))
 }
@@ -3736,7 +3764,7 @@ pub unsafe extern "C" fn yarray_observe(
 pub unsafe extern "C" fn yxmlelem_observe(
     xml: *const Branch,
     state: *mut c_void,
-    cb: extern "C" fn(*mut c_void, *const YXmlEvent),
+    cb: extern "C" fn(*mut c_void, *const YXmlEvent, u32, *const c_char),
 ) -> *mut Subscription {
     assert!(!xml.is_null());
     let state = CallbackState::new(state);
@@ -3744,7 +3772,8 @@ pub unsafe extern "C" fn yxmlelem_observe(
     let xml = XmlElementRef::from_raw_branch(xml);
     let subscription = xml.observe(move |txn, e| {
         let e = YXmlEvent::new(e, txn);
-        cb(state.0, &e as *const YXmlEvent);
+        let (origin, origin_len) = origin_c_bytes(txn.origin());
+        cb(state.0, &e as *const YXmlEvent, origin_len, origin);
     });
     Box::into_raw(Box::new(subscription))
 }
@@ -3757,7 +3786,7 @@ pub unsafe extern "C" fn yxmlelem_observe(
 pub unsafe extern "C" fn yxmltext_observe(
     xml: *const Branch,
     state: *mut c_void,
-    cb: extern "C" fn(*mut c_void, *const YXmlTextEvent),
+    cb: extern "C" fn(*mut c_void, *const YXmlTextEvent, u32, *const c_char),
 ) -> *mut Subscription {
     assert!(!xml.is_null());
 
@@ -3765,7 +3794,8 @@ pub unsafe extern "C" fn yxmltext_observe(
     let xml = XmlTextRef::from_raw_branch(xml);
     let subscription = xml.observe(move |txn, e| {
         let e = YXmlTextEvent::new(e, txn);
-        cb(state.0, &e as *const YXmlTextEvent);
+        let (origin, origin_len) = origin_c_bytes(txn.origin());
+        cb(state.0, &e as *const YXmlTextEvent, origin_len, origin);
     });
     Box::into_raw(Box::new(subscription))
 }
@@ -3780,7 +3810,7 @@ pub unsafe extern "C" fn yxmltext_observe(
 pub unsafe extern "C" fn yobserve_deep(
     ytype: *mut Branch,
     state: *mut c_void,
-    cb: extern "C" fn(*mut c_void, u32, *const YEvent),
+    cb: extern "C" fn(*mut c_void, u32, *const YEvent, u32, *const c_char),
 ) -> *mut Subscription {
     assert!(!ytype.is_null());
 
@@ -3789,7 +3819,8 @@ pub unsafe extern "C" fn yobserve_deep(
     let subscription = branch.observe_deep(move |txn, events| {
         let events: Vec<_> = events.iter().map(|e| YEvent::new(txn, e)).collect();
         let len = events.len() as u32;
-        cb(state.0, len, events.as_ptr());
+        let (origin, origin_len) = origin_c_bytes(txn.origin());
+        cb(state.0, len, events.as_ptr(), origin_len, origin);
     });
     Box::into_raw(Box::new(subscription))
 }
@@ -4798,14 +4829,7 @@ pub struct YUndoEvent {
 
 impl YUndoEvent {
     unsafe fn new(e: &yrs::undo::Event<AtomicPtr<c_void>>) -> Self {
-        let (origin, origin_len) = if let Some(origin) = e.origin() {
-            let bytes = origin.as_ref();
-            let origin_len = bytes.len() as u32;
-            let origin = bytes.as_ptr() as *const c_char;
-            (origin, origin_len)
-        } else {
-            (null(), 0)
-        };
+        let (origin, origin_len) = origin_c_bytes(e.origin());
         YUndoEvent {
             kind: match e.kind() {
                 EventKind::Undo => Y_KIND_UNDO,
@@ -4947,7 +4971,7 @@ pub struct YEventChange {
     pub tag: u8,
 
     /// Number of element affected by current type of a change. It can refer to a number of
-    /// inserted `values`, number of deleted element or a number of retained (unchanged) values.  
+    /// inserted `values`, number of deleted element or a number of retained (unchanged) values.
     pub len: u32,
 
     /// Used in case when current change is of `Y_EVENT_CHANGE_ADD` type. Contains a list (of
@@ -5031,7 +5055,7 @@ pub struct YDeltaOut {
     pub tag: u8,
 
     /// Number of element affected by current type of change. It can refer to a number of
-    /// inserted `values`, number of deleted element or a number of retained (unchanged) values.  
+    /// inserted `values`, number of deleted element or a number of retained (unchanged) values.
     pub len: u32,
 
     /// A number of formatting attributes assigned to an edited area represented by this delta.
@@ -5389,7 +5413,7 @@ pub unsafe extern "C" fn ysticky_index_from_index(
 }
 
 /// Serializes `YStickyIndex` into binary representation. `len` parameter is updated with byte
-/// length of the generated binary. Returned binary can be free'd using `ybinary_destroy`.  
+/// length of the generated binary. Returned binary can be free'd using `ybinary_destroy`.
 #[no_mangle]
 pub unsafe extern "C" fn ysticky_index_encode(
     pos: *const YStickyIndex,
