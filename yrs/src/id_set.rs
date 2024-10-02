@@ -11,8 +11,7 @@ use crate::ReadTxn;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hash, Hasher};
-use std::ops::Range;
-
+use std::ops::{Range, RangeInclusive};
 // Note: use native Rust [Range](https://doc.rust-lang.org/std/ops/struct.Range.html)
 // as it's left-inclusive/right-exclusive and defines the exact capabilities we care about here.
 
@@ -578,10 +577,18 @@ impl DeleteSet {
                 let mut si =
                     (blocks.len() - 1).min(1 + blocks.find_pivot(r.end - 1).unwrap_or_default());
                 let mut block = &blocks[si];
+
+                let mut valid_range = usize::MAX..usize::MIN;
+
                 while si > 0 && block.clock_start() >= r.start {
-                    blocks.squash_left(si);
+                    valid_range.start = valid_range.start.min(si);
+                    valid_range.end = valid_range.end.max(si);
                     si -= 1;
                     block = &blocks[si];
+                }
+
+                if valid_range.start != usize::MAX && valid_range.end != usize::MIN {
+                    blocks.squash_left_range_compaction(valid_range.start..=valid_range.end);
                 }
             }
         }
