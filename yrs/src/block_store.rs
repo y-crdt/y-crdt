@@ -124,6 +124,10 @@ impl ClientBlockList {
         ClientBlockListIter(self.list.iter())
     }
 
+    pub fn iter_mut(&mut self) -> ClientBlockListIterMut<'_> {
+        ClientBlockListIterMut(self.list.iter_mut())
+    }
+
     /// Attempts to squash block at a given `index` with a corresponding block on its left side.
     /// If this succeeds, block under a given `index` will be removed, and its contents will be
     /// squashed into its left neighbor. In such case a squash result will be returned in order to
@@ -183,6 +187,16 @@ impl<'a> Iterator for ClientBlockListIter<'a> {
     }
 }
 
+pub(crate) struct ClientBlockListIterMut<'a>(std::slice::IterMut<'a, BlockCell>);
+
+impl<'a> Iterator for ClientBlockListIterMut<'a> {
+    type Item = &'a mut BlockCell;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.0.next()
+    }
+}
+
 /// Block store is a collection of all blocks known to a document owning instance of this type.
 /// Blocks are organized per client ID and contain a resizable list of all blocks inserted by that
 /// client.
@@ -192,6 +206,7 @@ pub(crate) struct BlockStore {
 }
 
 pub(crate) type Iter<'a> = std::collections::hash_map::Iter<'a, ClientID, ClientBlockList>;
+pub(crate) type IterMut<'a> = std::collections::hash_map::IterMut<'a, ClientID, ClientBlockList>;
 
 impl BlockStore {
     /// Checks if block store is empty. Empty block store doesn't contain any blocks, neither active
@@ -240,6 +255,11 @@ impl BlockStore {
     /// Returns an iterator over the client and block lists pairs known to a current block store.
     pub fn iter(&self) -> Iter<'_> {
         self.clients.iter()
+    }
+
+    /// Returns an iterator over the client and mutable block lists pairs known to a current block store.
+    pub fn iter_mut(&mut self) -> IterMut<'_> {
+        self.clients.iter_mut()
     }
 
     /// Returns a state vector, which is a compact representation of the state of blocks integrated
