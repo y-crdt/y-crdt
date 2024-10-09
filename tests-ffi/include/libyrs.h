@@ -1248,6 +1248,13 @@ YDoc **ytransaction_subdocs(YTransaction *txn, uint32_t *len);
 void ytransaction_commit(YTransaction *txn);
 
 /**
+ * Perform garbage collection of deleted blocks, even if a document was created with `skip_gc`
+ * option. This operation will scan over ALL deleted elements, NOT ONLY the ones that have been
+ * changed as part of this transaction scope.
+ */
+void ytransaction_force_gc(YTransaction *txn);
+
+/**
  * Returns `1` if current transaction is of read-write type.
  * Returns `0` if transaction is read-only.
  */

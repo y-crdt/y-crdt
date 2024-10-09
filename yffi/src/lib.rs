@@ -665,6 +665,17 @@ pub unsafe extern "C" fn ytransaction_commit(txn: *mut Transaction) {
     drop(Box::from_raw(txn)); // transaction is auto-committed when dropped
 }
 
+/// Perform garbage collection of deleted blocks, even if a document was created with `skip_gc`
+/// option. This operation will scan over ALL deleted elements, NOT ONLY the ones that have been
+/// changed as part of this transaction scope.
+#[no_mangle]
+pub unsafe extern "C" fn ytransaction_force_gc(txn: *mut Transaction) {
+    assert!(!txn.is_null());
+    let txn = txn.as_mut().unwrap();
+    let txn = txn.as_mut().unwrap();
+    txn.force_gc();
+}
+
 /// Returns `1` if current transaction is of read-write type.
 /// Returns `0` if transaction is read-only.
 #[no_mangle]
