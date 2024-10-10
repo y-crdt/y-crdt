@@ -1034,7 +1034,8 @@ impl DocAddr {
 
 #[cfg(test)]
 mod test {
-    use crate::block::ItemContent;
+    use crate::block::{BlockCell, ItemContent, GC};
+    use crate::branch::{Branch, BranchPtr};
     use crate::test_utils::exchange_updates;
     use crate::transaction::{ReadTxn, TransactionMut};
     use crate::types::ToJson;
@@ -1042,9 +1043,10 @@ mod test {
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
     use crate::{
-        any, Any, Array, ArrayPrelim, ArrayRef, DeleteSet, Doc, GetString, Map, MapPrelim, MapRef,
-        OffsetKind, Options, StateVector, Subscription, Text, TextRef, Transact, Uuid, WriteTxn,
-        XmlElementPrelim, XmlFragment, XmlFragmentRef, XmlTextPrelim, XmlTextRef, ID,
+        any, Any, Array, ArrayPrelim, ArrayRef, BranchID, DeleteSet, Doc, GetString, Map,
+        MapPrelim, MapRef, OffsetKind, Options, SharedRef, StateVector, Subscription, Text,
+        TextPrelim, TextRef, Transact, Uuid, WriteTxn, XmlElementPrelim, XmlFragment,
+        XmlFragmentRef, XmlTextPrelim, XmlTextRef, ID,
     };
     use arc_swap::ArcSwapOption;
     use assert_matches2::assert_matches;
@@ -2440,5 +2442,54 @@ mod test {
         txt1.insert(&mut d1.transact_mut(), 4, " the door");
         let actual = e.swap(None);
         assert!(actual.is_none());
+    }
+
+    #[test]
+    fn force_gc() {
+        let doc = Doc::with_options(Options {
+            client_id: 1,
+            skip_gc: true,
+            ..Default::default()
+        });
+        let map = doc.get_or_insert_map("map");
+
+        {
+            // create some initial data
+            let mut txn = doc.transact_mut();
+            let txt = map.insert(&mut txn, "text", TextPrelim::default()); // <1#0>
+            txt.insert(&mut txn, 0, "c"); // <1#1>
+            txt.insert(&mut txn, 0, "b"); // <1#2>
+            txt.insert(&mut txn, 0, "a"); // <1#3>
+
+            // drop nested type
+            map.remove(&mut txn, "text");
+        }
+
+        // verify that skip_gc works and we have access to an original text content
+        {
+            let txn = doc.transact();
+            let mut i = 1;
+            for c in ["c", "b", "a"] {
+                let block = txn
+                    .store()
+                    .blocks
+                    .get_block(&ID::new(1, i))
+                    .unwrap()
+                    .as_item()
+                    .unwrap();
+                assert!(block.is_deleted(), "`abc` should be marked as deleted");
+                assert_eq!(&block.content, &ItemContent::String(c.into()));
+                i += 1;
+            }
+        }
+
+        // force GC and check if original content is hard deleted
+        doc.transact_mut().force_gc();
+
+        let txn = doc.transact();
+        let block = txn.store().blocks.get_block(&ID::new(1, 1)).unwrap();
+        assert_eq!(block.len(), 3, "GCed blocks should be squashed");
+        assert!(block.is_deleted(), "`abc` should be deleted");
+        assert_matches!(&block, &BlockCell::GC(_));
     }
 }

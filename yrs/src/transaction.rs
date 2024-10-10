@@ -995,6 +995,13 @@ impl<'doc> TransactionMut<'doc> {
         }
     }
 
+    /// Perform garbage collection of deleted blocks, even if a document was created with `skip_gc`
+    /// option. This operation will scan over ALL deleted elements, NOT ONLY the ones that have been
+    /// changed as part of this transaction scope.
+    pub fn force_gc(&mut self) {
+        GCCollector::collect_all(self);
+    }
+
     pub(crate) fn add_changed_type(&mut self, parent: BranchPtr, parent_sub: Option<Arc<str>>) {
         let trigger = if let Some(ptr) = parent.item {
             (ptr.id().clock < self.before_state.get(&ptr.id().client)) && !ptr.is_deleted()

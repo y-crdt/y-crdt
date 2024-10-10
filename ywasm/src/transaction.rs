@@ -422,6 +422,15 @@ impl YTransaction {
         let payload = txn.encode_update_v2();
         Uint8Array::from(payload.as_slice())
     }
+
+    /// Force garbage collection of the deleted elements, regardless of a parent doc was created
+    /// with `gc` option turned on or off.
+    #[wasm_bindgen(js_name = gc)]
+    pub fn gc(&mut self) -> Result<()> {
+        let txn = self.as_mut()?;
+        txn.force_gc();
+        Ok(())
+    }
 }
 
 impl<'doc> From<TransactionMut<'doc>> for YTransaction {

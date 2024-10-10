@@ -156,7 +156,7 @@ impl BlockCell {
 
     pub fn len(&self) -> u32 {
         match self {
-            BlockCell::GC(gc) => gc.end - gc.start,
+            BlockCell::GC(gc) => gc.end - gc.start + 1,
             BlockCell::Block(block) => block.len(),
         }
     }

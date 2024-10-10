@@ -8,13 +8,22 @@ pub(crate) struct GCCollector {
 }
 
 impl GCCollector {
+    /// Garbage collect all blocks deleted within current transaction scope.
     pub fn collect(txn: &mut TransactionMut) {
+        let mut gc = Self::default();
+        gc.mark_in_scope(txn);
+        gc.collect_all_marked(txn);
+    }
+
+    /// Garbage collect all deleted blocks from current transaction's document store.
+    pub fn collect_all(txn: &mut TransactionMut) {
         let mut gc = Self::default();
         gc.mark_all(txn);
         gc.collect_all_marked(txn);
     }
 
-    fn mark_all(&mut self, txn: &mut TransactionMut) {
+    /// Mark deleted items based on a current transaction delete set.
+    fn mark_in_scope(&mut self, txn: &mut TransactionMut) {
         for (client, range) in txn.delete_set.iter() {
             if let Some(blocks) = txn.store.blocks.get_client_mut(client) {
                 for delete_item in range.iter().rev() {
@@ -33,6 +42,19 @@ impl GCCollector {
                                 i += 1;
                             }
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    fn mark_all(&mut self, txn: &mut TransactionMut) {
+        for (_, client_blocks) in txn.store.blocks.iter_mut() {
+            for block in client_blocks.iter_mut() {
+                if let BlockCell::Block(item) = block {
+                    if item.is_deleted() {
+                        item.gc(self, false);
+                        txn.merge_blocks.push(item.id);
                     }
                 }
             }
