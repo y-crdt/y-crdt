@@ -54,6 +54,7 @@ impl GCCollector {
                 if let BlockCell::Block(item) = block {
                     if item.is_deleted() {
                         item.gc(self, false);
+                        txn.merge_blocks.push(item.id);
                     }
                 }
             }

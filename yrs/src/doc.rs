@@ -2457,30 +2457,39 @@ mod test {
             // create some initial data
             let mut txn = doc.transact_mut();
             let txt = map.insert(&mut txn, "text", TextPrelim::default()); // <1#0>
-            txt.insert(&mut txn, 0, "abc"); // <1#1..=3>
+            txt.insert(&mut txn, 0, "c"); // <1#1>
+            txt.insert(&mut txn, 0, "b"); // <1#2>
+            txt.insert(&mut txn, 0, "a"); // <1#3>
 
             // drop nested type
             map.remove(&mut txn, "text");
         }
 
         // verify that skip_gc works and we have access to an original text content
-        let mut txn = doc.transact_mut();
-        let block = txn
-            .store()
-            .blocks
-            .get_block(&ID::new(1, 1))
-            .unwrap()
-            .as_item()
-            .unwrap();
-        assert!(block.is_deleted(), "`abc` should be marked as deleted");
-        assert_eq!(&block.content, &ItemContent::String("abc".into()));
+        {
+            let txn = doc.transact();
+            let mut i = 1;
+            for c in ["c", "b", "a"] {
+                let block = txn
+                    .store()
+                    .blocks
+                    .get_block(&ID::new(1, i))
+                    .unwrap()
+                    .as_item()
+                    .unwrap();
+                assert!(block.is_deleted(), "`abc` should be marked as deleted");
+                assert_eq!(&block.content, &ItemContent::String(c.into()));
+                i += 1;
+            }
+        }
 
         // force GC and check if original content is hard deleted
-        txn.force_gc();
+        doc.transact_mut().force_gc();
 
+        let txn = doc.transact();
         let block = txn.store().blocks.get_block(&ID::new(1, 1)).unwrap();
+        assert_eq!(block.len(), 3, "GCed blocks should be squashed");
         assert!(block.is_deleted(), "`abc` should be deleted");
         assert_matches!(&block, &BlockCell::GC(_));
-        assert_eq!(block.len(), 3);
     }
 }
