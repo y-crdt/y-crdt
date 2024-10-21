@@ -2472,7 +2472,7 @@ void ypath_destroy(struct YPathSegment *path, uint32_t len);
  * `YText`, `YXmlText` and XML nodes added to `YXmlElement`). `len` output parameter is used to
  * provide information about number of changes produced.
  *
- * Delta returned from this function should eventually be released using `yevent_delta_destroy`
+ * Delta returned from this function should eventually be released using `ytext_delta_destroy`
  * function.
  */
 struct YDeltaOut *ytext_event_delta(const struct YTextEvent *e, uint32_t *len);
@@ -2482,7 +2482,7 @@ struct YDeltaOut *ytext_event_delta(const struct YTextEvent *e, uint32_t *len);
  * `YText`, `YXmlText` and XML nodes added to `YXmlElement`). `len` output parameter is used to
  * provide information about number of changes produced.
  *
- * Delta returned from this function should eventually be released using `yevent_delta_destroy`
+ * Delta returned from this function should eventually be released using `ytext_delta_destroy`
  * function.
  */
 struct YDeltaOut *yxmltext_event_delta(const struct YXmlTextEvent *e, uint32_t *len);
@@ -2508,7 +2508,7 @@ struct YEventChange *yarray_event_delta(const struct YArrayEvent *e, uint32_t *l
 struct YEventChange *yxmlelem_event_delta(const struct YXmlEvent *e, uint32_t *len);
 
 /**
- * Releases memory allocated by the object returned from `yevent_delta` function.
+ * Releases memory allocated by the object returned from `ytext_delta` function.
  */
 void ytext_delta_destroy(struct YDeltaOut *delta, uint32_t len);
 

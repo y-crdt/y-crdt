@@ -4479,7 +4479,7 @@ pub unsafe extern "C" fn ypath_destroy(path: *mut YPathSegment, len: u32) {
 /// `YText`, `YXmlText` and XML nodes added to `YXmlElement`). `len` output parameter is used to
 /// provide information about number of changes produced.
 ///
-/// Delta returned from this function should eventually be released using `yevent_delta_destroy`
+/// Delta returned from this function should eventually be released using `ytext_delta_destroy`
 /// function.
 #[no_mangle]
 pub unsafe extern "C" fn ytext_event_delta(e: *const YTextEvent, len: *mut u32) -> *mut YDeltaOut {
@@ -4496,7 +4496,7 @@ pub unsafe extern "C" fn ytext_event_delta(e: *const YTextEvent, len: *mut u32) 
 /// `YText`, `YXmlText` and XML nodes added to `YXmlElement`). `len` output parameter is used to
 /// provide information about number of changes produced.
 ///
-/// Delta returned from this function should eventually be released using `yevent_delta_destroy`
+/// Delta returned from this function should eventually be released using `ytext_delta_destroy`
 /// function.
 #[no_mangle]
 pub unsafe extern "C" fn yxmltext_event_delta(
@@ -4560,7 +4560,7 @@ pub unsafe extern "C" fn yxmlelem_event_delta(
     Box::into_raw(out) as *mut _
 }
 
-/// Releases memory allocated by the object returned from `yevent_delta` function.
+/// Releases memory allocated by the object returned from `ytext_delta` function.
 #[no_mangle]
 pub unsafe extern "C" fn ytext_delta_destroy(delta: *mut YDeltaOut, len: u32) {
     if !delta.is_null() {
