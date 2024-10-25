@@ -114,6 +114,22 @@ impl Update {
         sv
     }
 
+    /// Returns a state vector representing a lower bound of client clocks included by blocks
+    /// stored in current update.
+    pub fn state_vector_lower(&self) -> StateVector {
+        let mut sv = StateVector::default();
+        for (&client, blocks) in self.blocks.clients.iter() {
+            let id = blocks[0].id();
+            sv.set_max(client, id.clock);
+        }
+        sv
+    }
+
+    /// Returns a delete set associated with current update.
+    pub fn delete_set(&self) -> &DeleteSet {
+        &self.delete_set
+    }
+
     /// Merges another update into current one. Their blocks are deduplicated and reordered.
     pub fn merge(&mut self, other: Self) {
         for (client, other_blocks) in other.blocks.clients {
