@@ -114,6 +114,22 @@ impl Update {
         sv
     }
 
+    /// Returns a state vector representing a lower bound of client clocks included by blocks
+    /// stored in current update.
+    pub fn state_vector_lower(&self) -> StateVector {
+        let mut sv = StateVector::default();
+        for (&client, blocks) in self.blocks.clients.iter() {
+            let id = blocks[0].id();
+            sv.set_max(client, id.clock);
+        }
+        sv
+    }
+
+    /// Returns a delete set associated with current update.
+    pub fn delete_set(&self) -> &DeleteSet {
+        &self.delete_set
+    }
+
     /// Merges another update into current one. Their blocks are deduplicated and reordered.
     pub fn merge(&mut self, other: Self) {
         for (client, other_blocks) in other.blocks.clients {
@@ -1078,7 +1094,8 @@ mod test {
     use crate::update::{BlockCarrier, Update};
     use crate::updates::decoder::{Decode, DecoderV1};
     use crate::{
-        Doc, GetString, Options, ReadTxn, StateVector, Text, Transact, XmlFragment, XmlOut, ID,
+        Doc, GetString, Options, ReadTxn, StateVector, Text, Transact, WriteTxn, XmlFragment,
+        XmlOut, ID,
     };
 
     #[test]
@@ -1279,6 +1296,7 @@ mod test {
                 let mut lock = server_updates.lock().unwrap();
                 lock.push(update.update.clone());
             })
+            .unwrap()
         };
         let txt = d0.get_or_insert_text("textBlock");
         txt.apply_delta(&mut d0.transact_mut(), [Delta::insert("r")]);
@@ -1343,6 +1361,42 @@ mod test {
         let txt5 = d5.get_or_insert_text("textBlock");
         let str = txt5.get_string(&d5.transact());
         assert_eq!(str, "nenor");
+    }
+
+    #[test]
+    fn update_lower_bound() {
+        let d1 = Doc::with_client_id(1);
+        let mut updates = Arc::new(Mutex::new(vec![]));
+        let sub = {
+            let server_updates = updates.clone();
+            d1.observe_update_v1(move |_, update| {
+                let mut lock = server_updates.lock().unwrap();
+                lock.push(update.update.clone());
+            })
+            .unwrap()
+        };
+
+        let txt = d1.get_or_insert_text("text");
+        txt.insert(&mut d1.transact_mut(), 0, "a");
+        txt.insert(&mut d1.transact_mut(), 1, "b");
+        txt.insert(&mut d1.transact_mut(), 2, "c");
+
+        drop(sub);
+        let d2 = Doc::with_client_id(2);
+        let updates = Arc::into_inner(updates).unwrap().into_inner().unwrap();
+        // apply 1st update
+        let u1 = Update::decode_v1(&updates[0]).unwrap();
+        d2.transact_mut().apply_update(u1).unwrap();
+        let d2_sv = d2.transact().state_vector();
+
+        let u2 = Update::decode_v1(&updates[1]).unwrap();
+        assert!(d2_sv >= u2.state_vector_lower(), "no missing update");
+        assert!(d2_sv <= u2.state_vector(), "update has new data");
+
+        // check if we can detect missing 2nd update given the 3rd
+        let u3 = Update::decode_v1(&updates[2]).unwrap();
+        assert!(d2_sv <= u3.state_vector_lower(), "missing update");
+        assert!(d2_sv <= u3.state_vector(), "update has new data");
     }
 
     fn decode_update(bin: &[u8]) -> Update {
