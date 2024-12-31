@@ -2237,48 +2237,6 @@ mod test {
     }
 
     #[test]
-    fn check_liveness() {
-        let d1 = Doc::new();
-        let r1 = d1.get_or_insert_map("root");
-
-        let d2 = Doc::new();
-        let r2 = d2.get_or_insert_map("root");
-
-        let mut t1 = d1.transact_mut();
-        assert!(t1.is_alive(&r1), "root is always alive");
-        let a1 = r1.insert(&mut t1, "a", MapPrelim::default());
-        assert!(t1.is_alive(&a1), "1st level nesting");
-        let aa1 = a1.insert(&mut t1, "aa", MapPrelim::default());
-        assert!(t1.is_alive(&aa1), "2nd level nesting");
-        drop(t1);
-
-        exchange_updates(&[&d1, &d2]);
-
-        let t2 = d2.transact();
-        let a2 = r2.get(&t2, "a").unwrap().cast::<MapRef>().unwrap();
-        let aa2 = a2.get(&t2, "aa").unwrap().cast::<MapRef>().unwrap();
-        assert!(t2.is_alive(&r2), "root is always alive (remote)");
-        assert!(t2.is_alive(&a2), "1st level nesting (remote)");
-        assert!(t2.is_alive(&aa2), "2nd level nesting (remote)");
-        drop(t2);
-
-        // delete nested
-        let mut t1 = d1.transact_mut();
-        r1.remove(&mut t1, "a");
-        assert!(t1.is_alive(&r1), "root is always alive");
-        assert!(!t1.is_alive(&a1), "child was removed");
-        assert!(!t1.is_alive(&aa1), "parent was removed");
-        drop(t1);
-
-        exchange_updates(&[&d1, &d2]);
-
-        let t2 = d2.transact();
-        assert!(t2.is_alive(&r2), "root is always alive (remote)");
-        assert!(!t2.is_alive(&a2), "child was removed (remote)");
-        assert!(!t2.is_alive(&aa2), "parent was removed (remote)");
-    }
-
-    #[test]
     fn apply_snapshot_updates() {
         let update = {
             let doc = Doc::with_options(Options {

@@ -95,15 +95,6 @@ pub trait ReadTxn: Sized {
         merge_pending_v2(encoder.to_vec(), self.store())
     }
 
-    /// Check if given node is alive. Returns false if node has been deleted.
-    fn is_alive<B>(&self, node: &B) -> bool
-    where
-        B: SharedRef,
-    {
-        let ptr = BranchPtr::from(node.as_ref());
-        self.store().is_alive(&ptr)
-    }
-
     /// Returns an iterator over top level (root) shared types available in current [Doc].
     fn root_refs(&self) -> RootRefs {
         let store = self.store();
@@ -639,7 +630,6 @@ impl<'doc> TransactionMut<'doc> {
                     }
                 }
                 ItemContent::Type(inner) => {
-                    self.store.deregister(inner);
                     let branch_ptr = BranchPtr::from(inner);
                     #[cfg(feature = "weak")]
                     if let crate::types::TypeRef::WeakLink(source) = &branch_ptr.type_ref {
@@ -1086,7 +1076,7 @@ impl<'doc> TransactionMut<'doc> {
 }
 
 /// Iterator struct used to traverse over all of the root level types defined in a corresponding [Doc].
-pub struct RootRefs<'doc>(std::collections::hash_map::Iter<'doc, Arc<str>, Arc<Branch>>);
+pub struct RootRefs<'doc>(std::collections::hash_map::Iter<'doc, Arc<str>, Box<Branch>>);
 
 impl<'doc> Iterator for RootRefs<'doc> {
     type Item = (&'doc str, Out);
