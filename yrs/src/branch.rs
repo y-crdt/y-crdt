@@ -98,15 +98,15 @@ impl DerefMut for BranchPtr {
     }
 }
 
-impl<'a> From<&'a mut Arc<Branch>> for BranchPtr {
-    fn from(branch: &'a mut Arc<Branch>) -> Self {
+impl<'a> From<&'a mut Box<Branch>> for BranchPtr {
+    fn from(branch: &'a mut Box<Branch>) -> Self {
         let ptr = NonNull::from(branch.as_ref());
         BranchPtr(ptr)
     }
 }
 
-impl<'a> From<&'a Arc<Branch>> for BranchPtr {
-    fn from(branch: &'a Arc<Branch>) -> Self {
+impl<'a> From<&'a Box<Branch>> for BranchPtr {
+    fn from(branch: &'a Box<Branch>) -> Self {
         let b: &Branch = &*branch;
 
         let ptr = unsafe { NonNull::new_unchecked(b as *const Branch as *mut Branch) };
@@ -243,8 +243,8 @@ impl PartialEq for Branch {
 }
 
 impl Branch {
-    pub fn new(type_ref: TypeRef) -> Arc<Self> {
-        Arc::new(Self {
+    pub fn new(type_ref: TypeRef) -> Box<Self> {
+        Box::new(Self {
             start: None,
             map: HashMap::default(),
             block_len: 0,

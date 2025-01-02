@@ -725,12 +725,7 @@ impl ItemPtr {
                     // /** @type {AbstractType<any>} */ (item.parent)._searchMarker = null
                 }
                 ItemContent::Type(branch) => {
-                    let ptr = if this.info.is_deleted() {
-                        BranchPtr::from(branch)
-                    } else {
-                        // if current node is alive register is as such
-                        txn.store.register(branch)
-                    };
+                    let ptr = BranchPtr::from(branch);
                     #[cfg(feature = "weak")]
                     if let TypeRef::WeakLink(source) = &ptr.type_ref {
                         source.materialize(txn, ptr);
@@ -1248,10 +1243,9 @@ impl Item {
         });
         let item_ptr = ItemPtr::from(&mut item);
         if let ItemContent::Type(branch) = &mut item.content {
-            let b = Arc::get_mut(branch).unwrap();
-            b.item = Some(item_ptr);
-            if b.name.is_none() {
-                b.name = root_name;
+            branch.item = Some(item_ptr);
+            if branch.name.is_none() {
+                branch.name = root_name;
             }
         }
         Some(item)
@@ -1541,7 +1535,7 @@ pub enum ItemContent {
 
     /// A reference of a branch node. Branch nodes define a complex collection types, such as
     /// arrays, maps or XML elements.
-    Type(Arc<Branch>),
+    Type(Box<Branch>),
 
     /// Marker for destination location of move operation. Move is used to change position of
     /// previously inserted element in a sequence with respect to other operations that may happen
@@ -1915,14 +1909,13 @@ impl ItemContent {
     pub(crate) fn gc(&mut self, collector: &mut GCCollector) {
         match self {
             ItemContent::Type(branch) => {
-                let b = Arc::get_mut(branch).unwrap();
-                let mut curr = b.start.take();
+                let mut curr = branch.start.take();
                 while let Some(mut item) = curr {
                     curr = item.right.clone();
                     item.gc(collector, true);
                 }
 
-                for (_, ptr) in b.map.drain() {
+                for (_, ptr) in branch.map.drain() {
                     curr = Some(ptr);
                     while let Some(mut item) = curr {
                         curr = item.left.clone();
