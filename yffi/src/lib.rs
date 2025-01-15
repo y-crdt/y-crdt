@@ -3,7 +3,6 @@ use std::ffi::{c_char, c_void, CStr, CString};
 use std::mem::{forget, ManuallyDrop, MaybeUninit};
 use std::ops::{Deref, RangeBounds};
 use std::ptr::{null, null_mut};
-use std::str::Utf8Error;
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::Arc;
 use yrs::block::{ClientID, EmbedPrelim, ItemContent, Prelim, Unused};
@@ -4959,7 +4958,7 @@ pub struct YEventChange {
     pub tag: u8,
 
     /// Number of element affected by current type of a change. It can refer to a number of
-    /// inserted `values`, number of deleted element or a number of retained (unchanged) values.  
+    /// inserted `values`, number of deleted element or a number of retained (unchanged) values.
     pub len: u32,
 
     /// Used in case when current change is of `Y_EVENT_CHANGE_ADD` type. Contains a list (of
@@ -5043,7 +5042,7 @@ pub struct YDeltaOut {
     pub tag: u8,
 
     /// Number of element affected by current type of change. It can refer to a number of
-    /// inserted `values`, number of deleted element or a number of retained (unchanged) values.  
+    /// inserted `values`, number of deleted element or a number of retained (unchanged) values.
     pub len: u32,
 
     /// A number of formatting attributes assigned to an edited area represented by this delta.
@@ -5401,7 +5400,7 @@ pub unsafe extern "C" fn ysticky_index_from_index(
 }
 
 /// Serializes `YStickyIndex` into binary representation. `len` parameter is updated with byte
-/// length of the generated binary. Returned binary can be free'd using `ybinary_destroy`.  
+/// length of the generated binary. Returned binary can be free'd using `ybinary_destroy`.
 #[no_mangle]
 pub unsafe extern "C" fn ysticky_index_encode(
     pos: *const YStickyIndex,
@@ -5430,34 +5429,29 @@ pub unsafe extern "C" fn ysticky_index_decode(
 
 /// Serialize `YStickyIndex` into null-terminated UTF-8 encoded JSON string, that's compatible with
 /// Yjs RelativePosition serialization format. The `len` parameter is updated with byte length of
-/// of the output JSON string.
-/// Returns null pointer if serialization failed.
+/// of the output JSON string. This string can be freed using `ystring_destroy`.
 #[no_mangle]
-pub unsafe extern "C" fn ysticky_index_to_json(
-    pos: *const YStickyIndex,
-    len: *mut u32,
-) -> *mut c_char {
+pub unsafe extern "C" fn ysticky_index_to_json(pos: *const YStickyIndex) -> *mut c_char {
     let pos = pos.as_ref().unwrap();
     let json = match serde_json::to_string(&pos.0) {
         Ok(json) => json,
         Err(_) => return null_mut(),
     };
-    let binary = CString::new(json).unwrap().into_raw();
-    *len = binary.len() as u32;
-    binary
+    CString::new(json).unwrap().into_raw()
 }
 
 /// Deserializes `YStickyIndex` from the payload previously serialized using `ysticky_index_to_json`.
 /// The input `json` parameter is a NULL-terminated UTF-8 encoded string containing a JSON
 /// compatible with Yjs RelativePosition serialization format.
+///
 /// Returns null pointer if deserialization failed.
+///
+/// This function DOESN'T release the `json` parameter: it needs to be done manually - if JSON
+/// string was created using `ysticky_index_to_json` function, it can be freed using `ystring_destroy`.
 #[no_mangle]
-pub unsafe extern "C" fn ysticky_index_from_json(
-    json: *const c_char,
-    len: u32,
-) -> *mut YStickyIndex {
-    let slice = std::slice::from_raw_parts(json as *const u8, len as usize);
-    let json = match std::str::from_utf8(slice) {
+pub unsafe extern "C" fn ysticky_index_from_json(json: *const c_char) -> *mut YStickyIndex {
+    let cstr = CStr::from_ptr(json);
+    let json = match cstr.to_str() {
         Ok(json) => json,
         Err(_) => return null_mut(),
     };
