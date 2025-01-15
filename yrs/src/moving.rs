@@ -6,7 +6,8 @@ use crate::transaction::TransactionMut;
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::{BranchID, ReadTxn, WriteTxn, ID};
-use serde::de::Visitor;
+use serde::de::{MapAccess, Visitor};
+use serde::ser::SerializeStruct;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashSet;
 use std::fmt::Formatter;
@@ -399,7 +400,7 @@ impl std::fmt::Display for Move {
 /// let a = pos.get_offset(&txn).unwrap();
 /// assert_eq!(a.index, 4);
 /// ```
-#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct StickyIndex {
     scope: IndexScope,
     /// If true - associate to the right block. Otherwise, associate to the left one.
@@ -619,6 +620,91 @@ impl Decode for StickyIndex {
         let context = IndexScope::decode(decoder)?;
         let assoc = Assoc::decode(decoder)?;
         Ok(Self::new(context, assoc))
+    }
+}
+
+impl Serialize for StickyIndex {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut s = serializer.serialize_struct("StickyIndex", 2)?;
+        match &self.scope {
+            IndexScope::Relative(id) => s.serialize_field("item", id)?,
+            IndexScope::Nested(id) => s.serialize_field("type", id)?,
+            IndexScope::Root(name) => s.serialize_field("tname", name)?,
+        }
+        let assoc = self.assoc as i8;
+        s.serialize_field("assoc", &assoc)?;
+        s.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for StickyIndex {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct StickyIndexVisitor;
+        impl<'de> Visitor<'de> for StickyIndexVisitor {
+            type Value = StickyIndex;
+
+            fn expecting(&self, formatter: &mut Formatter) -> std::fmt::Result {
+                write!(formatter, "StickyIndex")
+            }
+
+            fn visit_map<A>(self, mut access: A) -> Result<Self::Value, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                let mut item = None;
+                let mut ttype = None;
+                let mut tname = None;
+                let mut assoc = None;
+                while let Some(key) = access.next_key::<String>()? {
+                    match &*key {
+                        "item" => {
+                            item = access.next_value()?;
+                        }
+                        "type" => {
+                            ttype = access.next_value()?;
+                        }
+                        "tname" => {
+                            tname = access.next_value()?;
+                        }
+                        "assoc" => {
+                            assoc = access.next_value()?;
+                        }
+                        _ => {
+                            return Err(serde::de::Error::unknown_field(
+                                &*key,
+                                &["item", "type", "tname", "assoc"],
+                            ));
+                        }
+                    }
+                }
+                let scope = if let Some(id) = item {
+                    IndexScope::Relative(id)
+                } else if let Some(name) = tname {
+                    IndexScope::Root(name)
+                } else if let Some(id) = ttype {
+                    IndexScope::Nested(id)
+                } else {
+                    return Err(serde::de::Error::missing_field("item"));
+                };
+                let assoc = if let Some(assoc) = assoc {
+                    match assoc {
+                        0 => Assoc::After,
+                        -1 => Assoc::Before,
+                        _ => return Err(serde::de::Error::custom("invalid assoc value")),
+                    }
+                } else {
+                    Assoc::default()
+                };
+                Ok(StickyIndex::new(scope, assoc))
+            }
+        }
+        deserializer.deserialize_map(StickyIndexVisitor)
     }
 }
 
@@ -846,7 +932,8 @@ mod test {
     use crate::moving::Assoc;
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::Encode;
-    use crate::{Doc, IndexedSequence, StickyIndex, Text, TextRef, Transact};
+    use crate::{Doc, IndexScope, IndexedSequence, StickyIndex, Text, TextRef, Transact, ID};
+    use serde::{Deserialize, Serialize};
 
     fn check_sticky_indexes(doc: &Doc, text: &TextRef) {
         // test if all positions are encoded and restored correctly
@@ -957,5 +1044,52 @@ mod test {
 
         assert_eq!(pos_right.index, 2);
         assert_eq!(pos_left.index, 1);
+    }
+
+    #[test]
+    fn sticky_index_is_yjs_compatible() {
+        // below is the example data passed from Yjs tiptap plugin
+        #[derive(Serialize, Deserialize)]
+        struct AwarenessData {
+            user: User,
+            cursor: Cursor,
+        }
+        #[derive(Serialize, Deserialize)]
+        struct Cursor {
+            anchor: StickyIndex,
+            head: StickyIndex,
+        }
+        #[derive(Serialize, Deserialize)]
+        struct User {
+            name: String,
+            color: String,
+        }
+        let json = serde_json::json!({
+            "user":{"name":"Grace","color":"#FAF594"},
+            "cursor":{
+                "anchor":{"type":{"client":3731284436u32,"clock":1},"tname":null,"item":{"client":3731284436u32,"clock":20},"assoc":-1},
+                "head":{"type":{"client":3731284436u32,"clock":1},"tname":null,"item":{"client":3731284436u32,"clock":20},"assoc":-1}
+            }
+        });
+        let data: AwarenessData = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(
+            data.cursor.anchor,
+            StickyIndex::new(IndexScope::Relative(ID::new(3731284436, 20)), Assoc::Before)
+        );
+        assert_eq!(
+            data.cursor.head,
+            StickyIndex::new(IndexScope::Relative(ID::new(3731284436, 20)), Assoc::Before)
+        );
+        let json2 = serde_json::to_value(&data).unwrap();
+        assert_eq!(
+            json["cursor"]["anchor"]["item"],
+            serde_json::json!({"client":3731284436u32,"clock":20})
+        );
+        assert_eq!(json["cursor"]["anchor"]["assoc"], serde_json::json!(-1));
+        assert_eq!(
+            json["cursor"]["head"]["item"],
+            serde_json::json!({"client":3731284436u32,"clock":20})
+        );
+        assert_eq!(json["cursor"]["head"]["assoc"], serde_json::json!(-1));
     }
 }
