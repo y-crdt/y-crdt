@@ -10,10 +10,10 @@ const checkStickyIndex = (ydoc, ytext) => {
     for (let i = 0; i < ytext.length; i++) {
         // for all types of associations..
         for (let assoc = -1; assoc < 2; assoc++) {
-            const rpos = Y.createStickyIndexFromType(ytext, i, assoc)
+            const rpos = Y.createRelativePositionFromTypeIndex(ytext, i, assoc)
             const encodedRpos = Y.encodeStickyIndex(rpos)
             const decodedRpos = Y.decodeStickyIndex(encodedRpos)
-            const absPos = (Y.createOffsetFromStickyIndex(decodedRpos, ydoc))
+            const absPos = (Y.createRelativePositionFromTypeIndex(decodedRpos, ydoc))
             t.assert(absPos.index === i)
             t.assert(absPos.assoc === assoc)
         }
@@ -94,11 +94,11 @@ export const testStickyIndexAssociationDifference = tc => {
     const ytext = ydoc.getText('test')
     ytext.insert(0, '2')
     ytext.insert(0, '1')
-    const rposRight = Y.createStickyIndexFromType(ytext, 1, 0)
-    const rposLeft = Y.createStickyIndexFromType(ytext, 1, -1)
+    const rposRight = Y.createRelativePositionFromTypeIndex(ytext, 1, 0)
+    const rposLeft = Y.createRelativePositionFromTypeIndex(ytext, 1, -1)
     ytext.insert(1, 'x')
-    const posRight = Y.createOffsetFromStickyIndex(rposRight, ydoc)
-    const posLeft = Y.createOffsetFromStickyIndex(rposLeft, ydoc)
+    const posRight = Y.createAbsolutePositionFromRelativePosition(rposRight, ydoc)
+    const posLeft = Y.createAbsolutePositionFromRelativePosition(rposLeft, ydoc)
     t.assert(posRight != null && posRight.index === 2)
     t.assert(posLeft != null && posLeft.index === 1)
 }

@@ -374,7 +374,7 @@ pub fn encode_state_from_snapshot_v2(doc: &Doc, snapshot: JsValue) -> Result<Vec
 ///
 /// If association is >= 0, the resulting position will point to location **after** the referenced index.
 /// If association is < 0, the resulting position will point to location **before** the referenced index.
-#[wasm_bindgen(js_name=createStickyIndexFromType)]
+#[wasm_bindgen(js_name=createRelativePositionFromTypeIndex)]
 pub fn create_sticky_index_from_type(
     ytype: &JsValue,
     index: u32,
@@ -416,7 +416,7 @@ pub fn create_sticky_index_from_type(
 
 /// Converts a sticky index (see: `createStickyIndexFromType`) into an object
 /// containing human-readable index.
-#[wasm_bindgen(js_name=createOffsetFromStickyIndex)]
+#[wasm_bindgen(js_name=createAbsolutePositionFromRelativePosition)]
 pub fn create_offset_from_sticky_index(rpos: &JsValue, doc: &Doc) -> Result<JsValue> {
     let pos: StickyIndex =
         JsValue::into_serde(rpos).map_err(|e| JsValue::from_str(&e.to_string()))?;
@@ -439,7 +439,7 @@ pub fn create_offset_from_sticky_index(rpos: &JsValue, doc: &Doc) -> Result<JsVa
 
 /// Serializes sticky index created by `createStickyIndexFromType` into a binary
 /// payload.
-#[wasm_bindgen(js_name=encodeStickyIndex)]
+#[wasm_bindgen(js_name=encodeRelativePosition)]
 pub fn encode_sticky_index(rpos: &JsValue) -> Result<Uint8Array> {
     let pos: StickyIndex =
         JsValue::into_serde(rpos).map_err(|e| JsValue::from_str(&e.to_string()))?;
@@ -448,11 +448,18 @@ pub fn encode_sticky_index(rpos: &JsValue) -> Result<Uint8Array> {
 }
 
 /// Deserializes sticky index serialized previously by `encodeStickyIndex`.
-#[wasm_bindgen(js_name=decodeStickyIndex)]
+#[wasm_bindgen(js_name=decodeRelativePosition)]
 pub fn decode_sticky_index(bin: Uint8Array) -> Result<JsValue> {
     let data: Vec<u8> = bin.to_vec();
     match StickyIndex::decode_v1(&data) {
         Ok(index) => JsValue::from_serde(&index).map_err(|e| JsValue::from_str(&e.to_string())),
         Err(err) => Err(JsValue::from_str(&err.to_string())),
     }
+}
+
+#[wasm_bindgen(js_name=compareRelativePositions)]
+pub fn sticky_index_cmp(a: JsValue, b: JsValue) -> bool {
+    let a: Option<StickyIndex> = a.into_serde().unwrap();
+    let b: Option<StickyIndex> = b.into_serde().unwrap();
+    a == b
 }
