@@ -3,6 +3,7 @@ use std::ffi::{c_char, c_void, CStr, CString};
 use std::mem::{forget, ManuallyDrop, MaybeUninit};
 use std::ops::{Deref, RangeBounds};
 use std::ptr::{null, null_mut};
+use std::str::Utf8Error;
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::Arc;
 use yrs::block::{ClientID, EmbedPrelim, ItemContent, Prelim, Unused};
@@ -5412,7 +5413,8 @@ pub unsafe extern "C" fn ysticky_index_encode(
     Box::into_raw(binary) as *mut c_char
 }
 
-/// Deserializes `YStickyIndex` from the payload previously serialized using `ysticky_index_encode`.
+/// Serializes `YStickyIndex` into JSON representation. `len` parameter is updated with byte
+/// length of the generated binary. Returned binary can be free'd using `ybinary_destroy`.
 #[no_mangle]
 pub unsafe extern "C" fn ysticky_index_decode(
     binary: *const c_char,
@@ -5423,6 +5425,45 @@ pub unsafe extern "C" fn ysticky_index_decode(
         Box::into_raw(Box::new(YStickyIndex(pos)))
     } else {
         null_mut()
+    }
+}
+
+/// Serialize `YStickyIndex` into null-terminated UTF-8 encoded JSON string, that's compatible with
+/// Yjs RelativePosition serialization format. The `len` parameter is updated with byte length of
+/// of the output JSON string.
+/// Returns null pointer if serialization failed.
+#[no_mangle]
+pub unsafe extern "C" fn ysticky_index_to_json(
+    pos: *const YStickyIndex,
+    len: *mut u32,
+) -> *mut c_char {
+    let pos = pos.as_ref().unwrap();
+    let json = match serde_json::to_string(&pos.0) {
+        Ok(json) => json,
+        Err(_) => return null_mut(),
+    };
+    let binary = CString::new(json).unwrap().into_raw();
+    *len = binary.len() as u32;
+    binary
+}
+
+/// Deserializes `YStickyIndex` from the payload previously serialized using `ysticky_index_to_json`.
+/// The input `json` parameter is a NULL-terminated UTF-8 encoded string containing a JSON
+/// compatible with Yjs RelativePosition serialization format.
+/// Returns null pointer if deserialization failed.
+#[no_mangle]
+pub unsafe extern "C" fn ysticky_index_from_json(
+    json: *const c_char,
+    len: u32,
+) -> *mut YStickyIndex {
+    let slice = std::slice::from_raw_parts(json as *const u8, len as usize);
+    let json = match std::str::from_utf8(slice) {
+        Ok(json) => json,
+        Err(_) => return null_mut(),
+    };
+    match serde_json::from_str(json) {
+        Ok(pos) => Box::into_raw(Box::new(YStickyIndex(pos))),
+        Err(_) => null_mut(),
     }
 }
 

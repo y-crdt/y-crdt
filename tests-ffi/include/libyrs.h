@@ -2661,9 +2661,26 @@ YStickyIndex *ysticky_index_from_index(const Branch *branch,
 char *ysticky_index_encode(const YStickyIndex *pos, uint32_t *len);
 
 /**
- * Deserializes `YStickyIndex` from the payload previously serialized using `ysticky_index_encode`.
+ * Serializes `YStickyIndex` into JSON representation. `len` parameter is updated with byte
+ * length of the generated binary. Returned binary can be free'd using `ybinary_destroy`.
  */
 YStickyIndex *ysticky_index_decode(const char *binary, uint32_t len);
+
+/**
+ * Serialize `YStickyIndex` into null-terminated UTF-8 encoded JSON string, that's compatible with
+ * Yjs RelativePosition serialization format. The `len` parameter is updated with byte length of
+ * of the output JSON string.
+ * Returns null pointer if serialization failed.
+ */
+char *ysticky_index_to_json(const YStickyIndex *pos, uint32_t *len);
+
+/**
+ * Deserializes `YStickyIndex` from the payload previously serialized using `ysticky_index_to_json`.
+ * The input `json` parameter is a NULL-terminated UTF-8 encoded string containing a JSON
+ * compatible with Yjs RelativePosition serialization format.
+ * Returns null pointer if deserialization failed.
+ */
+YStickyIndex *ysticky_index_from_json(const char *json, uint32_t len);
 
 /**
  * Given `YStickyIndex` and transaction reference, if computes a human-readable index in a
