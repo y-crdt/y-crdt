@@ -13,7 +13,7 @@ use std::collections::{Bound, HashMap};
 use std::convert::TryInto;
 use std::ops::{Deref, RangeBounds};
 use std::sync::Arc;
-use wasm_bindgen::__rt::RefMut;
+use wasm_bindgen::__rt::RcRefMut;
 use wasm_bindgen::convert::{FromWasmAbi, IntoWasmAbi};
 use wasm_bindgen::JsValue;
 use yrs::block::{EmbedPrelim, ItemContent, Prelim, Unused};
@@ -280,14 +280,14 @@ pub enum ValueRef {
 }
 
 pub enum Shared {
-    Text(RefMut<'static, YText>),
-    Map(RefMut<'static, YMap>),
-    Array(RefMut<'static, YArray>),
-    Weak(RefMut<'static, YWeakLink>),
-    XmlText(RefMut<'static, YXmlText>),
-    XmlElement(RefMut<'static, YXmlElement>),
-    XmlFragment(RefMut<'static, YXmlFragment>),
-    Doc(RefMut<'static, YDoc>),
+    Text(RcRefMut<YText>),
+    Map(RcRefMut<YMap>),
+    Array(RcRefMut<YArray>),
+    Weak(RcRefMut<YWeakLink>),
+    XmlText(RcRefMut<YXmlText>),
+    XmlElement(RcRefMut<YXmlElement>),
+    XmlFragment(RcRefMut<YXmlFragment>),
+    Doc(RcRefMut<YDoc>),
 }
 
 impl Shared {

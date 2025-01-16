@@ -12,7 +12,7 @@ use crate::Result;
 use gloo_utils::format::JsValueSerdeExt;
 use js_sys::Uint8Array;
 use std::ops::Deref;
-use wasm_bindgen::__rt::{Ref, RefMut};
+use wasm_bindgen::__rt::{RcRef, RcRefMut};
 use wasm_bindgen::convert::{IntoWasmAbi, RefFromWasmAbi, RefMutFromWasmAbi};
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::JsValue;
@@ -41,7 +41,7 @@ pub struct YTransaction {
 }
 
 impl YTransaction {
-    pub fn from_implicit(txn: &ImplicitTransaction) -> crate::Result<Option<Ref<Self>>> {
+    pub fn from_implicit(txn: &ImplicitTransaction) -> crate::Result<Option<RcRef<Self>>> {
         let js_value: &JsValue = txn.as_ref();
         if js_value.is_undefined() {
             Ok(None)
@@ -53,7 +53,7 @@ impl YTransaction {
         }
     }
 
-    pub fn from_implicit_mut(txn: &ImplicitTransaction) -> crate::Result<Option<RefMut<Self>>> {
+    pub fn from_implicit_mut(txn: &ImplicitTransaction) -> crate::Result<Option<RcRefMut<Self>>> {
         let js_value: &JsValue = txn.as_ref();
         if js_value.is_undefined() {
             Ok(None)
@@ -65,7 +65,7 @@ impl YTransaction {
         }
     }
 
-    pub fn try_ref_from_js_value(value: &JsValue) -> Result<Ref<Self>> {
+    pub fn try_ref_from_js_value(value: &JsValue) -> Result<RcRef<Self>> {
         let abi = value.into_abi();
 
         if abi == 0 {
@@ -81,7 +81,7 @@ impl YTransaction {
         }
     }
 
-    pub fn try_mut_from_js_value(value: &JsValue) -> Result<RefMut<Self>> {
+    pub fn try_mut_from_js_value(value: &JsValue) -> Result<RcRefMut<Self>> {
         let abi = value.into_abi();
         if abi == 0 {
             Err(JsValue::from_str(crate::js::errors::NON_TRANSACTION))
