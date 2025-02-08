@@ -1,5 +1,7 @@
 use super::{JsonPath, JsonPathToken};
 use crate::Any;
+use proptest::num::usize;
+use std::ops::Range;
 
 impl Any {
     pub fn json_path<'a>(&'a self, path: &'a JsonPath<'a>) -> JsonPathIter<'a> {
@@ -8,11 +10,16 @@ impl Any {
 }
 
 pub struct JsonPathIter<'a> {
+    /// Root object to start from.
     root: &'a Any,
+    /// Current object we're at.
     current: &'a Any,
+    /// JsonPath tokens to evaluate.
     tokens: &'a [JsonPathToken<'a>],
+    /// Offset to tokens array, pointing to currently evaluated token.
     index: usize,
-    stack: Vec<IterItem<'a>>,
+    /// Context used for recursive iterating, ie. recursive descent or wildcard.
+    context: Option<Box<IterItem<'a>>>,
 }
 
 impl<'a> JsonPathIter<'a> {
@@ -22,7 +29,99 @@ impl<'a> JsonPathIter<'a> {
             current: root,
             tokens: &path.tokens,
             index: 0,
-            stack: Vec::default(),
+            context: None,
+        }
+    }
+
+    /// If current iterator works in the context of multi-value retrieval like wildcard or slice,
+    /// once a value was retrieved in current branch, we need to iterate to the next value from
+    /// the last place where wildcard or slice was located.
+    fn advance(&mut self) -> bool {
+        if let Some(item) = &mut self.context {
+            self.index = item.index;
+            let finished = match &mut item.state {
+                IterState::ArrayIter(array) => {
+                    if let Some(next) = array.next() {
+                        self.current = next;
+                        false
+                    } else {
+                        true
+                    }
+                }
+                IterState::SliceIter(slice) => {
+                    if let Some(next) = slice.next() {
+                        self.current = next;
+                        false
+                    } else {
+                        true
+                    }
+                }
+                IterState::MapIter(map) => {
+                    if let Some((_, next)) = map.next() {
+                        self.current = next;
+                        false
+                    } else {
+                        true
+                    }
+                }
+            };
+            if finished {
+                // end of iterator, rollback to the previous context
+                self.current = item.current;
+                self.context = item.next.take();
+                self.index = usize::MAX; // force rollback in the next iteration
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    fn foreach(&mut self, slice: Option<&Range<u32>>) {
+        match self.current {
+            Any::Array(array) => {
+                let mut iter = array.iter();
+                if let Some(slice) = slice {
+                    let mut iter = iter
+                        .skip(slice.start as usize)
+                        .take((slice.end - slice.start) as usize);
+                    if let Some(next) = iter.next() {
+                        let context = IterItem {
+                            next: self.context.take(),
+                            index: self.index,
+                            current: self.current,
+                            state: IterState::SliceIter(iter),
+                        };
+                        self.current = next;
+                        self.context = Some(Box::new(context));
+                    }
+                } else {
+                    if let Some(next) = iter.next() {
+                        let context = IterItem {
+                            next: self.context.take(),
+                            index: self.index,
+                            current: self.current,
+                            state: IterState::ArrayIter(iter),
+                        };
+                        self.current = next;
+                        self.context = Some(Box::new(context));
+                    }
+                }
+            }
+            Any::Map(map) => {
+                let mut iter = map.iter();
+                if let Some((_, next)) = iter.next() {
+                    let context = IterItem {
+                        next: self.context.take(),
+                        index: self.index,
+                        current: self.current,
+                        state: IterState::MapIter(iter),
+                    };
+                    self.current = next;
+                    self.context = Some(Box::new(context));
+                }
+            }
+            _ => { /* do nothing */ }
         }
     }
 }
@@ -32,6 +131,9 @@ impl<'a> Iterator for JsonPathIter<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.index > self.tokens.len() {
+            if self.advance() {
+                return self.next();
+            }
             None // reached the end
         } else if self.index == self.tokens.len() {
             self.index += 1;
@@ -57,13 +159,13 @@ impl<'a> Iterator for JsonPathIter<'a> {
                     }
                 }
                 JsonPathToken::Wildcard => {
-                    // do nothing
+                    self.foreach(None);
                 }
                 JsonPathToken::Descend => {
-                    // do nothing
+                    todo!("recursive descent");
                 }
                 JsonPathToken::Slice(slice) => {
-                    // do nothing
+                    self.foreach(Some(slice));
                 }
             }
             self.index += 1;
@@ -73,12 +175,17 @@ impl<'a> Iterator for JsonPathIter<'a> {
 }
 
 struct IterItem<'a> {
+    next: Option<Box<IterItem<'a>>>,
     index: usize,
     current: &'a Any,
-    state: IterState,
+    state: IterState<'a>,
 }
 
-enum IterState {}
+enum IterState<'a> {
+    ArrayIter(std::slice::Iter<'a, Any>),
+    MapIter(std::collections::hash_map::Iter<'a, String, Any>),
+    SliceIter(std::iter::Take<std::iter::Skip<std::slice::Iter<'a, Any>>>),
+}
 
 #[cfg(test)]
 mod test {
@@ -89,7 +196,10 @@ mod test {
         any!({
           "friends": [
             { "name": "Alice" },
-            { "name": "Bob" }
+            { "name": "Bob" },
+            { "name": "Carl" },
+            { "name": "Damian" },
+            { "name": "Elise" },
           ]
         })
     }
@@ -103,7 +213,10 @@ mod test {
             values,
             vec![&any!([
               { "name": "Alice" },
-              { "name": "Bob" }
+              { "name": "Bob" },
+              { "name": "Carl" },
+              { "name": "Damian" },
+              { "name": "Elise" },
             ])]
         );
     }
@@ -111,16 +224,41 @@ mod test {
     #[test]
     fn eval_member_full() {
         let any = sample();
-        let path = JsonPath::parse("$.friends[1].name").unwrap();
+        let path = JsonPath::parse("$.friends[0].name").unwrap();
         let values: Vec<_> = any.json_path(&path).collect();
-        assert_eq!(values, vec![&any!("Bob")]);
+        assert_eq!(values, vec![&any!("Alice")]);
     }
 
     #[test]
     fn eval_member_negative_index() {
         let any = sample();
-        let path = JsonPath::parse("$.friends[-2].name").unwrap();
+        let path = JsonPath::parse("$.friends[-1].name").unwrap();
         let values: Vec<_> = any.json_path(&path).collect();
-        assert_eq!(values, vec![&any!("Alice")]);
+        assert_eq!(values, vec![&any!("Elise")]);
+    }
+
+    #[test]
+    fn eval_member_wildcard_array() {
+        let any = sample();
+        let path = JsonPath::parse("$.friends[*].name").unwrap();
+        let values: Vec<_> = any.json_path(&path).collect();
+        assert_eq!(
+            values,
+            vec![
+                &any!("Alice"),
+                &any!("Bob"),
+                &any!("Carl"),
+                &any!("Damian"),
+                &any!("Elise")
+            ]
+        );
+    }
+
+    #[test]
+    fn eval_member_slice() {
+        let any = sample();
+        let path = JsonPath::parse("$.friends[1:3].name").unwrap();
+        let values: Vec<_> = any.json_path(&path).collect();
+        assert_eq!(values, vec![&any!("Bob"), &any!("Carl")]);
     }
 }
