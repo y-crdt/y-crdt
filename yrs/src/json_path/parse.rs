@@ -78,7 +78,11 @@ impl<'a> JsonPath<'a> {
                             .next()
                             .and_then(|s| u32::from_str(s).ok())
                             .unwrap_or(u32::MAX);
-                        tokens.push(JsonPathToken::Slice(start..end));
+                        let by = split
+                            .next()
+                            .and_then(|s| u32::from_str(s).ok())
+                            .unwrap_or(1);
+                        tokens.push(JsonPathToken::Slice(start, end, by));
                     } else if slice.starts_with('\'') && slice.ends_with('\'') {
                         let member = &slice[1..slice.len() - 1];
                         tokens.push(JsonPathToken::Member(member));
@@ -189,7 +193,7 @@ mod test {
         let path = JsonPath::parse("$[1:3]").unwrap();
         assert_eq!(
             path.tokens,
-            vec![JsonPathToken::Root, JsonPathToken::Slice(1..3)]
+            vec![JsonPathToken::Root, JsonPathToken::Slice(1, 3, 1)]
         );
     }
 
@@ -198,7 +202,7 @@ mod test {
         let path = JsonPath::parse("$[:3]").unwrap();
         assert_eq!(
             path.tokens,
-            vec![JsonPathToken::Root, JsonPathToken::Slice(0..3)]
+            vec![JsonPathToken::Root, JsonPathToken::Slice(0, 3, 1)]
         );
     }
 
@@ -207,7 +211,26 @@ mod test {
         let path = JsonPath::parse("$[3:]").unwrap();
         assert_eq!(
             path.tokens,
-            vec![JsonPathToken::Root, JsonPathToken::Slice(3..u32::MAX)]
+            vec![JsonPathToken::Root, JsonPathToken::Slice(3, u32::MAX, 1)]
+        );
+    }
+
+    #[test]
+    fn parse_slice_with_step() {
+        let path = JsonPath::parse("$[3::2]").unwrap();
+        assert_eq!(
+            path.tokens,
+            vec![JsonPathToken::Root, JsonPathToken::Slice(3, u32::MAX, 2)]
+        );
+        let path = JsonPath::parse("$[3:5:2]").unwrap();
+        assert_eq!(
+            path.tokens,
+            vec![JsonPathToken::Root, JsonPathToken::Slice(3, 5, 2)]
+        );
+        let path = JsonPath::parse("$[:3:2]").unwrap();
+        assert_eq!(
+            path.tokens,
+            vec![JsonPathToken::Root, JsonPathToken::Slice(0, 3, 2)]
         );
     }
 

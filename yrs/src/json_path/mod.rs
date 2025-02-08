@@ -23,7 +23,7 @@ pub(super) enum JsonPathToken<'a> {
     Index(i32),
     Wildcard,
     Descend,
-    Slice(Range<u32>),
+    Slice(u32, u32, u32),
 }
 
 impl<'a> Display for JsonPathToken<'a> {
@@ -41,7 +41,7 @@ impl<'a> Display for JsonPathToken<'a> {
             JsonPathToken::Index(index) => write!(f, "[{}]", index),
             JsonPathToken::Wildcard => write!(f, ".*"),
             JsonPathToken::Descend => write!(f, ".."),
-            JsonPathToken::Slice(slice) => write!(f, "[{}:{}]", slice.start, slice.end),
+            JsonPathToken::Slice(from, to, by) => write!(f, "[{}:{}:{}]", from, to, by),
         }
     }
 }

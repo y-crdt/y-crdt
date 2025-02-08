@@ -1,11 +1,10 @@
 use super::{JsonPath, JsonPathToken};
 use crate::Any;
 use proptest::num::usize;
-use std::ops::Range;
 
 impl Any {
     pub fn json_path<'a>(&'a self, path: &'a JsonPath<'a>) -> JsonPathIter<'a> {
-        JsonPathIter::new(path, self)
+        JsonPathIter::new(&path.tokens, self)
     }
 }
 
@@ -18,16 +17,16 @@ pub struct JsonPathIter<'a> {
     tokens: &'a [JsonPathToken<'a>],
     /// Offset to tokens array, pointing to currently evaluated token.
     index: usize,
-    /// Context used for recursive iterating, ie. recursive descent or wildcard.
+    /// Context used for recursive iterating, ie. recursive descent, wildcard or slices.
     context: Option<Box<IterItem<'a>>>,
 }
 
 impl<'a> JsonPathIter<'a> {
-    fn new(path: &'a JsonPath<'a>, root: &'a Any) -> Self {
+    fn new(tokens: &'a [JsonPathToken<'a>], root: &'a Any) -> Self {
         Self {
             root,
             current: root,
-            tokens: &path.tokens,
+            tokens,
             index: 0,
             context: None,
         }
@@ -77,14 +76,15 @@ impl<'a> JsonPathIter<'a> {
         }
     }
 
-    fn foreach(&mut self, slice: Option<&Range<u32>>) {
+    fn foreach(&mut self, slice: Option<(u32, u32, u32)>) {
         match self.current {
             Any::Array(array) => {
                 let mut iter = array.iter();
-                if let Some(slice) = slice {
+                if let Some((from, to, by)) = slice {
                     let mut iter = iter
-                        .skip(slice.start as usize)
-                        .take((slice.end - slice.start) as usize);
+                        .skip(from as usize)
+                        .take((to - from) as usize)
+                        .step_by(by as usize);
                     if let Some(next) = iter.next() {
                         let context = IterItem {
                             next: self.context.take(),
@@ -140,9 +140,7 @@ impl<'a> Iterator for JsonPathIter<'a> {
             Some(self.current)
         } else {
             match &self.tokens[self.index] {
-                JsonPathToken::Root => {
-                    self.current = self.root;
-                }
+                JsonPathToken::Root => self.current = self.root,
                 JsonPathToken::Current => { /* do nothing */ }
                 JsonPathToken::Member(key) => {
                     if let Any::Map(map) = self.current {
@@ -164,8 +162,8 @@ impl<'a> Iterator for JsonPathIter<'a> {
                 JsonPathToken::Descend => {
                     todo!("recursive descent");
                 }
-                JsonPathToken::Slice(slice) => {
-                    self.foreach(Some(slice));
+                JsonPathToken::Slice(from, to, by) => {
+                    self.foreach(Some((*from, *to, *by)));
                 }
             }
             self.index += 1;
@@ -184,7 +182,7 @@ struct IterItem<'a> {
 enum IterState<'a> {
     ArrayIter(std::slice::Iter<'a, Any>),
     MapIter(std::collections::hash_map::Iter<'a, String, Any>),
-    SliceIter(std::iter::Take<std::iter::Skip<std::slice::Iter<'a, Any>>>),
+    SliceIter(std::iter::StepBy<std::iter::Take<std::iter::Skip<std::slice::Iter<'a, Any>>>>),
 }
 
 #[cfg(test)]
