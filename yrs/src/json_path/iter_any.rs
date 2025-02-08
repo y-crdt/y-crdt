@@ -39,24 +39,8 @@ impl<'a> JsonPathIter<'a> {
         if let Some(item) = &mut self.context {
             self.index = item.index;
             let finished = match &mut item.state {
-                IterState::ArrayIter(array) => {
-                    if let Some(next) = array.next() {
-                        self.current = next;
-                        false
-                    } else {
-                        true
-                    }
-                }
-                IterState::SliceIter(slice) => {
-                    if let Some(next) = slice.next() {
-                        self.current = next;
-                        false
-                    } else {
-                        true
-                    }
-                }
-                IterState::MapIter(map) => {
-                    if let Some((_, next)) = map.next() {
+                IterState::Iter(iter) => {
+                    if let Some(next) = iter.next() {
                         self.current = next;
                         false
                     } else {
@@ -77,51 +61,28 @@ impl<'a> JsonPathIter<'a> {
     }
 
     fn foreach(&mut self, slice: Option<(u32, u32, u32)>) {
-        match self.current {
-            Any::Array(array) => {
-                let mut iter = array.iter();
-                if let Some((from, to, by)) = slice {
-                    let mut iter = iter
-                        .skip(from as usize)
-                        .take((to - from) as usize)
-                        .step_by(by as usize);
-                    if let Some(next) = iter.next() {
-                        let context = IterItem {
-                            next: self.context.take(),
-                            index: self.index,
-                            current: self.current,
-                            state: IterState::SliceIter(iter),
-                        };
-                        self.current = next;
-                        self.context = Some(Box::new(context));
-                    }
-                } else {
-                    if let Some(next) = iter.next() {
-                        let context = IterItem {
-                            next: self.context.take(),
-                            index: self.index,
-                            current: self.current,
-                            state: IterState::ArrayIter(iter),
-                        };
-                        self.current = next;
-                        self.context = Some(Box::new(context));
-                    }
-                }
-            }
-            Any::Map(map) => {
-                let mut iter = map.iter();
-                if let Some((_, next)) = iter.next() {
-                    let context = IterItem {
-                        next: self.context.take(),
-                        index: self.index,
-                        current: self.current,
-                        state: IterState::MapIter(iter),
-                    };
-                    self.current = next;
-                    self.context = Some(Box::new(context));
-                }
-            }
-            _ => { /* do nothing */ }
+        let mut iter: Box<dyn Iterator<Item = &'a Any> + 'a> = match self.current {
+            Any::Array(array) => Box::new(array.iter()),
+            Any::Map(map) => Box::new(map.values()),
+            _ => return,
+        };
+
+        if let Some((from, to, by)) = slice {
+            iter = Box::new(
+                iter.skip(from as usize)
+                    .take((to - from) as usize)
+                    .step_by(by as usize),
+            );
+        }
+        if let Some(next) = iter.next() {
+            let context = IterItem {
+                next: self.context.take(),
+                index: self.index,
+                current: self.current,
+                state: IterState::Iter(iter),
+            };
+            self.current = next;
+            self.context = Some(Box::new(context));
         }
     }
 }
@@ -180,9 +141,7 @@ struct IterItem<'a> {
 }
 
 enum IterState<'a> {
-    ArrayIter(std::slice::Iter<'a, Any>),
-    MapIter(std::collections::hash_map::Iter<'a, String, Any>),
-    SliceIter(std::iter::StepBy<std::iter::Take<std::iter::Skip<std::slice::Iter<'a, Any>>>>),
+    Iter(Box<dyn Iterator<Item = &'a Any> + 'a>),
 }
 
 #[cfg(test)]
