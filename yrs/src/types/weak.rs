@@ -459,6 +459,7 @@ impl<T> From<WeakPrelim<T>> for In {
     }
 }
 
+#[derive(Debug)]
 pub struct WeakEvent {
     pub(crate) current_target: BranchPtr,
     target: BranchPtr,
