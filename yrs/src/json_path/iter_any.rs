@@ -18,7 +18,7 @@ pub struct JsonPathIter<'a> {
     /// Offset to tokens array, pointing to currently evaluated token.
     index: usize,
     /// Context used for recursive iterating, ie. recursive descent, wildcard or slices.
-    context: Option<Box<IterItem<'a>>>,
+    context: Option<Box<IterScope<'a>>>,
 }
 
 impl<'a> JsonPathIter<'a> {
@@ -39,7 +39,7 @@ impl<'a> JsonPathIter<'a> {
         if let Some(item) = &mut self.context {
             self.index = item.index;
             let finished = match &mut item.state {
-                IterState::Iter(iter) => {
+                ScopeIterator::Iter(iter) => {
                     if let Some(next) = iter.next() {
                         self.current = next;
                         false
@@ -60,30 +60,13 @@ impl<'a> JsonPathIter<'a> {
         }
     }
 
-    fn foreach(&mut self, slice: Option<(u32, u32, u32)>) {
-        let mut iter: Box<dyn Iterator<Item = &'a Any> + 'a> = match self.current {
+    fn foreach(&mut self) -> Option<Box<dyn Iterator<Item = &'a Any> + 'a>> {
+        let iter: Box<dyn Iterator<Item = &'a Any> + 'a> = match self.current {
             Any::Array(array) => Box::new(array.iter()),
             Any::Map(map) => Box::new(map.values()),
-            _ => return,
+            _ => return None,
         };
-
-        if let Some((from, to, by)) = slice {
-            iter = Box::new(
-                iter.skip(from as usize)
-                    .take((to - from) as usize)
-                    .step_by(by as usize),
-            );
-        }
-        if let Some(next) = iter.next() {
-            let context = IterItem {
-                next: self.context.take(),
-                index: self.index,
-                current: self.current,
-                state: IterState::Iter(iter),
-            };
-            self.current = next;
-            self.context = Some(Box::new(context));
-        }
+        Some(iter)
     }
 }
 
@@ -105,7 +88,15 @@ impl<'a> Iterator for JsonPathIter<'a> {
                 JsonPathToken::Current => { /* do nothing */ }
                 JsonPathToken::Member(key) => {
                     if let Any::Map(map) = self.current {
-                        self.current = map.get(*key)?;
+                        println!("pick key: {} from {}", key, self.current);
+                        self.current = match map.get(*key) {
+                            Some(child) => child,
+                            None => {
+                                //TODO: if we didn't match the key and we're descending, just allocate next
+                                // scope, self.index-- and continue
+                                todo!()
+                            }
+                        };
                     }
                 }
                 JsonPathToken::Index(index) => {
@@ -114,17 +105,47 @@ impl<'a> Iterator for JsonPathIter<'a> {
                         if index < 0 {
                             index = array.len() as i32 + index;
                         }
+                        println!("pick index: {} from {}", index, self.current);
                         self.current = array.get(index as usize)?;
+                        //TODO: if we didn't match the key and we're descending, just allocate next
+                        // scope, self.index-- and continue
                     }
                 }
                 JsonPathToken::Wildcard => {
-                    self.foreach(None);
+                    if let Some(mut iter) = self.foreach() {
+                        if let Some(next) = iter.next() {
+                            let context = IterScope {
+                                next: self.context.take(),
+                                index: self.index,
+                                current: self.current,
+                                state: ScopeIterator::Iter(iter),
+                            };
+                            self.current = next;
+                            self.context = Some(Box::new(context));
+                        }
+                    }
+                }
+                JsonPathToken::Slice(from, to, by) => {
+                    if let Some(mut iter) = self.foreach() {
+                        iter = Box::new(
+                            iter.skip(*from as usize)
+                                .take((*to - *from) as usize)
+                                .step_by(*by as usize),
+                        );
+                        if let Some(next) = iter.next() {
+                            let context = IterScope {
+                                next: self.context.take(),
+                                index: self.index,
+                                current: self.current,
+                                state: ScopeIterator::Iter(iter),
+                            };
+                            self.current = next;
+                            self.context = Some(Box::new(context));
+                        }
+                    }
                 }
                 JsonPathToken::Descend => {
                     todo!("recursive descent");
-                }
-                JsonPathToken::Slice(from, to, by) => {
-                    self.foreach(Some((*from, *to, *by)));
                 }
             }
             self.index += 1;
@@ -133,14 +154,21 @@ impl<'a> Iterator for JsonPathIter<'a> {
     }
 }
 
-struct IterItem<'a> {
-    next: Option<Box<IterItem<'a>>>,
+/// Scope used for recursive iteration, i.e. wildcard, descent or slice.
+struct IterScope<'a> {
+    /// Scopes can be nested in each other i.e. `$.people.*.friends[*]name`. In such case they
+    /// are organized in a linked list, with the first elements being the innermost scopes.
+    next: Option<Box<IterScope<'a>>>,
+    /// Offset to tokens array, where the current scope starts.
     index: usize,
+    /// Current object this scope is iterating over.
     current: &'a Any,
-    state: IterState<'a>,
+    /// Iterator used by this scope.
+    state: ScopeIterator<'a>,
 }
 
-enum IterState<'a> {
+enum ScopeIterator<'a> {
+    /// Iterator used by wildcard or slice.
     Iter(Box<dyn Iterator<Item = &'a Any> + 'a>),
 }
 
@@ -149,12 +177,12 @@ mod test {
     use crate::json_path::JsonPath;
     use crate::{any, Any};
 
-    fn sample() -> Any {
+    fn mixed_sample() -> Any {
         any!({
           "friends": [
             { "name": "Alice" },
-            { "name": "Bob" },
-            { "name": "Carl" },
+            { "nick": "boreas" },
+            { "nick": "crocodile91" },
             { "name": "Damian" },
             { "name": "Elise" },
           ]
@@ -163,15 +191,15 @@ mod test {
 
     #[test]
     fn eval_member_partial() {
-        let any = sample();
+        let any = mixed_sample();
         let path = JsonPath::parse("$.friends").unwrap();
         let values: Vec<_> = any.json_path(&path).collect();
         assert_eq!(
             values,
             vec![&any!([
               { "name": "Alice" },
-              { "name": "Bob" },
-              { "name": "Carl" },
+              { "nick": "boreas" },
+              { "nick": "crocodile91" },
               { "name": "Damian" },
               { "name": "Elise" },
             ])]
@@ -180,7 +208,7 @@ mod test {
 
     #[test]
     fn eval_member_full() {
-        let any = sample();
+        let any = mixed_sample();
         let path = JsonPath::parse("$.friends[0].name").unwrap();
         let values: Vec<_> = any.json_path(&path).collect();
         assert_eq!(values, vec![&any!("Alice")]);
@@ -188,7 +216,7 @@ mod test {
 
     #[test]
     fn eval_member_negative_index() {
-        let any = sample();
+        let any = mixed_sample();
         let path = JsonPath::parse("$.friends[-1].name").unwrap();
         let values: Vec<_> = any.json_path(&path).collect();
         assert_eq!(values, vec![&any!("Elise")]);
@@ -196,15 +224,15 @@ mod test {
 
     #[test]
     fn eval_member_wildcard_array() {
-        let any = sample();
+        let any = mixed_sample();
         let path = JsonPath::parse("$.friends[*].name").unwrap();
         let values: Vec<_> = any.json_path(&path).collect();
         assert_eq!(
             values,
             vec![
                 &any!("Alice"),
-                &any!("Bob"),
-                &any!("Carl"),
+                &Any::Undefined,
+                &Any::Undefined,
                 &any!("Damian"),
                 &any!("Elise")
             ]
@@ -213,9 +241,9 @@ mod test {
 
     #[test]
     fn eval_member_slice() {
-        let any = sample();
-        let path = JsonPath::parse("$.friends[1:3].name").unwrap();
+        let any = mixed_sample();
+        let path = JsonPath::parse("$.friends[1:3].nick").unwrap();
         let values: Vec<_> = any.json_path(&path).collect();
-        assert_eq!(values, vec![&any!("Bob"), &any!("Carl")]);
+        assert_eq!(values, vec![&any!("boreas"), &any!("crocodile91")]);
     }
 }

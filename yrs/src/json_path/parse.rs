@@ -94,7 +94,21 @@ impl<'a> JsonPath<'a> {
                     }
                 }
                 '*' => tokens.push(JsonPathToken::Wildcard),
-                c if c.is_alphabetic() => {}
+                c if c.is_alphabetic() => {
+                    // handle cases like `..name`, `$name` or `@name`
+                    let start = i - c.len_utf8();
+                    while let Some(a) = iter.peek() {
+                        if a.is_alphanumeric() || a == &'_' {
+                            i += a.len_utf8();
+                            iter.next();
+                        } else {
+                            break;
+                        }
+                    }
+                    let end = i;
+                    let member = &path[start..end];
+                    tokens.push(JsonPathToken::Member(member));
+                }
                 _ => {
                     return Err(invalid_char(c, path));
                 }
@@ -149,6 +163,19 @@ mod test {
         assert_eq!(
             path.tokens,
             vec![JsonPathToken::Root, JsonPathToken::Descend]
+        );
+    }
+
+    #[test]
+    fn parse_descend_gradual() {
+        let path = JsonPath::parse("$..name").unwrap();
+        assert_eq!(
+            path.tokens,
+            vec![
+                JsonPathToken::Root,
+                JsonPathToken::Descend,
+                JsonPathToken::Member("name")
+            ]
         );
     }
 
