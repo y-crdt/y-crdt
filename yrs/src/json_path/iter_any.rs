@@ -55,42 +55,30 @@ impl Any {
                         early_return = true;
                     }
                 }
-                JsonPathToken::Wildcard => match current {
-                    Any::Array(array) => {
+                JsonPathToken::Wildcard => {
+                    if let Some(iter) = any_iter(current) {
                         let pattern = &pattern[i + 1..];
-                        for any in array.iter() {
+                        for any in iter {
                             Self::json_path_internal(root, any, pattern, acc, false);
                         }
+                    } else {
+                        early_return = true;
                     }
-                    Any::Map(map) => {
+                }
+                JsonPathToken::RecursiveDescend => {
+                    if let Some(iter) = any_iter(current) {
                         let pattern = &pattern[i + 1..];
-                        for any in map.values() {
-                            Self::json_path_internal(root, any, pattern, acc, false);
-                        }
-                    }
-                    _ => early_return = true,
-                },
-                JsonPathToken::RecursiveDescend => match current {
-                    Any::Array(array) => {
-                        let pattern = &pattern[i + 1..];
-                        for any in array.iter() {
+                        for any in iter {
                             Self::json_path_internal(root, any, pattern, acc, true);
                         }
+                    } else {
+                        early_return = true;
                     }
-                    Any::Map(map) => {
-                        let pattern = &pattern[i + 1..];
-                        for any in map.values() {
-                            Self::json_path_internal(root, any, pattern, acc, true);
-                        }
-                    }
-                    _ => early_return = true,
-                },
+                }
                 JsonPathToken::Slice(from, to, by) => {
-                    if let Any::Array(array) = current {
-                        let from = *from as usize;
-                        let to = array.len().min(*to as usize);
-                        let by = *by;
-                        let mut iter = array.iter().skip(from).take(to - from).step_by(by as usize);
+                    if let Some(iter) =
+                        slice_iter(current, *from as usize, *to as usize, *by as usize)
+                    {
                         let pattern = &pattern[i + 1..];
                         for any in iter {
                             Self::json_path_internal(root, any, pattern, acc, false);
@@ -126,6 +114,31 @@ impl Any {
     }
 }
 
+fn slice_iter<'a>(
+    any: &'a Any,
+    from: usize,
+    to: usize,
+    by: usize,
+) -> Option<Box<dyn Iterator<Item = &'a Any> + 'a>> {
+    match any {
+        Any::Array(array) => {
+            let to = array.len().min(to);
+            Some(Box::new(
+                array.iter().skip(from).take(to - from).step_by(by),
+            ))
+        }
+        _ => None,
+    }
+}
+
+fn any_iter<'a>(any: &'a Any) -> Option<Box<dyn Iterator<Item = &'a Any> + 'a>> {
+    match any {
+        Any::Array(array) => Some(Box::new(array.iter())),
+        Any::Map(map) => Some(Box::new(map.values())),
+        _ => None,
+    }
+}
+
 pub type JsonPathIter<'a> = Box<dyn Iterator<Item = &'a Any> + 'a>;
 
 /// Scope used for recursive iteration, i.e. wildcard, descent or slice.
@@ -150,6 +163,7 @@ enum ScopeIterator<'a> {
 mod test {
     use crate::json_path::JsonPath;
     use crate::{any, Any};
+    use std::path::Display;
 
     fn mixed_sample() -> Any {
         any!({
@@ -303,7 +317,8 @@ mod test {
             }
         });
         let path = JsonPath::parse("$..c..name").unwrap();
-        let values: Vec<_> = any.json_path(&path).collect();
-        assert_eq!(values, vec![&any!("Alice"), &any!("Bob")]);
+        let mut values: Vec<_> = any.json_path(&path).map(|any| any.to_string()).collect();
+        values.sort();
+        assert_eq!(values, vec!["Alice".to_string(), "Bob".into()]);
     }
 }
