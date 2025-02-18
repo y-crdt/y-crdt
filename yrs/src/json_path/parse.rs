@@ -16,7 +16,7 @@ impl<'a> JsonPath<'a> {
                     let c = iter.peek();
                     match c {
                         Some('.') => {
-                            tokens.push(JsonPathToken::Descend);
+                            tokens.push(JsonPathToken::RecursiveDescend);
                             iter.next();
                             i += 1;
                         }
@@ -162,7 +162,7 @@ mod test {
         let path = JsonPath::parse("$..").unwrap();
         assert_eq!(
             path.tokens,
-            vec![JsonPathToken::Root, JsonPathToken::Descend]
+            vec![JsonPathToken::Root, JsonPathToken::RecursiveDescend]
         );
     }
 
@@ -173,7 +173,7 @@ mod test {
             path.tokens,
             vec![
                 JsonPathToken::Root,
-                JsonPathToken::Descend,
+                JsonPathToken::RecursiveDescend,
                 JsonPathToken::Member("name")
             ]
         );
