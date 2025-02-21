@@ -103,24 +103,45 @@ impl Update {
         self.blocks.is_empty() && self.delete_set.is_empty()
     }
 
+    /// Check if current update has changes that add new information to a document with given state.
+    pub fn extends(&self, state_vector: &StateVector) -> bool {
+        for (client_id, blocks) in self.blocks.clients.iter() {
+            let clock = state_vector.get(client_id);
+            let mut iter = blocks.iter();
+            while let Some(block) = iter.next() {
+                let range = block.range();
+                if range.id.clock <= clock && range.id.clock + range.len > clock {
+                    // this block overlaps or extends current state. It must NOT be Skip
+                    // in order to introduce any new changes
+                    if !block.is_skip() {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
     /// Returns a state vector representing an upper bound of client clocks included by blocks
     /// stored in current update.
     pub fn state_vector(&self) -> StateVector {
         let mut sv = StateVector::default();
         for (&client, blocks) in self.blocks.clients.iter() {
-            let last_id = blocks[blocks.len() - 1].last_id();
-            sv.set_max(client, last_id.clock + 1);
-        }
-        sv
-    }
-
-    /// Returns a state vector representing a lower bound of client clocks included by blocks
-    /// stored in current update.
-    pub fn state_vector_lower(&self) -> StateVector {
-        let mut sv = StateVector::default();
-        for (&client, blocks) in self.blocks.clients.iter() {
-            let id = blocks[0].id();
-            sv.set_max(client, id.clock);
+            let mut last_clock = 0;
+            if !blocks.is_empty() && blocks[0].id().clock == 0 {
+                // we expect clocks to start from 0, otherwise blocks for this client are not
+                // continuous
+                for block in blocks.iter() {
+                    if let BlockCarrier::Skip(_) = block {
+                        // if we met skip, we stop counting: blocks are not continuous any more
+                        break;
+                    }
+                    last_clock = block.id().clock + block.len();
+                }
+            }
+            if last_clock != 0 {
+                sv.set_max(client, last_clock);
+            }
         }
         sv
     }
@@ -856,6 +877,14 @@ impl BlockCarrier {
         }
     }
 
+    pub(crate) fn range(&self) -> BlockRange {
+        match self {
+            BlockCarrier::Item(item) => BlockRange::new(item.id, item.len),
+            BlockCarrier::GC(gc) => gc.clone(),
+            BlockCarrier::Skip(skip) => skip.clone(),
+        }
+    }
+
     pub(crate) fn last_id(&self) -> ID {
         match self {
             BlockCarrier::Item(x) => x.last_id(),
@@ -1086,15 +1115,16 @@ impl Iterator for IntoBlocks {
 
 #[cfg(test)]
 mod test {
+    use std::iter::FromIterator;
     use std::sync::{Arc, Mutex};
 
-    use crate::block::{Item, ItemContent};
+    use crate::block::{BlockRange, ClientID, Item, ItemContent};
     use crate::encoding::read::Cursor;
     use crate::types::{Delta, TypePtr};
     use crate::update::{BlockCarrier, Update};
     use crate::updates::decoder::{Decode, DecoderV1};
     use crate::{
-        Doc, GetString, Options, ReadTxn, StateVector, Text, Transact, WriteTxn, XmlFragment,
+        Any, Doc, GetString, Options, ReadTxn, StateVector, Text, Transact, WriteTxn, XmlFragment,
         XmlOut, ID,
     };
 
@@ -1364,39 +1394,67 @@ mod test {
     }
 
     #[test]
-    fn update_lower_bound() {
-        let d1 = Doc::with_client_id(1);
-        let mut updates = Arc::new(Mutex::new(vec![]));
-        let sub = {
-            let server_updates = updates.clone();
-            d1.observe_update_v1(move |_, update| {
-                let mut lock = server_updates.lock().unwrap();
-                lock.push(update.update.clone());
-            })
-            .unwrap()
-        };
+    fn update_state_vector_with_skips() {
+        let mut update = Update::new();
+        // skip followed by item => not included in state vector as it's not continuous from 0
+        update
+            .blocks
+            .add_block(BlockCarrier::Skip(BlockRange::new(ID::new(1, 0), 1)));
+        update.blocks.add_block(test_item(1, 1, 1));
+        // item starting from non-0 => not included
+        update.blocks.add_block(test_item(2, 1, 1));
+        // item => skip => item : second item not included
+        update.blocks.add_block(test_item(3, 0, 1));
+        update
+            .blocks
+            .add_block(BlockCarrier::Skip(BlockRange::new(ID::new(3, 1), 1)));
+        update.blocks.add_block(test_item(3, 2, 1));
 
-        let txt = d1.get_or_insert_text("text");
-        txt.insert(&mut d1.transact_mut(), 0, "a");
-        txt.insert(&mut d1.transact_mut(), 1, "b");
-        txt.insert(&mut d1.transact_mut(), 2, "c");
+        let sv = update.state_vector();
+        assert_eq!(sv, StateVector::from_iter([(3, 1)]));
+    }
 
-        drop(sub);
-        let d2 = Doc::with_client_id(2);
-        let updates = Arc::into_inner(updates).unwrap().into_inner().unwrap();
-        // apply 1st update
-        let u1 = Update::decode_v1(&updates[0]).unwrap();
-        d2.transact_mut().apply_update(u1).unwrap();
-        let d2_sv = d2.transact().state_vector();
+    #[test]
+    fn test_extends() {
+        let mut u = Update::new();
+        u.blocks.add_block(test_item(1, 0, 2)); // new data with partial duplicate
+        assert!(u.extends(&StateVector::from_iter([(1, 1)])));
 
-        let u2 = Update::decode_v1(&updates[1]).unwrap();
-        assert!(d2_sv >= u2.state_vector_lower(), "no missing update");
-        assert!(d2_sv <= u2.state_vector(), "update has new data");
+        let mut u = Update::new();
+        u.blocks.add_block(test_item(1, 0, 1)); // duplicate
+        assert!(!u.extends(&StateVector::from_iter([(1, 1)])));
 
-        // check if we can detect missing 2nd update given the 3rd
-        let u3 = Update::decode_v1(&updates[2]).unwrap();
-        assert!(d2_sv <= u3.state_vector_lower(), "missing update");
-        assert!(d2_sv <= u3.state_vector(), "update has new data");
+        let mut u = Update::new();
+        u.blocks
+            .add_block(BlockCarrier::Skip(BlockRange::new(ID::new(1, 0), 2)));
+        u.blocks.add_block(test_item(1, 2, 1)); // skip cause disjoin in updates
+        assert!(!u.extends(&StateVector::from_iter([(1, 1)])));
+
+        let mut u = Update::new();
+        u.blocks.add_block(test_item(1, 1, 1)); // adjacent
+        assert!(u.extends(&StateVector::from_iter([(1, 1)])));
+
+        let mut u = Update::new();
+        u.blocks.add_block(test_item(1, 2, 1)); // disjoint
+        assert!(!u.extends(&StateVector::from_iter([(1, 1)])));
+    }
+
+    fn test_item(client_id: ClientID, clock: u32, len: u32) -> BlockCarrier {
+        assert!(len > 0);
+        let any: Vec<_> = (0..len).into_iter().map(Any::from).collect();
+        BlockCarrier::Item(
+            Item::new(
+                ID::new(client_id, clock),
+                None,
+                None,
+                None,
+                None,
+                TypePtr::Named("test".into()),
+                None,
+                ItemContent::Any(any),
+            )
+            .unwrap(),
+        )
     }
 
     fn decode_update(bin: &[u8]) -> Update {
