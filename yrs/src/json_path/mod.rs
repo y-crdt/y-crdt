@@ -24,6 +24,8 @@ pub(super) enum JsonPathToken<'a> {
     Wildcard,
     RecursiveDescend,
     Slice(u32, u32, u32),
+    MemberUnion(Vec<&'a str>),
+    IndexUnion(Vec<i32>),
 }
 
 impl<'a> Display for JsonPathToken<'a> {
@@ -42,6 +44,28 @@ impl<'a> Display for JsonPathToken<'a> {
             JsonPathToken::Wildcard => write!(f, ".*"),
             JsonPathToken::RecursiveDescend => write!(f, ".."),
             JsonPathToken::Slice(from, to, by) => write!(f, "[{}:{}:{}]", from, to, by),
+            JsonPathToken::MemberUnion(members) => {
+                let mut i = members.iter();
+                write!(f, "[")?;
+                if let Some(m) = i.next() {
+                    write!(f, "{}", m)?;
+                }
+                while let Some(m) = i.next() {
+                    write!(f, ", {}", m)?;
+                }
+                write!(f, "]")
+            }
+            JsonPathToken::IndexUnion(indices) => {
+                let mut i = indices.iter();
+                write!(f, "[")?;
+                if let Some(m) = i.next() {
+                    write!(f, "{}", m)?;
+                }
+                while let Some(m) = i.next() {
+                    write!(f, ", {}", m)?;
+                }
+                write!(f, "]")
+            }
         }
     }
 }

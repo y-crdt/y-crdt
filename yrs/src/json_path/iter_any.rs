@@ -33,6 +33,39 @@ fn any_iter<'a>(any: &'a Any) -> Option<Box<dyn Iterator<Item = &'a Any> + 'a>> 
     }
 }
 
+fn member_union_iter<'a>(
+    any: &'a Any,
+    members: &'a [&'a str],
+) -> Option<Box<dyn Iterator<Item = &'a Any> + 'a>> {
+    match any {
+        Any::Map(map) => {
+            let iter = members.into_iter().flat_map(move |key| map.get(*key));
+            Some(Box::new(iter))
+        }
+        _ => None,
+    }
+}
+
+fn index_union_iter<'a>(
+    any: &'a Any,
+    indices: &'a [i32],
+) -> Option<Box<dyn Iterator<Item = &'a Any> + 'a>> {
+    match any {
+        Any::Array(array) => {
+            let iter = indices.into_iter().flat_map(move |i| {
+                let i = if *i < 0 {
+                    (array.len() as i32 + *i) as usize
+                } else {
+                    *i as usize
+                };
+                array.get(i)
+            });
+            Some(Box::new(iter))
+        }
+        _ => None,
+    }
+}
+
 pub struct JsonPathIter<'a> {
     root: &'a Any,
     pattern: &'a [JsonPathToken<'a>],
@@ -64,9 +97,11 @@ impl<'a> Iterator for JsonPathIter<'a> {
                     frame.descend(curr);
                 }
             }
+        } else if frame.index == self.pattern.len() {
+            return if frame.ascend() { self.next() } else { None };
         }
         // early return only works if the loop after has at least one iteration
-        let mut early_return = frame.index == self.pattern.len();
+        let mut early_return = false;
         while frame.index < self.pattern.len() {
             let segment = &self.pattern[frame.index];
             frame.index += 1;
@@ -128,6 +163,20 @@ impl<'a> Iterator for JsonPathIter<'a> {
                     }
                     early_return = true;
                 }
+                JsonPathToken::MemberUnion(members) => {
+                    if let Some(iter) = member_union_iter(frame.current, &members) {
+                        frame.iter = Some(iter);
+                        return self.next();
+                    }
+                    early_return = true;
+                }
+                JsonPathToken::IndexUnion(indices) => {
+                    if let Some(iter) = index_union_iter(frame.current, &indices) {
+                        frame.iter = Some(iter);
+                        return self.next();
+                    }
+                    early_return = true;
+                }
             }
 
             if early_return {
@@ -136,6 +185,7 @@ impl<'a> Iterator for JsonPathIter<'a> {
         }
 
         if !early_return {
+            let x = frame.current.to_string();
             return Some(frame.current);
         } else if frame.is_descending {
             if let Some(iter) = any_iter(frame.current) {
@@ -324,6 +374,22 @@ mod test {
         let path = JsonPath::parse("$.users[1:3].nick").unwrap();
         let values: Vec<_> = any.json_path(&path).collect();
         assert_eq!(values, vec![&any!("boreas"), &any!("crocodile91")]);
+    }
+
+    #[test]
+    fn eval_index_union() {
+        let any = mixed_sample();
+        let path = JsonPath::parse("$.users[1,3].name").unwrap();
+        let values: Vec<_> = any.json_path(&path).collect();
+        assert_eq!(values, vec![&any!("Bob"), &any!("Damian")]);
+    }
+
+    #[test]
+    fn eval_member_union() {
+        let any = mixed_sample();
+        let path = JsonPath::parse("$.users[0]['name','surname']").unwrap();
+        let values: Vec<_> = any.json_path(&path).collect();
+        assert_eq!(values, vec![&any!("Alice"), &any!("Smith")]);
     }
 
     #[test]

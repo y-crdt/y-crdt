@@ -1,5 +1,6 @@
 use super::{JsonPath, JsonPathToken, ParseError};
 use std::fmt::Display;
+use std::num::ParseIntError;
 use std::str::FromStr;
 
 impl<'a> JsonPath<'a> {
@@ -16,16 +17,19 @@ impl<'a> JsonPath<'a> {
                     let c = iter.peek();
                     match c {
                         Some('.') => {
+                            // '..' => recursive descent
                             tokens.push(JsonPathToken::RecursiveDescend);
                             iter.next();
                             i += 1;
                         }
                         Some('*') => {
+                            // '.*' => wildcard operator
                             tokens.push(JsonPathToken::Wildcard);
                             iter.next();
                             i += 1;
                         }
                         Some(a) if a.is_alphabetic() => {
+                            // '.{name}' => field name
                             let start = i;
                             while let Some(a) = iter.peek() {
                                 if a.is_alphanumeric() || a == &'_' {
@@ -51,6 +55,7 @@ impl<'a> JsonPath<'a> {
                     }
                 }
                 '[' => {
+                    // get all values between '[..]' braces
                     let start = i;
                     let mut slice = &path[i..];
                     let mut quote_start = false;
@@ -65,10 +70,13 @@ impl<'a> JsonPath<'a> {
                         }
                     }
                     if slice == "*" {
+                        // '[*]' => wildcard operator
                         tokens.push(JsonPathToken::Wildcard);
                     } else if let Ok(index) = slice.parse::<i32>() {
+                        // '[{number}]' => array index
                         tokens.push(JsonPathToken::Index(index));
                     } else if slice.contains(':') {
+                        // '[{?from}:{?to}:{?by}]' => slice operator
                         let mut split = slice.split(':');
                         let start = split
                             .next()
@@ -83,7 +91,54 @@ impl<'a> JsonPath<'a> {
                             .and_then(|s| u32::from_str(s).ok())
                             .unwrap_or(1);
                         tokens.push(JsonPathToken::Slice(start, end, by));
+                    } else if slice.contains(',') {
+                        // either member union ['a','b','c'] or index union [1, 2, 3]
+                        let subslices = slice.split(',');
+                        let mut i = subslices.into_iter();
+                        if let Some(n) = i.next() {
+                            let mut n = n.trim();
+                            if n.starts_with('\'') && n.ends_with('\'') {
+                                // member union
+                                let mut members = Vec::new();
+                                while {
+                                    members.push(&n[1..(n.len() - 1)]); // remove ' on both ends
+                                    match i.next() {
+                                        None => false,
+                                        Some(member) => {
+                                            n = member.trim();
+                                            if n.starts_with('\'') && n.ends_with('\'') {
+                                                true
+                                            } else {
+                                                return Err(ParseError::InvalidJsonPath(format!(
+                                                    "substring `{}` is missing pairing `'` symbol",
+                                                    n
+                                                )));
+                                            }
+                                        }
+                                    }
+                                } {}
+                                tokens.push(JsonPathToken::MemberUnion(members))
+                            } else {
+                                // index union
+                                let mut indices = Vec::new();
+                                while {
+                                    match n.parse::<i32>() {
+                                        Ok(i) => indices.push(i),
+                                        Err(err) => return Err(ParseError::InvalidJsonPath(format!("substring '{}' doesn't contain valid union of keys or indices: {}", slice, err))),
+                                    }
+                                    match i.next() {
+                                        None => false,
+                                        Some(index) => {
+                                            n = index.trim();
+                                            true
+                                        }
+                                    }
+                                } {}
+                                tokens.push(JsonPathToken::IndexUnion(indices))
+                            }
+                        }
                     } else if slice.starts_with('\'') && slice.ends_with('\'') {
+                        // "['name with spaces']" => field name with spaces
                         let member = &slice[1..slice.len() - 1];
                         tokens.push(JsonPathToken::Member(member));
                     } else {
@@ -258,6 +313,32 @@ mod test {
         assert_eq!(
             path.tokens,
             vec![JsonPathToken::Root, JsonPathToken::Slice(0, 3, 2)]
+        );
+    }
+
+    #[test]
+    fn parse_member_union() {
+        let path = JsonPath::parse("$.users['a', 'bc', '']").unwrap();
+        assert_eq!(
+            path.tokens,
+            vec![
+                JsonPathToken::Root,
+                JsonPathToken::Member("users"),
+                JsonPathToken::MemberUnion(vec!["a", "bc", ""])
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_index_union() {
+        let path = JsonPath::parse("$.users[0, 123, -1]").unwrap();
+        assert_eq!(
+            path.tokens,
+            vec![
+                JsonPathToken::Root,
+                JsonPathToken::Member("users"),
+                JsonPathToken::IndexUnion(vec![0, 123, -1])
+            ]
         );
     }
 
