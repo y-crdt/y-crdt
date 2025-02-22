@@ -6,111 +6,112 @@ impl Any {
     pub fn json_path<'a>(&'a self, path: &'a JsonPath<'a>) -> JsonPathIter<'a> {
         let mut acc = Vec::new();
         let root = self;
-        let current = root;
-        Self::json_path_internal(root, current, path.as_ref(), &mut acc, false);
-        Box::new(acc.into_iter())
-    }
+        let pattern = path.tokens.as_slice();
+        let mut frame = IterFrame::new(root, 0, None);
 
-    fn json_path_internal<'a>(
-        root: &'a Self,
-        mut current: &'a Self,
-        pattern: &'a [JsonPathToken<'a>],
-        acc: &mut Vec<&'a Any>,
-        is_descending: bool,
-    ) {
-        let mut early_return = false;
-        for i in 0..pattern.len() {
-            let segment = &pattern[i];
-            match segment {
-                JsonPathToken::Root => current = root,
-                JsonPathToken::Current => { /* do nothing */ }
-                JsonPathToken::Member(key) => {
-                    if let Any::Map(map) = current {
-                        current = match map.get(*key) {
-                            Some(value) => value,
-                            None => {
-                                early_return = true;
-                                break;
-                            }
-                        }
-                    } else {
-                        early_return = true;
-                    }
-                }
-                JsonPathToken::Index(idx) => {
-                    if let Any::Array(array) = current {
-                        let idx = if *idx < 0 {
-                            array.len() as i32 + idx
+        'rec: loop {
+            if let Some(iter) = &mut frame.iter {
+                match iter.next() {
+                    None => {
+                        frame.iter = None;
+                        if frame.ascend() {
+                            continue; //TODO: check is_descending
                         } else {
-                            *idx
-                        } as usize;
-                        current = match array.get(idx) {
-                            Some(value) => value,
-                            None => {
-                                early_return = true;
-                                break;
+                            break;
+                        }
+                    }
+                    Some(curr) => {
+                        frame.descend(curr);
+                    }
+                }
+            }
+            // early return only works if the loop after has at least one iteration
+            let mut early_return = frame.index == pattern.len();
+            while frame.index < pattern.len() {
+                let segment = &pattern[frame.index];
+                frame.index += 1;
+                match segment {
+                    JsonPathToken::Root => frame.current = root,
+                    JsonPathToken::Current => { /* do nothing */ }
+                    JsonPathToken::Member(key) => {
+                        if let Any::Map(map) = frame.current {
+                            frame.current = match map.get(*key) {
+                                Some(value) => value,
+                                None => {
+                                    early_return = true;
+                                    break;
+                                }
                             }
-                        };
-                    } else {
+                        } else {
+                            early_return = true;
+                        }
+                    }
+                    JsonPathToken::Index(idx) => {
+                        if let Any::Array(array) = frame.current {
+                            let idx = if *idx < 0 {
+                                array.len() as i32 + idx
+                            } else {
+                                *idx
+                            } as usize;
+                            frame.current = match array.get(idx) {
+                                Some(value) => value,
+                                None => {
+                                    early_return = true;
+                                    break;
+                                }
+                            };
+                        } else {
+                            early_return = true;
+                        }
+                    }
+                    JsonPathToken::Wildcard => {
+                        if let Some(iter) = any_iter(frame.current) {
+                            frame.iter = Some(iter);
+                            continue 'rec;
+                        }
+                        early_return = true;
+                    }
+                    JsonPathToken::RecursiveDescend => {
+                        if let Some(iter) = any_iter(frame.current) {
+                            frame.iter = Some(iter);
+                            frame.is_descending = true;
+                            continue 'rec;
+                        }
+                        early_return = true;
+                    }
+                    JsonPathToken::Slice(from, to, by) => {
+                        if let Some(iter) =
+                            slice_iter(frame.current, *from as usize, *to as usize, *by as usize)
+                        {
+                            frame.iter = Some(iter);
+                            continue 'rec;
+                        }
                         early_return = true;
                     }
                 }
-                JsonPathToken::Wildcard => {
-                    if let Some(iter) = any_iter(current) {
-                        let pattern = &pattern[i + 1..];
-                        for any in iter {
-                            Self::json_path_internal(root, any, pattern, acc, false);
-                        }
-                    } else {
-                        early_return = true;
-                    }
-                }
-                JsonPathToken::RecursiveDescend => {
-                    if let Some(iter) = any_iter(current) {
-                        let pattern = &pattern[i + 1..];
-                        for any in iter {
-                            Self::json_path_internal(root, any, pattern, acc, true);
-                        }
-                    } else {
-                        early_return = true;
-                    }
-                }
-                JsonPathToken::Slice(from, to, by) => {
-                    if let Some(iter) =
-                        slice_iter(current, *from as usize, *to as usize, *by as usize)
-                    {
-                        let pattern = &pattern[i + 1..];
-                        for any in iter {
-                            Self::json_path_internal(root, any, pattern, acc, false);
-                        }
-                    } else {
-                        early_return = true;
-                    }
+
+                if early_return {
+                    break;
                 }
             }
 
-            if early_return {
-                break;
+            if !early_return {
+                acc.push(frame.current);
+            } else if frame.is_descending {
+                if let Some(iter) = any_iter(frame.current) {
+                    frame.iter = Some(iter);
+                    frame.is_descending = true;
+                    frame.index -= 1; // '..' means we're not consuming the segment in this iteration
+                    continue 'rec;
+                }
+            }
+
+            if frame.iter.is_none() && !frame.ascend() {
+                break 'rec; // we got to the end of the evaluator
             }
         }
 
-        if !early_return {
-            acc.push(current);
-        } else if is_descending {
-            match current {
-                Any::Array(array) => {
-                    for any in array.iter() {
-                        Self::json_path_internal(root, any, pattern, acc, true);
-                    }
-                }
-                Any::Map(map) => {
-                    for any in map.values() {
-                        Self::json_path_internal(root, any, pattern, acc, true);
-                    }
-                }
-                _ => { /* do nothing */ }
-            }
-        }
+        Box::new(acc.into_iter())
     }
 }
 
@@ -142,22 +143,59 @@ fn any_iter<'a>(any: &'a Any) -> Option<Box<dyn Iterator<Item = &'a Any> + 'a>> 
 pub type JsonPathIter<'a> = Box<dyn Iterator<Item = &'a Any> + 'a>;
 
 /// Scope used for recursive iteration, i.e. wildcard, descent or slice.
-struct IterScope<'a> {
-    /// Scopes can be nested in each other i.e. `$.people.*.friends[*]name`. In such case they
-    /// are organized in a linked list, with the first elements being the innermost scopes.
-    next: Option<Box<IterScope<'a>>>,
+struct IterFrame<'a> {
     /// Offset to tokens array, where the current scope starts.
     index: usize,
+    /// Whether we're in recursive descent scope.
+    is_descending: bool,
     /// Current object this scope is iterating over.
     current: &'a Any,
     /// Iterator used by this scope.
-    state: ScopeIterator<'a>,
+    iter: Option<ScopeIterator<'a>>,
+    /// Scopes can be nested in each other i.e. `$.people.*.friends[*]name`. In such case they
+    /// are organized in a linked list, with the first elements being the innermost scopes.
+    next: Option<Box<IterFrame<'a>>>,
 }
 
-enum ScopeIterator<'a> {
-    /// Iterator used by wildcard or slice.
-    Iter(Box<dyn Iterator<Item = &'a Any> + 'a>),
+impl<'a> IterFrame<'a> {
+    fn new(current: &'a Any, index: usize, iter: Option<ScopeIterator<'a>>) -> Self {
+        Self {
+            index,
+            is_descending: false,
+            current,
+            iter,
+            next: None,
+        }
+    }
+
+    /// Descent into given iterator context, moving current frame to the stack and replacing it with
+    /// a new one executing in a context of that iterator.
+    fn descend(&mut self, current: &'a Any) {
+        let new_self = IterFrame {
+            index: self.index,
+            is_descending: self.is_descending,
+            current,
+            iter: None,
+            next: None,
+        };
+        let old_frame = std::mem::replace(self, new_self);
+        self.next = Some(Box::new(old_frame));
+    }
+
+    /// Return from current scope, restoring previous iter frame from the stack.
+    /// If there are no more iter frames, return false.
+    fn ascend(&mut self) -> bool {
+        match self.next.take() {
+            None => false,
+            Some(next) => {
+                *self = *next;
+                true
+            }
+        }
+    }
 }
+
+type ScopeIterator<'a> = Box<dyn Iterator<Item = &'a Any> + 'a>;
 
 #[cfg(test)]
 mod test {
