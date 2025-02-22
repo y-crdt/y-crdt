@@ -1,6 +1,5 @@
 use super::{JsonPath, JsonPathToken, ParseError};
 use std::fmt::Display;
-use std::num::ParseIntError;
 use std::str::FromStr;
 
 impl<'a> JsonPath<'a> {
@@ -48,7 +47,7 @@ impl<'a> JsonPath<'a> {
                         }
                         None => {
                             return Err(ParseError::InvalidJsonPath(format!(
-                                "Path cannot end with '.': '{}'",
+                                "Path cannot end with '.': `{}`",
                                 path
                             )))
                         }
@@ -59,11 +58,18 @@ impl<'a> JsonPath<'a> {
                     let start = i;
                     let mut slice = &path[i..];
                     let mut quote_start = false;
+                    let mut nesting = 1;
                     for c in iter.by_ref() {
                         i += c.len_utf8();
-                        if c == ']' && !quote_start {
-                            slice = &slice[..(i - start - 1)];
-                            break;
+                        if c == '[' {
+                            nesting += 1;
+                        }
+                        if c == ']' {
+                            nesting -= 1;
+                            if nesting == 0 && !quote_start {
+                                slice = &slice[..(i - start - 1)];
+                                break;
+                            }
                         }
                         if c == '\'' {
                             quote_start = !quote_start;
@@ -75,6 +81,11 @@ impl<'a> JsonPath<'a> {
                     } else if let Ok(index) = slice.parse::<i32>() {
                         // '[{number}]' => array index
                         tokens.push(JsonPathToken::Index(index));
+                    } else if slice.starts_with('?') {
+                        return Err(ParseError::InvalidJsonPath(format!(
+                            "JSON Path predicate expressions are not supported yet: `{}`",
+                            slice
+                        )));
                     } else if slice.contains(':') {
                         // '[{?from}:{?to}:{?by}]' => slice operator
                         let mut split = slice.split(':');
@@ -124,7 +135,7 @@ impl<'a> JsonPath<'a> {
                                 while {
                                     match n.parse::<i32>() {
                                         Ok(i) => indices.push(i),
-                                        Err(err) => return Err(ParseError::InvalidJsonPath(format!("substring '{}' doesn't contain valid union of keys or indices: {}", slice, err))),
+                                        Err(err) => return Err(ParseError::InvalidJsonPath(format!("substring `{}` doesn't contain valid union of keys or indices: {}", slice, err))),
                                     }
                                     match i.next() {
                                         None => false,
@@ -143,7 +154,7 @@ impl<'a> JsonPath<'a> {
                         tokens.push(JsonPathToken::Member(member));
                     } else {
                         return Err(ParseError::InvalidJsonPath(format!(
-                            "substring '{}' is not supported: '{}'",
+                            "substring `{}` is not supported: `{}`",
                             slice, path
                         )));
                     }
@@ -174,7 +185,7 @@ impl<'a> JsonPath<'a> {
 }
 
 fn invalid_char(c: char, path: &str) -> ParseError {
-    ParseError::InvalidJsonPath(format!("Invalid character '{}' in path: '{}'", c, path))
+    ParseError::InvalidJsonPath(format!("Invalid character `{}` in path: `{}`", c, path))
 }
 
 #[cfg(test)]
@@ -355,5 +366,13 @@ mod test {
                 JsonPathToken::Wildcard
             ]
         );
+    }
+
+    #[test]
+    fn parse_predicate_error() {
+        let res = JsonPath::parse("$.users[?(@['name'] == 'Alice')].surname");
+        assert!(res.is_err());
+        let err = res.unwrap_err();
+        assert!(err.to_string().contains("?(@['name'] == 'Alice')"));
     }
 }

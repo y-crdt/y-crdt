@@ -1,5 +1,4 @@
 use std::fmt::{Display, Formatter};
-use std::ops::Range;
 
 mod iter_any;
 mod parse;
