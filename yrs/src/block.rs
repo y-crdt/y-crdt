@@ -881,7 +881,7 @@ impl Item {
                         encoder.write_parent_info(true);
                         encoder.write_string(name);
                     } else {
-                        unreachable!()
+                        unreachable!("Could not get parent branch info for item")
                     }
                 }
                 TypePtr::Named(name) => {
