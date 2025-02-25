@@ -226,6 +226,8 @@ impl ItemSlice {
                     } else if let Some(name) = branch.name.as_deref() {
                         encoder.write_parent_info(true);
                         encoder.write_string(name);
+                    } else {
+                        unreachable!("Could not get parent branch info for item")
                     }
                 }
                 TypePtr::Named(name) => {
