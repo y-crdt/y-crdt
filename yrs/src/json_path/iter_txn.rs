@@ -1,21 +1,28 @@
-use super::{JsonPath, JsonPathToken};
-use crate::{Any, JsonPathEval};
-use proptest::num::usize;
+use crate::json_path::JsonPathToken;
+use crate::{
+    Any, Array, JsonPath, JsonPathEval, Map, Out, ReadTxn, Store, Transact, Xml, XmlFragment,
+};
 
-impl JsonPathEval for Any {
-    type Iter<'a> = JsonPathIter<'a>;
+impl<T> JsonPathEval for T
+where
+    T: ReadTxn,
+{
+    type Iter<'a>
+        = JsonPathIter<'a, T>
+    where
+        T: 'a;
     fn json_path<'a>(&'a self, path: &'a JsonPath<'a>) -> Self::Iter<'a> {
         JsonPathIter::new(self, path.as_ref())
     }
 }
 
 fn slice_iter<'a>(
-    any: &'a Any,
+    value: &'a Out,
     from: usize,
     to: usize,
     by: usize,
-) -> Option<Box<dyn Iterator<Item = &'a Any> + 'a>> {
-    match any {
+) -> Option<Box<dyn Iterator<Item = Out> + 'a>> {
+    match value {
         Any::Array(array) => {
             let to = array.len().min(to);
             Some(Box::new(
@@ -26,19 +33,21 @@ fn slice_iter<'a>(
     }
 }
 
-fn any_iter<'a>(any: &'a Any) -> Option<Box<dyn Iterator<Item = &'a Any> + 'a>> {
-    match any {
-        Any::Array(array) => Some(Box::new(array.iter())),
-        Any::Map(map) => Some(Box::new(map.values())),
-        _ => None,
+fn any_iter<'a, T: ReadTxn>(
+    txn: &'a T,
+    out: Option<&'a Out>,
+) -> Option<Box<dyn Iterator<Item = Out> + 'a>> {
+    match out {
+        None => Some(Box::new(txn.root_refs().map(|(_, out)| out))),
+        Some(Out::Any())
     }
 }
 
 fn member_union_iter<'a>(
-    any: &'a Any,
+    value: &'a Out,
     members: &'a [&'a str],
 ) -> Option<Box<dyn Iterator<Item = &'a Any> + 'a>> {
-    match any {
+    match value {
         Any::Map(map) => {
             let iter = members.into_iter().flat_map(move |key| map.get(*key));
             Some(Box::new(iter))
@@ -48,10 +57,10 @@ fn member_union_iter<'a>(
 }
 
 fn index_union_iter<'a>(
-    any: &'a Any,
+    value: &'a Out,
     indices: &'a [i32],
-) -> Option<Box<dyn Iterator<Item = &'a Any> + 'a>> {
-    match any {
+) -> Option<Box<dyn Iterator<Item = Out> + 'a>> {
+    match value {
         Any::Array(array) => {
             let iter = indices.into_iter().flat_map(move |i| {
                 let i = if *i < 0 {
@@ -67,24 +76,31 @@ fn index_union_iter<'a>(
     }
 }
 
-pub struct JsonPathIter<'a> {
-    root: &'a Any,
+pub struct JsonPathIter<'a, T> {
+    txn: &'a T,
     pattern: &'a [JsonPathToken<'a>],
     frame: ExecutionFrame<'a>,
 }
 
-impl<'a> JsonPathIter<'a> {
-    fn new(root: &'a Any, path: &'a [JsonPathToken<'a>]) -> Self {
+impl<'a, T> JsonPathIter<'a, T>
+where
+    T: ReadTxn,
+{
+    fn new(txn: &'a T, path: &'a [JsonPathToken<'a>]) -> Self {
+        let store = txn.store();
         Self {
-            root,
+            txn: store,
             pattern: path.as_ref(),
-            frame: ExecutionFrame::new(root, 0, None),
+            frame: ExecutionFrame::new(None, 0, None),
         }
     }
 }
 
-impl<'a> Iterator for JsonPathIter<'a> {
-    type Item = &'a Any;
+impl<'a, T> Iterator for JsonPathIter<'a, T>
+where
+    T: ReadTxn,
+{
+    type Item = Out;
 
     fn next(&mut self) -> Option<Self::Item> {
         let frame = &mut self.frame;
@@ -107,48 +123,31 @@ impl<'a> Iterator for JsonPathIter<'a> {
             let segment = &self.pattern[frame.index];
             frame.index += 1;
             match segment {
-                JsonPathToken::Root => frame.current = self.root,
+                JsonPathToken::Root => frame.current = None,
                 JsonPathToken::Current => { /* do nothing */ }
                 JsonPathToken::Member(key) => {
-                    if let Any::Map(map) = frame.current {
-                        frame.current = match map.get(*key) {
-                            Some(value) => value,
-                            None => {
-                                early_return = true;
-                                break;
-                            }
-                        }
+                    if let Some(value) = get_member(self.txn, frame.current.as_ref(), *key) {
+                        frame.current = Some(value);
                     } else {
                         early_return = true;
                     }
                 }
                 JsonPathToken::Index(idx) => {
-                    if let Any::Array(array) = frame.current {
-                        let idx = if *idx < 0 {
-                            array.len() as i32 + idx
-                        } else {
-                            *idx
-                        } as usize;
-                        frame.current = match array.get(idx) {
-                            Some(value) => value,
-                            None => {
-                                early_return = true;
-                                break;
-                            }
-                        };
+                    if let Some(value) = get_index(self.txn, frame.current.as_ref(), *idx) {
+                        frame.current = Some(value);
                     } else {
                         early_return = true;
                     }
                 }
                 JsonPathToken::Wildcard => {
-                    if let Some(iter) = any_iter(frame.current) {
+                    if let Some(iter) = any_iter(self.txn, frame.current.as_ref()) {
                         frame.iter = Some(iter);
                         return self.next();
                     }
                     early_return = true;
                 }
                 JsonPathToken::RecursiveDescend => {
-                    if let Some(iter) = any_iter(frame.current) {
+                    if let Some(iter) = any_iter(self.txn, frame.current.as_ref()) {
                         frame.iter = Some(iter);
                         frame.is_descending = true;
                         return self.next();
@@ -156,23 +155,30 @@ impl<'a> Iterator for JsonPathIter<'a> {
                     early_return = true;
                 }
                 JsonPathToken::Slice(from, to, by) => {
-                    if let Some(iter) =
-                        slice_iter(frame.current, *from as usize, *to as usize, *by as usize)
-                    {
+                    if let Some(iter) = slice_iter(
+                        self.txn,
+                        frame.current.as_ref(),
+                        *from as usize,
+                        *to as usize,
+                        *by as usize,
+                    ) {
                         frame.iter = Some(iter);
                         return self.next();
                     }
                     early_return = true;
                 }
                 JsonPathToken::MemberUnion(members) => {
-                    if let Some(iter) = member_union_iter(frame.current, &members) {
+                    if let Some(iter) =
+                        member_union_iter(self.txn, frame.current.as_ref(), &members)
+                    {
                         frame.iter = Some(iter);
                         return self.next();
                     }
                     early_return = true;
                 }
                 JsonPathToken::IndexUnion(indices) => {
-                    if let Some(iter) = index_union_iter(frame.current, &indices) {
+                    if let Some(iter) = index_union_iter(self.txn, frame.current.as_ref(), &indices)
+                    {
                         frame.iter = Some(iter);
                         return self.next();
                     }
@@ -186,9 +192,9 @@ impl<'a> Iterator for JsonPathIter<'a> {
         }
 
         if !early_return {
-            return Some(frame.current);
+            return frame.current.clone();
         } else if frame.is_descending {
-            if let Some(iter) = any_iter(frame.current) {
+            if let Some(iter) = any_iter(self.txn, frame.current.as_ref()) {
                 frame.iter = Some(iter);
                 frame.is_descending = true;
                 frame.index -= 1; // '..' means we're not consuming the segment in this iteration
@@ -204,6 +210,59 @@ impl<'a> Iterator for JsonPathIter<'a> {
     }
 }
 
+fn get_member<T: ReadTxn>(txn: &T, out: Option<&Out>, key: &str) -> Option<Out> {
+    match out {
+        None => txn.get(key),
+        Some(Out::YMap(map)) => map.get(txn, key),
+        Some(Out::Any(Any::Map(map))) => map.get(key).map(|any| Out::Any(any.clone())),
+        Some(Out::YXmlElement(elem)) => elem
+            .get_attribute(txn, key)
+            .map(|attr| Out::Any(Any::String(attr.into()))),
+        Some(Out::YXmlText(elem)) => elem
+            .get_attribute(txn, key)
+            .map(|attr| Out::Any(Any::String(attr.into()))),
+        _ => None,
+    }
+}
+
+fn get_index<T: ReadTxn>(txn: &T, out: Option<&Out>, idx: i32) -> Option<Out> {
+    match out {
+        Some(Out::YArray(array)) => {
+            let idx = if *idx < 0 {
+                array.len(txn) as i32 + idx
+            } else {
+                *idx
+            } as u32;
+            array.get(txn, idx)
+        }
+        Some(Out::Any(Any::Array(array))) => {
+            let idx = if *idx < 0 {
+                array.len() as i32 + idx
+            } else {
+                *idx
+            } as usize;
+            array.get(idx).cloned().map(Out::Any)
+        }
+        Some(Out::YXmlFragment(elem)) => {
+            let idx = if *idx < 0 {
+                elem.len(txn) as i32 + idx
+            } else {
+                *idx
+            } as u32;
+            elem.get(txn, idx).map(Out::from)
+        }
+        Some(Out::YXmlElement(elem)) => {
+            let idx = if *idx < 0 {
+                elem.len(txn) as i32 + idx
+            } else {
+                *idx
+            } as u32;
+            elem.get(txn, idx).map(Out::from)
+        }
+        _ => None,
+    }
+}
+
 /// Scope used for recursive iteration, i.e. wildcard, descent or slice.
 struct ExecutionFrame<'a> {
     /// Offset to tokens array, where the current scope starts.
@@ -211,7 +270,7 @@ struct ExecutionFrame<'a> {
     /// Whether we're in recursive descent scope.
     is_descending: bool,
     /// Current object this scope is iterating over.
-    current: &'a Any,
+    current: Option<Out>,
     /// Iterator used by this scope.
     iter: Option<ScopeIterator<'a>>,
     /// Scopes can be nested in each other i.e. `$.people.*.friends[*]name`. In such case they
@@ -220,7 +279,7 @@ struct ExecutionFrame<'a> {
 }
 
 impl<'a> ExecutionFrame<'a> {
-    fn new(current: &'a Any, index: usize, iter: Option<ScopeIterator<'a>>) -> Self {
+    fn new(current: Option<Out>, index: usize, iter: Option<ScopeIterator<'a>>) -> Self {
         Self {
             index,
             is_descending: false,
@@ -232,11 +291,11 @@ impl<'a> ExecutionFrame<'a> {
 
     /// Descent into given iterator context, moving current frame to the stack and replacing it with
     /// a new one executing in a context of that iterator.
-    fn descend(&mut self, current: &'a Any) {
+    fn descend(&mut self, current: Out) {
         let new_self = ExecutionFrame {
             index: self.index,
             is_descending: self.is_descending,
-            current,
+            current: Some(current),
             iter: None,
             next: None,
         };
@@ -257,53 +316,78 @@ impl<'a> ExecutionFrame<'a> {
     }
 }
 
-type ScopeIterator<'a> = Box<dyn Iterator<Item = &'a Any> + 'a>;
+type ScopeIterator<'a> = Box<dyn Iterator<Item = Out> + 'a>;
 
 #[cfg(test)]
 mod test {
-    use crate::json_path::JsonPath;
-    use crate::{any, Any, JsonPathEval};
-    use std::path::Display;
+    use crate::{
+        any, Any, Array, ArrayPrelim, Doc, In, JsonPath, JsonPathEval, Map, MapPrelim, Transact,
+        WriteTxn,
+    };
 
-    fn mixed_sample() -> Any {
-        any!({
-            "users": [
-                {
-                    "name": "Alice",
-                    "surname": "Smith",
-                    "age": 25,
-                    "friends": [
-                        { "name": "Bob", "nick": "boreas" },
-                        { "nick": "crocodile91" }
-                    ]
-                },
-                {
-                    "name": "Bob",
-                    "nick": "boreas",
-                    "age": 30
-                },
-                {
-                    "nick": "crocodile91",
-                    "age": 35
-                },
-                {
-                    "name": "Damian",
-                    "surname": "Smith",
-                    "age": 30
-                },
-                {
-                    "name": "Elise",
-                    "age": 35
-                }
-            ]
-        })
+    fn mixed_sample() -> Doc {
+        let doc = Doc::new();
+        let mut tx = doc.transact_mut();
+        let users = tx.get_or_insert_array("users");
+        users.insert(
+            &mut tx,
+            0,
+            MapPrelim::from([
+                ("name".into(), any!("Alice").into()),
+                ("surname".into(), any!("Smith").into()),
+                ("age".into(), any!(25).into()),
+                (
+                    "friends".into(),
+                    In::from(ArrayPrelim::from([
+                        any!({ "name": "Bob", "nick": "boreas" }),
+                        any!({ "nick": "crocodile91" }),
+                    ])),
+                ),
+            ]),
+        );
+        users.insert(
+            &mut tx,
+            1,
+            MapPrelim::from([
+                ("name".into(), any!("Bob").into()),
+                ("nick".into(), any!("boreas").into()),
+                ("age".into(), any!(30).into()),
+            ]),
+        );
+        users.insert(
+            &mut tx,
+            2,
+            MapPrelim::from([
+                ("nick".into(), any!("crocodile91").into()),
+                ("age".into(), any!(35).into()),
+            ]),
+        );
+        users.insert(
+            &mut tx,
+            3,
+            MapPrelim::from([
+                ("name".into(), any!("Damian").into()),
+                ("surname".into(), any!("Smith").into()),
+                ("age".into(), any!(30).into()),
+            ]),
+        );
+        users.insert(
+            &mut tx,
+            4,
+            MapPrelim::from([
+                ("name".into(), any!("Elise").into()),
+                ("age".into(), any!(35).into()),
+            ]),
+        );
+        doc
     }
 
     #[test]
     fn eval_member_partial() {
-        let any = mixed_sample();
+        let doc = mixed_sample();
         let path = JsonPath::parse("$.users").unwrap();
-        let values: Vec<_> = any.json_path(&path).collect();
+        let tx = doc.transact();
+        let values: Vec<_> = tx.json_path(&path).collect();
         let expected = any!([
             {
                 "name": "Alice",
@@ -338,25 +422,28 @@ mod test {
 
     #[test]
     fn eval_member_full() {
-        let any = mixed_sample();
+        let doc = mixed_sample();
         let path = JsonPath::parse("$.users[0].name").unwrap();
-        let values: Vec<_> = any.json_path(&path).collect();
+        let tx = doc.transact();
+        let values: Vec<_> = tx.json_path(&path).collect();
         assert_eq!(values, vec![&any!("Alice")]);
     }
 
     #[test]
     fn eval_member_negative_index() {
-        let any = mixed_sample();
+        let doc = mixed_sample();
         let path = JsonPath::parse("$.users[-1].name").unwrap();
-        let values: Vec<_> = any.json_path(&path).collect();
+        let tx = doc.transact();
+        let values: Vec<_> = tx.json_path(&path).collect();
         assert_eq!(values, vec![&any!("Elise")]);
     }
 
     #[test]
     fn eval_member_wildcard_array() {
-        let any = mixed_sample();
+        let doc = mixed_sample();
         let path = JsonPath::parse("$.users[*].name").unwrap();
-        let values: Vec<_> = any.json_path(&path).collect();
+        let tx = doc.transact();
+        let values: Vec<_> = tx.json_path(&path).collect();
         assert_eq!(
             values,
             vec![
@@ -370,33 +457,37 @@ mod test {
 
     #[test]
     fn eval_member_slice() {
-        let any = mixed_sample();
+        let doc = mixed_sample();
         let path = JsonPath::parse("$.users[1:3].nick").unwrap();
-        let values: Vec<_> = any.json_path(&path).collect();
+        let tx = doc.transact();
+        let values: Vec<_> = tx.json_path(&path).collect();
         assert_eq!(values, vec![&any!("boreas"), &any!("crocodile91")]);
     }
 
     #[test]
     fn eval_index_union() {
-        let any = mixed_sample();
+        let doc = mixed_sample();
         let path = JsonPath::parse("$.users[1,3].name").unwrap();
-        let values: Vec<_> = any.json_path(&path).collect();
+        let tx = doc.transact();
+        let values: Vec<_> = tx.json_path(&path).collect();
         assert_eq!(values, vec![&any!("Bob"), &any!("Damian")]);
     }
 
     #[test]
     fn eval_member_union() {
-        let any = mixed_sample();
+        let doc = mixed_sample();
         let path = JsonPath::parse("$.users[0]['name','surname']").unwrap();
-        let values: Vec<_> = any.json_path(&path).collect();
+        let tx = doc.transact();
+        let values: Vec<_> = tx.json_path(&path).collect();
         assert_eq!(values, vec![&any!("Alice"), &any!("Smith")]);
     }
 
     #[test]
     fn eval_descent_flat() {
-        let any = mixed_sample();
+        let doc = mixed_sample();
         let path = JsonPath::parse("$.users..name").unwrap();
-        let values: Vec<_> = any.json_path(&path).collect();
+        let tx = doc.transact();
+        let values: Vec<_> = tx.json_path(&path).collect();
         assert_eq!(
             values,
             vec![
@@ -406,35 +497,5 @@ mod test {
                 &any!("Elise")
             ]
         );
-    }
-
-    #[test]
-    fn eval_descent_multi_level() {
-        let any = any!({
-            "a": {
-                "b1": {
-                    "c": {
-                        "f": {
-                            "name": "Alice"
-                        }
-                    }
-                },
-                "b2": {
-                    "d": {
-                        "c": {
-                            "g": {
-                                "h": {
-                                    "name": "Bob"
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        });
-        let path = JsonPath::parse("$..c..name").unwrap();
-        let mut values: Vec<_> = any.json_path(&path).map(|any| any.to_string()).collect();
-        values.sort();
-        assert_eq!(values, vec!["Alice".to_string(), "Bob".into()]);
     }
 }

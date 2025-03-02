@@ -622,6 +622,7 @@ pub use crate::doc::Options;
 pub use crate::event::{SubdocsEvent, SubdocsEventIter, TransactionCleanupEvent, UpdateEvent};
 pub use crate::id_set::DeleteSet;
 pub use crate::input::In;
+pub use crate::json_path::{JsonPath, JsonPathEval};
 pub use crate::moving::Assoc;
 pub use crate::moving::IndexScope;
 pub use crate::moving::IndexedSequence;

@@ -1,7 +1,17 @@
+use crate::json_path::iter_any::JsonPathIter;
 use std::fmt::{Display, Formatter};
 
 mod iter_any;
+mod iter_txn;
 mod parse;
+
+/// Trait implemented by types capable of evaluating JSON Paths.
+pub trait JsonPathEval {
+    type Iter<'a>
+    where
+        Self: 'a;
+    fn json_path<'a>(&'a self, path: &'a JsonPath<'a>) -> Self::Iter<'a>;
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct JsonPath<'a> {
