@@ -95,6 +95,12 @@ pub struct Update {
 }
 
 impl Update {
+    /// Binary containing an empty update, serialized via lib0 version 1 encoder.
+    pub const EMPTY_V1: &'static [u8] = &[0, 0];
+
+    /// Binary containing an empty update, serialized via lib0 version 2 encoder.
+    pub const EMPTY_V2: &'static [u8] = &[0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0];
+
     pub fn new() -> Self {
         Self::default()
     }
@@ -1123,6 +1129,7 @@ mod test {
     use crate::types::{Delta, TypePtr};
     use crate::update::{BlockCarrier, Update};
     use crate::updates::decoder::{Decode, DecoderV1};
+    use crate::updates::encoder::Encode;
     use crate::{
         Any, Doc, GetString, Options, ReadTxn, StateVector, Text, Transact, WriteTxn, XmlFragment,
         XmlOut, ID,
@@ -1437,6 +1444,20 @@ mod test {
         let mut u = Update::new();
         u.blocks.add_block(test_item(1, 2, 1)); // disjoint
         assert!(!u.extends(&StateVector::from_iter([(1, 1)])));
+    }
+
+    #[test]
+    fn empty_update_v1() {
+        let mut u = Update::new();
+        let binary = u.encode_v1();
+        assert_eq!(&binary, Update::EMPTY_V1)
+    }
+
+    #[test]
+    fn empty_update_v2() {
+        let mut u = Update::new();
+        let binary = u.encode_v2();
+        assert_eq!(&binary, Update::EMPTY_V2)
     }
 
     fn test_item(client_id: ClientID, clock: u32, len: u32) -> BlockCarrier {
