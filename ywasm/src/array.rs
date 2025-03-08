@@ -148,7 +148,7 @@ impl YArray {
 
     /// Deletes a range of items of given `length` from current `YArray` instance,
     /// starting from given `index`.
-    #[wasm_bindgen(method, js_name = "delete")]
+    #[wasm_bindgen(js_name = "delete")]
     pub fn delete(
         &mut self,
         index: u32,

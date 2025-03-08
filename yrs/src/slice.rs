@@ -142,24 +142,6 @@ impl ItemSlice {
         self.end -= count;
     }
 
-    /// Attempts to trim current block slice to provided range of IDs.
-    /// Returns true if current block slice range has been modified as a result of this action.
-    pub fn try_trim(&mut self, from: &ID, to: &ID) -> bool {
-        let id = self.ptr.id;
-        let mut changed = false;
-        let start_clock = id.clock + self.start;
-        let end_clock = id.clock + self.end;
-        if id.client == from.client && from.clock > start_clock && from.clock <= end_clock {
-            self.start = from.clock - start_clock;
-            changed = true;
-        }
-        if id.client == to.client && to.clock >= start_clock && to.clock < end_clock {
-            self.end = end_clock - to.clock;
-            changed = true;
-        }
-        changed
-    }
-
     /// Returns true when current [ItemSlice] left boundary is equal to the boundary of the
     /// [ItemPtr] this slice wraps.
     pub fn adjacent_left(&self) -> bool {

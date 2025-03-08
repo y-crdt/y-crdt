@@ -1,6 +1,6 @@
 use crate::any::AnyArrayIter;
 use crate::json_path::JsonPathToken;
-use crate::{Any, Array, JsonPath, JsonPathEval, Map, Out, ReadTxn, Transact, Xml, XmlFragment};
+use crate::{Any, Array, JsonPath, JsonPathEval, Map, Out, ReadTxn, Xml, XmlFragment};
 
 impl<T> JsonPathEval for T
 where
@@ -367,7 +367,7 @@ type ScopeIterator<'a> = Box<dyn Iterator<Item = Out> + 'a>;
 #[cfg(test)]
 mod test {
     use crate::{
-        any, Array, ArrayPrelim, Doc, In, JsonPath, JsonPathEval, Map, MapPrelim, Out, ReadTxn,
+        any, Array, ArrayPrelim, Doc, In, JsonPath, JsonPathEval, MapPrelim, Out, ReadTxn,
         Transact, WriteTxn,
     };
 

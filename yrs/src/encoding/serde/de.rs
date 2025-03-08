@@ -214,12 +214,6 @@ pub struct AnyDeserializer<'a> {
     value: &'a Any,
 }
 
-impl<'a> AnyDeserializer<'a> {
-    pub(crate) fn new(value: &'a Any) -> Self {
-        AnyDeserializer { value }
-    }
-}
-
 impl<'de, 'a: 'de> IntoDeserializer<'de, Error> for &'a Any {
     type Deserializer = AnyDeserializer<'de>;
 

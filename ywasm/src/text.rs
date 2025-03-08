@@ -253,9 +253,9 @@ impl YText {
         }
     }
 
-    /// Deletes a specified range of of characters, starting at a given `index`.
+    /// Deletes a specified range of characters, starting at a given `index`.
     /// Both `index` and `length` are counted in terms of a number of UTF-8 character bytes.
-    #[wasm_bindgen(method, js_name = delete)]
+    #[wasm_bindgen(js_name = delete)]
     pub fn delete(
         &mut self,
         index: u32,

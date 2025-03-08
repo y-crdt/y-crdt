@@ -9,6 +9,7 @@ mod test {
     use crate::encoding::write::Write;
     use crate::Any;
     use proptest::prelude::*;
+    use proptest_derive::Arbitrary;
 
     pub fn arb_any() -> impl Strategy<Value = Any> {
         let leaf = prop_oneof![
@@ -41,7 +42,7 @@ mod test {
         }
     }
 
-    #[derive(Debug, proptest_derive::Arbitrary)]
+    #[derive(Debug, Arbitrary)]
     enum EncodingTypes {
         Byte(u8),
         Uint8(u8),

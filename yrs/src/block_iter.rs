@@ -427,9 +427,7 @@ impl BlockIter {
             }
         }
         self.next_item = next_item;
-        if len < 0 {
-            self.index -= len;
-        }
+        self.index -= len;
         read
     }
 

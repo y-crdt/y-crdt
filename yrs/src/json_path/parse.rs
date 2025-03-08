@@ -1,5 +1,4 @@
 use super::{JsonPath, JsonPathToken, ParseError};
-use std::fmt::Display;
 use std::str::FromStr;
 
 impl<'a> JsonPath<'a> {
@@ -191,7 +190,6 @@ fn invalid_char(c: char, path: &str) -> ParseError {
 #[cfg(test)]
 mod test {
     use crate::json_path::parse::{JsonPath, JsonPathToken};
-    use fastrand::u32;
 
     #[test]
     fn parse_root() {

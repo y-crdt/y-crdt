@@ -613,27 +613,6 @@ where
     }
 }
 
-pub(crate) struct Iter<'a, T> {
-    ptr: Option<&'a ItemPtr>,
-    _txn: &'a T,
-}
-
-impl<'a, T: ReadTxn> Iter<'a, T> {
-    fn new(ptr: Option<&'a ItemPtr>, txn: &'a T) -> Self {
-        Iter { ptr, _txn: txn }
-    }
-}
-
-impl<'a, T: ReadTxn> Iterator for Iter<'a, T> {
-    type Item = &'a Item;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let item = self.ptr.take()?;
-        self.ptr = item.right.as_ref();
-        Some(item)
-    }
-}
-
 /// Type pointer - used to localize a complex [Branch] node within a scope of a document store.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum TypePtr {

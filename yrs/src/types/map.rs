@@ -423,14 +423,14 @@ where
 }
 
 pub struct MapIntoIter<'a, T> {
-    txn: &'a T,
+    _txn: &'a T,
     entries: std::collections::hash_map::IntoIter<Arc<str>, ItemPtr>,
 }
 
 impl<'a, T: ReadTxn> MapIntoIter<'a, T> {
     fn new(map: BranchPtr, txn: &'a T) -> Self {
         let entries = map.map.clone().into_iter();
-        MapIntoIter { txn, entries }
+        MapIntoIter { _txn: txn, entries }
     }
 }
 

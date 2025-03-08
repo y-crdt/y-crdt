@@ -1067,13 +1067,6 @@ impl<'doc> TransactionMut<'doc> {
     }
 
     #[cfg(feature = "weak")]
-    fn link(&mut self, mut source: ItemPtr, link: BranchPtr) {
-        source.info.set_linked();
-        let links = self.store.linked_by.entry(source).or_default();
-        links.insert(link);
-    }
-
-    #[cfg(feature = "weak")]
     pub(crate) fn unlink(&mut self, mut source: ItemPtr, link: BranchPtr) {
         let all_links = &mut self.store.linked_by;
         let prune = if let Some(linked_by) = all_links.get_mut(&source) {
