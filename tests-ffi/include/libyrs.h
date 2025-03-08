@@ -69,6 +69,11 @@ typedef struct YArrayIter {} YArrayIter;
 typedef struct YMapIter {} YMapIter;
 
 /**
+ * Iterator structure used by shared JSON Path expressions over document content.
+ */
+typedef struct YJsonPathIter {} YJsonPathIter;
+
+/**
  * Iterator structure used by XML nodes (elements and text) to iterate over node's attributes.
  * Attribute iterators are unordered - there's no specific order in which map entries will be
  * returned during consecutive iterator calls.
@@ -1259,6 +1264,40 @@ void ytransaction_force_gc(YTransaction *txn);
  * Returns `0` if transaction is read-only.
  */
 uint8_t ytransaction_writeable(YTransaction *txn);
+
+/**
+ * Evaluates a JSON path expression (see: https://en.wikipedia.org/wiki/JSONPath) on
+ * the transaction's document and returns an iterator over values matching that query.
+ *
+ * Currently, this method supports the following syntax:
+ * - `$` - root object
+ * - `@` - current object
+ * - `.field` or `['field']` - member accessor
+ * - `[1]` - array index (also supports negative indices)
+ * - `.*` or `[*]` - wildcard (matches all members of an object or array)
+ * - `..` - recursive descent (matches all descendants not only direct children)
+ * - `[start:end:step]` - array slice operator (requires positive integer arguments)
+ * - `['a', 'b', 'c']` - union operator (returns an array of values for each query)
+ * - `[1, -1, 3]` - multiple indices operator (returns an array of values for each index)
+ *
+ * At the moment, JSON Path does not support filter predicates.
+ *
+ * Returns `NULL` if the json_path expression is invalid and couldn't be parsed.
+ *
+ * Use ``yjson_path_iter_next` function in order to retrieve a consecutive array elements.
+ * Use ``yjson_path_iter_destroy` function in order to close the iterator and release its resources.
+ */
+YJsonPathIter *ytransaction_json_path(YTransaction *txn, const char *json_path);
+
+/**
+ * Returns the next element of a JSON path iterator. If there are no more elements, `NULL` is returned.
+ */
+struct YOutput *yjson_path_iter_next(YJsonPathIter *iter);
+
+/**
+ * Closes the JSON path iterator created via `ytransaction_json_path` and releases its resources.
+ */
+void yjson_path_iter_destroy(YJsonPathIter *iter);
 
 /**
  * Gets a reference to shared data type instance at the document root-level,

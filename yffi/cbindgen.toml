@@ -73,6 +73,11 @@ typedef struct YArrayIter {} YArrayIter;
 typedef struct YMapIter {} YMapIter;
 
 /**
+ * Iterator structure used by shared JSON Path expressions over document content.
+ */
+typedef struct YJsonPathIter {} YJsonPathIter;
+
+/**
  * Iterator structure used by XML nodes (elements and text) to iterate over node's attributes.
  * Attribute iterators are unordered - there's no specific order in which map entries will be
  * returned during consecutive iterator calls.
@@ -107,6 +112,7 @@ exclude = [
     "WeakIter",
     "ArrayIter",
     "MapIter",
+    "JsonPathIter",
     "Attributes",
     "TreeWalker",
     "YUndoManager",
@@ -124,6 +130,7 @@ exclude = [
 "XmlText" = "YXmlText"
 "MapIter" = "YMapIter"
 "ArrayIter" = "YArrayIter"
+"JsonPathIter" = "YJsonPathIter"
 "WeakIter" = "YWeakIter"
 "TreeWalker" = "YXmlTreeWalker"
 "Attributes" = "YXmlAttrIter"

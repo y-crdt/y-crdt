@@ -4,6 +4,8 @@ mod iter_any;
 mod iter_txn;
 mod parse;
 
+pub use iter_txn::JsonPathIter;
+
 /// Trait implemented by types capable of evaluating JSON Paths.
 pub trait JsonPathEval {
     type Iter<'a>

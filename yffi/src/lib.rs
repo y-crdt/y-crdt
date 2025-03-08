@@ -9,6 +9,7 @@ use yrs::block::{ClientID, EmbedPrelim, ItemContent, Prelim, Unused};
 use yrs::branch::BranchPtr;
 use yrs::encoding::read::Error;
 use yrs::error::UpdateError;
+use yrs::json_path::JsonPathIter as NativeJsonPathIter;
 use yrs::types::array::ArrayEvent;
 use yrs::types::array::ArrayIter as NativeArrayIter;
 use yrs::types::map::MapEvent;
@@ -23,10 +24,11 @@ use yrs::undo::EventKind;
 use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use yrs::{
-    uuid_v4, Any, Array, ArrayRef, Assoc, BranchID, DeleteSet, GetString, Map, MapRef, Observable,
-    OffsetKind, Options, Origin, Out, Quotable, ReadTxn, Snapshot, StateVector, StickyIndex, Store,
-    SubdocsEvent, SubdocsEventIter, Text, TextRef, Transact, TransactionCleanupEvent, Update, Xml,
-    XmlElementPrelim, XmlElementRef, XmlFragmentRef, XmlTextPrelim, XmlTextRef, ID,
+    uuid_v4, Any, Array, ArrayRef, Assoc, BranchID, DeleteSet, GetString, JsonPath, JsonPathEval,
+    Map, MapRef, Observable, OffsetKind, Options, Origin, Out, Quotable, ReadTxn, Snapshot,
+    StateVector, StickyIndex, Store, SubdocsEvent, SubdocsEventIter, Text, TextRef, Transact,
+    TransactionCleanupEvent, Update, Xml, XmlElementPrelim, XmlElementRef, XmlFragmentRef,
+    XmlTextPrelim, XmlTextRef, ID,
 };
 
 /// Flag used by `YInput` to pass JSON string for an object that should be deserialized and
@@ -141,6 +143,10 @@ pub struct WeakIter(NativeUnquote<'static, Transaction>);
 /// specific order in which map entries will be returned during consecutive iterator calls.
 #[repr(transparent)]
 pub struct MapIter(NativeMapIter<'static, &'static Transaction, Transaction>);
+
+/// Iterator structure used by json path queries to traverse over the results of a query.
+#[repr(transparent)]
+pub struct JsonPathIter(NativeJsonPathIter<'static, Transaction>);
 
 /// Iterator structure used by XML nodes (elements and text) to iterate over node's attributes.
 /// Attribute iterators are unordered - there's no specific order in which map entries will be
@@ -685,6 +691,63 @@ pub unsafe extern "C" fn ytransaction_writeable(txn: *mut Transaction) -> u8 {
         1
     } else {
         0
+    }
+}
+
+/// Evaluates a JSON path expression (see: https://en.wikipedia.org/wiki/JSONPath) on
+/// the transaction's document and returns an iterator over values matching that query.
+///
+/// Currently, this method supports the following syntax:
+/// - `$` - root object
+/// - `@` - current object
+/// - `.field` or `['field']` - member accessor
+/// - `[1]` - array index (also supports negative indices)
+/// - `.*` or `[*]` - wildcard (matches all members of an object or array)
+/// - `..` - recursive descent (matches all descendants not only direct children)
+/// - `[start:end:step]` - array slice operator (requires positive integer arguments)
+/// - `['a', 'b', 'c']` - union operator (returns an array of values for each query)
+/// - `[1, -1, 3]` - multiple indices operator (returns an array of values for each index)
+///
+/// At the moment, JSON Path does not support filter predicates.
+///
+/// Returns `NULL` if the json_path expression is invalid and couldn't be parsed.
+///
+/// Use ``yjson_path_iter_next` function in order to retrieve a consecutive array elements.
+/// Use ``yjson_path_iter_destroy` function in order to close the iterator and release its resources.
+#[no_mangle]
+pub unsafe extern "C" fn ytransaction_json_path(
+    txn: *mut Transaction,
+    json_path: *const c_char,
+) -> *mut JsonPathIter {
+    assert!(!txn.is_null());
+    let txn = txn.as_ref().unwrap();
+    let query = CStr::from_ptr(json_path).to_str().unwrap();
+    let query = match JsonPath::parse(query) {
+        Ok(query) => query,
+        Err(_) => return null_mut(),
+    };
+    let iter = txn.json_path(&query);
+    Box::into_raw(Box::new(JsonPathIter(iter)))
+}
+
+/// Returns the next element of a JSON path iterator. If there are no more elements, `NULL` is returned.
+#[no_mangle]
+pub unsafe extern "C" fn yjson_path_iter_next(iter: *mut JsonPathIter) -> *mut YOutput {
+    assert!(!iter.is_null());
+    let iter = iter.as_mut().unwrap();
+    if let Some(value) = iter.0.next() {
+        let youtput = YOutput::from(value);
+        Box::into_raw(Box::new(youtput))
+    } else {
+        null_mut()
+    }
+}
+
+/// Closes the JSON path iterator created via `ytransaction_json_path` and releases its resources.
+#[no_mangle]
+pub unsafe extern "C" fn yjson_path_iter_destroy(iter: *mut JsonPathIter) {
+    if !iter.is_null() {
+        drop(Box::from_raw(iter));
     }
 }
 

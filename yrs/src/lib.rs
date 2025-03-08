@@ -624,7 +624,7 @@ pub mod error;
 mod gc;
 mod input;
 pub mod iter;
-mod json_path;
+pub mod json_path;
 mod moving;
 pub mod observer;
 mod out;
