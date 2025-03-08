@@ -338,3 +338,38 @@ export const testIds = tc => {
     // check if first doc has correctly updated values
     t.compare(a1.toJson(), ['abc', {'key1': 'value2'}])
 }
+
+
+/**
+ * @param {t.TestCase} tc
+ */
+export const testSelectAll = tc => {
+    const doc = new Y.YDoc({clientID: 1})
+    const store = doc.getMap('store')
+    store.set('book', new Y.YArray([
+        new Y.YMap({
+            "author": "Nigel Rees",
+            "title": "Sayings of the Century",
+            "price": 8.95
+        }),
+        new Y.YMap({
+            "author": "J. R. R. Tolkien",
+            "title": "The Lord of the Rings",
+            "isbn": "0-395-19395-8",
+            "price": 22.99
+        })
+    ]))
+    store.set('bicycle', {
+        "color": "red",
+        "price": 399
+    })
+
+    let result = doc.selectAll('$.store.book[*].price')
+    t.compare(result, [8.95, 22.99])
+
+    result = doc.selectAll('$...price')
+    t.compare(result, [8.95, 22.99, 399])
+
+    result = doc.selectOne('$.store.book[1].price')
+    t.compare(result, 22.99)
+}

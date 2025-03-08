@@ -20,8 +20,8 @@ use yrs::types::TypeRef;
 use yrs::updates::decoder::Decode;
 use yrs::updates::encoder::Encode;
 use yrs::{
-    ArrayRef, BranchID, MapRef, ReadTxn, TextRef, TransactionMut, Update, WeakRef, XmlElementRef,
-    XmlFragmentRef, XmlTextRef,
+    ArrayRef, BranchID, JsonPath, JsonPathEval, MapRef, ReadTxn, TextRef, TransactionMut, Update,
+    WeakRef, XmlElementRef, XmlFragmentRef, XmlTextRef,
 };
 
 #[wasm_bindgen]
@@ -430,6 +430,60 @@ impl YTransaction {
         let txn = self.as_mut()?;
         txn.force_gc();
         Ok(())
+    }
+
+    /// Evaluates a JSON path expression (see: https://en.wikipedia.org/wiki/JSONPath) on
+    /// the document and returns an array of values matching that query.
+    ///
+    /// Currently, this method supports the following syntax:
+    /// - `$` - root object
+    /// - `@` - current object
+    /// - `.field` or `['field']` - member accessor
+    /// - `[1]` - array index (also supports negative indices)
+    /// - `.*` or `[*]` - wildcard (matches all members of an object or array)
+    /// - `..` - recursive descent (matches all descendants not only direct children)
+    /// - `[start:end:step]` - array slice operator (requires positive integer arguments)
+    /// - `['a', 'b', 'c']` - union operator (returns an array of values for each query)
+    /// - `[1, -1, 3]` - multiple indices operator (returns an array of values for each index)
+    ///
+    /// At the moment, JSON Path does not support filter predicates.
+    #[wasm_bindgen(js_name = selectAll)]
+    pub fn select_all(&self, json_path: &str) -> Result<js_sys::Array> {
+        let query = JsonPath::parse(json_path).map_err(|e| JsValue::from_str(&e.to_string()))?;
+        let txn = self.as_ref();
+        let mut iter = txn.json_path(&query);
+        let result = js_sys::Array::new();
+        while let Some(value) = iter.next() {
+            let value: JsValue = Js::from_value(&value, txn.doc()).into();
+            result.push(&value);
+        }
+        Ok(result)
+    }
+
+    /// Evaluates a JSON path expression (see: https://en.wikipedia.org/wiki/JSONPath) on
+    /// the document and returns first value matching that query.
+    ///
+    /// Currently, this method supports the following syntax:
+    /// - `$` - root object
+    /// - `@` - current object
+    /// - `.field` or `['field']` - member accessor
+    /// - `[1]` - array index (also supports negative indices)
+    /// - `.*` or `[*]` - wildcard (matches all members of an object or array)
+    /// - `..` - recursive descent (matches all descendants not only direct children)
+    /// - `[start:end:step]` - array slice operator (requires positive integer arguments)
+    /// - `['a', 'b', 'c']` - union operator (returns an array of values for each query)
+    /// - `[1, -1, 3]` - multiple indices operator (returns an array of values for each index)
+    ///
+    /// At the moment, JSON Path does not support filter predicates.
+    #[wasm_bindgen(js_name = selectOne)]
+    pub fn select_one(&self, json_path: &str) -> Result<JsValue> {
+        let query = JsonPath::parse(json_path).map_err(|e| JsValue::from_str(&e.to_string()))?;
+        let txn = self.as_ref();
+        let mut iter = txn.json_path(&query);
+        match iter.next() {
+            None => Ok(JsValue::UNDEFINED),
+            Some(value) => Ok(Js::from_value(&value, txn.doc()).into()),
+        }
     }
 }
 
