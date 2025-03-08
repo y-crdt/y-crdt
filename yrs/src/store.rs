@@ -120,7 +120,7 @@ impl Store {
     ) -> BranchPtr {
         let key = key.into();
         match self.types.entry(key.clone()) {
-            Entry::Occupied(mut e) => {
+            Entry::Occupied(e) => {
                 let mut branch = BranchPtr::from(e.get());
                 branch.repair_type_ref(type_ref);
                 branch

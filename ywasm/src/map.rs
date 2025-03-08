@@ -129,7 +129,7 @@ impl YMap {
     }
 
     /// Removes an entry identified by a given `key` from this instance of `YMap`, if such exists.
-    #[wasm_bindgen(method, js_name = delete)]
+    #[wasm_bindgen(js_name = delete)]
     pub fn delete(&mut self, key: &str, txn: ImplicitTransaction) -> crate::Result<()> {
         match &mut self.0 {
             SharedCollection::Prelim(c) => {

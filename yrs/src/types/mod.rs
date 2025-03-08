@@ -588,15 +588,6 @@ where
     }
 }
 
-impl<'a, T: ReadTxn> Entries<'a, T, T>
-where
-    T: Borrow<T> + ReadTxn,
-{
-    pub fn from(source: &'a HashMap<Arc<str>, ItemPtr>, txn: T) -> Self {
-        Entries::new(source, txn)
-    }
-}
-
 impl<'a, T: ReadTxn> Entries<'a, &'a T, T>
 where
     T: Borrow<T> + ReadTxn,
@@ -619,27 +610,6 @@ where
             (key, ptr) = self.iter.next()?;
         }
         Some((key, ptr))
-    }
-}
-
-pub(crate) struct Iter<'a, T> {
-    ptr: Option<&'a ItemPtr>,
-    _txn: &'a T,
-}
-
-impl<'a, T: ReadTxn> Iter<'a, T> {
-    fn new(ptr: Option<&'a ItemPtr>, txn: &'a T) -> Self {
-        Iter { ptr, _txn: txn }
-    }
-}
-
-impl<'a, T: ReadTxn> Iterator for Iter<'a, T> {
-    type Item = &'a Item;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let item = self.ptr.take()?;
-        self.ptr = item.right.as_ref();
-        Some(item)
     }
 }
 

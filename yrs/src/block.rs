@@ -124,6 +124,7 @@ impl std::fmt::Debug for BlockCell {
 }
 
 impl BlockCell {
+    /// Returns the first clock sequence number of a current block.
     pub fn clock_start(&self) -> u32 {
         match self {
             BlockCell::GC(gc) => gc.start,
@@ -131,6 +132,7 @@ impl BlockCell {
         }
     }
 
+    /// Returns the last clock sequence number of a current block.
     pub fn clock_end(&self) -> u32 {
         match self {
             BlockCell::GC(gc) => gc.end,

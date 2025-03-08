@@ -8,13 +8,13 @@ use crate::id_set::DeleteSet;
 use crate::iter::TxnIterator;
 use crate::slice::BlockSlice;
 use crate::store::{Store, StoreEvents, SubdocGuids, SubdocsIter};
-use crate::types::{Event, Events, RootRef, SharedRef, TypePtr};
+use crate::types::{Event, Events, RootRef, TypePtr, TypeRef};
 use crate::update::Update;
 use crate::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use crate::utils::OptionExt;
 use crate::{
     merge_updates_v1, merge_updates_v2, ArrayRef, BranchID, Doc, MapRef, Out, Snapshot,
-    StateVector, TextRef, Transact, XmlFragmentRef,
+    StateVector, TextRef, Transact, XmlElementRef, XmlFragmentRef, XmlTextRef,
 };
 use async_lock::{RwLockReadGuard, RwLockWriteGuard};
 use smallvec::SmallVec;
@@ -171,6 +171,24 @@ pub trait ReadTxn: Sized {
     #[inline]
     fn get_xml_fragment<N: Into<Arc<str>>>(&self, name: N) -> Option<XmlFragmentRef> {
         XmlFragmentRef::root(name).get(self)
+    }
+
+    fn get<S: AsRef<str>>(&self, name: S) -> Option<Out> {
+        let value = self.store().types.get(name.as_ref())?;
+        let ptr = BranchPtr::from(&*value);
+        match &ptr.type_ref {
+            TypeRef::Array => Some(Out::YArray(ArrayRef::from(ptr))),
+            TypeRef::Map => Some(Out::YMap(MapRef::from(ptr))),
+            TypeRef::Text => Some(Out::YText(TextRef::from(ptr))),
+            TypeRef::XmlElement(_) => Some(Out::YXmlElement(XmlElementRef::from(ptr))),
+            TypeRef::XmlFragment => Some(Out::YXmlFragment(XmlFragmentRef::from(ptr))),
+            TypeRef::XmlHook => None,
+            TypeRef::XmlText => Some(Out::YXmlText(XmlTextRef::from(ptr))),
+            TypeRef::SubDoc => Some(Out::YDoc(ptr.as_subdoc()?)),
+            #[cfg(feature = "weak")]
+            TypeRef::WeakLink(_) => Some(Out::YWeakLink(crate::WeakRef::from(ptr))),
+            TypeRef::Undefined => Some(Out::UndefinedRef(ptr)),
+        }
     }
 
     /// If current document has been inserted as a sub-document, returns a reference to a parent
@@ -1046,13 +1064,6 @@ impl<'doc> TransactionMut<'doc> {
                 self.merge_blocks.push(ptr.id);
             }
         }
-    }
-
-    #[cfg(feature = "weak")]
-    fn link(&mut self, mut source: ItemPtr, link: BranchPtr) {
-        source.info.set_linked();
-        let links = self.store.linked_by.entry(source).or_default();
-        links.insert(link);
     }
 
     #[cfg(feature = "weak")]

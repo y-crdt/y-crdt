@@ -202,6 +202,16 @@ impl TryFrom<Out> for XmlOut {
     }
 }
 
+impl From<XmlOut> for Out {
+    fn from(value: XmlOut) -> Self {
+        match value {
+            XmlOut::Element(xml) => Out::YXmlElement(xml),
+            XmlOut::Fragment(xml) => Out::YXmlFragment(xml),
+            XmlOut::Text(xml) => Out::YXmlText(xml),
+        }
+    }
+}
+
 impl TryFrom<ItemPtr> for XmlOut {
     type Error = ItemPtr;
 

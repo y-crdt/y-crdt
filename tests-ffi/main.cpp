@@ -2375,3 +2375,71 @@ TEST_CASE("JSON output") {
     ytransaction_commit(txn);
     ydoc_destroy(doc);
 }
+
+
+TEST_CASE("JSONPath queries") {
+    YDoc *doc = ydoc_new_with_id(1);
+    Branch *store = ymap(doc, "store");
+    YTransaction *txn = ydoc_write_transaction(doc, 0, NULL);
+
+    /*
+        We'll query structure similar to:
+
+        {
+          "store": {
+            "book": [
+              { "author": "Nigel Rees",
+                "title": "Sayings of the Century",
+                "price": 8.95
+              },
+              { "author": "J. R. R. Tolkien",
+                "title": "The Lord of the Rings",
+                "price": 22.99
+              }
+            ],
+            "bicycle": {
+              "color": "red",
+              "price": 399
+            }
+          }
+        }
+     */
+
+    char* book_keys[] = {"author", "title", "price"};
+    YInput book1_values[] = {
+        yinput_string("Nigel Rees"),
+        yinput_string("Sayings of the Century"),
+        yinput_float(8.95)
+    };
+    YInput book2_values[] = {
+        yinput_string("J. R. R. Tolkien"),
+        yinput_string("The Lord of the Rings"),
+        yinput_float(22.99)
+    };
+    YInput books_raw[] = {
+        yinput_ymap(book_keys, book1_values, 3),
+        yinput_ymap(book_keys, book2_values, 3)
+    };
+    const YInput books = yinput_yarray(books_raw, 2);
+    ymap_insert(store, txn, "book", &books);
+    const YInput bicycle = yinput_json("{\"color\":\"red\", \"price\": 399}");
+    ymap_insert(store, txn, "bicycle", &bicycle);
+
+    YJsonPathIter* i = ytransaction_json_path(txn, "$.store.book[*].price");
+
+    YOutput* current = yjson_path_iter_next(i);
+    REQUIRE_EQ(*youtput_read_float(current), 8.95);
+    youtput_destroy(current);
+
+    current = yjson_path_iter_next(i);
+    REQUIRE_EQ(*youtput_read_float(current), 22.99);
+    youtput_destroy(current);
+
+
+    current = yjson_path_iter_next(i);
+    REQUIRE(current == NULL);
+
+    yjson_path_iter_destroy(i);
+    ytransaction_commit(txn);
+    ydoc_destroy(doc);
+}

@@ -1082,14 +1082,14 @@ mod test {
         );
         let json2 = serde_json::to_value(&data).unwrap();
         assert_eq!(
-            json["cursor"]["anchor"]["item"],
+            json2["cursor"]["anchor"]["item"],
             serde_json::json!({"client":3731284436u32,"clock":20})
         );
-        assert_eq!(json["cursor"]["anchor"]["assoc"], serde_json::json!(-1));
+        assert_eq!(json2["cursor"]["anchor"]["assoc"], serde_json::json!(-1));
         assert_eq!(
-            json["cursor"]["head"]["item"],
+            json2["cursor"]["head"]["item"],
             serde_json::json!({"client":3731284436u32,"clock":20})
         );
-        assert_eq!(json["cursor"]["head"]["assoc"], serde_json::json!(-1));
+        assert_eq!(json2["cursor"]["head"]["assoc"], serde_json::json!(-1));
     }
 }

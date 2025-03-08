@@ -5,7 +5,7 @@ use crate::types::TypePtr;
 use crate::utils::client_hasher::ClientHasher;
 use crate::*;
 use std::collections::hash_map::Entry;
-use std::collections::{HashMap};
+use std::collections::HashMap;
 use std::hash::BuildHasherDefault;
 use std::ops::{Index, IndexMut, Range, RangeInclusive};
 use std::vec::Vec;
@@ -18,37 +18,10 @@ pub(crate) struct ClientBlockList {
 
 struct SquashBlockRange {
     range: Range<usize>,
-    gc_block: bool
+    gc_block: bool,
 }
 
 impl ClientBlockList {
-    /// Creates a new instance of `ClientBlockList` with the specified capacity.
-    ///
-    /// This function initializes an internal vector with a capacity
-    /// indicated by the `capacity` argument. It attempts to reserve this capacity
-    /// upfront. If the reservation is successful, it returns a new `ClientBlockList`
-    /// instance. Otherwise, it returns an error if the reservation fails.
-    ///
-    /// # Arguments
-    ///
-    /// * `capacity` - The desired capacity for the internal vector of `ClientBlockList`.
-    ///
-    /// # Returns
-    ///
-    /// This function returns a `Result` type:
-    /// - `Ok(ClientBlockList)` if the capacity reservation is successful.
-    /// - `Err(Error)` if the capacity reservation fails, encapsulating the reason for the failure.
-    ///
-    /// # Errors
-    ///
-    /// This function will return an error if the memory allocation for the specified capacity fails.
-    ///
-    pub fn with_capacity(capacity: usize) -> Result<ClientBlockList, Error> {
-        let mut list = Vec::new();
-        list.try_reserve(capacity)?;
-        Ok(ClientBlockList { list })
-    }
-
     pub fn clock(&self) -> u32 {
         let len = self.list.len();
         if len == 0 {
@@ -166,7 +139,7 @@ impl ClientBlockList {
             let right = &mut r[0];
 
             match (left, right) {
-                (BlockCell::GC(left), BlockCell::GC(right)) => {
+                (BlockCell::GC(_), BlockCell::GC(_)) => {
                     let mut extended = false;
                     match squash_intervals.last_mut() {
                         Some(last_range) if last_range.gc_block => {
@@ -195,7 +168,13 @@ impl ClientBlockList {
                     let right = ItemPtr::from(right);
                     if left.try_squash(right) {
                         // Merge right into left Blocks one by one.
-                        squash_intervals.push(SquashBlockRange { range: Range {start: right_index, end: right_index }, gc_block: false });
+                        squash_intervals.push(SquashBlockRange {
+                            range: Range {
+                                start: right_index,
+                                end: right_index,
+                            },
+                            gc_block: false,
+                        });
                     }
                 }
                 _ => { /* cannot squash incompatible types */ }
@@ -218,7 +197,7 @@ impl ClientBlockList {
                     left.end = right.end;
                 }
                 (BlockCell::Block(left), BlockCell::Block(right)) => {
-                    let mut left = ItemPtr::from(left);
+                    let left = ItemPtr::from(left);
                     let right = ItemPtr::from(right);
                     if let Some(key) = right.parent_sub.as_deref() {
                         if let TypePtr::Branch(mut parent) = right.parent {
@@ -237,7 +216,6 @@ impl ClientBlockList {
             self.list.drain(start_idx..=end_idx);
         }
     }
-
 
     /// Attempts to squash block at a given `index` with a corresponding block on its left side.
     /// If this succeeds, block under a given `index` will be removed, and its contents will be
@@ -453,22 +431,6 @@ impl BlockStore {
         self.clients
             .entry(client)
             .or_insert_with(ClientBlockList::default)
-    }
-
-    /// Returns a mutable reference to block list for the given `client`. In case when no such list
-    /// existed, a new one will be created with predefined `capacity` and returned.
-    pub(crate) fn get_client_blocks_with_capacity_mut(
-        &mut self,
-        client: ClientID,
-        capacity: usize,
-    ) -> Result<&mut ClientBlockList, Error> {
-        match self.clients.entry(client) {
-            Entry::Occupied(e) => Ok(e.into_mut()),
-            Entry::Vacant(e) => {
-                let list = ClientBlockList::with_capacity(capacity)?;
-                Ok(e.insert(list))
-            }
-        }
     }
 
     /// Given block pointer, tries to split it, returning a true, if block was split in result of
