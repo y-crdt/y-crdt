@@ -33,6 +33,18 @@ fn slice_iter<'a, T: ReadTxn>(
             let iter = array.iter(txn);
             Some(Box::new(iter.skip(from).take(to - from).step_by(by)))
         }
+        Some(Out::YXmlElement(xml)) => {
+            let iter = xml.children(txn);
+            Some(Box::new(
+                iter.skip(from).take(to - from).step_by(by).map(Out::from),
+            ))
+        }
+        Some(Out::YXmlFragment(xml)) => {
+            let iter = xml.children(txn);
+            Some(Box::new(
+                iter.skip(from).take(to - from).step_by(by).map(Out::from),
+            ))
+        }
         _ => None,
     }
 }
@@ -53,6 +65,8 @@ fn any_iter<'a, T: ReadTxn>(
             iter.map(|iter| dyn_iter(iter.map(|(_, v)| Out::Any(v))))
         }
         Some(Out::YArray(array)) => Some(dyn_iter(array.iter(txn))),
+        Some(Out::YXmlElement(elem)) => Some(dyn_iter(elem.children(txn).map(Out::from))),
+        Some(Out::YXmlFragment(elem)) => Some(dyn_iter(elem.children(txn).map(Out::from))),
         Some(Out::YMap(map)) => Some(dyn_iter(map.into_iter(txn).map(|(_, value)| value))),
         _ => None,
     }
@@ -108,6 +122,30 @@ fn index_union_iter<'a, T: ReadTxn>(
                     *i as u32
                 };
                 array.get(txn, i)
+            });
+            Some(Box::new(iter))
+        }
+        Some(Out::YXmlFragment(xml)) => {
+            let len = xml.len(txn);
+            let iter = indices.into_iter().flat_map(move |i| {
+                let i = if *i < 0 {
+                    (len as i32 + *i) as u32
+                } else {
+                    *i as u32
+                };
+                xml.get(txn, i).map(Out::from)
+            });
+            Some(Box::new(iter))
+        }
+        Some(Out::YXmlElement(xml)) => {
+            let len = xml.len(txn);
+            let iter = indices.into_iter().flat_map(move |i| {
+                let i = if *i < 0 {
+                    (len as i32 + *i) as u32
+                } else {
+                    *i as u32
+                };
+                xml.get(txn, i).map(Out::from)
             });
             Some(Box::new(iter))
         }
