@@ -144,10 +144,6 @@ pub struct WeakIter(NativeUnquote<'static, Transaction>);
 #[repr(transparent)]
 pub struct MapIter(NativeMapIter<'static, &'static Transaction, Transaction>);
 
-/// Iterator structure used by json path queries to traverse over the results of a query.
-#[repr(transparent)]
-pub struct JsonPathIter(NativeJsonPathIter<'static, Transaction>);
-
 /// Iterator structure used by XML nodes (elements and text) to iterate over node's attributes.
 /// Attribute iterators are unordered - there's no specific order in which map entries will be
 /// returned during consecutive iterator calls.
@@ -166,6 +162,14 @@ pub struct TreeWalker(NativeTreeWalker<'static, &'static Transaction, Transactio
 /// transaction.
 #[repr(transparent)]
 pub struct Transaction(TransactionInner);
+
+/// Iterator structure used by json path queries to traverse over the results of a query.
+#[repr(C)]
+pub struct JsonPathIter {
+    query: String,
+    json_path: Box<JsonPath<'static>>,
+    inner: NativeJsonPathIter<'static, Transaction>,
+}
 
 enum TransactionInner {
     ReadOnly(yrs::Transaction<'static>),
@@ -721,13 +725,24 @@ pub unsafe extern "C" fn ytransaction_json_path(
 ) -> *mut JsonPathIter {
     assert!(!txn.is_null());
     let txn = txn.as_ref().unwrap();
-    let query = CStr::from_ptr(json_path).to_str().unwrap();
-    let query = match JsonPath::parse(query) {
-        Ok(query) => query,
+
+    // copy JSONPath string to have its ownership
+    let query: String = CStr::from_ptr(json_path).to_str().unwrap().into();
+    // since string is not reallocated/deallocated, we can safely pass it to the parser
+    let json_path: &'static str = unsafe { std::mem::transmute(query.as_str()) };
+    let json_path = match JsonPath::parse(json_path) {
+        Ok(query) => Box::new(query),
         Err(_) => return null_mut(),
     };
-    let iter = txn.json_path(&query);
-    Box::into_raw(Box::new(JsonPathIter(iter)))
+    // again, we wraped parsed JSONPath in a Box to ensure that it's owned and not moving
+    let json_path_ref: &'static JsonPath = unsafe { std::mem::transmute(json_path.as_ref()) };
+    let inner = txn.json_path(json_path_ref);
+    let iter = Box::new(JsonPathIter {
+        query,
+        json_path,
+        inner,
+    });
+    Box::into_raw(iter)
 }
 
 /// Returns the next element of a JSON path iterator. If there are no more elements, `NULL` is returned.
@@ -735,7 +750,7 @@ pub unsafe extern "C" fn ytransaction_json_path(
 pub unsafe extern "C" fn yjson_path_iter_next(iter: *mut JsonPathIter) -> *mut YOutput {
     assert!(!iter.is_null());
     let iter = iter.as_mut().unwrap();
-    if let Some(value) = iter.0.next() {
+    if let Some(value) = iter.inner.next() {
         let youtput = YOutput::from(value);
         Box::into_raw(Box::new(youtput))
     } else {
