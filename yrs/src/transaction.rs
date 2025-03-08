@@ -8,7 +8,7 @@ use crate::id_set::DeleteSet;
 use crate::iter::TxnIterator;
 use crate::slice::BlockSlice;
 use crate::store::{Store, StoreEvents, SubdocGuids, SubdocsIter};
-use crate::types::{Event, Events, RootRef, SharedRef, TypePtr, TypeRef};
+use crate::types::{Event, Events, RootRef, TypePtr, TypeRef};
 use crate::update::Update;
 use crate::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
 use crate::utils::OptionExt;

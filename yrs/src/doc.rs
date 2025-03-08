@@ -1034,8 +1034,7 @@ impl DocAddr {
 
 #[cfg(test)]
 mod test {
-    use crate::block::{BlockCell, ItemContent, GC};
-    use crate::branch::{Branch, BranchPtr};
+    use crate::block::{BlockCell, ItemContent};
     use crate::test_utils::exchange_updates;
     use crate::transaction::{ReadTxn, TransactionMut};
     use crate::types::ToJson;
@@ -1043,10 +1042,9 @@ mod test {
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
     use crate::{
-        any, Any, Array, ArrayPrelim, ArrayRef, BranchID, DeleteSet, Doc, GetString, Map,
-        MapPrelim, MapRef, OffsetKind, Options, SharedRef, StateVector, Subscription, Text,
-        TextPrelim, TextRef, Transact, Uuid, WriteTxn, XmlElementPrelim, XmlFragment,
-        XmlFragmentRef, XmlTextPrelim, XmlTextRef, ID,
+        any, Any, Array, ArrayPrelim, ArrayRef, DeleteSet, Doc, GetString, Map, MapRef, OffsetKind,
+        Options, StateVector, Subscription, Text, TextPrelim, TextRef, Transact, Uuid, WriteTxn,
+        XmlElementPrelim, XmlFragment, XmlFragmentRef, XmlTextPrelim, XmlTextRef, ID,
     };
     use arc_swap::ArcSwapOption;
     use assert_matches2::assert_matches;

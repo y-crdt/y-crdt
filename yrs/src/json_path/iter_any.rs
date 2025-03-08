@@ -1,6 +1,5 @@
 use super::{JsonPath, JsonPathToken};
 use crate::{Any, JsonPathEval};
-use proptest::num::usize;
 
 impl JsonPathEval for Any {
     type Iter<'a> = JsonPathIter<'a>;
@@ -22,14 +21,6 @@ fn slice_iter<'a>(
                 array.iter().skip(from).take(to - from).step_by(by),
             ))
         }
-        _ => None,
-    }
-}
-
-fn any_iter<'a>(any: &'a Any) -> Option<Box<dyn Iterator<Item = &'a Any> + 'a>> {
-    match any {
-        Any::Array(array) => Some(Box::new(array.iter())),
-        Any::Map(map) => Some(Box::new(map.values())),
         _ => None,
     }
 }
@@ -141,15 +132,15 @@ impl<'a> Iterator for JsonPathIter<'a> {
                     }
                 }
                 JsonPathToken::Wildcard => {
-                    if let Some(iter) = any_iter(frame.current) {
-                        frame.iter = Some(iter);
+                    if let Some(iter) = frame.current.try_iter() {
+                        frame.iter = Some(Box::new(iter.map(|(_, value)| value)));
                         return self.next();
                     }
                     early_return = true;
                 }
                 JsonPathToken::RecursiveDescend => {
-                    if let Some(iter) = any_iter(frame.current) {
-                        frame.iter = Some(iter);
+                    if let Some(iter) = frame.current.try_iter() {
+                        frame.iter = Some(Box::new(iter.map(|(_, value)| value)));
                         frame.is_descending = true;
                         return self.next();
                     }
@@ -188,8 +179,8 @@ impl<'a> Iterator for JsonPathIter<'a> {
         if !early_return {
             return Some(frame.current);
         } else if frame.is_descending {
-            if let Some(iter) = any_iter(frame.current) {
-                frame.iter = Some(iter);
+            if let Some(iter) = frame.current.try_iter() {
+                frame.iter = Some(Box::new(iter.map(|(_, value)| value)));
                 frame.is_descending = true;
                 frame.index -= 1; // '..' means we're not consuming the segment in this iteration
                 return self.next();
@@ -263,7 +254,6 @@ type ScopeIterator<'a> = Box<dyn Iterator<Item = &'a Any> + 'a>;
 mod test {
     use crate::json_path::JsonPath;
     use crate::{any, Any, JsonPathEval};
-    use std::path::Display;
 
     fn mixed_sample() -> Any {
         any!({

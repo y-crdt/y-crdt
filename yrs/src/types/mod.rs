@@ -588,15 +588,6 @@ where
     }
 }
 
-impl<'a, T: ReadTxn> Entries<'a, T, T>
-where
-    T: Borrow<T> + ReadTxn,
-{
-    pub fn from(source: &'a HashMap<Arc<str>, ItemPtr>, txn: T) -> Self {
-        Entries::new(source, txn)
-    }
-}
-
 impl<'a, T: ReadTxn> Entries<'a, &'a T, T>
 where
     T: Borrow<T> + ReadTxn,

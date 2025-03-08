@@ -180,6 +180,11 @@ pub trait Map: AsRef<Branch> + Sized {
         MapIter::new(self.as_ref(), txn)
     }
 
+    fn into_iter<'a, T: ReadTxn + 'a>(self, txn: &'a T) -> MapIntoIter<'a, T> {
+        let branch_ptr = BranchPtr::from(self.as_ref());
+        MapIntoIter::new(branch_ptr, txn)
+    }
+
     /// Inserts a new `value` under given `key` into current map. Returns an integrated value.
     fn insert<K, V>(&self, txn: &mut TransactionMut, key: K, value: V) -> V::Return
     where
@@ -387,7 +392,6 @@ pub trait Map: AsRef<Branch> + Sized {
     }
 }
 
-#[derive(Debug)]
 pub struct MapIter<'a, B, T>(Entries<'a, B, T>);
 
 impl<'a, B, T> MapIter<'a, B, T>
@@ -410,6 +414,31 @@ where
 
     fn next(&mut self) -> Option<Self::Item> {
         let (key, item) = self.0.next()?;
+        if let Some(content) = item.content.get_last() {
+            Some((key, content))
+        } else {
+            self.next()
+        }
+    }
+}
+
+pub struct MapIntoIter<'a, T> {
+    txn: &'a T,
+    entries: std::collections::hash_map::IntoIter<Arc<str>, ItemPtr>,
+}
+
+impl<'a, T: ReadTxn> MapIntoIter<'a, T> {
+    fn new(map: BranchPtr, txn: &'a T) -> Self {
+        let entries = map.map.clone().into_iter();
+        MapIntoIter { txn, entries }
+    }
+}
+
+impl<'a, T: ReadTxn> Iterator for MapIntoIter<'a, T> {
+    type Item = (Arc<str>, Out);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let (key, item) = self.entries.next()?;
         if let Some(content) = item.content.get_last() {
             Some((key, content))
         } else {

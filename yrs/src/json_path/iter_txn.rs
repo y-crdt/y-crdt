@@ -1,7 +1,6 @@
+use crate::any::AnyArrayIter;
 use crate::json_path::JsonPathToken;
-use crate::{
-    Any, Array, JsonPath, JsonPathEval, Map, Out, ReadTxn, Store, Transact, Xml, XmlFragment,
-};
+use crate::{Any, Array, JsonPath, JsonPathEval, Map, Out, ReadTxn, Transact, Xml, XmlFragment};
 
 impl<T> JsonPathEval for T
 where
@@ -16,18 +15,23 @@ where
     }
 }
 
-fn slice_iter<'a>(
-    value: &'a Out,
+fn slice_iter<'a, T: ReadTxn>(
+    txn: &'a T,
+    value: Option<Out>,
     from: usize,
     to: usize,
     by: usize,
 ) -> Option<Box<dyn Iterator<Item = Out> + 'a>> {
     match value {
-        Any::Array(array) => {
-            let to = array.len().min(to);
+        Some(Out::Any(Any::Array(array))) => {
+            let iter = AnyArrayIter::new(array);
             Some(Box::new(
-                array.iter().skip(from).take(to - from).step_by(by),
+                iter.skip(from).take(to - from).step_by(by).map(Out::Any),
             ))
+        }
+        Some(Out::YArray(array)) => {
+            let iter = array.iter(txn);
+            Some(Box::new(iter.skip(from).take(to - from).step_by(by)))
         }
         _ => None,
     }
@@ -35,40 +39,75 @@ fn slice_iter<'a>(
 
 fn any_iter<'a, T: ReadTxn>(
     txn: &'a T,
-    out: Option<&'a Out>,
+    out: Option<Out>,
 ) -> Option<Box<dyn Iterator<Item = Out> + 'a>> {
+    #[inline]
+    fn dyn_iter<'a, I: Iterator<Item = Out> + 'a>(iter: I) -> Box<dyn Iterator<Item = Out> + 'a> {
+        Box::new(iter)
+    }
+
     match out {
-        None => Some(Box::new(txn.root_refs().map(|(_, out)| out))),
-        Some(Out::Any())
+        None => Some(dyn_iter(txn.root_refs().map(|(_, out)| out))),
+        Some(Out::Any(any)) => {
+            let iter = any.try_into_iter();
+            iter.map(|iter| dyn_iter(iter.map(|(_, v)| Out::Any(v))))
+        }
+        Some(Out::YArray(array)) => Some(dyn_iter(array.iter(txn))),
+        Some(Out::YMap(map)) => Some(dyn_iter(map.into_iter(txn).map(|(_, value)| value))),
+        _ => None,
     }
 }
 
-fn member_union_iter<'a>(
-    value: &'a Out,
+fn member_union_iter<'a, T: ReadTxn>(
+    txn: &'a T,
+    value: Option<Out>,
     members: &'a [&'a str],
-) -> Option<Box<dyn Iterator<Item = &'a Any> + 'a>> {
+) -> Option<Box<dyn Iterator<Item = Out> + 'a>> {
     match value {
-        Any::Map(map) => {
-            let iter = members.into_iter().flat_map(move |key| map.get(*key));
+        Some(Out::Any(Any::Map(map))) => {
+            let iter = members
+                .into_iter()
+                .flat_map(move |key| map.get(*key).cloned().map(Out::Any));
+            Some(Box::new(iter))
+        }
+        Some(Out::YMap(map)) => {
+            let iter = members.into_iter().flat_map(move |key| map.get(txn, *key));
+            Some(Box::new(iter))
+        }
+        None => {
+            let iter = members.into_iter().flat_map(move |key| txn.get(key));
             Some(Box::new(iter))
         }
         _ => None,
     }
 }
 
-fn index_union_iter<'a>(
-    value: &'a Out,
+fn index_union_iter<'a, T: ReadTxn>(
+    txn: &'a T,
+    value: Option<Out>,
     indices: &'a [i32],
 ) -> Option<Box<dyn Iterator<Item = Out> + 'a>> {
     match value {
-        Any::Array(array) => {
+        Some(Out::Any(Any::Array(array))) => {
             let iter = indices.into_iter().flat_map(move |i| {
                 let i = if *i < 0 {
                     (array.len() as i32 + *i) as usize
                 } else {
                     *i as usize
                 };
-                array.get(i)
+                array.get(i).cloned().map(Out::Any)
+            });
+            Some(Box::new(iter))
+        }
+        Some(Out::YArray(array)) => {
+            let len = array.len(txn);
+            let iter = indices.into_iter().flat_map(move |i| {
+                let i = if *i < 0 {
+                    (len as i32 + *i) as u32
+                } else {
+                    *i as u32
+                };
+                array.get(txn, i)
             });
             Some(Box::new(iter))
         }
@@ -87,9 +126,8 @@ where
     T: ReadTxn,
 {
     fn new(txn: &'a T, path: &'a [JsonPathToken<'a>]) -> Self {
-        let store = txn.store();
         Self {
-            txn: store,
+            txn,
             pattern: path.as_ref(),
             frame: ExecutionFrame::new(None, 0, None),
         }
@@ -103,53 +141,60 @@ where
     type Item = Out;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let frame = &mut self.frame;
-        if let Some(iter) = &mut frame.iter {
+        if let Some(iter) = &mut self.frame.iter {
             match iter.next() {
                 None => {
-                    frame.iter = None;
-                    return if frame.ascend() { self.next() } else { None };
+                    self.frame.iter = None;
+                    return if self.frame.ascend() {
+                        self.next()
+                    } else {
+                        None
+                    };
                 }
                 Some(curr) => {
-                    frame.descend(curr);
+                    self.frame.descend(curr);
                 }
             }
-        } else if frame.index == self.pattern.len() {
-            return if frame.ascend() { self.next() } else { None };
+        } else if self.frame.index == self.pattern.len() {
+            return if self.frame.ascend() {
+                self.next()
+            } else {
+                None
+            };
         }
         // early return only works if the loop after has at least one iteration
         let mut early_return = false;
-        while frame.index < self.pattern.len() {
-            let segment = &self.pattern[frame.index];
-            frame.index += 1;
+        while self.frame.index < self.pattern.len() {
+            let segment = &self.pattern[self.frame.index];
+            self.frame.index += 1;
             match segment {
-                JsonPathToken::Root => frame.current = None,
+                JsonPathToken::Root => self.frame.current = None,
                 JsonPathToken::Current => { /* do nothing */ }
                 JsonPathToken::Member(key) => {
-                    if let Some(value) = get_member(self.txn, frame.current.as_ref(), *key) {
-                        frame.current = Some(value);
+                    if let Some(value) = get_member(self.txn, self.frame.current.as_ref(), *key) {
+                        self.frame.current = Some(value);
                     } else {
                         early_return = true;
                     }
                 }
                 JsonPathToken::Index(idx) => {
-                    if let Some(value) = get_index(self.txn, frame.current.as_ref(), *idx) {
-                        frame.current = Some(value);
+                    if let Some(value) = get_index(self.txn, self.frame.current.as_ref(), *idx) {
+                        self.frame.current = Some(value);
                     } else {
                         early_return = true;
                     }
                 }
                 JsonPathToken::Wildcard => {
-                    if let Some(iter) = any_iter(self.txn, frame.current.as_ref()) {
-                        frame.iter = Some(iter);
+                    if let Some(iter) = any_iter(self.txn, self.frame.current.clone()) {
+                        self.frame.iter = Some(iter);
                         return self.next();
                     }
                     early_return = true;
                 }
                 JsonPathToken::RecursiveDescend => {
-                    if let Some(iter) = any_iter(self.txn, frame.current.as_ref()) {
-                        frame.iter = Some(iter);
-                        frame.is_descending = true;
+                    if let Some(iter) = any_iter(self.txn, self.frame.current.clone()) {
+                        self.frame.iter = Some(iter);
+                        self.frame.is_descending = true;
                         return self.next();
                     }
                     early_return = true;
@@ -157,29 +202,30 @@ where
                 JsonPathToken::Slice(from, to, by) => {
                     if let Some(iter) = slice_iter(
                         self.txn,
-                        frame.current.as_ref(),
+                        self.frame.current.clone(),
                         *from as usize,
                         *to as usize,
                         *by as usize,
                     ) {
-                        frame.iter = Some(iter);
+                        self.frame.iter = Some(iter);
                         return self.next();
                     }
                     early_return = true;
                 }
                 JsonPathToken::MemberUnion(members) => {
                     if let Some(iter) =
-                        member_union_iter(self.txn, frame.current.as_ref(), &members)
+                        member_union_iter(self.txn, self.frame.current.clone(), &members)
                     {
-                        frame.iter = Some(iter);
+                        self.frame.iter = Some(iter);
                         return self.next();
                     }
                     early_return = true;
                 }
                 JsonPathToken::IndexUnion(indices) => {
-                    if let Some(iter) = index_union_iter(self.txn, frame.current.as_ref(), &indices)
+                    if let Some(iter) =
+                        index_union_iter(self.txn, self.frame.current.clone(), &indices)
                     {
-                        frame.iter = Some(iter);
+                        self.frame.iter = Some(iter);
                         return self.next();
                     }
                     early_return = true;
@@ -192,17 +238,17 @@ where
         }
 
         if !early_return {
-            return frame.current.clone();
-        } else if frame.is_descending {
-            if let Some(iter) = any_iter(self.txn, frame.current.as_ref()) {
-                frame.iter = Some(iter);
-                frame.is_descending = true;
-                frame.index -= 1; // '..' means we're not consuming the segment in this iteration
+            return self.frame.current.clone();
+        } else if self.frame.is_descending {
+            if let Some(iter) = any_iter(self.txn, self.frame.current.clone()) {
+                self.frame.iter = Some(iter);
+                self.frame.is_descending = true;
+                self.frame.index -= 1; // '..' means we're not consuming the segment in this iteration
                 return self.next();
             }
         }
 
-        if frame.iter.is_none() && !frame.ascend() {
+        if self.frame.iter.is_none() && !self.frame.ascend() {
             None // we got to the end of the evaluator
         } else {
             self.next()
@@ -228,34 +274,34 @@ fn get_member<T: ReadTxn>(txn: &T, out: Option<&Out>, key: &str) -> Option<Out> 
 fn get_index<T: ReadTxn>(txn: &T, out: Option<&Out>, idx: i32) -> Option<Out> {
     match out {
         Some(Out::YArray(array)) => {
-            let idx = if *idx < 0 {
+            let idx = if idx < 0 {
                 array.len(txn) as i32 + idx
             } else {
-                *idx
+                idx
             } as u32;
             array.get(txn, idx)
         }
         Some(Out::Any(Any::Array(array))) => {
-            let idx = if *idx < 0 {
+            let idx = if idx < 0 {
                 array.len() as i32 + idx
             } else {
-                *idx
+                idx
             } as usize;
             array.get(idx).cloned().map(Out::Any)
         }
         Some(Out::YXmlFragment(elem)) => {
-            let idx = if *idx < 0 {
+            let idx = if idx < 0 {
                 elem.len(txn) as i32 + idx
             } else {
-                *idx
+                idx
             } as u32;
             elem.get(txn, idx).map(Out::from)
         }
         Some(Out::YXmlElement(elem)) => {
-            let idx = if *idx < 0 {
+            let idx = if idx < 0 {
                 elem.len(txn) as i32 + idx
             } else {
-                *idx
+                idx
             } as u32;
             elem.get(txn, idx).map(Out::from)
         }
@@ -321,8 +367,8 @@ type ScopeIterator<'a> = Box<dyn Iterator<Item = Out> + 'a>;
 #[cfg(test)]
 mod test {
     use crate::{
-        any, Any, Array, ArrayPrelim, Doc, In, JsonPath, JsonPathEval, Map, MapPrelim, Transact,
-        WriteTxn,
+        any, Array, ArrayPrelim, Doc, In, JsonPath, JsonPathEval, Map, MapPrelim, Out, ReadTxn,
+        Transact, WriteTxn,
     };
 
     fn mixed_sample() -> Doc {
@@ -333,9 +379,9 @@ mod test {
             &mut tx,
             0,
             MapPrelim::from([
-                ("name".into(), any!("Alice").into()),
-                ("surname".into(), any!("Smith").into()),
-                ("age".into(), any!(25).into()),
+                ("name".to_string(), In::Any(any!("Alice"))),
+                ("surname".into(), In::Any(any!("Smith"))),
+                ("age".into(), In::Any(any!(25))),
                 (
                     "friends".into(),
                     In::from(ArrayPrelim::from([
@@ -349,36 +395,37 @@ mod test {
             &mut tx,
             1,
             MapPrelim::from([
-                ("name".into(), any!("Bob").into()),
-                ("nick".into(), any!("boreas").into()),
-                ("age".into(), any!(30).into()),
+                ("name".to_string(), In::Any(any!("Bob"))),
+                ("nick".into(), In::Any(any!("boreas"))),
+                ("age".into(), In::Any(any!(30))),
             ]),
         );
         users.insert(
             &mut tx,
             2,
             MapPrelim::from([
-                ("nick".into(), any!("crocodile91").into()),
-                ("age".into(), any!(35).into()),
+                ("nick".to_string(), In::Any(any!("crocodile91"))),
+                ("age".into(), In::Any(any!(35))),
             ]),
         );
         users.insert(
             &mut tx,
             3,
             MapPrelim::from([
-                ("name".into(), any!("Damian").into()),
-                ("surname".into(), any!("Smith").into()),
-                ("age".into(), any!(30).into()),
+                ("name".to_string(), In::Any(any!("Damian"))),
+                ("surname".into(), In::Any(any!("Smith"))),
+                ("age".into(), In::Any(any!(30))),
             ]),
         );
         users.insert(
             &mut tx,
             4,
             MapPrelim::from([
-                ("name".into(), any!("Elise").into()),
-                ("age".into(), any!(35).into()),
+                ("name".to_string(), In::Any(any!("Elise"))),
+                ("age".into(), In::Any(any!(35))),
             ]),
         );
+        drop(tx);
         doc
     }
 
@@ -388,36 +435,8 @@ mod test {
         let path = JsonPath::parse("$.users").unwrap();
         let tx = doc.transact();
         let values: Vec<_> = tx.json_path(&path).collect();
-        let expected = any!([
-            {
-                "name": "Alice",
-                "surname": "Smith",
-                "age": 25,
-                "friends": [
-                    { "name": "Bob", "nick": "boreas" },
-                    { "nick": "crocodile91" }
-                ]
-            },
-            {
-                "name": "Bob",
-                "nick": "boreas",
-                "age": 30
-            },
-            {
-                "nick": "crocodile91",
-                "age": 35
-            },
-            {
-                "name": "Damian",
-                "surname": "Smith",
-                "age": 30
-            },
-            {
-                "name": "Elise",
-                "age": 35
-            }
-        ]);
-        assert_eq!(values, vec![&expected]);
+        let expected = tx.get("users").unwrap();
+        assert_eq!(values, vec![expected]);
     }
 
     #[test]
@@ -426,7 +445,7 @@ mod test {
         let path = JsonPath::parse("$.users[0].name").unwrap();
         let tx = doc.transact();
         let values: Vec<_> = tx.json_path(&path).collect();
-        assert_eq!(values, vec![&any!("Alice")]);
+        assert_eq!(values, vec![Out::Any(any!("Alice"))]);
     }
 
     #[test]
@@ -435,7 +454,7 @@ mod test {
         let path = JsonPath::parse("$.users[-1].name").unwrap();
         let tx = doc.transact();
         let values: Vec<_> = tx.json_path(&path).collect();
-        assert_eq!(values, vec![&any!("Elise")]);
+        assert_eq!(values, vec![Out::Any(any!("Elise"))]);
     }
 
     #[test]
@@ -447,10 +466,10 @@ mod test {
         assert_eq!(
             values,
             vec![
-                &any!("Alice"),
-                &any!("Bob"),
-                &any!("Damian"),
-                &any!("Elise")
+                Out::Any(any!("Alice")),
+                Out::Any(any!("Bob")),
+                Out::Any(any!("Damian")),
+                Out::Any(any!("Elise"))
             ]
         );
     }
@@ -461,7 +480,10 @@ mod test {
         let path = JsonPath::parse("$.users[1:3].nick").unwrap();
         let tx = doc.transact();
         let values: Vec<_> = tx.json_path(&path).collect();
-        assert_eq!(values, vec![&any!("boreas"), &any!("crocodile91")]);
+        assert_eq!(
+            values,
+            vec![Out::Any(any!("boreas")), Out::Any(any!("crocodile91"))]
+        );
     }
 
     #[test]
@@ -470,7 +492,10 @@ mod test {
         let path = JsonPath::parse("$.users[1,3].name").unwrap();
         let tx = doc.transact();
         let values: Vec<_> = tx.json_path(&path).collect();
-        assert_eq!(values, vec![&any!("Bob"), &any!("Damian")]);
+        assert_eq!(
+            values,
+            vec![Out::Any(any!("Bob")), Out::Any(any!("Damian"))]
+        );
     }
 
     #[test]
@@ -479,7 +504,10 @@ mod test {
         let path = JsonPath::parse("$.users[0]['name','surname']").unwrap();
         let tx = doc.transact();
         let values: Vec<_> = tx.json_path(&path).collect();
-        assert_eq!(values, vec![&any!("Alice"), &any!("Smith")]);
+        assert_eq!(
+            values,
+            vec![Out::Any(any!("Alice")), Out::Any(any!("Smith"))]
+        );
     }
 
     #[test]
@@ -491,10 +519,10 @@ mod test {
         assert_eq!(
             values,
             vec![
-                &any!("Alice"),
-                &any!("Bob"),
-                &any!("Damian"),
-                &any!("Elise")
+                Out::Any(any!("Alice")),
+                Out::Any(any!("Bob")),
+                Out::Any(any!("Damian")),
+                Out::Any(any!("Elise"))
             ]
         );
     }

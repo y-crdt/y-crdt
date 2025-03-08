@@ -196,6 +196,23 @@ impl Any {
         let mut s = Serializer::new(cursor);
         self.serialize(&mut s).unwrap();
     }
+
+    /// Returns an iterator over an inner values of an array or a map, current reference represents.
+    pub fn try_iter(&self) -> Option<AnyIter<'_>> {
+        match self {
+            Any::Array(values) => Some(AnyIter::Array(values.iter())),
+            Any::Map(entries) => Some(AnyIter::Map(entries.iter())),
+            _ => None,
+        }
+    }
+
+    pub fn try_into_iter(self) -> Option<AnyIntoIter> {
+        match self {
+            Any::Array(values) => Some(AnyIntoIter::from(values.clone())),
+            Any::Map(entries) => Some(AnyIntoIter::from(entries.clone())),
+            _ => None,
+        }
+    }
 }
 
 impl std::fmt::Display for Any {
@@ -236,6 +253,89 @@ impl std::fmt::Display for Any {
                     write!(f, "{:02x}", byte)?;
                 }
                 Ok(())
+            }
+        }
+    }
+}
+
+pub enum AnyIter<'a> {
+    Array(std::slice::Iter<'a, Any>),
+    Map(std::collections::hash_map::Iter<'a, String, Any>),
+}
+
+impl<'a> Iterator for AnyIter<'a> {
+    type Item = (Option<&'a str>, &'a Any);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            AnyIter::Array(iter) => {
+                let value = iter.next()?;
+                Some((None, value))
+            }
+            AnyIter::Map(iter) => {
+                let (key, value) = iter.next()?;
+                Some((Some(key), value))
+            }
+        }
+    }
+}
+
+pub struct AnyArrayIter {
+    source: Arc<[Any]>,
+    index: usize,
+}
+
+impl AnyArrayIter {
+    pub fn new(source: Arc<[Any]>) -> Self {
+        Self { source, index: 0 }
+    }
+}
+
+impl Iterator for AnyArrayIter {
+    type Item = Any;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.index < self.source.len() {
+            let value = self.source[self.index].clone();
+            self.index += 1;
+            Some(value)
+        } else {
+            None
+        }
+    }
+}
+
+pub enum AnyIntoIter {
+    Array(AnyArrayIter),
+    //TODO: we need to clone the map, because we need to consume its iterator
+    // try to figure out something better
+    Map(std::collections::hash_map::IntoIter<String, Any>),
+}
+
+impl From<Arc<[Any]>> for AnyIntoIter {
+    fn from(value: Arc<[Any]>) -> Self {
+        Self::Array(AnyArrayIter::new(value))
+    }
+}
+
+impl From<Arc<HashMap<String, Any>>> for AnyIntoIter {
+    fn from(value: Arc<HashMap<String, Any>>) -> Self {
+        Self::Map((&*value).clone().into_iter())
+    }
+}
+
+impl Iterator for AnyIntoIter {
+    type Item = (Option<String>, Any);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            AnyIntoIter::Array(iter) => {
+                let n = iter.next()?;
+                Some((None, n))
+            }
+            AnyIntoIter::Map(iter) => {
+                let (key, value) = iter.next()?;
+                Some((Some(key.clone()), value.clone()))
             }
         }
     }

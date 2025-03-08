@@ -11,7 +11,7 @@ use crate::ReadTxn;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hash, Hasher};
-use std::ops::{Range, RangeInclusive};
+use std::ops::Range;
 // Note: use native Rust [Range](https://doc.rust-lang.org/std/ops/struct.Range.html)
 // as it's left-inclusive/right-exclusive and defines the exact capabilities we care about here.
 
@@ -169,13 +169,11 @@ impl IdRange {
             IdRange::Fragmented(ranges) => {
                 let mut i = ranges.iter();
                 if let Some(r) = i.next() {
-                    let mut prev_start = r.start;
                     let mut prev_end = r.end;
                     while let Some(r) = i.next() {
                         if r.start < prev_end {
                             return false;
                         }
-                        prev_start = r.start;
                         prev_end = r.end;
                     }
                     true
