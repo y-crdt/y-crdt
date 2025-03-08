@@ -563,6 +563,38 @@
 //! }
 //! ```
 //!
+//! # Querying document state
+//!
+//! Starting from version 0.23.0 Yrs provides a way to query document state using [JsonPath] queries.
+//! These are available for transactions and [Any] types. They allow to extract specific parts of
+//! the document state in a way similar to [JSONPath](https://en.wikipedia.org/wiki/JSONPath):
+//!
+//! ```rust
+//! use yrs::{any, Array, ArrayPrelim, Doc, In, JsonPath, JsonPathEval, Map, MapPrelim, Out, Transact, WriteTxn};
+//!
+//! let doc = Doc::new();
+//! let mut txn = doc.transact_mut();
+//! let users = txn.get_or_insert_array("users");
+//!
+//! // populate the document with some data to query
+//! users.insert(&mut txn, 0, MapPrelim::from([
+//!     ("name".to_string(), In::Any(any!("Alice"))),
+//!     ("surname".into(), In::Any(any!("Smith"))),
+//!     ("age".into(), In::Any(any!(25))),
+//!     (
+//!         "friends".into(),
+//!         In::from(ArrayPrelim::from([
+//!             any!({ "name": "Bob", "nick": "boreas" }),
+//!             any!({ "nick": "crocodile91" }),
+//!         ])),
+//!     ),
+//! ]));
+//!
+//! let query = JsonPath::parse("$.users..friends.*.nick").unwrap();
+//! let values: Vec<Out> = txn.json_path(&query).collect();
+//! assert_eq!(values, vec![Out::Any(any!("boreas")), Out::Any(any!("crocodile91"))]);
+//! ```
+//!
 //! # External learning materials
 //!
 //! - [A short walkthrough over YATA](https://bartoszsypytkowski.com/yata/) - a conflict resolution

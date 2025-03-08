@@ -3,6 +3,31 @@ use crate::{Any, JsonPathEval};
 
 impl JsonPathEval for Any {
     type Iter<'a> = JsonPathIter<'a>;
+
+    /// Evaluate JSON path on the current object.
+    ///
+    /// # Example
+    /// ```rust
+    /// use yrs::{any, Any, JsonPath, JsonPathEval};
+    ///
+    /// let root = any!({
+    ///    "users": [
+    ///       {
+    ///         "name": "Alice",
+    ///         "surname": "Smith",
+    ///         "age": 25,
+    ///         "friends": [
+    ///           { "name": "Bob", "nick": "boreas" },
+    ///           { "nick": "crocodile91" }
+    ///         ]
+    ///      },
+    ///    ]
+    /// });
+    ///
+    /// let query = JsonPath::parse("$.users..friends.*.nick").unwrap();
+    /// let values: Vec<&Any> = root.json_path(&query).collect();
+    /// assert_eq!(values, vec![&any!("boreas"), &any!("crocodile91")]);
+    /// ```
     fn json_path<'a>(&'a self, path: &'a JsonPath<'a>) -> Self::Iter<'a> {
         JsonPathIter::new(self, path.as_ref())
     }
