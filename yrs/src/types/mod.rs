@@ -995,6 +995,7 @@ pub(crate) fn event_change_set(txn: &TransactionMut, start: Option<ItemPtr>) -> 
     ChangeSet::new(added, deleted, delta)
 }
 
+#[derive(Debug)]
 pub struct Events<'a>(Vec<&'a Event>);
 
 impl<'a> Events<'a> {
@@ -1035,6 +1036,7 @@ impl<'a> ExactSizeIterator for EventsIter<'a> {
 }
 
 /// Generalized wrapper around events fired by specialized shared data types.
+#[derive(Debug)]
 pub enum Event {
     Text(TextEvent),
     Array(ArrayEvent),
