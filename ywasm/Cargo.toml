@@ -1,6 +1,6 @@
 [package]
 name = "ywasm"
-version = "0.22.0"
+version = "0.23.0"
 authors = ["Kevin Jahns <kevin.jahns@protonmail.com>", "Bartosz Sypytkowski <b.sypytkowski@gmail.com>"]
 keywords = ["crdt", "wasm", "yrs"]
 edition = "2018"
@@ -17,7 +17,7 @@ crate-type = ["cdylib", "rlib"]
 default = ["console_error_panic_hook"]
 
 [dependencies]
-yrs = { path = "../yrs", version = "0.22.0", features = ["weak"] }
+yrs = { path = "../yrs", version = "0.23.0", features = ["weak"] }
 wasm-bindgen = { version = "0.2" }
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
