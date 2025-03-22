@@ -2,13 +2,129 @@ on:
   push:
     # Sequence of patterns matched against refs/tags
     tags:
-      - 'v*' # Push events to matching v*, i.e. v1.0, v20.15.10
+      - 'v[0-9]+.[0-9]+.[0-9]+' # Push events to matching v*, i.e. v1.0, v20.15.10
 
 name: Release packages
 
+env:
+  BIN_NAME: libyrs
+
 jobs:
-  release-crate:
-    name: release to crates.io
+  dist:
+    name: create ${{ matrix.target }} C-FFI distribution
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        build: [ x86_64-linux, x86_64-macos, x86_64-windows ]
+        include:
+          - build: x86_64-linux
+            os: ubuntu-20.04
+            rust: stable
+            target: x86_64-unknown-linux-gnu
+            archive: tar.gz
+          - build: x86_64-macos
+            os: macos-latest
+            rust: stable
+            target: x86_64-apple-darwin
+            archive: zip
+          - build: x86_64-windows
+            os: windows-2019
+            rust: stable
+            target: x86_64-pc-windows-msvc
+            archive: zip
+    steps:
+      - name: checkout code
+        uses: actions/checkout@v2
+      - name: install $${{ matrix.rust }} toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: ${{ matrix.rust }}
+          target: ${{ matrix.target }}
+          override: true
+      - name: install cbindgen
+        run: cargo install cbindgen
+      - name: build release binary
+        uses: actions-rs/cargo@v1
+        with:
+          use-cross: ${{ matrix.cross }}
+          command: build
+          args: -p yffi --release --locked --target ${{ matrix.target }}
+      - name: Strip release binary (linux and macos)
+        if: matrix.build == 'x86_64-linux' || matrix.build == 'x86_64-macos'
+        run: strip "./target/${{ matrix.target }}/release/$BIN_NAME"
+      - name: Build archive
+        shell: bash
+        run: |
+          mkdir dist
+          cp "target/${{ matrix.target }}/release/$BIN_NAME" "dist/"
+      - name: generate C bindings
+        run: cbindgen --config ./yffi/cbindgen.toml --crate yffi --output "dist/libyrs.h" --lang C
+      - uses: actions/upload-artifact@v2.2.4
+        with:
+          name: bins-${{ matrix.build }}
+          path: dist
+
+  release:
+    name: release
+    needs: [ dist ]
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout sources
+        uses: actions/checkout@v2
+      - uses: actions/download-artifact@v2
+      - run: ls -al bins-*
+      - name: Calculate tag name
+        run: |
+          name=dev
+          if [[ $GITHUB_REF == refs/tags/v* ]]; then
+            name=${GITHUB_REF:10}
+          fi
+          echo ::set-output name=val::$name
+          echo TAG=$name >> $GITHUB_ENV
+        id: tagname
+      - name: Build archive
+        shell: bash
+        run: |
+          set -ex
+
+          rm -rf tmp
+          mkdir tmp
+          mkdir dist
+
+          for dir in bins-* ; do
+              platform=${dir#"bins-"}
+              unset exe
+              if [[ $platform =~ "windows" ]]; then
+                  exe=".exe"
+              fi
+              pkgname=yffi-$TAG-$platform
+              mkdir tmp/$pkgname
+              # cp LICENSE README.md tmp/$pkgname
+              mv bins-$platform/$BIN_NAME tmp/$pkgname
+
+              if [ "$exe" = "" ]; then
+                  tar cJf dist/$pkgname.tar.xz -C tmp $pkgname
+              else
+                  (cd tmp && 7z a -r ../dist/$pkgname.zip $pkgname)
+              fi
+          done
+      - name: Upload binaries to release
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: dist/*
+          file_glob: true
+          tag: ${{ steps.tagname.outputs.val }}
+          overwrite: true
+      - name: Extract version
+        id: extract-version
+        run: |
+          printf "::set-output name=%s::%s\n" tag-name "${GITHUB_REF#refs/tags/}"
+
+  publish-crate:
+    name: publish to crates.io
     runs-on: ubuntu-latest
     steps:
       - name: checkout code
@@ -30,8 +146,8 @@ jobs:
         env:
           CRATES_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
-  release-npm:
-    name: release to npmjs.org
+  publish-npm:
+    name: publish to npmjs.org
     runs-on: ubuntu-latest
     steps:
       - name: checkout code
