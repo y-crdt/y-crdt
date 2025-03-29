@@ -5581,6 +5581,39 @@ pub unsafe extern "C" fn yweak_deref(
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn yweak_read(text_link: *const Branch,
+    txn: *const Transaction,
+    out_branch: *mut *mut Branch,
+    out_start_index: *mut u32,
+    out_end_index: *mut u32,
+) {
+    assert!(!text_link.is_null());
+    assert!(!txn.is_null());
+
+    let txn = txn.as_ref().unwrap();
+    let weak: WeakRef<BranchPtr> = WeakRef::from_raw_branch(text_link);
+    if let Some(id) = weak.start_id() {
+        // Assoc must be After to get the same values back
+        let start = StickyIndex::from_id(*id, Assoc::After);
+        assert!(weak.end_id() != None);
+        let end = StickyIndex::from_id(*weak.end_id().unwrap(), Assoc::After);
+        if let Some(start_pos) = start.get_offset(txn) {
+            *out_branch = start_pos.branch.as_ref() as *const Branch as *mut Branch;
+            *out_start_index = start_pos.index as u32;
+            if let Some(end_pos) = end.get_offset(txn) {
+                assert!(*out_branch == end_pos.branch.as_ref() as *const Branch as *mut Branch);
+                *out_end_index = end_pos.index as u32;
+            }
+        }
+    } else {
+        assert!(weak.end_id() == None); // both
+        // unforunately no Branch in this case?
+        *out_start_index = 0; // empty text
+        *out_end_index = 0; // empty text
+    }
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn yweak_iter(
     array_link: *const Branch,
     txn: *const Transaction,
