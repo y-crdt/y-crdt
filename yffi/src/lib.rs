@@ -803,9 +803,7 @@ pub unsafe extern "C" fn ytext(doc: *mut Doc, name: *const c_char) -> *mut Branc
 /// This structure can later be accessed using its `name`, which must be a null-terminated UTF-8
 /// compatible string.
 ///
-/// Use [yarray_destroy] in order to release pointer returned that way - keep in mind that this will
-/// not remove `YArray` instance from the document itself (once created it'll last for the entire
-/// lifecycle of a document).
+/// Once created, a `YArray` instance will last for the entire lifecycle of a document.
 #[no_mangle]
 pub unsafe extern "C" fn yarray(doc: *mut Doc, name: *const c_char) -> *mut Branch {
     assert!(!doc.is_null());
@@ -822,9 +820,7 @@ pub unsafe extern "C" fn yarray(doc: *mut Doc, name: *const c_char) -> *mut Bran
 /// This structure can later be accessed using its `name`, which must be a null-terminated UTF-8
 /// compatible string.
 ///
-/// Use [ymap_destroy] in order to release pointer returned that way - keep in mind that this will
-/// not remove `YMap` instance from the document itself (once created it'll last for the entire
-/// lifecycle of a document).
+/// Once created, a `YMap` instance will last for the entire lifecycle of a document.
 #[no_mangle]
 pub unsafe extern "C" fn ymap(doc: *mut Doc, name: *const c_char) -> *mut Branch {
     assert!(!doc.is_null());
@@ -4380,7 +4376,7 @@ pub unsafe extern "C" fn yxmltext_event_target(e: *const YXmlTextEvent) -> *mut 
 
 /// Returns a path from a root type down to a current shared collection (which can be obtained using
 /// `ytext_event_target` function). It can consist of either integer indexes (used by sequence
-/// components) of *char keys (used by map components). `len` output parameter is used to provide
+/// components) or *char keys (used by map components). `len` output parameter is used to provide
 /// information about length of the path.
 ///
 /// Path returned this way should be eventually released using `ypath_destroy`.
@@ -4399,7 +4395,7 @@ pub unsafe extern "C" fn ytext_event_path(
 
 /// Returns a path from a root type down to a current shared collection (which can be obtained using
 /// `ymap_event_target` function). It can consist of either integer indexes (used by sequence
-/// components) of *char keys (used by map components). `len` output parameter is used to provide
+/// components) or *char keys (used by map components). `len` output parameter is used to provide
 /// information about length of the path.
 ///
 /// Path returned this way should be eventually released using `ypath_destroy`.
@@ -4415,7 +4411,7 @@ pub unsafe extern "C" fn ymap_event_path(e: *const YMapEvent, len: *mut u32) -> 
 
 /// Returns a path from a root type down to a current shared collection (which can be obtained using
 /// `yxmlelem_event_path` function). It can consist of either integer indexes (used by sequence
-/// components) of *char keys (used by map components). `len` output parameter is used to provide
+/// components) or *char keys (used by map components). `len` output parameter is used to provide
 /// information about length of the path.
 ///
 /// Path returned this way should be eventually released using `ypath_destroy`.
@@ -4434,7 +4430,7 @@ pub unsafe extern "C" fn yxmlelem_event_path(
 
 /// Returns a path from a root type down to a current shared collection (which can be obtained using
 /// `yxmltext_event_path` function). It can consist of either integer indexes (used by sequence
-/// components) of *char keys (used by map components). `len` output parameter is used to provide
+/// components) or *char keys (used by map components). `len` output parameter is used to provide
 /// information about length of the path.
 ///
 /// Path returned this way should be eventually released using `ypath_destroy`.
@@ -4453,7 +4449,7 @@ pub unsafe extern "C" fn yxmltext_event_path(
 
 /// Returns a path from a root type down to a current shared collection (which can be obtained using
 /// `yarray_event_target` function). It can consist of either integer indexes (used by sequence
-/// components) of *char keys (used by map components). `len` output parameter is used to provide
+/// components) or *char keys (used by map components). `len` output parameter is used to provide
 /// information about length of the path.
 ///
 /// Path returned this way should be eventually released using `ypath_destroy`.
@@ -4483,7 +4479,7 @@ pub unsafe extern "C" fn ypath_destroy(path: *mut YPathSegment, len: u32) {
 /// `YText`, `YXmlText` and XML nodes added to `YXmlElement`). `len` output parameter is used to
 /// provide information about number of changes produced.
 ///
-/// Delta returned from this function should eventually be released using `yevent_delta_destroy`
+/// Delta returned from this function should eventually be released using `ytext_delta_destroy`
 /// function.
 #[no_mangle]
 pub unsafe extern "C" fn ytext_event_delta(e: *const YTextEvent, len: *mut u32) -> *mut YDeltaOut {
@@ -4500,7 +4496,7 @@ pub unsafe extern "C" fn ytext_event_delta(e: *const YTextEvent, len: *mut u32) 
 /// `YText`, `YXmlText` and XML nodes added to `YXmlElement`). `len` output parameter is used to
 /// provide information about number of changes produced.
 ///
-/// Delta returned from this function should eventually be released using `yevent_delta_destroy`
+/// Delta returned from this function should eventually be released using `ytext_delta_destroy`
 /// function.
 #[no_mangle]
 pub unsafe extern "C" fn yxmltext_event_delta(
@@ -4564,7 +4560,7 @@ pub unsafe extern "C" fn yxmlelem_event_delta(
     Box::into_raw(out) as *mut _
 }
 
-/// Releases memory allocated by the object returned from `yevent_delta` function.
+/// Releases memory allocated by the object returned from `ytext_delta` function.
 #[no_mangle]
 pub unsafe extern "C" fn ytext_delta_destroy(delta: *mut YDeltaOut, len: u32) {
     if !delta.is_null() {
@@ -5093,13 +5089,13 @@ impl Drop for YEventChange {
 ///
 /// 1. `Y_EVENT_CHANGE_ADD` marks a new characters added to a collection. In this case `insert`
 /// field contains a pointer to a list of newly inserted values, while `len` field informs about
-/// their count. Additionally `attributes_len` nad `attributes` carry information about optional
+/// their count. Additionally `attributes_len` and `attributes` carry information about optional
 /// formatting attributes applied to edited blocks.
 /// 2. `Y_EVENT_CHANGE_DELETE` marks an existing elements removed from the collection. In this case
 /// `len` field informs about number of removed elements.
 /// 3. `Y_EVENT_CHANGE_RETAIN` marks a number of characters that have not been changed, counted from
 /// the previous element. `len` field informs about number of retained elements. Additionally
-/// `attributes_len` nad `attributes` carry information about optional formatting attributes applied
+/// `attributes_len` and `attributes` carry information about optional formatting attributes applied
 /// to edited blocks.
 ///
 /// A list of changes returned by `ytext_event_delta`/`yxmltext_event_delta` enables to locate
@@ -5238,13 +5234,13 @@ impl Drop for YDeltaAttr {
 ///
 /// 1. `Y_EVENT_CHANGE_ADD` marks a new characters added to a collection. In this case `insert`
 /// field contains a pointer to a list of newly inserted values, while `len` field informs about
-/// their count. Additionally `attributes_len` nad `attributes` carry information about optional
+/// their count. Additionally `attributes_len` and `attributes` carry information about optional
 /// formatting attributes applied to edited blocks.
 /// 2. `Y_EVENT_CHANGE_DELETE` marks an existing elements removed from the collection. In this case
 /// `len` field informs about number of removed elements.
 /// 3. `Y_EVENT_CHANGE_RETAIN` marks a number of characters that have not been changed, counted from
 /// the previous element. `len` field informs about number of retained elements. Additionally
-/// `attributes_len` nad `attributes` carry information about optional formatting attributes applied
+/// `attributes_len` and `attributes` carry information about optional formatting attributes applied
 /// to edited blocks.
 #[repr(C)]
 pub struct YDeltaIn {
