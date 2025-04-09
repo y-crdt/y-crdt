@@ -270,7 +270,7 @@ impl Branch {
         } else if let Some(name) = &self.name {
             BranchID::Root(name.clone())
         } else {
-            unreachable!()
+            unreachable!("Could not get ID for branch")
         }
     }
 
