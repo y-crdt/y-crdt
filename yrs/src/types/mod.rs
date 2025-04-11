@@ -721,7 +721,7 @@ pub enum Change {
 }
 
 /// A single change done over a map-component of shared data type.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub enum EntryChange {
     /// Informs about a new value inserted under specified entry.
     Inserted(Out),
@@ -732,6 +732,32 @@ pub enum EntryChange {
 
     /// Informs about a removal of a corresponding entry - contains a removed value.
     Removed(Out),
+}
+
+impl std::fmt::Debug for EntryChange {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            EntryChange::Inserted(out) => write!(f, "Inserted({out:?})"),
+            EntryChange::Updated(old, new) => write!(f, "Updated({old:?}, {new:?})"),
+            EntryChange::Removed(out) => {
+                f.write_str("Removed(")?;
+                // To avoid panicking on removed references, output the type name rather than the reference.
+                match out {
+                    Out::Any(any) => write!(f, "{any:?}")?,
+                    Out::YText(_) => write!(f, "YText")?,
+                    Out::YArray(_) => write!(f, "YArray")?,
+                    Out::YMap(_) => write!(f, "YMap")?,
+                    Out::YXmlElement(_) => write!(f, "YXmlElement")?,
+                    Out::YXmlFragment(_) => write!(f, "YXmlFragment")?,
+                    Out::YXmlText(_) => write!(f, "YXmlText")?,
+                    Out::YDoc(_) => write!(f, "YDoc")?,
+                    Out::YWeakLink(_) => write!(f, "YWeakLink")?,
+                    Out::UndefinedRef(_) => write!(f, "UndefinedRef")?,
+                }
+                f.write_str(")")
+            }
+        }
+    }
 }
 
 /// A single change done over a text-like types: [Text] or [XmlText].
