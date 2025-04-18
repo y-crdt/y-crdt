@@ -751,6 +751,7 @@ impl std::fmt::Debug for EntryChange {
                     Out::YXmlFragment(_) => write!(f, "YXmlFragment")?,
                     Out::YXmlText(_) => write!(f, "YXmlText")?,
                     Out::YDoc(_) => write!(f, "YDoc")?,
+                    #[cfg(feature = "weak")]
                     Out::YWeakLink(_) => write!(f, "YWeakLink")?,
                     Out::UndefinedRef(_) => write!(f, "UndefinedRef")?,
                 }
