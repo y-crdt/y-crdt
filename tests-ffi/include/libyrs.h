@@ -2736,6 +2736,12 @@ void yweak_destroy(const Weak *weak);
 
 struct YOutput *yweak_deref(const Branch *map_link, const YTransaction *txn);
 
+void yweak_read(const Branch *text_link,
+                const YTransaction *txn,
+                Branch **out_branch,
+                uint32_t *out_start_index,
+                uint32_t *out_end_index);
+
 YWeakIter *yweak_iter(const Branch *array_link, const YTransaction *txn);
 
 void yweak_iter_destroy(YWeakIter *iter);
