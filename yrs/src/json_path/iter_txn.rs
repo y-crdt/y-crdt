@@ -98,6 +98,19 @@ fn any_iter<'a, T: ReadTxn>(
         Some(Out::YXmlElement(elem)) => Some(dyn_iter(elem.children(txn).map(Out::from))),
         Some(Out::YXmlFragment(elem)) => Some(dyn_iter(elem.children(txn).map(Out::from))),
         Some(Out::YMap(map)) => Some(dyn_iter(map.into_iter(txn).map(|(_, value)| value))),
+        Some(Out::UndefinedRef(branch)) => {
+            // undefined ref only happens for root level types. These can be: ArrayRef, MapRef,
+            // XmlFragmentRef, TextRef. For JsonPath, we only care about ArrayRef and MapRef.
+            if branch.start.is_some() {
+                // a list component is not empty: we assume it's an Array
+                let array = crate::ArrayRef::from(branch);
+                Some(dyn_iter(array.iter(txn)))
+            } else {
+                // we assume it's a YMap
+                let map = crate::MapRef::from(branch);
+                Some(dyn_iter(map.into_iter(txn).map(|(_, value)| value)))
+            }
+        }
         _ => None,
     }
 }
@@ -335,6 +348,11 @@ fn get_member<T: ReadTxn>(txn: &T, out: Option<&Out>, key: &str) -> Option<Out> 
         Some(Out::YXmlText(elem)) => elem
             .get_attribute(txn, key)
             .map(|attr| Out::Any(Any::String(attr.into()))),
+        Some(Out::UndefinedRef(branch)) => {
+            // we assume it's a YMap
+            let map = crate::MapRef::from(*branch);
+            map.get(txn, key)
+        }
         _ => None,
     }
 }
@@ -372,6 +390,16 @@ fn get_index<T: ReadTxn>(txn: &T, out: Option<&Out>, idx: i32) -> Option<Out> {
                 idx
             } as u32;
             elem.get(txn, idx).map(Out::from)
+        }
+        Some(Out::UndefinedRef(array)) => {
+            // we assume it's a YMap
+            let array = crate::ArrayRef::from(*array);
+            let idx = if idx < 0 {
+                array.len(txn) as i32 + idx
+            } else {
+                idx
+            } as u32;
+            array.get(txn, idx)
         }
         _ => None,
     }
@@ -434,9 +462,10 @@ type ScopeIterator<'a> = Box<dyn Iterator<Item = Out> + 'a>;
 
 #[cfg(test)]
 mod test {
+    use crate::updates::decoder::Decode;
     use crate::{
         any, Array, ArrayPrelim, Doc, In, JsonPath, JsonPathEval, MapPrelim, Out, ReadTxn,
-        Transact, WriteTxn,
+        Transact, Update, WriteTxn,
     };
 
     fn mixed_sample() -> Doc {
@@ -582,6 +611,28 @@ mod test {
     fn eval_descent_flat() {
         let doc = mixed_sample();
         let path = JsonPath::parse("$.users..name").unwrap();
+        let tx = doc.transact();
+        let values: Vec<_> = tx.json_path(&path).collect();
+        assert_eq!(
+            values,
+            vec![
+                Out::Any(any!("Alice")),
+                Out::Any(any!("Bob")),
+                Out::Any(any!("Damian")),
+                Out::Any(any!("Elise"))
+            ]
+        );
+    }
+    #[test]
+    fn eval_on_fresh_document() {
+        let doc_state = mixed_sample()
+            .transact()
+            .encode_state_as_update_v1(&Default::default());
+        let doc = Doc::new();
+        doc.transact_mut()
+            .apply_update(Update::decode_v1(&doc_state).unwrap())
+            .unwrap();
+        let path = JsonPath::parse("$.users[*].name").unwrap();
         let tx = doc.transact();
         let values: Vec<_> = tx.json_path(&path).collect();
         assert_eq!(
