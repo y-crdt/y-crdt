@@ -15,7 +15,7 @@ weak = []
 sync = []
 
 [dependencies]
-thiserror = "1"
+thiserror = "2"
 fastrand = { version = "2", features = ["js"] }
 smallstr = { version = "0.3", features = ["union"] }
 smallvec = { version = "1.13", features = ["union", "const_generics", "const_new"] }
