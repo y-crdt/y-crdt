@@ -944,7 +944,8 @@ impl BlockCarrier {
             }
             BlockCarrier::Skip(x) => {
                 encoder.write_info(BLOCK_SKIP_REF_NUMBER);
-                encoder.write_len(x.len - offset);
+                // write as VarUint because Skips can't make use of predictable length-encoding
+                encoder.write_var(x.len - offset);
             }
             BlockCarrier::GC(x) => {
                 encoder.write_info(BLOCK_GC_REF_NUMBER);
