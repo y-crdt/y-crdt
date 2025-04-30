@@ -8,7 +8,7 @@
     "phone": "",
     "description": "Developer an maintainer of several OSS projects. Interested in building local-first applications, where data belongs to the user.",
     "webpageUrl": {
-      "url": "https://www.bartoszsypytkowski.com/",
+      "url": "https://github.com/y-crdt/y-crdt",
       "wellKnown": "https://github.com/y-crdt/y-crdt/blob/main/.well-known/funding-manifest-urls"
     }
   },
@@ -18,7 +18,7 @@
       "name": "yrs",
       "description": "A Rust implementation of Yjs. It is a library that allows you to build local-first collaborative applications with ease. It's commonly used as a plugin for collaborative text editors in many platforms. It's a foundation piece for implementations of Yjs compatible libraries in other languages, such as Python, Ruby, C# and more.",
       "webpageUrl": {
-        "url": "https://docs.rs/yrs",
+        "url": "https://github.com/y-crdt/y-crdt",
         "wellKnown": "https://github.com/y-crdt/y-crdt/blob/main/.well-known/funding-manifest-urls"
       },
       "repositoryUrl": {
@@ -44,7 +44,7 @@
         "description": "For funding maintenance work on yrs via Github Sponsors."
       },
       {
-        "guid": "yjs-opencollective",
+        "guid": "yrs-opencollective",
         "type": "payment-provider",
         "address": "https://opencollective.com/y-collective/projects/y-crdt",
         "description": "For funding yrs development via the OpenCollective."
