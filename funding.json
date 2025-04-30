@@ -1,0 +1,109 @@
+{
+  "version": "v1.0.0",
+  "entity": {
+    "type": "group",
+    "role": "steward",
+    "name": "Bartosz Sypytkowski",
+    "email": "b.sypytkowski@gmail.com",
+    "phone": "",
+    "description": "Developer an maintainer of several OSS projects. Interested in building local-first applications, where data belongs to the user.",
+    "webpageUrl": {
+      "url": "https://www.bartoszsypytkowski.com/",
+      "wellKnown": "https://github.com/y-crdt/y-crdt/blob/main/.well-known/funding-manifest-urls"
+    }
+  },
+  "projects": [
+    {
+      "guid": "y-crdt",
+      "name": "yrs",
+      "description": "A Rust implementation of Yjs. It is a library that allows you to build local-first collaborative applications with ease. It's commonly used as a plugin for collaborative text editors in many platforms. It's a foundation piece for implementations of Yjs compatible libraries in other languages, such as Python, Ruby, C# and more.",
+      "webpageUrl": {
+        "url": "https://docs.rs/yrs",
+        "wellKnown": "https://github.com/y-crdt/y-crdt/blob/main/.well-known/funding-manifest-urls"
+      },
+      "repositoryUrl": {
+        "url": "https://github.com/y-crdt/y-crdt/"
+      },
+      "licenses": [
+        "spdx:MIT"
+      ],
+      "tags": [
+        "collaboration",
+        "p2p",
+        "CRDT",
+        "local-first"
+      ]
+    }
+  ],
+  "funding": {
+    "channels": [
+      {
+        "guid": "github-sponsors",
+        "type": "payment-provider",
+        "address": "https://github.com/sponsors/Horusiath",
+        "description": "For funding maintenance work on yrs via Github Sponsors."
+      },
+      {
+        "guid": "yjs-opencollective",
+        "type": "payment-provider",
+        "address": "https://opencollective.com/y-collective/projects/y-crdt",
+        "description": "For funding yrs development via the OpenCollective."
+      }
+    ],
+    "plans": [
+      {
+        "guid": "supporter",
+        "status": "active",
+        "name": "Supporter",
+        "description": "A token of appreciation. This plan is for individuals who want to support the project.",
+        "amount": 50,
+        "currency": "USD",
+        "frequency": "monthly",
+        "channels": [
+          "github-sponsors",
+          "yrs-opencollective"
+        ]
+      },
+      {
+        "guid": "bronze-sponsor",
+        "status": "active",
+        "name": "Bronze Sponsor",
+        "description": "This is the recommended plan for early startups looking for a way to support the project and keep it alive.",
+        "amount": 500,
+        "currency": "USD",
+        "frequency": "monthly",
+        "channels": [
+          "github-sponsors",
+          "yrs-opencollective"
+        ]
+      },
+      {
+        "guid": "silver-sponsor",
+        "status": "active",
+        "name": "Silver Sponsor",
+        "description": "This is the recommended plan for companies, which use project in their products.",
+        "amount": 1000,
+        "currency": "USD",
+        "frequency": "monthly",
+        "channels": [
+          "github-sponsors",
+          "yrs-opencollective"
+        ]
+      },
+      {
+        "guid": "gold-sponsor",
+        "status": "active",
+        "name": "Gold Sponsor",
+        "description": "This is the recommended plan for companies, for which the project is a core part of their business.",
+        "amount": 2500,
+        "currency": "USD",
+        "frequency": "monthly",
+        "channels": [
+          "github-sponsors",
+          "yrs-opencollective"
+        ]
+      }
+    ],
+    "history": null
+  }
+}
