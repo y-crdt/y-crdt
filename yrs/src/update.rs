@@ -944,7 +944,7 @@ impl BlockCarrier {
             }
             BlockCarrier::Skip(x) => {
                 encoder.write_info(BLOCK_SKIP_REF_NUMBER);
-                encoder.write_len(x.len - offset);
+                encoder.write_var(x.len - offset);
             }
             BlockCarrier::GC(x) => {
                 encoder.write_info(BLOCK_GC_REF_NUMBER);
@@ -1121,18 +1121,19 @@ impl Iterator for IntoBlocks {
 
 #[cfg(test)]
 mod test {
+    use std::collections::{HashMap, VecDeque};
     use std::iter::FromIterator;
     use std::sync::{Arc, Mutex};
 
     use crate::block::{BlockRange, ClientID, Item, ItemContent};
     use crate::encoding::read::Cursor;
     use crate::types::{Delta, TypePtr};
-    use crate::update::{BlockCarrier, Update};
+    use crate::update::{BlockCarrier, Update, UpdateBlocks};
     use crate::updates::decoder::{Decode, DecoderV1};
     use crate::updates::encoder::Encode;
     use crate::{
-        Any, Doc, GetString, Options, ReadTxn, StateVector, Text, Transact, WriteTxn, XmlFragment,
-        XmlOut, ID,
+        Any, DeleteSet, Doc, GetString, Options, ReadTxn, StateVector, Text, Transact, WriteTxn,
+        XmlFragment, XmlOut, ID,
     };
 
     #[test]
@@ -1458,6 +1459,50 @@ mod test {
         let mut u = Update::new();
         let binary = u.encode_v2();
         assert_eq!(&binary, Update::EMPTY_V2)
+    }
+
+    #[test]
+    fn update_v2_with_skips() {
+        let u1 = Update {
+            blocks: UpdateBlocks {
+                clients: HashMap::from_iter([(
+                    1,
+                    VecDeque::from_iter([
+                        BlockCarrier::Item(
+                            Item::new(
+                                ID::new(1, 0),
+                                None,
+                                None,
+                                None,
+                                None,
+                                TypePtr::Named("test".into()),
+                                None,
+                                ItemContent::String("hello".into()),
+                            )
+                            .unwrap(),
+                        ),
+                        BlockCarrier::Skip(BlockRange::new(ID::new(1, 5), 3)),
+                        BlockCarrier::Item(
+                            Item::new(
+                                ID::new(1, 8),
+                                None,
+                                Some(ID::new(1, 7)),
+                                None,
+                                None,
+                                TypePtr::Unknown,
+                                None,
+                                ItemContent::String("world".into()),
+                            )
+                            .unwrap(),
+                        ),
+                    ]),
+                )]),
+            },
+            delete_set: DeleteSet::default(),
+        };
+        let encoded = u1.encode_v2();
+        let u2 = Update::decode_v2(&encoded).unwrap();
+        assert_eq!(u1, u2);
     }
 
     fn test_item(client_id: ClientID, clock: u32, len: u32) -> BlockCarrier {
