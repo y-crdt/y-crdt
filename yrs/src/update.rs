@@ -1132,8 +1132,8 @@ mod test {
     use crate::updates::decoder::{Decode, DecoderV1};
     use crate::updates::encoder::Encode;
     use crate::{
-        Any, DeleteSet, Doc, GetString, Options, ReadTxn, StateVector, Text, Transact, WriteTxn,
-        XmlFragment, XmlOut, ID,
+        Any, DeleteSet, Doc, GetString, Options, ReadTxn, StateVector, Text, Transact, XmlFragment,
+        XmlOut, ID,
     };
 
     #[test]
@@ -1449,14 +1449,14 @@ mod test {
 
     #[test]
     fn empty_update_v1() {
-        let mut u = Update::new();
+        let u = Update::new();
         let binary = u.encode_v1();
         assert_eq!(&binary, Update::EMPTY_V1)
     }
 
     #[test]
     fn empty_update_v2() {
-        let mut u = Update::new();
+        let u = Update::new();
         let binary = u.encode_v2();
         assert_eq!(&binary, Update::EMPTY_V2)
     }

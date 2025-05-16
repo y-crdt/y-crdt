@@ -7,7 +7,6 @@ use std::sync::Arc;
 
 use thiserror::Error;
 
-use crate::atomic::AtomicRef;
 use crate::block::{EmbedPrelim, ItemContent, ItemPtr, Prelim};
 use crate::iter::{
     AsIter, BlockIterator, BlockSliceIterator, IntoBlockIter, MoveIter, RangeIter, TxnIterator,
@@ -283,9 +282,10 @@ where
     /// map.insert(&mut txn, "A", "other");
     /// assert_eq!(link.try_deref_value(&txn), Some("other".into()));
     /// ```
-    pub fn try_deref_value<T: ReadTxn>(&self, _txn: &T) -> Option<Out> {
+    pub fn try_deref_value<T: ReadTxn>(&self, txn: &T) -> Option<Out> {
         let source = self.try_source()?;
-        let last = source.first_item.get_owned().to_iter().last()?;
+        let item = source.quote_start.get_item(txn);
+        let last = item.to_iter().last()?;
         if last.is_deleted() {
             None
         } else {
@@ -487,7 +487,6 @@ impl WeakEvent {
 pub struct LinkSource {
     pub(crate) quote_start: StickyIndex,
     pub(crate) quote_end: StickyIndex,
-    pub(crate) first_item: AtomicRef<ItemPtr>,
 }
 
 impl LinkSource {
@@ -495,7 +494,6 @@ impl LinkSource {
         LinkSource {
             quote_start: start,
             quote_end: end,
-            first_item: AtomicRef::default(),
         }
     }
 
@@ -508,7 +506,8 @@ impl LinkSource {
 
     /// Remove reference to current weak link from all items it quotes.
     pub(crate) fn unlink_all(&self, txn: &mut TransactionMut, branch_ptr: BranchPtr) {
-        let mut i = self.first_item.take().map(|arc| *arc).to_iter().moved();
+        let item = self.quote_start.get_item(txn);
+        let mut i = item.to_iter().moved();
         while let Some(item) = i.next(txn) {
             if item.info.is_linked() {
                 txn.unlink(item, branch_ptr);
@@ -517,10 +516,9 @@ impl LinkSource {
     }
 
     pub(crate) fn unquote<'a, T: ReadTxn>(&self, txn: &'a T) -> Unquote<'a, T> {
-        let mut current = self.first_item.get_owned();
+        let mut current = self.quote_start.get_item(txn);
         if let Some(ptr) = &mut current {
             if Self::try_right_most(ptr) {
-                self.first_item.swap(*ptr);
                 current = Some(*ptr);
             }
         }
@@ -551,25 +549,15 @@ impl LinkSource {
     }
 
     pub(crate) fn materialize(&self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
-        let curr = if let Some(ptr) = self.first_item.get_owned() {
+        let curr = if let Some(ptr) = self.quote_start.get_item(txn) {
             ptr
         } else {
-            if let Some(ptr) = self
-                .quote_start
-                .id()
-                .and_then(|id| txn.store.blocks.get_item(id))
-            {
-                self.first_item.swap(ptr);
-                ptr
-            } else {
-                // referenced element has already been GCed
-                return;
-            }
+            // referenced element has already been GCed
+            return;
         };
         if curr.parent_sub.is_some() {
             // for maps, advance to most recent item
             if let Some(mut last) = Some(curr).to_iter().last() {
-                self.first_item.swap(last);
                 last.info.set_linked();
                 let linked_by = txn.store.linked_by.entry(last).or_default();
                 linked_by.insert(inner_ref);
@@ -586,7 +574,6 @@ impl LinkSource {
                     slice.ptr
                 };
                 if first {
-                    self.first_item.swap(item);
                     first = false;
                 }
                 item.info.set_linked();
@@ -596,9 +583,9 @@ impl LinkSource {
         }
     }
 
-    pub fn to_string<T: ReadTxn>(&self, _txn: &T) -> String {
+    pub fn to_string<T: ReadTxn>(&self, txn: &T) -> String {
         let mut result = String::new();
-        let mut curr = self.first_item.get_owned();
+        let mut curr = self.quote_start.get_item(txn);
         let end = self.quote_end.id().unwrap();
         while let Some(item) = curr.as_deref() {
             if self.quote_end.assoc == Assoc::Before && &item.id == end {
@@ -619,8 +606,8 @@ impl LinkSource {
         result
     }
 
-    pub fn to_xml_string<T: ReadTxn>(&self, _txn: &T) -> String {
-        let curr = self.first_item.get_owned();
+    pub fn to_xml_string<T: ReadTxn>(&self, txn: &T) -> String {
+        let curr = self.quote_start.get_item(txn);
         if let Some(item) = curr.as_deref() {
             if let Some(branch) = item.parent.as_branch() {
                 return XmlTextRef::get_string_fragment(
@@ -839,7 +826,6 @@ pub(crate) fn join_linked_range(mut block: ItemPtr, txn: &mut TransactionMut) {
                                 // even though current boundary if left-side exclusive, current item
                                 // has been inserted on the right of it, therefore it's within range
                                 common.insert(*link);
-                                source.first_item.swap(block_copy); // this item is the new most left-wise
                             }
                         }
                     }
@@ -1114,7 +1100,6 @@ mod test {
         assert_eq!(l1.get(&d1.transact(), "a2"), l2.get(&d2.transact(), "a2"));
     }
 
-    #[ignore]
     #[test]
     fn delete_weak_link() {
         let d1 = Doc::new();
@@ -2079,16 +2064,16 @@ mod test {
         let txt1 = d1.get_or_insert_text("text");
         {
             let mut txn = d1.transact_mut();
-            txt1.insert(&mut txn, 0, "abcdef");
+            txt1.insert(&mut txn, 0, "abcdef"); // t1: 'abcdef'
         }
 
         let d2 = Doc::with_client_id(2);
         let _arr2 = d2.get_or_insert_array("array");
         let txt2 = d2.get_or_insert_text("text");
 
-        exchange_updates(&[&d1, &d2]);
+        exchange_updates(&[&d1, &d2]); // t2: 'abcdef'
 
-        txt2.insert(&mut d2.transact_mut(), 1, "xyz");
+        txt2.insert(&mut d2.transact_mut(), 1, "xyz"); // t2: 'axyzbcdef'
 
         let link_excl = {
             struct RangeLeftExclusive(u32, u32);
@@ -2103,12 +2088,12 @@ mod test {
             }
 
             let mut txn = d1.transact_mut();
-            let q = txt1.quote(&txn, RangeLeftExclusive(0, 5)).unwrap();
+            let q = txt1.quote(&txn, RangeLeftExclusive(0, 5)).unwrap(); // [bcde]
             arr1.insert(&mut txn, 0, q)
         };
         let link_incl = {
             let mut txn = d1.transact_mut();
-            let q = txt1.quote(&txn, 1..5).unwrap();
+            let q = txt1.quote(&txn, 1..5).unwrap(); // [bcde]
             arr1.insert(&mut txn, 0, q)
         };
         {

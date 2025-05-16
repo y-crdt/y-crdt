@@ -1,5 +1,4 @@
 use crate::block::{BlockCell, BlockRange, ClientID, Item, ItemPtr, GC, ID};
-use crate::encoding::read::Error;
 use crate::slice::ItemSlice;
 use crate::types::TypePtr;
 use crate::utils::client_hasher::ClientHasher;
