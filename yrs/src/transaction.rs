@@ -1060,7 +1060,7 @@ impl<'doc> TransactionMut<'doc> {
         }
     }
 
-    //#[cfg(feature = "weak")]
+    #[cfg(feature = "weak")]
     pub(crate) fn unlink(&mut self, mut source: ItemPtr, link: BranchPtr) {
         let all_links = &mut self.store.linked_by;
         let prune = if let Some(linked_by) = all_links.get_mut(&source) {

@@ -611,7 +611,12 @@ impl StickyIndex {
         let branch = match &self.scope {
             IndexScope::Relative(id) => {
                 // position relative to existing block
-                return txn.store().blocks.get_item(id);
+                let item = txn.store().blocks.get_item(id)?;
+                return if self.assoc == Assoc::After && &item.last_id() == id {
+                    item.right
+                } else {
+                    Some(item)
+                };
             }
             IndexScope::Nested(id) => {
                 // position at the beginning/end of a nested type
