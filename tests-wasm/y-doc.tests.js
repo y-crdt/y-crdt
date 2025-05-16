@@ -364,10 +364,11 @@ export const testSelectAll = tc => {
         "price": 399
     })
 
-    let result = doc.selectAll('$.store.book[*].price')
-    t.compare(result, [8.95, 22.99])
+    t.compare([8.95, 22.99], doc.selectAll('$.store.book[*].price'))
 
-    result = doc.selectAll('$...price')
+    let result = doc.selectAll('$...price')
+    // we sort results because YMap doesn't guarantee order
+    result.sort((a, b) => a - b)
     t.compare(result, [8.95, 22.99, 399])
 
     result = doc.selectOne('$.store.book[1].price')

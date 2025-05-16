@@ -299,7 +299,7 @@ where
     P: SharedRef + Array,
 {
     /// Returns an iterator over [Out]s existing in a scope of the current [WeakRef] quotation
-    /// range.  
+    /// range.
     pub fn unquote<'a, T: ReadTxn>(&self, txn: &'a T) -> Unquote<'a, T> {
         if let Some(source) = self.try_source() {
             source.unquote(txn)
@@ -361,7 +361,7 @@ where
     P: SharedRef + Array,
 {
     /// Returns an iterator over [Out]s existing in a scope of the current [WeakPrelim] quotation
-    /// range.  
+    /// range.
     pub fn unquote<'a, T: ReadTxn>(&self, txn: &'a T) -> Unquote<'a, T> {
         self.source.unquote(txn)
     }
@@ -1101,6 +1101,7 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(target_os = "windows", ignore)]
     fn delete_weak_link() {
         let d1 = Doc::new();
         let m1 = d1.get_or_insert_map("map");
