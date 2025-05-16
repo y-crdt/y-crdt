@@ -606,6 +606,42 @@ impl StickyIndex {
             true
         }
     }
+
+    pub(crate) fn get_item<T: ReadTxn>(&self, txn: &T) -> Option<ItemPtr> {
+        let branch = match &self.scope {
+            IndexScope::Relative(id) => {
+                // position relative to existing block
+                let item = txn.store().blocks.get_item(id)?;
+                return if self.assoc == Assoc::After && &item.last_id() == id {
+                    item.right
+                } else {
+                    Some(item)
+                };
+            }
+            IndexScope::Nested(id) => {
+                // position at the beginning/end of a nested type
+                let item = txn.store().blocks.get_item(id)?;
+                item.as_branch()?
+            }
+            IndexScope::Root(name) => {
+                // position at the beginning/end of a root type
+                let branch = txn.store().types.get(name.as_ref())?;
+                BranchPtr::from(branch)
+            }
+        };
+        match &self.assoc {
+            // get first item of a branch
+            Assoc::Before => branch.start,
+            // get last item of a branch
+            Assoc::After => {
+                let mut item = branch.item?;
+                while let Some(right) = item.right {
+                    item = right;
+                }
+                Some(item)
+            }
+        }
+    }
 }
 
 impl Encode for StickyIndex {

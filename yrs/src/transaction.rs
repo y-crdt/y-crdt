@@ -676,12 +676,6 @@ impl<'doc> TransactionMut<'doc> {
                 if let Some(linked_by) = self.store.linked_by.remove(&item) {
                     for link in linked_by {
                         self.add_changed_type(link, item.parent_sub.clone());
-                        #[cfg(feature = "weak")]
-                        if let crate::types::TypeRef::WeakLink(source) = &link.type_ref {
-                            if source.is_single() {
-                                source.first_item.take();
-                            }
-                        }
                     }
                 }
             }

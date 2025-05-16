@@ -3,7 +3,7 @@ use crate::branch::BranchPtr;
 use crate::encoding::read::Error;
 use crate::event::{SubdocsEvent, TransactionCleanupEvent, UpdateEvent};
 use crate::store::{DocStore, StoreInner};
-use crate::transaction::{Origin, Transaction, TransactionMut};
+use crate::transaction::{Origin, TransactionMut};
 use crate::types::{RootRef, ToJson};
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
@@ -21,7 +21,7 @@ use std::sync::Arc;
 /// A Yrs document type. Documents are the most important units of collaborative resources management.
 /// All shared collections live within a scope of their corresponding documents. All updates are
 /// generated on per-document basis (rather than individual shared type). All operations on shared
-/// collections happen via [Transaction], which lifetime is also bound to a document.
+/// collections happen via [Transaction](crate::Transaction), which lifetime is also bound to a document.
 ///
 /// Document manages so-called root types, which are top-level shared types definitions (as opposed
 /// to recursively nested types).
