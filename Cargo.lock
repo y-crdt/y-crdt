@@ -1253,7 +1253,7 @@ dependencies = [
 
 [[package]]
 name = "yffi"
-version = "0.23.2"
+version = "0.23.3"
 dependencies = [
  "serde_json",
  "yrs",
@@ -1261,7 +1261,7 @@ dependencies = [
 
 [[package]]
 name = "yrs"
-version = "0.23.2"
+version = "0.23.3"
 dependencies = [
  "arc-swap",
  "assert_matches2",
@@ -1284,7 +1284,7 @@ dependencies = [
 
 [[package]]
 name = "ywasm"
-version = "0.23.2"
+version = "0.23.3"
 dependencies = [
  "base64_light",
  "console_error_panic_hook",
