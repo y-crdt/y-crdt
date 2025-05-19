@@ -86,10 +86,20 @@ impl Store {
         self.pending.as_ref()
     }
 
+    /// Returns a mutable reference to the pending update if it exists.
+    pub fn pending_update_mut(&mut self) -> Option<&mut PendingUpdate> {
+        self.pending.as_mut()
+    }
+
     /// If there are some delete updates waiting for missing updates to arrive in order to be
     /// applied, this method will return them.
     pub fn pending_ds(&self) -> Option<&DeleteSet> {
         self.pending_ds.as_ref()
+    }
+
+    /// Returns a mutable reference to the pending delete set if it exists.
+    pub fn pending_ds_mut(&mut self) -> Option<&mut DeleteSet> {
+        self.pending_ds.as_mut()
     }
 
     pub fn is_subdoc(&self) -> bool {

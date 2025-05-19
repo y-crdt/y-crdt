@@ -1132,8 +1132,8 @@ mod test {
     use crate::updates::decoder::{Decode, DecoderV1};
     use crate::updates::encoder::Encode;
     use crate::{
-        Any, DeleteSet, Doc, GetString, Options, ReadTxn, StateVector, Text, Transact, XmlFragment,
-        XmlOut, ID,
+        merge_updates_v1, Any, DeleteSet, Doc, GetString, Options, ReadTxn, StateVector, Text,
+        Transact, WriteTxn, XmlFragment, XmlOut, ID,
     };
 
     #[test]
@@ -1463,7 +1463,35 @@ mod test {
 
     #[test]
     fn update_v2_with_skips() {
-        let u1 = Update {
+        let u1 = update_with_skips();
+        let encoded = u1.encode_v2();
+        let u2 = Update::decode_v2(&encoded).unwrap();
+        assert_eq!(u1, u2);
+    }
+
+    #[test]
+    fn pending_update_check() {
+        let update = update_with_skips();
+        let expected = update.encode_v1();
+        let doc = Doc::with_client_id(2);
+        let mut txn = doc.transact_mut();
+        let txt = txn.get_or_insert_text("test");
+        txn.apply_update(update).unwrap();
+        let str = txt.get_string(&txn);
+        assert_eq!(str, "hello"); // 'world' is missing because of skip block
+        assert!(txn.has_missing_updates());
+        let state = txn.encode_state_as_update_v1(&Default::default());
+        assert_eq!(state, expected); // we include pending update
+        let pending = txn.prune_pending();
+        assert!(pending.is_some());
+        let state = txn.encode_state_as_update_v1(&Default::default());
+        assert_ne!(state, expected); // we pruned pending update
+        let joined = merge_updates_v1([state, pending.unwrap().encode_v1()]).unwrap();
+        assert_eq!(joined, expected); // we joined current and pending state, they should be equal
+    }
+
+    fn update_with_skips() -> Update {
+        Update {
             blocks: UpdateBlocks {
                 clients: HashMap::from_iter([(
                     1,
@@ -1499,10 +1527,7 @@ mod test {
                 )]),
             },
             delete_set: DeleteSet::default(),
-        };
-        let encoded = u1.encode_v2();
-        let u2 = Update::decode_v2(&encoded).unwrap();
-        assert_eq!(u1, u2);
+        }
     }
 
     fn test_item(client_id: ClientID, clock: u32, len: u32) -> BlockCarrier {
