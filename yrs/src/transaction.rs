@@ -211,6 +211,13 @@ pub trait ReadTxn: Sized {
             None
         }
     }
+
+    /// Returns `true` if current document has any pending updates that are not yet
+    /// integrated into the document.
+    fn has_missing_updates(&self) -> bool {
+        let store = self.store();
+        store.pending.is_some() || store.pending_ds.is_none()
+    }
 }
 
 pub trait WriteTxn: Sized {
@@ -274,6 +281,26 @@ pub trait WriteTxn: Sized {
     /// XML nodes).
     fn get_or_insert_xml_fragment<N: Into<Arc<str>>>(&mut self, name: N) -> XmlFragmentRef {
         XmlFragmentRef::root(name).get_or_create(self)
+    }
+
+    /// Prunes a pending updates from the current document and returns them.
+    /// Returns `None` if current document didn't have any pending updates.
+    fn prune_pending(&mut self) -> Option<Update> {
+        let mut merge = Vec::with_capacity(2);
+        let store = self.store_mut();
+        if let Some(pending) = store.pending.take() {
+            merge.push(pending.update);
+        }
+        if let Some(pending_ds) = store.pending_ds.take() {
+            let mut u = Update::new();
+            u.delete_set = pending_ds.clone();
+            merge.push(u);
+        }
+        if merge.is_empty() {
+            None
+        } else {
+            Some(Update::merge_updates(merge))
+        }
     }
 }
 
