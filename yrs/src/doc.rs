@@ -958,7 +958,7 @@ impl Default for Options {
     fn default() -> Self {
         let mut rng = fastrand::Rng::new();
         let client_id: u32 = rng.u32(0..u32::MAX);
-        let uuid = uuid_v4_from(&mut rng);
+        let uuid = uuid_v4_from(rng.u128(..));
         Self::with_guid_and_client_id(uuid, client_id as ClientID)
     }
 }
@@ -1042,9 +1042,9 @@ mod test {
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
     use crate::{
-        any, Any, Array, ArrayPrelim, ArrayRef, DeleteSet, Doc, GetString, Map, MapRef, OffsetKind,
-        Options, StateVector, Subscription, Text, TextPrelim, TextRef, Transact, Uuid, WriteTxn,
-        XmlElementPrelim, XmlFragment, XmlFragmentRef, XmlTextPrelim, XmlTextRef, ID,
+        any, uuid_v4, Any, Array, ArrayPrelim, ArrayRef, DeleteSet, Doc, GetString, Map, MapRef,
+        OffsetKind, Options, StateVector, Subscription, Text, TextPrelim, TextRef, Transact, Uuid,
+        WriteTxn, XmlElementPrelim, XmlFragment, XmlFragmentRef, XmlTextPrelim, XmlTextRef, ID,
     };
     use arc_swap::ArcSwapOption;
     use assert_matches2::assert_matches;
@@ -2447,5 +2447,12 @@ mod test {
         assert_eq!(block.len(), 3, "GCed blocks should be squashed");
         assert!(block.is_deleted(), "`abc` should be deleted");
         assert_matches!(&block, &BlockCell::GC(_));
+    }
+
+    #[test]
+    fn uuid_generation() {
+        let guid = uuid_v4();
+        let uuid = uuid::Uuid::parse_str(&guid).unwrap();
+        assert_eq!(&*uuid.to_string(), &*guid);
     }
 }
