@@ -216,7 +216,7 @@ pub trait ReadTxn: Sized {
     /// integrated into the document.
     fn has_missing_updates(&self) -> bool {
         let store = self.store();
-        store.pending.is_some() || store.pending_ds.is_none()
+        store.pending.is_some() || store.pending_ds.is_some()
     }
 }
 
