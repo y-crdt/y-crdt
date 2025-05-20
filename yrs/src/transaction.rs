@@ -55,24 +55,67 @@ pub trait ReadTxn: Sized {
         self.store().encode_state_from_snapshot(snapshot, encoder)
     }
 
-    /// Encodes the difference between remove peer state given its `state_vector` and the state
-    /// of a current local peer
+    /// Encodes the difference between remote peer state given its `state_vector` and the state
+    /// of a current local peer.
+    ///
+    /// # Differences between alternative methods
+    ///
+    /// - [Self::encode_state_as_update] encodes full document state including pending updates and
+    /// entire delete set.
+    /// - [Self::encode_diff] encodes only the difference between the current state and
+    /// the given state vector, including entire delete set. Pending updates are not included.
+    /// - [TransactionMut::encode_update] encodes only inserts and deletes made within the scope
+    /// of the current transaction.
     fn encode_diff<E: Encoder>(&self, state_vector: &StateVector, encoder: &mut E) {
         self.store().encode_diff(state_vector, encoder)
     }
 
+    /// Encodes the difference between remote peer state given its `state_vector` and the state
+    /// of a current local peer, using lib0 v1 encoding.
+    ///
+    /// # Differences between alternative methods
+    ///
+    /// - [Self::encode_state_as_update_v1] encodes full document state including pending updates
+    /// and entire delete set.
+    /// - [Self::encode_diff_v1] encodes only the difference between the current state and
+    /// the given state vector, including entire delete set. Pending updates are not included.
+    /// - [TransactionMut::encode_update_v1] encodes only inserts and deletes made within the scope
+    /// of the current transaction.
     fn encode_diff_v1(&self, state_vector: &StateVector) -> Vec<u8> {
         let mut encoder = EncoderV1::new();
         self.encode_diff(state_vector, &mut encoder);
         encoder.to_vec()
     }
 
+    /// Encodes the difference between remote peer state given its `state_vector` and the state
+    /// of a current local peer, using lib0 v2 encoding.
+    ///
+    /// # Differences between alternative methods
+    ///
+    /// - [Self::encode_state_as_update_v2] encodes full document state including pending updates
+    /// and entire delete set.
+    /// - [Self::encode_diff_v2] encodes only the difference between the current state and
+    /// the given state vector, including entire delete set. Pending updates are not included.
+    /// - [TransactionMut::encode_update_v2] encodes only inserts and deletes made within the scope
+    /// of the current transaction.
     fn encode_diff_v2(&self, state_vector: &StateVector) -> Vec<u8> {
         let mut encoder = EncoderV2::new();
         self.encode_diff(state_vector, &mut encoder);
         encoder.to_vec()
     }
 
+    /// Encodes the difference between remote peer state given its `state_vector` and the state
+    /// of a current local peer. Also includes pending updates which were not yet integrated into
+    /// the main document state and entire delete set.
+    ///
+    /// # Differences between alternative methods
+    ///
+    /// - [Self::encode_state_as_update] encodes full document state including pending updates and
+    /// entire delete set.
+    /// - [Self::encode_diff] encodes only the difference between the current state and
+    /// the given state vector, including entire delete set. Pending updates are not included.
+    /// - [TransactionMut::encode_update] encodes only inserts and deletes made within the scope
+    /// of the current transaction.
     fn encode_state_as_update<E: Encoder>(&self, sv: &StateVector, encoder: &mut E) {
         let store = self.store();
         store.write_blocks_from(sv, encoder);
@@ -80,6 +123,18 @@ pub trait ReadTxn: Sized {
         ds.encode(encoder);
     }
 
+    /// Encodes the difference between remote peer state given its `state_vector` and the state
+    /// of a current local peer, using lib0 v1 encoding. Also includes pending updates which were
+    /// not yet integrated into the main document state and entire delete set.
+    ///
+    /// # Differences between alternative methods
+    ///
+    /// - [Self::encode_state_as_update_v1] encodes full document state including pending updates
+    /// and entire delete set.
+    /// - [Self::encode_diff_v1] encodes only the difference between the current state and
+    /// the given state vector, including entire delete set. Pending updates are not included.
+    /// - [TransactionMut::encode_update_v1] encodes only inserts and deletes made within the scope
+    /// of the current transaction.
     fn encode_state_as_update_v1(&self, sv: &StateVector) -> Vec<u8> {
         let mut encoder = EncoderV1::new();
         self.encode_state_as_update(sv, &mut encoder);
@@ -87,6 +142,18 @@ pub trait ReadTxn: Sized {
         merge_pending_v1(encoder.to_vec(), self.store())
     }
 
+    /// Encodes the difference between remote peer state given its `state_vector` and the state
+    /// of a current local peer, using lib0 v2 encoding. Also includes pending updates which were
+    /// not yet integrated into the main document state and entire delete set.
+    ///
+    /// # Differences between alternative methods
+    ///
+    /// - [Self::encode_state_as_update_v2] encodes full document state including pending updates
+    /// and entire delete set.
+    /// - [Self::encode_diff_v2] encodes only the difference between the current state and
+    /// the given state vector, including entire delete set. Pending updates are not included.
+    /// - [TransactionMut::encode_update_v2] encodes only inserts and deletes made within the scope
+    /// of the current transaction.
     fn encode_state_as_update_v2(&self, sv: &StateVector) -> Vec<u8> {
         let mut encoder = EncoderV2::new();
         self.encode_state_as_update(sv, &mut encoder);
