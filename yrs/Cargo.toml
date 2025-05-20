@@ -34,6 +34,7 @@ proptest = "1.2"
 proptest-derive = "0.4.0"
 rand = "0.8.5"
 assert_matches2 = "0.1"
+uuid = "1.16.0"
 
 [[bench]]
 name = "benches"

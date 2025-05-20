@@ -710,37 +710,56 @@ pub type Uuid = std::sync::Arc<str>;
 /// Generate random v4 UUID.
 /// (See: https://www.rfc-editor.org/rfc/rfc4122#section-4.4)
 pub fn uuid_v4() -> Uuid {
-    uuid_v4_from(&mut fastrand::Rng::new())
+    let mut rand = fastrand::Rng::new();
+    uuid_v4_from(rand.u128(..))
 }
 
 /// Generate random v4 UUID.
 /// (See: https://www.rfc-editor.org/rfc/rfc4122#section-4.4)
-pub fn uuid_v4_from(rng: &mut fastrand::Rng) -> Uuid {
-    let mut b = [0u8; 16];
-    rng.fill(&mut b);
-
-    // According to RFC 4122 - Section 4.4, UUID v4 requires setting up following:
-    b[6] = b[6] & 0x0f | 0x40; // time_hi_and_version (bits 4-7 of 7th octet)
-    b[8] = b[8] & 0x3f | 0x80; // clock_seq_hi_and_reserved (bit 6 & 7 of 9th octet)
-
-    let uuid = format!(
-        "{:x}{:x}{:x}{:x}-{:x}{:x}-{:x}{:x}-{:x}{:x}-{:x}{:x}{:x}{:x}{:x}{:x}",
-        b[0],
-        b[1],
-        b[2],
-        b[3],
-        b[4],
-        b[5],
-        b[6],
-        b[7],
-        b[8],
-        b[9],
-        b[10],
-        b[11],
-        b[12],
-        b[13],
-        b[14],
-        b[15]
-    );
-    uuid.into()
+pub fn uuid_v4_from(value: u128) -> Uuid {
+    let uuid = value & 0xFFFFFFFFFFFF4FFFBFFFFFFFFFFFFFFF | 0x40008000000000000000;
+    let src = uuid.to_be_bytes();
+    const HEX: [u8; 16] = [
+        b'0', b'1', b'2', b'3', b'4', b'5', b'6', b'7', b'8', b'9', b'a', b'b', b'c', b'd', b'e',
+        b'f',
+    ];
+    let mut dst = [0; 36];
+    dst[0] = HEX[(src[0] >> 4) as usize];
+    dst[1] = HEX[(src[0] & 0x0f) as usize];
+    dst[2] = HEX[(src[1] >> 4) as usize];
+    dst[3] = HEX[(src[1] & 0x0f) as usize];
+    dst[4] = HEX[(src[2] >> 4) as usize];
+    dst[5] = HEX[(src[2] & 0x0f) as usize];
+    dst[6] = HEX[(src[3] >> 4) as usize];
+    dst[7] = HEX[(src[3] & 0x0f) as usize];
+    dst[8] = '-' as u8;
+    dst[9] = HEX[(src[4] >> 4) as usize];
+    dst[10] = HEX[(src[4] & 0x0f) as usize];
+    dst[11] = HEX[(src[5] >> 4) as usize];
+    dst[12] = HEX[(src[5] & 0x0f) as usize];
+    dst[13] = '-' as u8;
+    dst[14] = HEX[(src[6] >> 4) as usize];
+    dst[15] = HEX[(src[6] & 0x0f) as usize];
+    dst[16] = HEX[(src[7] >> 4) as usize];
+    dst[17] = HEX[(src[7] & 0x0f) as usize];
+    dst[18] = '-' as u8;
+    dst[19] = HEX[(src[8] >> 4) as usize];
+    dst[20] = HEX[(src[8] & 0x0f) as usize];
+    dst[21] = HEX[(src[9] >> 4) as usize];
+    dst[22] = HEX[(src[9] & 0x0f) as usize];
+    dst[23] = '-' as u8;
+    dst[24] = HEX[(src[10] >> 4) as usize];
+    dst[25] = HEX[(src[10] & 0x0f) as usize];
+    dst[26] = HEX[(src[11] >> 4) as usize];
+    dst[27] = HEX[(src[11] & 0x0f) as usize];
+    dst[28] = HEX[(src[12] >> 4) as usize];
+    dst[29] = HEX[(src[12] & 0x0f) as usize];
+    dst[30] = HEX[(src[13] >> 4) as usize];
+    dst[31] = HEX[(src[13] & 0x0f) as usize];
+    dst[32] = HEX[(src[14] >> 4) as usize];
+    dst[33] = HEX[(src[14] & 0x0f) as usize];
+    dst[34] = HEX[(src[15] >> 4) as usize];
+    dst[35] = HEX[(src[15] & 0x0f) as usize];
+    let str: &str = unsafe { std::str::from_utf8_unchecked(&dst) };
+    str.into()
 }
