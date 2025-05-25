@@ -2766,15 +2766,15 @@ const Weak *ymap_link(const Branch *map, const YTransaction *txn, const char *ke
 
 const Weak *ytext_quote(const Branch *text,
                         YTransaction *txn,
-                        const uint32_t *start_index,
-                        const uint32_t *end_index,
+                        uint32_t *start_index,
+                        uint32_t *end_index,
                         int8_t start_exclusive,
                         int8_t end_exclusive);
 
 const Weak *yarray_quote(const Branch *array,
                          YTransaction *txn,
-                         uint32_t start_index,
-                         uint32_t end_index,
+                         uint32_t *start_index,
+                         uint32_t *end_index,
                          int8_t start_exclusive,
                          int8_t end_exclusive);
 

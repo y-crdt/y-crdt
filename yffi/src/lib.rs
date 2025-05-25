@@ -5721,8 +5721,8 @@ pub unsafe extern "C" fn ymap_link(
 pub unsafe extern "C" fn ytext_quote(
     text: *const Branch,
     txn: *mut Transaction,
-    start_index: *const u32,
-    end_index: *const u32,
+    start_index: *mut u32,
+    end_index: *mut u32,
     start_exclusive: i8,
     end_exclusive: i8,
 ) -> *const Weak {
@@ -5755,8 +5755,8 @@ pub unsafe extern "C" fn ytext_quote(
 pub unsafe extern "C" fn yarray_quote(
     array: *const Branch,
     txn: *mut Transaction,
-    start_index: *const u32,
-    end_index: *const u32,
+    start_index: *mut u32,
+    end_index: *mut u32,
     start_exclusive: i8,
     end_exclusive: i8,
 ) -> *const Weak {
