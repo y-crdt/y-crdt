@@ -2766,8 +2766,8 @@ const Weak *ymap_link(const Branch *map, const YTransaction *txn, const char *ke
 
 const Weak *ytext_quote(const Branch *text,
                         YTransaction *txn,
-                        uint32_t start_index,
-                        uint32_t end_index,
+                        const uint32_t *start_index,
+                        const uint32_t *end_index,
                         int8_t start_exclusive,
                         int8_t end_exclusive);
 

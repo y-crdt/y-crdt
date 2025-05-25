@@ -5581,7 +5581,8 @@ pub unsafe extern "C" fn yweak_deref(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn yweak_read(text_link: *const Branch,
+pub unsafe extern "C" fn yweak_read(
+    text_link: *const Branch,
     txn: *const Transaction,
     out_branch: *mut *mut Branch,
     out_start_index: *mut u32,
@@ -5607,7 +5608,7 @@ pub unsafe extern "C" fn yweak_read(text_link: *const Branch,
         }
     } else {
         assert!(weak.end_id() == None); // both
-        // unforunately no Branch in this case?
+                                        // unforunately no Branch in this case?
         *out_start_index = 0; // empty text
         *out_end_index = 0; // empty text
     }
@@ -5720,8 +5721,8 @@ pub unsafe extern "C" fn ymap_link(
 pub unsafe extern "C" fn ytext_quote(
     text: *const Branch,
     txn: *mut Transaction,
-    start_index: u32,
-    end_index: u32,
+    start_index: *const u32,
+    end_index: *const u32,
     start_exclusive: i8,
     end_exclusive: i8,
 ) -> *const Weak {
@@ -5734,6 +5735,8 @@ pub unsafe extern "C" fn ytext_quote(
         .as_mut()
         .expect("provided transaction was not writeable");
 
+    let start_index = start_index.as_ref().cloned();
+    let end_index = end_index.as_ref().cloned();
     let range = ExplicitRange {
         start_index,
         end_index,
@@ -5752,8 +5755,8 @@ pub unsafe extern "C" fn ytext_quote(
 pub unsafe extern "C" fn yarray_quote(
     array: *const Branch,
     txn: *mut Transaction,
-    start_index: u32,
-    end_index: u32,
+    start_index: *const u32,
+    end_index: *const u32,
     start_exclusive: i8,
     end_exclusive: i8,
 ) -> *const Weak {
@@ -5766,6 +5769,8 @@ pub unsafe extern "C" fn yarray_quote(
         .as_mut()
         .expect("provided transaction was not writeable");
 
+    let start_index = start_index.as_ref().cloned();
+    let end_index = end_index.as_ref().cloned();
     let range = ExplicitRange {
         start_index,
         end_index,
@@ -5781,26 +5786,26 @@ pub unsafe extern "C" fn yarray_quote(
 }
 
 struct ExplicitRange {
-    start_index: u32,
-    end_index: u32,
+    start_index: Option<u32>,
+    end_index: Option<u32>,
     start_exclusive: i8,
     end_exclusive: i8,
 }
 
 impl RangeBounds<u32> for ExplicitRange {
     fn start_bound(&self) -> Bound<&u32> {
-        if self.start_exclusive == 0 {
-            Bound::Included(&self.start_index)
-        } else {
-            Bound::Excluded(&self.start_index)
+        match (&self.start_index, self.start_exclusive) {
+            (None, _) => Bound::Unbounded,
+            (Some(i), 0) => Bound::Included(i),
+            (Some(i), _) => Bound::Excluded(i),
         }
     }
 
     fn end_bound(&self) -> Bound<&u32> {
-        if self.end_exclusive == 0 {
-            Bound::Included(&self.end_index)
-        } else {
-            Bound::Excluded(&self.end_index)
+        match (&self.end_index, self.end_exclusive) {
+            (None, _) => Bound::Unbounded,
+            (Some(i), 0) => Bound::Included(i),
+            (Some(i), _) => Bound::Excluded(i),
         }
     }
 }
