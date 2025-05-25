@@ -437,6 +437,36 @@ impl StickyIndex {
         &self.scope
     }
 
+    /// Scope refers to root collection.
+    #[inline]
+    pub fn is_root(&self) -> bool {
+        if let IndexScope::Root(_) = &self.scope {
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Scope refers to nested shared collection.
+    #[inline]
+    pub fn is_nested(&self) -> bool {
+        if let IndexScope::Nested(_) = &self.scope {
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Scope refers to a position relative to another block.
+    #[inline]
+    pub fn is_relative(&self) -> bool {
+        if let IndexScope::Relative(_) = &self.scope {
+            true
+        } else {
+            false
+        }
+    }
+
     /// Returns an [ID] of the block position which is used as a reference to keep track the location
     /// of current [StickyIndex] even in face of changes performed by different peers.
     ///

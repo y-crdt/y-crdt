@@ -1,10 +1,9 @@
+use serde::{Serialize, Serializer};
 use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Formatter;
 use std::marker::PhantomData;
 use std::sync::Arc;
-
-use serde::{Serialize, Serializer};
 
 pub use map::Map;
 pub use map::MapRef;
@@ -95,6 +94,104 @@ impl TypeRef {
             TypeRef::Undefined => TYPE_REFS_UNDEFINED,
         }
     }
+
+    #[cfg(feature = "weak")]
+    fn encode_weak_link<E: Encoder>(data: &LinkSource, encoder: &mut E) {
+        encoder.write_type_ref(TYPE_REFS_WEAK);
+        let mut info = 0u8;
+        let is_single = data.is_single();
+        if !is_single {
+            info |= WEAK_REF_FLAGS_QUOTE;
+        };
+        if data.quote_start.is_root() || data.quote_end.is_root() {
+            info |= WEAK_REF_FLAGS_PARENT_ROOT;
+        }
+        if !data.quote_start.is_relative() {
+            info |= WEAK_REF_FLAGS_START_UNBOUNDED;
+        }
+        if !data.quote_end.is_relative() {
+            info |= WEAK_REF_FLAGS_END_UNBOUNDED;
+        }
+        if data.quote_start.assoc == Assoc::After {
+            info |= WEAK_REF_FLAGS_START_ASSOC;
+        }
+        if data.quote_end.assoc == Assoc::After {
+            info |= WEAK_REF_FLAGS_END_ASSOC;
+        }
+        encoder.write_u8(info);
+        match data.quote_start.scope() {
+            IndexScope::Relative(id) | IndexScope::Nested(id) => {
+                encoder.write_var(id.client);
+                encoder.write_var(id.clock);
+            }
+            IndexScope::Root(name) => {
+                encoder.write_string(name);
+            }
+        }
+
+        match data.quote_end.scope() {
+            IndexScope::Relative(id) if !is_single => {
+                encoder.write_var(id.client);
+                encoder.write_var(id.clock);
+            }
+            IndexScope::Relative(id) => {
+                // for single element id is the same as start so we can infer it
+            }
+            IndexScope::Nested(id) => {
+                encoder.write_var(id.client);
+                encoder.write_var(id.clock);
+            }
+            IndexScope::Root(name) => {
+                encoder.write_string(name);
+            }
+        }
+    }
+
+    #[cfg(feature = "weak")]
+    fn decode_weak_link<D: Decoder>(decoder: &mut D) -> Result<Arc<LinkSource>, Error> {
+        let flags = decoder.read_u8()?;
+        let is_single = flags & WEAK_REF_FLAGS_QUOTE == 0;
+        let start_assoc = if flags & WEAK_REF_FLAGS_START_ASSOC == WEAK_REF_FLAGS_START_ASSOC {
+            Assoc::After
+        } else {
+            Assoc::Before
+        };
+        let end_assoc = if flags & WEAK_REF_FLAGS_END_ASSOC == WEAK_REF_FLAGS_END_ASSOC {
+            Assoc::After
+        } else {
+            Assoc::Before
+        };
+        let is_start_unbounded =
+            flags & WEAK_REF_FLAGS_START_UNBOUNDED == WEAK_REF_FLAGS_START_UNBOUNDED;
+        let is_end_unbounded = flags & WEAK_REF_FLAGS_END_UNBOUNDED == WEAK_REF_FLAGS_END_UNBOUNDED;
+        let is_parent_root = flags & WEAK_REF_FLAGS_PARENT_ROOT == WEAK_REF_FLAGS_PARENT_ROOT;
+        let start_scope = if is_start_unbounded {
+            if is_parent_root {
+                let name = decoder.read_string()?;
+                IndexScope::Root(name.into())
+            } else {
+                IndexScope::Nested(ID::new(decoder.read_var()?, decoder.read_var()?))
+            }
+        } else {
+            IndexScope::Relative(ID::new(decoder.read_var()?, decoder.read_var()?))
+        };
+
+        let end_scope = if is_end_unbounded {
+            if is_parent_root {
+                let name = decoder.read_string()?;
+                IndexScope::Root(name.into())
+            } else {
+                IndexScope::Nested(ID::new(decoder.read_var()?, decoder.read_var()?))
+            }
+        } else if is_single {
+            start_scope.clone()
+        } else {
+            IndexScope::Relative(ID::new(decoder.read_var()?, decoder.read_var()?))
+        };
+        let start = StickyIndex::new(start_scope, start_assoc);
+        let end = StickyIndex::new(end_scope, end_assoc);
+        Ok(Arc::new(LinkSource::new(start, end)))
+    }
 }
 
 impl std::fmt::Display for TypeRef {
@@ -115,6 +212,19 @@ impl std::fmt::Display for TypeRef {
     }
 }
 
+/// Marks is weak ref is quotation spanning over multiple elements.
+const WEAK_REF_FLAGS_QUOTE: u8 = 0b0000_0001;
+/// Marks is start boundary of weak ref is [Assoc::After].
+const WEAK_REF_FLAGS_START_ASSOC: u8 = 0b0000_0010;
+/// Marks is end boundary of weak ref is [Assoc::After].
+const WEAK_REF_FLAGS_END_ASSOC: u8 = 0b0000_0100;
+/// Marks if start boundary of weak ref is unbounded.
+const WEAK_REF_FLAGS_START_UNBOUNDED: u8 = 0b0000_1000;
+/// Marks if end boundary of weak ref is unbounded.
+const WEAK_REF_FLAGS_END_UNBOUNDED: u8 = 0b0001_0000;
+/// Marks if weak ref references a root type. Only needed for both sides unbounded elements.
+const WEAK_REF_FLAGS_PARENT_ROOT: u8 = 0b0010_0000;
+
 impl Encode for TypeRef {
     fn encode<E: Encoder>(&self, encoder: &mut E) {
         match self {
@@ -130,28 +240,7 @@ impl Encode for TypeRef {
             TypeRef::XmlText => encoder.write_type_ref(TYPE_REFS_XML_TEXT),
             TypeRef::SubDoc => encoder.write_type_ref(TYPE_REFS_DOC),
             #[cfg(feature = "weak")]
-            TypeRef::WeakLink(data) => {
-                let is_single = data.is_single();
-                let start = data.quote_start.id().unwrap();
-                let end = data.quote_end.id().unwrap();
-                encoder.write_type_ref(TYPE_REFS_WEAK);
-                let mut info = if is_single { 0u8 } else { 1u8 };
-                info |= match data.quote_start.assoc {
-                    Assoc::After => 2,
-                    Assoc::Before => 0,
-                };
-                info |= match data.quote_end.assoc {
-                    Assoc::After => 4,
-                    Assoc::Before => 0,
-                };
-                encoder.write_u8(info);
-                encoder.write_var(start.client);
-                encoder.write_var(start.clock);
-                if !is_single {
-                    encoder.write_var(end.client);
-                    encoder.write_var(end.clock);
-                }
-            }
+            TypeRef::WeakLink(data) => Self::encode_weak_link(data, encoder),
             TypeRef::Undefined => encoder.write_type_ref(TYPE_REFS_UNDEFINED),
         }
     }
@@ -171,27 +260,8 @@ impl Decode for TypeRef {
             TYPE_REFS_DOC => Ok(TypeRef::SubDoc),
             #[cfg(feature = "weak")]
             TYPE_REFS_WEAK => {
-                let flags = decoder.read_u8()?;
-                let is_single = flags & 1u8 == 0;
-                let start_assoc = if flags & 2 == 2 {
-                    Assoc::After
-                } else {
-                    Assoc::Before
-                };
-                let end_assoc = if flags & 4 == 4 {
-                    Assoc::After
-                } else {
-                    Assoc::Before
-                };
-                let start_id = ID::new(decoder.read_var()?, decoder.read_var()?);
-                let end_id = if is_single {
-                    start_id.clone()
-                } else {
-                    ID::new(decoder.read_var()?, decoder.read_var()?)
-                };
-                let start = StickyIndex::from_id(start_id, start_assoc);
-                let end = StickyIndex::from_id(end_id, end_assoc);
-                Ok(TypeRef::WeakLink(Arc::new(LinkSource::new(start, end))))
+                let source = Self::decode_weak_link(decoder)?;
+                Ok(TypeRef::WeakLink(source))
             }
             TYPE_REFS_UNDEFINED => Ok(TypeRef::Undefined),
             _ => Err(Error::UnexpectedValue),
