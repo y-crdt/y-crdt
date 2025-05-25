@@ -968,3 +968,35 @@ export const testArrayUpperBoundary = tc => {
     t.compare(linkInclusive.unquote(), ['b', 'c', 'd', 'e'])
     t.compare(linkExclusive.unquote(), ['b', 'c', 'd', 'e', 'x', 'y', 'z'])
 }
+
+
+/**
+ * @param {t.TestCase} tc
+ */
+export const testTextUnbounded = tc => {
+    const doc0 = new Y.YDoc({clientID: 1})
+    const text0 = doc0.getText('text')
+    const array0 = doc0.getArray('array')
+    const doc1 = new Y.YDoc({clientID: 2})
+    const text1 = doc1.getText('text')
+
+    text0.insert(0, 'def')
+
+    exchangeUpdates([doc0, doc1])
+
+    // everything up to ..de
+    const linkInclusive = text0.quote(null, 1, false, false)
+    // everything from ef..
+    const linkExclusive = text0.quote(1, null, false, false)
+    array0.insert(0, [linkInclusive, linkExclusive])
+    t.compare(linkInclusive.toString(), 'de')
+    t.compare(linkExclusive.toString(), 'ef')
+
+    text1.insert(0, 'abc')
+    text1.insert(text1.length(), 'ghi')
+
+    exchangeUpdates([doc0, doc1])
+
+    t.compare(linkInclusive.toString(), 'abcde')
+    t.compare(linkExclusive.toString(), 'efghi')
+}
