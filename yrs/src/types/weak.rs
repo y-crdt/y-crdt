@@ -773,10 +773,6 @@ pub enum QuoteError {
     /// of reference.
     #[error("Quoted range spans beyond the bounds of current collection")]
     OutOfBounds,
-    /// Range param passed to [Quotable::quote] contains an unbounded end (ie. `..n` or `n..`),
-    /// which is not supported at the moment.
-    #[error("Quotations don't support unbounded ranges")]
-    UnboundedRange,
 }
 
 pub(crate) fn join_linked_range(mut block: ItemPtr, txn: &mut TransactionMut) {
@@ -863,7 +859,7 @@ mod test {
     use crate::Assoc::{After, Before};
     use crate::{
         Array, ArrayRef, DeepObservable, Doc, GetString, Map, MapPrelim, MapRef, Observable,
-        Quotable, Text, TextRef, Transact, XmlTextRef,
+        Quotable, ReadTxn, StateVector, Text, TextRef, Transact, Update, WriteTxn, XmlTextRef,
     };
 
     #[test]
@@ -2178,5 +2174,73 @@ mod test {
             let str = to_weak_xml_text(&link_incl).get_string(&txn);
             assert_eq!(&str, "bcde");
         }
+    }
+
+    #[test]
+    fn quote_end_unbounded_text() {
+        let d1 = Doc::with_client_id(1);
+        let mut txn = d1.transact_mut();
+        let txt1 = txn.get_or_insert_text("text");
+        let arr1 = txn.get_or_insert_array("array");
+        txt1.insert(&mut txn, 0, "abc");
+        let link1 = txt1.quote(&txn, 1..).unwrap();
+        let link1 = arr1.insert(&mut txn, 0, link1);
+        let str = link1.get_string(&txn);
+        assert_eq!(str, "bc");
+
+        txt1.push(&mut txn, "def");
+        let str = link1.get_string(&txn);
+        assert_eq!(str, "bcdef");
+        drop(txn);
+
+        let d2 = Doc::with_client_id(2);
+
+        exchange_updates(&[&d1, &d2]);
+
+        let mut txn = d2.transact_mut();
+        let txt2 = txn.get_or_insert_text("text");
+        let arr2 = txn.get_or_insert_array("array");
+
+        let link2 = arr2
+            .get(&txn, 0)
+            .unwrap()
+            .cast::<WeakRef<TextRef>>()
+            .unwrap();
+        let str = link2.get_string(&txn);
+        assert_eq!(str, "bcdef");
+    }
+
+    #[test]
+    fn quote_start_unbounded_text() {
+        let d1 = Doc::with_client_id(1);
+        let mut txn = d1.transact_mut();
+        let txt1 = txn.get_or_insert_text("text");
+        let arr1 = txn.get_or_insert_array("array");
+        txt1.insert(&mut txn, 0, "xyz");
+        let link1 = txt1.quote(&txn, ..=1).unwrap();
+        let link1 = arr1.insert(&mut txn, 0, link1);
+        let str = link1.get_string(&txn);
+        assert_eq!(str, "xy");
+
+        txt1.insert(&mut txn, 0, "uwv"); // 'uwvxyz'
+        let str = link1.get_string(&txn);
+        assert_eq!(str, "uwvxy");
+        drop(txn);
+
+        let d2 = Doc::with_client_id(2);
+
+        exchange_updates(&[&d1, &d2]);
+
+        let mut txn = d2.transact_mut();
+        let txt2 = txn.get_or_insert_text("text");
+        let arr2 = txn.get_or_insert_array("array");
+
+        let link2 = arr2
+            .get(&txn, 0)
+            .unwrap()
+            .cast::<WeakRef<TextRef>>()
+            .unwrap();
+        let str = link2.get_string(&txn);
+        assert_eq!(str, "uwvxy");
     }
 }
