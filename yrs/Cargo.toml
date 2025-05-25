@@ -11,6 +11,7 @@ repository = "https://github.com/y-crdt/y-crdt/"
 readme = "./README.md"
 
 [features]
+default = []
 weak = []
 sync = []
 

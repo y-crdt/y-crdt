@@ -14,8 +14,8 @@ use crate::iter::{
 };
 use crate::types::{AsPrelim, Branch, BranchPtr, Out, Path, SharedRef, TypeRef};
 use crate::{
-    Array, Assoc, DeepObservable, GetString, In, Map, Observable, ReadTxn, StickyIndex, TextRef,
-    TransactionMut, XmlTextRef, ID,
+    Array, Assoc, BranchID, DeepObservable, GetString, In, IndexScope, Map, Observable, ReadTxn,
+    StickyIndex, TextRef, TransactionMut, XmlTextRef, ID,
 };
 
 /// Weak link reference represents a reference to a single element or consecutive range of elements
@@ -497,9 +497,10 @@ impl LinkSource {
         }
     }
 
+    #[inline]
     pub fn is_single(&self) -> bool {
-        match (self.quote_start.id(), self.quote_end.id()) {
-            (Some(x), Some(y)) => x == y,
+        match (self.quote_start.scope(), self.quote_end.scope()) {
+            (IndexScope::Relative(x), IndexScope::Relative(y)) => x == y,
             _ => false,
         }
     }
@@ -586,20 +587,24 @@ impl LinkSource {
     pub fn to_string<T: ReadTxn>(&self, txn: &T) -> String {
         let mut result = String::new();
         let mut curr = self.quote_start.get_item(txn);
-        let end = self.quote_end.id().unwrap();
+        let end = self.quote_end.id();
         while let Some(item) = curr.as_deref() {
-            if self.quote_end.assoc == Assoc::Before && &item.id == end {
-                // right side is open (last item excluded)
-                break;
+            if let Some(end) = end {
+                if self.quote_end.assoc == Assoc::Before && &item.id == end {
+                    // right side is open (last item excluded)
+                    break;
+                }
             }
             if !item.is_deleted() {
                 if let ItemContent::String(s) = &item.content {
                     result.push_str(s.as_str());
                 }
             }
-            if self.quote_end.assoc == Assoc::After && &item.last_id() == end {
-                // right side is closed (last item included)
-                break;
+            if let Some(end) = end {
+                if self.quote_end.assoc == Assoc::After && &item.last_id() == end {
+                    // right side is closed (last item included)
+                    break;
+                }
             }
             curr = item.right;
         }
@@ -692,71 +697,86 @@ pub trait Quotable: AsRef<Branch> + Sized {
         R: RangeBounds<u32>,
     {
         let this = BranchPtr::from(self.as_ref());
-        let (start, assoc_start) = match range.start_bound() {
-            Bound::Included(&i) => (i, Assoc::Before),
-            Bound::Excluded(&i) => (i, Assoc::After),
-            Bound::Unbounded => return Err(QuoteError::UnboundedRange),
+        let start = match range.start_bound() {
+            Bound::Included(&i) => Some((i, Assoc::Before)),
+            Bound::Excluded(&i) => Some((i, Assoc::After)),
+            Bound::Unbounded => None,
         };
-        let (end, assoc_end) = match range.end_bound() {
-            Bound::Included(&i) => (i, Assoc::After),
-            Bound::Excluded(&i) => (i, Assoc::Before),
-            Bound::Unbounded => return Err(QuoteError::UnboundedRange),
+        let end = match range.end_bound() {
+            Bound::Included(&i) => Some((i, Assoc::After)),
+            Bound::Excluded(&i) => Some((i, Assoc::Before)),
+            Bound::Unbounded => None,
         };
-        let mut remaining = start;
         let encoding = txn.store().offset_kind;
+        let mut start_index = 0;
+        let mut remaining = start_index;
+        let mut curr = None;
         let mut i = this.start.to_iter().moved();
-        // figure out the first ID
-        let mut curr = i.next(txn);
-        while let Some(item) = curr.as_deref() {
-            if remaining == 0 {
-                break;
-            }
-            if !item.is_deleted() && item.is_countable() {
-                let len = item.content_len(encoding);
-                if remaining < len {
+
+        let start = if let Some((start_i, assoc_start)) = start {
+            start_index = start_i;
+            remaining = start_index;
+            // figure out the first ID
+            curr = i.next(txn);
+            while let Some(item) = curr.as_deref() {
+                if remaining == 0 {
                     break;
                 }
-                remaining -= len;
-            }
-            curr = i.next(txn);
-        }
-        let start_id = if let Some(item) = curr.as_deref() {
-            let mut id = item.id.clone();
-            id.clock += if let ItemContent::String(s) = &item.content {
-                s.block_offset(remaining, encoding)
-            } else {
-                remaining
-            };
-            id
-        } else {
-            return Err(QuoteError::OutOfBounds);
-        };
-        // figure out the last ID
-        remaining = end - start + remaining;
-        while let Some(item) = curr.as_deref() {
-            if !item.is_deleted() && item.is_countable() {
-                let len = item.content_len(encoding);
-                if remaining < len {
-                    break;
+                if !item.is_deleted() && item.is_countable() {
+                    let len = item.content_len(encoding);
+                    if remaining < len {
+                        break;
+                    }
+                    remaining -= len;
                 }
-                remaining -= len;
+                curr = i.next(txn);
             }
-            curr = i.next(txn);
-        }
-        let end_id = if let Some(item) = curr.as_deref() {
-            let mut id = item.id.clone();
-            id.clock += if let ItemContent::String(s) = &item.content {
-                s.block_offset(remaining, encoding)
+            let start_id = if let Some(item) = curr.as_deref() {
+                let mut id = item.id.clone();
+                id.clock += if let ItemContent::String(s) = &item.content {
+                    s.block_offset(remaining, encoding)
+                } else {
+                    remaining
+                };
+                id
             } else {
-                remaining
+                return Err(QuoteError::OutOfBounds);
             };
-            id
+            StickyIndex::new(IndexScope::Relative(start_id), assoc_start)
         } else {
-            return Err(QuoteError::OutOfBounds);
+            curr = i.next(txn);
+            StickyIndex::new(IndexScope::from_branch(this), Assoc::Before)
         };
 
-        let start = StickyIndex::from_id(start_id, assoc_start);
-        let end = StickyIndex::from_id(end_id, assoc_end);
+        let end = if let Some((end_index, assoc_end)) = end {
+            // figure out the last ID
+            remaining = end_index - start_index + remaining;
+            while let Some(item) = curr.as_deref() {
+                if !item.is_deleted() && item.is_countable() {
+                    let len = item.content_len(encoding);
+                    if remaining < len {
+                        break;
+                    }
+                    remaining -= len;
+                }
+                curr = i.next(txn);
+            }
+            let end_id = if let Some(item) = curr.as_deref() {
+                let mut id = item.id.clone();
+                id.clock += if let ItemContent::String(s) = &item.content {
+                    s.block_offset(remaining, encoding)
+                } else {
+                    remaining
+                };
+                id
+            } else {
+                return Err(QuoteError::OutOfBounds);
+            };
+            StickyIndex::new(IndexScope::Relative(end_id), assoc_end)
+        } else {
+            StickyIndex::new(IndexScope::from_branch(this), Assoc::After)
+        };
+
         let source = LinkSource::new(start, end);
         Ok(WeakPrelim::with_source(Arc::new(source)))
     }
@@ -773,10 +793,6 @@ pub enum QuoteError {
     /// of reference.
     #[error("Quoted range spans beyond the bounds of current collection")]
     OutOfBounds,
-    /// Range param passed to [Quotable::quote] contains an unbounded end (ie. `..n` or `n..`),
-    /// which is not supported at the moment.
-    #[error("Quotations don't support unbounded ranges")]
-    UnboundedRange,
 }
 
 pub(crate) fn join_linked_range(mut block: ItemPtr, txn: &mut TransactionMut) {
@@ -863,7 +879,7 @@ mod test {
     use crate::Assoc::{After, Before};
     use crate::{
         Array, ArrayRef, DeepObservable, Doc, GetString, Map, MapPrelim, MapRef, Observable,
-        Quotable, Text, TextRef, Transact, XmlTextRef,
+        Quotable, ReadTxn, Text, TextRef, Transact, WriteTxn, XmlTextRef,
     };
 
     #[test]
@@ -2178,5 +2194,108 @@ mod test {
             let str = to_weak_xml_text(&link_incl).get_string(&txn);
             assert_eq!(&str, "bcde");
         }
+    }
+
+    #[test]
+    fn quote_end_unbounded_text() {
+        let d1 = Doc::with_client_id(1);
+        let mut txn = d1.transact_mut();
+        let txt1 = txn.get_or_insert_text("text");
+        let arr1 = txn.get_or_insert_array("array");
+        txt1.insert(&mut txn, 0, "abc");
+        let link1 = txt1.quote(&txn, 1..).unwrap();
+        let link1 = arr1.insert(&mut txn, 0, link1);
+        let str = link1.get_string(&txn);
+        assert_eq!(str, "bc");
+
+        txt1.push(&mut txn, "def");
+        let str = link1.get_string(&txn);
+        assert_eq!(str, "bcdef");
+        drop(txn);
+
+        let d2 = Doc::with_client_id(2);
+
+        exchange_updates(&[&d1, &d2]);
+
+        let mut txn = d2.transact_mut();
+        let txt2 = txn.get_or_insert_text("text");
+        let arr2 = txn.get_or_insert_array("array");
+
+        let link2 = arr2
+            .get(&txn, 0)
+            .unwrap()
+            .cast::<WeakRef<TextRef>>()
+            .unwrap();
+        let str = link2.get_string(&txn);
+        assert_eq!(str, "bcdef");
+    }
+
+    #[test]
+    fn quote_start_unbounded_text() {
+        let d1 = Doc::with_client_id(1);
+        let mut txn = d1.transact_mut();
+        let txt1 = txn.get_or_insert_text("text");
+        let arr1 = txn.get_or_insert_array("array");
+        txt1.insert(&mut txn, 0, "xyz");
+        let link1 = txt1.quote(&txn, ..=1).unwrap();
+        let link1 = arr1.insert(&mut txn, 0, link1);
+        let str = link1.get_string(&txn);
+        assert_eq!(str, "xy");
+
+        txt1.insert(&mut txn, 0, "uwv"); // 'uwvxyz'
+        let str = link1.get_string(&txn);
+        assert_eq!(str, "uwvxy");
+        drop(txn);
+
+        let d2 = Doc::with_client_id(2);
+
+        exchange_updates(&[&d1, &d2]);
+
+        let mut txn = d2.transact_mut();
+        let _txt2 = txn.get_or_insert_text("text");
+        let arr2 = txn.get_or_insert_array("array");
+
+        let link2 = arr2
+            .get(&txn, 0)
+            .unwrap()
+            .cast::<WeakRef<TextRef>>()
+            .unwrap();
+        let str = link2.get_string(&txn);
+        assert_eq!(str, "uwvxy");
+    }
+
+    #[test]
+    fn quote_both_sides_unbounded_text() {
+        let d1 = Doc::with_client_id(1);
+        let mut txn = d1.transact_mut();
+        let txt1 = txn.get_or_insert_text("text");
+        let arr1 = txn.get_or_insert_array("array");
+        txt1.insert(&mut txn, 0, "xyz");
+        let link1 = txt1.quote(&txn, ..).unwrap();
+        let link1 = arr1.insert(&mut txn, 0, link1);
+        let str = link1.get_string(&txn);
+        assert_eq!(str, "xyz");
+
+        txt1.insert(&mut txn, 0, "uwv"); // 'uwvxyz'
+        txt1.push(&mut txn, "abc"); // 'uwvxyzabc'
+        let str = link1.get_string(&txn);
+        assert_eq!(str, "uwvxyzabc");
+        drop(txn);
+
+        let d2 = Doc::with_client_id(2);
+
+        exchange_updates(&[&d1, &d2]);
+
+        let mut txn = d2.transact_mut();
+        let txt2 = txn.get_or_insert_text("text");
+        let arr2 = txn.get_or_insert_array("array");
+
+        let link2 = arr2
+            .get(&txn, 0)
+            .unwrap()
+            .cast::<WeakRef<TextRef>>()
+            .unwrap();
+        let str = link2.get_string(&txn);
+        assert_eq!(str, "uwvxyzabc");
     }
 }

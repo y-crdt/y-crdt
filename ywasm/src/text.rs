@@ -277,8 +277,8 @@ impl YText {
     #[wasm_bindgen(js_name = quote)]
     pub fn quote(
         &self,
-        lower: u32,
-        upper: u32,
+        lower: Option<u32>,
+        upper: Option<u32>,
         lower_open: Option<bool>,
         upper_open: Option<bool>,
         txn: &ImplicitTransaction,

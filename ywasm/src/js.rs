@@ -481,15 +481,20 @@ impl Prelim for Shared {
 }
 
 pub(crate) struct YRange {
-    lower: u32,
-    upper: u32,
+    lower: Option<u32>,
+    upper: Option<u32>,
     lower_open: bool,
     upper_open: bool,
 }
 
 impl YRange {
     #[inline]
-    pub fn new(lower: u32, upper: u32, lower_open: Option<bool>, upper_open: Option<bool>) -> Self {
+    pub fn new(
+        lower: Option<u32>,
+        upper: Option<u32>,
+        lower_open: Option<bool>,
+        upper_open: Option<bool>,
+    ) -> Self {
         YRange {
             lower,
             upper,
@@ -501,18 +506,18 @@ impl YRange {
 
 impl RangeBounds<u32> for YRange {
     fn start_bound(&self) -> Bound<&u32> {
-        if self.lower_open {
-            Bound::Excluded(&self.lower)
-        } else {
-            Bound::Included(&self.lower)
+        match (&self.lower, self.lower_open) {
+            (None, _) => Bound::Unbounded,
+            (Some(i), true) => Bound::Excluded(i),
+            (Some(i), false) => Bound::Included(i),
         }
     }
 
     fn end_bound(&self) -> Bound<&u32> {
-        if self.upper_open {
-            Bound::Excluded(&self.upper)
-        } else {
-            Bound::Included(&self.upper)
+        match (&self.upper, self.upper_open) {
+            (None, _) => Bound::Unbounded,
+            (Some(i), true) => Bound::Excluded(i),
+            (Some(i), false) => Bound::Included(i),
         }
     }
 }
