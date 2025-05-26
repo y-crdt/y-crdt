@@ -414,7 +414,7 @@ impl Decode for IdSet {
         let mut i = 0;
         while i < client_len {
             decoder.reset_ds_cur_val();
-            let client: u32 = decoder.read_var()?;
+            let client: u64 = decoder.read_var()?;
             let range = IdRange::decode(decoder)?;
             set.0.insert(client as ClientID, range);
             i += 1;
@@ -924,5 +924,29 @@ mod test {
         assert_eq!(start, 5);
         assert_eq!(end, 5);
         assert!(i.next(&txn).is_none());
+    }
+
+    #[test]
+    fn test_large_client_id_fix() {
+        use crate::block::ClientID;
+        use crate::ID;
+        
+        // Test with a large client ID that would be truncated if read as u32
+        let large_client_id: ClientID = 0x1_0000_0000; // 2^32, larger than u32::MAX
+        
+        // Test IdSet encoding/decoding with large client ID
+        let mut id_set = IdSet::new();
+        let original_id = ID::new(large_client_id, 42);
+        id_set.insert(original_id, 5);
+        
+        let encoded_set = id_set.encode_v1();
+        let decoded_set = IdSet::decode_v1(&encoded_set).unwrap();
+        
+        assert!(decoded_set.contains(&original_id));
+        
+        // Verify the client ID wasn't truncated
+        let range = decoded_set.get(&large_client_id);
+        assert!(range.is_some());
+        assert!(range.unwrap().contains(42));
     }
 }

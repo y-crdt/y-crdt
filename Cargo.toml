@@ -1,7 +1,3 @@
 [workspace]
 
-members = [
-  "yrs",
-  "ywasm",
-  "yffi"
-]
+members = ["yrs", "ywasm", "yffi"]
