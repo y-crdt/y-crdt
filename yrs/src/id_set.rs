@@ -398,28 +398,86 @@ impl IdSet {
 
 impl Encode for IdSet {
     fn encode<E: Encoder>(&self, encoder: &mut E) {
-        encoder.write_var(self.0.len() as u32);
-        for (&client_id, block) in self.0.iter() {
-            encoder.reset_ds_cur_val();
-            encoder.write_var(client_id);
-            block.encode(encoder);
+        // Check if any client ID requires u64
+        let needs_u64 = self.0.keys().any(|&client_id| client_id > u32::MAX as u64);
+        
+        if needs_u64 {
+            // Write version flag for u64 format
+            encoder.write_var(0xFFFFFFFFu32); // Special marker for u64 format
+            encoder.write_var(self.0.len() as u32);
+            for (&client_id, block) in self.0.iter() {
+                encoder.reset_ds_cur_val();
+                encoder.write_var(client_id); // Write as u64
+                block.encode(encoder);
+            }
+        } else {
+            // Use legacy u32 format for backward compatibility
+            encoder.write_var(self.0.len() as u32);
+            for (&client_id, block) in self.0.iter() {
+                encoder.reset_ds_cur_val();
+                encoder.write_var(client_id as u32); // Write as u32
+                block.encode(encoder);
+            }
         }
     }
 }
 
 impl Decode for IdSet {
     fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, Error> {
-        let mut set = Self::new();
+        let first_value: u32 = decoder.read_var()?;
+        
+        if first_value == 0xFFFFFFFF {
+            // This is the u64 format marker
+            let client_len: u32 = decoder.read_var()?;
+            Self::decode_with_client_id_size_and_count::<D, u64>(decoder, client_len)
+        } else {
+            // This is the legacy u32 format (first_value is the client count)
+            Self::decode_with_client_id_size_and_count::<D, u32>(decoder, first_value)
+        }
+    }
+}
+
+impl IdSet {
+    /// Decode IdSet with u32 client IDs (for backward compatibility)
+    pub fn decode_with_u32_client_ids<D: Decoder>(decoder: &mut D) -> Result<Self, Error> {
         let client_len: u32 = decoder.read_var()?;
+        Self::decode_with_client_id_size_and_count::<D, u32>(decoder, client_len)
+    }
+    
+    /// Decode IdSet with u64 client IDs (for new format supporting large client IDs)
+    pub fn decode_with_u64_client_ids<D: Decoder>(decoder: &mut D) -> Result<Self, Error> {
+        let client_len: u32 = decoder.read_var()?;
+        Self::decode_with_client_id_size_and_count::<D, u64>(decoder, client_len)
+    }
+    
+    fn decode_with_client_id_size_and_count<D: Decoder, T>(decoder: &mut D, client_len: u32) -> Result<Self, Error> 
+    where
+        T: crate::encoding::varint::VarInt + Into<ClientID>,
+    {
+        let mut set = Self::new();
         let mut i = 0;
         while i < client_len {
             decoder.reset_ds_cur_val();
+<<<<<<< Updated upstream
             let client: u64 = decoder.read_var()?;
+=======
+            // Explicitly read the client ID with the correct type size
+            let client: T = decoder.read_var()?;
+>>>>>>> Stashed changes
             let range = IdRange::decode(decoder)?;
-            set.0.insert(client as ClientID, range);
+            set.0.insert(client.into(), range);
             i += 1;
         }
         Ok(set)
+    }
+    
+    // Keep the old method for internal use
+    fn decode_with_client_id_size<D: Decoder, T>(decoder: &mut D) -> Result<Self, Error> 
+    where
+        T: crate::encoding::varint::VarInt + Into<ClientID>,
+    {
+        let client_len: u32 = decoder.read_var()?;
+        Self::decode_with_client_id_size_and_count::<D, T>(decoder, client_len)
     }
 }
 
@@ -599,14 +657,20 @@ impl DeleteSet {
 
 impl Decode for DeleteSet {
     fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, Error> {
+        // Use the smart IdSet decoder that auto-detects format
         Ok(DeleteSet(IdSet::decode(decoder)?))
     }
 }
 
-impl Encode for DeleteSet {
-    #[inline]
-    fn encode<E: Encoder>(&self, encoder: &mut E) {
-        self.0.encode(encoder)
+impl DeleteSet {
+    /// Decode DeleteSet with u32 client IDs (for backward compatibility)
+    pub fn decode_with_u32_client_ids<D: Decoder>(decoder: &mut D) -> Result<Self, Error> {
+        Ok(DeleteSet(IdSet::decode_with_u32_client_ids(decoder)?))
+    }
+    
+    /// Decode DeleteSet with u64 client IDs (for new format supporting large client IDs)
+    pub fn decode_with_u64_client_ids<D: Decoder>(decoder: &mut D) -> Result<Self, Error> {
+        Ok(DeleteSet(IdSet::decode_with_u64_client_ids(decoder)?))
     }
 }
 
@@ -720,6 +784,13 @@ impl<'ds> TxnIterator for DeletedBlocks<'ds> {
             };
             return self.next(txn);
         }
+    }
+}
+
+impl Encode for DeleteSet {
+    #[inline]
+    fn encode<E: Encoder>(&self, encoder: &mut E) {
+        self.0.encode(encoder)
     }
 }
 
@@ -927,6 +998,7 @@ mod test {
     }
 
     #[test]
+<<<<<<< Updated upstream
     fn test_large_client_id_fix() {
         use crate::block::ClientID;
         use crate::ID;
@@ -948,5 +1020,133 @@ mod test {
         let range = decoded_set.get(&large_client_id);
         assert!(range.is_some());
         assert!(range.unwrap().contains(42));
+=======
+    fn test_backward_compatibility_works() {
+        use crate::block::ClientID;
+        use crate::updates::decoder::DecoderV1;
+        use crate::ID;
+        
+        // Test that default decoding uses u32 (backward compatible)
+        let mut id_set = IdSet::new();
+        let normal_client_id: ClientID = 12345;
+        let original_id = ID::new(normal_client_id, 42);
+        id_set.insert(original_id, 5);
+        
+        let encoded_set = id_set.encode_v1();
+        
+        // Default decode should work with normal client IDs
+        let decoded_set = IdSet::decode_v1(&encoded_set).unwrap();
+        assert!(decoded_set.contains(&original_id));
+        
+        // Explicit u32 decode should also work
+        let mut decoder = DecoderV1::from(encoded_set.as_slice());
+        let decoded_set_u32 = IdSet::decode_with_u32_client_ids(&mut decoder).unwrap();
+        assert!(decoded_set_u32.contains(&original_id));
+        
+        println!("✅ Backward compatibility test passed!");
+    }
+
+    #[test]
+    fn test_automatic_client_id_size_detection() {
+        use crate::block::ClientID;
+        use crate::encoding::write::Write;
+        use crate::updates::encoder::EncoderV1;
+        use crate::ID;
+        
+        // Test 1: Small client IDs should use u32 format (backward compatible)
+        let mut small_id_set = IdSet::new();
+        let small_client_id: ClientID = 12345;
+        let small_id = ID::new(small_client_id, 42);
+        small_id_set.insert(small_id, 5);
+        
+        let encoded_small = small_id_set.encode_v1();
+        let decoded_small = IdSet::decode_v1(&encoded_small).unwrap();
+        assert!(decoded_small.contains(&small_id));
+        println!("✅ Small client ID (u32 format) works");
+        
+        // Test 2: Large client IDs should automatically use u64 format
+        let mut large_id_set = IdSet::new();
+        let large_client_id: ClientID = 0x1_0000_0000; // Larger than u32::MAX
+        let large_id = ID::new(large_client_id, 42);
+        large_id_set.insert(large_id, 5);
+        
+        let encoded_large = large_id_set.encode_v1();
+        let decoded_large = IdSet::decode_v1(&encoded_large).unwrap();
+        assert!(decoded_large.contains(&large_id));
+        println!("✅ Large client ID (u64 format) works");
+        
+        // Test 3: Mixed client IDs should use u64 format
+        let mut mixed_id_set = IdSet::new();
+        mixed_id_set.insert(ID::new(12345, 10), 3); // Small client ID
+        mixed_id_set.insert(ID::new(0x1_0000_0000, 20), 3); // Large client ID
+        
+        let encoded_mixed = mixed_id_set.encode_v1();
+        let decoded_mixed = IdSet::decode_v1(&encoded_mixed).unwrap();
+        assert!(decoded_mixed.contains(&ID::new(12345, 10)));
+        assert!(decoded_mixed.contains(&ID::new(0x1_0000_0000, 20)));
+        println!("✅ Mixed client IDs (auto u64 format) works");
+        
+        // Test 4: Verify backward compatibility with old data
+        // Simulate old u32-encoded data by forcing u32 encoding
+        let mut old_format_set = IdSet::new();
+        old_format_set.insert(ID::new(12345, 42), 5);
+        
+        // Force encode as u32 (simulate old data)
+        let mut encoder = EncoderV1::new();
+        encoder.write_var(1u32); // client count
+        encoder.reset_ds_cur_val();
+        encoder.write_var(12345u32); // client ID as u32
+        old_format_set.get(&12345).unwrap().encode(&mut encoder);
+        let old_encoded = encoder.to_vec();
+        
+        // Should decode correctly as legacy format
+        let decoded_old = IdSet::decode_v1(&old_encoded).unwrap();
+        assert!(decoded_old.contains(&ID::new(12345, 42)));
+        println!("✅ Backward compatibility with old u32 data works");
+        
+        println!("🎉 All automatic client ID size detection tests passed!");
+    }
+
+    #[test]
+    fn test_large_client_id_preservation() {
+        use crate::block::ClientID;
+        use crate::ID;
+        
+        // Test with a client ID that's definitely larger than u32::MAX
+        let large_client_id: ClientID = 0x1_FFFF_FFFF; // Much larger than u32::MAX (0xFFFFFFFF)
+        let original_id = ID::new(large_client_id, 42);
+        
+        // Create IdSet with large client ID
+        let mut id_set = IdSet::new();
+        id_set.insert(original_id, 5);
+        
+        // Encode and decode
+        let encoded = id_set.encode_v1();
+        let decoded = IdSet::decode_v1(&encoded).unwrap();
+        
+        // Verify the large client ID is preserved
+        assert!(decoded.contains(&original_id));
+        
+        // Also verify we can get the range for the large client ID
+        let range = decoded.get(&large_client_id);
+        assert!(range.is_some());
+        assert!(range.unwrap().contains(42));
+        
+        println!("✅ Large client ID {} preserved correctly", large_client_id);
+        
+        // Test with an even larger client ID
+        let very_large_client_id: ClientID = 0xFFFF_FFFF_FFFF_FFFF; // Maximum u64
+        let very_large_id = ID::new(very_large_client_id, 100);
+        
+        let mut id_set2 = IdSet::new();
+        id_set2.insert(very_large_id, 10);
+        
+        let encoded2 = id_set2.encode_v1();
+        let decoded2 = IdSet::decode_v1(&encoded2).unwrap();
+        
+        assert!(decoded2.contains(&very_large_id));
+        println!("✅ Maximum u64 client ID {} preserved correctly", very_large_client_id);
+>>>>>>> Stashed changes
     }
 }
+
