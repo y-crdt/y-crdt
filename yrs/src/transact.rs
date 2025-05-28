@@ -54,36 +54,33 @@ pub trait Transact {
     /// # Errors
     ///
     /// Only one read-write transaction can be active at the same time. If any other transaction -
-    /// be it a read-write or read-only one - is active at the same time, this method will panic.
+    /// be it a read-write or read-only one - is active at the same time, this method will
+    /// block the thread until exclusive access can be acquired, unless building for wasm
+    /// which panics. If blocking is undesirable, use `try_transact_mut_with(origin).unwrap()` instead`.
     fn transact_mut_with<T>(&self, origin: T) -> TransactionMut
     where
-        T: Into<Origin>,
-    {
-        self.try_transact_mut_with(origin).unwrap()
-    }
+        T: Into<Origin>;
 
     /// Creates and returns a lightweight read-only transaction.
     ///
-    /// # Panics
+    /// # Errors
     ///
     /// While it's possible to have multiple read-only transactions active at the same time,
-    /// this method will panic whenever called while a read-write transaction
-    /// (see: [Self::transact_mut]) is active at the same time.
-    fn transact(&self) -> Transaction {
-        self.try_transact().unwrap()
-    }
+    /// this method will block the thread until exclusive access can be acquired, unless building for wasm
+    /// which panics. If blocking is undesirable, use `try_transact(origin).unwrap()` instead`.
+    fn transact(&self) -> Transaction;
 
     /// Creates and returns a read-write capable transaction. This transaction can be used to
     /// mutate the contents of underlying document store and upon dropping or committing it may
     /// subscription callbacks.
     ///
-    /// # Panics
+    /// # Errors
     ///
     /// Only one read-write transaction can be active at the same time. If any other transaction -
-    /// be it a read-write or read-only one - is active at the same time, this method will panic.
-    fn transact_mut(&self) -> TransactionMut {
-        self.try_transact_mut().unwrap()
-    }
+    /// be it a read-write or read-only one - is active at the same time, this method will block
+    /// the thread until exclusive access can be acquired, unless building for wasm
+    /// which panics. If blocking is undesirable, use `try_transact_mut(origin).unwrap()` instead`.
+    fn transact_mut(&self) -> TransactionMut;
 }
 
 impl Transact for Doc {
