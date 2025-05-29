@@ -1173,7 +1173,7 @@ mod test {
     use crate::updates::encoder::Encode;
     use crate::{
         merge_updates_v1, Any, DeleteSet, Doc, GetString, Options, ReadTxn, StateVector, Text,
-        Transact, WriteTxn, XmlFragment, XmlOut, ID,
+        Transact, XmlFragment, XmlOut, ID,
     };
 
     #[test]

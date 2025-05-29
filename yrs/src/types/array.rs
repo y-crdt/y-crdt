@@ -277,7 +277,7 @@ pub trait Array: AsRef<Branch> + Sized {
     /// # Example
     ///
     /// ```rust
-    /// use yrs::{Doc, In, Array, MapPrelim, Transact, WriteTxn};
+    /// use yrs::{Doc, In, Array, MapPrelim, Transact};
     ///
     /// let doc = Doc::new();
     /// let mut txn = doc.transact_mut();
@@ -643,7 +643,7 @@ mod test {
     use crate::types::{Change, DeepObservable, Event, Out, Path, PathSegment, ToJson};
     use crate::{
         any, Any, Array, ArrayPrelim, Assoc, Doc, Map, MapRef, Observable, SharedRef, StateVector,
-        Transact, Update, WriteTxn, ID,
+        Transact, Update, ID,
     };
     use std::collections::{HashMap, HashSet};
     use std::iter::FromIterator;

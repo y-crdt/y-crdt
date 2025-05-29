@@ -879,7 +879,7 @@ mod test {
     use crate::Assoc::{After, Before};
     use crate::{
         Array, ArrayRef, DeepObservable, Doc, GetString, Map, MapPrelim, MapRef, Observable,
-        Quotable, ReadTxn, Text, TextRef, Transact, WriteTxn, XmlTextRef,
+        Quotable, ReadTxn, Text, TextRef, Transact, XmlTextRef,
     };
 
     #[test]

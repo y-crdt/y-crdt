@@ -225,7 +225,7 @@ pub trait Map: AsRef<Branch> + Sized {
     /// # Example
     ///
     /// ```rust
-    /// use yrs::{Doc, Map, Transact, WriteTxn};
+    /// use yrs::{Doc, Map, Transact};
     ///
     /// let doc = Doc::new();
     /// let mut txn = doc.transact_mut();
@@ -317,7 +317,7 @@ pub trait Map: AsRef<Branch> + Sized {
     /// # Example
     ///
     /// ```rust
-    /// use yrs::{Doc, In, Map, MapPrelim, Transact, WriteTxn};
+    /// use yrs::{Doc, In, Map, MapPrelim, Transact};
     ///
     /// let doc = Doc::new();
     /// let mut txn = doc.transact_mut();
@@ -654,8 +654,8 @@ mod test {
     use crate::updates::encoder::{Encoder, EncoderV1};
     use crate::{
         any, Any, Array, ArrayPrelim, ArrayRef, Doc, GetString, In, Map, MapPrelim, MapRef,
-        Observable, StateVector, Text, TextRef, Transact, Update, WriteTxn, XmlFragment,
-        XmlFragmentRef, XmlTextPrelim, XmlTextRef,
+        Observable, StateVector, Text, TextRef, Transact, Update, XmlFragment, XmlFragmentRef,
+        XmlTextPrelim, XmlTextRef,
     };
     use arc_swap::ArcSwapOption;
     use fastrand::Rng;

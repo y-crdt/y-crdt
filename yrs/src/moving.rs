@@ -5,7 +5,7 @@ use crate::encoding::read::Error;
 use crate::transaction::TransactionMut;
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
-use crate::{BranchID, ReadTxn, WriteTxn, ID};
+use crate::{BranchID, ReadTxn, ID};
 use serde::de::{MapAccess, Visitor};
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -45,9 +45,9 @@ impl Move {
         }
     }
 
-    pub(crate) fn get_moved_coords_mut<T: WriteTxn>(
+    pub(crate) fn get_moved_coords_mut(
         &self,
-        txn: &mut T,
+        txn: &mut TransactionMut,
     ) -> (Option<ItemPtr>, Option<ItemPtr>) {
         let start = if let Some(start) = self.start.id() {
             Self::get_item_ptr_mut(txn, start, self.start.assoc)
@@ -62,7 +62,7 @@ impl Move {
         (start, end)
     }
 
-    fn get_item_ptr_mut<T: WriteTxn>(txn: &mut T, id: &ID, assoc: Assoc) -> Option<ItemPtr> {
+    fn get_item_ptr_mut(txn: &mut TransactionMut, id: &ID, assoc: Assoc) -> Option<ItemPtr> {
         let store = txn.store_mut();
         if assoc == Assoc::After {
             let slice = store.blocks.get_item_clean_start(id)?;
