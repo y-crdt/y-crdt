@@ -891,7 +891,7 @@ pub(crate) fn event_keys(
         if let Some(key) = opt {
             let block = target.map.get(key.as_ref()).cloned();
             if let Some(item) = block.as_deref() {
-                if item.id.clock >= txn.before_state.get(&item.id.client) {
+                if item.id.clock >= txn.before_state().get(&item.id.client) {
                     let mut prev = item.left;
                     while let Some(p) = prev.as_deref() {
                         if !txn.has_added(&p.id) {
@@ -1010,7 +1010,7 @@ pub(crate) fn event_change_set(txn: &TransactionMut, start: Option<ItemPtr>) -> 
                         && (item.moved.is_none()
                             || curr_move_is_deleted
                             || is_moved_by_new(item.moved, txn))
-                        && (txn.prev_moved.get(&item).cloned() == curr_move)
+                        && (txn.moved(item) == curr_move)
                     {
                         match item.moved {
                             Some(ptr) if txn.has_added(ptr.id()) => {
@@ -1031,7 +1031,7 @@ pub(crate) fn event_change_set(txn: &TransactionMut, start: Option<ItemPtr>) -> 
                     if !curr_move_is_new
                         && txn.has_deleted(&item.id)
                         && !txn.has_added(&item.id)
-                        && !txn.prev_moved.contains_key(&item)
+                        && !txn.moved(item).is_some()
                     {
                         let removed = match last_op.take() {
                             None => 0,
@@ -1045,10 +1045,7 @@ pub(crate) fn event_change_set(txn: &TransactionMut, start: Option<ItemPtr>) -> 
                         deleted.insert(item.id);
                     } // else nop
                 } else {
-                    if curr_move_is_new
-                        || txn.has_added(&item.id)
-                        || txn.prev_moved.contains_key(&item)
-                    {
+                    if curr_move_is_new || txn.has_added(&item.id) || txn.moved(item).is_some() {
                         let mut inserts = match last_op.take() {
                             None => Vec::with_capacity(item.len() as usize),
                             Some(Change::Added(values)) => values,

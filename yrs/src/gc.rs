@@ -1,5 +1,6 @@
 use crate::block::{BlockCell, ClientID, GC};
-use crate::{DeleteSet, Store, TransactionMut, ID};
+use crate::transaction::TransactionState;
+use crate::{Store, TransactionMut, ID};
 use std::collections::HashMap;
 
 #[derive(Default)]
@@ -9,30 +10,23 @@ pub(crate) struct GCCollector {
 
 impl GCCollector {
     /// Garbage collect all blocks deleted within current transaction scope.
-    pub fn collect(txn: &mut TransactionMut) {
+    pub fn collect(store: &mut Store, state: &TransactionState) {
         let mut gc = Self::default();
-        gc.mark_in_scope(&mut txn.store, None, &txn.delete_set);
-        gc.collect_marked(txn);
+        gc.mark_in_scope(store, state);
+        gc.collect_all_marked(store);
     }
 
     /// Garbage collect all deleted blocks from current transaction's document store.
-    pub fn collect_all(txn: &mut TransactionMut, delete_set: Option<&DeleteSet>) {
+    pub fn collect_all(txn: &mut TransactionMut) {
         let mut gc = Self::default();
-        match delete_set {
-            None => gc.mark_all(txn),
-            Some(ds) => gc.mark_in_scope(&mut txn.store, Some(&mut txn.merge_blocks), ds),
-        }
-        gc.collect_marked(txn);
+        let (store, state) = txn.split_mut();
+        gc.mark_all(store, state);
+        gc.collect_all_marked(store);
     }
 
-    /// Mark deleted items based on a provided delete set.
-    fn mark_in_scope(
-        &mut self,
-        store: &mut Store,
-        mut merge_blocks: Option<&mut Vec<ID>>,
-        delete_set: &DeleteSet,
-    ) {
-        for (client, range) in delete_set.iter() {
+    /// Mark deleted items based on a current transaction delete set.
+    fn mark_in_scope(&mut self, store: &mut Store, state: &TransactionState) {
+        for (client, range) in state.delete_set.iter() {
             if let Some(blocks) = store.blocks.get_client_mut(client) {
                 for delete_item in range.iter().rev() {
                     let mut start = delete_item.start;
@@ -59,13 +53,13 @@ impl GCCollector {
         }
     }
 
-    fn mark_all(&mut self, txn: &mut TransactionMut) {
-        for (_, client_blocks) in txn.store.blocks.iter_mut() {
+    fn mark_all(&mut self, store: &mut Store, state: &mut TransactionState) {
+        for (_, client_blocks) in store.blocks.iter_mut() {
             for block in client_blocks.iter_mut() {
                 if let BlockCell::Block(item) = block {
                     if item.is_deleted() {
                         item.gc(self, false);
-                        txn.merge_blocks.push(item.id);
+                        state.merge_blocks.push(item.id);
                     }
                 }
             }
@@ -79,9 +73,9 @@ impl GCCollector {
     }
 
     /// Garbage collects all items marked for GC.
-    fn collect_marked(self, txn: &mut TransactionMut) {
-        for (client_id, clocks) in self.marked.into_iter() {
-            let client = txn.store.blocks.get_client_blocks_mut(client_id);
+    fn collect_all_marked(self, store: &mut Store) {
+        for (client_id, clocks) in self.items.into_iter() {
+            let client = store.blocks.get_client_blocks_mut(client_id);
             for clock in clocks {
                 if let Some(index) = client.find_pivot(clock) {
                     let block = &mut client[index];

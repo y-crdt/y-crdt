@@ -358,24 +358,28 @@ impl<'doc> ReadTxn for Transaction<'doc> {
 /// In Yrs transactions are always auto-committing all of their changes when dropped. Rollbacks are
 /// not supported (if some operations needs to be undone, this can be achieved using [UndoManager])
 pub struct TransactionMut<'doc> {
-    pub(crate) store: RwLockWriteGuard<'doc, Store>,
+    store: RwLockWriteGuard<'doc, Store>,
+    state: TransactionState,
+}
+
+pub(crate) struct TransactionState {
     /// State vector of a current transaction at the moment of its creation.
-    pub(crate) before_state: StateVector,
+    pub before_state: StateVector,
     /// Current state vector of a transaction, which includes all performed updates.
-    pub(crate) after_state: StateVector,
+    pub after_state: StateVector,
     /// ID's of the blocks to be merged.
-    pub(crate) merge_blocks: Vec<ID>,
+    pub merge_blocks: Vec<ID>,
     /// Describes the set of deleted items by ids.
-    pub(crate) delete_set: DeleteSet,
+    pub delete_set: DeleteSet,
     /// We store the reference that last moved an item. This is needed to compute the delta
     /// when multiple ContentMove move the same item.
-    pub(crate) prev_moved: HashMap<ItemPtr, ItemPtr>,
+    pub prev_moved: HashMap<ItemPtr, ItemPtr>,
     /// All types that were directly modified (property added or child inserted/deleted).
     /// New types are not included in this Set.
-    pub(crate) changed: HashMap<TypePtr, HashSet<Option<Arc<str>>>>,
-    pub(crate) changed_parent_types: Vec<BranchPtr>,
-    pub(crate) subdocs: Option<Box<Subdocs>>,
-    pub(crate) origin: Option<Origin>,
+    pub changed: HashMap<TypePtr, HashSet<Option<Arc<str>>>>,
+    pub changed_parent_types: Vec<BranchPtr>,
+    pub subdocs: Option<Box<Subdocs>>,
+    pub origin: Option<Origin>,
     doc: Doc,
     committed: bool,
 }
@@ -400,8 +404,7 @@ impl<'doc> TransactionMut<'doc> {
         origin: Option<Origin>,
     ) -> Self {
         let begin_timestamp = store.blocks.get_state_vector();
-        TransactionMut {
-            store,
+        let state = TransactionState {
             doc,
             origin,
             before_state: begin_timestamp,
@@ -413,16 +416,20 @@ impl<'doc> TransactionMut<'doc> {
             prev_moved: HashMap::default(),
             subdocs: None,
             committed: false,
-        }
+        };
+        TransactionMut { store, state }
     }
 
-    #[inline]
     pub fn store_mut(&mut self) -> &mut Store {
-        self.store.deref_mut()
+        &mut *self.store
+    }
+
+    pub(crate) fn split_mut(&mut self) -> (&mut Store, &mut TransactionState) {
+        (&mut *self.store, &mut self.state)
     }
 
     pub fn subdocs_mut(&mut self) -> &mut Subdocs {
-        self.subdocs.get_or_init()
+        self.state.subdocs.get_or_init()
     }
 
     /// Returns a [TextRef] data structure stored under a given `name`. Text structures are used for
@@ -488,7 +495,7 @@ impl<'doc> TransactionMut<'doc> {
     /// Returns `None` if current document didn't have any pending updates.
     pub fn prune_pending(&mut self) -> Option<Update> {
         let mut merge = Vec::with_capacity(2);
-        let store = self.store_mut();
+        let store = &mut *self.store;
         if let Some(pending) = store.pending.take() {
             merge.push(pending.update);
         }
@@ -505,7 +512,7 @@ impl<'doc> TransactionMut<'doc> {
     }
 
     pub fn doc(&self) -> &Doc {
-        &self.doc
+        &self.state.doc
     }
 
     pub fn events(&self) -> Option<&StoreEvents> {
@@ -518,34 +525,50 @@ impl<'doc> TransactionMut<'doc> {
 
     /// Corresponding document's state vector at the moment when current transaction was created.
     pub fn before_state(&self) -> &StateVector {
-        &self.before_state
+        &self.state.before_state
     }
 
     /// State vector of the transaction after [Transaction::commit] has been called.
     pub fn after_state(&self) -> &StateVector {
-        &self.after_state
+        &self.state.after_state
     }
 
     /// Data about deletions performed in the scope of current transaction.
     pub fn delete_set(&self) -> &DeleteSet {
-        &self.delete_set
+        &self.state.delete_set
     }
 
     /// Returns origin of the transaction if any was defined. Read-write transactions can get an
     /// origin assigned via [Transact::try_transact_mut_with]/[Transact::transact_mut_with] methods.
     pub fn origin(&self) -> Option<&Origin> {
-        self.origin.as_ref()
+        self.state.origin.as_ref()
     }
 
     /// Returns a list of root level types changed in a scope of the current transaction. This
     /// list is not filled right away, but as a part of [TransactionMut::commit] process.
     pub fn changed_parent_types(&self) -> &[BranchPtr] {
-        &self.changed_parent_types
+        &self.state.changed_parent_types
     }
 
     #[inline]
     pub(crate) fn store(&self) -> &Store {
         &self.store
+    }
+
+    pub(crate) fn moved(&self, item: ItemPtr) -> Option<ItemPtr> {
+        self.state.prev_moved.get(&item).cloned()
+    }
+
+    pub(crate) fn mark_moved(&mut self, item: ItemPtr, moved: ItemPtr) {
+        self.state.prev_moved.insert(item, moved);
+    }
+
+    pub(crate) fn unmark_moved(&mut self, item: ItemPtr) {
+        self.state.prev_moved.remove(&item);
+    }
+
+    pub(crate) fn mark_merge(&mut self, id: ID) {
+        self.state.merge_blocks.push(id);
     }
 
     /// Encodes changes made within the scope of the current transaction using lib0 v1 encoding.
@@ -586,8 +609,8 @@ impl<'doc> TransactionMut<'doc> {
     ///   is extracted and integrated into the document structure.
     pub fn encode_update<E: Encoder>(&self, encoder: &mut E) {
         let store = self.store();
-        store.write_blocks_from(&self.before_state, encoder);
-        self.delete_set.encode(encoder);
+        store.write_blocks_from(self.before_state(), encoder);
+        self.state.delete_set.encode(encoder);
     }
 
     /// Applies given `id_set` onto current transaction to run multi-range deletion.
@@ -619,13 +642,15 @@ impl<'doc> TransactionMut<'doc> {
                                         .split_block_inner(item, clock - item.id.clock)
                                     {
                                         if item.moved.is_some() {
-                                            if let Some(&prev_moved) = self.prev_moved.get(&item) {
-                                                self.prev_moved.insert(split, prev_moved);
+                                            if let Some(&prev_moved) =
+                                                self.state.prev_moved.get(&item)
+                                            {
+                                                self.state.prev_moved.insert(split, prev_moved);
                                             }
                                         }
 
                                         index += 1;
-                                        self.merge_blocks.push(*split.id());
+                                        self.state.merge_blocks.push(*split.id());
                                     }
                                     blocks = self.store.blocks.get_client_mut(client).unwrap();
                                 }
@@ -644,9 +669,10 @@ impl<'doc> TransactionMut<'doc> {
                                                     {
                                                         if item.moved.is_some() {
                                                             if let Some(&prev_moved) =
-                                                                self.prev_moved.get(&item)
+                                                                self.state.prev_moved.get(&item)
                                                             {
-                                                                self.prev_moved
+                                                                self.state
+                                                                    .prev_moved
                                                                     .insert(split, prev_moved);
                                                             }
                                                         }
@@ -663,7 +689,7 @@ impl<'doc> TransactionMut<'doc> {
                                                             }
                                                         }
 
-                                                        self.merge_blocks.push(*split.id());
+                                                        self.state.merge_blocks.push(*split.id());
                                                         index += 1;
                                                     }
                                                 }
@@ -720,7 +746,7 @@ impl<'doc> TransactionMut<'doc> {
             }
 
             item.mark_as_deleted();
-            self.delete_set.insert(item.id.clone(), item.len());
+            self.state.delete_set.insert(item.id.clone(), item.len());
             if let Some(parent) = item.parent.as_branch() {
                 self.add_changed_type(*parent, item.parent_sub.clone());
             } else {
@@ -729,7 +755,7 @@ impl<'doc> TransactionMut<'doc> {
 
             match &mut item.content {
                 ItemContent::Doc(_, doc) => {
-                    let subdocs = self.subdocs.get_or_init();
+                    let subdocs = self.state.subdocs.get_or_init();
                     let addr = doc.addr();
                     if subdocs.added.remove(&addr).is_none() {
                         subdocs.removed.insert(addr, doc.clone());
@@ -742,7 +768,7 @@ impl<'doc> TransactionMut<'doc> {
                         source.unlink_all(self, branch_ptr);
                     }
                     let mut ptr = branch_ptr.start;
-                    self.changed.remove(&TypePtr::Branch(branch_ptr));
+                    self.state.changed.remove(&TypePtr::Branch(branch_ptr));
 
                     while let Some(item) = ptr.as_deref() {
                         if !item.is_deleted() {
@@ -777,7 +803,7 @@ impl<'doc> TransactionMut<'doc> {
                 // We try to merge all deleted items after each transaction,
                 // but we have no knowledge about that this needs to be merged
                 // since it is not in transaction.ds. Hence we add it to transaction._mergeStructs
-                self.merge_blocks.push(id);
+                self.state.merge_blocks.push(id);
             }
         }
 
@@ -798,7 +824,7 @@ impl<'doc> TransactionMut<'doc> {
         let (remaining, remaining_ds) = update.integrate(self)?;
         let mut retry = false;
         {
-            let store = self.store_mut();
+            let store = &mut *self.store;
             store.pending = if let Some(mut pending) = store.pending.take() {
                 // check if we can apply something
                 for (client, &clock) in pending.missing.iter() {
@@ -820,7 +846,7 @@ impl<'doc> TransactionMut<'doc> {
                 remaining
             };
         }
-        if let Some(pending) = self.store_mut().pending_ds.take() {
+        if let Some(pending) = self.store.pending_ds.take() {
             let ds2 = self.apply_delete(&pending);
             let ds = match (remaining_ds, ds2) {
                 (Some(mut a), Some(b)) => {
@@ -831,13 +857,13 @@ impl<'doc> TransactionMut<'doc> {
                 (_, Some(x)) => Some(x),
                 _ => None,
             };
-            self.store_mut().pending_ds = ds;
+            self.store.pending_ds = ds;
         } else {
-            self.store_mut().pending_ds = remaining_ds.map(|update| update.delete_set);
+            self.store.pending_ds = remaining_ds.map(|update| update.delete_set);
         }
 
         if retry {
-            let store = self.store_mut();
+            let store = &mut *self.store;
             if let Some(pending) = store.pending.take() {
                 let ds = store.pending_ds.take().unwrap_or_default();
                 let mut ds_update = Update::new();
@@ -857,7 +883,7 @@ impl<'doc> TransactionMut<'doc> {
         parent_sub: Option<Arc<str>>,
     ) -> Option<ItemPtr> {
         let (left, right, origin, id) = {
-            let store = self.store_mut();
+            let store = &mut *self.store;
             let left = pos.left;
             let right = pos.right;
             let origin = if let Some(item) = pos.left.as_deref() {
@@ -950,26 +976,26 @@ impl<'doc> TransactionMut<'doc> {
     /// This step is performed automatically when a transaction is about to be dropped (its life
     /// scope comes to an end).
     pub fn commit(&mut self) {
-        if self.committed {
+        if self.state.committed {
             return;
         }
-        self.committed = true;
+        self.state.committed = true;
 
         // 1. sort and merge delete set
-        self.delete_set.squash();
-        self.after_state = self.store.blocks.get_state_vector();
+        self.state.delete_set.squash();
+        self.state.after_state = self.store.blocks.get_state_vector();
         // 2. emit 'beforeObserverCalls'
         // 3. for each change observed by the transaction call 'afterTransaction'
-        if !self.changed.is_empty() {
+        if !self.state.changed.is_empty() {
             let mut changed_parents: HashMap<BranchPtr, Vec<usize>> = HashMap::new();
             let mut event_cache = Vec::new();
 
-            for (ptr, subs) in self.changed.iter() {
+            for (ptr, subs) in self.state.changed.iter() {
                 if let TypePtr::Branch(branch) = ptr {
                     if let Some(e) = branch.trigger(self, subs.clone()) {
                         event_cache.push(e);
                         Self::call_type_observers(
-                            &mut self.changed_parent_types,
+                            &mut self.state.changed_parent_types,
                             &self.store.linked_by,
                             *branch,
                             &mut changed_parents,
@@ -1008,15 +1034,15 @@ impl<'doc> TransactionMut<'doc> {
 
         // 4. try GC delete set
         if !self.store.skip_gc {
-            GCCollector::collect(self);
+            GCCollector::collect(&mut *self.store, &self.state);
         }
 
         // 5. try merge delete set
-        self.delete_set.try_squash_with(&mut self.store);
+        self.state.delete_set.try_squash_with(&mut *self.store);
 
         // 6. get transaction after state and try to merge to left
-        for (client, &clock) in self.after_state.iter() {
-            let before_clock = self.before_state.get(client);
+        for (client, &clock) in self.state.after_state.iter() {
+            let before_clock = self.state.before_state.get(client);
             if before_clock != clock {
                 let blocks = self.store.blocks.get_client_mut(client).unwrap();
                 let first_change = blocks.find_pivot(before_clock).unwrap().max(1);
@@ -1029,7 +1055,7 @@ impl<'doc> TransactionMut<'doc> {
         }
 
         // 7. get merge_structs and try to merge to left
-        for id in self.merge_blocks.iter() {
+        for id in self.state.merge_blocks.iter() {
             if let Some(blocks) = self.store.blocks.get_client_mut(&id.client) {
                 if let Some(replaced_pos) = blocks.find_pivot(id.clock) {
                     if replaced_pos + 1 < blocks.len() {
@@ -1051,23 +1077,22 @@ impl<'doc> TransactionMut<'doc> {
         }
 
         // 11. add and remove subdocs
-        let store = self.store.deref_mut();
-        if let Some(mut subdocs) = self.subdocs.take() {
-            let client_id = store.client_id;
+        if let Some(mut subdocs) = self.state.subdocs.take() {
+            let client_id = self.store.client_id;
             for (guid, subdoc) in subdocs.added.iter_mut() {
                 let mut txn = subdoc.transact_mut();
                 txn.store.client_id = client_id;
-                txn.doc
+                self.state
+                    .doc
                     .store()
-                    .set_subdoc_data(client_id, self.doc.collection_id());
-                store.subdocs.insert(guid.clone(), subdoc.clone());
+                    .set_subdoc_data(client_id, self.state.doc.collection_id());
+                self.store.subdocs.insert(guid.clone(), subdoc.clone());
             }
             for guid in subdocs.removed.keys() {
-                store.subdocs.remove(guid);
+                self.store.subdocs.remove(guid);
             }
 
-            let store = self.store.deref();
-            let mut removed = if let Some(events) = store.events.as_ref() {
+            let mut removed = if let Some(events) = self.store.events.as_ref() {
                 if events.subdocs_events.has_subscribers() {
                     let e = SubdocsEvent::new(subdocs);
                     events.subdocs_events.trigger(|cb| cb(self, &e));
@@ -1097,24 +1122,24 @@ impl<'doc> TransactionMut<'doc> {
 
     pub(crate) fn add_changed_type(&mut self, parent: BranchPtr, parent_sub: Option<Arc<str>>) {
         let trigger = if let Some(ptr) = parent.item {
-            (ptr.id().clock < self.before_state.get(&ptr.id().client)) && !ptr.is_deleted()
+            (ptr.id().clock < self.state.before_state.get(&ptr.id().client)) && !ptr.is_deleted()
         } else {
             true
         };
         if trigger {
-            let e = self.changed.entry(parent.into()).or_default();
+            let e = self.state.changed.entry(parent.into()).or_default();
             e.insert(parent_sub.clone());
         }
     }
 
     /// Checks if item with a given `id` has been added to a block store within this transaction.
     pub(crate) fn has_added(&self, id: &ID) -> bool {
-        id.clock >= self.before_state.get(&id.client)
+        id.clock >= self.state.before_state.get(&id.client)
     }
 
     /// Checks if item with a given `id` has been deleted within this transaction.
     pub(crate) fn has_deleted(&self, id: &ID) -> bool {
-        self.delete_set.is_deleted(id)
+        self.state.delete_set.is_deleted(id)
     }
 
     pub(crate) fn split_by_snapshot(&mut self, snapshot: &Snapshot) {
@@ -1126,8 +1151,8 @@ impl<'doc> TransactionMut<'doc> {
                 if ptr_clock < clock {
                     if let Some(right) = blocks.split_block_inner(ptr, clock - ptr_clock) {
                         if right.moved.is_some() {
-                            if let Some(&prev_moved) = self.prev_moved.get(&ptr) {
-                                self.prev_moved.insert(right, prev_moved);
+                            if let Some(&prev_moved) = self.state.prev_moved.get(&ptr) {
+                                self.state.prev_moved.insert(right, prev_moved);
                             }
                         }
 
@@ -1137,7 +1162,7 @@ impl<'doc> TransactionMut<'doc> {
             }
         }
 
-        self.merge_blocks.append(&mut merge_blocks);
+        self.state.merge_blocks.append(&mut merge_blocks);
         let mut deleted = snapshot.delete_set.deleted_blocks();
         while let Some(slice) = deleted.next(self) {
             if let BlockSlice::Item(slice) = slice {
@@ -1146,7 +1171,7 @@ impl<'doc> TransactionMut<'doc> {
 
                 // split the blocks by delete set
                 let ptr = self.store.materialize(slice);
-                self.merge_blocks.push(ptr.id);
+                self.state.merge_blocks.push(ptr.id);
             }
         }
     }
@@ -1165,7 +1190,7 @@ impl<'doc> TransactionMut<'doc> {
             if source.is_countable() {
                 // since linked property is blocking items from merging,
                 // it may turn out that source item can be merged now
-                self.merge_blocks.push(source.id);
+                self.state.merge_blocks.push(source.id);
             }
         }
     }

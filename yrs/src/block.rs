@@ -246,9 +246,10 @@ impl ItemPtr {
     ) -> Option<ItemPtr> {
         let self_ptr = self.clone();
         let item = self.deref_mut();
+        let (mut store, mut tx_state) = txn.split_mut();
         if let Some(redone) = item.redone.as_ref() {
-            let slice = txn.store.blocks.get_item_clean_start(redone)?;
-            return Some(txn.store.materialize(slice));
+            let slice = store.blocks.get_item_clean_start(redone)?;
+            return Some(store.materialize(slice));
         }
 
         let mut parent_block = item.parent.as_branch().and_then(|b| b.item);
@@ -264,13 +265,13 @@ impl ItemPtr {
                 {
                     return None;
                 }
+                (store, tx_state) = txn.split_mut();
                 let mut redone = parent.redone;
                 while let Some(id) = redone.as_ref() {
-                    parent_block = txn
-                        .store
+                    parent_block = store
                         .blocks
                         .get_item_clean_start(id)
-                        .map(|slice| txn.store.materialize(slice));
+                        .map(|slice| store.materialize(slice));
                     redone = parent_block.and_then(|ptr| ptr.redone);
                 }
             }
@@ -305,11 +306,11 @@ impl ItemPtr {
                             left = Some(left_right);
                             while let Some(item) = left.as_deref() {
                                 if let Some(id) = item.redone.as_ref() {
-                                    left = match txn.store.blocks.get_item_clean_start(id) {
+                                    left = match store.blocks.get_item_clean_start(id) {
                                         None => break,
                                         Some(slice) => {
-                                            let ptr = txn.store.materialize(slice);
-                                            txn.merge_blocks.push(ptr.id().clone());
+                                            let ptr = store.materialize(slice);
+                                            tx_state.merge_blocks.push(ptr.id().clone());
                                             Some(ptr)
                                         }
                                     };
@@ -344,8 +345,8 @@ impl ItemPtr {
                     let p = trace.parent.as_branch().and_then(|p| p.item);
                     if parent_block != p {
                         left_trace = if let Some(redone) = trace.redone.as_ref() {
-                            let slice = txn.store.blocks.get_item_clean_start(redone);
-                            slice.map(|s| txn.store.materialize(s))
+                            let slice = store.blocks.get_item_clean_start(redone);
+                            slice.map(|s| store.materialize(s))
                         } else {
                             None
                         };
@@ -370,8 +371,8 @@ impl ItemPtr {
                     let p = trace.parent.as_branch().and_then(|p| p.item);
                     if parent_block != p {
                         right_trace = if let Some(redone) = trace.redone.as_ref() {
-                            let slice = txn.store.blocks.get_item_clean_start(redone);
-                            slice.map(|s| txn.store.materialize(s))
+                            let slice = store.blocks.get_item_clean_start(redone);
+                            slice.map(|s| store.materialize(s))
                         } else {
                             None
                         };
@@ -390,8 +391,8 @@ impl ItemPtr {
             }
         }
 
-        let next_clock = txn.store.get_local_state();
-        let next_id = ID::new(txn.store.client_id, next_clock);
+        let next_clock = store.get_local_state();
+        let next_id = ID::new(store.client_id, next_clock);
         let mut redone_item = Item::new(
             next_id,
             left,
@@ -431,7 +432,8 @@ impl ItemPtr {
     pub(crate) fn delete_as_cleanup(&self, txn: &mut TransactionMut, is_local: bool) {
         txn.delete(*self);
         if is_local {
-            txn.delete_set.insert(*self.id(), self.len());
+            let (_, state) = txn.split_mut();
+            state.delete_set.insert(*self.id(), self.len());
         }
     }
 
@@ -649,7 +651,7 @@ impl ItemPtr {
                             // inherit links from the block we're overriding
                             left.info.clear_linked();
                             this.info.set_linked();
-                            let all_links = &mut txn.store.linked_by;
+                            let all_links = &mut txn.store_mut().linked_by;
                             if let Some(linked_by) = all_links.remove(&left) {
                                 all_links.insert(self_ptr, linked_by);
                                 // since left is being deleted, it will remove
@@ -707,7 +709,8 @@ impl ItemPtr {
 
             match &mut this.content {
                 ItemContent::Deleted(len) => {
-                    txn.delete_set.insert(this.id, *len);
+                    let (_, state) = txn.split_mut();
+                    state.delete_set.insert(this.id, *len);
                     this.mark_as_deleted();
                 }
                 ItemContent::Move(m) => m.integrate_block(txn, self_ptr),
@@ -715,9 +718,9 @@ impl ItemPtr {
                     *parent_doc = Some(txn.doc().clone());
                     {
                         let mut child_txn = doc.transact_mut();
-                        child_txn.store.parent = Some(self_ptr);
+                        child_txn.store_mut().parent = Some(self_ptr);
                     }
-                    let subdocs = txn.subdocs.get_or_init();
+                    let subdocs = txn.subdocs_mut();
                     subdocs.added.insert(DocAddr::new(doc), doc.clone());
                     if doc.should_load() {
                         subdocs.loaded.insert(doc.addr(), doc.clone());
@@ -740,7 +743,7 @@ impl ItemPtr {
             }
             txn.add_changed_type(parent_ref, this.parent_sub.clone());
             if this.info.is_linked() {
-                if let Some(links) = txn.store.linked_by.get(&self_ptr).cloned() {
+                if let Some(links) = txn.store_mut().linked_by.get(&self_ptr).cloned() {
                     // notify links about changes
                     for link in links.iter() {
                         txn.add_changed_type(*link, this.parent_sub.clone());

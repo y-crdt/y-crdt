@@ -1157,7 +1157,7 @@ mod test {
             let mut i = 0;
             let mut deleted = s.delete_set.deleted_blocks();
             while let Some(BlockSlice::Item(b)) = deleted.next(&txn) {
-                let item = txn.store.materialize(b);
+                let item = txn.store_mut().materialize(b);
                 if let ItemContent::String(str) = &item.content {
                     let t = (
                         item.is_deleted(),

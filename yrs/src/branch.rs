@@ -392,7 +392,7 @@ impl Branch {
         mut ptr: Option<ItemPtr>,
         mut index: u32,
     ) -> (Option<ItemPtr>, Option<ItemPtr>) {
-        let encoding = txn.store.offset_kind;
+        let encoding = txn.store().offset_kind;
         while let Some(item) = ptr {
             let content_len = item.content_len(encoding);
             if !item.is_deleted() && item.is_countable() {
@@ -406,11 +406,11 @@ impl Branch {
                     } else {
                         index
                     };
-                    let right = txn.store.blocks.split_block(item, index, encoding);
+                    let right = txn.store_mut().blocks.split_block(item, index, encoding);
                     if let Some(_) = item.moved {
                         if let Some(src) = right {
-                            if let Some(&prev_dst) = txn.prev_moved.get(&item) {
-                                txn.prev_moved.insert(src, prev_dst);
+                            if let Some(prev_dst) = txn.moved(item) {
+                                txn.mark_moved(src, prev_dst);
                             }
                         }
                     }
@@ -444,11 +444,11 @@ impl Branch {
                             remaining
                         };
                         remaining = 0;
-                        let new_right = txn.store.blocks.split_block(item, offset, encoding);
+                        let new_right = txn.store_mut().blocks.split_block(item, offset, encoding);
                         if let Some(_) = item.moved {
                             if let Some(src) = new_right {
-                                if let Some(&prev_dst) = txn.prev_moved.get(&item) {
-                                    txn.prev_moved.insert(src, prev_dst);
+                                if let Some(prev_dst) = txn.moved(item) {
+                                    txn.mark_moved(src, prev_dst);
                                 }
                             }
                         }

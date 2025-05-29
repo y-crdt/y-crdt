@@ -187,18 +187,17 @@ impl Move {
                         self.push_override(moved_ptr);
                         if Some(start_ptr) != init {
                             // only add this to mergeStructs if this is not the first item
-                            txn.merge_blocks.push(start_item.id);
+                            txn.mark_merge(start_item.id);
                         }
                     }
                     max_priority = max_priority.max(next_prio);
                     // was already moved
                     let prev_move = start_item.moved;
                     if let Some(prev_move) = prev_move {
-                        if !txn.prev_moved.contains_key(&prev_move) && txn.has_added(prev_move.id())
-                        {
+                        if !txn.moved(prev_move).is_some() && txn.has_added(prev_move.id()) {
                             // only override prevMoved if the prevMoved item is not new
                             // we need to know which item previously moved an item
-                            txn.prev_moved.insert(start_ptr, prev_move);
+                            txn.mark_moved(start_ptr, prev_move);
                         }
                     }
                     start_item.moved = Some(item);
@@ -231,16 +230,16 @@ impl Move {
         while start != end && start.is_some() {
             if let Some(mut start_ptr) = start {
                 if start_ptr.moved == Some(item) {
-                    if let Some(&prev_moved) = txn.prev_moved.get(&start_ptr) {
+                    if let Some(prev_moved) = txn.moved(start_ptr) {
                         if txn.has_added(item.id()) {
                             if prev_moved == item {
                                 // Edge case: Item has been moved by this move op and it has been created & deleted in the same transaction (hence no effect that should be emitted by the change computation)
-                                txn.prev_moved.remove(&start_ptr);
+                                txn.unmark_moved(start_ptr);
                             }
                         }
                     } else {
                         // Normal case: item has been moved by this move and it has not been created & deleted in the same transaction
-                        txn.prev_moved.insert(start_ptr, item);
+                        txn.mark_moved(start_ptr, item);
                     }
                     start_ptr.moved = None;
                 }

@@ -155,7 +155,7 @@ where
         !inner
             .scope
             .iter()
-            .any(|parent| txn.changed_parent_types.contains(parent))
+            .any(|parent| txn.changed_parent_types().contains(parent))
             || !txn
                 .origin()
                 .map(|o| inner.options.tracked_origins.contains(o))
@@ -180,7 +180,7 @@ where
 
         let mut insertions = DeleteSet::new();
         for (client, &end_clock) in txn.after_state().iter() {
-            let start_clock = txn.before_state.get(client);
+            let start_clock = txn.before_state().get(client);
             let diff = end_clock - start_clock;
             if diff != 0 {
                 insertions.insert(ID::new(*client, start_clock), diff);
@@ -202,12 +202,12 @@ where
             // append change to last stack op
             if let Some(last_op) = stack.last_mut() {
                 // always true - we checked if stack is empty above
-                last_op.deletions.merge(txn.delete_set.clone());
+                last_op.deletions.merge(txn.delete_set().clone());
                 last_op.insertions.merge(insertions);
             }
         } else {
             // create a new stack op
-            let item = StackItem::new(txn.delete_set.clone(), insertions);
+            let item = StackItem::new(txn.delete_set().clone(), insertions);
             stack.push(item);
         }
 
@@ -215,7 +215,7 @@ where
             inner.last_change = now;
         }
         // make sure that deleted structs are not gc'd
-        let ds = txn.delete_set.clone();
+        let ds = txn.delete_set().clone();
         let mut deleted = ds.deleted_blocks();
         while let Some(slice) = deleted.next(txn) {
             if let Some(item) = slice.as_item() {
@@ -228,9 +228,17 @@ where
         let last_op = stack.last_mut().unwrap();
         let meta = std::mem::take(&mut last_op.meta);
         let mut event = if undoing {
-            Event::undo(meta, txn.origin.clone(), txn.changed_parent_types.clone())
+            Event::undo(
+                meta,
+                txn.origin().cloned(),
+                txn.changed_parent_types().into(),
+            )
         } else {
-            Event::redo(meta, txn.origin.clone(), txn.changed_parent_types.clone())
+            Event::redo(
+                meta,
+                txn.origin().cloned(),
+                txn.changed_parent_types().into(),
+            )
         };
         if !extend {
             if inner.observer_added.has_subscribers() {
@@ -644,7 +652,7 @@ where
         );
         txn.commit();
         let changed = if let Some(item) = result {
-            let mut e = Event::undo(item.meta, Some(origin), txn.changed_parent_types.clone());
+            let mut e = Event::undo(item.meta, Some(origin), txn.changed_parent_types().into());
             if inner.observer_popped.has_subscribers() {
                 inner.observer_popped.trigger(|fun| fun(&txn, &mut e));
             }
@@ -732,7 +740,7 @@ where
         );
         txn.commit();
         let changed = if let Some(item) = result {
-            let mut e = Event::redo(item.meta, Some(origin), txn.changed_parent_types.clone());
+            let mut e = Event::redo(item.meta, Some(origin), txn.changed_parent_types().into());
             if inner.observer_popped.has_subscribers() {
                 inner.observer_popped.trigger(|fun| fun(&txn, &mut e));
             }
@@ -759,10 +767,10 @@ where
             let deleted: Vec<_> = item.insertions.deleted_blocks().collect(txn);
             for slice in deleted {
                 if let BlockSlice::Item(slice) = slice {
-                    let mut item = txn.store.materialize(slice);
+                    let mut item = txn.store_mut().materialize(slice);
                     if item.redone.is_some() {
                         let slice = txn.store_mut().follow_redone(item.id())?;
-                        item = txn.store.materialize(slice);
+                        item = txn.store_mut().materialize(slice);
                     }
 
                     if !item.is_deleted() && scope.iter().any(|b| b.is_parent_of(Some(item))) {
@@ -774,7 +782,7 @@ where
             let mut deleted = item.deletions.deleted_blocks();
             while let Some(slice) = deleted.next(txn) {
                 if let BlockSlice::Item(slice) = slice {
-                    let ptr = txn.store.materialize(slice);
+                    let ptr = txn.store_mut().materialize(slice);
                     if scope.iter().any(|b| b.is_parent_of(Some(ptr)))
                         && !item.insertions.is_deleted(ptr.id())
                     // Never redo structs in stackItem.insertions because they were created and deleted in the same capture interval.

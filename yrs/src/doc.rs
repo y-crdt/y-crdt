@@ -781,7 +781,7 @@ impl Doc {
         for subdoc in subdocs {
             subdoc.destroy(&mut txn);
         }
-        if let Some(mut item) = txn.store.parent.take() {
+        if let Some(mut item) = txn.store_mut().parent.take() {
             let parent_ref = item.clone();
             let is_deleted = item.is_deleted();
             if let ItemContent::Doc(_, content) = &mut item.content {
@@ -1347,15 +1347,15 @@ mod test {
             // Compare values
             assert_eq!(
                 before_state.swap(None),
-                Some(Arc::new(txn.before_state.clone()))
+                Some(Arc::new(txn.before_state().clone()))
             );
             assert_eq!(
                 after_state.swap(None),
-                Some(Arc::new(txn.after_state.clone()))
+                Some(Arc::new(txn.after_state().clone()))
             );
             assert_eq!(
                 delete_set.swap(None),
-                Some(Arc::new(txn.delete_set.clone()))
+                Some(Arc::new(txn.delete_set().clone()))
             );
         }
 
@@ -1366,7 +1366,7 @@ mod test {
         txn.commit();
         assert_ne!(
             after_state.swap(None),
-            Some(Arc::new(txn.after_state.clone()))
+            Some(Arc::new(txn.after_state().clone()))
         );
     }
 
@@ -2290,11 +2290,11 @@ mod test {
             let u1 = updates.pop().unwrap();
             let mut txn = d2.transact_mut();
             txn.apply_update(u1).unwrap();
-            assert!(txn.store.pending.is_none()); // applied
+            assert!(txn.store().pending.is_none()); // applied
             txn.apply_update(u3).unwrap();
-            assert!(txn.store.pending.is_some()); // pending update waiting for u2
+            assert!(txn.store().pending.is_some()); // pending update waiting for u2
             txn.apply_update(u2).unwrap();
-            assert!(txn.store.pending.is_none()); // applied after fixing the missing update
+            assert!(txn.store().pending.is_none()); // applied after fixing the missing update
         }
 
         let map = d2.get_or_insert_map("map");
@@ -2355,9 +2355,9 @@ mod test {
         let e_copy = e.clone();
         d1.observe_after_transaction_with("key", move |txn| {
             e_copy.swap(Some(Arc::new((
-                txn.before_state.clone(),
-                txn.after_state.clone(),
-                txn.delete_set.clone(),
+                txn.before_state().clone(),
+                txn.after_state().clone(),
+                txn.delete_set().clone(),
             ))));
         })
         .unwrap();
