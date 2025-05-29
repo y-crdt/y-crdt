@@ -34,9 +34,9 @@ pub struct TransactionCleanupEvent {
 impl TransactionCleanupEvent {
     pub fn new(txn: &TransactionMut) -> Self {
         TransactionCleanupEvent {
-            before_state: txn.before_state.clone(),
-            after_state: txn.after_state.clone(),
-            delete_set: txn.delete_set.clone(),
+            before_state: txn.before_state().clone(),
+            after_state: txn.after_state().clone(),
+            delete_set: txn.delete_set().clone(),
         }
     }
 }
