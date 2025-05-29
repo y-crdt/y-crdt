@@ -287,90 +287,6 @@ pub trait ReadTxn: Sized {
     }
 }
 
-pub trait WriteTxn: Sized {
-    fn store_mut(&mut self) -> &mut Store;
-    fn subdocs_mut(&mut self) -> &mut Subdocs;
-
-    /// Returns a [TextRef] data structure stored under a given `name`. Text structures are used for
-    /// collaborative text editing: they expose operations to append and remove chunks of text,
-    /// which are free to execute concurrently by multiple peers over remote boundaries.
-    ///
-    /// If no structure under defined `name` existed before, it will be created and returned
-    /// instead.
-    ///
-    /// If a structure under defined `name` already existed, but its type was different it will be
-    /// reinterpreted as a text (in such case a sequence component of complex data type will be
-    /// interpreted as a list of text chunks).
-    fn get_or_insert_text<N: Into<Arc<str>>>(&mut self, name: N) -> TextRef {
-        TextRef::root(name).get_or_create(self)
-    }
-
-    /// Returns a [MapRef] data structure stored under a given `name`. Maps are used to store key-value
-    /// pairs associated. These values can be primitive data (similar but not limited to
-    /// a JavaScript Object Notation) as well as other shared types (Yrs maps, arrays, text
-    /// structures etc.), enabling to construct a complex recursive tree structures.
-    ///
-    /// If no structure under defined `name` existed before, it will be created and returned
-    /// instead.
-    ///
-    /// If a structure under defined `name` already existed, but its type was different it will be
-    /// reinterpreted as a map (in such case a map component of complex data type will be
-    /// interpreted as native map).
-    fn get_or_insert_map<N: Into<Arc<str>>>(&mut self, name: N) -> MapRef {
-        MapRef::root(name).get_or_create(self)
-    }
-
-    /// Returns an [ArrayRef] data structure stored under a given `name`. Array structures are used for
-    /// storing a sequences of elements in ordered manner, positioning given element accordingly
-    /// to its index.
-    ///
-    /// If no structure under defined `name` existed before, it will be created and returned
-    /// instead.
-    ///
-    /// If a structure under defined `name` already existed, but its type was different it will be
-    /// reinterpreted as an array (in such case a sequence component of complex data type will be
-    /// interpreted as a list of inserted values).
-    fn get_or_insert_array<N: Into<Arc<str>>>(&mut self, name: N) -> ArrayRef {
-        ArrayRef::root(name).get_or_create(self)
-    }
-
-    /// Returns a [XmlFragmentRef] data structure stored under a given `name`. XML elements represent
-    /// nodes of XML document. They can contain attributes (key-value pairs, both of string type)
-    /// as well as other nested XML elements or text values, which are stored in their insertion
-    /// order.
-    ///
-    /// If no structure under defined `name` existed before, it will be created and returned
-    /// instead.
-    ///
-    /// If a structure under defined `name` already existed, but its type was different it will be
-    /// reinterpreted as a XML element (in such case a map component of complex data type will be
-    /// interpreted as map of its attributes, while a sequence component - as a list of its child
-    /// XML nodes).
-    fn get_or_insert_xml_fragment<N: Into<Arc<str>>>(&mut self, name: N) -> XmlFragmentRef {
-        XmlFragmentRef::root(name).get_or_create(self)
-    }
-
-    /// Prunes a pending updates from the current document and returns them.
-    /// Returns `None` if current document didn't have any pending updates.
-    fn prune_pending(&mut self) -> Option<Update> {
-        let mut merge = Vec::with_capacity(2);
-        let store = self.store_mut();
-        if let Some(pending) = store.pending.take() {
-            merge.push(pending.update);
-        }
-        if let Some(pending_ds) = store.pending_ds.take() {
-            let mut u = Update::new();
-            u.delete_set = pending_ds.clone();
-            merge.push(u);
-        }
-        if merge.is_empty() {
-            None
-        } else {
-            Some(Update::merge_updates(merge))
-        }
-    }
-}
-
 fn merge_pending_v1(update: Vec<u8>, store: &Store) -> Vec<u8> {
     let mut merge = VecDeque::new();
     if let Some(pending) = store.pending.as_ref() {
@@ -471,17 +387,6 @@ impl<'doc> ReadTxn for TransactionMut<'doc> {
     }
 }
 
-impl<'doc> WriteTxn for TransactionMut<'doc> {
-    #[inline]
-    fn store_mut(&mut self) -> &mut Store {
-        self.store.deref_mut()
-    }
-
-    fn subdocs_mut(&mut self) -> &mut Subdocs {
-        self.subdocs.get_or_init()
-    }
-}
-
 impl<'doc> Drop for TransactionMut<'doc> {
     fn drop(&mut self) {
         self.commit()
@@ -508,6 +413,94 @@ impl<'doc> TransactionMut<'doc> {
             prev_moved: HashMap::default(),
             subdocs: None,
             committed: false,
+        }
+    }
+
+    #[inline]
+    pub fn store_mut(&mut self) -> &mut Store {
+        self.store.deref_mut()
+    }
+
+    pub fn subdocs_mut(&mut self) -> &mut Subdocs {
+        self.subdocs.get_or_init()
+    }
+
+    /// Returns a [TextRef] data structure stored under a given `name`. Text structures are used for
+    /// collaborative text editing: they expose operations to append and remove chunks of text,
+    /// which are free to execute concurrently by multiple peers over remote boundaries.
+    ///
+    /// If no structure under defined `name` existed before, it will be created and returned
+    /// instead.
+    ///
+    /// If a structure under defined `name` already existed, but its type was different it will be
+    /// reinterpreted as a text (in such case a sequence component of complex data type will be
+    /// interpreted as a list of text chunks).
+    pub fn get_or_insert_text<N: Into<Arc<str>>>(&mut self, name: N) -> TextRef {
+        TextRef::root(name).get_or_create(self)
+    }
+
+    /// Returns a [MapRef] data structure stored under a given `name`. Maps are used to store key-value
+    /// pairs associated. These values can be primitive data (similar but not limited to
+    /// a JavaScript Object Notation) as well as other shared types (Yrs maps, arrays, text
+    /// structures etc.), enabling to construct a complex recursive tree structures.
+    ///
+    /// If no structure under defined `name` existed before, it will be created and returned
+    /// instead.
+    ///
+    /// If a structure under defined `name` already existed, but its type was different it will be
+    /// reinterpreted as a map (in such case a map component of complex data type will be
+    /// interpreted as native map).
+    pub fn get_or_insert_map<N: Into<Arc<str>>>(&mut self, name: N) -> MapRef {
+        MapRef::root(name).get_or_create(self)
+    }
+
+    /// Returns an [ArrayRef] data structure stored under a given `name`. Array structures are used for
+    /// storing a sequences of elements in ordered manner, positioning given element accordingly
+    /// to its index.
+    ///
+    /// If no structure under defined `name` existed before, it will be created and returned
+    /// instead.
+    ///
+    /// If a structure under defined `name` already existed, but its type was different it will be
+    /// reinterpreted as an array (in such case a sequence component of complex data type will be
+    /// interpreted as a list of inserted values).
+    pub fn get_or_insert_array<N: Into<Arc<str>>>(&mut self, name: N) -> ArrayRef {
+        ArrayRef::root(name).get_or_create(self)
+    }
+
+    /// Returns a [XmlFragmentRef] data structure stored under a given `name`. XML elements represent
+    /// nodes of XML document. They can contain attributes (key-value pairs, both of string type)
+    /// as well as other nested XML elements or text values, which are stored in their insertion
+    /// order.
+    ///
+    /// If no structure under defined `name` existed before, it will be created and returned
+    /// instead.
+    ///
+    /// If a structure under defined `name` already existed, but its type was different it will be
+    /// reinterpreted as a XML element (in such case a map component of complex data type will be
+    /// interpreted as map of its attributes, while a sequence component - as a list of its child
+    /// XML nodes).
+    pub fn get_or_insert_xml_fragment<N: Into<Arc<str>>>(&mut self, name: N) -> XmlFragmentRef {
+        XmlFragmentRef::root(name).get_or_create(self)
+    }
+
+    /// Prunes a pending updates from the current document and returns them.
+    /// Returns `None` if current document didn't have any pending updates.
+    pub fn prune_pending(&mut self) -> Option<Update> {
+        let mut merge = Vec::with_capacity(2);
+        let store = self.store_mut();
+        if let Some(pending) = store.pending.take() {
+            merge.push(pending.update);
+        }
+        if let Some(pending_ds) = store.pending_ds.take() {
+            let mut u = Update::new();
+            u.delete_set = pending_ds.clone();
+            merge.push(u);
+        }
+        if merge.is_empty() {
+            None
+        } else {
+            Some(Update::merge_updates(merge))
         }
     }
 
@@ -553,11 +546,6 @@ impl<'doc> TransactionMut<'doc> {
     #[inline]
     pub(crate) fn store(&self) -> &Store {
         &self.store
-    }
-
-    #[inline]
-    pub(crate) fn store_mut(&mut self) -> &mut Store {
-        &mut self.store
     }
 
     /// Encodes changes made within the scope of the current transaction using lib0 v1 encoding.

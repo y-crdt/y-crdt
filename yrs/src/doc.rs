@@ -10,7 +10,7 @@ use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::OptionExt;
 use crate::{
     uuid_v4, uuid_v4_from, ArrayRef, BranchID, MapRef, Out, ReadTxn, TextRef, Transact,
-    TransactionAcqError, Uuid, WriteTxn, XmlFragmentRef,
+    TransactionAcqError, Uuid, XmlFragmentRef,
 };
 use crate::{Any, Subscription};
 use std::collections::HashMap;
@@ -759,10 +759,7 @@ impl Doc {
 
     /// Sends a load request to a parent document. Works only if current document is a sub-document
     /// of a document.
-    pub fn load<T>(&self, parent_txn: &mut T)
-    where
-        T: WriteTxn,
-    {
+    pub fn load(&self, parent_txn: &mut TransactionMut) {
         let should_load = self.store.set_should_load(true);
         if !should_load {
             let txn = self.transact();
@@ -777,10 +774,7 @@ impl Doc {
 
     /// Starts destroy procedure for a current document, triggering an "destroy" callback and
     /// invalidating all event callback subscriptions.
-    pub fn destroy<T>(&self, parent_txn: &mut T)
-    where
-        T: WriteTxn,
-    {
+    pub fn destroy(&self, parent_txn: &mut TransactionMut) {
         let mut txn = self.transact_mut();
         let store = txn.store_mut();
         let subdocs: Vec<_> = store.subdocs.values().cloned().collect();
@@ -1044,7 +1038,7 @@ mod test {
     use crate::{
         any, uuid_v4, Any, Array, ArrayPrelim, ArrayRef, DeleteSet, Doc, GetString, Map, MapRef,
         OffsetKind, Options, StateVector, Subscription, Text, TextPrelim, TextRef, Transact, Uuid,
-        WriteTxn, XmlElementPrelim, XmlFragment, XmlFragmentRef, XmlTextPrelim, XmlTextRef, ID,
+        XmlElementPrelim, XmlFragment, XmlFragmentRef, XmlTextPrelim, XmlTextRef, ID,
     };
     use arc_swap::ArcSwapOption;
     use assert_matches2::assert_matches;

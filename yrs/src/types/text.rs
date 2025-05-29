@@ -1512,7 +1512,7 @@ mod test {
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
     use crate::{
         any, Any, ArrayPrelim, Doc, GetString, Map, MapPrelim, MapRef, Observable, StateVector,
-        Text, Transact, Update, WriteTxn, ID,
+        Text, Transact, Update, ID,
     };
     use arc_swap::ArcSwapOption;
     use fastrand::Rng;
@@ -2497,11 +2497,7 @@ mod test {
             "👩‍❤️‍💋‍👨".len() as u32,
             HashMap::new(),
         );
-        txt.remove_range(
-            &mut txn,
-            "👯❤️❤️🙇‍♀️🙇‍♀️⏰⏰👩‍❤️‍💋‍👩".len() as u32,
-            "👩‍❤️‍💋‍👨".len() as u32,
-        );
+        txt.remove_range(&mut txn, "👯❤️❤️🙇‍♀️🙇‍♀️⏰⏰👩‍❤️‍💋‍👩".len() as u32, "👩‍❤️‍💋‍👨".len() as u32);
         assert_eq!(txt.get_string(&txn).as_str(), "👯❤️❤️🙇‍♀️🙇‍♀️⏰⏰👩‍❤️‍💋‍👨");
     }
 

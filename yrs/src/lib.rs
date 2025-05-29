@@ -110,7 +110,7 @@
 //! (eg. image binaries or [ArrayRef]s that we could interpret in example as nested tables).
 //!
 //! ```rust
-//! use yrs::{Any, Array, ArrayPrelim, Doc, GetString, Text, Transact, WriteTxn, XmlFragment, XmlTextPrelim};
+//! use yrs::{Any, Array, ArrayPrelim, Doc, GetString, Text, Transact, XmlFragment, XmlTextPrelim};
 //! use yrs::types::Attrs;
 //!
 //! let doc = Doc::new();
@@ -366,7 +366,7 @@
 //! as well as show the differences between them:
 //!
 //! ```rust
-//! use yrs::{Doc, GetString, Options, ReadTxn, Text, Transact, Update, WriteTxn, XmlFragment, XmlTextPrelim};
+//! use yrs::{Doc, GetString, Options, ReadTxn, Text, Transact, Update, XmlFragment, XmlTextPrelim};
 //! use yrs::types::Attrs;
 //! use yrs::types::text::{Diff, YChange};
 //! use yrs::updates::decoder::Decode;
@@ -570,7 +570,7 @@
 //! the document state in a way similar to [JSONPath](https://en.wikipedia.org/wiki/JSONPath):
 //!
 //! ```rust
-//! use yrs::{any, Array, ArrayPrelim, Doc, In, JsonPath, JsonPathEval, Map, MapPrelim, Out, Transact, WriteTxn};
+//! use yrs::{any, Array, ArrayPrelim, Doc, In, JsonPath, JsonPathEval, Map, MapPrelim, Out, Transact};
 //!
 //! let doc = Doc::new();
 //! let mut txn = doc.transact_mut();
@@ -673,7 +673,6 @@ pub use crate::transaction::ReadTxn;
 pub use crate::transaction::RootRefs;
 pub use crate::transaction::Transaction;
 pub use crate::transaction::TransactionMut;
-pub use crate::transaction::WriteTxn;
 pub use crate::types::array::Array;
 pub use crate::types::array::ArrayPrelim;
 pub use crate::types::array::ArrayRef;

@@ -493,7 +493,7 @@ impl From<XmlElementPrelim> for In {
 /// # Example
 ///
 /// ```rust
-/// use yrs::{Any, Array, ArrayPrelim, Doc, GetString, Text, Transact, WriteTxn, XmlFragment, XmlTextPrelim};
+/// use yrs::{Any, Array, ArrayPrelim, Doc, GetString, Text, Transact, XmlFragment, XmlTextPrelim};
 /// use yrs::types::Attrs;
 ///
 /// let doc = Doc::new();

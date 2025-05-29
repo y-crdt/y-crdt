@@ -208,7 +208,7 @@ impl Decode for Snapshot {
 
 #[cfg(test)]
 mod test {
-    use crate::{Doc, ReadTxn, StateVector, Text, Transact, WriteTxn};
+    use crate::{Doc, ReadTxn, StateVector, Text, Transact};
     use std::cmp::Ordering;
     use std::iter::FromIterator;
 

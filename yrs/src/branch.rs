@@ -8,7 +8,7 @@ use crate::types::{
 };
 use crate::{
     ArrayRef, Doc, MapRef, Observer, Origin, Out, ReadTxn, Subscription, TextRef, TransactionMut,
-    WriteTxn, XmlElementRef, XmlFragmentRef, XmlTextRef, ID,
+    XmlElementRef, XmlFragmentRef, XmlTextRef, ID,
 };
 use serde::{Deserialize, Serialize};
 use std::borrow::Borrow;
@@ -701,7 +701,7 @@ impl<S: RootRef> Root<S> {
 
     /// Returns a reference to a shared root-level collection current [Root] represents, or creates
     /// it if it wasn't instantiated before.
-    pub fn get_or_create<T: WriteTxn>(&self, txn: &mut T) -> S {
+    pub fn get_or_create(&self, txn: &mut TransactionMut) -> S {
         let store = txn.store_mut();
         let branch = store.get_or_create_type(self.name.clone(), S::type_ref());
         S::from(branch)
@@ -732,7 +732,7 @@ impl<S> Into<BranchID> for Root<S> {
 /// # Example
 ///
 /// ```rust
-/// use yrs::{Doc, Map, Nested, SharedRef, TextPrelim, TextRef, Transact, WriteTxn};
+/// use yrs::{Doc, Map, Nested, SharedRef, TextPrelim, TextRef, Transact};
 ///
 /// let doc = Doc::new();
 /// let mut txn = doc.transact_mut();
@@ -838,7 +838,7 @@ impl<S: SharedRef> Hook<S> {
     /// # Example
     ///
     /// ```rust
-    /// use yrs::{Hook, Doc, Map, MapRef, Nested, SharedRef, TextPrelim, TextRef, Transact, WriteTxn};
+    /// use yrs::{Hook, Doc, Map, MapRef, Nested, SharedRef, TextPrelim, TextRef, Transact};
     ///
     /// let doc = Doc::new();
     /// let mut txn = doc.transact_mut();
