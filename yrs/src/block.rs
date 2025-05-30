@@ -1,5 +1,5 @@
 use crate::branch::{Branch, BranchPtr};
-use crate::doc::{DocAddr, OffsetKind};
+use crate::doc::OffsetKind;
 use crate::encoding::read::Error;
 use crate::error::UpdateError;
 use crate::gc::GCCollector;
@@ -721,9 +721,9 @@ impl ItemPtr {
                         child_txn.doc_mut().parent = Some(self_ptr);
                     }
                     let subdocs = txn.subdocs_mut();
-                    subdocs.added.insert(DocAddr::new(doc), doc.clone());
+                    subdocs.added.insert(doc.guid());
                     if doc.should_load() {
-                        subdocs.loaded.insert(doc.addr(), doc.clone());
+                        subdocs.loaded.insert(doc.guid());
                     }
                 }
                 ItemContent::Format(_, _) => {

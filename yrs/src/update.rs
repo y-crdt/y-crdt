@@ -1053,11 +1053,11 @@ impl std::fmt::Display for Update {
 
 /// Conversion for tests only
 #[cfg(test)]
-impl Into<Doc> for Update {
-    fn into(self) -> Doc {
+impl Into<crate::Doc> for Update {
+    fn into(self) -> crate::Doc {
         use crate::doc::Options;
 
-        let mut doc = Doc::with_options(Options::with_client_id(0));
+        let mut doc = crate::Doc::with_options(Options::with_client_id(0));
         for (_, vec) in self.blocks.clients {
             for block in vec {
                 if let BlockCarrier::Item(block) = block {

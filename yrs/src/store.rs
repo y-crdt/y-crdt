@@ -1,7 +1,7 @@
 use crate::block::{BlockCell, ClientID, ItemContent, ItemPtr};
 use crate::block_store::BlockStore;
 use crate::branch::{Branch, BranchPtr};
-use crate::doc::{DocAddr, Options};
+use crate::doc::Options;
 use crate::error::Error;
 use crate::event::SubdocsEvent;
 use crate::id_set::DeleteSet;
@@ -46,7 +46,7 @@ pub struct Store {
     /// into `blocks`.
     pub(crate) pending_ds: Option<DeleteSet>,
 
-    pub(crate) subdocs: HashMap<DocAddr, Doc>,
+    pub(crate) subdocs: HashMap<Uuid, Doc>,
 
     pub(crate) events: Option<Box<DocEvents>>,
 
@@ -335,6 +335,14 @@ impl Store {
         ptr
     }
 
+    pub fn subdoc(&self, guid: &Uuid) -> Option<&Doc> {
+        self.subdocs.get(guid)
+    }
+
+    pub fn subdoc_mut(&mut self, guid: &Uuid) -> Option<&mut Doc> {
+        self.subdocs.get_mut(guid)
+    }
+
     /// Returns a collection of sub documents linked within the structures of this document store.
     pub fn subdocs(&self) -> SubdocsIter {
         SubdocsIter(self.subdocs.values())
@@ -343,7 +351,7 @@ impl Store {
     /// Returns a collection of globally unique identifiers of sub documents linked within
     /// the structures of this document store.
     pub fn subdoc_guids(&self) -> SubdocGuids {
-        SubdocGuids(self.subdocs.values())
+        SubdocGuids(self.subdocs.keys())
     }
 
     pub(crate) fn follow_redone(&self, id: &ID) -> Option<ItemSlice> {
@@ -408,7 +416,7 @@ impl std::fmt::Display for Store {
 }
 
 #[repr(transparent)]
-pub struct SubdocsIter<'doc>(std::collections::hash_map::Values<'doc, DocAddr, Doc>);
+pub struct SubdocsIter<'doc>(std::collections::hash_map::Values<'doc, Uuid, Doc>);
 
 impl<'doc> Iterator for SubdocsIter<'doc> {
     type Item = &'doc Doc;
@@ -419,14 +427,14 @@ impl<'doc> Iterator for SubdocsIter<'doc> {
 }
 
 #[repr(transparent)]
-pub struct SubdocGuids<'doc>(std::collections::hash_map::Values<'doc, DocAddr, Doc>);
+pub struct SubdocGuids<'doc>(std::collections::hash_map::Keys<'doc, Uuid, Doc>);
 
 impl<'doc> Iterator for SubdocGuids<'doc> {
-    type Item = Uuid;
+    type Item = &'doc Uuid;
 
     fn next(&mut self) -> Option<Self::Item> {
         let d = self.0.next()?;
-        Some(d.guid())
+        Some(d)
     }
 }
 

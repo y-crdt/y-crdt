@@ -412,37 +412,31 @@ impl Doc {
         if !should_load {
             let txn = self.transact();
             if txn.doc().is_subdoc() {
-                parent_txn.subdocs_mut().loaded.insert(self);
+                parent_txn.subdocs_mut().loaded.insert(self.guid());
             }
         }
     }
 
     /// Starts destroy procedure for a current document, triggering an "destroy" callback and
     /// invalidating all event callback subscriptions.
-    pub fn destroy(&self, parent_txn: &mut TransactionMut) {
+    pub fn destroy(&mut self, parent_txn: &mut TransactionMut) {
         let mut txn = self.transact_mut();
         let store = txn.doc_mut();
-        let subdocs: Vec<_> = store.subdocs.values().cloned().collect();
-        for subdoc in subdocs {
+        for subdoc in store.subdocs.values_mut() {
             subdoc.destroy(&mut txn);
         }
         if let Some(mut item) = txn.doc_mut().parent.take() {
             let parent_ref = item.clone();
             let is_deleted = item.is_deleted();
             if let ItemContent::Doc(_, content) = &mut item.content {
-                let mut options = (**content.store.options).clone();
+                let mut options = content.store.options.clone();
                 options.should_load = false;
                 let new_ref = Doc::subdoc(parent_ref, options);
+                let subdocs = parent_txn.subdocs_mut();
                 if !is_deleted {
-                    parent_txn
-                        .subdocs_mut()
-                        .added
-                        .insert(new_ref.addr(), new_ref.clone());
+                    subdocs.added.insert(new_ref.guid());
                 }
-                parent_txn
-                    .subdocs_mut()
-                    .removed
-                    .insert(new_ref.addr(), new_ref.clone());
+                subdocs.removed.insert(new_ref.guid());
 
                 *content = new_ref;
             }
@@ -467,10 +461,6 @@ impl Doc {
 
     pub fn ptr_eq(a: &Doc, b: &Doc) -> bool {
         std::ptr::eq(a as *const Doc, b as *const Doc)
-    }
-
-    pub(crate) fn addr(&self) -> DocAddr {
-        DocAddr::new(&self)
     }
 
     define_observe!(
@@ -711,20 +701,6 @@ impl Prelim for Doc {
     }
 
     fn integrate(self, _txn: &mut TransactionMut, _inner_ref: BranchPtr) {}
-}
-
-/// For a Yjs compatibility reasons we expect subdocuments to be compared based on their reference
-/// equality. This concept however doesn't really exists in Rust. Therefore we use a store reference
-/// instead and specialize it for this single scenario.
-#[repr(transparent)]
-#[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
-pub(crate) struct DocAddr(usize);
-
-impl DocAddr {
-    pub fn new(doc: &Doc) -> Self {
-        let ptr = Arc::as_ptr(&doc.store);
-        DocAddr(ptr as usize)
-    }
 }
 
 #[cfg(test)]
@@ -1029,13 +1005,12 @@ mod test {
         let delete_ref = delete_set.clone();
         // Subscribe callback
 
-        let sub: Subscription = doc
-            .observe_transaction_cleanup(move |_: &TransactionMut, event| {
+        let sub: Subscription =
+            doc.observe_transaction_cleanup(move |_: &TransactionMut, event| {
                 before_ref.store(Some(event.before_state.clone().into()));
                 after_ref.store(Some(event.after_state.clone().into()));
                 delete_ref.store(Some(event.delete_set.clone().into()));
-            })
-            .unwrap();
+            });
 
         {
             let mut txn = doc.transact_mut();
@@ -1530,9 +1505,9 @@ mod test {
         let event = Arc::new(ArcSwapOption::default());
         let event_c = event.clone();
         let _sub = doc.observe_subdocs(move |_, e| {
-            let added = e.added().map(|d| d.guid().clone()).collect();
-            let removed = e.removed().map(|d| d.guid().clone()).collect();
-            let loaded = e.loaded().map(|d| d.guid().clone()).collect();
+            let added = e.added().cloned().collect();
+            let removed = e.removed().cloned().collect();
+            let loaded = e.loaded().cloned().collect();
             event_c.store(Some(Arc::new((added, removed, loaded))));
         });
         let subdocs = doc.get_or_insert_map("mysubdocs");
@@ -1603,7 +1578,7 @@ mod test {
 
         {
             let mut txn = doc.transact_mut();
-            let doc_b_ref = subdocs.get(&txn, "b").unwrap().cast::<Doc>().unwrap();
+            let mut doc_b_ref = subdocs.get(&txn, "b").unwrap().cast::<Doc>().unwrap();
             doc_b_ref.load(&mut txn);
         }
         let actual = event.swap(None);
@@ -1620,7 +1595,7 @@ mod test {
         });
         {
             let mut txn = doc.transact_mut();
-            let doc_c_ref = subdocs.insert(&mut txn, "c", doc_c);
+            let mut doc_c_ref = subdocs.insert(&mut txn, "c", doc_c);
             doc_c_ref.load(&mut txn);
         }
         let actual = event.swap(None);
@@ -1644,9 +1619,9 @@ mod test {
         let event = Arc::new(ArcSwapOption::default());
         let event_c = event.clone();
         let _sub = doc2.observe_subdocs(move |_, e| {
-            let added: Vec<_> = e.added().map(|d| d.guid().clone()).collect();
-            let removed: Vec<_> = e.removed().map(|d| d.guid().clone()).collect();
-            let loaded: Vec<_> = e.loaded().map(|d| d.guid().clone()).collect();
+            let added: Vec<_> = e.added().cloned().collect();
+            let removed: Vec<_> = e.removed().cloned().collect();
+            let loaded: Vec<_> = e.loaded().cloned().collect();
             event_c.store(Some(Arc::new((added, removed, loaded))));
         });
         let update = Update::decode_v1(&data).unwrap();
@@ -1702,9 +1677,9 @@ mod test {
         let event = Arc::new(ArcSwapOption::default());
         let event_c = event.clone();
         let _sub = doc.observe_subdocs(move |_, e| {
-            let added = e.added().map(|d| d.guid().clone()).collect();
-            let removed = e.removed().map(|d| d.guid().clone()).collect();
-            let loaded = e.loaded().map(|d| d.guid().clone()).collect();
+            let added = e.added().cloned().collect();
+            let removed = e.removed().cloned().collect();
+            let loaded = e.loaded().cloned().collect();
 
             event_c.store(Some(Arc::new((added, removed, loaded))));
         });
@@ -1749,9 +1724,9 @@ mod test {
         let mut doc2 = Doc::with_client_id(2);
         let event_c = event.clone();
         let _sub = doc2.observe_subdocs(move |_, e| {
-            let added = e.added().map(|d| d.guid().clone()).collect();
-            let removed = e.removed().map(|d| d.guid().clone()).collect();
-            let loaded = e.loaded().map(|d| d.guid().clone()).collect();
+            let added = e.added().cloned().collect();
+            let removed = e.removed().cloned().collect();
+            let loaded = e.loaded().cloned().collect();
 
             event_c.store(Some(Arc::new((added, removed, loaded))));
         });
@@ -1800,9 +1775,9 @@ mod test {
         let event = Arc::new(ArcSwapOption::default());
         let event_c = event.clone();
         let _sub = doc.observe_subdocs(move |_, e| {
-            let added = e.added().map(|d| d.guid().clone()).collect();
-            let removed = e.removed().map(|d| d.guid().clone()).collect();
-            let loaded = e.loaded().map(|d| d.guid().clone()).collect();
+            let added = e.added().cloned().collect();
+            let removed = e.removed().cloned().collect();
+            let loaded = e.loaded().cloned().collect();
 
             event_c.store(Some(Arc::new((added, removed, loaded))));
         });
@@ -1857,9 +1832,9 @@ mod test {
         let mut doc2 = Doc::with_client_id(2);
         let event_c = event.clone();
         let _sub = doc2.observe_subdocs(move |_, e| {
-            let added = e.added().map(|d| d.guid()).collect();
-            let removed = e.removed().map(|d| d.guid()).collect();
-            let loaded = e.loaded().map(|d| d.guid()).collect();
+            let added = e.added().cloned().collect();
+            let removed = e.removed().cloned().collect();
+            let loaded = e.loaded().cloned().collect();
 
             event_c.store(Some(Arc::new((added, removed, loaded))));
         });

@@ -1,5 +1,5 @@
 use crate::transaction::Subdocs;
-use crate::{DeleteSet, Doc, StateVector, TransactionMut};
+use crate::{DeleteSet, StateVector, TransactionMut};
 use std::collections::HashSet;
 
 /// An update event passed to a callback subscribed with [Doc::observe_update_v1]/[Doc::observe_update_v2].
@@ -42,14 +42,14 @@ impl TransactionCleanupEvent {
 
 /// Event used to communicate load requests from the underlying subdocuments.
 #[derive(Debug)]
-pub struct SubdocsEvent<'a> {
-    pub(crate) added: HashSet<&'a Doc>,
-    pub(crate) removed: HashSet<&'a Doc>,
-    pub(crate) loaded: HashSet<&'a Doc>,
+pub struct SubdocsEvent {
+    pub(crate) added: HashSet<crate::Uuid>,
+    pub(crate) removed: HashSet<crate::Uuid>,
+    pub(crate) loaded: HashSet<crate::Uuid>,
 }
 
-impl<'a> SubdocsEvent<'a> {
-    pub(crate) fn new(inner: Box<Subdocs<'a>>) -> Self {
+impl SubdocsEvent {
+    pub(crate) fn new(inner: Box<Subdocs>) -> Self {
         SubdocsEvent {
             added: inner.added,
             removed: inner.removed,
@@ -76,4 +76,4 @@ impl<'a> SubdocsEvent<'a> {
     }
 }
 
-pub type SubdocsEventIter<'a> = std::collections::hash_set::Iter<'a, &'a Doc>;
+pub type SubdocsEventIter<'a> = std::collections::hash_set::Iter<'a, crate::Uuid>;

@@ -357,10 +357,10 @@ impl<'doc> ReadTxn for Transaction<'doc> {
 /// not supported (if some operations needs to be undone, this can be achieved using [UndoManager])
 pub struct TransactionMut<'doc> {
     doc: &'doc mut Doc,
-    state: TransactionState<'doc>,
+    state: TransactionState,
 }
 
-pub(crate) struct TransactionState<'doc> {
+pub(crate) struct TransactionState {
     /// State vector of a current transaction at the moment of its creation.
     pub before_state: StateVector,
     /// Current state vector of a transaction, which includes all performed updates.
@@ -376,7 +376,7 @@ pub(crate) struct TransactionState<'doc> {
     /// New types are not included in this Set.
     pub changed: HashMap<TypePtr, HashSet<Option<Arc<str>>>>,
     pub changed_parent_types: Vec<BranchPtr>,
-    pub subdocs: Option<Box<Subdocs<'doc>>>,
+    pub subdocs: Option<Box<Subdocs>>,
     pub origin: Option<Origin>,
     committed: bool,
 }
@@ -1195,10 +1195,10 @@ impl<'doc> Iterator for RootRefs<'doc> {
 }
 
 #[derive(Default)]
-pub struct Subdocs<'a> {
-    pub(crate) added: HashMap<crate::Uuid, &'a Doc>,
-    pub(crate) removed: HashMap<crate::Uuid, &'a Doc>,
-    pub(crate) loaded: HashMap<crate::Uuid, &'a Doc>,
+pub struct Subdocs {
+    pub(crate) added: HashSet<crate::Uuid>,
+    pub(crate) removed: HashSet<crate::Uuid>,
+    pub(crate) loaded: HashSet<crate::Uuid>,
 }
 
 /// A binary marker that can be assigned to a read-write transaction upon creation via
