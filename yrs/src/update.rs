@@ -17,7 +17,7 @@ use crate::types::TypePtr;
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::client_hasher::ClientHasher;
-use crate::{Doc, OffsetKind, StateVector, ID};
+use crate::{OffsetKind, StateVector, ID};
 
 #[derive(Debug, Default, PartialEq)]
 pub(crate) struct UpdateBlocks {
