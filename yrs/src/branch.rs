@@ -274,10 +274,10 @@ impl Branch {
         }
     }
 
-    pub fn as_subdoc(&self) -> Option<Doc> {
+    pub fn as_subdoc(&self) -> Option<&Doc> {
         let item = self.item?;
         if let ItemContent::Doc(_, doc) = &item.content {
-            Some(doc.clone())
+            Some(doc)
         } else {
             None
         }
@@ -392,7 +392,7 @@ impl Branch {
         mut ptr: Option<ItemPtr>,
         mut index: u32,
     ) -> (Option<ItemPtr>, Option<ItemPtr>) {
-        let encoding = txn.store().offset_kind;
+        let encoding = txn.doc().offset_kind();
         while let Some(item) = ptr {
             let content_len = item.content_len(encoding);
             if !item.is_deleted() && item.is_countable() {
@@ -406,7 +406,7 @@ impl Branch {
                     } else {
                         index
                     };
-                    let right = txn.store_mut().blocks.split_block(item, index, encoding);
+                    let right = txn.doc_mut().blocks.split_block(item, index, encoding);
                     if let Some(_) = item.moved {
                         if let Some(src) = right {
                             if let Some(prev_dst) = txn.moved(item) {
@@ -434,7 +434,7 @@ impl Branch {
         };
         while remaining > 0 {
             if let Some(item) = ptr {
-                let encoding = txn.store().offset_kind;
+                let encoding = txn.doc().offset_kind();
                 if !item.is_deleted() {
                     let content_len = item.content_len(encoding);
                     let (l, r) = if remaining < content_len {
@@ -444,7 +444,7 @@ impl Branch {
                             remaining
                         };
                         remaining = 0;
-                        let new_right = txn.store_mut().blocks.split_block(item, offset, encoding);
+                        let new_right = txn.doc_mut().blocks.split_block(item, offset, encoding);
                         if let Some(_) = item.moved {
                             if let Some(src) = new_right {
                                 if let Some(prev_dst) = txn.moved(item) {
@@ -702,7 +702,7 @@ impl<S: RootRef> Root<S> {
     /// Returns a reference to a shared root-level collection current [Root] represents, or creates
     /// it if it wasn't instantiated before.
     pub fn get_or_create(&self, txn: &mut TransactionMut) -> S {
-        let store = txn.store_mut();
+        let store = txn.doc_mut();
         let branch = store.get_or_create_type(self.name.clone(), S::type_ref());
         S::from(branch)
     }
@@ -712,7 +712,7 @@ impl<S: SharedRef> Root<S> {
     /// Returns a reference to a shared collection current [Root] represents, or returns `None` if
     /// that collection hasn't been instantiated yet.
     pub fn get<T: ReadTxn>(&self, txn: &T) -> Option<S> {
-        txn.store().get_type(self.name.clone()).map(S::from)
+        txn.doc().get_type(self.name.clone()).map(S::from)
     }
 }
 
@@ -773,7 +773,7 @@ impl<S: SharedRef> Nested<S> {
     /// If the referenced collection has been deleted or was not yet present in current transaction
     /// scope i.e. due to missing update, a `None` will be returned.  
     pub fn get<T: ReadTxn>(&self, txn: &T) -> Option<S> {
-        let store = txn.store();
+        let store = txn.doc();
         let block = store.blocks.get_block(&self.id)?;
         if let BlockCell::Block(block) = block {
             if let ItemContent::Type(branch) = &block.content {
@@ -931,11 +931,11 @@ pub enum BranchID {
 impl BranchID {
     #[inline]
     pub fn get_root<T: ReadTxn, K: Borrow<str>>(txn: &T, name: K) -> Option<BranchPtr> {
-        txn.store().get_type(name)
+        txn.doc().get_type(name)
     }
 
     pub fn get_nested<T: ReadTxn>(txn: &T, id: &ID) -> Option<BranchPtr> {
-        let block = txn.store().blocks.get_block(id)?;
+        let block = txn.doc().blocks.get_block(id)?;
         if let BlockCell::Block(block) = block {
             if let ItemContent::Type(branch) = &block.content {
                 return Some(BranchPtr::from(&*branch));

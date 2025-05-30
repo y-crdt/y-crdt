@@ -14,22 +14,18 @@ use crate::{
     Doc, Observer, OffsetKind, Snapshot, TransactionCleanupEvent, TransactionMut, UpdateEvent,
     Uuid, ID,
 };
-use arc_swap::{ArcSwap, DefaultStrategy, Guard};
-use async_lock::futures::{Read, Write};
-use async_lock::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::borrow::Borrow;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::ops::Deref;
+use std::pin::Pin;
 use std::sync::Arc;
 
-/// Store is a core element of a document. It contains all of the information, like block store
+/// Store is a core element of a document. It contains all the information, like block store
 /// map of root types, pending updates waiting to be applied once a missing update information
 /// arrives and all subscribed callbacks.
 pub struct Store {
-    pub(crate) client_id: ClientID,
-    pub(crate) offset_kind: OffsetKind,
-    pub(crate) skip_gc: bool,
+    pub(crate) options: Options,
 
     /// Root types (a.k.a. top-level types). These types are defined by users at the document level,
     /// they have their own unique names and represent core shared types that expose operations
@@ -52,7 +48,7 @@ pub struct Store {
 
     pub(crate) subdocs: HashMap<DocAddr, Doc>,
 
-    pub(crate) events: Option<Box<StoreEvents>>,
+    pub(crate) events: Option<Box<DocEvents>>,
 
     /// Pointer to a parent block - present only if a current document is a sub-document of another
     /// document.
@@ -64,11 +60,9 @@ pub struct Store {
 
 impl Store {
     /// Create a new empty store in context of a given `client_id`.
-    pub(crate) fn new(options: &Options) -> Self {
-        Store {
-            client_id: options.client_id,
-            offset_kind: options.offset_kind,
-            skip_gc: options.skip_gc,
+    pub(crate) fn new(options: Options, parent: Option<ItemPtr>) -> Pin<Box<Self>> {
+        Box::pin(Store {
+            options,
             types: HashMap::default(),
             blocks: BlockStore::default(),
             subdocs: HashMap::default(),
@@ -76,8 +70,8 @@ impl Store {
             events: None,
             pending: None,
             pending_ds: None,
-            parent: None,
-        }
+            parent,
+        })
     }
 
     /// If there are any missing updates, this method will return a pending update which contains
@@ -111,7 +105,7 @@ impl Store {
     /// block that's about to be inserted. You cannot use that clock value to find any existing
     /// block content.
     pub fn get_local_state(&self) -> u32 {
-        self.blocks.get_clock(&self.client_id)
+        self.blocks.get_clock(&self.options.client_id)
     }
 
     /// Returns a branch reference to a complex type identified by its pointer. Returns `None` if
@@ -152,7 +146,7 @@ impl Store {
         snapshot: &Snapshot,
         encoder: &mut E,
     ) -> Result<(), Error> {
-        if !self.skip_gc {
+        if !self.options.skip_gc {
             return Err(Error::Gc);
         }
         self.write_blocks_to(&snapshot.state_map, encoder);
@@ -389,7 +383,7 @@ impl std::fmt::Debug for Store {
 
 impl std::fmt::Display for Store {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut s = f.debug_struct(&self.client_id.to_string());
+        let mut s = f.debug_struct(&self.options.client_id.to_string());
         if !self.types.is_empty() {
             s.field("root types", &self.types);
         }
@@ -411,91 +405,6 @@ impl std::fmt::Display for Store {
         }
         s.finish()
     }
-}
-
-#[repr(transparent)]
-#[derive(Debug, Clone)]
-pub(crate) struct DocStore(pub(crate) Arc<StoreInner>);
-
-impl DocStore {
-    pub fn new(options: Options, parent: Option<ItemPtr>) -> Self {
-        let mut store = Store::new(&options);
-        let options = ArcSwap::new(options.into());
-        store.parent = parent;
-        DocStore(Arc::new(StoreInner {
-            options,
-            store: RwLock::new(store),
-        }))
-    }
-
-    pub(crate) fn try_read(&self) -> Option<RwLockReadGuard<Store>> {
-        self.0.store.try_read()
-    }
-
-    #[cfg(not(target_family = "wasm"))]
-    pub(crate) fn read_blocking(&self) -> RwLockReadGuard<Store> {
-        self.0.store.read_blocking()
-    }
-
-    #[cfg(target_family = "wasm")]
-    pub(crate) fn read_blocking(&self) -> RwLockReadGuard<Store> {
-        self.0.store.try_read().unwrap()
-    }
-
-    pub(crate) fn read_async(&self) -> Read<Store> {
-        self.0.store.read()
-    }
-
-    pub(crate) fn try_write(&self) -> Option<RwLockWriteGuard<Store>> {
-        self.0.store.try_write()
-    }
-
-    #[cfg(not(target_family = "wasm"))]
-    pub(crate) fn write_blocking(&self) -> RwLockWriteGuard<Store> {
-        self.0.store.write_blocking()
-    }
-
-    #[cfg(target_family = "wasm")]
-    pub(crate) fn write_blocking(&self) -> RwLockWriteGuard<Store> {
-        self.0.store.try_write().unwrap()
-    }
-
-    pub(crate) fn write_async(&self) -> Write<Store> {
-        self.0.store.write()
-    }
-
-    pub(crate) fn options(&self) -> Guard<Arc<Options>, DefaultStrategy> {
-        self.0.options.load()
-    }
-
-    /// Sets [Doc::should_load] flag, returning previous value.
-    pub(crate) fn set_should_load(&self, should_load: bool) -> bool {
-        self.0
-            .options
-            .rcu(|options| {
-                let mut options = options.deref().clone();
-                options.should_load = should_load;
-                options
-            })
-            .should_load
-    }
-
-    pub(crate) fn set_subdoc_data(&self, client_id: ClientID, collection_id: Option<Arc<str>>) {
-        self.0.options.rcu(|options| {
-            let mut options = options.deref().clone();
-            options.client_id = client_id;
-            if options.collection_id.is_none() {
-                options.collection_id = collection_id.clone();
-            }
-            options
-        });
-    }
-}
-
-#[derive(Debug)]
-pub(crate) struct StoreInner {
-    options: ArcSwap<Options>,
-    store: RwLock<Store>,
 }
 
 #[repr(transparent)]
@@ -545,60 +454,58 @@ pub type SubdocsFn = Box<dyn Fn(&TransactionMut, &SubdocsEvent) + 'static>;
 pub type DestroyFn = Box<dyn Fn(&TransactionMut, &Doc) + 'static>;
 
 #[derive(Default)]
-pub struct StoreEvents {
+pub struct DocEvents {
     /// Handles subscriptions for the transaction cleanup event. Events are called with the
     /// newest updates once they are committed and compacted.
-    pub transaction_cleanup_events: Observer<TransactionCleanupFn>,
+    pub transaction_cleanup: Observer<TransactionCleanupFn>,
 
     /// Handles subscriptions for the `afterTransactionCleanup` event. Events are called with the
     /// newest updates once they are committed and compacted.
-    pub after_transaction_events: Observer<AfterTransactionFn>,
+    pub after_transaction: Observer<AfterTransactionFn>,
 
     /// A subscription handler. It contains all callbacks with registered by user functions that
     /// are supposed to be called, once a new update arrives.
-    pub update_v1_events: Observer<UpdateFn>,
+    pub update_v1: Observer<UpdateFn>,
 
     /// A subscription handler. It contains all callbacks with registered by user functions that
     /// are supposed to be called, once a new update arrives.
-    pub update_v2_events: Observer<UpdateFn>,
+    pub update_v2: Observer<UpdateFn>,
 
     /// Handles subscriptions for subdocs events.
-    pub subdocs_events: Observer<SubdocsFn>,
+    pub subdocs: Observer<SubdocsFn>,
 
-    pub destroy_events: Observer<DestroyFn>,
+    pub destroy: Observer<DestroyFn>,
 }
 
-impl StoreEvents {
-    pub fn emit_update_v1(&self, txn: &TransactionMut) {
-        if self.update_v1_events.has_subscribers() {
+impl DocEvents {
+    pub(crate) fn emit_update_v1(&self, txn: &TransactionMut) {
+        if self.update_v1.has_subscribers() {
             if !txn.delete_set().is_empty() || txn.after_state() != txn.before_state() {
                 // produce update only if anything changed
                 let update = UpdateEvent::new_v1(txn);
-                self.update_v1_events
-                    .trigger(|callback| callback(txn, &update));
+                self.update_v1.trigger(|callback| callback(txn, &update));
             }
         }
     }
 
-    pub fn emit_update_v2(&self, txn: &TransactionMut) {
-        if self.update_v2_events.has_subscribers() {
+    pub(crate) fn emit_update_v2(&self, txn: &TransactionMut) {
+        if self.update_v2.has_subscribers() {
             if !txn.delete_set().is_empty() || txn.after_state() != txn.before_state() {
                 // produce update only if anything changed
                 let update = UpdateEvent::new_v2(txn);
-                self.update_v2_events.trigger(|fun| fun(txn, &update));
+                self.update_v2.trigger(|fun| fun(txn, &update));
             }
         }
     }
 
-    pub fn emit_after_transaction(&self, txn: &mut TransactionMut) {
-        self.after_transaction_events.trigger(|fun| fun(txn));
+    pub(crate) fn emit_after_transaction(&self, txn: &mut TransactionMut) {
+        self.after_transaction.trigger(|fun| fun(txn));
     }
 
-    pub fn emit_transaction_cleanup(&self, txn: &TransactionMut) {
-        if self.transaction_cleanup_events.has_subscribers() {
+    pub(crate) fn emit_transaction_cleanup(&self, txn: &TransactionMut) {
+        if self.transaction_cleanup.has_subscribers() {
             let event = TransactionCleanupEvent::new(txn);
-            self.transaction_cleanup_events
-                .trigger(|fun| fun(txn, &event));
+            self.transaction_cleanup.trigger(|fun| fun(txn, &event));
         }
     }
 }

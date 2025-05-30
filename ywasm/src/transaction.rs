@@ -142,7 +142,7 @@ impl YTransaction {
     #[inline]
     pub fn pending_structs(&self) -> Result<JsValue> {
         let tx = self.deref();
-        if let Some(update) = tx.store().pending_update() {
+        if let Some(update) = tx.doc().pending_update() {
             let missing = crate::js::convert::state_vector_to_js(&update.missing);
             let update = js_sys::Uint8Array::from(update.update.encode_v1().as_slice());
             let obj: JsValue = js_sys::Object::new().into();
@@ -160,7 +160,7 @@ impl YTransaction {
     #[inline]
     pub fn pending_ds(&self) -> Option<js_sys::Map> {
         let tx = self.deref();
-        let ds = tx.store().pending_ds()?;
+        let ds = tx.doc().pending_ds()?;
         Some(crate::js::convert::delete_set_to_js(&ds))
     }
 

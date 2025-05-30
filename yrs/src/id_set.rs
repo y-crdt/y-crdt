@@ -800,7 +800,7 @@ impl<'ds> TxnIterator for DeletedBlocks<'ds> {
         if let Some(r) = self.current_range {
             let mut block = if let Some(idx) = self.current_index.as_mut() {
                 if let Some(block) = txn
-                    .store()
+                    .doc()
                     .blocks
                     .get_client(&self.current_client_id?)
                     .unwrap()
@@ -816,7 +816,7 @@ impl<'ds> TxnIterator for DeletedBlocks<'ds> {
             } else {
                 // first block for a particular client
                 let list = txn
-                    .store()
+                    .doc()
                     .blocks
                     .get_client(&self.current_client_id?)
                     .unwrap();
@@ -894,7 +894,7 @@ mod test {
     use crate::test_utils::exchange_updates;
     use crate::updates::decoder::{Decode, DecoderV1};
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
-    use crate::{DeleteSet, Doc, Options, ReadTxn, Text, Transact, ID};
+    use crate::{DeleteSet, Doc, Options, ReadTxn, Text, ID};
     use std::collections::HashSet;
     use std::fmt::Debug;
 
@@ -1126,11 +1126,11 @@ mod test {
         let mut o = Options::default();
         o.client_id = 1;
         o.skip_gc = true;
-        let d1 = Doc::with_options(o.clone());
+        let mut d1 = Doc::with_options(o.clone());
         let t1 = d1.get_or_insert_text("test");
 
         o.client_id = 2;
-        let d2 = Doc::with_options(o);
+        let mut d2 = Doc::with_options(o);
         let t2 = d2.get_or_insert_text("test");
 
         t1.insert(&mut d1.transact_mut(), 0, "aaaaa");
@@ -1157,7 +1157,7 @@ mod test {
             let mut i = 0;
             let mut deleted = s.delete_set.deleted_blocks();
             while let Some(BlockSlice::Item(b)) = deleted.next(&txn) {
-                let item = txn.store_mut().materialize(b);
+                let item = txn.doc_mut().materialize(b);
                 if let ItemContent::String(str) = &item.content {
                     let t = (
                         item.is_deleted(),
@@ -1188,7 +1188,7 @@ mod test {
     #[test]
     fn deleted_blocks2() {
         let mut ds = DeleteSet::new();
-        let doc = Doc::with_client_id(1);
+        let mut doc = Doc::with_client_id(1);
         let txt = doc.get_or_insert_text("test");
         txt.push(&mut doc.transact_mut(), "testab");
         ds.insert(ID::new(1, 5), 1);

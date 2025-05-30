@@ -208,7 +208,7 @@ impl Decode for Snapshot {
 
 #[cfg(test)]
 mod test {
-    use crate::{Doc, ReadTxn, StateVector, Text, Transact};
+    use crate::{Doc, ReadTxn, StateVector, Text};
     use std::cmp::Ordering;
     use std::iter::FromIterator;
 
@@ -249,7 +249,7 @@ mod test {
 
     #[test]
     fn ordering_one_of() {
-        let doc = Doc::with_client_id(1);
+        let mut doc = Doc::with_client_id(1);
         let mut txn = doc.transact_mut();
         let txt = txn.get_or_insert_text("text");
         txt.insert(&mut txn, 0, "a");

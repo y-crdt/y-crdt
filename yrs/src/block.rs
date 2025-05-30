@@ -13,7 +13,7 @@ use crate::undo::UndoStack;
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::OptionExt;
-use crate::{Any, DeleteSet, Doc, Options, Out, Transact};
+use crate::{Any, DeleteSet, Doc, Options, Out};
 use serde::{Deserialize, Serialize};
 use smallstr::SmallString;
 use std::collections::HashSet;
@@ -392,7 +392,7 @@ impl ItemPtr {
         }
 
         let next_clock = store.get_local_state();
-        let next_id = ID::new(store.client_id, next_clock);
+        let next_id = ID::new(store.options.client_id, next_clock);
         let mut redone_item = Item::new(
             next_id,
             left,
@@ -409,7 +409,7 @@ impl ItemPtr {
 
         block_ptr.integrate(txn, 0);
 
-        txn.store_mut().blocks.push_block(redone_item);
+        txn.doc_mut().blocks.push_block(redone_item);
         Some(block_ptr)
     }
 
@@ -488,8 +488,8 @@ impl ItemPtr {
     pub(crate) fn integrate(&mut self, txn: &mut TransactionMut, offset: u32) -> bool {
         let self_ptr = self.clone();
         let this = self.deref_mut();
-        let store = txn.store_mut();
-        let encoding = store.offset_kind;
+        let store = txn.doc_mut();
+        let encoding = store.options.offset_kind;
         if offset > 0 {
             // offset could be > 0 only in context of Update::integrate,
             // is such case offset kind in use always means Yjs-compatible offset (utf-16)
@@ -651,7 +651,7 @@ impl ItemPtr {
                             // inherit links from the block we're overriding
                             left.info.clear_linked();
                             this.info.set_linked();
-                            let all_links = &mut txn.store_mut().linked_by;
+                            let all_links = &mut txn.doc_mut().linked_by;
                             if let Some(linked_by) = all_links.remove(&left) {
                                 all_links.insert(self_ptr, linked_by);
                                 // since left is being deleted, it will remove
@@ -718,7 +718,7 @@ impl ItemPtr {
                     *parent_doc = Some(txn.doc().clone());
                     {
                         let mut child_txn = doc.transact_mut();
-                        child_txn.store_mut().parent = Some(self_ptr);
+                        child_txn.doc_mut().parent = Some(self_ptr);
                     }
                     let subdocs = txn.subdocs_mut();
                     subdocs.added.insert(DocAddr::new(doc), doc.clone());
@@ -743,7 +743,7 @@ impl ItemPtr {
             }
             txn.add_changed_type(parent_ref, this.parent_sub.clone());
             if this.info.is_linked() {
-                if let Some(links) = txn.store_mut().linked_by.get(&self_ptr).cloned() {
+                if let Some(links) = txn.doc_mut().linked_by.get(&self_ptr).cloned() {
                     // notify links about changes
                     for link in links.iter() {
                         txn.add_changed_type(*link, this.parent_sub.clone());
@@ -1756,7 +1756,7 @@ impl ItemContent {
                     encoder.write_any(&any[i as usize]);
                 }
             }
-            ItemContent::Doc(_, doc) => doc.store().options().encode(encoder),
+            ItemContent::Doc(_, doc) => doc.store().options.encode(encoder),
             ItemContent::Move(m) => m.encode(encoder),
         }
     }
@@ -1786,7 +1786,7 @@ impl ItemContent {
                     encoder.write_any(a);
                 }
             }
-            ItemContent::Doc(_, doc) => doc.store().options().encode(encoder),
+            ItemContent::Doc(_, doc) => doc.store().options.encode(encoder),
             ItemContent::Move(m) => m.encode(encoder),
         }
     }

@@ -12,14 +12,12 @@ use crate::encoding::read::Error;
 use crate::error::UpdateError;
 use crate::id_set::{DeleteSet, IdSet};
 use crate::slice::ItemSlice;
-#[cfg(test)]
-use crate::store::Store;
 use crate::transaction::TransactionMut;
 use crate::types::TypePtr;
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
 use crate::utils::client_hasher::ClientHasher;
-use crate::{OffsetKind, StateVector, ID};
+use crate::{Doc, OffsetKind, StateVector, ID};
 
 #[derive(Debug, Default, PartialEq)]
 pub(crate) struct UpdateBlocks {
@@ -257,7 +255,7 @@ impl Update {
         let remaining_blocks = if self.blocks.is_empty() {
             None
         } else {
-            let mut store = txn.store_mut();
+            let mut store = txn.doc_mut();
             let mut client_block_ref_ids: Vec<ClientID> =
                 self.blocks.clients.keys().cloned().collect();
             client_block_ref_ids.sort();
@@ -313,7 +311,7 @@ impl Update {
                             } else {
                                 None
                             };
-                            store = txn.store_mut();
+                            store = txn.doc_mut();
                             match block {
                                 BlockCarrier::Item(item) => {
                                     if item.parent != TypePtr::Unknown {
@@ -331,7 +329,7 @@ impl Update {
                             if let Some(ptr) = delete_ptr {
                                 txn.delete(ptr);
                             }
-                            store = txn.store_mut();
+                            store = txn.doc_mut();
                         }
                     } else {
                         // update from the same client is missing
@@ -1055,21 +1053,21 @@ impl std::fmt::Display for Update {
 
 /// Conversion for tests only
 #[cfg(test)]
-impl Into<Store> for Update {
-    fn into(self) -> Store {
+impl Into<Doc> for Update {
+    fn into(self) -> Doc {
         use crate::doc::Options;
 
-        let mut store = Store::new(&Options::with_client_id(0));
+        let mut doc = Doc::with_options(Options::with_client_id(0));
         for (_, vec) in self.blocks.clients {
             for block in vec {
                 if let BlockCarrier::Item(block) = block {
-                    store.blocks.push_block(block);
+                    doc.blocks.push_block(block);
                 } else {
                     panic!("Cannot convert Update into block store - Skip block detected");
                 }
             }
         }
-        store
+        doc
     }
 }
 
@@ -1173,7 +1171,7 @@ mod test {
     use crate::updates::encoder::Encode;
     use crate::{
         merge_updates_v1, Any, DeleteSet, Doc, GetString, Options, ReadTxn, StateVector, Text,
-        Transact, XmlFragment, XmlOut, ID,
+        XmlFragment, XmlOut, ID,
     };
 
     #[test]
@@ -1220,11 +1218,11 @@ mod test {
 
     #[test]
     fn update_merge() {
-        let d1 = Doc::with_client_id(1);
+        let mut d1 = Doc::with_client_id(1);
         let txt1 = d1.get_or_insert_text("test");
         let mut t1 = d1.transact_mut();
 
-        let d2 = Doc::with_client_id(2);
+        let mut d2 = Doc::with_client_id(2);
         let txt2 = d2.get_or_insert_text("test");
         let mut t2 = d2.transact_mut();
 
@@ -1249,7 +1247,7 @@ mod test {
         // the same output as sequence of updates applied individually
         let u12 = Update::merge_updates(vec![u1, u2]);
 
-        let d3 = Doc::with_client_id(3);
+        let mut d3 = Doc::with_client_id(3);
         let txt3 = d3.get_or_insert_text("test");
         let mut t3 = d3.transact_mut();
         t3.apply_update(u12).unwrap();
@@ -1264,7 +1262,7 @@ mod test {
 
     #[test]
     fn test_duplicate_updates() {
-        let doc = Doc::with_client_id(1);
+        let mut doc = Doc::with_client_id(1);
         let txt = doc.get_or_insert_text("test");
         let mut tr = doc.transact_mut();
         txt.insert(&mut tr, 0, "aaa");
@@ -1281,14 +1279,14 @@ mod test {
     #[test]
     fn test_multiple_clients_in_one_update() {
         let binary1 = {
-            let doc = Doc::with_client_id(1);
+            let mut doc = Doc::with_client_id(1);
             let txt = doc.get_or_insert_text("test");
             let mut tr = doc.transact_mut();
             txt.insert(&mut tr, 0, "aaa");
             tr.encode_update_v1()
         };
         let binary2 = {
-            let doc = Doc::with_client_id(2);
+            let mut doc = Doc::with_client_id(2);
             let txt = doc.get_or_insert_text("test");
             let mut tr = doc.transact_mut();
             txt.insert(&mut tr, 0, "bbb");
@@ -1333,7 +1331,7 @@ mod test {
         let update = vec![
             0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 198, 182, 140, 174, 4, 1, 2, 0, 0, 5,
         ];
-        let doc = Doc::with_options(Options {
+        let mut doc = Doc::with_options(Options {
             skip_gc: true,
             client_id: 1,
             ..Default::default()
@@ -1366,7 +1364,7 @@ mod test {
 
     #[test]
     fn merge_pending_updates() {
-        let d0 = Doc::with_client_id(0);
+        let mut d0 = Doc::with_client_id(0);
         let server_updates = Arc::new(Mutex::new(vec![]));
         let sub = {
             let server_updates = server_updates.clone();
@@ -1387,7 +1385,7 @@ mod test {
         let updates = Arc::into_inner(server_updates).unwrap();
         let updates = updates.into_inner().unwrap();
 
-        let d1 = Doc::with_client_id(1);
+        let mut d1 = Doc::with_client_id(1);
         d1.transact_mut()
             .apply_update(Update::decode_v1(&updates[0]).unwrap())
             .unwrap();
@@ -1395,7 +1393,7 @@ mod test {
             .transact()
             .encode_state_as_update_v1(&StateVector::default());
 
-        let d2 = Doc::with_client_id(2);
+        let mut d2 = Doc::with_client_id(2);
         d2.transact_mut()
             .apply_update(Update::decode_v1(&u1).unwrap())
             .unwrap();
@@ -1406,7 +1404,7 @@ mod test {
             .transact()
             .encode_state_as_update_v1(&StateVector::default());
 
-        let d3 = Doc::with_client_id(3);
+        let mut d3 = Doc::with_client_id(3);
         d3.transact_mut()
             .apply_update(Update::decode_v1(&u2).unwrap())
             .unwrap();
@@ -1417,7 +1415,7 @@ mod test {
             .transact()
             .encode_state_as_update_v1(&StateVector::default());
 
-        let d4 = Doc::with_client_id(4);
+        let mut d4 = Doc::with_client_id(4);
         d4.transact_mut()
             .apply_update(Update::decode_v1(&u3).unwrap())
             .unwrap();
@@ -1428,7 +1426,7 @@ mod test {
             .transact()
             .encode_state_as_update_v1(&StateVector::default());
 
-        let d5 = Doc::with_client_id(5);
+        let mut d5 = Doc::with_client_id(5);
         d5.transact_mut()
             .apply_update(Update::decode_v1(&u4).unwrap())
             .unwrap();
@@ -1513,7 +1511,7 @@ mod test {
     fn pending_update_check() {
         let update = update_with_skips();
         let expected = update.encode_v1();
-        let doc = Doc::with_client_id(2);
+        let mut doc = Doc::with_client_id(2);
         let mut txn = doc.transact_mut();
         let txt = txn.get_or_insert_text("test");
         txn.apply_update(update).unwrap();

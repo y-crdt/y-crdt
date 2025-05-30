@@ -496,7 +496,7 @@ impl From<XmlElementPrelim> for In {
 /// use yrs::{Any, Array, ArrayPrelim, Doc, GetString, Text, Transact, XmlFragment, XmlTextPrelim};
 /// use yrs::types::Attrs;
 ///
-/// let doc = Doc::new();
+/// let mut doc = Doc::new();
 /// let mut txn = doc.transact_mut();
 /// let f = txn.get_or_insert_xml_fragment("article");
 /// let text = f.insert(&mut txn, 0, XmlTextPrelim::new(""));
@@ -1150,7 +1150,7 @@ pub trait XmlFragment: AsRef<Branch> {
     /// */
     /// use yrs::{Doc, Text, Xml, XmlOut, Transact, XmlFragment, XmlElementPrelim, XmlTextPrelim, GetString};
     ///
-    /// let doc = Doc::new();
+    /// let mut doc = Doc::new();
     /// let mut html = doc.get_or_insert_xml_fragment("div");
     /// let mut txn = doc.transact_mut();
     /// let p = html.push_back(&mut txn, XmlElementPrelim::empty("p"));
@@ -1527,20 +1527,20 @@ mod test {
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::{Encoder, EncoderV1};
     use crate::{
-        Any, Doc, GetString, Observable, SharedRef, StateVector, Text, Transact, Update,
-        XmlElementPrelim, XmlTextPrelim, XmlTextRef,
+        Any, Doc, GetString, Observable, SharedRef, StateVector, Text, Update, XmlElementPrelim,
+        XmlTextPrelim, XmlTextRef,
     };
 
     #[test]
     fn insert_attribute() {
-        let d1 = Doc::with_client_id(1);
+        let mut d1 = Doc::with_client_id(1);
         let f = d1.get_or_insert_xml_fragment("xml");
         let mut t1 = d1.transact_mut();
         let xml1 = f.push_back(&mut t1, XmlElementPrelim::empty("div"));
         xml1.insert_attribute(&mut t1, "height", 10.to_string());
         assert_eq!(xml1.get_attribute(&t1, "height"), Some(Out::from("10")));
 
-        let d2 = Doc::with_client_id(1);
+        let mut d2 = Doc::with_client_id(1);
         let f = d2.get_or_insert_xml_fragment("xml");
         let mut t2 = d2.transact_mut();
         let xml2 = f.push_back(&mut t2, XmlElementPrelim::empty("div"));
@@ -1552,7 +1552,7 @@ mod test {
 
     #[test]
     fn tree_walker() {
-        let doc = Doc::with_client_id(1);
+        let mut doc = Doc::with_client_id(1);
         let root = doc.get_or_insert_xml_fragment("xml");
         let mut txn = doc.transact_mut();
         /*
@@ -1593,7 +1593,7 @@ mod test {
 
     #[test]
     fn text_attributes() {
-        let doc = Doc::with_client_id(1);
+        let mut doc = Doc::with_client_id(1);
         let f = doc.get_or_insert_xml_fragment("test");
         let mut txn = doc.transact_mut();
         let txt = f.push_back(&mut txn, XmlTextPrelim::new(""));
@@ -1637,7 +1637,7 @@ mod test {
 
     #[test]
     fn siblings() {
-        let doc = Doc::with_client_id(1);
+        let mut doc = Doc::with_client_id(1);
         let root = doc.get_or_insert_xml_fragment("root");
         let mut txn = doc.transact_mut();
         let first = root.push_back(&mut txn, XmlTextPrelim::new("hello"));
@@ -1668,7 +1668,7 @@ mod test {
 
     #[test]
     fn serialization() {
-        let d1 = Doc::with_client_id(1);
+        let mut d1 = Doc::with_client_id(1);
         let r1 = d1.get_or_insert_xml_fragment("root");
         let mut t1 = d1.transact_mut();
         let _first = r1.push_back(&mut t1, XmlTextPrelim::new("hello"));
@@ -1679,7 +1679,7 @@ mod test {
 
         let u1 = t1.encode_state_as_update_v1(&StateVector::default());
 
-        let d2 = Doc::with_client_id(2);
+        let mut d2 = Doc::with_client_id(2);
         let r2 = d2.get_or_insert_xml_fragment("root");
         let mut t2 = d2.transact_mut();
 
@@ -1690,7 +1690,7 @@ mod test {
 
     #[test]
     fn serialization_compatibility() {
-        let d1 = Doc::with_client_id(1);
+        let mut d1 = Doc::with_client_id(1);
         let r1 = d1.get_or_insert_xml_fragment("root");
         let mut t1 = d1.transact_mut();
         let _first = r1.push_back(&mut t1, XmlTextPrelim::new("hello"));
@@ -1718,11 +1718,11 @@ mod test {
 
     #[test]
     fn event_observers() {
-        let d1 = Doc::with_client_id(1);
+        let mut d1 = Doc::with_client_id(1);
         let f = d1.get_or_insert_xml_fragment("xml");
         let xml = f.insert(&mut d1.transact_mut(), 0, XmlElementPrelim::empty("test"));
 
-        let d2 = Doc::with_client_id(2);
+        let mut d2 = Doc::with_client_id(2);
         let f = d2.get_or_insert_xml_fragment("xml");
         exchange_updates(&[&d1, &d2]);
         let xml2 = f
@@ -1854,7 +1854,7 @@ mod test {
 
     #[test]
     fn xml_to_string() {
-        let doc = Doc::new();
+        let mut doc = Doc::new();
         let f = doc.get_or_insert_xml_fragment("test");
         let mut txn = doc.transact_mut();
         let div = f.push_back(&mut txn, XmlElementPrelim::empty("div"));
@@ -1880,7 +1880,7 @@ mod test {
 
     #[test]
     fn xml_to_string_2() {
-        let doc = Doc::new();
+        let mut doc = Doc::new();
         let f = doc.get_or_insert_xml_fragment("article");
         let xml = f.insert(&mut doc.transact_mut(), 0, XmlTextPrelim::new(""));
         let mut txn = doc.transact_mut();
@@ -1909,7 +1909,7 @@ mod test {
             98, 4, 110, 117, 108, 108, 0,
         ];
         let update = Update::decode_v1(data).unwrap();
-        let doc = Doc::new();
+        let mut doc = Doc::new();
         let txt = doc.get_or_insert_text("test");
         let txt: &XmlTextRef = txt.as_ref();
         let mut txn = doc.transact_mut();
@@ -1929,7 +1929,7 @@ mod test {
             100, 105, 98, 98, 4, 1, 6, 5, 65, 1, 1, 1, 0, 0, 1, 6, 0, 120, 126, 120, 126, 0,
         ];
         let update = Update::decode_v2(data).unwrap();
-        let doc = Doc::new();
+        let mut doc = Doc::new();
         let txt = doc.get_or_insert_text("test");
         let txt: &XmlTextRef = txt.as_ref();
         let mut txn = doc.transact_mut();

@@ -460,12 +460,11 @@ type ScopeIterator<'a> = Box<dyn Iterator<Item = Out> + 'a>;
 mod test {
     use crate::updates::decoder::Decode;
     use crate::{
-        any, Array, ArrayPrelim, Doc, In, JsonPath, JsonPathEval, MapPrelim, Out, ReadTxn,
-        Transact, Update,
+        any, Array, ArrayPrelim, Doc, In, JsonPath, JsonPathEval, MapPrelim, Out, ReadTxn, Update,
     };
 
     fn mixed_sample() -> Doc {
-        let doc = Doc::new();
+        let mut doc = Doc::new();
         let mut tx = doc.transact_mut();
         let users = tx.get_or_insert_array("users");
         users.insert(
@@ -624,7 +623,7 @@ mod test {
         let doc_state = mixed_sample()
             .transact()
             .encode_state_as_update_v1(&Default::default());
-        let doc = Doc::new();
+        let mut doc = Doc::new();
         doc.transact_mut()
             .apply_update(Update::decode_v1(&doc_state).unwrap())
             .unwrap();
