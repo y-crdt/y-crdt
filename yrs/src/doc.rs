@@ -18,6 +18,104 @@ use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::sync::Arc;
 
+macro_rules! define_observe {
+    //TODO: reduce number of params once concat_idents! are stable
+    ($event:ident, $observe:ident, $observe_with:ident, $unobserve:ident, $t:ty) => {
+        #[cfg(not(feature = "sync"))]
+        pub fn $observe<F>(&mut self, callback: F) -> crate::Subscription
+        where
+            F: Fn(&TransactionMut, &$t) + 'static,
+        {
+            self.events().$event.subscribe(Box::new(callback))
+        }
+
+        #[cfg(not(feature = "sync"))]
+        pub fn $observe_with<K, F>(&mut self, key: K, callback: F)
+        where
+            K: Into<Origin>,
+            F: Fn(&TransactionMut, &$t) + 'static,
+        {
+            self.events()
+                .$event
+                .subscribe_with(key.into(), Box::new(callback))
+        }
+
+        #[cfg(feature = "sync")]
+        pub fn $observe<F>(&mut self, callback: F) -> crate::Subscription
+        where
+            F: Fn(&TransactionMut, &$t) + Send + Sync + 'static,
+        {
+            self.events().$event.subscribe(Box::new(callback))
+        }
+
+        #[cfg(feature = "sync")]
+        pub fn $observe_with<K, F>(&mut self, key: K, callback: F)
+        where
+            K: Into<Origin>,
+            F: Fn(&TransactionMut, &$t) + Send + Sync + 'static,
+        {
+            self.events()
+                .$event
+                .subscribe_with(key.into(), Box::new(callback))
+        }
+
+        pub fn $unobserve<K>(&mut self, key: K) -> bool
+        where
+            K: Into<Origin>,
+        {
+            let events = self.events();
+            events.$event.unsubscribe(&key.into())
+        }
+    };
+    ($event:ident, $observe:ident, $observe_with:ident, $unobserve:ident) => {
+        #[cfg(not(feature = "sync"))]
+        pub fn $observe<F>(&mut self, callback: F) -> crate::Subscription
+        where
+            F: Fn(&mut TransactionMut) + 'static,
+        {
+            self.events().$event.subscribe(Box::new(callback))
+        }
+
+        #[cfg(not(feature = "sync"))]
+        pub fn $observe_with<K, F>(&mut self, key: K, callback: F)
+        where
+            K: Into<Origin>,
+            F: Fn(&mut TransactionMut) + 'static,
+        {
+            self.events()
+                .$event
+                .subscribe_with(key.into(), Box::new(callback))
+        }
+
+        #[cfg(feature = "sync")]
+        pub fn $observe<F>(&mut self, callback: F) -> crate::Subscription
+        where
+            F: Fn(&mut TransactionMut) + Send + Sync + 'static,
+        {
+            self.events().$event.subscribe(Box::new(callback))
+        }
+
+        #[cfg(feature = "sync")]
+        pub fn $observe_with<K, F>(&mut self, key: K, callback: F)
+        where
+            K: Into<Origin>,
+            F: Fn(&mut TransactionMut) + Send + Sync + 'static,
+        {
+            self.events()
+                .$event
+                .subscribe_with(key.into(), Box::new(callback))
+        }
+
+        pub fn $unobserve<K>(&mut self, key: K) -> bool
+        where
+            K: Into<Origin>,
+        {
+            let events = self.events();
+            events.$event.unsubscribe(&key.into())
+        }
+    };
+}
+
 /// A Yrs document type. Documents are the most important units of collaborative resources management.
 /// All shared collections live within a scope of their corresponding documents. All updates are
 /// generated on per-document basis (rather than individual shared type). All operations on shared
@@ -368,12 +466,54 @@ impl Doc {
     }
 
     pub fn ptr_eq(a: &Doc, b: &Doc) -> bool {
-        Arc::ptr_eq(&a.store.0, &b.store.0)
+        std::ptr::eq(a as *const Doc, b as *const Doc)
     }
 
     pub(crate) fn addr(&self) -> DocAddr {
         DocAddr::new(&self)
     }
+
+    define_observe!(
+        update_v1,
+        observe_update_v1,
+        observe_update_v1_with,
+        unobserve_update_v1,
+        crate::UpdateEvent
+    );
+    define_observe!(
+        update_v2,
+        observe_update_v2,
+        observe_update_v2_with,
+        unobserve_update_v2,
+        crate::UpdateEvent
+    );
+    define_observe!(
+        destroy,
+        observe_destroy,
+        observe_destroy_with,
+        unobserve_destroy,
+        crate::Doc
+    );
+    define_observe!(
+        subdocs,
+        observe_subdocs,
+        observe_subdocs_with,
+        unobserve_subdocs,
+        crate::SubdocsEvent
+    );
+    define_observe!(
+        transaction_cleanup,
+        observe_transaction_cleanup,
+        observe_transaction_cleanup_with,
+        unobserve_transaction_cleanup,
+        crate::TransactionCleanupEvent
+    );
+    define_observe!(
+        after_transaction,
+        observe_after_transaction,
+        observe_after_transaction_with,
+        unobserve_after_transaction
+    );
 }
 
 impl Deref for Doc {
@@ -1351,7 +1491,7 @@ mod test {
             root.push_back(&mut txn, ArrayPrelim::from(["A"]));
         }
 
-        exchange_updates(&[&d1, &d2, &d3]);
+        exchange_updates([&mut d1, &mut d2, &mut d3]);
 
         {
             let root = d2.get_or_insert_array("array");
@@ -1373,7 +1513,7 @@ mod test {
                 .unwrap();
         }
 
-        exchange_updates(&[&d1, &d2, &d3]);
+        exchange_updates([&mut d1, &mut d2, &mut d3]);
 
         let r1 = d1.get_or_insert_array("array").to_json(&d1.transact());
         let r2 = d2.get_or_insert_array("array").to_json(&d2.transact());
@@ -1404,7 +1544,7 @@ mod test {
         });
         {
             let mut txn = doc.transact_mut();
-            let doc_a_ref = subdocs.insert(&mut txn, "a", doc_a);
+            let mut doc_a_ref = subdocs.insert(&mut txn, "a", doc_a);
             doc_a_ref.load(&mut txn);
         }
 
@@ -1416,7 +1556,7 @@ mod test {
 
         {
             let mut txn = doc.transact_mut();
-            let doc_a_ref = subdocs.get(&txn, "a").unwrap().cast::<Doc>().unwrap();
+            let mut doc_a_ref = subdocs.get(&txn, "a").unwrap().cast::<Doc>().unwrap();
             doc_a_ref.load(&mut txn);
         }
         let actual = event.swap(None);
@@ -1439,7 +1579,7 @@ mod test {
 
         {
             let mut txn = doc.transact_mut();
-            let doc_a_ref = subdocs.get(&txn, "a").unwrap().cast::<Doc>().unwrap();
+            let mut doc_a_ref = subdocs.get(&txn, "a").unwrap().cast::<Doc>().unwrap();
             doc_a_ref.load(&mut txn);
         }
         let actual = event.swap(None);
@@ -1525,7 +1665,7 @@ mod test {
         let subdocs = doc2.transact().get_map("mysubdocs").unwrap();
         {
             let mut txn = doc2.transact_mut();
-            let doc_ref = subdocs.get(&mut txn, "a").unwrap().cast::<Doc>().unwrap();
+            let mut doc_ref = subdocs.get(&mut txn, "a").unwrap().cast::<Doc>().unwrap();
             doc_ref.load(&mut txn);
         }
         let actual = event.swap(None);
@@ -1583,7 +1723,7 @@ mod test {
 
         // destroy and check whether lastEvent adds it again to added (it shouldn't)
         doc_ref.destroy(&mut doc.transact_mut());
-        let doc_ref_2 = array
+        let mut doc_ref_2 = array
             .get(&doc.transact(), 0)
             .unwrap()
             .cast::<Doc>()
@@ -1620,7 +1760,7 @@ mod test {
                 .encode_state_as_update_v1(&StateVector::default()),
         );
         doc2.transact_mut().apply_update(u.unwrap()).unwrap();
-        let doc_ref_3 = {
+        let mut doc_ref_3 = {
             let array = doc2.get_or_insert_array("test");
             array
                 .get(&doc2.transact(), 0)
@@ -1688,7 +1828,7 @@ mod test {
         // destroy and check whether lastEvent adds it again to added (it shouldn't)
         subdoc_1.destroy(&mut doc.transact_mut());
 
-        let subdoc_2 = array
+        let mut subdoc_2 = array
             .get(&doc.transact(), 0)
             .unwrap()
             .cast::<Doc>()
@@ -1769,9 +1909,10 @@ mod test {
         map.insert(&mut txn, "key1", "value1");
 
         // sub documents cannot use their parent's transaction
-        let sub_doc = Doc::new();
+        let mut sub_doc = Doc::new();
         let sub_text = sub_doc.get_or_insert_text("sub-text");
-        let sub_doc = map.insert(&mut txn, "sub-doc", sub_doc);
+        let mut sub_doc = map.insert(&mut txn, "sub-doc", sub_doc);
+        let sub_doc_guid = sub_doc.guid().clone();
         let mut sub_txn = sub_doc.transact_mut();
         sub_text.push(&mut sub_txn, "sample");
 
@@ -1782,7 +1923,7 @@ mod test {
             "map": {
                 "key1": "value1",
                 "sub-doc": {
-                    "guid": sub_doc.guid().as_ref()
+                    "guid": sub_doc_guid.as_ref()
                 }
             },
             "xml-fragment": "<div></div>world<xml-element><body></body></xml-element>",
@@ -1831,8 +1972,7 @@ mod test {
             d1.observe_update_v1(move |_, e| {
                 let mut u = updates.lock().unwrap();
                 u.push(Update::decode_v1(&e.update).unwrap());
-            })
-            .unwrap()
+            });
         };
 
         let map = d1.get_or_insert_map("map");
@@ -1920,8 +2060,7 @@ mod test {
                 txn.after_state().clone(),
                 txn.delete_set().clone(),
             ))));
-        })
-        .unwrap();
+        });
 
         txt1.insert(&mut d1.transact_mut(), 0, "hello world");
         let actual = e.swap(None);
@@ -1949,7 +2088,7 @@ mod test {
             )))
         );
 
-        d1.unobserve_after_transaction("key").unwrap();
+        d1.unobserve_after_transaction("key");
 
         txt1.insert(&mut d1.transact_mut(), 4, " the door");
         let actual = e.swap(None);

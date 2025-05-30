@@ -8,8 +8,7 @@ use crate::{DeleteSet, Doc, Observer, ReadTxn, TransactionMut, ID};
 
 use std::collections::HashSet;
 use std::fmt::Formatter;
-use std::ops::{Deref, DerefMut};
-use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 /// Undo manager is a structure used to perform undo/redo operations over the associated shared

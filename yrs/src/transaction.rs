@@ -1196,9 +1196,9 @@ impl<'doc> Iterator for RootRefs<'doc> {
 
 #[derive(Default)]
 pub struct Subdocs<'a> {
-    pub(crate) added: HashSet<&'a Doc>,
-    pub(crate) removed: HashSet<&'a Doc>,
-    pub(crate) loaded: HashSet<&'a Doc>,
+    pub(crate) added: HashMap<crate::Uuid, &'a Doc>,
+    pub(crate) removed: HashMap<crate::Uuid, &'a Doc>,
+    pub(crate) loaded: HashMap<crate::Uuid, &'a Doc>,
 }
 
 /// A binary marker that can be assigned to a read-write transaction upon creation via
