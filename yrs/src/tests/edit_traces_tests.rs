@@ -1,5 +1,5 @@
 use crate::tests::edit_traces::load_testing_data;
-use crate::{Doc, GetString, OffsetKind, Options, Text, Transact};
+use crate::{Doc, GetString, OffsetKind, Options, Text};
 use std::time::Instant;
 
 #[test]
@@ -29,7 +29,7 @@ fn edit_trace_rustcode() {
 
 fn test_editing_trace(fpath: &str) {
     let data = load_testing_data(fpath);
-    let doc = Doc::with_options(Options {
+    let mut doc = Doc::with_options(Options {
         offset_kind: if data.using_byte_positions {
             OffsetKind::Bytes
         } else {

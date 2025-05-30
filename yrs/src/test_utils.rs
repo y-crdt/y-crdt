@@ -10,7 +10,7 @@ use crate::encoding::read::{Cursor, Read};
 use crate::transaction::ReadTxn;
 use crate::updates::decoder::{Decode, Decoder, DecoderV1};
 use crate::updates::encoder::{Encode, Encoder, EncoderV1};
-use crate::{Doc, StateVector, Transact, Update};
+use crate::{Doc, StateVector, Update};
 
 pub const EXCHANGE_UPDATES_ORIGIN: &str = "exchange_updates";
 
@@ -20,7 +20,7 @@ pub fn exchange_updates(docs: &[&Doc]) {
             if i != j {
                 let a = docs[i];
                 let ta = a.transact();
-                let b = docs[j];
+                let mut b = docs[j];
                 let mut tb = b.transact_mut_with(EXCHANGE_UPDATES_ORIGIN);
 
                 let sv = tb.state_vector().encode_v1();
@@ -104,7 +104,7 @@ impl TestConnector {
         let mut tc = Self::with_rng(rng);
         for client_id in 0..peer_num {
             let peer = tc.create_peer(client_id as ClientID);
-            let peer_state = peer.state();
+            let mut peer_state = peer.state();
             peer_state.doc.get_or_insert_text("text");
             peer_state.doc.get_or_insert_map("map");
         }
@@ -416,13 +416,13 @@ impl TestConnector {
         */
         let inner = self.0.lock().unwrap();
         for i in 0..(inner.peers.len() - 1) {
-            let p1 = inner.peers[i].state();
-            let p2 = inner.peers[i + 1].state();
+            let mut p1 = inner.peers[i].state();
+            let mut p2 = inner.peers[i + 1].state();
             let a = p1.doc.transact_mut();
             let b = p2.doc.transact_mut();
 
-            let astore = a.store();
-            let bstore = b.store();
+            let astore = a.doc();
+            let bstore = b.doc();
             assert_eq!(astore.blocks, bstore.blocks);
             assert_eq!(astore.pending, bstore.pending);
             assert_eq!(astore.pending_ds, bstore.pending_ds);

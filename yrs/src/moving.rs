@@ -63,7 +63,7 @@ impl Move {
     }
 
     fn get_item_ptr_mut(txn: &mut TransactionMut, id: &ID, assoc: Assoc) -> Option<ItemPtr> {
-        let store = txn.store_mut();
+        let store = txn.doc_mut();
         if assoc == Assoc::After {
             let slice = store.blocks.get_item_clean_start(id)?;
             if slice.adjacent() {
@@ -101,11 +101,11 @@ impl Move {
 
     fn get_item_ptr<T: ReadTxn>(txn: &T, id: &ID, assoc: Assoc) -> Option<ItemPtr> {
         if assoc == Assoc::After {
-            let slice = txn.store().blocks.get_item_clean_start(id)?;
+            let slice = txn.doc().blocks.get_item_clean_start(id)?;
             debug_assert!(slice.adjacent()); //TODO: remove once confirmed that slice always fits block range
             Some(slice.ptr)
         } else {
-            let slice = txn.store().blocks.get_item_clean_end(id)?;
+            let slice = txn.doc().blocks.get_item_clean_end(id)?;
             debug_assert!(slice.adjacent()); //TODO: remove once confirmed that slice always fits block range
             slice.ptr.right
         }
@@ -381,9 +381,9 @@ impl std::fmt::Display for Move {
 /// Example:
 ///
 /// ```rust
-/// use yrs::{Assoc, Doc, IndexedSequence, Text, Transact};
+/// use yrs::{Assoc, Doc, IndexedSequence, Text};
 ///
-/// let doc = Doc::new();
+/// let mut doc = Doc::new();
 /// let txt = doc.get_or_insert_text("text");
 /// let mut txn = doc.transact_mut();
 /// txt.insert(&mut txn, 0, "abc"); // => 'abc'
@@ -489,9 +489,9 @@ impl StickyIndex {
     /// # Examples
     ///
     /// ```rust
-    /// use yrs::{Assoc, Doc, IndexedSequence, Text, Transact};
+    /// use yrs::{Assoc, Doc, IndexedSequence, Text};
     ///
-    /// let doc = Doc::new();
+    /// let mut doc = Doc::new();
     /// let text = doc.get_or_insert_text("text");
     /// let mut txn = doc.transact_mut();
     ///
@@ -516,12 +516,12 @@ impl StickyIndex {
 
         match &self.scope {
             IndexScope::Relative(right_id) => {
-                let store = txn.store();
-                if store.blocks.get_clock(&right_id.client) <= right_id.clock {
+                let doc = txn.doc();
+                if doc.blocks.get_clock(&right_id.client) <= right_id.clock {
                     // type does not exist yet
                     return None;
                 }
-                let right = store.follow_redone(right_id);
+                let right = doc.follow_redone(right_id);
                 if let Some(right) = right {
                     if let Some(b) = right.ptr.parent.as_branch() {
                         branch = Some(b.clone());
@@ -536,7 +536,7 @@ impl StickyIndex {
                                 } else {
                                     right.start + 1
                                 };
-                                let encoding = store.offset_kind;
+                                let encoding = doc.offset_kind();
                                 let mut n = right.ptr.left;
                                 while let Some(item) = n.as_deref() {
                                     if !item.is_deleted() && item.is_countable() {
@@ -550,7 +550,7 @@ impl StickyIndex {
                 }
             }
             IndexScope::Nested(id) => {
-                let store = txn.store();
+                let store = txn.doc();
                 if store.blocks.get_clock(&id.client) <= id.clock {
                     // type does not exist yet
                     return None;
@@ -562,7 +562,7 @@ impl StickyIndex {
                 } // else - branch remains null
             }
             IndexScope::Root(name) => {
-                branch = txn.store().get_type(name.clone());
+                branch = txn.doc().get_type(name.clone());
                 if let Some(ptr) = branch.as_ref() {
                     index = if self.assoc == Assoc::After {
                         ptr.content_len
@@ -640,7 +640,7 @@ impl StickyIndex {
         let branch = match &self.scope {
             IndexScope::Relative(id) => {
                 // position relative to existing block
-                let item = txn.store().blocks.get_item(id)?;
+                let item = txn.doc().blocks.get_item(id)?;
                 return if self.assoc == Assoc::After && &item.last_id() == id {
                     item.right
                 } else {
@@ -649,12 +649,12 @@ impl StickyIndex {
             }
             IndexScope::Nested(id) => {
                 // position at the beginning/end of a nested type
-                let item = txn.store().blocks.get_item(id)?;
+                let item = txn.doc().blocks.get_item(id)?;
                 item.as_branch()?
             }
             IndexScope::Root(name) => {
                 // position at the beginning/end of a root type
-                let branch = txn.store().types.get(name.as_ref())?;
+                let branch = txn.doc().types.get(name.as_ref())?;
                 BranchPtr::from(branch)
             }
         };
@@ -997,10 +997,10 @@ mod test {
     use crate::moving::Assoc;
     use crate::updates::decoder::Decode;
     use crate::updates::encoder::Encode;
-    use crate::{Doc, IndexScope, IndexedSequence, StickyIndex, Text, TextRef, Transact, ID};
+    use crate::{Doc, IndexScope, IndexedSequence, StickyIndex, Text, TextRef, ID};
     use serde::{Deserialize, Serialize};
 
-    fn check_sticky_indexes(doc: &Doc, text: &TextRef) {
+    fn check_sticky_indexes(doc: &mut Doc, text: &TextRef) {
         // test if all positions are encoded and restored correctly
         let mut txn = doc.transact_mut();
         let len = text.len(&txn);
@@ -1021,7 +1021,7 @@ mod test {
 
     #[test]
     fn sticky_index_case_1() {
-        let doc = Doc::with_client_id(1);
+        let mut doc = Doc::with_client_id(1);
         let txt = doc.get_or_insert_text("test");
 
         {
@@ -1033,21 +1033,21 @@ mod test {
             txt.insert(&mut txn, 0, "x");
         }
 
-        check_sticky_indexes(&doc, &txt);
+        check_sticky_indexes(&mut doc, &txt);
     }
 
     #[test]
     fn sticky_index_case_2() {
-        let doc = Doc::with_client_id(1);
+        let mut doc = Doc::with_client_id(1);
         let txt = doc.get_or_insert_text("test");
 
         txt.insert(&mut doc.transact_mut(), 0, "abc");
-        check_sticky_indexes(&doc, &txt);
+        check_sticky_indexes(&mut doc, &txt);
     }
 
     #[test]
     fn sticky_index_case_3() {
-        let doc = Doc::with_client_id(1);
+        let mut doc = Doc::with_client_id(1);
         let txt = doc.get_or_insert_text("test");
 
         {
@@ -1057,21 +1057,21 @@ mod test {
             txt.insert(&mut txn, 0, "xyz");
         }
 
-        check_sticky_indexes(&doc, &txt);
+        check_sticky_indexes(&mut doc, &txt);
     }
 
     #[test]
     fn sticky_index_case_4() {
-        let doc = Doc::with_client_id(1);
+        let mut doc = Doc::with_client_id(1);
         let txt = doc.get_or_insert_text("test");
 
         txt.insert(&mut doc.transact_mut(), 0, "1");
-        check_sticky_indexes(&doc, &txt);
+        check_sticky_indexes(&mut doc, &txt);
     }
 
     #[test]
     fn sticky_index_case_5() {
-        let doc = Doc::with_client_id(1);
+        let mut doc = Doc::with_client_id(1);
         let txt = doc.get_or_insert_text("test");
 
         {
@@ -1080,19 +1080,19 @@ mod test {
             txt.insert(&mut txn, 0, "1");
         }
 
-        check_sticky_indexes(&doc, &txt);
+        check_sticky_indexes(&mut doc, &txt);
     }
 
     #[test]
     fn sticky_index_case_6() {
-        let doc = Doc::with_client_id(1);
+        let mut doc = Doc::with_client_id(1);
         let txt = doc.get_or_insert_text("test");
-        check_sticky_indexes(&doc, &txt);
+        check_sticky_indexes(&mut doc, &txt);
     }
 
     #[test]
     fn sticky_index_association_difference() {
-        let doc = Doc::with_client_id(1);
+        let mut doc = Doc::with_client_id(1);
         let txt = doc.get_or_insert_text("test");
 
         let mut txn = doc.transact_mut();

@@ -205,10 +205,10 @@ impl Transaction {
 }
 
 impl ReadTxn for Transaction {
-    fn store(&self) -> &Store {
+    fn doc(&self) -> &Store {
         match &self.0 {
-            TransactionInner::ReadOnly(txn) => txn.store(),
-            TransactionInner::ReadWrite(txn) => txn.store(),
+            TransactionInner::ReadOnly(txn) => txn.doc(),
+            TransactionInner::ReadWrite(txn) => txn.doc(),
         }
     }
 }
@@ -1050,7 +1050,7 @@ pub unsafe extern "C" fn ytransaction_encode_state_from_snapshot_v2(
 #[no_mangle]
 pub unsafe extern "C" fn ytransaction_pending_ds(txn: *const Transaction) -> *mut YDeleteSet {
     let txn = txn.as_ref().unwrap();
-    match txn.store().pending_ds() {
+    match txn.doc().pending_ds() {
         None => null_mut(),
         Some(ds) => Box::into_raw(Box::new(YDeleteSet::new(ds))),
     }
@@ -1077,7 +1077,7 @@ pub unsafe extern "C" fn ytransaction_pending_update(
     txn: *const Transaction,
 ) -> *mut YPendingUpdate {
     let txn = txn.as_ref().unwrap();
-    match txn.store().pending_update() {
+    match txn.doc().pending_update() {
         None => null_mut(),
         Some(u) => {
             let binary = u.update.encode_v1().into_boxed_slice();
