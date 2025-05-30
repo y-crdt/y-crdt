@@ -2,7 +2,7 @@ use crate::block::{ItemContent, ItemPtr};
 use crate::branch::{Branch, BranchPtr};
 use crate::types::{AsPrelim, ToJson};
 use crate::{
-    any, Any, ArrayRef, Doc, GetString, In, MapPrelim, MapRef, ReadTxn, TextRef, XmlElementRef,
+    any, Any, ArrayRef, GetString, In, MapPrelim, MapRef, ReadTxn, TextRef, XmlElementRef,
     XmlFragmentRef, XmlTextRef,
 };
 use std::convert::TryFrom;
@@ -28,7 +28,7 @@ pub enum Out {
     /// Instance of a [XmlTextRef].
     YXmlText(XmlTextRef),
     /// Subdocument.
-    YDoc(Doc),
+    YDoc(crate::Uuid),
     /// Instance of a [WeakRef] or unspecified type (requires manual casting).
     #[cfg(feature = "weak")]
     YWeakLink(crate::WeakRef<BranchPtr>),
@@ -209,7 +209,7 @@ impl ToJson for Out {
             Out::YXmlElement(v) => Any::from(v.get_string(txn)),
             Out::YXmlText(v) => Any::from(v.get_string(txn)),
             Out::YXmlFragment(v) => Any::from(v.get_string(txn)),
-            Out::YDoc(doc) => any!({"guid": doc.guid().as_ref()}),
+            Out::YDoc(guid) => any!({"guid": guid.to_string()}),
             #[cfg(feature = "weak")]
             Out::YWeakLink(_) => Any::Undefined,
             Out::UndefinedRef(_) => Any::Undefined,
@@ -229,7 +229,7 @@ impl std::fmt::Display for Out {
             Out::YXmlText(_) => write!(f, "XmlTextRef"),
             #[cfg(feature = "weak")]
             Out::YWeakLink(_) => write!(f, "WeakRef"),
-            Out::YDoc(v) => write!(f, "Doc(guid:{})", v.guid()),
+            Out::YDoc(guid) => write!(f, "Doc(guid:{})", guid),
             Out::UndefinedRef(_) => write!(f, "UndefinedRef"),
         }
     }

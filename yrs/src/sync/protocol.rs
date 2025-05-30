@@ -387,7 +387,7 @@ mod test {
         let mut doc = Doc::new();
         let txt = doc.get_or_insert_text("text");
         txt.push(&mut doc.transact_mut(), "hello world");
-        let awareness = Awareness::new(doc);
+        let mut awareness = Awareness::new(doc);
         awareness
             .set_local_state(json!({
               "user":{

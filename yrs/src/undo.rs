@@ -8,6 +8,7 @@ use crate::{DeleteSet, Doc, Observer, ReadTxn, TransactionMut, ID};
 
 use std::collections::HashSet;
 use std::fmt::Formatter;
+use std::ops::Deref;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -53,7 +54,23 @@ pub trait Meta: Default {}
 #[cfg(not(feature = "sync"))]
 impl<M> Meta for M where M: Default {}
 
-pub type UndoStack<M> = crate::lockfree::Stack<StackItem<M>>;
+#[repr(transparent)]
+#[derive(Default)]
+pub struct UndoStack<M>(crate::lockfree::Stack<StackItem<M>>);
+
+impl<M> UndoStack<M> {
+    pub fn is_deleted(&self, id: &ID) -> bool {
+        self.0.any(|i| i.deletions.is_deleted(id))
+    }
+}
+
+impl<M> Deref for UndoStack<M> {
+    type Target = crate::lockfree::Stack<StackItem<M>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
 
 struct State<M> {
     scope: HashSet<BranchPtr>,
@@ -458,10 +475,6 @@ where
         let ptr = BranchPtr::from(scope.as_ref());
         let inner = Arc::get_mut(&mut self.state).unwrap();
         inner.scope.insert(ptr);
-    }
-
-    pub fn is_deleted(stack: &UndoStack<StackItem<M>>, id: &ID) -> bool {
-        stack.any(|i| i.deletions.is_deleted(id))
     }
 
     /// Extends a list of origins tracked by current undo manager by given `origin`. Origin markers

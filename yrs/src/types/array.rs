@@ -40,7 +40,7 @@ use std::ops::{Deref, DerefMut};
 /// # Example
 ///
 /// ```rust
-/// use yrs::{Array, Doc, Map, MapPrelim, Transact, Any, any};
+/// use yrs::{Array, Doc, Map, MapPrelim, Any, any};
 /// use yrs::types::ToJson;
 ///
 /// let mut doc = Doc::new();
