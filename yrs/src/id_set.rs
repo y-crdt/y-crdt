@@ -1136,11 +1136,11 @@ mod test {
         t1.insert(&mut d1.transact_mut(), 0, "aaaaa");
         t1.insert(&mut d1.transact_mut(), 0, "bbb");
 
-        exchange_updates(&[&d1, &d2]);
+        exchange_updates([&mut d1, &mut d2]);
 
         t2.insert(&mut d2.transact_mut(), 4, "cccc");
 
-        exchange_updates(&[&d1, &d2]);
+        exchange_updates([&mut d1, &mut d2]);
 
         // t1: 'bbbaccccaaaa'
         t1.remove_range(&mut d1.transact_mut(), 2, 2); // => 'bbccccaaaa'

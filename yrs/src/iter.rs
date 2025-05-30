@@ -590,7 +590,7 @@ mod test {
             assert_eq!(i.next(&txn), None);
         }
 
-        exchange_updates(&[&d1, &d2]);
+        exchange_updates([&mut d1, &mut d2]);
         {
             let txn = d2.transact();
             let mut i = a2.as_ref().start.to_iter().moved().slices().values();
@@ -630,7 +630,7 @@ mod test {
             assert_eq!(i.next(&txn), None);
         }
 
-        exchange_updates(&[&d1, &d2]);
+        exchange_updates([&mut d1, &mut d2]);
 
         {
             let txn = d2.transact();
@@ -659,7 +659,7 @@ mod test {
         let a2 = d2.get_or_insert_array("array");
 
         a1.insert_range(&mut d1.transact_mut(), 0, [1, 2, 3, 4]);
-        exchange_updates(&[&d1, &d2]);
+        exchange_updates([&mut d1, &mut d2]);
 
         a1.move_range_to(&mut d1.transact_mut(), 0, Assoc::After, 1, Assoc::Before, 3);
         {
@@ -683,8 +683,8 @@ mod test {
             assert_eq!(i.next(&txn), None);
         }
 
-        exchange_updates(&[&d1, &d2]);
-        exchange_updates(&[&d1, &d2]); // move cycles may not be detected within a single update exchange
+        exchange_updates([&mut d1, &mut d2]);
+        exchange_updates([&mut d1, &mut d2]); // move cycles may not be detected within a single update exchange
 
         let t1 = d1.transact();
         let v1: Vec<_> = a1

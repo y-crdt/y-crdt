@@ -277,7 +277,7 @@ pub trait Array: AsRef<Branch> + Sized {
     /// # Example
     ///
     /// ```rust
-    /// use yrs::{Doc, In, Array, MapPrelim, Transact};
+    /// use yrs::{Doc, In, Array, MapPrelim};
     ///
     /// let mut doc = Doc::new();
     /// let mut txn = doc.transact_mut();
@@ -372,7 +372,7 @@ pub trait Array: AsRef<Branch> + Sized {
     ///
     /// Example:
     /// ```
-    /// use yrs::{Doc, Transact, Array, Assoc};
+    /// use yrs::{Doc, Array, Assoc};
     /// let mut doc = Doc::new();
     /// let array = doc.get_or_insert_array("array");
     /// array.insert_range(&mut doc.transact_mut(), 0, [1,2,3,4]);
@@ -642,8 +642,8 @@ mod test {
     use crate::types::map::MapPrelim;
     use crate::types::{Change, DeepObservable, Event, Out, Path, PathSegment, ToJson};
     use crate::{
-        any, Any, Array, ArrayPrelim, Assoc, Doc, Map, MapRef, Observable, SharedRef, StateVector,
-        Update, ID,
+        any, Any, Array, ArrayPrelim, ArrayRef, Assoc, Doc, Map, MapRef, Observable, SharedRef,
+        StateVector, Update, ID,
     };
     use std::collections::{HashMap, HashSet};
     use std::iter::FromIterator;
@@ -783,7 +783,7 @@ mod test {
             );
         }
 
-        exchange_updates(&[&d1, &d2]);
+        exchange_updates([&mut d1, &mut d2]);
 
         let a2 = d2.get_or_insert_array("array");
         let t2 = d2.transact();
@@ -803,31 +803,31 @@ mod test {
             a.insert(&mut txn, 0, 0);
         }
 
-        let d2 = Doc::with_client_id(2);
+        let mut d2 = Doc::with_client_id(2);
         {
             let mut txn = d1.transact_mut();
             a.insert(&mut txn, 0, 1);
         }
 
-        let d3 = Doc::with_client_id(3);
+        let mut d3 = Doc::with_client_id(3);
         {
             let mut txn = d1.transact_mut();
             a.insert(&mut txn, 0, 2);
         }
 
-        exchange_updates(&[&d1, &d2, &d3]);
+        exchange_updates([&mut d1, &mut d2, &mut d3]);
 
-        let a1 = to_array(&d1);
-        let a2 = to_array(&d2);
-        let a3 = to_array(&d3);
+        let a1 = to_array(&mut d1);
+        let a2 = to_array(&mut d2);
+        let a3 = to_array(&mut d3);
 
         assert_eq!(a1, a2, "Peer 1 and peer 2 states are different");
         assert_eq!(a2, a3, "Peer 2 and peer 3 states are different");
     }
 
-    fn to_array(d: &Doc) -> Vec<Out> {
-        let a = d.get_or_insert_array("array");
-        a.iter(&d.transact()).collect()
+    fn to_array(doc: &mut Doc) -> Vec<Out> {
+        let a = doc.get_or_insert_array("array");
+        a.iter(&doc.transact()).collect()
     }
 
     #[test]
@@ -841,7 +841,7 @@ mod test {
         let mut d2 = Doc::with_client_id(2);
         let mut d3 = Doc::with_client_id(3);
 
-        exchange_updates(&[&d1, &d2, &d3]);
+        exchange_updates([&mut d1, &mut d2, &mut d3]);
 
         {
             // start state: [x,y,z]
@@ -858,12 +858,12 @@ mod test {
             a3.insert(&mut t3, 1, 2); // [x,2,y,z]
         }
 
-        exchange_updates(&[&d1, &d2, &d3]);
+        exchange_updates([&mut d1, &mut d2, &mut d3]);
         // after exchange expected: [0,2,y]
 
-        let a1 = to_array(&d1);
-        let a2 = to_array(&d2);
-        let a3 = to_array(&d3);
+        let a1 = to_array(&mut d1);
+        let a2 = to_array(&mut d2);
+        let a3 = to_array(&mut d3);
 
         assert_eq!(a1, a2, "Peer 1 and peer 2 states are different");
         assert_eq!(a2, a3, "Peer 2 and peer 3 states are different");
@@ -881,7 +881,7 @@ mod test {
         let mut d2 = Doc::with_client_id(2);
         let mut d3 = Doc::with_client_id(3);
 
-        exchange_updates(&[&d1, &d2, &d3]);
+        exchange_updates([&mut d1, &mut d2, &mut d3]);
 
         {
             let a1 = d1.get_or_insert_array("array");
@@ -896,11 +896,11 @@ mod test {
             a3.insert(&mut t3, 1, "user2");
         }
 
-        exchange_updates(&[&d1, &d2, &d3]);
+        exchange_updates([&mut d1, &mut d2, &mut d3]);
 
-        let a1 = to_array(&d1);
-        let a2 = to_array(&d2);
-        let a3 = to_array(&d3);
+        let a1 = to_array(&mut d1);
+        let a2 = to_array(&mut d2);
+        let a3 = to_array(&mut d3);
 
         assert_eq!(a1, a2, "Peer 1 and peer 2 states are different");
         assert_eq!(a2, a3, "Peer 2 and peer 3 states are different");
@@ -917,7 +917,7 @@ mod test {
         }
         let mut d2 = Doc::with_client_id(2);
 
-        exchange_updates(&[&d1, &d2]);
+        exchange_updates([&mut d1, &mut d2]);
 
         {
             let a1 = d1.get_or_insert_array("array");
@@ -929,10 +929,10 @@ mod test {
             a1.remove_range(&mut t1, 0, 2);
         }
 
-        exchange_updates(&[&d1, &d2]);
+        exchange_updates([&mut d1, &mut d2]);
 
-        let a1 = to_array(&d1);
-        let a2 = to_array(&d2);
+        let a1 = to_array(&mut d1);
+        let a2 = to_array(&mut d2);
 
         assert_eq!(a1, a2, "Peer 1 and peer 2 states are different");
     }
@@ -949,7 +949,7 @@ mod test {
         }
         let mut d2 = Doc::with_client_id(2);
 
-        exchange_updates(&[&d1, &d2]);
+        exchange_updates([&mut d1, &mut d2]);
 
         {
             let a2 = d2.get_or_insert_array("array");
@@ -958,10 +958,10 @@ mod test {
             a2.remove_range(&mut t2, 0, 3);
         }
 
-        exchange_updates(&[&d1, &d2]);
+        exchange_updates([&mut d1, &mut d2]);
 
-        let a1 = to_array(&d1);
-        let a2 = to_array(&d2);
+        let a1 = to_array(&mut d1);
+        let a2 = to_array(&mut d2);
 
         assert_eq!(a1, a2, "Peer 1 and peer 2 states are different");
     }
@@ -1155,7 +1155,7 @@ mod test {
             let mut t1 = d1.transact_mut();
             a1.insert_range(&mut t1, 0, [1, 2]);
         }
-        exchange_updates(&[&d1, &d2]);
+        exchange_updates([&mut d1, &mut d2]);
 
         assert_eq!(c1.swap(None), Some(Arc::new(a1.hook())));
         assert_eq!(c2.swap(None), Some(Arc::new(a2.hook())));
@@ -1366,7 +1366,7 @@ mod test {
         }
         assert_eq!(a1.to_json(&d1.transact()), vec![2, 1, 3].into());
 
-        exchange_updates(&[&d1, &d2]);
+        exchange_updates([&mut d1, &mut d2]);
 
         assert_eq!(a2.to_json(&d2.transact()), vec![2, 1, 3].into());
         let actual = e2.load_full();
@@ -1428,7 +1428,7 @@ mod test {
             );
         }
 
-        exchange_updates(&[&d1, &d2]);
+        exchange_updates([&mut d1, &mut d2]);
 
         assert_eq!(a2.to_json(&d2.transact()), vec![2, 1].into());
         {
@@ -1463,7 +1463,7 @@ mod test {
         let a2 = d2.get_or_insert_array("array");
 
         a1.insert_range(&mut d1.transact_mut(), 0, [1, 2, 3, 4]);
-        exchange_updates(&[&d1, &d2]);
+        exchange_updates([&mut d1, &mut d2]);
 
         a1.move_range_to(&mut d1.transact_mut(), 0, Assoc::After, 1, Assoc::Before, 3);
         assert_eq!(a1.to_json(&d1.transact()), vec![3, 1, 2, 4].into());
@@ -1471,8 +1471,8 @@ mod test {
         a2.move_range_to(&mut d2.transact_mut(), 2, Assoc::After, 3, Assoc::Before, 1);
         assert_eq!(a2.to_json(&d2.transact()), vec![1, 3, 4, 2].into());
 
-        exchange_updates(&[&d1, &d2]);
-        exchange_updates(&[&d1, &d2]); // move cycles may not be detected within a single update exchange
+        exchange_updates([&mut d1, &mut d2]);
+        exchange_updates([&mut d1, &mut d2]); // move cycles may not be detected within a single update exchange
 
         assert_eq!(a1.len(&d1.transact()), 4);
         assert_eq!(a1.to_json(&d1.transact()), a2.to_json(&d2.transact()));
@@ -1738,7 +1738,7 @@ mod test {
         h2.join().unwrap();
 
         let doc = doc.read().unwrap();
-        let array = doc.get_or_insert_array("test");
+        let array: ArrayRef = doc.get("test").unwrap();
         let len = array.len(&doc.transact());
         assert_eq!(len, 20);
     }
@@ -1784,7 +1784,7 @@ mod test {
 
         let data = txn.encode_state_as_update_v1(&StateVector::default());
 
-        let doc2 = Doc::with_client_id(2);
+        let mut doc2 = Doc::with_client_id(2);
         let mut txn = doc2.transact_mut();
         let array = txn.get_or_insert_array("array");
         txn.apply_update(Update::decode_v1(&data).unwrap()).unwrap();

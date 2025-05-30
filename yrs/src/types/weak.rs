@@ -932,7 +932,7 @@ mod test {
         let mut d2 = Doc::new();
         let a2 = d2.get_or_insert_array("array");
 
-        exchange_updates(&[&d1, &d2]);
+        exchange_updates([&mut d1, &mut d2]);
         let txn = d2.transact_mut();
 
         assert_eq!(a2.get(&txn, 0), Some(1.into()));
@@ -979,7 +979,7 @@ mod test {
         assert_eq!(a1.get(&t1, 4), Some(3.into()));
         drop(t1);
 
-        exchange_updates(&[&d1, &d2]);
+        exchange_updates([&mut d1, &mut d2]);
 
         let t2 = d2.transact();
         let l2 = a2.get(&t2, 0).unwrap().cast::<WeakRef<ArrayRef>>().unwrap();
@@ -1017,7 +1017,7 @@ mod test {
         );
         drop(t2);
 
-        exchange_updates(&[&d1, &d2]);
+        exchange_updates([&mut d1, &mut d2]);
 
         assert_eq!(
             l1.unquote(&d1.transact()).collect::<Vec<Out>>(),
@@ -1059,7 +1059,7 @@ mod test {
         assert_eq!(a1.get(&t1, 4), Some(4.into()));
         drop(t1);
 
-        exchange_updates(&[&d1, &d2]);
+        exchange_updates([&mut d1, &mut d2]);
 
         let t2 = d2.transact();
         let l2 = a2.get(&t2, 1).unwrap().cast::<WeakRef<ArrayRef>>().unwrap();
@@ -1096,7 +1096,7 @@ mod test {
             m1.insert(&mut txn, "b", link)
         };
 
-        exchange_updates(&[&d1, &d2]);
+        exchange_updates([&mut d1, &mut d2]);
 
         let link2 = m2
             .get(&d2.transact(), "b")
@@ -1109,7 +1109,7 @@ mod test {
 
         m2.insert(&mut d2.transact_mut(), "a2", "world");
 
-        exchange_updates(&[&d1, &d2]);
+        exchange_updates([&mut d1, &mut d2]);
 
         let l1: MapRef = link1.try_deref(&d1.transact()).unwrap();
         let l2: MapRef = link2.try_deref(&d2.transact()).unwrap();
@@ -1133,7 +1133,7 @@ mod test {
             m1.insert(&mut txn, "b", link)
         };
 
-        exchange_updates(&[&d1, &d2]);
+        exchange_updates([&mut d1, &mut d2]);
 
         let link2 = m2
             .get(&d2.transact(), "b")
@@ -1146,7 +1146,7 @@ mod test {
 
         m2.remove(&mut d2.transact_mut(), "b"); // delete links
 
-        exchange_updates(&[&d1, &d2]);
+        exchange_updates([&mut d1, &mut d2]);
 
         // since links have been deleted, they no longer refer to any content
         assert_eq!(link1.try_deref_value(&d1.transact()), None);
@@ -1169,7 +1169,7 @@ mod test {
             m1.insert(&mut txn, "b", link)
         };
 
-        exchange_updates(&[&d1, &d2]);
+        exchange_updates([&mut d1, &mut d2]);
 
         let link2 = m2
             .get(&d2.transact(), "b")
@@ -1182,7 +1182,7 @@ mod test {
 
         m2.remove(&mut d2.transact_mut(), "a"); // delete source of the link
 
-        exchange_updates(&[&d1, &d2]);
+        exchange_updates([&mut d1, &mut d2]);
 
         // since links have been deleted, they no longer refer to any content
         assert_eq!(link1.try_deref_value(&d1.transact()), None);
@@ -1209,7 +1209,7 @@ mod test {
             link1.observe(move |_, e| target.store(Some(Arc::new(e.target.clone()))))
         };
 
-        exchange_updates(&[&d1, &d2]);
+        exchange_updates([&mut d1, &mut d2]);
 
         let link2 = m2
             .get(&d2.transact(), "b")
@@ -1227,7 +1227,7 @@ mod test {
         m1.insert(&mut d1.transact_mut(), "a", "value2");
         assert_eq!(link1.try_deref_value(&d1.transact()), Some("value2".into()));
 
-        exchange_updates(&[&d1, &d2]);
+        exchange_updates([&mut d1, &mut d2]);
         assert_eq!(link2.try_deref_value(&d2.transact()), Some("value2".into()));
     }
 
@@ -1251,7 +1251,7 @@ mod test {
             link1.observe(move |_, e| target.store(Some(Arc::new(e.as_target::<MapRef>()))))
         };
 
-        exchange_updates(&[&d1, &d2]);
+        exchange_updates([&mut d1, &mut d2]);
 
         let link2 = m2
             .get(&d2.transact(), "b")
@@ -1270,7 +1270,7 @@ mod test {
         let l1 = target1.swap(None).unwrap();
         assert_eq!(l1.try_deref_value(&d1.transact()), None);
 
-        exchange_updates(&[&d1, &d2]);
+        exchange_updates([&mut d1, &mut d2]);
         let l2 = target2.swap(None).unwrap();
         assert_eq!(l2.try_deref_value(&d2.transact()), None);
     }
@@ -1295,7 +1295,7 @@ mod test {
             link1.observe(move |_, e| target.store(Some(Arc::new(e.as_target::<ArrayRef>()))))
         };
 
-        exchange_updates(&[&d1, &d2]);
+        exchange_updates([&mut d1, &mut d2]);
 
         let link2 = a2
             .get(&d2.transact(), 0)
@@ -1315,7 +1315,7 @@ mod test {
         let actual: Vec<_> = link1.unquote(&d1.transact()).collect();
         assert_eq!(actual, vec!["C".into()]);
 
-        exchange_updates(&[&d1, &d2]);
+        exchange_updates([&mut d1, &mut d2]);
         let l2 = target2.swap(None).unwrap();
         let actual: Vec<_> = l2.unquote(&d2.transact()).collect();
         assert_eq!(actual, vec!["C".into()]);
@@ -1325,7 +1325,7 @@ mod test {
         let actual: Vec<_> = l2.unquote(&d2.transact()).collect();
         assert_eq!(actual, vec![]);
 
-        exchange_updates(&[&d1, &d2]);
+        exchange_updates([&mut d1, &mut d2]);
         let l1 = target1.swap(None).unwrap();
         let actual: Vec<_> = l1.unquote(&d1.transact()).collect();
         assert_eq!(actual, vec![]);
@@ -1632,7 +1632,7 @@ mod test {
             a1.insert(&mut t1, 0, link)
         };
 
-        exchange_updates(&[&d1, &d2]);
+        exchange_updates([&mut d1, &mut d2]);
 
         let e1 = Arc::new(Mutex::new(vec![]));
         let _s1 = {
@@ -1676,7 +1676,7 @@ mod test {
         };
 
         let m20 = a1.insert(&mut d1.transact_mut(), 3, MapPrelim::default());
-        exchange_updates(&[&d1, &d2]);
+        exchange_updates([&mut d1, &mut d2]);
         m20.insert(&mut d1.transact_mut(), "key", "value");
         assert_eq!(
             &*e1.lock().unwrap(),
@@ -1689,7 +1689,7 @@ mod test {
             )]
         );
 
-        exchange_updates(&[&d1, &d2]);
+        exchange_updates([&mut d1, &mut d2]);
 
         let m21 = a2.get(&d2.transact(), 3).unwrap().cast::<MapRef>().unwrap();
         assert_eq!(
@@ -1811,7 +1811,7 @@ mod test {
 
         m1.insert(&mut d1.transact_mut(), "key", 1);
 
-        exchange_updates(&[&d1, &d2, &d3]);
+        exchange_updates([&mut d1, &mut d2, &mut d3]);
 
         let l2 = m2.link(&d2.transact(), "key").unwrap();
         m2.insert(&mut d2.transact_mut(), "link", l2);
@@ -1819,8 +1819,8 @@ mod test {
         m1.insert(&mut d1.transact_mut(), "key", 3);
 
         // apply updated content first, link second
-        exchange_updates(&[&d3, &d1]);
-        exchange_updates(&[&d3, &d2]);
+        exchange_updates([&mut d3, &mut d1]);
+        exchange_updates([&mut d3, &mut d2]);
 
         // make sure that link can find the most recent block
         let l3 = m3
@@ -1830,7 +1830,7 @@ mod test {
             .unwrap();
         assert_eq!(l3.try_deref_value(&d3.transact()), Some(3.into()));
 
-        exchange_updates(&[&d1, &d2, &d3]);
+        exchange_updates([&mut d1, &mut d2, &mut d3]);
 
         let l1 = m1
             .get(&d1.transact(), "link")
@@ -1872,7 +1872,7 @@ mod test {
 
         txt1.insert_embed(&mut d1.transact_mut(), 3, WeakPrelim::from(l1.clone())); // 'abe[be]'
 
-        exchange_updates(&[&d1, &d2]);
+        exchange_updates([&mut d1, &mut d2]);
 
         let diff = txt2.diff(&d2.transact(), YChange::identity);
         let l2 = diff[1].insert.clone().cast::<WeakRef<TextRef>>().unwrap();
@@ -1905,7 +1905,7 @@ mod test {
 
         txt1.insert_embed(&mut d1.transact_mut(), 3, WeakPrelim::from(l1.clone())); // 'abe[be]'
 
-        exchange_updates(&[&d1, &d2]);
+        exchange_updates([&mut d1, &mut d2]);
 
         let diff = txt2.diff(&d2.transact(), YChange::identity);
         let l2 = diff[1].insert.clone().cast::<WeakRef<TextRef>>().unwrap();
@@ -2088,7 +2088,7 @@ mod test {
         let _arr2 = d2.get_or_insert_array("array");
         let txt2 = d2.get_or_insert_text("text");
 
-        exchange_updates(&[&d1, &d2]); // t2: 'abcdef'
+        exchange_updates([&mut d1, &mut d2]); // t2: 'abcdef'
 
         txt2.insert(&mut d2.transact_mut(), 1, "xyz"); // t2: 'axyzbcdef'
 
@@ -2125,7 +2125,7 @@ mod test {
             assert_eq!(&str, "bcde");
         }
 
-        exchange_updates(&[&d1, &d2]);
+        exchange_updates([&mut d1, &mut d2]);
 
         {
             let txn = d1.transact();
@@ -2154,7 +2154,7 @@ mod test {
         let _arr2 = d2.get_or_insert_array("array");
         let txt2 = d2.get_or_insert_text("text");
 
-        exchange_updates(&[&d1, &d2]);
+        exchange_updates([&mut d1, &mut d2]);
 
         txt2.insert(&mut d2.transact_mut(), 5, "xyz");
 
@@ -2181,7 +2181,7 @@ mod test {
             assert_eq!(&str, "bcde");
         }
 
-        exchange_updates(&[&d1, &d2]);
+        exchange_updates([&mut d1, &mut d2]);
 
         {
             let txn = d1.transact();
@@ -2215,7 +2215,7 @@ mod test {
 
         let mut d2 = Doc::with_client_id(2);
 
-        exchange_updates(&[&d1, &d2]);
+        exchange_updates([&mut d1, &mut d2]);
 
         let mut txn = d2.transact_mut();
         let _txt2 = txn.get_or_insert_text("text");
@@ -2249,7 +2249,7 @@ mod test {
 
         let mut d2 = Doc::with_client_id(2);
 
-        exchange_updates(&[&d1, &d2]);
+        exchange_updates([&mut d1, &mut d2]);
 
         let mut txn = d2.transact_mut();
         let _txt2 = txn.get_or_insert_text("text");
@@ -2284,7 +2284,7 @@ mod test {
 
         let mut d2 = Doc::with_client_id(2);
 
-        exchange_updates(&[&d1, &d2]);
+        exchange_updates([&mut d1, &mut d2]);
 
         let mut txn = d2.transact_mut();
         let _txt2 = txn.get_or_insert_text("text");

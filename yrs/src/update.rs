@@ -1368,11 +1368,10 @@ mod test {
         let server_updates = Arc::new(Mutex::new(vec![]));
         let sub = {
             let server_updates = server_updates.clone();
-            d0.observe_update_v1(move |_, update| {
+            d0.events().update_v1.subscribe(Box::new(move |_, update| {
                 let mut lock = server_updates.lock().unwrap();
                 lock.push(update.update.clone());
-            })
-            .unwrap()
+            }))
         };
         let txt = d0.get_or_insert_text("textBlock");
         txt.apply_delta(&mut d0.transact_mut(), [Delta::insert("r")]);

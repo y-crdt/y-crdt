@@ -1724,7 +1724,7 @@ mod test {
 
         let mut d2 = Doc::with_client_id(2);
         let f = d2.get_or_insert_xml_fragment("xml");
-        exchange_updates(&[&d1, &d2]);
+        exchange_updates([&mut d1, &mut d2]);
         let xml2 = f
             .get(&d2.transact(), 0)
             .unwrap()

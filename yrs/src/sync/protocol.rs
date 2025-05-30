@@ -531,7 +531,7 @@ mod test {
 
         let a2_clients: HashMap<_, _> = a2
             .iter()
-            .flat_map(|(id, state)| state.data.map(|data| (id, data)))
+            .flat_map(|(id, state)| state.data.clone().map(|data| (*id, data)))
             .collect();
         assert_eq!(a2_clients, HashMap::from([(1, "{\"x\":3}".into())]));
     }

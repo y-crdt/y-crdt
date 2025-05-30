@@ -1,6 +1,5 @@
 use crate::block::{Item, ItemContent, ItemPosition, ItemPtr, Prelim, ID};
 use crate::branch::{Branch, BranchPtr};
-use crate::doc::DocAddr;
 use crate::error::{Error, UpdateError};
 use crate::event::SubdocsEvent;
 use crate::gc::GCCollector;
@@ -358,10 +357,10 @@ impl<'doc> ReadTxn for Transaction<'doc> {
 /// not supported (if some operations needs to be undone, this can be achieved using [UndoManager])
 pub struct TransactionMut<'doc> {
     doc: &'doc mut Doc,
-    state: TransactionState,
+    state: TransactionState<'doc>,
 }
 
-pub(crate) struct TransactionState {
+pub(crate) struct TransactionState<'doc> {
     /// State vector of a current transaction at the moment of its creation.
     pub before_state: StateVector,
     /// Current state vector of a transaction, which includes all performed updates.
@@ -377,7 +376,7 @@ pub(crate) struct TransactionState {
     /// New types are not included in this Set.
     pub changed: HashMap<TypePtr, HashSet<Option<Arc<str>>>>,
     pub changed_parent_types: Vec<BranchPtr>,
-    pub subdocs: Option<Box<Subdocs>>,
+    pub subdocs: Option<Box<Subdocs<'doc>>>,
     pub origin: Option<Origin>,
     committed: bool,
 }
@@ -1196,10 +1195,10 @@ impl<'doc> Iterator for RootRefs<'doc> {
 }
 
 #[derive(Default)]
-pub struct Subdocs {
-    pub(crate) added: HashMap<DocAddr, Doc>,
-    pub(crate) removed: HashMap<DocAddr, Doc>,
-    pub(crate) loaded: HashMap<DocAddr, Doc>,
+pub struct Subdocs<'a> {
+    pub(crate) added: HashSet<&'a Doc>,
+    pub(crate) removed: HashSet<&'a Doc>,
+    pub(crate) loaded: HashSet<&'a Doc>,
 }
 
 /// A binary marker that can be assigned to a read-write transaction upon creation via
