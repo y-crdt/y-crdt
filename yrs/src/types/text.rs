@@ -1511,7 +1511,7 @@ mod test {
     use crate::updates::encoder::{Encode, Encoder, EncoderV1};
     use crate::{
         any, Any, ArrayPrelim, Doc, GetString, Map, MapPrelim, MapRef, Observable, StateVector,
-        Text, Update, ID,
+        Text, TextRef, Update, ID,
     };
     use arc_swap::ArcSwapOption;
     use fastrand::Rng;
@@ -2380,12 +2380,12 @@ mod test {
         txt.insert(&mut d1.transact_mut(), 0, "😭😊");
 
         let mut d2 = Doc::new();
-        exchange_updates(&[&d1, &d2]);
+        exchange_updates([&mut d1, &mut d2]);
 
         txt.remove_range(&mut d1.transact_mut(), 0, "😭".len() as u32);
         assert_eq!(txt.get_string(&d1.transact()).as_str(), "😊");
 
-        exchange_updates(&[&d1, &d2]);
+        exchange_updates([&mut d1, &mut d2]);
         let txt = d2.get_or_insert_text("test");
         assert_eq!(txt.get_string(&d2.transact()).as_str(), "😊");
     }
@@ -2398,12 +2398,12 @@ mod test {
         txt.insert(&mut d1.transact_mut(), 0, "⏰⏳");
 
         let mut d2 = Doc::new();
-        exchange_updates(&[&d1, &d2]);
+        exchange_updates([&mut d1, &mut d2]);
 
         txt.remove_range(&mut d1.transact_mut(), 0, "⏰".len() as u32);
         assert_eq!(txt.get_string(&d1.transact()).as_str(), "⏳");
 
-        exchange_updates(&[&d1, &d2]);
+        exchange_updates([&mut d1, &mut d2]);
         let txt = d2.get_or_insert_text("test");
         assert_eq!(txt.get_string(&d2.transact()).as_str(), "⏳");
     }
@@ -2636,8 +2636,8 @@ mod test {
         h3.join().unwrap();
         h2.join().unwrap();
 
-        let mut doc = doc.read().unwrap();
-        let txt = doc.get_or_insert_text("test");
+        let doc = doc.read().unwrap();
+        let txt: TextRef = doc.get("test").unwrap();
         let len = txt.len(&doc.transact());
         assert_eq!(len, 20);
     }

@@ -1,13 +1,10 @@
-use std::sync::{Arc, Weak};
-
-use arc_swap::{ArcSwapOption, AsRaw, Guard};
-
 use crate::Origin;
+use std::sync::{Arc, Weak};
 
 /// Data structure used to handle publish/subscribe callbacks of specific type. Observers perform
 /// subscriber changes in thread-safe manner, using atomic hardware intrinsics.
 pub struct Observer<F> {
-    inner: ArcSwapOption<Inner<F>>,
+    subscriptions: Arc<crate::lockfree::Stack<Node<F>>>,
 }
 
 impl<F> Observer<F>
@@ -17,16 +14,12 @@ where
     /// Creates a new [Observer] with no active callbacks.
     pub fn new() -> Self {
         Observer {
-            inner: ArcSwapOption::new(None),
+            subscriptions: crate::lockfree::Stack::new().into(),
         }
     }
 
     pub fn has_subscribers(&self) -> bool {
-        if let Some(inner) = &*self.inner.load() {
-            inner.head.load().is_some()
-        } else {
-            false
-        }
+        !self.subscriptions.is_empty()
     }
 
     /// Cleanup already released subscriptions. Whenever a [Subscription] is dropped, the callback is released. However,
@@ -34,45 +27,12 @@ where
     /// [Observer::subscribe] or [Observer::callbacks].
     ///
     /// This method allows to perform stale callback cleanup without waiting for callbacks to be visited.
-    pub fn clean(&self) {
-        self.inner.swap(None);
-    }
-
-    fn inner(&self) -> Arc<Inner<F>> {
-        let cur = self.inner.load_full();
-        match cur {
-            Some(inner) => inner,
-            None => {
-                // inner was not initialized yet, we need to create a new one
-                let inner = Arc::new(Inner {
-                    head: ArcSwapOption::new(None),
-                });
-                let old: Option<Arc<Inner<F>>> = None;
-                let prev = self.inner.compare_and_swap(&old, Some(inner.clone()));
-                // there's a slight possibility that inner was initialized twice, in that case
-                // return first swapped inner
-                Guard::into_inner(prev).unwrap_or(inner)
-            }
-        }
-    }
-
-    fn remove(mut prev: Arc<Node<F>>, id: &Origin) -> bool {
-        while let Some(next) = prev.next.load_full() {
-            if &next.uid == id {
-                prev.next.store(next.next.load_full());
-                return true;
-            }
-            prev = next;
-        }
-        false
+    pub fn clear(&self) {
+        self.subscriptions.clear();
     }
 
     pub fn unsubscribe(&self, id: &Origin) -> bool {
-        if let Some(inner) = &*self.inner.load() {
-            inner.remove(id)
-        } else {
-            false
-        }
+        self.subscriptions.remove_where(|n| n.id == *id)
     }
 
     /// Returns a snapshot of callbacks subscribed to this observer at the moment when this method
@@ -82,40 +42,14 @@ where
     where
         E: FnMut(&F),
     {
-        if let Some(inner) = &*self.inner.load() {
-            let mut next = inner.head.load();
-            while let Some(node) = &*next {
-                each(&node.callback);
-                next = node.next.load();
-            }
-        }
+        self.subscriptions.each(|n| each(&n.callback));
     }
 
     /// Subscribes a callback parameter to a current [Observer].
     /// Returns a subscription object which - when dropped - will unsubscribe current callback.
     /// If the `id` was already present in the observer, current callback will be ignored.
     pub fn subscribe_with(&self, id: Origin, callback: F) {
-        let inner = self.inner();
-        let mut node = Arc::new(Node::new(id.clone(), callback));
-        let cur = inner.head.load();
-        let head = loop {
-            {
-                // update new node next pointer to point to current head
-                // it's safe to unwrap, since until current node is successfully inserted
-                // there will be no more that a single Arc reference to it
-                let n = Arc::get_mut(&mut node).unwrap();
-                n.next.store(cur.clone());
-            }
-
-            let prev = inner.head.compare_and_swap(&*cur, Some(node.clone()));
-            let swapped = std::ptr::eq(prev.as_raw(), cur.as_raw());
-            if swapped {
-                // we successfully swapped the head, we can exit the loop
-                break node;
-            }
-        };
-        // remove all previous nodes that share the same ID
-        Self::remove(head.clone(), &id);
+        self.subscriptions.push_unique(Node::new(id, callback));
     }
 }
 
@@ -131,7 +65,7 @@ where
         self.subscribe_with(origin.clone(), callback);
         Arc::new(Cancel {
             id: origin,
-            inner: Arc::downgrade(&self.inner()),
+            inner: Arc::downgrade(&self.subscriptions),
         })
     }
 }
@@ -148,7 +82,7 @@ where
         self.subscribe_with(origin.clone(), callback);
         Arc::new(Cancel {
             id: origin,
-            inner: Arc::downgrade(&self.inner()),
+            inner: Arc::downgrade(&self.subscriptions),
         })
     }
 }
@@ -170,56 +104,25 @@ where
 {
     fn default() -> Self {
         Observer::new()
-    }
-}
-
-struct Inner<F> {
-    head: ArcSwapOption<Node<F>>,
-}
-
-impl<F> Inner<F>
-where
-    F: 'static,
-{
-    fn remove(&self, id: &Origin) -> bool {
-        while let Some(head) = self.head.load_full() {
-            if &head.uid == id {
-                // the element to remove is the head of the list
-                // we need to swap head pointer of self to the next element
-                let next = head.next.load_full();
-                let prev = self.head.compare_and_swap(&head, next);
-                if !std::ptr::eq(prev.as_raw(), Arc::as_ptr(&head)) {
-                    // head changed, retry
-                    continue;
-                } else {
-                    return true;
-                }
-            } else {
-                // the element to remove is somewhere in the middle of the list
-                // we need to find it and repoint its predecessor's next pointer
-                // to its successor
-                return Observer::remove(head.clone(), id);
-            }
-        }
-        false
     }
 }
 
 struct Node<T> {
-    uid: Origin,
+    id: Origin,
     callback: T,
-    next: ArcSwapOption<Node<T>>,
 }
 
 impl<F> Node<F> {
-    fn new(uid: Origin, callback: F) -> Self {
-        Node {
-            uid,
-            callback,
-            next: Default::default(),
-        }
+    fn new(id: Origin, callback: F) -> Self {
+        Node { id, callback }
     }
 }
+impl<T> PartialEq for Node<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+impl<T> Eq for Node<T> {}
 
 #[cfg(feature = "sync")]
 struct Cancel<F>
@@ -227,7 +130,7 @@ where
     F: Send + Sync + 'static,
 {
     id: Origin,
-    inner: Weak<Inner<F>>,
+    inner: Weak<crate::lockfree::Stack<Node<F>>>,
 }
 
 #[cfg(feature = "sync")]
@@ -237,7 +140,7 @@ where
 {
     fn drop(&mut self) {
         if let Some(inner) = self.inner.upgrade() {
-            inner.remove(&self.id);
+            inner.remove_where(|n| n.id == self.id);
         }
     }
 }
@@ -258,7 +161,7 @@ where
 {
     fn drop(&mut self) {
         if let Some(inner) = self.inner.upgrade() {
-            inner.remove(&self.id);
+            inner.remove_where(|n| n.id == self.id);
         }
     }
 }
@@ -328,7 +231,7 @@ mod test {
         assert!(o.has_subscribers());
 
         drop(_sub);
-        o.clean();
+        o.clear();
 
         assert!(!o.has_subscribers());
     }
@@ -463,7 +366,7 @@ mod test {
             subscriptions.push(sub);
         }
         assert_eq!(counter.load(Ordering::SeqCst), 100);
-        o.clean();
+        o.clear();
         assert_eq!(counter.load(Ordering::SeqCst), 0);
     }
 }

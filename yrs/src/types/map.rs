@@ -825,7 +825,7 @@ mod test {
         let mut d1 = Doc::with_client_id(1);
         let mut d2 = Doc::with_client_id(2);
         let mut d3 = Doc::with_client_id(3);
-        let d4 = Doc::with_client_id(4);
+        let mut d4 = Doc::with_client_id(4);
 
         {
             let m1 = d1.get_or_insert_map("map");
@@ -842,7 +842,7 @@ mod test {
             m3.insert(&mut t3, "key1".to_owned(), "c3");
         }
 
-        exchange_updates(&[&d1, &d2, &d3, &d4]);
+        exchange_updates([&mut d1, &mut d2, &mut d3, &mut d4]);
 
         {
             let m1 = d1.get_or_insert_map("map");
@@ -860,7 +860,7 @@ mod test {
             m3.clear(&mut t3);
         }
 
-        exchange_updates(&[&d1, &d2, &d3, &d4]);
+        exchange_updates([&mut d1, &mut d2, &mut d3, &mut d4]);
 
         for doc in [d1, d2, d3, d4] {
             let map: MapRef = doc.get("map").unwrap();
@@ -907,7 +907,7 @@ mod test {
             m3.insert(&mut t3, "stuff".to_owned(), "c3");
         }
 
-        exchange_updates(&[&d1, &d2, &d3]);
+        exchange_updates([&mut d1, &mut d2, &mut d3]);
 
         for mut doc in [d1, d2, d3] {
             let map = doc.get_or_insert_map("map");
@@ -943,7 +943,7 @@ mod test {
             m3.insert(&mut t3, "key1".to_owned(), "c3");
         }
 
-        exchange_updates(&[&d1, &d2, &d3, &d4]);
+        exchange_updates([&mut d1, &mut d2, &mut d3, &mut d4]);
 
         {
             let m1 = d1.get_or_insert_map("map");
@@ -963,7 +963,7 @@ mod test {
             m4.remove(&mut t4, &"key1".to_owned());
         }
 
-        exchange_updates(&[&d1, &d2, &d3, &d4]);
+        exchange_updates([&mut d1, &mut d2, &mut d3, &mut d4]);
 
         for doc in [d1, d2, d3, d4] {
             let map: MapRef = doc.get("map").unwrap();
@@ -1365,8 +1365,8 @@ mod test {
         h3.join().unwrap();
         h2.join().unwrap();
 
-        let mut doc = doc.read().unwrap();
-        let map = doc.get_or_insert_map("test");
+        let doc = doc.read().unwrap();
+        let map: MapRef = doc.get("test").unwrap();
         let txn = doc.transact();
         let value = map.get(&txn, "key").unwrap().to_json(&txn);
 

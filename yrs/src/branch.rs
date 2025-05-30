@@ -257,6 +257,14 @@ impl Branch {
         })
     }
 
+    pub fn item_ref(&self) -> Option<&Item> {
+        Some(unsafe { std::mem::transmute(self.item?.deref()) })
+    }
+
+    pub fn item_mut(&mut self) -> Option<&mut Item> {
+        Some(unsafe { std::mem::transmute(self.item?.deref_mut()) })
+    }
+
     pub fn is_deleted(&self) -> bool {
         match self.item {
             Some(ptr) => ptr.is_deleted(),
@@ -275,8 +283,17 @@ impl Branch {
     }
 
     pub fn as_subdoc(&self) -> Option<&Doc> {
-        let item = self.item?;
+        let item = self.item_ref()?;
         if let ItemContent::Doc(_, doc) = &item.content {
+            Some(doc)
+        } else {
+            None
+        }
+    }
+
+    pub fn as_subdoc_mut(&mut self) -> Option<&mut Doc> {
+        let item = self.item_mut()?;
+        if let ItemContent::Doc(_, doc) = &mut item.content {
             Some(doc)
         } else {
             None

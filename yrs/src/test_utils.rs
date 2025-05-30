@@ -14,19 +14,19 @@ use crate::{Doc, StateVector, Update};
 
 pub const EXCHANGE_UPDATES_ORIGIN: &str = "exchange_updates";
 
-pub fn exchange_updates(docs: &[&Doc]) {
+pub fn exchange_updates<const N: usize>(docs: [&mut Doc; N]) {
     for i in 0..docs.len() {
         for j in 0..docs.len() {
             if i != j {
-                let a = docs[i];
-                let ta = a.transact();
-                let mut b = docs[j];
-                let mut tb = b.transact_mut_with(EXCHANGE_UPDATES_ORIGIN);
-
-                let sv = tb.state_vector().encode_v1();
-                let update = ta.encode_diff_v1(&StateVector::decode_v1(sv.as_slice()).unwrap());
+                let sv = docs[j].transact().state_vector();
+                let update = docs[i]
+                    .transact()
+                    .encode_diff_v1(&StateVector::decode_v1(sv.encode_v1().as_slice()).unwrap());
                 let update = Update::decode_v1(update.as_slice()).unwrap();
-                tb.apply_update(update).unwrap();
+                docs[j]
+                    .transact_mut_with(EXCHANGE_UPDATES_ORIGIN)
+                    .apply_update(update)
+                    .unwrap();
             }
         }
     }
@@ -122,14 +122,15 @@ impl TestConnector {
             let instance = TestPeer::new(client_id);
             let _sub = {
                 let rc = rc.clone();
-                let peer_state = instance.state();
+                let mut peer_state = instance.state();
                 peer_state
                     .doc
-                    .observe_update_v1(move |_, e| {
+                    .events()
+                    .update_v1
+                    .subscribe(Box::new(move |_, e| {
                         let mut inner = rc.lock().unwrap();
                         Self::broadcast(&mut inner, client_id, &e.update);
-                    })
-                    .unwrap()
+                    }))
             };
             let mut inner = rc.lock().unwrap();
             let idx = inner.peers.len();

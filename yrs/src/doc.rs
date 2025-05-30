@@ -314,10 +314,7 @@ impl Doc {
         if !should_load {
             let txn = self.transact();
             if txn.doc().is_subdoc() {
-                parent_txn
-                    .subdocs_mut()
-                    .loaded
-                    .insert(self.addr(), self.clone());
+                parent_txn.subdocs_mut().loaded.insert(self);
             }
         }
     }
