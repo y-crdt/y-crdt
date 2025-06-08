@@ -45,7 +45,7 @@ use std::ops::{Deref, DerefMut};
 /// # Example
 ///
 /// ```rust
-/// use yrs::{Any, Array, ArrayPrelim, Doc, GetString, Text, Transact};
+/// use yrs::{Any, Array, ArrayPrelim, Doc, GetString, Text};
 /// use yrs::types::Attrs;
 /// use yrs::types::text::{Diff, YChange};
 ///
@@ -173,7 +173,7 @@ pub trait Text: AsRef<Branch> + Sized {
     /// By default Document uses byte offset:
     ///
     /// ```
-    /// use yrs::{Doc, Text, GetString, Transact};
+    /// use yrs::{Doc, Text, GetString};
     ///
     /// let mut doc = Doc::new();
     /// let ytext = doc.get_or_insert_text("text");
@@ -191,7 +191,7 @@ pub trait Text: AsRef<Branch> + Sized {
     /// You can override how Yrs calculates the index with [OffsetKind]:
     ///
     /// ```
-    /// use yrs::{Doc, Options, Text, GetString, Transact, OffsetKind};
+    /// use yrs::{Doc, Options, Text, GetString, OffsetKind};
     ///
     /// let mut doc = Doc::with_options(Options {
     ///     offset_kind: OffsetKind::Utf16,
@@ -389,7 +389,7 @@ pub trait Text: AsRef<Branch> + Sized {
     /// # Example
     ///
     /// ```rust
-    /// use yrs::{Doc, Text, Transact};
+    /// use yrs::{Doc, Text};
     /// use yrs::types::Attrs;
     /// use yrs::types::text::{Diff, YChange};
     ///

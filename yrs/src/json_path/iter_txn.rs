@@ -16,9 +16,9 @@ where
     ///
     /// # Example
     /// ```rust
-    /// use yrs::{any, Array, ArrayPrelim, Doc, In, JsonPath, JsonPathEval, Map, MapPrelim, Out, Transact};
+    /// use yrs::{any, Array, ArrayPrelim, Doc, In, JsonPath, JsonPathEval, Map, MapPrelim, Out};
     ///
-    /// let doc = Doc::new();
+    /// let mut doc = Doc::new();
     /// let mut txn = doc.transact_mut();
     /// let users = txn.get_or_insert_array("users");
     ///

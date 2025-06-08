@@ -1,6 +1,6 @@
 use crate::transaction::Subdocs;
 use crate::{DeleteSet, StateVector, TransactionMut};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// An update event passed to a callback subscribed with [Doc::observe_update_v1]/[Doc::observe_update_v2].
 pub struct UpdateEvent {
@@ -43,37 +43,38 @@ impl TransactionCleanupEvent {
 /// Event used to communicate load requests from the underlying subdocuments.
 #[derive(Debug)]
 pub struct SubdocsEvent {
-    pub(crate) added: HashSet<crate::Uuid>,
-    pub(crate) removed: HashSet<crate::Uuid>,
     pub(crate) loaded: HashSet<crate::Uuid>,
+    pub(crate) added: HashSet<crate::Uuid>,
+    pub(crate) removed: Vec<crate::Doc>,
 }
 
 impl SubdocsEvent {
-    pub(crate) fn new(inner: Box<Subdocs>) -> Self {
+    pub(crate) fn new(
+        added: HashSet<crate::Uuid>,
+        removed: Vec<crate::Doc>,
+        loaded: HashSet<crate::Uuid>,
+    ) -> Self {
         SubdocsEvent {
-            added: inner.added,
-            removed: inner.removed,
-            loaded: inner.loaded,
+            loaded,
+            added,
+            removed,
         }
+    }
+    /// Returns an iterator over all sub-documents living in a parent document, that have requested
+    /// to be loaded within a scope of committed transaction.
+    pub fn loaded(&self) -> &HashSet<crate::Uuid> {
+        &self.loaded
     }
 
     /// Returns an iterator over all sub-documents added to a current document within a scope of
     /// committed transaction.
-    pub fn added(&self) -> SubdocsEventIter {
-        self.added.iter()
+    pub fn added(&self) -> &HashSet<crate::Uuid> {
+        &self.added
     }
 
     /// Returns an iterator over all sub-documents removed from a current document within a scope of
     /// committed transaction.
-    pub fn removed(&self) -> SubdocsEventIter {
-        self.removed.iter()
-    }
-
-    /// Returns an iterator over all sub-documents living in a parent document, that have requested
-    /// to be loaded within a scope of committed transaction.
-    pub fn loaded(&self) -> SubdocsEventIter {
-        self.loaded.iter()
+    pub fn removed(&self) -> &[crate::Doc] {
+        &self.removed
     }
 }
-
-pub type SubdocsEventIter<'a> = std::collections::hash_set::Iter<'a, crate::Uuid>;

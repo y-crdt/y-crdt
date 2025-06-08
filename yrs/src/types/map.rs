@@ -28,7 +28,7 @@ use std::sync::Arc;
 /// # Example
 ///
 /// ```rust
-/// use yrs::{any, Doc, Map, MapPrelim, Transact};
+/// use yrs::{any, Doc, Map, MapPrelim};
 /// use yrs::types::ToJson;
 ///
 /// let mut doc = Doc::new();
@@ -225,7 +225,7 @@ pub trait Map: AsRef<Branch> + Sized {
     /// # Example
     ///
     /// ```rust
-    /// use yrs::{Doc, Map, Transact};
+    /// use yrs::{Doc, Map};
     ///
     /// let mut doc = Doc::new();
     /// let mut txn = doc.transact_mut();
@@ -317,7 +317,7 @@ pub trait Map: AsRef<Branch> + Sized {
     /// # Example
     ///
     /// ```rust
-    /// use yrs::{Doc, In, Map, MapPrelim, Transact};
+    /// use yrs::{Doc, In, Map, MapPrelim};
     ///
     /// let mut doc = Doc::new();
     /// let mut txn = doc.transact_mut();

@@ -9,17 +9,17 @@ use crate::slice::ItemSlice;
 use crate::types::{Path, PathSegment, TypeRef};
 use crate::update::PendingUpdate;
 use crate::updates::encoder::{Encode, Encoder};
-use crate::StateVector;
 use crate::{
-    Doc, Observer, OffsetKind, Snapshot, TransactionCleanupEvent, TransactionMut, UpdateEvent,
-    Uuid, ID,
+    Doc, Observer, OffsetKind, Snapshot, SubDocMut, TransactionCleanupEvent, TransactionMut,
+    UpdateEvent, Uuid, ID,
 };
+use crate::{StateVector, SubDoc};
 use std::borrow::Borrow;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::ops::Deref;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 /// Store is a core element of a document. It contains all the information, like block store
 /// map of root types, pending updates waiting to be applied once a missing update information
@@ -50,17 +50,13 @@ pub struct Store {
 
     pub(crate) events: Option<Box<DocEvents>>,
 
-    /// Pointer to a parent block - present only if a current document is a sub-document of another
-    /// document.
-    pub(crate) parent: Option<ItemPtr>,
-
     /// Dependencies between items and weak links pointing to these items.
     pub(crate) linked_by: HashMap<ItemPtr, HashSet<BranchPtr>>,
 }
 
 impl Store {
     /// Create a new empty store in context of a given `client_id`.
-    pub(crate) fn new(options: Options, parent: Option<ItemPtr>) -> Pin<Box<Self>> {
+    pub(crate) fn new(options: Options) -> Pin<Box<Self>> {
         Box::pin(Store {
             options,
             types: HashMap::default(),
@@ -70,7 +66,6 @@ impl Store {
             events: None,
             pending: None,
             pending_ds: None,
-            parent,
         })
     }
 
@@ -94,10 +89,6 @@ impl Store {
     /// Returns a mutable reference to the pending delete set if it exists.
     pub fn pending_ds_mut(&mut self) -> Option<&mut DeleteSet> {
         self.pending_ds.as_mut()
-    }
-
-    pub fn is_subdoc(&self) -> bool {
-        self.parent.is_some()
     }
 
     /// Get the latest clock sequence number observed and integrated into a current store client.
@@ -335,25 +326,6 @@ impl Store {
         ptr
     }
 
-    pub fn subdoc(&self, guid: &Uuid) -> Option<&Doc> {
-        self.subdocs.get(guid)
-    }
-
-    pub fn subdoc_mut(&mut self, guid: &Uuid) -> Option<&mut Doc> {
-        self.subdocs.get_mut(guid)
-    }
-
-    /// Returns a collection of sub documents linked within the structures of this document store.
-    pub fn subdocs(&self) -> SubdocsIter {
-        SubdocsIter(self.subdocs.values())
-    }
-
-    /// Returns a collection of globally unique identifiers of sub documents linked within
-    /// the structures of this document store.
-    pub fn subdoc_guids(&self) -> SubdocGuids {
-        SubdocGuids(self.subdocs.keys())
-    }
-
     pub(crate) fn follow_redone(&self, id: &ID) -> Option<ItemSlice> {
         let mut next_id = Some(*id);
         let mut slice = None;
@@ -404,37 +376,10 @@ impl std::fmt::Display for Store {
         if let Some(pending_ds) = self.pending_ds.as_ref() {
             s.field("pending delete set", pending_ds);
         }
-
-        if let Some(parent) = self.parent.as_ref() {
-            s.field("parent block", parent.id());
-        }
         if !self.linked_by.is_empty() {
             s.field("links", &self.linked_by);
         }
         s.finish()
-    }
-}
-
-#[repr(transparent)]
-pub struct SubdocsIter<'doc>(std::collections::hash_map::Values<'doc, Uuid, Doc>);
-
-impl<'doc> Iterator for SubdocsIter<'doc> {
-    type Item = &'doc Doc;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.0.next()
-    }
-}
-
-#[repr(transparent)]
-pub struct SubdocGuids<'doc>(std::collections::hash_map::Keys<'doc, Uuid, Doc>);
-
-impl<'doc> Iterator for SubdocGuids<'doc> {
-    type Item = &'doc Uuid;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let d = self.0.next()?;
-        Some(d)
     }
 }
 
@@ -446,9 +391,9 @@ pub type AfterTransactionFn = Box<dyn Fn(&mut TransactionMut) + Send + Sync + 's
 #[cfg(feature = "sync")]
 pub type UpdateFn = Box<dyn Fn(&TransactionMut, &UpdateEvent) + Send + Sync + 'static>;
 #[cfg(feature = "sync")]
-pub type SubdocsFn = Box<dyn Fn(&TransactionMut, &SubdocsEvent) + Send + Sync + 'static>;
+pub type SubdocsFn = Box<dyn Fn(&mut SubdocsEvent) + Send + Sync + 'static>;
 #[cfg(feature = "sync")]
-pub type DestroyFn = Box<dyn Fn(&TransactionMut, &Doc) + Send + Sync + 'static>;
+pub type DestroyFn = Box<dyn Fn(&Doc) + Send + Sync + 'static>;
 
 #[cfg(not(feature = "sync"))]
 pub type TransactionCleanupFn = Box<dyn Fn(&TransactionMut, &TransactionCleanupEvent) + 'static>;
@@ -457,9 +402,9 @@ pub type AfterTransactionFn = Box<dyn Fn(&mut TransactionMut) + 'static>;
 #[cfg(not(feature = "sync"))]
 pub type UpdateFn = Box<dyn Fn(&TransactionMut, &UpdateEvent) + 'static>;
 #[cfg(not(feature = "sync"))]
-pub type SubdocsFn = Box<dyn Fn(&TransactionMut, &SubdocsEvent) + 'static>;
+pub type SubdocsFn = Box<dyn Fn(&mut SubdocsEvent) + 'static>;
 #[cfg(not(feature = "sync"))]
-pub type DestroyFn = Box<dyn Fn(&TransactionMut, &Doc) + 'static>;
+pub type DestroyFn = Box<dyn Fn(&Doc) + 'static>;
 
 #[derive(Default)]
 pub struct DocEvents {
